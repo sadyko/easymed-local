@@ -438,6 +438,29 @@ enough.
 
 ## 8. The panel
 
+**Correction, 2026-08-20:** this section originally assumed the panel would be built from
+scratch. It will not be — **it already exists.** `setting.easymed.uz` is a live 5,204-line
+"Easy-Med Platform Console" on Supabase, dumped for reference at `platform-console/`. See its
+README for the full inventory.
+
+What it already does: clinics list, plans and suspension, tariffs, payments, verifications,
+support, audit, platform team, and an `upgrade_requests` inbox with exactly the columns the
+locked-module button needs. **The new work extends it rather than duplicating it**, and the
+«Подключить модуль» requests should feed `upgrade_requests` instead of a second inbox.
+
+What it does **not** have — verified by searching all 19 of its modules, not assumed — is any
+notion of per-module entitlement. It carries one `plan` string per clinic and suspends by writing
+`is_active = false`, which works only because the cloud database belongs to the vendor. A local
+clinic's SQLite file is on its own PC behind its own router; there is no column to flip. That gap
+is precisely what the signed licence in §3 closes, and both enforcement models must coexist while
+the vendor has cloud and local clinics.
+
+**What must stay OUT of the console:** the signing key and the check-in endpoint. The console sits
+behind the same Cloudflare and gateway estate that hung twice in August 2026. If the console is
+down for an hour the vendor cannot administer clinics — irritating. If the check-in endpoint is
+down, every clinic in the country begins a 14-day countdown. Those two things must not be able to
+fail together, so the key and the endpoint live in a separate, deliberately boring service:
+
 A deliberately boring Node + Express + Postgres service on its own host.
 
 **Clinics** — list with name, version, last seen, subscription state, entitled modules, ring,
