@@ -1,0 +1,285 @@
+/* Easy-Med — Platform Console styles. Dark, dense, data-first. */
+
+:root {
+    --bg:        #0b1219;
+    --bg-2:      #11202d;
+    --bg-3:      #18293a;
+    --line:      #233848;
+    --line-2:    #2d4256;
+    --ink:       #eaf1f5;
+    --ink-2:     #b9c6d1;
+    --ink-3:     #7d8e9c;
+    --teal:      #19b59c;
+    --teal-2:    #0e8c77;
+    --amber:     #d8a82a;
+    --red:       #d75050;
+    --green:     #1fb574;
+    --blue:      #4ea3e6;
+    --shadow:    0 8px 32px rgba(0,0,0,0.35);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif; font-size: 13.5px; height: 100%; }
+a { color: var(--teal); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { font-family: inherit; }
+
+/* --- Boot card ----------------------------------------------------- */
+#platform-root.loading { display: grid; place-items: center; height: 100vh; }
+.boot-card { display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--ink-2); }
+.boot-logo { width: 64px; height: 64px; border-radius: 16px; background: linear-gradient(135deg, var(--teal), var(--teal-2)); display: grid; place-items: center; color: white; }
+.boot-title { font-size: 20px; font-weight: 800; color: var(--ink); }
+.boot-sub { font-size: 13px; color: var(--ink-3); }
+
+/* --- Login / gate -------------------------------------------------- */
+.gate { display: grid; place-items: center; height: 100vh; padding: 20px; }
+.gate-card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 18px; padding: 36px 32px; width: 100%; max-width: 380px; box-shadow: var(--shadow); }
+.gate-card .boot-logo { margin: 0 auto 16px; }
+.gate-card h1 { font-size: 22px; font-weight: 800; margin: 0 0 4px; text-align: center; }
+.gate-card p { color: var(--ink-3); margin: 0 0 22px; text-align: center; font-size: 13px; }
+.gate-card .gate-err { color: var(--red); font-size: 13px; min-height: 18px; text-align: center; margin-top: 8px; }
+.gate-input { width: 100%; padding: 11px 14px; background: var(--bg-3); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; font-size: 14px; font-family: inherit; outline: none; transition: border-color .12s, box-shadow .12s; margin-bottom: 10px; }
+.gate-input:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(25,181,156,0.18); }
+.gate-btn { width: 100%; padding: 12px 18px; border-radius: 10px; background: linear-gradient(180deg, var(--teal), var(--teal-2)); color: white; border: none; font-weight: 700; font-size: 14px; cursor: pointer; transition: transform .08s; margin-top: 8px; }
+.gate-btn:hover:not(:disabled) { transform: translateY(-1px); }
+.gate-btn:disabled { opacity: .55; cursor: not-allowed; }
+.deny-msg { background: rgba(215,80,80,0.08); border: 1px solid rgba(215,80,80,0.4); border-radius: 10px; padding: 14px; color: #ffb4b4; font-size: 13px; margin: 12px 0; line-height: 1.5; }
+
+/* --- Shell --------------------------------------------------------- */
+.shell { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+.sidebar { background: var(--bg-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+.sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 20px 18px; border-bottom: 1px solid var(--line); }
+.sidebar-brand .brand-mark { width: 36px; height: 36px; border-radius: 9px; background: linear-gradient(135deg, var(--teal), var(--teal-2)); display: grid; place-items: center; color: white; }
+.sidebar-brand .brand-text { display: flex; flex-direction: column; }
+.sidebar-brand .brand-name { font-size: 14.5px; font-weight: 800; letter-spacing: -0.01em; }
+.sidebar-brand .brand-sub { font-size: 11px; color: var(--ink-3); margin-top: 1px; letter-spacing: 0.04em; text-transform: uppercase; }
+
+.sidebar-nav { flex: 1; padding: 12px 8px; overflow-y: auto; }
+.nav-section { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-3); padding: 14px 10px 6px; }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; color: var(--ink-2); cursor: pointer; font-size: 13.5px; transition: background .1s, color .1s; user-select: none; }
+.nav-item:hover { background: var(--bg-3); color: var(--ink); }
+.nav-item.on { background: var(--bg-3); color: var(--teal); font-weight: 600; }
+.nav-item .nav-badge { margin-left: auto; background: var(--teal); color: white; font-size: 11px; padding: 1px 7px; border-radius: 999px; font-weight: 600; }
+.nav-item.on .nav-badge { background: var(--teal); }
+
+.sidebar-foot { padding: 14px 14px 18px; border-top: 1px solid var(--line); }
+.user-card { display: flex; align-items: center; gap: 10px; color: var(--ink-2); }
+.user-card .av { width: 32px; height: 32px; border-radius: 50%; background: var(--bg-3); border: 1px solid var(--line); display: grid; place-items: center; font-weight: 700; color: var(--ink); font-size: 13px; }
+.user-card .who { line-height: 1.3; }
+.user-card .who .name { font-size: 13px; color: var(--ink); font-weight: 600; }
+.user-card .who .role { font-size: 11.5px; color: var(--ink-3); }
+.signout { margin-top: 12px; width: 100%; padding: 7px; border-radius: 8px; background: transparent; border: 1px solid var(--line); color: var(--ink-2); font-size: 12.5px; cursor: pointer; }
+.signout:hover { background: var(--bg-3); }
+
+.main { display: flex; flex-direction: column; min-width: 0; }
+.topbar { display: flex; align-items: center; justify-content: space-between; padding: 16px 28px; border-bottom: 1px solid var(--line); background: var(--bg); position: sticky; top: 0; z-index: 5; }
+.topbar.topbar-compact { padding: 12px 28px; border-bottom: none; }
+.topbar h1 { font-size: 18px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+.topbar .sub { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+
+/* ----- Pill-style tab strip (matches clinic admin) -------------------
+   Active tab = solid teal pill with white text + close × . Inactive tabs
+   are plain text that gets a subtle background on hover. Mirrors the
+   shape of .tab-bar/.tab-item in css/admin.css, ported to the dark
+   platform palette so the two consoles read as part of the same product. */
+.tab-strip {
+    display: flex; align-items: center; gap: 4px;
+    padding: 8px 18px;
+    background: var(--bg-2); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 6;
+    overflow-x: auto; scrollbar-width: thin;
+    min-height: 48px;
+}
+.tab-strip::-webkit-scrollbar { height: 4px; }
+.tab-strip::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 2px; }
+
+.tab {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 32px;
+    padding: 0 6px 0 14px;
+    background: transparent; color: var(--ink-2);
+    border: 1px solid transparent;
+    border-radius: 8px;
+    font-size: 13px; font-weight: 500;
+    cursor: pointer; user-select: none;
+    max-width: 220px; min-width: 0; flex-shrink: 0;
+    transition: background .08s ease, color .08s ease, border-color .08s ease;
+    position: relative;
+}
+.tab:hover { background: var(--bg-3); color: var(--ink); }
+.tab.active {
+    background: var(--teal);
+    color: #ffffff;
+    border-color: var(--teal);
+    font-weight: 600;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.25);
+}
+
+.tab-label {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1; min-width: 0;
+}
+
+.tab-close {
+    width: 20px; height: 20px; flex-shrink: 0;
+    border: none; background: transparent;
+    color: var(--ink-3);
+    border-radius: 6px; line-height: 1; font-size: 15px;
+    cursor: pointer; opacity: 0.7;
+    display: grid; place-items: center;
+    transition: opacity .1s, background .1s, color .1s;
+}
+.tab:hover .tab-close { color: var(--ink-2); opacity: 1; }
+.tab-close:hover { background: rgba(255,255,255,0.08); color: var(--ink); opacity: 1; }
+.tab.active .tab-close { color: rgba(255,255,255,0.85); opacity: 1; }
+.tab.active .tab-close:hover { background: rgba(255,255,255,0.22); color: #ffffff; }
+
+.tab-new {
+    flex-shrink: 0;
+    width: 30px; height: 30px;
+    margin-left: 4px;
+    background: transparent; color: var(--ink-3);
+    border: 1px dashed var(--line); border-radius: 8px;
+    cursor: pointer; font-size: 18px; font-weight: 400;
+    display: grid; place-items: center;
+    transition: background .1s, color .1s, border-color .1s;
+    align-self: center;
+}
+.tab-new:hover { background: var(--bg-3); color: var(--ink); border-color: var(--teal); border-style: solid; }
+
+/* ----- Drag-to-reorder visuals ----- */
+.tab.dragging  { opacity: 0.4; transform: scale(0.97); }
+.tab.drag-over {
+    background: rgba(25,181,156,0.12);
+    box-shadow: inset 0 0 0 2px var(--teal);
+}
+
+/* Each tab's mounted view container. Sits inside #content; only one is
+   ever display:''. Hidden siblings retain their full DOM + scroll +
+   form state so switching tabs is instant and lossless. */
+.view-tab-root { min-height: 0; }
+
+.topbar-right { display: flex; align-items: center; gap: 8px; }
+
+.content { padding: 24px 28px 80px; }
+
+/* --- KPIs ---------------------------------------------------------- */
+.kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
+.kpi { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+.kpi .kpi-label { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-3); }
+.kpi .kpi-value { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; margin-top: 6px; color: var(--ink); }
+.kpi .kpi-delta { font-size: 12px; color: var(--ink-3); margin-top: 6px; }
+.kpi .kpi-delta.up   { color: var(--green); }
+.kpi .kpi-delta.down { color: var(--red); }
+
+/* --- Cards / sections --------------------------------------------- */
+.card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 20px; }
+.card h2 { font-size: 14px; font-weight: 700; margin: 0 0 14px; letter-spacing: -0.01em; }
+.card .empty { color: var(--ink-3); font-size: 13px; padding: 22px; text-align: center; }
+
+/* --- Tables ------------------------------------------------------- */
+.table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
+table.t { width: 100%; border-collapse: collapse; min-width: 800px; }
+table.t th, table.t td { padding: 10px 14px; text-align: left; vertical-align: middle; }
+table.t thead th { background: var(--bg-3); color: var(--ink-3); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; border-bottom: 1px solid var(--line); position: sticky; top: 0; }
+table.t tbody tr { border-bottom: 1px solid var(--line); }
+table.t tbody tr:hover { background: rgba(255,255,255,0.02); }
+table.t tbody tr:last-child { border-bottom: none; }
+table.t td.muted { color: var(--ink-3); }
+table.t td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* --- Badges ------------------------------------------------------- */
+.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
+.badge.trial      { background: rgba(216,168,42,0.18); color: var(--amber); }
+.badge.starter    { background: rgba(78,163,230,0.18); color: var(--blue); }
+.badge.growth     { background: rgba(78,163,230,0.18); color: var(--blue); }
+.badge.enterprise { background: rgba(25,181,156,0.18); color: var(--teal); }
+.badge.suspended  { background: rgba(215,80,80,0.18); color: var(--red); }
+.badge.pending    { background: rgba(216,168,42,0.18); color: var(--amber); }
+.badge.approved   { background: rgba(31,181,116,0.18); color: var(--green); }
+.badge.rejected   { background: rgba(215,80,80,0.18); color: var(--red); }
+.badge.inactive   { background: rgba(125,142,156,0.18); color: var(--ink-3); }
+
+/* --- Buttons ------------------------------------------------------ */
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg-3); color: var(--ink); font-size: 12.5px; cursor: pointer; font-weight: 600; transition: border-color .1s, background .1s; }
+.btn:hover { border-color: var(--teal); }
+.btn.primary { background: linear-gradient(180deg, var(--teal), var(--teal-2)); border-color: transparent; color: white; }
+.btn.primary:hover { transform: translateY(-1px); border-color: transparent; }
+.btn.danger { background: rgba(215,80,80,0.18); border-color: rgba(215,80,80,0.5); color: #ffb4b4; }
+.btn.danger:hover { background: rgba(215,80,80,0.28); }
+.btn.small { padding: 5px 10px; font-size: 12px; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* --- Modal --------------------------------------------------------- */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: grid; place-items: center; z-index: 9999; padding: 24px; backdrop-filter: blur(2px); }
+.modal { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px; width: 100%; max-width: 480px; box-shadow: var(--shadow); max-height: 90vh; overflow-y: auto; }
+.modal h3 { margin: 0 0 6px; font-size: 17px; font-weight: 700; }
+.modal .sub { color: var(--ink-3); font-size: 13px; margin: 0 0 18px; line-height: 1.5; }
+.modal .row { margin-bottom: 12px; }
+.modal label { font-size: 12px; color: var(--ink-2); display: block; margin-bottom: 4px; }
+.modal input, .modal select, .modal textarea { width: 100%; padding: 9px 12px; background: var(--bg-3); border: 1px solid var(--line); color: var(--ink); border-radius: 8px; font-family: inherit; font-size: 13px; outline: none; }
+.modal input:focus, .modal select:focus, .modal textarea:focus { border-color: var(--teal); }
+
+/* Override the generic input styling for checkboxes — they shouldn't
+   be full-width text inputs. Used in the Tariffs editor, the Verifications
+   modal, anywhere a yes/no toggle appears inside a modal. */
+.modal input[type="checkbox"], .modal input[type="radio"] {
+    width: 18px; height: 18px; padding: 0; margin: 0;
+    flex-shrink: 0;
+    cursor: pointer;
+    accent-color: var(--teal);
+    background: var(--bg-3); border: 1px solid var(--line);
+    border-radius: 4px;
+    appearance: auto; /* keep native check so accent-color works */
+}
+.modal .check-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 12px; background: var(--bg-3); border: 1px solid var(--line);
+    border-radius: 8px; cursor: pointer; user-select: none;
+    font-size: 13px; color: var(--ink); line-height: 1.4;
+    transition: border-color .1s, background .1s;
+}
+.modal .check-row:hover { border-color: var(--teal); }
+.modal .check-row + .check-row { margin-top: 6px; }
+.modal .check-row span { flex: 1; }
+.modal .check-row .check-sub { display: block; color: var(--ink-3); font-size: 11.5px; margin-top: 2px; }
+.modal-actions {
+    display: flex; gap: 8px; justify-content: flex-end;
+    /* Sticky bar at the bottom of the scrollable modal so Save / Cancel
+       are always reachable, no matter how long the form gets. */
+    position: sticky; bottom: -22px;
+    background: var(--bg-2);
+    margin: 18px -24px -22px;
+    padding: 14px 24px 22px;
+    border-top: 1px solid var(--line);
+    z-index: 2;
+}
+.modal-err { color: var(--red); font-size: 12.5px; min-height: 18px; margin-top: 8px; }
+
+/* --- Filter row --------------------------------------------------- */
+.filterbar { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+.filterbar input.search { flex: 1; min-width: 220px; max-width: 320px; padding: 8px 12px; background: var(--bg-2); border: 1px solid var(--line); color: var(--ink); border-radius: 8px; font-size: 13px; outline: none; }
+.filterbar input.search:focus { border-color: var(--teal); }
+.filterbar .chip { padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg-2); color: var(--ink-2); cursor: pointer; font-size: 12.5px; font-weight: 500; }
+.filterbar .chip.on { background: var(--teal); color: white; border-color: transparent; }
+
+/* --- Misc --------------------------------------------------------- */
+.spinner { width: 18px; height: 18px; border: 2px solid var(--line-2); border-top-color: var(--teal); border-radius: 50%; animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.row-loading { padding: 24px; text-align: center; color: var(--ink-3); }
+.row-loading .spinner { margin: 0 auto 6px; }
+
+.copy { color: var(--ink-3); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; cursor: pointer; }
+.copy:hover { color: var(--teal); }
+
+.toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--bg-2); border: 1px solid var(--line); padding: 10px 18px; border-radius: 10px; font-size: 13px; box-shadow: var(--shadow); z-index: 10000; }
+.toast.ok  { border-color: rgba(31,181,116,0.5); color: #b6f0d4; }
+.toast.err { border-color: rgba(215,80,80,0.5); color: #ffb4b4; }
+
+/* MODAL_FULLSCREEN_V1 — platform console dialogs match the admin app: every
+   .modal inside a .modal-overlay opens near-full-screen. Only size changes. */
+.modal-overlay > .modal {
+    width: calc(100vw - 24px) !important;
+    max-width: calc(100vw - 24px) !important;
+    max-height: calc(100vh - 24px) !important;
+}
