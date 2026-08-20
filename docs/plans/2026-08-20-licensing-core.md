@@ -157,14 +157,26 @@ In `server/db/migrate.js`, inside `migrate()`, immediately after the existing fi
 
 ```js
   // DUP_MIGRATION_GUARD_V1 — two files sharing a number prefix sort against each
-  // other ALPHABETICALLY, not by intent. The predecessor shipped three files on
-  // 071_ and two on 058_, so their real apply order was an accident of naming and
-  // differed from the order they were written in. That is survivable when a human
-  // is watching a single machine; it is not survivable once releases are delivered
-  // to clinics remotely. Refuse to start instead.
+  // other ALPHABETICALLY, not by intent. That is survivable while a human watches
+  // one machine; it is not survivable once releases are delivered to clinics
+  // remotely, which is where this project is going.
+  //
+  // The 058 and 071 groups below are grandfathered because they CANNOT be fixed.
+  // schema_migrations records the FULL FILENAME, so renaming an applied migration
+  // makes it look new and re-runs it — and 071_dedupe_lab_results.sql opens with
+  // `DELETE FROM lab_results`, while 071_queue_local_day_backfill.sql and
+  // 058_referral_source_person.sql both open with UPDATE. Renaming them to tidy up
+  // the numbering would wipe real clinical data on every install that already has
+  // them. They are applied, their order is settled, and they are left alone.
+  //
+  // Nothing may join this set. It is a record of damage already done, not a
+  // mechanism for permitting more.
+  const GRANDFATHERED_COLLISIONS = new Set(['058', '071']);
+
   const byNumber = new Map();
   for (const file of files) {
     const num = file.slice(0, file.indexOf('_'));
+    if (GRANDFATHERED_COLLISIONS.has(num)) continue;
     if (byNumber.has(num)) {
       throw new Error(`Duplicate migration number: ${num} (${byNumber.get(num)} and ${file})`);
     }
@@ -172,16 +184,33 @@ In `server/db/migrate.js`, inside `migrate()`, immediately after the existing fi
   }
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [ ] **Step 4: Pin the exemption with a second test, then run both**
+
+The grandfather list is exactly the sort of thing a future reader tidies away. Append to
+`server/db/migrate.test.js`:
+
+```js
+test('the real migrations directory still runs despite its historical collisions', () => {
+  // 058 and 071 collide and are deliberately grandfathered — see the comment in
+  // migrate.js. If this test fails, someone removed the exemption, and every
+  // existing clinic would refuse to start.
+  const db = new Database(':memory:');
+  assert.doesNotThrow(() => migrate(db));
+});
+```
 
 Run: `node --test server/db/migrate.test.js`
-Expected: PASS.
+Expected: PASS, both tests.
 
 - [ ] **Step 5: Run the whole suite — the existing migrations must still be legal**
 
 Run: `npm test`
-Expected: **1100+ passing, 0 failing.** If it reports `Duplicate migration number`, someone has
-added a colliding migration since this plan was written; renumber it before continuing.
+Expected: **1101 passing, 0 failing.**
+
+If it reports `Duplicate migration number` for any number other than 058 or 071, someone has added
+a colliding migration since this plan was written. **Renumber the new file — never an applied
+one.** Renaming a migration that any install has already run makes it look new and re-runs it,
+which for a `DELETE` or `UPDATE` migration destroys data.
 
 - [ ] **Step 6: Commit**
 
