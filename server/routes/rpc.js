@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { getRpc } from '../services/rpc/index.js';
+import { isReadOnlyRpc, isAlwaysAllowedRpc, lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 
 export function rpcRoutes(db) {
   const r = Router();
@@ -12,6 +13,19 @@ export function rpcRoutes(db) {
   // — no-op, поэтому для остальных RPC ничего не меняется, но следующий
   // асинхронный обработчик не наступит на ту же тихую пустоту.
   r.post('/:name', async (req, res) => {
+    // LICENCE_CORE_V1 — default deny, checked BEFORE the `!handler` 501 below,
+    // not after it. An unclassified name must fail shut whether or not it
+    // happens to be implemented: checking existence first would mean 501 vs 402
+    // itself reveals which RPC names are real, and a name that is registered
+    // LATER but never added to READ_ONLY_RPCS would work by accident until the
+    // day it is actually tried against a locked clinic. Pinned by the
+    // "unknown RPC" case in licence-gate.test.js — some_future_rpc has no
+    // handler at all and must still come back 402, not 501, while locked.
+    if (req.control?.locked
+        && !isAlwaysAllowedRpc(req.params.name)
+        && !isReadOnlyRpc(req.params.name)) {
+      return lockedResponse(res);
+    }
     const handler = getRpc(req.params.name);
     if (!handler) {
       return res.status(501).json({ error: { code: 'rpc_not_implemented', message: 'RPC not implemented: ' + req.params.name } });

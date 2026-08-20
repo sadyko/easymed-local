@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { compile, CompileError } from '../db/query-compiler.js';
 import { readableColumns } from '../db/schema-registry.js';
+import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
@@ -19,6 +20,11 @@ export function dbRoutes(db) {
       }
       throw e;
     }
+
+    // LICENCE_CORE_V1 — a lapsed clinic reads its own records freely and changes
+    // nothing. Placed after compile() so we know the operation, and before
+    // execution so nothing has touched the database yet.
+    if (req.control?.locked && compiled.meta.op !== 'select') return lockedResponse(res);
 
     try {
       const { sql, params, meta } = compiled;

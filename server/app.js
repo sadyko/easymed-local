@@ -9,10 +9,13 @@ import { userRoutes } from './routes/users.js';
 import { dbRoutes } from './routes/db.js';
 import { rpcRoutes } from './routes/rpc.js';
 import { storageRoutes } from './routes/storage.js';
+import { attachControl } from './services/control/gate.js';   // LICENCE_CORE_V1
+import { setDataDir } from './services/control/config.js';   // LICENCE_CORE_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
-export function createApp(db) {
+export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
+  setDataDir(dataDir);   // LICENCE_CORE_V1 — RPC handlers get no `req`; they read it from here.
   const app = express();
   app.disable('x-powered-by');
   // PERF_SLOWLOG_V1 — самым первым: меряем полное время запроса, включая
@@ -28,13 +31,14 @@ export function createApp(db) {
   app.use('/api/rpc', express.json({ limit: '2mb' }));
   app.use('/api', express.json({ limit: '100kb' }));
   app.use(attachUser(db));
+  app.use(attachControl(db, dataDir));   // LICENCE_CORE_V1
 
   app.get('/api/health', (req, res) => res.json({ ok: true }));
   app.use('/api/auth', authRoutes(db));
   app.use('/api/users', userRoutes(db));
   app.use('/api/db', requireAuth, dbRoutes(db));
   app.use('/api/rpc', requireAuth, rpcRoutes(db));
-  app.use('/api/storage', requireAuth, storageRoutes(path.join(ROOT, 'data', 'storage')));
+  app.use('/api/storage', requireAuth, storageRoutes(path.join(dataDir, 'storage')));
 
   // Unknown /api paths answer JSON, not an HTML 404 page.
   app.use('/api', (req, res) => res.status(404).json({ error: { code: 'not_found', message: 'Unknown API endpoint.' } }));
