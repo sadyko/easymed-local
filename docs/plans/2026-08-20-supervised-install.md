@@ -230,9 +230,9 @@ function workspace() {
   return { dir, dbPath, db };
 }
 
-test('a backup is taken and is a usable database', () => {
+test('a backup is taken and is a usable database', async () => {
   const { dir, dbPath, db } = workspace();
-  const out = backupBeforeMigrate(db, dbPath, '2.4.0');
+  const out = await backupBeforeMigrate(db, dbPath, '2.4.0');
   assert.ok(fs.existsSync(out), 'the file exists');
 
   const restored = openDb(out);
@@ -240,22 +240,22 @@ test('a backup is taken and is a usable database', () => {
     'the copy opens and holds the same rows — a raw file copy of a WAL database can lose the last writes');
 });
 
-test('the backup name records the version being installed', () => {
+test('the backup name records the version being installed', async () => {
   const { dbPath, db } = workspace();
-  assert.match(path.basename(backupBeforeMigrate(db, dbPath, '2.4.0')), /2\.4\.0/);
+  assert.match(path.basename(await backupBeforeMigrate(db, dbPath, '2.4.0')), /2\.4\.0/);
 });
 
-test('taking a backup twice does not overwrite the first', () => {
+test('taking a backup twice does not overwrite the first', async () => {
   const { dbPath, db } = workspace();
-  const a = backupBeforeMigrate(db, dbPath, '2.4.0');
-  const b = backupBeforeMigrate(db, dbPath, '2.4.0');
+  const a = await backupBeforeMigrate(db, dbPath, '2.4.0');
+  const b = await backupBeforeMigrate(db, dbPath, '2.4.0');
   assert.notEqual(a, b, 'a retried update must not destroy the pre-update state');
 });
 
-test('old backups are pruned but the newest are kept', () => {
+test('old backups are pruned but the newest are kept', async () => {
   const { dir, dbPath, db } = workspace();
   const made = [];
-  for (let i = 0; i < 7; i++) made.push(backupBeforeMigrate(db, dbPath, '2.4.' + i));
+  for (let i = 0; i < 7; i++) made.push(await backupBeforeMigrate(db, dbPath, '2.4.' + i));
   pruneBackups(path.join(dir, 'backups'), 3);
   const left = fs.readdirSync(path.join(dir, 'backups'));
   assert.equal(left.length, 3, 'a clinic disk is not infinite');
@@ -263,9 +263,9 @@ test('old backups are pruned but the newest are kept', () => {
   assert.ok(!left.includes(path.basename(made[0])), 'the oldest is gone');
 });
 
-test('a failure to back up is reported, not swallowed', () => {
+test('a failure to back up is reported, not swallowed', async () => {
   const { db } = workspace();
-  assert.throws(() => backupBeforeMigrate(db, '/definitely/not/here/easymed.db', '2.4.0'));
+  await assert.rejects(() => backupBeforeMigrate(db, '/definitely/not/here/easymed.db', '2.4.0'));
 });
 ```
 
@@ -300,7 +300,7 @@ import path from 'node:path';
  * @param {string} version   the version about to be installed, for the filename
  * @returns {string} the path written
  */
-export function backupBeforeMigrate(db, dbPath, version) {
+export async function backupBeforeMigrate(db, dbPath, version) {
   const dir = path.join(path.dirname(dbPath), 'backups');
   fs.mkdirSync(dir, { recursive: true });
 
@@ -311,11 +311,19 @@ export function backupBeforeMigrate(db, dbPath, version) {
   let out = path.join(dir, `${base}.db`);
   while (fs.existsSync(out)) out = path.join(dir, `${base}.${++n}.db`);
 
-  db.backup(out);   // synchronous in better-sqlite3; checkpoints the WAL for us
+  // ASYNC — verified against the installed better-sqlite3: db.backup() returns a
+  // Promise. It must be awaited, which is why the boot sequence in index.js uses
+  // top-level await rather than calling this and moving on. Not awaiting it would
+  // start migrations while the copy was still being written, producing a backup of
+  // a half-migrated database — the one thing it exists to prevent.
+  await db.backup(out);
   return out;
 }
 
-/** Keep the newest `keep` backups. A clinic PC does not have infinite disk. */
+/**
+ * Keep the newest `keep` backups. A clinic PC does not have infinite disk.
+ * Synchronous on purpose: it runs at boot and deleting a few files is instant.
+ */
 export function pruneBackups(dir, keep = 3) {
   let files;
   try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.db')); } catch { return; }
@@ -328,7 +336,15 @@ export function pruneBackups(dir, keep = 3) {
 }
 ```
 
-**Check `db.backup()` is synchronous in the installed better-sqlite3 version** before relying on it. If it returns a promise in this version, await it and make `backupBeforeMigrate` async — and say so in your report, because the caller in `index.js` runs before `listen()`.
+**`db.backup()` is asynchronous** — verified against the installed better-sqlite3, it returns a
+Promise. That is why `backupBeforeMigrate` is `async` above and why the caller must await it.
+`server/index.js` is an ES module, so **top-level `await` works there directly** — no IIFE wrapper,
+no restructuring of the boot sequence. Confirm that yourself before writing the caller.
+
+Do not be tempted by `fs.copyFileSync` to avoid the await. The database is in WAL mode, so the
+`.db` file is not the whole database: recent writes live in the `-wal` sidecar, and a plain file
+copy silently loses them. The loss surfaces only when the backup is restored, which is the worst
+possible moment.
 
 - [ ] **Step 4: Run it and watch it pass**
 
@@ -344,9 +360,13 @@ In `server/index.js`, immediately **before** `migrate(db);`:
 // Guarded on there being unapplied migrations so an ordinary restart does not
 // copy a 36 MB database every time the clinic reboots its PC. The version string
 // comes from package.json so a restored file says what it was rescued from.
+//
+// Top-level await: index.js is an ES module and db.backup() is asynchronous. The
+// await matters — starting migrations while the copy is still being written would
+// back up a half-migrated database, which is precisely what this prevents.
 try {
   if (pendingMigrations(db).length) {
-    const out = backupBeforeMigrate(db, path.join(DATA_DIR, 'easymed.db'), APP_VERSION);
+    const out = await backupBeforeMigrate(db, path.join(DATA_DIR, 'easymed.db'), APP_VERSION);
     console.log(`  Database backed up before update: ${out}`);
     pruneBackups(path.join(DATA_DIR, 'backups'), 3);
   }
