@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import Database from 'better-sqlite3';
 import { openDb } from './connection.js';
 import { migrate } from './migrate.js';
 
@@ -30,4 +31,23 @@ test('badly named migration file is rejected', () => {
   fs.writeFileSync(path.join(dir, '1_unpadded.sql'), 'CREATE TABLE y (id INTEGER);');
   const db = openDb(':memory:');
   assert.throws(() => migrate(db, dir), /Bad migration filename/);
+});
+
+test('refuses to run when two migrations share a number prefix', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-mig-'));
+  fs.writeFileSync(path.join(dir, '001_a.sql'), 'CREATE TABLE a (id INTEGER);');
+  fs.writeFileSync(path.join(dir, '001_b.sql'), 'CREATE TABLE b (id INTEGER);');
+  const db = new Database(':memory:');
+  assert.throws(() => migrate(db, dir), /Duplicate migration number: 001/);
+  // and nothing was applied
+  const applied = db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE name IN ('a','b')").get();
+  assert.equal(applied.n, 0);
+});
+
+test('the real migrations directory still runs despite its historical collisions', () => {
+  // 058 and 071 collide and are deliberately grandfathered — see the comment in
+  // migrate.js. If this test fails, someone removed the exemption and every
+  // existing clinic would refuse to start.
+  const db = new Database(':memory:');
+  assert.doesNotThrow(() => migrate(db));
 });

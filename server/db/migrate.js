@@ -27,6 +27,33 @@ export function migrate(db, dir = MIGRATIONS_DIR) {
     }
   }
 
+  // DUP_MIGRATION_GUARD_V1 — two files sharing a number prefix sort against each
+  // other ALPHABETICALLY, not by intent. That is survivable while a human watches
+  // one machine; it is not survivable once releases are delivered to clinics
+  // remotely, which is where this project is going.
+  //
+  // The 058 and 071 groups below are grandfathered because they CANNOT be fixed.
+  // schema_migrations records the FULL FILENAME, so renaming an applied migration
+  // makes it look new and re-runs it — and 071_dedupe_lab_results.sql opens with
+  // `DELETE FROM lab_results`, while 071_queue_local_day_backfill.sql and
+  // 058_referral_source_person.sql both open with UPDATE. Renaming them to tidy up
+  // the numbering would wipe real clinical data on every install that already has
+  // them. They are applied, their order is settled, and they are left alone.
+  //
+  // Nothing may join this set. It is a record of damage already done, not a
+  // mechanism for permitting more.
+  const GRANDFATHERED_COLLISIONS = new Set(['058', '071']);
+
+  const byNumber = new Map();
+  for (const file of files) {
+    const num = file.slice(0, file.indexOf('_'));
+    if (GRANDFATHERED_COLLISIONS.has(num)) continue;
+    if (byNumber.has(num)) {
+      throw new Error(`Duplicate migration number: ${num} (${byNumber.get(num)} and ${file})`);
+    }
+    byNumber.set(num, file);
+  }
+
   const applied = new Set(db.prepare('SELECT name FROM schema_migrations').all().map(r => r.name));
   for (const file of files) {
     if (applied.has(file)) continue;
