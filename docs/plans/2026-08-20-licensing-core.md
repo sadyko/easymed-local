@@ -445,20 +445,42 @@ Create `server/services/control/canonical.js`:
 // in ways that are easy to get subtly wrong. This is explicit instead.
 
 export function canonical(value) {
-  return JSON.stringify(sortDeep(value));
+  return serialize(value);
 }
 
-function sortDeep(value) {
-  if (Array.isArray(value)) return value.map(sortDeep);   // order is meaningful — leave it
-  if (value === null || typeof value !== 'object') return value;
-  const out = {};
-  for (const key of Object.keys(value).sort()) {
-    if (value[key] === undefined) continue;   // JSON.stringify would drop it anyway; be explicit
-    out[key] = sortDeep(value[key]);
+function serialize(value) {
+  if (Array.isArray(value)) {
+    // undefined has no JSON form; JSON.stringify maps it to null inside arrays
+    // (unlike object properties, where it is dropped) — match that here too.
+    return '[' + value.map((item) => (item === undefined ? 'null' : serialize(item))).join(',') + ']';
   }
-  return out;
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);   // primitives: let JSON.stringify handle escaping/format
+  }
+  const keys = Object.keys(value)
+    .filter((key) => value[key] !== undefined)   // dropped, not nulled — matches JSON.stringify on objects
+    .sort();
+  const entries = keys.map((key) => JSON.stringify(key) + ':' + serialize(value[key]));
+  return '{' + entries.join(',') + '}';
 }
 ```
+
+> **Why the string is built by hand.** The obvious version — sort the keys onto a
+> plain object, hand it to `JSON.stringify` — is deterministic and produces
+> byte-identical output for the payload this system signs. But it cannot honour its
+> own contract: JavaScript always enumerates array-index-like keys (`"2"`, `"10"`)
+> ahead of other keys in numeric order, so a plain object can never hold an
+> arbitrary lexicographic order. That only bites the day the signer is not this
+> file — a control plane written in Python or Go would sort plainly and disagree on
+> any numeric-looking key, and the signature would fail on that key alone, forever,
+> with no useful error. Building the text by hand makes the contract portable.
+
+Also pin these behaviours with tests, because a signing primitive with thin tests
+is a liability: empty object and empty array; a nested array of objects (position
+preserved, inner keys sorted); integer-like keys sorting lexicographically; the
+same input serialised twice giving identical bytes; and a `Date` collapsing to
+`{}` — the last as a documented trap, since licence payloads must carry dates as
+ISO strings, never `Date` instances.
 
 - [ ] **Step 4: Run it and watch it pass**
 

@@ -9,16 +9,24 @@
 // in ways that are easy to get subtly wrong. This is explicit instead.
 //
 // This builds the JSON text itself rather than sorting keys onto a plain object
-// and handing that to JSON.stringify. That first approach looked right and even
-// passed the basic key-order tests, but it does not work: the JS spec always
+// and handing that to JSON.stringify. The plain-object version is NOT broken —
+// it is deterministic, and it produces byte-identical output for the licence
+// payload this system actually signs. It was measured, not assumed.
+//
+// It is replaced because it cannot honour its own contract. The JS spec always
 // enumerates array-index-like own keys ("2", "10", ...) ahead of other string
-// keys, in ascending numeric order, no matter what order they were assigned in
-// — so a plain object can never be made to hold an arbitrary lexicographic key
-// order. A licence field keyed by something numeric-looking (a branch id used
-// as an object key, say) would silently come out ahead of alphabetic keys
-// instead of in sorted position, and — worse — inconsistently between two
-// otherwise-identical payloads built in a different property order. Writing
-// the string by hand sidesteps native key enumeration entirely.
+// keys in ascending numeric order, whatever order they were assigned in, so a
+// plain object can never hold an arbitrary lexicographic key order: {"2","10"}
+// comes back where {"10","2"} was asked for.
+//
+// That matters the day the signer is not this file. A licence is signed on the
+// vendor's machine and verified on a clinic's; if the control plane is ever
+// written in Python or Go, its "sort the keys" will be plain lexicographic and
+// will disagree with JavaScript's enumeration on any numeric-looking key. The
+// signature then fails with no useful error, on that key only, forever. Writing
+// the string by hand makes the format portable — the contract is exactly
+// "lexicographic by UTF-16 code unit", with nothing left to a host language's
+// object semantics.
 //
 // The sort itself uses the default Array.prototype.sort comparator (UTF-16 code
 // unit order), never localeCompare — that comparator does not consult the OS
