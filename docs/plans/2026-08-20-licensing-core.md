@@ -161,51 +161,85 @@ In `server/db/migrate.js`, inside `migrate()`, immediately after the existing fi
   // one machine; it is not survivable once releases are delivered to clinics
   // remotely, which is where this project is going.
   //
-  // The 058 and 071 groups below are grandfathered because they CANNOT be fixed.
-  // schema_migrations records the FULL FILENAME, so renaming an applied migration
-  // makes it look new and re-runs it — and 071_dedupe_lab_results.sql opens with
-  // `DELETE FROM lab_results`, while 071_queue_local_day_backfill.sql and
-  // 058_referral_source_person.sql both open with UPDATE. Renaming them to tidy up
-  // the numbering would wipe real clinical data on every install that already has
-  // them. They are applied, their order is settled, and they are left alone.
+  // The five files below are forgiven because they CANNOT be renamed. Renaming is
+  // the obvious tidy-up and it is the dangerous one: schema_migrations records the
+  // FULL FILENAME, so a renamed migration looks new and RE-RUNS. Two of these
+  // would do real damage on a second run — 071_dedupe_lab_results.sql carries a
+  // DELETE FROM lab_results that once removed 89 duplicate rows, and
+  // 071_queue_local_day_backfill.sql carries an UPDATE across visit_services.
+  // 058_referral_source_person.sql would fail outright on its ADD COLUMNs. The
+  // remaining two are additive, but they share a number with the others and so are
+  // listed here too. All five are applied, their order is settled, leave them.
   //
-  // Nothing may join this set. It is a record of damage already done, not a
-  // mechanism for permitting more.
-  const GRANDFATHERED_COLLISIONS = new Set(['058', '071']);
+  // Forgiveness is per FILENAME, deliberately. Exempting the NUMBER would leave
+  // 058 and 071 permanently open for a new colliding file, at exactly the two
+  // numbers a future contributor is most likely to reuse by mistake.
+  const GRANDFATHERED_COLLISIONS = new Set([
+    '058_crm_line_doctor.sql',
+    '058_referral_source_person.sql',
+    '071_dedupe_lab_results.sql',
+    '071_deposit_invoice_link.sql',
+    '071_queue_local_day_backfill.sql',
+  ]);
 
   const byNumber = new Map();
   for (const file of files) {
-    const num = file.slice(0, file.indexOf('_'));
-    if (GRANDFATHERED_COLLISIONS.has(num)) continue;
-    if (byNumber.has(num)) {
-      throw new Error(`Duplicate migration number: ${num} (${byNumber.get(num)} and ${file})`);
-    }
-    byNumber.set(num, file);
+    // Compared as a NUMBER so 001_ and 0001_ cannot both claim slot one; the
+    // filename regex above permits 3-or-more digits, so that is reachable.
+    const num = Number(file.slice(0, file.indexOf('_')));
+    const first = byNumber.get(num);
+    if (first === undefined) { byNumber.set(num, file); continue; }
+    if (GRANDFATHERED_COLLISIONS.has(file) && GRANDFATHERED_COLLISIONS.has(first)) continue;
+    throw new Error(
+      `Duplicate migration number: ${String(num).padStart(3, '0')} (${first} and ${file})`
+    );
   }
 ```
 
-- [ ] **Step 4: Pin the exemption with a second test, then run both**
+- [ ] **Step 4: Pin the exemption with three more tests, then run them**
 
-The grandfather list is exactly the sort of thing a future reader tidies away. Append to
-`server/db/migrate.test.js`:
+The first of these is the one whose absence would let a real bug through: an exemption scoped to
+the *number* rather than the *filenames* stops guarding 058 and 071 forever. Append to
+`server/db/migrate.test.js` — note all tests here use `openDb`, matching the three already in the
+file and what production does:
 
 ```js
 test('the real migrations directory still runs despite its historical collisions', () => {
-  // 058 and 071 collide and are deliberately grandfathered — see the comment in
-  // migrate.js. If this test fails, someone removed the exemption, and every
-  // existing clinic would refuse to start.
-  const db = new Database(':memory:');
+  // 058 and 071 collide and are deliberately forgiven — see the comment in
+  // migrate.js. If this fails, someone removed the exemption and every existing
+  // clinic would refuse to start.
+  const db = openDb(':memory:');
   assert.doesNotThrow(() => migrate(db));
+});
+
+test('a NEW file under a grandfathered number is still refused', () => {
+  // The exemption forgives five specific files, not the numbers 058 and 071.
+  // Without this test the guard silently stops guarding at exactly the two
+  // numbers most likely to be reused by accident.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-mig-'));
+  fs.writeFileSync(path.join(dir, '058_crm_line_doctor.sql'), 'CREATE TABLE a (id INTEGER);');
+  fs.writeFileSync(path.join(dir, '058_referral_source_person.sql'), 'CREATE TABLE b (id INTEGER);');
+  fs.writeFileSync(path.join(dir, '058_brand_new_mistake.sql'), 'CREATE TABLE c (id INTEGER);');
+  const db = openDb(':memory:');
+  assert.throws(() => migrate(db, dir), /Duplicate migration number: 058/);
+});
+
+test('the same number padded differently is still one number', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-mig-'));
+  fs.writeFileSync(path.join(dir, '001_a.sql'), 'CREATE TABLE a (id INTEGER);');
+  fs.writeFileSync(path.join(dir, '0001_b.sql'), 'CREATE TABLE b (id INTEGER);');
+  const db = openDb(':memory:');
+  assert.throws(() => migrate(db, dir), /Duplicate migration number/);
 });
 ```
 
 Run: `node --test server/db/migrate.test.js`
-Expected: PASS, both tests.
+Expected: PASS, four new tests.
 
 - [ ] **Step 5: Run the whole suite — the existing migrations must still be legal**
 
 Run: `npm test`
-Expected: **1101 passing, 0 failing.**
+Expected: **1104 passing, 0 failing.**
 
 If it reports `Duplicate migration number` for any number other than 058 or 071, someone has added
 a colliding migration since this plan was written. **Renumber the new file — never an applied
