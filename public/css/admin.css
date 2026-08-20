@@ -2291,4 +2291,8 @@ textarea:focus-visible,
     height: calc(100vh - 24px) !important;
     max-height: calc(100vh - 24px) !important;
 }
+
+/* LICENCE_CORE_V1 — an unbought module: visible, reachable, plainly marked. */
+.sidebar .nav-locked { opacity: .62; }
+.sidebar .nav-lock-icon { margin-left: auto; opacity: .8; flex: 0 0 auto; }
 .modal-card:not(.bedfs-card):not(.modal-compact) > .modal-body { flex: 1 1 auto; min-height: 0; }

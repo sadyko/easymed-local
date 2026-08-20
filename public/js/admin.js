@@ -25,6 +25,8 @@ import { renderNotifications } from './admin/notifications.js?v=nolicense1';    
 import { initBranchContext, onBranchChange } from './admin/branch-context.js?v=bc3';
 import { renderBranchPicker } from './admin/branch-picker.js';
 import { loadDocBrandingAsync } from './admin/views/doc-settings.js?v=q3company1';   // DOC_SETTINGS_UNIFY_V1
+import { setLicence, isLicensed, licenceState } from './admin/licence.js';   // LICENCE_CORE_V1
+import { renderLockedModule } from './admin/views/locked-module.js';   // LICENCE_CORE_V1
 
 import { renderDashboard }    from './admin/views/dashboard.js?v=owndash2';
 import { renderPublicSite }   from './admin/views/public-site.js?v=pub6';   // PUBLIC_SITE_V1
@@ -769,6 +771,22 @@ async function renderComingSoon(viewRoot, ctx, renderFn) {
 }
 
 async function renderViewInner(viewRoot, viewName, ctx) {
+    // LICENCE_CORE_V1 — checked BEFORE the role gate. A clinic that has not bought
+    // a module should be offered it, not told their role is wrong: two different
+    // problems with two different fixes, and confusing them makes the clinic
+    // phone their admin instead of their vendor.
+    //
+    // Lives here, on this function's own `viewRoot` param (the one tab actually
+    // being rendered) — NOT in navigate(), which has no isRouteAllowed guard of
+    // its own to sit beside (it only mounts a new tab and delegates the paint to
+    // renderViewInto()/renderViewInner()), and not on the shared #view-root
+    // container either: that div holds every open tab's root stacked as
+    // siblings, and renderLockedModule() clears its target — clearing the shared
+    // container would wipe every other open tab, not just this one.
+    if (!isLicensed(viewName)) {
+        await renderLockedModule(viewRoot, viewName);
+        return;
+    }
     if (!isRouteAllowed(viewName)) {
         viewRoot.appendChild(accessDenied());
         return;
@@ -967,8 +985,13 @@ function renderSidebar() {
                                               || (item.id === 'reports'  && state.view.startsWith('report'))
                                               || (item.id === 'consultation' && state.view === 'service-workspace');
         const badgeText = formatBadge(navCounts[item.id]);
+        // LICENCE_CORE_V1 — an unbought module stays VISIBLE and gets a lock mark.
+        // Hiding it would hide what the clinic could buy, and nobody asks for a
+        // feature they have never seen. Deliberately NOT folded into
+        // isModuleAllowed() above: that gate hides, this one marks.
+        const unlicensed = !isLicensed(item.id);
         currentNav.appendChild(h('button', {
-            class: 'nav-item' + (active ? ' active' : ''),
+            class: 'nav-item' + (active ? ' active' : '') + (unlicensed ? ' nav-locked' : ''),
             title: t('sidebar.nav.' + item.id, item.label),   // SIDEBAR_RAIL_V1 — readable when collapsed
             onclick: () => navigate(item.id),
         },
@@ -977,6 +1000,7 @@ function renderSidebar() {
             badgeText && h('span', {
                 class: 'nav-badge' + (item.badgeKind === 'alert' && navCounts[item.id] > 0 ? ' alert' : ''),
             }, badgeText),
+            unlicensed && h('span', { class: 'nav-lock-icon' }, Icon('Lock', { size: 14 })),
         ));
     }
 }
@@ -2260,6 +2284,23 @@ async function boot() {
 
     const userRow = await rehydrateUserFromSession();
     if (!userRow) { showLogin(); return; }
+
+    // LICENCE_CORE_V1 — fetched before onAuthed() paints the shell, so the sidebar
+    // is never drawn with a module open and then corrected a frame later.
+    //
+    // An RPC rather than a field on /api/auth/me: db-auth.js's getUser() returns
+    // only { data: { user } } and drops every other property of that response, so
+    // a licence block added there would vanish silently and NOTHING would ever
+    // lock — an enforcement failure that looks exactly like everything working.
+    try {
+        const { data: lic } = await supabase.rpc('licence_status', {});
+        setLicence(lic || null);
+    } catch (e) {
+        // A licence check that cannot run must never stop someone logging in.
+        // null means "clinical core open, paid modules closed" — see licence.js.
+        console.warn('[licence]', e && e.message);
+        setLicence(null);
+    }
 
     // MODEL_A_VERIFY_V1 — let an un-verified clinic into its OWN private workspace; only a
     // REJECTED clinic is blocked at the door. A non-blocking banner (renderVerificationBanner)
