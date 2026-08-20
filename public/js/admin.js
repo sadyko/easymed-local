@@ -27,6 +27,7 @@ import { renderBranchPicker } from './admin/branch-picker.js';
 import { loadDocBrandingAsync } from './admin/views/doc-settings.js?v=q3company1';   // DOC_SETTINGS_UNIFY_V1
 import { setLicence, isLicensed, licenceState } from './admin/licence.js';   // LICENCE_CORE_V1
 import { renderLockedModule } from './admin/views/locked-module.js';   // LICENCE_CORE_V1
+import { renderActivation } from './admin/views/activation.js';   // LICENCE_CORE_V1
 
 import { renderDashboard }    from './admin/views/dashboard.js?v=owndash2';
 import { renderPublicSite }   from './admin/views/public-site.js?v=pub6';   // PUBLIC_SITE_V1
@@ -771,6 +772,16 @@ async function renderComingSoon(viewRoot, ctx, renderFn) {
 }
 
 async function renderViewInner(viewRoot, viewName, ctx) {
+    // LICENCE_CORE_V1 — a lapsed subscription outranks everything. It blocks every
+    // module, not just unbought ones, so it must be checked first: otherwise a
+    // locked clinic clicking «Пациенты» lands on the sales screen, which has
+    // nothing to sell for a free-core module and renders a bare card with no way
+    // forward. Two different locks, two different screens — see the spec's §4.
+    const _lic = licenceState();
+    if (_lic.locked && viewName !== 'activation') {
+        await renderActivation(viewRoot, _lic);
+        return;
+    }
     // LICENCE_CORE_V1 — checked BEFORE the role gate. A clinic that has not bought
     // a module should be offered it, not told their role is wrong: two different
     // problems with two different fixes, and confusing them makes the clinic
@@ -2342,7 +2353,50 @@ async function onAuthed(userRow) {
     state.user = actorFromUser(userRow);
     await applyActorPermissions(state.user);
     startApp();
+    renderLicenceBanner();   // LICENCE_CORE_V1 — after the shell exists, so `.app` is there to mount above
 }
+
+// LICENCE_CORE_V1 — the countdown banner. A lapsed subscription gets the full
+// activation screen (renderActivation, in renderViewInner); this is for the
+// days BEFORE that, so the lock is never a surprise. Mounted the same way as
+// verify-banner.js/notifications.js: a sibling inserted right above `.app`.
+//
+// Idempotent by construction — always removes any prior banner by id before
+// deciding whether to (re)mount one, so calling this twice (or from the
+// onLangChange listener below) never leaves two banners stacked.
+function renderLicenceBanner() {
+    document.getElementById('licence-banner')?.remove();
+    const lic = licenceState();
+    // 'ok' needs no banner; 'locked' is the full-screen activation takeover
+    // instead — a banner on top of that screen would just be redundant chrome.
+    if (lic.state !== 'notice' && lic.state !== 'warn') return;
+
+    // daysLeft is structurally > 0 whenever state is 'notice'/'warn' — ladder.js
+    // only reaches either rung when msLeft > 0, and Math.ceil() of a positive
+    // number is never 0. But the client cannot fully trust a hand-edited or
+    // malformed RPC payload reaching this far, so floor at 1 defensively rather
+    // than ever rendering "через 0 дн.".
+    const days = Math.max(1, Number(lic.days_left) || 0);
+    // Built directly rather than through tr()'s STRINGS dictionary: the day
+    // count is dynamic, and this codebase's existing convention for a number
+    // embedded in a Russian sentence (see reports-hub.js's "N дн." KPI tiles)
+    // is a plain concatenated string, not a template key — there is no {n}
+    // placeholder precedent in STRINGS to follow instead.
+    const msg = lic.reason === 'unpaid'
+        ? `Подписка заканчивается через ${days} дн. Свяжитесь с менеджером Easy-Med.`
+        : `Нет связи с Easy-Med ${days} дн. Проверьте интернет — иначе система заблокируется.`;
+
+    const banner = h('div', { id: 'licence-banner', class: lic.state === 'warn' ? 'licence-warn' : 'licence-notice' },
+        h('span', { class: 'lb-msg' }, Icon(lic.state === 'warn' ? 'Warning' : 'Clock', { size: 15 }), msg));
+    document.body.insertBefore(banner, document.querySelector('.app') || document.body.firstChild);
+}
+
+// Repaint on a language switch, same as the other topbar/sidebar chrome in
+// startApp()'s own onLangChange handler — registered once at module load
+// (not inside onAuthed) so logging out and back in never stacks a second
+// listener. Safe to fire before any login too: licenceState() reads as 'ok'
+// with nothing set, so this simply no-ops.
+onLangChange(() => renderLicenceBanner());
 
 // SIDEBAR_COLLAPSE_V1 — chevron collapses the global left nav; the floating
 // re-open button restores it. Wired once; state persisted to localStorage.

@@ -2138,4 +2138,14 @@ export const STRINGS = {
   "Therapy": {"en": "Therapy", "ru": "Терапевтическое", "uz": "Terapevtik"},
   "Surgical": {"en": "Surgical", "ru": "Хирургическое", "uz": "Jarrohlik"},
   "Pathway": {"en": "Pathway", "ru": "Профиль лечения", "uz": "Davolash yo‘nalishi"},
+
+  // LICENCE_CORE_V1 — Task 15: the activation screen a lapsed clinic sees
+  // instead of the locked-module sales screen, plus the countdown banner.
+  "Подписка не активна": {"en":"Subscription inactive","ru":"Подписка не активна","uz":"Obuna faol emas"},
+  "Нет связи с Easy-Med": {"en":"No connection to Easy-Med","ru":"Нет связи с Easy-Med","uz":"Easy-Med bilan aloqa yo'q"},
+  "Позвоните менеджеру Easy-Med и назовите этот код:": {"en":"Call your Easy-Med manager and read them this code:","ru":"Позвоните менеджеру Easy-Med и назовите этот код:","uz":"Easy-Med menejeriga qo'ng'iroq qiling va bu kodni ayting:"},
+  "Введите код разблокировки": {"en":"Enter the unlock code","ru":"Введите код разблокировки","uz":"Qulfni ochish kodini kiriting"},
+  "Активировать": {"en":"Activate","ru":"Активировать","uz":"Faollashtirish"},
+  "Система разблокирована.": {"en":"System unlocked.","ru":"Система разблокирована.","uz":"Tizim qulfdan chiqarildi."},
+  "Данные клиники на месте. Пока подписка не активна, можно только просматривать записи.": {"en":"Your clinic's data is intact. While the subscription is inactive you can view records but not change them.","ru":"Данные клиники на месте. Пока подписка не активна, можно только просматривать записи.","uz":"Klinika ma'lumotlari joyida. Obuna faol bo'lmaguncha yozuvlarni faqat ko'rish mumkin."},
 };
