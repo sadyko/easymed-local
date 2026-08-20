@@ -56,3 +56,19 @@ test('073 the partial index permits a new request once the previous one is sent'
   assert.ok(rows[0].sent_at, 'first request is marked sent');
   assert.equal(rows[1].sent_at, null, 'second request is open again');
 });
+
+test('073 lets a staff member be deleted, keeping their request unattributed', () => {
+  // Without ON DELETE SET NULL this throws, and routes/users.js — whose
+  // STAFF_HISTORY_REFS/STAFF_CONFIG_REFS lists do not mention this table —
+  // would have told the admin the delete was safe first.
+  const db = fresh();
+  db.prepare("INSERT INTO users (username, password_hash, full_name, role) VALUES ('n1','x','Nurse','nurse')").run();
+  const id = db.prepare("SELECT id FROM users WHERE username='n1'").get().id;
+  db.prepare('INSERT INTO module_requests (module_key, requested_by) VALUES (?, ?)').run('crm', id);
+
+  assert.doesNotThrow(() => db.prepare('DELETE FROM users WHERE id = ?').run(id));
+
+  const row = db.prepare('SELECT * FROM module_requests').get();
+  assert.equal(row.requested_by, null, 'the lead survives, unattributed');
+  assert.equal(row.module_key, 'crm');
+});
