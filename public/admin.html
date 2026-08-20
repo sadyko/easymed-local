@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ru" translate="no">
+<head>
+    <meta charset="UTF-8">
+    <!-- NO_BROWSER_TRANSLATE_V1 — this is a Russian-language clinical app. Chrome saw
+         lang="en" + Cyrillic content and auto-translated the page, which rewrites the
+         hand-built DOM: it garbled labels (service names collapsed to their code) and
+         broke input/save handlers so techs couldn't type or save results. Machine-
+         translating a medical app (units, flags, drug names) is unsafe anyway. The app
+         has its own UZ/RU/EN switcher for real localization.
+         Ported from production easymed.uz, where this exact bug was diagnosed and fixed;
+         this local build had never received it. -->
+    <meta name="google" content="notranslate">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Easy-Med · Admin</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#167873">
+    <link rel="apple-touch-icon" href="/icon-192.png">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="EasyMed">
+    <link rel="stylesheet" href="css/admin.css?v=sbfold1">
+    <link rel="stylesheet" href="css/admin-views.css?v=crmrange1">
+</head>
+<body class="admin">
+    <div class="app">
+        <!-- ============ SIDEBAR ============ -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <div class="brand-mark" id="sidebar-logo" role="button" tabindex="0" title="Свернуть / открыть меню" aria-label="Свернуть / открыть меню">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 3v18M3 12h18"/>
+                    </svg>
+                </div>
+                <div>
+                    <div class="brand-name">Easy<span class="dot">·</span>Med</div>
+                    <div class="brand-sub">HIS</div>
+                </div>
+                <button id="sidebar-toggle" class="sidebar-toggle" type="button" title="Свернуть меню" aria-label="Свернуть меню">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+                </button>
+            </div>
+
+            <!-- Populated by renderSidebar() in js/admin.js -->
+            <nav id="sidebar-body" class="sidebar-body"></nav>
+        </aside>
+
+        <!-- ============ MAIN ============ -->
+        <main class="main">
+            <!-- Browser-style multi-tab strip. The left half holds the
+                 tabs (paintTabStrip populates #ts-tabs-area). The right
+                 half hosts the global controls (search, language, status)
+                 — moved here from the old topbar to save vertical space. -->
+            <div id="tab-strip" class="tab-strip">
+                <div id="ts-tabs-area" class="ts-tabs-area"></div>
+                <div class="ts-controls">
+                    <!-- APP_RELOAD_BTN_V1 — reload the app (handy in standalone/app mode where the browser reload is hidden) -->
+                    <button id="topbar-reload" type="button" title="Обновить приложение" aria-label="Обновить приложение"
+                            style="width:38px;height:38px;border-radius:10px;border:1px solid #fbcf4a;background:#fde68a;color:#7c5a00;display:grid;place-items:center;cursor:pointer;font-family:inherit;flex:0 0 auto;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                    </button>
+                    <div class="topbar-bell" id="topbar-bell" style="position:relative"></div>
+        <div id="branch-picker" class="branch-picker"></div>
+                    <div class="topbar-lang" id="topbar-lang" role="group" aria-label="Language">
+                        <button type="button" data-lang="uz">UZ</button>
+                        <button type="button" data-lang="ru">RU</button>
+                        <button type="button" data-lang="en">EN</button>
+                    </div>
+                    <div id="user-card-wrap" class="user-card-wrap">
+                        <button id="user-card-btn" class="user-card user-card--topbar" type="button" aria-haspopup="true" aria-expanded="false">
+                            <div class="avatar" id="user-avatar">?</div>
+                            <div class="user-card-text">
+                                <div class="user-name" id="user-name">—</div>
+                                <div class="user-role" id="user-role">—</div>
+                            </div>
+                            <span class="user-card-chev">▾</span>
+                        </button>
+                        <div id="user-popover" class="user-popover" hidden></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- View root — every page renders here via renderView() -->
+            <div id="view-root" style="padding: 20px 24px;">
+                <div class="empty" style="padding: 60px;">Loading…</div>
+            </div>
+        </main>
+    </div>
+
+    <script type="module" src="js/admin.js?v=labshared1"></script>
+    <!-- SUPPORT_FAB_REMOVED_V1 — плавающая кнопка поддержки убрана. Чат всё
+         равно был нерабочим: он читает support_tickets / support_messages,
+         которых в локальной сборке нет (ни таблиц, ни записей в реестре) —
+         остаток SaaS-версии. Сам js/admin/support-widget.js оставлен на диске:
+         чтобы вернуть кнопку, достаточно раскомментировать эту строку.
+    <script type="module" src="js/admin/support-widget.js?v=fab1"></script>
+    -->
+    <script type="module" src="js/admin/onboarding.js?v=3"></script>
+</body>
+</html>

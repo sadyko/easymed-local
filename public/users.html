@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Easy-Med — Users</title>
+  <link rel="icon" href="favicon.svg">
+  <link rel="stylesheet" href="css/local.css">
+</head>
+<body>
+  <div class="page">
+    <div class="topbar">
+      <h1 class="brand">Easy-<span>Med</span> · Users</h1>
+      <span class="who" id="whoami"></span>
+      <button class="ghost" id="logout" type="button">Sign out</button>
+    </div>
+
+    <table>
+      <thead>
+        <tr><th>Username</th><th>Full name</th><th>Role</th><th>Active</th><th></th></tr>
+      </thead>
+      <tbody id="user-rows"></tbody>
+    </table>
+
+    <form class="panel" id="add-form">
+      <h2>Add user</h2>
+      <div class="grid">
+        <div><label for="a-username">Username</label><input id="a-username" name="username" required></div>
+        <div><label for="a-fullname">Full name</label><input id="a-fullname" name="full_name"></div>
+        <div><label for="a-password">Password (min 8)</label><input id="a-password" name="password" type="password" required minlength="8"></div>
+        <div><label for="a-role">Role</label><select id="a-role" name="role"></select></div>
+      </div>
+      <p class="error" id="add-error"></p>
+      <button type="submit">Create user</button>
+    </form>
+  </div>
+  <script type="module" src="js/users.js"></script>
+</body>
+</html>

@@ -1,0 +1,47 @@
+/* Easy-Med Local — shell styles for login + management pages. */
+:root {
+  --bg: #f1f5f9; --card: #ffffff; --text: #0f172a; --muted: #64748b;
+  --primary: #2563eb; --primary-dark: #1d4ed8; --danger: #dc2626;
+  --border: #e2e8f0; --radius: 10px;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.5 system-ui, "Segoe UI", Roboto, sans-serif;
+}
+.center-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.card {
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 32px; width: 100%; max-width: 380px; box-shadow: 0 10px 30px rgba(2, 6, 23, .08);
+}
+.brand { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
+.brand span { color: var(--primary); }
+.sub { color: var(--muted); margin: 0 0 24px; }
+label { display: block; font-weight: 600; font-size: 13px; margin: 14px 0 4px; }
+input, select {
+  width: 100%; padding: 9px 11px; border: 1px solid var(--border);
+  border-radius: 8px; font: inherit; background: #fff;
+}
+input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+button {
+  font: inherit; font-weight: 600; border: 0; border-radius: 8px; cursor: pointer;
+  background: var(--primary); color: #fff; padding: 10px 16px;
+}
+button:hover { background: var(--primary-dark); }
+button:disabled { opacity: .6; cursor: default; }
+button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+.error { color: var(--danger); min-height: 20px; margin: 10px 0 0; font-size: 14px; }
+.full { width: 100%; margin-top: 20px; }
+
+/* management pages */
+.page { max-width: 900px; margin: 0 auto; padding: 24px 16px; }
+.topbar { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+.topbar .brand { font-size: 18px; margin: 0; flex: 1; }
+.topbar .who { color: var(--muted); font-size: 14px; }
+table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+th { background: #f8fafc; font-size: 13px; color: var(--muted); }
+tr.inactive td { opacity: .5; }
+.panel { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-top: 24px; }
+.panel h2 { margin: 0 0 12px; font-size: 16px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 16px; }

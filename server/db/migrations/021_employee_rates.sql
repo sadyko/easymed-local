@@ -1,0 +1,2 @@
+ALTER TABLE users ADD COLUMN service_rates TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN referral_rates TEXT NOT NULL DEFAULT '';

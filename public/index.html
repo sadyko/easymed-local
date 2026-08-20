@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Easy-Med — Login</title>
+  <link rel="icon" href="favicon.svg">
+  <link rel="stylesheet" href="css/local.css">
+</head>
+<body>
+  <div class="center-screen">
+    <form class="card" id="login-form">
+      <h1 class="brand">Easy-<span>Med</span></h1>
+      <p class="sub">Clinic management system</p>
+      <label for="username">Username</label>
+      <input id="username" name="username" autocomplete="username" required autofocus>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <p class="error" id="login-error"></p>
+      <button class="full" type="submit">Sign in</button>
+    </form>
+  </div>
+  <script type="module" src="js/login.js"></script>
+</body>
+</html>

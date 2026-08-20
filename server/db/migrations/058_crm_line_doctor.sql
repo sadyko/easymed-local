@@ -1,0 +1,13 @@
+-- CRM_LINE_DOCTOR_V1 — the doctor the call centre booked for a service.
+--
+-- A service with services.requires_doctor = 1 cannot be delivered by "whoever
+-- is free": the patient is booked with a named doctor, and the wizard refuses
+-- to put such a service in the смета until one is chosen (visibleCart() in
+-- visit-wizard.js filters on exactly that). So a call-centre booking that names
+-- only the service leaves the registrar to guess who the patient was promised —
+-- and the prefilled line sits invisible until they pick someone.
+--
+-- The doctor therefore belongs on the booking, beside the service and the date.
+-- NULL stays valid: services that need no doctor (лаборатория, УЗИ без врача)
+-- carry none, and a legacy line keeps working exactly as before.
+ALTER TABLE crm_request_services ADD COLUMN doctor_id INTEGER REFERENCES users(id);

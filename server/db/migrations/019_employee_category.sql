@@ -1,0 +1,6 @@
+ALTER TABLE users ADD COLUMN staff_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN scheduling_mode TEXT NOT NULL DEFAULT 'schedulable';
+ALTER TABLE users ADD COLUMN branch_id INTEGER REFERENCES branches(id);
+ALTER TABLE users ADD COLUMN working_hours TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN service_rate_default REAL NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN referral_rate_default REAL NOT NULL DEFAULT 0;

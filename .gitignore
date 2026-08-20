@@ -1,0 +1,28 @@
+# Easy-Med Local — fully local project, no server/deploy artifacts.
+
+# --- Secrets guard (none should ever exist in this project) ---
+*.env
+*.env.*
+*.pem
+*.key
+*.pfx
+
+# --- Dependencies / build output (regenerable) ---
+node_modules/
+dist/
+build/
+
+# --- OS / editor noise ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Ad-hoc edit backups ---
+*.bak
+*.bak.*
+*bak-*
+
+# --- Local runtime state ---
+data/
+backups/

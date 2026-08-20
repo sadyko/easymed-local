@@ -1,0 +1,75 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { openDb } from './db/connection.js';
+import { migrate } from './db/migrate.js';
+import { bootstrapAdmin } from './services/auth.js';
+import { autoCloseStaleShifts } from './services/rpc/cashier.js';   // SHIFT_AUTOCLOSE_V1
+import { startTelegramBot } from './services/telegram/index.js';   // TELEGRAM_BOT_V1
+import { createApp } from './app.js';
+
+const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const DATA_DIR = path.join(ROOT, 'data');
+fs.mkdirSync(DATA_DIR, { recursive: true });
+
+const db = openDb(path.join(DATA_DIR, 'easymed.db'));
+// SHIFT_AUTOCLOSE_V1 — кассовые смены живут до конца дня (00:00): закрываем
+// просроченные при старте и раз в час (перекрывает полночь, пока сервер жив;
+// если сервер был выключен — закрытие догонит при старте или первом RPC).
+setTimeout(() => { try { autoCloseStaleShifts(db); } catch (e) { console.warn('[shift-autoclose]', e.message); } }, 3000);
+setInterval(() => { try { autoCloseStaleShifts(db); } catch (e) { console.warn('[shift-autoclose]', e.message); } }, 60 * 60 * 1000);
+migrate(db);
+const firstRunPassword = bootstrapAdmin(db);
+
+// Expired sessions: prune at startup, then hourly. unref() so the timer
+// never blocks shutdown.
+const pruneSessions = () =>
+  db.prepare("DELETE FROM sessions WHERE expires_at <= strftime('%Y-%m-%dT%H:%M:%SZ','now')").run();
+pruneSessions();
+setInterval(pruneSessions, 3600 * 1000).unref();
+
+// TELEGRAM_BOT_V1 — опросник Telegram живёт внутри этого же процесса, чтобы у
+// клиники был один `npm start`. Он сам проверяет, включён ли бот в настройках,
+// и молчит, пока администратор его не включил. Все ошибки цикл ловит внутри:
+// недоступный Telegram не должен мешать регистратуре работать.
+startTelegramBot(db);
+
+const PORT = Number(process.env.PORT || 8000);
+const server = createApp(db).listen(PORT, '0.0.0.0', () => {
+  console.log('');
+  console.log('Easy-Med Local is running.');
+  console.log(`  On this PC:      http://localhost:${PORT}`);
+  for (const ip of lanAddresses()) console.log(`  On the network:  http://${ip}:${PORT}`);
+  if (firstRunPassword) {
+    console.log('');
+    console.log('FIRST RUN - admin account created:');
+    console.log('  username: admin');
+    console.log(`  password: ${firstRunPassword}`);
+    console.log('  Log in and change this password.');
+  }
+});
+
+// Without this, double-starting on Windows prints a success banner and then
+// dies silently — an operator double-clicking the start script twice would
+// never know. Fail loudly with a plain-language message instead.
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error('');
+    console.error(`Easy-Med could not start: port ${PORT} is already in use.`);
+    console.error('Easy-Med is probably already running on this PC - check for');
+    console.error('an open Easy-Med window before starting it again.');
+    process.exit(1);
+  }
+  throw err;
+});
+
+function lanAddresses() {
+  const out = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const iface of list || []) {
+      if (iface.family === 'IPv4' && !iface.internal) out.push(iface.address);
+    }
+  }
+  return out;
+}
