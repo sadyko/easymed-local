@@ -678,6 +678,11 @@ export function verifyLicence(raw, { publicKey = null, clinicId } = {}) {
     return { ok: false, reason: 'malformed' };
   }
 
+  // canonical() is INSIDE the try on purpose. It recurses one frame per level of
+  // nesting with no depth limit, and JSON.parse survives roughly 100k levels that
+  // it cannot — so a hostile or merely corrupted licence file parses cleanly and
+  // then overflows the stack here. Unguarded, that crashes every read of the
+  // patient list, not just licensing, which would break invariant 1 outright.
   let good = false;
   try {
     good = verify(

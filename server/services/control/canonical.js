@@ -33,6 +33,17 @@
 // locale, so the same licence sorts identically on the vendor's machine and
 // every clinic install regardless of locale.
 
+// CAN THROW — deliberately not caught here. serialize() recurses one frame per
+// level of nesting with no depth limit, so a deeply nested object overflows the
+// stack. That is reachable from untrusted input: JSON.parse survives ~100k levels
+// of nesting that this function cannot, so a hostile or merely corrupted licence
+// file parses fine and then blows up here.
+//
+// It is left throwing because the fix belongs at the trust boundary, not here —
+// the signer's input is the vendor's own payload and a stack overflow there is a
+// bug worth seeing. ANY caller handling a file from outside must wrap this in
+// try/catch; verifyLicence() in licence.js does, and has a regression test for it.
+
 export function canonical(value) {
   return serialize(value);
 }
