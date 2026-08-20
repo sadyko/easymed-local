@@ -3603,3 +3603,17 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .crm-range.bad { border-color: var(--crit-500, #d9534f); background: #fdecec; }
 .crm-range.bad .lbl { color: var(--crit-600, #b03a3a); }
 .crm-range .err { font-size: 11.5px; font-weight: 700; color: var(--crit-600, #b03a3a); }
+
+/* LICENCE_CORE_V1 — the locked-module screen. Deliberately calm and roomy: it is
+   a small sales page, not a warning. */
+.locked-module { max-width: 560px; margin: 48px auto; text-align: left; padding: 32px; }
+.locked-module .lm-label { font-size: 12px; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--muted, #7a8a89); margin-bottom: 14px; }
+.locked-module .lm-title { font-size: 26px; line-height: 1.25; margin: 0 0 14px; font-weight: 700; }
+/* --ink-600 is this codebase's secondary-body-text token (see admin.css); it
+   replaces the spec's --text-2, which is not defined anywhere and would have
+   silently fallen back to its hardcoded hex on every render. */
+.locked-module .lm-blurb { font-size: 15px; line-height: 1.6; color: var(--ink-600, #475756); margin: 0 0 28px; }
+.locked-module .lm-cta { height: 46px; padding: 0 26px; font-size: 15px; font-weight: 600; }
+.locked-module .lm-cta[disabled] { opacity: .75; cursor: default; }
+.locked-module .lm-foot { font-size: 13px; color: var(--muted, #7a8a89); margin: 16px 0 0; line-height: 1.5; }
