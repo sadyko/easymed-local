@@ -28,6 +28,12 @@ export const LICENSED_MODULES = Object.assign(Object.create(null), {
         title: 'Пациент забирает анализы сам, в Telegram',
         blurb: 'Бот узнаёт пациента по номеру телефона и отправляет готовые результаты. Регистратура перестаёт распечатывать и обзванивать.',
     },
+    // NOT SHIPPABLE YET — verified 2026-08-20. `marketing` has no entry in the
+    // sidebar NAV array, and its route (admin.js, case 'marketing') renders behind
+    // renderComingSoon's overlay. A clinic that bought this today would pay and
+    // then be shown "coming soon". It stays in the vocabulary so the vendor panel
+    // and the signed licence already understand the key, but it must not be sold
+    // until the module actually ships and gains a NAV entry.
     marketing: {
         key: 'marketing',
         title: 'Видно, откуда приходят пациенты',
