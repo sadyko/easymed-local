@@ -26,3 +26,8 @@ Thumbs.db
 # --- Local runtime state ---
 data/
 backups/
+
+# --- Vendor licence signing material — must NEVER reach a clinic or a repo ---
+vendor-private.pem
+control-*.json
+licence-*.dat
