@@ -922,6 +922,21 @@ test('an unparseable date is treated as no licence', () => {
   assert.equal(s.state, 'locked');
   assert.equal(s.reason, 'unlicensed');
 });
+
+test('an Invalid Date now locks rather than failing open', () => {
+  // Without the nowMs guard this returns state:'ok', locked:false, daysLeft:NaN —
+  // a dead CMOS battery would unlock the whole app.
+  const s = ladderState({ validUntil: '2026-09-03T00:00:00Z', now: new Date('nonsense'), subscription: 'active' });
+  assert.equal(s.locked, true);
+  assert.equal(s.reason, 'unlicensed');
+});
+
+test('an unrecognised subscription status uses the offline wording, not unpaid', () => {
+  // Choosing the cheaper mistake: telling a non-payer their internet is down is
+  // recoverable; telling a paying clinic they have not paid is not.
+  const s = ladderState({ validUntil: '2026-09-03T00:00:00Z', now: new Date('2026-08-31T09:00:00Z'), subscription: 'suspended' });
+  assert.equal(s.reason, 'offline');
+});
 ```
 
 - [ ] **Step 2: Run it and watch it fail**
@@ -958,11 +973,18 @@ const WARN_FROM   = 3;   // days left when it becomes a daily warning
 export function ladderState({ validUntil, now, subscription = 'active' }) {
   const until = validUntil ? new Date(validUntil) : null;
 
-  if (!until || Number.isNaN(until.getTime())) {
+  // `now` is guarded as well as `until`, and that is not belt-and-braces. An
+  // Invalid Date makes every comparison below false, so the whole if-chain falls
+  // through to the most permissive branch and returns state:'ok', locked:false,
+  // daysLeft:NaN — a broken system clock would UNLOCK the app and paint a "NaN
+  // days left" banner. Failing open is the one outcome this file must never have.
+  const nowMs = now instanceof Date ? now.getTime() : NaN;
+
+  if (!until || Number.isNaN(until.getTime()) || Number.isNaN(nowMs)) {
     return { state: 'locked', locked: true, daysLeft: 0, reason: 'unlicensed' };
   }
 
-  const msLeft = until.getTime() - now.getTime();
+  const msLeft = until.getTime() - nowMs;
   const daysLeft = Math.max(0, Math.ceil(msLeft / DAY_MS));
   const reason = subscription === 'unpaid' ? 'unpaid' : 'offline';
 
