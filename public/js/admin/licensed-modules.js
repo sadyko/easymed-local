@@ -28,18 +28,20 @@ export const LICENSED_MODULES = Object.assign(Object.create(null), {
         title: 'Пациент забирает анализы сам, в Telegram',
         blurb: 'Бот узнаёт пациента по номеру телефона и отправляет готовые результаты. Регистратура перестаёт распечатывать и обзванивать.',
     },
-    // NOT SHIPPABLE YET — verified 2026-08-20. `marketing` has no entry in the
-    // sidebar NAV array, and its route (admin.js, case 'marketing') renders behind
-    // renderComingSoon's overlay. A clinic that bought this today would pay and
-    // then be shown "coming soon". It stays in the vocabulary so the vendor panel
-    // and the signed licence already understand the key, but it must not be sold
-    // until the module actually ships and gains a NAV entry.
-    marketing: {
-        key: 'marketing',
-        title: 'Видно, откуда приходят пациенты',
-        blurb: 'Считает источники обращений и повторные визиты, чтобы вы платили за рекламу, которая действительно приводит людей.',
-    },
 });
 
 /** Every nav id that is gated. Used by the sidebar to decide where to draw a lock. */
 export const LICENSED_NAV_IDS = new Set(Object.keys(LICENSED_MODULES));
+
+// `marketing` is deliberately ABSENT from this map, though the server's
+// SELLABLE_MODULES still knows the key.
+//
+// It has no NAV entry and its route renders behind renderComingSoon's overlay, so
+// the feature does not exist yet. While it was listed here, opening #marketing
+// showed a polished "buy this module" screen with a working request button — the
+// product offering to sell something that, once bought, would still show "coming
+// soon". Leaving it out means #marketing behaves exactly as it did before
+// licensing existed.
+//
+// Add it back in the same commit that gives marketing a NAV entry and a real
+// screen, not before.

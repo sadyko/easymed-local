@@ -10,7 +10,7 @@ test('a module the licence names is unlocked', () => {
 
 test('a module the licence omits is locked', () => {
   setLicence({ locked: false, modules: ['crm'], state: 'ok', days_left: 13 });
-  assert.equal(isLicensed('marketing'), false);
+  assert.equal(isLicensed('telegram-chat'), false);
 });
 
 test('modules nobody sells are always open', () => {
@@ -27,7 +27,7 @@ test('a lapsed subscription locks even the free modules', () => {
 test('before the server answers, nothing is treated as sold', () => {
   setLicence(null);
   assert.equal(isLicensed('patients'), true, 'never flash a lock at a paying clinic on boot');
-  assert.equal(isLicensed('marketing'), false, 'but never flash a paid module open either');
+  assert.equal(isLicensed('telegram-chat'), false, 'but never flash a paid module open either');
 });
 
 test('nav ids map to licence keys', () => {
@@ -120,5 +120,9 @@ test('exactly the three sellable modules are gated, named to match the real nav 
   // licence and SELLABLE_MODULES on the server already name it, and the next
   // task (routing) needs a place to look it up — but there is currently no
   // sidebar link for a lock icon to attach to.
-  assert.deepEqual([...LICENSED_NAV_IDS].sort(), ['crm', 'marketing', 'telegram-chat']);
+  assert.deepEqual([...LICENSED_NAV_IDS].sort(), ['crm', 'telegram-chat']);
+  // marketing is deliberately NOT here: it has no NAV entry and its route renders
+  // a "coming soon" overlay, so offering to sell it would sell a placeholder.
+  // Re-add it in the same commit that ships the real screen.
+  assert.equal(LICENSED_NAV_IDS.has('marketing'), false);
 });
