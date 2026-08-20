@@ -1,6 +1,7 @@
 import { Router, raw } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
+import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 
 // Local file storage — the offline stand-in for Supabase Storage. Objects live
 // on disk under <storageDir>/<bucket>/<path>. Buckets are an allow-list; every
@@ -48,6 +49,11 @@ export function storageRoutes(storageDir) {
 
   // Upload: raw body (any content type) written verbatim to disk.
   r.post('/:bucket/*rest', raw({ type: () => true, limit: '20mb' }), (req, res) => {
+    // LICENCE_CORE_V1 — this is the OTHER write path: patient photos, lab scans
+    // and Telegram attachments go straight here, never through /api/db. A
+    // lapsed clinic must not be able to create a document any more than it can
+    // insert a row — gated first, before touching the filesystem at all.
+    if (req.control?.locked) return lockedResponse(res);
     const abs = safeResolve(storageDir, req.params.bucket, req.params.rest);
     if (!abs) return badPath(res);
     const body = req.body;
@@ -79,6 +85,9 @@ export function storageRoutes(storageDir) {
 
   // Best-effort delete.
   r.delete('/:bucket/*rest', (req, res) => {
+    // LICENCE_CORE_V1 — deleting a stored file is a write, same as DELETE
+    // /api/db; a lapsed clinic keeps read access to everything already there.
+    if (req.control?.locked) return lockedResponse(res);
     const abs = safeResolve(storageDir, req.params.bucket, req.params.rest);
     if (!abs) return badPath(res);
     try { fs.unlinkSync(abs); } catch { /* already gone */ }

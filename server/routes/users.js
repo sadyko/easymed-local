@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireRole } from '../middleware/auth.js';
 import { hashPassword } from '../services/auth.js';
 import { VALID_ROLES } from '../services/roles.js';
+import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 
 export { VALID_ROLES };
 
@@ -279,6 +280,10 @@ export function userRoutes(db) {
   });
 
   r.post('/', (req, res) => {
+    // LICENCE_CORE_V1 — a THIRD write path (see licence-gate.test.js): staff
+    // accounts bypass /api/db's registry entirely (it lists 'users' but with
+    // every write role set empty, on purpose) and land straight here.
+    if (req.control?.locked) return lockedResponse(res);
     const { username, password, full_name = '', role } = req.body || {};
     const name = String(username || '').trim().toLowerCase();
     if (!/^[a-z0-9._-]{3,30}$/.test(name)) return bad(res, 'Username must be 3-30 characters: letters, digits, . _ -');
@@ -302,6 +307,8 @@ export function userRoutes(db) {
   });
 
   r.patch('/:id', (req, res) => {
+    // LICENCE_CORE_V1 — same write gate as POST above.
+    if (req.control?.locked) return lockedResponse(res);
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
     if (!user) return res.status(404).json({ error: { code: 'not_found', message: 'User not found.' } });
     const { full_name, role, is_active, password } = req.body || {};
@@ -387,6 +394,9 @@ export function userRoutes(db) {
   });
 
   r.delete('/:id', (req, res) => {
+    // LICENCE_CORE_V1 — same write gate as POST above. GET /:id/delete-check
+    // stays open: it's a read-only dry run, never a write.
+    if (req.control?.locked) return lockedResponse(res);
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
     if (!user) return res.status(404).json({ error: { code: 'not_found', message: 'User not found.' } });
 

@@ -17,6 +17,7 @@ import { migrate } from '../db/migrate.js';
 import { hashPassword } from '../services/auth.js';
 import { createApp } from '../app.js';
 import { staffDeleteGuard } from './users.js';
+import { licensedDataDir } from '../services/control/licensed-fixture.js';   // LICENCE_CORE_V1
 
 function startServer() {
   const db = openDb(':memory:');
@@ -24,7 +25,9 @@ function startServer() {
   db.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)')
     .run('boss', hashPassword('password1'), 'Boss', 'admin');
   return new Promise((resolve) => {
-    const server = createApp(db).listen(0, '127.0.0.1', () => {
+    // LICENCE_CORE_V1 — enrolled+active so DELETE /api/users (this file's
+    // subject) never trips the write gate; predates licensing.
+    const server = createApp(db, { dataDir: licensedDataDir() }).listen(0, '127.0.0.1', () => {
       resolve({ db, server, base: `http://127.0.0.1:${server.address().port}` });
     });
   });

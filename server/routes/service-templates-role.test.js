@@ -16,6 +16,7 @@ import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { hashPassword } from '../services/auth.js';
 import { createApp } from '../app.js';
+import { licensedDataDir } from '../services/control/licensed-fixture.js';   // LICENCE_CORE_V1
 
 function startServer() {
   const db = openDb(':memory:');
@@ -27,7 +28,9 @@ function startServer() {
   db.prepare('INSERT INTO services (name, price) VALUES (?,?)').run('Консультация кардиолога', 100000);
   db.prepare('INSERT INTO services (name, price) VALUES (?,?)').run('С-реактивный белок', 35000);
   return new Promise((resolve) => {
-    const server = createApp(db).listen(0, '127.0.0.1', () => {
+    // LICENCE_CORE_V1 — enrolled+active so the write gate (routes/db.js,
+    // routes/rpc.js) never fires; this file predates licensing.
+    const server = createApp(db, { dataDir: licensedDataDir() }).listen(0, '127.0.0.1', () => {
       resolve({ db, server, base: `http://127.0.0.1:${server.address().port}` });
     });
   });
