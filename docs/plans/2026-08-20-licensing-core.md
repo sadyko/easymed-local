@@ -1991,11 +1991,20 @@ Create `server/services/rpc/licence.test.js`:
 ```js
 import { test } from 'node:test';
 import assert from 'node:assert';
-import Database from 'better-sqlite3';
+import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { moduleRequest } from './licence.js';
 
-const fresh = () => { const db = new Database(':memory:'); migrate(db); return db; };
+// Seeds a real user: module_requests.requested_by is a live foreign key, so a
+// USER whose id does not exist makes every INSERT throw FOREIGN KEY — which a
+// broad SQLITE_CONSTRAINT catch would swallow into a false {ok:true} with no row
+// written. The test would pass while the feature did nothing.
+const fresh = () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  db.prepare("INSERT INTO users (username, password_hash, full_name, role) VALUES ('t1','x','Tester','admin')").run();
+  return db;
+};
 const USER = { id: 1, role: 'admin' };
 
 test('requesting a module records a lead for the vendor', () => {
@@ -2049,6 +2058,7 @@ import path from 'node:path';
 import { controlState } from '../control/state.js';
 import { currentChallenge, redeem } from '../control/unlock.js';
 import { getDataDir } from '../control/config.js';
+import { hasAnyRole } from '../roles.js';
 
 // LICENCE_CORE_V1 — the three RPCs that must work while locked.
 
@@ -2080,7 +2090,11 @@ export function licenceStatus(db, args, user) {
 
 /** Redeem a code read out by the vendor over the telephone. */
 export function licenceUnlock(db, args, user) {
-  if (!user || user.role !== 'admin') throw new RpcError('Только администратор может активировать.', 403);
+  // hasAnyRole, NOT user.role === 'admin'. A clinic admin whose PRIMARY role is
+  // cashier or doctor holds admin through users.extra_roles, and a primary-role
+  // check locks exactly that person out of the one screen a lapsed clinic uses to
+  // pay. Same bug class as ADMIN_DOCTOR_V1 and the staff-delete guard.
+  if (!hasAnyRole(user, ['admin'])) throw new RpcError('Только администратор может активировать.', 403);
 
   let identity = null;
   try { identity = JSON.parse(fs.readFileSync(path.join(getDataDir(), 'control.json'), 'utf8')); } catch {}
@@ -2106,7 +2120,10 @@ export function licenceUnlock(db, args, user) {
 /** «Подключить модуль» from the locked-module screen. */
 export function moduleRequest(db, args, user) {
   const key = String(args.module_key || '');
-  if (!SELLABLE_MODULES.has(key)) throw new RpcError('Неизвестный модуль: ' + key, 400);
+  // English deliberately: a contract violation the real UI cannot produce, and
+  // this codebase keeps those in English while user-facing errors stay Russian.
+  // It also has to match the /module/i assertion in the test above.
+  if (!SELLABLE_MODULES.has(key)) throw new RpcError('Unknown module: ' + (key || '(missing)'), 400);
 
   const open = db.prepare('SELECT * FROM module_requests WHERE module_key = ? AND sent_at IS NULL').get(key);
   if (open) return { ok: true, already: true, requested_at: open.requested_at };
