@@ -832,6 +832,21 @@ export function clockAnomaly(db) {
 }
 ```
 
+> **As built, this snippet needed two corrections — see the shipped `clock.js`.**
+>
+> 1. **`systemNow.toISOString()` crashes on an Invalid Date** (`RangeError: Invalid time value`).
+>    A caller passing a bad date would take down every request that touches licensing. The
+>    shipped version treats an Invalid Date as "no observation": it returns the existing mark
+>    unchanged, writes nothing, and flags nothing.
+> 2. **It wrote a row on every call.** Measured, not assumed: ~13.3us vs ~5.7us per call over 20k
+>    calls. The guard is kept not for the 2.3x but because the read that decides it already
+>    happens anyway, so skipping the write is free — and it stops every quiet licence check
+>    dirtying a WAL row.
+>
+> A corrupt stored mark was also traced: `new Date('rubbish')` makes every comparison false, so
+> the original already recovered by re-establishing the mark rather than switching the defence
+> off. The shipped version makes that explicit instead of relying on incidental NaN behaviour.
+
 - [ ] **Step 4: Run it and watch it pass**
 
 Run: `node --test server/services/control/clock.test.js`
