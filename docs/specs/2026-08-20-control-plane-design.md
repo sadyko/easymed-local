@@ -356,6 +356,29 @@ upgrades when.
   clinic PC ── asks once a day: "anything new for me?"
 ```
 
+### Who pushes, and what happens next
+
+Two developers work in `easymed.local` and push to a **private** GitHub repository. That push is
+the trigger for everything downstream; nobody hand-copies files to a clinic again.
+
+```
+  developer edits + pushes            ->  GitHub (private)
+  a maintainer tags a release         ->  Actions builds and signs a bundle
+  the vendor publishes it to a ring   ->  settings.easymed.uz starts offering it
+  the clinic's admin approves         ->  it installs at 03:00 and self-checks
+```
+
+Two rules follow from having more than one developer:
+
+1. **`main` is what ships.** Work happens on branches and merges through a pull request. A release
+   is a tag on `main`, never a branch build — otherwise "which code is that clinic running?" has no
+   answer.
+2. **Tagging is a deliberate act, separate from pushing.** A push does not reach a clinic. Someone
+   decides a commit is a release and tags it. Without that separation, an ordinary Tuesday commit
+   could land on fifty clinics overnight.
+
+The clinic still never talks to GitHub — see below.
+
 ### A release
 
 A bundle is a zip of the application plus a manifest and a signature:
