@@ -36,7 +36,7 @@
 | Every table write goes through one route handler | `server/routes/db.js:11` |
 | Every RPC goes through one route handler; guards live *inside* handlers, not on the route | `server/routes/rpc.js:13` |
 | Session → `req.user` on every request | `server/middleware/auth.js:26` (`attachUser`) |
-| `GET /api/auth/me` is the browser's boot payload | `server/routes/auth.js:60` |
+| `GET /api/auth/me` is the boot payload, but `db-auth.js` keeps only its `user` key | `server/routes/auth.js:60`, `public/js/db-auth.js` |
 | Client module gate | `public/js/admin/permissions.js:263` (`isModuleAllowed`) |
 | Client route gate | `public/js/admin/permissions.js:305` (`isRouteAllowed`) |
 | Sidebar filters on `isModuleAllowed(item.id)` | `public/js/admin.js:955` |
@@ -73,6 +73,7 @@ server/
     migrations/073_licensing.sql        CREATE  — control_state, module_requests
     migrations/073.test.js              CREATE
   services/control/
+    config.js                           CREATE  — where the data directory lives
     canonical.js                        CREATE  — deterministic JSON for signing
     canonical.test.js                   CREATE
     licence.js                          CREATE  — verify a signed licence
@@ -90,7 +91,7 @@ server/
   routes/
     db.js                               MODIFY  — block writes when locked
     rpc.js                              MODIFY  — block mutating RPCs when locked
-    auth.js                             MODIFY  — publish licence state to the browser
+    auth.js                             UNTOUCHED — see Task 11 Step 5 for why
     licence-gate.test.js                CREATE  — end-to-end gate tests
   services/rpc/
     licence.js                          CREATE  — licence_status, module_request, licence_unlock
@@ -1149,7 +1150,7 @@ test('no licence file at all is locked, not broken', () => {
 });
 
 test('a shredded licence file is locked, not a crash', () => {
-  const { dir, db } = workspace({ licence: '  garbage' });
+  const { dir, db } = workspace({ licence: 'garbage' });
   const s = controlState(db, dir, new Date('2026-08-25T00:00:00Z'));
   assert.equal(s.locked, true);
 });
@@ -1595,7 +1596,38 @@ test('the app boots and serves with no licence file at all', async (t) => {
 Run: `node --test server/routes/licence-gate.test.js`
 Expected: FAIL — `createApp` does not accept options; writes are not blocked.
 
-- [ ] **Step 3: Write the gate**
+- [ ] **Step 3: Write the data-directory config**
+
+The RPC registry calls every handler as `(db, args, user)` — there is no fourth argument and no
+`req`, so an RPC cannot be told where the data directory is. One module holds it instead, set once
+at boot.
+
+Create `server/services/control/config.js`:
+
+```js
+import path from 'node:path';
+
+// LICENCE_CORE_V1 — where control.json and licence.dat live.
+//
+// This exists because of a signature mismatch that is easy to miss: RPC handlers
+// are invoked as (db, args, user) by services/rpc/index.js. They never see `req`,
+// so req.control and any per-request data directory are unreachable from inside
+// an RPC. Rather than widen that signature across ninety handlers, the path is
+// resolved once when the app is created and read from here.
+//
+// Plan 3 makes this read EASYMED_DATA_DIR. Until then the default matches the
+// behaviour every existing test expects.
+
+let _dataDir = null;
+
+export function setDataDir(dir) { _dataDir = dir; }
+
+export function getDataDir() {
+  return _dataDir || path.join(process.cwd(), 'data');
+}
+```
+
+- [ ] **Step 4: Write the gate**
 
 Create `server/services/control/gate.js`:
 
@@ -1659,7 +1691,7 @@ export function lockedResponse(res) {
 }
 ```
 
-- [ ] **Step 4: Wire it into the app**
+- [ ] **Step 5: Wire it into the app**
 
 In `server/app.js`, change the signature and add the middleware. Replace:
 
@@ -1673,10 +1705,18 @@ with:
 export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
 ```
 
-Add the import at the top, beside the other middleware imports:
+Add the imports at the top, beside the other middleware imports:
 
 ```js
 import { attachControl } from './services/control/gate.js';   // LICENCE_CORE_V1
+import { setDataDir } from './services/control/config.js';   // LICENCE_CORE_V1
+```
+
+As the **first statement inside** `createApp`, before `const app = express();`:
+
+```js
+  // LICENCE_CORE_V1 — publish the path for RPC handlers, which get no `req`.
+  setDataDir(dataDir);
 ```
 
 Immediately **after** the existing `app.use(attachUser(db));` line, add:
@@ -1699,7 +1739,7 @@ with:
   app.use('/api/storage', requireAuth, storageRoutes(path.join(dataDir, 'storage')));
 ```
 
-- [ ] **Step 5: Gate `/api/db`**
+- [ ] **Step 6: Gate `/api/db`**
 
 In `server/routes/db.js`, add the import at the top:
 
@@ -1717,7 +1757,7 @@ that produces `compiled` (so we know the operation) and **before** `try { const 
     if (req.control?.locked && compiled.meta.op !== 'select') return lockedResponse(res);
 ```
 
-- [ ] **Step 6: Gate `/api/rpc`**
+- [ ] **Step 7: Gate `/api/rpc`**
 
 In `server/routes/rpc.js`, add the import:
 
@@ -1737,21 +1777,22 @@ Inside the handler, immediately **after** the `if (!handler)` check, add:
     }
 ```
 
-- [ ] **Step 7: Run the gate tests**
+- [ ] **Step 8: Run the gate tests**
 
 Run: `node --test server/routes/licence-gate.test.js`
 Expected: PASS, 8 tests.
 
-- [ ] **Step 8: Run the whole suite — `createApp` changed, so everything is at risk**
+- [ ] **Step 9: Run the whole suite — `createApp` changed, so everything is at risk**
 
 Run: `npm test`
 Expected: **all passing.** `createApp(db)` still works because `dataDir` has a default; if any
 existing test fails, it is because it asserted on a data path — fix the test, not the default.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
-git add server/services/control/gate.js server/routes/licence-gate.test.js \
+git add server/services/control/gate.js server/services/control/config.js \
+        server/routes/licence-gate.test.js \
         server/app.js server/routes/db.js server/routes/rpc.js
 git commit -m "feat: block writes server-side when the licence has lapsed"
 ```
@@ -1761,7 +1802,6 @@ git commit -m "feat: block writes server-side when the licence has lapsed"
 ### Task 11: Tell the browser
 
 **Files:**
-- Modify: `server/routes/auth.js`
 - Create: `server/services/rpc/licence.js`
 - Modify: `server/services/rpc/index.js`
 - Test: `server/services/rpc/licence.test.js`
@@ -1826,10 +1866,11 @@ Expected: FAIL — cannot find module `./licence.js`.
 Create `server/services/rpc/licence.js`:
 
 ```js
-import { controlState } from '../control/state.js';
-import { currentChallenge, redeem } from '../control/unlock.js';
 import fs from 'node:fs';
 import path from 'node:path';
+import { controlState } from '../control/state.js';
+import { currentChallenge, redeem } from '../control/unlock.js';
+import { getDataDir } from '../control/config.js';
 
 // LICENCE_CORE_V1 — the three RPCs that must work while locked.
 
@@ -1843,9 +1884,8 @@ class RpcError extends Error {
 export const SELLABLE_MODULES = new Set(['crm', 'telegram', 'marketing']);
 
 /** Everything the lock screen and the banners need. Never blocked. */
-export function licenceStatus(db, args, user, ctx = {}) {
-  const dataDir = ctx.dataDir || path.join(process.cwd(), 'data');
-  const s = controlState(db, dataDir);
+export function licenceStatus(db, args, user) {
+  const s = controlState(db, getDataDir());
   return {
     state: s.state,
     locked: s.locked,
@@ -1861,12 +1901,11 @@ export function licenceStatus(db, args, user, ctx = {}) {
 }
 
 /** Redeem a code read out by the vendor over the telephone. */
-export function licenceUnlock(db, args, user, ctx = {}) {
+export function licenceUnlock(db, args, user) {
   if (!user || user.role !== 'admin') throw new RpcError('Только администратор может активировать.', 403);
 
-  const dataDir = ctx.dataDir || path.join(process.cwd(), 'data');
   let identity = null;
-  try { identity = JSON.parse(fs.readFileSync(path.join(dataDir, 'control.json'), 'utf8')); } catch {}
+  try { identity = JSON.parse(fs.readFileSync(path.join(getDataDir(), 'control.json'), 'utf8')); } catch {}
   if (!identity?.clinic_id) throw new RpcError('Эта установка не привязана к клинике.', 400);
 
   const r = redeem(db, {
@@ -1920,42 +1959,23 @@ And add to the `RPC` object:
   module_request:  (db, args, user) => moduleRequest(db, args, user),
 ```
 
-- [ ] **Step 5: Publish licence state on the boot payload**
+- [ ] **Step 5: Understand why the licence does NOT ride on `/api/auth/me`**
 
-In `server/routes/auth.js`, add the import:
+No code change in this step. It exists so that nobody "improves" this later and silently breaks
+enforcement.
 
-```js
-import { controlState } from '../services/control/state.js';   // LICENCE_CORE_V1
-```
+The obvious design is to add a `licence` block to the `/api/auth/me` response. **It does not
+work.** The browser never sees that response: `public/js/db-auth.js` funnels `/me` through the
+Supabase-compat shim, whose `getUser()` returns `{ data: { user: json.user } }` and **discards
+every other top-level property**. A `licence` key added to `/me` would vanish without an error,
+and the symptom would be an application where nothing is ever locked — an enforcement failure that
+looks exactly like everything working.
 
-Change `authRoutes(db)` to accept the data directory:
+The browser therefore calls the `licence_status` RPC at boot instead (Task 14, Step 2). It is
+already listed in `ALWAYS_ALLOWED_RPCS`, so it answers even while locked, and a local round trip
+costs under a millisecond.
 
-```js
-export function authRoutes(db, dataDir) {
-```
-
-In the `r.get('/me', …)` handler, add the licence block to the JSON response. The handler
-currently returns the session user; add alongside it:
-
-```js
-    // LICENCE_CORE_V1 — the browser paints lock markers and banners from this, so
-    // it must arrive with the very first response rather than in a second call
-    // that could fail separately and leave the UI lying about what is unlocked.
-    const c = controlState(db, dataDir);
-    licence: {
-      state: c.state, locked: c.locked, reason: c.reason,
-      days_left: c.daysLeft, modules: c.modules, clinic_name: c.clinicName,
-    },
-```
-
-(Place it as a property of the object already being returned — read the surrounding
-lines and match the existing response shape.)
-
-In `server/app.js`, pass the directory through:
-
-```js
-  app.use('/api/auth', authRoutes(db, dataDir));
-```
+`server/routes/auth.js` is **not modified by this plan.**
 
 - [ ] **Step 6: Run the tests**
 
@@ -1969,7 +1989,7 @@ Expected: all passing.
 
 ```bash
 git add server/services/rpc/licence.js server/services/rpc/licence.test.js \
-        server/services/rpc/index.js server/routes/auth.js server/app.js
+        server/services/rpc/index.js
 git commit -m "feat: licence status, telephone unlock and module requests over RPC"
 ```
 
@@ -2264,39 +2284,62 @@ import { setLicence, isLicensed, licenceState } from './admin/licence.js';   // 
 import { renderLockedModule } from './admin/views/locked-module.js';   // LICENCE_CORE_V1
 ```
 
-- [ ] **Step 2: Take the licence from the boot payload**
+- [ ] **Step 2: Load the licence at boot**
 
-Find where the app reads `/api/auth/me` during boot (search for `auth/me` or the function that
-populates `window.easymed.state.user`). Immediately after the response is parsed, add:
+In `public/js/admin.js`, inside `boot()` (line ~2247), find these two lines:
 
 ```js
-    // LICENCE_CORE_V1 — before the sidebar is painted, so a locked module is never
-    // drawn as available and then corrected a moment later.
-    setLicence(me?.licence || null);
+    const userRow = await rehydrateUserFromSession();
+    if (!userRow) { showLogin(); return; }
 ```
 
-Match the local variable name actually used for the parsed response.
+Immediately **after** them, add:
+
+```js
+    // LICENCE_CORE_V1 — fetched before onAuthed() paints the shell, so the sidebar
+    // is never drawn with a module open and then corrected a frame later.
+    //
+    // An RPC rather than a field on /api/auth/me: db-auth.js's getUser() returns
+    // only { data: { user } } and drops every other property of that response, so
+    // a licence block added there would vanish silently. See Task 11 Step 5.
+    try {
+        const { data: lic } = await supabase.rpc('licence_status', {});
+        setLicence(lic || null);
+    } catch (e) {
+        // A licence check that cannot run must never stop someone logging in.
+        // null means "clinical core open, paid modules closed" — see licence.js.
+        console.warn('[licence]', e && e.message);
+        setLicence(null);
+    }
+```
 
 - [ ] **Step 3: Draw the lock marker in the sidebar**
 
-In `renderSidebar()`, find the loop containing `if (!isModuleAllowed(item.id)) continue;`
-(around line 955). **After** that line, add:
+In `renderSidebar()`, find the block that appends each nav button (line ~968). Replace it
+**entirely** — this is the existing code plus two additions:
 
 ```js
         // LICENCE_CORE_V1 — an unbought module stays VISIBLE and gets a lock mark.
-        // Hiding it would hide what the clinic could buy, and a clinic cannot ask
-        // for something it has never seen.
+        // Hiding it would hide what the clinic could buy, and nobody asks for a
+        // feature they have never seen. Note this is deliberately NOT folded into
+        // isModuleAllowed() above: that gate hides, this one marks.
         const unlicensed = !isLicensed(item.id);
+        currentNav.appendChild(h('button', {
+            class: 'nav-item' + (active ? ' active' : '') + (unlicensed ? ' nav-locked' : ''),
+            title: t('sidebar.nav.' + item.id, item.label),   // SIDEBAR_RAIL_V1 — readable when collapsed
+            onclick: () => navigate(item.id),
+        },
+            h('span', { class: 'nav-icon' }, Icon(item.icon, { size: 18 })),
+            h('span', null, t('sidebar.nav.' + item.id, item.label)),
+            badgeText && h('span', {
+                class: 'nav-badge' + (item.badgeKind === 'alert' && navCounts[item.id] > 0 ? ' alert' : ''),
+            }, badgeText),
+            unlicensed && h('span', { class: 'nav-lock-icon' }, Icon('Lock', { size: 14 })),
+        ));
 ```
 
-Then, where the nav item element is constructed, add the class and the icon. Locate the element
-creation and add to its class list `unlicensed ? 'nav-locked' : ''`, and append after the label:
-
-```js
-        ...(unlicensed ? [Icon('Lock', { size: 14, class: 'nav-lock-icon' })] : []),
-```
-
-If `icons.js` has no `Lock` glyph, add one there first — a real icon, never an emoji:
+`icons.js` has no `Lock` glyph. Add one to the icon map in `public/js/admin/icons.js`, in the same
+style as its neighbours — a real icon, never an emoji:
 
 ```js
     Lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
@@ -2458,32 +2501,49 @@ In `public/js/admin.js`, add the import:
 import { renderActivation } from './admin/views/activation.js';   // LICENCE_CORE_V1
 ```
 
-In `navigate()`, **before** the unlicensed-module check added in Task 14, add:
+In `navigate()`, **before** the unlicensed-module check added in Task 14 Step 4, add:
 
 ```js
-    // LICENCE_CORE_V1 — a lapsed subscription takes precedence over everything
-    // except the activation screen itself.
+    // LICENCE_CORE_V1 — a lapsed subscription outranks everything: it blocks every
+    // module, not just the unbought ones. Two separate conditions on purpose, see
+    // spec §4 — "module not bought" and "subscription lapsed" are different
+    // problems with different screens and different ways out.
     const _lic = licenceState();
     if (_lic.locked && viewName !== 'activation') {
-        await renderActivation(contentRoot, _lic);
+        await renderActivation(document.getElementById('view-root'), _lic);
         return;
     }
 ```
 
-Then, where the top bar is built, add the countdown banner:
+Now the banner. It mounts the same way `verify-banner.js` does — above `.app`, not inside the
+tab strip, so it cannot be pushed off-screen by a crowded toolbar. Add this function near the
+bottom of `admin.js`:
 
 ```js
-    // LICENCE_CORE_V1 — the warning ramp. A lock must never be a surprise, and a
-    // clinic whose ROUTER died must never be shown a message about money: the two
-    // countdowns are mechanically identical and must read completely differently.
-    const _l = licenceState();
-    if (_l.state === 'notice' || _l.state === 'warn') {
-        const days = _l.days_left;
-        const text = _l.reason === 'unpaid'
-            ? `Подписка заканчивается через ${days} дн. Свяжитесь с менеджером Easy-Med.`
-            : `Нет связи с Easy-Med ${days} дн. Проверьте интернет — иначе система заблокируется.`;
-        topbar.appendChild(h('div', { class: 'licence-banner licence-' + _l.state }, text));
-    }
+// LICENCE_CORE_V1 — the warning ramp. A lock must never arrive as a surprise.
+//
+// The two messages matter more than the mechanism: a clinic whose ROUTER died and
+// a clinic that stopped paying are on mechanically identical countdowns, and
+// telling the first one about money is how you lose a paying customer.
+function renderLicenceBanner() {
+    document.getElementById('em-licence-banner')?.remove();
+    const l = licenceState();
+    if (l.state !== 'notice' && l.state !== 'warn') return;
+
+    const text = l.reason === 'unpaid'
+        ? `Подписка заканчивается через ${l.days_left} дн. Свяжитесь с менеджером Easy-Med.`
+        : `Нет связи с Easy-Med ${l.days_left} дн. Проверьте интернет — иначе система заблокируется.`;
+
+    const banner = h('div', { id: 'em-licence-banner', class: 'licence-banner licence-' + l.state }, text);
+    const root = document.querySelector('.app') || document.body.firstChild;
+    document.body.insertBefore(banner, root);
+}
+```
+
+Call it from `onAuthed()`, immediately after the shell is started:
+
+```js
+    renderLicenceBanner();   // LICENCE_CORE_V1
 ```
 
 - [ ] **Step 4: Style both**
@@ -2614,6 +2674,8 @@ git commit -m "docs: licensing core complete — record state and the hand-issue
 - [ ] Editing `modules` or `valid_until` in `licence.dat` locks the app rather than unlocking it
 - [ ] Winding the PC clock backwards does not extend a licence
 - [ ] A missing, empty or corrupt licence file locks the app but never stops it starting
+- [ ] Licensing never modifies clinical data — it writes only to `control_state` and
+      `module_requests` (spec §9 invariant 5)
 - [ ] `vendor-private.pem` is gitignored and has never been committed
 
 ## Deliberately out of scope
