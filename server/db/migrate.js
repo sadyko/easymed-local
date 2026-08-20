@@ -34,13 +34,24 @@ export function migrate(db, dir = MIGRATIONS_DIR) {
   //
   // The five files below are forgiven because they CANNOT be renamed. Renaming is
   // the obvious tidy-up and it is the dangerous one: schema_migrations records the
-  // FULL FILENAME, so a renamed migration looks new and RE-RUNS. Two of these
-  // would do real damage on a second run — 071_dedupe_lab_results.sql carries a
-  // DELETE FROM lab_results that once removed 89 duplicate rows, and
-  // 071_queue_local_day_backfill.sql carries an UPDATE across visit_services.
-  // 058_referral_source_person.sql would fail outright on its ADD COLUMNs. The
-  // remaining two are additive, but they share a number with the others and so are
-  // listed here too. All five are applied, their order is settled, leave them.
+  // FULL FILENAME, so a renamed migration looks new and RE-RUNS. What that costs
+  // differs per file, and only one of them is catastrophic:
+  //
+  //   071_dedupe_lab_results.sql        DELETE FROM lab_results. It removed 89
+  //                                     duplicate rows once; a second run deletes
+  //                                     live data silently. This is the one that
+  //                                     matters.
+  //   058_referral_source_person.sql    Fails outright on its ADD COLUMNs
+  //                                     ("duplicate column name"), so migrate()
+  //                                     throws and the clinic will not boot.
+  //   071_queue_local_day_backfill.sql  Documents itself as idempotent and is:
+  //                                     its UPDATE is guarded by NOT EXISTS and a
+  //                                     re-run matches nothing. Listed only
+  //                                     because it shares a number.
+  //   058_crm_line_doctor.sql           Additive (ADD COLUMN + index). Listed
+  //   071_deposit_invoice_link.sql      only because they share a number.
+  //
+  // All five are applied and their order is settled. Leave them alone.
   //
   // Forgiveness is per FILENAME, deliberately. Exempting the NUMBER would leave
   // 058 and 071 permanently open for a new colliding file, at exactly the two
