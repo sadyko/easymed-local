@@ -1146,6 +1146,16 @@ const KEY_EXTENSION = 'offline_extension_until';
 const MAX_ATTEMPTS   = 5;
 const EXTENSION_DAYS = 14;
 
+// ATTEMPT_LIMITER_RESET_V1 — the budget refills an hour after the first wrong
+// guess. A limiter that only resets on success permanently strands the exact
+// clinic this feature exists for: no internet, and now no working unlock path
+// either, because a receptionist mishearing two characters of a six-character
+// code on a bad line burns the whole budget. Recovering from that would need the
+// vendor to talk them through hand-editing control_state — over the same phone
+// call the code was supposed to be. Five tries per hour against a 32^10 keyspace
+// weakens nothing.
+const ATTEMPT_RESET_MS = 60 * 60 * 1000;
+
 function get(db, key) {
   return db.prepare('SELECT value FROM control_state WHERE key = ?').get(key)?.value ?? null;
 }
