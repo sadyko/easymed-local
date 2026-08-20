@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,6 +35,30 @@ setInterval(pruneSessions, 3600 * 1000).unref();
 // и молчит, пока администратор его не включил. Все ошибки цикл ловит внутри:
 // недоступный Telegram не должен мешать регистратуре работать.
 startTelegramBot(db);
+
+// DEV_KEY_FINGERPRINT — refuse to let a development signing key reach a clinic
+// unnoticed. The placeholder key that ships in licence.js by default cannot verify
+// anything (its private half was discarded), so a dev machine installs a throwaway
+// key just to be usable. That key must never leave this machine: anyone holding its
+// private half could license themselves.
+//
+// This is a loud warning rather than a hard refusal because refusing to boot would
+// brick the developer's own instance, which is the only place the key is legitimate.
+const DEV_KEY_FINGERPRINT = 'd81d431a2ddf105e';
+try {
+  const src = fs.readFileSync(path.join(ROOT, 'server/services/control/licence.js'), 'utf8');
+  const pem = src.match(/-----BEGIN PUBLIC KEY-----[\s\S]*?-----END PUBLIC KEY-----/);
+  if (pem && createHash('sha256').update(pem[0]).digest('hex').startsWith(DEV_KEY_FINGERPRINT)) {
+    console.warn('');
+    console.warn('  ###################################################################');
+    console.warn('  ##  WARNING: this build carries the DEVELOPMENT licence key.     ##');
+    console.warn('  ##  Do NOT install it at a clinic. Generate a real key with       ##');
+    console.warn('  ##  `node scripts/make-licence.mjs keygen` and replace the        ##');
+    console.warn('  ##  public half in server/services/control/licence.js first.      ##');
+    console.warn('  ###################################################################');
+    console.warn('');
+  }
+} catch { /* the check must never stop the server starting */ }
 
 const PORT = Number(process.env.PORT || 8000);
 const server = createApp(db).listen(PORT, '0.0.0.0', () => {
