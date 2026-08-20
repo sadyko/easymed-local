@@ -80,6 +80,24 @@ Alongside it: `POST /api/rpc/:name` (90+ named server-side handlers in
 `npm ci --ignore-scripts` (better-sqlite3 ships a prebuilt Windows binary; a plain
 `npm install` tries to compile it and fails without Visual Studio build tools).
 
+## The test suite has a known environmental flake
+
+`npm test` is green, but roughly **one full run in three reports 2-3 failures**. They are always
+in tests that bind a real ephemeral port and use `fetch` (`staff-delete`, `service-templates-role`,
+`clinic-after-login`, and friends), always `fetch failed / cause: bad port`, and **never an
+assertion failure**.
+
+Characterised on 2026-08-20: the 16 port-binding test files run in isolation passed 6/6 consecutive
+times. It only appears under full-suite parallelism, where Node's test runner starts many files at
+once and Windows ephemeral-port allocation transiently fails.
+
+**How to apply:** if a run shows failures, check whether they are assertion failures or network
+errors. Network errors in port-binding files are the flake — re-run. Anything else is real. Do not
+report a suite as green off a single run, and do not chase this flake as a code defect.
+
+Also: **never run `npm test` while another agent is writing files.** A half-written module produces
+failures in tests that have nothing to do with it, which reads exactly like a regression.
+
 ## Known issues carried over from easymed.old
 
 Recorded so they are not rediscovered the hard way:
