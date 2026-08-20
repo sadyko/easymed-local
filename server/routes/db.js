@@ -24,7 +24,7 @@ export function dbRoutes(db) {
     // LICENCE_CORE_V1 — a lapsed clinic reads its own records freely and changes
     // nothing. Placed after compile() so we know the operation, and before
     // execution so nothing has touched the database yet.
-    if (req.control?.locked && compiled.meta.op !== 'select') return lockedResponse(res);
+    if (req.control?.locked && compiled.meta.op !== 'select') return lockedResponse(res, req.control);
 
     try {
       const { sql, params, meta } = compiled;

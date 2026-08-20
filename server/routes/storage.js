@@ -53,7 +53,7 @@ export function storageRoutes(storageDir) {
     // and Telegram attachments go straight here, never through /api/db. A
     // lapsed clinic must not be able to create a document any more than it can
     // insert a row — gated first, before touching the filesystem at all.
-    if (req.control?.locked) return lockedResponse(res);
+    if (req.control?.locked) return lockedResponse(res, req.control);
     const abs = safeResolve(storageDir, req.params.bucket, req.params.rest);
     if (!abs) return badPath(res);
     const body = req.body;
@@ -87,7 +87,7 @@ export function storageRoutes(storageDir) {
   r.delete('/:bucket/*rest', (req, res) => {
     // LICENCE_CORE_V1 — deleting a stored file is a write, same as DELETE
     // /api/db; a lapsed clinic keeps read access to everything already there.
-    if (req.control?.locked) return lockedResponse(res);
+    if (req.control?.locked) return lockedResponse(res, req.control);
     const abs = safeResolve(storageDir, req.params.bucket, req.params.rest);
     if (!abs) return badPath(res);
     try { fs.unlinkSync(abs); } catch { /* already gone */ }

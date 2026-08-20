@@ -52,8 +52,30 @@ export function attachControl(db, dataDir) {
   };
 }
 
-export function lockedResponse(res) {
+// The message depends on WHY, and getting this wrong is the failure this whole
+// feature was designed to avoid: a clinic that has PAID, whose router died, must
+// never be told it owes money. The two lock states are mechanically identical and
+// must read completely differently.
+//
+// This shipped hardcoded to the money wording and was caught in review — a paid
+// but offline clinic saving a patient card got "Подписка не активна". The default
+// below is deliberately the NEUTRAL message, not the money one: a call site that
+// forgets to pass `control` should under-accuse, never over-accuse.
+const LOCKED_MESSAGES = {
+  unpaid:       'Подписка не активна. Обратитесь к менеджеру Easy-Med.',
+  offline:      'Нет связи с Easy-Med. Проверьте интернет — изменения временно недоступны.',
+  unlicensed:   'Система не активирована. Обратитесь к менеджеру Easy-Med.',
+  not_enrolled: 'Система не активирована. Обратитесь к менеджеру Easy-Med.',
+};
+const LOCKED_DEFAULT = 'Изменения временно недоступны. Обратитесь к менеджеру Easy-Med.';
+
+export function lockedResponse(res, control) {
+  const reason = control && control.reason;
   return res.status(402).json({
-    error: { code: 'licence_locked', message: 'Подписка не активна. Обратитесь к менеджеру Easy-Med.' },
+    error: {
+      code: 'licence_locked',
+      reason: reason || 'unknown',
+      message: LOCKED_MESSAGES[reason] || LOCKED_DEFAULT,
+    },
   });
 }

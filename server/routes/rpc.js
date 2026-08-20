@@ -24,7 +24,7 @@ export function rpcRoutes(db) {
     if (req.control?.locked
         && !isAlwaysAllowedRpc(req.params.name)
         && !isReadOnlyRpc(req.params.name)) {
-      return lockedResponse(res);
+      return lockedResponse(res, req.control);
     }
     const handler = getRpc(req.params.name);
     if (!handler) {

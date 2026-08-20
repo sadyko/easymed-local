@@ -364,3 +364,42 @@ test('licence_status renders a real activation code even with no control.json at
   assert.equal(body.data.locked, true);
   assert.ok(body.data.challenge, 'the activation screen must have something to show, not a blank lock screen');
 });
+
+// LICENCE_CORE_V1 — the rule this whole feature exists to protect.
+//
+// A clinic that has PAID, whose router died, must never be told it owes money.
+// This shipped hardcoded to the money wording and reached review before anyone
+// noticed a paying customer saving a patient card was being dunned for payment.
+test('a paid but offline clinic is NOT told it owes money', async (t) => {
+  const { app, password } = harness({ validUntil: '2020-01-01T00:00:00Z' });   // subscription: 'active'
+  const server = await listen(app); t.after(() => server.close());
+  const cookie = await login(server, password);
+
+  const res = await post(server, cookie, '/api/db', { table: 'patients', op: 'insert', values: { full_name: 'Тест' } });
+  assert.equal(res.status, 402);
+  const body = await res.json();
+
+  assert.equal(body.error.reason, 'offline', 'they have paid — the licence simply was not re-armed');
+  assert.match(body.error.message, /Нет связи с Easy-Med/);
+  assert.doesNotMatch(body.error.message, /Подписка не активна/, 'never accuse a paying clinic of not paying');
+});
+
+test('a clinic that stopped paying IS told about the subscription', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-unpaid-'));
+  fs.writeFileSync(path.join(dir, 'control.json'), JSON.stringify({
+    clinic_id: 'c-1', unlock_secret: 's', subscription: 'unpaid',
+  }));
+  const payload = { clinic_id: 'c-1', clinic_name: 'T', modules: [], valid_until: '2020-01-01T00:00:00Z', issued_at: '2020-01-01T00:00:00Z', nonce: 'n' };
+  fs.writeFileSync(path.join(dir, 'licence.dat'), JSON.stringify({
+    payload, sig: sign(null, Buffer.from(canonical(payload), 'utf8'), privateKey).toString('base64'),
+  }));
+  const db = openDb(':memory:'); migrate(db);
+  const password = bootstrapAdmin(db);
+  const server = await listen(createApp(db, { dataDir: dir })); t.after(() => server.close());
+  const cookie = await login(server, password);
+
+  const res = await post(server, cookie, '/api/db', { table: 'patients', op: 'insert', values: { full_name: 'Тест' } });
+  const body = await res.json();
+  assert.equal(body.error.reason, 'unpaid');
+  assert.match(body.error.message, /Подписка не активна/);
+});
