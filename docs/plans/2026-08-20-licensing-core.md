@@ -23,6 +23,12 @@
   to exist*. The project has no git history before 2026-08-20, so comments are the only record.
   Match that style — explain why, not what.
 - **Never `git add -A` or `git add .`** Add only the explicit paths listed in each commit step.
+- **Never create a git worktree of this repo.** `node_modules/` and `data/` are both gitignored,
+  so a worktree has neither — no test can run and the app cannot boot. Worse, junctioning
+  `node_modules` into one and cleaning up afterwards *emptied the real `node_modules`* during this
+  plan's execution. If you need an isolated checkout, ask instead. To restore:
+  `cp -r ../easymed.old/node_modules ./node_modules` — never `npm install`, which tries to compile
+  better-sqlite3 and fails without Visual Studio build tools.
 - **UI language is Russian.** Strings go through `public/js/admin/i18n-strings.js` (UZ/RU/EN).
 - **No emojis in the UI, ever.** Icons come from `public/js/admin/icons.js`.
 
@@ -310,6 +316,22 @@ test('073 records module access requests with who and when', () => {
   assert.equal(row.sent_at, null, 'not yet reported to the vendor');
 });
 
+test('073 lets a staff member be deleted, keeping their request unattributed', () => {
+  // Without ON DELETE SET NULL this throws, and routes/users.js — whose
+  // STAFF_HISTORY_REFS/STAFF_CONFIG_REFS lists do not mention this table —
+  // would have told the admin the delete was safe first.
+  const db = fresh();
+  db.prepare("INSERT INTO users (username, password_hash, full_name, role) VALUES ('n1','x','Nurse','nurse')").run();
+  const id = db.prepare("SELECT id FROM users WHERE username='n1'").get().id;
+  db.prepare('INSERT INTO module_requests (module_key, requested_by) VALUES (?, ?)').run('crm', id);
+
+  assert.doesNotThrow(() => db.prepare('DELETE FROM users WHERE id = ?').run(id));
+
+  const row = db.prepare('SELECT * FROM module_requests').get();
+  assert.equal(row.requested_by, null, 'the lead survives, unattributed');
+  assert.equal(row.module_key, 'crm');
+});
+
 test('073 keeps only one open request per module', () => {
   const db = fresh();
   db.prepare('INSERT INTO module_requests (module_key) VALUES (?)').run('crm');
@@ -338,7 +360,7 @@ Create `server/db/migrations/073_licensing.sql`:
 -- would edit to grant themselves a module. What lives here is only the state
 -- that has no security value on its own.
 
-CREATE TABLE IF NOT EXISTS control_state (
+CREATE TABLE control_state (
   key        TEXT PRIMARY KEY,
   value      TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
@@ -347,10 +369,18 @@ CREATE TABLE IF NOT EXISTS control_state (
 -- «Подключить модуль» from the locked-module screen. Rows wait here until a
 -- check-in carries them to the vendor (Plan 1b); until then this table IS the
 -- outbox, so nothing is lost while a clinic is offline.
-CREATE TABLE IF NOT EXISTS module_requests (
+--
+-- requested_by is ON DELETE SET NULL, deliberately. A module request is a sales
+-- lead, not clinical history: nobody needs to know forever which receptionist
+-- clicked the button. Without SET NULL the foreign key blocks deleting that
+-- member of staff — and because routes/users.js decides deletable-vs-blocked
+-- from a hardcoded list this table is not on, the clinic would be told the
+-- delete was allowed and then get an opaque 500. Staff administration must
+-- never fail because of a licensing table.
+CREATE TABLE module_requests (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   module_key    TEXT NOT NULL,
-  requested_by  INTEGER REFERENCES users(id),
+  requested_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
   requested_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
   sent_at       TEXT
 );
