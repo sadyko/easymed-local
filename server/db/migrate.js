@@ -32,26 +32,38 @@ export function migrate(db, dir = MIGRATIONS_DIR) {
   // one machine; it is not survivable once releases are delivered to clinics
   // remotely, which is where this project is going.
   //
-  // The 058 and 071 groups below are grandfathered because they CANNOT be fixed.
-  // schema_migrations records the FULL FILENAME, so renaming an applied migration
-  // makes it look new and re-runs it — and 071_dedupe_lab_results.sql opens with
-  // `DELETE FROM lab_results`, while 071_queue_local_day_backfill.sql and
-  // 058_referral_source_person.sql both open with UPDATE. Renaming them to tidy up
-  // the numbering would wipe real clinical data on every install that already has
-  // them. They are applied, their order is settled, and they are left alone.
+  // The five files below are forgiven because they CANNOT be renamed. Renaming is
+  // the obvious tidy-up and it is the dangerous one: schema_migrations records the
+  // FULL FILENAME, so a renamed migration looks new and RE-RUNS. Two of these
+  // would do real damage on a second run — 071_dedupe_lab_results.sql carries a
+  // DELETE FROM lab_results that once removed 89 duplicate rows, and
+  // 071_queue_local_day_backfill.sql carries an UPDATE across visit_services.
+  // 058_referral_source_person.sql would fail outright on its ADD COLUMNs. The
+  // remaining two are additive, but they share a number with the others and so are
+  // listed here too. All five are applied, their order is settled, leave them.
   //
-  // Nothing may join this set. It is a record of damage already done, not a
-  // mechanism for permitting more.
-  const GRANDFATHERED_COLLISIONS = new Set(['058', '071']);
+  // Forgiveness is per FILENAME, deliberately. Exempting the NUMBER would leave
+  // 058 and 071 permanently open for a new colliding file, at exactly the two
+  // numbers a future contributor is most likely to reuse by mistake.
+  const GRANDFATHERED_COLLISIONS = new Set([
+    '058_crm_line_doctor.sql',
+    '058_referral_source_person.sql',
+    '071_dedupe_lab_results.sql',
+    '071_deposit_invoice_link.sql',
+    '071_queue_local_day_backfill.sql',
+  ]);
 
   const byNumber = new Map();
   for (const file of files) {
-    const num = file.slice(0, file.indexOf('_'));
-    if (GRANDFATHERED_COLLISIONS.has(num)) continue;
-    if (byNumber.has(num)) {
-      throw new Error(`Duplicate migration number: ${num} (${byNumber.get(num)} and ${file})`);
-    }
-    byNumber.set(num, file);
+    // Compared as a NUMBER so 001_ and 0001_ cannot both claim slot one; the
+    // filename regex above permits 3-or-more digits, so that is reachable.
+    const num = Number(file.slice(0, file.indexOf('_')));
+    const first = byNumber.get(num);
+    if (first === undefined) { byNumber.set(num, file); continue; }
+    if (GRANDFATHERED_COLLISIONS.has(file) && GRANDFATHERED_COLLISIONS.has(first)) continue;
+    throw new Error(
+      `Duplicate migration number: ${String(num).padStart(3, '0')} (${first} and ${file})`
+    );
   }
 
   const applied = new Set(db.prepare('SELECT name FROM schema_migrations').all().map(r => r.name));
