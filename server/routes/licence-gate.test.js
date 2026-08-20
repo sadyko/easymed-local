@@ -6,9 +6,10 @@ import path from 'node:path';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
-import { bootstrapAdmin } from '../services/auth.js';
+import { bootstrapAdmin, hashPassword } from '../services/auth.js';
 import { canonical } from '../services/control/canonical.js';
 import { __setPublicKeyForTests } from '../services/control/state.js';
+import { expectedResponse } from '../services/control/unlock.js';
 import { createApp } from '../app.js';
 
 const { publicKey, privateKey } = generateKeyPairSync('ed25519');
@@ -235,4 +236,131 @@ test('a lapsed clinic can still list staff', async (t) => {
   const cookie = await login(server, password);
   const res = await request(server, cookie, 'GET', '/api/users');
   assert.equal(res.status, 200, 'reading the staff roster must never be blocked');
+});
+
+// LICENCE_CORE_V1 — Task 11: the three RPCs that must survive a licence lockout.
+//
+// This is the single most valuable test in that task: a name mismatch between
+// this file's expectations, gate.js's ALWAYS_ALLOWED_RPCS and rpc/index.js's
+// registration would strand every locked clinic behind its own escape hatch,
+// and nothing else in the suite would catch it — the read-only/unknown-RPC
+// tests above exercise entirely different RPC names.
+test('all three licence RPCs stay reachable through the real HTTP route on a locked clinic', async (t) => {
+  const { app, password } = harness({ validUntil: '2020-01-01T00:00:00Z' });
+  const server = await listen(app); t.after(() => server.close());
+  const cookie = await login(server, password);
+
+  const status = await post(server, cookie, '/api/rpc/licence_status', {});
+  assert.notEqual(status.status, 402, 'licence_status must answer even while locked');
+  const statusBody = await status.json();
+  assert.equal(statusBody.data.locked, true);
+
+  // Wrong code on purpose: this proves the RPC is REACHABLE (400, not 402),
+  // not that redemption succeeds — the full round trip is the next test.
+  const unlock = await post(server, cookie, '/api/rpc/licence_unlock', { code: 'WRONG-CODE1' });
+  assert.notEqual(unlock.status, 402, 'licence_unlock must answer even while locked');
+  assert.equal(unlock.status, 400, 'a wrong code is a bad request, not a lock');
+
+  const req = await post(server, cookie, '/api/rpc/module_request', { module_key: 'crm' });
+  assert.notEqual(req.status, 402, 'module_request must answer even while locked');
+  assert.equal(req.status, 200);
+});
+
+test('a locked clinic can redeem the correct telephone code end-to-end', async (t) => {
+  const { app, password } = harness({ validUntil: '2020-01-01T00:00:00Z' });
+  const server = await listen(app); t.after(() => server.close());
+  const cookie = await login(server, password);
+
+  const status = await (await post(server, cookie, '/api/rpc/licence_status', {})).json();
+  const challenge = status.data.challenge;
+  assert.ok(challenge, 'the lock screen must have a code to read out over the phone');
+
+  // The vendor side of the call: same computation, done here with the secret
+  // from control.json ('s', written by harness()) instead of reading it off disk.
+  const code = expectedResponse({ clinicId: 'c-1', challenge, secret: 's' });
+  const res = await post(server, cookie, '/api/rpc/licence_unlock', { code });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.data.ok, true);
+  assert.ok(body.data.until, 'the extension date must come back so the UI can show it');
+
+  // And the clinic should read as unlocked immediately after, on the same
+  // connection that redeemed the code — no restart needed.
+  const after = await (await post(server, cookie, '/api/rpc/licence_status', {})).json();
+  assert.equal(after.data.locked, false);
+});
+
+async function loginAs(server, username, password) {
+  const res = await fetch(`http://127.0.0.1:${server.address().port}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  return res.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+}
+
+// ADMIN_DOCTOR_V1-class check (see easymed-admin-doctor memory): a clinic
+// admin's PRIMARY role is not always 'admin' — extra_roles exists precisely so
+// one account can be, say, a doctor AND an admin. Testing user.role directly
+// (as opposed to hasAnyRole(), which every other RPC guard in this codebase
+// uses) would lock exactly that admin out of the one screen that lets them
+// pay. These two tests pin the fix for this RPC specifically.
+test('an admin granted only via extra_roles can still reach licence_unlock', async (t) => {
+  const { app, db } = harness({ validUntil: '2020-01-01T00:00:00Z' });
+  db.prepare(
+    'INSERT INTO users (username, password_hash, full_name, role, extra_roles) VALUES (?,?,?,?,?)'
+  ).run('deskadmin', hashPassword('password1'), 'Front Desk', 'registrar', JSON.stringify(['admin']));
+  const server = await listen(app); t.after(() => server.close());
+  const cookie = await loginAs(server, 'deskadmin', 'password1');
+
+  // Wrong code deliberately — this test is about getting PAST the role guard
+  // (403), not about redemption succeeding. 400 proves the role check passed.
+  const res = await post(server, cookie, '/api/rpc/licence_unlock', { code: 'WRONG-CODE1' });
+  assert.notEqual(res.status, 403, 'an admin granted through extra_roles must not be locked out of activation');
+  assert.equal(res.status, 400);
+});
+
+test('a user without the admin role anywhere is refused licence_unlock, not silently allowed', async (t) => {
+  const { app, db } = harness({ validUntil: '2020-01-01T00:00:00Z' });
+  db.prepare(
+    'INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)'
+  ).run('nursebeth', hashPassword('password1'), 'Beth', 'nurse');
+  const server = await listen(app); t.after(() => server.close());
+  const cookie = await loginAs(server, 'nursebeth', 'password1');
+
+  const res = await post(server, cookie, '/api/rpc/licence_unlock', { code: 'WRONG-CODE1' });
+  assert.equal(res.status, 403, 'only an admin (primary or extra role) may activate a licence');
+});
+
+test('clicking «Подключить модуль» twice through the real route records one lead, not two', async (t) => {
+  const { app, password } = harness({ validUntil: '2020-01-01T00:00:00Z' });
+  const server = await listen(app); t.after(() => server.close());
+  const cookie = await login(server, password);
+
+  const first = await (await post(server, cookie, '/api/rpc/module_request', { module_key: 'telegram' })).json();
+  assert.equal(first.data.already, false);
+  const second = await (await post(server, cookie, '/api/rpc/module_request', { module_key: 'telegram' })).json();
+  assert.equal(second.data.already, true, 'the button must not show an error on a second click');
+});
+
+// LICENCE_CORE_V1 — an install that has never been enrolled (no control.json at
+// all, e.g. a fresh copy before the vendor has run the enrollment step) still
+// locks, via state.js's 'not_enrolled' path. The lock screen still needs
+// SOMETHING to render: currentChallenge() only ever touches control_state
+// (always created by migrate()), never control.json, so a challenge is
+// generated even with no clinic identity on disk at all.
+test('licence_status renders a real activation code even with no control.json at all', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-unenrolled-'));
+  const db = openDb(':memory:'); migrate(db);
+  const password = bootstrapAdmin(db);
+  const server = await listen(createApp(db, { dataDir: dir }));
+  t.after(() => server.close());
+  const cookie = await login(server, password);
+
+  const res = await post(server, cookie, '/api/rpc/licence_status', {});
+  assert.notEqual(res.status, 402);
+  const body = await res.json();
+  assert.equal(body.data.reason, 'not_enrolled');
+  assert.equal(body.data.locked, true);
+  assert.ok(body.data.challenge, 'the activation screen must have something to show, not a blank lock screen');
 });

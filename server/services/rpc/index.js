@@ -20,6 +20,7 @@ import { deleteService, serviceDeleteCheck } from './catalog.js';   // SERVICE_D
 import { saveLabResults } from './lab.js';   // LAB_SAVE_BATCH_V1
 import { cashierReport } from './cashier-report.js';   // CASHIER_REPORT_V1
 import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
+import { licenceStatus, licenceUnlock, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
 
 export const RPC = {
   get_clinic_by_slug:       (db, args, user) => getClinicBySlug(db, args, user),
@@ -162,6 +163,13 @@ export const RPC = {
   // регистратура работает сменами, и личная папка исчезала бы вместе со сменой.
   telegram_folder_save:           (db, args, user) => telegramFolderSave(db, args, user),
   telegram_folder_set_chat:       (db, args, user) => telegramFolderSetChat(db, args, user),
+
+  // LICENCE_CORE_V1 — the three that stay reachable while locked (see
+  // control/gate.js ALWAYS_ALLOWED_RPCS). Without them a clinic that wants to
+  // pay would have no way to say so.
+  licence_status:  (db, args, user) => licenceStatus(db, args, user),
+  licence_unlock:  (db, args, user) => licenceUnlock(db, args, user),
+  module_request:  (db, args, user) => moduleRequest(db, args, user),
 };
 
 export function getRpc(name) {
