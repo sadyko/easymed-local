@@ -13,8 +13,9 @@
 // below prints a plain-English line and exits, never a raw stack trace.
 
 import fs from 'node:fs';
-import { generateKeyPairSync, sign, randomBytes, createHmac } from 'node:crypto';
+import { generateKeyPairSync, sign, randomBytes } from 'node:crypto';
 import { canonical } from '../server/services/control/canonical.js';
+import { expectedResponse } from '../server/services/control/unlock.js';
 
 // Pairs "--flag value"; a flag with nothing after it (end of argv, or another
 // flag immediately following) becomes boolean `true` rather than silently
@@ -47,7 +48,11 @@ const need = (k) => {
 };
 
 // Must match unlock.js exactly — the clinic verifies with the same alphabet.
-const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+// The unlock alphabet and code derivation deliberately live in ONE place —
+// server/services/control/unlock.js, imported above. They were duplicated here
+// at first, and the two copies agreed, but nothing forced them to: editing the
+// alphabet on the clinic side would have silently broken every telephone unlock,
+// discoverable only when a locked clinic read out a code that no longer worked.
 
 switch (process.argv[2]) {
   case 'keygen': {
@@ -149,10 +154,14 @@ switch (process.argv[2]) {
   }
 
   case 'unlock': {
-    const mac = createHmac('sha256', need('secret')).update(`${need('clinic')}:${need('challenge')}`).digest();
-    let code = '';
-    for (let i = 0; i < 10; i++) code += ALPHABET[mac[i] % ALPHABET.length];
-    console.log('Read this back to the clinic:  ' + code.slice(0, 5) + '-' + code.slice(5));
+    // Same function the clinic runs to check the code. Importing it rather than
+    // recomputing it is what makes agreement structural instead of coincidental.
+    const code = expectedResponse({
+      clinicId:  need('clinic'),
+      challenge: need('challenge'),
+      secret:    need('secret'),
+    });
+    console.log('Read this back to the clinic:  ' + code);
     break;
   }
 
