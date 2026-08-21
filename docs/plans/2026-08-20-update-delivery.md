@@ -137,7 +137,19 @@ Extends Plan 1b's check-in response with an `update` block.
 - [ ] `update_status` RPC → the offer, the notes, whether it is approved, when it will install.
 - [ ] `update_approve` RPC → **admin only, via `hasAnyRole`, not `user.role`.** A clinic admin whose primary role is cashier or doctor holds admin through `extra_roles`; a primary-role check locks out exactly the person who approves. This bug has already occurred twice in this project.
 - [ ] Approval records who and when. It is a consent record — it may be asked about later.
-- [ ] The installer runs in the 03:00–04:00 window. If the PC is off, it runs at the next opportunity in that window — **never mid-morning**, which is the entire point.
+- [ ] **The clinic chooses when.** Approval and timing are one action: «Обновить сегодня ночью»
+      offers a default of 03:00 tonight, plus «завтра ночью» and a free hour picker.
+      - A fixed 03:00 was the original design and it is wrong. A clinic that closes at 14:00 has no
+        reason to wait until 3am, and a 24-hour clinic may be busiest then — its quiet hour might be
+        05:00. The vendor cannot know; the clinic does.
+      - Store the chosen local hour, not a UTC instant. "03:00" means three in the morning where the
+        clinic is, on whatever day it next occurs.
+      - **Warn, do not block, if they pick a working hour.** Show the clinic's own configured
+        working hours if available and say plainly that staff will be logged out for a minute or
+        two. It is their clinic; they may have a good reason.
+      - If the PC is off at the chosen time, install at the next occurrence of that hour — never
+        immediately on next boot, which could be 09:15 with a full waiting room.
+      - The window is one hour wide. Miss it and wait for tomorrow.
 - [ ] Download to a temp file, verify `sha256`, verify the manifest signature, unpack to `<root>\versions\<version>\`, and only then hand over to `apply-update.ps1`. **Verify before unpacking, never after.**
 - [ ] Every failure is "try again tomorrow" and is reported on the next check-in. Test: no network, half a download, wrong hash, wrong signature, disk full, an already-existing version directory.
 
@@ -162,7 +174,16 @@ Extends Plan 1b's check-in response with an `update` block.
 Russian, no emojis, `tr()` for literal strings (**not `t()`** — different function, different lookup table; that mistake has already shipped once here).
 
 - [ ] Shows: current version, the offered version, `notes_ru`, and one button — «Обновить сегодня ночью».
-- [ ] After approval: «Обновление установится сегодня в 3:00. Компьютер должен быть включён.» That last sentence matters more than it looks — an update that silently never happens because the PC was off is a support call.
+- [ ] The approval control is **one action that includes the time**: a primary button for tonight
+      at 03:00, a secondary for tomorrow night, and a link to pick another hour. Do not make consent
+      and scheduling two separate screens — an admin who approves and then does not notice the time
+      picker has scheduled something they did not intend.
+- [ ] After approval: «Обновление установится сегодня в 3:00. Компьютер должен быть включён.» with
+      the chosen hour substituted. That last sentence matters more than it looks — an update that
+      silently never happens because the PC was off is a support call.
+- [ ] The scheduled time must be **changeable and cancellable** right up until it runs. Someone who
+      approves on Monday and then books a full Tuesday morning needs to move it without phoning
+      anyone.
 - [ ] A quiet banner when an update is waiting, in the style of the licence banner.
 - [ ] After an update: a short "what changed" note on first login.
 - [ ] If the last attempt failed and rolled back, say so plainly, with the version and the date. A clinic must not discover from the vendor that its update failed.
