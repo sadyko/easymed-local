@@ -16,7 +16,18 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 //
 // Ambiguous characters (I, O, 0, 1) are excluded because these codes are read
 // aloud by people, over a phone, in a busy clinic.
-const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 32 chars — power of two, see randomCode()
+//
+// Exported (added under LICENCE_CORE_V1's enrollment task) so enrollment codes
+// — also read aloud over a phone, to enroll a clinic in the first place — use
+// this exact alphabet by import, not by a second hand-typed copy. This project
+// already paid for that mistake once: scripts/make-licence.mjs originally
+// re-typed this alphabet and reimplemented the HMAC derivation instead of
+// importing expectedResponse() from here, and nothing forced the two copies to
+// agree — see the "refactor: the CLI reimplemented the unlock code instead of
+// importing it" commit. Exporting a constant is a smaller change than that
+// refactor needed, but it is the same fix applied before the drift happens
+// instead of after.
+export const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 32 chars — power of two, see randomCode()
 
 const KEY_CHALLENGE       = 'unlock_challenge';
 const KEY_ATTEMPTS        = 'unlock_attempts';
