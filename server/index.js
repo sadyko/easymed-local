@@ -80,7 +80,23 @@ const APP_VERSION = readAppVersion(ROOT);
 // mid-run. `node server/index.js` (npm start, and later the Windows service)
 // makes this file the process entry point; `import './index.js'` from a test
 // does not. That distinction is what isMain checks.
-const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+// Compared as REAL paths, and that is not fussiness — it is the difference
+// between the clinic's service booting and silently not booting.
+//
+// Under the supervised install the service runs
+// C:\EasyMed\current\server\index.js, where `current` is a junction to
+// versions\<v>\. Node's ESM loader resolves import.meta.url THROUGH the
+// junction to the real versions\<v>\ path, while argv[1] stays exactly as
+// typed. A plain string comparison therefore fails, isMain is false, and node
+// exits with code 0, no output and no error: the service appears to start and
+// never runs. Reproduced directly before this line was written.
+//
+// realpathSync resolves the junction on both sides, so they agree whether or not
+// --preserve-symlinks-main was passed. The launcher passes it too, but a guard
+// that depends on someone remembering a flag is not a guard.
+const realPath = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+const isMain = process.argv[1]
+  && realPath(path.resolve(process.argv[1])) === realPath(fileURLToPath(import.meta.url));
 
 if (isMain) {
   const db = openDb(path.join(DATA_DIR, 'easymed.db'));
