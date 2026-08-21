@@ -16,12 +16,35 @@ months stale. The real state:
 - **Everything through Phase 2 shipped.** Patients, CRM, doctor cabinet, queue board,
   laboratory, procedures, inpatient/beds, cashier + shifts, procurement, documents, reports,
   roles, i18n (UZ/RU/EN), and a Telegram patient bot are all live.
-- **1,100 automated tests, all passing.** (`npm test`)
+- **1,418 automated tests, all passing.** (`npm test`)
 - 97 tables, 72 migrations, ~107,000 lines of code.
 
-Next work: the **control plane** — a panel at `settings.easymed.uz` that licenses clinics,
-collects non-PII statistics, and delivers updates. Design in progress; see
-`docs/specs/` once it lands.
+**Licensing is done and enforced** (Plan 1a, `docs/plans/2026-08-20-licensing-core.md`).
+A clinic verifies an Ed25519-signed licence, unbought modules show an offer screen instead of
+opening, and a lapsed clinic can log in and read but cannot write. Editing `licence.dat` locks the
+app rather than unlocking it; winding the PC clock back does not extend anything; a corrupt or
+missing licence locks but never stops the app starting. Telephone unlock works with no internet.
+
+**The control plane is most of the way there** (`docs/plans/2026-08-20-control-plane-service.md`):
+registry with unique clinic ids, licence signing, enrollment over the wire, the daily check-in, and
+the clinic-side client that calls it. Granting a module in the vendor's database reaches the clinic
+on its next check-in with no file carried by hand. **Still to build: the vendor panel page.**
+
+**Supervised install is done** (`docs/plans/2026-08-20-supervised-install.md`): `EASYMED_DATA_DIR`,
+pre-migration database backups, the Windows service installer and a version switcher that rolls
+itself back on a failed health check. Untested end-to-end because this machine has no
+administrator rights — service registration needs one pass on a box that does.
+
+**Not started:** remote updates (`docs/plans/2026-08-20-update-delivery.md`, blocked on a GitHub
+remote that does not exist yet) and statistics collection (no plan written).
+
+### The development licence key
+
+This working copy carries a **development** Ed25519 key in
+`server/services/control/licence.js` and a matching `data/licence.dat` for clinic `dev-local`.
+Without it the app sits read-only, because the shipped placeholder key can verify nothing by
+design. **It must be replaced before any clinic install** — `node scripts/make-licence.mjs keygen`
+— and the server prints a loud warning at every boot until it is.
 
 ## Architecture — the one thing to understand first
 
