@@ -1,5 +1,6 @@
 import express from 'express';
 import { enrollRoutes } from './routes/enroll.js';
+import { checkinRoutes } from './routes/checkin.js';
 
 // LICENCE_CORE_V1 — the control plane's own HTTP surface, minimal on purpose.
 //
@@ -16,6 +17,7 @@ export function createApp(db) {
   app.use('/api', express.json({ limit: '100kb' }));
 
   app.use('/api/v1/enroll', enrollRoutes(db));
+  app.use('/api/v1/checkin', checkinRoutes(db));
 
   // Unknown /api paths answer JSON, not an HTML 404 page.
   app.use('/api', (req, res) => res.status(404).json({ error: { code: 'not_found', message: 'Unknown API endpoint.' } }));
