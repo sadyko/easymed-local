@@ -562,19 +562,32 @@ function Wait-ForEasyMedHealthy {
     & sc.exe @('start', $ServiceName) | Out-Null
     # sc.exe start's own exit code only reports whether the Service Control
     # Manager ACCEPTED the start request, not whether node.exe went on to open
-    # the port - that is why this polls Get-Service AND the health endpoint,
-    # rather than trusting that exit code alone.
+    # the port.
 
+    # UNVERIFIED, FLAGGED — this whole install could not be tested against a
+    # REAL registered service in this session (no administrator rights were
+    # available here, confirmed: sc.exe create itself returns "Access is
+    # denied"). The one thing that could not be checked as a result: whether
+    # Get-Service ever reports 'Running' for a process that never calls
+    # StartServiceCtrlDispatcher (which powershell.exe/cmd.exe/node.exe here
+    # never do - see Register-EasyMedService). That is a well-known Windows
+    # requirement for a service to be considered started, and its absence is
+    # what commonly produces "Error 1053: the service did not respond in a
+    # timely fashion" for a raw executable registered this way. If Get-Service
+    # never flips to Running even though the app is genuinely up underneath,
+    # gating on it here would report failure for an install that actually
+    # worked - so this polls the health endpoint on its own merits and treats
+    # THAT as ground truth, independent of what Get-Service says. Whoever
+    # runs this with real admin rights should check Get-Service's status
+    # after a successful health check, specifically to see whether it says
+    # Running or something else.
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
-        $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-        if ($svc -and $svc.Status -eq 'Running') {
-            try {
-                $resp = Invoke-RestMethod -Uri "http://localhost:$Port/api/health" -TimeoutSec 2
-                if ($resp.ok -eq $true) { return $true }
-            } catch {
-                # not answering yet - keep polling until the deadline
-            }
+        try {
+            $resp = Invoke-RestMethod -Uri "http://localhost:$Port/api/health" -TimeoutSec 2
+            if ($resp.ok -eq $true) { return $true }
+        } catch {
+            # not answering yet - keep polling until the deadline
         }
         Start-Sleep -Seconds 1
     }
