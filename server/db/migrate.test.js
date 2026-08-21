@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { openDb } from './connection.js';
-import { migrate } from './migrate.js';
+import { migrate, pendingMigrations } from './migrate.js';
 
 test('migrate creates tables and is idempotent', () => {
   const db = openDb(':memory:');
@@ -69,4 +69,40 @@ test('the same number padded differently is still one number', () => {
   fs.writeFileSync(path.join(dir, '0001_b.sql'), 'CREATE TABLE b (id INTEGER);');
   const db = openDb(':memory:');
   assert.throws(() => migrate(db, dir), /Duplicate migration number/);
+});
+
+test('pendingMigrations: none pending on a fully migrated database', () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  assert.deepEqual(pendingMigrations(db), []);
+});
+
+test('pendingMigrations: all pending on a database that was never migrated', () => {
+  // No schema_migrations table exists yet — pendingMigrations must treat that
+  // as "nothing applied", not throw, since this is exactly the state the boot
+  // sequence calls it in to decide whether a backup is worth taking.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-mig-'));
+  fs.writeFileSync(path.join(dir, '001_a.sql'), 'CREATE TABLE a (id INTEGER);');
+  fs.writeFileSync(path.join(dir, '002_b.sql'), 'CREATE TABLE b (id INTEGER);');
+  const db = openDb(':memory:');
+  assert.deepEqual(pendingMigrations(db, dir), ['001_a.sql', '002_b.sql']);
+});
+
+test('pendingMigrations does not itself apply anything', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-mig-'));
+  fs.writeFileSync(path.join(dir, '001_a.sql'), 'CREATE TABLE a (id INTEGER);');
+  const db = openDb(':memory:');
+
+  pendingMigrations(db, dir);
+
+  // the migration itself must not have run
+  assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='a'").get(), undefined);
+  // nor must the bookkeeping table have been created as a side effect —
+  // pendingMigrations is a read, migrate() is the only thing that writes
+  assert.equal(
+    db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'").get(),
+    undefined
+  );
+  // and calling it again gives the same answer — it did not consume anything
+  assert.deepEqual(pendingMigrations(db, dir), ['001_a.sql']);
 });

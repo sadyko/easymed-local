@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb } from './db/connection.js';
-import { migrate } from './db/migrate.js';
+import { migrate, pendingMigrations } from './db/migrate.js';
+import { backupBeforeMigrate, pruneBackups } from './db/backup.js';   // SUPERVISED_INSTALL_V1
 import { bootstrapAdmin } from './services/auth.js';
 import { autoCloseStaleShifts } from './services/rpc/cashier.js';   // SHIFT_AUTOCLOSE_V1
 import { startTelegramBot } from './services/telegram/index.js';   // TELEGRAM_BOT_V1
@@ -54,6 +55,20 @@ const DATA_DIR = resolveDataDir(process.env, ROOT, { mkdir: true });
 // the versioned application folder, which an update deletes wholesale.
 setDataDir(DATA_DIR);
 
+// SUPERVISED_INSTALL_V1 — the version stamped into a pre-migration backup's
+// filename (see db/backup.js). Read straight from package.json rather than
+// imported, and defaulted rather than thrown, because a version tag that can't
+// be read is not worth failing boot over — the backup itself still protects
+// the database either way, it just gets a '0.0.0' label instead of '2.4.0'.
+function readAppVersion(root) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+const APP_VERSION = readAppVersion(ROOT);
+
 // SUPERVISED_INSTALL_V1 — importing this file must not have side effects.
 //
 // server/index.datadir.test.js needs to import resolveDataDir from this module
@@ -74,6 +89,44 @@ if (isMain) {
   // если сервер был выключен — закрытие догонит при старте или первом RPC).
   setTimeout(() => { try { autoCloseStaleShifts(db); } catch (e) { console.warn('[shift-autoclose]', e.message); } }, 3000);
   setInterval(() => { try { autoCloseStaleShifts(db); } catch (e) { console.warn('[shift-autoclose]', e.message); } }, 60 * 60 * 1000);
+
+  // SUPERVISED_INSTALL_V1 — back up before touching the schema, and only then.
+  //
+  // Guarded on there being unapplied migrations so an ordinary restart does not
+  // copy a multi-MB database every time the clinic reboots its PC — only an
+  // update, which is the one moment a rollback point is actually needed.
+  //
+  // Top-level await IS legal here even though this sits inside `if (isMain) {`:
+  // a block statement (if/for/try/...) does not open a new function scope, so
+  // code inside it is still the module's top-level code as far as the "await
+  // only works at the top level" rule is concerned — verified directly against
+  // this Node version before relying on it, rather than assumed. What top-level
+  // await cannot do is cross into a nested function body (e.g. an arrow
+  // passed to .then or setTimeout); nothing here does that.
+  try {
+    if (pendingMigrations(db).length) {
+      const out = await backupBeforeMigrate(db, path.join(DATA_DIR, 'easymed.db'), APP_VERSION);
+      console.log(`  Database backed up before update: ${out}`);
+      // Its OWN try/catch, deliberately separate from the one below. Pruning
+      // old backups is disk hygiene, not correctness, and it runs AFTER the
+      // line above already told the operator the backup succeeded — a
+      // failure here must never be reported as "no rollback point exists"
+      // when one plainly does, sitting right there on disk.
+      try {
+        pruneBackups(path.join(DATA_DIR, 'backups'), 3);
+      } catch (e) {
+        console.warn('[backup] could not prune old backups (the new backup is fine):', e.message);
+      }
+    }
+  } catch (e) {
+    // A clinic must not be unable to start because a backup could not be
+    // written — a clinic that cannot open at all is worse than one that
+    // migrates unprotected for one run. But it must be LOUD: the next
+    // migrate() below is now unprotected, and silence here is how a future
+    // "just restore the backup" support call discovers there isn't one.
+    console.error('[backup] FAILED — migrations will run WITHOUT a rollback point:', e.message);
+  }
+
   migrate(db);
   const firstRunPassword = bootstrapAdmin(db);
 
