@@ -268,6 +268,13 @@ Match `platform-console/`'s house style: vanilla ES modules, `h()`-style DOM, no
 - [ ] **Compute a telephone unlock code** from the clinic's `unlock_secret` and a challenge typed in — reuse `expectedResponse` from the clinic app's `unlock.js`, imported, never reimplemented. It was duplicated once already and the duplication was removed for exactly this reason.
 - [ ] `marketing` must **not** be offerable until it ships. Read `SELLABLE_MODULES` and exclude it explicitly, with a comment.
 
+**Never offer a hard delete.** Task 1 confirmed the schema does not prevent a `clinic_id` being
+reused after its row is deleted — and an old signed licence would then verify against the new
+clinic, silently granting whatever the deleted one had. The registry deliberately carries no
+database-level guard, because the intended retirement path is `active = 0`. That makes it the
+panel's job: retire a clinic, never delete one. If a delete button is ever added, it must first
+check that no licence was ever issued for that id.
+
 **Requests inbox:** open `module_requests` with clinic, module, date; granting one adds the entitlement and marks it granted in a single transaction.
 
 **Access:** vendor staff only. Reuse the existing console's auth if this is served behind it; otherwise a simple session with a strong shared credential is acceptable for v1 — **say which you chose and why in the README**.
