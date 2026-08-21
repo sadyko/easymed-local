@@ -98,6 +98,22 @@ report a suite as green off a single run, and do not chase this flake as a code 
 Also: **never run `npm test` while another agent is writing files.** A half-written module produces
 failures in tests that have nothing to do with it, which reads exactly like a regression.
 
+## Re-running a migration is not "delete its tracking row"
+
+Migrations use plain `CREATE TABLE`, not `CREATE TABLE IF NOT EXISTS` — matching 34 of the 38
+table-creating migrations. That is correct, because `migrate()` runs each file exactly once per
+install, tracked by filename.
+
+But it means the obvious way to force a migration to re-run —
+`DELETE FROM schema_migrations WHERE name='073_licensing.sql'` — **does not work**. The tracking
+row goes, the tables stay, and the re-run dies with `table control_state already exists`.
+
+**How to apply:** to genuinely re-run a migration you must undo what it created as well as its
+tracking row. For 073 that is `control_state`, `module_requests` and `module_requests_open_uniq`.
+Found on 2026-08-21 while testing the pre-migration backup; the backup itself fired correctly
+first, which is exactly the situation it exists for — an operator in this position should restore
+from `data/backups/` rather than hand-patching the schema.
+
 ## Known issues carried over from easymed.old
 
 Recorded so they are not rediscovered the hard way:

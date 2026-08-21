@@ -264,8 +264,14 @@ test('old backups are pruned but the newest are kept', async () => {
 });
 
 test('a failure to back up is reported, not swallowed', async () => {
-  const { db } = workspace();
-  await assert.rejects(() => backupBeforeMigrate(db, '/definitely/not/here/easymed.db', '2.4.0'));
+  // NOT '/definitely/not/here/...' — on Windows that resolves under the current
+  // drive root and mkdirSync({recursive:true}) cheerfully CREATES it, so the test
+  // passed for the wrong reason and littered C:\. Route the path through an
+  // existing FILE instead: mkdir then fails with ENOTDIR on every platform.
+  const { dir, db } = workspace();
+  const blocker = path.join(dir, 'not-a-directory');
+  fs.writeFileSync(blocker, 'x');
+  await assert.rejects(() => backupBeforeMigrate(db, path.join(blocker, 'easymed.db'), '2.4.0'));
 });
 ```
 
@@ -306,10 +312,19 @@ export async function backupBeforeMigrate(db, dbPath, version) {
 
   // A retried update must not destroy the state the first attempt captured, so
   // the name carries a counter rather than being overwritten.
+  // Claimed with an atomic exclusive create, not existsSync-then-write. A service
+  // restart racing a manual start would otherwise both see the same name free and
+  // both back up onto it. db.backup() writes fine onto a pre-created empty file.
   const base = `pre-${version}`;
   let n = 0;
   let out = path.join(dir, `${base}.db`);
-  while (fs.existsSync(out)) out = path.join(dir, `${base}.${++n}.db`);
+  for (;;) {
+    try { fs.closeSync(fs.openSync(out, 'wx')); break; }
+    catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      out = path.join(dir, `${base}.${++n}.db`);
+    }
+  }
 
   // ASYNC — verified against the installed better-sqlite3: db.backup() returns a
   // Promise. It must be awaited, which is why the boot sequence in index.js uses
@@ -381,6 +396,12 @@ migrate(db);
 You will need `pendingMigrations(db)` — add it to `server/db/migrate.js` as a small exported helper that returns the list of `.sql` files not yet recorded in `schema_migrations`, reusing the existing directory read and the duplicate-prefix guard. Give it its own test in `server/db/migrate.test.js`: none pending on a migrated database, all pending on an empty one.
 
 `APP_VERSION` comes from `package.json` — read it once at boot with `createRequire` or `fs.readFileSync`, and default to `'0.0.0'` if unreadable.
+
+> **Correction, verified:** an earlier draft of this plan claimed top-level `await` is illegal
+> inside an `if` block and told the implementer to restructure the boot sequence around it. That is
+> wrong, and was proved wrong by running it. A block statement opens no function scope, so code
+> inside `if (isMain) { ... }` is still module top-level for TLA purposes; it only breaks when the
+> `await` crosses into an actual nested function body. No restructuring is needed.
 
 - [ ] **Step 6: Prove it end to end**
 
