@@ -1,0 +1,373 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { verifyLicence } from './licence.js';
+
+// LICENCE_CORE_V1 — the clinic's half of the daily call.
+//
+// THE RULE THAT OUTRANKS EVERYTHING ELSE HERE: if the control plane is
+// unreachable, broken, or lying, the clinic must not notice. Every clinic
+// holds a licence valid for 14 more days, so a day of vendor downtime is
+// invisible — but only if this file treats every failure (a timeout, a 500,
+// an HTML error page, a licence for someone else, a licence signed with the
+// wrong key, a truncated body, a gigantic body) as "try again tomorrow" and
+// nothing else. Nothing below this comment is allowed to throw out of
+// runCheckin(), overwrite a good licence with an unverifiable one, or leave a
+// half-written file on disk.
+
+const DEFAULT_ENDPOINT = 'https://settings.easymed.uz';
+const CHECKIN_PATH = '/cp/v1/checkin';
+
+// Delay chosen so a slow or dead control plane can never be blamed for a slow
+// boot: the server is already listening and serving patients long before this
+// ever fires. The interval is simply "once a day" — the licence itself is
+// good for 14, so there is no urgency to poll more often, and polling less
+// would shrink the safety margin between "vendor is down" and "licence
+// visibly expires" for no benefit.
+const INITIAL_DELAY_MS = 60_000;
+const INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+// The HTTP call itself must not hang indefinitely — a clinic PC with no
+// internet must fail fast and quietly, not pile up open sockets. 15s is
+// generous for a tiny JSON exchange but nowhere near "indistinguishable from
+// a hang" the way an unbounded wait would be.
+const TIMEOUT_MS = 15_000;
+
+// A licence response is a few hundred bytes; a module_requests list is at
+// most a handful of short strings. Node's fetch will happily buffer whatever
+// a server sends, so this is the client's own backstop against a
+// misbehaving or hostile endpoint answering with megabytes of data — read
+// readBounded()'s own comment for how the cap is enforced without ever
+// buffering past it.
+const MAX_RESPONSE_BYTES = 1_000_000;
+
+let _testPublicKey = null;
+/**
+ * Tests inject their own throwaway key, mirroring state.js's own seam of the
+ * same name and for the same reason: verifyLicence() takes the key as a
+ * parameter rather than reading a module-global, so whoever CALLS it needs a
+ * way to override the default in tests without touching production code
+ * paths. Never called in production — the compiled-in vendor key (the one
+ * baked into licence.js) is what every real clinic trusts.
+ */
+export function __setPublicKeyForTests(key) { _testPublicKey = key; }
+
+// TWO_OVERLAPPING_CHECKINS_V1 — the boot-time timer and the 24h interval
+// timer share this one module-level flag. In real operation they can never
+// coincide (60s after boot vs. once every 24h), but a run that somehow took
+// longer than a day (the TIMEOUT_MS bound above makes this practically
+// impossible, but "practically" is not "provably") must not let a second,
+// overlapping run send duplicate module_requests or race two file writes
+// against each other. The guard lives in the OUTER function (runCheckin),
+// not inside the logic it wraps, so that a call which bails out early here
+// never touches the flag that the ACTUAL in-progress call is relying on to
+// reset itself in its own `finally` — see the "two overlapping check-ins"
+// test for the failure this ordering avoids.
+let inFlight = false;
+
+function readJson(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+function controlStateGet(db, key) {
+  return db.prepare('SELECT value FROM control_state WHERE key = ?').get(key)?.value ?? null;
+}
+
+function controlStatePut(db, key, value) {
+  db.prepare(`INSERT INTO control_state (key, value, updated_at)
+              VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+    .run(key, String(value));
+}
+
+// Temp file in the SAME directory as the target, then rename — path.dirname
+// guarantees that, which is what makes the rename atomic (same filesystem,
+// same volume). A crash or power cut between these two lines leaves either
+// the old file (rename never happened) or the new one (rename is a single
+// filesystem operation) — never a half-written licence.dat that would read
+// as corrupt and lock the clinic out of its own, otherwise-healthy licence.
+//
+// writeFileSync/renameSync are parameters, not hardcoded calls to `fs`, so
+// tests can inject a renameSync that fails for ONE specific destination
+// (control.json) while the real filesystem still services licence.dat's
+// write — see the "control.json unwritable" test, which is the only way to
+// prove the write-ordering claim below without depending on OS-specific
+// permission quirks.
+function writeAtomic(file, content, { writeFileSync = fs.writeFileSync, renameSync = fs.renameSync } = {}) {
+  const dir = path.dirname(file);
+  const tmp = path.join(dir, `.${path.basename(file)}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  writeFileSync(tmp, content);
+  renameSync(tmp, file);
+}
+
+/** Where the daily call goes. Exported so the endpoint-resolution logic itself is unit-testable without a real network call. */
+export function checkinUrl(env = process.env) {
+  const base = String((env && env.EASYMED_CONTROL_URL) || DEFAULT_ENDPOINT).trim().replace(/\/+$/, '');
+  return base + CHECKIN_PATH;
+}
+
+/**
+ * The installed version, read from package.json rather than hardcoded so it
+ * can never drift from what actually shipped. Defaulted rather than thrown —
+ * mirrors server/index.js's own readAppVersion(): a version string that can't
+ * be read is not worth failing (or even warning loudly during) a check-in
+ * over, since it is purely informational on the vendor's side.
+ */
+export function readAppVersion() {
+  try {
+    const pkgPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'package.json');
+    const v = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version;
+    return typeof v === 'string' && v ? v : '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
+/**
+ * A machine fingerprint: hash of hostname + the first non-loopback MAC.
+ *
+ * hostname/interfaces are injectable (default to the real os.* calls) purely
+ * for deterministic tests — os.networkInterfaces() cannot be made to return
+ * a fixed answer otherwise.
+ *
+ * Interface NAMES are sorted before picking one, so re-enumeration on a
+ * plain reboot (same adapters, same names, whatever order the OS happens to
+ * report them in that boot) cannot change the answer. This does NOT make the
+ * fingerprint immune to a genuine hardware change — docking a laptop and
+ * gaining a new adapter whose name sorts alphabetically ahead of the
+ * existing one WILL change the fingerprint, because a real new MAC is now
+ * the "first" one. That is accepted, not fixed, because checkin.js's own
+ * contract (mirroring control-plane/server/services/checkin.js's rule 4)
+ * treats a fingerprint change as evidence only, never a lock — see this
+ * file's KNOWN LIMITATION test and the task report for the reasoning.
+ */
+export function computeFingerprint({ hostname = os.hostname(), interfaces = os.networkInterfaces() } = {}) {
+  let mac = '';
+  for (const name of Object.keys(interfaces || {}).sort()) {
+    for (const iface of interfaces[name] || []) {
+      if (iface && !iface.internal && iface.mac && iface.mac !== '00:00:00:00:00:00') {
+        mac = iface.mac;
+        break;
+      }
+    }
+    if (mac) break;
+  }
+  return createHash('sha256').update(`${hostname}|${mac}`).digest('hex');
+}
+
+// Reads a fetch Response body up to maxBytes, THEN stops — never buffers a
+// gigantic or endless body into memory just to throw it away afterwards. Node's
+// fetch (undici) exposes res.body as a WHATWG ReadableStream; reading it
+// chunk-by-chunk and cancelling once the cap is crossed is what makes the
+// bound real rather than cosmetic (a plain `await res.text()` would already
+// have paid the memory cost by the time any length check could run).
+async function readBounded(res, maxBytes) {
+  const reader = res.body && typeof res.body.getReader === 'function' ? res.body.getReader() : null;
+  if (!reader) {
+    // Some fetch implementations may not expose a streamable body; fall back
+    // to reading it whole and checking size after the fact rather than
+    // refusing to function at all. Never reachable against Node's own fetch.
+    const text = await res.text();
+    return Buffer.byteLength(text, 'utf8') > maxBytes ? null : text;
+  }
+  let total = 0;
+  const chunks = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > maxBytes) {
+      try { await reader.cancel(); } catch { /* best-effort — we are discarding this response anyway */ }
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+/**
+ * One check-in attempt. Never throws — every failure path logs a warning and
+ * returns, leaving licence.dat, control.json and module_requests exactly as
+ * they were. See this file's header for why that guarantee is the entire
+ * point of the feature.
+ *
+ * @param {Database} db
+ * @param {string} dataDir
+ * @param {object} [opts]
+ * @param {typeof fetch} [opts.fetchImpl]
+ * @param {string} [opts.endpoint]        override for the control-plane BASE url (tests point this at a fake server)
+ * @param {number} [opts.timeoutMs]
+ * @param {number} [opts.maxResponseBytes]
+ * @param {Function} [opts.writeFileSync] override for atomic-write testing
+ * @param {Function} [opts.renameSync]    override for atomic-write testing
+ */
+export async function runCheckin(db, dataDir, opts = {}) {
+  if (inFlight) return; // see TWO_OVERLAPPING_CHECKINS_V1 above
+  inFlight = true;
+  try {
+    await performCheckin(db, dataDir, opts);
+  } finally {
+    inFlight = false;
+  }
+}
+
+async function performCheckin(db, dataDir, {
+  fetchImpl = globalThis.fetch,
+  endpoint,
+  timeoutMs = TIMEOUT_MS,
+  maxResponseBytes = MAX_RESPONSE_BYTES,
+  writeFileSync,
+  renameSync,
+} = {}) {
+  try {
+    const identityPath = path.join(dataDir, 'control.json');
+    const identity = readJson(identityPath);
+
+    // RULE — no token, no call. This install was licensed by hand and must
+    // keep working exactly as it does today; nothing here may change that.
+    const token = identity && typeof identity === 'object' && !Array.isArray(identity)
+      && typeof identity.install_token === 'string' && identity.install_token
+      ? identity.install_token
+      : null;
+    if (!token) return;
+
+    const pending = db.prepare(
+      'SELECT id, module_key, requested_at FROM module_requests WHERE sent_at IS NULL ORDER BY id',
+    ).all();
+
+    const url = endpoint ? String(endpoint).replace(/\/+$/, '') + CHECKIN_PATH : checkinUrl();
+
+    let res;
+    try {
+      res = await fetchImpl(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          install_token: token,
+          version: readAppVersion(),
+          fingerprint: computeFingerprint(),
+          module_requests: pending.map((r) => ({ module_key: r.module_key, requested_at: r.requested_at })),
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (e) {
+      // Connection refused, DNS failure, timeout — all land here. Exactly the
+      // "vendor is unreachable" case the whole file exists for.
+      console.warn('[checkin] could not reach the control plane, will retry tomorrow:', e && e.message);
+      return;
+    }
+
+    if (!res.ok) {
+      console.warn('[checkin] control plane responded with status', res.status);
+      return;
+    }
+
+    const text = await readBounded(res, maxResponseBytes);
+    if (text === null) {
+      console.warn('[checkin] response exceeded the size bound — discarded');
+      return;
+    }
+
+    let body;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      console.warn('[checkin] response was not valid JSON — discarded');
+      return;
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      console.warn('[checkin] response was not a JSON object — discarded');
+      return;
+    }
+
+    // ORDER MATTERS — licence.dat is written BEFORE control.json. If the
+    // control.json write below fails (disk full, permissions), the
+    // functionally important half — the renewed licence, the actual thing
+    // that keeps the clinic unlocked — has already landed safely. A stale
+    // subscription WORD (money vs. offline wording) is a cosmetic gap that
+    // heals on the next successful check-in; a lost licence renewal is not.
+    if (body.licence) {
+      let verified;
+      try {
+        verified = verifyLicence(JSON.stringify(body.licence), {
+          publicKey: _testPublicKey,
+          clinicId: identity.clinic_id,
+        });
+      } catch {
+        // verifyLicence is documented never to throw; this is a backstop for
+        // that guarantee changing out from under this call site someday, not
+        // a path expected to ever run.
+        verified = { ok: false, reason: 'malformed' };
+      }
+      if (verified.ok) {
+        try {
+          writeAtomic(path.join(dataDir, 'licence.dat'), JSON.stringify(body.licence), { writeFileSync, renameSync });
+        } catch (e) {
+          console.warn('[checkin] could not write licence.dat:', e && e.message);
+        }
+      } else {
+        // NEVER overwrite a good licence with an unverifiable one — the
+        // existing licence.dat, if any, is left completely untouched.
+        console.warn('[checkin] discarded an unverifiable licence:', verified.reason);
+      }
+    }
+
+    // The vendor recorded these leads inside its own transaction the moment
+    // the HTTP call succeeded (control-plane/server/services/checkin.js),
+    // independent of whether a licence came back — so they are marked
+    // delivered here regardless of the licence-verification outcome above.
+    if (pending.length) {
+      try {
+        const sentAt = new Date().toISOString();
+        const mark = db.prepare('UPDATE module_requests SET sent_at = ? WHERE id = ?');
+        db.transaction((rows) => { for (const row of rows) mark.run(sentAt, row.id); })(pending);
+      } catch (e) {
+        console.warn('[checkin] could not mark module_requests as sent:', e && e.message);
+      }
+    }
+
+    if (typeof body.subscription === 'string' && body.subscription) {
+      try {
+        writeAtomic(identityPath, JSON.stringify({ ...identity, subscription: body.subscription }), { writeFileSync, renameSync });
+      } catch (e) {
+        console.warn('[checkin] could not store the reported subscription:', e && e.message);
+      }
+    }
+
+    try {
+      controlStatePut(db, 'last_checkin_at', new Date().toISOString());
+    } catch (e) {
+      console.warn('[checkin] could not record the last check-in time:', e && e.message);
+    }
+  } catch (e) {
+    // Backstop. Every meaningful step above already has its own guard; this
+    // exists so that something unforeseen still resolves to "try again
+    // tomorrow" rather than an uncaught exception reaching the caller.
+    console.warn('[checkin] unexpected error, treating as "try again tomorrow":', e && e.message);
+  }
+}
+
+/**
+ * Wires the daily call into the running process. Fires once ~60s after boot
+ * (so it can never slow startup or delay listen()) and then every 24h.
+ * .unref() on both timers so neither can hold the process open — a clinic
+ * shutting down must not wait on a licensing timer that has nothing urgent
+ * to do.
+ */
+export function scheduleCheckin(db, dataDir, opts = {}) {
+  const { initialDelayMs = INITIAL_DELAY_MS, intervalMs = INTERVAL_MS, ...runOpts } = opts;
+  const run = () => {
+    // runCheckin() is documented never to reject, but a scheduled timer
+    // callback has no caller to hand a rejection to anyway — an uncaught
+    // rejection here would surface as a process-level warning at best and a
+    // crash at worst, neither of which this feature is allowed to cause.
+    runCheckin(db, dataDir, runOpts).catch((e) => console.warn('[checkin] scheduled run failed:', e && e.message));
+  };
+  const initial = setTimeout(run, initialDelayMs);
+  initial.unref();
+  const interval = setInterval(run, intervalMs);
+  interval.unref();
+  return { initial, interval };
+}

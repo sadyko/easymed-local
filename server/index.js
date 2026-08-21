@@ -11,6 +11,7 @@ import { autoCloseStaleShifts } from './services/rpc/cashier.js';   // SHIFT_AUT
 import { startTelegramBot } from './services/telegram/index.js';   // TELEGRAM_BOT_V1
 import { createApp } from './app.js';
 import { setDataDir } from './services/control/config.js';   // SUPERVISED_INSTALL_V1
+import { scheduleCheckin } from './services/control/checkin.js';   // LICENCE_CORE_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -211,6 +212,13 @@ if (isMain) {
     }
     throw err;
   });
+
+  // LICENCE_CORE_V1 — the daily call home. Placed after listen() is called,
+  // never awaited: scheduleCheckin only arms two unref()'d timers (first
+  // fires ~60s from now, then every 24h) and returns immediately, so a dead
+  // or slow control plane can never be the reason a clinic's own server is
+  // slow to start or fails to bind its port.
+  scheduleCheckin(db, DATA_DIR);
 }
 
 function lanAddresses() {
