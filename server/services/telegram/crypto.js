@@ -18,6 +18,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getDataDir } from '../control/config.js';   // SUPERVISED_INSTALL_V1
 
 const ALGO = 'aes-256-gcm';
 const IV_LEN = 12;    // рекомендованный размер nonce для GCM
@@ -30,7 +31,11 @@ const ROOT = path.dirname(path.dirname(path.dirname(path.dirname(fileURLToPath(i
 // чтобы не писать ключ в рабочий data/ и не шифровать тестовые токены тем же
 // ключом, что и боевой.
 export function defaultKeyPath() {
-  return process.env.EASYMED_TELEGRAM_KEY_PATH || path.join(ROOT, 'data', '.telegram-key');
+  // SUPERVISED_INSTALL_V1 — from the one configured data directory, never
+  // ROOT/data. Under a service install the application folder is versioned and
+  // an update replaces it; a key written there would be destroyed on every
+  // update and every clinic would silently lose its Telegram bot.
+  return process.env.EASYMED_TELEGRAM_KEY_PATH || path.join(getDataDir(), '.telegram-key');
 }
 
 // Ключ создаётся при первом сохранении токена и дальше живёт вечно: перезапись

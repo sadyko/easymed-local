@@ -14,6 +14,7 @@ import { renderPdf } from './render.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getDataDir } from '../control/config.js';   // SUPERVISED_INSTALL_V1
 
 // Корень проекта считаем от расположения модуля, а не от process.cwd():
 // сервер могут запустить ярлыком из любой папки, и тогда cwd указывает мимо.
@@ -450,7 +451,9 @@ function chromePath(db) {
   return (row && row.chrome_path) || '';
 }
 function storageRoot() {
-  return path.join(ROOT, 'data', 'storage');
+  // SUPERVISED_INSTALL_V1 — see crypto.js. Attachments must live with the
+  // database, outside the versioned application folder.
+  return path.join(getDataDir(), 'storage');
 }
 function touch(db, chatId) {
   db.prepare(`UPDATE telegram_links SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')

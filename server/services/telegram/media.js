@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getDataDir } from '../control/config.js';   // SUPERVISED_INSTALL_V1
 
 const ROOT = path.dirname(path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url)))));
 export const MEDIA_BUCKET = 'telegram-media';
@@ -26,7 +27,9 @@ export function resolveMedia(relPath) {
   const segments = String(relPath || '').split('/').filter(Boolean);
   if (!segments.length) return null;
   if (segments.some((s) => s === '.' || s === '..' || s.includes('\\') || s.includes('\0'))) return null;
-  const baseDir = path.resolve(ROOT, 'data', 'storage', MEDIA_BUCKET);
+  // SUPERVISED_INSTALL_V1 — see crypto.js. Patient documents received over
+  // Telegram must survive an update.
+  const baseDir = path.resolve(getDataDir(), 'storage', MEDIA_BUCKET);
   const abs = path.resolve(baseDir, ...segments);
   if (abs !== baseDir && !abs.startsWith(baseDir + path.sep)) return null;
   return abs;
