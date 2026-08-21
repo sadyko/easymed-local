@@ -60,7 +60,7 @@ function harness() {
 }
 
 async function post(server, body) {
-  return fetch(`http://127.0.0.1:${server.address().port}/api/v1/enroll`, {
+  return fetch(`http://127.0.0.1:${server.address().port}/cp/v1/enroll`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

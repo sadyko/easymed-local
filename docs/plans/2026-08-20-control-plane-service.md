@@ -74,8 +74,8 @@ control-plane/
       enrollment.js               CREATE  — codes -> identity
       enrollment.test.js          CREATE
     routes/
-      enroll.js                   CREATE  — POST /api/v1/enroll
-      checkin.js                  CREATE  — POST /api/v1/checkin
+      enroll.js                   CREATE  — POST /cp/v1/enroll
+      checkin.js                  CREATE  — POST /cp/v1/checkin
       admin.js                    CREATE  — the panel's API
       checkin.test.js             CREATE
       enroll.test.js              CREATE
@@ -214,7 +214,7 @@ CREATE INDEX module_requests_open ON module_requests (status, received_at DESC);
 **Files:** `control-plane/server/services/enrollment.js` + test, `control-plane/server/routes/enroll.js` + test
 
 - [ ] Generate an enrollment code (`EM-XXXX-XXXX`, the unlock alphabet, no ambiguous characters).
-- [ ] `POST /api/v1/enroll {code, fingerprint}` → validates, consumes the code (clears it — **single use, prove it with a test**), issues `install_token` + `unlock_secret` + `clinic_id`, records the fingerprint, returns them plus a first licence.
+- [ ] `POST /cp/v1/enroll {code, fingerprint}` → validates, consumes the code (clears it — **single use, prove it with a test**), issues `install_token` + `unlock_secret` + `clinic_id`, records the fingerprint, returns them plus a first licence.
 - [ ] A wrong, reused, or unknown code returns the **same** generic failure. Different messages let someone probe which codes exist.
 - [ ] Rate-limit by IP.
 - [ ] **Test the whole loop:** enroll → write the response to a `control.json` → the clinic app's `controlState` reads it as enrolled and unlocked.
@@ -225,7 +225,7 @@ CREATE INDEX module_requests_open ON module_requests (status, received_at DESC);
 
 **Files:** `control-plane/server/routes/checkin.js` + test
 
-`POST /api/v1/checkin` with `{ install_token, version, fingerprint, module_requests: [...] }` →
+`POST /cp/v1/checkin` with `{ install_token, version, fingerprint, module_requests: [...] }` →
 `{ licence, subscription, collect: [...] }`.
 
 - [ ] Unknown or inactive token → 401, and **nothing else** — never a hint about which clinics exist.
@@ -280,6 +280,26 @@ check that no licence was ever issued for that id.
 **Access:** vendor staff only. Reuse the existing console's auth if this is served behind it; otherwise a simple session with a strong shared credential is acceptable for v1 — **say which you chose and why in the README**.
 
 ---
+
+### How this reaches setting.easymed.uz
+
+The panel and the control plane are two different things and must not be conflated:
+
+| | serves | who calls it | routed to |
+|---|---|---|---|
+| Platform Console | the vendor's web pages | the owner's browser | Supabase, and `/api/v1/*` to the CORE gateway |
+| Control plane | `/cp/v1/*` | **clinic installs**, and the new panel page | this Node process, directly |
+
+**`/cp/*` must be its own nginx upstream, never proxied through the CORE FastAPI gateway.** That
+gateway hung twice in August 2026 and took `symptex.uz` with it; sharing its fate would start a
+14-day countdown on every clinic simultaneously. Ideally it is not even the same machine.
+
+The path prefix is `/cp` rather than `/api/v1` for exactly this reason — the console already uses
+`/api/v1` for the gateway, so the two would have collided both in routing and in blast radius.
+
+The new panel page is served by the existing console and calls `/cp/v1/admin/*` with a vendor
+session. Local clinics therefore appear **alongside** cloud clinics in the console, on their own
+page, while the data behind them lives in the control plane's own database — not in Supabase.
 
 ### Task 7: Deployment
 

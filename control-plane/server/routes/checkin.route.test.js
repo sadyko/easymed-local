@@ -68,7 +68,7 @@ async function post(server, path_, body) {
 }
 
 function checkin(server, body) {
-  return post(server, '/api/v1/checkin', body);
+  return post(server, '/cp/v1/checkin', body);
 }
 
 // Enrols a clinic straight through the service layer, the same shortcut the

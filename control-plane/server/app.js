@@ -10,17 +10,28 @@ import { checkinRoutes } from './routes/checkin.js';
 // not copying what that app needs and this one doesn't: no session cookies, no
 // static file serving, no licence gate (the control plane IS the thing that
 // issues licences; it has no licence of its own to check).
+// CONTROL_PLANE_V1 — mounted under /cp, NOT /api/v1, and that is deliberate.
+//
+// setting.easymed.uz already proxies /api/v1/* to the EasyMed CORE FastAPI
+// gateway — platform-console/js/setting/gateway.js calls exactly that prefix. A
+// control plane on the same prefix would collide with it, and worse, would end up
+// routed THROUGH the very gateway this service exists to stay clear of: it hung
+// twice in August 2026 and took symptex.uz down with it. If it took check-in down
+// too, every clinic in the country would start a 14-day countdown at once.
+//
+// /cp/* must be routed by nginx straight to this process as its own upstream —
+// never through the gateway, and preferably not even on the same machine.
 export function createApp(db) {
   const app = express();
   app.disable('x-powered-by');
   app.use((req, res, next) => { res.set('X-Content-Type-Options', 'nosniff'); next(); });
-  app.use('/api', express.json({ limit: '100kb' }));
+  app.use('/cp', express.json({ limit: '100kb' }));
 
-  app.use('/api/v1/enroll', enrollRoutes(db));
-  app.use('/api/v1/checkin', checkinRoutes(db));
+  app.use('/cp/v1/enroll', enrollRoutes(db));
+  app.use('/cp/v1/checkin', checkinRoutes(db));
 
   // Unknown /api paths answer JSON, not an HTML 404 page.
-  app.use('/api', (req, res) => res.status(404).json({ error: { code: 'not_found', message: 'Unknown API endpoint.' } }));
+  app.use('/cp', (req, res) => res.status(404).json({ error: { code: 'not_found', message: 'Unknown API endpoint.' } }));
 
   // Last resort. Client errors (malformed JSON, oversized body) keep their
   // real status; only true server errors log a stack. NEVER log the error
