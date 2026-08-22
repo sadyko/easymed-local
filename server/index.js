@@ -209,7 +209,8 @@ if (isMain) {
 
   // LICENCE_CORE_V1 — the daily call home. Placed after listen() is called,
   // never awaited: scheduleCheckin only arms two unref()'d timers (first
-  // fires ~60s from now, then every 24h) and returns immediately, so a dead
+  // fires ~60s from now, then every 24h — or EASYMED_CHECKIN_INTERVAL_MS on
+  // a test install, see checkinIntervalMs) and returns immediately, so a dead
   // or slow control plane can never be the reason a clinic's own server is
   // slow to start or fails to bind its port.
   scheduleCheckin(db, DATA_DIR);

@@ -16,6 +16,7 @@ import {
   runCheckin,
   scheduleCheckin,
   checkinUrl,
+  checkinIntervalMs,
   computeFingerprint,
   readAppVersion,
   __setPublicKeyForTests,
@@ -529,6 +530,34 @@ test('checkinUrl defaults to settings.easymed.uz', () => {
 
 test('checkinUrl honours EASYMED_CONTROL_URL, trimming a trailing slash', () => {
   assert.equal(checkinUrl({ EASYMED_CONTROL_URL: 'https://cp.example.com/' }), 'https://cp.example.com/cp/v1/checkin');
+});
+
+// --- checkinIntervalMs ------------------------------------------------------
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+test('checkinIntervalMs defaults to 24h when the override is absent', () => {
+  assert.equal(checkinIntervalMs({}), DAY_MS);
+});
+
+test('checkinIntervalMs honours EASYMED_CHECKIN_INTERVAL_MS (one hour)', () => {
+  assert.equal(checkinIntervalMs({ EASYMED_CHECKIN_INTERVAL_MS: '3600000' }), 3_600_000);
+});
+
+test('checkinIntervalMs treats garbage as "a normal clinic", never "no check-ins"', () => {
+  // Number('') and Number(null) are both 0 — the blank-string guard is what
+  // keeps an empty env var from meaning "poll every minute" by accident.
+  for (const bad of ['soon', '', '   ', '-5', '0', 'NaN', 'Infinity']) {
+    assert.equal(checkinIntervalMs({ EASYMED_CHECKIN_INTERVAL_MS: bad }), DAY_MS, JSON.stringify(bad));
+  }
+});
+
+test('checkinIntervalMs clamps below one minute up to one minute', () => {
+  assert.equal(checkinIntervalMs({ EASYMED_CHECKIN_INTERVAL_MS: '1' }), 60_000);
+});
+
+test('checkinIntervalMs clamps above 24h down to 24h', () => {
+  assert.equal(checkinIntervalMs({ EASYMED_CHECKIN_INTERVAL_MS: String(7 * DAY_MS) }), DAY_MS);
 });
 
 // --- scheduleCheckin: never holds the process open, never fires early ------

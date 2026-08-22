@@ -135,6 +135,27 @@ export function checkinUrl(env = process.env) {
 }
 
 /**
+ * How often the scheduled check-in repeats. 24 hours (see INTERVAL_MS's own
+ * comment for why that is the right pace for a real clinic) unless
+ * EASYMED_CHECKIN_INTERVAL_MS says otherwise — the override exists for the
+ * vendor's own test install, which wants to hear about a freshly published
+ * release within the hour rather than within the day.
+ *
+ * Clamped, not trusted: a typo like "1" must not turn the daily call into a
+ * hammer on the control plane (floor: one minute), and anything above 24h
+ * would quietly shrink the 14-day margin between "vendor is down" and
+ * "licence visibly expires", which no override is allowed to do (ceiling:
+ * the default itself). Garbage falls back to the default — a misspelled
+ * value must degrade to "a normal clinic", never to "no check-ins at all".
+ */
+export function checkinIntervalMs(env = process.env) {
+  const raw = env && env.EASYMED_CHECKIN_INTERVAL_MS;
+  const n = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN;
+  if (!Number.isFinite(n) || n <= 0) return INTERVAL_MS;
+  return Math.min(INTERVAL_MS, Math.max(60_000, Math.floor(n)));
+}
+
+/**
  * The installed version, read from package.json rather than hardcoded so it
  * can never drift from what actually shipped. Defaulted rather than thrown —
  * mirrors server/index.js's own readAppVersion(): a version string that can't
@@ -491,13 +512,14 @@ async function performCheckin(db, dataDir, {
 
 /**
  * Wires the daily call into the running process. Fires once ~60s after boot
- * (so it can never slow startup or delay listen()) and then every 24h.
+ * (so it can never slow startup or delay listen()) and then every 24h — or
+ * every EASYMED_CHECKIN_INTERVAL_MS, see checkinIntervalMs() above.
  * .unref() on both timers so neither can hold the process open — a clinic
  * shutting down must not wait on a licensing timer that has nothing urgent
  * to do.
  */
 export function scheduleCheckin(db, dataDir, opts = {}) {
-  const { initialDelayMs = INITIAL_DELAY_MS, intervalMs = INTERVAL_MS, ...runOpts } = opts;
+  const { initialDelayMs = INITIAL_DELAY_MS, intervalMs = checkinIntervalMs(), ...runOpts } = opts;
   const run = () => {
     // runCheckin() is documented never to reject, but a scheduled timer
     // callback has no caller to hand a rejection to anyway — an uncaught
