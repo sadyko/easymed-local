@@ -78,7 +78,14 @@ const MODULE_GROUPS = NAV_MODULES;
 // Modules that bypass role gating entirely. Empty: every module (Dashboard
 // included) is controlled by the role's permission list. A restricted user
 // lands on their first allowed module (see admin.js firstAllowedView()).
-const ALWAYS_ALLOWED = new Set(['specialties']);  // specialties: global read-only reference; viewable by any role, add is super-admin-gated (SPECIALTIES_VIEW_V1)
+const ALWAYS_ALLOWED = new Set(['specialties', 'updates']);
+// specialties: global read-only reference; viewable by any role, add is super-admin-gated (SPECIALTIES_VIEW_V1)
+// updates: UPDATE_DELIVERY_V1 — the approval screen is readable by any role;
+// the RPCs behind it (update_status/update_approve/update_cancel) gate the
+// admin-only ACTIONS themselves via hasAnyRole server-side, and the view
+// itself only renders the approve/change/cancel buttons for an admin actor
+// (see views/updates.js's isAdminActor()) — this only controls whether the
+// route can be OPENED at all by a role-restricted account.
 
 // ---------------------------------------------------------------------------
 // Effective access state

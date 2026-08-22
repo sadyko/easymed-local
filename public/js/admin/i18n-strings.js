@@ -2148,4 +2148,34 @@ export const STRINGS = {
   "Активировать": {"en":"Activate","ru":"Активировать","uz":"Faollashtirish"},
   "Система разблокирована.": {"en":"System unlocked.","ru":"Система разблокирована.","uz":"Tizim qulfdan chiqarildi."},
   "Данные клиники на месте. Пока подписка не активна, можно только просматривать записи.": {"en":"Your clinic's data is intact. While the subscription is inactive you can view records but not change them.","ru":"Данные клиники на месте. Пока подписка не активна, можно только просматривать записи.","uz":"Klinika ma'lumotlari joyida. Obuna faol bo'lmaguncha yozuvlarni faqat ko'rish mumkin."},
+
+  // UPDATE_DELIVERY_V1 (docs/plans/2026-08-20-update-delivery.md, Task 6) —
+  // the update-approval screen (views/updates.js) and its quiet banner
+  // (admin.js renderUpdateBanner). Sentences with a dynamic version/date/hour
+  // spliced in are built directly in code and are NOT listed here — same
+  // convention as the licence banner's day-count message just above (see its
+  // own comment in admin.js) — so only the fully-literal strings appear.
+  "Обновления": {"en":"Updates","ru":"Обновления","uz":"Yangilanishlar"},
+  "Версия системы и установка обновлений.": {"en":"System version and installing updates.","ru":"Версия системы и установка обновлений.","uz":"Tizim versiyasi va yangilanishlarni o'rnatish."},
+  "Версия системы и установка обновлений": {"en":"System version and installing updates","ru":"Версия системы и установка обновлений","uz":"Tizim versiyasi va yangilanishlarni o'rnatish"},
+  "Не удалось загрузить статус обновления. Попробуйте ещё раз позже.": {"en":"Could not load the update status. Try again later.","ru":"Не удалось загрузить статус обновления. Попробуйте ещё раз позже.","uz":"Yangilanish holatini yuklab bo'lmadi. Keyinroq qayta urinib ko'ring."},
+  "Обновление установлено.": {"en":"Update installed.","ru":"Обновление установлено.","uz":"Yangilanish o'rnatildi."},
+  "Текущая версия:": {"en":"Current version:","ru":"Текущая версия:","uz":"Joriy versiya:"},
+  "Доступно обновление": {"en":"Update available","ru":"Доступно обновление","uz":"Yangilanish mavjud"},
+  "Только администратор клиники может подтвердить установку.": {"en":"Only the clinic administrator can confirm installation.","ru":"Только администратор клиники может подтвердить установку.","uz":"Faqat klinika administratori o'rnatishni tasdiqlashi mumkin."},
+  "В это время клиника обычно работает — сотрудники будут отключены на 1–2 минуты.": {"en":"The clinic is usually open at this time — staff will be disconnected for 1-2 minutes.","ru":"В это время клиника обычно работает — сотрудники будут отключены на 1–2 минуты.","uz":"Bu vaqtda klinika odatda ishlaydi — xodimlar 1-2 daqiqaga uzib qo'yiladi."},
+  "Другое время:": {"en":"Another time:","ru":"Другое время:","uz":"Boshqa vaqt:"},
+  "Другое время — час (0-23)": {"en":"Another time — hour (0-23)","ru":"Другое время — час (0-23)","uz":"Boshqa vaqt — soat (0-23)"},
+  "Обновить сегодня ночью": {"en":"Update tonight","ru":"Обновить сегодня ночью","uz":"Bugun tunda yangilash"},
+  "Обновить завтра ночью": {"en":"Update tomorrow night","ru":"Обновить завтра ночью","uz":"Ertaga tunda yangilash"},
+  "Запланировать": {"en":"Schedule","ru":"Запланировать","uz":"Rejalashtirish"},
+  "Выберите час от 0 до 23.": {"en":"Choose an hour from 0 to 23.","ru":"Выберите час от 0 до 23.","uz":"0 dan 23 gacha soat tanlang."},
+  "Обновление запланировано": {"en":"Update scheduled","ru":"Обновление запланировано","uz":"Yangilanish rejalashtirildi"},
+  "Не удалось запланировать обновление. Попробуйте ещё раз.": {"en":"Could not schedule the update. Try again.","ru":"Не удалось запланировать обновление. Попробуйте ещё раз.","uz":"Yangilanishni rejalashtirib bo'lmadi. Qayta urinib ko'ring."},
+  "Обновление подтверждено": {"en":"Update confirmed","ru":"Обновление подтверждено","uz":"Yangilanish tasdiqlandi"},
+  "Обновление подтверждено.": {"en":"Update confirmed.","ru":"Обновление подтверждено.","uz":"Yangilanish tasdiqlandi."},
+  "Изменить время": {"en":"Change time","ru":"Изменить время","uz":"Vaqtni o'zgartirish"},
+  "Не удалось изменить время. Попробуйте ещё раз.": {"en":"Could not change the time. Try again.","ru":"Не удалось изменить время. Попробуйте ещё раз.","uz":"Vaqtni o'zgartirib bo'lmadi. Qayta urinib ko'ring."},
+  "Не удалось отменить. Попробуйте ещё раз.": {"en":"Could not cancel. Try again.","ru":"Не удалось отменить. Попробуйте ещё раз.","uz":"Bekor qilib bo'lmadi. Qayta urinib ko'ring."},
+  "Подробнее": {"en":"Details","ru":"Подробнее","uz":"Batafsil"},
 };

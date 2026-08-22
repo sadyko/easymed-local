@@ -10,7 +10,7 @@ import { bootstrapAdmin } from './services/auth.js';
 import { autoCloseStaleShifts } from './services/rpc/cashier.js';   // SHIFT_AUTOCLOSE_V1
 import { startTelegramBot } from './services/telegram/index.js';   // TELEGRAM_BOT_V1
 import { createApp } from './app.js';
-import { setDataDir } from './services/control/config.js';   // SUPERVISED_INSTALL_V1
+import { setDataDir, setAppVersion } from './services/control/config.js';   // SUPERVISED_INSTALL_V1 / UPDATE_DELIVERY_V1
 import { scheduleCheckin } from './services/control/checkin.js';   // LICENCE_CORE_V1
 import { scheduleUpdater } from './services/control/updater.js';   // UPDATE_DELIVERY_V1
 import { recordEvent, pruneOpsEvents } from './services/ops-log.js';   // OPS_EVENTS_V1
@@ -71,6 +71,10 @@ function readAppVersion(root) {
   }
 }
 const APP_VERSION = readAppVersion(ROOT);
+// UPDATE_DELIVERY_V1 — published so update_status (rpc/updates.js) can report
+// current_version; see config.js's own comment for why that file reads it
+// back through getAppVersion() rather than this module importing it back.
+setAppVersion(APP_VERSION);
 
 // SUPERVISED_INSTALL_V1 — importing this file must not have side effects.
 //

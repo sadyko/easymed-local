@@ -28,6 +28,8 @@ import { loadDocBrandingAsync } from './admin/views/doc-settings.js?v=q3company1
 import { setLicence, isLicensed, licenceState } from './admin/licence.js';   // LICENCE_CORE_V1
 import { renderLockedModule } from './admin/views/locked-module.js';   // LICENCE_CORE_V1
 import { renderActivation } from './admin/views/activation.js';   // LICENCE_CORE_V1
+import { renderUpdates } from './admin/views/updates.js';   // UPDATE_DELIVERY_V1
+import { offerIsCurrent, formatRuHour } from './admin/updates-logic.js';   // UPDATE_DELIVERY_V1
 
 import { renderDashboard }    from './admin/views/dashboard.js?v=owndash2';
 import { renderPublicSite }   from './admin/views/public-site.js?v=pub6';   // PUBLIC_SITE_V1
@@ -778,7 +780,13 @@ async function renderViewInner(viewRoot, viewName, ctx) {
     // nothing to sell for a free-core module and renders a bare card with no way
     // forward. Two different locks, two different screens — see the spec's §4.
     const _lic = licenceState();
-    if (_lic.locked && viewName !== 'activation') {
+    // UPDATE_DELIVERY_V1 — 'updates' is exempted the same way 'activation'
+    // is: update_status/update_approve/update_cancel are READ_ONLY /
+    // ALWAYS_ALLOWED server-side (server/services/control/gate.js) precisely
+    // so a licence-lapsed clinic can still receive and approve an update —
+    // which may be exactly what fixes its own licensing situation. A screen
+    // that then refused to even OPEN while locked would defeat that.
+    if (_lic.locked && viewName !== 'activation' && viewName !== 'updates') {
         await renderActivation(viewRoot, _lic);
         return;
     }
@@ -794,7 +802,14 @@ async function renderViewInner(viewRoot, viewName, ctx) {
     // container either: that div holds every open tab's root stacked as
     // siblings, and renderLockedModule() clears its target — clearing the shared
     // container would wipe every other open tab, not just this one.
-    if (!isLicensed(viewName)) {
+    // UPDATE_DELIVERY_V1 — same exemption as the full-lockout branch above,
+    // repeated here because isLicensed() has its OWN, separately-reasoned
+    // `_licence.locked === true` short-circuit (see licence.js) that would
+    // otherwise still catch 'updates' even after surviving the check above,
+    // and render it through renderLockedModule() — which has no
+    // LICENSED_MODULES entry for 'updates' (it is core, not sold separately)
+    // and would show the wrong screen entirely ("Модуль не подключён").
+    if (viewName !== 'updates' && !isLicensed(viewName)) {
         await renderLockedModule(viewRoot, viewName);
         return;
     }
@@ -859,6 +874,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'settings':      return void await renderSettingsHub(viewRoot, ctx);   // SETTINGS_HUB_V1
             case 'employees':     return void await renderEmployees(viewRoot, ctx);   // EMPLOYEE_EDITOR_V1 — Сотрудники
             case 'documents-settings': return void await renderDocumentsSettings(viewRoot, ctx);   // DOCUMENTS_SETTINGS_V1
+            case 'updates':       return void await renderUpdates(viewRoot);   // UPDATE_DELIVERY_V1 — reachable from the banner + Settings; readable by anyone, actions gate themselves inside the view
         }
         // Settings drilldown:  settings:<section_key>
         if (state.view.startsWith('settings:')) {
@@ -2354,6 +2370,10 @@ async function onAuthed(userRow) {
     await applyActorPermissions(state.user);
     startApp();
     renderLicenceBanner();   // LICENCE_CORE_V1 — after the shell exists, so `.app` is there to mount above
+    // UPDATE_DELIVERY_V1 — fire-and-forget, same posture as boot()'s own
+    // renderNotifications() call: a check that cannot run (offline, RPC
+    // error) must never block login or surface as an error to the clinic.
+    renderUpdateBanner().catch((e) => console.warn('[updates]', e && e.message));
 }
 
 // LICENCE_CORE_V1 — the countdown banner. A lapsed subscription gets the full
@@ -2397,6 +2417,61 @@ function renderLicenceBanner() {
 // listener. Safe to fire before any login too: licenceState() reads as 'ok'
 // with nothing set, so this simply no-ops.
 onLangChange(() => renderLicenceBanner());
+
+// UPDATE_DELIVERY_V1 (Task 6) — the quiet update banner, mounted the same way
+// as #licence-banner just above (a sibling inserted right above `.app`).
+// Deliberately calm: only two states, and neither is ever the amber/red
+// treatment the licence banner uses for its 'warn'/'locked' states — an
+// available or scheduled update is good news, not a problem the clinic
+// caused.
+//
+// Unlike renderLicenceBanner() this hits the network on every call
+// (update_status has no cheap client-side cache the way licenceState() is
+// one), so it is called once at login (onAuthed above) and again on demand
+// via window.easymedRefreshUpdateBanner() from views/updates.js after an
+// approve/change/cancel — NOT wired into onLangChange: a language toggle is
+// not a moment worth repeating that round trip for, and this screen's own
+// visible strings still render through tr() at whichever language is active
+// whenever it next repaints.
+async function renderUpdateBanner() {
+    document.getElementById('update-banner')?.remove();
+    let status;
+    try {
+        const { data, error } = await supabase.rpc('update_status', {});
+        if (error) throw error;
+        status = data || {};
+    } catch (e) {
+        return;   // same posture as licence.js/verify-banner.js — a check that cannot run must never alarm anyone
+    }
+    // offerIsCurrent — the narrow window right after a successful install,
+    // before the next daily check-in clears/replaces the offer server-side
+    // (see server/services/control/checkin.js); see updates-logic.js's own
+    // comment. Treated as "nothing waiting" here too.
+    const offer = offerIsCurrent(status.offer, status.current_version) ? null : status.offer;
+    if (!offer) return;
+
+    const banner = h('div', { id: 'update-banner' });
+    if (status.approved) {
+        const hour = Number(status.hour);
+        // Built directly, not through tr()'s STRINGS table — same convention
+        // as renderLicenceBanner's own dynamic day-count message just above:
+        // there is no {hour} placeholder mechanism to hook a dynamic value
+        // into instead.
+        banner.appendChild(h('span', { class: 'ub-msg' }, Icon('Clock', { size: 15 }),
+            Number.isInteger(hour) ? `Обновление запланировано на ${formatRuHour(hour)}.` : 'Обновление запланировано.'));
+    } else {
+        banner.appendChild(h('span', { class: 'ub-msg' }, Icon('Download', { size: 15 }),
+            `Доступно обновление ${offer.version} — `,
+            h('button', { class: 'ub-link', type: 'button', onclick: () => navigate('updates') }, 'Подробнее')));
+    }
+    document.body.insertBefore(banner, document.querySelector('.app') || document.body.firstChild);
+}
+
+// Bridge for views/updates.js, which cannot import this module back (admin.js
+// is the entry script that imports every view; a view importing it would
+// form a cycle) — same established pattern as window.easymedSetTabLabel
+// above for tab titles.
+window.easymedRefreshUpdateBanner = renderUpdateBanner;
 
 // SIDEBAR_COLLAPSE_V1 — chevron collapses the global left nav; the floating
 // re-open button restores it. Wired once; state persisted to localStorage.

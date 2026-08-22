@@ -130,6 +130,10 @@ const GROUPS = [
             // Раздел админский: isRouteAllowed('telegram-settings') пускает только
             // полный доступ, остальные упрутся в отказ на самом экране.
             { label: 'Telegram-бот',        desc: 'Пациент получает свои документы в Telegram по номеру телефона', icon: 'Bot', live: true, action: nav('telegram-settings') },
+            // UPDATE_DELIVERY_V1 — the approval screen (views/updates.js) is
+            // also reachable from its own quiet banner; this row is the
+            // other of the two entry points the plan calls for.
+            { label: 'Обновления',          desc: 'Версия системы и установка обновлений', icon: 'Download', live: true, action: nav('updates') },
         ],
     },
     {

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { setDataDir } from '../control/config.js';
+import { setDataDir, setAppVersion } from '../control/config.js';
 import { updateStatus, updateApprove, updateCancel, RpcError } from './updates.js';
 
 const admin = { id: 1, role: 'admin' };
@@ -35,6 +35,9 @@ const OFFER = { version: '2.4.0', notes_ru: 'Тест', url: '/x.tar.gz', sha256
 
 test.beforeEach(() => {
   setDataDir(fs.mkdtempSync(path.join(os.tmpdir(), 'em-updates-rpc-')));
+  // UPDATE_DELIVERY_V1 (Task 6) — a fixed test version, independent of this
+  // checkout's real package.json, same DI-via-config.js seam setDataDir uses.
+  setAppVersion('2.3.0');
 });
 
 // --- update_status ---------------------------------------------------------
@@ -42,7 +45,21 @@ test.beforeEach(() => {
 test('update_status: nothing offered, nothing approved — every field is empty/false', () => {
   const db = freshDb();
   const s = updateStatus(db, {}, admin);
-  assert.deepEqual(s, { offer: null, approved: false, hour: null, scheduled_at: null, last_result: null });
+  assert.deepEqual(s, { current_version: '2.3.0', offer: null, approved: false, hour: null, scheduled_at: null, last_result: null });
+});
+
+test('update_status: current_version reflects the running app, independent of any offer', () => {
+  const db = freshDb();
+  setAppVersion('9.9.9');
+  const s = updateStatus(db, {}, admin);
+  assert.equal(s.current_version, '9.9.9');
+});
+
+test('update_status: no app version ever set — falls back to "0.0.0", never undefined/throws', () => {
+  const db = freshDb();
+  setAppVersion(null);
+  const s = updateStatus(db, {}, admin);
+  assert.equal(s.current_version, '0.0.0');
 });
 
 test('update_status: an offer with no approval yet', () => {

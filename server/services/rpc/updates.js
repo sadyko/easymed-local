@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { hasAnyRole } from '../roles.js';
-import { getDataDir } from '../control/config.js';
+import { getDataDir, getAppVersion } from '../control/config.js';
 import { nextRunAt, consentAppliesTo } from '../control/update-schedule.js';
 
 // UPDATE_DELIVERY_V1 (docs/plans/2026-08-20-update-delivery.md, Task 4) — the
@@ -72,6 +72,12 @@ export function updateStatus(db, args, user) {
   const consent = consentAppliesTo(offer, rawConsent) ? rawConsent : null;
   const scheduledAt = consent ? readScheduledAt(db) : null;
   return {
+    // UPDATE_DELIVERY_V1 (Task 6) — the approval screen shows this next to
+    // the offer so a clinic can tell whether an update ever actually landed,
+    // not only whether one was ever offered. Read from config.js, set once
+    // at boot from package.json (server/index.js) — see that file's own
+    // comment for why this isn't a direct import of server/index.js.
+    current_version: getAppVersion(),
     offer,
     approved: !!consent,
     hour: consent ? consent.hour : null,
