@@ -33,7 +33,7 @@
 | The clinic check-in client already parses the check-in response and ignores unknown fields | `server/services/control/checkin.js` |
 | The control plane already returns `collect: []` with a comment marking it for this plan | `control-plane/server/services/checkin.js` |
 | `checkins.payload TEXT` already stores arbitrary JSON per check-in | `control-plane/server/db/migrations/001_registry.sql` |
-| The error handler and slow-log middleware see every 5xx and every slow request, but only `console`-log them | `server/app.js`, `server/middleware/slow-log.js` |
+| ~~The error handler sees every 5xx~~ **False, found in Task 1:** `routes/rpc.js` and `routes/db.js` answer their own 500s locally without `next(e)`, so the global handler never saw the app's two dominant gateways. Both are now instrumented directly, with regression tests. | `server/routes/rpc.js`, `server/routes/db.js` |
 | Failed logins are throttled in memory, not recorded | `server/services/auth.js` |
 | Revenue lives in `invoices` (`total`, `status`) and `payments` (`amount`, `method`, `created_at`) | schema |
 | The vocabulary-drift trap and its cure: import shared vocabularies across the repo halves, never re-type them | `SELLABLE_MODULES`, `expectedResponse` precedents |
