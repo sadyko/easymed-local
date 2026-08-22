@@ -45,6 +45,19 @@ function isoDaysFromToday(days) {
   return d.toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
+// UPDATE_DELIVERY_V1 — registers a release row directly (this is checkin.js's
+// own test file; releases are normally created through routes/admin.js, but
+// that is a different module's surface to test).
+function insertRelease(db, version, { ring = 2, halted = 0, manifest = { payload: { version }, sig: 'sig' }, notes_ru = 'notes', url = `https://example/${version}.tar.gz`, sha256 = 'hash' } = {}) {
+  db.prepare(
+    `INSERT INTO releases (version, notes_ru, url, sha256, manifest, ring, halted) VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(version, notes_ru, url, sha256, JSON.stringify(manifest), ring, halted);
+}
+
+function releaseRow(db, version) {
+  return db.prepare('SELECT * FROM releases WHERE version = ?').get(version);
+}
+
 // --- rule 1: unknown / inactive / missing token — one outcome, nothing else -
 
 test('an unknown install_token returns null — no row is written anywhere', () => {
@@ -602,4 +615,307 @@ test('a valid-looking token whose clinic row has since been deleted behaves exac
   const result = checkIn(db, { installToken: token }, { signLicence: fakeSigner() });
   assert.equal(result, null, 'the token authenticates nothing once its clinic row is gone');
   assert.equal(db.prepare('SELECT COUNT(*) n FROM checkins').get().n, 1, 'no new row for a token that no longer resolves to any clinic');
+});
+
+// --- UPDATE_DELIVERY_V1: the `update` offer -----------------------------------
+
+test('update defaults to null when no releases are registered at all', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  const result = checkIn(db, { installToken: token, version: '2.0.0' }, { signLicence: fakeSigner() });
+  assert.equal(result.update, null);
+});
+
+test('a published, unhalted, newer release is offered as `update`, with the manifest passed through as an object', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  insertRelease(db, '2.4.0', { manifest: { payload: { version: '2.4.0', sha256: 'abc' }, sig: 'realsig' } });
+
+  const result = checkIn(db, { installToken: token, version: '2.0.0' }, { signLicence: fakeSigner() });
+  assert.ok(result.update, 'a newer, published, unhalted release must be offered');
+  assert.equal(result.update.version, '2.4.0');
+  assert.deepEqual(result.update.manifest, { payload: { version: '2.4.0', sha256: 'abc' }, sig: 'realsig' });
+});
+
+test('ATTACK: a release registered but never published (ring -1, the schema default) is never offered', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  insertRelease(db, '2.4.0', { ring: -1 });
+
+  const result = checkIn(db, { installToken: token, version: '2.0.0' }, { signLicence: fakeSigner() });
+  assert.equal(result.update, null);
+});
+
+test('a halted release is never offered, even though otherwise eligible', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  insertRelease(db, '2.4.0', { halted: 1 });
+
+  const result = checkIn(db, { installToken: token, version: '2.0.0' }, { signLicence: fakeSigner() });
+  assert.equal(result.update, null);
+});
+
+test('a clinic already on the offered version gets update: null', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  insertRelease(db, '2.4.0');
+
+  const result = checkIn(db, { installToken: token, version: '2.4.0' }, { signLicence: fakeSigner() });
+  assert.equal(result.update, null);
+});
+
+test('ring gating: a ring-0 publish does not reach a ring-2 clinic (the schema default ring), but does reach a ring-0 clinic', () => {
+  const db = freshDb();
+  const tokenWide = enrol(db, 'c-wide'); // default ring 2
+  const tokenNarrow = enrol(db, 'c-narrow');
+  db.prepare('UPDATE clinics SET ring = 0 WHERE clinic_id = ?').run('c-narrow');
+  insertRelease(db, '2.4.0', { ring: 0 });
+
+  const resultWide = checkIn(db, { installToken: tokenWide, version: '2.0.0' }, { signLicence: fakeSigner() });
+  assert.equal(resultWide.update, null, 'ring 0 is the narrowest audience');
+
+  const resultNarrow = checkIn(db, { installToken: tokenNarrow, version: '2.0.0' }, { signLicence: fakeSigner() });
+  assert.equal(resultNarrow.update.version, '2.4.0');
+});
+
+test('promoting a release from ring 1 to ring 2 makes it reach a ring-2 clinic that previously saw nothing', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1'); // default ring 2
+  insertRelease(db, '2.4.0', { ring: 1 });
+
+  assert.equal(checkIn(db, { installToken: token, version: '2.0.0' }, { signLicence: fakeSigner() }).update, null);
+
+  db.prepare('UPDATE releases SET ring = 2 WHERE version = ?').run('2.4.0');
+  const result = checkIn(db, { installToken: token, version: '2.0.0' }, { signLicence: fakeSigner() });
+  assert.equal(result.update.version, '2.4.0');
+});
+
+test('pin decision: installed 2.3.0, pinned 2.4.0, release 2.4.0 published -> offered (the pin is a ceiling, not a lock)', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  db.prepare('UPDATE clinics SET pinned_version = ? WHERE clinic_id = ?').run('2.4.0', 'c-1');
+  insertRelease(db, '2.4.0');
+
+  const result = checkIn(db, { installToken: token, version: '2.3.0' }, { signLicence: fakeSigner() });
+  assert.equal(result.update.version, '2.4.0');
+});
+
+test('pin decision: a release newer than the pin is never offered, even though it is otherwise eligible', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  db.prepare('UPDATE clinics SET pinned_version = ? WHERE clinic_id = ?').run('2.4.0', 'c-1');
+  insertRelease(db, '2.5.0');
+
+  const result = checkIn(db, { installToken: token, version: '2.3.0' }, { signLicence: fakeSigner() });
+  assert.equal(result.update, null, 'a pinned clinic must not be offered anything newer than the pin, despite eligibility otherwise');
+});
+
+test('two eligible releases: the response is deterministic — always the single newest one', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  insertRelease(db, '2.4.0');
+  insertRelease(db, '2.5.0');
+
+  const result = checkIn(db, { installToken: token, version: '2.0.0' }, { signLicence: fakeSigner() });
+  assert.equal(result.update.version, '2.5.0');
+});
+
+test('ATTACK: manifest is passed through opaquely — an attacker-shaped payload inside it never fails the check-in', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  insertRelease(db, '2.4.0', {
+    manifest: { payload: { __proto__: { polluted: true }, nested: { arbitrary: ['shapes', 1, null] } }, sig: 'whatever-not-verified-here' },
+  });
+
+  const result = checkIn(db, { installToken: token, version: '2.0.0' }, { signLicence: fakeSigner() });
+  assert.ok(result.update, 'an attacker-shaped payload inside manifest must still be offered, unexamined');
+  assert.equal(result.update.manifest.sig, 'whatever-not-verified-here');
+  assert.equal(({}).polluted, undefined, 'must never pollute Object.prototype');
+});
+
+test('a release whose stored manifest is hand-corrupted (unparseable) is not offered, rather than handing back something unusable', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  db.prepare(
+    `INSERT INTO releases (version, notes_ru, url, sha256, manifest, ring, halted) VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run('2.4.0', 'notes', 'url', 'hash', 'not json at all', 2, 0);
+
+  const result = checkIn(db, { installToken: token, version: '2.0.0' }, { signLicence: fakeSigner() });
+  assert.equal(result.update, null);
+});
+
+test('the update offer is unaffected by subscription — an unpaid clinic still sees an available update', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  db.prepare("UPDATE clinics SET subscription = 'unpaid' WHERE clinic_id = ?").run('c-1');
+  insertRelease(db, '2.4.0');
+
+  const result = checkIn(db, { installToken: token, version: '2.0.0' }, { signLicence: fakeSigner() });
+  assert.equal(result.licence, null, 'sanity: still unpaid, no licence');
+  assert.equal(result.update.version, '2.4.0', 'a software update offer is not a money gate');
+});
+
+// --- UPDATE_DELIVERY_V1: `update_result` ------------------------------------
+
+test('an old clinic that never sends update_result at all checks in exactly as before — the field is optional forever', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  const result = checkIn(db, { installToken: token, version: '1.0.0' }, { signLicence: fakeSigner() });
+  assert.ok(result, 'a missing update_result must never fail the check-in');
+
+  const row = db.prepare('SELECT payload FROM checkins WHERE clinic_id = ?').get('c-1');
+  assert.equal(JSON.parse(row.payload).update_result, null, 'no update_result sent must still leave a well-shaped null stored');
+});
+
+test('a valid update_result is recorded verbatim in the checkin payload, merged alongside stats/module_requests', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  insertRelease(db, '2.4.0');
+  checkIn(db, {
+    installToken: token,
+    stats: { patients_total: 3 },
+    updateResult: { version: '2.4.0', ok: true },
+  }, { signLicence: fakeSigner() });
+
+  const row = db.prepare('SELECT payload FROM checkins WHERE clinic_id = ?').get('c-1');
+  const payload = JSON.parse(row.payload);
+  assert.deepEqual(payload.update_result, { version: '2.4.0', ok: true });
+  assert.deepEqual(payload.stats, { patients_total: 3 }, 'merge, not clobber — the other payload fields must still be there');
+});
+
+test('a successful update_result increments outcome_successes and never halts', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  insertRelease(db, '2.4.0');
+
+  checkIn(db, { installToken: token, updateResult: { version: '2.4.0', ok: true } }, { signLicence: fakeSigner() });
+
+  const row = releaseRow(db, '2.4.0');
+  assert.equal(row.outcome_successes, 1);
+  assert.equal(row.outcome_failures, 0);
+  assert.equal(row.halted, 0);
+});
+
+test('a failed update_result increments outcome_failures', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  insertRelease(db, '2.4.0');
+
+  checkIn(db, { installToken: token, updateResult: { version: '2.4.0', ok: false } }, { signLicence: fakeSigner() });
+
+  const row = releaseRow(db, '2.4.0');
+  assert.equal(row.outcome_failures, 1);
+  assert.equal(row.halted, 0, 'one failure alone must not halt (below DEFAULT_HALT_THRESHOLD)');
+});
+
+test('the acceptance boundary: exactly two failures (zero successes) auto-halts the release, inside the SAME transaction as the second failure', () => {
+  const db = freshDb();
+  const tokenA = enrol(db, 'c-a');
+  const tokenB = enrol(db, 'c-b');
+  insertRelease(db, '2.4.0');
+
+  checkIn(db, { installToken: tokenA, updateResult: { version: '2.4.0', ok: false } }, { signLicence: fakeSigner() });
+  assert.equal(releaseRow(db, '2.4.0').halted, 0, 'one failure must not halt yet');
+
+  checkIn(db, { installToken: tokenB, updateResult: { version: '2.4.0', ok: false } }, { signLicence: fakeSigner() });
+  assert.equal(releaseRow(db, '2.4.0').halted, 1, 'the second failure must halt it, atomically with recording that failure');
+});
+
+test('a halted release stops being offered to a third clinic — the acceptance scenario, end to end', () => {
+  const db = freshDb();
+  const tokenA = enrol(db, 'c-a');
+  const tokenB = enrol(db, 'c-b');
+  const tokenC = enrol(db, 'c-c');
+  insertRelease(db, '2.4.0');
+
+  checkIn(db, { installToken: tokenA, version: '2.0.0', updateResult: { version: '2.4.0', ok: false } }, { signLicence: fakeSigner() });
+  checkIn(db, { installToken: tokenB, version: '2.0.0', updateResult: { version: '2.4.0', ok: false } }, { signLicence: fakeSigner() });
+  assert.equal(releaseRow(db, '2.4.0').halted, 1, 'sanity: it must be halted by now');
+
+  const resultC = checkIn(db, { installToken: tokenC, version: '2.0.0' }, { signLicence: fakeSigner() });
+  assert.equal(resultC.update, null, 'a third clinic checking in after the halt must be offered nothing');
+});
+
+test('unhalting a release (as the admin API would) makes offers resume, with no further failures reported', () => {
+  const db = freshDb();
+  const tokenA = enrol(db, 'c-a');
+  const tokenC = enrol(db, 'c-c');
+  insertRelease(db, '2.4.0', { halted: 1 }); // as if auto-halted already
+  db.prepare('UPDATE releases SET outcome_failures = 2 WHERE version = ?').run('2.4.0');
+
+  assert.equal(checkIn(db, { installToken: tokenA, version: '2.0.0' }, { signLicence: fakeSigner() }).update, null);
+
+  db.prepare('UPDATE releases SET halted = 0 WHERE version = ?').run('2.4.0'); // the unhalt
+
+  const result = checkIn(db, { installToken: tokenC, version: '2.0.0' }, { signLicence: fakeSigner() });
+  assert.equal(result.update.version, '2.4.0', 'offers must resume once unhalted');
+});
+
+test('a success reported after an unhalt does not resurrect the halt from stale failure counts', () => {
+  // Regression guard for the exact bug this file's own comment warns about:
+  // if a SUCCESS were allowed to re-trigger shouldHalt using the old,
+  // never-reset failure counter, an unhalted release could freeze itself
+  // again on the very next ordinary success report.
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  insertRelease(db, '2.4.0', { halted: 0 });
+  db.prepare('UPDATE releases SET outcome_failures = 2, outcome_successes = 0 WHERE version = ?').run('2.4.0');
+
+  checkIn(db, { installToken: token, updateResult: { version: '2.4.0', ok: true } }, { signLicence: fakeSigner() });
+
+  const row = releaseRow(db, '2.4.0');
+  assert.equal(row.halted, 0, 'a success must never itself flip halted, however stale the failure count is');
+  assert.equal(row.outcome_successes, 1);
+});
+
+test('update_result naming a version that was never registered as a release is recorded as evidence but touches no release row, and never throws', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  assert.doesNotThrow(() => checkIn(db, {
+    installToken: token, updateResult: { version: '9.9.9-never-registered', ok: false },
+  }, { signLicence: fakeSigner() }));
+
+  const row = db.prepare('SELECT payload FROM checkins WHERE clinic_id = ?').get('c-1');
+  assert.deepEqual(JSON.parse(row.payload).update_result, { version: '9.9.9-never-registered', ok: false });
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM releases').get().n, 0, 'no release row may be invented');
+});
+
+test('ATTACK: garbage update_result shapes never fail the check-in and store a well-shaped null', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  for (const bad of ['a string', 42, null, ['array', 'not', 'object'], {}, { version: '2.4.0' }, { ok: true }, { version: '', ok: true }, { version: 42, ok: true }, { version: '2.4.0', ok: 'yes' }, { version: '2.4.0', ok: 1 }]) {
+    const result = checkIn(db, { installToken: token, updateResult: bad }, { signLicence: fakeSigner() });
+    assert.ok(result, `updateResult=${JSON.stringify(bad)} must not fail the check-in`);
+    const row = db.prepare('SELECT payload FROM checkins WHERE clinic_id = ? ORDER BY id DESC LIMIT 1').get('c-1');
+    assert.equal(JSON.parse(row.payload).update_result, null, `updateResult=${JSON.stringify(bad)} must normalise to null, not be stored as-is`);
+  }
+});
+
+test('a __proto__-shaped update_result never pollutes Object.prototype', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  assert.doesNotThrow(() => checkIn(db, {
+    installToken: token, updateResult: { __proto__: { version: '2.4.0', ok: true } },
+  }, { signLicence: fakeSigner() }));
+  assert.equal(({}).polluted, undefined);
+});
+
+test('update_result never affects entitlement — a failed update report still re-arms an otherwise-paid clinic', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  grantModule(db, 'c-1', 'crm');
+  insertRelease(db, '2.4.0');
+
+  const result = checkIn(db, { installToken: token, updateResult: { version: '2.4.0', ok: false } }, { signLicence: fakeSigner() });
+  assert.ok(result.licence, 'a failed update attempt must never cost a paid clinic its licence renewal');
+});
+
+test('a version string longer than the bound is truncated, not rejected outright, in update_result', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  const huge = '9.9.9-' + 'x'.repeat(200);
+  assert.doesNotThrow(() => checkIn(db, { installToken: token, updateResult: { version: huge, ok: true } }, { signLicence: fakeSigner() }));
+  const row = db.prepare('SELECT payload FROM checkins WHERE clinic_id = ?').get('c-1');
+  const stored = JSON.parse(row.payload).update_result;
+  assert.ok(stored.version.length <= 32, 'version must be bounded, matching normaliseUpdateResult\'s own cap');
 });

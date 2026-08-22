@@ -650,3 +650,296 @@ test('POST /requests/:id/grant 404s for an unknown request id', async (t) => {
   const res = await req(server, 'POST', '/cp/v1/admin/requests/999999/grant', { cookie, body: {} });
   assert.equal(res.status, 404);
 });
+
+// --- UPDATE_DELIVERY_V1: POST /releases ---------------------------------------
+
+function manifest(overrides = {}) {
+  return { payload: { version: '2.4.0', sha256: 'abc123' }, sig: 'base64-looking-signature', ...overrides };
+}
+
+function checkin(server, body) {
+  return fetch(`http://127.0.0.1:${server.address().port}/cp/v1/checkin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+test('POST /releases registers a release; it defaults to unpublished (ring -1) and is never offered', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const installToken = enrol(db, 'c-1');
+
+  const res = await req(server, 'POST', `${ADMIN_BASE}/releases`, {
+    cookie, body: { version: '2.4.0', notes_ru: 'Тест', url: 'https://x/2.4.0.tar.gz', sha256: 'abc', manifest: manifest() },
+  });
+  assert.equal(res.status, 201);
+
+  const checkinRes = await checkin(server, { install_token: installToken, version: '2.0.0' });
+  assert.equal((await checkinRes.json()).update, null, 'a registered-but-never-published release must never be offered');
+});
+
+test('POST /releases rejects a missing version', async (t) => {
+  const { server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const res = await req(server, 'POST', `${ADMIN_BASE}/releases`, { cookie, body: { manifest: manifest() } });
+  assert.equal(res.status, 400);
+});
+
+test('POST /releases rejects a manifest that is not {payload, sig}-shaped', async (t) => {
+  const { server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  for (const bad of [null, undefined, {}, { payload: {} }, { sig: 'x' }, { payload: 'not-an-object', sig: 'x' }, { payload: {}, sig: '' }, { payload: {}, sig: 42 }, 'not-an-object']) {
+    const res = await req(server, 'POST', `${ADMIN_BASE}/releases`, { cookie, body: { version: '2.4.0', manifest: bad } });
+    assert.equal(res.status, 400, `manifest=${JSON.stringify(bad)} must be rejected`);
+  }
+});
+
+test('ATTACK: the manifest payload can hold attacker-shaped JSON — this route never verifies the signature, only the shape', async (t) => {
+  const { server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  // A signature that could never possibly verify against anything, and a
+  // payload full of nonsense — registration must still succeed, because this
+  // route explicitly trusts the CLINIC to be the verifier (Task 4), not itself.
+  const res = await req(server, 'POST', `${ADMIN_BASE}/releases`, {
+    cookie, body: { version: '2.4.0', manifest: { payload: { anything: 'goes', nested: { a: [1, 2, 3] } }, sig: 'totally-bogus-not-verified-here' } },
+  });
+  assert.equal(res.status, 201, 'the shape guard must not reject on the CONTENTS of payload/sig, only their shape');
+});
+
+test('POST /releases twice with the same version is rejected — version is the primary key', async (t) => {
+  const { server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  await req(server, 'POST', `${ADMIN_BASE}/releases`, { cookie, body: { version: '2.4.0', manifest: manifest() } });
+  const second = await req(server, 'POST', `${ADMIN_BASE}/releases`, { cookie, body: { version: '2.4.0', manifest: manifest() } });
+  assert.equal(second.status, 400);
+});
+
+// --- UPDATE_DELIVERY_V1: POST /releases/:version/publish ----------------------
+
+test('POST /releases/:version/publish sets the ring, and a clinic in that ring is then offered it', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const installToken = enrol(db, 'c-1'); // default ring 2
+
+  await req(server, 'POST', `${ADMIN_BASE}/releases`, { cookie, body: { version: '2.4.0', manifest: manifest() } });
+  const publish = await req(server, 'POST', `${ADMIN_BASE}/releases/2.4.0/publish`, { cookie, body: { ring: 2 } });
+  assert.equal(publish.status, 200);
+
+  const res = await checkin(server, { install_token: installToken, version: '2.0.0' });
+  const body = await res.json();
+  assert.equal(body.update.version, '2.4.0');
+  assert.deepEqual(body.update.manifest, manifest());
+});
+
+test('POST /releases/:version/publish rejects a ring outside 0/1/2', async (t) => {
+  const { server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  await req(server, 'POST', `${ADMIN_BASE}/releases`, { cookie, body: { version: '2.4.0', manifest: manifest() } });
+  for (const bad of [3, -2, 'wide', null, 1.5]) {
+    const res = await req(server, 'POST', `${ADMIN_BASE}/releases/2.4.0/publish`, { cookie, body: { ring: bad } });
+    assert.equal(res.status, 400, `ring=${JSON.stringify(bad)} must be rejected`);
+  }
+});
+
+test('POST /releases/:version/publish 404s for an unregistered version', async (t) => {
+  const { server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const res = await req(server, 'POST', `${ADMIN_BASE}/releases/9.9.9/publish`, { cookie, body: { ring: 2 } });
+  assert.equal(res.status, 404);
+});
+
+// --- UPDATE_DELIVERY_V1: GET /releases ----------------------------------------
+
+test('GET /releases lists a registered release with its ring, halted state, and outcome counts', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const installToken = enrol(db, 'c-1');
+
+  await req(server, 'POST', `${ADMIN_BASE}/releases`, { cookie, body: { version: '2.4.0', notes_ru: 'Заметки', manifest: manifest() } });
+  await req(server, 'POST', `${ADMIN_BASE}/releases/2.4.0/publish`, { cookie, body: { ring: 2 } });
+  await checkin(server, { install_token: installToken, update_result: { version: '2.4.0', ok: false } });
+
+  const res = await req(server, 'GET', `${ADMIN_BASE}/releases`, { cookie });
+  assert.equal(res.status, 200);
+  const { releases } = await res.json();
+  const r24 = releases.find((r) => r.version === '2.4.0');
+  assert.ok(r24);
+  assert.equal(r24.notes_ru, 'Заметки');
+  assert.equal(r24.ring, 2);
+  assert.equal(r24.halted, false);
+  assert.deepEqual(r24.outcomes, { failures: 1, successes: 0 });
+  assert.equal(r24.manifest, undefined, 'the manifest blob is deliberately omitted from the list view');
+});
+
+// --- UPDATE_DELIVERY_V1: POST /releases/:version/halt and /unhalt -------------
+
+test('POST /releases/:version/halt and /unhalt flip the same halted flag the automatic halt uses', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const installToken = enrol(db, 'c-1');
+
+  await req(server, 'POST', `${ADMIN_BASE}/releases`, { cookie, body: { version: '2.4.0', manifest: manifest() } });
+  await req(server, 'POST', `${ADMIN_BASE}/releases/2.4.0/publish`, { cookie, body: { ring: 2 } });
+
+  const halt = await req(server, 'POST', `${ADMIN_BASE}/releases/2.4.0/halt`, { cookie, body: {} });
+  assert.equal(halt.status, 200);
+  assert.equal(db.prepare('SELECT halted FROM releases WHERE version = ?').get('2.4.0').halted, 1);
+  assert.equal((await (await checkin(server, { install_token: installToken, version: '2.0.0' })).json()).update, null,
+    'a manually halted release must not be offered');
+
+  const unhalt = await req(server, 'POST', `${ADMIN_BASE}/releases/2.4.0/unhalt`, { cookie, body: {} });
+  assert.equal(unhalt.status, 200);
+  assert.equal(db.prepare('SELECT halted FROM releases WHERE version = ?').get('2.4.0').halted, 0);
+  assert.equal((await (await checkin(server, { install_token: installToken, version: '2.0.0' })).json()).update.version, '2.4.0',
+    'offers must resume once unhalted');
+});
+
+test('POST /releases/:version/halt and /unhalt 404 for an unregistered version', async (t) => {
+  const { server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  assert.equal((await req(server, 'POST', `${ADMIN_BASE}/releases/9.9.9/halt`, { cookie, body: {} })).status, 404);
+  assert.equal((await req(server, 'POST', `${ADMIN_BASE}/releases/9.9.9/unhalt`, { cookie, body: {} })).status, 404);
+});
+
+// --- UPDATE_DELIVERY_V1: POST /clinics/:id/ring -------------------------------
+
+test('POST /clinics/:id/ring sets the clinic\'s ring, and check-in reflects it against a narrowly published release', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const installToken = enrol(db, 'c-1'); // default ring 2
+
+  await req(server, 'POST', `${ADMIN_BASE}/releases`, { cookie, body: { version: '2.4.0', manifest: manifest() } });
+  await req(server, 'POST', `${ADMIN_BASE}/releases/2.4.0/publish`, { cookie, body: { ring: 1 } });
+  assert.equal((await (await checkin(server, { install_token: installToken, version: '2.0.0' })).json()).update, null,
+    'sanity: a ring-2 clinic must not see a ring-1 publish yet');
+
+  const res = await req(server, 'POST', `${ADMIN_BASE}/clinics/c-1/ring`, { cookie, body: { ring: 1 } });
+  assert.equal(res.status, 200);
+  assert.ok((await res.json()).note);
+  assert.equal(db.prepare('SELECT ring FROM clinics WHERE clinic_id = ?').get('c-1').ring, 1);
+
+  const after = await (await checkin(server, { install_token: installToken, version: '2.0.0' })).json();
+  assert.equal(after.update.version, '2.4.0', 'now in ring 1, the ring-1 publish must reach it');
+});
+
+test('POST /clinics/:id/ring rejects a ring outside 0/1/2, and 404s for an unknown clinic', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  enrol(db, 'c-1');
+  for (const bad of [3, -1, 'wide', null]) {
+    const res = await req(server, 'POST', `${ADMIN_BASE}/clinics/c-1/ring`, { cookie, body: { ring: bad } });
+    assert.equal(res.status, 400, `ring=${JSON.stringify(bad)} must be rejected`);
+  }
+  const res = await req(server, 'POST', `${ADMIN_BASE}/clinics/no-such-clinic/ring`, { cookie, body: { ring: 1 } });
+  assert.equal(res.status, 404);
+});
+
+// --- UPDATE_DELIVERY_V1: POST /clinics/:id/pin --------------------------------
+
+test('POST /clinics/:id/pin sets pinned_version, and check-in refuses anything newer than the pin', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const installToken = enrol(db, 'c-1');
+
+  await req(server, 'POST', `${ADMIN_BASE}/releases`, { cookie, body: { version: '2.5.0', manifest: manifest({ payload: { version: '2.5.0' } }) } });
+  await req(server, 'POST', `${ADMIN_BASE}/releases/2.5.0/publish`, { cookie, body: { ring: 2 } });
+
+  const pin = await req(server, 'POST', `${ADMIN_BASE}/clinics/c-1/pin`, { cookie, body: { version: '2.4.0' } });
+  assert.equal(pin.status, 200);
+  assert.equal(db.prepare('SELECT pinned_version FROM clinics WHERE clinic_id = ?').get('c-1').pinned_version, '2.4.0');
+
+  const res = await checkin(server, { install_token: installToken, version: '2.3.0' });
+  assert.equal((await res.json()).update, null, 'pinned below the published release — no offer despite eligibility otherwise');
+});
+
+test('POST /clinics/:id/pin with {version: null} unpins — offers resume', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const installToken = enrol(db, 'c-1');
+  db.prepare('UPDATE clinics SET pinned_version = ? WHERE clinic_id = ?').run('2.0.0', 'c-1');
+
+  await req(server, 'POST', `${ADMIN_BASE}/releases`, { cookie, body: { version: '2.4.0', manifest: manifest() } });
+  await req(server, 'POST', `${ADMIN_BASE}/releases/2.4.0/publish`, { cookie, body: { ring: 2 } });
+  assert.equal((await (await checkin(server, { install_token: installToken, version: '2.0.0' })).json()).update, null,
+    'sanity: pinned at 2.0.0, must not see 2.4.0 yet');
+
+  const unpin = await req(server, 'POST', `${ADMIN_BASE}/clinics/c-1/pin`, { cookie, body: { version: null } });
+  assert.equal(unpin.status, 200);
+  assert.equal(db.prepare('SELECT pinned_version FROM clinics WHERE clinic_id = ?').get('c-1').pinned_version, null);
+
+  const after = await (await checkin(server, { install_token: installToken, version: '2.0.0' })).json();
+  assert.equal(after.update.version, '2.4.0', 'unpinned, the eligible release must now be offered');
+});
+
+test('POST /clinics/:id/pin rejects a missing/undefined `version` field (distinct from an explicit null)', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  enrol(db, 'c-1');
+  for (const bad of [{}, { version: '' }, { version: 42 }, { version: undefined }]) {
+    const res = await req(server, 'POST', `${ADMIN_BASE}/clinics/c-1/pin`, { cookie, body: bad });
+    assert.equal(res.status, 400, `body=${JSON.stringify(bad)} must be rejected`);
+  }
+});
+
+test('POST /clinics/:id/pin 404s for an unknown clinic', async (t) => {
+  const { server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const res = await req(server, 'POST', `${ADMIN_BASE}/clinics/no-such-clinic/pin`, { cookie, body: { version: '2.4.0' } });
+  assert.equal(res.status, 404);
+});
+
+// --- ACCEPTANCE: rings, promotion, auto-halt, unhalt, pin — end to end ------
+
+test('acceptance: register, publish to ring 1, promote to ring 2, auto-halt on two failures, unhalt, then pin blocks eligibility', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+
+  const ring1Token = enrol(db, 'c-ring1');
+  const ring2Token = enrol(db, 'c-ring2');
+  db.prepare('UPDATE clinics SET ring = 1 WHERE clinic_id = ?').run('c-ring1'); // ring2Token stays the default, ring 2
+
+  // 1. Register a release, publish to ring 1.
+  const register = await req(server, 'POST', `${ADMIN_BASE}/releases`, {
+    cookie, body: { version: '2.4.0', notes_ru: 'Первый релиз', url: 'https://x/2.4.0.tar.gz', sha256: 'hash', manifest: manifest() },
+  });
+  assert.equal(register.status, 201);
+  const publishRing1 = await req(server, 'POST', `${ADMIN_BASE}/releases/2.4.0/publish`, { cookie, body: { ring: 1 } });
+  assert.equal(publishRing1.status, 200);
+
+  // 2. A ring-1 clinic's check-in carries the offer; a ring-2 clinic's does not.
+  const ring1Sees = await (await checkin(server, { install_token: ring1Token, version: '2.0.0' })).json();
+  assert.equal(ring1Sees.update.version, '2.4.0', 'result: ring-1 clinic is offered the ring-1 publish');
+
+  const ring2SeesNothingYet = await (await checkin(server, { install_token: ring2Token, version: '2.0.0' })).json();
+  assert.equal(ring2SeesNothingYet.update, null, 'result: ring-2 clinic sees nothing while published only to ring 1');
+
+  // 3. Promote to ring 2 -> now the ring-2 clinic sees it too.
+  const promote = await req(server, 'POST', `${ADMIN_BASE}/releases/2.4.0/publish`, { cookie, body: { ring: 2 } });
+  assert.equal(promote.status, 200);
+  const ring2SeesNow = await (await checkin(server, { install_token: ring2Token, version: '2.0.0' })).json();
+  assert.equal(ring2SeesNow.update.version, '2.4.0', 'result: promoted to ring 2, the ring-2 clinic now sees it');
+
+  // 4. The ring-2 clinic reports update_result:{ok:false} twice -> auto-halt.
+  await checkin(server, { install_token: ring2Token, version: '2.0.0', update_result: { version: '2.4.0', ok: false } });
+  await checkin(server, { install_token: ring2Token, version: '2.0.0', update_result: { version: '2.4.0', ok: false } });
+  assert.equal(db.prepare('SELECT halted FROM releases WHERE version = ?').get('2.4.0').halted, 1,
+    'result: two failures from a ring-2 clinic auto-halt the release');
+
+  // 5. A THIRD clinic gets no offer.
+  const thirdToken = enrol(db, 'c-third'); // default ring 2
+  const thirdSees = await (await checkin(server, { install_token: thirdToken, version: '2.0.0' })).json();
+  assert.equal(thirdSees.update, null, 'result: a third clinic checking in after the halt gets no offer');
+
+  // 6. Unhalt -> offers resume.
+  const unhalt = await req(server, 'POST', `${ADMIN_BASE}/releases/2.4.0/unhalt`, { cookie, body: {} });
+  assert.equal(unhalt.status, 200);
+  const afterUnhalt = await (await checkin(server, { install_token: thirdToken, version: '2.0.0' })).json();
+  assert.equal(afterUnhalt.update.version, '2.4.0', 'result: unhalting resumes offers');
+
+  // 7. Pin a clinic -> no offer despite eligibility.
+  const pin = await req(server, 'POST', `${ADMIN_BASE}/clinics/c-third/pin`, { cookie, body: { version: '2.0.0' } });
+  assert.equal(pin.status, 200);
+  const afterPin = await (await checkin(server, { install_token: thirdToken, version: '2.0.0' })).json();
+  assert.equal(afterPin.update, null, 'result: a clinic pinned at 2.0.0 gets no offer of 2.4.0, despite otherwise being eligible');
+});

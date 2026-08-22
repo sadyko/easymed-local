@@ -293,3 +293,55 @@ test('a token whose clinic row was since deleted is refused exactly like an unkn
   // call never authenticated.
   assert.equal(db.prepare('SELECT COUNT(*) n FROM checkins').get().n, 1);
 });
+
+// --- UPDATE_DELIVERY_V1: `update` in the response, `update_result` in the request, over real HTTP ---
+
+test('an old-shaped check-in (no update_result at all) still gets a 200 with update:null when nothing is registered', async (t) => {
+  const { db } = harness();
+  const app = createApp(db);
+  const server = await listen(app); t.after(() => server.close());
+  const installToken = enrol(db, 'c-1');
+
+  const res = await checkin(server, { install_token: installToken, version: '2.0.0' });
+  assert.equal(res.status, 200, 'an old clinic sending nothing new must be completely unaffected');
+  assert.equal((await res.json()).update, null);
+});
+
+test('a published release is offered as `update` over real HTTP, with the manifest passed through', async (t) => {
+  const { db } = harness();
+  const app = createApp(db);
+  const server = await listen(app); t.after(() => server.close());
+  const installToken = enrol(db, 'c-1'); // default ring 2
+
+  const manifest = { payload: { version: '2.4.0' }, sig: 'real-signature-value' };
+  db.prepare(
+    `INSERT INTO releases (version, notes_ru, url, sha256, manifest, ring) VALUES (?, ?, ?, ?, ?, ?)`
+  ).run('2.4.0', 'Что нового', 'https://x/2.4.0.tar.gz', 'hash', JSON.stringify(manifest), 2);
+
+  const res = await checkin(server, { install_token: installToken, version: '2.0.0' });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.update.version, '2.4.0');
+  assert.equal(body.update.notes_ru, 'Что нового');
+  assert.deepEqual(body.update.manifest, manifest);
+});
+
+test('update_result is accepted over HTTP, recorded, and never fails the check-in — even a failing report', async (t) => {
+  const { db } = harness();
+  const app = createApp(db);
+  const server = await listen(app); t.after(() => server.close());
+  const installToken = enrol(db, 'c-1');
+
+  db.prepare(
+    `INSERT INTO releases (version, notes_ru, url, sha256, manifest, ring) VALUES (?, ?, ?, ?, ?, ?)`
+  ).run('2.4.0', '', '', '', JSON.stringify({ payload: {}, sig: 'x' }), 2);
+
+  const res = await checkin(server, {
+    install_token: installToken,
+    update_result: { version: '2.4.0', ok: false },
+  });
+  assert.equal(res.status, 200, 'a failed update_result must never itself fail the check-in call');
+
+  const row = db.prepare('SELECT outcome_failures FROM releases WHERE version = ?').get('2.4.0');
+  assert.equal(row.outcome_failures, 1);
+});

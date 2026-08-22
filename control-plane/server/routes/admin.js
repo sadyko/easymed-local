@@ -56,6 +56,19 @@ export const ADMIN_ROUTE_TABLE = [
   { method: 'GET',  path: '/counters' },
   { method: 'GET',  path: '/requests' },
   { method: 'POST', path: '/requests/:id/grant' },
+  // UPDATE_DELIVERY_V1 (docs/plans/2026-08-20-update-delivery.md, Task 3) —
+  // ':id' here is a release VERSION, not a clinic_id, but this table's own
+  // convention (see this table's own header) only cares that ':id' is the
+  // literal placeholder the adversarial test substitutes a real string for —
+  // the actual Express route below names its param `:version` for clarity;
+  // that name never has to match this documentation table's placeholder.
+  { method: 'POST', path: '/releases' },
+  { method: 'GET',  path: '/releases' },
+  { method: 'POST', path: '/releases/:id/publish' },
+  { method: 'POST', path: '/releases/:id/halt' },
+  { method: 'POST', path: '/releases/:id/unhalt' },
+  { method: 'POST', path: '/clinics/:id/ring' },
+  { method: 'POST', path: '/clinics/:id/pin' },
 ];
 
 function bad(res, message) {
@@ -66,9 +79,39 @@ function notFound(res, message) {
   return res.status(404).json({ error: { code: 'not_found', message } });
 }
 
+// ATTACK (found while writing this task's own duplicate-registration test,
+// POST /releases twice with the same version): better-sqlite3 reports a
+// collision on a non-INTEGER `TEXT PRIMARY KEY` column (releases.version,
+// exactly like clinics.clinic_id above it) as e.code
+// 'SQLITE_CONSTRAINT_PRIMARYKEY', NOT 'SQLITE_CONSTRAINT_UNIQUE' — verified
+// directly against better-sqlite3 rather than assumed. The message text is
+// identical either way ("UNIQUE constraint failed: table.column"), which is
+// why this went unnoticed: createClinic()'s own retry-on-collision above
+// never actually exercises this path (an id collision there is astronomically
+// unlikely, never forced by a test), so the gap was silent until this task
+// wrote a test that deliberately forces one. Both codes are accepted here now.
 function isUniqueViolation(e, table, column) {
-  return !!e && e.code === 'SQLITE_CONSTRAINT_UNIQUE' &&
+  return !!e && (e.code === 'SQLITE_CONSTRAINT_UNIQUE' || e.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') &&
     typeof e.message === 'string' && e.message.includes(`${table}.${column}`);
+}
+
+// UPDATE_DELIVERY_V1 — the only three ring values that exist, everywhere this
+// file validates one (release publish, clinic ring). One list, not three
+// hand-typed [0,1,2] literals that could quietly drift apart.
+const VALID_RINGS = [0, 1, 2];
+
+// UPDATE_DELIVERY_V1 — `{payload, sig}`-shaped, and nothing more. Deliberately
+// NOT a signature check: this route never verifies the release signature —
+// see POST /releases' own comment for why that trust decision is correct
+// (the control plane may not even hold the release public key; the CLINIC is
+// the verifier). This is only a SHAPE guard, so a manifest that could never
+// possibly verify as anything (missing payload, sig not a string) is rejected
+// at registration time rather than being silently stored and discovered
+// broken only when a clinic tries to use it.
+function isManifestShaped(manifest) {
+  return !!manifest && typeof manifest === 'object' && !Array.isArray(manifest)
+    && !!manifest.payload && typeof manifest.payload === 'object' && !Array.isArray(manifest.payload)
+    && typeof manifest.sig === 'string' && manifest.sig.length > 0;
 }
 
 // The next unused c-NNNNNN id, derived from the highest numeric suffix seen
@@ -423,6 +466,135 @@ export function adminRoutes(db) {
     })();
 
     res.status(outcome.status).json(outcome.body);
+  });
+
+  // --- releases (UPDATE_DELIVERY_V1) -------------------------------------------
+
+  // Registers a release. Ring defaults to -1 (not published) via the schema —
+  // registering is deliberately a SEPARATE act from publishing (POST
+  // .../publish): a maintainer can stage a release's metadata before deciding
+  // it is ready for even the vendor's own ring-0 install to see.
+  r.post('/releases', (req, res) => {
+    const { version, notes_ru, url, sha256, manifest } = req.body || {};
+    if (typeof version !== 'string' || !version.trim()) return bad(res, 'version is required.');
+
+    // TRUST BOUNDARY — deliberately NOT verified here. This control plane may
+    // not even hold the release public key (it is a SEPARATE keypair from the
+    // licence key — see scripts/build-bundle.mjs's own header on why two
+    // keys exist), so this route only checks the manifest is the right
+    // SHAPE, never that its signature is genuine. The CLINIC is the one
+    // party that ever calls verifyBundle() against it (Task 4). If this API
+    // is misused (a compromised vendor session, a bad admin script) the
+    // manifest column can hold attacker-shaped JSON — services/checkin.js is
+    // written to pass it through completely opaquely for exactly that
+    // reason, never parsing it for meaning beyond "is it valid JSON".
+    if (!isManifestShaped(manifest)) {
+      return bad(res, 'manifest must be a {payload, sig} object — the CLINIC verifies the signature, not this API.');
+    }
+
+    try {
+      db.prepare(
+        `INSERT INTO releases (version, notes_ru, url, sha256, manifest) VALUES (?, ?, ?, ?, ?)`
+      ).run(
+        version.trim(),
+        typeof notes_ru === 'string' ? notes_ru : null,
+        typeof url === 'string' ? url : null,
+        typeof sha256 === 'string' ? sha256 : null,
+        JSON.stringify(manifest),
+      );
+    } catch (e) {
+      if (isUniqueViolation(e, 'releases', 'version')) return bad(res, 'A release with this version is already registered.');
+      throw e;
+    }
+    res.status(201).json({ ok: true });
+  });
+
+  // The list the panel shows: per-release outcome counts (what
+  // services/checkin.js has counted from update_result reports) and the ring
+  // it is offered to. Manifest is deliberately OMITTED from the list — a
+  // large signed blob the panel has no row-by-row use for, the same
+  // list-vs-detail split GET /clinics already draws against GET /clinics/:id.
+  r.get('/releases', (req, res) => {
+    const rows = db.prepare(
+      `SELECT version, notes_ru, url, sha256, ring, halted, outcome_failures, outcome_successes, created_at
+       FROM releases ORDER BY created_at DESC, version DESC`
+    ).all();
+    const releases = rows.map((row) => ({
+      version: row.version,
+      notes_ru: row.notes_ru,
+      url: row.url,
+      sha256: row.sha256,
+      ring: row.ring, // -1 = registered, not published; 0/1/2 = offered up to (and including) that ring
+      halted: !!row.halted,
+      outcomes: { failures: row.outcome_failures, successes: row.outcome_successes },
+      created_at: row.created_at,
+    }));
+    res.json({ releases });
+  });
+
+  // The manual promotion. Deliberately allows narrowing too (2 -> 0, say) —
+  // an admin undoing a mistaken promotion must be possible, and refusing a
+  // narrower ring the admin explicitly asked for would make that mistake
+  // unfixable through this route.
+  r.post('/releases/:version/publish', (req, res) => {
+    const release = db.prepare('SELECT version FROM releases WHERE version = ?').get(req.params.version);
+    if (!release) return notFound(res, 'Release not found.');
+
+    const { ring } = req.body || {};
+    if (!VALID_RINGS.includes(ring)) return bad(res, 'ring must be 0, 1, or 2.');
+
+    db.prepare('UPDATE releases SET ring = ? WHERE version = ?').run(ring, release.version);
+    res.json({ ok: true });
+  });
+
+  // Manual halt/unhalt — the SAME `halted` column services/checkin.js's own
+  // automatic halt (rings.js:shouldHalt) flips, so an unhalt here always
+  // means the same thing regardless of who or what set it. See checkin.js's
+  // own comment for why the outcome counters are never reset by either route:
+  // history survives a manual override, on purpose.
+  r.post('/releases/:version/halt', (req, res) => {
+    const release = db.prepare('SELECT version FROM releases WHERE version = ?').get(req.params.version);
+    if (!release) return notFound(res, 'Release not found.');
+    db.prepare('UPDATE releases SET halted = 1 WHERE version = ?').run(release.version);
+    res.json({ ok: true });
+  });
+
+  r.post('/releases/:version/unhalt', (req, res) => {
+    const release = db.prepare('SELECT version FROM releases WHERE version = ?').get(req.params.version);
+    if (!release) return notFound(res, 'Release not found.');
+    db.prepare('UPDATE releases SET halted = 0 WHERE version = ?').run(release.version);
+    res.json({ ok: true });
+  });
+
+  // --- clinics: ring and pin (UPDATE_DELIVERY_V1) ------------------------------
+
+  r.post('/clinics/:id/ring', (req, res) => {
+    const clinic = db.prepare('SELECT clinic_id FROM clinics WHERE clinic_id = ?').get(req.params.id);
+    if (!clinic) return notFound(res, 'Clinic not found.');
+
+    const { ring } = req.body || {};
+    if (!VALID_RINGS.includes(ring)) return bad(res, 'ring must be 0, 1, or 2.');
+
+    db.prepare('UPDATE clinics SET ring = ? WHERE clinic_id = ?').run(ring, clinic.clinic_id);
+    res.json({ ok: true, note: NEXT_CHECKIN_NOTE });
+  });
+
+  // `{version: null}` unpins — a real, deliberate choice, distinct from the
+  // field being omitted entirely (rejected below as a malformed request: a
+  // caller must say what they mean, the same discipline POST
+  // .../subscription already applies to subscription_until).
+  r.post('/clinics/:id/pin', (req, res) => {
+    const clinic = db.prepare('SELECT clinic_id FROM clinics WHERE clinic_id = ?').get(req.params.id);
+    if (!clinic) return notFound(res, 'Clinic not found.');
+
+    const { version } = req.body || {};
+    if (version !== null && (typeof version !== 'string' || !version.trim())) {
+      return bad(res, 'version must be a non-empty string, or null to unpin.');
+    }
+
+    db.prepare('UPDATE clinics SET pinned_version = ? WHERE clinic_id = ?')
+      .run(version === null ? null : version.trim(), clinic.clinic_id);
+    res.json({ ok: true, note: NEXT_CHECKIN_NOTE });
   });
 
   return r;

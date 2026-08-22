@@ -35,6 +35,11 @@ import { SELLABLE_MODULES } from '../../../server/services/rpc/licence.js';
 // disagreement would be invisible until a clinic reported a number under a
 // name the vendor never actually offered.
 import { COUNTER_NAMES } from '../../../server/services/control/metrics.js';
+// UPDATE_DELIVERY_V1 (docs/plans/2026-08-20-update-delivery.md, Task 3) — the
+// pure ring/halt decision logic, imported rather than re-derived here. This
+// file's job is DB plumbing (read the clinic's ring/pin, read the releases
+// table, count outcomes); rings.js's job is deciding what those facts mean.
+import { offerFor, shouldHalt } from './rings.js';
 
 // Advisory bounds, mirroring enrollment.js's own MAX_FINGERPRINT_LEN (same
 // reasoning: these are evidence, not credentials, so an absurd value is
@@ -50,6 +55,11 @@ const MAX_REQUESTED_AT_LEN = 64;
 // against a hostile or buggy caller, not a real limit (COUNTER_NAMES itself
 // is a small, fixed catalogue today).
 const MAX_STATS_KEYS = 50;
+
+// UPDATE_DELIVERY_V1 — a version string looks like "2.4.0"; generous enough
+// for any real release tag, small enough that a hostile caller can't stuff an
+// enormous string into a column that only ever needs to match a releases.version.
+const MAX_UPDATE_RESULT_VERSION_LEN = 32;
 
 function normaliseToken(token) {
   return typeof token === 'string' && token.length > 0 ? token : null;
@@ -171,6 +181,22 @@ function normaliseStats(input) {
   return out;
 }
 
+// UPDATE_DELIVERY_V1 — the clinic's own report on whether ITS update attempt
+// succeeded. Same normalisation discipline as normaliseStats: a malformed
+// report costs nothing but itself, never the check-in that carries it — see
+// this function's own callers for why the WHOLE object is dropped (returned
+// null) rather than salvaged field-by-field, unlike normaliseStats: there is
+// no sensible partial reading of "an update result with a version but no
+// verdict", or vice versa, so a shape that isn't cleanly both is treated as
+// not having said anything at all.
+function normaliseUpdateResult(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null; // wrong shape entirely
+  const version = typeof input.version === 'string' ? input.version.trim().slice(0, MAX_UPDATE_RESULT_VERSION_LEN) : '';
+  if (!version) return null; // no version named — nothing to attribute this report to
+  if (typeof input.ok !== 'boolean') return null; // never coerced: '', 0, 'false' are not booleans
+  return { version, ok: input.ok };
+}
+
 // Rule 5 — re-arm only if entitled. subscription_until is inclusive of the
 // day itself: "paid until 2026-08-21" means still paid ON the 21st, not only
 // on the days strictly before it — only a date strictly BEFORE today has
@@ -199,19 +225,26 @@ function isEntitled(subscription, subscriptionUntil, now = new Date()) {
  * @param {*} [args.moduleRequests]
  * @param {*} [args.stats] STATS_V1 — the clinic's reported counters, `{ [name]: number }`. Optional forever: an
  *   older clinic that never sends this field at all must check in exactly as it always has.
+ * @param {*} [args.updateResult] UPDATE_DELIVERY_V1 — `{ version, ok }`, the clinic's own report on whether ITS
+ *   update attempt succeeded. Optional forever, same as `stats` — an old clinic that never sends this checks in
+ *   exactly as before. Never verified/interpreted beyond version+ok (see normaliseUpdateResult); only ever used to
+ *   move this file's own outcome counters and, via rings.js:shouldHalt, to freeze a release from further offers.
  * @param {object} [hooks]
  * @param {function({clinicId:string, clinicName:string, modules:string[]}): {payload:object, sig:string}} [hooks.signLicence]
  *   Called ONLY when the clinic is currently entitled to a fresh licence
  *   (rule 5), and ONLY after the check-in below has already committed (rule
  *   2) — if it throws, the throw propagates straight to the caller, but the
  *   checkins row (and everything else this call wrote) is already durable.
- * @returns {{licence: object|null, subscription: 'active'|'unpaid', collect: string[]} | null}
+ * @returns {{licence: object|null, subscription: 'active'|'unpaid', collect: string[], update: object|null} | null}
  *   null means unknown, inactive, or malformed token (rule 1) — the caller
  *   (routes/checkin.js) turns that into ONE generic 401, indistinguishable
  *   from the outside. `collect` (STATS_V1) is this clinic's collect_set, or
  *   the code-level default (every COUNTER_NAMES) when it has never been set.
+ *   `update` (UPDATE_DELIVERY_V1) is `{version, notes_ru, url, sha256, manifest}`
+ *   for the single newest release this clinic is eligible for (rings.js:offerFor),
+ *   or null when there is nothing to offer.
  */
-export function checkIn(db, { installToken, version, fingerprint, moduleRequests, stats } = {}, { signLicence } = {}) {
+export function checkIn(db, { installToken, version, fingerprint, moduleRequests, stats, updateResult } = {}, { signLicence } = {}) {
   const token = normaliseToken(installToken);
   if (!token) return null; // malformed/missing — never worth a DB round-trip, same outward shape as "unknown"
 
@@ -223,6 +256,8 @@ export function checkIn(db, { installToken, version, fingerprint, moduleRequests
   // needs transactional atomicity, only the same "never throw, never fail
   // the call" guarantee normaliseModuleRequests already gives.
   const normStats = normaliseStats(stats);
+  // UPDATE_DELIVERY_V1 — same reasoning: pure, outside the transaction.
+  const normUpdateResult = normaliseUpdateResult(updateResult);
 
   // ATOMICITY — as with enrollment.js's own transaction, this is not about
   // concurrent-request locking: better-sqlite3 is fully synchronous and Node
@@ -232,8 +267,11 @@ export function checkIn(db, { installToken, version, fingerprint, moduleRequests
   // either fully recorded (row + last_seen_at + leads) or not recorded at
   // all — never a checkins row with no matching last_seen_at update.
   const txn = db.transaction(() => {
+    // UPDATE_DELIVERY_V1 — ring and pinned_version are also read here (in the
+    // same identifying SELECT, not a second query) purely so rings.js:offerFor
+    // has what it needs; neither column affects rule 1's identification/entitlement logic.
     const clinic = db.prepare(
-      `SELECT clinic_id, name, subscription, subscription_until, last_fingerprint, collect_set
+      `SELECT clinic_id, name, subscription, subscription_until, last_fingerprint, collect_set, ring, pinned_version
        FROM clinics WHERE install_token = ? AND active = 1`
     ).get(token);
     // Rule 1 — unknown, inactive, and (handled above) malformed tokens are
@@ -269,6 +307,7 @@ export function checkIn(db, { installToken, version, fingerprint, moduleRequests
       module_requests: requests,
       fingerprint_changed: fingerprintChanged,
       stats: normStats,
+      update_result: normUpdateResult,
     }));
 
     db.prepare(
@@ -297,6 +336,86 @@ export function checkIn(db, { installToken, version, fingerprint, moduleRequests
       `SELECT module_key FROM clinic_modules WHERE clinic_id = ? ORDER BY module_key`
     ).all(clinic.clinic_id).map((m) => m.module_key);
 
+    // UPDATE_DELIVERY_V1 — the clinic's report on ITS OWN update attempt.
+    // Already recorded (evidence, unconditionally) in the payload above; what
+    // happens here is the ONLY thing that can change control-plane STATE from
+    // it — a release's outcome counters, and possibly its `halted` flag, set
+    // INSIDE this same transaction (the task's own requirement: a halt must
+    // never be a separate, un-atomic write from the failure that caused it).
+    //
+    // Only a NEW FAILURE can flip halted from 0 to 1 — never a success, and
+    // never when it is already halted. This is deliberate, not an oversight:
+    // rings.js:shouldHalt looks at cumulative counters that are NEVER reset
+    // (see migrations/004_releases.sql), so if a success were also allowed to
+    // re-trigger the check, a release a human just unhalted could freeze
+    // itself again on the very next ordinary success report, purely from
+    // stale counts nobody asked to re-litigate. A fresh failure re-tripping
+    // it after an unhalt, by contrast, is exactly the safety net working as
+    // intended — new evidence, evaluated again.
+    if (normUpdateResult) {
+      if (normUpdateResult.ok) {
+        // No-op (0 rows affected) if this version was never registered as a
+        // release — a success report cannot invent a release row, only add
+        // to one that already exists.
+        db.prepare('UPDATE releases SET outcome_successes = outcome_successes + 1 WHERE version = ?')
+          .run(normUpdateResult.version);
+      } else {
+        const release = db.prepare(
+          'SELECT halted, outcome_failures, outcome_successes FROM releases WHERE version = ?'
+        ).get(normUpdateResult.version);
+        // An update_result naming a version this control plane never
+        // registered (or has since removed) is still real EVIDENCE — already
+        // stored in the payload above — but there is no release row to
+        // credit it to or halt. Never throws, never invents one.
+        if (release) {
+          const failures = release.outcome_failures + 1;
+          db.prepare('UPDATE releases SET outcome_failures = outcome_failures + 1 WHERE version = ?')
+            .run(normUpdateResult.version);
+          if (!release.halted && shouldHalt({ outcomes: { failures, successes: release.outcome_successes } })) {
+            db.prepare('UPDATE releases SET halted = 1 WHERE version = ?').run(normUpdateResult.version);
+            // LOUD and deliberate: console.error, not .warn. An automatic
+            // halt stops every remaining clinic in the ring from being
+            // offered this release with no admin having asked for it yet —
+            // this must be impossible to miss in the server's own logs.
+            console.error(
+              `[control-plane] RELEASE AUTO-HALTED: ${normUpdateResult.version} — ` +
+              `${failures} failure(s) vs ${release.outcome_successes} success(es) reported by clinic ${clinic.clinic_id}.`
+            );
+          }
+        }
+      }
+    }
+
+    // UPDATE_DELIVERY_V1 — at most one offer, the newest this clinic is
+    // eligible for (rings.js:offerFor). Read INSIDE this same transaction so
+    // a halt this very call just triggered above is already reflected in
+    // what gets offered back to THIS clinic (never offer a release in the
+    // same breath that just froze it).
+    const releaseRows = db.prepare(
+      `SELECT version, notes_ru, url, sha256, manifest, ring, halted FROM releases`
+    ).all();
+    const offer = offerFor({
+      releases: releaseRows,
+      clinic: { ring: clinic.ring, pinnedVersion: clinic.pinned_version },
+      installedVersion: normVersion,
+    });
+    let update = null;
+    if (offer) {
+      // Manifest is stored and passed through OPAQUELY (see this file's own
+      // header and routes/admin.js's POST /releases) — parsed here only to
+      // embed it as a nested JSON object in the response rather than a
+      // double-encoded string, never inspected for meaning. A release whose
+      // stored manifest somehow fails to parse (a hand-corrupted column) is
+      // the one case this refuses to offer at all: a broken manifest is
+      // useless to the clinic anyway, and "no offer" is a safer failure than
+      // handing back something the clinic cannot use.
+      let manifest = null;
+      try { manifest = JSON.parse(offer.manifest); } catch { manifest = null; }
+      if (manifest) {
+        update = { version: offer.version, notes_ru: offer.notes_ru, url: offer.url, sha256: offer.sha256, manifest };
+      }
+    }
+
     return {
       clinicId: clinic.clinic_id,
       clinicName: clinic.name,
@@ -304,6 +423,7 @@ export function checkIn(db, { installToken, version, fingerprint, moduleRequests
       subscriptionUntil: clinic.subscription_until,
       modules,
       collectSet: clinic.collect_set,
+      update,
     };
   });
 
@@ -332,5 +452,10 @@ export function checkIn(db, { installToken, version, fingerprint, moduleRequests
     // code-level default (every COUNTER_NAMES) when it has never been set or
     // was hand-corrupted. See resolveCollectSet's own header.
     collect: resolveCollectSet(recorded.collectSet),
+    // UPDATE_DELIVERY_V1 — already fully decided and shaped inside the
+    // transaction above; returned regardless of `eligible`/licence status —
+    // an unpaid clinic still deserves to know an update exists (this is a
+    // software update, not a money gate).
+    update: recorded.update,
   };
 }
