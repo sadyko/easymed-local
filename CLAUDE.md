@@ -42,8 +42,25 @@ panel, the clinic reports them within two check-ins, no release shipped. The gua
 build-gate test: a marker patient seeded clinic-side is asserted absent from every control-plane
 table.
 
-**Not started:** remote updates (`docs/plans/2026-08-20-update-delivery.md`, blocked on a GitHub
-remote that does not exist yet).
+**Update delivery is done** (`docs/plans/2026-08-20-update-delivery.md`): signed release bundles
+(allow-listed, leak-tested), CI that turns a tag on `main` into a release, rings with automatic
+halt on failures, a clinic-side updater (consent names a version, the clinic picks its local hour,
+cross-host downloads refused, verify-before-unpack), an apply script with exact rules for when the
+database may be touched (almost never), and the approval screen — reachable even by a
+licence-lapsed clinic, deliberately. The developer workflow is `docs/WORKFLOW.md`; releasing is
+`docs/RELEASING.md`; onboarding a second developer is `docs/ONBOARDING.md`.
+
+### What remains before the first real clinic
+
+1. **The GitHub remote does not exist.** Create `easymed-local` (private), push this branch, add
+   the `EASYMED_RELEASE_KEY` secret and the rulesets per `docs/RELEASING.md`. The first real tag
+   is also the first real validation of `.github/workflows/release.yml`.
+2. **One pass on a machine with administrator rights**: register the real Windows service
+   (`install/install-service.ps1`) and confirm SCM reports it — the known "Error 1053" question.
+3. **Replace the development licence key** (`node scripts/make-licence.mjs keygen`) — the server
+   warns at every boot until then — and generate the release keypair for CI.
+4. **Deploy the control plane** to the server behind `settings.easymed.uz/cp/` (own nginx
+   upstream, never through the CORE gateway), generating the production signing key there.
 
 ### The development licence key
 
