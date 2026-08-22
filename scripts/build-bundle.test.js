@@ -542,3 +542,69 @@ test('CLI: a full build round-trips through the actual command line, including E
     rm(src); rm(out);
   }
 });
+
+// ---------------------------------------------------------------------------
+// The shipped tree may not import anything the bundle leaves behind
+//
+// FINDING — server/services/control/updater.js carried a static top-level
+// `import { verifyBundle, tarCommand } from '../../../scripts/build-bundle.mjs'`,
+// but scripts/ is not on the ALLOWLIST above, so a CI-built bundle never
+// contained it. Unpacking v0.1.1 and starting it died with ERR_MODULE_NOT_FOUND
+// before the server bound its port — every release would have failed its health
+// check and rolled straight back. Nothing caught it: the suite runs in the full
+// repo where scripts/ exists, and verifying a tarball's signature is not the
+// same as booting what is inside it.
+//
+// A static scan of the import graph rather than a real boot, deliberately:
+// booting an unpacked tree needs node_modules copied or linked and a free port,
+// and would prove this for one entry point only. Reading the imports proves it
+// for every runtime file at once, in milliseconds, and names the offending line.
+//
+// *.test.js is excluded on purpose. Test files DO ship (they are co-located
+// under server/), but nothing imports them at runtime, so one reaching into
+// scripts/ cannot stop a clinic starting — updater.test.js does exactly that,
+// and is right to.
+// ---------------------------------------------------------------------------
+
+function runtimeJsFilesUnder(dir) {
+  const out = [];
+  for (const it of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, it.name);
+    if (it.isDirectory()) {
+      out.push(...runtimeJsFilesUnder(full));
+      continue;
+    }
+    if (!/\.(js|mjs)$/.test(it.name)) continue;
+    if (/\.test\.(js|mjs)$/.test(it.name)) continue;
+    out.push(full);
+  }
+  return out;
+}
+
+// Static relative specifiers only — `import x from '...'`, `export x from '...'`,
+// and the bare `import '...'` side-effect form. Those are resolved at load time,
+// which is what decides whether the process starts at all. A bare specifier
+// (an npm package) is not relative and is covered by node_modules shipping.
+const RELATIVE_SPECIFIER_RE = /\bfrom\s*['"](\.[^'"]*)['"]|\bimport\s*['"](\.[^'"]*)['"]/g;
+
+test('nothing under server/ imports outside the allow-listed bundle contents', () => {
+  const offenders = [];
+
+  for (const file of runtimeJsFilesUnder(path.join(REPO_ROOT, 'server'))) {
+    const src = fs.readFileSync(file, 'utf8');
+    for (const m of src.matchAll(RELATIVE_SPECIFIER_RE)) {
+      const spec = m[1] ?? m[2];
+      const resolved = path.resolve(path.dirname(file), spec);
+      const topLevel = path.relative(REPO_ROOT, resolved).split(path.sep)[0];
+      if (!ALLOWLIST.includes(topLevel)) {
+        offenders.push(`${path.relative(REPO_ROOT, file)} imports "${spec}" (resolves to "${topLevel}", which is not shipped)`);
+      }
+    }
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    'These runtime imports escape the bundle, so an unpacked release cannot start:\n  ' + offenders.join('\n  '),
+  );
+});

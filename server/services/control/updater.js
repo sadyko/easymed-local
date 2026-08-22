@@ -3,7 +3,10 @@ import path from 'node:path';
 import { createHash, createPublicKey } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { verifyBundle, tarCommand } from '../../../scripts/build-bundle.mjs';
+// NOT from scripts/build-bundle.mjs — scripts/ is not on that file's own
+// ALLOWLIST, so importing it here meant an unpacked release bundle died with
+// ERR_MODULE_NOT_FOUND before the server ever bound its port. See bundle.js.
+import { verifyBundle, tarCommand } from './bundle.js';
 import { readAppVersion } from './checkin.js';
 import { nextRunAt, isInWindow, consentAppliesTo } from './update-schedule.js';
 
