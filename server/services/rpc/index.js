@@ -20,7 +20,7 @@ import { deleteService, serviceDeleteCheck } from './catalog.js';   // SERVICE_D
 import { saveLabResults } from './lab.js';   // LAB_SAVE_BATCH_V1
 import { cashierReport } from './cashier-report.js';   // CASHIER_REPORT_V1
 import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
-import { licenceStatus, licenceUnlock, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
+import { licenceStatus, licenceUnlock, licenceEnroll, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
 import { updateStatus, updateApprove, updateCancel } from './updates.js';   // UPDATE_DELIVERY_V1
 
 export const RPC = {
@@ -170,6 +170,9 @@ export const RPC = {
   // pay would have no way to say so.
   licence_status:  (db, args, user) => licenceStatus(db, args, user),
   licence_unlock:  (db, args, user) => licenceUnlock(db, args, user),
+  // ENROLLMENT_SCREEN_V1 — first-run activation; a not-enrolled install is
+  // locked by definition, so this lives in the same always-allowed set.
+  licence_enroll:  (db, args, user) => licenceEnroll(db, args, user),
   module_request:  (db, args, user) => moduleRequest(db, args, user),
 
   // UPDATE_DELIVERY_V1 — the approval screen's own RPCs (see control/gate.js

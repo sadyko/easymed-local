@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { controlState } from '../control/state.js';
 import { currentChallenge, redeem } from '../control/unlock.js';
+import { enrollWithCode } from '../control/enroll.js';
 import { getDataDir } from '../control/config.js';
 import { hasAnyRole } from '../roles.js';
 
@@ -68,6 +69,39 @@ export function licenceUnlock(db, args, user) {
     );
   }
   return { ok: true, until: r.until };
+}
+
+// ENROLLMENT_SCREEN_V1 — the fixed reason vocabulary control/enroll.js returns,
+// mapped onto the sentences the activation screen shows verbatim (the screen
+// displays e.message as-is, same as licence_unlock's errors above). Reasons the
+// clinic cannot act on differently (a vendor 500, a garbage response, a failed
+// disk write) share ONE retryable sentence on purpose — three scary variants
+// would not change what the admin should do next.
+const ENROLL_MESSAGES = {
+  empty_code:        'Код неверный. Проверьте и введите ещё раз.',
+  invalid_code:      'Код неверный. Проверьте и введите ещё раз.',
+  too_many_attempts: 'Слишком много попыток. Попробуйте позже.',
+  offline:           'Нет связи с Easy-Med. Проверьте интернет и попробуйте ещё раз.',
+  already_enrolled:  'Эта установка уже привязана к клинике.',
+};
+const ENROLL_DEFAULT = 'Не удалось активировать. Попробуйте ещё раз или обратитесь к менеджеру Easy-Med.';
+
+/**
+ * Redeem the EM- enrollment code typed on the first-run activation screen.
+ * The transport (network, Ed25519 verification, atomic file writes) lives in
+ * control/enroll.js; this adapter only gates and translates. enrollImpl is a
+ * test seam — the RPC signature is (db, args, user), so the transport cannot
+ * be injected any other way (same reasoning as control/config.js's seams).
+ */
+export async function licenceEnroll(db, args, user, { enrollImpl = enrollWithCode } = {}) {
+  // Same gate and same wording as licenceUnlock above, for the same reason:
+  // the admin fixing a locked install may be a doctor whose EXTRA role is
+  // admin, and a non-admin must see WHY they cannot activate.
+  if (!hasAnyRole(user, ['admin'])) throw new RpcError('Только администратор может активировать.', 403);
+
+  const r = await enrollImpl(getDataDir(), args.code);
+  if (!r.ok) throw new RpcError(ENROLL_MESSAGES[r.reason] || ENROLL_DEFAULT, 400);
+  return { ok: true, clinic_id: r.clinic_id, clinic_name: r.clinic_name };
 }
 
 /** «Подключить модуль» from the locked-module screen. */

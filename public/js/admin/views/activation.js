@@ -26,6 +26,14 @@ export async function renderActivation(root, lic) {
     clear(root);
 
     const reason = lic && lic.reason;
+
+    // ENROLLMENT_SCREEN_V1 — a never-enrolled install is its own state, not a
+    // flavour of lapse. Before this branch it fell into the offline heading:
+    // a brand-new install was told its internet was broken and offered a
+    // telephone-unlock field that cannot work (unlock needs the unlock_secret
+    // only enrollment creates). First run gets its own screen instead.
+    if (reason === 'not_enrolled') return renderEnrollment(root);
+
     const heading = reason === 'unpaid' ? 'Подписка не активна' : 'Нет связи с Easy-Med';
 
     // Populated below, once (if) the licence_status RPC answers with a
@@ -121,4 +129,71 @@ export async function renderActivation(root, lic) {
         // may already have the code from an earlier call, or the manager may
         // read it out from their own panel.
     }
+}
+
+// ENROLLMENT_SCREEN_V1 — first run: the admin types the EM- code the vendor
+// read out, licence_enroll redeems it and writes this install's identity.
+//
+// Deliberately NOT the unlock form with different labels, even though the two
+// read alike: no telephone challenge is fetched or shown (licence_status does
+// answer one for a not-enrolled install, but redeeming it needs an
+// unlock_secret that does not exist yet — showing a code the manager can do
+// nothing with would script a doomed phone call), and no «данные на месте»
+// reassurance (that line is about a LAPSE; a first run has no data to worry
+// about). The code goes to the server exactly as typed — normalisation lives
+// in one place, control-plane-side (mirrored by control/enroll.js), so the
+// screen can never disagree with it.
+function renderEnrollment(root) {
+    const statusEl = h('div', { class: 'act-status', role: 'status' });
+
+    const input = h('input', {
+        type: 'text', class: 'act-input', placeholder: 'EM-XXXX-XXXX',
+        autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false',
+    });
+
+    // Same explicit re-entrancy guard as doUnlock above, for the same two
+    // race paths (double click, Enter during an in-flight click). Kept as a
+    // sibling rather than extracted: the two flows share a shape but not a
+    // fate — different RPC, different success action, different fallback text.
+    const doEnroll = async () => {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        statusEl.className = 'act-status';
+        statusEl.textContent = '';
+        try {
+            const { error } = await supabase.rpc('licence_enroll', { code: input.value });
+            if (error) throw error;
+            statusEl.className = 'act-status ok';
+            statusEl.textContent = tr('Система активирована.');
+            input.disabled = true;
+            // Same readable-before-reload delay as the unlock path: the reload
+            // is what swaps this screen for the real app now that
+            // licence_status will answer unlocked.
+            setTimeout(() => { try { location.reload(); } catch (e) {} }, 1200);
+        } catch (e) {
+            // The server's message is already the specific, Russian sentence
+            // (licence_enroll maps every transport reason — wrong code, rate
+            // limit, no internet, vendor error — in services/rpc/licence.js).
+            statusEl.className = 'act-status error';
+            statusEl.textContent = (e && e.message) || tr('Не удалось активировать.');
+            btn.disabled = false;
+        }
+    };
+
+    const btn = h('button', {
+        type: 'button', class: 'btn btn-primary act-cta',
+        onclick: doEnroll,
+    }, 'Активировать');
+
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault?.(); doEnroll(); } });
+
+    root.appendChild(h('div', { class: 'card activation-screen' },
+        h('div', { class: 'act-icon' }, Icon('Lock', { size: 26 })),
+        h('h1', { class: 'act-title' }, 'Активация Easy-Med'),
+        h('p', { class: 'act-reassure' },
+            'Введите код активации, полученный от менеджера Easy-Med.'),
+        field('Введите код активации', input),
+        btn,
+        statusEl,
+    ));
 }

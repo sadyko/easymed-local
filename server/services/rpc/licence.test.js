@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { moduleRequest } from './licence.js';
+import { moduleRequest, licenceEnroll } from './licence.js';
+import { getRpc } from './index.js';
+import { isAlwaysAllowedRpc } from '../control/gate.js';
 
 // module_requests.requested_by is a real FK to users(id) (ON DELETE SET NULL —
 // see 073_licensing.sql), so USER.id must reference an actual row or the
@@ -101,4 +103,88 @@ test('the theoretical SELECT-then-INSERT race still answers cleanly, not a 500',
   assert.equal(r.ok, true);
   assert.equal(r.already, true, 'the loser of the race must see "already requested", not a 500');
   assert.ok(r.requested_at);
+});
+
+// --- ENROLLMENT_SCREEN_V1 — licence_enroll ---------------------------------
+//
+// The RPC is a thin adapter: control/enroll.js owns the network, the
+// verification and the file writes (and has its own suite); what belongs HERE
+// is the admin gate and the mapping of enroll's fixed reason vocabulary onto
+// the Russian sentences the activation screen shows verbatim. enrollImpl is
+// injected the same way moduleRequest's race test injects its db — the
+// transport is not what these tests are about.
+
+const enrollOk = async () => ({ ok: true, clinic_id: 'c-000051', clinic_name: 'Нурафшон Мед' });
+const enrollFail = (reason) => async () => ({ ok: false, reason });
+
+test('licence_enroll: a non-admin is refused with the same 403 wording as licence_unlock', async () => {
+  const db = fresh();
+  await assert.rejects(
+    () => licenceEnroll(db, { code: 'EM-7K4Q-9XZP' }, { id: 1, role: 'doctor' }, { enrollImpl: enrollOk }),
+    (e) => e.status === 403 && /Только администратор может активировать/.test(e.message),
+  );
+});
+
+test('licence_enroll: success hands back the clinic so the screen can greet it', async () => {
+  const db = fresh();
+  let got = null;
+  const enrollImpl = async (dataDir, code) => { got = { dataDir, code }; return enrollOk(); };
+  const r = await licenceEnroll(db, { code: 'EM-7K4Q-9XZP' }, USER, { enrollImpl });
+  assert.deepEqual(r, { ok: true, clinic_id: 'c-000051', clinic_name: 'Нурафшон Мед' });
+  assert.equal(got.code, 'EM-7K4Q-9XZP');
+  assert.ok(got.dataDir, 'the transport must be pointed at the real data directory');
+});
+
+test('licence_enroll: a wrong or empty code reads as the unlock screen\'s own wording', async () => {
+  const db = fresh();
+  for (const reason of ['invalid_code', 'empty_code']) {
+    await assert.rejects(
+      () => licenceEnroll(db, { code: 'nope' }, USER, { enrollImpl: enrollFail(reason) }),
+      (e) => e.status === 400 && /Код неверный\. Проверьте и введите ещё раз\./.test(e.message),
+    );
+  }
+});
+
+test('licence_enroll: rate-limited reads as "слишком много попыток"', async () => {
+  const db = fresh();
+  await assert.rejects(
+    () => licenceEnroll(db, { code: 'EM-X' }, USER, { enrollImpl: enrollFail('too_many_attempts') }),
+    /Слишком много попыток\. Попробуйте позже\./,
+  );
+});
+
+test('licence_enroll: no internet reads as a connectivity problem, never as a bad code', async () => {
+  const db = fresh();
+  await assert.rejects(
+    () => licenceEnroll(db, { code: 'EM-X' }, USER, { enrollImpl: enrollFail('offline') }),
+    (e) => /Нет связи с Easy-Med/.test(e.message) && !/Код неверный/.test(e.message),
+  );
+});
+
+test('licence_enroll: an already-enrolled install is told so', async () => {
+  const db = fresh();
+  await assert.rejects(
+    () => licenceEnroll(db, { code: 'EM-X' }, USER, { enrollImpl: enrollFail('already_enrolled') }),
+    /Эта установка уже привязана к клинике\./,
+  );
+});
+
+test('licence_enroll: server_error/bad_response/write_failed all read as one retryable sentence', async () => {
+  // The clinic can do nothing different across these three, so the screen must
+  // not invent three scary variants — one honest "try again / call the vendor".
+  const db = fresh();
+  for (const reason of ['server_error', 'bad_response', 'write_failed']) {
+    await assert.rejects(
+      () => licenceEnroll(db, { code: 'EM-X' }, USER, { enrollImpl: enrollFail(reason) }),
+      /Не удалось активировать\. Попробуйте ещё раз или обратитесь к менеджеру Easy-Med\./,
+    );
+  }
+});
+
+test('licence_enroll is registered and reachable through a not_enrolled lock', () => {
+  // Both halves of "the screen can actually call it": the registry knows the
+  // name, and the gate lets it through while locked — a not-enrolled install
+  // is ALWAYS locked, so missing either line would make the screen 402 itself.
+  assert.ok(getRpc('licence_enroll'), 'must be in the RPC registry');
+  assert.equal(isAlwaysAllowedRpc('licence_enroll'), true, 'must be in ALWAYS_ALLOWED_RPCS');
 });

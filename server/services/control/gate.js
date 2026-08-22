@@ -34,6 +34,10 @@ const READ_ONLY_RPCS = new Set([
 // has no route to doing so — the reason login itself stays open.
 const ALWAYS_ALLOWED_RPCS = new Set([
   'licence_status', 'licence_unlock', 'module_request',
+  // ENROLLMENT_SCREEN_V1 — the first-run "type the EM- code" screen. A
+  // never-enrolled install is locked (reason not_enrolled), so without this
+  // line the one RPC that ends that state would 402 against it.
+  'licence_enroll',
   // UPDATE_DELIVERY_V1 — a licence-lapsed clinic must still be able to
   // receive an update: the update may be exactly what the vendor ships to
   // fix the clinic's own situation (a licensing bug, a billing-flow fix),

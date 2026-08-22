@@ -2148,6 +2148,19 @@ export const STRINGS = {
   "Активировать": {"en":"Activate","ru":"Активировать","uz":"Faollashtirish"},
   "Система разблокирована.": {"en":"System unlocked.","ru":"Система разблокирована.","uz":"Tizim qulfdan chiqarildi."},
   "Данные клиники на месте. Пока подписка не активна, можно только просматривать записи.": {"en":"Your clinic's data is intact. While the subscription is inactive you can view records but not change them.","ru":"Данные клиники на месте. Пока подписка не активна, можно только просматривать записи.","uz":"Klinika ma'lumotlari joyida. Obuna faol bo'lmaguncha yozuvlarni faqat ko'rish mumkin."},
+  // Was referenced by activation.js's catch fallback since Task 15 but never
+  // listed here — RU worked (unknown keys pass through), EN/UZ fell back to
+  // the Russian sentence. Added while wiring the enrollment screen below.
+  "Не удалось активировать.": {"en":"Activation failed.","ru":"Не удалось активировать.","uz":"Faollashtirib bo'lmadi."},
+
+  // ENROLLMENT_SCREEN_V1 — the first-run branch of the activation screen
+  // (views/activation.js renderEnrollment): a never-enrolled install typing
+  // its EM- code. Server-sent error sentences come from
+  // server/services/rpc/licence.js and are shown verbatim, not listed here.
+  "Активация Easy-Med": {"en":"Easy-Med activation","ru":"Активация Easy-Med","uz":"Easy-Med faollashtirish"},
+  "Введите код активации, полученный от менеджера Easy-Med.": {"en":"Enter the activation code you received from your Easy-Med manager.","ru":"Введите код активации, полученный от менеджера Easy-Med.","uz":"Easy-Med menejeridan olingan faollashtirish kodini kiriting."},
+  "Введите код активации": {"en":"Enter the activation code","ru":"Введите код активации","uz":"Faollashtirish kodini kiriting"},
+  "Система активирована.": {"en":"System activated.","ru":"Система активирована.","uz":"Tizim faollashtirildi."},
 
   // UPDATE_DELIVERY_V1 (docs/plans/2026-08-20-update-delivery.md, Task 6) —
   // the update-approval screen (views/updates.js) and its quiet banner

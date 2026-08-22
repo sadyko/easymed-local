@@ -119,7 +119,9 @@ function readStoredCollectNames(db) {
 // write — see the "control.json unwritable" test, which is the only way to
 // prove the write-ordering claim below without depending on OS-specific
 // permission quirks.
-function writeAtomic(file, content, { writeFileSync = fs.writeFileSync, renameSync = fs.renameSync } = {}) {
+// Exported for enroll.js, which writes the same two files at first enrollment —
+// the same never-two-implementations rule unlock.js states for expectedResponse().
+export function writeAtomic(file, content, { writeFileSync = fs.writeFileSync, renameSync = fs.renameSync } = {}) {
   const dir = path.dirname(file);
   const tmp = path.join(dir, `.${path.basename(file)}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   writeFileSync(tmp, content);
@@ -187,7 +189,9 @@ export function computeFingerprint({ hostname = os.hostname(), interfaces = os.n
 // chunk-by-chunk and cancelling once the cap is crossed is what makes the
 // bound real rather than cosmetic (a plain `await res.text()` would already
 // have paid the memory cost by the time any length check could run).
-async function readBounded(res, maxBytes) {
+// Exported for enroll.js: an enrollment response comes from the same endpoint
+// class as a check-in response and deserves the same bound.
+export async function readBounded(res, maxBytes) {
   const reader = res.body && typeof res.body.getReader === 'function' ? res.body.getReader() : null;
   if (!reader) {
     // Some fetch implementations may not expose a streamable body; fall back

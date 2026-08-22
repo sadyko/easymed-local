@@ -50,7 +50,7 @@ registry is separate: 4 migrations in `control-plane/server/db/migrations/`.
 | Statistics (vendor-chosen counters, no-PII by construction) | **done** |
 | Supervised install (Windows service, versioned layout, rollback switch) | done in code; **service registration never executed with real admin rights** |
 | Update delivery (bundle → CI → rings → consent → install → auto-rollback) | **done**; v0.1.1 built and signature-verified end to end |
-| Clinic-side enrollment-code entry screen | **NOT BUILT** — see §7 |
+| Clinic-side enrollment-code entry screen | **done** — first-run branch of the activation screen (ENROLLMENT_SCREEN_V1) |
 
 ## 3. The licensing system, as actually implemented
 
@@ -61,7 +61,10 @@ registry is separate: 4 migrations in `control-plane/server/db/migrations/`.
 - **Enrollment:** vendor creates a clinic in the panel → one-use code `EM-XXXX-XXXX`
   (alphabet excludes I/O/0/1 — codes are read aloud) → `POST /cp/v1/enroll {code, fingerprint}`
   → identity + first licence. Server side: `control-plane/server/services/enrollment.js`.
-  Clinic side today: applied by script (no UI yet, §7).
+  Clinic side: the first-run activation screen (`views/activation.js` renderEnrollment →
+  `licence_enroll` RPC → `server/services/control/enroll.js`, which verifies the returned
+  licence against the compiled-in key BEFORE writing `control.json`/`licence.dat`).
+  The script path below still works for break-glass.
 - **Staying licensed:** `server/services/control/checkin.js` calls
   `POST https://settings.easymed.uz/cp/v1/checkin` daily; a paid clinic gets a fresh 14-day
   licence (the dead-man's switch — the vendor stops re-arming, the clinic lapses by itself).
@@ -153,17 +156,18 @@ node server/index.js                           # prints a one-time vendor passwo
 
 ## 7. Known gaps / TODO
 
-1. **Clinic-side enrollment screen does not exist.** The design says "type the EM- code at first
-   run"; today the code is applied by writing `control.json`/`licence.dat` via script. Server
-   side is complete. This is the top missing UX piece.
-2. **Windows service registration never executed with real admin rights** — the dev account had
+1. **Windows service registration never executed with real admin rights** — the dev account had
    none. `install/install-service.ps1` is written and everything around it tested; the
    SCM-reports-Running question ("Error 1053" class) needs one pass on an elevated machine.
-3. GitHub free plan refuses branch/tag rulesets on private repos — protection is convention
+2. GitHub free plan refuses branch/tag rulesets on private repos — protection is convention
    until GitHub Pro (or a public repo, which this must never be).
-4. `marketing` module: in the licence vocabulary, deliberately not sellable (no screen exists —
+3. `marketing` module: in the licence vocabulary, deliberately not sellable (no screen exists —
    a clinic that bought it would see "coming soon"). Comments in `licensed-modules.js` explain.
-5. The old dev folder may carry a stale name (`easymed.local` vs a planned `easymed.dev`);
+4. The old dev folder may carry a stale name (`easymed.local` vs a planned `easymed.dev`);
    folder name is cosmetic — the repo name is the identity.
-6. Cloud-era leftovers in the clinic app (easymed.uz redirect dead-ends, Symptex publication
+5. Cloud-era leftovers in the clinic app (easymed.uz redirect dead-ends, Symptex publication
    stubs) — listed in CLAUDE.md's "known issues".
+6. The first-run **welcome-tour modal pops up OVER the activation screen** (seen driving the
+   real app on 2026-08-22): a locked, never-enrolled install offers "Начать тур" on top of the
+   code-entry form. Cosmetic, pre-existing, but a confusing first impression for a clinic
+   mid-activation.

@@ -64,15 +64,17 @@ const findByClass = (root, cls) => walk(root).find((n) => String(n.className).sp
 const jsonOk = (data) => ({ ok: true, json: async () => ({ data }) });
 const jsonErr = (error, status = 400) => ({ ok: false, status, json: async () => ({ error }) });
 
-// Two independent, reassignable responders — one per RPC name — so a test can
-// point either at whatever answer it wants without re-mocking all of fetch.
-let statusCalls = 0, unlockCalls = 0;
+// Independent, reassignable responders — one per RPC name — so a test can
+// point any of them at whatever answer it wants without re-mocking all of fetch.
+let statusCalls = 0, unlockCalls = 0, enrollCalls = 0, enrollBody = null;
 let statusRespond = () => jsonOk({ state: 'locked', locked: true, reason: 'offline', days_left: 0, modules: [], challenge: null });
 let unlockRespond = () => jsonOk({ ok: true, until: '2026-09-03T00:00:00Z' });
-globalThis.fetch = async (url) => {
+let enrollRespond = () => jsonOk({ ok: true, clinic_id: 'c-000051', clinic_name: 'Нурафшон Мед' });
+globalThis.fetch = async (url, init) => {
   const u = String(url);
   if (u.startsWith('/api/rpc/licence_status')) { statusCalls++; return statusRespond(); }
   if (u.startsWith('/api/rpc/licence_unlock')) { unlockCalls++; return unlockRespond(); }
+  if (u.startsWith('/api/rpc/licence_enroll')) { enrollCalls++; try { enrollBody = JSON.parse(init?.body ?? 'null'); } catch { enrollBody = null; } return enrollRespond(); }
   return jsonOk({});
 };
 
@@ -170,4 +172,76 @@ test('падение licence_status (клиника офлайн) не лома�
   assert.ok(findInput(root), 'поле ввода кода должно остаться доступным');
   assert.ok(findButton(root), 'кнопка «Активировать» должна остаться доступной');
   assert.strictEqual(findByClass(root, 'act-code'), undefined, 'без ответа RPC кода нет — это нормальное состояние, не ошибка');
+});
+
+// --- ENROLLMENT_SCREEN_V1 — the not_enrolled (first-run) branch --------------
+//
+// A brand-new install is NOT offline and does NOT owe money; before this
+// branch existed it fell into the offline heading — told its internet was
+// broken and offered a telephone-unlock field that cannot work (unlock needs
+// an unlock_secret, which only enrollment creates).
+
+test('не привязана — заголовок про активацию, а не про связь и не про деньги', async () => {
+  statusRespond = () => jsonOk({ challenge: 'AB3CD9' });
+  const root = mk('div');
+  await renderActivation(root, { reason: 'not_enrolled', days_left: 0, locked: true, state: 'locked' });
+  const text = textOf(root);
+  assert.match(text, /Активация Easy-Med/, 'заголовок первой установки: ' + text);
+  assert.doesNotMatch(text, /Нет связи с Easy-Med/, 'новой установке нельзя говорить, что её интернет сломан');
+  assert.doesNotMatch(text, /Подписка не активна/, 'и нельзя обвинять её в неоплате');
+  assert.match(text, /Введите код активации, полученный от менеджера Easy-Med\./);
+});
+
+test('не привязана — поле под EM-код, без телефонного кода разблокировки', async () => {
+  statusRespond = () => jsonOk({ challenge: 'AB3CD9' });
+  const root = mk('div');
+  await renderActivation(root, { reason: 'not_enrolled', days_left: 0, locked: true, state: 'locked' });
+  const input = findInput(root);
+  assert.ok(input, 'поле ввода кода активации должно быть');
+  assert.strictEqual(input.attrs.placeholder, 'EM-XXXX-XXXX', 'формат кода активации, не формат кода разблокировки');
+  // Даже когда licence_status вернул challenge — на этом экране он бесполезен:
+  // разблокировка по телефону требует unlock_secret, которого ещё нет.
+  assert.strictEqual(findByClass(root, 'act-call'), undefined, 'строки «позвоните менеджеру» быть не должно');
+  assert.strictEqual(findByClass(root, 'act-code'), undefined, 'телефонный код показывать не нужно');
+  // Строка про «данные на месте» — про ЛАПС, у первой установки данных ещё нет.
+  assert.doesNotMatch(textOf(root), /Данные клиники на месте/);
+});
+
+test('успешная активация кодом вызывает licence_enroll и показывает «Система активирована.»', async () => {
+  statusRespond = () => jsonOk({ challenge: null });
+  enrollRespond = () => jsonOk({ ok: true, clinic_id: 'c-000051', clinic_name: 'Нурафшон Мед' });
+  enrollCalls = 0; enrollBody = null;
+  const before = unlockCalls;
+
+  const root = mk('div');
+  await renderActivation(root, { reason: 'not_enrolled', days_left: 0, locked: true, state: 'locked' });
+  const input = findInput(root);
+  input.value = ' em-7k4q-9xzp ';
+  const btn = findButton(root);
+  btn.click();
+  assert.strictEqual(btn.disabled, true, 'кнопка блокируется сразу, синхронно, до ответа RPC');
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.strictEqual(enrollCalls, 1);
+  assert.strictEqual(unlockCalls, before, 'licence_unlock здесь ни при чём');
+  assert.strictEqual(enrollBody.code, ' em-7k4q-9xzp ', 'нормализация — дело сервера; экран шлёт как есть');
+  assert.match(textOf(findByClass(root, 'act-status')), /Система активирована/);
+});
+
+test('неверный EM-код снова разрешает нажать и показывает ИМЕННО ответ сервера', async () => {
+  statusRespond = () => jsonOk({ challenge: null });
+  enrollRespond = () => jsonErr({ message: 'Код неверный. Проверьте и введите ещё раз.' }, 400);
+  enrollCalls = 0;
+
+  const root = mk('div');
+  await renderActivation(root, { reason: 'not_enrolled', days_left: 0, locked: true, state: 'locked' });
+  findInput(root).value = 'EM-WRONG-CODE';
+  const btn = findButton(root);
+  btn.click();
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.strictEqual(btn.disabled, false, 'ошибка должна снова разрешить нажать');
+  const status = findByClass(root, 'act-status');
+  assert.match(textOf(status), /Код неверный\. Проверьте и введите ещё раз\./, 'должен быть виден ИМЕННО ответ сервера: ' + textOf(status));
+  assert.doesNotMatch(textOf(status), /Система активирована/);
 });
