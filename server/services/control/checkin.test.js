@@ -718,6 +718,137 @@ test('acceptance: a module granted in the control plane reaches the clinic on th
     'granting a module in the panel must reach the clinic on the very next check-in, unattended');
 });
 
+// --- UPDATE_DELIVERY_V1: the offer arriving, and the outcome leaving --------
+
+function controlStateGet(db, key) {
+  return db.prepare('SELECT value FROM control_state WHERE key = ?').get(key)?.value ?? null;
+}
+
+const UPDATE_OFFER = { version: '2.4.0', notes_ru: 'Тест', url: '/x.tar.gz', sha256: 'abc', manifest: { payload: {}, sig: 's' } };
+
+test('an update offer in the response is stored in control_state', async (t) => {
+  const { dir, db } = workspace();
+  const { server, endpoint } = await fakeServer(jsonHandler(200, { licence: null, subscription: 'active', collect: [], update: UPDATE_OFFER }));
+  t.after(() => server.close());
+  await runCheckin(db, dir, { endpoint });
+  assert.deepEqual(JSON.parse(controlStateGet(db, 'update_offer')), UPDATE_OFFER);
+});
+
+test('an explicit null update clears a previously stored offer', async (t) => {
+  const { dir, db } = workspace();
+  db.prepare(`INSERT INTO control_state (key, value) VALUES ('update_offer', ?)`).run(JSON.stringify(UPDATE_OFFER));
+
+  const { server, endpoint } = await fakeServer(jsonHandler(200, { licence: null, subscription: 'active', collect: [], update: null }));
+  t.after(() => server.close());
+  await runCheckin(db, dir, { endpoint });
+  assert.equal(controlStateGet(db, 'update_offer'), null, 'a clinic already on the latest version must not keep showing a stale offer');
+});
+
+test('a response with no `update` key at all leaves a previously stored offer untouched (back-compat)', async (t) => {
+  const { dir, db } = workspace();
+  db.prepare(`INSERT INTO control_state (key, value) VALUES ('update_offer', ?)`).run(JSON.stringify(UPDATE_OFFER));
+
+  const { server, endpoint } = await fakeServer(jsonHandler(200, { licence: null, subscription: 'active', collect: [] }));
+  t.after(() => server.close());
+  await runCheckin(db, dir, { endpoint });
+  assert.deepEqual(JSON.parse(controlStateGet(db, 'update_offer')), UPDATE_OFFER);
+});
+
+test('a malformed update field (wrong shape) is ignored, keeping whatever offer was already on file', async (t) => {
+  const { dir, db } = workspace();
+  db.prepare(`INSERT INTO control_state (key, value) VALUES ('update_offer', ?)`).run(JSON.stringify(UPDATE_OFFER));
+
+  const { server, endpoint } = await fakeServer(jsonHandler(200, { licence: null, subscription: 'active', collect: [], update: 'not an object' }));
+  t.after(() => server.close());
+  await runCheckin(db, dir, { endpoint });
+  assert.deepEqual(JSON.parse(controlStateGet(db, 'update_offer')), UPDATE_OFFER, 'garbage must never overwrite a good stored offer');
+});
+
+test('an update-result.json is attached to the next request, and renamed .sent after a successful send', async (t) => {
+  const { dir, db } = workspace();
+  fs.writeFileSync(path.join(dir, 'update-result.json'), JSON.stringify({ version: '2.4.0', ok: true }));
+
+  let receivedUpdateResult;
+  const { server, endpoint } = await fakeServer((req, res, body) => {
+    receivedUpdateResult = JSON.parse(body).update_result;
+    jsonHandler(200, { licence: null, subscription: 'active', collect: [] })(req, res);
+  });
+  t.after(() => server.close());
+  await runCheckin(db, dir, { endpoint });
+
+  assert.deepEqual(receivedUpdateResult, { version: '2.4.0', ok: true });
+  assert.equal(fs.existsSync(path.join(dir, 'update-result.json')), false, 'the live file is gone — renamed, not duplicated');
+  assert.deepEqual(JSON.parse(readText(path.join(dir, 'update-result.json.sent'))), { version: '2.4.0', ok: true });
+});
+
+test('a second check-in after the rename sends nothing — a result reaches the vendor exactly once', async (t) => {
+  const { dir, db } = workspace();
+  fs.writeFileSync(path.join(dir, 'update-result.json'), JSON.stringify({ version: '2.4.0', ok: true }));
+
+  let calls = 0;
+  const { server, endpoint } = await fakeServer((req, res, body) => {
+    calls += 1;
+    const parsed = JSON.parse(body);
+    if (calls === 1) assert.ok(parsed.update_result, 'first call carries it');
+    else assert.equal(parsed.update_result, undefined, 'second call must carry nothing — already sent');
+    jsonHandler(200, { licence: null, subscription: 'active', collect: [] })(req, res);
+  });
+  t.after(() => server.close());
+
+  await runCheckin(db, dir, { endpoint });
+  await runCheckin(db, dir, { endpoint });
+  assert.equal(calls, 2);
+});
+
+test('no update-result.json at all: the field is simply absent, no crash', async (t) => {
+  const { dir, db } = workspace();
+  let received;
+  const { server, endpoint } = await fakeServer((req, res, body) => {
+    received = JSON.parse(body);
+    jsonHandler(200, { licence: null, subscription: 'active', collect: [] })(req, res);
+  });
+  t.after(() => server.close());
+  await runCheckin(db, dir, { endpoint });
+  assert.equal(received.update_result, undefined);
+});
+
+test('a corrupt update-result.json is never attached and never crashes the check-in', async (t) => {
+  const { dir, db } = workspace();
+  fs.writeFileSync(path.join(dir, 'update-result.json'), '{ not valid json');
+  let received;
+  const { server, endpoint } = await fakeServer((req, res, body) => {
+    received = JSON.parse(body);
+    jsonHandler(200, { licence: null, subscription: 'active', collect: [] })(req, res);
+  });
+  t.after(() => server.close());
+  await assert.doesNotReject(runCheckin(db, dir, { endpoint }));
+  assert.equal(received.update_result, undefined);
+});
+
+test('update-result.json is NOT renamed when the control plane cannot be reached — it survives for tomorrow', async () => {
+  const { dir, db } = workspace();
+  fs.writeFileSync(path.join(dir, 'update-result.json'), JSON.stringify({ version: '2.4.0', ok: true }));
+
+  const { server, endpoint } = await fakeServer(() => {});
+  await new Promise((r) => server.close(r)); // nothing listening
+
+  await runCheckin(db, dir, { endpoint });
+  assert.ok(fs.existsSync(path.join(dir, 'update-result.json')), 'a failed send must never rename the file — it has not reached the vendor');
+  assert.equal(fs.existsSync(path.join(dir, 'update-result.json.sent')), false);
+});
+
+test('update-result.json is NOT renamed on a non-2xx response', async (t) => {
+  const { dir, db } = workspace();
+  fs.writeFileSync(path.join(dir, 'update-result.json'), JSON.stringify({ version: '2.4.0', ok: false }));
+
+  const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(500); res.end('{}'); });
+  t.after(() => server.close());
+
+  await runCheckin(db, dir, { endpoint });
+  assert.ok(fs.existsSync(path.join(dir, 'update-result.json')), 'a server error means the vendor never durably recorded it — retry tomorrow');
+  assert.equal(fs.existsSync(path.join(dir, 'update-result.json.sent')), false);
+});
+
 // --- Task 3 acceptance: the vendor ticks counters, the clinic reports the
 //     numbers, and no patient data ever reaches the control plane — the
 //     owner's own instruction, proven at the far end of the real wire -------

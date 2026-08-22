@@ -25,13 +25,25 @@ const READ_ONLY_RPCS = new Set([
   'telegram_settings_get', 'telegram_links_list', 'telegram_deliveries_list',
   'telegram_stats', 'telegram_broadcast_status', 'telegram_broadcast_history',
   'telegram_chats_list', 'telegram_chat_messages', 'telegram_chat_unread',
+  // UPDATE_DELIVERY_V1 — the approval screen's own status read; it changes
+  // nothing, only reports the offer/approval/schedule/last result.
+  'update_status',
 ]);
 
 // The way back in. These must work while locked or a clinic that wants to pay
-// has no route to doing so — the reason login itself stays open. They do not
-// exist yet; a later task adds them.
+// has no route to doing so — the reason login itself stays open.
 const ALWAYS_ALLOWED_RPCS = new Set([
   'licence_status', 'licence_unlock', 'module_request',
+  // UPDATE_DELIVERY_V1 — a licence-lapsed clinic must still be able to
+  // receive an update: the update may be exactly what the vendor ships to
+  // fix the clinic's own situation (a licensing bug, a billing-flow fix),
+  // and approving/cancelling it is vendor-relations, not clinical data —
+  // the same category as the three RPCs above, not a write this gate exists
+  // to hold back. tickUpdater's own pipeline (download/verify/stage/apply)
+  // is not reached through this gate at all — it runs off a timer, not an
+  // HTTP request — so this only ever governs whether the ADMIN can still
+  // see the offer and say yes/no to it while locked.
+  'update_approve', 'update_cancel',
 ]);
 
 export function isReadOnlyRpc(name) { return READ_ONLY_RPCS.has(name); }

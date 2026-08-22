@@ -12,6 +12,7 @@ import { startTelegramBot } from './services/telegram/index.js';   // TELEGRAM_B
 import { createApp } from './app.js';
 import { setDataDir } from './services/control/config.js';   // SUPERVISED_INSTALL_V1
 import { scheduleCheckin } from './services/control/checkin.js';   // LICENCE_CORE_V1
+import { scheduleUpdater } from './services/control/updater.js';   // UPDATE_DELIVERY_V1
 import { recordEvent, pruneOpsEvents } from './services/ops-log.js';   // OPS_EVENTS_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -232,6 +233,17 @@ if (isMain) {
   // or slow control plane can never be the reason a clinic's own server is
   // slow to start or fails to bind its port.
   scheduleCheckin(db, DATA_DIR);
+
+  // UPDATE_DELIVERY_V1 — the minute-granularity timer that notices when the
+  // clinic's chosen install hour arrives. tickUpdater is documented never to
+  // throw (every failure is "try again tomorrow"), but a timer callback has
+  // no caller to hand a rejection to anyway — scheduleUpdater already wraps
+  // each tick in its own try/catch (mirroring scheduleCheckin just above) so
+  // a bug here can only ever cost a missed update check, never the running
+  // clinic. appRoot is passed explicitly as THIS process's own ROOT rather
+  // than letting updater.js recompute it from its own module path — the two
+  // must never be able to disagree about what "the app directory" is.
+  scheduleUpdater(db, DATA_DIR, { appRoot: ROOT });
 }
 
 function lanAddresses() {

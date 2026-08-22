@@ -384,6 +384,67 @@ test('a paid but offline clinic is NOT told it owes money', async (t) => {
   assert.doesNotMatch(body.error.message, /Подписка не активна/, 'never accuse a paying clinic of not paying');
 });
 
+// UPDATE_DELIVERY_V1 — update_status/update_approve/update_cancel must
+// survive a licence lapse for the same reason the three licence RPCs do: an
+// update may be exactly what the vendor ships to fix the clinic's own
+// situation, and approving it is vendor-relations, not clinical data. Same
+// "single most valuable test" reasoning as the licence RPCs above — a name
+// mismatch between this file, gate.js and rpc/index.js would strand a locked
+// clinic behind its own escape hatch and nothing else would catch it.
+test('all three update RPCs stay reachable through the real HTTP route on a locked clinic', async (t) => {
+  const { app, db, password } = harness({ validUntil: '2020-01-01T00:00:00Z' });
+  db.prepare(`INSERT INTO control_state (key, value) VALUES ('update_offer', ?)`)
+    .run(JSON.stringify({ version: '2.4.0', notes_ru: 'Тест', url: '/x.tar.gz', sha256: 'abc', manifest: {} }));
+  const server = await listen(app); t.after(() => server.close());
+  const cookie = await login(server, password);
+
+  const status = await post(server, cookie, '/api/rpc/update_status', {});
+  assert.notEqual(status.status, 402, 'update_status must answer even while locked');
+  const statusBody = await status.json();
+  assert.equal(statusBody.data.offer.version, '2.4.0');
+
+  const approve = await post(server, cookie, '/api/rpc/update_approve', { hour: 3 });
+  assert.notEqual(approve.status, 402, 'update_approve must answer even while locked');
+  assert.equal(approve.status, 200);
+
+  const cancel = await post(server, cookie, '/api/rpc/update_cancel', {});
+  assert.notEqual(cancel.status, 402, 'update_cancel must answer even while locked');
+  assert.equal(cancel.status, 200);
+});
+
+// Same ADMIN_DOCTOR_V1-class pinning as licence_unlock's own pair of tests
+// just above: extra_roles admin must get PAST the role guard (never a 403),
+// and a user with no admin role anywhere must be refused (403), independent
+// of the licence gate's own 402 (proven by the RPCs being reachable above).
+test('an admin granted only via extra_roles can still approve an update while locked', async (t) => {
+  const { app, db } = harness({ validUntil: '2020-01-01T00:00:00Z' });
+  db.prepare(`INSERT INTO control_state (key, value) VALUES ('update_offer', ?)`)
+    .run(JSON.stringify({ version: '2.4.0', notes_ru: 'Тест', url: '/x.tar.gz', sha256: 'abc', manifest: {} }));
+  db.prepare(
+    'INSERT INTO users (username, password_hash, full_name, role, extra_roles) VALUES (?,?,?,?,?)'
+  ).run('deskadmin2', hashPassword('password1'), 'Front Desk', 'registrar', JSON.stringify(['admin']));
+  const server = await listen(app); t.after(() => server.close());
+  const cookie = await loginAs(server, 'deskadmin2', 'password1');
+
+  const res = await post(server, cookie, '/api/rpc/update_approve', { hour: 3 });
+  assert.notEqual(res.status, 403, 'an admin granted through extra_roles must not be locked out of approving an update');
+  assert.equal(res.status, 200);
+});
+
+test('a user without the admin role anywhere is refused update_approve, not silently allowed', async (t) => {
+  const { app, db } = harness({ validUntil: '2020-01-01T00:00:00Z' });
+  db.prepare(`INSERT INTO control_state (key, value) VALUES ('update_offer', ?)`)
+    .run(JSON.stringify({ version: '2.4.0', notes_ru: 'Тест', url: '/x.tar.gz', sha256: 'abc', manifest: {} }));
+  db.prepare(
+    'INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)'
+  ).run('nursedina', hashPassword('password1'), 'Dina', 'nurse');
+  const server = await listen(app); t.after(() => server.close());
+  const cookie = await loginAs(server, 'nursedina', 'password1');
+
+  const res = await post(server, cookie, '/api/rpc/update_approve', { hour: 3 });
+  assert.equal(res.status, 403, 'only an admin (primary or extra role) may approve an update');
+});
+
 test('a clinic that stopped paying IS told about the subscription', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-unpaid-'));
   fs.writeFileSync(path.join(dir, 'control.json'), JSON.stringify({

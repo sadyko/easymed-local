@@ -21,6 +21,7 @@ import { saveLabResults } from './lab.js';   // LAB_SAVE_BATCH_V1
 import { cashierReport } from './cashier-report.js';   // CASHIER_REPORT_V1
 import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
 import { licenceStatus, licenceUnlock, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
+import { updateStatus, updateApprove, updateCancel } from './updates.js';   // UPDATE_DELIVERY_V1
 
 export const RPC = {
   get_clinic_by_slug:       (db, args, user) => getClinicBySlug(db, args, user),
@@ -170,6 +171,13 @@ export const RPC = {
   licence_status:  (db, args, user) => licenceStatus(db, args, user),
   licence_unlock:  (db, args, user) => licenceUnlock(db, args, user),
   module_request:  (db, args, user) => moduleRequest(db, args, user),
+
+  // UPDATE_DELIVERY_V1 — the approval screen's own RPCs (see control/gate.js
+  // for why update_approve/update_cancel stay reachable through a licence
+  // lapse, same as the three above).
+  update_status:   (db, args, user) => updateStatus(db, args, user),
+  update_approve:  (db, args, user) => updateApprove(db, args, user),
+  update_cancel:   (db, args, user) => updateCancel(db, args, user),
 };
 
 export function getRpc(name) {

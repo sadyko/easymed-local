@@ -282,6 +282,22 @@ async function performCheckin(db, dataDir, {
       stats = {};
     }
 
+    // UPDATE_DELIVERY_V1 — apply-update.ps1 (a separate task) writes this file
+    // in EVERY outcome after its own attempt. Read here, BEFORE the network
+    // call, so a report sits ready to attach the moment a token exists;
+    // renamed to .sent only once the vendor has actually answered (see
+    // below) — never here, and never on a read failure, so a result that
+    // hasn't reached the vendor yet is never lost to a corrupt or racing
+    // read.
+    const updateResultPath = path.join(dataDir, 'update-result.json');
+    let updateResult = null;
+    try {
+      updateResult = JSON.parse(fs.readFileSync(updateResultPath, 'utf8'));
+      if (!updateResult || typeof updateResult !== 'object' || Array.isArray(updateResult)) updateResult = null;
+    } catch {
+      updateResult = null; // no file, or unreadable/corrupt — nothing to attach this cycle
+    }
+
     const url = endpoint ? String(endpoint).replace(/\/+$/, '') + CHECKIN_PATH : checkinUrl();
 
     let res;
@@ -295,6 +311,7 @@ async function performCheckin(db, dataDir, {
           fingerprint: computeFingerprint(),
           module_requests: pending.map((r) => ({ module_key: r.module_key, requested_at: r.requested_at })),
           stats,
+          ...(updateResult ? { update_result: updateResult } : {}),
         }),
         signal: AbortSignal.timeout(timeoutMs),
       });
@@ -303,6 +320,27 @@ async function performCheckin(db, dataDir, {
       // "vendor is unreachable" case the whole file exists for.
       console.warn('[checkin] could not reach the control plane, will retry tomorrow:', e && e.message);
       return;
+    }
+
+    // UPDATE_DELIVERY_V1 — the instant res.ok is true, the control plane's own
+    // checkIn() has ALREADY recorded update_result inside its own transaction
+    // (control-plane/server/services/checkin.js) — whatever happens to THIS
+    // client's own parsing of the response body from here on cannot change
+    // that fact. So the rename — "sent exactly once" — happens right here,
+    // not after the response body is parsed: waiting would mean a client-side
+    // JSON hiccup AFTER a successful send could re-send a report the vendor
+    // already has, which is the exact double-report this file-rename exists
+    // to prevent. A rename is a single filesystem operation, so a crash
+    // between "vendor answered 2xx" and "file renamed" is the only window
+    // that could ever cause a duplicate — accepted as unavoidable, the same
+    // way writeAtomic's own tmp-then-rename accepts a crash between its two
+    // lines (see that function's comment).
+    if (updateResult && res.ok) {
+      try {
+        fs.renameSync(updateResultPath, updateResultPath + '.sent');
+      } catch (e) {
+        console.warn('[checkin] could not rename update-result.json after sending it:', e && e.message);
+      }
     }
 
     if (!res.ok) {
@@ -344,6 +382,39 @@ async function performCheckin(db, dataDir, {
         controlStatePut(db, 'stats_collect', JSON.stringify(names));
       } catch (e) {
         console.warn('[checkin] could not store the collect set:', e && e.message);
+      }
+    }
+
+    // UPDATE_DELIVERY_V1 — persist the offer exactly as the control plane sent
+    // it; updater.js (the actual download/verify/stage pipeline) and
+    // updates.js (the approval RPCs) are the only things that ever interpret
+    // it. Distinguishes an ABSENT `update` key (an older or misbehaving
+    // control plane that never mentions the field at all — leave whatever
+    // was already stored alone, back-compat) from an EXPLICIT `null` (this
+    // clinic is offered nothing right now — e.g. already on the newest
+    // version, or the release was halted — which must clear a stale offer,
+    // not leave one sitting there forever looking current). A malformed,
+    // non-null value (wrong shape, no version string) is neither: it is
+    // logged and ignored, keeping whatever offer was already on file rather
+    // than overwriting a good one with garbage.
+    if ('update' in body) {
+      if (body.update === null) {
+        try {
+          db.prepare(`DELETE FROM control_state WHERE key = 'update_offer'`).run();
+        } catch (e) {
+          console.warn('[checkin] could not clear the stored update offer:', e && e.message);
+        }
+      } else if (
+        body.update && typeof body.update === 'object' && !Array.isArray(body.update)
+        && typeof body.update.version === 'string' && body.update.version
+      ) {
+        try {
+          controlStatePut(db, 'update_offer', JSON.stringify(body.update));
+        } catch (e) {
+          console.warn('[checkin] could not store the update offer:', e && e.message);
+        }
+      } else {
+        console.warn('[checkin] update field was malformed — ignored, keeping any previously stored offer');
       }
     }
 
