@@ -35,8 +35,15 @@ pre-migration database backups, the Windows service installer and a version swit
 itself back on a failed health check. Untested end-to-end because this machine has no
 administrator rights — service registration needs one pass on a box that does.
 
+**Statistics is done** (`docs/plans/2026-08-22-statistics.md`): a PII-proof event log
+(`ops_events`, no free text by schema), a compiled-in counter catalogue whose payload builder can
+emit only finite numbers under known names, and the wiring — the vendor ticks counters in the
+panel, the clinic reports them within two check-ins, no release shipped. The guarantee is a
+build-gate test: a marker patient seeded clinic-side is asserted absent from every control-plane
+table.
+
 **Not started:** remote updates (`docs/plans/2026-08-20-update-delivery.md`, blocked on a GitHub
-remote that does not exist yet) and statistics collection (no plan written).
+remote that does not exist yet).
 
 ### The development licence key
 
