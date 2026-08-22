@@ -2,16 +2,65 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
-import { bootstrapAdmin, login, logout, sessionUser, hashPassword } from './auth.js';
+import { bootstrapAdmin, login, logout, sessionUser, hashPassword, changeOwnPassword, validPassword, FIRST_RUN_PASSWORD } from './auth.js';
 
 function freshDb() { const db = openDb(':memory:'); migrate(db); return db; }
 
-test('bootstrapAdmin creates admin only when there are no users', () => {
+// FIRST_RUN_PASSWORD_V1 — the default is fixed by owner decision (was random;
+// see bootstrapAdmin's comment). The flag beside it is what makes that safe.
+test('bootstrapAdmin creates admin with the fixed default and the must-change flag, only when there are no users', () => {
   const db = freshDb();
   const pw = bootstrapAdmin(db);
-  assert.ok(pw && pw.length >= 10);
-  assert.equal(db.prepare('SELECT role FROM users WHERE username = ?').get('admin').role, 'admin');
+  assert.equal(pw, FIRST_RUN_PASSWORD);
+  assert.equal(pw, '123456789');
+  const row = db.prepare('SELECT role, must_change_password FROM users WHERE username = ?').get('admin');
+  assert.equal(row.role, 'admin');
+  assert.equal(row.must_change_password, 1, 'the fixed default is only acceptable because a change is forced');
   assert.equal(bootstrapAdmin(db), null); // second call: users exist, no-op
+});
+
+test('login and sessionUser both surface must_change_password', () => {
+  const db = freshDb();
+  bootstrapAdmin(db);
+  const ok = login(db, 'admin', FIRST_RUN_PASSWORD);
+  assert.equal(ok.user.must_change_password, true);
+  assert.equal(sessionUser(db, ok.session).must_change_password, true);
+});
+
+test('changeOwnPassword: verifies current, applies the shared strength rule, clears the flag', () => {
+  const db = freshDb();
+  bootstrapAdmin(db);
+  const { id } = db.prepare("SELECT id FROM users WHERE username = 'admin'").get();
+
+  assert.equal(changeOwnPassword(db, id, 'wrong-current', 'a-fine-new-password').error, 'invalid_current');
+  assert.equal(changeOwnPassword(db, id, FIRST_RUN_PASSWORD, 'short').error, 'weak_password');
+  // the flag must still be set — nothing above was allowed to change anything
+  assert.equal(db.prepare('SELECT must_change_password FROM users WHERE id = ?').get(id).must_change_password, 1);
+
+  assert.equal(changeOwnPassword(db, id, FIRST_RUN_PASSWORD, 'my-real-password').ok, true);
+  assert.equal(db.prepare('SELECT must_change_password FROM users WHERE id = ?').get(id).must_change_password, 0);
+  assert.equal(login(db, 'admin', FIRST_RUN_PASSWORD).error, 'invalid', 'the default must stop working');
+  assert.equal(login(db, 'admin', 'my-real-password').user.must_change_password, false);
+});
+
+test('changeOwnPassword ends every other session but keeps the caller\'s own', () => {
+  const db = freshDb();
+  bootstrapAdmin(db);
+  const { id } = db.prepare("SELECT id FROM users WHERE username = 'admin'").get();
+  const mine = login(db, 'admin', FIRST_RUN_PASSWORD);
+  const other = login(db, 'admin', FIRST_RUN_PASSWORD);
+
+  assert.equal(changeOwnPassword(db, id, FIRST_RUN_PASSWORD, 'my-real-password', mine.session).ok, true);
+  assert.ok(sessionUser(db, mine.session), 'changing your own password must not log you out');
+  assert.equal(sessionUser(db, other.session), null, 'a stale session elsewhere dies with the old password');
+});
+
+test('validPassword counts bytes, not characters (bcrypt truncates at 72 BYTES)', () => {
+  assert.equal(validPassword('1234567'), false);           // 7 chars — too short
+  assert.equal(validPassword('12345678'), true);
+  assert.equal(validPassword('ж'.repeat(36)), true);       // 72 bytes exactly
+  assert.equal(validPassword('ж'.repeat(37)), false);      // 74 bytes — silently truncated by bcrypt, so refused
+  assert.equal(validPassword(12345678), false);
 });
 
 test('login validates password and manages sessions', () => {
@@ -117,7 +166,7 @@ test('a successful login records no failed_login event', () => {
 
 test('login still works when the ops_events table does not exist yet (recordEvent must never break the login path)', () => {
   const db = openDb(':memory:'); // deliberately unmigrated: no users table either, so use raw SQL setup below
-  db.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, password_hash TEXT, full_name TEXT, role TEXT, extra_roles TEXT, is_active INTEGER DEFAULT 1);
+  db.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, password_hash TEXT, full_name TEXT, role TEXT, extra_roles TEXT, is_active INTEGER DEFAULT 1, must_change_password INTEGER DEFAULT 0);
            CREATE TABLE sessions (id TEXT PRIMARY KEY, user_id INTEGER, expires_at TEXT);`);
   db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?,?,?)').run('bare', hashPassword('secret123'), 'admin');
   assert.doesNotThrow(() => login(db, 'bare', 'wrong'));

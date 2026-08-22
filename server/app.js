@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { attachUser, requireAuth } from './middleware/auth.js';
+import { attachUser, requireAuth, requirePasswordChanged } from './middleware/auth.js';   // FIRST_RUN_PASSWORD_V1
 import { compress } from './middleware/compress.js';   // PERF_GZIP_V1
 import { slowLog } from './middleware/slow-log.js';   // PERF_SLOWLOG_V1
 import { authRoutes } from './routes/auth.js';
@@ -36,6 +36,10 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
 
   app.get('/api/health', (req, res) => res.json({ ok: true }));
   app.use('/api/auth', authRoutes(db));
+  // FIRST_RUN_PASSWORD_V1 — placed AFTER /api/auth (the way out of the state)
+  // and BEFORE every other router, so anything mounted later is gated by
+  // default instead of by someone remembering to add it.
+  app.use('/api', requirePasswordChanged);
   app.use('/api/users', userRoutes(db));
   app.use('/api/db', requireAuth, dbRoutes(db));
   app.use('/api/rpc', requireAuth, rpcRoutes(db));
