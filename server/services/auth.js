@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
+import { recordEvent } from './ops-log.js';   // OPS_EVENTS_V1
 
 export const SESSION_TTL_HOURS = 12;
 
@@ -38,7 +39,17 @@ export function login(db, username, password) {
     'SELECT id, username, password_hash, full_name, role, is_active FROM users WHERE username = ?'
   ).get(name);
   const match = bcrypt.compareSync(String(password ?? ''), user?.password_hash || DUMMY_HASH);
-  if (!user || !user.is_active || !match) return { error: noteFailure(name) };
+  if (!user || !user.is_active || !match) {
+    // OPS_EVENTS_V1 — one kind, no distinction between "no such user" and
+    // "wrong password": recording which would let anyone who later reads the
+    // stats learn which usernames exist. No username, no IP in the event —
+    // the in-memory throttle above already enforces; this call is only a
+    // count, and it sits on the branch both failure paths already share, so
+    // it cannot itself introduce a timing difference between them (see
+    // auth.test.js's cost-equalisation timing test).
+    recordEvent(db, 'failed_login');
+    return { error: noteFailure(name) };
+  }
   failedAttempts.delete(name);
 
   const sid = crypto.randomBytes(32).toString('base64url');

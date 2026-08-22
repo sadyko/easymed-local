@@ -11,6 +11,7 @@ import { rpcRoutes } from './routes/rpc.js';
 import { storageRoutes } from './routes/storage.js';
 import { attachControl } from './services/control/gate.js';   // LICENCE_CORE_V1
 import { setDataDir } from './services/control/config.js';   // LICENCE_CORE_V1
+import { recordEvent } from './services/ops-log.js';   // OPS_EVENTS_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -20,7 +21,7 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   app.disable('x-powered-by');
   // PERF_SLOWLOG_V1 — самым первым: меряем полное время запроса, включая
   // разбор тела и отдачу ответа, а не только работу маршрута.
-  app.use(slowLog());
+  app.use(slowLog(db));   // OPS_EVENTS_V1 — same db-first factory shape as the route modules below.
   // PERF_GZIP_V1 — до статики и до маршрутов: сжимаем и файлы, и ответы API.
   app.use(compress());
   app.use((req, res, next) => { res.set('X-Content-Type-Options', 'nosniff'); next(); });
@@ -69,7 +70,14 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   // object itself — body-parser puts the raw request body (passwords) on it.
   app.use((err, req, res, next) => {
     const status = err.status || err.statusCode || 500;
-    if (status >= 500) console.error('[server error]', err.stack || err);
+    if (status >= 500) {
+      console.error('[server error]', err.stack || err);
+      // OPS_EVENTS_V1 — only real server errors count; a 4xx is the caller's
+      // mistake, not an operational event. req.route.path is the matched
+      // route TEMPLATE (e.g. "/api/patients/:id"), never req.url — a URL can
+      // carry a patient id in the path or a name in the query string.
+      recordEvent(db, 'server_error', req.route?.path ?? null);
+    }
     else console.warn('[client error]', status, err.type || err.code);
     if (res.headersSent) return next(err);
     res.status(status).json({

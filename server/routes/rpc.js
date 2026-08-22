@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { getRpc } from '../services/rpc/index.js';
 import { isReadOnlyRpc, isAlwaysAllowedRpc, lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
+import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 
 export function rpcRoutes(db) {
   const r = Router();
@@ -37,6 +38,14 @@ export function rpcRoutes(db) {
       const status = e.status || 500;
       if (status >= 500) {
         console.error('[rpc]', req.params.name, e.message);
+        // OPS_EVENTS_V1 — this branch answers the request directly (never
+        // calls next(e)), so app.js's global error handler NEVER sees an RPC
+        // failure; without this line every 500 from the app's main
+        // business-logic surface would be invisible to the error counter.
+        // req.params.name is a fixed-vocabulary code identifier (the RPC
+        // registry key), not user data — same reasoning as the RPC name
+        // already being safe to console.log above.
+        recordEvent(db, 'server_error', '/api/rpc/' + req.params.name);
         return res.status(500).json({ error: { code: 'internal', message: 'RPC failed.' } });
       }
       return res.status(status).json({ error: { code: status === 403 ? 'forbidden' : 'bad_request', message: e.message } });

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { compile, CompileError } from '../db/query-compiler.js';
 import { readableColumns } from '../db/schema-registry.js';
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
+import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
@@ -105,6 +106,12 @@ export function dbRoutes(db) {
         return res.status(400).json({ error: { code: 'bad_request', message: e.message } });
       }
       console.error('[db query failed]', e.message);
+      // OPS_EVENTS_V1 — same reasoning as rpc.js's 500 branch: this catch
+      // answers directly (never next(e)), so app.js's global handler never
+      // sees a /api/db failure either. meta.table is a schema-registry name
+      // (fixed vocabulary, not a patient value), the same kind of identifier
+      // rpc.js's RPC name already is.
+      recordEvent(db, 'server_error', '/api/db/' + compiled.meta.table);
       return res.status(500).json({ error: { code: 'internal', message: 'Query failed.' } });
     }
   });

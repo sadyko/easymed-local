@@ -12,6 +12,8 @@
 // Тело читаем в момент завершения, а не на входе: express.json к тому времени
 // уже разобрал его, и лишней работы на быстрых запросах не делается.
 
+import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
+
 const DEFAULT_MS = 200;
 
 function label(req) {
@@ -24,7 +26,9 @@ function label(req) {
     return req.path;
 }
 
-export function slowLog({ thresholdMs, log = console.warn } = {}) {
+// OPS_EVENTS_V1 — db threaded through as the first argument, same shape as
+// createApp(db) and every routes/*.js factory in this app; no new mechanism.
+export function slowLog(db, { thresholdMs, log = console.warn } = {}) {
     const limit = thresholdMs != null
         ? thresholdMs
         : Number(process.env.EASYMED_SLOW_MS || DEFAULT_MS);
@@ -41,6 +45,13 @@ export function slowLog({ thresholdMs, log = console.warn } = {}) {
             log('[slow] ' + ms.toFixed(0) + 'ms  ' + req.method + ' ' + label(req)
                 + '  status=' + res.statusCode
                 + (req.user && req.user.username ? '  user=' + req.user.username : ''));
+            // Same route-template discipline as app.js's error handler:
+            // req.route.path only. label() above is fine for a human reading
+            // the console (an RPC name or a db table name is a safe code
+            // identifier) but storage's /:bucket/*rest route proves req.path
+            // itself can carry a real filename — a patient's name.pdf — so the
+            // stored event never uses it.
+            recordEvent(db, 'slow_request', req.route?.path ?? null);
         };
         res.on('finish', finish);
         res.on('close', finish);

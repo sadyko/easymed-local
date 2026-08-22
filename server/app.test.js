@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import express from 'express';
 import { openDb } from './db/connection.js';
 import { migrate } from './db/migrate.js';
 import { hashPassword } from './services/auth.js';
 import { createApp } from './app.js';
 import { licensedDataDir } from './services/control/licensed-fixture.js';   // LICENCE_CORE_V1
+import { RPC } from './services/rpc/index.js';   // OPS_EVENTS_V1 — used below to prove a real finding, see the test
 
 function startServer() {
   const db = openDb(':memory:');
@@ -319,5 +321,103 @@ test('/api/rpc: unknown function is a clean 501, auth required', async () => {
     assert.equal((await res.json()).error.code, 'rpc_not_implemented');
     res = await fetch(`${base}/api/rpc/does_not_exist`, { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
     assert.equal(res.status, 401);
+  } finally { server.close(); }
+});
+
+// --- OPS_EVENTS_V1 -----------------------------------------------------------
+
+test('a 4xx (unknown /api route) never records a server_error ops_event', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    assert.equal((await fetch(`${base}/api/no-such-thing`)).status, 404);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ops_events').get().n, 0);
+  } finally { server.close(); }
+});
+
+// FINDING, fixed here — do not assume app.js's handler sees "every 5xx" (the
+// plan's own verified-facts table claims exactly that): routes/rpc.js has its
+// OWN try/catch around every handler call and, on a >=500 error, responds
+// directly (`return res.status(500).json(...)`) WITHOUT calling `next(e)`.
+// The error therefore never reaches app.js's global error-handling
+// middleware — confirmed empirically (a throwing handler was added to the
+// live RPC registry and hit over real HTTP) before routes/rpc.js was given
+// its own recordEvent call, at which point this test's assertion was 0, not
+// 1. Left in as a regression test for the fix, not just a demonstration.
+test('an RPC handler throwing 500 answers correctly AND records its own server_error event (app.js never sees it)', async () => {
+  RPC.__ops_events_test_throw = () => { throw Object.assign(new Error('boom'), {}); };
+  const { db, server, base } = await startServer();
+  try {
+    const login = await post(base, '/api/auth/login', { username: 'boss', password: 'password1' });
+    const admin = login.headers.get('set-cookie').split(';')[0];
+    const res = await post(base, '/api/rpc/__ops_events_test_throw', {}, admin);
+    assert.equal(res.status, 500, 'the RPC route still answers 500 correctly');
+    const row = db.prepare('SELECT * FROM ops_events').get();
+    assert.equal(row.kind, 'server_error');
+    assert.equal(row.route, '/api/rpc/__ops_events_test_throw', 'the RPC name is a safe, fixed-vocabulary identifier');
+  } finally {
+    server.close();
+    delete RPC.__ops_events_test_throw;
+  }
+});
+
+// Same gap, same fix, for /api/db: its own catch around query execution also
+// answers 500s directly without calling next(e) — a constraint-shaped error
+// (400/409, already classified by routes/db.js's own branches above the one
+// touched here) must NOT record anything; only a truly unexpected failure
+// falls to the final branch that now records one.
+test('/api/db: a truly unexpected query failure records its own server_error event; ordinary requests record nothing', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const login = await post(base, '/api/auth/login', { username: 'boss', password: 'password1' });
+    const admin = login.headers.get('set-cookie').split(';')[0];
+
+    let res = await post(base, '/api/db', { table: 'patients', op: 'select', columns: '*' }, admin);
+    assert.equal(res.status, 200);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ops_events').get().n, 0, 'an ordinary request records nothing');
+
+    // Force the truly-unexpected branch: compile() only checks the registry
+    // allow-list, not whether the table literally exists in this connection,
+    // so dropping it (safe — this is the test's own throwaway in-memory db)
+    // makes the real db.prepare(sql).all(...) call below throw a plain
+    // SQLITE_ERROR ("no such table"), which none of routes/db.js's four
+    // classified constraint codes match — proving the final, unclassified
+    // branch, the one this task's recordEvent call was added to.
+    db.exec('DROP TABLE patients');
+    res = await post(base, '/api/db', { table: 'patients', op: 'select', columns: '*' }, admin);
+    assert.equal(res.status, 500);
+    const row = db.prepare('SELECT * FROM ops_events').get();
+    assert.equal(row.kind, 'server_error');
+    assert.equal(row.route, '/api/db/patients', 'the schema-registry table name is a safe, fixed-vocabulary identifier');
+  } finally { server.close(); }
+});
+
+// Reproduces app.js's exact error-handling shape (a matched, parameterised
+// route ahead of a 4-arg middleware identical in structure to the real one) on
+// a disposable Express app, to answer empirically whether req.route is
+// populated inside that middleware. Not exercised through any production
+// route: every route in THIS app that could throw uncaught already has its
+// own local catch (rpc.js, db.js, storage.js all respond directly rather than
+// calling next(err)) — see the FINDING test above — so there is currently no
+// real request path left that reaches app.js's handler with req.route set.
+// This still matters: it is the mechanism app.js's `req.route?.path ?? null`
+// line relies on, and it must be shown true of Express itself, not assumed.
+test('EMPIRICAL: req.route.path IS populated inside error-handling middleware for a throw in a matched route; UNDEFINED (not the string "undefined") for one thrown before routing', async () => {
+  const seen = [];
+  const app = express();
+  app.get('/patients/:id', (req, res) => { throw new Error('boom'); });     // matched route: req.route should be set
+  app.use(express.json());                                                  // registered AFTER the route on purpose: a parse failure here happens with no route matched yet
+  app.post('/parse-me', (req, res) => res.json({ ok: true }));
+  app.use((err, req, res, next) => {                                        // same shape as app.js's real handler
+    seen.push(req.route?.path ?? null);
+    res.status(500).json({ error: { code: 'internal' } });
+  });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((r) => server.once('listening', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    await fetch(`${base}/patients/42`);
+    await fetch(`${base}/parse-me`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{bad json' });
+    assert.equal(seen[0], '/patients/:id', 'populated: this is the whole reason req.route.path is safe to store');
+    assert.equal(seen[1], null, 'no route matched yet when body-parser fails — must be null, never the literal string "undefined"');
   } finally { server.close(); }
 });

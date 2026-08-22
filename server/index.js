@@ -12,6 +12,7 @@ import { startTelegramBot } from './services/telegram/index.js';   // TELEGRAM_B
 import { createApp } from './app.js';
 import { setDataDir } from './services/control/config.js';   // SUPERVISED_INSTALL_V1
 import { scheduleCheckin } from './services/control/checkin.js';   // LICENCE_CORE_V1
+import { recordEvent, pruneOpsEvents } from './services/ops-log.js';   // OPS_EVENTS_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -154,6 +155,12 @@ if (isMain) {
   pruneSessions();
   setInterval(pruneSessions, 3600 * 1000).unref();
 
+  // OPS_EVENTS_V1 — same prune-at-startup-then-hourly shape as sessions just
+  // above. Bounds the table against a clinic whose integration is stuck
+  // hammering 500s or retrying a doomed login between restarts.
+  pruneOpsEvents(db);
+  setInterval(() => pruneOpsEvents(db), 3600 * 1000).unref();
+
   // TELEGRAM_BOT_V1 — опросник Telegram живёт внутри этого же процесса, чтобы у
   // клиники был один `npm start`. Он сам проверяет, включён ли бот в настройках,
   // и молчит, пока администратор его не включил. Все ошибки цикл ловит внутри:
@@ -186,6 +193,12 @@ if (isMain) {
 
   const PORT = Number(process.env.PORT || 8000);
   const server = createApp(db, { dataDir: DATA_DIR }).listen(PORT, '0.0.0.0', () => {
+    // OPS_EVENTS_V1 — recorded here, not earlier: this callback only fires
+    // once the port is actually bound, i.e. the clinic really did start (as
+    // opposed to migrate()/bootstrapAdmin() completing but EADDRINUSE
+    // aborting the process a few lines below before a single request could
+    // ever be served).
+    recordEvent(db, 'boot');
     console.log('');
     console.log('Easy-Med Local is running.');
     console.log(`  On this PC:      http://localhost:${PORT}`);
