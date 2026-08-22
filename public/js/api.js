@@ -13,6 +13,13 @@ export async function api(path, { method = 'GET', body } = {}) {
     location.href = '/';
     throw new Error('Login required.');
   }
+  // FIRST_RUN_PASSWORD_V1 — the server refuses everything until the first-run
+  // default password is changed; the login page owns that flow, so any screen
+  // that trips over the refusal hands the user back to it.
+  if (res.status === 403 && data?.error?.code === 'password_change_required' && location.pathname !== '/') {
+    location.href = '/';
+    throw new Error(data.error.message);
+  }
   if (!res.ok) throw new Error(data?.error?.message || `Request failed (${res.status})`);
   return data;
 }

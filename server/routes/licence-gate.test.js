@@ -31,6 +31,10 @@ function harness({ validUntil }) {
   const db = openDb(':memory:');
   migrate(db);
   const password = bootstrapAdmin(db);
+  // FIRST_RUN_PASSWORD_V1 — these tests are about the LICENCE gate; the
+  // password gate (requirePasswordChanged, tested in its own file) would
+  // otherwise answer 403 before any licence logic ran.
+  db.prepare('UPDATE users SET must_change_password = 0').run();
   return { db, dir, password, app: createApp(db, { dataDir: dir }) };
 }
 
@@ -353,6 +357,7 @@ test('licence_status renders a real activation code even with no control.json at
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-unenrolled-'));
   const db = openDb(':memory:'); migrate(db);
   const password = bootstrapAdmin(db);
+  db.prepare('UPDATE users SET must_change_password = 0').run();   // FIRST_RUN_PASSWORD_V1 — see makeApp
   const server = await listen(createApp(db, { dataDir: dir }));
   t.after(() => server.close());
   const cookie = await login(server, password);
@@ -456,6 +461,7 @@ test('a clinic that stopped paying IS told about the subscription', async (t) =>
   }));
   const db = openDb(':memory:'); migrate(db);
   const password = bootstrapAdmin(db);
+  db.prepare('UPDATE users SET must_change_password = 0').run();   // FIRST_RUN_PASSWORD_V1 — see makeApp
   const server = await listen(createApp(db, { dataDir: dir })); t.after(() => server.close());
   const cookie = await login(server, password);
 

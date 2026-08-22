@@ -30,13 +30,21 @@ export function hashPassword(pw) {
   return bcrypt.hashSync(pw, BCRYPT_COST);
 }
 
+// bcrypt only hashes the first 72 BYTES — a 72-char Cyrillic password is 126
+// bytes, so counting characters would silently ignore the tail. Count bytes.
+// Lives here (not routes/users.js, where it started) because the self-service
+// change-password path below applies the identical rule — one implementation.
+export function validPassword(pw) {
+  return typeof pw === 'string' && pw.length >= 8 && Buffer.byteLength(pw, 'utf8') <= 72;
+}
+
 export function login(db, username, password) {
   const name = String(username || '').trim().toLowerCase();
   const fail = failedAttempts.get(name);
   if (fail && fail.lockedUntil > Date.now()) return { error: 'locked' };
 
   const user = db.prepare(
-    'SELECT id, username, password_hash, full_name, role, is_active FROM users WHERE username = ?'
+    'SELECT id, username, password_hash, full_name, role, is_active, must_change_password FROM users WHERE username = ?'
   ).get(name);
   const match = bcrypt.compareSync(String(password ?? ''), user?.password_hash || DUMMY_HASH);
   if (!user || !user.is_active || !match) {
@@ -84,7 +92,7 @@ export function logout(db, sid) {
 export function sessionUser(db, sid) {
   if (!sid) return null;
   const row = db.prepare(
-    'SELECT u.id, u.username, u.full_name, u.role, u.extra_roles, u.is_active, s.expires_at AS session_expires_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?'
+    'SELECT u.id, u.username, u.full_name, u.role, u.extra_roles, u.is_active, u.must_change_password, s.expires_at AS session_expires_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?'
   ).get(sid);
   if (!row) return null;
   if (row.session_expires_at <= isoSeconds(Date.now()) || !row.is_active) {
@@ -107,15 +115,55 @@ function parseRoleList(v) {
 
 export function publicUser(u) {
   return { id: u.id, username: u.username, full_name: u.full_name, role: u.role,
-           extra_roles: parseRoleList(u.extra_roles), is_active: !!u.is_active };
+           extra_roles: parseRoleList(u.extra_roles), is_active: !!u.is_active,
+           // !! also maps SQLite's 0/1 — and an undefined column (rows selected
+           // by callers that don't need the flag) — to a clean boolean.
+           must_change_password: !!u.must_change_password };
 }
 
-// First run only: create the admin account with a random password and return
-// it so index.js can print it to the console. Never a fixed default password.
+// FIRST_RUN_PASSWORD_V1 — the well-known default the first-run admin starts
+// with. This REVERSES the original "never a fixed default password" rule, by
+// owner decision (2026-08-22): installers were fishing a generated string out
+// of a service log, and a clinic whose window closed too fast was locked out
+// of its own fresh install. What makes the fixed default acceptable is the
+// must_change_password flag set beside it: until the admin sets their own
+// password, the API refuses everything except login/logout/me/change-password
+// (enforced in app.js — requirePasswordChanged — not just by the login
+// screen), so the default cannot be used to actually operate the clinic.
+export const FIRST_RUN_PASSWORD = '123456789';
+
+// First run only: create the admin account with the well-known default above
+// and return it so index.js can print it to the console. must_change_password
+// is what keeps this from being an open door — see FIRST_RUN_PASSWORD.
 export function bootstrapAdmin(db) {
   if (db.prepare('SELECT COUNT(*) AS n FROM users').get().n > 0) return null;
-  const password = crypto.randomBytes(9).toString('base64url'); // 12 chars
-  db.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)')
-    .run('admin', hashPassword(password), 'Administrator', 'admin');
-  return password;
+  db.prepare('INSERT INTO users (username, password_hash, full_name, role, must_change_password) VALUES (?,?,?,?,1)')
+    .run('admin', hashPassword(FIRST_RUN_PASSWORD), 'Administrator', 'admin');
+  return FIRST_RUN_PASSWORD;
+}
+
+/**
+ * Self-service password change — the only way must_change_password clears.
+ *
+ * Verifies the CURRENT password even though the caller already holds a valid
+ * session: a walked-away-from clinic PC must not let a passer-by silently
+ * take over the account by setting a new password on an open session.
+ *
+ * Ends every OTHER session of the same user on success (mirrors
+ * routes/users.js's reset behaviour); the caller's own session survives so
+ * changing your password doesn't log you out.
+ *
+ * @returns {{ok: true} | {error: 'invalid_current'|'weak_password'}}
+ */
+export function changeOwnPassword(db, userId, currentPassword, newPassword, keepSessionId = null) {
+  if (!validPassword(newPassword)) return { error: 'weak_password' };
+  const row = db.prepare('SELECT password_hash FROM users WHERE id = ? AND is_active = 1').get(userId);
+  if (!row || !bcrypt.compareSync(String(currentPassword ?? ''), row.password_hash)) {
+    return { error: 'invalid_current' };
+  }
+  db.prepare(`UPDATE users SET password_hash = ?, must_change_password = 0,
+              updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`)
+    .run(hashPassword(newPassword), userId);
+  db.prepare('DELETE FROM sessions WHERE user_id = ? AND id IS NOT ?').run(userId, keepSessionId);
+  return { ok: true };
 }

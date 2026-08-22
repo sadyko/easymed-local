@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireRole } from '../middleware/auth.js';
-import { hashPassword } from '../services/auth.js';
+import { hashPassword, validPassword } from '../services/auth.js';
 import { VALID_ROLES } from '../services/roles.js';
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 
@@ -499,8 +499,6 @@ function bad(res, message) {
   return res.status(400).json({ error: { code: 'bad_request', message } });
 }
 
-// bcrypt only hashes the first 72 BYTES — a 72-char Cyrillic password is 126
-// bytes, so counting characters would silently ignore the tail. Count bytes.
-function validPassword(pw) {
-  return typeof pw === 'string' && pw.length >= 8 && Buffer.byteLength(pw, 'utf8') <= 72;
-}
+// validPassword moved to services/auth.js (imported above) — the self-service
+// change-password path applies the identical byte-counting rule, and two
+// copies of a password rule is how they drift apart.

@@ -189,7 +189,7 @@ if (isMain) {
       console.log('FIRST RUN - admin account created:');
       console.log('  username: admin');
       console.log(`  password: ${firstRunPassword}`);
-      console.log('  Log in and change this password.');
+      console.log('  The app will require a new password at first sign-in.');
     }
   });
 

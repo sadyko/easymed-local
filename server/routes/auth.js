@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { login, logout, SESSION_TTL_HOURS } from '../services/auth.js';
+import { login, logout, changeOwnPassword, SESSION_TTL_HOURS } from '../services/auth.js';
 import { SESSION_COOKIE } from '../middleware/auth.js';
 
 // Per-IP login throttle: bcrypt costs ~60ms of the single JS thread per
@@ -49,6 +49,29 @@ export function authRoutes(db) {
     res.setHeader('Set-Cookie',
       `${SESSION_COOKIE}=${encodeURIComponent(result.session)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_HOURS * 3600}`);
     res.json({ user: result.user });
+  });
+
+  // FIRST_RUN_PASSWORD_V1 — self-service, session required. Deliberately under
+  // /api/auth so requirePasswordChanged (app.js) can gate everything else while
+  // leaving this reachable: it is the way OUT of the must-change state.
+  // Re-checks the current password despite the live session — see
+  // changeOwnPassword for why. Counts toward the same per-IP throttle as login,
+  // so the current-password check cannot be brute-forced any faster than login.
+  r.post('/change-password', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    if (!req.user) return res.status(401).json({ error: { code: 'unauthorized', message: 'Login required.' } });
+    if (ipThrottled(req.ip)) {
+      return res.status(429).json({ error: { code: 'locked', message: 'Too many attempts. Try again in a few minutes.' } });
+    }
+    const { current_password, new_password } = req.body || {};
+    const result = changeOwnPassword(db, req.user.id, current_password, new_password, req.sessionId);
+    if (result.error === 'weak_password') {
+      return res.status(400).json({ error: { code: 'weak_password', message: 'Password must be 8 characters or more (max 72 bytes).' } });
+    }
+    if (result.error) {
+      return res.status(401).json({ error: { code: 'invalid_credentials', message: 'Current password is wrong.' } });
+    }
+    res.json({ ok: true });
   });
 
   r.post('/logout', (req, res) => {
