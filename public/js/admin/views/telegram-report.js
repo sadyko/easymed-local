@@ -119,6 +119,11 @@ function statsCard() {
         tile('Подключено чатов', s.chats_active),
         tile('Открыто карт пациентов', s.cards_reachable, 'один номер — часто вся семья'),
         tile('Документов выдано', s.documents_sent),
+        // TG_DAILY_30_V1 — «сколько человек подключилось за месяц». Ноль здесь
+        // ПОКАЗЫВАЕТСЯ, в отличие от плиток отвязанных/заблокировавших ниже:
+        // те нули — про отсутствие проблемы, а этот — ответ на вопрос «работает
+        // ли стойка сейчас», и молчание выглядело бы как сломанный отчёт.
+        tile('Новых за 30 дней', s.started_30d ?? 0),
     ];
     // Отвязанные и заблокировавшие показываются, только когда они есть: нули в
     // ряду плиток занимают место и не отвечают ни на один вопрос.
@@ -130,9 +135,76 @@ function statsCard() {
         gridTemplateColumns: `repeat(${tiles.length}, minmax(0, 1fr))`,
     } }, ...tiles));
 
+    // График рисуется только когда подключения есть: тридцать пустых
+    // столбиков не сообщают ничего — тот же довод, каким TG_STATS_ONE_LINE_V1
+    // убрал отсюда недельные столбцы при двух подключениях. Плитка выше
+    // отвечает «ноль» и без графика.
+    if (s.started_30d) box.appendChild(daily30Chart(s));
+
     return h('div', { class: 'card' },
         h('div', { class: 'card-header' }, h('h3', null, Icon('Patients', { size: 16 }), ' Подключения')),
         box);
+}
+
+// TG_DAILY_30_V1 — подключения по дням за последние 30 дней.
+//
+// Дни строятся в UTC — тем же календарём, каким date(linked_at) на сервере
+// раскладывает подключения по вёдрам: локальная полночь на границе суток
+// рисовала бы столбик, в который ничего не может попасть.
+//
+// Один ряд — один цвет продукта; подписи и значения — чернильными токенами,
+// цвет несёт только столбик. Число видно по наведению (столбик в 10px не
+// вместит подпись), а масштаб — по «макс. N в день» в заголовке блока.
+function daily30Chart(s) {
+    const byDay = new Map((s.daily_30d || []).map((d) => [d.day, d.c]));
+    const days = [];
+    const now = new Date();
+    for (let i = 29; i >= 0; i--) {
+        const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - i));
+        const iso = d.toISOString().slice(0, 10);
+        days.push({ iso, c: byDay.get(iso) || 0 });
+    }
+    const max = Math.max(...days.map((d) => d.c), 1);
+
+    const tip = h('div', { style: {
+        position: 'absolute', display: 'none', pointerEvents: 'none', zIndex: '5',
+        padding: '3px 8px', borderRadius: '7px', whiteSpace: 'nowrap',
+        background: 'var(--ink-900,#13272e)', color: '#fff', fontSize: '11.5px',
+        fontVariantNumeric: 'tabular-nums', transform: 'translateX(-50%)',
+    } });
+
+    const CHART_H = 64;
+    const bars = h('div', { style: {
+        display: 'flex', alignItems: 'flex-end', gap: '2px', height: CHART_H + 'px',
+        borderBottom: '1px solid var(--ink-100)',
+    } });
+    for (const d of days) {
+        // Колонка на всю высоту — цель наведения крупнее самого столбика.
+        const fill = h('div', { style: d.c
+            ? { height: Math.max(Math.round((d.c / max) * CHART_H), 3) + 'px',
+                background: 'var(--primary-500, #0d9488)', borderRadius: '3px 3px 0 0' }
+            // Пустой день существует видимо (2px чернильной подложки), но
+            // читается как ноль, а не как маленькое значение.
+            : { height: '2px', background: 'var(--ink-100, #e4eaec)' } });
+        const col = h('div', { style: { flex: '1', minWidth: '0', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' } }, fill);
+        col.addEventListener('mouseenter', () => {
+            tip.textContent = shortDate(d.iso) + ' — ' + d.c;
+            tip.style.left = (col.offsetLeft + col.offsetWidth / 2) + 'px';
+            tip.style.bottom = (CHART_H + 6) + 'px';
+            tip.style.display = 'block';
+        });
+        col.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+        bars.appendChild(col);
+    }
+
+    const axisLabel = (t) => h('span', { style: { fontSize: '11px', color: 'var(--ink-500)', fontVariantNumeric: 'tabular-nums' } }, t);
+    return h('div', { style: { marginTop: '16px' } },
+        h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '8px' } },
+            h('div', { style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-700)' } }, 'Новые подключения по дням'),
+            h('span', { style: { fontSize: '11.5px', color: 'var(--ink-500)' } }, 'макс. ' + max + ' в день')),
+        h('div', { style: { position: 'relative' } }, tip, bars),
+        h('div', { style: { display: 'flex', justifyContent: 'space-between', marginTop: '4px' } },
+            axisLabel(shortDate(days[0].iso)), axisLabel('сегодня')));
 }
 
 // ---------------------------------------------------------------------------

@@ -64,6 +64,19 @@ export function botStats(db) {
       WHERE linked_at >= date('now','-56 days')
       GROUP BY week ORDER BY week`).all();
 
+  // Подключения по ДНЯМ за последний месяц — «какой темп сейчас», вопрос
+  // владельца рядом с недельным «работает ли продвижение вообще». Считаются
+  // ПОДКЛЮЧЕНИЯ (строки), не уникальные номера, и отозванные не вычитаются:
+  // связка после «Отвязать» и повторное подключение — это дважды сработавшая
+  // стойка, а история выдач у отозванной строки и так остаётся (см. схему
+  // telegram_links). -29, а не -30: вместе с сегодняшним днём окно — ровно 30
+  // календарных дней.
+  const daily30 = db.prepare(
+    `SELECT date(linked_at) AS day, COUNT(*) c
+       FROM telegram_links
+      WHERE linked_at >= date('now','-29 days')
+      GROUP BY day ORDER BY day`).all();
+
   return {
     chats_active: active.length,
     chats_revoked: links.filter((l) => l.revoked_at).length,
@@ -74,6 +87,8 @@ export function botStats(db) {
     coverage_pct: recent ? Math.round((recentConnected / recent) * 100) : 0,
     coverage_window_days: COVERAGE_WINDOW_DAYS,
     weekly,
+    daily_30d: daily30,
+    started_30d: daily30.reduce((n, d) => n + d.c, 0),
     documents_sent: db.prepare("SELECT COUNT(*) c FROM telegram_deliveries WHERE status='sent'").get().c,
   };
 }

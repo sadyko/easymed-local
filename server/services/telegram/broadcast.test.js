@@ -197,3 +197,24 @@ test('охват считается от недавних пациентов, а
   assert.equal(s.chats_active, 2);
   db.close();
 });
+
+// TG_DAILY_30_V1 — «сколько человек подключилось за месяц», по дням.
+test('подключения за 30 дней: по дням, старые не попадают, отозванные не вычитаются', () => {
+  const { db } = seed();   // три связки прямо сейчас, одна из них отозвана
+  const iso = (daysAgo) => new Date(Date.now() - daysAgo * 864e5).toISOString().slice(0, 19) + 'Z';
+  const link = db.prepare('INSERT INTO telegram_links (chat_id, phone, tg_name, linked_at) VALUES (?,?,?,?)');
+  // Двое в один день пять дней назад — должны слипнуться в одно ведро.
+  link.run('401', '998900000001', 'Пятидневный-1', iso(5));
+  link.run('402', '998900000002', 'Пятидневный-2', iso(5));
+  // Сорок дней назад — за окном, в счёт не идёт.
+  link.run('403', '998900000003', 'Старый', iso(40));
+
+  const s = botStats(db);
+  assert.equal(s.started_30d, 5, 'трое из seed (отозванный тоже ПОДКЛЮЧАЛСЯ) плюс двое пятидневных');
+  const today = new Date().toISOString().slice(0, 10);
+  const byDay = Object.fromEntries(s.daily_30d.map((d) => [d.day, d.c]));
+  assert.equal(byDay[today], 3, 'связки seed легли в сегодняшнее ведро');
+  assert.equal(byDay[iso(5).slice(0, 10)], 2, 'один день — одно ведро');
+  assert.equal(byDay[iso(40).slice(0, 10)], undefined, 'сорокадневная связка за окном');
+  db.close();
+});
