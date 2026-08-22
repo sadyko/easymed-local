@@ -1,17 +1,25 @@
 import express from 'express';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { enrollRoutes } from './routes/enroll.js';
 import { checkinRoutes } from './routes/checkin.js';
 import { vendorAuthRoutes, attachVendorUser } from './routes/vendor-auth.js';
 import { adminRoutes } from './routes/admin.js';
 
+// control-plane/server/app.js -> control-plane/ -> control-plane/public
+const CONTROL_PLANE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const PUBLIC_DIR = path.join(CONTROL_PLANE_ROOT, 'public');
+
 // LICENCE_CORE_V1 — the control plane's own HTTP surface, minimal on purpose.
 //
 // Mirrors the clinic app's server/app.js — same idioms (disable x-powered-by,
 // nosniff, JSON body limit, JSON 404 for unknown /api paths, a last-resort
-// error handler that never echoes the raw error to the client) — deliberately
-// not copying what that app needs and this one doesn't: no session cookies, no
-// static file serving, no licence gate (the control plane IS the thing that
-// issues licences; it has no licence of its own to check).
+// error handler that never echoes the raw error to the client, and — since
+// THE_PANEL_V1 below — the same NO_STALE_CODE_V1 static-file caching rule).
+// Deliberately not copying what that app needs and this one doesn't: no
+// per-clinic session cookies for patient-facing staff, no licence gate (the
+// control plane IS the thing that issues licences; it has no licence of its
+// own to check).
 // CONTROL_PLANE_V1 — mounted under /cp, NOT /api/v1, and that is deliberate.
 //
 // setting.easymed.uz already proxies /api/v1/* to the EasyMed CORE FastAPI
@@ -48,6 +56,29 @@ export function createApp(db) {
   // requireVendor is applied INSIDE adminRoutes(), not here — see admin.js.
   app.use('/cp/v1/auth', vendorAuthRoutes(db));
   app.use('/cp/v1/admin', adminRoutes(db));
+
+  // THE_PANEL_V1 — the page the owner actually clicks, served at /cp/.
+  // Registered AFTER every /cp/v1/* router above (so those still win) and
+  // BEFORE the catch-all 404 below (so a request for a real static file
+  // falls through to it only when nothing here matched).
+  //
+  // NO_STALE_CODE_V1 — same reasoning and same fix as the clinic app's own
+  // server/app.js: 'no-cache' does NOT mean "never cache", it means "always
+  // ask the server before using the cached copy" (an ETag round-trip is a
+  // 304 in the common case — a few bytes, not the whole file). Without this,
+  // a browser that already loaded panel.js keeps running the OLD code after
+  // a deploy until a hard refresh, and there is no way to tell from the
+  // screen that this happened — see that file's own comment for the day
+  // this cost the clinic app before the fix. Images/fonts (none live here
+  // yet, but if any are added) deliberately don't match this regex — they
+  // don't change silently under a stable filename the way code does.
+  const REVALIDATE = /\.(?:html|js|mjs|css)$/i;
+  app.use('/cp', express.static(PUBLIC_DIR, {
+    extensions: ['html'],
+    setHeaders: (res, filePath) => {
+      if (REVALIDATE.test(filePath)) res.setHeader('Cache-Control', 'no-cache');
+    },
+  }));
 
   // Unknown /api paths answer JSON, not an HTML 404 page.
   app.use('/cp', (req, res) => res.status(404).json({ error: { code: 'not_found', message: 'Unknown API endpoint.' } }));
