@@ -33,7 +33,7 @@ import { nextRunAt, isInWindow, consentAppliesTo } from './update-schedule.js';
 // bundle can ever verify against it, the same reasoning licence.js documents
 // for its own placeholder.
 // ############################################################################
-// ##  DEVELOPMENT KEY — NOT THE PRODUCTION KEY. REPLACE BEFORE ANY CLINIC.  ##
+// ##  DEVELOPMENT KEY — NOT THE PRODUCTION KEY. the production release key.  ##
 // ############################################################################
 const RELEASE_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAjCh/fDySue8xTrMIdwxu4YoXV9qkmbDSpCM7BJdc+70=

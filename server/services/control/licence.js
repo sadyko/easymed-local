@@ -12,9 +12,6 @@ import { canonical } from './canonical.js';
 // placeholder below is a real, valid Ed25519 key whose private half was
 // discarded, so an un-replaced build fails closed: no licence can ever verify
 // against it.
-// ############################################################################
-// ##  DEVELOPMENT KEY — NOT THE PRODUCTION KEY. REPLACE BEFORE ANY CLINIC.  ##
-// ############################################################################
 //
 // Installed 2026-08-20 so the local dev instance is usable: with the discarded
 // placeholder in place, no licence could verify and the whole app sat read-only.
@@ -26,7 +23,7 @@ import { canonical } from './canonical.js';
 // license themselves. server/index.js logs a warning at every boot while it is in
 // place — see DEV_KEY_FINGERPRINT there.
 const VENDOR_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAViIP4qnVmkQPzdQNpsdhkD5Vzh9qZ/kYMZjjFnTwIUw=
+MCowBQYDK2VwAyEAXaSA2ArkuT/Ci1VjOzeCx/vsYZNiuKwsF1yceOrRCjM=
 -----END PUBLIC KEY-----`;
 
 let _defaultKey = null;

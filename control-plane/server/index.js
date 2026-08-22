@@ -40,7 +40,7 @@ migrate(db);
 const firstRunPassword = bootstrapVendorAdmin(db);
 
 const PORT = Number(process.env.CP_PORT || 8090);
-const server = createApp(db).listen(PORT, '0.0.0.0', () => {
+const server = createApp(db).listen(PORT, process.env.CP_BIND || '0.0.0.0', () => {
   console.log('');
   console.log('Easy-Med control plane is running.');
   console.log(`  Panel:    http://localhost:${PORT}/cp/`);
