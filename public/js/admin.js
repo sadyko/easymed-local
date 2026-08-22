@@ -103,7 +103,9 @@ const NAV = [
     // TELEGRAM_CHAT_BADGE_V1 — непрочитанные пациентские сообщения — это работа,
     // которая ждёт: значок красный, как у остальных «требует действия».
     { id: 'telegram-chat', label: 'Чат с пациентами', icon: 'Msg', badgeKind: 'alert' },
-    { id: 'cashier-shifts', label: 'Cashier', icon: 'Wallet' },   // CASHIER_LOCAL_V1 — Касса (module key 'cashier')
+    // CASHIER_UNPAID_BADGE_V1 — деньги, которые ждут: красный, как у чата выше,
+    // потому что неоплаченный счёт — это работа кассира, а не справка.
+    { id: 'cashier-shifts', label: 'Cashier', icon: 'Wallet', badgeKind: 'alert' },   // CASHIER_LOCAL_V1 — Касса (module key 'cashier')
     { id: 'cashier-head', label: 'Head cashier', icon: 'Coins' },   // CASHIER_LOCAL_V1 — Старший кассир (key 'cashier-head')
     { id: 'inventory', label: 'Procurement', icon: 'Pill' },   // INVENTORY_UI_V1 — Закупки
     { section: 'Analytics' },
@@ -119,7 +121,7 @@ const navCounts = {
     requests:     null,    // pending Symptex requests (visits.status='requested')
     appointments: null,    // today's visits
     consultation: null,    // queued + in_progress visit_services (active work)
-    'cashier-shifts': null,   // unpaid + partial invoices for this clinic (money to collect)
+    'cashier-shifts': null,   // CASHIER_UNPAID_BADGE_V1 — unpaid + partial + debt invoices (money to collect)
     pacs:         12,      // studies awaiting read — TODO: wire to a `studies` count once table exists
     'telegram-chat': null,   // TELEGRAM_CHAT_BADGE_V1 — входящие без read_at
 };
@@ -1048,11 +1050,11 @@ function formatBadge(n) {
 // Pull real counts from Supabase + re-render the sidebar. Errors fail silent —
 // the badges just don't appear, the rest of the app keeps working.
 async function loadNavCounts() {
-    // PHASE2A_SHELL — trimmed to the Patients count only. The other badge
-    // queries (visits, visit_services, invoices) target tables that don't
-    // exist yet in local mode; each returned a non-fatal 403 individually,
-    // but their NAV entries are gone too (see NAV above) so there's nothing
-    // left to badge. Restore alongside those modules in a later slice.
+    // PHASE2A_SHELL — once trimmed to the Patients count only, because the
+    // other badge tables didn't exist in local mode yet. Restored since:
+    // telegram-chat (TELEGRAM_CHAT_BADGE_V1) and invoices
+    // (CASHIER_UNPAID_BADGE_V1) below. visits/visit_services counts are still
+    // gone along with their NAV entries.
     try {
         const navCid = (window.CLINIC && window.CLINIC.id) || null;
         const scopeCid = (q) => navCid ? q.eq('company_id', navCid) : q;   // M1 — badge counts must match their clinic-scoped lists (RLS-bypass roles)
@@ -1074,6 +1076,24 @@ async function loadNavCounts() {
             if (!error && data) navCounts['telegram-chat'] = data.unread ?? 0;
         } catch (e) {
             console.warn('[nav counts] telegram:', e.message);
+        }
+    }
+    // CASHIER_UNPAID_BADGE_V1 — сколько счетов ещё ждут оплаты. Статусы — те же
+    // три, что server/services/domain/money.js::OUTSTANDING_STATUSES ('unpaid',
+    // 'partial', 'debt'): 'debt' обязан быть здесь — однажды он уже «исчезал» из
+    // дашборда, пока касса его считала (см. заголовок money.js). void/refunded
+    // не долг. Свой try — по той же причине, что у телеграма выше.
+    //
+    // НЕ scopeCid: у invoices в schema-registry нет фильтра company_id (локальный
+    // режим не мультиарендный), и обёртка превращала бы каждый опрос в 4xx.
+    if (isModuleAllowed('cashier-shifts')) {
+        try {
+            const iRes = await supabase.from('invoices')
+                .select('id', { count: 'exact', head: true })
+                .in('status', ['unpaid', 'partial', 'debt']);
+            if (!iRes.error) navCounts['cashier-shifts'] = iRes.count ?? 0;
+        } catch (e) {
+            console.warn('[nav counts] cashier:', e.message);
         }
     }
     renderSidebar();
