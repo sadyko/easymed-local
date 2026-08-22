@@ -36,7 +36,7 @@ import { nextRunAt, isInWindow, consentAppliesTo } from './update-schedule.js';
 // ##  DEVELOPMENT KEY — NOT THE PRODUCTION KEY. REPLACE BEFORE ANY CLINIC.  ##
 // ############################################################################
 const RELEASE_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAwns+Xg574uKieWFBvQWF2i2Qd4Iacc6dPTOBi7lM8n0=
+MCowBQYDK2VwAyEAjCh/fDySue8xTrMIdwxu4YoXV9qkmbDSpCM7BJdc+70=
 -----END PUBLIC KEY-----`;
 
 let _defaultReleaseKey = null;
