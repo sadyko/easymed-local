@@ -84,7 +84,38 @@ export function selectEntries(sourceDir) {
 // something to discover empirically on a build machine, so it is refused here,
 // before tar ever runs, by refusing to build at all if any selected entry
 // contains one.
+//
+// Narrowed to those two actual risks (link resolves to a DIRECTORY — the
+// recursion risk — or resolves OUTSIDE sourceDir — the leak risk), not every
+// symlink on sight: `npm ci` on Linux/macOS creates a real file symlink in
+// node_modules/.bin for every dependency that declares a "bin" entry —
+// bcryptjs does — pointing at a sibling file already inside the same tree.
+// That link can neither loop (it's not a directory) nor leak (its target is
+// already in the bundle), so it is not one of the two things this refusal
+// exists to catch. Flagging it anyway meant this project's own release build
+// could never once succeed on the ubuntu-latest CI runner — first found when
+// CI ran on Linux for the first time (Windows npm makes a .cmd shim, not a
+// symlink, so this never showed up building locally).
 // ---------------------------------------------------------------------------
+
+function isRiskySymlink(full, baseDir) {
+  let real;
+  try {
+    real = fs.realpathSync(full);   // follows the link to its ultimate target
+  } catch {
+    return true;   // broken link — cannot prove it's safe, so refuse rather than guess
+  }
+  const rel = path.relative(baseDir, real);
+  const escapesTree = rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel);
+  if (escapesTree) return true;
+  let st;
+  try {
+    st = fs.statSync(full);   // follows the link; throws only if it's already broken (handled above)
+  } catch {
+    return true;
+  }
+  return st.isDirectory();   // a directory link/junction — the recursion risk
+}
 
 function walkForSymlinks(dir, baseDir, found) {
   let items;
@@ -96,14 +127,14 @@ function walkForSymlinks(dir, baseDir, found) {
   for (const it of items) {
     const full = path.join(dir, it.name);
     if (it.isSymbolicLink()) {
-      found.push(path.relative(baseDir, full));
-      continue;   // never followed — see comment above
+      if (isRiskySymlink(full, baseDir)) found.push(path.relative(baseDir, full));
+      continue;   // never followed either way — see comment above
     }
     if (it.isDirectory()) walkForSymlinks(full, baseDir, found);
   }
 }
 
-/** Every symlink/junction found inside the selected entries, as paths relative to sourceDir. */
+/** Every risky symlink/junction found inside the selected entries, as paths relative to sourceDir. */
 export function findSymlinksInSource(sourceDir, entries) {
   const found = [];
   for (const entry of entries) {
@@ -115,7 +146,7 @@ export function findSymlinksInSource(sourceDir, entries) {
       continue;
     }
     if (st.isSymbolicLink()) {
-      found.push(entry);   // the allow-listed entry itself is a link
+      if (isRiskySymlink(full, sourceDir)) found.push(entry);   // the allow-listed entry itself is a risky link
       continue;
     }
     if (st.isDirectory()) walkForSymlinks(full, sourceDir, found);

@@ -29,6 +29,17 @@ const mk=t=>{const e=new F(t);if(e.tagName==='TEMPLATE'){e.content={firstChild:n
 globalThis.Node=F; globalThis.Event=class{constructor(t,o){this.type=t;Object.assign(this,o||{});}};
 globalThis.document={createElement:mk,createElementNS:(_n,t)=>mk(t),createTextNode:t=>new TX(t),head:mk('head'),body:mk('body'),documentElement:mk('html'),addEventListener(){},removeEventListener(){},getElementById(){return null;}};
 globalThis.window={location:{hostname:'localhost'},localStorage:{getItem:()=>null,setItem(){}},addEventListener(){}};
+// I18N_LOCALE_PIN_V1 — pins the admin UI language to 'ru' regardless of the
+// host OS locale. i18n.js's detect() checks localStorage.getItem('admin.lang')
+// (the bare global, NOT window.localStorage above) before ever falling back
+// to navigator.language/languages. This file's own assertions don't happen to
+// touch a translated string today, but ui.js's h() runs every string this
+// view renders through tr() regardless — so it is one OS-locale fallback
+// change away from doing exactly what activation/updates-view do, and is
+// pinned here too rather than left as a latent case of the same bug. Must be
+// set before the view import: i18n.js picks the language once, at its own
+// module-load time.
+globalThis.localStorage = { getItem: (k) => (k === 'admin.lang' ? 'ru' : null), setItem() {}, removeItem() {}, clear() {} };
 globalThis.MutationObserver=class{observe(){}disconnect(){}};
 globalThis.requestAnimationFrame=(fn)=>fn();
 

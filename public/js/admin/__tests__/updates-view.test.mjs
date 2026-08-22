@@ -68,6 +68,15 @@ const fakeLocalStorage = makeLocalStorage();
 // views/updates.js calls the bare global `localStorage`, same convention as
 // i18n.js — both must point at the SAME store as window.localStorage.
 globalThis.localStorage = fakeLocalStorage;
+// I18N_LOCALE_PIN_V1 — i18n.js's detect() also reads this same store, via
+// this same bare global, for its OWN key ('admin.lang') — before ever
+// falling back to navigator.language/languages. Pre-seeding it here pins the
+// UI language to 'ru' regardless of the host OS locale, so this file's many
+// assertions on rendered Russian strings hold on GitHub's English-locale
+// ubuntu-latest runner the same way they already do on a Russian-locale dev
+// machine. Must happen before the view import below: i18n.js picks the
+// language once, at its own module-load time.
+fakeLocalStorage.setItem('admin.lang', 'ru');
 globalThis.window = { location: { hostname: 'localhost' }, localStorage: fakeLocalStorage, addEventListener(){}, easymed: { state: { user: null } } };
 globalThis.MutationObserver=class{observe(){}disconnect(){}};
 globalThis.requestAnimationFrame=(fn)=>fn();

@@ -41,6 +41,16 @@ function mk(t){
 globalThis.Node=F; globalThis.Event=class{constructor(t,o){this.type=t;Object.assign(this,o||{});}};
 globalThis.document={createElement:mk,createElementNS:(_n,t)=>mk(t),createTextNode:t=>new TX(t),head:mk('head'),body:mk('body'),documentElement:mk('html'),addEventListener(){},removeEventListener(){},getElementById(){return null;}};
 globalThis.window={location:{hostname:'localhost'},localStorage:{getItem:()=>null,setItem(){}},addEventListener(){}};
+// I18N_LOCALE_PIN_V1 — pins the admin UI language to 'ru' regardless of the
+// host OS locale. i18n.js's detect() checks localStorage.getItem('admin.lang')
+// (the bare global, NOT window.localStorage above) before ever falling back
+// to navigator.language/languages — so without this, the view below renders
+// in whatever language the machine running the test defaults to: Russian on
+// this dev box, English on GitHub's ubuntu-latest runner, breaking every
+// assertion on a Russian string below there, identically, every run. Must be
+// set before the view import: i18n.js picks the language once, at its own
+// module-load time.
+globalThis.localStorage = { getItem: (k) => (k === 'admin.lang' ? 'ru' : null), setItem() {}, removeItem() {}, clear() {} };
 globalThis.MutationObserver=class{observe(){}disconnect(){}};
 globalThis.requestAnimationFrame=(fn)=>fn();
 

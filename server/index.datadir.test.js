@@ -10,7 +10,18 @@ test('with no environment variable, the data directory is <root>/data', () => {
   assert.equal(resolveDataDir({}, root), path.join(root, 'data'));
 });
 
-test('EASYMED_DATA_DIR wins when set', () => {
+// resolveDataDir uses Node's platform-native `path`, deliberately: this app
+// is installed only on clinic Windows machines (see the SUPERVISED_INSTALL_V1
+// comments below), so on the one platform it actually ships to, `path` IS
+// win32 semantics. A drive-letter value like 'C:\EasyMed\data' is only
+// "absolute" under win32 rules — under posix rules (what `path` resolves to
+// when this file itself runs on the ubuntu-latest CI runner) it is just a
+// relative-looking string that gets joined under root instead, so the literal
+// expectation below can never hold there. Skipped rather than rewritten for
+// posix, because posix is not a real target for this code — this asserts a
+// guarantee about the platform clinics actually run, and a passing-for-the-
+// wrong-reason posix version would prove nothing.
+test('EASYMED_DATA_DIR wins when set', { skip: process.platform !== 'win32' && 'drive-letter absolute-path detection is win32-only; this only ever runs on clinic Windows installs' }, () => {
   assert.equal(resolveDataDir({ EASYMED_DATA_DIR: 'C:\\EasyMed\\data' }, '/srv/easymed'), 'C:\\EasyMed\\data');
 });
 
@@ -61,7 +72,11 @@ test('a path that collides with an existing file fails with a message naming the
 // drive-letter path (D:\...) as absolute even when `root` is a *different*
 // drive (C:\...): the override must win outright, not get silently joined
 // under root.
-test('an absolute override on a different drive than root is honoured, not joined under root', () => {
+// Same win32-only reasoning as the skip above — path.isAbsolute('D:\\...')
+// is only true under win32 rules, which is what `path` resolves to on the
+// clinic Windows machines this ships to, but not on the ubuntu-latest runner
+// this file is also exercised on.
+test('an absolute override on a different drive than root is honoured, not joined under root', { skip: process.platform !== 'win32' && 'drive-letter absolute-path detection is win32-only; this only ever runs on clinic Windows installs' }, () => {
   assert.equal(
     resolveDataDir({ EASYMED_DATA_DIR: 'D:\\EasyMed\\data' }, 'C:\\some\\root'),
     'D:\\EasyMed\\data',
