@@ -48,6 +48,13 @@ const ALWAYS_ALLOWED_RPCS = new Set([
   // HTTP request — so this only ever governs whether the ADMIN can still
   // see the offer and say yes/no to it while locked.
   'update_approve', 'update_cancel',
+  // «Проверить обновления» — triggers an immediate check-in. The check-in is
+  // the very mechanism that renews a licence and delivers module grants, so
+  // for a locked clinic this button is the recovery path itself: an admin who
+  // just fixed the router (or just paid) presses it and gets unlocked NOW
+  // instead of waiting for the daily timer. Blocking it at 402 would be
+  // locking the clinic out of the one action that ends the lock.
+  'update_check_now',
 ]);
 
 export function isReadOnlyRpc(name) { return READ_ONLY_RPCS.has(name); }

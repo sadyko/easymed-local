@@ -21,7 +21,7 @@ import { saveLabResults } from './lab.js';   // LAB_SAVE_BATCH_V1
 import { cashierReport } from './cashier-report.js';   // CASHIER_REPORT_V1
 import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
 import { licenceStatus, licenceUnlock, licenceEnroll, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
-import { updateStatus, updateApprove, updateCancel } from './updates.js';   // UPDATE_DELIVERY_V1
+import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
 
 export const RPC = {
   get_clinic_by_slug:       (db, args, user) => getClinicBySlug(db, args, user),
@@ -181,6 +181,12 @@ export const RPC = {
   update_status:   (db, args, user) => updateStatus(db, args, user),
   update_approve:  (db, args, user) => updateApprove(db, args, user),
   update_cancel:   (db, args, user) => updateCancel(db, args, user),
+  // «Проверить обновления» — an immediate check-in on demand; also how a
+  // fresh module grant reaches the clinic without waiting a day. Same
+  // always-allowed reasoning as the rest of this block: the check-in is the
+  // very thing that can UNLOCK a locked clinic (licence renewal), so it must
+  // stay reachable through a lapse.
+  update_check_now: (db, args, user) => updateCheckNow(db, args, user),
 };
 
 export function getRpc(name) {

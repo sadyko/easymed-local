@@ -98,10 +98,17 @@ const jsonErr = (error, status = 400) => ({ ok: false, status, json: async () =>
 // -> repaint) behaves like the real thing instead of needing every test to
 // hand-author two disagreeing canned responses.
 let currentStatus, approveCalls, cancelCalls, statusCalls, approveShouldFail, statusShouldFail, lastApproveBody;
+// «Проверить обновления» — checkNowMutate stands in for what a real check-in
+// does server-side (a new offer lands, the licence moves) so the round trip
+// click -> check-in -> fresh status behaves like the real thing, same idea as
+// the approve/cancel mocks above.
+let checkNowCalls, checkNowShouldFail, checkNowMutate, licenceStatusData;
 
 function resetServer(initial) {
   currentStatus = JSON.parse(JSON.stringify(initial));
   approveCalls = 0; cancelCalls = 0; statusCalls = 0; approveShouldFail = false; statusShouldFail = false; lastApproveBody = null;
+  checkNowCalls = 0; checkNowShouldFail = false; checkNowMutate = null;
+  licenceStatusData = { state: 'ok', locked: false, reason: null, modules: [] };
 }
 
 globalThis.fetch = async (url, opts) => {
@@ -123,6 +130,15 @@ globalThis.fetch = async (url, opts) => {
     cancelCalls++;
     currentStatus = { ...currentStatus, approved: false, hour: null, scheduled_at: null };
     return jsonOk({ ok: true });
+  }
+  if (u.startsWith('/api/rpc/update_check_now')) {
+    checkNowCalls++;
+    if (checkNowShouldFail) return jsonErr({ message: 'boom' });
+    if (checkNowMutate) checkNowMutate();
+    return jsonOk({ ok: true, ...currentStatus });
+  }
+  if (u.startsWith('/api/rpc/licence_status')) {
+    return jsonOk(licenceStatusData);
   }
   return jsonOk({});
 };
@@ -361,4 +377,87 @@ test('первичная загрузка update_status падает (клини
   const root = mk('div');
   await assert.doesNotReject(() => renderUpdates(root));
   assert.match(textOf(root), /Не удалось загрузить статус обновления/, textOf(root));
+});
+
+// --- «Проверить обновления» -----------------------------------------------------
+
+const CALM = { current_version: '2.3.0', offer: null, approved: false, hour: null, scheduled_at: null, last_result: null };
+
+test('«Проверить обновления»: клик делает один check-in и сразу перерисовывает свежий статус', async () => {
+  resetServer(CALM);
+  fakeLocalStorage.setItem('em.updates.lastSeenVersion', '2.3.0');
+  const root = mk('div');
+  await renderUpdates(root);
+  assert.match(textOf(root), /У вас последняя версия/);
+
+  const btn = findButtonByText(root, /Проверить обновления/);
+  assert.ok(btn, 'админ должен видеть кнопку проверки');
+  // The "check-in" delivers a fresh offer — the SAME click must repaint it,
+  // never require a page reload or a second navigation to this screen.
+  checkNowMutate = () => { currentStatus = { ...currentStatus, offer: OFFER }; };
+  btn.click();
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.equal(checkNowCalls, 1);
+  assert.match(textOf(root), /Доступно обновление/);
+  assert.match(textOf(root), /2\.4\.0/);
+  assert.equal(btn.disabled, false, 'кнопка снова доступна для следующей проверки');
+});
+
+test('«Проверить обновления»: двойной клик не делает второй check-in', async () => {
+  resetServer(CALM);
+  fakeLocalStorage.setItem('em.updates.lastSeenVersion', '2.3.0');
+  const root = mk('div');
+  await renderUpdates(root);
+  const btn = findButtonByText(root, /Проверить обновления/);
+  btn.click();
+  btn.click();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(checkNowCalls, 1, 'повторный клик до ответа сервера — no-op');
+});
+
+test('«Проверить обновления»: не-админ кнопку не видит вовсе', async () => {
+  resetServer(CALM);
+  setUser(REGISTRAR);
+  fakeLocalStorage.setItem('em.updates.lastSeenVersion', '2.3.0');
+  const root = mk('div');
+  await renderUpdates(root);
+  assert.equal(findButtonByText(root, /Проверить обновления/), undefined,
+    'проверка — вендорское действие админа, как approve/cancel');
+});
+
+test('«Проверить обновления»: сбой проверки — кнопка снова активна и на экране объяснение', async () => {
+  resetServer(CALM);
+  fakeLocalStorage.setItem('em.updates.lastSeenVersion', '2.3.0');
+  const root = mk('div');
+  await renderUpdates(root);
+  const btn = findButtonByText(root, /Проверить обновления/);
+  checkNowShouldFail = true;
+  btn.click();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(checkNowCalls, 1);
+  assert.match(textOf(root), /Не удалось проверить обновления/);
+  assert.equal(btn.disabled, false, 'после сбоя можно пробовать снова');
+});
+
+test('«Проверить обновления»: check-in привёз изменение лицензии (выдан модуль) — экран готовит перезагрузку, а не тихую перерисовку', async () => {
+  resetServer(CALM);
+  fakeLocalStorage.setItem('em.updates.lastSeenVersion', '2.3.0');
+  // licence.js's module-level state is untouched in this harness (modules: []),
+  // so a licence_status answer naming a module IS a change.
+  licenceStatusData = { state: 'ok', locked: false, reason: null, modules: ['crm'] };
+  checkNowMutate = () => { currentStatus = { ...currentStatus, offer: OFFER }; };
+  const root = mk('div');
+  await renderUpdates(root);
+  const btn = findButtonByText(root, /Проверить обновления/);
+  btn.click();
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.equal(checkNowCalls, 1);
+  // The reload path must NOT paint the fetched offer — the whole app is about
+  // to re-read its licence; painting half-fresh state first would flash and
+  // then vanish. (location.reload itself is unreachable in this fake window —
+  // the view wraps it in try/catch by design, same as activation.js.)
+  assert.doesNotMatch(textOf(root), /Доступно обновление/,
+    'при смене лицензии экран уходит в перезагрузку, не в перерисовку');
 });

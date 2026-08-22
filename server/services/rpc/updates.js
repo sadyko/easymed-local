@@ -3,6 +3,7 @@ import path from 'node:path';
 import { hasAnyRole } from '../roles.js';
 import { getDataDir, getAppVersion } from '../control/config.js';
 import { nextRunAt, consentAppliesTo } from '../control/update-schedule.js';
+import { runCheckin } from '../control/checkin.js';
 
 // UPDATE_DELIVERY_V1 (docs/plans/2026-08-20-update-delivery.md, Task 4) — the
 // three RPCs the approval screen (a later task) calls. Registered in
@@ -132,6 +133,37 @@ export function updateApprove(db, args, user, { now = () => new Date() } = {}) {
   put(db, 'update_scheduled_at', scheduledAt.toISOString());
 
   return { ok: true, version: offer.version, hour, scheduled_at: scheduledAt.toISOString() };
+}
+
+/**
+ * «Проверить обновления» — one immediate check-in instead of waiting for the
+ * daily timer. The check-in is also what renews the licence and delivers
+ * module grants, so this button doubles as "the vendor just granted us
+ * something — fetch it now", which is why the screen re-reads licence_status
+ * after calling this.
+ *
+ * runImpl is a test seam (the RPC signature is (db, args, user), so the
+ * network-touching implementation cannot be injected any other way — same
+ * reasoning as licence.js's enrollImpl).
+ */
+export async function updateCheckNow(db, args, user, { runImpl = runCheckin } = {}) {
+  if (!hasAnyRole(user, ['admin'])) {
+    throw new RpcError('Только администратор может проверять обновления.', 403);
+  }
+  // runCheckin is documented never to reject and guards its own re-entrancy
+  // (a scheduled run already in flight turns this call into a no-op). The
+  // backstop try/catch is the same "back up a guarantee, don't just assume
+  // it" idiom checkin.js itself applies to buildStatsPayload: if the promise
+  // is ever broken, the admin gets an honest ok:false instead of a 500 —
+  // and still gets the current status, which needs nothing from the network.
+  let ok = true;
+  try {
+    await runImpl(db, getDataDir());
+  } catch (e) {
+    console.warn('[updates] manual check-in failed:', e && e.message);
+    ok = false;
+  }
+  return { ok, ...updateStatus(db, args, user) };
 }
 
 /** Changeable and cancellable right up until it runs — clears the approval, not the offer itself. */

@@ -396,7 +396,7 @@ test('a paid but offline clinic is NOT told it owes money', async (t) => {
 // "single most valuable test" reasoning as the licence RPCs above — a name
 // mismatch between this file, gate.js and rpc/index.js would strand a locked
 // clinic behind its own escape hatch and nothing else would catch it.
-test('all three update RPCs stay reachable through the real HTTP route on a locked clinic', async (t) => {
+test('all four update RPCs stay reachable through the real HTTP route on a locked clinic', async (t) => {
   const { app, db, password } = harness({ validUntil: '2020-01-01T00:00:00Z' });
   db.prepare(`INSERT INTO control_state (key, value) VALUES ('update_offer', ?)`)
     .run(JSON.stringify({ version: '2.4.0', notes_ru: 'Тест', url: '/x.tar.gz', sha256: 'abc', manifest: {} }));
@@ -415,6 +415,18 @@ test('all three update RPCs stay reachable through the real HTTP route on a lock
   const cancel = await post(server, cookie, '/api/rpc/update_cancel', {});
   assert.notEqual(cancel.status, 402, 'update_cancel must answer even while locked');
   assert.equal(cancel.status, 200);
+
+  // update_check_now is the recovery path itself (the check-in it triggers is
+  // what renews the licence) — a 402 here would lock the clinic out of the one
+  // action that ends the lock. Safe to call for real in this harness: its
+  // control.json has no install_token, so runCheckin's "no token, no call"
+  // rule returns before any network is touched.
+  const check = await post(server, cookie, '/api/rpc/update_check_now', {});
+  assert.notEqual(check.status, 402, 'update_check_now must answer even while locked');
+  assert.equal(check.status, 200);
+  const checkBody = await check.json();
+  assert.equal(checkBody.data.ok, true);
+  assert.equal(checkBody.data.offer.version, '2.4.0', 'the fresh status rides back on the same call');
 });
 
 // Same ADMIN_DOCTOR_V1-class pinning as licence_unlock's own pair of tests

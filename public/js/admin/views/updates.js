@@ -22,6 +22,7 @@
 import { h, Icon, clear, toast } from '../ui.js';
 import { tr } from '../i18n.js';
 import { supabase } from '../../supabase.js';
+import { licenceState } from '../licence.js';
 import {
     scheduleChoices, resolveHour, isValidHour, offerIsCurrent,
     formatScheduled, updateOutcomeMessage, whatsNewState,
@@ -80,12 +81,33 @@ export async function renderUpdates(root) {
     clear(root);
     const wrap = h('div', { class: 'fade-in upd-wrap' });
     root.appendChild(wrap);
-    wrap.appendChild(h('div', { class: 'page-head' },
-        h('div', null,
-            h('h1', { class: 'page-title' }, 'Обновления'),
-            h('p', { class: 'page-subtitle' }, 'Версия системы и установка обновлений.'))));
 
     const body = h('div', { class: 'upd-body' });
+
+    // «Проверить обновления» — one immediate check-in instead of waiting for
+    // the daily timer. The same check-in also renews the licence and delivers
+    // module grants (see rpc/updates.js's updateCheckNow), which is why a
+    // successful check re-reads licence_status below: if the vendor just
+    // granted a module, the whole app must re-read its licence — a reload,
+    // the same way activation.js reloads after a successful unlock — instead
+    // of leaving the sidebar lying until the next full page load.
+    // Admin-only in the UI to match the server's own hasAnyRole gate; the
+    // server re-checks regardless, this is the same politeness as the
+    // approve/cancel buttons above it.
+    const head = h('div', { class: 'page-head' },
+        h('div', null,
+            h('h1', { class: 'page-title' }, 'Обновления'),
+            h('p', { class: 'page-subtitle' }, 'Версия системы и установка обновлений.')));
+    if (isAdminActor()) {
+        const checkStatus = h('span', { class: 'upd-check-status muted', role: 'status' });
+        const checkBtn = h('button', {
+            type: 'button', class: 'btn btn-outline upd-check-btn',
+            onclick: () => checkNow(body, checkBtn, checkStatus),
+        }, Icon('Refresh', { size: 15 }), ' ', 'Проверить обновления');
+        head.appendChild(h('div', { class: 'upd-check' }, checkBtn, checkStatus));
+    }
+    wrap.appendChild(head);
+
     wrap.appendChild(body);
     body.appendChild(h('div', { class: 'empty' }, 'Загрузка…'));
 
@@ -101,6 +123,53 @@ export async function renderUpdates(root) {
         return;
     }
     paint(body, status);
+}
+
+// The button's whole flow: check in now, then decide whether the LICENCE
+// moved (module granted, subscription renewed, lock lifted) — that needs a
+// reload so every part of the app re-reads it — or only the update status
+// moved, which this screen can repaint in place.
+async function checkNow(body, btn, statusEl) {
+    // Same explicit re-entrancy guard as buildScheduleControls' approve():
+    // `disabled` stops a real pointer click but not a second direct call
+    // landing before the browser reflects the attribute.
+    if (btn.disabled) return;
+    btn.disabled = true;
+    statusEl.textContent = tr('Проверка…');
+    try {
+        const { data, error } = await supabase.rpc('update_check_now', {});
+        if (error) throw error;
+        // ok:false is the RPC's honest "the check-in itself broke" (see
+        // updateCheckNow's backstop) — the status fields beside it are still
+        // current, but the admin must not read "Проверка выполнена" off a
+        // check that never reached the vendor.
+        if (data && data.ok === false) throw new Error('checkin failed');
+
+        const before = licenceState();
+        const { data: lic } = await supabase.rpc('licence_status', {});
+        const changed = lic && (
+            JSON.stringify(Array.isArray(lic.modules) ? lic.modules : []) !==
+            JSON.stringify(Array.isArray(before.modules) ? before.modules : [])
+            || (lic.locked === true) !== (before.locked === true)
+        );
+        if (changed) {
+            statusEl.textContent = '';
+            toast(tr('Лицензия обновлена — страница перезагрузится.'), 'ok');
+            // Same short readable-before-reload delay as activation.js's
+            // unlock path — not a mechanism anything depends on.
+            setTimeout(() => { try { location.reload(); } catch (e) {} }, 1200);
+            return;
+        }
+
+        statusEl.textContent = '';
+        toast(tr('Проверка выполнена.'), 'ok');
+        refreshBanner();
+        paint(body, data || {});
+        btn.disabled = false;
+    } catch (e) {
+        btn.disabled = false;
+        statusEl.textContent = tr('Не удалось проверить обновления. Попробуйте ещё раз.');
+    }
 }
 
 function paint(body, status) {

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { setDataDir, setAppVersion } from '../control/config.js';
-import { updateStatus, updateApprove, updateCancel, RpcError } from './updates.js';
+import { updateStatus, updateApprove, updateCancel, updateCheckNow, RpcError } from './updates.js';
 
 const admin = { id: 1, role: 'admin' };
 const registrar = { id: 2, role: 'registrar' };
@@ -197,4 +197,50 @@ test('update_cancel: cancelling with nothing approved is a harmless no-op', () =
   const db = freshDb();
   const r = updateCancel(db, {}, admin);
   assert.equal(r.ok, true);
+});
+
+// --- update_check_now ----------------------------------------------------------
+
+test('update_check_now: a plain registrar is refused (403) and the check-in never runs', async () => {
+  const db = freshDb();
+  let ran = 0;
+  await assert.rejects(
+    () => updateCheckNow(db, {}, registrar, { runImpl: async () => { ran++; } }),
+    (e) => e instanceof RpcError && e.status === 403,
+  );
+  assert.equal(ran, 0, 'the role guard must sit BEFORE the network-touching call');
+});
+
+test('update_check_now: runs one check-in against the real data dir and returns the fresh status', async () => {
+  const db = freshDb();
+  storeOffer(db, OFFER);
+  const calls = [];
+  // The seam mutates state the way a real check-in would (a new offer landed),
+  // proving the returned status is read AFTER the check-in, not before.
+  const r = await updateCheckNow(db, {}, admin, {
+    runImpl: async (gotDb, gotDir) => {
+      calls.push({ gotDb, gotDir });
+      storeOffer(db, { ...OFFER, version: '2.5.0' });
+    },
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].gotDb, db);
+  assert.equal(typeof calls[0].gotDir, 'string');
+  assert.equal(r.ok, true);
+  assert.equal(r.offer.version, '2.5.0', 'status must reflect what the check-in just fetched');
+  assert.equal(r.current_version, '2.3.0');
+});
+
+test('update_check_now: extra_roles admin passes the guard (ADMIN_DOCTOR_V1)', async () => {
+  const db = freshDb();
+  const r = await updateCheckNow(db, {}, doctorAdmin, { runImpl: async () => {} });
+  assert.equal(r.ok, true);
+});
+
+test('update_check_now: a broken check-in reports ok:false but still returns the status', async () => {
+  const db = freshDb();
+  storeOffer(db, OFFER);
+  const r = await updateCheckNow(db, {}, admin, { runImpl: async () => { throw new Error('boom'); } });
+  assert.equal(r.ok, false, 'the admin must not read success off a check that never happened');
+  assert.deepEqual(r.offer, OFFER, 'the local status needs nothing from the network');
 });
