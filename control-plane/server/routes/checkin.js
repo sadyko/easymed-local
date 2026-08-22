@@ -22,7 +22,7 @@ export function checkinRoutes(db) {
   const r = Router();
 
   r.post('/', (req, res) => {
-    const { install_token, version, fingerprint, module_requests } = req.body || {};
+    const { install_token, version, fingerprint, module_requests, stats } = req.body || {};
 
     // signLicence runs INSIDE checkIn(), but only AFTER the check-in itself
     // has already committed (see checkIn's own doc comment) — so if it throws
@@ -31,11 +31,17 @@ export function checkinRoutes(db) {
     // hands the error to app.js's error middleware, which answers 500 without
     // echoing anything request-shaped — the same path as enroll.js's own
     // signing failure.
+    //
+    // `stats` (STATS_V1) passes straight through, untouched, exactly like
+    // `module_requests` above — checkIn()/normaliseStats() do all the actual
+    // validation. An older clinic that never sends this field at all leaves
+    // it `undefined` here, same as any other optional field.
     const result = checkIn(db, {
       installToken: install_token,
       version,
       fingerprint,
       moduleRequests: module_requests,
+      stats,
     }, { signLicence });
 
     if (!result) {

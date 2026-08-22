@@ -137,3 +137,39 @@ export function subscriptionUntilPayload(rawValue) {
   const v = typeof rawValue === 'string' ? rawValue.trim() : '';
   return v === '' ? null : v;
 }
+
+// --- STATS_V1 (docs/plans/2026-08-22-statistics.md) -------------------------
+//
+// The Statistics card: a checkbox list editing collect_set, and the latest
+// reported numbers. Same split as everything above — the view (panel-clinic-
+// detail.js) only calls these and paints the result.
+
+// Which of the CURRENT catalogue's counter names should render checked, given
+// a clinic's own collect_set. null/undefined means "never touched" — the
+// server-side default is every known counter (see services/checkin.js's
+// resolveCollectSet), so the checkbox list must show that same default as
+// all-checked, not all-UNchecked — an empty picklist would look identical to
+// "collect nothing", which is a real, different, explicit choice (a real
+// array, even an empty one). Filtered against counterNames on the way in too:
+// a stale collect_set entry naming a since-removed counter must not produce
+// a checkbox for a row that no longer exists in the list being rendered.
+export function counterCheckedState(counterNames, collectSet) {
+  const names = Array.isArray(counterNames) ? counterNames : [];
+  if (collectSet === null || collectSet === undefined) return new Set(names);
+  const picked = Array.isArray(collectSet) ? collectSet : [];
+  return new Set(picked.filter((n) => names.includes(n)));
+}
+
+// Turns a clinic's latest_stats object (from GET /admin/clinics/:id) plus the
+// current /admin/counters catalogue into rows ready to render, sorted by
+// name for a stable display order. A reported name the catalogue no longer
+// has (removed in a later release — see this task's own attack list) still
+// gets a row: its raw key stands in for the missing describe text, rather
+// than the row vanishing or the view throwing on a lookup miss.
+export function statsRows(latestStats, counters) {
+  const describeByName = new Map((Array.isArray(counters) ? counters : []).map((c) => [c.name, c.describe]));
+  const stats = latestStats && typeof latestStats === 'object' ? latestStats : {};
+  return Object.keys(stats)
+    .sort()
+    .map((name) => ({ name, describe: describeByName.get(name) || name, value: stats[name] }));
+}

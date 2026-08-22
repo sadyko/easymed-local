@@ -27,6 +27,14 @@
 // out of this function without being able to un-record anything.
 
 import { SELLABLE_MODULES } from '../../../server/services/rpc/licence.js';
+// STATS_V1 (docs/plans/2026-08-22-statistics.md) — the ONE vocabulary of
+// counter names, imported rather than re-typed. Same drift trap this repo
+// has already been bitten by once (see this file's own SELLABLE_MODULES
+// import, and metrics.js's own header): if the vendor's picklist and the
+// clinic's own catalogue could ever disagree on what a name means, that
+// disagreement would be invisible until a clinic reported a number under a
+// name the vendor never actually offered.
+import { COUNTER_NAMES } from '../../../server/services/control/metrics.js';
 
 // Advisory bounds, mirroring enrollment.js's own MAX_FINGERPRINT_LEN (same
 // reasoning: these are evidence, not credentials, so an absurd value is
@@ -36,6 +44,12 @@ import { SELLABLE_MODULES } from '../../../server/services/rpc/licence.js';
 const MAX_VERSION_LEN = 64;
 const MAX_FINGERPRINT_LEN = 256;
 const MAX_REQUESTED_AT_LEN = 64;
+
+// STATS_V1 — a bound on how many stats keys a single check-in can carry,
+// mirroring normaliseModuleRequests' own reasoning: this is a backstop
+// against a hostile or buggy caller, not a real limit (COUNTER_NAMES itself
+// is a small, fixed catalogue today).
+const MAX_STATS_KEYS = 50;
 
 function normaliseToken(token) {
   return typeof token === 'string' && token.length > 0 ? token : null;
@@ -110,6 +124,53 @@ function parseDateOnly(value) {
   return Number.isNaN(dt.getTime()) ? null : dt;
 }
 
+// STATS_V1 — turns clinics.collect_set (NULL, valid JSON, or hand-edited
+// junk) into the actual list of names to hand back as `collect`. NULL is the
+// documented default (migrations/003_collect_set.sql: "the default set"),
+// and so is anything this column could never legitimately contain — a
+// corrupt value must fail OPEN to the default catalogue, never 500 a
+// check-in over a bad column value the clinic had no part in writing.
+// Filtered against the CURRENT COUNTER_NAMES on the way out, too: a name
+// stored while it still existed but since removed from the catalogue would
+// otherwise instruct an old install to keep trying to collect something
+// that no longer means anything.
+function resolveCollectSet(rawCollectSet) {
+  if (rawCollectSet === null || rawCollectSet === undefined) return COUNTER_NAMES.slice();
+  let parsed;
+  try {
+    parsed = JSON.parse(rawCollectSet);
+  } catch {
+    return COUNTER_NAMES.slice(); // hand-corrupted column — fall back to the default, not a crash
+  }
+  if (!Array.isArray(parsed)) return COUNTER_NAMES.slice();
+  return parsed.filter((n) => typeof n === 'string' && COUNTER_NAMES.includes(n));
+}
+
+// STATS_V1 — the incoming `stats` object, cut down to exactly what the
+// no-PII guarantee promises: known catalogue keys, finite numbers, a bounded
+// count. Never throws, and never fails the check-in over a garbage value —
+// "a malformed stat costs a data point; a rejected check-in costs a licence
+// renewal" (this task's own instruction). Deliberately NOT scoped to the
+// clinic's own collect_set: a counter the vendor un-ticked since the
+// clinic's last check-in is still a real, known name, and rejecting it here
+// would only throw away a harmless, already-computed number for no security
+// benefit (buildStatsPayload — the clinic side — is what enforces "the panel
+// can never send a query"; this side's job is "never store garbage").
+function normaliseStats(input) {
+  const out = {};
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return out; // wrong shape entirely — dropped, not fatal
+  let count = 0;
+  for (const key of Object.keys(input)) {
+    if (count >= MAX_STATS_KEYS) break;
+    if (!COUNTER_NAMES.includes(key)) continue; // unknown or since-removed counter — dropped, not fatal
+    const value = Number(input[key]);
+    if (!Number.isFinite(value)) continue; // NaN/Infinity/non-numeric — dropped
+    out[key] = value;
+    count++;
+  }
+  return out;
+}
+
 // Rule 5 — re-arm only if entitled. subscription_until is inclusive of the
 // day itself: "paid until 2026-08-21" means still paid ON the 21st, not only
 // on the days strictly before it — only a date strictly BEFORE today has
@@ -136,24 +197,32 @@ function isEntitled(subscription, subscriptionUntil, now = new Date()) {
  * @param {*} [args.version]
  * @param {*} [args.fingerprint]
  * @param {*} [args.moduleRequests]
+ * @param {*} [args.stats] STATS_V1 — the clinic's reported counters, `{ [name]: number }`. Optional forever: an
+ *   older clinic that never sends this field at all must check in exactly as it always has.
  * @param {object} [hooks]
  * @param {function({clinicId:string, clinicName:string, modules:string[]}): {payload:object, sig:string}} [hooks.signLicence]
  *   Called ONLY when the clinic is currently entitled to a fresh licence
  *   (rule 5), and ONLY after the check-in below has already committed (rule
  *   2) — if it throws, the throw propagates straight to the caller, but the
  *   checkins row (and everything else this call wrote) is already durable.
- * @returns {{licence: object|null, subscription: 'active'|'unpaid', collect: []} | null}
+ * @returns {{licence: object|null, subscription: 'active'|'unpaid', collect: string[]} | null}
  *   null means unknown, inactive, or malformed token (rule 1) — the caller
  *   (routes/checkin.js) turns that into ONE generic 401, indistinguishable
- *   from the outside.
+ *   from the outside. `collect` (STATS_V1) is this clinic's collect_set, or
+ *   the code-level default (every COUNTER_NAMES) when it has never been set.
  */
-export function checkIn(db, { installToken, version, fingerprint, moduleRequests } = {}, { signLicence } = {}) {
+export function checkIn(db, { installToken, version, fingerprint, moduleRequests, stats } = {}, { signLicence } = {}) {
   const token = normaliseToken(installToken);
   if (!token) return null; // malformed/missing — never worth a DB round-trip, same outward shape as "unknown"
 
   const normVersion = normaliseAdvisory(version, MAX_VERSION_LEN);
   const normFingerprint = normaliseAdvisory(fingerprint, MAX_FINGERPRINT_LEN);
   const requests = normaliseModuleRequests(moduleRequests);
+  // STATS_V1 — normalised OUTSIDE the transaction, same as `requests` above:
+  // it never touches the database itself, so there is nothing here that
+  // needs transactional atomicity, only the same "never throw, never fail
+  // the call" guarantee normaliseModuleRequests already gives.
+  const normStats = normaliseStats(stats);
 
   // ATOMICITY — as with enrollment.js's own transaction, this is not about
   // concurrent-request locking: better-sqlite3 is fully synchronous and Node
@@ -164,7 +233,7 @@ export function checkIn(db, { installToken, version, fingerprint, moduleRequests
   // all — never a checkins row with no matching last_seen_at update.
   const txn = db.transaction(() => {
     const clinic = db.prepare(
-      `SELECT clinic_id, name, subscription, subscription_until, last_fingerprint
+      `SELECT clinic_id, name, subscription, subscription_until, last_fingerprint, collect_set
        FROM clinics WHERE install_token = ? AND active = 1`
     ).get(token);
     // Rule 1 — unknown, inactive, and (handled above) malformed tokens are
@@ -185,11 +254,21 @@ export function checkIn(db, { installToken, version, fingerprint, moduleRequests
     // checkIn's own doc comment: signLicence runs only AFTER this whole
     // transaction has returned, so a clinic whose licence fails to sign must
     // still show up here.
+    // STATS_V1 — `stats` merged into the SAME payload object as
+    // module_requests/fingerprint_changed, not written as a second update:
+    // this row is written once, so "merge, don't clobber" means building the
+    // whole object in one place, never overwriting an earlier write to this
+    // same row. Present even when empty (an old clinic that never sends
+    // `stats` at all, or one that sent nothing usable) so `stats` in a
+    // payload is always a reliable, present key — see routes/admin.js's
+    // latestStats(), which distinguishes "carried stats" by non-empty keys,
+    // not by the key's mere presence.
     db.prepare(
       `INSERT INTO checkins (clinic_id, version, fingerprint, payload) VALUES (?, ?, ?, ?)`
     ).run(clinic.clinic_id, normVersion, normFingerprint, JSON.stringify({
       module_requests: requests,
       fingerprint_changed: fingerprintChanged,
+      stats: normStats,
     }));
 
     db.prepare(
@@ -224,6 +303,7 @@ export function checkIn(db, { installToken, version, fingerprint, moduleRequests
       subscription: clinic.subscription,
       subscriptionUntil: clinic.subscription_until,
       modules,
+      collectSet: clinic.collect_set,
     };
   });
 
@@ -248,9 +328,9 @@ export function checkIn(db, { installToken, version, fingerprint, moduleRequests
     // value here would show the clinic "active" with no fresh licence and no
     // clue why, instead of the money wording rule 5 exists to trigger.
     subscription: eligible ? 'active' : 'unpaid',
-    // Deliberately unused — reserved for the statistics plan (Plan 2). Do not
-    // build statistics collection here; this is just the shape the field will
-    // eventually carry.
-    collect: [],
+    // STATS_V1 — resolved from the clinic's own collect_set, or the
+    // code-level default (every COUNTER_NAMES) when it has never been set or
+    // was hand-corrupted. See resolveCollectSet's own header.
+    collect: resolveCollectSet(recorded.collectSet),
   };
 }

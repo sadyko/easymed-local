@@ -65,6 +65,10 @@ export const cp = {
   retire: (id) => request('POST', `/admin/clinics/${encodeURIComponent(id)}/retire`, {}),
   unlockCode: (id, challenge) => request('POST', `/admin/clinics/${encodeURIComponent(id)}/unlock-code`, { challenge }),
 
+  // STATS_V1 (docs/plans/2026-08-22-statistics.md)
+  counters: () => request('GET', '/admin/counters'),
+  setCollect: (id, names) => request('POST', `/admin/clinics/${encodeURIComponent(id)}/collect`, { names }),
+
   requests: () => request('GET', '/admin/requests'),
   grantRequest: (id) => request('POST', `/admin/requests/${encodeURIComponent(id)}/grant`, {}),
 };

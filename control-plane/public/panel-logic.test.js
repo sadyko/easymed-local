@@ -12,6 +12,8 @@ import {
   subscriptionBadge,
   codeGroups,
   subscriptionUntilPayload,
+  counterCheckedState,
+  statsRows,
 } from './panel-logic.js';
 
 // --- lastSeenSeverity --------------------------------------------------------
@@ -197,4 +199,63 @@ test('subscriptionUntilPayload: an empty date input means "no end date" (null), 
 
 test('subscriptionUntilPayload: a real date passes through untouched', () => {
   assert.equal(subscriptionUntilPayload('2026-08-22'), '2026-08-22');
+});
+
+// --- STATS_V1: counterCheckedState -------------------------------------------
+
+const ALL_COUNTERS = ['errors_24h', 'patients_total', 'visits_today'];
+
+test('counterCheckedState: null/undefined collect_set (never touched) checks EVERY current counter — the default', () => {
+  assert.deepEqual(counterCheckedState(ALL_COUNTERS, null), new Set(ALL_COUNTERS));
+  assert.deepEqual(counterCheckedState(ALL_COUNTERS, undefined), new Set(ALL_COUNTERS));
+});
+
+test('counterCheckedState: an explicit empty array means "collect nothing" — none checked, not the default', () => {
+  assert.deepEqual(counterCheckedState(ALL_COUNTERS, []), new Set());
+});
+
+test('counterCheckedState: a real subset checks exactly those names', () => {
+  assert.deepEqual(counterCheckedState(ALL_COUNTERS, ['patients_total']), new Set(['patients_total']));
+});
+
+test('counterCheckedState: a stale name no longer in the current catalogue is silently dropped, not a phantom checkbox', () => {
+  assert.deepEqual(
+    counterCheckedState(ALL_COUNTERS, ['patients_total', 'a_counter_removed_since']),
+    new Set(['patients_total']),
+  );
+});
+
+test('counterCheckedState: a malformed counterNames list never throws', () => {
+  assert.doesNotThrow(() => counterCheckedState(undefined, ['patients_total']));
+  assert.deepEqual(counterCheckedState(undefined, ['patients_total']), new Set());
+});
+
+// --- STATS_V1: statsRows ------------------------------------------------------
+
+test('statsRows: empty/never-reported input yields no rows, never a throw', () => {
+  assert.deepEqual(statsRows(null, []), []);
+  assert.deepEqual(statsRows(undefined, []), []);
+  assert.deepEqual(statsRows({}, []), []);
+});
+
+test('statsRows: attaches the describe text from the counters catalogue, sorted by name', () => {
+  const counters = [
+    { name: 'visits_today', describe: 'Visits today.' },
+    { name: 'patients_total', describe: 'Total patients.' },
+  ];
+  const rows = statsRows({ visits_today: 3, patients_total: 12 }, counters);
+  assert.deepEqual(rows, [
+    { name: 'patients_total', describe: 'Total patients.', value: 12 },
+    { name: 'visits_today', describe: 'Visits today.', value: 3 },
+  ]);
+});
+
+test('statsRows: a reported name missing from the current catalogue (removed in a later release) still gets a row, labelled with its raw key', () => {
+  const rows = statsRows({ a_counter_removed_since: 42 }, [{ name: 'patients_total', describe: 'Total patients.' }]);
+  assert.deepEqual(rows, [{ name: 'a_counter_removed_since', describe: 'a_counter_removed_since', value: 42 }]);
+});
+
+test('statsRows: a missing/malformed counters list never throws — every row falls back to its raw key', () => {
+  assert.doesNotThrow(() => statsRows({ patients_total: 1 }, undefined));
+  assert.deepEqual(statsRows({ patients_total: 1 }, undefined), [{ name: 'patients_total', describe: 'patients_total', value: 1 }]);
 });

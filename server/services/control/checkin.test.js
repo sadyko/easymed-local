@@ -11,6 +11,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { canonical } from './canonical.js';
 import { controlState, __setPublicKeyForTests as __setStatePublicKeyForTests } from './state.js';
+import { COUNTER_NAMES } from './metrics.js';
 import {
   runCheckin,
   scheduleCheckin,
@@ -28,6 +29,7 @@ import { openDb as openCpDb } from '../../../control-plane/server/db/connection.
 import { migrate as migrateCp } from '../../../control-plane/server/db/migrate.js';
 import { createEnrollmentCode, redeemEnrollmentCode } from '../../../control-plane/server/services/enrollment.js';
 import { createApp as createCpApp } from '../../../control-plane/server/app.js';
+import { hashPassword } from '../../../control-plane/server/services/vendor-auth.js';
 
 // --- test harness ------------------------------------------------------------
 //
@@ -549,6 +551,113 @@ test('scheduleCheckin arms unref\'d timers and never calls run before the delay 
   }
 });
 
+// --- Task 3 (docs/plans/2026-08-22-statistics.md): remembering the vendor's
+//     collect list, and reporting stats from it on the NEXT check-in --------
+
+test('a collect array in the response is remembered in control_state (stats_collect), for the next check-in to read', async (t) => {
+  const { dir, db } = workspace();
+  const { server, endpoint } = await fakeServer(
+    jsonHandler(200, { licence: null, subscription: 'active', collect: ['patients_total', 'visits_today'] }),
+  );
+  t.after(() => server.close());
+
+  await runCheckin(db, dir, { endpoint });
+
+  const stored = db.prepare("SELECT value FROM control_state WHERE key = 'stats_collect'").get();
+  assert.ok(stored, 'the collect list must be persisted so the NEXT check-in can read it');
+  assert.deepEqual(JSON.parse(stored.value), ['patients_total', 'visits_today']);
+});
+
+test('storing the collect list drops non-strings and caps the length, rather than trusting the wire', async (t) => {
+  const { dir, db } = workspace();
+  const oversized = Array.from({ length: 60 }, (_, i) => `counter_${i}`);
+  const mixed = [...oversized, 123, null, { not: 'a string' }, true];
+  const { server, endpoint } = await fakeServer(
+    jsonHandler(200, { licence: null, subscription: 'active', collect: mixed }),
+  );
+  t.after(() => server.close());
+
+  await runCheckin(db, dir, { endpoint });
+
+  const stored = JSON.parse(db.prepare("SELECT value FROM control_state WHERE key = 'stats_collect'").get().value);
+  assert.equal(stored.length, 50, 'the stored list must be capped at 50 names');
+  assert.ok(stored.every((n) => typeof n === 'string'), 'every stored entry must be a string — no number/null/object ever written');
+  assert.deepEqual(stored, oversized.slice(0, 50));
+});
+
+test('a non-array collect field (missing, or the wrong shape) leaves any previously-stored collect list untouched', async (t) => {
+  const { dir, db } = workspace();
+  db.prepare(`INSERT INTO control_state (key, value) VALUES ('stats_collect', ?)`).run(JSON.stringify(['patients_total']));
+
+  for (const bogus of [undefined, 'not-an-array', 42, { also: 'not an array' }]) {
+    const body = { licence: null, subscription: 'active', collect: bogus };
+    if (bogus === undefined) delete body.collect;
+    const { server, endpoint } = await fakeServer(jsonHandler(200, body));
+    await runCheckin(db, dir, { endpoint });
+    server.close();
+  }
+
+  const stored = JSON.parse(db.prepare("SELECT value FROM control_state WHERE key = 'stats_collect'").get().value);
+  assert.deepEqual(stored, ['patients_total'], 'a malformed/missing collect field must never overwrite a good, previously-learned list');
+});
+
+test('the next check-in builds and sends stats from the collect list learned on the previous one', async (t) => {
+  const { dir, db } = workspace();
+
+  // Check-in #1: learns the collect list. Nothing was stored before this
+  // call, so stats must go out empty — there is nothing to report yet.
+  const { server: server1, endpoint: endpoint1 } = await fakeServer((req, res, body) => {
+    assert.deepEqual(JSON.parse(body).stats, {}, 'the very first check-in has nothing stored yet, so stats must be empty');
+    jsonHandler(200, { licence: null, subscription: 'active', collect: ['patients_total'] })(req, res);
+  });
+  await runCheckin(db, dir, { endpoint: endpoint1 });
+  server1.close();
+
+  // A real patient row for patients_total to actually count.
+  db.prepare("INSERT INTO patients (full_name) VALUES ('A'), ('B')").run();
+
+  // Check-in #2: reports patients_total, and ONLY patients_total — the
+  // catalogue's other names were never in the learned collect list.
+  const { server: server2, endpoint: endpoint2 } = await fakeServer((req, res, body) => {
+    const parsed = JSON.parse(body);
+    assert.deepEqual(parsed.stats, { patients_total: 2 });
+    jsonHandler(200, { licence: null, subscription: 'active', collect: ['patients_total'] })(req, res);
+  });
+  await runCheckin(db, dir, { endpoint: endpoint2 });
+  server2.close();
+});
+
+test('a stats builder that throws never blocks the check-in — the licence still renews (licensing outranks telemetry)', async (t) => {
+  const { dir, db } = workspace();
+  const licence = signedLicence();
+
+  const { server, endpoint } = await fakeServer((req, res, body) => {
+    const parsed = JSON.parse(body);
+    assert.equal(typeof parsed.stats, 'object', 'a thrown builder must still leave `stats` as a safe, sendable value, never absent-and-crashing');
+    jsonHandler(200, { licence, subscription: 'active', collect: [] })(req, res);
+  });
+  t.after(() => server.close());
+
+  const throwingBuilder = () => { throw new Error('catalogue exploded'); };
+  await assert.doesNotReject(runCheckin(db, dir, { endpoint, buildStatsPayload: throwingBuilder }));
+
+  assert.deepEqual(JSON.parse(readText(path.join(dir, 'licence.dat'))), licence,
+    'THE RULE THAT OUTRANKS EVERYTHING — a throwing stats catalogue must never cost the clinic its licence renewal');
+});
+
+test('a hand-corrupted stats_collect value in control_state is ignored, not a crash — falls back to sending no names', async (t) => {
+  const { dir, db } = workspace();
+  db.prepare(`INSERT INTO control_state (key, value) VALUES ('stats_collect', 'not json')`).run();
+
+  const { server, endpoint } = await fakeServer((req, res, body) => {
+    assert.deepEqual(JSON.parse(body).stats, {}, 'corrupt stored names must fall back to an empty request, never a throw');
+    jsonHandler(200, { licence: null, subscription: 'active', collect: [] })(req, res);
+  });
+  t.after(() => server.close());
+
+  await assert.doesNotReject(runCheckin(db, dir, { endpoint }));
+});
+
 // --- acceptance: real control plane, end to end -----------------------------
 
 test('acceptance: a module granted in the control plane reaches the clinic on the next check-in', async (t) => {
@@ -607,4 +716,143 @@ test('acceptance: a module granted in the control plane reaches the clinic on th
   assert.equal(state2.locked, false);
   assert.deepEqual([...state2.modules].sort(), ['crm', 'telegram'],
     'granting a module in the panel must reach the clinic on the very next check-in, unattended');
+});
+
+// --- Task 3 acceptance: the vendor ticks counters, the clinic reports the
+//     numbers, and no patient data ever reaches the control plane — the
+//     owner's own instruction, proven at the far end of the real wire -------
+
+test('acceptance: vendor sets a collect subset, two check-ins later the numbers arrive, and the ZZTESTPATIENT marker is absent from every control-plane table', async (t) => {
+  const MARKER = 'ZZTESTPATIENT_UNIQUE_9Q4';
+
+  const registryDb = openCpDb(':memory:');
+  migrateCp(registryDb);
+
+  // Own throwaway signing key AND its own public-key override for both
+  // verifier seams — never assume the module-level key from the top of this
+  // file is still installed; restored in t.after so nothing after this test
+  // (were one ever added) inherits this test's key by accident.
+  const { publicKey: vendorPublicKey, privateKey: vendorPrivateKey } = generateKeyPairSync('ed25519');
+  const keyDir = tmpDir('em-checkin-stats-key-');
+  const keyPath = path.join(keyDir, 'vendor-private.pem');
+  fs.writeFileSync(keyPath, vendorPrivateKey.export({ type: 'pkcs8', format: 'pem' }));
+  process.env.EASYMED_SIGNING_KEY = keyPath;
+  __setPublicKeyForTests(vendorPublicKey);
+  __setStatePublicKeyForTests(vendorPublicKey);
+  t.after(() => {
+    delete process.env.EASYMED_SIGNING_KEY;
+    __setPublicKeyForTests(publicKey);
+    __setStatePublicKeyForTests(publicKey);
+  });
+
+  const cpApp = createCpApp(registryDb);
+  const cpServer = await new Promise((resolve) => {
+    const s = cpApp.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  t.after(() => cpServer.close());
+  const cpEndpoint = `http://127.0.0.1:${cpServer.address().port}`;
+
+  // A vendor account + a logged-in session cookie — exactly how the panel
+  // itself would authenticate before calling the admin API.
+  registryDb.prepare('INSERT INTO vendor_users (username, password_hash, full_name) VALUES (?,?,?)')
+    .run('vendor', hashPassword('secret123'), 'Test Vendor');
+  const loginRes = await fetch(`${cpEndpoint}/cp/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'vendor', password: 'secret123' }),
+  });
+  assert.equal(loginRes.status, 200, 'sanity check: vendor login must succeed for this harness');
+  const setCookie = loginRes.headers.getSetCookie ? loginRes.headers.getSetCookie() : [loginRes.headers.get('set-cookie')];
+  const cookie = setCookie.map((c) => c.split(';')[0]).join('; ');
+
+  // --- 1. Enrol a clinic; seed its CLINIC-SIDE db with a marker patient, ---
+  //        an invoice and payments.
+  const clinicId = 'c-stats-accept-1';
+  const code = createEnrollmentCode(registryDb, { clinicId, name: 'Статистика Тест' });
+  const enrolled = redeemEnrollmentCode(registryDb, { code });
+
+  const dataDir = tmpDir('em-checkin-stats-');
+  fs.writeFileSync(path.join(dataDir, 'control.json'), JSON.stringify({
+    clinic_id: enrolled.clinic_id,
+    clinic_name: enrolled.clinic_name,
+    install_token: enrolled.install_token,
+    unlock_secret: enrolled.unlock_secret,
+    subscription: enrolled.subscription,
+  }));
+  const clinicDb = openDb(':memory:');
+  migrate(clinicDb);
+
+  const pid = clinicDb.prepare('INSERT INTO patients (full_name, phone) VALUES (?, ?)')
+    .run(`Иванов ${MARKER} Иван`, `+998${MARKER}`).lastInsertRowid;
+  const inv = clinicDb.prepare("INSERT INTO invoices (patient_id, total_amount, paid_amount, status) VALUES (?,1500,1500,'paid')")
+    .run(pid).lastInsertRowid;
+  clinicDb.prepare("INSERT INTO payments (invoice_id, amount, method) VALUES (?,1500,'cash')").run(inv);
+
+  // --- 2. Vendor sets collect_set to a subset via the admin API -----------
+  const subset = ['patients_total', 'billed_today'];
+  assert.ok(subset.every((n) => COUNTER_NAMES.includes(n)), 'sanity: the subset must be real catalogue names');
+  const collectRes = await fetch(`${cpEndpoint}/cp/v1/admin/clinics/${clinicId}/collect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({ names: subset }),
+  });
+  assert.equal(collectRes.status, 200, 'setting a valid collect subset must succeed');
+
+  // --- 3. Clinic check-in #1 (learns the set) and #2 (reports) -----------
+  await runCheckin(clinicDb, dataDir, { endpoint: cpEndpoint });
+  const learned = JSON.parse(clinicDb.prepare("SELECT value FROM control_state WHERE key = 'stats_collect'").get().value);
+  assert.deepEqual(learned.slice().sort(), subset.slice().sort(), 'the first check-in must learn exactly the vendor-picked subset');
+
+  await runCheckin(clinicDb, dataDir, { endpoint: cpEndpoint });
+
+  // --- 4. Admin API now shows latest_stats with the right keys -----------
+  const detailRes = await fetch(`${cpEndpoint}/cp/v1/admin/clinics/${clinicId}`, { headers: { Cookie: cookie } });
+  assert.equal(detailRes.status, 200);
+  const detail = await detailRes.json();
+  assert.ok(detail.clinic.latest_stats, 'the clinic must show reported stats after its second check-in');
+  assert.deepEqual(Object.keys(detail.clinic.latest_stats).sort(), subset.slice().sort());
+  assert.equal(detail.clinic.latest_stats.patients_total, 1, 'exactly the one seeded patient — never the marker itself');
+  assert.equal(typeof detail.clinic.latest_stats.billed_today, 'number');
+  assert.ok(Number.isFinite(detail.clinic.latest_stats.billed_today) && detail.clinic.latest_stats.billed_today >= 0,
+    'a plausible (finite, non-negative) number, not NaN or a string');
+  assert.ok(detail.clinic.latest_stats_at, 'a timestamp for when these numbers were reported');
+  assert.deepEqual(detail.clinic.collect_set, subset);
+
+  // --- 5. Dump EVERY control-plane table; the marker must appear NOWHERE --
+  const tables = registryDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+    .all().map((r) => r.name);
+  const dump = {};
+  for (const tableName of tables) {
+    dump[tableName] = registryDb.prepare(`SELECT * FROM "${tableName}"`).all();
+  }
+  const dumpJson = JSON.stringify(dump);
+  assert.ok(!dumpJson.includes(MARKER),
+    `THE OWNER'S OWN INSTRUCTION — the marker leaked into the control plane's own database: ${dumpJson.slice(0, 2000)}`);
+
+  // --- 6. A clinic whose stats builder throws still gets its licence -----
+  //        renewed on that SAME check-in, against this SAME real control
+  //        plane — "licensing outranks telemetry" proven end to end, not
+  //        just against a fake server.
+  const throwingClinicId = 'c-stats-accept-throws';
+  const throwingCode = createEnrollmentCode(registryDb, { clinicId: throwingClinicId, name: 'Клиника с плохой статистикой' });
+  const throwingEnrolled = redeemEnrollmentCode(registryDb, { code: throwingCode });
+  const throwingDir = tmpDir('em-checkin-stats-throws-');
+  fs.writeFileSync(path.join(throwingDir, 'control.json'), JSON.stringify({
+    clinic_id: throwingEnrolled.clinic_id,
+    clinic_name: throwingEnrolled.clinic_name,
+    install_token: throwingEnrolled.install_token,
+    unlock_secret: throwingEnrolled.unlock_secret,
+    subscription: throwingEnrolled.subscription,
+  }));
+  const throwingClinicDb = openDb(':memory:');
+  migrate(throwingClinicDb);
+
+  await assert.doesNotReject(runCheckin(throwingClinicDb, throwingDir, {
+    endpoint: cpEndpoint,
+    buildStatsPayload: () => { throw new Error('catalogue exploded, for real this time'); },
+  }));
+
+  const throwingState = controlState(throwingClinicDb, throwingDir);
+  assert.equal(throwingState.locked, false,
+    'a throwing stats builder must never cost this clinic its licence renewal, even against the real control plane');
 });

@@ -3,6 +3,10 @@ import { requireVendor } from './vendor-auth.js';
 import { createEnrollmentCode } from '../services/enrollment.js';
 import { expectedResponse } from '../../../server/services/control/unlock.js';
 import { SELLABLE_MODULES } from '../../../server/services/rpc/licence.js';
+// STATS_V1 (docs/plans/2026-08-22-statistics.md) — the one vocabulary of
+// counter names AND their human descriptions, imported rather than
+// re-typed — same drift trap SELLABLE_MODULES above already guards against.
+import { COUNTERS, COUNTER_NAMES } from '../../../server/services/control/metrics.js';
 
 // CONTROL_PLANE_V1 — the vendor's own admin API, behind vendor login. This is
 // the part of the control plane the owner actually touches: today they would
@@ -48,6 +52,8 @@ export const ADMIN_ROUTE_TABLE = [
   { method: 'POST', path: '/clinics/:id/subscription' },
   { method: 'POST', path: '/clinics/:id/retire' },
   { method: 'POST', path: '/clinics/:id/unlock-code' },
+  { method: 'POST', path: '/clinics/:id/collect' },
+  { method: 'GET',  path: '/counters' },
   { method: 'GET',  path: '/requests' },
   { method: 'POST', path: '/requests/:id/grant' },
 ];
@@ -121,6 +127,45 @@ function openRequestCount(db, clinicId) {
   return db.prepare("SELECT COUNT(*) n FROM module_requests WHERE clinic_id = ? AND status = 'open'").get(clinicId).n;
 }
 
+// STATS_V1 — the clinic's own collect_set, parsed for display. NULL (never
+// set) and anything hand-corrupted both read as null here — "the default
+// set" — so the panel can show one plain sentence for both rather than
+// pretending a corrupt column is a real, empty choice.
+function parsedCollectSet(rawCollectSet) {
+  if (rawCollectSet === null || rawCollectSet === undefined) return null;
+  try {
+    const parsed = JSON.parse(rawCollectSet);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// STATS_V1 — the most recently REPORTED stats for a clinic, and when. Not
+// every check-in carries usable stats (nothing learned yet, an old install,
+// a throwing catalogue) — this walks check-ins newest-first and stops at the
+// first payload whose `stats` object actually has something in it, rather
+// than assuming the very latest row is the right one.
+//
+// Uses the checkins_clinic_at index (clinic_id, at DESC) for the ORDER BY —
+// same `at DESC, id DESC` tie-break idiom as lastCheckinFlaggedChange() above
+// — and .iterate() rather than .all(), so a clinic with hundreds of
+// check-ins of history is read lazily, row by row, and this stops at the
+// first hit instead of ever materialising the whole history into memory.
+function latestStats(db, clinicId) {
+  const stmt = db.prepare(
+    'SELECT at, payload FROM checkins WHERE clinic_id = ? ORDER BY at DESC, id DESC'
+  );
+  for (const row of stmt.iterate(clinicId)) {
+    let payload;
+    try { payload = JSON.parse(row.payload); } catch { continue; } // an unparsable row is skipped, not fatal
+    if (payload && payload.stats && typeof payload.stats === 'object' && Object.keys(payload.stats).length) {
+      return { stats: payload.stats, at: row.at };
+    }
+  }
+  return null; // this clinic has never reported anything usable
+}
+
 export function adminRoutes(db) {
   const r = Router();
   r.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
@@ -151,10 +196,12 @@ export function adminRoutes(db) {
   r.get('/clinics/:id', (req, res) => {
     const c = db.prepare(
       `SELECT clinic_id, name, contact_phone, contact_name, subscription, subscription_until,
-              last_seen_at, last_version, last_fingerprint, active, created_at
+              last_seen_at, last_version, last_fingerprint, active, created_at, collect_set
        FROM clinics WHERE clinic_id = ?`
     ).get(req.params.id);
     if (!c) return notFound(res, 'Clinic not found.');
+
+    const latest = latestStats(db, c.clinic_id);
 
     // Deliberately NOT `SELECT *` — install_token and unlock_secret must
     // never reach this response. install_token authenticates check-in (the
@@ -182,6 +229,11 @@ export function adminRoutes(db) {
         active: !!c.active,
         created_at: c.created_at,
         modules: clinicModules(db, c.clinic_id),
+        // STATS_V1 — null means "the default set" (see resolveCollectSet in
+        // services/checkin.js, the code this panel's checkbox list mirrors).
+        collect_set: parsedCollectSet(c.collect_set),
+        latest_stats: latest ? latest.stats : null,
+        latest_stats_at: latest ? latest.at : null,
       },
       checkins,
     });
@@ -286,6 +338,43 @@ export function adminRoutes(db) {
     // verify.
     const code = expectedResponse({ clinicId: clinic.clinic_id, challenge: challenge.trim(), secret: clinic.unlock_secret });
     res.json({ code });
+  });
+
+  // STATS_V1 — the vendor's counter picklist for this clinic. Unlike
+  // POST /clinics/:id/modules (which accepts an unofferable-but-sellable key
+  // for REVOKE, see MARKETING_NOT_OFFERABLE_V1), there is no "offerable
+  // subset" distinction here: every name in COUNTER_NAMES is always a valid
+  // thing to collect, so any name outside that vocabulary is simply unknown
+  // and rejected — a direct API caller inventing a name should hear about
+  // it (400), unlike a clinic mid-check-in reporting one (silently dropped,
+  // see normaliseStats in services/checkin.js — a check-in must never fail
+  // over a name the panel picker itself would never have offered).
+  r.post('/clinics/:id/collect', (req, res) => {
+    const clinic = db.prepare('SELECT clinic_id FROM clinics WHERE clinic_id = ?').get(req.params.id);
+    if (!clinic) return notFound(res, 'Clinic not found.');
+
+    const { names } = req.body || {};
+    if (!Array.isArray(names)) return bad(res, 'names must be an array.');
+    for (const n of names) {
+      if (typeof n !== 'string' || !COUNTER_NAMES.includes(n)) {
+        return bad(res, `Unknown counter: ${JSON.stringify(n)}`);
+      }
+    }
+    // Deduplicated — a double-submitted checkbox list must not store the
+    // same name twice; harmless either way, but the stored set should read
+    // as a clean, deliberate choice.
+    const unique = [...new Set(names)];
+    db.prepare('UPDATE clinics SET collect_set = ? WHERE clinic_id = ?').run(JSON.stringify(unique), clinic.clinic_id);
+    res.json({ ok: true, note: NEXT_CHECKIN_NOTE });
+  });
+
+  // STATS_V1 — the panel's own checkbox list. Built server-side from the
+  // imported catalogue: `describe` (previously unused outside the clinic
+  // app) finally earns its keep here as the label the vendor actually reads
+  // before deciding what to collect.
+  r.get('/counters', (req, res) => {
+    const counters = COUNTER_NAMES.map((name) => ({ name, describe: COUNTERS[name].describe }));
+    res.json({ counters });
   });
 
   // --- module requests --------------------------------------------------------

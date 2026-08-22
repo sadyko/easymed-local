@@ -8,6 +8,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { openDb } from './db/connection.js';
 import { migrate } from './db/migrate.js';
 import { hashPassword } from './services/vendor-auth.js';
+import { checkIn } from './services/checkin.js';
 import { expectedResponse } from '../../server/services/control/unlock.js';
 import { createApp } from './app.js';
 
@@ -263,6 +264,52 @@ test('flow: the requests inbox lists an open lead and granting it updates both t
 
   const remaining = await (await req(server, 'GET', `${ADMIN_BASE}/requests`, { cookie })).json();
   assert.ok(!remaining.requests.some((r) => r.id === lead.id), 'a granted request must drop out of the open-requests inbox');
+});
+
+// --- STATS_V1: the Statistics card's own two API calls ----------------------
+
+test('flow: the vendor picks a collect subset via the admin API, and the clinic detail reflects reported stats after a check-in', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+
+  const created = await (await req(server, 'POST', `${ADMIN_BASE}/clinics`, { cookie, body: { name: 'Клиника со статистикой' } })).json();
+
+  // GET /counters — the panel's own checkbox source.
+  const countersRes = await req(server, 'GET', `${ADMIN_BASE}/counters`, { cookie });
+  assert.equal(countersRes.status, 200);
+  const { counters } = await countersRes.json();
+  assert.ok(counters.length > 0, 'the catalogue must not be empty');
+  assert.ok(counters.every((c) => typeof c.name === 'string' && typeof c.describe === 'string' && c.describe.length > 0));
+
+  // The vendor picks a subset.
+  const subset = ['patients_total', 'visits_today'];
+  const collectRes = await req(server, 'POST', `${ADMIN_BASE}/clinics/${created.clinic_id}/collect`, {
+    cookie, body: { names: subset },
+  });
+  assert.equal(collectRes.status, 200);
+  assert.ok((await collectRes.json()).note, 'the panel needs this note to tell the owner the change is not instant');
+
+  // ATTACK, driven through this same flow: an unknown counter name must be
+  // refused, not silently dropped or accepted.
+  const badRes = await req(server, 'POST', `${ADMIN_BASE}/clinics/${created.clinic_id}/collect`, {
+    cookie, body: { names: ['not_a_real_counter'] },
+  });
+  assert.equal(badRes.status, 400, 'the vendor picker only ever offers real counters, so a direct API caller inventing one should hear about it');
+
+  // Enrol for real, over HTTP, then simulate this clinic's own check-in
+  // reporting the picked counters (the clinic CLIENT side of this same wire
+  // is exercised end to end in server/services/control/checkin.test.js).
+  const enrollRes = await req(server, 'POST', '/cp/v1/enroll', { body: { code: created.enrollment_code } });
+  assert.equal(enrollRes.status, 200);
+  const { install_token } = await enrollRes.json();
+  checkIn(db, { installToken: install_token, stats: { patients_total: 4, visits_today: 2 } });
+
+  const detailRes = await req(server, 'GET', `${ADMIN_BASE}/clinics/${created.clinic_id}`, { cookie });
+  assert.equal(detailRes.status, 200);
+  const detail = await detailRes.json();
+  assert.deepEqual(detail.clinic.collect_set.slice().sort(), subset.slice().sort());
+  assert.deepEqual(detail.clinic.latest_stats, { patients_total: 4, visits_today: 2 });
+  assert.ok(detail.clinic.latest_stats_at, 'a timestamp for when these numbers were reported');
 });
 
 // --- 401 mid-session: the panel's own contract with panel-api.js's hook -----

@@ -18,6 +18,7 @@ import { createApp } from '../app.js';
 import { openDb as openClinicDb } from '../../../server/db/connection.js';
 import { migrate as migrateClinic } from '../../../server/db/migrate.js';
 import { controlState, __setPublicKeyForTests } from '../../../server/services/control/state.js';
+import { COUNTER_NAMES } from '../../../server/services/control/metrics.js';
 
 // --- test harness ------------------------------------------------------------
 
@@ -113,7 +114,8 @@ test('acceptance: a paid clinic is re-armed, an unpaid one is not, and a lapsed 
   const body1 = await res1.json();
   assert.ok(body1.licence && body1.licence.payload && body1.licence.sig, 'result 2b: a freshly signed licence must come back');
   assert.equal(body1.subscription, 'active', 'result 2c: subscription must read active');
-  assert.deepEqual(body1.collect, [], 'result 2d: collect is always empty');
+  assert.deepEqual(body1.collect.slice().sort(), COUNTER_NAMES.slice().sort(),
+    'result 2d: collect defaults to every known counter when collect_set has never been set (STATS_V1)');
 
   const dir = tmpDir('checkin-clinic-');
   fs.writeFileSync(path.join(dir, 'control.json'), JSON.stringify({

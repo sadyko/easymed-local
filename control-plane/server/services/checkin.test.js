@@ -5,6 +5,7 @@ import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { createEnrollmentCode, redeemEnrollmentCode } from './enrollment.js';
 import { checkIn } from './checkin.js';
+import { COUNTER_NAMES } from '../../../server/services/control/metrics.js';
 
 // --- test harness ------------------------------------------------------------
 
@@ -240,13 +241,177 @@ test('an unparseable subscription_until fails closed — not entitled, not a cra
   assert.equal(result.subscription, 'unpaid');
 });
 
-// --- collect: reserved, always empty ----------------------------------------
+// --- STATS_V1 (docs/plans/2026-08-22-statistics.md): `collect` ---------------
 
-test('collect is always an empty array', () => {
+test('collect defaults to every known counter when collect_set has never been set (NULL)', () => {
   const db = freshDb();
   const token = enrol(db, 'c-1');
   const result = checkIn(db, { installToken: token }, { signLicence: fakeSigner() });
-  assert.deepEqual(result.collect, []);
+  assert.deepEqual(result.collect.slice().sort(), COUNTER_NAMES.slice().sort());
+});
+
+test('collect reflects the clinic\'s own collect_set once the vendor has picked a subset', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  db.prepare('UPDATE clinics SET collect_set = ? WHERE clinic_id = ?')
+    .run(JSON.stringify(['patients_total', 'billed_today']), 'c-1');
+
+  const result = checkIn(db, { installToken: token }, { signLicence: fakeSigner() });
+  assert.deepEqual(result.collect.slice().sort(), ['billed_today', 'patients_total']);
+});
+
+test('collect_set explicitly set to an empty list means "collect nothing" — not the default', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  db.prepare('UPDATE clinics SET collect_set = ? WHERE clinic_id = ?').run(JSON.stringify([]), 'c-1');
+
+  const result = checkIn(db, { installToken: token }, { signLicence: fakeSigner() });
+  assert.deepEqual(result.collect, [], 'an explicit empty choice must not fall back to the default set');
+});
+
+test('a hand-corrupted collect_set falls back to the default set, not a 500-equivalent crash', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  db.prepare("UPDATE clinics SET collect_set = 'not json at all' WHERE clinic_id = ?").run('c-1');
+
+  const result = checkIn(db, { installToken: token }, { signLicence: fakeSigner() });
+  assert.deepEqual(result.collect.slice().sort(), COUNTER_NAMES.slice().sort(),
+    'a corrupt column must fail OPEN to the default catalogue, never crash the check-in');
+});
+
+test('collect_set that is valid JSON but not an array falls back to the default set', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  db.prepare('UPDATE clinics SET collect_set = ? WHERE clinic_id = ?').run(JSON.stringify({ not: 'an array' }), 'c-1');
+
+  const result = checkIn(db, { installToken: token }, { signLicence: fakeSigner() });
+  assert.deepEqual(result.collect.slice().sort(), COUNTER_NAMES.slice().sort());
+});
+
+test('a counter name in collect_set that no longer exists in the catalogue is filtered out, not passed through', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  db.prepare('UPDATE clinics SET collect_set = ? WHERE clinic_id = ?')
+    .run(JSON.stringify(['patients_total', 'a_counter_removed_in_a_later_release']), 'c-1');
+
+  const result = checkIn(db, { installToken: token }, { signLicence: fakeSigner() });
+  assert.deepEqual(result.collect, ['patients_total']);
+});
+
+// --- STATS_V1: incoming `stats` ----------------------------------------------
+
+test('an old clinic that never sends `stats` at all checks in exactly as before — the field is optional forever', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  const result = checkIn(db, { installToken: token, version: '1.0.0' }, { signLicence: fakeSigner() });
+  assert.ok(result, 'a missing stats field must never fail the check-in');
+
+  const row = db.prepare('SELECT payload FROM checkins WHERE clinic_id = ?').get('c-1');
+  assert.deepEqual(JSON.parse(row.payload).stats, {}, 'no stats sent must still leave a well-shaped, empty stats object stored');
+});
+
+test('valid stats are stored, keyed by catalogue name, merged alongside module_requests/fingerprint_changed in the same payload', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  checkIn(db, {
+    installToken: token,
+    moduleRequests: [{ module_key: 'crm', requested_at: '2026-08-20T00:00:00Z' }],
+    stats: { patients_total: 42, billed_today: 1500.5 },
+  }, { signLicence: fakeSigner() });
+
+  const row = db.prepare('SELECT payload FROM checkins WHERE clinic_id = ?').get('c-1');
+  const payload = JSON.parse(row.payload);
+  assert.deepEqual(payload.stats, { patients_total: 42, billed_today: 1500.5 });
+  // "merge, don't clobber" — the OTHER fields this same route already wrote
+  // into this payload must still be there.
+  assert.equal(payload.module_requests.length, 1);
+  assert.equal(payload.module_requests[0].module_key, 'crm');
+  assert.equal(payload.fingerprint_changed, false);
+});
+
+test('unknown stat keys are dropped silently — a panel newer than this install may name a counter it does not have', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  checkIn(db, { installToken: token, stats: { patients_total: 3, not_a_real_counter: 99, future_counter_v9: 1 } }, { signLicence: fakeSigner() });
+
+  const row = db.prepare('SELECT payload FROM checkins WHERE clinic_id = ?').get('c-1');
+  assert.deepEqual(JSON.parse(row.payload).stats, { patients_total: 3 });
+});
+
+test('non-finite / non-numeric stat values are dropped, never stored as a string or NaN', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  checkIn(db, {
+    installToken: token,
+    stats: { patients_total: 'not a number', billed_today: NaN, unpaid_total: Infinity, visits_today: 7 },
+  }, { signLicence: fakeSigner() });
+
+  const row = db.prepare('SELECT payload FROM checkins WHERE clinic_id = ?').get('c-1');
+  assert.deepEqual(JSON.parse(row.payload).stats, { visits_today: 7 });
+});
+
+test('a stats key of "__proto__" or "constructor" is dropped like any other unknown key, and pollutes nothing', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  assert.doesNotThrow(() => checkIn(db, {
+    installToken: token,
+    stats: { __proto__: 5, constructor: 6, patients_total: 1 },
+  }, { signLicence: fakeSigner() }));
+
+  const row = db.prepare('SELECT payload FROM checkins WHERE clinic_id = ?').get('c-1');
+  assert.deepEqual(JSON.parse(row.payload).stats, { patients_total: 1 });
+  assert.equal(({}).polluted, undefined, 'must never pollute Object.prototype');
+});
+
+test('a stats object with more entries than the bound is truncated, not rejected', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  // Every real catalogue name, each repeated with a bogus name too — far more
+  // than MAX_STATS_KEYS worth of junk keys, none of which should ever count.
+  const stats = {};
+  for (const name of COUNTER_NAMES) stats[name] = 1;
+  for (let i = 0; i < 200; i++) stats[`junk_${i}`] = i;
+
+  assert.doesNotThrow(() => checkIn(db, { installToken: token, stats }, { signLicence: fakeSigner() }));
+  const row = db.prepare('SELECT payload FROM checkins WHERE clinic_id = ?').get('c-1');
+  const stored = JSON.parse(row.payload).stats;
+  assert.ok(Object.keys(stored).length <= COUNTER_NAMES.length, 'only real catalogue names can ever survive, however much junk was sent');
+});
+
+test('garbage stats shapes (array, string, number, null) never fail the check-in', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  for (const bad of [['not', 'an', 'object'], 'just a string', 42, null]) {
+    const result = checkIn(db, { installToken: token, stats: bad }, { signLicence: fakeSigner() });
+    assert.ok(result, `stats=${JSON.stringify(bad)} must not fail the check-in`);
+    const row = db.prepare('SELECT payload FROM checkins WHERE clinic_id = ? ORDER BY id DESC LIMIT 1').get('c-1');
+    assert.deepEqual(JSON.parse(row.payload).stats, {}, 'a garbage shape must store as an empty stats object, never crash or store the garbage itself');
+  }
+});
+
+test('a counter the vendor un-ticked between check-ins is still stored if reported — it is still a known name, harmless either way', () => {
+  // Deliberately NOT filtered against the clinic's OWN collect_set: the
+  // no-PII/known-vocabulary guarantee is enforced by COUNTER_NAMES, not by
+  // whatever this clinic was last told to collect. See normaliseStats' own
+  // header for why this is a deliberate choice, not an oversight.
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  db.prepare('UPDATE clinics SET collect_set = ? WHERE clinic_id = ?').run(JSON.stringify(['patients_total']), 'c-1');
+
+  checkIn(db, { installToken: token, stats: { patients_total: 5, billed_today: 900 } }, { signLicence: fakeSigner() });
+
+  const row = db.prepare('SELECT payload FROM checkins WHERE clinic_id = ?').get('c-1');
+  assert.deepEqual(JSON.parse(row.payload).stats, { patients_total: 5, billed_today: 900 },
+    'a known counter name is stored whether or not it is in the clinic\'s CURRENT collect_set');
+});
+
+test('stats never affects entitlement — a broken stats object still re-arms an otherwise-paid clinic', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  grantModule(db, 'c-1', 'crm');
+
+  const result = checkIn(db, { installToken: token, stats: 'garbage' }, { signLicence: fakeSigner() });
+  assert.ok(result.licence, 'a malformed stats payload must never cost a paid clinic its licence renewal');
 });
 
 // --- rule 6 & 7: module_requests carried up, deduplicated, idempotent ------

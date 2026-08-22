@@ -1,0 +1,11 @@
+-- STATS_V1 (docs/plans/2026-08-22-statistics.md) — which counters the vendor
+-- wants THIS clinic to report. NULL means "the default set" — deliberately
+-- not baked into this schema (no DEFAULT literal, no CHECK against a fixed
+-- list): the default lives in code (server/services/control/metrics.js's
+-- COUNTER_NAMES, imported by services/checkin.js) so the vendor's starting
+-- catalogue can grow release-over-release without ever needing another
+-- migration here. A JSON array of counter names once the vendor has
+-- explicitly picked a subset via POST /admin/clinics/:id/collect — including
+-- explicitly picking none at all, which is a real, distinct choice from
+-- "never touched this".
+ALTER TABLE clinics ADD COLUMN collect_set TEXT;

@@ -13,6 +13,7 @@ import { esc, toast, fmtDateTime, renderCodeGroups } from './panel-dom.js';
 import {
   SELLABLE_MODULES, moduleToggles, hasUnmanageableMarketingGrant,
   subscriptionBadge, subscriptionUntilPayload, codeGroups,
+  counterCheckedState, statsRows,
 } from './panel-logic.js';
 
 const FALLBACK_NOTE = "Changes apply at this clinic's next check-in — not instantly.";
@@ -26,10 +27,12 @@ export async function renderClinicDetail(root, clinicId) {
 
   let clinic;
   let checkins;
+  let counters; // STATS_V1 — [{name, describe}], the panel's own checkbox list source
   try {
-    const data = await cp.clinic(clinicId);
+    const [data, countersData] = await Promise.all([cp.clinic(clinicId), cp.counters()]);
     clinic = data.clinic;
     checkins = data.checkins;
+    counters = countersData.counters;
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) return; // session-expired hook already showed the login screen
     const box = document.createElement('div');
@@ -109,6 +112,19 @@ export async function renderClinicDetail(root, clinicId) {
         </div>
       </div>
 
+      <div class="card" id="dt-stats-card">
+        <h2>Statistics</h2>
+        <div id="dt-stats-body"></div>
+        <h3 class="stats-subhead">Collected counters</h3>
+        <div id="dt-stats-counters"></div>
+        <div class="form-actions">
+          <button class="btn primary" id="dt-stats-save" type="button">Save</button>
+          <span class="form-ok" id="dt-stats-ok"></span>
+        </div>
+        <div class="form-err" id="dt-stats-err"></div>
+        <div class="next-checkin-note" id="dt-stats-note">${esc(FALLBACK_NOTE)}</div>
+      </div>
+
       <div class="card">
         <h2>Recent check-ins</h2>
         <div id="dt-checkins"></div>
@@ -117,10 +133,12 @@ export async function renderClinicDetail(root, clinicId) {
     root.querySelector('#dt-back').addEventListener('click', (e) => { e.preventDefault(); location.hash = '#clinics'; });
 
     paintModules();
+    paintStats();
     paintCheckins();
     wireSubscriptionForm();
     wireRetire();
     wireUnlock();
+    wireStats();
   }
 
   // --- modules ---------------------------------------------------------
@@ -163,6 +181,81 @@ export async function renderClinicDetail(root, clinicId) {
           input.disabled = false;
         }
       });
+    });
+  }
+
+  // --- statistics (STATS_V1) --------------------------------------------
+
+  // Two independent pieces in one card: the latest REPORTED numbers (read-
+  // only, from the clinic's own last check-in that carried any), and the
+  // checkbox list that edits collect_set for the NEXT one — same "applies at
+  // next check-in" wording every other mutation on this page already shows.
+  function paintStats() {
+    const body = root.querySelector('#dt-stats-body');
+    if (!body) return;
+    if (!clinic.latest_stats) {
+      body.innerHTML = `<div class="empty">This clinic has never reported statistics.</div>`;
+    } else {
+      const rows = statsRows(clinic.latest_stats, counters);
+      body.innerHTML = `
+        <div class="sub stats-as-of">As of ${esc(fmtDateTime(clinic.latest_stats_at))}</div>
+        <div class="table-wrap">
+          <table class="t">
+            <thead><tr><th>Counter</th><th class="num">Value</th></tr></thead>
+            <tbody>
+              ${rows.map((row) => `
+                <tr>
+                  <td>${esc(row.describe)}</td>
+                  <td class="num">${esc(String(row.value))}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    const counterList = root.querySelector('#dt-stats-counters');
+    if (!counterList) return;
+    const checked = counterCheckedState(counters.map((c) => c.name), clinic.collect_set);
+    counterList.innerHTML = counters.map((c) => `
+      <label class="counter-row" data-key="${esc(c.name)}">
+        <input type="checkbox" ${checked.has(c.name) ? 'checked' : ''}>
+        <span class="counter-name">${esc(c.describe)}</span>
+      </label>
+    `).join('');
+  }
+
+  function wireStats() {
+    const saveBtn = root.querySelector('#dt-stats-save');
+    const err = root.querySelector('#dt-stats-err');
+    const ok = root.querySelector('#dt-stats-ok');
+    if (!saveBtn) return;
+
+    let inFlight = false;
+    saveBtn.addEventListener('click', async () => {
+      if (inFlight) return;
+      err.textContent = '';
+      ok.textContent = '';
+      const names = [...root.querySelectorAll('#dt-stats-counters .counter-row')]
+        .filter((rowEl) => rowEl.querySelector('input').checked)
+        .map((rowEl) => rowEl.dataset.key);
+
+      inFlight = true;
+      saveBtn.disabled = true;
+      try {
+        const res = await cp.setCollect(clinic.id, names);
+        clinic.collect_set = names; // matches what GET would now return — an explicit array, even if empty
+        const note = root.querySelector('#dt-stats-note');
+        if (note && res.note) note.textContent = res.note;
+        ok.textContent = res.note || 'Saved.';
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 401) return;
+        err.textContent = e.message || 'Could not save the collected counters.';
+      } finally {
+        inFlight = false;
+        if (root.contains(saveBtn)) saveBtn.disabled = false;
+      }
     });
   }
 

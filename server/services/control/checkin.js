@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { verifyLicence } from './licence.js';
+import { buildStatsPayload as defaultBuildStatsPayload } from './metrics.js';
 
 // LICENCE_CORE_V1 — the clinic's half of the daily call.
 //
@@ -43,6 +44,12 @@ const TIMEOUT_MS = 15_000;
 // buffering past it.
 const MAX_RESPONSE_BYTES = 1_000_000;
 
+// STATS_V1 (docs/plans/2026-08-22-statistics.md) — the vendor's collect list
+// is a handful of counter names, not a real dataset; a cap here is a backstop
+// against a buggy or hostile control plane trying to make control_state grow
+// without bound, not a real-world limit anyone should ever hit.
+const MAX_COLLECT_NAMES = 50;
+
 let _testPublicKey = null;
 /**
  * Tests inject their own throwaway key, mirroring state.js's own seam of the
@@ -80,6 +87,23 @@ function controlStatePut(db, key, value) {
               VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
     .run(key, String(value));
+}
+
+// STATS_V1 — the counter names the vendor asked for on our LAST check-in
+// (learned from that response's `collect` field, see below). Read back
+// defensively: a hand-edited or corrupted value here must fall back to "no
+// names" rather than throw — the same fail-open rule Task 3's own attack
+// list asks for on the control-plane side of this same field.
+function readStoredCollectNames(db) {
+  const raw = controlStateGet(db, 'stats_collect');
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((n) => typeof n === 'string').slice(0, MAX_COLLECT_NAMES);
+  } catch {
+    return [];
+  }
 }
 
 // Temp file in the SAME directory as the target, then rename — path.dirname
@@ -202,6 +226,7 @@ async function readBounded(res, maxBytes) {
  * @param {number} [opts.maxResponseBytes]
  * @param {Function} [opts.writeFileSync] override for atomic-write testing
  * @param {Function} [opts.renameSync]    override for atomic-write testing
+ * @param {typeof import('./metrics.js').buildStatsPayload} [opts.buildStatsPayload] override for tests that force the catalogue to throw
  */
 export async function runCheckin(db, dataDir, opts = {}) {
   if (inFlight) return; // see TWO_OVERLAPPING_CHECKINS_V1 above
@@ -220,6 +245,7 @@ async function performCheckin(db, dataDir, {
   maxResponseBytes = MAX_RESPONSE_BYTES,
   writeFileSync,
   renameSync,
+  buildStatsPayload = defaultBuildStatsPayload,
 } = {}) {
   try {
     const identityPath = path.join(dataDir, 'control.json');
@@ -237,6 +263,25 @@ async function performCheckin(db, dataDir, {
       'SELECT id, module_key, requested_at FROM module_requests WHERE sent_at IS NULL ORDER BY id',
     ).all();
 
+    // STATS_NEVER_BLOCKS_CHECKIN_V1 — "licensing outranks telemetry,
+    // everywhere" (docs/plans/2026-08-22-statistics.md). buildStatsPayload is
+    // documented to never throw on its own (see metrics.js), but this call
+    // site does not get to trust that promise forever: the names collected
+    // here were learned from a PREVIOUS response and could, in principle,
+    // point at a counter whose query was broken by a later schema change.
+    // Wrapping it is the same "backstop a guarantee, don't just assume it"
+    // idiom verifyLicence's own try/catch below already uses. Building this
+    // BEFORE the network call (not after) is deliberate too: a slow or
+    // throwing builder must never delay or skip the call that renews the
+    // licence, so it either succeeds fast or falls back to {} immediately.
+    let stats;
+    try {
+      stats = buildStatsPayload(db, readStoredCollectNames(db));
+    } catch (e) {
+      console.warn('[checkin] could not build the stats payload, sending none this time:', e && e.message);
+      stats = {};
+    }
+
     const url = endpoint ? String(endpoint).replace(/\/+$/, '') + CHECKIN_PATH : checkinUrl();
 
     let res;
@@ -249,6 +294,7 @@ async function performCheckin(db, dataDir, {
           version: readAppVersion(),
           fingerprint: computeFingerprint(),
           module_requests: pending.map((r) => ({ module_key: r.module_key, requested_at: r.requested_at })),
+          stats,
         }),
         signal: AbortSignal.timeout(timeoutMs),
       });
@@ -280,6 +326,25 @@ async function performCheckin(db, dataDir, {
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       console.warn('[checkin] response was not a JSON object — discarded');
       return;
+    }
+
+    // STATS_V1 — remember which counters the vendor wants NEXT time, so the
+    // check-in after this one can build and send them (see the DI-wrapped
+    // buildStatsPayload call above, which reads this same control_state key
+    // back). Validated before it ever touches disk: only a real array is
+    // accepted at all (a missing or wrong-shaped `collect` leaves whatever
+    // was already learned untouched, never overwritten with garbage), and
+    // within that array only strings survive, capped at MAX_COLLECT_NAMES —
+    // this is the clinic's own defence against a compromised or buggy panel,
+    // on top of buildStatsPayload's own re-check of every name against the
+    // real catalogue at build time.
+    if (Array.isArray(body.collect)) {
+      const names = body.collect.filter((n) => typeof n === 'string').slice(0, MAX_COLLECT_NAMES);
+      try {
+        controlStatePut(db, 'stats_collect', JSON.stringify(names));
+      } catch (e) {
+        console.warn('[checkin] could not store the collect set:', e && e.message);
+      }
     }
 
     // ORDER MATTERS — licence.dat is written BEFORE control.json. If the

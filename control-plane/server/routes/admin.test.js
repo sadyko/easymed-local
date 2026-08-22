@@ -13,6 +13,7 @@ import { checkIn } from '../services/checkin.js';
 import { createApp } from '../app.js';
 import { expectedResponse } from '../../../server/services/control/unlock.js';
 import { SELLABLE_MODULES } from '../../../server/services/rpc/licence.js';
+import { COUNTERS, COUNTER_NAMES } from '../../../server/services/control/metrics.js';
 import { ADMIN_ROUTE_TABLE } from './admin.js';
 
 // --- test harness ------------------------------------------------------------
@@ -196,6 +197,202 @@ test('GET /clinics/:id 404s for an unknown clinic', async (t) => {
   const cookie = await loggedInCookie(server);
   const res = await req(server, 'GET', '/cp/v1/admin/clinics/no-such-clinic', { cookie });
   assert.equal(res.status, 404);
+});
+
+// --- STATS_V1: GET /clinics/:id — collect_set and latest_stats ---------------
+
+test('GET /clinics/:id shows collect_set:null and latest_stats:null for a clinic that has never reported', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  enrol(db, 'c-1', 'Клиника Один');
+
+  const res = await req(server, 'GET', '/cp/v1/admin/clinics/c-1', { cookie });
+  const body = await res.json();
+  assert.equal(body.clinic.collect_set, null, 'never touched — reads as the default set, not an empty array');
+  assert.equal(body.clinic.latest_stats, null);
+  assert.equal(body.clinic.latest_stats_at, null);
+});
+
+test('GET /clinics/:id reflects collect_set once set, and latest_stats/latest_stats_at once a check-in reports something', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const installToken = enrol(db, 'c-1', 'Клиника Один');
+
+  db.prepare('UPDATE clinics SET collect_set = ? WHERE clinic_id = ?')
+    .run(JSON.stringify(['patients_total', 'billed_today']), 'c-1');
+
+  checkIn(db, { installToken, stats: { patients_total: 7, billed_today: 500 } });
+
+  const res = await req(server, 'GET', '/cp/v1/admin/clinics/c-1', { cookie });
+  const body = await res.json();
+  assert.deepEqual(body.clinic.collect_set.slice().sort(), ['billed_today', 'patients_total']);
+  assert.deepEqual(body.clinic.latest_stats, { patients_total: 7, billed_today: 500 });
+  assert.ok(body.clinic.latest_stats_at, 'a timestamp for when these numbers were reported');
+});
+
+test('GET /clinics/:id: an explicit empty collect_set reads as [] , distinct from "never set" (null)', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  enrol(db, 'c-1', 'Клиника Один');
+  db.prepare('UPDATE clinics SET collect_set = ? WHERE clinic_id = ?').run(JSON.stringify([]), 'c-1');
+
+  const res = await req(server, 'GET', '/cp/v1/admin/clinics/c-1', { cookie });
+  const body = await res.json();
+  assert.deepEqual(body.clinic.collect_set, []);
+});
+
+test('GET /clinics/:id: a hand-corrupted collect_set column renders as null (the default), not a 500', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  enrol(db, 'c-1', 'Клиника Один');
+  db.prepare("UPDATE clinics SET collect_set = 'not json' WHERE clinic_id = ?").run('c-1');
+
+  const res = await req(server, 'GET', '/cp/v1/admin/clinics/c-1', { cookie });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).clinic.collect_set, null);
+});
+
+test('GET /clinics/:id: latest_stats skips PAST an empty-stats check-in to find the most recent one that actually reported', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const installToken = enrol(db, 'c-1');
+
+  checkIn(db, { installToken, stats: { patients_total: 3 } }); // reports something
+  checkIn(db, {}); // a later, unrelated check-in with no stats at all (e.g. an old install)
+
+  const res = await req(server, 'GET', '/cp/v1/admin/clinics/c-1', { cookie });
+  const body = await res.json();
+  assert.deepEqual(body.clinic.latest_stats, { patients_total: 3 },
+    'the most recent check-in carried no stats, so the search must walk back to the one before it');
+});
+
+test('GET /clinics/:id: latest_stats is found correctly across 200 check-ins of history, using the checkins_clinic_at index rather than a full table load', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const installToken = enrol(db, 'c-1');
+
+  checkIn(db, { installToken, stats: { patients_total: 1 } }); // the only one that ever carries stats
+  for (let i = 0; i < 200; i++) checkIn(db, { installToken, version: `v${i}` }); // 200 more, none with stats
+
+  // Sanity: the query plan itself must use the index for ordering, not a
+  // full-table sort — this is the literal "is it indexed" the task asks
+  // about, not just a correctness check on the result.
+  const plan = db.prepare(
+    'EXPLAIN QUERY PLAN SELECT at, payload FROM checkins WHERE clinic_id = ? ORDER BY at DESC, id DESC'
+  ).all('c-1').map((r) => r.detail).join(' | ');
+  assert.match(plan, /checkins_clinic_at/i, `expected the checkins_clinic_at index to be used, got: ${plan}`);
+
+  const res = await req(server, 'GET', '/cp/v1/admin/clinics/c-1', { cookie });
+  const body = await res.json();
+  assert.deepEqual(body.clinic.latest_stats, { patients_total: 1 },
+    'must still find the one check-in with real stats, 200 rows deep');
+});
+
+test('GET /clinics/:id: latest_stats renders a name from an older/removed catalogue without breaking', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const installToken = enrol(db, 'c-1');
+  checkIn(db, { installToken });
+
+  // Hand-write a checkins payload as if an OLDER catalogue had reported a
+  // counter that no longer exists — the route must pass it straight through
+  // rather than throwing on an unrecognised key.
+  db.prepare('UPDATE checkins SET payload = ? WHERE clinic_id = ?')
+    .run(JSON.stringify({ module_requests: [], fingerprint_changed: false, stats: { a_counter_removed_since: 42 } }), 'c-1');
+
+  const res = await req(server, 'GET', '/cp/v1/admin/clinics/c-1', { cookie });
+  assert.equal(res.status, 200);
+  assert.deepEqual((await res.json()).clinic.latest_stats, { a_counter_removed_since: 42 });
+});
+
+// --- STATS_V1: GET /counters --------------------------------------------------
+
+test('GET /counters returns every catalogue name with its describe text', async (t) => {
+  const { server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const res = await req(server, 'GET', `${ADMIN_BASE}/counters`, { cookie });
+  assert.equal(res.status, 200);
+  const { counters } = await res.json();
+  assert.deepEqual(counters.map((c) => c.name).sort(), COUNTER_NAMES.slice().sort());
+  for (const c of counters) {
+    assert.equal(c.describe, COUNTERS[c.name].describe);
+    assert.ok(c.describe.length > 0);
+  }
+});
+
+// --- STATS_V1: POST /clinics/:id/collect --------------------------------------
+
+test('POST /clinics/:id/collect stores a valid subset, reflected on the next GET and the next real check-in', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const installToken = enrol(db, 'c-1');
+
+  const subset = ['patients_total', 'visits_today'];
+  const res = await req(server, 'POST', `${ADMIN_BASE}/clinics/c-1/collect`, { cookie, body: { names: subset } });
+  assert.equal(res.status, 200);
+  assert.ok((await res.json()).note, 'the panel needs this note to tell the owner the change is not instant');
+
+  const detail = await (await req(server, 'GET', `${ADMIN_BASE}/clinics/c-1`, { cookie })).json();
+  assert.deepEqual(detail.clinic.collect_set.slice().sort(), subset.slice().sort());
+
+  // And the real wire behaviour this exists for: the NEXT check-in reports it.
+  const result = checkIn(db, { installToken });
+  assert.deepEqual(result.collect.slice().sort(), subset.slice().sort());
+});
+
+test('POST /clinics/:id/collect can store an explicit empty list — collecting nothing is a real choice', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  enrol(db, 'c-1');
+
+  const res = await req(server, 'POST', `${ADMIN_BASE}/clinics/c-1/collect`, { cookie, body: { names: [] } });
+  assert.equal(res.status, 200);
+  const detail = await (await req(server, 'GET', `${ADMIN_BASE}/clinics/c-1`, { cookie })).json();
+  assert.deepEqual(detail.clinic.collect_set, [], 'an explicit empty choice must not read back as null (the default)');
+});
+
+test('POST /clinics/:id/collect rejects an unknown counter name with 400 — a direct API caller inventing a name should hear about it', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  enrol(db, 'c-1');
+
+  const res = await req(server, 'POST', `${ADMIN_BASE}/clinics/c-1/collect`, {
+    cookie, body: { names: ['patients_total', 'not_a_real_counter'] },
+  });
+  assert.equal(res.status, 400);
+  // Nothing must have been stored — a rejected call must not partially apply.
+  const detail = await (await req(server, 'GET', `${ADMIN_BASE}/clinics/c-1`, { cookie })).json();
+  assert.equal(detail.clinic.collect_set, null, 'a rejected update must leave collect_set exactly as it was');
+});
+
+test('POST /clinics/:id/collect rejects a non-array `names`', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  enrol(db, 'c-1');
+
+  for (const bad of ['not-an-array', 42, { also: 'not an array' }, null, undefined]) {
+    const res = await req(server, 'POST', `${ADMIN_BASE}/clinics/c-1/collect`, { cookie, body: { names: bad } });
+    assert.equal(res.status, 400, `names=${JSON.stringify(bad)} must be rejected`);
+  }
+});
+
+test('POST /clinics/:id/collect 404s for an unknown clinic', async (t) => {
+  const { server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const res = await req(server, 'POST', `${ADMIN_BASE}/clinics/no-such-clinic/collect`, { cookie, body: { names: [] } });
+  assert.equal(res.status, 404);
+});
+
+test('POST /clinics/:id/collect deduplicates repeated names in the same request', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  enrol(db, 'c-1');
+  const res = await req(server, 'POST', `${ADMIN_BASE}/clinics/c-1/collect`, {
+    cookie, body: { names: ['patients_total', 'patients_total', 'visits_today'] },
+  });
+  assert.equal(res.status, 200);
+  const row = db.prepare('SELECT collect_set FROM clinics WHERE clinic_id = ?').get('c-1');
+  assert.deepEqual(JSON.parse(row.collect_set).sort(), ['patients_total', 'visits_today']);
 });
 
 // --- POST /clinics (create) ---------------------------------------------------
