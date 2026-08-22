@@ -1,0 +1,227 @@
+# UPDATE_DELIVERY_V1 — a tag on main becomes a signed release, and nothing
+# else does. See docs/RELEASING.md for the maintainer's steps and
+# docs/plans/2026-08-20-update-delivery.md (Plan 4, Task 2) for why this
+# workflow is shaped the way it is.
+#
+# Only actions/checkout and actions/setup-node are used — both maintained by
+# GitHub itself. No other third-party Action runs in this job. A
+# supply-chain-compromised action with access to EASYMED_RELEASE_KEY could
+# sign a malicious bundle and have it accepted by every clinic that trusts
+# the release public key, so the surface here is kept to the smallest set
+# GitHub itself is responsible for; the GitHub release upload is done with
+# the `gh` CLI, which is preinstalled on the runner image and is not an
+# Action at all.
+name: Release
+
+# Tag pushes only — matching v*, never a plain branch push. A release is a
+# tag on main, made once, on purpose; there is no "release on every push"
+# path here at all.
+on:
+  push:
+    tags:
+      - 'v*'
+
+# contents: write is required for `gh release create` to publish a release
+# and upload assets using the workflow's own github.token — no separate PAT.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history, not the default shallow clone — the very next step
+          # walks ancestry from the tag back to main, which a shallow clone
+          # cannot do (there is nothing to walk).
+          fetch-depth: 0
+
+      - name: Refuse a tag that is not on main
+        # A release is a tag ON main, never a branch build — otherwise "which
+        # code is that clinic running?" has no answer (see "Read this first"
+        # in the Plan 4 doc). GITHUB_SHA on a tag-push trigger is the commit
+        # the tag points at.
+        #
+        # `git fetch origin main:refs/remotes/origin/main` is done explicitly
+        # here rather than relied upon from the checkout step above: it is
+        # very likely already populated by fetch-depth: 0, but this line
+        # costs nothing and removes any dependence on that being true across
+        # actions/checkout versions.
+        #
+        # merge-base --is-ancestor exits non-zero both when the tag truly
+        # isn't reachable from main AND when origin/main somehow fails to
+        # resolve at all — either way that's a "fail loudly, do not build" as
+        # far as this workflow is concerned.
+        run: |
+          git fetch origin main:refs/remotes/origin/main --force
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag $GITHUB_REF_NAME (commit $GITHUB_SHA) is not reachable from origin/main. A release must be a tag on main — see docs/RELEASING.md."
+            exit 1
+          fi
+          echo "OK: $GITHUB_REF_NAME is on main."
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        # Full install, NOT --ignore-scripts. --ignore-scripts is a
+        # Windows-dev-machine workaround (better-sqlite3's postinstall build
+        # step is what breaks there); this runner is Linux, where npm ci can
+        # fetch/build better-sqlite3's native binding normally, and the
+        # resulting node_modules is exactly what ships inside the bundle
+        # (build-bundle.mjs's ALLOWLIST includes node_modules) — a clinic
+        # needs the real compiled module, not a stubbed-out one.
+        run: npm ci
+
+      - name: Check the tag matches package.json's version
+        # The one local, pure gate this project can unit-test on its own
+        # (scripts/check-tag-version.test.js). Refuses the release outright
+        # on any mismatch — see that script's own header for why this is a
+        # hard gate here but only a warning inside build-bundle.mjs.
+        run: node scripts/check-tag-version.mjs "$GITHUB_REF_NAME"
+
+      - name: Test
+        # One retry, and only one. The plan's own instruction: a flaky gate
+        # that blocks every release is worse than no gate at all — the
+        # documented flake is ephemeral-port errors under concurrent test
+        # runs, which should not occur on a single Linux CI runner, but if it
+        # ever does, this line is why the release isn't blocked by it.
+        # A retry that fires is worth someone's attention, so it prints a
+        # visible warning rather than silently passing on the second try.
+        run: |
+          if ! npm test; then
+            echo "::warning::npm test failed on the first attempt — retrying once. If you see this warning, the suite has flaked or genuinely regressed; check the log above before trusting the release that follows."
+            npm test
+          fi
+
+      - name: Read the version floor from release.config.json
+        # A floor nobody consciously set must not default silently — see
+        # build-bundle.mjs's own comment on --min-from. release.config.json
+        # is a reviewed, versioned file precisely so raising or lowering this
+        # floor is a change someone made on purpose, in a diff someone read,
+        # not a default buried in this workflow.
+        run: |
+          MIN_FROM=$(node -e "console.log(JSON.parse(require('fs').readFileSync('release.config.json','utf8')).min_from)")
+          if [ -z "$MIN_FROM" ] || [ "$MIN_FROM" = "undefined" ]; then
+            echo "::error::release.config.json is missing min_from. Add e.g. { \"min_from\": \"0.1.0\" } — see docs/RELEASING.md."
+            exit 1
+          fi
+          echo "MIN_FROM=$MIN_FROM" >> "$GITHUB_ENV"
+
+      - name: Read clinic-facing release notes, if any
+        # RELEASE_NOTES.md (if the maintainer wrote one at this tag) is used
+        # for BOTH the signed bundle's notes_ru field (what a clinic admin
+        # reads on the approval screen, once Task 6 builds it) and the
+        # GitHub Release body below — one Russian file, not two places that
+        # could drift apart.
+        run: |
+          if [ -f RELEASE_NOTES.md ]; then
+            # A random delimiter, not a fixed "EOF_NOTES" — GITHUB_ENV's
+            # multiline form is terminated by finding this exact line, so a
+            # release note that happened to contain that literal line would
+            # otherwise truncate itself or leak into later env vars.
+            DELIM="EOF_$(date +%s%N)"
+            {
+              echo "NOTES<<$DELIM"
+              cat RELEASE_NOTES.md
+              echo "$DELIM"
+            } >> "$GITHUB_ENV"
+            echo "HAS_NOTES=1" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No RELEASE_NOTES.md at this tag — the bundle's notes_ru will be empty and the GitHub Release will fall back to --generate-notes (raw commit log, not clinic-facing Russian text). See docs/RELEASING.md."
+            echo "NOTES=" >> "$GITHUB_ENV"
+            echo "HAS_NOTES=0" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build and sign the release bundle
+        # The signing key lives ONLY for the duration of this step: written
+        # to a runner-local temp file immediately before use, deleted
+        # immediately after (next step, which runs even if this one fails).
+        # No `set -x` here, deliberately — tracing this step would echo the
+        # key file's path into the public log on every line, and depending on
+        # how a failure message is composed could echo file contents too.
+        # Never add `set -x` (or `ACTIONS_STEP_DEBUG`-driven tracing) to this
+        # step.
+        env:
+          EASYMED_RELEASE_KEY: ${{ secrets.EASYMED_RELEASE_KEY }}
+        run: |
+          # Fail loudly on an empty/unset secret rather than let it reach
+          # build-bundle.mjs — which WOULD also refuse (an empty file is not
+          # a valid Ed25519 key, per its own error message), but catching it
+          # here means the failure reads as "secret missing" and not "signing
+          # step to a stranger a stack frame deep threw."
+          if [ -z "$EASYMED_RELEASE_KEY" ]; then
+            echo "::error::EASYMED_RELEASE_KEY secret is empty or not set. This bundle would otherwise be signed with nothing. Set the secret — see docs/RELEASING.md's one-time setup section."
+            exit 1
+          fi
+
+          # umask 077 before the file exists at all — every subsequent write
+          # to KEY_FILE is created 0600, never briefly world/group readable.
+          umask 077
+          KEY_FILE="$RUNNER_TEMP/easymed-release-key.pem"
+          printf '%s' "$EASYMED_RELEASE_KEY" > "$KEY_FILE"
+          echo "KEY_FILE=$KEY_FILE" >> "$GITHUB_ENV"
+
+          # build-bundle.mjs's --version wants "2.4.0", not the tag's "v2.4.0"
+          # — its VERSION_RE is strictly \d+.\d+.\d+. Read package.json's own
+          # version rather than re-deriving the "v" strip ad hoc here: the
+          # previous step already proved tag and package.json agree
+          # (scripts/check-tag-version.mjs), so package.json's value IS the
+          # tag's value, with no second place that stripping logic could
+          # quietly diverge from check-tag-version.mjs's own.
+          VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('package.json','utf8')).version)")
+
+          OUT_DIR="$RUNNER_TEMP/easymed-bundle-out"
+          echo "OUT_DIR=$OUT_DIR" >> "$GITHUB_ENV"
+          node scripts/build-bundle.mjs \
+            --version "$VERSION" \
+            --notes "$NOTES" \
+            --min-from "$MIN_FROM" \
+            --key "$KEY_FILE" \
+            --out "$OUT_DIR"
+
+      - name: Delete the signing key
+        # Runs even if the build step above failed — a key must not be left
+        # on the runner's disk either way. `shred -u` (ubuntu-latest ships
+        # GNU coreutils) overwrites before unlinking; plain `rm -f` is the
+        # fallback if shred is ever unavailable, so cleanup cannot silently
+        # no-op.
+        if: always()
+        run: |
+          if [ -n "$KEY_FILE" ] && [ -f "$KEY_FILE" ]; then
+            shred -u "$KEY_FILE" 2>/dev/null || rm -f "$KEY_FILE"
+          fi
+
+      - name: Publish the GitHub Release
+        env:
+          # github.token, not a separate PAT — scoped to this run, expires
+          # with it. Sufficient for `gh release create` given contents:write
+          # above.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAR_PATH=$(ls "$OUT_DIR"/easymed-*.tar.gz)
+          MANIFEST_PATH=$(ls "$OUT_DIR"/easymed-*.manifest.json)
+
+          # Idempotent re-run: if a previous attempt at this same tag got far
+          # enough to publish a release but something after it failed (or the
+          # job is simply being re-run after a fix), `gh release create`
+          # refuses outright because the release already exists. Deleting and
+          # recreating makes a re-run behave the same as a first run, which is
+          # what "re-run this failed workflow" should mean. `--cleanup-tag` is
+          # deliberately NOT passed: this only ever removes the GitHub Release
+          # object, never the git tag itself — the tag is the one thing this
+          # entire workflow must never touch.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "::warning::A release for $GITHUB_REF_NAME already exists — deleting and recreating it (assumed to be a re-run of a previous attempt at the same tag; the tag itself is left alone)."
+            gh release delete "$GITHUB_REF_NAME" --yes
+          fi
+
+          if [ "$HAS_NOTES" = "1" ]; then
+            gh release create "$GITHUB_REF_NAME" "$TAR_PATH" "$MANIFEST_PATH" --notes-file RELEASE_NOTES.md
+          else
+            gh release create "$GITHUB_REF_NAME" "$TAR_PATH" "$MANIFEST_PATH" --generate-notes
+          fi

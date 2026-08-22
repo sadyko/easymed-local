@@ -1,0 +1,41 @@
+# UPDATE_DELIVERY_V1 — the review-gate promise from docs/WORKFLOW.md ("3. Make
+# the change, then confirm it... npm test") enforced server-side, not just
+# taken on trust: every PR and every push to main runs the suite. Deliberately
+# small — this is not the release pipeline (.github/workflows/release.yml),
+# it never builds or signs anything, it only proves the suite is green.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        # Full install, not --ignore-scripts — see release.yml's identical
+        # comment: that flag is a Windows-dev-machine workaround for
+        # better-sqlite3's native build step, not something CI needs.
+        run: npm ci
+
+      - name: Test
+        # Same single-retry policy as release.yml, for the same reason: the
+        # documented flake is ephemeral-port errors, environmental rather
+        # than a real regression, and a retry that fires is worth a loud line
+        # in the log rather than a silent pass.
+        run: |
+          if ! npm test; then
+            echo "::warning::npm test failed on the first attempt — retrying once. If you see this warning, check the log above before assuming it was just the known port-binding flake."
+            npm test
+          fi
