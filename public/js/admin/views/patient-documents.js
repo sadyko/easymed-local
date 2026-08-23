@@ -154,8 +154,9 @@ function searchCard() {
     });
 
     // Лупа внутри поля — поле и так одно, отдельный заголовок «Find patient»
-    // ему больше не нужен.
-    const searchWrap = h('div', { style: { position: 'relative', flex: '1 1 300px', minWidth: '240px' } },
+    // ему больше не нужен. flex 0 1: поле НЕ растягивается на всю ширину —
+    // во всю строку оно отталкивало период за край экрана.
+    const searchWrap = h('div', { style: { position: 'relative', flex: '0 1 320px', minWidth: '220px' } },
         h('span', { style: { position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--ink-400)', pointerEvents: 'none', display: 'flex' } },
             Icon('Search', { size: 16 })),
         searchInp);
@@ -208,7 +209,14 @@ function paintPeriodRow() {
     refs.periodRow.appendChild(dateInp(feed.from, (v) => { feed.from = v; }));
     refs.periodRow.appendChild(h('span', { class: 'muted', style: { fontSize: '12px' } }, '—'));
     refs.periodRow.appendChild(dateInp(feed.to, (v) => { feed.to = v; }));
-    refs.periodRow.appendChild(chip(feed.from === weekStart() && feed.to === today, 'Эта неделя', () => {
+    refs.periodRow.appendChild(chip(feed.from === today && feed.to === today, 'Сегодня', () => {
+        feed.from = ymdLocal(new Date()); feed.to = ymdLocal(new Date());
+        paintPeriodRow(); reloadFeed();
+    }));
+    // «Эта неделя» не подсвечивается, когда выбран «Сегодня», хотя сегодняшний
+    // день формально внутри недели: пресет — это ровно тот диапазон, что стоит
+    // в датах, а не «пересекается с ним».
+    refs.periodRow.appendChild(chip(feed.from === weekStart() && feed.to === today && feed.from !== today, 'Эта неделя', () => {
         feed.from = weekStart(); feed.to = ymdLocal(new Date());
         paintPeriodRow(); reloadFeed();
     }));
