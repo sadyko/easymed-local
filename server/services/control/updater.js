@@ -492,7 +492,18 @@ async function runPipeline(db, dataDir, offer, {
     // and this function returns immediately rather than hanging on a
     // process that is about to outlive its parent.
     try {
-      const applyScript = path.join(layout.root, 'current', 'install', 'apply-update.ps1');
+      // The INCOMING version's copy of the apply script, not the running one's.
+      // The 0.2.1→0.2.2 transition proved why: 0.2.2 carried the fixes for the
+      // very update machinery installing it, and running 0.2.1's broken copy
+      // meant the fixes could not apply to their own transition. The staged
+      // copy is part of the signature-verified bundle unpacked two steps
+      // above, so trusting it is trusting the same signature that gated the
+      // whole pipeline. Fallback to current's copy only if a (future) bundle
+      // ships without install/ — never a reason to refuse the update itself.
+      const stagedScript = path.join(layout.root, 'versions', offer.version, 'install', 'apply-update.ps1');
+      const applyScript = fs.existsSync(stagedScript)
+        ? stagedScript
+        : path.join(layout.root, 'current', 'install', 'apply-update.ps1');
       const child = spawnImpl(
         'powershell.exe',
         ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', applyScript, '-Version', offer.version, '-Root', layout.root, '-Port', String(port)],

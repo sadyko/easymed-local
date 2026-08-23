@@ -78,6 +78,11 @@ function makeSignedBundle({ version = '2.4.0', minFrom = '0.0.0', keyOverride } 
   fs.mkdirSync(path.join(src, 'server'), { recursive: true });
   fs.writeFileSync(path.join(src, 'server', 'index.js'), `console.log("v${version}");\n`);
   fs.writeFileSync(path.join(src, 'package.json'), JSON.stringify({ name: 'synthetic', version }));
+  // install/ ships in every real bundle (the allow-list includes it) and the
+  // spawn now PREFERS the staged copy of apply-update.ps1 - the fixture must
+  // look like a real bundle or that primary path is never the one under test.
+  fs.mkdirSync(path.join(src, 'install'), { recursive: true });
+  fs.writeFileSync(path.join(src, 'install', 'apply-update.ps1'), '# synthetic stand-in\n');
 
   const keyDir = tmpDir('em-updater-key-');
   const keyPath = path.join(keyDir, 'release-private.pem');
@@ -423,6 +428,11 @@ test('versioned layout: stages under <root>\\versions\\<version> and spawns appl
   // the wrong port and refuses every update (2026-08-23, the 8712 test clinic).
   assert.ok(spawnArgs.args.includes('-Port'));
   assert.equal(spawnArgs.args[spawnArgs.args.indexOf('-Port') + 1], '8451');
+  // The STAGED version's apply script, not current's: script fixes must
+  // apply to their own transition (the 0.2.1->0.2.2 lesson). The staged
+  // copy is inside the signature-verified bundle unpacked moments earlier.
+  const fileArg = spawnArgs.args[spawnArgs.args.indexOf('-File') + 1];
+  assert.ok(fileArg.includes(path.join('versions', '2.4.0', 'install')), 'spawns the staged copy: ' + fileArg);
   assert.ok(fs.existsSync(path.join(dataDir, 'update-result.json')));
 });
 
