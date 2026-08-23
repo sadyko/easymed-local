@@ -55,6 +55,16 @@ const ALWAYS_ALLOWED_RPCS = new Set([
   // instead of waiting for the daily timer. Blocking it at 402 would be
   // locking the clinic out of the one action that ends the lock.
   'update_check_now',
+  // SYSTEM_SETTINGS_V1 — the backup/restore/reset block. A licence-lapsed
+  // clinic must still be able to SAVE its data, and a decommissioned one to
+  // erase itself — a lock that stands between a clinic and its own data would
+  // turn a billing dispute into data hostage-taking. Safety does not depend
+  // on this gate: all four re-check the admin role in their handlers
+  // (rpc/backup.js), and the two destructive ones re-verify the caller's own
+  // password with bcrypt on top. backup_list fits READ_ONLY_RPCS' letter, but
+  // it travels with its three siblings so the feature is one findable block
+  // with one reasoning.
+  'backup_list', 'backup_create', 'backup_restore', 'factory_reset',
 ]);
 
 export function isReadOnlyRpc(name) { return READ_ONLY_RPCS.has(name); }

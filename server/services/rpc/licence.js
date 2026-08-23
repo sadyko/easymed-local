@@ -32,6 +32,14 @@ export function licenceStatus(db, args, user) {
     days_left: s.daysLeft,
     modules: s.modules,
     clinic_name: s.clinicName,
+    // SYSTEM_SETTINGS_V1 — the subscription card's extra facts. clinic_id and
+    // valid_until ride along from controlState (valid_until is the EFFECTIVE
+    // expiry — see state.js's shape() for why it is not the raw licence
+    // field); last_checkin is a read of the control_state record checkin.js
+    // already writes after every successful call home — no new storage.
+    clinic_id: s.clinicId,
+    valid_until: s.validUntil,
+    last_checkin: db.prepare("SELECT value FROM control_state WHERE key = 'last_checkin_at'").get()?.value ?? null,
     clock_anomaly: s.clockAnomaly,
     // Shown on the lock screen for the telephone call, so it must be available
     // even with no control.json at all (an unenrolled install: reason

@@ -110,10 +110,10 @@ export function controlState(db, dataDir, systemNow = new Date()) {
     ? licence.modules.filter((m) => typeof m === 'string')
     : [];
 
-  return shape(ladder, modules, identity.clinic_id, licence?.clinic_name ?? null, anomaly);
+  return shape(ladder, modules, identity.clinic_id, licence?.clinic_name ?? null, anomaly, until);
 }
 
-function shape(ladder, modules, clinicId, clinicName, clockAnomalyFlag) {
+function shape(ladder, modules, clinicId, clinicName, clockAnomalyFlag, validUntil = null) {
   const set = new Set(modules);
   return {
     state:    ladder.state,
@@ -124,6 +124,12 @@ function shape(ladder, modules, clinicId, clinicName, clockAnomalyFlag) {
     clinicId,
     clinicName,
     clockAnomaly: clockAnomalyFlag,
+    // SYSTEM_SETTINGS_V1 — the EFFECTIVE expiry (`until` above: licence vs.
+    // phone extension, whichever reaches further), not the raw licence field.
+    // It is the date daysLeft counts down to, and the settings screen shows
+    // the two side by side — a date that disagreed with its own countdown
+    // would read as a bug to the clinic.
+    validUntil,
     has: (key) => set.has(key),
   };
 }

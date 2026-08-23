@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { moduleRequest, licenceEnroll } from './licence.js';
+import { moduleRequest, licenceEnroll, licenceStatus } from './licence.js';
+import { setDataDir } from '../control/config.js';
+import { licensedDataDir } from '../control/licensed-fixture.js';
 import { getRpc } from './index.js';
 import { isAlwaysAllowedRpc } from '../control/gate.js';
 
@@ -187,4 +189,21 @@ test('licence_enroll is registered and reachable through a not_enrolled lock', (
   // is ALWAYS locked, so missing either line would make the screen 402 itself.
   assert.ok(getRpc('licence_enroll'), 'must be in the RPC registry');
   assert.equal(isAlwaysAllowedRpc('licence_enroll'), true, 'must be in ALWAYS_ALLOWED_RPCS');
+});
+
+// --- SYSTEM_SETTINGS_V1 — the subscription card's extra facts ---------------
+
+test('licence_status carries the subscription card facts: clinic id, valid-until, last check-in', () => {
+  const db = fresh();
+  setDataDir(licensedDataDir());
+  const before = licenceStatus(db, {}, USER);
+  assert.equal(before.clinic_id, 'test-clinic');
+  assert.equal(new Date(before.valid_until).getTime(), new Date('2099-01-01T00:00:00Z').getTime());
+  assert.equal(before.last_checkin, null,
+    'an install that has never checked in says so rather than inventing a date');
+
+  // The key checkin.js itself writes after every successful call home —
+  // this field is a read of that record, not new storage.
+  db.prepare("INSERT INTO control_state (key, value) VALUES ('last_checkin_at', '2026-08-22T10:00:00.000Z')").run();
+  assert.equal(licenceStatus(db, {}, USER).last_checkin, '2026-08-22T10:00:00.000Z');
 });

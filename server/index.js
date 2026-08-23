@@ -5,7 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb } from './db/connection.js';
 import { migrate, pendingMigrations } from './db/migrate.js';
-import { backupBeforeMigrate, pruneBackups } from './db/backup.js';   // SUPERVISED_INSTALL_V1
+import { backupBeforeMigrate } from './db/backup.js';   // SUPERVISED_INSTALL_V1
+import { processPendingAction, pruneBackupsByKind, scheduleDailyBackups } from './services/backup.js';   // SYSTEM_SETTINGS_V1
 import { bootstrapAdmin } from './services/auth.js';
 import { autoCloseStaleShifts } from './services/rpc/cashier.js';   // SHIFT_AUTOCLOSE_V1
 import { startTelegramBot } from './services/telegram/index.js';   // TELEGRAM_BOT_V1
@@ -106,6 +107,16 @@ const isMain = process.argv[1]
   && realPath(path.resolve(process.argv[1])) === realPath(fileURLToPath(import.meta.url));
 
 if (isMain) {
+  // SYSTEM_SETTINGS_V1 — a restore or factory reset the admin requested from
+  // the settings screen is applied HERE, before openDb: Windows will not
+  // rename a file this process already holds open, so "before the first
+  // handle exists" is the mechanism, not just an ordering preference.
+  // processPendingAction never throws — a marker it cannot act on is set
+  // aside as .bad and the clinic boots on whatever database it has.
+  const pending = processPendingAction(DATA_DIR);
+  if (pending.action === 'restore') console.log(`  Restored database from backup: ${pending.backup}`);
+  if (pending.action === 'factory_reset') console.log('  Factory reset applied — this is now a fresh install.');
+
   const db = openDb(path.join(DATA_DIR, 'easymed.db'));
   // SHIFT_AUTOCLOSE_V1 — кассовые смены живут до конца дня (00:00): закрываем
   // просроченные при старте и раз в час (перекрывает полночь, пока сервер жив;
@@ -135,8 +146,13 @@ if (isMain) {
       // line above already told the operator the backup succeeded — a
       // failure here must never be reported as "no rollback point exists"
       // when one plainly does, sitting right there on disk.
+      //
+      // SYSTEM_SETTINGS_V1 — kind-aware since the daily/manual backups
+      // arrived: the old pruneBackups(dir, 3) counted ALL .db files against
+      // one limit of three, so fourteen daily copies would have evicted every
+      // pre-update rollback point (and vice versa) the day this shipped.
       try {
-        pruneBackups(path.join(DATA_DIR, 'backups'), 3);
+        pruneBackupsByKind(path.join(DATA_DIR, 'backups'));
       } catch (e) {
         console.warn('[backup] could not prune old backups (the new backup is fine):', e.message);
       }
@@ -225,6 +241,12 @@ if (isMain) {
   // than letting updater.js recompute it from its own module path — the two
   // must never be able to disagree about what "the app directory" is.
   scheduleUpdater(db, DATA_DIR, { appRoot: ROOT });
+
+  // SYSTEM_SETTINGS_V1 — the daily database copy, same shape as the two
+  // schedulers above: unref'd timers, every tick self-contained. First tick
+  // ~5 minutes after boot on purpose — a clinic PC powered on in the morning
+  // and shut down before the first full hour still gets its backup for the day.
+  scheduleDailyBackups(db, DATA_DIR);
 }
 
 function lanAddresses() {

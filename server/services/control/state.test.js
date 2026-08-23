@@ -192,3 +192,27 @@ test('a far-future licence is not shortened by a stale extension in the past', (
   assert.equal(s.locked, false);
   assert.deepEqual(s.modules, ['crm']);
 });
+
+// SYSTEM_SETTINGS_V1 — the settings screen's subscription card shows the date
+// the countdown runs against. That is the EFFECTIVE date (licence vs. phone
+// extension, whichever reaches further), not the raw licence field: showing a
+// date that disagrees with days_left would read as a bug to the clinic.
+test('validUntil reports the date the countdown runs against', () => {
+  const { dir, db } = workspace({ licence: issue() });
+  const s = controlState(db, dir, new Date('2026-08-25T00:00:00Z'));
+  assert.equal(new Date(s.validUntil).getTime(), new Date('2026-09-03T00:00:00Z').getTime());
+});
+
+test('a phone unlock that outlives the licence moves validUntil with it', () => {
+  const { dir, db } = workspace({ licence: issue() });
+  db.prepare("INSERT INTO control_state (key, value) VALUES ('offline_extension_until', '2026-09-20T00:00:00Z')").run();
+  const s = controlState(db, dir, new Date('2026-09-10T00:00:00Z'));
+  assert.equal(new Date(s.validUntil).getTime(), new Date('2026-09-20T00:00:00Z').getTime());
+});
+
+test('an unenrolled or unlicensed install has no validUntil, not a crash', () => {
+  const { dir: noId, db: db1 } = workspace({ identity: null });
+  assert.equal(controlState(db1, noId, new Date()).validUntil, null);
+  const { dir: noLic, db: db2 } = workspace();
+  assert.equal(controlState(db2, noLic, new Date()).validUntil, null);
+});

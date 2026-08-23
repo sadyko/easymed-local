@@ -133,7 +133,12 @@ const GROUPS = [
             // UPDATE_DELIVERY_V1 — the approval screen (views/updates.js) is
             // also reachable from its own quiet banner; this row is the
             // other of the two entry points the plan calls for.
-            { label: 'Обновления',          desc: 'Версия системы и установка обновлений', icon: 'Download', live: true, action: nav('updates') },
+            // SYSTEM_SETTINGS_V1 — relabelled «Обновления» → «Система»: the
+            // screen behind it grew activation/subscription, backups and the
+            // danger zone. The ROUTE ID stays 'updates' on purpose — deep
+            // links and admin.js's lockout exemption both key on the id, not
+            // this label (see views/updates.js's own header).
+            { label: 'Система',             desc: 'Обновления, активация, резервные копии и данные клиники', icon: 'Shield', live: true, action: nav('updates') },
         ],
     },
     {

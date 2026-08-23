@@ -22,6 +22,7 @@ import { cashierReport } from './cashier-report.js';   // CASHIER_REPORT_V1
 import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
 import { licenceStatus, licenceUnlock, licenceEnroll, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
+import { backupList, backupCreate, backupRestore, factoryReset } from './backup.js';   // SYSTEM_SETTINGS_V1
 
 export const RPC = {
   get_clinic_by_slug:       (db, args, user) => getClinicBySlug(db, args, user),
@@ -187,6 +188,14 @@ export const RPC = {
   // very thing that can UNLOCK a locked clinic (licence renewal), so it must
   // stay reachable through a lapse.
   update_check_now: (db, args, user) => updateCheckNow(db, args, user),
+
+  // SYSTEM_SETTINGS_V1 — Настройки → Система: резервные копии и опасная зона.
+  // Also always-allowed through a licence lapse (control/gate.js has the
+  // reasoning); the admin-role and caller-password checks live in backup.js.
+  backup_list:      (db, args, user) => backupList(db, args, user),
+  backup_create:    (db, args, user) => backupCreate(db, args, user),
+  backup_restore:   (db, args, user) => backupRestore(db, args, user),
+  factory_reset:    (db, args, user) => factoryReset(db, args, user),
 };
 
 export function getRpc(name) {

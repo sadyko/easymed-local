@@ -84,6 +84,8 @@ const DEFS = {
     Stop:        '<rect x="5" y="5" width="14" height="14" rx="2"/>',
     Repeat:      '<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
     Pause:       '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
+    Shield:      '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',   // SYSTEM_SETTINGS_V1 — the activation & subscription card
+    Database:    '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>',   // SYSTEM_SETTINGS_V1 — the backups card
 };
 
 export function iconHtml(name, { size = 18, stroke = 1.75 } = {}) {

@@ -144,6 +144,29 @@ export async function renderActivation(root, lic) {
 // in one place, control-plane-side (mirrored by control/enroll.js), so the
 // screen can never disagree with it.
 function renderEnrollment(root) {
+    const { input, btn, statusEl } = buildEnrollForm();
+
+    root.appendChild(h('div', { class: 'card activation-screen' },
+        h('div', { class: 'act-icon' }, Icon('Lock', { size: 26 })),
+        h('h1', { class: 'act-title' }, 'Активация Easy-Med'),
+        h('p', { class: 'act-reassure' },
+            'Введите код активации, полученный от менеджера Easy-Med.'),
+        field('Введите код активации', input),
+        btn,
+        statusEl,
+    ));
+}
+
+// SYSTEM_SETTINGS_V1 (docs/plans/2026-08-23-system-settings.md, Task 3) — the
+// EM- code entry itself (input + button + status, wired to licence_enroll),
+// extracted so the Settings → «Система» subscription card
+// (views/system-subscription.js) reuses THIS flow instead of keeping a copy
+// that would drift from it — the plan's own "extract the shared piece rather
+// than copy it". Behavior is renderEnrollment's, unchanged: the code goes to
+// the server exactly as typed (normalisation lives control-plane-side, so no
+// screen can disagree with it), the server's Russian sentence is shown as-is
+// on failure, and success reloads — the whole app must re-read its licence.
+export function buildEnrollForm() {
     const statusEl = h('div', { class: 'act-status', role: 'status' });
 
     const input = h('input', {
@@ -153,8 +176,9 @@ function renderEnrollment(root) {
 
     // Same explicit re-entrancy guard as doUnlock above, for the same two
     // race paths (double click, Enter during an in-flight click). Kept as a
-    // sibling rather than extracted: the two flows share a shape but not a
-    // fate — different RPC, different success action, different fallback text.
+    // sibling of doUnlock rather than merged with it: the two flows share a
+    // shape but not a fate — different RPC, different success action,
+    // different fallback text.
     const doEnroll = async () => {
         if (btn.disabled) return;
         btn.disabled = true;
@@ -187,13 +211,5 @@ function renderEnrollment(root) {
 
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault?.(); doEnroll(); } });
 
-    root.appendChild(h('div', { class: 'card activation-screen' },
-        h('div', { class: 'act-icon' }, Icon('Lock', { size: 26 })),
-        h('h1', { class: 'act-title' }, 'Активация Easy-Med'),
-        h('p', { class: 'act-reassure' },
-            'Введите код активации, полученный от менеджера Easy-Med.'),
-        field('Введите код активации', input),
-        btn,
-        statusEl,
-    ));
+    return { input, btn, statusEl };
 }

@@ -3704,3 +3704,58 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .upd-uptodate { flex-direction: row; align-items: center; gap: 10px; color: var(--ink-700); }
 .upd-uptodate-ic { color: var(--primary-700, #0a6e61); }
 .upd-error { color: var(--crit-700, #b91c1c); margin: 0; }
+
+/* SYSTEM_SETTINGS_V1 (docs/plans/2026-08-23-system-settings.md, Task 3) —
+   Settings → «Система»: the three cards that joined the updates screen
+   (views/system-subscription.js / system-backups.js / system-danger.js) and
+   the restart takeover (system-restart.js). Same calm register as the upd-
+   block above; --crit red appears ONLY on the danger card and inside the
+   two destructive modals — the one place on this page where something can
+   actually be lost. */
+.sys-section-title { font-size: 15px; font-weight: 700; color: var(--ink-900); margin: 10px 0 0; }
+.sys-card { gap: 12px; margin-top: 14px; }
+.sys-card-head { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: var(--ink-900); }
+.sys-info { display: grid; grid-template-columns: max-content 1fr; gap: 7px 18px; font-size: 13px; align-items: center; }
+.sys-info-label { color: var(--ink-500); }
+.sys-info-value { color: var(--ink-800); }
+.sys-block-title { font-size: 13px; font-weight: 700; color: var(--ink-700); margin-top: 4px; }
+.sys-modules { display: flex; flex-direction: column; gap: 7px; }
+.sys-module-row { display: flex; align-items: center; gap: 12px; font-size: 13px; flex-wrap: wrap; }
+.sys-module-name { min-width: 220px; color: var(--ink-800); }
+.sys-module-on { display: inline-flex; align-items: center; gap: 5px; color: var(--ok-700); font-size: 12.5px; font-weight: 600; }
+.sys-module-off { font-size: 12.5px; }
+.sys-module-req { display: inline-flex; align-items: center; gap: 8px; }
+.sys-module-req-status { font-size: 12px; }
+.sys-enroll { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--ink-100); }
+.sys-enroll-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sys-actions-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sys-action-status { font-size: 12.5px; min-height: 16px; margin: 0; }
+.sys-note { font-size: 12.5px; margin: 0; line-height: 1.5; }
+.sys-backups-tbl { width: 100%; }
+.sys-backups-tbl td { vertical-align: middle; }
+.sys-backups-restore { text-align: right; }
+.sys-danger { border: 1px solid #fecaca; background: var(--crit-50, #fef2f2); }
+.sys-danger .sys-card-head { color: var(--crit-700, #b91c1c); }
+.sys-danger-text { color: var(--ink-700); }
+.sys-modal-body { display: flex; flex-direction: column; gap: 10px; }
+.sys-modal-input { width: 100%; box-sizing: border-box; }
+.sys-modal-lead { font-size: 13.5px; color: var(--ink-800); margin: 0; }
+.sys-modal-warn { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--crit-700, #b91c1c);
+    background: var(--crit-50, #fef2f2); border-radius: 8px; padding: 8px 10px; margin: 0; }
+.sys-modal-note { font-size: 12.5px; color: var(--ink-600); margin: 0; line-height: 1.5; }
+.sys-modal-status { font-size: 12.5px; color: var(--crit-700, #b91c1c); min-height: 16px; margin: 0; }
+.sys-death-list { margin: 0; padding-left: 20px; font-size: 13px; color: var(--ink-800); display: flex; flex-direction: column; gap: 4px; }
+.sys-wipe-row { display: flex; flex-direction: column; gap: 4px; }
+/* The restart takeover — deliberately ABOVE every modal z-index in this file
+   (150 is the working modal layer): once the server is exiting, nothing
+   underneath may look pressable. */
+.sys-restart-overlay { position: fixed; inset: 0; z-index: 400; background: rgba(11, 20, 24, 0.72);
+    display: flex; align-items: center; justify-content: center; }
+.sys-restart-card { background: #fff; border-radius: 14px; padding: 28px 32px; max-width: 440px;
+    display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+.sys-restart-title { margin: 0; font-size: 16px; font-weight: 700; color: var(--ink-900); }
+.sys-restart-msg { margin: 0; font-size: 13px; color: var(--ink-700); line-height: 1.5; }
+.sys-restart-hint { margin: 0; font-size: 12.5px; color: var(--ink-500); line-height: 1.5; }
+.sys-restart-spin { width: 26px; height: 26px; border-radius: 50%; border: 3px solid var(--ink-100);
+    border-top-color: var(--primary-700, #0a6e61); animation: sys-spin 0.9s linear infinite; }
+@keyframes sys-spin { to { transform: rotate(360deg); } }

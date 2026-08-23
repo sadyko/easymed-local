@@ -1,23 +1,34 @@
 // UPDATE_DELIVERY_V1 (docs/plans/2026-08-20-update-delivery.md, Task 6) — the
 // approval screen: the moment a human says yes to an offered version and
-// picks the hour. Route 'updates', reachable from renderUpdateBanner()
-// (admin.js) and from Settings → «Обновления» (settings-hub.js). It survives
-// a full licence lockout on purpose (admin.js's renderViewInner exempts
-// 'updates' next to 'activation') — an update may be exactly what fixes the
-// clinic's own licensing situation, and the RPCs behind this screen are
-// READ_ONLY / ALWAYS_ALLOWED server-side for exactly that reason (see
+// picks the hour. SYSTEM_SETTINGS_V1 (docs/plans/2026-08-23-system-settings.md,
+// Task 3) grew this route into Settings → «Система»: the updates cards this
+// file owns, then three sibling card modules — activation & subscription
+// (system-subscription.js), backups (system-backups.js) and the danger zone
+// (system-danger.js) — split out rather than inlined so this file stays
+// readable (the same sibling-module pattern laboratory.js uses for
+// lab-barcode.js/lab-grouping.js). Route id stays 'updates' on purpose: deep
+// links and admin.js's lockout exemption both key on it.
+//
+// Reachable from renderUpdateBanner() (admin.js) and from Settings →
+// «Система» (settings-hub.js). It survives a full licence lockout on purpose
+// (admin.js's renderViewInner exempts 'updates' next to 'activation') — an
+// update may be exactly what fixes the clinic's own licensing situation, and
+// now also because a lapsed clinic must still be able to save its data and a
+// decommissioned one to erase itself (the backup/reset RPCs are
+// ALWAYS_ALLOWED server-side for the same reason — see
 // server/services/control/gate.js's own comment).
 //
 // READABLE BY ANYONE; the approve/change/cancel BUTTONS render only for an
 // admin actor — checked the same way cashier-desk.js's isGeneralAdmin() and
 // telegram-chat.js's canBroadcast() already do (primary role OR 'admin' in
 // extra_roles, never `user.role === 'admin'` alone — see isAdminActor()
-// below). This is politeness only: update_approve/update_cancel re-check
-// hasAnyRole(user, ['admin']) server-side no matter what this screen renders.
+// below). The sibling cards receive that same verdict as a parameter instead
+// of re-deriving it, so all call sites still move together. This is
+// politeness only: every RPC re-checks server-side no matter what renders.
 //
-// Every scheduling/formatting DECISION lives in ../updates-logic.js as a
-// pure, unit-tested function — this file only builds DOM and talks to the
-// three RPCs (update_status / update_approve / update_cancel).
+// Every scheduling/formatting DECISION lives in ../updates-logic.js (updates)
+// or ../system-logic.js (the three new cards) as pure, unit-tested functions —
+// the view files only build DOM and talk to RPCs.
 
 import { h, Icon, clear, toast } from '../ui.js';
 import { tr } from '../i18n.js';
@@ -27,6 +38,9 @@ import {
     scheduleChoices, resolveHour, isValidHour, offerIsCurrent,
     formatScheduled, updateOutcomeMessage, whatsNewState,
 } from '../updates-logic.js';
+import { renderSubscriptionCard } from './system-subscription.js';
+import { renderBackupsCard } from './system-backups.js';
+import { renderDangerCard } from './system-danger.js';
 
 const LAST_SEEN_KEY = 'em.updates.lastSeenVersion';
 const NOTES_CACHE_KEY = 'em.updates.notesCache';   // { [version]: notes_ru } — small, capped below
@@ -94,11 +108,17 @@ export async function renderUpdates(root) {
     // Admin-only in the UI to match the server's own hasAnyRole gate; the
     // server re-checks regardless, this is the same politeness as the
     // approve/cancel buttons above it.
+    // The page head says «Система» (settings-hub.js's tile matches); the
+    // check button stays up here because it serves TWO cards at once — the
+    // same check-in that fetches an update offer also renews the licence and
+    // delivers module grants, so it is the subscription card's "refresh"
+    // exactly as much as the updates card's (the plan's own table says so).
+    const admin = isAdminActor();
     const head = h('div', { class: 'page-head' },
         h('div', null,
-            h('h1', { class: 'page-title' }, 'Обновления'),
-            h('p', { class: 'page-subtitle' }, 'Версия системы и установка обновлений.')));
-    if (isAdminActor()) {
+            h('h1', { class: 'page-title' }, 'Система'),
+            h('p', { class: 'page-subtitle' }, 'Обновления, активация, резервные копии и данные клиники.')));
+    if (admin) {
         const checkStatus = h('span', { class: 'upd-check-status muted', role: 'status' });
         const checkBtn = h('button', {
             type: 'button', class: 'btn btn-outline upd-check-btn',
@@ -108,10 +128,11 @@ export async function renderUpdates(root) {
     }
     wrap.appendChild(head);
 
+    wrap.appendChild(h('h2', { class: 'sys-section-title' }, 'Обновления'));
     wrap.appendChild(body);
     body.appendChild(h('div', { class: 'empty' }, 'Загрузка…'));
 
-    let status;
+    let status = null;
     try {
         const { data, error } = await supabase.rpc('update_status', {});
         if (error) throw error;
@@ -120,9 +141,28 @@ export async function renderUpdates(root) {
         clear(body);
         body.appendChild(h('div', { class: 'card upd-card' },
             h('p', { class: 'upd-error', role: 'status' }, 'Не удалось загрузить статус обновления. Попробуйте ещё раз позже.')));
-        return;
+        // Deliberately NOT a return any more: the cards below must render
+        // even when the update status cannot load — a clinic that cannot
+        // reach its own server status is exactly the clinic that may need
+        // its backups next.
     }
-    paint(body, status);
+    if (status) paint(body, status);
+
+    // SYSTEM_SETTINGS_V1 — the three sibling cards, in the plan's order.
+    // Subscription paints synchronously from the boot-time licence copy;
+    // backups is awaited so this function resolves only once the whole page
+    // is real (the fake-DOM tests — and the human eye — rely on that).
+    const subRoot = h('div');
+    wrap.appendChild(subRoot);
+    renderSubscriptionCard(subRoot, { admin });
+
+    const bakRoot = h('div');
+    wrap.appendChild(bakRoot);
+    await renderBackupsCard(bakRoot, { admin });
+
+    const dzRoot = h('div');
+    wrap.appendChild(dzRoot);
+    renderDangerCard(dzRoot, { admin });
 }
 
 // The button's whole flow: check in now, then decide whether the LICENCE
