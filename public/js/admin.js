@@ -74,7 +74,7 @@ import { renderRequestsInbox } from './admin/views/requests-inbox.js?v=btnright1
 import { renderPacs }         from './admin/views/pacs.js';
 import { renderInventory }    from './admin/views/inventory.js?v=inv4';   // INVENTORY_UI_V1 — Suppliers/PO/Requisitions/Counts tabs live
 import { renderSettingsHub }  from './admin/views/settings-hub.js?v=refsrc1';   // SETTINGS_HUB_V1 — Документы -> rich designer; Пациенты -> settings:patients route
-import { renderPatientDocuments } from './admin/views/patient-documents.js?v=docstabs1';   // PATIENT_DOCUMENTS_V1 + DOCS_TYPE_TABS_V1
+import { renderPatientDocuments } from './admin/views/patient-documents.js?v=docstoolbar1';   // PATIENT_DOCUMENTS_V1 + DOCS_TOOLBAR_V1
 import { renderDocumentsSettings } from './admin/views/documents-settings.js?v=doc2';   // DOCUMENTS_SETTINGS_V1
 
 // ---------------------------------------------------------------------------

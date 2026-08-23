@@ -80,6 +80,10 @@ function repaintBody() {
         // Поле поиска рисуется пустым, поэтому и фильтр ленты сбрасываем:
         // иначе лента осталась бы сужённой запросом, которого не видно.
         feed.q = '';
+        // DOCS_TOOLBAR_V1 — период по умолчанию задаётся ДО отрисовки панели:
+        // раньше это делал feedCard, но период теперь рисует searchCard, а он
+        // монтируется первым.
+        if (!feed.from && !feed.to) { feed.from = weekStart(); feed.to = ymdLocal(new Date()); }
         refs.bodyEl.appendChild(searchCard());
         refs.bodyEl.appendChild(feedCard());
         loadFeed({ reset: true });
@@ -107,14 +111,26 @@ function clearPatient() {
 // the local client has no `.or()`).
 // -----------------------------------------------------------------------------
 function searchCard() {
+    // DOCS_TOOLBAR_V1 — один блок фильтров вместо двух: поиск, период и типы
+    // живут вместе над лентой. Раньше период сидел внутри карточки «Готовые
+    // документы», и сотрудник крутил взгляд между двумя карточками, чтобы
+    // задать один вопрос («анализы Каримовой за эту неделю»).
     const searchInp = h('input', {
         type: 'search', autocomplete: 'off',
-        placeholder: 'Search by name, phone, or MRN…',
+        placeholder: 'Пациент: имя, телефон или № карты — или название услуги…',
+        style: {
+            width: '100%', boxSizing: 'border-box',
+            padding: '10px 14px 10px 38px', fontSize: '14px',
+            border: '1px solid var(--ink-200)', borderRadius: '10px',
+            background: 'var(--ink-25, #f8fafa)', outline: 'none',
+        },
+        onfocus: (e) => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.borderColor = 'var(--primary-600, #0f766e)'; },
+        onblur:  (e) => { e.currentTarget.style.background = 'var(--ink-25, #f8fafa)'; e.currentTarget.style.borderColor = 'var(--ink-200)'; },
     });
     const resultsEl = h('div', {
         style: {
             display: 'none', marginTop: '8px',
-            border: '1px solid var(--ink-200)', borderRadius: '8px',
+            border: '1px solid var(--ink-200)', borderRadius: '10px',
             maxHeight: '300px', overflowY: 'auto',
         },
     });
@@ -137,6 +153,17 @@ function searchCard() {
         }, 250);
     });
 
+    // Лупа внутри поля — поле и так одно, отдельный заголовок «Find patient»
+    // ему больше не нужен.
+    const searchWrap = h('div', { style: { position: 'relative', flex: '1 1 300px', minWidth: '240px' } },
+        h('span', { style: { position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--ink-400)', pointerEvents: 'none', display: 'flex' } },
+            Icon('Search', { size: 16 })),
+        searchInp);
+
+    // DOCS_TOOLBAR_V1 — период рядом с поиском, в той же строке.
+    refs.periodRow = h('div', { class: 'row', style: { gap: '6px', alignItems: 'center', flexWrap: 'wrap', flex: '0 0 auto' } });
+    paintPeriodRow();
+
     // DOCS_TYPE_TABS_V1 — регистратура ищет ПО ТИПУ: «Приёмы / Диагностика /
     // Анализы» стоят прямо у поиска, всегда, даже при нуле документов — кнопка,
     // которая появляется только когда есть что показать, выглядит как её
@@ -147,9 +174,48 @@ function searchCard() {
     paintTypeRow();
 
     return h('div', { class: 'card' },
-        h('div', { class: 'card-header' }, h('h3', null, Icon('Search', { size: 16 }), ' Find patient')),
-        h('div', { style: { padding: '14px 16px' } }, searchInp, refs.typeRow, resultsEl),
+        h('div', { style: { padding: '14px 16px' } },
+            h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
+                searchWrap, refs.periodRow),
+            refs.typeRow,
+            resultsEl),
     );
+}
+
+// DOCS_TOOLBAR_V1 — период как сегмент из дат и двух пресетов. Пресеты — те же
+// чипы, что и типы ниже: два вида кнопок в одной панели читались бы как два
+// разных механизма. Активный пресет подсвечен, ручная правка дат гасит оба.
+function paintPeriodRow() {
+    if (!refs.periodRow) return;
+    clear(refs.periodRow);
+    const today = ymdLocal(new Date());
+    const chip = (on, label, onclick) =>
+        h('button', { class: 'wzc-cat' + (on ? ' on' : ''), type: 'button', onclick }, label);
+    const dateInp = (val, onset) => {
+        const el = h('input', {
+            type: 'date', value: val || '',
+            style: {
+                padding: '6px 8px', fontSize: '12.5px',
+                border: '1px solid var(--ink-200)', borderRadius: '8px',
+                background: '#fff', color: 'var(--ink-700)',
+            },
+        });
+        el.addEventListener('change', () => { onset(el.value); paintPeriodRow(); reloadFeed(); });
+        return el;
+    };
+
+    refs.periodRow.appendChild(h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Период'));
+    refs.periodRow.appendChild(dateInp(feed.from, (v) => { feed.from = v; }));
+    refs.periodRow.appendChild(h('span', { class: 'muted', style: { fontSize: '12px' } }, '—'));
+    refs.periodRow.appendChild(dateInp(feed.to, (v) => { feed.to = v; }));
+    refs.periodRow.appendChild(chip(feed.from === weekStart() && feed.to === today, 'Эта неделя', () => {
+        feed.from = weekStart(); feed.to = ymdLocal(new Date());
+        paintPeriodRow(); reloadFeed();
+    }));
+    refs.periodRow.appendChild(chip(!feed.from && !feed.to, 'Всё время', () => {
+        feed.from = ''; feed.to = '';
+        paintPeriodRow(); reloadFeed();
+    }));
 }
 
 // Всегда видимые три главных типа; счётчики подтягиваются после загрузки ленты.
@@ -644,46 +710,18 @@ const feed = {
     rows: [], total: 0, byType: [], nextOffset: 0, hasMore: false, loading: false,
 };
 
+// DOCS_TOOLBAR_V1 — все фильтры (период, типы, поиск) живут в верхней панели
+// (searchCard); эта карточка — только лента.
 function feedCard() {
-    if (!feed.from) { feed.from = weekStart(); feed.to = ymdLocal(new Date()); }
-
-    refs.feedFilters = h('div', { style: { padding: '12px 16px', borderBottom: '1px solid var(--ink-100)' } });
     refs.feedList = h('div');
     refs.feedFoot = h('div', { style: { padding: '12px 16px' } });
 
-    paintFeedFilters();
     return h('div', { class: 'card', style: { marginTop: '16px', padding: '0' } },
         h('div', { class: 'card-header' },
             h('h3', null, Icon('Doc', { size: 16 }), ' Готовые документы'),
             h('span', { class: 'grow', style: { flex: '1' } }),
             refs.feedCount = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '')),
-        refs.feedFilters, refs.feedList, refs.feedFoot);
-}
-
-function paintFeedFilters() {
-    clear(refs.feedFilters);
-    const lbl = (t) => h('span', { class: 'muted', style: { fontSize: '12px', marginRight: '2px' } }, t);
-    const dateInp = (val, onset) => {
-        const el = h('input', { type: 'date', value: val || '', style: { padding: '4px 8px', fontSize: '12.5px' } });
-        el.addEventListener('change', () => { onset(el.value); reloadFeed(); });
-        return el;
-    };
-
-    const row1 = h('div', { class: 'row', style: { gap: '6px', alignItems: 'center', flexWrap: 'wrap' } },
-        lbl('Период'), dateInp(feed.from, (v) => { feed.from = v; }),
-        lbl('по'), dateInp(feed.to, (v) => { feed.to = v; }),
-        h('button', {
-            class: 'btn btn-sm btn-outline', type: 'button', style: { marginLeft: '4px' },
-            onclick: () => { feed.from = weekStart(); feed.to = ymdLocal(new Date()); paintFeedFilters(); reloadFeed(); },
-        }, 'Эта неделя'),
-        h('button', {
-            class: 'btn btn-sm btn-outline', type: 'button',
-            onclick: () => { feed.from = ''; feed.to = ''; paintFeedFilters(); reloadFeed(); },
-        }, 'Всё время'));
-
-    // DOCS_TYPE_TABS_V1 — фильтр по типу переехал наверх, к поиску (см.
-    // paintTypeRow): здесь остался только период.
-    refs.feedFilters.appendChild(row1);
+        refs.feedList, refs.feedFoot);
 }
 
 function reloadFeed() { loadFeed({ reset: true }); }
@@ -719,7 +757,6 @@ async function loadFeed({ reset = false } = {}) {
 
     for (const r of (res.rows || [])) refs.feedList.appendChild(feedRow(r));
     paintFeedFoot();
-    paintFeedFilters();
     paintTypeRow();   // DOCS_TYPE_TABS_V1 — счётчики у кнопок типов обновляются вместе с лентой
     if (refs.feedCount) refs.feedCount.textContent = feed.total
         ? `показано ${feed.rows.length} из ${feed.total}` : '';
