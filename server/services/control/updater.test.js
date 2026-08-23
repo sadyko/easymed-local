@@ -402,7 +402,7 @@ test('versioned layout: stages under <root>\\versions\\<version> and spawns appl
   let spawnArgs = null;
   try {
     await tickUpdater(db, dataDir, {
-      endpoint, now: IN_WINDOW_NOW, appRoot,
+      endpoint, now: IN_WINDOW_NOW, appRoot, port: 8451,
       spawnImpl: (cmd, args, opts) => {
         spawnArgs = { cmd, args, opts };
         // Simulate apply-update.ps1's own contract: it writes the result file.
@@ -419,6 +419,10 @@ test('versioned layout: stages under <root>\\versions\\<version> and spawns appl
   assert.match(spawnArgs.cmd, /powershell/i);
   assert.ok(spawnArgs.args.includes('-Version'));
   assert.ok(spawnArgs.args.includes('2.4.0'));
+  // -Port must reach apply-update.ps1 or a pinned-port clinic health-checks
+  // the wrong port and refuses every update (2026-08-23, the 8712 test clinic).
+  assert.ok(spawnArgs.args.includes('-Port'));
+  assert.equal(spawnArgs.args[spawnArgs.args.indexOf('-Port') + 1], '8451');
   assert.ok(fs.existsSync(path.join(dataDir, 'update-result.json')));
 });
 

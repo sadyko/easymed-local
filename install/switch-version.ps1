@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Switches the running Easy-Med version by repointing `current`, with an
     automatic roll-back to the previous version if the new one fails its
@@ -262,7 +262,11 @@ function Wait-ForEasyMedHealthOrTimeout {
     $lastSymptom = 'never connected'
     while ((Get-Date) -lt $deadline) {
         try {
-            $resp = Invoke-RestMethod -Uri "http://localhost:$Port/api/health" -TimeoutSec 2
+            # 127.0.0.1, NEVER localhost: in a fresh (child) PowerShell, localhost resolves
+            # ::1 first, the server listens on IPv4 0.0.0.0 only, and the IPv6 attempt
+            # eats the whole -TimeoutSec before any fallback — every health poll "fails"
+            # while the clinic is up (reproduced on the owner's machine, 2026-08-23).
+            $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/health" -TimeoutSec 2
             if ($resp.ok -eq $true) {
                 return [pscustomobject]@{ Healthy = $true; Symptom = $null }
             }

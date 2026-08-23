@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Applies a staged Easy-Med update: switches to it, confirms it stays healthy,
     and decides - loudly, and only in the one place it is ever safe to - what
@@ -292,7 +292,7 @@ function Test-ApplyPreconditions {
     $healthNow = Wait-ForEasyMedHealthOrTimeout -Port $Port -TimeoutSeconds 5
     $currentHealthy = $healthNow.Healthy
     if (-not $currentHealthy) {
-        $problems += "The CURRENTLY RUNNING version is not answering http://localhost:$Port/api/health right now ($($healthNow.Symptom)). Applying an update on top of an already-broken clinic turns one problem into two - fix why the current version is down before retrying this update."
+        $problems += "The CURRENTLY RUNNING version is not answering http://127.0.0.1:$Port/api/health right now ($($healthNow.Symptom)). Applying an update on top of an already-broken clinic turns one problem into two - fix why the current version is down before retrying this update."
     }
 
     return [pscustomobject]@{

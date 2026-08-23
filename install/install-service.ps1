@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Installs Easy-Med Local as a Windows service, running from a versioned
     directory so a later update can be installed by unpacking beside the
@@ -584,7 +584,11 @@ function Wait-ForEasyMedHealthy {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
         try {
-            $resp = Invoke-RestMethod -Uri "http://localhost:$Port/api/health" -TimeoutSec 2
+            # 127.0.0.1, NEVER localhost: in a fresh (child) PowerShell, localhost resolves
+            # ::1 first, the server listens on IPv4 0.0.0.0 only, and the IPv6 attempt
+            # eats the whole -TimeoutSec before any fallback — every health poll "fails"
+            # while the clinic is up (reproduced on the owner's machine, 2026-08-23).
+            $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/health" -TimeoutSec 2
             if ($resp.ok -eq $true) { return $true }
         } catch {
             # not answering yet - keep polling until the deadline

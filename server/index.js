@@ -240,7 +240,10 @@ if (isMain) {
   // clinic. appRoot is passed explicitly as THIS process's own ROOT rather
   // than letting updater.js recompute it from its own module path — the two
   // must never be able to disagree about what "the app directory" is.
-  scheduleUpdater(db, DATA_DIR, { appRoot: ROOT });
+  // port likewise: apply-update.ps1 health-checks whatever port we hand it,
+  // and a pinned-port clinic (port.txt) health-checked on the default 8000
+  // refuses every update — found on the owner's own 8712 test clinic 2026-08-23.
+  scheduleUpdater(db, DATA_DIR, { appRoot: ROOT, port: PORT });
 
   // SYSTEM_SETTINGS_V1 — the daily database copy, same shape as the two
   // schedulers above: unref'd timers, every tick self-contained. First tick

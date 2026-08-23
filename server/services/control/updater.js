@@ -316,6 +316,13 @@ async function performTick(db, dataDir, {
   endpoint,
   publicKey,
   appRoot = DEFAULT_APP_ROOT,
+  // The port THIS server actually listens on. apply-update.ps1's precondition
+  // and post-switch health checks poll it; before this was passed through
+  // (2026-08-23) every pinned-port clinic (port.txt — the owner's own test
+  // clinic on 8712 was the first) had its updates health-checked against the
+  // DEFAULT 8000, where either nothing answers (refusal) or, worse, some
+  // OTHER application answers and vouches for a switch it knows nothing about.
+  port = 8000,
   timeoutMs = DOWNLOAD_TIMEOUT_MS,
   maxBytes = MAX_BUNDLE_BYTES,
 } = {}) {
@@ -367,7 +374,7 @@ async function performTick(db, dataDir, {
 
     await runPipeline(db, dataDir, offer, {
       fetchImpl, spawnImpl, execFileSyncImpl, mkdirSync, rmSync, writeFileSync, realpathSync,
-      endpoint, publicKey, appRoot, timeoutMs, maxBytes,
+      endpoint, publicKey, appRoot, port, timeoutMs, maxBytes,
     });
   } catch (e) {
     // Backstop — every step below has its own guard, but nothing may ever
@@ -378,7 +385,7 @@ async function performTick(db, dataDir, {
 
 async function runPipeline(db, dataDir, offer, {
   fetchImpl, spawnImpl, execFileSyncImpl, mkdirSync, rmSync, writeFileSync, realpathSync,
-  endpoint, publicKey, appRoot, timeoutMs, maxBytes,
+  endpoint, publicKey, appRoot, port, timeoutMs, maxBytes,
 }) {
   const base = endpoint ? String(endpoint).replace(/\/+$/, '') : controlBaseUrl();
   const resolved = resolveDownloadUrl(offer.url, base);
@@ -488,7 +495,7 @@ async function runPipeline(db, dataDir, offer, {
       const applyScript = path.join(layout.root, 'current', 'install', 'apply-update.ps1');
       const child = spawnImpl(
         'powershell.exe',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', applyScript, '-Version', offer.version, '-Root', layout.root],
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', applyScript, '-Version', offer.version, '-Root', layout.root, '-Port', String(port)],
         { cwd: layout.root, detached: true, stdio: 'ignore' },
       );
       // A DI stub is not obliged to return a real ChildProcess — guarded so
