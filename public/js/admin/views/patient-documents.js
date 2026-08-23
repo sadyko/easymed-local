@@ -137,10 +137,46 @@ function searchCard() {
         }, 250);
     });
 
+    // DOCS_TYPE_TABS_V1 — регистратура ищет ПО ТИПУ: «Приёмы / Диагностика /
+    // Анализы» стоят прямо у поиска, всегда, даже при нуле документов — кнопка,
+    // которая появляется только когда есть что показать, выглядит как её
+    // отсутствие. Раньше типы жили чипами ниже фильтра периода и прятались при
+    // нуле; регистратура их просто не находила. Прочие типы (процедуры и
+    // «прочее») дорисовываются только когда они есть — их не ищут нарочно.
+    refs.typeRow = h('div', { class: 'row', style: { gap: '6px', alignItems: 'center', flexWrap: 'wrap', marginTop: '10px' } });
+    paintTypeRow();
+
     return h('div', { class: 'card' },
         h('div', { class: 'card-header' }, h('h3', null, Icon('Search', { size: 16 }), ' Find patient')),
-        h('div', { style: { padding: '14px 16px' } }, searchInp, resultsEl),
+        h('div', { style: { padding: '14px 16px' } }, searchInp, refs.typeRow, resultsEl),
     );
+}
+
+// Всегда видимые три главных типа; счётчики подтягиваются после загрузки ленты.
+const PRIMARY_TYPES = ['consultation', 'imaging', 'lab'];
+
+function paintTypeRow() {
+    if (!refs.typeRow) return;
+    clear(refs.typeRow);
+    const counts = Object.fromEntries((feed.byType || []).map((x) => [x.t, x.c]));
+    const chip = (on, label, onclick) =>
+        h('button', { class: 'wzc-cat' + (on ? ' on' : ''), type: 'button', onclick }, label);
+    const toggle = (key) => () => {
+        if (feed.types.has(key)) feed.types.delete(key); else feed.types.add(key);
+        paintTypeRow();
+        reloadFeed();
+    };
+
+    refs.typeRow.appendChild(chip(!feed.types.size, 'Все', () => { feed.types.clear(); paintTypeRow(); reloadFeed(); }));
+    for (const key of PRIMARY_TYPES) {
+        const c = counts[key];
+        refs.typeRow.appendChild(chip(feed.types.has(key), DOC_TYPE_RU[key] + (c ? ' · ' + c : ''), toggle(key)));
+    }
+    for (const [key, label] of DOC_TYPES) {
+        if (PRIMARY_TYPES.includes(key)) continue;
+        if (!counts[key] && !feed.types.has(key)) continue;
+        refs.typeRow.appendChild(chip(feed.types.has(key), label + ' · ' + (counts[key] || 0), toggle(key)));
+    }
 }
 
 function paintResults(rows, resultsEl) {
@@ -246,10 +282,25 @@ async function fetchPatientDocs(patientId) {
         return { visits: [], labByVisit: {}, doctorMap: {} };
     }
     const visits = visitsData || [];
-    const labByVisit = {};
+    const labByVisit = visits.length > 0 ? await fetchLabByVisit(visits.map(v => v.id)) : {};
 
-    if (visits.length > 0) {
-        const visitIds = visits.map(v => v.id);
+    // Doctor names — optional, best-effort (no toast on failure: the document
+    // still prints fine without a doctor name).
+    const doctorMap = {};
+    try {
+        const { data: docData, error: docErr } = await supabase.from('users').select('id,full_name').eq('role', 'doctor');
+        if (!docErr) for (const d of (docData || [])) doctorMap[d.id] = d.full_name;
+    } catch (e) { /* optional */ }
+
+    return { visits, labByVisit, doctorMap };
+}
+
+// DOCS_ROW_PRINT_V1 — вынесено из fetchPatientDocs без изменений, потому что
+// печать из строки ленты обязана собирать данные ТЕМ ЖЕ кодом, что и архив
+// пациента: две сборки одного документа неизбежно разошлись бы.
+async function fetchLabByVisit(visitIds) {
+    const labByVisit = {};
+    {
         const { data: vsData, error: vsErr } = await supabase.from('visit_services')
             .select('id,visit_id,services(name,result_unit,ref_low,ref_high,ref_text,is_lab)')
             .in('visit_id', visitIds);
@@ -313,16 +364,7 @@ async function fetchPatientDocs(patientId) {
             }
         }
     }
-
-    // Doctor names — optional, best-effort (no toast on failure: the document
-    // still prints fine without a doctor name).
-    const doctorMap = {};
-    try {
-        const { data: docData, error: docErr } = await supabase.from('users').select('id,full_name').eq('role', 'doctor');
-        if (!docErr) for (const d of (docData || [])) doctorMap[d.id] = d.full_name;
-    } catch (e) { /* optional */ }
-
-    return { visits, labByVisit, doctorMap };
+    return labByVisit;
 }
 
 // -----------------------------------------------------------------------------
@@ -627,10 +669,6 @@ function paintFeedFilters() {
         return el;
     };
 
-    const counts = Object.fromEntries((feed.byType || []).map((x) => [x.t, x.c]));
-    const chip = (on, label, onclick) =>
-        h('button', { class: 'wzc-cat' + (on ? ' on' : ''), type: 'button', onclick }, label);
-
     const row1 = h('div', { class: 'row', style: { gap: '6px', alignItems: 'center', flexWrap: 'wrap' } },
         lbl('Период'), dateInp(feed.from, (v) => { feed.from = v; }),
         lbl('по'), dateInp(feed.to, (v) => { feed.to = v; }),
@@ -643,22 +681,9 @@ function paintFeedFilters() {
             onclick: () => { feed.from = ''; feed.to = ''; paintFeedFilters(); reloadFeed(); },
         }, 'Всё время'));
 
-    // Счётчики приходят с сервера БЕЗ учёта выбранного типа, поэтому соседние
-    // типы продолжают показывать, что они есть, даже когда список сужен.
-    const row2 = h('div', { class: 'row', style: { gap: '6px', alignItems: 'center', flexWrap: 'wrap', marginTop: '8px' } },
-        lbl('Тип'),
-        chip(!feed.types.size, 'Все', () => { feed.types.clear(); paintFeedFilters(); reloadFeed(); }));
-    for (const [key, label] of DOC_TYPES) {
-        if (!counts[key] && !feed.types.has(key)) continue;   // пустые типы не показываем
-        row2.appendChild(chip(feed.types.has(key), label + ' · ' + (counts[key] || 0), () => {
-            if (feed.types.has(key)) feed.types.delete(key); else feed.types.add(key);
-            paintFeedFilters();
-            reloadFeed();
-        }));
-    }
-
+    // DOCS_TYPE_TABS_V1 — фильтр по типу переехал наверх, к поиску (см.
+    // paintTypeRow): здесь остался только период.
     refs.feedFilters.appendChild(row1);
-    refs.feedFilters.appendChild(row2);
 }
 
 function reloadFeed() { loadFeed({ reset: true }); }
@@ -695,6 +720,7 @@ async function loadFeed({ reset = false } = {}) {
     for (const r of (res.rows || [])) refs.feedList.appendChild(feedRow(r));
     paintFeedFoot();
     paintFeedFilters();
+    paintTypeRow();   // DOCS_TYPE_TABS_V1 — счётчики у кнопок типов обновляются вместе с лентой
     if (refs.feedCount) refs.feedCount.textContent = feed.total
         ? `показано ${feed.rows.length} из ${feed.total}` : '';
     if (!feed.rows.length) {
@@ -719,11 +745,35 @@ function paintFeedFoot() {
 function feedRow(r) {
     const date = String(r.visit_date || '').slice(0, 10).split('-').reverse().join('.');
     const done = r.status === 'completed' || !!r.verified_at;
+
+    // DOCS_FEED_ANSWERS_V1 — ответы прямо в строке: регистратура диктует
+    // результат по телефону, не открывая архив. Отклонения — красным, тем же
+    // словарём флагов, что печатный бланк (всё, что не 'normal' и не пусто).
+    const answers = (r.results || []).length ? h('div', {
+        style: { fontSize: '11.5px', marginTop: '2px', lineHeight: '1.5' },
+    }, ...(r.results.map((res, i) => {
+        const abnormal = res.flag && res.flag !== 'normal';
+        return h('span', { style: { color: abnormal ? 'var(--crit-600, #dc2626)' : 'var(--ink-500)', fontWeight: abnormal ? '600' : '400' } },
+            (i ? ' · ' : '') + res.parameter + ' ' + (res.value === '' ? '—' : res.value) + (res.unit ? ' ' + res.unit : ''));
+    }))) : null;
+
+    // DOCS_ROW_PRINT_V1 — печать, не покидая ленту: кнопка в конце строки
+    // печатает ВСЕ анализы этого ВИЗИТА одним бланком (пациент уходит с одной
+    // бумагой, а не с пятью). Прежний запрет «второй печатной кнопки» снят
+    // честно: она зовёт тот же printLabReport через тот же fetchLabByVisit,
+    // что и архив пациента, — расходиться нечему.
+    //
+    // span, а не button: сама строка — <button>, а <button> внутри <button> —
+    // невалидный HTML, и клики по вложенной кнопке ведут себя непредсказуемо.
+    const printBtn = r.result_count ? h('span', {
+        class: 'btn btn-outline btn-sm', role: 'button', title: 'Печать всех результатов визита',
+        onclick: (e) => { e.stopPropagation(); printVisitFromFeed(r, e.currentTarget); },
+    }, Icon('Print', { size: 13 }), ' Печать') : null;
+
     return h('button', {
         type: 'button',
-        // Строка ведёт в архив пациента — там уже есть печать бланка и все его
-        // прочие документы. Второй печатной кнопки заводить не станем: два
-        // места, печатающие один документ, неизбежно разойдутся.
+        // Строка по-прежнему ведёт в архив пациента — там заключения, правка
+        // и остальные его документы.
         onclick: () => selectPatient({ id: r.patient_id, full_name: r.patient_name, mrn: r.mrn }),
         style: {
             display: 'flex', alignItems: 'center', gap: '12px', width: '100%', textAlign: 'left',
@@ -734,17 +784,53 @@ function feedRow(r) {
         onmouseleave: (e) => { e.currentTarget.style.background = 'transparent'; },
     },
         h('div', { style: { width: '74px', flex: '0 0 auto', fontSize: '12.5px', color: 'var(--ink-600)' } }, date),
-        h('div', { style: { flex: '1 1 40%', minWidth: '0' } },
+        h('div', { style: { flex: '1 1 34%', minWidth: '0' } },
             h('div', { style: { fontSize: '13.5px', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
                 r.patient_name || '—'),
             h('div', { class: 'muted', style: { fontSize: '11.5px' } }, r.mrn || '')),
-        h('div', { style: { flex: '1 1 40%', minWidth: '0' } },
+        h('div', { style: { flex: '1 1 46%', minWidth: '0' } },
             h('div', { style: { fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
                 r.service_name || '—'),
-            h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+            answers || h('div', { class: 'muted', style: { fontSize: '11.5px' } },
                 (DOC_TYPE_RU[r.service_type] || r.service_type || '')
-                + (r.result_count ? ' · показателей: ' + r.result_count : '')
                 + (r.doc_type ? ' · заключение' : ''))),
         h('span', { style: { flex: '0 0 auto' } }, Tag(done ? 'Выдан' : 'Готовится', { kind: done ? 'ok' : 'warn', dot: true })),
+        printBtn && h('span', { style: { flex: '0 0 auto' }, onclick: (e) => e.stopPropagation() }, printBtn),
         h('span', { style: { flex: '0 0 auto', color: 'var(--ink-400, #9aa7ab)' } }, Icon('ChevronRight', { size: 15 })));
+}
+
+// DOCS_ROW_PRINT_V1 — собрать и напечатать все результаты ОДНОГО визита тем же
+// кодом, что архив пациента: fetchLabByVisit + printLabReport, без своей
+// вёрстки и без своей выборки. Пациента добираем отдельным запросом — в строке
+// ленты нет пола и даты рождения, а шапка бланка без них неполная.
+async function printVisitFromFeed(r, btn) {
+    // span-кнопка (см. feedRow): .disabled у span нет, гасим кликабельность руками.
+    if (btn) { btn.style.pointerEvents = 'none'; btn.style.opacity = '0.55'; }
+    try {
+        const [brand, labByVisit, visitRes, patientRes] = await Promise.all([
+            getBrand(),
+            fetchLabByVisit([r.visit_id]),
+            supabase.from('visits').select('id,visit_date,visit_type,status,conclusion,conclusion_type,doctor_id').eq('id', r.visit_id).single(),
+            supabase.from('patients').select('id, full_name, mrn, phone, gender, date_of_birth').eq('id', r.patient_id).single(),
+        ]);
+        const visit = visitRes.data;
+        if (visitRes.error || !visit) throw new Error((visitRes.error && visitRes.error.message) || 'Визит не найден.');
+        const patient = patientRes.data || { id: r.patient_id, full_name: r.patient_name, mrn: r.mrn };
+        const results = labByVisit[r.visit_id] || [];
+        if (!results.length) return toast('Результатов нет — печатать нечего.', 'info');
+
+        // printLabReport читает имя врача из state.docs.doctorMap — заполним его
+        // для этого визита, не трогая выбранного пациента.
+        if (visit.doctor_id && !state.docs.doctorMap[visit.doctor_id]) {
+            try {
+                const { data } = await supabase.from('users').select('id,full_name').eq('id', visit.doctor_id).single();
+                if (data) state.docs.doctorMap[visit.doctor_id] = data.full_name;
+            } catch (e) { /* бланк печатается и без имени врача */ }
+        }
+        await printLabReport(visit, results, brand, patient);
+    } catch (e) {
+        toast('Не удалось напечатать: ' + ((e && e.message) || e), 'fail');
+    } finally {
+        if (btn) { btn.style.pointerEvents = ''; btn.style.opacity = ''; }
+    }
 }

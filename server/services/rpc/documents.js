@@ -118,6 +118,39 @@ export function documentsFeed(db, args, user) {
      ORDER BY ${localDate('v.visit_date')} DESC, vs.id DESC
      LIMIT ? OFFSET ?`).all(...listParams, limit, offset);
 
+  // DOCS_FEED_ANSWERS_V1 — регистратура читает ОТВЕТЫ прямо в строке, не
+  // открывая архив пациента. Значения — только для строк текущей страницы
+  // (≤ PAGE_MAX), одним батчем, а не подзапросом на строку.
+  //
+  // «Последний ввод показателя побеждает» — ровно то же правило (и тот же ключ
+  // услуга\0параметр), что у LAB_DOC_ALL_ANALYTES_V1 в patient-documents.js:
+  // повторный ввод того же показателя заменяет строку, но РАЗНЫЕ показатели
+  // панели живут все. Порядок — по id, как вводил лаборант.
+  const pageVsIds = rows.map((r) => r.visit_service_id);
+  if (pageVsIds.length) {
+    const lr = db.prepare(
+      `SELECT id, visit_service_id, parameter, value, unit, flag
+         FROM lab_results WHERE visit_service_id IN (${pageVsIds.map(() => '?').join(',')})`
+    ).all(...pageVsIds);
+    const latest = new Map();
+    for (const r of lr) {
+      const key = r.visit_service_id + '\0' + (r.parameter || '');
+      const prev = latest.get(key);
+      if (!prev || r.id > prev.id) latest.set(key, r);
+    }
+    const byVs = new Map();
+    for (const r of [...latest.values()].sort((a, b) => a.id - b.id)) {
+      if (!byVs.has(r.visit_service_id)) byVs.set(r.visit_service_id, []);
+      byVs.get(r.visit_service_id).push({
+        parameter: r.parameter || '',
+        value: r.value == null ? '' : String(r.value),
+        unit: r.unit || '',
+        flag: r.flag || '',
+      });
+    }
+    for (const row of rows) row.results = byVs.get(row.visit_service_id) || [];
+  }
+
   return {
     rows,
     total,

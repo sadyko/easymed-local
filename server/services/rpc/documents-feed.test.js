@@ -201,6 +201,47 @@ test('мусорные даты игнорируются, а не роняют �
   db.close();
 });
 
+// DOCS_FEED_ANSWERS_V1 — значения показателей едут прямо в строке.
+
+test('строка несёт сами ответы: параметр, значение, единицу, флаг', () => {
+  const db = seed();
+  const d = day(db, 0);
+  const vs = line(db, visit(db, 1, d), 1);
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, unit, flag) VALUES (?,?,?,?,?)")
+    .run(vs, 'HGB', '142', 'г/л', 'normal');
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, unit, flag) VALUES (?,?,?,?,?)")
+    .run(vs, 'WBC', '15.2', '10^9/л', 'high');
+
+  const row = feed(db, { from: d, to: d }).rows[0];
+  assert.equal(row.results.length, 2);
+  assert.deepEqual(row.results[0], { parameter: 'HGB', value: '142', unit: 'г/л', flag: 'normal' });
+  assert.deepEqual(row.results[1], { parameter: 'WBC', value: '15.2', unit: '10^9/л', flag: 'high' });
+  db.close();
+});
+
+test('повторный ввод того же показателя заменяет ответ, а не удваивает строку', () => {
+  const db = seed();
+  const d = day(db, 0);
+  const vs = line(db, visit(db, 1, d), 1);
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value) VALUES (?,?,?)").run(vs, 'HGB', '90');
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value) VALUES (?,?,?)").run(vs, 'HGB', '142');
+
+  const row = feed(db, { from: d, to: d }).rows[0];
+  assert.equal(row.results.length, 1, 'один показатель — один ответ');
+  assert.equal(row.results[0].value, '142', 'побеждает последний ввод');
+  db.close();
+});
+
+test('услуга с подписанным документом, но без результатов, несёт пустой results', () => {
+  const db = seed();
+  const d = day(db, 0);
+  const v = visit(db, 1, d);
+  const vs = line(db, v, 3);
+  addDoc(db, vs, v, 1, 'protocol');
+  assert.deepEqual(feed(db, { from: d, to: d }).rows[0].results, []);
+  db.close();
+});
+
 test('новые документы идут первыми', () => {
   const db = seed();
   const old = day(db, -5), now = day(db, 0);
