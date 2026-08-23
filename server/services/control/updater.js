@@ -27,17 +27,15 @@ import { nextRunAt, isInWindow, consentAppliesTo } from './update-schedule.js';
 // header for why leaking this one only lets someone forge an UPDATE, not mint
 // a licence.
 //
-// REPLACE THIS at first release with the real public key printed by
-// `node scripts/build-bundle.mjs` 's companion keygen step (mirrors
-// make-licence.mjs keygen). The matching private half must live only in the
-// EASYMED_RELEASE_KEY CI secret, never here. The placeholder below is a real,
-// valid Ed25519 key whose private half was generated once, used to print
-// this PEM, and then discarded — so an un-replaced build fails closed: no
-// bundle can ever verify against it, the same reasoning licence.js documents
-// for its own placeholder.
 // ############################################################################
-// ##  DEVELOPMENT KEY — NOT THE PRODUCTION KEY. the production release key.  ##
+// ##  PRODUCTION RELEASE KEY — this is what every clinic verifies against.  ##
 // ############################################################################
+// The private half lives ONLY in the EASYMED_RELEASE_KEY GitHub Actions secret
+// (plus the owner's offline backup in Documents/easymed-keys) — never in this
+// repo. Replacing this PEM orphans every already-shipped install: their
+// compiled-in copy stops accepting new bundles, so a key rotation must ship AS
+// an update signed by the old key first. Proven against v0.1.1's CI-built
+// manifest on 2026-08-22.
 const RELEASE_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAjCh/fDySue8xTrMIdwxu4YoXV9qkmbDSpCM7BJdc+70=
 -----END PUBLIC KEY-----`;
