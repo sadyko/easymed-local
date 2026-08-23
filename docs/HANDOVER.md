@@ -167,7 +167,15 @@ node server/index.js                           # prints a one-time vendor passwo
    folder name is cosmetic — the repo name is the identity.
 5. Cloud-era leftovers in the clinic app (easymed.uz redirect dead-ends, Symptex publication
    stubs) — listed in CLAUDE.md's "known issues".
-6. The first-run **welcome-tour modal pops up OVER the activation screen** (seen driving the
+6. **Launcher-mode updates apply on the NEXT window restart, not immediately** (seen while
+   building the clinic package 2026-08-23): `apply-update.ps1` stops/starts the Windows
+   *service*; when a clinic runs via `EasyMed.exe` instead (no service registered), the
+   junction is swapped but the running node keeps serving the old version from memory until
+   the Easy-Med window is closed and reopened — usually the next morning. Not destructive
+   (the boot-time pre-migration backup still runs when the new version first starts), just
+   delayed. The launcher already honours exit code 75 as a restart request if the server
+   ever wants to self-restart after a switch.
+7. The first-run **welcome-tour modal pops up OVER the activation screen** (seen driving the
    real app on 2026-08-22): a locked, never-enrolled install offers "Начать тур" on top of the
    code-entry form. Cosmetic, pre-existing, but a confusing first impression for a clinic
    mid-activation.
