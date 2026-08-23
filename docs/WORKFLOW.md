@@ -80,8 +80,9 @@ Release notes are written for the clinic manager who reads them in the update di
 
 ```
 Desktop\implementation workflow\
-├─ easymed.local     THE DEV SERVER — every change is made and tested HERE
-└─ easymed.clinic    THE TEST CLINIC — a real clinic package (EasyMed.exe).
+├─ easymed.local     THE DEV SERVER — every change is made and tested HERE (:8000)
+└─ easymed.clinic    THE TEST CLINIC — a real clinic package (EasyMed.exe), :8712
+                     pinned by its port.txt so it can never take dev's port.
                      Receives changes ONLY as signed releases, like a real
                      clinic would. It has no git. Never edit files in it —
                      the next update would silently overwrite them.

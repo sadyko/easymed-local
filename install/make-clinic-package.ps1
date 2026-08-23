@@ -19,7 +19,13 @@ param(
     [Parameter(Mandatory=$true)][string]$Dest,
     [Parameter(Mandatory=$true)][string]$Tar,
     [Parameter(Mandatory=$true)][string]$Manifest,
-    [string]$NodeExe = ""
+    [string]$NodeExe = "",
+    # Pins this package to its own port via port.txt (the launcher's precedence:
+    # arg > EASYMED_PORT > port.txt > 8000). Two Easy-Med installs on one
+    # machine MUST differ here or the second silently answers for the first —
+    # the owner's dev(:8000)-vs-test-clinic collision of 2026-08-23. Pick an
+    # uncommon port (e.g. 8712), not 8000/8080/3000 that other software grabs.
+    [int]$Port = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -94,6 +100,15 @@ Write-Host "Bundled runtime\node.exe ($([math]::Round((Get-Item $NodeExe).Length
 # onto every install.
 New-Item -ItemType Directory -Force (Join-Path $Dest 'data') | Out-Null
 
+# Pinned port, if requested — one number in a file a technician can edit in
+# Notepad. Written BEFORE the README so the README below can tell the truth
+# about which port this install actually uses.
+$docPort = 8000
+if ($Port -gt 0) {
+    Set-Content -Path (Join-Path $Dest 'port.txt') -Value $Port -Encoding ascii
+    $docPort = $Port
+}
+
 # ── 6. README for the person doing the install ─────────────────────────────────
 $readme = @'
 EASY-MED — УСТАНОВКА В КЛИНИКЕ
@@ -141,6 +156,9 @@ EASY-MED — УСТАНОВКА В КЛИНИКЕ
   «Обновления», подтверждает и выбирает удобный час. Ничего
   скачивать вручную не нужно.
 '@
+# Every 8000 in the template is a port reference, so a blanket replace keeps
+# the whole README truthful for a pinned-port package with one line.
+$readme = $readme -replace '8000', "$docPort"
 [System.IO.File]::WriteAllText((Join-Path $Dest 'README-УСТАНОВКА.txt'), $readme, (New-Object System.Text.UTF8Encoding $true))
 
 Write-Host ""
