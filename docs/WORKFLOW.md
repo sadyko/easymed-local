@@ -76,14 +76,56 @@ Release notes are written for the clinic manager who reads them in the update di
   version if the health check fails**, reported on the next check-in.
 - A clinic that never confirms simply keeps running its current version, forever.
 
-## Status of the machinery (2026-08-22)
+## The owner's machine: two folders, two roles
+
+```
+Desktop\implementation workflow\
+├─ easymed.local     THE DEV SERVER — every change is made and tested HERE
+└─ easymed.clinic    THE TEST CLINIC — a real clinic package (EasyMed.exe).
+                     Receives changes ONLY as signed releases, like a real
+                     clinic would. It has no git. Never edit files in it —
+                     the next update would silently overwrite them.
+```
+
+Why this design: **two or three machines push to this GitHub repo.** If anyone edits
+without pulling first, two versions of the truth diverge and someone's work gets lost in
+a merge. So the iron ordering is: *sync from GitHub → change in dev → test in dev →
+push to GitHub → only then think about clinics.*
+
+## Pushing is not releasing — the gate
+
+A push to `main` puts code on GitHub. **No clinic can see it yet.** A change only
+reaches clinics after two more deliberate acts: the owner tags a release (CI builds and
+signs the bundle) and the vendor publishes it to a ring in the panel.
+
+**The standing rule for anyone (or any AI assistant) working in this repo:**
+
+> After pushing changes to GitHub — STOP and ASK the owner:
+> *"Push is done. Should I make this a release and make it available to the clinics?"*
+> Never tag, never publish a ring, never touch the panel's releases page without the
+> owner saying yes to that specific version.
+
+The owner's answer usually follows this test loop:
+
+1. Owner says yes → tag `vX.Y.Z` → CI builds the signed bundle → publish in the panel
+   **to the test ring only** (the test clinic `easymed.clinic`).
+2. Restart the test clinic's Easy-Med window. Check-in runs ~60 seconds after boot,
+   so the offer appears in «Обновления» within a minute or two.
+3. Confirm the update there, pick the nearest hour. After it applies, close and reopen
+   the window (launcher installs pick up the new version on restart — HANDOVER §7).
+4. Owner clicks through the changed screens on the test clinic.
+5. Only when the test clinic looks right does the owner widen the release to the real
+   clinic rings. A release that misbehaves is simply never widened — real clinics keep
+   their current version.
+
+## Status of the machinery (2026-08-23)
 
 | Piece | State |
 |---|---|
-| Steps 1–6 (git + PR discipline) | ready the moment the `easymed-local` repo exists |
-| Bundle builder | in progress (Plan 4 Task 1) |
-| CI on tag, distribution, rings, clinic updater, consent screen | Plan 4 Tasks 2–6, not yet built |
+| Steps 1–6 (git + PR discipline) | in daily use — repo `sadyko/easymed-local`, both machines pushing |
+| Bundle builder, CI on tag, rings, clinic updater, consent screen | **built**; v0.1.x releases shipped through the full pipeline |
 | Everything the update rides on (licensing, check-in, versioned install, rollback) | **built and tested** |
+| Test clinic (`easymed.clinic`, EasyMed.exe package) | built 2026-08-23 — the proving ground for every release |
 
-Until Plan 4 completes, the pipeline's front half (dev → PR → merge → tag) is real and
-should be used from day one; the back half (clinic receives it) is the remaining work.
+The whole pipeline is real end to end. The remaining discipline is human: sync first,
+push, and never skip the release gate above.

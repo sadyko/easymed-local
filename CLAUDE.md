@@ -105,6 +105,25 @@ Alongside it: `POST /api/rpc/:name` (90+ named server-side handlers in
 - `data/easymed.db` — the entire clinic dataset. **Gitignored. Contains real patient data.**
 - `docs/specs/`, `docs/plans/` — design specs and implementation plans
 
+## The dev -> GitHub -> clinics workflow (docs/WORKFLOW.md is the full version)
+
+This folder (`easymed.local`) is the DEV SERVER. Its sibling `easymed.clinic` is the
+TEST CLINIC — a real launcher package that receives changes only as signed releases;
+never edit files there. Two or three machines push to this repo, so the ordering is
+absolute:
+
+1. **Sync first, before any change:** `git switch main && git pull` — someone else may
+   have pushed since yesterday. Building on a stale checkout loses their work in a merge.
+2. Make the change here, `npm test`, look at the actual screen.
+3. Review the diff (`git status` / `git diff` — no data/, no *.db, no keys), then push.
+4. **STOP AND ASK THE OWNER** before anything release-shaped: no tagging, no publishing
+   in the panel, nothing that makes the change visible to clinics, until the owner says
+   yes to that specific version. Pushing to GitHub is safe by itself — clinics can only
+   ever receive a tagged, signed, ring-published release.
+5. The owner verifies on the test clinic first (restart its window -> check-in offers
+   the update within ~a minute -> consent -> applies -> reopen window), and only then
+   decides whether to widen the release to real clinics.
+
 ## Conventions
 
 - Vanilla HTML/CSS/JS ES modules. **No framework, no build step.**
