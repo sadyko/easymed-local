@@ -165,6 +165,14 @@ export function offerIsCurrent(offer, currentVersion) {
 export function formatScheduled(consent) {
   const hour = consent && consent.hour;
   const scheduledAt = consent && consent.scheduled_at;
+  // «Обновить сейчас»: immediate consent has hour null BY DESIGN (see
+  // update_approve's own comment) — an instant, not a wall-clock hour, so
+  // the sentence promises minutes, not a time of day. Checked before the
+  // hour==null guard below, which otherwise reads immediate as "nothing
+  // scheduled" and leaves the screen blank right after the click.
+  if (consent && consent.immediate === true && scheduledAt) {
+    return 'Обновление устанавливается. Обычно это занимает несколько минут — не выключайте компьютер.';
+  }
   if (hour == null || !scheduledAt) return null;
   const d = new Date(scheduledAt);
   if (Number.isNaN(d.getTime())) return null;

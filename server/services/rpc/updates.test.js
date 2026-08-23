@@ -45,7 +45,7 @@ test.beforeEach(() => {
 test('update_status: nothing offered, nothing approved — every field is empty/false', () => {
   const db = freshDb();
   const s = updateStatus(db, {}, admin);
-  assert.deepEqual(s, { current_version: '2.3.0', offer: null, approved: false, hour: null, scheduled_at: null, last_result: null });
+  assert.deepEqual(s, { current_version: '2.3.0', offer: null, approved: false, hour: null, immediate: false, scheduled_at: null, last_result: null });
 });
 
 test('update_status: current_version reflects the running app, independent of any offer', () => {
@@ -243,4 +243,60 @@ test('update_check_now: a broken check-in reports ok:false but still returns the
   const r = await updateCheckNow(db, {}, admin, { runImpl: async () => { throw new Error('boom'); } });
   assert.equal(r.ok, false, 'the admin must not read success off a check that never happened');
   assert.deepEqual(r.offer, OFFER, 'the local status needs nothing from the network');
+});
+
+// ── «Обновить сейчас» (immediate approval) ──────────────────────────────────
+
+test('update_approve {now:true}: scheduled_at is THIS instant and the window is already open', async () => {
+  const db = freshDb();
+  storeOffer(db, OFFER);
+  const fixed = new Date('2026-08-23T15:30:00');
+  const r = updateApprove(db, { now: true }, admin, { now: () => fixed });
+  assert.equal(r.ok, true);
+  assert.equal(r.immediate, true);
+  assert.equal(r.hour, null);
+  assert.equal(r.scheduled_at, fixed.toISOString());
+  // The whole point: the minute tick that runs seconds from "now" must
+  // already be inside the install window — no waiting for a wall-clock hour.
+  const { isInWindow } = await import('../control/update-schedule.js');
+  assert.equal(isInWindow(r.scheduled_at, new Date(fixed.getTime() + 60_000)), true);
+});
+
+test('update_approve {now:true}: consent record carries immediate:true and names the offered version', () => {
+  const db = freshDb();
+  storeOffer(db, OFFER);
+  updateApprove(db, { now: true }, doctorAdmin, { now: () => new Date('2026-08-23T15:30:00') });
+  const consent = JSON.parse(get(db, 'update_consent'));
+  assert.equal(consent.immediate, true);
+  assert.equal(consent.hour, null);
+  assert.equal(consent.version, OFFER.version);
+  assert.equal(consent.approved_by, doctorAdmin.id);
+});
+
+test('update_status after an immediate approval: immediate:true, hour null — the screen branch that shows "устанавливается"', () => {
+  const db = freshDb();
+  storeOffer(db, OFFER);
+  updateApprove(db, { now: true }, admin, { now: () => new Date('2026-08-23T15:30:00') });
+  const s = updateStatus(db, {}, registrar);
+  assert.equal(s.approved, true);
+  assert.equal(s.immediate, true);
+  assert.equal(s.hour, null);
+  assert.ok(s.scheduled_at);
+});
+
+test('update_approve: now must be EXACTLY true — a truthy string still goes down the hour path and is refused', () => {
+  const db = freshDb();
+  storeOffer(db, OFFER);
+  // {now:'yes'} with no hour: not the immediate contract, and no valid hour
+  // either — refused, nothing written. Guards against a sloppy caller
+  // accidentally triggering an instant install.
+  assert.throws(() => updateApprove(db, { now: 'yes' }, admin), RpcError);
+  assert.equal(get(db, 'update_consent'), null);
+});
+
+test('update_approve {now:true}: non-admin still refused, nothing written', () => {
+  const db = freshDb();
+  storeOffer(db, OFFER);
+  assert.throws(() => updateApprove(db, { now: true }, registrar), RpcError);
+  assert.equal(get(db, 'update_consent'), null);
 });

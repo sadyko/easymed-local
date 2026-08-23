@@ -239,3 +239,20 @@ test('whatsNewState: a malformed notes map (array, string, null) never throws, d
     assert.equal(s.notes, null, `bad map ${JSON.stringify(bad)} must degrade to null notes, not throw`);
   }
 });
+
+// ── formatScheduled: the «Обновить сейчас» branch ───────────────────────────
+
+test('formatScheduled: immediate consent says "устанавливается", never a wall-clock hour', () => {
+  const msg = formatScheduled({ hour: null, scheduled_at: '2026-08-23T15:30:00.000Z', immediate: true });
+  assert.ok(msg.includes('устанавливается'));
+  assert.ok(!msg.includes('в 15'));
+});
+
+test('formatScheduled: immediate WITHOUT scheduled_at is nothing scheduled — null, not a promise', () => {
+  assert.equal(formatScheduled({ hour: null, scheduled_at: null, immediate: true }), null);
+});
+
+test('formatScheduled: hour-based consent unchanged by the new field defaulting off', () => {
+  const msg = formatScheduled({ hour: 3, scheduled_at: '2026-08-24T03:00:00' });
+  assert.ok(msg.includes('03:00'));
+});

@@ -349,13 +349,38 @@ function buildScheduleControls(body, offer) {
         }
     }
 
-    const tonightBtn = h('button', { type: 'button', class: 'btn btn-primary', onclick: () => approve(choices.tonight.hour) },
+    // «Обновить сейчас» — same one-action rule as approve(), different wire
+    // shape ({now:true}, no hour): the server stamps scheduled_at = this
+    // instant and the minute tick installs straight away. Owner-requested
+    // (2026-08-23) after the hour-only screen made even a vendor test wait
+    // for the next full hour.
+    async function approveNow() {
+        if (busy) return;
+        setBusy(true);
+        statusEl.textContent = '';
+        try {
+            const { error } = await supabase.rpc('update_approve', { now: true });
+            if (error) throw error;
+            const { data: fresh, error: err2 } = await supabase.rpc('update_status', {});
+            if (err2) throw err2;
+            toast(tr('Обновление устанавливается'), 'ok');
+            refreshBanner();
+            paint(body, fresh || {});
+        } catch (e) {
+            setBusy(false);
+            statusEl.textContent = tr('Не удалось запланировать обновление. Попробуйте ещё раз.');
+        }
+    }
+
+    const nowBtn = h('button', { type: 'button', class: 'btn btn-primary', onclick: () => approveNow() },
+        'Обновить сейчас');
+    const tonightBtn = h('button', { type: 'button', class: 'btn btn-outline', onclick: () => approve(choices.tonight.hour) },
         'Обновить сегодня ночью');
     const tomorrowBtn = h('button', { type: 'button', class: 'btn btn-outline', onclick: () => approve(choices.tomorrow.hour) },
         'Обновить завтра ночью');
     const customBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: () => approve(customInput.value) },
         'Запланировать');
-    buttons.push(tonightBtn, tomorrowBtn, customBtn);
+    buttons.push(nowBtn, tonightBtn, tomorrowBtn, customBtn);
 
     function refreshCustomPreview() {
         if (!isValidHour(customInput.value)) { customPreview.textContent = ''; warnEl.style.display = 'none'; return; }
@@ -367,6 +392,12 @@ function buildScheduleControls(body, offer) {
     refreshCustomPreview();
 
     return h('div', { class: 'upd-actions' },
+        h('div', { class: 'upd-choice' },
+            nowBtn,
+            // The honest cost of "now", stated where the button is — the same
+            // sentence the working-hours warning uses, because it is the same
+            // event: a server restart while people may be mid-form.
+            h('span', { class: 'upd-choice-when muted' }, 'сотрудники будут отключены на 1–2 минуты')),
         h('div', { class: 'upd-choice' },
             tonightBtn,
             h('span', { class: 'upd-choice-when muted' }, choices.tonight.dateLabel + ', ' + choices.tonight.hourLabel)),
@@ -381,7 +412,7 @@ function buildScheduleControls(body, offer) {
 }
 
 function paintScheduled(body, status, offer, admin) {
-    const msg = formatScheduled({ hour: status.hour, scheduled_at: status.scheduled_at });
+    const msg = formatScheduled({ hour: status.hour, scheduled_at: status.scheduled_at, immediate: status.immediate });
     const card = h('div', { class: 'card upd-card upd-scheduled' },
         h('div', { class: 'upd-scheduled-head' }, Icon('Clock', { size: 16 }),
             h('span', null, 'Обновление подтверждено', ' ', h('strong', null, offer.version))),

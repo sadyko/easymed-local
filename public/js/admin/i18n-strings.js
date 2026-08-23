@@ -2184,6 +2184,7 @@ export const STRINGS = {
   "Запланировать": {"en":"Schedule","ru":"Запланировать","uz":"Rejalashtirish"},
   "Выберите час от 0 до 23.": {"en":"Choose an hour from 0 to 23.","ru":"Выберите час от 0 до 23.","uz":"0 dan 23 gacha soat tanlang."},
   "Обновление запланировано": {"en":"Update scheduled","ru":"Обновление запланировано","uz":"Yangilanish rejalashtirildi"},
+  "Обновление устанавливается": {"en":"Update is installing","ru":"Обновление устанавливается","uz":"Yangilanish o‘rnatilmoqda"},
   "Проверить обновления": {"en":"Check for updates","ru":"Проверить обновления","uz":"Yangilanishlarni tekshirish"},
   "Проверка…": {"en":"Checking…","ru":"Проверка…","uz":"Tekshirilmoqda…"},
   "Проверка выполнена.": {"en":"Check complete.","ru":"Проверка выполнена.","uz":"Tekshiruv bajarildi."},

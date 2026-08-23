@@ -82,6 +82,7 @@ export function updateStatus(db, args, user) {
     offer,
     approved: !!consent,
     hour: consent ? consent.hour : null,
+    immediate: !!(consent && consent.immediate),
     scheduled_at: scheduledAt ? scheduledAt.toISOString() : null,
     last_result: readLastResult(getDataDir()),
   };
@@ -104,6 +105,26 @@ export function updateApprove(db, args, user, { now = () => new Date() } = {}) {
 
   const offer = readJsonState(db, 'update_offer');
   if (!offer) throw new RpcError('Нет доступного обновления.', 400);
+
+  // «Обновить сейчас» — the vendor-and-test-clinic path the owner asked for
+  // on 2026-08-23 after v0.2.0 could only be scheduled for the NEXT hour.
+  // Same consent record, same window machinery: scheduled_at = this instant,
+  // so tickUpdater's next minute tick is already inside [now, +1h) and the
+  // install starts immediately. hour stays null on purpose — an immediate
+  // consent has no wall-clock hour to show, and formatScheduled branches on
+  // `immediate` rather than inventing one.
+  if (args && args.now === true) {
+    const nowDate = now();
+    put(db, 'update_consent', JSON.stringify({
+      version: offer.version,
+      approved_by: user?.id ?? null,
+      approved_at: nowDate.toISOString(),
+      hour: null,
+      immediate: true,
+    }));
+    put(db, 'update_scheduled_at', nowDate.toISOString());
+    return { ok: true, version: offer.version, hour: null, immediate: true, scheduled_at: nowDate.toISOString() };
+  }
 
   // Number(null) and Number('') are both 0 — a missing hour must be refused,
   // not silently scheduled for midnight. Same guard as update-schedule.js's
