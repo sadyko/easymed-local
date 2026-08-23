@@ -112,7 +112,7 @@ test('LICENSED_MODULES has no inherited Object.prototype baggage', () => {
   assert.equal(Object.getPrototypeOf(LICENSED_MODULES), null, 'null-prototype object, not a {} literal');
 });
 
-test('exactly the three sellable modules are gated, named to match the real nav ids', () => {
+test('exactly the gated routes are listed, named to match the real nav/route ids', () => {
   // Cross-checked against admin.js: NAV has {id:'crm'} and {id:'telegram-chat'},
   // both real sidebar entries. 'marketing' has NO NAV entry today — it is only
   // reachable as a route (case 'marketing' in the router, and a CRUMBS entry)
@@ -120,7 +120,10 @@ test('exactly the three sellable modules are gated, named to match the real nav 
   // licence and SELLABLE_MODULES on the server already name it, and the next
   // task (routing) needs a place to look it up — but there is currently no
   // sidebar link for a lock icon to attach to.
-  assert.deepEqual([...LICENSED_NAV_IDS].sort(), ['crm', 'telegram-chat']);
+  // TELEPHONY_V1 — 'telephony-settings' is a Settings route (no sidebar entry,
+  // so no lock icon either), gated by the `callcenter` licence key: a real
+  // screen exists behind it, unlike marketing's placeholder.
+  assert.deepEqual([...LICENSED_NAV_IDS].sort(), ['crm', 'telegram-chat', 'telephony-settings']);
   // marketing is deliberately NOT here: it has no NAV entry and its route renders
   // a "coming soon" overlay, so offering to sell it would sell a placeholder.
   // Re-add it in the same commit that ships the real screen.

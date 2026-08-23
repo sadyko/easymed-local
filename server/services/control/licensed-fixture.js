@@ -24,7 +24,11 @@ import { __setPublicKeyForTests } from './state.js';
 // gives two different pids), so calling __setPublicKeyForTests here is safe
 // per-file — it can never leak a throwaway key into a different test file's
 // process.
-export function licensedDataDir() {
+// `modules` (TELEPHONY_V1): tests of licensed-module features (the telephony
+// poller's callcenter gate) need a licence that GRANTS a module, signed the
+// same way — defaulted to none so every existing caller keeps the exact
+// fixture it always had.
+export function licensedDataDir({ modules = [] } = {}) {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
   __setPublicKeyForTests(publicKey);
 
@@ -33,7 +37,7 @@ export function licensedDataDir() {
     clinic_id: 'test-clinic', unlock_secret: 'test-secret', subscription: 'active',
   }));
   const payload = {
-    clinic_id: 'test-clinic', clinic_name: 'Test Clinic', modules: [],
+    clinic_id: 'test-clinic', clinic_name: 'Test Clinic', modules,
     // Far enough out that no test suite will ever run past it.
     valid_until: '2099-01-01T00:00:00Z', issued_at: '2026-08-01T00:00:00Z', nonce: 'fixture',
   };

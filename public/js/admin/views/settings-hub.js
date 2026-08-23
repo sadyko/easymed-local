@@ -130,6 +130,12 @@ const GROUPS = [
             // Раздел админский: isRouteAllowed('telegram-settings') пускает только
             // полный доступ, остальные упрутся в отказ на самом экране.
             { label: 'Telegram-бот',        desc: 'Пациент получает свои документы в Telegram по номеру телефона', icon: 'Bot', live: true, action: nav('telegram-settings') },
+            // TELEPHONY_V1 — интеграция колл-центра Binotel: ключи, опрос,
+            // WebHook-и, журнал звонков. Раздел админский тем же правилом, что
+            // Telegram-бот (isRouteAllowed('telephony-settings') → false для
+            // настроенных ролей), а без модуля `callcenter` маршрутизатор сам
+            // покажет стандартный экран «Модуль не подключён».
+            { label: 'Телефония',           desc: 'Звонки Binotel: подключение, опрос и журнал звонков', icon: 'Headset', live: true, action: nav('telephony-settings') },
             // UPDATE_DELIVERY_V1 — the approval screen (views/updates.js) is
             // also reachable from its own quiet banner; this row is the
             // other of the two entry points the plan calls for.

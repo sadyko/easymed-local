@@ -335,6 +335,11 @@ export function isRouteAllowed(view) {
     // что здесь остаются только настроенные роли — им отказ. Сервер отказывает
     // второй раз, независимо от этой строки.
     if (view === 'telegram-settings') return false;
+    // TELEPHONY_V1 — то же правило, что у Telegram-бота строкой выше: ключ и
+    // secret Binotel открывают журнал звонков всей клиники, настроенным ролям
+    // тут делать нечего. Полный доступ (_effective === null) уже пропущен выше;
+    // сервер (admin-only RPC) отказывает второй раз, независимо от этой строки.
+    if (view === 'telephony-settings') return false;
     if (view === 'doctor-pay') return _effective.has('doctor-pay') || _effective.has('settings:doctor_pay') || _effective.has('settings');   // DOCTOR_PAY_BULK_V1
     if (view === 'referral-settings') return _effective.has('referral-settings') || _effective.has('settings');   // REFERRAL_REWARDS_V1
     if (view === 'cashier-settings') return _effective.has('cashier-settings') || _effective.has('settings:cashiers') || _effective.has('settings');   // CASHIER_SHIFT_MODE_V1

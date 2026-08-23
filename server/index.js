@@ -10,6 +10,7 @@ import { processPendingAction, pruneBackupsByKind, scheduleDailyBackups } from '
 import { bootstrapAdmin } from './services/auth.js';
 import { autoCloseStaleShifts } from './services/rpc/cashier.js';   // SHIFT_AUTOCLOSE_V1
 import { startTelegramBot } from './services/telegram/index.js';   // TELEGRAM_BOT_V1
+import { schedulePolling } from './services/telephony/poller.js';   // TELEPHONY_V1
 import { createApp } from './app.js';
 import { setDataDir, setAppVersion } from './services/control/config.js';   // SUPERVISED_INSTALL_V1 / UPDATE_DELIVERY_V1
 import { scheduleCheckin } from './services/control/checkin.js';   // LICENCE_CORE_V1
@@ -187,6 +188,14 @@ if (isMain) {
   // и молчит, пока администратор его не включил. Все ошибки цикл ловит внутри:
   // недоступный Telegram не должен мешать регистратуре работать.
   startTelegramBot(db);
+
+  // TELEPHONY_V1 — the Binotel call poller, in this same process for the same
+  // one-`npm start` reason as the bot above. Its tick decides for itself
+  // whether to do anything (settings enabled + callcenter module granted +
+  // credentials saved), so scheduling it unconditionally costs an idle clinic
+  // one settings read every 30 seconds and nothing else. unref'd timers —
+  // it can never hold a shutdown open.
+  schedulePolling(db);
 
     const PORT = Number(process.env.PORT || 8000);
   const server = createApp(db, { dataDir: DATA_DIR }).listen(PORT, '0.0.0.0', () => {

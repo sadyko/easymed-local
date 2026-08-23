@@ -20,7 +20,10 @@ export class RpcError extends Error {
 // licence happens to contain, so a typo in a request is caught and so the vendor
 // panel and the app share one vocabulary. Extend deliberately, in step with the
 // panel.
-export const SELLABLE_MODULES = new Set(['crm', 'telegram', 'marketing']);
+// TELEPHONY_V1 — 'callcenter' unlocks Настройки → «Телефония» (and later the
+// call-center screen rewrite); added here so the locked-tile's «Подключить
+// модуль» request validates instead of 400ing.
+export const SELLABLE_MODULES = new Set(['crm', 'telegram', 'marketing', 'callcenter']);
 
 /** Everything the lock screen and the banners need. Never blocked. */
 export function licenceStatus(db, args, user) {

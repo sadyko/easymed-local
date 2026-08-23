@@ -28,6 +28,16 @@ export const LICENSED_MODULES = Object.assign(Object.create(null), {
         title: 'Пациент забирает анализы сам, в Telegram',
         blurb: 'Бот узнаёт пациента по номеру телефона и отправляет готовые результаты. Регистратура перестаёт распечатывать и обзванивать.',
     },
+    // TELEPHONY_V1 — Настройки → «Телефония» (интеграция Binotel) продаётся
+    // модулем `callcenter` (docs/plans/2026-08-23-binotel-telephony.md).
+    // Серверная часть строится параллельно тому же плану: она проверяет тот же
+    // ключ и в опросе звонков, и в 402-гейте RPC, а module_request с этого
+    // экрана заработает, когда `callcenter` появится в её SELLABLE_MODULES.
+    'telephony-settings': {
+        key: 'callcenter',
+        title: 'Каждый звонок пациента — в журнале клиники',
+        blurb: 'Интеграция с АТС Binotel: входящие и исходящие звонки записываются автоматически и находят карту пациента по номеру телефона.',
+    },
 });
 
 /** Every nav id that is gated. Used by the sidebar to decide where to draw a lock. */

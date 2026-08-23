@@ -21,6 +21,7 @@ import { saveLabResults } from './lab.js';   // LAB_SAVE_BATCH_V1
 import { cashierReport } from './cashier-report.js';   // CASHIER_REPORT_V1
 import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
 import { licenceStatus, licenceUnlock, licenceEnroll, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
+import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRecentCalls } from './telephony.js';   // TELEPHONY_V1
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
 import { backupList, backupCreate, backupRestore, factoryReset } from './backup.js';   // SYSTEM_SETTINGS_V1
 
@@ -165,6 +166,16 @@ export const RPC = {
   // регистратура работает сменами, и личная папка исчезала бы вместе со сменой.
   telegram_folder_save:           (db, args, user) => telegramFolderSave(db, args, user),
   telegram_folder_set_chat:       (db, args, user) => telegramFolderSetChat(db, args, user),
+
+  // TELEPHONY_V1 — Настройки → «Телефония» (Binotel). Admin-only; the secret
+  // never leaves the server (api_secret_set only). telephony_test is async —
+  // routes/rpc.js has awaited handlers since telegram_test_connection.
+  // NORMAL 402 gating on purpose: telephony is clinical operations, not
+  // licence recovery — nothing here belongs in gate.js's allowed sets.
+  telephony_settings_get:   (db, args, user) => telephonySettingsGet(db, args, user),
+  telephony_settings_save:  (db, args, user) => telephonySettingsSave(db, args, user),
+  telephony_test:           (db, args, user) => telephonyTest(db, args, user),
+  telephony_recent_calls:   (db, args, user) => telephonyRecentCalls(db, args, user),
 
   // LICENCE_CORE_V1 — the three that stay reachable while locked (see
   // control/gate.js ALWAYS_ALLOWED_RPCS). Without them a clinic that wants to

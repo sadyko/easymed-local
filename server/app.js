@@ -12,6 +12,7 @@ import { storageRoutes } from './routes/storage.js';
 import { attachControl } from './services/control/gate.js';   // LICENCE_CORE_V1
 import { setDataDir } from './services/control/config.js';   // LICENCE_CORE_V1
 import { recordEvent } from './services/ops-log.js';   // OPS_EVENTS_V1
+import { telephonyWebhooks } from './services/telephony/webhooks.js';   // TELEPHONY_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -36,6 +37,13 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
 
   app.get('/api/health', (req, res) => res.json({ ok: true }));
   app.use('/api/auth', authRoutes(db));
+  // TELEPHONY_V1 — Binotel's webhook receivers, in /api/auth's slot: BEFORE
+  // requirePasswordChanged and carrying no requireAuth, because Binotel sends
+  // no cookies — a session gate would 401 every real webhook. The router does
+  // its own gating instead (settings toggle, the callcenter module via
+  // req.control from attachControl above, the vendor source-IP allowlist and
+  // the Company ID check), and every refusal is a non-advertising 404.
+  app.use('/api/telephony/binotel', telephonyWebhooks(db));
   // FIRST_RUN_PASSWORD_V1 — placed AFTER /api/auth (the way out of the state)
   // and BEFORE every other router, so anything mounted later is gated by
   // default instead of by someone remembering to add it.

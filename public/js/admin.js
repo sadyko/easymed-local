@@ -65,6 +65,7 @@ import { renderDoctorPay } from './admin/views/doctor-pay.js?v=dp1';   // DOCTOR
 import { renderReferralSettings } from './admin/views/referral-settings.js?v=rr1';   // REFERRAL_REWARDS_V1
 import { renderCashierSettings } from './admin/views/cashier-settings.js?v=shiftmode1';   // CASHIER_SHIFT_MODE_V1
 import { renderTelegramSettings } from './admin/views/telegram-settings.js?v=tg3';   // TELEGRAM_BOT_V1
+import { renderTelephonySettings } from './admin/views/telephony-settings.js?v=tel1';   // TELEPHONY_V1 — Binotel call-center integration
 import { renderTelegramChat } from './admin/views/telegram-chat.js?v=tgc4';   // TELEGRAM_CHAT_V1
 import { renderConsultationTypes } from './admin/views/consultation-types.js?v=ct5';   // CONSULTATION_TYPES_RESTORE
 import { renderPharmacy }    from './admin/views/pharmacy.js?v=ph2';   // PHARMACY_V1
@@ -158,6 +159,7 @@ const CRUMBS = {
     'discounts-settings': ['Insights', 'Settings', 'Скидки пациентов'],   // PATIENT_DISCOUNTS_V1
     'api-settings': ['Insights', 'Settings', 'API'],   // CLINIC_API_V1
     'telegram-settings': ['Insights', 'Settings', 'Telegram-бот'],   // TELEGRAM_BOT_V1
+    'telephony-settings': ['Insights', 'Settings', 'Телефония'],   // TELEPHONY_V1
     'telegram-chat': ['Insights', 'Чат с пациентами'],   // TELEGRAM_CHAT_V1
     'consultation-types': ['Insights', 'Settings', 'Консультации врачей'],   // CONSULTATION_TYPES_RESTORE
     'doctor-pay': ['Insights', 'Settings', 'Зарплата врачей'],   // DOCTOR_PAY_BULK_V1
@@ -867,6 +869,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'discounts-settings': return void await renderDiscountsSettings(viewRoot, ctx);   // PATIENT_DISCOUNTS_V1
             case 'api-settings': return void await renderApiSettings(viewRoot, ctx);   // CLINIC_API_V1
             case 'telegram-settings': return void await renderTelegramSettings(viewRoot, ctx);   // TELEGRAM_BOT_V1
+            case 'telephony-settings': return void await renderTelephonySettings(viewRoot, ctx);   // TELEPHONY_V1
             case 'telegram-chat': return void await renderTelegramChat(viewRoot, ctx);   // TELEGRAM_CHAT_V1
             case 'doctor-pay': return void await renderDoctorPay(viewRoot, ctx);   // DOCTOR_PAY_BULK_V1
             case 'referral-settings': return void await renderReferralSettings(viewRoot);   // REFERRAL_REWARDS_V1
@@ -2452,13 +2455,20 @@ async function renderUpdateBanner() {
 
     const banner = h('div', { id: 'update-banner' });
     if (status.approved) {
-        const hour = Number(status.hour);
+        // status.hour, NOT Number(status.hour): an «Обновить сейчас» consent has
+        // hour null BY DESIGN, and Number(null) is 0 — the first immediate
+        // install shipped a banner promising «запланировано на 00:00» (owner's
+        // screenshot, 2026-08-23). The same Number(null)===0 trap update_approve's
+        // own comment warns about, hit from the display side this time.
+        const hour = status.hour;
         // Built directly, not through tr()'s STRINGS table — same convention
         // as renderLicenceBanner's own dynamic day-count message just above:
         // there is no {hour} placeholder mechanism to hook a dynamic value
         // into instead.
         banner.appendChild(h('span', { class: 'ub-msg' }, Icon('Clock', { size: 15 }),
-            Number.isInteger(hour) ? `Обновление запланировано на ${formatRuHour(hour)}.` : 'Обновление запланировано.'));
+            status.immediate === true ? 'Обновление устанавливается.'
+                : Number.isInteger(hour) ? `Обновление запланировано на ${formatRuHour(hour)}.`
+                : 'Обновление запланировано.'));
     } else {
         banner.appendChild(h('span', { class: 'ub-msg' }, Icon('Download', { size: 15 }),
             `Доступно обновление ${offer.version} — `,
