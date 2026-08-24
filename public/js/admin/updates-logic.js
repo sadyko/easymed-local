@@ -229,6 +229,52 @@ export function updateOutcomeMessage(lastResult, currentVersion) {
  *   whatever comes next — nothing server-side still has yesterday's notes
  *   lying around by then.
  */
+/**
+ * Numeric-per-segment version compare — the SAME rule the server's
+ * bundle.js and build-bundle.mjs use, restated here because the frontend
+ * cannot import server modules. A string compare gets 0.10.0 vs 0.9.0
+ * backwards, which is exactly the case this function exists to get right.
+ *
+ * @returns {number} <0 if a is older, 0 if equal, >0 if a is newer
+ */
+export function compareVersions(a, b) {
+  const parts = (v) => String(v || '').split('.').map((n) => Number.parseInt(n, 10) || 0);
+  const pa = parts(a);
+  const pb = parts(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/**
+ * «Установлено, но ещё не работает» — the notice for an update that applied
+ * successfully while the OLD code is still the running process.
+ *
+ * This is the normal launcher case: apply-update.ps1 repoints the `current`
+ * junction, but a launcher install has no Windows service to stop and start,
+ * so the already-running Node keeps serving the previous version until the
+ * Easy-Med window is closed and reopened (docs/HANDOVER.md §7). Without this
+ * message the screen shows the OLD version number and no explanation — which
+ * is indistinguishable from the update having failed, and cost the owner a
+ * day of "why is nothing updating?" on 2026-08-24.
+ *
+ * Deliberately requires the finished version to be NEWER than the running
+ * one, not merely different: a stale result file from an older update (the
+ * clinic has since moved past it) must not claim a restart is pending.
+ *
+ * @param {object|null} lastResult   apply-update.ps1's outcome file
+ * @param {string|null} currentVersion  what the running server reports
+ * @returns {string|null}
+ */
+export function pendingRestartMessage(lastResult, currentVersion) {
+  if (!lastResult || typeof lastResult !== 'object' || lastResult.ok !== true) return null;
+  const installed = typeof lastResult.version === 'string' ? lastResult.version : '';
+  if (!installed || !currentVersion) return null;
+  if (compareVersions(installed, currentVersion) <= 0) return null;
+  return `Обновление до ${installed} установлено. Чтобы оно заработало, закройте окно Easy-Med и откройте его снова.`;
+}
 export function whatsNewState(currentVersion, lastSeenVersion, offerNotesByVersion) {
   if (!currentVersion) return { show: false, version: null, notes: null };
   if (!lastSeenVersion || lastSeenVersion === currentVersion) {

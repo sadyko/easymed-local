@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   formatRuDate, formatRuHour, isWorkingHour, isValidHour, nextRunAtLocal,
   resolveHour, scheduleChoices, offerIsCurrent, formatScheduled,
-  updateOutcomeMessage, whatsNewState,
+  updateOutcomeMessage, whatsNewState, pendingRestartMessage, compareVersions,
 } from './updates-logic.js';
 
 // --- formatRuDate / formatRuHour ---------------------------------------------
@@ -255,4 +255,38 @@ test('formatScheduled: immediate WITHOUT scheduled_at is nothing scheduled — n
 test('formatScheduled: hour-based consent unchanged by the new field defaulting off', () => {
   const msg = formatScheduled({ hour: 3, scheduled_at: '2026-08-24T03:00:00' });
   assert.ok(msg.includes('03:00'));
+});
+
+// ── pendingRestartMessage: installed but not yet running ────────────────────
+
+test('pendingRestartMessage: a newer version applied while the old one still runs asks for a window restart', () => {
+  const msg = pendingRestartMessage({ ok: true, version: '0.3.2' }, '0.3.1');
+  assert.ok(msg.includes('0.3.2'));
+  assert.ok(msg.includes('закройте окно Easy-Med'));
+});
+
+test('pendingRestartMessage: nothing to say once the running version caught up', () => {
+  assert.equal(pendingRestartMessage({ ok: true, version: '0.3.2' }, '0.3.2'), null);
+});
+
+test('pendingRestartMessage: a STALE result the clinic has moved past never claims a restart is pending', () => {
+  // The 0.2.2 result file can outlive several updates; running 0.3.1 already
+  // includes it. Requiring strictly-newer is what stops a permanent nag.
+  assert.equal(pendingRestartMessage({ ok: true, version: '0.2.2' }, '0.3.1'), null);
+});
+
+test('pendingRestartMessage: a FAILED result is updateOutcomeMessage’s job, not this one’s', () => {
+  assert.equal(pendingRestartMessage({ ok: false, version: '0.3.2' }, '0.3.1'), null);
+});
+
+test('pendingRestartMessage: missing/garbage input is silent, never a thrown error on the screen', () => {
+  assert.equal(pendingRestartMessage(null, '0.3.1'), null);
+  assert.equal(pendingRestartMessage({ ok: true }, '0.3.1'), null);
+  assert.equal(pendingRestartMessage({ ok: true, version: '0.3.2' }, null), null);
+});
+
+test('compareVersions: numeric per segment — 0.10.0 is newer than 0.9.0, which a string compare gets backwards', () => {
+  assert.ok(compareVersions('0.10.0', '0.9.0') > 0);
+  assert.ok(compareVersions('0.3.1', '0.3.2') < 0);
+  assert.equal(compareVersions('1.2.3', '1.2.3'), 0);
 });

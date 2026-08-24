@@ -36,7 +36,7 @@ import { supabase } from '../../supabase.js';
 import { licenceState } from '../licence.js';
 import {
     scheduleChoices, resolveHour, isValidHour, offerIsCurrent,
-    formatScheduled, updateOutcomeMessage, whatsNewState,
+    formatScheduled, updateOutcomeMessage, whatsNewState, pendingRestartMessage,
 } from '../updates-logic.js';
 import { renderSubscriptionCard } from './system-subscription.js';
 import { renderBackupsCard } from './system-backups.js';
@@ -233,6 +233,20 @@ function paint(body, status) {
             // convention) — passed as a plain h() child, so it is a real
             // Text node either way, never raw HTML.
             h('span', null, outcomeMsg)));
+    }
+
+    // INSTALLED, NOT YET RUNNING — the launcher case (no Windows service to
+    // stop and start, so the old process keeps serving until the Easy-Med
+    // window is reopened). Without this the screen shows the OLD version and
+    // says nothing, which looks exactly like the update having failed — the
+    // confusion that cost the owner a day on 2026-08-24. Rendered ABOVE the
+    // offer for the same reason as the failure notice: the clinic must not
+    // have to hunt for the state of its own system.
+    const restartMsg = pendingRestartMessage(status.last_result, currentVersion);
+    if (restartMsg) {
+        body.appendChild(h('div', { class: 'card upd-card upd-restart', role: 'status' },
+            h('span', { class: 'upd-outcome-ic' }, Icon('Refresh', { size: 16 })),
+            h('span', null, restartMsg)));
     }
 
     // Bullet 6 — one-time "what's new", only once current_version has
