@@ -83,6 +83,10 @@ registry is separate: 4 migrations in `control-plane/server/db/migrations/`.
     backup (`Documents/easymed-keys/` on the owner's machine — not in any repo). Public half:
     embedded in `server/services/control/updater.js`.
   - Two separate keypairs on purpose: a leaked build key cannot mint licences.
+  - Release PUBLISHING (not signing): `EASYMED_CP_DEPLOY_TOKEN` — the same string in the GitHub
+    Actions secret of that name and in the control plane's environment. Not a key: it only lets
+    CI call `POST /cp/v1/deploy/release`. Rotate by changing it in both places; nothing else is
+    affected, and a leaked one still cannot forge an update (clinics check the signature).
 - **Panel:** `https://settings.easymed.uz/cp/` — served by the control plane itself
   (systemd unit `easymed-cp` on the vendor server, `/opt/easymed-cp`, its own private Node 24
   runtime at `/opt/node24`, port 8095 bound to 127.0.0.1 behind nginx). Vendor login is the
@@ -96,8 +100,16 @@ registry is separate: 4 migrations in `control-plane/server/db/migrations/`.
    builds `easymed-X.Y.Z.tar.gz` + a signed manifest via `scripts/build-bundle.mjs`
    (allow-listed contents — `data/`, `.git/`, keys physically cannot be included), attaches both
    to a GitHub Release.
-4. The vendor registers/publishes the release in the panel **by ring** (0 = own install,
-   1 = friendly clinics, 2 = everyone). Two failed installs auto-halt a release.
+4. **The same CI run publishes it** — `POST /cp/v1/deploy/release` on the control plane, bearer
+   `EASYMED_CP_DEPLOY_TOKEN` (publish-only, nothing else): the tar lands in
+   `EASYMED_CP_RELEASES_DIR` (nginx serves that directory at `/releases/`) and the release is
+   registered and published to **ring 2 = every clinic** in one call. A failed upload fails the
+   workflow; re-running it is idempotent (same version + same bundle = no-op, a different bundle
+   under the same version is refused). This hand-off exists because the repo is private, so a
+   clinic PC cannot pull from GitHub and must never hold credentials for it —
+   `control-plane/server/routes/deploy.js` explains the whole trade-off. Rings still exist in the
+   schema and the panel for narrowing or halting BY HAND; nothing is published by hand any more.
+   Two failed installs auto-halt a release — with staging gone, that is the only automatic brake.
 5. Each clinic's daily check-in returns the offer; the clinic **admin consents and picks the
    hour** (consent names the version — a newer offer voids old consent).
 6. At the chosen hour: download (same-origin only) → verify signature BEFORE unpacking →
@@ -136,6 +148,10 @@ node server/index.js                           # prints a one-time vendor passwo
 | `EASYMED_SIGNING_KEY` | control plane only | path to a throwaway keygen PEM |
 | `EASYMED_CP_DATA_DIR`, `CP_PORT`, `CP_BIND` | control plane | defaults fine in dev |
 | `EASYMED_RELEASE_KEY` | GitHub Actions only | already set as a repo secret; never needed locally |
+| `EASYMED_CP_DEPLOY_TOKEN` | control plane **and** GitHub Actions (same value) | unset in dev — without it `POST /cp/v1/deploy/release` answers 404 and is invisible. Min 32 chars; shorter is ignored |
+| `EASYMED_CP_RELEASES_DIR` | control plane | unset in dev (defaults to `control-plane/releases`). On the server it MUST be the directory nginx serves at `/releases/` |
+| `EASYMED_CP_RELEASES_URL_BASE`, `EASYMED_CP_MAX_BUNDLE_BYTES` | control plane | defaults fine (`/releases`, 32 MB) |
+| `EASYMED_CP_URL` | GitHub Actions only | optional; CI defaults to `https://settings.easymed.uz` |
 
 ## 6. Conventions (the short version — CLAUDE.md has the long one)
 

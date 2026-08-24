@@ -182,7 +182,11 @@ export function readMigrations(sourceDir) {
   return names.filter((n) => n.endsWith('.sql')).sort();
 }
 
-const VERSION_RE = /^\d+\.\d+\.\d+$/;
+// Exported since AUTO_ROLLOUT_V1: the control plane's CI-facing publish route
+// (control-plane/server/routes/deploy.js) turns a version string into a
+// directory and a filename, so it must accept exactly what this file is
+// willing to BUILD — one vocabulary, not two regexes that could drift.
+export const VERSION_RE = /^\d+\.\d+\.\d+$/;
 
 // compareVersions() and tarCommand() moved to server/services/control/bundle.js
 // (imported and re-exported at the top of this file) — both are needed by the

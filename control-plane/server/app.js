@@ -5,6 +5,7 @@ import { enrollRoutes } from './routes/enroll.js';
 import { checkinRoutes } from './routes/checkin.js';
 import { vendorAuthRoutes, attachVendorUser } from './routes/vendor-auth.js';
 import { adminRoutes } from './routes/admin.js';
+import { deployRoutes, DEPLOY_MOUNT } from './routes/deploy.js';
 
 // control-plane/server/app.js -> control-plane/ -> control-plane/public
 const CONTROL_PLANE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -35,6 +36,20 @@ export function createApp(db) {
   const app = express();
   app.disable('x-powered-by');
   app.use((req, res, next) => { res.set('X-Content-Type-Options', 'nosniff'); next(); });
+
+  // AUTO_ROLLOUT_V1 — CI's publish endpoint, mounted ABOVE the 100kb JSON
+  // parser below and that ordering is load-bearing, twice over:
+  //   - a release bundle is ~15 MB (~20 MB base64), so the 100kb parser would
+  //     reject it outright; this router carries its own, much larger limit,
+  //     and it is the ONLY path in the control plane that does.
+  //   - the router checks the bearer token BEFORE parsing anything, so an
+  //     unauthenticated caller can never make this process buffer megabytes.
+  //     Mounting it below the global parser would parse first and authenticate
+  //     afterwards, which is the wrong way round.
+  // Also above attachVendorUser: CI has no vendor session and must never be
+  // able to gain anything from presenting one. See routes/deploy.js.
+  app.use(DEPLOY_MOUNT, deployRoutes(db));
+
   app.use('/cp', express.json({ limit: '100kb' }));
   // VENDOR_LOGIN_V1 — resolves the vendor session cookie into req.vendorUser
   // for every /cp route, in one place. /cp/v1/enroll and /cp/v1/checkin never

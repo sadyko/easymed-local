@@ -31,9 +31,17 @@ The full story is [docs/WORKFLOW.md](docs/WORKFLOW.md); this page is the contrac
                git tag vX.Y.Z && git push origin vX.Y.Z
                → CI runs the full suite, builds and SIGNS the bundle, attaches it
                  to a GitHub Release (tag must sit on main and match the version)
-11. PUBLISH    settings.easymed.uz/cp/ → publish the release to a ring:
-               TEST CLINIC FIRST, always. Widen only after the owner has clicked
-               through the test clinic. A bad release is simply never widened.
+11. PUBLISH    NOTHING TO DO — the same CI run uploads the signed bundle to
+               settings.easymed.uz and publishes it to EVERY clinic. If that
+               upload fails the workflow goes red: a release that exists on
+               GitHub but reached no clinic is a failed release, not a green one.
+               (There is no manual scp/register/ring step any more. The step
+               exists at all only because the repo is private, so a clinic PC
+               cannot download from GitHub and must never hold credentials for
+               it — CI pushes to the vendor server over one publish-only token.)
+               So: TAGGING IS THE IRREVERSIBLE ACT. Once the tag is pushed, every
+               clinic will be offered it. Ask the owner before tagging, never
+               after.
 12. RECEIVE    the clinic admin sees the offer (check-in ~60s after boot or the
                «Проверить обновления» button), consents, picks the hour; launcher
                installs pick up the new version on the next window restart.
@@ -63,9 +71,13 @@ outcome file appears AND is readable by the app's own reader. It skips on
 non-Windows machines - which is precisely why it cannot live in CI, and why
 this line is in the instructions instead.
 
-After publishing to the test clinic, confirm the install actually happened -
-the version on screen changed, or `data\update-apply.log` says why not. Never
-widen a release to real clinics on the strength of "no failures reported".
+**This gate matters MORE now that publishing is automatic.** A tag goes to every
+clinic, so there is no longer a manual ring step in which someone would have
+noticed. The auto-halt is the only automatic brake, and the table above is the
+list of things it cannot see. Run the gate, and after the release goes out check
+the test clinic by eye - the version on screen changed, or
+`data\update-apply.log` says why not. "No failures reported" is not evidence
+that anything installed.
 
 ## Iron rules
 
@@ -74,9 +86,10 @@ widen a release to real clinics on the strength of "no failures reported".
 - **`data/` never leaves the machine.** No database, no licence files, no keys in
   any commit — CI's bundle allow-list enforces this for releases, YOU enforce it
   for the repo.
-- **Only a tag ships.** Merging to main ships nothing; clinics can only ever
-  receive a tagged, CI-signed, ring-published release. That is why pushing is
-  safe and tagging is the owner's single irreversible act.
+- **Only a tag ships — and a tag ships to everyone.** Merging to main ships
+  nothing; clinics can only ever receive a tagged, CI-signed release. But since
+  CI now publishes that release itself, the tag is the whole act: pushing is
+  safe, tagging is irreversible, and nobody tags but the owner.
 - **Version discipline.** The tag, package.json, and RELEASE_NOTES.md move
   together in the release commit(s); CI refuses a tag that disagrees with
   package.json or sits off main.

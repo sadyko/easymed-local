@@ -12,7 +12,8 @@ Two people develop; **only the owner can ship.** Clinics never see GitHub.
  4. push branch ───────►  5. Pull Request
                           6. review + merge to main
                           7. owner tags v2.4.0 ──►  8. CI builds + signs bundle
-                                                    9. vendor publishes to a ring
+                                                    9. the SAME CI run uploads it here
+                                                       and publishes it to EVERY clinic
                                                    10. clinic's daily check-in ──►  sees the offer
                                                                                    11. admin confirms
                                                                                        + picks the hour
@@ -95,29 +96,34 @@ push to GitHub → only then think about clinics.*
 
 ## Pushing is not releasing — the gate
 
-A push to `main` puts code on GitHub. **No clinic can see it yet.** A change only
-reaches clinics after two more deliberate acts: the owner tags a release (CI builds and
-signs the bundle) and the vendor publishes it to a ring in the panel.
+A push to `main` puts code on GitHub. **No clinic can see it yet.** A change reaches
+clinics after exactly one more deliberate act: **the owner tags a release.** That one
+act now does everything — CI runs the suite, signs the bundle, attaches it to a GitHub
+Release, uploads it to `settings.easymed.uz` and publishes it to every clinic. There is
+no second manual step in which someone could have a change of heart.
 
 **The standing rule for anyone (or any AI assistant) working in this repo:**
 
 > After pushing changes to GitHub — STOP and ASK the owner:
 > *"Push is done. Should I make this a release and make it available to the clinics?"*
-> Never tag, never publish a ring, never touch the panel's releases page without the
-> owner saying yes to that specific version.
+> Never tag without the owner saying yes to that specific version. **The tag is the
+> release** — after it is pushed there is nothing left to reconsider.
 
-The owner's answer usually follows this test loop:
+What the owner's "yes" sets in motion:
 
-1. Owner says yes → tag `vX.Y.Z` → CI builds the signed bundle → publish in the panel
-   **to the test ring only** (the test clinic `easymed.clinic`).
+1. Owner says yes → run the Windows apply gate (CONTRIBUTING.md) → tag `vX.Y.Z` → CI
+   builds, signs, and publishes it to every clinic.
 2. Restart the test clinic's Easy-Med window. Check-in runs ~60 seconds after boot,
-   so the offer appears in «Обновления» within a minute or two.
+   so the offer appears in «Обновления» within a minute or two — the same offer every
+   other clinic is now seeing.
 3. Confirm the update there, pick the nearest hour. After it applies, close and reopen
    the window (launcher installs pick up the new version on restart — HANDOVER §7).
-4. Owner clicks through the changed screens on the test clinic.
-5. Only when the test clinic looks right does the owner widen the release to the real
-   clinic rings. A release that misbehaves is simply never widened — real clinics keep
-   their current version.
+4. Owner clicks through the changed screens on the test clinic. **Do this promptly** —
+   real clinics are being offered the same version, and each one installs when its own
+   admin consents.
+5. If it misbehaves: two reported failures halt it automatically for everyone who has
+   not installed yet, and the owner can halt it by hand in the panel at any time. A
+   clinic that has not consented never installed anything.
 
 ## Status of the machinery (2026-08-23)
 

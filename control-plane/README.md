@@ -81,6 +81,29 @@ anything this service could cause on its own.
 **Do not consolidate this behind the CORE gateway for tidiness.** It must
 keep its own, independent path to the internet.
 
+## Serving releases (`/releases/`) — what the vendor server must provide
+
+Since AUTO_ROLLOUT_V1, GitHub Actions posts each signed bundle to
+`POST /cp/v1/deploy/release` (bearer token, publish-only — see
+`server/routes/deploy.js` for why CI pushes here rather than this server
+pulling from GitHub). This service writes the `.tar.gz` to disk and registers
+the release at ring 2, so every clinic is offered it at its next check-in.
+
+**It does not serve those files.** Clinics download
+`/releases/<version>/easymed-<version>.tar.gz` from `settings.easymed.uz` as an
+ordinary static file, and the clinic updater refuses any URL that leaves that
+origin (`server/services/control/updater.js`). So nginx must serve
+`EASYMED_CP_RELEASES_DIR` at `/releases/` — read-only, no directory listing. If
+that `location` and this env var ever disagree, clinics are offered a URL that
+404s, and the symptom shows up at the clinics, not here.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `EASYMED_CP_DEPLOY_TOKEN` | none | Without it the endpoint answers 404 and is invisible. Minimum 32 characters; a shorter one is ignored, with a loud line in the log |
+| `EASYMED_CP_RELEASES_DIR` | `control-plane/releases` | Must match the nginx `location /releases/`. Writable by this service, readable by nginx |
+| `EASYMED_CP_RELEASES_URL_BASE` | `/releases` | Only if nginx serves that directory at some other path |
+| `EASYMED_CP_MAX_BUNDLE_BYTES` | 32 MB | The largest bundle accepted |
+
 ## Development
 
 From the repository root:

@@ -108,7 +108,11 @@ const VALID_RINGS = [0, 1, 2];
 // possibly verify as anything (missing payload, sig not a string) is rejected
 // at registration time rather than being silently stored and discovered
 // broken only when a clinic tries to use it.
-function isManifestShaped(manifest) {
+//
+// Exported for routes/deploy.js (AUTO_ROLLOUT_V1), which registers a release
+// from CI and must apply the SAME guard — one definition of "what a manifest
+// looks like", never a second copy that could drift from this one.
+export function isManifestShaped(manifest) {
   return !!manifest && typeof manifest === 'object' && !Array.isArray(manifest)
     && !!manifest.payload && typeof manifest.payload === 'object' && !Array.isArray(manifest.payload)
     && typeof manifest.sig === 'string' && manifest.sig.length > 0;

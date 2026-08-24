@@ -225,3 +225,111 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" "$TAR_PATH" "$MANIFEST_PATH" --generate-notes
           fi
+
+      - name: Publish it to every clinic
+        # AUTO_ROLLOUT_V1 — the step that used to be a person. Until now the
+        # release stopped at GitHub: someone had to download the asset, scp it
+        # to the vendor server, register it in the panel and publish it to a
+        # ring. A release that was built but never carried across is invisible
+        # to clinics — indistinguishable from one that was never cut — and that
+        # is exactly what kept happening.
+        #
+        # It cannot simply be deleted, only automated: this repository is
+        # PRIVATE, so a clinic PC (which has no credentials and must never be
+        # given any) cannot download from it. The bundle has to be served from
+        # settings.easymed.uz. So CI pushes it there, over ONE narrow bearer
+        # token that can do nothing else — see
+        # control-plane/server/routes/deploy.js for why that beats an SSH key
+        # in CI or a GitHub token on the vendor server.
+        #
+        # This step FAILS the workflow if the upload fails. A silently
+        # unpublished release is the exact problem being fixed; a green tick on
+        # a release no clinic can see would recreate it.
+        #
+        # NEVER add `set -x` (or ACTIONS_STEP_DEBUG tracing) to this step — the
+        # same rule as the signing step above, for the same reason: the trace
+        # would echo the token.
+        env:
+          EASYMED_CP_URL: ${{ secrets.EASYMED_CP_URL }}
+          EASYMED_CP_DEPLOY_TOKEN: ${{ secrets.EASYMED_CP_DEPLOY_TOKEN }}
+        run: |
+          if [ -z "$EASYMED_CP_DEPLOY_TOKEN" ]; then
+            echo "::error::EASYMED_CP_DEPLOY_TOKEN secret is empty or not set, so this release cannot reach any clinic. Set it (and EASYMED_CP_URL if the control plane is not at the default host) — see docs/RELEASING.md's one-time setup section."
+            exit 1
+          fi
+
+          # The secret is optional and defaults to production — a repository
+          # that never sets it still publishes to the real control plane, which
+          # is the behaviour you want by default; the secret exists so a fork
+          # or a staging host can point somewhere else.
+          BASE="${EASYMED_CP_URL:-https://settings.easymed.uz}"
+          BASE="${BASE%/}"
+
+          TAR_PATH=$(ls "$OUT_DIR"/easymed-*.tar.gz)
+          MANIFEST_PATH=$(ls "$OUT_DIR"/easymed-*.manifest.json)
+          VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('package.json','utf8')).version)")
+
+          # umask 077 before either file exists: the request body and the curl
+          # config are created 0600, never briefly readable by anything else on
+          # the runner.
+          umask 077
+          BODY_FILE="$RUNNER_TEMP/cp-deploy-body.json"
+          CURL_CFG="$RUNNER_TEMP/cp-deploy.curlrc"
+          echo "BODY_FILE=$BODY_FILE" >> "$GITHUB_ENV"
+          echo "CURL_CFG=$CURL_CFG" >> "$GITHUB_ENV"
+
+          # The body is assembled by node, not by shell string interpolation:
+          # notes_ru is Russian prose that will contain quotes, newlines and
+          # non-ASCII, and hand-built JSON would corrupt it (or worse, produce
+          # something that parses but says something else).
+          node -e '
+            const fs = require("fs");
+            const [tarPath, manifestPath, version, notesPath] = process.argv.slice(1);
+            const body = {
+              version,
+              notes_ru: fs.existsSync(notesPath) ? fs.readFileSync(notesPath, "utf8") : "",
+              manifest: JSON.parse(fs.readFileSync(manifestPath, "utf8")),
+              tar_base64: fs.readFileSync(tarPath).toString("base64"),
+            };
+            fs.writeFileSync(process.env.BODY_FILE, JSON.stringify(body));
+          ' "$TAR_PATH" "$MANIFEST_PATH" "$VERSION" RELEASE_NOTES.md
+
+          # The token goes in a curl config file rather than on the command
+          # line: an argument would be visible in the runner process table for
+          # the life of the upload.
+          printf 'header = "Authorization: Bearer %s"\n' "$EASYMED_CP_DEPLOY_TOKEN" > "$CURL_CFG"
+
+          # --retry is safe here BECAUSE the endpoint is idempotent: posting
+          # the same version with the same bundle twice answers 200 and changes
+          # nothing (a different bundle under the same version is refused
+          # outright, which is the case that must never be retried away).
+          RESPONSE="$RUNNER_TEMP/cp-deploy-response.json"
+          HTTP=$(curl --silent --show-error --config "$CURL_CFG" \
+            --request POST "$BASE/cp/v1/deploy/release" \
+            --header 'Content-Type: application/json' \
+            --data-binary "@$BODY_FILE" \
+            --max-time 600 --retry 3 --retry-delay 10 --retry-connrefused \
+            --output "$RESPONSE" --write-out '%{http_code}') || true
+
+          if [ "$HTTP" != "200" ] && [ "$HTTP" != "201" ]; then
+            echo "::error::Publishing $VERSION to $BASE failed with HTTP ${HTTP:-no response}. The signed release exists on GitHub but NO CLINIC CAN SEE IT. Fix the cause and re-run this workflow — re-running is safe, the endpoint is idempotent. Response body follows:"
+            cat "$RESPONSE" 2>/dev/null || echo "(no response body)"
+            exit 1
+          fi
+
+          echo "Published $VERSION to the control plane at $BASE:"
+          cat "$RESPONSE"
+          echo ""
+          echo "Every clinic is offered it at its next check-in. Two reported failures halt it automatically; each clinic still consents to when it installs."
+
+      - name: Delete the deploy credentials
+        # Same discipline as "Delete the signing key" above, and runs even if
+        # the upload failed: neither the token nor the 20 MB request body is
+        # left on the runner's disk.
+        if: always()
+        run: |
+          for f in "$CURL_CFG" "$BODY_FILE"; do
+            if [ -n "$f" ] && [ -f "$f" ]; then
+              shred -u "$f" 2>/dev/null || rm -f "$f"
+            fi
+          done

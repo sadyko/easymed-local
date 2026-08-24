@@ -27,6 +27,13 @@ Thumbs.db
 data/
 backups/
 
+# --- Signed release bundles (AUTO_ROLLOUT_V1) ---
+# Where the control plane stores the .tar.gz CI uploads, when
+# EASYMED_CP_RELEASES_DIR is left at its default. On the vendor server that
+# directory is elsewhere (nginx serves it at /releases/); here it only appears
+# after a local experiment, and a ~15 MB bundle must never be committed.
+control-plane/releases/
+
 # --- Vendor licence signing material — must NEVER reach a clinic or a repo ---
 vendor-private.pem
 control-*.json
