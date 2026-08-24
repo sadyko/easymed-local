@@ -28,6 +28,58 @@ function formatRequestDate(iso) {
     return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('ru-RU');
 }
 
+// LICENCE_REFRESH_ON_LOCKED_V1 — opening a locked module asks the vendor again.
+//
+// The clinic's scheduled call home is DAILY (checkin.js INTERVAL_MS). So a
+// module the vendor grants at 10:00 stayed invisible to the clinic until the
+// next day's call — the owner's own report: «the modules that are set to active
+// not active until I check for updates». Pressing «Проверить обновления» was the
+// only way to hurry it, which nobody should have to know.
+//
+// The fix is demand-driven rather than a faster poll: this screen is opened at
+// exactly the moment somebody wants the module, so THAT is when it is worth
+// asking. Raising the fleet-wide poll rate instead would multiply every
+// clinic's traffic and the vendor's stored check-in history around the clock to
+// solve a problem that only exists while a human is looking at this page.
+//
+// Silent by design: the screen has already rendered and is correct as it
+// stands. If the module turns out to be granted, the page reloads into it; if
+// not (or the clinic is offline), nothing visibly happened.
+let _lastAutoCheck = 0;
+const AUTO_CHECK_COOLDOWN_MS = 2 * 60 * 1000;
+
+// Same convention as updates.js / cashier-desk.js: primary role OR 'admin' in
+// extra_roles, never `user.role === 'admin'` alone (the ADMIN_DOCTOR_V1 bug).
+// update_check_now is admin-only server-side, so a receptionist opening this
+// screen must not fire a request that can only come back 403.
+function isAdminActor() {
+    const u = (typeof window !== 'undefined' && window.easymed && window.easymed.state && window.easymed.state.user) || null;
+    if (!u) return false;
+    if (u.is_super_admin === true || u.is_admin === true) return true;
+    const extra = Array.isArray(u.extra_roles) ? u.extra_roles : [];
+    return [u.role, ...extra].includes('admin');
+}
+
+async function refreshIfJustGranted(moduleKey) {
+    if (!moduleKey || !isAdminActor()) return;
+    const now = Date.now();
+    // Navigating between two locked modules must not mean two calls home.
+    if (now - _lastAutoCheck < AUTO_CHECK_COOLDOWN_MS) return;
+    _lastAutoCheck = now;
+    try {
+        // The check-in is what actually collects a freshly granted module (see
+        // rpc/updates.js updateCheckNow — it is the same call the button makes).
+        await supabase.rpc('update_check_now', {});
+        const { data, error } = await supabase.rpc('licence_status', {});
+        if (error || !data) return;
+        const mods = Array.isArray(data.modules) ? data.modules : [];
+        // Reload rather than re-render: the sidebar, the router's own gate and
+        // every other screen read the licence that was fetched at boot, so a
+        // local repaint would unlock this page inside an app that still
+        // believes the module is missing.
+        if (mods.includes(moduleKey) && typeof location !== 'undefined' && location.reload) location.reload();
+    } catch { /* offline, or the RPC is older than this screen — the page is still correct */ }
+}
 export async function renderLockedModule(root, navId) {
     const mod = LICENSED_MODULES[navId];
     clear(root);
@@ -46,6 +98,10 @@ export async function renderLockedModule(root, navId) {
     // draft of this screen did) is not reliably announced.
     const foot = h('p', { class: 'lm-foot', role: 'status' },
         'Заявка уйдёт вашему менеджеру Easy-Med. Обычно отвечаем в тот же рабочий день.');
+
+    // Fired without await: the screen renders now, the question is asked in
+    // the background, and a granted module reloads the page into itself.
+    refreshIfJustGranted(mod.key);
 
     const cta = h('button', {
         type: 'button',

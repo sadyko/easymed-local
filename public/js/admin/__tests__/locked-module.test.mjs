@@ -54,11 +54,21 @@ const jsonErr = (error, status = 500) => ({ ok: false, status, json: async () =>
 // it wants /api/rpc/module_request to give, without re-mocking all of fetch.
 let rpcCalls = 0;
 let respond = () => jsonOk({ ok: true, already: false, requested_at: '2026-08-20T10:15:00Z' });
+// LICENCE_REFRESH_ON_LOCKED_V1 — the screen also asks the vendor again when it
+// opens (admins only). Counted separately so the sales-flow tests above stay
+// about module_request and nothing else.
+let checkNowCalls = 0;
+let licenceModules = [];
 globalThis.fetch = async (url) => {
   const u = String(url);
   if (u.startsWith('/api/rpc/module_request')) { rpcCalls++; return respond(); }
+  if (u.startsWith('/api/rpc/update_check_now')) { checkNowCalls++; return jsonOk({ ok: true }); }
+  if (u.startsWith('/api/rpc/licence_status')) return jsonOk({ modules: licenceModules });
   return jsonOk({});
 };
+
+let reloads = 0;
+globalThis.location = { reload: () => { reloads++; }, hostname: 'localhost' };
 
 const { renderLockedModule } = await import('../views/locked-module.js');
 
@@ -146,4 +156,35 @@ test('неизвестный navId рендерит заглушку и не б�
   await assert.doesNotReject(() => renderLockedModule(root, 'no-such-module'));
   assert.match(textOf(root), /Модуль не подключён/);
   assert.strictEqual(findButton(root), undefined, 'без описанного модуля кнопки быть не должно');
+});
+
+
+// --- LICENCE_REFRESH_ON_LOCKED_V1 -------------------------------------------
+
+test('админ: экран сам переспрашивает поставщика и перезагружается, если модуль уже выдан', async () => {
+  checkNowCalls = 0; reloads = 0;
+  // A granted module is exactly the owner's case: activated in the panel,
+  // still locked in the clinic until somebody pressed «Проверить обновления».
+  licenceModules = ['crm'];
+  globalThis.window.easymed = { state: { user: { role: 'admin' } } };
+
+  const root = mk('div');
+  await renderLockedModule(root, 'crm');
+  await new Promise((r) => setTimeout(r, 30));
+
+  assert.strictEqual(checkNowCalls, 1, 'один звонок домой при открытии');
+  assert.strictEqual(reloads, 1, 'модуль выдан — страница перезагружается в него');
+});
+
+test('не админ: экран молчит — update_check_now доступен только администратору', async () => {
+  checkNowCalls = 0; reloads = 0;
+  licenceModules = ['crm'];
+  globalThis.window.easymed = { state: { user: { role: 'registrar' } } };
+
+  const root = mk('div');
+  await renderLockedModule(root, 'crm');
+  await new Promise((r) => setTimeout(r, 30));
+
+  assert.strictEqual(checkNowCalls, 0, 'регистратор не шлёт запрос, который вернётся 403');
+  assert.strictEqual(reloads, 0);
 });
