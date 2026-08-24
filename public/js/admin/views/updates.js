@@ -92,6 +92,11 @@ function rememberOffer(offer) {
 }
 
 export async function renderUpdates(root) {
+    // A previous mount's watcher must never outlive it: navigating away and
+    // back would otherwise leave two timers polling, and a watcher whose view
+    // is long gone can reload the tab out from under whatever the user moved
+    // on to. paint() below restarts one if an install is genuinely in flight.
+    stopVersionWatch();
     clear(root);
     const wrap = h('div', { class: 'fade-in upd-wrap' });
     root.appendChild(wrap);
@@ -212,6 +217,59 @@ async function checkNow(body, btn, statusEl) {
     }
 }
 
+// UPDATE_PAGE_RELOAD_V1 — the page reloads itself once the new version is up.
+//
+// The server already restarts onto the new version by itself (updater.js
+// staleAfterSwitch → exit 75 → the launcher relaunches). What it cannot do is
+// refresh the browser tab standing in front of it: an open page keeps showing
+// the version it booted with, next to the offer it has ALREADY installed. Every
+// successful update on 2026-08-24 looked like a failure for exactly this reason
+// — the owner pressed «Обновить сейчас» four times and each time the screen sat
+// unchanged while the install had in fact completed.
+//
+// Polls the authenticated update_status RATHER than adding a version to the
+// public /api/health: health takes no session, and a clinic's build number is
+// not something to hand an unauthenticated caller on the LAN. Polling is
+// bounded to the window where an update is actually in flight, so this is never
+// a background timer running all day.
+const RELOAD_POLL_MS = 5000;
+const RELOAD_GIVE_UP_MS = 15 * 60 * 1000;   // an install that takes longer has failed; the outcome file will say so
+let _watchTimer = null;
+let _watchBoot = null;
+
+function stopVersionWatch() {
+    if (_watchTimer) { clearInterval(_watchTimer); _watchTimer = null; }
+    _watchBoot = null;
+}
+
+function watchForNewVersion(bootVersion) {
+    // One watcher at a time, and an EXISTING watch for this same version is
+    // left running: paint() fires on every repaint, so restarting here would
+    // both multiply timers and reset the give-up clock on every redraw.
+    if (!bootVersion) return;
+    if (_watchTimer && _watchBoot === bootVersion) return;
+    stopVersionWatch();
+    _watchBoot = bootVersion;
+    const startedAt = Date.now();
+    _watchTimer = setInterval(async () => {
+        if (Date.now() - startedAt > RELOAD_GIVE_UP_MS) { stopVersionWatch(); return; }
+        let now = null;
+        try {
+            const { data, error } = await supabase.rpc('update_status', {});
+            if (error) return;   // mid-restart the server is simply gone — that is expected, keep waiting
+            now = data && data.current_version;
+        } catch { return; }
+        if (now && now !== bootVersion) {
+            stopVersionWatch();
+            // Reload, not repaint: every screen in the app was built by the OLD
+            // code and the sidebar, licence and router state all came from that
+            // boot. A repaint would leave a new server behind an old shell.
+            if (typeof location !== 'undefined' && location.reload) location.reload();
+        }
+    }, RELOAD_POLL_MS);
+    // A timer must never hold the page open or outlive the view.
+    if (_watchTimer && typeof _watchTimer.unref === 'function') _watchTimer.unref();
+}
 function paint(body, status) {
     clear(body);
     const admin = isAdminActor();
@@ -220,6 +278,20 @@ function paint(body, status) {
     // before the next daily check-in clears/replaces the offer server-side
     // (see checkin.js). Treated as "nothing to offer" here too.
     const offer = offerIsCurrent(status.offer, currentVersion) ? null : status.offer;
+
+    // Watch only while an install is actually coming: an approved consent, or
+    // an outcome file naming a version newer than the one serving this page
+    // (the launcher case — installed on disk, the old process still answering).
+    const installing = !!status.approved
+        || !!pendingRestartMessage(status.last_result, currentVersion);
+    // Started, never cancelled by a repaint. The status that arrives WHILE an
+    // install runs is not stable — the consent is consumed before the new
+    // version answers, so a repaint in that window reports approved:false and
+    // an `else stopVersionWatch()` here silently ended the watch at exactly the
+    // moment it was needed (caught by its own test, which is why it is written
+    // this way). The watch ends on its own terms only: the version changed, or
+    // the give-up deadline passed.
+    if (installing) watchForNewVersion(currentVersion);
 
     // Bullet 5 — a failed-and-rolled-back last attempt, said plainly, before
     // anything else on the screen: "a clinic must not learn of its failed

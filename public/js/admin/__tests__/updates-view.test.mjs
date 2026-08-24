@@ -111,6 +111,12 @@ function resetServer(initial) {
   licenceStatusData = { state: 'ok', locked: false, reason: null, modules: [] };
 }
 
+// UPDATE_PAGE_RELOAD_V1 — the view reloads the tab once the server comes back
+// on a new version. Counted so the tests can prove it happens exactly once,
+// and does NOT happen when nothing is installing.
+let reloads = 0;
+globalThis.location = { reload: () => { reloads++; }, hostname: 'localhost' };
+
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   if (u.startsWith('/api/rpc/update_status')) {
@@ -460,4 +466,42 @@ test('«Проверить обновления»: check-in привёз изм�
   // the view wraps it in try/catch by design, same as activation.js.)
   assert.doesNotMatch(textOf(root), /Доступно обновление/,
     'при смене лицензии экран уходит в перезагрузку, не в перерисовку');
+});
+
+
+// --- UPDATE_PAGE_RELOAD_V1 ---------------------------------------------------
+
+test('идёт установка: экран сам перезагружается, когда сервер вернулся на новой версии', async () => {
+  resetServer({ current_version: '0.3.4', offer: { version: '0.4.0', notes_ru: 'x' },
+    approved: true, immediate: true, hour: null, scheduled_at: new Date().toISOString(), last_result: null });
+  reloads = 0;
+  const root = mk('div');
+  await renderUpdates(root);
+
+  // Предыдущие тесты могли оставить отложенную перезагрузку (экран проверки
+  // обновлений планирует её через setTimeout). Даём ей сработать и только
+  // потом обнуляем счётчик — иначе чужой таймер попадёт в наше окно.
+  await new Promise((r) => setTimeout(r, 1500));
+  reloads = 0;
+
+  // Сервер перезапустился на 0.4.0 — ровно то, что делает staleAfterSwitch.
+  currentStatus = { ...currentStatus, current_version: '0.4.0', approved: false, offer: null };
+  await new Promise((r) => setTimeout(r, 7000));
+  assert.strictEqual(reloads, 1, 'страница перезагружается один раз');
+
+  // И не повторяет это бесконечно после перезагрузки.
+  await new Promise((r) => setTimeout(r, 5600));
+  assert.strictEqual(reloads, 1, 'таймер остановлен после перезагрузки');
+});
+
+test('ничего не устанавливается: никакого фонового опроса и никаких перезагрузок', async () => {
+  resetServer({ current_version: '0.3.4', offer: null, approved: false, hour: null,
+    scheduled_at: null, last_result: null });
+  reloads = 0;
+  const root = mk('div');
+  await renderUpdates(root);
+  const after = statusCalls;
+  await new Promise((r) => setTimeout(r, 5600));
+  assert.strictEqual(reloads, 0, 'перезагружать нечего');
+  assert.strictEqual(statusCalls, after, 'сервер не опрашивается впустую');
 });
