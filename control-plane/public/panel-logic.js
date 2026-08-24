@@ -16,11 +16,20 @@ export const STALE_THRESHOLD_MS = 3 * 24 * 60 * 60 * 1000;
 // vocabulary the clinic app and admin.js both key off). There is no admin
 // route today that publishes this list to the panel over HTTP, so this is a
 // small, deliberately duplicated constant rather than a derived one — if
-// SELLABLE_MODULES ever grows a fourth key, this needs a matching edit.
+// SELLABLE_MODULES ever grows a key, this needs a matching edit.
+//
+// That prediction came true on 2026-08-23: 'callcenter' was added server-side
+// with the Binotel integration, and the panel — holding this stale copy —
+// showed no toggle for it, so the owner could not sell the module even though
+// every server route already accepted it. The duplication is the cost of
+// having no list-publishing route; the fix is to edit BOTH places in the same
+// commit, always. (A /cp/v1/admin/modules route that derives this list would
+// retire the problem — worth doing the next time this file is touched.)
+//
 // Passed through moduleToggles() UNFILTERED (marketing included) so that
 // function's own exclusion is what actually gets exercised, rather than
 // trusting every caller to remember to filter first.
-export const SELLABLE_MODULES = ['crm', 'telegram', 'marketing'];
+export const SELLABLE_MODULES = ['crm', 'telegram', 'marketing', 'callcenter'];
 
 function parseDate(iso) {
   if (!iso) return null;
@@ -55,7 +64,7 @@ export function formatLastSeen(lastSeenIso, now = new Date()) {
   return `${days} day${days === 1 ? '' : 's'} ago`;
 }
 
-const MODULE_LABELS = { crm: 'CRM', telegram: 'Telegram' };
+const MODULE_LABELS = { crm: 'CRM', telegram: 'Telegram', callcenter: 'Колл-центр' };
 
 function moduleLabel(key) {
   return MODULE_LABELS[key] || (key.charAt(0).toUpperCase() + key.slice(1));
