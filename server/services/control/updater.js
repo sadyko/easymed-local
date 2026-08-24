@@ -488,9 +488,23 @@ async function runPipeline(db, dataDir, offer, {
     // APPLY — spawned, never awaited to completion. apply-update.ps1 calls
     // switch-version.ps1, which STOPS this very Windows service as one of
     // its first steps: this Node process may be killed mid-flight moments
-    // after this call returns. detached + unref'd so the child survives that
-    // and this function returns immediately rather than hanging on a
-    // process that is about to outlive its parent.
+    // after this call returns. unref'd so this function returns immediately
+    // rather than hanging on a process that may outlive its parent.
+    //
+    // NOT `detached: true`, though every instinct says it should be. On
+    // Windows that flag means DETACHED_PROCESS — the child gets NO console —
+    // and powershell.exe is a console host: it dies on startup, instantly and
+    // silently, because stdio was 'ignore' too. THIS is why no clinic update
+    // ever completed by itself: download, verify and stage all worked, then
+    // the apply step vanished without a trace, and every install so far was
+    // finished by hand. Measured directly on the owner's machine 2026-08-24,
+    // same argv, same cwd, four variants — detached+ignore: never ran;
+    // detached+windowsHide: never ran; detached+stdio-to-a-file: never ran;
+    // NOT detached: ran and wrote its result every time.
+    //
+    // stdio goes to data/update-apply.log instead of 'ignore' for the same
+    // lesson: an update that fails must leave evidence on the clinic's own
+    // disk. The whole of today's hunt existed because this step was silent.
     try {
       // The INCOMING version's copy of the apply script, not the running one's.
       // The 0.2.1→0.2.2 transition proved why: 0.2.2 carried the fixes for the
@@ -504,10 +518,21 @@ async function runPipeline(db, dataDir, offer, {
       const applyScript = fs.existsSync(stagedScript)
         ? stagedScript
         : path.join(layout.root, 'current', 'install', 'apply-update.ps1');
+      // Appended, never truncated: the log of a FAILED attempt must still be
+      // there after the next one. Opening it must never be able to stop an
+      // update, so a failure here falls back to inheriting this process's own
+      // stdio (the launcher console) rather than to 'ignore', which is the
+      // state that hid the bug in the first place.
+      let stdio = 'inherit';
+      try {
+        const logFd = fs.openSync(path.join(dataDir, 'update-apply.log'), 'a');
+        stdio = ['ignore', logFd, logFd];
+      } catch { /* keep 'inherit' — visible output beats no output */ }
+
       const child = spawnImpl(
         'powershell.exe',
         ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', applyScript, '-Version', offer.version, '-Root', layout.root, '-Port', String(port)],
-        { cwd: layout.root, detached: true, stdio: 'ignore' },
+        { cwd: layout.root, stdio },
       );
       // A DI stub is not obliged to return a real ChildProcess — guarded so
       // a test's plain stub return value can never crash this call.

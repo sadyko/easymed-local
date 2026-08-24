@@ -433,6 +433,14 @@ test('versioned layout: stages under <root>\\versions\\<version> and spawns appl
   // copy is inside the signature-verified bundle unpacked moments earlier.
   const fileArg = spawnArgs.args[spawnArgs.args.indexOf('-File') + 1];
   assert.ok(fileArg.includes(path.join('versions', '2.4.0', 'install')), 'spawns the staged copy: ' + fileArg);
+  // NEVER detached on Windows: DETACHED_PROCESS gives powershell.exe no
+  // console and it dies on startup — the silent failure that meant no
+  // clinic update ever completed on its own (measured 2026-08-24, see
+  // updater.js's own comment). This assertion is the guard against a
+  // future 'shouldn't a background job be detached?' instinct.
+  assert.notEqual(spawnArgs.opts.detached, true, 'detached would kill the apply step silently');
+  // ...and its output must land somewhere a human can read after the fact.
+  assert.notEqual(spawnArgs.opts.stdio, 'ignore', 'a failed apply must leave evidence on disk');
   assert.ok(fs.existsSync(path.join(dataDir, 'update-result.json')));
 });
 
