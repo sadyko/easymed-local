@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 // NOT from scripts/build-bundle.mjs — scripts/ is not on that file's own
 // ALLOWLIST, so importing it here meant an unpacked release bundle died with
 // ERR_MODULE_NOT_FOUND before the server ever bound its port. See bundle.js.
-import { verifyBundle, tarCommand } from './bundle.js';
-import { readAppVersion } from './checkin.js';
+import { verifyBundle, tarCommand, compareVersions } from './bundle.js';
+import { readAppVersion, readJsonFile } from './checkin.js';
 import { nextRunAt, isInWindow, consentAppliesTo } from './update-schedule.js';
 
 // UPDATE_DELIVERY_V1 (docs/plans/2026-08-20-update-delivery.md, Task 4) — the
@@ -383,6 +383,57 @@ async function performTick(db, dataDir, {
   }
 }
 
+/**
+ * How the apply step is launched — ONE definition, used by production and by
+ * the smoke test that actually executes it (apply-spawn.smoke.test.js).
+ *
+ * It lives in its own exported function for a reason that cost a full day:
+ * every unit test of this pipeline injects a fake `spawn` and asserts the
+ * ARGUMENTS, which happily passed while the real child never ran at all
+ * (detached on Windows = no console = powershell dies instantly). Arguments
+ * being right is not the same claim as the child running. Now the exact plan
+ * production uses is the exact plan a real-process test executes, so the two
+ * cannot drift.
+ *
+ * @param {object} o
+ * @param {string} o.root     the install root (holds versions/ and current)
+ * @param {string} o.version  the version being installed
+ * @param {number} o.port     the port THIS server listens on — apply-update.ps1 health-checks it
+ * @param {string} o.dataDir  where update-apply.log goes
+ * @returns {{cmd: string, args: string[], opts: object}}
+ */
+export function applySpawnPlan({ root, version, port, dataDir }) {
+  // The INCOMING version's copy of the apply script, not the running one's.
+  // The 0.2.1->0.2.2 transition proved why: 0.2.2 carried the fixes for the
+  // very update machinery installing it, and running 0.2.1's broken copy meant
+  // the fixes could not apply to their own transition. The staged copy is part
+  // of the signature-verified bundle, so trusting it is trusting the same
+  // signature that gated the whole pipeline. Fallback to current's copy only if
+  // a (future) bundle ships without install/ — never a reason to refuse the
+  // update itself.
+  const stagedScript = path.join(root, 'versions', version, 'install', 'apply-update.ps1');
+  const applyScript = fs.existsSync(stagedScript)
+    ? stagedScript
+    : path.join(root, 'current', 'install', 'apply-update.ps1');
+
+  // Appended, never truncated: the log of a FAILED attempt must still be there
+  // after the next one. Opening it must never be able to stop an update, so a
+  // failure here falls back to inheriting this process's own stdio (the
+  // launcher console) rather than to 'ignore' — the state that hid the bug.
+  let stdio = 'inherit';
+  try {
+    const logFd = fs.openSync(path.join(dataDir, 'update-apply.log'), 'a');
+    stdio = ['ignore', logFd, logFd];
+  } catch { /* keep 'inherit' — visible output beats no output */ }
+
+  return {
+    cmd: 'powershell.exe',
+    args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', applyScript,
+      '-Version', version, '-Root', root, '-Port', String(port)],
+    // NEVER detached — see the APPLY comment in performTick for the measurement.
+    opts: { cwd: root, stdio },
+  };
+}
 async function runPipeline(db, dataDir, offer, {
   fetchImpl, spawnImpl, execFileSyncImpl, mkdirSync, rmSync, writeFileSync, realpathSync,
   endpoint, publicKey, appRoot, port, timeoutMs, maxBytes,
@@ -514,26 +565,8 @@ async function runPipeline(db, dataDir, offer, {
       // above, so trusting it is trusting the same signature that gated the
       // whole pipeline. Fallback to current's copy only if a (future) bundle
       // ships without install/ — never a reason to refuse the update itself.
-      const stagedScript = path.join(layout.root, 'versions', offer.version, 'install', 'apply-update.ps1');
-      const applyScript = fs.existsSync(stagedScript)
-        ? stagedScript
-        : path.join(layout.root, 'current', 'install', 'apply-update.ps1');
-      // Appended, never truncated: the log of a FAILED attempt must still be
-      // there after the next one. Opening it must never be able to stop an
-      // update, so a failure here falls back to inheriting this process's own
-      // stdio (the launcher console) rather than to 'ignore', which is the
-      // state that hid the bug in the first place.
-      let stdio = 'inherit';
-      try {
-        const logFd = fs.openSync(path.join(dataDir, 'update-apply.log'), 'a');
-        stdio = ['ignore', logFd, logFd];
-      } catch { /* keep 'inherit' — visible output beats no output */ }
-
-      const child = spawnImpl(
-        'powershell.exe',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', applyScript, '-Version', offer.version, '-Root', layout.root, '-Port', String(port)],
-        { cwd: layout.root, stdio },
-      );
+      const plan = applySpawnPlan({ root: layout.root, version: offer.version, port, dataDir });
+      const child = spawnImpl(plan.cmd, plan.args, plan.opts);
       // A DI stub is not obliged to return a real ChildProcess — guarded so
       // a test's plain stub return value can never crash this call.
       if (child && typeof child.unref === 'function') child.unref();
@@ -556,9 +589,70 @@ async function runPipeline(db, dataDir, offer, {
  * to happen, but not something a timer callback has any caller to hand a
  * rejection to anyway) cannot crash the clinic's server.
  */
+/**
+ * Am I the OLD code, still serving after the junction already moved?
+ *
+ * The launcher case, and the last gap in hands-free updating. apply-update.ps1
+ * stops and starts a Windows SERVICE; a launcher install has none, so the
+ * script repoints `current` and the already-running Node keeps serving the
+ * previous version — screen still showing the old number, owner reasonably
+ * concluding the update failed (it happened three times on 2026-08-24).
+ *
+ * Detected from facts on disk only: a successful outcome file naming a version
+ * newer than the one THIS process is running, plus `current` now resolving
+ * somewhere other than where this process was loaded from. Both must hold, so
+ * a dev checkout (no versions/ parent) and a service install (already restarted
+ * by the SCM, versions equal) can never trip it.
+ *
+ * @returns {string|null} the newly installed version, or null if nothing to do
+ */
+export function staleAfterSwitch(dataDir, appRoot, {
+  realpathSync = fs.realpathSync,
+  // The version THIS process is running. Injectable for the same reason
+  // realpathSync is: a test must be able to describe an install other than
+  // the checkout it happens to be running inside.
+  runningVersion = readAppVersion(),
+} = {}) {
+  const result = readJsonFile(path.join(dataDir, 'update-result.json'))
+    || readJsonFile(path.join(dataDir, 'update-result.json.sent'));
+  if (!result || result.ok !== true) return null;
+
+  const installed = typeof result.version === 'string' ? result.version : '';
+  const running = runningVersion;
+  if (!installed || !running || compareVersions(installed, running) <= 0) return null;
+
+  // Must look like a versioned install: <root>/versions/<mine>
+  const resolvedAppRoot = path.resolve(appRoot);
+  const versionsDir = path.dirname(resolvedAppRoot);
+  if (path.basename(versionsDir) !== 'versions') return null;
+
+  // ...and `current` must now point somewhere OTHER than here — that is the
+  // switch having happened underneath this process.
+  let currentReal;
+  try { currentReal = realpathSync(path.join(path.dirname(versionsDir), 'current')); } catch { return null; }
+  if (path.resolve(currentReal) === resolvedAppRoot) return null;
+
+  return installed;
+}
 export function scheduleUpdater(db, dataDir, opts = {}) {
-  const { intervalMs = 60_000, ...runOpts } = opts;
+  const { intervalMs = 60_000, exitImpl = (code) => process.exit(code), ...runOpts } = opts;
   const tick = () => {
+    // Checked BEFORE the pipeline: if the junction already moved under us,
+    // this process is the old code and has nothing useful left to do — hand
+    // the window back to the launcher, which relaunches on exit code 75 and
+    // comes up on the new version. Without this the clinic runs the previous
+    // release until someone happens to close and reopen the window.
+    try {
+      const installed = staleAfterSwitch(dataDir, runOpts.appRoot || DEFAULT_APP_ROOT);
+      if (installed) {
+        console.log(`[updater] version ${installed} is installed and active on disk — restarting to run it`);
+        exitImpl(75);
+        return;
+      }
+    } catch (e) {
+      // A restart decision must never be the reason a clinic stops working.
+      console.warn('[updater] post-switch check failed (continuing):', e && e.message);
+    }
     tickUpdater(db, dataDir, runOpts).catch((e) => console.warn('[updater] scheduled tick failed:', e && e.message));
   };
   const interval = setInterval(tick, intervalMs);

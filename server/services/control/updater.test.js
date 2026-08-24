@@ -14,8 +14,11 @@ import {
   resolveDownloadUrl,
   detectLayout,
   __setReleasePublicKeyForTests,
+  staleAfterSwitch,
+  scheduleUpdater,
 } from './updater.js';
 import { runCheckin } from './checkin.js';
+import { setAppVersion } from './config.js';
 import { updateApprove } from '../rpc/updates.js';
 
 // --- test harness -------------------------------------------------------------
@@ -642,4 +645,63 @@ test('concurrent overlapping ticks (outer re-entrancy guard) never run two pipel
     server.close();
   }
   assert.equal(maxConcurrent, 1, 'the second call must have returned immediately, never starting its own request');
+});
+
+// --- staleAfterSwitch: the launcher's missing restart -------------------------
+
+function versionedInstall(runningVersion) {
+  // <root>/versions/<runningVersion> is where 'this process' was loaded from;
+  // <root>/current is a plain directory here (the junction's target is what
+  // matters, and realpathSync is injected below).
+  const root = tmpDir('em-stale-');
+  const appRoot = path.join(root, 'versions', runningVersion);
+  fs.mkdirSync(appRoot, { recursive: true });
+  fs.mkdirSync(path.join(root, 'data'), { recursive: true });
+  fs.writeFileSync(path.join(appRoot, 'package.json'), JSON.stringify({ version: runningVersion }));
+  return { root, appRoot, dataDir: path.join(root, 'data') };
+}
+
+test('staleAfterSwitch: a newer version installed AND current pointing elsewhere means restart', () => {
+  const { root, appRoot, dataDir } = versionedInstall('0.3.1');
+  setAppVersion('0.3.1');
+  // PowerShell writes this file WITH a BOM — the real shape, on purpose.
+  fs.writeFileSync(path.join(dataDir, 'update-result.json'),
+    '﻿' + JSON.stringify({ version: '0.3.2', from: '0.3.1', ok: true }), 'utf8');
+  const newRoot = path.join(root, 'versions', '0.3.2');
+  const out = staleAfterSwitch(dataDir, appRoot, { realpathSync: () => newRoot, runningVersion: '0.3.1' });
+  assert.equal(out, '0.3.2');
+});
+
+test('staleAfterSwitch: current still pointing at THIS version means nothing to do', () => {
+  const { appRoot, dataDir } = versionedInstall('0.3.2');
+  setAppVersion('0.3.2');
+  fs.writeFileSync(path.join(dataDir, 'update-result.json'),
+    JSON.stringify({ version: '0.3.2', ok: true }), 'utf8');
+  assert.equal(staleAfterSwitch(dataDir, appRoot, { realpathSync: () => appRoot, runningVersion: '0.3.2' }), null);
+});
+
+test('staleAfterSwitch: a FAILED outcome never triggers a restart', () => {
+  const { root, appRoot, dataDir } = versionedInstall('0.3.1');
+  setAppVersion('0.3.1');
+  fs.writeFileSync(path.join(dataDir, 'update-result.json'),
+    JSON.stringify({ version: '0.3.2', ok: false }), 'utf8');
+  assert.equal(staleAfterSwitch(dataDir, appRoot, { realpathSync: () => path.join(root, 'versions', '0.3.2'), runningVersion: '0.3.1' }), null);
+});
+
+test('staleAfterSwitch: a dev checkout (no versions/ parent) is never asked to restart', () => {
+  const root = tmpDir('em-devlayout-');
+  const dataDir = path.join(root, 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
+  setAppVersion('0.3.1');
+  fs.writeFileSync(path.join(dataDir, 'update-result.json'),
+    JSON.stringify({ version: '0.3.2', ok: true }), 'utf8');
+  assert.equal(staleAfterSwitch(dataDir, root, { realpathSync: () => '/somewhere/else', runningVersion: '0.3.1' }), null);
+});
+
+test('staleAfterSwitch: an OLDER result the clinic has moved past never triggers a restart', () => {
+  const { root, appRoot, dataDir } = versionedInstall('0.3.2');
+  setAppVersion('0.3.2');
+  fs.writeFileSync(path.join(dataDir, 'update-result.json'),
+    JSON.stringify({ version: '0.3.1', ok: true }), 'utf8');
+  assert.equal(staleAfterSwitch(dataDir, appRoot, { realpathSync: () => path.join(root, 'versions', '0.3.1'), runningVersion: '0.3.2' }), null);
 });

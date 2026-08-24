@@ -3,7 +3,7 @@ import path from 'node:path';
 import { hasAnyRole } from '../roles.js';
 import { getDataDir, getAppVersion } from '../control/config.js';
 import { nextRunAt, consentAppliesTo } from '../control/update-schedule.js';
-import { runCheckin } from '../control/checkin.js';
+import { runCheckin, readJsonFile } from '../control/checkin.js';
 
 // UPDATE_DELIVERY_V1 (docs/plans/2026-08-20-update-delivery.md, Task 4) — the
 // three RPCs the approval screen (a later task) calls. Registered in
@@ -54,10 +54,11 @@ function readScheduledAt(db) {
 // next successful check-in.
 function readLastResult(dataDir) {
   for (const name of ['update-result.json', 'update-result.json.sent']) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(path.join(dataDir, name), 'utf8'));
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
-    } catch { /* try the next name, or fall through to null */ }
+    // readJsonFile strips the BOM PowerShell writes. A bare JSON.parse threw
+    // on every real outcome file, so this function returned null forever and
+    // the screen could never report the result of the clinic's own update.
+    const parsed = readJsonFile(path.join(dataDir, name));
+    if (parsed) return parsed;
   }
   return null;
 }

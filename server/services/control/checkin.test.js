@@ -19,6 +19,7 @@ import {
   checkinIntervalMs,
   computeFingerprint,
   readAppVersion,
+  readJsonFile,
   __setPublicKeyForTests,
 } from './checkin.js';
 
@@ -1015,4 +1016,39 @@ test('acceptance: vendor sets a collect subset, two check-ins later the numbers 
   const throwingState = controlState(throwingClinicDb, throwingDir);
   assert.equal(throwingState.locked, false,
     'a throwing stats builder must never cost this clinic its licence renewal, even against the real control plane');
+});
+
+// --- readJsonFile: the BOM PowerShell writes ---------------------------------
+
+test('readJsonFile: parses a file written WITH a UTF-8 BOM — what apply-update.ps1 actually produces', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-bom-'));
+  const file = path.join(dir, 'update-result.json');
+  // ﻿ prefix = exactly what PowerShell 5.1's Out-File writes by default.
+  fs.writeFileSync(file, '﻿' + JSON.stringify({ version: '1.2.3', ok: true }), 'utf8');
+  // Proof the naive read this replaced could not do it:
+  assert.throws(() => JSON.parse(fs.readFileSync(file, 'utf8')));
+  const parsed = readJsonFile(file);
+  assert.equal(parsed.version, '1.2.3');
+  assert.equal(parsed.ok, true);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('readJsonFile: plain JSON with no BOM still works', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-bom-'));
+  const file = path.join(dir, 'x.json');
+  fs.writeFileSync(file, JSON.stringify({ a: 1 }), 'utf8');
+  assert.deepEqual(readJsonFile(file), { a: 1 });
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('readJsonFile: missing, corrupt, or non-object content is null — never a throw on a status path', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-bom-'));
+  assert.equal(readJsonFile(path.join(dir, 'nope.json')), null);
+  const bad = path.join(dir, 'bad.json');
+  fs.writeFileSync(bad, '{ not json');
+  assert.equal(readJsonFile(bad), null);
+  const arr = path.join(dir, 'arr.json');
+  fs.writeFileSync(arr, '[1,2,3]');
+  assert.equal(readJsonFile(arr), null, 'an array is not an outcome object');
+  fs.rmSync(dir, { recursive: true, force: true });
 });

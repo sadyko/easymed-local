@@ -121,6 +121,43 @@ function readStoredCollectNames(db) {
 // permission quirks.
 // Exported for enroll.js, which writes the same two files at first enrollment —
 // the same never-two-implementations rule unlock.js states for expectedResponse().
+/**
+ * Read a JSON file that POWERSHELL may have written — i.e. one that probably
+ * starts with a UTF-8 BOM.
+ *
+ * apply-update.ps1 writes update-result.json through PowerShell 5.1, whose
+ * Out-File/Set-Content emit a BOM by default. `JSON.parse` treats that BOM as
+ * an unexpected token and THROWS, and both readers of that file wrapped the
+ * parse in a try/catch that quietly turned the throw into "no result".
+ *
+ * The damage was invisible and total: the clinic could never display the
+ * outcome of its own update (neither the failure notice nor the
+ * installed-pending-restart one), and — worse — checkin.js never attached an
+ * update_result to its call home, so the control plane never learned whether
+ * ANY update succeeded. The vendor's auto-halt (two reported failures halt a
+ * release for everyone) could therefore never fire: it counts reports that
+ * were never sent. Found 2026-08-24 by the smoke test that finally ran the
+ * real apply script instead of a stub.
+ *
+ * Stripping on READ, not just fixing the writer, is deliberate: result files
+ * with a BOM already exist on clinic disks today, and they must become
+ * readable the moment the clinic updates — not stay lost.
+ *
+ * @returns {object|null} the parsed object, or null for missing/unreadable/
+ *   non-object content. Never throws — every caller is on a path that must
+ *   not be able to fail because of a status file.
+ */
+export function readJsonFile(file, { readFileSync = fs.readFileSync } = {}) {
+  let raw;
+  try { raw = readFileSync(file, 'utf8'); } catch { return null; }
+  if (typeof raw !== 'string') return null;
+  // ﻿ is the BOM as it appears once the bytes are decoded as UTF-8.
+  const text = raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw;
+  try {
+    const v = JSON.parse(text);
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+  } catch { return null; }
+}
 export function writeAtomic(file, content, { writeFileSync = fs.writeFileSync, renameSync = fs.renameSync } = {}) {
   const dir = path.dirname(file);
   const tmp = path.join(dir, `.${path.basename(file)}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -315,13 +352,10 @@ async function performCheckin(db, dataDir, {
     // hasn't reached the vendor yet is never lost to a corrupt or racing
     // read.
     const updateResultPath = path.join(dataDir, 'update-result.json');
-    let updateResult = null;
-    try {
-      updateResult = JSON.parse(fs.readFileSync(updateResultPath, 'utf8'));
-      if (!updateResult || typeof updateResult !== 'object' || Array.isArray(updateResult)) updateResult = null;
-    } catch {
-      updateResult = null; // no file, or unreadable/corrupt — nothing to attach this cycle
-    }
+    // readJsonFile, not a bare JSON.parse: PowerShell writes this file with a
+    // BOM, which made every parse throw and silently reported 'no outcome' to
+    // the vendor forever — see readJsonFile's own comment.
+    const updateResult = readJsonFile(updateResultPath);
 
     const url = endpoint ? String(endpoint).replace(/\/+$/, '') + CHECKIN_PATH : checkinUrl();
 
