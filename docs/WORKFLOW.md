@@ -72,9 +72,14 @@ Release notes are written for the clinic manager who reads them in the update di
 - The admin sees the version, the notes, and **one action that includes the time**:
   tonight at 03:00 by default, tomorrow night, or any hour they pick. Nothing installs
   without that consent — there is no forced channel.
-- At the chosen hour: download → verify signature **before** unpacking → database
-  backed up → version switched → health check → **automatic rollback to the previous
-  version if the health check fails**, reported on the next check-in.
+- At the chosen hour, in the clinic's own Node process: download → verify signature
+  **before** unpacking → unpack beside the running version → database snapshot →
+  repoint the `current` junction → restart onto the new version, reported on the next
+  check-in. No PowerShell, no service, no administrator rights.
+- **If a release goes wrong, the previous version is still on that PC.** `recover.cmd`,
+  next to `EasyMed.exe`, is a double-click that points the clinic back at it. There is
+  no automatic rollback any more: the old one health-checked the OLD process on a
+  launcher install, so it vouched for switches it had never verified.
 - A clinic that never confirms simply keeps running its current version, forever.
 
 ## The owner's machine: two folders, two roles
@@ -111,13 +116,14 @@ no second manual step in which someone could have a change of heart.
 
 What the owner's "yes" sets in motion:
 
-1. Owner says yes → run the Windows apply gate (CONTRIBUTING.md) → tag `vX.Y.Z` → CI
-   builds, signs, and publishes it to every clinic.
+1. Owner says yes → tag `vX.Y.Z` → CI builds, signs, and publishes it to every clinic.
+   (There is no manual pre-tag gate any more: since 2026-08-24 the apply step is
+   ordinary Node and CI runs the real thing — CONTRIBUTING.md.)
 2. Restart the test clinic's Easy-Med window. Check-in runs ~60 seconds after boot,
    so the offer appears in «Обновления» within a minute or two — the same offer every
    other clinic is now seeing.
-3. Confirm the update there, pick the nearest hour. After it applies, close and reopen
-   the window (launcher installs pick up the new version on restart — HANDOVER §7).
+3. Confirm the update there, pick the nearest hour. The clinic switches and restarts
+   itself; the window reappears on the new version within seconds.
 4. Owner clicks through the changed screens on the test clinic. **Do this promptly** —
    real clinics are being offered the same version, and each one installs when its own
    admin consents.

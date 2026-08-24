@@ -7,8 +7,10 @@ import { writeAtomic } from './control/checkin.js';
 // reset. db/backup.js stays the migration-rollback specialist (pre- copies for
 // updates); this module owns everything the settings screen drives.
 //
-// Two rules inherited from db/backup.js and apply-update.ps1, restated because
-// every function below leans on them:
+// Two rules inherited from db/backup.js and from the retired apply-update.ps1
+// (deleted 2026-08-24 — these two rules are the part of it worth keeping, and
+// this is now where they live), restated because every function below leans
+// on them:
 //   1. Copies are taken with db.backup(), never fs.copyFileSync — the database
 //      runs in WAL mode, so the .db file alone is NOT the whole database.
 //   2. The live database is MOVED aside on restore, never deleted. Disk space

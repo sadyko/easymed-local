@@ -1,0 +1,17 @@
+# NODE_NATIVE_UPDATES_V1 (docs/plans/2026-08-24-node-native-updates.md).
+#
+# Deliberately minimal: this file exists for ONE reason and must not grow into a
+# repo-wide line-ending policy by accident. Everything not named here keeps
+# behaving exactly as it did before this file was added (core.autocrlf).
+#
+# install/recover.cmd is the clinic's manual way back to the previous version —
+# a batch file a clinic manager double-clicks when an update went wrong, and
+# therefore the one file in this repo that has to work on the worst day. cmd.exe
+# reads batch files by seeking through them, and `goto :label` is documented to
+# misbehave in LF-only files. This repo is built and bundled on Linux CI, where
+# a plain checkout would be LF.
+#
+# `text eol=crlf` means: normalised to LF inside the repository (so diffs stay
+# clean), checked out as CRLF on EVERY platform — including the CI runner that
+# tars install/ into a release bundle.
+*.cmd text eol=crlf

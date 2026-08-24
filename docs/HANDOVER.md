@@ -29,7 +29,8 @@ easymed-local/
 │  └─ public/               the vendor panel (login, clinics, modules, subscriptions, releases)
 ├─ scripts/                 make-licence.mjs (break-glass CLI), build-bundle.mjs (release
 │                           bundles), check-tag-version.mjs (CI gate)
-├─ install/                 Windows service + versioned layout + switch-version + apply-update
+├─ install/                 EasyMed.exe launcher + clinic-package builder + recover.cmd
+│                           (install-service.ps1 is RETIRED — see §7.1)
 ├─ .github/workflows/       ci.yml (PRs), release.yml (tag v* → signed bundle → GitHub Release)
 ├─ docs/                    WORKFLOW.md, RELEASING.md, ONBOARDING.md, plans/, specs/
 └─ data/                    GITIGNORED. Patient records + this machine's licence identity.
@@ -112,9 +113,20 @@ registry is separate: 4 migrations in `control-plane/server/db/migrations/`.
    Two failed installs auto-halt a release — with staging gone, that is the only automatic brake.
 5. Each clinic's daily check-in returns the offer; the clinic **admin consents and picks the
    hour** (consent names the version — a newer offer voids old consent).
-6. At the chosen hour: download (same-origin only) → verify signature BEFORE unpacking →
-   pre-migration DB backup → `install/switch-version.ps1` swaps the `current` junction →
-   health check → automatic rollback on failure → outcome reported on the next check-in.
+6. At the chosen hour, entirely inside the clinic's own Node process
+   (`server/services/control/updater.js`, `applyUpdate()`): download (same-origin only) →
+   verify signature BEFORE unpacking → unpack into `versions/<v>/` → WAL-safe DB snapshot →
+   repoint the `current` junction (`fs.symlinkSync(..., 'junction')`, no admin rights) →
+   write `data/update-result.json` as plain JSON → `process.exit(75)`, which the launcher
+   treats as "relaunch" → outcome reported on the next check-in.
+
+   No PowerShell, no service, no elevation. `install/apply-update.ps1` and
+   `install/switch-version.ps1` were deleted 2026-08-24 — every defect that made updating
+   painful lived in them (see `docs/plans/2026-08-24-node-native-updates.md`). There is no
+   automatic rollback: it health-checked the OLD process on a launcher install, so it
+   vouched for switches it never verified. The way back is `recover.cmd` in the clinic
+   package root — a double-click that repoints `current` at the previous version, which is
+   still on disk.
 
 Proven: `v0.1.1`'s CI-signed manifest verifies against the clinic-embedded public key.
 
@@ -172,9 +184,13 @@ node server/index.js                           # prints a one-time vendor passwo
 
 ## 7. Known gaps / TODO
 
-1. **Windows service registration never executed with real admin rights** — the dev account had
-   none. `install/install-service.ps1` is written and everything around it tested; the
-   SCM-reports-Running question ("Error 1053" class) needs one pass on an elevated machine.
+1. **The Windows service was never once successfully registered** — the dev account had no
+   administrator rights, so the SCM-reports-Running question ("Error 1053" class) was never
+   answered. **Closed by abandonment, 2026-08-24:** every real install is the clinic package
+   (copy the folder, double-click `EasyMed.exe`), and updating no longer needs elevation for
+   anything, so `install/install-service.ps1` is RETIRED — the file carries a header saying
+   so. If a service is ever genuinely wanted, that is a fresh decision to take on a machine
+   that can prove it works.
 2. GitHub free plan refuses branch/tag rulesets on private repos — protection is convention
    until GitHub Pro (or a public repo, which this must never be).
 3. `marketing` module: in the licence vocabulary, deliberately not sellable (no screen exists —
@@ -183,14 +199,12 @@ node server/index.js                           # prints a one-time vendor passwo
    folder name is cosmetic — the repo name is the identity.
 5. Cloud-era leftovers in the clinic app (easymed.uz redirect dead-ends, Symptex publication
    stubs) — listed in CLAUDE.md's "known issues".
-6. **Launcher-mode updates apply on the NEXT window restart, not immediately** (seen while
-   building the clinic package 2026-08-23): `apply-update.ps1` stops/starts the Windows
-   *service*; when a clinic runs via `EasyMed.exe` instead (no service registered), the
-   junction is swapped but the running node keeps serving the old version from memory until
-   the Easy-Med window is closed and reopened — usually the next morning. Not destructive
-   (the boot-time pre-migration backup still runs when the new version first starts), just
-   delayed. The launcher already honours exit code 75 as a restart request if the server
-   ever wants to self-restart after a switch.
+6. ~~**Launcher-mode updates apply on the NEXT window restart, not immediately**~~ — **fixed
+   2026-08-24.** The old `apply-update.ps1` stopped and started the Windows *service*; a
+   launcher install has none, so the junction moved and the running node kept serving the
+   old version from memory until somebody closed the window (usually the next morning).
+   `applyUpdate()` now ends with `process.exit(75)`, which the launcher already treats as
+   "relaunch", so a clinic is running the new version seconds after the switch.
 7. The first-run **welcome-tour modal pops up OVER the activation screen** (seen driving the
    real app on 2026-08-22): a locked, never-enrolled install offers "Начать тур" on top of the
    code-entry form. Cosmetic, pre-existing, but a confusing first impression for a clinic

@@ -47,16 +47,16 @@ function readScheduledAt(db) {
 }
 
 // last_result comes straight off disk, never off a control_state copy — the
-// file IS the single record of what happened (updater.js hands it to
-// apply-update.ps1's own DI seam; checkin.js reads it, sends it, and renames
-// it .sent). Preferring the not-yet-sent name means a result the vendor
-// hasn't heard about YET still shows up here immediately, not only after the
-// next successful check-in.
+// file IS the single record of what happened (updater.js's applyUpdate()
+// writes it; checkin.js reads it, sends it, and renames it .sent). Preferring
+// the not-yet-sent name means a result the vendor hasn't heard about YET still
+// shows up here immediately, not only after the next successful check-in.
 function readLastResult(dataDir) {
   for (const name of ['update-result.json', 'update-result.json.sent']) {
-    // readJsonFile strips the BOM PowerShell writes. A bare JSON.parse threw
-    // on every real outcome file, so this function returned null forever and
-    // the screen could never report the result of the clinic's own update.
+    // readJsonFile strips the BOM the retired PowerShell apply wrote. A bare
+    // JSON.parse threw on every outcome file it produced, so this function
+    // returned null forever and the screen could never report the result of
+    // the clinic's own update. Node writes no BOM; old files still have one.
     const parsed = readJsonFile(path.join(dataDir, name));
     if (parsed) return parsed;
   }

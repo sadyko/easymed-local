@@ -82,16 +82,25 @@ is why only the owner tags, and why the full suite is a hard gate rather than ad
 - **Comments say WHY**, usually naming the bug that forced the line. This project had
   no git history before 2026-08-20; the comments are the archaeology. Keep writing them.
 
-## Before tagging a release (owner, or whoever the owner asks)
+## How an update actually installs itself (and why there is no manual gate)
 
-Run the Windows-only gate. It is the only place in the pipeline where the real
-installer actually executes:
+There used to be a Windows-only step here that somebody had to remember to run
+before tagging, because the install step was a PowerShell script CI could not
+execute. Four consecutive releases once installed nothing at all: the script was
+spawned in a way that killed it instantly, every test asserted the arguments
+rather than the result, and the outcome file it wrote was unreadable, so nothing
+ever reported a failure.
 
-    node --test server/services/control/apply-spawn.smoke.test.js
+That whole layer is gone (2026-08-24). An update is now: verify the signature,
+unpack beside the running version, snapshot the database, repoint the `current`
+junction, exit 75 so the launcher relaunches — all in Node, in the clinic's own
+process, with no administrator rights and no PowerShell. It is therefore
+testable on any machine, and CI runs the real thing:
 
-CI runs on Linux and cannot run it — `powershell.exe` does not exist there. Four
-consecutive releases once installed nothing at all because the apply step was only ever
-tested through a fake. Do not skip this because CI is green.
+    node --test server/services/control/apply-update.test.js
+
+If you change anything about updating, that file is the one that must stay
+green. `docs/plans/2026-08-24-node-native-updates.md` records why.
 
 ## If you are an AI assistant
 

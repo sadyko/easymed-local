@@ -125,10 +125,11 @@ function readStoredCollectNames(db) {
  * Read a JSON file that POWERSHELL may have written — i.e. one that probably
  * starts with a UTF-8 BOM.
  *
- * apply-update.ps1 writes update-result.json through PowerShell 5.1, whose
- * Out-File/Set-Content emit a BOM by default. `JSON.parse` treats that BOM as
- * an unexpected token and THROWS, and both readers of that file wrapped the
- * parse in a try/catch that quietly turned the throw into "no result".
+ * The retired apply-update.ps1 wrote update-result.json through PowerShell
+ * 5.1, whose Out-File/Set-Content emit a BOM by default. `JSON.parse` treats
+ * that BOM as an unexpected token and THROWS, and both readers of that file
+ * wrapped the parse in a try/catch that quietly turned the throw into "no
+ * result".
  *
  * The damage was invisible and total: the clinic could never display the
  * outcome of its own update (neither the failure notice nor the
@@ -139,9 +140,11 @@ function readStoredCollectNames(db) {
  * were never sent. Found 2026-08-24 by the smoke test that finally ran the
  * real apply script instead of a stub.
  *
- * Stripping on READ, not just fixing the writer, is deliberate: result files
- * with a BOM already exist on clinic disks today, and they must become
- * readable the moment the clinic updates — not stay lost.
+ * THE WRITER IS FIXED — updater.js's writeOutcome() is Node and emits no BOM
+ * (NODE_NATIVE_UPDATES_V1). Stripping on READ stays anyway, and that is the
+ * whole point of this function: BOM-prefixed result files already exist on
+ * clinic disks, and they must become readable the moment that clinic updates,
+ * not stay lost forever because the writer was fixed afterwards.
  *
  * @returns {object|null} the parsed object, or null for missing/unreadable/
  *   non-object content. Never throws — every caller is on a path that must
@@ -344,17 +347,18 @@ async function performCheckin(db, dataDir, {
       stats = {};
     }
 
-    // UPDATE_DELIVERY_V1 — apply-update.ps1 (a separate task) writes this file
-    // in EVERY outcome after its own attempt. Read here, BEFORE the network
+    // UPDATE_DELIVERY_V1 — updater.js's applyUpdate() writes this file in
+    // EVERY outcome after its own attempt. Read here, BEFORE the network
     // call, so a report sits ready to attach the moment a token exists;
     // renamed to .sent only once the vendor has actually answered (see
     // below) — never here, and never on a read failure, so a result that
     // hasn't reached the vendor yet is never lost to a corrupt or racing
     // read.
     const updateResultPath = path.join(dataDir, 'update-result.json');
-    // readJsonFile, not a bare JSON.parse: PowerShell writes this file with a
-    // BOM, which made every parse throw and silently reported 'no outcome' to
-    // the vendor forever — see readJsonFile's own comment.
+    // readJsonFile, not a bare JSON.parse: the PowerShell apply this replaced
+    // wrote the file with a BOM, which made every parse throw and silently
+    // reported 'no outcome' to the vendor forever. Those files still exist on
+    // clinic disks — see readJsonFile's own comment.
     const updateResult = readJsonFile(updateResultPath);
 
     const url = endpoint ? String(endpoint).replace(/\/+$/, '') + CHECKIN_PATH : checkinUrl();

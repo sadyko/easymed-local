@@ -17,7 +17,7 @@ import {
   staleAfterSwitch,
   scheduleUpdater,
 } from './updater.js';
-import { runCheckin } from './checkin.js';
+import { runCheckin, readJsonFile } from './checkin.js';
 import { setAppVersion } from './config.js';
 import { updateApprove } from '../rpc/updates.js';
 
@@ -81,11 +81,11 @@ function makeSignedBundle({ version = '2.4.0', minFrom = '0.0.0', keyOverride } 
   fs.mkdirSync(path.join(src, 'server'), { recursive: true });
   fs.writeFileSync(path.join(src, 'server', 'index.js'), `console.log("v${version}");\n`);
   fs.writeFileSync(path.join(src, 'package.json'), JSON.stringify({ name: 'synthetic', version }));
-  // install/ ships in every real bundle (the allow-list includes it) and the
-  // spawn now PREFERS the staged copy of apply-update.ps1 - the fixture must
-  // look like a real bundle or that primary path is never the one under test.
+  // install/ ships in every real bundle (the allow-list includes it), so the
+  // fixture carries one too — recover.cmd travels with the application, and a
+  // bundle without install/ would not be the shape a clinic actually unpacks.
   fs.mkdirSync(path.join(src, 'install'), { recursive: true });
-  fs.writeFileSync(path.join(src, 'install', 'apply-update.ps1'), '# synthetic stand-in\n');
+  fs.writeFileSync(path.join(src, 'install', 'recover.cmd'), '@rem synthetic stand-in\n');
 
   const keyDir = tmpDir('em-updater-key-');
   const keyPath = path.join(keyDir, 'release-private.pem');
@@ -110,6 +110,17 @@ function makeVersionedRoot(runningVersion = '2.3.0') {
   fs.symlinkSync(runningDir, path.join(root, 'current'), 'junction');
   fs.mkdirSync(path.join(root, 'current', 'install'), { recursive: true });
   return { root, appRoot: runningDir };
+}
+
+// NODE_NATIVE_UPDATES_V1 — the apply is now in-process and ends by asking the
+// launcher to restart (exit 75), so "did the update apply?" is answered by
+// this spy plus the junction on disk, never by "was spawn called with the
+// right arguments". That distinction is the whole reason four releases
+// shipped installing nothing: every test asserted the arguments, and the
+// child never ran. The exit is stubbed so the test runner survives.
+function exitSpy() {
+  const calls = [];
+  return { impl: (code) => calls.push(code), calls };
 }
 
 // --- resolveDownloadUrl ---------------------------------------------------------
@@ -386,65 +397,59 @@ test('dev layout: stages into a scratch folder, apply is never invoked', async (
   const devRoot = tmpDir('em-updater-devroot-'); // no versions/current siblings — a plain checkout
 
   const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
-  let spawnCalled = false;
+  const exit = exitSpy();
   try {
     await tickUpdater(db, dataDir, {
-      endpoint, now: IN_WINDOW_NOW, appRoot: devRoot,
-      spawnImpl: () => { spawnCalled = true; return {}; },
+      endpoint, now: IN_WINDOW_NOW, appRoot: devRoot, exitImpl: exit.impl,
     });
   } finally {
     server.close();
   }
-  assert.equal(spawnCalled, false, 'a dev machine must never have apply-update.ps1 spawned against it');
+  assert.deepEqual(exit.calls, [], 'a dev machine must never have its `current` switched, or be restarted');
+  assert.equal(fs.existsSync(path.join(dataDir, 'update-result.json')), false, 'and nothing is reported as installed');
   const staged = path.join(dataDir, 'update-staging', '2.4.0', 'server', 'index.js');
   assert.ok(fs.existsSync(staged), 'the bundle IS still staged, just not applied');
 });
 
-test('versioned layout: stages under <root>\\versions\\<version> and spawns apply via the DI seam', async () => {
+test('versioned layout: stages under <root>\\versions\\<version>, repoints `current`, and restarts', async () => {
   const { tarBytes, manifest } = makeSignedBundle({ version: '2.4.0' });
   const offer = makeOffer({ manifest });
   const { db, dataDir } = approvedWorkspace(offer);
   const { root, appRoot } = makeVersionedRoot('2.3.0');
 
   const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
-  let spawnArgs = null;
+  const exit = exitSpy();
   try {
-    await tickUpdater(db, dataDir, {
-      endpoint, now: IN_WINDOW_NOW, appRoot, port: 8451,
-      spawnImpl: (cmd, args, opts) => {
-        spawnArgs = { cmd, args, opts };
-        // Simulate apply-update.ps1's own contract: it writes the result file.
-        fs.writeFileSync(path.join(dataDir, 'update-result.json'), JSON.stringify({ version: '2.4.0', ok: true }));
-        return { unref() {} };
-      },
-    });
+    await tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl: exit.impl });
   } finally {
     server.close();
   }
   const staged = path.join(root, 'versions', '2.4.0', 'server', 'index.js');
   assert.ok(fs.existsSync(staged), 'staged under <root>/versions/<version>, not <root>/current');
-  assert.ok(spawnArgs, 'apply-update.ps1 was launched');
-  assert.match(spawnArgs.cmd, /powershell/i);
-  assert.ok(spawnArgs.args.includes('-Version'));
-  assert.ok(spawnArgs.args.includes('2.4.0'));
-  // -Port must reach apply-update.ps1 or a pinned-port clinic health-checks
-  // the wrong port and refuses every update (2026-08-23, the 8712 test clinic).
-  assert.ok(spawnArgs.args.includes('-Port'));
-  assert.equal(spawnArgs.args[spawnArgs.args.indexOf('-Port') + 1], '8451');
-  // The STAGED version's apply script, not current's: script fixes must
-  // apply to their own transition (the 0.2.1->0.2.2 lesson). The staged
-  // copy is inside the signature-verified bundle unpacked moments earlier.
-  const fileArg = spawnArgs.args[spawnArgs.args.indexOf('-File') + 1];
-  assert.ok(fileArg.includes(path.join('versions', '2.4.0', 'install')), 'spawns the staged copy: ' + fileArg);
-  // NEVER detached on Windows: DETACHED_PROCESS gives powershell.exe no
-  // console and it dies on startup — the silent failure that meant no
-  // clinic update ever completed on its own (measured 2026-08-24, see
-  // updater.js's own comment). This assertion is the guard against a
-  // future 'shouldn't a background job be detached?' instinct.
-  assert.notEqual(spawnArgs.opts.detached, true, 'detached would kill the apply step silently');
-  // ...and its output must land somewhere a human can read after the fact.
-  assert.notEqual(spawnArgs.opts.stdio, 'ignore', 'a failed apply must leave evidence on disk');
-  assert.ok(fs.existsSync(path.join(dataDir, 'update-result.json')));
+
+  // The claim that matters, and the one the old spawn-argument assertions
+  // could never make: the switch REALLY happened, on this machine, in this
+  // process. Resolved through the link rather than inferred.
+  assert.equal(
+    path.resolve(fs.realpathSync(path.join(root, 'current'))),
+    path.resolve(path.join(root, 'versions', '2.4.0')),
+  );
+  // Removing `current` must have removed the LINK only. `install/` was
+  // created THROUGH the junction by makeVersionedRoot, so its survival is
+  // proof the previous version's own files were never followed into.
+  assert.ok(fs.existsSync(path.join(appRoot, 'install')),
+    'the previous version is still on disk — that IS the rollback (recover.cmd points back at it)');
+  assert.deepEqual(exit.calls, [75], 'the launcher is asked to relaunch on the new version');
+
+  // Written by Node now, so the app can finally read its own outcome.
+  const outcome = readJsonFile(path.join(dataDir, 'update-result.json'));
+  assert.equal(outcome.version, '2.4.0');
+  assert.equal(outcome.from, '2.3.0');
+  assert.equal(outcome.ok, true);
+
+  // And the download did not survive the apply: process.exit skips finally
+  // blocks, so the cleanup has to happen before the switch, not after it.
+  assert.equal(fs.existsSync(path.join(dataDir, 'update-download.tmp')), false);
 });
 
 test('versioned layout: refuses to stage over the directory `current` actually points at', async () => {
@@ -454,16 +459,13 @@ test('versioned layout: refuses to stage over the directory `current` actually p
   const { appRoot } = makeVersionedRoot('2.3.0'); // current -> versions/2.3.0, i.e. THIS offer's own version
 
   const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
-  let spawnCalled = false;
+  const exit = exitSpy();
   try {
-    await tickUpdater(db, dataDir, {
-      endpoint, now: IN_WINDOW_NOW, appRoot,
-      spawnImpl: () => { spawnCalled = true; return {}; },
-    });
+    await tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl: exit.impl });
   } finally {
     server.close();
   }
-  assert.equal(spawnCalled, false, 'must never touch the live, currently-running version directory');
+  assert.deepEqual(exit.calls, [], 'must never touch the live, currently-running version directory');
   // Nothing was ever staged into the live version's own directory.
   assert.equal(fs.existsSync(path.join(appRoot, 'server')), false, 'the running version directory was never touched');
 });
@@ -481,10 +483,7 @@ test('an already-existing (leftover) version directory is discarded and re-stage
 
   const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
   try {
-    await tickUpdater(db, dataDir, {
-      endpoint, now: IN_WINDOW_NOW, appRoot,
-      spawnImpl: () => ({ unref() {} }),
-    });
+    await tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl: () => {} });
   } finally {
     server.close();
   }
@@ -519,11 +518,8 @@ test('two ticks in the same window do not double-download or double-apply', asyn
   const { appRoot } = makeVersionedRoot('2.3.0');
 
   const { server, endpoint, state } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
-  let applyCount = 0;
-  const opts = {
-    endpoint, now: IN_WINDOW_NOW, appRoot,
-    spawnImpl: () => { applyCount += 1; return { unref() {} }; },
-  };
+  const exit = exitSpy();
+  const opts = { endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl: exit.impl };
   try {
     await tickUpdater(db, dataDir, opts);
     await tickUpdater(db, dataDir, opts); // one minute later, same scheduled window
@@ -531,7 +527,10 @@ test('two ticks in the same window do not double-download or double-apply', asyn
     server.close();
   }
   assert.equal(state.count, 1, 'only the first tick downloads');
-  assert.equal(applyCount, 1, 'only the first tick applies');
+  // In production the first apply's exit(75) ends the process, so a second
+  // one is impossible; here the stub lets the tick return, which is exactly
+  // the shape that would loop the launcher forever if the guards failed.
+  assert.deepEqual(exit.calls, [75], 'only the first tick applies');
 });
 
 // --- the acceptance test: offer -> approve -> download/verify/stage -> apply
@@ -593,25 +592,31 @@ test('acceptance: offered, approved, installed, and reported — end to end', as
     const approveResult = updateApprove(db, { hour: 3 }, admin, { now: () => new Date(2026, 0, 1, 1, 0, 0) });
     assert.equal(approveResult.ok, true);
 
-    // 3. The clock reaches hour 3 — tickUpdater downloads, verifies, stages,
-    //    and (stub) applies, which writes update-result.json exactly the way
-    //    apply-update.ps1 is contracted to.
-    let spawnedWith = null;
+    // 3. The clock reaches hour 3 — tickUpdater downloads, verifies, stages
+    //    and applies FOR REAL: the junction moves and the outcome file is
+    //    written by this very process. Nothing is stubbed but the exit.
+    const exit = exitSpy();
     await tickUpdater(db, dataDir, {
-      endpoint, appRoot, now: () => new Date(2026, 0, 1, 3, 0, 0),
-      spawnImpl: (cmd, args) => {
-        spawnedWith = { cmd, args };
-        fs.writeFileSync(path.join(dataDir, 'update-result.json'), JSON.stringify({ version: '2.4.0', ok: true }));
-        return { unref() {} };
-      },
+      endpoint, appRoot, now: () => new Date(2026, 0, 1, 3, 0, 0), exitImpl: exit.impl,
     });
-    assert.ok(spawnedWith, 'apply-update.ps1 must have been launched');
+    assert.deepEqual(exit.calls, [75], 'the apply must have run and asked for the restart');
     assert.ok(fs.existsSync(path.join(root, 'versions', '2.4.0', 'server', 'index.js')), 'staged for real under <root>/versions/2.4.0');
+    assert.equal(
+      path.resolve(fs.realpathSync(path.join(root, 'current'))),
+      path.resolve(path.join(root, 'versions', '2.4.0')),
+      '`current` really points at the new version',
+    );
 
     // 4. The NEXT check-in carries update_result — asserted at the fake
-    //    vendor's own side (receivedUpdateResults), not just on disk.
+    //    vendor's own side (receivedUpdateResults), not just on disk. This is
+    //    the leg that was broken for the whole life of the PowerShell apply:
+    //    the outcome file had a BOM, every parse threw, and the vendor's
+    //    two-failure auto-halt was counting reports nobody ever sent.
     await runCheckin(db, dataDir, { endpoint });
-    assert.deepEqual(receivedUpdateResults, [{ version: '2.4.0', ok: true }]);
+    assert.equal(receivedUpdateResults.length, 1, 'exactly one outcome reached the vendor');
+    assert.equal(receivedUpdateResults[0].version, '2.4.0');
+    assert.equal(receivedUpdateResults[0].ok, true);
+    assert.equal(receivedUpdateResults[0].from, '2.3.0');
     assert.ok(fs.existsSync(path.join(dataDir, 'update-result.json.sent')), 'sent exactly once, then rotated');
     assert.equal(fs.existsSync(path.join(dataDir, 'update-result.json')), false);
 
@@ -638,8 +643,8 @@ test('concurrent overlapping ticks (outer re-entrancy guard) never run two pipel
   });
   try {
     await Promise.all([
-      tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW, appRoot, spawnImpl: () => ({ unref() {} }) }),
-      tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW, appRoot, spawnImpl: () => ({ unref() {} }) }),
+      tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl: () => {} }),
+      tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl: () => {} }),
     ]);
   } finally {
     server.close();

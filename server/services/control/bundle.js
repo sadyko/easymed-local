@@ -4,10 +4,12 @@
 // updater.js imported verifyBundle and tarCommand from scripts/build-bundle.mjs,
 // but scripts/ is not on that same file's ALLOWLIST, so a CI-built bundle never
 // contained it. Unpacking v0.1.1 and starting it died with ERR_MODULE_NOT_FOUND
-// before the server bound its port; the health check would then have failed and
-// switch-version.ps1 would have rolled straight back, for every release forever.
-// Signature-verifying a tarball is not the same as booting what is inside it,
-// which is why the signed v0.1.1 looked fine.
+// before the server bound its port — every clinic left with a `current` pointed
+// at a version that cannot start, for every release forever. Signature-verifying
+// a tarball is not the same as booting what is inside it, which is why the
+// signed v0.1.1 looked fine.
+// (This is also the failure recover.cmd exists for: the previous version is
+// still on disk, and pointing `current` back at it is one double-click.)
 //
 // The split is by WHO RUNS IT, not by subject matter:
 //   - here, under server/  : verify + unpack, run on a clinic PC, ships

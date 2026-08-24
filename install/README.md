@@ -1,5 +1,18 @@
 # Installing Easy-Med at a clinic
 
+> **RETIRED — this describes the Windows *service* install, which nothing uses.**
+>
+> A real install is the clinic package: copy the whole folder onto the clinic
+> PC and double-click `EasyMed.exe`. Nothing to install, no administrator
+> rights, no Node.js needed on the PC. The vendor builds that folder with
+> `install/make-clinic-package.ps1`, and the Russian instructions the clinic
+> actually reads are inside it (`README-УСТАНОВКА.txt`).
+>
+> The service path below was never once successfully registered (docs/HANDOVER.md
+> §7.1), and updating no longer needs elevation for anything — see
+> `docs/plans/2026-08-24-node-native-updates.md`. Kept for reference only;
+> `install-service.ps1` carries the same note in its own header.
+
 This page is for whoever sets Easy-Med up on the clinic's computer. It does not
 assume you write code — just that you can copy a folder and run one command.
 

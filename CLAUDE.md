@@ -31,9 +31,10 @@ the clinic-side client that calls it. Granting a module in the vendor's database
 on its next check-in with no file carried by hand. **Still to build: the vendor panel page.**
 
 **Supervised install is done** (`docs/plans/2026-08-20-supervised-install.md`): `EASYMED_DATA_DIR`,
-pre-migration database backups, the Windows service installer and a version switcher that rolls
-itself back on a failed health check. Untested end-to-end because this machine has no
-administrator rights — service registration needs one pass on a box that does.
+pre-migration database backups, and the versioned layout (`versions/<v>/` + a `current` junction)
+every clinic runs. The **Windows service** part of that plan is retired, not pending: it was never
+once successfully registered, every install is the `EasyMed.exe` launcher, and nothing about
+updating needs administrator rights any more (`docs/plans/2026-08-24-node-native-updates.md`).
 
 **Statistics is done** (`docs/plans/2026-08-22-statistics.md`): a PII-proof event log
 (`ops_events`, no free text by schema), a compiled-in counter catalogue whose payload builder can
@@ -45,18 +46,22 @@ table.
 **Update delivery is done** (`docs/plans/2026-08-20-update-delivery.md`): signed release bundles
 (allow-listed, leak-tested), CI that turns a tag on `main` into a release, rings with automatic
 halt on failures, a clinic-side updater (consent names a version, the clinic picks its local hour,
-cross-host downloads refused, verify-before-unpack), an apply script with exact rules for when the
-database may be touched (almost never), and the approval screen — reachable even by a
-licence-lapsed clinic, deliberately. The developer workflow is `docs/WORKFLOW.md`; releasing is
-`docs/RELEASING.md`; onboarding a second developer is `docs/ONBOARDING.md`.
+cross-host downloads refused, verify-before-unpack), an in-process Node apply — snapshot the
+database, repoint the `current` junction, exit 75 so the launcher relaunches — and the approval
+screen, reachable even by a licence-lapsed clinic, deliberately. The PowerShell installer layer
+was deleted on 2026-08-24 (`docs/plans/2026-08-24-node-native-updates.md`): every defect that made
+updating painful lived in it, and CI can now run the real apply. The developer workflow is
+`docs/WORKFLOW.md`; releasing is `docs/RELEASING.md`; onboarding a second developer is
+`docs/ONBOARDING.md`.
 
 ### What remains before the first real clinic
 
 1. **The GitHub remote does not exist.** Create `easymed-local` (private), push this branch, add
    the `EASYMED_RELEASE_KEY` secret and the rulesets per `docs/RELEASING.md`. The first real tag
    is also the first real validation of `.github/workflows/release.yml`.
-2. **One pass on a machine with administrator rights**: register the real Windows service
-   (`install/install-service.ps1`) and confirm SCM reports it — the known "Error 1053" question.
+2. ~~One pass on a machine with administrator rights to register the Windows service.~~
+   **Dropped 2026-08-24** — there is no service. Installs are the `EasyMed.exe` launcher and
+   updates repoint a junction, neither of which needs elevation.
 3. **Replace the development licence key** (`node scripts/make-licence.mjs keygen`) — the server
    warns at every boot until then — and generate the release keypair for CI.
 4. **Deploy the control plane** to the server behind `settings.easymed.uz/cp/` (own nginx
@@ -129,8 +134,8 @@ absolute:
    tagging, no publishing in the panel, nothing that makes the change visible to clinics,
    until the owner says yes to that specific version. Pushing to GitHub is safe by
    itself — clinics can only ever receive a tagged, signed, ring-published release.
-   Before tagging, run the Windows-only gate the update pipeline has no other cover for:
-   `node --test server/services/control/apply-spawn.smoke.test.js` (see CONTRIBUTING.md).
+   (There is no manual pre-tag gate any more: the apply step is plain Node since
+   2026-08-24, so CI runs the real thing — `apply-update.test.js`. See CONTRIBUTING.md.)
 6. The owner verifies on the test clinic first (restart its window -> check-in offers
    the update within ~a minute -> consent -> applies -> reopen window), and only then
    decides whether to widen the release to real clinics.

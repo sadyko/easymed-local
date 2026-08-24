@@ -27,8 +27,7 @@ The full story is [docs/WORKFLOW.md](docs/WORKFLOW.md); this page is the contrac
 8. NOTES       RELEASE_NOTES.md = what the clinic admin reads, in plain Russian
                («Появился раздел…»), never developer language
 9. BUMP        package.json "version" in its own commit, pushed to main
-10. TAG        run the Windows gate first (see below), then
-               git tag vX.Y.Z && git push origin vX.Y.Z
+10. TAG        git tag vX.Y.Z && git push origin vX.Y.Z
                → CI runs the full suite, builds and SIGNS the bundle, attaches it
                  to a GitHub Release (tag must sit on main and match the version)
 11. PUBLISH    NOTHING TO DO — the same CI run uploads the signed bundle to
@@ -47,37 +46,43 @@ The full story is [docs/WORKFLOW.md](docs/WORKFLOW.md); this page is the contrac
                installs pick up the new version on the next window restart.
 ```
 
-## Why the update pipeline needs a LOCAL gate (learned 2026-08-24)
+## Why the apply step is ordinary Node (learned 2026-08-24)
 
 For four releases no clinic update ever installed itself. Download, signature
 check and unpack all worked; the final install step silently never launched
 (`detached: true` on Windows = no console = powershell dies instantly). Four
-separate safety nets all failed to notice, and every one of them is structural:
+separate safety nets all failed to notice, and every one of them was structural:
 
 | Layer | Why it could not catch it |
 |---|---|
-| The dev folder | a git checkout is a *dev layout*: `updater.js` deliberately SKIPS the apply step there. The broken step cannot run on a developer's machine at all. |
-| The test suite | every apply test injects a fake `spawn` and asserts the ARGUMENTS. "We called spawn correctly" passed forever while "the child actually ran" was never asserted. |
-| CI | runs on `ubuntu-latest`. `powershell.exe` does not exist there, so the Windows-only failure mode is invisible to it by construction. |
-| Ring 0 / auto-halt | halts a release after two REPORTED failures. A silent failure reports nothing, so the release looked healthy forever. (Made worse by a second bug found the same day: PowerShell writes the outcome file with a BOM, `JSON.parse` threw on it, and the clinic therefore never reported ANY outcome - the halt could never fire.) |
+| The dev folder | a git checkout is a *dev layout*: `updater.js` deliberately SKIPS the apply step there. The broken step could not run on a developer's machine at all. |
+| The test suite | every apply test injected a fake `spawn` and asserted the ARGUMENTS. "We called spawn correctly" passed forever while "the child actually ran" was never asserted. |
+| CI | runs on `ubuntu-latest`. `powershell.exe` does not exist there, so a Windows-only apply step was invisible to it by construction. |
+| Ring 0 / auto-halt | halts a release after two REPORTED failures. A silent failure reports nothing, so the release looked healthy forever. (Made worse by a second bug found the same day: PowerShell writes the outcome file with a BOM, `JSON.parse` threw on it, and the clinic therefore never reported ANY outcome — the halt could never fire.) |
 
-**So: before tagging a release, run the local Windows gate.** It is the only
-place in the whole pipeline where the real installer actually executes:
+The stop-gap was a Windows-only gate somebody had to remember to run before
+tagging. **That gate is gone, and so is the layer that needed it.** The apply is
+now plain Node in the clinic's own process — snapshot the database, repoint the
+`current` junction with `fs.symlinkSync(..., 'junction')` (no administrator
+rights required), write the outcome as plain JSON, exit 75 so the launcher
+relaunches. `install/apply-update.ps1` and `install/switch-version.ps1` were
+deleted. See `docs/plans/2026-08-24-node-native-updates.md`.
 
-    node --test server/services/control/apply-spawn.smoke.test.js
+**What replaces the gate: a test that runs everywhere, including CI.**
 
-It spawns the real `apply-update.ps1` against a scratch install and asserts the
-outcome file appears AND is readable by the app's own reader. It skips on
-non-Windows machines - which is precisely why it cannot live in CI, and why
-this line is in the instructions instead.
+    node --test server/services/control/apply-update.test.js
 
-**This gate matters MORE now that publishing is automatic.** A tag goes to every
-clinic, so there is no longer a manual ring step in which someone would have
-noticed. The auto-halt is the only automatic brake, and the table above is the
-list of things it cannot see. Run the gate, and after the release goes out check
-the test clinic by eye - the version on screen changed, or
-`data\update-apply.log` says why not. "No failures reported" is not evidence
-that anything installed.
+It builds a real versioned layout in a temp directory, runs the REAL apply
+against it, and asserts the junction moved, the previous version survived, the
+database was snapshotted, and the outcome file parses through the app's own
+reader. Rows 1–3 of that table are closed by construction: CI executes the same
+apply a clinic executes.
+
+**Still check the test clinic by eye after a release.** A tag goes to every
+clinic and there is no manual ring step where someone would notice. The
+auto-halt is the only automatic brake, and "no failures reported" is not
+evidence that anything installed — look at the version on screen, or at
+`data\update-result.json`, which the clinic can finally read.
 
 ## Iron rules
 

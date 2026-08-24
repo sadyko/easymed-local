@@ -1,19 +1,24 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, createPublicKey } from 'node:crypto';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 // NOT from scripts/build-bundle.mjs — scripts/ is not on that file's own
 // ALLOWLIST, so importing it here meant an unpacked release bundle died with
 // ERR_MODULE_NOT_FOUND before the server ever bound its port. See bundle.js.
 import { verifyBundle, tarCommand, compareVersions } from './bundle.js';
-import { readAppVersion, readJsonFile } from './checkin.js';
+import { readAppVersion, readJsonFile, writeAtomic } from './checkin.js';
+// The ONE WAL-safe snapshot implementation, reused rather than copied — a
+// second one would drift, and the whole rollback story rests on this being
+// db.backup() and never fs.copyFileSync (see db/backup.js's own header).
+import { backupBeforeMigrate } from '../../db/backup.js';
 import { nextRunAt, isInWindow, consentAppliesTo } from './update-schedule.js';
 
 // UPDATE_DELIVERY_V1 (docs/plans/2026-08-20-update-delivery.md, Task 4) — the
 // clinic's own machine: check the stored offer, confirm it is still
 // consented to, and — only inside the clinic's chosen hour — download,
-// verify, stage, and hand off to apply-update.ps1.
+// verify, stage and apply it, all in this process (NODE_NATIVE_UPDATES_V1,
+// docs/plans/2026-08-24-node-native-updates.md — see applyUpdate below).
 //
 // THE RULE THAT OUTRANKS EVERYTHING BELOW, same as checkin.js's own header:
 // nothing here may harm the RUNNING clinic. Every network error, every disk
@@ -243,10 +248,10 @@ async function downloadToFile(url, destPath, { fetchImpl = globalThis.fetch, max
 // junction whose real target IS appRoot. A directory that merely happens to
 // sit two levels under a folder named "versions" (a coincidence, or a dev
 // checkout cloned into an oddly-named path) must not be mistaken for the
-// genuine, service-managed layout: staging into a plain checkout's sibling
-// folders would be inert, but the WORSE mistake this guards against is ever
-// deciding "versioned" when it is not, which is what gates whether
-// apply-update.ps1 gets to touch a Windows service at all.
+// genuine, versioned install: staging into a plain checkout's sibling folders
+// would be inert, but the WORSE mistake this guards against is ever deciding
+// "versioned" when it is not, which is what gates whether applyUpdate() gets
+// to repoint anything at all.
 // ---------------------------------------------------------------------------
 
 export function detectLayout(appRoot, { realpathSync = fs.realpathSync } = {}) {
@@ -306,7 +311,6 @@ export async function tickUpdater(db, dataDir, opts = {}) {
 
 async function performTick(db, dataDir, {
   fetchImpl = globalThis.fetch,
-  spawnImpl = spawn,
   execFileSyncImpl = execFileSync,
   mkdirSync = fs.mkdirSync,
   rmSync = fs.rmSync,
@@ -316,13 +320,11 @@ async function performTick(db, dataDir, {
   endpoint,
   publicKey,
   appRoot = DEFAULT_APP_ROOT,
-  // The port THIS server actually listens on. apply-update.ps1's precondition
-  // and post-switch health checks poll it; before this was passed through
-  // (2026-08-23) every pinned-port clinic (port.txt — the owner's own test
-  // clinic on 8712 was the first) had its updates health-checked against the
-  // DEFAULT 8000, where either nothing answers (refusal) or, worse, some
-  // OTHER application answers and vouches for a switch it knows nothing about.
-  port = 8000,
+  // Passed through to applyUpdate, which ends a successful install with
+  // exit(75) so the launcher relaunches on the new version. Injectable for the
+  // same reason scheduleUpdater's own exitImpl is: a test must be able to
+  // observe "it asked for a restart" without taking the test runner down.
+  exitImpl,
   timeoutMs = DOWNLOAD_TIMEOUT_MS,
   maxBytes = MAX_BUNDLE_BYTES,
 } = {}) {
@@ -373,8 +375,8 @@ async function performTick(db, dataDir, {
     controlStatePut(db, 'update_attempted_for', attemptKey);
 
     await runPipeline(db, dataDir, offer, {
-      fetchImpl, spawnImpl, execFileSyncImpl, mkdirSync, rmSync, writeFileSync, realpathSync,
-      endpoint, publicKey, appRoot, port, timeoutMs, maxBytes,
+      fetchImpl, execFileSyncImpl, mkdirSync, rmSync, writeFileSync, realpathSync,
+      endpoint, publicKey, appRoot, exitImpl, now, timeoutMs, maxBytes,
     });
   } catch (e) {
     // Backstop — every step below has its own guard, but nothing may ever
@@ -383,60 +385,250 @@ async function performTick(db, dataDir, {
   }
 }
 
+// ---------------------------------------------------------------------------
+// NODE_NATIVE_UPDATES_V1 (docs/plans/2026-08-24-node-native-updates.md) — the
+// apply step, in this process, with no PowerShell anywhere.
+//
+// WHAT IT REPLACES, AND WHY. The apply used to spawn install/apply-update.ps1,
+// which called install/switch-version.ps1. Every defect that made updating
+// painful lived in that layer and only there:
+//   1. the apply step never ran — `detached: true` gives a Windows console
+//      app no console, so powershell.exe died at startup, silently;
+//   2. the wrong port was health-checked — a script argument nobody passed;
+//   3. a healthy clinic read as down — `localhost` resolving to ::1 inside a
+//      child PowerShell, which then ate the whole timeout;
+//   4. the outcome file was unreadable — PowerShell 5.1 writes a UTF-8 BOM,
+//      JSON.parse throws on it, so the vendor's two-failure auto-halt was
+//      counting reports that were never sent.
+// None of those failure modes exist in Node. The finding that made the swap
+// possible at all: Node creates and repoints a Windows junction with NO
+// elevation — fs.symlinkSync(target, link, 'junction') — verified on the
+// owner's machine before the plan was written. Elevation was the ONLY reason
+// PowerShell was ever involved in the switch.
+//
+// The sibling product (symptex local/server/services/updates.js) has shipped
+// 49 releases on exactly this shape — download, verify, back up, unpack,
+// restart — against 6 releases here, four of which needed a human mid-flight.
+//
+// LESSONS KEPT FROM THE DELETED SCRIPTS, because they were bought with real
+// incidents rather than reasoning:
+//   - removing `current` removes the LINK, never the directory it points at.
+//     install-service.ps1's Set-CurrentJunction carried this warning about
+//     Remove-Item; apply-update.test.js now asserts it, because getting it
+//     wrong deletes a clinic's application instead of a shortcut to it.
+//   - refuse when `current` is a REAL directory rather than a link: that is a
+//     botched manual install or a copy-paste that flattened the junction, and
+//     repointing it would mean deleting a folder that might BE the running
+//     version (Get-CurrentVersionInfo's own refusal, kept verbatim in spirit).
+//   - refuse to touch the version that is currently running.
+//   - snapshot the database FIRST — the new version's migrations run at its
+//     next boot, and a migration is the one part of an update that can hurt
+//     data.
+//   - write the outcome in EVERY path, including the failures: a vendor's
+//     auto-halt cannot count a failure it never saw.
+//
+// WHAT WAS DELIBERATELY NOT KEPT: the post-switch health check and automatic
+// rollback. On a launcher install it polled the OLD process — which was still
+// answering, because there is no service to stop — so it vouched for switches
+// it had never verified. Theatre, not protection. Its replacement is
+// install/recover.cmd, shipped in the clinic package root: a double-click that
+// repoints `current` back at the previous version, which is still on disk.
+// ---------------------------------------------------------------------------
+
+// A junction on Windows (no elevation, and the same kind the launcher's own
+// EnsureCurrent creates with `mklink /J`); a directory symlink everywhere
+// else, purely so this step is testable on Linux CI. That portability IS the
+// point of the change: for four releases the apply step could only be
+// exercised on a Windows desktop, so nothing caught that it never ran.
+const CURRENT_LINK_TYPE = process.platform === 'win32' ? 'junction' : 'dir';
+
 /**
- * How the apply step is launched — ONE definition, used by production and by
- * the smoke test that actually executes it (apply-spawn.smoke.test.js).
+ * The outcome file — the clinic's only record of what its own update did, and
+ * the only thing the vendor's two-failure auto-halt can ever count.
  *
- * It lives in its own exported function for a reason that cost a full day:
- * every unit test of this pipeline injects a fake `spawn` and asserts the
- * ARGUMENTS, which happily passed while the real child never ran at all
- * (detached on Windows = no console = powershell dies instantly). Arguments
- * being right is not the same claim as the child running. Now the exact plan
- * production uses is the exact plan a real-process test executes, so the two
- * cannot drift.
+ * Written as plain JSON from Node, which is the whole fix for defect 4 above.
+ * checkin.js still STRIPS a BOM on read, deliberately: files written by the
+ * retired PowerShell script already sit on clinic disks and must become
+ * readable the moment the clinic updates. Nothing writes one any more.
  *
- * @param {object} o
- * @param {string} o.root     the install root (holds versions/ and current)
- * @param {string} o.version  the version being installed
- * @param {number} o.port     the port THIS server listens on — apply-update.ps1 health-checks it
- * @param {string} o.dataDir  where update-apply.log goes
- * @returns {{cmd: string, args: string[], opts: object}}
+ * Shape unchanged from Write-UpdateOutcome — {version, from, ok, db, at,
+ * detail} — because checkin.js, rpc/updates.js and the updates screen all
+ * already read exactly this.
  */
-export function applySpawnPlan({ root, version, port, dataDir }) {
-  // The INCOMING version's copy of the apply script, not the running one's.
-  // The 0.2.1->0.2.2 transition proved why: 0.2.2 carried the fixes for the
-  // very update machinery installing it, and running 0.2.1's broken copy meant
-  // the fixes could not apply to their own transition. The staged copy is part
-  // of the signature-verified bundle, so trusting it is trusting the same
-  // signature that gated the whole pipeline. Fallback to current's copy only if
-  // a (future) bundle ships without install/ — never a reason to refuse the
-  // update itself.
-  const stagedScript = path.join(root, 'versions', version, 'install', 'apply-update.ps1');
-  const applyScript = fs.existsSync(stagedScript)
-    ? stagedScript
-    : path.join(root, 'current', 'install', 'apply-update.ps1');
-
-  // Appended, never truncated: the log of a FAILED attempt must still be there
-  // after the next one. Opening it must never be able to stop an update, so a
-  // failure here falls back to inheriting this process's own stdio (the
-  // launcher console) rather than to 'ignore' — the state that hid the bug.
-  let stdio = 'inherit';
+function writeOutcome(dataDir, outcome) {
+  // Printed FIRST, one grep-able line: apply-update.ps1's rule, kept. If the
+  // file write below fails (a disk that has just absorbed a multi-MB unpack is
+  // a plausible place to run out), the outcome must still exist SOMEWHERE.
+  console.log('UPDATE_RESULT ' + JSON.stringify(outcome));
   try {
-    const logFd = fs.openSync(path.join(dataDir, 'update-apply.log'), 'a');
-    stdio = ['ignore', logFd, logFd];
-  } catch { /* keep 'inherit' — visible output beats no output */ }
+    // writeAtomic, not writeFileSync: a power cut mid-write must leave either
+    // the old file or the new one, never a half-written outcome that reads as
+    // "no result" — the same tmp-then-rename checkin.js uses for licence.dat.
+    // Pretty-printed because a clinic manager may well open it in Notepad.
+    writeAtomic(path.join(dataDir, 'update-result.json'), JSON.stringify(outcome, null, 2) + '\n');
+  } catch (e) {
+    console.warn('[updater] could not write update-result.json (the UPDATE_RESULT line above is the record):', e && e.message);
+  }
+}
 
-  return {
-    cmd: 'powershell.exe',
-    args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', applyScript,
-      '-Version', version, '-Root', root, '-Port', String(port)],
-    // NEVER detached — see the APPLY comment in performTick for the measurement.
-    opts: { cwd: root, stdio },
+/**
+ * Apply a version that is ALREADY staged at <root>/versions/<version>:
+ * snapshot the database, repoint `current`, record the outcome, restart.
+ *
+ * Never throws. Every failure leaves the clinic running the OLD version and
+ * writes ok:false with the reason — "nothing here may harm the RUNNING
+ * clinic" is this file's header rule and it applies hardest right here.
+ *
+ * @param {Database} db        the open connection, for the WAL-safe snapshot
+ * @param {string} dataDir     where easymed.db, backups/ and the outcome live
+ * @param {object} opts
+ * @param {string} opts.root      the install root (holds versions/ and current)
+ * @param {string} opts.version   the staged version to switch to
+ * @returns {Promise<{ok: boolean, from: string|null, detail: string}>}
+ */
+export async function applyUpdate(db, dataDir, opts = {}) {
+  const { version, exitImpl = (code) => process.exit(code), now = () => new Date() } = opts;
+  let result;
+  try {
+    result = await performApply(db, dataDir, opts);
+  } catch (e) {
+    // Backstop only — performApply returns on every path it knows about. An
+    // outcome must exist even for the failure nobody predicted, or the vendor
+    // learns nothing and the auto-halt stays blind (defect 4's real lesson,
+    // which was never really about BOMs).
+    const detail = 'Unexpected error while applying ' + version + ': ' + (e && e.message);
+    writeOutcome(dataDir, { version, from: null, ok: false, db: 'unknown', at: now().toISOString(), detail });
+    console.warn('[updater] ' + detail);
+    result = { ok: false, from: null, detail };
+  }
+  // The restart is requested HERE, outside the try, so a test's exitImpl
+  // cannot be caught by the backstop above and turned into a second outcome.
+  // Exit code 75 is the launcher's restart convention (install/launcher/
+  // EasyMed.cs: `while (exitCode == 75)`), and the entry path runs through
+  // `current`, so the relaunch lands on the version just installed.
+  if (result.restart) exitImpl(75);
+  return { ok: result.ok, from: result.from, detail: result.detail };
+}
+
+async function performApply(db, dataDir, {
+  root,
+  version,
+  now = () => new Date(),
+  // Injected so a test can prove the apply REFUSES when no rollback point can
+  // be taken. Never a second backup implementation — see the import.
+  backupImpl = backupBeforeMigrate,
+  symlinkSync = fs.symlinkSync,
+  rmSync = fs.rmSync,
+  realpathSync = fs.realpathSync,
+  lstatSync = fs.lstatSync,
+} = {}) {
+  const currentLink = path.join(root, 'current');
+  const targetDir = path.join(root, 'versions', version);
+
+  // Where `current` points RIGHT NOW. That reading IS the rollback plan —
+  // switch-version.ps1's step 2, and the one thing every failure path below
+  // needs in order to put things back.
+  let fromDir = null;
+  try { fromDir = realpathSync(currentLink); } catch { /* absent or dangling — handled below */ }
+  const from = fromDir ? path.basename(fromDir) : null;
+
+  const fail = (dbState, detail) => {
+    writeOutcome(dataDir, { version, from, ok: false, db: dbState, at: now().toISOString(), detail });
+    console.warn('[updater] ' + version + ' was NOT applied: ' + detail);
+    return { ok: false, from, detail, restart: false };
   };
+
+  // ── Preconditions: refuse loudly, before anything is touched ──────────────
+
+  // The bundle was unpacked moments ago by runPipeline, so this should always
+  // hold — but a truncated unpack that still "succeeded" (tar's exit code says
+  // nothing about a bundle built wrong) must be caught before `current` is
+  // pointed at a directory with no application in it, which is the one mistake
+  // that takes the clinic down with no way back except recover.cmd.
+  const entry = path.join(targetDir, 'server', 'index.js');
+  if (!fs.existsSync(entry)) {
+    return fail('untouched', `Staged version '${version}' is missing or incomplete — '${entry}' was not found. Nothing was switched.`);
+  }
+
+  let linkStat = null;
+  try { linkStat = lstatSync(currentLink); } catch { /* no `current` at all — created below, same as the launcher does */ }
+  if (linkStat && !linkStat.isSymbolicLink()) {
+    return fail('untouched', `'${currentLink}' exists but is a real directory, not a junction — a botched manual install, or a copy-paste that flattened the link. Removing it here could delete the running application rather than a link to it, so this refuses to touch it. Fix '${currentLink}' by hand first.`);
+  }
+
+  if (fromDir && path.resolve(fromDir) === path.resolve(targetDir)) {
+    // NO outcome file on purpose: this is neither a failed install (auto-halt
+    // must not count it) nor a successful one. Structurally unreachable —
+    // runPipeline already refuses to stage over the running version — and kept
+    // only as the backstop that makes an exit-75 restart loop impossible.
+    console.warn(`[updater] 'current' already points at ${version} — nothing to apply`);
+    return { ok: false, from, detail: 'already current', restart: false };
+  }
+
+  // ── 1. The rollback point ────────────────────────────────────────────────
+  // The new version's migrations run at ITS next boot, and a migration is the
+  // one part of an update that can hurt data. A snapshot that cannot be taken
+  // CANCELS the update: an update is always deferrable ("try again tomorrow"
+  // is this file's whole ethic), losing the only rollback point is not.
+  let backupPath;
+  try {
+    backupPath = await backupImpl(db, path.join(dataDir, 'easymed.db'), version);
+  } catch (e) {
+    return fail('untouched', `Could not take the pre-update database snapshot (${e && e.message}) — the update was cancelled and the clinic is still running ${from || 'the version it was already on'}.`);
+  }
+
+  // ── 2. The switch ────────────────────────────────────────────────────────
+  // fs.rmSync on a junction removes the LINK, never the directory it points
+  // at (verified directly, and asserted in apply-update.test.js — the previous
+  // version has to survive, or there is nothing to recover TO).
+  try {
+    if (linkStat) rmSync(currentLink, { recursive: true, force: true });
+    symlinkSync(targetDir, currentLink, CURRENT_LINK_TYPE);
+  } catch (e) {
+    // Crash-safe: the clinic must be left runnable whatever happened. If the
+    // old link is already gone and the new one could not be made, put the old
+    // one back — the launcher CAN rebuild a missing `current` from the newest
+    // version on disk, but only when somebody restarts it, and a clinic must
+    // not have to discover that.
+    let recovery = `'current' still points at ${from || 'wherever it did'}`;
+    if (fromDir && !fs.existsSync(currentLink)) {
+      try {
+        symlinkSync(fromDir, currentLink, CURRENT_LINK_TYPE);
+        recovery = `'current' was put back to ${from}`;
+      } catch (e2) {
+        recovery = `'current' could not be put back either (${e2 && e2.message}) — the launcher rebuilds a missing 'current' from the newest version on disk at its next start, or run recover.cmd`;
+      }
+    }
+    return fail('untouched', `Repointing 'current' at ${version} failed: ${e && e.message}. ${recovery}. The database was not modified; the snapshot at ${backupPath} is intact.`);
+  }
+
+  // ── 3. Confirm, never assume ─────────────────────────────────────────────
+  // A link that was created but resolves somewhere else must be reported as a
+  // failure, not as an install nobody actually made. (The realistic case is an
+  // operator double-clicking recover.cmd at the same moment.)
+  let landed = null;
+  try { landed = realpathSync(currentLink); } catch { /* falls into the mismatch below */ }
+  if (!landed || path.resolve(landed) !== path.resolve(targetDir)) {
+    return fail('untouched', `'current' was repointed but now resolves to '${landed || 'nothing'}' instead of '${targetDir}'. The database was not modified.`);
+  }
+
+  // 'current' is apply-update.ps1's own success vocabulary for "no rollback
+  // question applies" — kept because updates-logic.js reads this field and
+  // only ever singles out 'restored'.
+  writeOutcome(dataDir, {
+    version,
+    from,
+    ok: true,
+    db: 'current',
+    at: now().toISOString(),
+    detail: `Repointed 'current' from ${from || '(nothing)'} to ${version}. Database snapshot taken first: ${backupPath}. Restarting to run the new version.`,
+  });
+  console.log(`[updater] version ${version} installed — restarting to run it`);
+  return { ok: true, from, detail: 'applied', restart: true };
 }
 async function runPipeline(db, dataDir, offer, {
-  fetchImpl, spawnImpl, execFileSyncImpl, mkdirSync, rmSync, writeFileSync, realpathSync,
-  endpoint, publicKey, appRoot, port, timeoutMs, maxBytes,
+  fetchImpl, execFileSyncImpl, mkdirSync, rmSync, writeFileSync, realpathSync,
+  endpoint, publicKey, appRoot, exitImpl, now, timeoutMs, maxBytes,
 }) {
   const base = endpoint ? String(endpoint).replace(/\/+$/, '') : controlBaseUrl();
   const resolved = resolveDownloadUrl(offer.url, base);
@@ -447,6 +639,16 @@ async function runPipeline(db, dataDir, offer, {
 
   const tarPath = path.join(dataDir, TEMP_TAR_NAME);
   const manifestPath = path.join(dataDir, TEMP_MANIFEST_NAME);
+
+  // Disk hygiene — a failed attempt's temp files must never accumulate.
+  // Extracted from the `finally` below because it now has to run BEFORE the
+  // apply as well: a successful apply ends in process.exit(75), and
+  // process.exit does not run finally blocks, so the downloaded bundle would
+  // otherwise sit on a clinic's disk until the next attempt overwrote it.
+  const cleanupTempFiles = () => {
+    try { fs.existsSync(tarPath) && fs.unlinkSync(tarPath); } catch { /* best-effort cleanup */ }
+    try { fs.existsSync(manifestPath) && fs.unlinkSync(manifestPath); } catch { /* best-effort cleanup */ }
+  };
 
   try {
     const dl = await downloadToFile(resolved.url, tarPath, { fetchImpl, maxBytes, timeoutMs });
@@ -532,53 +734,27 @@ async function runPipeline(db, dataDir, offer, {
     }
 
     if (!layout.versioned) {
-      console.warn('[updater] dev layout — staged only; apply is skipped (a dev machine must never have its service switched)');
+      console.warn('[updater] dev layout — staged only; apply is skipped (a dev machine must never have its `current` switched)');
       return;
     }
 
-    // APPLY — spawned, never awaited to completion. apply-update.ps1 calls
-    // switch-version.ps1, which STOPS this very Windows service as one of
-    // its first steps: this Node process may be killed mid-flight moments
-    // after this call returns. unref'd so this function returns immediately
-    // rather than hanging on a process that may outlive its parent.
-    //
-    // NOT `detached: true`, though every instinct says it should be. On
-    // Windows that flag means DETACHED_PROCESS — the child gets NO console —
-    // and powershell.exe is a console host: it dies on startup, instantly and
-    // silently, because stdio was 'ignore' too. THIS is why no clinic update
-    // ever completed by itself: download, verify and stage all worked, then
-    // the apply step vanished without a trace, and every install so far was
-    // finished by hand. Measured directly on the owner's machine 2026-08-24,
-    // same argv, same cwd, four variants — detached+ignore: never ran;
-    // detached+windowsHide: never ran; detached+stdio-to-a-file: never ran;
-    // NOT detached: ran and wrote its result every time.
-    //
-    // stdio goes to data/update-apply.log instead of 'ignore' for the same
-    // lesson: an update that fails must leave evidence on the clinic's own
-    // disk. The whole of today's hunt existed because this step was silent.
-    try {
-      // The INCOMING version's copy of the apply script, not the running one's.
-      // The 0.2.1→0.2.2 transition proved why: 0.2.2 carried the fixes for the
-      // very update machinery installing it, and running 0.2.1's broken copy
-      // meant the fixes could not apply to their own transition. The staged
-      // copy is part of the signature-verified bundle unpacked two steps
-      // above, so trusting it is trusting the same signature that gated the
-      // whole pipeline. Fallback to current's copy only if a (future) bundle
-      // ships without install/ — never a reason to refuse the update itself.
-      const plan = applySpawnPlan({ root: layout.root, version: offer.version, port, dataDir });
-      const child = spawnImpl(plan.cmd, plan.args, plan.opts);
-      // A DI stub is not obliged to return a real ChildProcess — guarded so
-      // a test's plain stub return value can never crash this call.
-      if (child && typeof child.unref === 'function') child.unref();
-    } catch (e) {
-      console.warn('[updater] could not launch apply-update.ps1, will retry tomorrow:', e.message);
-    }
+    // APPLY — in this process, and awaited. There is no child to lose track
+    // of any more: the whole of the 2026-08-24 hunt existed because a spawned
+    // powershell.exe died silently and nothing could tell the difference
+    // between "installed" and "never started". applyUpdate never throws, and
+    // ends a successful install by asking the launcher for a restart.
+    cleanupTempFiles();
+    await applyUpdate(db, dataDir, {
+      root: layout.root,
+      version: offer.version,
+      exitImpl,
+      now,
+    });
   } finally {
-    // Disk hygiene — a failed attempt's temp files must never accumulate.
-    // Unconditional: reached whether the pipeline above succeeded, refused
-    // the bundle, or threw partway through staging.
-    try { fs.existsSync(tarPath) && fs.unlinkSync(tarPath); } catch { /* best-effort cleanup */ }
-    try { fs.existsSync(manifestPath) && fs.unlinkSync(manifestPath); } catch { /* best-effort cleanup */ }
+    // Unconditional backstop — reached whether the pipeline above succeeded,
+    // refused the bundle, or threw partway through staging. (A successful
+    // apply has already cleaned up and exited before reaching this.)
+    cleanupTempFiles();
   }
 }
 
@@ -592,11 +768,16 @@ async function runPipeline(db, dataDir, offer, {
 /**
  * Am I the OLD code, still serving after the junction already moved?
  *
- * The launcher case, and the last gap in hands-free updating. apply-update.ps1
- * stops and starts a Windows SERVICE; a launcher install has none, so the
- * script repoints `current` and the already-running Node keeps serving the
+ * Historically the last gap in hands-free updating: the retired apply-update.ps1
+ * stopped and started a Windows SERVICE, a launcher install has none, so the
+ * script repointed `current` and the already-running Node kept serving the
  * previous version — screen still showing the old number, owner reasonably
  * concluding the update failed (it happened three times on 2026-08-24).
+ *
+ * KEPT, though applyUpdate now exits 75 itself the moment it switches, because
+ * this is the only thing that notices a switch THIS process did not make: an
+ * outcome file left by a clinic that was still on the PowerShell apply when it
+ * updated, or a `current` moved by hand or by recover.cmd while the server ran.
  *
  * Detected from facts on disk only: a successful outcome file naming a version
  * newer than the one THIS process is running, plus `current` now resolving
@@ -635,7 +816,12 @@ export function staleAfterSwitch(dataDir, appRoot, {
   return installed;
 }
 export function scheduleUpdater(db, dataDir, opts = {}) {
-  const { intervalMs = 60_000, exitImpl = (code) => process.exit(code), ...runOpts } = opts;
+  const { intervalMs = 60_000, exitImpl = (code) => process.exit(code), ...rest } = opts;
+  // exitImpl is destructured out AND put back: this scheduler uses it for the
+  // staleAfterSwitch restart below, and applyUpdate needs the same seam to end
+  // a successful install. Two exits, one injection point — a test that stubs
+  // it must never have one of the two slip through to the real process.exit.
+  const runOpts = { ...rest, exitImpl };
   const tick = () => {
     // Checked BEFORE the pipeline: if the junction already moved under us,
     // this process is the old code and has nothing useful left to do — hand

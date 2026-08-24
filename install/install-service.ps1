@@ -1,4 +1,34 @@
 ﻿<#
+    ###################################################################
+    ##  RETIRED — NOTHING USES THIS SCRIPT. Kept for reference only. ##
+    ###################################################################
+
+    NODE_NATIVE_UPDATES_V1, 2026-08-24 (docs/plans/2026-08-24-node-native-updates.md).
+
+    Why it is retired, plainly:
+
+      * The Windows service it registers has never once been successfully
+        registered — see docs/HANDOVER.md §7.1. The dev account had no
+        administrator rights, so the "does the SCM report Running?" question
+        (the Error 1053 class) was never answered on any machine.
+      * EVERY real install is the clinic package instead: copy the folder,
+        double-click EasyMed.exe. That is what the owner ships, what the test
+        clinic runs, and what install/make-clinic-package.ps1 builds.
+      * A service needs elevation, and elevation is exactly what the current
+        update design refuses. An update is now "repoint a junction inside the
+        application folder and restart" — no installer, no service, no
+        registry, no Program Files, no firewall change, and no administrator.
+
+    Its two callers are gone with it: install/switch-version.ps1 and
+    install/apply-update.ps1 were deleted on 2026-08-24 and their work now
+    happens in Node (server/services/control/updater.js, applyUpdate()).
+    Set-CurrentJunction's lesson survives there in comments and in a test:
+    removing `current` removes the LINK, never the version it points at.
+
+    Do not extend this file. If a clinic ever genuinely needs a Windows
+    service, that is a new decision to take deliberately, on a machine that
+    has the administrator rights to prove it works.
+
 .SYNOPSIS
     Installs Easy-Med Local as a Windows service, running from a versioned
     directory so a later update can be installed by unpacking beside the

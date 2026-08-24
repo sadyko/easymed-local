@@ -46,8 +46,8 @@ gets compromised first — could not only forge a fake update, they could licens
 themselves a clinic for free, forever, with no way for you to revoke it. Two
 keys means a leaked release key only lets someone forge an update bundle, which
 still has to pass every other control in this system (ring publishing, an
-admin's explicit consent, a health-checked install) before it could ever reach
-a real clinic.
+admin's explicit consent, a signature the clinic re-checks before it unpacks
+anything) before it could ever reach a real clinic.
 
 The licence tool's `keygen` command is reused to make this key too — it is the
 same Ed25519 mechanism, it just needs to end up as a different file:
@@ -244,26 +244,32 @@ Nothing to do — but here is what is happening, so you can tell whether it work
   restarts (or whose admin presses «Проверить обновления») sees the offer.
   Every other clinic sees it at its next daily check-in.
 - **Each clinic admin decides when.** They consent to the version and pick the
-  hour; the install verifies the signature, backs the database up, switches, and
-  health-checks itself, rolling back on its own if the new version does not come
-  up. A clinic that never consents stays where it is and keeps working.
+  hour; at that hour the clinic verifies the signature, unpacks beside the
+  version it is running, takes a database snapshot, repoints its `current`
+  junction and restarts onto the new version. A clinic that never consents stays
+  where it is and keeps working.
 - **Two reported failures halt the release automatically** — every clinic that
   has not installed it yet stops being offered it. You do not have to be
   watching. To resume it after a fix, cut a new version; to release the halt by
   hand, use the panel.
+- **If a release goes wrong at a clinic**, the previous version is still on that
+  PC. `recover.cmd`, in the clinic's Easy-Med folder next to `EasyMed.exe`, is a
+  double-click that points it back — no administrator rights, no reinstall, data
+  untouched. Automatic rollback was removed with the PowerShell installer: it
+  health-checked the OLD process on a launcher install and so vouched for
+  switches it had never verified.
 
 **The failure the halt cannot see.** A release that fails *silently* reports
 nothing, so the counter never moves and the release looks healthy forever. That
 has actually happened here (four releases in a row, August 2026 — see
-CONTRIBUTING.md). It is why one gate stays manual and local, and why you run it
-**before** you tag:
+CONTRIBUTING.md). Both causes are now closed: the install step is ordinary Node
+that CI executes for real (`node --test server/services/control/apply-update.test.js`,
+run on every push), and the outcome file is written as plain JSON instead of
+BOM-prefixed PowerShell output nothing could parse.
 
-    node --test server/services/control/apply-spawn.smoke.test.js
-
-It is Windows-only — it spawns the real installer — which is exactly why CI
-(Linux) cannot run it for you. After the release goes out, confirm on the test
-clinic that a version really changed on screen, rather than trusting "no failures
-reported".
+There is no manual pre-tag gate any more. After the release goes out, still
+confirm on the test clinic that a version really changed on screen, rather than
+trusting "no failures reported".
 
 ---
 

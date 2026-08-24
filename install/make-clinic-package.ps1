@@ -11,6 +11,7 @@
 #   runtime\node.exe       bundled Node — the clinic PC needs nothing preinstalled
 #   versions\<v>\          the application, exactly as the signed release shipped it
 #   data\                  empty; the clinic's DB + licence identity appear on first run
+#   recover.cmd            double-click: point `current` back at the previous version
 #   README-УСТАНОВКА.txt   for the person doing the copy-paste
 #
 # The `current` junction is NOT created here on purpose: junctions do not survive
@@ -81,6 +82,17 @@ if (Test-Path (Join-Path $versionDir 'server\index.js')) {
 
 # ── 3. Build the launcher into the package root ────────────────────────────────
 & (Join-Path $PSScriptRoot 'build-launcher.ps1') -OutDir $Dest
+
+# NODE_NATIVE_UPDATES_V1 — the manual way back, in the package ROOT where a
+# clinic manager can find it, not buried in versions\<v>\install\. It replaces
+# apply-update.ps1's automatic post-switch rollback, which polled the OLD
+# process on a launcher install and therefore vouched for switches it never
+# verified. Copied from the repo (never generated here) so there is exactly one
+# copy to maintain. It is deliberately NOT updated by a release: an update
+# bundle unpacks into versions\<v>\, and the root copy is the one thing that
+# must keep working even when the newest version does not.
+Copy-Item (Join-Path $PSScriptRoot 'recover.cmd') (Join-Path $Dest 'recover.cmd') -Force
+Write-Host "Added recover.cmd (roll back to the previous version, no admin rights needed)"
 
 # ── 4. Bundled Node runtime ────────────────────────────────────────────────────
 # node.exe alone is a complete runtime for this app (no npm needed at the clinic);
@@ -155,6 +167,13 @@ EASY-MED — УСТАНОВКА В КЛИНИКЕ
   Приходят сами. Администратор видит предложение в разделе
   «Обновления», подтверждает и выбирает удобный час. Ничего
   скачивать вручную не нужно.
+  Обновление применяется при следующем запуске окна Easy-Med.
+
+ЕСЛИ ПОСЛЕ ОБНОВЛЕНИЯ ЧТО-ТО НЕ ТАК
+  Закройте окно Easy-Med и запустите  recover.cmd  (лежит рядом с
+  EasyMed.exe) — система вернётся к предыдущей версии, она никуда
+  не удаляется. Права администратора не нужны, данные клиники не
+  затрагиваются. После этого снова запустите EasyMed.exe.
 '@
 # Every 8000 in the template is a port reference, so a blanket replace keeps
 # the whole README truthful for a pinned-port package with one line.

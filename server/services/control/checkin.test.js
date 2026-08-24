@@ -1018,12 +1018,17 @@ test('acceptance: vendor sets a collect subset, two check-ins later the numbers 
     'a throwing stats builder must never cost this clinic its licence renewal, even against the real control plane');
 });
 
-// --- readJsonFile: the BOM PowerShell writes ---------------------------------
+// --- readJsonFile: the BOM the retired PowerShell apply wrote -----------------
+//
+// Nothing WRITES a BOM any more (updater.js's writeOutcome is Node), but files
+// the old apply-update.ps1 produced still sit in clinics' data\ folders — a
+// clinic updating from one of those versions must be able to read the outcome
+// of its own last update, so the reader can never stop stripping it.
 
-test('readJsonFile: parses a file written WITH a UTF-8 BOM — what apply-update.ps1 actually produces', () => {
+test('readJsonFile: parses a file written WITH a UTF-8 BOM — what the retired PowerShell apply left on clinic disks', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-bom-'));
   const file = path.join(dir, 'update-result.json');
-  // ﻿ prefix = exactly what PowerShell 5.1's Out-File writes by default.
+  // ﻿ prefix = exactly what PowerShell 5.1's Out-File wrote by default.
   fs.writeFileSync(file, '﻿' + JSON.stringify({ version: '1.2.3', ok: true }), 'utf8');
   // Proof the naive read this replaced could not do it:
   assert.throws(() => JSON.parse(fs.readFileSync(file, 'utf8')));

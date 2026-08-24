@@ -249,10 +249,15 @@ if (isMain) {
   // clinic. appRoot is passed explicitly as THIS process's own ROOT rather
   // than letting updater.js recompute it from its own module path — the two
   // must never be able to disagree about what "the app directory" is.
-  // port likewise: apply-update.ps1 health-checks whatever port we hand it,
-  // and a pinned-port clinic (port.txt) health-checked on the default 8000
-  // refuses every update — found on the owner's own 8712 test clinic 2026-08-23.
-  scheduleUpdater(db, DATA_DIR, { appRoot: ROOT, port: PORT });
+  //
+  // NODE_NATIVE_UPDATES_V1 — `port` used to be passed too, because
+  // apply-update.ps1 health-checked whatever port it was handed, and a
+  // pinned-port clinic (port.txt) health-checked on the default 8000 refused
+  // every update (found on the owner's own 8712 test clinic 2026-08-23). The
+  // apply no longer health-checks anything: it repoints the junction in this
+  // process and exits 75. Nothing about updating depends on which port this
+  // server bound any more.
+  scheduleUpdater(db, DATA_DIR, { appRoot: ROOT });
 
   // SYSTEM_SETTINGS_V1 — the daily database copy, same shape as the two
   // schedulers above: unref'd timers, every tick self-contained. First tick

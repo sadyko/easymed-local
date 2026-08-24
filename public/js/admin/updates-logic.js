@@ -185,12 +185,14 @@ export function formatScheduled(consent) {
  * plan's own words). Never fires for a SUCCESSFUL last_result — that is
  * whatsNewState()'s job below, not this one's.
  *
- * `lastResult` is install/apply-update.ps1's outcome file
- * (`Write-UpdateOutcome`): `{version, from, ok, db, at, detail}`. Every field
- * but `ok` is treated as possibly-missing/malformed — that file is still
- * under active development on another branch of this same task, and a
- * corrupt or half-written outcome file must never crash this screen (same
- * defensive posture as updates.js's own readLastResult()).
+ * `lastResult` is the updater's own outcome file, `data/update-result.json`
+ * (server/services/control/updater.js, `writeOutcome`): `{version, from, ok,
+ * db, at, detail}`. The shape is unchanged from the retired apply-update.ps1's
+ * `Write-UpdateOutcome` on purpose — files that script wrote still sit on
+ * clinic disks and must keep rendering. Every field but `ok` is treated as
+ * possibly-missing/malformed: a corrupt or half-written outcome file must
+ * never crash this screen (same defensive posture as updates.js's own
+ * readLastResult()).
  *
  * @param {object|null} lastResult
  * @param {string|null} currentVersion  what update_status.current_version says NOW — the version the clinic rolled back TO, not `lastResult.from` (the server is the live source of truth for what is actually running)
@@ -202,11 +204,13 @@ export function updateOutcomeMessage(lastResult, currentVersion) {
   const dateFragment = d && !Number.isNaN(d.getTime()) ? ' ' + formatRuDate(d) : '';
   const rolledTo = currentVersion || '?';
   const base = `Обновление до ${failedVersion} не удалось${dateFragment} — система вернулась к ${rolledTo} и работает. Мы попробуем снова после следующего одобрения.`;
-  // apply-update.ps1's `db` vocabulary: only 'restored' means PATIENT DATA
+  // The outcome file's `db` vocabulary: only 'restored' means PATIENT DATA
   // itself was rolled back, not just code — material enough to a clinic
   // manager that it must never be buried in a console log they will never
   // open (see the plan's own "restoring it destroys anything entered since
-  // the backup" warning).
+  // the backup" warning). Nothing produces 'restored' any more — the Node
+  // apply never touches the database, it only snapshots it before switching —
+  // but old outcome files on clinic disks still can, so this stays.
   if (lastResult.db === 'restored') {
     return base + ' База данных также была восстановлена из резервной копии, сделанной перед обновлением.';
   }
@@ -252,19 +256,25 @@ export function compareVersions(a, b) {
  * «Установлено, но ещё не работает» — the notice for an update that applied
  * successfully while the OLD code is still the running process.
  *
- * This is the normal launcher case: apply-update.ps1 repoints the `current`
- * junction, but a launcher install has no Windows service to stop and start,
- * so the already-running Node keeps serving the previous version until the
- * Easy-Med window is closed and reopened (docs/HANDOVER.md §7). Without this
- * message the screen shows the OLD version number and no explanation — which
+ * This was the normal launcher case: the retired apply-update.ps1 repointed
+ * the `current` junction, but a launcher install has no Windows service to
+ * stop and start, so the already-running Node kept serving the previous
+ * version until the Easy-Med window was closed and reopened. Without this
+ * message the screen showed the OLD version number and no explanation — which
  * is indistinguishable from the update having failed, and cost the owner a
  * day of "why is nothing updating?" on 2026-08-24.
+ *
+ * KEPT although applyUpdate() now exits 75 and the launcher relaunches within
+ * seconds: a clinic mid-upgrade (still on a version whose updater was the
+ * PowerShell one), or one whose window was closed at exactly the wrong moment,
+ * still lands here — and this message is the only thing that tells them the
+ * update worked.
  *
  * Deliberately requires the finished version to be NEWER than the running
  * one, not merely different: a stale result file from an older update (the
  * clinic has since moved past it) must not claim a restart is pending.
  *
- * @param {object|null} lastResult   apply-update.ps1's outcome file
+ * @param {object|null} lastResult   the updater's outcome file
  * @param {string|null} currentVersion  what the running server reports
  * @returns {string|null}
  */

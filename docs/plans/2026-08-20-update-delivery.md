@@ -1,5 +1,12 @@
 # Update Delivery (Plan 4) Implementation Plan
 
+> **PARTLY SUPERSEDED (2026-08-24).** The PowerShell apply this plan specifies
+> (`install/apply-update.ps1`, calling Plan 3's `switch-version.ps1`) was deleted
+> and replaced by an in-process Node apply — see
+> `docs/plans/2026-08-24-node-native-updates.md`. Everything else here still
+> stands: signed bundles, rings, consent, the chosen hour, the outcome file and
+> the two-failure auto-halt are unchanged.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Two developers push to a private GitHub repository; a maintainer tags a release; GitHub builds and signs a bundle; the vendor publishes it to a ring; each clinic's admin approves it and it installs itself at 03:00, rolling back by itself if anything goes wrong.

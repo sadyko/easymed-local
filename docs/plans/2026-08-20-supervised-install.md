@@ -1,5 +1,13 @@
 # Supervised Install (Plan 3) Implementation Plan
 
+> **PARTLY SUPERSEDED (2026-08-24).** The versioned layout (`versions/<v>/` plus
+> a `current` junction) and `EASYMED_DATA_DIR` are exactly as specified and are
+> what every clinic runs. The WINDOWS SERVICE is not: it was never once
+> successfully registered, every install is the `EasyMed.exe` launcher, and
+> `install-service.ps1` / `switch-version.ps1` are retired and deleted
+> respectively. Switching versions now happens in Node — see
+> `docs/plans/2026-08-24-node-native-updates.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Easy-Med runs as a Windows service from a versioned directory, with its data outside the application folder, so a future release can be installed by swapping which version the service points at — and rolled back the same way.
