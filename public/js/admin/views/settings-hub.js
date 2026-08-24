@@ -122,20 +122,16 @@ const GROUPS = [
             // раздела, которого в меню не было. Отсюда и «нельзя изменить
             // название компании»: менять было негде, а правки в дизайнере
             // затирались при следующей загрузке.
-            { label: 'Компания',            desc: 'Название, логотип, цвет и контакты клиники — во всех документах', icon: 'ID', live: true, action: nav('documents-settings') },
             { label: 'Документы',           desc: 'Печатные шаблоны и настройки документов',             icon: 'Doc',      live: true, action: nav('documents') },
             { label: 'Скидки пациентов',    desc: 'Промокоды, подарочные карты и сертификаты',           icon: 'Coins',    live: true, action: () => openSection('patient_discounts') },
-            { label: 'API',                 desc: 'Токены интеграции для партнёров',                     icon: 'Settings', live: true, action: () => openSection('api_tokens') },
             // TELEGRAM_BOT_V1 — токен бота и режимы выдачи документов пациентам.
             // Раздел админский: isRouteAllowed('telegram-settings') пускает только
             // полный доступ, остальные упрутся в отказ на самом экране.
-            { label: 'Telegram-бот',        desc: 'Пациент получает свои документы в Telegram по номеру телефона', icon: 'Bot', live: true, action: nav('telegram-settings') },
             // TELEPHONY_V1 — интеграция колл-центра Binotel: ключи, опрос,
             // WebHook-и, журнал звонков. Раздел админский тем же правилом, что
             // Telegram-бот (isRouteAllowed('telephony-settings') → false для
             // настроенных ролей), а без модуля `callcenter` маршрутизатор сам
             // покажет стандартный экран «Модуль не подключён».
-            { label: 'Телефония',           desc: 'Звонки Binotel: подключение, опрос и журнал звонков', icon: 'Headset', live: true, action: nav('telephony-settings') },
             // UPDATE_DELIVERY_V1 — the approval screen (views/updates.js) is
             // also reachable from its own quiet banner; this row is the
             // other of the two entry points the plan calls for.
@@ -144,6 +140,29 @@ const GROUPS = [
             // danger zone. The ROUTE ID stays 'updates' on purpose — deep
             // links and admin.js's lockout exemption both key on the id, not
             // this label (see views/updates.js's own header).
+        ],
+    },
+    {
+        // SETTINGS_GROUPS_V2 (2026-08-24, owner's own grouping) — the four
+        // integration/plumbing tiles moved out of «Основное», which had grown
+        // to eleven unrelated rows. These are the ones a technician touches
+        // when connecting the clinic to something, not ones a receptionist
+        // opens daily.
+        title: 'Системные настройки', icon: 'Settings', color: { bg: '#e9ebfb', fg: '#4b52b0' },
+        items: [
+            { label: 'CRM-канбан',          desc: 'Колонки воронки, источники заявок и маршрут звонков в карточки', icon: 'Grid', live: true, action: nav('crm-settings') },
+            { label: 'Телефония',           desc: 'Звонки Binotel: подключение, опрос и журнал звонков', icon: 'Headset', live: true, action: nav('telephony-settings') },
+            { label: 'Telegram-бот',        desc: 'Пациент получает свои документы в Telegram по номеру телефона', icon: 'Bot', live: true, action: nav('telegram-settings') },
+            { label: 'API',                 desc: 'Токены интеграции для партнёров',                     icon: 'Settings', live: true, action: () => openSection('api_tokens') },
+        ],
+    },
+    {
+        // The clinic's own identity and the state of the installation —
+        // the two things that are about Easy-Med itself rather than about
+        // how the clinic works.
+        title: 'Настройки Easy-Med', icon: 'Shield', color: { bg: '#e4f3f1', fg: '#1f8a80' },
+        items: [
+            { label: 'Компания',            desc: 'Название, логотип, цвет и контакты клиники — во всех документах', icon: 'ID', live: true, action: nav('documents-settings') },
             { label: 'Система',             desc: 'Обновления, активация, резервные копии и данные клиники', icon: 'Shield', live: true, action: nav('updates') },
         ],
     },

@@ -66,6 +66,7 @@ import { renderReferralSettings } from './admin/views/referral-settings.js?v=rr1
 import { renderCashierSettings } from './admin/views/cashier-settings.js?v=shiftmode1';   // CASHIER_SHIFT_MODE_V1
 import { renderTelegramSettings } from './admin/views/telegram-settings.js?v=tg3';   // TELEGRAM_BOT_V1
 import { renderTelephonySettings } from './admin/views/telephony-settings.js?v=tel1';   // TELEPHONY_V1 — Binotel call-center integration
+import { renderCrmSettings } from './admin/views/crm-settings.js?v=crmcfg1';   // CRM_CONFIG_V1 — configurable kanban stages/sources/call routing
 import { renderTelegramChat } from './admin/views/telegram-chat.js?v=tgc4';   // TELEGRAM_CHAT_V1
 import { renderConsultationTypes } from './admin/views/consultation-types.js?v=ct5';   // CONSULTATION_TYPES_RESTORE
 import { renderPharmacy }    from './admin/views/pharmacy.js?v=ph2';   // PHARMACY_V1
@@ -162,6 +163,7 @@ const CRUMBS = {
     'api-settings': ['Insights', 'Settings', 'API'],   // CLINIC_API_V1
     'telegram-settings': ['Insights', 'Settings', 'Telegram-бот'],   // TELEGRAM_BOT_V1
     'telephony-settings': ['Insights', 'Settings', 'Телефония'],   // TELEPHONY_V1
+    'crm-settings': ['Insights', 'Settings', 'CRM-канбан'],   // CRM_CONFIG_V1
     'telegram-chat': ['Insights', 'Чат с пациентами'],   // TELEGRAM_CHAT_V1
     'consultation-types': ['Insights', 'Settings', 'Консультации врачей'],   // CONSULTATION_TYPES_RESTORE
     'doctor-pay': ['Insights', 'Settings', 'Зарплата врачей'],   // DOCTOR_PAY_BULK_V1
@@ -872,6 +874,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'api-settings': return void await renderApiSettings(viewRoot, ctx);   // CLINIC_API_V1
             case 'telegram-settings': return void await renderTelegramSettings(viewRoot, ctx);   // TELEGRAM_BOT_V1
             case 'telephony-settings': return void await renderTelephonySettings(viewRoot, ctx);   // TELEPHONY_V1
+            case 'crm-settings': return void await renderCrmSettings(viewRoot, ctx);   // CRM_CONFIG_V1
             case 'telegram-chat': return void await renderTelegramChat(viewRoot, ctx);   // TELEGRAM_CHAT_V1
             case 'doctor-pay': return void await renderDoctorPay(viewRoot, ctx);   // DOCTOR_PAY_BULK_V1
             case 'referral-settings': return void await renderReferralSettings(viewRoot);   // REFERRAL_REWARDS_V1

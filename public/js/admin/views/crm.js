@@ -9,30 +9,64 @@ import { openVisitWizard } from './visit-wizard.js?v=aug17e';   // CRM_V4 — к
 import { digitsOf, phoneLikePattern, filterPhoneMatches, uzLocalDigits, MIN_PHONE_DIGITS } from './crm-phone-match.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { filterServicePool, serviceGroupCounts } from './service-search.js';   // CRM_SERVICE_FILTER_V1
+import { boardConfig } from '../crm-settings-logic.js?v=crmcfg1';   // CRM_CONFIG_V1
 
-const SOURCES = [
-    ['call', 'Звонок'], ['instagram', 'Instagram'], ['telegram', 'Telegram'],
-    ['website', 'Сайт'], ['walk_in', 'Пришёл сам'], ['referral', 'Рекомендация'], ['other', 'Другое'],
-];
-const SOURCE_RU = Object.fromEntries(SOURCES);
-// CRM_V6 — воронка из 8 статусов (mig 046). «Пришёл» = конверсия: только через
-// попап регистрации/привязки пациента, чтобы у каждого пришедшего была карта.
-const STATUSES = [
-    ['in_process',    'В обработке',           'info'],
-    ['recall',        'Перезвонить',           'warn'],
-    ['scheduled',     'Записан',               'purple'],
-    ['approved',      'Подтверждён',           'teal'],
-    ['came',          'Пришёл',                'ok'],
-    ['no_show',       'Не пришёл',             'crit'],
-    ['stopped',       'Обработка остановлена', ''],
-    ['not_qualified', 'Нецелевой',             ''],
-];
-const STATUS_RU = Object.fromEntries(STATUSES.map(([k, l, kind]) => [k, [l, kind]]));
-const CONVERT_STATUS = 'came';
+// CRM_CONFIG_V1 — воронка перестала быть константой.
+//
+// Колонки, их цвета, порядок и видимость, а также список источников теперь
+// живут в базе (crm_stages / crm_sources, миграция 077) и правятся на экране
+// Настройки → «CRM-канбан». Сюда они приезжают одним вызовом crm_config_get.
+//
+// Значения в crm-settings-logic.js — ТА ЖЕ жёстко зашитая воронка, что была
+// здесь раньше (mig 046), и остаются ИСКЛЮЧИТЕЛЬНО как запасной вариант: если
+// RPC не ответил (клиника на старой сборке получает 501, сеть отвалилась,
+// ответ пустой), доска рисуется ровно так, как вчера. Экран настроек не должен
+// иметь возможности обнулить доску — поэтому неудачная загрузка НИЧЕГО не
+// меняет, в том числе не откатывает уже загруженную конфигурацию.
+//
+// «Пришёл» перестало быть именем: конверсия — это колонка с kind === 'won',
+// единственная, через которую регистрируется пациент. Сам список правил
+// (цвета, значения по умолчанию, разбор ответа) лежит в crm-settings-logic.js,
+// чтобы доска и экран настроек не разъехались.
+let SOURCES, SOURCE_RU, STATUSES, STATUS_RU, CONVERT_STATUS, ACTIVE_STATUSES, LOST_STATUSES;
+function applyBoardConfig(data) {
+    const c = boardConfig(data);
+    SOURCES = c.sources; SOURCE_RU = c.sourceRu;
+    STATUSES = c.statuses; STATUS_RU = c.statusRu;
+    CONVERT_STATUS = c.convertStatus;
+    ACTIVE_STATUSES = c.activeStatuses; LOST_STATUSES = c.lostStatuses;
+}
+applyBoardConfig(null);   // запасная воронка — до первого ответа сервера доска уже рабочая
+async function loadBoardConfig() {
+    const { data, error } = await supabase.rpc('crm_config_get', {});
+    // Молча остаёмся на запасной воронке: доска — рабочий экран регистратуры,
+    // и красная плашка «не удалось загрузить настройки» над полностью
+    // работающими карточками пугала бы без причины. Настройки не применились —
+    // это видно на экране настроек, а не здесь.
+    if (error || !data) return;
+    applyBoardConfig(data);
+}
+
+// CRM_CONFIG_V1 — ключи, на которые завязана АВТОМАТИКА, а не только вид.
+//
+// 'in_process' / 'scheduled' / 'no_show' — сид миграции 077, и обычно они на
+// месте. Но колонку без заявок владелец вправе удалить на экране настроек, а
+// после 077 crm_requests.status ссылается на crm_stages: вставка с исчезнувшим
+// ключом упала бы «Не удалось создать заявку», и регистратура осталась бы без
+// объяснения. Поэтому каждый такой ключ проверяется по ЖИВОЙ конфигурации, а
+// запасной вариант — первая видимая колонка (начало воронки).
+function stageKey(preferred) {
+    if (STATUSES.some(([k]) => k === preferred)) return preferred;
+    return STATUSES.length ? STATUSES[0][0] : CONVERT_STATUS;
+}
+// Есть ли такая колонка вообще: для фоновой автоматики, которой лучше не
+// сработать, чем сработать не туда.
+const hasStage = (key) => STATUSES.some(([k]) => k === key);
+// Источник новой заявки по умолчанию — первый видимый, а не жёсткое 'call':
+// источник тоже редактируется, и 'call' может быть переименован или скрыт.
+const defaultSource = () => (SOURCES.length ? SOURCES[0][0] : 'call');
 // CRM_KANBAN_PAGE_V1 — сколько карточек рисуется в колонке сразу.
 const KANBAN_PAGE = 20;
-const ACTIVE_STATUSES = ['in_process', 'recall', 'scheduled', 'approved'];
-const LOST_STATUSES = ['no_show', 'stopped', 'not_qualified'];
 
 // CRM_FILTERS_V1 — источник и период сужают доску. Живут в state, потому что
 // paintBody() перерисовывает только тело, без повторного запроса к базе.
@@ -117,6 +151,9 @@ export async function renderCrm(container, { onNavigate } = {}) {
     refs.onNavigate = onNavigate;
     refs.root = h('div', { class: 'fade-in' });
     container.appendChild(refs.root);
+    // CRM_CONFIG_V1 — воронка читается ДО первой отрисовки: иначе доска
+    // моргнула бы запасными колонками и тут же перерисовалась настроенными.
+    await loadBoardConfig();
     await paint();
 }
 
@@ -127,8 +164,13 @@ async function load() {
     try {
         const d = new Date(); const pad = (n) => String(n).padStart(2, '0');
         const today = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
-        await supabase.from('crm_requests').update({ status: 'no_show' })
-            .in('status', ['scheduled', 'approved']).lt('scheduled_date', today);
+        // CRM_CONFIG_V1 — если колонку «Не пришёл» из воронки убрали, автоматика
+        // просто не срабатывает: молча переложить заявку в другую колонку было бы
+        // хуже, чем оставить её там, где она есть.
+        if (hasStage('no_show')) {
+            await supabase.from('crm_requests').update({ status: 'no_show' })
+                .in('status', ['scheduled', 'approved']).lt('scheduled_date', today);
+        }
     } catch (e) { /* фоновая автоматика — молча */ }
     const { data, error } = await supabase.from('crm_requests')
         .select('*, patients(id, full_name, mrn), users(full_name), services(id, name, price)')
@@ -380,7 +422,7 @@ async function paint() {
                     // раз нажали «показать ещё», она не должна.
                     h('span', { class: 'muted', style: { fontSize: '12px', fontWeight: 700 } }, String(colRows.length)),
                     h('span', { class: 'grow' }),
-                    key === 'in_process' ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: 'Новая заявка', onclick: () => requestModal(null) }, '+') : null),
+                    key === stageKey('in_process') ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: 'Новая заявка', onclick: () => requestModal(null) }, '+') : null),
                 list,
                 shown < colRows.length ? more : null);
             board.appendChild(col);
@@ -878,7 +920,7 @@ async function paint() {
         }, 'Не он? Заполните остальные поля — заявка создастся как новый лид.');
 
         // Источник — чипы вместо выпадающего списка: видно всё сразу, один клик.
-        let srcChosen = r ? (r.source || 'call') : 'call';
+        let srcChosen = r ? (r.source || defaultSource()) : defaultSource();
         const srcRow = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } });
         function paintSrc() {
             clear(srcRow);
@@ -1088,7 +1130,9 @@ async function paint() {
             if (!phone && !linkedPatient) { toast('Укажите телефон.', 'fail'); return null; }
             const payload = { full_name: name, phone, source: srcChosen, note: noteInp.value.trim(), service_id: svcChosen || null, patient_id: linkedPatient ? linkedPatient.id : null, scheduled_date: schedInp.value || null };
             // Дата записи назначена — активная заявка сама переходит в «Записан».
-            if (isEdit && schedInp.value && ['in_process', 'recall'].includes(r.status)) payload.status = 'scheduled';
+            // CRM_CONFIG_V1 — правило прежнее (дата назначена → «Записан»), но
+            // целевая колонка проверяется: если её удалили, статус не трогаем.
+            if (isEdit && schedInp.value && ['in_process', 'recall'].includes(r.status) && hasStage('scheduled')) payload.status = 'scheduled';
             if (isEdit) {
                 const { error } = await supabase.from('crm_requests').update(payload).eq('id', r.id);
                 if (error) { toast(error.message, 'fail'); return null; }
@@ -1101,7 +1145,7 @@ async function paint() {
                 return r;
             }
             const { data, error } = await supabase.from('crm_requests')
-                .insert({ ...payload, status: schedInp.value ? 'scheduled' : 'in_process', ...(uid() != null ? { created_by: uid() } : {}) })
+                .insert({ ...payload, status: schedInp.value ? stageKey('scheduled') : stageKey('in_process'), ...(uid() != null ? { created_by: uid() } : {}) })
                 .select().single();
             if (error) { toast(error.message, 'fail'); return null; }
             // insert не возвращает join'ы — подставляем услугу из каталога, иначе

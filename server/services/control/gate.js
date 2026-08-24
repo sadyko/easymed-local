@@ -28,6 +28,11 @@ const READ_ONLY_RPCS = new Set([
   // UPDATE_DELIVERY_V1 — the approval screen's own status read; it changes
   // nothing, only reports the offer/approval/schedule/last result.
   'update_status',
+  // CRM_CONFIG_V1 — the kanban's own vocabulary (columns, sources, call
+  // routing). A pure read, and the board cannot be drawn without it: a
+  // licence-lapsed clinic may read but not write, and "read" must not mean
+  // "a CRM board with no column headings".
+  'crm_config_get',
 ]);
 
 // The way back in. These must work while locked or a clinic that wants to pay

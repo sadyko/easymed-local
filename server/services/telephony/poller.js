@@ -15,6 +15,11 @@ import { readSettingsRow, getCredentials, recordPoll, noteCallSeen } from './set
 // by the operator ends up not found by the call log — the exact failure
 // telegram/documents.js documents for the bot.
 import { findPatientsByPhone } from '../telegram/documents.js';
+// CRM_CONFIG_V1 — «звонок становится карточкой». Wired into recordCall below
+// rather than into the poll loop and the webhook separately, for the same
+// reason recordCall itself is shared: two call sites would be two chances for
+// one call to produce two leads — or, worse, none.
+import { leadFromCall } from '../crm/lead-from-call.js';
 
 // Cursor overlap. Binotel's since-methods key on the call's startTime; a call
 // that STARTED just before our last poll but was still ringing at poll time
@@ -93,7 +98,29 @@ export function recordCall(db, d, source) {
     raw: JSON.stringify(d),
     source,
   });
-  if (info.changes) noteCallSeen(db, startedAt);
+  if (info.changes) {
+    noteCallSeen(db, startedAt);
+    // CRM_CONFIG_V1 — only on a REAL insert, never on the ON CONFLICT no-op:
+    // that is what makes poll-and-webhook double delivery produce one lead
+    // instead of two, by exactly the constraint that already de-duplicates
+    // the call itself.
+    //
+    // Wrapped, and deliberately not allowed to fail the call. The call row is
+    // the RECORD; the lead is a convenience built on top of it. A broken
+    // routing table must never cost the clinic the fact that the phone rang —
+    // and on the webhook path a throw here would answer 500 to Binotel, which
+    // then retries the same already-filed call seven times over 38 hours.
+    try {
+      leadFromCall(db, {
+        id: info.lastInsertRowid,
+        disposition: d.disposition == null ? '' : String(d.disposition),
+        external_number: externalNumber,
+        patient_id: matches.length ? matches[0].id : null,
+      });
+    } catch (e) {
+      console.warn('[telephony] lead not created for call:', e && e.message);
+    }
+  }
   return info.changes > 0;
 }
 

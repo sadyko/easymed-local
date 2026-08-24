@@ -340,6 +340,14 @@ export function isRouteAllowed(view) {
     // тут делать нечего. Полный доступ (_effective === null) уже пропущен выше;
     // сервер (admin-only RPC) отказывает второй раз, независимо от этой строки.
     if (view === 'telephony-settings') return false;
+    // CRM_CONFIG_V1 — то же правило, что у Телефонии строкой выше. Этот экран
+    // задаёт САМУ воронку: колонки доски, колонку конверсии (единственный путь
+    // регистрации пациента) и то, из каких звонков система делает заявки.
+    // Ошибка здесь ломает CRM всей клиники, поэтому раздел админский целиком,
+    // включая чтение. Полный доступ (_effective === null) уже пропущен выше;
+    // сервер (admin-only crm_config_save) отказывает второй раз, независимо от
+    // этой строки.
+    if (view === 'crm-settings') return false;
     if (view === 'doctor-pay') return _effective.has('doctor-pay') || _effective.has('settings:doctor_pay') || _effective.has('settings');   // DOCTOR_PAY_BULK_V1
     if (view === 'referral-settings') return _effective.has('referral-settings') || _effective.has('settings');   // REFERRAL_REWARDS_V1
     if (view === 'cashier-settings') return _effective.has('cashier-settings') || _effective.has('settings:cashiers') || _effective.has('settings');   // CASHIER_SHIFT_MODE_V1

@@ -9,7 +9,10 @@ export const REGISTRY = {
   // CRM_V1 (mig 044) — журнал обращений; конверсия в пациента выставляет
   // patient_id + status 'converted' (обычный /api/db, денег нет).
   crm_requests: {
-    read:  { roles: ALL_STAFF, columns: ['id','full_name','phone','source','note','status','patient_id','assigned_to','created_by','created_at','updated_at','service_id','scheduled_date'] },   // service_id: CRM_V3 (045); scheduled_date: CRM_V7 (047)
+    read:  { roles: ALL_STAFF, columns: ['id','full_name','phone','source','note','status','patient_id','assigned_to','created_by','created_at','updated_at','service_id','scheduled_date','call_id'] },   // service_id: CRM_V3 (045); scheduled_date: CRM_V7 (047); call_id: CRM_CONFIG_V1 (077)
+    // call_id is READ-ONLY on purpose: only lead-from-call.js writes it, and it
+    // is the card's proof that a lead came from a real phone call. A screen
+    // able to set it could claim a call that never happened.
     // CALLCENTER_ROLE_V1 — running this board IS the call centre's job. Deleting
     // a request stays admin-only: the operator closes a lead by status, and the
     // journal is what the clinic audits calls with.

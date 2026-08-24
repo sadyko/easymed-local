@@ -22,6 +22,7 @@ import { cashierReport } from './cashier-report.js';   // CASHIER_REPORT_V1
 import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
 import { licenceStatus, licenceUnlock, licenceEnroll, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
 import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRecentCalls } from './telephony.js';   // TELEPHONY_V1
+import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
 import { backupList, backupCreate, backupRestore, factoryReset } from './backup.js';   // SYSTEM_SETTINGS_V1
 
@@ -176,6 +177,15 @@ export const RPC = {
   telephony_settings_save:  (db, args, user) => telephonySettingsSave(db, args, user),
   telephony_test:           (db, args, user) => telephonyTest(db, args, user),
   telephony_recent_calls:   (db, args, user) => telephonyRecentCalls(db, args, user),
+
+  // CRM_CONFIG_V1 — Настройки → «CRM-канбан»: колонки доски, источники и
+  // «звонок -> карточка» (миграция 077). _get читают И доска, и экран
+  // настроек — это словарь, из которого рисуется канбан, поэтому он открыт
+  // всем сотрудникам и стоит в READ_ONLY_RPCS (control/gate.js): клиника с
+  // просроченной лицензией обязана видеть свою доску. _save — только admin,
+  // обычное 402-ограничение, ничего always-allowed.
+  crm_config_get:           (db, args, user) => crmConfigGet(db, args, user),
+  crm_config_save:          (db, args, user) => crmConfigSave(db, args, user),
 
   // LICENCE_CORE_V1 — the three that stay reachable while locked (see
   // control/gate.js ALWAYS_ALLOWED_RPCS). Without them a clinic that wants to

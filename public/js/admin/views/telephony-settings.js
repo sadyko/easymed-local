@@ -162,7 +162,7 @@ function connectionCard() {
                 toast('Сохранено.', 'success');
                 paint();
             });
-        } }, Icon('Check', { size: 13 }), ' Сохранить подключение');
+        } }, Icon('Check', { size: 13 }), ' ', tr('Сохранить подключение'));
 
     const testBtn = h('button', { class: 'btn', type: 'button',
         onclick: async () => {
@@ -190,13 +190,13 @@ function connectionCard() {
                     else setResult(false, e.message || tr('Не удалось подключиться.'));
                 }
             });
-        } }, Icon('Refresh', { size: 13 }), ' Проверить подключение');
+        } }, Icon('Refresh', { size: 13 }), ' ', tr('Проверить подключение'));
 
     card.appendChild(h('div', { class: 'row', style: { gap: '8px', marginTop: '12px' } }, saveBtn, testBtn));
     card.appendChild(resultLine);
 
     return h('div', { class: 'card', style: { marginBottom: '16px' } },
-        h('div', { class: 'card-header' }, h('h3', null, Icon('Phone', { size: 16 }), ' Подключение')),
+        h('div', { class: 'card-header' }, h('h3', null, Icon('Phone', { size: 16 }), ' ', tr('Подключение'))),
         card);
 }
 
@@ -256,7 +256,7 @@ function pollingCard() {
         'Звонки появляются в журнале с задержкой до одного интервала опроса. Карточка звонка прямо в момент вызова — только через WebHook-и.'));
 
     return h('div', { class: 'card', style: { marginBottom: '16px' } },
-        h('div', { class: 'card-header' }, h('h3', null, Icon('Refresh', { size: 16 }), ' Опрос звонков')),
+        h('div', { class: 'card-header' }, h('h3', null, Icon('Refresh', { size: 16 }), ' ', tr('Опрос звонков'))),
         card);
 }
 
@@ -335,7 +335,7 @@ function callsCard() {
     refs.callsBody = h('div');
     paintCalls();
     return h('div', { class: 'card' },
-        h('div', { class: 'card-header' }, h('h3', null, Icon('Headset', { size: 16 }), ' Последние звонки')),
+        h('div', { class: 'card-header' }, h('h3', null, Icon('Headset', { size: 16 }), ' ', tr('Последние звонки'))),
         refs.callsBody);
 }
 
