@@ -273,8 +273,14 @@ jobs:
           # config are created 0600, never briefly readable by anything else on
           # the runner.
           umask 077
-          BODY_FILE="$RUNNER_TEMP/cp-deploy-body.json"
-          CURL_CFG="$RUNNER_TEMP/cp-deploy.curlrc"
+          # EXPORTED, not written to $GITHUB_ENV: that file only reaches LATER
+          # steps, so the node -e below — which runs inside THIS step — saw
+          # process.env.BODY_FILE as undefined and died with ERR_INVALID_ARG_TYPE.
+          # That is exactly how v0.4.1 failed to publish on the first real run of
+          # this step. The $GITHUB_ENV lines stay as well, because the cleanup
+          # step at the end of the job is a separate step and needs them there.
+          export BODY_FILE="$RUNNER_TEMP/cp-deploy-body.json"
+          export CURL_CFG="$RUNNER_TEMP/cp-deploy.curlrc"
           echo "BODY_FILE=$BODY_FILE" >> "$GITHUB_ENV"
           echo "CURL_CFG=$CURL_CFG" >> "$GITHUB_ENV"
 
