@@ -57,6 +57,18 @@ function sig(rows, keys) {
     return JSON.stringify((rows || []).map((r) => keys.map((k) => r[k])));
 }
 const STAGE_SIG_KEYS = ['key', 'label', 'color', 'kind', 'is_active'];
+
+// Take a config from the server AND record what it looked like. One function,
+// because there are two paths here (first load, and the reload after a save)
+// and patching only one is exactly the bug this replaces: the baseline stayed
+// undefined on first load, so «Изменения не сохранены» showed on a screen
+// nobody had touched — which teaches the owner to ignore the one marker that
+// is supposed to mean something.
+function adoptConfig(raw) {
+    state.cfg = shapeConfig(raw);
+    state.baseStages = sig(state.cfg.stages, STAGE_SIG_KEYS);
+    state.baseSources = sig(state.cfg.sources, SOURCE_SIG_KEYS);
+}
 const SOURCE_SIG_KEYS = ['key', 'label', 'is_active'];
 const state = { cfg: null, busy: false };
 let refs = { root: null, body: null, stages: null, sources: null };
@@ -94,7 +106,7 @@ export async function renderCrmSettings(container) {
 
     body.appendChild(h('div', { class: 'muted', style: { padding: '24px' } }, 'Загрузка…'));
     try {
-        state.cfg = shapeConfig(await rpc('crm_config_get', {}));
+        adoptConfig(await rpc('crm_config_get', {}));
     } catch (e) {
         clear(body);
         if (isNotImplemented(e)) {
@@ -133,9 +145,7 @@ function paint() {
 async function reload(fresh) {
     const cfg = (fresh && typeof fresh === 'object' && (Array.isArray(fresh.stages) || Array.isArray(fresh.sources)))
         ? fresh : await rpc('crm_config_get', {});
-    state.cfg = shapeConfig(cfg);
-    state.baseStages = sig(state.cfg.stages, STAGE_SIG_KEYS);
-    state.baseSources = sig(state.cfg.sources, SOURCE_SIG_KEYS);
+    adoptConfig(cfg);
     paint();
 }
 

@@ -2346,6 +2346,7 @@ export const STRINGS = {
   "Колонки воронки, источники заявок и правила, по которым звонки становятся карточками.": {"en":"Funnel columns, lead sources and the rules that turn calls into cards.","ru":"Колонки воронки, источники заявок и правила, по которым звонки становятся карточками.","uz":"Voronka ustunlari, murojaat manbalari va qo'ng'iroqlarni kartochkaga aylantiradigan qoidalar."},
   "Колонки воронки, источники заявок и маршрут звонков в карточки": {"en":"Funnel columns, lead sources and how calls are routed into cards","ru":"Колонки воронки, источники заявок и маршрут звонков в карточки","uz":"Voronka ustunlari, murojaat manbalari va qo'ng'iroqlarning kartochkalarga yo'nalishi"},
   "Настройки CRM недоступны: сервер ещё не обновлён до этой версии.": {"en":"CRM settings are unavailable: the server has not been updated to this version yet.","ru":"Настройки CRM недоступны: сервер ещё не обновлён до этой версии.","uz":"CRM sozlamalari mavjud emas: server hali bu versiyaga yangilanmagan."},
+  "Изменения не сохранены": {"en":"Unsaved changes","ru":"Изменения не сохранены","uz":"O‘zgarishlar saqlanmagan"},
   "Колонки канбана": {"en":"Kanban columns","ru":"Колонки канбана","uz":"Kanban ustunlari"},
   "Источники": {"en":"Sources","ru":"Источники","uz":"Manbalar"},
   "Звонки → карточки": {"en":"Calls → cards","ru":"Звонки → карточки","uz":"Qo'ng'iroqlar → kartochkalar"},
