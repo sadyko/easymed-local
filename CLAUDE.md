@@ -105,6 +105,11 @@ Alongside it: `POST /api/rpc/:name` (90+ named server-side handlers in
 - `data/easymed.db` — the entire clinic dataset. **Gitignored. Contains real patient data.**
 - `docs/specs/`, `docs/plans/` — design specs and implementation plans
 
+## New to this repo? Read docs/FOR-NEW-CONTRIBUTORS.md first
+
+It is the contract every contributor works under — human or assistant — and it is
+short. Everything below is the same rules in the form you need while working.
+
 ## The dev -> GitHub -> clinics workflow (docs/WORKFLOW.md is the full version)
 
 This folder (`easymed.local`) is the DEV SERVER. Its sibling `easymed.clinic` is the

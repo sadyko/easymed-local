@@ -4,6 +4,8 @@ Two or three machines push here. One clinic-visible mistake ships to real clinic
 So every workflow — human or AI, this machine or the colleague's — follows ONE form.
 The full story is [docs/WORKFLOW.md](docs/WORKFLOW.md); this page is the contract.
 
+**Just been given access?** Start with [docs/FOR-NEW-CONTRIBUTORS.md](docs/FOR-NEW-CONTRIBUTORS.md) — it is the short version of everything that can hurt a real clinic, written for a human developer and for an AI assistant working in this repo alike.
+
 ## The form
 
 ```
