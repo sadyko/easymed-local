@@ -2,8 +2,19 @@
 //
 // Стандартная интеграция колл-центра: администратор вводит ключи Binotel,
 // проверяет связь, включает опрос звонков и — если у клиники есть публичный
-// адрес — WebHook-и. Внизу журнал последних звонков как доказательство, что
-// интеграция живёт. Экран продаётся модулем «callcenter»: маршрутизатор в
+// адрес — WebHook-и. Дальше «Звонки → заявки»: из каких исходов звонка
+// система сама делает карточку в CRM. Внизу журнал последних звонков как
+// доказательство, что интеграция живёт.
+//
+// TELEPHONY_ROUTING_V1 (docs/plans/2026-08-24-telephony-owns-its-routing.md)
+// — карточка «Звонки → заявки» приехала сюда из настроек CRM-канбана по
+// поправке владельца, и поправка верная: правило «звонок → заявка» — это
+// свойство ИСТОЧНИКА, а не доски. У Binotel есть исходы звонка, у формы на
+// сайте будут свои, у Instagram нет никаких. Каждый источник настраивает
+// свою маршрутизацию сам, рядом со своими ключами. Хранилище не менялось:
+// таблица crm_call_routing и контракт crm_config_save {routing} те же, они
+// с самого начала ключевались по provider — потому переезд и оказался
+// чистым переносом UI. Экран продаётся модулем «callcenter»: маршрутизатор в
 // admin.js сам показывает стандартный экран «Модуль не подключён» (см. запись
 // в licensed-modules.js), сюда невыкупленная клиника не доходит.
 //
@@ -17,18 +28,32 @@
 // Все решения отображения — telephony-logic.js; здесь только DOM.
 
 import { supabase } from '../../supabase.js';
-import { h, Icon, PageHead, clear, toast, field, checkField } from '../ui.js';
+import { h, Icon, PageHead, Tag, clear, toast, field, checkField } from '../ui.js';
 // h() прогоняет текстовые дети через tr() сам; но всё, что меняет текст ПОСЛЕ
 // отрисовки через .textContent, обходит h() — те места зовут tr() явно
 // (тот же приём, что в locked-module.js).
 import { tr } from '../i18n.js';
 import {
     DASH, secretPlaceholder, normalizeInterval, webhookUrl, shapeCalls,
-    statusTime, textOrDash, isNotImplemented,
+    statusTime, textOrDash, isNotImplemented, shapeDispositions, pluralRu,
 } from '../telephony-logic.js';
+// Словарь исходов звонка и список действий берутся из CRM-логики, а не
+// переписываются здесь: карточка переехала, ПРАВИЛА не менялись. Второй
+// экземпляр DISPOSITION_RU разошёлся бы с сервером через один релиз —
+// ровно та причина, по которой crm-settings-logic.js сам импортирует
+// isNotImplemented отсюда, а не копирует его.
+import {
+    dispositionRu, ROUTING_ACTIONS, validateRouting, shapeConfig,
+} from '../crm-settings-logic.js';
 
-const state = { s: null, calls: null, callsError: null, busy: false };
-let refs = { root: null, body: null, callsBody: null, onNavigate: null };
+const state = {
+    s: null, calls: null, callsError: null, busy: false,
+    // «Звонки → заявки»: исходы с их правилами (telephony_dispositions) и
+    // видимые колонки канбана для выпадающего списка (crm_config_get).
+    // null = ещё грузится, [] = загрузилось и пусто — разные экраны.
+    routing: null, stages: [], routingError: null,
+};
+let refs = { root: null, body: null, callsBody: null, routingBody: null, onNavigate: null };
 
 async function rpc(name, args = {}) {
     const { data, error } = await supabase.rpc(name, args);
@@ -44,8 +69,12 @@ async function rpc(name, args = {}) {
 
 export async function renderTelephonySettings(container, { onNavigate } = {}) {
     clear(container);
-    refs = { root: null, body: null, callsBody: null, onNavigate: onNavigate || null };
-    refs.root = h('div', { class: 'fade-in' });
+    refs = { root: null, body: null, callsBody: null, routingBody: null, onNavigate: onNavigate || null };
+    // tel-set — область действия базовых стилей полей ввода этого экрана.
+    // Причина — в public/css/admin-views.css рядом с самим блоком: admin.html
+    // не задаёт <input>/<select> ВООБЩЕ, и без этого класса каждое поле здесь
+    // рисуется голым браузерным прямоугольником.
+    refs.root = h('div', { class: 'fade-in tel-set' });
     container.appendChild(refs.root);
 
     refs.root.appendChild(PageHead({
@@ -75,11 +104,15 @@ export async function renderTelephonySettings(container, { onNavigate } = {}) {
     }
     state.calls = null;
     state.callsError = null;
+    state.routing = null;
+    state.stages = [];
+    state.routingError = null;
     paint();
-    // Журнал грузится ПОСЛЕ отрисовки настроек и перекрашивает только свою
-    // карточку: полный paint() здесь стёр бы ключ, который администратор уже
-    // начал вводить, пока список ехал.
+    // Журнал и маршрут грузятся ПОСЛЕ отрисовки настроек и перекрашивают
+    // только свои карточки: полный paint() здесь стёр бы ключ, который
+    // администратор уже начал вводить, пока списки ехали.
     loadCalls();
+    loadRouting();
 }
 
 function paint() {
@@ -87,6 +120,11 @@ function paint() {
     refs.body.appendChild(connectionCard());
     refs.body.appendChild(pollingCard());
     refs.body.appendChild(webhooksCard());
+    // Маршрут стоит ПОСЛЕ подключения и опроса и ПЕРЕД журналом: правила
+    // бессмысленны, пока связь не работает (потому не выше), но это всё ещё
+    // настройка, а журнал — не настройка, а доказательство жизни (потому не
+    // ниже него).
+    refs.body.appendChild(routingCard());
     refs.body.appendChild(callsCard());
 }
 
@@ -329,7 +367,180 @@ function webhooksCard() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Последние звонки — доказательство жизни интеграции
+// 4. Звонки → заявки — маршрут исходов звонка в колонки канбана
+// ---------------------------------------------------------------------------
+// Статусы здесь НЕ вписываются руками. Их два источника, и оба честные:
+//   наблюдённые — то, что АТС этой клиники реально прислала (таблица calls);
+//                 у Binotel нет метода «перечисли все исходы», так что это и
+//                 есть настоящий ответ на вопрос «какие статусы мы получаем»;
+//   вендорские  — список из документации, засеянный миграцией 077, чтобы
+//                 правило можно было задать ДО первого такого звонка.
+// Оба приезжают одним вызовом telephony_dispositions, уже с текущим правилом
+// в каждой строке — склеивать два ответа в браузере значит однажды нарисовать
+// правило напротив чужого исхода.
+function routingCard() {
+    refs.routingBody = h('div');
+    paintRouting();
+    return h('div', { class: 'card', style: { marginBottom: '16px' } },
+        h('div', { class: 'card-header' }, h('h3', null, Icon('Headset', { size: 16 }), ' ', tr('Звонки → заявки'))),
+        refs.routingBody);
+}
+
+async function loadRouting() {
+    try {
+        // Один заход, два вопроса: какие исходы бывают (со своими правилами)
+        // и в какие колонки их вообще можно класть. Колонки живут в CRM и
+        // читаются её же RPC — второй список колонок здесь разошёлся бы с
+        // доской в первый же раз, когда владелец переименует колонку.
+        const [disp, cfg] = await Promise.all([
+            rpc('telephony_dispositions', {}),
+            rpc('crm_config_get', {}),
+        ]);
+        state.routing = shapeDispositions(disp);
+        // Только видимые: правило, ведущее в скрытую колонку, сервер и так
+        // отказывается сохранять (saveRouting) — заявка легла бы туда, где её
+        // никто не увидит, что для клиники неотличимо от потерянной заявки.
+        state.stages = shapeConfig(cfg).stages.filter((s) => s.is_active);
+        state.routingError = null;
+    } catch (e) {
+        state.routing = null;
+        state.routingError = e;
+    }
+    if (refs.routingBody) paintRouting();
+}
+
+function paintRouting() {
+    const box = refs.routingBody;
+    if (!box) return;
+    clear(box);
+
+    if (state.routingError) {
+        box.appendChild(h('div', { class: 'muted', style: { padding: '24px' } },
+            isNotImplemented(state.routingError)
+                ? 'Маршрут звонков недоступен: сервер ещё не обновлён.'
+                // Две РАЗНЫЕ текстовые дети, а не склейка: h() прогоняет tr()
+                // по каждой строке-источнику отдельно, и «…маршрут: <ошибка>»
+                // одним куском не нашлось бы в словаре никогда.
+                : ['Не удалось загрузить маршрут: ', state.routingError.message]));
+        return;
+    }
+    if (state.routing === null) {
+        box.appendChild(h('div', { class: 'muted', style: { padding: '24px' } }, 'Загрузка…'));
+        return;
+    }
+
+    box.appendChild(h('div', { class: 'muted tel-route-note', style: { padding: '18px 18px 0' } },
+        'Телефония сообщает, чем закончился каждый звонок. Здесь решается, из каких звонков система сама делает заявку и в какую колонку её кладёт.'));
+
+    if (!state.routing.length) {
+        // Ни одного звонка и ни одного правила: у свежей установки такого не
+        // бывает (миграция засевает вендорский список), поэтому сюда попадают
+        // только клиники с вычищенной таблицей — и им нужна спокойная фраза,
+        // а не пустая таблица.
+        box.appendChild(h('div', { class: 'empty', style: { padding: '30px 20px' } },
+            h('p', null, 'Исходов звонков пока нет.'),
+            h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
+                'Они появятся сами, как только Binotel пришлёт первый звонок.')));
+        box.appendChild(routingFootnote());
+        return;
+    }
+
+    const tb = h('tbody');
+    for (const r of state.routing) {
+        // Исход, для которого у экрана нет русского слова, dispositionRu
+        // возвращает сырым кодом — и тогда строка ниже его не повторяет.
+        // Три SMS-* правила все называются «SMS» и различаются ТОЛЬКО кодом,
+        // поэтому для известных исходов код обязателен.
+        const ru = dispositionRu(r.disposition);
+        const nameIsCode = ru === r.disposition;
+        // Список действий управляет списком колонок: у «не создавать» колонки
+        // нет, и поле выключается, а не притворяется, что выбор ещё важен.
+        const stageSel = h('select', { class: 'tel-route-stage', disabled: r.action !== 'create' },
+            ...state.stages.map((st) => h('option', { value: st.key, selected: r.stage_key === st.key }, st.label)));
+        stageSel.addEventListener('change', () => { r.stage_key = stageSel.value; });
+
+        const actionSel = h('select', { class: 'tel-route-action' },
+            ...ROUTING_ACTIONS.map((a) => h('option', { value: a.value, selected: r.action === a.value }, a.label)));
+        actionSel.addEventListener('change', () => {
+            r.action = actionSel.value;
+            // Переключение на «создать заявку» без колонки собрало бы правило,
+            // которое сервер откажется сохранять. Кладём в первую видимую —
+            // владелец переставит, а правило до тех пор валидно.
+            if (r.action === 'create' && !state.stages.some((st) => st.key === r.stage_key)) {
+                r.stage_key = state.stages.length ? state.stages[0].key : null;
+            }
+            paintRouting();
+        });
+
+        tb.appendChild(h('tr', null,
+            h('td', null,
+                h('div', { class: r.seen_count ? null : 'tel-route-unseen' },
+                    ru,
+                    // «Новое» — исход, которого нет ни в одном правиле: Binotel
+                    // придумал его после установки. Такой звонок сейчас не
+                    // создаёт НИЧЕГО, и владелец должен узнать об этом здесь,
+                    // а не через три недели по отсутствию карточек.
+                    r.documented ? null : [' ', Tag('новое', { kind: 'warn' })]),
+                // Сырой код остаётся на виду: им говорят поддержка Binotel и
+                // журнал звонков, а исход, которого экран не знает, только им
+                // и опознаётся.
+                h('div', { class: 'cell-mono muted tel-route-code' },
+                    ...(nameIsCode ? [] : [r.disposition, ' · ']),
+                    // Число и слово — РАЗНЫЕ текстовые дети: tr() ищет перевод
+                    // по всей строке-источнику, и склеенное «15 звонков» не
+                    // нашлось бы в словаре никогда, а «звонков» находится.
+                    ...(r.seen_count
+                        ? [String(r.seen_count), ' ', pluralRu(r.seen_count, 'звонок', 'звонка', 'звонков')]
+                        : [h('span', { class: 'tel-route-unseen' }, 'ещё не встречалось')]))),
+            h('td', null, actionSel),
+            h('td', null, stageSel),
+        ));
+    }
+
+    box.appendChild(h('table', { class: 'tbl tel-route-tbl', style: { width: '100%' } },
+        h('thead', null, h('tr', null,
+            h('th', null, 'Исход звонка'),
+            h('th', null, 'Что делать'),
+            h('th', null, 'В какую колонку'))),
+        tb));
+
+    const saveBtn = h('button', { class: 'btn btn-primary', type: 'button',
+        onclick: () => run(saveBtn, async () => {
+            const routing = state.routing.map((r) => ({
+                // Какая АТС — из настроек этого же экрана: строка правила
+                // ключуется по (provider, disposition), и второй вендор
+                // когда-нибудь — это данные, а не миграция.
+                provider: (state.s && state.s.provider) || 'binotel',
+                disposition: r.disposition,
+                action: r.action,
+                // «Не создавать» колонку не хранит: правилу, которое ничего не
+                // создаёт, некуда её класть, а сохранённый ключ воскресил бы
+                // имя удалённой колонки при следующем чтении.
+                stage_key: r.action === 'create' ? r.stage_key : null,
+            }));
+            const v = validateRouting(routing, state.stages);
+            if (!v.ok) { toast(v.error, 'warn'); return; }
+            await rpc('crm_config_save', { routing });
+            toast('Маршрут сохранён.', 'success');
+            // Перечитываем, а не догадываемся: значок «новое» и признак
+            // «вендорский» считает сервер, и у исхода, которому правило
+            // только что задали, значка больше быть не должно.
+            await loadRouting();
+        }) }, Icon('Check', { size: 13 }), ' ', tr('Сохранить маршрут'));
+    box.appendChild(h('div', { class: 'row', style: { gap: '8px', padding: '14px 18px 0' } }, saveBtn));
+    box.appendChild(routingFootnote());
+}
+
+// Честное ограничение прямо на экране, а не в документации: эти правила не
+// делают ничего, пока модуль «Колл-центр» не подключён и опрос звонков не
+// включён — иначе звонки в систему не попадают и заявки создавать не из чего.
+function routingFootnote() {
+    return h('div', { class: 'muted tel-route-note', style: { padding: '12px 18px 18px' } },
+        'Правила работают, только пока подключён модуль «Колл-центр» и включён опрос звонков выше — иначе звонки в систему не попадают и заявки создавать не из чего.');
+}
+
+// ---------------------------------------------------------------------------
+// 5. Последние звонки — доказательство жизни интеграции
 // ---------------------------------------------------------------------------
 function callsCard() {
     refs.callsBody = h('div');

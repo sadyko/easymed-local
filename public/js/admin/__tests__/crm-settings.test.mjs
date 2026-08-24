@@ -2,7 +2,7 @@
 // Настройки → «CRM-канбан» screen against the RPC contract in
 // server/services/rpc/crm-config.js and services/crm/config.js.
 //
-// Covers: all three cards render and crm_config_get is called with {}; a 501
+// Covers: both cards render and crm_config_get is called with {}; a 501
 // from a clinic still on an older build shows the calm «недоступно» line and
 // never crashes; each card saves ONLY its own section, with positions
 // renumbered from the on-screen order and labels trimmed; ↑/↓ reorder what
@@ -10,8 +10,15 @@
 // and cannot be hidden; the rows the server refuses to delete
 // (UNDELETABLE_*_KEYS) are not offered a delete button at all; a new column
 // derives its key from the Russian label; a refused save never reaches the
-// server; routing rows render in plain Russian, keep no column when set to
-// «не создавать», and carry the honest line about the Телефония module.
+// server.
+//
+// TELEPHONY_ROUTING_V1 (docs/plans/2026-08-24-telephony-owns-its-routing.md)
+// — the «Звонки → карточки» assertions that used to live here MOVED into
+// __tests__/telephony-settings.test.mjs along with the card itself. What
+// stays behind is one test that the move actually happened: crm_config_get
+// still answers with `routing`, and this screen must now render none of it.
+// Deleting the old tests without that guard would have let the card quietly
+// come back.
 
 import { test } from 'node:test';
 import assert from 'node:assert';
@@ -156,13 +163,12 @@ async function render(onNavigate) {
 // telephony-settings.test.mjs wrote down).
 const saveStagesBtn = (root) => findButtonByText(root, /Сохранить колонки/);
 const saveSourcesBtn = (root) => findButtonByText(root, /Сохранить источники/);
-const saveRoutingBtn = (root) => findButtonByText(root, /Сохранить маршрут/);
 
-test('три карточки рисуются; crm_config_get вызван ровно с {}', async () => {
+test('две карточки рисуются; crm_config_get вызван ровно с {}', async () => {
   resetServer();
   const root = await render();
   const text = textOf(root);
-  for (const card of ['Колонки канбана', 'Источники', 'Звонки → карточки']) {
+  for (const card of ['Колонки канбана', 'Источники']) {
     assert.ok(text.includes(card), 'карточка на экране: ' + card);
   }
   assert.strictEqual(getCalls, 1);
@@ -311,61 +317,22 @@ test('источники сохраняются своей кнопкой и с�
   ]);
 });
 
-test('маршрут звонков: исходы на русском, рядом сырой код, и честная строка про модуль', async () => {
+test('маршрут звонков уехал в «Телефонию» — на этом экране от него не осталось ничего', async () => {
   resetServer();
   const root = await render();
   const text = textOf(root);
-  for (const ru of ['Ответили', 'Не ответили', 'SMS']) assert.ok(text.includes(ru), 'исход по-русски: ' + ru);
-  for (const raw of ['ANSWER', 'NOANSWER', 'SMS-SENDING']) assert.ok(text.includes(raw), 'сырой код рядом: ' + raw);
-  assert.ok(text.includes('Правила работают, только пока подключён модуль «Телефония»'), 'честное ограничение на экране');
-});
-
-test('«не создавать» не хранит колонку; переключение на «создать» само выбирает первую видимую', async () => {
-  resetServer();
-  const root = await render();
-  const selects = findSelects(root);
-  // Порядок построения: [действие, колонка] на каждую строку маршрута.
-  const [answerAction, answerStage, , , smsAction, smsStage] = selects;
-  assert.ok('disabled' in smsStage.attrs, 'у «не создавать» выбор колонки отключён, а не притворяется рабочим');
-  assert.ok(!('disabled' in answerStage.attrs));
-  assert.strictEqual(answerAction.children.length, 2, 'выбор ровно из двух действий');
-
-  // ANSWER → «не создавать»: колонка при сохранении обнуляется.
-  answerAction.value = 'ignore';
-  answerAction.dispatchEvent({ type: 'change' });
-  await tick();
-  // SMS → «создать заявку»: пустая колонка недопустима, подставляется первая видимая.
-  const smsAction2 = findSelects(root)[4];
-  smsAction2.value = 'create';
-  smsAction2.dispatchEvent({ type: 'change' });
-  await tick();
-
-  saveRoutingBtn(root).click();
-  await tick();
-  assert.deepStrictEqual(Object.keys(lastSaveBody), ['routing']);
-  assert.deepStrictEqual(lastSaveBody.routing, [
-    { provider: 'binotel', disposition: 'ANSWER',   action: 'ignore', stage_key: null },
-    { provider: 'binotel', disposition: 'NOANSWER', action: 'create', stage_key: 'recall' },
-    { provider: 'binotel', disposition: 'SMS-SENDING', action: 'create', stage_key: 'in_process' },
-  ]);
-});
-
-test('пустой маршрут — спокойное объяснение, а не пустая таблица', async () => {
-  resetServer();
-  getRespond = () => jsonOk({ ...FULL_CONFIG, routing: [] });
-  const root = await render();
-  const text = textOf(root);
-  assert.ok(text.includes('Правил маршрутизации пока нет.'), text);
-  assert.ok(text.includes('Правила работают, только пока подключён модуль «Телефония»'), 'ограничение видно и в пустом состоянии');
-});
-
-test('из карточки маршрута есть путь в настройки телефонии', async () => {
-  resetServer();
-  const nav = [];
-  const root = await render((view) => nav.push(view));
-  findButtonByText(root, /Настройки телефонии/).click();
-  await tick();
-  assert.deepStrictEqual(nav, ['telephony-settings']);
+  // Сервер по-прежнему отдаёт routing в том же ответе (crm_config_get не
+  // менялся) — и экран обязан его игнорировать. Правило источника
+  // настраивается там, где настраивается сам источник.
+  assert.ok(FULL_CONFIG.routing.length, 'тест бессмыслен, если сервер перестал присылать правила');
+  for (const gone of ['Звонки → карточки', 'Исход звонка', 'Что делать', 'В какую колонку',
+                      'Сохранить маршрут', 'Ответили', 'ANSWER', 'SMS-SENDING',
+                      'Правила работают, только пока подключён модуль']) {
+    assert.ok(!text.includes(gone), 'осталось от карточки маршрута: ' + gone);
+  }
+  assert.strictEqual(findSelects(root).length, 0, 'выпадающих списков на этом экране больше нет вовсе');
+  assert.strictEqual(findAllButtons(root).filter((b) => /маршрут|телефон/i.test(textOf(b))).length, 0,
+    'и ни одной кнопки, которая писала бы routing');
 });
 
 test('501 на сохранении — честная строка «недоступно», не «сервер сломан»', async () => {

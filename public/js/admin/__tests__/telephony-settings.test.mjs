@@ -2,7 +2,11 @@
 // Settings → «Телефония» screen against the EXACT RPC contract the parallel
 // server task is building to.
 //
-// Covers: all four sections render and telephony_settings_get is called with
+// TELEPHONY_ROUTING_V1 (docs/plans/2026-08-24-telephony-owns-its-routing.md)
+// added the fifth section, «Звонки → заявки», and with it the assertions that
+// moved here from __tests__/crm-settings.test.mjs when the card did.
+//
+// Covers: all five sections render and telephony_settings_get is called with
 // {}; a 501 from a not-yet-merged server shows the calm «недоступно» line
 // (full-screen for settings, per-card for the call log) and never crashes;
 // saving the connection sends api_key always and api_secret ONLY when a new
@@ -79,6 +83,20 @@ const findByRole = (root, role) => walk(root).find((n) => n.attrs.role === role)
 // Company ID — единственный text-инпут секции без плейсхолдера (ключ и адрес свои несут).
 const findCompanyInput = (root) => findInputs(root).find((n) => n.attrs.type === 'text' && !n.attrs.placeholder);
 
+// The last toast the screen raised. A dedicated #toast node is handed to
+// ui.js's toast() so it reuses it instead of appending a new one, and its text
+// is kept OUTSIDE `_t`: toast() stores its dismiss timer in `el._t`, which is
+// exactly the field this fake DOM keeps text in — reading `_t` back would
+// return a Timeout object. (Verbatim from crm-settings.test.mjs, which needed
+// it for the same refuse-before-the-server assertions.)
+let toastMsg = null;
+const toastEl = mk('div');
+Object.defineProperty(toastEl, 'textContent', {
+  configurable: true, get() { return toastMsg; }, set(v) { toastMsg = String(v); },
+});
+document.getElementById = (id) => (id === 'toast' ? toastEl : null);
+const lastToast = () => toastMsg;
+
 const jsonOk = (data) => ({ ok: true, json: async () => ({ data }) });
 const jsonErr = (error, status = 400) => ({ ok: false, status, json: async () => ({ error }) });
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
@@ -89,6 +107,12 @@ const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
 let getCalls, saveCalls, testCalls, callsCalls, dbCalls;
 let lastGetBody, lastSaveBody, lastTestBody, lastCallsBody, lastDbBody;
 let settingsRespond, saveRespond, testRespond, callsRespond, dbRespond;
+// TELEPHONY_ROUTING_V1 — «Звонки → заявки» reads two more RPCs and writes the
+// CRM's existing one. crm_config_save is deliberately NOT a telephony RPC:
+// the card moved screens, the storage model did not.
+let dispCalls, cfgGetCalls, cfgSaveCalls;
+let lastDispBody, lastCfgGetBody, lastCfgSaveBody;
+let dispRespond, cfgGetRespond, cfgSaveRespond;
 
 const FULL_SETTINGS = {
   enabled: true, provider: 'binotel', api_key: 'key-live', api_secret_set: true, company_id: '12345',
@@ -96,9 +120,39 @@ const FULL_SETTINGS = {
   last_poll_at: '2026-08-23T09:00:00', last_call_at: null, last_error: null,
 };
 
+// telephony_dispositions' contract: observed ∪ documented, each row already
+// carrying its own rule. ANSWER/NOANSWER are documented AND seen, WHATSAPP-IN
+// is one Binotel invented after this install (seen, no rule), SMS-SENDING is
+// documented only.
+const DISPOSITIONS = [
+  { disposition: 'ANSWER',      seen_count: 15, last_seen_at: '2026-08-24T11:30:00Z', documented: true,  action: 'create', stage_key: 'in_process' },
+  { disposition: 'NOANSWER',    seen_count: 3,  last_seen_at: '2026-08-23T09:00:00Z', documented: true,  action: 'create', stage_key: 'recall' },
+  { disposition: 'WHATSAPP-IN', seen_count: 2,  last_seen_at: '2026-08-24T10:05:00Z', documented: false, action: 'ignore', stage_key: null },
+  { disposition: 'SMS-SENDING', seen_count: 0,  last_seen_at: null,                   documented: true,  action: 'ignore', stage_key: null },
+];
+// crm_config_get's reply, unchanged by this move — «Нецелевой» is hidden on
+// purpose, so the column picker can be asserted to leave it out.
+const CRM_CONFIG = {
+  stages: [
+    { key: 'in_process',    label: 'В обработке', color: 'info', position: 1, is_active: 1, kind: 'open' },
+    { key: 'recall',        label: 'Перезвонить', color: 'warn', position: 2, is_active: 1, kind: 'open' },
+    { key: 'came',          label: 'Пришёл',      color: 'ok',   position: 3, is_active: 1, kind: 'won' },
+    { key: 'not_qualified', label: 'Нецелевой',   color: '',     position: 4, is_active: 0, kind: 'lost' },
+  ],
+  sources: [{ key: 'call', label: 'Звонок', position: 1, is_active: 1 }],
+  routing: DISPOSITIONS.map((d) => ({ provider: 'binotel', disposition: d.disposition, action: d.action, stage_key: d.stage_key })),
+};
+
 function resetServer() {
   getCalls = 0; saveCalls = 0; testCalls = 0; callsCalls = 0; dbCalls = 0;
   lastGetBody = null; lastSaveBody = null; lastTestBody = null; lastCallsBody = null; lastDbBody = null;
+  dispCalls = 0; cfgGetCalls = 0; cfgSaveCalls = 0;
+  lastDispBody = null; lastCfgGetBody = null; lastCfgSaveBody = null;
+  dispRespond = () => jsonOk(JSON.parse(JSON.stringify(DISPOSITIONS)));
+  cfgGetRespond = () => jsonOk(JSON.parse(JSON.stringify(CRM_CONFIG)));
+  // The real crm_config_save answers with the WHOLE config (services/crm/config.js).
+  cfgSaveRespond = () => jsonOk(JSON.parse(JSON.stringify(CRM_CONFIG)));
+  toastMsg = null;
   settingsRespond = () => jsonOk({ ...FULL_SETTINGS });
   saveRespond = () => jsonOk({ ok: true });
   testRespond = () => jsonOk({ ok: true });
@@ -115,6 +169,9 @@ globalThis.fetch = async (url, opts) => {
   if (u.startsWith('/api/rpc/telephony_settings_save')) { saveCalls++; lastSaveBody = body; return saveRespond(); }
   if (u.startsWith('/api/rpc/telephony_test'))          { testCalls++; lastTestBody = body; return testRespond(); }
   if (u.startsWith('/api/rpc/telephony_recent_calls'))  { callsCalls++; lastCallsBody = body; return callsRespond(); }
+  if (u.startsWith('/api/rpc/telephony_dispositions'))  { dispCalls++; lastDispBody = body; return dispRespond(); }
+  if (u.startsWith('/api/rpc/crm_config_get'))          { cfgGetCalls++; lastCfgGetBody = body; return cfgGetRespond(); }
+  if (u.startsWith('/api/rpc/crm_config_save'))         { cfgSaveCalls++; lastCfgSaveBody = body; return cfgSaveRespond(); }
   if (u.startsWith('/api/db')) { dbCalls++; lastDbBody = body; return dbRespond(); }
   return jsonOk({});
 };
@@ -124,15 +181,15 @@ const { renderTelephonySettings } = await import('../views/telephony-settings.js
 async function render(onNavigate) {
   const root = mk('div');
   await renderTelephonySettings(root, { onNavigate });
-  await tick();   // журнал звонков грузится после отрисовки настроек
+  await tick();   // журнал и маршрут грузятся после отрисовки настроек
   return root;
 }
 
-test('все четыре секции рисуются; get вызван ровно с {}; secret говорит «сохранён» плейсхолдером', async () => {
+test('все пять секций рисуются; get вызван ровно с {}; secret говорит «сохранён» плейсхолдером', async () => {
   resetServer();
   const root = await render();
   const text = textOf(root);
-  for (const section of ['Подключение', 'Опрос звонков', 'WebHook-и', 'Последние звонки']) {
+  for (const section of ['Подключение', 'Опрос звонков', 'WebHook-и', 'Звонки → заявки', 'Последние звонки']) {
     assert.ok(text.includes(section), 'секция на экране: ' + section);
   }
   assert.strictEqual(getCalls, 1);
@@ -360,4 +417,148 @@ test('пустой журнал — спокойное «Звонков пока
   resetServer();
   const root = await render();
   assert.ok(textOf(root).includes('Звонков пока нет.'));
+});
+
+// ---------------------------------------------------------------------------
+// TELEPHONY_ROUTING_V1 — «Звонки → заявки»
+// (docs/plans/2026-08-24-telephony-owns-its-routing.md, tasks 2 and 4)
+// ---------------------------------------------------------------------------
+// Эти проверки ПЕРЕЕХАЛИ сюда из __tests__/crm-settings.test.mjs вместе с
+// самой карточкой: исходы по-русски рядом с сырым кодом, «не создавать» не
+// хранит колонку, переключение на «создать» подставляет первую видимую,
+// пустой список объясняется словами, и честная строка про модуль — на экране,
+// а не в документации. К ним добавилось то, чего на прошлом экране быть не
+// могло: счётчик реальных звонков, значок «новое» у исхода без правила и
+// пометка «ещё не встречалось» у чисто вендорской строки.
+
+const findSelects = (root) => walk(root).filter((n) => n.tagName === 'SELECT');
+// В строке маршрута два списка, и порядок в DOM — [что делать, в какую
+// колонку]: ячейки идут именно так, как их читает человек.
+const routeSelects = (root) => findSelects(root);
+
+test('карточка «Звонки → заявки»: контракт обоих запросов, исходы по-русски, сырой код рядом', async () => {
+  resetServer();
+  const root = await render();
+  const text = textOf(root);
+  assert.ok(text.includes('Звонки → заявки'), 'карточка на экране');
+  assert.strictEqual(dispCalls, 1);
+  assert.deepStrictEqual(lastDispBody, {}, 'контракт: telephony_dispositions {}');
+  // Колонки берутся у CRM её же RPC — второй список колонок здесь разошёлся
+  // бы с доской при первом же переименовании.
+  assert.strictEqual(cfgGetCalls, 1);
+  assert.deepStrictEqual(lastCfgGetBody, {}, 'контракт: crm_config_get {}');
+
+  for (const ru of ['Ответили', 'Не ответили', 'SMS']) assert.ok(text.includes(ru), 'исход по-русски: ' + ru);
+  for (const raw of ['ANSWER', 'NOANSWER', 'SMS-SENDING']) assert.ok(text.includes(raw), 'сырой код рядом: ' + raw);
+  // Исход, которого экран не знает, показывает себя сырым кодом — иначе
+  // правило нельзя было бы даже назвать.
+  assert.ok(text.includes('WHATSAPP-IN'), 'незнакомый исход всё равно называет себя');
+  // …но ровно один раз: dispositionRu отдаёт неизвестный код как есть, и
+  // вторая строка тогда его не повторяет — а у трёх правил SMS-*, которые все
+  // называются «SMS», код остаётся единственным различием.
+  assert.strictEqual((text.match(/WHATSAPP-IN/g) || []).length, 1, 'код не задваивается');
+  assert.ok(text.includes('SMS-SENDING'), 'у исхода с русским именем сырой код на месте');
+  assert.ok(text.includes('Правила работают, только пока подключён модуль «Колл-центр»'),
+    'честное ограничение на экране, а не в документации');
+});
+
+test('наблюдённые исходы носят счётчик, вендорские — «ещё не встречалось», без правила — «новое»', async () => {
+  resetServer();
+  const root = await render();
+  const text = textOf(root);
+  // «15 звонков» — число и слово собраны РАЗНЫМИ текстовыми детьми, чтобы
+  // «звонков» нашлось в словаре; на экране это по-прежнему одна фраза.
+  assert.ok(text.includes('15 звонков'), text.slice(0, 400));
+  assert.ok(text.includes('3 звонка'), 'форма множественного числа согласована с числом');
+  assert.ok(text.includes('2 звонка'));
+  // Строка только из документации: правило задать можно, но такого звонка
+  // ещё не было — и это видно.
+  assert.ok(text.includes('ещё не встречалось'));
+  // Исход без правила сейчас не создаёт НИЧЕГО, и владелец узнаёт об этом
+  // здесь, а не через три недели по отсутствию карточек.
+  assert.ok(text.includes('новое'), 'значок у исхода, которому правило ещё не задано');
+});
+
+test('в списке колонок только ВИДИМЫЕ колонки канбана', async () => {
+  resetServer();
+  const root = await render();
+  const [, firstStage] = routeSelects(root);
+  const options = firstStage.children.map((o) => o.attrs.value);
+  assert.deepStrictEqual(options, ['in_process', 'recall', 'came'],
+    'скрытая колонка не предлагается: сервер такое правило и не сохранит, а заявка в невидимой колонке неотличима от потерянной');
+});
+
+test('«не создавать» не хранит колонку; переключение на «создать» само выбирает первую видимую', async () => {
+  resetServer();
+  const root = await render();
+  const [answerAction, answerStage, , , , , smsAction, smsStage] = routeSelects(root);
+  assert.ok('disabled' in smsStage.attrs, 'у «не создавать» выбор колонки отключён, а не притворяется рабочим');
+  assert.ok(!('disabled' in answerStage.attrs));
+  assert.strictEqual(answerAction.children.length, 2, 'выбор ровно из двух действий');
+
+  // ANSWER → «не создавать»: колонка при сохранении обнуляется.
+  answerAction.value = 'ignore';
+  answerAction.dispatchEvent({ type: 'change' });
+  await tick();
+  // SMS-SENDING → «создать заявку»: пустая колонка недопустима, подставляется первая видимая.
+  const smsAction2 = routeSelects(root)[6];
+  smsAction2.value = 'create';
+  smsAction2.dispatchEvent({ type: 'change' });
+  await tick();
+
+  findButtonByText(root, /Сохранить маршрут/).click();
+  await tick();
+  assert.strictEqual(cfgSaveCalls, 1);
+  assert.deepStrictEqual(Object.keys(lastCfgSaveBody), ['routing'],
+    'сохраняется ТОЛЬКО маршрут — колонки и источники этот экран не трогает');
+  assert.deepStrictEqual(lastCfgSaveBody.routing, [
+    { provider: 'binotel', disposition: 'ANSWER',      action: 'ignore', stage_key: null },
+    { provider: 'binotel', disposition: 'NOANSWER',    action: 'create', stage_key: 'recall' },
+    { provider: 'binotel', disposition: 'WHATSAPP-IN', action: 'ignore', stage_key: null },
+    { provider: 'binotel', disposition: 'SMS-SENDING', action: 'create', stage_key: 'in_process' },
+  ]);
+});
+
+test('после сохранения карточка перечитывается — значок «новое» считает сервер, а не экран', async () => {
+  resetServer();
+  const root = await render();
+  findButtonByText(root, /Сохранить маршрут/).click();
+  await tick();
+  assert.strictEqual(dispCalls, 2, 'исходы перечитаны: у того, кому правило только что задали, значка быть не должно');
+  assert.strictEqual(cfgGetCalls, 2);
+  assert.strictEqual(saveCalls, 0, 'настройки телефонии этой кнопкой не трогаются');
+});
+
+test('правило без видимой колонки — отказ ДО обращения к серверу', async () => {
+  resetServer();
+  // Доска, у которой не осталось ни одной видимой колонки: правило «создать
+  // заявку» вести некуда, и это ловится на экране, а не 400-й от сервера.
+  cfgGetRespond = () => jsonOk({ ...CRM_CONFIG, stages: CRM_CONFIG.stages.map((s) => ({ ...s, is_active: 0 })) });
+  const root = await render();
+  findButtonByText(root, /Сохранить маршрут/).click();
+  await tick();
+  assert.strictEqual(cfgSaveCalls, 0, 'на сервер такое не уходит вовсе');
+  assert.ok(/не выбрана видимая колонка/.test(String(lastToast())), lastToast());
+});
+
+test('пустой список исходов — спокойное объяснение, а не пустая таблица', async () => {
+  resetServer();
+  dispRespond = () => jsonOk([]);
+  const root = await render();
+  const text = textOf(root);
+  assert.ok(text.includes('Исходов звонков пока нет.'), text);
+  assert.ok(text.includes('Они появятся сами, как только Binotel пришлёт первый звонок.'));
+  assert.ok(text.includes('Правила работают, только пока подключён модуль «Колл-центр»'),
+    'ограничение видно и в пустом состоянии');
+});
+
+test('501 только на маршруте — остальной экран живёт, карточка говорит «недоступен»', async () => {
+  resetServer();
+  dispRespond = err501;
+  const root = await render();
+  const text = textOf(root);
+  assert.ok(text.includes('Подключение'), 'настройки отрисованы');
+  assert.ok(text.includes('Последние звонки'), 'журнал отрисован');
+  assert.ok(text.includes('Маршрут звонков недоступен: сервер ещё не обновлён.'), text);
+  assert.strictEqual(findSelects(root).length, 0, 'ни одного списка, который нечем наполнить');
 });

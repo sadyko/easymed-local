@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import {
     DASH, textOrDash, secretPlaceholder, formatDuration, dispositionLabel,
     callDirection, normalizeInterval, webhookUrl, timeLabel, isNotImplemented,
-    shapeCalls, statusTime,
+    shapeCalls, statusTime, shapeDispositions, pluralRu,
 } from './telephony-logic.js';
 
 // --- textOrDash --------------------------------------------------------------
@@ -200,4 +200,64 @@ test('shapeCalls: patient_name only when a real non-empty string — the RPC mar
     assert.equal(shapeCalls({ calls: [{ patient_id: 'p-1', patient_name: '  ' }] })[0].patient_name, null);
     assert.equal(shapeCalls({ calls: [{ patient_id: 'p-1' }] })[0].patient_name, null);
     assert.equal(shapeCalls({ calls: [{ patient_id: 'p-1', patient_name: 'Иванов' }] })[0].patient_name, 'Иванов');
+});
+
+// --- shapeDispositions (TELEPHONY_ROUTING_V1) --------------------------------
+
+test('shapeDispositions: the contract array, the {dispositions} envelope, and junk all shape safely', () => {
+    const row = { disposition: 'ANSWER', seen_count: 3, last_seen_at: '2026-08-24T11:30:00Z',
+        documented: true, action: 'create', stage_key: 'in_process' };
+    assert.deepEqual(shapeDispositions([row]), [row]);
+    assert.deepEqual(shapeDispositions({ dispositions: [row] }), [row]);
+    // {} is what a clinic still on an older build answers — an empty card,
+    // never a throw.
+    for (const junk of [null, undefined, {}, 'nope', 7, { dispositions: 'no' }]) {
+        assert.deepEqual(shapeDispositions(junk), [], JSON.stringify(junk));
+    }
+    // A row with no disposition is not an outcome anybody can set a rule for.
+    assert.deepEqual(shapeDispositions([{}, { disposition: '  ' }, { disposition: 5 }]), []);
+});
+
+test('shapeDispositions: a half-built row degrades to «seen never, no rule, creates nothing»', () => {
+    const [r] = shapeDispositions([{ disposition: '  NOANSWER  ' }]);
+    assert.deepEqual(r, {
+        disposition: 'NOANSWER', seen_count: 0, last_seen_at: null,
+        documented: false, action: 'ignore', stage_key: null,
+    });
+    // 'ignore' for anything that is not literally 'create': silence is what
+    // leadFromCall does with a rule it cannot read, and the screen must show
+    // what the system does rather than a friendlier guess.
+    for (const bad of ['CREATE', 'make', '', null, 1, true]) {
+        assert.equal(shapeDispositions([{ disposition: 'X', action: bad }])[0].action, 'ignore', String(bad));
+    }
+    assert.equal(shapeDispositions([{ disposition: 'X', action: 'create' }])[0].action, 'create');
+});
+
+test('shapeDispositions: the count can never render as «-1 звонок» or «1.5 звонка»', () => {
+    const n = (v) => shapeDispositions([{ disposition: 'X', seen_count: v }])[0].seen_count;
+    assert.equal(n(12), 12);
+    assert.equal(n('12'), 12, 'a JSON number that arrived as text still counts');
+    for (const bad of [-1, 0, 0.4, 'many', null, undefined, NaN, {}]) {
+        assert.equal(n(bad), 0, JSON.stringify(bad));
+    }
+    assert.equal(n(1.9), 1, 'floored, not rounded up — never claim a call that did not happen');
+});
+
+test('shapeDispositions: stage_key and last_seen_at are null unless they are real strings', () => {
+    const [r] = shapeDispositions([{ disposition: 'X', stage_key: '', last_seen_at: '   ' }]);
+    assert.equal(r.stage_key, null);
+    assert.equal(r.last_seen_at, null);
+    const [r2] = shapeDispositions([{ disposition: 'X', stage_key: 7, last_seen_at: 1755000000 }]);
+    assert.equal(r2.stage_key, null);
+    assert.equal(r2.last_seen_at, null);
+});
+
+// --- pluralRu ---------------------------------------------------------------
+
+test('pluralRu: the «звонок / звонка / звонков» line agrees with its number', () => {
+    const f = (n) => pluralRu(n, 'звонок', 'звонка', 'звонков');
+    for (const n of [1, 21, 101, 131]) assert.equal(f(n), 'звонок', `n=${n}`);
+    for (const n of [2, 3, 4, 22, 104]) assert.equal(f(n), 'звонка', `n=${n}`);
+    // 11-14 are the trap every hand-rolled version gets wrong.
+    for (const n of [0, 5, 11, 12, 13, 14, 25, 111]) assert.equal(f(n), 'звонков', `n=${n}`);
 });

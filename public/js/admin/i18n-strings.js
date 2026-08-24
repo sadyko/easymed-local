@@ -2412,4 +2412,32 @@ export const STRINGS = {
   "Пришёл сам": {"en":"Walk-in","ru":"Пришёл сам","uz":"O'zi keldi"},
   "Рекомендация": {"en":"Referral","ru":"Рекомендация","uz":"Tavsiya"},
   "Другое": {"en":"Other","ru":"Другое","uz":"Boshqa"},
+  // TELEPHONY_ROUTING_V1 - the «Звонки → заявки» card moved out of CRM-канбан
+  // into Настройки → Телефония (docs/plans/2026-08-24-telephony-owns-its-routing.md)
+  // - added 2026-08-24. The routing card's OWN vocabulary («Исход звонка»,
+  // «Что делать», «Создать заявку», the disposition words) is unchanged and
+  // still lives in the CRM_CONFIG_V1 block above: the card moved, the rules
+  // did not, and the screen imports those labels rather than restating them.
+  "Звонки → заявки": {"en":"Calls → leads","ru":"Звонки → заявки","uz":"Qo'ng'iroqlar → murojaatlar"},
+  "Маршрут звонков недоступен: сервер ещё не обновлён.": {"en":"Call routing is unavailable: the server has not been updated yet.","ru":"Маршрут звонков недоступен: сервер ещё не обновлён.","uz":"Qo'ng'iroqlar yo'nalishi mavjud emas: server hali yangilanmagan."},
+  "Не удалось загрузить маршрут: ": {"en":"Could not load the routing: ","ru":"Не удалось загрузить маршрут: ","uz":"Yo'nalishni yuklab bo'lmadi: "},
+  "Исходов звонков пока нет.": {"en":"There are no call outcomes yet.","ru":"Исходов звонков пока нет.","uz":"Hozircha qo'ng'iroq natijalari yo'q."},
+  "Они появятся сами, как только Binotel пришлёт первый звонок.": {"en":"They appear by themselves as soon as Binotel sends the first call.","ru":"Они появятся сами, как только Binotel пришлёт первый звонок.","uz":"Binotel birinchi qo'ng'iroqni yuborishi bilan ular o'zi paydo bo'ladi."},
+  // «новое» - an outcome that matches no rule: it creates nothing today.
+  "новое": {"en":"new","ru":"новое","uz":"yangi"},
+  "ещё не встречалось": {"en":"not seen yet","ru":"ещё не встречалось","uz":"hali uchramagan"},
+  // The count line is built from separate text children on purpose - tr() is
+  // keyed by the whole source string, so «15 звонков» glued together would
+  // never be found. Uzbek makes no plural agreement after a numeral; English
+  // has two forms and reuses the second for the third.
+  "звонок": {"en":"call","ru":"звонок","uz":"qo'ng'iroq"},
+  "звонка": {"en":"calls","ru":"звонка","uz":"qo'ng'iroq"},
+  "звонков": {"en":"calls","ru":"звонков","uz":"qo'ng'iroq"},
+  "Правила работают, только пока подключён модуль «Колл-центр» и включён опрос звонков выше — иначе звонки в систему не попадают и заявки создавать не из чего.": {"en":"The rules work only while the Call center module is connected and the call polling above is on — otherwise no calls reach the system and there is nothing to make leads from.","ru":"Правила работают, только пока подключён модуль «Колл-центр» и включён опрос звонков выше — иначе звонки в систему не попадают и заявки создавать не из чего.","uz":"Qoidalar faqat «Qo'ng'iroq markazi» moduli ulangan va yuqoridagi qo'ng'iroqlar so'rovi yoqilgan paytda ishlaydi — aks holda qo'ng'iroqlar tizimga tushmaydi va murojaat yaratish uchun hech narsa bo'lmaydi."},
+  // The two screens' own descriptions had to follow the card: the CRM tile
+  // promised routing it no longer holds, and the Телефония tile did not
+  // mention the routing it now owns.
+  "Колонки воронки и источники заявок — структура доски CRM.": {"en":"Funnel columns and lead sources — the CRM board's structure.","ru":"Колонки воронки и источники заявок — структура доски CRM.","uz":"Voronka ustunlari va murojaat manbalari — CRM doskasining tuzilishi."},
+  "Колонки воронки и источники заявок": {"en":"Funnel columns and lead sources","ru":"Колонки воронки и источники заявок","uz":"Voronka ustunlari va murojaat manbalari"},
+  "Звонки Binotel: подключение, опрос, маршрут звонков в заявки и журнал": {"en":"Binotel calls: connection, polling, call-to-lead routing and the log","ru":"Звонки Binotel: подключение, опрос, маршрут звонков в заявки и журнал","uz":"Binotel qo'ng'iroqlari: ulanish, so'rov, qo'ng'iroqdan murojaatga yo'naltirish va jurnal"},
 };

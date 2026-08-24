@@ -150,8 +150,11 @@ const GROUPS = [
         // opens daily.
         title: 'Системные настройки', icon: 'Settings', color: { bg: '#e9ebfb', fg: '#4b52b0' },
         items: [
-            { label: 'CRM-канбан',          desc: 'Колонки воронки, источники заявок и маршрут звонков в карточки', icon: 'Grid', live: true, action: nav('crm-settings') },
-            { label: 'Телефония',           desc: 'Звонки Binotel: подключение, опрос и журнал звонков', icon: 'Headset', live: true, action: nav('telephony-settings') },
+            { label: 'CRM-канбан',          desc: 'Колонки воронки и источники заявок', icon: 'Grid', live: true, action: nav('crm-settings') },
+            // TELEPHONY_ROUTING_V1 — обе подписи поехали вслед за карточкой
+            // «Звонки → заявки»: CRM-канбан обещал маршрут, которого у него
+            // больше нет, а Телефония не упоминала маршрут, который теперь её.
+            { label: 'Телефония',           desc: 'Звонки Binotel: подключение, опрос, маршрут звонков в заявки и журнал', icon: 'Headset', live: true, action: nav('telephony-settings') },
             { label: 'Telegram-бот',        desc: 'Пациент получает свои документы в Telegram по номеру телефона', icon: 'Bot', live: true, action: nav('telegram-settings') },
             { label: 'API',                 desc: 'Токены интеграции для партнёров',                     icon: 'Settings', live: true, action: () => openSection('api_tokens') },
         ],

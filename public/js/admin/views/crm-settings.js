@@ -1,14 +1,24 @@
 // CRM_CONFIG_V1 — Настройки → «CRM-канбан»
 // (docs/plans/2026-08-24-crm-kanban-settings.md, part B).
 //
-// Three jobs on one screen, in the order the owner described them:
+// Two jobs on one screen, in the order the owner described them:
 //   1. «Колонки канбана» — the funnel itself: name, colour, order, visible.
 //   2. «Источники» — where a lead came from.
-//   3. «Звонки → карточки» — which column a Binotel call outcome lands in.
 //
-// Everything here writes to crm_stages / crm_sources / crm_call_routing
-// (migration 077) through two RPCs, and views/crm.js reads the same config —
-// so this screen IS the board's vocabulary, not a copy of it.
+// TELEPHONY_ROUTING_V1 (docs/plans/2026-08-24-telephony-owns-its-routing.md)
+// took the third card away, and the owner was right to ask for it: «звонок →
+// заявка» is a property of the SOURCE, not of the board. Binotel has
+// dispositions, a website form will have its own outcomes, Instagram has none
+// — one CRM screen holding every integration's rules would grow a section per
+// vendor, none of them next to the vendor's own credentials. The card now
+// lives in views/telephony-settings.js. Nothing about the STORAGE moved:
+// crm_call_routing, crm_config_save {routing} and lead-from-call.js are
+// untouched, and they were already keyed by provider — which is what made
+// per-source ownership the natural shape all along.
+//
+// Everything here writes to crm_stages / crm_sources (migration 077) through
+// two RPCs, and views/crm.js reads the same config — so this screen IS the
+// board's vocabulary, not a copy of it.
 //
 // Each card saves its OWN section with its own button: crm_config_save takes
 // the whole ordered array of the section being saved, because that is how the
@@ -35,13 +45,12 @@ import {
     UNDELETABLE_STAGE_KEYS, UNDELETABLE_SOURCE_KEYS,
     UNDELETABLE_STAGE_REASON, UNDELETABLE_SOURCE_REASON,
     deriveKey, moveItem, withPositions,
-    validateStages, validateSources, validateRouting,
-    dispositionRu, ROUTING_ACTIONS,
+    validateStages, validateSources,
     shapeConfig, isNotImplemented,
 } from '../crm-settings-logic.js';
 
 const state = { cfg: null, busy: false };
-let refs = { root: null, body: null, stages: null, sources: null, routing: null };
+let refs = { root: null, body: null, stages: null, sources: null };
 
 async function rpc(name, args = {}) {
     const { data, error } = await supabase.rpc(name, args);
@@ -56,15 +65,18 @@ async function rpc(name, args = {}) {
     return data;
 }
 
-export async function renderCrmSettings(container, { onNavigate } = {}) {
+// No onNavigate: with the routing card gone this screen navigates nowhere.
+// admin.js still passes its ctx — extra arguments are harmless — and the day
+// something here needs to navigate, it takes the parameter back.
+export async function renderCrmSettings(container) {
     clear(container);
-    refs = { root: null, body: null, stages: null, sources: null, routing: null, onNavigate: onNavigate || null };
+    refs = { root: null, body: null, stages: null, sources: null };
     refs.root = h('div', { class: 'fade-in' });
     container.appendChild(refs.root);
 
     refs.root.appendChild(PageHead({
         title: 'CRM-канбан',
-        subtitle: 'Колонки воронки, источники заявок и правила, по которым звонки становятся карточками.',
+        subtitle: 'Колонки воронки и источники заявок — структура доски CRM.',
     }));
 
     const body = h('div');
@@ -94,13 +106,16 @@ function paint() {
     clear(refs.body);
     refs.body.appendChild(stagesCard());
     refs.body.appendChild(sourcesCard());
-    refs.body.appendChild(routingCard());
 }
 
 // Never assume the write landed the way the screen imagined it: the server
-// renumbers positions, folds colour aliases, and saving COLUMNS can rewrite
-// ROUTING (hiding a column switches the rules that fed it off). So the screen
-// redraws from the server's own answer.
+// renumbers positions and folds colour aliases. So the screen redraws from
+// the server's own answer.
+//
+// Saving COLUMNS still rewrites ROUTING server-side — hiding a column
+// switches the rules that fed it off (saveStages' unroute) — but that card
+// now lives on the Телефония screen, which reads its rules fresh every time
+// it opens. Nothing on THIS screen can show a stale copy of them.
 //
 // crm_config_save already returns the whole config for exactly that reason;
 // `fresh` is that reply. A reply that is not a config — an older server
@@ -113,12 +128,11 @@ async function reload(fresh) {
     paint();
 }
 
-const cardShell = (icon, title, ...content) => h('div', { class: 'card', style: { marginBottom: '16px' } },
+const cardShell = (icon, title, ...content) => h('div', { class: 'card crm-set-card', style: { marginBottom: '16px' } },
     h('div', { class: 'card-header' }, h('h3', null, Icon(icon, { size: 16 }), ' ', title)),
     ...content);
 
-const hint = (text, style = {}) => h('div', { class: 'muted',
-    style: { fontSize: '12px', lineHeight: '1.6', ...style } }, text);
+const hint = (text, style = {}) => h('div', { class: 'muted crm-set-note', style }, text);
 
 // ---------------------------------------------------------------------------
 // Shared row furniture
@@ -133,7 +147,7 @@ function moveButtons(list, index, onChange) {
         style: { padding: '2px 6px', lineHeight: '1' },
         onclick: () => onChange(moveItem(list, index, delta)),
     }, Icon(delta < 0 ? 'ArrowUp' : 'ArrowDown', { size: 13 }));
-    return h('div', { class: 'row', style: { gap: '2px' } },
+    return h('div', { class: 'crm-set-move' },
         btn(-1, index === 0, 'Выше'),
         btn(1, index === list.length - 1, 'Ниже'));
 }
@@ -142,13 +156,11 @@ function moveButtons(list, index, onChange) {
 // columns, the routing rules and every export are keyed by — an owner
 // debugging with support needs to be able to read it out. It is never
 // editable after creation: renaming a key would orphan every lead in it.
-const keyChip = (key) => h('span', { class: 'cell-mono muted',
-    style: { fontSize: '11px', whiteSpace: 'nowrap' } }, key);
+const keyChip = (key) => h('span', { class: 'cell-mono crm-set-key' }, key);
 
 function labelInput(row, onEdit) {
     const input = h('input', {
         type: 'text', value: row.label, spellcheck: 'false', maxlength: String(LABEL_MAX),
-        style: { width: '100%' },
     });
     // Typed straight into the model, with no repaint: repainting on every
     // keystroke would move the caret to the end of the field.
@@ -185,10 +197,17 @@ function removeButton(label, onRemove) {
     }, Icon('Trash', { size: 13 }));
 }
 
-const rowBox = (...children) => h('div', {
-    class: 'row',
-    style: { gap: '10px', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--ink-100)', flexWrap: 'wrap' },
-}, ...children);
+// One grid row: [reorder] [name+key] [colour] [visible] [actions]. A grid, not
+// a wrapping flex — with up to seven controls per row the flex version lined
+// nothing up between rows and re-shuffled itself at every window width. Cells
+// are always emitted, even when empty, or the columns stop aligning the moment
+// one row lacks a delete button.
+const rowBox = ({ move, name, colors, visible, actions }) => h('div', { class: 'crm-set-row' },
+    h('div', { class: 'crm-set-move' }, move || null),
+    h('div', { class: 'crm-set-name' }, name || null),
+    h('div', { class: 'crm-set-colors' }, colors || null),
+    h('div', { class: 'crm-set-visible' }, visible || null),
+    h('div', { class: 'crm-set-actions' }, actions || null));
 
 // ---------------------------------------------------------------------------
 // 1. Колонки канбана
@@ -208,30 +227,45 @@ function paintStages() {
     const list = state.cfg.stages;
     const onChange = (next) => { state.cfg.stages = next; paintStages(); };
 
+    // The list is one visual block; explanations go UNDER it, not between the
+    // rows. A paragraph after every protected row broke the rhythm of the
+    // table and made eight columns look like a wall of prose.
+    const listBox = h('div', { class: 'crm-set-list' });
+    let hasWon = false;
+    let hasUndeletable = false;
+
     list.forEach((row, i) => {
         const isWon = row.kind === 'won';
-        box.appendChild(rowBox(
-            moveButtons(list, i, onChange),
-            h('div', { style: { flex: '1 1 200px', minWidth: '160px' } }, labelInput(row)),
-            keyChip(row.key),
-            colorPicker(row),
+        const protectedRow = isWon || UNDELETABLE_STAGE_KEYS.includes(row.key);
+        if (isWon) hasWon = true;
+        if (!isWon && UNDELETABLE_STAGE_KEYS.includes(row.key)) hasUndeletable = true;
+        listBox.appendChild(rowBox({
+            move: moveButtons(list, i, onChange),
+            name: [labelInput(row), keyChip(row.key)],
+            colors: colorPicker(row),
             // The conversion column is a BEHAVIOUR, not a label: it is the only
             // status that opens the patient-registration popup. Badge it, and
             // take away the two controls that could break that path.
-            isWon ? Tag('конверсия', { kind: 'ok' }) : null,
-            activeToggle(row, { locked: isWon, lockedTitle: 'Колонку конверсии нельзя скрыть' }),
-            h('span', { class: 'grow' }),
-            (isWon || UNDELETABLE_STAGE_KEYS.includes(row.key))
+            visible: [
+                isWon ? Tag('конверсия', { kind: 'ok' }) : null,
+                activeToggle(row, { locked: isWon, lockedTitle: 'Колонку конверсии нельзя скрыть' }),
+            ],
+            actions: protectedRow
                 ? null
                 : removeButton(row.label, () => onChange(list.filter((_, j) => j !== i))),
-        ));
-        if (isWon) {
-            box.appendChild(hint('Через эту колонку регистрируется пациент — её нельзя ни удалить, ни скрыть.',
-                { margin: '-4px 0 4px 0' }));
-        } else if (UNDELETABLE_STAGE_KEYS.includes(row.key)) {
-            box.appendChild(hint(UNDELETABLE_STAGE_REASON, { margin: '-4px 0 4px 0' }));
-        }
+        }));
     });
+    box.appendChild(listBox);
+    // The SAME sentences that used to sit between the rows, now collected
+    // under the list: a row explains itself by having no delete button, and
+    // the reason belongs where it can be read once instead of three times.
+    if (hasWon) {
+        box.appendChild(hint('Через эту колонку регистрируется пациент — её нельзя ни удалить, ни скрыть.',
+            { marginTop: '10px' }));
+    }
+    if (hasUndeletable) {
+        box.appendChild(hint(UNDELETABLE_STAGE_REASON, { marginTop: hasWon ? '4px' : '10px' }));
+    }
 
     box.appendChild(addRow('Добавить колонку', 'Название новой колонки', (label, taken) => {
         state.cfg.stages = withPositions([...list, {
@@ -307,21 +341,22 @@ function paintSources() {
     const list = state.cfg.sources;
     const onChange = (next) => { state.cfg.sources = next; paintSources(); };
 
+    const listBox = h('div', { class: 'crm-set-list' });
+    let anyProtected = false;
     list.forEach((row, i) => {
-        box.appendChild(rowBox(
-            moveButtons(list, i, onChange),
-            h('div', { style: { flex: '1 1 200px', minWidth: '160px' } }, labelInput(row)),
-            keyChip(row.key),
-            activeToggle(row),
-            h('span', { class: 'grow' }),
-            UNDELETABLE_SOURCE_KEYS.includes(row.key)
+        const protectedRow = UNDELETABLE_SOURCE_KEYS.includes(row.key);
+        if (protectedRow) anyProtected = true;
+        listBox.appendChild(rowBox({
+            move: moveButtons(list, i, onChange),
+            name: [labelInput(row), keyChip(row.key)],
+            visible: activeToggle(row),
+            actions: protectedRow
                 ? null
                 : removeButton(row.label, () => onChange(list.filter((_, j) => j !== i))),
-        ));
-        if (UNDELETABLE_SOURCE_KEYS.includes(row.key)) {
-            box.appendChild(hint(UNDELETABLE_SOURCE_REASON, { margin: '-4px 0 4px 0' }));
-        }
+        }));
     });
+    box.appendChild(listBox);
+    if (anyProtected) box.appendChild(hint(UNDELETABLE_SOURCE_REASON, { marginTop: '10px' }));
 
     box.appendChild(addRow('Добавить источник', 'Название нового источника', (label, taken) => {
         state.cfg.sources = withPositions([...list, {
@@ -341,119 +376,13 @@ function paintSources() {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Звонки → карточки
-// ---------------------------------------------------------------------------
-function routingCard() {
-    refs.routing = h('div');
-    paintRouting();
-    return cardShell('Headset', 'Звонки → карточки', refs.routing);
-}
-
-function paintRouting() {
-    const box = refs.routing;
-    clear(box);
-
-    const stages = state.cfg.stages;
-    const activeStages = stages.filter((s) => s.is_active);
-    const rows = state.cfg.routing;
-
-    box.appendChild(hint('Телефония сообщает, чем закончился каждый звонок. Здесь решается, из каких звонков система сама делает заявку и в какую колонку её кладёт.',
-        { padding: '18px 18px 0' }));
-
-    if (!rows.length) {
-        box.appendChild(h('div', { class: 'empty', style: { padding: '30px 20px' } },
-            h('p', null, 'Правил маршрутизации пока нет.'),
-            h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
-                'Они приезжают вместе с обновлением сервера — исходы звонков и правила по умолчанию задаются там.')));
-        box.appendChild(routingFootnote());
-        return;
-    }
-
-    const tb = h('tbody');
-    for (const r of rows) {
-        // The action select drives the column select: «не создавать» has no
-        // column to name, so the field goes disabled rather than pretending
-        // the choice still matters.
-        const stageSel = h('select', { style: { minWidth: '180px' }, disabled: r.action !== 'create' },
-            ...activeStages.map((s) => h('option', { value: s.key, selected: r.stage_key === s.key }, s.label)));
-        stageSel.addEventListener('change', () => { r.stage_key = stageSel.value; });
-
-        const actionSel = h('select', { style: { minWidth: '160px' } },
-            ...ROUTING_ACTIONS.map((a) => h('option', { value: a.value, selected: r.action === a.value }, a.label)));
-        actionSel.addEventListener('change', () => {
-            r.action = actionSel.value;
-            // Switching to «создать заявку» with no column chosen would build a
-            // rule that refuses to save. Land it in the first visible column
-            // instead — the owner can move it, and the rule is valid meanwhile.
-            if (r.action === 'create' && !activeStages.some((s) => s.key === r.stage_key)) {
-                r.stage_key = activeStages.length ? activeStages[0].key : null;
-            }
-            paintRouting();
-        });
-
-        tb.appendChild(h('tr', null,
-            h('td', null,
-                h('div', null, dispositionRu(r.disposition)),
-                // The raw code stays visible: it is what Binotel support and
-                // the call log speak, and an outcome this screen has not
-                // learned shows up as its code and nothing else.
-                h('div', { class: 'cell-mono muted', style: { fontSize: '11px' } }, r.disposition)),
-            h('td', null, actionSel),
-            h('td', null, stageSel),
-        ));
-    }
-
-    box.appendChild(h('table', { class: 'tbl', style: { width: '100%' } },
-        h('thead', null, h('tr', null,
-            h('th', null, 'Исход звонка'),
-            h('th', null, 'Что делать'),
-            h('th', null, 'В какую колонку'))),
-        tb));
-
-    box.appendChild(h('div', { style: { padding: '0 18px' } }, saveRow('Сохранить маршрут', async () => {
-        const routing = state.cfg.routing.map((r) => ({
-            provider: r.provider || 'binotel',
-            disposition: r.disposition,
-            action: r.action,
-            // «Не создавать» keeps no column: a rule that creates nothing has
-            // nowhere to put it, and storing a stale key would resurrect a
-            // deleted column's name on the next read.
-            stage_key: r.action === 'create' ? r.stage_key : null,
-        }));
-        const v = validateRouting(routing, state.cfg.stages);
-        if (!v.ok) { toast(v.error, 'warn'); return; }
-        const fresh = await rpc('crm_config_save', { routing });
-        toast('Маршрут сохранён.', 'success');
-        await reload(fresh);
-    })));
-    box.appendChild(routingFootnote());
-}
-
-// The honest limit, on the screen rather than in the documentation: these
-// rules do nothing at all unless the Телефония module is connected AND its
-// call polling is on — no call reaches the system otherwise, so there is
-// nothing to route.
-function routingFootnote() {
-    return h('div', { style: { padding: '0 18px 18px' } },
-        hint('Правила работают, только пока подключён модуль «Телефония» и включён опрос звонков — иначе звонки в систему не попадают и заявки создавать не из чего.'),
-        h('button', {
-            class: 'btn btn-sm', type: 'button', style: { marginTop: '8px' },
-            onclick: () => { if (refs.onNavigate) refs.onNavigate('telephony-settings'); },
-            // The label is its own text child, with the space beside it: h()
-            // runs tr() once PER child, and ' Настройки телефонии' — a single
-            // child carrying a leading space — is a different dictionary key
-            // from the phrase itself, so it would never be translated.
-        }, Icon('Phone', { size: 13 }), ' ', 'Настройки телефонии'));
-}
-
-// ---------------------------------------------------------------------------
 // Add / save rows
 // ---------------------------------------------------------------------------
 // `taken()` is read at click time, not at build time: the list changes under
 // this row every time something is added or removed, and a stale key list
 // would hand out a duplicate key.
 function addRow(buttonLabel, placeholder, onAdd, taken) {
-    const input = h('input', { type: 'text', placeholder, spellcheck: 'false', style: { flex: '1 1 220px', minWidth: '160px' } });
+    const input = h('input', { type: 'text', placeholder, spellcheck: 'false' });
     const btn = h('button', { class: 'btn', type: 'button',
         onclick: () => {
             const label = String(input.value || '').trim();
@@ -463,7 +392,10 @@ function addRow(buttonLabel, placeholder, onAdd, taken) {
             input.value = '';
             onAdd(label, taken());
         } }, Icon('Plus', { size: 13 }), ' ', buttonLabel);
-    return h('div', { class: 'row', style: { gap: '8px', marginTop: '12px', flexWrap: 'wrap' } }, input, btn);
+    // Enter submits: typing a name and pressing Enter is what everyone tries
+    // first, and a form that ignores it reads as broken.
+    input.addEventListener('keydown', (e) => { if (e && e.key === 'Enter') btn.onclick(); });
+    return h('div', { class: 'crm-set-add' }, input, btn);
 }
 
 function saveRow(label, fn) {

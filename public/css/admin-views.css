@@ -3764,3 +3764,140 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .sys-restart-spin { width: 26px; height: 26px; border-radius: 50%; border: 3px solid var(--ink-100);
     border-top-color: var(--primary-700, #0a6e61); animation: sys-spin 0.9s linear infinite; }
 @keyframes sys-spin { to { transform: rotate(360deg); } }
+
+/* ---------------------------------------------------------------------------
+   CRM_CONFIG_V1 — Настройки → CRM-канбан.
+
+   A real stylesheet block rather than the inline styles this screen shipped
+   with: seven controls per row inside a wrapping flex meant nothing lined up
+   between rows, and every window width produced a different ragged shape.
+   A grid fixes the alignment once — every row's name, colour, visibility and
+   actions sit in the same column, whatever the label lengths are.
+   --------------------------------------------------------------------------- */
+.crm-set-list { display: flex; flex-direction: column; }
+
+/* [reorder] [name+key] [colour] [visible] [actions] — the last three sized to
+   their content so the name column absorbs all the slack. */
+.crm-set-row {
+    display: grid;
+    grid-template-columns: auto minmax(160px, 1fr) auto auto auto;
+    gap: 12px;
+    align-items: center;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--ink-100);
+}
+.crm-set-row:last-of-type { border-bottom: 0; }
+.crm-set-move { display: flex; gap: 2px; }
+.crm-set-move .btn { padding: 2px 6px; line-height: 1; }
+.crm-set-name input { width: 100%; }
+/* The key is support-call material, not something the owner reads daily:
+   present, but visibly secondary to the name above it. */
+.crm-set-key { display: block; font-size: 10.5px; opacity: .65; margin-top: 3px; white-space: nowrap; }
+.crm-set-colors { display: flex; gap: 4px; }
+.crm-set-actions { display: flex; gap: 6px; align-items: center; justify-content: flex-end; min-width: 34px; }
+.crm-set-note { font-size: 12px; line-height: 1.6; }
+
+/* THE bug behind "the fields and dropdowns are not fixed": admin.html has no
+   base styling for <input>/<select> at all (local.css's input rule belongs to
+   the LOGIN page and is never loaded here), so every field on this screen
+   rendered as a raw browser box — full width, square, no border radius. Other
+   admin screens each scope their own (.np-grid input, .tp-input); this is
+   ours, applied to the whole card so nothing on it can be missed again. */
+.crm-set-card input[type="text"],
+.crm-set-card input[type="search"],
+.crm-set-card select {
+    width: 100%;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid var(--ink-200);
+    border-radius: var(--r-sm, 8px);
+    background: #fff;
+    font: inherit;
+    color: inherit;
+}
+.crm-set-card select { padding-right: 26px; cursor: pointer; }
+.crm-set-card input[type="text"]:focus,
+.crm-set-card select:focus {
+    outline: none;
+    border-color: var(--primary-500);
+    box-shadow: 0 0 0 3px var(--primary-50);
+}
+.crm-set-card input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; margin: 0; }
+
+/* «Добавить колонку»: the field and its button read as one control, and the
+   field is visibly the thing you type into — the previous version put a bare
+   box next to a styled button and looked broken. */
+.crm-set-add { display: flex; gap: 8px; margin-top: 14px; align-items: center; }
+.crm-set-add input[type="text"] { max-width: 320px; }
+
+/* Below ~720px the five columns cannot hold their shape: the row becomes two
+   lines — reorder + name, then the controls — instead of wrapping mid-row. */
+@media (max-width: 720px) {
+    .crm-set-row { grid-template-columns: auto 1fr; row-gap: 8px; }
+    .crm-set-colors, .crm-set-visible, .crm-set-actions { grid-column: 2; justify-content: flex-start; }
+}
+
+/* ---------------------------------------------------------------------------
+   TELEPHONY_ROUTING_V1 — Настройки → Телефония
+   (docs/plans/2026-08-24-telephony-owns-its-routing.md).
+
+   THE SAME latent bug the CRM block above documents, on the screen next door:
+   admin.html loads no base styling for <input>/<select> at all (local.css's
+   input rule belongs to the LOGIN page and never reaches the app), so the
+   Binotel key, the secret, the poll interval and the public address all
+   rendered as raw browser boxes — and the routing card was about to add two
+   dropdowns per row to them. Scoped to the whole screen (`.tel-set` sits on
+   the view root) rather than to the one new card, because the bug was never
+   the card's: every field here had it.
+
+   No `width` is declared: the fields that need it already carry an inline one
+   (100% for the key/secret/address, 120px for the interval), and forcing a
+   width here would only fight them. The selects get theirs below.
+   --------------------------------------------------------------------------- */
+.tel-set input[type="text"],
+.tel-set input[type="password"],
+.tel-set input[type="number"],
+.tel-set input[type="search"],
+.tel-set select {
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid var(--ink-200);
+    border-radius: var(--r-sm, 8px);
+    background: #fff;
+    font: inherit;
+    color: inherit;
+}
+.tel-set select { width: 100%; padding-right: 26px; cursor: pointer; }
+.tel-set input:focus,
+.tel-set select:focus {
+    outline: none;
+    border-color: var(--primary-500);
+    box-shadow: 0 0 0 3px var(--primary-50);
+}
+/* A disabled column picker must LOOK unavailable, not merely refuse the
+   click: the row says «не создавать», and a dropdown that still reads as
+   editable invites the owner to argue with it. */
+.tel-set select:disabled {
+    background: var(--ink-50, #f4f6f7);
+    color: var(--ink-500);
+    cursor: not-allowed;
+}
+.tel-set input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; margin: 0; }
+
+/* «Звонки → заявки». The two pickers are sized so the table does not swing
+   its column widths when one row's outcome name is twice as long as another's. */
+.tel-route-tbl td { vertical-align: middle; }
+.tel-route-action { min-width: 160px; max-width: 220px; }
+.tel-route-stage { min-width: 180px; max-width: 240px; }
+/* The raw Binotel code plus «15 звонков» / «ещё не встречалось»: support-call
+   material and evidence, both secondary to the outcome's name above them. */
+.tel-route-code { display: block; font-size: 11px; margin-top: 3px; white-space: nowrap; }
+/* An outcome the docs describe but this clinic has never received. Dimmed on
+   the TEXT only, never on the row: the rule is still fully settable, and
+   fading its controls would say otherwise. */
+.tel-route-unseen { opacity: .6; }
+.tel-route-note { font-size: 12px; line-height: 1.6; }
+
+@media (max-width: 720px) {
+    .tel-route-action, .tel-route-stage { min-width: 0; max-width: none; }
+}

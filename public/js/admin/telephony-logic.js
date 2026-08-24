@@ -16,8 +16,15 @@
 // text-child path runs tr(), so the ru/uz/en entries live in i18n-strings.js.
 
 import { formatRuDateTime, DASH } from './system-logic.js';
+// TELEPHONY_ROUTING_V1 — «15 звонков» needs a Russian plural form, and this
+// codebase has exactly ONE (1 анализ / 2 анализа / 5 анализов). Re-exported,
+// not re-implemented: views/patient-card.js already keeps a private copy and
+// that is the wart, not the pattern — the server itself imports a browser
+// helper (crm-phone-match.js in crm/lead-from-call.js) rather than owning a
+// second version of a rule. lab-grouping.js is pure: no DOM, no network.
+import { pluralRu } from './views/lab-grouping.js';
 
-export { DASH };
+export { DASH, pluralRu };
 
 function pad2(n) { return String(n).padStart(2, '0'); }
 
@@ -185,6 +192,44 @@ export function shapeCalls(data) {
             patient_id:  r.patient_id ?? null,
             patient_name: (typeof r.patient_name === 'string' && r.patient_name.trim() !== '') ? r.patient_name : null,
         }));
+}
+
+/**
+ * TELEPHONY_ROUTING_V1 — telephony_dispositions' reply → safe rows for the
+ * «Звонки → заявки» card (docs/plans/2026-08-24-telephony-owns-its-routing.md).
+ *
+ * The contract is a bare array; {dispositions:[...]} is accepted too, and
+ * anything else — including the {} an older server answers — degrades to an
+ * empty list, exactly as shapeCalls does and for the same reason.
+ *
+ * Every field is re-derived rather than trusted: `action` is one of two words
+ * or it is 'ignore' (silence is what leadFromCall does with a rule it cannot
+ * read, so the screen must not show a friendlier lie), a `stage_key` that is
+ * not a real string is null, and seen_count is a whole non-negative number so
+ * the count line can never say «-1 звонок» or «1.5 звонка».
+ *
+ * `documented` false carries BOTH facts the card needs: the vendor never
+ * documented this outcome, and no rule row exists for it yet — one is the
+ * other, because the documented list IS the seeded routing table.
+ */
+export function shapeDispositions(data) {
+    const arr = Array.isArray(data) ? data
+        : (data && Array.isArray(data.dispositions)) ? data.dispositions
+            : [];
+    return arr
+        .filter((r) => r && typeof r === 'object'
+            && typeof r.disposition === 'string' && r.disposition.trim() !== '')
+        .map((r) => {
+            const n = Math.floor(Number(r.seen_count));
+            return {
+                disposition: r.disposition.trim(),
+                seen_count: Number.isFinite(n) && n > 0 ? n : 0,
+                last_seen_at: (typeof r.last_seen_at === 'string' && r.last_seen_at.trim() !== '') ? r.last_seen_at : null,
+                documented: !!r.documented,
+                action: r.action === 'create' ? 'create' : 'ignore',
+                stage_key: (typeof r.stage_key === 'string' && r.stage_key) ? r.stage_key : null,
+            };
+        });
 }
 
 /** last_poll_at / last_call_at status values — one door for the view, same tolerant parsing as the call table. */

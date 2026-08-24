@@ -6,7 +6,7 @@
 // Nothing returned here ever contains api_secret — only api_secret_set.
 
 import { hasAnyRole } from '../roles.js';
-import { publicSettings, saveSettings, getCredentials, SettingsError } from '../telephony/settings.js';
+import { publicSettings, saveSettings, getCredentials, listDispositions, SettingsError } from '../telephony/settings.js';
 import { binotelCall } from '../telephony/binotel.js';
 import { wakePolling } from '../telephony/poller.js';
 
@@ -97,4 +97,22 @@ export function telephonyRecentCalls(db, _args, user) {
       LEFT JOIN patients p ON p.id = c.patient_id
      ORDER BY c.started_at DESC, c.id DESC
      LIMIT 20`).all();
+}
+
+// TELEPHONY_ROUTING_V1 — «Звонки → заявки»: which call outcomes exist at all,
+// each already carrying its own routing rule
+// (docs/plans/2026-08-24-telephony-owns-its-routing.md, task 3).
+//
+// Admin-only like the rest of this section, and for a sharper reason than
+// symmetry: the seen_count of every disposition is a summary of the clinic's
+// call traffic, and the rules it carries decide what the whole call centre
+// sees on its board tomorrow.
+//
+// ONE call, not two: the screen needs the outcome AND its current rule for
+// every row, and merging two replies in the browser is how a rule ends up
+// drawn next to the wrong outcome. The merge is a join — it belongs where the
+// tables are.
+export function telephonyDispositions(db, _args, user) {
+  requireAdmin(user);
+  return listDispositions(db);
 }

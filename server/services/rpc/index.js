@@ -21,7 +21,7 @@ import { saveLabResults } from './lab.js';   // LAB_SAVE_BATCH_V1
 import { cashierReport } from './cashier-report.js';   // CASHIER_REPORT_V1
 import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
 import { licenceStatus, licenceUnlock, licenceEnroll, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
-import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRecentCalls } from './telephony.js';   // TELEPHONY_V1
+import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRecentCalls, telephonyDispositions } from './telephony.js';   // TELEPHONY_V1 / TELEPHONY_ROUTING_V1
 import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
 import { backupList, backupCreate, backupRestore, factoryReset } from './backup.js';   // SYSTEM_SETTINGS_V1
@@ -177,6 +177,12 @@ export const RPC = {
   telephony_settings_save:  (db, args, user) => telephonySettingsSave(db, args, user),
   telephony_test:           (db, args, user) => telephonyTest(db, args, user),
   telephony_recent_calls:   (db, args, user) => telephonyRecentCalls(db, args, user),
+  // TELEPHONY_ROUTING_V1 — «Звонки → заявки» на том же экране: какие исходы
+  // звонков вообще бывают у ЭТОЙ клиники (наблюдённые + вендорский список) и
+  // какое правило стоит у каждого. Читающий вызов, но в READ_ONLY_RPCS его
+  // НЕТ намеренно — как и telephony_settings_get: у клиники с просроченной
+  // лицензией нет опроса звонков, и настраивать маршрут ей нечего.
+  telephony_dispositions:   (db, args, user) => telephonyDispositions(db, args, user),
 
   // CRM_CONFIG_V1 — Настройки → «CRM-канбан»: колонки доски, источники и
   // «звонок -> карточка» (миграция 077). _get читают И доска, и экран

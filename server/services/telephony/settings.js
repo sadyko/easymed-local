@@ -5,6 +5,14 @@
 // background poller, which has no `user`, can call this module too. The exact
 // shape (and reasoning) of telegram/settings.js.
 
+// TELEPHONY_ROUTING_V1 — listDispositions() below reads the routing table the
+// CRM owns. READ ONLY, and through crm/config.js rather than a second SELECT
+// of its own: crm_call_routing is keyed by (provider, disposition) there, and
+// a private copy of that query here is how the two would drift the day a
+// second PBX vendor arrives. Nothing in this file writes it — the storage
+// model and crm_config_save's contract stay where they belong.
+import { listRouting, DEFAULT_PROVIDER } from '../crm/config.js';
+
 export class SettingsError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
 }
@@ -124,4 +132,94 @@ export function noteCallSeen(db, startedAtIso) {
   db.prepare(`UPDATE telephony_settings SET
       last_call_at = CASE WHEN last_call_at IS NULL OR last_call_at < @t THEN @t ELSE last_call_at END
     WHERE id = 1`).run({ t: String(startedAtIso) });
+}
+
+// --------------------------------------------------------------------------
+// TELEPHONY_ROUTING_V1 — which call outcomes this clinic actually has
+// (docs/plans/2026-08-24-telephony-owns-its-routing.md, task 3)
+// --------------------------------------------------------------------------
+
+/**
+ * Every call outcome the «Звонки → заявки» card must offer, merged from the
+ * only two honest sources there are:
+ *
+ *   OBSERVED   — what this clinic's own PBX has actually reported (the calls
+ *                table). Binotel publishes no "list every disposition"
+ *                endpoint, so this is the real answer to «какие статусы мы
+ *                получаем», and it costs no API call.
+ *   DOCUMENTED — the vendor list already seeded into crm_call_routing, so a
+ *                rule can be set for an outcome BEFORE it happens once.
+ *
+ * Each row carries its own current rule, so the screen needs ONE call rather
+ * than a second read it would have to join in the browser.
+ *
+ * `documented` answers both of the screen's questions at once, and that is not
+ * a shortcut: the documented list IS the seeded routing table, so «the vendor
+ * documented it» and «a rule row exists for it» are the same fact. A false
+ * here therefore means BOTH «Binotel invented this one after the install» and
+ * «no rule yet» — which is exactly the row the card badges «новое».
+ *
+ * @returns {{disposition:string, seen_count:number, last_seen_at:string|null,
+ *            documented:boolean, action:'create'|'ignore', stage_key:string|null}[]}
+ */
+export function listDispositions(db, provider) {
+  // Which PBX the clinic runs — data, not a constant (leadFromCall reads the
+  // same field for the same reason: a rule is keyed by (provider, disposition),
+  // so 'ANSWER' can mean different things to different vendors).
+  const row = readSettingsRow(db);
+  const prov = String(provider || (row && row.provider) || DEFAULT_PROVIDER);
+
+  // UPPER + TRIM, and grouped by the same expression: leadFromCall uppercases
+  // the disposition before it looks the rule up, and saveRouting stores it
+  // uppercased — so «answer» and «ANSWER» are ONE rule. Two rows here would
+  // offer the owner a second rule that can never fire.
+  //
+  // The empty disposition is excluded: calls.disposition DEFAULTs to '' (mig
+  // 076) for a call recorded before it ended, and DISPOSITION_RE forbids an
+  // empty key — a rule for it could not be saved even if it were offered.
+  const observed = db.prepare(`
+    SELECT UPPER(TRIM(disposition)) AS disposition,
+           COUNT(*)                 AS seen_count,
+           MAX(started_at)          AS last_seen_at
+      FROM calls
+     WHERE TRIM(disposition) <> ''
+     GROUP BY UPPER(TRIM(disposition))`).all();
+
+  const byCode = new Map();
+  for (const r of observed) {
+    byCode.set(r.disposition, {
+      disposition: r.disposition,
+      seen_count: Number(r.seen_count) || 0,
+      last_seen_at: r.last_seen_at || null,
+      // Until a rule is found below, an outcome nobody has configured creates
+      // nothing. That is leadFromCall's own behaviour for a rule it does not
+      // have — the card must show what the system actually does, not a
+      // friendlier guess.
+      documented: false,
+      action: 'ignore',
+      stage_key: null,
+    });
+  }
+
+  for (const rule of listRouting(db, prov)) {
+    const code = String(rule.disposition || '').trim().toUpperCase();
+    if (!code) continue;
+    const seen = byCode.get(code);
+    byCode.set(code, {
+      disposition: code,
+      seen_count: seen ? seen.seen_count : 0,
+      last_seen_at: seen ? seen.last_seen_at : null,
+      documented: true,
+      action: rule.action === 'create' ? 'create' : 'ignore',
+      stage_key: rule.stage_key || null,
+    });
+  }
+
+  // Outcomes this clinic actually GETS come first, busiest first: those are
+  // the rules worth setting. Everything unseen has seen_count 0, so the same
+  // comparison sinks it — sorted alphabetically among itself so the order is
+  // stable between loads (a list that reshuffles itself reads as broken).
+  return [...byCode.values()].sort((a, b) => (a.seen_count !== b.seen_count)
+    ? b.seen_count - a.seen_count
+    : a.disposition.localeCompare(b.disposition));
 }
