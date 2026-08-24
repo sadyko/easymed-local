@@ -11,25 +11,28 @@ The full story is [docs/WORKFLOW.md](docs/WORKFLOW.md); this page is the contrac
 2. CHANGE      edit in the dev folder only        (the test clinic receives releases,
                                                    never edits — it has no git)
 3. TEST        npm test → "fail 0"                + look at the actual screen
-4. REVIEW      git status / git diff              no data/, no *.db, no keys, no secrets
-5. PUSH        branch → Pull Request → merge      (see the PR checklist template)
-6. STOP        pushing is NOT releasing.          Ask the owner before anything
+4. OWNER OK    the owner tests it on dev          localhost:8000 - green tests are not
+               (localhost:8000) and says go       the same claim as "this is right"
+5. REVIEW      git status / git diff              no data/, no *.db, no keys, no secrets
+6. PUSH        branch → Pull Request → merge      (see the PR checklist template)
+7. STOP        pushing is NOT releasing.          Ask the owner before anything
                                                    release-shaped. Nobody tags but the owner.
 ```
 
 ## Releasing (owner only)
 
 ```
-7. NOTES       RELEASE_NOTES.md = what the clinic admin reads, in plain Russian
+8. NOTES       RELEASE_NOTES.md = what the clinic admin reads, in plain Russian
                («Появился раздел…»), never developer language
-8. BUMP        package.json "version" in its own commit, pushed to main
-9. TAG         git tag vX.Y.Z && git push origin vX.Y.Z
+9. BUMP        package.json "version" in its own commit, pushed to main
+10. TAG        run the Windows gate first (see below), then
+               git tag vX.Y.Z && git push origin vX.Y.Z
                → CI runs the full suite, builds and SIGNS the bundle, attaches it
                  to a GitHub Release (tag must sit on main and match the version)
-10. PUBLISH    settings.easymed.uz/cp/ → publish the release to a ring:
+11. PUBLISH    settings.easymed.uz/cp/ → publish the release to a ring:
                TEST CLINIC FIRST, always. Widen only after the owner has clicked
                through the test clinic. A bad release is simply never widened.
-11. RECEIVE    the clinic admin sees the offer (check-in ~60s after boot or the
+12. RECEIVE    the clinic admin sees the offer (check-in ~60s after boot or the
                «Проверить обновления» button), consents, picks the hour; launcher
                installs pick up the new version on the next window restart.
 ```

@@ -115,12 +115,18 @@ absolute:
 1. **Sync first, before any change:** `git switch main && git pull` — someone else may
    have pushed since yesterday. Building on a stale checkout loses their work in a merge.
 2. Make the change here, `npm test`, look at the actual screen.
-3. Review the diff (`git status` / `git diff` — no data/, no *.db, no keys), then push.
-4. **STOP AND ASK THE OWNER** before anything release-shaped: no tagging, no publishing
-   in the panel, nothing that makes the change visible to clinics, until the owner says
-   yes to that specific version. Pushing to GitHub is safe by itself — clinics can only
-   ever receive a tagged, signed, ring-published release.
-5. The owner verifies on the test clinic first (restart its window -> check-in offers
+3. **STOP AND WAIT FOR THE OWNER TO TEST IT ON DEV** (localhost:8000). The owner's rule,
+   stated 2026-08-24: automated tests passing is not the same as the change being right,
+   and the dev server is where they look. Do not push until they say it is good.
+4. Review the diff (`git status` / `git diff` — no data/, no *.db, no keys), then push,
+   and check CI went green on GitHub.
+5. **STOP AND ASK THE OWNER AGAIN** before anything release-shaped: no version bump, no
+   tagging, no publishing in the panel, nothing that makes the change visible to clinics,
+   until the owner says yes to that specific version. Pushing to GitHub is safe by
+   itself — clinics can only ever receive a tagged, signed, ring-published release.
+   Before tagging, run the Windows-only gate the update pipeline has no other cover for:
+   `node --test server/services/control/apply-spawn.smoke.test.js` (see CONTRIBUTING.md).
+6. The owner verifies on the test clinic first (restart its window -> check-in offers
    the update within ~a minute -> consent -> applies -> reopen window), and only then
    decides whether to widen the release to real clinics.
 
