@@ -2440,4 +2440,91 @@ export const STRINGS = {
   "Колонки воронки и источники заявок — структура доски CRM.": {"en":"Funnel columns and lead sources — the CRM board's structure.","ru":"Колонки воронки и источники заявок — структура доски CRM.","uz":"Voronka ustunlari va murojaat manbalari — CRM doskasining tuzilishi."},
   "Колонки воронки и источники заявок": {"en":"Funnel columns and lead sources","ru":"Колонки воронки и источники заявок","uz":"Voronka ustunlari va murojaat manbalari"},
   "Звонки Binotel: подключение, опрос, маршрут звонков в заявки и журнал": {"en":"Binotel calls: connection, polling, call-to-lead routing and the log","ru":"Звонки Binotel: подключение, опрос, маршрут звонков в заявки и журнал","uz":"Binotel qo'ng'iroqlari: ulanish, so'rov, qo'ng'iroqdan murojaatga yo'naltirish va jurnal"},
+  // LAB_PANELS_MODE_V1 — Лаборатория gains an Очередь | Панели switch and the
+  // panel editor moved into views/lab-panels.js (docs/plans/2026-08-24-lab-panels-
+  // and-roles.md, Task 1) — added 2026-08-24. The editor's own vocabulary
+  // («Панель сохранена», «Поиск панели…», «Вверх», «Вниз», «Удалить»,
+  // «Загрузка…») is unchanged and already sits above: the editor moved file,
+  // its words did not. What is new here is the switch, the accessible names the
+  // extraction added, and the panels-mode subtitle.
+  "Очередь": {"en":"Queue","ru":"Очередь","uz":"Navbat"},
+  "Панели": {"en":"Panels","ru":"Панели","uz":"Panellar"},
+  "Режим раздела": {"en":"Section mode","ru":"Режим раздела","uz":"Bo'lim rejimi"},
+  "Панели исследований, показатели и референсные значения.": {"en":"Test panels, analytes and reference ranges.","ru":"Панели исследований, показатели и референсные значения.","uz":"Tekshiruv panellari, ko'rsatkichlar va referens qiymatlar."},
+  // Accessible names for controls that carried only a tooltip (or only a glyph)
+  // before the extraction — a screen reader reads these, so they need the same
+  // three languages as anything else on screen.
+  "Поиск панели": {"en":"Search panels","ru":"Поиск панели","uz":"Panel qidirish"},
+  "Создать копию выбранной панели": {"en":"Duplicate the selected panel","ru":"Создать копию выбранной панели","uz":"Tanlangan panel nusxasini yaratish"},
+  "Создать пустую панель вручную": {"en":"Create an empty panel by hand","ru":"Создать пустую панель вручную","uz":"Bo'sh panelni qo'lda yaratish"},
+  "Диапазоны нормы": {"en":"Reference ranges","ru":"Диапазоны нормы","uz":"Norma diapazonlari"},
+  // ROLES_EDITOR_V2 — Настройки → «Роли» (docs/plans/2026-08-24-lab-panels-and-roles.md,
+  // задача 2) — added 2026-08-24. Экран был целиком на английском внутри
+  // русского приложения; здесь его собственные строки. Плюс словарь того, из
+  // чего он строит матрицу: названия ролей и все модули permissions.js
+  // NAV_MODULES — их источник русский, но записи ru/uz/en не было ни у одной,
+  // поэтому в UZ/EN клинике половина экрана оставалась русской.
+  "Назад в настройки": {"en":"Back to settings","ru":"Назад в настройки","uz":"Sozlamalarga qaytish"},
+  "Роли и права": {"en":"Roles & permissions","ru":"Роли и права","uz":"Rollar va huquqlar"},
+  "Кто что видит и может менять. У администратора всегда полный доступ.": {"en":"Who sees what, and who can change it. An administrator always has full access.","ru":"Кто что видит и может менять. У администратора всегда полный доступ.","uz":"Kim nimani ko'radi va o'zgartira oladi. Administratorda doim to'liq kirish bo'ladi."},
+  "Здесь вы выбираете, какие разделы видит сотрудник. Доступ к данным дополнительно проверяет сервер — это не единственный замок.": {"en":"Here you choose which sections a staff member sees. Data access is checked by the server as well — this is not the only lock.","ru":"Здесь вы выбираете, какие разделы видит сотрудник. Доступ к данным дополнительно проверяет сервер — это не единственный замок.","uz":"Bu yerda siz xodim qaysi bo'limlarni ko'rishini tanlaysiz. Ma'lumotlarga kirishni qo'shimcha ravishda server ham tekshiradi — bu yagona qulf emas."},
+  "Выберите роль": {"en":"Choose a role","ru":"Выберите роль","uz":"Rolni tanlang"},
+  "Не удалось загрузить права роли.": {"en":"Could not load this role's permissions.","ru":"Не удалось загрузить права роли.","uz":"Rol huquqlarini yuklab bo'lmadi."},
+  "Права не показаны — это не значит, что их нет. Повторите загрузку, прежде чем что-то сохранять.": {"en":"The permissions are not shown — that does not mean there are none. Reload before saving anything.","ru":"Права не показаны — это не значит, что их нет. Повторите загрузку, прежде чем что-то сохранять.","uz":"Huquqlar ko'rsatilmadi — bu ular yo'q degani emas. Biror narsani saqlashdan oldin qayta yuklang."},
+  "Повторить загрузку": {"en":"Reload","ru":"Повторить загрузку","uz":"Qayta yuklash"},
+  "Разделы и уровень доступа": {"en":"Sections and access level","ru":"Разделы и уровень доступа","uz":"Bo'limlar va kirish darajasi"},
+  "У этой роли ещё нет сохранённых настроек. Отметьте разделы и сохраните.": {"en":"This role has no saved settings yet. Tick the sections and save.","ru":"У этой роли ещё нет сохранённых настроек. Отметьте разделы и сохраните.","uz":"Bu rolda hali saqlangan sozlamalar yo'q. Bo'limlarni belgilang va saqlang."},
+  "Что можно делать": {"en":"What they can do","ru":"Что можно делать","uz":"Nima qilish mumkin"},
+  // Уровни названы действием, а не системной ролью: ключи viewer/editor/admin в
+  // базе не менялись, слова на экране — да.
+  "Только просмотр": {"en":"View only","ru":"Только просмотр","uz":"Faqat ko'rish"},
+  "Просмотр и изменение": {"en":"View and edit","ru":"Просмотр и изменение","uz":"Ko'rish va o'zgartirish"},
+  "Изменение и удаление": {"en":"Edit and delete","ru":"Изменение и удаление","uz":"O'zgartirish va o'chirish"},
+  "Уровень доступа": {"en":"Access level","ru":"Уровень доступа","uz":"Kirish darajasi"},
+  "Сначала отметьте раздел": {"en":"Tick the section first","ru":"Сначала отметьте раздел","uz":"Avval bo'limni belgilang"},
+  "Сохранить роль": {"en":"Save role","ru":"Сохранить роль","uz":"Rolni saqlash"},
+  "Сохранение…": {"en":"Saving…","ru":"Сохранение…","uz":"Saqlanmoqda…"},
+  "Права сохранены — сотрудники увидят их при следующем входе.": {"en":"Permissions saved — staff will see them at their next sign-in.","ru":"Права сохранены — сотрудники увидят их при следующем входе.","uz":"Huquqlar saqlandi — xodimlar ularni keyingi kirishda ko'radi."},
+  "Не удалось сохранить права. Проверьте связь с сервером и повторите.": {"en":"Could not save the permissions. Check the connection to the server and try again.","ru":"Не удалось сохранить права. Проверьте связь с сервером и повторите.","uz":"Huquqlarni saqlab bo'lmadi. Server bilan aloqani tekshiring va qayta urinib ko'ring."},
+  "Права этой роли изменены, но не сохранены. Перейти дальше? Изменения пропадут.": {"en":"This role's permissions were changed but not saved. Continue? The changes will be lost.","ru":"Права этой роли изменены, но не сохранены. Перейти дальше? Изменения пропадут.","uz":"Bu rolning huquqlari o'zgartirilgan, lekin saqlanmagan. Davom etasizmi? O'zgarishlar yo'qoladi."},
+  // Названия ролей матрицы (Регистратор/Врач/Медсестра уже были выше).
+  "Кассир": {"en":"Cashier","ru":"Кассир","uz":"Kassir"},
+  "Лаборант": {"en":"Lab technician","ru":"Лаборант","uz":"Laborant"},
+  "Склад": {"en":"Stock","ru":"Склад","uz":"Ombor"},
+  "Колл-центр": {"en":"Call center","ru":"Колл-центр","uz":"Qo'ng'iroq markazi"},
+  // Группы и модули permissions.js NAV_MODULES. «Overview» — единственная
+  // группа, чей ИСХОДНИК английский (permissions.js:41); запись здесь даёт ей
+  // русское имя, не трогая общий для всех ворот файл.
+  "Overview": {"en":"Overview","ru":"Обзор","uz":"Umumiy ko'rinish"},
+  "Клинические": {"en":"Clinical","ru":"Клинические","uz":"Klinik"},
+  "Операционные": {"en":"Operations","ru":"Операционные","uz":"Operatsion"},
+  "Администрирование": {"en":"Administration","ru":"Администрирование","uz":"Administratsiya"},
+  "Дашборд": {"en":"Dashboard","ru":"Дашборд","uz":"Boshqaruv paneli"},
+  "Сводка по клинике за день": {"en":"The clinic's day at a glance","ru":"Сводка по клинике за день","uz":"Klinikaning kunlik xulosasi"},
+  "Отчёты за период и выгрузка в Excel": {"en":"Period reports and Excel export","ru":"Отчёты за период и выгрузка в Excel","uz":"Davr hisobotlari va Excelga yuklash"},
+  "Картотека, карты, визиты, счета": {"en":"Card index, records, visits, invoices","ru":"Картотека, карты, визиты, счета","uz":"Kartoteka, kartalar, tashriflar, hisoblar"},
+  "Регистрация пациента": {"en":"Patient registration","ru":"Регистрация пациента","uz":"Bemorni ro'yxatga olish"},
+  "Кнопка «+ Новый пациент» — заведение карты": {"en":"The «+ New patient» button — creating a record","ru":"Кнопка «+ Новый пациент» — заведение карты","uz":"«+ Yangi bemor» tugmasi — karta ochish"},
+  "CRM · Заявки": {"en":"CRM · Leads","ru":"CRM · Заявки","uz":"CRM · Murojaatlar"},
+  "Обращения и лиды, конверсия в пациента": {"en":"Enquiries and leads, conversion into a patient","ru":"Обращения и лиды, конверсия в пациента","uz":"Murojaatlar va lidlar, bemorga aylantirish"},
+  "Мои услуги (кабинет врача)": {"en":"My services (doctor's cabinet)","ru":"Мои услуги (кабинет врача)","uz":"Mening xizmatlarim (shifokor kabineti)"},
+  "Очередь врача, заключения, назначения": {"en":"The doctor's queue, conclusions, prescriptions","ru":"Очередь врача, заключения, назначения","uz":"Shifokor navbati, xulosalar, tayinlovlar"},
+  // «Очередь» уже добавлена блоком LAB_PANELS_MODE_V1 выше — тот же модуль,
+  // та же строка; вторая запись рядом означала бы два перевода одного слова.
+  "Доска номеров: кто у какого врача, в лаборатории и на процедурах": {"en":"The number board: who is with which doctor, in the lab and in procedures","ru":"Доска номеров: кто у какого врача, в лаборатории и на процедурах","uz":"Raqamlar taxtasi: kim qaysi shifokorda, laboratoriyada va muolajalarda"},
+  "Рабочий список и результаты": {"en":"Worklist and results","ru":"Рабочий список и результаты","uz":"Ish ro'yxati va natijalar"},
+  "Очередь процедур (медсестра)": {"en":"Procedure queue (nurse)","ru":"Очередь процедур (медсестра)","uz":"Muolajalar navbati (hamshira)"},
+  "Стационар и палаты": {"en":"Ward & beds","ru":"Стационар и палаты","uz":"Statsionar va palatalar"},
+  "Койки, госпитализация и выписка": {"en":"Beds, admission and discharge","ru":"Койки, госпитализация и выписка","uz":"Krovatlar, gospitalizatsiya va chiqarish"},
+  "Документы пациентов": {"en":"Patient documents","ru":"Документы пациентов","uz":"Bemor hujjatlari"},
+  "Печатные документы по пациентам": {"en":"Printable patient documents","ru":"Печатные документы по пациентам","uz":"Bemorlar bo'yicha chop etiladigan hujjatlar"},
+  "Смена кассира и приём оплат": {"en":"The cashier's shift and taking payments","ru":"Смена кассира и приём оплат","uz":"Kassir smenasi va to'lovlarni qabul qilish"},
+  "Все смены и сверка": {"en":"All shifts and reconciliation","ru":"Все смены и сверка","uz":"Barcha smenalar va solishtirish"},
+  "Закупки и склад": {"en":"Procurement & stock","ru":"Закупки и склад","uz":"Xaridlar va ombor"},
+  "Товары, остатки, поступления": {"en":"Products, stock on hand, receipts","ru":"Товары, остатки, поступления","uz":"Mahsulotlar, qoldiqlar, kirimlar"},
+  "Чат с пациентами": {"en":"Patient chat","ru":"Чат с пациентами","uz":"Bemorlar bilan chat"},
+  // Описание называет уровни своими новыми именами — иначе подсказка ссылалась
+  // бы на слова, которых на экране больше нет.
+  "Переписка в Telegram-боте: читать (Просмотр) и отвечать (Редактирование)": {"en":"Telegram bot correspondence: read (View only) and reply (View and edit)","ru":"Переписка в Telegram-боте: читать (Просмотр) и отвечать (Редактирование)","uz":"Telegram-botdagi yozishmalar: o'qish (Faqat ko'rish) va javob berish (Ko'rish va o'zgartirish)"},
+  "Вся конфигурация клиники": {"en":"The clinic's whole configuration","ru":"Вся конфигурация клиники","uz":"Klinikaning barcha sozlamalari"},
 };

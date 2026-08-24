@@ -3901,3 +3901,88 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 @media (max-width: 720px) {
     .tel-route-action, .tel-route-stage { min-width: 0; max-width: none; }
 }
+
+/* ============================ ROLES_EDITOR_V2 — «Роли и права» ============================
+   Экран жил на инлайновых стилях, разложенных по вызовам h() (padding, border,
+   font-size у каждой строки матрицы). Стили переехали сюда — тот же приём и та
+   же причина, что у .tel-set: admin.html не задаёт <input>/<select> ВООБЩЕ, и
+   без класса-области каждое поле рисуется голым браузерным прямоугольником.
+   Область — весь экран (.roles-ed на корне вида), а не одна карточка: правило
+   касалось всех полей здесь. */
+.roles-ed .roles-back { margin-bottom: 14px; }
+
+/* Пояснение «это не единственный замок» — карточка-заметка над матрицей. */
+.roles-note { margin-bottom: 14px; padding: 11px 14px; display: flex; gap: 10px; align-items: flex-start; }
+.roles-note-ico { color: var(--ink-400); flex: 0 0 16px; margin-top: 1px; display: flex; }
+.roles-note-txt { font-size: 12px; line-height: 1.5; }
+
+/* Переключатель ролей: семь ролей не помещаются в строку на ноутбуке — перенос
+   обязателен, иначе последняя роль уезжает за край карточки. */
+.roles-tabs { flex-wrap: wrap; margin-bottom: 14px; }
+.roles-tabs button:disabled { opacity: .55; cursor: not-allowed; }
+
+/* Загрузка/ошибка. Пустая матрица на экране прав читается как «доступа нет»,
+   поэтому у ошибки свой видимый блок с кнопкой повтора, а не тост поверх
+   пустоты. */
+.roles-state { padding: 40px 24px; text-align: center; color: var(--ink-500); font-size: 13px; }
+.roles-error { padding: 16px 18px; border-color: var(--crit-500); }
+.roles-error-head { display: flex; align-items: center; gap: 8px; color: var(--crit-700); font-size: 14px; }
+.roles-error-ico { display: flex; flex: 0 0 16px; }
+.roles-error-why { margin: 8px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--ink-600);
+    background: var(--crit-50); border-radius: 6px; padding: 7px 10px; overflow-wrap: anywhere; }
+.roles-error-next { margin: 8px 0 12px; font-size: 12.5px; line-height: 1.5; color: var(--ink-600); }
+
+/* «У роли ещё нет настроек» — это НЕ ошибка и не пустой экран: галочки уже
+   можно ставить, поэтому строка стоит внутри карточки над матрицей. */
+.roles-unset { margin: 0; padding: 10px 16px; font-size: 12.5px; line-height: 1.5;
+    color: var(--info-700); background: var(--info-50); border-bottom: 1px solid var(--ink-100); }
+
+/* Заголовок группы несёт подпись колонки уровня: одна видимая подпись на
+   группу вместо двадцати повторов над каждым выпадающим списком. */
+.roles-group { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+    padding: 14px 16px 3px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--ink-400); }
+.roles-group-name { font-weight: 600; }
+.roles-group-lvl { flex: 0 0 auto; }
+
+.roles-row { display: flex; align-items: center; gap: 12px; padding: 9px 16px;
+    border-top: 1px solid var(--ink-25); }
+/* Галочка и подпись — одна мишень: попасть можно и по названию раздела, и по
+   его описанию, а не только по квадратику 16×16. */
+.roles-pick { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; cursor: pointer; margin: 0; }
+.roles-pick-txt { min-width: 0; display: block; }
+.roles-mod { display: block; font-size: 13px; font-weight: 600; color: var(--ink-900); }
+.roles-desc { display: block; font-size: 11px; color: var(--ink-500); margin-top: 1px; }
+.roles-ed input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; margin: 0; flex: 0 0 16px; }
+/* Во время записи прав форма заперта целиком — курсор говорит об этом. */
+.roles-ed input[type="checkbox"]:disabled { cursor: not-allowed; }
+.roles-row:hover { background: var(--ink-25); }
+
+.roles-lvl-cell { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.roles-ed select.roles-lvl {
+    height: 32px; min-width: 190px; padding: 0 26px 0 10px;
+    border: 1px solid var(--ink-200); border-radius: var(--r-sm, 8px);
+    background: #fff; font: inherit; font-size: 12.5px; color: inherit; cursor: pointer;
+}
+.roles-ed select.roles-lvl:hover:not(:disabled) { border-color: var(--ink-300); }
+/* Видимый фокус. Общий outline из admin.css НЕ снимаем — он заметнее любой
+   замены; здесь только усиливаем рамку самого поля, чтобы было видно, какой
+   именно раздел сейчас под клавиатурой. */
+.roles-ed select.roles-lvl:focus-visible {
+    border-color: var(--primary-500); box-shadow: 0 0 0 3px var(--primary-50);
+}
+/* Заблокированный список должен ВЫГЛЯДЕТЬ недоступным, а не просто не
+   отвечать на клик — иначе администратор спорит с ним, не понимая почему. */
+.roles-ed select.roles-lvl:disabled { background: var(--ink-50); color: var(--ink-400); cursor: not-allowed; }
+/* Причина блокировки. Прячется, когда раздел отмечен: aria-describedby ссылается
+   на неё, и display:none убирает её из проговаривания заодно с экрана. */
+.roles-why { font-size: 10.5px; color: var(--ink-400); line-height: 1.2; }
+.roles-why.is-hidden { display: none; }
+
+@media (max-width: 720px) {
+    .roles-row { flex-direction: column; align-items: stretch; gap: 8px; }
+    .roles-lvl-cell { align-items: stretch; }
+    .roles-ed select.roles-lvl { min-width: 0; width: 100%; }
+    .roles-group-lvl { display: none; }
+}
+/* ============================ end ROLES_EDITOR_V2 ============================ */

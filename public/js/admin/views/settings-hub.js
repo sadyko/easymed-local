@@ -22,7 +22,11 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, checkField } from '../ui.js';
 import { getLang, tr } from '../i18n.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
-import { NAV_MODULES } from '../permissions.js';   // ROLE_KEYS_V2 — one source of truth for grantable modules
+// ROLES_EDITOR_V2 — «Роли» — свой файл экрана (views/roles-editor.js). Он жил
+// здесь и тянул за собой NAV_MODULES; вынесен по конвенции «один файл на
+// экран» и чтобы правки прав не задевали этот файл. Хаб только монтирует
+// экран и даёт ему дорогу назад.
+import { renderRolesEditor } from './roles-editor.js?v=roles2';
 
 let state = { section: null };   // null = hub; else one of LOOKUP_CONFIG's keys
 
@@ -38,7 +42,7 @@ export async function renderSettingsHub(container, { onNavigate } = {}) {
 
 async function repaint() {
     clear(refs.container);
-    if (state.section === 'roles') await renderRolesEditor(refs.container);
+    if (state.section === 'roles') await renderRolesEditor(refs.container, { onBack: backToHub });
     else if (state.section) await renderEditor(refs.container, state.section);
     else renderHub(refs.container);
 }
@@ -782,154 +786,5 @@ async function renderEditor(container, key) {
         document.body.appendChild(overlay);
         for (const f of fkFields) loadFkOptions(f);
         for (const s of suggestFields) loadSuggestions(s);
-    }
-}
-
-// -----------------------------------------------------------------------------
-// ROLES & PERMISSIONS — ROLES_EDITOR_V1. Per-role access matrix: for each of the
-// fixed staff roles, tick which sidebar modules that role sees and at what level
-// (View / Edit / Full). Stored one row per role in `role_permissions`
-// (permissions = JSON { sections:[navId], levels:{navId:'viewer'|'editor'|'admin'} })
-// and consumed verbatim by admin.js applyActorPermissions() +
-// admin/permissions.js at login. Admin always has full access and is NOT editable
-// here (can never be locked out). This gates the CLIENT UI (sidebar + edit/delete
-// buttons); the server independently enforces DATA access by the base role
-// (server/db/schema-registry.js), so this is an access layer on top of that.
-// -----------------------------------------------------------------------------
-
-// ROLE_KEYS_V2 — the matrix is built from permissions.js NAV_MODULES, the SAME
-// list the sidebar gates read. It used to be a second hand-maintained copy, and
-// it had drifted: it offered «Doctor's room» → wrote the key `doctor-room`,
-// which nothing checks (the cabinet is gated on `consultation`), so a ticked box
-// granted nothing. It also had no row for CRM, Процедуры or Регистрация, so
-// those gates could never be opened for any role.
-const ROLE_MODULES = NAV_MODULES;
-
-// The editable staff roles (admin is always full access — handled separately).
-const ROLE_LIST = [
-    { key: 'registrar', label: 'Регистратор' },
-    { key: 'doctor',    label: 'Врач' },
-    { key: 'cashier',   label: 'Кассир' },
-    { key: 'lab',       label: 'Лаборант' },
-    { key: 'nurse',     label: 'Медсестра' },
-    { key: 'inventory', label: 'Склад' },
-    { key: 'callcenter', label: 'Колл-центр' },   // CALLCENTER_ROLE_V1
-];
-const ROLE_LEVELS = [['viewer', 'View'], ['editor', 'Edit'], ['admin', 'Full']];
-const roleLabel = (key) => (ROLE_LIST.find(r => r.key === key) || { label: key }).label;
-
-async function renderRolesEditor(container) {
-    let selected = ROLE_LIST[0].key;
-    const controls = {};   // moduleKey -> { chk, level }
-
-    const roleBtns  = h('div', { class: 'segmented', style: { flexWrap: 'wrap' } });
-    const matrixWrap = h('div');
-    const saveBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button' }, 'Save role');
-    saveBtn.addEventListener('click', save);
-
-    container.appendChild(h('div', { class: 'fade-in' },
-        h('button', { class: 'btn btn-outline btn-sm', type: 'button', style: { marginBottom: '14px' }, onclick: backToHub },
-            Icon('ChevronLeft', { size: 14 }), ' Back to settings'),
-        h('div', { class: 'page-head' },
-            h('div', null,
-                h('h1', { class: 'page-title' }, 'Roles & permissions'),
-                h('p', { class: 'page-subtitle' }, 'Choose what each staff role sees in the app. Admin always has full access.'),
-            ),
-        ),
-        h('div', { class: 'card', style: { marginBottom: '14px', padding: '11px 14px', display: 'flex', gap: '10px', alignItems: 'flex-start' } },
-            h('span', { style: { color: 'var(--ink-400)', flex: '0 0 16px', marginTop: '1px' } }, Icon('Help', { size: 15 })),
-            h('div', { class: 'muted', style: { fontSize: '12px', lineHeight: '1.5' } },
-                'This controls the sidebar and edit/delete buttons each role sees. Data access is also enforced on the server by the base role — so this is a UI-access layer on top of that, not the only lock.'),
-        ),
-        h('div', { style: { marginBottom: '14px' } }, roleBtns),
-        matrixWrap,
-    ));
-
-    for (const r of ROLE_LIST) {
-        const b = h('button', { class: 'segmented-btn', type: 'button', onclick: () => selectRole(r.key) }, r.label);
-        b.dataset.role = r.key;
-        roleBtns.appendChild(b);
-    }
-
-    await selectRole(selected);
-
-    function paintActive() {
-        for (const b of roleBtns.children) b.classList.toggle('on', b.dataset.role === selected);
-    }
-
-    async function selectRole(key) {
-        selected = key;
-        paintActive();
-        clear(matrixWrap);
-        matrixWrap.appendChild(h('div', { class: 'empty' }, 'Loading…'));
-        let perms = { sections: [], levels: {} };
-        try {
-            const { data, error } = await supabase.from('role_permissions').select('permissions').eq('role', key).maybeSingle();
-            if (error) throw error;
-            if (data && data.permissions) {
-                let p = data.permissions;
-                if (typeof p === 'string') p = JSON.parse(p);
-                if (p && Array.isArray(p.sections)) perms = { sections: p.sections, levels: p.levels || {} };
-            }
-        } catch (e) {
-            toast('Failed to load role: ' + (e && e.message || e), 'fail');
-        }
-        paintMatrix(perms);
-    }
-
-    function paintMatrix(perms) {
-        clear(matrixWrap);
-        for (const k of Object.keys(controls)) delete controls[k];
-        const granted = new Set(perms.sections || []);
-
-        const card = h('div', { class: 'card' },
-            h('div', { class: 'card-header' },
-                h('h3', null, Icon('Settings', { size: 16 }), ' ', roleLabel(selected) + ' — module access'),
-                saveBtn,
-            ),
-        );
-        for (const grp of ROLE_MODULES) {
-            card.appendChild(h('div', { class: 'muted', style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.04em', padding: '12px 14px 2px' } }, grp.group));
-            for (const it of grp.items) {
-                const chk = h('input', { type: 'checkbox', checked: granted.has(it.key) });
-                const lvl = h('select', null, ...ROLE_LEVELS.map(([v, l]) => h('option', { value: v, selected: (perms.levels && perms.levels[it.key] || 'editor') === v }, l)));
-                lvl.disabled = !chk.checked;
-                chk.addEventListener('change', () => { lvl.disabled = !chk.checked; });
-                controls[it.key] = { chk, level: lvl };
-                card.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '9px 14px', borderTop: '1px solid var(--ink-25)' } },
-                    h('label', { style: { display: 'flex', alignItems: 'center', gap: '9px', flex: 1, minWidth: 0, cursor: 'pointer' } },
-                        chk,
-                        h('div', { style: { minWidth: 0 } },
-                            h('div', { style: { fontSize: '13px', fontWeight: 600, color: 'var(--ink-900)' } }, it.label),
-                            it.desc ? h('div', { class: 'muted', style: { fontSize: '11px' } }, it.desc) : null,
-                        ),
-                    ),
-                    h('div', { style: { flex: '0 0 auto' } }, lvl),
-                ));
-            }
-        }
-        matrixWrap.appendChild(card);
-    }
-
-    async function save() {
-        const sections = [];
-        const levels = {};
-        for (const [key, ctl] of Object.entries(controls)) {
-            if (ctl.chk.checked) { sections.push(key); levels[key] = ctl.level.value; }
-        }
-        const permissions = JSON.stringify({ sections, levels });
-        saveBtn.disabled = true;
-        const prev = saveBtn.textContent;
-        saveBtn.textContent = 'Saving…';
-        try {
-            const { error } = await supabase.from('role_permissions').update({ permissions }).eq('role', selected).select().single();
-            if (error) throw error;
-            toast('Saved ' + roleLabel(selected) + ' role — users see it on next sign-in', 'ok');
-        } catch (e) {
-            toast((e && e.message) || 'Failed to save.', 'fail');
-        } finally {
-            saveBtn.disabled = false;
-            saveBtn.textContent = prev;
-        }
     }
 }

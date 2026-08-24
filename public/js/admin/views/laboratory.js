@@ -33,7 +33,8 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, fmtDate, fmtDateTime, field, avColor, initials } from '../ui.js';
 import { printBarcodeLabel } from './lab-barcode.js';
 import { printableSheet } from './doc-settings.js?v=q3company1';   // same URL as patient-card/service-workspace (one instance)
-import { canDelete } from '../permissions.js';
+import { canDelete, canManageLabSettings } from '../permissions.js';   // LAB_PANELS_MODE_V1 — same right that opens Настройки → «Лаборатория и диагностика»
+import { mountLabPanels } from './lab-panels.js';   // LAB_PANELS_MODE_V1 — the editor itself, shared with lab-settings.js
 // ?v= is required here, not decorative: this module gained selectOptionsFor, and a
 // browser holding the older cached copy would fail the named import and blank the view.
 import { pluralRu, groupLabRows, selectOptionsFor } from './lab-grouping.js?v=labsel1';   // LAB_GROUP_V1 / LAB_SELECT_OPTIONS_V1 — pure helpers, unit-tested separately
@@ -99,7 +100,7 @@ function flagTag(f) {
 // -----------------------------------------------------------------------------
 // State
 // -----------------------------------------------------------------------------
-const refs = { container: null, list: null, emptyEl: null, totalEl: null, filterWrap: null, searchInp: null };
+const refs = { container: null, list: null, emptyEl: null, totalEl: null, filterWrap: null, searchInp: null, panelsHost: null, tabId: null };
 const state = {
     rows: [],          // lab visit_services, newest first
     patientMap: {},    // visit_id -> { visit_date, patient }
@@ -109,14 +110,98 @@ const state = {
     typeNameById: {},  // service_type_id -> name (LAB_SERVICE_ROUTING_V1)
     filter: 'open',
     search: '',
+    mode: 'queue',     // LAB_PANELS_MODE_V1 — 'queue' | 'panels'
 };
 
-export async function renderLaboratory(container) {
+// LAB_PANELS_MODE_V1 — «Панели» is a MODE of Лаборатория, not a second sidebar
+// entry: the technician stays in the section they already live in, and the
+// module keeps one nav item and one tab.
+const MODES = [
+    { key: 'queue',  label: 'Очередь' },
+    { key: 'panels', label: 'Панели'  },
+];
+
+export async function renderLaboratory(container, ctx = {}) {
     refs.container = container;
+    refs.tabId = ctx.tabId || null;   // HASH_SUBROUTE_V1 — needed to report the mode back to the shell
     state.filter = 'open';
     state.search = '';
+    // LAB_PANELS_MODE_V1 — the mode comes out of the URL: admin.js hands
+    // '#labs/panels' over as payload.sub, so a reload or a pasted link opens the
+    // mode it names instead of always dropping the user back on the queue.
+    // Gated exactly like the switch itself — a role that may not manage panels
+    // gets the queue no matter what the address bar asks for.
+    const wantsPanels = !!(ctx.payload && ctx.payload.sub === 'panels');
+    state.mode = (wantsPanels && canManageLabSettings()) ? 'panels' : 'queue';
     mount();
-    await fetchAndPaint();
+    await paintMode();
+}
+
+// Paints the body the current mode needs. The queue and the panel editor are
+// two different screens sharing one page head, so nothing here is shared beyond
+// that head — mount() decides which body exists, this decides what fills it.
+async function paintMode() {
+    if (state.mode === 'panels') await mountLabPanels(refs.panelsHost);
+    else await fetchAndPaint();
+}
+
+// LAB_PANELS_MODE_V1 — switching mode rebuilds the head (the segmented control
+// has to move its «on» state and the queue's search/filter/refresh have no
+// meaning in the editor) and then repaints the body.
+async function setMode(mode) {
+    if (state.mode === mode) return;
+    // Defence in depth: the button is not rendered for a role without the right,
+    // but a mode setter that trusts its own UI is one refactor away from being
+    // the hole. The permission is re-checked here too.
+    if (mode === 'panels' && !canManageLabSettings()) return;
+    state.mode = mode;
+    syncModeUrl();
+    mount();
+    await paintMode();
+}
+
+// URL reflects state (web-interface-guidelines): the mode lives in the address,
+// so F5 keeps it and a colleague can be sent straight to it. replaceState, not
+// pushState — flipping a mode inside one screen is not a new place for the Back
+// button to return to, and a technician toggling twice should not have to press
+// Back three times to leave Лаборатория.
+function syncModeUrl() {
+    try {
+        if (typeof history === 'undefined' || !history.replaceState) return;
+        const panels = state.mode === 'panels';
+        history.replaceState({ view: 'labs', payload: panels ? { sub: 'panels' } : null },
+            '', '#labs' + (panels ? '/panels' : ''));
+        // Tell the shell too: the address bar alone is not enough, because
+        // navigate() rewrites the hash from the TAB's payload the next time
+        // anyone routes to Лаборатория.
+        if (typeof window !== 'undefined' && typeof window.easymedSetTabSub === 'function') {
+            window.easymedSetTabSub(refs.tabId, panels ? 'panels' : null);
+        }
+    } catch (e) {
+        // A hardened browser can refuse history writes; the mode still works,
+        // it just stops being linkable. Never worth breaking the screen for.
+    }
+}
+
+// LAB_PANELS_MODE_V1 — the two-way switch, rendered ONLY for a role that may
+// manage lab settings. canManageLabSettings() is already true for any Lab role
+// at edit level, which is the whole point of the plan: the technician gets panel
+// editing without being handed the Settings hub (staff accounts, price lists,
+// licence, danger zone). A read-only lab user sees no switch at all — not a
+// disabled one, because there is nothing they could do to earn it here.
+function modeSwitch() {
+    if (!canManageLabSettings()) return null;
+    const wrap = h('div', { class: 'segmented', role: 'group', 'aria-label': 'Режим раздела' });
+    for (const m of MODES) {
+        const on = state.mode === m.key;
+        wrap.appendChild(h('button', {
+            type: 'button',
+            class: 'segmented-btn' + (on ? ' on' : ''),
+            'aria-pressed': on ? 'true' : 'false',
+            onclick: () => setMode(m.key),
+        }, m.label));
+    }
+    return wrap;
 }
 
 // -----------------------------------------------------------------------------
@@ -147,25 +232,37 @@ function mount() {
         tmr = setTimeout(() => { state.search = refs.searchInp.value; paintRows(); }, 180);
     });
 
+    // LAB_PANELS_MODE_V1 — the editor gets its own host so switching modes swaps
+    // one child instead of leaving the queue's card on screen behind it.
+    refs.panelsHost = h('div');
+    const panels = state.mode === 'panels';
+
     refs.container.appendChild(h('div', { class: 'fade-in' },
         h('div', { class: 'page-head' },
-            h('div', null,
+            // minWidth 0 — a flex child with a long subtitle must be allowed to
+            // shrink, or the head actions get pushed off the right edge.
+            h('div', { style: { minWidth: '0' } },
                 h('h1', { class: 'page-title' }, 'Лаборатория'),
-                h('p', { class: 'page-subtitle' }, 'Очередь проб: забор → в работу → результаты → проверка и выдача.'),
+                h('p', { class: 'page-subtitle' }, panels
+                    ? 'Панели исследований, показатели и референсные значения.'
+                    : 'Очередь проб: забор → в работу → результаты → проверка и выдача.'),
             ),
             h('div', { class: 'page-head-actions', style: { display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
-                refs.searchInp,
-                refs.filterWrap,
-                h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => fetchAndPaint() },
+                modeSwitch(),
+                // The queue's own controls filter the queue — in the editor they
+                // would point at nothing, so they are absent rather than inert.
+                panels ? null : refs.searchInp,
+                panels ? null : refs.filterWrap,
+                panels ? null : h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => fetchAndPaint() },
                     Icon('Refresh', { size: 13 }), ' Обновить'),
             ),
         ),
-        h('div', { class: 'card' },
+        panels ? refs.panelsHost : h('div', { class: 'card' },
             refs.list,
             refs.emptyEl,
         ),
     ));
-    paintFilters();
+    if (!panels) paintFilters();
 }
 
 function paintFilters() {

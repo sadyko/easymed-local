@@ -279,11 +279,38 @@ function navigate(view, payload, opts = {}) {
 }
 
 function pushHistory(view, payload) {
+    const url = hashFor(view, payload);
     try {
-        history.pushState({ view, payload: payload ?? null }, '', '#' + view);
+        history.pushState({ view, payload: payload ?? null }, '', url);
     } catch {
-        try { history.pushState({ view }, '', '#' + view); } catch {}
+        try { history.pushState({ view }, '', url); } catch {}
     }
+}
+
+// HASH_SUBROUTE_V1 — a MODE inside a view, carried in the hash as '#view/sub'.
+//
+// This app has no hash router: pushHistory writes the hash, nothing ever read
+// it, and the route that survives a reload is the one saved to localStorage.
+// «Панели» inside Лаборатория is the first piece of state that localStorage
+// cannot express — the same view with two different faces — so the convention
+// starts here and is deliberately tiny: ONE slash, the view before it, and the
+// part after it reaches the view as ctx.payload.sub.
+//
+// It is not a second view id ('labs-panels') because the plan requires one
+// sidebar entry and one tab for Лаборатория; a second id would have produced a
+// second tab and a second nav item for what is one screen in two modes.
+function hashFor(view, payload) {
+    const sub = payload && typeof payload.sub === 'string' ? payload.sub : null;
+    return '#' + view + (sub ? '/' + sub : '');
+}
+
+function parseHash() {
+    let raw = '';
+    try { raw = String(location.hash || '').replace(/^#/, ''); } catch { raw = ''; }
+    if (!raw) return { view: null, sub: null };
+    const i = raw.indexOf('/');
+    if (i < 0) return { view: raw, sub: null };
+    return { view: raw.slice(0, i), sub: raw.slice(i + 1) || null };
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +346,22 @@ function initialTabLabel(view, payload) {
     }
     return view;
 }
+
+// HASH_SUBROUTE_V1 — a view that owns a sub-route reports it here, so the tab's
+// payload keeps telling the truth about what is on screen. Two things depend on
+// that: the next navigate() to this view writes the right hash (clicking the
+// sidebar entry for the section you are already in must not silently drop
+// '/panels' out of the URL), and a re-render of an open tab — the branch/lang
+// switches re-render every tab — reopens the mode the user was in rather than
+// resetting them to the view's default. Mirrors easymedSetTabLabel below.
+window.easymedSetTabSub = function setTabSub(tabId, sub) {
+    const tab = state.tabs.find(t => t.id === tabId);
+    if (!tab) return;
+    const payload = { ...(tab.payload || {}) };
+    if (sub) payload.sub = sub; else delete payload.sub;
+    tab.payload = Object.keys(payload).length ? payload : null;
+    if (state.activeTabId === tabId) state.payload = tab.payload;
+};
 
 // Called by views (or anyone) to update their tab's label once they
 // know the real one (e.g. patient name fetched async).
@@ -2559,10 +2602,19 @@ function startApp() {
     });
 
     const last = loadRoute();
-    const valid = last && (CRUMBS[last] || PLACEHOLDERS.has(last) || last.startsWith('settings') || last.startsWith('report'));
+    const isKnownView = (v) => !!v && (CRUMBS[v] || PLACEHOLDERS.has(v) || v.startsWith('settings') || v.startsWith('report'));
+    const valid = last && isKnownView(last);
     let target = valid ? last : firstAllowedView();
     if (!isRouteAllowed(target)) target = firstAllowedView();
-    navigate(target);
+
+    // HASH_SUBROUTE_V1 — a hash that names a SUB-route (#labs/panels) carries
+    // state the remembered route cannot express, so it wins the boot. A bare
+    // '#view' does NOT: switchToTab saves the route without rewriting the URL,
+    // so a plain hash can be stale, and the remembered tab keeps the precedence
+    // it has always had.
+    const hash = parseHash();
+    if (hash.sub && isKnownView(hash.view) && isRouteAllowed(hash.view)) target = hash.view;
+    navigate(target, hash.sub && hash.view === target ? { sub: hash.sub } : null);
 
     // Load roles (for the super-admin "View as" switcher) then render the
     // footer account controls (switcher + logout). loadRolesForPreview fails
