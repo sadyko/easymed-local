@@ -356,3 +356,24 @@ test('тонкий ответ сервера — экран показывает
     assert.ok(values.includes(label), 'запасной источник: ' + label);
   }
 });
+
+
+// --- Enter добавляет колонку, и экран говорит, что не сохранено --------------
+
+test('Enter в поле «Добавить колонку» добавляет её — раньше падал TypeError и не добавлялось ничего', async () => {
+  resetServer();
+  const root = await render();
+  // По placeholder: в обеих карточках есть поле добавления, и «последнее
+  // текстовое поле» — это поле источников, а не колонок.
+  const addInput = walk(root).find((n) => n.tagName === 'INPUT'
+      && String(n.attrs.placeholder || '').includes('колонк'));
+  assert.ok(addInput, 'поле добавления должно существовать');
+  addInput.value = 'Ждёт оплаты';
+  addInput.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} });
+
+  // Название колонки живёт в value поля ввода, а не в тексте страницы —
+  // textOf() его не увидит, сколько бы раз колонка ни добавилась.
+  const values = walk(root).filter((n) => n.tagName === 'INPUT').map((n) => n.value);
+  assert.ok(values.includes('Ждёт оплаты'), 'колонка появилась в списке: ' + JSON.stringify(values));
+  assert.ok(textOf(root).includes('Изменения не сохранены'), 'и экран честно говорит, что её ещё надо сохранить');
+});

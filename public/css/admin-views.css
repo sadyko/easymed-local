@@ -3830,6 +3830,11 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .crm-set-add { display: flex; gap: 8px; margin-top: 14px; align-items: center; }
 .crm-set-add input[type="text"] { max-width: 320px; }
 
+/* Save row + the «not saved yet» sentence. Amber, not red: nothing is wrong,
+   there is simply one more click to make the change real. */
+.crm-set-save { display: flex; gap: 10px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+.crm-set-dirty { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--warn-700); }
+
 /* Below ~720px the five columns cannot hold their shape: the row becomes two
    lines — reorder + name, then the controls — instead of wrapping mid-row. */
 @media (max-width: 720px) {

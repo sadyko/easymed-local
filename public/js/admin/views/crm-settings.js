@@ -49,6 +49,15 @@ import {
     shapeConfig, isNotImplemented,
 } from '../crm-settings-logic.js';
 
+// The signature of a section as the SERVER last gave it. Dirtiness is then a
+// comparison, not a flag every edit path has to remember to set — and the
+// screen edits rows in place (labels type straight into the model), so a flag
+// would have been wrong within a day.
+function sig(rows, keys) {
+    return JSON.stringify((rows || []).map((r) => keys.map((k) => r[k])));
+}
+const STAGE_SIG_KEYS = ['key', 'label', 'color', 'kind', 'is_active'];
+const SOURCE_SIG_KEYS = ['key', 'label', 'is_active'];
 const state = { cfg: null, busy: false };
 let refs = { root: null, body: null, stages: null, sources: null };
 
@@ -125,6 +134,8 @@ async function reload(fresh) {
     const cfg = (fresh && typeof fresh === 'object' && (Array.isArray(fresh.stages) || Array.isArray(fresh.sources)))
         ? fresh : await rpc('crm_config_get', {});
     state.cfg = shapeConfig(cfg);
+    state.baseStages = sig(state.cfg.stages, STAGE_SIG_KEYS);
+    state.baseSources = sig(state.cfg.sources, SOURCE_SIG_KEYS);
     paint();
 }
 
@@ -291,7 +302,7 @@ function paintStages() {
         const fresh = await rpc('crm_config_save', { stages });
         toast('Колонки сохранены.', 'success');
         await reload(fresh);
-    }));
+    }, sig(state.cfg.stages, STAGE_SIG_KEYS) !== state.baseStages));
 }
 
 // Colour is picked from the house tokens as swatches — never a free hex field.
@@ -372,7 +383,7 @@ function paintSources() {
         const fresh = await rpc('crm_config_save', { sources });
         toast('Источники сохранены.', 'success');
         await reload(fresh);
-    }));
+    }, sig(state.cfg.sources, SOURCE_SIG_KEYS) !== state.baseSources));
 }
 
 // ---------------------------------------------------------------------------
@@ -383,25 +394,48 @@ function paintSources() {
 // would hand out a duplicate key.
 function addRow(buttonLabel, placeholder, onAdd, taken) {
     const input = h('input', { type: 'text', placeholder, spellcheck: 'false' });
-    const btn = h('button', { class: 'btn', type: 'button',
-        onclick: () => {
-            const label = String(input.value || '').trim();
-            // Refusal, not a generated placeholder name: an unnamed column on
-            // the board is worse than no column.
-            if (!label) { toast('Введите название.', 'warn'); return; }
-            input.value = '';
-            onAdd(label, taken());
-        } }, Icon('Plus', { size: 13 }), ' ', buttonLabel);
-    // Enter submits: typing a name and pressing Enter is what everyone tries
-    // first, and a form that ignores it reads as broken.
-    input.addEventListener('keydown', (e) => { if (e && e.key === 'Enter') btn.onclick(); });
+
+    // ONE function, called by the button and by the Enter key.
+    //
+    // It used to be the button's onclick, with the key handler calling
+    // `btn.onclick()`. That threw: ui.js's h() wires every on* prop through
+    // addEventListener, so the .onclick PROPERTY is undefined and pressing
+    // Enter — the first thing anyone does after typing a name — died with a
+    // TypeError and added nothing. Reported as «I cannot add a column».
+    function submit() {
+        const label = String(input.value || '').trim();
+        // Refusal, not a generated placeholder name: an unnamed column on
+        // the board is worse than no column.
+        if (!label) { toast('Введите название.', 'warn'); return; }
+        input.value = '';
+        onAdd(label, taken());
+    }
+
+    const btn = h('button', { class: 'btn', type: 'button', onclick: submit },
+        Icon('Plus', { size: 13 }), ' ', buttonLabel);
+    input.addEventListener('keydown', (e) => {
+        if (!e || e.key !== 'Enter') return;
+        // The field may sit inside a form one day; never let Enter navigate.
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        submit();
+    });
     return h('div', { class: 'crm-set-add' }, input, btn);
 }
 
-function saveRow(label, fn) {
+// `dirty` = this section has edits that exist only on screen.
+//
+// Adding a column puts it in the list and NOTHING else — it reaches the clinic
+// only when this button is pressed. Without saying so, the screen looks like it
+// accepted the column and then lost it on the next reload, which is exactly how
+// «I cannot add a column» feels from the other side. The marker is a plain
+// sentence rather than a badge: it has to be readable, not decoded.
+function saveRow(label, fn, dirty) {
     const btn = h('button', { class: 'btn btn-primary', type: 'button',
         onclick: () => run(btn, fn) }, Icon('Check', { size: 13 }), ' ', label);
-    return h('div', { class: 'row', style: { gap: '8px', marginTop: '14px' } }, btn);
+    return h('div', { class: 'crm-set-save' },
+        btn,
+        dirty ? h('span', { class: 'crm-set-dirty', role: 'status' },
+            Icon('Warning', { size: 13 }), ' ', 'Изменения не сохранены') : null);
 }
 
 // One save at a time: two sections written in parallel is a race the server
