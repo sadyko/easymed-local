@@ -151,17 +151,25 @@ export async function openCustDev() {
         const b = bounds();
         if (!b.from || !b.to) { state.rows = []; paintBoard(); return; }
 
-        // Сначала досоздаём карточки, потом читаем. Ошибку синхронизации ГЛОТАЕМ:
-        // у клиники с просроченной лицензией custdev_sync — запись и вернёт 402,
-        // но уже созданные карточки читаться должны, иначе «только чтение»
-        // превратилось бы в пустой экран.
-        try { await supabase.rpc('custdev_sync', b); } catch (e) { /* фоновая автоматика — молча */ }
+        // supabase.rpc() НИКОГДА не бросает — ошибку возвращает в { error }.
+        // Здесь стояло `state.rows = await supabase.rpc(...)`, и в state.rows
+        // ложился объект { data, error }: rows.length давал undefined (экран
+        // говорил «обзванивать некого»), а следующий rows.filter() падал
+        // TypeError-ом ещё до отрисовки колонок. Доска была пуста при 344
+        // карточках в базе.
+        //
+        // Ошибку синхронизации глотаем НАМЕРЕННО: у клиники с просроченной
+        // лицензией custdev_sync — запись и вернёт 402, но уже созданные
+        // карточки читаться должны, иначе «только чтение» превратилось бы в
+        // пустой экран.
+        await supabase.rpc('custdev_sync', b);
 
-        try {
-            state.rows = await supabase.rpc('custdev_list', b) || [];
-        } catch (e) {
-            toast('Не удалось загрузить карточки: ' + ((e && e.message) || e), 'fail');
+        const { data, error } = await supabase.rpc('custdev_list', b);
+        if (error) {
+            toast('Не удалось загрузить карточки: ' + (error.message || ''), 'fail');
             state.rows = [];
+        } else {
+            state.rows = Array.isArray(data) ? data : [];
         }
         paintBoard();
     }
@@ -279,12 +287,9 @@ export async function openCustDev() {
                 const target = overCol;
                 cleanup();
                 if (!target || target.dataset.col === r.status) return;
-                try {
-                    await supabase.rpc('custdev_mark', { card_id: r.id, status: target.dataset.col });
-                    await reload();
-                } catch (e) {
-                    toast((e && e.message) || 'Не удалось изменить статус.', 'fail');
-                }
+                const { error } = await supabase.rpc('custdev_mark', { card_id: r.id, status: target.dataset.col });
+                if (error) { toast(error.message || 'Не удалось изменить статус.', 'fail'); return; }
+                await reload();
             };
             document.addEventListener('pointermove', onMove);
             document.addEventListener('pointerup', onUp);
@@ -364,33 +369,35 @@ function openRate(r, onSaved, editable) {
 
     saveBtn.addEventListener('click', async () => {
         saveBtn.disabled = true;
-        try {
-            await supabase.rpc('custdev_rate', {
-                card_id: r.id, registrar: picked.registrar, cashier: picked.cashier,
-                doctor: picked.doctor, comment: comment.value,
-            });
-            toast('Оценка сохранена.', 'ok');
-            close();
-            await onSaved();
-        } catch (e) {
-            // Сервер считает то же правило, и его отказ — источник истины.
-            toast((e && e.message) || 'Не удалось сохранить оценку.', 'fail');
+        const { error } = await supabase.rpc('custdev_rate', {
+            card_id: r.id, registrar: picked.registrar, cashier: picked.cashier,
+            doctor: picked.doctor, comment: comment.value,
+        });
+        // Отказ сервера ОБЯЗАН быть виден. Пока ошибка проверялась через
+        // try/catch, которого rpc() не использует, отказ проходил незамеченным:
+        // попап закрывался с «Оценка сохранена», а в базе не менялось ничего.
+        if (error) {
+            toast(error.message || 'Не удалось сохранить оценку.', 'fail');
             syncSave();
+            return;
         }
+        toast('Оценка сохранена.', 'ok');
+        close();
+        await onSaved();
     });
 
     const noAnswer = h('button', { class: 'btn btn-outline', type: 'button', disabled: !editable },
         Icon('PhoneMissed', { size: 14 }), ' Не дозвонились');
     noAnswer.addEventListener('click', async () => {
         noAnswer.disabled = true;
-        try {
-            await supabase.rpc('custdev_mark', { card_id: r.id, status: 'unreachable' });
-            close();
-            await onSaved();
-        } catch (e) {
-            toast((e && e.message) || 'Не удалось изменить статус.', 'fail');
+        const { error } = await supabase.rpc('custdev_mark', { card_id: r.id, status: 'unreachable' });
+        if (error) {
+            toast(error.message || 'Не удалось изменить статус.', 'fail');
             noAnswer.disabled = false;
+            return;
         }
+        close();
+        await onSaved();
     });
 
     ov.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '560px', maxWidth: 'calc(100vw - 32px)' } },
@@ -431,12 +438,11 @@ async function openReport(b) {
         body));
     document.body.appendChild(ov);
 
-    let rep;
-    try {
-        rep = await supabase.rpc('custdev_report', b);
-    } catch (e) {
+    const { data: rep, error } = await supabase.rpc('custdev_report', b);
+    if (error || !rep) {
         clear(body);
-        body.appendChild(h('p', { class: 'muted' }, 'Не удалось построить отчёт: ' + ((e && e.message) || e)));
+        body.appendChild(h('p', { class: 'muted' },
+            'Не удалось построить отчёт: ' + ((error && error.message) || 'пустой ответ')));
         return;
     }
 
