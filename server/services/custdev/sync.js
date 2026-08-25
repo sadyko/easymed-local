@@ -54,7 +54,19 @@ export function syncCards(db, { from, to } = {}) {
                       WHERE vs.visit_id = v.id AND vs.doctor_id IS NOT NULL
                       ORDER BY vs.id LIMIT 1))
       FROM visits v
-     WHERE v.status = 'arrived'
+     -- ПРИХОД ПОДТВЕРЖДАЮТ ДЕНЬГИ, А НЕ СТАТУС ВИЗИТА.
+     --
+     -- Здесь стояло v.status = 'arrived', и доска была пуста навсегда. На
+     -- боевой базе клиники ВСЕ 390 визитов имеют статус 'scheduled' и ни один
+     -- не 'arrived', при этом 389 счетов оплачены. Статус в 'arrived' переводят
+     -- ровно два места (кнопка в visit-modal.js и запись «с ходу» в
+     -- doctor-room.js), и регистратура не пользуется ни одним: пациент
+     -- приходит, платит на кассе, и на этом всё.
+     --
+     -- Оплата на кассе — событие, которое НЕ МОЖЕТ произойти заочно, поэтому
+     -- она и есть доказательство прихода. Исключаем только отмену и неявку:
+     -- по ним оплата означает предоплату, и спрашивать там не о чем.
+     WHERE v.status NOT IN ('cancelled','no_show')
        AND ${localDate('v.visit_date')} BETWEEN date(?) AND date(?)
        AND ${localDate('v.visit_date')} < date(?)
        AND EXISTS (SELECT 1 FROM invoices i

@@ -20,10 +20,12 @@ function fresh() {
   return db;
 }
 
-// Пришёл, счёт оплачен, деньги приняты — полный «хороший» визит.
-function paidVisit(db, { id, day, doctorId = 12, paid = 50000, status = 'paid' }) {
+// Оплаченный визит. visitStatus по умолчанию 'scheduled' — ИМЕННО ТАК выглядит
+// реальная база клиники: статус визита никто не переводит в 'arrived' руками,
+// а приход подтверждается оплатой на кассе.
+function paidVisit(db, { id, day, doctorId = 12, paid = 50000, status = 'paid', visitStatus = 'scheduled' }) {
   db.prepare('INSERT INTO visits (id, patient_id, doctor_id, visit_date, status) VALUES (?,1,?,?,?)')
-    .run(id, doctorId, day + 'T09:00:00Z', 'arrived');
+    .run(id, doctorId, day + 'T09:00:00Z', visitStatus);
   db.prepare('INSERT INTO invoices (id, visit_id, patient_id, total_amount, paid_amount, status, created_by) VALUES (?,?,1,?,?,?,10)')
     .run(id, id, paid, paid, status);
   db.prepare('INSERT INTO payments (invoice_id, amount, cashier_id) VALUES (?,?,11)').run(id, paid);
@@ -53,18 +55,34 @@ test('сегодняшний визит карточку НЕ создаёт —
   assert.equal(syncCards(db, wide(db)), 0);
 });
 
-test('не пришёл или не оплатил — карточки нет', () => {
+// Реальный случай клиники: статус визита остался 'scheduled', но человек
+// заплатил на кассе. На боевой базе так выглядят ВСЕ 390 визитов и ни одного
+// 'arrived' — приход подтверждают деньги, а не кнопка «пришёл».
+test('оплаченный визит со статусом scheduled — это пришедший пациент', () => {
+  const db = fresh();
+  paidVisit(db, { id: 1, day: dayOffset(db, -1), visitStatus: 'scheduled' });
+  assert.equal(syncCards(db, wide(db)), 1);
+});
+
+test('нажатая кнопка «пришёл» тоже годится', () => {
+  const db = fresh();
+  paidVisit(db, { id: 1, day: dayOffset(db, -1), visitStatus: 'arrived' });
+  assert.equal(syncCards(db, wide(db)), 1);
+});
+
+test('отменённый визит и неявка не попадают, даже если по ним есть оплата', () => {
+  const db = fresh();
+  // Предоплатил и не пришёл — спрашивать про впечатления не о чем.
+  paidVisit(db, { id: 1, day: dayOffset(db, -1), visitStatus: 'no_show' });
+  paidVisit(db, { id: 2, day: dayOffset(db, -1), visitStatus: 'cancelled' });
+  assert.equal(syncCards(db, wide(db)), 0);
+});
+
+test('не оплатил — карточки нет', () => {
   const db = fresh();
   const yesterday = dayOffset(db, -1);
-
-  // Записан, но не пришёл.
-  db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (2,1,?,'no_show')").run(yesterday + 'T09:00:00Z');
-  db.prepare("INSERT INTO invoices (id, visit_id, patient_id, paid_amount, status, created_by) VALUES (2,2,1,50000,'paid',10)").run();
-
-  // Пришёл, но счёт не оплачен.
-  db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (3,1,?,'arrived')").run(yesterday + 'T09:00:00Z');
+  db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (3,1,?,'scheduled')").run(yesterday + 'T09:00:00Z');
   db.prepare("INSERT INTO invoices (id, visit_id, patient_id, paid_amount, status, created_by) VALUES (3,3,1,0,'unpaid',10)").run();
-
   assert.equal(syncCards(db, wide(db)), 0);
 });
 
