@@ -25,10 +25,17 @@ import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRe
 import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
 import { backupList, backupCreate, backupRestore, factoryReset } from './backup.js';   // SYSTEM_SETTINGS_V1
+import { custdevList, custdevSync, custdevRate, custdevMark, custdevReport } from './custdev.js';   // CUSTDEV_V1
 
 export const RPC = {
   get_clinic_by_slug:       (db, args, user) => getClinicBySlug(db, args, user),
   callcenter_report:        (db, args, user) => callcenterReport(db, args, user),
+  // CUSTDEV_V1 — обзвон пациентов после визита
+  custdev_list:             (db, args, user) => custdevList(db, args, user),
+  custdev_sync:             (db, args, user) => custdevSync(db, args, user),
+  custdev_rate:             (db, args, user) => custdevRate(db, args, user),
+  custdev_mark:             (db, args, user) => custdevMark(db, args, user),
+  custdev_report:           (db, args, user) => custdevReport(db, args, user),
   // ACCOMMODATION_AS_SERVICE_V1 — проживание становится услугой по кнопке
   bill_accommodation:       (db, args, user) => billAccommodation(db, args, user),
   unbill_accommodation:     (db, args, user) => unbillAccommodation(db, args, user),

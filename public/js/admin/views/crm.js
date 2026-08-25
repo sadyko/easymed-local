@@ -9,6 +9,8 @@ import { openVisitWizard } from './visit-wizard.js?v=aug17e';   // CRM_V4 — к
 import { digitsOf, phoneLikePattern, filterPhoneMatches, uzLocalDigits, MIN_PHONE_DIGITS } from './crm-phone-match.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { filterServicePool, serviceGroupCounts } from './service-search.js';   // CRM_SERVICE_FILTER_V1
+import { openCustDev } from './custdev.js';           // CUSTDEV_V1 — обзвон после визита
+import { canView } from '../permissions.js';          // CUSTDEV_V1 — право на кнопку «Cust Dev»
 import { boardConfig } from '../crm-settings-logic.js?v=crmcfg1';   // CRM_CONFIG_V1
 
 // CRM_CONFIG_V1 — воронка перестала быть константой.
@@ -265,6 +267,10 @@ async function paint() {
         h('div', { class: 'page-head-actions', style: { flexWrap: 'wrap' } },
             viewBtn('kanban', 'Канбан', 'Grid'),
             viewBtn('list', 'Список', 'Layers'),
+            // CUSTDEV_V1 — рабочее место обзвона. Отдельное право: заявки ведёт
+            // регистратура, а оценки о врачах и кассирах читать ей незачем.
+            canView('custdev') ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => openCustDev() },
+                Icon('PhoneOut', { size: 13 }), ' Cust Dev') : null,
             h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => reportModal() }, Icon('Chart', { size: 13 }), ' Отчёт'),
             h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => exportExcel() }, Icon('Download', { size: 13 }), ' Excel'),
             h('button', { class: 'btn btn-primary', type: 'button', onclick: () => requestModal(null) },

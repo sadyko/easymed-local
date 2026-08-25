@@ -41,17 +41,25 @@ const NON_NAV_GATES = {
   registration: /isModuleAllowed\('registration'\)/,
   // isModuleAllowed('cashier-shifts') accepts `cashier` as an alias of the NAV id.
   cashier: /navId === 'cashier-shifts'\) return _effective\.has\('cashier-shifts'\) \|\| _effective\.has\('cashier'\)/,
+  // CUSTDEV_V1 — the «Cust Dev» button inside the CRM screen. Its gate cannot
+  // live in admin.js: the workplace is not a sidebar section, it is a button
+  // next to «Канбан».
+  custdev: /canView\('custdev'\)/,
 };
+
+// Files a non-NAV gate may live in. crm.js joined the list with CUSTDEV_V1 — a
+// gate belongs where the thing it guards is drawn, and forcing it into admin.js
+// just to satisfy this test would put the check in the wrong file.
+const GATE_SOURCES = ['public/js/admin.js', 'public/js/admin/permissions.js', 'public/js/admin/views/crm.js'];
 
 test('every grantable key is a real gate — no key the UI offers is dead', () => {
   const nav = new Set(navIds());
-  const adminSrc = read('public/js/admin.js');
-  const permSrc = read('public/js/admin/permissions.js');
+  const sources = GATE_SOURCES.map(read);
   const dead = [];
   for (const key of grantableKeys()) {
     if (nav.has(key)) continue;
     const re = NON_NAV_GATES[key];
-    if (re && (re.test(adminSrc) || re.test(permSrc))) continue;
+    if (re && sources.some((src) => re.test(src))) continue;
     dead.push(key);
   }
   assert.deepEqual(dead, [], 'grantable keys that nothing checks (ticking them does nothing):\n' + dead.join('\n'));

@@ -33,6 +33,11 @@ const READ_ONLY_RPCS = new Set([
   // licence-lapsed clinic may read but not write, and "read" must not mean
   // "a CRM board with no column headings".
   'crm_config_get',
+  // CUSTDEV_V1 — доска и отчёт по обзвону. Чистое чтение. Клиника с
+  // просроченной лицензией читает, но не пишет, и «читает» не должно означать
+  // «пустой экран вместо доски». Оценка (custdev_rate/custdev_mark) и
+  // досоздание карточек (custdev_sync) сюда НЕ входят — это записи.
+  'custdev_list', 'custdev_report',
 ]);
 
 // The way back in. These must work while locked or a clinic that wants to pay
