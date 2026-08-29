@@ -13,7 +13,10 @@ test('002 creates core tables, seeds one branch, and auto-generates patient MRN'
 
   const info = db.prepare("INSERT INTO patients (full_name, branch_id) VALUES ('Test Patient', 1)").run();
   const row = db.prepare('SELECT mrn FROM patients WHERE id = ?').get(info.lastInsertRowid);
-  assert.match(row.mrn, /^P-\d{2}-\d{5}$/);
+  // 'P-' until 080_branch_identity, which made the prefix this install's
+  // branch letter so two branches can never mint the same MRN. A fresh install
+  // is always the main branch, letter A.
+  assert.match(row.mrn, /^A-\d{2}-\d{5}$/);
 
   const info2 = db.prepare("INSERT INTO patients (full_name, branch_id) VALUES ('Two', 1)").run();
   assert.notEqual(db.prepare('SELECT mrn FROM patients WHERE id=?').get(info2.lastInsertRowid).mrn, row.mrn);

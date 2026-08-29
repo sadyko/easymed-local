@@ -461,7 +461,21 @@ const IMPORT_CONFIGS = {
             { key: 'blood_type',         hint: 'Blood group — one of: A+ A- B+ B- AB+ AB- O+ O- unknown' },
             { key: 'allergies',          hint: 'Comma-separated — e.g. Penicillin, Latex. Leave blank for none.' },
             { key: 'chronic_conditions', hint: 'Comma-separated — e.g. Hypertension, Diabetes.' },
-            { key: 'mrn',                hint: 'Leave blank — assigned automatically (P-YY-NNNNN).' },
+            // BRANCH_IDENTITY_V1 (migration 080) — the prefix is no longer the
+            // literal 'P': it is the letter of the branch this install IS, so the
+            // main branch mints A-26-00042 and a secondary mints C-26-00042. The
+            // hint names the shape rather than a letter, because the same template
+            // is downloaded on every branch's PC.
+            //
+            // Bare literal, NOT tr(), and deliberately: none of the sixteen hints
+            // in this file is in STRINGS, so wrapping only this one would make the
+            // downloaded template fifteen English hints plus one Russian. These
+            // strings are also baked into the .xlsx as header-cell comments from a
+            // module-level const, so a tr() here would resolve once at import and
+            // ignore a later language switch. Translating the template is a real
+            // change — all sixteen, evaluated when the file is built — not a
+            // drive-by on the one line that had the wrong format in it.
+            { key: 'mrn',                hint: 'Leave blank — assigned automatically: branch letter, year, number (e.g. A-26-00042).' },
             { key: 'active',             coerce: 'bool', defaultBool: true, hint: 'true / false (default true)' },
         ],
         // Schema requires full_name NOT NULL; synthesize it from the name

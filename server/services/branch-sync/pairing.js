@@ -3,6 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { writeAtomic } from '../control/checkin.js';
+// BRANCH_IDENTITY_V1 — связывание принимает БУКВУ филиала, а не только адрес и
+// секрет. Зависимость направленная, и обратной ей быть нельзя: identity.js
+// отсюда не импортирует ничего (он умеет только ПРИНЯТЬ букву), поэтому кольца
+// не возникает, а у активации остаётся ровно один владелец — этот файл.
+import { becomeSecondary } from './identity.js';
 
 // BRANCH_SYNC_V1 — кто мы в группе филиалов и чем доказываем это друг другу.
 //
@@ -38,6 +43,40 @@ export const CATALOGUE_PATH = '/api/branch-sync/catalogue';
 // Версионный префикс в самом коде — чтобы установка со старым форматом сказала
 // «код не подходит», а не разобрала его наполовину.
 const KEY_PREFIX = 'EMB1-';
+
+// KEY FORMAT v2. EMB1 keys are still accepted on purpose: every clinic paired
+// before this release holds one, and refusing them would un-pair every existing
+// branch the moment the update installed. A v1 key yields letter: null, and the
+// caller allocates a letter then — the branch is no less identified, it simply
+// learns its letter at activation instead of from the key.
+//
+// И РОВНО ТА ЖЕ ЗАБОТА В ОБРАТНУЮ СТОРОНУ, поэтому encodeKey переключается на
+// EMB2 только когда ключу есть что нести сверх старого набора. Обновляют парк
+// не одномоментно: главный филиал почти всегда обновится первым, и ключ, который
+// он выдаёт, попадёт в филиал СО СТАРОЙ сборкой. Тот на незнакомый префикс
+// ответит «ключ не подходит» — то самое отваливание, от которого защищает
+// абзац выше, только с другого конца. Ключ без буквы и без токена по-прежнему
+// EMB1, потому что в нём нет ни одного поля, которого старая сборка не поняла бы.
+const KEY_PREFIX_V2 = 'EMB2-';
+
+// Токен резервного канала (Задача 4) уезжает в заголовок
+// `Authorization: Bearer <token>`, поэтому в нём допускаются только видимые
+// ASCII-символы и никаких пробелов.
+//
+// И это НЕ про внедрение чужого заголовка: fetch в Node такое значение просто
+// не отправит, а бросит TypeError. Цена — в том, что происходит с этим броском
+// дальше: relay.js оборачивает свой fetch в try/catch и ЛЮБОЙ бросок переводит
+// в 'relay_offline', то есть в «Нет связи с сервером Easy-Med». Один испорченный
+// символ в токене навсегда превратился бы в жалобу на интернет, которую никто
+// не связал бы с ключом подключения. Выпускает токен
+// control-plane/server/routes/relay-token.js в base64url (43 символа), так что
+// настоящий токен попадает в это множество целиком.
+const RELAY_TOKEN_RE = /^[\x21-\x7E]+$/;
+
+// Верхняя граница длины — не про формат, а про то, что эта строка ложится на
+// диск клиники и уходит в заголовок HTTP. 256 символов — это шестикратный запас
+// над выпускаемыми 43 и заведомо меньше любого предела на длину заголовка.
+const RELAY_TOKEN_MAX = 256;
 
 // Секрет группы: 32 случайных байта. Это ключ HMAC, а не пароль, который кто-то
 // набирает руками, поэтому длина выбрана по стойкости, а не по удобству ввода.
@@ -236,7 +275,30 @@ export function makeMainKey(dataDir, {
  * бумажка, флешка), и это сознательно выбранный канал: он не проходит через
  * settings.easymed.uz, поэтому поставщик не видит ключа даже мельком.
  */
-export function encodeKey({ group_id, secret, main_url, group_key }) {
+export function encodeKey({ group_id, secret, main_url, group_key, letter, relay_token }) {
+  // Нечего нести сверх старого набора — значит и формат старый. Не экономия
+  // байтов, а совместимость вниз: см. KEY_PREFIX_V2.
+  if (!letter && !relay_token) return encodeLegacyV1({ group_id, secret, main_url, group_key });
+  const body = { v: 2, g: group_id, s: secret, u: main_url };
+  if (group_key) body.k = group_key;
+  // `l` — буква филиала (её выдал ГЛАВНЫЙ филиал, letters.js), `t` — токен
+  // резервного канала, выписанный главным филиалом на сервере поставщика.
+  // Оба поля необязательны и оба разбираются по-разному — см. parseKey.
+  if (letter) body.l = letter;
+  if (relay_token) body.t = relay_token;
+  return KEY_PREFIX_V2 + b64url(Buffer.from(JSON.stringify(body), 'utf8'));
+}
+
+/**
+ * Ключ ровно в том виде, в каком его выпускали до появления буквы филиала.
+ *
+ * Экспортирован не ради вызывающих (их нет — encodeKey сам сюда сворачивает),
+ * а ради теста обратной совместимости: проверять разбор EMB1 надо на строке,
+ * собранной СТАРЫМ кодом, а не на новой, которую подогнали под старый формат.
+ * Держать её здесь дешевле, чем хранить в тесте константу-образец, которая
+ * ничего не расскажет, если формат поедет.
+ */
+export function encodeLegacyV1({ group_id, secret, main_url, group_key }) {
   const body = { v: 1, g: group_id, s: secret, u: main_url };
   if (group_key) body.k = group_key;
   return KEY_PREFIX + b64url(Buffer.from(JSON.stringify(body), 'utf8'));
@@ -265,19 +327,34 @@ export function relayEnabled(pairing) {
  * его копируют через мессенджер и почту, и перенос строки посередине — самая
  * обычная судьба такой строки. Регистр НЕ трогаем — base64url регистрозависим.
  *
- * @returns {{ok:true, group_id, secret, main_url, group_key:string|null}
- *          | {ok:false, reason:'empty_key'|'bad_key'}}
+ * @returns {{ok:true, group_id, secret, main_url, group_key:string|null,
+ *            letter:string|null, relay_token:string|null}
+ *          | {ok:false, reason:'empty_key'|'bad_key'|'bad_letter'}}
  *   group_key === null — ключ выпущен установкой до появления Маршрута Б.
  *   Это не ошибка: Маршрут А работает, резервный канал просто недоступен.
+ *   letter === null — ключ выпущен до появления букв филиалов (EMB1) либо
+ *   главным филиалом, который букв ещё не раздаёт. Тоже не ошибка — см.
+ *   pairWithKey, который в этом случае базу не трогает.
  */
 export function parseKey(text) {
   const cleaned = String(text || '').replace(/\s+/g, '');
   if (!cleaned) return { ok: false, reason: 'empty_key' };
-  if (!cleaned.startsWith(KEY_PREFIX)) return { ok: false, reason: 'bad_key' };
+  // Префикс задаёт ОЖИДАЕМУЮ версию, а не «одну из». Оба префикса длиной пять
+  // символов, но срез считается от найденного, а не от KEY_PREFIX: одинаковая
+  // длина — совпадение, а не правило, и следующий формат его не обязан хранить.
+  const prefix = cleaned.startsWith(KEY_PREFIX_V2) ? KEY_PREFIX_V2
+    : cleaned.startsWith(KEY_PREFIX) ? KEY_PREFIX : null;
+  if (!prefix) return { ok: false, reason: 'bad_key' };
+  const version = prefix === KEY_PREFIX_V2 ? 2 : 1;
   let body;
-  try { body = JSON.parse(unb64url(cleaned.slice(KEY_PREFIX.length)).toString('utf8')); }
+  try { body = JSON.parse(unb64url(cleaned.slice(prefix.length)).toString('utf8')); }
   catch { return { ok: false, reason: 'bad_key' }; }
-  if (!body || typeof body !== 'object' || Array.isArray(body) || body.v !== 1) return { ok: false, reason: 'bad_key' };
+  // Версия внутри обязана совпасть с префиксом снаружи. Расхождение — это ключ,
+  // который кто-то правил руками: разобрать его «как получится» означало бы
+  // принять поля одного формата по правилам другого.
+  if (!body || typeof body !== 'object' || Array.isArray(body) || body.v !== version) {
+    return { ok: false, reason: 'bad_key' };
+  }
   const mainUrl = normalizeUrl(body.u);
   if (typeof body.g !== 'string' || !body.g || typeof body.s !== 'string' || !body.s || !mainUrl) {
     return { ok: false, reason: 'bad_key' };
@@ -287,20 +364,147 @@ export function parseKey(text) {
   // ключ подключения, испорченный при переносе, и лучше остаться без резервного
   // канала, чем записать на диск огрызок и потом искать, почему не расшифровывается.
   const groupKey = typeof body.k === 'string' && decodeGroupKey(body.k) ? body.k : null;
-  return { ok: true, group_id: body.g, secret: body.s, main_url: mainUrl, group_key: groupKey };
+
+  // БУКВА — единственное поле ключа, испорченность которого отвергает ВЕСЬ ключ.
+  // Ключ группы и токен при поломке просто обнуляются: цена — резервный канал.
+  // Цена молча обнулённой буквы другая: филиал свяжется, буквы не получит и
+  // начнёт печатать A-номера рядом с главным филиалом, который печатает свои, —
+  // два разных человека с одним номером на карточках, ровно та коллизия, ради
+  // которой буква и заведена. Поэтому «поле есть, но это не A-Z» отвергает ключ
+  // целиком: владельца отправляют за новым ключом, и это поправимо в тот же день.
+  //
+  // ОТКАЗ НАЗЫВАЕТСЯ 'bad_letter', А НЕ 'bad_key', и различие здесь ровно одно —
+  // что владелец прочтёт на экране. bad_key переводится как «проверьте, что ключ
+  // скопирован целиком»: верный совет для обрезанного или искажённого при
+  // пересылке ключа и бесполезный для этого случая. Ключ, выпущенный с
+  // кириллической «С» вместо латинской «C» (буквы неразличимы на экране, а
+  // клавиатура у выпускающего русская), скопирован целиком — копировать его
+  // заново можно бесконечно. Лечится он перевыпуском ключа в главном филиале,
+  // и это то, что говорит фраза bad_letter (rpc/branch-sync.js).
+  //
+  // Тот же код, что у identity.js normalizeLetter, и это не совпадение: там он
+  // отвечает на «буква не A-Z» и «буква длиннее восьми», здесь — на «поле есть,
+  // но буквой не является». Один код на одно положение дел, с какой бы стороны
+  // в него ни пришли.
+  //
+  // Отсутствие поля и явный null — это НЕ порча, а «буквы в ключе нет»
+  // (EMB1 или ключ главного филиала до раздачи букв).
+  //
+  // ЧТО ИМЕННО ПРОВЕРЯЕТСЯ ЗДЕСЬ, а что — нет. Здесь только тип: «в этом поле
+  // лежит строка, похожая на букву». Годится ли ТАКАЯ буква — длина, регистр,
+  // занятость, поддельная кириллица — решает identity.js (normalizeLetter и
+  // проверки becomeSecondary), и решает он один: через него проходит КАЖДЫЙ, кто
+  // принимает букву, а через разбор ключа — только тот, кто пришёл с ключом
+  // (сегодня это единственный путь: Задача 6 вышла списком филиалов, который
+  // букву не принимает, а согласованная перенумерация — это Этап 2 и её ещё нет).
+  // Регистр здесь не приводится по той же причине: свёртка живёт там, и
+  // вторая её копия разошлась бы с первой — тем более что именно свёртка умеет
+  // ИЗГОТОВИТЬ латинскую букву из нелатинской ('ß' -> 'SS'). Здесь только
+  // обрезаются пробелы по краям.
+  let letter = null;
+  if (version === 2 && body.l !== undefined && body.l !== null) {
+    letter = typeof body.l === 'string' ? body.l.trim() : '';
+    if (!/^[A-Za-z]+$/.test(letter)) return { ok: false, reason: 'bad_letter' };
+  }
+
+  // Токен резервного канала — по правилам ключа группы, а не буквы: без него
+  // работает Маршрут А, и это состояние, а не поломка. Достижимо честным путём:
+  // главный филиал выписывает токен на сервере поставщика, а ключ подключения
+  // он умеет выдать и без интернета.
+  const rawToken = version === 2 && typeof body.t === 'string' ? body.t.trim() : '';
+  const relayToken = rawToken && rawToken.length <= RELAY_TOKEN_MAX && RELAY_TOKEN_RE.test(rawToken)
+    ? rawToken : null;
+
+  return {
+    ok: true, group_id: body.g, secret: body.s, main_url: mainUrl, group_key: groupKey,
+    letter, relay_token: relayToken,
+  };
+}
+
+/**
+ * Вернуть файл пары ровно в то состояние, в котором он был до попытки.
+ *
+ * Буфер, а не строка, и это не мелочь: файл пишет не только этот модуль (его
+ * правят руками, его восстанавливают из архива), и прочитанный как 'utf8' байт,
+ * который в UTF-8 не складывается, возвращается уже как U+FFFD. Проверено:
+ * 105-байтовый файл с русским текстом в CP1251 «восстанавливался» в 117 байт,
+ * то есть откат портил ровно то, что обещал сохранить.
+ *
+ * Сам не бросает — откат уже идёт по пути отказа, и падение в нём подменило бы
+ * причину, ради которой мы сюда попали, — но РЕЗУЛЬТАТ отдаёт наверх, потому
+ * что несостоявшийся откат меняет ответ вызывающему (см. pairWithKey).
+ *
+ * @returns {boolean} файл действительно вернулся в прежнее состояние
+ */
+function restorePairingFile(dataDir, previousRaw, { writeFileSync, renameSync, unlinkSync, readFileSync = fs.readFileSync } = {}) {
+  try {
+    if (previousRaw !== null) {
+      writeAtomic(pairingPath(dataDir), previousRaw, { writeFileSync, renameSync });
+      return true;
+    }
+    if (clearPairing(dataDir, { unlinkSync })) return true;
+    // clearPairing отвечает false на ЛЮБУЮ неудачу, включая «файла и так нет».
+    // Отличить их можно только по диску — и спрашивать надо именно про диск:
+    // вызывающему обещано, что после отказа файла НЕ ОСТАНЕТСЯ, а не что
+    // системный вызов вернул успех.
+    try { readFileSync(pairingPath(dataDir)); } catch { return true; }
+    console.warn('[branch-sync] the pairing file could not be removed after a refused activation');
+    return false;
+  } catch (e) {
+    console.warn('[branch-sync] could not roll the pairing file back after a refused activation:', e && e.message);
+    return false;
+  }
 }
 
 /**
  * Принять ключ на вторичном филиале.
  *
- * Проверки происходят ДО единственной записи на диск — то же правило, что у
- * enroll.js: установка либо остаётся ровно такой, какой была, либо получает
- * целую и осмысленную запись.
+ * Проверки происходят ДО записей — то же правило, что у enroll.js: установка
+ * либо остаётся ровно такой, какой была, либо получает целую и осмысленную
+ * запись.
  *
- * @returns {{ok:true, record:object} | {ok:false, reason:string}}
- *   reason: empty_key | bad_key | already_main | write_failed
+ * ЗАПИСЕЙ ТЕПЕРЬ ДВЕ, И ПОРЯДОК ИХ ЗАДАН НЕ УДОБСТВОМ. Файл пары переписывается
+ * сколько угодно раз; identity в базе (identity.js) — нет: она тратит букву, а
+ * буква тратится однажды и навсегда, потому что номера под ней печатаются на
+ * карточках. Поэтому сначала обратимое, потом необратимое:
+ *
+ *   1. файл пары — и текст файла до записи придержан для отката;
+ *   2. becomeSecondary — последним.
+ *
+ * Отказ на шаге 2 откатывает шаг 1, и установка остаётся ровно прежней: это и
+ * есть требование «отказ не пишет ничего». Обратный порядок отката не имеет —
+ * потраченную букву вернуть нечем, — и оставлял бы установку, у которой база
+ * говорит «вторичный», а файл «не спарен»: тот самый расход, о котором
+ * предупреждает шапка identity.js (главным её после этого назначить МОЖНО).
+ *
+ * Откат — единственная запись здесь, которая сама может не удаться, и тогда
+ * обещание выше не выполнено. Это НЕ прячется под причиной отказа: ответ
+ * приходит с кодом 'rollback_failed' (исходная причина — в поле cause).
+ *
+ * Обрыв ПИТАНИЯ между шагами отката не получит, и это учтено: файл лёг, буква
+ * не потрачена — повторное нажатие доводит дело до конца. Обрыв после шага 2
+ * тоже переживается, потому что becomeSecondary для ТОЙ ЖЕ буквы идемпотентен
+ * (Задача 3): повтор ничего не тратит и возвращает ту же identity.
+ *
+ * @param {object} [opts]
+ * @param {object} [opts.db] база клиники. ОБЯЗАТЕЛЬНА, если ключ несёт букву:
+ *   без неё связывание прошло бы, а identity молча осталась бы прежней — филиал
+ *   печатал бы A-номера рядом с главным. Молчаливый пропуск здесь неотличим от
+ *   нормальной работы месяцами, поэтому это отказ.
+ *
+ * @returns {{ok:true, record:object, identity:object|null}
+ *          | {ok:false, reason:string, cause?:string}}
+ *   identity — принятая identity, либо null, если В КЛЮЧЕ БУКВЫ НЕ БЫЛО (это не
+ *   то же самое, что «у установки нет identity»: она есть всегда, миграция 080).
+ *   reason: empty_key | bad_key | bad_letter | already_main | write_failed |
+ *     identity_unavailable | rollback_failed | и любой код отказа identity.js
+ *     (already_other_branch | already_numbered | letter_spent | letter_in_mrns |
+ *     letter_on_branch | bad_letter | identity_missing) | identity_failed
+ *   cause — только у 'rollback_failed': причина, по которой откатывались.
  */
-export function pairWithKey(dataDir, keyText, { now = () => new Date(), writeFileSync, renameSync } = {}) {
+export function pairWithKey(dataDir, keyText, {
+  db, now = () => new Date(), writeFileSync, renameSync, readFileSync = fs.readFileSync, unlinkSync,
+} = {}) {
   const parsed = parseKey(keyText);
   if (!parsed.ok) return parsed;
 
@@ -308,6 +512,10 @@ export function pairWithKey(dataDir, keyText, { now = () => new Date(), writeFil
   // Симметрично makeMainKey: главный филиал не начинает вдруг забирать
   // справочник у кого-то ещё. Владелец должен сначала осознанно отвязаться.
   if (existing && existing.role === 'main') return { ok: false, reason: 'already_main' };
+
+  // ДО первой записи, а не перед второй: вызывающий, забывший передать базу, не
+  // должен оставить после себя даже файла.
+  if (parsed.letter && !db) return { ok: false, reason: 'identity_unavailable' };
 
   const record = {
     role: 'secondary',
@@ -323,12 +531,67 @@ export function pairWithKey(dataDir, keyText, { now = () => new Date(), writeFil
   // два разных ключа в одной группе означали бы блоб, который никто не
   // расшифрует. Ключ, выпущенный до появления Маршрута Б, поля просто не несёт.
   if (parsed.group_key) record.group_key = parsed.group_key;
+  // Токен резервного канала — по тому же правилу и по той же причине, что и
+  // ключ группы: вторичный филиал НИКОГДА не активировался у поставщика, и это
+  // единственная учётная запись, которая у него для Маршрута Б есть. Она
+  // приезжает в ключе и не проходит через сервер поставщика ни в одну сторону.
+  if (parsed.relay_token) record.relay_token = parsed.relay_token;
+
+  // Байты файла ДО записи — материал для отката. Именно БАЙТЫ (без 'utf8'), и
+  // именно сам файл, а не readPairing: испорченную запись readPairing показывает
+  // как null, и восстанавливать её было бы нечем, а сохранить её надо — эти
+  // байты принадлежат клинике, а не нам.
+  let previousRaw = null;
+  try { previousRaw = readFileSync(pairingPath(dataDir)); } catch { previousRaw = null; }
+
   try { writePairing(dataDir, record, { writeFileSync, renameSync }); }
   catch (e) {
     console.warn('[branch-sync] could not write the pairing file:', e && e.message);
     return { ok: false, reason: 'write_failed' };
   }
-  return { ok: true, record };
+
+  // Ключ без буквы связывает как раньше и базу НЕ ТРОГАЕТ. Выдать букву здесь
+  // было бы можно (letters.js рядом), и это была бы худшая из ошибок этого
+  // этапа: журнал вторичного филиала знает только 'A' и 'P', поэтому ответ был
+  // бы 'B' — буква, которую главный филиал уже отдал другому зданию. Выдаёт
+  // ГЛАВНЫЙ, по единственному журналу парка; здесь букву только принимают.
+  // Установка остаётся при своей identity (A/main) ровно как до обновления, и
+  // получит букву, когда владелец принесёт ключ нового выпуска.
+  if (!parsed.letter) return { ok: true, record, identity: null };
+
+  let identity;
+  try {
+    // Имя филиала в ключе не едет: переименование — дело реестра филиалов
+    // (Задача 6), а не активации. identity.js назовёт строку буквой.
+    identity = becomeSecondary(db, { letter: parsed.letter });
+  } catch (e) {
+    const restored = restorePairingFile(dataDir, previousRaw, {
+      writeFileSync, renameSync, unlinkSync, readFileSync,
+    });
+    // Код причины проходит НАСКВОЗЬ и неизменным. 'already_numbered' — тупик:
+    // экран согласия на разовую перенумерацию отнесён к Этапу 2 и не написан, а
+    // русский текст этого кода честно отправляет владельца в поддержку. Подменять
+    // код на общий 'identity_failed' всё равно нельзя: это единственный признак,
+    // по которому тупик отличается от обычного отказа, и он же будет крючком для
+    // того экрана, когда его напишут.
+    const reason = e && typeof e.reason === 'string' ? e.reason : 'identity_failed';
+    if (reason === 'identity_failed') {
+      console.warn('[branch-sync] adopting the branch letter failed:', e && e.message);
+    }
+    // НО ЕСЛИ ОТКАТ НЕ УДАЛСЯ, отвечать «буква занята» нельзя, и это не
+    // придирка к формулировке. На диске тогда лежит НОВАЯ запись (другая
+    // группа, другой главный филиал), а identity в базе осталась прежней:
+    // установка будет забирать справочник у нового главного и печатать
+    // A-номера рядом с настоящим филиалом A — та самая коллизия, ради которой
+    // весь этап и делается. Случай не выдуманный: на Windows антивирус или
+    // агент резервного копирования держит файл, unlink отвечает EBUSY/EPERM.
+    // Отдельный код нужен, чтобы Задача 6 могла сказать «установка в
+    // несогласованном состоянии», а не назвать это занятой буквой; исходная
+    // причина едет рядом, в cause, — она объясняет, ПОЧЕМУ откатывались.
+    if (!restored) return { ok: false, reason: 'rollback_failed', cause: reason };
+    return { ok: false, reason };
+  }
+  return { ok: true, record, identity };
 }
 
 // Подпись запроса. Секрет НИКОГДА не уходит в сеть — уходит HMAC от него по

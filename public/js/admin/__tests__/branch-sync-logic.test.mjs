@@ -10,6 +10,8 @@ import assert from 'node:assert';
 import {
   roleBadge, roleExplainer, syncLine, changesLabel, whenLabel, canSyncNow, addressValue,
   routeLabel, syncKeyLine, relayExplainer, publishLine, canRegenerateKey, KEY_LOSS_WARNING,
+  branchRows, branchListNote, KEY_REISSUE_WARNING, LETTER_PERMANENCE_NOTE,
+  pairedMessage, letterExplainer, becomeMainState, IDENTITY_UNKNOWN_NOTE,
 } from '../branch-sync-logic.js';
 
 test('роль установки читается с одного взгляда', () => {
@@ -205,4 +207,149 @@ test('перевыпустить ключ может главный филиал
   assert.equal(canRegenerateKey({ role: 'secondary' }, true), false,
     'его ключ выдаёт главный филиал: перевыпуск у себя только отвалил бы филиал от группы');
   assert.equal(canRegenerateKey({ role: 'main' }, false), false, 'не администратор — не перевыпускает');
+});
+
+// --- BRANCH_IDENTITY_V1 — список филиалов, буквы и постоянные ключи ---------
+
+test('список филиалов даёт каждому имя и ключ, который читается в любой момент', () => {
+  // Требование владельца дословно: «in the branch list should be only the
+  // branch name. and activation key (not one time generated)». Ключ,
+  // показанный один раз и спрятанный, превращает переустановку филиала в
+  // звонок поставщику.
+  const rows = branchRows({ role: 'main', branches: [
+    { id: 1, name: 'Главный', letter: 'A', key: null, is_self: true },
+    { id: 2, name: 'Чиланзар', letter: 'B', key: 'EMB2-xxxx' },
+  ] });
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1].key, 'EMB2-xxxx');
+  assert.equal(rows[0].key, null, 'у главного филиала нет ключа, чтобы подключиться к самому себе');
+  assert.equal(rows[0].state, 'self');
+  assert.equal(rows[1].state, 'key');
+  // Пустая клетка на месте ключа — это «не знаю»; здесь ответ известен.
+  assert.match(rows[0].note, /к самой себе/);
+  assert.equal(rows[1].note, null, 'у строки с ключом объяснять нечего');
+});
+
+test('буква показана рядом с именем, потому что с неё начинается номер пациента', () => {
+  const [row] = branchRows({ role: 'main', branches: [{ id: 3, name: 'Юнусабад', letter: 'C', key: 'EMB2-y' }] });
+  assert.equal(row.letter, 'C');
+  assert.equal(row.letterLabel, 'C');
+  // Филиал, заведённый до появления букв, не должен рисовать «undefined».
+  const [old] = branchRows({ role: 'main', branches: [{ id: 4, name: 'Старый', letter: null, key: null }] });
+  assert.equal(old.letterLabel, '—');
+  assert.equal(old.state, 'no_letter');
+  assert.match(old.note, /Выдать ключ/);
+});
+
+test('безымянная строка филиала не рисуется пустотой', () => {
+  const [row] = branchRows({ role: 'main', branches: [{ id: 5, name: '', letter: 'D', key: 'EMB2-z' }] });
+  assert.equal(row.name, '—');
+});
+
+test('подключённый филиал ключей не выдаёт и не делает вид, что может', () => {
+  // Это свойство ВСЕГО СПИСКА, а не отдельной строки: не выдаёт ключи установка,
+  // а не филиал. Строкой это было мёртвым состоянием — экран показывает список
+  // только главному филиалу, — и мёртвая ветка тихо расходится с правдой.
+  assert.match(branchListNote({ role: 'secondary' }), /главн/i);
+  assert.match(branchListNote({ role: 'none' }), /главн/i);
+  assert.equal(branchListNote({ role: 'main' }), null, 'главному филиалу объяснять нечего');
+});
+
+test('ключ без доступа к резервному каналу — своё состояние, а не «всё хорошо»', () => {
+  // ДВА ИЗМЕРЕННЫХ ПУТИ СЮДА, и оба обычные: перевыпуск ключа синхронизации
+  // (учётки филиалов гасятся вместе с адресом, к которому были привязаны) и
+  // заведение филиала при выключенном интернете. В обоих ключ рабочий — прямая
+  // связь от поставщика не зависит, — но резервного канала у филиала нет, и
+  // пока это состояние называлось 'key', экран не предлагал ничего: владелец
+  // раздавал ключи без резервного канала и не знал об этом.
+  const rows = branchRows({ role: 'main', can_relay: true, branches: [
+    { id: 2, name: 'Чиланзар', letter: 'B', key: 'EMB2-x', has_relay_token: false },
+    { id: 3, name: 'Юнусабад', letter: 'C', key: 'EMB2-y', has_relay_token: true },
+  ] });
+  assert.equal(rows[0].state, 'key_no_relay');
+  assert.equal(rows[0].key, 'EMB2-x', 'ключ остаётся рабочим и показывается целиком');
+  assert.match(rows[0].note, /резервн/i);
+  assert.equal(rows[1].state, 'key');
+  assert.equal(rows[1].note, null);
+});
+
+test('клинике без активации не показывают кнопку, которая всегда откажет', () => {
+  // Резервного канала у такой клиники нет вовсе и быть не может — предлагать
+  // «выдать доступ» значит обещать то, чего поставщик не выпишет.
+  const [row] = branchRows({ role: 'main', can_relay: false, branches: [
+    { id: 2, name: 'Чиланзар', letter: 'B', key: 'EMB2-x', has_relay_token: false },
+  ] });
+  assert.equal(row.state, 'key');
+  assert.equal(row.note, null);
+});
+
+test('список переживает старый сервер и испорченный ответ', () => {
+  assert.deepEqual(branchRows(null), []);
+  assert.deepEqual(branchRows({ role: 'main' }), []);
+  assert.deepEqual(branchRows({ role: 'main', branches: 'нет' }), []);
+});
+
+test('перевыпуск ключа предупреждает ДО действия и ровно теми словами', () => {
+  // Дословно из задачи: владелец должен прочитать это до нажатия, а не узнать
+  // после того, как филиалы отвалились.
+  assert.equal(
+    KEY_REISSUE_WARNING,
+    'Перевыпуск ключа отключит все филиалы, подключённые старым ключом. Их придётся подключить заново.',
+  );
+});
+
+test('про несменяемость буквы сказано там, где выбирают название филиала', () => {
+  assert.match(LETTER_PERMANENCE_NOTE, /навсегда/);
+  assert.match(LETTER_PERMANENCE_NOTE, /номер пациента/i);
+});
+
+test('подключение подтверждается буквой, а не бодрым «готово»', () => {
+  // branchSyncPair возвращает принятую букву именно ради этой фразы: владелец
+  // видит, чем стала установка, и сверяет её с ключом, который вводил.
+  assert.equal(pairedMessage({ ok: true, letter: 'C' }).letter, 'C');
+  // ЧАСТЯМИ: tr() ищет в словаре строку целиком, поэтому фраза, склеенная с
+  // буквой, не нашлась бы там никогда и ушла бы в узбекскую клинику по-русски.
+  assert.equal(pairedMessage({ ok: true, letter: 'C' }).base, 'Филиал подключён к главному');
+  // Ключ старого выпуска буквы не несёт — выдумывать её нельзя.
+  assert.equal(pairedMessage({ ok: true }).letter, null);
+  assert.equal(pairedMessage(null).letter, null);
+  assert.equal(pairedMessage(null).base, 'Филиал подключён к главному');
+});
+
+test('буква установки объяснена номером пациента, а не термином', () => {
+  const line = letterExplainer({ letter: 'C' });
+  assert.equal(line.example, 'C-26-00042', 'номер, который регистратура видит каждый день');
+  assert.ok(line.base.length > 20, 'переводимая половина — целая строка словаря');
+  assert.equal(letterExplainer({}), null, 'нечего объяснять — нечего и писать');
+});
+
+test('«Сделать главным филиалом» не показывают там, где сервер откажет всегда', () => {
+  // Правило то же, что у can_issue и can_relay, и это было последнее место, где
+  // его не применили: блок «Этот филиал — главный» рисовался НИЖЕ блока «Эта
+  // установка — филиал» и рисовался безусловно, а branch_sync_make_key такой
+  // установке отказывает всегда (identity_is_branch). Кнопка, которую показали и
+  // которая всегда отказывает, хуже отсутствующей: владелец нажимает, читает
+  // отказ и идёт искать свою ошибку там, где её нет.
+  assert.equal(becomeMainState({ role: 'none', identity_role: 'main' }), 'allowed');
+  assert.equal(becomeMainState({ role: 'none', identity_role: 'secondary' }), 'branch');
+
+  // РОЛЬ НЕ ПРОЧИТАЛАСЬ — ТОЖЕ ОТКАЗ, и это вторая половина той же ошибки на
+  // сервере: там «неизвестно» означало «можно» и разрешало отвязанному филиалу
+  // с удалённой служебной строкой раздавать буквы. Молчание базы не может быть
+  // правом.
+  assert.equal(becomeMainState({ role: 'none', identity_role: null }), 'unknown');
+  assert.equal(becomeMainState({ role: 'none' }), 'unknown');
+  assert.equal(becomeMainState(null), 'unknown');
+
+  // И это ОТДЕЛЬНОЕ состояние, а не «филиал»: филиалу помогает ключ подключения
+  // с его буквой, а здесь помогает только восстановление базы.
+  assert.notEqual(becomeMainState({ identity_role: null }), becomeMainState({ identity_role: 'secondary' }));
+});
+
+test('установке, потерявшей свою запись, сказано и про пациентов', () => {
+  // Та же пропавшая строка останавливает не только выдачу ключей: триггер
+  // номеров отказывает каждой регистрации. Владелец, прочитавший здесь только
+  // про филиалы, пойдёт чинить филиалы, а сломана у него регистратура.
+  assert.match(IDENTITY_UNKNOWN_NOTE, /регистрир/i);
+  assert.match(IDENTITY_UNKNOWN_NOTE, /резервной копии/i);
 });

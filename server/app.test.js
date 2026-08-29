@@ -277,7 +277,9 @@ test('/api/db enforces the registry over HTTP', async () => {
     assert.equal(res.status, 200);
     const created = (await res.json()).data;
     assert.equal(created.full_name, 'Jane Roe');
-    assert.match(created.mrn, /^P-\d{2}-\d{5}$/);
+    // 'P-' until 080_branch_identity made the prefix this install's branch
+    // letter; a fresh install is the main branch, letter A.
+    assert.match(created.mrn, /^A-\d{2}-\d{5}$/);
 
     res = await fetch(`${base}/api/db`, { method:'POST',
       headers:{ 'Content-Type':'application/json', Cookie: admin },

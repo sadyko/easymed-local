@@ -258,3 +258,42 @@ Each stage ships and runs in a real clinic before the next begins.
 - **Clock skew is the quiet one.** Everything about "newest wins" rests on two
   clinic PCs agreeing what time it is, and nothing about a clinic PC guarantees
   that.
+
+---
+
+## Must be closed BEFORE Stage 2 starts: same-letter re-pairing across clinics
+
+Found by the whole-branch review of Stage 1, on its second pass, and measured:
+
+```
+paired into CLINIC-1 as C   ->  minted C-26-00001
+unpair
+paired into CLINIC-2 as C   ->  ok: true, letter: "C"
+next patient                ->  C-26-00002   collides with clinic 2's own branch C
+```
+
+`becomeSecondary` no-ops when the letter it is handed matches the letter it
+already holds. That no-op is load-bearing and correct — it is what makes an
+interrupted activation retryable, and what lets a branch re-pair after the main
+branch changes address. But it returns **before** the `already_numbered` guard,
+and nothing compares the incoming `group_id` against the identity. Every clinic
+letters its branches A, B, C…, so two fleets using the same letter is a
+coincidence to expect, not a remote one.
+
+**Why it is not a Stage 1 blocker:** it takes physical hardware moving between
+two different clinics, which is outside the single-clinic model Stage 1 is built
+for. `identity.js` already states the rule ("a branch re-pointed at a different
+clinic gets a fresh install"), and the `already_other_branch` refusal says it out
+loud — for the *different*-letter case. The same-letter case gets no signal at
+all and reports success.
+
+**Why Stage 2 cannot start until it is closed:** Stage 2 is where patient records
+actually move between installs and are matched by MRN. Today the failure is two
+collided numbers inside one building. After Stage 2 it is **two different people
+merged into one medical record**, which is the exact harm this whole design
+exists to prevent.
+
+The fix is cheap and the fact is already computed: `branchSyncPair` compares
+`before.group_id !== r.record.group_id` in order to clear `branch_sync_map`.
+The same comparison belongs in front of the same-letter no-op — a key from a
+different group is not a retry of this activation, whatever letter it carries.

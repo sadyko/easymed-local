@@ -29,7 +29,7 @@ import { migrate } from '../../db/migrate.js';
 import { createApp } from '../../app.js';
 import { hashPassword } from '../auth.js';
 import { licensedDataDir } from '../control/licensed-fixture.js';
-import { readPairing, writePairing, makeMainKey, b64url, GROUP_KEY_BYTES } from './pairing.js';
+import { readPairing, writePairing, makeMainKey, encodeKey, b64url, GROUP_KEY_BYTES } from './pairing.js';
 import { relayIdFor } from './relay-crypto.js';
 import { publishCatalogue } from './relay.js';
 import { readSyncGroup, regenerateSyncGroup } from './sync-group.js';
@@ -39,6 +39,7 @@ import { migrate as migrateCp } from '../../../control-plane/server/db/migrate.j
 import { createApp as createCpApp } from '../../../control-plane/server/app.js';
 import { createEnrollmentCode, redeemEnrollmentCode } from '../../../control-plane/server/services/enrollment.js';
 import { relayPathFor } from '../../../control-plane/server/routes/relay.js';
+import { RELAY_TOKEN_MOUNT } from '../../../control-plane/server/routes/relay-token.js';   // BRANCH_IDENTITY_V1
 
 const MARKER = 'ZZPATIENTMARKER';
 
@@ -421,4 +422,146 @@ test('резервный канал включается только там, г
   assert.equal(ok.ok, true);
   assert.equal(ok.route, 'direct');
   db.close();
+});
+
+// --- BRANCH_IDENTITY_V1 ------------------------------------------------------
+//
+// НАСТОЯЩИЙ ВТОРОЙ ФИЛИАЛ, а не вторая активированная клиника. Тест выше сводил
+// два филиала, каждый из которых активирован у поставщика ОТДЕЛЬНО — это удобно
+// для проверки транспорта и непохоже на жизнь: филиал подключается к клинике, а
+// не к поставщику, у него нет ни кода активации, ни install_token-а, и по
+// резервному каналу ему ходить было нечем.
+//
+// Задачи 4 и 5 построили для этого весь механизм — поставщик выписывает главному
+// филиалу узкий токен на один адрес, ключ подключения его переносит, pairing.js
+// кладёт на диск, — и на этом всё обрывалось: токен на диске никто не читал.
+// Проверяется здесь сквозной путь целиком, вплоть до номера пациента с буквой
+// филиала и до отзыва токена.
+test('филиал, не активированный у поставщика: буква и токен приезжают в ключе и работают', async (t) => {
+  const cpDb = openCpDb(':memory:');
+  migrateCp(cpDb);
+  const cp = await listen(createCpApp(cpDb));
+  // ОДНА активация на всю группу — у главного филиала. Второго кода активации
+  // никто не выдаёт, и это ровно то, что здесь проверяется.
+  const tokenMain = redeemEnrollmentCode(cpDb, {
+    code: createEnrollmentCode(cpDb, { clinicId: 'cp-clinic', name: 'Клиника' }),
+  }).install_token;
+
+  const prevControlUrl = process.env.EASYMED_CONTROL_URL;
+  process.env.EASYMED_CONTROL_URL = cp.base;
+
+  // Лицензия у обоих одна (licensedDataDir выдаёт новый ключ подписи на каждый
+  // вызов, поэтому второй каталог получается копированием файлов первого).
+  // install_token дописывается ТОЛЬКО главному — у филиала его нет и не будет.
+  const secDir = licensedDataDir();
+  const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-relay-branch-'));
+  for (const f of ['control.json', 'licence.dat']) fs.copyFileSync(path.join(secDir, f), path.join(mainDir, f));
+  withInstallToken(mainDir, tokenMain);
+
+  const dbMain = install(mainDir, 'main');
+  seedMain(dbMain);
+  const main = await listen(createApp(dbMain, { dataDir: mainDir }));
+  const dbSec = install(secDir, 'sec');
+
+  let sec = null;
+  let secCookie = null;
+  t.after(async () => {
+    if (sec) await shutdown(sec.server);
+    try { await shutdown(main.server); } catch { /* уже закрыт этим же тестом */ }
+    await shutdown(cp.server);
+    dbSec.close(); dbMain.close(); cpDb.close();
+    fs.rmSync(mainDir, { recursive: true, force: true });
+    fs.rmSync(secDir, { recursive: true, force: true });
+    if (prevControlUrl === undefined) delete process.env.EASYMED_CONTROL_URL;
+    else process.env.EASYMED_CONTROL_URL = prevControlUrl;
+  });
+
+  const mainCookie = await login(main.base);
+  let branchKey = null;
+  let minted = null;
+  let relayId = null;
+
+  await t.test('главный филиал выписывает филиалу узкий токен и вкладывает его в ключ', async () => {
+    assert.equal((await rpc(main.base, mainCookie, 'branch_sync_make_key', { url: main.base })).status, 200);
+    assert.equal((await rpc(main.base, mainCookie, 'branch_sync_relay_set', { enabled: true })).status, 200);
+    const pub = await rpc(main.base, mainCookie, 'branch_sync_relay_publish');
+    assert.equal(pub.data.ok, true, JSON.stringify(pub.data));
+
+    const pairing = readPairing(mainDir);
+    relayId = relayIdFor(pairing.group_key);
+
+    // Выписывает ГЛАВНЫЙ и своим install_token-ом: он единственный в группе, у
+    // кого есть личность у поставщика.
+    const res = await fetch(cp.base + RELAY_TOKEN_MOUNT, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokenMain}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ relay_id: relayId }),
+    });
+    assert.equal(res.status, 201, 'активированная клиника вправе выписать токен на свой адрес');
+    minted = (await res.json()).token;
+
+    // Ключ, который владелец несёт во второе здание: адрес, секрет, ключ
+    // шифрования, БУКВА филиала и токен. Через сервер поставщика он не проходит.
+    branchKey = encodeKey({ ...pairing, letter: 'B', relay_token: minted });
+  });
+
+  await t.test('филиал принимает ключ: буква ложится в базу, токен — на диск', async () => {
+    sec = await listen(createApp(dbSec, { dataDir: secDir }));
+    secCookie = await login(sec.base);
+
+    const r = await rpc(sec.base, secCookie, 'branch_sync_pair', { key: branchKey });
+    assert.equal(r.status, 200, JSON.stringify(r.error));
+
+    assert.deepEqual(dbSec.prepare('SELECT letter, role FROM branch_identity WHERE id = 1').get(),
+      { letter: 'B', role: 'secondary' }, 'установка узнала, каким филиалом она является');
+    assert.equal(readPairing(secDir).relay_token, minted, 'токен доехал ключом и лёг в запись');
+    assert.equal('install_token' in JSON.parse(fs.readFileSync(path.join(secDir, 'control.json'), 'utf8')),
+      false, 'у филиала нет и не должно быть учётной записи у поставщика');
+
+    // То, ради чего буква вообще заведена: номера этого здания не пересекаются
+    // с номерами главного филиала.
+    dbSec.prepare("INSERT INTO patients (full_name) VALUES ('Пациент филиала')").run();
+    assert.match(dbSec.prepare('SELECT mrn FROM patients ORDER BY id DESC LIMIT 1').get().mrn, /^B-/);
+  });
+
+  await t.test('главный выключен — справочник приходит через сервер по токену из ключа', async () => {
+    dbMain.prepare("UPDATE services SET price = 320000 WHERE code='S-CARD'").run();
+    assert.equal((await publishCatalogue(dbMain, mainDir)).ok, true);
+    await shutdown(main.server);
+
+    const r = await rpc(sec.base, secCookie, 'branch_sync_now');
+    assert.equal(r.status, 200);
+    assert.equal(r.data.ok, true, JSON.stringify(r.data));
+    assert.equal(r.data.route, 'relay');
+    assert.equal(priceOf(dbSec, 'S-CARD'), 320000, 'цена главного филиала доехала через сервер поставщика');
+    assert.deepEqual(clinicalCounts(dbSec), { patients: 1, visits: 0, invoices: 0, invoice_items: 0 },
+      'приехал справочник и только он: свой пациент на месте, чужих нет');
+
+    // Именно ЭТИМ токеном: поставщик отмечает последнее использование.
+    const row = cpDb.prepare('SELECT relay_id, last_used FROM relay_tokens WHERE token = ?').get(minted);
+    assert.equal(row.relay_id, relayId);
+    assert.ok(row.last_used, 'ходили токеном из ключа, а не чем-то ещё');
+  });
+
+  await t.test('отзыв токена отключает ИМЕННО этот филиал, и сразу', async () => {
+    // Ради этого свойства токен из ключа и предпочитается install_token-у:
+    // отозвать учётку одного филиала можно, не трогая клинику.
+    cpDb.prepare('UPDATE relay_tokens SET revoked_at = ? WHERE token = ?')
+      .run(new Date().toISOString(), minted);
+
+    const r = await rpc(sec.base, secCookie, 'branch_sync_now');
+    assert.equal(r.data.ok, false);
+    assert.equal(r.data.reason, 'offline', 'первопричина по-прежнему — выключенный главный филиал');
+    // ИЗМЕНЁННЫЙ КОД, тот же отказ: 401 у ПОДКЛЮЧЁННОГО филиала теперь
+    // называется relay_branch_revoked. Прежнее relay_unauthorized уводило
+    // владельца в «проверьте активацию клиники», тогда как случившееся чинится
+    // на другой машине и одним действием — новым ключом подключения из главного
+    // филиала (rpc/branch-sync.js REASONS).
+    assert.equal(r.data.relay_reason, 'relay_branch_revoked');
+
+    // А блоб на месте, и главный филиал ничего не потерял: отозвана учётка
+    // филиала, а не клиники.
+    const ok = await fetch(cp.base + relayPathFor(relayId), { headers: { Authorization: 'Bearer ' + tokenMain } });
+    assert.equal(ok.status, 200);
+  });
 });

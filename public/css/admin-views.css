@@ -4005,6 +4005,14 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .bsync-key { width: 100%; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px;
   line-height: 1.5; padding: 8px 10px; border: 1px solid var(--ink-200); border-radius: 8px;
   overflow-wrap: anywhere; resize: vertical; }
+/* BRANCH_IDENTITY_V1 — список филиалов с их постоянными ключами. Не таблица:
+   ключ длинный и должен лежать на всю ширину карточки, а в ячейке он либо
+   уезжает за край, либо жмётся в колонку и копируется обрезанным. */
+.bsync-branches { display: flex; flex-direction: column; gap: 12px; }
+.bsync-branch { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
+  border: 1px solid var(--ink-100); border-radius: 10px; background: var(--ink-25, #fafbfc); }
+.bsync-branch-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bsync-branch-name { font-weight: 600; font-size: 13.5px; color: var(--ink-800); }
 .bsync-line { display: flex; align-items: flex-start; gap: 6px; font-size: 13px; color: var(--ink-700); margin: 0; line-height: 1.5; }
 .bsync-line-warn { color: var(--warn-700); background: var(--warn-50); border: 1px solid #f0d29b;
   border-radius: 8px; padding: 8px 10px; }

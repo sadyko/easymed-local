@@ -1,4 +1,5 @@
 import express, { Router } from 'express';
+import { clinicForRelayToken } from './relay-token.js';   // BRANCH_IDENTITY_V1
 
 // BRANCH_SYNC_RELAY_V1 — the relay. Stores one opaque blob per branch group and
 // hands it back. That is the entire feature.
@@ -34,6 +35,43 @@ import express, { Router } from 'express';
 // so nobody can probe which tokens are live). Deliberately not a second scheme:
 // a clinic has exactly one identity with the vendor, and a relay is no reason to
 // issue it another.
+//
+// BRANCH_IDENTITY_V1 — with ONE exception, added when real branch installs
+// arrived: a RELAY TOKEN (routes/relay-token.js) is also accepted, and only ever
+// for the single relay id it was minted against. It exists because a SECONDARY
+// branch never enrols — it joins a clinic, not the vendor — so it has no
+// install_token and could not use this route at all. It is NOT a second identity
+// with the vendor: it names no clinic to check-in, carries no entitlement, and is
+// refused by /cp/v1/checkin, which never looks at the relay_tokens table. The
+// alternative — putting the clinic's install_token in the branch key — would
+// have made every branch PC able to impersonate the clinic completely. See
+// db/migrations/006_relay_tokens.sql for the full argument.
+//
+// WHAT AUTHENTICATION HERE DOES *NOT* DO, stated so this file cannot be read as
+// promising more than it delivers: it identifies the CALLER, it does not bind a
+// caller to a relay id. Any enrolled, active clinic that knows a relay id can
+// read and overwrite the blob at it, including one belonging to another clinic —
+// demonstrated end to end, and true since this route shipped (v0.4.5). The
+// address is the capability: a relay id is 128 bits derived from a 256-bit key
+// generated inside the clinic and never sent here, so learning one in practice
+// means already holding either this server's database (which carries every
+// install_token, a strictly worse compromise) or the victim's own group key
+// (which decrypts the blob outright, making an overwrite the least of it).
+//
+// FIRST-WRITER-WINS WAS CONSIDERED AND NOT TAKEN. relay_blobs.clinic_id already
+// records a writer, so refusing a PUT from a different clinic is cheap — but the
+// clinic_id is OURS, not the group's, and it legitimately changes: a clinic that
+// re-enrols after a rebuild keeps its data directory, hence its group key, hence
+// its relay id, but gets a NEW clinic_id. Locking that install out of its own
+// blob would be a silent, total, self-inflicted sync failure for a clinic that
+// did nothing wrong, recoverable only by a vendor hand-editing a row — and
+// deployed onto a live relay it would strand, on the spot, every existing blob
+// whose recorded writer has since changed. A worse failure, aimed at innocent
+// clinics, to raise the cost of an attack that already presupposes a bigger
+// breach. So the change of hands is made LOUD instead of impossible (below), and
+// the real fix — binding a relay id to a group identity the clinic proves rather
+// than to a vendor-assigned clinic_id — is left as a design change for Stage 2,
+// where the branch group gets an identity of its own.
 
 export const RELAY_MOUNT = '/cp/v1/relay';
 
@@ -46,7 +84,7 @@ export const relayPathFor = (relayId) => `${RELAY_MOUNT}/${relayId}`;
 // truncated to 16 bytes (server/services/branch-sync/relay-crypto.js). Enforced
 // here as a FORMAT, not as a lookup: it bounds what can become a primary key,
 // and it means a probing request is refused before it touches the database.
-const RELAY_ID_RE = /^[0-9a-f]{32}$/;
+export const RELAY_ID_RE = /^[0-9a-f]{32}$/;
 
 // The hard ceiling on one blob. A gzipped catalogue with a clinic logo in it is
 // a few hundred kilobytes; 12 MB is "an implausibly large clinic" and, more to
@@ -125,15 +163,49 @@ export function relayRoutes(db, { env = process.env, now = () => new Date() } = 
   // same reason as deploy.js: an unauthenticated caller must never make this
   // process buffer megabytes. It also means a refused request cannot possibly
   // have stored anything, because nothing has even been read yet.
-  r.use((req, res, next) => {
+  // Mounted on '/:relayId', not bare, and that is load-bearing rather than
+  // cosmetic. The relay-token fallback below has to know WHICH relay id is being
+  // asked for, and this is the only way to learn it from EXPRESS ITSELF — the
+  // same parse, the same percent-decoding, the same value the handlers below
+  // read out of req.params. A hand-rolled reader of req.url (this file had one
+  // for exactly one commit) is a second URL parser that can disagree with the
+  // first about fragments, absolute-form request targets and %-escapes; the day
+  // it disagrees, the id the scope was CHECKED against is not the id the blob is
+  // STORED under. One parser, no daylight.
+  //
+  // Consequence worth noting: a request to the mount root itself (no relay id at
+  // all) no longer reaches this middleware, so it answers 404 — for everyone.
+  // That is strictly better than what it did before: it used to answer 401 to an
+  // unknown token and 404 to a valid one, which made the bare mount path a
+  // one-bit oracle for "is this install_token live".
+  r.use('/:relayId', (req, res, next) => {
     const token = bearerToken(req.headers.authorization);
     if (!token) return res.status(401).json(GENERIC_FAILURE_BODY);
     // The same SELECT services/checkin.js identifies a clinic with, including
     // `active = 1`: a retired clinic loses the relay exactly when it loses
     // check-in, with no second switch to remember.
     const clinic = db.prepare('SELECT clinic_id FROM clinics WHERE install_token = ? AND active = 1').get(token);
-    if (!clinic) return res.status(401).json(GENERIC_FAILURE_BODY);
-    req.relayClinicId = clinic.clinic_id;
+    if (clinic) {
+      req.relayClinicId = clinic.clinic_id;
+      return next();
+    }
+
+    // BRANCH_IDENTITY_V1 — the fallback, tried ONLY after the install_token
+    // lookup has already failed, so the enrolled main branch's path is exactly
+    // what it was before this existed.
+    //
+    // Scoped to the relay id in THIS request's path and to nothing else: the
+    // same token presented for another id gets the same generic 401 as a token
+    // that was never issued. clinicForRelayToken also refuses a revoked token and
+    // one whose clinic has been deactivated, so a retired clinic loses the relay
+    // for EVERY branch at once, not just for the one holding the install_token.
+    //
+    // req.params.relayId — express's own parse, byte-identical to what the PUT
+    // and GET handlers below will use as the storage key. See the mount comment.
+    const relayId = String(req.params.relayId || '');
+    const viaRelayToken = RELAY_ID_RE.test(relayId) ? clinicForRelayToken(db, token, relayId, { now }) : null;
+    if (!viaRelayToken) return res.status(401).json(GENERIC_FAILURE_BODY);
+    req.relayClinicId = viaRelayToken;
     next();
   });
 
@@ -156,6 +228,31 @@ export function relayRoutes(db, { env = process.env, now = () => new Date() } = 
     }
     if (bytes.length > maxRelayBytes(env)) {
       return res.status(413).json({ error: { code: 'too_large', message: 'The blob is larger than this server accepts.' } });
+    }
+
+    // A blob changing hands has exactly two causes: a clinic that re-enrolled
+    // (same data directory, same group key, same relay id, new clinic_id) and is
+    // republishing its own catalogue, or one clinic overwriting another's. The
+    // first is rare and legitimate; the second is an attack, and this route
+    // cannot tell them apart — see this file's header for why it refuses neither.
+    //
+    // So it is logged, LOUDLY (console.error, the same register as check-in's
+    // automatic release halt), because the one thing worse than a cross-clinic
+    // overwrite is a cross-clinic overwrite nobody can see afterwards. Never the
+    // bytes, never the size — the relay id and the two clinic ids are metadata
+    // this service already holds. Best-effort: bookkeeping must not fail an
+    // upload (the same rule as the read_at touch below).
+    try {
+      const held = db.prepare('SELECT clinic_id FROM relay_blobs WHERE relay_id = ?').get(relayId);
+      if (held && held.clinic_id !== req.relayClinicId) {
+        console.error(
+          `[control-plane] RELAY BLOB CHANGED HANDS: relay ${relayId} was written by clinic ` +
+          `${held.clinic_id} and is now being overwritten by clinic ${req.relayClinicId}. ` +
+          `Expected only after a re-enrolment; otherwise check the registry.`
+        );
+      }
+    } catch (e) {
+      console.warn('[control-plane] could not check relay blob ownership:', e && e.message);
     }
 
     // ONE row per group, replaced wholesale. No history, no versions, no second

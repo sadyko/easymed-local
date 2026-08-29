@@ -233,8 +233,31 @@ test('a letter is never reused, even when its branch is gone', () => {
 test('allocation is driven by the highest letter ever issued, not by the count', () => {
   const db = freshDb();
   db.prepare("INSERT INTO branches (name, letter) VALUES ('Второй', 'B')").run();
+  db.prepare("INSERT INTO branch_letters_spent (letter, kind) VALUES ('B','issue')").run();
   db.prepare("DELETE FROM branches WHERE letter = 'B'").run();
   assert.equal(allocateLetter(db), 'C', 'B was used once and is spent forever');
+});
+
+test("a BURNED letter is skipped but does not drag the next letter past it", () => {
+  // Migration 080 burns 'P': it is the prefix ~70,000 legacy MRNs already
+  // carry, so a branch lettered P would mint numbers Stage 2 cannot tell apart
+  // from the legacy ones. Burned is NOT issued — if it counted as issued, the
+  // clinic's second branch would be 'Q' and everyone would wonder where B..O
+  // went. Worse, the frozen 'B' case below would fail and the obvious fix
+  // would be to delete the burn row, undoing the reason it exists.
+  const db = freshDb();
+  const spent = db.prepare('SELECT letter, kind FROM branch_letters_spent ORDER BY letter').all();
+  assert.deepEqual(spent, [{ letter: 'A', kind: 'issue' }, { letter: 'P', kind: 'burn' }]);
+  assert.equal(allocateLetter(db, { name: 'Второй' }), 'B', "burning P must not push past B");
+});
+
+test('a burned letter is never issued, even when allocation reaches it', () => {
+  const db = freshDb();
+  // Issue up to O, so the next candidate would be P.
+  for (const l of 'BCDEFGHIJKLMNO') {
+    db.prepare("INSERT INTO branch_letters_spent (letter, kind) VALUES (?, 'issue')").run(l);
+  }
+  assert.equal(allocateLetter(db, { name: 'Шестнадцатый' }), 'Q', 'P is burned and must be stepped over');
 });
 
 test('allocateLetter writes the letter onto the branch row it creates', () => {
@@ -244,6 +267,20 @@ test('allocateLetter writes the letter onto the branch row it creates', () => {
   assert.equal(row.name, 'Юнусабад');
   assert.equal(letter, 'B', 'A is the main branch');
 });
+
+test('a prefix already present in imported patient numbers is burned, not issued', () => {
+  // Migration 080 can only burn the prefix THIS codebase ever generated ('P').
+  // A clinic migrating from another system imports MRNs through Excel, and that
+  // importer accepts arbitrary text — so 'B-24-00500' can already exist before
+  // any branch is called B. Issuing B would then mint numbers colliding with
+  // rows that are already printed. The migration cannot know these prefixes;
+  // only allocation time can see them.
+  const db = freshDb();
+  db.prepare("INSERT INTO patients (full_name, mrn) VALUES ('Импорт', 'B-24-00500')").run();
+  assert.equal(allocateLetter(db, { name: 'Второй' }), 'C', 'B is taken by imported data');
+  const b = db.prepare("SELECT kind FROM branch_letters_spent WHERE letter = 'B'").get();
+  assert.equal(b.kind, 'burn', 'and the reason is recorded, not recomputed next time');
+});
 ```
 
 - [ ] **Step 2: Run it and watch it fail**
@@ -252,6 +289,17 @@ Run: `node --test server/services/branch-sync/letters.test.js`
 Expected: FAIL — `Cannot find module './letters.js'`
 
 - [ ] **Step 3: Implement**
+
+> **The code below is the DRAFT this task started from, kept as the record of
+> what was proposed. It is NOT what shipped, and three things in it are wrong** —
+> `server/services/branch-sync/letters.js` is the truth. The default argument
+> `taken = issued` is a provable no-op that silently means "ignore every burn",
+> and calling `nextLetter` with one argument returns `P` — the one letter the
+> module exists never to hand out. The recursion is bounded only by however many
+> poisoned prefixes an old system's Excel export happened to contain. And the
+> `substr(...)` prefix probe full-scans the covering index: measured at 3.3 ms
+> against 0.004 ms for a range seek on 70,000 rows. The shipped file argues all
+> three out at length. Do not copy from here.
 
 ```js
 // server/services/branch-sync/letters.js
@@ -285,18 +333,48 @@ function fromIndex(n) {
   return out;
 }
 
-export function nextLetter(used) {
-  const highest = (used || []).reduce((max, l) => Math.max(max, toIndex(l)), 0);
-  return fromIndex(highest + 1);
+// `issued` drives WHERE WE ARE; `taken` is everything the ledger holds at all.
+//
+// The two differ because migration 080 BURNS 'P' — the prefix ~70,000 legacy
+// MRNs already carry — without it ever having been a branch. If a burn counted
+// as issued, the highest would be P and a clinic's SECOND branch would be
+// lettered Q, silently skipping B..O.
+export function nextLetter(issued, taken = issued) {
+  const highest = (issued || []).reduce((max, l) => Math.max(max, toIndex(l)), 0);
+  const blocked = new Set((taken || []).map((l) => String(l).toUpperCase()));
+  let n = highest + 1;
+  while (blocked.has(fromIndex(n))) n += 1;   // step over burns
+  return fromIndex(n);
 }
 
 // `branch_letters_spent` records every letter ever issued, so a deleted branch
 // cannot free its letter. branches.letter alone would not do: DELETE removes it.
 export function allocateLetter(db, { name = '' } = {}) {
-  const spent = db.prepare('SELECT letter FROM branch_letters_spent').all().map((r) => r.letter);
-  const letter = nextLetter(spent);
+  const rows = db.prepare('SELECT letter, kind FROM branch_letters_spent').all();
+  const letter = nextLetter(
+    rows.filter((r) => r.kind === 'issue').map((r) => r.letter),
+    rows.map((r) => r.letter),
+  );
+
+  // A prefix that already exists in this database's own patient numbers must
+  // never become a branch letter: an Excel import can carry in MRNs from a
+  // clinic's previous system, and 080 cannot know which prefixes those are.
+  // Recorded as a burn so the knowledge accumulates in one place instead of
+  // being recomputed on every allocation.
+  //
+  // NOTE (Stage 2): this must eventually check the FLEET's MRNs, not only this
+  // install's. A poisoned prefix can sit in a SECONDARY branch's imported rows,
+  // and the main branch — which allocates — would not see it here.
+  const clash = db.prepare(
+    "SELECT 1 FROM patients WHERE mrn IS NOT NULL AND substr(mrn, 1, length(?) + 1) = ? || '-' LIMIT 1",
+  ).get(letter, letter);
+  if (clash) {
+    db.prepare("INSERT OR IGNORE INTO branch_letters_spent (letter, kind) VALUES (?, 'burn')").run(letter);
+    return allocateLetter(db, { name });
+  }
+
   db.transaction(() => {
-    db.prepare('INSERT INTO branch_letters_spent (letter) VALUES (?)').run(letter);
+    db.prepare("INSERT INTO branch_letters_spent (letter, kind) VALUES (?, 'issue')").run(letter);
     if (name) db.prepare('INSERT INTO branches (name, letter) VALUES (?, ?)').run(name, letter);
   })();
   return letter;
@@ -821,3 +899,52 @@ git push origin main
 **Deliberately out of scope**, and why: field-level conflict resolution, the append-only money model, and patient matching all belong to later stages. Building them now would mean writing merge rules before a single branch key has been exchanged in a real clinic.
 
 **One thing that looks like scope creep but is not:** lettered MRNs (Task 1) move no clinical data, yet they must land in this stage. A patient created at a secondary branch *before* the letter exists would be numbered as if it were the main branch, and that number is already printed by the time Stage 2 arrives to fix it.
+
+---
+
+## Added during execution: the `already_numbered` dead end, and its way out
+
+Task 3 refuses to adopt a branch letter when this install has already MINTED
+patient numbers under its own letter. That refusal is correct — those numbers are
+printed on cards, migration 080 forbids renumbering them, and leaving them as
+`A-…` while the real branch A goes on minting its own `A-…` for different people
+is exactly the collision the letter exists to prevent.
+
+But as shipped the refusal is **terminal**. A building that ran the system
+standalone for a week and then activates as branch C is stuck between "cannot
+renumber" and "fresh install, discard the week". That is not an acceptable answer
+to give an owner, so Task 6 must carry the way out.
+
+**A consented one-time renumber at adoption is safe here, and only here.** The
+letter has just been issued to this install and the ledger guarantees single
+issue, so moving numbers OUT of a namespace this install never owned and INTO one
+it now owns exclusively cannot collide with anything, fleet-wide. Two facts
+verified during Task 3 make it cheap rather than sprawling: **no table stores a
+copy of `mrn`** — every consumer reads it through a join — so it is one UPDATE,
+not a fan-out; and Stage 1 syncs no patients, so no other install has yet seen
+the numbers being changed.
+
+What it requires, and why it is work rather than a one-liner:
+
+- a column for the superseded number (`patients.mrn_previous`), included in
+  patient search, so someone presenting last week's card is still found;
+- the UPDATE inside the SAME transaction as the adoption;
+- consent that names the count — «52 номера пациентов изменятся с A- на C-;
+  эти карты нужно перепечатать» — because the cost is real and local, and the
+  owner is the one who pays it.
+
+`reason: 'already_numbered'` is the hook for that screen.
+
+> **RESOLVED DIFFERENTLY, 2026-08-29, after this was written.** The line that
+> stood here said the activation flow must not ship without the renumber. That
+> was wrong on scope: a renumber REWRITES patient numbers, which is clinical
+> data mutation, and Stage 1's whole boundary is that no clinical data moves.
+> Building it here would have broken the one promise that makes this stage
+> reviewable.
+>
+> What shipped instead is an honest refusal. `rpc/branch-sync.js` answers
+> `already_numbered` with Russian that tells the owner exactly what happened,
+> offers the one remedy that IS available today (a clean reinstall, if this is
+> a new branch PC), and sends them to support for the case where the patients
+> are real — rather than promising a button that does not exist. The renumber
+> belongs to Stage 2, alongside the patient sync it exists to serve.
