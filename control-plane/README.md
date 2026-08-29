@@ -104,6 +104,42 @@ that `location` and this env var ever disagree, clinics are offered a URL that
 | `EASYMED_CP_RELEASES_URL_BASE` | `/releases` | Only if nginx serves that directory at some other path |
 | `EASYMED_CP_MAX_BUNDLE_BYTES` | 32 MB | The largest bundle accepted |
 
+## The branch-sync relay (`/cp/v1/relay/:relayId`) — bytes this service cannot read
+
+BRANCH_SYNC_RELAY_V1. A clinic with two branches on unrelated internet
+connections cannot sync them directly (Route A), so the main branch PUTs an
+encrypted catalogue here and the other branch GETs it. One blob per branch
+group, replaced wholesale, never parsed.
+
+**This service cannot decrypt what it stores, and no change may make it able
+to.** The key is AES-256, generated inside the clinic when it is activated
+(`server/services/branch-sync/sync-group.js`), and reaches the second branch
+only inside the pairing key the owner carries by hand. It is never sent to this
+server — not at enrollment, not at check-in, never.
+
+The consequence has to be said out loud, because a clinic will eventually ask:
+**if a clinic loses its key, nobody can recover that data, including us.** The
+clinic's own screen says so before the owner turns the fallback on.
+
+What this server does learn: which install uploaded or downloaded, when, how
+many bytes, and that some set of installs share one relay id. Nothing about
+services, prices, patients or money.
+
+Authentication is the clinic's `install_token` — the same credential the daily
+check-in presents, looked up the same way, with the same single generic 401 for
+missing, malformed, unknown and deactivated. Mounted above the 100kb JSON
+parser (like `/cp/v1/deploy`) because the body is megabytes and the router
+authenticates before it buffers a byte.
+
+Nothing needs to be configured for it to work; it stores blobs in the registry
+database (migration `005_relay_blobs.sql`), not on disk, so there is no nginx
+`location` to keep in step.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `EASYMED_CP_MAX_RELAY_BYTES` | 12 MB | The largest encrypted catalogue accepted |
+| `EASYMED_CP_RELAY_RETENTION_DAYS` | 30 | A blob untouched (neither uploaded nor downloaded) for this long is deleted. Swept on every upload — there is no scheduler |
+
 ## Development
 
 From the repository root:

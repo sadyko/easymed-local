@@ -98,6 +98,48 @@ test('a valid code writes both identity files and reports the clinic', async () 
   assert.match(body.fingerprint, /^[0-9a-f]{64}$/);
 });
 
+test('BRANCH_SYNC_RELAY_V1: activation also mints the branch-sync key — and never sends it', async () => {
+  // The owner's decision (2026-08-29): the synchronisation key is created when
+  // the clinic is ACTIVATED, not by a separate ceremony later. Adding a branch
+  // then hands that same identity to the new building.
+  const dir = freshDir();
+  let sent = null;
+  const fetchImpl = async (url, init) => { sent = { url, init }; return okFetch(goodBody())(); };
+
+  await enrollWithCode(dir, 'EM-7K4Q-9XZP', { fetchImpl });
+
+  const group = JSON.parse(fs.readFileSync(path.join(dir, 'sync-group.json'), 'utf8'));
+  assert.match(group.group_id, /^BR-[0-9A-F]{12}$/);
+  // 32 bytes, base64url — AES-256. Checked as a LENGTH, because a short key
+  // would encrypt happily and be worthless.
+  assert.equal(Buffer.from(group.key.replace(/-/g, '+').replace(/_/g, '/'), 'base64').length, 32);
+
+  // THE POINT OF THE WHOLE DESIGN: the vendor never sees this key — not in the
+  // enrollment request, not anywhere. If this assertion ever fails, Route B has
+  // stopped being end-to-end encrypted and the vendor can read clinic data.
+  assert.equal(sent.init.body.includes(group.key), false, 'the group key must never reach the control plane');
+  assert.equal(JSON.stringify(sent.init.headers).includes(group.key), false);
+});
+
+test('BRANCH_SYNC_RELAY_V1: a refused enrollment mints no key, and an existing key is never rotated', async () => {
+  // Nothing may be written by a refused enrollment — the same rule the identity
+  // files live under.
+  const empty = freshDir();
+  await enrollWithCode(empty, 'EM-BAD', { fetchImpl: errFetch(400) });
+  assert.equal(fs.existsSync(path.join(empty, 'sync-group.json')), false);
+
+  // And an install that enrolls a second time (its identity file lost, the code
+  // re-issued) must keep the key its branches already hold: rotating it would
+  // silently break every paired branch while the screen showed nothing wrong.
+  const dir = freshDir();
+  await enrollWithCode(dir, 'EM-7K4Q-9XZP', { fetchImpl: okFetch(goodBody()) });
+  const first = fs.readFileSync(path.join(dir, 'sync-group.json'), 'utf8');
+  fs.unlinkSync(path.join(dir, 'control.json'));
+  await enrollWithCode(dir, 'EM-7K4Q-9XZP', { fetchImpl: okFetch(goodBody()) });
+  assert.equal(fs.readFileSync(path.join(dir, 'sync-group.json'), 'utf8'), first,
+    're-enrolling must not rotate a key the branches are already using');
+});
+
 test('the acceptance loop: enroll → controlState reads enrolled and unlocked', async () => {
   // docs/plans/2026-08-20-control-plane-service.md Task 3: "enroll → write the
   // response to a control.json → the clinic app's controlState reads it as

@@ -26,7 +26,10 @@ import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
 import { backupList, backupCreate, backupRestore, factoryReset } from './backup.js';   // SYSTEM_SETTINGS_V1
 import { custdevList, custdevSync, custdevRate, custdevMark, custdevReport } from './custdev.js';   // CUSTDEV_V1
-import { branchSyncStatus, branchSyncMakeKey, branchSyncPair, branchSyncUnpair, branchSyncNow } from './branch-sync.js';   // BRANCH_SYNC_V1
+import {
+  branchSyncStatus, branchSyncMakeKey, branchSyncPair, branchSyncUnpair, branchSyncNow,
+  branchSyncRelaySet, branchSyncRelayPublish, branchSyncRegenerateKey,   // BRANCH_SYNC_RELAY_V1
+} from './branch-sync.js';   // BRANCH_SYNC_V1
 
 export const RPC = {
   get_clinic_by_slug:       (db, args, user) => getClinicBySlug(db, args, user),
@@ -241,6 +244,12 @@ export const RPC = {
   branch_sync_pair:     (db, args, user) => branchSyncPair(db, args, user),
   branch_sync_unpair:   (db, args, user) => branchSyncUnpair(db, args, user),
   branch_sync_now:      (db, args, user) => branchSyncNow(db, args, user),
+  // BRANCH_SYNC_RELAY_V1 — резервный канал через сервер Easy-Med: согласие на
+  // выгрузку, ручная выгрузка и перевыпуск ключа синхронизации. Все три пишут
+  // (на диск или в базу), поэтому в READ_ONLY_RPCS их тоже нет.
+  branch_sync_relay_set:     (db, args, user) => branchSyncRelaySet(db, args, user),
+  branch_sync_relay_publish: (db, args, user) => branchSyncRelayPublish(db, args, user),
+  branch_sync_regenerate_key: (db, args, user) => branchSyncRegenerateKey(db, args, user),
 };
 
 export function getRpc(name) {

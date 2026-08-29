@@ -1,0 +1,152 @@
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
+import { gzipSync, gunzipSync } from 'node:zlib';
+import { decodeGroupKey } from './pairing.js';
+
+// BRANCH_SYNC_RELAY_V1 — вся криптография Маршрута Б, и ничего кроме неё.
+//
+// ЧТО РЕШАЕТ ЭТОТ ФАЙЛ. Маршрут А (филиалы ходят друг к другу напрямую) не
+// работает, когда два здания сидят на разных интернет-каналах без VPN. Тогда
+// справочник едет ЧЕРЕЗ сервер поставщика — но поставщик не должен получить
+// возможность его прочитать. Здесь запечатывается то, что уйдёт на чужой диск,
+// и распечатывается то, что оттуда вернулось.
+//
+// ПРАВИЛО, КОТОРОЕ НЕЛЬЗЯ ОСЛАБИТЬ: ключ существует только в каталогах данных
+// филиалов. Он не уходит ни в запрос активации, ни в ежедневный check-in,
+// никуда. Поставщик физически не может расшифровать блоб — и, прямое
+// следствие, не может и восстановить его, если клиника потеряет ключ.
+// Владельцу это сказано на экране прямым текстом, до того как он на это
+// положится.
+//
+// ВЫБОРЫ И ПРИЧИНЫ:
+//   * AES-256-GCM, а не CBC/CTR: нужен не только шифр, но и ПОДПИСЬ.
+//     Испорченный (или подменённый на сервере поставщика) блоб обязан быть
+//     отвергнут целиком, а не применён наполовину. GCM даёт это одним тегом.
+//   * IV — 12 случайных байт на КАЖДУЮ выгрузку. Повтор IV на одном ключе
+//     ломает GCM полностью, поэтому он никогда не выводится из чего-либо
+//     детерминированного и не переиспользуется.
+//   * AAD — четырёхбайтовая метка формата. Так блоб версии 1 нельзя выдать за
+//     блоб будущей версии 2: тег считается вместе с меткой.
+//   * gzip ДО шифрования. Справочник — это JSON, внутри которого логотип
+//     клиники в виде data-URL; сжатие уменьшает то, что лежит на чужом диске,
+//     в разы. Обратный порядок бессмыслен: шифротекст не сжимается.
+//     Классическое возражение против «сжать, потом зашифровать» (CRIME/BREACH)
+//     требует, чтобы атакующий мог подмешивать свой текст в сжимаемые данные и
+//     мерить длину ответа; здесь данные целиком свои и такой возможности нет.
+//   * node:crypto и node:zlib — ничего кроме стандартной библиотеки. Новых
+//     зависимостей у проекта не появляется.
+
+// Метка формата. Она же AAD — см. выше.
+const MAGIC = Buffer.from('EMR1', 'ascii');
+const IV_BYTES = 12;      // канонический размер IV для GCM
+const TAG_BYTES = 16;     // полный тег аутентификации, не усечённый
+// Размер ключа (32 байта = AES-256) задан в pairing.js: он же проверяет ключ
+// группы при разборе ключа подключения, и одно знание в двух файлах разошлось
+// бы ровно тогда, когда его меняют.
+const HEADER_BYTES = MAGIC.length + IV_BYTES + TAG_BYTES;
+
+// Строка-«назначение» в выводе идентификатора: нужна ровно для того, чтобы тот
+// же ключ, применённый когда-нибудь ещё для чего-то, не дал то же значение.
+const RELAY_ID_INFO = 'easymed/branch-sync/relay-id/v1';
+const RELAY_ID_CHARS = 32;   // 16 байт HMAC в hex — 128 бит, не угадывается
+
+// Потолок РАСПАКОВАННОГО справочника. Блоб уже прошёл проверку тега, то есть
+// его сделал наш же главный филиал, — но «уже проверено» не повод разворачивать
+// в память сколько угодно. Ограничение реальное, а не косметическое: gunzipSync
+// обрывается на превышении, а не после того, как всё распаковал.
+const MAX_PLAIN_BYTES = 32 * 1024 * 1024;
+
+/** Идентификатор блоба в виде, пригодном для пути — маршрут и тесты берут его отсюда. */
+export const RELAY_ID_RE = /^[0-9a-f]{32}$/;
+
+/**
+ * Адрес блоба на сервере поставщика — ВЫВЕДЕННЫЙ ИЗ КЛЮЧА, а не отдельное поле.
+ *
+ * Почему не group_id: его владелец видит на экране, он короткий и обязан быть
+ * удобным. Адрес же — единственное, по чему на сервере поставщика можно
+ * попросить чужой блоб. Выведенный HMAC-ом из 256-битного ключа, он
+ * неугадываем, и знает его только тот, у кого ключ уже есть. Обратно ключ из
+ * него не достаётся (HMAC односторонний), поэтому поставщик, видя адрес, не
+ * приближается к содержимому ни на шаг.
+ *
+ * Побочная выгода: перевыпуск ключа сам собой меняет адрес, и старый блоб
+ * становится сиротой, которого вычистит удержание на сервере.
+ */
+export function relayIdFor(key) {
+  const k = decodeGroupKey(key);
+  if (!k) return null;
+  return createHmac('sha256', k).update(RELAY_ID_INFO).digest('hex').slice(0, RELAY_ID_CHARS);
+}
+
+/**
+ * Запечатать то, что уйдёт на сервер поставщика.
+ *
+ * @param {string|Buffer} key   ключ группы
+ * @param {object} payload      ровно то же тело, что отдаёт Маршрут А
+ * @returns {Buffer|null}       null — ключа нет либо он не той длины
+ *
+ * Формат: MAGIC(4) | IV(12) | TAG(16) | шифротекст. Тег в заголовке, а не в
+ * хвосте, чтобы разбор не зависел от длины тела.
+ */
+export function sealPayload(key, payload) {
+  const k = decodeGroupKey(key);
+  if (!k) return null;
+  const iv = randomBytes(IV_BYTES);
+  const cipher = createCipheriv('aes-256-gcm', k, iv);
+  cipher.setAAD(MAGIC);
+  const plain = gzipSync(Buffer.from(JSON.stringify(payload), 'utf8'));
+  const body = Buffer.concat([cipher.update(plain), cipher.final()]);
+  return Buffer.concat([MAGIC, iv, cipher.getAuthTag(), body]);
+}
+
+/**
+ * Распечатать то, что вернулось.
+ *
+ * НИКОГДА не бросает и НИКОГДА не отдаёт «половину». Блоб, не сошедшийся по
+ * тегу, отвергается целиком — именно это правило превращает «поставщик хранит
+ * наши байты» в «поставщик не может ни прочитать их, ни подменить».
+ *
+ * @returns {{ok:true, payload:object} | {ok:false, reason:string}}
+ *   reason: no_key | bad_blob | bad_key | bad_payload
+ *     bad_key   — тег не сошёлся: чужой ключ ЛИБО подменённые байты. Различить
+ *                 эти два случая невозможно в принципе, и не нужно: действие
+ *                 одно — не применять ничего.
+ *     bad_blob  — это вообще не наш формат (обрезано, не та метка).
+ */
+export function openPayload(key, bytes) {
+  const k = decodeGroupKey(key);
+  if (!k) return { ok: false, reason: 'no_key' };
+  const buf = Buffer.isBuffer(bytes) ? bytes : (bytes ? Buffer.from(bytes) : null);
+  if (!buf || buf.length <= HEADER_BYTES) return { ok: false, reason: 'bad_blob' };
+  if (!buf.subarray(0, MAGIC.length).equals(MAGIC)) return { ok: false, reason: 'bad_blob' };
+
+  const iv = buf.subarray(MAGIC.length, MAGIC.length + IV_BYTES);
+  const tag = buf.subarray(MAGIC.length + IV_BYTES, HEADER_BYTES);
+  const body = buf.subarray(HEADER_BYTES);
+
+  let plain;
+  try {
+    const decipher = createDecipheriv('aes-256-gcm', k, iv);
+    decipher.setAAD(MAGIC);
+    decipher.setAuthTag(tag);
+    // final() и ЕСТЬ проверка тега: она бросает, если байты или ключ не те.
+    // Всё, что до неё, ещё ничего не доказывает, поэтому распаковка и разбор
+    // JSON стоят строго ПОСЛЕ.
+    plain = Buffer.concat([decipher.update(body), decipher.final()]);
+  } catch {
+    return { ok: false, reason: 'bad_key' };
+  }
+
+  let json;
+  try {
+    json = gunzipSync(plain, { maxOutputLength: MAX_PLAIN_BYTES }).toString('utf8');
+  } catch {
+    return { ok: false, reason: 'bad_payload' };
+  }
+
+  let payload;
+  try { payload = JSON.parse(json); } catch { return { ok: false, reason: 'bad_payload' }; }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return { ok: false, reason: 'bad_payload' };
+  }
+  return { ok: true, payload };
+}

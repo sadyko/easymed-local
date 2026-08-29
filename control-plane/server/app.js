@@ -6,6 +6,7 @@ import { checkinRoutes } from './routes/checkin.js';
 import { vendorAuthRoutes, attachVendorUser } from './routes/vendor-auth.js';
 import { adminRoutes } from './routes/admin.js';
 import { deployRoutes, DEPLOY_MOUNT } from './routes/deploy.js';
+import { relayRoutes, RELAY_MOUNT } from './routes/relay.js';   // BRANCH_SYNC_RELAY_V1
 
 // control-plane/server/app.js -> control-plane/ -> control-plane/public
 const CONTROL_PLANE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -49,6 +50,15 @@ export function createApp(db) {
   // Also above attachVendorUser: CI has no vendor session and must never be
   // able to gain anything from presenting one. See routes/deploy.js.
   app.use(DEPLOY_MOUNT, deployRoutes(db));
+
+  // BRANCH_SYNC_RELAY_V1 — the branch-sync relay, mounted above the 100kb JSON
+  // parser for exactly the two reasons deploy is: an encrypted catalogue is
+  // megabytes, and the router authenticates (install_token, the check-in
+  // credential) BEFORE it buffers a single byte. It must also stay above
+  // attachVendorUser: a vendor session grants nothing here and must not be able
+  // to. See routes/relay.js — the whole point of that file is that this service
+  // stores bytes it cannot read.
+  app.use(RELAY_MOUNT, relayRoutes(db));
 
   app.use('/cp', express.json({ limit: '100kb' }));
   // VENDOR_LOGIN_V1 — resolves the vendor session cookie into req.vendorUser

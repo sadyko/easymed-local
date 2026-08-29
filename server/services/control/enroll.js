@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { verifyLicence } from './licence.js';
 import { computeFingerprint, writeAtomic, readBounded } from './checkin.js';
+import { ensureSyncGroup } from '../branch-sync/sync-group.js';   // BRANCH_SYNC_RELAY_V1
 
 // ENROLLMENT_SCREEN_V1 — the clinic's half of first-run enrollment.
 //
@@ -152,6 +153,20 @@ export async function enrollWithCode(dataDir, code, {
     console.warn('[enroll] could not write identity files:', e && e.message);
     return { ok: false, reason: 'write_failed' };
   }
+
+  // BRANCH_SYNC_RELAY_V1 — the branch-sync key is born HERE, with the install's
+  // identity. The owner's decision: activating the clinic is the moment it gets
+  // a key, and "add a branch" later just hands that same identity to the second
+  // building.
+  //
+  // AFTER both writes and OUTSIDE their try/catch, deliberately: this key never
+  // goes to the vendor and nothing in enrollment depends on it, so failing to
+  // write it (full disk, permissions) must cost the branch-sync fallback route
+  // and NOT the enrollment, whose single-use code is already burned server-side.
+  // An install left without the file picks one up the first time the Branches
+  // screen is opened (ensureSyncGroup is called from there too) — the same path
+  // every clinic enrolled before Route B existed takes.
+  ensureSyncGroup(dataDir, { writeFileSync, renameSync });
 
   return { ok: true, clinic_id, clinic_name: identity.clinic_name };
 }

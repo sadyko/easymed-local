@@ -15,6 +15,7 @@ import { createApp } from './app.js';
 import { setDataDir, setAppVersion } from './services/control/config.js';   // SUPERVISED_INSTALL_V1 / UPDATE_DELIVERY_V1
 import { scheduleCheckin } from './services/control/checkin.js';   // LICENCE_CORE_V1
 import { scheduleUpdater } from './services/control/updater.js';   // UPDATE_DELIVERY_V1
+import { scheduleRelayPublish } from './services/branch-sync/relay.js';   // BRANCH_SYNC_RELAY_V1
 import { recordEvent, pruneOpsEvents } from './services/ops-log.js';   // OPS_EVENTS_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -264,6 +265,21 @@ if (isMain) {
   // ~5 minutes after boot on purpose — a clinic PC powered on in the morning
   // and shut down before the first full hour still gets its backup for the day.
   scheduleDailyBackups(db, DATA_DIR);
+
+  // BRANCH_SYNC_RELAY_V1 — the main branch's encrypted catalogue copy on the
+  // vendor server, refreshed in the background. Same shape as the schedulers
+  // above (unref'd timers, self-contained ticks) and, like them, it decides for
+  // itself whether it has anything to do: an install that is not the main
+  // branch, or whose owner never enabled the fallback route, returns
+  // immediately and touches no network at all.
+  //
+  // It must be a background job rather than a button, because of which
+  // direction the fallback runs: the branch that CANNOT reach the main branch
+  // is the one that needs the copy, so the copy has to already be there before
+  // it asks. The catalogue is uploaded only when its content hash changed (or
+  // the copy is a day old — see relay.js REFRESH_MS, which is about the
+  // vendor's retention sweep, not about freshness).
+  scheduleRelayPublish(db, DATA_DIR);
 }
 
 function lanAddresses() {

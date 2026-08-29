@@ -13,11 +13,12 @@
 // вежливость, а не защита: каждый RPC заново проверяет роль на сервере.
 
 import { supabase } from '../../supabase.js';
-import { h, Icon, Tag, clear, toast, field } from '../ui.js';
+import { h, Icon, Tag, clear, toast, field, checkField } from '../ui.js';
 import { tr } from '../i18n.js';
 import { isAdminActor } from '../admin-actor.js';
 import {
     roleBadge, roleExplainer, syncLine, whenLabel, canSyncNow, addressValue,
+    syncKeyLine, relayExplainer, publishLine, canRegenerateKey, KEY_LOSS_WARNING,
 } from '../branch-sync-logic.js';
 
 async function rpc(name, args = {}) {
@@ -146,11 +147,124 @@ function paintMain(card, status, admin) {
         h('div', { class: 'sys-block-title' }, 'Ключ подключения'),
         h('p', { class: 'muted bsync-note' },
             'Введите этот ключ на каждом филиале, который должен получать справочник отсюда. Ключ не меняется — его можно показать снова в любой момент.'),
+        h('p', { class: 'muted bsync-note' },
+            'Ключ содержит и ключ шифрования группы. Передайте его лично или сообщением — через сервер Easy-Med он не проходит.'),
         keyBox,
         h('div', { class: 'bsync-actions' }, showBtn, copyBtn, keyStatus),
     ));
+    paintRelay(card, status, admin);
+    paintSyncKey(card, status, admin);
     card.appendChild(unlinkBlock(card,
         'Филиалы перестанут получать справочник отсюда. Уже переданные услуги и панели у них останутся.'));
+}
+
+// --- резервный канал через сервер Easy-Med (BRANCH_SYNC_RELAY_V1) ----------
+//
+// Один блок на обе роли, потому что переключатель один; отличается то, на что
+// владелец соглашается — главный филиал ОТДАЁТ копию наружу, подключённый
+// только берёт уже лежащую. Тексты разведены в relayExplainer().
+function paintRelay(card, status, admin) {
+    const box = h('div', { class: 'bsync-block' },
+        h('div', { class: 'sys-block-title' }, 'Резервный канал через сервер Easy-Med'));
+
+    if (!status.relay_ready) {
+        // Честное «недоступно» вместо переключателя, который ничего не делает.
+        box.appendChild(h('p', { class: 'muted bsync-note' }, syncKeyLine(status).text));
+        card.appendChild(box);
+        return;
+    }
+
+    box.appendChild(h('p', { class: 'muted bsync-note' }, relayExplainer(status)));
+
+    if (!admin) {
+        box.appendChild(h('p', { class: 'muted bsync-note' },
+            status.relay_enabled ? 'Резервный канал включён.' : 'Резервный канал выключен.'));
+        card.appendChild(box);
+        return;
+    }
+
+    const toggle = h('input', { type: 'checkbox' });
+    toggle.checked = !!status.relay_enabled;
+    const toggleStatus = h('p', { class: 'upd-action-status', role: 'status' });
+    toggle.addEventListener('change', async () => {
+        toggle.disabled = true;
+        toggleStatus.textContent = '';
+        try {
+            await rpc('branch_sync_relay_set', { enabled: toggle.checked });
+            await paint(card);
+            return;
+        } catch (e) {
+            // Возврат галочки на место: экран не должен показывать включённым
+            // то, что сервер не принял.
+            toggle.checked = !toggle.checked;
+            toggleStatus.textContent = e.message;
+        }
+        toggle.disabled = false;
+    });
+    box.appendChild(checkField('Использовать сервер Easy-Med, когда прямая связь недоступна', toggle));
+
+    const line = publishLine(status);
+    if (line) box.appendChild(h('p', { class: 'muted bsync-note' }, line));
+
+    if (status.role === 'main' && status.relay_enabled) {
+        const pubBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, 'Отправить копию сейчас');
+        const pubStatus = h('p', { class: 'upd-action-status', role: 'status' });
+        pubBtn.addEventListener('click', async () => {
+            pubBtn.disabled = true;
+            pubStatus.textContent = tr('Отправляем копию на сервер…');
+            try {
+                const data = await rpc('branch_sync_relay_publish');
+                // ok:false здесь не исключение: отсутствие интернета для этой
+                // клиники норма, и звучать оно должно как состояние.
+                toast(data && data.ok ? tr('Копия отправлена') : (data && data.message) || tr('Не удалось отправить копию'),
+                    data && data.ok ? 'ok' : 'fail');
+            } catch (e) {
+                toast(e.message, 'fail');
+            }
+            await paint(card);
+        });
+        box.appendChild(h('div', { class: 'bsync-actions' }, pubBtn, pubStatus));
+    }
+
+    box.appendChild(h('p', { class: 'muted bsync-note' }, KEY_LOSS_WARNING));
+    card.appendChild(box);
+}
+
+// --- ключ синхронизации и его перевыпуск -----------------------------------
+function paintSyncKey(card, status, admin) {
+    if (!canRegenerateKey(status, admin)) return;
+    const key = syncKeyLine(status);
+
+    const btn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, 'Перевыпустить ключ синхронизации');
+    const btnStatus = h('p', { class: 'upd-action-status', role: 'status' });
+    btn.addEventListener('click', async () => {
+        // Спрашиваем ДО вызова и говорим ровно то, что произойдёт: перевыпуск
+        // рвёт связь со всеми филиалами, и восстановить старый ключ не может
+        // никто, включая Easy-Med.
+        const ok = window.confirm(
+            'Перевыпустить ключ синхронизации?\n\n'
+            + 'Все подключённые филиалы отвалятся: на каждом придётся заново ввести новый ключ подключения.\n\n'
+            + 'Старый ключ восстановить невозможно — Easy-Med его не хранит.');
+        if (!ok) return;
+        btn.disabled = true;
+        btnStatus.textContent = '';
+        try {
+            await rpc('branch_sync_regenerate_key');
+            toast(tr('Ключ синхронизации перевыпущен'), 'ok');
+            await paint(card);
+        } catch (e) {
+            btn.disabled = false;
+            btnStatus.textContent = e.message;
+        }
+    });
+
+    card.appendChild(h('div', { class: 'bsync-block' },
+        h('div', { class: 'sys-block-title' }, 'Ключ синхронизации'),
+        h('p', { class: 'muted bsync-note' }, key.text),
+        h('p', { class: 'muted bsync-note' },
+            'Перевыпуск отключит все филиалы: каждому придётся выдать новый ключ подключения.'),
+        h('div', { class: 'bsync-actions' }, btn, btnStatus),
+    ));
 }
 
 // --- подключённый филиал ---------------------------------------------------
@@ -201,6 +315,7 @@ function paintSecondary(card, status, admin) {
     card.appendChild(h('div', { class: 'bsync-actions' }, syncBtn, syncStatus));
     card.appendChild(h('p', { class: 'muted bsync-note' },
         'Синхронизация переносит только справочник: сведения о клинике, услуги с ценами и лабораторные панели. Пациенты, визиты, анализы и оплаты остаются в своём филиале.'));
+    paintRelay(card, status, admin);
     card.appendChild(unlinkBlock(card,
         'Филиал перестанет получать справочник. Услуги и панели, которые уже приехали, останутся на месте.'));
 }

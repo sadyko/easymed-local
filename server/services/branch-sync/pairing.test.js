@@ -13,6 +13,7 @@ import {
   makeMainKey, pairWithKey, parseKey, encodeKey, readPairing, writePairing, clearPairing,
   normalizeUrl, signRequest, verifySignature, skewMs, lanAddresses, suggestMainUrl,
   pairingPath, CATALOGUE_PATH, MAX_SKEW_MS,
+  relayEnabled, decodeGroupKey, GROUP_KEY_BYTES,   // BRANCH_SYNC_RELAY_V1
 } from './pairing.js';
 
 const tmp = (tag) => fs.mkdtempSync(path.join(os.tmpdir(), 'em-branch-' + tag + '-'));
@@ -173,4 +174,111 @@ test('подсказка адреса берёт первый внешний IPv
   assert.deepEqual(lanAddresses({ interfaces: ifaces }), ['10.4.1.19']);
   assert.equal(suggestMainUrl({ port: 8000, interfaces: ifaces }), 'http://10.4.1.19:8000');
   assert.equal(suggestMainUrl({ port: 8000, interfaces: { lo: [{ family: 'IPv4', internal: true, address: '127.0.0.1' }] } }), null);
+});
+
+// --- BRANCH_SYNC_RELAY_V1: ключ группы внутри ключа подключения -------------
+//
+// Ключ подключения — ЕДИНСТВЕННЫЙ путь, которым ключ шифрования попадает во
+// второй филиал. Он переносится руками и не проходит через сервер поставщика,
+// поэтому всё, что этот раздел проверяет, сводится к двум вопросам: доезжает ли
+// он целым и что происходит, когда его нет.
+
+const KEY32 = 'A'.repeat(43);   // 43 символа base64url — ровно 32 байта
+
+test('ключ группы едет в ключе подключения и приземляется в записи филиала', () => {
+  const mainDir = tmp('relay-main');
+  const secDir = tmp('relay-sec');
+
+  const made = makeMainKey(mainDir, { url: '10.0.0.5:8000', groupId: 'BR-ABCDEF012345', groupKey: KEY32 });
+  assert.equal(made.ok, true);
+  assert.equal(made.record.group_id, 'BR-ABCDEF012345', 'группа берётся из ключа, выписанного при активации');
+  assert.equal(made.record.group_key, KEY32);
+
+  const parsed = parseKey(made.key);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.group_key, KEY32);
+
+  const paired = pairWithKey(secDir, made.key);
+  assert.equal(paired.ok, true);
+  assert.equal(paired.record.group_key, KEY32, 'оба филиала работают ОДНИМ ключом, иначе блоб не расшифровать');
+});
+
+test('ключ подключения без ключа группы — это Маршрут А, а не поломка', () => {
+  // Ровно то, что лежит на диске у клиник, спаренных до Маршрута Б: связь
+  // работает, резервный канал просто недоступен.
+  const secDir = tmp('relay-old');
+  const old = encodeKey({ group_id: 'BR-000000000001', secret: 'sss', main_url: 'http://10.0.0.5:8000' });
+  const parsed = parseKey(old);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.group_key, null);
+
+  const paired = pairWithKey(secDir, old);
+  assert.equal(paired.ok, true);
+  assert.equal('group_key' in paired.record, false, 'пустого поля на диске быть не должно — его отсутствие и есть ответ');
+});
+
+test('ключ группы не той длины отбрасывается, а не записывается огрызком', () => {
+  // Обрезанный при копировании ключ зашифровал бы одну сторону и не расшифровал
+  // другую, и выяснилось бы это через неделю. Лучше остаться без резервного
+  // канала сразу.
+  const short = encodeKey({ group_id: 'g', secret: 's', main_url: 'http://h:1', group_key: 'AAAA' });
+  assert.equal(parseKey(short).group_key, null);
+  const notText = encodeKey({ group_id: 'g', secret: 's', main_url: 'http://h:1' });
+  assert.equal(parseKey(notText).group_key, null);
+});
+
+test('повторная выдача ключа не трогает ни секрет, ни ключ группы', () => {
+  // Ключ печатают, пересылают и вводят не в один присест: «нажал ещё раз —
+  // старый ключ умер» рвало бы связь уже подключённым филиалам.
+  const dir = tmp('relay-stable');
+  const first = makeMainKey(dir, { url: '10.0.0.5:8000', groupId: 'BR-111111111111', groupKey: KEY32 });
+  const second = makeMainKey(dir, { url: '10.0.0.9:8000', groupId: 'BR-222222222222', groupKey: 'B'.repeat(43) });
+  assert.equal(second.record.secret, first.record.secret);
+  assert.equal(second.record.group_key, KEY32, 'ключ группы у существующей пары не подменяется');
+  assert.equal(second.record.group_id, 'BR-111111111111');
+  assert.equal(second.record.main_url, 'http://10.0.0.9:8000', 'а адрес обновить можно — он не тайна');
+});
+
+test('перевыпуск меняет ВСЁ: и ключ группы, и секрет подписи', () => {
+  // Обещание экрана — «отключит все филиалы». Если бы менялся только ключ
+  // шифрования, старые филиалы продолжали бы забирать справочник напрямую, и
+  // обещание было бы правдой наполовину.
+  const dir = tmp('relay-rotate');
+  const before = makeMainKey(dir, { url: '10.0.0.5:8000', groupId: 'BR-111111111111', groupKey: KEY32 });
+  const after = makeMainKey(dir, {
+    url: '10.0.0.5:8000', groupId: 'BR-333333333333', groupKey: 'C'.repeat(43), rotate: true,
+  });
+  assert.notEqual(after.record.secret, before.record.secret);
+  assert.equal(after.record.group_key, 'C'.repeat(43));
+  assert.equal(after.record.group_id, 'BR-333333333333');
+  // Старый ключ подключения после этого не подходит ни одним из двух путей.
+  assert.notEqual(parseKey(after.key).secret, parseKey(before.key).secret);
+});
+
+test('согласие на резервный канал: главный — молчит, подключённый — соглашается', () => {
+  // Умолчания разные, и это не небрежность. Главный филиал ОТДАЁТ байты наружу
+  // — за него такое не решают. Подключённый ничего не отдаёт, только берёт уже
+  // лежащее, и берёт лишь тогда, когда прямой путь не удался.
+  assert.equal(relayEnabled({ role: 'main' }), false, 'выгрузка наружу — только по явному согласию владельца');
+  assert.equal(relayEnabled({ role: 'main', relay: true }), true);
+  assert.equal(relayEnabled({ role: 'secondary' }), true);
+  assert.equal(relayEnabled({ role: 'secondary', relay: false }), false);
+  assert.equal(relayEnabled(null), false);
+});
+
+test('согласие переживает повторную выдачу ключа', () => {
+  const dir = tmp('relay-consent');
+  makeMainKey(dir, { url: '10.0.0.5:8000', groupId: 'BR-111111111111', groupKey: KEY32 });
+  writePairing(dir, { ...readPairing(dir), relay: true });
+  const again = makeMainKey(dir, { url: '10.0.0.5:8000' });
+  assert.equal(again.record.relay, true, 'нажатие «показать ключ» не должно молча выключать резервный канал');
+});
+
+test('ключ группы читается и как строка, и как байты, и только нужной длины', () => {
+  assert.equal(GROUP_KEY_BYTES, 32, 'AES-256');
+  assert.equal(decodeGroupKey(KEY32).length, 32);
+  assert.equal(decodeGroupKey('AAAA'), null);
+  assert.equal(decodeGroupKey(null), null);
+  assert.equal(decodeGroupKey(Buffer.alloc(32)).length, 32);
+  assert.equal(decodeGroupKey(Buffer.alloc(31)), null);
 });

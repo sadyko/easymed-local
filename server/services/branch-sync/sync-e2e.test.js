@@ -368,7 +368,11 @@ test('лицензионный шлюз: смотреть можно всегд�
   assert.equal(isReadOnlyRpc('branch_sync_status'), true,
     'заблокированная клиника обязана видеть, почему справочник не приезжает');
   assert.equal(isAlwaysAllowedRpc('branch_sync_status'), false);
-  for (const name of ['branch_sync_now', 'branch_sync_pair', 'branch_sync_make_key', 'branch_sync_unpair']) {
+  // BRANCH_SYNC_RELAY_V1 — три вызова Маршрута Б стоят в том же ряду: согласие
+  // на выгрузку и перевыпуск ключа пишут на диск, ручная выгрузка ведёт наружу
+  // от имени клиники. Ни один не должен работать сквозь блокировку лицензии.
+  for (const name of ['branch_sync_now', 'branch_sync_pair', 'branch_sync_make_key', 'branch_sync_unpair',
+    'branch_sync_relay_set', 'branch_sync_relay_publish', 'branch_sync_regenerate_key']) {
     assert.equal(isReadOnlyRpc(name), false, name + ' пишет в базу или на диск');
     assert.equal(isAlwaysAllowedRpc(name), false, name + ' не должен проходить сквозь блокировку');
   }
