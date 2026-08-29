@@ -167,6 +167,15 @@ const CRUMBS = {
     'telegram-chat': ['Insights', 'Чат с пациентами'],   // TELEGRAM_CHAT_V1
     'consultation-types': ['Insights', 'Settings', 'Консультации врачей'],   // CONSULTATION_TYPES_RESTORE
     'doctor-pay': ['Insights', 'Settings', 'Зарплата врачей'],   // DOCTOR_PAY_BULK_V1
+    // SUBSCRIPTION_SUBROUTE_V1 — 'updates' had no CRUMBS entry, and CRUMBS is
+    // also what isKnownView() at boot consults. Two consequences, both real:
+    // the tab for «Система» was labelled with the raw route id ('updates', via
+    // initialTabLabel's last-resort branch), and a reload — or a pasted
+    // '#updates/subscription' link — was rejected as an unknown view and
+    // bounced to the home screen, so the deep link only ever worked for the
+    // life of one page. The route itself is ALWAYS_ALLOWED in permissions.js,
+    // so naming it here grants nothing new.
+    updates:      ['Insights', 'Settings', 'Система'],
 };
 
 const PLACEHOLDERS = new Set([]);   // PHARMACY_V1 — pharmacy is now a real view
@@ -925,7 +934,10 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'settings':      return void await renderSettingsHub(viewRoot, ctx);   // SETTINGS_HUB_V1
             case 'employees':     return void await renderEmployees(viewRoot, ctx);   // EMPLOYEE_EDITOR_V1 — Сотрудники
             case 'documents-settings': return void await renderDocumentsSettings(viewRoot, ctx);   // DOCUMENTS_SETTINGS_V1
-            case 'updates':       return void await renderUpdates(viewRoot);   // UPDATE_DELIVERY_V1 — reachable from the banner + Settings; readable by anyone, actions gate themselves inside the view
+            // SUBSCRIPTION_SUBROUTE_V1 — ctx passed on purpose: it carries
+            // payload.sub, which is how the «Подписка» tile asks this screen to
+            // arrive on its subscription card ('#updates/subscription').
+            case 'updates':       return void await renderUpdates(viewRoot, ctx);   // UPDATE_DELIVERY_V1 — reachable from the banner + Settings; readable by anyone, actions gate themselves inside the view
         }
         // Settings drilldown:  settings:<section_key>
         if (state.view.startsWith('settings:')) {

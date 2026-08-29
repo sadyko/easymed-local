@@ -7,6 +7,9 @@
 // English app chrome. Structure mirrors public/js/admin/views/services.js
 // (mount / fetchAndPaint / DOM via h()) and its modal chrome.
 //
+// «Управление филиалами» is the ONE heading from that list that is deliberately
+// gone — SETTINGS_ONE_COMPANY_V1, see the long note above GROUPS for why.
+//
 // Two internal states, both driven by one module-level `state` object:
 //   state.section === null            -> HUB (card grid of groups/items)
 //   state.section === '<LOOKUP key>'  -> shared, config-driven lookup editor
@@ -51,6 +54,12 @@ function openSection(key) { state.section = key; repaint(); }
 function backToHub()      { state.section = null; repaint(); }
 
 const nav = (route) => () => { if (refs.onNavigate) refs.onNavigate(route); };
+// HASH_SUBROUTE_V1 — a tile that opens a route FOCUSED on one part of it. The
+// convention is admin.js's: the payload's `sub` becomes '#view/sub' in the
+// address bar and comes back to the view as ctx.payload.sub (views/laboratory.js
+// uses it for '#labs/panels'). Used by «Подписка», which is a card inside
+// «Система» — a second route would have meant a second copy of that card.
+const navSub = (route, sub) => () => { if (refs.onNavigate) refs.onNavigate(route, { sub }); };
 const goto = (url) => () => { window.location.href = url; };
 
 // -----------------------------------------------------------------------------
@@ -74,18 +83,51 @@ const goto = (url) => () => { window.location.href = url; };
 //      with a full ru/en/uz entry in i18n-strings.js, so the whole page renders
 //      in one language.
 // -----------------------------------------------------------------------------
+// SETTINGS_ONE_COMPANY_V1 (2026-08-29, owner: «в настройках два управления
+// филиалами — сделать одно, второе убрать») — группа «Управление филиалами»
+// удалена целиком, и вот почему.
+//
+// В хабе стояли ДВЕ плитки со словом «компания», и владелец не мог понять,
+// какая из них настоящая:
+//   1) «Компания» → documents-settings — запись doc_settings (id=1). Это и есть
+//      клиника: название, логотип, фирменный цвет, контакты. Из неё
+//      rpc/clinic.js собирает window.CLINIC, ею подписаны шапка приложения и
+//      КАЖДАЯ печатная форма.
+//   2) «Компании» → openSection('companies') — реестр юридических лиц из
+//      облачной (SaaS) версии. По ней вообще НЕЛЬЗЯ БЫЛО КЛИКНУТЬ с пользой:
+//      в LOOKUP_CONFIG ниже записи 'companies' нет, поэтому renderEditor()
+//      упирался в свою же защиту `if (!cfg) { backToHub(); return; }` и
+//      возвращал владельца на тот же экран. Плитка была мёртвой кнопкой.
+//
+// Проверено по этой базе перед удалением: в `companies` НОЛЬ строк, а её
+// локальная схема — 13 «бумажных» колонок (name, legal_name, tax_id, director…).
+// Ни одна работающая часть приложения не читает оттуда поведение:
+//   • notifications.js берёт companies.eq('id', clinic.id) — clinic.id всегда 1
+//     от синтетического get_clinic_by_slug, строки нет, напоминание не
+//     возникает НИ РАЗУ;
+//   • setup-checklist.js импортирован в admin.js, но renderSetupChecklist()
+//     не вызывается ниоткуда (см. шапку notifications.js: «Replaces …
+//     renderSetupChecklist»);
+//   • cashier-settings.js / referral-settings.js / procurement.js /
+//     reports-export.js / verify-banner.js читают companies.cashier_shift_mode,
+//     .referral_reward_rates, .costing_method, .verification_status — таких
+//     колонок нет ни в таблице, ни в schema-registry.js, эти вызовы и так
+//     отвечают 4xx (CLAUDE.md, «Cloud leftovers in an offline app»);
+//   • у локальной `branches` НЕТ колонки company_id — внешнего ключа на
+//     companies в этой базе не существует вовсе (он есть только в устаревшем
+//     облачном описании sections.js).
+//
+// Поэтому убрана ТОЛЬКО плитка. Таблица, миграция 026, запись в
+// schema-registry.js, раздел sections.js и маршрут 'settings:companies' целы:
+// схему молча не меняют, данные не удаляют, и ссылка из notifications.js
+// по-прежнему открывается. Реестр юрлиц перестал притворяться настройкой
+// клиники, а не исчез.
+//
+// «Список филиалов» переехал в «Настройки Easy-Med» под именем «Филиалы» —
+// это и есть то самое «одно управление филиалами». Группа осталась пустой и
+// удалена: заголовок над единственной осиротевшей строкой хуже, чем его
+// отсутствие.
 const GROUPS = [
-    {
-        title: 'Управление филиалами', icon: 'Building', color: { bg: '#eaf1fb', fg: '#3b6fb0' },
-        items: [
-            // COMPANY_SECTION_LIVE_V1 — раздел был помечен «Скоро», хотя всё для
-            // него уже есть: таблица companies, права admin на запись в реестре и
-            // готовое описание в sections.js. Из-за пометки нельзя было изменить
-            // даже НАЗВАНИЕ КЛИНИКИ — то самое, что стоит в шапке под логотипом.
-            { label: 'Компании',        desc: 'Юридические лица сети клиник', icon: 'Building', live: true, action: () => openSection('companies') },
-            { label: 'Список филиалов',  desc: 'Физические адреса клиник',     icon: 'Building', live: true, action: () => openSection('branches') },
-        ],
-    },
     {
         title: 'Управление пользователями и сотрудниками', icon: 'ID', color: { bg: '#e4f3f1', fg: '#1f8a80' },
         items: [
@@ -164,13 +206,29 @@ const GROUPS = [
         ],
     },
     {
-        // The clinic's own identity and the state of the installation —
-        // the two things that are about Easy-Med itself rather than about
-        // how the clinic works.
+        // SETTINGS_ONE_COMPANY_V1 — «системные настройки одним разделом»
+        // (владелец, 2026-08-29): Компания · Филиалы · Система · Подписка.
+        // Всё, что описывает САМУ клинику и её установку Easy-Med, в одном
+        // месте и в этом порядке — сначала кто мы, потом где мы, потом чем
+        // мы это обслуживаем и за что платим. Группа уже существовала с
+        // «Компанией» и «Системой»; она расширена, а не заведена третья
+        // рядом с ней. «Системные настройки» (CRM, телефония, Telegram, API)
+        // остаются отдельной группой: это подключения к чужим сервисам, а не
+        // сведения о клинике.
         title: 'Настройки Easy-Med', icon: 'Shield', color: { bg: '#e4f3f1', fg: '#1f8a80' },
         items: [
             { label: 'Компания',            desc: 'Название, логотип, цвет и контакты клиники — во всех документах', icon: 'ID', live: true, action: nav('documents-settings') },
+            // Единственное «управление филиалами» в системе: тот же редактор
+            // (LOOKUP_CONFIG.branches), просто теперь у него один вход, а не
+            // собственная группа из двух строк.
+            { label: 'Филиалы',             desc: 'Физические адреса клиник', icon: 'Building', live: true, action: () => openSection('branches') },
             { label: 'Система',             desc: 'Обновления, активация, резервные копии и данные клиники', icon: 'Shield', live: true, action: nav('updates') },
+            // «Подписка» НЕ отдельный экран: активация, срок и модули — это
+            // карточка «Активация и подписка» внутри «Системы»
+            // (views/system-subscription.js). Плитка ведёт прямо в неё через
+            // подмаршрут '#updates/subscription' — вторая копия карточки
+            // разошлась бы с оригиналом при первой же правке.
+            { label: 'Подписка',            desc: 'Активация, срок действия и подключённые модули', icon: 'Wallet', live: true, action: navSub('updates', 'subscription') },
         ],
     },
     {

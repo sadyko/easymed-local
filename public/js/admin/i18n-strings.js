@@ -2053,6 +2053,20 @@ export const STRINGS = {
   "Процент вознаграждения за услуги": {"en": "Reward % for referred services", "ru": "Процент вознаграждения за услуги", "uz": "Xizmatlar uchun mukofot foizi"},
   "Процент врача по каждой услуге": {"en": "Doctor % per service", "ru": "Процент врача по каждой услуге", "uz": "Har bir xizmat bo'yicha shifokor foizi"},
 
+  // SETTINGS_ONE_COMPANY_V1 (2026-08-29) — группа «Настройки Easy-Med»:
+  // Компания · Филиалы · Система · Подписка. «Филиалы» и «Подписка» — новые
+  // подписи; у заголовка группы, у «Компании» и у её описания записей не было
+  // вовсе, поэтому на узбекском и английском карточка оставалась наполовину
+  // русской. «Система» и её описание уже есть в блоке SYSTEM_SETTINGS_V1 ниже
+  // и намеренно не повторяются: STRINGS — один плоский словарь, вторая запись
+  // с тем же ключом просто затёрла бы первую.
+  "Настройки Easy-Med": {"en": "Easy-Med settings", "ru": "Настройки Easy-Med", "uz": "Easy-Med sozlamalari"},
+  "Компания": {"en": "Company", "ru": "Компания", "uz": "Kompaniya"},
+  "Название, логотип, цвет и контакты клиники — во всех документах": {"en": "Clinic name, logo, colour and contacts — used across every document", "ru": "Название, логотип, цвет и контакты клиники — во всех документах", "uz": "Klinika nomi, logotipi, rangi va kontaktlari — barcha hujjatlarda"},
+  "Филиалы": {"en": "Branches", "ru": "Филиалы", "uz": "Filiallar"},
+  "Подписка": {"en": "Subscription", "ru": "Подписка", "uz": "Obuna"},
+  "Активация, срок действия и подключённые модули": {"en": "Activation, validity and the modules you have", "ru": "Активация, срок действия и подключённые модули", "uz": "Faollashtirish, amal qilish muddati va ulangan modullar"},
+
   // IMPORTER_UI_V2 — the Excel import dialog. It used to mix a Russian shell
   // with English body copy («Импорт employees from Excel»); the copy is Russian
   // source now, so these entries keep EN/UZ whole. Added 2026-08-16.

@@ -91,7 +91,20 @@ function rememberOffer(offer) {
     writeLocal(NOTES_CACHE_KEY, JSON.stringify(cache));
 }
 
-export async function renderUpdates(root) {
+// SUBSCRIPTION_SUBROUTE_V1 (2026-08-29) — «Подписка» в Настройках открывает
+// ЭТОТ экран, наведённым на карточку «Активация и подписка», через подмаршрут
+// '#updates/subscription' (HASH_SUBROUTE_V1 в admin.js, тот же механизм, что
+// у '#labs/panels'). Отдельного экрана нет намеренно: подписка — одна из
+// четырёх карточек «Системы», и вторая её копия разошлась бы с оригиналом при
+// первой же правке. Отличие от laboratory.js: там sub — это РЕЖИМ, который
+// пользователь переключает внутри экрана, поэтому вид сообщает его обратно
+// оболочке через easymedSetTabSub(). Здесь sub — только точка прибытия: внутри
+// «Системы» ничего его не меняет, сообщать оболочке нечего.
+export async function renderUpdates(root, ctx = {}) {
+    // Карточка подписки поднимается наверх, а не просто подсвечивается: у
+    // экрана четыре карточки, и на ноутбуке нужная оказывалась ниже сгиба —
+    // «Подписка» приводила бы на страницу, где подписки не видно.
+    const wantsSubscription = !!(ctx.payload && ctx.payload.sub === 'subscription');
     // A previous mount's watcher must never outlive it: navigating away and
     // back would otherwise leave two timers polling, and a watcher whose view
     // is long gone can reload the tab out from under whatever the user moved
@@ -133,6 +146,16 @@ export async function renderUpdates(root) {
     }
     wrap.appendChild(head);
 
+    // SUBSCRIPTION_SUBROUTE_V1 — по прямой ссылке карточка подписки встаёт
+    // ПЕРВОЙ, сразу под шапкой; при обычном заходе порядок прежний
+    // (обновления → подписка → резервные копии → опасная зона), чтобы у тех,
+    // кто открывает «Систему» ради обновления, ничего не переехало.
+    // Узел создаётся здесь, а заполняется ниже одним и тем же
+    // renderSubscriptionCard() — порядок на экране задаёт appendChild, а не
+    // вторая ветка отрисовки.
+    const subRoot = h('div');
+    if (wantsSubscription) wrap.appendChild(subRoot);
+
     wrap.appendChild(h('h2', { class: 'sys-section-title' }, 'Обновления'));
     wrap.appendChild(body);
     body.appendChild(h('div', { class: 'empty' }, 'Загрузка…'));
@@ -157,8 +180,7 @@ export async function renderUpdates(root) {
     // Subscription paints synchronously from the boot-time licence copy;
     // backups is awaited so this function resolves only once the whole page
     // is real (the fake-DOM tests — and the human eye — rely on that).
-    const subRoot = h('div');
-    wrap.appendChild(subRoot);
+    if (!wantsSubscription) wrap.appendChild(subRoot);   // SUBSCRIPTION_SUBROUTE_V1 — иначе он уже наверху
     renderSubscriptionCard(subRoot, { admin });
 
     const bakRoot = h('div');
@@ -168,6 +190,19 @@ export async function renderUpdates(root) {
     const dzRoot = h('div');
     wrap.appendChild(dzRoot);
     renderDangerCard(dzRoot, { admin });
+
+    // SUBSCRIPTION_SUBROUTE_V1 — вкладка помнит свою прокрутку
+    // (state.tabs[].scrollY в admin.js), поэтому «первая на странице» ещё не
+    // значит «видна»: вернувшийся на «Систему» пользователь оказался бы там,
+    // где бросил её в прошлый раз. Прокрутку просят у самой карточки.
+    // scrollIntoView есть не везде (тесты на фальшивом DOM, старые движки) —
+    // проверка обязательна, ради наведения экран падать не должен.
+    if (wantsSubscription) {
+        const card = subRoot.firstChild;
+        if (card && typeof card.scrollIntoView === 'function') {
+            try { card.scrollIntoView({ block: 'start' }); } catch (e) { /* наведение — не повод ломать экран */ }
+        }
+    }
 }
 
 // The button's whole flow: check in now, then decide whether the LICENCE
