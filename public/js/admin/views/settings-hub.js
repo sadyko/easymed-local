@@ -31,6 +31,14 @@ import { phoneInput } from '../phone-input.js?v=ph1';
 // экран и даёт ему дорогу назад.
 import { renderRolesEditor } from './roles-editor.js?v=roles2';
 
+// BRANCH_SYNC_V1 — «Филиалы» отвечают теперь на два разных вопроса: какие у
+// клиники адреса (таблица branches, редактор ниже) и как связаны ОТДЕЛЬНЫЕ
+// установки Easy-Med в разных зданиях. Второе живёт своим файлом-экраном по
+// той же конвенции, что и «Роли», и монтируется НАД списком — разводить их по
+// двум пунктам меню значило бы вернуть путаницу «две плитки про одно и то же»,
+// которую SETTINGS_ONE_COMPANY_V1 только что убрал.
+import { renderBranchSyncCard } from './branch-sync.js?v=bsync1';
+
 let state = { section: null };   // null = hub; else one of LOOKUP_CONFIG's keys
 
 const refs = { container: null, onNavigate: null };
@@ -54,12 +62,13 @@ function openSection(key) { state.section = key; repaint(); }
 function backToHub()      { state.section = null; repaint(); }
 
 const nav = (route) => () => { if (refs.onNavigate) refs.onNavigate(route); };
-// HASH_SUBROUTE_V1 — a tile that opens a route FOCUSED on one part of it. The
-// convention is admin.js's: the payload's `sub` becomes '#view/sub' in the
-// address bar and comes back to the view as ctx.payload.sub (views/laboratory.js
-// uses it for '#labs/panels'). Used by «Подписка», which is a card inside
-// «Система» — a second route would have meant a second copy of that card.
-const navSub = (route, sub) => () => { if (refs.onNavigate) refs.onNavigate(route, { sub }); };
+// SETTINGS_SPLIT_V1 — navSub() lived here for one caller, «Подписка», which
+// opened '#updates/subscription' back when subscription was a card inside
+// «Система». It has its own route now, so the helper went with its only user
+// rather than staying as a convention nothing in this file follows. The
+// HASH_SUBROUTE_V1 convention itself is alive and documented in admin.js
+// (views/laboratory.js still uses it for '#labs/panels'), and the old hash is
+// still answered — by views/updates.js, see its renderUpdates().
 const goto = (url) => () => { window.location.href = url; };
 
 // -----------------------------------------------------------------------------
@@ -217,18 +226,29 @@ const GROUPS = [
         // сведения о клинике.
         title: 'Настройки Easy-Med', icon: 'Shield', color: { bg: '#e4f3f1', fg: '#1f8a80' },
         items: [
-            { label: 'Компания',            desc: 'Название, логотип, цвет и контакты клиники — во всех документах', icon: 'ID', live: true, action: nav('documents-settings') },
+            { label: 'Компания',            desc: 'Название, логотип, фирменный цвет и контакты клиники', icon: 'ID', live: true, action: nav('documents-settings') },
             // Единственное «управление филиалами» в системе: тот же редактор
             // (LOOKUP_CONFIG.branches), просто теперь у него один вход, а не
             // собственная группа из двух строк.
             { label: 'Филиалы',             desc: 'Физические адреса клиник', icon: 'Building', live: true, action: () => openSection('branches') },
-            { label: 'Система',             desc: 'Обновления, активация, резервные копии и данные клиники', icon: 'Shield', live: true, action: nav('updates') },
-            // «Подписка» НЕ отдельный экран: активация, срок и модули — это
-            // карточка «Активация и подписка» внутри «Системы»
-            // (views/system-subscription.js). Плитка ведёт прямо в неё через
-            // подмаршрут '#updates/subscription' — вторая копия карточки
-            // разошлась бы с оригиналом при первой же правке.
-            { label: 'Подписка',            desc: 'Активация, срок действия и подключённые модули', icon: 'Wallet', live: true, action: navSub('updates', 'subscription') },
+            // SETTINGS_SPLIT_V1 (2026-08-29, владелец: «в подписке оставить
+            // только подписку и статус модулей (с запросом), а в системе —
+            // только версию и что нового») — «Система» больше не четыре
+            // карточки в одном экране. Каждая плитка ведёт на свой маршрут:
+            //   Система        → 'updates'      (версия + «что нового»)
+            //   Подписка       → 'subscription' (состояние подписки + модули)
+            //   Данные клиники → 'clinic-data'  (копии + опасная зона)
+            { label: 'Система',             desc: 'Версия системы и что нового в последнем обновлении', icon: 'Shield', live: true, action: nav('updates') },
+            // «Подписка» — теперь собственный экран, но карточка внутри него
+            // ТА ЖЕ САМАЯ (views/system-subscription.js): экран её импортирует,
+            // а не копирует. Второй копии подписки в системе нет.
+            { label: 'Подписка',            desc: 'Активация, срок действия и подключённые модули', icon: 'Wallet', live: true, action: nav('subscription') },
+            // «Данные клиники» — единственный вход к резервным копиям и к
+            // полному удалению данных. Плитка появилась вместе с разделением:
+            // без неё обе функции остались бы в коде, но исчезли бы с экрана,
+            // а другого пути к backup_create/backup_restore/factory_reset в
+            // системе нет вообще.
+            { label: 'Данные клиники',      desc: 'Резервные копии и полное удаление данных клиники', icon: 'Database', live: true, action: nav('clinic-data') },
         ],
     },
     {
@@ -628,12 +648,18 @@ async function renderEditor(container, key) {
     const addBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openRowModal(null) },
         Icon('Plus', { size: 14 }), ' Add');
 
+    // BRANCH_SYNC_V1 — слот под карточку связи филиалов. Заполняется после
+    // отрисовки (карточка ходит в RPC), поэтому список филиалов появляется
+    // сразу и не ждёт сети.
+    const syncSlot = key === 'branches' ? h('div') : null;
+
     container.appendChild(h('div', { class: 'fade-in' },
         h('button', { class: 'btn btn-outline btn-sm', type: 'button', style: { marginBottom: '14px' }, onclick: backToHub },
             Icon('ChevronLeft', { size: 14 }), ' Back to settings'),
         h('div', { class: 'page-head' },
             h('div', null, h('h1', { class: 'page-title' }, cfg.title)),
         ),
+        syncSlot,
         h('div', { class: 'card' },
             h('div', { class: 'card-header' },
                 h('h3', null, Icon(cfg.icon, { size: 16 }), ' ', cfg.title),
@@ -649,6 +675,12 @@ async function renderEditor(container, key) {
             emptyEl,
         ),
     ));
+
+    if (syncSlot) {
+        // Не await: карточка связи не должна задерживать список, а её
+        // собственные отказы она показывает сама.
+        renderBranchSyncCard(syncSlot).catch((e) => console.warn('[branch-sync] card failed:', e && e.message));
+    }
 
     await load();
 

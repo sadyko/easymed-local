@@ -4,19 +4,25 @@
 //
 // Что здесь действительно закреплено:
 //   * в хабе ровно ОДНА группа про саму клинику — «Настройки Easy-Med» — и в
-//     ней ровно четыре строки в порядке владельца: Компания · Филиалы ·
-//     Система · Подписка;
+//     ней строки в порядке владельца: Компания · Филиалы · Система · Подписка
+//     (+ «Данные клиники», см. ниже);
 //   * дубликат исчез: плитки «Компании» нет, группы «Управление филиалами»
 //     нет, и слово «Компания» встречается в хабе один-единственный раз —
 //     именно эта неоднозначность и была жалобой;
-//   * «Подписка» ведёт в карточку «Активация и подписка», а не в свою копию:
-//     плитка зовёт navigate('updates', {sub:'subscription'}), а
-//     renderUpdates() с этим payload ставит ту же самую карточку выше
-//     «Обновлений». Никакого второго экрана подписки не появляется;
 //   * ничего не потеряло вход: «Компания» по-прежнему открывает
 //     documents-settings, «Система» — updates, «Филиалы» — тот же редактор
 //     branches, что и раньше, а группа «Системные настройки» (CRM, телефония,
 //     Telegram, API) осталась ровно такой, какой была.
+//
+// SETTINGS_SPLIT_V1 (2026-08-29) переставил две вещи в этом файле:
+//   * «Подписка» зовёт СВОЙ маршрут ('subscription'), а не подмаршрут
+//     «Системы». Правило «никакой второй копии карточки» не отменено — оно
+//     соблюдено импортом: views/subscription.js подключает ту же самую
+//     views/system-subscription.js;
+//   * появилась пятая плитка «Данные клиники» → 'clinic-data'. Она проверяется
+//     здесь именно потому, что это единственный вход к резервным копиям и к
+//     удалению данных после того, как их убрали с «Системы»: плитка исчезнет —
+//     функции станут недостижимыми, и тест обязан это поймать.
 //
 // Fake-DOM harness — copied from __tests__/lab-panels-mode.test.mjs (itself
 // from telephony-settings.test.mjs / system-view.test.mjs), including the
@@ -154,18 +160,22 @@ async function mountHub(nav) {
   return root;
 }
 
-test('одна группа «Настройки Easy-Med» — Компания · Филиалы · Система · Подписка, в этом порядке', async () => {
+test('одна группа «Настройки Easy-Med» — Компания · Филиалы · Система · Подписка · Данные клиники, в этом порядке', async () => {
   setFullAccess('Администратор');
   const nav = [];
   const root = await mountHub(nav);
 
   const g = groupNamed(root, 'Настройки Easy-Med');
   assert.ok(g, 'группа «Настройки Easy-Med» на экране; заголовки: ' + groupTitles(root).join(' | '));
-  assert.deepStrictEqual(g.rows.map((r) => r.name), ['Компания', 'Филиалы', 'Система', 'Подписка'],
-    'ровно четыре плитки владельца и в его порядке');
+  // SETTINGS_SPLIT_V1 — пятая плитка появилась не «до кучи»: после того как
+  // «Система» сузилась до версии и «что нового», это ЕДИНСТВЕННЫЙ вход к
+  // резервным копиям и к удалению данных клиники.
+  assert.deepStrictEqual(g.rows.map((r) => r.name), ['Компания', 'Филиалы', 'Система', 'Подписка', 'Данные клиники'],
+    'четыре плитки владельца в его порядке + «Данные клиники» последней');
   assert.strictEqual(groupTitles(root).filter((t) => t === 'Настройки Easy-Med').length, 1,
     'группа одна — а не вторая такая же рядом');
   assert.strictEqual(textOf(g.rows[3].node).includes('Скоро'), false, '«Подписка» живая, а не заглушка «Скоро»');
+  assert.strictEqual(textOf(g.rows[4].node).includes('Скоро'), false, '«Данные клиники» живая, а не заглушка «Скоро»');
 });
 
 test('дубликат убран: ни плитки «Компании», ни группы «Управление филиалами»', async () => {
@@ -184,7 +194,7 @@ test('дубликат убран: ни плитки «Компании», ни 
   // не притворяется настройкой клиники. Ничего не удалено молча.
 });
 
-test('ничего не потеряло вход: Компания → documents-settings, Система → updates, Филиалы → тот же редактор', async () => {
+test('ничего не потеряло вход: Компания → documents-settings, Система → updates, Данные клиники → clinic-data, Филиалы → тот же редактор', async () => {
   setFullAccess('Администратор');
   const nav = [];
   const root = await mountHub(nav);
@@ -196,6 +206,12 @@ test('ничего не потеряло вход: Компания → document
   nav.length = 0;
   g.rows[2].node.click();
   assert.deepStrictEqual(nav, [['updates']], '«Система» открывается как прежде, без подмаршрута');
+
+  // SETTINGS_SPLIT_V1 — главное, что должен доказать этот файл: копии и
+  // опасная зона не стали недостижимыми при разделении экрана.
+  nav.length = 0;
+  g.rows[4].node.click();
+  assert.deepStrictEqual(nav, [['clinic-data']], '«Данные клиники» — единственный вход к копиям и удалению данных');
 
   // «Филиалы» — не переход, а тот же встроенный редактор LOOKUP_CONFIG.branches.
   nav.length = 0;
@@ -220,53 +236,38 @@ test('группа «Системные настройки» не тронута
     'интеграции остались отдельной группой и в прежнем составе');
 });
 
-test('«Подписка» зовёт подмаршрут #updates/subscription, а не второй экран', async () => {
+test('«Подписка» — собственный маршрут, а не подмаршрут «Системы»', async () => {
   setFullAccess('Администратор');
   const nav = [];
   const root = await mountHub(nav);
 
   groupNamed(root, 'Настройки Easy-Med').rows[3].node.click();
-  assert.deepStrictEqual(nav, [['updates', { sub: 'subscription' }]],
-    'тот же маршрут «Системы» + sub — admin.js превратит это в #updates/subscription');
+  // SETTINGS_SPLIT_V1 — раньше здесь был ['updates', {sub:'subscription'}].
+  assert.deepStrictEqual(nav, [['subscription']],
+    'плитка зовёт свой экран; вторая копия карточки при этом не появилась — экран её импортирует');
 });
 
-// Порядок берём по DOM, а не по позиции слова в тексте: подзаголовок страницы
-// («Обновления, активация, резервные копии…») содержит слово «Обновления» и
-// стоит выше всего, так что поиск по тексту нашёл бы шапку, а не раздел.
-function domOrder(root) {
-  const nodes = walk(root);
-  const idxOf = (pred) => nodes.findIndex(pred);
-  return {
-    subscription: idxOf((n) => String(n.className).includes('sys-card-head') && textOf(n).includes('Активация и подписка')),
-    updates: idxOf((n) => String(n.className).includes('sys-section-title') && textOf(n).includes('Обновления')),
-  };
-}
-
-test('#updates/subscription открывает «Систему» на карточке подписки — она первая, выше «Обновлений»', async () => {
+test('старая ссылка #updates/subscription по-прежнему приводит на подписку', async () => {
   setFullAccess('Администратор');
   const root = mk('div');
   await renderUpdates(root, { payload: { sub: 'subscription' } });
   await tick();
 
-  const { subscription, updates } = domOrder(root);
-  assert.ok(subscription > -1, 'карточка «Активация и подписка» отрисована');
-  assert.ok(updates > -1, 'раздел «Обновления» никуда не делся');
-  assert.ok(subscription < updates, 'подписка стоит выше обновлений — иначе на ноутбуке она уходит под сгиб');
-
   const text = textOf(root);
-  // Один экран, одна карточка: заголовок карточки встречается ровно раз.
-  assert.strictEqual(text.split('Активация и подписка').length - 1, 1, 'карточка одна, копии не появилось');
+  assert.ok(text.includes('Активация и подписка'), 'старая закладка открывает карточку подписки: ' + text.slice(0, 200));
   assert.ok(text.includes('Нурафшон Мед'), 'данные лицензии в карточке, а не заглушка');
-  assert.ok(text.includes('Резервные копии'), 'остальные карточки «Системы» на месте — это тот же экран целиком');
+  // Один экран, одна карточка.
+  assert.strictEqual(text.split('Активация и подписка').length - 1, 1, 'карточка одна, копии не появилось');
 });
 
-test('обычный заход в «Систему» (без sub) сохраняет прежний порядок: сначала обновления', async () => {
+test('обычный заход в «Систему» (без sub) — только обновления, без подписки и копий', async () => {
   setFullAccess('Администратор');
   const root = mk('div');
   await renderUpdates(root);
   await tick();
 
-  const { subscription, updates } = domOrder(root);
-  assert.ok(subscription > -1 && updates > -1, 'оба блока на экране');
-  assert.ok(updates < subscription, 'у тех, кто пришёл за обновлением, ничего не переехало');
+  const text = textOf(root);
+  assert.ok(text.includes('Система'), 'заголовок экрана на месте');
+  assert.ok(!text.includes('Активация и подписка'), 'подписка уехала на свой экран: ' + text.slice(0, 200));
+  assert.ok(!text.includes('Резервные копии'), 'копии уехали в «Данные клиники»');
 });

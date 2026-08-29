@@ -1,29 +1,46 @@
-// Documents — DOCUMENTS_SETTINGS_V1 — clinic branding for printed documents
-// (letterhead: clinic identity, accent colour, paper size, watermark, footer
-// / legal notes). Backed by the single-row `doc_settings` table (id=1,
-// seeded by migration 008): every staff role may read it, only admin may
-// update it, via /api/db (server/db/schema-registry.js). Mirrors
-// public/js/admin/views/services.js / settings-hub.js / inventory.js for
-// structure (h()/Icon/clear/toast/Tag, shared field()/checkField() from
-// ../ui.js) and modal-free single-page form pattern.
+// «Компания» — DOCUMENTS_SETTINGS_V1 — сведения о самой клинике: название,
+// адрес, телефон, почта, лицензия, логотип и фирменный цвет. Одна строка в
+// `doc_settings` (id=1, засеяна миграцией 008): читать может любая роль,
+// менять — только администратор, через /api/db
+// (server/db/schema-registry.js). Из этой записи rpc/clinic.js собирает
+// window.CLINIC, ею подписаны шапка приложения и каждая печатная форма.
 //
-// NOTE: this is a DIFFERENT feature from the older, company-scoped
-// "Document templates" editor (views/documents.js + views/doc-settings.js,
-// route 'documents', table doc_branding) — that system covers six document
-// types with a much richer per-type template/variant designer and is still
-// live (permission-gated, listed in permissions.js). This view is the newer,
-// simple, single clinic-wide letterhead editor for `doc_settings`. It is
-// routed as 'documents-settings' (NOT 'documents') so it never collides with
-// that existing route.
+// SETTINGS_SPLIT_V1 (2026-08-29, владелец: «in the company the company
+// info») — экран был наполовину не про компанию. Вместе с реквизитами он
+// редактировал НАСТРОЙКИ ПЕЧАТНОГО ШАБЛОНА: размер бумаги, водяной знак,
+// нижний колонтитул и юридическую сноску, — и звался «Documents». Плитка
+// «Компания» открывала экран с заголовком «Documents»; ровно та путаница, из-за
+// которой владелец не мог найти, где меняется название клиники.
+//
+// Четыре поля шаблона убраны отсюда, и это ничего не сломало — проверено по
+// коду перед удалением: `paper_size`, `show_watermark`, `footer_note` и
+// `legal_note` из doc_settings НЕ ЧИТАЕТ никто. Печать берёт свои настройки из
+// doc_branding (views/doc-settings.js: paperSize / showWatermark / footerNote /
+// legalNote), который редактируется в «Документах» — это и есть их настоящее
+// место, и там они живые. Здешние были вторым, мёртвым набором тех же
+// переключателей: клиника меняла их и не видела разницы.
+//
+// Колонки НЕ удалены (миграции необратимы, а данные молча не выбрасывают) и
+// сохраняются как есть: save() их просто не отправляет, поэтому то, что клиника
+// когда-то ввела, остаётся в базе нетронутым.
+//
+// Это ДРУГАЯ функция, чем дизайнер шаблонов (views/documents.js +
+// views/doc-settings.js, маршрут 'documents', таблица doc_branding): там шесть
+// типов документов, варианты и предпросмотр печати. Здесь — одна запись о
+// клинике. Маршрут 'documents-settings' (НЕ 'documents'), чтобы не столкнуться
+// с тем экраном.
 
 import { supabase } from '../../supabase.js';
-import { h, Icon, clear, toast, field, checkField } from '../ui.js';
+import { h, Icon, clear, toast, field } from '../ui.js';
+import { tr } from '../i18n.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
 
+// SETTINGS_SPLIT_V1 — paper_size/show_watermark/footer_note/legal_note остались
+// в таблице, но не в этом объекте: DEFAULTS описывает то, чем управляет ЭТОТ
+// экран, и лишнее поле здесь снова превратилось бы в поле формы.
 const DEFAULTS = {
     clinic_name: '', address: '', phone: '', email: '', license: '',
-    logo_data_url: null, accent_color: '#167873', paper_size: 'A4',
-    show_watermark: 0, footer_note: '', legal_note: '',
+    logo_data_url: null, accent_color: '#167873',
 };
 
 let state = { ...DEFAULTS };
@@ -46,25 +63,27 @@ function mount(onNavigate) {
     const backBtn = h('button', {
         class: 'btn btn-outline btn-sm', type: 'button', style: { marginBottom: '14px' },
         onclick: () => onNavigate && onNavigate('settings'),
-    }, Icon('ChevronLeft', { size: 14 }), ' Settings');
+    }, Icon('ChevronLeft', { size: 14 }), ' ', 'Настройки');
 
     refs.saveBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: save },
-        Icon('Check', { size: 14 }), ' Save');
+        Icon('Check', { size: 14 }), ' ', 'Сохранить');
 
     const formCard = h('div', { class: 'card' });
     buildForm(formCard);
 
     refs.previewEl = h('div');
     const previewCard = h('div', { class: 'card', style: { position: 'sticky', top: '16px', alignSelf: 'flex-start' } },
-        h('div', { class: 'card-header' }, h('h3', null, Icon('Doc', { size: 16 }), ' Preview')),
+        h('div', { class: 'card-header' }, h('h3', null, Icon('ID', { size: 16 }), ' ', 'Как это выглядит')),
         h('div', { style: { padding: '18px' } }, refs.previewEl));
 
     refs.container.appendChild(h('div', { class: 'fade-in' },
         backBtn,
         h('div', { class: 'page-head' },
             h('div', null,
-                h('h1', { class: 'page-title' }, 'Documents'),
-                h('p', { class: 'page-subtitle' }, 'Branding for printed documents — letterhead, logo, notes'),
+                // SETTINGS_SPLIT_V1 — заголовок наконец совпал с плиткой, из
+                // которой сюда приходят. Раньше здесь стояло «Documents».
+                h('h1', { class: 'page-title' }, 'Компания'),
+                h('p', { class: 'page-subtitle' }, 'Название, логотип, фирменный цвет и контакты клиники'),
             ),
             h('div', { class: 'page-head-actions' }, refs.saveBtn),
         ),
@@ -92,40 +111,29 @@ function buildForm(card) {
     const emailInp   = h('input', { type: 'text', oninput: onText('email') });
     const licenseInp = h('input', { type: 'text', oninput: onText('license') });
     const accentInp  = h('input', { type: 'color', oninput: onText('accent_color') });
-    const paperSel   = h('select', { onchange: onText('paper_size') },
-        h('option', { value: 'A4' }, 'A4'),
-        h('option', { value: 'A5' }, 'A5'),
-        h('option', { value: 'Letter' }, 'Letter'));
-    const watermarkChk = h('input', {
-        type: 'checkbox',
-        onchange: (e) => { state.show_watermark = e.target.checked ? 1 : 0; renderPreview(); },
-    });
-    const footerTa = h('textarea', { rows: '3', oninput: onText('footer_note') });
-    const legalTa  = h('textarea', { rows: '3', oninput: onText('legal_note') });
 
     const fileInp = h('input', { type: 'file', accept: 'image/*', onchange: onLogoPick });
     refs.thumbWrap = h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' } });
 
-    refs.controls = { nameInp, addressInp, phoneInp, emailInp, licenseInp, accentInp, paperSel, watermarkChk, footerTa, legalTa };
+    refs.controls = { nameInp, addressInp, phoneInp, emailInp, licenseInp, accentInp };
     refs.errNote = h('div', { class: 'empty', style: { display: 'none', margin: '0 16px 12px' } },
-        'Could not load document settings — showing defaults.');
+        'Не удалось загрузить данные компании — показаны значения по умолчанию.');
 
-    card.appendChild(h('div', { class: 'card-header' }, h('h3', null, Icon('Doc', { size: 16 }), ' Letterhead')));
+    card.appendChild(h('div', { class: 'card-header' }, h('h3', null, Icon('ID', { size: 16 }), ' ', 'Реквизиты клиники')));
     card.appendChild(refs.errNote);
     card.appendChild(h('div', { style: { padding: '4px 16px 16px', display: 'flex', flexDirection: 'column' } },
-        field('Clinic name', nameInp),
-        field('Address', addressInp),
-        field('Phone', phoneInp),
-        field('Email', emailInp),
-        field('License', licenseInp),
-        h('div', { class: 'row', style: { gap: '12px' } },
-            h('div', { class: 'col grow' }, field('Accent color', accentInp)),
-            h('div', { class: 'col grow' }, field('Paper size', paperSel)),
-        ),
-        checkField('Show watermark', watermarkChk),
-        field('Footer note', footerTa),
-        field('Legal note', legalTa),
-        field('Logo', h('div', null, fileInp, refs.thumbWrap)),
+        field('Название клиники', nameInp),
+        field('Адрес', addressInp),
+        field('Телефон', phoneInp),
+        field('Электронная почта', emailInp),
+        field('Номер лицензии', licenseInp),
+        field('Фирменный цвет', accentInp),
+        field('Логотип', h('div', null, fileInp, refs.thumbWrap)),
+        // SETTINGS_SPLIT_V1 — сказано ровно один раз и там, где раньше стояли
+        // переехавшие переключатели: иначе администратор, помнящий «размер
+        // бумаги» на этом экране, решит, что настройка пропала.
+        h('p', { class: 'muted', style: { fontSize: '12px', marginTop: '10px' } },
+            'Размер бумаги, водяной знак и подписи внизу документов настраиваются в разделе «Документы».'),
     ));
 }
 
@@ -139,10 +147,6 @@ function applyStateToControls() {
     c.emailInp.value   = state.email || '';
     c.licenseInp.value = state.license || '';
     c.accentInp.value  = state.accent_color || '#167873';
-    c.paperSel.value   = state.paper_size || 'A4';
-    c.watermarkChk.checked = !!state.show_watermark;
-    c.footerTa.value   = state.footer_note || '';
-    c.legalTa.value    = state.legal_note || '';
     paintThumb();
 }
 
@@ -175,9 +179,9 @@ function onLogoPick(e) {
     e.target.value = '';   // always reset — lets the same file be re-picked after Remove
     if (!file) return;
     resizeImageToDataUrl(file, 220, (dataUrl) => {
-        if (!dataUrl) { toast('Could not read that image.', 'fail'); return; }
+        if (!dataUrl) { toast('Не удалось прочитать это изображение.', 'fail'); return; }
         if (dataUrl.length > 90000) {
-            toast('Logo is too large even after resizing — please use a smaller/simpler image.', 'fail');
+            toast('Логотип слишком большой даже после сжатия — выберите изображение поменьше.', 'fail');
             return;
         }
         state.logo_data_url = dataUrl;
@@ -201,9 +205,9 @@ function paintThumb() {
             style: { height: '40px', maxWidth: '120px', objectFit: 'contain', border: '1px solid var(--ink-100)', borderRadius: '6px', background: '#fff' },
         }));
         refs.thumbWrap.appendChild(h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: removeLogo },
-            Icon('Trash', { size: 13 }), ' Remove logo'));
+            Icon('Trash', { size: 13 }), ' ', 'Удалить логотип'));
     } else {
-        refs.thumbWrap.appendChild(h('span', { class: 'muted', style: { fontSize: '12px' } }, 'No logo uploaded'));
+        refs.thumbWrap.appendChild(h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Логотип не загружен'));
     }
 }
 
@@ -217,7 +221,11 @@ async function load() {
         state = { ...DEFAULTS, ...(data || {}) };
         if (refs.errNote) refs.errNote.style.display = 'none';
     } catch (e) {
-        toast('Failed to load document settings: ' + ((e && e.message) || e), 'fail');
+        // tr() on the fixed sentence, the server's own message appended raw —
+        // the convention every RPC-facing screen here follows (activation.js,
+        // system-backups.js): a message built by concatenation would never be
+        // translatable at all.
+        toast(tr('Не удалось загрузить данные компании.') + ' ' + ((e && e.message) || e), 'fail');
         state = { ...DEFAULTS };
         if (refs.errNote) refs.errNote.style.display = '';
     }
@@ -228,8 +236,13 @@ async function load() {
 async function save() {
     refs.saveBtn.disabled = true;
     const prevLabel = refs.saveBtn.textContent;
-    refs.saveBtn.textContent = 'Saving…';
+    refs.saveBtn.textContent = tr('Сохранение…');
     try {
+        // SETTINGS_SPLIT_V1 — ровно те поля, которыми управляет этот экран.
+        // paper_size / show_watermark / footer_note / legal_note НЕ шлются
+        // намеренно: /api/db обновляет только перечисленные колонки, поэтому
+        // то, что клиника ввела в них раньше, остаётся в базе нетронутым, а не
+        // затирается значениями по умолчанию из отсутствующей формы.
         const payload = {
             clinic_name:    state.clinic_name || '',
             address:        state.address || '',
@@ -238,19 +251,15 @@ async function save() {
             license:        state.license || '',
             logo_data_url:  state.logo_data_url || null,
             accent_color:   state.accent_color || '#167873',
-            paper_size:     state.paper_size || 'A4',
-            show_watermark: state.show_watermark ? 1 : 0,
-            footer_note:    state.footer_note || '',
-            legal_note:     state.legal_note || '',
         };
         const { data, error } = await supabase.from('doc_settings').update(payload).eq('id', 1).select().single();
         if (error) throw error;
         state = { ...DEFAULTS, ...(data || payload) };
         applyStateToControls();
         renderPreview();
-        toast('Saved', 'ok');
+        toast(tr('Сохранено'), 'ok');
     } catch (e) {
-        toast((e && e.message) || 'Failed to save.', 'fail');
+        toast((e && e.message) || tr('Не удалось сохранить.'), 'fail');
     } finally {
         refs.saveBtn.disabled = false;
         refs.saveBtn.textContent = prevLabel;
@@ -258,9 +267,18 @@ async function save() {
 }
 
 // -----------------------------------------------------------------------------
-// PREVIEW — a representative branded "paper" that updates live as the form
-// changes. All clinic-supplied strings go through h()'s textContent path —
-// never innerHTML.
+// PREVIEW — how the clinic's own identity looks: logo, name, contacts, accent
+// rule. Updates live as the form changes.
+//
+// SETTINGS_SPLIT_V1 — it used to be a mock DOCUMENT: a «Medical Certificate»
+// heading, «Patient: ____» sample lines, and the footer/legal notes printed at
+// the bottom. Those went with the settings that produced them — a sample of a
+// printed form belongs on «Документы», where the template is actually edited,
+// and showing a footer note here with no field to change it would be a control
+// the screen displays but cannot operate.
+//
+// All clinic-supplied strings go through h()'s textContent path — never
+// innerHTML.
 // -----------------------------------------------------------------------------
 function renderPreview() {
     if (!refs.previewEl) return;
@@ -276,23 +294,13 @@ function renderPreview() {
     const headerRow = h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', position: 'relative' } },
         logoEl,
         h('div', { style: { flex: '1', minWidth: 0 } },
-            h('div', { style: { fontWeight: '700', fontSize: '16px', color: accent } }, state.clinic_name || 'Clinic name'),
+            h('div', { style: { fontWeight: '700', fontSize: '16px', color: accent } }, state.clinic_name || 'Название клиники'),
             contactBits.length
                 ? h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '2px' } }, contactBits.join(' · '))
                 : null,
         ));
 
-    const rule = h('div', { style: { borderTop: `2px solid ${accent}`, margin: '14px 0' } });
-
-    const docTitle = h('div', { style: { fontWeight: '700', fontSize: '15px', marginBottom: '10px' } }, 'Medical Certificate');
-    const sampleLines = h('div', { class: 'muted', style: { fontSize: '12.5px', lineHeight: '2' } },
-        h('div', null, 'Patient: ____________________'),
-        h('div', null, 'Date: ____________________'),
-        h('div', null, 'Doctor: ____________________'));
-
-    const footer = h('div', { style: { borderTop: `1px solid ${accent}`, marginTop: '26px', paddingTop: '10px' } },
-        state.footer_note ? h('div', { class: 'muted', style: { fontSize: '10.5px' } }, state.footer_note) : null,
-        state.legal_note  ? h('div', { class: 'muted', style: { fontSize: '10px', fontStyle: 'italic', marginTop: '2px' } }, state.legal_note) : null);
+    const rule = h('div', { style: { borderTop: `2px solid ${accent}`, margin: '14px 0 4px' } });
 
     refs.previewEl.appendChild(h('div', {
         style: {
@@ -300,19 +308,8 @@ function renderPreview() {
             background: '#fff', border: '1px solid var(--ink-100)', borderRadius: '10px',
             boxShadow: '0 4px 18px rgba(11,20,24,0.08)', padding: '24px', maxWidth: '460px', margin: '0 auto',
         },
-    },
-        Number(state.show_watermark) ? watermarkEl(accent) : null,
-        headerRow, rule, docTitle, sampleLines, footer));
-}
+    }, headerRow, rule));
 
-function watermarkEl(accent) {
-    return h('div', {
-        style: {
-            position: 'absolute', inset: '0', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            opacity: '0.06', pointerEvents: 'none',
-        },
-    },
-        state.logo_data_url
-            ? h('img', { src: state.logo_data_url, style: { width: '70%', objectFit: 'contain' } })
-            : h('div', { style: { width: '55%', aspectRatio: '1 / 1', borderRadius: '20%', background: accent } }));
+    refs.previewEl.appendChild(h('p', { class: 'muted', style: { fontSize: '12px', marginTop: '12px', textAlign: 'center' } },
+        'Так клиника подписана в шапке программы и во всех печатных документах.'));
 }

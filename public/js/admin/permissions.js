@@ -83,14 +83,22 @@ const MODULE_GROUPS = NAV_MODULES;
 // Modules that bypass role gating entirely. Empty: every module (Dashboard
 // included) is controlled by the role's permission list. A restricted user
 // lands on their first allowed module (see admin.js firstAllowedView()).
-const ALWAYS_ALLOWED = new Set(['specialties', 'updates']);
+const ALWAYS_ALLOWED = new Set(['specialties', 'updates', 'subscription', 'clinic-data']);
 // specialties: global read-only reference; viewable by any role, add is super-admin-gated (SPECIALTIES_VIEW_V1)
 // updates: UPDATE_DELIVERY_V1 — the approval screen is readable by any role;
 // the RPCs behind it (update_status/update_approve/update_cancel) gate the
 // admin-only ACTIONS themselves via hasAnyRole server-side, and the view
 // itself only renders the approve/change/cancel buttons for an admin actor
-// (see views/updates.js's isAdminActor()) — this only controls whether the
-// route can be OPENED at all by a role-restricted account.
+// (admin-actor.js's isAdminActor()) — this only controls whether the route can
+// be OPENED at all by a role-restricted account.
+// subscription / clinic-data: SETTINGS_SPLIT_V1 — the other two thirds of what
+// 'updates' used to be (views/subscription.js, views/clinic-data.js). They
+// INHERIT that entry rather than being granted a new one: as cards on the
+// updates page every role could already open them, and each card still decides
+// for itself what a non-admin sees (the module list goes read-only, the backups
+// card explains itself and never calls the admin-gated backup_list, the danger
+// zone does not render at all). Leaving them out would have silently narrowed
+// access as a side effect of moving a card between screens.
 
 // ---------------------------------------------------------------------------
 // Effective access state

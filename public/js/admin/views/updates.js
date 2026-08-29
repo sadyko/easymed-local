@@ -1,65 +1,61 @@
 // UPDATE_DELIVERY_V1 (docs/plans/2026-08-20-update-delivery.md, Task 6) — the
 // approval screen: the moment a human says yes to an offered version and
 // picks the hour. SYSTEM_SETTINGS_V1 (docs/plans/2026-08-23-system-settings.md,
-// Task 3) grew this route into Settings → «Система»: the updates cards this
-// file owns, then three sibling card modules — activation & subscription
-// (system-subscription.js), backups (system-backups.js) and the danger zone
-// (system-danger.js) — split out rather than inlined so this file stays
-// readable (the same sibling-module pattern laboratory.js uses for
-// lab-barcode.js/lab-grouping.js). Route id stays 'updates' on purpose: deep
-// links and admin.js's lockout exemption both key on it.
+// Task 3) grew this route into Settings → «Система» by hanging three sibling
+// cards off it — subscription, backups, the danger zone.
+//
+// SETTINGS_SPLIT_V1 (2026-08-29) took them off again. The owner's instruction:
+// «in the system only the version and last updated "wahts new"». So this
+// screen is back to what its name says — the current version, the offer /
+// approve UI (that is what the screen is FOR), and the one-time what's-new
+// note. Nothing was deleted, only rehoused:
+//     subscription  ->  views/subscription.js   (route 'subscription')
+//     backups       ->  views/clinic-data.js    (route 'clinic-data')
+//     danger zone   ->  views/clinic-data.js
+// Each of those imports the SAME card module it always did; there is no second
+// copy of any card anywhere.
+//
+// Route id stays 'updates': the banner, deep links and admin.js's lockout
+// exemption all key on it.
 //
 // Reachable from renderUpdateBanner() (admin.js) and from Settings →
 // «Система» (settings-hub.js). It survives a full licence lockout on purpose
 // (admin.js's renderViewInner exempts 'updates' next to 'activation') — an
-// update may be exactly what fixes the clinic's own licensing situation, and
-// now also because a lapsed clinic must still be able to save its data and a
-// decommissioned one to erase itself (the backup/reset RPCs are
-// ALWAYS_ALLOWED server-side for the same reason — see
-// server/services/control/gate.js's own comment).
+// update may be exactly what fixes the clinic's own licensing situation. The
+// other two halves of the old page carry their own exemptions now, for the
+// reasons written in their own headers.
 //
 // READABLE BY ANYONE; the approve/change/cancel BUTTONS render only for an
-// admin actor — checked the same way cashier-desk.js's isGeneralAdmin() and
-// telegram-chat.js's canBroadcast() already do (primary role OR 'admin' in
-// extra_roles, never `user.role === 'admin'` alone — see isAdminActor()
-// below). The sibling cards receive that same verdict as a parameter instead
-// of re-deriving it, so all call sites still move together. This is
-// politeness only: every RPC re-checks server-side no matter what renders.
+// admin actor — ../admin-actor.js, the one shared verdict all three screens
+// use. Politeness only: every RPC re-checks server-side no matter what renders.
 //
-// Every scheduling/formatting DECISION lives in ../updates-logic.js (updates)
-// or ../system-logic.js (the three new cards) as pure, unit-tested functions —
-// the view files only build DOM and talk to RPCs.
+// Every scheduling/formatting DECISION lives in ../updates-logic.js as pure,
+// unit-tested functions — this file only builds DOM and talks to RPCs.
 
 import { h, Icon, clear, toast } from '../ui.js';
 import { tr } from '../i18n.js';
 import { supabase } from '../../supabase.js';
 import { licenceState } from '../licence.js';
+import { isAdminActor } from '../admin-actor.js';
 import {
     scheduleChoices, resolveHour, isValidHour, offerIsCurrent,
     formatScheduled, updateOutcomeMessage, whatsNewState, pendingRestartMessage,
 } from '../updates-logic.js';
-import { renderSubscriptionCard } from './system-subscription.js';
-import { renderBackupsCard } from './system-backups.js';
-import { renderDangerCard } from './system-danger.js';
+// SETTINGS_SPLIT_V1 — imported ONLY to keep the old '#updates/subscription'
+// deep link landing on the subscription screen (see renderUpdates below).
+// The ?v= tag MUST match admin.js's import of the same file: a browser keys
+// modules by URL, so two different tags would load two instances of it (the
+// same trap doc-settings.js's own '?v must match in EVERY importer' note
+// records).
+import { renderSubscription } from './subscription.js?v=split1';
 
 const LAST_SEEN_KEY = 'em.updates.lastSeenVersion';
 const NOTES_CACHE_KEY = 'em.updates.notesCache';   // { [version]: notes_ru } — small, capped below
 
-// Mirrors cashier-desk.js's isGeneralAdmin() / telegram-chat.js's
-// canBroadcast() exactly, on purpose — one convention for "does the CURRENT
-// actor hold admin, counting extra_roles" across every view that needs it,
-// not a fourth slightly-different copy. (window.easymed.state.user does not
-// currently carry `extra_roles` — see those two files' own history — so the
-// fallback below is inert today the same way theirs is; it stays here so all
-// three call sites move together the day that gap is closed, instead of
-// fixing one and leaving the others silently behind again.)
-function isAdminActor() {
-    const u = (typeof window !== 'undefined' && window.easymed && window.easymed.state && window.easymed.state.user) || null;
-    if (!u) return false;
-    if (u.is_super_admin === true || u.is_admin === true) return true;
-    const extra = Array.isArray(u.extra_roles) ? u.extra_roles : [];
-    return [u.role, ...extra].includes('admin');
-}
+// SETTINGS_SPLIT_V1 — isAdminActor() moved to ../admin-actor.js when the page
+// split into three screens that must all agree on the same verdict; its
+// reasoning (and its deliberate mirroring of cashier-desk.js /
+// telegram-chat.js) travelled with it.
 
 function readLocal(key) {
     try { return localStorage.getItem(key); } catch { return null; }
@@ -91,20 +87,29 @@ function rememberOffer(offer) {
     writeLocal(NOTES_CACHE_KEY, JSON.stringify(cache));
 }
 
-// SUBSCRIPTION_SUBROUTE_V1 (2026-08-29) — «Подписка» в Настройках открывает
-// ЭТОТ экран, наведённым на карточку «Активация и подписка», через подмаршрут
-// '#updates/subscription' (HASH_SUBROUTE_V1 в admin.js, тот же механизм, что
-// у '#labs/panels'). Отдельного экрана нет намеренно: подписка — одна из
-// четырёх карточек «Системы», и вторая её копия разошлась бы с оригиналом при
-// первой же правке. Отличие от laboratory.js: там sub — это РЕЖИМ, который
-// пользователь переключает внутри экрана, поэтому вид сообщает его обратно
-// оболочке через easymedSetTabSub(). Здесь sub — только точка прибытия: внутри
-// «Системы» ничего его не меняет, сообщать оболочке нечего.
+// SETTINGS_SPLIT_V1 (2026-08-29) — «Подписка» is its own route now
+// ('subscription'), but the hash it used to live at must keep working: the
+// predecessor arrangement (SUBSCRIPTION_SUBROUTE_V1) pointed the settings tile
+// at '#updates/subscription', so that string is in browser histories, in
+// bookmarks, and in whatever the owner pasted to somebody. It is answered here
+// rather than in admin.js's router because a redirect at THIS level is true for
+// every caller — router, banner, a direct renderUpdates() call in a test — and
+// because there is then exactly one place that knows the old hash exists.
+//
+// The tab keeps its identity ('updates' — tabIdFor() has no notion of the sub),
+// so its label is corrected through the bridge admin.js already exposes for
+// async tab titles. Without that the strip would say «Система» over a page
+// showing «Подписка».
 export async function renderUpdates(root, ctx = {}) {
-    // Карточка подписки поднимается наверх, а не просто подсвечивается: у
-    // экрана четыре карточки, и на ноутбуке нужная оказывалась ниже сгиба —
-    // «Подписка» приводила бы на страницу, где подписки не видно.
-    const wantsSubscription = !!(ctx.payload && ctx.payload.sub === 'subscription');
+    if (ctx.payload && ctx.payload.sub === 'subscription') {
+        try {
+            if (typeof window !== 'undefined' && typeof window.easymedSetTabLabel === 'function') {
+                window.easymedSetTabLabel(ctx.tabId, tr('Подписка'));
+            }
+        } catch (e) { /* косметика вкладки — не повод не показать экран */ }
+        clear(root);
+        return void await renderSubscription(root, ctx);
+    }
     // A previous mount's watcher must never outlive it: navigating away and
     // back would otherwise leave two timers polling, and a watcher whose view
     // is long gone can reload the tab out from under whatever the user moved
@@ -126,16 +131,16 @@ export async function renderUpdates(root, ctx = {}) {
     // Admin-only in the UI to match the server's own hasAnyRole gate; the
     // server re-checks regardless, this is the same politeness as the
     // approve/cancel buttons above it.
-    // The page head says «Система» (settings-hub.js's tile matches); the
-    // check button stays up here because it serves TWO cards at once — the
-    // same check-in that fetches an update offer also renews the licence and
-    // delivers module grants, so it is the subscription card's "refresh"
-    // exactly as much as the updates card's (the plan's own table says so).
+    // SETTINGS_SPLIT_V1 — the button stays here, on the screen that owns the
+    // update offer, and did NOT follow the subscription card to its new route:
+    // the owner's list for that screen is "subscription state + modules", and
+    // a module granted after «Запросить» still arrives by itself on the next
+    // daily check-in.
     const admin = isAdminActor();
     const head = h('div', { class: 'page-head' },
         h('div', null,
             h('h1', { class: 'page-title' }, 'Система'),
-            h('p', { class: 'page-subtitle' }, 'Обновления, активация, резервные копии и данные клиники.')));
+            h('p', { class: 'page-subtitle' }, 'Версия системы и что нового в последнем обновлении.')));
     if (admin) {
         const checkStatus = h('span', { class: 'upd-check-status muted', role: 'status' });
         const checkBtn = h('button', {
@@ -146,17 +151,9 @@ export async function renderUpdates(root, ctx = {}) {
     }
     wrap.appendChild(head);
 
-    // SUBSCRIPTION_SUBROUTE_V1 — по прямой ссылке карточка подписки встаёт
-    // ПЕРВОЙ, сразу под шапкой; при обычном заходе порядок прежний
-    // (обновления → подписка → резервные копии → опасная зона), чтобы у тех,
-    // кто открывает «Систему» ради обновления, ничего не переехало.
-    // Узел создаётся здесь, а заполняется ниже одним и тем же
-    // renderSubscriptionCard() — порядок на экране задаёт appendChild, а не
-    // вторая ветка отрисовки.
-    const subRoot = h('div');
-    if (wantsSubscription) wrap.appendChild(subRoot);
-
-    wrap.appendChild(h('h2', { class: 'sys-section-title' }, 'Обновления'));
+    // SETTINGS_SPLIT_V1 — the «Обновления» section heading went with the
+    // siblings: it existed to separate four cards from one another, and one
+    // section does not need a heading repeating the page it is on.
     wrap.appendChild(body);
     body.appendChild(h('div', { class: 'empty' }, 'Загрузка…'));
 
@@ -169,40 +166,14 @@ export async function renderUpdates(root, ctx = {}) {
         clear(body);
         body.appendChild(h('div', { class: 'card upd-card' },
             h('p', { class: 'upd-error', role: 'status' }, 'Не удалось загрузить статус обновления. Попробуйте ещё раз позже.')));
-        // Deliberately NOT a return any more: the cards below must render
-        // even when the update status cannot load — a clinic that cannot
-        // reach its own server status is exactly the clinic that may need
-        // its backups next.
+        // Still not a `return`: the message replaces the «Загрузка…»
+        // placeholder and the check button above stays live, so an offline
+        // clinic gets a screen it can retry from rather than a spinner that
+        // never resolves. (It used to matter for a second reason — the backup
+        // cards below had to render anyway — which moved to
+        // views/clinic-data.js with them.)
     }
     if (status) paint(body, status);
-
-    // SYSTEM_SETTINGS_V1 — the three sibling cards, in the plan's order.
-    // Subscription paints synchronously from the boot-time licence copy;
-    // backups is awaited so this function resolves only once the whole page
-    // is real (the fake-DOM tests — and the human eye — rely on that).
-    if (!wantsSubscription) wrap.appendChild(subRoot);   // SUBSCRIPTION_SUBROUTE_V1 — иначе он уже наверху
-    renderSubscriptionCard(subRoot, { admin });
-
-    const bakRoot = h('div');
-    wrap.appendChild(bakRoot);
-    await renderBackupsCard(bakRoot, { admin });
-
-    const dzRoot = h('div');
-    wrap.appendChild(dzRoot);
-    renderDangerCard(dzRoot, { admin });
-
-    // SUBSCRIPTION_SUBROUTE_V1 — вкладка помнит свою прокрутку
-    // (state.tabs[].scrollY в admin.js), поэтому «первая на странице» ещё не
-    // значит «видна»: вернувшийся на «Систему» пользователь оказался бы там,
-    // где бросил её в прошлый раз. Прокрутку просят у самой карточки.
-    // scrollIntoView есть не везде (тесты на фальшивом DOM, старые движки) —
-    // проверка обязательна, ради наведения экран падать не должен.
-    if (wantsSubscription) {
-        const card = subRoot.firstChild;
-        if (card && typeof card.scrollIntoView === 'function') {
-            try { card.scrollIntoView({ block: 'start' }); } catch (e) { /* наведение — не повод ломать экран */ }
-        }
-    }
 }
 
 // The button's whole flow: check in now, then decide whether the LICENCE

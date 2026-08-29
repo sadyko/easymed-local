@@ -3,6 +3,45 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // BRANCH_SYNC_V1 — «Настройки → Филиалы»: связь между отдельными установками — added 2026-08-29
+  "Синхронизация филиалов": {"en":"Branch synchronisation","ru":"Синхронизация филиалов","uz":"Filiallar sinxronizatsiyasi"},
+  "Роль этой установки": {"en":"Role of this installation","ru":"Роль этой установки","uz":"Ushbu o'rnatma roli"},
+  "Главный филиал": {"en":"Main branch","ru":"Главный филиал","uz":"Bosh filial"},
+  "Подключённый филиал": {"en":"Connected branch","ru":"Подключённый филиал","uz":"Ulangan filial"},
+  "Не связан": {"en":"Not linked","ru":"Не связан","uz":"Bog'lanmagan"},
+  "Этот компьютер раздаёт справочник остальным филиалам: услуги и цены, лабораторные панели, сведения о клинике.": {"en":"This computer distributes the catalogue to the other branches: services and prices, lab panels, clinic details.","ru":"Этот компьютер раздаёт справочник остальным филиалам: услуги и цены, лабораторные панели, сведения о клинике.","uz":"Ushbu kompyuter boshqa filiallarga ma'lumotnomani tarqatadi: xizmatlar va narxlar, laboratoriya panellari, klinika ma'lumotlari."},
+  "Этот филиал получает справочник из главного. Пациенты, визиты, анализы и деньги остаются только здесь и никуда не передаются.": {"en":"This branch receives the catalogue from the main branch. Patients, visits, lab results and money stay here and are never sent anywhere.","ru":"Этот филиал получает справочник из главного. Пациенты, визиты, анализы и деньги остаются только здесь и никуда не передаются.","uz":"Bu filial ma'lumotnomani bosh filialdan oladi. Bemorlar, tashriflar, tahlillar va pul faqat shu yerda qoladi va hech qayerga uzatilmaydi."},
+  "Филиалы пока не связаны. Назначьте один компьютер главным, а на остальных введите его ключ подключения.": {"en":"The branches are not linked yet. Make one computer the main branch and enter its connection key on the others.","ru":"Филиалы пока не связаны. Назначьте один компьютер главным, а на остальных введите его ключ подключения.","uz":"Filiallar hali bog'lanmagan. Bitta kompyuterni bosh qiling, qolganlarida esa uning ulanish kalitini kiriting."},
+  "Не удалось прочитать состояние связи филиалов. Обновите страницу.": {"en":"Could not read the branch link status. Refresh the page.","ru":"Не удалось прочитать состояние связи филиалов. Обновите страницу.","uz":"Filiallar bog'lanishi holatini o'qib bo'lmadi. Sahifani yangilang."},
+  "Связать филиалы может только администратор клиники.": {"en":"Only a clinic administrator can link branches.","ru":"Связать филиалы может только администратор клиники.","uz":"Filiallarni faqat klinika administratori bog'lay oladi."},
+  "Сделать главным филиалом": {"en":"Make this the main branch","ru":"Сделать главным филиалом","uz":"Bosh filial qilish"},
+  "Этот филиал — главный": {"en":"This branch is the main one","ru":"Этот филиал — главный","uz":"Bu filial — bosh filial"},
+  "Справочник будет раздаваться отсюда. Укажите адрес, по которому этот компьютер виден остальным филиалам.": {"en":"The catalogue will be served from here. Enter the address at which the other branches can reach this computer.","ru":"Справочник будет раздаваться отсюда. Укажите адрес, по которому этот компьютер виден остальным филиалам.","uz":"Ma'lumotnoma shu yerdan tarqatiladi. Boshqa filiallar bu kompyuterni ko'radigan manzilni kiriting."},
+  "Адрес этого компьютера": {"en":"Address of this computer","ru":"Адрес этого компьютера","uz":"Ushbu kompyuter manzili"},
+  "Подключить к главному": {"en":"Connect to the main branch","ru":"Подключить к главному","uz":"Bosh filialga ulash"},
+  "Этот филиал подключается к главному": {"en":"This branch connects to the main one","ru":"Этот филиал подключается к главному","uz":"Bu filial bosh filialga ulanadi"},
+  "Вставьте ключ подключения, выданный на главном филиале.": {"en":"Paste the connection key issued on the main branch.","ru":"Вставьте ключ подключения, выданный на главном филиале.","uz":"Bosh filialda berilgan ulanish kalitini joylashtiring."},
+  "Ключ подключения": {"en":"Connection key","ru":"Ключ подключения","uz":"Ulanish kaliti"},
+  "Адрес для филиалов": {"en":"Address for the branches","ru":"Адрес для филиалов","uz":"Filiallar uchun manzil"},
+  "Группа филиалов": {"en":"Branch group","ru":"Группа филиалов","uz":"Filiallar guruhi"},
+  "Показать ключ подключения": {"en":"Show the connection key","ru":"Показать ключ подключения","uz":"Ulanish kalitini ko'rsatish"},
+  "Введите этот ключ на каждом филиале, который должен получать справочник отсюда. Ключ не меняется — его можно показать снова в любой момент.": {"en":"Enter this key on every branch that should receive the catalogue from here. The key does not change — it can be shown again at any time.","ru":"Введите этот ключ на каждом филиале, который должен получать справочник отсюда. Ключ не меняется — его можно показать снова в любой момент.","uz":"Bu kalitni shu yerdan ma'lumotnoma oladigan har bir filialda kiriting. Kalit o'zgarmaydi — uni istalgan vaqtda qayta ko'rsatish mumkin."},
+  "Запускать синхронизацию может только администратор клиники.": {"en":"Only a clinic administrator can start a synchronisation.","ru":"Запускать синхронизацию может только администратор клиники.","uz":"Sinxronizatsiyani faqat klinika administratori boshlay oladi."},
+  "Синхронизировать сейчас": {"en":"Synchronise now","ru":"Синхронизировать сейчас","uz":"Hozir sinxronlash"},
+  "Синхронизация переносит только справочник: сведения о клинике, услуги с ценами и лабораторные панели. Пациенты, визиты, анализы и оплаты остаются в своём филиале.": {"en":"Synchronisation transfers the catalogue only: clinic details, services with prices and lab panels. Patients, visits, lab results and payments stay in their own branch.","ru":"Синхронизация переносит только справочник: сведения о клинике, услуги с ценами и лабораторные панели. Пациенты, визиты, анализы и оплаты остаются в своём филиале.","uz":"Sinxronizatsiya faqat ma'lumotnomani ko'chiradi: klinika ma'lumotlari, narxlar bilan xizmatlar va laboratoriya panellari. Bemorlar, tashriflar, tahlillar va to'lovlar o'z filialida qoladi."},
+  "Отвязать филиал": {"en":"Unlink the branch","ru":"Отвязать филиал","uz":"Filialni uzish"},
+  "Филиалы перестанут получать справочник отсюда. Уже переданные услуги и панели у них останутся.": {"en":"The branches will stop receiving the catalogue from here. Services and panels already delivered stay with them.","ru":"Филиалы перестанут получать справочник отсюда. Уже переданные услуги и панели у них останутся.","uz":"Filiallar bu yerdan ma'lumotnoma olishni to'xtatadi. Allaqachon yuborilgan xizmatlar va panellar ularda qoladi."},
+  "Филиал перестанет получать справочник. Услуги и панели, которые уже приехали, останутся на месте.": {"en":"The branch will stop receiving the catalogue. Services and panels that already arrived stay where they are.","ru":"Филиал перестанет получать справочник. Услуги и панели, которые уже приехали, останутся на месте.","uz":"Filial ma'lumotnoma olishni to'xtatadi. Allaqachon kelgan xizmatlar va panellar joyida qoladi."},
+  "Синхронизации ещё не было.": {"en":"No synchronisation yet.","ru":"Синхронизации ещё не было.","uz":"Hali sinxronizatsiya bo'lmagan."},
+  "Изменений не было — справочник уже совпадает.": {"en":"Nothing changed — the catalogue already matches.","ru":"Изменений не было — справочник уже совпадает.","uz":"O'zgarish bo'lmadi — ma'lumotnoma allaqachon mos."},
+  "Ключ скопирован": {"en":"Key copied","ru":"Ключ скопирован","uz":"Kalit nusxalandi"},
+  "Скопируйте выделенный ключ": {"en":"Copy the selected key","ru":"Скопируйте выделенный ключ","uz":"Ajratilgan kalitni nusxalang"},
+  "Связываемся с главным филиалом…": {"en":"Contacting the main branch…","ru":"Связываемся с главным филиалом…","uz":"Bosh filial bilan bog'lanilmoqda…"},
+  "Справочник обновлён": {"en":"The catalogue is up to date","ru":"Справочник обновлён","uz":"Ma'lumotnoma yangilandi"},
+  "Не удалось синхронизироваться": {"en":"Could not synchronise","ru":"Не удалось синхронизироваться","uz":"Sinxronlab bo'lmadi"},
+  "Филиал назначен главным": {"en":"This branch is now the main one","ru":"Филиал назначен главным","uz":"Filial bosh filial etib belgilandi"},
+  "Филиал подключён к главному": {"en":"The branch is connected to the main one","ru":"Филиал подключён к главному","uz":"Filial bosh filialga ulandi"},
+  "Связь разорвана": {"en":"The link is removed","ru":"Связь разорвана","uz":"Bog'lanish uzildi"},
   // STOCK_SEARCH_V1 — procurement Stock tab search — added 2026-07-14
   "Поиск товара…": {"en":"Search product…","ru":"Поиск товара…","uz":"Mahsulot qidirish…"},
   // WIZ_TEMPLATES_V1 — booking-wizard cart templates — added 2026-07-14
@@ -2542,4 +2581,41 @@ export const STRINGS = {
   // бы на слова, которых на экране больше нет.
   "Переписка в Telegram-боте: читать (Просмотр) и отвечать (Редактирование)": {"en":"Telegram bot correspondence: read (View only) and reply (View and edit)","ru":"Переписка в Telegram-боте: читать (Просмотр) и отвечать (Редактирование)","uz":"Telegram-botdagi yozishmalar: o'qish (Faqat ko'rish) va javob berish (Ko'rish va o'zgartirish)"},
   "Вся конфигурация клиники": {"en":"The clinic's whole configuration","ru":"Вся конфигурация клиники","uz":"Klinikaning barcha sozlamalari"},
+
+  // SETTINGS_SPLIT_V1 (2026-08-29, владелец: «in the subcription settings we
+  // need only left with subscription and modules status (with request). and in
+  // the system only the version and last updated "wahts new". in the company
+  // the company info.») — «Система» разделилась на три экрана
+  // (views/updates.js, views/subscription.js, views/clinic-data.js), а
+  // «Компания» (views/documents-settings.js) перестала быть наполовину
+  // редактором печатного шаблона. Сами карточки не менялись — их строки уже
+  // есть в блоке SYSTEM_SETTINGS_V1 выше; здесь только новые заголовки,
+  // подписи плиток и поля «Компании», которые до сих пор стояли по-английски
+  // без единого перевода. Пары «с точкой / без точки» — это подпись экрана и
+  // подпись плитки: h() переводит строку целиком, поэтому один ключ на обе
+  // формы не годится.
+  "Версия системы и что нового в последнем обновлении": {"en":"The system version and what's new in the last update","ru":"Версия системы и что нового в последнем обновлении","uz":"Tizim versiyasi va oxirgi yangilanishdagi yangiliklar"},
+  "Версия системы и что нового в последнем обновлении.": {"en":"The system version and what's new in the last update.","ru":"Версия системы и что нового в последнем обновлении.","uz":"Tizim versiyasi va oxirgi yangilanishdagi yangiliklar."},
+  "Активация, срок действия и подключённые модули.": {"en":"Activation, validity and connected modules.","ru":"Активация, срок действия и подключённые модули.","uz":"Faollashtirish, amal qilish muddati va ulangan modullar."},
+  "Данные клиники": {"en":"Clinic data","ru":"Данные клиники","uz":"Klinika ma'lumotlari"},
+  "Резервные копии и полное удаление данных клиники": {"en":"Backups and complete deletion of clinic data","ru":"Резервные копии и полное удаление данных клиники","uz":"Zaxira nusxalar va klinika ma'lumotlarini to'liq o'chirish"},
+  "Резервные копии и полное удаление данных клиники.": {"en":"Backups and complete deletion of clinic data.","ru":"Резервные копии и полное удаление данных клиники.","uz":"Zaxira nusxalar va klinika ma'lumotlarini to'liq o'chirish."},
+
+  // «Компания» — views/documents-settings.js
+  "Название, логотип, фирменный цвет и контакты клиники": {"en":"The clinic's name, logo, brand colour and contacts","ru":"Название, логотип, фирменный цвет и контакты клиники","uz":"Klinikaning nomi, logotipi, firma rangi va kontaktlari"},
+  "Реквизиты клиники": {"en":"Clinic details","ru":"Реквизиты клиники","uz":"Klinika rekvizitlari"},
+  "Как это выглядит": {"en":"How it looks","ru":"Как это выглядит","uz":"Bu qanday ko'rinadi"},
+  "Название клиники": {"en":"Clinic name","ru":"Название клиники","uz":"Klinika nomi"},
+  "Электронная почта": {"en":"Email","ru":"Электронная почта","uz":"Elektron pochta"},
+  "Номер лицензии": {"en":"Licence number","ru":"Номер лицензии","uz":"Litsenziya raqami"},
+  "Фирменный цвет": {"en":"Brand colour","ru":"Фирменный цвет","uz":"Firma rangi"},
+  "Логотип": {"en":"Logo","ru":"Логотип","uz":"Logotip"},
+  "Удалить логотип": {"en":"Remove the logo","ru":"Удалить логотип","uz":"Logotipni o'chirish"},
+  "Логотип не загружен": {"en":"No logo uploaded","ru":"Логотип не загружен","uz":"Logotip yuklanmagan"},
+  "Так клиника подписана в шапке программы и во всех печатных документах.": {"en":"This is how the clinic is signed in the app header and on every printed document.","ru":"Так клиника подписана в шапке программы и во всех печатных документах.","uz":"Klinika dastur sarlavhasida va barcha chop etilgan hujjatlarda shunday ko'rinadi."},
+  "Размер бумаги, водяной знак и подписи внизу документов настраиваются в разделе «Документы».": {"en":"Paper size, the watermark and the notes at the bottom of documents are set in the Documents section.","ru":"Размер бумаги, водяной знак и подписи внизу документов настраиваются в разделе «Документы».","uz":"Qog'oz o'lchami, suv belgisi va hujjatlar pastidagi izohlar «Hujjatlar» bo'limida sozlanadi."},
+  "Не удалось загрузить данные компании — показаны значения по умолчанию.": {"en":"Could not load the company details — showing defaults.","ru":"Не удалось загрузить данные компании — показаны значения по умолчанию.","uz":"Kompaniya ma'lumotlarini yuklab bo'lmadi — standart qiymatlar ko'rsatilmoqda."},
+  "Не удалось загрузить данные компании.": {"en":"Could not load the company details.","ru":"Не удалось загрузить данные компании.","uz":"Kompaniya ma'lumotlarini yuklab bo'lmadi."},
+  "Не удалось прочитать это изображение.": {"en":"Could not read that image.","ru":"Не удалось прочитать это изображение.","uz":"Bu rasmni o'qib bo'lmadi."},
+  "Логотип слишком большой даже после сжатия — выберите изображение поменьше.": {"en":"The logo is too large even after resizing — choose a smaller image.","ru":"Логотип слишком большой даже после сжатия — выберите изображение поменьше.","uz":"Logotip siqilgandan keyin ham juda katta — kichikroq rasm tanlang."},
 };

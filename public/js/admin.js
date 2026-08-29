@@ -29,6 +29,10 @@ import { setLicence, isLicensed, licenceState } from './admin/licence.js';   // 
 import { renderLockedModule } from './admin/views/locked-module.js';   // LICENCE_CORE_V1
 import { renderActivation } from './admin/views/activation.js';   // LICENCE_CORE_V1
 import { renderUpdates } from './admin/views/updates.js';   // UPDATE_DELIVERY_V1
+// SETTINGS_SPLIT_V1 — «Система» split into three screens (views/updates.js's
+// header records what moved where); these are the two new halves.
+import { renderSubscription } from './admin/views/subscription.js?v=split1';   // SETTINGS_SPLIT_V1
+import { renderClinicData }   from './admin/views/clinic-data.js?v=split1';    // SETTINGS_SPLIT_V1
 import { offerIsCurrent, formatRuHour } from './admin/updates-logic.js';   // UPDATE_DELIVERY_V1
 
 import { renderDashboard }    from './admin/views/dashboard.js?v=owndash2';
@@ -176,7 +180,27 @@ const CRUMBS = {
     // life of one page. The route itself is ALWAYS_ALLOWED in permissions.js,
     // so naming it here grants nothing new.
     updates:      ['Insights', 'Settings', 'Система'],
+    // SETTINGS_SPLIT_V1 — the two routes «Система» split into. Named here for
+    // exactly the reasons the line above records: isKnownView() reads CRUMBS at
+    // boot, so a route missing from it is bounced to the home screen on reload,
+    // and the tab would otherwise be labelled with the raw route id. Both are
+    // ALWAYS_ALLOWED in permissions.js, so naming them here grants nothing.
+    subscription:  ['Insights', 'Settings', 'Подписка'],
+    'clinic-data': ['Insights', 'Settings', 'Данные клиники'],
 };
+
+// SETTINGS_SPLIT_V1 — the routes that stay open through a full licence
+// lockout. 'activation' is where a locked clinic fixes its licence; 'updates'
+// because an update may be exactly what fixes it (its RPCs are READ_ONLY /
+// ALWAYS_ALLOWED server-side for that purpose); 'subscription' because a clinic
+// whose subscription lapsed must be able to read its own subscription state and
+// ask for a module; 'clinic-data' because a lapsed clinic must still be able to
+// save its data and a decommissioned one to erase itself — backup_create /
+// backup_restore / factory_reset are ALWAYS_ALLOWED server-side for precisely
+// that reason (server/services/control/gate.js). Before the split the last two
+// were reachable only because they were cards on 'updates'; the exemption
+// followed them rather than being quietly dropped.
+const LOCKOUT_EXEMPT = new Set(['activation', 'updates', 'subscription', 'clinic-data']);
 
 const PLACEHOLDERS = new Set([]);   // PHARMACY_V1 — pharmacy is now a real view
 
@@ -844,7 +868,11 @@ async function renderViewInner(viewRoot, viewName, ctx) {
     // so a licence-lapsed clinic can still receive and approve an update —
     // which may be exactly what fixes its own licensing situation. A screen
     // that then refused to even OPEN while locked would defeat that.
-    if (_lic.locked && viewName !== 'activation' && viewName !== 'updates') {
+    // SETTINGS_SPLIT_V1 — the list is LOCKOUT_EXEMPT (see its own comment):
+    // three of the four entries used to be one screen, and spelling them out
+    // inline twice in this function is how the second call site below drifted
+    // away from the first in the past.
+    if (_lic.locked && !LOCKOUT_EXEMPT.has(viewName)) {
         await renderActivation(viewRoot, _lic);
         return;
     }
@@ -867,7 +895,11 @@ async function renderViewInner(viewRoot, viewName, ctx) {
     // and render it through renderLockedModule() — which has no
     // LICENSED_MODULES entry for 'updates' (it is core, not sold separately)
     // and would show the wrong screen entirely ("Модуль не подключён").
-    if (viewName !== 'updates' && !isLicensed(viewName)) {
+    // SETTINGS_SPLIT_V1 — same list as the branch above, and it MUST be the
+    // same one: 'subscription' and 'clinic-data' have no LICENSED_MODULES entry
+    // either, so a locked clinic reaching them would land on a sales screen
+    // with nothing to sell instead of on its own backups.
+    if (!LOCKOUT_EXEMPT.has(viewName) && !isLicensed(viewName)) {
         await renderLockedModule(viewRoot, viewName);
         return;
     }
@@ -934,10 +966,12 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'settings':      return void await renderSettingsHub(viewRoot, ctx);   // SETTINGS_HUB_V1
             case 'employees':     return void await renderEmployees(viewRoot, ctx);   // EMPLOYEE_EDITOR_V1 — Сотрудники
             case 'documents-settings': return void await renderDocumentsSettings(viewRoot, ctx);   // DOCUMENTS_SETTINGS_V1
-            // SUBSCRIPTION_SUBROUTE_V1 — ctx passed on purpose: it carries
-            // payload.sub, which is how the «Подписка» tile asks this screen to
-            // arrive on its subscription card ('#updates/subscription').
+            // SETTINGS_SPLIT_V1 — ctx passed on purpose: it still carries
+            // payload.sub, which is how the retired '#updates/subscription'
+            // deep link is recognised and handed to the subscription screen.
             case 'updates':       return void await renderUpdates(viewRoot, ctx);   // UPDATE_DELIVERY_V1 — reachable from the banner + Settings; readable by anyone, actions gate themselves inside the view
+            case 'subscription':  return void await renderSubscription(viewRoot, ctx);   // SETTINGS_SPLIT_V1 — подписка и модули
+            case 'clinic-data':   return void await renderClinicData(viewRoot, ctx);     // SETTINGS_SPLIT_V1 — резервные копии и опасная зона
         }
         // Settings drilldown:  settings:<section_key>
         if (state.view.startsWith('settings:')) {

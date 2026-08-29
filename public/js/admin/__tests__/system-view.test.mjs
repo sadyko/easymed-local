@@ -1,10 +1,17 @@
 // SYSTEM_SETTINGS_V1 (docs/plans/2026-08-23-system-settings.md, Task 3) — the
 // three cards that grew Settings → «Система» out of the updates screen:
 // activation & subscription (views/system-subscription.js), backups
-// (views/system-backups.js) and the danger zone (views/system-danger.js),
-// rendered through the page owner views/updates.js.
+// (views/system-backups.js) and the danger zone (views/system-danger.js).
 //
-// Covers: all four cards render for an admin; a non-admin sees ZERO buttons
+// SETTINGS_SPLIT_V1 (2026-08-29) re-addressed them without rewriting them: the
+// subscription card is now rendered by views/subscription.js and the other two
+// by views/clinic-data.js, so every test below mounts its own screen instead of
+// the one page they all used to share. The assertions themselves are unchanged
+// on purpose — an untouched card must keep behaving identically after a move,
+// and a test that had to be re-taught its own contract would be evidence the
+// move was not a move.
+//
+// Covers: all four cards still render for an admin, one screen each; a non-admin sees ZERO buttons
 // page-wide (the updates screen's own rule, extended) and never even calls
 // the admin-gated backup_list; the extended licence fields render and their
 // ABSENCE renders an em-dash (the server side is built in parallel and may
@@ -121,6 +128,12 @@ globalThis.fetch = async (url, opts) => {
 };
 
 const { renderUpdates } = await import('../views/updates.js');
+// SETTINGS_SPLIT_V1 — the three cards below no longer sit on the updates page;
+// each test renders the screen that actually owns its card now. The CARDS were
+// not touched by the split, which is exactly what these assertions still prove:
+// same DOM, same RPC contracts, new address.
+const { renderSubscription } = await import('../views/subscription.js');
+const { renderClinicData } = await import('../views/clinic-data.js');
 const { setLicence } = await import('../licence.js');
 
 function setUser(u) { globalThis.window.easymed.state.user = u; }
@@ -141,23 +154,28 @@ test.beforeEach(() => {
   document.body.children.length = 0;   // модалки и оверлеи прошлых тестов не должны утекать в следующий
 });
 
-// --- страница из четырёх карточек ---------------------------------------------
+// --- три экрана вместо одной страницы из четырёх карточек ----------------------
 
-test('админ видит все четыре карточки: обновления, активация и подписка, резервные копии, опасная зона', async () => {
-  const root = mk('div');
-  await renderUpdates(root);
-  const text = textOf(root);
-  assert.match(text, /Система/, 'заголовок страницы — «Система»');
-  assert.match(text, /У вас последняя версия/, 'карточка обновлений живёт как раньше');
-  assert.match(text, /Активация и подписка/);
-  assert.match(text, /Резервные копии/);
-  assert.match(text, /Опасная зона/);
+test('SETTINGS_SPLIT_V1: все четыре карточки живы — каждая на своём экране, ни одна не пропала', async () => {
+  const sys = mk('div');
+  await renderUpdates(sys);
+  assert.match(textOf(sys), /Система/, 'заголовок экрана обновлений — «Система»');
+  assert.match(textOf(sys), /У вас последняя версия/, 'карточка обновлений живёт как раньше');
+
+  const sub = mk('div');
+  await renderSubscription(sub);
+  assert.match(textOf(sub), /Активация и подписка/, 'та же карточка подписки, только на своём экране');
+
+  const data = mk('div');
+  await renderClinicData(data);
+  assert.match(textOf(data), /Резервные копии/, 'копии никуда не делись');
+  assert.match(textOf(data), /Опасная зона/, 'опасная зона никуда не делась');
 });
 
-test('неадмин: НИ ОДНОЙ кнопки на всей странице, опасной зоны нет вовсе, backup_list даже не вызывается', async () => {
+test('неадмин на «Данных клиники»: НИ ОДНОЙ кнопки, опасной зоны нет вовсе, backup_list даже не вызывается', async () => {
   setUser(REGISTRAR);
   const root = mk('div');
-  await renderUpdates(root);
+  await renderClinicData(root);
   assert.deepEqual(findAllButtons(root), [], 'у не-администратора не должно быть ни одной кнопки');
   assert.doesNotMatch(textOf(root), /Опасная зона/, 'красная карточка — чистая угроза для того, кто не может её нажать');
   assert.equal(backupListCalls, 0, 'backup_list закрыт на сервере для не-админа — гарантированный 403 незачем провоцировать');
@@ -168,7 +186,7 @@ test('неадмин: НИ ОДНОЙ кнопки на всей страниц�
 
 test('карточка подписки показывает клинику, ID, срок и последнюю связь из licence_status', async () => {
   const root = mk('div');
-  await renderUpdates(root);
+  await renderSubscription(root);
   const text = textOf(root);
   assert.match(text, /Нурафшон Мед/);
   assert.match(text, /c-000051/);
@@ -180,7 +198,7 @@ test('карточка подписки показывает клинику, ID,
 test('расширенные поля ещё не приехали (сервер строится параллельно) — тире, а не undefined', async () => {
   setLicence({ state: 'ok', locked: false, reason: null, days_left: 0, modules: [] });
   const root = mk('div');
-  await renderUpdates(root);
+  await renderSubscription(root);
   const text = textOf(root);
   assert.match(text, /—/, 'em-dash должен присутствовать');
   assert.doesNotMatch(text, /undefined/);
@@ -190,7 +208,7 @@ test('расширенные поля ещё не приехали (сервер
 test('«Запросить» отправляет module_request с ключом модуля; двойной клик — один вызов', async () => {
   setLicence({ ...ENROLLED_LIC, modules: [] });
   const root = mk('div');
-  await renderUpdates(root);
+  await renderSubscription(root);
   const btn = findButtonByText(root, /Запросить/);
   assert.ok(btn, 'невключённый модуль должен предлагать «Запросить»');
   btn.click();
@@ -203,7 +221,7 @@ test('«Запросить» отправляет module_request с ключом
 
 test('включённый модуль показывает «Подключён», а не кнопку запроса', async () => {
   const root = mk('div');   // ENROLLED_LIC: crm включён, telegram нет
-  await renderUpdates(root);
+  await renderSubscription(root);
   assert.match(textOf(root), /Подключён/);
   assert.match(textOf(root), /CRM и call-центр/);
   assert.match(textOf(root), /Telegram-бот для пациентов/);
@@ -212,7 +230,7 @@ test('включённый модуль показывает «Подключё�
 test('ввод EM-кода появляется ТОЛЬКО когда licence_status говорит not_enrolled, и шлёт код как набран', async () => {
   setLicence({ state: 'locked', locked: true, reason: 'not_enrolled', days_left: 0, modules: [] });
   const root = mk('div');
-  await renderUpdates(root);
+  await renderSubscription(root);
   const input = walk(root).find((n) => n.tagName === 'INPUT' && n.attrs.placeholder === 'EM-XXXX-XXXX');
   assert.ok(input, 'поле EM-кода должно быть');
   input.value = ' em-7k4q-9xzp ';
@@ -225,7 +243,7 @@ test('ввод EM-кода появляется ТОЛЬКО когда licence_
 
 test('зарегистрированная клиника поля EM-кода не видит', async () => {
   const root = mk('div');
-  await renderUpdates(root);
+  await renderSubscription(root);
   const emInput = walk(root).find((n) => n.tagName === 'INPUT' && n.attrs.placeholder === 'EM-XXXX-XXXX');
   assert.equal(emInput, undefined, 'уже привязана — повторный ввод заработал бы только already_enrolled');
 });
@@ -234,7 +252,7 @@ test('зарегистрированная клиника поля EM-кода �
 
 test('таблица копий: дата, человеческий тип, размер — новые сверху', async () => {
   const root = mk('div');
-  await renderUpdates(root);
+  await renderClinicData(root);
   const text = textOf(root);
   assert.match(text, /ручная/);
   assert.match(text, /ежедневная/);
@@ -247,7 +265,7 @@ test('таблица копий: дата, человеческий тип, ра
 
 test('«Создать копию сейчас» вызывает backup_create и перечитывает список', async () => {
   const root = mk('div');
-  await renderUpdates(root);
+  await renderClinicData(root);
   const listCallsBefore = backupListCalls;
   findButtonByText(root, /Создать копию сейчас/).click();
   await new Promise((r) => setTimeout(r, 20));
@@ -258,7 +276,7 @@ test('«Создать копию сейчас» вызывает backup_create 
 
 test('модалка восстановления: без пароля RPC не уходит; с паролем уходит ровно {name, password}; на restarting поднимается оверлей', async () => {
   const root = mk('div');
-  await renderUpdates(root);
+  await renderClinicData(root);
   findButtonByText(root, /Восстановить/).click();
   const modal = findByClass(document.body, 'modal');
   assert.ok(modal, 'модалка должна смонтироваться на body');
@@ -284,7 +302,7 @@ test('модалка восстановления: без пароля RPC не 
 test('неверный пароль при восстановлении: показан ИМЕННО ответ сервера, кнопка снова активна', async () => {
   restoreRespond = () => jsonErr({ message: 'Пароль неверный.' }, 403);
   const root = mk('div');
-  await renderUpdates(root);
+  await renderClinicData(root);
   findButtonByText(root, /Восстановить/).click();
   const modal = findByClass(document.body, 'modal');
   findInputByType(modal, 'password').value = 'wrong';
@@ -301,7 +319,7 @@ test('неверный пароль при восстановлении: пок�
 
 test('сброс: кнопка мертва до «УДАЛИТЬ»+пароля, уходит точный контракт с wipe_backups=false по умолчанию', async () => {
   const root = mk('div');
-  await renderUpdates(root);
+  await renderClinicData(root);
   findButtonByText(root, /Удалить все данные клиники/).click();
   const modal = findByClass(document.body, 'modal');
   assert.ok(modal);
@@ -331,7 +349,7 @@ test('сброс: кнопка мертва до «УДАЛИТЬ»+пароля
 
 test('галочка «также удалить все резервные копии» отправляет wipe_backups=true', async () => {
   const root = mk('div');
-  await renderUpdates(root);
+  await renderClinicData(root);
   findButtonByText(root, /Удалить все данные клиники/).click();
   const modal = findByClass(document.body, 'modal');
   const chk = findInputByType(modal, 'checkbox');
