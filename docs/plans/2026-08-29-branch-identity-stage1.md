@@ -888,3 +888,40 @@ git push origin main
 **Deliberately out of scope**, and why: field-level conflict resolution, the append-only money model, and patient matching all belong to later stages. Building them now would mean writing merge rules before a single branch key has been exchanged in a real clinic.
 
 **One thing that looks like scope creep but is not:** lettered MRNs (Task 1) move no clinical data, yet they must land in this stage. A patient created at a secondary branch *before* the letter exists would be numbered as if it were the main branch, and that number is already printed by the time Stage 2 arrives to fix it.
+
+---
+
+## Added during execution: the `already_numbered` dead end, and its way out
+
+Task 3 refuses to adopt a branch letter when this install has already MINTED
+patient numbers under its own letter. That refusal is correct — those numbers are
+printed on cards, migration 080 forbids renumbering them, and leaving them as
+`A-…` while the real branch A goes on minting its own `A-…` for different people
+is exactly the collision the letter exists to prevent.
+
+But as shipped the refusal is **terminal**. A building that ran the system
+standalone for a week and then activates as branch C is stuck between "cannot
+renumber" and "fresh install, discard the week". That is not an acceptable answer
+to give an owner, so Task 6 must carry the way out.
+
+**A consented one-time renumber at adoption is safe here, and only here.** The
+letter has just been issued to this install and the ledger guarantees single
+issue, so moving numbers OUT of a namespace this install never owned and INTO one
+it now owns exclusively cannot collide with anything, fleet-wide. Two facts
+verified during Task 3 make it cheap rather than sprawling: **no table stores a
+copy of `mrn`** — every consumer reads it through a join — so it is one UPDATE,
+not a fan-out; and Stage 1 syncs no patients, so no other install has yet seen
+the numbers being changed.
+
+What it requires, and why it is work rather than a one-liner:
+
+- a column for the superseded number (`patients.mrn_previous`), included in
+  patient search, so someone presenting last week's card is still found;
+- the UPDATE inside the SAME transaction as the adoption;
+- consent that names the count — «52 номера пациентов изменятся с A- на C-;
+  эти карты нужно перепечатать» — because the cost is real and local, and the
+  owner is the one who pays it.
+
+`reason: 'already_numbered'` is the hook for that screen. **The activation flow
+should not ship without it**, because until it exists the honest text is a dead
+end.
