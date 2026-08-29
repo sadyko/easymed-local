@@ -13,7 +13,6 @@
 import { supabase } from '../../supabase.js';
 import { gw } from '../gateway.js';   // CUSTOM_CLINIC_V3
 import { currentClinicId } from '../tenant-tables.js';   // OPENING_STOCK_IMPORT_V1
-import { tr } from '../i18n.js';   // BRANCH_IDENTITY_V1
 
 // SERVICE_GROUP_ROUTING_V1 — the «Раздел» classifier. Its value maps to
 // services.type, which routes the service: lab -> #labs, procedure ->
@@ -467,7 +466,16 @@ const IMPORT_CONFIGS = {
             // main branch mints A-26-00042 and a secondary mints C-26-00042. The
             // hint names the shape rather than a letter, because the same template
             // is downloaded on every branch's PC.
-            { key: 'mrn',                hint: tr('Leave blank — assigned automatically: branch letter, year, number (e.g. A-26-00042).') },
+            //
+            // Bare literal, NOT tr(), and deliberately: none of the sixteen hints
+            // in this file is in STRINGS, so wrapping only this one would make the
+            // downloaded template fifteen English hints plus one Russian. These
+            // strings are also baked into the .xlsx as header-cell comments from a
+            // module-level const, so a tr() here would resolve once at import and
+            // ignore a later language switch. Translating the template is a real
+            // change — all sixteen, evaluated when the file is built — not a
+            // drive-by on the one line that had the wrong format in it.
+            { key: 'mrn',                hint: 'Leave blank — assigned automatically: branch letter, year, number (e.g. A-26-00042).' },
             { key: 'active',             coerce: 'bool', defaultBool: true, hint: 'true / false (default true)' },
         ],
         // Schema requires full_name NOT NULL; synthesize it from the name

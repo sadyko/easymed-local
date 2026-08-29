@@ -24,6 +24,69 @@ test('this install knows which branch it is, and starts as the main branch', () 
   assert.equal(me.role, 'main');
 });
 
+// The rule letters.js (Task 2) implements, mirrored here so this file can pin
+// the ledger's INTENT without waiting for that module to exist: the next letter
+// is the highest ISSUED one plus one, then walk forward past anything present
+// at all. 'A' -> 'B', 'Z' -> 'AA', 'AZ' -> 'BA'.
+const bump = (s) => {
+  const c = s.split('');
+  for (let i = c.length - 1; ; i--) {
+    if (c[i] !== 'Z') { c[i] = String.fromCharCode(c[i].charCodeAt(0) + 1); return c.join(''); }
+    c[i] = 'A';
+    if (i === 0) return 'A' + c.join('');
+  }
+};
+function nextLetter(db) {
+  const highestIssued = db.prepare("SELECT MAX(letter) m FROM branch_letters_spent WHERE kind = 'issue'").get().m;
+  const present = new Set(db.prepare('SELECT letter FROM branch_letters_spent').all().map((r) => r.letter));
+  let cand = bump(highestIssued);
+  while (present.has(cand)) cand = bump(cand);
+  return cand;
+}
+
+test("'P' is burned, not issued: unusable as a branch letter, and it does not push the next branch past B", () => {
+  const db = freshDb();
+  // DO NOT DELETE THE 'P' ROW. If a frozen test elsewhere starts failing, this
+  // is the test that says why the row is here — read it before touching the
+  // seed. 'P' is the prefix ~70 000 legacy MRNs already carry (002 and 034
+  // minted 'P-YY-NNNNN' for years). A branch lettered P would be a separate
+  // database with no legacy rows, so it would start at P-26-00001 and climb
+  // through numbers the main branch printed years ago; Stage 2 matches patients
+  // on natural: ['mrn'], so two unrelated people would merge into one record.
+  //
+  // The reason it is kind='burn' and not kind='issue' is this test's second
+  // half. 'issue' means "handed to a real branch" and drives what comes next;
+  // 'burn' means "never a branch and never allowed to be one". Seeded as
+  // 'issue', 'P' would be the highest issued letter and the clinic's SECOND
+  // branch would be lettered Q, skipping B through O — and the obvious fix for
+  // THAT is deleting this row, which silently undoes the collision guard.
+  assert.equal(nextLetter(db), 'B',
+    "the second branch must be B: 'P' is burned, not issued, so it must not drag the allocator up to Q");
+
+  const p = db.prepare("SELECT kind FROM branch_letters_spent WHERE letter = 'P'").get();
+  assert.equal(p.kind, 'burn', "'P' must never be marked issued — see the comment above, it is the legacy MRN prefix");
+
+  // …and it is still unusable: present in the ledger, so the walk-forward skips
+  // it when allocation eventually reaches that far.
+  db.prepare("INSERT INTO branch_letters_spent (letter, kind) VALUES ('O','issue')").run();
+  assert.equal(nextLetter(db), 'Q', "allocation must step over the burned 'P', not through it");
+});
+
+test("a letter that is not plain A-Z is rejected by both tables that store one", () => {
+  const db = freshDb();
+  for (const bad of ['', 'a', '1', 'Ab', 'aB', 'A1', 'A-']) {
+    assert.throws(() => db.prepare('UPDATE branch_identity SET letter = ? WHERE id = 1').run(bad),
+      /CHECK constraint failed/, 'branch_identity.letter ' + JSON.stringify(bad));
+    assert.throws(() => db.prepare('INSERT INTO branch_letters_spent (letter) VALUES (?)').run(bad),
+      /CHECK constraint failed/, 'branch_letters_spent.letter ' + JSON.stringify(bad));
+  }
+  // branch_letters_spent is the table letters.js reads to decide the next
+  // letter, so a junk row there is a junk MRN prefix on a whole branch.
+  db.prepare("INSERT INTO branch_letters_spent (letter) VALUES ('AA')").run();
+  assert.equal(db.prepare("SELECT kind FROM branch_letters_spent WHERE letter = 'AA'").get().kind, 'issue',
+    "kind defaults to 'issue' — a plain allocation should not have to name it");
+});
+
 test("'A' and 'P' are already spent, so letters.js can never hand either to a branch", () => {
   const db = freshDb();
   // The ledger, not branches.letter, is what makes reuse impossible: a deleted
@@ -37,8 +100,8 @@ test("'A' and 'P' are already spent, so letters.js can never hand either to a br
   // through numbers the main branch printed years ago. Stage 2 matches patients
   // on natural: ['mrn'], so two unrelated people would merge into one record.
   // The unanchored year predicate below cannot help: it only sees one database.
-  assert.deepEqual(db.prepare('SELECT letter FROM branch_letters_spent ORDER BY letter').all(),
-    [{ letter: 'A' }, { letter: 'P' }]);
+  assert.deepEqual(db.prepare('SELECT letter, kind FROM branch_letters_spent ORDER BY letter').all(),
+    [{ letter: 'A', kind: 'issue' }, { letter: 'P', kind: 'burn' }]);
 });
 
 test('a missing branch identity aborts the registration instead of minting a NULL MRN', () => {
@@ -55,13 +118,8 @@ test('a missing branch identity aborts the registration instead of minting a NUL
     'RAISE(ABORT) must roll the half-registered patient back, not leave it with mrn = NULL');
 });
 
-test('an unusable branch letter is rejected at the column, not discovered in an MRN', () => {
+test('the letter shapes letters.js really produces stay legal', () => {
   const db = freshDb();
-  for (const bad of ['', 'a', '1']) {
-    assert.throws(() => db.prepare('UPDATE branch_identity SET letter = ? WHERE id = 1').run(bad),
-      /CHECK constraint failed/, 'letter ' + JSON.stringify(bad) + ' must not be storable');
-  }
-  // …while the shapes letters.js really produces stay legal.
   for (const good of ['B', 'Z', 'AA', 'AB']) {
     db.prepare('UPDATE branch_identity SET letter = ? WHERE id = 1').run(good);
     assert.equal(db.prepare('SELECT letter FROM branch_identity WHERE id = 1').get().letter, good);

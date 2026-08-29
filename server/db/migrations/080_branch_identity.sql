@@ -40,13 +40,15 @@ CREATE UNIQUE INDEX branches_letter_uniq ON branches(letter);
 -- exists to stop. identity.js (Task 3) is the only writer of either column and
 -- sets both in one transaction.
 --
--- CHECK: a letter must at least start with A-Z. The point is not to police the
--- format — it is that '' and lowercase are the shapes an empty form field or a
--- hand-edited row actually produces, and either one would put a nonsense
--- prefix on every MRN the clinic prints from then on.
+-- CHECK: a letter is plain A-Z, one or more characters, nothing else. '' and
+-- lowercase are what an empty form field or a hand-edited row actually
+-- produces, and 'A1' or 'A-' are what a half-finished paste produces; any of
+-- them would put a nonsense prefix on every MRN the clinic prints from then on.
+-- The second clause is what rejects the mixed shapes: GLOB '[A-Z]*' alone only
+-- constrains the FIRST character, so 'Ab' would pass it.
 CREATE TABLE branch_identity (
   id         INTEGER PRIMARY KEY CHECK (id = 1),
-  letter     TEXT NOT NULL CHECK (letter GLOB '[A-Z]*'),
+  letter     TEXT NOT NULL CHECK (letter GLOB '[A-Z]*' AND letter NOT GLOB '*[^A-Z]*'),
   role       TEXT NOT NULL DEFAULT 'main' CHECK (role IN ('main','secondary')),
   branch_id  INTEGER REFERENCES branches(id),
   -- Written by identity.js (Task 3) on every identity change — becomeSecondary
@@ -78,6 +80,20 @@ INSERT INTO branch_identity (id, letter, role, branch_id) VALUES (1, 'A', 'main'
 -- file that records 'P' as burned. A list in letters.js would be a second copy
 -- of that knowledge, free to drift.
 --
+-- Hence `kind`, which is NOT bookkeeping — without it the fix above breaks the
+-- thing it was added to protect:
+--
+--   'issue' = handed to a real branch; drives what comes next.
+--   'burn'  = never a branch and never allowed to be one (the legacy 'P-'
+--             prefix, and anything else later found to be already in use).
+--
+-- letters.js takes the next letter from the highest ISSUED row, then walks
+-- forward past anything present at all. Seed 'P' without the distinction and it
+-- becomes the highest letter in a one-branch clinic, so the SECOND branch is
+-- lettered Q, skipping B through O — and the obvious fix for that is deleting
+-- the 'P' row, which silently undoes the collision guard this table exists for.
+-- A guard whose failure mode invites its own removal is worse than no guard.
+--
 -- 'P' is the only letter poisoned this way: it is the only MRN prefix this
 -- codebase has ever GENERATED (grep the migrations — 002, 034 and this file are
 -- the only 'P-' literals). The Excel importer does accept arbitrary MRN text,
@@ -86,10 +102,14 @@ INSERT INTO branch_identity (id, letter, role, branch_id) VALUES (1, 'A', 'main'
 -- it belongs at allocation time in letters.js: before issuing a letter, refuse
 -- one that any existing patients.mrn already uses.
 CREATE TABLE branch_letters_spent (
-  letter     TEXT PRIMARY KEY,
+  -- Same shape rule as branch_identity.letter above, and it matters more here:
+  -- this is the table letters.js READS to decide the next letter, so a junk row
+  -- becomes a junk MRN prefix on a whole branch.
+  letter     TEXT PRIMARY KEY CHECK (letter GLOB '[A-Z]*' AND letter NOT GLOB '*[^A-Z]*'),
+  kind       TEXT NOT NULL DEFAULT 'issue' CHECK (kind IN ('issue','burn')),
   issued_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
-INSERT INTO branch_letters_spent (letter) VALUES ('A'), ('P');
+INSERT INTO branch_letters_spent (letter, kind) VALUES ('A','issue'), ('P','burn');
 
 -- MRN autogen, now branch-aware.
 --
