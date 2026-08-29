@@ -39,8 +39,9 @@ test('a letter is never reused, even when its branch is gone', () => {
   // frees nothing: its letter prefixes MRNs printed on cards patients still
   // carry and quoted on invoices already issued. Hand B out a second time and
   // two different people carry the same number years apart — and nothing flags
-  // it, because the numbers are simply equal. Stage 2 matches patients on
-  // natural: ['mrn'], so the two would silently merge into one medical record.
+  // it, because the numbers are simply equal. That is the fleet-wide rule 080
+  // states once, just above branch_letters_spent; the consequence is written
+  // out there.
   assert.equal(nextLetter(['A', 'B', 'C'], ['A', 'B', 'C']), 'D', 'not B, even if B was deleted');
 });
 

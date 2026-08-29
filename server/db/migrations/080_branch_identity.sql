@@ -79,6 +79,33 @@ CREATE TABLE branch_identity (
 );
 INSERT INTO branch_identity (id, letter, role, branch_id) VALUES (1, 'A', 'main', 1);
 
+-- THE ONE RULE EVERYTHING IN THIS MIGRATION DEFENDS, stated here and nowhere
+-- else:
+--
+--   NO TWO PEOPLE ANYWHERE IN THE CLINIC'S FLEET OF INSTALLS MAY EVER HOLD THE
+--   SAME MRN.
+--
+-- Not "should not" — the failure is SILENT. Two installs minting the same string
+-- raises nothing anywhere, because the numbers are simply equal; the damage
+-- lands later, when Stage 2 has to decide whether a row arriving from another
+-- branch is a patient this database already has, and files two people as one. A
+-- merged medical record is one person's allergies on another person's chart.
+--
+-- BY WHICH KEY Stage 2 will decide that is NOT settled yet, and this paragraph
+-- is where it gets settled when it is. Today there is no patient matcher at all:
+-- Stage 1 syncs the catalogue only, and catalogue.js adopts a catalogue row by
+-- natural: ['code','name'] — matching on VALUES, because ids are minted
+-- independently in every install (079). The design carries that vocabulary over
+-- to patients as natural: ['mrn'], which is why patients.mrn is the value this
+-- whole scheme namespaces:
+-- docs/plans/2026-08-29-branch-architecture-stage2-design.md.
+--
+-- If Stage 2 lands somewhere else — (letter, mrn), or a fuzzy match on name and
+-- birth date — CHANGE THIS PARAGRAPH AND NOTHING ELSE. letters.js, identity.js
+-- and both of their test files point here rather than restating it, so their
+-- guards keep their reason either way: a letter reused, burned or abandoned
+-- still puts one number on two people, whatever the matcher does with it after.
+
 -- Every letter ever issued. branches.letter alone cannot carry this: deleting a
 -- branch would delete its letter and the next allocation would hand it out
 -- again, giving two different people the same MRN years apart. Used by
@@ -92,8 +119,8 @@ INSERT INTO branch_identity (id, letter, role, branch_id) VALUES (1, 'A', 'main'
 --   034 minted 'P-YY-NNNNN' for years; a live clinic holds ~70 000 of them).
 --   That branch is a SEPARATE database with no legacy rows, so its allocator
 --   would start at P-26-00001 and climb straight through numbers the main
---   branch printed years ago. Stage 2 matches patients on natural: ['mrn'], so
---   two unrelated people would silently merge into one record.
+--   branch printed years ago — one number on two people, which is the rule
+--   above.
 --
 -- It is seeded here rather than skip-listed in letters.js because this is where
 -- the reason lives: the same file that changed the prefix away from 'P' is the

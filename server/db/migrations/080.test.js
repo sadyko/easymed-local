@@ -56,8 +56,9 @@ test("'P' is burned, not issued: unusable as a branch letter, and it does not pu
   // seed. 'P' is the prefix ~70 000 legacy MRNs already carry (002 and 034
   // minted 'P-YY-NNNNN' for years). A branch lettered P would be a separate
   // database with no legacy rows, so it would start at P-26-00001 and climb
-  // through numbers the main branch printed years ago; Stage 2 matches patients
-  // on natural: ['mrn'], so two unrelated people would merge into one record.
+  // through numbers the main branch printed years ago — one number on two
+  // people, which is the fleet-wide rule 080 states once, just above
+  // branch_letters_spent.
   //
   // The reason it is kind='burn' and not kind='issue' is this test's second
   // half. 'issue' means "handed to a real branch" and drives what comes next;
@@ -102,9 +103,9 @@ test("'A' and 'P' are already spent, so letters.js can never hand either to a br
   // A, B, C ... so the SIXTEENTH branch would be lettered P — the prefix every
   // legacy MRN already carries. That branch is a different database with no
   // legacy rows, so its allocator would start at P-26-00001 and climb straight
-  // through numbers the main branch printed years ago. Stage 2 matches patients
-  // on natural: ['mrn'], so two unrelated people would merge into one record.
-  // The unanchored year predicate below cannot help: it only sees one database.
+  // through numbers the main branch printed years ago — one number on two
+  // people, the rule 080 states just above branch_letters_spent. The unanchored
+  // year predicate below cannot help: it only sees one database.
   assert.deepEqual(db.prepare('SELECT letter, kind FROM branch_letters_spent ORDER BY letter').all(),
     [{ letter: 'A', kind: 'issue' }, { letter: 'P', kind: 'burn' }]);
 });

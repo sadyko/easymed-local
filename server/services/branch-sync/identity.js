@@ -2,7 +2,26 @@
 //
 // Read from the database rather than data/branch-sync.json because the MRN
 // trigger (migration 080) needs the letter and a trigger cannot read a file.
-// The file keeps what only JavaScript reads: addresses, secrets, keys.
+// The file keeps what only JavaScript reads: addresses, secrets, keys — and
+// `role`, which is the one field BOTH stores hold.
+//
+// THAT SECOND COPY IS REAL AND NOTHING SYNCHRONISES IT, so read this before
+// writing a caller. pairing.js owns the file's copy: readPairing validates it,
+// makeMainKey refuses a paired secondary ('already_secondary'), pairWithKey
+// refuses a main ('already_main') and writes it. branch_identity.role is the
+// database's copy, guarded here, and the two never consult each other.
+//
+// The drift is reachable today. If becomeSecondary succeeds and the pairing
+// file is then not written — pairing.js has a real write_failed path — the file
+// says "not paired" while the database says secondary, so «Сделать главным» is
+// allowed and the install serves the catalogue as a main branch while minting
+// C- numbers as a secondary.
+//
+// Task 5 must therefore own BOTH writes in one activation and write the
+// DATABASE LAST, because the file is rewritable and this identity is not: fail
+// with the file written and the database untouched and the install is merely
+// unpaired with a stale file, which a retry fixes; fail the other way round and
+// a letter has been spent for an activation that never finished.
 //
 // This file ADOPTS a letter; it never allocates one. Allocation is letters.js,
 // and it happens on the MAIN branch, against the fleet's one ledger. A
@@ -12,6 +31,26 @@
 // arrives from outside, in the branch key the owner carries (Task 5).
 
 import { mrnPrefixInUse } from './letters.js';
+
+// Every refusal here carries a REASON CODE, and a caller must branch on that
+// rather than on the message.
+//
+// The shape is borrowed from pairing.js, the module Task 5 activates alongside
+// this one: it answers { ok: false, reason: 'already_secondary' | 'bad_key' |
+// 'write_failed' } and never throws in 28 KB, leaving the wording to the UI.
+// This file throws because its contract does — but the wording decision is the
+// same one, and it goes the same way.
+//
+// The English message is DIAGNOSTIC: for the log, and for whoever is reading
+// this code. It is NOT what the owner reads. rpc.js and db.js put e.message
+// straight into the HTTP response and this clinic's UI is Russian, so a message
+// surfaced verbatim would be a wall of English at the worst moment of an
+// activation. The Russian sentence belongs in i18n-strings.js, keyed by code.
+function refusal(reason, message) {
+  const e = new Error(message);
+  e.reason = reason;
+  return e;
+}
 
 // A branch letter is plain A-Z, and all three tables that store one (080) say
 // so in a CHECK. Reaching those CHECKs is the wrong way to find out: this value
@@ -26,15 +65,22 @@ import { mrnPrefixInUse } from './letters.js';
 // pixel-identical to Latin 'C'. It survives toUpperCase and fails here, which
 // is the right answer — adopted, it would put a character nobody can type into
 // a search box on every number this branch ever prints.
+//
+// Which is exactly why the shape is tested BEFORE the fold and not after.
+// Upper-casing can MANUFACTURE a letter that was never A-Z: 'ß' folds to 'SS',
+// 'ﬁ' to 'FI', 'ı' to 'I'. Test the folded value and all three are accepted as
+// branch letters — the same look-alike this guard exists to refuse, arriving
+// through the normaliser instead of past it.
 function normalizeLetter(value) {
-  const letter = String(value == null ? '' : value).trim().toUpperCase();
-  if (!/^[A-Z]+$/.test(letter)) {
-    throw new Error(
+  const raw = String(value == null ? '' : value).trim();
+  if (!/^[A-Za-z]+$/.test(raw)) {
+    throw refusal(
+      'bad_letter',
       'A branch letter is one or more plain A-Z characters, and this is not one: '
       + JSON.stringify(value) + '. Check the branch key was pasted whole.',
     );
   }
-  return letter;
+  return raw.toUpperCase();
 }
 
 /**
@@ -50,7 +96,7 @@ function normalizeLetter(value) {
  */
 export function readIdentity(db) {
   const row = db.prepare('SELECT letter, role, branch_id FROM branch_identity WHERE id = 1').get();
-  if (!row) throw new Error('branch identity missing');
+  if (!row) throw refusal('identity_missing', 'branch identity missing');
   return { letter: row.letter, role: row.role, branch_id: row.branch_id };
 }
 
@@ -65,6 +111,9 @@ export function readIdentity(db) {
  * handed to patients.
  *
  * @returns {{letter: string, role: string, branch_id: number}} the new identity
+ * @throws {Error} with `reason` — bad_letter | identity_missing |
+ *   already_secondary | already_numbered | letter_spent | letter_in_mrns |
+ *   letter_on_branch. Branch on `reason`; `message` is for the log.
  */
 export function becomeSecondary(db, { letter, name } = {}) {
   // Shape first, outside the transaction: a mistyped key never takes a write
@@ -96,8 +145,24 @@ export function becomeSecondary(db, { letter, name } = {}) {
     // would mean abandoning a letter under which this branch has already
     // printed numbers, which is the same collision as the guard below. A branch
     // that must be re-pointed at a different clinic gets a fresh install.
+    //
+    // But re-adopting the letter this install ALREADY holds is a NO-OP, not a
+    // refusal, and that distinction is the whole of activation's retryability.
+    // Task 5 writes this identity and then the pairing file, and pairing.js has
+    // a real write_failed path; when it fires the owner presses the button
+    // again. Refusing then would leave the install half-activated — database
+    // secondary, file unpaired — with no route forward but a fresh install that
+    // discards the clinic's database. The roster row and the ledger entry a
+    // second call would write are already here and already ours, so there is
+    // nothing to do and nothing to undo. (The letter IS the identity; a `name`
+    // that differs on the retry is not applied — renaming a branch is the
+    // roster's job, not activation's.)
     if (me.role === 'secondary') {
-      throw new Error('This install is already branch ' + me.letter + ' and cannot change identity.');
+      if (me.letter === adopted) return me;
+      throw refusal(
+        'already_secondary',
+        'This install is already branch ' + me.letter + ' and cannot change identity.',
+      );
     }
 
     // A MAIN install that has already MINTED numbers may not be re-lettered,
@@ -107,9 +172,10 @@ export function becomeSecondary(db, { letter, name } = {}) {
     // cards patients carry. So an install that registered A-26-00042 and then
     // becomes branch C keeps that row forever, while letter A stays with the
     // main branch, which goes on minting A-26-000NN of its own. Two databases,
-    // one number, two different people — and Stage 2 matches patients on
-    // natural: ['mrn'], so it merges them into a single medical record. That is
-    // the exact failure the letter exists to prevent, reached from the other end.
+    // one number, two different people — which breaks the fleet-wide rule 080
+    // states once, in its branch_letters_spent block; read it there rather than
+    // a summary of it here. That is the exact failure the letter exists to
+    // prevent, reached from the other end.
     //
     // The ordinary path is untouched: a branch PC is installed, seeded main/A
     // by 080, and the key is pasted before anyone registers a patient. Nothing
@@ -129,7 +195,8 @@ export function becomeSecondary(db, { letter, name } = {}) {
     // not this collision — and nothing in these rows tells a copy from a fresh
     // install anyway.
     if (mrnPrefixInUse(db, me.letter)) {
-      throw new Error(
+      throw refusal(
+        'already_numbered',
         'This install has already registered patients under letter ' + me.letter
         + ', so it cannot become branch ' + adopted + '. Those numbers stay here and are already printed, '
         + 'while letter ' + me.letter + ' stays with the branch that owns it.',
@@ -155,7 +222,8 @@ export function becomeSecondary(db, { letter, name } = {}) {
     const spent = db.prepare('SELECT letter, kind FROM branch_letters_spent WHERE letter = ? COLLATE NOCASE')
       .get(adopted);
     if (spent) {
-      throw new Error(
+      throw refusal(
+        'letter_spent',
         'Letter ' + adopted + ' is already spent in this database (' + spent.kind + ') and cannot be adopted. '
         + 'A letter is spent once and never reissued.',
       );
@@ -168,20 +236,37 @@ export function becomeSecondary(db, { letter, name } = {}) {
     // are invisible to it. An Excel import HERE, from this building's previous
     // system, is precisely the row it cannot see, and adoption is the last
     // moment before this install starts minting into that series.
+    //
+    // A REFUSAL, not a burn, and that is the deliberate difference from
+    // letters.js, which RECORDS the same discovery (kind='burn') so the letter
+    // stays refused even after the offending rows are deleted. Both mrn checks
+    // here are derived from live rows and therefore forget: delete the imported
+    // patients and the letter becomes adoptable again. It has to be that way
+    // round. A burn belongs in the ledger the MAIN branch allocates from, and a
+    // secondary writing one into its own copy would file it where no allocator
+    // will ever read it — while leaving the main branch free to issue the same
+    // letter to somebody else tomorrow. What a secondary can do is refuse at
+    // the one moment the key can still be swapped, and say why, so the poisoned
+    // prefix travels back to the main branch as a fact a human acts on rather
+    // than as a burn nobody sees.
     if (mrnPrefixInUse(db, adopted)) {
-      throw new Error(
+      throw refusal(
+        'letter_in_mrns',
         'Letter ' + adopted + ' already prefixes patient numbers in this database (imported from an older '
         + 'system) and cannot be adopted — new numbers would land in a series that is already printed.',
       );
     }
 
-    // Said in words rather than left to branches_letter_uniq, because "UNIQUE
-    // constraint failed: branches.letter" is what the owner would otherwise
-    // read on the activation screen. The index stays, and stays NOCASE: it is
-    // what catches such a row arriving between this SELECT and the INSERT.
+    // Given a reason of its own rather than left to branches_letter_uniq. The
+    // index would still stop it, but it raises "UNIQUE constraint failed:
+    // branches.letter" — a string no caller can classify and no screen can
+    // translate, from a constraint that also fires for causes this refusal is
+    // not about. The index stays, and stays NOCASE: it is what catches such a
+    // row arriving between this SELECT and the INSERT.
     const held = db.prepare('SELECT id, name FROM branches WHERE letter = ? COLLATE NOCASE').get(adopted);
     if (held) {
-      throw new Error(
+      throw refusal(
+        'letter_on_branch',
         'Letter ' + adopted + ' is already on branch "' + held.name + '" in this database and cannot be adopted.',
       );
     }

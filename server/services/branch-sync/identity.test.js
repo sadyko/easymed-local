@@ -6,6 +6,12 @@ import { migrate } from '../../db/migrate.js';
 
 function freshDb() { const db = openDb(':memory:'); migrate(db); return db; }
 
+// Refusals are asserted by their `reason` CODE, not by their English message.
+// The code is the contract Task 5 branches on; the message is a log line, and
+// the sentence the owner reads is Russian and lives in i18n-strings.js. Pinning
+// the prose here would freeze the wrong half — the half that is meant to be
+// rewritten as the activation screen learns how to explain itself.
+
 test('a fresh install is the main branch, letter A', () => {
   const db = freshDb();
   assert.deepEqual(readIdentity(db), { letter: 'A', role: 'main', branch_id: 1 });
@@ -31,6 +37,33 @@ test('adopting a letter twice is refused - an install has ONE identity', () => {
   const db = freshDb();
   becomeSecondary(db, { letter: 'C', name: 'Чиланзар' });
   assert.throws(() => becomeSecondary(db, { letter: 'D', name: 'Другой' }), /already/i);
+});
+
+test('re-adopting the SAME letter is a no-op, so a half-failed activation can be retried', () => {
+  // Task 5 writes this identity and then the pairing file, and pairing.js has a
+  // real write_failed path. When it fires the owner presses the button again —
+  // and a second call that threw would leave the install half-activated
+  // (database secondary, file unpaired) with no route forward but a fresh
+  // install that discards the clinic's database.
+  const db = freshDb();
+  const first = becomeSecondary(db, { letter: 'C', name: 'Чиланзар' });
+  db.prepare("UPDATE branch_identity SET updated_at = '2000-01-01T00:00:00Z' WHERE id = 1").run();
+
+  assert.deepEqual(becomeSecondary(db, { letter: 'C', name: 'Чиланзар' }), first);
+  // …and it really is a NO-OP, not a second adoption: one roster row, one
+  // ledger row, and not even a fresh timestamp, because nothing changed.
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM branches WHERE letter='C'").get().n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM branch_letters_spent WHERE letter='C'").get().n, 1);
+  assert.equal(db.prepare('SELECT updated_at FROM branch_identity WHERE id = 1').get().updated_at,
+    '2000-01-01T00:00:00Z');
+
+  // The same identity spelled in lower case is still the same identity, so a
+  // retry survives a key that came back through a lower-casing tool.
+  assert.deepEqual(becomeSecondary(db, { letter: 'c' }), first);
+
+  // A DIFFERENT letter is still refused — the frozen test above, by its code.
+  assert.throws(() => becomeSecondary(db, { letter: 'D', name: 'Другой' }),
+    { reason: 'already_secondary' });
 });
 
 test('the roster keeps the main branch alongside us, and branch_id names OUR row', () => {
@@ -89,15 +122,15 @@ test('a letter already spent in this database is refused, never silently ignored
   const db = freshDb();
 
   assert.throws(() => becomeSecondary(db, { letter: 'A', name: 'Свой' }),
-    /already spent in this database \(issue\)/, "'A' is the main branch's own letter");
+    { reason: 'letter_spent', message: /\(issue\)/ }, "'A' is the main branch's own letter");
 
   assert.throws(() => becomeSecondary(db, { letter: 'P', name: 'Свой' }),
-    /already spent in this database \(burn\)/,
+    { reason: 'letter_spent', message: /\(burn\)/ },
     "'P' is the burned legacy MRN prefix — adopting it would mint into ~70 000 printed numbers");
 
   // A letter this install issued while it was still the main branch.
   db.prepare("INSERT INTO branch_letters_spent (letter, kind) VALUES ('B','issue')").run();
-  assert.throws(() => becomeSecondary(db, { letter: 'B', name: 'Свой' }), /already spent/i);
+  assert.throws(() => becomeSecondary(db, { letter: 'B', name: 'Свой' }), { reason: 'letter_spent' });
 
   // A restored backup or a hand-edited row can hold 'd'; the ledger's PRIMARY
   // KEY is BINARY, so only a NOCASE lookup sees it. Miss it and the refusal
@@ -106,7 +139,7 @@ test('a letter already spent in this database is refused, never silently ignored
   db.pragma('ignore_check_constraints = ON');
   db.prepare("INSERT INTO branch_letters_spent (letter, kind) VALUES ('d','issue')").run();
   db.pragma('ignore_check_constraints = OFF');
-  assert.throws(() => becomeSecondary(db, { letter: 'D', name: 'Свой' }), /already spent/i);
+  assert.throws(() => becomeSecondary(db, { letter: 'D', name: 'Свой' }), { reason: 'letter_spent' });
 
   assert.deepEqual(readIdentity(db), { letter: 'A', role: 'main', branch_id: 1 },
     'four refusals, and this install is still exactly what it was');
@@ -122,7 +155,7 @@ test('a letter that already prefixes patient numbers here is refused', () => {
     const db = freshDb();
     db.prepare('INSERT INTO patients (full_name, mrn) VALUES (?, ?)').run('Импорт', imported);
     assert.throws(() => becomeSecondary(db, { letter: 'C', name: 'Чиланзар' }),
-      /already prefixes patient numbers/,
+      { reason: 'letter_in_mrns' },
       `${imported} must block C — patients.mrn is indexed BINARY, so only a NOCASE check sees the lower-case one`);
   }
 });
@@ -132,13 +165,13 @@ test('a main install that has already numbered patients cannot be re-lettered', 
   // are printed on cards patients carry), so an install that registered
   // A-26-00042 and then became branch C would keep that row forever while
   // letter A stays with the main branch — which goes on minting A-26-000NN of
-  // its own. Two databases, one number, two different people; Stage 2 matches
-  // on natural: ['mrn'] and merges them into one medical record. That is the
-  // collision the letter exists to prevent, reached from the other end.
+  // its own. Two databases, one number, two different people — the fleet-wide
+  // rule 080 states once, just above branch_letters_spent. That is the collision
+  // the letter exists to prevent, reached from the other end.
   const db = freshDb();
   db.prepare("INSERT INTO patients (full_name) VALUES ('Свой пациент')").run();
   assert.throws(() => becomeSecondary(db, { letter: 'C', name: 'Чиланзар' }),
-    /already registered patients under letter A/);
+    { reason: 'already_numbered', message: /letter A/ });
   assert.deepEqual(readIdentity(db), { letter: 'A', role: 'main', branch_id: 1 },
     'and it stays the main branch');
 });
@@ -173,11 +206,18 @@ test('a letter that is not plain A-Z is refused before anything is written', () 
   // layout away when the owner types the key by hand. It survives toUpperCase,
   // so only the A-Z test catches it — adopted, it would put a character nobody
   // can type into a search box on every number this branch ever prints.
-  for (const bad of ['', '   ', 'C1', 'C-', 'A B', 'С', 'AB1', null, undefined, 7]) {
+  //
+  // 'ß', 'ﬁ' and 'ı' are the other direction, and the reason the shape is
+  // tested BEFORE the case fold rather than after: upper-casing them yields
+  // 'SS', 'FI' and 'I', so a check on the folded value would ACCEPT all three
+  // and letter a branch with a character that was never A-Z. Unreachable from
+  // a generated key, and the point is that the normaliser must not be the thing
+  // that manufactures a valid letter.
+  for (const bad of ['', '   ', 'C1', 'C-', 'A B', 'С', 'AB1', 'ß', 'ﬁ', 'ı', null, undefined, 7]) {
     assert.throws(() => becomeSecondary(db, { letter: bad, name: 'Чиланзар' }),
-      /plain A-Z characters/, 'letter ' + JSON.stringify(bad));
+      { reason: 'bad_letter' }, 'letter ' + JSON.stringify(bad));
   }
-  assert.throws(() => becomeSecondary(db), /plain A-Z characters/, 'and no options at all');
+  assert.throws(() => becomeSecondary(db), { reason: 'bad_letter' }, 'and no options at all');
   assert.deepEqual(readIdentity(db), { letter: 'A', role: 'main', branch_id: 1 });
   assert.equal(db.prepare('SELECT COUNT(*) n FROM branches').get().n, 1);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM branch_letters_spent').get().n, 2, "still just 'A' and 'P'");
@@ -212,15 +252,16 @@ test('a failure after the roster row takes the ledger row with it', () => {
   assert.deepEqual(readIdentity(db), { letter: 'A', role: 'main', branch_id: 1 });
 });
 
-test('a letter already on a branch row is refused in words, not by the index', () => {
+test('a letter already on a branch row gets its own code, not a bare UNIQUE error', () => {
   // The realistic source is the one 080 names: a restored backup or a
   // hand-edited row holding the letter while the ledger does not. The index
-  // would still stop it, but "UNIQUE constraint failed: branches.letter" is
-  // what the owner would then read on the activation screen.
+  // would still stop it, but it answers "UNIQUE constraint failed:
+  // branches.letter" — which no caller can classify and no screen can
+  // translate.
   const db = freshDb();
   db.prepare("INSERT INTO branches (name, letter) VALUES ('Из бэкапа', 'C')").run();
   assert.throws(() => becomeSecondary(db, { letter: 'C', name: 'Чиланзар' }),
-    /already on branch "Из бэкапа"/);
+    { reason: 'letter_on_branch', message: /Из бэкапа/ });
   assert.equal(db.prepare("SELECT COUNT(*) n FROM branch_letters_spent WHERE letter='C'").get().n, 0);
   assert.deepEqual(readIdentity(db), { letter: 'A', role: 'main', branch_id: 1 });
 });
@@ -232,6 +273,7 @@ test('a missing identity row is named, not dereferenced', () => {
   // identity.js instead of the missing row.
   const db = freshDb();
   db.prepare('DELETE FROM branch_identity WHERE id = 1').run();
-  assert.throws(() => readIdentity(db), /branch identity missing/);
-  assert.throws(() => becomeSecondary(db, { letter: 'C', name: 'Чиланзар' }), /branch identity missing/);
+  assert.throws(() => readIdentity(db), { reason: 'identity_missing', message: /branch identity missing/ });
+  assert.throws(() => becomeSecondary(db, { letter: 'C', name: 'Чиланзар' }),
+    { reason: 'identity_missing', message: /branch identity missing/ });
 });
