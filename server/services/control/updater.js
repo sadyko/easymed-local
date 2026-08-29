@@ -98,6 +98,10 @@ function controlStatePut(db, key, value) {
     .run(key, String(value));
 }
 
+function controlStateDel(db, key) {
+  db.prepare('DELETE FROM control_state WHERE key = ?').run(key);
+}
+
 function readJsonState(db, key) {
   const raw = controlStateGet(db, key);
   if (!raw) return null;
@@ -320,6 +324,11 @@ async function performTick(db, dataDir, {
   endpoint,
   publicKey,
   appRoot = DEFAULT_APP_ROOT,
+  // Injectable for the same reason staleAfterSwitch's is: readAppVersion()
+  // reads package.json off disk, so a test cannot describe an install other
+  // than the checkout it runs inside. (setAppVersion() sets a DIFFERENT value —
+  // config.js's — and using it here would silently never match.)
+  runningVersion = readAppVersion(),
   // Passed through to applyUpdate, which ends a successful install with
   // exit(75) so the launcher relaunches on the new version. Injectable for the
   // same reason scheduleUpdater's own exitImpl is: a test must be able to
@@ -339,6 +348,22 @@ async function performTick(db, dataDir, {
     // land here, identically — do nothing, forever, until an admin approves
     // THIS offer.
     if (!consentAppliesTo(offer, consent)) return;
+
+    // A consent for the version ALREADY RUNNING is spent — clear it.
+    //
+    // It survives a successful install (nothing deletes it on the way to
+    // exit 75), so the next boot found consent + a not-yet-cleared offer for
+    // the version now running, walked all the way to the staging guard and
+    // logged «refusing to stage over the currently running version — will
+    // retry tomorrow» on a clinic that was already up to date. Harmless — the
+    // guard is exactly right — but it reads as a failure to the owner, who
+    // reported it as one (2026-08-29). Clearing it here also stops a stale
+    // approval from outliving the update it was given for.
+    if (offer.version === runningVersion) {
+      controlStateDel(db, 'update_consent');
+      controlStateDel(db, 'update_scheduled_at');
+      return;
+    }
 
     const nowDate = now();
     let scheduledAt = readScheduledAt(db);

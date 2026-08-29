@@ -710,3 +710,22 @@ test('staleAfterSwitch: an OLDER result the clinic has moved past never triggers
     JSON.stringify({ version: '0.3.1', ok: true }), 'utf8');
   assert.equal(staleAfterSwitch(dataDir, appRoot, { realpathSync: () => path.join(root, 'versions', '0.3.1'), runningVersion: '0.3.2' }), null);
 });
+
+// --- a consent for the version already running is spent -----------------------
+
+test('consent naming the RUNNING version is cleared, not retried into the staging guard', async () => {
+  const { db, dataDir } = workspace();
+  setAppVersion('2.4.0');
+  // Exactly the state a successful install leaves behind: the offer has not
+  // been cleared by a check-in yet, and the consent for it is still on file.
+  storeOffer(db, { version: '2.4.0', url: '/x.tar.gz', sha256: 'a', manifest: {} });
+  storeConsent(db, { version: '2.4.0', hour: null, immediate: true });
+  storeScheduledAt(db, new Date());
+
+  let fetched = false;
+  await tickUpdater(db, dataDir, { runningVersion: '2.4.0', fetchImpl: () => { fetched = true; throw new Error('must not download'); } });
+
+  assert.equal(fetched, false, 'nothing is downloaded for a version already running');
+  assert.equal(controlStateGet(db, 'update_consent'), null, 'the spent consent is cleared');
+  assert.equal(controlStateGet(db, 'update_scheduled_at'), null, 'and its schedule with it');
+});
