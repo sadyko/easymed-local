@@ -406,14 +406,19 @@ test('чужая буква на уже подключённом филиале 
   const before = fs.readFileSync(pairingPath(dir), 'utf8');
   // Другая группа и другой адрес — иначе «файл не изменился» проходило бы даром.
   const r = pairWithKey(dir, v2key({ letter: 'D', group_id: 'BR-OTHER', main_url: 'http://10.9.9.9:9' }), { db });
-  assert.equal(r.reason, 'already_secondary');
+  // ИЗМЕНЁННОЕ УТВЕРЖДЕНИЕ: тот же отказ, своё имя. 'already_secondary' остался
+  // за файловым отказом makeMainKey, который лечится отвязкой; этот приходит из
+  // БАЗЫ, отвязка его не лечит, и один код на оба означал бы невыполнимый совет.
+  assert.equal(r.reason, 'already_other_branch');
   assert.equal(fs.readFileSync(pairingPath(dir), 'utf8'), before);
   assert.equal(readIdentity(db).letter, 'C');
 });
 
-test('already_numbered доезжает до вызывающего целым — на нём висит экран Задачи 6', () => {
+test('already_numbered доезжает до вызывающего целым — это крючок для экрана Этапа 2', () => {
   // Установка неделю работала сама по себе и напечатала номера под своей
-  // буквой. Отказ терминальный до Задачи 6, поэтому код обязан дойти неизменным.
+  // буквой. Отказ терминальный: экран согласия на перенумерацию отнесён к
+  // Этапу 2 и не написан, поэтому код обязан дойти неизменным — по нему экран
+  // отличает этот тупик от обычного отказа и говорит про поддержку.
   const dir = tmp('id-numbered');
   const db = identityDb();
   db.prepare("INSERT INTO patients (full_name) VALUES ('Пациент')").run();

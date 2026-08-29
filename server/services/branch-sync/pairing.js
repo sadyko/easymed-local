@@ -395,7 +395,8 @@ export function parseKey(text) {
   // занятость, поддельная кириллица — решает identity.js (normalizeLetter и
   // проверки becomeSecondary), и решает он один: через него проходит КАЖДЫЙ, кто
   // принимает букву, а через разбор ключа — только тот, кто пришёл с ключом
-  // (у Задачи 6 будут свои вызывающие: экран активации и перенумерация).
+  // (сегодня это единственный путь: Задача 6 вышла списком филиалов, который
+  // букву не принимает, а согласованная перенумерация — это Этап 2 и её ещё нет).
   // Регистр здесь не приводится по той же причине: свёртка живёт там, и
   // вторая её копия разошлась бы с первой — тем более что именно свёртка умеет
   // ИЗГОТОВИТЬ латинскую букву из нелатинской ('ß' -> 'SS'). Здесь только
@@ -497,7 +498,7 @@ function restorePairingFile(dataDir, previousRaw, { writeFileSync, renameSync, u
  *   то же самое, что «у установки нет identity»: она есть всегда, миграция 080).
  *   reason: empty_key | bad_key | bad_letter | already_main | write_failed |
  *     identity_unavailable | rollback_failed | и любой код отказа identity.js
- *     (already_secondary | already_numbered | letter_spent | letter_in_mrns |
+ *     (already_other_branch | already_numbered | letter_spent | letter_in_mrns |
  *     letter_on_branch | bad_letter | identity_missing) | identity_failed
  *   cause — только у 'rollback_failed': причина, по которой откатывались.
  */
@@ -567,10 +568,12 @@ export function pairWithKey(dataDir, keyText, {
     const restored = restorePairingFile(dataDir, previousRaw, {
       writeFileSync, renameSync, unlinkSync, readFileSync,
     });
-    // Код причины проходит НАСКВОЗЬ и неизменным. На 'already_numbered' Задача 6
-    // вешает экран согласия на разовую перенумерацию — до тех пор это тупик, и
-    // подменять код на общий 'identity_failed' значило бы отобрать у экрана
-    // единственный признак, по которому этот тупик отличается от обычного отказа.
+    // Код причины проходит НАСКВОЗЬ и неизменным. 'already_numbered' — тупик:
+    // экран согласия на разовую перенумерацию отнесён к Этапу 2 и не написан, а
+    // русский текст этого кода честно отправляет владельца в поддержку. Подменять
+    // код на общий 'identity_failed' всё равно нельзя: это единственный признак,
+    // по которому тупик отличается от обычного отказа, и он же будет крючком для
+    // того экрана, когда его напишут.
     const reason = e && typeof e.reason === 'string' ? e.reason : 'identity_failed';
     if (reason === 'identity_failed') {
       console.warn('[branch-sync] adopting the branch letter failed:', e && e.message);

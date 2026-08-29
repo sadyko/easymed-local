@@ -17,6 +17,16 @@
 // allowed and the install serves the catalogue as a main branch while minting
 // C- numbers as a secondary.
 //
+// AND IT DOES NOT NEED A FAILED WRITE TO HAPPEN. «Отвязать» produces exactly the
+// same split ON PURPOSE — it clears the file and leaves this row alone, because
+// the letter is spent and printed on cards — so every ordinary unpair left an
+// install whose file says "not paired" and whose database says branch C. While
+// the screen's two allocating calls read only the file, that install would make
+// itself main and hand out D from its OWN history, in the same week the real
+// main branch handed D to another building. Both calls now gate on
+// readIdentity(db).role (rpc/branch-sync.js), which is the only copy an unpair
+// cannot erase.
+//
 // Task 5 must therefore own BOTH writes in one activation and write the
 // DATABASE LAST, because the file is rewritable and this identity is not: fail
 // with the file written and the database untouched and the install is merely
@@ -114,10 +124,14 @@ function normalizeLetter(value) {
   // and then prefixes EVERY patient number this branch ever mints — a measured
   // 1009-character MRN, on a card someone is meant to carry.
   //
-  // Here, because this is the one gate every adopter passes: the branch key
-  // (pairing.js), the activation screen and the renumber flow of Task 6. A bound
-  // in the key parser guards the callers who arrive with a key and nobody else,
-  // and the caller that skips it is exactly the one nobody remembered to check.
+  // Here, because this is the one gate every adopter passes. Today that is
+  // exactly one caller — the branch key (pairing.js pairWithKey) — and the bound
+  // still belongs here rather than in the key parser: the parser guards whoever
+  // arrives with a key and nobody else, and the caller that skips it is exactly
+  // the one nobody remembered to check. (An earlier draft named "the activation
+  // screen and the renumber flow of Task 6" as the other two. Task 6 shipped as
+  // the branch list, which adopts nothing, and the consented renumber is Stage 2
+  // and unwritten — so this sentence promised callers that do not exist.)
   //
   // Eight is not a considered maximum so much as a place well past any real one:
   // letters.js counts in bijective base-26, so it is 26^8 branches, and a clinic
@@ -163,7 +177,7 @@ export function readIdentity(db) {
  *
  * @returns {{letter: string, role: string, branch_id: number}} the new identity
  * @throws {Error} with `reason` — bad_letter | identity_missing |
- *   already_secondary | already_numbered | letter_spent | letter_in_mrns |
+ *   already_other_branch | already_numbered | letter_spent | letter_in_mrns |
  *   letter_on_branch. Branch on `reason`; `message` is for the log.
  */
 export function becomeSecondary(db, { letter, name } = {}) {
@@ -222,8 +236,16 @@ export function becomeSecondary(db, { letter, name } = {}) {
     // not applied — renaming a branch is the roster's job, not activation's.)
     if (me.role === 'secondary') {
       if (me.letter === adopted) return me;
+      // 'already_other_branch', NOT 'already_secondary', and the split is about
+      // an impossible instruction rather than a shade of wording. The pairing
+      // FILE's refusal of the same name is cured by unpairing (pairing.js
+      // makeMainKey), so its Russian says «сначала отвяжите её». This one is not:
+      // the letter is in the DATABASE, unpairing deliberately leaves it there
+      // (branch_sync_unpair), and an owner who followed that advice would unpair,
+      // retry, and hear the very same sentence. Sharing the code meant sharing
+      // the sentence, so this refusal now carries its own.
       throw refusal(
-        'already_secondary',
+        'already_other_branch',
         'This install is already branch ' + me.letter + ' and cannot change identity.',
       );
     }

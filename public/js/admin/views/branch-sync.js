@@ -19,7 +19,8 @@ import { isAdminActor } from '../admin-actor.js';
 import {
     roleBadge, roleExplainer, syncLine, whenLabel, canSyncNow, addressValue,
     syncKeyLine, relayExplainer, publishLine, canRegenerateKey, KEY_LOSS_WARNING,
-    branchRows, KEY_REISSUE_WARNING, LETTER_PERMANENCE_NOTE, pairedMessage, letterExplainer,
+    branchRows, branchListNote, KEY_REISSUE_WARNING, LETTER_PERMANENCE_NOTE,
+    pairedMessage, letterExplainer,
 } from '../branch-sync-logic.js';
 
 async function rpc(name, args = {}) {
@@ -70,6 +71,26 @@ function paintUnlinked(card, status, admin) {
         card.appendChild(h('p', { class: 'muted bsync-note' },
             'Связать филиалы может только администратор клиники.'));
         return;
+    }
+
+    // ОТВЯЗАННЫЙ ФИЛИАЛ — не то же самое, что новая установка, и экран обязан
+    // это различать. «Отвязать» стирает файл пары и НЕ трогает принятую букву:
+    // она уже напечатана на карточках. Поэтому здесь стоит установка, которая
+    // выглядит несвязанной и при этом навсегда остаётся филиалом C — и кнопка
+    // «Сделать главным филиалом» ей откажет (rpc identity_is_branch). Сказать
+    // об этом ДО нажатия дешевле, чем после.
+    if (status.identity_role === 'secondary') {
+        card.appendChild(h('div', { class: 'bsync-block' },
+            h('div', { class: 'sys-block-title' }, 'Эта установка — филиал'),
+            h('div', { class: 'sys-info' },
+                h('span', { class: 'sys-info-label' }, 'Этот филиал'),
+                h('span', { class: 'sys-info-value' }, status.letter ? Tag(status.letter, { kind: 'info' }) : '—'),
+            ),
+            h('p', { class: 'muted bsync-note' },
+                'Связь с главным филиалом разорвана, но буква осталась за этой установкой навсегда — она напечатана на карточках её пациентов. Введите ключ подключения с той же буквой, чтобы связать филиал заново.'),
+        ));
+        const back = letterExplainer(status);
+        if (back) card.appendChild(h('p', { class: 'muted bsync-note' }, back.base, ' ', back.example));
     }
 
     const urlInput = h('input', { type: 'text', value: addressValue(status), placeholder: '10.0.0.5:8000' });
@@ -214,6 +235,10 @@ function paintBranchList(card) {
             return;
         }
         clear(listEl);
+        // Роль могла смениться в другой вкладке между отрисовкой карточки и
+        // загрузкой списка: ключи показывает только главный филиал.
+        const note = branchListNote(data);
+        if (note) { listEl.appendChild(h('p', { class: 'muted bsync-note' }, note)); return; }
         const rows = branchRows(data);
         if (!rows.length) {
             listEl.appendChild(h('p', { class: 'muted bsync-note' }, 'Филиалов пока нет.'));
@@ -231,14 +256,24 @@ function paintBranchList(card) {
             Tag(row.letterLabel, { kind: row.letter ? 'info' : '' }));
 
         const box = h('div', { class: 'bsync-branch' }, head);
-        if (row.key) { box.appendChild(keyBox(row.key)); return box; }
-
+        if (row.key) box.appendChild(keyBox(row.key));
         // ЧЕСТНОЕ СОСТОЯНИЕ ВМЕСТО ПУСТОЙ КЛЕТКИ: пустое поле на месте ключа
         // читается как «не загрузилось», а у каждого случая здесь есть точный
-        // ответ (branch-sync-logic.js branchRows).
-        box.appendChild(h('p', { class: 'muted bsync-note' }, row.note));
-        if (row.state === 'no_letter' && canIssue) {
-            const btn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, 'Выдать ключ');
+        // ответ (branch-sync-logic.js branchRows). У 'key_no_relay' ключ ЕСТЬ и
+        // работает — объяснение идёт ПОД ним, а не вместо него.
+        if (row.note) box.appendChild(h('p', { class: 'muted bsync-note' }, row.note));
+
+        // ОДНА КНОПКА НА ДВА СОСТОЯНИЯ, потому что вызов один и тот же:
+        // branch_sync_branch_key выдаёт букву, если её нет, и выписывает учётку
+        // резервного канала, если её нет. Без второго состояния строка с ключом
+        // без учётки не предлагала на экране НИЧЕГО — а приводят туда два
+        // обычных пути, перевыпуск ключа синхронизации и заведение филиала без
+        // интернета, и владелец раздавал бы ключи без резервного канала, не
+        // зная об этом.
+        const fixable = row.state === 'no_letter' || row.state === 'key_no_relay';
+        if (fixable && canIssue) {
+            const btn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' },
+                row.state === 'no_letter' ? 'Выдать ключ' : 'Выдать доступ');
             btn.addEventListener('click', async () => {
                 if (btn.disabled) return;
                 btn.disabled = true;

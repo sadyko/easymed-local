@@ -10,7 +10,8 @@ import assert from 'node:assert';
 import {
   roleBadge, roleExplainer, syncLine, changesLabel, whenLabel, canSyncNow, addressValue,
   routeLabel, syncKeyLine, relayExplainer, publishLine, canRegenerateKey, KEY_LOSS_WARNING,
-  branchRows, KEY_REISSUE_WARNING, LETTER_PERMANENCE_NOTE, pairedMessage, letterExplainer,
+  branchRows, branchListNote, KEY_REISSUE_WARNING, LETTER_PERMANENCE_NOTE,
+  pairedMessage, letterExplainer,
 } from '../branch-sync-logic.js';
 
 test('роль установки читается с одного взгляда', () => {
@@ -246,9 +247,40 @@ test('безымянная строка филиала не рисуется п�
 });
 
 test('подключённый филиал ключей не выдаёт и не делает вид, что может', () => {
-  const [row] = branchRows({ role: 'secondary', branches: [{ id: 2, name: 'Чиланзар', letter: 'B', key: null }] });
-  assert.equal(row.state, 'not_main');
-  assert.match(row.note, /главн/i);
+  // Это свойство ВСЕГО СПИСКА, а не отдельной строки: не выдаёт ключи установка,
+  // а не филиал. Строкой это было мёртвым состоянием — экран показывает список
+  // только главному филиалу, — и мёртвая ветка тихо расходится с правдой.
+  assert.match(branchListNote({ role: 'secondary' }), /главн/i);
+  assert.match(branchListNote({ role: 'none' }), /главн/i);
+  assert.equal(branchListNote({ role: 'main' }), null, 'главному филиалу объяснять нечего');
+});
+
+test('ключ без доступа к резервному каналу — своё состояние, а не «всё хорошо»', () => {
+  // ДВА ИЗМЕРЕННЫХ ПУТИ СЮДА, и оба обычные: перевыпуск ключа синхронизации
+  // (учётки филиалов гасятся вместе с адресом, к которому были привязаны) и
+  // заведение филиала при выключенном интернете. В обоих ключ рабочий — прямая
+  // связь от поставщика не зависит, — но резервного канала у филиала нет, и
+  // пока это состояние называлось 'key', экран не предлагал ничего: владелец
+  // раздавал ключи без резервного канала и не знал об этом.
+  const rows = branchRows({ role: 'main', can_relay: true, branches: [
+    { id: 2, name: 'Чиланзар', letter: 'B', key: 'EMB2-x', has_relay_token: false },
+    { id: 3, name: 'Юнусабад', letter: 'C', key: 'EMB2-y', has_relay_token: true },
+  ] });
+  assert.equal(rows[0].state, 'key_no_relay');
+  assert.equal(rows[0].key, 'EMB2-x', 'ключ остаётся рабочим и показывается целиком');
+  assert.match(rows[0].note, /резервн/i);
+  assert.equal(rows[1].state, 'key');
+  assert.equal(rows[1].note, null);
+});
+
+test('клинике без активации не показывают кнопку, которая всегда откажет', () => {
+  // Резервного канала у такой клиники нет вовсе и быть не может — предлагать
+  // «выдать доступ» значит обещать то, чего поставщик не выпишет.
+  const [row] = branchRows({ role: 'main', can_relay: false, branches: [
+    { id: 2, name: 'Чиланзар', letter: 'B', key: 'EMB2-x', has_relay_token: false },
+  ] });
+  assert.equal(row.state, 'key');
+  assert.equal(row.note, null);
 });
 
 test('список переживает старый сервер и испорченный ответ', () => {

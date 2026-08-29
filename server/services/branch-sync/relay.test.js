@@ -8,7 +8,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { b64url, writePairing, GROUP_KEY_BYTES } from './pairing.js';
 import { relayIdFor, openPayload } from './relay-crypto.js';
-import { publishCatalogue, fetchCatalogue, maybePublish, mintRelayToken, relayUrl, relayTokenUrl, readLastPublish } from './relay.js';
+import { publishCatalogue, fetchCatalogue, maybePublish, mintRelayToken, relayMintable, relayUrl, relayTokenUrl, readLastPublish } from './relay.js';
 
 // BRANCH_SYNC_RELAY_V1 — транспорт Маршрута Б на подставном fetch.
 //
@@ -388,5 +388,31 @@ test('пустая учётка в ответе — это не учётка', a
     const r = await mintRelayToken(dir, { fetchImpl: fakeMint({ body }).fetchImpl, env: {} });
     assert.equal(r.ok, false, JSON.stringify(body));
     assert.equal(r.reason, 'relay_bad_response', JSON.stringify(body));
+  }
+});
+
+test('предсказание кнопки совпадает с тем, что делает выписка', async () => {
+  // relayMintable() решает, показывать ли на экране «Выдать доступ», и делает
+  // это БЕЗ СЕТИ — открытие списка филиалов в сеть ходить не должно.
+  // mintRelayToken() отвечает на тот же вопрос по-настоящему. Разъехавшись, они
+  // дадут либо спрятанную рабочую кнопку, либо кнопку, которая всегда
+  // отказывает; ни то ни другое не заметит ни один существующий тест. Здесь обе
+  // прогоняются по одним и тем же установкам.
+  const PREFLIGHT = new Set(['relay_not_main', 'relay_no_key', 'relay_not_enrolled']);
+  const cases = [
+    ['main-ready', { role: 'main' }, true],
+    ['sec', { role: 'secondary' }, false],
+    ['nokey', { role: 'main', key: null }, false],
+    ['notok', { role: 'main', token: null }, false],
+  ];
+  for (const [tag, opts, expected] of cases) {
+    const { dir } = clinic('mintable-' + tag, opts);
+    assert.equal(relayMintable(dir), expected, tag);
+    // И то же самое глазами самой выписки: сеть до неё не доходит, потому что
+    // все три отказа — предполётные.
+    const vendor = fakeMint();
+    const r = await mintRelayToken(dir, { fetchImpl: vendor.fetchImpl, env: {} });
+    assert.equal(!PREFLIGHT.has(r.reason), expected, tag + ': выписка судит так же');
+    if (!expected) assert.equal(vendor.calls.length, 0, tag + ': предполётный отказ до сети не доходит');
   }
 });

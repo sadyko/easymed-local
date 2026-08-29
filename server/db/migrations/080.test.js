@@ -326,3 +326,76 @@ test('an existing clinic with 70 000 legacy P- MRNs upgrades without error and w
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- the seeded branch row is not guaranteed to still be there --------------
+//
+// Same shape as the 70 000-MRN upgrade above: migrate to 079, put the database
+// into the state a real clinic is in, THEN apply 080 and watch what happens.
+
+/** A database at exactly 079, plus the temp dir migrate() reads from. */
+function at079() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-080-del-'));
+  fs.cpSync(MIGRATIONS_DIR, dir, { recursive: true, filter: (src) => {
+    if (fs.statSync(src).isDirectory()) return true;
+    const m = /^(\d{3,})_.*\.sql$/.exec(path.basename(src));
+    return m ? Number(m[1]) < 80 : false;
+  } });
+  const db = openDb(':memory:');
+  migrate(db, dir);
+  return { db, dir, apply80() {
+    fs.cpSync(path.join(MIGRATIONS_DIR, '080_branch_identity.sql'), path.join(dir, '080_branch_identity.sql'));
+    migrate(db, dir);
+  } };
+}
+
+test('клиника, удалившая предзаполненный филиал, всё равно открывается', () => {
+  // ИЗМЕРЕННЫЙ ОТКАЗ ЗАГРУЗКИ, а не придирка к стилю. 002 заводит «Main Branch»
+  // строкой id = 1, но список филиалов — обычная редактируемая таблица:
+  // section-crud.js удаляет строку целиком и лишь при отказе внешнего ключа
+  // прячет её через active = 0. Клиника, которая на внедрении стёрла
+  // предзаполненный филиал и завела свой, живёт с id = 2 уже сегодня.
+  //
+  // Пока 080 писала WHERE id = 1, у такой клиники UPDATE не находил ничего, а
+  // следующий INSERT падал на внешнем ключе (connection.js включает
+  // foreign_keys), migrate() бросал — и база не открывалась ВООБЩЕ. Миграция,
+  // роняющая клинику из-за номера строки, хуже любой нумерации, которую она
+  // защищает.
+  const { db, dir, apply80 } = at079();
+  try {
+    db.prepare("INSERT INTO branches (name) VALUES ('Клиника на Чиланзаре')").run();
+    db.prepare('DELETE FROM branches WHERE id = 1').run();
+
+    assert.doesNotThrow(apply80, 'база обязана открыться');
+
+    const branch = db.prepare('SELECT id, letter FROM branches').get();
+    assert.notEqual(branch.id, 1, 'проверяем именно ту клинику, у которой строки 1 нет');
+    assert.equal(branch.letter, 'A', 'первый филиал клиники получает A, какой бы id у него ни был');
+    assert.equal(db.prepare('SELECT branch_id FROM branch_identity WHERE id = 1').get().branch_id, branch.id,
+      'установка указывает на реальную строку, а не на выдуманную единицу');
+
+    // И то, ради чего всё это: номера пациентов выдаются.
+    db.prepare("INSERT INTO patients (full_name) VALUES ('Пациент')").run();
+    assert.match(db.prepare('SELECT mrn FROM patients ORDER BY id DESC LIMIT 1').get().mrn, /^A-/);
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('пустой список филиалов не роняет миграцию, а честно даёт пустую ссылку', () => {
+  // Край того же случая. branch_id объявлен NULL-абельным, а MRN-триггер
+  // намеренно не join-ит branches — он читает букву из branch_identity. Значит
+  // пустой ростер стоит имени в списке и больше ничего, и падать тут не за что.
+  const { db, dir, apply80 } = at079();
+  try {
+    db.prepare('DELETE FROM branches').run();
+    assert.doesNotThrow(apply80);
+    assert.equal(db.prepare('SELECT branch_id FROM branch_identity WHERE id = 1').get().branch_id, null);
+    db.prepare("INSERT INTO patients (full_name) VALUES ('Пациент')").run();
+    assert.match(db.prepare('SELECT mrn FROM patients ORDER BY id DESC LIMIT 1').get().mrn, /^A-/,
+      'буква живёт в branch_identity, поэтому номера выдаются и без строки филиала');
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

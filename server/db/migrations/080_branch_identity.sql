@@ -18,11 +18,28 @@
 ALTER TABLE branches ADD COLUMN letter TEXT
   CHECK (letter GLOB '[A-Z]*' AND letter NOT GLOB '*[^A-Z]*');
 
--- The seeded 'Main Branch' from 002 is A. Every other letter is allocated by
+-- The clinic's FIRST branch row is A. Every other letter is allocated by
 -- letters.js, which never reuses one — reuse would give two different people
 -- the same MRN years apart, which is the single failure this scheme exists to
 -- prevent.
-UPDATE branches SET letter = 'A' WHERE id = 1;
+--
+-- MIN(id) AND NOT THE LITERAL 1, and this is not defensive habit. 002 seeds
+-- 'Main Branch' as id 1, but the branch list is an ordinary editable table:
+-- section-crud.js deletes a branch row outright and only falls back to
+-- active = 0 when a foreign key stops it, so an onboarding clinic that removed
+-- the seeded row and entered its own is sitting on id 2 today. Against the
+-- literal 1 this UPDATE matched nothing and the INSERT below then failed the
+-- foreign key (connection.js turns foreign_keys ON), migrate() threw, and the
+-- clinic could not open at all. A migration that bricks a database on a row id
+-- is worse than any numbering it was protecting.
+--
+-- An EMPTY branches table degrades safely rather than failing: MIN(id) is NULL,
+-- this UPDATE matches nothing, and the INSERT below stores branch_id = NULL,
+-- which the column allows. Nothing downstream breaks — the MRN trigger reads
+-- branch_identity.letter and deliberately never joins branches (see the note at
+-- the branch_identity block), so a null branch_id costs a name in the roster and
+-- nothing else.
+UPDATE branches SET letter = 'A' WHERE id = (SELECT MIN(id) FROM branches);
 
 -- Without this the ledger below is only advisory. letters.js reads the highest
 -- letter ever issued and writes the new one onto a branch row; nothing stops a
@@ -77,7 +94,12 @@ CREATE TABLE branch_identity (
   -- first time someone asks when this branch was re-pointed.
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
-INSERT INTO branch_identity (id, letter, role, branch_id) VALUES (1, 'A', 'main', 1);
+-- id 1 is THIS table's only row, forever (the CHECK above pins it). branch_id
+-- is the branches row, and it is looked up rather than assumed, for the reason
+-- written at the UPDATE above: hard-coding it made a clinic that deleted the
+-- seeded branch fail this INSERT on its foreign key and refuse to open.
+INSERT INTO branch_identity (id, letter, role, branch_id)
+  VALUES (1, 'A', 'main', (SELECT MIN(id) FROM branches));
 
 -- THE ONE RULE EVERYTHING IN THIS MIGRATION DEFENDS, stated here and nowhere
 -- else:
@@ -183,11 +205,19 @@ INSERT INTO branch_letters_spent (letter, kind) VALUES ('A','issue'), ('P','burn
 -- Why the predicate is not anchored to a prefix the way 034's LIKE 'P-YY-%'
 -- was: CONTINUITY ACROSS THE P->A CHANGE. An upgraded clinic's existing rows
 -- are all 'P-' and its new ones are 'A-'; anchoring on 'A-' would find nothing
--- and restart the register at 00001 while cards numbered 70 000 are in
--- patients' hands. Counting every row of the current year instead gives that
--- clinic A-26-70001, which is what the staff expect to see. (It is NOT about
--- MRNs synced in from other branches — those carry a different letter and can
--- never equal one of this branch's numbers.)
+-- and restart the register at 00001 while cards of the current year are in
+-- patients' hands, handing a second person a number someone already carries.
+-- Counting every row OF THE CURRENT YEAR instead continues that year's series.
+--
+-- WHAT THAT DOES NOT MEAN, because an earlier draft of this comment claimed it
+-- and was wrong: the ~70 000 legacy rows accumulated over SEVERAL years, so the
+-- current year holds only this year's share of them. The next number is
+-- therefore A-26-0NNNN just past THIS YEAR's count — not A-26-70001, which
+-- would only be right if every legacy row had been minted since January. The
+-- guarantee is continuity within the year, which is the one that matters: no
+-- number is ever issued twice. (It is NOT about MRNs synced in from other
+-- branches — those carry a different letter and can never equal one of this
+-- branch's numbers.)
 --
 -- And note the direction this predicate errs in, because it is the opposite of
 -- what "unanchored" suggests: relative to 034 it is NARROWER, not wider. It

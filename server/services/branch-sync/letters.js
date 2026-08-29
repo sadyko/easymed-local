@@ -180,10 +180,16 @@ export function allocateLetter(db, { name = '' } = {}) {
   // transaction the BEGIN IMMEDIATE above is never executed — silently, with no
   // error. Atomicity survives (the savepoint still rolls the burns back); the
   // cross-process serialisation does not, and the outer transaction's own mode
-  // decides it. That is a live case, not a hypothetical: the branch_identity
-  // block in 080 has identity.js setting both of its columns in one transaction,
-  // and Task 5 allocates during activation. A caller that needs the lock must open
-  // its own transaction with .immediate().
+  // decides it. That is a live case, not a hypothetical: rpc/branch-sync.js
+  // branchSyncBranchKey wraps this call in its own .immediate() transaction, so
+  // that the letter it allocates and the UPDATE that puts the letter on the
+  // branch row commit or roll back together — without the wrapper a failed
+  // UPDATE would leave the letter spent for a branch that never got it. That
+  // wrapper is also what keeps the cross-process lock, because it opens the
+  // outermost transaction in IMMEDIATE mode. A caller that needs the lock must
+  // do the same. (An earlier draft named Task 5's activation as the nesting
+  // caller; Task 5 shipped explicitly NOT allocating — a secondary adopts the
+  // letter it is given and never mints one, see identity.js's header.)
   return db.transaction(() => {
     const rows = db.prepare('SELECT letter, kind FROM branch_letters_spent').all();
     const issued = rows.filter((r) => r.kind === 'issue').map((r) => r.letter);

@@ -21,9 +21,11 @@ import { migrate } from '../../db/migrate.js';
 import { setDataDir } from '../control/config.js';
 import { encodeKey, parseKey, readPairing, writePairing } from '../branch-sync/pairing.js';
 import { readIdentity } from '../branch-sync/identity.js';
+import { branchRows } from '../../../public/js/admin/branch-sync-logic.js';
 import {
   branchSyncPair, branchSyncStatus, branchSyncMakeKey, branchSyncBranches,
-  branchSyncAddBranch, branchSyncBranchKey, branchSyncRegenerateKey, reasonText,
+  branchSyncAddBranch, branchSyncBranchKey, branchSyncRegenerateKey,
+  branchSyncUnpair, reasonText,
 } from './branch-sync.js';
 
 const admin = { id: 1, role: 'admin' };
@@ -124,7 +126,7 @@ test('уже подключённый филиал слышит про свою 
   const db = freshDb();
   assert.equal(branchSyncPair(db, { key: key() }, admin).ok, true);
   assert.throws(() => branchSyncPair(db, { key: key({ letter: 'D' }) }, admin),
-    (e) => e.message === reasonText('already_secondary'));
+    (e) => e.message === reasonText('already_other_branch'));
   db.close();
 });
 
@@ -138,6 +140,7 @@ test('у каждого кода отказа активации есть сво
   const generic = reasonText('это не код причины');
   for (const reason of [
     'empty_key', 'bad_key', 'bad_letter', 'already_main', 'already_secondary', 'write_failed',
+    'already_other_branch', 'identity_is_branch',
     'identity_unavailable', 'already_numbered', 'letter_spent', 'letter_in_mrns',
     'letter_on_branch', 'identity_missing', 'identity_failed', 'rollback_failed',
   ]) {
@@ -199,6 +202,7 @@ test('смена группы стирает карту соответствий
 // Учётка резервного канала выписывается у поставщика по сети. В этих тестах
 // сети нет: подставляем выписку, чтобы проверять СВОЙ код, а не чужой сервер.
 const mintOk = async () => ({ ok: true, token: 'relay-tok-1', relay_id: 'a'.repeat(32) });
+const mintOk2 = async () => ({ ok: true, token: 'relay-tok-2', relay_id: 'b'.repeat(32) });
 const mintOffline = async () => ({ ok: false, reason: 'relay_offline' });
 
 function asMain(url = 'http://10.0.0.5:8000') {
@@ -305,6 +309,81 @@ test('себе ключ не выдаётся, и это сказано слов
   db.close();
 });
 
+test('ОТВЯЗАННЫЙ ФИЛИАЛ НЕ СТАНОВИТСЯ ВТОРЫМ РАЗДАТЧИКОМ БУКВ', async () => {
+  // САМАЯ ДОРОГАЯ ОШИБКА ЭТОГО ЭТАПА, и она стоила ровно того, ради чего буква
+  // заведена. «Отвязать» стирает ФАЙЛ пары и намеренно не трогает
+  // branch_identity: буква потрачена, и отменить её нельзя. Но обе проверки
+  // «я главный?» смотрели в стёртый файл, а не в базу, поэтому филиал C после
+  // отвязки объявлял себя главным и начинал раздавать буквы из СВОЕЙ истории
+  // (A, B, C потрачены -> выдаёт D), пока настоящий главный выдавал D другому
+  // зданию. Два здания, одна буква, одинаковые номера пациентов, и ни одна
+  // проверка не срабатывает.
+  //
+  // Измерено через настоящие вызовы, а не подстановкой строк в таблицы.
+  const dir = inDir('ex-secondary');
+  const db = freshDb();
+  // Установка стала филиалом C по ключу главного филиала...
+  assert.equal(branchSyncPair(db, { key: key() }, admin).letter, 'C');
+  // ...и владелец её отвязал. Файл ушёл, буква осталась — так и задумано.
+  assert.equal(branchSyncUnpair(db, {}, admin).ok, true);
+  assert.equal(readPairing(dir), null, 'файл пары стёрт');
+  assert.deepEqual(readIdentity(db), { letter: 'C', role: 'secondary', branch_id: 2 },
+    'буква НЕ отменяется отвязкой: она уже напечатана на карточках');
+
+  // Отказ читается из БАЗЫ, а не из файла, которого больше нет.
+  assert.throws(() => branchSyncMakeKey(db, { url: 'http://10.0.0.9:8000' }, admin),
+    (e) => e.message === reasonText('identity_is_branch'));
+  // И фраза обязана объяснять ПОЧЕМУ: «сначала отвяжите» здесь — невыполнимый
+  // совет, отвязка уже произошла и ничего не изменила.
+  assert.doesNotMatch(reasonText('identity_is_branch'), /отвяж/i);
+  assert.match(reasonText('identity_is_branch'), /C|букв/,
+    'владелец должен услышать, каким филиалом эта установка является');
+
+  // Вторая дверь в ту же комнату: выдача буквы новому филиалу.
+  await assert.rejects(
+    () => branchSyncAddBranch(db, { name: 'Самозванец' }, admin, { mintImpl: mintOk }),
+    (e) => e.message === reasonText('identity_is_branch'),
+  );
+  // Ни одна буква не потрачена сверх той, что установка приняла.
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM branch_letters_spent WHERE kind = 'issue'").get().n, 2,
+    'A от миграции и C, принятая этой установкой — больше ничего');
+  db.close();
+});
+
+test('«отвяжите сначала» и «эта установка — филиал C» это РАЗНЫЕ отказы', () => {
+  // Один код на два положения означал невыполнимый совет в одном из них.
+  // Файловый отказ чинится отвязкой; отказ из базы — не чинится ничем, кроме
+  // чистой установки, и говорить про отвязку в нём нельзя.
+  assert.notEqual(reasonText('already_secondary'), reasonText('identity_is_branch'));
+  assert.match(reasonText('already_secondary'), /отвяж/i);
+  assert.match(reasonText('identity_is_branch'), /установ/i);
+
+  // То же и на стороне принятия чужой буквы: база отказывает своим кодом.
+  inDir('other-letter');
+  const db = freshDb();
+  assert.equal(branchSyncPair(db, { key: key() }, admin).ok, true);
+  branchSyncUnpair(db, {}, admin);
+  assert.throws(() => branchSyncPair(db, { key: key({ letter: 'D' }) }, admin),
+    (e) => e.message === reasonText('already_other_branch'));
+  assert.doesNotMatch(reasonText('already_other_branch'), /отвяж/i,
+    'отвязка уже произошла и ничего не изменила — советовать её нельзя');
+  db.close();
+});
+
+test('бывший филиал не предлагает ключ на чужую строку своего списка', async () => {
+  // Следствие той же дыры: строка 1 «Main Branch» с буквой A досталась установке
+  // от миграции, своей она никогда не была (branch_identity.branch_id = 2), и
+  // ключ на неё несёт букву A, которую отвергнет любая установка на свете.
+  inDir('foreign-row');
+  const db = freshDb();
+  branchSyncPair(db, { key: key() }, admin);
+  branchSyncUnpair(db, {}, admin);
+  const list = branchSyncBranches(db, {}, admin);
+  assert.equal(list.can_issue, false, 'эта установка ключей не выдаёт вовсе');
+  for (const b of list.branches) assert.equal(b.key, null, JSON.stringify(b));
+  db.close();
+});
+
 test('не главный филиал ключей не выдаёт и не делает вид, что может', async () => {
   inDir('not-main');
   const db = freshDb();
@@ -316,6 +395,72 @@ test('не главный филиал ключей не выдаёт и не д
     () => branchSyncAddBranch(db, { name: 'Новый' }, admin, { mintImpl: mintOk }),
     (e) => e.message === reasonText('branch_not_main'),
   );
+  db.close();
+});
+
+test('после перевыпуска ключа филиал ВИДНО и доступ выписывается заново', async () => {
+  // ИЗМЕРЕННЫЙ ТУПИК, а не гипотеза: перевыпуск гасит учётки филиалов (они
+  // привязаны к адресу, который умер вместе с ключом группы), и это правильно.
+  // Не хватало второй половины — способа выписать их снова. Строка с буквой
+  // всегда выглядела как 'key', экран не предлагал ничего, и владелец, сделав
+  // ровно то, что этот же экран ему советует, раздавал дальше ключи без
+  // резервного канала и не знал об этом.
+  const dir = inDir('reissue-cure');
+  fs.writeFileSync(path.join(dir, 'control.json'),
+    JSON.stringify({ clinic_id: 'c-1', install_token: 'tok-AAAA' }));
+  const db = asMain();
+  const added = await branchSyncAddBranch(db, { name: 'Чиланзар' }, admin, { mintImpl: mintOk });
+  assert.equal(parseKey(added.branch.key).relay_token, 'relay-tok-1');
+
+  branchSyncRegenerateKey(db, {}, admin);
+
+  const after = branchSyncBranches(db, {}, admin);
+  const row = after.branches.find((b) => b.id === added.branch.id);
+  assert.equal(after.can_relay, true, 'клиника активирована — выписать учётку она может');
+  assert.equal(row.has_relay_token, false, 'мёртвая учётка стёрта вместе с адресом');
+  // ТО, ЧЕГО НЕ БЫЛО: экран отличает такую строку от исправной.
+  assert.equal(branchRows(after).find((r) => r.id === row.id).state, 'key_no_relay');
+
+  // И лекарство работает: тот же вызов выписывает учётку заново.
+  const fixed = await branchSyncBranchKey(db, { branch_id: row.id }, admin, { mintImpl: mintOk2 });
+  assert.equal(fixed.relay.ok, true);
+  assert.equal(parseKey(fixed.branch.key).relay_token, 'relay-tok-2');
+  const healed = branchSyncBranches(db, {}, admin);
+  assert.equal(branchRows(healed).find((r) => r.id === row.id).state, 'key');
+  db.close();
+});
+
+test('филиал, заведённый без интернета, получает доступ, когда интернет вернулся', async () => {
+  // Та же дыра с другой стороны, и она делала фразу relay_branch_no_token
+  // невыполнимой: филиал просил «возьмите новый ключ подключения в главном
+  // филиале», а главный отдавал ровно тот же ключ без учётки, сколько бы раз
+  // его ни показывали.
+  const dir = inDir('offline-cure');
+  fs.writeFileSync(path.join(dir, 'control.json'),
+    JSON.stringify({ clinic_id: 'c-1', install_token: 'tok-AAAA' }));
+  const db = asMain();
+  const added = await branchSyncAddBranch(db, { name: 'Себзар' }, admin, { mintImpl: mintOffline });
+  assert.equal(added.relay.ok, false);
+  assert.equal(parseKey(added.branch.key).relay_token, null);
+
+  const before = branchSyncBranches(db, {}, admin);
+  assert.equal(branchRows(before).find((r) => r.id === added.branch.id).state, 'key_no_relay',
+    'экран обязан показать кнопку, иначе филиал остаётся без канала навсегда');
+
+  const fixed = await branchSyncBranchKey(db, { branch_id: added.branch.id }, admin, { mintImpl: mintOk });
+  assert.equal(parseKey(fixed.branch.key).relay_token, 'relay-tok-1');
+  db.close();
+});
+
+test('неактивированной клинике кнопку не показывают: выписать учётку ей нечем', async () => {
+  // Без control.json резервный канал недоступен КЛИНИКЕ, а не филиалу, и
+  // кнопка отказывала бы всегда.
+  inDir('no-enrol');
+  const db = asMain();
+  const added = await branchSyncAddBranch(db, { name: 'Мирзо' }, admin, { mintImpl: mintOffline });
+  const list = branchSyncBranches(db, {}, admin);
+  assert.equal(list.can_relay, false);
+  assert.equal(branchRows(list).find((r) => r.id === added.branch.id).state, 'key');
   db.close();
 });
 

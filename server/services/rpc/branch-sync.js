@@ -14,7 +14,9 @@ import { readIdentity } from '../branch-sync/identity.js';
 // BRANCH_SYNC_RELAY_V1 — Маршрут Б: те же три файла, что и у Маршрута А, только
 // транспорт другой. Ключ группы и его выпуск при активации — в sync-group.js.
 import { ensureSyncGroup, regenerateSyncGroup, readSyncGroup } from '../branch-sync/sync-group.js';
-import { fetchCatalogue, publishCatalogue, readLastPublish, mintRelayToken, LAST_PUBLISH_KEY } from '../branch-sync/relay.js';
+import {
+  fetchCatalogue, publishCatalogue, readLastPublish, mintRelayToken, relayMintable, LAST_PUBLISH_KEY,
+} from '../branch-sync/relay.js';
 import { relayIdFor } from '../branch-sync/relay-crypto.js';
 
 // BRANCH_SYNC_V1 — вызовы, которыми живёт экран «Настройки → Филиалы».
@@ -62,6 +64,13 @@ const REASONS = {
   bad_key:      'Ключ подключения неверный. Проверьте, что он скопирован целиком.',
   already_main: 'Эта установка уже назначена главным филиалом. Сначала отвяжите её.',
   already_secondary: 'Эта установка уже подключена к главному филиалу. Сначала отвяжите её.',
+  // ОТДЕЛЬНО от already_secondary, и разница не в оттенке, а в выполнимости
+  // совета. Тот отказ приходит из ФАЙЛА пары и лечится отвязкой. Эти два — из
+  // БАЗЫ, где записана принятая буква, а отвязка базу не трогает намеренно
+  // (буква уже напечатана на карточках). Владелец, услышавший «сначала
+  // отвяжите» здесь, отвяжет, повторит и услышит ту же фразу снова.
+  identity_is_branch: 'Эта установка сама является филиалом клиники и раздавать буквы другим филиалам не может: буквы выдаёт только главный филиал. Отвязка этого не меняет — принятая буква остаётся за установкой навсегда, потому что она уже напечатана на карточках пациентов. Если этот компьютер должен стать главным филиалом, установите Easy-Med заново с чистой базой.',
+  already_other_branch: 'Эта установка уже является филиалом с другой буквой, и сменить букву нельзя: выданные номера пациентов останутся с прежней. Введите ключ с той же буквой, что у этой установки, либо установите Easy-Med заново с чистой базой, если компьютер отдают другому филиалу.',
   bad_url:      'Адрес указан неверно. Пример: 10.0.0.5:8000',
   write_failed: 'Не удалось сохранить настройку связи на диск. Проверьте свободное место.',
 
@@ -247,6 +256,28 @@ export function branchSyncStatus(db, args, user) {
 // почему именно бросает). Статус ронять этим нельзя: экран, который не смог
 // прочитать своё состояние, обязан нарисоваться и сказать об этом, а не отдать
 // 500 на открытие раздела настроек. Прочерк вместо буквы — честный ответ.
+/**
+ * ЭТА УСТАНОВКА — ФИЛИАЛ? Ответ берётся из БАЗЫ, и это вся суть проверки.
+ *
+ * Роль лежит в двух местах, и они намеренно не совпадают: файл пары
+ * (data/branch-sync.json) и branch_identity. «Отвязать» стирает файл и НЕ
+ * трогает базу — буква уже напечатана на карточках, отменить её нельзя. Значит
+ * после каждой обычной отвязки файл говорит «не связан», а база — «филиал C».
+ *
+ * Пока обе выдающие буквы функции читали файл, такая установка объявляла себя
+ * главной и начинала раздавать буквы из СВОЕЙ истории: у неё потрачены A, B, C,
+ * поэтому она выдавала D — ровно в те дни, когда настоящий главный филиал
+ * выдавал D другому зданию. Два здания, одна буква, одинаковые номера
+ * пациентов, и ни одна проверка в системе не срабатывает. Это единственная
+ * ошибка, ради предотвращения которой существует весь этот этап.
+ *
+ * Файловую проверку это не заменяет, а дополняет: у них разные лекарства
+ * (отвязать / поставить заново), поэтому и коды отказа разные.
+ */
+function identityIsBranch(db) {
+  return identityFields(db).identity_role === 'secondary';
+}
+
 function identityFields(db) {
   try {
     const me = readIdentity(db);
@@ -271,6 +302,10 @@ export function branchSyncMakeKey(db, args, user) {
   // должен услышать «сначала отвяжите», а не «адрес указан неверно» — иначе он
   // будет чинить поле, которое не при чём.
   if (existing && existing.role === 'secondary') throw new RpcError(reasonText('already_secondary'), 400);
+  // И то же самое ПО БАЗЕ — см. identityIsBranch. Отдельная проверка, а не
+  // замена предыдущей: файл лечится отвязкой, база не лечится ничем, и советы
+  // владельцу поэтому разные.
+  if (identityIsBranch(db)) throw new RpcError(reasonText('identity_is_branch'), 400);
   // Кнопка «Показать ключ» на уже настроенном главном филиале: адрес заново не
   // спрашиваем, берём записанный.
   const url = (args && typeof args.url === 'string' && args.url.trim())
@@ -434,7 +469,12 @@ export function branchSyncRegenerateKey(db, args, user) {
   // давали доступ, больше не существует. Оставить их значило бы класть мёртвые
   // строки в свежевыпущенные ключи — филиал получил бы 401 вместо честного
   // «учётки нет» и пошёл бы чинить активацию клиники.
-  db.prepare('DELETE FROM control_state WHERE key LIKE ?').run(BRANCH_TOKEN_PREFIX + '%');
+  // substr, НЕ LIKE: в 'branch_relay_token:' есть подчёркивания, а в LIKE '_'
+  // это шаблонный символ «любой знак». Сегодня в control_state нет ключа,
+  // который под это попал бы случайно, но следующий добавленный ключ проверять
+  // никто не пойдёт, а стирание чужой строки здесь молчаливо.
+  db.prepare('DELETE FROM control_state WHERE substr(key, 1, ?) = ?')
+    .run(BRANCH_TOKEN_PREFIX.length, BRANCH_TOKEN_PREFIX);
   return {
     ok: true,
     role: 'main',
@@ -530,6 +570,12 @@ function branchRow(db, pairing, branch, selfId) {
     // У ТЕКУЩЕЙ УСТАНОВКИ КЛЮЧА НЕТ, и это не пропуск данных: подключать её к
     // самой себе не к чему. Экран пишет это словами.
     key: isSelf ? null : branchKeyFor(db, pairing, branch),
+    // ЕСТЬ ЛИ учётка — но НЕ САМА УЧЁТКА. Экран должен уметь отличить филиал с
+    // резервным каналом от филиала без него (после перевыпуска ключа
+    // синхронизации или заведения без интернета учётки нет, а ключ есть и
+    // работает), и для этого достаточно факта. Значение уезжает только внутри
+    // ключа.
+    has_relay_token: !!getState(db, branchTokenKey(branch.id)),
   };
 }
 
@@ -551,7 +597,14 @@ export function branchSyncBranches(db, args, user) {
   return {
     ok: true,
     role: pairing ? pairing.role : 'none',
-    can_issue: !!(pairing && pairing.role === 'main' && pairing.main_url),
+    // can_issue управляет кнопками на экране, поэтому оно обязано совпадать с
+    // тем, что на самом деле разрешат вызовы ниже: кнопка, которую показали и
+    // которая всегда отказывает, хуже отсутствующей.
+    can_issue: !!(pairing && pairing.role === 'main' && pairing.main_url) && !identityIsBranch(db),
+    // Может ли клиника выписать учётку резервного канала ВООБЩЕ. Без этого
+    // экран предлагал бы «выдать доступ» неактивированной клинике, у которой
+    // поставщик его не выпишет никогда (relay.js relayMintable).
+    can_relay: relayMintable(getDataDir()),
     branches: rows.map((b) => branchRow(db, pairing, b, me.branch_id)),
   };
 }
@@ -572,6 +625,13 @@ export async function branchSyncAddBranch(db, args, user, { mintImpl = mintRelay
   // Буквы раздаёт ГЛАВНЫЙ филиал и только он: очередь букв в группе одна, и
   // филиал, выдающий буквы себе сам, читал бы свою собственную историю вместо
   // общей (см. заголовок identity.js).
+  // ПЕРВОЙ, ДО проверки файла, и порядок здесь — это и есть смысл фразы,
+  // которую услышит владелец. У отвязанного филиала файла пары нет вовсе, так
+  // что проверка файла отвечала бы branch_not_main — «сначала назначьте эту
+  // установку главной», — то есть советовала бы ровно то единственное, чего
+  // этой установке делать нельзя (см. identityIsBranch). Невыполнимый совет
+  // хуже отказа без совета.
+  if (identityIsBranch(db)) throw new RpcError(reasonText('identity_is_branch'), 400);
   if (!pairing || pairing.role !== 'main') throw new RpcError(reasonText('branch_not_main'), 400);
   if (!pairing.main_url) throw new RpcError(reasonText('branch_no_url'), 400);
 
@@ -619,6 +679,9 @@ export async function branchSyncBranchKey(db, args, user, { mintImpl = mintRelay
   requireAdmin(user);
   const dataDir = getDataDir();
   const pairing = readPairing(dataDir);
+  // Тоже первой и по той же причине: этот вызов ТРАТИТ букву, когда у строки её
+  // нет, и отвязанному филиалу нельзя советовать «станьте главным».
+  if (identityIsBranch(db)) throw new RpcError(reasonText('identity_is_branch'), 400);
   if (!pairing || pairing.role !== 'main') throw new RpcError(reasonText('branch_not_main'), 400);
   if (!pairing.main_url) throw new RpcError(reasonText('branch_no_url'), 400);
 

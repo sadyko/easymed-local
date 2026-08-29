@@ -67,7 +67,7 @@ test('re-adopting the SAME letter is a no-op, so a half-failed activation can be
 
   // A DIFFERENT letter is still refused — the frozen test above, by its code.
   assert.throws(() => becomeSecondary(db, { letter: 'D', name: 'Другой' }),
-    { reason: 'already_secondary' });
+    { reason: 'already_other_branch' });
 });
 
 test('the roster keeps the main branch alongside us, and branch_id names OUR row', () => {
@@ -234,8 +234,10 @@ test('an absurdly long letter is refused here, because nothing below refuses it'
   // measured 1009-character patient number, printed on a card.
   //
   // The bound sits in normalizeLetter and not in whoever passes the letter in,
-  // because this function is the one gate EVERY adopter goes through: the branch
-  // key today, Task 6's activation screen and renumber flow tomorrow.
+  // because this function is the one gate EVERY adopter goes through — the branch
+  // key being the only one that exists. (This comment used to promise "Task 6's
+  // activation screen and renumber flow"; Task 6 shipped as the branch list,
+  // which adopts no letter, and the renumber is Stage 2 and unwritten.)
   const db = freshDb();
   assert.throws(() => becomeSecondary(db, { letter: 'A'.repeat(LETTER_MAX_CHARS + 1) }),
     { reason: 'bad_letter' });
