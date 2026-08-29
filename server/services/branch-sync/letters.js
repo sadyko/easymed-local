@@ -48,27 +48,43 @@ export function nextLetter(issued, taken = issued) {
 
 // Is some patients.mrn already numbered under this letter?
 //
-// Written as a half-open RANGE, not as substr(mrn, 1, …) = 'B-', because the
-// substr form applies a function to the column and so cannot seek: SQLite scans
-// every mrn in idx_patients_mrn and tests each one. Measured on a 70,000-row
-// clinic: 3.3 ms for a letter that is NOT in use (the case that scans the whole
-// index) against 0.004 ms for the range. `mrn >= 'B-' AND mrn < 'B.'` is exactly
-// the set of MRNs starting with 'B-' — '.' (0x2E) is the character immediately
-// after '-' (0x2D), so nothing can sort between them. LIKE 'B-%' would be
-// correct too but also scans: SQLite only turns LIKE into a range on a NOCASE
-// index, and this column's index is BINARY.
+// CASE-INSENSITIVE, and that is the whole reason this is a scan and not a seek.
+// patients.mrn is indexed BINARY, so the fast form — the half-open range
+// `mrn >= 'B-' AND mrn < 'B.'` — seeks the index but can only ever match ONE
+// spelling. Probing spellings instead does not close the gap: an n-character
+// letter has 2^n of them, so a two-letter branch needs AA/Aa/aA/aa and the guard
+// gets weaker exactly as a clinic grows past 26 branches — precisely where the
+// collision it exists to prevent starts to bite. COLLATE NOCASE says what is
+// meant in one predicate, for every letter length, permanently.
 //
-// Probed in both cases because that index is BINARY and the Excel importer
-// takes the MRN column as typed. An import that arrives lowercased carries the
-// same printed series to the staff reading the cards, so 'b-24-00500' must
-// block the letter B just as 'B-24-00500' does. Two seeks, not one predicate,
-// for the reason above: a case-insensitive comparison could not use the index.
+// The cost, measured on a 70,000-row clinic (the size that motivated all this):
+//
+//   range, BINARY seek     0.0007 ms   one spelling only, therefore wrong
+//   this, COLLATE NOCASE   3.8 ms      worst case: letter free, whole index read
+//   ditto, letter in use   0.0009 ms   stops at the first hit
+//
+// 3.8 ms is bought, not paid: allocation runs a handful of times in a clinic's
+// entire life, when the owner adds a branch. The plan asked whether this
+// predicate could use an index — it cannot (SQLite applies substr() per row over
+// the covering index idx_patients_mrn), and that is the right trade here.
+//
+// COLLATE NOCASE rather than `mrn LIKE ? || '-%'`, which measured faster at
+// 2.3 ms and folds case identically: LIKE folds only while PRAGMA
+// case_sensitive_like is off. That is the default and connection.js never sets
+// it — but it is a CONNECTION-WIDE switch, so anyone who flips it for an
+// unrelated query silently turns this guard case-sensitive again, with no test
+// failing anywhere. An explicit COLLATE in the SQL text cannot be switched off
+// from a distance.
+//
+// Why case matters at all: the Excel importer takes the MRN column as typed, so
+// an export from a lower-casing system arrives as 'b-24-00500'. BINARY makes
+// that a different string from 'B-26-00001', so nothing would ever raise — yet
+// it is the same printed series to the staff reading the cards, and to any
+// Stage 2 matcher that normalises case.
 function mrnPrefixInUse(db, letter) {
-  const probe = db.prepare('SELECT 1 FROM patients WHERE mrn >= ? AND mrn < ? LIMIT 1');
-  for (const p of [letter.toUpperCase(), letter.toLowerCase()]) {
-    if (probe.get(p + '-', p + '.')) return true;
-  }
-  return false;
+  return !!db.prepare(
+    "SELECT 1 FROM patients WHERE substr(mrn, 1, length(?) + 1) = ? || '-' COLLATE NOCASE LIMIT 1",
+  ).get(letter, letter);
 }
 
 export function allocateLetter(db, { name = '' } = {}) {

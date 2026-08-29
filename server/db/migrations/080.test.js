@@ -37,6 +37,11 @@ const bump = (s) => {
   }
 };
 function nextLetter(db) {
+  // KEEP EVERY SCENARIO IN THIS FILE UNDER 26 BRANCHES. This MAX() is a LEXICAL
+  // maximum; the real allocator (letters.js) takes the highest by POSITION, so
+  // the two disagree past Z — with {A,B,AA} issued letters.js answers AB and
+  // this mirror answers C, because 'AA' < 'B' as text. Add a >26-branch case
+  // here and it would pin the wrong rule while looking authoritative.
   const highestIssued = db.prepare("SELECT MAX(letter) m FROM branch_letters_spent WHERE kind = 'issue'").get().m;
   const present = new Set(db.prepare('SELECT letter FROM branch_letters_spent').all().map((r) => r.letter));
   let cand = bump(highestIssued);

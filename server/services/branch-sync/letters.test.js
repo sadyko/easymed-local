@@ -16,10 +16,21 @@ test('letters run A, B, C ... Z, then AA, AB', () => {
 });
 
 test('a letter is never reused, even when its branch is gone', () => {
+  // The single failure this whole scheme exists to prevent. A closed branch
+  // frees nothing: its letter prefixes MRNs printed on cards patients still
+  // carry and quoted on invoices already issued. Hand B out a second time and
+  // two different people carry the same number years apart — and nothing flags
+  // it, because the numbers are simply equal. Stage 2 matches patients on
+  // natural: ['mrn'], so the two would silently merge into one medical record.
   assert.equal(nextLetter(['A', 'B', 'C']), 'D', 'not B, even if B was deleted');
 });
 
 test('allocation is driven by the highest letter ever issued, not by the count', () => {
+  // Which is why the LEDGER is the authority and branches.letter is not.
+  // Counting branches, or reading the highest letter off the branches table,
+  // both give the same wrong answer here: the row is deleted, so B looks free.
+  // Only branch_letters_spent still remembers that it was spent — that is the
+  // whole reason 080 created a second table instead of reading branches.
   const db = freshDb();
   db.prepare("INSERT INTO branches (name, letter) VALUES ('Второй', 'B')").run();
   db.prepare("INSERT INTO branch_letters_spent (letter, kind) VALUES ('B','issue')").run();
@@ -28,6 +39,24 @@ test('allocation is driven by the highest letter ever issued, not by the count',
 });
 
 test("a BURNED letter is skipped but does not drag the next letter past it", () => {
+  // READ THIS BEFORE TOUCHING THE 'P' SEED IN MIGRATION 080.
+  //
+  // 'P' is spent without ever having been a branch: it is the prefix every
+  // legacy MRN already carries (002 and 034 minted 'P-YY-NNNNN' for years, and
+  // a live clinic holds ~70 000 of them). A branch lettered P would be a
+  // separate database with no legacy rows, so its allocator would start at
+  // P-26-00001 and climb straight through numbers the main branch printed years
+  // ago.
+  //
+  // That is why the ledger has a `kind` and why 'P' is 'burn' and not 'issue'.
+  // 'issue' means "handed to a real branch" and drives where allocation is;
+  // 'burn' means "never a branch and never allowed to be one". Seed 'P' as
+  // 'issue' and it becomes the highest issued letter in a one-branch clinic, so
+  // the clinic's SECOND branch comes out lettered Q, silently skipping B..O —
+  // and the obvious fix would be to delete the burn row, undoing the reason it
+  // exists. A guard whose failure mode invites its own removal is worse than no
+  // guard, so this test pins both halves at once: the row is there, AND it does
+  // not move the allocator.
   const db = freshDb();
   const spent = db.prepare('SELECT letter, kind FROM branch_letters_spent ORDER BY letter').all();
   assert.deepEqual(spent, [{ letter: 'A', kind: 'issue' }, { letter: 'P', kind: 'burn' }]);
@@ -35,6 +64,12 @@ test("a BURNED letter is skipped but does not drag the next letter past it", () 
 });
 
 test('a burned letter is never issued, even when allocation reaches it', () => {
+  // The other half of the same rule, and the half that actually fires one day.
+  // The test above proves a burn does not PUSH allocation forward; this one
+  // proves allocation cannot walk THROUGH it once it arrives. Fifteen branches
+  // in, the next letter by position is P — so the walk must step over it and
+  // land on Q. If it ever returns P, every MRN that branch mints collides with
+  // the legacy series, and nothing downstream can tell the two apart.
   const db = freshDb();
   for (const l of 'BCDEFGHIJKLMNO') {
     db.prepare("INSERT INTO branch_letters_spent (letter, kind) VALUES (?, 'issue')").run(l);
@@ -127,6 +162,41 @@ test('an imported prefix in lower case blocks the letter too', () => {
   db.prepare("INSERT INTO patients (full_name, mrn) VALUES ('Импорт', 'b-24-00500')").run();
   assert.equal(allocateLetter(db, { name: 'Второй' }), 'C');
   assert.equal(db.prepare("SELECT kind FROM branch_letters_spent WHERE letter = 'B'").get().kind, 'burn');
+});
+
+test('a MIXED-case imported prefix blocks a two-letter branch, not just an all-lower one', () => {
+  // The bug this pins: probing only toUpperCase() and toLowerCase() covers a
+  // one-character letter exhaustively and a two-character one only half — 'Aa-'
+  // and 'aA-' go unseen, so the 27th branch is issued AA and mints straight into
+  // an imported series. It bites ONLY past 26 branches, which is also the only
+  // place the collision itself can happen, so the guard was weakest exactly
+  // where it was needed. The predicate is COLLATE NOCASE for this reason; the
+  // spelling-probe approach needs 2^n queries and gets worse as letters grow.
+  for (const imported of ['Aa-24-00500', 'aA-24-00500', 'aa-24-00500', 'AA-24-00500']) {
+    const db = freshDb();
+    for (const l of 'BCDEFGHIJKLMNOQRSTUVWXYZ') {   // P is already burned by 080
+      db.prepare("INSERT INTO branch_letters_spent (letter, kind) VALUES (?, 'issue')").run(l);
+    }
+    db.prepare('INSERT INTO patients (full_name, mrn) VALUES (?, ?)').run('Импорт', imported);
+    assert.equal(allocateLetter(db, { name: 'Двадцать седьмой' }), 'AB',
+      `${imported} must block AA whatever case it was imported in`);
+    assert.equal(db.prepare("SELECT kind FROM branch_letters_spent WHERE letter = 'AA'").get().kind, 'burn');
+  }
+});
+
+test('the prefix check matches a whole letter, never a longer or shorter one', () => {
+  // COLLATE NOCASE folds case; it must not also blur length. 'AAA-…' must not
+  // block AA, and 'A-…' must not block AA — otherwise the walk burns letters
+  // that are perfectly free and the clinic loses them forever.
+  const db = freshDb();
+  for (const l of 'BCDEFGHIJKLMNOQRSTUVWXYZ') {
+    db.prepare("INSERT INTO branch_letters_spent (letter, kind) VALUES (?, 'issue')").run(l);
+  }
+  db.prepare("INSERT INTO patients (full_name, mrn) VALUES ('Длинный', 'AAA-24-00500')").run();
+  db.prepare("INSERT INTO patients (full_name, mrn) VALUES ('Короткий', 'A-24-00500')").run();
+  assert.equal(allocateLetter(db, { name: 'Двадцать седьмой' }), 'AA', 'neither row is an AA- number');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM branch_letters_spent WHERE kind='burn'").get().n, 1,
+    "only 080's 'P' — nothing was burned by mistake");
 });
 
 test('thirty branches in a row: every letter distinct, P stepped over, Z rolling into AA', () => {
