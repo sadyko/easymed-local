@@ -8,7 +8,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { b64url, writePairing, GROUP_KEY_BYTES } from './pairing.js';
 import { relayIdFor, openPayload } from './relay-crypto.js';
-import { publishCatalogue, fetchCatalogue, maybePublish, relayUrl, readLastPublish } from './relay.js';
+import { publishCatalogue, fetchCatalogue, maybePublish, mintRelayToken, relayUrl, relayTokenUrl, readLastPublish } from './relay.js';
 
 // BRANCH_SYNC_RELAY_V1 — транспорт Маршрута Б на подставном fetch.
 //
@@ -294,7 +294,13 @@ test('нет ни того, ни другого — по-прежнему чес
   const sec = clinic('rt-none', { role: 'secondary', token: null });
   const got = await fetchCatalogue(sec.dir, { fetchImpl: vendor.fetchImpl, env: {} });
   assert.equal(got.ok, false);
-  assert.equal(got.reason, 'relay_not_enrolled');
+  // ИЗМЕНЁННОЕ УТВЕРЖДЕНИЕ: было relay_not_enrolled, и отказ тот же самый —
+  // изменилось имя, потому что изменилось ЛЕКАРСТВО. Эта функция работает
+  // только у подключённого филиала (первая же её проверка), а он у поставщика
+  // не активирован и активирован не будет: он подключался к клинике. Фраза
+  // «клиника не активирована через Easy-Med» отправляла владельца проверять
+  // активацию, тогда как учётка приезжает внутри ключа подключения.
+  assert.equal(got.reason, 'relay_branch_no_token');
   assert.equal(vendor.calls.length, 0);
 });
 
@@ -307,7 +313,80 @@ test('пустой или пробельный токен в записи — э
   for (const relayToken of ['   ', '	']) {
     const sec = clinic('rt-blank', { role: 'secondary', token: null, relayToken });
     const got = await fetchCatalogue(sec.dir, { fetchImpl: vendor.fetchImpl, env: {} });
-    assert.equal(got.reason, 'relay_not_enrolled', JSON.stringify(relayToken));
+    assert.equal(got.reason, 'relay_branch_no_token', JSON.stringify(relayToken));
   }
   assert.equal(vendor.calls.length, 0);
+});
+
+// --- BRANCH_IDENTITY_V1: выписка учётки для нового филиала ------------------
+//
+// Сторона ГЛАВНОГО филиала: он единственный в группе, кто активирован у
+// поставщика, поэтому он единственный, кому есть чем представиться. Выписанная
+// учётка уезжает во второй филиал ВНУТРИ ключа подключения, который владелец
+// переносит руками.
+
+function fakeMint({ status = 201, body = { token: 'minted-XYZ' } } = {}) {
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push({
+      url,
+      method: init.method,
+      auth: (init.headers || {}).Authorization || null,
+      body: init.body ? JSON.parse(init.body) : null,
+    });
+    return { ok: status >= 200 && status < 300, status, json: async () => body };
+  };
+  return { calls, fetchImpl };
+}
+
+test('главный филиал выписывает учётку своим install_token-ом и на свой адрес', async () => {
+  const { dir } = clinic('mint-ok', { role: 'main' });
+  const vendor = fakeMint();
+  const r = await mintRelayToken(dir, { fetchImpl: vendor.fetchImpl, env: {} });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.token, 'minted-XYZ');
+  assert.equal(vendor.calls.length, 1);
+  assert.equal(vendor.calls[0].url, relayTokenUrl({}));
+  assert.equal(vendor.calls[0].method, 'POST');
+  assert.equal(vendor.calls[0].auth, 'Bearer tok-AAAA', 'клиника представляется своей учёткой');
+  // Учётка привязана к адресу группы: на любом другом она бесполезна.
+  assert.equal(vendor.calls[0].body.relay_id, relayIdFor(KEY));
+});
+
+test('выписывать может только главный филиал, только с ключом и только активированная клиника', async () => {
+  const vendor = fakeMint();
+  const call = async (opts) => mintRelayToken(clinic('mint-guard', opts).dir, { fetchImpl: vendor.fetchImpl, env: {} });
+  // Подключённый филиал учёток не выписывает: install_token-а у него нет, и
+  // попытка кончилась бы 401, который на экране неотличим от отозванного доступа.
+  assert.equal((await call({ role: 'secondary' })).reason, 'relay_not_main');
+  assert.equal((await call({ role: 'main', key: null })).reason, 'relay_no_key');
+  assert.equal((await call({ role: 'main', token: null })).reason, 'relay_not_enrolled');
+  assert.equal(vendor.calls.length, 0, 'ни один отказ не должен был дойти до сети');
+});
+
+test('каждый ответ сервера при выписке переводится в свою причину', async () => {
+  const { dir } = clinic('mint-codes', { role: 'main' });
+  const byStatus = async (status) => (await mintRelayToken(dir, {
+    fetchImpl: fakeMint({ status }).fetchImpl, env: {},
+  })).reason;
+  assert.equal(await byStatus(401), 'relay_unauthorized');
+  // 409 — упёрлись в потолок живых учёток клиники, и лекарство своё: отозвать
+  // учётки филиалов, которых больше нет.
+  assert.equal(await byStatus(409), 'relay_too_many_tokens');
+  assert.equal(await byStatus(500), 'relay_server_error');
+
+  const dead = async () => { throw new Error('ECONNREFUSED'); };
+  const offline = await mintRelayToken(dir, { fetchImpl: dead, env: {} });
+  assert.equal(offline.reason, 'relay_offline', 'офлайн для этой клиники — норма, а не поломка');
+});
+
+test('пустая учётка в ответе — это не учётка', async () => {
+  // Записав пустую строку в ключ подключения, мы выдали бы филиалу
+  // гарантированный 401 под видом рабочего доступа.
+  const { dir } = clinic('mint-empty', { role: 'main' });
+  for (const body of [{}, { token: '' }, { token: '   ' }, { token: 42 }]) {
+    const r = await mintRelayToken(dir, { fetchImpl: fakeMint({ body }).fetchImpl, env: {} });
+    assert.equal(r.ok, false, JSON.stringify(body));
+    assert.equal(r.reason, 'relay_bad_response', JSON.stringify(body));
+  }
 });

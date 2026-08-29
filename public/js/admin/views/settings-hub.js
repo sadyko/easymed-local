@@ -37,7 +37,7 @@ import { renderRolesEditor } from './roles-editor.js?v=roles2';
 // той же конвенции, что и «Роли», и монтируется НАД списком — разводить их по
 // двум пунктам меню значило бы вернуть путаницу «две плитки про одно и то же»,
 // которую SETTINGS_ONE_COMPANY_V1 только что убрал.
-import { renderBranchSyncCard } from './branch-sync.js?v=bsync2';
+import { renderBranchSyncCard } from './branch-sync.js?v=bsync3';   // bsync3: список филиалов с постоянными ключами (BRANCH_IDENTITY_V1)
 
 let state = { section: null };   // null = hub; else one of LOOKUP_CONFIG's keys
 

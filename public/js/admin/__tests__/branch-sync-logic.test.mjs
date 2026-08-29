@@ -10,6 +10,7 @@ import assert from 'node:assert';
 import {
   roleBadge, roleExplainer, syncLine, changesLabel, whenLabel, canSyncNow, addressValue,
   routeLabel, syncKeyLine, relayExplainer, publishLine, canRegenerateKey, KEY_LOSS_WARNING,
+  branchRows, KEY_REISSUE_WARNING, LETTER_PERMANENCE_NOTE, pairedMessage, letterExplainer,
 } from '../branch-sync-logic.js';
 
 test('роль установки читается с одного взгляда', () => {
@@ -205,4 +206,87 @@ test('перевыпустить ключ может главный филиал
   assert.equal(canRegenerateKey({ role: 'secondary' }, true), false,
     'его ключ выдаёт главный филиал: перевыпуск у себя только отвалил бы филиал от группы');
   assert.equal(canRegenerateKey({ role: 'main' }, false), false, 'не администратор — не перевыпускает');
+});
+
+// --- BRANCH_IDENTITY_V1 — список филиалов, буквы и постоянные ключи ---------
+
+test('список филиалов даёт каждому имя и ключ, который читается в любой момент', () => {
+  // Требование владельца дословно: «in the branch list should be only the
+  // branch name. and activation key (not one time generated)». Ключ,
+  // показанный один раз и спрятанный, превращает переустановку филиала в
+  // звонок поставщику.
+  const rows = branchRows({ role: 'main', branches: [
+    { id: 1, name: 'Главный', letter: 'A', key: null, is_self: true },
+    { id: 2, name: 'Чиланзар', letter: 'B', key: 'EMB2-xxxx' },
+  ] });
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1].key, 'EMB2-xxxx');
+  assert.equal(rows[0].key, null, 'у главного филиала нет ключа, чтобы подключиться к самому себе');
+  assert.equal(rows[0].state, 'self');
+  assert.equal(rows[1].state, 'key');
+  // Пустая клетка на месте ключа — это «не знаю»; здесь ответ известен.
+  assert.match(rows[0].note, /к самой себе/);
+  assert.equal(rows[1].note, null, 'у строки с ключом объяснять нечего');
+});
+
+test('буква показана рядом с именем, потому что с неё начинается номер пациента', () => {
+  const [row] = branchRows({ role: 'main', branches: [{ id: 3, name: 'Юнусабад', letter: 'C', key: 'EMB2-y' }] });
+  assert.equal(row.letter, 'C');
+  assert.equal(row.letterLabel, 'C');
+  // Филиал, заведённый до появления букв, не должен рисовать «undefined».
+  const [old] = branchRows({ role: 'main', branches: [{ id: 4, name: 'Старый', letter: null, key: null }] });
+  assert.equal(old.letterLabel, '—');
+  assert.equal(old.state, 'no_letter');
+  assert.match(old.note, /Выдать ключ/);
+});
+
+test('безымянная строка филиала не рисуется пустотой', () => {
+  const [row] = branchRows({ role: 'main', branches: [{ id: 5, name: '', letter: 'D', key: 'EMB2-z' }] });
+  assert.equal(row.name, '—');
+});
+
+test('подключённый филиал ключей не выдаёт и не делает вид, что может', () => {
+  const [row] = branchRows({ role: 'secondary', branches: [{ id: 2, name: 'Чиланзар', letter: 'B', key: null }] });
+  assert.equal(row.state, 'not_main');
+  assert.match(row.note, /главн/i);
+});
+
+test('список переживает старый сервер и испорченный ответ', () => {
+  assert.deepEqual(branchRows(null), []);
+  assert.deepEqual(branchRows({ role: 'main' }), []);
+  assert.deepEqual(branchRows({ role: 'main', branches: 'нет' }), []);
+});
+
+test('перевыпуск ключа предупреждает ДО действия и ровно теми словами', () => {
+  // Дословно из задачи: владелец должен прочитать это до нажатия, а не узнать
+  // после того, как филиалы отвалились.
+  assert.equal(
+    KEY_REISSUE_WARNING,
+    'Перевыпуск ключа отключит все филиалы, подключённые старым ключом. Их придётся подключить заново.',
+  );
+});
+
+test('про несменяемость буквы сказано там, где выбирают название филиала', () => {
+  assert.match(LETTER_PERMANENCE_NOTE, /навсегда/);
+  assert.match(LETTER_PERMANENCE_NOTE, /номер пациента/i);
+});
+
+test('подключение подтверждается буквой, а не бодрым «готово»', () => {
+  // branchSyncPair возвращает принятую букву именно ради этой фразы: владелец
+  // видит, чем стала установка, и сверяет её с ключом, который вводил.
+  assert.equal(pairedMessage({ ok: true, letter: 'C' }).letter, 'C');
+  // ЧАСТЯМИ: tr() ищет в словаре строку целиком, поэтому фраза, склеенная с
+  // буквой, не нашлась бы там никогда и ушла бы в узбекскую клинику по-русски.
+  assert.equal(pairedMessage({ ok: true, letter: 'C' }).base, 'Филиал подключён к главному');
+  // Ключ старого выпуска буквы не несёт — выдумывать её нельзя.
+  assert.equal(pairedMessage({ ok: true }).letter, null);
+  assert.equal(pairedMessage(null).letter, null);
+  assert.equal(pairedMessage(null).base, 'Филиал подключён к главному');
+});
+
+test('буква установки объяснена номером пациента, а не термином', () => {
+  const line = letterExplainer({ letter: 'C' });
+  assert.equal(line.example, 'C-26-00042', 'номер, который регистратура видит каждый день');
+  assert.ok(line.base.length > 20, 'переводимая половина — целая строка словаря');
+  assert.equal(letterExplainer({}), null, 'нечего объяснять — нечего и писать');
 });

@@ -36,12 +36,24 @@ import { relayIdFor, sealPayload, openPayload } from './relay-crypto.js';
 // выглядит как «сервер поставщика не умеет резервный канал».
 export const RELAY_PATH_PREFIX = '/cp/v1/relay/';
 
+// BRANCH_IDENTITY_V1 — где ГЛАВНЫЙ филиал выписывает учётку для нового филиала
+// (control-plane/server/routes/relay-token.js, RELAY_TOKEN_MOUNT). Тот же приём,
+// что и строкой выше, и по той же причине: разъехавшись на один символ, две
+// стороны дадут 404, который на экране неотличим от «поставщик не умеет
+// резервный канал».
+export const RELAY_TOKEN_PATH = '/cp/v1/relay-token';
+
 const DEFAULT_ENDPOINT = 'https://settings.easymed.uz';
 
 // Те же бюджеты, что у checkin.js: мёртвая сеть обязана отказать быстро, а не
 // висеть. Выгрузка больше check-in-а на порядки, поэтому и времени ей больше.
 const UPLOAD_TIMEOUT_MS = 60_000;
 const DOWNLOAD_TIMEOUT_MS = 60_000;
+// Выписка учётки — один INSERT на той стороне и полсотни байт ответа, поэтому
+// бюджет короткий: владелец в этот момент СМОТРИТ на кнопку «Добавить филиал»,
+// и минута ожидания ради необязательного резервного канала — это сломанная
+// кнопка, а не терпение.
+const MINT_TIMEOUT_MS = 15_000;
 
 // Потолок на то, что мы готовы принять с сервера поставщика. Справочник в
 // сжатом виде — сотни килобайт даже с логотипом клиники; 12 МБ это «очень
@@ -73,6 +85,12 @@ const LAST_PUBLISH = LAST_PUBLISH_KEY;
 export function relayUrl(relayId, env = process.env) {
   const base = String((env && env.EASYMED_CONTROL_URL) || DEFAULT_ENDPOINT).trim().replace(/\/+$/, '');
   return base + RELAY_PATH_PREFIX + relayId;
+}
+
+/** Туда же, но за учёткой для филиала. */
+export function relayTokenUrl(env = process.env) {
+  const base = String((env && env.EASYMED_CONTROL_URL) || DEFAULT_ENDPOINT).trim().replace(/\/+$/, '');
+  return base + RELAY_TOKEN_PATH;
 }
 
 /**
@@ -330,8 +348,15 @@ export async function maybePublish(db, dataDir, opts = {}) {
  * — половина справочника хуже, чем ни одной.
  *
  * reason: relay_not_secondary | relay_disabled | relay_no_key |
- *   relay_not_enrolled | relay_offline | relay_unauthorized | relay_empty |
+ *   relay_branch_no_token | relay_offline | relay_branch_revoked | relay_empty |
  *   relay_too_large | relay_server_error | relay_bad_key | relay_bad_response
+ *
+ * BRANCH_IDENTITY_V1 — relay_branch_no_token и relay_branch_revoked заменили
+ * здесь общие relay_not_enrolled и relay_unauthorized. Коды разошлись потому,
+ * что разошлись ЛЕКАРСТВА: у главного филиала это «проверьте активацию
+ * клиники», у подключённого — «возьмите новый ключ подключения в главном
+ * филиале». Ветки по роли не понадобилось: эта функция и так только для
+ * подключённого (первая же проверка), а publishCatalogue — только для главного.
  *
  * @returns {Promise<{ok:true, group_id, catalogue, generated_at}|{ok:false, reason:string}>}
  */
@@ -349,7 +374,15 @@ export async function fetchCatalogue(dataDir, {
   if (!relayId) return { ok: false, reason: 'relay_no_key' };
 
   const token = relayCredential(dataDir, pairing);
-  if (!token) return { ok: false, reason: 'relay_not_enrolled' };
+  // ОТДЕЛЬНЫЙ КОД, А НЕ relay_not_enrolled, и это правка про лекарство, а не про
+  // оттенок формулировки. Эта функция по построению работает только у
+  // ПОДКЛЮЧЁННОГО филиала (проверка role выше), а подключённый филиал у
+  // поставщика не активирован и активирован не будет — он подключался к
+  // клинике. Фраза «клиника не активирована через Easy-Med» отправляла его
+  // владельца проверять активацию, то есть чинить то, что не сломано; настоящее
+  // лекарство — взять в главном филиале новый ключ подключения, потому что
+  // учётка резервного канала приезжает ВНУТРИ ключа.
+  if (!token) return { ok: false, reason: 'relay_branch_no_token' };
 
   let res;
   try {
@@ -363,7 +396,13 @@ export async function fetchCatalogue(dataDir, {
   }
 
   if (!res.ok) {
-    if (res.status === 401 || res.status === 403) return { ok: false, reason: 'relay_unauthorized' };
+    // И здесь тоже свой код, по той же причине. 401 у подключённого филиала
+    // означает ровно одно из двух: главный филиал отозвал его учётку
+    // (relay_tokens.revoked_at) или перевыпустил ключ синхронизации, отчего
+    // адрес на сервере сменился вместе с ключом группы. Оба чинятся ОДНИМ
+    // действием и на ДРУГОЙ машине — новым ключом подключения, — а «проверьте
+    // активацию клиники» не чинится ничем.
+    if (res.status === 401 || res.status === 403) return { ok: false, reason: 'relay_branch_revoked' };
     // 404 — блоба нет. Самый обычный случай: главный филиал не включал выгрузку
     // либо ещё ни разу не выгружался. Отдельная причина, потому что чинится это
     // на ДРУГОЙ машине, и владелец должен услышать именно это.
@@ -400,6 +439,80 @@ export async function fetchCatalogue(dataDir, {
     catalogue,
     generated_at: typeof payload.generated_at === 'string' ? payload.generated_at : null,
   };
+}
+
+/**
+ * BRANCH_IDENTITY_V1 — выписать НОВОМУ ФИЛИАЛУ учётку резервного канала.
+ *
+ * Сторона ГЛАВНОГО филиала, и только его: он единственный в группе, кто
+ * активирован у поставщика, поэтому он единственный, кому есть чем
+ * представиться. Выписанный токен уезжает во второй филиал ВНУТРИ ключа
+ * подключения, который владелец переносит руками, — через сервер поставщика он
+ * не проходит ни разу.
+ *
+ * НИКОГДА НЕ БРОСАЕТ и ничему не мешает. Ключ подключения выпускается и без
+ * токена: Маршрут А (филиал ходит к главному напрямую) от поставщика не зависит
+ * вовсе, и клиника без интернета обязана уметь завести филиал. Отказ здесь —
+ * это «резервный канал у этого филиала пока не работает», а не «филиал не
+ * заведён», и экран говорит именно это.
+ *
+ * reason: relay_not_main | relay_no_key | relay_not_enrolled | relay_offline |
+ *   relay_unauthorized | relay_too_many_tokens | relay_server_error |
+ *   relay_bad_response
+ *
+ * @returns {Promise<{ok:true, token:string, relay_id:string}|{ok:false, reason:string}>}
+ */
+export async function mintRelayToken(dataDir, {
+  fetchImpl = globalThis.fetch,
+  timeoutMs = MINT_TIMEOUT_MS,
+  env = process.env,
+} = {}) {
+  const pairing = readPairing(dataDir);
+  // Токены ВЫПИСЫВАЕТ главный филиал. У подключённого своего install_token-а
+  // нет, и попытка выписать закончилась бы 401, который на экране выглядит как
+  // отозванный доступ — жалоба на поломку там, где просто не та машина.
+  if (!pairing || pairing.role !== 'main') return { ok: false, reason: 'relay_not_main' };
+
+  // Адрес на сервере поставщика выводится из ключа группы, и токен привязан
+  // ИМЕННО К НЕМУ: без ключа выписывать нечего и не на что.
+  const relayId = relayIdFor(pairing.group_key);
+  if (!relayId) return { ok: false, reason: 'relay_no_key' };
+
+  // Клиника, лицензированная по телефону и никогда не ходившая к поставщику,
+  // резервным каналом пользоваться не может — ни сама, ни через филиалы.
+  const token = installToken(dataDir);
+  if (!token) return { ok: false, reason: 'relay_not_enrolled' };
+
+  let res;
+  try {
+    res = await fetchImpl(relayTokenUrl(env), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ relay_id: relayId }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch {
+    // Клиника офлайновая по построению: нет интернета — не поломка.
+    return { ok: false, reason: 'relay_offline' };
+  }
+
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) return { ok: false, reason: 'relay_unauthorized' };
+    // 409 — упёрлись в потолок живых токенов клиники (см. MAX_LIVE_TOKENS_PER_CLINIC
+    // в control-plane/server/routes/relay-token.js). Отдельный код, потому что
+    // лекарство своё и оно есть: отозвать учётки филиалов, которых больше нет.
+    if (res.status === 409) return { ok: false, reason: 'relay_too_many_tokens' };
+    return { ok: false, reason: 'relay_server_error' };
+  }
+
+  let body;
+  try { body = await res.json(); }
+  catch { return { ok: false, reason: 'relay_bad_response' }; }
+  const minted = body && typeof body.token === 'string' ? body.token.trim() : '';
+  // Пустая строка — это ОТСУТСТВИЕ токена, а не токен: записав её в ключ, мы
+  // выдали бы филиалу гарантированный 401 под видом рабочей учётки.
+  if (!minted) return { ok: false, reason: 'relay_bad_response' };
+  return { ok: true, token: minted, relay_id: relayId };
 }
 
 /**

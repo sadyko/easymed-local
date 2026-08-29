@@ -19,6 +19,7 @@ import { isAdminActor } from '../admin-actor.js';
 import {
     roleBadge, roleExplainer, syncLine, whenLabel, canSyncNow, addressValue,
     syncKeyLine, relayExplainer, publishLine, canRegenerateKey, KEY_LOSS_WARNING,
+    branchRows, KEY_REISSUE_WARNING, LETTER_PERMANENCE_NOTE, pairedMessage, letterExplainer,
 } from '../branch-sync-logic.js';
 
 async function rpc(name, args = {}) {
@@ -85,11 +86,29 @@ function paintUnlinked(card, status, admin) {
         h('div', { class: 'bsync-actions' }, mainBtn, mainStatus),
     ));
 
-    const keyInput = h('textarea', { rows: '3', placeholder: 'EMB1-…', class: 'bsync-key' });
+    const keyInput = h('textarea', { rows: '3', placeholder: 'EMB2-…', class: 'bsync-key' });
     const pairBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, 'Подключить к главному');
     const pairStatus = h('p', { class: 'upd-action-status', role: 'status' });
-    pairBtn.addEventListener('click', () => run(pairBtn, pairStatus, card,
-        () => rpc('branch_sync_pair', { key: keyInput.value }), 'Филиал подключён к главному'));
+    // НЕ через run(): тот говорит заготовленное «Готово», а здесь подтвердить надо
+    // БУКВОЙ. Владелец только что ввёл длинный ключ, выпущенный на другой машине, и
+    // буква — единственное, что он может сверить глазами (branchSyncPair её для
+    // этого и возвращает).
+    pairBtn.addEventListener('click', async () => {
+        if (pairBtn.disabled) return;
+        pairBtn.disabled = true;
+        pairStatus.textContent = '';
+        try {
+            const data = await rpc('branch_sync_pair', { key: keyInput.value });
+            // Обе половины через tr() по отдельности: tr() ищет в словаре строку
+            // целиком, поэтому склеенная с буквой фраза не переводится нигде.
+            const done = pairedMessage(data);
+            toast(done.letter ? `${tr(done.base)}. ${tr('Этот филиал')} — ${done.letter}` : tr(done.base), 'ok');
+            await paint(card);
+        } catch (e) {
+            pairBtn.disabled = false;
+            pairStatus.textContent = e.message;
+        }
+    });
 
     card.appendChild(h('div', { class: 'bsync-block' },
         h('div', { class: 'sys-block-title' }, 'Этот филиал подключается к главному'),
@@ -110,52 +129,170 @@ function paintMain(card, status, admin) {
     ));
     if (!admin) return;
 
-    const keyBox = h('textarea', { rows: '3', readonly: 'readonly', class: 'bsync-key' });
-    const showBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, 'Показать ключ подключения');
-    const copyBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button', style: { display: 'none' } }, 'Копировать');
-    const keyStatus = h('p', { class: 'upd-action-status', role: 'status' });
+    paintBranchList(card);
+    paintRelay(card, status, admin);
+    paintSyncKey(card, status, admin);
+    card.appendChild(unlinkBlock(card,
+        'Филиалы перестанут получать справочник отсюда. Уже переданные услуги и панели у них останутся.'));
+}
 
-    showBtn.addEventListener('click', async () => {
-        showBtn.disabled = true;
-        keyStatus.textContent = '';
+// --- список филиалов и их ПОСТОЯННЫЕ ключи (BRANCH_IDENTITY_V1) ------------
+//
+// Требование владельца дословно: «in the branch list should be only the branch
+// name. and activation key (not one time generated)». Прежний блок «Показать
+// ключ подключения» УДАЛЁН, и не только потому, что прятал ключ за нажатием:
+// он выдавал ключ БЕЗ БУКВЫ филиала, а филиал, подключённый таким ключом,
+// остаётся при букве A и начинает печатать A-номера рядом с главным филиалом,
+// который печатает свои. Это ровно та коллизия, ради которой буква и заведена
+// (см. server/services/branch-sync/identity.js). Ключ теперь выдаётся строке
+// списка — то есть всегда вместе с буквой.
+//
+// Список грузится ОТДЕЛЬНЫМ вызовом и после отрисовки: он несёт ключи, поэтому
+// закрыт ролью, тогда как branch_sync_status читают все, кому открыты
+// настройки. Карточка не должна ждать его, чтобы показать роль установки.
+function paintBranchList(card) {
+    const listEl = h('div', { class: 'bsync-branches' },
+        h('p', { class: 'muted bsync-note' }, 'Загружаем список филиалов…'));
+    // Строка состояния ЖИВЁТ ВНЕ списка: она рассказывает про последнее действие
+    // (например, что резервный канал этому филиалу выписать не удалось), а
+    // список перерисовывается после каждого действия и стёр бы её собой.
+    const actionStatus = h('p', { class: 'upd-action-status', role: 'status' });
+
+    const nameInput = h('input', { type: 'text', placeholder: 'Чиланзар' });
+    const addBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button' },
+        Icon('Plus', { size: 14 }), ' ', 'Добавить филиал');
+
+    card.appendChild(h('div', { class: 'bsync-block' },
+        h('div', { class: 'sys-block-title' }, 'Филиалы клиники'),
+        h('p', { class: 'muted bsync-note' },
+            'Ключ филиала не меняется, и прочитать его здесь можно в любой момент. Так и задумано: филиальный компьютер переустанавливают и меняют, а код, показанный один раз, к этому дню уже потерян.'),
+        h('p', { class: 'muted bsync-note' },
+            'Ключ несёт и ключ шифрования группы. Передайте его лично, сообщением или на флешке — через сервер Easy-Med он не проходит.'),
+        listEl,
+        h('div', { class: 'bsync-block' },
+            h('div', { class: 'sys-block-title' }, 'Добавить филиал'),
+            field('Название филиала', nameInput),
+            // ПРО НЕСМЕНЯЕМОСТЬ БУКВЫ — здесь, а не в справке: решение о новом
+            // филиале принимается ровно в этом поле, а справку не открывают.
+            h('p', { class: 'muted bsync-note' }, LETTER_PERMANENCE_NOTE),
+            h('div', { class: 'bsync-actions' }, addBtn, actionStatus),
+        ),
+    ));
+
+    addBtn.addEventListener('click', async () => {
+        if (addBtn.disabled) return;
+        addBtn.disabled = true;
+        actionStatus.textContent = '';
         try {
-            const data = await rpc('branch_sync_make_key', {});
-            keyBox.value = data.key;
-            keyBox.style.display = '';
-            copyBtn.style.display = '';
+            const data = await rpc('branch_sync_add_branch', { name: nameInput.value });
+            nameInput.value = '';
+            toast(tr('Филиал добавлен'), 'ok');
+            // Резервный канал мог не выписаться (нет интернета, клиника не
+            // активирована) — филиал при этом заведён и по прямой связи работает.
+            // Это СОСТОЯНИЕ, а не отказ, поэтому оно идёт строкой, а не красным
+            // тостом поверх удачного действия.
+            noteRelay(actionStatus, data);
+            await reload();
         } catch (e) {
-            keyStatus.textContent = e.message;
-        } finally {
-            showBtn.disabled = false;
+            actionStatus.textContent = e.message;
         }
+        addBtn.disabled = false;
     });
+
+    // Не await: карточка уже нарисована, и список догружается в неё сам —
+    // ровно так же, как settings-hub.js догружает саму карточку.
+    reload();
+
+    async function reload() {
+        let data;
+        try {
+            data = await rpc('branch_sync_branches');
+        } catch (e) {
+            clear(listEl);
+            listEl.appendChild(h('p', { class: 'upd-error' },
+                'Не удалось прочитать список филиалов. Обновите страницу.'));
+            return;
+        }
+        clear(listEl);
+        const rows = branchRows(data);
+        if (!rows.length) {
+            listEl.appendChild(h('p', { class: 'muted bsync-note' }, 'Филиалов пока нет.'));
+            return;
+        }
+        for (const row of rows) listEl.appendChild(branchEl(row, data.can_issue));
+    }
+
+    function branchEl(row, canIssue) {
+        const head = h('div', { class: 'bsync-branch-head' },
+            h('span', { class: 'bsync-branch-name' }, row.name),
+            h('span', { class: 'muted bsync-note' }, 'Буква'),
+            // Буква — Tag, а не текст: её ищут глазами среди имён, и она же
+            // стоит первым символом каждого номера пациента этого здания.
+            Tag(row.letterLabel, { kind: row.letter ? 'info' : '' }));
+
+        const box = h('div', { class: 'bsync-branch' }, head);
+        if (row.key) { box.appendChild(keyBox(row.key)); return box; }
+
+        // ЧЕСТНОЕ СОСТОЯНИЕ ВМЕСТО ПУСТОЙ КЛЕТКИ: пустое поле на месте ключа
+        // читается как «не загрузилось», а у каждого случая здесь есть точный
+        // ответ (branch-sync-logic.js branchRows).
+        box.appendChild(h('p', { class: 'muted bsync-note' }, row.note));
+        if (row.state === 'no_letter' && canIssue) {
+            const btn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, 'Выдать ключ');
+            btn.addEventListener('click', async () => {
+                if (btn.disabled) return;
+                btn.disabled = true;
+                actionStatus.textContent = '';
+                try {
+                    const data = await rpc('branch_sync_branch_key', { branch_id: row.id });
+                    toast(tr('Ключ выдан'), 'ok');
+                    noteRelay(actionStatus, data);
+                    await reload();
+                    return;   // строка перерисована — кнопки больше нет
+                } catch (e) {
+                    actionStatus.textContent = e.message;
+                }
+                btn.disabled = false;
+            });
+            box.appendChild(h('div', { class: 'bsync-actions' }, btn));
+        }
+        return box;
+    }
+}
+
+/** Резервный канал филиалу выписать не удалось — сказать это, но не пугать. */
+function noteRelay(statusEl, data) {
+    const relay = data && data.relay;
+    statusEl.textContent = relay && relay.ok === false && relay.message ? relay.message : '';
+}
+
+/** Ключ целиком, выделяемый, с кнопкой «Копировать». Никаких «показать один раз». */
+function keyBox(key) {
+    // aria-label, а не подпись рядом: подписью служит имя филиала строкой выше,
+    // но программе чтения с экрана нужно имя у самого поля — h() прогоняет
+    // aria-label через tr(), поэтому оно переводится вместе со всем остальным.
+    const box = h('textarea', {
+        rows: '3', readonly: 'readonly', class: 'bsync-key', 'aria-label': 'Ключ подключения',
+    });
+    box.value = key;
+    // Без значка: в icons.js нет ничего, что читалось бы как «копировать», а
+    // подставить похожий (лист, слои) значит подписать кнопку неправдой. Слово
+    // здесь короче любого объяснения.
+    const copyBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, 'Копировать');
+    const copyStatus = h('p', { class: 'upd-action-status', role: 'status' });
     copyBtn.addEventListener('click', async () => {
         try {
             // Буфер обмена может быть недоступен (нет https, отказ в правах) —
             // тогда просто выделяем текст, чтобы ключ можно было скопировать
             // руками. Ошибку копирования показывать не за что.
-            await navigator.clipboard.writeText(keyBox.value);
-            keyStatus.textContent = tr('Ключ скопирован');
+            await navigator.clipboard.writeText(box.value);
+            copyStatus.textContent = tr('Ключ скопирован');
         } catch {
-            keyBox.select?.();
-            keyStatus.textContent = tr('Скопируйте выделенный ключ');
+            box.select?.();
+            copyStatus.textContent = tr('Скопируйте выделенный ключ');
         }
     });
-
-    keyBox.style.display = 'none';
-    card.appendChild(h('div', { class: 'bsync-block' },
-        h('div', { class: 'sys-block-title' }, 'Ключ подключения'),
-        h('p', { class: 'muted bsync-note' },
-            'Введите этот ключ на каждом филиале, который должен получать справочник отсюда. Ключ не меняется — его можно показать снова в любой момент.'),
-        h('p', { class: 'muted bsync-note' },
-            'Ключ содержит и ключ шифрования группы. Передайте его лично или сообщением — через сервер Easy-Med он не проходит.'),
-        keyBox,
-        h('div', { class: 'bsync-actions' }, showBtn, copyBtn, keyStatus),
-    ));
-    paintRelay(card, status, admin);
-    paintSyncKey(card, status, admin);
-    card.appendChild(unlinkBlock(card,
-        'Филиалы перестанут получать справочник отсюда. Уже переданные услуги и панели у них останутся.'));
+    return h('div', null, box, h('div', { class: 'bsync-actions' }, copyBtn, copyStatus));
 }
 
 // --- резервный канал через сервер Easy-Med (BRANCH_SYNC_RELAY_V1) ----------
@@ -241,10 +378,13 @@ function paintSyncKey(card, status, admin) {
         // Спрашиваем ДО вызова и говорим ровно то, что произойдёт: перевыпуск
         // рвёт связь со всеми филиалами, и восстановить старый ключ не может
         // никто, включая Easy-Med.
+        // window.confirm НЕ прогоняет текст через tr() сам — в отличие от h(),
+        // который делает это с каждым текстовым узлом. Без явного tr() это
+        // единственное окно на экране осталось бы по-русски в узбекской клинике.
         const ok = window.confirm(
-            'Перевыпустить ключ синхронизации?\n\n'
-            + 'Все подключённые филиалы отвалятся: на каждом придётся заново ввести новый ключ подключения.\n\n'
-            + 'Старый ключ восстановить невозможно — Easy-Med его не хранит.');
+            tr(KEY_REISSUE_WARNING) + '\n\n'
+            + tr('Старый ключ восстановить невозможно — Easy-Med его не хранит.') + '\n\n'
+            + tr('Перевыпустить ключ синхронизации?'));
         if (!ok) return;
         btn.disabled = true;
         btnStatus.textContent = '';
@@ -261,8 +401,9 @@ function paintSyncKey(card, status, admin) {
     card.appendChild(h('div', { class: 'bsync-block' },
         h('div', { class: 'sys-block-title' }, 'Ключ синхронизации'),
         h('p', { class: 'muted bsync-note' }, key.text),
-        h('p', { class: 'muted bsync-note' },
-            'Перевыпуск отключит все филиалы: каждому придётся выдать новый ключ подключения.'),
+        // ТО ЖЕ ПРЕДУПРЕЖДЕНИЕ, что и в окне подтверждения, одной строкой на
+        // два места: разошёдшись, они бы рассказывали разное об одном действии.
+        h('p', { class: 'muted bsync-note' }, KEY_REISSUE_WARNING),
         h('div', { class: 'bsync-actions' }, btn, btnStatus),
     ));
 }
@@ -271,6 +412,11 @@ function paintSyncKey(card, status, admin) {
 function paintSecondary(card, status, admin) {
     const line = syncLine(status);
     card.appendChild(h('div', { class: 'sys-info' },
+        // БУКВА ПЕРВОЙ, и она стоит здесь ПОСТОЯННО, а не всплывает
+        // уведомлением после подключения: вопрос «что за буква в номере»
+        // задаёт регистратура спустя месяцы после того, как тост погас.
+        h('span', { class: 'sys-info-label' }, 'Этот филиал'),
+        h('span', { class: 'sys-info-value' }, status.letter ? Tag(status.letter, { kind: 'info' }) : '—'),
         h('span', { class: 'sys-info-label' }, 'Главный филиал'),
         h('span', { class: 'sys-info-value' }, status.main_url || '—'),
         h('span', { class: 'sys-info-label' }, 'Группа филиалов'),
@@ -278,6 +424,10 @@ function paintSecondary(card, status, admin) {
         h('span', { class: 'sys-info-label' }, 'Подключён'),
         h('span', { class: 'sys-info-value' }, whenLabel(status.paired_at)),
     ));
+    const letters = letterExplainer(status);
+    // Двумя текстовыми узлами: h() прогоняет каждый через tr() по отдельности,
+    // так что переводится фраза, а пример с буквой просто дописывается.
+    if (letters) card.appendChild(h('p', { class: 'muted bsync-note' }, letters.base, ' ', letters.example));
 
     card.appendChild(h('p', {
         class: line.tone === 'warn' ? 'bsync-line bsync-line-warn' : 'bsync-line',

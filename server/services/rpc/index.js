@@ -29,6 +29,7 @@ import { custdevList, custdevSync, custdevRate, custdevMark, custdevReport } fro
 import {
   branchSyncStatus, branchSyncMakeKey, branchSyncPair, branchSyncUnpair, branchSyncNow,
   branchSyncRelaySet, branchSyncRelayPublish, branchSyncRegenerateKey,   // BRANCH_SYNC_RELAY_V1
+  branchSyncBranches, branchSyncAddBranch, branchSyncBranchKey,   // BRANCH_IDENTITY_V1
 } from './branch-sync.js';   // BRANCH_SYNC_V1
 
 export const RPC = {
@@ -250,6 +251,13 @@ export const RPC = {
   branch_sync_relay_set:     (db, args, user) => branchSyncRelaySet(db, args, user),
   branch_sync_relay_publish: (db, args, user) => branchSyncRelayPublish(db, args, user),
   branch_sync_regenerate_key: (db, args, user) => branchSyncRegenerateKey(db, args, user),
+  // BRANCH_IDENTITY_V1 — список филиалов с их буквами и ПОСТОЯННЫМИ ключами
+  // подключения. Ни один из трёх не в READ_ONLY_RPCS (control/gate.js):
+  // branch_sync_branches отдаёт ключи, а в ключе лежат и секрет подписи, и ключ
+  // шифрования группы, поэтому он стоит за проверкой роли наравне с пишущими.
+  branch_sync_branches:   (db, args, user) => branchSyncBranches(db, args, user),
+  branch_sync_add_branch: (db, args, user) => branchSyncAddBranch(db, args, user),
+  branch_sync_branch_key: (db, args, user) => branchSyncBranchKey(db, args, user),
 };
 
 export function getRpc(name) {

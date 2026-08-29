@@ -5,11 +5,16 @@ import { applyCatalogue } from '../branch-sync/catalogue.js';
 import { pullCatalogue } from '../branch-sync/pull.js';
 import {
   readPairing, writePairing, makeMainKey, pairWithKey, clearPairing, suggestMainUrl, relayEnabled,
+  encodeKey,
 } from '../branch-sync/pairing.js';
+// BRANCH_IDENTITY_V1 — буква филиала: её выдаёт ГЛАВНЫЙ филиал (letters.js), а
+// читает эта установка про себя (identity.js).
+import { allocateLetter } from '../branch-sync/letters.js';
+import { readIdentity } from '../branch-sync/identity.js';
 // BRANCH_SYNC_RELAY_V1 — Маршрут Б: те же три файла, что и у Маршрута А, только
 // транспорт другой. Ключ группы и его выпуск при активации — в sync-group.js.
 import { ensureSyncGroup, regenerateSyncGroup, readSyncGroup } from '../branch-sync/sync-group.js';
-import { fetchCatalogue, publishCatalogue, readLastPublish, LAST_PUBLISH_KEY } from '../branch-sync/relay.js';
+import { fetchCatalogue, publishCatalogue, readLastPublish, mintRelayToken, LAST_PUBLISH_KEY } from '../branch-sync/relay.js';
 import { relayIdFor } from '../branch-sync/relay-crypto.js';
 
 // BRANCH_SYNC_V1 — вызовы, которыми живёт экран «Настройки → Филиалы».
@@ -66,6 +71,10 @@ const REASONS = {
   relay_not_secondary: 'Забирать копию с сервера может только подключённый филиал.',
   relay_disabled: 'Резервный канал через сервер Easy-Med выключен.',
   relay_no_key: 'У этого филиала нет ключа синхронизации. Перевыпустите ключ подключения в главном филиале и введите его здесь заново.',
+  // ОБА КОДА НИЖЕ — про ГЛАВНЫЙ филиал, и только теперь это правда. Раньше их
+  // же получал и подключённый филиал, которому обе фразы советовали не то:
+  // «активируйте клинику» тому, кто к поставщику и не должен быть подключён.
+  // Его случаи разведены ниже, в relay_branch_*.
   relay_not_enrolled: 'Клиника не активирована через Easy-Med, поэтому резервный канал недоступен.',
   relay_offline: 'Нет связи с сервером Easy-Med.',
   relay_unauthorized: 'Сервер Easy-Med не принял эту установку. Проверьте активацию клиники.',
@@ -75,6 +84,33 @@ const REASONS = {
   relay_bad_key: 'Ключи филиалов не совпадают: копию с сервера расшифровать не удалось. Скорее всего, в главном филиале перевыпустили ключ — получите новый ключ подключения и введите его здесь.',
   relay_bad_response: 'Копия с сервера повреждена и не была применена.',
   relay_is_secondary: 'Перевыпустить ключ можно только в главном филиале — этот филиал получает ключ от него.',
+
+  // BRANCH_IDENTITY_V1 — то же самое, что двумя абзацами выше, но со стороны
+  // ПОДКЛЮЧЁННОГО филиала, и лекарство здесь другое. Он у поставщика не
+  // активирован и активирован не будет: он подключался к клинике, а не к
+  // Easy-Med. Единственная его учётка приезжает ВНУТРИ ключа подключения,
+  // поэтому обе фразы ведут в главный филиал, а не в настройки активации.
+  relay_branch_no_token: 'У этого филиала нет доступа к резервному каналу: доступ приходит внутри ключа подключения. Получите в главном филиале новый ключ подключения и введите его здесь заново.',
+  relay_branch_revoked: 'Сервер Easy-Med больше не принимает этот филиал: доступ отозван или в главном филиале перевыпустили ключ синхронизации. Получите в главном филиале новый ключ подключения и введите его здесь заново.',
+  // Выписка учётки филиала упёрлась в потолок живых учёток клиники. Лекарство
+  // есть и оно точное — отозвать учётки филиалов, которых больше нет, — но
+  // делается оно у поставщика, поэтому фраза ведёт в поддержку.
+  relay_too_many_tokens: 'У клиники уже выписано предельное число учёток филиалов для резервного канала. Обратитесь в поддержку Easy-Med, чтобы отозвать учётки филиалов, которых больше нет.',
+
+  // BRANCH_IDENTITY_V1 — список филиалов и выдача ключей. Всё это делает
+  // ГЛАВНЫЙ филиал: буква тратится из одной общей на группу очереди, и если бы
+  // её выдавал себе каждый филиал сам, двое разных людей однажды получили бы
+  // одинаковый номер (см. letters.js).
+  branch_not_main: 'Выдавать ключи филиалам может только главный филиал. Сначала назначьте эту установку главной.',
+  branch_no_url: 'Сначала укажите адрес, по которому этот компьютер виден остальным филиалам: без него ключу некуда вести.',
+  branch_no_name: 'Введите название филиала.',
+  branch_duplicate_name: 'Филиал с таким названием уже есть. Проверьте список: буква тратится безвозвратно, и второй филиал с тем же именем чаще всего означает случайное двойное нажатие.',
+  branch_unknown: 'Такого филиала в списке больше нет. Обновите страницу.',
+  // Буква у этой строки не выдаётся ПРИНЦИПИАЛЬНО: это сама текущая установка,
+  // и подключать её к самой себе не к чему.
+  branch_is_self: 'Это и есть текущая установка — ключ ей не нужен.',
+  branch_letters_gone: 'Свободные буквы филиалов закончились. Обратитесь в поддержку Easy-Med.',
+  branch_add_failed: 'Не удалось завести филиал в базе данных. Попробуйте ещё раз, а если повторится — обратитесь в поддержку Easy-Med.',
 
   // BRANCH_IDENTITY_V1 — отказы активации с БУКВОЙ филиала. Буква — это то, с
   // чего начинается каждый номер пациента этого здания, поэтому у почти каждого
@@ -198,7 +234,27 @@ export function branchSyncStatus(db, args, user) {
     relay_enabled: relayEnabled(pairing),
     // Последняя выгрузка копии — только у главного филиала она осмысленна.
     relay_last_publish: pairing?.role === 'main' ? readLastPublish(db) : null,
+
+    // BRANCH_IDENTITY_V1 — БУКВА этой установки. Не секрет и никогда им не была:
+    // она напечатана на каждой карточке пациента этого здания. Экран показывает
+    // её всем, кому открыты настройки, ровно потому, что вопрос «что за буква в
+    // номере» задаёт регистратура, а не администратор.
+    ...identityFields(db),
   };
+}
+
+// readIdentity бросает, когда служебной строки нет (identity.js объясняет,
+// почему именно бросает). Статус ронять этим нельзя: экран, который не смог
+// прочитать своё состояние, обязан нарисоваться и сказать об этом, а не отдать
+// 500 на открытие раздела настроек. Прочерк вместо буквы — честный ответ.
+function identityFields(db) {
+  try {
+    const me = readIdentity(db);
+    return { letter: me.letter, identity_role: me.role, branch_id: me.branch_id };
+  } catch (e) {
+    console.warn('[branch-sync] could not read the branch identity of this install:', e && e.message);
+    return { letter: null, identity_role: null, branch_id: null };
+  }
 }
 
 /**
@@ -278,6 +334,13 @@ export function branchSyncPair(db, args, user) {
     group_id: r.record.group_id,
     main_url: r.record.main_url,
     relay_ready: !!relayIdFor(r.record.group_key),
+    // ПРИНЯТАЯ БУКВА, и она возвращается ради одной фразы на экране: «Этот
+    // филиал — C». Владелец только что ввёл длинный ключ, выпущенный на другой
+    // машине, и буква — единственное, что он может сверить глазами; «Готово»
+    // не отличает удачное подключение от подключения не тем ключом. null — в
+    // ключе буквы не было (старый выпуск), и придумывать её нельзя: установка
+    // осталась при своей прежней.
+    letter: r.identity ? r.identity.letter : null,
   };
 }
 
@@ -365,6 +428,13 @@ export function branchSyncRegenerateKey(db, args, user) {
   // приёмнику), поэтому стирать здесь нечего — а вот журнал прошлых выгрузок
   // стереть надо: он говорит про блоб, до которого больше нет адреса.
   db.prepare('DELETE FROM control_state WHERE key = ?').run(LAST_PUBLISH_KEY);
+  // BRANCH_IDENTITY_V1 — и учётки филиалов для резервного канала вместе с ним.
+  // Они выписаны НА АДРЕС, который выводится из ключа группы (relay-crypto.js
+  // relayIdFor), а ключ группы только что сменился: адреса, к которому они
+  // давали доступ, больше не существует. Оставить их значило бы класть мёртвые
+  // строки в свежевыпущенные ключи — филиал получил бы 401 вместо честного
+  // «учётки нет» и пошёл бы чинить активацию клиники.
+  db.prepare('DELETE FROM control_state WHERE key LIKE ?').run(BRANCH_TOKEN_PREFIX + '%');
   return {
     ok: true,
     role: 'main',
@@ -372,6 +442,219 @@ export function branchSyncRegenerateKey(db, args, user) {
     key: r.key,
     sync_key_created_at: group.created_at,
   };
+}
+
+// --- BRANCH_IDENTITY_V1: список филиалов и ПОСТОЯННЫЕ ключи ----------------
+//
+// Требование владельца дословно: «in the branch list should be only the branch
+// name. and activation key (not one time generated)».
+//
+// Ключ здесь ничего не «хранит»: он СОБИРАЕТСЯ заново при каждом чтении из того
+// же, из чего собирался при выдаче — записи о паре (группа, секрет, адрес, ключ
+// шифрования) и буквы филиала из его строки. Поэтому «показать ещё раз» и
+// «выдать» — одно и то же действие, и одноразового кода, который надо было
+// успеть записать, больше нет. Цена размена названа владельцем и принята: кто
+// видит этот список, тот может подключить к клинике ещё один филиал, — но
+// список закрыт ролью администратора, а защищались бы мы от того, у кого
+// административный доступ к системе клиники уже есть.
+//
+// ХРАНИТСЯ ровно одна часть — учётка резервного канала, потому что она
+// невоспроизводима: поставщик отдаёт её один раз при выписке
+// (control-plane/server/routes/relay-token.js) и второй раз не покажет. Не
+// сохранив её, экран при каждом показе ключа выписывал бы новую и упёрся бы в
+// потолок живых учёток клиники.
+
+// Учётка филиала для резервного канала, по одной на строку списка. В
+// control_state, а не в колонке branches: это не свойство филиала как адреса, а
+// секрет, выписанный поставщиком.
+const BRANCH_TOKEN_PREFIX = 'branch_relay_token:';
+const branchTokenKey = (branchId) => BRANCH_TOKEN_PREFIX + branchId;
+
+/**
+ * Ключ подключения для строки списка — или null, если выдавать его не из чего.
+ *
+ * Три причины для null, и все три экран называет словами (branch-sync-logic.js
+ * branchRows), а не пустой клеткой: не главный филиал; не задан адрес, по
+ * которому филиалы его найдут; у филиала ещё нет буквы.
+ */
+function branchKeyFor(db, pairing, branch) {
+  if (!pairing || pairing.role !== 'main' || !pairing.main_url) return null;
+  if (!branch || !branch.letter) return null;
+  return encodeKey({
+    group_id: pairing.group_id,
+    secret: pairing.secret,
+    main_url: pairing.main_url,
+    group_key: pairing.group_key,
+    letter: branch.letter,
+    relay_token: getState(db, branchTokenKey(branch.id)) || null,
+  });
+}
+
+/**
+ * Выписать филиалу учётку резервного канала, если её ещё нет.
+ *
+ * НИКОГДА НЕ БРОСАЕТ и никогда не срывает выдачу ключа. Маршрут А (филиал ходит
+ * к главному напрямую) от поставщика не зависит вовсе, и клиника без интернета
+ * обязана уметь завести филиал. Неудача здесь — это «резервный канал у этого
+ * филиала пока не работает», и экран говорит именно это, а не «филиал не
+ * заведён».
+ */
+async function ensureBranchToken(db, dataDir, branchId, mintImpl) {
+  // Повторный показ ключа НЕ выписывает вторую учётку: у поставщика они копятся
+  // (выписка аддитивна) и упираются в потолок на клинику.
+  const existing = getState(db, branchTokenKey(branchId));
+  if (existing) return { ok: true };
+
+  const r = await mintImpl(dataDir);
+  if (!r.ok) return { ok: false, reason: r.reason, message: reasonText(r.reason) };
+  try {
+    putState(db, branchTokenKey(branchId), r.token);
+  } catch (e) {
+    // Учётка выписана у поставщика, а записать её сюда не вышло — значит она
+    // потеряна навсегда (второй раз её не покажут) и просто занимает место в
+    // потолке клиники. Молчать об этом нельзя: следующая попытка выпишет ещё одну.
+    console.warn('[branch-sync] minted a relay token and could not store it:', e && e.message);
+    return { ok: false, reason: 'write_failed', message: reasonText('write_failed') };
+  }
+  return { ok: true };
+}
+
+/** Строка списка в том виде, в каком её ждёт экран. */
+function branchRow(db, pairing, branch, selfId) {
+  const isSelf = selfId != null && branch.id === selfId;
+  return {
+    id: branch.id,
+    name: branch.name,
+    letter: branch.letter || null,
+    is_self: isSelf,
+    // У ТЕКУЩЕЙ УСТАНОВКИ КЛЮЧА НЕТ, и это не пропуск данных: подключать её к
+    // самой себе не к чему. Экран пишет это словами.
+    key: isSelf ? null : branchKeyFor(db, pairing, branch),
+  };
+}
+
+/**
+ * Список филиалов: имя, буква, ключ.
+ *
+ * ОТДЕЛЬНЫЙ ВЫЗОВ, а не поле в branch_sync_status, и это правило старше этой
+ * задачи: статус читают все, кому открыты настройки, а ключ подключения несёт и
+ * секрет подписи, и ключ шифрования группы. Здесь стоит проверка роли.
+ */
+export function branchSyncBranches(db, args, user) {
+  requireAdmin(user);
+  const pairing = readPairing(getDataDir());
+  const me = identityFields(db);
+  // ORDER BY id — порядок заведения, он же порядок выдачи букв. Сортировка по
+  // букве была бы красивее ровно до двадцать седьмого филиала: 'AA' встаёт
+  // перед 'B' лексически, и список начал бы врать про очерёдность.
+  const rows = db.prepare('SELECT id, name, letter FROM branches ORDER BY id').all();
+  return {
+    ok: true,
+    role: pairing ? pairing.role : 'none',
+    can_issue: !!(pairing && pairing.role === 'main' && pairing.main_url),
+    branches: rows.map((b) => branchRow(db, pairing, b, me.branch_id)),
+  };
+}
+
+/**
+ * «Добавить филиал» — завести строку, потратить на неё букву и выдать ключ.
+ *
+ * БУКВА ТРАТИТСЯ БЕЗВОЗВРАТНО (letters.js): её не получит больше никто и
+ * никогда, даже если этот филиал удалить, — иначе двое разных людей однажды
+ * носили бы одинаковые номера. Поэтому здесь стоит проверка на повтор названия:
+ * второй филиал с тем же именем почти всегда означает двойное нажатие, а платит
+ * за него клиника буквой из общей очереди.
+ */
+export async function branchSyncAddBranch(db, args, user, { mintImpl = mintRelayToken } = {}) {
+  requireAdmin(user);
+  const dataDir = getDataDir();
+  const pairing = readPairing(dataDir);
+  // Буквы раздаёт ГЛАВНЫЙ филиал и только он: очередь букв в группе одна, и
+  // филиал, выдающий буквы себе сам, читал бы свою собственную историю вместо
+  // общей (см. заголовок identity.js).
+  if (!pairing || pairing.role !== 'main') throw new RpcError(reasonText('branch_not_main'), 400);
+  if (!pairing.main_url) throw new RpcError(reasonText('branch_no_url'), 400);
+
+  const name = typeof (args && args.name) === 'string' ? args.name.trim() : '';
+  if (!name) throw new RpcError(reasonText('branch_no_name'), 400);
+  // Сравнение регистра — В JAVASCRIPT, а не COLLATE NOCASE, и это не вкус.
+  // NOCASE в SQLite складывает регистр ТОЛЬКО у латиницы (документировано), а
+  // названия филиалов здесь русские и узбекские: «Юнусабад» и «юнусабад» база
+  // считает разными строками и пропустила бы оба, потратив на второй букву из
+  // общей очереди клиники. toLocaleLowerCase() складывает и кириллицу.
+  const same = name.toLocaleLowerCase();
+  if (db.prepare('SELECT name FROM branches').all().some((b) => String(b.name || '').trim().toLocaleLowerCase() === same)) {
+    throw new RpcError(reasonText('branch_duplicate_name'), 400);
+  }
+
+  let letter;
+  try {
+    letter = allocateLetter(db, { name });
+  } catch (e) {
+    // RangeError — буквы кончились (letters.js бросает вместо того, чтобы выдать
+    // букву, которую принимающая сторона откажется принять). Всё остальное —
+    // база: занятая буква на чужой строке, отказ записи.
+    console.warn('[branch-sync] could not allocate a branch letter:', e && e.message);
+    throw new RpcError(reasonText(e instanceof RangeError ? 'branch_letters_gone' : 'branch_add_failed'), 400);
+  }
+
+  const branch = db.prepare('SELECT id, name, letter FROM branches WHERE letter = ? COLLATE NOCASE').get(letter);
+  // Недостижимо: allocateLetter с именем ставит строку в той же транзакции. Но
+  // молчаливый undefined отсюда ушёл бы на экран пустым ключом.
+  if (!branch) throw new RpcError(reasonText('branch_add_failed'), 400);
+
+  const relay = await ensureBranchToken(db, dataDir, branch.id, mintImpl);
+  return { ok: true, branch: branchRow(db, pairing, branch, null), relay };
+}
+
+/**
+ * «Выдать ключ» филиалу, который в списке уже есть, а буквы не имеет.
+ *
+ * Состояние достижимое и обычное: филиалы заводили и до появления букв, и
+ * заводят через общий редактор списка на том же экране, который про буквы
+ * ничего не знает. Без этого вызова такая строка осталась бы в списке навсегда
+ * без ключа и без способа его получить.
+ */
+export async function branchSyncBranchKey(db, args, user, { mintImpl = mintRelayToken } = {}) {
+  requireAdmin(user);
+  const dataDir = getDataDir();
+  const pairing = readPairing(dataDir);
+  if (!pairing || pairing.role !== 'main') throw new RpcError(reasonText('branch_not_main'), 400);
+  if (!pairing.main_url) throw new RpcError(reasonText('branch_no_url'), 400);
+
+  const id = Number(args && args.branch_id);
+  if (!Number.isInteger(id) || id <= 0) throw new RpcError(reasonText('branch_unknown'), 400);
+  let branch = db.prepare('SELECT id, name, letter FROM branches WHERE id = ?').get(id);
+  if (!branch) throw new RpcError(reasonText('branch_unknown'), 400);
+  const me = identityFields(db);
+  if (me.branch_id != null && branch.id === me.branch_id) throw new RpcError(reasonText('branch_is_self'), 400);
+
+  if (!branch.letter) {
+    try {
+      // ТРАНЗАКЦИЮ ОТКРЫВАЕТ ВЫЗЫВАЮЩИЙ, и именно .immediate(): allocateLetter
+      // внутри чужой транзакции вырождается в SAVEPOINT (better-sqlite3 13.0.2)
+      // и теряет межпроцессную блокировку — letters.js требует этого прямым
+      // текстом. Сцепка нужна и сама по себе: упади UPDATE, буква пропала бы из
+      // очереди клиники ни за что.
+      db.transaction(() => {
+        const letter = allocateLetter(db);
+        const done = db.prepare('UPDATE branches SET letter = ? WHERE id = ? AND letter IS NULL').run(letter, branch.id);
+        // 0 строк — букву этому филиалу уже проставили (другая вкладка, другой
+        // процесс). Откат возвращает нашу букву в очередь, а перечитанная ниже
+        // строка отдаст ключ с той буквой, что закрепилась.
+        if (done.changes !== 1) throw new Error('branch letter already set');
+      }).immediate();
+    } catch (e) {
+      // Не бросаем: строку перечитываем — если букву поставил кто-то другой,
+      // ключ всё равно есть, и владельцу незачем видеть отказ.
+      console.warn('[branch-sync] could not letter branch', id, e && e.message);
+    }
+    branch = db.prepare('SELECT id, name, letter FROM branches WHERE id = ?').get(id) || branch;
+    if (!branch.letter) throw new RpcError(reasonText('branch_add_failed'), 400);
+  }
+
+  const relay = await ensureBranchToken(db, dataDir, branch.id, mintImpl);
+  return { ok: true, branch: branchRow(db, pairing, branch, me.branch_id), relay };
 }
 
 /**

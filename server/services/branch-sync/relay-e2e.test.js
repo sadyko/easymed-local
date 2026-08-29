@@ -552,7 +552,12 @@ test('филиал, не активированный у поставщика: �
     const r = await rpc(sec.base, secCookie, 'branch_sync_now');
     assert.equal(r.data.ok, false);
     assert.equal(r.data.reason, 'offline', 'первопричина по-прежнему — выключенный главный филиал');
-    assert.equal(r.data.relay_reason, 'relay_unauthorized');
+    // ИЗМЕНЁННЫЙ КОД, тот же отказ: 401 у ПОДКЛЮЧЁННОГО филиала теперь
+    // называется relay_branch_revoked. Прежнее relay_unauthorized уводило
+    // владельца в «проверьте активацию клиники», тогда как случившееся чинится
+    // на другой машине и одним действием — новым ключом подключения из главного
+    // филиала (rpc/branch-sync.js REASONS).
+    assert.equal(r.data.relay_reason, 'relay_branch_revoked');
 
     // А блоб на месте, и главный филиал ничего не потерял: отозвана учётка
     // филиала, а не клиники.
