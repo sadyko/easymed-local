@@ -9,8 +9,10 @@ import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { createEnrollmentCode, redeemEnrollmentCode } from '../services/enrollment.js';
 import { createApp } from '../app.js';
-import { relayPathFor, RELAY_ID_RE as RELAY_ID_RE_ROUTE } from './relay.js';
-import { RELAY_TOKEN_MOUNT, RELAY_ID_RE as RELAY_ID_RE_MINT, clinicForRelayToken } from './relay-token.js';
+import { relayPathFor, RELAY_MOUNT, RELAY_ID_RE as RELAY_ID_RE_ROUTE } from './relay.js';
+import {
+  RELAY_TOKEN_MOUNT, RELAY_ID_RE as RELAY_ID_RE_MINT, clinicForRelayToken, pruneRelayTokens,
+} from './relay-token.js';
 
 // BRANCH_IDENTITY_V1 — the credential a SECONDARY branch uses on the relay.
 //
@@ -192,29 +194,138 @@ test('a relay_id that is not 32 lowercase hex is refused before it can become a 
   );
 });
 
-test('minting is capped, so an authenticated clinic cannot grow the table without bound', async (t) => {
+// --- the bound on the table --------------------------------------------------
+//
+// THE ATTACK THIS REPLACES A WEAKER TEST FOR: relay_id comes out of the request
+// body, from a 2^128 space, so a cap counted per (clinic, relay id) bounds
+// nothing — one enrolled clinic names a new id every time and writes rows for
+// ever (3,000 rows in 1.77 s, measured). An earlier version of this file
+// asserted "the cap is per relay id, not per clinic" and so pinned the hole open
+// as if it were the design. It is per CLINIC, and these are the tests that say so.
+
+// Seeds live tokens straight into the table, each on a DIFFERENT relay id —
+// which is exactly the shape of the attack. Done in SQL rather than over HTTP
+// because the per-IP throttle makes 60-odd mints in one minute impossible, which
+// is itself part of the fix (see the throttle test below).
+function seedTokens(db, clinicId, n, at = new Date().toISOString()) {
+  const ins = db.prepare('INSERT INTO relay_tokens (token, clinic_id, relay_id, created_at, last_used) VALUES (?,?,?,?,?)');
+  for (let i = 0; i < n; i++) {
+    ins.run(`seed-${clinicId}-${i}`, clinicId, i.toString(16).padStart(32, '0'), at, at);
+  }
+}
+
+test('the cap counts a CLINIC\'s live tokens, not one relay id\'s — a fresh relay id does not buy a fresh 64', async (t) => {
+  const { db, base } = await harness(t);
+  const installToken = enrol(db);
+  seedTokens(db, 'c-1', 63);
+
+  assert.equal((await mint(base, installToken, { relay_id: RELAY_ID })).status, 201, 'the 64th is still allowed');
+
+  // The 65th, on a relay id this clinic has never used and nobody has ever seen.
+  // Counted per relay id this would be "0 live, go ahead" — which is the whole
+  // bug. Counted per clinic it is 64, and refused.
+  const over = await mint(base, installToken, { relay_id: OTHER_RELAY_ID });
+  assert.equal(over.status, 409);
+  assert.equal((await over.json()).error.code, 'too_many_tokens');
+  // A DISTINCT error, not the generic 401, deliberately: the caller has already
+  // proved it holds a live install_token, so a specific answer tells an attacker
+  // nothing and tells the clinic exactly what happened.
+
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM relay_tokens WHERE clinic_id = ?').get('c-1').n, 64,
+    'the table stops growing for this clinic, whatever relay id is named');
+});
+
+test('the cap is per clinic, so one clinic at its limit cannot stop another minting', async (t) => {
+  const { db, base } = await harness(t);
+  enrol(db, 'c-full');
+  const other = enrol(db, 'c-2', 'Second Clinic');
+  seedTokens(db, 'c-full', 64);
+
+  assert.equal((await mint(base, other, { relay_id: RELAY_ID })).status, 201);
+});
+
+test('revoking frees a slot — un-pairing a branch must not make a clinic permanently poorer', async (t) => {
+  const { db, base } = await harness(t);
+  const installToken = enrol(db);
+  seedTokens(db, 'c-1', 64);
+  assert.equal((await mint(base, installToken, { relay_id: RELAY_ID })).status, 409);
+
+  db.prepare('UPDATE relay_tokens SET revoked_at = ? WHERE token = ?')
+    .run(new Date().toISOString(), 'seed-c-1-0');   // not "UPDATE ... LIMIT 1": needs a compile-time SQLite option
+  assert.equal((await mint(base, installToken, { relay_id: RELAY_ID })).status, 201);
+});
+
+test('minting is throttled per IP, and a refused burst writes nothing', async (t) => {
   const { db, base } = await harness(t);
   const installToken = enrol(db);
 
-  for (let i = 0; i < 64; i++) {
-    assert.equal((await mint(base, installToken, { relay_id: RELAY_ID })).status, 201, `token ${i} is a real branch`);
+  for (let i = 0; i < 20; i++) {
+    assert.equal((await mint(base, installToken, { relay_id: RELAY_ID })).status, 201, `mint ${i}`);
   }
   const over = await mint(base, installToken, { relay_id: RELAY_ID });
-  assert.equal(over.status, 409, 'far above any real branch count, far below a storage problem');
-  assert.equal((await over.json()).error.code, 'too_many_tokens');
+  assert.equal(over.status, 429, 'the 21st in a minute is a burst, not a clinic adding branches');
+  assert.deepEqual(await over.json(), { error: { code: 'too_many_attempts', message: 'Too many attempts. Try again later.' } });
 
-  // A DISTINCT error, not the generic 401, and deliberately so: the caller has
-  // already proved it holds a live install_token, so a specific answer tells an
-  // attacker nothing and tells the clinic exactly what happened.
-  assert.equal((await mint(base, installToken, { relay_id: OTHER_RELAY_ID })).status, 201,
-    'the cap is per relay id, not per clinic');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM relay_tokens').get().n, 20, 'a throttled call wrote nothing');
 
-  // Revoking frees a slot — the cap counts LIVE tokens, so a clinic that
-  // un-pairs a branch is not permanently poorer for having done so.
-  const oneOfThem = db.prepare('SELECT token FROM relay_tokens WHERE relay_id = ? AND revoked_at IS NULL')
-    .get(RELAY_ID).token;   // not "UPDATE ... LIMIT 1": that needs a compile-time SQLite option
-  db.prepare('UPDATE relay_tokens SET revoked_at = ? WHERE token = ?').run(new Date().toISOString(), oneOfThem);
-  assert.equal((await mint(base, installToken, { relay_id: RELAY_ID })).status, 201);
+  // The throttle answer depends on the IP's request count and NOTHING else — a
+  // garbage token gets the same 429 once the window is spent, so it cannot be
+  // used to tell a live install_token from a dead one.
+  const garbage = await mint(base, 'no-such-token', { relay_id: RELAY_ID });
+  assert.equal(garbage.status, 429);
+});
+
+// --- retention ---------------------------------------------------------------
+
+test('a token nobody has used in 30 days is swept, and one in use never is', async (t) => {
+  const { db, base } = await harness(t);
+  const installToken = enrol(db);
+  const live = await mintedToken(base, installToken);
+  await put(base, RELAY_ID, randomBytes(32), live);   // used just now
+
+  seedTokens(db, 'c-1', 1, '2000-01-01T00:00:00Z');   // last used in another decade
+  db.prepare('INSERT INTO relay_tokens (token, clinic_id, relay_id, created_at) VALUES (?,?,?,?)')
+    .run('never-used-old', 'c-1', OTHER_RELAY_ID, '2000-01-01T00:00:00Z');
+  db.prepare('INSERT INTO relay_tokens (token, clinic_id, relay_id, created_at) VALUES (?,?,?,?)')
+    .run('minted-today', 'c-1', OTHER_RELAY_ID, new Date().toISOString());
+
+  assert.equal(pruneRelayTokens(db, { days: 30 }), 2, 'the two ancient ones, and only those');
+  const left = db.prepare('SELECT token FROM relay_tokens ORDER BY token').all().map((r) => r.token);
+  assert.deepEqual(left.sort(), [live, 'minted-today'].sort(),
+    'a token minted today but not yet carried to the branch must survive, and one in daily use must too');
+});
+
+test('a revocation is kept as evidence for the window, then dropped', async (t) => {
+  const { db } = await harness(t);
+  enrol(db);
+  seedTokens(db, 'c-1', 1);
+  db.prepare('UPDATE relay_tokens SET revoked_at = ? WHERE token = ?').run(new Date().toISOString(), 'seed-c-1-0');
+  assert.equal(pruneRelayTokens(db, { days: 30 }), 0, 'a fresh revocation still answers "when was this branch cut off"');
+
+  db.prepare('UPDATE relay_tokens SET revoked_at = ?, last_used = ? WHERE token = ?')
+    .run('2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z', 'seed-c-1-0');
+  assert.equal(pruneRelayTokens(db, { days: 30 }), 1);
+});
+
+test('the sweep runs on the way into a mint, so a stranded clinic un-strands itself', async (t) => {
+  const { db, base } = await harness(t);
+  const installToken = enrol(db);
+  // A clinic that re-paired its branches over a year and burned every slot. With
+  // no sweep and no vendor revoke route, this clinic could never add a branch
+  // again without a phone call.
+  seedTokens(db, 'c-1', 64, '2000-01-01T00:00:00Z');
+
+  assert.equal((await mint(base, installToken, { relay_id: RELAY_ID })).status, 201,
+    'the attempt that would hit the cap is the attempt that reclaims the slots');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM relay_tokens').get().n, 1, 'the 64 dead ones are gone');
+});
+
+test('the sweep never throws, whatever the table is doing', async (t) => {
+  const { db } = await harness(t);
+  db.exec('DROP TABLE relay_tokens');
+  // Housekeeping attached to a mint must never be the thing that fails the mint
+  // — pruneRelayBlobs' own rule, and relay.route.test.js pins the same for blobs.
+  assert.equal(pruneRelayTokens(db, { days: 30 }), 0);
 });
 
 test('the mint route and the relay route agree, character for character, on what a relay id is', () => {
@@ -365,6 +476,68 @@ test('a last_used write that fails does not fail the request it is attached to',
 });
 
 // --- the exported helper, directly -------------------------------------------
+
+// --- one URL parser, not two -------------------------------------------------
+
+test('the scope is checked against the SAME relay id the blob is stored under, escapes included', async (t) => {
+  const { db, base } = await harness(t);
+  const installToken = enrol(db);
+  const token = await mintedToken(base, installToken);   // scoped to the decoded id
+
+  // '%62%33' decodes to 'b3'. Express decodes req.params for the handler, so the
+  // handler stores under the DECODED id; the auth middleware must therefore
+  // check the scope against the decoded id too. While this file had its own
+  // req.url reader, the middleware saw the raw escapes, refused, and the two
+  // halves of the request disagreed about which relay id this even was.
+  const encoded = '%62%33' + 'b3'.repeat(15);
+  const res = await put(base, encoded, Buffer.from('through the escape'), token);
+  assert.equal(res.status, 200, 'one parser: what the scope allowed is what gets written');
+
+  const rows = db.prepare('SELECT relay_id FROM relay_blobs').all().map((r) => r.relay_id);
+  assert.deepEqual(rows, [RELAY_ID], 'stored under the decoded id, which is the one the token names');
+  assert.equal((await get(base, RELAY_ID, token)).status, 200);
+});
+
+test('the mount root is a 404 for everyone, so it cannot be asked whether a token is live', async (t) => {
+  const { db, base } = await harness(t);
+  const installToken = enrol(db);
+
+  // Before the auth middleware moved onto '/:relayId', this path answered 401 to
+  // an unknown token and 404 to a valid one — a one-bit oracle on the bare mount.
+  const withGood = await fetch(base + RELAY_MOUNT, { method: 'PUT', headers: { Authorization: `Bearer ${installToken}` }, body: 'x' });
+  const withBad = await fetch(base + RELAY_MOUNT, { method: 'PUT', headers: { Authorization: 'Bearer nonsense' }, body: 'x' });
+  assert.equal(withGood.status, withBad.status);
+  assert.equal(withGood.status, 404);
+  assert.equal(await withGood.text(), await withBad.text());
+});
+
+// --- a blob changing hands is visible ----------------------------------------
+
+test('one clinic overwriting another\'s blob is logged loudly, and the ordinary case is silent', async (t) => {
+  const { db, base } = await harness(t);
+  const a = enrol(db, 'c-a', 'Clinic A');
+  const b = enrol(db, 'c-b', 'Clinic B');
+
+  const lines = [];
+  const realError = console.error;
+  console.error = (...args) => lines.push(args.join(' '));
+  t.after(() => { console.error = realError; });
+
+  assert.equal((await put(base, RELAY_ID, Buffer.from('A owns this'), a)).status, 200);
+  assert.equal((await put(base, RELAY_ID, Buffer.from('A again'), a)).status, 200);
+  assert.deepEqual(lines, [], 'a clinic republishing its own blob is not an event');
+
+  // Not refused — see routes/relay.js's header for why first-writer-wins was
+  // rejected (it would strand a re-enrolled clinic out of its own blob). Made
+  // VISIBLE instead: the one thing worse than a cross-clinic overwrite is one
+  // nobody can see afterwards.
+  assert.equal((await put(base, RELAY_ID, Buffer.from('B took it'), b)).status, 200);
+  assert.equal(lines.length, 1, lines.join(' | '));
+  assert.match(lines[0], /RELAY BLOB CHANGED HANDS/);
+  assert.match(lines[0], /c-a/);
+  assert.match(lines[0], /c-b/);
+  assert.equal(lines[0].includes('B took it'), false, 'metadata only — never the bytes');
+});
 
 test('clinicForRelayToken refuses rubbish without a database round-trip', async (t) => {
   const { db, base } = await harness(t);

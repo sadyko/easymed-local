@@ -24,12 +24,14 @@ CREATE TABLE relay_tokens (
   -- STORED RAW, NOT HASHED, and that is an argued decision, not an oversight.
   -- The credential that MINTS these — clinics.install_token — sits raw two
   -- tables over, as does clinics.unlock_secret. Anyone who can read this table
-  -- can read that one, and with it mint fresh relay tokens at will, so hashing
-  -- the weaker credential while the stronger one is plaintext protects nothing
-  -- and only makes the vendor's own support listing ("which branches can reach
-  -- this relay, since when, which one was last used") harder to read. If this
-  -- project ever hashes credentials at rest, install_token must be hashed
-  -- FIRST; hashing this one before that one would be theatre.
+  -- can read that one, and with it mint fresh relay tokens at will: hashing the
+  -- weaker credential while the stronger one is plaintext protects nothing at
+  -- all. That is the whole argument, and it is the only one — an earlier draft
+  -- of this comment also claimed a vendor support listing needed the raw value,
+  -- which was false twice over (a listing is served by the row, not the secret,
+  -- and no such listing exists — see revoked_at below). If this project ever
+  -- hashes credentials at rest, install_token must be hashed FIRST; hashing
+  -- this one before that one would be theatre.
   --
   -- 32 random bytes as base64url (see routes/relay-token.js). base64url rather
   -- than base64 because this string is carried inside the branch key a human
@@ -70,6 +72,15 @@ CREATE TABLE relay_tokens (
   -- Revocation, and the ONLY switch there is: set it and the token stops working
   -- on the very next request. Deliberately a timestamp rather than a boolean, so
   -- the answer to "when did this branch stop being allowed in" survives.
+  --
+  -- NO OPERATOR SURFACE EXISTS YET, and that is a known gap, not an assumption:
+  -- no route lists these and no route revokes one, so today revoking is an
+  -- UPDATE typed by hand against this column. What keeps that from stranding a
+  -- clinic in the meantime is the sweep (routes/relay-token.js
+  -- pruneRelayTokens), which reclaims tokens nobody has used in 30 days and runs
+  -- on the way into every mint. A vendor panel that lists a clinic's branches
+  -- and revokes one by hand is FOLLOW-UP WORK, and deliberately out of scope
+  -- here: this task is the credential, not the console.
   -- Re-issuing the clinic's GROUP KEY does not need this: a new group key means a
   -- new relay id (branch-sync/relay-crypto.js relayIdFor), so every token scoped
   -- to the old id is already worthless.

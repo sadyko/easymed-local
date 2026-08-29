@@ -15,6 +15,15 @@ import { randomBytes } from 'node:crypto';
 // reads this table. That last property is what makes the whole design safe, and
 // relay-token.route.test.js asserts it explicitly rather than trusting it.
 //
+// WHAT IT DOES GIVE AWAY, stated plainly: a clinic can mint a token for a relay
+// id it does not own and hand that token to somebody else, delegating a narrow
+// "read and write THIS relay id" capability without handing over its own
+// identity. That is a delegation of access the clinic already had — any enrolled
+// clinic can already reach any relay id it knows with its install_token (see
+// routes/relay.js's own note on clinic scoping) — not an escalation, and it is
+// bounded to one relay id. It is written down because it is the one thing this
+// credential makes possible that proxying through the clinic did not.
+//
 // See db/migrations/006_relay_tokens.sql for why this exists at all, and for the
 // two cheaper designs that were rejected.
 
@@ -43,14 +52,44 @@ const GENERIC_FAILURE_BODY = {
   error: { code: 'invalid_token', message: 'This install is not recognised.' },
 };
 
-// A ceiling on live tokens per (clinic, relay id). Minting is an authenticated
-// write available to every enrolled clinic, and an unbounded write path is an
-// unbounded table. A clinic has branches, not thousands of them: 64 is far above
-// any real group and far below "this is now a storage problem". Refused with a
-// DISTINCT error, not the generic 401 — the caller has already proved it is an
-// enrolled clinic at that point, so a specific answer tells an attacker nothing
-// and tells the clinic exactly what happened.
-const MAX_LIVE_TOKENS_PER_RELAY = 64;
+// THE HARD BOUND ON THIS TABLE: live tokens per CLINIC, across every relay id.
+//
+// Per clinic and NOT per (clinic, relay id), and the difference is the whole
+// point. relay_id arrives in the request body out of a 2^128 space, so a
+// per-relay-id cap bounds nothing at all — one enrolled clinic simply names a
+// new id each time and writes rows for ever. Measured before this was fixed:
+// 3,000 permanent rows in 1.77 s from a single install_token, and no 409 in
+// sight. Counted per clinic, the table cannot exceed clinics x 64 rows no matter
+// what any caller sends.
+//
+// Why this matters more than the number suggests — app.js's own header: if this
+// service's disk fills, check-in stops, and every clinic in the country starts
+// its 14-day licence countdown at the same moment.
+//
+// 64 is far above any real clinic (branches are counted in ones and tens) and far
+// below a storage problem. A clinic that burns slots by re-pairing reclaims them
+// automatically: pruneRelayTokens runs on the way in, before the count below.
+const MAX_LIVE_TOKENS_PER_CLINIC = 64;
+
+// How long an unused token survives. Deliberately the same 30 days
+// routes/relay.js gives a blob, and for the same reason: a branch polls the
+// relay every 6 hours (services/branch-sync/relay.js INTERVAL_MS), so 30 days of
+// total silence means the branch is gone, the group key was re-issued (which
+// changes the relay id and orphans every token scoped to the old one), or the
+// key was minted and never carried to a branch at all. A token still in use is
+// never touched — the window runs from LAST USE, not from issue.
+const DEFAULT_TOKEN_RETENTION_DAYS = 30;
+
+// Per-IP throttle on minting. Same shape as routes/enroll.js and
+// routes/vendor-auth.js — an in-memory counter, not a table — but a looser limit
+// and a different reason: those two are guessing defences on unauthenticated
+// endpoints, while this one authenticates before it writes anything. The hard
+// bound here is MAX_LIVE_TOKENS_PER_CLINIC above; this only stops one
+// authenticated caller turning that bound into a burst of database writes, and
+// 20/minute still lets an owner set up a dozen branches in one sitting.
+const IP_WINDOW_MS = 60 * 1000;
+const IP_LIMIT = 20;
+const IP_MAX_TRACKED = 200; // bounds the map's memory against a spoofed-IP flood
 
 // `Authorization: Bearer <token>` and nothing else — the same reader relay.js
 // and deploy.js use, including the case-insensitive scheme (RFC 7235) and the
@@ -60,10 +99,73 @@ function bearerToken(header) {
   return m ? m[1] : null;
 }
 
+/**
+ * Delete tokens nobody has used in `days`, and revocations older than that.
+ *
+ * Exported for the same reason pruneRelayBlobs is: retention that only runs as a
+ * side effect of traffic is retention nobody can test or trigger. Called on
+ * every mint — one DELETE on a table that is bounded by construction, cheaper
+ * than a scheduler, and it runs exactly when the table is growing.
+ *
+ * Running it BEFORE the cap check is what stops a clinic being stranded: an
+ * owner who re-paired a branch a dozen times over a year does not need to call
+ * the vendor to free the slots, because the attempt that would hit the cap is
+ * the attempt that reclaims them.
+ *
+ * @returns {number} rows removed
+ */
+export function pruneRelayTokens(db, { days = DEFAULT_TOKEN_RETENTION_DAYS, now = () => new Date() } = {}) {
+  const cutoff = new Date(now().getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    // COALESCE(last_used, created_at) — a token minted this morning and not yet
+    // carried across to the branch must not be swept, and a token in daily use
+    // must not be swept however old it is. Revoked rows are kept for the same
+    // window, as evidence of WHEN a branch was cut off, and then dropped.
+    const info = db.prepare(
+      `DELETE FROM relay_tokens
+        WHERE COALESCE(last_used, created_at) < ?
+           OR (revoked_at IS NOT NULL AND revoked_at < ?)`
+    ).run(cutoff, cutoff);
+    return info.changes;
+  } catch (e) {
+    // Housekeeping must never fail the mint it is attached to — pruneRelayBlobs'
+    // own rule. A clinic adding a branch does not care that last year's dead
+    // token is still there; it cares very much that its branch key was issued.
+    console.warn('[control-plane] relay token retention sweep failed:', e && e.message);
+    return 0;
+  }
+}
+
 export function relayTokenRouter(db, { now = () => new Date() } = {}) {
   const r = Router();
+  const ipAttempts = new Map(); // ip -> { count, windowStart }
+
+  // Copied from routes/enroll.js rather than reinvented, down to the
+  // delete-then-set that keeps Map iteration order oldest-first for eviction.
+  function ipThrottled(ip) {
+    const at = Date.now();
+    const e = ipAttempts.get(ip) || { count: 0, windowStart: at };
+    if (at - e.windowStart > IP_WINDOW_MS) { e.count = 0; e.windowStart = at; }
+    e.count += 1;
+    ipAttempts.delete(ip);
+    ipAttempts.set(ip, e);
+    if (ipAttempts.size > IP_MAX_TRACKED) {
+      for (const [k, v] of ipAttempts) {
+        if (ipAttempts.size <= IP_MAX_TRACKED) break;
+        if (at - v.windowStart > IP_WINDOW_MS) ipAttempts.delete(k);
+      }
+    }
+    return e.count > IP_LIMIT;
+  }
 
   r.post('/', (req, res) => {
+    // Before authentication, exactly as in enroll.js. This answer depends only
+    // on how many times this IP has called, never on whether the token it
+    // presented was any good, so it tells nobody which tokens are live.
+    if (ipThrottled(req.ip)) {
+      return res.status(429).json({ error: { code: 'too_many_attempts', message: 'Too many attempts. Try again later.' } });
+    }
+
     const presented = bearerToken(req.headers.authorization);
     if (!presented) return res.status(401).json(GENERIC_FAILURE_BODY);
 
@@ -95,10 +197,14 @@ export function relayTokenRouter(db, { now = () => new Date() } = {}) {
       });
     }
 
+    // Reclaim first, then count — see pruneRelayTokens for why this ordering is
+    // what keeps a re-pairing clinic from being stranded behind the cap.
+    pruneRelayTokens(db, { now });
+
     const live = db.prepare(
-      'SELECT COUNT(*) n FROM relay_tokens WHERE clinic_id = ? AND relay_id = ? AND revoked_at IS NULL'
-    ).get(clinic.clinic_id, relayId).n;
-    if (live >= MAX_LIVE_TOKENS_PER_RELAY) {
+      'SELECT COUNT(*) n FROM relay_tokens WHERE clinic_id = ? AND revoked_at IS NULL'
+    ).get(clinic.clinic_id).n;
+    if (live >= MAX_LIVE_TOKENS_PER_CLINIC) {
       return res.status(409).json({
         error: { code: 'too_many_tokens', message: 'This clinic already has the maximum number of live relay tokens.' },
       });
@@ -166,6 +272,7 @@ export function clinicForRelayToken(db, token, relayId, { now = () => new Date()
   // catalogue. Not throttled — a branch polls the relay about four times a day
   // (services/branch-sync/relay.js INTERVAL_MS = 6h), and the same request
   // already writes relay_blobs.read_at, so this is not a new class of cost.
+  // It is also what keeps the row alive: pruneRelayTokens sweeps on LAST USE.
   try {
     db.prepare('UPDATE relay_tokens SET last_used = ? WHERE token = ?').run(now().toISOString(), token);
   } catch (e) {
