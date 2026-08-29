@@ -13,6 +13,7 @@ import { attachControl } from './services/control/gate.js';   // LICENCE_CORE_V1
 import { setDataDir } from './services/control/config.js';   // LICENCE_CORE_V1
 import { recordEvent } from './services/ops-log.js';   // OPS_EVENTS_V1
 import { telephonyWebhooks } from './services/telephony/webhooks.js';   // TELEPHONY_V1
+import { branchSyncRoutes } from './routes/branch-sync.js';   // BRANCH_SYNC_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -44,6 +45,16 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   // req.control from attachControl above, the vendor source-IP allowlist and
   // the Company ID check), and every refusal is a non-advertising 404.
   app.use('/api/telephony/binotel', telephonyWebhooks(db));
+
+  // BRANCH_SYNC_V1 — раздача справочника другому ФИЛИАЛУ той же клиники.
+  // Стоит здесь же и по той же причине, что вебхуки выше: запрос приходит от
+  // другой установки Easy-Med, а не из браузера сотрудника, и cookie сессии у
+  // него нет — requireAuth отказал бы каждому честному запросу. Гейт у
+  // маршрута свой: подпись на общем секрете пары (routes/branch-sync.js).
+  // Стоит ДО requirePasswordChanged намеренно: филиал не должен переставать
+  // получать прайс из-за того, что в главном филиале кто-то не сменил пароль
+  // при первом входе.
+  app.use('/api/branch-sync', branchSyncRoutes(db, dataDir));
   // FIRST_RUN_PASSWORD_V1 — placed AFTER /api/auth (the way out of the state)
   // and BEFORE every other router, so anything mounted later is gated by
   // default instead of by someone remembering to add it.

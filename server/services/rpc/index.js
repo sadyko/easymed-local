@@ -26,6 +26,7 @@ import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
 import { backupList, backupCreate, backupRestore, factoryReset } from './backup.js';   // SYSTEM_SETTINGS_V1
 import { custdevList, custdevSync, custdevRate, custdevMark, custdevReport } from './custdev.js';   // CUSTDEV_V1
+import { branchSyncStatus, branchSyncMakeKey, branchSyncPair, branchSyncUnpair, branchSyncNow } from './branch-sync.js';   // BRANCH_SYNC_V1
 
 export const RPC = {
   get_clinic_by_slug:       (db, args, user) => getClinicBySlug(db, args, user),
@@ -230,6 +231,16 @@ export const RPC = {
   backup_create:    (db, args, user) => backupCreate(db, args, user),
   backup_restore:   (db, args, user) => backupRestore(db, args, user),
   factory_reset:    (db, args, user) => factoryReset(db, args, user),
+
+  // BRANCH_SYNC_V1 — Настройки → Филиалы: связывание отдельных установок
+  // Easy-Med и перенос справочника из главного филиала. В READ_ONLY_RPCS
+  // (control/gate.js) внесён только branch_sync_status — остальные пишут, и
+  // клиника с просроченной лицензией их не получает.
+  branch_sync_status:   (db, args, user) => branchSyncStatus(db, args, user),
+  branch_sync_make_key: (db, args, user) => branchSyncMakeKey(db, args, user),
+  branch_sync_pair:     (db, args, user) => branchSyncPair(db, args, user),
+  branch_sync_unpair:   (db, args, user) => branchSyncUnpair(db, args, user),
+  branch_sync_now:      (db, args, user) => branchSyncNow(db, args, user),
 };
 
 export function getRpc(name) {

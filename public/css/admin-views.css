@@ -3991,3 +3991,20 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     .roles-group-lvl { display: none; }
 }
 /* ============================ end ROLES_EDITOR_V2 ============================ */
+
+/* BRANCH_SYNC_V1 — карточка «Синхронизация филиалов» на «Настройки → Филиалы».
+   Держится на уже существующих .upd-card/.sys-* (та же карточная сетка, что у
+   «Системы»); своё только то, чего там нет: блоки-шаги и поле для длинного
+   ключа подключения. */
+.bsync-card { max-width: 720px; }
+.bsync-note { font-size: 12.5px; margin: 0; line-height: 1.5; }
+.bsync-block { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--ink-100); }
+.bsync-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* Ключ длинный и переносится целиком — перенос по любому символу, иначе он
+   уезжал бы за край карточки одной строкой и копировался бы обрезанным. */
+.bsync-key { width: 100%; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px;
+  line-height: 1.5; padding: 8px 10px; border: 1px solid var(--ink-200); border-radius: 8px;
+  overflow-wrap: anywhere; resize: vertical; }
+.bsync-line { display: flex; align-items: flex-start; gap: 6px; font-size: 13px; color: var(--ink-700); margin: 0; line-height: 1.5; }
+.bsync-line-warn { color: var(--warn-700); background: var(--warn-50); border: 1px solid #f0d29b;
+  border-radius: 8px; padding: 8px 10px; }
