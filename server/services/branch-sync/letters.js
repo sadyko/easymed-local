@@ -103,7 +103,16 @@ export function nextLetter(issued, taken) {
 // that a different string from 'B-26-00001', so nothing would ever raise — yet
 // it is the same printed series to the staff reading the cards, and to any
 // Stage 2 matcher that normalises case.
-function mrnPrefixInUse(db, letter) {
+//
+// EXPORTED, though only this file allocates: identity.js needs the identical
+// question at adoption, on the side that can actually see the answer. This
+// guard runs on the MAIN branch and reads the MAIN branch's rows, so a prefix
+// sitting in a SECONDARY's imported data is invisible here (the Stage 2 note
+// above). A second copy of a predicate this particular — one COLLATE, folding
+// case for every letter length — is a copy free to drift into the BINARY
+// comparison that misses 'b-24-00500', which is the bug the comment above
+// spends forty lines on.
+export function mrnPrefixInUse(db, letter) {
   return !!db.prepare(
     "SELECT 1 FROM patients WHERE substr(mrn, 1, length(?) + 1) = ? || '-' COLLATE NOCASE LIMIT 1",
   ).get(letter, letter);
