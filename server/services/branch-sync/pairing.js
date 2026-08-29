@@ -60,26 +60,23 @@ const KEY_PREFIX = 'EMB1-';
 const KEY_PREFIX_V2 = 'EMB2-';
 
 // Токен резервного канала (Задача 4) уезжает в заголовок
-// `Authorization: Bearer <token>`, а этот заголовок собирается конкатенацией.
-// Поэтому в токене допускаются только видимые ASCII-символы без пробела: CR или
-// LF внутри — это внедрение чужого заголовка, а не «странный токен». Выпускает
-// его control-plane/server/routes/relay-token.js в base64url (43 символа), так
-// что настоящий токен в это множество попадает целиком.
+// `Authorization: Bearer <token>`, поэтому в нём допускаются только видимые
+// ASCII-символы и никаких пробелов.
+//
+// И это НЕ про внедрение чужого заголовка: fetch в Node такое значение просто
+// не отправит, а бросит TypeError. Цена — в том, что происходит с этим броском
+// дальше: relay.js оборачивает свой fetch в try/catch и ЛЮБОЙ бросок переводит
+// в 'relay_offline', то есть в «Нет связи с сервером Easy-Med». Один испорченный
+// символ в токене навсегда превратился бы в жалобу на интернет, которую никто
+// не связал бы с ключом подключения. Выпускает токен
+// control-plane/server/routes/relay-token.js в base64url (43 символа), так что
+// настоящий токен попадает в это множество целиком.
 const RELAY_TOKEN_RE = /^[\x21-\x7E]+$/;
 
 // Верхняя граница длины — не про формат, а про то, что эта строка ложится на
 // диск клиники и уходит в заголовок HTTP. 256 символов — это шестикратный запас
 // над выпускаемыми 43 и заведомо меньше любого предела на длину заголовка.
 const RELAY_TOKEN_MAX = 256;
-
-// Длина буквы филиала. Граница стоит ЗДЕСЬ, потому что ниже её нет нигде:
-// миграция 080 проверяет буквы алфавитом (`letter GLOB '[A-Z]*' AND letter NOT
-// GLOB '*[^A-Z]*'`), а не длиной, и identity.js — тоже. Строка из тысячи «A»
-// прошла бы все проверки и стала бы префиксом КАЖДОГО номера пациента этого
-// филиала. Восемь символов — это 26^8 филиалов, то есть запас, которого парку
-// не понадобится никогда: letters.js считает в биективной 26-ричной системе, и
-// у клиники с двумя зданиями буква односимвольная.
-const LETTER_MAX_CHARS = 8;
 
 // Секрет группы: 32 случайных байта. Это ключ HMAC, а не пароль, который кто-то
 // набирает руками, поэтому длина выбрана по стойкости, а не по удобству ввода.
@@ -379,16 +376,20 @@ export function parseKey(text) {
   // Отсутствие поля и явный null — это НЕ порча, а «буквы в ключе нет»
   // (EMB1 или ключ главного филиала до раздачи букв).
   //
-  // Проверяется ФОРМА, но не приводится регистр: свёртку владеет
-  // identity.js (normalizeLetter), и вторая её копия здесь разошлась бы с той —
-  // тем более что именно свёртка умеет ИЗГОТОВИТЬ латинскую букву из нелатинской
-  // ('ß' -> 'SS'). Здесь только обрезаются пробелы по краям.
+  // ЧТО ИМЕННО ПРОВЕРЯЕТСЯ ЗДЕСЬ, а что — нет. Здесь только тип: «в этом поле
+  // лежит строка, похожая на букву». Годится ли ТАКАЯ буква — длина, регистр,
+  // занятость, поддельная кириллица — решает identity.js (normalizeLetter и
+  // проверки becomeSecondary), и решает он один: через него проходит КАЖДЫЙ, кто
+  // принимает букву, а через разбор ключа — только тот, кто пришёл с ключом
+  // (у Задачи 6 будут свои вызывающие: экран активации и перенумерация).
+  // Регистр здесь не приводится по той же причине: свёртка живёт там, и
+  // вторая её копия разошлась бы с первой — тем более что именно свёртка умеет
+  // ИЗГОТОВИТЬ латинскую букву из нелатинской ('ß' -> 'SS'). Здесь только
+  // обрезаются пробелы по краям.
   let letter = null;
   if (version === 2 && body.l !== undefined && body.l !== null) {
     letter = typeof body.l === 'string' ? body.l.trim() : '';
-    if (!/^[A-Za-z]+$/.test(letter) || letter.length > LETTER_MAX_CHARS) {
-      return { ok: false, reason: 'bad_key' };
-    }
+    if (!/^[A-Za-z]+$/.test(letter)) return { ok: false, reason: 'bad_key' };
   }
 
   // Токен резервного канала — по правилам ключа группы, а не буквы: без него
@@ -408,19 +409,35 @@ export function parseKey(text) {
 /**
  * Вернуть файл пары ровно в то состояние, в котором он был до попытки.
  *
- * Сырой текст, а не разобранная запись: восстанавливать надо БАЙТЫ, иначе
- * повторная сериализация меняет файл там, где мы обещали его не трогать. Файла
- * не было — его и не будет.
+ * Буфер, а не строка, и это не мелочь: файл пишет не только этот модуль (его
+ * правят руками, его восстанавливают из архива), и прочитанный как 'utf8' байт,
+ * который в UTF-8 не складывается, возвращается уже как U+FFFD. Проверено:
+ * 105-байтовый файл с русским текстом в CP1251 «восстанавливался» в 117 байт,
+ * то есть откат портил ровно то, что обещал сохранить.
  *
- * Сам не бросает: откат — это уже путь отказа, и падение в нём подменило бы
- * причину, ради которой мы сюда попали.
+ * Сам не бросает — откат уже идёт по пути отказа, и падение в нём подменило бы
+ * причину, ради которой мы сюда попали, — но РЕЗУЛЬТАТ отдаёт наверх, потому
+ * что несостоявшийся откат меняет ответ вызывающему (см. pairWithKey).
+ *
+ * @returns {boolean} файл действительно вернулся в прежнее состояние
  */
-function restorePairingFile(dataDir, previousRaw, { writeFileSync, renameSync, unlinkSync } = {}) {
+function restorePairingFile(dataDir, previousRaw, { writeFileSync, renameSync, unlinkSync, readFileSync = fs.readFileSync } = {}) {
   try {
-    if (previousRaw === null) clearPairing(dataDir, { unlinkSync });
-    else writeAtomic(pairingPath(dataDir), previousRaw, { writeFileSync, renameSync });
+    if (previousRaw !== null) {
+      writeAtomic(pairingPath(dataDir), previousRaw, { writeFileSync, renameSync });
+      return true;
+    }
+    if (clearPairing(dataDir, { unlinkSync })) return true;
+    // clearPairing отвечает false на ЛЮБУЮ неудачу, включая «файла и так нет».
+    // Отличить их можно только по диску — и спрашивать надо именно про диск:
+    // вызывающему обещано, что после отказа файла НЕ ОСТАНЕТСЯ, а не что
+    // системный вызов вернул успех.
+    try { readFileSync(pairingPath(dataDir)); } catch { return true; }
+    console.warn('[branch-sync] the pairing file could not be removed after a refused activation');
+    return false;
   } catch (e) {
     console.warn('[branch-sync] could not roll the pairing file back after a refused activation:', e && e.message);
+    return false;
   }
 }
 
@@ -445,6 +462,10 @@ function restorePairingFile(dataDir, previousRaw, { writeFileSync, renameSync, u
  * говорит «вторичный», а файл «не спарен»: тот самый расход, о котором
  * предупреждает шапка identity.js (главным её после этого назначить МОЖНО).
  *
+ * Откат — единственная запись здесь, которая сама может не удаться, и тогда
+ * обещание выше не выполнено. Это НЕ прячется под причиной отказа: ответ
+ * приходит с кодом 'rollback_failed' (исходная причина — в поле cause).
+ *
  * Обрыв ПИТАНИЯ между шагами отката не получит, и это учтено: файл лёг, буква
  * не потрачена — повторное нажатие доводит дело до конца. Обрыв после шага 2
  * тоже переживается, потому что becomeSecondary для ТОЙ ЖЕ буквы идемпотентен
@@ -456,13 +477,15 @@ function restorePairingFile(dataDir, previousRaw, { writeFileSync, renameSync, u
  *   печатал бы A-номера рядом с главным. Молчаливый пропуск здесь неотличим от
  *   нормальной работы месяцами, поэтому это отказ.
  *
- * @returns {{ok:true, record:object, identity:object|null} | {ok:false, reason:string}}
+ * @returns {{ok:true, record:object, identity:object|null}
+ *          | {ok:false, reason:string, cause?:string}}
  *   identity — принятая identity, либо null, если В КЛЮЧЕ БУКВЫ НЕ БЫЛО (это не
  *   то же самое, что «у установки нет identity»: она есть всегда, миграция 080).
  *   reason: empty_key | bad_key | already_main | write_failed |
- *     identity_unavailable | и любой код отказа identity.js (already_secondary |
- *     already_numbered | letter_spent | letter_in_mrns | letter_on_branch |
- *     bad_letter | identity_missing) | identity_failed
+ *     identity_unavailable | rollback_failed | и любой код отказа identity.js
+ *     (already_secondary | already_numbered | letter_spent | letter_in_mrns |
+ *     letter_on_branch | bad_letter | identity_missing) | identity_failed
+ *   cause — только у 'rollback_failed': причина, по которой откатывались.
  */
 export function pairWithKey(dataDir, keyText, {
   db, now = () => new Date(), writeFileSync, renameSync, readFileSync = fs.readFileSync, unlinkSync,
@@ -499,12 +522,12 @@ export function pairWithKey(dataDir, keyText, {
   // приезжает в ключе и не проходит через сервер поставщика ни в одну сторону.
   if (parsed.relay_token) record.relay_token = parsed.relay_token;
 
-  // Байты файла ДО записи — материал для отката. Читается сырым текстом, а не
-  // через readPairing: испорченный файл readPairing показывает как null, и
-  // восстанавливать его нечем, зато удаление — правильный ответ, потому что
-  // «файла нет» и «файл нечитаем» для этого модуля одно состояние.
+  // Байты файла ДО записи — материал для отката. Именно БАЙТЫ (без 'utf8'), и
+  // именно сам файл, а не readPairing: испорченную запись readPairing показывает
+  // как null, и восстанавливать её было бы нечем, а сохранить её надо — эти
+  // байты принадлежат клинике, а не нам.
   let previousRaw = null;
-  try { previousRaw = readFileSync(pairingPath(dataDir), 'utf8'); } catch { previousRaw = null; }
+  try { previousRaw = readFileSync(pairingPath(dataDir)); } catch { previousRaw = null; }
 
   try { writePairing(dataDir, record, { writeFileSync, renameSync }); }
   catch (e) {
@@ -527,7 +550,9 @@ export function pairWithKey(dataDir, keyText, {
     // (Задача 6), а не активации. identity.js назовёт строку буквой.
     identity = becomeSecondary(db, { letter: parsed.letter });
   } catch (e) {
-    restorePairingFile(dataDir, previousRaw, { writeFileSync, renameSync, unlinkSync });
+    const restored = restorePairingFile(dataDir, previousRaw, {
+      writeFileSync, renameSync, unlinkSync, readFileSync,
+    });
     // Код причины проходит НАСКВОЗЬ и неизменным. На 'already_numbered' Задача 6
     // вешает экран согласия на разовую перенумерацию — до тех пор это тупик, и
     // подменять код на общий 'identity_failed' значило бы отобрать у экрана
@@ -536,6 +561,17 @@ export function pairWithKey(dataDir, keyText, {
     if (reason === 'identity_failed') {
       console.warn('[branch-sync] adopting the branch letter failed:', e && e.message);
     }
+    // НО ЕСЛИ ОТКАТ НЕ УДАЛСЯ, отвечать «буква занята» нельзя, и это не
+    // придирка к формулировке. На диске тогда лежит НОВАЯ запись (другая
+    // группа, другой главный филиал), а identity в базе осталась прежней:
+    // установка будет забирать справочник у нового главного и печатать
+    // A-номера рядом с настоящим филиалом A — та самая коллизия, ради которой
+    // весь этап и делается. Случай не выдуманный: на Windows антивирус или
+    // агент резервного копирования держит файл, unlink отвечает EBUSY/EPERM.
+    // Отдельный код нужен, чтобы Задача 6 могла сказать «установка в
+    // несогласованном состоянии», а не назвать это занятой буквой; исходная
+    // причина едет рядом, в cause, — она объясняет, ПОЧЕМУ откатывались.
+    if (!restored) return { ok: false, reason: 'rollback_failed', cause: reason };
     return { ok: false, reason };
   }
   return { ok: true, record, identity };

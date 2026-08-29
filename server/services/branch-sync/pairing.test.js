@@ -461,10 +461,10 @@ test('буква-подделка в ключе отвергается разб�
   // это символ, который потом никто не наберёт в поиске.
   const dir = tmp('id-hostile');
   const db = identityDb();
-  // 'A'.repeat(9) — не выдумка: ни миграция 080, ни identity.js букву по длине
-  // не проверяют (080 проверяет только алфавит), так что тысяча «A» стала бы
-  // префиксом каждого номера пациента. Единственная граница стоит в разборе.
-  for (const bad of ['С', '1', 'C-', '', ' ', 'C;DROP', 'ß', 'A'.repeat(9), 42, {}, [], true]) {
+  // Здесь только то, что буквой даже не ВЫГЛЯДИТ, — это отказ разбора, bad_key.
+  // Длина — уже свойство самой буквы, её проверяет identity.js, и ответ у неё
+  // другой (см. «слишком длинная буква» ниже).
+  for (const bad of ['С', '1', 'C-', '', ' ', 'C;DROP', 'ß', 42, {}, [], true]) {
     const r = pairWithKey(dir, rawV2({ l: bad, t: 'rt-abc' }), { db });
     assert.equal(r.ok, false, JSON.stringify(bad));
     assert.equal(r.reason, 'bad_key', JSON.stringify(bad) + ' -> ' + r.reason);
@@ -487,4 +487,124 @@ test('токен резервного канала не может протащ�
     assert.equal(parsed.relay_token, null, JSON.stringify(bad));
     assert.equal(parsed.letter, 'C', 'и буква из того же ключа доезжает');
   }
+});
+
+test('ключ без буквы и без токена остаётся EMB1 — байт в байт со старым выпуском', () => {
+  // Это НЕ косметика формата, это единственное, что защищает парк в день
+  // обновления. Обновляются машины не одновременно, и главный филиал почти
+  // всегда первым: ключ, который он выдаёт, попадает в филиал СО СТАРОЙ сборкой,
+  // а та про EMB2 не знает и ответит «ключ не подходит». Пока в ключе нет ни
+  // одного нового поля, он обязан остаться ровно прежним.
+  //
+  // Проверяется здесь, а не через RPC в sync-e2e: там утверждение про форму
+  // ответа RPC, и будущий читатель, упростивший encodeKey до «всегда EMB2»,
+  // увидел бы падение сквозного теста про справочник и не понял бы, при чём тут
+  // формат ключа.
+  const fields = { group_id: 'g1', secret: 's1', main_url: 'http://10.0.0.5:8000' };
+  assert.match(encodeKey(fields), /^EMB1-/);
+  assert.equal(encodeKey(fields), encodeLegacyV1(fields), 'байт в байт');
+  const withGroupKey = { ...fields, group_key: KEY32 };
+  assert.equal(encodeKey(withGroupKey), encodeLegacyV1(withGroupKey), 'и с ключом группы тоже');
+  // А как только появляется буква — формат новый, и старый филиал такой ключ
+  // честно не примет вместо того, чтобы разобрать его наполовину.
+  assert.match(encodeKey({ ...fields, letter: 'C' }), /^EMB2-/);
+  assert.match(encodeKey({ ...fields, relay_token: 'rt-abc' }), /^EMB2-/);
+});
+
+test('ключ группы едет и в EMB2 — иначе филиал с буквой молча теряет Маршрут Б', () => {
+  // Замороженный тест выше кладёт ключ группы в EMB2-ключ, но не спрашивает его
+  // обратно: убери `k` из ветки v2 — и все 84 теста остались бы зелёными, а
+  // каждый новый филиал получил бы связь без шифрованного резервного канала.
+  const dir = tmp('v2-groupkey');
+  const db = identityDb();
+  const key = v2key({ group_key: KEY32 });
+  assert.equal(parseKey(key).group_key, KEY32);
+  const r = pairWithKey(dir, key, { db });
+  assert.equal(r.ok, true);
+  assert.equal(readPairing(dir).group_key, KEY32, 'и доезжает до диска, а не только до разбора');
+});
+
+test('ключ с токеном, но БЕЗ буквы: связывает, базу не трогает, токен сохраняет', () => {
+  // Достижимая форма: главный филиал уже выписывает токены на сервере
+  // поставщика, но буквы ещё не раздаёт (Задача 6 не дошла до этой клиники).
+  const dir = tmp('v2-tokenonly');
+  const db = identityDb();
+  const r = pairWithKey(dir, encodeKey({
+    group_id: 'BR-AAAAAAAAAAAA', secret: 'sec', main_url: 'http://10.0.0.5:8000', relay_token: 'rt-only',
+  }), { db });
+  assert.equal(r.ok, true);
+  assert.equal(r.identity, null);
+  assert.equal(readPairing(dir).relay_token, 'rt-only');
+  assert.deepEqual(readIdentity(db), { letter: 'A', role: 'main', branch_id: 1 });
+});
+
+test('слишком длинная буква отвергается принимающей стороной, и ничего не пишется', () => {
+  // Длину проверяет identity.js (normalizeLetter) — там, где через одну функцию
+  // проходит КАЖДЫЙ, кто принимает букву, а не только пришедший с ключом.
+  // Разбор ключа отвечает лишь за тип поля, поэтому код здесь bad_letter, а не
+  // bad_key: строка буквой ВЫГЛЯДИТ, но такой буквы не бывает.
+  const dir = tmp('id-long');
+  const db = identityDb();
+  const r = pairWithKey(dir, v2key({ letter: 'A'.repeat(9) }), { db });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'bad_letter');
+  assert.equal(fs.existsSync(pairingPath(dir)), false, 'откат вернул отсутствие файла');
+  assert.deepEqual(readIdentity(db), { letter: 'A', role: 'main', branch_id: 1 });
+});
+
+test('неудавшийся откат НЕ выдаётся за обычный отказ', () => {
+  // Самое опасное состояние во всём этапе, и раньше оно молчало. Файл уже
+  // переписан на НОВУЮ группу, база осталась прежней (main/A) — установка будет
+  // забирать справочник у нового главного филиала и печатать A-номера рядом с
+  // настоящим филиалом A. На Windows это не экзотика: антивирус или агент
+  // резервного копирования держит файл, и unlink отвечает EBUSY.
+  const dir = tmp('rollback-unlink');
+  const db = identityDb();
+  const r = pairWithKey(dir, v2key({ letter: 'A' }), {
+    db, unlinkSync: () => { const e = new Error('EBUSY'); e.code = 'EBUSY'; throw e; },
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'rollback_failed', 'а не letter_spent');
+  assert.equal(r.cause, 'letter_spent', 'исходная причина едет рядом');
+  assert.equal(fs.existsSync(pairingPath(dir)), true, 'файл и правда остался — код честен');
+});
+
+test('неудавшийся откат замечен и когда прежний файл не удалось вернуть на место', () => {
+  // Вторая половина того же: файл БЫЛ, его переписали, вернуть не смогли.
+  // renameSync ломается со второго вызова — первый нужен прямой записи, второй
+  // это уже откат.
+  const dir = tmp('rollback-rename');
+  const db = identityDb();
+  pairWithKey(dir, encodeLegacyV1({ group_id: 'BR-OLD', secret: 'old', main_url: 'http://10.0.0.1:8000' }), { db });
+  let renames = 0;
+  const renameSync = (a, b) => {
+    renames += 1;
+    if (renames > 1) { const e = new Error('EPERM'); e.code = 'EPERM'; throw e; }
+    return fs.renameSync(a, b);
+  };
+  const r = pairWithKey(dir, v2key({ letter: 'A', group_id: 'BR-NEW' }), { db, renameSync });
+  assert.equal(r.reason, 'rollback_failed');
+  assert.equal(r.cause, 'letter_spent');
+  assert.equal(readPairing(dir).group_id, 'BR-NEW', 'на диске осталась новая запись — про это и код');
+});
+
+test('откат возвращает БАЙТЫ, а не перекодированный текст', () => {
+  // Файл пары правят руками и восстанавливают из архивов, поэтому в нём вполне
+  // может лежать не-UTF-8. Прочитанный как 'utf8', такой байт возвращается уже
+  // как U+FFFD: 105-байтовый файл в CP1251 «восстанавливался» в 117 байт, то
+  // есть откат портил ровно то, что обещал сохранить.
+  const dir = tmp('rollback-bytes');
+  const db = identityDb();
+  // Валидная пара, но с русским названием в CP1251 — readPairing её не разберёт,
+  // и это часть проверки: сохранять надо и то, что мы прочитать не смогли.
+  const cp1251 = Buffer.concat([
+    Buffer.from('{"role":"secondary","group_id":"BR-OLD","secret":"s","main_url":"http://10.0.0.1:8000","name":"', 'utf8'),
+    Buffer.from([0xD4, 0xE8, 0xEB, 0xE8, 0xE0, 0xEB]),   // «Филиал» в CP1251
+    Buffer.from('"}', 'utf8'),
+  ]);
+  fs.writeFileSync(pairingPath(dir), cp1251);
+
+  const r = pairWithKey(dir, v2key({ letter: 'A' }), { db });
+  assert.equal(r.reason, 'letter_spent');
+  assert.deepEqual(fs.readFileSync(pairingPath(dir)), cp1251, 'байт в байт, включая CP1251');
 });

@@ -23,6 +23,14 @@
 // unpaired with a stale file, which a retry fixes; fail the other way round and
 // a letter has been spent for an activation that never finished.
 //
+// SHIPPED, in pairing.js pairWithKey, which writes the file, calls this, and on
+// a refusal restores the file to the byte it held before. So the drift no longer
+// arrives from an ordinary refusal — it has exactly one route left, and that
+// route has its own name: a rollback that ITSELF fails (a locked file on
+// Windows), answered as 'rollback_failed' rather than as the refusal that
+// triggered it. Anything that hears that code is looking at an install whose two
+// stores disagree.
+//
 // This file ADOPTS a letter; it never allocates one. Allocation is letters.js,
 // and it happens on the MAIN branch, against the fleet's one ledger. A
 // secondary allocating from its OWN ledger would be reading a history that
@@ -31,6 +39,11 @@
 // arrives from outside, in the branch key the owner carries (Task 5).
 
 import { mrnPrefixInUse } from './letters.js';
+
+// Exported so a test can state the boundary instead of pinning the number, and
+// so pairing.js could name it if it ever needs to. See normalizeLetter for why
+// the bound exists and why it lives in this file.
+export const LETTER_MAX_CHARS = 8;
 
 // Every refusal here carries a REASON CODE, and a caller must branch on that
 // rather than on the message.
@@ -78,6 +91,28 @@ function normalizeLetter(value) {
       'bad_letter',
       'A branch letter is one or more plain A-Z characters, and this is not one: '
       + JSON.stringify(value) + '. Check the branch key was pasted whole.',
+    );
+  }
+  // LENGTH, and it belongs HERE rather than in whatever handed the letter over.
+  // Nothing below this line bounds it: 080's three CHECKs constrain the alphabet
+  // (`letter GLOB '[A-Z]*' AND letter NOT GLOB '*[^A-Z]*'`) and say nothing about
+  // how many characters, so 'A' x 1000 satisfies every constraint in the schema
+  // and then prefixes EVERY patient number this branch ever mints — a measured
+  // 1009-character MRN, on a card someone is meant to carry.
+  //
+  // Here, because this is the one gate every adopter passes: the branch key
+  // (pairing.js), the activation screen and the renumber flow of Task 6. A bound
+  // in the key parser guards the callers who arrive with a key and nobody else,
+  // and the caller that skips it is exactly the one nobody remembered to check.
+  //
+  // Eight is not a considered maximum so much as a place well past any real one:
+  // letters.js counts in bijective base-26, so it is 26^8 branches, and a clinic
+  // with two buildings has a one-character letter.
+  if (raw.length > LETTER_MAX_CHARS) {
+    throw refusal(
+      'bad_letter',
+      'A branch letter is at most ' + LETTER_MAX_CHARS + ' characters and this one is '
+      + raw.length + '. Check the branch key was pasted whole.',
     );
   }
   return raw.toUpperCase();
@@ -148,15 +183,27 @@ export function becomeSecondary(db, { letter, name } = {}) {
     //
     // But re-adopting the letter this install ALREADY holds is a NO-OP, not a
     // refusal, and that distinction is the whole of activation's retryability.
-    // Task 5 writes this identity and then the pairing file, and pairing.js has
-    // a real write_failed path; when it fires the owner presses the button
-    // again. Refusing then would leave the install half-activated — database
-    // secondary, file unpaired — with no route forward but a fresh install that
-    // discards the clinic's database. The roster row and the ledger entry a
-    // second call would write are already here and already ours, so there is
-    // nothing to do and nothing to undo. (The letter IS the identity; a `name`
-    // that differs on the retry is not applied — renaming a branch is the
-    // roster's job, not activation's.)
+    //
+    // NOT for the reason first written here. That reason said Task 5 writes this
+    // identity and THEN the pairing file, so a write_failed after the adoption
+    // would strand the install; Task 5 shipped the other way round — pairing
+    // file first, this LAST, exactly as the header demands — and that sequence
+    // is now unreachable. Two live ones replace it, and both still need the
+    // no-op:
+    //
+    //   * the power goes out (or the process dies) between this transaction
+    //     committing and the owner seeing an answer. He presses the button
+    //     again, with the same key;
+    //   * he pairs again on purpose, which pairing.js treats as routine — the
+    //     main branch moved to a new address, or re-issued its key, and the new
+    //     key carries the SAME letter, because the letter is this building's and
+    //     is not re-allocated. A refusal here would make re-pairing impossible
+    //     for every branch that has a letter.
+    //
+    // In both, the roster row and the ledger entry a second call would write are
+    // already here and already ours, so there is nothing to do and nothing to
+    // undo. (The letter IS the identity; a `name` that differs on the retry is
+    // not applied — renaming a branch is the roster's job, not activation's.)
     if (me.role === 'secondary') {
       if (me.letter === adopted) return me;
       throw refusal(

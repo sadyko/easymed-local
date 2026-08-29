@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readIdentity, becomeSecondary } from './identity.js';
+import { readIdentity, becomeSecondary, LETTER_MAX_CHARS } from './identity.js';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 
@@ -40,11 +40,15 @@ test('adopting a letter twice is refused - an install has ONE identity', () => {
 });
 
 test('re-adopting the SAME letter is a no-op, so a half-failed activation can be retried', () => {
-  // Task 5 writes this identity and then the pairing file, and pairing.js has a
-  // real write_failed path. When it fires the owner presses the button again —
-  // and a second call that threw would leave the install half-activated
-  // (database secondary, file unpaired) with no route forward but a fresh
-  // install that discards the clinic's database.
+  // The reason first written here was that Task 5 writes this identity and THEN
+  // the pairing file, so pairing.js's write_failed could strand the install.
+  // Task 5 shipped the reverse order — file first, this last — and that
+  // sequence cannot happen. What still needs the no-op is real and is two
+  // things: a crash between this transaction committing and the owner seeing an
+  // answer (he presses the button again), and deliberate re-pairing, which
+  // pairing.js treats as routine — a new key from the same group carries the
+  // SAME letter, so refusing here would make re-pairing impossible for every
+  // branch that has one.
   const db = freshDb();
   const first = becomeSecondary(db, { letter: 'C', name: 'Чиланзар' });
   db.prepare("UPDATE branch_identity SET updated_at = '2000-01-01T00:00:00Z' WHERE id = 1").run();
@@ -221,6 +225,24 @@ test('a letter that is not plain A-Z is refused before anything is written', () 
   assert.deepEqual(readIdentity(db), { letter: 'A', role: 'main', branch_id: 1 });
   assert.equal(db.prepare('SELECT COUNT(*) n FROM branches').get().n, 1);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM branch_letters_spent').get().n, 2, "still just 'A' and 'P'");
+});
+
+test('an absurdly long letter is refused here, because nothing below refuses it', () => {
+  // The schema does not stop this. All three CHECKs in 080 constrain the
+  // ALPHABET and not the length, so 'A' x 1000 is a valid letter as far as
+  // SQLite is concerned — and then prefixes every MRN this branch mints: a
+  // measured 1009-character patient number, printed on a card.
+  //
+  // The bound sits in normalizeLetter and not in whoever passes the letter in,
+  // because this function is the one gate EVERY adopter goes through: the branch
+  // key today, Task 6's activation screen and renumber flow tomorrow.
+  const db = freshDb();
+  assert.throws(() => becomeSecondary(db, { letter: 'A'.repeat(LETTER_MAX_CHARS + 1) }),
+    { reason: 'bad_letter' });
+  // …and the boundary itself is allowed, so the bound is a bound and not an
+  // off-by-one that quietly caps the fleet one letter short.
+  assert.equal(becomeSecondary(db, { letter: 'B'.repeat(LETTER_MAX_CHARS) }).letter,
+    'B'.repeat(LETTER_MAX_CHARS));
 });
 
 test('a lower-case or padded letter means the same branch, and is taken as such', () => {
