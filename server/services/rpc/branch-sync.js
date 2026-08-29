@@ -252,12 +252,15 @@ export function branchSyncStatus(db, args, user) {
   };
 }
 
-// readIdentity бросает, когда служебной строки нет (identity.js объясняет,
-// почему именно бросает). Статус ронять этим нельзя: экран, который не смог
-// прочитать своё состояние, обязан нарисоваться и сказать об этом, а не отдать
-// 500 на открытие раздела настроек. Прочерк вместо буквы — честный ответ.
+// ДВЕ ФУНКЦИИ, ОДИН ВОПРОС К БАЗЕ И РАЗНАЯ ЦЕНА МОЛЧАНИЯ. Обе спрашивают, каким
+// филиалом является эта установка, но отсутствие служебной строки означает для
+// них противоположное: для статуса это «неизвестно», для проверки права —
+// «разрешено». Поэтому глоток исключения у них РАЗНЫЙ. Пока он был общий, его
+// хотела только одна из двух.
+
 /**
- * ЭТА УСТАНОВКА — ФИЛИАЛ? Ответ берётся из БАЗЫ, и это вся суть проверки.
+ * МОЖЕТ ЛИ ЭТА УСТАНОВКА РАЗДАВАТЬ БУКВЫ? Ответ берётся из БАЗЫ, и это вся суть
+ * проверки. Возвращает КОД ОТКАЗА или null, когда можно.
  *
  * Роль лежит в двух местах, и они намеренно не совпадают: файл пары
  * (data/branch-sync.json) и branch_identity. «Отвязать» стирает файл и НЕ
@@ -273,11 +276,45 @@ export function branchSyncStatus(db, args, user) {
  *
  * Файловую проверку это не заменяет, а дополняет: у них разные лекарства
  * (отвязать / поставить заново), поэтому и коды отказа разные.
+ *
+ * ЧИТАЕТ readIdentity НАПРЯМУЮ, а не identityFields, и это вторая половина той
+ * же ошибки. identityFields глотает отсутствие служебной строки ради статуса
+ * (см. ниже) и отдаёт identity_role: null — а «роль неизвестна» в вопросе «я
+ * филиал?» превращалось в «нет, не филиал», то есть в РАЗРЕШЕНИЕ. Измерено: с
+ * удалённой строкой branch_identity бывший филиал делал себя главным и выдавал
+ * букву D из леджера, где потрачены A, P и C, а can_issue при этом читался
+ * true. Сам он ни одного номера не напечатает — триггер MRN отказывает каждой
+ * регистрации словами «branch identity missing», — но буквы он раздаёт ДРУГИМ
+ * установкам, и печатать по ним будут они.
+ *
+ * Поэтому отказ ЗАКРЫТЫЙ: не прочитали свою роль — не раздаём. Отдельным кодом,
+ * а не identity_is_branch: та фраза советует чистую переустановку, а здесь
+ * лекарство другое — восстановить базу из резервной копии. И кодом, а не
+ * исключением наружу: у экрана тогда была бы английская фраза из лога вместо
+ * русской, а у вызова 500 вместо честного отказа.
  */
-function identityIsBranch(db) {
-  return identityFields(db).identity_role === 'secondary';
+function identityBlocksAllocation(db) {
+  try {
+    return readIdentity(db).role === 'secondary' ? 'identity_is_branch' : null;
+  } catch (e) {
+    // ЛЮБАЯ неудача чтения, а не только отсутствие строки: заблокированная база
+    // и не доехавшая миграция отвечают на вопрос «какой я филиал?» одинаково —
+    // никак, — и раздавать буквы, не зная ответа, нельзя ни в одном из случаев.
+    console.warn('[branch-sync] refusing to hand out letters: could not read the branch identity of this install:', e && e.message);
+    return 'identity_missing';
+  }
 }
 
+// СТАТУС, И ТОЛЬКО СТАТУС — здесь глоток нужен, и вот почему. readIdentity
+// бросает, когда служебной строки нет (identity.js объясняет, почему именно
+// бросает). Статус ронять этим нельзя: экран, который не смог прочитать своё
+// состояние, обязан нарисоваться и сказать об этом, а не отдать 500 на открытие
+// раздела настроек. Прочерк вместо буквы — честный ответ, а identity_role: null
+// экран читает как «установка не знает своего филиала» и пишет это словами
+// (branch-sync-logic.js becomeMainState).
+//
+// НИ ОДНА ПРОВЕРКА ПРАВА ЧЕРЕЗ ЭТУ ФУНКЦИЮ НЕ ИДЁТ: молчание здесь означает
+// «неизвестно», а в проверке права оно означало бы «можно».
 function identityFields(db) {
   try {
     const me = readIdentity(db);
@@ -302,10 +339,12 @@ export function branchSyncMakeKey(db, args, user) {
   // должен услышать «сначала отвяжите», а не «адрес указан неверно» — иначе он
   // будет чинить поле, которое не при чём.
   if (existing && existing.role === 'secondary') throw new RpcError(reasonText('already_secondary'), 400);
-  // И то же самое ПО БАЗЕ — см. identityIsBranch. Отдельная проверка, а не
-  // замена предыдущей: файл лечится отвязкой, база не лечится ничем, и советы
-  // владельцу поэтому разные.
-  if (identityIsBranch(db)) throw new RpcError(reasonText('identity_is_branch'), 400);
+  // И то же самое ПО БАЗЕ — см. identityBlocksAllocation. Отдельная проверка, а
+  // не замена предыдущей: файл лечится отвязкой, база не лечится ничем, и советы
+  // владельцу поэтому разные. Код отказа приходит ОТТУДА, а не написан здесь:
+  // причин две («это филиал» и «роль не прочиталась»), и лекарства у них разные.
+  const blocked = identityBlocksAllocation(db);
+  if (blocked) throw new RpcError(reasonText(blocked), 400);
   // Кнопка «Показать ключ» на уже настроенном главном филиале: адрес заново не
   // спрашиваем, берём записанный.
   const url = (args && typeof args.url === 'string' && args.url.trim())
@@ -600,7 +639,7 @@ export function branchSyncBranches(db, args, user) {
     // can_issue управляет кнопками на экране, поэтому оно обязано совпадать с
     // тем, что на самом деле разрешат вызовы ниже: кнопка, которую показали и
     // которая всегда отказывает, хуже отсутствующей.
-    can_issue: !!(pairing && pairing.role === 'main' && pairing.main_url) && !identityIsBranch(db),
+    can_issue: !!(pairing && pairing.role === 'main' && pairing.main_url) && !identityBlocksAllocation(db),
     // Может ли клиника выписать учётку резервного канала ВООБЩЕ. Без этого
     // экран предлагал бы «выдать доступ» неактивированной клинике, у которой
     // поставщик его не выпишет никогда (relay.js relayMintable).
@@ -629,9 +668,10 @@ export async function branchSyncAddBranch(db, args, user, { mintImpl = mintRelay
   // которую услышит владелец. У отвязанного филиала файла пары нет вовсе, так
   // что проверка файла отвечала бы branch_not_main — «сначала назначьте эту
   // установку главной», — то есть советовала бы ровно то единственное, чего
-  // этой установке делать нельзя (см. identityIsBranch). Невыполнимый совет
-  // хуже отказа без совета.
-  if (identityIsBranch(db)) throw new RpcError(reasonText('identity_is_branch'), 400);
+  // этой установке делать нельзя (см. identityBlocksAllocation). Невыполнимый
+  // совет хуже отказа без совета.
+  const blocked = identityBlocksAllocation(db);
+  if (blocked) throw new RpcError(reasonText(blocked), 400);
   if (!pairing || pairing.role !== 'main') throw new RpcError(reasonText('branch_not_main'), 400);
   if (!pairing.main_url) throw new RpcError(reasonText('branch_no_url'), 400);
 
@@ -681,7 +721,8 @@ export async function branchSyncBranchKey(db, args, user, { mintImpl = mintRelay
   const pairing = readPairing(dataDir);
   // Тоже первой и по той же причине: этот вызов ТРАТИТ букву, когда у строки её
   // нет, и отвязанному филиалу нельзя советовать «станьте главным».
-  if (identityIsBranch(db)) throw new RpcError(reasonText('identity_is_branch'), 400);
+  const blocked = identityBlocksAllocation(db);
+  if (blocked) throw new RpcError(reasonText(blocked), 400);
   if (!pairing || pairing.role !== 'main') throw new RpcError(reasonText('branch_not_main'), 400);
   if (!pairing.main_url) throw new RpcError(reasonText('branch_no_url'), 400);
 

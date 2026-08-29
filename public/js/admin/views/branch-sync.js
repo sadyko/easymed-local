@@ -20,7 +20,7 @@ import {
     roleBadge, roleExplainer, syncLine, whenLabel, canSyncNow, addressValue,
     syncKeyLine, relayExplainer, publishLine, canRegenerateKey, KEY_LOSS_WARNING,
     branchRows, branchListNote, KEY_REISSUE_WARNING, LETTER_PERMANENCE_NOTE,
-    pairedMessage, letterExplainer,
+    pairedMessage, letterExplainer, becomeMainState, IDENTITY_UNKNOWN_NOTE,
 } from '../branch-sync-logic.js';
 
 async function rpc(name, args = {}) {
@@ -77,9 +77,10 @@ function paintUnlinked(card, status, admin) {
     // это различать. «Отвязать» стирает файл пары и НЕ трогает принятую букву:
     // она уже напечатана на карточках. Поэтому здесь стоит установка, которая
     // выглядит несвязанной и при этом навсегда остаётся филиалом C — и кнопка
-    // «Сделать главным филиалом» ей откажет (rpc identity_is_branch). Сказать
-    // об этом ДО нажатия дешевле, чем после.
-    if (status.identity_role === 'secondary') {
+    // «Сделать главным филиалом» ей откажет (rpc identity_is_branch), сколько бы
+    // раз её ни нажали. Вместо кнопки здесь объяснение, а самой кнопки ниже нет.
+    const mainState = becomeMainState(status);
+    if (mainState === 'branch') {
         card.appendChild(h('div', { class: 'bsync-block' },
             h('div', { class: 'sys-block-title' }, 'Эта установка — филиал'),
             h('div', { class: 'sys-info' },
@@ -93,19 +94,28 @@ function paintUnlinked(card, status, admin) {
         if (back) card.appendChild(h('p', { class: 'muted bsync-note' }, back.base, ' ', back.example));
     }
 
-    const urlInput = h('input', { type: 'text', value: addressValue(status), placeholder: '10.0.0.5:8000' });
-    const mainBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button' }, 'Сделать главным филиалом');
-    const mainStatus = h('p', { class: 'upd-action-status', role: 'status' });
-    mainBtn.addEventListener('click', () => run(mainBtn, mainStatus, card,
-        () => rpc('branch_sync_make_key', { url: urlInput.value }), 'Филиал назначен главным'));
+    // ...и установка, которая свою служебную запись прочитать не смогла. Буквы
+    // она тоже не раздаёт — сервер отказывает кодом identity_missing, — но
+    // лечится это не ключом подключения, а восстановлением базы, поэтому
+    // состояние отдельное и фраза своя. Блок «подключиться к главному» ниже
+    // остаётся: ключ БЕЗ буквы базу не трогает и связывает как прежде, так что
+    // мёртвой кнопкой он здесь не становится.
+    if (mainState === 'unknown') {
+        card.appendChild(h('div', { class: 'bsync-block' },
+            h('div', { class: 'sys-block-title' }, 'Установка не знает своего филиала'),
+            h('p', { class: 'muted bsync-note' }, IDENTITY_UNKNOWN_NOTE),
+        ));
+    }
 
-    card.appendChild(h('div', { class: 'bsync-block' },
-        h('div', { class: 'sys-block-title' }, 'Этот филиал — главный'),
-        h('p', { class: 'muted bsync-note' },
-            'Справочник будет раздаваться отсюда. Укажите адрес, по которому этот компьютер виден остальным филиалам.'),
-        field('Адрес этого компьютера', urlInput),
-        h('div', { class: 'bsync-actions' }, mainBtn, mainStatus),
-    ));
+    // БЛОК «ЭТОТ ФИЛИАЛ — ГЛАВНЫЙ» РИСУЕТСЯ ТОЛЬКО ТАМ, ГДЕ ОН СРАБОТАЕТ. Оба
+    // состояния выше — это установка, которой branch_sync_make_key откажет
+    // всегда, а кнопка, которую показали и которая всегда отказывает, хуже
+    // отсутствующей: владелец нажимает, читает отказ и идёт искать свою ошибку
+    // там, где её нет.
+    //
+    // ЦЕЛИКОМ, А НЕ ОДНОЙ КНОПКОЙ: поле «Адрес этого компьютера» существует
+    // ровно ради неё и без неё предлагает заполнить то, что никуда не поедет.
+    if (mainState === 'allowed') paintMakeMain(card, status);
 
     const keyInput = h('textarea', { rows: '3', placeholder: 'EMB2-…', class: 'bsync-key' });
     const pairBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, 'Подключить к главному');
@@ -137,6 +147,24 @@ function paintUnlinked(card, status, admin) {
             'Вставьте ключ подключения, выданный на главном филиале.'),
         field('Ключ подключения', keyInput),
         h('div', { class: 'bsync-actions' }, pairBtn, pairStatus),
+    ));
+}
+
+// «Сделать главным филиалом» — блок целиком, потому что и показывают его
+// целиком или никак: поле адреса без кнопки нечего заполнять.
+function paintMakeMain(card, status) {
+    const urlInput = h('input', { type: 'text', value: addressValue(status), placeholder: '10.0.0.5:8000' });
+    const mainBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button' }, 'Сделать главным филиалом');
+    const mainStatus = h('p', { class: 'upd-action-status', role: 'status' });
+    mainBtn.addEventListener('click', () => run(mainBtn, mainStatus, card,
+        () => rpc('branch_sync_make_key', { url: urlInput.value }), 'Филиал назначен главным'));
+
+    card.appendChild(h('div', { class: 'bsync-block' },
+        h('div', { class: 'sys-block-title' }, 'Этот филиал — главный'),
+        h('p', { class: 'muted bsync-note' },
+            'Справочник будет раздаваться отсюда. Укажите адрес, по которому этот компьютер виден остальным филиалам.'),
+        field('Адрес этого компьютера', urlInput),
+        h('div', { class: 'bsync-actions' }, mainBtn, mainStatus),
     ));
 }
 

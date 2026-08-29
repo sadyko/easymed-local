@@ -11,7 +11,7 @@ import {
   roleBadge, roleExplainer, syncLine, changesLabel, whenLabel, canSyncNow, addressValue,
   routeLabel, syncKeyLine, relayExplainer, publishLine, canRegenerateKey, KEY_LOSS_WARNING,
   branchRows, branchListNote, KEY_REISSUE_WARNING, LETTER_PERMANENCE_NOTE,
-  pairedMessage, letterExplainer,
+  pairedMessage, letterExplainer, becomeMainState, IDENTITY_UNKNOWN_NOTE,
 } from '../branch-sync-logic.js';
 
 test('роль установки читается с одного взгляда', () => {
@@ -321,4 +321,35 @@ test('буква установки объяснена номером пацие
   assert.equal(line.example, 'C-26-00042', 'номер, который регистратура видит каждый день');
   assert.ok(line.base.length > 20, 'переводимая половина — целая строка словаря');
   assert.equal(letterExplainer({}), null, 'нечего объяснять — нечего и писать');
+});
+
+test('«Сделать главным филиалом» не показывают там, где сервер откажет всегда', () => {
+  // Правило то же, что у can_issue и can_relay, и это было последнее место, где
+  // его не применили: блок «Этот филиал — главный» рисовался НИЖЕ блока «Эта
+  // установка — филиал» и рисовался безусловно, а branch_sync_make_key такой
+  // установке отказывает всегда (identity_is_branch). Кнопка, которую показали и
+  // которая всегда отказывает, хуже отсутствующей: владелец нажимает, читает
+  // отказ и идёт искать свою ошибку там, где её нет.
+  assert.equal(becomeMainState({ role: 'none', identity_role: 'main' }), 'allowed');
+  assert.equal(becomeMainState({ role: 'none', identity_role: 'secondary' }), 'branch');
+
+  // РОЛЬ НЕ ПРОЧИТАЛАСЬ — ТОЖЕ ОТКАЗ, и это вторая половина той же ошибки на
+  // сервере: там «неизвестно» означало «можно» и разрешало отвязанному филиалу
+  // с удалённой служебной строкой раздавать буквы. Молчание базы не может быть
+  // правом.
+  assert.equal(becomeMainState({ role: 'none', identity_role: null }), 'unknown');
+  assert.equal(becomeMainState({ role: 'none' }), 'unknown');
+  assert.equal(becomeMainState(null), 'unknown');
+
+  // И это ОТДЕЛЬНОЕ состояние, а не «филиал»: филиалу помогает ключ подключения
+  // с его буквой, а здесь помогает только восстановление базы.
+  assert.notEqual(becomeMainState({ identity_role: null }), becomeMainState({ identity_role: 'secondary' }));
+});
+
+test('установке, потерявшей свою запись, сказано и про пациентов', () => {
+  // Та же пропавшая строка останавливает не только выдачу ключей: триггер
+  // номеров отказывает каждой регистрации. Владелец, прочитавший здесь только
+  // про филиалы, пойдёт чинить филиалы, а сломана у него регистратура.
+  assert.match(IDENTITY_UNKNOWN_NOTE, /регистрир/i);
+  assert.match(IDENTITY_UNKNOWN_NOTE, /резервной копии/i);
 });

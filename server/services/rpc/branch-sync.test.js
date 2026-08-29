@@ -537,3 +537,51 @@ test('у каждого нового кода списка филиалов ес
     assert.ok(reasonText(reason).length > 20, reason + ': фраза должна что-то объяснять');
   }
 });
+
+test('БЕЗ СЛУЖЕБНОЙ ЗАПИСИ УСТАНОВКА НЕ РАЗДАЁТ БУКВЫ, а экран настроек всё равно рисуется', async () => {
+  // ДВА ПУТИ К ОДНОЙ ФУНКЦИИ, И ГЛОТОК ХОТЕЛ ТОЛЬКО ОДИН ИЗ НИХ. identityFields
+  // глотает отсутствие строки branch_identity ради статуса — экран, не сумевший
+  // прочитать своё состояние, обязан нарисоваться и сказать об этом, а не отдать
+  // 500 на открытие настроек. Проверка права читала через ту же функцию, и там
+  // «роль неизвестна» превращалось в «не филиал», то есть в РАЗРЕШЕНИЕ.
+  //
+  // Измерено до починки: с удалённой строкой бывший филиал C делал себя главным
+  // и выдавал букву D из леджера, где потрачены A, P и C, а can_issue читался
+  // true. Своих номеров он при этом напечатать не может — триггер MRN отказывает
+  // каждой регистрации, — но буквы уезжают на ДРУГИЕ установки, и печатать по
+  // ним будут они.
+  const dir = inDir('identity-gone');
+  const db = freshDb();
+  assert.equal(branchSyncPair(db, { key: key() }, admin).letter, 'C');
+  assert.equal(branchSyncUnpair(db, {}, admin).ok, true);
+  db.prepare('DELETE FROM branch_identity').run();
+  const spentBefore = db.prepare("SELECT COUNT(*) n FROM branch_letters_spent WHERE kind = 'issue'").get().n;
+
+  // ПУТЬ ПЕРВЫЙ — ПРОВЕРКА ПРАВА. Все три двери к букве закрыты, и закрыты
+  // СВОИМ кодом: identity_is_branch советует чистую переустановку, а здесь
+  // лекарство другое — восстановить базу из копии.
+  assert.throws(() => branchSyncMakeKey(db, { url: 'http://10.0.0.9:8000' }, admin),
+    (e) => e.message === reasonText('identity_missing'));
+  await assert.rejects(
+    () => branchSyncAddBranch(db, { name: 'Самозванец' }, admin, { mintImpl: mintOk }),
+    (e) => e.message === reasonText('identity_missing'));
+  await assert.rejects(
+    () => branchSyncBranchKey(db, { branch_id: 1 }, admin, { mintImpl: mintOk }),
+    (e) => e.message === reasonText('identity_missing'));
+  assert.notEqual(reasonText('identity_missing'), reasonText('identity_is_branch'),
+    'два разных положения дел — две разные фразы');
+
+  // И ни одной буквы не потрачено, ни одной пары не создано.
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM branch_letters_spent WHERE kind = 'issue'").get().n, spentBefore);
+  assert.equal(readPairing(dir), null, 'установка не сделала себя главной');
+
+  // ПУТЬ ВТОРОЙ — ЧТЕНИЕ СОСТОЯНИЯ. Тот же отсутствующий ряд не роняет ни
+  // статус, ни список: прочерк вместо буквы — честный ответ, 500 — нет.
+  const st = branchSyncStatus(db, {}, admin);
+  assert.equal(st.identity_role, null, 'экран читает это как «филиал неизвестен»');
+  assert.equal(st.letter, null);
+  assert.equal(st.role, 'none');
+  const list = branchSyncBranches(db, {}, admin);
+  assert.equal(list.can_issue, false, 'кнопок выдачи не показываем: они откажут всегда');
+  db.close();
+});
