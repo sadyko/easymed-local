@@ -8,6 +8,21 @@
 // The ledger this reads (branch_letters_spent) and the reasoning behind its
 // 'issue'/'burn' split live in server/db/migrations/080_branch_identity.sql.
 
+// THE BOUND ON A LETTER'S LENGTH. It lives here because this is the only module
+// that MANUFACTURES a letter — the walk below counts in bijective base-26 and
+// has no natural stopping point — and identity.js re-exports it rather than
+// keeping a second copy, so the end that issues and the end that accepts cannot
+// drift apart. That direction is forced anyway: identity.js already imports
+// mrnPrefixInUse from this file, and importing back would close a ring.
+//
+// WHY THERE IS A BOUND AT ALL is identity.js's argument, at normalizeLetter, and
+// it is about what a letter DOES: it prefixes every patient number a branch ever
+// mints, and 080's CHECKs constrain the alphabet and not the length, so nothing
+// in the schema stops a 1000-character MRN printed on a card. Eight is not a
+// considered maximum so much as a place well past any real one — 26^8 branches,
+// where a clinic with two buildings has a one-character letter.
+export const LETTER_MAX_CHARS = 8;
+
 const A = 'A'.charCodeAt(0);
 
 // Spreadsheet-column ordering: A..Z, AA..AZ, BA.. — short for the first 26
@@ -65,7 +80,31 @@ export function nextLetter(issued, taken) {
   const blocked = new Set(taken.map((l) => String(l).toUpperCase()));
   let n = highest + 1;
   while (blocked.has(fromIndex(n))) n += 1;   // step over burns
-  return fromIndex(n);
+  const letter = fromIndex(n);
+
+  // The ISSUE side of the bound, and until this line there was no issue side:
+  // the walk above grows without limit, while identity.js normalizeLetter — the
+  // gate EVERY adopter passes — refuses anything longer than LETTER_MAX_CHARS.
+  // The two ends disagreeing means the main branch mints a branch key that the
+  // branch it was minted for then rejects, and the symptom the owner reports
+  // ("the key does not work") names neither end. Refusing here says which end.
+  //
+  // AFTER the walk, not before: the walk steps over burns, so the letter that is
+  // actually issued is the only one worth checking.
+  //
+  // Throws rather than returning a code, because there is no recovery to offer
+  // and no caller that could act on one: a clinic reaching this has 26^8
+  // branches. It is the same trade this function already makes on a missing
+  // argument, and the same 080 makes when its MRN trigger RAISEs rather than
+  // minting a NULL — refusing beats answering wrongly.
+  if (letter.length > LETTER_MAX_CHARS) {
+    throw new RangeError(
+      'Branch letters are exhausted: the next one would be ' + letter + ' (' + letter.length
+      + ' characters), and an adopting branch refuses anything longer than ' + LETTER_MAX_CHARS
+      + ' (services/branch-sync/identity.js normalizeLetter).',
+    );
+  }
+  return letter;
 }
 
 // Is some patients.mrn already numbered under this letter?

@@ -38,12 +38,26 @@
 // letter the main branch has already given to another building. The letter
 // arrives from outside, in the branch key the owner carries (Task 5).
 
-import { mrnPrefixInUse } from './letters.js';
+import { mrnPrefixInUse, LETTER_MAX_CHARS } from './letters.js';
 
-// Exported so a test can state the boundary instead of pinning the number, and
-// so pairing.js could name it if it ever needs to. See normalizeLetter for why
-// the bound exists and why it lives in this file.
-export const LETTER_MAX_CHARS = 8;
+// RE-EXPORTED, NOT REDEFINED, and the number itself now lives in letters.js.
+//
+// The bound has two ends. This file REFUSES a letter longer than it (see
+// normalizeLetter, which is where the reasoning for the bound is written and
+// where the check belongs — it is the one gate every adopter passes). letters.js
+// is the only thing that MANUFACTURES one, counting in bijective base-26 with no
+// natural stopping point, and until it read this number it could issue a letter
+// this file would then refuse: a branch key the receiving branch rejects, with a
+// symptom that names neither end.
+//
+// The direction of the import is forced rather than chosen: this file already
+// needs mrnPrefixInUse from letters.js, and importing the constant the other way
+// would close a ring — the thing pairing.js's header is careful to avoid.
+//
+// Still exported from HERE because this is where callers meet it: identity.test.js
+// states the boundary instead of pinning the number, and pairing.js could name it
+// if it ever needs to.
+export { LETTER_MAX_CHARS };
 
 // Every refusal here carries a REASON CODE, and a caller must branch on that
 // rather than on the message.
@@ -107,7 +121,9 @@ function normalizeLetter(value) {
   //
   // Eight is not a considered maximum so much as a place well past any real one:
   // letters.js counts in bijective base-26, so it is 26^8 branches, and a clinic
-  // with two buildings has a one-character letter.
+  // with two buildings has a one-character letter. letters.js now refuses to
+  // ISSUE past the same number, so a key that reaches this refusal was not minted
+  // by us.
   if (raw.length > LETTER_MAX_CHARS) {
     throw refusal(
       'bad_letter',

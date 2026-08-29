@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { nextLetter, allocateLetter } from './letters.js';
+// BRANCH_IDENTITY_V1 — imported from the ADOPTING side on purpose. The bound is
+// one number with two ends, and this test's whole point is that the end which
+// issues a letter and the end which accepts one are reading the same one.
+import { LETTER_MAX_CHARS } from './identity.js';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 
@@ -265,4 +269,39 @@ test('the A..Z..AA..ZZ..AAA sequence never repeats a letter', () => {
   }
   // Every letter produced is a shape both tables in 080 accept (plain A-Z).
   for (const l of seen) assert.match(l, /^[A-Z]+$/);
+});
+
+test('the allocator refuses to issue a letter the receiving branch would refuse', () => {
+  // Nothing bounded the ISSUE side. Letters grow in bijective base-26, so this
+  // walk never stops on its own, while identity.js normalizeLetter refuses
+  // anything past LETTER_MAX_CHARS — the two ends disagreeing means the main
+  // branch mints a branch key that the branch it was minted for rejects, and the
+  // symptom ("this key does not work") names neither end.
+  //
+  // Unreachable in practice: it takes 26^8 branches to get here, and a clinic
+  // with two buildings has a one-character letter. Written down anyway, because
+  // a disagreement between two ends is exactly the kind of thing that surfaces
+  // as a support call nobody can locate.
+  const last = 'Z'.repeat(LETTER_MAX_CHARS - 1);
+  const boundary = nextLetter([last], [last]);
+  assert.equal(boundary.length, LETTER_MAX_CHARS, 'the bound is a bound, not an off-by-one');
+  assert.equal(boundary, 'A'.repeat(LETTER_MAX_CHARS));
+
+  const full = 'Z'.repeat(LETTER_MAX_CHARS);
+  assert.throws(() => nextLetter([full], [full]), RangeError);
+});
+
+test('a letter that cannot be issued is not half-issued either', () => {
+  // allocateLetter writes to the ledger before it returns, so the refusal has to
+  // land INSIDE its transaction: a spent row for a letter no branch ever got is
+  // a letter lost from the clinic's supply for ever (letters are never reissued).
+  const db = freshDb();
+  const full = 'Z'.repeat(LETTER_MAX_CHARS);
+  db.prepare("INSERT INTO branch_letters_spent (letter, kind) VALUES (?, 'issue')").run(full);
+  const before = db.prepare('SELECT COUNT(*) n FROM branch_letters_spent').get().n;
+
+  assert.throws(() => allocateLetter(db, { name: 'Слишком поздний филиал' }), RangeError);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM branch_letters_spent').get().n, before,
+    'a refused allocation must not spend anything');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM branches WHERE name = 'Слишком поздний филиал'").get().n, 0);
 });

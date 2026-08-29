@@ -329,7 +329,7 @@ export function relayEnabled(pairing) {
  *
  * @returns {{ok:true, group_id, secret, main_url, group_key:string|null,
  *            letter:string|null, relay_token:string|null}
- *          | {ok:false, reason:'empty_key'|'bad_key'}}
+ *          | {ok:false, reason:'empty_key'|'bad_key'|'bad_letter'}}
  *   group_key === null — ключ выпущен установкой до появления Маршрута Б.
  *   Это не ошибка: Маршрут А работает, резервный канал просто недоступен.
  *   letter === null — ключ выпущен до появления букв филиалов (EMB1) либо
@@ -370,8 +370,22 @@ export function parseKey(text) {
   // Цена молча обнулённой буквы другая: филиал свяжется, буквы не получит и
   // начнёт печатать A-номера рядом с главным филиалом, который печатает свои, —
   // два разных человека с одним номером на карточках, ровно та коллизия, ради
-  // которой буква и заведена. Поэтому «поле есть, но это не A-Z» = bad_key:
-  // владельца отправляют за новым ключом, и это поправимо в тот же день.
+  // которой буква и заведена. Поэтому «поле есть, но это не A-Z» отвергает ключ
+  // целиком: владельца отправляют за новым ключом, и это поправимо в тот же день.
+  //
+  // ОТКАЗ НАЗЫВАЕТСЯ 'bad_letter', А НЕ 'bad_key', и различие здесь ровно одно —
+  // что владелец прочтёт на экране. bad_key переводится как «проверьте, что ключ
+  // скопирован целиком»: верный совет для обрезанного или искажённого при
+  // пересылке ключа и бесполезный для этого случая. Ключ, выпущенный с
+  // кириллической «С» вместо латинской «C» (буквы неразличимы на экране, а
+  // клавиатура у выпускающего русская), скопирован целиком — копировать его
+  // заново можно бесконечно. Лечится он перевыпуском ключа в главном филиале,
+  // и это то, что говорит фраза bad_letter (rpc/branch-sync.js).
+  //
+  // Тот же код, что у identity.js normalizeLetter, и это не совпадение: там он
+  // отвечает на «буква не A-Z» и «буква длиннее восьми», здесь — на «поле есть,
+  // но буквой не является». Один код на одно положение дел, с какой бы стороны
+  // в него ни пришли.
   //
   // Отсутствие поля и явный null — это НЕ порча, а «буквы в ключе нет»
   // (EMB1 или ключ главного филиала до раздачи букв).
@@ -389,7 +403,7 @@ export function parseKey(text) {
   let letter = null;
   if (version === 2 && body.l !== undefined && body.l !== null) {
     letter = typeof body.l === 'string' ? body.l.trim() : '';
-    if (!/^[A-Za-z]+$/.test(letter)) return { ok: false, reason: 'bad_key' };
+    if (!/^[A-Za-z]+$/.test(letter)) return { ok: false, reason: 'bad_letter' };
   }
 
   // Токен резервного канала — по правилам ключа группы, а не буквы: без него
@@ -481,7 +495,7 @@ function restorePairingFile(dataDir, previousRaw, { writeFileSync, renameSync, u
  *          | {ok:false, reason:string, cause?:string}}
  *   identity — принятая identity, либо null, если В КЛЮЧЕ БУКВЫ НЕ БЫЛО (это не
  *   то же самое, что «у установки нет identity»: она есть всегда, миграция 080).
- *   reason: empty_key | bad_key | already_main | write_failed |
+ *   reason: empty_key | bad_key | bad_letter | already_main | write_failed |
  *     identity_unavailable | rollback_failed | и любой код отказа identity.js
  *     (already_secondary | already_numbered | letter_spent | letter_in_mrns |
  *     letter_on_branch | bad_letter | identity_missing) | identity_failed

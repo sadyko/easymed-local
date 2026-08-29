@@ -461,13 +461,16 @@ test('буква-подделка в ключе отвергается разб�
   // это символ, который потом никто не наберёт в поиске.
   const dir = tmp('id-hostile');
   const db = identityDb();
-  // Здесь только то, что буквой даже не ВЫГЛЯДИТ, — это отказ разбора, bad_key.
-  // Длина — уже свойство самой буквы, её проверяет identity.js, и ответ у неё
-  // другой (см. «слишком длинная буква» ниже).
+  // Отвергается ВЕСЬ ключ, и код отказа — 'bad_letter', а не 'bad_key'. Ключ при
+  // этом цел: он разобрался, адрес и секрет на месте, испорчено ровно одно поле.
+  // Это различие целиком про совет на экране — bad_key говорит «проверьте, что
+  // ключ скопирован целиком», и для ключа, выпущенного с кириллической «С»,
+  // этот совет не срабатывает никогда. Тот же код отдаёт identity.js на слишком
+  // длинную букву, и приходят они в одну и ту же фразу: «выпустите ключ заново».
   for (const bad of ['С', '1', 'C-', '', ' ', 'C;DROP', 'ß', 42, {}, [], true]) {
     const r = pairWithKey(dir, rawV2({ l: bad, t: 'rt-abc' }), { db });
     assert.equal(r.ok, false, JSON.stringify(bad));
-    assert.equal(r.reason, 'bad_key', JSON.stringify(bad) + ' -> ' + r.reason);
+    assert.equal(r.reason, 'bad_letter', JSON.stringify(bad) + ' -> ' + r.reason);
   }
   assert.equal(fs.existsSync(pairingPath(dir)), false);
   assert.equal(readIdentity(db).role, 'main');

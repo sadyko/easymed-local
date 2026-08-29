@@ -22,7 +22,7 @@ import { publishCatalogue, fetchCatalogue, maybePublish, relayUrl, readLastPubli
 const KEY = b64url(randomBytes(GROUP_KEY_BYTES));
 const tmp = (tag) => fs.mkdtempSync(path.join(os.tmpdir(), 'em-relay-' + tag + '-'));
 
-function clinic(tag, { role = 'main', relay = true, key = KEY, token = 'tok-AAAA' } = {}) {
+function clinic(tag, { role = 'main', relay = true, key = KEY, token = 'tok-AAAA', relayToken = null } = {}) {
   const dir = tmp(tag);
   const db = openDb(':memory:');
   migrate(db);
@@ -31,6 +31,10 @@ function clinic(tag, { role = 'main', relay = true, key = KEY, token = 'tok-AAAA
   if (token) fs.writeFileSync(path.join(dir, 'control.json'), JSON.stringify({ clinic_id: 'c-1', install_token: token }));
   const record = { role, group_id: 'BR-ABCDEF012345', secret: 'sss', main_url: 'http://10.0.0.5:8000', relay };
   if (key) record.group_key = key;
+  // BRANCH_IDENTITY_V1 — учётка, приехавшая в ключе подключения. У настоящего
+  // вторичного филиала она единственная: он подключался к клинике, а не к
+  // поставщику, и install_token-а у него нет и быть не должно.
+  if (relayToken) record.relay_token = relayToken;
   writePairing(dir, record);
   return { dir, db };
 }
@@ -228,4 +232,82 @@ test('главный филиал не забирает копию сам у с�
     fetchImpl: async () => { throw new Error('не должно вызываться'); }, env: {},
   });
   assert.equal(r.reason, 'relay_not_secondary', 'иначе вышло бы кольцо, в котором ничья цена не правда');
+});
+
+// --- BRANCH_IDENTITY_V1: чем представляется филиал, не активированный у поставщика ---
+//
+// Вторичный филиал НИКОГДА не активируется у поставщика: он подключается к
+// клинике, а не к поставщику, поэтому install_token-а у него нет. Ровно для
+// этого главный филиал выписывает ему токен резервного канала и кладёт в ключ
+// подключения. Пока этот файл читал только control.json, филиал с токеном на
+// диске всё равно отвечал relay_not_enrolled — «Клиника не активирована», — то
+// есть жаловался на то, чего от него и не требовалось.
+
+test('филиал без install_token ходит на сервер токеном из ключа подключения', async () => {
+  const vendor = fakeVendor();
+  const main = clinic('rt-src', { role: 'main' });
+  await publishCatalogue(main.db, main.dir, { fetchImpl: vendor.fetchImpl, env: {} });
+
+  const sec = clinic('rt-only', { role: 'secondary', token: null, relayToken: 'relay-tok-XYZ' });
+  const got = await fetchCatalogue(sec.dir, { fetchImpl: vendor.fetchImpl, env: {} });
+  assert.equal(got.ok, true, JSON.stringify(got));
+  assert.ok(got.catalogue.services.some((x) => x.code === 'S-1'));
+  assert.equal(vendor.calls.at(-1).auth, 'Bearer relay-tok-XYZ',
+    'единственная учётка филиала — та, что приехала в ключе подключения');
+});
+
+test('токен из ключа сильнее install_token-а, когда есть оба', async () => {
+  // Достижимо: каталог данных филиала скопирован с активированной установки
+  // (так ставят второй компьютер), и в control.json лежит чужой install_token.
+  //
+  // ПОБЕЖДАЕТ ТОКЕН ИЗ КЛЮЧА, и это решение про отзыв. install_token —
+  // учётка КЛИНИКИ: он открывает любой адрес на резервном канале и check-in
+  // заодно, и отобрать его у одного филиала нельзя, не отключив клинику целиком.
+  // Токен из ключа выписан этому филиалу, привязан к одному адресу и гасится
+  // одной строкой на сервере поставщика (relay_tokens.revoked_at). Победи здесь
+  // install_token — отзыв токена филиала не делал бы ничего, и филиал, у
+  // которого отобрали доступ, продолжал бы забирать справочник. Отзыв, который
+  // молча не срабатывает, хуже отсутствующего.
+  const vendor = fakeVendor();
+  const main = clinic('rt-both-src', { role: 'main' });
+  await publishCatalogue(main.db, main.dir, { fetchImpl: vendor.fetchImpl, env: {} });
+
+  const sec = clinic('rt-both', { role: 'secondary', token: 'tok-CLINIC', relayToken: 'relay-tok-NARROW' });
+  const got = await fetchCatalogue(sec.dir, { fetchImpl: vendor.fetchImpl, env: {} });
+  assert.equal(got.ok, true, JSON.stringify(got));
+  assert.equal(vendor.calls.at(-1).auth, 'Bearer relay-tok-NARROW',
+    'узкая отзываемая учётка предпочитается учётке всей клиники');
+});
+
+test('главный филиал по-прежнему представляется install_token-ом', async () => {
+  // Обратная сторона того же правила: у главного филиала токена из ключа нет —
+  // он их ВЫПИСЫВАЕТ, — поэтому выгрузка идёт учёткой клиники, ровно как раньше.
+  const vendor = fakeVendor();
+  const { dir, db } = clinic('rt-main-unchanged', { role: 'main' });
+  const r = await publishCatalogue(db, dir, { fetchImpl: vendor.fetchImpl, env: {} });
+  assert.equal(r.ok, true);
+  assert.equal(vendor.calls.at(-1).auth, 'Bearer tok-AAAA');
+});
+
+test('нет ни того, ни другого — по-прежнему честный отказ, и он не доходит до сети', async () => {
+  const vendor = fakeVendor();
+  const sec = clinic('rt-none', { role: 'secondary', token: null });
+  const got = await fetchCatalogue(sec.dir, { fetchImpl: vendor.fetchImpl, env: {} });
+  assert.equal(got.ok, false);
+  assert.equal(got.reason, 'relay_not_enrolled');
+  assert.equal(vendor.calls.length, 0);
+});
+
+test('пустой или пробельный токен в записи — это отсутствие токена, а не токен', async () => {
+  // Заголовок «Authorization: Bearer  » не учётка, а гарантированный 401,
+  // который на экране выглядел бы как «сервер не принял установку». Пустая
+  // строка на диске появляется от правки файла руками и от неудачной сборки
+  // ключа, и в обоих случаях правильный ответ — «учётки нет».
+  const vendor = fakeVendor();
+  for (const relayToken of ['   ', '	']) {
+    const sec = clinic('rt-blank', { role: 'secondary', token: null, relayToken });
+    const got = await fetchCatalogue(sec.dir, { fetchImpl: vendor.fetchImpl, env: {} });
+    assert.equal(got.reason, 'relay_not_enrolled', JSON.stringify(relayToken));
+  }
+  assert.equal(vendor.calls.length, 0);
 });
