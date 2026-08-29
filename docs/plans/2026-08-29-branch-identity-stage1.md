@@ -290,6 +290,17 @@ Expected: FAIL — `Cannot find module './letters.js'`
 
 - [ ] **Step 3: Implement**
 
+> **The code below is the DRAFT this task started from, kept as the record of
+> what was proposed. It is NOT what shipped, and three things in it are wrong** —
+> `server/services/branch-sync/letters.js` is the truth. The default argument
+> `taken = issued` is a provable no-op that silently means "ignore every burn",
+> and calling `nextLetter` with one argument returns `P` — the one letter the
+> module exists never to hand out. The recursion is bounded only by however many
+> poisoned prefixes an old system's Excel export happened to contain. And the
+> `substr(...)` prefix probe full-scans the covering index: measured at 3.3 ms
+> against 0.004 ms for a range seek on 70,000 rows. The shipped file argues all
+> three out at length. Do not copy from here.
+
 ```js
 // server/services/branch-sync/letters.js
 //
@@ -922,6 +933,18 @@ What it requires, and why it is work rather than a one-liner:
   эти карты нужно перепечатать» — because the cost is real and local, and the
   owner is the one who pays it.
 
-`reason: 'already_numbered'` is the hook for that screen. **The activation flow
-should not ship without it**, because until it exists the honest text is a dead
-end.
+`reason: 'already_numbered'` is the hook for that screen.
+
+> **RESOLVED DIFFERENTLY, 2026-08-29, after this was written.** The line that
+> stood here said the activation flow must not ship without the renumber. That
+> was wrong on scope: a renumber REWRITES patient numbers, which is clinical
+> data mutation, and Stage 1's whole boundary is that no clinical data moves.
+> Building it here would have broken the one promise that makes this stage
+> reviewable.
+>
+> What shipped instead is an honest refusal. `rpc/branch-sync.js` answers
+> `already_numbered` with Russian that tells the owner exactly what happened,
+> offers the one remedy that IS available today (a clean reinstall, if this is
+> a new branch PC), and sends them to support for the case where the patients
+> are real — rather than promising a button that does not exist. The renumber
+> belongs to Stage 2, alongside the patient sync it exists to serve.
