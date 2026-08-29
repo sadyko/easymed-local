@@ -37,6 +37,9 @@ tested. If you are tempted, the answer is: make the change in dev and release it
                                                   machines push here.
 2. CHANGE    edit in easymed.local
 3. TEST      npm test → "fail 0", and open the screen you changed
+                                                  `npm start` to look; closing the
+                                                  window does NOT stop it - use
+                                                  stop-easymed.bat or Ctrl+C
 4. OWNER OK  the owner looks at it on localhost:8000 and says go
 5. REVIEW    git status / git diff — no data/, no *.db, no keys, no secrets
 6. PUSH      to main

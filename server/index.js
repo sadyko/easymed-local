@@ -226,8 +226,23 @@ if (isMain) {
     if (err.code === 'EADDRINUSE') {
       console.error('');
       console.error(`Easy-Med could not start: port ${PORT} is already in use.`);
-      console.error('Easy-Med is probably already running on this PC - check for');
-      console.error('an open Easy-Med window before starting it again.');
+      console.error('');
+      console.error('Another Easy-Med is still running on this PC.');
+      console.error('');
+      // The old text here said 'check for an open Easy-Med window', which is a
+      // dead end in exactly the case that produces this error most often:
+      // CLOSING THE TERMINAL WINDOW DOES NOT STOP THE SERVER. node keeps
+      // running, keeps the port, and there is no window left to find. The owner
+      // hit this twice, and the second time the only way forward was to ask.
+      // A message about a problem has to name the way out of it.
+      console.error('Closing the terminal window does NOT stop it - the server');
+      console.error('keeps running in the background and keeps holding the port.');
+      console.error('');
+      console.error('To stop it, run stop-easymed.bat (it sits next to');
+      console.error('start-easymed.bat), or paste this into PowerShell:');
+      console.error('');
+      console.error(`  Get-NetTCPConnection -LocalPort ${PORT} -State Listen |`);
+      console.error('    ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }');
       process.exit(1);
     }
     throw err;

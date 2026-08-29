@@ -40,6 +40,13 @@ If the pull brings changes, run `npm test` once before building on top of them.
     npm test        # must end 0 failing (the port-flake note in CLAUDE.md applies)
     npm start       # look at the actual screen you changed
 
+`npm start` keeps running until you stop it, and **closing the terminal window does not
+stop it.** node stays alive in the background still holding port 8000, so the next start
+dies with "port 8000 is already in use" — and by then there is no window left to close.
+This has cost real time twice. Stop it with `Ctrl+C` in its window, or, once that window
+is gone, run `stop-easymed.bat` (it only ever stops a *node* process on that port, never
+whatever else might be using it).
+
 **4. Review your own diff before pushing — confirm the changes are only what you meant:**
 
     git status      # nothing unexpected? no data/, no *.db, no keys?
