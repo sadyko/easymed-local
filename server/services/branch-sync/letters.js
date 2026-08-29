@@ -18,6 +18,11 @@ function toIndex(letter) {
   return n;
 }
 
+// The `- 1` before BOTH the modulo and the division is the whole trick, and not
+// decoration: this is BIJECTIVE base-26, which has no zero digit — A is 1, Z is
+// 26, and 27 must come out 'AA'. Ordinary base-26 would spell 26 as digits (1,0)
+// and so need a letter for a zero that has no spelling. Drop either `- 1` and
+// the Z -> AA boundary is where it shows.
 function fromIndex(n) {
   let out = '';
   while (n > 0) {
@@ -38,9 +43,26 @@ function fromIndex(n) {
 // The highest is taken by INDEX, not by string comparison: past 26 branches
 // 'AA' sorts before 'B' lexically, so a MAX() over the text would hand out a
 // letter that is already on a branch.
-export function nextLetter(issued, taken = issued) {
-  const highest = (issued || []).reduce((max, l) => Math.max(max, toIndex(l)), 0);
-  const blocked = new Set((taken || []).map((l) => String(l).toUpperCase()));
+//
+// BOTH arguments are REQUIRED, and that is a deliberate reversal: `taken` used to
+// default to `issued`, which reads like a safety net and provably is not one.
+// Every member of `issued` has an index <= highest and the walk starts at
+// highest + 1, so a defaulted `taken` can never block anything — the default
+// silently meant "this ledger has no burns", and every ledger has at least one.
+// The cost of the omission was specific: nextLetter(['A'..'O']) answered 'P',
+// the single letter this module exists never to issue. Refusing beats answering
+// wrongly — the same trade migration 080 makes when its trigger RAISEs instead
+// of minting a NULL MRN. A caller with genuinely no burns passes the ledger
+// twice, which states that premise instead of assuming it.
+export function nextLetter(issued, taken) {
+  if (!Array.isArray(issued) || !Array.isArray(taken)) {
+    throw new TypeError(
+      'nextLetter(issued, taken): both are required. `taken` is the WHOLE ledger, burns included; '
+      + 'omit it and a fifteen-branch clinic is handed P, the legacy MRN prefix.',
+    );
+  }
+  const highest = issued.reduce((max, l) => Math.max(max, toIndex(l)), 0);
+  const blocked = new Set(taken.map((l) => String(l).toUpperCase()));
   let n = highest + 1;
   while (blocked.has(fromIndex(n))) n += 1;   // step over burns
   return fromIndex(n);
@@ -103,6 +125,17 @@ export function allocateLetter(db, { name = '' } = {}) {
   //     read and our INSERT; IMMEDIATE serialises the whole decision. The PRIMARY
   //     KEY on branch_letters_spent and the UNIQUE index on branches.letter stay
   //     the backstop — a duplicate raises instead of issuing the same letter.
+  //
+  // THE LOCKING HALF HOLDS ONLY IF THIS OPENS THE OUTERMOST TRANSACTION.
+  // better-sqlite3 (13.0.2, lib/methods/transaction.js:54) issues a SAVEPOINT
+  // instead of BEGIN when db.inTransaction, so nested inside a caller's
+  // transaction the BEGIN IMMEDIATE above is never executed — silently, with no
+  // error. Atomicity survives (the savepoint still rolls the burns back); the
+  // cross-process serialisation does not, and the outer transaction's own mode
+  // decides it. That is a live case, not a hypothetical: the branch_identity
+  // block in 080 has identity.js setting both of its columns in one transaction,
+  // and Task 5 allocates during activation. A caller that needs the lock must open
+  // its own transaction with .immediate().
   return db.transaction(() => {
     const rows = db.prepare('SELECT letter, kind FROM branch_letters_spent').all();
     const issued = rows.filter((r) => r.kind === 'issue').map((r) => r.letter);
@@ -140,6 +173,15 @@ export function allocateLetter(db, { name = '' } = {}) {
     }
 
     db.prepare("INSERT INTO branch_letters_spent (letter, kind) VALUES (?, 'issue')").run(letter);
+
+    // The nameless form SPENDS A LETTER AND CREATES NOTHING, and the spend is
+    // irreversible — the header's first paragraph is exactly about this. The
+    // default stays because allocating without a branch row is a real need (a
+    // secondary install already has its roster row and only needs the letter),
+    // but a caller that meant to create a branch and forgot the name has just
+    // burned a letter out of the clinic's supply with nothing to show for it.
+    // This line is also the ONLY INSERT INTO branches on the server, so in
+    // practice this function is createBranch wearing another name.
     if (name) db.prepare('INSERT INTO branches (name, letter) VALUES (?, ?)').run(name, letter);
     return letter;
   }).immediate();

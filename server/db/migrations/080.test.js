@@ -146,6 +146,44 @@ test('two branches cannot hold the same letter, but unlettered branches are fine
   assert.equal(db.prepare('SELECT COUNT(*) n FROM branches WHERE letter IS NULL').get().n, 2);
 });
 
+test('branches.letter is held to the same shape rule as the other two tables', () => {
+  const db = freshDb();
+  // The first draft of this migration left this column bare TEXT while
+  // branch_identity.letter and branch_letters_spent.letter both carried the
+  // rule — so the one table that actually names a branch was the one that would
+  // accept 'a' or 'A1' and put that on every MRN the branch ever prints.
+  for (const bad of ['', 'a', '1', 'Ab', 'aB', 'A1', 'A-']) {
+    assert.throws(() => db.prepare('INSERT INTO branches (name, letter) VALUES (?, ?)').run('Плохая', bad),
+      /CHECK constraint failed/, 'branches.letter ' + JSON.stringify(bad));
+  }
+  // …and NULL still passes, because an upgraded clinic's branches carry no
+  // letter until letters.js allocates one. A SQLite CHECK fails only on an
+  // explicit false, so the nullable column needs no special case.
+  db.prepare("INSERT INTO branches (name) VALUES ('Ещё без буквы')").run();
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM branches WHERE letter IS NULL').get().n, 1);
+});
+
+test('a branch letter cannot be duplicated in another case either', () => {
+  const db = freshDb();
+  // branches_letter_uniq is COLLATE NOCASE. Under the default BINARY, a 'b'
+  // beside an allocated 'B' is two branches minting 'b-26-00001' and
+  // 'B-26-00001' — different strings to SQLite, the same number on the printed
+  // card and to any Stage 2 matcher that normalises case. It is the same
+  // collision class letters.js guards against in patients.mrn, and it has to be
+  // shut on both sides.
+  db.prepare("INSERT INTO branches (name, letter) VALUES ('Второй', 'B')").run();
+  assert.throws(() => db.prepare("UPDATE branches SET letter = 'b' WHERE name = 'Второй'").run(),
+    /CHECK constraint failed/, 'the shape rule refuses lowercase first');
+  // Now reach past the CHECK the way a restored backup or a hand-edited row
+  // does, and the index is what is left standing.
+  db.pragma('ignore_check_constraints = ON');
+  assert.throws(() => db.prepare("INSERT INTO branches (name, letter) VALUES ('Дубль', 'b')").run(),
+    /UNIQUE constraint failed/, "'b' must collide with the allocated 'B'");
+  assert.throws(() => db.prepare("INSERT INTO branches (name, letter) VALUES ('Дубль', 'a')").run(),
+    /UNIQUE constraint failed/, "…and 'a' with the seeded main branch 'A'");
+  db.pragma('ignore_check_constraints = OFF');
+});
+
 test('a new patient MRN carries this install branch letter', () => {
   const db = freshDb();
   db.prepare("INSERT INTO patients (full_name) VALUES ('Тестов Тест')").run();

@@ -6,7 +6,17 @@
 --
 -- Design: docs/plans/2026-08-29-branch-architecture-stage2-design.md
 
-ALTER TABLE branches ADD COLUMN letter TEXT;
+-- Same shape rule as branch_identity.letter and branch_letters_spent.letter
+-- below, and for the same reason: this column is an MRN prefix, so 'a', '', 'A1'
+-- or 'A-' would put a nonsense prefix on every number that branch ever prints.
+-- Bare TEXT here would leave branches as the ONE of the three tables storing a
+-- letter without the rule.
+--
+-- NULL passes a SQLite CHECK (only an explicit false fails), which is exactly
+-- what this column needs: an upgraded clinic's existing branches have no letter
+-- yet, and letters.js writes one later.
+ALTER TABLE branches ADD COLUMN letter TEXT
+  CHECK (letter GLOB '[A-Z]*' AND letter NOT GLOB '*[^A-Z]*');
 
 -- The seeded 'Main Branch' from 002 is A. Every other letter is allocated by
 -- letters.js, which never reuses one — reuse would give two different people
@@ -20,7 +30,17 @@ UPDATE branches SET letter = 'A' WHERE id = 1;
 -- putting the same letter on two rows, and two branches minting the same MRNs
 -- is exactly the failure this migration exists to prevent. NULLs stay distinct
 -- in SQLite, so branches created before a letter is allocated do not collide.
-CREATE UNIQUE INDEX branches_letter_uniq ON branches(letter);
+--
+-- COLLATE NOCASE, not the default BINARY. Under BINARY a restored backup or a
+-- hand-edited row holding 'b' sits happily beside an allocated 'B', and the two
+-- branches then mint 'b-26-00001' and 'B-26-00001' — different strings to
+-- SQLite, the same number on a printed card and to any Stage 2 matcher that
+-- normalises case. That is the identical collision class letters.js spends its
+-- mrnPrefixInUse guard defending against in patients.mrn, and it has to be shut
+-- on both sides. The CHECK above already refuses lowercase on the way in; this
+-- is the second half of that pair, for rows arriving without passing through an
+-- INSERT this codebase wrote.
+CREATE UNIQUE INDEX branches_letter_uniq ON branches(letter COLLATE NOCASE);
 
 -- Which branch THIS install is. One row, id = 1, always present.
 --

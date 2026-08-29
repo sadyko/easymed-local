@@ -7,12 +7,31 @@ import { migrate } from '../../db/migrate.js';
 function freshDb() { const db = openDb(':memory:'); migrate(db); return db; }
 
 test('letters run A, B, C ... Z, then AA, AB', () => {
-  assert.equal(nextLetter([]), 'A');
-  assert.equal(nextLetter(['A']), 'B');
-  assert.equal(nextLetter(['A', 'B']), 'C');
-  assert.equal(nextLetter(['Z']), 'AA');
-  assert.equal(nextLetter(['AA']), 'AB');
-  assert.equal(nextLetter(['AZ']), 'BA');
+  // The ledger is passed TWICE on purpose, and this test is where that shape is
+  // learned: `issued` is what has been handed to a real branch, `taken` is every
+  // row the ledger holds, burns included. These cases have no burns, so the two
+  // are the same list — said out loud rather than defaulted, because a defaulted
+  // `taken` means "no burns" and answers 'P' for a fifteen-branch clinic.
+  assert.equal(nextLetter([], []), 'A');
+  assert.equal(nextLetter(['A'], ['A']), 'B');
+  assert.equal(nextLetter(['A', 'B'], ['A', 'B']), 'C');
+  assert.equal(nextLetter(['Z'], ['Z']), 'AA');
+  assert.equal(nextLetter(['AA'], ['AA']), 'AB');
+  assert.equal(nextLetter(['AZ'], ['AZ']), 'BA');
+});
+
+test('nextLetter refuses to guess the ledger rather than answering without it', () => {
+  // The omission is not a near-miss, it is the worst available answer: fifteen
+  // branches in, a one-argument call returned 'P' — the legacy MRN prefix, the
+  // one letter migration 080 burns and the whole reason the ledger has a `kind`.
+  // Throwing is the same choice 080's trigger makes with RAISE(ABORT): loud and
+  // recoverable beats silent and discovered years later.
+  assert.throws(() => nextLetter('ABCDEFGHIJKLMNO'.split('')), /both are required/);
+  assert.throws(() => nextLetter(['A']), /both are required/);
+  assert.throws(() => nextLetter(), /both are required/);
+  assert.throws(() => nextLetter(['A'], null), /both are required/);
+  // …and the message names what the omission costs, not just that it happened.
+  assert.throws(() => nextLetter(['A']), /P, the legacy MRN prefix/);
 });
 
 test('a letter is never reused, even when its branch is gone', () => {
@@ -22,7 +41,7 @@ test('a letter is never reused, even when its branch is gone', () => {
   // two different people carry the same number years apart — and nothing flags
   // it, because the numbers are simply equal. Stage 2 matches patients on
   // natural: ['mrn'], so the two would silently merge into one medical record.
-  assert.equal(nextLetter(['A', 'B', 'C']), 'D', 'not B, even if B was deleted');
+  assert.equal(nextLetter(['A', 'B', 'C'], ['A', 'B', 'C']), 'D', 'not B, even if B was deleted');
 });
 
 test('allocation is driven by the highest letter ever issued, not by the count', () => {
@@ -39,16 +58,12 @@ test('allocation is driven by the highest letter ever issued, not by the count',
 });
 
 test("a BURNED letter is skipped but does not drag the next letter past it", () => {
-  // READ THIS BEFORE TOUCHING THE 'P' SEED IN MIGRATION 080.
+  // READ THIS BEFORE TOUCHING THE 'P' SEED IN MIGRATION 080. Why 'P' is spent
+  // without ever having been a branch is written out once, at the seed itself
+  // (080_branch_identity.sql, the branch_letters_spent block) — go and read it
+  // there rather than trusting a summary.
   //
-  // 'P' is spent without ever having been a branch: it is the prefix every
-  // legacy MRN already carries (002 and 034 minted 'P-YY-NNNNN' for years, and
-  // a live clinic holds ~70 000 of them). A branch lettered P would be a
-  // separate database with no legacy rows, so its allocator would start at
-  // P-26-00001 and climb straight through numbers the main branch printed years
-  // ago.
-  //
-  // That is why the ledger has a `kind` and why 'P' is 'burn' and not 'issue'.
+  // What belongs HERE is why the ledger has a `kind` and why 'P' is 'burn'.
   // 'issue' means "handed to a real branch" and drives where allocation is;
   // 'burn' means "never a branch and never allowed to be one". Seed 'P' as
   // 'issue' and it becomes the highest issued letter in a one-branch clinic, so
@@ -99,9 +114,12 @@ test('a prefix already present in imported patient numbers is burned, not issued
 });
 
 // ---------------------------------------------------------------------------
-// The tests above are the contract. The tests below pin the three things the
-// first draft of letters.js got wrong, so that a revert to that draft fails
-// here rather than in a clinic.
+// The tests above are the contract: what a branch letter IS, and what the
+// ledger's two kinds mean. Everything below is a regression test — each one
+// names a bug that a draft of letters.js actually shipped, so that writing that
+// code again fails here instead of in a clinic. They are not all from the same
+// draft: the walk, the rollback and the ordering come from the first, the
+// mixed-case guard from the second. Read each test's comment for which.
 // ---------------------------------------------------------------------------
 
 test('a whole run of poisoned prefixes is walked past in one call, and every skipped letter is burned', () => {
@@ -222,8 +240,8 @@ test('past Z the highest letter is found by position, not alphabetically', () =>
   // 'AA' < 'B' as text, so a MAX() over the letter column would answer 'B' for a
   // clinic already at AA and reissue a letter that is on a branch. Only bites
   // past 26 branches, which is exactly when nobody is looking.
-  assert.equal(nextLetter(['AA', 'B']), 'AB');
-  assert.equal(nextLetter(['B', 'AA']), 'AB');
+  assert.equal(nextLetter(['AA', 'B'], ['AA', 'B']), 'AB');
+  assert.equal(nextLetter(['B', 'AA'], ['B', 'AA']), 'AB');
   const db = freshDb();
   db.prepare("INSERT INTO branch_letters_spent (letter, kind) VALUES ('B','issue'),('AA','issue')").run();
   assert.equal(allocateLetter(db, { name: 'Двадцать восьмой' }), 'AB');
@@ -234,7 +252,7 @@ test('the A..Z..AA..ZZ..AAA sequence never repeats a letter', () => {
   // and the boundaries are where a base-26 encoding goes wrong: Z->AA (26->27)
   // and ZZ->AAA (702->703).
   const seen = new Set();
-  let letter = nextLetter([]);
+  let letter = nextLetter([], []);
   for (let i = 1; i <= 703; i++) {
     assert.equal(seen.has(letter), false, 'repeated ' + letter + ' at position ' + i);
     seen.add(letter);
@@ -242,7 +260,7 @@ test('the A..Z..AA..ZZ..AAA sequence never repeats a letter', () => {
     if (i === 27) assert.equal(letter, 'AA');
     if (i === 702) assert.equal(letter, 'ZZ');
     if (i === 703) assert.equal(letter, 'AAA');
-    letter = nextLetter([letter]);
+    letter = nextLetter([letter], [letter]);
   }
   // Every letter produced is a shape both tables in 080 accept (plain A-Z).
   for (const l of seen) assert.match(l, /^[A-Z]+$/);
