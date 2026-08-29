@@ -37,7 +37,11 @@ test('034 batch insert: importer array shape — ragged keys keep DB defaults', 
   assert.equal(anna.marital_status, 'married');
   assert.equal(anna.phone, '');          // DB default fired, not NULL
   assert.equal(anna.gender, 'other');    // NOT NULL DEFAULT survived the batch
-  assert.equal(anna.mrn, 'P-26-00002');  // MAX+1 autogen — no collision with the imported P-26-00001
+  // MAX+1 autogen — no collision with the imported P-26-00001. The prefix is
+  // 'A' and not 'P' since 080_branch_identity: the number now carries this
+  // install's branch letter, and the legacy 'P-' row still counts towards MAX,
+  // which is exactly what keeps 00002 from being handed out twice.
+  assert.equal(anna.mrn, 'A-26-00002');
 
   // single-object insert unchanged (returning path intact)
   const c1 = compile({ table: 'patients', op: 'insert', values: { full_name: 'X' }, returning: true, single: 'single' }, REG);
