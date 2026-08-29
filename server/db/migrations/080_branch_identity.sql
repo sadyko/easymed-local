@@ -13,7 +13,14 @@ ALTER TABLE branches ADD COLUMN letter TEXT;
 -- the same MRN years apart, which is the single failure this scheme exists to
 -- prevent.
 UPDATE branches SET letter = 'A' WHERE id = 1;
-UPDATE branches SET letter = NULL WHERE id <> 1;
+
+-- Without this the ledger below is only advisory. letters.js reads the highest
+-- letter ever issued and writes the new one onto a branch row; nothing stops a
+-- hand-written INSERT, a restored backup, or letters.js racing itself from
+-- putting the same letter on two rows, and two branches minting the same MRNs
+-- is exactly the failure this migration exists to prevent. NULLs stay distinct
+-- in SQLite, so branches created before a letter is allocated do not collide.
+CREATE UNIQUE INDEX branches_letter_uniq ON branches(letter);
 
 -- Which branch THIS install is. One row, id = 1, always present.
 --
@@ -21,11 +28,31 @@ UPDATE branches SET letter = NULL WHERE id <> 1;
 -- state lives: the MRN trigger below has to read the letter, and a trigger
 -- cannot read a file. Network/pairing config stays in the file; identity that
 -- SQL must see lives here.
+--
+-- How this relates to branches.letter, since the letter appears in both:
+-- `branches` is the ROSTER of the clinic's branches as this install knows them
+-- — on a secondary install it still holds the main branch's 'A' row alongside
+-- its own — while `branch_identity` is the one-row answer to "which of them am
+-- I", with branch_id naming that row. For minting an MRN, branch_identity
+-- WINS, and the trigger deliberately does not join branches to re-derive the
+-- letter: branch_id is nullable, so a join that found nothing would silently
+-- mint mrn = NULL again, which is the exact failure the RAISE guard below
+-- exists to stop. identity.js (Task 3) is the only writer of either column and
+-- sets both in one transaction.
+--
+-- CHECK: a letter must at least start with A-Z. The point is not to police the
+-- format — it is that '' and lowercase are the shapes an empty form field or a
+-- hand-edited row actually produces, and either one would put a nonsense
+-- prefix on every MRN the clinic prints from then on.
 CREATE TABLE branch_identity (
   id         INTEGER PRIMARY KEY CHECK (id = 1),
-  letter     TEXT NOT NULL,
+  letter     TEXT NOT NULL CHECK (letter GLOB '[A-Z]*'),
   role       TEXT NOT NULL DEFAULT 'main' CHECK (role IN ('main','secondary')),
   branch_id  INTEGER REFERENCES branches(id),
+  -- Written by identity.js (Task 3) on every identity change — becomeSecondary
+  -- must set it. Nothing else maintains it, so if that is missed this column
+  -- reads "install time" forever and silently answers the wrong question the
+  -- first time someone asks when this branch was re-pointed.
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 INSERT INTO branch_identity (id, letter, role, branch_id) VALUES (1, 'A', 'main', 1);
@@ -34,11 +61,35 @@ INSERT INTO branch_identity (id, letter, role, branch_id) VALUES (1, 'A', 'main'
 -- branch would delete its letter and the next allocation would hand it out
 -- again, giving two different people the same MRN years apart. Used by
 -- letters.js (Task 2) and identity.js (Task 3).
+--
+-- 'A' is the main branch. 'P' is spent WITHOUT ever being a branch, and that is
+-- the one entry here that is not obvious:
+--
+--   letters.js allocates A, B, C ... so the SIXTEENTH branch a clinic opens
+--   would be lettered P — the prefix every legacy MRN already carries (002 and
+--   034 minted 'P-YY-NNNNN' for years; a live clinic holds ~70 000 of them).
+--   That branch is a SEPARATE database with no legacy rows, so its allocator
+--   would start at P-26-00001 and climb straight through numbers the main
+--   branch printed years ago. Stage 2 matches patients on natural: ['mrn'], so
+--   two unrelated people would silently merge into one record.
+--
+-- It is seeded here rather than skip-listed in letters.js because this is where
+-- the reason lives: the same file that changed the prefix away from 'P' is the
+-- file that records 'P' as burned. A list in letters.js would be a second copy
+-- of that knowledge, free to drift.
+--
+-- 'P' is the only letter poisoned this way: it is the only MRN prefix this
+-- codebase has ever GENERATED (grep the migrations — 002, 034 and this file are
+-- the only 'P-' literals). The Excel importer does accept arbitrary MRN text,
+-- so a clinic could in principle carry some other prefix in from an old system,
+-- but that set is unbounded and unknowable and cannot be pre-seeded. Guarding
+-- it belongs at allocation time in letters.js: before issuing a letter, refuse
+-- one that any existing patients.mrn already uses.
 CREATE TABLE branch_letters_spent (
   letter     TEXT PRIMARY KEY,
   issued_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
-INSERT INTO branch_letters_spent (letter) VALUES ('A');
+INSERT INTO branch_letters_spent (letter) VALUES ('A'), ('P');
 
 -- MRN autogen, now branch-aware.
 --
@@ -62,22 +113,38 @@ INSERT INTO branch_letters_spent (letter) VALUES ('A');
 -- while last year's 'A-25-00500' -> '-25-' is correctly excluded, so numbering
 -- restarts at 1 each January under a year that cannot collide with the old one.
 --
--- Note what this predicate deliberately does NOT do: unlike 034's
--- LIKE 'P-YY-%' it is not anchored to a prefix, so EVERY row of the current
--- year counts, whatever letter it carries. That is the safe direction. A wider
--- match can only push the next number higher, never lower, and MRNs arriving
--- from other branches in Stage 2 must not be able to hand this branch a number
--- it has already printed. Anchoring on this install's own letter would also
--- break the day letters.js reaches 'P' and starts colliding with the legacy
--- 'P-' rows below.
+-- Why the predicate is not anchored to a prefix the way 034's LIKE 'P-YY-%'
+-- was: CONTINUITY ACROSS THE P->A CHANGE. An upgraded clinic's existing rows
+-- are all 'P-' and its new ones are 'A-'; anchoring on 'A-' would find nothing
+-- and restart the register at 00001 while cards numbered 70 000 are in
+-- patients' hands. Counting every row of the current year instead gives that
+-- clinic A-26-70001, which is what the staff expect to see. (It is NOT about
+-- MRNs synced in from other branches — those carry a different letter and can
+-- never equal one of this branch's numbers.)
 --
--- Legacy 'P-' rows are counted when picking the next number, so a clinic that
--- already has P-26-00042 gets A-26-00043 and never collides. Existing MRNs are
--- deliberately NOT renumbered: they are printed on cards patients carry.
+-- And note the direction this predicate errs in, because it is the opposite of
+-- what "unanchored" suggests: relative to 034 it is NARROWER, not wider. It
+-- needs a five-character numeric tail, so an imported legacy 'P-26-0042' (four
+-- digits) is skipped where 034's LIKE would have counted it. Harmless while no
+-- branch is lettered P — which the ledger above now guarantees forever — but it
+-- is a narrowing, not a widening, and the next person to touch this should know
+-- which way it fails.
+--
+-- Existing MRNs are deliberately NOT renumbered: they are printed on cards
+-- patients carry.
 DROP TRIGGER IF EXISTS patients_mrn_autogen;
 CREATE TRIGGER patients_mrn_autogen AFTER INSERT ON patients
 WHEN NEW.mrn IS NULL
 BEGIN
+  -- mrn is UNIQUE, and SQLite allows unlimited NULLs in a UNIQUE column. Without
+  -- this guard a deleted branch_identity row makes the SELECT below return NULL,
+  -- the concatenation collapses to NULL, and the clinic quietly registers patient
+  -- after patient with no medical record number — discovered weeks later, by
+  -- which time the paperwork is already wrong. Refusing the registration is loud,
+  -- immediate and recoverable.
+  SELECT RAISE(ABORT, 'branch identity missing')
+   WHERE NOT EXISTS (SELECT 1 FROM branch_identity WHERE id = 1);
+
   UPDATE patients
      SET mrn = (SELECT letter FROM branch_identity WHERE id = 1)
                || '-' || substr(strftime('%Y','now'), 3, 2) || '-'

@@ -11,7 +11,7 @@ const MIGRATIONS_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 function freshDb() { const db = openDb(':memory:'); migrate(db); return db; }
 
-test('the main branch is A, and a new branch gets its own letter column', () => {
+test('branches gains a letter column and the seeded Main Branch is A', () => {
   const db = freshDb();
   const main = db.prepare('SELECT letter FROM branches WHERE id = 1').get();
   assert.equal(main.letter, 'A', 'the seeded Main Branch must be A');
@@ -24,12 +24,63 @@ test('this install knows which branch it is, and starts as the main branch', () 
   assert.equal(me.role, 'main');
 });
 
-test("'A' is already spent, so letters.js can never hand it to a second branch", () => {
+test("'A' and 'P' are already spent, so letters.js can never hand either to a branch", () => {
   const db = freshDb();
   // The ledger, not branches.letter, is what makes reuse impossible: a deleted
   // branch takes its letter row with it, and the next allocation would reissue
   // it to a different person's MRN years later.
-  assert.deepEqual(db.prepare('SELECT letter FROM branch_letters_spent ORDER BY letter').all(), [{ letter: 'A' }]);
+  //
+  // 'P' is the dangerous one and it is not obvious. letters.js allocates
+  // A, B, C ... so the SIXTEENTH branch would be lettered P — the prefix every
+  // legacy MRN already carries. That branch is a different database with no
+  // legacy rows, so its allocator would start at P-26-00001 and climb straight
+  // through numbers the main branch printed years ago. Stage 2 matches patients
+  // on natural: ['mrn'], so two unrelated people would merge into one record.
+  // The unanchored year predicate below cannot help: it only sees one database.
+  assert.deepEqual(db.prepare('SELECT letter FROM branch_letters_spent ORDER BY letter').all(),
+    [{ letter: 'A' }, { letter: 'P' }]);
+});
+
+test('a missing branch identity aborts the registration instead of minting a NULL MRN', () => {
+  const db = freshDb();
+  // mrn is UNIQUE, and SQLite allows unlimited NULLs in a UNIQUE column. So a
+  // trigger that quietly produced NULL would register patient after patient
+  // with no medical record number and nothing would complain until someone
+  // tried to find one of them. Failing the registration loudly is the lesser
+  // harm — and the only outcome an operator will actually report.
+  db.prepare('DELETE FROM branch_identity WHERE id = 1').run();
+  assert.throws(() => db.prepare("INSERT INTO patients (full_name) VALUES ('Без номера')").run(),
+    /branch identity missing/);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM patients').get().n, 0,
+    'RAISE(ABORT) must roll the half-registered patient back, not leave it with mrn = NULL');
+});
+
+test('an unusable branch letter is rejected at the column, not discovered in an MRN', () => {
+  const db = freshDb();
+  for (const bad of ['', 'a', '1']) {
+    assert.throws(() => db.prepare('UPDATE branch_identity SET letter = ? WHERE id = 1').run(bad),
+      /CHECK constraint failed/, 'letter ' + JSON.stringify(bad) + ' must not be storable');
+  }
+  // …while the shapes letters.js really produces stay legal.
+  for (const good of ['B', 'Z', 'AA', 'AB']) {
+    db.prepare('UPDATE branch_identity SET letter = ? WHERE id = 1').run(good);
+    assert.equal(db.prepare('SELECT letter FROM branch_identity WHERE id = 1').get().letter, good);
+  }
+});
+
+test('two branches cannot hold the same letter, but unlettered branches are fine', () => {
+  const db = freshDb();
+  // Without this index the ledger is only advisory: a hand-written INSERT, or
+  // letters.js racing itself, could put 'A' on two rows and both would then
+  // mint the same MRNs.
+  assert.throws(() => db.prepare("INSERT INTO branches (name, letter) VALUES ('Дубль', 'A')").run(),
+    /UNIQUE constraint failed/);
+  db.prepare("INSERT INTO branches (name, letter) VALUES ('Второй', 'B')").run();
+  // NULLs stay distinct in SQLite, so branches created before a letter is
+  // allocated do not collide with each other.
+  db.prepare("INSERT INTO branches (name) VALUES ('Без буквы 1')").run();
+  db.prepare("INSERT INTO branches (name) VALUES ('Без буквы 2')").run();
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM branches WHERE letter IS NULL').get().n, 2);
 });
 
 test('a new patient MRN carries this install branch letter', () => {
@@ -129,9 +180,21 @@ test('an existing clinic with 70 000 legacy P- MRNs upgrades without error and w
   // outcome this migration may never produce is a renumbered patient.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-080-'));
   try {
-    fs.cpSync(MIGRATIONS_DIR, dir, { recursive: true, filter: (s) => !path.basename(s).startsWith('080') });
+    // Filter on the migration NUMBER, not on the string '080'. The day 081 is
+    // written, a name-prefix filter would copy it in, migrate would apply it
+    // BEFORE 080 (081 sorts after 079 but 080 is not there yet), the
+    // branch_identity sanity check below would still pass, and this test would
+    // quietly stop testing the upgrade while running the schema out of order.
+    fs.cpSync(MIGRATIONS_DIR, dir, { recursive: true, filter: (src) => {
+      if (fs.statSync(src).isDirectory()) return true;
+      const m = /^(\d{3,})_.*\.sql$/.exec(path.basename(src));
+      return m ? Number(m[1]) < 80 : false;   // .sql only; migrate() ignores the rest
+    } });
     const db = openDb(':memory:');
     migrate(db, dir);
+    const base = db.prepare('SELECT name FROM schema_migrations ORDER BY name').all().map((r) => r.name);
+    assert.equal(base.at(-1), '079_branch_sync.sql',
+      'the base must stop exactly one migration short of 080, whatever lands later');
     assert.equal(db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE name='branch_identity'").get().n, 0,
       'sanity: this database must be at 079, i.e. before branch identity exists');
 
@@ -143,6 +206,8 @@ test('an existing clinic with 70 000 legacy P- MRNs upgrades without error and w
 
     fs.cpSync(path.join(MIGRATIONS_DIR, '080_branch_identity.sql'), path.join(dir, '080_branch_identity.sql'));
     migrate(db, dir);   // throws if the migration fails; that is the "without error" half
+    assert.deepEqual(db.prepare('SELECT name FROM schema_migrations ORDER BY name').all().map((r) => r.name),
+      base.concat('080_branch_identity.sql'), 'exactly one migration ran, and it was 080');
 
     assert.equal(db.prepare('SELECT COUNT(*) n FROM patients').get().n, 70000);
     assert.equal(db.prepare("SELECT COUNT(*) n FROM patients WHERE mrn LIKE 'P-%'").get().n, 70000,

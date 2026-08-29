@@ -13,6 +13,7 @@
 import { supabase } from '../../supabase.js';
 import { gw } from '../gateway.js';   // CUSTOM_CLINIC_V3
 import { currentClinicId } from '../tenant-tables.js';   // OPENING_STOCK_IMPORT_V1
+import { tr } from '../i18n.js';   // BRANCH_IDENTITY_V1
 
 // SERVICE_GROUP_ROUTING_V1 — the «Раздел» classifier. Its value maps to
 // services.type, which routes the service: lab -> #labs, procedure ->
@@ -461,7 +462,12 @@ const IMPORT_CONFIGS = {
             { key: 'blood_type',         hint: 'Blood group — one of: A+ A- B+ B- AB+ AB- O+ O- unknown' },
             { key: 'allergies',          hint: 'Comma-separated — e.g. Penicillin, Latex. Leave blank for none.' },
             { key: 'chronic_conditions', hint: 'Comma-separated — e.g. Hypertension, Diabetes.' },
-            { key: 'mrn',                hint: 'Leave blank — assigned automatically (P-YY-NNNNN).' },
+            // BRANCH_IDENTITY_V1 (migration 080) — the prefix is no longer the
+            // literal 'P': it is the letter of the branch this install IS, so the
+            // main branch mints A-26-00042 and a secondary mints C-26-00042. The
+            // hint names the shape rather than a letter, because the same template
+            // is downloaded on every branch's PC.
+            { key: 'mrn',                hint: tr('Leave blank — assigned automatically: branch letter, year, number (e.g. A-26-00042).') },
             { key: 'active',             coerce: 'bool', defaultBool: true, hint: 'true / false (default true)' },
         ],
         // Schema requires full_name NOT NULL; synthesize it from the name
