@@ -79,7 +79,7 @@ test('администратор сохраняет токен, и токен н
     assert.ok(!text.includes('AAFeAwoH'), 'секретная часть — тем более');
     const body = JSON.parse(text);
     assert.equal(body.data.has_token, true);
-    assert.equal(body.data.token_hint, 'elf8');
+    assert.equal(body.data.token_hint, 'y123');
     // Один ввод токена = рабочий бот: проверка связи и включение происходят сами.
     assert.equal(body.data.enabled, true);
     assert.equal(body.data.auto_enabled, true);

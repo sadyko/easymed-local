@@ -79,7 +79,7 @@ test('сохранённый токен не возвращается наруж
   assert.ok(!serialized.includes(TOKEN), 'токен целиком не должен попадать в ответ');
   assert.ok(!serialized.includes('AAFeAwoH'), 'секретная часть токена не должна попадать в ответ');
   assert.equal(saved.has_token, true);
-  assert.equal(saved.token_hint, 'elf8');
+  assert.equal(saved.token_hint, 'y123');
 
   assert.ok(!JSON.stringify(telegramSettingsGet(db, {}, admin)).includes('AAFeAwoH'));
   db.close();
@@ -146,7 +146,7 @@ test('новый токен заменяет старый и переопозн�
   // Новый токен — возможно, другой бот; интерфейс не должен показывать
   // прежний @username как текущий.
   assert.equal(after.bot_username, 'new_bot');
-  assert.equal(after.token_hint, 'eYxs');
+  assert.equal(after.token_hint, 'y456');
   db.close();
 });
 

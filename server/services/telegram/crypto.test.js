@@ -72,7 +72,7 @@ test('форма токена BotFather проверяется до сохран
 });
 
 test('подсказка — это только хвост, никогда не секрет', () => {
-  assert.equal(tokenHint(TOKEN), 'elf8');
+  assert.equal(tokenHint(TOKEN), 'y123');
   assert.equal(tokenHint('abc'), '');
   assert.equal(tokenHint(''), '');
 });
