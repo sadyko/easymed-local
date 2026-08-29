@@ -7,6 +7,7 @@ import { vendorAuthRoutes, attachVendorUser } from './routes/vendor-auth.js';
 import { adminRoutes } from './routes/admin.js';
 import { deployRoutes, DEPLOY_MOUNT } from './routes/deploy.js';
 import { relayRoutes, RELAY_MOUNT } from './routes/relay.js';   // BRANCH_SYNC_RELAY_V1
+import { relayTokenRouter, RELAY_TOKEN_MOUNT } from './routes/relay-token.js';   // BRANCH_IDENTITY_V1
 
 // control-plane/server/app.js -> control-plane/ -> control-plane/public
 const CONTROL_PLANE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -74,6 +75,23 @@ export function createApp(db) {
   // session to present. See routes/enroll.js and routes/checkin.js.
   app.use('/cp/v1/enroll', enrollRoutes(db));
   app.use('/cp/v1/checkin', checkinRoutes(db));
+  // BRANCH_IDENTITY_V1 — the main branch mints a relay-scoped token here for a
+  // branch that never enrolled. Mounted HERE, with the other clinic-facing
+  // routes, and deliberately NOT up beside the relay itself: the two reasons the
+  // relay sits above the JSON parser are body size (a catalogue is megabytes)
+  // and authenticating before buffering it. Neither applies to a request whose
+  // whole body is a 32-character relay id, and the global 100kb parser is the
+  // right ceiling for it — a second, differently-configured body parser is a
+  // thing to explain later for no benefit now.
+  //
+  // It sits BELOW attachVendorUser, like enroll and checkin, and that is safe
+  // for the same reason: this router authenticates on install_token and never
+  // reads req.vendorUser, so a vendor session buys nothing here.
+  //
+  // '/cp/v1/relay' above does NOT swallow this path — express matches a mount
+  // prefix on segment boundaries, so '/cp/v1/relay-token' is not '/cp/v1/relay'.
+  // relay-token.route.test.js proves it by minting over real HTTP.
+  app.use(RELAY_TOKEN_MOUNT, relayTokenRouter(db));
 
   // VENDOR-FACING — the panel's own login (/login, /logout, /me are
   // themselves how a vendor becomes authenticated, so this router is not

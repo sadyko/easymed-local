@@ -1,4 +1,5 @@
 import express, { Router } from 'express';
+import { clinicForRelayToken } from './relay-token.js';   // BRANCH_IDENTITY_V1
 
 // BRANCH_SYNC_RELAY_V1 — the relay. Stores one opaque blob per branch group and
 // hands it back. That is the entire feature.
@@ -34,6 +35,17 @@ import express, { Router } from 'express';
 // so nobody can probe which tokens are live). Deliberately not a second scheme:
 // a clinic has exactly one identity with the vendor, and a relay is no reason to
 // issue it another.
+//
+// BRANCH_IDENTITY_V1 — with ONE exception, added when real branch installs
+// arrived: a RELAY TOKEN (routes/relay-token.js) is also accepted, and only ever
+// for the single relay id it was minted against. It exists because a SECONDARY
+// branch never enrols — it joins a clinic, not the vendor — so it has no
+// install_token and could not use this route at all. It is NOT a second identity
+// with the vendor: it names no clinic to check-in, carries no entitlement, and is
+// refused by /cp/v1/checkin, which never looks at the relay_tokens table. The
+// alternative — putting the clinic's install_token in the branch key — would
+// have made every branch PC able to impersonate the clinic completely. See
+// db/migrations/006_relay_tokens.sql for the full argument.
 
 export const RELAY_MOUNT = '/cp/v1/relay';
 
@@ -46,7 +58,21 @@ export const relayPathFor = (relayId) => `${RELAY_MOUNT}/${relayId}`;
 // truncated to 16 bytes (server/services/branch-sync/relay-crypto.js). Enforced
 // here as a FORMAT, not as a lookup: it bounds what can become a primary key,
 // and it means a probing request is refused before it touches the database.
-const RELAY_ID_RE = /^[0-9a-f]{32}$/;
+export const RELAY_ID_RE = /^[0-9a-f]{32}$/;
+
+// The relay id as it appears in this router's own path, or null when the path is
+// not one. Read in the AUTH middleware below, which is unusual for a route
+// parameter and is forced by the scoping rule: a relay token is valid for one
+// relay id, so there is no way to decide whether to accept it without first
+// knowing which id is being asked for.
+//
+// Deliberately NOT URL-decoded. A relay id that needed decoding is not a relay id
+// (RELAY_ID_RE), and decodeURIComponent throws on malformed input — which an
+// unauthenticated caller must never be able to reach.
+function relayIdFromPath(url) {
+  const seg = String(url || '').split('?')[0].split('/')[1] || '';
+  return RELAY_ID_RE.test(seg) ? seg : null;
+}
 
 // The hard ceiling on one blob. A gzipped catalogue with a clinic logo in it is
 // a few hundred kilobytes; 12 MB is "an implausibly large clinic" and, more to
@@ -132,8 +158,24 @@ export function relayRoutes(db, { env = process.env, now = () => new Date() } = 
     // `active = 1`: a retired clinic loses the relay exactly when it loses
     // check-in, with no second switch to remember.
     const clinic = db.prepare('SELECT clinic_id FROM clinics WHERE install_token = ? AND active = 1').get(token);
-    if (!clinic) return res.status(401).json(GENERIC_FAILURE_BODY);
-    req.relayClinicId = clinic.clinic_id;
+    if (clinic) {
+      req.relayClinicId = clinic.clinic_id;
+      return next();
+    }
+
+    // BRANCH_IDENTITY_V1 — the fallback, tried ONLY after the install_token
+    // lookup has already failed, so the enrolled main branch's path is exactly
+    // what it was before this existed.
+    //
+    // Scoped to the relay id in THIS request's path and to nothing else: the
+    // same token presented for another id gets the same generic 401 as a token
+    // that was never issued. clinicForRelayToken also refuses a revoked token and
+    // one whose clinic has been deactivated, so a retired clinic loses the relay
+    // for EVERY branch at once, not just for the one holding the install_token.
+    const relayId = relayIdFromPath(req.url);
+    const viaRelayToken = relayId ? clinicForRelayToken(db, token, relayId, { now }) : null;
+    if (!viaRelayToken) return res.status(401).json(GENERIC_FAILURE_BODY);
+    req.relayClinicId = viaRelayToken;
     next();
   });
 
