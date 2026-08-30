@@ -4016,23 +4016,64 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
    Держится на уже существующих .upd-card/.sys-* (та же карточная сетка, что у
    «Системы»); своё только то, чего там нет: блоки-шаги и поле для длинного
    ключа подключения. */
-.bsync-card { max-width: 720px; }
+.bsync-card { max-width: 860px; }
 .bsync-note { font-size: 12.5px; margin: 0; line-height: 1.5; }
 .bsync-block { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--ink-100); }
 .bsync-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-/* Ключ длинный и переносится целиком — перенос по любому символу, иначе он
-   уезжал бы за край карточки одной строкой и копировался бы обрезанным. */
-.bsync-key { width: 100%; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px;
+/* Метка роли и короткая подпись к ней — в одну строку, а не метка и абзац под
+   ней (BRANCH_LIST_V2). */
+.bsync-role { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bsync-hint { margin-left: 28px; }   /* 18px галочка + 10px gap (.field.checkbox) — вровень с её подписью */
+/* Ключ длинный. В поле ВВОДА (вставить чужой ключ) он переносится целиком —
+   перенос по любому символу, иначе уезжал бы за край одной строкой. */
+.bsync-key { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px;
   line-height: 1.5; padding: 8px 10px; border: 1px solid var(--ink-200); border-radius: 8px;
-  overflow-wrap: anywhere; resize: vertical; }
-/* BRANCH_IDENTITY_V1 — список филиалов с их постоянными ключами. Не таблица:
-   ключ длинный и должен лежать на всю ширину карточки, а в ячейке он либо
-   уезжает за край, либо жмётся в колонку и копируется обрезанным. */
-.bsync-branches { display: flex; flex-direction: column; gap: 12px; }
-.bsync-branch { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
-  border: 1px solid var(--ink-100); border-radius: 10px; background: var(--ink-25, #fafbfc); }
-.bsync-branch-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.bsync-branch-name { font-weight: 600; font-size: 13.5px; color: var(--ink-800); }
+  color: var(--ink-800); background: #fff; }
+/* Поле ключа лежит ВНЕ .field, поэтому домовое .field input:focus до него не
+   достаёт: своё кольцо фокуса, теми же токенами, что у всех полей системы. */
+.bsync-key:focus { outline: none; border-color: var(--primary-500); box-shadow: 0 0 0 4px var(--primary-50); }
+.bsync-key-in { width: 100%; overflow-wrap: anywhere; resize: vertical; }
+
+/* BRANCH_LIST_V2 (2026-08-30) — филиалы ТАБЛИЦЕЙ, а не колодой карточек.
+   Прежний комментарий здесь запрещал таблицу: длинный ключ «в ячейке жмётся в
+   колонку и копируется обрезанным». Это верно для текста, но не для поля
+   ввода — <input readonly> прокручивается внутри ячейки, а копируется всегда
+   box.value целиком (views/branch-sync.js keyBox). Взамен виден весь список
+   сразу, ради чего владелец список и просил. */
+.bsync-tblwrap { border: 1px solid var(--ink-100); border-radius: 10px; overflow-x: auto; }
+table.bsync-tbl { min-width: 560px; }
+table.bsync-tbl thead th:first-child { border-top-left-radius: 10px; }
+table.bsync-tbl thead th:last-child  { border-top-right-radius: 10px; }
+.bsync-th-letter { width: 76px; }
+.bsync-th-act { width: 1%; white-space: nowrap; text-align: right; }
+/* Отличается ВЕСОМ, а не кеглем: 13.5px спорил с 13px остальной таблицы ради
+   ничего. Длинное название переносится внутри клетки, а не растягивает
+   таблицу — колонка ключа ужимается первой, но обрезать её нечем. */
+.bsync-branch-name { font-weight: 600; color: var(--ink-900); margin-right: 8px; }
+table.bsync-tbl td:first-child { max-width: 220px; overflow-wrap: anywhere; }
+/* Ключ занимает свою колонку целиком и ужимается вместе с ней: min-width:0 —
+   то, без чего flex-ребёнок отказывается становиться уже своего содержимого и
+   растягивает таблицу за край карточки. */
+.bsync-td-key { width: 100%; }
+.bsync-keyrow { display: flex; align-items: center; gap: 8px; }
+.bsync-keyrow .bsync-key { flex: 1 1 auto; min-width: 0; }
+.bsync-td-act { text-align: right; white-space: nowrap; }
+.bsync-td-act > * + * { margin-left: 8px; }
+/* ЭТА УСТАНОВКА — строка списка, но узнаваемая с одного взгляда: своя подложка
+   и полоса слева. Ключа у неё нет и быть не может, поэтому отличать её надо
+   раньше, чем владелец успеет поискать там ключ. :hover перекрыт намеренно —
+   иначе общее правило .tbl вернуло бы ей обычный фон под курсором. */
+.bsync-tr-self td,
+table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
+.bsync-tr-self td:first-child { box-shadow: inset 3px 0 0 var(--primary-500, #0f766e); }
+/* «Добавить филиал» — поле и кнопка на одной строке. Ровно два элемента: три
+   строки про несменяемость буквы уехали в окно подтверждения. */
+.bsync-add { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.bsync-add .field { flex: 1 1 220px; margin: 0; }
+@media (max-width: 640px) {
+    .bsync-add .field { flex-basis: 100%; }
+    .bsync-hint { margin-left: 0; }
+}
 .bsync-line { display: flex; align-items: flex-start; gap: 6px; font-size: 13px; color: var(--ink-700); margin: 0; line-height: 1.5; }
 .bsync-line-warn { color: var(--warn-700); background: var(--warn-50); border: 1px solid #f0d29b;
   border-radius: 8px; padding: 8px 10px; }

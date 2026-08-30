@@ -18,6 +18,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
+import {
+  KEY_REISSUE_WARNING, KEY_LOSS_WARNING, LETTER_PERMANENCE_WARNING,
+  UNLINK_WARNING_MAIN, RELAY_ACCESS_ISSUED,
+} from '../branch-sync-logic.js';
 
 class F{constructor(t){this.tagName=String(t).toUpperCase();this.style={};this.children=[];this.attrs={};this.className='';this._t='';this._l={};this.dataset={};this.value='';}
  appendChild(c){this.children.push(c);return c;} removeChild(c){const i=this.children.indexOf(c);if(i>-1)this.children.splice(i,1);return c;}
@@ -65,23 +69,54 @@ globalThis.requestAnimationFrame = (fn) => fn();
 const walk = (e, o = []) => { o.push(e); for (const c of e.children || []) walk(c, o); return o; };
 const textOf = (el) => walk(el).map((n) => n._t || '').join(' ');
 
-// Единственный вызов, который делает эта карточка в состоянии «не связаны»:
-// список филиалов грузится только у главного филиала.
+// В состоянии «не связаны» эта карточка делает ровно один вызов: список
+// филиалов грузится только у главного. branches остаётся null для тех трёх
+// тестов, и попытка его позвать там по-прежнему взрывается.
 let status = null;
+let branches = null;
+const calls = [];
 globalThis.fetch = async (url) => {
   const name = String(url).replace('/api/rpc/', '');
+  calls.push(name);
   if (name === 'branch_sync_status') return { ok: true, json: async () => ({ data: status }) };
+  if (name === 'branch_sync_branches' && branches) return { ok: true, json: async () => ({ data: branches }) };
   throw new Error('экран не должен звать ' + name + ' в этом состоянии');
 };
 
+// BRANCH_LIST_V2 — окно подтверждения теперь ЕДИНСТВЕННЫЙ адрес всего
+// необратимого на этом экране, поэтому тест его записывает.
+let confirms = [];
+let confirmAnswer = true;
+globalThis.window.confirm = (text) => { confirms.push(String(text)); return confirmAnswer; };
+// navigator в Node 24 — геттер без сеттера: присвоение бросает.
+const copied = [];
+Object.defineProperty(globalThis, 'navigator', {
+  configurable: true,
+  value: { clipboard: { writeText: async (v) => { copied.push(String(v)); } } },
+});
+
 const { renderBranchSyncCard } = await import('../views/branch-sync.js');
 
-async function paint(st) {
+/** Список догружается без await — даём микрозадачам дойти. */
+async function flush() { for (let i = 0; i < 12; i += 1) await new Promise((r) => setTimeout(r, 0)); }
+
+let card = null;
+async function paint(st, br = null) {
   status = st;
+  branches = br;
+  calls.length = 0;
+  confirms = [];
+  confirmAnswer = true;
   const container = mk('div');
   await renderBranchSyncCard(container);
+  await flush();
+  card = container;
   return textOf(container);
 }
+
+const all = (root) => walk(root);
+const tags = (root, tag) => all(root).filter((n) => n.tagName === String(tag).toUpperCase());
+const buttonWith = (root, text) => tags(root, 'button').find((b) => textOf(b).includes(text));
 
 const BUTTON = 'Сделать главным филиалом';
 const PAIR = 'Подключить к главному';
@@ -125,4 +160,210 @@ test('установке, потерявшей служебную запись, 
   // Ключ БЕЗ буквы базу не трогает и связывает как прежде, так что блок
   // подключения здесь мёртвой кнопкой не становится и остаётся на экране.
   assert.ok(text.includes(PAIR));
+});
+
+// ===========================================================================
+// BRANCH_LIST_V2 (2026-08-30) — ЖАЛОБА ВЛАДЕЛЬЦА, ПЕРЕВЕДЁННАЯ В ТЕСТЫ.
+//
+// Дословно: «can we remove the unnecessary information and make clear list of
+// main branch, and and the list of branches keys etc, all the sloppy text that
+// no one will read is unnecessary». На экране главного филиала стояло около
+// пятнадцати строк прозы вокруг шести кнопок: абзац под ключом, абзац под
+// полем названия, три строки под строкой филиала без резервного канала, два
+// абзаца у резервного канала, абзац у перевыпуска, абзац у отвязки.
+//
+// Здесь проверяются ДВА свойства, и второе важнее первого:
+//   1. на экране больше нет стоячей прозы;
+//   2. ни одно предупреждение при этом не выброшено — каждое встречает то
+//      нажатие, которое делает его правдой.
+// Без второго первое тривиально достигается удалением, а удалить
+// предупреждение о безвозвратно потраченной букве нельзя.
+// ===========================================================================
+
+
+const MAIN_STATUS = {
+  role: 'main', identity_role: 'main', main_url: '10.0.0.5:8000', group_id: 'grp-1',
+  relay_ready: true, relay_enabled: true, sync_key_present: true,
+  sync_key_created_at: '2026-08-12T10:00:00Z',
+};
+const MAIN_BRANCHES = {
+  ok: true, role: 'main', can_issue: true, can_relay: true,
+  branches: [
+    { id: 1, name: 'Головной офис', letter: 'A', key: null, is_self: true },
+    { id: 2, name: 'Чиланзар', letter: 'B', key: 'EMB2-BBBB-2222', has_relay_token: true },
+    { id: 3, name: 'Юнусабад', letter: 'C', key: 'EMB2-CCCC-3333', has_relay_token: false },
+    { id: 4, name: 'Старый', letter: null, key: null },
+  ],
+};
+
+test('филиалы показаны СПИСКОМ: имя · буква · ключ · действие, все разом', async () => {
+  // Требование владельца — «make clear list of main branch, and the list of
+  // branches keys etc». Прежняя колода карточек с абзацем под каждой
+  // показывала два филиала на экран.
+  await paint(MAIN_STATUS, MAIN_BRANCHES);
+  const table = tags(card, 'table')[0];
+  assert.ok(table, 'филиалы обязаны быть таблицей, а не колодой карточек');
+  const head = textOf(tags(table, 'thead')[0]);
+  for (const col of ['Филиал', 'Буква', 'Ключ подключения', 'Действие']) {
+    assert.ok(head.includes(col), `в шапке нет колонки «${col}»`);
+  }
+  // Четыре филиала — четыре строки, и ни одной лишней.
+  const rows = tags(tags(table, 'tbody')[0], 'tr');
+  assert.equal(rows.length, 4, 'каждый филиал — ровно одна строка');
+
+  // Ключи читаются целиком и в любой момент, без «показать один раз».
+  const values = tags(table, 'input').map((i) => i.value);
+  assert.ok(values.includes('EMB2-BBBB-2222'), 'ключ филиала должен лежать в строке целиком');
+  assert.ok(values.includes('EMB2-CCCC-3333'));
+  // Каждое поле ключа названо ИМЕНЕМ СВОЕГО ФИЛИАЛА: «Ключ подключения» пять
+  // раз подряд не различает для программы чтения с экрана ничего.
+  const labels = tags(table, 'input').map((i) => i.getAttribute('aria-label') || '');
+  assert.ok(labels.some((l) => l.includes('Чиланзар')), 'aria-label обязан называть филиал');
+  assert.ok(labels.every((l) => l.trim()), 'поле ключа без имени — поле без подписи');
+});
+
+test('ГЛАВНЫЙ ФИЛИАЛ ПОМЕЧЕН КАК ЭТА УСТАНОВКА и ключа не имеет', async () => {
+  await paint(MAIN_STATUS, MAIN_BRANCHES);
+  const table = tags(card, 'table')[0];
+  const [selfRow, otherRow] = tags(tags(table, 'tbody')[0], 'tr');
+
+  assert.ok(textOf(selfRow).includes('Головной офис'));
+  assert.ok(textOf(selfRow).includes('Эта установка'), 'строка этой установки обязана называть себя');
+  assert.equal(tags(selfRow, 'input').length, 0, 'подключать установку к самой себе не к чему — ключа нет');
+  assert.equal(tags(selfRow, 'button').length, 0, 'и делать с ней на этом экране нечего');
+  // И она ОТЛИЧАЕТСЯ ВИДОМ, а не только словами: класс строки несёт подложку
+  // и полосу слева (admin-views.css .bsync-tr-self).
+  assert.ok(selfRow.classList.contains('bsync-tr-self'), 'эта установка обязана быть видна с одного взгляда');
+  assert.equal(otherRow.classList.contains('bsync-tr-self'), false, 'метка ровно одна на список');
+});
+
+test('состояния строк — короткие слова и метки, а не абзацы', async () => {
+  await paint(MAIN_STATUS, MAIN_BRANCHES);
+  const rows = tags(tags(tags(card, 'table')[0], 'tbody')[0], 'tr');
+  const [, , noRelay, noLetter] = rows;
+
+  // Было три строки объяснения; стало восемь слов и кнопка.
+  assert.ok(textOf(noRelay).includes('Без резервного канала'));
+  assert.ok(buttonWith(noRelay, 'Выдать доступ'), 'лекарство остаётся на строке');
+  assert.equal(textOf(noRelay).includes('Так бывает после перевыпуска'), false,
+    'прежний трёхстрочный абзац не должен вернуться');
+  assert.ok(tags(noRelay, 'input')[0], 'ключ у этой строки рабочий и показан целиком');
+
+  assert.ok(textOf(noLetter).includes('Буквы и ключа ещё нет'));
+  assert.ok(buttonWith(noLetter, 'Выдать ключ'));
+});
+
+test('НА ЭКРАНЕ БОЛЬШЕ НЕТ СТОЯЧЕЙ ПРОЗЫ', async () => {
+  // Ровно то, на что владелец пожаловался. Каждая строка ниже стояла на экране
+  // при каждой отрисовке, никем не прочитанная.
+  const text = await paint(MAIN_STATUS, MAIN_BRANCHES);
+  const gone = {
+    'предупреждение о перевыпуске': KEY_REISSUE_WARNING,
+    'про потерянный ключ': KEY_LOSS_WARNING,
+    'про несменяемость буквы': LETTER_PERMANENCE_WARNING,
+    'последствия отвязки': UNLINK_WARNING_MAIN,
+    'про постоянство ключа филиала': 'Ключ филиала не меняется',
+    'про передачу ключа лично': 'через сервер Easy-Med он не проходит',
+    'про подключение к самой себе': 'подключать её к самой себе не нужно',
+  };
+  for (const [what, phrase] of Object.entries(gone)) {
+    assert.equal(text.includes(phrase), false, `${what} всё ещё стоит абзацем на экране`);
+  }
+  // «Добавить филиал» — ПОЛЕ И КНОПКА, и больше ничего.
+  assert.ok(text.includes('Название филиала') && text.includes('Добавить филиал'));
+});
+
+test('ПРЕДУПРЕЖДЕНИЯ НЕ УДАЛЕНЫ — они переехали в окно подтверждения', async () => {
+  // Вторая половина, без которой первая ничего не стоит: экран стал короче
+  // потому, что предупреждения ПЕРЕЕХАЛИ, а не потому, что их выбросили.
+  await paint(MAIN_STATUS, MAIN_BRANCHES);
+  confirmAnswer = false;   // владелец передумал — RPC не должен позваться
+
+  // 1. Перевыпуск ключа: оба предупреждения в одном окне.
+  confirms = [];
+  calls.length = 0;
+  buttonWith(card, 'Перевыпустить ключ синхронизации').click();
+  assert.equal(confirms.length, 1, 'необратимое действие обязано спросить');
+  assert.ok(confirms[0].includes(KEY_REISSUE_WARNING), 'филиалы отвалятся — об этом надо сказать');
+  assert.ok(confirms[0].includes(KEY_LOSS_WARNING), 'и что старый ключ не восстановит никто, включая Easy-Med');
+  assert.equal(calls.includes('branch_sync_regenerate_key'), false, '«отмена» обязана отменять');
+
+  // 2. Отвязка — единственное необратимое действие, у которого вопроса не было
+  //    вовсе: последствие стояло абзацем рядом с кнопкой.
+  confirms = [];
+  calls.length = 0;
+  buttonWith(card, 'Отвязать').click();
+  assert.equal(confirms.length, 1);
+  assert.ok(confirms[0].includes(UNLINK_WARNING_MAIN));
+  assert.equal(calls.includes('branch_sync_unpair'), false);
+
+  // 3. Выдача ключа филиалу без буквы: буква тратится безвозвратно.
+  confirms = [];
+  calls.length = 0;
+  const rows = tags(tags(tags(card, 'table')[0], 'tbody')[0], 'tr');
+  buttonWith(rows[3], 'Выдать ключ').click();
+  assert.equal(confirms.length, 1);
+  assert.ok(confirms[0].includes(LETTER_PERMANENCE_WARNING));
+  assert.ok(confirms[0].includes('Старый'), 'владелец должен видеть, какому филиалу выдаёт ключ');
+  assert.equal(calls.includes('branch_sync_branch_key'), false);
+
+  // 4. Добавление филиала: тот же расход буквы, то же окно.
+  confirms = [];
+  calls.length = 0;
+  const nameInput = tags(card, 'input').find((i) => i.getAttribute('placeholder') === 'Чиланзар');
+  assert.ok(nameInput, 'поле названия филиала');
+  nameInput.value = 'Сергели';
+  buttonWith(card, 'Добавить филиал').click();
+  assert.equal(confirms.length, 1);
+  assert.ok(confirms[0].includes(LETTER_PERMANENCE_WARNING));
+  assert.ok(confirms[0].includes('Сергели'));
+  assert.equal(calls.includes('branch_sync_add_branch'), false);
+});
+
+test('выписать резервный доступ можно молча — окно только там, где тратится буква', async () => {
+  // Подтверждение на всё подряд приучает закрывать окна не читая, и тогда
+  // перестают читать и то единственное, ради которого окно заведено. Учётку
+  // резервного канала можно выписывать сколько угодно раз.
+  await paint(MAIN_STATUS, MAIN_BRANCHES);
+  confirms = [];
+  calls.length = 0;
+  const rows = tags(tags(tags(card, 'table')[0], 'tbody')[0], 'tr');
+  buttonWith(rows[2], 'Выдать доступ').click();
+  assert.deepEqual(confirms, [], 'обратимое действие не спрашивает');
+  // А то, что осталось сделать руками, говорится ПОСЛЕ нажатия.
+  assert.match(RELAY_ACCESS_ISSUED, /ключ заново/);
+});
+
+test('h() вешает обработчики через addEventListener — btn.onclick не существует', async () => {
+  // Этот экран уже ломали так однажды: код звал btn.onclick(), а h() (ui.js)
+  // вешает обработчики через addEventListener, поэтому onclick остаётся
+  // undefined и вызов падает. Тест держит это свойство на виду.
+  await paint(MAIN_STATUS, MAIN_BRANCHES);
+  const btn = buttonWith(card, 'Отвязать');
+  assert.equal(btn.onclick, undefined, 'обработчик живёт в addEventListener, а не в .onclick');
+  confirmAnswer = false;
+  confirms = [];
+  btn.click();   // dispatchEvent — единственный работающий путь
+  assert.equal(confirms.length, 1, 'клик обязан дойти до обработчика');
+});
+
+test('ключ копируется ЦЕЛИКОМ, сколь бы узкой ни была колонка', async () => {
+  // Прежний комментарий в CSS запрещал таблицу: длинный ключ «в ячейке жмётся
+  // в колонку и копируется обрезанным». Копируется box.value, а не видимый
+  // кусок, — это и есть ответ на то возражение.
+  await paint(MAIN_STATUS, MAIN_BRANCHES);
+  const rows = tags(tags(tags(card, 'table')[0], 'tbody')[0], 'tr');
+  copied.length = 0;
+  buttonWith(rows[1], 'Копировать').click();
+  await flush();
+  assert.deepEqual(copied, ['EMB2-BBBB-2222'], 'в буфер уходит ключ целиком');
+});
+
+test('список филиалов не загрузился — таблица говорит это, а не показывает пустоту', async () => {
+  // branches: null — мок взрывается на branch_sync_branches, как и в трёх
+  // тестах выше. Экран обязан пережить это словами.
+  const text = await paint(MAIN_STATUS, null);
+  assert.ok(text.includes('Не удалось прочитать список филиалов'), 'пустая таблица читается как «сломалось молча»');
+  // И карточка при этом жива: роль установки прочиталась отдельным вызовом.
+  assert.ok(text.includes('Главный филиал'));
 });
