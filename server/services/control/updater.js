@@ -13,6 +13,9 @@ import { readAppVersion, readJsonFile, writeAtomic } from './checkin.js';
 // db.backup() and never fs.copyFileSync (see db/backup.js's own header).
 import { backupBeforeMigrate } from '../../db/backup.js';
 import { nextRunAt, isInWindow, consentAppliesTo } from './update-schedule.js';
+// UPDATE_PROGRESS_V1 — the "what is it doing right now" record. Its writes are
+// all best-effort by construction; see that file's header.
+import { makeProgressReporter, reconcileProgressAtBoot } from './update-progress.js';
 
 // UPDATE_DELIVERY_V1 (docs/plans/2026-08-20-update-delivery.md, Task 4) — the
 // clinic's own machine: check the stored offer, confirm it is still
@@ -200,7 +203,7 @@ export function resolveDownloadUrl(offerUrl, baseUrl) {
 // logging.
 // ---------------------------------------------------------------------------
 
-async function downloadToFile(url, destPath, { fetchImpl = globalThis.fetch, maxBytes = MAX_BUNDLE_BYTES, timeoutMs = DOWNLOAD_TIMEOUT_MS } = {}) {
+async function downloadToFile(url, destPath, { fetchImpl = globalThis.fetch, maxBytes = MAX_BUNDLE_BYTES, timeoutMs = DOWNLOAD_TIMEOUT_MS, onProgress = null } = {}) {
   let res;
   try {
     res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
@@ -209,8 +212,29 @@ async function downloadToFile(url, destPath, { fetchImpl = globalThis.fetch, max
   }
   if (!res.ok) return { ok: false, reason: 'http_status', status: res.status };
 
+  // UPDATE_PROGRESS_V1 — the whole size, when the server bothers to declare
+  // one. Content-Length is OPTIONAL: a chunked response, or one gzipped on
+  // the fly, carries none. `expected` then stays null and the screen says
+  // "downloaded N MB" instead of a percentage of an unknown whole — never a
+  // bar that pretends to know where it is.
+  let expected = null;
+  try {
+    const raw = res.headers && typeof res.headers.get === 'function' ? res.headers.get('content-length') : null;
+    const n = Number.parseInt(raw, 10);
+    if (Number.isFinite(n) && n > 0) expected = n;
+  } catch { /* a header bag that misbehaves simply means an unknown size */ }
+
   const reader = res.body && typeof res.body.getReader === 'function' ? res.body.getReader() : null;
   if (!reader) return { ok: false, reason: 'no_body' };
+
+  // Reporting must never break the download it describes (update-progress.js's
+  // header rule). Swallowed HERE as well as inside the reporter, because
+  // onProgress is an injected callback and this loop cannot know what a
+  // caller put in it.
+  const report = (received, force) => {
+    if (!onProgress) return;
+    try { onProgress(received, expected, { force }); } catch { /* progress is never worth a failed update */ }
+  };
 
   const hash = createHash('sha256');
   let total = 0;
@@ -221,6 +245,9 @@ async function downloadToFile(url, destPath, { fetchImpl = globalThis.fetch, max
     return { ok: false, reason: 'disk', detail: e && e.message };
   }
   try {
+    // "0 of 45 MB" the instant the connection opens — the screen must not sit
+    // empty while a slow first chunk is on its way.
+    report(0, true);
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -231,12 +258,18 @@ async function downloadToFile(url, destPath, { fetchImpl = globalThis.fetch, max
       }
       hash.update(value);
       fs.writeSync(fd, value);
+      // Throttled on the reporter's side, not here: this loop runs once per
+      // chunk and must stay a counter increment plus a cheap clock read.
+      report(total, false);
     }
   } catch (e) {
     return { ok: false, reason: 'stream_error', detail: e && e.message };
   } finally {
     try { fs.closeSync(fd); } catch { /* already closed or never opened successfully */ }
   }
+  // Forced past the throttle: without it the record's last word on a finished
+  // download is whatever it happened to say up to two seconds before the end.
+  report(total, true);
   return { ok: true, bytes: total, sha256: hash.digest('hex') };
 }
 
@@ -539,6 +572,10 @@ async function performApply(db, dataDir, {
   root,
   version,
   now = () => new Date(),
+  // UPDATE_PROGRESS_V1 — optional: applyUpdate is also called directly by
+  // apply-update.test.js, which has no pipeline and no reporter. A no-op
+  // stand-in keeps the call sites below free of `progress && progress.phase`.
+  progress = { phase() {} },
   // Injected so a test can prove the apply REFUSES when no rollback point can
   // be taken. Never a second backup implementation — see the import.
   backupImpl = backupBeforeMigrate,
@@ -596,6 +633,7 @@ async function performApply(db, dataDir, {
   // CANCELS the update: an update is always deferrable ("try again tomorrow"
   // is this file's whole ethic), losing the only rollback point is not.
   let backupPath;
+  progress.phase('snapshot');
   try {
     backupPath = await backupImpl(db, path.join(dataDir, 'easymed.db'), version);
   } catch (e) {
@@ -606,6 +644,7 @@ async function performApply(db, dataDir, {
   // fs.rmSync on a junction removes the LINK, never the directory it points
   // at (verified directly, and asserted in apply-update.test.js — the previous
   // version has to survive, or there is nothing to recover TO).
+  progress.phase('switching');
   try {
     if (linkStat) rmSync(currentLink, { recursive: true, force: true });
     symlinkSync(targetDir, currentLink, CURRENT_LINK_TYPE);
@@ -662,6 +701,14 @@ async function runPipeline(db, dataDir, offer, {
     return;
   }
 
+  // Created only AFTER the URL is accepted: a refused cross-host offer never
+  // reaches the network, so telling the screen "downloading" would be a lie.
+  // The throttle keeps its default here on purpose: the rate a progress row
+  // may be written at is a property of the clinic's database, not something a
+  // caller should be able to turn up. update-progress.test.js drives it
+  // directly, off a fake clock, where it belongs.
+  const progress = makeProgressReporter(db, { version: offer.version, now });
+
   const tarPath = path.join(dataDir, TEMP_TAR_NAME);
   const manifestPath = path.join(dataDir, TEMP_MANIFEST_NAME);
 
@@ -676,9 +723,18 @@ async function runPipeline(db, dataDir, offer, {
   };
 
   try {
-    const dl = await downloadToFile(resolved.url, tarPath, { fetchImpl, maxBytes, timeoutMs });
+    progress.phase('downloading');
+    const dl = await downloadToFile(resolved.url, tarPath, {
+      fetchImpl, maxBytes, timeoutMs,
+      onProgress: (received, total, opts) => progress.bytes(received, total, opts),
+    });
     if (!dl.ok) {
       console.warn('[updater] download failed (' + dl.reason + '), will retry tomorrow:', dl.detail || dl.status || '');
+      // Kept, not cleared: "the download failed and we will try again" is
+      // something the clinic can act on (check the internet), and it is the
+      // only signal for a failure that never reaches the outcome file —
+      // writeOutcome only ever runs from the APPLY step.
+      progress.fail(dl.reason);
       return;
     }
 
@@ -689,10 +745,12 @@ async function runPipeline(db, dataDir, offer, {
     // — it has no `manifest` object parameter — so offer.manifest (already
     // parsed JSON from the check-in response) is written back out to disk
     // once, purely to hand it to the same verifier every bundle uses.
+    progress.phase('verifying');
     try {
       writeFileSync(manifestPath, JSON.stringify(offer.manifest ?? null));
     } catch (e) {
       console.warn('[updater] could not write the manifest temp file:', e.message);
+      progress.fail('manifest_write');
       return;
     }
 
@@ -704,6 +762,7 @@ async function runPipeline(db, dataDir, offer, {
     });
     if (!verified.ok) {
       console.warn('[updater] bundle refused (' + verified.reason + ') — nothing staged, nothing applied');
+      progress.fail('bundle_refused');
       return;
     }
     // Belt-and-braces beyond verifyBundle's own checks: the SIGNED manifest
@@ -712,6 +771,7 @@ async function runPipeline(db, dataDir, offer, {
     // necessarily an attack) must not silently install the wrong version.
     if (verified.manifest.version !== offer.version) {
       console.warn('[updater] manifest version does not match the offer — refusing');
+      progress.fail('version_mismatch');
       return;
     }
 
@@ -736,10 +796,15 @@ async function runPipeline(db, dataDir, offer, {
       try { currentReal = realpathSync(currentLink); } catch { /* no current link — nothing to protect */ }
       if (currentReal && path.resolve(currentReal) === path.resolve(versionDir)) {
         console.warn('[updater] refusing to stage over the currently running version — will retry tomorrow');
+        // Cleared, not failed: this is the clinic ALREADY being on the offered
+        // version (see performTick's spent-consent note). Nothing went wrong,
+        // so nothing should be shown.
+        progress.clear();
         return;
       }
     }
 
+    progress.phase('unpacking');
     try {
       // An "already exists" versionDir is always a LEFTOVER from a prior,
       // never-applied attempt (the safety check above already ruled out it
@@ -755,11 +820,16 @@ async function runPipeline(db, dataDir, offer, {
     } catch (e) {
       console.warn('[updater] could not stage the update, will retry tomorrow:', e.message);
       try { rmSync(versionDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+      progress.fail('unpack');
       return;
     }
 
     if (!layout.versioned) {
       console.warn('[updater] dev layout — staged only; apply is skipped (a dev machine must never have its `current` switched)');
+      // A dev checkout has no screen a clinic is watching, and leaving
+      // «распаковка…» standing forever on one would be the exact stale record
+      // this feature exists to prevent.
+      progress.clear();
       return;
     }
 
@@ -769,12 +839,20 @@ async function runPipeline(db, dataDir, offer, {
     // between "installed" and "never started". applyUpdate never throws, and
     // ends a successful install by asking the launcher for a restart.
     cleanupTempFiles();
-    await applyUpdate(db, dataDir, {
+    const applied = await applyUpdate(db, dataDir, {
       root: layout.root,
       version: offer.version,
       exitImpl,
       now,
+      progress,
     });
+    // A successful apply never gets here — exit(75) already took the process
+    // down, and the record it left ('switching') is cleaned up by
+    // reconcileProgressAtBoot on the way back in. A FAILED apply does get
+    // here, and the outcome file (which the screen renders as its own,
+    // louder notice) is now the better record — so this one steps aside
+    // rather than showing two versions of the same bad news.
+    if (!applied || !applied.ok) progress.clear();
   } finally {
     // Unconditional backstop — reached whether the pipeline above succeeded,
     // refused the bundle, or threw partway through staging. (A successful
@@ -842,6 +920,23 @@ export function staleAfterSwitch(dataDir, appRoot, {
 }
 export function scheduleUpdater(db, dataDir, opts = {}) {
   const { intervalMs = 60_000, exitImpl = (code) => process.exit(code), ...rest } = opts;
+
+  // UPDATE_PROGRESS_V1 — ONCE, at boot, before anything is armed. The whole
+  // pipeline runs inside a single process, so a progress record still in a
+  // live phase at this moment belongs to a process that no longer exists: it
+  // either finished (and exit(75) is why we are booting) or it died. Either
+  // way it must stop claiming to be downloading. See that file's own header.
+  try {
+    // rest.runningVersion is performTick's own test seam, reused here for the
+    // same reason its comment gives: readAppVersion() reads package.json off
+    // disk, so a test cannot otherwise describe an install other than the
+    // checkout it is running inside.
+    reconcileProgressAtBoot(db, { runningVersion: rest.runningVersion || readAppVersion(), compare: compareVersions });
+  } catch (e) {
+    // Bookkeeping may never be the reason a clinic fails to start.
+    console.warn('[updater] could not reconcile the update progress record (continuing):', e && e.message);
+  }
+
   // exitImpl is destructured out AND put back: this scheduler uses it for the
   // staleAfterSwitch restart below, and applyUpdate needs the same seam to end
   // a successful install. Two exits, one injection point — a test that stubs

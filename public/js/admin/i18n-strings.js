@@ -2266,10 +2266,13 @@ export const STRINGS = {
 
   // UPDATE_DELIVERY_V1 (docs/plans/2026-08-20-update-delivery.md, Task 6) —
   // the update-approval screen (views/updates.js) and its quiet banner
-  // (admin.js renderUpdateBanner). Sentences with a dynamic version/date/hour
-  // spliced in are built directly in code and are NOT listed here — same
-  // convention as the licence banner's day-count message just above (see its
-  // own comment in admin.js) — so only the fully-literal strings appear.
+  // (admin.js renderUpdateBanner).
+  //
+  // This block once said that sentences with a dynamic version/date/hour in
+  // them are built in code and NOT listed here. That convention is what put a
+  // Russian «У вас последняя версия — 0.4.5.» under an Uzbek screen on a real
+  // clinic (2026-08-29). It is dead: those sentences are templates now, and
+  // they are listed in the UPDATES_I18N_V1 block below.
   "Обновления": {"en":"Updates","ru":"Обновления","uz":"Yangilanishlar"},
   "Версия системы и установка обновлений.": {"en":"System version and installing updates.","ru":"Версия системы и установка обновлений.","uz":"Tizim versiyasi va yangilanishlarni o'rnatish."},
   "Версия системы и установка обновлений": {"en":"System version and installing updates","ru":"Версия системы и установка обновлений","uz":"Tizim versiyasi va yangilanishlarni o'rnatish"},
@@ -2299,6 +2302,47 @@ export const STRINGS = {
   "Не удалось изменить время. Попробуйте ещё раз.": {"en":"Could not change the time. Try again.","ru":"Не удалось изменить время. Попробуйте ещё раз.","uz":"Vaqtni o'zgartirib bo'lmadi. Qayta urinib ko'ring."},
   "Не удалось отменить. Попробуйте ещё раз.": {"en":"Could not cancel. Try again.","ru":"Не удалось отменить. Попробуйте ещё раз.","uz":"Bekor qilib bo'lmadi. Qayta urinib ko'ring."},
   "Подробнее": {"en":"Details","ru":"Подробнее","uz":"Batafsil"},
+
+  // UPDATES_I18N_V1 (2026-08-30) — «Система» (views/updates.js) целиком.
+  //
+  // Владелец прислал снимок клиники, работающей по-узбекски — «Tizim»,
+  // «Yangilanishlarni tekshirish», «Joriy versiya: 0.4.5» — и строкой ниже
+  // по-русски: «У вас последняя версия — 0.4.5.». Причина была не в
+  // отсутствующем ключе: фраза СКЛЕИВАЛАСЬ из кусков, а tr() ищет строку
+  // целиком, поэтому подходящего ключа не могло существовать в принципе.
+  //
+  // Поэтому здесь появились ШАБЛОНЫ с дырками {version} / {date} / {done}:
+  // ключом остаётся целая русская фраза, а значения подставляются уже ПОСЛЕ
+  // перевода (updates-logic.js fill(), views/updates.js say()). Комментарий
+  // блока UPDATE_DELIVERY_V1 выше — «предложения с подставленной версией
+  // здесь не перечисляются» — этим и отменён: теперь перечисляются все.
+  //
+  // Набор дырок в переводе обязан совпадать с русским оригиналом —
+  // views/updates-i18n.test.js проверяет и это, и то, что каждая строка
+  // экрана вообще проходит через tr().
+  "Что нового в версии {version}": {"en":"What's new in version {version}","ru":"Что нового в версии {version}","uz":"{version} versiyasidagi yangiliklar"},
+  "Обновить сейчас": {"en":"Update now","ru":"Обновить сейчас","uz":"Hozir yangilash"},
+  "сотрудники будут отключены на 1–2 минуты": {"en":"staff will be disconnected for 1-2 minutes","ru":"сотрудники будут отключены на 1–2 минуты","uz":"xodimlar 1-2 daqiqaga uzib qo'yiladi"},
+  "У вас последняя версия — {version}.": {"en":"You have the latest version — {version}.","ru":"У вас последняя версия — {version}.","uz":"Sizda eng so'nggi versiya — {version}."},
+  "У вас последняя версия.": {"en":"You have the latest version.","ru":"У вас последняя версия.","uz":"Sizda eng so'nggi versiya."},
+  "Обновление установится {date} в {hour}. Компьютер должен быть включён.": {"en":"The update will install on {date} at {hour}. The computer must be switched on.","ru":"Обновление установится {date} в {hour}. Компьютер должен быть включён.","uz":"Yangilanish {date} kuni soat {hour} da o'rnatiladi. Kompyuter yoqilgan bo'lishi kerak."},
+  "Обновление устанавливается. Обычно это занимает несколько минут — не выключайте компьютер.": {"en":"The update is installing. It usually takes a few minutes — do not switch the computer off.","ru":"Обновление устанавливается. Обычно это занимает несколько минут — не выключайте компьютер.","uz":"Yangilanish o'rnatilmoqda. Bu odatda bir necha daqiqa davom etadi — kompyuterni o'chirmang."},
+  "Обновление до {version} не удалось {date} — система вернулась к {current} и работает. Мы попробуем снова после следующего одобрения.": {"en":"The update to {version} failed on {date} — the system went back to {current} and is working. We will try again after the next approval.","ru":"Обновление до {version} не удалось {date} — система вернулась к {current} и работает. Мы попробуем снова после следующего одобрения.","uz":"{version} ga yangilash {date} kuni amalga oshmadi — tizim {current} ga qaytdi va ishlayapti. Keyingi tasdiqdan so'ng yana urinib ko'ramiz."},
+  "Обновление до {version} не удалось — система вернулась к {current} и работает. Мы попробуем снова после следующего одобрения.": {"en":"The update to {version} failed — the system went back to {current} and is working. We will try again after the next approval.","ru":"Обновление до {version} не удалось — система вернулась к {current} и работает. Мы попробуем снова после следующего одобрения.","uz":"{version} ga yangilash amalga oshmadi — tizim {current} ga qaytdi va ishlayapti. Keyingi tasdiqdan so'ng yana urinib ko'ramiz."},
+  "База данных также была восстановлена из резервной копии, сделанной перед обновлением.": {"en":"The database was also restored from the backup taken before the update.","ru":"База данных также была восстановлена из резервной копии, сделанной перед обновлением.","uz":"Ma'lumotlar bazasi ham yangilanishdan oldin olingan zaxira nusxadan tiklandi."},
+  "Обновление до {version} установлено. Чтобы оно заработало, закройте окно Easy-Med и откройте его снова.": {"en":"The update to {version} is installed. To start using it, close the Easy-Med window and open it again.","ru":"Обновление до {version} установлено. Чтобы оно заработало, закройте окно Easy-Med и откройте его снова.","uz":"{version} ga yangilash o'rnatildi. U ishga tushishi uchun Easy-Med oynasini yopib, qaytadan oching."},
+  "Устанавливается обновление {version}": {"en":"Installing update {version}","ru":"Устанавливается обновление {version}","uz":"{version} yangilanishi o'rnatilmoqda"},
+  "Загружено {done} МБ из {total} МБ": {"en":"Downloaded {done} MB of {total} MB","ru":"Загружено {done} МБ из {total} МБ","uz":"{total} MB dan {done} MB yuklab olindi"},
+  "Загружено {done} МБ": {"en":"Downloaded {done} MB","ru":"Загружено {done} МБ","uz":"{done} MB yuklab olindi"},
+  "Проверка подписи обновления…": {"en":"Checking the update's signature…","ru":"Проверка подписи обновления…","uz":"Yangilanish imzosi tekshirilmoqda…"},
+  "Распаковка файлов…": {"en":"Unpacking the files…","ru":"Распаковка файлов…","uz":"Fayllar ochilmoqda…"},
+  "Резервная копия базы данных…": {"en":"Backing up the database…","ru":"Резервная копия базы данных…","uz":"Ma'lumotlar bazasidan zaxira nusxa olinmoqda…"},
+  "Переключение на новую версию…": {"en":"Switching to the new version…","ru":"Переключение на новую версию…","uz":"Yangi versiyaga o'tilmoqda…"},
+  "Ничего не происходит уже несколько минут — возможно, пропала связь. Мы попробуем снова.": {"en":"Nothing has happened for several minutes — the connection may be lost. We will try again.","ru":"Ничего не происходит уже несколько минут — возможно, пропала связь. Мы попробуем снова.","uz":"Bir necha daqiqadan beri hech narsa bo'lmayapti — aloqa uzilgan bo'lishi mumkin. Yana urinib ko'ramiz."},
+  "Обновление {version} не завершилось": {"en":"Update {version} did not finish","ru":"Обновление {version} не завершилось","uz":"{version} yangilanishi tugallanmadi"},
+  "Установка прервалась — компьютер или программа были выключены. Мы попробуем снова.": {"en":"The installation was interrupted — the computer or the program was switched off. We will try again.","ru":"Установка прервалась — компьютер или программа были выключены. Мы попробуем снова.","uz":"O'rnatish uzilib qoldi — kompyuter yoki dastur o'chirilgan. Yana urinib ko'ramiz."},
+  "Обновление {version} не установилось": {"en":"Update {version} was not installed","ru":"Обновление {version} не установилось","uz":"{version} yangilanishi o'rnatilmadi"},
+  "Не удалось загрузить обновление — проверьте подключение к интернету. Мы попробуем снова.": {"en":"The update could not be downloaded — check the internet connection. We will try again.","ru":"Не удалось загрузить обновление — проверьте подключение к интернету. Мы попробуем снова.","uz":"Yangilanishni yuklab bo'lmadi — internet ulanishini tekshiring. Yana urinib ko'ramiz."},
 
   // SYSTEM_SETTINGS_V1 (docs/plans/2026-08-23-system-settings.md, Task 3) —
   // Settings → «Система»: the subscription/backups/danger cards

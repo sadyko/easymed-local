@@ -4,6 +4,9 @@ import { hasAnyRole } from '../roles.js';
 import { getDataDir, getAppVersion } from '../control/config.js';
 import { nextRunAt, consentAppliesTo } from '../control/update-schedule.js';
 import { runCheckin, readJsonFile } from '../control/checkin.js';
+// UPDATE_PROGRESS_V1 (2026-08-30) — "what is this update doing right now",
+// answered inside the call the screen was already making.
+import { progressForStatus } from '../control/update-progress.js';
 
 // UPDATE_DELIVERY_V1 (docs/plans/2026-08-20-update-delivery.md, Task 4) — the
 // three RPCs the approval screen (a later task) calls. Registered in
@@ -86,6 +89,11 @@ export function updateStatus(db, args, user) {
     immediate: !!(consent && consent.immediate),
     scheduled_at: scheduledAt ? scheduledAt.toISOString() : null,
     last_result: readLastResult(getDataDir()),
+    // UPDATE_PROGRESS_V1 — null whenever no update has ever run here. Carries
+    // its own `age_ms`, computed on THIS machine's clock rather than left for
+    // the browser to work out from `at`: a clinic PC whose clock is hours off
+    // would otherwise call a healthy download stalled, or the reverse.
+    progress: progressForStatus(db),
   };
 }
 

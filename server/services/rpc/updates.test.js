@@ -45,7 +45,7 @@ test.beforeEach(() => {
 test('update_status: nothing offered, nothing approved — every field is empty/false', () => {
   const db = freshDb();
   const s = updateStatus(db, {}, admin);
-  assert.deepEqual(s, { current_version: '2.3.0', offer: null, approved: false, hour: null, immediate: false, scheduled_at: null, last_result: null });
+  assert.deepEqual(s, { current_version: '2.3.0', offer: null, approved: false, hour: null, immediate: false, scheduled_at: null, last_result: null, progress: null });
 });
 
 test('update_status: current_version reflects the running app, independent of any offer', () => {
@@ -299,4 +299,41 @@ test('update_approve {now:true}: non-admin still refused, nothing written', () =
   storeOffer(db, OFFER);
   assert.throws(() => updateApprove(db, { now: true }, registrar), RpcError);
   assert.equal(get(db, 'update_consent'), null);
+});
+
+
+// --- UPDATE_PROGRESS_V1: progress rides along in the call the screen already makes ---
+
+test('update_status: progress is null until an update has ever run here', () => {
+  assert.equal(updateStatus(freshDb(), {}, admin).progress, null);
+});
+
+test('update_status: a live progress record comes back with age_ms computed on the SERVER clock', () => {
+  const db = freshDb();
+  const at = new Date(Date.now() - 20_000).toISOString();
+  put(db, 'update_progress', JSON.stringify({ version: '2.4.0', phase: 'downloading', bytes: 5_000_000, total: 40_000_000, started_at: at, at }));
+
+  const p = updateStatus(db, {}, admin).progress;
+  assert.equal(p.phase, 'downloading');
+  assert.equal(p.bytes, 5_000_000);
+  assert.equal(p.total, 40_000_000);
+  // Not left for the browser to derive from `at`: a clinic PC whose clock is
+  // hours off would otherwise call a healthy download stalled, or the reverse.
+  assert.ok(p.age_ms >= 19_000 && p.age_ms < 60_000, `age_ms=${p.age_ms}`);
+});
+
+test('update_status: a corrupt progress row is simply no progress, never a broken screen', () => {
+  const db = freshDb();
+  put(db, 'update_progress', 'not json at all');
+  assert.equal(updateStatus(db, {}, admin).progress, null);
+});
+
+test('update_status: progress is readable while the licence is lapsed — it is READ_ONLY status, like the rest', () => {
+  // update_status is registered READ_ONLY in control/gate.js precisely so a
+  // clinic can watch the update that may be what fixes its licensing.
+  const db = freshDb();
+  storeOffer(db, OFFER);
+  put(db, 'update_progress', JSON.stringify({ version: '2.4.0', phase: 'verifying', bytes: 1, total: null, at: new Date().toISOString() }));
+  const s = updateStatus(db, {}, registrar);
+  assert.equal(s.progress.phase, 'verifying', 'a non-admin sees the status too — the buttons are what admin gates, not the news');
 });

@@ -4,7 +4,15 @@ import {
   formatRuDate, formatRuHour, isWorkingHour, isValidHour, nextRunAtLocal,
   resolveHour, scheduleChoices, offerIsCurrent, formatScheduled,
   updateOutcomeMessage, whatsNewState, pendingRestartMessage, compareVersions,
+  fill, upToDateMessage, progressView, formatMb, PROGRESS_STALL_MS,
 } from './updates-logic.js';
+
+// UPDATES_I18N_V1 (2026-08-30) — the message functions no longer return a
+// finished Russian string; they return {template, params(, extra)} so tr()
+// can translate the WHOLE phrase before the version/date go back in. These
+// helpers render a descriptor the way views/updates.js's say() does, so every
+// assertion below still reads as the sentence a clinic sees.
+const render = (msg) => (msg ? fill(msg.template, msg.params) + (msg.extra ? ' ' + msg.extra : '') : msg);
 
 // --- formatRuDate / formatRuHour ---------------------------------------------
 
@@ -152,7 +160,7 @@ test('offerIsCurrent: true only when the offer names the version already running
 // --- formatScheduled -----------------------------------------------------------
 
 test('formatScheduled: the load-bearing confirmation sentence, date and hour spliced in', () => {
-  const msg = formatScheduled({ hour: 3, scheduled_at: new Date(2026, 7, 21, 3, 0, 0).toISOString() });
+  const msg = render(formatScheduled({ hour: 3, scheduled_at: new Date(2026, 7, 21, 3, 0, 0).toISOString() }));
   assert.equal(msg, 'Обновление установится 21.08.2026 в 03:00. Компьютер должен быть включён.');
   assert.match(msg, /Компьютер должен быть включён/, 'the load-bearing last sentence must be present');
 });
@@ -166,19 +174,19 @@ test('formatScheduled: null when nothing is actually scheduled', () => {
 });
 
 test('formatScheduled: hour 0 is a real value, not "missing" (Number(null)===0 trap)', () => {
-  const msg = formatScheduled({ hour: 0, scheduled_at: new Date(2026, 7, 21, 0, 0, 0).toISOString() });
+  const msg = render(formatScheduled({ hour: 0, scheduled_at: new Date(2026, 7, 21, 0, 0, 0).toISOString() }));
   assert.match(msg, /00:00/);
 });
 
 // --- updateOutcomeMessage -------------------------------------------------------
 
 test('updateOutcomeMessage: a failed-and-rolled-back attempt is said plainly, with version and date', () => {
-  const msg = updateOutcomeMessage({ version: '2.4.0', ok: false, at: '2026-08-21T02:10:00.000Z', db: 'untouched' }, '2.3.0');
+  const msg = render(updateOutcomeMessage({ version: '2.4.0', ok: false, at: '2026-08-21T02:10:00.000Z', db: 'untouched' }, '2.3.0'));
   assert.equal(msg, 'Обновление до 2.4.0 не удалось 21.08.2026 — система вернулась к 2.3.0 и работает. Мы попробуем снова после следующего одобрения.');
 });
 
 test('updateOutcomeMessage: a restored database gets its own extra, explicit sentence', () => {
-  const msg = updateOutcomeMessage({ version: '2.4.0', ok: false, at: '2026-08-21T02:10:00.000Z', db: 'restored' }, '2.3.0');
+  const msg = render(updateOutcomeMessage({ version: '2.4.0', ok: false, at: '2026-08-21T02:10:00.000Z', db: 'restored' }, '2.3.0'));
   assert.match(msg, /восстановлена из резервной копии/, 'a clinic must be told plainly when its DATA, not just the code, was rolled back');
 });
 
@@ -192,13 +200,13 @@ test('updateOutcomeMessage: null when there is no last_result at all, never thro
 });
 
 test('updateOutcomeMessage: a missing/unparseable `at` degrades to no date fragment, never "Invalid Date"', () => {
-  const msg = updateOutcomeMessage({ version: '2.4.0', ok: false }, '2.3.0');
+  const msg = render(updateOutcomeMessage({ version: '2.4.0', ok: false }, '2.3.0'));
   assert.equal(msg, 'Обновление до 2.4.0 не удалось — система вернулась к 2.3.0 и работает. Мы попробуем снова после следующего одобрения.');
   assert.doesNotMatch(msg, /Invalid Date/);
 });
 
 test('updateOutcomeMessage: a missing currentVersion/failed version degrades to "?", never "undefined"', () => {
-  const msg = updateOutcomeMessage({ ok: false }, null);
+  const msg = render(updateOutcomeMessage({ ok: false }, null));
   assert.doesNotMatch(msg, /undefined/);
   assert.match(msg, /\?/);
 });
@@ -243,7 +251,7 @@ test('whatsNewState: a malformed notes map (array, string, null) never throws, d
 // ── formatScheduled: the «Обновить сейчас» branch ───────────────────────────
 
 test('formatScheduled: immediate consent says "устанавливается", never a wall-clock hour', () => {
-  const msg = formatScheduled({ hour: null, scheduled_at: '2026-08-23T15:30:00.000Z', immediate: true });
+  const msg = render(formatScheduled({ hour: null, scheduled_at: '2026-08-23T15:30:00.000Z', immediate: true }));
   assert.ok(msg.includes('устанавливается'));
   assert.ok(!msg.includes('в 15'));
 });
@@ -253,14 +261,14 @@ test('formatScheduled: immediate WITHOUT scheduled_at is nothing scheduled — n
 });
 
 test('formatScheduled: hour-based consent unchanged by the new field defaulting off', () => {
-  const msg = formatScheduled({ hour: 3, scheduled_at: '2026-08-24T03:00:00' });
+  const msg = render(formatScheduled({ hour: 3, scheduled_at: '2026-08-24T03:00:00' }));
   assert.ok(msg.includes('03:00'));
 });
 
 // ── pendingRestartMessage: installed but not yet running ────────────────────
 
 test('pendingRestartMessage: a newer version applied while the old one still runs asks for a window restart', () => {
-  const msg = pendingRestartMessage({ ok: true, version: '0.3.2' }, '0.3.1');
+  const msg = render(pendingRestartMessage({ ok: true, version: '0.3.2' }, '0.3.1'));
   assert.ok(msg.includes('0.3.2'));
   assert.ok(msg.includes('закройте окно Easy-Med'));
 });
@@ -289,4 +297,117 @@ test('compareVersions: numeric per segment — 0.10.0 is newer than 0.9.0, which
   assert.ok(compareVersions('0.10.0', '0.9.0') > 0);
   assert.ok(compareVersions('0.3.1', '0.3.2') < 0);
   assert.equal(compareVersions('1.2.3', '1.2.3'), 0);
+});
+
+// ── upToDateMessage — THE line from the owner's 2026-08-29 screenshot ───────
+
+test('upToDateMessage: the version is a {version} hole in one whole phrase, never concatenated on', () => {
+  const m = upToDateMessage('0.4.5');
+  assert.equal(m.template, 'У вас последняя версия — {version}.');
+  assert.deepEqual(m.params, { version: '0.4.5' });
+  assert.equal(render(m), 'У вас последняя версия — 0.4.5.');
+  // The whole point: the SAME template translated first still reads correctly.
+  assert.equal(fill('Sizda eng soʻnggi versiya — {version}.', m.params), 'Sizda eng soʻnggi versiya — 0.4.5.');
+});
+
+test('upToDateMessage: no version yet — a different whole phrase, never "версия —  ."', () => {
+  const m = upToDateMessage(null);
+  assert.equal(render(m), 'У вас последняя версия.');
+  assert.doesNotMatch(render(m), /—/);
+});
+
+// ── formatMb ────────────────────────────────────────────────────────────────
+
+test('formatMb: megabytes with one decimal, and a dot — no locale-specific comma to get wrong in three languages', () => {
+  assert.equal(formatMb(0), '0.0');
+  assert.equal(formatMb(1024 * 1024), '1.0');
+  assert.equal(formatMb(40 * 1024 * 1024), '40.0');
+  assert.equal(formatMb(1536 * 1024), '1.5');
+});
+
+test('formatMb: garbage never becomes NaN on a clinic screen', () => {
+  for (const bad of [null, undefined, 'x', -5, NaN]) assert.equal(formatMb(bad), '0.0', `bytes=${JSON.stringify(bad)}`);
+});
+
+// ── progressView — UPDATE_PROGRESS_V1 ──────────────────────────────────────
+
+test('progressView: nothing to say when there is no record, or a malformed one', () => {
+  for (const bad of [null, undefined, {}, [], 'x', 42, { phase: null }]) {
+    assert.equal(progressView(bad).show, false, `record=${JSON.stringify(bad)}`);
+  }
+});
+
+test('progressView: downloading with a Content-Length gives a real percentage and both byte counts', () => {
+  const v = progressView({ version: '0.4.6', phase: 'downloading', bytes: 10 * 1024 * 1024, total: 40 * 1024 * 1024, age_ms: 500 });
+  assert.equal(v.show, true);
+  assert.equal(v.tone, 'busy');
+  assert.equal(v.percent, 25);
+  assert.equal(render(v.detail), 'Загружено 10.0 МБ из 40.0 МБ');
+  assert.equal(render(v.title), 'Устанавливается обновление 0.4.6');
+});
+
+test('progressView: NO Content-Length — an honest byte count and NO percentage, never an invented bar', () => {
+  const v = progressView({ version: '0.4.6', phase: 'downloading', bytes: 3 * 1024 * 1024, total: null, age_ms: 500 });
+  assert.equal(v.percent, null, 'a percentage of an unknown whole cannot exist and must not be shown');
+  assert.equal(render(v.detail), 'Загружено 3.0 МБ');
+});
+
+test('progressView: a Content-Length that undercounts what actually arrived is clamped, never 143%', () => {
+  const v = progressView({ version: '0.4.6', phase: 'downloading', bytes: 60 * 1024 * 1024, total: 40 * 1024 * 1024, age_ms: 0 });
+  assert.equal(v.percent, 100);
+});
+
+test('progressView: each later phase says what it is doing, as one complete sentence', () => {
+  const expect = {
+    verifying: 'Проверка подписи обновления…',
+    unpacking: 'Распаковка файлов…',
+    snapshot: 'Резервная копия базы данных…',
+    switching: 'Переключение на новую версию…',
+  };
+  for (const [phase, sentence] of Object.entries(expect)) {
+    const v = progressView({ version: '0.4.6', phase, bytes: 0, total: null, age_ms: 0 });
+    assert.equal(v.show, true, phase);
+    assert.equal(render(v.detail), sentence);
+    assert.equal(v.percent, null, `${phase} has no percentage to show`);
+  }
+});
+
+test('progressView: THE owner question — a stalled download is told apart from a slow one', () => {
+  const slow = progressView({ version: '0.4.6', phase: 'downloading', bytes: 1024, total: null, age_ms: 5000 });
+  assert.equal(slow.stalled, false);
+  assert.equal(slow.note, null);
+  assert.equal(slow.tone, 'busy');
+
+  const stuck = progressView({ version: '0.4.6', phase: 'downloading', bytes: 1024, total: null, age_ms: PROGRESS_STALL_MS + 1 });
+  assert.equal(stuck.stalled, true);
+  assert.equal(stuck.tone, 'warn');
+  assert.match(render(stuck.note), /возможно, пропала связь/);
+  // Still says how far it got: "stuck at 0.0 MB" and "stuck at 39 of 40" are
+  // very different problems to whoever has to act on it.
+  assert.match(render(stuck.detail), /Загружено/);
+});
+
+test('progressView: a record with no age_ms at all is never called stalled on a guess', () => {
+  const v = progressView({ version: '0.4.6', phase: 'downloading', bytes: 1024, total: null });
+  assert.equal(v.stalled, false);
+});
+
+test('progressView: an interrupted record (a restart killed the install) says so instead of freezing at 40%', () => {
+  const v = progressView({ version: '0.4.6', phase: 'interrupted', bytes: 16 * 1024 * 1024, total: 40 * 1024 * 1024, age_ms: 60 * 60 * 1000 });
+  assert.equal(v.show, true);
+  assert.equal(v.tone, 'warn');
+  assert.equal(v.percent, null, 'a dead download must not keep showing a bar');
+  assert.equal(render(v.title), 'Обновление 0.4.6 не завершилось');
+  assert.match(render(v.note), /прервалась/);
+});
+
+test('progressView: a failed download says what to check, and shows no bar', () => {
+  const v = progressView({ version: '0.4.6', phase: 'failed', reason: 'network', bytes: 0, total: null, age_ms: 1000 });
+  assert.equal(v.tone, 'warn');
+  assert.equal(v.percent, null);
+  assert.match(render(v.note), /интернет/);
+});
+
+test('progressView: an unknown phase from a newer server says nothing rather than something wrong', () => {
+  assert.equal(progressView({ version: '9.9.9', phase: 'teleporting', bytes: 0, age_ms: 0 }).show, false);
 });

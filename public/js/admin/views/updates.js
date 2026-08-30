@@ -31,6 +31,23 @@
 //
 // Every scheduling/formatting DECISION lives in ../updates-logic.js as pure,
 // unit-tested functions — this file only builds DOM and talks to RPCs.
+//
+// UPDATES_I18N_V1 (2026-08-30) — EVERY user-facing string on this screen goes
+// through tr(), and there is a test that fails if a new one ever does not:
+// updates-i18n.test.js next door reads this file, finds every Cyrillic string
+// literal in it, and asserts (a) that each one is an argument to tr(), and
+// (b) that the dictionary has ru/uz/en for it. Measured before the change
+// (comments excluded): 23 bare literals against 12 tr() calls, plus every
+// dynamic sentence updates-logic.js built by concatenation — so an Uzbek
+// clinic read a mixture. The owner's 2026-08-29 screenshot showed
+// «Joriy versiya: 0.4.5» over «У вас последняя версия — 0.4.5.». Sentences
+// with a version/date/byte count in them are templates plus say() now, never
+// concatenation; see say() below.
+//
+// UPDATE_PROGRESS_V1 (2026-08-30, owner: «can we show status of the
+// downloading of the last update please fix that») — paintProgress() renders
+// the phase and the real byte counts the updater reports, so a clinic can
+// tell a big download from a hung one.
 
 import { h, Icon, clear, toast } from '../ui.js';
 import { tr } from '../i18n.js';
@@ -40,6 +57,7 @@ import { isAdminActor } from '../admin-actor.js';
 import {
     scheduleChoices, resolveHour, isValidHour, offerIsCurrent,
     formatScheduled, updateOutcomeMessage, whatsNewState, pendingRestartMessage,
+    fill, upToDateMessage, progressView,
 } from '../updates-logic.js';
 // SETTINGS_SPLIT_V1 — imported ONLY to keep the old '#updates/subscription'
 // deep link landing on the subscription screen (see renderUpdates below).
@@ -51,6 +69,37 @@ import { renderSubscription } from './subscription.js?v=split1';
 
 const LAST_SEEN_KEY = 'em.updates.lastSeenVersion';
 const NOTES_CACHE_KEY = 'em.updates.notesCache';   // { [version]: notes_ru } — small, capped below
+
+// UPDATES_I18N_V1 (2026-08-30) — every sentence on this screen that has a
+// version, date or byte count in it.
+//
+// The owner photographed a clinic running fully in Uzbek — «Tizim»,
+// «Yangilanishlarni tekshirish», «Joriy versiya: 0.4.5» — with «У вас
+// последняя версия — 0.4.5.» underneath it in Russian. The cause was not a
+// missing dictionary entry: it was that the sentence was CONCATENATED
+// (`'У вас последняя версия' + ' — ' + v + '.'`), and tr() matches whole
+// strings, so no key could ever have existed for it.
+//
+// The fix is this one helper. updates-logic.js hands back {template, params}
+// where the template is the complete Russian phrase with `{version}` still in
+// it — a real dictionary key — and translation happens BEFORE the values go
+// back in. `extra` is a second, independently translatable sentence (only the
+// «база данных восстановлена» case needs one), never a fragment.
+//
+// ui.js's h() ALREADY runs tr() over plain-text children and over aria-label,
+// so an explicit tr() around an h() child translates twice. That is deliberate
+// here — the explicit call is what makes the routing visible in this file and
+// what the test above can actually check, and it covers the paths h() never
+// touches (toast(), .textContent, and say()'s own output). It is safe only
+// while no translation is itself a key meaning something else; STRINGS does
+// contain English keys, so updates-i18n.test.js asserts that translating twice
+// equals translating once for every string this screen uses.
+function say(msg) {
+    if (!msg) return null;
+    let out = fill(tr(msg.template), msg.params);
+    if (msg.extra) out += ' ' + tr(msg.extra);
+    return out;
+}
 
 // SETTINGS_SPLIT_V1 — isAdminActor() moved to ../admin-actor.js when the page
 // split into three screens that must all agree on the same verdict; its
@@ -139,14 +188,14 @@ export async function renderUpdates(root, ctx = {}) {
     const admin = isAdminActor();
     const head = h('div', { class: 'page-head' },
         h('div', null,
-            h('h1', { class: 'page-title' }, 'Система'),
-            h('p', { class: 'page-subtitle' }, 'Версия системы и что нового в последнем обновлении.')));
+            h('h1', { class: 'page-title' }, tr('Система')),
+            h('p', { class: 'page-subtitle' }, tr('Версия системы и что нового в последнем обновлении.'))));
     if (admin) {
         const checkStatus = h('span', { class: 'upd-check-status muted', role: 'status' });
         const checkBtn = h('button', {
             type: 'button', class: 'btn btn-outline upd-check-btn',
             onclick: () => checkNow(body, checkBtn, checkStatus),
-        }, Icon('Refresh', { size: 15 }), ' ', 'Проверить обновления');
+        }, Icon('Refresh', { size: 15 }), ' ', tr('Проверить обновления'));
         head.appendChild(h('div', { class: 'upd-check' }, checkBtn, checkStatus));
     }
     wrap.appendChild(head);
@@ -155,7 +204,7 @@ export async function renderUpdates(root, ctx = {}) {
     // siblings: it existed to separate four cards from one another, and one
     // section does not need a heading repeating the page it is on.
     wrap.appendChild(body);
-    body.appendChild(h('div', { class: 'empty' }, 'Загрузка…'));
+    body.appendChild(h('div', { class: 'empty' }, tr('Загрузка…')));
 
     let status = null;
     try {
@@ -165,7 +214,7 @@ export async function renderUpdates(root, ctx = {}) {
     } catch (e) {
         clear(body);
         body.appendChild(h('div', { class: 'card upd-card' },
-            h('p', { class: 'upd-error', role: 'status' }, 'Не удалось загрузить статус обновления. Попробуйте ещё раз позже.')));
+            h('p', { class: 'upd-error', role: 'status' }, tr('Не удалось загрузить статус обновления. Попробуйте ещё раз позже.'))));
         // Still not a `return`: the message replaces the «Загрузка…»
         // placeholder and the check button above stays live, so an offline
         // clinic gets a screen it can retry from rather than a spinner that
@@ -242,13 +291,30 @@ const RELOAD_POLL_MS = 5000;
 const RELOAD_GIVE_UP_MS = 15 * 60 * 1000;   // an install that takes longer has failed; the outcome file will say so
 let _watchTimer = null;
 let _watchBoot = null;
+// UPDATE_PROGRESS_V1 — the last progress the screen actually drew. The poll
+// below already ran every 5s; repainting on EVERY tick would rebuild the
+// card (and the «Изменить время»/«Отменить» buttons under it) whether or not
+// anything moved, so a repaint happens only when this signature changes.
+let _watchDrawn = null;
+
+// What "something moved" means. Bytes and phase are the real progress; the
+// coarse age bucket is what lets a download that has STOPPED moving still
+// flip into its stall message — without it the screen would freeze on the
+// last byte count precisely in the case the owner most needs told about.
+function progressSignature(status) {
+    const p = status && status.progress;
+    if (!p) return '';
+    const ageBucket = Math.floor((Number(p.age_ms) || 0) / 30000);
+    return [p.version, p.phase, p.bytes, p.total, ageBucket].join('|');
+}
 
 function stopVersionWatch() {
     if (_watchTimer) { clearInterval(_watchTimer); _watchTimer = null; }
     _watchBoot = null;
+    _watchDrawn = null;
 }
 
-function watchForNewVersion(bootVersion) {
+function watchForNewVersion(bootVersion, body) {
     // One watcher at a time, and an EXISTING watch for this same version is
     // left running: paint() fires on every repaint, so restarting here would
     // both multiply timers and reset the give-up clock on every redraw.
@@ -259,19 +325,30 @@ function watchForNewVersion(bootVersion) {
     const startedAt = Date.now();
     _watchTimer = setInterval(async () => {
         if (Date.now() - startedAt > RELOAD_GIVE_UP_MS) { stopVersionWatch(); return; }
-        let now = null;
+        let data = null;
         try {
-            const { data, error } = await supabase.rpc('update_status', {});
-            if (error) return;   // mid-restart the server is simply gone — that is expected, keep waiting
-            now = data && data.current_version;
+            const res = await supabase.rpc('update_status', {});
+            if (res.error) return;   // mid-restart the server is simply gone — that is expected, keep waiting
+            data = res.data;
         } catch { return; }
+        const now = data && data.current_version;
         if (now && now !== bootVersion) {
             stopVersionWatch();
             // Reload, not repaint: every screen in the app was built by the OLD
             // code and the sidebar, licence and router state all came from that
             // boot. A repaint would leave a new server behind an old shell.
             if (typeof location !== 'undefined' && location.reload) location.reload();
+            return;
         }
+        // Still the same version — the update is somewhere in the middle of
+        // itself. Redraw only when the progress record actually moved: this is
+        // what turns a screen that used to say nothing for minutes into one
+        // that counts megabytes.
+        if (!body) return;
+        const sig = progressSignature(data);
+        if (sig === _watchDrawn) return;
+        _watchDrawn = sig;
+        paint(body, data || {});
     }, RELOAD_POLL_MS);
     // A timer must never hold the page open or outlive the view.
     if (_watchTimer && typeof _watchTimer.unref === 'function') _watchTimer.unref();
@@ -288,8 +365,14 @@ function paint(body, status) {
     // Watch only while an install is actually coming: an approved consent, or
     // an outcome file naming a version newer than the one serving this page
     // (the launcher case — installed on disk, the old process still answering).
+    // UPDATE_PROGRESS_V1 — the third reason to keep watching: a live progress
+    // record. During the switch phase the consent has already been consumed,
+    // so `approved` alone can go false at the exact moment the screen most
+    // needs to keep refreshing.
+    const prog = progressView(status.progress);
     const installing = !!status.approved
-        || !!pendingRestartMessage(status.last_result, currentVersion);
+        || !!pendingRestartMessage(status.last_result, currentVersion)
+        || (prog.show && prog.tone === 'busy');
     // Started, never cancelled by a repaint. The status that arrives WHILE an
     // install runs is not stable — the consent is consumed before the new
     // version answers, so a repaint in that window reports approved:false and
@@ -297,7 +380,18 @@ function paint(body, status) {
     // moment it was needed (caught by its own test, which is why it is written
     // this way). The watch ends on its own terms only: the version changed, or
     // the give-up deadline passed.
-    if (installing) watchForNewVersion(currentVersion);
+    if (installing) watchForNewVersion(currentVersion, body);
+    // Recorded AFTER the call above, which may have restarted the watch (and
+    // with it cleared this): what the screen is about to draw, so the poll
+    // does not redraw the identical card five seconds later merely because it
+    // had nothing to compare against yet.
+    _watchDrawn = progressSignature(status);
+
+    // UPDATE_PROGRESS_V1 — first on the screen while an update is actually
+    // happening: it is the most perishable thing here, and the owner's
+    // complaint («can we show status of the downloading») was exactly that
+    // there was nothing at this spot at all.
+    if (prog.show) body.appendChild(paintProgress(prog));
 
     // Bullet 5 — a failed-and-rolled-back last attempt, said plainly, before
     // anything else on the screen: "a clinic must not learn of its failed
@@ -306,11 +400,10 @@ function paint(body, status) {
     if (outcomeMsg) {
         body.appendChild(h('div', { class: 'card upd-card upd-outcome', role: 'status' },
             h('span', { class: 'upd-outcome-ic' }, Icon('Warning', { size: 16 })),
-            // outcomeMsg already carries the failed version + date spliced
-            // in (updates-logic.js's own dynamic-Russian-sentence
-            // convention) — passed as a plain h() child, so it is a real
-            // Text node either way, never raw HTML.
-            h('span', null, outcomeMsg)));
+            // say() translates the WHOLE phrase and only then puts the version
+            // and date back — passed as a plain h() child, so it is a real
+            // Text node, never raw HTML.
+            h('span', null, say(outcomeMsg))));
     }
 
     // INSTALLED, NOT YET RUNNING — the launcher case (no Windows service to
@@ -324,7 +417,7 @@ function paint(body, status) {
     if (restartMsg) {
         body.appendChild(h('div', { class: 'card upd-card upd-restart', role: 'status' },
             h('span', { class: 'upd-outcome-ic' }, Icon('Refresh', { size: 16 })),
-            h('span', null, restartMsg)));
+            h('span', null, say(restartMsg))));
     }
 
     // Bullet 6 — one-time "what's new", only once current_version has
@@ -332,7 +425,10 @@ function paint(body, status) {
     const wn = whatsNewState(currentVersion, readLocal(LAST_SEEN_KEY), readNotesCache());
     if (wn.show) {
         body.appendChild(h('div', { class: 'card upd-card upd-whatsnew' },
-            h('div', { class: 'upd-whatsnew-title' }, Icon('Sparkles', { size: 15 }), ' ', 'Что нового в версии ' + wn.version),
+            // Template + fill, not concatenation: «Что нового в версии X» is
+            // one phrase in the dictionary, so it can actually be translated.
+            h('div', { class: 'upd-whatsnew-title' }, Icon('Sparkles', { size: 15 }), ' ',
+                fill(tr('Что нового в версии {version}'), { version: wn.version })),
             // XSS_HARDEN — notes_ru is vendor-entered free text, not this
             // clinic's own data. Rendered via h()'s plain-child path, which
             // appends a real DOM Text node (document.createTextNode) — never
@@ -341,22 +437,23 @@ function paint(body, status) {
             // a script. No separate escapeHtml() call is needed because no
             // HTML string is ever built here; see the identical note on
             // offer.notes_ru in paintOffer() below.
-            wn.notes ? h('p', { class: 'upd-notes' }, wn.notes) : h('p', { class: 'upd-notes muted' }, 'Обновление установлено.')));
+            wn.notes ? h('p', { class: 'upd-notes' }, wn.notes) : h('p', { class: 'upd-notes muted' }, tr('Обновление установлено.'))));
     }
     // Mark seen regardless of whether the note was shown — covers both "just
     // saw it" and "first-ever open on this browser, nothing to compare to".
     if (currentVersion) writeLocal(LAST_SEEN_KEY, currentVersion);
 
-    body.appendChild(h('p', { class: 'upd-current' }, 'Текущая версия:', ' ', h('strong', null, currentVersion || '—')));
+    body.appendChild(h('p', { class: 'upd-current' }, tr('Текущая версия:'), ' ', h('strong', null, currentVersion || '—')));
 
     if (!offer) {
         // Calm, deliberately unexciting — "up to date" is not an achievement
         // to celebrate every time, just the normal state of things.
         body.appendChild(h('div', { class: 'card upd-card upd-uptodate' },
             h('span', { class: 'upd-uptodate-ic' }, Icon('Check', { size: 16 })),
-            // Dynamic version spliced into a fixed Russian sentence — same
-            // convention as updates-logic.js's own formatted strings.
-            h('span', null, 'У вас последняя версия' + (currentVersion ? ' — ' + currentVersion : '') + '.')));
+            // THE line from the owner's screenshot: an Uzbek screen with this
+            // sentence in Russian, because it was concatenated. One whole
+            // phrase per case now — see upToDateMessage().
+            h('span', null, say(upToDateMessage(currentVersion)))));
         return;
     }
 
@@ -368,11 +465,50 @@ function paint(body, status) {
     }
 }
 
+// UPDATE_PROGRESS_V1 — what the update is doing, right now.
+//
+// Every DECISION (which phase, what percentage, is it stalled, is this record
+// the corpse of an install a restart interrupted) is progressView()'s, in
+// ../updates-logic.js, where it is unit-tested with no DOM in sight. This
+// function only turns that verdict into elements.
+//
+// No emoji anywhere — icons come from the project's own set (../icons.js),
+// same as every other card on this screen.
+function paintProgress(view) {
+    const card = h('div', {
+        class: 'card upd-card upd-progress' + (view.tone === 'warn' ? ' upd-progress-warn' : ''),
+        // Announced: this card changes underneath a person who may not be
+        // looking at that exact corner of the screen.
+        role: 'status', 'aria-live': 'polite',
+    },
+        h('div', { class: 'upd-progress-head' },
+            Icon(view.tone === 'warn' ? 'Warning' : 'Download', { size: 16 }),
+            h('span', null, say(view.title))));
+
+    if (view.detail) card.appendChild(h('p', { class: 'upd-progress-detail' }, say(view.detail)));
+
+    // A bar ONLY when a real percentage exists. With no Content-Length the
+    // detail line says "загружено N МБ" and there is deliberately no bar —
+    // a bar that crawls towards an unknown end is exactly the "is it stuck?"
+    // confusion this change exists to end.
+    if (view.percent != null) {
+        const fillEl = h('div', { class: 'upd-progress-fill' });
+        fillEl.style.width = view.percent + '%';
+        card.appendChild(h('div', {
+            class: 'upd-progress-bar', role: 'progressbar',
+            'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(view.percent),
+        }, fillEl));
+    }
+
+    if (view.note) card.appendChild(h('p', { class: 'upd-progress-note' }, say(view.note)));
+    return card;
+}
+
 function paintOffer(body, offer, admin, approved) {
     const card = h('div', { class: 'card upd-card upd-offer' },
         h('div', { class: 'upd-offer-head' },
             Icon('Download', { size: 16 }),
-            h('span', null, 'Доступно обновление', ' ', h('strong', null, offer.version))));
+            h('span', null, tr('Доступно обновление'), ' ', h('strong', null, offer.version))));
     if (offer.notes_ru) {
         // See the identical XSS_HARDEN note above — plain h() child, real
         // Text node, `<b>evil</b>` can never become markup here.
@@ -385,7 +521,7 @@ function paintOffer(body, offer, admin, approved) {
         // the read-only confirmation instead.
         if (!approved) {
             card.appendChild(h('p', { class: 'upd-admin-note muted' },
-                'Только администратор клиники может подтвердить установку.'));
+                tr('Только администратор клиники может подтвердить установку.')));
         }
         return card;
     }
@@ -401,12 +537,12 @@ function buildScheduleControls(body, offer) {
     const statusEl = h('p', { class: 'upd-action-status', role: 'status' });
     const warnEl = h('p', { class: 'upd-hour-warn' },
         Icon('Warning', { size: 13 }), ' ',
-        'В это время клиника обычно работает — сотрудники будут отключены на 1–2 минуты.');
+        tr('В это время клиника обычно работает — сотрудники будут отключены на 1–2 минуты.'));
     warnEl.style.display = 'none';
 
     const customInput = h('input', {
         type: 'number', min: '0', max: '23', class: 'upd-hour-input',
-        value: String(choices.defaultHour), 'aria-label': 'Другое время — час (0-23)',
+        value: String(choices.defaultHour), 'aria-label': tr('Другое время — час (0-23)'),
     });
     const customPreview = h('span', { class: 'upd-hour-preview muted' });
 
@@ -465,13 +601,13 @@ function buildScheduleControls(body, offer) {
     }
 
     const nowBtn = h('button', { type: 'button', class: 'btn btn-primary', onclick: () => approveNow() },
-        'Обновить сейчас');
+        tr('Обновить сейчас'));
     const tonightBtn = h('button', { type: 'button', class: 'btn btn-outline', onclick: () => approve(choices.tonight.hour) },
-        'Обновить сегодня ночью');
+        tr('Обновить сегодня ночью'));
     const tomorrowBtn = h('button', { type: 'button', class: 'btn btn-outline', onclick: () => approve(choices.tomorrow.hour) },
-        'Обновить завтра ночью');
+        tr('Обновить завтра ночью'));
     const customBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: () => approve(customInput.value) },
-        'Запланировать');
+        tr('Запланировать'));
     buttons.push(nowBtn, tonightBtn, tomorrowBtn, customBtn);
 
     function refreshCustomPreview() {
@@ -489,7 +625,7 @@ function buildScheduleControls(body, offer) {
             // The honest cost of "now", stated where the button is — the same
             // sentence the working-hours warning uses, because it is the same
             // event: a server restart while people may be mid-form.
-            h('span', { class: 'upd-choice-when muted' }, 'сотрудники будут отключены на 1–2 минуты')),
+            h('span', { class: 'upd-choice-when muted' }, tr('сотрудники будут отключены на 1–2 минуты'))),
         h('div', { class: 'upd-choice' },
             tonightBtn,
             h('span', { class: 'upd-choice-when muted' }, choices.tonight.dateLabel + ', ' + choices.tonight.hourLabel)),
@@ -497,7 +633,7 @@ function buildScheduleControls(body, offer) {
             tomorrowBtn,
             h('span', { class: 'upd-choice-when muted' }, choices.tomorrow.dateLabel + ', ' + choices.tomorrow.hourLabel)),
         h('div', { class: 'upd-choice upd-choice-custom' },
-            h('label', { class: 'upd-hour-label' }, 'Другое время:', ' ', customInput, ' ', customPreview),
+            h('label', { class: 'upd-hour-label' }, tr('Другое время:'), ' ', customInput, ' ', customPreview),
             customBtn),
         warnEl,
         statusEl);
@@ -507,14 +643,14 @@ function paintScheduled(body, status, offer, admin) {
     const msg = formatScheduled({ hour: status.hour, scheduled_at: status.scheduled_at, immediate: status.immediate });
     const card = h('div', { class: 'card upd-card upd-scheduled' },
         h('div', { class: 'upd-scheduled-head' }, Icon('Clock', { size: 16 }),
-            h('span', null, 'Обновление подтверждено', ' ', h('strong', null, offer.version))),
-        h('p', { class: 'upd-scheduled-msg', role: 'status' }, msg || 'Обновление подтверждено.'));
+            h('span', null, tr('Обновление подтверждено'), ' ', h('strong', null, offer.version))),
+        h('p', { class: 'upd-scheduled-msg', role: 'status' }, say(msg) || tr('Обновление подтверждено.')));
 
     if (!admin) return card;   // non-admin: status only, no change/cancel controls
 
     const statusEl = h('p', { class: 'upd-action-status', role: 'status' });
-    const changeBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm' }, 'Изменить время');
-    const cancelBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm' }, 'Отменить');
+    const changeBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm' }, tr('Изменить время'));
+    const cancelBtn = h('button', { type: 'button', class: 'btn btn-outline btn-sm' }, tr('Отменить'));
     const buttons = [changeBtn, cancelBtn];
     let busy = false;
     function setBusy(v) { busy = v; for (const b of buttons) b.disabled = v; }

@@ -3710,6 +3710,26 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .upd-uptodate-ic { color: var(--primary-700, #0a6e61); }
 .upd-error { color: var(--crit-700, #b91c1c); margin: 0; }
 
+/* UPDATE_PROGRESS_V1 (2026-08-30) — the "what is it doing right now" card.
+   Same calm card grid as .upd-offer above; the only new shape is the bar, and
+   it renders ONLY when a real Content-Length made a real percentage possible
+   (views/updates.js paintProgress). No animation on the fill: a bar that
+   slides by itself looks like motion the download is not necessarily making,
+   which is the exact confusion this card exists to remove. A width that moves
+   only when bytes actually arrived is the honest one. */
+.upd-progress { background: var(--info-50, #eff6ff); border: 1px solid #bfdbfe; }
+.upd-progress-head { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: var(--ink-900); }
+.upd-progress-head svg { color: var(--info-700, #1d4ed8); flex: 0 0 auto; }
+.upd-progress-detail { font-size: 13.5px; color: var(--ink-700); margin: 0; font-variant-numeric: tabular-nums; }
+.upd-progress-bar { height: 8px; border-radius: 999px; background: var(--ink-100, #e5e7eb); overflow: hidden; }
+.upd-progress-fill { height: 100%; border-radius: 999px; background: var(--info-700, #1d4ed8); }
+.upd-progress-note { font-size: 12.5px; color: var(--ink-600); margin: 0; line-height: 1.5; }
+/* Stalled / interrupted / failed — amber, matching .upd-outcome, because it is
+   the same register: something the clinic has to be told, not watch. */
+.upd-progress-warn { background: var(--warn-50); border-color: #f0d29b; }
+.upd-progress-warn .upd-progress-head svg { color: var(--warn-700); }
+.upd-progress-warn .upd-progress-note { color: var(--warn-700); }
+
 /* SYSTEM_SETTINGS_V1 (docs/plans/2026-08-23-system-settings.md, Task 3) —
    Settings → «Система»: the three cards that joined the updates screen
    (views/system-subscription.js / system-backups.js / system-danger.js) and

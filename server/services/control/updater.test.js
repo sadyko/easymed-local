@@ -17,6 +17,7 @@ import {
   staleAfterSwitch,
   scheduleUpdater,
 } from './updater.js';
+import { readProgress, writeProgress } from './update-progress.js';
 import { runCheckin, readJsonFile } from './checkin.js';
 import { setAppVersion } from './config.js';
 import { updateApprove } from '../rpc/updates.js';
@@ -728,4 +729,176 @@ test('consent naming the RUNNING version is cleared, not retried into the stagin
   assert.equal(fetched, false, 'nothing is downloaded for a version already running');
   assert.equal(controlStateGet(db, 'update_consent'), null, 'the spent consent is cleared');
   assert.equal(controlStateGet(db, 'update_scheduled_at'), null, 'and its schedule with it');
+});
+
+
+// --- UPDATE_PROGRESS_V1: the pipeline says what it is doing ------------------
+//
+// The owner could not tell a 40 MB download from a hung one, because the
+// screen showed nothing at all between «доступно обновление» and
+// «установлено». These drive the REAL pipeline — a real HTTP server, a real
+// signed bundle, the real download loop — and assert it leaves a record
+// honest enough to act on.
+
+test('progress: a real download records phase and byte counts, and Content-Length becomes the total', async () => {
+  const { tarBytes, manifest } = makeSignedBundle({ version: '2.4.0' });
+  const offer = makeOffer({ manifest });
+  const { db, dataDir } = approvedWorkspace(offer);
+  const { root, appRoot } = makeVersionedRoot('2.3.0');
+
+  const { server, endpoint } = await fakeServer((req, res) => {
+    // Declared explicitly, because that is the case in which a percentage
+    // can exist at all.
+    res.writeHead(200, { 'content-length': String(tarBytes.length) });
+    res.end(tarBytes);
+  });
+  const exit = exitSpy();
+  try {
+    await tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl: exit.impl });
+  } finally {
+    server.close();
+  }
+  assert.deepEqual(exit.calls, [75], 'the update itself still worked');
+
+  const rec = readProgress(db);
+  assert.ok(rec, 'the pipeline left a progress record');
+  assert.equal(rec.version, '2.4.0');
+  // The last phase before exit(75). NOT cleared here on purpose:
+  // reconcileProgressAtBoot removes it on the way back in, once the new
+  // version is the one running.
+  assert.equal(rec.phase, 'switching');
+  assert.equal(rec.bytes, tarBytes.length, 'the final byte count is forced past the throttle');
+  assert.equal(rec.total, tarBytes.length, 'Content-Length is what makes a percentage possible');
+  assert.ok(rec.started_at && rec.at, 'both timestamps are present — `at` is how a stall is ever noticed');
+  assert.ok(fs.existsSync(path.join(root, 'current')));
+});
+
+test('progress: NO Content-Length — bytes are still counted, total stays null, no invented percentage', async () => {
+  const { tarBytes, manifest } = makeSignedBundle({ version: '2.4.0' });
+  const offer = makeOffer({ manifest });
+  const { db, dataDir } = approvedWorkspace(offer);
+  const { appRoot } = makeVersionedRoot('2.3.0');
+
+  const { server, endpoint } = await fakeServer((req, res) => {
+    // Chunked — what a server sends when it does not know or declare the
+    // whole size. Exactly the case a progress bar would have to be faked in.
+    res.writeHead(200, { 'transfer-encoding': 'chunked' });
+    res.write(tarBytes.subarray(0, 100));
+    res.end(tarBytes.subarray(100));
+  });
+  const exit = exitSpy();
+  try {
+    await tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl: exit.impl });
+  } finally {
+    server.close();
+  }
+  const rec = readProgress(db);
+  assert.equal(rec.total, null, 'an unknown whole must never be given a denominator');
+  assert.equal(rec.bytes, tarBytes.length, 'how much arrived is still known, and is what the screen says');
+});
+
+test('progress: a failed download is recorded as failed — the outcome file never covers this case', async () => {
+  const { manifest } = makeSignedBundle({ version: '2.4.0' });
+  const offer = makeOffer({ manifest });
+  const { db, dataDir } = approvedWorkspace(offer);
+
+  const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(404); res.end('nope'); });
+  try {
+    await tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW });
+  } finally {
+    server.close();
+  }
+  const rec = readProgress(db);
+  assert.equal(rec.phase, 'failed');
+  assert.equal(rec.reason, 'http_status');
+  assert.equal(controlStateGet(db, 'update_offer'), JSON.stringify(offer), 'and the update is still just "try again tomorrow"');
+});
+
+test('progress: a refused bundle is recorded as failed, not left mid-download forever', async () => {
+  const otherKeypair = generateKeyPairSync('ed25519');
+  const { tarBytes, manifest } = makeSignedBundle({ version: '2.4.0', keyOverride: otherKeypair });
+  const offer = makeOffer({ manifest });
+  const { db, dataDir } = approvedWorkspace(offer);
+
+  const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
+  try {
+    await tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW });
+  } finally {
+    server.close();
+  }
+  assert.equal(readProgress(db).phase, 'failed');
+  assert.equal(readProgress(db).reason, 'bundle_refused');
+});
+
+test('progress: a dev checkout leaves NO record — a stale «распаковка…» on a dev box is the same lie', async () => {
+  const { tarBytes, manifest } = makeSignedBundle({ version: '2.4.0' });
+  const offer = makeOffer({ manifest });
+  const { db, dataDir } = approvedWorkspace(offer);
+
+  const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
+  try {
+    await tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW, appRoot: tmpDir('em-updater-dev-') });
+  } finally {
+    server.close();
+  }
+  assert.equal(readProgress(db), null);
+});
+
+test('progress: reporting is best-effort — a database that refuses every progress write still installs', async () => {
+  const { tarBytes, manifest } = makeSignedBundle({ version: '2.4.0' });
+  const offer = makeOffer({ manifest });
+  const { db, dataDir } = approvedWorkspace(offer);
+  const { root, appRoot } = makeVersionedRoot('2.3.0');
+
+  // Every write to THIS key fails, and only this key. The update must not
+  // notice — the same guarantee branch-sync/relay.js gives its own
+  // bookkeeping writes, which is where the discipline was borrowed from.
+  const realPrepare = db.prepare.bind(db);
+  db.prepare = (sql) => {
+    const stmt = realPrepare(sql);
+    if (!/INSERT INTO control_state/.test(sql)) return stmt;
+    return {
+      run: (...args) => {
+        if (args[0] === 'update_progress') throw new Error('disk I/O error');
+        return stmt.run(...args);
+      },
+      get: (...args) => stmt.get(...args),
+      all: (...args) => stmt.all(...args),
+    };
+  };
+  const exit = exitSpy();
+  const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
+  try {
+    await tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW, appRoot, exitImpl: exit.impl });
+  } finally {
+    server.close();
+    db.prepare = realPrepare;
+  }
+  assert.deepEqual(exit.calls, [75], 'the update completed even though every progress write threw');
+  assert.equal(
+    path.resolve(fs.realpathSync(path.join(root, 'current'))),
+    path.resolve(path.join(root, 'versions', '2.4.0')),
+  );
+});
+
+test('progress: scheduleUpdater reconciles a corpse record at boot instead of leaving a frozen bar', () => {
+  const { db, dataDir } = workspace();
+  writeProgress(db, { version: '0.4.6', phase: 'downloading', bytes: 16, total: 40, at: '2026-08-30T03:00:00.000Z' });
+
+  // The whole pipeline runs in one process, so a live phase seen at boot is
+  // always the remains of a process that has already ended.
+  const { interval } = scheduleUpdater(db, dataDir, { intervalMs: 60_000, exitImpl: () => {}, runningVersion: '0.4.5' });
+  clearInterval(interval);
+
+  assert.equal(readProgress(db).phase, 'interrupted');
+});
+
+test('progress: the record left by a SUCCESSFUL update is deleted at the next boot', () => {
+  const { db, dataDir } = workspace();
+  writeProgress(db, { version: '0.4.6', phase: 'switching', bytes: 40, total: 40, at: '2026-08-30T03:00:00.000Z' });
+
+  const { interval } = scheduleUpdater(db, dataDir, { intervalMs: 60_000, exitImpl: () => {}, runningVersion: '0.4.6' });
+  clearInterval(interval);
+
+  assert.equal(readProgress(db), null, 'nothing is shown after an update that simply worked');
 });
