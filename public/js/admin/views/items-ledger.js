@@ -7,6 +7,7 @@
 // drug is created through the gateway CRUD. Cost basis for расход/остаток = each item's LATEST
 // receipt unit_cost. Respects settings:clinic_items permissions (view to open, edit to add).
 import { h, Icon, PageHead, clear, toast, fmtDateTime } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { supabase } from '../../supabase.js';
 import { currentClinicId } from '../tenant-tables.js';
 import { canEdit } from '../permissions.js';
@@ -37,7 +38,7 @@ const state = {
 let containerRef = null, onBackRef = null, bodyRef = null;
 
 // ---- formatters -----------------------------------------------------------
-function money(n) { return (Math.round(Number(n) || 0)).toLocaleString('ru-RU') + ' сум'; }
+function money(n) { return (Math.round(Number(n) || 0)).toLocaleString('ru-RU') + ' ' + tr('сум'); }
 function num(n)   { const v = Number(n) || 0; return (Math.round(v * 100) / 100).toLocaleString('ru-RU'); }
 function itemName(id) { const it = state.items.find(i => i.id === id); return it ? it.name : '—'; }
 function itemById(id) { return state.items.find(i => i.id === id) || null; }
@@ -248,7 +249,7 @@ async function onSaveReceipt(e, f) {
             reference_type: 'manual', note: null,
         });
         if (error) throw error;
-        toast('Приход записан: ' + name + ' +' + num(qty) + '.', 'ok');
+        toast(trf('Приход записан: {name} +{qty}.', { name, qty: num(qty) }), 'ok');
         state.adding = false;
         await loadAll();
         paint();
@@ -329,8 +330,8 @@ async function importBatch(rows, branchId) {
     rows.forEach((raw, i) => {
         const p = parseBatchRow(raw);
         if (!p.name && p.quantity == null) return;                         // blank row
-        if (!p.name)          { errors.push('стр.' + (i + 2) + ': нет названия'); return; }
-        if (!(p.quantity > 0)) { errors.push('стр.' + (i + 2) + ' (' + p.name + '): количество не указано'); return; }
+        if (!p.name)          { errors.push(trf('стр.{n}: нет названия', { n: i + 2 })); return; }
+        if (!(p.quantity > 0)) { errors.push(trf('стр.{n} ({name}): количество не указано', { n: i + 2, name: p.name })); return; }
         const unitCost  = p.unitCost  != null ? p.unitCost  : (p.totalCost  != null ? p.totalCost  / p.quantity : 0);
         const salePrice = p.salePrice != null ? p.salePrice : (p.totalPrice != null ? p.totalPrice / p.quantity : unitCost);
         valid.push({ name: p.name, unit: p.unit, quantity: p.quantity, unitCost, salePrice });
@@ -354,7 +355,7 @@ async function importBatch(rows, branchId) {
     const movements = [];
     for (const p of valid) {
         const item = byName[p.name.toLowerCase()];
-        if (!item) { errors.push(p.name + ': товар не создан'); continue; }
+        if (!item) { errors.push(trf('{name}: товар не создан', { name: p.name })); continue; }
         movements.push({ company_id: cid, item_id: item.id, branch_id: branchId, kind: 'receipt',
                          qty: p.quantity, unit_cost: p.unitCost, reference_type: 'import', note: 'Партия (импорт Excel)' });
     }
@@ -398,7 +399,7 @@ function openBatchImporter() {
 
     async function handleFile(file) {
         if (!file) return;
-        status.textContent = 'Чтение ' + file.name + '…';
+        status.textContent = trf('Чтение {name}…', { name: file.name });
         try {
             const XLSX = await loadXlsx();
             const buf = await file.arrayBuffer();
@@ -407,10 +408,10 @@ function openBatchImporter() {
             if (!ws) throw new Error('в файле нет листов');
             parsed = sheetToObjects(XLSX, ws);
             const ok = parsed.map(parseBatchRow).filter(p => p.name && p.quantity > 0).length;
-            status.textContent = 'К загрузке: ' + ok + ' позиц. из ' + parsed.length + ' строк.';
+            status.textContent = trf('К загрузке: {ok} позиц. из {total} строк.', { ok, total: parsed.length });
             importBtn.disabled = ok ? null : '';
         } catch (e) {
-            status.textContent = 'Ошибка чтения: ' + (e.message || e);
+            status.textContent = trf('Ошибка чтения: {msg}', { msg: e.message || e });
             importBtn.disabled = '';
         }
     }
@@ -421,13 +422,13 @@ function openBatchImporter() {
         status.textContent = 'Загрузка…';
         try {
             const res = await importBatch(parsed, branchId);
-            const msg = 'Загружено позиций: ' + res.received + (res.createdItems ? ', новых товаров: ' + res.createdItems : '');
+            const msg = trf('Загружено позиций: {n}', { n: res.received }) + (res.createdItems ? ', ' + trf('новых товаров: {n}', { n: res.createdItems }) : '');
             toast(msg, 'ok');
             await loadAll(); paint();
-            if (res.errors.length) status.textContent = msg + '. Пропущено: ' + res.errors.length + '. ' + res.errors.slice(0, 4).join('; ');
+            if (res.errors.length) status.textContent = msg + '. ' + trf('Пропущено: {n}.', { n: res.errors.length }) + ' ' + res.errors.slice(0, 4).join('; ');
             else close();
         } catch (e) {
-            status.textContent = 'Ошибка: ' + (e.message || e);
+            status.textContent = trf('Ошибка: {msg}', { msg: e.message || e });
             toast(e.message || String(e), 'fail');
         } finally {
             if (ev.currentTarget && ev.currentTarget.isConnected) ev.currentTarget.disabled = null;
@@ -481,9 +482,9 @@ function paint() {
     bodyRef.appendChild(h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } },
         state.adding ? addForm() : null,
         h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '12px' } },
-            statCard('ArrowDown', 'Приход', money(s.inSum), num(s.inQty) + ' ед. поступило', 'var(--ok-700, #1a7f4b)'),
-            statCard('ArrowUp', 'Расход', money(s.outSum), num(s.outQty) + ' ед. израсходовано', 'var(--crit-700, #c0392b)'),
-            statCard('Layers', 'Остаток (по себестоимости)', money(s.stockVal), num(s.stockQty) + ' ед. на складе'),
+            statCard('ArrowDown', 'Приход', money(s.inSum), trf('{n} ед. поступило', { n: num(s.inQty) }), 'var(--ok-700, #1a7f4b)'),
+            statCard('ArrowUp', 'Расход', money(s.outSum), trf('{n} ед. израсходовано', { n: num(s.outQty) }), 'var(--crit-700, #c0392b)'),
+            statCard('Layers', 'Остаток (по себестоимости)', money(s.stockVal), trf('{n} ед. на складе', { n: num(s.stockQty) })),
         ),
         movementsTable(),
     ));

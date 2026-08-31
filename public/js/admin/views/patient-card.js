@@ -17,6 +17,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, StatusTag, fmtDate, fmtDateTime, field, Avatar, avColor, initials } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { labFlagCell, labPosFor, fmtDMY, labSexRu, labRefLines, labRefText, matchResultsToAnalytes, labAccession, labIssueDates, labMaxDate,
          namedRangeCell, ageYears } from './lab-doc.js?v=labshared1';
 import { analyteIndex, resolveAnalyte, analytesForService } from './lab-analyte-index.js?v=labshared1';   // LAB_BLANK_DESIGNED_V1
@@ -65,7 +66,9 @@ function fmtRuDate(iso) {
     if (!iso) return null;
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return null;
-    return `${d.getDate()} ${RU_M_GEN[d.getMonth()]} ${d.getFullYear()} г.`;
+    // I18N_COVERAGE_V1 — единый локале-зависимый формат из ui.js (Intl сам
+    // добавляет « г.» в ru-RU) вместо русской сборки, которую tr() не найдёт.
+    return fmtDate(d);
 }
 
 function ageFromDob(dob) {
@@ -143,7 +146,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             if (pErr || !pRow) {
                 clear(headerEl);
                 headerEl.appendChild(h('div', { class: 'empty' }, 'Пациент не найден.'));
-                toast('Не удалось загрузить пациента: ' + (pErr && pErr.message || 'not found'), 'fail');
+                toast(trf('Не удалось загрузить пациента: {msg}', { msg: (pErr && pErr.message) || 'not found' }), 'fail');
                 return;
             }
             patient = pRow;
@@ -164,8 +167,8 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     : Promise.resolve({ data: null }),
             ]);
             if (token !== fetchToken) return;
-            if (visitsRes.error)   toast('Не удалось загрузить визиты: ' + visitsRes.error.message, 'fail');
-            if (invoicesRes.error) toast('Не удалось загрузить счета: ' + invoicesRes.error.message, 'fail');
+            if (visitsRes.error)   toast(trf('Не удалось загрузить визиты: {msg}', { msg: visitsRes.error.message }), 'fail');
+            if (invoicesRes.error) toast(trf('Не удалось загрузить счета: {msg}', { msg: invoicesRes.error.message }), 'fail');
             visits    = visitsRes.data || [];
             invoices  = invoicesRes.data || [];
             payerName = (payerRes && payerRes.data && payerRes.data.name) || null;
@@ -180,7 +183,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             if (token !== fetchToken) return;
             clear(headerEl);
             headerEl.appendChild(h('div', { class: 'empty' }, 'Не удалось загрузить пациента.'));
-            toast('Не удалось загрузить пациента: ' + (e && e.message || e), 'fail');
+            toast(trf('Не удалось загрузить пациента: {msg}', { msg: (e && e.message) || e }), 'fail');
         }
     }
 
@@ -466,7 +469,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 () => openNotesModal()),
             statCell('Coins',    '#2563eb', 'Кэшбэк', '0 сум', 'нет начислений', null, () => openCashbackModal()),
             statCell('Wallet',   outstanding > 0 ? 'var(--crit-600, #dc2626)' : 'var(--ok-600, #16a34a)', 'Баланс счёта',
-                fmtPrice(outstanding) + ' сум',
+                fmtPrice(outstanding) + ' ' + tr('сум'),
                 outstanding > 0 ? 'долг' : 'оплачено',
                 outstanding > 0 ? 'var(--crit-600, #dc2626)' : 'var(--ok-700, #047857)',
                 () => openBalanceModal()),
@@ -596,7 +599,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             h('div', { class: 'card-header' }, h('h3', null, Icon('Chart', { size: 15 }), ' Сводка')),
             h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', padding: '14px 18px 18px' } },
                 miniTile('Stethoscope', 'Визитов', String(visits.length)),
-                miniTile('Wallet', 'Баланс счёта', fmtPrice(outstanding) + ' сум', outstanding > 0 ? 'var(--crit-600)' : 'var(--ok-700)'),
+                miniTile('Wallet', 'Баланс счёта', fmtPrice(outstanding) + ' ' + tr('сум'), outstanding > 0 ? 'var(--crit-600)' : 'var(--ok-700)'),
                 miniTile('Coins', 'Кэшбэк', '0 сум'),
                 miniTile('ID', 'Полис', payerName || '—'),
                 miniTile('Warning', 'Аллергий', String(countList(p.allergies))),
@@ -717,7 +720,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         function paintRows() {
             clear(tbody);
             const rows = services.filter(matches);
-            countEl.textContent = q ? `${rows.length} из ${services.length}` : String(services.length);
+            countEl.textContent = q ? trf('{n} из {max}', { n: rows.length, max: services.length }) : String(services.length);
 
             if (!rows.length) {
                 tbody.appendChild(h('tr', null, h('td', { colspan: '7', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } },
@@ -729,7 +732,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
 
             const left = rows.length - Math.min(shown, rows.length);
             moreWrap.style.display = left > 0 ? '' : 'none';
-            moreBtn.textContent = `Показать ещё ${Math.min(SERVICES_PAGE, left)} из ${left}`;
+            moreBtn.textContent = trf('Показать ещё {n} из {left}', { n: Math.min(SERVICES_PAGE, left), left });
         }
 
         // Одна строка таблицы. Вынесена из цикла, чтобы её можно было
@@ -753,12 +756,12 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     if (!pool.length) { toast('На эту услугу не назначен ни один врач (Сотрудники → «Услуги и ставки»).', 'info'); return; }
                     const sel = h('select', { style: { padding: '5px 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '12.5px', maxWidth: '180px' } },
                         ...(s.doctorId && !pool.some(d => String(d.id) === String(s.doctorId))
-                            ? [h('option', { value: s.doctorId, selected: true }, s.doctorName || ('Врач #' + s.doctorId))] : []),
+                            ? [h('option', { value: s.doctorId, selected: true }, s.doctorName || trf('Врач #{id}', { id: s.doctorId }))] : []),
                         ...pool.map(d => h('option', { value: d.id, selected: String(d.id) === String(s.doctorId) }, d.full_name)));
                     const save = h('button', { class: 'btn btn-primary btn-sm', type: 'button' }, 'ОК');
                     save.addEventListener('click', async () => {
                         const { error } = await supabase.from('visit_services').update({ doctor_id: Number(sel.value) }).eq('id', s.id);
-                        if (error) { toast('Не сохранилось: ' + error.message, 'fail'); return; }
+                        if (error) { toast(trf('Не сохранилось: {msg}', { msg: error.message }), 'fail'); return; }
                         toast('Врач изменён.');
                         await reload();
                     });
@@ -786,7 +789,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                         if (String(sel.value) === String(s.serviceId)) { toast('Услуга не изменилась.', 'info'); return; }
                         const { data, error } = await supabase.rpc('change_unpaid_service',
                             { visit_service_id: s.id, new_service_id: Number(sel.value) });
-                        if (error) { toast('Не удалось заменить: ' + error.message, 'fail'); return; }
+                        if (error) { toast(trf('Не удалось заменить: {msg}', { msg: error.message }), 'fail'); return; }
                         toast(data && data.invoice ? 'Услуга заменена, счёт пересчитан.' : 'Услуга заменена.');
                         await reload();
                     });
@@ -801,13 +804,13 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 style: { color: 'var(--crit-600, #dc2626)' },
                 onclick: async () => {
                     const warn = s.invoiceItemId
-                        ? 'Убрать услугу «' + s.name + '»? Неоплаченный счёт будет уменьшен (или удалён, если это единственная позиция).'
-                        : 'Убрать услугу «' + s.name + '»?';
+                        ? trf('Убрать услугу «{name}»? Неоплаченный счёт будет уменьшен (или удалён, если это единственная позиция).', { name: s.name })
+                        : trf('Убрать услугу «{name}»?', { name: s.name });
                     if (!confirm(warn)) return;
                     // SVC_UNPAID_REMOVE_V1 — атомарно: строка + ремонт счёта; сервер
                     // откажет, если счёт уже оплачен/частично оплачен.
                     const { data, error } = await supabase.rpc('remove_unpaid_service', { visit_service_id: s.id });
-                    if (error) { toast('Не удалось убрать: ' + error.message, 'fail'); return; }
+                    if (error) { toast(trf('Не удалось убрать: {msg}', { msg: error.message }), 'fail'); return; }
                     toast(data && data.invoice_deleted ? 'Услуга и пустой счёт удалены.'
                         : s.invoiceItemId ? 'Услуга убрана, счёт пересчитан.' : 'Услуга убрана.');
                     await reload();
@@ -834,7 +837,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                         });
                         if (!res.ok) toast(res.reason || 'Не удалось напечатать чек.', 'fail');
                     } catch (e) {
-                        toast('Не удалось напечатать чек: ' + (e && e.message || e), 'fail');
+                        toast(trf('Не удалось напечатать чек: {msg}', { msg: (e && e.message) || e }), 'fail');
                     } finally { btn.disabled = false; }
                 },
             }, Icon('Print', { size: 13 })) : null;
@@ -884,10 +887,10 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         }
         const outstanding = Math.max(0, totalBilled - totalPaid);
         wrap.appendChild(h('div', { class: 'row', style: { gap: '18px', padding: '14px 20px 0', flexWrap: 'wrap', fontSize: '12.5px', color: 'var(--ink-600)' } },
-            h('span', null, 'Выставлено: ', h('b', null, fmtPrice(totalBilled) + ' сум')),
-            h('span', null, 'Оплачено: ', h('b', null, fmtPrice(totalPaid) + ' сум')),
+            h('span', null, 'Выставлено: ', h('b', null, fmtPrice(totalBilled), ' сум')),
+            h('span', null, 'Оплачено: ', h('b', null, fmtPrice(totalPaid), ' сум')),
             h('span', { style: { color: outstanding > 0 ? 'var(--warn-700)' : 'var(--ok-700)', fontWeight: 600 } },
-                'Долг: ', fmtPrice(outstanding) + ' сум'),
+                'Долг: ', fmtPrice(outstanding), ' сум'),
         ));
         const svcCells = new Map();   // invoice_id -> услуги cell
         const docCells = new Map();   // invoice_id -> врач cell
@@ -1042,7 +1045,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 if (error) throw new Error(error.message);
                 toast('Документ загружен.');
                 paintList();
-            } catch (e) { toast('Не удалось загрузить: ' + (e && e.message || e), 'fail'); }
+            } catch (e) { toast(trf('Не удалось загрузить: {msg}', { msg: (e && e.message) || e }), 'fail'); }
             fileInp.value = '';
         });
 
@@ -1135,7 +1138,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     : total;
                 return {
                     _lab: true, id: 'lab:' + key, doc_type: 'lab',
-                    title: 'Результаты анализов · ' + total + ' ' + pluralRuLocal(total, 'анализ', 'анализа', 'анализов'),
+                    title: trf('Результаты анализов · {n} анализ(ов)', { n: total }),
                     created_at: (g.day || '') + 'T12:00:00Z',
                     rows: g.rows,
                     ready, total, st: labDocStatus(g.orders, ready, total),
@@ -1148,7 +1151,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         // чем сказать, что он ещё делается.
         function labDocStatus(orders, ready, total) {
             if (!ready) return { label: 'Не готов', kind: 'warn' };
-            if (ready < total) return { label: `Готово ${ready} из ${total}`, kind: 'warn' };
+            if (ready < total) return { label: trf('Готово {ready} из {total}', { ready, total }), kind: 'warn' };
             const issued = orders.length && orders.every(o => o.status === 'completed');
             return issued ? { label: 'Выдан', kind: 'ok' } : { label: 'Готов', kind: 'info' };
         }

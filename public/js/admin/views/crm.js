@@ -5,6 +5,7 @@
 // и выгрузка Excel. Таблица crm_requests (mig 044).
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, fmtDateTime } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { openVisitWizard } from './visit-wizard.js?v=aug17e';   // CRM_V4 — конверсия сразу в реальный заказ услуги
 import { digitsOf, phoneLikePattern, filterPhoneMatches, uzLocalDigits, MIN_PHONE_DIGITS } from './crm-phone-match.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
@@ -177,7 +178,7 @@ async function load() {
     const { data, error } = await supabase.from('crm_requests')
         .select('*, patients(id, full_name, mrn), users(full_name), services(id, name, price)')
         .order('id', { ascending: false }).limit(800);
-    if (error) { toast('Не удалось загрузить заявки: ' + error.message, 'fail'); state.rows = []; return; }
+    if (error) { toast(trf('Не удалось загрузить заявки: {msg}', { msg: error.message }), 'fail'); state.rows = []; return; }
     state.rows = data || [];
 }
 
@@ -317,7 +318,7 @@ async function paint() {
         for (const r of byPeriod) { const k = r.source || 'other'; counts[k] = (counts[k] || 0) + 1; }
 
         const srcRow = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } }, lbl('Источник'),
-            chip(!state.source, 'Все · ' + byPeriod.length, () => { state.source = ''; paintFilters(); paintBody(); }));
+            chip(!state.source, trf('Все · {n}', { n: byPeriod.length }), () => { state.source = ''; paintFilters(); paintBody(); }));
         for (const [key, label] of SOURCES) {
             if (!counts[key]) continue;
             srcRow.appendChild(chip(state.source === key, label + ' · ' + counts[key],
@@ -408,7 +409,7 @@ async function paint() {
             function syncMore() {
                 const left = colRows.length - shown;
                 if (left <= 0) { more.remove(); return; }
-                more.textContent = 'Показать ещё ' + Math.min(KANBAN_PAGE, left);
+                more.textContent = trf('Показать ещё {n}', { n: Math.min(KANBAN_PAGE, left) });
             }
             function showMore() {
                 for (const r of colRows.slice(shown, shown + KANBAN_PAGE)) list.appendChild(kanbanCard(r));
@@ -525,7 +526,7 @@ async function paint() {
                 const key = target ? target.dataset.col : null;
                 if (!key || key === r.status) return;
                 if (key === CONVERT_STATUS) { convertPopup(r); return; }
-                if (await setStatus(r, key)) { toast('Статус: ' + (STATUS_RU[key] || [key])[0]); await paint(); }
+                if (await setStatus(r, key)) { toast(trf('Статус: {status}', { status: tr((STATUS_RU[key] || [key])[0]) })); await paint(); }
             };
             const onCancel = () => { cleanup(); mark(null); };
             document.addEventListener('pointermove', onMove);
@@ -544,7 +545,7 @@ async function paint() {
             ...STATUSES.filter(([k]) => k !== CONVERT_STATUS)
                 .map(([k, l]) => h('option', { value: k, selected: r.status === k }, l)));
         sel.addEventListener('change', async () => {
-            if (await setStatus(r, sel.value)) { toast('Статус: ' + (STATUS_RU[sel.value] || [sel.value])[0]); await paint(); }
+            if (await setStatus(r, sel.value)) { toast(trf('Статус: {status}', { status: tr((STATUS_RU[sel.value] || [sel.value])[0]) })); await paint(); }
         });
         return [sel];
     }
@@ -616,7 +617,7 @@ async function paint() {
         // регистрацию, заводя пациенту вторую карту.
         const known = linked || r.patients || null;
         if (r.patient_id || known) {
-            if (known) toast('Пациент уже в базе: ' + known.full_name + (known.mrn ? ' · ' + known.mrn : '') + ' — заявка привязана.', 'ok');
+            if (known) toast(trf('Пациент уже в базе: {who} — заявка привязана.', { who: known.full_name + (known.mrn ? ' · ' + known.mrn : '') }), 'ok');
             openServicesFor(r, known);
             return;
         }
@@ -668,6 +669,7 @@ async function paint() {
         const mailInp  = h('input', { type: 'email', placeholder: 'Необязательно' });
         const noteInp  = h('textarea', { rows: '2', placeholder: 'Заметки регистратора' });
         if (src.dob) dobInp.value = src.dob;
+        // i18n-exempt: префикс уходит в сохраняемую заметку пациента — хранимые данные, а не текст экрана
         if (src.note) noteInp.value = 'Из заявки CRM: ' + src.note;
 
         // CRM_CONVERT_V1 — кнопка «Оформить услугу» и означает конверсию, поэтому
@@ -700,7 +702,7 @@ async function paint() {
             if (noteInp.value.trim()) payload.notes = noteInp.value.trim();
             if (uid() != null) payload.created_by = uid();
             const { data: p, error } = await supabase.from('patients').insert(payload).select('id, full_name, mrn, phone').single();
-            if (error) { toast('Пациент не создан: ' + error.message, 'fail'); saveBtn.disabled = false; return; }
+            if (error) { toast(trf('Пациент не создан: {msg}', { msg: error.message }), 'fail'); saveBtn.disabled = false; return; }
             // Заявку обновляем, только если она УЖЕ сохранена: «Записать на
             // дату» может вызвать регистрацию из ещё не созданной заявки —
             // её patient_id запишет persist() при сохранении.
@@ -708,7 +710,7 @@ async function paint() {
                 const patch = { patient_id: p.id };
                 if (markCame) patch.status = CONVERT_STATUS;
                 const { error: upErr } = await supabase.from('crm_requests').update(patch).eq('id', requestRow.id);
-                if (upErr) toast('Пациент создан, но заявка не обновилась: ' + upErr.message, 'fail');
+                if (upErr) toast(trf('Пациент создан, но заявка не обновилась: {msg}', { msg: upErr.message }), 'fail');
             }
             // CRM_CONVERT_V2 — заявка в памяти теперь ЗНАЕТ своего пациента. Без
             // этого повторная конверсия (карточка ещё держит старый объект) снова
@@ -718,7 +720,7 @@ async function paint() {
                 requestRow.patients = { id: p.id, full_name: p.full_name, mrn: p.mrn };
                 if (markCame) requestRow.status = CONVERT_STATUS;
             }
-            toast('Пациент зарегистрирован: ' + p.full_name + (p.mrn ? ' · ' + p.mrn : ''), 'ok');
+            toast(trf('Пациент зарегистрирован: {who}', { who: p.full_name + (p.mrn ? ' · ' + p.mrn : '') }), 'ok');
             close();
             if (typeof onCreated === 'function') onCreated(p);
         });
@@ -758,7 +760,7 @@ async function paint() {
                     h('h2', { style: { margin: 0 } }, 'Регистрация пациента'),
                     h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' } },
                         requestRow && requestRow.created_at
-                            ? 'Из заявки: ' + (SOURCE_RU[r.source] || r.source) + ' · ' + fmtDateTime(r.created_at)
+                            ? trf('Из заявки: {src} · {when}', { src: tr(SOURCE_RU[r.source] || r.source), when: fmtDateTime(r.created_at) })
                             : 'Карта заводится сразу — дальше выберем врача и дату')),
                 h('button', { class: 'modal-close', onclick: close }, '×')),
             regBody,
@@ -1020,7 +1022,7 @@ async function paint() {
                 pickedList.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 10px', background: 'var(--teal-25, #f0faf9)', border: '1px solid var(--teal-200, #b2dfdb)', borderRadius: '10px' } },
                     h('div', { style: { flex: 1, minWidth: 0 } },
                         h('div', { style: { fontSize: '13px', fontWeight: 600, overflowWrap: 'anywhere' } }, p.name),
-                        h('div', { class: 'muted', style: { fontSize: '11.5px' } }, String(p.price || 0) + ' сум')),
+                        h('div', { class: 'muted', style: { fontSize: '11.5px' } }, String(p.price || 0), ' сум')),
                     dateInp,
                     h('button', { type: 'button', title: 'Убрать услугу',
                         style: { border: 0, background: 'transparent', cursor: 'pointer', color: 'var(--crit-500, #ef4444)', fontSize: '16px', lineHeight: 1, padding: '0 2px' },
@@ -1181,7 +1183,7 @@ async function paint() {
                     status: 'pending',
                 })));
             } catch (e) {
-                toast('Услуги заявки не сохранились: ' + ((e && e.message) || e), 'fail');
+                toast(trf('Услуги заявки не сохранились: {msg}', { msg: (e && e.message) || e }), 'fail');
             }
         }
 
@@ -1269,7 +1271,7 @@ async function paint() {
                     rows.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 11px', border: '1px solid var(--ink-100)', borderRadius: '10px' } },
                         h('div', { style: { flex: 1, minWidth: 0 } },
                             h('div', { style: { fontSize: '13px', fontWeight: 600, overflowWrap: 'anywhere' } }, p.name),
-                            h('div', { class: 'muted', style: { fontSize: '11.5px' } }, String(p.price || 0) + ' сум')),
+                            h('div', { class: 'muted', style: { fontSize: '11.5px' } }, String(p.price || 0), ' сум')),
                         docCell, inp));
                 }
             };
@@ -1287,17 +1289,17 @@ async function paint() {
             const saveAll = h('button', { class: 'btn btn-primary', type: 'button' }, Icon('Check', { size: 14 }), ' Сохранить и записать');
             saveAll.addEventListener('click', async () => {
                 const missing = picked.filter(p => !p.date);
-                if (missing.length) { toast('Без даты: ' + missing.map(p => p.name).join(', '), 'fail'); return; }
+                if (missing.length) { toast(trf('Без даты: {names}', { names: missing.map(p => p.name).join(', ') }), 'fail'); return; }
                 // CRM_LINE_DOCTOR_V1 — услуга, требующая врача, без врача не
                 // сохраняется: регистратура получила бы строку, которую мастер
                 // записи не покажет в смете.
                 const noDoc = picked.filter(p => needsDoctor(p) && !p.doctor_id);
-                if (noDoc.length) { toast('Не выбран врач: ' + noDoc.map(p => p.name).join(', '), 'fail'); return; }
+                if (noDoc.length) { toast(trf('Не выбран врач: {names}', { names: noDoc.map(p => p.name).join(', ') }), 'fail'); return; }
                 saveAll.disabled = true;
                 const row = await persist();
                 if (!row) { saveAll.disabled = false; return; }
                 shut(); close();
-                toast('Записано услуг: ' + picked.length + ' — регистратура увидит каждую в свой день.', 'ok');
+                toast(trf('Записано услуг: {n} — регистратура увидит каждую в свой день.', { n: picked.length }), 'ok');
                 await paint();
             });
 
@@ -1339,7 +1341,7 @@ async function paint() {
                     h('div', null,
                         h('h2', { style: { margin: 0, fontSize: '15px' } }, isEdit ? 'Заявка' : 'Новая заявка'),
                         h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '1px' } },
-                            isEdit ? ('Создана ' + fmtDateTime(r.created_at)) : 'Найдите пациента клиники или зафиксируйте нового'))),
+                            isEdit ? trf('Создана {when}', { when: fmtDateTime(r.created_at) }) : 'Найдите пациента клиники или зафиксируйте нового'))),
                 h('button', { class: 'modal-close', onclick: close }, '×')),
             h('div', { class: 'modal-body' },
                 field('ФИО', nameWrap, { required: true }),
@@ -1477,7 +1479,7 @@ async function paint() {
             XLSX.utils.book_append_sheet(wb, ws, 'CRM');
             XLSX.writeFile(wb, 'crm-requests.xlsx');
         } catch (e) {
-            toast('Не удалось сформировать Excel: ' + ((e && e.message) || e), 'fail');
+            toast(trf('Не удалось сформировать Excel: {msg}', { msg: (e && e.message) || e }), 'fail');
         }
     }
 }

@@ -19,7 +19,7 @@
 import { h, Icon, PageHead, clear, toast, fmtDate } from '../ui.js';
 import { supabase } from '../../supabase.js';
 import { currentClinicId } from '../tenant-tables.js';
-import { getLang } from '../i18n.js';
+import { getLang, tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1
 import { canProcurementFull, canProcurementRequisitions } from '../permissions.js';   // PROCUREMENT_REQ_GRANT_V1
 import { currentUser } from '../data.js';
 import { openSectionImporter, downloadSectionSample } from './section-import-export.js?v=aug17e';   // PROCUREMENT_IMPORT_V2
@@ -856,12 +856,12 @@ async function openApproveRequisitionModal(r) {
         })));
 
     openModal({
-        title: 'Согласование заявки ' + (r.req_number || ''),
-        subtitle: 'Отдел: ' + deptLbl + (reqName ? ' · Заявитель: ' + reqName : ''),
+        title: trf('Согласование заявки {num}', { num: r.req_number || '' }),
+        subtitle: trf('Отдел: {dept}', { dept: deptLbl }) + (reqName ? ' · ' + trf('Заявитель: {name}', { name: reqName }) : ''),
         width: '560px',
         body: h('div', { class: 'modal-body' },
             h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '10px' } },
-                'При согласовании товары списываются со склада в отдел «' + deptLbl + '» и печатается требование-накладная для подписи заявителем.'),
+                trf('При согласовании товары списываются со склада в отдел «{dept}» и печатается требование-накладная для подписи заявителем.', { dept: deptLbl })),
             itemsTable),
         footerButtons: (close) => [
             h('button', { class: 'btn btn-primary', type: 'button', onclick: async (e) => {
@@ -1526,7 +1526,7 @@ function prDashboard() {
                 XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Товар', 'Заказано, кол-во', 'Заказано, сумма'],
                     ...orderedRows.map(r => [r.name, r.v, r.sum])]), 'Заказанные товары');   // PROC_DASHBOARD_V2
                 XLSX.writeFile(wb, 'procurement-dashboard-' + new Date().toISOString().slice(0, 10) + '.xlsx');
-            } catch (e) { toast('Экспорт не удался: ' + (e.message || e), 'fail'); }
+            } catch (e) { toast(trf('Экспорт не удался: {msg}', { msg: e.message || e }), 'fail'); }
         }
 
         // ---- ordered-products popup (PROC_DASHBOARD_V2) ---------------
@@ -1537,7 +1537,7 @@ function prDashboard() {
                 XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Товар', 'Заказано, кол-во', 'Заказано, сумма'],
                     ...orderedRows.map(r => [r.name, r.v, r.sum])]), 'Заказанные товары');
                 XLSX.writeFile(wb, 'ordered-products-' + new Date().toISOString().slice(0, 10) + '.xlsx');
-            } catch (e) { toast('Экспорт не удался: ' + (e.message || e), 'fail'); }
+            } catch (e) { toast(trf('Экспорт не удался: {msg}', { msg: e.message || e }), 'fail'); }
         }
         function openOrderedListModal() {
             openModal({
@@ -1553,7 +1553,7 @@ function prDashboard() {
                             ? orderedRows.map(r => h('tr', null,
                                 h('td', { class: 'cell-strong' }, r.name),
                                 h('td', { class: 'num' }, fmtNum(r.v)),
-                                h('td', { class: 'num' }, fmtNum(r.sum) + ' сум')))
+                                h('td', { class: 'num' }, fmtNum(r.sum), ' сум')))
                             : [emptyRow(3, 'Заказов пока нет.')])))),
                 footerButtons: () => [
                     h('button', { class: 'btn btn-outline', type: 'button', onclick: exportOrdered }, Icon('Download', { size: 14 }), ' Выгрузить в Excel'),
@@ -1609,22 +1609,22 @@ function prDashboard() {
             h('span', { style: { flex: 1 } }),
             h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: exportDash }, Icon('Download', { size: 14 }), ' Excel')));
         wrap.appendChild(h('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap' } },
-            tile('Стоимость запасов', fmtNum(Math.round(stockValue)) + ' сум'),
-            tile('Заказано на сумму', fmtNum(Math.round(openPOSum)) + ' сум'),   // PROC_DASHBOARD_V2 — open (not yet received) orders
+            tile('Стоимость запасов', fmtNum(Math.round(stockValue)) + ' ' + tr('сум')),
+            tile('Заказано на сумму', fmtNum(Math.round(openPOSum)) + ' ' + tr('сум')),   // PROC_DASHBOARD_V2 — open (not yet received) orders
             tile('Позиции на складе', fmtNum(positions)),
             tile('Требуют дозаказа', fmtNum(reorderCnt), reorderCnt > 0 ? '#d03b3b' : undefined),
             tile('Открытые заказы', fmtNum(openPOs))));
         // PROC_DASHBOARD_V2 — «Приход и расход» line chart removed per owner.
         wrap.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', alignItems: 'start' } },
             card('Топ расхода за период', barRows(consumpRows.slice(0, 8), S1, (v) => fmtNum(v))),
-            card('Стоимость запасов — топ товаров', barRows(valueRows.slice(0, 8), S2, (v) => fmtNum(v) + ' сум'))));
+            card('Стоимость запасов — топ товаров', barRows(valueRows.slice(0, 8), S2, (v) => fmtNum(v) + ' ' + tr('сум')))));
         // PROC_DASHBOARD_V2 — most-ordered products + «Смотреть все» popup with Excel.
         wrap.appendChild(h('div', { style: { border: '1px solid var(--ink-100)', borderRadius: '14px', background: 'white', padding: '18px 20px', minWidth: 0 } },
             h('div', { class: 'row', style: { alignItems: 'center', gap: '10px', marginBottom: '12px' } },
                 h('div', { style: { fontSize: '13px', fontWeight: 600, color: INK } }, 'Заказанные товары — самые заказываемые'),
                 h('span', { style: { flex: 1 } }),
                 h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: openOrderedListModal }, 'Смотреть все')),
-            barRows(orderedRows.slice(0, 8).map(r => ({ ...r, sub: fmtNum(r.sum) + ' сум' })), S3, (v) => fmtNum(v))));
+            barRows(orderedRows.slice(0, 8).map(r => ({ ...r, sub: fmtNum(r.sum) + ' ' + tr('сум') })), S3, (v) => fmtNum(v))));
     }
 }
 
@@ -2669,8 +2669,8 @@ async function openStockLogModal(item, branch) {
         h('div', { class: 'muted', style: { padding: '20px', fontSize: '12.5px' } }, 'Загрузка журнала…'));
 
     openModal({
-        title: 'Журнал движений · ' + (item.name || '—'),
-        subtitle: (branch?.name || '—') + ' — кто, когда и сколько принял или списал.',
+        title: trf('Журнал движений · {name}', { name: item.name || '—' }),
+        subtitle: trf('{branch} — кто, когда и сколько принял или списал.', { branch: branch?.name || '—' }),
         width: '760px',
         body: bodyEl2,
         footerButtons: () => [],   // NO_DOUBLE_CLOSE_V1 — header red «Закрыть» is enough
@@ -2688,7 +2688,7 @@ async function openStockLogModal(item, branch) {
     clear(bodyEl2);
     if (error) {
         bodyEl2.appendChild(h('div', { class: 'muted', style: { padding: '20px', fontSize: '12.5px' } },
-            'Не удалось загрузить журнал: ' + error.message));
+            trf('Не удалось загрузить журнал: {msg}', { msg: error.message })));
         return;
     }
     const rows = data || [];
@@ -2736,7 +2736,7 @@ async function openStockLogModal(item, branch) {
                     m.kind === 'issue' && m.reference_type === 'staff'
                         ? h('div', null,
                             h('div', null, staffById[m.reference_id] || '—'),
-                            m.users?.full_name ? h('div', { class: 'muted', style: { fontSize: '10.5px' } }, 'выдал: ' + m.users.full_name) : null)
+                            m.users?.full_name ? h('div', { class: 'muted', style: { fontSize: '10.5px' } }, trf('выдал: {name}', { name: m.users.full_name })) : null)
                         : (m.users?.full_name || h('span', { class: 'muted' }, '—'))),
             );
         })),

@@ -31,6 +31,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, fmtDate, fmtDateTime, field, avColor, initials } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { printBarcodeLabel } from './lab-barcode.js';
 import { printableSheet } from './doc-settings.js?v=q3company1';   // same URL as patient-card/service-workspace (one instance)
 import { canDelete, canManageLabSettings } from '../permissions.js';   // LAB_PANELS_MODE_V1 — same right that opens Настройки → «Лаборатория и диагностика»
@@ -330,7 +331,7 @@ async function fetchAndPaint() {
         ]);
         if (token !== lastFetchToken) return;
         const vsData = (vsOpen || []).concat(vsDone || []);
-        if (vsErr) { toast('Не удалось загрузить очередь: ' + (vsErr.message || vsErr), 'fail'); paintEmpty(); return; }
+        if (vsErr) { toast(trf('Не удалось загрузить очередь: {msg}', { msg: vsErr.message || vsErr }), 'fail'); paintEmpty(); return; }
 
         state.panelByService = {};
         for (const p of (panels || [])) {
@@ -400,7 +401,7 @@ async function fetchAndPaint() {
         paintRows();
     } catch (e) {
         if (token !== lastFetchToken) return;
-        toast('Не удалось загрузить очередь: ' + (e && e.message || e), 'fail');
+        toast(trf('Не удалось загрузить очередь: {msg}', { msg: (e && e.message) || e }), 'fail');
         paintEmpty();
     }
 }
@@ -449,7 +450,7 @@ function resultsCell(r) {
     return h('span', { style: { fontSize: '12px' } },
         results.length === 1
             ? h('span', { class: 'num' }, (results[0].value != null ? String(results[0].value) : '—') + (results[0].unit ? ' ' + results[0].unit : ''))
-            : h('span', { class: 'muted' }, results.length + ' показателей'),
+            : h('span', { class: 'muted' }, trf('{n} показателей', { n: results.length })),
         ' ',
         worstFlagTag(results));
 }
@@ -469,7 +470,7 @@ function lqItem(r, patient) {
             h('div', { class: 'lq-name' }, svc.name || '—'),
             svc.specimen ? h('div', { class: 'lq-type' }, svc.specimen) : null,
         ),
-        r.sample_collected_at ? h('span', { class: 'lq-collected' }, 'взято ' + fmtDateTime(r.sample_collected_at)) : null,
+        r.sample_collected_at ? h('span', { class: 'lq-collected' }, trf('взято {when}', { when: fmtDateTime(r.sample_collected_at) })) : null,
         results.length ? resultsCell(r) : null,
         Tag(st.label, { kind: st.kind, dot: true }),
         h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } }, ...actionButtons(r, patient, results)),
@@ -506,8 +507,8 @@ function labGroupCard(g) {
                     g.patientMrn ? h('span', { class: 'chip' }, 'ID · ' + g.patientMrn) : null,
                     sexTxt ? h('span', { class: 'chip' }, sexTxt) : null,
                     ageTxt ? h('span', { class: 'chip' }, ageTxt) : null,
-                    h('span', { class: 'chip' }, total + ' ' + pluralRu(total, 'анализ', 'анализа', 'анализов')),
-                    critCount ? h('span', { class: 'chip', style: { background: 'var(--crit-50)', borderColor: '#fecaca', color: 'var(--crit-700)' } }, '⚠ ' + critCount + ' критич.') : null,
+                    h('span', { class: 'chip' }, trf('{n} анализ(ов)', { n: total })),
+                    critCount ? h('span', { class: 'chip', style: { background: 'var(--crit-50)', borderColor: '#fecaca', color: 'var(--crit-700)' } }, trf('⚠ {n} критич.', { n: critCount })) : null,
                 ),
             ),
             h('div', { class: 'lw-acc' }, h('div', { class: 'k' }, 'Образец №'), h('div', { class: 'v' }, g.accession || '—')),
@@ -515,7 +516,7 @@ function labGroupCard(g) {
         h('div', { class: 'lq-actions' },
             h('div', { class: 'lq-prog' },
                 h('div', { class: 'lq-bar' }, h('i', { style: { width: pct + '%', background: allDone ? 'var(--ok-500)' : 'var(--primary-500)' } })),
-                h('span', { class: 'lq-prog-txt' }, done + ' / ' + total + ' готово' + (awaiting ? ' · ' + awaiting + ' к забору' : '')),
+                h('span', { class: 'lq-prog-txt' }, trf('{done} / {total} готово', { done, total }) + (awaiting ? ' · ' + trf('{n} к забору', { n: awaiting }) : '')),
             ),
             h('span', { style: { flex: 1 } }),
             anyActive ? h('button', {
@@ -626,11 +627,11 @@ async function verifyGroup(g) {
     for (const p of panels) allResults.push(...(state.resultsByVs[p.id] || []));
     const critical = allResults.filter(x => x.flag === 'critical');
 
-    let prompt = `Подтвердить и выдать ${panels.length} ${pluralRu(panels.length, 'анализ', 'анализа', 'анализов')} для ${g.patientName}?\n\n`;
+    let prompt = trf('Подтвердить и выдать {n} анализ(ов) для {name}?', { n: panels.length, name: g.patientName }) + '\n\n';
     if (critical.length) {
-        prompt += `⚠ КРИТИЧЕСКИХ значений: ${critical.length}\n`;
+        prompt += trf('⚠ КРИТИЧЕСКИХ значений: {n}', { n: critical.length }) + '\n';
         for (const x of critical.slice(0, 8)) prompt += `   • ${x.parameter}: ${x.value}${x.unit ? ' ' + x.unit : ''}\n`;
-        prompt += `\nСообщите врачу ПЕРЕД подтверждением.\n\n`;
+        prompt += '\n' + tr('Сообщите врачу ПЕРЕД подтверждением.') + '\n\n';
     }
     prompt += 'Это финально — результаты отправляются врачу. Продолжить?';
     if (!confirm(prompt)) return;
@@ -651,11 +652,11 @@ async function verifyGroup(g) {
             if (stErr) throw stErr;
         }
         toast(critical.length
-            ? `Подтверждено — ${critical.length} критич. значений отмечено для врача.`
+            ? trf('Подтверждено — {n} критич. значений отмечено для врача.', { n: critical.length })
             : 'Подтверждено и выдано.', 'ok');
         await fetchAndPaint();
     } catch (e) {
-        toast('Не удалось подтвердить: ' + (e && e.message || e), 'fail');
+        toast(trf('Не удалось подтвердить: {msg}', { msg: (e && e.message) || e }), 'fail');
     }
 }
 
@@ -690,7 +691,7 @@ function collectDialog(r, patient) {
     const svc = r.services || {};
     const printCb = h('input', { type: 'checkbox', checked: true });
     const okBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Проба взята');
-    const m = labModal('Забор пробы · ' + accession(r),
+    const m = labModal(trf('Забор пробы · {acc}', { acc: accession(r) }),
         (patient.full_name || '—') + ' · ' + (svc.name || ''),
         [
             h('div', { class: 'row', style: { gap: '10px', marginBottom: '10px', alignItems: 'center' } },
@@ -704,7 +705,7 @@ function collectDialog(r, patient) {
     okBtn.addEventListener('click', async () => {
         okBtn.disabled = true;
         const stamp = nowIso();
-        const ok = await advance(r, { status: 'collected', sample_collected_at: stamp }, 'Проба взята — ' + accession(r));
+        const ok = await advance(r, { status: 'collected', sample_collected_at: stamp }, trf('Проба взята — {acc}', { acc: accession(r) }));
         if (!ok) { okBtn.disabled = false; return; }
         m.close();
         if (printCb.checked) {
@@ -1032,7 +1033,7 @@ async function openResultsModal(r, patient) {
             m.close();
             await fetchAndPaint();
         } catch (e) {
-            toast('Не удалось сохранить: ' + (e && e.message || e), 'fail');
+            toast(trf('Не удалось сохранить: {msg}', { msg: (e && e.message) || e }), 'fail');
             saveBtn.disabled = false;
             saveBtn.textContent = 'Сохранить результаты';
         }
@@ -1304,7 +1305,7 @@ async function openPatientWorksheet(g, patient) {
             close();
             await fetchAndPaint();
         } catch (e) {
-            toast('Не удалось сохранить: ' + (e && e.message || e), 'fail');
+            toast(trf('Не удалось сохранить: {msg}', { msg: (e && e.message) || e }), 'fail');
         }
     }
 
@@ -1348,7 +1349,7 @@ function verifyDialog(r, patient, results) {
         h('span', { style: { flex: '0 0 86px' } }, flagTag(x.flag)),
     ));
 
-    const m = labModal('Проверка · ' + accession(r),
+    const m = labModal(trf('Проверка · {acc}', { acc: accession(r) }),
         (patient.full_name || '—') + (patient.mrn ? ' · ' + patient.mrn : ''),
         [
             ...rows,
@@ -1373,12 +1374,12 @@ function verifyDialog(r, patient, results) {
             const { error: stErr } = await supabase.from('visit_services')
                 .update({ status: 'completed', verified_by: u.id || null, verified_at: stamp }).eq('id', r.id);
             if (stErr) throw stErr;
-            toast('Результаты выданы — ' + accession(r), 'ok');
+            toast(trf('Результаты выданы — {acc}', { acc: accession(r) }), 'ok');
             m.close();
             if (printCb.checked) printReport(r, patient, results, { verifiedAt: stamp, verifiedBy: u.full_name || u.username || '' });
             await fetchAndPaint();
         } catch (e) {
-            toast('Не удалось подтвердить: ' + (e && e.message || e), 'fail');
+            toast(trf('Не удалось подтвердить: {msg}', { msg: (e && e.message) || e }), 'fail');
             okBtn.disabled = false;
             okBtn.textContent = 'Подтвердить и выдать';
         }

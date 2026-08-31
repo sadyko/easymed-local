@@ -26,6 +26,7 @@
 // 1002 laboratory studies (migrations 050/051). Importing COPIES the template in;
 // reference ranges are never shipped and are always the clinic's own.
 import { h, Icon, toast, clear } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { supabase } from '../../supabase.js';
 import { currentClinicId } from '../tenant-tables.js';
 import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';   // LAB_SERVICE_ROUTING_V1 — one shared definition of 'lab service'
@@ -111,9 +112,9 @@ export async function mountLabPanels(container) {
             supabase.from('departments').select('id, name, kind').limit(200),
             supabase.from('service_types').select('id, name').limit(200),
         ]);
-        if (panelsRes.error)   state.loadError = 'панели: ' + (panelsRes.error.message || panelsRes.error);
-        if (servicesRes.error) state.loadError = (state.loadError ? state.loadError + ' · ' : '') + 'услуги: ' + (servicesRes.error.message || servicesRes.error);
-        if (state.loadError) toast('Не удалось загрузить: ' + state.loadError, 'fail');
+        if (panelsRes.error)   state.loadError = trf('панели: {msg}', { msg: panelsRes.error.message || panelsRes.error });
+        if (servicesRes.error) state.loadError = (state.loadError ? state.loadError + ' · ' : '') + trf('услуги: {msg}', { msg: servicesRes.error.message || servicesRes.error });
+        if (state.loadError) toast(trf('Не удалось загрузить: {msg}', { msg: state.loadError }), 'fail');
         state.panels = panelsRes.data || [];
         state.services = servicesRes.data || [];
         // Lookups for the lab-service rule. A failure here is not fatal — it only
@@ -230,12 +231,12 @@ export async function mountLabPanels(container) {
             const { data, error } = await req.order('name').limit(300);
             clear(listBox);
             if (error) {
-                listBox.appendChild(h('div', { style: { padding: '14px', color: 'var(--crit-700)' } }, 'Каталог недоступен: ' + (error.message || error)));
+                listBox.appendChild(h('div', { style: { padding: '14px', color: 'var(--crit-700)' } }, trf('Каталог недоступен: {msg}', { msg: error.message || error })));
                 countEl.textContent = '';
                 return;
             }
             const rows = data || [];
-            countEl.textContent = rows.length ? `найдено: ${rows.length}${rows.length === 300 ? '+' : ''}` : '';
+            countEl.textContent = rows.length ? trf('найдено: {n}', { n: String(rows.length) + (rows.length === 300 ? '+' : '') }) : '';
             if (!rows.length) {
                 listBox.appendChild(h('div', { class: 'muted', style: { padding: '18px', textAlign: 'center', fontSize: '12.5px' } }, 'Ничего не найдено — измените запрос или раздел.'));
                 return;
@@ -303,15 +304,16 @@ export async function mountLabPanels(container) {
             if (typeof close === 'function') close();
             paintList();
             paintEditor();
-            toast(`«${t.name.slice(0, 40)}${t.name.length > 40 ? '…' : ''}» — ${rows.length} показ. Привяжите услугу и сохраните.`);
+            toast(trf('«{name}» — {n} показ. Привяжите услугу и сохраните.', { name: t.name.slice(0, 40) + (t.name.length > 40 ? '…' : ''), n: rows.length }));
         } catch (e) {
-            toast('Не удалось загрузить шаблон: ' + (e.message || e), 'fail');
+            toast(trf('Не удалось загрузить шаблон: {msg}', { msg: e.message || e }), 'fail');
         }
     }
 
     function duplicatePanel() {
         const p = state.selected;
         if (!p || !p.id) { toast('Сначала выберите панель для копирования', 'warn'); return; }
+        // i18n-exempt: «(копия)» уходит в ИМЯ новой панели — хранимые данные, как записи сервера, а не текст экрана
         state.selected = { ...p, id: null, core_panel_id: null, service_id: null, name: p.name + ' (копия)' };
         state.rows = state.rows.map(r => ({ ...r, id: null, panel_id: null }));
         paintList();
@@ -380,7 +382,7 @@ export async function mountLabPanels(container) {
                 value: s.id,
                 selected: cur === s.id,
                 disabled: !!takenBy[s.id],
-            }, s.name + (takenBy[s.id] ? '  — уже занята: ' + takenBy[s.id] : ''));
+            }, s.name + (takenBy[s.id] ? '  — ' + trf('уже занята: {name}', { name: takenBy[s.id] }) : ''));
 
             for (const s of pinned) svcSel.appendChild(opt(s));
             if (lab.length) {
@@ -431,9 +433,9 @@ export async function mountLabPanels(container) {
                 : (linkedSvc && !isLabSvc(linkedSvc))
                     ? h('div', { style: { fontSize: '12px', margin: '-6px 0 12px', color: 'var(--warn-700, #92400e)' } },
                         Icon('Warning', { size: 12 }),
-                        ' Услуга «' + linkedSvc.name + '» не помечена как лабораторная. Поставьте ей тип «Лаборатория» в Настройки → Услуги, иначе заказ не попадёт в очередь лаборатории.')
+                        ' ', trf('Услуга «{name}» не помечена как лабораторная. Поставьте ей тип «Лаборатория» в Настройки → Услуги, иначе заказ не попадёт в очередь лаборатории.', { name: linkedSvc.name }))
                     : h('div', { class: 'muted', style: { fontSize: '12px', margin: '-6px 0 12px' } },
-                        Icon('Check', { size: 12 }), ' Привязана' + (linkedSvc ? ' к услуге «' + linkedSvc.name + '»' : '') + ' — заказы попадут в «Лабораторию».'));
+                        Icon('Check', { size: 12 }), ' ', linkedSvc ? trf('Привязана к услуге «{name}» — заказы попадут в «Лабораторию».', { name: linkedSvc.name }) : 'Привязана — заказы попадут в «Лабораторию».'));
         body.appendChild(h('div', { class: 'row', style: { gap: '10px', margin: '14px 0 18px' } },
             h('label', { class: 'lp-check' }, narrChk, ' Текстовое заключение'),
             h('label', { class: 'lp-check' + (p.active !== false ? ' on' : '') }, activeChk, ' Активна')));
@@ -505,7 +507,7 @@ export async function mountLabPanels(container) {
 
         const syncAddBtn = () => {
             addBtn.disabled = picked.size === 0;
-            addBtn.textContent = picked.size ? ` Добавить (${picked.size})` : ' Добавить';
+            addBtn.textContent = picked.size ? ' ' + trf('Добавить ({n})', { n: picked.size }) : ' ' + tr('Добавить');
             addBtn.prepend(Icon('Check', { size: 14 }));
         };
 
@@ -529,12 +531,12 @@ export async function mountLabPanels(container) {
             const { data, error } = await req.order('name').limit(400);
             clear(listBox);
             if (error) {
-                listBox.appendChild(h('div', { style: { padding: '14px', color: 'var(--crit-700)' } }, 'Справочник недоступен: ' + (error.message || error)));
+                listBox.appendChild(h('div', { style: { padding: '14px', color: 'var(--crit-700)' } }, trf('Справочник недоступен: {msg}', { msg: error.message || error })));
                 countEl.textContent = '';
                 return;
             }
             const rows = data || [];
-            countEl.textContent = rows.length ? `найдено: ${rows.length}${rows.length === 400 ? '+' : ''}` : '';
+            countEl.textContent = rows.length ? trf('найдено: {n}', { n: String(rows.length) + (rows.length === 400 ? '+' : '') }) : '';
             if (!rows.length) {
                 listBox.appendChild(h('div', { class: 'muted', style: { padding: '18px', textAlign: 'center', fontSize: '12.5px' } }, 'Ничего не найдено — измените запрос или раздел.'));
                 return;
