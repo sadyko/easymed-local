@@ -14,7 +14,7 @@
 // the raw key — so partially translated views never blow up; they just show
 // English alongside whatever has been translated.
 
-import { STRINGS } from './i18n-strings.js?v=pathway1';
+import { STRINGS } from './i18n-strings.js?v=svceditor1';
 
 const I18N = {
     en: {

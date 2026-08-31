@@ -3,6 +3,8 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // SERVICE_EDITOR_V1 — редактор услуги (service-editor-logic.js + views/service-editor.js) — added 2026-08-31
+  "Рентген": {"en":"X-ray","ru":"Рентген","uz":"Rentgen"},
   // BRANCH_SYNC_V1 — «Настройки → Филиалы»: связь между отдельными установками — added 2026-08-29
   "Синхронизация филиалов": {"en":"Branch synchronisation","ru":"Синхронизация филиалов","uz":"Filiallar sinxronizatsiyasi"},
   "Роль этой установки": {"en":"Role of this installation","ru":"Роль этой установки","uz":"Ushbu o'rnatma roli"},
