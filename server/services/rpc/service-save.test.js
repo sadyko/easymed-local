@@ -320,3 +320,31 @@ test('default share 0: the membership entry carries NO pct, and the REAL pay rep
   assert.equal(r.rows[0][r.columns.indexOf('Доля врача (гонорар)')], 37600,
     'card default 40% governs when the service default was left at 0');
 });
+
+test('the three dynamic refusals carry machine codes + params — the dialog translates by code', () => {
+  // The assembled Russian sentences stay for logs and old clients, but a
+  // sentence built around a value can never match a dictionary key (tr()
+  // matches whole strings) — so the translatable identity is {code, params},
+  // the same architecture the branch screen already uses.
+  const db = freshDb();
+
+  try { serviceSave(db, baseArgs({ category_ref: { id: 9999 } }), admin); assert.fail('should have thrown'); }
+  catch (e) {
+    assert.equal(e.code, 'ref_row_missing');
+    assert.deepEqual(e.params, { table: 'service_categories', id: 9999 });
+    assert.match(e.message, /service_categories/, 'the human sentence survives for logs');
+  }
+
+  try { serviceSave(db, baseArgs({ requires_doctor: true, performers: [12345] }), admin); assert.fail('should have thrown'); }
+  catch (e) {
+    assert.equal(e.code, 'employee_missing');
+    assert.deepEqual(e.params, { id: 12345 });
+  }
+
+  const doc = addUser(db, { name: 'Врач Битый Код', rates: '{broken' });
+  try { serviceSave(db, baseArgs({ requires_doctor: true, performers: [doc] }), admin); assert.fail('should have thrown'); }
+  catch (e) {
+    assert.equal(e.code, 'rates_corrupt');
+    assert.deepEqual(e.params, { name: 'Врач Битый Код' });
+  }
+});

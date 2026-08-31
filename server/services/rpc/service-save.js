@@ -26,9 +26,17 @@ import {
 } from '../../../public/js/admin/service-editor-logic.js';
 
 export class RpcError extends Error {
-  constructor(msg, status = 400) {
+  // extra.code / extra.params — машинная личность ошибки для ошибок с
+  // ДИНАМИКОЙ (имя, id, таблица): склеенную фразу словарь не переведёт
+  // никогда (tr() ищет строку целиком), поэтому экран переводит ШАБЛОН по
+  // коду и подставляет params после перевода (rpcErrorTemplate в
+  // service-editor-logic.js). Русская фраза остаётся в message — для логов
+  // и старых клиентов. routes/rpc.js пропускает оба поля в JSON.
+  constructor(msg, status = 400, extra = null) {
     super(msg);
     this.status = status;
+    if (extra && extra.code) this.code = extra.code;
+    if (extra && extra.params) this.params = extra.params;
   }
 }
 
@@ -69,7 +77,10 @@ function resolveRefTx(db, table, ref) {
   if (ref == null) return { id: null, created: false };
   if (ref.id != null) {
     const row = db.prepare(`SELECT id FROM "${table}" WHERE id = ?`).get(Number(ref.id));
-    if (!row) throw new RpcError(`Справочник ${table}: строка ${ref.id} не найдена.`, 400);
+    if (!row) {
+      throw new RpcError(`Справочник ${table}: строка ${ref.id} не найдена.`, 400,
+        { code: 'ref_row_missing', params: { table, id: Number(ref.id) } });
+    }
     return { id: row.id, created: false };
   }
   const name = String(ref.name ?? '').trim();
@@ -146,7 +157,7 @@ export function serviceSave(db, args, user) {
   // («такого сотрудника нет»), а не откатом на полдороге.
   const performerRows = performers.map((pid) => {
     const row = db.prepare('SELECT id, full_name, service_rates FROM users WHERE id = ?').get(pid);
-    if (!row) throw new RpcError(`Сотрудник ${pid} не найден.`, 400);
+    if (!row) throw new RpcError(`Сотрудник ${pid} не найден.`, 400, { code: 'employee_missing', params: { id: pid } });
     return row;
   });
   for (const row of performerRows) {
@@ -156,6 +167,7 @@ export function serviceSave(db, args, user) {
       throw new RpcError(
         `У сотрудника «${row.full_name}» повреждён список ставок — откройте его карточку и сохраните её заново, затем повторите.`,
         400,
+        { code: 'rates_corrupt', params: { name: row.full_name } },
       );
     }
   }

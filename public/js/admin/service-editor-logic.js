@@ -180,3 +180,29 @@ export function mergeServiceRates(raw, serviceId, isPerformer, defaultPct, branc
   if (!mine) return { changed: false, rates };
   return { changed: true, rates: rates.filter((e) => !(e && Number(e.service_id) === sid)) };
 }
+
+// ---------------------------------------------------------------------------
+// Ошибки rpc service_save с динамикой (имя, id, таблица).
+// ---------------------------------------------------------------------------
+
+// Склеенная фраза («Сотрудник 7 не найден.») непереводима в принципе: tr()
+// ищет в словаре строку ЦЕЛИКОМ. Поэтому сервер шлёт {code, params}, а экран
+// переводит ШАБЛОН и подставляет значения ПОСЛЕ перевода (trf) — тот же приём,
+// что у branch-sync-logic.js и updates-logic.js. Шаблоны ниже — ключи словаря
+// i18n-strings.js, дырки обязаны совпадать во всех трёх языках.
+const RPC_ERROR_TEMPLATES = {
+  ref_row_missing: 'Справочник {table}: строка {id} не найдена.',
+  employee_missing: 'Сотрудник {id} не найден.',
+  rates_corrupt: 'У сотрудника «{name}» повреждён список ставок — откройте его карточку и сохраните её заново, затем повторите.',
+};
+
+/**
+ * Ошибка RPC -> {template, params} для trf, либо null — и тогда экран
+ * показывает message как раньше (старый сервер, чужой код — деградация без
+ * пустого тоста). params могут не доехать: trf оставит дырку видимой.
+ */
+export function rpcErrorTemplate(error) {
+  const template = error && error.code ? RPC_ERROR_TEMPLATES[error.code] : null;
+  if (!template) return null;
+  return { template, params: (error && error.params) || {} };
+}

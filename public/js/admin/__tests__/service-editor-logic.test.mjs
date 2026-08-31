@@ -20,7 +20,7 @@ import assert from 'node:assert/strict';
 import {
   SERVICE_SECTIONS, labBlockVisible, normName, resolveCombobox,
   splitPerformers, currentPerformerIds, performerGate,
-  ratesArray, mergeServiceRates,
+  ratesArray, mergeServiceRates, rpcErrorTemplate,
 } from '../service-editor-logic.js';
 
 // ---------------------------------------------------------------------------
@@ -210,4 +210,33 @@ test('ratesArray терпит все реальные формы колонки:
   assert.deepEqual(ratesArray('').rates, []);
   assert.deepEqual(ratesArray(null).rates, []);
   assert.equal(ratesArray('xx').corrupt, true);
+});
+
+// ---------------------------------------------------------------------------
+// Ошибки rpc service_save с динамикой: код + параметры -> переводимый шаблон.
+// ---------------------------------------------------------------------------
+
+test('код сервера превращается в шаблон с дырками; параметры подставляются ПОСЛЕ перевода', () => {
+  // Склейка «Сотрудник 7 не найден.» непереводима в принципе: tr() ищет в
+  // словаре строку целиком. Поэтому сервер шлёт {code, params}, а экран
+  // переводит ШАБЛОН и лишь потом заполняет дырки (trf) — тот же приём, что у
+  // branch-sync-logic.js и updates-logic.js.
+  const corrupt = rpcErrorTemplate({ code: 'rates_corrupt', params: { name: 'Иванов' } });
+  assert.equal(corrupt.template,
+    'У сотрудника «{name}» повреждён список ставок — откройте его карточку и сохраните её заново, затем повторите.');
+  assert.deepEqual(corrupt.params, { name: 'Иванов' });
+
+  assert.equal(rpcErrorTemplate({ code: 'ref_row_missing', params: { table: 'service_types', id: 5 } }).template,
+    'Справочник {table}: строка {id} не найдена.');
+  assert.equal(rpcErrorTemplate({ code: 'employee_missing', params: { id: 7 } }).template,
+    'Сотрудник {id} не найден.');
+});
+
+test('неизвестный код или его отсутствие — null: экран падает на message, как раньше', () => {
+  assert.equal(rpcErrorTemplate({ code: 'bad_request', message: 'x' }), null);
+  assert.equal(rpcErrorTemplate({ message: 'x' }), null);
+  assert.equal(rpcErrorTemplate(null), null);
+  // Параметры могут не доехать (старый сервер) — шаблон всё равно возвращается,
+  // trf оставит дырку видимой, это честнее пустоты.
+  assert.deepEqual(rpcErrorTemplate({ code: 'employee_missing' }).params, {});
 });

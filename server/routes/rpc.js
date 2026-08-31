@@ -48,7 +48,15 @@ export function rpcRoutes(db) {
         recordEvent(db, 'server_error', '/api/rpc/' + req.params.name);
         return res.status(500).json({ error: { code: 'internal', message: 'RPC failed.' } });
       }
-      return res.status(status).json({ error: { code: status === 403 ? 'forbidden' : 'bad_request', message: e.message } });
+      // Код обработчика (например, ref_row_missing из service_save) важнее
+      // статусного: по нему диалог переводит ошибку с динамикой через словарь
+      // (шаблон + params, подстановка после перевода). До этого маршрут
+      // перезаписывал code статусом, и любой назначенный код умирал здесь.
+      return res.status(status).json({ error: {
+        code: e.code || (status === 403 ? 'forbidden' : 'bad_request'),
+        message: e.message,
+        ...(e.params ? { params: e.params } : {}),
+      } });
     }
   });
   return r;

@@ -17,10 +17,10 @@
 // подсказки — вежливость, а не защита.
 import { supabase } from '../../supabase.js';
 import { h, Icon, toast, field, checkField } from '../ui.js';
-import { tr } from '../i18n.js';
+import { trf } from '../i18n.js';
 import {
     SERVICE_SECTIONS, labBlockVisible, resolveCombobox, splitPerformers,
-    currentPerformerIds, performerGate,
+    currentPerformerIds, performerGate, rpcErrorTemplate,
 } from '../service-editor-logic.js';
 
 // Тот же перечень пробирок, что вела старая generic-форма (sections.js,
@@ -252,7 +252,13 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
         e.target.disabled = true;
         try {
             const { error } = await supabase.rpc('service_save', args);
-            if (error) throw new Error(error.message || String(error));
+            if (error) {
+                // Ошибка с динамикой (имя/id в тексте) переводится по коду:
+                // шаблон из словаря, значения — после перевода. Без кода —
+                // message как есть (toast сам прогонит его через tr()).
+                const known = rpcErrorTemplate(error);
+                throw new Error(known ? trf(known.template, known.params) : (error.message || String(error)));
+            }
             toast('Услуга сохранена.');
             close();
             if (onSaved) await onSaved();

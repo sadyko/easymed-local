@@ -28,6 +28,11 @@ export const STRINGS = {
   "НДС должен быть неотрицательным числом.": {"en":"VAT must be a non-negative number.","ru":"НДС должен быть неотрицательным числом.","uz":"QQS manfiy bo'lmagan son bo'lishi kerak."},
   "Список исполнителей повреждён.": {"en":"The performer list is malformed.","ru":"Список исполнителей повреждён.","uz":"Bajaruvchilar ro'yxati buzilgan."},
   "Некорректный id услуги.": {"en":"Invalid service id.","ru":"Некорректный id услуги.","uz":"Xizmat id noto'g'ri."},
+  // Ошибки service_save с динамикой: сервер шлёт {code, params}, экран
+  // переводит шаблон и заполняет дырки после перевода (rpcErrorTemplate + trf).
+  "Справочник {table}: строка {id} не найдена.": {"en":"Reference list {table}: row {id} not found.","ru":"Справочник {table}: строка {id} не найдена.","uz":"{table} ma'lumotnomasida {id} qatori topilmadi."},
+  "Сотрудник {id} не найден.": {"en":"Employee {id} not found.","ru":"Сотрудник {id} не найден.","uz":"Xodim {id} topilmadi."},
+  "У сотрудника «{name}» повреждён список ставок — откройте его карточку и сохраните её заново, затем повторите.": {"en":"Employee «{name}» has a corrupt rate list — open their card, save it again, then retry.","ru":"У сотрудника «{name}» повреждён список ставок — откройте его карточку и сохраните её заново, затем повторите.","uz":"«{name}» xodimning stavkalar ro'yxati buzilgan — kartasini oching, qayta saqlang, so'ng yana urinib ko'ring."},
   // BRANCH_SYNC_V1 — «Настройки → Филиалы»: связь между отдельными установками — added 2026-08-29
   "Синхронизация филиалов": {"en":"Branch synchronisation","ru":"Синхронизация филиалов","uz":"Filiallar sinxronizatsiyasi"},
   "Роль этой установки": {"en":"Role of this installation","ru":"Роль этой установки","uz":"Ushbu o'rnatma roli"},
