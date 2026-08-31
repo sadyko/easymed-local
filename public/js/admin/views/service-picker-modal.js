@@ -34,7 +34,7 @@ import { gw } from '../gateway.js';
 import { clinicFlags } from '../clinic-flags.js';   // CUSTOM_CLINIC_V1
 import { loadClinicHours, clinicRangeForDay } from '../clinic-hours.js?v=ch1';   // WORKING_HOURS_CLINIC_BOUND_V1
 import { printableSheet } from './doc-settings.js?v=q3company1';   // insurance/B2B: print statistics act
-import { tr } from '../i18n.js';   // WIZ_TEMPLATES_V1 — toasts/prompts in all 3 languages
+import { tr, trf } from '../i18n.js';   // WIZ_TEMPLATES_V1 + I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { resolveTypeId } from './service-group.js?v=aug17e';   // SERVICE_GROUPS_V1 — group filtering must survive a NULL type_id
 
@@ -242,7 +242,7 @@ export function openServicePickerModal({
             if (showSchedule) renderSchedule();
             renderAdded();
             updateSummary();
-            toast(`В списке: ${payload.service.name}`);
+            toast(trf('В списке: {name}', { name: payload.service.name }));
         },
     }, Icon('Plus', { size: 14 }), ' В список');
 
@@ -454,6 +454,7 @@ export function openServicePickerModal({
             // services of the same request may be booked for another day.
             state.crmLineIds = added.map(a => a.line.id);
             state.crmRequestIds = [...new Set(added.map(a => a.line.request_id))];
+            // i18n-exempt: заметка сохраняется В БАЗУ — хранимая запись, а не текст экрана
             state.crmNote = 'Из заявки колл-центра на ' + dayIso.split('-').reverse().join('.')
                 + ': ' + added.map(a => a.svc.name).join(', ');
             paintCatalog();
@@ -542,9 +543,9 @@ export function openServicePickerModal({
             },
         },
             h('span', { style: { color: 'var(--ok-700)', fontWeight: 700, fontSize: '13px' } },
-                `Выбрано услуг: ${n}`),
+                trf('Выбрано услуг: {n}', { n })),
             h('span', { class: 'num', style: { fontWeight: 700, color: 'var(--ok-700)', fontSize: '13px' } },
-                total.toLocaleString('ru-RU') + ' сум'),
+                total.toLocaleString('ru-RU'), ' сум'),
         ));
 
         const GRID = '1.4fr 1.2fr 110px 28px';
@@ -748,7 +749,7 @@ export function openServicePickerModal({
             // via "Add". Done is enabled so they can commit and close; Add
             // stays disabled (nothing to add).
             const _tot = state.added.reduce((s, a) => s + Number(a.service?.price || 0), 0);
-            summary.textContent = `В списке: ${state.added.length} усл. на ${formatMoney(_tot)} — нажмите «${confirmLabel}»`;
+            summary.textContent = trf('В списке: {n} усл. на {sum} — нажмите «{label}»', { n: state.added.length, sum: formatMoney(_tot), label: tr(confirmLabel) });
             confirmBtn.removeAttribute('disabled');
             addAnotherBtn.setAttribute('disabled', '');
         } else {
@@ -1162,13 +1163,11 @@ export function openServicePickerModal({
 
         const total = calcCartTotal();
         const n = state.added.length;
-        const plural = (n % 10 === 1 && n % 100 !== 11) ? 'услуга'
-                     : ((n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)) ? 'услуги' : 'услуг');
 
         el.appendChild(h('div', { class: 'pk2-calc-cap' }, 'Калькулятор — расчёт без пациента'));
         el.appendChild(h('div', { class: 'pk2-calc-total' },
-            total.toLocaleString('ru-RU') + ' сум',
-            h('small', null, ` · ${n} ${plural}`),
+            total.toLocaleString('ru-RU'), ' сум',
+            h('small', null, ' · ', trf('{n} услуг(и)', { n })),
         ));
 
         const p = refs.attachedPatient;
@@ -1301,7 +1300,7 @@ export function openServicePickerModal({
         renderCalcBar();
         if (catListEl) { wiz.depositBalance = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); }   // CATALOG_WIZARD_V4
         const nm = (p.lastName || p.fullName || '').toString().trim();
-        toast(`Пациент привязан${nm ? ': ' + nm : ''}`);
+        toast(nm ? trf('Пациент привязан: {name}', { name: nm }) : tr('Пациент привязан'));
     }
 
 
@@ -1664,7 +1663,7 @@ export function openServicePickerModal({
         catGroupsEl.appendChild(mk('', 'Все', elig.length));
         for (const t of state.types) { const n = counts[String(t.id)] || 0; if (n) catGroupsEl.appendChild(mk(String(t.id), t.name, n)); }
         if (lockedDoctor) catGroupsEl.appendChild(h('span', { class: 'muted', style: { marginLeft: 'auto', fontSize: '11px', alignSelf: 'center' } },
-            'только услуги: ' + (lockedDoctor.name || '')));
+            trf('только услуги: {name}', { name: lockedDoctor.name || '' })));
     }
     function paintCatList() {
         clear(catListEl);
@@ -1688,7 +1687,7 @@ export function openServicePickerModal({
         if (list.length > cat2.win) {
             catListEl.appendChild(h('button', { class: 'btn btn-outline', style: { width: '100%', marginTop: '4px' }, type: 'button',
                 onclick: () => { cat2.win += CAT_PAGE; paintCatList(); } },
-                `Показать ещё ${Math.min(CAT_PAGE, list.length - cat2.win)} · всего ${list.length}`));
+                trf('Показать ещё {n} · всего {total}', { n: Math.min(CAT_PAGE, list.length - cat2.win), total: list.length })));
         }
     }
     function catRow(s) {
@@ -1704,7 +1703,7 @@ export function openServicePickerModal({
         // CONSULT_NAME_OVERRIDE_V1 — show the per-doctor name when a doctor is locked or picked.
         const _docCtx = s.__consult ? (lockedDoctor ? lockedDoctor.id : (item && item.doctor ? item.doctor.id : null)) : null;
         const dispName = _docCtx ? consultNameFor(_docCtx, s.__ct || s) : s.name;
-        const subBits = [s.__consultDocName ? s.__consultDocName : groupNameOf(s), dur + ' мин'];   // CONSULT_PER_DOCTOR_ROWS_V1
+        const subBits = [s.__consultDocName ? s.__consultDocName : groupNameOf(s), trf('{n} мин', { n: dur })];   // CONSULT_PER_DOCTOR_ROWS_V1
         if (!lockedDoctor && !s.__consult && perf.length === 0) subBits.push('врач не требуется');
         // ATTACH_CATALOG_V1 — a service already on the visit can't be added again.
         // The columns view has always greyed these out (excludeServiceIds); the
@@ -1780,7 +1779,7 @@ export function openServicePickerModal({
                     onclick: free === 0 ? null : () => { item.__dayIso = d.iso; paintCatalog(); } },
                     h('span', { class: 'wd' }, d.today ? 'сегодня' : d.wd),
                     h('span', { class: 'dd' }, String(d.dd)),
-                    h('span', { class: 'free' }, free === 0 ? 'нет' : free + ' окн.')));
+                    h('span', { class: 'free' }, free === 0 ? tr('нет') : trf('{n} окн.', { n: free }))));
             }
             box.appendChild(strip);
             const slots = freeStarts(item.doctor.id, item.__dayIso, item.durationMinutes, item);
@@ -1801,9 +1800,9 @@ export function openServicePickerModal({
                 const d = catDays().find(x => x.iso === item.dateIso);
                 const startM = Number(item.time.slice(0, 2)) * 60 + Number(item.time.slice(3, 5));
                 box.appendChild(h('div', { class: 'wzc-tsum' },
-                    h('span', null, (d ? (d.today ? 'Сегодня' : `${d.wd}, ${d.dd} ${d.mo}`) : item.dateIso) + ' · ',
+                    h('span', null, (d ? (d.today ? tr('Сегодня') : tr(d.wd) + ', ' + d.dd + ' ' + tr(d.mo)) : item.dateIso) + ' · ',
                         h('b', { class: 'num' }, `${item.time}–${fmtMin(startM + item.durationMinutes)}`),
-                        ` · ${item.durationMinutes} мин`),
+                        ' · ' + trf('{n} мин', { n: item.durationMinutes })),
                     item.__auto ? h('span', { class: 'auto' }, 'ближайшее свободное — можно изменить') : null));
             } else {
                 box.appendChild(h('div', { class: 'wzc-tsum off' }, 'выберите время'));
@@ -1880,7 +1879,7 @@ export function openServicePickerModal({
             if (wiz.payment.mode === 'patient') {
                 const line = (lbl, v) => h('div', { style: { display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '12px', color: 'var(--ink-500, #55636d)' } },
                     h('span', null, lbl), h('span', { class: 'num' }, '−' + formatMoney(v)));
-                if (wt.full - wt.afterDisc > 0) totBox.appendChild(line('Скидка ' + wizDiscountPct() + '%', wt.full - wt.afterDisc));
+                if (wt.full - wt.afterDisc > 0) totBox.appendChild(line(trf('Скидка {n}%', { n: wizDiscountPct() }), wt.full - wt.afterDisc));
                 if (wt.promoOff > 0) totBox.appendChild(line('Промокод', wt.promoOff));
                 if (wt.cards > 0) totBox.appendChild(line('Карты/сертификаты', wt.cards));
                 if (wt.bal > 0) totBox.appendChild(line('Баланс', wt.bal));
@@ -1898,10 +1897,10 @@ export function openServicePickerModal({
             hintEl.textContent =
                 state.added.length === 0 ? 'добавьте хотя бы одну услугу'
                 : !cartComplete() ? 'у некоторых услуг не выбран врач или время'
-                : attachMode ? 'всё готово — услуг: ' + state.added.length
+                : attachMode ? trf('всё готово — услуг: {n}', { n: state.added.length })
                 : !refs.attachedPatient ? 'привяжите пациента'
                 : !wizStep2Valid() ? 'выберите плательщика'
-                : 'всё готово — услуг: ' + state.added.length;
+                : trf('всё готово — услуг: {n}', { n: state.added.length });
         };
         wiz._railRefresh = refreshRail;
         refreshRail();
@@ -1930,8 +1929,8 @@ export function openServicePickerModal({
             }
         }
         if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = 'Добавить к визиту'; }
-        if (added && !failed)      toast(added === 1 ? 'Услуга добавлена к визиту.' : `Добавлено услуг: ${added}.`);
-        else if (added && failed)  toast(`Добавлено ${added}, не удалось ${failed} — проверьте список.`, 'warn');
+        if (added && !failed)      toast(added === 1 ? 'Услуга добавлена к визиту.' : trf('Добавлено услуг: {n}.', { n: added }));
+        else if (added && failed)  toast(trf('Добавлено {ok}, не удалось {bad} — проверьте список.', { ok: added, bad: failed }), 'warn');
         else                       { toast('Не удалось добавить услуги.', 'fail'); return; }
         // CRM_SCHEDULE_V1 — the patient came and the service was attached, so the
         // request is fulfilled. Without this it stays «Записан», and crm.js's
@@ -2028,10 +2027,10 @@ export function openServicePickerModal({
                     clear(appliedBox);
                     for (const d of (wiz.applied || [])) {
                         const lbl = d.kind === 'promo_code'
-                            ? (d.discount_type === 'amount' ? `−${formatMoney(d.amount)} сум` : `−${Number(d.percent || 0)}%`)
-                            : `${formatMoney(d.remaining ?? d.amount ?? 0)} сум`;
+                            ? (d.discount_type === 'amount' ? '−' + formatMoney(d.amount) + ' ' + tr('сум') : `−${Number(d.percent || 0)}%`)
+                            : formatMoney(d.remaining ?? d.amount ?? 0) + ' ' + tr('сум');
                         appliedBox.appendChild(h('span', { class: 'tag tag-ok', style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11px' } },
-                            `${KIND_RU3[d.kind] || d.kind} ${d.code} · ${lbl}`,
+                            tr(KIND_RU3[d.kind] || d.kind) + ' ' + d.code + ' · ' + lbl,
                             h('button', { type: 'button', style: { background: 'none', border: '0', cursor: 'pointer', color: 'inherit', fontWeight: 700 },
                                 onclick: (e) => { e.stopPropagation(); wiz.applied = wiz.applied.filter(x => x !== d); paintRailApplied(); refresh(); } }, '×')));
                     }
@@ -2148,7 +2147,7 @@ export function openServicePickerModal({
     async function wizApplyCode(code) {
         const { data, error } = await supabase.from('patient_discounts')
             .select('*').eq('code', code.toUpperCase()).limit(1);
-        if (error) { toast('Скидки недоступны: ' + error.message, 'fail'); return; }
+        if (error) { toast(trf('Скидки недоступны: {msg}', { msg: error.message }), 'fail'); return; }
         const row = (data || [])[0];
         if (!row) { toast('Код не найден.', 'fail'); return; }
         if (!row.active) { toast('Код деактивирован.', 'fail'); return; }
@@ -2157,12 +2156,12 @@ export function openServicePickerModal({
         if (row.valid_to && row.valid_to < today) { toast('Срок действия кода истёк.', 'fail'); return; }
         if (row.patient_id && (!refs.attachedPatient || refs.attachedPatient.id !== row.patient_id)) { toast('Код привязан к другому пациенту.', 'fail'); return; }
         if (row.max_uses != null && Number(row.used_count || 0) >= Number(row.max_uses)) { toast('Лимит использований исчерпан.', 'fail'); return; }
-        if (Number(row.min_purchase || 0) > wizTotals().afterDisc) { toast(`Код действует при счёте от ${formatMoney(row.min_purchase)}.`, 'fail'); return; }
+        if (Number(row.min_purchase || 0) > wizTotals().afterDisc) { toast(trf('Код действует при счёте от {sum}.', { sum: formatMoney(row.min_purchase) }), 'fail'); return; }
         if (row.kind !== 'promo_code' && !(Number(row.remaining ?? row.amount ?? 0) > 0)) { toast('На карте нет средств.', 'fail'); return; }
         if ((wiz.applied || []).some(x => x.id === row.id)) { toast('Код уже применён.', 'info'); return; }
         if (row.kind === 'promo_code' && wizPromo()) { toast('Можно применить только один промокод.', 'fail'); return; }
         wiz.applied.push(row);
-        toast(`${KIND_RU3[row.kind] || 'Код'} применён: ${row.code}`);
+        toast(trf('{kind} применён: {code}', { kind: tr(KIND_RU3[row.kind] || 'Код'), code: row.code }));
     }
 
     async function loadWizDeposit(pid) {
@@ -2372,7 +2371,7 @@ export function openServicePickerModal({
             const src = (R.sources || []).find(s => s.id === row.sourceId);
             const cat = (R.cats || []).find(c => c.id === row.catId);
             if (src) return (cat ? cat.name + ' · ' : '') + src.name;
-            return cat ? cat.name + ' (партнёр не выбран)' : 'Сам пациент';
+            return cat ? trf('{name} (партнёр не выбран)', { name: cat.name }) : 'Сам пациент';
         };
         const refLabels = state.added.map((_, i) => refLabelOf(i));
         const refUniform = refLabels.length > 0 && refLabels.every(l => l === refLabels[0]);
@@ -2384,7 +2383,7 @@ export function openServicePickerModal({
                 refUniform && refLabels[0] !== 'Сам пациент' ? h('div', { class: 'tag tag-info', style: { fontSize: '13.5px', fontWeight: '700', padding: '6px 12px' } },
                     'Направление: ', h('b', null, refLabels[0])) : null,
                 h('div', { class: 'tag ' + (selfPay ? 'tag-ok' : 'tag-warn'), style: { fontSize: '13.5px', fontWeight: '700', padding: '6px 12px' } },
-                    selfPay ? 'Пациент платит' : ('Платит: ' + ((payer && payer.name) || covRu[pm.coverage] || pm.coverage))))));
+                    selfPay ? 'Пациент платит' : trf('Платит: {who}', { who: (payer && payer.name) || tr(covRu[pm.coverage] || pm.coverage) })))));
 
         const tableFor = (idxs, withDisc) => {
             const tb = h('tbody');
@@ -2392,7 +2391,7 @@ export function openServicePickerModal({
                 const a = state.added[i]; const unit = Number(a.service?.price || 0);
                 tb.appendChild(h('tr', null,
                     h('td', { style: { fontWeight: 500 } }, a.service?.name || '—',
-                        refUniform ? null : h('div', { class: 'muted', style: { fontSize: '11.5px', fontWeight: 400, marginTop: '2px' } }, 'Направление: ' + refLabels[i])),   // SVC_REFERRAL_CONFIRM_V1
+                        refUniform ? null : h('div', { class: 'muted', style: { fontSize: '11.5px', fontWeight: 400, marginTop: '2px' } }, trf('Направление: {ref}', { ref: refLabels[i] }))),   // SVC_REFERRAL_CONFIRM_V1
                     h('td', { class: 'muted' }, a.doctor ? (a.doctor.full_name || a.doctor.name || '—') : '—'),
                     h('td', { class: 'num', style: { textAlign: 'right' } },
                         withDisc && wizDiscountPct()
@@ -2407,7 +2406,7 @@ export function openServicePickerModal({
 
         if (payerIdx.length) {
             const sum = payerIdx.reduce((acc, i) => acc + Number(state.added[i].service?.price || 0), 0);
-            root.appendChild(sectionTitle('Плательщик (акт): ' + (payer ? payer.name : '—') + ((pol && (pol.name || pol.policy_code)) || (pm.policyNumber || '').trim() ? ' · ' + ((pol && (pol.name || pol.policy_code)) || pm.policyNumber.trim()) : '') + ' — ' + formatMoney(sum)));   // WIZ_POLICY_MANUAL_V1
+            root.appendChild(sectionTitle(trf('Плательщик (акт): {who} — {sum}', { who: (payer ? payer.name : '—') + ((pol && (pol.name || pol.policy_code)) || (pm.policyNumber || '').trim() ? ' · ' + ((pol && (pol.name || pol.policy_code)) || pm.policyNumber.trim()) : ''), sum: formatMoney(sum) })));   // WIZ_POLICY_MANUAL_V1
             root.appendChild(tableFor(payerIdx, false));
         }
         if (patIdx.length) {
@@ -2416,18 +2415,18 @@ export function openServicePickerModal({
         }
 
         const lines = [];
-        if (scheduledISO) lines.push('Время записи: ' + new Date(scheduledISO).toLocaleString('ru-RU'));
-        lines.push('Направление: ' + (refUniform ? refLabels[0] : 'указано по каждой услуге (см. список выше).'));   // SVC_REFERRAL_CONFIRM_V1
+        if (scheduledISO) lines.push(trf('Время записи: {when}', { when: new Date(scheduledISO).toLocaleString('ru-RU') }));
+        lines.push(trf('Направление: {ref}', { ref: refUniform ? refLabels[0] : tr('указано по каждой услуге (см. список выше).') }));   // SVC_REFERRAL_CONFIRM_V1
         if (payerIdx.length) lines.push('Покрытые услуги: счёт не выставляется, печатается акт оказанных услуг.');
         if (patIdx.length) {
             if (selfPay) {
-                if (t.promoOff > 0) lines.push('Промокод: −' + formatMoney(t.promoOff) + '.');
-                if (t.cards > 0) lines.push('Карты/сертификаты: −' + formatMoney(t.cards) + '.');
-                if (t.bal > 0) lines.push('Списание баланса: −' + formatMoney(t.bal) + ' (кешбэк и возвраты).');
-                lines.push('Счёт на ' + formatMoney(t.payable) + ' — к оплате в кассе ' + formatMoney(t.due) + '.');
+                if (t.promoOff > 0) lines.push(trf('Промокод: −{sum}.', { sum: formatMoney(t.promoOff) }));
+                if (t.cards > 0) lines.push(trf('Карты/сертификаты: −{sum}.', { sum: formatMoney(t.cards) }));
+                if (t.bal > 0) lines.push(trf('Списание баланса: −{sum} (кешбэк и возвраты).', { sum: formatMoney(t.bal) }));
+                lines.push(trf('Счёт на {sum} — к оплате в кассе {due}.', { sum: formatMoney(t.payable), due: formatMoney(t.due) }));
             } else {
                 const patBase = patIdx.reduce((acc, i) => acc + Number(state.added[i].service?.price || 0), 0);
-                lines.push('Счёт пациенту на ' + formatMoney(patBase) + ' — к оплате в кассе.');
+                lines.push(trf('Счёт пациенту на {sum} — к оплате в кассе.', { sum: formatMoney(patBase) }));
             }
         }
         root.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', display: 'flex', flexDirection: 'column', gap: '4px' } },
@@ -2535,7 +2534,7 @@ export function openServicePickerModal({
             // CATALOG_WIZARD_V2 — a partially-recorded visit must not proceed to
             // billing: the invoice/balance math would diverge from what landed.
             if (vsRows.length !== state.added.length) {
-                toast(`Записались не все услуги (${vsRows.length} из ${state.added.length}) — счёт НЕ выставлен. Откройте визит и добавьте услуги вручную.`, 'fail');
+                toast(trf('Записались не все услуги ({got} из {want}) — счёт НЕ выставлен. Откройте визит и добавьте услуги вручную.', { got: vsRows.length, want: state.added.length }), 'fail');
                 overlay.remove();
                 document.removeEventListener('keydown', onKey);
                 if (typeof onBooked === 'function') { try { onBooked(); } catch (_) {} }
@@ -2561,11 +2560,11 @@ export function openServicePickerModal({
                     const byId = {}; for (const r of fresh) byId[r.id] = r;
                     for (const ap of wiz.applied) {
                         const r = byId[ap.id];
-                        if (!r || !r.active) { toast(`Код ${ap.code} больше недоступен — не применён.`, 'fail'); continue; }
-                        if (r.valid_from && r.valid_from > today) { toast(`Код ${ap.code} ещё не действует — не применён.`, 'fail'); continue; }
-                        if (r.valid_to && r.valid_to < today) { toast(`Код ${ap.code} истёк — не применён.`, 'fail'); continue; }
-                        if (r.patient_id && r.patient_id !== p.id) { toast(`Код ${ap.code} привязан к другому пациенту — не применён.`, 'fail'); continue; }
-                        if (Number(r.min_purchase || 0) > subtotal) { toast(`Код ${ap.code} требует счёт от ${formatMoney(r.min_purchase)} — не применён.`, 'fail'); continue; }
+                        if (!r || !r.active) { toast(trf('Код {code} больше недоступен — не применён.', { code: ap.code }), 'fail'); continue; }
+                        if (r.valid_from && r.valid_from > today) { toast(trf('Код {code} ещё не действует — не применён.', { code: ap.code }), 'fail'); continue; }
+                        if (r.valid_to && r.valid_to < today) { toast(trf('Код {code} истёк — не применён.', { code: ap.code }), 'fail'); continue; }
+                        if (r.patient_id && r.patient_id !== p.id) { toast(trf('Код {code} привязан к другому пациенту — не применён.', { code: ap.code }), 'fail'); continue; }
+                        if (Number(r.min_purchase || 0) > subtotal) { toast(trf('Код {code} требует счёт от {sum} — не применён.', { code: ap.code, sum: formatMoney(r.min_purchase) }), 'fail'); continue; }
                         if (r.kind === 'promo_code') { if (!promoRow) promoRow = r; }
                         else if (Number(r.remaining ?? r.amount ?? 0) > 0) validCards.push(r);
                     }
@@ -2577,7 +2576,7 @@ export function openServicePickerModal({
                         : Math.round(subtotal * Math.min(100, Math.max(0, Number(promoRow.percent || 0))) / 100));
                     let claimed = false;
                     try { const cr = await supabase.rpc('claim_promo_use', { p_id: promoRow.id }); claimed = !cr.error && !!cr.data; } catch (_) {}
-                    if (!claimed) { toast(`Промокод ${promoRow.code} исчерпан — не применён.`, 'fail'); promoOff = 0; promoRow = null; }
+                    if (!claimed) { toast(trf('Промокод {code} исчерпан — не применён.', { code: promoRow.code }), 'fail'); promoOff = 0; promoRow = null; }
                 }
                 const payable = Math.max(0, subtotal - promoOff);
                 const { data: inv, error: invErr } = await supabase.from('invoices').insert({
@@ -2586,7 +2585,7 @@ export function openServicePickerModal({
                     created_by: currentUser()?.id || null,
                 }).select().single();
                 if (invErr) {
-                    console.warn('[wizard] invoice:', invErr.message); note = ' (счёт не создан: ' + invErr.message + ')';
+                    console.warn('[wizard] invoice:', invErr.message); note = ' ' + trf('(счёт не создан: {msg})', { msg: invErr.message });
                     if (promoRow) { try { await supabase.rpc('release_promo_use', { p_id: promoRow.id }); } catch (_) {} }
                 }
                 else {
@@ -2596,6 +2595,7 @@ export function openServicePickerModal({
                         const { data: item, error: itErr } = await supabase.from('invoice_items').insert({
                             invoice_id:  inv.id,
                             service_id:  r.a.service.__consult ? null : r.a.service.id,
+                            // i18n-exempt: описание строки счёта пишется В БАЗУ — хранимая запись, а не текст экрана
                             description: (r.a.service.name || 'Услуга') + (wizDiscountPct() ? ` (скидка ${wizDiscountPct()}%)` : ''),
                             quantity:    1,
                             unit_price:  price,
@@ -2607,13 +2607,13 @@ export function openServicePickerModal({
                             if (_linkErr) { console.warn('[wizard] invoice_item link:', _linkErr.message); _billLinkFail++; }
                         }
                     }
-                    if (_billLinkFail) toast('Внимание: ' + _billLinkFail + ' услуг(и) не привязались к счёту — проверьте счёт в кассе перед оплатой.', 'fail');
-                    note = inv.invoice_number ? `, счёт №${inv.invoice_number}` : ', счёт выставлен';
+                    if (_billLinkFail) toast(trf('Внимание: {n} услуг(и) не привязались к счёту — проверьте счёт в кассе перед оплатой.', { n: _billLinkFail }), 'fail');
+                    note = inv.invoice_number ? ', ' + trf('счёт №{no}', { no: inv.invoice_number }) : ', ' + tr('счёт выставлен');
                     // CATALOG_WIZARD_V4 — promo marker (cancel-restore), then non-cash
                     // payments via ATOMIC claims (gift cards -> balance), relative undo,
                     // ONE final invoice update; payable===0 (full promo) is paid+released.
                     if (promoRow) {
-                        note += ` · промокод −${formatMoney(promoOff)}`;
+                        note += ' · ' + trf('промокод −{sum}', { sum: formatMoney(promoOff) });
                         await supabase.from('payments').insert({ invoice_id: inv.id, amount: 0, method: 'other', notes: 'promo:' + promoRow.id });
                     }
                     let paidSoFar = 0;
@@ -2624,14 +2624,14 @@ export function openServicePickerModal({
                         if (alloc <= 0) continue;
                         let newRem = null;
                         try { const cr = await supabase.rpc('claim_patient_discount', { p_id: card.id, p_alloc: alloc }); newRem = cr.error ? null : cr.data; } catch (_) { newRem = null; }
-                        if (newRem == null) { toast(`Карта ${card.code} не списана — баланс карты изменился.`, 'fail'); continue; }
+                        if (newRem == null) { toast(trf('Карта {code} не списана — баланс карты изменился.', { code: card.code }), 'fail'); continue; }
                         const { data: gp, error: gErr } = await supabase.from('payments').insert({
                             invoice_id: inv.id, amount: alloc, method: 'gift_card',
                             cashier_id: currentUser()?.id || null, notes: 'gift:' + card.id,
                         }).select().single();
                         if (gErr) {
                             try { await supabase.rpc('restore_patient_discount', { p_id: card.id, p_amount: alloc }); } catch (_) {}
-                            toast(`Карта ${card.code} не списана: ` + gErr.message, 'fail');
+                            toast(trf('Карта {code} не списана: {msg}', { code: card.code, msg: gErr.message }), 'fail');
                             continue;
                         }
                         undo.push(async () => {
@@ -2653,7 +2653,7 @@ export function openServicePickerModal({
                             created_by: currentUser()?.id || null,
                             created_by_name: currentUser()?.full_name || null,
                         }).select().single();
-                        if (dErr) { toast('Баланс НЕ списан: ' + dErr.message, 'fail'); balToSpend = 0; }
+                        if (dErr) { toast(trf('Баланс НЕ списан: {msg}', { msg: dErr.message }), 'fail'); balToSpend = 0; }
                         else {
                             const { data: payRow, error: pyErr } = await supabase.from('payments').insert({
                                 invoice_id: inv.id, amount: balToSpend, method: 'deposit',
@@ -2661,14 +2661,14 @@ export function openServicePickerModal({
                             }).select().single();
                             if (pyErr) {
                                 await supabase.from('patient_deposits').delete().eq('id', spentRow.id);
-                                toast('Баланс НЕ списан: ' + pyErr.message, 'fail');
+                                toast(trf('Баланс НЕ списан: {msg}', { msg: pyErr.message }), 'fail');
                                 balToSpend = 0;
                             } else {
                                 undo.push(async () => {
                                     await supabase.from('payments').delete().eq('id', payRow.id);
                                     await supabase.from('patient_deposits').delete().eq('id', spentRow.id);
                                 });
-                                note += ` · баланс −${formatMoney(balToSpend)}`;
+                                note += ' · ' + trf('баланс −{sum}', { sum: formatMoney(balToSpend) });
                             }
                         }
                     }
@@ -2682,8 +2682,8 @@ export function openServicePickerModal({
                         }).eq('id', inv.id);
                         if (updErr) {
                             for (const u of undo.reverse()) { try { await u(); } catch (_) {} }
-                            toast('Оплаты НЕ применены (' + updErr.message + ') — оплата полностью в кассе.', 'fail');
-                            note = inv.invoice_number ? `, счёт №${inv.invoice_number}` : ', счёт выставлен';
+                            toast(trf('Оплаты НЕ применены ({msg}) — оплата полностью в кассе.', { msg: updErr.message }), 'fail');
+                            note = inv.invoice_number ? ', ' + trf('счёт №{no}', { no: inv.invoice_number }) : ', ' + tr('счёт выставлен');
                         } else if (fullyPaid) {
                             const ids = patientRows.map(r => r.vs && r.vs.id).filter(Boolean);
                             if (ids.length) await supabase.from('visit_services').update({ status: 'queued' }).in('id', ids);
@@ -2732,7 +2732,7 @@ export function openServicePickerModal({
                                     }
                                     queueBlock = [...byQueue.values()].map(q => ({
                                         label:   q.label,
-                                        service: q.names.length === 1 ? q.names[0] : (q.names.length + ' услуг'),
+                                        service: q.names.length === 1 ? q.names[0] : (q.names.length + ' услуг'),   // i18n-exempt: талон очереди — печатный документ
                                         number:  q.number,
                                     }));
                                 }
@@ -2741,6 +2741,7 @@ export function openServicePickerModal({
                         const patName = (p.fullName || [p.lastName, p.firstName].filter(Boolean).join(' ') || '—').trim();
                         const paidNow = Math.min(paidSoFar + balToSpend, payable);
                         const invStatus = payable === 0 || paidNow >= payable ? 'PAID' : (paidNow > 0 ? 'PARTIAL' : 'UNPAID');
+                        /* i18n-exempt-start: печатный счёт (бланк) — печатные документы намеренно русские */
                         printableSheet({ type: 'invoice', idLine: inv.invoice_number || inv.id.slice(0, 8), data: {
                             title: 'Амбулаторные услуги',
                             docNo: inv.invoice_number || inv.id.slice(0, 8),
@@ -2793,6 +2794,8 @@ export function openServicePickerModal({
                     }));
                     const actTotal = actItems.reduce((sx, it) => sx + it.price, 0);
                     const actNo = visit.visit_number || visit.id.slice(0, 8);
+                    /* i18n-exempt-end */
+                    /* i18n-exempt-start: печатный акт оказанных услуг — печатный документ */
                     printableSheet({ type: 'act', idLine: actNo, data: {
                         title: 'Акт оказанных медицинских услуг',
                         docNo: actNo,
@@ -2819,7 +2822,8 @@ export function openServicePickerModal({
                 note += ' · услуги пациента — счёт во вкладке «Услуги»';
                 openServicesFor = visit;
             }
-            toast('Визит создан' + note);
+            /* i18n-exempt-end */
+            toast(tr('Визит создан') + note);
             overlay.remove();
             document.removeEventListener('keydown', onKey);
             if (typeof onBooked === 'function') { try { onBooked(); } catch (_) {} }
@@ -2833,7 +2837,7 @@ export function openServicePickerModal({
                 } catch (e) { console.warn('[wizard] open Services tab:', e); }
             }
         } catch (e) {
-            toast('Не удалось создать визит: ' + (e.message || e), 'fail');
+            toast(trf('Не удалось создать визит: {msg}', { msg: e.message || e }), 'fail');
             if (btn && btn.isConnected) btn.disabled = false;
         }
     }
@@ -2875,7 +2879,7 @@ export function openServicePickerModal({
                         });
                     } catch (_) { toast('Похожий пациент уже существует — найдите его через поиск.', 'fail'); }
                 } else {
-                    toast('Не удалось создать: ' + (e.message || e), 'fail');
+                    toast(trf('Не удалось создать: {msg}', { msg: e.message || e }), 'fail');
                 }
             }
         }
@@ -2937,7 +2941,7 @@ function emptyHint(title, sub) {
 function formatMoney(n) {
     const v = Number(n || 0);
     if (!Number.isFinite(v)) return '—';
-    return v.toLocaleString('ru-RU', { maximumFractionDigits: 0 }) + ' сум';
+    return v.toLocaleString('ru-RU', { maximumFractionDigits: 0 }) + ' ' + tr('сум');
 }
 
 // ---------------------------------------------------------------------------

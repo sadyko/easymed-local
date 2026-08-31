@@ -24,7 +24,8 @@
 
 import { supabase } from '../../supabase.js';
 import { CAT_ORDER, categoryOf } from '../../shared/service-categories.js';   // SERVICE_CATALOG_FILTER_V1
-import { h, Icon, clear, toast, Avatar, initials, avColor, field } from '../ui.js';
+import { h, Icon, clear, toast, Avatar, initials, avColor, field, fmtDate, fmtDateTime } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1
 import { doctorPoolFor } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1
 import { printableSheet } from './doc-settings.js?v=q3company1';   // WIZ_INVOICE_PRINT_V1 — тот же брендированный бланк «Счёт» (Настройки → Документы); ?v как у всех импортёров
@@ -37,9 +38,8 @@ function fmtPrice(n) {
     return sign + String(Math.abs(v)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 }
 function fmtRuDateTime(iso) {
-    const d = new Date(iso);
-    const hh = String(d.getHours()).padStart(2, '0'), mm = String(d.getMinutes()).padStart(2, '0');
-    return `${d.getDate()} ${RU_M_GEN[d.getMonth()]} ${d.getFullYear()} г. в ${hh}:${mm}`;
+    // I18N_COVERAGE_V1 — единый локале-зависимый формат из ui.js вместо русской сборки, которую tr() не найдёт
+    return fmtDateTime(iso);
 }
 
 // Local services have no category column — derive one (is_lab is authoritative
@@ -387,7 +387,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         wiz.payers   = (payerRes.data || []).filter(p => p.active === undefined || !!p.active);
         if (payerRes.error) {
             console.error('[visit-wizard] payers load failed:', payerRes.error);
-            toast('Плательщики не загрузились: ' + wiz.payersError, 'fail');
+            toast(trf('Плательщики не загрузились: {msg}', { msg: wiz.payersError }), 'fail');
         }
         // CATALOG_DIAG_V4 — «каталог пуст» and «каталог не загрузился» are
         // different facts and must never render the same sentence.
@@ -399,8 +399,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // read it off to add services that were already there. The status is now
         // a field of its own instead of a phrase to be pattern-matched.
         wiz.loadError = svcRes.error ? (svcRes.error.message || String(svcRes.error)) : null;
+        /* i18n-exempt-start: wiz.dbg — диагностика для console, не текст экрана */
         wiz.dbg = 'услуги: ' + (svcRes.error ? 'ОШИБКА ' + wiz.loadError : wiz.services.length)
                 + ' · врачи: ' + (docRes.error ? 'ОШИБКА ' + docRes.error.message : wiz.doctors.length);
+        /* i18n-exempt-end */
         // Leaves a trace in the console even when nobody is looking at the toast.
         // The build tag is printed too: this module had NO cache-buster for its
         // whole life, so a browser could sit on a copy downloaded months earlier
@@ -410,15 +412,17 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // The tag MUST match the ?v= in the import URLs (crm.js, patient-card.js):
         // it is what tells you whether the browser is running the file you just
         // edited, which is exactly the question when a fix "does not work".
+        /* i18n-exempt-start: console-диагностика */
         console.info('[visit-wizard vw7] catalog load —', wiz.dbg,
             '· плательщики:', wiz.payersError ? 'ОШИБКА ' + wiz.payersError : wiz.payers.length);
-        if (svcRes.error) toast('Услуги не загрузились: ' + wiz.loadError, 'fail');
-        if (docRes.error) toast('Врачи не загрузились: ' + docRes.error.message, 'fail');
+        /* i18n-exempt-end */
+        if (svcRes.error) toast(trf('Услуги не загрузились: {msg}', { msg: wiz.loadError }), 'fail');
+        if (docRes.error) toast(trf('Врачи не загрузились: {msg}', { msg: docRes.error.message }), 'fail');
     } catch (e) {
         wiz.loadError = (e && e.message) || String(e);
-        wiz.dbg = 'сбой загрузки: ' + wiz.loadError;
+        wiz.dbg = 'сбой загрузки: ' + wiz.loadError;   // i18n-exempt: console-диагностика
         console.error('[visit-wizard] catalog load threw:', e);
-        toast('Не удалось загрузить каталог: ' + wiz.loadError, 'fail');
+        toast(trf('Не удалось загрузить каталог: {msg}', { msg: wiz.loadError }), 'fail');
     }
     // SCHED_V1 — график врача (users.working_hours / scheduling_mode) становится
     // читаемым после перезапуска сервера (registry-обновление); до этого молча
@@ -500,7 +504,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // не работает», хотя запрос падал (например, сервер не перезапущен
             // после добавления crm_request_services в реестр — таблица есть в
             // базе, но процесс о ней не знает).
-            if (reqErr) throw new Error('заявки: ' + (reqErr.message || reqErr));
+            if (reqErr) throw new Error(trf('заявки: {msg}', { msg: reqErr.message || reqErr }));
             if (!reqs || !reqs.length) return;
 
             const { data: lines, error: lineErr } = await supabase.from('crm_request_services')
@@ -508,7 +512,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 .in('request_id', reqs.map(r => r.id))
                 .eq('scheduled_date', dayIso)
                 .eq('status', 'pending');
-            if (lineErr) throw new Error('услуги заявки: ' + (lineErr.message || lineErr));
+            if (lineErr) throw new Error(trf('услуги заявки: {msg}', { msg: lineErr.message || lineErr }));
             if (!lines || !lines.length) return;
 
             const names = [];
@@ -537,13 +541,13 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             wiz.crmLineIds = lines.map(l => l.id);
             wiz.crmRequestIds = [...new Set(lines.map(l => l.request_id))];
             paint();
-            toast('Из заявки колл-центра на ' + dayIso.split('-').reverse().join('.') + ': ' + names.join(', '), 'ok');
+            toast(trf('Из заявки колл-центра на {date}: {names}', { date: dayIso.split('-').reverse().join('.'), names: names.join(', ') }), 'ok');
         } catch (e) {
             // Подстановка — удобство: сбой не мешает набрать услуги руками, но
             // МОЛЧАТЬ о нём нельзя — пустая смета неотличима от «записей нет».
             const msg = (e && e.message) || String(e);
             console.error('[visit-wizard] CRM prefill failed:', e);
-            toast('Записи колл-центра не загрузились (' + msg + '). Услуги можно добавить вручную.', 'fail');
+            toast(trf('Записи колл-центра не загрузились ({msg}). Услуги можно добавить вручную.', { msg }), 'fail');
         }
     }
 
@@ -725,7 +729,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const msg = wiz.services.length
                     ? 'Ничего не найдено — измените поиск или категорию.'
                     : wiz.loadError
-                        ? 'Каталог не загрузился: ' + wiz.loadError
+                        ? trf('Каталог не загрузился: {msg}', { msg: wiz.loadError })
                         : 'Каталог услуг пуст — добавьте услуги в настройках.';
                 listEl.appendChild(h('div', { class: 'empty' }, msg));
                 return;
@@ -742,10 +746,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                                 ? h('span', { style: { marginLeft: '8px', padding: '2px 8px', borderRadius: '999px', fontSize: '10.5px', fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase', background: 'var(--teal-50, #e0f2f1)', color: 'var(--teal-700, #00796b)', verticalAlign: 'middle' } }, 'из заявки')
                                 : null),
                         h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '2px' } },
-                            [categoryOf(s), (s.duration_minutes || 30) + ' мин', s.requires_doctor ? 'нужен врач' : 'врач не требуется'].join(' · ')),
+                            [categoryOf(s), trf('{n} мин', { n: s.duration_minutes || 30 }), s.requires_doctor ? tr('нужен врач') : tr('врач не требуется')].join(' · ')),
                     ),
                     h('span', { class: 'num', style: { fontSize: '13px', fontWeight: 700, color: 'var(--ink-900)', whiteSpace: 'nowrap' } },
-                        fmtPrice(s.price) + ' сум'),
+                        fmtPrice(s.price), ' сум'),
                     inCart
                         ? h('button', {
                             class: 'btn btn-sm', type: 'button',
@@ -787,9 +791,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         class: 'btn btn-sm', type: 'button',
                         style: { borderRadius: '999px', minWidth: '180px', fontWeight: 600 },
                         onclick: () => { wiz.limit += PAGE_SIZE; repaintCatalog(); },
-                    }, `Показать ещё ${Math.min(PAGE_SIZE, rows.length - shown)}`),
+                    }, trf('Показать ещё {n}', { n: Math.min(PAGE_SIZE, rows.length - shown) })),
                     h('span', { class: 'muted', style: { fontSize: '11.5px' } },
-                        `показано ${shown} из ${rows.length}`),
+                        trf('показано {shown} из {total}', { shown, total: rows.length })),
                 ));
             }
             // DATE_ONLY_V1 — услуга без врача (лаборатория, забор, справка) не
@@ -885,8 +889,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const d0 = new Date(); d0.setHours(0, 0, 0, 0);
                 if (line.ui.calShift === undefined) line.ui.calShift = 0;   // 0 = текущий месяц, 1 = следующий
                 const selDate = new Date(line.ui.day);
-                const dayLabelBtn = (line.ui.day === d0.getTime() ? 'Сегодня' : selDate.getDate() + ' ' + RU_M_GEN[selDate.getMonth()].slice(0, 3)) +
-                    (line.doctorId ? ' · ' + slotsForDay(line, line.ui.day).length + ' окн.' : '');
+                const dayLabelBtn = (line.ui.day === d0.getTime() ? tr('Сегодня') : selDate.getDate() + ' ' + tr(RU_M_GEN[selDate.getMonth()]).slice(0, 3)) +
+                    (line.doctorId ? ' · ' + trf('{n} окн.', { n: slotsForDay(line, line.ui.day).length }) : '');
                 const dayWrap = h('div', { style: { position: 'relative', flex: '0 0 auto' } });
                 const dayBtn = h('button', {
                     type: 'button', disabled: line.doctorId ? null : true,
@@ -935,7 +939,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                                 line.when = fs.length ? slotToLocalIso(fs[0]) : null;
                                 repaintRail(); repaintCatalog();
                             },
-                            title: past || beyond ? '' : (free ? free + ' окн.' : 'нет окон'),
+                            title: past || beyond ? '' : (free ? trf('{n} окн.', { n: free }) : tr('нет окон')),
                             style: {
                                 padding: '4px 0 3px', borderRadius: '8px', fontFamily: 'inherit',
                                 border: active ? '2px solid var(--primary-600)' : '1px solid transparent',
@@ -946,7 +950,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         },
                             h('div', { style: { fontSize: '12.5px', fontWeight: 700, lineHeight: 1.1 } }, String(dd)),
                             h('div', { style: { fontSize: '8.5px', lineHeight: 1, opacity: active ? 0.9 : 0.75, minHeight: '9px' } },
-                                (!disabled || active) && free ? free + ' окн' : ''),
+                                (!disabled || active) && free ? trf('{n} окн', { n: free }) : ''),
                         ));
                     }
                     calPop.appendChild(grid);
@@ -991,7 +995,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     const dur = Number(line.svc.duration_minutes) || 30;
                     const end = new Date(t.getTime() + dur * 60000);
                     summary = h('span', { class: 'muted', style: { fontSize: '12px', whiteSpace: 'nowrap' } },
-                        fmtSlot(t.getTime()) + '–' + fmtSlot(end.getTime()) + ' · ' + dur + ' мин');
+                        fmtSlot(t.getTime()) + '–' + fmtSlot(end.getTime()) + ' · ' + trf('{n} мин', { n: dur }));
                 } else if (line.svc.requires_doctor && !line.doctorId) {
                     summary = h('span', { style: { fontSize: '12px', color: 'var(--crit-600, #dc2626)', whiteSpace: 'nowrap' } }, 'выберите врача');
                 }
@@ -1002,7 +1006,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
             if (rows.length > 200) {
                 listEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', padding: '8px 4px' } },
-                    `Показаны первые 200 из ${rows.length} — уточните поиск.`));
+                    trf('Показаны первые 200 из {n} — уточните поиск.', { n: rows.length })));
             }
         }
 
@@ -1026,7 +1030,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             .gte('visit_date', from.toISOString())
             .lte('visit_date', to.toISOString())
             .in('status', ['scheduled', 'confirmed', 'arrived']);
-        if (error) { toast('Занятость врача не загрузилась: ' + error.message, 'fail'); busyMap.set(docId, []); return; }
+        if (error) { toast(trf('Занятость врача не загрузилась: {msg}', { msg: error.message }), 'fail'); busyMap.set(docId, []); return; }
         busyMap.set(docId, (data || []).map(v => {
             const s = new Date(v.visit_date).getTime();
             return { start: s, end: s + (Number(v.duration_minutes) || 30) * 60000 };
@@ -1117,7 +1121,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const item = wiz.cart.find(c => c.svc.id === svc.id);
         if (item) {
             if (!isMultiQty(svc)) {
-                toast('«' + svc.name + '» уже в смете — эту услугу можно добавить только один раз за визит.', 'info');
+                toast(trf('«{name}» уже в смете — эту услугу можно добавить только один раз за визит.', { name: svc.name }), 'info');
                 return;
             }
             item.qty += 1;
@@ -1231,6 +1235,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // В бланке 'act' уже есть блок плательщика, покрытие и подписи сторон
         // (пациент / врач / представитель страховой) — свой бланк не нужен,
         // достаточно отдать данные в его форме. Итоги он считает по items сам.
+        /* i18n-exempt-start: печатный акт — печатный документ, намеренно русский */
         printableSheet({
             type: 'act',
             idLine: 'АКТ ' + no,
@@ -1255,6 +1260,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 }),
             },
         });
+        /* i18n-exempt-end */
     }
 
     // ---------------------------------------------------------------------
@@ -1339,7 +1345,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     h('span', { style: { flex: 1, minWidth: 0, fontSize: '13px', fontWeight: 600, color: 'var(--ink-900)' } },
                         c.svc.name, c.qty > 1 ? h('span', { class: 'muted', style: { marginLeft: '6px', fontWeight: 500 } }, '×' + c.qty) : null),
                     h('span', { class: 'num', style: { fontSize: '12.5px', fontWeight: 700, whiteSpace: 'nowrap', color: 'var(--ink-900)' } },
-                        fmtPrice(cartLinePrice(c) * c.qty) + ' сум'),
+                        fmtPrice(cartLinePrice(c) * c.qty), ' сум'),
                     h('span', {
                         style: {
                             fontSize: '11px', fontWeight: 700, padding: '2px 9px', borderRadius: '999px', whiteSpace: 'nowrap',
@@ -1353,8 +1359,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 style: { flex: '1 1 200px', padding: '10px 12px', borderRadius: '10px', background: bg, color: fg },
             },
                 h('div', { style: { fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', opacity: '.85' } }, label),
-                h('div', { class: 'num', style: { fontSize: '17px', fontWeight: 800, marginTop: '2px' } }, fmtPrice(sum) + ' сум'));
-            totals.appendChild(tile('Покрывает ' + payerName, coveredTotal(), 'var(--primary-700)', 'var(--primary-50, #f2faf8)'));
+                h('div', { class: 'num', style: { fontSize: '17px', fontWeight: 800, marginTop: '2px' } }, fmtPrice(sum), ' сум'));
+            totals.appendChild(tile(trf('Покрывает {name}', { name: payerName }), coveredTotal(), 'var(--primary-700)', 'var(--primary-50, #f2faf8)'));
             totals.appendChild(tile('Платит пациент', patientTotal(), 'var(--ink-900)', 'var(--ink-25, #f6f8f9)'));
         };
         paint2();
@@ -1362,7 +1368,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         return h('div', { class: 'card', style: { padding: '18px 20px', marginTop: '14px' } },
             h('h3', { style: { margin: '0 0 6px', fontSize: '14px' } }, Icon('Layers', { size: 15 }), ' Что покрывает плательщик'),
             h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '12px' } },
-                'Услуги перенесены с первого шага. Отмеченные уйдут в счёт «' + payerName + '», снятые — в счёт пациента. Визит будет выставлен двумя счетами.'),
+                trf('Услуги перенесены с первого шага. Отмеченные уйдут в счёт «{name}», снятые — в счёт пациента. Визит будет выставлен двумя счетами.', { name: payerName })),
             wiz.cart.length ? rows : h('div', { class: 'muted', style: { fontSize: '13px' } }, 'В смете пока нет услуг.'),
             wiz.cart.length ? totals : null,
         );
@@ -1398,8 +1404,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // DATE_ONLY_V1 — день берём из ЛОКАЛЬНОЙ строки ('ГГГГ-ММ-ДДTчч:мм'), а не
         // через toISOString(): в UTC+5 полночь уехала бы на предыдущие сутки.
         const days = [...new Set(wiz.cart.map(c => String(c.when || wiz.when).slice(0, 10)))].sort();
-        const fmtDay = (iso) => { const d = new Date(iso + 'T00:00:00'); return d.getDate() + ' ' + RU_M_GEN[d.getMonth()] + ' ' + d.getFullYear() + ' г.'; };
-        const dateLine = days.map(fmtDay).join(' · ') + (days.length > 1 ? ' (визитов: ' + days.length + ')' : '');
+        const fmtDay = (iso) => fmtDate(new Date(iso + 'T00:00:00'));   // I18N_COVERAGE_V1 — локале-зависимый формат из ui.js
+        const dateLine = days.map(fmtDay).join(' · ') + (days.length > 1 ? ' ' + trf('(визитов: {n})', { n: days.length }) : '');
         const lineWhen = (c) => {
             if (isLiveQueueDoc(c.doctorId)) return 'живая очередь';
             if (!c.when) return '';
@@ -1428,9 +1434,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // PAYER_FROM_SETTINGS_V1 — плательщик назван своим именем из настроек;
             // его тип идёт пояснением, а не вместо названия.
             kv('Кто платит', payer
-                ? payer.name + ' · ' + payerKindRu(payer.kind)
-                    + (wiz.payMethod === 'dms' && wiz.policyNo.trim() ? ' · полис ' + wiz.policyNo.trim() : '')
-                : 'Пациент — оплата в кассе'),
+                ? payer.name + ' · ' + tr(payerKindRu(payer.kind))
+                    + (wiz.payMethod === 'dms' && wiz.policyNo.trim() ? ' · ' + trf('полис {no}', { no: wiz.policyNo.trim() }) : '')
+                : tr('Пациент — оплата в кассе')),
             h('div', { style: { margin: '14px 0 6px', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--ink-500)' } }, 'Услуги'),
             ...wiz.cart.map(c => {
                 const dn = lineDocName(c);
@@ -1445,10 +1451,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             }),
             discountAmount() > 0 ? h('div', { class: 'row', style: { padding: '8px 0 0', fontSize: '13px', gap: '10px' } },
                 h('span', { class: 'muted', style: { flex: 1 } }, 'Скидка'),
-                h('span', { class: 'num', style: { fontWeight: 700, color: 'var(--crit-600, #dc2626)' } }, '−' + fmtPrice(discountAmount()) + ' сум')) : null,
+                h('span', { class: 'num', style: { fontWeight: 700, color: 'var(--crit-600, #dc2626)' } }, '−' + fmtPrice(discountAmount()), ' сум')) : null,
             h('div', { class: 'row', style: { padding: '10px 0 0', fontSize: '14px', gap: '10px' } },
                 h('span', { style: { flex: 1, fontWeight: 700 } }, 'Итого'),
-                h('span', { class: 'num', style: { fontWeight: 800, color: 'var(--primary-700)' } }, fmtPrice(grandTotal()) + ' сум')),
+                h('span', { class: 'num', style: { fontWeight: 800, color: 'var(--primary-700)' } }, fmtPrice(grandTotal()), ' сум')),
             h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px', fontSize: '12.5px', color: 'var(--ink-700)', cursor: 'pointer' } },
                 invoiceCb, 'Сразу выставить счёт — он появится в кассе («Приём оплат»)'),
         ));
@@ -1481,7 +1487,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             const ids = wiz.cart.map(c => c.svc && c.svc.id).filter(Boolean);
             const { error } = await createTemplate(supabase, { name: nameIn.value, serviceIds: ids });
             if (error) { toast(error.message || String(error), 'fail'); btn.disabled = false; return; }
-            toast('Шаблон сохранён — услуг: ' + ids.length, 'ok');
+            toast(trf('Шаблон сохранён — услуг: {n}', { n: ids.length }), 'ok');
             shut();
         };
         nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doSave(saveBtn); } });
@@ -1491,7 +1497,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 h('button', { class: 'modal-close', type: 'button', onclick: shut }, '×')),
             h('div', { class: 'modal-body', style: { display: 'block', padding: '14px' } },
                 h('div', { class: 'muted', style: { fontSize: '12px' } },
-                    'Шаблон сохранит только список услуг (' + wiz.cart.length + ') — врач и время выбираются при каждой записи.'),
+                    trf('Шаблон сохранит только список услуг ({n}) — врач и время выбираются при каждой записи.', { n: wiz.cart.length })),
                 nameIn),
             h('footer', { class: 'modal-foot' },
                 h('button', { class: 'btn', type: 'button', onclick: shut }, 'Отмена'),
@@ -1518,7 +1524,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         clear(listEl);
         if (error) {
             listEl.appendChild(h('div', { style: { padding: '12px', textAlign: 'center', color: 'var(--crit-700)', fontSize: '12.5px' } },
-                'Не удалось загрузить шаблоны: ' + (error.message || error)));
+                trf('Не удалось загрузить шаблоны: {msg}', { msg: error.message || error })));
             return;
         }
         if (!data || !data.length) {
@@ -1534,7 +1540,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     onclick: () => { shut(); applyTemplate(t); },
                 },
                     h('div', { style: { fontWeight: 700, fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
-                    h('div', { class: 'muted', style: { fontSize: '11.5px' } }, 'услуг: ' + templateSize(t))),
+                    h('div', { class: 'muted', style: { fontSize: '11.5px' } }, trf('услуг: {n}', { n: templateSize(t) }))),
                 h('button', {
                     type: 'button', title: 'Убрать шаблон из списка',
                     style: { border: '0', background: 'none', cursor: 'pointer', color: 'var(--crit-600, #dc2626)', fontSize: '16px', flex: 'none', padding: '2px 6px' },
@@ -1564,10 +1570,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // Три разных исхода — три разных сообщения: услуги удалены из каталога;
         // всё уже было в смете; добавлено столько-то.
         const bits = [];
-        if (added) bits.push('добавлено услуг: ' + added);
-        if (added < services.length) bits.push('уже в смете: ' + (services.length - added));
-        if (missing) bits.push('не найдено в каталоге: ' + missing);
-        toast('Шаблон «' + t.name + '» — ' + (bits.join(' · ') || 'добавлять нечего'), missing ? 'warn' : 'ok');
+        if (added) bits.push(trf('добавлено услуг: {n}', { n: added }));
+        if (added < services.length) bits.push(trf('уже в смете: {n}', { n: services.length - added }));
+        if (missing) bits.push(trf('не найдено в каталоге: {n}', { n: missing }));
+        toast(trf('Шаблон «{name}» — {what}', { name: t.name, what: bits.join(' · ') || tr('добавлять нечего') }), missing ? 'warn' : 'ok');
     }
 
     function estimateRail() {
@@ -1666,7 +1672,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         h('span', { class: 'num', style: { fontSize: '14px', minWidth: '20px', textAlign: 'center' } }, String(c.qty)),
                         stepBtn('+', () => { c.qty += 1; repaintRail(); }),
                     ] : []),
-                    h('span', { class: 'num', style: { fontSize: '14px', fontWeight: 700, whiteSpace: 'nowrap' } }, fmtPrice(cartLinePrice(c) * c.qty) + ' сум'),
+                    h('span', { class: 'num', style: { fontSize: '14px', fontWeight: 700, whiteSpace: 'nowrap' } }, fmtPrice(cartLinePrice(c) * c.qty), ' сум'),
                     h('button', {
                         type: 'button', title: 'Убрать',
                         onclick: () => { wiz.cart = wiz.cart.filter(x => x !== c); repaintRail(); if (wiz.step === 1) paint(); },
@@ -1686,7 +1692,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             if (pendingDoc > 0) {
                 const wait = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '8px', padding: '9px 10px', background: 'var(--warn-50, #fffbeb)', border: '1px solid var(--warn-200, #fde68a)', borderRadius: '10px' } },
                     h('div', { style: { fontSize: '11.5px', fontWeight: 700, color: 'var(--warn-700, #a16207)' } },
-                        'Выберите врача — ' + pendingDoc + ' услуг(и) ждут'));
+                        trf('Выберите врача — {n} услуг(и) ждут', { n: pendingDoc })));
                 for (const c of wiz.cart.filter(x => x.svc.requires_doctor && !x.doctorId)) {
                     const pool = doctorsForService(c.svc.id);
                     const sel = h('select', {
@@ -1794,14 +1800,14 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 // на себя. Смета обязана показывать, на кого пойдёт счёт, даже
                 // когда сам выбор переехал на следующий шаг.
                 : h('div', { class: 'muted', style: { fontSize: '11.5px' } },
-                    _payer.name + ' · покрывает ' + fmtPrice(coveredTotal()) + ' из ' + fmtPrice(cartTotal()) + ' сум');
+                    trf('{name} · покрывает {covered} из {total} сум', { name: _payer.name, covered: fmtPrice(coveredTotal()), total: fmtPrice(cartTotal()) }));
         // Единственная кнопка «Пациент» без объяснения выглядит как поломка —
         // но сказать «не заведены», когда список просто не загрузился, ХУЖЕ: это
         // отправляет заводить то, что уже заведено. PAYER_LOAD_V2.
         const noPayersHint = wiz.payers.length ? null
             : wiz.payersError
                 ? h('div', { style: { fontSize: '11.5px', color: 'var(--crit-700, #b91c1c)' } },
-                    'Плательщики не загрузились: ' + wiz.payersError + '. Список в Настройки → Компании-плательщики цел — обновите страницу.')
+                    trf('Плательщики не загрузились: {msg}. Список в Настройки → Компании-плательщики цел — обновите страницу.', { msg: wiz.payersError }))
                 : h('div', { class: 'muted', style: { fontSize: '11.5px' } },
                     'Плательщики не заведены — добавьте их в Настройки → Компании-плательщики.');
 
@@ -1814,8 +1820,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const refreshTotals = () => {
             const d = discountAmount();
             discRow.style.display = d > 0 ? '' : 'none';
-            discEl.textContent = '−' + fmtPrice(d) + ' сум';
-            totEl.textContent = fmtPrice(grandTotal()) + ' сум';
+            discEl.textContent = '−' + fmtPrice(d) + ' ' + tr('сум');
+            totEl.textContent = fmtPrice(grandTotal()) + ' ' + tr('сум');
         };
 
         // DISCOUNT_ABS_V1 — поле скидки + переключатель «% / сум».
@@ -1883,11 +1889,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 if (!code) { wiz.promo = null; refreshTotals(); return; }
                 const { data, error } = await supabase.from('patient_discounts')
                     .select('id, name, kind, percent, amount').eq('active', 1);
-                if (error) { toast('Не удалось проверить код: ' + error.message, 'fail'); return; }
+                if (error) { toast(trf('Не удалось проверить код: {msg}', { msg: error.message }), 'fail'); return; }
                 const hit = (data || []).find(d => (d.name || '').trim().toLowerCase() === code.toLowerCase());
-                if (!hit) { toast('Код «' + code + '» не найден (Настройки → Скидки пациентов).', 'fail'); return; }
+                if (!hit) { toast(trf('Код «{code}» не найден (Настройки → Скидки пациентов).', { code }), 'fail'); return; }
                 wiz.promo = hit;
-                toast('Применено: ' + hit.name + (hit.percent ? ' (−' + hit.percent + '%)' : hit.amount ? ' (−' + fmtPrice(hit.amount) + ' сум)' : ''), 'ok');
+                toast(trf('Применено: {what}', { what: hit.name + (hit.percent ? ' (−' + hit.percent + '%)' : hit.amount ? ' (−' + fmtPrice(hit.amount) + ' ' + tr('сум') + ')' : '') }), 'ok');
                 refreshTotals();
             },
         }, 'Применить');
@@ -1935,7 +1941,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const NEXT_TITLES = { 2: 'Направление', 3: 'Кто платит', 4: 'Подтверждение' };
         const seqIdx = seq.indexOf(wiz.step);
         const nextStep = seqIdx >= 0 && seqIdx < seq.length - 1 ? seq[seqIdx + 1] : null;
-        const nextLabel = nextStep ? 'Далее: ' + NEXT_TITLES[nextStep] : 'Сформировать счёт';   // WIZ_INVOICE_PRINT_V1
+        const nextLabel = nextStep ? trf('Далее: {step}', { step: tr(NEXT_TITLES[nextStep]) }) : 'Сформировать счёт';   // WIZ_INVOICE_PRINT_V1
         const blocked = nextBlockReason();
         const nextBtn = h('button', {
             class: 'btn', type: 'button',
@@ -1962,7 +1968,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         });
         footer.appendChild(nextBtn);
         footer.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', textAlign: 'center' } },
-            blocked ? blocked : ('всё готово — услуг: ' + wiz.cart.length)));
+            blocked ? blocked : trf('всё готово — услуг: {n}', { n: wiz.cart.length })));
         if (wiz.step > 1) {
             footer.appendChild(h('button', {
                 class: 'btn btn-outline btn-sm', type: 'button',
@@ -2057,7 +2063,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     branch_id: branchId,
                     notes: wiz.notes.trim() || null,
                 });
-                if (evErr) throw new Error('Визит на ' + day + ': ' + (evErr.message || 'ensure_visit failed'));
+                if (evErr) throw new Error(trf('Визит на {day}: {msg}', { day, msg: evErr.message || 'ensure_visit failed' }));
                 const visit = ev.visit;
 
                 const vsIds = [];
@@ -2081,7 +2087,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     if (c.when) row.scheduled_at = new Date(c.when).toISOString();
                     if (uid != null) row.created_by = uid;
                     const res = await supabase.from('visit_services').insert(row).select().single();
-                    if (res.error) throw new Error('Услуга «' + c.svc.name + '»: ' + (res.error.message || 'insert failed'));
+                    if (res.error) throw new Error(trf('Услуга «{name}»: {msg}', { name: c.svc.name, msg: res.error.message || 'insert failed' }));
                     vsIds.push(res.data.id);
                     lineByVsId.set(res.data.id, c);
                     if (isCovered(c)) coveredVsIds.push(res.data.id);
@@ -2104,7 +2110,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         const disc = job.payer === null ? discountLeft : 0;
                         const { data: iRes, error: iErr } = await supabase.rpc('create_invoice_for_visit',
                             { visit_id: visit.id, visit_service_ids: job.ids, discount_amount: disc, payer_id: job.payer });
-                        if (iErr) { invoiceFail = ' Счёт (' + day + ', ' + job.label + ') не выставлен: ' + (iErr.message || iErr) + ' — можно выставить из визита.'; continue; }
+                        if (iErr) { invoiceFail = ' ' + trf('Счёт ({day}, {label}) не выставлен: {msg} — можно выставить из визита.', { day, label: job.label, msg: iErr.message || iErr }); continue; }
                         invoicesOk++;
                         // DISCOUNT_CARRY_V1 — остаток скидки переходит на счёт
                         // СЛЕДУЮЩЕГО дня, а не сгорает.
@@ -2165,6 +2171,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     // PAYER_FROM_SETTINGS_V1 — на печатном счёте плательщик назван
                     // так же, как в настройках и в подтверждении мастера.
                     const _p = wiz.payers.find(p => String(p.id) === String(wiz.payerId));
+                    /* i18n-exempt-start: печатный счёт (бланк) — печатный документ, намеренно русский */
                     const payLabel = _p
                         ? _p.name + ' · ' + payerKindRu(_p.kind)
                             + (wiz.payMethod === 'dms' && wiz.policyNo.trim() ? ' · полис ' + wiz.policyNo.trim() : '')
@@ -2210,6 +2217,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         queue: queueRows,   // QUEUE_TICKET_V1
                         subtotal: patientTotal(), total: Math.max(0, patientTotal() - discountAmount()), paid: 0,
                     } });
+                    /* i18n-exempt-end */
                 } catch (e) { console.warn('[wizard] invoice print:', e); }
             }
 
@@ -2228,18 +2236,18 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 try { printAkt(job); } catch (e) { console.warn('[wizard] akt print:', e); }
             }
 
-            const dayWord = byDay.size > 1 ? ' (дней: ' + byDay.size + ')' : '';
+            const dayWord = byDay.size > 1 ? ' ' + trf('(дней: {n})', { n: byDay.size }) : '';
             const cashInvoices = invoicesOk - aktJobs.length;
             const invMsg = invoiceFail || [
-                cashInvoices > 0 ? ' Счёт пациента выставлен — виден в кассе.' : '',
-                aktJobs.length ? ' Услуги плательщика — по акту, в кассу не идут.' : '',
+                cashInvoices > 0 ? ' ' + tr('Счёт пациента выставлен — виден в кассе.') : '',
+                aktJobs.length ? ' ' + tr('Услуги плательщика — по акту, в кассу не идут.') : '',
             ].join('');
-            toast('Услуги добавлены' + dayWord + '.' + invMsg, invoiceFail ? 'info' : 'ok');
+            toast(tr('Услуги добавлены') + dayWord + '.' + invMsg, invoiceFail ? 'info' : 'ok');
             await closeCrmLines();   // CRM_SCHEDULE_V1
             close();
             if (typeof onSaved === 'function') await onSaved();
         } catch (e) {
-            toast('Не удалось сохранить услуги: ' + (e && e.message || e), 'fail');
+            toast(trf('Не удалось сохранить услуги: {msg}', { msg: (e && e.message) || e }), 'fail');
             wiz.creating = false;
             repaintRail();
         }

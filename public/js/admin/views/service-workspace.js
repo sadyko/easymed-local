@@ -10,6 +10,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, Avatar, Tag, StatusTag, clear, toast } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
 import { openItemPickerModal } from './item-picker-modal.js?v=billoptin1';   // DISPENSE_ITEM_V1
 import { logPatientActivity } from './activity-log.js';
@@ -36,7 +37,7 @@ function _a4NaturalSig(paper) {
 }
 function makeA4Break(pg, fill) {
     return h('div', { class: 'a4-pbreak', contenteditable: 'false', style: { height: Math.round(fill) + 'px' } },
-        h('span', { class: 'a4-pbreak-tag' }, 'Разрыв страницы · Sahifa ' + pg));
+        h('span', { class: 'a4-pbreak-tag' }, 'Разрыв страницы · Sahifa ' + pg));   // i18n-exempt: метка листа ДОКУМЕНТА — двуязычная (ru+uz) по замыслу бланка
 }
 function paginateA4(paper) {
     if (!paper || !paper.isConnected) return;
@@ -118,7 +119,7 @@ function ensureWsStyle() {
 function wsToggleChip(gridEl, side, label) {
     const st = wsLayoutState();
     const chip = h('button', { class: 'ws-tg' + (st[side] ? '' : ' off'), type: 'button',
-        title: (st[side] ? 'Скрыть' : 'Показать') + ' боковую панель' },
+        title: st[side] ? tr('Скрыть боковую панель') : tr('Показать боковую панель') },
         Icon(side === 'left' ? 'ChevronLeft' : 'ChevronRight', { size: 14 }), label);
     chip.addEventListener('click', function () {
         const s2 = wsLayoutState(); s2[side] = !s2[side]; saveWsLayout(s2);
@@ -127,7 +128,7 @@ function wsToggleChip(gridEl, side, label) {
         const panel = gridEl.querySelector('[data-ws-' + side + ']');
         if (panel) panel.classList.toggle('ws-hide', !s2[side]);
         chip.classList.toggle('off', !s2[side]);
-        chip.title = (s2[side] ? 'Скрыть' : 'Показать') + ' боковую панель';
+        chip.title = s2[side] ? tr('Скрыть боковую панель') : tr('Показать боковую панель');
     });
     return chip;
 }
@@ -292,7 +293,7 @@ async function loadVitals(ctx) {
         const v = (data && data[0]) || null;
         clear(strip);
         vitalChips(v).forEach(c => strip.appendChild(c));
-        if (v && v.recorded_at) strip.title = 'Витальные · ' + dateTimeShort(v.recorded_at);
+        if (v && v.recorded_at) strip.title = trf('Витальные · {when}', { when: dateTimeShort(v.recorded_at) });
     } catch (e) { /* leave dashes */ }
 }
 
@@ -580,7 +581,7 @@ function paintDispensed(ctx) {
 // Void a dispensed line — returns stock + deletes the row via the RPC, then
 // reloads + repaints. RAISEs (toasted) if already invoiced.
 async function voidDispensedItemWs(ctx, it) {
-    if (!confirm(`Отменить «${it.name}»? Препарат вернётся на склад.`)) return;
+    if (!confirm(trf('Отменить «{name}»? Препарат вернётся на склад.', { name: it.name }))) return;
     try {
         const { error } = await supabase.rpc('void_dispensed_visit_item', { p_line: it.id });
         if (error) throw error;
@@ -783,6 +784,7 @@ function insertDxBlock(ctx) {
         const t = DX_TYPE_RU[d.type] ? ` (${DX_TYPE_RU[d.type].toLowerCase()})` : '';
         return `<div><b>${esc(d.code || '')}</b> — ${esc(d.name || '')}${t}</div>`;
     }).join('');
+    // i18n-exempt: HTML вставляется В ДОКУМЕНТ приёма — содержимое бланка, не текст интерфейса
     const html = `<div><b>Диагноз (МКБ-10):</b></div>${rows}`;
     a4InsertHtml(ctx, html, 'primary_diagnosis', 'Вставлено в документ');
 }
@@ -794,6 +796,7 @@ function insertRecsBlock(ctx) {
         const parts = [r.__service_name, (r.__doctor_name && r.__doctor_name !== '(unknown)') ? r.__doctor_name : null, r.notes].filter(Boolean);
         return `<li>${esc(parts.join(', '))}</li>`;
     }).join('');
+    // i18n-exempt: HTML вставляется В ДОКУМЕНТ приёма
     const html = `<div><b>Рекомендовано:</b></div><ul>${rows}</ul>`;
     a4InsertHtml(ctx, html, 'recommendations_text', 'Вставлено в документ');
 }
@@ -805,6 +808,7 @@ function insertRxBlock(ctx) {
         const tail = [rx.dose, rx.freq, rx.dur, rx.notes].filter(Boolean).join(', ');
         return `<li><b>${esc(rx.name || '(без названия)')}</b>${tail ? ' — ' + esc(tail) : ''}</li>`;
     }).join('');
+    // i18n-exempt: HTML вставляется В ДОКУМЕНТ приёма
     const html = `<div><b>Назначения:</b></div><ol>${rows}</ol>`;
     a4InsertHtml(ctx, html, 'therapy_text', 'Вставлено в документ');
 }
@@ -816,8 +820,8 @@ function insertRxBlock(ctx) {
 // ---------------------------------------------------------------------------
 function a4Section(ctx, { sec, ru, uz, field, ph }) {
     return h('div', { class: 'a4-sec' + (wsSectionOn(sec) ? '' : ' a4-sec-off'), 'data-sec': sec, style: { position: 'relative' } },
-        h('button', { class: 'a4-sec-add', type: 'button', onclick: () => wsAddSection(ctx, sec) }, '+ Добавить: ' + ru),
-        h('span', { class: 'a4-sec-tag' }, `${ru} · ${uz}`),
+        h('button', { class: 'a4-sec-add', type: 'button', onclick: () => wsAddSection(ctx, sec) }, trf('+ Добавить: {name}', { name: ru })),
+        h('span', { class: 'a4-sec-tag' }, `${ru} · ${uz}`),   // i18n-exempt: подпись раздела ДОКУМЕНТА — двуязычная (ru+uz) по замыслу бланка
         h('button', { class: 'a4-sec-x', type: 'button', title: 'Убрать раздел', onclick: () => wsRemoveSection(ctx, sec) }, '×'),
         h('div', {
             class: 'a4-input', 'data-field': field, contentEditable: 'true',
@@ -990,7 +994,7 @@ function soapForm(ctx) {
                     ),
                     h('div', { class: 'a4-doctitle' }, 'Приём (осмотр, консультация)',
                         h('small', null, 'Qabul (ko\'rik, konsultatsiya)'),
-                        h('div', { class: 'a4-datebox' }, 'ДАТА · SANA: ' + today),
+                        h('div', { class: 'a4-datebox' }, 'ДАТА · SANA: ' + today),   // i18n-exempt: шапка ДОКУМЕНТА — двуязычная (ru+uz) по замыслу бланка
                     ),
                 ),
                 // PAPER_PATIENT_LINE_V1 — patient details on a single long line
@@ -1316,10 +1320,11 @@ async function openHospitalizationRequestModal(ctx) {
             // PAPER_ACTIONS_NOTE_V1 — mirror the inpatient request into the document as a recommendation.
             const _pw = pathwaySel.value === 'surgical' ? 'хирургическая' : 'терапевтическая';
             const _dx = dxInput.value.trim(); const _cc = ccInput.value.trim();
+            // i18n-exempt: HTML вставляется В ДОКУМЕНТ приёма
             noteInRecommendations(ctx, `<div><b>Рекомендована госпитализация в стационар</b> (${esc(_pw)})${_dx ? '. Диагноз направления: ' + esc(_dx) : ''}${_cc ? '. Повод: ' + esc(_cc) : ''}.</div>`);
             toast('Заявка на госпитализацию оформлена', 'ok');
             close();
-        } catch (e) { toast('Не удалось оформить заявку: ' + (e.message || e), 'fail'); }
+        } catch (e) { toast(trf('Не удалось оформить заявку: {msg}', { msg: e.message || e }), 'fail'); }
         finally { if (ev.currentTarget && ev.currentTarget.isConnected) ev.currentTarget.disabled = false; }
     } }, Icon('Bed', { size: 14 }), ' Оформить заявку');
 
@@ -1443,7 +1448,7 @@ async function openRevisitModal(ctx) {
             const _past = (() => { const n = new Date(); return new Date(state.sel.y, state.sel.m, state.sel.d).toDateString() === n.toDateString() && (hh * 60 + mm) <= (n.getHours() * 60 + n.getMinutes()); })(); slots.push({ label, busy: lunch || _past || booked.has(label), lunch, past: _past });
         }
         const free = slots.filter(s => !s.busy).length;
-        slotsWrap.appendChild(h('div', { class: 'rv-slotcount', style: { color: free ? 'var(--ok-700)' : 'var(--crit-700)' } }, `Свободно: ${free}`));
+        slotsWrap.appendChild(h('div', { class: 'rv-slotcount', style: { color: free ? 'var(--ok-700)' : 'var(--crit-700)' } }, trf('Свободно: {n}', { n: free })));
         const grid = h('div', { class: 'rv-slots' });
         slots.forEach(s => {
             const cls = ['rv-slot', s.busy ? 'busy' : '', state.slot === s.label ? 'on' : ''].filter(Boolean).join(' ');
@@ -1498,7 +1503,7 @@ async function openRevisitModal(ctx) {
                 await logPatientActivity({
                     patientId, visitId: visit.id, entityType: 'visit', entityId: visit.id,
                     entityLabel: 'Повторный визит', action: 'scheduled',
-                    summary: `Повторный визит: ${isoDate} ${state.slot}`,
+                    summary: `Повторный визит: ${isoDate} ${state.slot}`,   // i18n-exempt: запись в журнал действий (БД) — хранимая запись
                     detail: { reason, comment, consultation_type_id: ctId },
                 });
             } catch (_) {}
@@ -1509,10 +1514,11 @@ async function openRevisitModal(ctx) {
             close();
             markRevisitBooked(ctx, `${dl} · ${state.slot}`);
             // PAPER_ACTIONS_NOTE_V1 — mirror the scheduled revisit into the document.
+            // i18n-exempt: HTML вставляется В ДОКУМЕНТ приёма
             noteInRecommendations(ctx, `<div><b>Повторный визит:</b> ${esc(dl)} · ${esc(state.slot)}${reason ? ' — ' + esc(reason) : ''}</div>`);
             toast('Пациент записан на повторный визит', 'ok');
         } catch (e) {
-            toast('Не удалось записать: ' + (e?.message || e), 'fail');
+            toast(trf('Не удалось записать: {msg}', { msg: e?.message || e }), 'fail');
             bookBtn.removeAttribute('disabled');
         }
     }
@@ -1600,7 +1606,7 @@ function markRevisitBooked(ctx, when) {
     btns.forEach((btn) => {
         btn.classList.add('booked');
         const sub = btn.querySelector('.ws-ba-sub');
-        if (sub) sub.textContent = `Запланировано: ${when}`;
+        if (sub) sub.textContent = trf('Запланировано: {when}', { when });
     });
 }
 
@@ -1842,7 +1848,7 @@ async function openEmrResultModal(row, groupId) {
     } catch (err) {
         clear(body);
         body.appendChild(h('div', { class: 'muted', style: { padding: '14px 0', fontSize: '12.5px', color: 'var(--crit-700)' } },
-            'Не удалось загрузить результаты: ' + (err?.message || err)));
+            trf('Не удалось загрузить результаты: {msg}', { msg: err?.message || err })));
     }
 }
 
@@ -1931,6 +1937,7 @@ async function renderStudyPreview(ctx, prev, study, mode, close) {
             : '—';
         prev.appendChild(h('div', { style: { fontSize: '13px', color: 'var(--ink-800)', lineHeight: '1.5' } }, bodyText));
         prev.appendChild(h('button', { class: 'btn btn-primary btn-sm', style: { marginTop: '12px' }, onclick: () => {
+            // i18n-exempt: HTML вставляется В ДОКУМЕНТ приёма
             const html = `<div><b>${esc(study.serviceName)} от ${dateLabel}.</b> ${bodyText}</div>`;
             _pastePickField(ctx, html, 'instrumental_text', 'Вставлено в документ');
             close && close();
@@ -1968,6 +1975,7 @@ async function renderStudyPreview(ctx, prev, study, mode, close) {
         const chosen = rows.filter((_, i) => checked[i]);
         if (!chosen.length) { toast('Выберите хотя бы один показатель', 'warn'); return; }
         const lines = chosen.map(r => `<tr><td>${esc(r.parameter)}</td><td>${esc(r.value)}${r.unit ? ' ' + esc(r.unit) : ''}</td><td>${esc(r.reference_range || '—')}</td></tr>`).join('');
+        // i18n-exempt: HTML вставляется В ДОКУМЕНТ приёма (таблица результатов)
         const html = `<div><b>${esc(study.serviceName)} от ${dateLabel}:</b></div>`
             + `<table class="a4-restbl"><thead><tr><th>Показатель</th><th>Результат</th><th>Норма</th></tr></thead><tbody>${lines}</tbody></table>`;
         _pastePickField(ctx, html, 'labs_text', 'Вставлено в документ');
@@ -2024,9 +2032,11 @@ async function fillServiceConclusion(body, row) {
         ),
     );
     const _parts = [];
+    /* i18n-exempt-start: HTML сводки уходит В ДОКУМЕНТ, не в интерфейс */
     if (f.physical_exam)        _parts.push('Осмотр: ' + esc(f.physical_exam));
     if (f.primary_diagnosis)    _parts.push('Диагноз: ' + esc(f.primary_diagnosis));
     if (f.recommendations_text) _parts.push('Рекомендации: ' + esc(f.recommendations_text));
+    /* i18n-exempt-end */
     return { html: _parts.length ? '<div>' + _parts.join('. ') + '</div>' : null };
 }
 
@@ -2239,7 +2249,7 @@ async function writePayload(ctx, payload, extraUpdate = {}) {
     const { error } = await supabase.from('visit_services')
         .update({ notes: JSON.stringify(payload), ...extraUpdate })
         .eq('id', ctx.visitServiceId);
-    if (error) { toast('Не удалось сохранить: ' + error.message, 'fail'); return false; }
+    if (error) { toast(trf('Не удалось сохранить: {msg}', { msg: error.message }), 'fail'); return false; }
     wsState.payload = payload;
     return true;
 }
@@ -2291,7 +2301,7 @@ function paintRxDoc(ctx) {
                 h('th', { style: th }, 'Длительность'))),
             h('tbody', null, list.map((r, i) => h('tr', null,
                 h('td', { style: Object.assign({}, td, { color: 'var(--primary-600,#167873)', fontWeight: '700' }) }, String(i + 1)),
-                h('td', { style: Object.assign({}, td, { fontWeight: '600' }) }, r.name, r.notes ? h('div', { style: { fontWeight: '400', fontStyle: 'italic', color: '#7a8290', fontSize: '11.5px', marginTop: '2px' } }, r.notes) : null, r.nurse ? h('div', { style: { fontWeight: '400', color: '#7a8290', fontSize: '11.5px', marginTop: '2px' } }, 'Медсестре: ' + r.nurse) : null),
+                h('td', { style: Object.assign({}, td, { fontWeight: '600' }) }, r.name, r.notes ? h('div', { style: { fontWeight: '400', fontStyle: 'italic', color: '#7a8290', fontSize: '11.5px', marginTop: '2px' } }, r.notes) : null, r.nurse ? h('div', { style: { fontWeight: '400', color: '#7a8290', fontSize: '11.5px', marginTop: '2px' } }, trf('Медсестре: {name}', { name: r.nurse })) : null),
                 h('td', { style: td }, r.dose || '—'),
                 h('td', { style: td }, r.freq || '—'),
                 h('td', { style: td }, r.dur || '—'))))));
@@ -2329,7 +2339,7 @@ function paintPrescriptions(ctx) {
                     rx.name || '(без названия)',
                     rx.dose ? h('span', { style: { color: 'var(--ink-500)', fontWeight: 500 } }, ' · ' + rx.dose) : null),
                 meta && h('div', { class: 'muted', style: { fontSize: '11.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, meta),
-                rx.nurse && h('div', { style: { fontSize: '11.5px', color: 'var(--warn-700, #b45309)', marginTop: '2px' } }, 'Медсестре: ' + rx.nurse),
+                rx.nurse && h('div', { style: { fontSize: '11.5px', color: 'var(--warn-700, #b45309)', marginTop: '2px' } }, trf('Медсестре: {name}', { name: rx.nurse })),
             ),
             h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: 'Изменить', onclick: () => openPrescriptionDialog(ctx, i) }, Icon('Edit', { size: 12 })),
             canDeleteRole('consultation') && h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: 'Удалить', style: { color: 'var(--crit-700)' }, onclick: () => removePrescription(ctx, i) }, Icon('Trash', { size: 12 })),
@@ -2434,7 +2444,7 @@ async function removePrescription(ctx, index) {
     const items = Array.isArray(payload.prescriptions) ? payload.prescriptions : [];
     const entry = items[index];
     if (!entry) return;
-    if (!confirm(`Удалить ${entry.name || 'этот препарат'}?`)) return;
+    if (!confirm(trf('Удалить {name}?', { name: entry.name || tr('этот препарат') }))) return;
     items.splice(index, 1);
     payload.prescriptions = items;
     if (!await writePayload(ctx, payload)) return;
@@ -2694,7 +2704,7 @@ function historyMeta(item) {
     if (item.kind === 'signed') {
         return {
             icon: 'Check', bg: 'var(--ok-50)', fg: 'var(--ok-700)',
-            title: 'Подписано' + (item.byName ? ' · ' + item.byName : '') + ' и завершено',
+            title: item.byName ? trf('Подписано · {name} и завершено', { name: item.byName }) : tr('Подписано и завершено'),
             subtitle: (item.fields?.primary_diagnosis || '').trim() || null,
         };
     }
@@ -2803,7 +2813,7 @@ async function handleSave(ctx, btnEl) {
     }
     if (missing.length) {
         wsState.saved = false;
-        toast('Заполните обязательные поля: ' + missing.join(', '), 'fail');
+        toast(trf('Заполните обязательные поля: {fields}', { fields: missing.join(', ') }), 'fail');
         firstBad?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         return;
     }
@@ -2991,11 +3001,11 @@ function openDiagnosisModal(ctx) {
                 if (my !== _dxToken) return;
                 clear(resultsEl);
                 (data || []).forEach(it => resultsEl.appendChild(rowFor(it)));
-                countEl.textContent = 'В справочнике ' + (count ? count.toLocaleString('ru-RU') : '14 000+') + ' кодов МКБ-10 — введите код или название';
+                countEl.textContent = trf('В справочнике {n} кодов МКБ-10 — введите код или название', { n: count ? count.toLocaleString('ru-RU') : '14 000+' });
             } catch (e) {
                 clear(resultsEl);
                 ICD_SEED.forEach(it => resultsEl.appendChild(rowFor(it)));
-                countEl.textContent = 'Найдено: ' + ICD_SEED.length;
+                countEl.textContent = trf('Найдено: {n}', { n: ICD_SEED.length });
             }
             return;
         }
@@ -3026,13 +3036,13 @@ function openDiagnosisModal(ctx) {
                     toast('Диагноз добавлен', 'ok');
                     searchIn.value = '';
                     runSearch('');
-                } }, Icon('Plus', { size: 12 }), ' Добавить вручную: «' + query + '»'),
+                } }, Icon('Plus', { size: 12 }), ' ', trf('Добавить вручную: «{q}»', { q: query })),
             ));
             countEl.textContent = 'Найдено: 0';
             return;
         }
         list.forEach(it => resultsEl.appendChild(rowFor(it)));
-        countEl.textContent = 'Найдено: ' + list.length + (list.length >= 50 ? '+' : '');
+        countEl.textContent = trf('Найдено: {n}', { n: String(list.length) + (list.length >= 50 ? '+' : '') });
     }
     let debounce = null;
     searchIn.addEventListener('input', () => { clearTimeout(debounce); debounce = setTimeout(() => runSearch(searchIn.value), 250); });
@@ -3311,7 +3321,7 @@ function openTemplateLibraryModal(ctx) {
             return;
         }
         footEl.appendChild(h('span', { class: 'muted', style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px' } },
-            tplState.rows.length + ' шаблон(ов) · ', Icon('Globe', { size: 12 }), ' общие видны всем врачам клиники'));
+            trf('{n} шаблон(ов)', { n: tplState.rows.length }), ' · ', Icon('Globe', { size: 12 }), ' общие видны всем врачам клиники'));
         footEl.appendChild(h('span', { class: 'grow' }));
         footEl.appendChild(h('button', { class: 'btn btn-ghost', type: 'button', onclick: close }, 'Закрыть'));
     }
@@ -3406,7 +3416,7 @@ function paintOwnServices(ctx) {
     items.forEach((svc, i) => list.appendChild(h('div', { class: 'cn-dx-row' },
         h('span', { class: 'cn-dx-name' }, svc.name || '—'),
         h('span', { class: 'num', style: { fontSize: '12px', color: 'var(--ink-700)', whiteSpace: 'nowrap' } },
-            (svc.price != null ? Number(svc.price).toLocaleString('ru-RU') : '—') + ' сум'),
+            (svc.price != null ? Number(svc.price).toLocaleString('ru-RU') : '—'), ' сум'),
         patientTabCanEdit('services') && h('button', {   // AURORA_DX_DELETE_GATE_V1 — the doctor can remove a service they added
             class: 'btn btn-ghost btn-sm', type: 'button', title: 'Удалить', style: { color: 'var(--crit-700)' },
             onclick: () => removeOwnService(ctx, i),
@@ -3484,7 +3494,7 @@ async function handleSaveDraft(ctx, opts = {}) {
     if (!await writePayload(ctx, payload)) return false;
     paintHistoryList(ctx);
     if (wsState.rtab === 'drafts') paintRtab(ctx);
-    updateSavedMarker(ctx, 'Сохранено · ' + shortTime(entry.savedAt));
+    updateSavedMarker(ctx, trf('Сохранено · {time}', { time: shortTime(entry.savedAt) }));
     if (!opts.silent) toast('Черновик сохранён', 'ok');
     return true;
 }
@@ -3507,11 +3517,11 @@ async function handleSignFinalize(ctx) {
     const _last = _prevSigned.length ? _prevSigned[_prevSigned.length - 1] : null;
     const _isOwner = _actor.is_super_admin === true || (_actor.is_admin === true && !!_actor.company_id);
     if (_last && _last.by && _last.by !== _actor.id && !_isOwner) {
-        toast('Документ подписан другим сотрудником (' + (_last.byName || '—') + '). Изменить может только автор или администратор.', 'fail');
+        toast(trf('Документ подписан другим сотрудником ({name}). Изменить может только автор или администратор.', { name: _last.byName || '—' }), 'fail');
         return;
     }
     const _signMsg = _prevSigned.length
-        ? ('Документ уже подписан' + (_last && _last.byName ? ' (' + _last.byName + ')' : '') + '.\n\nСоздать НОВУЮ версию (изменение)? Предыдущая версия останется в истории.')
+        ? (_last && _last.byName ? trf('Документ уже подписан ({name}).\n\nСоздать НОВУЮ версию (изменение)? Предыдущая версия останется в истории.', { name: _last.byName }) : tr('Документ уже подписан.\n\nСоздать НОВУЮ версию (изменение)? Предыдущая версия останется в истории.'))
         : (_hasText
             ? 'Подписать и завершить приём?\n\nУслуга будет отмечена выполненной, а пациент покинет вашу очередь.'
             : 'Документ выглядит ПУСТЫМ.\n\nВсё равно подписать и завершить приём?');
@@ -3564,7 +3574,7 @@ async function handleSignFinalize(ctx) {
     const visitCompleted = await syncVisitStatus(ctx.visitId);
 
     paintHistoryList(ctx);
-    updateSavedMarker(ctx, 'Подписано · ' + shortTime(entry.savedAt));
+    updateSavedMarker(ctx, trf('Подписано · {time}', { time: shortTime(entry.savedAt) }));
     toast(visitCompleted ? 'Документ подписан. Приём пациента завершён.' : 'Документ подписан. Услуга отмечена выполненной.');
 
     // Bounce back to the My services list so the queue refreshes.
@@ -3727,7 +3737,7 @@ function openReferralPicker(ctx, target) {
         return;
     }
     openServicePickerModal({
-        title:           'Направить: ' + target.label,
+        title:           trf('Направить: {label}', { label: tr(target.label) }),
         titleIcon:       target.icon,
         confirmLabel:    'Отправить направление',
         confirmIcon:     'ArrowRight',
@@ -3768,7 +3778,7 @@ function openDispenseConsultItem(ctx) {
                     const name = res?.item_name || item.name;
                     ok++;
                     if (res && Number(res.on_hand) <= 0) {
-                        toast(`Внимание: остаток ${name} теперь ${Number(res.on_hand).toLocaleString('ru-RU')} (мало/в минусе).`, 'fail');
+                        toast(trf('Внимание: остаток {name} теперь {n} (мало/в минусе).', { name, n: Number(res.on_hand).toLocaleString('ru-RU') }), 'fail');
                     }
                     // Log the dispense to the patient timeline (best-effort).
                     try {
@@ -3788,7 +3798,7 @@ function openDispenseConsultItem(ctx) {
             // RX_SEPARATE_V1 — refresh the «Назначения» list with the new lines.
             try { await loadDispensedItems(ctx); paintDispensed(ctx); } catch (e) { /* non-blocking */ }
             if (ok === 0) throw new Error(fails[0] || 'Не удалось выдать товары');
-            toast(`Выдано позиций: ${ok}` + (fails.length ? ` · ошибок: ${fails.length}` : ''));
+            toast(trf('Выдано позиций: {n}', { n: ok }) + (fails.length ? ' · ' + trf('ошибок: {n}', { n: fails.length }) : ''));
             if (fails.length) toast(fails.join('; '), 'fail');
         },
     });
@@ -3833,7 +3843,7 @@ async function openRecommendPickerModal(ctx) {
             .eq('active', true).order('name'),
         supabase.from('service_types').select('id, name').eq('active', true).order('name'),
     ]);
-    if (error) { clear(listEl); listEl.appendChild(h('div', { class: 'empty' }, 'Не удалось загрузить услуги: ' + error.message)); return; }
+    if (error) { clear(listEl); listEl.appendChild(h('div', { class: 'empty' }, trf('Не удалось загрузить услуги: {msg}', { msg: error.message }))); return; }
     st.types = typesRes && typesRes.data ? typesRes.data : [];
     st.services = data || [];
 
@@ -3846,8 +3856,8 @@ async function openRecommendPickerModal(ctx) {
             class: 'btn btn-sm' + (st.type === val ? ' btn-primary' : ' btn-outline'),
             style: { borderRadius: '999px' },
             onclick: () => { st.type = val; paintChips(); paintList(); } }, label);
-        chipsEl.appendChild(mk('all', 'Все · ' + st.services.length));
-        Object.keys(counts).sort().forEach(t => chipsEl.appendChild(mk(t, t + ' · ' + counts[t])));
+        chipsEl.appendChild(mk('all', trf('Все · {n}', { n: st.services.length })));
+        Object.keys(counts).sort().forEach(t => chipsEl.appendChild(mk(t, tr(t) + ' · ' + counts[t])));
     }
     function paintList() {
         clear(listEl);
@@ -3871,8 +3881,8 @@ async function openRecommendPickerModal(ctx) {
                 h('div', { style: { flex: '1 1 auto', minWidth: 0 } },
                     h('div', { style: { fontWeight: 600, fontSize: '13px' } }, s.name),
                     h('div', { class: 'muted', style: { fontSize: '11.5px' } },
-                        typeName(s) + (s.duration_minutes ? ' · ' + s.duration_minutes + ' мин' : ''))),
-                h('div', { class: 'cell-mono', style: { whiteSpace: 'nowrap', fontWeight: 600 } }, Number(s.price || 0).toLocaleString('ru-RU') + ' сум'),
+                        typeName(s) + (s.duration_minutes ? ' · ' + trf('{n} мин', { n: s.duration_minutes }) : ''))),
+                h('div', { class: 'cell-mono', style: { whiteSpace: 'nowrap', fontWeight: 600 } }, Number(s.price || 0).toLocaleString('ru-RU'), ' сум'),
                 btn));
         }
         if (rows.length > 200) listEl.appendChild(h('div', { class: 'muted', style: { padding: '8px', fontSize: '11.5px' } }, 'Показаны первые 200 — уточните поиск.'));
@@ -3889,6 +3899,7 @@ async function sendReferral(ctx, target, service, doctor) {
 
     const refDoctorId   = ctx.patient.__service?.doctorId   || null;
     const refDoctorName = ctx.patient.__service?.doctorName || null;
+    // i18n-exempt: note пишется В БАЗУ (recommended_services) — хранимая запись
     const note = target.label + (doctor ? ` — выполняет ${doctor.full_name || doctor.name}` : '');
     const insertRow = {
         patient_id:          ctx.patient.id,
@@ -3907,7 +3918,7 @@ async function sendReferral(ctx, target, service, doctor) {
         if (/relation .* does not exist/i.test(error.message) || /could not find the table/i.test(error.message) || /schema cache/i.test(error.message)) {
             toast('Сначала примените миграцию 009_recommended_services.sql.', 'fail');
         } else {
-            toast('Не удалось отправить направление: ' + error.message, 'fail');
+            toast(trf('Не удалось отправить направление: {msg}', { msg: error.message }), 'fail');
         }
         return;
     }
@@ -3919,7 +3930,7 @@ async function sendReferral(ctx, target, service, doctor) {
         entityId:    data?.id || null,
         entityLabel: service.name,
         action:      'sent',
-        summary:     `Направление (${target.label}): ${service.name}` + (doctor ? ` — ${doctor.full_name || doctor.name}` : ''),
+        summary:     `Направление (${target.label}): ${service.name}` + (doctor ? ` — ${doctor.full_name || doctor.name}` : ''),   // i18n-exempt: журнал действий (БД) — хранимая запись
         detail:      { target: target.label, doctor_id: doctor?.id || null, doctor_name: doctor?.full_name || doctor?.name || null },
     });
 
@@ -3928,7 +3939,7 @@ async function sendReferral(ctx, target, service, doctor) {
     await loadRecommendations(ctx);
     paintRecommendations(ctx);
 
-    toast('Направление отправлено: ' + target.label +
+    toast(trf('Направление отправлено: {label}', { label: tr(target.label) }) +
           (service?.name ? ' (' + service.name + ').' : '.'));
 }
 
@@ -3970,6 +3981,7 @@ async function handlePrint(ctx) {
               ${rx.nurse ? '<div class="muted small">Медсестре: ' + escapeHtml(rx.nurse) + '</div>' : ''}
             </div>`).join('');
 
+    /* i18n-exempt-start: HTML заключения — содержимое ДОКУМЕНТА, не текст интерфейса */
     const recsBlock = recs.length === 0
         ? `<dd class="muted">Дополнительные услуги не рекомендованы.</dd>`
         : recs.map(rec => `
@@ -3977,6 +3989,7 @@ async function handlePrint(ctx) {
               <div class="rx-name">${escapeHtml(rec.__service_name)}</div>
               <div class="muted small">Рекомендовал ${escapeHtml(rec.__doctor_name || '—')}${rec.notes ? ' · ' + escapeHtml(rec.notes) : ''}</div>
             </div>`).join('');
+    /* i18n-exempt-end */
 
     // UNIFY_PRINT_V2 — print the consultation via the single conclusion renderer (data, not bodyHtml),
     // so the doctor's printout == the #documents «Заключение» preview.
@@ -4011,6 +4024,7 @@ async function handlePrint(ctx) {
             description: data.instrumental || '', conclusion: data.dx || '',
             images: wsState.diagImages || [],   // DIAG_IMAGES_V1
         };
+        // i18n-exempt: печатное заключение — печатный документ
         printableSheet({ type: _dt, data: _data, title: 'Заключение · ' + patientName, idLine: p.mrn || '', settings: loadDocSettings() });
     } catch (e) {
         console.error('[ws print]', e);
@@ -4034,6 +4048,7 @@ async function openRecipeModal(ctx) {
     const p   = ctx.patient || {};
     const svc = p.__service || {};
     const patientName = `${p.lastName || ''} ${p.firstName || ''} ${p.middle || ''}`.trim() || p.fullName || 'Пациент';
+    /* i18n-exempt-start: «Рецепт» — печатный бланк (Rp., ru+uz), содержимое документа */
     const ageStr = (p.age != null && p.age !== '') ? (String(p.age) + ' лет') : '—';
     const sexStr = (p.gender === 'M' ? 'Муж.' : p.gender === 'F' ? 'Жен.' : (p.gender || '—'));
     const dob = p.dob || p.birthDate || '—';
@@ -4189,6 +4204,7 @@ async function openRecipeModal(ctx) {
         w.document.write(html);
         w.document.close();
     }
+    /* i18n-exempt-end */
 
     // -------- modal chassis (canonical openPrescriptionDialog pattern) --------
     const overlay = h('div', { class: 'modal', style: { zIndex: '130' } });
