@@ -12,6 +12,7 @@ import { supabase } from '../../supabase.js';
 import { isAccommodationLine, isServiceLine, isGoodsLine, ACCOMMODATION_LABEL } from '../../shared/accommodation-line.js';
 import { CAT_ORDER, categoryOf, filterCatalog, categoryCounts } from '../../shared/service-categories.js';   // SERVICE_CATALOG_FILTER_V1   // ACCOMMODATION_AS_SERVICE_V1
 import { h, Icon, clear, toast, Tag, field, fmtDateTime, initials } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — tr() matches WHOLE strings, so assembled sentences go through trf(): translate first, substitute second
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { searchableSelect } from './searchable-select.js?v=ss2';   // SEARCHABLE_SELECT_V1
 
@@ -247,8 +248,8 @@ function quickCreatePatient(onCreated) {
             if (phoneInp.value.trim()) payload.phone = phoneInp.value.trim();
             if (dobInp.value) payload.date_of_birth = dobInp.value;
             const { data, error } = await supabase.from('patients').insert(payload).select('id, full_name, mrn').single();
-            if (error) { toast('Не удалось создать: ' + error.message, 'fail'); return false; }
-            toast('Пациент создан: ' + data.full_name + (data.mrn ? ' · ' + data.mrn : ''), 'ok');
+            if (error) { toast(trf('Не удалось создать: {msg}', { msg: error.message }), 'fail'); return false; }
+            toast(trf('Пациент создан: {name}', { name: data.full_name + (data.mrn ? ' · ' + data.mrn : '') }), 'ok');
             onCreated(data);
             return true;
         });
@@ -282,7 +283,7 @@ function admitModal(bed, ward, root) {
                 // SEARCH_EMPTY_HINT_V1 — пустой результат объясняет себя,
                 // а не выглядит сломанным поиском.
                 results.appendChild(h('div', { class: 'muted', style: { padding: '9px 10px', fontSize: '12.5px' } },
-                    'Не найдено «' + q + '» — проверьте написание или создайте пациента кнопкой «+».'));
+                    trf('Не найдено «{q}» — проверьте написание или создайте пациента кнопкой «+».', { q })));
                 results.style.display = '';
                 return;
             }
@@ -291,7 +292,7 @@ function admitModal(bed, ward, root) {
                     style: { padding: '7px 10px', cursor: 'pointer', fontSize: '13px' },
                     onmouseover: (e) => e.currentTarget.style.background = 'var(--ink-25)',
                     onmouseout: (e) => e.currentTarget.style.background = 'transparent',
-                    onclick: () => { patientId = p.id; searchInp.value = p.full_name; chosen.textContent = 'Выбран: ' + p.full_name + (p.mrn ? ' · ' + p.mrn : ''); results.style.display = 'none'; },
+                    onclick: () => { patientId = p.id; searchInp.value = p.full_name; chosen.textContent = trf('Выбран: {name}', { name: p.full_name + (p.mrn ? ' · ' + p.mrn : '') }); results.style.display = 'none'; },
                 }, p.full_name + (p.mrn ? '  ·  ' + p.mrn : '')));
             }
             results.style.display = '';
@@ -318,7 +319,7 @@ function admitModal(bed, ward, root) {
                  background: 'var(--warn-50, #fdf3e1)', border: '1px solid var(--warn-200, #f2d9a6)', color: 'var(--warn-800, #8a6116)' },
         onclick: () => quickCreatePatient((p) => {
             patientId = p.id; searchInp.value = p.full_name;
-            chosen.textContent = 'Выбран: ' + p.full_name + (p.mrn ? ' · ' + p.mrn : '');
+            chosen.textContent = trf('Выбран: {name}', { name: p.full_name + (p.mrn ? ' · ' + p.mrn : '') });
             results.style.display = 'none';
         }),
     }, '+');
@@ -328,7 +329,7 @@ function admitModal(bed, ward, root) {
                 style: { padding: '9px 12px', background: 'var(--primary-25, #f2faf8)', border: '1px solid var(--primary-100, #d7efe9)',
                          borderRadius: '10px', fontSize: '13px', fontWeight: 700, color: 'var(--primary-700)',
                          display: 'flex', alignItems: 'center', gap: '7px' },
-            }, Icon('Bed', { size: 14 }), 'Палата ' + (ward ? ward.name : '—') + ' · Койка ' + bed.code),
+            }, Icon('Bed', { size: 14 }), trf('Палата {ward} · Койка {bed}', { ward: ward ? ward.name : '—', bed: bed.code })),
             field('Пациент', h('div', null,
                 h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } }, searchWrap, newPatientBtn),
                 results, chosen), { required: true }),
@@ -411,7 +412,7 @@ function bedDetailModal(bed, ward, adm, root) {
             h('div', { style: { fontSize: '11px', fontWeight: 800, letterSpacing: '.06em', color: 'var(--primary-700)', marginBottom: '8px' } }, 'ACCOMMODATION'),
             kvRow('Дата поступления', fmtDateTime(adm.admitted_at)),
             kvRow('Длительность', lengthOfStay(adm.admitted_at)),
-            kvRow('Ставка', fmtPrice(est.rate) + ' / ' + (est.unitLabel === 'day' ? 'день' : 'час')),
+            kvRow('Ставка', fmtPrice(est.rate) + ' / ' + (est.unitLabel === 'day' ? tr('день') : tr('час'))),
             h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', margin: '8px 0' } },
                 h('span', { class: 'muted', style: { flex: 1, fontSize: '12.5px' } }, 'Discount %'), discInp, saveDiscBtn),
             h('div', { style: { borderTop: '1px dashed var(--primary-100, #d7efe9)', margin: '8px 0' } }),
@@ -458,7 +459,7 @@ function bedDetailModal(bed, ward, adm, root) {
             h('button', { class: 'btn', style: { background: 'var(--warn-500, #e8a23d)', borderColor: 'var(--warn-500, #e8a23d)', color: '#fff', fontWeight: 700 },
                 onclick: () => transferDialog() }, '→ Перевести'),
             h('button', { class: 'btn btn-primary', disabled: !selCount,
-                onclick: () => generateInvoice() }, Icon('Plus', { size: 14 }), ' Сформировать счёт' + (selCount ? ' (' + selCount + ')' : '')),
+                onclick: () => generateInvoice() }, Icon('Plus', { size: 14 }), ' Сформировать счёт', selCount ? ' (' + selCount + ')' : ''),
             h('button', { class: 'btn', style: { background: 'var(--ok-600, #16a34a)', borderColor: 'var(--ok-600, #16a34a)', color: '#fff', fontWeight: 700 },
                 onclick: () => dischargeDialog() }, Icon('Check', { size: 14 }), ' Выписать'),
             h('span', { class: 'grow' }),
@@ -502,7 +503,7 @@ function bedDetailModal(bed, ward, adm, root) {
     function bedNameById(id) {
         if (id == null) return '—';
         const b = (bedsCache || []).find(x => x.id === id);
-        return b ? ((b.wards && b.wards.name ? b.wards.name + ' · ' : '') + b.code) : ('Койка #' + id);
+        return b ? ((b.wards && b.wards.name ? b.wards.name + ' · ' : '') + b.code) : trf('Койка #{id}', { id });
     }
     let bedsCache = null;
     supabase.from('beds').select('id, code, ward_id, status, active, wards(name)').then(({ data }) => { bedsCache = data || []; paintRight(); });
@@ -537,7 +538,7 @@ function bedDetailModal(bed, ward, adm, root) {
                 h('td', null, billed ? h('span', { class: 'row', style: { gap: '6px' } }, Tag('Invoiced', { kind: 'ok', dot: true }),
                         h('button', { class: 'btn btn-sm', type: 'button', title: 'Убрать строку из неоплаченного счёта',
                             onclick: async () => {
-                                if (!confirm('Убрать «' + name + '» из счёта? Счёт будет пересчитан (пустой — удалён).')) return;
+                                if (!confirm(trf('Убрать «{name}» из счёта? Счёт будет пересчитан (пустой — удалён).', { name }))) return;
                                 const { data: rr, error } = await supabase.rpc('remove_admission_line_from_invoice', { line_id: l.id });
                                 if (error) { toast(error.message, 'fail'); return; }
                                 toast(rr && rr.invoice_deleted ? 'Строка убрана, пустой счёт удалён.' : 'Строка убрана из счёта.');
@@ -552,7 +553,7 @@ function bedDetailModal(bed, ward, adm, root) {
                 h('td', { style: { textAlign: 'right' } }, billed ? null : h('button', {
                     class: 'btn btn-ghost btn-sm', type: 'button', title: 'Убрать', style: { color: 'var(--crit-600, #dc2626)' },
                     onclick: async () => {
-                        if (!confirm('Убрать строку «' + name + '»?')) return;
+                        if (!confirm(trf('Убрать строку «{name}»?', { name }))) return;
                         const { error } = l.clinic_item_id != null
                             ? await supabase.rpc('void_dispensed_admission_item', { p_line: l.id })
                             : await supabase.from('admission_services').delete().eq('id', l.id);
@@ -596,7 +597,7 @@ function bedDetailModal(bed, ward, adm, root) {
                 qtyInp.addEventListener('input', () => { x.qty = qtyInp.value === '' ? 0 : Number(qtyInp.value); refreshTotal(); });
                 listEl.appendChild(h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', padding: '9px 12px', border: '1px solid var(--ink-100)', borderRadius: '12px', background: 'var(--ink-25, #f8fafa)' } },
                     h('span', { style: { flex: 1, minWidth: 0, fontWeight: 600, fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-                        x.s.name, h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '11.5px' } }, ' · ' + fmtPrice(x.s.price) + ' сум')),
+                        x.s.name, h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '11.5px' } }, ' · ' + fmtPrice(x.s.price), ' сум')),
                     qtyInp,
                     h('button', { type: 'button', title: 'Убрать', style: { width: '28px', height: '28px', borderRadius: '999px', border: '1px solid var(--ink-150, var(--ink-200))', background: 'var(--white, #fff)', cursor: 'pointer', color: 'var(--ink-500)', fontWeight: 700, lineHeight: 1, flex: '0 0 auto' }, onmouseenter: (e) => { e.currentTarget.style.background = 'var(--crit-50, #fdecec)'; e.currentTarget.style.color = 'var(--crit-600, #dc2626)'; e.currentTarget.style.borderColor = 'var(--crit-200, #f5c2c2)'; }, onmouseleave: (e) => { e.currentTarget.style.background = 'var(--white, #fff)'; e.currentTarget.style.color = 'var(--ink-500)'; e.currentTarget.style.borderColor = 'var(--ink-150, var(--ink-200))'; },
                         onclick: () => { picked.splice(picked.indexOf(x), 1); paintPicked(); paintCatalog(); } }, '×')));
@@ -684,12 +685,12 @@ function bedDetailModal(bed, ward, adm, root) {
                     h('span', { style: { flex: 1, minWidth: 0, fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
                         s2.name,
                         h('span', { class: 'muted', style: { fontSize: '11.5px' } }, ' · ' + categoryOf(s2))),
-                    h('span', { class: 'num', style: { fontSize: '12.5px', fontWeight: 700, whiteSpace: 'nowrap' } }, fmtPrice(s2.price) + ' сум'),
+                    h('span', { class: 'num', style: { fontSize: '12.5px', fontWeight: 700, whiteSpace: 'nowrap' } }, fmtPrice(s2.price), ' сум'),
                     h('span', { style: { fontSize: '15px', fontWeight: 800, color: already ? 'var(--ink-300)' : 'var(--primary-600)', width: '16px', textAlign: 'center' } }, already ? '✓' : '+')));
             }
             if (pool.length > 200) {
                 catalogEl.appendChild(h('div', { class: 'muted', style: { padding: '10px', textAlign: 'center', fontSize: '11.5px' } },
-                    'Показаны первые 200 из ' + pool.length + ' — уточните поиск.'));
+                    trf('Показаны первые 200 из {n} — уточните поиск.', { n: pool.length })));
             }
         }
 
@@ -735,8 +736,8 @@ function bedDetailModal(bed, ward, adm, root) {
                     });
                     if (error) fails.push(x.s.name + ': ' + error.message); else ok++;
                 }
-                if (fails.length) toast('Добавлено: ' + ok + '. Ошибки — ' + fails.join('; '), 'fail');
-                else toast('Добавлено услуг: ' + ok + '.', 'ok');
+                if (fails.length) toast(trf('Добавлено: {n}. Ошибки — {fails}', { n: ok, fails: fails.join('; ') }), 'fail');
+                else toast(trf('Добавлено услуг: {n}.', { n: ok }), 'ok');
                 await reloadAll();
                 return fails.length === 0;
             });
@@ -767,7 +768,7 @@ function bedDetailModal(bed, ward, adm, root) {
                 qtyInp.addEventListener('input', () => { x.qty = qtyInp.value === '' ? 0 : Number(qtyInp.value); refreshTotal(); });
                 listEl.appendChild(h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', padding: '9px 12px', border: '1px solid var(--ink-100)', borderRadius: '12px', background: 'var(--ink-25, #f8fafa)' } },
                     h('span', { style: { flex: 1, minWidth: 0, fontWeight: 600, fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-                        x.p.name, h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '11.5px' } }, ' ' + (x.p.base_unit || '') + ' · ' + fmtPrice(x.p.sale_price) + ' сум')),
+                        x.p.name, h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '11.5px' } }, ' ' + (x.p.base_unit || '') + ' · ' + fmtPrice(x.p.sale_price), ' сум')),
                     qtyInp,
                     h('button', { type: 'button', title: 'Убрать', style: { width: '28px', height: '28px', borderRadius: '999px', border: '1px solid var(--ink-150, var(--ink-200))', background: 'var(--white, #fff)', cursor: 'pointer', color: 'var(--ink-500)', fontWeight: 700, lineHeight: 1, flex: '0 0 auto' }, onmouseenter: (e) => { e.currentTarget.style.background = 'var(--crit-50, #fdecec)'; e.currentTarget.style.color = 'var(--crit-600, #dc2626)'; e.currentTarget.style.borderColor = 'var(--crit-200, #f5c2c2)'; }, onmouseleave: (e) => { e.currentTarget.style.background = 'var(--white, #fff)'; e.currentTarget.style.color = 'var(--ink-500)'; e.currentTarget.style.borderColor = 'var(--ink-150, var(--ink-200))'; },
                         onclick: () => { picked.splice(picked.indexOf(x), 1); paintPicked(); paintCatalog(); } }, '×')));
@@ -798,7 +799,7 @@ function bedDetailModal(bed, ward, adm, root) {
                 },
                     h('span', { style: { flex: '1 1 auto', minWidth: 0, overflowWrap: 'anywhere' } }, p2.name),
                     h('span', { class: 'muted', style: { flex: '0 0 auto', fontSize: '12px', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' } },
-                        'остаток ' + (p2.on_hand || 0) + ' ' + (p2.base_unit || ''))));
+                        trf('остаток {n} {unit}', { n: p2.on_hand || 0, unit: p2.base_unit || '' }))));
             }
         }
         prodSearch.addEventListener('input', paintProdResults);
@@ -836,8 +837,8 @@ function bedDetailModal(bed, ward, adm, root) {
                     });
                     if (error) fails.push(x.p.name + ': ' + error.message); else ok++;
                 }
-                if (fails.length) toast('Выдано: ' + ok + '. Ошибки — ' + fails.join('; '), 'fail');
-                else toast('Выдано позиций: ' + ok + (billChk.checked ? ' — в счёт пациента.' : ' — в учёт расходов.'), 'ok');
+                if (fails.length) toast(trf('Выдано: {n}. Ошибки — {fails}', { n: ok, fails: fails.join('; ') }), 'fail');
+                else toast(billChk.checked ? trf('Выдано позиций: {n} — в счёт пациента.', { n: ok }) : trf('Выдано позиций: {n} — в учёт расходов.', { n: ok }), 'ok');
                 await reloadAll();
                 return fails.length === 0;
             });
@@ -849,7 +850,7 @@ function bedDetailModal(bed, ward, adm, root) {
         if (!ids.length) { toast('Отметьте небиллованные строки.', 'fail'); return; }
         const { data, error } = await supabase.rpc('create_invoice_for_admission', { admission_id: adm.id, admission_service_ids: ids });
         if (error) { toast(error.message, 'fail'); return; }
-        toast('Счёт ' + ((data.invoice && data.invoice.invoice_number) || '') + ' выставлен — виден в кассе.', 'ok');
+        toast(trf('Счёт {num} выставлен — виден в кассе.', { num: (data.invoice && data.invoice.invoice_number) || '' }), 'ok');
         st.selected = new Set();
         await reloadAll();
     }
@@ -878,7 +879,7 @@ function bedDetailModal(bed, ward, adm, root) {
         const est = estimateCharge(ward, bed, adm.admitted_at, Number(adm.accommodation_discount_percent) || 0);
         modal('Выписать пациента', 'Check',
             [h('div', { style: { fontSize: '13px', lineHeight: 1.6 } },
-                'Проживание (расчёт): ', h('b', null, fmtPrice(est.net) + ' сум'), h('br'),
+                'Проживание (расчёт): ', h('b', null, fmtPrice(est.net), ' сум'), h('br'),
                 'Итог посчитает сервер и добавит в новый счёт. Небиллованные услуги/товары выставите кнопкой «Сформировать счёт».')],
             'Выписать',
             async () => {
@@ -1049,18 +1050,18 @@ function accommodationDueRows(adm, est) {
         const units = st ? st.current.units : est.units;
         const net = st ? st.current.net : est.net;
         const rate = st ? st.current.rate : est.rate;
-        const unitRu = est.unitLabel === 'day' ? 'сут.' : 'ч.';
+        const unitRu = est.unitLabel === 'day' ? tr('сут.') : tr('ч.');   // перевод по словам — сборка вокруг числа (см. changesLabel в branch-sync-logic.js)
 
         if (st && st.stay_units != null) {
             box.appendChild(kvRow('Всего в стационаре', st.stay_units + ' ' + unitRu));
         }
         if (st && st.invoiced && st.invoiced.units > 0) {
             box.appendChild(kvRow('Уже выставлено',
-                st.invoiced.units + ' ' + unitRu + ' · ' + fmtPrice(st.invoiced.total) + ' сум'));
+                st.invoiced.units + ' ' + unitRu + ' · ' + fmtPrice(st.invoiced.total) + ' ' + tr('сум')));
         }
         box.appendChild(kvRow(est.unitLabel === 'day' ? 'К оплате, дней' : 'К оплате, часов', String(units)));
         box.appendChild(h('div', { style: { fontSize: '18px', fontWeight: 800, color: 'var(--primary-700)' } },
-            fmtPrice(net) + ' сум'));
+            fmtPrice(net), ' сум'));
         box.appendChild(h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '2px' } },
             units + ' × ' + fmtPrice(rate)));
     };
@@ -1092,7 +1093,7 @@ function accommodationBox(adm, est, onChanged) {
                 btn.disabled = true;
                 const { data, error } = await supabase.rpc('bill_accommodation', { admission_id: adm.id });
                 if (error) { toast(error.message || 'Не удалось внести проживание.', 'fail'); btn.disabled = false; return; }
-                toast('Проживание внесено в счёт: ' + fmtPrice(data.line.total) + ' сум', 'ok');
+                toast(trf('Проживание внесено в счёт: {sum} сум', { sum: fmtPrice(data.line.total) }), 'ok');
                 await refreshAccommodation(adm.id, paint);
                 if (onChanged) await onChanged();   // строка появилась в «Услугах» — обновляем списки
             });
@@ -1104,7 +1105,7 @@ function accommodationBox(adm, est, onChanged) {
 
         box.appendChild(h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
             h('span', { style: { flex: 1, fontSize: '12.5px', fontWeight: 700, color: 'var(--ok-700, #047857)' } },
-                Icon('Check', { size: 12 }), ' В счёте: ' + fmtPrice(billed.total) + ' сум'),
+                Icon('Check', { size: 12 }), ' ', trf('В счёте: {sum} сум', { sum: fmtPrice(billed.total) })),
             billed.invoiced
                 ? h('span', { class: 'muted', style: { fontSize: '11px' } }, 'выставлено')
                 : h('button', { class: 'btn btn-ghost btn-sm', type: 'button', style: { color: 'var(--crit-600)' },
@@ -1119,7 +1120,7 @@ function accommodationBox(adm, est, onChanged) {
 
         // Снимок устарел: пациент лежит дольше, чем когда проживание вносили.
         if (st.stale) {
-            const upd = h('button', { class: 'btn btn-sm', type: 'button', style: { width: '100%', marginTop: '6px' } }, 'Обновить до ' + fmtPrice(st.current.net) + ' сум');
+            const upd = h('button', { class: 'btn btn-sm', type: 'button', style: { width: '100%', marginTop: '6px' } }, trf('Обновить до {sum} сум', { sum: fmtPrice(st.current.net) }));
             upd.addEventListener('click', async () => {
                 upd.disabled = true;
                 const { error } = await supabase.rpc('bill_accommodation', { admission_id: adm.id });
@@ -1129,7 +1130,7 @@ function accommodationBox(adm, est, onChanged) {
                 if (onChanged) await onChanged();
             });
             box.appendChild(h('div', { style: { fontSize: '11px', color: 'var(--warn-700, #92400e)', marginTop: '6px' } },
-                'Срок вырос: в счёте ' + fmtPrice(billed.total) + ', сейчас ' + fmtPrice(st.current.net)));
+                trf('Срок вырос: в счёте {billed}, сейчас {current}', { billed: fmtPrice(billed.total), current: fmtPrice(st.current.net) })));
             box.appendChild(upd);
         }
     };
