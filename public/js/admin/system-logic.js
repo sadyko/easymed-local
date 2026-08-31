@@ -14,6 +14,11 @@
 import { formatRuDate } from './updates-logic.js';
 
 /** The em-dash the whole app renders for "we do not know" — one constant so a test can assert the exact character. */
+// I18N_COVERAGE_V1 — fill() from updates-logic (same dir, pure): the
+// translate-then-substitute pattern without importing i18n.js, which this
+// module must never do (tests import it statically, i18n.js needs a DOM).
+import { fill } from './updates-logic.js';
+
 export const DASH = '—';
 
 function pad2(n) { return String(n).padStart(2, '0'); }
@@ -38,16 +43,16 @@ export function formatRuDateTime(v) {
  * numbers above. Garbage/negative/missing → em-dash, never "NaN Б" — the
  * parallel-built server may omit `size` entirely.
  */
-export function formatBytes(n) {
+export function formatBytes(n, t = (s) => s) {
   const v = typeof n === 'number' ? n : (typeof n === 'string' && n.trim() !== '' ? Number(n) : NaN);
   if (!Number.isFinite(v) || v < 0) return DASH;
-  if (v < 1024) return `${Math.round(v)} Б`;
+  if (v < 1024) return fill(t('{n} Б'), { n: Math.round(v) });
   const units = ['КБ', 'МБ', 'ГБ', 'ТБ'];
   let val = v;
   let i = -1;
   do { val /= 1024; i++; } while (val >= 1024 && i < units.length - 1);
   const s = val < 10 ? val.toFixed(1).replace('.', ',').replace(/,0$/, '') : String(Math.round(val));
-  return `${s} ${units[i]}`;
+  return s + ' ' + t(units[i]);
 }
 
 /**
@@ -125,14 +130,14 @@ export function normalizeBackupList(data) {
  * absent/garbage: no line at all beats «Свободно на диске: —». Dynamic
  * Russian by concatenation, the house no-placeholder convention.
  */
-export function freeSpaceNote(data) {
+export function freeSpaceNote(data, t = (s) => s) {
   // Only a real number counts — Number(null) is 0 (the same trap
   // updates-logic.js's coerceHour documents), and a server that answered
   // free_bytes:null must produce NO line, not «Свободно на диске: 0 Б».
   const free = data && typeof data === 'object' && typeof data.free_bytes === 'number'
     ? data.free_bytes : NaN;
   if (!Number.isFinite(free) || free < 0) return null;
-  return `Свободно на диске: ${formatBytes(free)}`;
+  return fill(t('Свободно на диске: {size}'), { size: formatBytes(free, t) });
 }
 
 /**
@@ -165,14 +170,14 @@ export function validUntilLabel(v) {
  * Dynamic Russian, built by concatenation — the same no-placeholder
  * convention as updates-logic.js's formatScheduled().
  */
-export function validityLabel(lic) {
+export function validityLabel(lic, t = (s) => s) {
   if (!lic || typeof lic !== 'object') return DASH;
   const until = validUntilLabel(lic.valid_until);
   const days = Number(lic.days_left);
   const hasDays = Number.isFinite(days) && days > 0;
-  if (until !== DASH && hasDays) return `${until} — осталось ${Math.floor(days)} дн.`;
+  if (until !== DASH && hasDays) return fill(t('{until} — осталось {days} дн.'), { until, days: Math.floor(days) });
   if (until !== DASH) return until;
-  if (hasDays) return `осталось ${Math.floor(days)} дн.`;
+  if (hasDays) return fill(t('осталось {days} дн.'), { days: Math.floor(days) });
   return DASH;
 }
 
@@ -195,7 +200,7 @@ export function dashWhenEmpty(v) {
  * Dynamic day-count labels are code-built Russian (banner convention in
  * admin.js renderLicenceBanner); the static ones live in i18n-strings.js.
  */
-export function subscriptionBadge(lic) {
+export function subscriptionBadge(lic, t = (s) => s) {
   if (!lic || typeof lic !== 'object') return { kind: '', label: DASH };
   if (lic.reason === 'not_enrolled') return { kind: 'warn', label: 'Не активирована' };
   // Same `=== true` strictness as licence.js's isLicensed(): only a real
@@ -210,8 +215,8 @@ export function subscriptionBadge(lic) {
     // structurally days>0, but a malformed payload must never print «0 дн.».
     const days = Math.max(1, Number(lic.days_left) || 0);
     const label = lic.reason === 'unpaid'
-      ? `Подписка заканчивается через ${days} дн.`
-      : `Нет связи с Easy-Med ${days} дн.`;
+      ? fill(t('Подписка заканчивается через {days} дн.'), { days })
+      : fill(t('Нет связи с Easy-Med {days} дн.'), { days });
     return { kind: lic.state === 'warn' ? 'warn' : 'info', label };
   }
   // 'ok' — and also the pre-RPC 'unknown' fallback licence.js serves before

@@ -38,7 +38,7 @@ function infoRow(label, valueNode) {
 
 export function renderSubscriptionCard(root, { admin }) {
     const lic = licenceState();
-    const badge = subscriptionBadge(lic);
+    const badge = subscriptionBadge(lic, tr);
 
     const card = h('div', { class: 'card upd-card sys-card' },
         h('div', { class: 'sys-card-head' }, Icon('Shield', { size: 16 }),
@@ -48,7 +48,7 @@ export function renderSubscriptionCard(root, { admin }) {
         infoRow('Клиника', dashWhenEmpty(lic.clinic_name)),
         infoRow('ID клиники', dashWhenEmpty(lic.clinic_id)),
         infoRow('Статус', Tag(badge.label, { kind: badge.kind })),
-        infoRow('Действует до', validityLabel(lic)),
+        infoRow('Действует до', validityLabel(lic, tr)),
         infoRow('Последняя связь с Easy-Med', lastCheckinLabel(lic.last_checkin)),
     ));
 

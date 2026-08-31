@@ -307,7 +307,7 @@ function paintStages() {
 
     box.appendChild(saveRow('Сохранить колонки', async () => {
         const stages = withPositions(state.cfg.stages).map((s) => ({ ...s, label: String(s.label || '').trim() }));
-        const v = validateStages(stages);
+        const v = validateStages(stages, tr);
         if (!v.ok) { toast(v.error, 'warn'); return; }
         const fresh = await rpc('crm_config_save', { stages });
         toast('Колонки сохранены.', 'success');
@@ -388,7 +388,7 @@ function paintSources() {
 
     box.appendChild(saveRow('Сохранить источники', async () => {
         const sources = withPositions(state.cfg.sources).map((s) => ({ ...s, label: String(s.label || '').trim() }));
-        const v = validateSources(sources);
+        const v = validateSources(sources, tr);
         if (!v.ok) { toast(v.error, 'warn'); return; }
         const fresh = await rpc('crm_config_save', { sources });
         toast('Источники сохранены.', 'success');

@@ -9,7 +9,7 @@ import { permissionGroups, allPermissionKeys, canEdit, canDelete, PATIENT_TABS }
 import { hashPassword } from '../auth.js?v=admdoc3';
 import { BRANCH_BUCKET, uploadFile, signedUrl, removeFile } from '../storage.js?v=aurora20b';
 import { h, Icon, Tag, PageHead, toast, clear } from '../ui.js';
-import { tr } from '../i18n.js';
+import { tr, trf } from '../i18n.js';
 import { isClinicScopedTable, currentClinicId } from '../tenant-tables.js';
 import { branchScope, branchFilterActive, BRANCH_PATHS } from '../branch-filter.js?v=bf4';   // BRANCH_ISOLATION_V2
 import { getSelectedBranchIds, isBranchRestricted, getAvailableBranchIds, soleBranchId } from '../branch-context.js?v=bc3';   // soleBranchId: SOLE_BRANCH_V1
@@ -542,7 +542,7 @@ function paintList(container, onNavigate) {
             style: { gap: '8px', alignItems: 'center', padding: '12px 4px 2px', flexWrap: 'wrap' },
         },
             h('span', { class: 'muted', style: { fontSize: '12.5px' } },
-                state.total ? `${first}–${last} из ${state.total}` : 'Ничего не найдено'),
+                state.total ? trf('{first}–{last} из {total}', { first, last, total: state.total }) : 'Ничего не найдено'),
             h('span', { class: 'grow' }),
             go('«', 0, state.page === 0, 'В начало'),
             go('‹ Назад', state.page - 1, state.page === 0),
@@ -658,8 +658,14 @@ async function staffDeleteWarning(table, ids) {
     try {
         const { count } = await supabase.from('users').select('id', { count: 'exact', head: true }).in(c.col, ids);
         if (!count) return '';
-        return `Внимание: ${count} ${c.noun}. Удаление снимет у них эту привязку.\n\n`;
+        return fillWarn(count, c.noun);
     } catch (e) { return ''; }
+}
+
+// I18N_COVERAGE_V1 — предупреждение собирается вокруг числа и слова-существительного;
+// перевод СНАЧАЛА (шаблон целиком — ключ словаря, noun переводится отдельным словом).
+function fillWarn(count, noun) {
+    return trf('Внимание: {count} {noun}. Удаление снимет у них эту привязку.', { count, noun: tr(noun) }) + '\n\n';
 }
 
 // DELETE_SOFT_FALLBACK_V1 — rows already referenced by history (e.g. a
@@ -698,9 +704,9 @@ async function _deleteOne(def, id) {
 function _deleteSummaryToast(deleted, deactivated, firstError) {
     if (firstError && !deleted && !deactivated) { toast(firstError, 'fail'); return; }
     const parts = [];
-    if (deleted)     parts.push(`удалено ${deleted}`);
-    if (deactivated) parts.push(`${deactivated} уже использовались — деактивированы (active=false)`);
-    toast(parts.join('; ') + (firstError ? `; ошибка: ${firstError}` : '.'), firstError ? 'fail' : 'ok');
+    if (deleted)     parts.push(trf('удалено {n}', { n: deleted }));
+    if (deactivated) parts.push(trf('{n} уже использовались — деактивированы (active=false)', { n: deactivated }));
+    toast(parts.join('; ') + (firstError ? '; ' + trf('ошибка: {msg}', { msg: firstError }) : '.'), firstError ? 'fail' : 'ok');
 }
 
 async function bulkDelete(container, onNavigate, def) {
@@ -1272,7 +1278,7 @@ function searchableSelect({ name, value, options, placeholder = 'Search…', onC
         // nothing (custom clinic's own Type / Category / Department).
         const _typed = search.value.trim();
         if (onCreate && _typed && !options.some(o => String(o.label || '').trim().toLowerCase() === _typed.toLowerCase())) {
-            const createRow = h('div', { class: 'combo-opt', style: { fontWeight: '600', color: 'var(--primary-700)' } }, '\uFF0B Создать «' + _typed + '»');
+            const createRow = h('div', { class: 'combo-opt', style: { fontWeight: '600', color: 'var(--primary-700)' } }, trf('\uFF0B Создать «{name}»', { name: _typed }));
             createRow.addEventListener('mousedown', async (e) => {
                 e.preventDefault();
                 createRow.textContent = 'Создание…';
@@ -1283,8 +1289,8 @@ function searchableSelect({ name, value, options, placeholder = 'Search…', onC
                         options.push({ id: made.id, label: lbl });
                         byId.set(String(made.id), lbl);
                         choose(made.id, lbl);
-                    } else { createRow.textContent = '\uFF0B Создать «' + _typed + '»'; }
-                } catch (err) { createRow.textContent = 'Ошибка: ' + ((err && err.message) || err); }
+                    } else { createRow.textContent = trf('\uFF0B Создать «{name}»', { name: _typed }); }
+                } catch (err) { createRow.textContent = trf('Ошибка: {msg}', { msg: (err && err.message) || err }); }
             });
             menu.appendChild(createRow);
         }
@@ -2072,7 +2078,7 @@ function sectionPicker(v) {
             if (!pane) continue;
             const reads = [...pane.querySelectorAll('input[data-perm-lvl="read"], input[data-ptab-lvl="view"]')];
             const restr = pane.querySelector('input[data-ptab-lvl]') ? reads.filter(c => !c.checked).length : reads.filter(c => c.checked).length;
-            badge.textContent = pane.querySelector('input[data-ptab-lvl]') ? (restr ? restr + ' скрыто' : 'все') : (restr + '/' + reads.length);
+            badge.textContent = pane.querySelector('input[data-ptab-lvl]') ? (restr ? trf('{n} скрыто', { n: restr }) : tr('все')) : (restr + '/' + reads.length);
         }
     }
     groups.forEach((g, gi) => {
@@ -2564,10 +2570,10 @@ async function openAddServiceModal(container, onNavigate) {
                     }
                 }
                 existingCores.add(row.id); addedAny = true;
-                toast('Услуга добавлена: ' + svc.name);
+                toast(trf('Услуга добавлена: {name}', { name: svc.name }));
                 onAdded();
             } catch (e) {
-                toast('Не удалось добавить услугу: ' + (e.message || e), 'fail');
+                toast(trf('Не удалось добавить услугу: {msg}', { msg: e.message || e }), 'fail');
             } finally { addBtn.disabled = false; }
         };
         return h('div', { style: { padding: '4px 12px 14px', background: 'var(--ink-25)', borderTop: '1px dashed var(--ink-200)' } },
@@ -2592,11 +2598,11 @@ async function openAddServiceModal(container, onNavigate) {
             clear(listBox);
             if (!rows.length) { listBox.appendChild(h('div', { class: 'muted', style: { padding: '12px' } }, 'Ничего не найдено. Если услуги нет в каталоге — запросите её (ссылка внизу).')); return; }
             const addedN = rows.filter(r => existingCores.has(r.id)).length;
-            listBox.appendChild(h('div', { class: 'muted', style: { padding: '8px 12px', fontSize: '11.5px', borderBottom: '1px solid var(--ink-100)' } }, rows.length + ' услуг · ' + addedN + ' уже добавлено'));
+            listBox.appendChild(h('div', { class: 'muted', style: { padding: '8px 12px', fontSize: '11.5px', borderBottom: '1px solid var(--ink-100)' } }, trf('{n} услуг · {added} уже добавлено', { n: rows.length, added: addedN })));
             for (const row of rows) listBox.appendChild(renderRow(row));
         } catch (e) {
             clear(listBox);
-            listBox.appendChild(h('div', { class: 'muted', style: { padding: '12px', color: 'var(--crit-700, #b91c1c)' } }, 'Каталог недоступен: ' + (e.message || e)));
+            listBox.appendChild(h('div', { class: 'muted', style: { padding: '12px', color: 'var(--crit-700, #b91c1c)' } }, trf('Каталог недоступен: {msg}', { msg: e.message || e })));
         }
     }
     searchInp.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(runSearch, 300); });

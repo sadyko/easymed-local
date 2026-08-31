@@ -1,3 +1,9 @@
+// I18N_COVERAGE_V1 — fill() from updates-logic (pure, same dir): translate-
+// then-substitute for the validation sentences without importing i18n.js,
+// which this module must never do (crm-settings-logic.test.js imports it
+// statically; i18n.js needs a DOM at load).
+import { fill } from './updates-logic.js';
+
 // CRM_CONFIG_V1 (docs/plans/2026-08-24-crm-kanban-settings.md) — every
 // DECISION behind Настройки → «CRM-канбан» (views/crm-settings.js) AND behind
 // the board that obeys it (views/crm.js), as pure functions: no DOM, no
@@ -271,7 +277,7 @@ export function truthy(v) {
 
 const KIND_VALUES = ['open', 'won', 'lost'];
 
-export function validateStages(stages) {
+export function validateStages(stages, t = (s) => s) {
     const arr = Array.isArray(stages) ? stages : [];
     if (!arr.length) return { ok: false, error: 'Нужна хотя бы одна колонка канбана.' };
 
@@ -280,19 +286,19 @@ export function validateStages(stages) {
     let activeCount = 0;
     for (const s of arr) {
         const label = typeof (s && s.label) === 'string' ? s.label.trim() : '';
-        if (!label) return { ok: false, error: 'У каждой колонки должно быть название.' };
+        if (!label) return { ok: false, error: t('У каждой колонки должно быть название.') };
         if (!isValidKey(s && s.key)) {
-            return { ok: false, error: `Ключ колонки «${label}» задан неверно: разрешены латинские буквы, цифры и подчёркивание, до 32 знаков.` };
+            return { ok: false, error: fill(t('Ключ колонки «{label}» задан неверно: разрешены латинские буквы, цифры и подчёркивание, до 32 знаков.'), { label }) };
         }
-        if (seen.has(s.key)) return { ok: false, error: `Ключ «${s.key}» уже занят другой колонкой.` };
+        if (seen.has(s.key)) return { ok: false, error: fill(t('Ключ «{key}» уже занят другой колонкой.'), { key: s.key }) };
         seen.add(s.key);
-        if (!isValidColor(s && s.color)) return { ok: false, error: `У колонки «${label}» выбран неизвестный цвет.` };
-        if (!KIND_VALUES.includes(s && s.kind)) return { ok: false, error: `У колонки «${label}» не задан тип.` };
+        if (!isValidColor(s && s.color)) return { ok: false, error: fill(t('У колонки «{label}» выбран неизвестный цвет.'), { label }) };
+        if (!KIND_VALUES.includes(s && s.kind)) return { ok: false, error: fill(t('У колонки «{label}» не задан тип.'), { label }) };
         if (s.kind === 'won') {
             wonCount++;
             // A hidden conversion column would leave the clinic with no way to
             // register the patient who actually arrived.
-            if (!truthy(s.is_active)) return { ok: false, error: `Колонка конверсии «${label}» не может быть скрыта.` };
+            if (!truthy(s.is_active)) return { ok: false, error: fill(t('Колонка конверсии «{label}» не может быть скрыта.'), { label }) };
         }
         if (truthy(s.is_active)) activeCount++;
     }
@@ -302,7 +308,7 @@ export function validateStages(stages) {
     return { ok: true };
 }
 
-export function validateSources(sources) {
+export function validateSources(sources, t = (s) => s) {
     const arr = Array.isArray(sources) ? sources : [];
     if (!arr.length) return { ok: false, error: 'Нужен хотя бы один источник.' };
 
@@ -310,11 +316,11 @@ export function validateSources(sources) {
     let activeCount = 0;
     for (const s of arr) {
         const label = typeof (s && s.label) === 'string' ? s.label.trim() : '';
-        if (!label) return { ok: false, error: 'У каждого источника должно быть название.' };
+        if (!label) return { ok: false, error: t('У каждого источника должно быть название.') };
         if (!isValidKey(s && s.key)) {
-            return { ok: false, error: `Ключ источника «${label}» задан неверно: разрешены латинские буквы, цифры и подчёркивание, до 32 знаков.` };
+            return { ok: false, error: fill(t('Ключ источника «{label}» задан неверно: разрешены латинские буквы, цифры и подчёркивание, до 32 знаков.'), { label }) };
         }
-        if (seen.has(s.key)) return { ok: false, error: `Ключ «${s.key}» уже занят другим источником.` };
+        if (seen.has(s.key)) return { ok: false, error: fill(t('Ключ «{key}» уже занят другим источником.'), { key: s.key }) };
         seen.add(s.key);
         if (truthy(s.is_active)) activeCount++;
     }
@@ -327,17 +333,17 @@ export function validateSources(sources) {
  * that names no column — or names a hidden one — would drop a real call on
  * the floor silently, which is the one failure a call-centre never notices.
  */
-export function validateRouting(routing, stages) {
+export function validateRouting(routing, stages, t = (s) => s) {
     const arr = Array.isArray(routing) ? routing : [];
     const active = new Set((Array.isArray(stages) ? stages : [])
         .filter((s) => s && truthy(s.is_active)).map((s) => s.key));
     for (const r of arr) {
-        const name = dispositionRu(r && r.disposition);
+        const name = t(dispositionRu(r && r.disposition));
         if (!r || (r.action !== 'create' && r.action !== 'ignore')) {
-            return { ok: false, error: `Для «${name}» не выбрано действие.` };
+            return { ok: false, error: fill(t('Для «{name}» не выбрано действие.'), { name }) };
         }
         if (r.action === 'create' && !active.has(r.stage_key)) {
-            return { ok: false, error: `Для «${name}» не выбрана видимая колонка.` };
+            return { ok: false, error: fill(t('Для «{name}» не выбрана видимая колонка.'), { name }) };
         }
     }
     return { ok: true };

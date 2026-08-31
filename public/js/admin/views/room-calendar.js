@@ -7,6 +7,7 @@
 // Booking reuses the 3-step wizard (calculator → BOOK_WIZARD_V1). RESCAL_V2 / RESCAL_V3.
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, initials, avColor, Avatar } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { loadPatientById } from '../data.js';
 import { loadClinicHours, clampToClinic } from '../clinic-hours.js?v=ch1';   // WORKING_HOURS_CLINIC_BOUND_V1
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';   // RESCAL_WIRE_V1 — same URL as other importers (one instance)
@@ -103,7 +104,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             ]);
             for (const b of ((brs && brs.data) || [])) branchLabel[b.id] = shortBranch(b.name_ru || b.name || '');
             for (const f of ((floors && floors.data) || [])) floorBranch[f.id] = f.branch_id;
-            rooms = ((rms && rms.data) || []).map(r => ({ id: r.id, name: r.name || ('Каб. ' + (r.code || '')), spec: r.room_type || 'кабинет', napr: r.room_type || '—', branch: branchLabel[floorBranch[r.floor_id]] || '', branchId: floorBranch[r.floor_id], deptId: r.department_id, hours: r.working_hours }));
+            rooms = ((rms && rms.data) || []).map(r => ({ id: r.id, name: r.name || trf('Каб. {code}', { code: r.code || '' }), spec: r.room_type || 'кабинет', napr: r.room_type || '—', branch: branchLabel[floorBranch[r.floor_id]] || '', branchId: floorBranch[r.floor_id], deptId: r.department_id, hours: r.working_hours }));
             doctors = ((docs && docs.data) || []).filter(u => u.is_doctor === true || (u.role || '').toLowerCase() === 'doctor' || (u.specialty || '').trim())   // ADMIN_DOCTOR_LIST_V1
                 .map(u => ({ id: u.id, name: u.full_name || '—', spec: u.specialty || 'врач', napr: u.specialty || '—', branch: branchLabel[u.branch_id] || '', branchId: u.branch_id, hours: u.working_hours }));
             servicesList = ((svcs && svcs.data) || []).map(s => ({ id: s.id, name: s.name || '—', dur: s.duration_minutes, deptId: s.department_id }));
@@ -183,8 +184,8 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         const { error } = await supabase.from('visits').update({ status: raw }).eq('id', a.id);
         if (error) {
             if (/check|constraint/i.test(error.message || '')) {
-                toast(`Статус «${STATUS_META[bucket].label}» не разрешён БД — примените миграцию 008_visit_statuses.sql.`, 'fail');
-            } else toast('Не удалось изменить статус: ' + error.message, 'fail');
+                toast(trf('Статус «{status}» не разрешён БД — примените миграцию 008_visit_statuses.sql.', { status: STATUS_META[bucket].label }), 'fail');
+            } else toast(trf('Не удалось изменить статус: {msg}', { msg: error.message }), 'fail');
             return false;
         }
         a.status = bucket;
@@ -202,7 +203,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             for (const k of SETTABLE) {
                 const m = STATUS_META[k];
                 pillsBox.appendChild(h('button', { class: 'rcal-stbtn' + (a.status === k ? ' on' : ''), type: 'button',
-                    onclick: async (ev) => { ev.currentTarget.disabled = true; const ok = await setApptStatus(a, k); if (ok) { toast('Статус: ' + m.label); paintPills(); } else ev.currentTarget.disabled = false; } },
+                    onclick: async (ev) => { ev.currentTarget.disabled = true; const ok = await setApptStatus(a, k); if (ok) { toast(trf('Статус: {status}', { status: m.label })); paintPills(); } else ev.currentTarget.disabled = false; } },
                     h('span', { class: 'rcal-dot', style: { background: m.color } }), m.label));
             }
         }
@@ -232,11 +233,11 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                         const { error } = await supabase.from('visits').update(upd).eq('id', a.id);
                         if (error) {
                             if (error.code === '23P01' || /overlap|exclu|conflict/i.test(error.message || '')) toast('Это время уже занято у выбранного врача.', 'fail');
-                            else toast('Не удалось подтвердить: ' + (error.message || error), 'fail');
+                            else toast(trf('Не удалось подтвердить: {msg}', { msg: error.message || error }), 'fail');
                             ev.currentTarget.disabled = false; return;
                         }
                         toast('Запись подтверждена'); close();
-                    } catch (e) { toast('Не удалось подтвердить: ' + (e.message || e), 'fail'); ev.currentTarget.disabled = false; }
+                    } catch (e) { toast(trf('Не удалось подтвердить: {msg}', { msg: e.message || e }), 'fail'); ev.currentTarget.disabled = false; }
                 } }, 'Подтвердить'),
                 h('button', { class: 'btn', style: { color: 'var(--crit-700)' }, onclick: async (ev) => { ev.currentTarget.disabled = true; const ok = await setApptStatus(a, 'cancelled'); if (ok) { toast('Заявка отклонена'); close(); } else ev.currentTarget.disabled = false; } }, 'Отклонить'))) : null;
 
@@ -297,11 +298,11 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                         const { error } = await supabase.from('visits').update(upd).eq('id', a.id);
                         if (error) {
                             if (error.code === '23P01' || /overlap|exclu|conflict/i.test(error.message || '')) toast('Это время уже занято у выбранного врача.', 'fail');
-                            else toast('Не удалось сохранить: ' + (error.message || error), 'fail');
+                            else toast(trf('Не удалось сохранить: {msg}', { msg: error.message || error }), 'fail');
                             ev.currentTarget.disabled = false; return;
                         }
                         toast('Запись сохранена'); close();
-                    } catch (e2) { toast('Не удалось сохранить: ' + (e2.message || e2), 'fail'); ev.currentTarget.disabled = false; }
+                    } catch (e2) { toast(trf('Не удалось сохранить: {msg}', { msg: e2.message || e2 }), 'fail'); ev.currentTarget.disabled = false; }
                 } }, 'Готово'))));
         document.body.appendChild(overlay);
         document.addEventListener('keydown', onEsc);
@@ -320,7 +321,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', marginBottom: '6px' } },
                 h('span', { style: { fontWeight: 700, fontSize: '12.5px', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, a.patient),
                 h('span', { class: 'rcal-tip-st' }, h('span', { class: 'rcal-dot', style: { background: m.color } }), m.label)),
-            line('Clock', `${fmtHM(a.start)}–${fmtHM(a.start + a.dur)} · ${a.dur} мин`),
+            line('Clock', fmtHM(a.start) + '–' + fmtHM(a.start + a.dur) + ' · ' + trf('{n} мин', { n: a.dur })),
             a.service ? line('Doc', a.service) : null,
             a.phone ? line('Phone', a.phone) : null,
             a.doctorId ? line('Stethoscope', doctorName(a.doctorId)) : null,
@@ -377,7 +378,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             if (d.mode === 'resize') {
                 const { error } = await supabase.from('visits').update({ duration_minutes: d.curDur }).eq('id', d.a.id);
                 if (error) throw error;
-                toast(`Длительность: ${d.curDur} мин`);
+                toast(trf('Длительность: {n} мин', { n: d.curDur }));
             } else {
                 const day = isoToLocalDay(d.curDay); day.setHours(Math.floor(d.curStart / 60), d.curStart % 60, 0, 0);
                 const upd = { visit_date: day.toISOString() };
@@ -398,10 +399,10 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 }
                 const { error } = await supabase.from('visits').update(upd).eq('id', d.a.id);
                 if (error) throw error;
-                toast(`Перенесено: ${ruDay(d.curDay)}, ${fmtHM(d.curStart)}`);
+                toast(trf('Перенесено: {day}, {time}', { day: ruDay(d.curDay), time: fmtHM(d.curStart) }));
             }
         } catch (e2) {
-            toast('Не удалось перенести: ' + (e2.message || e2), 'fail');
+            toast(trf('Не удалось перенести: {msg}', { msg: e2.message || e2 }), 'fail');
         }
         reloadAndRepaint();
     }
@@ -517,7 +518,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         hideTip();
         clear(gridWrapEl);
         const sel = resources().filter(r => state.selected.has(r.id));
-        if (!sel.length) { gridWrapEl.appendChild(h('div', { class: 'empty', style: { padding: '60px 20px' } }, `Выберите ${state.resType === 'doctor' ? 'врачей' : 'кабинеты'} слева, чтобы увидеть расписание.`)); return; }
+        if (!sel.length) { gridWrapEl.appendChild(h('div', { class: 'empty', style: { padding: '60px 20px' } }, state.resType === 'doctor' ? tr('Выберите врачей слева, чтобы увидеть расписание.') : tr('Выберите кабинеты слева, чтобы увидеть расписание.'))); return; }
         const days = colDays();
         const ppm = pxPerMin(state.step), laneH = (DAY_END - DAY_START) * ppm;
         const cols = [];

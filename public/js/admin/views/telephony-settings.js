@@ -518,7 +518,7 @@ function paintRouting() {
                 // имя удалённой колонки при следующем чтении.
                 stage_key: r.action === 'create' ? r.stage_key : null,
             }));
-            const v = validateRouting(routing, state.stages);
+            const v = validateRouting(routing, state.stages, tr);
             if (!v.ok) { toast(v.error, 'warn'); return; }
             await rpc('crm_config_save', { routing });
             toast('Маршрут сохранён.', 'success');

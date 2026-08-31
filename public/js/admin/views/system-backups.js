@@ -89,7 +89,7 @@ export async function renderBackupsCard(root, { admin }) {
         // The courtesy free-space line the listing may carry (plan B: "if
         // cheaply available") — absent on platforms where statfs failed, and
         // then nothing renders, which is the whole point of freeSpaceNote.
-        const free = freeSpaceNote(data);
+        const free = freeSpaceNote(data, tr);
         if (free) tableWrap.appendChild(h('p', { class: 'muted sys-note' }, free));
     }
 
@@ -103,7 +103,7 @@ export async function renderBackupsCard(root, { admin }) {
             tb.appendChild(h('tr', null,
                 h('td', null, backupDateLabel(row.mtimeMs)),
                 h('td', null, backupKindLabel(backupKind(row))),
-                h('td', null, formatBytes(row.size)),
+                h('td', null, formatBytes(row.size, tr)),
                 h('td', { class: 'sys-backups-restore' },
                     h('button', {
                         type: 'button', class: 'btn btn-outline btn-sm',
