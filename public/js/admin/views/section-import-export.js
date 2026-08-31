@@ -1145,7 +1145,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
                 // insert-vs-update is known — beats a round-trip that comes back
                 // with a server error the user has to map to a spreadsheet row.
                 const why = typeof cfg.validateInsert === 'function' ? cfg.validateInsert(r.payload) : null;
-                if (why) rejected.push(`${matchVal || 'строка ' + r.rowNum}: ${why}`);
+                if (why) rejected.push(`${matchVal || trf('строка {n}', { n: r.rowNum })}: ${why}`);
                 else toInsert.push(r.payload);
             }
         }

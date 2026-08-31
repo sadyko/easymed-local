@@ -1844,7 +1844,7 @@ export function openServicePickerModal({
                         if (catSearchEl) catSearchEl.value = cat2.q; paintCatalog(); } },
                     'выберите врача и время');
                 else if (a.doctor) who = h('div', { class: 'muted', style: { fontSize: '11px' } },
-                    `${a.doctor.full_name || ''}${a.time ? ' · ' + (a.dateIso === catDays()[0].iso ? 'сегодня' : (a.dateIso || '').slice(8) + '.' + (a.dateIso || '').slice(5, 7)) + ' ' + a.time : ''}`);
+                    `${a.doctor.full_name || ''}${a.time ? ' · ' + (a.dateIso === catDays()[0].iso ? tr('сегодня') : (a.dateIso || '').slice(8) + '.' + (a.dateIso || '').slice(5, 7)) + ' ' + a.time : ''}`);
                 else who = h('div', { class: 'muted', style: { fontSize: '11px' } }, 'процедурный кабинет');
                 rowsWrap.appendChild(h('div', { class: 'wzc-ln' },
                     h('div', { style: { minWidth: 0 } }, h('div', { style: { fontSize: '12.5px' } }, a.service.name), who),
@@ -2639,7 +2639,7 @@ export function openServicePickerModal({
                             try { await supabase.rpc('restore_patient_discount', { p_id: card.id, p_amount: alloc }); } catch (_) {}
                         });
                         paidSoFar += alloc;
-                        note += ` · ${KIND_RU3[card.kind] || 'карта'} −${formatMoney(alloc)}`;
+                        note += ' · ' + tr(KIND_RU3[card.kind] || 'карта') + ' −' + formatMoney(alloc);
                     }
                     let balToSpend = 0;
                     if (payable > 0 && wiz.payment.useBal && paidSoFar < payable) {

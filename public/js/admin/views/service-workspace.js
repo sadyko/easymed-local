@@ -801,6 +801,7 @@ function insertRecsBlock(ctx) {
     a4InsertHtml(ctx, html, 'recommendations_text', 'Вставлено в документ');
 }
 // Рецепт -> therapy_text section. Source: wsState.payload.prescriptions[].
+/* i18n-exempt-start: HTML вставляется В ДОКУМЕНТ приёма (назначения) */
 function insertRxBlock(ctx) {
     const list = wsState.payload?.prescriptions || [];
     if (!list.length) { toast('Раздел пуст', 'warn'); return; }
@@ -808,10 +809,10 @@ function insertRxBlock(ctx) {
         const tail = [rx.dose, rx.freq, rx.dur, rx.notes].filter(Boolean).join(', ');
         return `<li><b>${esc(rx.name || '(без названия)')}</b>${tail ? ' — ' + esc(tail) : ''}</li>`;
     }).join('');
-    // i18n-exempt: HTML вставляется В ДОКУМЕНТ приёма
     const html = `<div><b>Назначения:</b></div><ol>${rows}</ol>`;
     a4InsertHtml(ctx, html, 'therapy_text', 'Вставлено в документ');
 }
+/* i18n-exempt-end */
 
 // ---------------------------------------------------------------------------
 // AURORA_CONSULT_EDITOR_V1 — center zone: an A4 contentEditable document.
@@ -1975,9 +1976,10 @@ async function renderStudyPreview(ctx, prev, study, mode, close) {
         const chosen = rows.filter((_, i) => checked[i]);
         if (!chosen.length) { toast('Выберите хотя бы один показатель', 'warn'); return; }
         const lines = chosen.map(r => `<tr><td>${esc(r.parameter)}</td><td>${esc(r.value)}${r.unit ? ' ' + esc(r.unit) : ''}</td><td>${esc(r.reference_range || '—')}</td></tr>`).join('');
-        // i18n-exempt: HTML вставляется В ДОКУМЕНТ приёма (таблица результатов)
+        /* i18n-exempt-start: HTML вставляется В ДОКУМЕНТ приёма (таблица результатов) */
         const html = `<div><b>${esc(study.serviceName)} от ${dateLabel}:</b></div>`
             + `<table class="a4-restbl"><thead><tr><th>Показатель</th><th>Результат</th><th>Норма</th></tr></thead><tbody>${lines}</tbody></table>`;
+        /* i18n-exempt-end */
         _pastePickField(ctx, html, 'labs_text', 'Вставлено в документ');
         close && close();
     } }, Icon('Plus', { size: 14 }), ' Вставить результаты в документ'));
@@ -3972,6 +3974,7 @@ async function handlePrint(ctx) {
     const prescriptions = (wsState.payload?.prescriptions || []);
     const recs = (wsState.recommendations || []);
 
+    /* i18n-exempt-start: HTML заключения (назначения) — содержимое ДОКУМЕНТА */
     const rxBlock = prescriptions.length === 0
         ? `<dd class="muted">Препараты не назначены.</dd>`
         : prescriptions.map(rx => `
@@ -4890,7 +4893,7 @@ function _blankMakeSep(doc, fill, pageNo) {
     const edge = doc.createElement('div');
     edge.className = 'bk-pageedge';
     edge.style.top = (fill + MB - 13) + 'px';
-    edge.textContent = 'СТРАНИЦА ' + pageNo;
+    edge.textContent = 'СТРАНИЦА ' + pageNo;   // i18n-exempt: край листа ДОКУМЕНТА — часть бланка
     sep.appendChild(edge);
     return sep;
 }

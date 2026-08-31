@@ -1238,8 +1238,8 @@ async function openReportBuilder(rep, ctx) {
             paintPreview();
         } catch (e) {
             console.error('[reports-hub] generate:', e);
-            toast('Не удалось сформировать отчёт: ' + (e.message || e), 'fail');
-            paintPreviewEmpty('Ошибка: ' + (e.message || e));
+            toast(trf('Не удалось сформировать отчёт: {msg}', { msg: e.message || e }), 'fail');
+            paintPreviewEmpty(trf('Ошибка: {msg}', { msg: e.message || e }));
         } finally {
             st.generating = false;
             generateBtn.disabled = false;
@@ -1303,9 +1303,9 @@ async function openReportBuilder(rep, ctx) {
         const shown = rows.slice(0, CAP);
         previewEl.appendChild(h('div', { class: 'row', style: { alignItems: 'center', gap: '10px', marginBottom: '10px' } },
             h('span', { style: { fontSize: '13px', fontWeight: 700, color: 'var(--ink-900)' } },
-                `Строк: ${rows.length}`),
+                trf('Строк: {n}', { n: rows.length })),
             rows.length > CAP ? h('span', { class: 'muted', style: { fontSize: '12px' } },
-                `— показаны первые ${CAP}, в Excel попадут все`) : null,
+                trf('— показаны первые {n}, в Excel попадут все', { n: CAP })) : null,
         ));
         // Wide table in its own horizontal scroller.
         const thStyle = {

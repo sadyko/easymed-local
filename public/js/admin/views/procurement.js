@@ -3251,7 +3251,7 @@ function openIssueModal(item, branch, onHand) {
         h('div', { style: { padding: '10px 12px', background: 'var(--ink-25, #fafafa)', border: '1px solid var(--ink-100)', borderRadius: '10px', marginBottom: '12px', fontSize: '13px' } },
             h('div', { class: 'cell-strong' }, item.name || '—'),
             h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' } },
-                (branch?.name || '—') + ' · В наличии: ' + fmtNum(onHand) + ' ' + (item.unit || '')),
+                (branch?.name || '—') + ' · ' + trf('В наличии: {n} {unit}', { n: fmtNum(onHand), unit: item.unit || '' })),
         ),
         fieldRow(prL('qty'), qtyInput),
         h('div', { class: 'field' },
@@ -3273,7 +3273,7 @@ function openIssueModal(item, branch, onHand) {
                 onclick: async (e) => {
                     const qty = Number(qtyInput.value);
                     if (!(qty > 0)) { toast('Укажите количество больше 0.', 'fail'); qtyInput.focus(); return; }
-                    if (qty > onHand) { toast(`Недостаточно на складе — в наличии ${fmtNum(onHand)}.`, 'fail'); qtyInput.focus(); return; }
+                    if (qty > onHand) { toast(trf('Недостаточно на складе — в наличии {n}.', { n: fmtNum(onHand) }), 'fail'); qtyInput.focus(); return; }
                     if (!recipient) { toast('Выберите сотрудника, который получает товар.', 'fail'); searchInp.focus(); return; }
                     e.target.disabled = true;
                     try {
@@ -3290,7 +3290,7 @@ function openIssueModal(item, branch, onHand) {
                             created_by: issuer.id || null,    // who issued
                         });
                         if (error) throw error;
-                        toast(`Выдано ${fmtNum(qty)} — ${recipient.full_name}.`, 'ok');
+                        toast(trf('Выдано {n} — {name}.', { n: fmtNum(qty), name: recipient.full_name }), 'ok');
                         close();
                         openIssueSlip({ item, branch, qty, recipient, issuer, note: noteInput.value.trim() });
                         await loadStock();
@@ -3307,6 +3307,7 @@ function openIssueModal(item, branch, onHand) {
 
 // Printable issue slip (требование-накладная) with signature lines — the
 // storage manager keeps the signed paper copy.
+/* i18n-exempt-start: требование-накладная (ТН) — печатный документ, намеренно русский */
 function openIssueSlip({ item, branch, qty, recipient, issuer, note }) {
     const now = new Date();
     const pad = n => String(n).padStart(2, '0');
@@ -3359,6 +3360,7 @@ function openIssueSlip({ item, branch, qty, recipient, issuer, note }) {
     w.document.write(html);
     w.document.close();
 }
+/* i18n-exempt-end */
 
 // ---- Receive modal: INSERT stock_movements kind='receipt', qty = +quantity ---
 // ---------------------------------------------------------------------------
@@ -3439,11 +3441,11 @@ function openReceiveModal() {
         const phIn  = styledPhoneInput('Телефон *', inpStyle);
         const emIn  = h('input', { type: 'email', placeholder: 'Email', style: { ...inpStyle, minWidth: 0 } });
         const prIn  = h('input', { type: 'number', min: '0', step: 'any',
-            placeholder: 'Цена закупки (за ' + baseUnitOf(ln.item) + ')', style: { ...inpStyle, minWidth: 0 } });
+            placeholder: trf('Цена закупки (за {unit})', { unit: baseUnitOf(ln.item) }), style: { ...inpStyle, minWidth: 0 } });
         if (ln.cost !== '' && ln.cost != null) prIn.value = String(ln.cost);
         openModal({
             title: 'Новый поставщик',
-            subtitle: 'Для товара «' + (ln.item.name || '—') + '» — создаётся, привязывается и подставляется в строку.',
+            subtitle: trf('Для товара «{name}» — создаётся, привязывается и подставляется в строку.', { name: ln.item.name || '—' }),
             width: '460px',
             zIndex: '220',   // above the receive modal (default 160)
             body: h('div', { class: 'modal-body' },
@@ -3451,7 +3453,7 @@ function openReceiveModal() {
                     nmIn, mgIn, phIn, emIn,
                     h('div', null,
                         h('div', { class: 'muted', style: { fontSize: '11.5px', marginBottom: '3px' } },
-                            'Цена закупки у этого поставщика (за ' + baseUnitOf(ln.item) + ')'),
+                            trf('Цена закупки у этого поставщика (за {unit})', { unit: baseUnitOf(ln.item) })),
                         prIn))),
             footerButtons: (close) => [
                 h('button', { class: 'btn', type: 'button', onclick: close }, 'Отмена'),
@@ -3488,7 +3490,7 @@ function openReceiveModal() {
                             ln.supplier = String(data.id);
                             if (price != null) ln.cost = price;
                             paintLines();
-                            toast(`Поставщик «${data.name}» создан и выбран.`, 'ok');
+                            toast(trf('Поставщик «{name}» создан и выбран.', { name: data.name }), 'ok');
                             close();
                         } catch (err) {
                             toast(err.message || String(err), 'fail');
@@ -3986,13 +3988,13 @@ function paintProductsTable() {
         tableWrap.appendChild(h('div', { class: 'row', style: {
             gap: '10px', alignItems: 'center', padding: '8px 12px', margin: '10px 12px 0',
             background: 'var(--crit-50, #fef2f2)', border: '1px solid #fecaca', borderRadius: '9px' } },
-            h('span', { style: { fontSize: '12.5px', fontWeight: 600 } }, 'Выбрано товаров: ' + selVis.length),
+            h('span', { style: { fontSize: '12.5px', fontWeight: 600 } }, trf('Выбрано товаров: {n}', { n: selVis.length })),
             h('div', { style: { flex: 1 } }),
             h('button', {
                 class: 'btn btn-sm', type: 'button',
                 style: { background: 'var(--crit-600, #dc2626)', borderColor: 'var(--crit-600, #dc2626)', color: '#fff' },
                 onclick: () => confirmDeleteProducts(pItems.filter(p => prodSel.has(String(p.id)))),
-            }, Icon('Trash', { size: 13 }), ' Удалить выбранные (' + selVis.length + ')'),
+            }, Icon('Trash', { size: 13 }), ' ', trf('Удалить выбранные ({n})', { n: selVis.length })),
         ));
     }
     const masterCb = selectable ? (() => {
@@ -4077,7 +4079,7 @@ function confirmDeleteProducts(items) {
     if (!items || !items.length) return;
     const names = items.slice(0, 3).map(p => p.name).filter(Boolean).join(', ') + (items.length > 3 ? '…' : '');
     openModal({
-        title: 'Удалить товары (' + items.length + ')?',
+        title: trf('Удалить товары ({n})?', { n: items.length }),
         subtitle: names,
         width: '500px',
         body: h('div', { class: 'modal-body' },
@@ -4098,7 +4100,7 @@ function confirmDeleteProducts(items) {
                             .in('id', items.map(p => p.id)).eq('company_id', currentClinicId());
                         if (error) throw error;
                         prodSel.clear();
-                        toast('Удалено товаров: ' + items.length + '. История закупок сохранена.', 'ok');
+                        toast(trf('Удалено товаров: {n}. История закупок сохранена.', { n: items.length }), 'ok');
                         close();
                         await reloadCommon();
                         renderBody();
@@ -4107,7 +4109,7 @@ function confirmDeleteProducts(items) {
                         e.target.disabled = false;
                     }
                 },
-            }, Icon('Trash', { size: 13 }), ' Удалить (' + items.length + ')'),
+            }, Icon('Trash', { size: 13 }), ' ', trf('Удалить ({n})', { n: items.length })),
         ],
     });
 }
@@ -4190,7 +4192,7 @@ function openProductModal(product, opts = {}) {   // RECEIVE_MULTI_V1 — opts.o
                         type: 'number', min: '0.0001', step: 'any',
                         placeholder: String(numOr1(packFactIn.value)),
                         value: supplierPack.has(sid) ? String(supplierPack.get(sid)) : '',
-                        title: 'Сколько ' + (baseUnitIn.value.trim() || 'шт') + ' в одной ' + (purchUnitIn.value.trim() || 'уп') + ' у этого поставщика (пусто = как у товара)',
+                        title: trf('Сколько {base} в одной {pack} у этого поставщика (пусто = как у товара)', { base: baseUnitIn.value.trim() || tr('шт'), pack: purchUnitIn.value.trim() || tr('уп') }),
                         style: { ...inpStyle, width: '76px', height: '30px', textAlign: 'right' },
                     });
                     packIn.addEventListener('input', () => {
@@ -4332,7 +4334,7 @@ function openProductModal(product, opts = {}) {   // RECEIVE_MULTI_V1 — opts.o
                             selected.add(data.id);   // auto-link the new supplier to this product
                             quickName.value = ''; quickManager.value = ''; quickPhone.value = ''; quickEmail.value = '';
                             paintChips();
-                            toast(`Поставщик «${data.name}» создан и привязан.`, 'ok');
+                            toast(trf('Поставщик «{name}» создан и привязан.', { name: data.name }), 'ok');
                             close();
                         } catch (err) {
                             toast(err.message || String(err), 'fail');
@@ -5014,7 +5016,7 @@ function openNewPOModal(prefill = null) {   // PO_PREFILL_V1 — { item, supplie
                     const valid = lines.filter(l => Number(l.qty) > 0);
                     if (!valid.length) { toast('Добавьте хотя бы один товар с количеством больше 0.', 'fail'); return; }
                     const noSup = valid.find(l => !l.supplierId);
-                    if (noSup) { toast('Выберите поставщика для «' + (noSup.item.name || '—') + '».', 'fail'); return; }
+                    if (noSup) { toast(trf('Выберите поставщика для «{name}».', { name: noSup.item.name || '—' }), 'fail'); return; }
                     e.target.disabled = true;
                     try {
                         const cid = currentClinicId();
@@ -5043,7 +5045,7 @@ function openNewPOModal(prefill = null) {   // PO_PREFILL_V1 — { item, supplie
                             if (liErr) throw liErr;
                             made.push(poNumber);
                         }
-                        toast(made.length > 1 ? 'Создано заказов: ' + made.length + ' (' + made.join(', ') + ').' : 'Заказ ' + made[0] + ' создан.', 'ok');
+                        toast(made.length > 1 ? trf('Создано заказов: {n} ({list}).', { n: made.length, list: made.join(', ') }) : trf('Заказ {no} создан.', { no: made[0] }), 'ok');
                         close();
                         await loadPOs();
                         paintPOTable();

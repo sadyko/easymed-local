@@ -249,10 +249,11 @@ export async function cancelInvoice(inv, { reason, refundAmount = 0, notes = nul
             entityId:    inv.id,
             entityLabel: inv.invoice_number || inv.id.slice(0, 8),
             action:      willRefund ? 'refunded' : 'cancelled',
-            // i18n-exempt: summary пишется В БАЗУ (журнал действий) — хранимая запись, а не текст экрана
+            /* i18n-exempt-start: summary пишется В БАЗУ (журнал действий) — хранимая запись, а не текст экрана */
             summary:     willRefund
                 ? `Возврат ${refundAmount.toLocaleString('ru-RU')} сум — ${reason}`
                 : `Отменён — ${reason}`,
+            /* i18n-exempt-end */
             detail:      { refund_amount: refundAmount, from_status: inv.status, to_status: toStatus, notes },
         });
     }

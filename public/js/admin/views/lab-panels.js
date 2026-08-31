@@ -579,7 +579,7 @@ export async function mountLabPanels(container) {
             const n = picked.size;
             close();
             paintEditor();
-            toast(n === 1 ? 'Показатель добавлен — заполните референсные значения' : `Добавлено показателей: ${n} — заполните референсные значения`);
+            toast(n === 1 ? 'Показатель добавлен — заполните референсные значения' : trf('Добавлено показателей: {n} — заполните референсные значения', { n }));
         }
 
         searchInp.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 250); });
@@ -658,7 +658,7 @@ export async function mountLabPanels(container) {
 
         const card = h('div', { class: 'modal-card', style: { width: '900px', maxWidth: 'calc(100vw - 32px)' } },
             h('header', { class: 'modal-head' },
-                h('h2', null, 'Диапазоны нормы · ' + (r.name || 'показатель')),
+                h('h2', null, trf('Диапазоны нормы · {name}', { name: r.name || tr('показатель') })),
                 h('button', { class: 'modal-close', onclick: close }, '×')),
             h('div', { style: { padding: '16px 20px' } },
                 h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '10px', lineHeight: '1.5' } },
@@ -797,7 +797,7 @@ export async function mountLabPanels(container) {
             toast('Панель сохранена');
             state.selected = { ...p, id: panelId, ...row };
             await reload();
-        } catch (e) { toast('Не удалось сохранить: ' + savePanelReason(e, fields), 'fail'); }
+        } catch (e) { toast(trf('Не удалось сохранить: {msg}', { msg: savePanelReason(e, fields) }), 'fail'); }
     }
 
     // LAB_LINK_REASON_V1 — одна услуга = одна панель (UNIQUE-индекс, миграция
@@ -812,20 +812,18 @@ export async function mountLabPanels(container) {
             const svcId = fields && fields.service_id;
             const owner = state.panels.find(p => String(p.service_id) === String(svcId) && p.id !== (state.selected && state.selected.id));
             const svc = state.services.find(s => String(s.id) === String(svcId));
-            return 'услуга' + (svc ? ' «' + svc.name + '»' : '')
-                + ' уже привязана к панели' + (owner ? ' «' + owner.name + '»' : '')
-                + '. Одна услуга может принадлежать только одной панели — отвяжите её там или выберите другую услугу.';
+            return trf('услуга{svc} уже привязана к панели{owner}. Одна услуга может принадлежать только одной панели — отвяжите её там или выберите другую услугу.', { svc: svc ? ' «' + svc.name + '»' : '', owner: owner ? ' «' + owner.name + '»' : '' });
         }
         return msg;
     }
 
     async function removePanel(p) {
-        if (!p.id || !window.confirm('Удалить панель «' + p.name + '» и её показатели?')) return;
+        if (!p.id || !window.confirm(trf('Удалить панель «{name}» и её показатели?', { name: p.name }))) return;
         try {
             const { error } = await supabase.from('lab_panels').delete().eq('id', p.id);
             if (error) throw error;
             toast('Панель удалена'); state.selected = null; await reload();
-        } catch (e) { toast('Не удалось удалить: ' + (e.message || e), 'fail'); }
+        } catch (e) { toast(trf('Не удалось удалить: {msg}', { msg: e.message || e }), 'fail'); }
     }
 
     // Paint the loading state BEFORE the first read: an empty list beside an

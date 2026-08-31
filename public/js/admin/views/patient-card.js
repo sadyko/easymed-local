@@ -1261,6 +1261,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             recommendations: 'Рекомендации', follow_up: 'Повторный приём',
             referral: 'Направление', instrumental: 'Инструментальные данные', doctor_phone: 'Телефон врача',
         };
+        /* i18n-exempt-start: печать «Заключения врача» — печатный документ, намеренно русский */
         function printWsDoc(d) {
             const esc = (x) => String(x == null ? '' : x).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
             const blocks = Object.entries(d.fields || {})
@@ -1270,6 +1271,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             const bodyHtml = `<h3 style="margin:0 0 4px">Заключение врача</h3>
 <div style="color:#667;font-size:12px;margin-bottom:8px">${esc(patient.full_name || '')} · ${esc(patient.mrn || '')}${d.doctorName ? ' · Врач: ' + esc(d.doctorName) : ''} · ${esc(String(d.created_at || '').slice(0, 10).split('-').reverse().join('.'))}</div>
 ${blocks || '<div style="color:#889;font-size:13px">Документ подписан без заполненных разделов.</div>'}`;
+            /* i18n-exempt-end */
             printableSheet({ type: 'conclusion', title: d.title, bodyHtml });
         }
         async function paintList() {
@@ -1281,7 +1283,7 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                 .order('created_at', { ascending: false })
                 .limit(300);
             clear(listEl);
-            if (error) { listEl.appendChild(h('div', { class: 'empty' }, 'Не удалось загрузить документы: ' + error.message)); return; }
+            if (error) { listEl.appendChild(h('div', { class: 'empty' }, trf('Не удалось загрузить документы: {msg}', { msg: error.message }))); return; }
 
             // подписанные документы из истории строк услуг (WS_DERIVED_DOCS_V1)
             const wsRows = [];
@@ -1333,7 +1335,7 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                     h('td', null, h('a', {
                         href: '#', style: { fontWeight: 600 },
                         onclick: (ev) => { ev.preventDefault(); openRow(d); },
-                    }, d.title || d.file_name || ('Документ #' + d.id)),
+                    }, d.title || d.file_name || trf('Документ #{id}', { id: d.id })),
                         h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', marginTop: '3px' } },
                             h('span', { class: 'muted', style: { fontSize: '11.5px' } }, DOC_TYPE_RU[d.doc_type] || d.doc_type || ''),
                             // LAB_DOC_PENDING_V1 — статус виден в списке: «Не
@@ -1351,9 +1353,9 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                             class: 'btn btn-outline btn-sm', type: 'button', title: 'Удалить',
                             style: { marginLeft: '6px', color: 'var(--crit-600, #dc2626)' },
                             onclick: async () => {
-                                if (!confirm('Удалить документ «' + (d.title || d.file_name || d.id) + '»?')) return;
+                                if (!confirm(trf('Удалить документ «{name}»?', { name: d.title || d.file_name || d.id }))) return;
                                 const { error: delErr } = await supabase.from('visit_documents').delete().eq('id', d.id);
-                                if (delErr) { toast('Не удалось удалить: ' + delErr.message, 'fail'); return; }
+                                if (delErr) { toast(trf('Не удалось удалить: {msg}', { msg: delErr.message }), 'fail'); return; }
                                 if (d.file_path) removeFile(BRANCH_BUCKET, d.file_path);   // best-effort
                                 toast('Документ удалён.');
                                 paintList();
@@ -1420,7 +1422,7 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                     h('div', { style: { fontWeight: 700, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' } }, 'Полисы'),
                     ...rows.map(r => h('div', { class: 'row', style: { padding: '5px 0', borderBottom: '1px solid var(--ink-50)', gap: '10px' } },
                         h('span', { style: { flex: 1, color: 'var(--ink-800)' } }, r.name),
-                        h('span', { class: 'num', style: { fontWeight: 600 } }, 'покрытие ' + (r.coverage_percent || 0) + '%'))),
+                        h('span', { class: 'num', style: { fontWeight: 600 } }, trf('покрытие {n}%', { n: r.coverage_percent || 0 })))),
                 ));
             } catch (e) { policiesEl.textContent = ''; }
         }
@@ -1443,7 +1445,7 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                 m.close();
                 await reload();
             } catch (e) {
-                toast('Не удалось сохранить: ' + (e && e.message || e), 'fail');
+                toast(trf('Не удалось сохранить: {msg}', { msg: (e && e.message) || e }), 'fail');
                 saveBtn.disabled = false;
                 saveBtn.textContent = 'Сохранить';
             }
@@ -1497,14 +1499,14 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
             const voided = inv.status === 'void' || inv.status === 'refunded';
             events.push({
                 t: inv.created_at, kind: 'invoice', voided,
-                label: 'Счёт ' + (inv.invoice_number || ('#' + inv.id)) + (voided ? ' · отменён' : ''),
+                label: trf('Счёт {no}', { no: inv.invoice_number || ('#' + inv.id) }) + (voided ? ' · ' + tr('отменён') : ''),
                 amount: Number(inv.total_amount || 0),
             });
         }
         for (const pay of payRows) {
             events.push({
                 t: pay.paid_at, kind: 'payment',
-                label: 'Оплата · ' + (METHOD_RU[pay.method] || pay.method) + ' · ' + (numById.get(pay.invoice_id) || ''),
+                label: trf('Оплата · {method}', { method: tr(METHOD_RU[pay.method] || pay.method) }) + ' · ' + (numById.get(pay.invoice_id) || ''),
                 amount: Number(pay.amount || 0),
             });
         }
@@ -1526,15 +1528,15 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                 h('span', { class: 'num', style: { fontWeight: 700, color: ev.kind === 'payment' ? 'var(--ok-700)' : (ev.voided ? 'var(--ink-400)' : 'var(--ink-900)') } },
                     (ev.kind === 'payment' ? '−' : '+') + fmtPrice(ev.amount)),
                 h('span', { class: 'num muted', style: { flex: '0 0 96px', textAlign: 'right', fontSize: '11.5px' } },
-                    'долг ' + fmtPrice(Math.max(running, 0))),
+                    trf('долг {sum}', { sum: fmtPrice(Math.max(running, 0)) })),
             ));
         }
         const debt = Math.max(totalBilled - totalPaid, 0);
 
         const sums = h('div', { class: 'row', style: { gap: '16px', flexWrap: 'wrap', fontSize: '12.5px', marginBottom: '10px' } },
-            h('span', null, 'Выставлено: ', h('b', { class: 'num' }, fmtPrice(totalBilled) + ' сум')),
-            h('span', null, 'Оплачено: ', h('b', { class: 'num', style: { color: 'var(--ok-700)' } }, fmtPrice(totalPaid) + ' сум')),
-            h('span', null, 'Долг: ', h('b', { class: 'num', style: { color: debt > 0 ? 'var(--crit-600)' : 'var(--ok-700)' } }, fmtPrice(debt) + ' сум')),
+            h('span', null, 'Выставлено: ', h('b', { class: 'num' }, fmtPrice(totalBilled), ' сум')),
+            h('span', null, 'Оплачено: ', h('b', { class: 'num', style: { color: 'var(--ok-700)' } }, fmtPrice(totalPaid), ' сум')),
+            h('span', null, 'Долг: ', h('b', { class: 'num', style: { color: debt > 0 ? 'var(--crit-600)' : 'var(--ok-700)' } }, fmtPrice(debt), ' сум')),
         );
 
         // DEPOSIT_V1 — депозит живёт здесь же. «Баланс счёта» — то место, куда
@@ -1553,12 +1555,12 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
             },
         },
             h('span', { style: { fontSize: '12.5px', color: 'var(--ink-700)' } }, 'Депозит (предоплата):'),
-            h('b', { class: 'num', style: { fontSize: '15px', color: 'var(--primary-700)' } }, fmtPrice(bal.balance) + ' сум'),
+            h('b', { class: 'num', style: { fontSize: '15px', color: 'var(--primary-700)' } }, fmtPrice(bal.balance), ' сум'),
             // Заведённый, но не принятый кассой депозит — не деньги. Показываем
             // отдельно, иначе регистратура ждала бы, что баланс уже вырос.
             pending.length
                 ? h('span', { class: 'muted', style: { fontSize: '12px' } },
-                    '· ждёт приёма кассой: ' + fmtPrice(pending.reduce((n, d) => n + Number(d.amount || 0), 0)) + ' сум')
+                    '· ', trf('ждёт приёма кассой: {sum} сум', { sum: fmtPrice(pending.reduce((n, d) => n + Number(d.amount || 0), 0)) }))
                 : null);
 
         const depBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button' },
@@ -1605,10 +1607,10 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                 });
                 const num = (res && res.deposit && res.deposit.deposit_number) || '';
                 m.close();
-                toast('Депозит ' + num + ' на ' + fmtPrice(amount) + ' сум отправлен в кассу.', 'ok');
+                toast(trf('Депозит {no} на {sum} сум отправлен в кассу.', { no: num, sum: fmtPrice(amount) }), 'ok');
                 reload();
             } catch (e) {
-                toast('Не удалось создать депозит: ' + (e && e.message || e), 'fail');
+                toast(trf('Не удалось создать депозит: {msg}', { msg: (e && e.message) || e }), 'fail');
                 saveBtn.disabled = false;
                 saveBtn.textContent = 'Отправить в кассу';
             }
@@ -1653,7 +1655,7 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                 close();
                 await reload();
             } catch (e) {
-                toast('Не удалось сохранить: ' + (e && e.message || e), 'fail');
+                toast(trf('Не удалось сохранить: {msg}', { msg: (e && e.message) || e }), 'fail');
                 saveBtn.disabled = false;
                 saveBtn.textContent = 'Сохранить';
             }
@@ -1768,7 +1770,7 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                 close();
                 await reload();
             } catch (e) {
-                toast('Не удалось сохранить: ' + (e && e.message || e), 'fail');
+                toast(trf('Не удалось сохранить: {msg}', { msg: (e && e.message) || e }), 'fail');
                 saveBtn.disabled = false;
                 saveBtn.textContent = prevLabel;
             }

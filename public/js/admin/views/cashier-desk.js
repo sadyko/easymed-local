@@ -65,7 +65,7 @@ async function printInvoiceSheet(inv) {
         // RECEIPT_DOB_PERFORMER_V1 — очередь и исполнители одним запросом: раньше
         // счёт брал только очередь, поэтому «Исполнитель» на нём не появлялся.
         const { queue, byItem: perfByItem } = await loadInvoiceLines(supabase, inv.id);
-        // i18n-exempt: данные ПЕЧАТНОГО счёта (бланк) — печатные документы намеренно русские, как METHOD_RU/GENDER_RU в receipt-print.js
+        /* i18n-exempt-start: данные ПЕЧАТНОГО счёта (бланк) — печатные документы намеренно русские, как METHOD_RU/GENDER_RU в receipt-print.js */
         printableSheet({ type: 'invoice', idLine: inv.invoice_number || String(inv.id), data: {
             title: 'Счёт за медицинские услуги',
             queue,   // INVOICE_QUEUE_V1
@@ -90,6 +90,7 @@ async function printInvoiceSheet(inv) {
             })),
             subtotal: inv.subtotal, total: inv.total_amount, paid,
         } });
+        /* i18n-exempt-end */
     } catch (e) {
         console.warn('[cashier] invoice print:', e && e.message);
         toast(trf('Не удалось напечатать счёт: {msg}', { msg: (e && e.message) || e }), 'fail');
@@ -576,6 +577,7 @@ async function printShiftReport(withPayments) {
     if (r) printReportDoc(r, withPayments);
 }
 
+/* i18n-exempt-start: печатная форма X-отчёта / внутреннего отчёта смены — печатный документ, намеренно русский */
 function printReportDoc(r, withPayments) {
     const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const row = (l, v, strong) => `<tr><td style="padding:4px 0;color:#555">${esc(l)}</td><td style="padding:4px 0;text-align:right;font-weight:${strong ? 800 : 600}">${esc(v)}</td></tr>`;
@@ -614,6 +616,7 @@ function printReportDoc(r, withPayments) {
       <script>window.onload = () => window.print();</script></body></html>`);
     w.document.close();
 }
+/* i18n-exempt-end */
 
 // ---- Close shift ---------------------------------------------------------------
 function closeShiftModal(root, shift, expectedDrawer) {
@@ -635,7 +638,7 @@ function closeShiftModal(root, shift, expectedDrawer) {
     countedInp.addEventListener('input', renderDiff);
     renderDiff();
 
-    modal('Закрыть смену · ' + shiftNo(shift), 'Wallet',
+    modal(trf('Закрыть смену · {no}', { no: shiftNo(shift) }), 'Wallet',
         [field('Пересчитанные наличные в кассе', countedInp, { required: true }), diffEl, field('Примечание', notesInp)],
         'Закрыть смену',
         async () => {
@@ -644,7 +647,7 @@ function closeShiftModal(root, shift, expectedDrawer) {
             const { data, error } = await supabase.rpc('close_cash_shift', { shift_id: shift.id, counted_amount: c, notes: notesInp.value || '' });
             if (error) { toast((error.message) || 'Не удалось закрыть смену.', 'fail'); return false; }
             const os = data && data.shift ? data.shift.over_short : 0;
-            toast(os === 0 ? 'Смена закрыта — касса сходится' : ('Смена закрыта — ' + (os > 0 ? 'излишек +' : 'недостача ') + fmtPrice(os)), os === 0 ? 'ok' : 'info');
+            toast(os === 0 ? 'Смена закрыта — касса сходится' : (os > 0 ? trf('Смена закрыта — излишек +{sum}', { sum: fmtPrice(os) }) : trf('Смена закрыта — недостача {sum}', { sum: fmtPrice(os) })), os === 0 ? 'ok' : 'info');
             await paint(root);
             return true;
         });
@@ -665,7 +668,7 @@ async function paymentsCard(root, summary) {
 
     const card = h('div', { class: 'card' },
         h('div', { class: 'card-header' },
-            h('h3', null, 'Приём оплат — счета ' + (summary.branch_name ? 'филиала ' + summary.branch_name : 'клиники')),
+            h('h3', null, summary.branch_name ? trf('Приём оплат — счета филиала {name}', { name: summary.branch_name }) : 'Приём оплат — счета клиники'),
             h('div', { class: 'row', style: { gap: '8px' } },
                 headBtn('Обновить', 'Refresh', () => paint(root)),
                 headBtn('История', 'Clock', () => historyModal(root)),
@@ -689,7 +692,7 @@ async function loadInvoices() {
     state.rows = [];
     state.counts = null;
     const { data, error } = await supabase.rpc('cashier_invoices', {});
-    if (error) { toast('Не удалось загрузить счета: ' + (error.message || error), 'fail'); return; }
+    if (error) { toast(trf('Не удалось загрузить счета: {msg}', { msg: error.message || error }), 'fail'); return; }
     state.rows = (data && data.rows) || [];
     state.counts = (data && data.counts) || null;
     // DEPOSIT_V1 — отдельный запрос: депозиты не счета, в cashier_invoices их

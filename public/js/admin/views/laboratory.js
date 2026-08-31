@@ -1528,7 +1528,7 @@ async function labGroupFor(r, patient, results) {
 
     // Номер образца в заголовке панели: у каждого анализа своя пробирка со
     // своим штрих-кодом, и на бланке он должен стоять рядом со своей таблицей.
-    return { title: `${svc.name || 'Анализ'} · № ${accession(r)}`, tests };
+    return { title: `${svc.name || 'Анализ'} · № ${accession(r)}`, tests };   // i18n-exempt: заголовок печатного бланка анализа
 }
 
 async function buildLabDoc(rows, patient, opts = {}) {

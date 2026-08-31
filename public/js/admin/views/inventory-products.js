@@ -582,6 +582,7 @@ export function openReceiveModal(onSaved) {
     (async () => { await Promise.all([loadProducts(), loadSuppliers()]); paintLines(); })();
 
     // ---- печать этикеток (name · партия · годен до · Nx) ----
+    /* i18n-exempt-start: печать этикеток — печатный документ */
     function printLabels() {
         if (!st.lines.length) { toast('Нет строк для этикеток.', 'fail'); return; }
         const esc = (x) => String(x == null ? '' : x).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
@@ -598,6 +599,7 @@ export function openReceiveModal(onSaved) {
 <body onload="print()" style="display:flex;flex-wrap:wrap;gap:10px;padding:16px;">${cells}</body></html>`);
         w.document.close();
     }
+    /* i18n-exempt-end */
 
     const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Приход');
     saveBtn.addEventListener('click', save);
@@ -605,8 +607,8 @@ export function openReceiveModal(onSaved) {
     async function save() {
         if (!st.lines.length) { toast('Добавьте хотя бы один товар.', 'fail'); return; }
         for (const ln of st.lines) {
-            if (!(Number(ln.qty) > 0)) { toast('Кол-во должно быть больше нуля: ' + ln.product.name, 'fail'); return; }
-            if (!(Number(ln.unitCost) >= 0)) { toast('Укажите цену за единицу: ' + ln.product.name, 'fail'); return; }
+            if (!(Number(ln.qty) > 0)) { toast(trf('Кол-во должно быть больше нуля: {name}', { name: ln.product.name }), 'fail'); return; }
+            if (!(Number(ln.unitCost) >= 0)) { toast(trf('Укажите цену за единицу: {name}', { name: ln.product.name }), 'fail'); return; }
         }
         saveBtn.disabled = true; saveBtn.textContent = 'Проводим…';
         try {
@@ -666,7 +668,7 @@ export function openAdjustModal(p, onSaved) {
     const infoEl = h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '10px' } }, '');
     function refreshInfo() {
         infoEl.textContent = current
-            ? `Сейчас в наличии: ${Number(current.on_hand) || 0} ${current.base_unit || ''}`.trim()
+            ? trf('Сейчас в наличии: {n} {unit}', { n: Number(current.on_hand) || 0, unit: current.base_unit || '' }).trim()
             : 'Выберите товар.';
     }
 
@@ -687,7 +689,7 @@ export function openAdjustModal(p, onSaved) {
                     refreshInfo();
                 });
             } catch (e) {
-                toast('Не удалось загрузить товары: ' + ((e && e.message) || e), 'fail');
+                toast(trf('Не удалось загрузить товары: {msg}', { msg: (e && e.message) || e }), 'fail');
             }
         })();
     }
