@@ -1,22 +1,33 @@
-// LAB_PANELS_MODE_V1 (docs/plans/2026-08-24-lab-panels-and-roles.md, Task 1) —
-// panel editing reachable from Лаборатория, so a lab technician never has to be
-// handed the whole Settings hub to fill in a reference range.
+// LAB_PANELS_BY_SECTION_V1 (2026-08-31, owner: «remove the laboratory and the
+// panels settings from the settings, leave only in the lab section with switch.
+// and make switch a little bit prominent. user in the system with the role of
+// laborant will get exactly this window without giving him a separate
+// permission in the settings. who ever will have permission of the lab section
+// will be able to edit the panels») — supersedes LAB_PANELS_MODE_V1's gating.
 //
 // What is actually guarded here:
-//   * the Очередь | Панели switch does not exist for a lab user who may not
-//     manage lab settings — the read-only technician sees the queue and nothing
-//     that hints at a door they cannot open;
-//   * it does exist for a labs-EDIT role (the owner's actual case) and for an
-//     admin, and clicking «Панели» renders the panel editor in place;
-//   * Настройки → «Лаборатория и диагностика» still renders that SAME editor —
-//     the assertion that keeps «one implementation, two entry points» honest,
-//     because a copy-paste fork would drift the moment either side is fixed;
-//   * '#labs/panels' works in both directions: the mode writes it into the
-//     address bar, and a boot that hands it back (ctx.payload.sub) opens the
-//     editor — but never for a role without the right, whatever the URL says.
+//   * the gate IS lab-section access: ANY role that can open Лаборатория —
+//     viewer included — gets the Очередь | Панели switch and the editor.
+//     canEditLabPanels() delegates to the same isModuleAllowed('labs') that
+//     decides the sidebar, so the two can never disagree;
+//   * the owner's acceptance case, literally: a bare laborant (the seeded
+//     'lab' role row, ZERO settings-side configuration) opens '#labs/panels',
+//     presses «Сохранить панель», and the write goes to lab_panels /
+//     lab_panel_analytes;
+//   * a role WITHOUT the labs section gets nothing — no switch, no editor,
+//     whatever the address bar says;
+//   * the Settings entry is GONE: views/lab-settings.js no longer exists,
+//     admin.js neither imports nor routes it, and the old '#lab-settings'
+//     address redirects to '#labs/panels' at route resolution;
+//   * the switch is the prominent variant (.seg-lg) — the queue's own status
+//     filter stays the small one;
+//   * the LAB_BUILD marker moved with the editor's only remaining page head.
 
 import { test } from 'node:test';
 import assert from 'node:assert';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // Fake-DOM harness — copied from __tests__/telephony-settings.test.mjs (itself
 // from system-view.test.mjs / activation.test.mjs) because these views also
@@ -94,10 +105,11 @@ const textOf = (el) => walk(el).map((n) => n._t || '').join('');
 const findAllButtons = (root) => walk(root).filter((n) => n.tagName === 'BUTTON');
 const findButtonByText = (root, re) => findAllButtons(root).find((b) => re.test(textOf(b)));
 const findByAriaLabel = (root, label) => walk(root).find((n) => n.attrs['aria-label'] === label);
+const hasClass = (n, c) => String(n.className || '').split(/\s+/).includes(c);
 // The switch is identified by its accessible name, not by '.segmented': the
 // queue's own status filter is a .segmented too, and asserting on the class
 // would pass for the wrong control.
-const modeSwitch = (root) => walk(root).find((n) => n.className === 'segmented' && n.attrs['aria-label'] === 'Режим раздела');
+const modeSwitch = (root) => walk(root).find((n) => hasClass(n, 'segmented') && n.attrs['aria-label'] === 'Режим раздела');
 const modeButtons = (root) => { const sw = modeSwitch(root); return sw ? findAllButtons(sw) : []; };
 
 // A toast node, so ui.js reuses it instead of appending to the fake body. Its
@@ -113,8 +125,10 @@ document.getElementById = (id) => (id === 'toast' ? toastEl : null);
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 
 // --- fake /api/db ----------------------------------------------------------
-// db-client.js POSTs one descriptor per read; answer by table so both the queue
-// and the panel editor get shaped rows out of the same server.
+// db-client.js POSTs one descriptor per call; answer by table so both the
+// queue and the panel editor get shaped rows out of the same server, and
+// RECORD every descriptor's {table, op} — the acceptance test asserts that
+// «Сохранить панель» actually writes.
 const PANELS = [
   { id: 'p-1', company_id: 'c-1', name: 'Общий анализ крови', modality: 'lab', has_narrative: false, service_id: 's-1', active: true },
 ];
@@ -125,13 +139,13 @@ const ANALYTES = [
 ];
 const SERVICES = [{ id: 's-1', name: 'ОАК', type: 'lab', is_lab: true, department_id: 'd-1', type_id: null }];
 
-let dbTables = [];
+let dbCalls = [];
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   if (u.startsWith('/api/db')) {
     const table = body && body.table;
-    dbTables.push(table);
+    dbCalls.push({ table, op: (body && body.op) || 'select' });
     const rows = {
       lab_panels: PANELS,
       lab_panel_analytes: ANALYTES,
@@ -148,17 +162,21 @@ globalThis.fetch = async (url, opts) => {
 };
 
 const { renderLaboratory } = await import('../views/laboratory.js');
-const { renderLabSettings } = await import('../views/lab-settings.js');
-const { setFullAccess, setEffectiveFromRole, canManageLabSettings } = await import('../permissions.js');
+const { LAB_BUILD } = await import('../views/lab-panels.js');
+const perms = await import('../permissions.js');
+const { setFullAccess, setEffectiveFromRole, canEditLabPanels } = perms;
 
-// Two roles that matter. «Лаборант (чтение)» holds Лаборатория at viewer level
-// and nothing else — the person the switch must stay away from. «Лаборант»
-// holds it at editor level, which is what canManageLabSettings() already
-// accepts, so the plan needed no new permission key.
-const LAB_VIEWER = { name: 'Лаборант (чтение)', permissions: { sections: ['labs'], levels: { labs: 'viewer' } } };
-const LAB_EDITOR = { name: 'Лаборант',          permissions: { sections: ['labs'], levels: { labs: 'editor' } } };
+// The three roles that matter now. «lab» is the SEEDED 'lab' row from
+// migration 013 verbatim — the owner's acceptance case is that this exact user
+// edits panels with zero settings-side configuration. «Медсестра» holds labs at
+// viewer level only: under the owner's rule («who ever will have permission of
+// the lab section will be able to edit the panels») that is enough.
+// «Регистратура» has no labs section at all and must stay outside.
+const LAB_SEEDED = { name: 'lab', permissions: { sections: ['labs', 'patients', 'dashboard'], levels: { labs: 'editor', patients: 'viewer', dashboard: 'viewer' } } };
+const LAB_VIEWER = { name: 'Медсестра', permissions: { sections: ['labs', 'patients', 'dashboard'], levels: { labs: 'viewer', patients: 'editor', dashboard: 'viewer' } } };
+const NO_LABS    = { name: 'Регистратура', permissions: { sections: ['patients', 'dashboard'], levels: { patients: 'editor', dashboard: 'viewer' } } };
 
-function reset() { toastMsg = null; dbTables = []; lastHistoryUrl = null; historyWrites = 0; tabSubCalls = []; }
+function reset() { toastMsg = null; dbCalls = []; lastHistoryUrl = null; historyWrites = 0; tabSubCalls = []; }
 
 // Markers the panel editor — and only the panel editor — puts on screen.
 function assertPanelEditor(root, where) {
@@ -171,27 +189,11 @@ function assertPanelEditor(root, where) {
   assert.ok(text.includes('Сохранить панель'), where + ': кнопка сохранения');
 }
 
-test('роль без права на настройки лаборатории: переключателя нет вовсе, только очередь', async () => {
+test('любой доступ к Лаборатории — включая чтение — даёт переключатель, и «Панели» открывают редактор', async () => {
   reset();
   setEffectiveFromRole(LAB_VIEWER);
-  assert.strictEqual(canManageLabSettings(), false, 'предпосылка теста: право не дано');
-
-  const root = mk('div');
-  await renderLaboratory(root, {});
-  await tick();
-
-  assert.strictEqual(modeSwitch(root), undefined, 'переключатель режима не отрисован');
-  assert.ok(!findButtonByText(root, /^Панели$/), 'кнопки «Панели» нет ни в каком виде — не отключённой, никакой');
-  const text = textOf(root);
-  assert.ok(text.includes('Лаборатория'), 'очередь на месте');
-  assert.ok(text.includes('Очередь проб'), 'подзаголовок очереди');
-  assert.ok(!text.includes('Из каталога'), 'редактор панелей не смонтирован');
-});
-
-test('роль с правом на редактирование лаборатории: переключатель есть, «Панели» открывают редактор', async () => {
-  reset();
-  setEffectiveFromRole(LAB_EDITOR);
-  assert.strictEqual(canManageLabSettings(), true, 'labs=editor уже даёт это право');
+  assert.strictEqual(canEditLabPanels(), true,
+    'правило владельца: раздел виден — панели редактируемы; labs=viewer этого достаточно');
 
   const root = mk('div');
   await renderLaboratory(root, {});
@@ -220,6 +222,89 @@ test('роль с правом на редактирование лаборат�
   assert.ok(!textOf(root).includes('Из каталога'), 'редактор убран');
 });
 
+test('приёмочный случай владельца: голый лаборант открывает #labs/panels и сохраняет панель — ноль настроек', async () => {
+  reset();
+  setEffectiveFromRole(LAB_SEEDED);
+  assert.strictEqual(canEditLabPanels(), true, 'штатная роль lab проходит без единого settings-ключа');
+
+  const root = mk('div');
+  await renderLaboratory(root, { payload: { sub: 'panels' } });
+  await tick();
+  assertPanelEditor(root, 'по прямой ссылке');
+
+  const save = findButtonByText(root, /Сохранить панель/);
+  assert.ok(save, 'кнопка сохранения на месте');
+  save.click();
+  await tick();
+
+  assert.strictEqual(toastMsg, 'Панель сохранена', 'сохранение дошло до конца');
+  const writes = dbCalls.filter((c) => c.op !== 'select');
+  assert.ok(writes.some((c) => c.table === 'lab_panels' && c.op === 'update'),
+    'панель записана в lab_panels: ' + JSON.stringify(writes));
+  assert.ok(writes.some((c) => c.table === 'lab_panel_analytes' && c.op === 'insert'),
+    'показатели перезаписаны (insert новых): ' + JSON.stringify(writes));
+  assert.ok(writes.some((c) => c.table === 'lab_panel_analytes' && c.op === 'delete'),
+    'reconcile добрал удаление старых строк: ' + JSON.stringify(writes));
+});
+
+test('роль без раздела Лаборатория: ни переключателя, ни редактора — даже по прямой ссылке', async () => {
+  reset();
+  setEffectiveFromRole(NO_LABS);
+  assert.strictEqual(canEditLabPanels(), false, 'нет labs — нет панелей');
+
+  const root = mk('div');
+  await renderLaboratory(root, { payload: { sub: 'panels' } });
+  await tick();
+
+  assert.strictEqual(modeSwitch(root), undefined, 'переключатель режима не отрисован');
+  assert.ok(!findButtonByText(root, /^Панели$/), 'кнопки «Панели» нет ни в каком виде — не отключённой, никакой');
+  assert.ok(!textOf(root).includes('Из каталога'), 'редактор не открылся по ссылке');
+  assert.ok(textOf(root).includes('Очередь проб'), 'показана очередь');
+  // (в живой оболочке этот пользователь не дошёл бы и сюда: renderViewInto
+  // отсекает '#labs' через isRouteAllowed — это защита в глубину.)
+});
+
+test('переключатель заметный: seg-lg на переключателе режима — и только на нём', async () => {
+  reset();
+  setFullAccess('Администратор');
+  const root = mk('div');
+  await renderLaboratory(root, {});
+  await tick();
+
+  const sw = modeSwitch(root);
+  assert.ok(sw, 'переключатель на месте');
+  assert.ok(hasClass(sw, 'seg-lg'), 'режимный переключатель — крупный вариант: ' + sw.className);
+  const smallSegments = walk(root).filter((n) => hasClass(n, 'segmented') && n !== sw);
+  assert.ok(smallSegments.length >= 1, 'фильтр очереди — тоже .segmented (иначе сравнивать не с чем)');
+  for (const s of smallSegments) assert.ok(!hasClass(s, 'seg-lg'), 'фильтры очереди остаются мелкими');
+
+  // Класс без правила — невидимая «заметность»: разметка получила seg-lg, а
+  // браузер рисовал бы обычную мелкую пилюлю. admin-views.css обязан объявлять
+  // вариант, и его активная сторона — заливка primary, не белая карточка.
+  const css = fs.readFileSync(path.resolve(HERE, '..', '..', '..', 'css', 'admin-views.css'), 'utf8');
+  assert.match(css, /\.segmented\.seg-lg\s*\{/, 'вариант .seg-lg объявлен в admin-views.css');
+  assert.match(css, /\.segmented\.seg-lg button\.on\s*\{[^}]*var\(--primary-600\)/,
+    'активная сторона крупного варианта залита primary — то самое «a little bit prominent»');
+});
+
+test('маркер сборки переехал вместе с редактором: в режиме «Панели» виден LAB_BUILD', async () => {
+  reset();
+  setFullAccess('Администратор');
+  const root = mk('div');
+  await renderLaboratory(root, { payload: { sub: 'panels' } });
+  await tick();
+
+  assert.ok(textOf(root).includes(LAB_BUILD),
+    'маркер сборки в шапке — по нему диагностируют «я не вижу изменений» теперь здесь, а не в настройках');
+
+  // В очереди маркер не нужен — он про редактор.
+  reset();
+  const root2 = mk('div');
+  await renderLaboratory(root2, {});
+  await tick();
+  assert.ok(!textOf(root2).includes(LAB_BUILD), 'в режиме очереди маркер не показывается');
+});
+
 test('переключение режима пишет адрес: #labs/panels и обратно #labs (replaceState, без новой записи истории)', async () => {
   reset();
   setFullAccess('Администратор');
@@ -241,61 +326,40 @@ test('переключение режима пишет адрес: #labs/panels 
     'оболочка узнаёт о режиме — иначе следующий navigate() перепишет адрес из устаревшего payload вкладки');
 });
 
-test('#labs/panels открывает редактор сразу (ctx.payload.sub), но только тому, кому можно', async () => {
-  reset();
-  setFullAccess('Администратор');
-  const root = mk('div');
-  await renderLaboratory(root, { payload: { sub: 'panels' } });
-  await tick();
-  assertPanelEditor(root, 'по прямой ссылке');
+// ---------------------------------------------------------------------------
+// The Settings entry is GONE. admin.js cannot be imported without a real DOM
+// (it grabs #view-root at module scope), so the routing half of the change is
+// pinned the way clinic-after-login.test.mjs pins boot(): on the source text.
+// What a source assertion cannot prove — that a browser actually lands on the
+// panels editor from an old bookmark — stays a manual check.
+// ---------------------------------------------------------------------------
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const adminSrc = fs.readFileSync(path.resolve(HERE, '..', '..', 'admin.js'), 'utf8');
 
-  // Тот же адрес у роли без права — молча очередь. Ссылка не может выдать доступ.
-  reset();
-  setEffectiveFromRole(LAB_VIEWER);
-  const root2 = mk('div');
-  await renderLaboratory(root2, { payload: { sub: 'panels' } });
-  await tick();
-  assert.strictEqual(modeSwitch(root2), undefined, 'переключателя по-прежнему нет');
-  assert.ok(!textOf(root2).includes('Из каталога'), 'редактор не открылся по ссылке');
-  assert.ok(textOf(root2).includes('Очередь проб'), 'показана очередь');
+test('настройки больше не входная точка: экран удалён, маршрут и карточка вычищены', () => {
+  assert.ok(!fs.existsSync(path.resolve(HERE, '..', 'views', 'lab-settings.js')),
+    'views/lab-settings.js удалён — редактор живёт только в Лаборатории');
+  assert.ok(!/from\s+'\.\/admin\/views\/lab-settings\.js/.test(adminSrc), 'admin.js не импортирует lab-settings');
+  assert.ok(!/case\s+'lab-settings'/.test(adminSrc), 'маршрута lab-settings больше нет');
+  assert.ok(!/renderLabSettings/.test(adminSrc), 'и ссылок на renderLabSettings тоже');
+
+  const hubSrc = fs.readFileSync(path.resolve(HERE, '..', 'views', 'settings-hub.js'), 'utf8');
+  assert.ok(!/lab-settings/.test(hubSrc), 'в хабе настроек не осталось входа lab-settings');
+
+  // Отдельное право на настройки лаборатории умерло вместе с экраном.
+  assert.strictEqual(perms.canManageLabSettings, undefined,
+    'canManageLabSettings удалён — единственный гейт теперь canEditLabPanels (= доступ к разделу labs)');
+  const permsSrc = fs.readFileSync(path.resolve(HERE, '..', 'permissions.js'), 'utf8');
+  assert.ok(!/settings:lab_settings/.test(permsSrc), 'ключ settings:lab_settings больше не раздаётся в редакторе ролей');
 });
 
-test('Настройки → «Лаборатория и диагностика» рисуют ТОТ ЖЕ редактор', async () => {
-  reset();
-  setFullAccess('Администратор');
-  const nav = [];
-  const root = mk('div');
-  await renderLabSettings(root, { onNavigate: (v) => nav.push(v) });
-  await tick();
-
-  const text = textOf(root);
-  assert.ok(text.includes('Лаборатория и диагностика'), 'заголовок раздела настроек');
-  assert.ok(text.includes('lab-v6'), 'маркер сборки на месте — по нему диагностируют «я не вижу изменений»');
-  assertPanelEditor(root, 'из настроек');
-
-  const back = findButtonByText(root, /Настройки/);
-  assert.ok(back, 'кнопка возврата');
-  back.click();
-  assert.deepStrictEqual(nav, ['settings'], 'возврат ведёт в Настройки');
-});
-
-test('оба входа дают один и тот же экран — не две копии редактора', async () => {
-  reset();
-  setFullAccess('Администратор');
-
-  const fromLabs = mk('div');
-  await renderLaboratory(fromLabs, { payload: { sub: 'panels' } });
-  await tick();
-
-  const fromSettings = mk('div');
-  await renderLabSettings(fromSettings, {});
-  await tick();
-
-  // Сравниваем сам редактор: набор кнопок под шапкой должен совпадать
-  // дословно. Разойдётся — значит появилась вторая реализация.
-  const editorButtons = (root) => findAllButtons(root)
-    .map(textOf).map((s) => s.trim())
-    .filter((s) => s && s !== 'Очередь' && s !== 'Панели' && s !== '← Настройки');
-  assert.deepStrictEqual(editorButtons(fromLabs), editorButtons(fromSettings),
-    'редактор в Лаборатории и в Настройках — один и тот же модуль');
+test('старый адрес #lab-settings ведёт в #labs/panels (перенаправление на разборе маршрута)', () => {
+  // Одна таблица legacy-маршрутов, и оба места, где старый id может всплыть,
+  // проходят через неё: navigate() (popstate со старой записью истории, любой
+  // застрявший вызов) и parseHash() (вставленная в адресную строку старая
+  // ссылка — именно так «старые ссылки не ломаются»).
+  assert.match(adminSrc, /LEGACY_ROUTES\s*=\s*\{[^}]*'lab-settings':\s*\{\s*view:\s*'labs',\s*sub:\s*'panels'\s*\}/,
+    'таблица legacy-маршрутов объявлена и знает lab-settings → labs/panels');
+  const uses = (adminSrc.match(/LEGACY_ROUTES\[/g) || []).length;
+  assert.ok(uses >= 2, 'таблица применяется и в navigate(), и в parseHash() — найдено применений: ' + uses);
 });

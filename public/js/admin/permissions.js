@@ -224,15 +224,20 @@ export function canView(key)   { return accessLevelFor(key) !== 'none'; }
 export function canEdit(key)   { const l = accessLevelFor(key); return l === 'editor' || l === 'admin'; }
 export function canDelete(key) { return accessLevelFor(key) === 'admin'; }
 
-// LAB_ROLE_SETTINGS_V1 — the Lab role can reach + edit lab service settings
-// (Лаборатория и диагностика) either through the explicit «settings:lab_settings»
-// grant OR by holding the Laboratory module at edit/delete level. Used by
-// isModuleAllowed('settings') and isRouteAllowed('lab-settings').
-export function canManageLabSettings() {
-    if (_effective == null) return true;   // full access
-    return _effective.has('settings:lab_settings')
-        || _effective.has('lab-settings')
-        || canEdit('labs');
+// LAB_PANELS_BY_SECTION_V1 (2026-08-31, owner: «who ever will have permission
+// of the lab section will be able to edit the panels») — panel editing follows
+// LAB-SECTION access itself. The ONE predicate is the same isModuleAllowed('labs')
+// that decides whether Лаборатория is in the sidebar, so the nav and the
+// «Панели» mode can never disagree. No settings-side grant is involved any
+// more: the lab-settings screen is gone (the editor's only home is
+// Лаборатория → «Панели») and its settings key is no longer offered in the
+// Roles editor. Replaces LAB_ROLE_SETTINGS_V1's canManageLabSettings, which
+// wanted a settings key or labs-at-EDIT — now opening the section is enough,
+// viewer level included: a role trusted to see the lab's queue is trusted with
+// its reference ranges, per the owner. Server mirror: schema-registry.js
+// LAB_SECTION_ROLES (admin/doctor/lab/nurse — the seeded labs-section roles).
+export function canEditLabPanels() {
+    return isModuleAllowed('labs');
 }
 
 // PROCUREMENT_REQ_GRANT_V1 — «Заявки на закупку» is a SEPARATE grant so a nurse
@@ -293,7 +298,7 @@ export function isModuleAllowed(navId) {
         // (Lab/Nurse/Doctor roles carry 'documents' with no settings key).
         // The Settings home index itself filters rows by isRouteAllowed, so
         // they see ONLY the rows they were granted.
-        for (const k of ['documents', 'discounts-settings', 'api-settings', 'referral-settings', 'doctor-pay', 'lab-settings', 'consultation-types', 'communications', 'cashier-settings'])
+        for (const k of ['documents', 'discounts-settings', 'api-settings', 'referral-settings', 'doctor-pay', 'consultation-types', 'communications', 'cashier-settings'])
             if (_effective.has(k)) return true;
         // LOCAL_ROLES_V1 — the production LAB_ROLE_SETTINGS_V1 implication (any
         // Laboratory-edit role also opens Settings, to manage lab panels) is
@@ -339,7 +344,6 @@ export function isRouteAllowed(view) {
     if (view.startsWith('report:'))   return isModuleAllowed('reports');
     if (view === 'consultation-types') return _effective.has('consultation-types') || _effective.has('settings:consultation_types') || _effective.has('settings');
     if (view === 'communications')     return _effective.has('communications') || _effective.has('settings');
-    if (view === 'lab-settings')       return _effective.has('lab-settings') || _effective.has('settings:lab_settings') || _effective.has('settings') || canManageLabSettings();   // LAB_ROLE_SETTINGS_V1
     if (view === 'discounts-settings') return _effective.has('discounts-settings') || _effective.has('settings');   // PATIENT_DISCOUNTS_V2
     if (view === 'api-settings') return _effective.has('api-settings') || _effective.has('settings');   // CLINIC_API_V1
     // TELEGRAM_BOT_V1 — раздел админский целиком, включая чтение: токен бота
@@ -401,7 +405,9 @@ export function permissionGroups() {
     // EXTRA_SETTINGS_PERMS_V1 — non-table settings pages (special routes) made grantable per-role.
     for (const e of [
         { key: 'settings:consultation_types', label: 'Консультации врачей',      group: 'Service settings' },
-        { key: 'settings:lab_settings',       label: 'Лаборатория и диагностика', group: 'Service settings' },
+        // LAB_PANELS_BY_SECTION_V1 — «Лаборатория и диагностика» is no longer a
+        // grantable settings key: panel editing rides on the Laboratory module
+        // itself (canEditLabPanels), so there is nothing here to tick.
         { key: 'settings:doctor_pay',         label: 'Зарплата врачей (массово)',  group: 'Doctor salary' },
     ]) {
         const gn = 'Settings · ' + e.group;

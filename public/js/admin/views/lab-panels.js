@@ -1,16 +1,20 @@
-// LAB_PANELS_EDITOR_V1 — the panel editor with NO page chrome of its own, so
-// the SAME implementation can be mounted from two places:
+// LAB_PANELS_EDITOR_V1 — the panel editor with NO page chrome of its own.
 //
-//   Настройки → «Лаборатория и диагностика»  → views/lab-settings.js
-//   Лаборатория → «Панели»                    → views/laboratory.js
+// LAB_PANELS_BY_SECTION_V1 (2026-08-31): its ONLY entry point is now
+// Лаборатория → «Панели» (views/laboratory.js). The Settings screen that used
+// to wrap it (views/lab-settings.js, Настройки → «Лаборатория и диагностика»)
+// is retired — owner: «remove the laboratory and the panels settings from the
+// settings, leave only in the lab section with switch» — and the gate is
+// lab-section access itself (permissions.js canEditLabPanels), so a laborant
+// reaches this editor with zero settings-side configuration.
 //
-// Lifted out of lab-settings.js on 2026-08-24 (docs/plans/2026-08-24-lab-panels-
-// and-roles.md, Task 1). WHY it moved rather than being copied: a lab technician
-// has to edit panels without being handed the whole Settings hub — staff
-// accounts, price lists, licence, danger zone (permissions.js LOCAL_ROLES_V1
-// explains why Settings is all-or-nothing here). A second copy of this editor
-// would have been two copies of a delete-then-insert save, i.e. two chances to
-// lose a clinic's reference ranges. One implementation, two entry points.
+// History: lifted out of lab-settings.js on 2026-08-24 (docs/plans/
+// 2026-08-24-lab-panels-and-roles.md, Task 1) so a lab technician could edit
+// panels without being handed the whole Settings hub — staff accounts, price
+// lists, licence, danger zone. A second copy of this editor would have been
+// two copies of a delete-then-insert save, i.e. two chances to lose a
+// clinic's reference ranges — which is why the Settings entry was removed
+// around the ONE implementation rather than forked from it.
 //
 // The caller owns the page head; this module owns everything below it.
 //
@@ -37,7 +41,9 @@ const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагнос
 // match what you expect, the browser is running older JavaScript — reload the
 // page fully (F5), because switching hash routes does not re-fetch modules.
 // v6 = the editor moved out of lab-settings.js into this module.
-export const LAB_BUILD = 'lab-v6';
+// v7 = the Settings entry removed; panels edited from Лаборатория by every
+//      lab-section role (LAB_PANELS_BY_SECTION_V1).
+export const LAB_BUILD = 'lab-v7';
 
 // Mounts the editor into `container` and resolves once the first load has
 // painted — the caller can await it and know the screen is settled.

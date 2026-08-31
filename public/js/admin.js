@@ -49,7 +49,7 @@ import { renderPlaceholder }  from './admin/views/placeholder.js';
 import { renderSectionCrud }  from './admin/views/section-crud.js?v=svceditor1';
 import { renderCashier, renderCashierHead } from './admin/views/cashier-desk.js?v=cash6';   // CASHIER_DESIGN_V2 + CASHIER_ROW_FIT_V1 — patient cell width, RU status, compact date
 import { renderReport }       from './admin/views/report.js';
-import { renderLaboratory }   from './admin/views/laboratory.js?v=labshared1';   // LAB_GROUP_V1 — patient-grouped queue + combined worksheet
+import { renderLaboratory }   from './admin/views/laboratory.js?v=panelsw1';   // LAB_GROUP_V1 + LAB_PANELS_BY_SECTION_V1 — queue + the panels mode for every labs role
 import { renderProcedures }   from './admin/views/procedures.js?v=unassigned1';
 import { renderQueue }       from './admin/views/queue.js?v=q6';   // QUEUE_BOARD_V1
 import { renderCrm }          from './admin/views/crm.js?v=aug18d';   // CRM_V10 — поиск пациента: телефон (и короткая форма), дата рождения; CRM_SERVICE_FILTER_V1 — рейка категорий (тег поднят, иначе браузер оставит старую копию)
@@ -62,7 +62,6 @@ import { renderEmployees }    from './admin/views/employees.js?v=arch1';   // EM
 import { renderMarketing }    from './admin/views/marketing.js?v=btnright1';
 import { renderCallCenter }   from './admin/views/callcenter.js';
 import { renderDocuments }    from './admin/views/documents.js?v=doc-company1';
-import { renderLabSettings } from './admin/views/lab-settings.js?v=labtpl1';   // LAB_SETTINGS_V1
 import { renderDiscountsSettings } from './admin/views/discounts-settings.js?v=btnright1';   // PATIENT_DISCOUNTS_V1
 import { renderApiSettings } from './admin/views/api-settings.js?v=api4';   // CLINIC_API_V1
 import { renderDoctorPay } from './admin/views/doctor-pay.js?v=dp1';   // DOCTOR_PAY_BULK_V1
@@ -78,7 +77,7 @@ import { renderProcurement }  from './admin/views/procurement.js?v=vendorxlsx2';
 import { renderRequestsInbox } from './admin/views/requests-inbox.js?v=btnright1';
 import { renderPacs }         from './admin/views/pacs.js';
 import { renderInventory }    from './admin/views/inventory.js?v=inv4';   // INVENTORY_UI_V1 — Suppliers/PO/Requisitions/Counts tabs live
-import { renderSettingsHub }  from './admin/views/settings-hub.js?v=refsrc1';   // SETTINGS_HUB_V1 — Документы -> rich designer; Пациенты -> settings:patients route
+import { renderSettingsHub }  from './admin/views/settings-hub.js?v=panelsw1';   // SETTINGS_HUB_V1 — Документы -> rich designer; Пациенты -> settings:patients route
 import { renderPatientDocuments } from './admin/views/patient-documents.js?v=docstoolbar1';   // PATIENT_DOCUMENTS_V1 + DOCS_TOOLBAR_V1
 import { renderDocumentsSettings } from './admin/views/documents-settings.js?v=doc2';   // DOCUMENTS_SETTINGS_V1
 
@@ -249,8 +248,21 @@ function firstAllowedView() {
     return 'dashboard';   // unreachable in practice (super admin sees all)
 }
 
+// LAB_PANELS_BY_SECTION_V1 — route ids that no longer exist, mapped to where
+// their screen lives now. Two places consult this table: navigate() (an old
+// history entry replayed by popstate, or any caller still naming the dead id)
+// and parseHash() (an old '#lab-settings' bookmark pasted into the address
+// bar). 'lab-settings' was Настройки → «Лаборатория и диагностика»; its editor
+// is now the «Панели» mode of Лаборатория — owner decision 2026-08-31: the
+// panels editor lives ONLY in the lab section, gated by lab-section access.
+const LEGACY_ROUTES = { 'lab-settings': { view: 'labs', sub: 'panels' } };
+
 function navigate(view, payload, opts = {}) {
     if (!view) return;
+    // Old links must not break: a retired route id is answered by the screen
+    // that replaced it, not by a blank unknown view.
+    const legacy = LEGACY_ROUTES[view];
+    if (legacy) { view = legacy.view; payload = { ...(payload || {}), sub: legacy.sub }; }
     const tabId = tabIdFor(view, payload);
 
     // Tab already open? Just switch to it — never re-render.
@@ -342,8 +354,12 @@ function parseHash() {
     try { raw = String(location.hash || '').replace(/^#/, ''); } catch { raw = ''; }
     if (!raw) return { view: null, sub: null };
     const i = raw.indexOf('/');
-    if (i < 0) return { view: raw, sub: null };
-    return { view: raw.slice(0, i), sub: raw.slice(i + 1) || null };
+    const parsed = i < 0 ? { view: raw, sub: null } : { view: raw.slice(0, i), sub: raw.slice(i + 1) || null };
+    // A retired route id in a pasted/bookmarked hash maps to its replacement —
+    // and because the replacement carries a sub, it also WINS the boot below
+    // (a bare legacy hash would otherwise be ignored like any bare '#view').
+    const legacy = LEGACY_ROUTES[parsed.view];
+    return legacy ? { view: legacy.view, sub: legacy.sub } : parsed;
 }
 
 // ---------------------------------------------------------------------------
@@ -952,7 +968,6 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'reports':       return void await renderReports(viewRoot, ctx);
             case 'reports-hub':   return void await renderReportsHub(viewRoot, ctx);   // REPORTS_HUB_V1
             case 'documents':     return void await renderDocuments(viewRoot, ctx);
-            case 'lab-settings':  return void await renderLabSettings(viewRoot, ctx);   // LAB_SETTINGS_V1
             case 'consultation-types': return void await renderConsultationTypes(viewRoot, ctx);   // CONSULTATION_TYPES_RESTORE
             case 'discounts-settings': return void await renderDiscountsSettings(viewRoot, ctx);   // PATIENT_DISCOUNTS_V1
             case 'api-settings': return void await renderApiSettings(viewRoot, ctx);   // CLINIC_API_V1
@@ -1396,7 +1411,6 @@ function renderSettingsIndex(container) {
         ...(isRouteAllowed('discounts-settings') ? [discountsRow()] : []),   // PATIENT_DISCOUNTS_V1
         ...(isRouteAllowed('api-settings') ? [apiRow()] : []),   // CLINIC_API_V1
     ];
-    const labExtras = isRouteAllowed('lab-settings') ? [labRow()] : [];   // LAB_SETTINGS_V1
     const consultExtras = isRouteAllowed('consultation-types') ? [consultRow()] : [];   // CONSULTATION_TYPES_RESTORE
     const doctorPayExtras = isRouteAllowed('doctor-pay') ? [doctorPayRow()] : [];   // DOCTOR_PAY_BULK_V1
     const referralExtras = isRouteAllowed('referral-settings') ? [referralRewardRow()] : [];   // REFERRAL_REWARDS_V1
@@ -1404,14 +1418,15 @@ function renderSettingsIndex(container) {
     // SETTINGS_ORDER_V1 — explicit card order; any unlisted group is appended after.
     const _cardByName = new Map();
     if (top.length || generalExtras.length) _cardByName.set('General', groupCard('General', top, generalExtras));
-    for (const [name, items] of buckets) _cardByName.set(name, groupCard(name, items, name === 'Service settings' ? [...consultExtras, ...labExtras] : name === 'Referrals' ? referralExtras : name === 'User & staff management' ? cashierSetExtras : []));   // REFERRAL_REWARDS_V1 + CASHIER_SHIFT_MODE_V1
-    // LAB_ROLE_SETTINGS_V2 — the non-table extras (lab settings, consultation
-    // types, referrals, doctor pay) attach to their group card above ONLY when
-    // a table-backed section already created it. A role granted just the extra
-    // (e.g. Lab → settings:lab_settings, no table service-section) would lose
-    // the row. Create the card here when its group is absent but has extras.
-    if ((consultExtras.length || labExtras.length) && !_cardByName.has('Service settings'))
-        _cardByName.set('Service settings', groupCard('Service settings', [], [...consultExtras, ...labExtras]));
+    for (const [name, items] of buckets) _cardByName.set(name, groupCard(name, items, name === 'Service settings' ? consultExtras : name === 'Referrals' ? referralExtras : name === 'User & staff management' ? cashierSetExtras : []));   // REFERRAL_REWARDS_V1 + CASHIER_SHIFT_MODE_V1
+    // LAB_ROLE_SETTINGS_V2 — the non-table extras (consultation types,
+    // referrals, doctor pay) attach to their group card above ONLY when a
+    // table-backed section already created it. A role granted just the extra
+    // would lose the row. Create the card here when its group is absent but
+    // has extras. (LAB_PANELS_BY_SECTION_V1: lab settings left this list —
+    // panels are edited from Лаборатория, not from Settings.)
+    if (consultExtras.length && !_cardByName.has('Service settings'))
+        _cardByName.set('Service settings', groupCard('Service settings', [], consultExtras));
     if (referralExtras.length && !_cardByName.has('Referrals'))
         _cardByName.set('Referrals', groupCard('Referrals', [], referralExtras));
     if (doctorPayExtras.length && !_cardByName.has('Doctor salary')) _cardByName.set('Doctor salary', groupCard('Doctor salary', [], doctorPayExtras));   // DOCTOR_PAY_BULK_V1
@@ -1512,7 +1527,6 @@ function renderSettingsIndex(container) {
             onClick:  () => navigate('documents'),
         });
     }
-    // LAB_SETTINGS_V1 — opens the standalone lab/diagnostics panel manager.
     function consultRow() {
         return settingsRow({
             key:      'consultation-types',
@@ -1520,15 +1534,6 @@ function renderSettingsIndex(container) {
             label:    'Консультации врачей',
             desc:     'Типы консультаций (RU/UZ/EN) и цены по каждому врачу',
             onClick:  () => navigate('consultation-types'),
-        });
-    }
-    function labRow() {
-        return settingsRow({
-            key:      'lab-settings',
-            iconName: 'Flask',
-            label:    'Лаборатория и диагностика',
-            desc:     'Панели, показатели, референсные значения',
-            onClick:  () => navigate('lab-settings'),
         });
     }
     function cashierSettingsRow() {   // CASHIER_SHIFT_MODE_V1

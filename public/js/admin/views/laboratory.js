@@ -34,8 +34,8 @@ import { h, Icon, clear, toast, Tag, fmtDate, fmtDateTime, field, avColor, initi
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { printBarcodeLabel } from './lab-barcode.js';
 import { printableSheet } from './doc-settings.js?v=q3company1';   // same URL as patient-card/service-workspace (one instance)
-import { canDelete, canManageLabSettings } from '../permissions.js';   // LAB_PANELS_MODE_V1 — same right that opens Настройки → «Лаборатория и диагностика»
-import { mountLabPanels } from './lab-panels.js';   // LAB_PANELS_MODE_V1 — the editor itself, shared with lab-settings.js
+import { canDelete, canEditLabPanels } from '../permissions.js';   // LAB_PANELS_BY_SECTION_V1 — the gate IS lab-section access (same predicate as the sidebar)
+import { mountLabPanels, LAB_BUILD } from './lab-panels.js';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now
 // ?v= is required here, not decorative: this module gained selectOptionsFor, and a
 // browser holding the older cached copy would fail the named import and blank the view.
 import { pluralRu, groupLabRows, selectOptionsFor } from './lab-grouping.js?v=labsel1';   // LAB_GROUP_V1 / LAB_SELECT_OPTIONS_V1 — pure helpers, unit-tested separately
@@ -130,10 +130,11 @@ export async function renderLaboratory(container, ctx = {}) {
     // LAB_PANELS_MODE_V1 — the mode comes out of the URL: admin.js hands
     // '#labs/panels' over as payload.sub, so a reload or a pasted link opens the
     // mode it names instead of always dropping the user back on the queue.
-    // Gated exactly like the switch itself — a role that may not manage panels
-    // gets the queue no matter what the address bar asks for.
+    // Gated exactly like the switch itself — a role without lab-section access
+    // gets the queue no matter what the address bar asks for (defence in depth:
+    // the shell's isRouteAllowed('labs') already refused such a role the view).
     const wantsPanels = !!(ctx.payload && ctx.payload.sub === 'panels');
-    state.mode = (wantsPanels && canManageLabSettings()) ? 'panels' : 'queue';
+    state.mode = (wantsPanels && canEditLabPanels()) ? 'panels' : 'queue';
     mount();
     await paintMode();
 }
@@ -154,7 +155,7 @@ async function setMode(mode) {
     // Defence in depth: the button is not rendered for a role without the right,
     // but a mode setter that trusts its own UI is one refactor away from being
     // the hole. The permission is re-checked here too.
-    if (mode === 'panels' && !canManageLabSettings()) return;
+    if (mode === 'panels' && !canEditLabPanels()) return;
     state.mode = mode;
     syncModeUrl();
     mount();
@@ -184,15 +185,18 @@ function syncModeUrl() {
     }
 }
 
-// LAB_PANELS_MODE_V1 — the two-way switch, rendered ONLY for a role that may
-// manage lab settings. canManageLabSettings() is already true for any Lab role
-// at edit level, which is the whole point of the plan: the technician gets panel
-// editing without being handed the Settings hub (staff accounts, price lists,
-// licence, danger zone). A read-only lab user sees no switch at all — not a
-// disabled one, because there is nothing they could do to earn it here.
+// LAB_PANELS_BY_SECTION_V1 — the two-way switch, for EVERY role that can open
+// Лаборатория (owner: «who ever will have permission of the lab section will be
+// able to edit the panels» — so a laborant needs zero settings-side
+// configuration, and viewer-level lab access is enough). In practice the
+// predicate is always true here — the shell refuses the route to anyone
+// without labs — but the switch keeps asking the shared predicate rather than
+// assuming it, so the two gates can never drift apart. The .seg-lg variant
+// (admin-views.css) is the owner's «a little bit prominent»: a filled primary
+// active side and a larger hit area, still the same one control.
 function modeSwitch() {
-    if (!canManageLabSettings()) return null;
-    const wrap = h('div', { class: 'segmented', role: 'group', 'aria-label': 'Режим раздела' });
+    if (!canEditLabPanels()) return null;
+    const wrap = h('div', { class: 'segmented seg-lg', role: 'group', 'aria-label': 'Режим раздела' });
     for (const m of MODES) {
         const on = state.mode === m.key;
         wrap.appendChild(h('button', {
@@ -243,9 +247,16 @@ function mount() {
             // minWidth 0 — a flex child with a long subtitle must be allowed to
             // shrink, or the head actions get pushed off the right edge.
             h('div', { style: { minWidth: '0' } },
-                h('h1', { class: 'page-title' }, 'Лаборатория'),
+                h('h1', { class: 'page-title' }, 'Лаборатория',
+                    // LAB_PANELS_BY_SECTION_V1 — the visible build marker moved
+                    // here from the retired lab-settings screen (which followed
+                    // the CRM's v11 pattern): switching hash routes does NOT
+                    // reload modules, so without a marker on the page «I can't
+                    // see any changes» is impossible to diagnose. Shown only in
+                    // the panels mode — it is about the editor, not the queue.
+                    panels ? h('span', { class: 'muted', style: { fontSize: '12.5px', opacity: '0.6', marginLeft: '8px', fontWeight: '400' } }, LAB_BUILD) : null),
                 h('p', { class: 'page-subtitle' }, panels
-                    ? 'Панели исследований, показатели и референсные значения.'
+                    ? 'Панели исследований, показатели и референсные значения. Создайте панели своей клиники и заполните референсные значения.'
                     : 'Очередь проб: забор → в работу → результаты → проверка и выдача.'),
             ),
             h('div', { class: 'page-head-actions', style: { display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },

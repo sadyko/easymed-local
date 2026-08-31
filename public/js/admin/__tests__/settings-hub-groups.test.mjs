@@ -271,3 +271,24 @@ test('обычный заход в «Систему» (без sub) — толь�
   assert.ok(!text.includes('Активация и подписка'), 'подписка уехала на свой экран: ' + text.slice(0, 200));
   assert.ok(!text.includes('Резервные копии'), 'копии уехали в «Данные клиники»');
 });
+
+// LAB_PANELS_BY_SECTION_V1 (2026-08-31, owner: «remove the laboratory and the
+// panels settings from the settings, leave only in the lab section with
+// switch») — the hub side of the move: the panel editor's ONLY entry is now
+// Лаборатория → «Панели», so the Settings card must be gone — while the rest
+// of «Настройки услуг» keeps every other entrance it had.
+test('карточки «Лаборатория и диагностика» в хабе больше нет — панели живут в Лаборатории', async () => {
+  setFullAccess('Администратор');
+  const nav = [];
+  const root = await mountHub(nav);
+
+  const names = allRowNames(root);
+  assert.ok(!names.includes('Лаборатория и диагностика'),
+    'плитка убрана — вход в панели теперь один, через раздел Лаборатория: ' + names.join(', '));
+
+  const g = groupNamed(root, 'Настройки услуг');
+  assert.ok(g, 'сама группа «Настройки услуг» осталась');
+  assert.deepStrictEqual(g.rows.map((r) => r.name),
+    ['Список услуг', 'Товары и препараты', 'Типы услуг', 'Консультации врачей'],
+    'остальные плитки группы не пострадали');
+});

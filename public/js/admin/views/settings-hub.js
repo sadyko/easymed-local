@@ -149,13 +149,12 @@ const GROUPS = [
         title: 'Настройки услуг', icon: 'Flask', color: { bg: '#efeafb', fg: '#6b4fb0' },
         items: [
             { label: 'Список услуг',        desc: 'Все услуги клиники · цены и маршрутизация', icon: 'Receipt', live: true, action: nav('services') },
-            // LAB_SETTINGS_ROW_V1 — the lab panel editor belongs on this card, which
-            // is where the production easymed.uz puts it (its admin.js attaches
-            // labRow() to the 'Service settings' group). It was missing here only
-            // because this hub is a rewrite of that screen and the row was never
-            // carried across; the route and the view have existed all along, so the
-            // screen was reachable by URL but by nothing a user could click.
-            { label: 'Лаборатория и диагностика', desc: 'Панели, показатели, референсные значения', icon: 'Flask', live: true, action: nav('lab-settings') },
+            // LAB_PANELS_BY_SECTION_V1 (2026-08-31) — «Лаборатория и диагностика»
+            // is gone from this card on purpose (owner: «remove the laboratory
+            // and the panels settings from the settings, leave only in the lab
+            // section with switch»). The panel editor's one home is the «Панели»
+            // mode of Лаборатория, open to every role that can open the section;
+            // the old address redirects there (admin.js LEGACY_ROUTES).
             { label: 'Товары и препараты',  desc: 'Склад · остатки, цены, точки заказа', icon: 'Pill',   live: true, action: nav('inventory') },
             { label: 'Типы услуг',          desc: 'Категории и разделы услуг',           icon: 'Layers', live: true, action: () => openSection('service_types') },
             { label: 'Консультации врачей', desc: 'Виды консультаций и их стоимость',    icon: 'Stethoscope', live: true, action: () => openSection('consultation_types') },

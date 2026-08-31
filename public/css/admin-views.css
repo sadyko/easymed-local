@@ -477,6 +477,26 @@
     box-shadow: var(--shadow-sm);
 }
 
+/* LAB_PANELS_BY_SECTION_V1 (2026-08-31) — .seg-lg: the prominent variant of
+   the segmented control, for a switch that IS the section's navigation
+   (Лаборатория: Очередь | Панели), not a row-level filter. Same anatomy, two
+   changes only: a larger hit area (taller buttons, wider padding, one type
+   step up — 13.5px is --fs-2, on the eight-step scale) and a FILLED primary
+   active side (the .btn-primary treatment, admin.css) so the current mode
+   reads at a glance. The owner asked for «a little bit prominent» — this is
+   that, not a new control. */
+.segmented.seg-lg { padding: 4px; border-radius: 11px; }
+.segmented.seg-lg button {
+    padding: 8px 18px;
+    font-size: 13.5px;
+    border-radius: 8px;
+}
+.segmented.seg-lg button.on {
+    background: var(--primary-600);
+    color: var(--white);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.12) inset, 0 1px 2px rgba(11, 20, 24, 0.08);
+}
+
 /* ---- Radio chips ---- */
 .radio-chips { display: flex; gap: 8px; flex-wrap: wrap; }
 .radio-chip {
