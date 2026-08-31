@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { STRINGS } from '../i18n-strings.js';
 import { fill } from '../updates-logic.js';
 import {
-  roleBadge, roleExplainer, syncLine, syncKeyLine, relayExplainer, publishLine,
+  roleBadge, roleExplainer, syncLine, syncKeyLine, relayExplainer, publishLine, whenLabel,
   letterExplainer, branchRows, branchListNote, changesLabel, routeLabel,
   pairedMessage, KEY_LOSS_WARNING, KEY_REISSUE_WARNING, KEY_REISSUE_QUESTION,
   LETTER_PERMANENCE_WARNING, ADD_BRANCH_QUESTION, ISSUE_KEY_QUESTION,
@@ -309,8 +309,18 @@ test('«Ключ синхронизации есть. Создан …» бол�
   assert.equal(ready.template, 'Создан {date}.', 'дырка обязана дожить до словаря');
   assert.ok(STRINGS[ready.template], 'шаблон обязан быть ключом словаря');
   // И подстановка идёт ПОСЛЕ перевода, иначе всё это бессмысленно.
-  assert.equal(fill(STRINGS[ready.template].en, ready.params), 'Created 12.08.2026 15:00.');
-  assert.equal(fill(STRINGS[ready.template].uz, ready.params), '12.08.2026 15:00 da yaratilgan.');
+  //
+  // Ожидаемую дату считаем тем же whenLabel(), которым её считает сам
+  // syncKeyLine — НЕ строкой '15:00'. Первая версия этого теста вписала
+  // '12.08.2026 15:00.' буквально: у автора UTC+5, и Z-время 10:00 у него
+  // рисуется как 15:00. На сборочной машине GitHub часовой пояс UTC, там та
+  // же секунда — 10:00, и релиз v0.4.6 не смог собраться вообще: тест падал
+  // детерминированно при зелёной локальной прогонке. Предмет теста — что
+  // шаблон доживает до словаря и дырка заполняется после перевода; какие
+  // именно цифры в дате, предметом не является.
+  const when = whenLabel('2026-08-12T10:00:00Z');
+  assert.equal(fill(STRINGS[ready.template].en, ready.params), `Created ${when}.`);
+  assert.equal(fill(STRINGS[ready.template].uz, ready.params), `${when} da yaratilgan.`);
   // Прежняя склейка не должна вернуться ни одной своей половиной.
   assert.equal(/Ключ синхронизации есть/.test(ready.template), false,
     'заголовок блока уже говорит «Ключ синхронизации» — второй раз не нужен');
