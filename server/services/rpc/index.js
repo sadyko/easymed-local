@@ -17,6 +17,7 @@ import { callcenterReport } from './callcenter.js';
 import { billAccommodation, unbillAccommodation, accommodationState } from './accommodation.js';
 import { setAdmissionDate } from './admission-date.js';   // ADMISSION_DATE_EDIT_V1   // ACCOMMODATION_AS_SERVICE_V1   // CALLCENTER_REPORT_V1
 import { deleteService, serviceDeleteCheck } from './catalog.js';   // SERVICE_DELETE_V1
+import { serviceSave } from './service-save.js';   // SERVICE_EDITOR_V1
 import { saveLabResults } from './lab.js';   // LAB_SAVE_BATCH_V1
 import { cashierReport } from './cashier-report.js';   // CASHIER_REPORT_V1
 import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
@@ -131,6 +132,12 @@ export const RPC = {
   // refused (409) and deactivated instead, so billing history keeps its names.
   service_delete_check:           (db, args, user) => serviceDeleteCheck(db, args, user),
   delete_service:                 (db, args, user) => deleteService(db, args, user),
+
+  // SERVICE_EDITOR_V1 — редактор услуги: услуга + комбобоксы (тип/категория/
+  // отделение создаются по набранному имени) + членство исполнителей в
+  // users.service_rates — ОДНОЙ транзакцией, чтобы частичное сохранение
+  // было невозможно (см. заголовок service-save.js).
+  service_save:                   (db, args, user) => serviceSave(db, args, user),
 
   // LAB_SAVE_BATCH_V1 — вся панель одним запросом и одной транзакцией.
   // Заменяет цикл «HTTP-запрос на каждый показатель»: 29 обращений по сети
