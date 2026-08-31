@@ -14,6 +14,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, PageHead } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ (в ccTrendLine параметр tr затеняет импорт — там только trf)
 import { reportTotals } from './report-totals.js?v=rt1';   // REPORT_TOTALS_V1
 
 // Экспортируется, чтобы определения (в т.ч. рисовалку графиков) можно было
@@ -305,9 +306,9 @@ async function openReportBuilder(rep) {
         else if (picked === total) { masterCb.checked = true; masterCb.indeterminate = false; }
         else { masterCb.checked = false; masterCb.indeterminate = true; }
         summaryEl.textContent = total === 0 ? ''
-            : picked === 0 ? 'Филиалы не выбраны'
-            : picked === total ? `Все филиалы (${total})`
-            : `${picked} из ${total}`;
+            : picked === 0 ? tr('Филиалы не выбраны')
+            : picked === total ? trf('Все филиалы ({total})', { total })
+            : trf('{n} из {max}', { n: picked, max: total });
     }
     masterCb.addEventListener('change', () => {
         if (masterCb.checked) st.branches.forEach(b => st.branchIds.add(b.id));
@@ -363,7 +364,7 @@ async function openReportBuilder(rep) {
                 toast('Файл скачан', 'ok');
             } catch (e) {
                 console.error('[reports-hub] download:', e);
-                toast('Не удалось скачать: ' + (e.message || e), 'fail');
+                toast(trf('Не удалось скачать: {msg}', { msg: e.message || e }), 'fail');
             } finally { ev.currentTarget.disabled = false; }
         },
     }, Icon('Download', { size: 14 }), ' Скачать Excel');
@@ -400,8 +401,8 @@ async function openReportBuilder(rep) {
             paintPreview();
         } catch (e) {
             console.error('[reports-hub] generate:', e);
-            toast('Не удалось сформировать отчёт: ' + (e.message || e), 'fail');
-            paintPreviewEmpty('Ошибка: ' + (e.message || e));
+            toast(trf('Не удалось сформировать отчёт: {msg}', { msg: e.message || e }), 'fail');
+            paintPreviewEmpty(trf('Ошибка: {msg}', { msg: e.message || e }));
         } finally {
             st.generating = false;
             generateBtn.disabled = false;
@@ -470,9 +471,9 @@ async function openReportBuilder(rep) {
         const CAP = 300;
         const shown = rows.slice(0, CAP);
         previewEl.appendChild(h('div', { class: 'row', style: { alignItems: 'center', gap: '10px', marginBottom: '10px' } },
-            h('span', { style: { fontSize: '13px', fontWeight: 700, color: 'var(--ink-900)' } }, `Строк: ${rows.length}`),
+            h('span', { style: { fontSize: '13px', fontWeight: 700, color: 'var(--ink-900)' } }, trf('Строк: {n}', { n: rows.length })),
             rows.length > CAP ? h('span', { class: 'muted', style: { fontSize: '12px' } },
-                `— показаны первые ${CAP}, в Excel попадут все`) : null,
+                trf('— показаны первые {n}, в Excel попадут все', { n: CAP })) : null,
         ));
         // Numeric columns right-align header AND cells (probe first non-empty value).
         const isNumCol = columns.map((_, ci) => {
@@ -557,9 +558,9 @@ function renderOwnerCharts(el, d) {
     const obs = new MutationObserver(() => { if (!el.isConnected) { tip.destroy(); obs.disconnect(); } });
     obs.observe(document.body, { childList: true, subtree: true });
     el.appendChild(h('div', { style: { display: 'grid', gap: '14px', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' } },
-        ownerKpiTile('Общая выручка', d.kpis.revenue.toLocaleString('ru-RU') + ' сум', 'за выбранный период'),
+        ownerKpiTile('Общая выручка', d.kpis.revenue.toLocaleString('ru-RU') + ' ' + tr('сум'), 'за выбранный период'),
         ownerKpiTile('Услуг оказано', d.kpis.count.toLocaleString('ru-RU'), 'без отменённых'),
-        ownerKpiTile('Средний чек', d.kpis.avg.toLocaleString('ru-RU') + ' сум', 'выручка / услуги')));
+        ownerKpiTile('Средний чек', d.kpis.avg.toLocaleString('ru-RU') + ' ' + tr('сум'), 'выручка / услуги')));
     el.appendChild(h('div', { style: { marginTop: '14px' } },
         ownerCard('Выручка по месяцам', 'последние 12 месяцев — независимо от выбранного периода', ownerLine(d.monthly, { tip }))));
     el.appendChild(h('div', { style: { display: 'grid', gap: '14px', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', marginTop: '14px' } },
@@ -610,7 +611,7 @@ function ownerBars(items, { hue = '#0d8a72', tip, total = null } = {}) {
                 h('span', { style: { display: 'block', height: '100%', width: pctW + '%', background: it.color || hue, borderRadius: '0 4px 4px 0' } })),
             h('span', { class: 'num', style: { fontSize: '12px', color: 'var(--ink-800)', fontVariantNumeric: 'tabular-nums' } },
                 it.value.toLocaleString('ru-RU') + (sum > 0 ? '  · ' + share + '%' : '')));
-        row.addEventListener('mousemove', (e) => tip && tip.show(e.clientX, e.clientY, (it.name || it.label) + ': ' + it.value.toLocaleString('ru-RU') + ' сум · ' + share + '%'));
+        row.addEventListener('mousemove', (e) => tip && tip.show(e.clientX, e.clientY, trf('{name}: {value} сум · {share}%', { name: it.name || it.label, value: it.value.toLocaleString('ru-RU'), share })));
         row.addEventListener('mouseenter', () => { row.style.background = 'var(--ink-25, #fafbfb)'; });
         row.addEventListener('mouseleave', () => { row.style.background = 'transparent'; tip && tip.hide(); });
         wrapEl.appendChild(row);
@@ -661,7 +662,7 @@ function ownerLine(points, { hue = '#0d8a72', tip } = {}) {
         coords.forEach((c, i) => { const d = Math.abs(c[0] - relX); if (d < bd) { bd = d; best = i; } });
         vline.setAttribute('x1', coords[best][0]); vline.setAttribute('x2', coords[best][0]); vline.setAttribute('visibility', 'visible');
         marker.setAttribute('cx', coords[best][0]); marker.setAttribute('cy', coords[best][1]); marker.setAttribute('visibility', 'visible');
-        tip && tip.show(e.clientX, e.clientY, points[best].label + ': ' + points[best].value.toLocaleString('ru-RU') + ' сум');
+        tip && tip.show(e.clientX, e.clientY, trf('{name}: {value} сум', { name: points[best].label, value: points[best].value.toLocaleString('ru-RU') }));
     });
     svg.addEventListener('mouseleave', () => { vline.setAttribute('visibility', 'hidden'); marker.setAttribute('visibility', 'hidden'); tip && tip.hide(); });
     return svg;
@@ -697,10 +698,10 @@ function renderCallcenterCharts(el, d) {
         ownerKpiTile('Не пришли', num(k.no_show) + ' · ' + k.no_show_pct + '%', 'записались, но не явились'),
         ownerKpiTile('Стали пациентами', num(k.became_patient) + ' · ' + k.became_patient_pct + '%', 'заведена карта'),
         ownerKpiTile('Пиковый час', d.peak.hour != null ? d.peak.hour + ':00' : '—',
-            d.peak.hour != null ? num(d.peak.hour_count) + ' заявок · время клиники' : 'нет данных'),
+            d.peak.hour != null ? trf('{n} заявок · время клиники', { n: num(d.peak.hour_count) }) : 'нет данных'),
         ownerKpiTile('Пиковый день', d.peak.weekday || '—',
-            d.peak.weekday ? num(d.peak.weekday_count) + ' заявок' : 'нет данных'),
-        ownerKpiTile('Запись вперёд', k.avg_lead_days != null ? k.avg_lead_days + ' дн.' : '—',
+            d.peak.weekday ? trf('{n} заявок', { n: num(d.peak.weekday_count) }) : 'нет данных'),
+        ownerKpiTile('Запись вперёд', k.avg_lead_days != null ? trf('{n} дн.', { n: k.avg_lead_days }) : '—',
             'в среднем от заявки до даты приёма')));
 
     el.appendChild(h('div', { style: { marginTop: '14px' } },
@@ -790,7 +791,7 @@ function ccDayBars(days, tip) {
         });
         if (tip) {
             const human = new Date(d.day + 'T00:00:00').toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', weekday: 'short' });
-            bar.addEventListener('mousemove', (e) => tip.show(e, human + ' — ' + d.count + ' заявок'));
+            bar.addEventListener('mousemove', (e) => tip.show(e, human + ' — ' + trf('{n} заявок', { n: d.count })));
             bar.addEventListener('mouseleave', () => tip.hide());
         }
         col.appendChild(bar);
@@ -821,7 +822,7 @@ function ccTrendLine(tr) {
     return h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap', marginBottom: '4px' } },
         h('span', { style: { fontSize: '19px', fontWeight: '800', color } }, arrow + ' ' + pctText),
         h('span', { class: 'muted', style: { fontSize: '12.5px' } },
-            'за 7 дней ' + tr.current + ' · неделей раньше ' + tr.previous));
+            trf('за 7 дней {cur} · неделей раньше {prev}', { cur: tr.current, prev: tr.previous })));
 }
 
 // CASHIER_REPORT_V1 — экран «Отчёта кассира».
@@ -872,8 +873,8 @@ function ccrTable({ title, tone, columns, rows, numericCol, kind, period }) {
         // Показываем и сколько на экране, и сколько всего — иначе «Строк: 15»
         // рядом с итогом на 39 миллионов читается как потерянные данные.
         countEl.textContent = page.length < vis.length
-            ? 'Показано ' + page.length + ' из ' + vis.length
-            : 'Строк: ' + vis.length + (vis.length !== rows.length ? ' из ' + rows.length : '');
+            ? trf('Показано {n} из {total}', { n: page.length, total: vis.length })
+            : trf('Строк: {n}', { n: vis.length }) + (vis.length !== rows.length ? ' ' + trf('из {n}', { n: rows.length }) : '');
         // Итог считается по ВИДИМЫМ строкам: отфильтровали одного кассира —
         // сумма обязана стать его суммой, иначе фильтр обманывает.
         totalEl.textContent = ccrMoney(vis.reduce((n, r) => n + (Number(r[numericCol]) || 0), 0));
@@ -896,7 +897,7 @@ function ccrTable({ title, tone, columns, rows, numericCol, kind, period }) {
 
         const left = vis.length - page.length;
         moreWrap.style.display = left ? 'flex' : 'none';
-        moreBtn.textContent = 'Показать ещё ' + Math.min(CCR_PAGE, left) + ' (осталось ' + left + ')';
+        moreBtn.textContent = trf('Показать ещё {n} (осталось {left})', { n: Math.min(CCR_PAGE, left), left });
     }
 
     const moreBtn = h('button', { class: 'btn btn-sm', type: 'button',
@@ -935,7 +936,7 @@ function ccrTable({ title, tone, columns, rows, numericCol, kind, period }) {
                 XLSX.utils.book_append_sheet(wb, ws, title);
                 XLSX.writeFile(wb, 'cashier_' + kind + '_' + period + '.xlsx');
                 toast('Файл скачан', 'ok');
-            } catch (e) { toast('Не удалось скачать: ' + (e.message || e), 'fail'); }
+            } catch (e) { toast(trf('Не удалось скачать: {msg}', { msg: e.message || e }), 'fail'); }
             finally { ev.currentTarget.disabled = false; }
         },
     }, Icon('Download', { size: 13 }), ' Excel');
@@ -993,7 +994,7 @@ function ccHourBars(byHour, tip) {
             },
         });
         if (tip) {
-            bar.addEventListener('mousemove', (e) => tip.show(e, slot.hour + ':00 — ' + slot.count + ' заявок'));
+            bar.addEventListener('mousemove', (e) => tip.show(e, slot.hour + ':00 — ' + trf('{n} заявок', { n: slot.count })));
             bar.addEventListener('mouseleave', () => tip.hide());
         }
         wrap.appendChild(h('div', { style: { flex: '1', minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '100%' } },
@@ -1037,7 +1038,7 @@ function ccStale(s) {
             padding: '6px 0', borderTop: '1px solid var(--ink-50, #f1f4f5)', fontSize: '12.5px',
         } },
             h('span', { style: { flex: '0 0 42px', fontWeight: '700', color: 'var(--warn-700, #b45309)', fontVariantNumeric: 'tabular-nums' } },
-                x.days + ' дн.'),
+                trf('{n} дн.', { n: x.days })),
             h('span', { style: { flex: '1', minWidth: '0', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
                 x.name),
             h('span', { class: 'muted', style: { flex: '0 0 auto', fontSize: '11.5px', fontVariantNumeric: 'tabular-nums' } },
@@ -1093,7 +1094,7 @@ function ccOperators(rows) {
             h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '10px', fontSize: '12.5px', marginBottom: '4px' } },
                 h('span', { style: { fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, r.name),
                 h('span', { class: 'num', style: { flex: '0 0 auto', color: 'var(--ink-600)', fontVariantNumeric: 'tabular-nums' } },
-                    r.count + ' · дошли ' + r.came + ' (' + r.came_pct + '%)')),
+                    trf('{n} · дошли {came} ({pct}%)', { n: r.count, came: r.came, pct: r.came_pct }))),
             h('div', { style: { height: '8px', background: 'var(--ink-100)', borderRadius: '99px', overflow: 'hidden' } },
                 h('div', { style: { width: (r.count / max * 100) + '%', height: '100%', background: '#9fc4bb', borderRadius: '99px', overflow: 'hidden' } },
                     h('div', { style: { width: r.came_pct + '%', height: '100%', background: '#0d8a72' } })))));

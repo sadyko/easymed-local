@@ -107,6 +107,7 @@ async function _injectDataValidations(buf, cfg, XLSX) {
     return zipSync(files);
 }
 import { h, Icon, toast, clear } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { SECTIONS, FK_LABEL_COLUMN } from '../sections.js?v=noikpu1';
 
 // EXCEL_SELF_HOST_V1 — served from our own origin (CSP allows 'self'); the
@@ -209,13 +210,13 @@ const IMPORT_CONFIGS = {
             { key: 'категория',     target: 'procurement_category', map: PROCUREMENT_CATEGORY_MAP, lenient: true,
               aliases: ['category', 'тип'],
               allowedLabel: PROCUREMENT_CATEGORY_LABELS.join(' · '),
-              hint: 'Категория — из списка: ' + PROCUREMENT_CATEGORY_LABELS.join(' · ') + '. «Лекарственные средства» автоматически помечает товар как препарат. Неизвестное значение пропускается с предупреждением.' },
+              hint: trf('Категория — из списка: {list}. «Лекарственные средства» автоматически помечает товар как препарат. Неизвестное значение пропускается с предупреждением.', { list: PROCUREMENT_CATEGORY_LABELS.join(' · ') }) },
             // PROCUREMENT_IMPORT_V2 — unit of measure. NOTE: the legacy export's
             // «Ед.из» column holds numeric tasnif codes, not readable units, so
             // it is deliberately NOT an alias here — those codes must not leak
             // into clinic_items.unit.
             { key: 'ед.изм',        target: 'unit', aliases: ['unit', 'единица', 'ед.изм.'], tmpl: false,
-              hint: 'Единица измерения — из списка: ' + PROCUREMENT_UNITS.join(' · ') + '. Пусто → шт.' },
+              hint: trf('Единица измерения — из списка: {list}. Пусто → шт.', { list: PROCUREMENT_UNITS.join(' · ') }) },
             { key: 'цена',          target: 'price', coerce: 'num', defaultNum: 0, aliases: ['price'], tmpl: false,
               hint: 'Цена продажи, число — напр. 3210.' },
             { key: 'икпу',          aliases: ['ikpu', 'икпу_код'], tmpl: false,
@@ -301,13 +302,13 @@ const IMPORT_CONFIGS = {
                     }
                     linked++;
                 }
-                let m = `Поставщики: ${linked} связок`;
-                if (created) m += `, создано новых: ${created}`;
+                let m = trf('Поставщики: {n} связок', { n: linked });
+                if (created) m += ', ' + trf('создано новых: {n}', { n: created });
                 return m;
             }
             let supMsg = null;
             try { supMsg = await linkSuppliers(); }
-            catch (e) { supMsg = 'Поставщики: ошибка — ' + (e && e.message || e); }
+            catch (e) { supMsg = trf('Поставщики: ошибка — {msg}', { msg: (e && e.message) || e }); }
 
             const rows = validRows.filter(r => Number(r.captures?.qty || 0) > 0 && r.payload.name);
             if (!rows.length) return supMsg;
@@ -359,13 +360,13 @@ const IMPORT_CONFIGS = {
             for (let i = 0; i < moves.length; i += 100) {
                 const batch = moves.slice(i, i + 100);
                 const { error } = await supabase.from('stock_movements').insert(batch);
-                if (error) return `Остатки: создано ${posted} приходов, дальше ошибка: ${error.message}`;
+                if (error) return trf('Остатки: создано {n} приходов, дальше ошибка: {msg}', { n: posted, msg: error.message });
                 posted += batch.length;
             }
             const skippedDup = rows.length - moves.length - noCard;
-            let msg = `Остатки: ${posted} приходов на склад`;
-            if (skippedDup > 0) msg += `, ${skippedDup} пропущено (приход уже был)`;
-            if (noCard > 0) msg += `, ${noCard} без карточки товара`;
+            let msg = trf('Остатки: {n} приходов на склад', { n: posted });
+            if (skippedDup > 0) msg += ', ' + trf('{n} пропущено (приход уже был)', { n: skippedDup });
+            if (noCard > 0) msg += ', ' + trf('{n} без карточки товара', { n: noCard });
             return [supMsg, msg].filter(Boolean).join(' · ');   // PROD_IMPORT_FULL_V1
         },
     },
@@ -540,7 +541,7 @@ const IMPORT_CONFIGS = {
                 return 'логин должен быть 3–30 символов: латиница, цифры, . _ -';
             }
             if (!VALID_ROLE_KEYS.includes(payload.role)) {
-                return `роль «${payload.role || ''}» неизвестна (${VALID_ROLE_KEYS.join(' · ')})`;
+                return trf('роль «{role}» неизвестна ({list})', { role: payload.role || '', list: VALID_ROLE_KEYS.join(' · ') });
             }
             if (!payload.password || String(payload.password).length < 8) {
                 return 'новому сотруднику нужен пароль от 8 символов';
@@ -554,7 +555,7 @@ const IMPORT_CONFIGS = {
         columns: [
             { key: 'username',   required: true, hint: 'Логин (обязательно) — 3–30 символов: латиница, цифры, . _ -. По нему находится сотрудник при повторном импорте.' },
             { key: 'password',   hint: 'Пароль для НОВОГО сотрудника — минимум 8 символов. Для существующего оставьте пусто: текущий пароль сохранится.' },
-            { key: 'role',       required: true, hint: 'Роль доступа (обязательно): ' + VALID_ROLE_KEYS.join(' · ') },
+            { key: 'role',       required: true, hint: trf('Роль доступа (обязательно): {list}', { list: VALID_ROLE_KEYS.join(' · ') }) },
             { key: 'last_name',  hint: 'Фамилия' },
             { key: 'first_name', hint: 'Имя' },
             { key: 'middle_name', hint: 'Отчество' },
@@ -776,7 +777,7 @@ export async function exportSectionRows({ sectionKey, rows, filenameStem }) {
     XLSX.utils.book_append_sheet(wb, ws, cfg.sheetName.slice(0, 31));
     const date = new Date().toISOString().slice(0, 10);
     XLSX.writeFile(wb, `easymed_${filenameStem || cfg.sampleFile || sectionKey}_${date}.xlsx`);
-    toast(`Экспортировано строк: ${rows.length}.`);
+    toast(trf('Экспортировано строк: {n}.', { n: rows.length }));
 }
 
 // id -> label for every FK column, so the export writes «Поликлиника» rather
@@ -849,7 +850,7 @@ export function importExportButtons({ sectionKey, fetchRows, filenameStem, onImp
             const btn = e.currentTarget;
             btn.disabled = true;
             try { await exportSectionRows({ sectionKey, rows: await fetchRows(), filenameStem }); }
-            catch (err) { toast('Экспорт не удался: ' + ((err && err.message) || err), 'fail'); }
+            catch (err) { toast(trf('Экспорт не удался: {msg}', { msg: (err && err.message) || err }), 'fail'); }
             finally { if (btn.isConnected) btn.disabled = false; }
         },
     }, Icon('Download', { size: 14 }), ' Экспорт');
@@ -914,7 +915,7 @@ function columnsHint(cfg) {
             required.length ? required.join(', ') : 'нет'),
         optional.length
             ? h('details', { class: 'imx-more' },
-                h('summary', null, `Необязательные колонки (${optional.length})`),
+                h('summary', null, trf('Необязательные колонки ({n})', { n: optional.length })),
                 h('div', { class: 'imx-cols' }, optional.join(', ')))
             : null,
         (lookupFk.length || autoFk.length)
@@ -1018,7 +1019,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
 
     async function handleFile(file) {
         if (!file) return;
-        status.textContent = `Читаем ${file.name}…`;
+        status.textContent = trf('Читаем {name}…', { name: file.name });
         try {
             const XLSX = await loadXlsx();
             const buf = await file.arrayBuffer();
@@ -1037,18 +1038,18 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
             const validCount = parsedRows.filter(r => r.status !== 'error').length;
             clear(status);
             status.append(
-                document.createTextNode(`Строк в файле: ${rows.length} — `),
+                document.createTextNode(trf('Строк в файле: {n}', { n: rows.length }) + ' — '),
                 h('b', { style: { color: 'var(--ok-700)' } }, String(validCount)),
-                document.createTextNode(' готовы, '),
+                document.createTextNode(' ' + tr('готовы') + ', '),
                 h('b', { style: { color: 'var(--crit-700)' } }, String(rows.length - validCount)),
-                document.createTextNode(' с ошибками.'),
+                document.createTextNode(' ' + tr('с ошибками.')),
             );
             paintPreview();
             if (validCount > 0) confirmBtn.removeAttribute('disabled');
             else                confirmBtn.setAttribute('disabled', '');
         } catch (e) {
             console.error('[section-import] parse failed:', e);
-            status.textContent = 'Не удалось прочитать файл: ' + (e.message || e);
+            status.textContent = trf('Не удалось прочитать файл: {msg}', { msg: e.message || e });
             clear(preview);
             confirmBtn.setAttribute('disabled', '');
         }
@@ -1059,7 +1060,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
         if (parsedRows.length === 0) return;
         const showRows = parsedRows.slice(0, 50);
         preview.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '6px' } },
-            `Предпросмотр — первые ${showRows.length} из ${parsedRows.length}`));
+            trf('Предпросмотр — первые {n} из {total}', { n: showRows.length, total: parsedRows.length })));
 
         // Show up to four columns in the preview so the table stays compact;
         // the full data still imports.
@@ -1091,7 +1092,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
         if (valid.length === 0) { toast('Импортировать нечего — сначала исправьте ошибки в файле.', 'fail'); return; }
 
         const created = await autoCreatePendingFks(valid);
-        if (created > 0) toast(`Создано недостающих справочных записей: ${created}.`);
+        if (created > 0) toast(trf('Создано недостающих справочных записей: {n}.', { n: created }));
 
         // Decide insert vs update per row. When `Update existing` is on (and
         // the section has a matchField), any row whose match value already
@@ -1210,12 +1211,12 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
         const ok = updated + inserted;
         if (ok > 0) {
             const parts = [];
-            if (inserted) parts.push(`новых: ${inserted}`);
-            if (updated)  parts.push(`обновлено: ${updated}`);
-            if (failed)   parts.push(`с ошибкой: ${failed}`);
-            toast(`Импортировано строк: ${ok} · ${parts.join(' · ')}.`);
+            if (inserted) parts.push(trf('новых: {n}', { n: inserted }));
+            if (updated)  parts.push(trf('обновлено: {n}', { n: updated }));
+            if (failed)   parts.push(trf('с ошибкой: {n}', { n: failed }));
+            toast(trf('Импортировано строк: {n} · {parts}.', { n: ok, parts: parts.join(' · ') }));
         } else {
-            toast(`Импорт не удался — отклонено строк: ${failed}.${lastError ? ' ' + lastError : ''}`, 'fail');
+            toast(trf('Импорт не удался — отклонено строк: {n}.', { n: failed }) + (lastError ? ' ' + lastError : ''), 'fail');
         }
 
         // OPENING_STOCK_IMPORT_V1 — config post-hook (e.g. post opening-stock
@@ -1226,7 +1227,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
                 if (msg) toast(msg);
             } catch (e) {
                 console.warn('[section-import] afterImport failed:', e);
-                toast('Товары импортированы, но пост-обработка не удалась: ' + (e.message || e), 'fail');
+                toast(trf('Товары импортированы, но пост-обработка не удалась: {msg}', { msg: e.message || e }), 'fail');
             }
         }
 
@@ -1375,6 +1376,7 @@ function insertPayloadFor(table, keyField, value) {
     // PROCUREMENT_IMPORT_V1 — ikpu_codes.name is required alongside code; the
     // official label can be filled in later, the code itself is what fiscal
     // needs.
+    // i18n-exempt: «ИКПУ …» уходит в ИМЯ создаваемой записи справочника — хранимые данные, а не текст экрана
     if (table === 'ikpu_codes' && keyField === 'code') row.name = 'ИКПУ ' + value;
     return row;
 }
@@ -1440,7 +1442,7 @@ function buildRow(raw, rowNum, lookups, cfg) {
         // with the column default but flags the row so the user notices.
         if (col.warnIfMissing) {
             const v = String(cellRaw ?? '').trim();
-            if (!v) { notes.push(`${col.key} пусто — будет ${col.defaultNum ?? 0}`); if (status !== 'error') status = 'warn'; }
+            if (!v) { notes.push(trf('{col} пусто — будет {def}', { col: col.key, def: col.defaultNum ?? 0 })); if (status !== 'error') status = 'warn'; }
         }
 
         // PROCUREMENT_IMPORT_V1 — captured columns feed afterImport (e.g.
@@ -1480,10 +1482,10 @@ function buildRow(raw, rowNum, lookups, cfg) {
             // rejecting the row (e.g. «Категория: Корневая группа» from a
             // legacy warehouse export).
             else if (col.lenient) {
-                notes.push(`${col.key} "${v}" не из списка — пропущено`);
+                notes.push(trf('{col} "{v}" не из списка — пропущено', { col: col.key, v }));
                 if (status !== 'error') status = 'warn';
             }
-            else { notes.push(`${col.key} "${v}" — недопустимо (список: ${col.allowedLabel || ''})`); status = 'error'; }
+            else { notes.push(trf('{col} "{v}" — недопустимо (список: {list})', { col: col.key, v, list: col.allowedLabel || '' })); status = 'error'; }
             continue;
         }
 
@@ -1507,7 +1509,7 @@ function buildRow(raw, rowNum, lookups, cfg) {
             const iso = parseFlexibleDate(cellRaw);
             if (iso) { payload[col.target || col.key] = iso; }
             else {
-                notes.push(`${col.key} "${rawStr}" — не распознано как дата, пропущено`);
+                notes.push(trf('{col} "{v}" — не распознано как дата, пропущено', { col: col.key, v: rawStr }));
                 if (status !== 'error') status = 'warn';
             }
             continue;

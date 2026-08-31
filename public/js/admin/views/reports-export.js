@@ -7,6 +7,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, toast, clear } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { formatMethods } from '../../shared/payment-methods.js?v=pm1';   // INVOICE_METHOD_COLUMN_V1 — общий словарь с сервером
 import { reportTotals } from './report-totals.js?v=rt1';   // REPORT_TOTALS_V1
 
@@ -545,7 +546,7 @@ function ownerBars(items, { hue = '#0d8a72', tip, total = null } = {}) {
                 h('span', { style: { display: 'block', height: '100%', width: pctW + '%', background: it.color || hue, borderRadius: '0 4px 4px 0' } })),
             h('span', { class: 'num', style: { fontSize: '12px', color: 'var(--ink-800)', fontVariantNumeric: 'tabular-nums' } },
                 it.value.toLocaleString('ru-RU') + (sum > 0 ? '  · ' + share + '%' : '')));
-        row.addEventListener('mousemove', (e) => tip && tip.show(e.clientX, e.clientY, (it.name || it.label) + ': ' + it.value.toLocaleString('ru-RU') + ' сум · ' + share + '%'));
+        row.addEventListener('mousemove', (e) => tip && tip.show(e.clientX, e.clientY, trf('{name}: {value} сум · {share}%', { name: it.name || it.label, value: it.value.toLocaleString('ru-RU'), share })));
         row.addEventListener('mouseleave', () => tip && tip.hide());
         row.addEventListener('mouseenter', () => { row.style.background = 'var(--ink-25, #fafbfb)'; });
         row.addEventListener('mouseleave', () => { row.style.background = 'transparent'; });
@@ -599,7 +600,7 @@ function ownerLine(points, { hue = '#0d8a72', tip } = {}) {
         coords.forEach((c, i) => { const d = Math.abs(c[0] - relX); if (d < bd) { bd = d; best = i; } });
         vline.setAttribute('x1', coords[best][0]); vline.setAttribute('x2', coords[best][0]); vline.setAttribute('visibility', 'visible');
         marker.setAttribute('cx', coords[best][0]); marker.setAttribute('cy', coords[best][1]); marker.setAttribute('visibility', 'visible');
-        tip && tip.show(e.clientX, e.clientY, points[best].label + ': ' + points[best].value.toLocaleString('ru-RU') + ' сум');
+        tip && tip.show(e.clientX, e.clientY, trf('{name}: {value} сум', { name: points[best].label, value: points[best].value.toLocaleString('ru-RU') }));
     });
     svg.addEventListener('mouseleave', () => { vline.setAttribute('visibility', 'hidden'); marker.setAttribute('visibility', 'hidden'); tip && tip.hide(); });
     return svg;
@@ -623,9 +624,9 @@ export function renderOwnerCharts(el, d) {
     const obs = new MutationObserver(() => { if (!el.isConnected) { tip.destroy(); obs.disconnect(); } });
     obs.observe(document.body, { childList: true, subtree: true });
     el.appendChild(h('div', { style: { display: 'grid', gap: '14px', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' } },
-        ownerKpiTile('Общая выручка', d.kpis.revenue.toLocaleString('ru-RU') + ' сум', 'за выбранный период'),
+        ownerKpiTile('Общая выручка', d.kpis.revenue.toLocaleString('ru-RU') + ' ' + tr('сум'), 'за выбранный период'),
         ownerKpiTile('Услуг оказано', d.kpis.count.toLocaleString('ru-RU'), 'без отменённых'),
-        ownerKpiTile('Средний чек', d.kpis.avg.toLocaleString('ru-RU') + ' сум', 'выручка / услуги')));
+        ownerKpiTile('Средний чек', d.kpis.avg.toLocaleString('ru-RU') + ' ' + tr('сум'), 'выручка / услуги')));
     el.appendChild(h('div', { style: { marginTop: '14px' } },
         ownerCard('Выручка по месяцам', 'последние 12 месяцев — независимо от выбранного периода', ownerLine(d.monthly, { tip }))));
     el.appendChild(h('div', { style: { display: 'grid', gap: '14px', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', marginTop: '14px' } },
@@ -676,7 +677,7 @@ export async function buildInvoicesReport({ branchId, branchIds, clinicId, fromI
     if (Array.isArray(branchIds) && branchIds.length > 0) q = q.in('branch_id', branchIds);
     else if (branchId && branchId !== 'all') q = q.eq('branch_id', branchId);
     const { data, error } = await q;
-    if (error) { console.warn('[invoices report]', error.message); toast('Не удалось получить счета: ' + error.message, 'fail'); return []; }
+    if (error) { console.warn('[invoices report]', error.message); toast(trf('Не удалось получить счета: {msg}', { msg: error.message }), 'fail'); return []; }
     const rows = data || [];
     const regIds = [...new Set(rows.map(r => r.created_by).filter(Boolean))];
     const regsRes = regIds.length ? await supabase.from('users').select('id, full_name').in('id', regIds) : { data: [] };
@@ -884,7 +885,7 @@ export async function buildProcurementReport({ branchId, branchIds, clinicId, fr
     if (Array.isArray(branchIds) && branchIds.length > 0) q = q.in('purchase_orders.branch_id', branchIds);
     else if (branchId && branchId !== 'all') q = q.eq('purchase_orders.branch_id', branchId);
     const { data, error } = await q;
-    if (error) { console.warn('[procurement report]', error.message); toast('Не удалось получить закупки: ' + error.message, 'fail'); return []; }
+    if (error) { console.warn('[procurement report]', error.message); toast(trf('Не удалось получить закупки: {msg}', { msg: error.message }), 'fail'); return []; }
     return (data || []).map(r => ({
         po:       r.purchase_orders?.po_number || '',
         product:  [r.clinic_items?.name, [r.clinic_items?.strength, r.clinic_items?.form].filter(Boolean).join(' ')].filter(Boolean).join(' · '),
@@ -1150,9 +1151,9 @@ async function openReportBuilder(rep, ctx) {
         else if (picked === total) { masterCb.checked = true; masterCb.indeterminate = false; }
         else { masterCb.checked = false; masterCb.indeterminate = true; }
         summaryEl.textContent = total === 0 ? ''
-            : picked === 0 ? 'Филиалы не выбраны'
-            : picked === total ? `Все филиалы (${total})`
-            : `${picked} из ${total}`;
+            : picked === 0 ? tr('Филиалы не выбраны')
+            : picked === total ? trf('Все филиалы ({total})', { total })
+            : trf('{n} из {max}', { n: picked, max: total });
     }
     masterCb.addEventListener('change', () => {
         if (masterCb.checked) st.branches.forEach(b => st.branchIds.add(b.id));
@@ -1205,7 +1206,7 @@ async function openReportBuilder(rep, ctx) {
             if (!st.rows || !st.rows.length) return;
             ev.currentTarget.disabled = true;
             try { await rep.download(st.rows); }
-            catch (e) { console.error('[reports-hub] download:', e); toast('Не удалось скачать: ' + (e.message || e), 'fail'); }
+            catch (e) { console.error('[reports-hub] download:', e); toast(trf('Не удалось скачать: {msg}', { msg: e.message || e }), 'fail'); }
             finally { ev.currentTarget.disabled = false; }
         },
     }, Icon('Download', { size: 14 }), ' Скачать Excel');
