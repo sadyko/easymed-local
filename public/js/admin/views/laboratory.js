@@ -411,7 +411,7 @@ function statsHeadRow() {
 
 function statsRow(r) {
     return h('div', { class: 'lab-stats-row' },
-        h('span', { class: 'lab-stats-name' },
+        h('span', { class: 'lab-stats-name', title: (r.name || '') + (r.code ? ' · ' + r.code : '') },
             r.name || '—',
             r.code ? h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '12.5px' } }, ' · ' + r.code) : null),
         h('span', { class: 'lab-stats-num' }, String(r.ordered != null ? r.ordered : 0)),
