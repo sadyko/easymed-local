@@ -182,11 +182,19 @@ test('inpatient + lab-panel tables (025): staff read, correct write actors', () 
   assert.ok(canWrite('admission_services', 'insert', 'nurse'));
   assert.ok(canWrite('admission_transfers', 'insert', 'nurse'));
   assert.ok(!canWrite('admission_prescriptions', 'insert', 'lab'));   // lab has no place in inpatient orders
-  // lab role owns the panel catalog (lab-settings.js); nurses do not
-  assert.ok(canWrite('lab_panels', 'insert', 'lab'));
-  assert.ok(canWrite('lab_panel_analytes', 'insert', 'lab'));
-  assert.ok(canWrite('lab_panel_analytes', 'delete', 'lab'));         // save = delete-then-insert reconcile
-  assert.ok(!canWrite('lab_panels', 'insert', 'nurse'));
+  // LAB_PANELS_BY_SECTION_V1 — panel writes follow LAB-SECTION access (owner:
+  // «who ever will have permission of the lab section will be able to edit the
+  // panels»). The roles whose seeded role_permissions row carries 'labs' are
+  // admin/doctor/lab/nurse — exactly those may write; the rest stay refused.
+  for (const role of ['admin', 'doctor', 'lab', 'nurse']) {
+    assert.ok(canWrite('lab_panels', 'insert', role), role + ' holds the labs section');
+    assert.ok(canWrite('lab_panel_analytes', 'insert', role), role + ' writes analytes');
+    assert.ok(canWrite('lab_panel_analytes', 'delete', role), role + ': save = delete-then-insert reconcile');
+  }
+  for (const role of ['registrar', 'cashier', 'inventory', 'callcenter']) {
+    assert.ok(!canWrite('lab_panels', 'insert', role), role + ' has no labs section');
+    assert.ok(!canWrite('lab_panel_analytes', 'insert', role), role + ' has no labs section');
+  }
   // main filtered FKs are allow-listed for the query layer
   assert.ok(filterAllowed('admission_services', 'admission_id'));
   assert.ok(filterAllowed('admission_transfers', 'admission_id'));

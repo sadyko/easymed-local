@@ -5,6 +5,15 @@
 // bespoke read surface.
 const ALL_STAFF = ['admin','registrar','doctor','cashier','lab','nurse','inventory','callcenter'];
 
+// LAB_PANELS_BY_SECTION_V1 (2026-08-31, owner: «who ever will have permission
+// of the lab section will be able to edit the panels») — the roles whose
+// seeded role_permissions row (migration 013/016) carries the 'labs' section,
+// i.e. everyone the client shows Лаборатория to. Panel-catalog writes key on
+// THIS set so the door the sidebar shows and the door the server opens are the
+// same door. If a clinic re-grants 'labs' to another role in Настройки → Роли,
+// this static list must follow — the ACL layer reads roles, not sections.
+const LAB_SECTION_ROLES = ['admin','doctor','lab','nurse'];
+
 export const REGISTRY = {
   // CRM_V1 (mig 044) — журнал обращений; конверсия в пациента выставляет
   // patient_id + status 'converted' (обычный /api/db, денег нет).
@@ -508,25 +517,26 @@ export const REGISTRY = {
     filters: ['id','admission_id','administered_at','created_at'],
     embed:   { patients: { table:'patients', fk:'patient_id', columns:['id','full_name','first_name','last_name'] } },
   },
-  // Lab/diagnostic panel definitions (config). lab-settings.js. Owned by admin/lab.
+  // Lab/diagnostic panel definitions (config). views/lab-panels.js, mounted as
+  // the «Панели» mode of Лаборатория. Owned by every labs-section role.
   lab_panels: {
     read:  { roles: ALL_STAFF, columns: ['id','name','code','modality','has_narrative','service_id','core_panel_id','active','created_at'] },
-    write: { insert: { roles: ['admin','lab'], columns: ['name','code','modality','has_narrative','service_id','core_panel_id','active'] },
-             update: { roles: ['admin','lab'], columns: ['name','code','modality','has_narrative','service_id','active'] },
-             delete: { roles: ['admin','lab'] } },
+    write: { insert: { roles: LAB_SECTION_ROLES, columns: ['name','code','modality','has_narrative','service_id','core_panel_id','active'] },
+             update: { roles: LAB_SECTION_ROLES, columns: ['name','code','modality','has_narrative','service_id','active'] },
+             delete: { roles: LAB_SECTION_ROLES } },
     filters: ['id','modality','name','active'],
     embed:   {},
   },
-  // Analytes within a panel (config). lab-settings.js. Saved by delete-then-insert
-  // reconcile, so the lab role needs insert + delete.
+  // Analytes within a panel (config). views/lab-panels.js. Saved by
+  // delete-then-insert reconcile, so the labs roles need insert + delete.
   lab_panel_analytes: {
     read:  { roles: ALL_STAFF, columns: ['id','panel_id','code','name','unit','value_type','value_options','decimals',
              'ref_low','ref_high','ref_text','ref_low_m','ref_high_m','ref_low_f','ref_high_f','group_label','sort_order','ref_ranges','active','created_at'] },
-    write: { insert: { roles: ['admin','lab'], columns: ['panel_id','code','name','unit','value_type','value_options','decimals',
+    write: { insert: { roles: LAB_SECTION_ROLES, columns: ['panel_id','code','name','unit','value_type','value_options','decimals',
                'ref_low','ref_high','ref_text','ref_low_m','ref_high_m','ref_low_f','ref_high_f','group_label','sort_order','ref_ranges','active'] },
-             update: { roles: ['admin','lab'], columns: ['code','name','unit','value_type','value_options','decimals',
+             update: { roles: LAB_SECTION_ROLES, columns: ['code','name','unit','value_type','value_options','decimals',
                'ref_low','ref_high','ref_text','ref_low_m','ref_high_m','ref_low_f','ref_high_f','group_label','sort_order','ref_ranges','active'] },
-             delete: { roles: ['admin','lab'] } },
+             delete: { roles: LAB_SECTION_ROLES } },
     // LAB_SVC_ANALYTE_FALLBACK_V1 — поиск по ИМЕНИ показателя: услуга без
     // панели («Д-димер» отдельной строкой в прайсе) берёт единицы и норму у
     // одноимённого показателя из справочника. Только чтение справочной
