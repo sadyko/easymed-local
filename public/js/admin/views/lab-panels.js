@@ -37,13 +37,19 @@ import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';   // 
 
 const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагностика' };
 
-// Bump this whenever this screen changes. If the marker on the page does not
-// match what you expect, the browser is running older JavaScript — reload the
-// page fully (F5), because switching hash routes does not re-fetch modules.
+// Bump this whenever this screen changes. If the marker does not match what
+// you expect, the browser is running older JavaScript — reload the page fully
+// (F5), because switching hash routes does not re-fetch modules.
+// LAB_HEAD_ONE_V1: the marker is NOT screen text (users are not its audience);
+// it rides as data-lab-build on the Лаборатория page head in BOTH modes —
+// read it in the element inspector, or from the console:
+//   document.querySelector('.page-head').dataset.labBuild
 // v6 = the editor moved out of lab-settings.js into this module.
 // v7 = the Settings entry removed; panels edited from Лаборатория by every
 //      lab-section role (LAB_PANELS_BY_SECTION_V1).
-export const LAB_BUILD = 'lab-v7';
+// v8 = one shared page head for queue+panels; marker moved off-screen into
+//      the data-attribute above; queue filter chips translate label-then-count.
+export const LAB_BUILD = 'lab-v8';
 
 // Mounts the editor into `container` and resolves once the first load has
 // painted — the caller can await it and know the screen is settled.

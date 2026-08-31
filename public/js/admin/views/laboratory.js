@@ -212,6 +212,41 @@ function modeSwitch() {
 // -----------------------------------------------------------------------------
 // Shell
 // -----------------------------------------------------------------------------
+// LAB_HEAD_ONE_V1 — ONE page head for BOTH modes, built here and only here.
+//
+// The head used to be assembled inline in mount() with per-mode conditionals
+// in three places (marker span, subtitle, which actions exist), and the two
+// renderings drifted into two different screens: the queue drew the switch
+// beside the title while «Панели» pushed it to the far right edge and grew a
+// visible grey «lab-v7» after the title. Owner (two screenshots, 2026-08-31):
+// «make similar across the switching please». The queue layout is the base —
+// that is the screen staff live in — so the Очередь|Панели switch stands
+// RIGHT OF THE TITLE in both modes, and the only things a mode may vary are
+// the subtitle text and the controls that fill the actions area (the queue's
+// search/filters/refresh; the editor has none — its own toolbar lives in the
+// panel list below).
+//
+// The LAB_BUILD marker is deliberately NOT screen text any more: users are
+// not the audience for build markers. It rides as data-lab-build on the head
+// (both modes), so «I can't see any changes» is still diagnosable — inspect
+// the element, or document.querySelector('.page-head').dataset.labBuild —
+// without printing plumbing on the owner's screen.
+function pageHead(subtitle, actions) {
+    return h('div', { class: 'page-head', 'data-lab-build': LAB_BUILD },
+        // minWidth 0 — a flex child with a long subtitle must be allowed to
+        // shrink, or the head actions get pushed off the right edge.
+        h('div', { style: { minWidth: '0' } },
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' } },
+                h('h1', { class: 'page-title' }, 'Лаборатория'),
+                modeSwitch(),
+            ),
+            h('p', { class: 'page-subtitle' }, subtitle),
+        ),
+        h('div', { class: 'page-head-actions', style: { display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
+            ...actions),
+    );
+}
+
 function mount() {
     clear(refs.container);
 
@@ -243,32 +278,18 @@ function mount() {
     const panels = state.mode === 'panels';
 
     refs.container.appendChild(h('div', { class: 'fade-in' },
-        h('div', { class: 'page-head' },
-            // minWidth 0 — a flex child with a long subtitle must be allowed to
-            // shrink, or the head actions get pushed off the right edge.
-            h('div', { style: { minWidth: '0' } },
-                h('h1', { class: 'page-title' }, 'Лаборатория',
-                    // LAB_PANELS_BY_SECTION_V1 — the visible build marker moved
-                    // here from the retired lab-settings screen (which followed
-                    // the CRM's v11 pattern): switching hash routes does NOT
-                    // reload modules, so without a marker on the page «I can't
-                    // see any changes» is impossible to diagnose. Shown only in
-                    // the panels mode — it is about the editor, not the queue.
-                    panels ? h('span', { class: 'muted', style: { fontSize: '12.5px', opacity: '0.6', marginLeft: '8px', fontWeight: '400' } }, LAB_BUILD) : null),
-                h('p', { class: 'page-subtitle' }, panels
-                    ? 'Панели исследований, показатели и референсные значения. Создайте панели своей клиники и заполните референсные значения.'
-                    : 'Очередь проб: забор → в работу → результаты → проверка и выдача.'),
-            ),
-            h('div', { class: 'page-head-actions', style: { display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
-                modeSwitch(),
-                // The queue's own controls filter the queue — in the editor they
-                // would point at nothing, so they are absent rather than inert.
-                panels ? null : refs.searchInp,
-                panels ? null : refs.filterWrap,
-                panels ? null : h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => fetchAndPaint() },
+        pageHead(
+            panels
+                ? 'Панели исследований, показатели и референсные значения. Создайте панели своей клиники и заполните референсные значения.'
+                : 'Очередь проб: забор → в работу → результаты → проверка и выдача.',
+            // The queue's own controls filter the queue — in the editor they
+            // would point at nothing, so they are absent rather than inert.
+            panels ? [] : [
+                refs.searchInp,
+                refs.filterWrap,
+                h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => fetchAndPaint() },
                     Icon('Refresh', { size: 13 }), ' Обновить'),
-            ),
-        ),
+            ]),
         panels ? refs.panelsHost : h('div', { class: 'card' },
             refs.list,
             refs.emptyEl,
@@ -291,7 +312,15 @@ function paintFilters() {
                 paintFilters();
                 paintRows();
             },
-        }, f.label + (state.rows.length ? ` · ${counts[f.key]}` : '')));
+            // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ. The label
+            // and the count go in as TWO children: h() runs the label alone
+            // through tr(), so «Открытые» resolves as a whole dictionary word,
+            // and the language-neutral « · N» is appended after. The previous
+            // `f.label + ' · ' + n` glued them into one string BEFORE
+            // translation — tr() matches whole strings, so «Открытые · 41»
+            // could never resolve and the owner photographed Russian chips on
+            // an Uzbek screen.
+        }, f.label, state.rows.length ? ` · ${counts[f.key]}` : null));
     }
 }
 

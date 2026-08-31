@@ -21,7 +21,13 @@
 //     address redirects to '#labs/panels' at route resolution;
 //   * the switch is the prominent variant (.seg-lg) — the queue's own status
 //     filter stays the small one;
-//   * the LAB_BUILD marker moved with the editor's only remaining page head.
+//   * LAB_HEAD_ONE_V1 (owner: «make similar across the switching please»):
+//     ONE page head for BOTH modes — same title, the switch right of the title
+//     in both, built by a single function. The LAB_BUILD marker is NOT screen
+//     text any more: it rides as data-lab-build on the head (both modes);
+//   * the queue filter chips translate the label as a WHOLE word and compose
+//     the count AFTER (I18N_COVERAGE_V1) — the owner photographed «Открытые ·
+//     41» on an Uzbek screen because the label was glued to the count first.
 
 import { test } from 'node:test';
 import assert from 'node:assert';
@@ -75,6 +81,9 @@ globalThis.localStorage = fakeLocalStorage;
 fakeLocalStorage.setItem('admin.lang', 'ru');
 globalThis.window = {
   location: { hostname: 'localhost' }, localStorage: fakeLocalStorage, addEventListener(){},
+  // setLang() (i18n.js) announces the switch on window — the chips test flips
+  // the language to uz and back, so the fake must accept the event.
+  dispatchEvent(){ return true; },
   easymed: { state: { user: { id: 'u-1', full_name: 'Лаборант' } } },
   // currentClinicId() reads this; without it the editor takes its "no clinic"
   // branch and toasts, which is a different screen from the one under test.
@@ -102,6 +111,7 @@ globalThis.history = {
 
 const walk = (e, o = []) => { o.push(e); for (const c of e.children || []) walk(c, o); return o; };
 const textOf = (el) => walk(el).map((n) => n._t || '').join('');
+const parentOf = (root, node) => walk(root).find((n) => (n.children || []).includes(node));
 const findAllButtons = (root) => walk(root).filter((n) => n.tagName === 'BUTTON');
 const findButtonByText = (root, re) => findAllButtons(root).find((b) => re.test(textOf(b)));
 const findByAriaLabel = (root, label) => walk(root).find((n) => n.attrs['aria-label'] === label);
@@ -139,6 +149,14 @@ const ANALYTES = [
 ];
 const SERVICES = [{ id: 's-1', name: 'ОАК', type: 'lab', is_lab: true, department_id: 'd-1', type_id: null }];
 
+// Queue rows, EMPTY by default (the older tests were written against an empty
+// queue). A test that needs the filter chips to carry counts pushes rows here
+// and reset() clears them. The filters are ignored by this fake, so the same
+// rows answer both the open-statuses query and the completed-window query —
+// each order therefore shows up twice; the chip-count assertions expect that.
+const VISIT_SERVICES = [];
+const VISITS = [];
+
 let dbCalls = [];
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
@@ -152,8 +170,8 @@ globalThis.fetch = async (url, opts) => {
       services: SERVICES,
       departments: [{ id: 'd-1', name: 'Лаборатория', kind: 'laboratory' }],
       service_types: [],
-      visit_services: [],
-      visits: [],
+      visit_services: VISIT_SERVICES,
+      visits: VISITS,
       lab_results: [],
     }[table] || [];
     return { ok: true, json: async () => ({ data: JSON.parse(JSON.stringify(rows)) }) };
@@ -163,6 +181,7 @@ globalThis.fetch = async (url, opts) => {
 
 const { renderLaboratory } = await import('../views/laboratory.js');
 const { LAB_BUILD } = await import('../views/lab-panels.js');
+const { setLang } = await import('../i18n.js');
 const perms = await import('../permissions.js');
 const { setFullAccess, setEffectiveFromRole, canEditLabPanels } = perms;
 
@@ -176,7 +195,7 @@ const LAB_SEEDED = { name: 'lab', permissions: { sections: ['labs', 'patients', 
 const LAB_VIEWER = { name: 'Медсестра', permissions: { sections: ['labs', 'patients', 'dashboard'], levels: { labs: 'viewer', patients: 'editor', dashboard: 'viewer' } } };
 const NO_LABS    = { name: 'Регистратура', permissions: { sections: ['patients', 'dashboard'], levels: { patients: 'editor', dashboard: 'viewer' } } };
 
-function reset() { toastMsg = null; dbCalls = []; lastHistoryUrl = null; historyWrites = 0; tabSubCalls = []; }
+function reset() { toastMsg = null; dbCalls = []; lastHistoryUrl = null; historyWrites = 0; tabSubCalls = []; VISIT_SERVICES.length = 0; VISITS.length = 0; }
 
 // Markers the panel editor — and only the panel editor — puts on screen.
 function assertPanelEditor(root, where) {
@@ -287,22 +306,102 @@ test('переключатель заметный: seg-lg на переключ�
     'активная сторона крупного варианта залита primary — то самое «a little bit prominent»');
 });
 
-test('маркер сборки переехал вместе с редактором: в режиме «Панели» виден LAB_BUILD', async () => {
+// LAB_HEAD_ONE_V1 — the owner's two screenshots showed two DIFFERENT heads:
+// the queue drew the switch beside the title, the editor pushed it to the far
+// right and grew a grey «lab-v7» after the title. One head, one builder, both
+// modes — the queue layout is the base.
+test('одна шапка на оба режима: заголовок, рядом с ним переключатель, подзаголовок — одинаково в очереди и в «Панелях»', async () => {
+  setFullAccess('Администратор');
+  for (const [name, ctx] of [['очередь', {}], ['панели', { payload: { sub: 'panels' } }]]) {
+    reset();
+    const root = mk('div');
+    await renderLaboratory(root, ctx);
+    await tick();
+
+    const heads = walk(root).filter((n) => hasClass(n, 'page-head'));
+    assert.strictEqual(heads.length, 1, name + ': ровно одна шапка');
+
+    const title = walk(root).find((n) => n.tagName === 'H1');
+    assert.ok(title && textOf(title).includes('Лаборатория'), name + ': тот же заголовок');
+
+    const sw = modeSwitch(root);
+    assert.ok(sw, name + ': переключатель на месте');
+    assert.ok(hasClass(sw, 'seg-lg'), name + ': тот же крупный вариант');
+
+    // The switch stands NEXT TO THE TITLE — same row, same parent — in BOTH
+    // modes, never parked in the right-hand actions block (that is exactly
+    // where the panels mode used to drift it to).
+    const swParent = parentOf(root, sw);
+    assert.ok(swParent && swParent.children.some((c) => c.tagName === 'H1'),
+      name + ': переключатель в одном ряду с заголовком');
+    const actions = walk(root).find((n) => hasClass(n, 'page-head-actions'));
+    assert.ok(!actions || !walk(actions).includes(sw), name + ': и НЕ в блоке действий справа');
+
+    assert.ok(walk(root).some((n) => hasClass(n, 'page-subtitle')), name + ': подзаголовок есть в обоих режимах');
+  }
+
+  // «Not two heads that agree by coincidence»: the head is built in ONE place
+  // in the source — a second `class: 'page-head'` site is how the drift began.
+  const labSrc = fs.readFileSync(path.resolve(HERE, '..', 'views', 'laboratory.js'), 'utf8');
+  assert.strictEqual((labSrc.match(/['"]page-head['"]/g) || []).length, 1,
+    'шапку собирает одно место в laboratory.js — не два, совпадающих по случайности');
+});
+
+test('маркер сборки не показывается пользователю: не текст на экране, а data-атрибут шапки — в обоих режимах', async () => {
+  setFullAccess('Администратор');
+  for (const [name, ctx] of [['панели', { payload: { sub: 'panels' } }], ['очередь', {}]]) {
+    reset();
+    const root = mk('div');
+    await renderLaboratory(root, ctx);
+    await tick();
+    assert.ok(!textOf(root).includes(LAB_BUILD),
+      name + ': пользователь маркер сборки не видит — он не для него');
+    const head = walk(root).find((n) => hasClass(n, 'page-head'));
+    assert.strictEqual(head && head.attrs['data-lab-build'], LAB_BUILD,
+      name + ': след для диагностики «я не вижу изменений» остаётся — data-lab-build на шапке (видно в инспекторе)');
+  }
+});
+
+// I18N_COVERAGE_V1, the owner's photo: «Открытые · 41» on an Uzbek screen.
+// The label was glued to the count BEFORE translation, and tr() matches whole
+// strings — no dictionary entry can rescue 'Открытые · 41'. The label must be
+// translated as a whole word and the count composed AFTER.
+test('чипы фильтра очереди переводятся: слово целиком, счётчик после — узбекский экран без русских слов', async () => {
   reset();
   setFullAccess('Администратор');
-  const root = mk('div');
-  await renderLaboratory(root, { payload: { sub: 'panels' } });
-  await tick();
+  VISIT_SERVICES.push({ id: 1, visit_id: 'v-1', service_id: 's-1', status: 'queued', sample_collected_at: null,
+    services: { name: 'OAK', is_lab: true, type: 'lab', department_id: 'd-1', type_id: null, tube_color: null, specimen: null } });
+  VISITS.push({ id: 'v-1', visit_date: '2026-08-30',
+    patients: { id: 'pt-1', full_name: 'Test Bemor', mrn: 'M-1', gender: 'male', date_of_birth: '1990-01-01' } });
 
-  assert.ok(textOf(root).includes(LAB_BUILD),
-    'маркер сборки в шапке — по нему диагностируют «я не вижу изменений» теперь здесь, а не в настройках');
+  const chipTexts = (root) => {
+    const wrap = walk(root).find((n) => hasClass(n, 'segmented') && !hasClass(n, 'seg-lg'));
+    assert.ok(wrap, 'фильтры очереди на месте');
+    return findAllButtons(wrap).map(textOf);
+  };
 
-  // В очереди маркер не нужен — он про редактор.
-  reset();
+  try {
+    setLang('uz');
+    const root = mk('div');
+    await renderLaboratory(root, {});
+    await tick();
+    const texts = chipTexts(root);
+    // The fake db answers both the open and the completed query with the same
+    // row, so every matching chip counts it twice.
+    assert.deepStrictEqual(texts,
+      ['Ochiq · 2', 'Namuna olish · 2', 'Jarayonda · 0', 'Natijalar · 0', 'Hammasi · 2'],
+      'каждый чип — переведённое слово + счётчик');
+    assert.ok(!/[Ѐ-ӿ]/.test(texts.join(' ')), 'на узбекском экране в чипах нет кириллицы');
+  } finally {
+    setLang('ru');   // остальные тесты этого файла закреплены на русских строках
+  }
+
+  // и на русском счётчик по-прежнему на месте
   const root2 = mk('div');
   await renderLaboratory(root2, {});
   await tick();
-  assert.ok(!textOf(root2).includes(LAB_BUILD), 'в режиме очереди маркер не показывается');
+  assert.deepStrictEqual(chipTexts(root2),
+    ['Открытые · 2', 'Забор · 2', 'В работе · 0', 'Результаты · 0', 'Все · 2']);
 });
 
 test('переключение режима пишет адрес: #labs/panels и обратно #labs (replaceState, без новой записи истории)', async () => {
