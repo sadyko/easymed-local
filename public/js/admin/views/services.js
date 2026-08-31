@@ -1,26 +1,31 @@
 // Services — SERVICES_CATALOG_V1 — service/procedure price-list admin page.
 // Mirrors public/js/admin/views/visits.js for structure (mount / fetchAndPaint
-// / DOM-building via h()) and the modal chrome (.modal / .modal-backdrop /
-// .modal-card / .modal-head / .modal-close / .modal-body / .modal-foot — there
-// is no shared modal() helper in ui.js, every view builds its own overlay with
-// those classes).
+// / DOM-building via h()).
 //
-// services is CRUD via /api/db (server/db/schema-registry.js): admin may
-// insert/update {name, code, price, tax_rate, duration_minutes,
-// requires_doctor, active}; every staff role may read.
+// SERVICES_ONE_EDITOR_V1 — create and edit go through the ONE service editor
+// (views/service-editor.js, SERVICE_EDITOR_V1): «Add service» and the row
+// click both call openServiceEditor exactly like section-crud.js does, and
+// lab fields appear only when the editor's Раздел = Лаборатория. This page's
+// own hand-built modal (raw «Is lab test» checkbox, untranslated English
+// labels) predated that design decision and is gone.
 //
 // SERVICE_DELETE_V1 — /api/db still grants DELETE on services to nobody, on
 // purpose: removal goes through the `delete_service` RPC
 // (server/services/rpc/catalog.js), which refuses any service that appears in a
 // visit, invoice, admission, queue ticket, lab panel or CRM lead, and offers
 // deactivation instead. Keeping the generic delete verb closed means there is
-// no second path that skips that check.
+// no second path that skips that check. The shared editor deliberately has no
+// delete button, and the generic section list's Del can only deactivate (its
+// DELETE verb is the closed one) — so this page keeps the ONE client path to a
+// hard delete: the per-row trash button (admin-only, server-checked,
+// confirm-first — the same flow the old modal carried).
 
 import { supabase } from '../../supabase.js';
-import { h, Icon, clear, toast, Tag, field, checkField } from '../ui.js';
+import { h, Icon, clear, toast, Tag } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { importExportButtons } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1
 import { ratesOf } from './doctor-pool.js?v=dp1';   // SVC_PERFORMERS_V1 — тот же разбор service_rates, что и в мастере визита
+import { openServiceEditor } from './service-editor.js?v=svceditor1';   // SERVICES_ONE_EDITOR_V1
 
 // SVC_PERFORMERS_V1 — кто выполняет услугу.
 //
@@ -196,6 +201,7 @@ function mount() {
         h('th', null, textFilter('performer', 'Doctor name')),   // SVC_PERFORMERS_V1
         h('th', null, selectFilter('lab', YES_NO)),
         h('th', null, selectFilter('active', YES_NO)),
+        isAdmin() ? h('th', null, '') : null,   // SERVICE_DELETE_V1 — колонка удаления
     );
 
     // No spare column for a reset control, so it sits beside the count in the
@@ -210,9 +216,12 @@ function mount() {
         },
     }, 'Reset');
 
+    // SERVICES_ONE_EDITOR_V1 — the same call section-crud.js makes: add and
+    // edit both open the shared editor; readOnly mirrors the write grant
+    // (insert/update on services are admin-only, like the editor's RPC).
     const addBtn = h('button', {
         class: 'btn btn-primary btn-sm', type: 'button',
-        onclick: () => openServiceModal(null, fetchAndPaint),
+        onclick: () => openServiceEditor({ row: null, readOnly: !isAdmin(), onSaved: fetchAndPaint }),
     }, Icon('Plus', { size: 14 }), ' Add service');
 
     refs.container.appendChild(h('div', { class: 'fade-in' },
@@ -246,6 +255,7 @@ function mount() {
                         h('th', null, 'Performers'),
                         h('th', null, 'Lab'),
                         h('th', null, 'Active'),
+                        isAdmin() ? h('th', null, '') : null,   // SERVICE_DELETE_V1
                     ),
                     filterRow,
                 ),
@@ -285,7 +295,7 @@ async function fetchAndPaint() {
         renderRows();
     } catch (e) {
         if (token !== lastFetchToken) return;
-        toast('Failed to load services: ' + (e && e.message || e), 'fail');
+        toast(trf('Не удалось загрузить услуги: {msg}', { msg: (e && e.message) || e }), 'fail');
         allServices = [];
         renderRows();
     }
@@ -310,7 +320,7 @@ function setLoadingRow() {
     if (!refs.tbody) return;
     clear(refs.tbody);
     refs.tbody.appendChild(h('tr', null,
-        h('td', { colspan: '8', style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Loading…'),
+        h('td', { colspan: String(isAdmin() ? 10 : 9), style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Loading…'),
     ));
     refs.emptyEl.style.display = 'none';
 }
@@ -326,8 +336,8 @@ function renderRows() {
     const total = allServices.length;
     if (refs.totalEl) {
         refs.totalEl.textContent = filtering
-            ? `${rows.length} of ${total}`
-            : `${total} service${total === 1 ? '' : 's'}`;
+            ? trf('{n} из {max}', { n: rows.length, max: total })
+            : trf('Услуг: {n}', { n: total });
     }
 
     clear(refs.tbody);
@@ -385,180 +395,73 @@ function serviceRow(s) {
     return h('tr', {
         class: 'row-click',
         style: { cursor: 'pointer', opacity: inactive ? '0.55' : '' },
-        onclick: () => openServiceModal(s, fetchAndPaint),
+        // SERVICES_ONE_EDITOR_V1 — the row opens the shared editor (read-only
+        // below admin, matching the services write grant).
+        onclick: () => openServiceEditor({ row: s, readOnly: !isAdmin(), onSaved: fetchAndPaint }),
     },
         h('td', { class: 'cell-strong' }, s.name || '—'),
         h('td', { class: 'muted' }, s.code || '—'),
         h('td', null, typeLabel(s)),
         h('td', { class: 'num' }, fmtPrice(s.price)),
-        h('td', null, s.duration_minutes != null ? (s.duration_minutes + ' min') : '—'),
+        h('td', null, s.duration_minutes != null ? trf('{n} мин', { n: s.duration_minutes }) : '—'),
         h('td', null, s.requires_doctor ? Tag('Yes', { kind: 'ok', dot: true }) : h('span', { class: 'muted' }, '—')),
         performerCell(s),
         h('td', null, s.is_lab ? Tag('Lab', { kind: 'info', dot: true }) : h('span', { class: 'muted' }, '—')),
         h('td', null, Tag(s.active ? 'Yes' : 'No', { kind: s.active ? 'ok' : '', dot: true })),
+        deleteCell(s),
     );
 }
 
+
 // -----------------------------------------------------------------------------
-// ADD / EDIT MODAL — shared: svc == null -> add (blank); svc set -> edit (prefilled).
+// DELETE — SERVICE_DELETE_V1. The one client path to a hard delete (see the
+// header comment): ask the server what is possible FIRST, so the dialog says
+// what will actually happen rather than offering a delete that was never
+// possible; a service with history gets a deactivate offer instead.
 // -----------------------------------------------------------------------------
-function openServiceModal(svc, onSaved) {
-    const isEdit = !!svc;
+function deleteCell(s) {
+    // Admin-only because the RPC is admin-only; showing the button to anyone
+    // else would just produce a 403 they can do nothing about.
+    if (!isAdmin()) return null;
+    return h('td', { style: { textAlign: 'right', width: '1%' } },
+        h('button', {
+            class: 'btn btn-danger btn-sm', type: 'button', title: 'Удалить',
+            onclick: async (e) => {
+                e.stopPropagation();   // клик по ряду открывает редактор — не сюда
+                const btn = e.currentTarget;
+                btn.disabled = true;
+                try { await confirmDelete(s); }
+                finally { if (btn.isConnected) btn.disabled = false; }
+            },
+        }, Icon('Trash', { size: 14 })));
+}
 
-    const overlay = h('div', { class: 'modal' });
-    const close = () => overlay.remove();
-    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
-
-    const nameInp  = h('input', { type: 'text', required: true, value: svc ? (svc.name || '') : '' });
-    const codeInp  = h('input', { type: 'text', value: svc ? (svc.code || '') : '' });
-    const typeSel  = h('select', null, ...SERVICE_TYPES.map(([v, l]) => h('option', { value: v, selected: (svc && svc.type ? svc.type : 'consultation') === v }, l)));
-    const priceInp = h('input', { type: 'number', min: '0', step: 'any', required: true,
-        value: (svc && svc.price != null) ? String(svc.price) : '' });
-    const durInp   = h('input', { type: 'number', min: '0', step: '5',
-        value: String((svc && svc.duration_minutes != null) ? svc.duration_minutes : 30) });
-    const reqDocChk = h('input', { type: 'checkbox', checked: svc ? !!svc.requires_doctor : false });
-    const activeChk = h('input', { type: 'checkbox', checked: svc ? !!svc.active : true });
-    const isLabChk  = h('input', { type: 'checkbox', checked: svc ? !!svc.is_lab : false });
-
-    // Lab-only fields — shown only while "Is lab test" is checked.
-    const specimenInp  = h('input', { type: 'text', value: svc ? (svc.specimen || '') : '', placeholder: 'e.g. blood' });
-    const resultUnitInp = h('input', { type: 'text', value: svc ? (svc.result_unit || '') : '', placeholder: 'e.g. mg/dL' });
-    const refLowInp  = h('input', { type: 'number', step: 'any', value: (svc && svc.ref_low != null) ? String(svc.ref_low) : '' });
-    const refHighInp = h('input', { type: 'number', step: 'any', value: (svc && svc.ref_high != null) ? String(svc.ref_high) : '' });
-    const refTextInp = h('input', { type: 'text', value: svc ? (svc.ref_text || '') : '', placeholder: 'e.g. negative' });
-
-    const labFieldsEl = h('div', { style: { display: isLabChk.checked ? 'flex' : 'none', flexDirection: 'column', gap: '14px' } },
-        field('Specimen', specimenInp),
-        field('Result unit', resultUnitInp),
-        h('div', { class: 'row' },
-            h('div', { class: 'grow' }, field('Ref low', refLowInp)),
-            h('div', { class: 'grow' }, field('Ref high', refHighInp)),
-        ),
-        field('Ref text (non-numeric range)', refTextInp),
-    );
-    isLabChk.addEventListener('change', () => {
-        labFieldsEl.style.display = isLabChk.checked ? 'flex' : 'none';
-    });
-
-    const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, isEdit ? 'Save' : 'Add service');
-    saveBtn.addEventListener('click', save);
-
-    // SERVICE_DELETE_V1 — hard delete, but only for a service with no history.
-    // Admin-only here because the RPC is admin-only; showing the button to
-    // anyone else would just produce a 403 they can do nothing about.
-    const deleteBtn = (isEdit && isAdmin())
-        ? h('button', { class: 'btn btn-danger', type: 'button', onclick: confirmDelete },
-            Icon('Trash', { size: 14 }), ' Удалить')
-        : null;
-
-    async function confirmDelete() {
-        deleteBtn.disabled = true;
-        try {
-            // Ask first, so the dialog can say what will actually happen rather
-            // than offering a delete that was never possible.
-            const { data: chk, error } = await supabase.rpc('service_delete_check', { p_service_id: svc.id });
-            if (error) throw error;
-
-            if (!chk.deletable) {
-                const where = chk.blocking.map(b => `${b.label}: ${b.count}`).join(', ');
-                const ok = window.confirm(
-                    trf('Услуга «{name}» уже используется ({where}).\n\nУдалить её нельзя — прошлые визиты и счёта ссылаются на неё по названию.\n\nОтключить её вместо удаления? Она исчезнет из списков выбора, а история останется целой.', { name: chk.name, where }));
-                if (ok) await deactivate();
-                return;
-            }
-
-            if (!window.confirm(trf('Удалить услугу «{name}» навсегда?\n\nОна нигде не использована, поэтому удаляется без следа.', { name: chk.name }))) return;
-            const { error: delErr } = await supabase.rpc('delete_service', { p_service_id: svc.id });
-            if (delErr) throw delErr;
-            toast(trf('Услуга «{name}» удалена', { name: chk.name }), 'ok');
-            close();
-            if (typeof onSaved === 'function') await onSaved();
-        } catch (e) {
-            toast((e && e.message) || 'Не удалось удалить услугу.', 'fail');
-        } finally {
-            if (deleteBtn.isConnected) deleteBtn.disabled = false;
-        }
-    }
-
-    async function deactivate() {
-        const { error } = await supabase.from('services').update({ active: 0 }).eq('id', svc.id);
+async function confirmDelete(svc) {
+    try {
+        const { data: chk, error } = await supabase.rpc('service_delete_check', { p_service_id: svc.id });
         if (error) throw error;
-        toast('Услуга отключена — история сохранена', 'ok');
-        close();
-        if (typeof onSaved === 'function') await onSaved();
-    }
 
-    async function save() {
-        const name  = nameInp.value.trim();
-        const price = Number(priceInp.value);
-        if (!name) { toast('Enter a service name.', 'fail'); return; }
-        if (!Number.isFinite(price) || price < 0) { toast('Enter a valid price.', 'fail'); return; }
-
-        saveBtn.disabled = true;
-        const prevLabel = saveBtn.textContent;
-        saveBtn.textContent = isEdit ? 'Saving…' : 'Adding…';
-        try {
-            const payload = {
-                name,
-                price,
-                type:             typeSel.value,
-                duration_minutes: Number(durInp.value) || 30,
-                requires_doctor:  reqDocChk.checked ? 1 : 0,
-                active:           activeChk.checked ? 1 : 0,
-                is_lab:           isLabChk.checked ? 1 : 0,
-            };
-            const code = codeInp.value.trim();
-            if (code) payload.code = code;
-
-            if (isLabChk.checked) {
-                const specimen   = specimenInp.value.trim();
-                const resultUnit = resultUnitInp.value.trim();
-                const refText    = refTextInp.value.trim();
-                const refLow     = Number(refLowInp.value);
-                const refHigh    = Number(refHighInp.value);
-                if (specimen) payload.specimen = specimen;
-                if (resultUnit) payload.result_unit = resultUnit;
-                if (refText) payload.ref_text = refText;
-                if (refLowInp.value !== '' && Number.isFinite(refLow)) payload.ref_low = refLow;
-                if (refHighInp.value !== '' && Number.isFinite(refHigh)) payload.ref_high = refHigh;
-            }
-
-            const { error } = isEdit
-                ? await supabase.from('services').update(payload).eq('id', svc.id).select().single()
-                : await supabase.from('services').insert(payload).select().single();
-            if (error) throw error;
-
-            toast('Saved', 'ok');
-            close();
-            if (typeof onSaved === 'function') await onSaved();
-        } catch (e) {
-            toast((e && e.message) || 'Failed to save service.', 'fail');
-            saveBtn.disabled = false;
-            saveBtn.textContent = prevLabel;
+        if (!chk.deletable) {
+            const where = chk.blocking.map(b => `${b.label}: ${b.count}`).join(', ');
+            const ok = window.confirm(
+                trf('Услуга «{name}» уже используется ({where}).\n\nУдалить её нельзя — прошлые визиты и счёта ссылаются на неё по названию.\n\nОтключить её вместо удаления? Она исчезнет из списков выбора, а история останется целой.', { name: chk.name, where }));
+            if (ok) await deactivateService(svc);
+            return;
         }
-    }
 
-    overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '440px', maxWidth: 'calc(100vw - 32px)' } },
-        h('header', { class: 'modal-head' },
-            h('h2', null, Icon('Coins', { size: 16 }), ' ', isEdit ? 'Edit service' : 'Add service'),
-            h('button', { class: 'modal-close', onclick: close }, '×')),
-        h('div', { class: 'modal-body' },
-            field('Name', nameInp, { required: true }),
-            field('Code', codeInp),
-            field('Тип услуги (раздел)', typeSel),
-            field('Price', priceInp, { required: true }),
-            field('Duration (minutes)', durInp),
-            checkField('Requires doctor', reqDocChk),
-            checkField('Active', activeChk),
-            checkField('Is lab test', isLabChk),
-            labFieldsEl,
-        ),
-        h('footer', { class: 'modal-foot' },
-            deleteBtn,
-            h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'),
-            h('span', { class: 'grow' }),
-            saveBtn),
-    ));
-    document.body.appendChild(overlay);
-    nameInp.focus();
+        if (!window.confirm(trf('Удалить услугу «{name}» навсегда?\n\nОна нигде не использована, поэтому удаляется без следа.', { name: chk.name }))) return;
+        const { error: delErr } = await supabase.rpc('delete_service', { p_service_id: svc.id });
+        if (delErr) throw delErr;
+        toast(trf('Услуга «{name}» удалена', { name: chk.name }), 'ok');
+        await fetchAndPaint();
+    } catch (e) {
+        toast((e && e.message) || 'Не удалось удалить услугу.', 'fail');
+    }
+}
+
+async function deactivateService(svc) {
+    const { error } = await supabase.from('services').update({ active: 0 }).eq('id', svc.id);
+    if (error) throw error;
+    toast('Услуга отключена — история сохранена', 'ok');
+    await fetchAndPaint();
 }

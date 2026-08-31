@@ -1087,6 +1087,7 @@ export const STRINGS = {
   "to": {"en":"to","ru":"до","uz":"gacha"},
   "Clear all filters": {"en":"Clear all filters","ru":"Сбросить все фильтры","uz":"Barcha filtrlarni tozalash"},
   "No services match the filters.": {"en":"No services match the filters.","ru":"Ни одна услуга не подходит под фильтры.","uz":"Filtrlarga mos xizmat yoʻq."},
+  "No services yet — add the first one.": {"en":"No services yet — add the first one.","ru":"Услуг пока нет — добавьте первую.","uz":"Hozircha xizmatlar yoʻq — birinchisini qoʻshing."},
   "Showing the first": {"en":"Showing the first","ru":"Показаны первые","uz":"Birinchi"},
   "of": {"en":"of","ru":"из","uz":"dan"},
   "narrow the filters to see the rest.": {"en":"narrow the filters to see the rest.","ru":"уточните фильтры, чтобы увидеть остальные.","uz":"qolganini koʻrish uchun filtrlarni aniqlashtiring."},
