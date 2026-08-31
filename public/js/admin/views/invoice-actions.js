@@ -8,6 +8,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, toast } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 
 // Identifies the user performing the action. With auth disabled we fall
 // back to whatever's rendered in the user card on the sidebar — every
@@ -78,8 +79,8 @@ export function openCancelInvoiceDialog(inv, { onDone } = {}) {
         h('div', { class: 'modal-body' },
             h('div', { style: { fontSize: '12.5px', color: 'var(--ink-600)', marginBottom: '12px' } },
                 'Счёт ', h('b', null, inv.invoice_number || inv.id.slice(0, 8)),
-                ' · сумма ', h('b', null, total.toLocaleString('ru-RU') + ' сум'),
-                ' · оплачено ', h('b', { style: { color: paid > 0 ? 'var(--ok-700)' : 'var(--ink-500)' } }, paid.toLocaleString('ru-RU') + ' сум'),
+                ' · сумма ', h('b', null, total.toLocaleString('ru-RU'), ' сум'),
+                ' · оплачено ', h('b', { style: { color: paid > 0 ? 'var(--ok-700)' : 'var(--ink-500)' } }, paid.toLocaleString('ru-RU'), ' сум'),
             ),
             h('div', { class: 'field' },
                 h('label', null, 'Причина ', h('span', { style: { color: 'var(--crit-700)' } }, '*')),
@@ -157,7 +158,7 @@ export async function cancelInvoice(inv, { reason, refundAmount = 0, notes = nul
     if (willRefund && nonCashPaid > 0) {
         const cashPaid = Math.max(0, Number(inv.paid_amount || 0) - nonCashPaid);
         if (refundAmount > cashPaid) {
-            toast(`Наличными вернётся ${cashPaid.toLocaleString('ru-RU')} сум — остальное вернётся на баланс и карты пациента.`, 'info');
+            toast(trf('Наличными вернётся {sum} сум — остальное вернётся на баланс и карты пациента.', { sum: cashPaid.toLocaleString('ru-RU') }), 'info');
             refundAmount = cashPaid;
         }
     }
@@ -170,12 +171,13 @@ export async function cancelInvoice(inv, { reason, refundAmount = 0, notes = nul
         status:      toStatus,
         paid_amount: newPaid,
     }).eq('id', inv.id).not('status', 'in', '("void","refunded")').select();
-    if (updErr) { toast('Не удалось отменить счёт: ' + updErr.message, 'fail'); return false; }
+    if (updErr) { toast(trf('Не удалось отменить счёт: {msg}', { msg: updErr.message }), 'fail'); return false; }
     if (!flipped || !flipped.length) { toast('Счёт уже отменён.', 'info'); return false; }
 
     // Negative cash payment for the running ledger (after the guarded flip).
     if (refundAmount > 0) {
         const { error: payErr } = await supabase.from('payments').insert({
+            // i18n-exempt: примечание пишется В БАЗУ (payments.notes) — хранимая запись, как серверные REASONS, а не текст экрана
             invoice_id: inv.id, amount: -refundAmount, method: 'cash', notes: `Возврат — ${reason}`,
             cashier_id: (typeof window !== 'undefined' && window.easymed?.state?.user?.id) || null,   // M3 — so cash refunds land in the shift / Z-report (was NULL → false OVER variance)
         });
@@ -247,6 +249,7 @@ export async function cancelInvoice(inv, { reason, refundAmount = 0, notes = nul
             entityId:    inv.id,
             entityLabel: inv.invoice_number || inv.id.slice(0, 8),
             action:      willRefund ? 'refunded' : 'cancelled',
+            // i18n-exempt: summary пишется В БАЗУ (журнал действий) — хранимая запись, а не текст экрана
             summary:     willRefund
                 ? `Возврат ${refundAmount.toLocaleString('ru-RU')} сум — ${reason}`
                 : `Отменён — ${reason}`,
@@ -255,7 +258,7 @@ export async function cancelInvoice(inv, { reason, refundAmount = 0, notes = nul
     }
 
     toast(willRefund
-        ? `Возврат ${refundAmount.toLocaleString('ru-RU')} сум — счёт отменён.`
+        ? trf('Возврат {sum} сум — счёт отменён.', { sum: refundAmount.toLocaleString('ru-RU') })
         : 'Счёт отменён.');
     return true;
 }

@@ -32,7 +32,7 @@ import { h, Icon, PageHead, Tag, clear, toast, field, checkField } from '../ui.j
 // h() прогоняет текстовые дети через tr() сам; но всё, что меняет текст ПОСЛЕ
 // отрисовки через .textContent, обходит h() — те места зовут tr() явно
 // (тот же приём, что в locked-module.js).
-import { tr } from '../i18n.js';
+import { tr, trf } from '../i18n.js';
 import {
     DASH, secretPlaceholder, normalizeInterval, webhookUrl, shapeCalls,
     statusTime, textOrDash, isNotImplemented, shapeDispositions, pluralRu,
@@ -98,7 +98,7 @@ export async function renderTelephonySettings(container, { onNavigate } = {}) {
                 'Телефония недоступна: сервер ещё не обновлён до этой версии.'));
         } else {
             body.appendChild(h('div', { class: 'empty', style: { padding: '30px' } },
-                'Не удалось загрузить настройки: ' + e.message));
+                trf('Не удалось загрузить настройки: {msg}', { msg: e.message })));
         }
         return;
     }
@@ -570,7 +570,7 @@ function paintCalls() {
         box.appendChild(h('div', { class: 'muted', style: { padding: '24px' } },
             isNotImplemented(state.callsError)
                 ? 'Список звонков недоступен: сервер ещё не обновлён.'
-                : 'Не удалось загрузить звонки: ' + state.callsError.message));
+                : trf('Не удалось загрузить звонки: {msg}', { msg: state.callsError.message })));
         return;
     }
     if (state.calls === null) {

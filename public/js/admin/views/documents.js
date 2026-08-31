@@ -9,6 +9,7 @@
 // what you see in the preview.
 
 import { h, Icon, PageHead, toast, clear } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { sanitizeRichHtml } from '../sanitize.js';
 import { supabase } from '../../supabase.js';
 import { currentUser } from '../data.js';
@@ -571,7 +572,7 @@ function variantCard() {
     const sel = (state.s.variant && state.s.variant[state.active]) || 'classic';
     return editorCard('Вариант для печати', 'Sparkles', [
         h('div', { style: { fontSize: '10.5px', color: 'var(--ink-500)', lineHeight: '1.45', marginBottom: '4px' } },
-            'Дизайн печати для типа «' + (typeMeta(state.active).label || state.active) + '». Выбранный вариант печатается из приёма врача и из визита пациента.'),
+            trf('Дизайн печати для типа «{type}». Выбранный вариант печатается из приёма врача и из визита пациента.', { type: typeMeta(state.active).label || state.active })),
         ...list.map(v => {
             const on = sel === v.key;
             return h('button', {
@@ -657,7 +658,7 @@ async function openDocTemplatesModal() {
     }
     function paintFootMeta() {
         clear(footMeta);
-        footMeta.appendChild(h('span', null, st.rows.length + ' шаблон(ов) · '));
+        footMeta.appendChild(h('span', null, trf('{n} шаблон(ов)', { n: st.rows.length }), ' · '));
         footMeta.appendChild(Icon('Globe', { size: 12 }));
         footMeta.appendChild(h('span', null, ' общие видны всем врачам клиники'));
     }
@@ -730,7 +731,7 @@ async function openDocTemplatesModal() {
         await load(); st.mode = 'view'; st.draft = null; paintList(); paintDetail(); paintFootMeta();
     }
     function askDelete(r) {
-        if (!confirm('Удалить шаблон «' + (r.name || '') + '»?')) return;
+        if (!confirm(trf('Удалить шаблон «{name}»?', { name: r.name || '' }))) return;
         (async () => {
             try { const { error } = await supabase.from('consultation_templates').delete().eq('id', r.id); if (error) throw error; toast('Шаблон удалён', 'ok'); }
             catch (e) { toast('Не удалось удалить', 'fail'); return; }

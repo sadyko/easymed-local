@@ -5,6 +5,7 @@
 // isolation is enforced by RLS on visit_services (via the parent visit's branch).
 import { supabase } from '../../supabase.js';
 import { h, Icon, PageHead, toast, clear, fmtDateTime } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { hasRestriction, scopedProviderId } from '../permissions.js';
 import { currentUser } from '../data.js';
 import { openItemPickerModal } from './item-picker-modal.js?v=billoptin1';   // PROC_PRODUCTS_V1 — reuse the dispense picker
@@ -46,7 +47,7 @@ async function load() {
         .order('created_at', { ascending: false }).limit(300);
     if (error) {
         console.warn('[procedures]', error.message);
-        toast('Не удалось загрузить процедуры: ' + error.message, 'fail');
+        toast(trf('Не удалось загрузить процедуры: {msg}', { msg: error.message }), 'fail');
         state.rows = []; return;
     }
     state.rows = (data || [])
@@ -121,7 +122,7 @@ function rowEl(r, body) {
     // Пока никто не назначен, строка это и говорит, а не молчит.
     const whoLine = r.unassigned
         ? (done ? '' : 'Исполнитель не назначен')
-        : 'Исполнитель · ' + r.doctor;
+        : trf('Исполнитель · {name}', { name: r.doctor });
     return h('div', { class: 'row', style: { justifyContent: 'space-between', alignItems: 'center', gap: '12px', padding: '12px 14px', borderBottom: '1px solid var(--ink-50, #f3f3f3)' } },
         h('div', { style: { minWidth: '0' } },
             h('div', { style: { fontWeight: '600', fontSize: '13.5px' } }, r.service),
@@ -181,7 +182,7 @@ function openDone(r, body) {
                     ? h('span', { class: 'muted', style: { fontSize: '11px' }, title: 'Уже в счёте — убрать нельзя' }, Icon('Check', { size: 12 }))
                     : h('button', { class: 'btn btn-ghost btn-sm', type: 'button', style: { color: 'var(--crit-700)' }, title: 'Убрать (вернуть на склад)',
                         onclick: async () => {
-                            if (!confirm(`Убрать «${it.name}»? Товар вернётся на склад.`)) return;
+                            if (!confirm(trf('Убрать «{name}»? Товар вернётся на склад.', { name: it.name }))) return;
                             try { const { error } = await supabase.rpc('void_dispensed_visit_item', { p_line: it.id }); if (error) throw error; toast('Товар возвращён на склад.'); await refreshItems(); }
                             catch (e) { toast(e?.message || String(e), 'fail'); }
                         } }, Icon('Trash', { size: 12 }))));
@@ -201,7 +202,7 @@ function openDone(r, body) {
                 }
                 await refreshItems();
                 if (ok === 0) throw new Error(fails[0] || 'Не удалось добавить товары');
-                toast(`Добавлено позиций: ${ok}` + (fails.length ? ` · ошибок: ${fails.length}` : ''));
+                toast(trf('Добавлено позиций: {n}', { n: ok }) + (fails.length ? ' · ' + trf('ошибок: {n}', { n: fails.length }) : ''));
                 if (fails.length) toast(fails.join('; '), 'fail');
             },
         }) }, Icon('Plus', { size: 13 }), ' Добавить товары');
@@ -297,7 +298,7 @@ async function takeProcedure(r, body) {
     const me = currentUser();
     if (!me || me.id == null) { toast('Не удалось определить пользователя — войдите заново.', 'fail'); return; }
     const { error } = await supabase.from('visit_services').update({ doctor_id: me.id }).eq('id', r.id);
-    if (error) { toast('Не удалось взять процедуру: ' + error.message, 'fail'); return; }
+    if (error) { toast(trf('Не удалось взять процедуру: {msg}', { msg: error.message }), 'fail'); return; }
     toast('Процедура закреплена за вами');
     await load();
     paint(body);
@@ -318,6 +319,6 @@ async function complete(r, noteText) {
     // осталась бы «не назначена» уже после выполнения.
     if (r.unassigned && _me && _me.id != null) payload.doctor_id = _me.id;
     const { error } = await supabase.from('visit_services').update(payload).eq('id', r.id);
-    if (error) { toast('Ошибка: ' + error.message, 'fail'); return; }
+    if (error) { toast(trf('Ошибка: {msg}', { msg: error.message }), 'fail'); return; }
     toast('Процедура выполнена');
 }

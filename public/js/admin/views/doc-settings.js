@@ -14,6 +14,7 @@
 import { supabase } from '../../supabase.js';
 import { currentClinicId } from '../tenant-tables.js';
 import { toast } from '../ui.js';
+import { trf } from '../i18n.js';   // I18N_COVERAGE_V1
 // TELEGRAM_BOT_V1 — сам рендерер переехал в ../../shared/doc-render.js,
 // чтобы его мог импортировать и сервер (Node) для сборки PDF боту.
 // Здесь остаётся то, что без браузера не живёт: загрузка/сохранение настроек
@@ -142,7 +143,7 @@ export function saveDocSettings(settings) {
         const cid = currentClinicId();
         if (cid) supabase.from('doc_branding')
             .upsert({ company_id: cid, settings, updated_at: new Date().toISOString() }, { onConflict: 'company_id' })
-            .then(({ error }) => { if (error) { console.warn('[doc-settings] save DB:', error.message); toast('Настройки сохранены только локально: ' + error.message, 'fail'); } });
+            .then(({ error }) => { if (error) { console.warn('[doc-settings] save DB:', error.message); toast(trf('Настройки сохранены только локально: {msg}', { msg: error.message }), 'fail'); } });
     } catch (e) { console.warn('[doc-settings] save DB:', e && e.message); }
 }
 

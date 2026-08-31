@@ -15,6 +15,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, PageHead } from '../ui.js';
+import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — счётчики очереди собираются вокруг чисел
 
 // QUEUE_FILTERS_V1 — фильтры живут в состоянии модуля, а не в DOM: доска сама
 // перезагружается каждые 10 секунд, и фильтр, хранившийся в поле ввода,
@@ -281,9 +282,9 @@ function groupCard(g) {
             h('div', { style: { fontSize: '14.5px', fontWeight: '700', color: 'var(--ink-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
                 g.label),
             h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '3px' } },
-                `ждут: ${g.waiting_count}` +
-                (g.unpaid_count ? ` · без оплаты: ${g.unpaid_count}` : '') +
-                ` · принято: ${g.done_count}`)));
+                trf('ждут: {n}', { n: g.waiting_count }) +
+                (g.unpaid_count ? ' · ' + trf('без оплаты: {n}', { n: g.unpaid_count }) : '') +
+                ' · ' + trf('принято: {n}', { n: g.done_count }))));
 
     const list = h('div', { style: {
         borderTop: '1px solid var(--ink-100)',

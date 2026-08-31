@@ -104,7 +104,7 @@ export async function renderPharmacy(container, { onNavigate } = {}) {
                     h('td', { style: { fontWeight: 500 } }, i.name, !i.active ? h('span', { class: 'tag', style: { marginLeft: '6px', fontSize: '10px' } }, 'выкл') : null),
                     h('td', { class: 'muted', style: { fontSize: '12.5px' } }, [i.form, i.strength].filter(Boolean).join(' · ') || '—'),
                     h('td', { class: 'muted' }, i.unit || '—'),
-                    h('td', { class: 'num' }, fmt(i.price) + ' сум'),
+                    h('td', { class: 'num' }, fmt(i.price), ' сум'),
                     h('td', { class: 'num', style: { fontWeight: 700 } }, fmt(qty)),
                     h('td', { class: 'num muted' }, reorder ? fmt(reorder) : '—'),
                     h('td', null, low ? h('span', { class: 'tag tag-warn' }, 'Заканчивается') : (qty > 0 ? h('span', { class: 'tag tag-ok' }, 'В наличии') : h('span', { class: 'tag' }, 'Нет')))));

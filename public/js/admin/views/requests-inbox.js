@@ -7,6 +7,7 @@
 //   the admin sees the real funnel. Writes via the RLS-scoped supabase client.
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, initials } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 
 const RU_MO = ['янв.', 'фев.', 'мар.', 'апр.', 'мая', 'июн.', 'июл.', 'авг.', 'сен.', 'окт.', 'ноя.', 'дек.'];
 const pad = (n) => String(n).padStart(2, '0');
@@ -111,7 +112,7 @@ export async function renderRequestsInbox(container) {
             visits = data || [];
         } catch (e) {
             clear(wrap); wrap.appendChild(hero()); wrap.appendChild(kpiRow(counts)); wrap.appendChild(toolbar());
-            wrap.appendChild(h('div', { class: 'empty', style: { padding: '40px', color: 'var(--crit-700, #b91c1c)' } }, 'Не удалось загрузить: ' + (e.message || e)));
+            wrap.appendChild(h('div', { class: 'empty', style: { padding: '40px', color: 'var(--crit-700, #b91c1c)' } }, trf('Не удалось загрузить: {msg}', { msg: e.message || e })));
             return;
         }
 
@@ -134,7 +135,7 @@ export async function renderRequestsInbox(container) {
         const doctors = ((dn && dn.data) || []);
         const docName = {}; for (const d of doctors) docName[d.id] = d.full_name || '—';
         const rooms = ((rm && rm.data) || []);
-        const roomName = {}; for (const r of rooms) roomName[r.id] = r.name || ('Каб. ' + (r.code || ''));
+        const roomName = {}; for (const r of rooms) roomName[r.id] = r.name || trf('Каб. {code}', { code: r.code || '' });
         render(visits, { pm, ph, sm, bm, doctors, docName, cbm, rooms, roomName }, counts);
     }
 
@@ -225,7 +226,7 @@ export async function renderRequestsInbox(container) {
             v.doctor_id ? item('Stethoscope', lk.docName[v.doctor_id] || 'врач') : null,
             branch ? item('MapPin', branch) : null,
             hasSlot ? item('Clock', fmtDateTime(v.visit_date)) : null,
-            v.created_at ? h('span', { style: { color: 'var(--ink-400, #7a8892)' } }, 'создана ' + fmtRel(v.created_at)) : null);
+            v.created_at ? h('span', { style: { color: 'var(--ink-400, #7a8892)' } }, trf('создана {when}', { when: fmtRel(v.created_at) })) : null);
     }
 
     function activeCard(v, lk) {
@@ -238,7 +239,7 @@ export async function renderRequestsInbox(container) {
             ...lk.doctors.map(d => h('option', { value: d.id, ...(d.id === v.doctor_id ? { selected: true } : {}) }, (d.full_name || '—') + (d.specialty ? ` · ${d.specialty}` : ''))));
         const roomSel = h('select', { style: { ...inp, minWidth: '190px' } },
             h('option', { value: '' }, '— без кабинета —'),
-            ...((lk.rooms || []).map(r => h('option', { value: r.id, ...(r.id === v.room_id ? { selected: true } : {}) }, (lk.roomName && lk.roomName[r.id]) || r.name || ('Каб. ' + (r.code || ''))))));
+            ...((lk.rooms || []).map(r => h('option', { value: r.id, ...(r.id === v.room_id ? { selected: true } : {}) }, (lk.roomName && lk.roomName[r.id]) || r.name || trf('Каб. {code}', { code: r.code || '' })))));
         const dtInput = h('input', { type: 'datetime-local', style: inp, value: hasSlot ? toLocalInput(v.visit_date) : '' });
         const confirmBtn = h('button', { class: 'btn btn-primary btn-sm' }, Icon('Check', { size: 15 }), ' Подтвердить');
         const rejectBtn = h('button', { class: 'btn btn-outline btn-sm', style: { color: 'var(--crit-700, #b91c1c)', borderColor: 'var(--crit-200, #fecaca)' } }, 'Отклонить');
@@ -255,14 +256,14 @@ export async function renderRequestsInbox(container) {
             confirmBtn.disabled = rejectBtn.disabled = true;
             const upd = { status: 'scheduled', doctor_id: docId, room_id: roomId, visit_date: d.toISOString() };
             const { error } = await supabase.from('visits').update(upd).eq('id', v.id);
-            if (error) { toast('Не удалось подтвердить: ' + error.message, 'fail'); confirmBtn.disabled = rejectBtn.disabled = false; return; }
+            if (error) { toast(trf('Не удалось подтвердить: {msg}', { msg: error.message }), 'fail'); confirmBtn.disabled = rejectBtn.disabled = false; return; }
             toast(docId ? 'Запись подтверждена и назначена врачу' : 'Запись подтверждена (кабинет)');
             load();
         };
         rejectBtn.onclick = () => openRejectDialog(patient, async (reason) => {
             confirmBtn.disabled = rejectBtn.disabled = true;
             const { error } = await supabase.from('visits').update({ status: 'cancelled', cancel_reason: reason, cancelled_by: currentUserId(), cancelled_at: new Date().toISOString() }).eq('id', v.id);
-            if (error) { toast('Не удалось отклонить: ' + error.message, 'fail'); confirmBtn.disabled = rejectBtn.disabled = false; return false; }
+            if (error) { toast(trf('Не удалось отклонить: {msg}', { msg: error.message }), 'fail'); confirmBtn.disabled = rejectBtn.disabled = false; return false; }
             toast('Заявка отклонена');
             load();
             return true;
@@ -293,7 +294,7 @@ export async function renderRequestsInbox(container) {
             metaLine(v, lk),
             (v.status === 'cancelled' && (v.cancel_reason || who)) ? h('div', { style: { marginTop: '9px', padding: '9px 12px', background: 'var(--crit-50, #fef2f2)', border: '1px solid var(--crit-200, #fecaca)', borderRadius: '10px', fontSize: '12.5px', color: 'var(--crit-700, #b91c1c)' } },
                 h('span', { style: { fontWeight: 600 } }, 'Причина отказа: '), (v.cancel_reason || '—'),
-                (who || v.cancelled_at) ? h('div', { style: { color: 'var(--ink-400, #7a8892)', marginTop: '3px', fontSize: '11.5px' } }, [who ? ('отклонил: ' + who) : '', v.cancelled_at ? ('· ' + fmtRel(v.cancelled_at)) : ''].filter(Boolean).join(' ')) : null) : null));
+                (who || v.cancelled_at) ? h('div', { style: { color: 'var(--ink-400, #7a8892)', marginTop: '3px', fontSize: '11.5px' } }, [who ? trf('отклонил: {who}', { who }) : '', v.cancelled_at ? ('· ' + fmtRel(v.cancelled_at)) : ''].filter(Boolean).join(' ')) : null) : null));
     }
 
     await load();

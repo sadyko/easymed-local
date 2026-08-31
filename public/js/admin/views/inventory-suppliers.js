@@ -3,6 +3,7 @@
 // (registry: delete roles []).
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, checkField } from '../ui.js';
+import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { fetchGuard } from './inventory-shared.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
 
@@ -55,10 +56,10 @@ async function fetchAndPaint() {
         if (token !== fetchGuard.token) return;
         if (error) throw error;
         paintRows(data || []);
-        refs.totalEl.textContent = `Поставщиков: ${(data || []).length}`;
+        refs.totalEl.textContent = trf('Поставщиков: {n}', { n: (data || []).length });
     } catch (e) {
         if (token !== fetchGuard.token) return;
-        toast('Не удалось загрузить поставщиков: ' + ((e && e.message) || e), 'fail');
+        toast(trf('Не удалось загрузить поставщиков: {msg}', { msg: (e && e.message) || e }), 'fail');
         paintRows([]);
     }
 }

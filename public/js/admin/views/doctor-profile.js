@@ -4,6 +4,7 @@
 // via update_my_doctor_profile RPC, plus user_specialties + doctor_conditions.
 // Surfaces on Symptex via the partner API. DOCTOR_PROFILE_V1
 import { h, clear, toast, Icon } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { supabase } from '../../supabase.js';
 import { gw } from '../gateway.js';
 import { uploadFile } from '../storage.js';
@@ -228,7 +229,7 @@ export async function renderDoctorProfile(container, doctorId) {
             } catch (e) { console.warn('[doctor-profile] medcore sync:', e.message); }
             toast('Профиль сохранён', 'info');
         } catch (e) {
-            toast('Не удалось сохранить: ' + (e.message || e), 'fail');
+            toast(trf('Не удалось сохранить: {msg}', { msg: e.message || e }), 'fail');
         }
         saveBtn.disabled = false;
         saveBtn.textContent = '';
@@ -295,7 +296,7 @@ export async function renderDoctorProfile(container, doctorId) {
             const last = mk(part.last, 'Фамилия'), first = mk(part.first, 'Имя'), middle = mk(part.middle, 'Отчество');
             nameInputs[lng] = { last, first, middle };
             return h('div', { class: 'docprof-tricell' },
-                h('label', { class: 'docprof-trilabel' }, 'ФИО · ' + LANG_LBL[lng]),
+                h('label', { class: 'docprof-trilabel' }, trf('ФИО · {lang}', { lang: LANG_LBL[lng] })),
                 h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' } }, last, first, middle));
         });
         return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '12px' } }, ...groups);
@@ -396,7 +397,7 @@ export async function renderDoctorProfile(container, doctorId) {
                 if (!f) return;
                 st.photoFile = f; st.photoUrl = '';
                 setPhoto(URL.createObjectURL(f));
-                toast('Фото загружено: ' + (f.name || 'файл'));
+                toast(trf('Фото загружено: {name}', { name: f.name || tr('файл') }));
             },
         });
         const acts = h('div', { class: 'cam-acts' },
@@ -427,7 +428,7 @@ export async function renderDoctorProfile(container, doctorId) {
             const { data } = supabase.storage.from(PHOTO_BUCKET).getPublicUrl(path);
             return (data && data.publicUrl) || '';
         } catch (e) {
-            toast('Не удалось загрузить фото: ' + (e && e.message || e), 'fail');
+            toast(trf('Не удалось загрузить фото: {msg}', { msg: (e && e.message) || e }), 'fail');
             return '';   // save profile anyway, photo unchanged
         }
     }
@@ -457,7 +458,7 @@ export async function renderDoctorProfile(container, doctorId) {
         } else {
             navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 960 } }, audio: false })
                 .then((s) => { stream = s; video.srcObject = s; snapBtn.removeAttribute('disabled'); })
-                .catch((e) => showErr('Нет доступа к камере: ' + (e && e.message || e) + '. Разрешите доступ в браузере.'));
+                .catch((e) => showErr(trf('Нет доступа к камере: {msg}. Разрешите доступ в браузере.', { msg: (e && e.message) || e })));
         }
 
         overlay.appendChild(h('div', { class: 'modal-card', style: { width: '520px', maxWidth: 'calc(100vw - 32px)' } },
@@ -529,7 +530,7 @@ export async function renderDoctorProfile(container, doctorId) {
 
         const key = (k, s) => k + ':' + s;
         function updateStatus() {
-            condStatus.textContent = st.selectedConds.size + ' выбрано · ' + st.catalog.length + ' в каталоге';
+            condStatus.textContent = trf('{sel} выбрано · {total} в каталоге', { sel: st.selectedConds.size, total: st.catalog.length });
         }
         function render() {
             clear(listWrap);

@@ -6,6 +6,7 @@
 // list). Rewards are calculated in the «Рефералы» report (reports-export.js).
 import { supabase } from '../../supabase.js';
 import { h, PageHead, toast, clear } from '../ui.js';
+import { trf } from '../i18n.js';   // I18N_COVERAGE_V1
 
 export async function renderReferralSettings(container) {
     clear(container);
@@ -54,7 +55,7 @@ export async function renderReferralSettings(container) {
         btn.disabled = true;
         try {
             const { error } = await supabase.from('companies').update({ referral_reward_rates: obj }).eq('id', cid);
-            if (error) toast('Не сохранилось: ' + error.message, 'fail');
+            if (error) toast(trf('Не сохранилось: {msg}', { msg: error.message }), 'fail');
             else toast('Общие ставки сохранены', 'ok');
         } finally { if (btn.isConnected) btn.disabled = false; }
     } }, 'Сохранить');

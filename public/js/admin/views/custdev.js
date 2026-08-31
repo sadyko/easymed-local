@@ -9,6 +9,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { canEdit } from '../permissions.js';
 
 const STATUSES = [
@@ -166,7 +167,7 @@ export async function openCustDev() {
 
         const { data, error } = await supabase.rpc('custdev_list', b);
         if (error) {
-            toast('Не удалось загрузить карточки: ' + (error.message || ''), 'fail');
+            toast(trf('Не удалось загрузить карточки: {msg}', { msg: error.message || '' }), 'fail');
             state.rows = [];
         } else {
             state.rows = Array.isArray(data) ? data : [];
@@ -405,7 +406,7 @@ function openRate(r, onSaved, editable) {
             h('div', null,
                 h('h2', { style: { margin: 0, fontSize: '15px' } }, r.patient_name || 'Карточка'),
                 h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '1px' } },
-                    'Визит ' + fmtD(r.visit_date) + ' · ' + (r.phone || 'телефон не указан'))),
+                    trf('Визит {date} · {phone}', { date: fmtD(r.visit_date), phone: r.phone || tr('телефон не указан') }))),
             h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { class: 'modal-body' },
             groupEl('registrar', 'Регистратура', r.registrar_name),
@@ -442,7 +443,7 @@ async function openReport(b) {
     if (error || !rep) {
         clear(body);
         body.appendChild(h('p', { class: 'muted' },
-            'Не удалось построить отчёт: ' + ((error && error.message) || 'пустой ответ')));
+            trf('Не удалось построить отчёт: {msg}', { msg: (error && error.message) || tr('пустой ответ') })));
         return;
     }
 
@@ -478,7 +479,7 @@ async function openReport(b) {
 
     clear(body);
     body.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '10px' } },
-        'Период: ' + fmtD(b.from) + ' — ' + fmtD(b.to)));
+        trf('Период: {from} — {to}', { from: fmtD(b.from), to: fmtD(b.to) })));
     body.appendChild(h('div', { class: 'row', style: { gap: '10px', flexWrap: 'wrap' } },
         kpi('Карточек', rep.total),
         kpi('Обзвонено', rep.called, rep.calledPct + ' %'),
@@ -516,6 +517,6 @@ async function toExcel(rows) {
         XLSX.utils.book_append_sheet(wb, ws, 'Cust Dev');
         XLSX.writeFile(wb, 'custdev.xlsx');
     } catch (e) {
-        toast('Не удалось сформировать Excel: ' + ((e && e.message) || e), 'fail');
+        toast(trf('Не удалось сформировать Excel: {msg}', { msg: (e && e.message) || e }), 'fail');
     }
 }

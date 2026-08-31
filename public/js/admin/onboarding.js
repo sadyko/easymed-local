@@ -11,6 +11,7 @@
 // defineEmpty, restart, setHelpMode.
 
 import { iconHtml } from './icons.js';
+import { trf } from './i18n.js';   // I18N_COVERAGE_V1 — «Шаг N из M» собирается вокруг чисел
 
 // ---------------------------------------------------------------------------
 // Progress store (localStorage, per user)
@@ -200,7 +201,7 @@ function startTour(steps, onDone) {
         renderSpotlight(rect, false);
         const last = i === steps.length - 1;
         const pop = el('div', { class: 'em-onb-pop' },
-            el('div', { class: 'em-onb-step' }, `Шаг ${i + 1} из ${steps.length}`),
+            el('div', { class: 'em-onb-step' }, trf('Шаг {i} из {n}', { i: i + 1, n: steps.length })),
             el('h4', null, step.title || ''),
             el('p', { html: step.body || '' }),
             el('div', { class: 'em-onb-foot' },

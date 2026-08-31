@@ -13,6 +13,7 @@
 // allow-list in server/db/schema-registry.js enforces this.
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, fmtDateTime } from '../ui.js';
+import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import {
     fetchGuard, loadingCard, comingSoon, fmtPrice, fmtQty, fmtSignedQty,
     movementTag, fetchMovements, isLowStock,
@@ -181,7 +182,7 @@ async function renderDashboardTab(container) {
     clear(container);
 
     if (productsError) {
-        toast('Не удалось загрузить дашборд: ' + (productsError.message || productsError), 'fail');
+        toast(trf('Не удалось загрузить дашборд: {msg}', { msg: productsError.message || productsError }), 'fail');
         container.appendChild(h('div', { class: 'empty' }, 'Не удалось загрузить данные.'));
         return;
     }
@@ -252,7 +253,7 @@ function recentReceiptsCard(rows, productsById) {
             )),
             h('tbody', null, ...rows.map(m => {
                 const fallback = productsById.get(m.product_id);
-                const name = (m.products && m.products.name) || (fallback && fallback.name) || `Товар #${m.product_id}`;
+                const name = (m.products && m.products.name) || (fallback && fallback.name) || trf('Товар #{id}', { id: m.product_id });
                 const unit = (fallback && fallback.base_unit) || (m.products && (m.products.base_unit || m.products.unit)) || '';
                 return h('tr', null,
                     h('td', null, fmtDateTime(m.created_at)),
@@ -280,7 +281,7 @@ async function renderAuditTab(container) {
     clear(container);
 
     if (error) {
-        toast('Не удалось загрузить журнал: ' + (error.message || error), 'fail');
+        toast(trf('Не удалось загрузить журнал: {msg}', { msg: error.message || error }), 'fail');
         container.appendChild(h('div', { class: 'card' }, h('div', { class: 'empty' }, 'Не удалось загрузить движения.')));
         return;
     }

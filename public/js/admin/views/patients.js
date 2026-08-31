@@ -3,6 +3,7 @@
 // filter / sort / page / keystroke fires a fresh PostgREST query.
 
 import { h, Icon, Avatar, Tag, StatusTag, PageHead, toast, clear } from '../ui.js';
+import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { registrarHeader } from './registrar-header.js?v=roleaud1';
 import { loadPatientsPaged, findAllDuplicatePatientIds, mergePatients } from '../data.js';   // DUP_MERGE_V1
 import { scopedDoctorId } from '../permissions.js';
@@ -436,7 +437,7 @@ function openMergeModal() {
                         h('span', { class: 'num', style: { color: 'var(--ink-400)', marginRight: '6px' } }, p.mrn || '—'),
                         nameOf(p)),
                     h('div', { class: 'muted', style: { fontSize: '11.5px' } },
-                        `${p.dob || '—'} · ${p.phone || '—'} · визитов: ${p.visitCount || 0}`)),
+                        (p.dob || '—') + ' · ' + (p.phone || '—') + ' · ' + trf('визитов: {n}', { n: p.visitCount || 0 }))),
                 on ? h('span', { class: 'tag tag-ok', style: { marginLeft: 'auto', fontSize: '10px' } }, 'Оставить') : null,
             ));
         }
@@ -450,7 +451,7 @@ function openMergeModal() {
         mergeBtn.disabled = true; mergeBtn.textContent = 'Объединение…';
         try {
             await mergePatients({ primaryId, duplicateIds });
-            toast(`Объединено: ${duplicateIds.length} дубликат(ов) → одна карта.`, 'ok');
+            toast(trf('Объединено: {n} дубликат(ов) → одна карта.', { n: duplicateIds.length }), 'ok');
             selectedDup.clear();
             close();
             // rescan duplicates, then repaint
@@ -458,7 +459,7 @@ function openMergeModal() {
             paintDuplicateCount();
             await fetchAndPaint();
         } catch (e) {
-            toast('Не удалось объединить: ' + (e && e.message || e), 'fail');
+            toast(trf('Не удалось объединить: {msg}', { msg: (e && e.message) || e }), 'fail');
             mergeBtn.disabled = false; mergeBtn.textContent = '';
             mergeBtn.append(Icon('Check', { size: 14 }), ' Объединить');
         }
@@ -526,7 +527,7 @@ function patientRow(p) {
         // 2 — Дата рожд. / возраст
         h('td', null,
             h('div', { class: 'num', style: { fontSize: '12.5px' } }, p.dob || '—'),
-            h('div', { class: 'muted', style: { fontSize: '11.5px' } }, p.age != null ? `${p.age} лет` : '—'),
+            h('div', { class: 'muted', style: { fontSize: '11.5px' } }, p.age != null ? trf('{n} лет', { n: p.age }) : '—'),
         ),
         // 3 — Пол
         h('td', { style: { textAlign: 'center' } },

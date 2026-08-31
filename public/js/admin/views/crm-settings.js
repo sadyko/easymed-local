@@ -39,7 +39,7 @@ import { h, Icon, PageHead, Tag, clear, toast, checkField } from '../ui.js';
 // h() runs tr() over its text children, but anything that changes text AFTER
 // the render through .textContent bypasses h() — those places call tr()
 // explicitly (same trick as telephony-settings.js).
-import { tr } from '../i18n.js';
+import { tr, trf } from '../i18n.js';
 import {
     COLORS, tagKind, LABEL_MAX,
     UNDELETABLE_STAGE_KEYS, UNDELETABLE_SOURCE_KEYS,
@@ -116,7 +116,7 @@ export async function renderCrmSettings(container) {
                 'Настройки CRM недоступны: сервер ещё не обновлён до этой версии.'));
         } else {
             body.appendChild(h('div', { class: 'empty', style: { padding: '30px' } },
-                'Не удалось загрузить настройки: ' + e.message));
+                trf('Не удалось загрузить настройки: {msg}', { msg: e.message })));
         }
         return;
     }

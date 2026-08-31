@@ -11,6 +11,7 @@
 // but it is STAMPED at the 00:00 boundary so the day's reports stay correct.
 import { supabase } from '../../supabase.js';
 import { h, Icon, PageHead, toast, clear } from '../ui.js';
+import { trf } from '../i18n.js';   // I18N_COVERAGE_V1
 
 const MODES = [
     {
@@ -116,7 +117,7 @@ export async function renderCashierSettings(container) {
         saveBtn.disabled = true;
         try {
             const { error } = await supabase.from('companies').update({ cashier_shift_mode: mode }).eq('id', cid);
-            if (error) { toast('Не сохранилось: ' + error.message, 'fail'); return; }
+            if (error) { toast(trf('Не сохранилось: {msg}', { msg: error.message }), 'fail'); return; }
             toast(mode === 'auto'
                 ? 'Режим смен: автоматически в 00:00.'
                 : 'Режим смен: вручную.', 'ok');

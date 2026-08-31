@@ -10,6 +10,7 @@
 // confined to its own private sandbox.
 import { supabase } from '../supabase.js';
 import { h, Icon, toast } from './ui.js';
+import { tr, trf } from './i18n.js';   // I18N_COVERAGE_V1
 
 const MAX_DOC_BYTES = 10 * 1024 * 1024;
 const ACCEPT = '.pdf,.png,.jpg,.jpeg,.webp,.heic,application/pdf,image/*';
@@ -133,7 +134,7 @@ export function openUploadModal(clinic) {   // ONBOARDING_CHECKLIST_V1 — reuse
             toast('Документы отправлены на проверку — обычно в течение 24 часов.', 'ok');
         } catch (e) {
             console.error('[verify-banner] upload', e);
-            errEl.textContent = 'Не удалось загрузить: ' + (e.message || 'ошибка');
+            errEl.textContent = trf('Не удалось загрузить: {msg}', { msg: e.message || tr('ошибка') });
             submit.disabled = false; submit.textContent = 'Отправить на проверку';
         }
     });

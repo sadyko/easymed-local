@@ -23,6 +23,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast } from '../ui.js';
+import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { currentClinicId } from '../tenant-tables.js';
 import { gw } from '../gateway.js';   // ITEM_UNIT_V1 — persist a corrected catalog unit
 
@@ -214,7 +215,7 @@ export function openItemPickerModal({
                 ),
                 h('div', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
                     h('div', { class: 'num', style: { fontSize: '13px', fontWeight: 600, color: 'var(--ink-900)' } }, Number(it.price || 0).toLocaleString('ru-RU') + ' UZS'),
-                    h('div', { style: { fontSize: '11px', color: lowStock ? 'var(--crit-700)' : 'var(--ink-500)' } }, 'Остаток: ' + onLabel),
+                    h('div', { style: { fontSize: '11px', color: lowStock ? 'var(--crit-700)' : 'var(--ink-500)' } }, trf('Остаток: {n}', { n: onLabel })),
                 ),
                 inCart
                     ? h('span', { style: { minWidth: '22px', height: '22px', borderRadius: '999px', background: 'var(--primary-500)', color: 'white', font: '700 11px/22px inherit', textAlign: 'center', flexShrink: 0, padding: '0 6px' } }, '×' + Number(inCart.qty || 0))
@@ -273,7 +274,7 @@ export function openItemPickerModal({
     function updateSummary() {
         const valid = validLines();
         if (valid.length) {
-            summary.textContent = `Позиций: ${valid.length} · Итого: ${cartTotal().toLocaleString('ru-RU')} UZS`;
+            summary.textContent = trf('Позиций: {n} · Итого: {total} UZS', { n: valid.length, total: cartTotal().toLocaleString('ru-RU') });
             confirmBtn.removeAttribute('disabled');
         } else {
             summary.textContent = state.lines.length ? 'Укажите количество больше 0' : 'Выберите товары';

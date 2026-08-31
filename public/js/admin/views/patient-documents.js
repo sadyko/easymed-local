@@ -28,6 +28,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, StatusTag, fmtDateTime, field } from '../ui.js';
+import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 // LAB_BLANK_ONE_TEMPLATE_V1 — печатаем шаблоном из «Настройки → Документы»,
 // тем же, что лаборатория, карта пациента и Telegram-бот.
 import { printableSheet } from './doc-settings.js?v=q3company1';
@@ -767,7 +768,7 @@ async function loadFeed({ reset = false } = {}) {
     paintFeedFoot();
     paintTypeRow();   // DOCS_TYPE_TABS_V1 — счётчики у кнопок типов обновляются вместе с лентой
     if (refs.feedCount) refs.feedCount.textContent = feed.total
-        ? `показано ${feed.rows.length} из ${feed.total}` : '';
+        ? trf('показано {shown} из {total}', { shown: feed.rows.length, total: feed.total }) : '';
     if (!feed.rows.length) {
         refs.feedList.appendChild(h('div', { class: 'empty', style: { padding: '34px', textAlign: 'center' } },
             h('div', { style: { fontWeight: '600' } }, 'За этот период документов нет'),
@@ -783,7 +784,7 @@ function paintFeedFoot() {
     const btn = h('button', {
         class: 'btn btn-outline', type: 'button', style: { width: '100%' },
         onclick: () => { btn.disabled = true; loadFeed(); },
-    }, `Показать ещё ${Math.min(FEED_PAGE, left)}`);
+    }, trf('Показать ещё {n}', { n: Math.min(FEED_PAGE, left) }));
     refs.feedFoot.appendChild(btn);
 }
 
@@ -874,7 +875,7 @@ async function printVisitFromFeed(r, btn) {
         }
         await printLabReport(visit, results, brand, patient);
     } catch (e) {
-        toast('Не удалось напечатать: ' + ((e && e.message) || e), 'fail');
+        toast(trf('Не удалось напечатать: {msg}', { msg: (e && e.message) || e }), 'fail');
     } finally {
         if (btn) { btn.style.pointerEvents = ''; btn.style.opacity = ''; }
     }

@@ -18,7 +18,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, checkField } from '../ui.js';
-import { tr } from '../i18n.js';
+import { tr, trf } from '../i18n.js';
 import { importExportButtons } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1
 import { ratesOf } from './doctor-pool.js?v=dp1';   // SVC_PERFORMERS_V1 — тот же разбор service_rates, что и в мастере визита
 
@@ -462,17 +462,15 @@ function openServiceModal(svc, onSaved) {
             if (!chk.deletable) {
                 const where = chk.blocking.map(b => `${b.label}: ${b.count}`).join(', ');
                 const ok = window.confirm(
-                    `Услуга «${chk.name}» уже используется (${where}).\n\n` +
-                    'Удалить её нельзя — прошлые визиты и счёта ссылаются на неё по названию.\n\n' +
-                    'Отключить её вместо удаления? Она исчезнет из списков выбора, а история останется целой.');
+                    trf('Услуга «{name}» уже используется ({where}).\n\nУдалить её нельзя — прошлые визиты и счёта ссылаются на неё по названию.\n\nОтключить её вместо удаления? Она исчезнет из списков выбора, а история останется целой.', { name: chk.name, where }));
                 if (ok) await deactivate();
                 return;
             }
 
-            if (!window.confirm(`Удалить услугу «${chk.name}» навсегда?\n\nОна нигде не использована, поэтому удаляется без следа.`)) return;
+            if (!window.confirm(trf('Удалить услугу «{name}» навсегда?\n\nОна нигде не использована, поэтому удаляется без следа.', { name: chk.name }))) return;
             const { error: delErr } = await supabase.rpc('delete_service', { p_service_id: svc.id });
             if (delErr) throw delErr;
-            toast(`Услуга «${chk.name}» удалена`, 'ok');
+            toast(trf('Услуга «{name}» удалена', { name: chk.name }), 'ok');
             close();
             if (typeof onSaved === 'function') await onSaved();
         } catch (e) {

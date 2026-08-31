@@ -22,7 +22,7 @@
 // only, as always: every RPC re-checks admin + password server-side.
 
 import { h, Icon, clear, toast, field } from '../ui.js';
-import { tr } from '../i18n.js';
+import { tr, trf } from '../i18n.js';
 import { supabase } from '../../supabase.js';
 import {
     normalizeBackupList, backupKind, backupKindLabel, backupDateLabel, formatBytes, freeSpaceNote,
@@ -167,7 +167,7 @@ function openRestoreModal(row) {
             // Dynamic Russian sentence, concatenation convention (see
             // updates-logic.js formatScheduled) — the date is the whole point
             // of this line, so it is spliced in, not looked up.
-            h('p', { class: 'sys-modal-lead' }, `Будет восстановлена копия от ${when}.`),
+            h('p', { class: 'sys-modal-lead' }, trf('Будет восстановлена копия от {when}.', { when })),
             h('p', { class: 'sys-modal-warn' },
                 Icon('Warning', { size: 14 }), ' ',
                 'Все данные, введённые после этой даты, исчезнут.'),

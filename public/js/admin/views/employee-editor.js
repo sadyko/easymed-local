@@ -14,7 +14,7 @@ import { hashPassword } from '../auth.js?v=admdoc3';
 import { gw } from '../gateway.js';
 import { isBranchRestricted, getAvailableBranchIds, soleBranchId } from '../branch-context.js?v=bc3';   // EMP_BRANCH_SCOPE_V1; soleBranchId: SOLE_BRANCH_V1
 import { canEdit } from '../permissions.js';   // ROLE_DELEGATION_V1
-import { getLang } from '../i18n.js';   // EMP_STAFF_TYPE_V1
+import { getLang, tr, trf } from '../i18n.js';   // EMP_STAFF_TYPE_V1 + I18N_COVERAGE_V1
 import { phoneInput } from '../phone-input.js?v=ph1';
 
 // ROLE_ADMIN_ONLY_V1 — assigning a user's role is the clinic owner's job alone
@@ -445,7 +445,7 @@ function paintModal({ row, emp, lookups, onSaved, readOnly }) {
                 toast('Employee saved, but login could NOT be enabled: ' + authError + '. They will not be able to sign in until this is fixed.', 'fail');
             } else if (syncWarnings.length) {
                 // H1 — branches / specialties / consultation prices failed to persist; don't claim success.
-                toast('Сохранено, но не удалось записать: ' + syncWarnings.join(', ') + '. Откройте сотрудника и сохраните ещё раз.', 'fail');
+                toast(trf('Сохранено, но не удалось записать: {what}. Откройте сотрудника и сохраните ещё раз.', { what: syncWarnings.join(', ') }), 'fail');
             } else if (!row?.id && !(emp.username || '').trim()) {
                 // NEW_EMP_PASSWORD_V1 — saved without a login at all: legal
                 // (e.g. staff who never use the system), but say it loudly.
@@ -757,7 +757,7 @@ const SECTION_RENDERERS = {
                 (emp.role || '').toLowerCase() === 'admin'
                     ? fld('Role', h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '8px 0' } }, 'Администратор клиники — полный доступ (роль не назначается).'))
                     : !_canAssignRole()
-                        ? fld('Role', h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '8px 0' } }, (optLabel(lookups.roles, emp.role_id) || 'No role') + ' · нет прав назначать роль'))
+                        ? fld('Role', h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '8px 0' } }, trf('{role} · нет прав назначать роль', { role: optLabel(lookups.roles, emp.role_id) || 'No role' })))
                         : fld('Role', fkSelect(emp.role_id, lookups.roles, v => markDirty({ role_id: v }), { style: { maxWidth: '320px' } })),
                 // MULTI_ROLE_V1 — additional access roles stack their permissions on top
                 // of the main Role (union). Owner/admin only; not for the clinic-admin
@@ -904,7 +904,7 @@ const SECTION_RENDERERS = {
                     const _exceeds = d.on && _cw && _cw.enabled !== false && (_hm(d.start) < _hm(_cw.from) || _hm(d.end) > _hm(_cw.to));
                     const _warn = (_cClosed || _exceeds)
                         ? h('span', { style: { fontSize: '11px', color: 'var(--crit-700)', whiteSpace: 'nowrap', fontWeight: '500' } },
-                            _cClosed ? '⚠ Клиника закрыта в этот день' : '⚠ Часы клиники: ' + _cw.from + '–' + _cw.to)
+                            _cClosed ? '⚠ Клиника закрыта в этот день' : trf('⚠ Часы клиники: {from}–{to}', { from: _cw.from, to: _cw.to }))
                         : null;
                     return h('div', { class: 'day-row' + (d.on ? ' on' : '') },
                     cbx(d.on, () => upd(i, { on: !d.on }), {}),
@@ -1354,7 +1354,7 @@ export async function saveEmployee(emp, row) {
             if (res.error.code === '42501' || res.error.code === 'PGRST116'
                 || /row-level security|JSON object requested|multiple \(or no\) rows/i.test(res.error.message || '')) {
                 console.error('[emp-editor] users write rejected:', res.error);   // STAFF_PERM_DETAIL_V1
-                throw new Error('Недостаточно прав для управления сотрудниками. В редакторе ролей включите для этой роли доступ «Сотрудники» (редактирование), либо войдите как администратор клиники. [' + (res.error.code || '?') + ': ' + (res.error.message || '') + ']');
+                throw new Error(trf('Недостаточно прав для управления сотрудниками. В редакторе ролей включите для этой роли доступ «Сотрудники» (редактирование), либо войдите как администратор клиники. [{code}: {msg}]', { code: res.error.code || '?', msg: res.error.message || '' }));
             }
             throw res.error;
         }
@@ -1382,7 +1382,7 @@ export async function saveEmployee(emp, row) {
                       + ' auth=' + ((_au && _au.data && _au.data.user && _au.data.user.id) ? _au.data.user.id.slice(0, 8) : 'NONE')
                       + ' see=' + ((_see && _see.count != null) ? _see.count : '?') + ']';
             } catch (e) { _diag = ' [diag failed: ' + (e && e.message || e) + ']'; }
-            throw new Error('Изменения не записаны (0 строк) — у вашей сессии нет прав на этого сотрудника.' + _diag);
+            throw new Error(tr('Изменения не записаны (0 строк) — у вашей сессии нет прав на этого сотрудника.') + _diag);
         }
     } else {
         const res = await writeRow((body) => supabase.from('users').insert(body).select('id').single());

@@ -7,6 +7,7 @@
 // клиенту трогать on_hand напрямую.
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, fmtDateTime, field, Tag } from '../ui.js';
+import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { fmtPrice, fmtQty, fmtSignedQty, loadingCard, selStyle, numStyle } from './inventory-shared.js';
 
 // Локальный анти-гонковый токен (в старом файле был общий на модуль).
@@ -296,10 +297,10 @@ async function fetchReqsAndPaint() {
                 h('td', { class: 'num' }, String(nLines)),
                 h('td', null, fmtDateTime(rq.created_at))));
         }
-        reqRefs.totalEl.textContent = 'Заявок: ' + rows.length;
+        reqRefs.totalEl.textContent = trf('Заявок: {n}', { n: rows.length });
     } catch (e) {
         if (token !== lastFetchToken) return;
-        toast('Не удалось загрузить заявки: ' + ((e && e.message) || e), 'fail');
+        toast(trf('Не удалось загрузить заявки: {msg}', { msg: (e && e.message) || e }), 'fail');
         clear(reqRefs.tbody); reqRefs.emptyEl.style.display = '';
     }
 }
@@ -388,7 +389,7 @@ async function openReqModal(onSaved) {
         if (!deptSel.value) { toast('Выберите отдел — кто запрашивает.', 'fail'); return; }
         if (!lines.length) { toast('Добавьте хотя бы один товар.', 'fail'); return; }
         for (const ln of lines) {
-            if (!(Number(ln.qty) > 0)) { toast('Кол-во должно быть больше нуля: ' + ln.product.name, 'fail'); return; }
+            if (!(Number(ln.qty) > 0)) { toast(trf('Кол-во должно быть больше нуля: {name}', { name: ln.product.name }), 'fail'); return; }
         }
         saveBtn.disabled = true; const prev = saveBtn.textContent; saveBtn.textContent = 'Создаём…';
         try {

@@ -14,6 +14,8 @@
 // Alphabetical: the list is long enough that scan order matters more than any
 // notion of importance.
 
+import { trf } from './i18n.js';   // I18N_COVERAGE_V1 — суффикс опции собирается вокруг значения, перевод до сборки
+
 export const SPECIALTIES = [
     'Аллерголог-иммунолог',
     'Анестезиолог-реаниматолог',
@@ -67,6 +69,6 @@ export const SPECIALTIES = [
 export function specialtyOptions(current) {
     const opts = [['', '— не указана —'], ...SPECIALTIES.map((s) => [s, s])];
     const cur = String(current || '').trim();
-    if (cur && !SPECIALTIES.includes(cur)) opts.splice(1, 0, [cur, cur + '  (не из списка)']);
+    if (cur && !SPECIALTIES.includes(cur)) opts.splice(1, 0, [cur, trf('{name}  (не из списка)', { name: cur })]);
     return opts;
 }
