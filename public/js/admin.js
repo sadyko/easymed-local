@@ -49,7 +49,7 @@ import { renderPlaceholder }  from './admin/views/placeholder.js';
 import { renderSectionCrud }  from './admin/views/section-crud.js?v=svceditor1';
 import { renderCashier, renderCashierHead } from './admin/views/cashier-desk.js?v=cash6';   // CASHIER_DESIGN_V2 + CASHIER_ROW_FIT_V1 — patient cell width, RU status, compact date
 import { renderReport }       from './admin/views/report.js';
-import { renderLaboratory }   from './admin/views/laboratory.js?v=labstats3';   // LAB_STATS_V1 — third mode «Статистика» (usage counters, no money) on the shared LAB_HEAD_ONE_V1 head
+import { renderLaboratory }   from './admin/views/laboratory.js?v=labstats4';   // LAB_STATS_V1 — third mode «Статистика» (usage counters, no money) on the shared LAB_HEAD_ONE_V1 head
 import { renderProcedures }   from './admin/views/procedures.js?v=unassigned1';
 import { renderQueue }       from './admin/views/queue.js?v=q6';   // QUEUE_BOARD_V1
 import { renderCrm }          from './admin/views/crm.js?v=aug18d';   // CRM_V10 — поиск пациента: телефон (и короткая форма), дата рождения; CRM_SERVICE_FILTER_V1 — рейка категорий (тег поднят, иначе браузер оставит старую копию)
@@ -67,6 +67,7 @@ import { renderApiSettings } from './admin/views/api-settings.js?v=api4';   // C
 import { renderDoctorPay } from './admin/views/doctor-pay.js?v=dp1';   // DOCTOR_PAY_BULK_V1
 import { renderReferralSettings } from './admin/views/referral-settings.js?v=rr1';   // REFERRAL_REWARDS_V1
 import { renderCashierSettings } from './admin/views/cashier-settings.js?v=shiftmode1';   // CASHIER_SHIFT_MODE_V1
+import { renderRoomsSetup } from './admin/views/rooms-setup.js?v=rooms1';   // ROOMS_SETUP_V1 — кабинеты и палаты одним разделом
 import { renderTelegramSettings } from './admin/views/telegram-settings.js?v=tg3';   // TELEGRAM_BOT_V1
 import { renderTelephonySettings } from './admin/views/telephony-settings.js?v=tel1';   // TELEPHONY_V1 — Binotel call-center integration
 import { renderCrmSettings } from './admin/views/crm-settings.js?v=crmcfg2';   // CRM_CONFIG_V1 — configurable kanban stages/sources/call routing
@@ -978,6 +979,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'doctor-pay': return void await renderDoctorPay(viewRoot, ctx);   // DOCTOR_PAY_BULK_V1
             case 'referral-settings': return void await renderReferralSettings(viewRoot);   // REFERRAL_REWARDS_V1
             case 'cashier-settings':  return void await renderCashierSettings(viewRoot);    // CASHIER_SHIFT_MODE_V1
+            case 'rooms-setup':       return void await renderRoomsSetup(viewRoot);       // ROOMS_SETUP_V1
             case 'settings':      return void await renderSettingsHub(viewRoot, ctx);   // SETTINGS_HUB_V1
             case 'employees':     return void await renderEmployees(viewRoot, ctx);   // EMPLOYEE_EDITOR_V1 — Сотрудники
             case 'documents-settings': return void await renderDocumentsSettings(viewRoot, ctx);   // DOCUMENTS_SETTINGS_V1
@@ -1415,10 +1417,11 @@ function renderSettingsIndex(container) {
     const doctorPayExtras = isRouteAllowed('doctor-pay') ? [doctorPayRow()] : [];   // DOCTOR_PAY_BULK_V1
     const referralExtras = isRouteAllowed('referral-settings') ? [referralRewardRow()] : [];   // REFERRAL_REWARDS_V1
     const cashierSetExtras = isRouteAllowed('cashier-settings') ? [cashierSettingsRow()] : [];   // CASHIER_SHIFT_MODE_V1
+    const roomsSetupExtras = isRouteAllowed('rooms-setup') ? [roomsSetupRow()] : [];   // ROOMS_SETUP_V1
     // SETTINGS_ORDER_V1 — explicit card order; any unlisted group is appended after.
     const _cardByName = new Map();
     if (top.length || generalExtras.length) _cardByName.set('General', groupCard('General', top, generalExtras));
-    for (const [name, items] of buckets) _cardByName.set(name, groupCard(name, items, name === 'Service settings' ? consultExtras : name === 'Referrals' ? referralExtras : name === 'User & staff management' ? cashierSetExtras : []));   // REFERRAL_REWARDS_V1 + CASHIER_SHIFT_MODE_V1
+    for (const [name, items] of buckets) _cardByName.set(name, groupCard(name, items, name === 'Service settings' ? consultExtras : name === 'Referrals' ? referralExtras : name === 'User & staff management' ? cashierSetExtras : name === 'Rooms & floors' ? roomsSetupExtras : []));   // REFERRAL_REWARDS_V1 + CASHIER_SHIFT_MODE_V1
     // LAB_ROLE_SETTINGS_V2 — the non-table extras (consultation types,
     // referrals, doctor pay) attach to their group card above ONLY when a
     // table-backed section already created it. A role granted just the extra
@@ -1429,6 +1432,7 @@ function renderSettingsIndex(container) {
         _cardByName.set('Service settings', groupCard('Service settings', [], consultExtras));
     if (referralExtras.length && !_cardByName.has('Referrals'))
         _cardByName.set('Referrals', groupCard('Referrals', [], referralExtras));
+    if (roomsSetupExtras.length && !_cardByName.has('Rooms & floors')) _cardByName.set('Rooms & floors', groupCard('Rooms & floors', [], roomsSetupExtras));   // ROOMS_SETUP_V1
     if (doctorPayExtras.length && !_cardByName.has('Doctor salary')) _cardByName.set('Doctor salary', groupCard('Doctor salary', [], doctorPayExtras));   // DOCTOR_PAY_BULK_V1
     const _groupOrder = ['Branch management', 'User & staff management', 'Service settings', 'General', 'Rooms & floors', 'Inpatient', 'Payer management', 'Referrals', 'Doctor salary'];
     for (const _n of _groupOrder) { if (_cardByName.has(_n)) { cardEls.push(_cardByName.get(_n)); _cardByName.delete(_n); } }
@@ -1534,6 +1538,15 @@ function renderSettingsIndex(container) {
             label:    'Консультации врачей',
             desc:     'Типы консультаций (RU/UZ/EN) и цены по каждому врачу',
             onClick:  () => navigate('consultation-types'),
+        });
+    }
+    function roomsSetupRow() {   // ROOMS_SETUP_V1
+        return settingsRow({
+            key:      'rooms-setup',
+            iconName: 'Bed',
+            label:    'Помещения — кабинеты и палаты',
+            desc:     'Один экран: кабинет или палата, койки и цена проживания создаются одним окном',
+            onClick:  () => navigate('rooms-setup'),
         });
     }
     function cashierSettingsRow() {   // CASHIER_SHIFT_MODE_V1

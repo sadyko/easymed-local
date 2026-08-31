@@ -316,7 +316,7 @@ function mount() {
         // exports exactly that period, i.e. what is on screen.
         stats:  [refs.periodWrap,
                  h('button', { class: 'btn btn-outline btn-sm', type: 'button',
-                              title: 'Выгрузить статистику за выбранный период в Excel',
+                              title: tr('Выгрузить статистику за выбранный период в Excel'),
                               onclick: () => exportStatsExcel() },
                    Icon('Download', { size: 13 }), ' Excel')],
         queue:  [
@@ -403,9 +403,9 @@ function paintPeriodChips() {
 // right-aligned, tabular-figure columns, so the digits align vertically.
 function statsHeadRow() {
     return h('div', { class: 'lab-stats-row lab-stats-row--head' },
-        h('span', { class: 'lab-stats-name' }, 'Название'),
-        h('span', { class: 'lab-stats-num' }, 'Заказано'),
-        h('span', { class: 'lab-stats-num' }, 'Выполнено'),
+        h('span', { class: 'lab-stats-name' }, tr('Название')),
+        h('span', { class: 'lab-stats-num' }, tr('Заказано')),
+        h('span', { class: 'lab-stats-num' }, tr('Выполнено')),
     );
 }
 
@@ -434,12 +434,11 @@ function statsBlock(title, rows) {
 // SheetJS is served from our own /js/vendor (this app must run with no internet
 // at all), matching inventory-sklad.js / cashier-desk.js. Two sheets, one per
 // block, plus the period in the file name so saved files stay tellable apart.
-const STATS_PERIOD_LABEL = { today: 'сегодня', '7d': '7 дней', '30d': '30 дней', all: 'всё время' };
 
 async function exportStatsExcel() {
     const d = state.statsData || { panels: [], services: [] };
     if (!(d.panels || []).length && !(d.services || []).length) {
-        toast('Нечего выгружать: за выбранный период данных нет.', 'fail');
+        toast(tr('Нечего выгружать: за выбранный период данных нет.'), 'fail');
         return;
     }
     try {

@@ -368,6 +368,14 @@ export function isRouteAllowed(view) {
     if (view === 'doctor-pay') return _effective.has('doctor-pay') || _effective.has('settings:doctor_pay') || _effective.has('settings');   // DOCTOR_PAY_BULK_V1
     if (view === 'referral-settings') return _effective.has('referral-settings') || _effective.has('settings');   // REFERRAL_REWARDS_V1
     if (view === 'cashier-settings') return _effective.has('cashier-settings') || _effective.has('settings:cashiers') || _effective.has('settings');   // CASHIER_SHIFT_MODE_V1
+    // ROOMS_SETUP_V1 — «Помещения» пишет в те же таблицы, что разделы Rooms /
+    // Wards / Beds, поэтому и права те же: у кого есть любой из них (или
+    // Settings целиком), у того есть и объединённый экран. Отдельного нового
+    // грантa не заводим — иначе у существующих ролей раздел просто исчез бы.
+    if (view === 'rooms-setup') return _effective.has('rooms-setup')
+        || _effective.has('settings:rooms') || _effective.has('settings:wards')
+        || _effective.has('settings:beds_settings') || _effective.has('settings:floors')
+        || _effective.has('settings');
     // COMPANY_ROUTE_GRANT_V1 — «Компания» (Настройки → Основное) is the clinic
     // letterhead editor for doc_settings. It was the ONE settings sub-page with
     // no implication line here, so it fell through to `_effective.has(view)` —
