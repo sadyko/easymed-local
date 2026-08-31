@@ -272,8 +272,17 @@ export function applyCatalogue(db, payload, { dryRun = false } = {}) {
     for (const remote of rows) {
       if (!remote || typeof remote !== 'object' || remote.id === undefined || remote.id === null) continue;
 
+      // ВЕРСИОННЫЙ ПЕРЕКОС — нормальное состояние: обновления приезжают
+      // помашинно, и главный филиал может неделями отдавать выгрузку БЕЗ
+      // колонки, которую эта база уже получила миграцией (первой так поехала
+      // default_doctor_percent из 081). Отсутствующий ключ значит «экспортёр
+      // старой версии», а не NULL: NULL валил бы INSERT об NOT NULL и затирал
+      // бы местную настройку на UPDATE. Поэтому дальше участвуют только
+      // колонки, которые в строке ДЕЙСТВИТЕЛЬНО есть — ровно тот же приём,
+      // которым ветка doc_settings выше всегда и жила (`col in payload…`).
+      const present = firstPass.filter((col) => col in remote);
       const values = {};
-      for (const col of firstPass) {
+      for (const col of present) {
         values[col] = spec.refs[col] ? resolveRef(spec.refs[col], remote[col]) : (remote[col] ?? null);
       }
 
@@ -311,17 +320,19 @@ export function applyCatalogue(db, payload, { dryRun = false } = {}) {
         if (dryRun) {
           remember(spec.name, remote.id, fakeId--);
         } else {
-          const cols = firstPass.map((c) => `"${c}"`).join(', ');
-          const qs = firstPass.map(() => '?').join(', ');
+          // Только приехавшие колонки: отсутствующие получают умолчание своей
+          // таблицы, как у любой местной вставки.
+          const cols = present.map((c) => `"${c}"`).join(', ');
+          const qs = present.map(() => '?').join(', ');
           const info = db.prepare(`INSERT INTO "${spec.name}" (${cols}) VALUES (${qs})`)
-            .run(...firstPass.map((c) => values[c]));
+            .run(...present.map((c) => values[c]));
           remember(spec.name, remote.id, Number(info.lastInsertRowid));
         }
         continue;
       }
 
       // --- обновление ------------------------------------------------------
-      const changedCols = localRow ? firstPass.filter((c) => !sameValue(values[c], localRow[c])) : firstPass;
+      const changedCols = localRow ? present.filter((c) => !sameValue(values[c], localRow[c])) : present;
       if (changedCols.length) {
         summary.updated[spec.name] = (summary.updated[spec.name] || 0) + 1;
         summary.changed += 1;
@@ -339,6 +350,9 @@ export function applyCatalogue(db, payload, { dryRun = false } = {}) {
       for (const remote of rows) {
         const localId = mapped.get(`${spec.name}:${remote.id}`);
         if (localId == null) continue;
+        // Тот же версионный перекос, что и выше: строка без этой колонки —
+        // старый экспортёр, местное значение остаётся.
+        if (!remote || !(spec.selfRef in remote)) continue;
         const want = resolveRef(spec.refs[spec.selfRef], remote[spec.selfRef]);
         const have = after.find((r) => r.id === localId)?.[spec.selfRef] ?? null;
         // В dryRun у только что «вставленных» строк локальной копии нет, и have

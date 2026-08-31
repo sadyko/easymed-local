@@ -270,3 +270,59 @@ test('мусор вместо справочника не роняет приё�
   assert.equal(dst.prepare('SELECT COUNT(*) n FROM services').get().n, before);
   assert.equal(dst.prepare('SELECT COUNT(*) n FROM branch_sync_map').get().n, 0);
 });
+
+// ---------------------------------------------------------------------------
+// РАЗНЫЕ ВЕРСИИ НА ДВУХ КОНЦАХ — нормальное состояние этого продукта:
+// обновления приезжают помашинно, и главный филиал неделями может отдавать
+// справочник БЕЗ колонок, которые принимающая база уже получила миграцией
+// (первый такой случай — default_doctor_percent из 081). Отсутствующий ключ
+// обязан читаться как «старый экспортёр — оставь местное/умолчание», а не как
+// NULL: NULL валит INSERT об NOT NULL, а UPDATE затирает местную настройку.
+// Ветка doc_settings в applyCatalogue всегда так и делала (`col in payload`);
+// эти тесты требуют того же от ветки TABLES.
+// ---------------------------------------------------------------------------
+
+// Выгрузка «как её отдал бы главный филиал до 081»: настоящий экспорт, из
+// которого КЛЮЧ УДАЛЁН (не занулён — старый код про колонку не знает вовсе).
+function preMigration081Catalogue(db) {
+  const cat = exportCatalogue(db);
+  for (const row of cat.services) delete row.default_doctor_percent;
+  return cat;
+}
+
+test('выгрузка главного филиала ДО 081 приземляется чисто; новая колонка остаётся по умолчанию', () => {
+  const cat = preMigration081Catalogue(seedMain(fresh()));
+  const dst = receiver();
+
+  // dryRun решает, снимать ли резервную копию, — он обязан сойтись с
+  // настоящим приёмом на том же payload из того же состояния.
+  const preview = dst.transaction(() => applyCatalogue(dst, cat, { dryRun: true }))();
+  const real = apply(dst, cat);
+  assert.equal(preview.changed, real.changed, 'dryRun и настоящий приём должны согласиться');
+
+  const svc = dst.prepare("SELECT default_doctor_percent FROM services WHERE code='S-CARD'").get();
+  assert.ok(svc, 'услуга обязана приехать, версия экспортёра — не причина для отказа');
+  assert.equal(svc.default_doctor_percent, 0, 'отсутствующая колонка = умолчание, не NULL');
+});
+
+test('старая выгрузка не затирает местную долю на уже сопоставленной услуге и не дрейфует', () => {
+  const main = seedMain(fresh());
+  const dst = receiver();
+  apply(dst, exportCatalogue(main));   // связаны в новом формате
+  dst.prepare("UPDATE services SET default_doctor_percent = 35 WHERE code='S-CARD'").run();
+
+  // Главный филиал ещё не обновился (или откатился): колонки в выгрузке нет,
+  // но цена изменилась — цена обязана доехать, местная доля — уцелеть.
+  main.prepare("UPDATE services SET price = 260000 WHERE code='S-CARD'").run();
+  const cat = preMigration081Catalogue(main);
+  apply(dst, cat);
+
+  const svc = dst.prepare("SELECT price, default_doctor_percent FROM services WHERE code='S-CARD'").get();
+  assert.equal(svc.price, 260000, 'обычное обновление из старой выгрузки работает');
+  assert.equal(svc.default_doctor_percent, 35, 'местная настройка не затёрта отсутствующим ключом');
+
+  // Повторный приём того же старого payload — no-op: иначе каждая синхронизация
+  // «находила» бы изменение и снимала резервную копию на пустом прогоне.
+  const again = apply(dst, cat);
+  assert.equal(again.changed, 0, 'no-op на повторе — против бесконечного дрейфа');
+});
