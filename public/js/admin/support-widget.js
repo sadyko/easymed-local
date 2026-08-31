@@ -30,6 +30,7 @@ function injectStyles() {
     if (document.getElementById('sw-styles')) return;
     const s = document.createElement('style');
     s.id = 'sw-styles';
+    // i18n-exempt-start: CSS виджета — русский встречается только в CSS-комментарии внутри строки
     s.textContent = `
 .sw-bubble {
     /* COMBINED_FAB_V1 — the single floating button (chat + Режим подсказок), bottom-LEFT. */
@@ -142,6 +143,7 @@ function injectStyles() {
 .sw-foot .sw-help { font-size: 11px; color: #97a4ad; margin-top: 6px; text-align: center; line-height: 1.35; }
 .sw-foot .sw-err  { font-size: 12px; color: #c83434; margin-top: 6px; min-height: 16px; }
 `;
+    /* i18n-exempt-end */
     document.head.appendChild(s);
 }
 
@@ -171,8 +173,8 @@ function buildMenu() {
     const m = document.createElement('div');
     m.className = 'sw-menu';
     m.innerHTML = `
-        <button type="button" class="sw-menu-item chat"><span class="ic">💬</span>Чат поддержки</button>
-        <button type="button" class="sw-menu-item help"><span class="ic">?</span><span class="lbl">Режим подсказок</span></button>
+        <button type="button" class="sw-menu-item chat"><span class="ic">💬</span>${tr('Чат поддержки')}</button>
+        <button type="button" class="sw-menu-item help"><span class="ic">?</span><span class="lbl">${tr('Режим подсказок')}</span></button>
     `;
     m.querySelector('.chat').addEventListener('click', () => { m.classList.remove('open'); open(); });
     m.querySelector('.help').addEventListener('click', () => {

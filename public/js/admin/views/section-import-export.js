@@ -17,6 +17,7 @@ import { currentClinicId } from '../tenant-tables.js';   // OPENING_STOCK_IMPORT
 // SERVICE_GROUP_ROUTING_V1 — the «Раздел» classifier. Its value maps to
 // services.type, which routes the service: lab -> #labs, procedure ->
 // #procedures, everything else -> the doctor cabinet. Accepts RU + EN aliases.
+/* i18n-exempt-start: словарь соответствий импорта (заголовки/значения Excel) — контракт файла, не текст экрана */
 const SERVICE_GROUP_LABELS = ['Консультация', 'Лаборатория', 'Процедуры', 'Диагностика', 'Хирургия'];
 const SERVICE_GROUP_MAP = {
     'консультация':'consultation','consultation':'consultation','приём':'consultation','прием':'consultation','кабинет':'consultation',
@@ -79,6 +80,7 @@ async function usersApi(path, opts = {}) {
 // Add-product modal default).
 const PROCUREMENT_UNITS = ['шт', 'уп', 'табл', 'капс', 'амп', 'фл', 'мл', 'л', 'г', 'кг', 'м', 'пара', 'компл', 'наб', 'доза'];
 
+/* i18n-exempt-end */
 function _downloadBuffer(buf, filename) {
     const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
@@ -139,6 +141,11 @@ function loadXlsx() {
 //   hint      - per-column comment baked into the sample file's header row
 // sampleRows[] - pre-filled rows in the downloadable template.
 // ---------------------------------------------------------------------------
+/* i18n-exempt-start: IMPORT_CONFIGS — контракт Excel-импорта: ключи и алиасы колонок,
+   допустимые значения и токены парсинга обязаны оставаться ровно теми словами, которые
+   пользователь пишет в файле, на любом языке интерфейса. Подсказки (hint) переведены
+   словарём и показываются через tr()/trf(); проверка покрытия для этого блока снята
+   сознательно, как для серверных REASONS. */
 const IMPORT_CONFIGS = {
     // ITEMS_IMPORT_V1 — clinic products & drugs. Writes go via the gateway.
     clinic_items: {
@@ -607,6 +614,7 @@ const IMPORT_CONFIGS = {
     },
 };
 
+/* i18n-exempt-end */
 export function hasImporter(sectionKey) {
     return !!getCfg(sectionKey);
 }
@@ -1617,8 +1625,10 @@ function bool(v, fallback) {
     if (v === '' || v == null) return fallback;
     if (typeof v === 'boolean') return v;
     const s = String(v).trim().toLowerCase();
+    // i18n-exempt-start: токены разбора булевых значений из Excel — контракт файла
     if (['true', '1', 'yes', 'y', 'да', 'истина'].includes(s)) return true;
     if (['false', '0', 'no', 'n', 'нет', 'ложь'].includes(s)) return false;
+    /* i18n-exempt-end */
     return fallback;
 }
 function statusPill(s) {

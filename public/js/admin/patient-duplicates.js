@@ -51,7 +51,7 @@ export function levenshtein(a, b) {
 export function normalizeName(s) {
     return String(s == null ? '' : s)
         .toLowerCase()
-        .replace(/ё/g, 'е')
+        .replace(/ё/g, 'е')   // i18n-exempt: константа нормализации ё→е — данные алгоритма, не текст экрана
         .replace(/[^\p{L}\p{N}]+/gu, ' ')
         .trim()
         .replace(/\s+/g, ' ');

@@ -149,7 +149,7 @@ export function freeSpaceNote(data, t = (s) => s) {
  * click, not after).
  */
 export function confirmWordOk(input) {
-  return typeof input === 'string' && input.trim() === 'УДАЛИТЬ';
+  return typeof input === 'string' && input.trim() === 'УДАЛИТЬ';   // i18n-exempt: контрольное слово сброса — сверяемая константа, намеренно одна во всех языках
 }
 
 /** DD.MM.YYYY for licence valid_until (ISO or ms); em-dash when the server has not learned to send it yet. */

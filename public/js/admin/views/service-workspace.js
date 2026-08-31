@@ -2845,6 +2845,7 @@ const DX_TYPE_RU  = { main: 'Основной', concomitant: 'Сопутству
 // Bundled ICD-10 seed (real 2026 ICD-10-CM codes, RU/EN names). Used when the
 // search box is empty or to filter offline; the picker also accepts manual
 // free-text so it never blocks the doctor.
+/* i18n-exempt-start: ICD_SEED — двуязычный (ru·en) запасной справочник МКБ-10, данные каталога как в БД */
 const ICD_SEED = [
     { code: 'K64.9', name: 'Геморрой неуточнённый · Unspecified hemorrhoids' },
     { code: 'K64.1', name: 'Геморрой второй степени · Second degree hemorrhoids' },
@@ -2859,6 +2860,7 @@ const ICD_SEED = [
     { code: 'K60.2', name: 'Анальная трещина неуточнённая · Anal fissure, unspecified' },
     { code: 'K60.3', name: 'Анальный свищ · Anal fistula' },
 ];
+/* i18n-exempt-end */
 
 function paintDiagnoses(ctx) {
     const list = ctx.container?.querySelector('[data-dx-list]');
@@ -4465,7 +4467,7 @@ async function _diagAddImages(ctx, fileList) {
     if (!files.length) return;
     const MAX = 12;
     for (const f of files) {
-        if ((wsState.diagImages || []).length >= MAX) { toast('Максимум ' + MAX + ' изображений.', 'warn'); break; }
+        if ((wsState.diagImages || []).length >= MAX) { toast(trf('Максимум {n} изображений.', { n: MAX }), 'warn'); break; }
         try { wsState.diagImages.push(await _compressImage(f, 1400, 0.82)); }
         catch (e) { console.warn('[diag image]', e); toast('Не удалось обработать изображение.', 'fail'); }
     }
@@ -4498,7 +4500,7 @@ function _wireBlankEditing(ctx, frame) {
         '.sec:focus-within{border-color:var(--accent,#1a7f77);box-shadow:0 0 0 2px rgba(22,120,115,.14);}' +
         '.sec-h{margin-bottom:6px;}' +
         '[data-field]{min-height:3.2em;padding:2px 0;transition:background .12s;outline:none;}' +
-        '[data-field]:empty::before{content:"Нажмите, чтобы заполнить…";color:#9fb3b0;font-style:italic;}' +
+        '[data-field]:empty::before{content:"' + tr('Нажмите, чтобы заполнить…') + '";color:#9fb3b0;font-style:italic;}' +
         '.bk-pagesep{position:relative;display:block;}' +
         '.bk-pageedge{position:absolute;left:-60px;right:-60px;height:26px;background:#dde5e3;box-shadow:inset 0 7px 7px -7px rgba(0,0,0,.3), inset 0 -7px 7px -7px rgba(0,0,0,.3);text-align:center;font:700 8.5px/26px Arial,sans-serif;letter-spacing:.14em;color:#7b908c;}' +
         '@media print{.bk-pagesep{display:none !important;}}' +
@@ -4592,7 +4594,7 @@ function _wireBlankEditing(ctx, frame) {
         fbar.style.cssText = 'position:absolute;display:none;z-index:99999;background:#111827;border-radius:8px;padding:3px;box-shadow:0 6px 18px rgba(0,0,0,.28);white-space:nowrap;';
         const fbBtn = (cmd, label, val) => `<button type="button" data-cmd="${cmd}"${val ? ` data-val="${val}"` : ''} style="border:0;background:transparent;color:#fff;font:600 13px/1 Arial,sans-serif;cursor:pointer;padding:5px 8px;border-radius:5px;">${label}</button>`;
         fbar.innerHTML =
-            fbBtn('bold', '<b>Ж</b>') + fbBtn('italic', '<i>К</i>') + fbBtn('underline', '<u>Ч</u>') + fbBtn('strikeThrough', '<s>З</s>') +
+            fbBtn('bold', tr('<b>Ж</b>')) + fbBtn('italic', tr('<i>К</i>')) + fbBtn('underline', tr('<u>Ч</u>')) + fbBtn('strikeThrough', tr('<s>З</s>')) +
             fbBtn('foreColor', '<span style="color:#4dabf7">A</span>', '#1971c2') +
             fbBtn('hiliteColor', '<span style="background:#fff3bf;color:#111;padding:0 3px;border-radius:2px">A</span>', '#fff3bf') +
             fbBtn('fontSize:5', 'A+', '') + fbBtn('fontSize:2', 'A-', '') +
