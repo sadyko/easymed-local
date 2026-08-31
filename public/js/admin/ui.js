@@ -236,7 +236,14 @@ export function toast(msg, kind = 'info') {
         el.setAttribute('aria-atomic', 'true');
         document.body.appendChild(el);
     }
-    el.textContent = msg;
+    // TOAST_I18N_V1 (2026-08-31) — translate here, centrally, exactly like
+    // h() does for its text children. The audit found 520 call sites passing
+    // bare Russian to toast(); routing every one through tr() by hand is the
+    // per-site mistake this codebase keeps re-making. An already-translated
+    // or assembled message passes through unchanged (tr() returns unknown
+    // strings as-is), so double translation is as safe here as in h() —
+    // guarded by the updates-i18n "translating twice" test.
+    el.textContent = tr(msg);
     el.dataset.kind = kind;
     el.classList.remove('hidden');
     clearTimeout(el._t);

@@ -296,6 +296,25 @@ export function tr(str) {
     return str;
 }
 
+// I18N_COVERAGE_V1 (2026-08-31) — translate FIRST, substitute SECOND.
+//
+// tr() matches WHOLE strings, so a sentence assembled around a value —
+// `'Создан ' + date` — can never resolve, whatever the dictionary holds.
+// The cure (proven on the Updates screen, commit 08ab775) is to keep the
+// complete Russian sentence WITH ITS {holes} as the dictionary key, translate
+// it, and only then put the values back. trf() is that pattern as one call,
+// for views; pure logic modules keep returning {template, params} and let the
+// view call trf (or tr + updates-logic's fill, which this mirrors — same
+// split/join semantics, same "an unknown hole stays visible" rule).
+export function trf(template, params) {
+    let out = String(tr(template) ?? '');
+    if (!params) return out;
+    for (const [key, value] of Object.entries(params)) {
+        out = out.split('{' + key + '}').join(String(value));
+    }
+    return out;
+}
+
 export function getLang() { return currentLang; }
 
 export function setLang(code) {
