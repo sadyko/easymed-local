@@ -23,7 +23,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast } from '../ui.js';
-import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { currentClinicId } from '../tenant-tables.js';
 import { gw } from '../gateway.js';   // ITEM_UNIT_V1 — persist a corrected catalog unit
 
@@ -277,7 +277,7 @@ export function openItemPickerModal({
             summary.textContent = trf('Позиций: {n} · Итого: {total} UZS', { n: valid.length, total: cartTotal().toLocaleString('ru-RU') });
             confirmBtn.removeAttribute('disabled');
         } else {
-            summary.textContent = state.lines.length ? 'Укажите количество больше 0' : 'Выберите товары';
+            summary.textContent = state.lines.length ? tr('Укажите количество больше 0') : tr('Выберите товары');
             confirmBtn.setAttribute('disabled', '');
         }
     }
@@ -286,7 +286,7 @@ export function openItemPickerModal({
         const lines = validLines().map(l => ({ item: l.item, qty: Number(l.qty), unit: l.unit || l.item.unit || '' }));
         if (!lines.length) { toast('Добавьте хотя бы один товар с количеством больше 0.', 'fail'); return; }
         confirmBtn.setAttribute('disabled', '');
-        confirmBtn.textContent = 'Выдача…';
+        confirmBtn.textContent = tr('Выдача…');
         try {
             if (onConfirm) await onConfirm(lines);
             close();

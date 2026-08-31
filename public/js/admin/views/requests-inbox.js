@@ -56,10 +56,10 @@ function openRejectDialog(patient, onConfirm) {
     const submit = h('button', { class: 'btn btn-primary', style: { background: '#dc2626', borderColor: '#dc2626' } }, 'Отклонить заявку');
     submit.onclick = async () => {
         const reason = ta.value.trim();
-        if (!reason) { errEl.textContent = 'Укажите причину — это поможет администратору.'; ta.focus(); return; }
-        submit.disabled = true; submit.textContent = 'Отклоняем…';
+        if (!reason) { errEl.textContent = tr('Укажите причину — это поможет администратору.'); ta.focus(); return; }
+        submit.disabled = true; submit.textContent = tr('Отклоняем…');
         const ok = await onConfirm(reason);
-        if (ok) close(); else { submit.disabled = false; submit.textContent = 'Отклонить заявку'; }
+        if (ok) close(); else { submit.disabled = false; submit.textContent = tr('Отклонить заявку'); }
     };
     ta.onkeydown = (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) submit.click(); };
     overlay.appendChild(h('div', { class: 'modal-card', style: { width: '440px', maxWidth: 'calc(100vw - 32px)' } },

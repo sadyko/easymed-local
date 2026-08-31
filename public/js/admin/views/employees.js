@@ -333,7 +333,7 @@ function openEditor(user, root) {
     function reqFilled(f) { if (f === 'password') return isEdit || !!String(emp.password).trim(); return String(emp[f] != null ? emp[f] : '').trim() !== ''; }
     function sectionComplete(sec) { const req = sec.key === 'access' ? (isEdit ? sec.required : sec.required.concat('password')) : sec.required; return req.every(reqFilled); }
     function completionPct() { const all = railSections().flatMap(s => (s.key === 'access' && !isEdit) ? s.required.concat('password') : s.required); if (!all.length) return 100; return Math.round(all.filter(reqFilled).length / all.length * 100); }
-    function touch() { dirty = true; dirtyEl.textContent = '● Есть несохранённые изменения'; }
+    function touch() { dirty = true; dirtyEl.textContent = tr('● Есть несохранённые изменения'); }
     function markDirty(patch) { Object.assign(emp, patch); touch(); renderRail(); renderHead(); }
 
     function renderHead() {
@@ -533,7 +533,7 @@ function openEditor(user, root) {
         };
         if (String(emp.password).trim()) payload.password = emp.password;
 
-        saveBtn.disabled = true; const prev = saveBtn.textContent; saveBtn.textContent = 'Сохранение…';
+        saveBtn.disabled = true; const prev = saveBtn.textContent; saveBtn.textContent = tr('Сохранение…');
         try {
             if (isEdit) await api('/' + user.id, { method: 'PATCH', body: JSON.stringify(payload) });
             else await api('', { method: 'POST', body: JSON.stringify({ ...payload, username: emp.username.trim() }) });
@@ -648,7 +648,7 @@ function ratesSection(emp, arrayKey, opts, touch) {
     const bulkSeg = segmented(opts.allowFix, () => bulkFix, (fix) => {
         bulkFix = fix;
         bulkInp.max = fix ? '' : '100';
-        bulkUnit.textContent = fix ? 'сум' : '%';
+        bulkUnit.textContent = fix ? tr('сум') : tr('%');
     });
     const applyBulk = () => {
         const raw = String(bulkInp.value).trim();

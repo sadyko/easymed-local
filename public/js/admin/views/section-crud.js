@@ -1281,7 +1281,7 @@ function searchableSelect({ name, value, options, placeholder = 'Search…', onC
             const createRow = h('div', { class: 'combo-opt', style: { fontWeight: '600', color: 'var(--primary-700)' } }, trf('\uFF0B Создать «{name}»', { name: _typed }));
             createRow.addEventListener('mousedown', async (e) => {
                 e.preventDefault();
-                createRow.textContent = 'Создание…';
+                createRow.textContent = tr('Создание…');
                 try {
                     const made = await onCreate(_typed);
                     if (made && made.id != null) {

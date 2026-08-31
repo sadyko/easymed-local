@@ -7,7 +7,7 @@
 // клиенту трогать on_hand напрямую.
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, fmtDateTime, field, Tag } from '../ui.js';
-import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { fmtPrice, fmtQty, fmtSignedQty, loadingCard, selStyle, numStyle } from './inventory-shared.js';
 
 // Локальный анти-гонковый токен (в старом файле был общий на модуль).
@@ -391,7 +391,7 @@ async function openReqModal(onSaved) {
         for (const ln of lines) {
             if (!(Number(ln.qty) > 0)) { toast(trf('Кол-во должно быть больше нуля: {name}', { name: ln.product.name }), 'fail'); return; }
         }
-        saveBtn.disabled = true; const prev = saveBtn.textContent; saveBtn.textContent = 'Создаём…';
+        saveBtn.disabled = true; const prev = saveBtn.textContent; saveBtn.textContent = tr('Создаём…');
         try {
             const uid = (window.easymed && window.easymed.state && window.easymed.state.user && window.easymed.state.user.id) || null;
             const payload = { req_number: 'REQ-' + Date.now().toString(36).toUpperCase(), status: 'submitted',

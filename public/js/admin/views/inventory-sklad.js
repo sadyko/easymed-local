@@ -288,7 +288,7 @@ function openImportModal(onDone) {
         if (!parsedRows) return;
         importBtn.disabled = true;
         const prev = importBtn.textContent;
-        importBtn.textContent = 'Импортируем…';
+        importBtn.textContent = tr('Импортируем…');
         try {
             // Numbers go to the server untouched: importProductsExcel is the single
             // validator (it accepts a comma decimal and spacer whitespace, and rejects
@@ -427,7 +427,7 @@ function openIssueModal(onDone) {
 
         saveBtn.disabled = true;
         const prev = saveBtn.textContent;
-        saveBtn.textContent = 'Выдаём…';
+        saveBtn.textContent = tr('Выдаём…');
         try {
             const note = noteInp.value.trim() || undefined;
             const { error } = await supabase.rpc('issue_stock_lines', { lines, recipient, note });

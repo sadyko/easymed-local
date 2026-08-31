@@ -112,7 +112,7 @@ export function openUploadModal(clinic) {   // ONBOARDING_CHECKLIST_V1 — reuse
 
     submit.addEventListener('click', async () => {
         if (!(picked.license && picked.certificate)) return;
-        submit.disabled = true; submit.textContent = 'Загрузка…'; errEl.textContent = '';
+        submit.disabled = true; submit.textContent = tr('Загрузка…'); errEl.textContent = '';
         try {
             const me = (typeof window !== 'undefined' && window.easymed && window.easymed.state && window.easymed.state.user) || {};
             const docs = [{ kind: 'license', file: picked.license }, { kind: 'certificate', file: picked.certificate }];
@@ -135,7 +135,7 @@ export function openUploadModal(clinic) {   // ONBOARDING_CHECKLIST_V1 — reuse
         } catch (e) {
             console.error('[verify-banner] upload', e);
             errEl.textContent = trf('Не удалось загрузить: {msg}', { msg: e.message || tr('ошибка') });
-            submit.disabled = false; submit.textContent = 'Отправить на проверку';
+            submit.disabled = false; submit.textContent = tr('Отправить на проверку');
         }
     });
 }

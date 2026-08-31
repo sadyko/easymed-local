@@ -1008,7 +1008,7 @@ async function openResultsModal(r, patient) {
         const filled = lines.filter(L => String(L.input.value || '').trim() !== '');
         if (!filled.length) { toast('Внесите хотя бы один показатель.', 'fail'); return; }
         saveBtn.disabled = true;
-        saveBtn.textContent = 'Сохраняем…';
+        saveBtn.textContent = tr('Сохраняем…');
         try {
             const rows = filled.map(L => {
                 const raw = String(L.input.value).trim();
@@ -1035,7 +1035,7 @@ async function openResultsModal(r, patient) {
         } catch (e) {
             toast(trf('Не удалось сохранить: {msg}', { msg: (e && e.message) || e }), 'fail');
             saveBtn.disabled = false;
-            saveBtn.textContent = 'Сохранить результаты';
+            saveBtn.textContent = tr('Сохранить результаты');
         }
     });
 }
@@ -1362,7 +1362,7 @@ function verifyDialog(r, patient, results) {
 
     okBtn.addEventListener('click', async () => {
         okBtn.disabled = true;
-        okBtn.textContent = 'Подтверждаем…';
+        okBtn.textContent = tr('Подтверждаем…');
         try {
             const u = currentUser();
             const stamp = nowIso();
@@ -1381,7 +1381,7 @@ function verifyDialog(r, patient, results) {
         } catch (e) {
             toast(trf('Не удалось подтвердить: {msg}', { msg: (e && e.message) || e }), 'fail');
             okBtn.disabled = false;
-            okBtn.textContent = 'Подтвердить и выдать';
+            okBtn.textContent = tr('Подтвердить и выдать');
         }
     });
 }

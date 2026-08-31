@@ -993,7 +993,7 @@ function modal(title, icon, bodyEls, submitLabel, onSubmit, opts = {}) {
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
     const submitBtn = h('button', { class: 'btn btn-primary', type: 'button' }, submitLabel);
     submitBtn.addEventListener('click', async () => {
-        submitBtn.disabled = true; const prev = submitBtn.textContent; submitBtn.textContent = 'Выполняем…';
+        submitBtn.disabled = true; const prev = submitBtn.textContent; submitBtn.textContent = tr('Выполняем…');
         let ok = false;
         try { ok = await onSubmit(); } catch (e) { toast((e && e.message) || 'Failed.', 'fail'); }
         if (ok) { close(); return; }
@@ -1110,7 +1110,7 @@ function accommodationBox(adm, est, onChanged) {
                 ? h('span', { class: 'muted', style: { fontSize: '11px' } }, 'выставлено')
                 : h('button', { class: 'btn btn-ghost btn-sm', type: 'button', style: { color: 'var(--crit-600)' },
                     onclick: async () => {
-                        if (!confirm('Убрать проживание из счёта? За койку тогда денег не возьмут.')) return;
+                        if (!confirm(tr('Убрать проживание из счёта? За койку тогда денег не возьмут.'))) return;
                         const { error } = await supabase.rpc('unbill_accommodation', { admission_id: adm.id });
                         if (error) { toast(error.message || 'Не удалось убрать.', 'fail'); return; }
                         toast('Проживание убрано из счёта.', 'info');

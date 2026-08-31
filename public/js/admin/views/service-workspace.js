@@ -1396,7 +1396,7 @@ async function openRevisitModal(ctx) {
             bookBtn.removeAttribute('disabled');
         } else {
             footSel.className = 'rv-foot-sel muted';
-            footSel.textContent = 'Слот не выбран';
+            footSel.textContent = tr('Слот не выбран');
             bookBtn.setAttribute('disabled', '');
         }
     }
@@ -2419,7 +2419,7 @@ function openPrescriptionDialog(ctx, editIndex) {
                         if (!entries.length) { toast('Укажите название препарата.', 'fail'); return; }
                         payload.prescriptions[editIndex] = entries[0];
                     } else {
-                        if (!entries.length && payload.prescriptions.length && !confirm('Удалить все препараты из рецепта?')) return;
+                        if (!entries.length && payload.prescriptions.length && !confirm(tr('Удалить все препараты из рецепта?'))) return;
                         payload.prescriptions = entries;   // RX_MANAGE_V1 — the dialog is the full list
                     }
                     if (!await writePayload(ctx, payload)) return;
@@ -2553,7 +2553,7 @@ function paintRecommendations(ctx) {
 }
 
 async function removeWorkspaceRec(ctx, id) {
-    if (!confirm('Удалить эту рекомендацию?')) return;
+    if (!confirm(tr('Удалить эту рекомендацию?'))) return;
     // Snapshot the row before flipping its status so the log shows what
     // was cancelled, not just a bare id.
     const rec = (wsState.recommendations || []).find(r => r.id === id);
@@ -2995,7 +2995,7 @@ function openDiagnosisModal(ctx) {
             // BROWSE_ICD_V1 — the FULL МКБ-10 catalogue (14 000+ codes) lives in the
             // icd10 table; browse its start instead of the 12-code starter seed so
             // it's obvious the whole base is searchable.
-            countEl.textContent = 'Загрузка…';
+            countEl.textContent = tr('Загрузка…');
             try {
                 const { data, error, count } = await supabase.from('icd10')
                     .select('code,name', { count: 'exact' }).order('code').limit(50);
@@ -3011,7 +3011,7 @@ function openDiagnosisModal(ctx) {
             }
             return;
         }
-        countEl.textContent = 'Поиск…';
+        countEl.textContent = tr('Поиск…');
         let list = [];
         try {
             const term = query.replace(/[,()%*]/g, ' ').trim();
@@ -3040,7 +3040,7 @@ function openDiagnosisModal(ctx) {
                     runSearch('');
                 } }, Icon('Plus', { size: 12 }), ' ', trf('Добавить вручную: «{q}»', { q: query })),
             ));
-            countEl.textContent = 'Найдено: 0';
+            countEl.textContent = tr('Найдено: 0');
             return;
         }
         list.forEach(it => resultsEl.appendChild(rowFor(it)));
@@ -3616,7 +3616,7 @@ async function handleDeleteEntry(ctx, originalIdx) {
         return;
     }
     const label = entry.kind === 'referral' ? 'referral' : 'draft';
-    if (!confirm('Удалить эту запись?')) return;
+    if (!confirm(tr('Удалить эту запись?'))) return;
     payload.history.splice(originalIdx, 1);
     if (!await writePayload(ctx, payload)) return;
     paintHistoryList(ctx);
@@ -4406,7 +4406,7 @@ function renderBlank(ctx) {
         };
     }
     const html = renderDesignedVariant(type, (s.variant && s.variant[type]) || 'classic', s, data);
-    if (!html) { wrap.textContent = 'Шаблон недоступен.'; return; }
+    if (!html) { wrap.textContent = tr('Шаблон недоступен.'); return; }
     let frame = wrap.querySelector('iframe');
     if (!frame) {
         frame = h('iframe', { style: { width: '100%', border: '0', display: 'block', minHeight: '900px', background: 'white', borderRadius: '8px', boxShadow: '0 4px 18px rgba(0,0,0,.08)' } });
@@ -4429,7 +4429,7 @@ function _wireBlankPreview(ctx, frame) {
     doc.head.appendChild(st);
     const note = doc.createElement('div');
     note.className = 'bk-preview-note';
-    note.textContent = 'Предпросмотр шаблона клиники. Документ этого типа формируется в своём модуле (касса, лаборатория) — поля приёма редактируются в типе «Заключение приёма».';
+    note.textContent = tr('Предпросмотр шаблона клиники. Документ этого типа формируется в своём модуле (касса, лаборатория) — поля приёма редактируются в типе «Заключение приёма».');
     doc.body.insertBefore(note, doc.body.firstChild);
     const fit = () => { try { _paginateBlank(doc, null); frame.style.height = Math.max(600, doc.documentElement.scrollHeight + 24) + 'px'; } catch (e) {} };
     fit(); setTimeout(fit, 250);
@@ -4549,7 +4549,7 @@ function _wireBlankEditing(ctx, frame) {
     if (_dxField && !doc.querySelector('.bk-icd')) {
         const _icdBtn = doc.createElement('button');
         _icdBtn.type = 'button'; _icdBtn.className = 'bk-icd';
-        _icdBtn.textContent = '+ Выбрать из МКБ-10';
+        _icdBtn.textContent = tr('+ Выбрать из МКБ-10');
         _icdBtn.addEventListener('click', (e) => { e.preventDefault(); try { openDiagnosisModal(ctx); } catch (err) { console.warn('[dx icd]', err); } });
         const _host = _dxField.closest('.dx') || _dxField.parentElement;
         _host.appendChild(_icdBtn);

@@ -165,7 +165,7 @@ function statusBanner(dash, reload) {
 
 async function requestPublication(btn, reload, branchId) {
     btn.disabled = true; btn.style.opacity = '0.7';
-    const orig = btn.textContent; btn.textContent = 'Отправка…';
+    const orig = btn.textContent; btn.textContent = tr('Отправка…');
     try {
         await gw('/public-site/request-publication?branch_id=' + encodeURIComponent(branchId || ''), { method: 'POST' });
         toast('Заявка на публикацию отправлена', 'info');

@@ -3,7 +3,7 @@
 // (registry: delete roles []).
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, checkField } from '../ui.js';
-import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { fetchGuard } from './inventory-shared.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
 
@@ -103,7 +103,7 @@ export function openSupplierModal(s, onSaved) {
         if (!name) { toast('Укажите название поставщика.', 'fail'); return; }
         saveBtn.disabled = true;
         const prev = saveBtn.textContent;
-        saveBtn.textContent = 'Сохраняем…';
+        saveBtn.textContent = tr('Сохраняем…');
         try {
             const payload = {
                 name,

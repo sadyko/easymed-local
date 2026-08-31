@@ -1412,12 +1412,12 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
         async function showPolicies() {
             clear(policiesEl);
             const pid = Number(sel.value);
-            if (!pid) { policiesEl.textContent = payers.length ? '' : 'Плательщики не настроены (Настройки → Плательщики).'; return; }
+            if (!pid) { policiesEl.textContent = payers.length ? tr('') : tr('Плательщики не настроены (Настройки → Плательщики).'); return; }
             try {
                 const { data } = await supabase.from('payer_policies')
                     .select('name, coverage_percent').eq('payer_id', pid).eq('active', true).order('name');
                 const rows = data || [];
-                if (!rows.length) { policiesEl.textContent = 'У плательщика нет активных полисов.'; return; }
+                if (!rows.length) { policiesEl.textContent = tr('У плательщика нет активных полисов.'); return; }
                 policiesEl.appendChild(h('div', null,
                     h('div', { style: { fontWeight: 700, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' } }, 'Полисы'),
                     ...rows.map(r => h('div', { class: 'row', style: { padding: '5px 0', borderBottom: '1px solid var(--ink-50)', gap: '10px' } },
@@ -1436,18 +1436,18 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
         ], [saveBtn]);
         saveBtn.addEventListener('click', async () => {
             saveBtn.disabled = true;
-            saveBtn.textContent = 'Сохраняем…';
+            saveBtn.textContent = tr('Сохраняем…');
             try {
                 const { error } = await supabase.from('patients')
                     .update({ payer_id: sel.value ? Number(sel.value) : null }).eq('id', p.id).select().single();
-                if (error) { toast(error.message, 'fail'); saveBtn.disabled = false; saveBtn.textContent = 'Сохранить'; return; }
+                if (error) { toast(error.message, 'fail'); saveBtn.disabled = false; saveBtn.textContent = tr('Сохранить'); return; }
                 toast('Сохранено');
                 m.close();
                 await reload();
             } catch (e) {
                 toast(trf('Не удалось сохранить: {msg}', { msg: (e && e.message) || e }), 'fail');
                 saveBtn.disabled = false;
-                saveBtn.textContent = 'Сохранить';
+                saveBtn.textContent = tr('Сохранить');
             }
         });
     }
@@ -1600,7 +1600,7 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
             const amount = Math.round(Number(amountInp.value) || 0);
             if (!(amount > 0)) { toast('Введите сумму депозита.', 'fail'); amountInp.focus(); return; }
             saveBtn.disabled = true;
-            saveBtn.textContent = 'Отправляем…';
+            saveBtn.textContent = tr('Отправляем…');
             try {
                 const res = await rpcDeposits('create_deposit', {
                     patient_id: patient.id, amount, notes: noteInp.value.trim(),
@@ -1612,7 +1612,7 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
             } catch (e) {
                 toast(trf('Не удалось создать депозит: {msg}', { msg: (e && e.message) || e }), 'fail');
                 saveBtn.disabled = false;
-                saveBtn.textContent = 'Отправить в кассу';
+                saveBtn.textContent = tr('Отправить в кассу');
             }
         });
         amountInp.focus();
@@ -1643,21 +1643,21 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
         const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Сохранить');
         saveBtn.addEventListener('click', async () => {
             saveBtn.disabled = true;
-            saveBtn.textContent = 'Сохраняем…';
+            saveBtn.textContent = tr('Сохраняем…');
             try {
                 const { error } = await supabase.from('patients').update({
                     notes: notesInp.value.trim(),
                     allergies: allergiesInp.value.trim(),
                     chronic_conditions: chronicInp.value.trim(),
                 }).eq('id', p.id).select().single();
-                if (error) { toast(error.message, 'fail'); saveBtn.disabled = false; saveBtn.textContent = 'Сохранить'; return; }
+                if (error) { toast(error.message, 'fail'); saveBtn.disabled = false; saveBtn.textContent = tr('Сохранить'); return; }
                 toast('Сохранено');
                 close();
                 await reload();
             } catch (e) {
                 toast(trf('Не удалось сохранить: {msg}', { msg: (e && e.message) || e }), 'fail');
                 saveBtn.disabled = false;
-                saveBtn.textContent = 'Сохранить';
+                saveBtn.textContent = tr('Сохранить');
             }
         });
 
@@ -1757,7 +1757,7 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
 
             saveBtn.disabled = true;
             const prevLabel = saveBtn.textContent;
-            saveBtn.textContent = 'Сохранение…';
+            saveBtn.textContent = tr('Сохранение…');
             try {
                 const { error } = await supabase.from('patients').update(values).eq('id', p.id).select().single();
                 if (error) {

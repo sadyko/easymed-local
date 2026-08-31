@@ -342,7 +342,7 @@ function openProductModal(p, onSaved) {
 
         saveBtn.disabled = true;
         const prevLabel = saveBtn.textContent;
-        saveBtn.textContent = isEdit ? 'Сохраняем…' : 'Добавляем…';
+        saveBtn.textContent = isEdit ? tr('Сохраняем…') : tr('Добавляем…');
         try {
             const baseUnit = dispenseUnitSel.value;
             const payload = {
@@ -610,7 +610,7 @@ export function openReceiveModal(onSaved) {
             if (!(Number(ln.qty) > 0)) { toast(trf('Кол-во должно быть больше нуля: {name}', { name: ln.product.name }), 'fail'); return; }
             if (!(Number(ln.unitCost) >= 0)) { toast(trf('Укажите цену за единицу: {name}', { name: ln.product.name }), 'fail'); return; }
         }
-        saveBtn.disabled = true; saveBtn.textContent = 'Проводим…';
+        saveBtn.disabled = true; saveBtn.textContent = tr('Проводим…');
         try {
             const { error } = await supabase.rpc('receive_stock_lines', {
                 lines: st.lines.map(ln => ({
@@ -627,7 +627,7 @@ export function openReceiveModal(onSaved) {
             if (typeof onSaved === 'function') await onSaved();
         } catch (e) {
             toast((e && e.message) || 'Не удалось провести приход.', 'fail');
-            saveBtn.disabled = false; saveBtn.textContent = 'Приход';
+            saveBtn.disabled = false; saveBtn.textContent = tr('Приход');
         }
     }
 
@@ -709,7 +709,7 @@ export function openAdjustModal(p, onSaved) {
 
         saveBtn.disabled = true;
         const prevLabel = saveBtn.textContent;
-        saveBtn.textContent = 'Проводим…';
+        saveBtn.textContent = tr('Проводим…');
         try {
             const { error } = await supabase.rpc('adjust_stock', { product_id: current.id, qty, note });
             if (error) throw error;

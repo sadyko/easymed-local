@@ -9,6 +9,7 @@
 // when the panel is closed.
 
 import { supabase } from '../supabase.js';
+import { tr } from './i18n.js';   // I18N_COVERAGE_V1 — sink-обёртки: textContent/confirm не проходят через h()
 
 const STATE = {
     bubble:        null,
@@ -189,7 +190,7 @@ function syncHelpItem() {
     const ob = window.easymedOnboarding;
     const on = !!(ob && typeof ob.helpMode === 'function' && ob.helpMode());
     it.classList.toggle('on', on);
-    const lbl = it.querySelector('.lbl'); if (lbl) lbl.textContent = on ? 'Режим подсказок: вкл' : 'Режим подсказок';
+    const lbl = it.querySelector('.lbl'); if (lbl) lbl.textContent = on ? tr('Режим подсказок: вкл') : tr('Режим подсказок');
 }
 
 function buildPanel() {

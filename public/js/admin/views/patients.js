@@ -3,7 +3,7 @@
 // filter / sort / page / keystroke fires a fresh PostgREST query.
 
 import { h, Icon, Avatar, Tag, StatusTag, PageHead, toast, clear } from '../ui.js';
-import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { registrarHeader } from './registrar-header.js?v=roleaud1';
 import { loadPatientsPaged, findAllDuplicatePatientIds, mergePatients } from '../data.js';   // DUP_MERGE_V1
 import { scopedDoctorId } from '../permissions.js';
@@ -448,7 +448,7 @@ function openMergeModal() {
         Icon('Check', { size: 14 }), ' Объединить');
     mergeBtn.addEventListener('click', async () => {
         const duplicateIds = chosen.map(p => p.id).filter(id => id !== primaryId);
-        mergeBtn.disabled = true; mergeBtn.textContent = 'Объединение…';
+        mergeBtn.disabled = true; mergeBtn.textContent = tr('Объединение…');
         try {
             await mergePatients({ primaryId, duplicateIds });
             toast(trf('Объединено: {n} дубликат(ов) → одна карта.', { n: duplicateIds.length }), 'ok');

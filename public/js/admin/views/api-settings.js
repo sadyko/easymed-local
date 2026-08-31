@@ -115,7 +115,7 @@ export async function renderApiSettings(container, { onNavigate } = {}) {
                 h('input', { readonly: '', value: token, class: 'cell-mono', style: { flex: 1, height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '12.5px', fontFamily: 'inherit' },
                     onclick: (e) => e.target.select() }),
                 h('button', { class: 'btn btn-outline btn-sm', onclick: (e) => {
-                    try { navigator.clipboard.writeText(token); toast('Скопировано'); e.currentTarget.textContent = 'Скопировано'; } catch { toast('Скопируйте вручную', 'info'); } }, type: 'button' }, 'Копировать')));
+                    try { navigator.clipboard.writeText(token); toast('Скопировано'); e.currentTarget.textContent = tr('Скопировано'); } catch { toast('Скопируйте вручную', 'info'); } }, type: 'button' }, 'Копировать')));
         // mount the banner at the top of the tokens card area
         root.insertBefore(banner, tokensCard);
         setTimeout(() => { if (banner.isConnected) banner.style.opacity = '1'; }, 0);
@@ -204,7 +204,7 @@ export async function renderApiSettings(container, { onNavigate } = {}) {
         const testBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: async () => {
             const tok = testIn.value.trim();
             if (!tok) { toast('Вставьте токен.', 'fail'); return; }
-            testBtn.disabled = true; clear(testOut); testOut.textContent = 'Проверка…';
+            testBtn.disabled = true; clear(testOut); testOut.textContent = tr('Проверка…');
             try {
                 const res = await fetch('/api/v1/key/whoami', { headers: { Authorization: 'Bearer ' + tok } });
                 const data = await res.json().catch(() => null);

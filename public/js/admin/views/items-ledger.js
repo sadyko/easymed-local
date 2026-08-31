@@ -419,7 +419,7 @@ function openBatchImporter() {
         const branchId = state.branches.length === 1 ? state.branches[0].id : (branchSel ? branchSel.value : (state.branch !== 'all' ? state.branch : ''));
         if (!branchId) { toast('Выберите филиал.', 'fail'); if (branchSel) branchSel.focus(); return; }
         ev.currentTarget.disabled = true;
-        status.textContent = 'Загрузка…';
+        status.textContent = tr('Загрузка…');
         try {
             const res = await importBatch(parsed, branchId);
             const msg = trf('Загружено позиций: {n}', { n: res.received }) + (res.createdItems ? ', ' + trf('новых товаров: {n}', { n: res.createdItems }) : '');

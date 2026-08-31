@@ -187,7 +187,7 @@ function tokenCard() {
         style: { display: s.has_token ? '' : 'none' },
         onclick: async () => {
             // Удаление выключает бота — говорим об этом до, а не после.
-            if (!confirm('Удалить токен? Бот будет выключен, и пациенты перестанут получать документы.')) return;
+            if (!confirm(tr('Удалить токен? Бот будет выключен, и пациенты перестанут получать документы.'))) return;
             await run(clearBtn, async () => {
                 state.s = await rpc('telegram_token_clear');
                 toast('Токен удалён, бот выключен.', 'info');

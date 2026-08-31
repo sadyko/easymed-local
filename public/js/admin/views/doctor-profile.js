@@ -165,7 +165,7 @@ export async function renderDoctorProfile(container, doctorId) {
 
     saveBtn.onclick = async () => {
         saveBtn.disabled = true;
-        saveBtn.textContent = 'Сохранение…';
+        saveBtn.textContent = tr('Сохранение…');
         try {
             // (1) Upload pending photo → URL (or external "по ссылке", or '').
             const photoUrl = await uploadPendingPhoto();
@@ -524,7 +524,7 @@ export async function renderDoctorProfile(container, doctorId) {
         wrap.appendChild(listWrap);
 
         if (!st.catalog.length) {
-            condStatus.textContent = 'Не удалось загрузить каталог болезней.';
+            condStatus.textContent = tr('Не удалось загрузить каталог болезней.');
             return wrap;
         }
 

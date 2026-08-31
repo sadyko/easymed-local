@@ -753,7 +753,7 @@ export function openServicePickerModal({
             confirmBtn.removeAttribute('disabled');
             addAnotherBtn.setAttribute('disabled', '');
         } else {
-            summary.textContent = 'Выберите услугу, чтобы продолжить';
+            summary.textContent = tr('Выберите услугу, чтобы продолжить');
             confirmBtn.setAttribute('disabled', '');
             addAnotherBtn.setAttribute('disabled', '');
         }
@@ -1917,7 +1917,7 @@ export function openServicePickerModal({
     async function attachCartToVisit(btn) {
         if (!state.added.length || typeof onPick !== 'function') return;
         const rows = state.added.slice();
-        if (btn) { btn.disabled = true; btn.textContent = 'Добавляем…'; }
+        if (btn) { btn.disabled = true; btn.textContent = tr('Добавляем…'); }
         let added = 0, failed = 0;
         for (const a of rows) {
             try {
@@ -1928,7 +1928,7 @@ export function openServicePickerModal({
                 console.warn('[picker attach]', (a.service && a.service.name) || '?', e && e.message);
             }
         }
-        if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = 'Добавить к визиту'; }
+        if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = tr('Добавить к визиту'); }
         if (added && !failed)      toast(added === 1 ? 'Услуга добавлена к визиту.' : trf('Добавлено услуг: {n}.', { n: added }));
         else if (added && failed)  toast(trf('Добавлено {ok}, не удалось {bad} — проверьте список.', { ok: added, bad: failed }), 'warn');
         else                       { toast('Не удалось добавить услуги.', 'fail'); return; }
@@ -2049,7 +2049,7 @@ export function openServicePickerModal({
                     const balBtn = h('button', { class: 'btn btn-sm ' + (pm.useBal ? 'btn-primary' : 'btn-outline'), type: 'button',
                         onclick: () => { pm.useBal = !pm.useBal;
                             balBtn.className = 'btn btn-sm ' + (pm.useBal ? 'btn-primary' : 'btn-outline');
-                            balBtn.textContent = pm.useBal ? 'Используется' : 'Использовать';
+                            balBtn.textContent = pm.useBal ? tr('Используется') : tr('Использовать');
                             refresh(); } },
                         pm.useBal ? 'Используется' : 'Использовать');
                     box.appendChild(h('div', { class: 'row', style: { justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginTop: '8px' } },

@@ -364,7 +364,7 @@ function section(num, title, desc, body, { foldable = false, open = false } = {}
         onclick: () => {
             const hidden = body.style.display === 'none';
             body.style.display = hidden ? '' : 'none';
-            chev.textContent = hidden ? 'Свернуть ▾' : 'Развернуть ▸';
+            chev.textContent = hidden ? tr('Свернуть ▾') : tr('Развернуть ▸');
         } },
         h('span', { class: 'num-step' }, num),
         h('h4', null, title),
@@ -895,7 +895,7 @@ function telegramBlock() {
         onclick: () => {
             state.tgSent = true;
             chip.classList.add('on');
-            chip.querySelector('.tg-chip-t').textContent = 'Приглашение отправлено';
+            chip.querySelector('.tg-chip-t').textContent = tr('Приглашение отправлено');
             btn.style.display = 'none';
             const phone = (document.querySelector('input[name="phone"]')?.value) || tr('номер пациента');
             note.textContent = trf('Ссылка на бота отправлена на {phone} — подключение после перехода по ней.', { phone });

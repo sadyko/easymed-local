@@ -1834,7 +1834,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // Значение и ограничения зависят от режима: процент ограничен сотней,
         // сумма — нет (её всё равно зажимает сметой loyaltyDiscount и сервер).
         const syncDiscInput = () => {
-            discLabelEl.textContent = isAbs() ? 'Скидка (лояльность), сум' : 'Скидка (лояльность), %';
+            discLabelEl.textContent = isAbs() ? tr('Скидка (лояльность), сум') : tr('Скидка (лояльность), %');
             discInp.max = isAbs() ? '' : '100';
             discInp.step = isAbs() ? '1000' : '1';
             const v = isAbs() ? wiz.discountAbs : wiz.discountPct;

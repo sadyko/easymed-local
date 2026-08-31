@@ -8,6 +8,7 @@
 // so the caller (e.g. the calendar) can refresh.
 
 import { supabase } from '../../supabase.js';
+import { tr } from '../i18n.js';   // I18N_COVERAGE_V1 — sink-обёртки: textContent/confirm не проходят через h()
 import { currentUser } from '../data.js';
 import { h, Icon, Tag, StatusTag, statusLabel, toast, clear } from '../ui.js';
 import { canDelete } from '../permissions.js';
@@ -95,7 +96,7 @@ export function openVisitModal({ visit, patient, doctor, service, onChange, onSt
             const st = state.visit?.status || 'scheduled';
             if (!state.visit?.id) { toast('Визит ещё не сохранён.', 'fail'); return; }
             if (['completed', 'cancelled', 'no_show'].includes(st)) { toast('Визит уже закрыт.', 'fail'); return; }
-            if (!confirm('Отменить визит?')) return;
+            if (!confirm(tr('Отменить визит?'))) return;
             ev.currentTarget.disabled = true;
             try {
                 await setVisitStatus(state, 'cancelled');

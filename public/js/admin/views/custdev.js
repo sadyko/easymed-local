@@ -355,13 +355,13 @@ function openRate(r, onSaved, editable) {
     // Кнопка «Сохранить» гаснет, пока сохранять нельзя, И говорит почему.
     // Заблокированная кнопка без объяснения читается как поломка.
     function syncSave() {
-        if (!editable) { saveBtn.disabled = true; hint.textContent = 'Доступ «Только просмотр».'; return; }
+        if (!editable) { saveBtn.disabled = true; hint.textContent = tr('Доступ «Только просмотр».'); return; }
         const vals = [picked.registrar, picked.cashier, picked.doctor];
-        if (vals.some(v => !v)) { saveBtn.disabled = true; hint.textContent = 'Оцените все три пункта — или отметьте «Не применимо».'; return; }
-        if (vals.every(v => v === 'na')) { saveBtn.disabled = true; hint.textContent = 'Три «Не применимо» оценкой не являются.'; return; }
+        if (vals.some(v => !v)) { saveBtn.disabled = true; hint.textContent = tr('Оцените все три пункта — или отметьте «Не применимо».'); return; }
+        if (vals.every(v => v === 'na')) { saveBtn.disabled = true; hint.textContent = tr('Три «Не применимо» оценкой не являются.'); return; }
         if (vals.includes('bad') && !comment.value.trim()) {
             saveBtn.disabled = true;
-            hint.textContent = 'Есть «Не доволен» — напишите, что именно не устроило.';
+            hint.textContent = tr('Есть «Не доволен» — напишите, что именно не устроило.');
             return;
         }
         saveBtn.disabled = false;

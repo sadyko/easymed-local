@@ -1221,7 +1221,7 @@ async function openReportBuilder(rep, ctx) {
         if (st.generating) return;
         st.generating = true;
         generateBtn.disabled = true;
-        generateBtn.querySelector('.gen-lbl').textContent = ' Формируем…';
+        generateBtn.querySelector('.gen-lbl').textContent = tr(' Формируем…');
         paintPreviewLoading();
         try {
             const rows = await rep.build({
@@ -1243,7 +1243,7 @@ async function openReportBuilder(rep, ctx) {
         } finally {
             st.generating = false;
             generateBtn.disabled = false;
-            generateBtn.querySelector('.gen-lbl').textContent = ' Сформировать отчёт';
+            generateBtn.querySelector('.gen-lbl').textContent = tr(' Сформировать отчёт');
         }
     }
 

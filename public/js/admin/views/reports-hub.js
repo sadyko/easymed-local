@@ -380,7 +380,7 @@ async function openReportBuilder(rep) {
         if (st.generating) return;
         st.generating = true;
         generateBtn.disabled = true;
-        generateBtn.querySelector('.gen-lbl').textContent = ' Формируем…';
+        generateBtn.querySelector('.gen-lbl').textContent = tr(' Формируем…');
         paintPreviewLoading();
         try {
             // Only a PROPER subset filters; all/none selected = [] = no filter,
@@ -406,7 +406,7 @@ async function openReportBuilder(rep) {
         } finally {
             st.generating = false;
             generateBtn.disabled = false;
-            generateBtn.querySelector('.gen-lbl').textContent = ' Сформировать отчёт';
+            generateBtn.querySelector('.gen-lbl').textContent = tr(' Сформировать отчёт');
         }
     }
 
