@@ -4,6 +4,7 @@
 // via gw(); never writes medcore / talks to Symptex directly.
 
 import { h, Icon, Avatar, clear, toast } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { gw } from '../gateway.js';
 import { getSelectedBranchIds } from '../branch-context.js?v=bc3';
 
@@ -83,7 +84,7 @@ export async function renderPublicSite(container, ctx = {}) {
             ]);
         } catch (e) {
             clear(contentEl);
-            contentEl.appendChild(h('div', { class: 'error-state', style: { padding: '32px', textAlign: 'center' } }, 'Не удалось загрузить филиал: ' + (e.message || e)));
+            contentEl.appendChild(h('div', { class: 'error-state', style: { padding: '32px', textAlign: 'center' } }, trf('Не удалось загрузить филиал: {msg}', { msg: e.message || e })));
             return;
         }
         clear(contentEl);
@@ -143,23 +144,23 @@ function statusBanner(dash, reload) {
         try { date = dash.published_at ? new Date(dash.published_at).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }) : null; } catch (e) {}
         const link = dash.slug ? h('a', { href: 'https://symptex.uz/clinics/' + dash.slug, target: '_blank', rel: 'noopener', class: 'btn', style: { background: '#059669', color: '#fff', fontWeight: '600', padding: '11px 20px', fontSize: '14px', boxShadow: '0 4px 14px rgba(5,150,105,.3)' } }, Icon('Globe', { size: 16 }), ' Открыть страницу') : null;
         return shell('linear-gradient(120deg,#ecfdf5,#d1fae5)', '#6ee7b7', [chip('#059669', 'Check'),
-            txt('«' + bn + '» опубликован на Symptex', date ? ('Дата публикации: ' + date + '. Пациенты видят филиал в маркетплейсе.') : 'Пациенты видят филиал в маркетплейсе.', '#065f46', '#047857'), link]);
+            txt(trf('«{name}» опубликован на Symptex', { name: bn }), date ? trf('Дата публикации: {date}. Пациенты видят филиал в маркетплейсе.', { date }) : 'Пациенты видят филиал в маркетплейсе.', '#065f46', '#047857'), link]);
     }
     if (st === 'pending') {
         return shell('linear-gradient(120deg,#fffbeb,#fef3c7)', '#fcd34d', [chip('#d97706', 'Clock'),
-            txt('Заявка на публикацию «' + bn + '» рассматривается', 'Мы уведомим вас после проверки администратором Symptex. Можно продолжать заполнять профиль.', '#92400e', '#b45309')]);
+            txt(trf('Заявка на публикацию «{name}» рассматривается', { name: bn }), 'Мы уведомим вас после проверки администратором Symptex. Можно продолжать заполнять профиль.', '#92400e', '#b45309')]);
     }
     const BRANCH_PUBLISH_REQUIRED = ['Адрес', 'Часы работы'];
     const missingCore = BRANCH_PUBLISH_REQUIRED.filter((l) => (dash.clinic_missing || []).includes(l));
     const blocked = missingCore.length > 0;
-    const btn = h('button', { class: 'btn', style: { background: blocked ? '#cbb59a' : '#d97706', color: '#fff', fontWeight: '600', padding: '13px 24px', fontSize: '14.5px', boxShadow: blocked ? 'none' : '0 6px 18px rgba(217,119,6,.35)', whiteSpace: 'nowrap', cursor: blocked ? 'not-allowed' : 'pointer', opacity: blocked ? '0.85' : '1' }, disabled: blocked, title: blocked ? ('Заполните профиль филиала: ' + missingCore.join(', ')) : '' }, Icon('Megaphone', { size: 17 }), ' Запросить публикацию');
+    const btn = h('button', { class: 'btn', style: { background: blocked ? '#cbb59a' : '#d97706', color: '#fff', fontWeight: '600', padding: '13px 24px', fontSize: '14.5px', boxShadow: blocked ? 'none' : '0 6px 18px rgba(217,119,6,.35)', whiteSpace: 'nowrap', cursor: blocked ? 'not-allowed' : 'pointer', opacity: blocked ? '0.85' : '1' }, disabled: blocked, title: blocked ? trf('Заполните профиль филиала: {what}', { what: missingCore.join(', ') }) : '' }, Icon('Megaphone', { size: 17 }), ' Запросить публикацию');
     if (!blocked) btn.onclick = () => requestPublication(btn, reload, dash.branch_id);
     const sub = blocked
-        ? ('Чтобы отправить заявку, заполните профиль филиала: ' + missingCore.join(', ') + '.')
+        ? trf('Чтобы отправить заявку, заполните профиль филиала: {what}.', { what: missingCore.join(', ') })
         : (dash.synced ? 'Заполните профиль и отправьте заявку — после одобрения пациенты увидят филиал в маркетплейсе и смогут записаться.'
                        : 'Сначала заполните и сохраните профиль филиала, затем отправьте заявку.');
     return shell('linear-gradient(120deg,#fff7ed,#fef3c7)', '#fcd34d', [chip('#f59e0b', 'Megaphone'),
-        txt('Филиал «' + bn + '» не отображается на Symptex', sub, '#92400e', '#b45309'), btn]);
+        txt(trf('Филиал «{name}» не отображается на Symptex', { name: bn }), sub, '#92400e', '#b45309'), btn]);
 }
 
 async function requestPublication(btn, reload, branchId) {
@@ -282,8 +283,7 @@ function previewBlock(dash, preview, previewMeta) {
             h('div', { style: { width: '52px', height: '52px', borderRadius: '14px', margin: '0 auto 12px', background: tint('var(--primary-600)', 12), color: 'var(--primary-700)', display: 'grid', placeItems: 'center' } }, Icon('Globe', { size: 26 })),
             h('div', { style: { fontWeight: '700', fontSize: '15px', color: 'var(--ink-900)' } }, 'Филиал ещё не синхронизирован'),
             h('div', { class: 'muted', style: { fontSize: '13px', marginTop: '6px', maxWidth: '460px', marginLeft: 'auto', marginRight: 'auto', lineHeight: '1.55' } },
-                'Заполните и сохраните профиль филиала — после этого здесь появится предпросмотр настоящей страницы Symptex. Сейчас: ' +
-                ((preview.doctors || []).length) + ' ' + plural((preview.doctors || []).length, 'врач', 'врача', 'врачей') + ', ' + (preview.services_count || 0) + ' ' + plural(preview.services_count || 0, 'услуга', 'услуги', 'услуг') + '.')));
+                trf('Заполните и сохраните профиль филиала — после этого здесь появится предпросмотр настоящей страницы Symptex. Сейчас: {doctors} врач(ей), {services} услуг(и).', { doctors: (preview.doctors || []).length, services: preview.services_count || 0 }))));
     }
     return card;
 }

@@ -9,6 +9,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, field, checkField, Ring, initials } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { importExportButtons } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1
 import { soleBranchId } from '../branch-context.js?v=bc3';                  // SOLE_BRANCH_V1
@@ -173,7 +174,7 @@ async function paint(root) {
         btn.disabled = true;
         try {
             await api('/' + u.id, { method: 'PATCH', body: JSON.stringify({ is_active: true }) });
-            toast((u.full_name || u.username) + ' — снова активен', 'ok');
+            toast(trf('{name} — снова активен', { name: u.full_name || u.username }), 'ok');
             await paint(root);
         } catch (e) {
             toast(e.message || 'Не удалось активировать.', 'fail');
@@ -186,12 +187,12 @@ async function paint(root) {
         resetBtn.style.display = active ? '' : 'none';
 
         const inArchive = allUsers.filter(u => !u.is_active).length;
-        archiveBtn.textContent = showArchive ? '← К работающим' : ('Архив' + (inArchive ? ' · ' + inArchive : ''));
+        archiveBtn.textContent = showArchive ? tr('← К работающим') : (tr('Архив') + (inArchive ? ' · ' + inArchive : ''));
         archiveBtn.className = 'btn btn-sm ' + (showArchive ? 'btn-primary' : 'btn-outline');
 
         const rows = allUsers.filter(matches);
         const pool = allUsers.filter(u => (showArchive ? !u.is_active : u.is_active)).length;
-        countEl.textContent = active ? `${rows.length} из ${pool}` : (pool ? String(pool) : '');
+        countEl.textContent = active ? trf('{n} из {max}', { n: rows.length, max: pool }) : (pool ? String(pool) : '');
         clear(tbody);
         if (!rows.length) {
             const why = showArchive
@@ -237,7 +238,7 @@ async function paint(root) {
         renderRows();
     } catch (e) {
         clear(tbody);
-        tbody.appendChild(h('tr', null, h('td', { colspan: '6', style: { textAlign: 'center', padding: '18px', color: 'var(--crit-600)' } }, 'Ошибка: ' + (e.message || e))));
+        tbody.appendChild(h('tr', null, h('td', { colspan: '6', style: { textAlign: 'center', padding: '18px', color: 'var(--crit-600)' } }, trf('Ошибка: {msg}', { msg: e.message || e }))));
     }
 }
 
@@ -487,16 +488,14 @@ function openEditor(user, root) {
                 if (!chk.blocking || !chk.blocking.length) { toast(chk.reason || 'Удаление невозможно.', 'fail'); return; }
                 const where = chk.blocking.map(b => `${b.label}: ${b.count}`).join(', ');
                 const ok = window.confirm(
-                    `За сотрудником «${who}» закреплены записи (${where}).\n\n` +
-                    'Удалить его нельзя — визиты, счета и журналы ссылаются на него как на автора.\n\n' +
-                    'Отключить учётную запись вместо удаления? Он исчезнет из выбора и не сможет войти, а записи останутся целыми.');
+                    trf('За сотрудником «{who}» закреплены записи ({where}).\n\nУдалить его нельзя — визиты, счета и журналы ссылаются на него как на автора.\n\nОтключить учётную запись вместо удаления? Он исчезнет из выбора и не сможет войти, а записи останутся целыми.', { who, where }));
                 if (ok) await deactivate();
                 return;
             }
 
-            if (!window.confirm(`Удалить сотрудника «${who}» навсегда?\n\nЗа ним нет ни одной записи, поэтому он удаляется без следа.`)) return;
+            if (!window.confirm(trf('Удалить сотрудника «{who}» навсегда?\n\nЗа ним нет ни одной записи, поэтому он удаляется без следа.', { who }))) return;
             await api('/' + user.id, { method: 'DELETE' });
-            toast(`Сотрудник «${who}» удалён`, 'ok');
+            toast(trf('Сотрудник «{who}» удалён', { who }), 'ok');
             close();
             await paint(root);
         } catch (e) {
@@ -580,7 +579,7 @@ function ratesSection(emp, arrayKey, opts, touch) {
     const visible = () => services.filter(s => (typeFilter === 'all' || svcTypeVal(s) === typeFilter) && s.name.toLowerCase().includes(q.toLowerCase()));
 
     const selBadge = h('span', { class: 'rt-sel' });
-    const refreshCount = () => { clear(selBadge); selBadge.append(h('i'), 'Выбрано: ' + arr().length); };
+    const refreshCount = () => { clear(selBadge); selBadge.append(h('i'), trf('Выбрано: {n}', { n: arr().length })); };
 
     const scroll = h('div', { class: 'rt-scroll' });
     // RATES_UI_V2 — header and rows share one .rt-row grid (defined once in CSS,
@@ -683,9 +682,9 @@ function ratesSection(emp, arrayKey, opts, touch) {
         const paintOwn = () => {
             const own = hasOwn();
             inp.classList.toggle('is-own', own);
-            inp.title = !on ? 'Отметьте услугу, чтобы задать свою цену'
-                : own ? 'Своя цена врача — по ней выставляется счёт'
-                      : 'Цена из каталога: ' + fmtPrice(s.price) + '. Введите свою, чтобы переопределить.';
+            inp.title = !on ? tr('Отметьте услугу, чтобы задать свою цену')
+                : own ? tr('Своя цена врача — по ней выставляется счёт')
+                      : trf('Цена из каталога: {price}. Введите свою, чтобы переопределить.', { price: fmtPrice(s.price) });
             reset.style.visibility = own ? 'visible' : 'hidden';
         };
         // Style updates happen in place (no re-render) so the field keeps focus

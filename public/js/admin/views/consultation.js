@@ -14,6 +14,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, PageHead, toast, clear, avColor, initials, fmtDateTime } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { scopedDoctorId, selfDoctorId, scopedProviderId } from '../permissions.js';   // ADMIN_DOCTOR_V2 / SERVICE_SCOPE_V1
 import { renderDoctorProfile } from './doctor-profile.js?v=btnright1';
 import { openAdmissionRegistrarModal } from './admission-modal.js?v=aug17e';   // INPATIENT_TAB_V1
@@ -274,7 +275,7 @@ function inpatientsView() {
     const rows = state.inpt.rows || [];
     wrap.appendChild(h('div', { class: 'row', style: { alignItems: 'center', gap: '10px' } },
         h('div', { style: { fontWeight: 700, fontSize: '14px' } }, 'Пациенты в стационаре'),
-        h('span', { class: 'muted', style: { fontSize: '12px' } }, 'активные госпитализации: ' + rows.length),
+        h('span', { class: 'muted', style: { fontSize: '12px' } }, trf('активные госпитализации: {n}', { n: rows.length })),
         h('span', { style: { flex: 1 } }),
         h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => {
             state.inpt.loading = true; paint();
@@ -289,7 +290,7 @@ function inpatientsView() {
     for (const r of rows) {
         const p = r.patients || {};
         const nm = (p.full_name || [p.last_name, p.first_name].filter(Boolean).join(' ') || '—').trim();
-        const place = [r.wards && r.wards.name, r.beds && r.beds.code ? ('койка ' + r.beds.code) : null].filter(Boolean).join(' · ');
+        const place = [r.wards && r.wards.name, r.beds && r.beds.code ? trf('койка {code}', { code: r.beds.code }) : null].filter(Boolean).join(' · ');
         wrap.appendChild(h('button', {
             type: 'button',
             style: { display: 'flex', gap: '14px', alignItems: 'center', textAlign: 'left', width: '100%',
@@ -306,7 +307,7 @@ function inpatientsView() {
                     h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '11.5px', marginLeft: '8px' } }, p.mrn || '')),
                 h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' } },
                     (place || 'без койки'),
-                    ' · поступил ' + String(r.admitted_at || '').slice(0, 10),
+                    ' · ' + trf('поступил {date}', { date: String(r.admitted_at || '').slice(0, 10) }),
                     r.admission_diagnosis ? ' · ' + r.admission_diagnosis : ''),
             ),
             h('span', { class: 'muted', style: { fontSize: '12px', flex: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px' } },
@@ -487,7 +488,7 @@ function kpiSummary() {
         kpiCard({
             active: false,
             icon: 'Check', accent: 'var(--primary-700)', accentBg: 'var(--primary-50)',
-            value: String(recsDone), sub: 'из ' + recsToday, label: 'Выполнено рекомендаций',
+            value: String(recsDone), sub: trf('из {n}', { n: recsToday }), label: 'Выполнено рекомендаций',
             onClick: () => openRecsModal('done'),
         }),
     );
@@ -668,7 +669,7 @@ function listRow(r, i) {
         h('td', { class: 'cell-strong' },
             r.serviceName,
             r.doctorRoom && h('div', { class: 'docroom-line' },
-                'Кабинет ' + r.doctorRoom + (r.doctorFloor ? ' · Этаж ' + r.doctorFloor : '')),
+                trf('Кабинет {room}', { room: r.doctorRoom }) + (r.doctorFloor ? ' · ' + trf('Этаж {n}', { n: r.doctorFloor }) : '')),
         ),
         h('td', null, statusBadge(r.status)),
         h('td', { class: 'num muted' }, formatVisitDate(r.visitDate)),
@@ -712,7 +713,7 @@ function gridCard(r) {
             h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '2px' } },
                 // DOCTOR_ROOM_V1
                 r.doctorName + (r.doctorSpecialty ? ' · ' + r.doctorSpecialty : '')
-                + (r.doctorRoom ? ' · Кабинет ' + r.doctorRoom + (r.doctorFloor ? ' · Этаж ' + r.doctorFloor : '') : '')),
+                + (r.doctorRoom ? ' · ' + trf('Кабинет {room}', { room: r.doctorRoom }) + (r.doctorFloor ? ' · ' + trf('Этаж {n}', { n: r.doctorFloor }) : '') : '')),
             h('div', { class: 'row', style: { marginTop: '8px', gap: '10px' } },
                 h('span', { class: 'num cell-strong', style: { fontSize: '13px' } },
                     Number(r.price || 0).toLocaleString('ru-RU') + ' UZS'),
@@ -1086,8 +1087,8 @@ function openRecsModal(mode) {
     const list = mode === 'done' ? all.filter(r => referralIsDone(r.status)) : all;
     const title = mode === 'done' ? 'Выполненные рекомендации' : 'Рекомендованные услуги';
     const sub   = mode === 'done'
-        ? `Выполнено ${list.length} из ${all.length} за сегодня`
-        : `Всего ${list.length} рекомендованных услуг за сегодня`;
+        ? trf('Выполнено {n} из {total} за сегодня', { n: list.length, total: all.length })
+        : trf('Всего {n} рекомендованных услуг за сегодня', { n: list.length });
 
     const overlay = h('div', { class: 'modal' });
     const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };

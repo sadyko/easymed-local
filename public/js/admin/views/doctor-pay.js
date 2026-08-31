@@ -6,6 +6,7 @@
 //                     performer's service_rates[].percentage.
 //   • Выбранные врачи → writes/adds the % into the selected doctors' service_rates only.
 import { h, Icon, PageHead, toast, clear } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { supabase } from '../../supabase.js';
 
 const cid = () => { try { return window.easymed?.state?.user?.company_id || null; } catch (e) { return null; } };
@@ -55,7 +56,7 @@ export async function renderDoctorPay(container) {
             cb.addEventListener('change', () => { if (cb.checked) selSvc.add(s.id); else selSvc.delete(s.id); updateCount(); });
             svcList.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '6px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px' } },
                 cb, h('span', { style: { flex: 1, minWidth: '0' } }, s.name || '—'),
-                h('span', { class: 'muted', style: { fontSize: '11.5px', flex: '0 0 auto' } }, 'тек. ' + fmtPct(s.default_doctor_percent))));
+                h('span', { class: 'muted', style: { fontSize: '11.5px', flex: '0 0 auto' } }, trf('тек. {pct}', { pct: fmtPct(s.default_doctor_percent) }))));
         }
     }
     const selectAllShown = h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => {
@@ -91,7 +92,7 @@ export async function renderDoctorPay(container) {
 
     const countEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } });
     function updateCount() {
-        countEl.textContent = 'Услуг: ' + selSvc.size + (mode === 'selected' ? ' · Врачей: ' + selDoc.size : ' · Все врачи');
+        countEl.textContent = trf('Услуг: {n}', { n: selSvc.size }) + (mode === 'selected' ? ' · ' + trf('Врачей: {n}', { n: selDoc.size }) : ' · ' + tr('Все врачи'));
     }
     updateCount();
 
@@ -118,7 +119,7 @@ export async function renderDoctorPay(container) {
                 }
                 for (const s of services) if (svcIds.includes(String(s.id))) s.default_doctor_percent = pct;
                 paintSvc();
-                toast('Доля ' + pct + '% задана для ' + svcIds.length + ' услуг(и): по умолчанию + ' + touched + ' врач(ей) обновлено.');
+                toast(trf('Доля {pct}% задана для {n} услуг(и): по умолчанию + {touched} врач(ей) обновлено.', { pct, n: svcIds.length, touched }));
             } else {
                 let touched = 0;
                 for (const doc of doctors.filter(d => selDoc.has(d.id))) {
@@ -134,10 +135,10 @@ export async function renderDoctorPay(container) {
                     const { error } = await supabase.from('users').update({ service_rates: rates }).eq('id', doc.id);
                     if (!error) { touched++; doc.service_rates = rates; }
                 }
-                toast('Доля ' + pct + '% задана для ' + svcIds.length + ' услуг(и) у ' + touched + ' врач(ей).');
+                toast(trf('Доля {pct}% задана для {n} услуг(и) у {touched} врач(ей).', { pct, n: svcIds.length, touched }));
             }
         } catch (e) {
-            toast('Не удалось применить: ' + (e.message || e), 'fail');
+            toast(trf('Не удалось применить: {msg}', { msg: e.message || e }), 'fail');
         } finally { if (btn && btn.isConnected) btn.disabled = false; }
     }
     const applyBtn = h('button', { class: 'btn btn-primary', onclick: apply }, Icon('Check', { size: 14 }), ' Применить долю');

@@ -4,6 +4,7 @@
 // never queries supabase directly. Powers the Symptex / partner integration: read the
 // clinic's published info and create/cancel visits with «Authorization: Bearer emk_…».
 import { h, Icon, PageHead, toast, clear } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { gw } from '../gateway.js';
 
 const MAX_KEYS = 10;
@@ -31,7 +32,7 @@ export async function renderApiSettings(container, { onNavigate } = {}) {
         tokensCard.appendChild(h('div', { class: 'muted', style: { padding: '24px', textAlign: 'center' } }, 'Загрузка…'));
         let keys = [];
         try { const r = await gw('/keys'); keys = (r && r.keys) || r || []; }
-        catch (e) { clear(tokensCard); tokensCard.appendChild(h('div', { class: 'empty', style: { padding: '30px' } }, 'Не удалось загрузить токены: ' + (e.message || e))); return; }
+        catch (e) { clear(tokensCard); tokensCard.appendChild(h('div', { class: 'empty', style: { padding: '30px' } }, trf('Не удалось загрузить токены: {msg}', { msg: e.message || e }))); return; }
         // Show only the clinic's own partner tokens — hide source='easymed' (EasyMed-internal plumbing).
         const clinicKeys = keys.filter(k => k.scope === 'clinic' && k.source !== 'easymed');
         clear(tokensCard);
@@ -41,7 +42,7 @@ export async function renderApiSettings(container, { onNavigate } = {}) {
         tokensCard.appendChild(h('div', { class: 'card-header' },
             h('h3', null, 'Токены доступа'),
             h('span', { class: 'grow' }),
-            h('span', { class: 'muted', style: { fontSize: '12px', marginRight: '10px' } }, `${clinicKeys.length} из ${MAX_KEYS}`),
+            h('span', { class: 'muted', style: { fontSize: '12px', marginRight: '10px' } }, trf('{n} из {max}', { n: clinicKeys.length, max: MAX_KEYS })),
             createBtn));
 
         if (!clinicKeys.length) {
@@ -61,9 +62,9 @@ export async function renderApiSettings(container, { onNavigate } = {}) {
                 h('td', { style: { textAlign: 'right' } },
                     h('button', { class: 'btn btn-ghost btn-sm', style: { color: 'var(--crit-700)' },
                         onclick: async () => {
-                            if (!confirm(`Отозвать токен «${k.name || ''}»? Интеграции, использующие его, перестанут работать.`)) return;
+                            if (!confirm(trf('Отозвать токен «{name}»? Интеграции, использующие его, перестанут работать.', { name: k.name || '' }))) return;
                             try { await gw('/keys/' + k.id + '/revoke', { method: 'POST' }); toast('Токен отозван'); loadAndPaintTokens(); }
-                            catch (e) { toast('Не удалось отозвать: ' + (e.message || e), 'fail'); }
+                            catch (e) { toast(trf('Не удалось отозвать: {msg}', { msg: e.message || e }), 'fail'); }
                         } }, 'Отозвать')),
             ));
         }
@@ -108,7 +109,7 @@ export async function renderApiSettings(container, { onNavigate } = {}) {
     function showSecret(token, name) {
         if (!token) { toast('Токен создан, но секрет не получен — отзовите и создайте заново.', 'fail'); return; }
         const banner = h('div', { style: { border: '1px solid var(--ok-500, #1f9254)', background: '#eafaf0', borderRadius: '10px', padding: '14px', marginBottom: '14px' } },
-            h('div', { style: { fontWeight: 700, marginBottom: '6px' } }, '✓ Токен «' + name + '» создан'),
+            h('div', { style: { fontWeight: 700, marginBottom: '6px' } }, trf('✓ Токен «{name}» создан', { name })),
             h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '8px' } }, 'Скопируйте секрет сейчас — он показывается только один раз и больше не будет доступен.'),
             h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
                 h('input', { readonly: '', value: token, class: 'cell-mono', style: { flex: 1, height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '12.5px', fontFamily: 'inherit' },
@@ -190,9 +191,10 @@ export async function renderApiSettings(container, { onNavigate } = {}) {
         body.appendChild(h('div', null,
             h('div', { style: { fontWeight: 600, marginBottom: '4px' } }, 'Пример (curl)'),
             codeBlock(
-                '# свободные слоты\n' +
+                tr('# свободные слоты') + '\n' +
                 `curl -H "Authorization: Bearer $TOKEN" \\\n  "${apiBase()}/availability?doctor_id=DOCTOR_UUID&date_from=2026-06-20&date_to=2026-06-22"\n\n` +
-                '# создать заявку на визит\n' +
+                tr('# создать заявку на визит') + '\n' +
+                // i18n-exempt: пример curl-запроса — «Иванов Иван» здесь образец данных, а не текст экрана
                 `curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \\\n  -d '{"doctor_id":"DOCTOR_UUID","visit_date":"2026-06-20T10:30:00+05:00","patient":{"phone":"+998901234567","full_name":"Иванов Иван"}}' \\\n  "${apiBase()}/visits"`)));
 
         // test connection
@@ -207,9 +209,9 @@ export async function renderApiSettings(container, { onNavigate } = {}) {
                 const res = await fetch('/api/v1/key/whoami', { headers: { Authorization: 'Bearer ' + tok } });
                 const data = await res.json().catch(() => null);
                 clear(testOut);
-                if (res.ok) testOut.appendChild(h('span', { style: { color: 'var(--ok-700)' } }, '✓ Токен действителен · область: ' + ((data && (data.scope || data.source)) || 'clinic')));
-                else testOut.appendChild(h('span', { style: { color: 'var(--crit-700)' } }, '✗ Недействителен (' + res.status + ')'));
-            } catch (e) { clear(testOut); testOut.appendChild(h('span', { style: { color: 'var(--crit-700)' } }, '✗ Ошибка: ' + (e.message || e))); }
+                if (res.ok) testOut.appendChild(h('span', { style: { color: 'var(--ok-700)' } }, trf('✓ Токен действителен · область: {scope}', { scope: (data && (data.scope || data.source)) || 'clinic' })));
+                else testOut.appendChild(h('span', { style: { color: 'var(--crit-700)' } }, trf('✗ Недействителен ({code})', { code: res.status })));
+            } catch (e) { clear(testOut); testOut.appendChild(h('span', { style: { color: 'var(--crit-700)' } }, trf('✗ Ошибка: {msg}', { msg: e.message || e }))); }
             finally { testBtn.disabled = false; }
         } }, 'Проверить токен');
         body.appendChild(h('div', null,

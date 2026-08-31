@@ -2,7 +2,7 @@
 // Left: 4-section form (Identity, Documents, Contacts & address, Legal rep).
 // Right: Visit details + Coverage & payment sidebar.
 
-import { tr } from '../i18n.js';
+import { tr, trf } from '../i18n.js';
 import { h, Icon, PageHead, toast, clear, fmtDate } from '../ui.js';
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';   // CATALOG_WIZARD_V1
 import { savePatient, loadPatientById } from '../data.js';
@@ -259,7 +259,7 @@ function photoBlock() {
             if (!f) return;
             state.photoFile = f; state.photoUrl = '';
             setPhoto(URL.createObjectURL(f));
-            toast('Фото загружено: ' + (f.name || 'файл'));
+            toast(trf('Фото загружено: {name}', { name: f.name || tr('файл') }));
         },
     });
     const acts = h('div', { class: 'cam-acts' },
@@ -456,7 +456,7 @@ async function runPatientSearch(term, resultsEl, onNavigate) {
     if (rows.length === 0) {
         resultsEl.appendChild(h('div', {
             style: { padding: '14px', fontSize: '12.5px', textAlign: 'center', color: 'var(--ink-500)' },
-        }, `Совпадений по запросу «${t}» нет. Заполните форму ниже, чтобы создать новую карту.`));
+        }, trf('Совпадений по запросу «{q}» нет. Заполните форму ниже, чтобы создать новую карту.', { q: t })));
     } else {
         for (const p of rows.slice(0, 10)) {
             const name = [p.last_name, p.first_name, p.middle_name].filter(Boolean).join(' ').trim()
@@ -625,11 +625,11 @@ function collectPatientPayload(formNode) {
     const age = computeAge(payload.date_of_birth);
     if (needsLegalRep(age)) {
         if (!(payload.legal_representative || '').trim()) {
-            toast(`Пациенту ${age} лет — укажите ФИО опекуна.`, 'fail');
+            toast(trf('Пациенту {age} лет — укажите ФИО опекуна.', { age }), 'fail');
             return null;
         }
         if (!(payload.emergency_contact_phone || '').trim()) {
-            toast(`Пациенту ${age} лет — укажите телефон опекуна.`, 'fail');
+            toast(trf('Пациенту {age} лет — укажите телефон опекуна.', { age }), 'fail');
             return null;
         }
     }
@@ -701,7 +701,7 @@ async function saveAndContinue(formNode, onNavigate, { openVisit, force = false 
     if (openVisit && patient && patient.id) {
         Promise.resolve(openVisitWizard(null, {
             id: patient.id, full_name: patient.fullName, mrn: patient.mrn, phone: patient.phone,
-        })).catch((e) => toast('Не удалось открыть мастер услуг: ' + ((e && e.message) || e), 'fail'));
+        })).catch((e) => toast(trf('Не удалось открыть мастер услуг: {msg}', { msg: (e && e.message) || e }), 'fail'));
     }
 }
 
@@ -785,7 +785,7 @@ export function openDuplicatePatientDialog(err, { onOpenExisting, onForceCreate 
                 },
             }, list.length === 1
                 ? 'Найдено 1 возможное совпадение. Выберите существующего пациента — или принудительно создайте нового, если уверены, что это другой человек.'
-                : `Найдено совпадений: ${list.length}. Выберите существующего пациента — или принудительно создайте нового, если ни один из них не тот же человек.`,
+                : trf('Найдено совпадений: {n}. Выберите существующего пациента — или принудительно создайте нового, если ни один из них не тот же человек.', { n: list.length }),
             ),
             rowsEl,
         ),
@@ -826,7 +826,7 @@ async function uploadPendingPhoto() {
         const { data } = supabase.storage.from(PHOTO_BUCKET).getPublicUrl(path);
         return data?.publicUrl || '';
     } catch (e) {
-        toast('Не удалось загрузить фото: ' + (e?.message || e), 'fail');
+        toast(trf('Не удалось загрузить фото: {msg}', { msg: e?.message || e }), 'fail');
         return '';                                       // save patient anyway, without photo
     }
 }
@@ -856,7 +856,7 @@ function openWebcamModal(onCapture) {
     } else {
         navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 960 } }, audio: false })
             .then((s) => { stream = s; video.srcObject = s; snapBtn.removeAttribute('disabled'); })
-            .catch((e) => showErr('Нет доступа к камере: ' + (e?.message || e) + '. Разрешите доступ в браузере.'));
+            .catch((e) => showErr(trf('Нет доступа к камере: {msg}. Разрешите доступ в браузере.', { msg: e?.message || e })));
     }
 
     overlay.appendChild(h('div', { class: 'modal-card', style: { width: '520px', maxWidth: 'calc(100vw - 32px)' } },
@@ -897,8 +897,8 @@ function telegramBlock() {
             chip.classList.add('on');
             chip.querySelector('.tg-chip-t').textContent = 'Приглашение отправлено';
             btn.style.display = 'none';
-            const phone = (document.querySelector('input[name="phone"]')?.value) || 'номер пациента';
-            note.textContent = `Ссылка на бота отправлена на ${phone} — подключение после перехода по ней.`;
+            const phone = (document.querySelector('input[name="phone"]')?.value) || tr('номер пациента');
+            note.textContent = trf('Ссылка на бота отправлена на {phone} — подключение после перехода по ней.', { phone });
             note.style.display = '';
             toast('Приглашение отправлено');
         } },

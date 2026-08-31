@@ -22,6 +22,7 @@
 import { supabase } from '../../supabase.js';
 import { isAccommodationLine, ACCOMMODATION_LABEL } from '../../shared/accommodation-line.js';   // ACCOMMODATION_AS_SERVICE_V1
 import { h, Icon, Tag, StatusTag, toast, clear, avColor, initials } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
 import { openItemPickerModal } from './item-picker-modal.js?v=billoptin1';   // DISPENSE_ITEM_V1
 import { creditCashbackOnPaid } from './cashback.js?v=cb1';
@@ -253,7 +254,7 @@ export function openAdmissionRegistrarModal({ admissionId, onChange } = {}) {
                 bedFails.push('нет прав на изменение койки (RLS). Примените supabase/migrations/117_beds_rls_clinic_scope.sql');
             }
         }
-        if (bedFails.length) toast('Койка не освободилась — ' + bedFails[0], 'fail');
+        if (bedFails.length) toast(trf('Койка не освободилась — {msg}', { msg: bedFails[0] }), 'fail');
         await supabase.from('admission_transfers').insert({
             admission_id: a.id, from_bed_id: a.bed_id || null,
             from_ward_id: a.ward_id || null, kind: 'discharge',
@@ -832,10 +833,10 @@ function medsTab(state) {
                 if (window.CLINIC && window.CLINIC.id) ins.company_id = window.CLINIC.id;
                 const { error } = await supabase.from('admission_prescriptions').insert(ins);
                 if (error) {
-                    const msg = /does not exist|schema cache/i.test(error.message || '') ? 'Примените миграцию 105 в Supabase SQL editor.' : error.message;
-                    toast('Назначение не сохранено: ' + msg, 'fail'); btn.disabled = false; return;
+                    const msg = /does not exist|schema cache/i.test(error.message || '') ? tr('Примените миграцию 105 в Supabase SQL editor.') : error.message;
+                    toast(trf('Назначение не сохранено: {msg}', { msg }), 'fail'); btn.disabled = false; return;
                 }
-                toast('Назначение добавлено: ' + name);
+                toast(trf('Назначение добавлено: {name}', { name }));
                 ov2.remove();
                 clear(root); root.appendChild(medsTab(state));
             };
@@ -872,11 +873,11 @@ function medsTab(state) {
                             administered_by_name: u.full_name || 'Медсестра',
                         });
                         if (error) throw error;
-                        toast('Отмечено: ' + rx.name);
+                        toast(trf('Отмечено: {name}', { name: rx.name }));
                         clear(root);
                         root.appendChild(medsTab(state));   // re-render with fresh journal
                     } catch (e) {
-                        toast('Не удалось записать: ' + (e.message || e), 'fail');
+                        toast(trf('Не удалось записать: {msg}', { msg: e.message || e }), 'fail');
                         if (ev.currentTarget?.isConnected) ev.currentTarget.disabled = false;
                     }
                 } }, Icon('Check', { size: 13 }), ' Выполнено');
@@ -885,7 +886,7 @@ function medsTab(state) {
                 const giveBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button',
                     title: 'Выдать со склада — спишет остаток и добавит в счёт', onclick: () => {
                     openItemPickerModal({
-                        title: 'Выдать: ' + rx.name,
+                        title: trf('Выдать: {name}', { name: rx.name }),
                         confirmLabel: 'Выдать',
                         initialSearch: rx.name,
                         // DISPENSE_MULTI_V1 — dispense each cart line (usually the
@@ -912,12 +913,12 @@ function medsTab(state) {
                                         });
                                     } catch (e) { console.warn('[rx-dispense] journal', e); }
                                     if (res && Number(res.on_hand) <= 0) {
-                                        toast('Внимание: остаток теперь ' + Number(res.on_hand).toLocaleString('ru-RU') + '.', 'fail');
+                                        toast(trf('Внимание: остаток теперь {n}.', { n: Number(res.on_hand).toLocaleString('ru-RU') }), 'fail');
                                     }
                                 } catch (err) { fails.push(`${item.name}: ${err?.message || err}`); }
                             }
                             if (ok === 0) throw new Error(fails[0] || 'Не удалось выдать');
-                            toast('Выдано и записано: ' + ok + (fails.length ? ` · ошибок: ${fails.length}` : ''));
+                            toast(trf('Выдано и записано: {n}', { n: ok }) + (fails.length ? ' · ' + trf('ошибок: {n}', { n: fails.length }) : ''));
                             if (fails.length) toast(fails.join('; '), 'fail');
                             clear(root);
                             root.appendChild(medsTab(state));
@@ -931,7 +932,7 @@ function medsTab(state) {
                         ev.currentTarget.disabled = true;
                         const { error } = await supabase.from('admission_prescriptions').update({ active: false }).eq('id', rx._apId);
                         if (error) { toast(error.message, 'fail'); if (ev.currentTarget?.isConnected) ev.currentTarget.disabled = false; return; }
-                        toast('Назначение отменено: ' + rx.name);
+                        toast(trf('Назначение отменено: {name}', { name: rx.name }));
                         clear(root); root.appendChild(medsTab(state));
                     } }, '×') : null;
                 ob.appendChild(h('div', { class: 'row', style: { padding: '10px 12px', background: 'var(--primary-50)', border: '1px solid var(--primary-200)', borderRadius: '9px', gap: '12px', alignItems: 'center' } },
@@ -942,7 +943,7 @@ function medsTab(state) {
                             h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '11px', marginLeft: '8px' } }, rx.srcDate || ''),
                             rx._by ? h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '11px', marginLeft: '6px' } }, '· ' + rx._by) : null),
                         rx.freq && h('div', { class: 'muted', style: { fontSize: '11.5px' } }, rx.freq),
-                        rx.nurse && h('div', { style: { fontSize: '12px', color: 'var(--warn-700, #b45309)', marginTop: '2px', fontWeight: 600 } }, 'Медсестре: ' + rx.nurse),
+                        rx.nurse && h('div', { style: { fontSize: '12px', color: 'var(--warn-700, #b45309)', marginTop: '2px', fontWeight: 600 } }, trf('Медсестре: {name}', { name: rx.nurse })),
                     ),
                     giveBtn, doneBtn, cancelBtn));
             }
