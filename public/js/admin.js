@@ -49,7 +49,7 @@ import { renderPlaceholder }  from './admin/views/placeholder.js';
 import { renderSectionCrud }  from './admin/views/section-crud.js?v=svceditor1';
 import { renderCashier, renderCashierHead } from './admin/views/cashier-desk.js?v=cash6';   // CASHIER_DESIGN_V2 + CASHIER_ROW_FIT_V1 — patient cell width, RU status, compact date
 import { renderReport }       from './admin/views/report.js';
-import { renderLaboratory }   from './admin/views/laboratory.js?v=labstats1';   // LAB_STATS_V1 — third mode «Статистика» (usage counters, no money) on the shared LAB_HEAD_ONE_V1 head
+import { renderLaboratory }   from './admin/views/laboratory.js?v=labstats2';   // LAB_STATS_V1 — third mode «Статистика» (usage counters, no money) on the shared LAB_HEAD_ONE_V1 head
 import { renderProcedures }   from './admin/views/procedures.js?v=unassigned1';
 import { renderQueue }       from './admin/views/queue.js?v=q6';   // QUEUE_BOARD_V1
 import { renderCrm }          from './admin/views/crm.js?v=aug18d';   // CRM_V10 — поиск пациента: телефон (и короткая форма), дата рождения; CRM_SERVICE_FILTER_V1 — рейка категорий (тег поднят, иначе браузер оставит старую копию)

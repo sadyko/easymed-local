@@ -3217,10 +3217,32 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
    .chip is scoped per context (.lq-sub/.lw-meta) rather than global. */
 .lab-stats .chip{ background:var(--ink-25); border:1px solid var(--ink-100); border-radius:999px; padding:1px 9px; font-size:12.5px; color:var(--ink-600); font-weight:500; white-space:nowrap; }
 .lab-stats-title{ font-size:12.5px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-500); margin-bottom:6px; }
-.lab-stats-row{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:8px 6px; border-top:1px solid var(--ink-50); border-radius:9px; }
+/* LAB_STATS_ALIGN_V1 — counts are fixed-width, right-aligned, tabular-figure
+   columns so they line up down the page; labels live once in the header row.
+   Rows are flush with the card padding (no stray 6px inset) and the title. */
+.lab-stats-row{ display:flex; align-items:center; gap:14px; padding:9px 0; border-top:1px solid var(--ink-50); }
 .lab-stats-row:first-of-type{ border-top:none; }
 .lab-stats-row:hover{ background:var(--ink-25); }
-.lab-stats-name{ flex:1 1 40%; min-width:160px; font-size:13.5px; font-weight:600; color:var(--ink-900); }
+.lab-stats-row--head{ padding-top:0; padding-bottom:7px; border-top:none; }
+.lab-stats-row--head:hover{ background:none; }
+.lab-stats-row--head .lab-stats-name,
+.lab-stats-row--head .lab-stats-num{
+  font-size:11.5px; font-weight:700; letter-spacing:.04em; text-transform:uppercase;
+  color:var(--ink-500);
+}
+.lab-stats-name{ flex:1 1 auto; min-width:0; font-size:13.5px; font-weight:600; color:var(--ink-900); }
+.lab-stats-num{
+  flex:0 0 92px; text-align:right; font-size:13.5px; font-weight:600; color:var(--ink-700);
+  font-variant-numeric:tabular-nums; font-feature-settings:"tnum" 1;
+}
+.lab-stats-card{ margin-bottom:14px; }
+.lab-stats-card + .lab-stats-card{ margin-top:0; }
+@media (max-width: 560px){
+  .lab-stats-row{ gap:10px; }
+  .lab-stats-num{ flex-basis:68px; }
+  .lab-stats-row--head .lab-stats-name,
+  .lab-stats-row--head .lab-stats-num{ font-size:10.5px; }
+}
 /* ============================ end LAB_STATS_V1 ============================ */
 
 /* ============================ LAB_ENTRY_V2 — simple "fill the value" entry form ============================ */

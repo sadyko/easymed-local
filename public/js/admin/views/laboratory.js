@@ -112,7 +112,8 @@ const state = {
     filter: 'open',
     search: '',
     mode: 'queue',     // LAB_PANELS_MODE_V1 / LAB_STATS_V1 — 'queue' | 'panels' | 'stats'
-    statsPeriod: '30d',// LAB_STATS_V1 — the period chip in force ('today'|'7d'|'30d'|'all')
+    statsPeriod: '30d',
+    statsData: null,   // LAB_STATS_XLSX_V1 — last painted stats, for the Excel export// LAB_STATS_V1 — the period chip in force ('today'|'7d'|'30d'|'all')
 };
 
 // LAB_PANELS_MODE_V1 — «Панели» is a MODE of Лаборатория, not a second sidebar
@@ -311,7 +312,13 @@ function mount() {
     // mode's only control is the period chips (the queue-chip idiom).
     const ACTIONS = {
         panels: [],
-        stats:  [refs.periodWrap],
+        // LAB_STATS_XLSX_V1 — the export sits with the period chips because it
+        // exports exactly that period, i.e. what is on screen.
+        stats:  [refs.periodWrap,
+                 h('button', { class: 'btn btn-outline btn-sm', type: 'button',
+                              title: 'Выгрузить статистику за выбранный период в Excel',
+                              onclick: () => exportStatsExcel() },
+                   Icon('Download', { size: 13 }), ' Excel')],
         queue:  [
             refs.searchInp,
             refs.filterWrap,
@@ -389,8 +396,17 @@ function paintPeriodChips() {
 // Counter chip: the WORD is translated alone (h() runs a lone string child
 // through tr()), the language-neutral « · N» is appended after — the same
 // compose-after-translate rule the queue chips learned the hard way.
-function statCountChip(label, n) {
-    return h('span', { class: 'chip' }, label, ` · ${n}`);
+// LAB_STATS_ALIGN_V1 — the counts used to be chips that carried their own label
+// ("Заказано 12"), so every chip was a different width and the two numeric
+// columns never lined up down the page; the labels also repeated on every row.
+// The labels now live once in a header and the numbers sit in fixed-width,
+// right-aligned, tabular-figure columns, so the digits align vertically.
+function statsHeadRow() {
+    return h('div', { class: 'lab-stats-row lab-stats-row--head' },
+        h('span', { class: 'lab-stats-name' }, 'Название'),
+        h('span', { class: 'lab-stats-num' }, 'Заказано'),
+        h('span', { class: 'lab-stats-num' }, 'Выполнено'),
+    );
 }
 
 function statsRow(r) {
@@ -398,20 +414,53 @@ function statsRow(r) {
         h('span', { class: 'lab-stats-name' },
             r.name || '—',
             r.code ? h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '12.5px' } }, ' · ' + r.code) : null),
-        statCountChip('Заказано', r.ordered),
-        statCountChip('Выполнено', r.completed),
+        h('span', { class: 'lab-stats-num' }, String(r.ordered != null ? r.ordered : 0)),
+        h('span', { class: 'lab-stats-num' }, String(r.completed != null ? r.completed : 0)),
     );
 }
 
 function statsBlock(title, rows) {
-    return h('div', { class: 'card', style: { marginBottom: '14px' } },
+    return h('div', { class: 'card lab-stats-card' },
         h('div', { class: 'lab-stats-title' }, title),
         // Zero-use rows are already absent (the server builds the blocks FROM
         // the period's orders); a block with nothing left says so in words.
         rows.length
-            ? h('div', null, ...rows.map(statsRow))
+            ? h('div', { class: 'lab-stats-tbl' }, statsHeadRow(), ...rows.map(statsRow))
             : h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '6px 0' } }, 'Нет данных за выбранный период.'),
     );
+}
+
+// LAB_STATS_XLSX_V1 — download the statistics as .xlsx.
+// SheetJS is served from our own /js/vendor (this app must run with no internet
+// at all), matching inventory-sklad.js / cashier-desk.js. Two sheets, one per
+// block, plus the period in the file name so saved files stay tellable apart.
+const STATS_PERIOD_LABEL = { today: 'сегодня', '7d': '7 дней', '30d': '30 дней', all: 'всё время' };
+
+async function exportStatsExcel() {
+    const d = state.statsData || { panels: [], services: [] };
+    if (!(d.panels || []).length && !(d.services || []).length) {
+        toast('Нечего выгружать: за выбранный период данных нет.', 'fail');
+        return;
+    }
+    try {
+        const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');
+        const wb = XLSX.utils.book_new();
+        const sheet = (rows) => {
+            const ws = XLSX.utils.aoa_to_sheet([
+                ['Название', 'Код', 'Заказано', 'Выполнено'],
+                ...rows.map(r => [r.name || '', r.code || '',
+                                  Number(r.ordered) || 0, Number(r.completed) || 0]),
+            ]);
+            ws['!cols'] = [{ wch: 46 }, { wch: 14 }, { wch: 11 }, { wch: 11 }];
+            return ws;
+        };
+        XLSX.utils.book_append_sheet(wb, sheet(d.panels || []), 'Панели');
+        XLSX.utils.book_append_sheet(wb, sheet(d.services || []), 'Услуги');
+        const stamp = new Date().toISOString().slice(0, 10);
+        XLSX.writeFile(wb, `lab-statistika-${state.statsPeriod}-${stamp}.xlsx`);
+    } catch (e) {
+        toast(trf('Не удалось сформировать Excel: {msg}', { msg: (e && e.message) || e }), 'fail');
+    }
 }
 
 let lastStatsToken = 0;
@@ -436,6 +485,9 @@ async function paintStats() {
             h('div', { class: 'empty' }, 'Нет данных за выбранный период.')));
         return;
     }
+    // LAB_STATS_XLSX_V1 — hold exactly what is painted so the Excel export can
+    // never disagree with the table the user is looking at.
+    state.statsData = { panels: panels, services: services };
     refs.statsHost.appendChild(statsBlock('Панели', panels));
     refs.statsHost.appendChild(statsBlock('Лабораторные услуги', services));
 }
