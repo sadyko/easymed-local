@@ -10,6 +10,7 @@ import { h, Icon, clear, toast, Tag, field, checkField } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { fetchGuard, fmtPrice, fmtQty, CATEGORY_LABEL, selStyle, numStyle, isLowStock } from './inventory-shared.js';
 import { openSupplierModal } from './inventory-suppliers.js';   // ADD_PRODUCT_EASYMED_V1 — «+ Новый поставщик» из карточки товара
+import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
 
 const productRefs = { tbody: null, emptyEl: null, totalEl: null };
 
@@ -587,7 +588,7 @@ export function openReceiveModal(onSaved) {
         if (!st.lines.length) { toast('Нет строк для этикеток.', 'fail'); return; }
         const esc = (x) => String(x == null ? '' : x).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
         const cells = st.lines.map(ln => `
-<div style="border:1px dashed #999;border-radius:6px;padding:8px 10px;width:220px;font:12px/1.45 system-ui;">
+<div style="border:1px dashed #999;border-radius:6px;padding:8px 10px;width:220px;font:12px/1.45 'Onest',system-ui;">
   <div style="font-weight:700;">${esc(ln.product.name)}</div>
   ${ln.batchNo ? `<div>Партия: <b>${esc(ln.batchNo)}</b></div>` : ''}
   ${ln.expiry ? `<div>Годен до: <b>${esc(ln.expiry.split('-').reverse().join('.'))}</b></div>` : ''}
@@ -595,8 +596,8 @@ export function openReceiveModal(onSaved) {
 </div>`).join('');
         const w = window.open('', '_blank', 'width=760,height=900');
         if (!w) { toast('Браузер заблокировал окно печати.', 'fail'); return; }
-        w.document.write(`<!DOCTYPE html><html><head><title>Этикетки</title></head>
-<body onload="print()" style="display:flex;flex-wrap:wrap;gap:10px;padding:16px;">${cells}</body></html>`);
+        w.document.write(`<!DOCTYPE html><html><head><title>Этикетки</title><style>${PRINT_FONT_FACE_CSS}</style></head>
+<body onload="(document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve()).then(()=>print())" style="display:flex;flex-wrap:wrap;gap:10px;padding:16px;">${cells}</body></html>`);
         w.document.close();
     }
     /* i18n-exempt-end */

@@ -25,6 +25,7 @@ import { currentUser } from '../data.js';
 import { openSectionImporter, downloadSectionSample } from './section-import-export.js?v=aug17e';   // PROCUREMENT_IMPORT_V2
 import { barcodeSVG } from './lab-barcode.js?v=labbc1';   // BATCH_LABELS_V1 — same Code128 generator as lab labels
 import { phoneInput } from '../phone-input.js?v=ph1';
+import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
 
 // PHONE_INPUT_V1 — the supplier popups here style their inputs inline rather
 // than through .field CSS, so the country control's inner input has to inherit
@@ -3104,7 +3105,8 @@ function openBulkIssueSlip({ lines, branch, recipient, issuer, dept, note }) {
 
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(num)}</title>
 <style>
-  body { font: 13px/1.5 'Segoe UI', Arial, sans-serif; color: #111; max-width: 700px; margin: 32px auto; padding: 0 16px; }
+${PRINT_FONT_FACE_CSS}
+  body { font: 13px/1.5 'Onest', 'Segoe UI', Arial, sans-serif; color: #111; max-width: 700px; margin: 32px auto; padding: 0 16px; }
   h1 { font-size: 18px; margin: 0 0 2px; }
   .muted { color: #666; font-size: 12px; }
   .meta { margin-top: 10px; font-size: 12.5px; }
@@ -3139,7 +3141,7 @@ function openBulkIssueSlip({ lines, branch, recipient, issuer, dept, note }) {
       <div class="cap">${esc(prL('slipReceivedBy'))} ${esc(recipient?.full_name || '')} ${esc(prL('slipSign'))}</div>
     </div>
   </div>
-  <script>window.addEventListener('load', function(){ setTimeout(function(){ window.print(); }, 150); });</scr` + `ipt>
+  <script>window.addEventListener('load', function(){ (document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve()).then(function(){ setTimeout(function(){ window.print(); }, 150); }); });</scr` + `ipt>
 </body></html>`;
 
     const w = window.open('', '_blank', 'width=760,height=900');
@@ -3318,7 +3320,8 @@ function openIssueSlip({ item, branch, qty, recipient, issuer, note }) {
 
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(num)}</title>
 <style>
-  body { font: 13px/1.5 'Segoe UI', Arial, sans-serif; color: #111; max-width: 640px; margin: 32px auto; padding: 0 16px; }
+${PRINT_FONT_FACE_CSS}
+  body { font: 13px/1.5 'Onest', 'Segoe UI', Arial, sans-serif; color: #111; max-width: 640px; margin: 32px auto; padding: 0 16px; }
   h1 { font-size: 18px; margin: 0 0 2px; }
   .muted { color: #666; font-size: 12px; }
   table { width: 100%; border-collapse: collapse; margin: 18px 0; }
@@ -3351,7 +3354,7 @@ function openIssueSlip({ item, branch, qty, recipient, issuer, note }) {
       <div class="cap">Получил: ${esc(recipient?.full_name || '')} (подпись)</div>
     </div>
   </div>
-  <script>window.addEventListener('load', function(){ setTimeout(function(){ window.print(); }, 150); });</scr` + `ipt>
+  <script>window.addEventListener('load', function(){ (document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve()).then(function(){ setTimeout(function(){ window.print(); }, 150); }); });</scr` + `ipt>
 </body></html>`;
 
     const w = window.open('', '_blank', 'width=760,height=900');
@@ -3749,12 +3752,13 @@ function openReceiveModal() {
             </div>`;
         }).join('');
         const html = `<!doctype html><html><head><meta charset="utf-8"><title>Batch labels</title><style>
+${PRINT_FONT_FACE_CSS}
           @page { size: 58mm 40mm; margin: 0; }
           * { box-sizing: border-box; }
           html,body { margin:0; padding:0; background:#fff; }
           .lbl { width:58mm; height:40mm; padding:1.5mm 2.5mm; overflow:hidden;
                  display:flex; flex-direction:column; justify-content:space-between;
-                 page-break-after:always; font-family:Arial,Helvetica,sans-serif; color:#000; }
+                 page-break-after:always; font-family:'Onest',Arial,Helvetica,sans-serif; color:#000; }
           .top { display:flex; justify-content:space-between; align-items:baseline; gap:4px; }
           .acc { font-size:11pt; font-weight:700; }
           .date { font-size:8pt; }
@@ -3764,7 +3768,7 @@ function openReceiveModal() {
           .bc svg { width:100%; height:auto; max-height:17mm; }
           .bcnum { text-align:center; font-size:8pt; letter-spacing:2px; margin-top:0.3mm; }
         </style></head><body>${cards}
-        <script>window.onload=function(){try{window.focus();window.print();}catch(e){}setTimeout(function(){window.close();},400);};<\/script>
+        <script>window.onload=function(){(document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve()).then(function(){try{window.focus();window.print();}catch(e){}setTimeout(function(){window.close();},400);});};<\/script>
         </body></html>`;
         const win = window.open('', '_blank', 'width=460,height=380');
         if (!win) { toast('Разрешите всплывающие окна, чтобы печатать этикетки.', 'fail'); return; }

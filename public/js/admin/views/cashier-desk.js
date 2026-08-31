@@ -21,6 +21,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { printableSheet } from './doc-settings.js?v=q3company1';
 import { moneyDisplay, moneyNumber } from '../../shared/money-input.js?v=mi2';   // MONEY_INPUT_V2
 import { loadInvoiceLines, performersByItem } from './receipt-print.js?v=rp1';   // INVOICE_QUEUE_V1 — тот же сбор талонов, что у чека   // CASH_CHECK_PRINT_V1 — бланк «Кассовый чек» из Настройки → Документы
+import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
 
 const METHOD_RU = { cash: 'Наличные', card: 'Карта', transfer: 'Перевод', acquiring: 'Эквайринг' };
 // DEPOSIT_METHOD_BY_CASHIER_V1 — у ДЕПОЗИТА три способа, а не четыре: их берут
@@ -611,9 +612,9 @@ function printReportDoc(r, withPayments) {
     }
     const w = window.open('', '_blank');
     if (!w) { toast('Разрешите всплывающие окна для печати.', 'fail'); return; }
-    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(shiftNo(r.shift))}</title></head>
-      <body style="font-family:-apple-system,'Segoe UI',Roboto,sans-serif;padding:28px">${body}
-      <script>window.onload = () => window.print();</script></body></html>`);
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(shiftNo(r.shift))}</title><style>${PRINT_FONT_FACE_CSS}</style></head>
+      <body style="font-family:'Onest',-apple-system,'Segoe UI',Roboto,sans-serif;padding:28px">${body}
+      <script>window.onload = () => (document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve()).then(() => window.print());</script></body></html>`);
     w.document.close();
 }
 /* i18n-exempt-end */

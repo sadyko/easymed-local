@@ -423,3 +423,49 @@ test('EMPIRICAL: req.route.path IS populated inside error-handling middleware fo
     assert.equal(seen[1], null, 'no route matched yet when body-parser fails — must be null, never the literal string "undefined"');
   } finally { server.close(); }
 });
+
+// ONEST_TYPOGRAPHY_V1 — the fonts must actually reach a clinic browser with
+// sane cache headers, or the whole "one typeface" design silently degrades to
+// the fallback stack and nobody notices. Three claims, each load-bearing:
+//   - the woff2 is served at the URL admin.css/@font-face names, and it is a
+//     REAL woff2 (magic bytes), not a 404 page or an LFS pointer;
+//   - fonts get LONG cache (30 days), because a content-stable 30KB file
+//     revalidated on every page load of every registration desk is pure LAN
+//     waste (see app.js's comment for why not a year);
+//   - js/css keep NO_STALE_CODE_V1's no-cache — the font rule must not have
+//     widened it.
+test('fonts are served with the woff2 payload and long cache; code keeps no-cache', async () => {
+  const { server, base } = await startServer();
+  try {
+    const res = await fetch(`${base}/fonts/onest-latin.woff2`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('cache-control'), 'public, max-age=2592000');
+    const buf = Buffer.from(await res.arrayBuffer());
+    assert.equal(buf.subarray(0, 4).toString('latin1'), 'wOF2', 'not a real woff2 payload');
+    assert.ok(buf.length > 10000, `implausibly small font file: ${buf.length} bytes`);
+
+    // The other three subsets exist too — a missing cyrillic subset would
+    // render Russian UI in the fallback face next to Latin in Onest.
+    for (const f of ['onest-cyrillic.woff2', 'onest-cyrillic-ext.woff2', 'onest-latin-ext.woff2']) {
+      const r = await fetch(`${base}/fonts/${f}`);
+      assert.equal(r.status, 200, f);
+      const b = Buffer.from(await r.arrayBuffer());
+      assert.equal(b.subarray(0, 4).toString('latin1'), 'wOF2', f);
+    }
+
+    // The licence file ships alongside (SIL OFL requires it) and mentions Onest.
+    const lic = await fetch(`${base}/fonts/OFL.txt`);
+    assert.equal(lic.status, 200);
+    assert.match(await lic.text(), /Onest/);
+
+    // Code stays no-cache — NO_STALE_CODE_V1 unbroken by the font rule.
+    const css = await fetch(`${base}/css/admin.css`);
+    assert.equal(css.status, 200);
+    assert.equal(css.headers.get('cache-control'), 'no-cache');
+    const js = await fetch(`${base}/js/admin.js`);
+    assert.equal(js.status, 200);
+    assert.equal(js.headers.get('cache-control'), 'no-cache');
+  } finally {
+    server.close();
+  }
+});

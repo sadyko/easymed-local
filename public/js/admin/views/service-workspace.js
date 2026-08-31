@@ -23,6 +23,7 @@ import { printableSheet, loadDocSettings } from './doc-settings.js?v=q3company1'
 import { renderDesignedVariant } from './doc-variants.js?v=labref19a';   // WYSIWYG_BLANK_V1 — stateless renderer, own ?v is safe (STAMP_ONLY_V1)
 import { openVitalsDialog } from './patient-card.js?v=labshared1';   // CARD_SPEC_V1 — same URL as admin.js (one instance)
 import { serviceGroupLabel } from './service-group.js?v=aug17e';   // SERVICE_GROUPS_V1 — chips must survive a NULL type_id
+import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
 
 // AURORA_REAL_VITALS_V1 — the vitals strip is filled async from patient_vitals (see vitalsStrip / loadVitals).
 
@@ -4125,8 +4126,9 @@ async function openRecipeModal(ctx) {
         const html = `<!doctype html>
 <html><head><meta charset="utf-8"><title>Рецепт · ${escapeHtml(patientName)}</title>
 <style>
+${PRINT_FONT_FACE_CSS}
   * { box-sizing: border-box; }
-  body { font: 13px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; color: #111; margin: 18mm 16mm; }
+  body { font: 13px/1.5 'Onest', -apple-system, "Segoe UI", Roboto, sans-serif; color: #111; margin: 18mm 16mm; }
   .rh { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px;
         border-bottom: 2px solid #167873; padding-bottom: 10px; margin-bottom: 14px; }
   .rh-clinic b { display: block; font-size: 15px; color: #0b1418; }
@@ -4200,7 +4202,7 @@ async function openRecipeModal(ctx) {
     </div>
     <div class="rf-seal">М.П.</div>
   </div>
-  <script>window.onload = () => { window.focus(); window.print(); };</script>
+  <script>window.onload = () => { (document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve()).then(() => { window.focus(); window.print(); }); };</script>
 </body></html>`;
 
         const w = window.open('', '_blank', 'width=860,height=1024');
@@ -4425,9 +4427,9 @@ function _wireBlankPreview(ctx, frame) {
     const doc = frame.contentDocument;
     const st = doc.createElement('style');
     st.textContent = '.bk-pagesep{position:relative;display:block;}' +
-        '.bk-pageedge{position:absolute;left:-60px;right:-60px;height:26px;background:#dde5e3;box-shadow:inset 0 7px 7px -7px rgba(0,0,0,.3), inset 0 -7px 7px -7px rgba(0,0,0,.3);text-align:center;font:700 8.5px/26px Arial,sans-serif;letter-spacing:.14em;color:#7b908c;}' +
+        '.bk-pageedge{position:absolute;left:-60px;right:-60px;height:26px;background:#dde5e3;box-shadow:inset 0 7px 7px -7px rgba(0,0,0,.3), inset 0 -7px 7px -7px rgba(0,0,0,.3);text-align:center;font:700 8.5px/26px "Onest",Arial,sans-serif;letter-spacing:.14em;color:#7b908c;}' +
         '@media print{.bk-pagesep{display:none !important;}.bk-preview-note{display:none;}}' +
-        '.bk-preview-note{background:#fff7e6;border:1px solid #f0d9a8;color:#8a6d1f;font:600 11px/1.45 Arial,sans-serif;padding:8px 12px;border-radius:8px;margin:10px;}';
+        '.bk-preview-note{background:#fff7e6;border:1px solid #f0d9a8;color:#8a6d1f;font:600 11px/1.45 "Onest",Arial,sans-serif;padding:8px 12px;border-radius:8px;margin:10px;}';
     doc.head.appendChild(st);
     const note = doc.createElement('div');
     note.className = 'bk-preview-note';
@@ -4502,12 +4504,12 @@ function _wireBlankEditing(ctx, frame) {
         '[data-field]{min-height:3.2em;padding:2px 0;transition:background .12s;outline:none;}' +
         '[data-field]:empty::before{content:"' + tr('Нажмите, чтобы заполнить…') + '";color:#9fb3b0;font-style:italic;}' +
         '.bk-pagesep{position:relative;display:block;}' +
-        '.bk-pageedge{position:absolute;left:-60px;right:-60px;height:26px;background:#dde5e3;box-shadow:inset 0 7px 7px -7px rgba(0,0,0,.3), inset 0 -7px 7px -7px rgba(0,0,0,.3);text-align:center;font:700 8.5px/26px Arial,sans-serif;letter-spacing:.14em;color:#7b908c;}' +
+        '.bk-pageedge{position:absolute;left:-60px;right:-60px;height:26px;background:#dde5e3;box-shadow:inset 0 7px 7px -7px rgba(0,0,0,.3), inset 0 -7px 7px -7px rgba(0,0,0,.3);text-align:center;font:700 8.5px/26px "Onest",Arial,sans-serif;letter-spacing:.14em;color:#7b908c;}' +
         '@media print{.bk-pagesep{display:none !important;}}' +
         '.dx .dh{display:flex;align-items:baseline;}' +
         '.bk-rm{margin-left:auto;border:0;background:transparent;color:#c3ccd6;font-size:14px;line-height:1;cursor:pointer;padding:0 2px 0 8px;}' +
         '.bk-rm:hover{color:#dc2626;}' +
-        '.bk-add{display:block;width:100%;text-align:left;margin:7px 0;padding:8px 12px;border:1px dashed #cbd5e1;border-radius:8px;background:#f8fafc;color:#64748b;font:600 11px/1.2 "Helvetica Neue",Arial,sans-serif;cursor:pointer;}' +
+        '.bk-add{display:block;width:100%;text-align:left;margin:7px 0;padding:8px 12px;border:1px dashed #cbd5e1;border-radius:8px;background:#f8fafc;color:#64748b;font:600 11px/1.2 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;}' +
         '.bk-add:hover{border-color:var(--accent,#1a7f77);color:var(--accent,#1a7f77);}' +
         '.bk-ctl{margin-left:auto;display:inline-flex;align-items:center;gap:1px;}' +
         '.bk-up,.bk-dn{border:0;background:transparent;color:#9aa4b0;cursor:pointer;padding:2px 3px;border-radius:5px;display:inline-flex;align-items:center;}' +
@@ -4516,7 +4518,7 @@ function _wireBlankEditing(ctx, frame) {
         // PAPER_A4_KEEP_V1 — keep the full A4 page (no min-height override); buttons stack vertically.
         '[data-ws-actions]{display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;gap:8px;margin:16px 0 4px;}' +
         '[data-ws-actions] .ws-actbreak{flex-basis:100%;height:0;margin:0;}' +   // forces «Тел. врача» onto its own line
-        '[data-ws-actions] button{display:inline-flex;align-items:center;gap:6px;padding:8px 13px;border:1px solid #a7f3d0;border-radius:8px;background:#ecfdf5;color:#065f46;font:600 12px/1 "Helvetica Neue",Arial,sans-serif;cursor:pointer;}' +
+        '[data-ws-actions] button{display:inline-flex;align-items:center;gap:6px;padding:8px 13px;border:1px solid #a7f3d0;border-radius:8px;background:#ecfdf5;color:#065f46;font:600 12px/1 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;}' +
         '[data-ws-actions] button svg{width:15px;height:15px;flex:0 0 auto;}' +
         '[data-ws-actions] button:hover{border-color:#34d399;background:#d1fae5;}' +
         // DX_PLAIN_SECTION_V1 — in the editor the Диагноз block looks like every
@@ -4524,9 +4526,9 @@ function _wireBlankEditing(ctx, frame) {
         '.dx{background:#fff !important;border:1px solid #e2e8f0 !important;border-left:1px solid #e2e8f0 !important;border-radius:8px !important;padding:9px 12px 10px !important;margin:8px 0 !important;}' +
         '.dx:focus-within{border-color:var(--accent,#1a7f77) !important;box-shadow:0 0 0 2px rgba(22,120,115,.14);}' +
         '.dx .dh .ru,.dx .dh{color:#334155 !important;}' +
-        '.bk-icd{display:inline-flex;align-items:center;gap:6px;margin-top:7px;padding:7px 12px;border:1px dashed #e6c74c;border-radius:8px;background:#fef9c3;color:#854d0e;font:600 11.5px/1.2 "Helvetica Neue",Arial,sans-serif;cursor:pointer;}' + /* ICD_BTN_YELLOW_V1 */
+        '.bk-icd{display:inline-flex;align-items:center;gap:6px;margin-top:7px;padding:7px 12px;border:1px dashed #e6c74c;border-radius:8px;background:#fef9c3;color:#854d0e;font:600 11.5px/1.2 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;}' + /* ICD_BTN_YELLOW_V1 */
         '.bk-icd:hover{border-color:#ca8a04;background:#fef08a;color:#713f12;}' +
-        '.bk-recrm{margin-left:auto;border:0;background:transparent;color:#dc2626;font:600 11px/1 "Helvetica Neue",Arial,sans-serif;cursor:pointer;padding:2px 6px;border-radius:6px;opacity:.75;white-space:nowrap;}' +
+        '.bk-recrm{margin-left:auto;border:0;background:transparent;color:#dc2626;font:600 11px/1 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;padding:2px 6px;border-radius:6px;opacity:.75;white-space:nowrap;}' +
         '.svc .si,.recs li{display:flex;align-items:baseline;gap:6px;}' +   // REC_RM_INLINE_V1 — «Удалить» stays on the SAME line, pinned right
         '.recs li::before{content:"•";color:var(--accent,#1a7f77);}' +
         '.bk-recrm:hover{background:#fee2e2;opacity:1;}' +

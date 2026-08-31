@@ -7,6 +7,12 @@
 //   classic = full colour + branding (richer)        compact = ink-economy + small branding (denser, B&W)
 // DOC_FONT_UP_V3 — all inline font sizes scaled up (~x1.35 small / x1.25 mid / x1.1 large): printed documents were too small to read.
 
+// ONEST_TYPOGRAPHY_V1 — каждый вариант — полный standalone-документ со своим
+// <style>; admin.css сюда не попадает, поэтому @font-face вставляется в каждый
+// шаблон из общего модуля. Печать получает только СЕМЕЙСТВО — размеры бланков
+// остаются их выверенными метриками (дизайн-док 2026-08-31, решение владельца).
+import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';
+
 function esc(x) { return String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 function lines(t) { return String(t || '').split(/\n+/).map(x => x.trim()).filter(Boolean); }
 function logoTag(s, px) {
@@ -271,9 +277,10 @@ function conclusionClassic(s, d) {
     for (const k of _DEF_ORDER) if (_order.indexOf(k) < 0) _order.push(k);
     const _bodyHtml = _order.map(k => _secByField[k] || '').join('\n');
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Заключение · ${esc(d.patientName || '')}</title><style>
+${PRINT_FONT_FACE_CSS}
 :root{ --accent:${esc(s.accent)}; --accent-2:${esc(accent2)}; --accent-soft:${esc(s.accentSoft || '#eef6f5')}; --ink:${esc(s.ink || '#16213f')};
   --ink-2:#3a4258; --muted:#454e63; --faint:#6b7285; --line:#e3e6ec; --line-2:#eef0f4; --paper:#fff; --page-bg:#e9eaee; --card-line:#e7eceb; }
-*{margin:0;padding:0;box-sizing:border-box;} body{ background:var(--page-bg); font-family:"Helvetica Neue",Arial,"Segoe UI",sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; padding:24px 14px; display:flex; flex-direction:column; align-items:center; }
+*{margin:0;padding:0;box-sizing:border-box;} body{ background:var(--page-bg); font-family:'Onest',"Helvetica Neue",Arial,"Segoe UI",sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; padding:24px 14px; display:flex; flex-direction:column; align-items:center; }
 .sheet{ position:relative; width:210mm; min-height:297mm; display:flex; flex-direction:column; background:var(--paper); padding:15mm 14mm 16mm; box-shadow:0 8px 34px rgba(20,28,48,.16); }
 .head{ display:flex; justify-content:space-between; align-items:flex-start; gap:18px; }
 .brand{ display:flex; align-items:center; gap:13px; } .brand .wm{ font-size:25.5px; font-weight:800; color:var(--ink); letter-spacing:-.01em; line-height:1; } .brand .tg{ font-size:12px; color:var(--muted); letter-spacing:.04em; margin-top:4px; }
@@ -385,8 +392,9 @@ function conclusionCompact(s, d) {
     for (const k of _DEF_ORDER) if (_order.indexOf(k) < 0) _order.push(k);
     const _bodyHtml = _order.map(k => _secByField[k] || '').join('\n');
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Заключение · ${esc(d.patientName || '')}</title><style>
+${PRINT_FONT_FACE_CSS}
 :root{ --accent:${esc(s.accent)}; --accent-2:${esc(s.accent)}; --ink:${esc(s.ink || '#16213f')}; --ink-2:#39414f; --muted:#474f5e; --faint:#727a88; --line:#e2e4e9; --line-2:#eef0f3; --bar:#f2f3f5; --paper:#fff; --page-bg:#e9eaee; }
-*{margin:0;padding:0;box-sizing:border-box;} body{ background:var(--page-bg); font-family:"Helvetica Neue",Arial,"Segoe UI",sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; padding:24px 14px; display:flex; flex-direction:column; align-items:center; }
+*{margin:0;padding:0;box-sizing:border-box;} body{ background:var(--page-bg); font-family:'Onest',"Helvetica Neue",Arial,"Segoe UI",sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; padding:24px 14px; display:flex; flex-direction:column; align-items:center; }
 .sheet{ position:relative; width:210mm; min-height:297mm; background:var(--paper); padding:13mm 14mm 14mm; box-shadow:0 8px 30px rgba(20,28,48,.14); }
 .head{ display:flex; justify-content:space-between; align-items:flex-start; gap:18px; } .brand{ display:flex; align-items:center; gap:10px; } .brand .wm{ font-size:18.5px; font-weight:800; color:var(--ink); line-height:1; } .brand .tg{ font-size:9.5px; color:var(--muted); letter-spacing:.05em; margin-top:3px; text-transform:uppercase; }
 .clinic{ text-align:right; line-height:1.4; } .clinic .cn{ font-size:13.5px; font-weight:700; color:var(--ink); } .clinic .cl{ font-size:11.5px; color:var(--muted); margin-top:2px; }
@@ -450,8 +458,9 @@ function labClassic(s, d) {
     const row = (t) => `<tr><td class="pname">${esc(t.name)}${t.code ? ` <small>${esc(t.code)}</small>` : ''}</td><td class="r"><span class="val ${fcl(t.flag)}">${esc(t.value)}</span></td><td>${esc(t.unit || '')}</td><td class="ref">${refCellHtml(t.ref)}</td><td>${t.pos == null ? '<span class="rng-na">—</span>' : `<div class="range"><div class="track"></div><div class="band"></div><div class="mk ${fcl(t.flag)}" style="left:${Math.max(2, Math.min(98, t.pos))}%"></div></div>`}</td><td class="c">${t.flag ? `<span class="flag ${t.flag === 'H' ? 'h' : t.flag === 'L' ? 'l' : 'n'}">${fsym(t.flag)}</span>` : ''}</td></tr>`;
     const grp = (g) => `<div class="grp"><div class="grp-h"><span class="ru">${esc(g.title)}</span>${g.titleUz ? `<span class="uz">· ${esc(g.titleUz)}</span>` : ''}</div><table class="res"><colgroup><col style="width:33%"><col style="width:12%"><col style="width:13%"><col style="width:24%"><col style="width:10%"><col style="width:8%"></colgroup><thead><tr><th>Показатель<span class="uz">Ko‘rsatkich</span></th><th class="r">Результат<span class="uz">Natija</span></th><th>Ед.</th><th>Референс<span class="uz">Norma</span></th><th>Диапазон</th><th class="c">Флаг</th></tr></thead><tbody>${(g.tests || []).map(row).join('')}</tbody></table></div>`;
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Результаты анализов · ${esc(d.patientName || '')}</title><style>
+${PRINT_FONT_FACE_CSS}
 :root{ --accent:${esc(s.accent)}; --accent-2:${esc(s.accent)}; --accent-soft:${esc(s.accentSoft || '#eef6f5')}; --ink:${esc(s.ink || '#16213f')}; --ink-2:#3a4258; --muted:#454e63; --faint:#6b7285; --line:#e3e6ec; --line-2:#eef0f4; --paper:#fff; --page-bg:#e9eaee; --card-line:#e7eceb; --low:#2a6fb0; }
-*{margin:0;padding:0;box-sizing:border-box;} body{ background:var(--page-bg); font-family:"Helvetica Neue",Arial,"Segoe UI",sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; padding:24px 14px; display:flex; flex-direction:column; align-items:center; }
+*{margin:0;padding:0;box-sizing:border-box;} body{ background:var(--page-bg); font-family:'Onest',"Helvetica Neue",Arial,"Segoe UI",sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; padding:24px 14px; display:flex; flex-direction:column; align-items:center; }
 .sheet{ position:relative; width:210mm; min-height:297mm; background:var(--paper); padding:15mm 14mm 16mm; box-shadow:0 8px 34px rgba(20,28,48,.16); }
 .head{ display:flex; justify-content:space-between; align-items:flex-start; gap:18px; } .brand{ display:flex; align-items:center; gap:13px; } .brand .wm{ font-size:25.5px; font-weight:800; color:var(--ink); line-height:1; } .brand .tg{ font-size:12px; color:var(--muted); letter-spacing:.04em; margin-top:4px; }
 .clinic{ text-align:right; line-height:1.5; } .clinic .cl{ font-size:13.5px; color:var(--muted); } .clinic .cl b{ color:var(--ink-2); font-weight:600; }
@@ -494,8 +503,9 @@ function labCompact(s, d) {
     const row = (t) => `<tr><td class="pname">${esc(t.name)}${t.code ? ` <small>${esc(t.code)}</small>` : ''}</td><td class="r"><b${(t.flag === 'H' || t.flag === 'L') ? ' style="text-decoration:underline"' : ''}>${esc(t.value)}</b></td><td>${esc(t.unit || '')}</td><td class="ref">${refCellHtml(t.ref)}</td><td class="c flag">${fsym(t.flag)}</td></tr>`;
     const grp = (g) => `<div class="secbar"><span class="ru">${esc(g.title)}</span></div><table class="res"><colgroup><col style="width:36%"><col style="width:13%"><col style="width:15%"><col style="width:26%"><col style="width:10%"></colgroup><thead><tr><th>Показатель</th><th class="r">Результат</th><th>Ед.</th><th>Референс</th><th class="c">Флаг</th></tr></thead><tbody>${(g.tests || []).map(row).join('')}</tbody></table>`;
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Результаты анализов · ${esc(d.patientName || '')}</title><style>
+${PRINT_FONT_FACE_CSS}
 :root{ --accent:${esc(s.accent)}; --ink:${esc(s.ink || '#16213f')}; --ink-2:#39414f; --muted:#474f5e; --faint:#727a88; --line:#e2e4e9; --line-2:#eef0f3; --bar:#f2f3f5; --paper:#fff; --page-bg:#e9eaee; }
-*{margin:0;padding:0;box-sizing:border-box;} body{ background:var(--page-bg); font-family:"Helvetica Neue",Arial,"Segoe UI",sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; padding:24px 14px; display:flex; flex-direction:column; align-items:center; }
+*{margin:0;padding:0;box-sizing:border-box;} body{ background:var(--page-bg); font-family:'Onest',"Helvetica Neue",Arial,"Segoe UI",sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; padding:24px 14px; display:flex; flex-direction:column; align-items:center; }
 .sheet{ position:relative; width:210mm; min-height:297mm; background:var(--paper); padding:13mm 14mm 14mm; box-shadow:0 8px 30px rgba(20,28,48,.14); }
 .head{ display:flex; justify-content:space-between; align-items:flex-start; gap:18px; } .brand{ display:flex; align-items:center; gap:10px; } .brand .wm{ font-size:18.5px; font-weight:800; color:var(--ink); line-height:1; } .brand .tg{ font-size:9.5px; color:var(--muted); letter-spacing:.05em; margin-top:3px; text-transform:uppercase; } .clinic{ text-align:right; line-height:1.4; } .clinic .cl{ font-size:11.5px; color:var(--muted); margin-top:2px; }
 .hr{ height:2px; background:var(--ink); margin-top:8px; } .title{ text-align:center; margin-top:11px; } .title h1{ font-size:17.5px; font-weight:800; } .title .uz{ font-size:12px; font-style:normal; color:var(--muted); }
@@ -558,8 +568,9 @@ function imagingClassic(s, d) {
     const films = (d.films || []).slice(0, 3);
     const f = (l, uz, v) => v ? `<div class="fl">${esc(l)}${uz ? ` <i>· ${esc(uz)}</i>` : ''}</div><div class="fv">${esc(v)}</div>` : '';
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Диагностика · ${esc(d.patientName || '')}</title><style>
+${PRINT_FONT_FACE_CSS}
 :root{ --accent:${esc(s.accent)}; --accent-2:${esc(s.accent)}; --accent-soft:${esc(s.accentSoft || '#eef6f5')}; --ink:${esc(s.ink || '#16213f')}; --ink-2:#3a4258; --muted:#454e63; --faint:#6b7285; --line:#e3e6ec; --line-2:#eef0f4; --paper:#fff; --page-bg:#e9eaee; --card-line:#e7eceb; }
-*{margin:0;padding:0;box-sizing:border-box;} body{ background:var(--page-bg); font-family:"Helvetica Neue",Arial,"Segoe UI",sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; padding:24px 14px; display:flex; flex-direction:column; align-items:center; }
+*{margin:0;padding:0;box-sizing:border-box;} body{ background:var(--page-bg); font-family:'Onest',"Helvetica Neue",Arial,"Segoe UI",sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; padding:24px 14px; display:flex; flex-direction:column; align-items:center; }
 .sheet{ position:relative; width:210mm; min-height:297mm; background:var(--paper); padding:15mm 14mm 16mm; box-shadow:0 8px 34px rgba(20,28,48,.16); }
 .head{ display:flex; justify-content:space-between; align-items:flex-start; gap:18px; } .brand{ display:flex; align-items:center; gap:13px; } .brand .wm{ font-size:25.5px; font-weight:800; color:var(--ink); line-height:1; } .brand .tg{ font-size:12px; color:var(--muted); letter-spacing:.04em; margin-top:4px; } .clinic{ text-align:right; line-height:1.5; } .clinic .cl{ font-size:13.5px; color:var(--muted); } .clinic .cl b{ color:var(--ink-2); font-weight:600; }
 .rule{ height:1px; background:var(--line); margin:11px 0 0; } .title{ text-align:center; margin-top:15px; } .title h1{ font-size:20px; font-weight:800; color:var(--ink); } .title .uz{ font-size:15px; font-style:italic; color:var(--muted); margin-top:3px; }
@@ -601,8 +612,9 @@ function imagingCompact(s, d) {
     const st = d.study || {};
     const fld = (l, v) => v ? `<div class="fld"><span class="l">${esc(l)}</span><span class="d"></span><span class="v">${esc(v)}</span></div>` : '';
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Диагностика · ${esc(d.patientName || '')}</title><style>
+${PRINT_FONT_FACE_CSS}
 :root{ --accent:${esc(s.accent)}; --ink:${esc(s.ink || '#16213f')}; --ink-2:#39414f; --muted:#474f5e; --faint:#727a88; --line:#e2e4e9; --line-2:#eef0f3; --bar:#f2f3f5; --paper:#fff; --page-bg:#e9eaee; }
-*{margin:0;padding:0;box-sizing:border-box;} body{ background:var(--page-bg); font-family:"Helvetica Neue",Arial,"Segoe UI",sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; padding:24px 14px; display:flex; flex-direction:column; align-items:center; }
+*{margin:0;padding:0;box-sizing:border-box;} body{ background:var(--page-bg); font-family:'Onest',"Helvetica Neue",Arial,"Segoe UI",sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; padding:24px 14px; display:flex; flex-direction:column; align-items:center; }
 .sheet{ position:relative; width:210mm; min-height:297mm; background:var(--paper); padding:13mm 14mm 14mm; box-shadow:0 8px 30px rgba(20,28,48,.14); }
 .head{ display:flex; justify-content:space-between; align-items:flex-start; gap:18px; } .brand{ display:flex; align-items:center; gap:10px; } .brand .wm{ font-size:18.5px; font-weight:800; line-height:1; } .brand .tg{ font-size:9.5px; color:var(--muted); letter-spacing:.05em; margin-top:3px; text-transform:uppercase; } .clinic{ text-align:right; } .clinic .cl{ font-size:11.5px; color:var(--muted); margin-top:2px; }
 .hr{ height:2px; background:var(--ink); margin-top:8px; } .title{ text-align:center; margin-top:11px; } .title h1{ font-size:17.5px; font-weight:800; } .title .uz{ font-size:12px; font-style:italic; color:var(--muted); }
@@ -687,8 +699,9 @@ function invoiceClassic(s, d) {
     const t = invoiceTotals(d);
     const rows = (d.items || []).map((it, i) => `<tr><td class="num">${i + 1}</td><td class="svc">${esc(it.name || '—')}</td><td class="c">${esc(it.qty || 1)}</td><td class="r money">${money(it.price)}</td><td class="r money sum">${money(Number(it.qty || 1) * Number(it.price || 0))}</td></tr>`).join('');
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Счёт · ${esc(d.docNo || '')}</title><style>
+${PRINT_FONT_FACE_CSS}
 :root{ --accent:${esc(s.accent)}; --accent-2:${esc(s.accent)}; --accent-soft:${esc(s.accentSoft || '#eef6f5')}; --ink:${esc(s.ink || '#16213f')}; --ink-2:#3a4258; --muted:#454e63; --faint:#6b7285; --line:#e3e6ec; --line-2:#eef0f4; --paper:#fff; --page-bg:#e9eaee; --card-line:#e7eceb; }
-*{margin:0;padding:0;box-sizing:border-box;} body{ background:var(--page-bg); font-family:"Helvetica Neue",Arial,"Segoe UI",sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; padding:24px 14px; display:flex; flex-direction:column; align-items:center; }
+*{margin:0;padding:0;box-sizing:border-box;} body{ background:var(--page-bg); font-family:'Onest',"Helvetica Neue",Arial,"Segoe UI",sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; padding:24px 14px; display:flex; flex-direction:column; align-items:center; }
 .sheet{ position:relative; width:210mm; min-height:297mm; background:var(--paper); padding:15mm 14mm 16mm; box-shadow:0 8px 34px rgba(20,28,48,.16); }
 .head{ display:flex; justify-content:space-between; align-items:flex-start; gap:18px; } .brand{ display:flex; align-items:center; gap:13px; } .brand .wm{ font-size:25.5px; font-weight:800; color:var(--ink); line-height:1; } .brand .tg{ font-size:12px; color:var(--muted); letter-spacing:.04em; margin-top:4px; } .clinic{ text-align:right; line-height:1.5; } .clinic .cl{ font-size:13.5px; color:var(--muted); } .clinic .cl b{ color:var(--ink-2); font-weight:600; }
 .rule{ height:1px; background:var(--line); margin:11px 0 0; } .title{ text-align:center; margin-top:15px; } .title h1{ font-size:20px; font-weight:800; color:var(--ink); } .title .uz{ font-size:15px; font-style:italic; color:var(--muted); margin-top:3px; }
@@ -728,8 +741,9 @@ function invoiceCompact(s, d) {
     const kvFld = (arr) => (arr || []).map(([k, v]) => `<div class="fld"><span class="l">${esc(k)}</span><span class="dd"></span><span class="v">${esc(v)}</span></div>`).join('');
     const rows = (d.items || []).map((it, i) => `<tr><td class="num">${i + 1}</td><td class="svc">${esc(it.name || '—')}</td><td class="c">${esc(it.qty || 1)}</td><td class="r">${money(it.price)}</td><td class="r sum">${money(Number(it.qty || 1) * Number(it.price || 0))}</td></tr>`).join('');
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Счёт · ${esc(d.docNo || '')}</title><style>
+${PRINT_FONT_FACE_CSS}
 :root{ --accent:${esc(s.accent)}; --ink:${esc(s.ink || '#16213f')}; --ink-2:#39414f; --muted:#474f5e; --faint:#727a88; --line:#e2e4e9; --line-2:#eef0f3; --bar:#f2f3f5; --paper:#fff; --page-bg:#e9eaee; }
-*{margin:0;padding:0;box-sizing:border-box;} body{ background:var(--page-bg); font-family:"Helvetica Neue",Arial,"Segoe UI",sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; padding:24px 14px; display:flex; flex-direction:column; align-items:center; }
+*{margin:0;padding:0;box-sizing:border-box;} body{ background:var(--page-bg); font-family:'Onest',"Helvetica Neue",Arial,"Segoe UI",sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; padding:24px 14px; display:flex; flex-direction:column; align-items:center; }
 .sheet{ position:relative; width:210mm; min-height:297mm; background:var(--paper); padding:13mm 14mm 14mm; box-shadow:0 8px 30px rgba(20,28,48,.14); }
 .head{ display:flex; justify-content:space-between; align-items:flex-start; gap:18px; } .brand{ display:flex; align-items:center; gap:10px; } .brand .wm{ font-size:18.5px; font-weight:800; line-height:1; } .brand .tg{ font-size:9.5px; color:var(--muted); letter-spacing:.05em; margin-top:3px; text-transform:uppercase; } .clinic{ text-align:right; } .clinic .cl{ font-size:11.5px; color:var(--muted); margin-top:2px; }
 .hr{ height:2px; background:var(--ink); margin-top:8px; } .title{ text-align:center; margin-top:11px; } .title h1{ font-size:17.5px; font-weight:800; } .title .uz{ font-size:12px; font-style:italic; color:var(--muted); }
@@ -818,10 +832,11 @@ function invoiceThermal(s, d) {
     const queueBlock = queueBlockHtml(d);   // QUEUE_TICKET_V2
     const items = (d.items || []).map((it, i) => `<div class="f-item"><div class="f-item-n">${i + 1}. ${esc(it.name)}</div><div class="f-item-r"><span>${esc(it.qty || 1)} × ${money(it.price)}</span><b>${money(Number(it.qty || 1) * Number(it.price || 0))}</b></div>${performerLine(it)}</div>`).join('');
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Счёт · ${esc(d.docNo || '')}</title><style>
+${PRINT_FONT_FACE_CSS}
 @page{ size:58mm auto; margin:0; }
 *{ margin:0; padding:0; box-sizing:border-box; }
 html,body{ background:#fff; }
-body{ width:46mm; margin:0; padding-top:6mm; font-family:"Helvetica Neue",Arial,sans-serif; color:#000; font-size:11px; line-height:1.28; overflow-wrap:anywhere; }
+body{ width:46mm; margin:0; padding-top:6mm; font-family:'Onest',"Helvetica Neue",Arial,sans-serif; color:#000; font-size:11px; line-height:1.28; overflow-wrap:anywhere; }
 .f-logo{ display:flex; justify-content:center; margin-bottom:2px; }
 .f-name{ text-align:center; font-size:14px; font-weight:800; line-height:1.12; }
 .f-sub{ text-align:center; font-size:9px; font-weight:700; margin-top:1px; }
@@ -872,10 +887,11 @@ function fiscalClassic(s, d) {
     const logo = (s.logoUrl || s.logoDataUrl) ? `<div class="f-logo"><img src="${esc(s.logoUrl || s.logoDataUrl)}" alt="" style="max-width:14mm;height:auto;filter:grayscale(1) contrast(1.5);"></div>` : '';
     const items = (d.items || []).map((it, i) => `<div class="f-item"><div class="f-item-n">${i + 1}. ${esc(it.name)}</div><div class="f-item-r"><span>${esc(it.qty || 1)} × ${money(it.price)}</span><b>${money(Number(it.qty || 1) * Number(it.price || 0))}</b></div>${performerLine(it)}</div>`).join('');
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Чек · ${esc(d.docNo || '')}</title><style>
+${PRINT_FONT_FACE_CSS}
 @page{ size:58mm auto; margin:0; }
 *{ margin:0; padding:0; box-sizing:border-box; }
 html,body{ background:#fff; }
-body{ width:46mm; margin:0; padding-top:6mm; font-family:"Helvetica Neue",Arial,sans-serif; color:#000; font-size:11px; line-height:1.28; overflow-wrap:anywhere; }
+body{ width:46mm; margin:0; padding-top:6mm; font-family:'Onest',"Helvetica Neue",Arial,sans-serif; color:#000; font-size:11px; line-height:1.28; overflow-wrap:anywhere; }
 .f-logo{ display:flex; justify-content:center; margin-bottom:2px; }
 .f-name{ text-align:center; font-size:14px; font-weight:800; line-height:1.12; }
 .f-sub{ text-align:center; font-size:9px; font-weight:700; margin-top:1px; }
@@ -933,10 +949,11 @@ function receiptClassic(s, d) {
     const logo = (s.logoUrl || s.logoDataUrl) ? `<div class="f-logo"><img src="${esc(s.logoUrl || s.logoDataUrl)}" alt="" style="max-width:14mm;height:auto;filter:grayscale(1) contrast(1.5);"></div>` : '';
     const items = (d.items || []).map((it, i) => `<div class="f-item"><div class="f-item-n">${i + 1}. ${esc(it.name)}</div><div class="f-item-r"><span>${esc(it.qty || 1)} × ${money(it.price)}</span><b>${money(Number(it.qty || 1) * Number(it.price || 0))}</b></div>${performerLine(it)}</div>`).join('');
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Чек · ${esc(d.docNo || '')}</title><style>
+${PRINT_FONT_FACE_CSS}
 @page{ size:58mm auto; margin:0; }
 *{ margin:0; padding:0; box-sizing:border-box; }
 html,body{ background:#fff; }
-body{ width:46mm; margin:0; padding-top:6mm; font-family:"Helvetica Neue",Arial,sans-serif; color:#000; font-size:11px; line-height:1.28; overflow-wrap:anywhere; }
+body{ width:46mm; margin:0; padding-top:6mm; font-family:'Onest',"Helvetica Neue",Arial,sans-serif; color:#000; font-size:11px; line-height:1.28; overflow-wrap:anywhere; }
 .f-logo{ display:flex; justify-content:center; margin-bottom:2px; }
 .f-name{ text-align:center; font-size:14px; font-weight:800; line-height:1.12; }
 .f-sub{ text-align:center; font-size:9px; font-weight:700; margin-top:1px; }

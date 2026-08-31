@@ -14,6 +14,9 @@
 // loadDocSettings() сам (это localStorage) — настройки передаёт вызывающий.
 
 import { renderDesignedVariant } from '../admin/views/doc-variants.js?v=labref19a';
+// ONEST_TYPOGRAPHY_V1 — печатное окно/PDF — отдельный документ, admin.css туда
+// не попадает; @font-face приезжает из общего модуля (см. его шапку).
+import { PRINT_FONT_FACE_CSS } from './print-fonts.js';
 export function esc(s) {
     return String(s ?? '').replace(/[&<>"']/g, ch => (
         { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
@@ -61,6 +64,7 @@ export function buildSheetHtml({ type = 'invoice', s = null, data = null, idLine
 <meta charset="utf-8">
 <title>${esc(title || titleFor(type))} · ${esc(idLine || '')}</title>
 <style>
+${PRINT_FONT_FACE_CSS}
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body {
@@ -167,7 +171,7 @@ body {
 .wm { position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; opacity:${cfg.watermarkOpacity ?? 0.04}; }
 .fiscal-body { font: 11px/1.4 ui-monospace, "JetBrains Mono", monospace; color:#000; white-space:pre; }
 /* FISCAL_58MM_V1 — adaptive receipt body: fits 58mm, large black bold, flex rows. */
-.fisc { font-family: "Helvetica Neue", Arial, sans-serif; color:#000; line-height:1.3; }
+.fisc { font-family: 'Onest', "Helvetica Neue", Arial, sans-serif; color:#000; line-height:1.3; }
 .fisc .f-name { text-align:center; font-size:15px; font-weight:800; line-height:1.15; }
 .fisc .f-sub { text-align:center; font-size:9.5px; font-weight:600; margin-top:1px; overflow-wrap:anywhere; }
 .fisc .f-hr { border-top:1px dashed #000; margin:5px 0; }
@@ -229,7 +233,7 @@ ${paper.cls === 'fiscal' ? `.sheet, .sheet * { color: #000 !important; font-weig
     ${type !== 'fiscal' && cfg.showWatermark ? watermarkMark(cfg) : ''}
     ${body}
 </div>
-<script>window.onload = () => { setTimeout(() => window.print(), 250); };</script>
+<script>window.onload = () => { (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(() => setTimeout(() => window.print(), 250)); };</script>
 </body></html>`;
 }
 
@@ -273,9 +277,13 @@ function renderBuiltinBody({ s, type, data }) {
 // Shared atoms
 // ---------------------------------------------------------------------------
 function fontFor(pair) {
+    // ONEST_TYPOGRAPHY_V1 — печать получает СЕМЕЙСТВО системы: обе sans-пары
+    // ведут Onest (прежние лидеры — Inter/IBM Plex — на клиниках всё равно не
+    // установлены и никогда не грузились). 'serif' оставлен как есть: это
+    // осознанный брендинговый выбор клиники, замена serif на sans поменяла бы
+    // сам характер документа, а не шрифтовой файл.
     return pair === 'serif'    ? `"Source Serif Pro", "Georgia", serif` :
-           pair === 'clinical' ? `"IBM Plex Sans", "Inter", system-ui, sans-serif` :
-                                 `"Inter", "SF Pro Text", system-ui, sans-serif`;
+                                 `'Onest', "IBM Plex Sans", "Inter", system-ui, sans-serif`;
 }
 function titleFor(type) {
     return ({
