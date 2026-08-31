@@ -101,7 +101,8 @@ export const REGISTRY = {
   },
   services: {
     read:  { roles: ALL_STAFF, columns: ['id','name','code','price','tax_rate','duration_minutes','requires_doctor','active','created_at','updated_at',
-             'is_lab','specimen','result_unit','ref_low','ref_high','ref_text','type','type_id','category_id','department_id','tube_color'] },   // tube_color: LAB_HANDLING_V1 (mig 041)
+             'is_lab','specimen','result_unit','ref_low','ref_high','ref_text','type','type_id','category_id','department_id','tube_color',
+             'default_doctor_percent','room_id'] },   // tube_color: LAB_HANDLING_V1 (mig 041); default_doctor_percent/room_id: SERVICE_EDITOR_V1 (mig 081) — read-only here, written ONLY by the service_save RPC (rates merge must be transactional)
     write: { insert: { roles: ['admin'], columns: ['name','code','price','tax_rate','duration_minutes','requires_doctor','active',
              'is_lab','specimen','result_unit','ref_low','ref_high','ref_text','type','type_id','category_id','department_id','tube_color'] },
              update: { roles: ['admin'], columns: ['name','code','price','tax_rate','duration_minutes','requires_doctor','active',

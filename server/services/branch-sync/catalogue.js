@@ -80,6 +80,15 @@ export const TABLES = [
       'name', 'code', 'price', 'tax_rate', 'duration_minutes', 'requires_doctor', 'active',
       'is_lab', 'specimen', 'result_unit', 'ref_low', 'ref_high', 'ref_text', 'type',
       'type_id', 'category_id', 'department_id', 'tube_color',
+      // SERVICE_EDITOR_V1 (миграция 081) — доля исполнителя по умолчанию ЕДЕТ:
+      // это ценовая политика клиники, и она путешествует вместе с прайсом.
+      'default_doctor_percent',
+      // services.room_id (та же миграция 081) НАМЕРЕННО ОТСУТСТВУЕТ: кабинет —
+      // факт ЗДАНИЯ, а не клиники. «Кабинет 5» главного филиала ничего не
+      // значит во втором корпусе, а приехавший чужой id указал бы на случайную
+      // местную комнату или в никуда. Принимающий филиал хранит свой
+      // NULL/локальный кабинет; перечень колонок здесь — и есть гарантия, что
+      // room_id физически не попадает в выгрузку (пин: 081.test.js).
     ],
     refs: { type_id: 'service_types', category_id: 'service_categories', department_id: 'departments' },
     natural: ['code', 'name'],
