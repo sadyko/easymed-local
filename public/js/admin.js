@@ -46,7 +46,7 @@ import { renderConsultation }     from './admin/views/consultation.js?v=dashpay1
 import { renderServiceWorkspace } from './admin/views/service-workspace.js?v=aug17e';
 import { renderPatientCard }  from './admin/views/patient-card.js?v=labshared1';   // PATIENT_CARD_DESIGN_V2 + SVC_ROW_ACTIONS_V1 (?v must match service-workspace.js)
 import { renderPlaceholder }  from './admin/views/placeholder.js';
-import { renderSectionCrud }  from './admin/views/section-crud.js?v=crudphone1';
+import { renderSectionCrud }  from './admin/views/section-crud.js?v=svceditor1';
 import { renderCashier, renderCashierHead } from './admin/views/cashier-desk.js?v=cash6';   // CASHIER_DESIGN_V2 + CASHIER_ROW_FIT_V1 — patient cell width, RU status, compact date
 import { renderReport }       from './admin/views/report.js';
 import { renderLaboratory }   from './admin/views/laboratory.js?v=labshared1';   // LAB_GROUP_V1 — patient-grouped queue + combined worksheet

@@ -22,6 +22,7 @@ import {
     exportRowsToExcel,
 } from './section-import-export.js?v=aug17e';
 import { openEmployeeEditor } from './employee-editor.js?v=multirole3';
+import { openServiceEditor } from './service-editor.js?v=svceditor1';   // SERVICE_EDITOR_V1
 import { renderItemsLedger } from './items-ledger.js?v=ledger3';   // ITEMS_LEDGER_V1
 import { phoneInput, isCodeOnly } from '../phone-input.js?v=ph1';
 
@@ -992,18 +993,21 @@ async function openEditor(container, onNavigate, row, forceForm) {   // CUSTOM_C
         return;
     }
 
-    // SERVICE_REQUEST_V1: clinics can no longer create services directly.
-    // Creating a NEW service (row === null) opens the "Request a service"
-    // modal, which files a service_requests row for admin review. Editing an
-    // existing service still uses the generic (price/operational-only) form.
-    // CUSTOM_CLINIC_V2 — "Add service" opens the SAME catalog window for every
-    // clinic (one shared structure across the platform). Clinics flagged
-    // custom_services_enabled get an extra path from the wizard footer
-    // (forceForm) into this generic form with all fields editable and
-    // core_service_id left null.
-    if (state.sectionKey === 'services') await clinicFlags();   // warm cache for formBody's sync reads
-    if (state.sectionKey === 'services' && !row && !forceForm && !clinicFlagsSync().custom_services_enabled) {
-        openAddServiceModal(container, onNavigate);   // ADD_SERVICE_CATALOG_V1 (shared clinics: catalog wizard)
+    // SERVICE_EDITOR_V1 — ONE editor everywhere for services: add AND edit open
+    // the dedicated dialog (views/service-editor.js), which saves through the
+    // service_save RPC in a single transaction. This replaces both prior paths
+    // through this function — the catalog wizard for row === null (its footer's
+    // forceForm route lands here too and gets the same editor) and the generic
+    // grouped form for edits. The wizard itself (openAddServiceModal) stays
+    // reachable from the «Из каталога» toolbar button for flagged clinics.
+    // Design: docs/plans/2026-08-31-service-editor-design.md — the services
+    // LIST above is untouched; only the form is replaced.
+    if (state.sectionKey === 'services') {
+        await openServiceEditor({
+            row,
+            readOnly: !canEdit(currentPermKey()),
+            onSaved: () => loadRows(container, onNavigate),
+        });
         return;
     }
     const fkSources = new Set(def.fields.filter(f => f.type === 'fk' && f.source).map(f => f.source));
