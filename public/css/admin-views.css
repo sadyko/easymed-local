@@ -3212,6 +3212,17 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .lq-collected{ font-size:12.5px; color:var(--ink-400); white-space:nowrap; }
 /* ============================ end LAB_QUEUE_V2 ============================ */
 
+/* ============================ LAB_STATS_V1 — usage statistics mode ============================ */
+/* Counts only — the same .chip look the queue cards use, restated here because
+   .chip is scoped per context (.lq-sub/.lw-meta) rather than global. */
+.lab-stats .chip{ background:var(--ink-25); border:1px solid var(--ink-100); border-radius:999px; padding:1px 9px; font-size:12.5px; color:var(--ink-600); font-weight:500; white-space:nowrap; }
+.lab-stats-title{ font-size:12.5px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-500); margin-bottom:6px; }
+.lab-stats-row{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:8px 6px; border-top:1px solid var(--ink-50); border-radius:9px; }
+.lab-stats-row:first-of-type{ border-top:none; }
+.lab-stats-row:hover{ background:var(--ink-25); }
+.lab-stats-name{ flex:1 1 40%; min-width:160px; font-size:13.5px; font-weight:600; color:var(--ink-900); }
+/* ============================ end LAB_STATS_V1 ============================ */
+
 /* ============================ LAB_ENTRY_V2 — simple "fill the value" entry form ============================ */
 .le-head{ display:grid; grid-template-columns: minmax(150px,1.5fr) minmax(120px,1.5fr) 56px minmax(100px,1fr) 112px 30px; gap:10px; padding:2px 8px 4px; font-size:12.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-400); font-weight:700; }
 .le-row{ display:grid; grid-template-columns: minmax(150px,1.5fr) minmax(120px,1.5fr) 56px minmax(100px,1fr) 112px 30px; align-items:center; gap:10px; padding:6px 8px; border-radius:10px; border-top:1px solid var(--ink-50); }

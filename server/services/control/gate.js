@@ -28,6 +28,9 @@ const READ_ONLY_RPCS = new Set([
   // UPDATE_DELIVERY_V1 — the approval screen's own status read; it changes
   // nothing, only reports the offer/approval/schedule/last result.
   'update_status',
+  // LAB_STATS_V1 — usage counters for the lab's panels and services. A pure
+  // read with no money in it — the same category as reports_overview above.
+  'lab_usage_stats',
   // CRM_CONFIG_V1 — the kanban's own vocabulary (columns, sources, call
   // routing). A pure read, and the board cannot be drawn without it: a
   // licence-lapsed clinic may read but not write, and "read" must not mean

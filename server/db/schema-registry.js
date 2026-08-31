@@ -12,7 +12,10 @@ const ALL_STAFF = ['admin','registrar','doctor','cashier','lab','nurse','invento
 // THIS set so the door the sidebar shows and the door the server opens are the
 // same door. If a clinic re-grants 'labs' to another role in Настройки → Роли,
 // this static list must follow — the ACL layer reads roles, not sections.
-const LAB_SECTION_ROLES = ['admin','doctor','lab','nurse'];
+// Exported (LAB_STATS_V1): rpc/lab-stats.js gates the read-only usage
+// statistics on the SAME constant, so the panel writes and the stats read can
+// never disagree about who holds the lab section.
+export const LAB_SECTION_ROLES = ['admin','doctor','lab','nurse'];
 
 export const REGISTRY = {
   // CRM_V1 (mig 044) — журнал обращений; конверсия в пациента выставляет

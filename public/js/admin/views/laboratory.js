@@ -101,7 +101,7 @@ function flagTag(f) {
 // -----------------------------------------------------------------------------
 // State
 // -----------------------------------------------------------------------------
-const refs = { container: null, list: null, emptyEl: null, totalEl: null, filterWrap: null, searchInp: null, panelsHost: null, tabId: null };
+const refs = { container: null, list: null, emptyEl: null, totalEl: null, filterWrap: null, searchInp: null, panelsHost: null, statsHost: null, periodWrap: null, tabId: null };
 const state = {
     rows: [],          // lab visit_services, newest first
     patientMap: {},    // visit_id -> { visit_date, patient }
@@ -111,15 +111,28 @@ const state = {
     typeNameById: {},  // service_type_id -> name (LAB_SERVICE_ROUTING_V1)
     filter: 'open',
     search: '',
-    mode: 'queue',     // LAB_PANELS_MODE_V1 — 'queue' | 'panels'
+    mode: 'queue',     // LAB_PANELS_MODE_V1 / LAB_STATS_V1 — 'queue' | 'panels' | 'stats'
+    statsPeriod: '30d',// LAB_STATS_V1 — the period chip in force ('today'|'7d'|'30d'|'all')
 };
 
 // LAB_PANELS_MODE_V1 — «Панели» is a MODE of Лаборатория, not a second sidebar
 // entry: the technician stays in the section they already live in, and the
-// module keeps one nav item and one tab.
+// module keeps one nav item and one tab. LAB_STATS_V1 adds the third side —
+// usage statistics (counts only, NO money: revenue lives in Отчёты behind its
+// own permissions, while THIS screen is open to every lab-section role).
 const MODES = [
     { key: 'queue',  label: 'Очередь' },
     { key: 'panels', label: 'Панели'  },
+    { key: 'stats',  label: 'Статистика' },
+];
+
+// LAB_STATS_V1 — the four periods the server's lab_usage_stats validates.
+// Default 30 дней (owner's choice). Same chip idiom as the queue filters.
+const STAT_PERIODS = [
+    { key: 'today', label: 'Сегодня'  },
+    { key: '7d',    label: '7 дней'   },
+    { key: '30d',   label: '30 дней'  },
+    { key: 'all',   label: 'Всё время' },
 ];
 
 export async function renderLaboratory(container, ctx = {}) {
@@ -127,35 +140,41 @@ export async function renderLaboratory(container, ctx = {}) {
     refs.tabId = ctx.tabId || null;   // HASH_SUBROUTE_V1 — needed to report the mode back to the shell
     state.filter = 'open';
     state.search = '';
-    // LAB_PANELS_MODE_V1 — the mode comes out of the URL: admin.js hands
-    // '#labs/panels' over as payload.sub, so a reload or a pasted link opens the
-    // mode it names instead of always dropping the user back on the queue.
+    state.statsPeriod = '30d';   // LAB_STATS_V1 — every visit starts on the default period
+    // LAB_PANELS_MODE_V1 / LAB_STATS_V1 — the mode comes out of the URL:
+    // admin.js hands '#labs/panels' / '#labs/stats' over as payload.sub, so a
+    // reload or a pasted link opens the mode it names instead of always
+    // dropping the user back on the queue.
     // Gated exactly like the switch itself — a role without lab-section access
     // gets the queue no matter what the address bar asks for (defence in depth:
     // the shell's isRouteAllowed('labs') already refused such a role the view).
-    const wantsPanels = !!(ctx.payload && ctx.payload.sub === 'panels');
-    state.mode = (wantsPanels && canEditLabPanels()) ? 'panels' : 'queue';
+    const sub = ctx.payload && ctx.payload.sub;
+    state.mode = ((sub === 'panels' || sub === 'stats') && canEditLabPanels()) ? sub : 'queue';
     mount();
     await paintMode();
 }
 
-// Paints the body the current mode needs. The queue and the panel editor are
-// two different screens sharing one page head, so nothing here is shared beyond
-// that head — mount() decides which body exists, this decides what fills it.
+// Paints the body the current mode needs. The queue, the panel editor and the
+// statistics are three different screens sharing one page head, so nothing
+// here is shared beyond that head — mount() decides which body exists, this
+// decides what fills it.
 async function paintMode() {
     if (state.mode === 'panels') await mountLabPanels(refs.panelsHost);
+    else if (state.mode === 'stats') await paintStats();
     else await fetchAndPaint();
 }
 
 // LAB_PANELS_MODE_V1 — switching mode rebuilds the head (the segmented control
 // has to move its «on» state and the queue's search/filter/refresh have no
-// meaning in the editor) and then repaints the body.
+// meaning in the other modes) and then repaints the body.
 async function setMode(mode) {
     if (state.mode === mode) return;
     // Defence in depth: the button is not rendered for a role without the right,
     // but a mode setter that trusts its own UI is one refactor away from being
-    // the hole. The permission is re-checked here too.
-    if (mode === 'panels' && !canEditLabPanels()) return;
+    // the hole. The permission is re-checked here too. The rule is the same
+    // for panels AND stats: lab-section access is the one gate (the server
+    // re-checks it again in lab_usage_stats / the panel-table ACL).
+    if (mode !== 'queue' && !canEditLabPanels()) return;
     state.mode = mode;
     syncModeUrl();
     mount();
@@ -170,14 +189,16 @@ async function setMode(mode) {
 function syncModeUrl() {
     try {
         if (typeof history === 'undefined' || !history.replaceState) return;
-        const panels = state.mode === 'panels';
-        history.replaceState({ view: 'labs', payload: panels ? { sub: 'panels' } : null },
-            '', '#labs' + (panels ? '/panels' : ''));
+        // LAB_STATS_V1 — the sub IS the mode for every non-queue mode; the
+        // queue is the bare '#labs'.
+        const sub = state.mode === 'queue' ? null : state.mode;
+        history.replaceState({ view: 'labs', payload: sub ? { sub } : null },
+            '', '#labs' + (sub ? '/' + sub : ''));
         // Tell the shell too: the address bar alone is not enough, because
         // navigate() rewrites the hash from the TAB's payload the next time
         // anyone routes to Лаборатория.
         if (typeof window !== 'undefined' && typeof window.easymedSetTabSub === 'function') {
-            window.easymedSetTabSub(refs.tabId, panels ? 'panels' : null);
+            window.easymedSetTabSub(refs.tabId, sub);
         }
     } catch (e) {
         // A hardened browser can refuse history writes; the mode still works,
@@ -274,28 +295,42 @@ function mount() {
 
     // LAB_PANELS_MODE_V1 — the editor gets its own host so switching modes swaps
     // one child instead of leaving the queue's card on screen behind it.
+    // LAB_STATS_V1 — the statistics get their own host for the same reason.
     refs.panelsHost = h('div');
-    const panels = state.mode === 'panels';
+    refs.statsHost = h('div', { class: 'lab-stats' });
+    refs.periodWrap = h('div', { class: 'segmented', role: 'group', 'aria-label': 'Период' });
+    const mode = state.mode;
+
+    const SUBTITLES = {
+        panels: 'Панели исследований, показатели и референсные значения. Создайте панели своей клиники и заполните референсные значения.',
+        stats:  'Сколько раз заказывали панели и лабораторные услуги и сколько выдано — за выбранный период.',
+        queue:  'Очередь проб: забор → в работу → результаты → проверка и выдача.',
+    };
+    // The queue's own controls filter the queue — in the other modes they
+    // would point at nothing, so they are absent rather than inert. The stats
+    // mode's only control is the period chips (the queue-chip idiom).
+    const ACTIONS = {
+        panels: [],
+        stats:  [refs.periodWrap],
+        queue:  [
+            refs.searchInp,
+            refs.filterWrap,
+            h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => fetchAndPaint() },
+                Icon('Refresh', { size: 13 }), ' Обновить'),
+        ],
+    };
 
     refs.container.appendChild(h('div', { class: 'fade-in' },
-        pageHead(
-            panels
-                ? 'Панели исследований, показатели и референсные значения. Создайте панели своей клиники и заполните референсные значения.'
-                : 'Очередь проб: забор → в работу → результаты → проверка и выдача.',
-            // The queue's own controls filter the queue — in the editor they
-            // would point at nothing, so they are absent rather than inert.
-            panels ? [] : [
-                refs.searchInp,
-                refs.filterWrap,
-                h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => fetchAndPaint() },
-                    Icon('Refresh', { size: 13 }), ' Обновить'),
-            ]),
-        panels ? refs.panelsHost : h('div', { class: 'card' },
-            refs.list,
-            refs.emptyEl,
-        ),
+        pageHead(SUBTITLES[mode], ACTIONS[mode]),
+        mode === 'panels' ? refs.panelsHost
+            : mode === 'stats' ? refs.statsHost
+            : h('div', { class: 'card' },
+                refs.list,
+                refs.emptyEl,
+            ),
     ));
-    if (!panels) paintFilters();
+    if (mode === 'queue') paintFilters();
+    if (mode === 'stats') paintPeriodChips();
 }
 
 function paintFilters() {
@@ -322,6 +357,87 @@ function paintFilters() {
             // an Uzbek screen.
         }, f.label, state.rows.length ? ` · ${counts[f.key]}` : null));
     }
+}
+
+// -----------------------------------------------------------------------------
+// LAB_STATS_V1 — «Статистика»: счётчики использования панелей и безпанельных
+// лабораторных услуг за период. Считает СЕРВЕР (rpc/lab-stats.js — SQL, не
+// перебор строк в браузере); правило разбиения там же: заказ услуги с активной
+// панелью — блок «Панели», лабораторная услуга без панели — блок «Услуги»,
+// одна строка visit_services ровно в одном блоке. «Выполнено» =
+// status='completed' (проверено и выдано — терминальное состояние миграции 041).
+// Денег в ответе нет вовсе: выручка живёт в «Отчётах» со своими правами.
+// -----------------------------------------------------------------------------
+function paintPeriodChips() {
+    clear(refs.periodWrap);
+    for (const p of STAT_PERIODS) {
+        refs.periodWrap.appendChild(h('button', {
+            type: 'button',
+            class: state.statsPeriod === p.key ? 'on' : null,
+            onclick: () => {
+                if (state.statsPeriod === p.key) return;
+                state.statsPeriod = p.key;
+                paintPeriodChips();
+                paintStats();
+            },
+            // I18N_COVERAGE_V1 — the label goes through tr() as a whole word;
+            // period chips carry no counts, so there is nothing to compose.
+        }, p.label));
+    }
+}
+
+// Counter chip: the WORD is translated alone (h() runs a lone string child
+// through tr()), the language-neutral « · N» is appended after — the same
+// compose-after-translate rule the queue chips learned the hard way.
+function statCountChip(label, n) {
+    return h('span', { class: 'chip' }, label, ` · ${n}`);
+}
+
+function statsRow(r) {
+    return h('div', { class: 'lab-stats-row' },
+        h('span', { class: 'lab-stats-name' },
+            r.name || '—',
+            r.code ? h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '12.5px' } }, ' · ' + r.code) : null),
+        statCountChip('Заказано', r.ordered),
+        statCountChip('Выполнено', r.completed),
+    );
+}
+
+function statsBlock(title, rows) {
+    return h('div', { class: 'card', style: { marginBottom: '14px' } },
+        h('div', { class: 'lab-stats-title' }, title),
+        // Zero-use rows are already absent (the server builds the blocks FROM
+        // the period's orders); a block with nothing left says so in words.
+        rows.length
+            ? h('div', null, ...rows.map(statsRow))
+            : h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '6px 0' } }, 'Нет данных за выбранный период.'),
+    );
+}
+
+let lastStatsToken = 0;
+
+async function paintStats() {
+    const token = ++lastStatsToken;
+    clear(refs.statsHost);
+    refs.statsHost.appendChild(h('div', { class: 'empty' }, 'Загрузка…'));
+    const { data, error } = await supabase.rpc('lab_usage_stats', { period: state.statsPeriod });
+    if (token !== lastStatsToken) return;   // an older answer must not overpaint a newer period
+    clear(refs.statsHost);
+    if (error) {
+        toast(trf('Не удалось загрузить статистику: {msg}', { msg: (error && error.message) || error }), 'fail');
+        refs.statsHost.appendChild(h('div', { class: 'card' },
+            h('div', { class: 'empty' }, 'Нет данных за выбранный период.')));
+        return;
+    }
+    const panels = (data && data.panels) || [];
+    const services = (data && data.services) || [];
+    if (!panels.length && !services.length) {
+        refs.statsHost.appendChild(h('div', { class: 'card' },
+            h('div', { class: 'empty' }, 'Нет данных за выбранный период.')));
+        return;
+    }
+    refs.statsHost.appendChild(statsBlock('Панели', panels));
+    refs.statsHost.appendChild(statsBlock('Лабораторные услуги', services));
 }
 
 // -----------------------------------------------------------------------------

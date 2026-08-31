@@ -2677,6 +2677,15 @@ export const STRINGS = {
   // Accessible names for controls that carried only a tooltip (or only a glyph)
   // before the extraction — a screen reader reads these, so they need the same
   // three languages as anything else on screen.
+  // LAB_STATS_V1 — Лаборатория's third mode: usage statistics (counts only,
+  // no money). «Сегодня»/«7 дней»/«30 дней»/«Всё время»/«Период»/«Выполнено»/
+  // «Лабораторные услуги»/«Загрузка…» already exist elsewhere in this file —
+  // one word, one entry.
+  "Статистика": {"en":"Statistics","ru":"Статистика","uz":"Statistika"},
+  "Заказано": {"en":"Ordered","ru":"Заказано","uz":"Buyurtma qilingan"},
+  "Сколько раз заказывали панели и лабораторные услуги и сколько выдано — за выбранный период.": {"en":"How many times panels and laboratory services were ordered, and how many were completed — for the selected period.","ru":"Сколько раз заказывали панели и лабораторные услуги и сколько выдано — за выбранный период.","uz":"Tanlangan davrda panellar va laboratoriya xizmatlari necha marta buyurtma qilingani va nechtasi berilgani."},
+  "Нет данных за выбранный период.": {"en":"No data for the selected period.","ru":"Нет данных за выбранный период.","uz":"Tanlangan davr uchun ma'lumot yo'q."},
+  "Не удалось загрузить статистику: {msg}": {"en":"Could not load the statistics: {msg}","ru":"Не удалось загрузить статистику: {msg}","uz":"Statistikani yuklab bo'lmadi: {msg}"},
   "Поиск панели": {"en":"Search panels","ru":"Поиск панели","uz":"Panel qidirish"},
   "Создать копию выбранной панели": {"en":"Duplicate the selected panel","ru":"Создать копию выбранной панели","uz":"Tanlangan panel nusxasini yaratish"},
   "Создать пустую панель вручную": {"en":"Create an empty panel by hand","ru":"Создать пустую панель вручную","uz":"Bo'sh panelni qo'lda yaratish"},

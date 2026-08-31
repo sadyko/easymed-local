@@ -19,6 +19,7 @@ import { setAdmissionDate } from './admission-date.js';   // ADMISSION_DATE_EDIT
 import { deleteService, serviceDeleteCheck } from './catalog.js';   // SERVICE_DELETE_V1
 import { serviceSave } from './service-save.js';   // SERVICE_EDITOR_V1
 import { saveLabResults } from './lab.js';   // LAB_SAVE_BATCH_V1
+import { labUsageStats } from './lab-stats.js';   // LAB_STATS_V1
 import { cashierReport } from './cashier-report.js';   // CASHIER_REPORT_V1
 import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
 import { licenceStatus, licenceUnlock, licenceEnroll, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
@@ -144,6 +145,11 @@ export const RPC = {
   // превращались в секунду ожидания, а обрыв связи посередине оставлял
   // половину бланка сохранённой.
   save_lab_results:               (db, args, user) => saveLabResults(db, args, user),
+
+  // LAB_STATS_V1 — «Лаборатория → Статистика»: сколько раз заказаны панели и
+  // безпанельные лабораторные услуги за период и сколько выдано. Только
+  // счётчики, никаких денег; доступ — LAB_SECTION_ROLES, как у записей панелей.
+  lab_usage_stats:                (db, args, user) => labUsageStats(db, args, user),
 
   // CASHIER_REPORT_V1 — «Отчёт кассира»: приход, расход и итог за ПЕРИОД
   // (в отличие от X-отчёта смены, который смотрит на одну смену).

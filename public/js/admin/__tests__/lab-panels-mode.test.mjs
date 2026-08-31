@@ -157,6 +157,17 @@ const SERVICES = [{ id: 's-1', name: 'ОАК', type: 'lab', is_lab: true, depart
 const VISIT_SERVICES = [];
 const VISITS = [];
 
+// LAB_STATS_V1 — the fake /api/rpc/lab_usage_stats answer. Names are Latin on
+// purpose: the uz test asserts the WHOLE stats screen carries no Cyrillic, and
+// clinic data must not fake-fail that by being Russian in the fixture.
+const STATS_DEFAULT = () => ({
+  period: '30d', from: '2026-08-02', to: '2026-08-31',
+  panels: [{ panel_id: 'p-1', name: 'Umumiy qon tahlili', code: 'CBC', service_id: 's-1', service_name: 'OAK', ordered: 3, completed: 1 }],
+  services: [{ service_id: 's-9', name: 'D-dimer', ordered: 2, completed: 2 }],
+});
+let STATS = STATS_DEFAULT();
+let rpcCalls = [];
+
 let dbCalls = [];
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
@@ -175,6 +186,14 @@ globalThis.fetch = async (url, opts) => {
       lab_results: [],
     }[table] || [];
     return { ok: true, json: async () => ({ data: JSON.parse(JSON.stringify(rows)) }) };
+  }
+  if (u.startsWith('/api/rpc/')) {
+    const name = decodeURIComponent(u.slice('/api/rpc/'.length));
+    rpcCalls.push({ name, args: body });
+    if (name === 'lab_usage_stats') {
+      return { ok: true, json: async () => ({ data: JSON.parse(JSON.stringify(STATS)) }) };
+    }
+    return { ok: true, json: async () => ({ data: null }) };
   }
   return { ok: true, json: async () => ({ data: null }) };
 };
@@ -195,7 +214,7 @@ const LAB_SEEDED = { name: 'lab', permissions: { sections: ['labs', 'patients', 
 const LAB_VIEWER = { name: 'Медсестра', permissions: { sections: ['labs', 'patients', 'dashboard'], levels: { labs: 'viewer', patients: 'editor', dashboard: 'viewer' } } };
 const NO_LABS    = { name: 'Регистратура', permissions: { sections: ['patients', 'dashboard'], levels: { patients: 'editor', dashboard: 'viewer' } } };
 
-function reset() { toastMsg = null; dbCalls = []; lastHistoryUrl = null; historyWrites = 0; tabSubCalls = []; VISIT_SERVICES.length = 0; VISITS.length = 0; }
+function reset() { toastMsg = null; dbCalls = []; rpcCalls = []; STATS = STATS_DEFAULT(); lastHistoryUrl = null; historyWrites = 0; tabSubCalls = []; VISIT_SERVICES.length = 0; VISITS.length = 0; }
 
 // Markers the panel editor — and only the panel editor — puts on screen.
 function assertPanelEditor(root, where) {
@@ -219,7 +238,8 @@ test('любой доступ к Лаборатории — включая чт�
   await tick();
 
   const btns = modeButtons(root);
-  assert.deepStrictEqual(btns.map(textOf), ['Очередь', 'Панели'], 'двусторонний переключатель в шапке');
+  // LAB_STATS_V1 — the switch grew a third side: usage statistics.
+  assert.deepStrictEqual(btns.map(textOf), ['Очередь', 'Панели', 'Статистика'], 'трёхсторонний переключатель в шапке');
   assert.ok(btns[0].className.includes('on'), 'по умолчанию — Очередь');
   assert.strictEqual(btns[0].attrs['aria-pressed'], 'true');
   assert.strictEqual(btns[1].attrs['aria-pressed'], 'false');
@@ -281,6 +301,14 @@ test('роль без раздела Лаборатория: ни переклю
   assert.ok(textOf(root).includes('Очередь проб'), 'показана очередь');
   // (в живой оболочке этот пользователь не дошёл бы и сюда: renderViewInto
   // отсекает '#labs' через isRouteAllowed — это защита в глубину.)
+
+  // LAB_STATS_V1 — и статистика по прямой ссылке ему тоже не открывается.
+  const root2 = mk('div');
+  await renderLaboratory(root2, { payload: { sub: 'stats' } });
+  await tick();
+  assert.ok(!findButtonByText(root2, /^Статистика$/), 'кнопки «Статистика» нет');
+  assert.ok(!textOf(root2).includes('Заказано'), 'счётчики не отрисованы по прямой ссылке');
+  assert.ok(textOf(root2).includes('Очередь проб'), 'вместо статистики — очередь');
 });
 
 test('переключатель заметный: seg-lg на переключателе режима — и только на нём', async () => {
@@ -310,9 +338,9 @@ test('переключатель заметный: seg-lg на переключ�
 // the queue drew the switch beside the title, the editor pushed it to the far
 // right and grew a grey «lab-v7» after the title. One head, one builder, both
 // modes — the queue layout is the base.
-test('одна шапка на оба режима: заголовок, рядом с ним переключатель, подзаголовок — одинаково в очереди и в «Панелях»', async () => {
+test('одна шапка на все режимы: заголовок, рядом с ним переключатель, подзаголовок — одинаково в очереди, «Панелях» и «Статистике»', async () => {
   setFullAccess('Администратор');
-  for (const [name, ctx] of [['очередь', {}], ['панели', { payload: { sub: 'panels' } }]]) {
+  for (const [name, ctx] of [['очередь', {}], ['панели', { payload: { sub: 'panels' } }], ['статистика', { payload: { sub: 'stats' } }]]) {
     reset();
     const root = mk('div');
     await renderLaboratory(root, ctx);
@@ -349,7 +377,7 @@ test('одна шапка на оба режима: заголовок, рядо
 
 test('маркер сборки не показывается пользователю: не текст на экране, а data-атрибут шапки — в обоих режимах', async () => {
   setFullAccess('Администратор');
-  for (const [name, ctx] of [['панели', { payload: { sub: 'panels' } }], ['очередь', {}]]) {
+  for (const [name, ctx] of [['панели', { payload: { sub: 'panels' } }], ['очередь', {}], ['статистика', { payload: { sub: 'stats' } }]]) {
     reset();
     const root = mk('div');
     await renderLaboratory(root, ctx);
@@ -417,12 +445,102 @@ test('переключение режима пишет адрес: #labs/panels 
   assert.deepStrictEqual(history.state, { view: 'labs', payload: { sub: 'panels' } },
     'состояние истории несёт тот же sub, который admin.js вернёт обратно во view');
 
+  // LAB_STATS_V1 — третий режим ходит тем же HASH_SUBROUTE-путём.
+  modeButtons(root)[2].click();
+  await tick();
+  assert.strictEqual(lastHistoryUrl, '#labs/stats', 'статистика тоже в адресной строке');
+  assert.deepStrictEqual(history.state, { view: 'labs', payload: { sub: 'stats' } });
+
   modeButtons(root)[0].click();
   await tick();
   assert.strictEqual(lastHistoryUrl, '#labs', 'возврат в очередь убирает подмаршрут');
-  assert.strictEqual(historyWrites, 2, 'ровно два replaceState — ни одного pushState');
-  assert.deepStrictEqual(tabSubCalls, [['labs', 'panels'], ['labs', null]],
+  assert.strictEqual(historyWrites, 3, 'ровно три replaceState — ни одного pushState');
+  assert.deepStrictEqual(tabSubCalls, [['labs', 'panels'], ['labs', 'stats'], ['labs', null]],
     'оболочка узнаёт о режиме — иначе следующий navigate() перепишет адрес из устаревшего payload вкладки');
+});
+
+// ---------------------------------------------------------------------------
+// LAB_STATS_V1 — «Статистика»: how often each panel and each bare lab service
+// was used. Counts only, NO money (owner: revenue lives in Отчёты behind its
+// own permissions; every lab-section role sees this screen). The screen is a
+// third MODE of Лаборатория through the same shared pageHead, with the queue's
+// chip idiom for the period and compose-after-translate counters.
+// ---------------------------------------------------------------------------
+test('режим «Статистика»: чипы периода (по умолчанию 30 дней), два блока счётчиков, RPC зовётся с периодом', async () => {
+  reset();
+  setEffectiveFromRole(LAB_SEEDED);   // лаборант видит статистику без единой настройки
+  const root = mk('div');
+  await renderLaboratory(root, { payload: { sub: 'stats' } });
+  await tick();
+
+  const btns = modeButtons(root);
+  assert.ok(btns[2].className.includes('on'), '«Статистика» подсвечена');
+  assert.strictEqual(btns[2].attrs['aria-pressed'], 'true');
+  assert.ok(!textOf(root).includes('Открытые'), 'фильтров очереди нет — они про очередь');
+  assert.ok(!textOf(root).includes('Из каталога'), 'редактора панелей нет');
+
+  // Чипы периода — тот же .segmented-идиом, что у фильтров очереди.
+  const wrap = walk(root).find((n) => n.attrs['aria-label'] === 'Период');
+  assert.ok(wrap, 'группа периодов с доступным именем');
+  const chips = findAllButtons(wrap);
+  assert.deepStrictEqual(chips.map(textOf), ['Сегодня', '7 дней', '30 дней', 'Всё время']);
+  assert.ok(chips[2].className.includes('on'), 'период по умолчанию — 30 дней');
+
+  // Ровно один вызов RPC, период проговорён явно.
+  assert.deepStrictEqual(rpcCalls, [{ name: 'lab_usage_stats', args: { period: '30d' } }]);
+
+  // Оба блока и счётчики: слово переводится ЦЕЛИКОМ, « · N» приклеивается ПОСЛЕ
+  // (тот же урок, что у чипов очереди — I18N_COVERAGE_V1).
+  const text = textOf(root);
+  assert.ok(text.includes('Панели'), 'блок панелей');
+  assert.ok(text.includes('Лабораторные услуги'), 'блок безпанельных услуг');
+  assert.ok(text.includes('Umumiy qon tahlili'), 'панель из ответа RPC');
+  assert.ok(text.includes('Заказано · 3'), 'заказы панели: ' + text.slice(0, 400));
+  assert.ok(text.includes('Выполнено · 1'), 'выдано по панели');
+  assert.ok(text.includes('D-dimer'), 'безпанельная услуга');
+  assert.ok(text.includes('Заказано · 2'));
+  assert.ok(text.includes('Выполнено · 2'));
+
+  // Смена периода: новый вызов RPC, подсветка переезжает.
+  chips[0].click();
+  await tick();
+  assert.deepStrictEqual(rpcCalls[1], { name: 'lab_usage_stats', args: { period: 'today' } });
+  const after = findAllButtons(walk(root).find((n) => n.attrs['aria-label'] === 'Период'));
+  assert.ok(after[0].className.includes('on'), '«Сегодня» подсвечен');
+  assert.ok(!after[2].className.includes('on'), '«30 дней» погашен');
+});
+
+test('статистика честно пуста: нулевые данные — сообщение словами, никаких фантомных счётчиков', async () => {
+  reset();
+  setFullAccess('Администратор');
+  STATS = { period: '30d', from: '2026-08-02', to: '2026-08-31', panels: [], services: [] };
+  const root = mk('div');
+  await renderLaboratory(root, { payload: { sub: 'stats' } });
+  await tick();
+  assert.ok(textOf(root).includes('Нет данных за выбранный период.'), 'пустое состояние названо словами');
+  assert.ok(!textOf(root).includes('Заказано'), 'нет счётчиков без данных');
+});
+
+test('статистика по-узбекски: экран целиком без кириллицы — слово переводится, счётчик собирается после', async () => {
+  reset();
+  setFullAccess('Администратор');
+  try {
+    setLang('uz');
+    const root = mk('div');
+    await renderLaboratory(root, { payload: { sub: 'stats' } });
+    await tick();
+    const text = textOf(root);
+    assert.ok(text.includes('Buyurtma qilingan · 3'), 'слово переведено целиком, счётчик после: ' + text.slice(0, 300));
+    assert.ok(text.includes('Bajarildi · 1'), 'выполнено переведено');
+    const wrap = walk(root).find((n) => n.attrs['aria-label'] === 'Davr');
+    assert.ok(wrap, 'доступное имя группы периодов тоже переведено');
+    assert.deepStrictEqual(findAllButtons(wrap).map(textOf), ['Bugun', '7 kun', '30 kun', 'Butun davr'],
+      'чипы периода — переведённые слова');
+    assert.ok(!/[Ѐ-ӿ]/.test(text),
+      'на узбекском экране статистики нет кириллицы: ' + (text.match(/[Ѐ-ӿ][^ ]*/g) || []).slice(0, 8).join(', '));
+  } finally {
+    setLang('ru');   // остальные тесты файла закреплены на русских строках
+  }
 });
 
 // ---------------------------------------------------------------------------
