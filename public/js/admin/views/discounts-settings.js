@@ -6,6 +6,7 @@
 // `remaining` and land as payments method 'gift_card' (notes 'gift:<id>').
 import { supabase } from '../../supabase.js';
 import { h, Icon, PageHead, toast, clear, fmtDate, initials, avColor } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { loadPatientsPaged, insertRow, currentUser } from '../data.js';
 
 const KINDS = [
@@ -39,7 +40,7 @@ export async function renderDiscountsSettings(container, { onNavigate } = {}) {
                 for (const p of (ps || [])) state.patients[p.id] = (p.full_name || [p.last_name, p.first_name].filter(Boolean).join(' ') || '—') + (p.mrn ? ' · ' + p.mrn : '');
             }
         } catch (e) {
-            toast('Не удалось загрузить: ' + (e.message || e), 'fail');
+            toast(trf('Не удалось загрузить: {msg}', { msg: e.message || e }), 'fail');
             state.rows = [];
         }
         state.loaded = true;
@@ -48,19 +49,19 @@ export async function renderDiscountsSettings(container, { onNavigate } = {}) {
     function valueCell(r) {
         if (r.kind === 'promo_code') {
             return r.discount_type === 'amount'
-                ? h('span', { class: 'num', style: { fontWeight: 700 } }, '−' + fmtUZS(r.amount) + ' сум')
+                ? h('span', { class: 'num', style: { fontWeight: 700 } }, '−' + fmtUZS(r.amount), ' сум')
                 : h('span', { class: 'num', style: { fontWeight: 700 } }, '−' + Number(r.percent || 0) + '%');
         }
         const rem = Number(r.remaining ?? r.amount ?? 0);
         return h('span', null,
             h('span', { class: 'num', style: { fontWeight: 700, color: rem > 0 ? 'var(--ok-700)' : 'var(--ink-400)' } }, fmtUZS(rem)),
-            h('span', { class: 'muted', style: { fontSize: '11px' } }, ' / ' + fmtUZS(r.amount) + ' сум'));
+            h('span', { class: 'muted', style: { fontSize: '11px' } }, ' / ' + fmtUZS(r.amount), ' сум'));
     }
     function limitsCell(r) {
         const bits = [];
-        if (r.max_uses != null) bits.push(`${r.used_count || 0} из ${r.max_uses} исп.`);
-        else if (r.used_count) bits.push(`${r.used_count} исп.`);
-        if (Number(r.min_purchase) > 0) bits.push('от ' + fmtUZS(r.min_purchase));
+        if (r.max_uses != null) bits.push(trf('{used} из {max} исп.', { used: r.used_count || 0, max: r.max_uses }));
+        else if (r.used_count) bits.push(trf('{n} исп.', { n: r.used_count }));
+        if (Number(r.min_purchase) > 0) bits.push(trf('от {sum}', { sum: fmtUZS(r.min_purchase) }));
         return bits.join(' · ') || '—';
     }
     function validityCell(r) {
@@ -133,7 +134,7 @@ export async function renderDiscountsSettings(container, { onNavigate } = {}) {
                     h('button', { class: 'btn btn-ghost btn-sm', style: { color: r.active ? 'var(--crit-700)' : 'var(--ok-700)' },
                         onclick: async () => {
                             const { error } = await supabase.from('patient_discounts').update({ active: !r.active }).eq('id', r.id);
-                            if (error) { toast('Не удалось: ' + error.message, 'fail'); return; }
+                            if (error) { toast(trf('Не удалось: {msg}', { msg: error.message }), 'fail'); return; }
                             r.active = !r.active; paintList();
                         } }, r.active ? 'Выключить' : 'Включить')),
             );
@@ -260,7 +261,7 @@ export async function renderDiscountsSettings(container, { onNavigate } = {}) {
                     payload.created_by_name = currentUser()?.full_name || null;
                     const { error } = await insertRow('patient_discounts', payload, { stampCreatedBy: false });
                     if (error) throw error;
-                    toast('Создано: ' + code);
+                    toast(trf('Создано: {code}', { code }));
                 } else {
                     const { error } = await supabase.from('patient_discounts').update(payload).eq('id', r.id);
                     if (error) throw error;
@@ -269,14 +270,14 @@ export async function renderDiscountsSettings(container, { onNavigate } = {}) {
                 close();
                 await loadRows(); paintList();
             } catch (e) {
-                toast(/duplicate|uniq/i.test(e.message || '') ? 'Такой код уже существует.' : 'Не удалось сохранить: ' + (e.message || e), 'fail');
+                toast(/duplicate|uniq/i.test(e.message || '') ? 'Такой код уже существует.' : trf('Не удалось сохранить: {msg}', { msg: e.message || e }), 'fail');
                 btn.disabled = false;
             }
         }
 
         overlay.appendChild(h('div', { class: 'modal-card', style: { width: '560px', maxWidth: 'calc(100vw - 32px)' } },
             h('header', { class: 'modal-head' },
-                h('h2', null, Icon('Coins', { size: 16 }), ' ', isNew ? 'Новая скидка' : 'Изменить — ' + (r.code || '')),
+                h('h2', null, Icon('Coins', { size: 16 }), ' ', isNew ? 'Новая скидка' : trf('Изменить — {code}', { code: r.code || '' })),
                 h('button', { class: 'modal-close', onclick: close }, '×')),
             h('div', { class: 'modal-body', style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 14px' } },
                 fld('Тип', fKind),

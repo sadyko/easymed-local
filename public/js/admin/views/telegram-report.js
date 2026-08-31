@@ -17,6 +17,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, fmtDateTime } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { fileTo16x9Jpeg } from './image-16x9.js';   // TELEGRAM_BROADCAST_IMG_V1
 
 const state = { stats: null, links: null, linksError: null, preview: null, sending: null, busy: false };
@@ -70,7 +71,7 @@ async function paint(body) {
     try { state.stats = await rpc('telegram_stats'); }
     catch (e) {
         clear(body);
-        body.appendChild(h('div', { class: 'empty', style: { padding: '30px' } }, 'Не удалось загрузить: ' + e.message));
+        body.appendChild(h('div', { class: 'empty', style: { padding: '30px' } }, trf('Не удалось загрузить: {msg}', { msg: e.message })));
         return;
     }
     // TG_LINKS_IN_REPORT_V1 — список подключённых грузим ОТДЕЛЬНО от статистики:
@@ -201,7 +202,7 @@ function daily30Chart(s) {
     return h('div', { style: { marginTop: '16px' } },
         h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '8px' } },
             h('div', { style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-700)' } }, 'Новые подключения по дням'),
-            h('span', { style: { fontSize: '11.5px', color: 'var(--ink-500)' } }, 'макс. ' + max + ' в день')),
+            h('span', { style: { fontSize: '11.5px', color: 'var(--ink-500)' } }, trf('макс. {n} в день', { n: max }))),
         h('div', { style: { position: 'relative' } }, tip, bars),
         h('div', { style: { display: 'flex', justifyContent: 'space-between', marginTop: '4px' } },
             axisLabel(shortDate(days[0].iso)), axisLabel('сегодня')));
@@ -273,12 +274,12 @@ function linksTable(rows, bodyEl, onRevoked) {
         const revokeBtn = h('button', { class: 'btn btn-sm btn-danger', type: 'button',
             style: { display: l.revoked ? 'none' : '' },
             title: l.patients.length > 1
-                ? 'Отвязать Telegram — доступ закроется ко всем ' + l.patients.length + ' картам на этом номере'
+                ? trf('Отвязать Telegram — доступ закроется ко всем {n} картам на этом номере', { n: l.patients.length })
                 : 'Отвязать Telegram',
             onclick: async () => {
                 const extra = l.patients.length > 1
-                    ? '\n\nНа этом номере ' + l.patients.length + ' карт(ы) — доступ закроется ко всем.' : '';
-                if (!confirm('Отвязать этот Telegram? Человек перестанет получать документы, пока не подключится заново.' + extra)) return;
+                    ? trf('\n\nНа этом номере {n} карт(ы) — доступ закроется ко всем.', { n: l.patients.length }) : '';
+                if (!confirm(tr('Отвязать этот Telegram? Человек перестанет получать документы, пока не подключится заново.') + extra)) return;
                 await run(revokeBtn, async () => {
                     state.links = await rpc('telegram_link_revoke', { id: l.id });
                     toast('Отвязано.', 'info');
@@ -333,7 +334,7 @@ function linksCard(bodyEl) {
     let allBtn = null;
 
     if (state.linksError) {
-        box.appendChild(h('div', { class: 'muted' }, 'Не удалось загрузить список: ' + state.linksError));
+        box.appendChild(h('div', { class: 'muted' }, trf('Не удалось загрузить список: {msg}', { msg: state.linksError })));
     } else if (!state.links || !state.links.length) {
         box.appendChild(h('div', { class: 'muted' },
             'Пока никто не подключился. Пациент открывает бота, нажимает «Поделиться номером» — и появляется здесь.'));
@@ -348,14 +349,14 @@ function linksCard(bodyEl) {
             // последнюю строку и хотят продолжения. Возвращаться к заголовку
             // ради этого не нужно.
             allBtn = h('button', { class: 'btn btn-sm', type: 'button',
-                onclick: () => openLinksModal(bodyEl) }, 'Показать все · ' + rows.length);
+                onclick: () => openLinksModal(bodyEl) }, trf('Показать все · {n}', { n: rows.length }));
             box.appendChild(h('div', { style: {
                 display: 'flex', alignItems: 'center', gap: '10px', marginTop: '12px',
             } },
                 h('button', { class: 'btn btn-sm', type: 'button',
-                    onclick: () => openLinksModal(bodyEl) }, 'Показать все · ' + rows.length),
+                    onclick: () => openLinksModal(bodyEl) }, trf('Показать все · {n}', { n: rows.length })),
                 h('span', { class: 'muted', style: { fontSize: '11.5px' } },
-                    'показано ' + shown.length + ' из ' + rows.length)));
+                    trf('показано {shown} из {total}', { shown: shown.length, total: rows.length }))));
         }
 
         box.appendChild(h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '10px' } }, LINKS_HINT));
@@ -418,7 +419,7 @@ function openLinksModal(bodyEl) {
             return false;
         };
         const rows = all.filter(hit);
-        countEl.textContent = q ? 'найдено: ' + rows.length + ' из ' + all.length : 'всего: ' + all.length;
+        countEl.textContent = q ? trf('найдено: {n} из {total}', { n: rows.length, total: all.length }) : trf('всего: {n}', { n: all.length });
         clear(listBox);
         if (!rows.length) {
             listBox.appendChild(h('div', { class: 'empty', style: { padding: '30px' } }, 'Никого не найдено.'));
@@ -518,8 +519,8 @@ export function openBroadcastModal({ onDone } = {}) {
         const n = composedLength();
         const split = !!imagePath && n > CAPTION_LIMIT;
         counter.textContent = split
-            ? `${n} символов · с картинкой уйдёт двумя сообщениями (в подпись помещается ${CAPTION_LIMIT})`
-            : `${n} символов`;
+            ? trf('{n} символов · с картинкой уйдёт двумя сообщениями (в подпись помещается {limit})', { n, limit: CAPTION_LIMIT })
+            : trf('{n} символов', { n });
         counter.style.color = split ? 'var(--warn-700, #b45309)' : 'var(--ink-500)';
     };
     ru.addEventListener('input', syncCounter);
@@ -648,7 +649,7 @@ export function openBroadcastModal({ onDone } = {}) {
             const objectPath = `broadcast/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
             const { error } = await supabase.storage.from(MEDIA_BUCKET).upload(objectPath, blob);
             if (error) {
-                toast('Не удалось загрузить картинку: ' + (error.message || error), 'error');
+                toast(trf('Не удалось загрузить картинку: {msg}', { msg: error.message || error }), 'error');
                 return paintEmpty();
             }
             imagePath = objectPath;
@@ -678,10 +679,10 @@ export function openBroadcastModal({ onDone } = {}) {
         // Подтверждение числом, а не «ОК»: перепечатать количество — это
         // секунда, а отозвать сообщение, ушедшее не тем людям, нельзя.
         const typed = prompt(
-            `Сообщение получат ${p.count} чел. (карт: ${p.cards}).\n\n` +
-            (imagePath ? 'К сообщению приложена картинка.\n' : '') +
-            `Отменить отправку будет нельзя.\n` +
-            `Чтобы подтвердить, введите число получателей: ${p.count}`);
+            trf('Сообщение получат {count} чел. (карт: {cards}).\n\n', { count: p.count, cards: p.cards }) +
+            (imagePath ? tr('К сообщению приложена картинка.\n') : '') +
+            tr('Отменить отправку будет нельзя.\n') +
+            trf('Чтобы подтвердить, введите число получателей: {count}', { count: p.count }));
         if (typed === null) return;
         if (String(typed).trim() !== String(p.count)) return toast('Число не совпало — отправка отменена.', 'info');
 
@@ -690,7 +691,7 @@ export function openBroadcastModal({ onDone } = {}) {
                 text_ru: ru.value, text_uz: uz.value, filters: filters(), confirm_count: p.count,
                 image_path: imagePath,   // TELEGRAM_BROADCAST_IMG_V1 — null, если картинки нет
             });
-            toast(`Рассылка запущена: ${started.audience_count} получателей.`, 'success');
+            toast(trf('Рассылка запущена: {n} получателей.', { n: started.audience_count }), 'success');
             ru.value = ''; uz.value = '';
             watch(started.id);
         });
@@ -707,8 +708,8 @@ export function openBroadcastModal({ onDone } = {}) {
             return;
         }
         result.appendChild(h('div', null,
-            h('b', null, `Получателей: ${p.count}`),
-            h('span', { class: 'muted' }, ` · карт пациентов: ${p.cards}`)));
+            h('b', null, trf('Получателей: {n}', { n: p.count })),
+            h('span', { class: 'muted' }, ' · ', trf('карт пациентов: {n}', { n: p.cards }))));
         result.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } },
             p.sample.map((x) => x.name || x.tg).join(' · ') + (p.count > p.sample.length ? ' …' : '')));
     }
@@ -724,12 +725,12 @@ export function openBroadcastModal({ onDone } = {}) {
             catch { break; }
             clear(line);
             line.appendChild(h('span', null,
-                `Отправлено ${st.sent_count} из ${st.audience_count}` +
-                (st.failed_count ? ` · не доставлено ${st.failed_count}` : '') +
-                (st.blocked_count ? ` (заблокировали бота: ${st.blocked_count})` : '')));
+                trf('Отправлено {sent} из {total}', { sent: st.sent_count, total: st.audience_count }) +
+                (st.failed_count ? ' · ' + trf('не доставлено {n}', { n: st.failed_count }) : '') +
+                (st.blocked_count ? ' ' + trf('(заблокировали бота: {n})', { n: st.blocked_count }) : '')));
             if (st.status !== 'running') {
                 line.appendChild(h('div', { style: { marginTop: '4px' } },
-                    st.failed_count ? '' : '✅ Готово · ' + fmtDateTime(st.finished_at)));
+                    st.failed_count ? '' : trf('✅ Готово · {when}', { when: fmtDateTime(st.finished_at) })));
                 if (onDone) onDone();   // обновить статистику: блокировки меняют охват
                 break;
             }

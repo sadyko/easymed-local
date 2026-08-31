@@ -6,6 +6,7 @@
 // Заказы на закупку tab ships.
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { fetchGuard, loadingCard, fmtPrice, fmtMoney2, fmtQty, selStyle, numStyle, isLowStock } from './inventory-shared.js';
 import { openReceiveModal, openAdjustModal } from './inventory-products.js';
 
@@ -42,7 +43,7 @@ export async function renderSkladTab(container) {
 
     clear(container);
     if (loadError) {
-        toast('Не удалось загрузить склад: ' + ((loadError && loadError.message) || loadError), 'fail');
+        toast(trf('Не удалось загрузить склад: {msg}', { msg: (loadError && loadError.message) || loadError }), 'fail');
         container.appendChild(h('div', { class: 'card' }, h('div', { class: 'empty' }, 'Не удалось загрузить остатки.')));
         return;
     }
@@ -207,7 +208,7 @@ export async function renderSkladTab(container) {
             XLSX.utils.book_append_sheet(wb, ws, 'Склад');
             XLSX.writeFile(wb, `sklad-${new Date().toISOString().slice(0, 10)}.xlsx`);
         } catch (e) {
-            toast('Не удалось сформировать Excel: ' + ((e && e.message) || e), 'fail');
+            toast(trf('Не удалось сформировать Excel: {msg}', { msg: (e && e.message) || e }), 'fail');
         }
     }
 
@@ -224,7 +225,7 @@ export async function renderSkladTab(container) {
             XLSX.utils.book_append_sheet(wb, ws, 'Импорт');
             XLSX.writeFile(wb, 'shablon-import-tovarov.xlsx');
         } catch (e) {
-            toast('Не удалось сформировать шаблон: ' + ((e && e.message) || e), 'fail');
+            toast(trf('Не удалось сформировать шаблон: {msg}', { msg: (e && e.message) || e }), 'fail');
         }
     }
 }
@@ -276,10 +277,10 @@ function openImportModal(onDone) {
             parsedRows = rows;
             importBtn.disabled = false;
             previewEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                `Строк к импорту: ${rows.length}. Совпадение — по точному названию товара; новые товары будут созданы.`));
+                trf('Строк к импорту: {n}. Совпадение — по точному названию товара; новые товары будут созданы.', { n: rows.length })));
         } catch (e) {
             previewEl.appendChild(h('div', { style: { color: 'var(--crit-700)', fontSize: '12.5px' } },
-                'Ошибка чтения файла: ' + ((e && e.message) || e)));
+                trf('Ошибка чтения файла: {msg}', { msg: (e && e.message) || e })));
         }
     });
 
@@ -304,7 +305,7 @@ function openImportModal(onDone) {
             }));
             const { data, error } = await supabase.rpc('import_products_excel', { rows });
             if (error) throw error;
-            toast(`Импорт готов: создано ${data.created}, обновлено ${data.updated}, приходов ${data.received}.`, 'ok');
+            toast(trf('Импорт готов: создано {created}, обновлено {updated}, приходов {received}.', { created: data.created, updated: data.updated, received: data.received }), 'ok');
             close();
             if (typeof onDone === 'function') onDone();
         } catch (e) {
@@ -380,7 +381,7 @@ function openIssueModal(onDone) {
             const iu = issueUnitOf(line.product);
             unitEl.textContent = iu.unit || '—';
             const avail = (Number(line.product.on_hand) || 0) * iu.factor;
-            hintEl.textContent = `Доступно: ${fmtQty(avail)} ${iu.unit}`.trim();
+            hintEl.textContent = trf('Доступно: {qty} {unit}', { qty: fmtQty(avail), unit: iu.unit || '' }).trim();
         }
 
         prodSel.addEventListener('change', () => {
@@ -481,7 +482,7 @@ function openIssueModal(onDone) {
             modal.departments = (dr.error ? [] : dr.data) || [];
             for (const d of modal.departments) deptList.appendChild(h('option', { value: d.name }));
         } catch (e) {
-            toast('Не удалось загрузить товары: ' + ((e && e.message) || e), 'fail');
+            toast(trf('Не удалось загрузить товары: {msg}', { msg: (e && e.message) || e }), 'fail');
             modal.products = [];
         } finally {
             clear(linesBody);

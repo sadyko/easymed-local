@@ -7,6 +7,7 @@
 //   dispense_item / void_dispense (visit-bill.js — unrelated, do not touch).
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, checkField } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { fetchGuard, fmtPrice, fmtQty, CATEGORY_LABEL, selStyle, numStyle, isLowStock } from './inventory-shared.js';
 import { openSupplierModal } from './inventory-suppliers.js';   // ADD_PRODUCT_EASYMED_V1 — «+ Новый поставщик» из карточки товара
 
@@ -63,15 +64,15 @@ async function fetchProductsAndPaint() {
             .limit(1000);
         if (token !== fetchGuard.token) return;   // a newer fetch already landed
         if (error) {
-            toast('Не удалось загрузить товары: ' + (error.message || error), 'fail');
+            toast(trf('Не удалось загрузить товары: {msg}', { msg: error.message || error }), 'fail');
             paintRows([]);
             return;
         }
         paintRows(data || []);
-        if (productRefs.totalEl) productRefs.totalEl.textContent = `Товаров: ${(data || []).length}`;
+        if (productRefs.totalEl) productRefs.totalEl.textContent = trf('Товаров: {n}', { n: (data || []).length });
     } catch (e) {
         if (token !== fetchGuard.token) return;
-        toast('Не удалось загрузить товары: ' + (e && e.message || e), 'fail');
+        toast(trf('Не удалось загрузить товары: {msg}', { msg: (e && e.message) || e }), 'fail');
         paintRows([]);
     }
 }
@@ -403,7 +404,7 @@ function openProductModal(p, onSaved) {
     ];
     if (isEdit) {
         bodyChildren.push(h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '10px' } },
-            `В наличии: ${fmtQty(p.on_hand)} ${p.base_unit || ''} · себестоимость ${fmtPrice(p.avg_cost)}. Остаток меняется через «Принять» / «Корректировка».`));
+            trf('В наличии: {qty} {unit} · себестоимость {cost}. Остаток меняется через «Принять» / «Корректировка».', { qty: fmtQty(p.on_hand), unit: p.base_unit || '', cost: fmtPrice(p.avg_cost) })));
     }
 
     // modal-compact ОБЯЗАТЕЛЕН: без него глобальное правило (MODAL_COMPACT_OPTOUT_V1)
@@ -552,7 +553,7 @@ export function openReceiveModal(onSaved) {
                 onmouseenter: (e) => { e.currentTarget.style.background = 'var(--ink-25, #f6f8f9)'; },
                 onmouseleave: (e) => { e.currentTarget.style.background = ''; },
                 onmousedown: (e) => { e.preventDefault(); addLineFor(p); prodSearch.value = ''; prodResults.style.display = 'none'; },
-            }, p.name, h('span', { class: 'muted', style: { fontSize: '12px' } }, ' · ' + (p.base_unit || '') + ' · остаток ' + fmtQty(p.on_hand))));
+            }, p.name, h('span', { class: 'muted', style: { fontSize: '12px' } }, ' · ' + (p.base_unit || '') + ' · ', trf('остаток {n}', { n: fmtQty(p.on_hand) }))));
         }
     }
     prodSearch.addEventListener('input', paintProdResults);
@@ -571,7 +572,7 @@ export function openReceiveModal(onSaved) {
 
     async function loadProducts() {
         const { data, error } = await supabase.from('products').select('*').eq('active', 1).order('name').limit(1000);
-        if (error) { toast('Товары не загрузились: ' + error.message, 'fail'); return; }
+        if (error) { toast(trf('Товары не загрузились: {msg}', { msg: error.message }), 'fail'); return; }
         st.products = data || [];
     }
     async function loadSuppliers() {

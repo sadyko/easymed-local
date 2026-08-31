@@ -20,6 +20,7 @@ import { threadChanged } from '../../shared/thread-sync.js?v=ts1';   // TELEGRAM
 import { attachmentError, isImageName, humanSize } from '../../shared/chat-attachment.js?v=att1';
 import { uploadFile } from '../storage.js';
 import { h, Icon, clear, toast, PageHead, initials, avColor } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { canEdit } from '../permissions.js';
 
 // TELEGRAM_CHAT_FOLDERS_V1 — вкладки над списком, как в Telegram.
@@ -79,7 +80,7 @@ function broadcastButton() {
             const m = await import('./telegram-report.js?v=tgr5');
             m.openBroadcastModal();
         } catch (e) {
-            toast('Не удалось открыть форму рассылки: ' + (e.message || e), 'error');
+            toast(trf('Не удалось открыть форму рассылки: {msg}', { msg: e.message || e }), 'error');
         } finally { btn.disabled = false; }
     } }, Icon('Send', { size: 13 }), ' Сообщение пациентам');
     return btn;
@@ -353,15 +354,15 @@ function paintList() {
     }
 
     for (const c of rows) {
-        const name = c.tg_name || c.tg_username || ('Чат ' + c.chat_id);
+        const name = c.tg_name || c.tg_username || trf('Чат {id}', { id: c.chat_id });
         // TELEGRAM_ORPHAN_CHAT_V1 — «ничей» чат: человек написал, но связка не
         // создалась (номер набрали текстом вместо кнопки «Поделиться номером»).
         // Раньше такие чаты в список не попадали вовсе, и их непрочитанные
         // висели в бейдже навсегда — открыть было нечего.
         const who = c.unlinked
             ? (c.candidates && c.candidates.length
-                ? 'не связан · похоже на ' + c.candidates.map((p) => p.name).join(', ')
-                : 'не связан' + (c.candidate_phone ? ' · набрал ' + c.candidate_phone : ''))
+                ? trf('не связан · похоже на {names}', { names: c.candidates.map((p) => p.name).join(', ') })
+                : tr('не связан') + (c.candidate_phone ? ' · ' + trf('набрал {phone}', { phone: c.candidate_phone }) : ''))
             : (c.patients.length ? c.patients.map((p) => p.name).join(', ') : 'карта не найдена');
         const isActive = state.active === c.chat_id;
 
@@ -455,8 +456,8 @@ function paintList() {
                             ev.stopPropagation();
                             const cand = (c.candidates && c.candidates[0]) || null;
                             const ask = cand
-                                ? 'Связать этот чат с картой «' + cand.name + '» (' + c.candidate_phone + ')?\n\nПосле связывания человек сможет получать документы этого пациента.'
-                                : 'Связать этот чат с номером ' + c.candidate_phone + '?\n\nКарта по номеру не найдена — документы появятся, когда она заведётся.';
+                                ? trf('Связать этот чат с картой «{name}» ({phone})?\n\nПосле связывания человек сможет получать документы этого пациента.', { name: cand.name, phone: c.candidate_phone })
+                                : trf('Связать этот чат с номером {phone}?\n\nКарта по номеру не найдена — документы появятся, когда она заведётся.', { phone: c.candidate_phone });
                             if (!confirm(ask)) return;
                             try {
                                 await rpc('telegram_chat_link', { chat_id: c.chat_id, phone: c.candidate_phone });
@@ -550,7 +551,7 @@ function paintPane(thread, loading = false) {
     }
 
     const l = thread.link || {};
-    const name = l.tg_name || l.tg_username || ('Чат ' + thread.chat_id);
+    const name = l.tg_name || l.tg_username || trf('Чат {id}', { id: thread.chat_id });
 
     // Шапка: кто это в Telegram И кто это в клинике. Одного telegram-имени мало —
     // сотрудник должен видеть карту пациента, чтобы понимать, о ком речь.

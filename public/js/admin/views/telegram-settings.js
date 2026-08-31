@@ -13,6 +13,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, PageHead, clear, toast, field, checkField, fmtDateTime } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 
 const DOC_KINDS = [
     ['lab',        'Результаты анализов',      'Готовый результат из лаборатории'],
@@ -67,7 +68,7 @@ export async function renderTelegramSettings(container, { onNavigate } = {}) {
     } catch (e) {
         clear(body);
         body.appendChild(h('div', { class: 'empty', style: { padding: '30px' } },
-            'Не удалось загрузить настройки: ' + e.message));
+            trf('Не удалось загрузить настройки: {msg}', { msg: e.message })));
         return;
     }
     paint();
@@ -95,9 +96,9 @@ function statusRow() {
         return banner('warn', 'Warning', 'Токен не задан', 'Бот не работает. Создайте бота в @BotFather и вставьте токен ниже.');
     }
     if (s.last_check_status === 'ok') {
-        const who = s.bot_username ? '@' + s.bot_username : 'бот подтверждён';
-        return banner('ok', 'Check', 'Связь с Telegram установлена · ' + who,
-            s.last_check_at ? 'Последняя проверка: ' + fmtDateTime(s.last_check_at) : '');
+        const who = s.bot_username ? '@' + s.bot_username : tr('бот подтверждён');
+        return banner('ok', 'Check', trf('Связь с Telegram установлена · {who}', { who }),
+            s.last_check_at ? trf('Последняя проверка: {when}', { when: fmtDateTime(s.last_check_at) }) : '');
     }
     if (s.last_check_status === 'error') {
         return banner('err', 'Warning', 'Telegram отклонил токен', s.last_check_error || '');
@@ -145,7 +146,7 @@ function tokenCard() {
         } }, 'Показать');
 
     card.appendChild(field(
-        s.has_token ? `Сохранённый токен: …${s.token_hint} (заменить)` : 'Токен из @BotFather',
+        s.has_token ? trf('Сохранённый токен: …{hint} (заменить)', { hint: s.token_hint }) : 'Токен из @BotFather',
         h('div', { class: 'row', style: { gap: '8px' } },
             h('div', { style: { flex: '1' } }, input), showBtn)));
 
@@ -160,8 +161,8 @@ function tokenCard() {
                 const res = await rpc('telegram_settings_save', { bot_token: v });
                 state.s = res;
                 input.value = '';
-                if (res.check_error) toast('Токен сохранён, но Telegram его не принял: ' + res.check_error, 'error');
-                else if (res.auto_enabled) toast('Готово! Бот @' + (res.bot_username || '') + ' включён и отвечает пациентам.', 'success');
+                if (res.check_error) toast(trf('Токен сохранён, но Telegram его не принял: {msg}', { msg: res.check_error }), 'error');
+                else if (res.auto_enabled) toast(trf('Готово! Бот @{bot} включён и отвечает пациентам.', { bot: res.bot_username || '' }), 'success');
                 else toast('Токен сохранён.', 'success');
                 paint();
                 // TG_LINKS_IN_REPORT_V1 — здесь был loadLinks(): список чатов
@@ -176,7 +177,7 @@ function tokenCard() {
             await run(testBtn, async () => {
                 const res = await rpc('telegram_test_connection');
                 state.s = res.settings;
-                if (res.ok) toast('Связь есть: @' + (res.bot.username || 'бот'), 'success');
+                if (res.ok) toast(trf('Связь есть: @{bot}', { bot: res.bot.username || tr('бот') }), 'success');
                 else toast(res.error, 'error');
                 paint();
             });
