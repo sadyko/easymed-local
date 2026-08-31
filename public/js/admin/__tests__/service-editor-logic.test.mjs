@@ -69,6 +69,21 @@ test('набранное имя существующей строки — это
   assert.deepEqual(resolveCombobox('ХИРУРГИЯ', rows), { id: 7 });
 });
 
+test('ё/е и разложенные буквы — одно имя: «Прием» выбирает «Приём», а не плодит двойника', () => {
+  // ё→е — та же константа нормализации, что у поиска дублей пациентов
+  // (patient-duplicates.js normalizeName): «Прием» и «Приём» набирают одни и
+  // те же люди про одну и ту же услугу.
+  assert.equal(normName('Прием'), normName('Приём'));
+  assert.equal(normName('ПРИЁМ'), normName('прием'));
+  // NFC: разложенная ё (е + U+0308) и разложенная й (и + U+0306) приезжают из
+  // копипасты/старых макбуков и байтово НЕ равны составным — без нормализации
+  // это второй способ родить двойника, невидимый глазом.
+  assert.equal(normName('Приём'.normalize('NFD')), normName('Приём'));
+  assert.equal(normName('Йод'.normalize('NFD')), normName('Йод'));
+  assert.deepEqual(resolveCombobox('Прием', [{ id: 3, name: 'Приём' }]), { id: 3 });
+  assert.deepEqual(resolveCombobox('Приём'.normalize('NFD'), [{ id: 3, name: 'Приём' }]), { id: 3 });
+});
+
 test('новое имя уходит на создание — обрезанным, как его и сохранят', () => {
   assert.deepEqual(resolveCombobox(' Новая категория ', [{ id: 1, name: 'Терапия' }]),
     { name: 'Новая категория' });

@@ -326,3 +326,38 @@ test('старая выгрузка не затирает местную дол�
   const again = apply(dst, cat);
   assert.equal(again.changed, 0, 'no-op на повторе — против бесконечного дрейфа');
 });
+
+// ---------------------------------------------------------------------------
+// Ё/Е И NFC ПРИ УСЫНОВЛЕНИИ — правило «то же имя» одно на весь продукт.
+// Редактор услуги (resolveCombobox) и усыновление здесь обязаны согласиться,
+// иначе то, что редактор считает «той же услугой», синхронизация продублирует
+// (или наоборот). Согласие закреплено конструктивно — catalogue.js импортирует
+// normName из service-editor-logic.js — и проверено здесь поведенчески.
+// ---------------------------------------------------------------------------
+
+test('усыновление сквозь ё/е и NFD: «Прием кардиолога» узнаёт местный «Приём кардиолога»', () => {
+  const dst = receiver();
+  // Код НЕ задан ни там, ни там — сопоставление идёт по названию.
+  dst.prepare("INSERT INTO services (name, price, type) VALUES ('Приём кардиолога', 250000, 'consultation')").run();
+  const localId = dst.prepare("SELECT id FROM services WHERE name = 'Приём кардиолога'").get().id;
+
+  const remoteRow = {
+    id: 900, name: 'Прием кардиолога', code: null, price: 260000, tax_rate: 0,
+    duration_minutes: 30, requires_doctor: 0, active: 1, is_lab: 0, specimen: null,
+    result_unit: null, ref_low: null, ref_high: null, ref_text: null,
+    type: 'consultation', type_id: null, category_id: null, department_id: null,
+    tube_color: null, default_doctor_percent: 0,
+  };
+  const summary = apply(dst, { services: [remoteRow] });
+  assert.equal(summary.adopted.services, 1, 'ё против е — то же имя, это усыновление');
+  assert.equal(summary.created.services ?? 0, 0, 'двойник не создан');
+  assert.equal(dst.prepare('SELECT price FROM services WHERE id = ?').get(localId).price, 260000);
+
+  // И разложенная форма (NFD) того же имени на следующем прогоне — тоже он.
+  const nfd = { ...remoteRow, id: 901, name: 'Приём кардиолога'.normalize('NFD'), price: 270000 };
+  const dst2 = receiver();
+  dst2.prepare("INSERT INTO services (name, price, type) VALUES ('Приём кардиолога', 250000, 'consultation')").run();
+  const s2 = apply(dst2, { services: [nfd] });
+  assert.equal(s2.adopted.services, 1, 'NFD против NFC — то же имя');
+  assert.equal(s2.created.services ?? 0, 0);
+});
