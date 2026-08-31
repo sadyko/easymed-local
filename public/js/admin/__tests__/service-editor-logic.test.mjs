@@ -177,9 +177,22 @@ test('строковые id в старых данных находятся чи
 
 test('доля по умолчанию зажимается в 0..100 — как в parseRates на приёме users', () => {
   assert.equal(mergeServiceRates('', 5, true, 150, []).rates[0].pct, 100);
-  assert.equal(mergeServiceRates('', 5, true, -3, []).rates[0].pct, 0);
-  assert.equal(mergeServiceRates('', 5, true, NaN, []).rates[0].pct, 0);
   assert.equal(mergeServiceRates('', 5, true, '35', []).rates[0].pct, 35);
+});
+
+test('доля 0/пустая — записи БЕЗ pct: правит ставка из карточки, а не ноль', () => {
+  // Измерено на настоящем зарплатном отчёте (reports.js): запись с pct:0
+  // ПЕРЕКРЫВАЕТ карточную ставку врача нулём, а запись без ключа pct отдаёт
+  // расчёт COALESCE-у — dr.percent NULL -> doc.service_rate_default. Владелец,
+  // не заполнивший «долю по умолчанию», имеет в виду «я её не задал», а не
+  // «этой услугой никто не зарабатывает» — поэтому 0/пусто = ключа нет.
+  for (const zero of [0, '', null, undefined, -3, NaN]) {
+    const { rates } = mergeServiceRates('', 5, true, zero, [1]);
+    assert.equal('pct' in rates[0], false, 'zero=' + String(zero));
+    assert.deepEqual(rates[0], { service_id: 5, branches: [1] });
+  }
+  // Настоящая доля > 0 — записывается как раньше.
+  assert.deepEqual(mergeServiceRates('', 5, true, 30, [1]).rates[0], { service_id: 5, pct: 30, branches: [1] });
 });
 
 test('испорченный JSON никогда не «чинится» перезаписью — corrupt, и вызывающий решает', () => {

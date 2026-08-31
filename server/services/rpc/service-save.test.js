@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { serviceSave } from './service-save.js';
+import { runReport } from './reports.js';
 
 const admin = { id: 1, role: 'admin' };
 // ADMIN_DOCTOR_V1 — a clinic admin whose PRIMARY role is doctor. hasAnyRole
@@ -286,4 +287,36 @@ test('edit updates in place — no twin service, updated_at moves, room is setta
 test('editing a service that is gone is 404, not a silent create', () => {
   const db = freshDb();
   assert.throws(() => serviceSave(db, baseArgs({ id: 424242 }), admin), (e) => e.status === 404);
+});
+
+test('default share 0: the membership entry carries NO pct, and the REAL pay report uses the card default', () => {
+  // Measured before this behaviour existed: an entry with pct:0 OVERRODE the
+  // doctor's card default with zero on the actual doctor_salaries report. An
+  // entry without the pct key falls through reports.js's COALESCE to
+  // users.service_rate_default — which is what "I did not set a share" means.
+  const db = freshDb();
+  const doc = addUser(db, { name: 'Врач Карточный' });
+  db.prepare('UPDATE users SET service_rate_default = 40 WHERE id = ?').run(doc);
+
+  const res = serviceSave(db, baseArgs({
+    requires_doctor: true, performers: [doc], default_doctor_percent: 0, tax_rate: 6,
+  }), admin);
+
+  const rates = JSON.parse(db.prepare('SELECT service_rates FROM users WHERE id = ?').get(doc).service_rates);
+  assert.deepEqual(rates, [{ service_id: res.id, branches: [1] }], 'no pct key — the card governs');
+
+  // …and the actual salary report agrees: 100 000 − 6% налог = 94 000; 40% = 37 600.
+  db.prepare("INSERT INTO patients (id, mrn, full_name) VALUES (1,'P-1','Пациент')").run();
+  db.prepare("INSERT INTO visits (id, patient_id, visit_date) VALUES (1,1,strftime('%Y-%m-%dT%H:%M:%SZ','now'))").run();
+  db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, doctor_id, quantity, unit_price, total, status)
+              VALUES (1,1,?,?,1,100000,100000,'added')`).run(res.id, doc);
+  db.prepare(`INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_at)
+              VALUES (1,'INV-1',1,1,100000,0,100000,100000,'paid',strftime('%Y-%m-%dT%H:%M:%SZ','now'))`).run();
+  db.prepare(`INSERT INTO invoice_items (id, invoice_id, service_id, description, quantity, unit_price, total)
+              VALUES (1,1,?, 'Приём',1,100000,100000)`).run(res.id);
+  db.prepare('UPDATE visit_services SET invoice_item_id = 1 WHERE id = 1').run();
+
+  const r = runReport(db, { kind: 'doctor_salaries', from: '2000-01-01', to: '2100-01-01' }, admin);
+  assert.equal(r.rows[0][r.columns.indexOf('Доля врача (гонорар)')], 37600,
+    'card default 40% governs when the service default was left at 0');
 });

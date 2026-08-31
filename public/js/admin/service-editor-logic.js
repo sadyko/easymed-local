@@ -144,7 +144,13 @@ const clampPct = (v) => {
  *   тик, записи нет  -> добавить {service_id, pct: <доля по умолчанию>,
  *                       branches} — ровно форма, которую читает reports.js
  *                       (DOC_RATE_JSON_V1: service_id, pct, fix?, branches)
- *                       и принимает parseRates (routes/users.js);
+ *                       и принимает parseRates (routes/users.js).
+ *                       ДОЛЯ 0/ПУСТАЯ -> ключа pct НЕТ ВОВСЕ: измерено на
+ *                       настоящем зарплатном отчёте — pct:0 перекрывает
+ *                       карточную ставку врача нулём, а запись без pct
+ *                       отдаёт расчёт COALESCE-у (dr.percent NULL ->
+ *                       doc.service_rate_default). «Я не задал долю» — это
+ *                       не «врачу не платить»;
  *   тик, запись есть -> НЕ ТРОГАТЬ: pct/fix/price там — персональные
  *                       переопределения из карточки;
  *   нет тика         -> убрать запись ЭТОЙ услуги; записи других услуг
@@ -163,10 +169,12 @@ export function mergeServiceRates(raw, serviceId, isPerformer, defaultPct, branc
 
   if (isPerformer) {
     if (mine) return { changed: false, rates };
-    return {
-      changed: true,
-      rates: [...rates, { service_id: sid, pct: clampPct(defaultPct), branches: Array.isArray(branchIds) ? branchIds : [] }],
-    };
+    const pct = clampPct(defaultPct);
+    const entry = { service_id: sid, branches: Array.isArray(branchIds) ? branchIds : [] };
+    // 0 — это «не задано», и тогда ключа нет (см. шапку: карточная ставка
+    // должна остаться решающей).
+    if (pct > 0) entry.pct = pct;
+    return { changed: true, rates: [...rates, entry] };
   }
 
   if (!mine) return { changed: false, rates };
