@@ -86,7 +86,7 @@ const TUBES = {
 function tubePill(color) {
     if (!color) return null;
     const t = TUBES[String(color).toLowerCase()] || { hex: '#9ca3af', label: color };
-    return h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--ink-600)' } },
+    return h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12.5px', color: 'var(--ink-600)' } },
         h('span', { style: { width: '9px', height: '9px', borderRadius: '999px', background: t.hex, border: '1px solid rgba(0,0,0,0.15)', flex: 'none' } }),
         t.label);
 }
@@ -216,7 +216,7 @@ function mount() {
     refs.list = h('div', { id: 'lab-list' });
     refs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } },
         'Заявок нет. Лабораторная услуга попадает сюда, как только добавлена к визиту; после оплаты счёта она встаёт в очередь на забор.');
-    refs.totalEl = h('span', { class: 'muted', style: { fontSize: '12px' } }, '');
+    refs.totalEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
     refs.filterWrap = h('div', { class: 'segmented' });
 
     refs.searchInp = h('input', {
@@ -447,7 +447,7 @@ function paintRows() {
 function resultsCell(r) {
     const results = state.resultsByVs[r.id] || [];
     if (!results.length) return h('span', { class: 'muted' }, '—');
-    return h('span', { style: { fontSize: '12px' } },
+    return h('span', { style: { fontSize: '12.5px' } },
         results.length === 1
             ? h('span', { class: 'num' }, (results[0].value != null ? String(results[0].value) : '—') + (results[0].unit ? ' ' + results[0].unit : ''))
             : h('span', { class: 'muted' }, trf('{n} показателей', { n: results.length })),
@@ -671,7 +671,7 @@ function labModal(title, subtitle, bodyEls, footEls, width = 520) {
         h('header', { class: 'modal-head' },
             h('div', null,
                 h('h2', null, Icon('Flask', { size: 16 }), ' ', title),
-                subtitle ? h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' } }, subtitle) : null,
+                subtitle ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, subtitle) : null,
             ),
             h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { class: 'modal-body' }, ...bodyEls),
@@ -971,7 +971,7 @@ async function openResultsModal(r, patient) {
     });
 
     const grid = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px' } },
-        h('div', { class: 'row', style: { gap: '10px', padding: '4px 0', fontSize: '10.5px', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--ink-500)' } },
+        h('div', { class: 'row', style: { gap: '10px', padding: '4px 0', fontSize: '12.5px', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--ink-500)' } },
             h('span', { style: { flex: '1 1 40%' } }, 'Показатель'),
             h('span', { style: { flex: '0 0 110px' } }, 'Значение'),
             h('span', { style: { flex: '0 0 70px' } }, 'Ед.'),
@@ -982,13 +982,13 @@ async function openResultsModal(r, patient) {
             h('div', { class: 'row', style: { gap: '10px', padding: L.named.length ? '7px 0 2px' : '7px 0', alignItems: 'center' } },
                 h('span', { style: { flex: '1 1 40%', fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-900)', minWidth: 0 } }, L.a.name || L.a.code || '—'),
                 h('span', { style: { flex: '0 0 110px' } }, L.input),
-                h('span', { class: 'muted', style: { flex: '0 0 70px', fontSize: '12px' } }, L.a.unit || ''),
-                h('span', { class: 'muted num', style: { flex: '0 0 90px', fontSize: '12px' } }, L.ref.text || '—'),
+                h('span', { class: 'muted', style: { flex: '0 0 70px', fontSize: '12.5px' } }, L.a.unit || ''),
+                h('span', { class: 'muted num', style: { flex: '0 0 90px', fontSize: '12.5px' } }, L.ref.text || '—'),
                 h('span', { style: { flex: '0 0 86px' } }, L.flagEl),
             ),
             // Named ranges (phase / pregnancy / age band) matched by sex+age —
             // shown as hints only, never fed into the flag (safety rule).
-            L.named.length ? h('div', { class: 'muted', style: { fontSize: '10.5px', padding: '0 0 7px', lineHeight: 1.5 } },
+            L.named.length ? h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '0 0 7px', lineHeight: 1.5 } },
                 '▸ ' + L.named.map(fmtNamedRange).join(' · ')) : null,
         )),
     );
@@ -1185,14 +1185,14 @@ function wsSection(section) {
     function paintCollect() {
         clear(collectSlot);
         if (p.status === 'added') {
-            collectSlot.appendChild(h('span', { class: 'muted', style: { fontSize: '11.5px' } }, 'Ожидает кассу'));
+            collectSlot.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Ожидает кассу'));
         } else if (!p.sample_collected_at) {
             collectSlot.appendChild(h('button', {
                 class: 'btn btn-primary btn-sm', type: 'button',
                 onclick: () => wsCollect(p, paintCollect),
             }, Icon('Flask', { size: 13 }), ' Собрать образец'));
         } else {
-            collectSlot.appendChild(h('span', { class: 'tag tag-ok', style: { fontSize: '11px' } }, 'Проба собрана'));
+            collectSlot.appendChild(h('span', { class: 'tag tag-ok', style: { fontSize: '12.5px' } }, 'Проба собрана'));
         }
     }
     paintCollect();
@@ -1355,7 +1355,7 @@ function verifyDialog(r, patient, results) {
             ...rows,
             h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '12px', fontSize: '12.5px', color: 'var(--ink-700)', cursor: 'pointer' } },
                 printCb, 'Распечатать бланк результатов'),
-            h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '6px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } },
                 'После подтверждения результаты появятся в карте пациента (вкладка «Документы»).'),
         ],
         [okBtn], 600);

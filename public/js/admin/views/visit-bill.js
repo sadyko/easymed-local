@@ -34,7 +34,7 @@ function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
 
 function sectionTitle(text) {
     return h('div', { style: {
-        fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.08em',
+        fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.08em',
         color: 'var(--ink-500)', fontWeight: '700', marginBottom: '8px',
     } }, text);
 }
@@ -221,7 +221,7 @@ export function openVisitBillModal(visit, onChanged) {
     // =========================================================================
     // 2. GENERATE INVOICE
     // =========================================================================
-    const generateInfoEl = h('div', { class: 'muted', style: { fontSize: '12px' } }, '');
+    const generateInfoEl = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, '');
     const generateBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', disabled: true },
         Icon('Receipt', { size: 14 }), ' Generate invoice');
 
@@ -256,7 +256,7 @@ export function openVisitBillModal(visit, onChanged) {
 
     function statBlock(label, value) {
         return h('div', null,
-            h('div', { class: 'muted', style: { fontSize: '11px' } }, label),
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, label),
             h('div', { class: 'cell-strong' }, value),
         );
     }
@@ -359,7 +359,7 @@ export function openVisitBillModal(visit, onChanged) {
         h('header', { class: 'modal-head' },
             h('div', null,
                 h('h2', null, Icon('Receipt', { size: 16 }), ` Bill & Pay — ${patientName} (${mrn})`),
-                h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' } }, fmtDateTime(visit.visit_date)),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, fmtDateTime(visit.visit_date)),
             ),
             h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { class: 'modal-body' },

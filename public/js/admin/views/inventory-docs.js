@@ -118,7 +118,7 @@ function poStatusTag(s) {
 export function renderPurchaseOrdersTab(container) {
     poRefs.tbody = h('tbody');
     poRefs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } }, 'No purchase orders yet — create the first one.');
-    poRefs.totalEl = h('span', { class: 'muted', style: { fontSize: '12px' } }, '');
+    poRefs.totalEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
     const addBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openPOModal(fetchPOsAndPaint) }, Icon('Plus', { size: 14 }), ' New order');
 
     container.appendChild(h('div', null,
@@ -266,7 +266,7 @@ function reqStatusTag(s) {
 export function renderRequisitionsTab(container) {
     reqRefs.tbody = h('tbody');
     reqRefs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } }, 'Заявок пока нет — создайте первую.');
-    reqRefs.totalEl = h('span', { class: 'muted', style: { fontSize: '12px' } }, '');
+    reqRefs.totalEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
     const addBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openReqModal(fetchReqsAndPaint) }, Icon('Plus', { size: 14 }), ' Новая заявка');
 
     container.appendChild(h('div', null,
@@ -338,8 +338,8 @@ async function openReqModal(onSaved) {
                          border: '1px solid var(--ink-100)', borderRadius: '12px', background: 'var(--white, #fff)' },
             },
                 h('span', { style: { minWidth: '80px', flex: '1 1 auto', overflow: 'hidden' } },
-                    h('span', { style: { display: 'block', fontWeight: 700, fontSize: '13px', color: 'var(--ink-900)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, ln.product.name),
-                    h('span', { class: 'muted', style: { fontSize: '11.5px' } }, ln.product.base_unit || '')),
+                    h('span', { style: { display: 'block', fontWeight: 700, fontSize: '13.5px', color: 'var(--ink-900)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, ln.product.name),
+                    h('span', { class: 'muted', style: { fontSize: '12.5px' } }, ln.product.base_unit || '')),
                 qtyInp, noteInp,
                 h('button', {
                     type: 'button', title: 'Убрать',
@@ -355,7 +355,7 @@ async function openReqModal(onSaved) {
     const prodSearch = h('input', {
         type: 'text', placeholder: 'Поиск товара — выберите, чтобы добавить…',
         style: { width: '100%', boxSizing: 'border-box', padding: '10px 12px', border: '1px solid var(--ink-200)',
-                 borderRadius: '10px', fontFamily: 'inherit', fontSize: '13px', outline: 'none' },
+                 borderRadius: '10px', fontFamily: 'inherit', fontSize: '13.5px', outline: 'none' },
     });
     const prodResults = h('div', {
         style: { display: 'none', position: 'absolute', left: 0, right: 0, top: 'calc(100% + 4px)', zIndex: 40,
@@ -370,11 +370,11 @@ async function openReqModal(onSaved) {
         prodResults.style.display = '';
         for (const p of pool) {
             prodResults.appendChild(h('div', {
-                style: { padding: '9px 12px', cursor: 'pointer', fontSize: '13px' },
+                style: { padding: '9px 12px', cursor: 'pointer', fontSize: '13.5px' },
                 onmouseenter: (e) => { e.currentTarget.style.background = 'var(--ink-25, #f6f8f9)'; },
                 onmouseleave: (e) => { e.currentTarget.style.background = ''; },
                 onmousedown: (e) => { e.preventDefault(); lines.push({ product: p, qty: 1, note: '' }); prodSearch.value = ''; prodResults.style.display = 'none'; paintLines(); },
-            }, p.name, h('span', { class: 'muted', style: { fontSize: '12px' } }, ' · ' + (p.base_unit || ''))));
+            }, p.name, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, ' · ' + (p.base_unit || ''))));
         }
     }
     prodSearch.addEventListener('input', paintProdResults);
@@ -416,7 +416,7 @@ async function openReqModal(onSaved) {
     const { close } = docModal({
         title: 'Новая заявка', icon: 'Send',
         body: [
-            h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '-6px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '-6px' } },
                 'Перечислите нужные товары; администратор согласует до превращения в заказ.'),
             field('Отдел (кто запрашивает)', deptSel, { required: true }),
             h('div', null,
@@ -490,7 +490,7 @@ function countStatusTag(s) {
 export function renderStockCountsTab(container) {
     countRefs.tbody = h('tbody');
     countRefs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } }, 'No stock counts yet.');
-    countRefs.totalEl = h('span', { class: 'muted', style: { fontSize: '12px' } }, '');
+    countRefs.totalEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
     const addBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => createStockCount(fetchCountsAndPaint) }, Icon('Plus', { size: 14 }), ' New count');
 
     container.appendChild(h('div', null,

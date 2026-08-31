@@ -373,7 +373,7 @@ function openIssueModal(onDone) {
         const prodSel = h('select', { style: selStyle },
             h('option', { value: '' }, '— Выберите товар —'),
             ...modal.products.map(pr => h('option', { value: String(pr.id) }, pr.name)));
-        const hintEl = h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '3px' } }, '');
+        const hintEl = h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '3px' } }, '');
         const unitEl = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, '—');
 
         function refresh() {

@@ -50,7 +50,7 @@ function injectStyles() {
     position: absolute; top: -4px; right: -4px;
     min-width: 20px; height: 20px; border-radius: 999px;
     background: #d75050; color: white;
-    font-size: 11px; font-weight: 700; letter-spacing: -0.02em;
+    font-size: 12.5px; font-weight: 700; letter-spacing: -0.02em;
     display: grid; place-items: center; padding: 0 6px;
     border: 2px solid white; line-height: 1;
 }
@@ -72,7 +72,7 @@ function injectStyles() {
     background: #fff; border: 1px solid #e2e8ea; border-radius: 999px;
     padding: 8px 16px 8px 9px; cursor: pointer;
     box-shadow: 0 10px 26px rgba(11,20,28,0.18);
-    font: 600 13px -apple-system, 'Segoe UI', Roboto, sans-serif; color: #1f2d34;
+    font: 600 13.5px -apple-system, 'Segoe UI', Roboto, sans-serif; color: #1f2d34;
 }
 .sw-menu-item:hover { background: #f4f8f8; }
 .sw-menu-item .ic { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: #0d8a8a; color: #fff; font-weight: 700; flex: none; }
@@ -84,7 +84,7 @@ function injectStyles() {
     background: linear-gradient(135deg, #0d8a8a, #0a6e6e);
     color: white; padding: 16px 18px; flex-shrink: 0;
 }
-.sw-head h3 { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+.sw-head h3 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
 .sw-head .sw-sub { font-size: 12.5px; opacity: 0.85; margin-top: 3px; line-height: 1.4; }
 
 .sw-body {
@@ -93,10 +93,10 @@ function injectStyles() {
     display: flex; flex-direction: column; gap: 10px;
 }
 .sw-empty {
-    text-align: center; color: #5a6c78; font-size: 13px;
+    text-align: center; color: #5a6c78; font-size: 13.5px;
     margin: auto; max-width: 280px; padding: 16px; line-height: 1.55;
 }
-.sw-empty .sw-empty-icon { font-size: 36px; margin-bottom: 10px; opacity: 0.65; }
+.sw-empty .sw-empty-icon { font-size: 40px; margin-bottom: 10px; opacity: 0.65; }
 
 .sw-msg {
     display: flex; gap: 6px; align-items: flex-end;
@@ -115,10 +115,10 @@ function injectStyles() {
 }
 .sw-msg.platform .sw-bub-content { border-bottom-left-radius: 4px; }
 .sw-msg.system .sw-bub-content {
-    background: transparent; color: #7a8a94; font-size: 11.5px; font-style: italic;
+    background: transparent; color: #7a8a94; font-size: 12.5px; font-style: italic;
     border: none; padding: 4px 8px;
 }
-.sw-msg .sw-time { font-size: 10.5px; color: #97a4ad; margin: 0 6px 2px; }
+.sw-msg .sw-time { font-size: 12.5px; color: #97a4ad; margin: 0 6px 2px; }
 
 .sw-foot {
     flex-shrink: 0; border-top: 1px solid #e6ecf0;
@@ -136,12 +136,12 @@ function injectStyles() {
 .sw-send {
     padding: 9px 14px; border-radius: 10px; border: none;
     background: linear-gradient(180deg, #0d8a8a, #0a6e6e); color: white;
-    font-weight: 700; font-size: 13px; cursor: pointer; font-family: inherit;
+    font-weight: 700; font-size: 13.5px; cursor: pointer; font-family: inherit;
     flex-shrink: 0;
 }
 .sw-send:disabled { opacity: 0.5; cursor: not-allowed; }
-.sw-foot .sw-help { font-size: 11px; color: #97a4ad; margin-top: 6px; text-align: center; line-height: 1.35; }
-.sw-foot .sw-err  { font-size: 12px; color: #c83434; margin-top: 6px; min-height: 16px; }
+.sw-foot .sw-help { font-size: 12.5px; color: #97a4ad; margin-top: 6px; text-align: center; line-height: 1.35; }
+.sw-foot .sw-err  { font-size: 12.5px; color: #c83434; margin-top: 6px; min-height: 16px; }
 `;
     /* i18n-exempt-end */
     document.head.appendChild(s);

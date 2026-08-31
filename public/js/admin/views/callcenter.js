@@ -191,7 +191,7 @@ function dashboard() {
             h('div', { class: 'card' },
                 h('div', { class: 'card-header' },
                     h('h3', null, Icon('Activity', { size: 16 }), ' Hourly call volume · today'),
-                    h('div', { class: 'row', style: { gap: '12px', fontSize: '11.5px', color: 'var(--ink-500)' } },
+                    h('div', { class: 'row', style: { gap: '12px', fontSize: '12.5px', color: 'var(--ink-500)' } },
                         legendDot('var(--info-500)',    'Inbound'),
                         legendDot('var(--primary-500)', 'Outbound'),
                         legendDot('var(--crit-500)',    'Missed'),
@@ -211,12 +211,12 @@ function dashboard() {
             h('div', { class: 'card' },
                 h('div', { class: 'card-header' },
                     h('h3', null, Icon('Target', { size: 16 }), ' Call reasons · last 7 days'),
-                    h('span', { class: 'muted', style: { fontSize: '12px' } }, String(reasonsTotal) + ' calls'),
+                    h('span', { class: 'muted', style: { fontSize: '12.5px' } }, String(reasonsTotal) + ' calls'),
                 ),
                 h('div', { style: { padding: '14px 22px 22px', display: 'flex', gap: '18px', alignItems: 'center' } },
                     donut(CC_REASONS.map(r => ({ value: r.value, color: r.color })), 130, 18, String(reasonsTotal), 'calls'),
                     h('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' } },
-                        ...CC_REASONS.map(r => h('div', { class: 'row', style: { gap: '8px', fontSize: '12px' } },
+                        ...CC_REASONS.map(r => h('div', { class: 'row', style: { gap: '8px', fontSize: '12.5px' } },
                             h('span', { style: { width: '9px', height: '9px', borderRadius: '3px', background: r.color } }),
                             h('span', { style: { color: 'var(--ink-800)', fontWeight: 500 } }, r.label),
                             h('span', { class: 'grow' }),
@@ -231,7 +231,7 @@ function dashboard() {
             h('div', { class: 'card' },
                 h('div', { class: 'card-header' },
                     h('h3', null, Icon('Layers', { size: 16 }), ' Status pipeline · this week'),
-                    h('span', { class: 'muted', style: { fontSize: '12px' } }, 'active → terminal'),
+                    h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'active → terminal'),
                 ),
                 h('div', { style: { padding: '22px', display: 'flex', flexDirection: 'column', gap: '12px' } },
                     statusFlow(),
@@ -254,11 +254,11 @@ function dashboard() {
                             Avatar({ initials: c.patient.av, color: c.patient.avc, size: 'sm' }),
                             h('div', { style: { flex: 1, minWidth: 0 } },
                                 h('div', { class: 'cell-strong', style: { fontSize: '12.5px' } }, c.patient.name),
-                                h('div', { class: 'muted', style: { fontSize: '11px' } },
+                                h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                                     ccReason(c.reason).label + ' · ' + (c.dir === 'in' ? 'inbound' : 'outbound')),
                             ),
                             statusPill(c.status),
-                            h('span', { class: 'num muted', style: { fontSize: '11px', width: '50px', textAlign: 'right' } }, c.startedAt),
+                            h('span', { class: 'num muted', style: { fontSize: '12.5px', width: '50px', textAlign: 'right' } }, c.startedAt),
                         )),
                 ),
             ),
@@ -315,7 +315,7 @@ function statusFlow() {
                 display: 'inline-flex', alignItems: 'center', gap: '7px',
                 padding: '6px 11px', background: 'white',
                 border: `1.5px solid ${s.c}`, borderRadius: '999px',
-                fontSize: '12px', fontWeight: 600, color: s.c, whiteSpace: 'nowrap',
+                fontSize: '12.5px', fontWeight: 600, color: s.c, whiteSpace: 'nowrap',
             },
         }, Icon(m.icon, { size: 12 }), ' ', m.label);
     };
@@ -327,7 +327,7 @@ function statusFlow() {
         return wrap;
     };
     const sectionLabel = (txt) => h('div', {
-        style: { fontSize: '10.5px', fontWeight: 700, color: 'var(--ink-500)',
+        style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-500)',
                  letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: '8px' },
     }, txt);
     const interleave = (items, sep) => {
@@ -341,10 +341,10 @@ function statusFlow() {
             h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } },
                 ...interleave(active, arrow),
                 arrow(),
-                h('span', { style: { fontSize: '11px', color: 'var(--ink-400)', alignSelf: 'center', fontStyle: 'italic' } }, '(or branch ↓)'),
+                h('span', { style: { fontSize: '12.5px', color: 'var(--ink-400)', alignSelf: 'center', fontStyle: 'italic' } }, '(or branch ↓)'),
             ),
             h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap', marginTop: '8px', paddingLeft: '26px' } },
-                ...interleave(branch, () => h('span', { style: { color: 'var(--ink-300)', fontSize: '12px' } }, '·')),
+                ...interleave(branch, () => h('span', { style: { color: 'var(--ink-300)', fontSize: '12.5px' } }, '·')),
             ),
         ),
         h('div', { style: { height: '1px', background: 'var(--ink-100)' } }),
@@ -370,7 +370,7 @@ function pipelineBar() {
     ];
     const total = dist.reduce((s, d) => s + d.n, 0);
     return h('div', { style: { marginTop: '6px' } },
-        h('div', { class: 'row', style: { marginBottom: '6px', fontSize: '11px' } },
+        h('div', { class: 'row', style: { marginBottom: '6px', fontSize: '12.5px' } },
             h('span', { style: { color: 'var(--ink-500)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' } },
                 'Distribution · ' + total + ' calls'),
             h('span', { class: 'grow' }),
@@ -380,7 +380,7 @@ function pipelineBar() {
         h('div', { style: { height: '14px', display: 'flex', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--ink-100)' } },
             ...dist.map(d => h('div', { title: `${CC_STATUS[d.id].label} · ${d.n}`, style: { width: (d.n / total * 100) + '%', background: d.c } })),
         ),
-        h('div', { class: 'row', style: { marginTop: '8px', gap: '10px', flexWrap: 'wrap', fontSize: '11px' } },
+        h('div', { class: 'row', style: { marginTop: '8px', gap: '10px', flexWrap: 'wrap', fontSize: '12.5px' } },
             ...dist.map(d => h('span', { class: 'row', style: { gap: '5px' } },
                 h('span', { style: { width: '8px', height: '8px', borderRadius: '2px', background: d.c } }),
                 h('span', { style: { color: 'var(--ink-700)' } }, CC_STATUS[d.id].label),
@@ -429,12 +429,12 @@ function queueColumn(title, badgeKind, accent, calls, emptyText) {
                     h('div', { class: 'row', style: { gap: '8px' } },
                         Avatar({ initials: c.patient.av, color: c.patient.avc, size: 'sm' }),
                         h('div', { style: { flex: 1, minWidth: 0 } },
-                            h('div', { class: 'cell-strong', style: { fontSize: '13px' } }, c.patient.name),
-                            h('div', { class: 'muted', style: { fontSize: '11px' } }, c.patient.mrn + ' · ' + c.patient.age + 'y'),
+                            h('div', { class: 'cell-strong', style: { fontSize: '13.5px' } }, c.patient.name),
+                            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, c.patient.mrn + ' · ' + c.patient.age + 'y'),
                         ),
                         c.priority === 'high' && Tag('High', { kind: 'crit', dot: true }),
                     ),
-                    h('div', { class: 'row', style: { gap: '6px', fontSize: '11.5px' } },
+                    h('div', { class: 'row', style: { gap: '6px', fontSize: '12.5px' } },
                         h('span', { style: { color: ccReason(c.reason).color, fontWeight: 600 } }, ccReason(c.reason).label),
                         h('span', { class: 'grow' }),
                         h('span', { style: { color: 'var(--ink-500)' } },
@@ -443,7 +443,7 @@ function queueColumn(title, badgeKind, accent, calls, emptyText) {
                     ),
                     h('div', { class: 'row', style: { gap: '6px' } },
                         statusPill(c.status),
-                        c.nextAction && h('span', { class: 'muted', style: { fontSize: '11px' } }, '· ' + c.nextAction),
+                        c.nextAction && h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '· ' + c.nextAction),
                     ),
                 )),
         ),
@@ -485,7 +485,7 @@ function callsTable() {
                         },
                     },
                         b.label,
-                        h('span', { style: { fontSize: '11px', padding: '0 6px', borderRadius: '999px',
+                        h('span', { style: { fontSize: '12.5px', padding: '0 6px', borderRadius: '999px',
                             background: on ? 'white' : 'var(--ink-50)', color: 'var(--ink-600)', fontWeight: 600 } }, String(b.count)),
                     );
                 }),
@@ -526,7 +526,7 @@ function callsTable() {
                         Avatar({ initials: c.patient.av, color: c.patient.avc, size: 'sm' }),
                         h('div', null,
                             h('div', { class: 'cell-strong' }, c.patient.name),
-                            h('div', { class: 'muted cell-mono', style: { fontSize: '11px' } }, c.patient.mrn),
+                            h('div', { class: 'muted cell-mono', style: { fontSize: '12.5px' } }, c.patient.mrn),
                         ),
                     )),
                     h('td', null, h('span', {
@@ -534,29 +534,29 @@ function callsTable() {
                             display: 'inline-flex', alignItems: 'center', gap: '5px',
                             padding: '2px 8px', borderRadius: '999px',
                             background: 'white', border: `1px solid ${ccReason(c.reason).color}40`,
-                            color: ccReason(c.reason).color, fontSize: '11.5px', fontWeight: 600,
+                            color: ccReason(c.reason).color, fontSize: '12.5px', fontWeight: 600,
                         },
                     },
                         h('span', { style: { width: '6px', height: '6px', borderRadius: '999px', background: ccReason(c.reason).color } }),
                         ccReason(c.reason).label,
                     )),
                     h('td', null, statusPill(c.status)),
-                    h('td', null, c.agent === '—' ? h('span', { class: 'muted', style: { fontSize: '12px' } }, '—') : agentChip(c.agent)),
-                    h('td', { class: 'muted num', style: { fontSize: '12px' } }, c.startedAt),
+                    h('td', null, c.agent === '—' ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '—') : agentChip(c.agent)),
+                    h('td', { class: 'muted num', style: { fontSize: '12.5px' } }, c.startedAt),
                     h('td', null, h('span', {
                         style: {
                             display: 'inline-flex', alignItems: 'center', gap: '4px',
                             padding: '1px 8px', borderRadius: '999px',
                             background: c.attempts >= 3 ? 'var(--crit-50)' : 'var(--ink-25)',
                             color:      c.attempts >= 3 ? 'var(--crit-700)' : 'var(--ink-700)',
-                            fontSize: '11.5px', fontWeight: 600, fontFamily: 'var(--font-mono)',
+                            fontSize: '12.5px', fontWeight: 600, fontFamily: 'var(--font-mono)',
                         },
                     }, String(c.attempts))),
                     h('td', null,
                         c.nextAction
-                            ? h('span', { style: { fontSize: '12px', color: 'var(--ink-800)', fontWeight: 500 } },
+                            ? h('span', { style: { fontSize: '12.5px', color: 'var(--ink-800)', fontWeight: 500 } },
                                 Icon('Clock', { size: 11 }), ' ', c.nextAction)
-                            : h('span', { class: 'muted', style: { fontSize: '12px' } }, '—'),
+                            : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '—'),
                     ),
                     h('td', { onclick: (e) => e.stopPropagation() },
                         h('div', { class: 'row', style: { gap: '4px' } },
@@ -614,7 +614,7 @@ function reminders() {
                     background: '#fde7c5', display: 'grid', placeItems: 'center', color: 'var(--warn-700)' } },
                     Icon('Repeat', { size: 22 })),
                 h('div', { style: { flex: 1 } },
-                    h('h3', { style: { margin: 0, fontSize: '14.5px', color: 'var(--ink-900)' } }, 'How the reminder loop works'),
+                    h('h3', { style: { margin: 0, fontSize: '15px', color: 'var(--ink-900)' } }, 'How the reminder loop works'),
                     h('p', { class: 'muted', style: { margin: '4px 0 0', fontSize: '12.5px', lineHeight: 1.55 } },
                         'Each call carries a ', h('b', null, 'nextActionAt'), ' while its status is ', h('i', null, 'Active'),
                         '. The system surfaces it to the assigned agent (and auto-dials for predictive campaigns) according to retry policy. Reminders ',
@@ -641,7 +641,7 @@ function reminders() {
                 ),
             ),
             b.items.length === 0
-                ? h('div', { class: 'muted', style: { padding: '18px 22px', fontSize: '13px' } }, 'Nothing here. 🎯')
+                ? h('div', { class: 'muted', style: { padding: '18px 22px', fontSize: '13.5px' } }, 'Nothing here. 🎯')
                 : h('div', null, ...b.items.map((r, i) => {
                     const parts = r.nextAction.split(' · ');
                     const left  = parts[0] || r.nextAction.split(' ')[0];
@@ -656,13 +656,13 @@ function reminders() {
                         onclick: () => openCall(r),
                     },
                         h('div', { style: { width: '56px', textAlign: 'center' } },
-                            h('div', { class: 'num', style: { fontSize: '12px', color: `var(--${b.kind}-700)`, fontWeight: 700 } }, right),
-                            h('div', { class: 'muted', style: { fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, left),
+                            h('div', { class: 'num', style: { fontSize: '12.5px', color: `var(--${b.kind}-700)`, fontWeight: 700 } }, right),
+                            h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, left),
                         ),
                         Avatar({ initials: r.patient.av, color: r.patient.avc, size: 'sm' }),
                         h('div', { style: { flex: 1, minWidth: 0 } },
                             h('div', { class: 'cell-strong', style: { fontSize: '13.5px' } }, r.patient.name),
-                            h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+                            h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                                 r.patient.mrn + ' · ' + ccReason(r.reason).label + ' · attempt #' + (r.attempts + 1)),
                         ),
                         statusPill(r.status),
@@ -681,8 +681,8 @@ function reminders() {
 
 function retryRule(label, value) {
     return h('div', null,
-        h('div', { class: 'muted', style: { fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } }, label),
-        h('div', { class: 'num', style: { fontSize: '13px', color: 'var(--ink-900)', fontWeight: 600, marginTop: '2px' } }, value),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } }, label),
+        h('div', { class: 'num', style: { fontSize: '13.5px', color: 'var(--ink-900)', fontWeight: 600, marginTop: '2px' } }, value),
     );
 }
 
@@ -698,18 +698,18 @@ function agents() {
                     Avatar({ initials: a.initials, color: a.color }),
                     h('div', { style: { flex: 1, minWidth: 0 } },
                         h('div', { class: 'row', style: { gap: '8px' } },
-                            h('span', { style: { fontSize: '14px', fontWeight: 600, color: 'var(--ink-900)' } }, a.name),
+                            h('span', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } }, a.name),
                             h('span', {
                                 style: {
                                     display: 'inline-flex', gap: '6px', alignItems: 'center',
                                     padding: '2px 8px', borderRadius: '999px',
-                                    background: s.bg, color: s.color, fontSize: '11px', fontWeight: 700,
+                                    background: s.bg, color: s.color, fontSize: '12.5px', fontWeight: 700,
                                 },
                             },
                                 h('span', { style: { width: '6px', height: '6px', borderRadius: '999px', background: s.color } }),
                                 s.label),
                         ),
-                        h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '2px' } }, 'Agent · ID ' + a.id.toUpperCase()),
+                        h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, 'Agent · ID ' + a.id.toUpperCase()),
                     ),
                     h('div', { class: 'row', style: { gap: '4px' } },
                         h('button', { class: 'icon-btn', style: { width: '28px', height: '28px' }, title: 'Listen in' }, Icon('Headset', { size: 13 })),
@@ -723,7 +723,7 @@ function agents() {
                     miniStat('SLA',     a.sla + '%', a.sla >= 90 ? 'ok' : 'warn'),
                 ),
                 h('div', { style: { marginTop: '12px' } },
-                    h('div', { class: 'row', style: { fontSize: '11px', marginBottom: '4px' } },
+                    h('div', { class: 'row', style: { fontSize: '12.5px', marginBottom: '4px' } },
                         h('span', { style: { color: 'var(--ink-500)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' } }, 'Occupancy'),
                         h('span', { class: 'grow' }),
                         h('span', { class: 'num', style: { color: 'var(--ink-900)', fontWeight: 700 } }, Math.round(a.occ * 100) + '%'),
@@ -745,9 +745,9 @@ function agents() {
 
 function miniStat(label, value, kind) {
     return h('div', { style: { padding: '8px 10px', borderRadius: '8px', background: 'var(--ink-25)', border: '1px solid var(--ink-100)' } },
-        h('div', { class: 'muted', style: { fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } }, label),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } }, label),
         h('div', { class: 'num', style: {
-            fontSize: '16px', fontWeight: 700, marginTop: '2px',
+            fontSize: '17px', fontWeight: 700, marginTop: '2px',
             color: kind === 'ok' ? 'var(--ok-700)' : kind === 'warn' ? 'var(--warn-700)' : 'var(--ink-900)',
         } }, value),
     );
@@ -773,19 +773,19 @@ function scripts() {
                 },
                     h('div', { class: 'row', style: { gap: '8px' } },
                         h('span', { style: { width: '8px', height: '8px', borderRadius: '999px', background: r.color } }),
-                        h('span', { style: { fontSize: '11px', fontWeight: 700, color: r.color, textTransform: 'uppercase', letterSpacing: '0.06em' } }, r.label),
+                        h('span', { style: { fontSize: '12.5px', fontWeight: 700, color: r.color, textTransform: 'uppercase', letterSpacing: '0.06em' } }, r.label),
                         h('span', { class: 'grow' }),
                         Tag(s.conv + '% conv.', { kind: 'ok', dot: true }),
                     ),
-                    h('div', { style: { fontSize: '14px', fontWeight: 600, color: 'var(--ink-900)' } }, s.title),
-                    h('div', { class: 'row', style: { gap: '12px', fontSize: '12px', color: 'var(--ink-600)' } },
+                    h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } }, s.title),
+                    h('div', { class: 'row', style: { gap: '12px', fontSize: '12.5px', color: 'var(--ink-600)' } },
                         h('span', null, Icon('Layers', { size: 11 }), ' ', s.steps, ' steps'),
                         h('span', null, Icon('Clock',  { size: 11 }), ' ', s.length),
                         h('span', null, Icon('Phone',  { size: 11 }), ' ', s.used, ' used'),
                     ),
                     h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '4px' } },
-                        ...CC_SCRIPT_STEPS.slice(0, s.steps).map((st, i) => h('div', { class: 'row', style: { gap: '8px', fontSize: '11.5px', color: 'var(--ink-700)' } },
-                            h('span', { style: { width: '18px', height: '18px', borderRadius: '999px', background: 'var(--ink-25)', color: 'var(--ink-600)', display: 'grid', placeItems: 'center', fontSize: '10px', fontWeight: 700 } }, String(i + 1)),
+                        ...CC_SCRIPT_STEPS.slice(0, s.steps).map((st, i) => h('div', { class: 'row', style: { gap: '8px', fontSize: '12.5px', color: 'var(--ink-700)' } },
+                            h('span', { style: { width: '18px', height: '18px', borderRadius: '999px', background: 'var(--ink-25)', color: 'var(--ink-600)', display: 'grid', placeItems: 'center', fontSize: '12.5px', fontWeight: 700 } }, String(i + 1)),
                             st,
                         )),
                     ),
@@ -808,7 +808,7 @@ function statusPill(status) {
             background: `color-mix(in oklab, ${m.dot} 10%, white)`,
             color: m.dot,
             border: `1px solid color-mix(in oklab, ${m.dot} 35%, white)`,
-            fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em',
+            fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em',
         },
     }, Icon(m.icon, { size: 10 }), ' ', m.label);
 }
@@ -837,7 +837,7 @@ function callDrawer(call) {
             // Header
             h('div', { style: { padding: '18px 22px 14px', borderBottom: '1px solid var(--ink-100)' } },
                 h('div', { class: 'row', style: { gap: '10px' } },
-                    h('span', { style: { fontSize: '11px', fontWeight: 700, color: r.color, textTransform: 'uppercase', letterSpacing: '0.06em' } }, r.label),
+                    h('span', { style: { fontSize: '12.5px', fontWeight: 700, color: r.color, textTransform: 'uppercase', letterSpacing: '0.06em' } }, r.label),
                     h('span', { class: 'grow' }),
                     Tag(call.id),
                     h('button', { class: 'icon-btn', style: { width: '28px', height: '28px' }, onclick: closeCall }, Icon('X', { size: 14 })),
@@ -845,8 +845,8 @@ function callDrawer(call) {
                 h('div', { class: 'row', style: { gap: '14px', marginTop: '10px' } },
                     Avatar({ initials: call.patient.av, color: call.patient.avc }),
                     h('div', { style: { flex: 1, minWidth: 0 } },
-                        h('div', { style: { fontSize: '18px', fontWeight: 700, color: 'var(--ink-900)' } }, call.patient.name),
-                        h('div', { class: 'muted cell-mono', style: { fontSize: '12px' } }, call.patient.mrn + ' · ' + call.patient.age + 'y'),
+                        h('div', { style: { fontSize: '17px', fontWeight: 700, color: 'var(--ink-900)' } }, call.patient.name),
+                        h('div', { class: 'muted cell-mono', style: { fontSize: '12.5px' } }, call.patient.mrn + ' · ' + call.patient.age + 'y'),
                     ),
                 ),
                 h('div', { class: 'row', style: { gap: '6px', marginTop: '12px' } },
@@ -858,9 +858,9 @@ function callDrawer(call) {
             // Status row
             h('div', { style: { padding: '14px 22px', background: 'var(--ink-25)', borderBottom: '1px solid var(--ink-100)' } },
                 h('div', { class: 'row', style: { gap: '8px' } },
-                    h('span', { style: { fontSize: '10.5px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.06em' } }, 'Current status'),
+                    h('span', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.06em' } }, 'Current status'),
                     h('span', { class: 'grow' }),
-                    h('span', { style: { fontSize: '11px', fontWeight: 700, color: m.terminal ? 'var(--ok-700)' : 'var(--warn-700)', textTransform: 'uppercase' } },
+                    h('span', { style: { fontSize: '12.5px', fontWeight: 700, color: m.terminal ? 'var(--ok-700)' : 'var(--warn-700)', textTransform: 'uppercase' } },
                         m.terminal ? '✓ Reminders stopped' : '⟳ Reminders active'),
                 ),
                 h('div', { class: 'row', style: { gap: '10px', marginTop: '8px' } },
@@ -869,10 +869,10 @@ function callDrawer(call) {
                             display: 'inline-flex', alignItems: 'center', gap: '7px',
                             padding: '6px 12px', borderRadius: '8px',
                             background: 'white', border: `1.5px solid ${m.dot}`, color: m.dot,
-                            fontSize: '13px', fontWeight: 600,
+                            fontSize: '13.5px', fontWeight: 600,
                         },
                     }, Icon(m.icon, { size: 14 }), ' ', m.label),
-                    call.nextAction && !m.terminal && h('span', { style: { fontSize: '12px', color: 'var(--ink-700)' } },
+                    call.nextAction && !m.terminal && h('span', { style: { fontSize: '12.5px', color: 'var(--ink-700)' } },
                         Icon('Clock', { size: 11 }), ' next action ' + call.nextAction),
                 ),
             ),
@@ -881,18 +881,18 @@ function callDrawer(call) {
                 call.linkedAppt && h('div', { style: { padding: '12px 14px', background: 'var(--ok-50)', border: '1px solid #c6e7d8', borderRadius: '10px' } },
                     h('div', { class: 'row', style: { gap: '8px' } },
                         Icon('Check', { size: 14 }),
-                        h('span', { style: { fontSize: '12px', fontWeight: 700, color: 'var(--ok-700)', textTransform: 'uppercase', letterSpacing: '0.06em' } }, 'Appointment linked'),
+                        h('span', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ok-700)', textTransform: 'uppercase', letterSpacing: '0.06em' } }, 'Appointment linked'),
                     ),
                     h('div', { style: { fontSize: '13.5px', color: 'var(--ink-900)', fontWeight: 600, marginTop: '4px' } }, call.linkedAppt),
                     h('button', { class: 'btn btn-ghost btn-sm', style: { marginTop: '6px', padding: 0, color: 'var(--ok-700)' }, onclick: () => onNavigateRef('appointments') },
                         'Open in Scheduling ', Icon('ArrowRight', { size: 13 })),
                 ),
                 call.note && h('div', null,
-                    h('div', { style: { fontSize: '10.5px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' } }, 'Agent note'),
-                    h('div', { style: { fontSize: '13px', color: 'var(--ink-800)', lineHeight: 1.55, padding: '10px 12px', background: 'var(--ink-25)', borderLeft: '3px solid var(--primary-500)', borderRadius: '6px' } }, call.note),
+                    h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' } }, 'Agent note'),
+                    h('div', { style: { fontSize: '13.5px', color: 'var(--ink-800)', lineHeight: 1.55, padding: '10px 12px', background: 'var(--ink-25)', borderLeft: '3px solid var(--primary-500)', borderRadius: '6px' } }, call.note),
                 ),
                 h('div', null,
-                    h('div', { style: { fontSize: '10.5px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' } }, 'Call details'),
+                    h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' } }, 'Call details'),
                     h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' } },
                         kv('Direction', call.dir === 'in' ? 'Inbound' : 'Outbound'),
                         kv('Agent',     call.agent === '—' ? 'Unassigned' : (ag?.name || call.agent)),
@@ -903,7 +903,7 @@ function callDrawer(call) {
                     ),
                 ),
                 h('div', null,
-                    h('div', { style: { fontSize: '10.5px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' } }, 'Change status'),
+                    h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' } }, 'Change status'),
                     h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } },
                         ...Object.entries(CC_STATUS).map(([id, meta]) => {
                             const on = call.status === id;
@@ -917,7 +917,7 @@ function callDrawer(call) {
                                     border: '1px solid ' + (on ? meta.dot : 'var(--ink-100)'),
                                     background: on ? `color-mix(in oklab, ${meta.dot} 12%, white)` : 'white',
                                     color: on ? meta.dot : 'var(--ink-700)',
-                                    fontSize: '11.5px', fontWeight: 600, fontFamily: 'inherit',
+                                    fontSize: '12.5px', fontWeight: 600, fontFamily: 'inherit',
                                     display: 'inline-flex', alignItems: 'center', gap: '5px',
                                 },
                             },
@@ -927,11 +927,11 @@ function callDrawer(call) {
                             );
                         }),
                     ),
-                    h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '8px' } },
+                    h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '8px' } },
                         'Terminal statuses (✓) stop the reminder loop immediately.'),
                 ),
                 h('div', null,
-                    h('div', { style: { fontSize: '10.5px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' } }, 'Activity'),
+                    h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' } }, 'Activity'),
                     timeline([
                         { t: 'now',          text: 'Status set to ' + m.label, by: call.agent === '—' ? 'System' : (ag?.name || call.agent), dot: m.dot },
                         { t: call.startedAt, text: (call.dir === 'in' ? 'Inbound call ' : 'Outbound call ') + (call.duration === '0:00' ? '(no answer)' : '· ' + call.duration), by: 'System', dot: 'var(--info-500)' },
@@ -953,8 +953,8 @@ function callDrawer(call) {
 
 function kv(label, value, capitalize) {
     return h('div', { style: { padding: '8px 10px', background: 'var(--ink-25)', borderRadius: '8px', border: '1px solid var(--ink-100)' } },
-        h('div', { class: 'muted', style: { fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } }, label),
-        h('div', { style: { fontSize: '13px', color: 'var(--ink-900)', fontWeight: 600, marginTop: '2px', textTransform: capitalize ? 'capitalize' : 'none' } }, value),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } }, label),
+        h('div', { style: { fontSize: '13.5px', color: 'var(--ink-900)', fontWeight: 600, marginTop: '2px', textTransform: capitalize ? 'capitalize' : 'none' } }, value),
     );
 }
 
@@ -967,11 +967,11 @@ function timeline(items) {
                 background: it.dot, border: '2px solid white', boxShadow: '0 0 0 1px var(--ink-100)',
             } }),
             h('div', { class: 'row', style: { gap: '8px' } },
-                h('span', { style: { fontSize: '13px', color: 'var(--ink-900)', fontWeight: 500 } }, it.text),
+                h('span', { style: { fontSize: '13.5px', color: 'var(--ink-900)', fontWeight: 500 } }, it.text),
                 h('span', { class: 'grow' }),
-                h('span', { class: 'muted num', style: { fontSize: '11px' } }, it.t),
+                h('span', { class: 'muted num', style: { fontSize: '12.5px' } }, it.t),
             ),
-            h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '1px' } }, 'by ' + it.by),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '1px' } }, 'by ' + it.by),
         )),
     );
 }
@@ -1000,8 +1000,8 @@ function donut(segments, size = 140, stroke = 20, centerLabel, centerSub) {
     </svg>`;
     wrap.appendChild(h('div', { style: { position: 'absolute', inset: 0, display: 'grid', placeItems: 'center' } },
         h('div', { style: { textAlign: 'center' } },
-            h('div', { class: 'num', style: { fontSize: '22px', fontWeight: 700, color: 'var(--ink-900)', letterSpacing: '-0.02em' } }, centerLabel),
-            h('div', { class: 'muted', style: { fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, centerSub),
+            h('div', { class: 'num', style: { fontSize: '24px', fontWeight: 700, color: 'var(--ink-900)', letterSpacing: '-0.02em' } }, centerLabel),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, centerSub),
         ),
     ));
     return wrap;
@@ -1022,7 +1022,7 @@ function stackedBars(labels, series) {
             y -= bh;
             svg += `<rect x="${x}" y="${y}" width="${bw}" height="${bh}" fill="${ss.color}"/>`;
         }
-        svg += `<text x="${x + bw/2}" y="${hgt + 14}" text-anchor="middle" font-size="10" fill="var(--ink-400)" font-family="var(--font-mono)">${labels[i]}</text></g>`;
+        svg += `<text x="${x + bw/2}" y="${hgt + 14}" text-anchor="middle" font-size="12.5" fill="var(--ink-400)" font-family="var(--font-mono)">${labels[i]}</text></g>`;
     }
     svg += `</svg>`;
     const wrap = document.createElement('div');

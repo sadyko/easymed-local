@@ -118,7 +118,7 @@ export function openVisitModal({ visit, patient, doctor, service, onChange, onSt
         headerEl.append(
             h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px' } },
                 h('h2', null, 'Visit · ', formatDate(state.visit?.visit_date || state.visit?.date)),
-                h('div', { class: 'muted', style: { fontSize: '12px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     [state.visit?.__doctor_name, state.visit?.dept].filter(Boolean).join(' · '),
                 ),
             ),
@@ -144,7 +144,7 @@ export function openVisitModal({ visit, patient, doctor, service, onChange, onSt
                 style: t.locked ? { opacity: 0.6 } : {},
             }, Icon(t.icon, { size: 14 }), ' ', t.label,
                 t.count != null && h('span', { class: 'tab-count' }, String(t.count)),
-                t.locked && h('span', { class: 'muted', style: { marginLeft: '6px', fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '0.05em' } }, 'locked'),
+                t.locked && h('span', { class: 'muted', style: { marginLeft: '6px', fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.05em' } }, 'locked'),
             ));
         }
     }
@@ -259,12 +259,12 @@ function visitInfoBanner(state) {
 
 function bannerCol(label, icon, value, meta) {
     return h('div', { style: { minWidth: 0 } },
-        h('div', { class: 'muted', style: { fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700, color: 'var(--ink-500)', marginBottom: '6px' } }, label),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700, color: 'var(--ink-500)', marginBottom: '6px' } }, label),
         h('div', { class: 'row', style: { gap: '8px', minWidth: 0 } },
             h('span', { style: { color: 'var(--primary-700)', flex: '0 0 auto' } }, icon),
             h('div', { style: { minWidth: 0 } },
                 h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, value || '—'),
-                meta && h('div', { class: 'muted', style: { fontSize: '11.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, meta),
+                meta && h('div', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, meta),
             ),
         ),
     );
@@ -401,8 +401,8 @@ function detailsForm(state) {
         },
             h('span', { style: { color: 'var(--warn-700)', flex: '0 0 auto', marginTop: '1px' } }, Icon('Warning', { size: 15 })),
             h('div', null,
-                h('div', { style: { fontSize: '12px', fontWeight: 700, color: 'var(--warn-700)', textTransform: 'uppercase', letterSpacing: '0.04em' } }, 'Behaviour caution'),
-                h('div', { style: { fontSize: '13px', color: 'var(--ink-800)', marginTop: '2px' } }, state.patientBehaviorNote),
+                h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--warn-700)', textTransform: 'uppercase', letterSpacing: '0.04em' } }, 'Behaviour caution'),
+                h('div', { style: { fontSize: '13.5px', color: 'var(--ink-800)', marginTop: '2px' } }, state.patientBehaviorNote),
             ),
         ),
         h('div', { class: 'vd-form', style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px 28px' } },
@@ -437,7 +437,7 @@ function detailsForm(state) {
         labeled('Discount (%)', h('input', { type: 'number', name: 'discount_percentage', step: '0.01', value: v.discount_percentage ?? '0', class: 'num' })),
 
         h('div', { style: { gridColumn: '1 / -1' } },
-            h('div', { style: { fontSize: '12px', color: 'var(--ink-700)', fontWeight: 500, marginBottom: '4px' } }, 'Visit comment'),
+            h('div', { style: { fontSize: '12.5px', color: 'var(--ink-700)', fontWeight: 500, marginBottom: '4px' } }, 'Visit comment'),
             h('textarea', { name: 'notes', rows: '3', style: { width: '100%' } }, v.notes || ''),
         ),
         ),
@@ -548,10 +548,10 @@ function servicesPane(state, onReload) {
         recommendationsSection(state, onReload),
 
         h('div', { class: 'row', style: { marginBottom: '12px', gap: '8px' } },
-            h('h3', { style: { margin: 0, fontSize: '14px', fontWeight: 600, color: 'var(--ink-900)' } },
+            h('h3', { style: { margin: 0, fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } },
                 'Services in this visit'),
             h('span', { class: 'grow' }),
-            h('div', { class: 'num', style: { fontWeight: 700, fontSize: '14px', color: 'var(--ink-900)' } },
+            h('div', { class: 'num', style: { fontWeight: 700, fontSize: '13.5px', color: 'var(--ink-900)' } },
                 selected.size > 0
                     ? `${selected.size} selected · ${selectedTotal.toLocaleString('ru-RU')} UZS`
                     : `Total ${(state.services || []).reduce((s,r) => s + Number(r.price||0)*(r.qty||1), 0).toLocaleString('ru-RU')} UZS`),
@@ -659,23 +659,23 @@ function servicesPane(state, onReload) {
                 ),
                 h('td', { class: 'cell-strong' }, r.__service_name || '—'),
                 h('td', null, r.__doctor_name || '—'),
-                h('td', { class: 'muted', style: { fontSize: '12px' } }, r.__created_by_name || '—'),
-                h('td', { class: 'muted', style: { fontSize: '12px', whiteSpace: 'nowrap' } }, r.created_at ? formatDateTime(r.created_at) : '—'),
-                h('td', { class: 'muted', style: { fontSize: '12px', whiteSpace: 'nowrap' } }, r.completed_at ? formatDateTime(r.completed_at) : '—'),
+                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, r.__created_by_name || '—'),
+                h('td', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, r.created_at ? formatDateTime(r.created_at) : '—'),
+                h('td', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, r.completed_at ? formatDateTime(r.completed_at) : '—'),
                 h('td', { class: 'num cell-strong', title: `${r.qty || r.quantity || 1} × ${Number(r.price ?? r.unit_price ?? r.services?.price ?? 0).toLocaleString('ru-RU')} UZS` },
                     rowAmount(r).toLocaleString('ru-RU') + ' UZS'),
                 h('td', null,
                     r.invoice_item_id
-                        ? h('span', { class: 'cell-mono', style: { fontSize: '12px' }, title: 'Invoice generated for this service' },
+                        ? h('span', { class: 'cell-mono', style: { fontSize: '12.5px' }, title: 'Invoice generated for this service' },
                             state.invoice?.invoice_number || 'Created')
-                        : h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Not yet')),
+                        : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Not yet')),
                 h('td', null, StatusTag(r.__service_status || 'added')),
                 h('td', null,
                     r.invoice_item_id
                         ? StatusTag(state.invoice?.status || 'unpaid')
                         : isCovered(r)
-                        ? h('span', { class: 'tag tag-info', style: { fontSize: '11px' } }, 'Покрывается плательщиком')
-                        : h('span', { class: 'muted', style: { fontSize: '12px' } }, '—')),
+                        ? h('span', { class: 'tag tag-info', style: { fontSize: '12.5px' } }, 'Покрывается плательщиком')
+                        : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '—')),
                 h('td', { style: { textAlign: 'right' } },
                     // DISPENSE_ITEM_V1: item lines void via the RPC (writes a
                     // compensating 'return' movement + deletes the line). The RPC
@@ -696,7 +696,7 @@ function servicesPane(state, onReload) {
                           }, Icon('Trash', { size: 13 }), ' Remove')
                         : !r.invoice_item_id
                         ? null
-                        : h('span', { class: 'muted', style: { fontSize: '11.5px' }, title: 'Already invoiced — void the invoice to remove.' }, 'invoiced'),
+                        : h('span', { class: 'muted', style: { fontSize: '12.5px' }, title: 'Already invoiced — void the invoice to remove.' }, 'invoiced'),
                 ),
             ))),
         ),
@@ -732,10 +732,10 @@ function recommendationsSection(state, onReload) {
             },
         },
             h('span', { style: { color: 'var(--info-700)' } }, Icon('Heart', { size: 14 })),
-            h('div', { style: { fontSize: '13px', fontWeight: 600, color: 'var(--info-700)' } },
+            h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--info-700)' } },
                 `Recommended for this patient · ${recs.length}`),
             h('span', { class: 'grow' }),
-            h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 'From previous consultations — add what the patient wants done today.'),
         ),
         h('div', null, ...recs.map(rec => recommendationRow(rec, state, onReload))),
@@ -756,7 +756,7 @@ function recommendationRow(rec, state, onReload) {
         h('div', { style: { minWidth: 0 } },
             h('div', { class: 'cell-strong', style: { fontSize: '13.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } },
                 rec.__service_name),
-            h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } },
                 'Recommended by ',
                 h('b', { style: { color: 'var(--info-700)' } }, rec.__doctor_name),
                 rec.__doctor_spec ? ` (${rec.__doctor_spec})` : '',
@@ -767,7 +767,7 @@ function recommendationRow(rec, state, onReload) {
         price != null
             ? h('div', { class: 'num', style: { fontWeight: 600, color: 'var(--ink-900)' } },
                 Number(price).toLocaleString('ru-RU') + ' UZS')
-            : h('span', { class: 'muted', style: { fontSize: '11.5px' } }, 'price not set'),
+            : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'price not set'),
         h('button', {
             class: 'btn btn-primary btn-sm',
             onclick: () => openAttachRecommendationModal(state, rec, onReload),
@@ -851,16 +851,16 @@ function openAttachRecommendationModal(state, rec, onReload) {
             },
                 h('div', { class: 'cell-strong', style: { fontSize: '15px', color: 'var(--ink-900)', marginBottom: '6px' } },
                     rec.__service_name || '—'),
-                h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: price != null ? '6px' : '0' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: price != null ? '6px' : '0' } },
                     'Recommended by ',
                     h('b', { style: { color: 'var(--info-700)' } }, rec.__doctor_name),
                     rec.__doctor_spec ? ` (${rec.__doctor_spec})` : '',
                     ' · ', createdLabel),
-                price != null && h('div', { class: 'num', style: { fontSize: '13px', fontWeight: 600, color: 'var(--ink-800)' } },
+                price != null && h('div', { class: 'num', style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-800)' } },
                     Number(price).toLocaleString('ru-RU') + ' UZS'),
                 rec.notes && h('div', {
                     style: {
-                        fontSize: '12px', color: 'var(--ink-700)',
+                        fontSize: '12.5px', color: 'var(--ink-700)',
                         marginTop: '10px', padding: '8px 10px',
                         background: 'white', border: '1px solid var(--ink-100)',
                         borderRadius: '6px', whiteSpace: 'pre-wrap',
@@ -870,7 +870,7 @@ function openAttachRecommendationModal(state, rec, onReload) {
             h('div', { class: 'field' },
                 h('label', null, 'Assigned doctor (editable)'),
                 doctorSelect,
-                h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '4px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
                     'Defaults to the doctor who recommended it — change if someone else will perform it.'),
             ),
         ),
@@ -1290,7 +1290,7 @@ function invoicePane(state, onReload) {
             }, h('span', { html: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' })),
             h('h3', { style: { margin: '0 0 6px', fontSize: '15px', fontWeight: 600, color: 'var(--ink-900)' } },
                 'Invoice locked until the patient arrives'),
-            h('p', { class: 'muted', style: { margin: 0, fontSize: '13px', maxWidth: '420px', marginLeft: 'auto', marginRight: 'auto' } },
+            h('p', { class: 'muted', style: { margin: 0, fontSize: '13.5px', maxWidth: '420px', marginLeft: 'auto', marginRight: 'auto' } },
                 'Current status: ', h('b', { style: { color: 'var(--ink-700)' } }, statusLabel(status)),
                 '. Use the ', h('b', null, 'Arrived'), ' button in the header once the patient checks in at reception.'),
         );
@@ -1317,10 +1317,10 @@ function invoicePane(state, onReload) {
         // Summary card
         h('div', { class: 'card', style: { padding: '16px 18px', marginBottom: '16px' } },
             h('div', { class: 'row', style: { gap: '24px', flexWrap: 'wrap' } },
-                kv('Invoice #', h('span', { class: 'cell-mono cell-strong', style: { fontSize: '14px' } }, inv.invoice_number || inv.id.slice(0, 8))),
+                kv('Invoice #', h('span', { class: 'cell-mono cell-strong', style: { fontSize: '13.5px' } }, inv.invoice_number || inv.id.slice(0, 8))),
                 kv('Total', h('span', { class: 'num cell-strong', style: { fontSize: '15px' } }, total.toLocaleString('ru-RU') + ' UZS')),
-                kv('Paid',  h('span', { class: 'num', style: { fontSize: '14px', color: 'var(--ok-700)' } }, paid.toLocaleString('ru-RU') + ' UZS')),
-                kv('Debt',  h('span', { class: 'num cell-strong', style: { fontSize: '14px', color: owed > 0 ? 'var(--crit-700)' : 'var(--ink-500)' } }, owed.toLocaleString('ru-RU') + ' UZS')),
+                kv('Paid',  h('span', { class: 'num', style: { fontSize: '13.5px', color: 'var(--ok-700)' } }, paid.toLocaleString('ru-RU') + ' UZS')),
+                kv('Debt',  h('span', { class: 'num cell-strong', style: { fontSize: '13.5px', color: owed > 0 ? 'var(--crit-700)' : 'var(--ink-500)' } }, owed.toLocaleString('ru-RU') + ' UZS')),
                 kv('Status', StatusTag(inv.status || 'unpaid')),
                 kv('Created', formatDate(inv.created_at)),
             ),
@@ -1371,7 +1371,7 @@ function paymentMethodSelect(pm) {
     const METHODS = [['cash', 'Cash'], ['card', 'Card'], ['online', 'Online / acquiring'], ['insurance', 'Insurance'], ['transfer', 'Bank transfer']];
     return h('select', {
         class: 'input',
-        style: { height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13px', background: '#fff' },
+        style: { height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', background: '#fff' },
         onchange: (e) => { pm.method = e.target.value; },
     }, ...METHODS.map(([v, l]) => h('option', { value: v }, l)));
 }
@@ -1513,13 +1513,13 @@ function openPartialPaymentDialog(state, inv, onReload) {
         ),
         h('div', { class: 'modal-body' },
             h('div', { style: { padding: '10px 12px', background: 'var(--ink-25)', borderRadius: '8px', marginBottom: '14px' } },
-                h('div', { class: 'muted', style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, 'Outstanding'),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, 'Outstanding'),
                 h('div', { class: 'num', style: { fontSize: '20px', fontWeight: 700, color: 'var(--crit-700)' } }, owed.toLocaleString('ru-RU') + ' UZS'),
             ),
             h('div', { class: 'field' },
                 h('label', null, 'Amount the patient is paying now'),
                 amountInput,
-                h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '4px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
                     'Whatever stays unpaid becomes a debt on this invoice. Patient can pay it later.'),
             ),
             h('div', { class: 'field' },
@@ -1550,7 +1550,7 @@ function openPartialPaymentDialog(state, inv, onReload) {
 // ---------------------------------------------------------------------------
 function labeled(label, input) {
     return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
-        h('label', { style: { fontSize: '12px', color: 'var(--ink-700)', fontWeight: 500 } }, label),
+        h('label', { style: { fontSize: '12.5px', color: 'var(--ink-700)', fontWeight: 500 } }, label),
         input,
     );
 }
@@ -1590,8 +1590,8 @@ function segmentRow(name, options, current) {
 }
 function kv(k, v) {
     return h('div', null,
-        h('div', { class: 'muted', style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, k),
-        h('div', { style: { fontSize: '14px', color: 'var(--ink-900)', marginTop: '2px' } }, v),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, k),
+        h('div', { style: { fontSize: '13.5px', color: 'var(--ink-900)', marginTop: '2px' } }, v),
     );
 }
 function fkSelect(name, table, currentId, allowBlank) {
@@ -1805,14 +1805,14 @@ function invoiceLogCard(state) {
     const logs = state.invoiceLogs || [];
     return h('div', { class: 'card', style: { padding: '14px 16px', marginTop: '20px' } },
         h('div', { class: 'row', style: { alignItems: 'center', marginBottom: '10px' } },
-            h('h3', { style: { margin: 0, fontSize: '13px', fontWeight: 600, color: 'var(--ink-700)' } },
+            h('h3', { style: { margin: 0, fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-700)' } },
                 Icon('Doc', { size: 13 }), ' Invoice activity'),
             h('span', { class: 'grow' }),
-            h('span', { class: 'muted', style: { fontSize: '11.5px' } },
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } },
                 logs.length === 0 ? 'No entries yet.' : `${logs.length} entr${logs.length === 1 ? 'y' : 'ies'}`),
         ),
         logs.length === 0
-            ? h('div', { class: 'muted', style: { fontSize: '12px', padding: '8px 0' } },
+            ? h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '8px 0' } },
                 'Every payment, debt mark, cancel, and refund for this visit will appear here with the user and reason.')
             : h('table', { class: 'tbl', style: { fontSize: '12.5px' } },
                 h('thead', null, h('tr', null,
@@ -1846,14 +1846,14 @@ function logRow(l) {
     if (!detail.length && transition) detail.push(transition);
 
     return h('tr', null,
-        h('td', { class: 'muted', style: { fontSize: '11.5px' } }, stamp),
+        h('td', { class: 'muted', style: { fontSize: '12.5px' } }, stamp),
         h('td', null, tag),
         h('td', null,
             h('div', { style: { fontWeight: 600, fontSize: '12.5px', color: 'var(--ink-800)' } }, l.__actor_name || 'Unknown'),
-            l.__actor_role && h('div', { class: 'muted', style: { fontSize: '11px' } }, l.__actor_role),
+            l.__actor_role && h('div', { class: 'muted', style: { fontSize: '12.5px' } }, l.__actor_role),
         ),
         h('td', { style: { textAlign: 'right' } }, amount),
-        h('td', { style: { fontSize: '11.5px', color: 'var(--ink-700)' } }, detail.join(' · ') || h('span', { class: 'muted' }, '—')),
+        h('td', { style: { fontSize: '12.5px', color: 'var(--ink-700)' } }, detail.join(' · ') || h('span', { class: 'muted' }, '—')),
     );
 }
 

@@ -41,7 +41,7 @@ function mount() {
     refs.tbody = h('tbody');
     refs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } },
         'No visits yet — book the first one.');
-    refs.totalEl = h('span', { class: 'muted', style: { fontSize: '12px' } }, '');
+    refs.totalEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
 
     const bookBtn = h('button', {
         class: 'btn btn-primary btn-sm', type: 'button',
@@ -130,7 +130,7 @@ function visitRow(v) {
         h('td', { class: 'num', style: { fontSize: '12.5px' } }, fmtDateTime(v.visit_date)),
         h('td', null,
             h('div', { class: 'cell-strong' }, p ? (p.full_name || '—') : '—'),
-            p && p.mrn ? h('div', { class: 'muted', style: { fontSize: '11.5px' } }, p.mrn) : null,
+            p && p.mrn ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, p.mrn) : null,
         ),
         h('td', null, doc ? (doc.full_name || '—') : '—'),
         h('td', null, v.visit_type || '—'),

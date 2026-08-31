@@ -123,7 +123,7 @@ function paint() {
                 Icon(d.icon, { size: 14 }),
                 h('div', { style: { flex: 1, minWidth: 0 } },
                     h('div', null, d.label),
-                    h('div', { style: { fontSize: '10.5px', color: 'var(--ink-500)', fontWeight: 500, marginTop: '1px' } },
+                    h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', fontWeight: 500, marginTop: '1px' } },
                         d.sub + ' · ' + d.paper),
                 ),
             )),
@@ -146,7 +146,7 @@ function settingsPanel() {
         variantCard(),
         editorCard('Clinic identity', 'Building', [
             companyIdentityToggle(fromCompany),
-            h('div', { style: { fontSize: '10.5px', color: 'var(--ink-500)', lineHeight: '1.45', marginBottom: '2px' } },
+            h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', lineHeight: '1.45', marginBottom: '2px' } },
                 // COMPANY_SECTION_V1 — раздел теперь действительно существует
                 // (Настройки → Основное → «Компания»); раньше подсказка отправляла
                 // туда, куда попасть было нельзя, а поля здесь молча
@@ -213,7 +213,7 @@ function editorCard(title, iconName, children) {
         h('div', { style: { padding: '11px 14px', borderBottom: '1px solid var(--ink-100)', background: 'var(--ink-25)' } },
             h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
                 h('span', { style: { color: 'var(--primary-600)', display: 'inline-flex' } }, Icon(iconName, { size: 14 })),
-                h('span', { style: { fontSize: '11.5px', fontWeight: 700, color: 'var(--ink-700)', textTransform: 'uppercase', letterSpacing: '0.06em' } }, title),
+                h('span', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-700)', textTransform: 'uppercase', letterSpacing: '0.06em' } }, title),
             ),
         ),
         h('div', { style: { padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '10px' } }, ...children),
@@ -255,7 +255,7 @@ function logoField() {
             mini('Clinic logo'),
             h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
                 h('img', { src: _companyLogo, style: { width: '48px', height: '48px', objectFit: 'contain', borderRadius: '10px', border: '1px solid var(--ink-200)', background: 'white', flex: '0 0 48px' } }),
-                h('div', { style: { fontSize: '10.5px', color: 'var(--ink-500)', lineHeight: '1.4' } }, 'Логотип берётся из раздела «Компания». Чтобы изменить — обновите его там.'),
+                h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', lineHeight: '1.4' } }, 'Логотип берётся из раздела «Компания». Чтобы изменить — обновите его там.'),
             ),
         );
     }
@@ -294,16 +294,16 @@ function logoField() {
                 h('div', { style: { display: 'flex', gap: '6px' } },
                     h('button', {
                         class: 'btn btn-outline',
-                        style: { height: '30px', padding: '0 10px', fontSize: '12px' },
+                        style: { height: '30px', padding: '0 10px', fontSize: '12.5px' },
                         onclick: () => fileInput.click(),
                     }, Icon('Plus', { size: 13 }), has ? ' Replace' : ' Upload'),
                     has && h('button', {
                         class: 'btn btn-outline',
-                        style: { height: '30px', padding: '0 10px', fontSize: '12px', color: 'var(--crit-700)' },
+                        style: { height: '30px', padding: '0 10px', fontSize: '12.5px', color: 'var(--crit-700)' },
                         onclick: () => set({ logoDataUrl: null }),
                     }, 'Remove'),
                 ),
-                h('div', { style: { fontSize: '10.5px', color: 'var(--ink-500)', lineHeight: '1.4' } },
+                h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', lineHeight: '1.4' } },
                     has ? 'Shown on every printed document.' : 'PNG, JPG or SVG · max 1 MB · square works best.'),
             ),
         ),
@@ -324,7 +324,7 @@ function handleLogoFile(file) {
 function mini(text, opts = {}) {
     return h('div', {
         style: {
-            fontSize: '10.5px', fontWeight: 700, color: 'var(--ink-500)',
+            fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-500)',
             textTransform: 'uppercase', letterSpacing: '0.06em',
             marginBottom: '4px',
             marginTop: opts.mt ? (opts.mt + 'px') : '0',
@@ -354,7 +354,7 @@ function segmented(key, options) {
                     background: on ? 'white' : 'transparent',
                     color: on ? 'var(--ink-900)' : 'var(--ink-500)',
                     border: 0,
-                    fontSize: '11.5px', fontWeight: 600, fontFamily: 'inherit',
+                    fontSize: '12.5px', fontWeight: 600, fontFamily: 'inherit',
                     cursor: 'pointer',
                     boxShadow: on ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
                 },
@@ -404,7 +404,7 @@ function customColorRow() {
         h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
             colorInput, hexInput,
             !isPreset && valid
-                ? h('span', { style: { fontSize: '10px', fontWeight: 700, color: 'var(--ink-500)', whiteSpace: 'nowrap' } }, 'CUSTOM')
+                ? h('span', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-500)', whiteSpace: 'nowrap' } }, 'CUSTOM')
                 : null,
         ),
     );
@@ -438,11 +438,11 @@ function watermarkOpacityControl() {
     const pct = Math.round((state.s.watermarkOpacity ?? 0.04) * 100);
     const valLabel = h('span', {
         class: 'num',
-        style: { fontSize: '11px', fontWeight: 700, color: 'var(--ink-700)' },
+        style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-700)' },
     }, pct + '%');
     return h('div', { style: { padding: '2px 0 4px' } },
         h('div', { class: 'row', style: { justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' } },
-            h('span', { style: { fontSize: '10.5px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.06em' } }, 'Watermark visibility'),
+            h('span', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.06em' } }, 'Watermark visibility'),
             valLabel,
         ),
         h('input', {
@@ -524,12 +524,12 @@ function patchPreview() {
 function previewPanel() {
     return h('div', { class: 'card', style: { padding: '14px', background: 'var(--ink-25, #f5f7f8)' } },
         h('div', { class: 'row', style: { gap: '8px', marginBottom: '10px', alignItems: 'center' } },
-            h('span', { style: { fontSize: '11.5px', fontWeight: 700, color: 'var(--ink-700)', textTransform: 'uppercase', letterSpacing: '0.06em' } },
+            h('span', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-700)', textTransform: 'uppercase', letterSpacing: '0.06em' } },
                 'Live preview'),
-            h('span', { class: 'muted', style: { fontSize: '11px' } },
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } },
                 '— ' + typeMeta(state.active).label + ' · ' + state.s.paperSize),
             h('span', { class: 'grow' }),
-            h('span', { class: 'muted', style: { fontSize: '11px' } },
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } },
                 'Same renderer every Print button uses'),
         ),
         h('div', { id: 'doc-preview-slot' }, buildPreviewFrame()),
@@ -571,7 +571,7 @@ function variantCard() {
     const list = (typeof DOC_VARIANTS !== 'undefined' && DOC_VARIANTS[state.active]) || [{ key: 'classic', label: 'Классический' }];
     const sel = (state.s.variant && state.s.variant[state.active]) || 'classic';
     return editorCard('Вариант для печати', 'Sparkles', [
-        h('div', { style: { fontSize: '10.5px', color: 'var(--ink-500)', lineHeight: '1.45', marginBottom: '4px' } },
+        h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', lineHeight: '1.45', marginBottom: '4px' } },
             trf('Дизайн печати для типа «{type}». Выбранный вариант печатается из приёма врача и из визита пациента.', { type: typeMeta(state.active).label || state.active })),
         ...list.map(v => {
             const on = sel === v.key;
@@ -589,7 +589,7 @@ function variantCard() {
             },
                 h('span', { style: { width: '14px', display: 'inline-flex', flex: '0 0 14px' } }, on ? Icon('Check', { size: 14 }) : null),
                 h('span', { style: { flex: 1 } }, v.label),
-                v.stub ? h('span', { style: { fontSize: '10px', color: 'var(--ink-400)' } }, 'скоро') : null,
+                v.stub ? h('span', { style: { fontSize: '12.5px', color: 'var(--ink-400)' } }, 'скоро') : null,
             );
         }),
     ]);
@@ -619,7 +619,7 @@ async function openDocTemplatesModal() {
 
     const listEl = h('div', { class: 'tplm-list' });
     const detailEl = h('div', { class: 'tplm-detail' });
-    const footMeta = h('span', { class: 'muted', style: { fontSize: '12px', display: 'inline-flex', alignItems: 'center', gap: '6px' } });
+    const footMeta = h('span', { class: 'muted', style: { fontSize: '12.5px', display: 'inline-flex', alignItems: 'center', gap: '6px' } });
     const searchInp = h('input', { class: 'tplm-input', type: 'search', placeholder: 'Поиск по названию…', style: { maxWidth: '320px' }, oninput: (e) => { st.q = e.target.value; paintList(); } });
 
     let barEl;
@@ -691,9 +691,9 @@ async function openDocTemplatesModal() {
                 h('button', { class: 'btn btn-outline btn-sm', style: { color: 'var(--crit-700)' }, onclick: () => askDelete(r) }, Icon('Trash', { size: 13 }))),
             h('div', { class: 'tplm-meta', style: { marginTop: '2px' } }, (r.scope === 'shared' ? 'Общий для всех врачей' : 'Только я') + ' · ' + (r.author_name || '—')),
             ...filled.map(([k, lbl]) => h('div', { style: { marginTop: '12px' } },
-                h('div', { style: { fontSize: '10.5px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '3px' } }, lbl),
-                h('div', { style: { fontSize: '13px', color: 'var(--ink-800)', whiteSpace: 'pre-wrap', lineHeight: '1.5' }, html: sanitizeRichHtml(r.body[k]) }))),
-            filled.length ? null : h('div', { class: 'muted', style: { marginTop: '12px', fontSize: '12px' } }, 'Шаблон без заполненных секций.')));
+                h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '3px' } }, lbl),
+                h('div', { style: { fontSize: '13.5px', color: 'var(--ink-800)', whiteSpace: 'pre-wrap', lineHeight: '1.5' }, html: sanitizeRichHtml(r.body[k]) }))),
+            filled.length ? null : h('div', { class: 'muted', style: { marginTop: '12px', fontSize: '12.5px' } }, 'Шаблон без заполненных секций.')));
     }
     function paintEditor() {
         const d = st.draft;
@@ -701,7 +701,7 @@ async function openDocTemplatesModal() {
         const nameIn = h('input', { class: 'tplm-input', value: d.name, oninput: (e) => { d.name = e.target.value; } });
         const sbtn = (val, label, icon) => h('button', { class: 'btn btn-sm ' + (d.scope === val ? 'btn-primary' : 'btn-outline'), onclick: () => { d.scope = val; paintEditor(); } }, Icon(icon, { size: 13 }), ' ' + label);
         detailEl.appendChild(h('div', { class: 'tplm-form' },
-            h('b', { style: { fontSize: '14px', color: 'var(--ink-900)' } }, d.id ? 'Изменение шаблона' : 'Новый шаблон'),
+            h('b', { style: { fontSize: '13.5px', color: 'var(--ink-900)' } }, d.id ? 'Изменение шаблона' : 'Новый шаблон'),
             h('div', { class: 'tplm-field' }, h('label', null, 'Название'), nameIn),
             h('div', { class: 'tplm-field' }, h('label', null, 'Видимость'),
                 h('div', { style: { display: 'flex', gap: '6px' } }, sbtn('shared', 'Общий для всех', 'Globe'), sbtn('private', 'Только я', 'User'))),

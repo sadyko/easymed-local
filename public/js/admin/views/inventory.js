@@ -230,8 +230,8 @@ function lowStockCard(list) {
             ...shown.map(p => h('div', {
                 style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', borderTop: '1px solid var(--ink-100)' },
             },
-                h('div', { style: { fontWeight: 600, fontSize: '13px', color: 'var(--ink-900)' } }, p.name || '—'),
-                h('div', { class: 'muted num', style: { fontSize: '12px' } },
+                h('div', { style: { fontWeight: 600, fontSize: '13.5px', color: 'var(--ink-900)' } }, p.name || '—'),
+                h('div', { class: 'muted num', style: { fontSize: '12.5px' } },
                     `${fmtQty(Number(p.on_hand) || 0)} / ${fmtQty(Number(p.reorder_level) || 0)} ${p.base_unit || ''}`.trim()),
             )),
         ),

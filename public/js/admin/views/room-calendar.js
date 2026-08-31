@@ -214,8 +214,8 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         const requestedBanner = (a.status === 'requested') ? h('div', { style: { background: 'var(--purple-50, #f5f3ff)', border: '1px solid var(--purple-200, #ddd6fe)', borderRadius: '10px', padding: '11px 12px', margin: '0 0 14px' } },
             h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', marginBottom: '8px' } },
                 h('span', { class: 'rcal-dot', style: { background: 'var(--purple-700)' } }),
-                h('div', { style: { fontWeight: 700, fontSize: '13px', color: 'var(--purple-700)' } }, 'Заявка из Symptex')),
-            h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '10px' } }, 'Пациент записался через Symptex. Подтвердите запись, чтобы зафиксировать слот, или отклоните её.'),
+                h('div', { style: { fontWeight: 700, fontSize: '13.5px', color: 'var(--purple-700)' } }, 'Заявка из Symptex')),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } }, 'Пациент записался через Symptex. Подтвердите запись, чтобы зафиксировать слот, или отклоните её.'),
             h('div', { class: 'row', style: { gap: '8px' } },
                 h('button', { class: 'btn btn-primary', onclick: async (ev) => {
                     ev.currentTarget.disabled = true;
@@ -241,11 +241,11 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 } }, 'Подтвердить'),
                 h('button', { class: 'btn', style: { color: 'var(--crit-700)' }, onclick: async (ev) => { ev.currentTarget.disabled = true; const ok = await setApptStatus(a, 'cancelled'); if (ok) { toast('Заявка отклонена'); close(); } else ev.currentTarget.disabled = false; } }, 'Отклонить'))) : null;
 
-        const row = (label, value) => h('div', { class: 'row', style: { gap: '10px', padding: '7px 0', borderBottom: '1px solid var(--ink-50)', fontSize: '13px', alignItems: 'baseline' } },
-            h('span', { class: 'muted', style: { flex: '0 0 110px', fontSize: '12px' } }, label),
+        const row = (label, value) => h('div', { class: 'row', style: { gap: '10px', padding: '7px 0', borderBottom: '1px solid var(--ink-50)', fontSize: '13.5px', alignItems: 'baseline' } },
+            h('span', { class: 'muted', style: { flex: '0 0 110px', fontSize: '12.5px' } }, label),
             h('span', { style: { fontWeight: 500 } }, value || '—'));
         // RCAL_EDIT_V1 — editable service / doctor / date / time (status stays the pills below).
-        const _ecss = { fontSize: '13px', padding: '7px 9px', border: '1px solid var(--ink-200, #e2e8f0)', borderRadius: '8px', background: '#fff', color: 'var(--ink-800, #1e293b)', width: '100%', boxSizing: 'border-box' };
+        const _ecss = { fontSize: '13.5px', padding: '7px 9px', border: '1px solid var(--ink-200, #e2e8f0)', borderRadius: '8px', background: '#fff', color: 'var(--ink-800, #1e293b)', width: '100%', boxSizing: 'border-box' };
         const svcSel = h('select', { class: 'rcal-edit', style: _ecss },
             h('option', { value: '' }, '— без услуги —'),
             ...(state.servicesList || []).map(s => h('option', Object.assign({ value: s.id }, String(s.id) === String(a.serviceId) ? { selected: true } : {}), s.name || '—')));
@@ -256,7 +256,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         const timeInp = h('input', { type: 'time', class: 'rcal-edit', style: Object.assign({}, _ecss, { width: '120px' }), value: fmtHM(a.start) });
         const durInp = h('input', { type: 'number', min: '5', step: '5', class: 'rcal-edit', style: Object.assign({}, _ecss, { width: '90px' }), value: String(a.dur) });
         const editRow = (label, control) => h('div', { style: { padding: '8px 0', borderBottom: '1px solid var(--ink-50)' } },
-            h('div', { class: 'muted', style: { fontSize: '11px', marginBottom: '4px' } }, label), control);
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '4px' } }, label), control);
 
         overlay.appendChild(h('div', { class: 'modal-card', style: { width: '480px', maxWidth: 'calc(100vw - 32px)' } },
             h('header', { class: 'modal-head' },
@@ -267,16 +267,16 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 h('div', { class: 'row', style: { gap: '11px', alignItems: 'center', marginBottom: '12px' } },
                     Avatar({ initials: initials(a.patient), color: avColor(a.patientId || a.patient) }),
                     h('div', { style: { minWidth: 0 } },
-                        h('div', { style: { fontWeight: 700, fontSize: '14px' } }, a.patient),
-                        a.phone ? h('div', { class: 'muted', style: { fontSize: '12px' } }, a.phone) : null)),
+                        h('div', { style: { fontWeight: 700, fontSize: '13.5px' } }, a.patient),
+                        a.phone ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, a.phone) : null)),
                 editRow('Услуга', svcSel),
                 editRow('Врач', docSel),
                 a.roomId ? row('Кабинет', roomName(a.roomId)) : null,
                 editRow('Дата', dateInp),
-                editRow('Время и длительность', h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } }, timeInp, durInp, h('span', { class: 'muted', style: { fontSize: '12px' } }, 'мин'))),
-                h('div', { style: { fontWeight: 700, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--ink-500)', margin: '14px 0 8px' } }, 'Статус приёма'),
+                editRow('Время и длительность', h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } }, timeInp, durInp, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'мин'))),
+                h('div', { style: { fontWeight: 700, fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--ink-500)', margin: '14px 0 8px' } }, 'Статус приёма'),
                 pillsBox,
-                h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '12px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '12px' } },
                     'Перетащите запись в сетке, чтобы перенести время, день или ресурс.')),
             h('footer', { class: 'modal-foot' },
                 h('button', { class: 'btn', style: { color: 'var(--crit-700)' }, onclick: async (ev) => {
@@ -315,7 +315,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         hideTip();
         if (_drag) return;
         const m = STATUS_META[a.status] || STATUS_META.planned;
-        const line = (icon, text) => h('div', { class: 'row', style: { gap: '7px', fontSize: '12px', alignItems: 'baseline' } },
+        const line = (icon, text) => h('div', { class: 'row', style: { gap: '7px', fontSize: '12.5px', alignItems: 'baseline' } },
             h('span', { style: { color: 'var(--ink-400)', flex: '0 0 14px' } }, Icon(icon, { size: 12 })), h('span', null, text));
         _tipEl = h('div', { class: 'rcal-tip' },
             h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', marginBottom: '6px' } },
@@ -326,7 +326,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             a.phone ? line('Phone', a.phone) : null,
             a.doctorId ? line('Stethoscope', doctorName(a.doctorId)) : null,
             state.period > 1 ? line('Calendar', ruDay(a.date)) : null,
-            h('div', { class: 'muted', style: { fontSize: '10.5px', marginTop: '6px' } }, 'Клик — детали · тяни — перенести'));
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } }, 'Клик — детали · тяни — перенести'));
         document.body.appendChild(_tipEl);
         const tw = 270;
         let left = rect.right + 8;
@@ -509,7 +509,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         for (const [label, n, color] of cards) {
             statsEl.appendChild(h('div', { style: { padding: '9px 14px', border: '1px solid var(--ink-100, #e2e8f0)', borderRadius: '12px', background: 'var(--surface, #fff)', minWidth: '76px', textAlign: 'center' } },
                 h('div', { style: { fontSize: '20px', fontWeight: 700, color: color } }, String(n)),
-                h('div', { style: { fontSize: '11px', color: 'var(--ink-400, #64748b)', marginTop: '1px' } }, label)));
+                h('div', { style: { fontSize: '12.5px', color: 'var(--ink-400, #64748b)', marginTop: '1px' } }, label)));
         }
     }
 

@@ -54,9 +54,9 @@ export async function renderDoctorPay(container) {
             const cb = h('input', { type: 'checkbox' });
             cb.checked = selSvc.has(s.id);
             cb.addEventListener('change', () => { if (cb.checked) selSvc.add(s.id); else selSvc.delete(s.id); updateCount(); });
-            svcList.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '6px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px' } },
+            svcList.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '6px', borderRadius: '8px', cursor: 'pointer', fontSize: '13.5px' } },
                 cb, h('span', { style: { flex: 1, minWidth: '0' } }, s.name || '—'),
-                h('span', { class: 'muted', style: { fontSize: '11.5px', flex: '0 0 auto' } }, trf('тек. {pct}', { pct: fmtPct(s.default_doctor_percent) }))));
+                h('span', { class: 'muted', style: { fontSize: '12.5px', flex: '0 0 auto' } }, trf('тек. {pct}', { pct: fmtPct(s.default_doctor_percent) }))));
         }
     }
     const selectAllShown = h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => {
@@ -76,7 +76,7 @@ export async function renderDoctorPay(container) {
     for (const d of doctors) {
         const cb = h('input', { type: 'checkbox' });
         cb.addEventListener('change', () => { if (cb.checked) selDoc.add(d.id); else selDoc.delete(d.id); updateCount(); });
-        docList.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '6px', cursor: 'pointer', fontSize: '13px' } },
+        docList.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '6px', cursor: 'pointer', fontSize: '13.5px' } },
             cb, (d.full_name || '—') + (d.specialty ? ' · ' + d.specialty : '')));
     }
     if (!doctors.length) docList.appendChild(h('div', { class: 'muted', style: { padding: '10px' } }, 'В клинике нет врачей.'));

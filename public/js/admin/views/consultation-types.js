@@ -117,7 +117,7 @@ function renderDefaults(types, cid) {
         h('div', { style: { width: '32px', height: '32px', borderRadius: '8px', display: 'grid', placeItems: 'center', background: 'var(--primary-50)', color: 'var(--primary-700)', flex: '0 0 32px' } }, Icon('Stethoscope', { size: 17 })),
         h('div', { style: { flex: 1, minWidth: 0 } },
             h('div', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } }, 'Consultation types'),
-            h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '1px' } }, 'Shared list of consultation kinds — prices are set per doctor'),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '1px' } }, 'Shared list of consultation kinds — prices are set per doctor'),
         ),
         chevron,
     );
@@ -125,12 +125,12 @@ function renderDefaults(types, cid) {
     card.appendChild(bodyWrap);
 
     if (!types.length) {
-        bodyWrap.appendChild(h('div', { class: 'muted', style: { padding: '16px', fontSize: '13px', textAlign: 'center' } },
+        bodyWrap.appendChild(h('div', { class: 'muted', style: { padding: '16px', fontSize: '13.5px', textAlign: 'center' } },
             'No consultation types yet for this clinic.'));
         return card;
     }
 
-    const inpStyle = { height: '32px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13px', background: 'white', fontFamily: 'inherit' };
+    const inpStyle = { height: '32px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', background: 'white', fontFamily: 'inherit' };
     const edits = {};
     const tb = h('tbody');
     for (const t of types) {
@@ -147,7 +147,7 @@ function renderDefaults(types, cid) {
         const activeI = h('input', { type: 'checkbox', checked: t.active !== false,
             onchange: (e) => { edits[t.id].active = e.currentTarget.checked; } });
         tb.appendChild(h('tr', null,
-            h('td', { class: 'muted', style: { fontSize: '12px', width: '40px' } }, String(t.sort_order ?? '')),
+            h('td', { class: 'muted', style: { fontSize: '12.5px', width: '40px' } }, String(t.sort_order ?? '')),
             h('td', null, nameI),
             h('td', null, nameUzI),
             h('td', null, nameEnI),
@@ -196,7 +196,7 @@ function renderDefaults(types, cid) {
 function renderDoctors(types, doctors, priceMap, cid, branches, branchOf, branchName) {
     const wrap = h('div', null);
     wrap.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', margin: '4px 0 12px' } },
-        h('h2', { style: { fontSize: '16px', margin: 0, fontWeight: 700 } }, 'Doctors'),
+        h('h2', { style: { fontSize: '17px', margin: 0, fontWeight: 700 } }, 'Doctors'),
         h('span', { class: 'muted', style: { fontSize: '12.5px' } }, doctors.length + ' total'),
     ));
 
@@ -205,7 +205,7 @@ function renderDoctors(types, doctors, priceMap, cid, branches, branchOf, branch
         return wrap;
     }
     if (!types.length) {
-        wrap.appendChild(h('div', { class: 'muted', style: { padding: '16px', fontSize: '13px' } },
+        wrap.appendChild(h('div', { class: 'muted', style: { padding: '16px', fontSize: '13.5px' } },
             'Add consultation types above before setting per-doctor availability.'));
         return wrap;
     }
@@ -213,7 +213,7 @@ function renderDoctors(types, doctors, priceMap, cid, branches, branchOf, branch
     let branchFilter = '', q = '', offset = 0;
 
     // Branch filter
-    const selStyle = { height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontSize: '13px', background: 'white', fontFamily: 'inherit', cursor: 'pointer' };
+    const selStyle = { height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontSize: '13.5px', background: 'white', fontFamily: 'inherit', cursor: 'pointer' };
     const branchSel = h('select', { style: selStyle },
         h('option', { value: '' }, 'All branches'),
         ...branches.map(b => h('option', { value: b.id }, b.name_ru || b.name || '—')),
@@ -221,14 +221,14 @@ function renderDoctors(types, doctors, priceMap, cid, branches, branchOf, branch
     branchSel.onchange = () => { branchFilter = branchSel.value; offset = 0; paint(); };
 
     // Real-time search
-    const searchI = h('input', { placeholder: 'Search doctors…', style: { height: '34px', padding: '0 10px 0 32px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontSize: '13px', background: 'white', width: '260px', fontFamily: 'inherit', outline: 'none' } });
+    const searchI = h('input', { placeholder: 'Search doctors…', style: { height: '34px', padding: '0 10px 0 32px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontSize: '13.5px', background: 'white', width: '260px', fontFamily: 'inherit', outline: 'none' } });
     const searchWrap = h('div', { style: { position: 'relative', display: 'inline-flex', alignItems: 'center' } },
         h('span', { style: { position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--ink-400)', pointerEvents: 'none' } }, Icon('Search', { size: 14 })),
         searchI,
     );
 
     wrap.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' } },
-        h('span', { class: 'muted', style: { fontSize: '12px', display: 'inline-flex', alignItems: 'center', gap: '5px' } }, Icon('Filter', { size: 13 }), 'Branch'),
+        h('span', { class: 'muted', style: { fontSize: '12.5px', display: 'inline-flex', alignItems: 'center', gap: '5px' } }, Icon('Filter', { size: 13 }), 'Branch'),
         branchSel,
         searchWrap,
     ));
@@ -290,12 +290,12 @@ function doctorRow(d, types, priceMap, cid, branchOf, branchName, repaint) {
         h('div', { class: 'avatar ' + avColor(d.id), style: { flex: '0 0 36px', width: '36px', height: '36px' } }, initials(d.full_name)),
         h('div', { style: { flex: 1, minWidth: 0 } },
             h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, d.full_name || '—'),
-            h('div', { class: 'muted', style: { fontSize: '11.5px', display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '1px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '1px' } },
                 d.specialty ? h('span', null, d.specialty) : null,
                 h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px' } }, Icon('Building', { size: 11 }), branchLabel),
             ),
         ),
-        h('span', { class: 'muted', style: { fontSize: '11.5px', whiteSpace: 'nowrap' } },
+        h('span', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } },
             configured ? (configured + '/' + types.length + ' set') : 'defaults'),
         editBtn,
     );
@@ -320,7 +320,7 @@ function openDoctorPricesModal(d, types, priceMap, cid, repaint) {
             : { available: true, price: '', is_free: false, name_ru: '', name_uz: '', name_en: '' };
     }
 
-    const inpStyle = { height: '30px', width: '140px', padding: '0 8px', border: '1px solid var(--ink-200)', borderRadius: '7px', fontSize: '13px', background: 'white', fontFamily: 'inherit' };
+    const inpStyle = { height: '30px', width: '140px', padding: '0 8px', border: '1px solid var(--ink-200)', borderRadius: '7px', fontSize: '13.5px', background: 'white', fontFamily: 'inherit' };
     const tb = h('tbody');
     for (const t of types) {
         const s = state[t.id];
@@ -337,7 +337,7 @@ function openDoctorPricesModal(d, types, priceMap, cid, repaint) {
         if (s.is_free) { priceI.disabled = true; priceI.style.opacity = '0.5'; }
 
         // CONSULT_DOC_NAMES_V1 — per-doctor name (blank = the type's label; placeholder shows it).
-        const nameStyle = { height: '28px', width: '100%', padding: '0 7px', border: '1px solid var(--ink-200)', borderRadius: '6px', fontSize: '12px', background: 'white', fontFamily: 'inherit' };
+        const nameStyle = { height: '28px', width: '100%', padding: '0 7px', border: '1px solid var(--ink-200)', borderRadius: '6px', fontSize: '12.5px', background: 'white', fontFamily: 'inherit' };
         const nmRu = h('input', { type: 'text', value: s.name_ru, placeholder: t.name_ru || 'RU', style: nameStyle, oninput: (e) => { s.name_ru = e.currentTarget.value; } });
         const nmUz = h('input', { type: 'text', value: s.name_uz, placeholder: t.name_uz || 'UZ', style: nameStyle, oninput: (e) => { s.name_uz = e.currentTarget.value; } });
         const nmEn = h('input', { type: 'text', value: s.name_en, placeholder: t.name_en || 'EN', style: nameStyle, oninput: (e) => { s.name_en = e.currentTarget.value; } });
@@ -346,7 +346,7 @@ function openDoctorPricesModal(d, types, priceMap, cid, repaint) {
             h('td', null,
                 h('div', { style: { fontWeight: 500, fontSize: '12.5px', marginBottom: '5px' } }, typeName(t)),
                 h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '5px' } }, nmRu, nmUz, nmEn),
-                h('div', { class: 'muted', style: { fontSize: '10.5px', marginTop: '3px' } }, 'Название для этого врача · RU / UZ / EN (пусто = название типа)')),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '3px' } }, 'Название для этого врача · RU / UZ / EN (пусто = название типа)')),
             h('td', { style: { width: '90px', textAlign: 'center', verticalAlign: 'top' } }, availI),
             h('td', { style: { width: '156px', verticalAlign: 'top' } }, priceI),
             h('td', { style: { width: '64px', textAlign: 'center', verticalAlign: 'top' } }, freeI),
@@ -397,8 +397,8 @@ function openDoctorPricesModal(d, types, priceMap, cid, repaint) {
             h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 } },
                 h('div', { class: 'avatar ' + avColor(d.id), style: { flex: '0 0 32px', width: '32px', height: '32px' } }, initials(d.full_name)),
                 h('div', { style: { minWidth: 0 } },
-                    h('div', { style: { fontWeight: 700, fontSize: '14.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, d.full_name || 'Doctor'),
-                    h('div', { class: 'muted', style: { fontSize: '11.5px' } }, 'Consultation availability & price'),
+                    h('div', { style: { fontWeight: 700, fontSize: '15px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, d.full_name || 'Doctor'),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Consultation availability & price'),
                 ),
             ),
             h('button', { class: 'modal-close', onclick: close }, '×'),
@@ -412,7 +412,7 @@ function openDoctorPricesModal(d, types, priceMap, cid, repaint) {
                     h('th', { style: { textAlign: 'center' } }, 'Free'),
                 )),
                 tb),
-            h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '8px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '8px' } },
                 'Цена и название — для этого врача. «Free» = бесплатно. Пустое название = название типа.'),
         ),
         h('footer', { class: 'modal-foot' },

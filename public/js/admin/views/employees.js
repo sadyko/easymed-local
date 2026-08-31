@@ -96,11 +96,11 @@ async function paint(root) {
     const flt = { name: '', staff: '', role: '', phone: '' };
     let allUsers = [];
 
-    const countEl = h('span', { class: 'muted', style: { fontSize: '12px', fontWeight: 500, marginLeft: '8px' } });
+    const countEl = h('span', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 500, marginLeft: '8px' } });
     const inpStyle = {
         width: '100%', height: '28px', padding: '0 8px', borderRadius: '6px',
         border: '1px solid var(--ink-200)', background: 'var(--white, #fff)',
-        fontSize: '12px', fontFamily: 'inherit', boxSizing: 'border-box',
+        fontSize: '12.5px', fontFamily: 'inherit', boxSizing: 'border-box',
     };
     const textFilter = (key, ph) => h('input', {
         type: 'text', placeholder: ph, value: flt[key], style: inpStyle,
@@ -121,7 +121,7 @@ async function paint(root) {
 
     const resetBtn = h('button', {
         class: 'btn btn-outline btn-sm', type: 'button', title: 'Сбросить фильтры',
-        style: { display: 'none', padding: '2px 10px', fontSize: '11.5px' },
+        style: { display: 'none', padding: '2px 10px', fontSize: '12.5px' },
         onclick: () => {
             Object.keys(flt).forEach(k => { flt[k] = ''; });
             nameFlt.value = ''; phoneFlt.value = '';
@@ -211,11 +211,11 @@ async function paint(root) {
             }, 'Вернуть');
 
             tbody.appendChild(h('tr', { class: 'row-click', style: { cursor: 'pointer' }, onclick: () => openEditor(u, root) },
-                h('td', null, h('span', { style: { fontWeight: 600 } }, u.full_name || u.username), h('span', { class: 'muted', style: { fontSize: '11px', marginLeft: '6px' } }, '@' + u.username)),
+                h('td', null, h('span', { style: { fontWeight: 600 } }, u.full_name || u.username), h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '6px' } }, '@' + u.username)),
                 h('td', null, u.staff_type ? staffLabel(u.staff_type) : (u.is_doctor ? 'Врачи' : '—')),
                 h('td', null, roleLabel(u.role)),
                 h('td', null, u.phone || '—'),
-                h('td', null, u.is_active ? h('span', { style: { color: 'var(--ok-700, #1a7a44)', fontWeight: 600, fontSize: '12px' } }, '● Активен') : h('span', { class: 'muted', style: { fontSize: '12px' } }, '○ Неактивен')),
+                h('td', null, u.is_active ? h('span', { style: { color: 'var(--ok-700, #1a7a44)', fontWeight: 600, fontSize: '12.5px' } }, '● Активен') : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '○ Неактивен')),
                 h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } }, backBtn, openBtn),
             ));
         }
@@ -327,7 +327,7 @@ function openEditor(user, root) {
     const body = h('div', { style: { flex: 1, minWidth: 0, padding: '18px 22px', overflowY: 'auto' } });
     const ringWrap = h('div', { style: { textAlign: 'center' } });
     const headWrap = h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 } });
-    const dirtyEl = h('span', { class: 'muted', style: { fontSize: '12px' } });
+    const dirtyEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } });
 
     const railSections = () => ALL_SECTIONS.filter(s => !s.doctorOnly || emp.is_doctor);
     function reqFilled(f) { if (f === 'password') return isEdit || !!String(emp.password).trim(); return String(emp[f] != null ? emp[f] : '').trim() !== ''; }
@@ -339,17 +339,17 @@ function openEditor(user, root) {
     function renderHead() {
         clear(ringWrap);
         ringWrap.appendChild(Ring({ value: completionPct(), max: 100, size: 54, stroke: 5, label: completionPct() + '%' }));
-        ringWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '9px', letterSpacing: '.06em', marginTop: '2px' } }, 'ЗАПОЛНЕНО'));
+        ringWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', letterSpacing: '.06em', marginTop: '2px' } }, 'ЗАПОЛНЕНО'));
         clear(headWrap);
         const nm = [emp.last_name, emp.first_name].filter(Boolean).join(' ') || (isEdit ? emp.username : 'Новый сотрудник');
         headWrap.appendChild(h('span', { style: { width: '46px', height: '46px', borderRadius: '12px', background: 'var(--primary-600, #1f7a72)', color: '#fff', fontSize: '15px', fontWeight: 700, display: 'grid', placeItems: 'center', flex: '0 0 46px' } }, initials(nm)));
         headWrap.appendChild(h('div', { style: { minWidth: 0 } },
-            h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } }, h('strong', { style: { fontSize: '16px' } }, nm),
-                emp.is_active ? h('span', { style: { color: 'var(--ok-700, #1a7a44)', fontSize: '12px', fontWeight: 600 } }, '● Активен') : h('span', { class: 'muted', style: { fontSize: '12px' } }, '○ Неактивен')),
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } }, h('strong', { style: { fontSize: '17px' } }, nm),
+                emp.is_active ? h('span', { style: { color: 'var(--ok-700, #1a7a44)', fontSize: '12.5px', fontWeight: 600 } }, '● Активен') : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '○ Неактивен')),
             // SPECIALTY_LIST_V1 — было «должность · категория». Должности больше
             // нет, и специальность описывает сотрудника точнее; без неё
             // остаётся одна категория, а не «Без должности».
-            h('div', { class: 'muted', style: { fontSize: '12px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 [emp.specialty, staffLabel(emp.staff_type)].filter(Boolean).join(' · ')),
             h('div', { style: { display: 'flex', gap: '6px', marginTop: '5px', flexWrap: 'wrap' } }, chip(depName(emp.department_id) || 'Без отдела'), chip('Lic. ' + (emp.license_number || '—')), chip(roleLabel(emp.role)))));
     }
@@ -359,12 +359,12 @@ function openEditor(user, root) {
         for (const g of SECTIONS) {
             const items = g.items.filter(s => !s.doctorOnly || emp.is_doctor);
             if (!items.length) continue;
-            rail.appendChild(h('div', { class: 'muted', style: { fontSize: '10px', letterSpacing: '.06em', padding: '10px 10px 4px' } }, g.group));
+            rail.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', letterSpacing: '.06em', padding: '10px 10px 4px' } }, g.group));
             for (const sec of items) {
                 const on = active === sec.key;
                 const done = sectionComplete(sec);
                 rail.appendChild(h('div', {
-                    style: { display: 'flex', alignItems: 'center', gap: '9px', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer', background: on ? 'var(--ink-25)' : 'transparent', fontWeight: on ? 600 : 400, fontSize: '13px' },
+                    style: { display: 'flex', alignItems: 'center', gap: '9px', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer', background: on ? 'var(--ink-25)' : 'transparent', fontWeight: on ? 600 : 400, fontSize: '13.5px' },
                     onclick: () => { active = sec.key; renderRail(); renderBody(); },
                 },
                     h('span', { style: { color: on ? 'var(--primary-700)' : 'var(--ink-500)', display: 'flex' } }, Icon(sec.icon, { size: 15 })),
@@ -402,7 +402,7 @@ function openEditor(user, root) {
             h('div', { style: { flex: 1 } }, h('h2', { style: { margin: 0, fontSize: '17px' } }, title), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, sub)),
             right || null);
         const grid = (...els) => h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px' } }, ...els.filter(Boolean));
-        const hint = (t) => h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '6px', lineHeight: 1.5 } }, t);
+        const hint = (t) => h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px', lineHeight: 1.5 } }, t);
 
         if (active === 'personal') {
             body.append(head('Личные данные', 'Личные и контактные данные сотрудника.'),
@@ -450,13 +450,13 @@ function openEditor(user, root) {
                 const on = (emp.extra_roles || []).includes(rk);
                 const c = h('input', { type: 'checkbox', checked: on });
                 c.addEventListener('change', () => { const set = new Set(emp.extra_roles || []); c.checked ? set.add(rk) : set.delete(rk); markDirty({ extra_roles: [...set].filter(r => r !== emp.role) }); });
-                extraRoles.appendChild(h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '13px', padding: '5px 10px', border: '1px solid ' + (on ? 'var(--primary-300, #9fd0cb)' : 'var(--ink-100)'), borderRadius: '20px', cursor: 'pointer', background: on ? 'var(--primary-50, #e8f3f2)' : 'transparent' } }, c, rl));
+                extraRoles.appendChild(h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '13.5px', padding: '5px 10px', border: '1px solid ' + (on ? 'var(--primary-300, #9fd0cb)' : 'var(--ink-100)'), borderRadius: '20px', cursor: 'pointer', background: on ? 'var(--primary-50, #e8f3f2)' : 'transparent' } }, c, rl));
             }
             body.append(head('Вход и доступ', 'Логин, пароль и роли доступа. Каждый сотрудник входит в систему.'),
                 grid(field('Логин', (() => { const i = h('input', { type: 'text', value: emp.username, placeholder: 'login', disabled: isEdit }); i.addEventListener('input', () => markDirty({ username: i.value })); return i; })(), { required: true }),
                     field('Основная роль', roleSel, { required: true }),
                     field(isEdit ? 'Новый пароль (пусто — не менять)' : 'Пароль', (() => { const i = h('input', { type: 'password', value: '', placeholder: '••••••••' }); i.addEventListener('input', () => markDirty({ password: i.value })); return i; })(), { required: !isEdit })),
-                h('div', { style: { marginTop: '14px' } }, h('div', { style: { fontSize: '13px', fontWeight: 600, marginBottom: '7px' } }, 'Дополнительные роли'), extraRoles,
+                h('div', { style: { marginTop: '14px' } }, h('div', { style: { fontSize: '13.5px', fontWeight: 600, marginBottom: '7px' } }, 'Дополнительные роли'), extraRoles,
                     hint('Сотруднику открывается объединение разделов всех его ролей. Права на данные определяются основной ролью.')),
                 h('div', { style: { marginTop: '12px' } }, checkField('Активен', (() => { const c = h('input', { type: 'checkbox', checked: emp.is_active }); c.addEventListener('change', () => markDirty({ is_active: c.checked })); return c; })())),
                 isEdit ? null : hint('Логин 3–30 символов (латиница, цифры, . _ -). Пароль от 8 символов.'));
@@ -555,7 +555,7 @@ function openEditor(user, root) {
 // click, which matters on a list where every row carries one. When the section
 // has no fixed mode it degrades to a plain «%» label, not a dead control.
 function segmented(enabled, isFix, onPick, disabled = false) {
-    if (!enabled) return h('span', { class: 'muted', style: { fontSize: '11.5px' } }, '%');
+    if (!enabled) return h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '%');
     const mk = (label, fix, title) => {
         const b = h('button', { type: 'button', class: isFix() === fix ? 'on' : '', title, disabled });
         b.textContent = label;
@@ -779,10 +779,10 @@ function buildHours(emp, markDirty) {
         const commit = () => { const wh = { ...emp.working_hours, [key]: { on: chk.checked, from: from.value, to: to.value } }; from.disabled = to.disabled = !chk.checked; markDirty({ working_hours: wh }); };
         chk.addEventListener('change', commit); from.addEventListener('change', commit); to.addEventListener('change', commit);
         wrap.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '4px 0' } },
-            h('label', { style: { display: 'flex', alignItems: 'center', gap: '7px', width: '80px', cursor: 'pointer' } }, chk, h('span', { style: { fontWeight: 600, fontSize: '13px' } }, label)), from, h('span', { class: 'muted' }, '—'), to));
+            h('label', { style: { display: 'flex', alignItems: 'center', gap: '7px', width: '80px', cursor: 'pointer' } }, chk, h('span', { style: { fontWeight: 600, fontSize: '13.5px' } }, label)), from, h('span', { class: 'muted' }, '—'), to));
     }
     return wrap;
 }
 
 function depName(id) { const d = departments.find(x => String(x.id) === String(id)); return d ? d.name : ''; }
-function chip(text) { return h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', padding: '2px 8px', borderRadius: '20px', background: 'var(--ink-50, #f1f2f4)', color: 'var(--ink-600)' } }, text); }
+function chip(text) { return h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12.5px', padding: '2px 8px', borderRadius: '20px', background: 'var(--ink-50, #f1f2f4)', color: 'var(--ink-600)' } }, text); }

@@ -154,9 +154,9 @@ function reportCard(rep) {
             },
         }, Icon(rep.icon || 'Download', { size: 18 })),
         h('div', { style: { minWidth: 0 } },
-            h('div', { style: { fontSize: '14.5px', fontWeight: 700, color: 'var(--ink-900)' } }, rep.title),
-            h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '4px', lineHeight: 1.45 } }, rep.desc),
-            h('div', { style: { marginTop: '10px', fontSize: '12px', fontWeight: 600, color: 'var(--primary-700)', display: 'inline-flex', alignItems: 'center', gap: '5px' } },
+            h('div', { style: { fontSize: '15px', fontWeight: 700, color: 'var(--ink-900)' } }, rep.title),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px', lineHeight: 1.45 } }, rep.desc),
+            h('div', { style: { marginTop: '10px', fontSize: '12.5px', fontWeight: 600, color: 'var(--primary-700)', display: 'inline-flex', alignItems: 'center', gap: '5px' } },
                 'Открыть отчёт ', Icon('ArrowRight', { size: 12 })),
         ),
     );
@@ -224,8 +224,8 @@ async function openReportBuilder(rep) {
             style: { width: '36px', height: '36px', borderRadius: '10px', background: 'var(--primary-50)', color: 'var(--primary-700)', display: 'grid', placeItems: 'center' },
         }, Icon(rep.icon || 'Download', { size: 17 })),
         h('div', null,
-            h('div', { style: { fontSize: '16px', fontWeight: 700, color: 'var(--ink-900)' } }, rep.title),
-            h('div', { class: 'muted', style: { fontSize: '12px' } }, 'Выберите период и филиалы, затем сформируйте отчёт'),
+            h('div', { style: { fontSize: '17px', fontWeight: 700, color: 'var(--ink-900)' } }, rep.title),
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Выберите период и филиалы, затем сформируйте отчёт'),
         ),
         h('span', { style: { flex: 1 } }),
         // REPORT_CLOSE_RED_V1 — the close control must be unmissable
@@ -254,7 +254,7 @@ async function openReportBuilder(rep) {
     fromInp.addEventListener('change', () => { st.from = fromInp.value; });
     toInp.addEventListener('change',   () => { st.to   = toInp.value;   });
     const dateWrap = h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
-        fromInp, h('span', { class: 'muted', style: { fontSize: '12px' } }, '→'), toInp);
+        fromInp, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '→'), toInp);
     function syncDates() { dateWrap.style.display = st.preset === 'custom' ? 'flex' : 'none'; }
 
     const presetsEl = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } });
@@ -295,9 +295,9 @@ async function openReportBuilder(rep) {
             background: 'var(--white, #fff)', border: '1px solid var(--ink-100)',
             borderRadius: '10px', maxHeight: '64px', overflow: 'auto', maxWidth: '440px',
         },
-    }, h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Загрузка филиалов…'));
+    }, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Загрузка филиалов…'));
     const masterCb  = h('input', { type: 'checkbox' });
-    const summaryEl = h('span', { class: 'muted', style: { fontSize: '11.5px' } });
+    const summaryEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } });
 
     function refreshBranchUI() {
         const total = st.branches.length;
@@ -327,7 +327,7 @@ async function openReportBuilder(rep) {
         st.branchIds = new Set(list.map(b => b.id));
         clear(branchListEl);
         if (!list.length) {
-            branchListEl.appendChild(h('span', { class: 'muted', style: { fontSize: '12px' } },
+            branchListEl.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } },
                 'Филиалы не найдены — отчёт будет сформирован по всей клинике.'));
         } else {
             for (const b of list) {
@@ -412,7 +412,7 @@ async function openReportBuilder(rep) {
 
     const label = (text) => h('div', {
         style: {
-            fontSize: '11px', fontWeight: 700, textTransform: 'uppercase',
+            fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase',
             letterSpacing: '0.05em', color: 'var(--ink-500)',
         },
     }, text);
@@ -430,7 +430,7 @@ async function openReportBuilder(rep) {
         // CALLCENTER_REPORT_V1 — у отчётов с noBranch выбор филиала СКРЫТ:
         // у crm_requests нет branch_id, и селектор молча ничего бы не делал.
         rep.noBranch ? null : label('Филиалы'),
-        rep.noBranch ? null : h('label', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--ink-700)', cursor: 'pointer', whiteSpace: 'nowrap' } },
+        rep.noBranch ? null : h('label', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', color: 'var(--ink-700)', cursor: 'pointer', whiteSpace: 'nowrap' } },
             masterCb, h('span', null, 'Выбрать все')),
         rep.noBranch ? null : branchListEl,
         rep.noBranch ? null : summaryEl,
@@ -449,14 +449,14 @@ async function openReportBuilder(rep) {
         clear(previewEl);
         previewEl.appendChild(h('div', {
             class: 'muted',
-            style: { padding: '60px 20px', textAlign: 'center', fontSize: '13px' },
+            style: { padding: '60px 20px', textAlign: 'center', fontSize: '13.5px' },
         }, msg || 'Настройте период и филиалы, затем нажмите «Сформировать отчёт» — данные появятся здесь.'));
     }
     function paintPreviewLoading() {
         clear(previewEl);
         previewEl.appendChild(h('div', {
             class: 'muted',
-            style: { padding: '60px 20px', textAlign: 'center', fontSize: '13px' },
+            style: { padding: '60px 20px', textAlign: 'center', fontSize: '13.5px' },
         }, 'Формируем отчёт…'));
     }
     function paintPreview() {
@@ -471,8 +471,8 @@ async function openReportBuilder(rep) {
         const CAP = 300;
         const shown = rows.slice(0, CAP);
         previewEl.appendChild(h('div', { class: 'row', style: { alignItems: 'center', gap: '10px', marginBottom: '10px' } },
-            h('span', { style: { fontSize: '13px', fontWeight: 700, color: 'var(--ink-900)' } }, trf('Строк: {n}', { n: rows.length })),
-            rows.length > CAP ? h('span', { class: 'muted', style: { fontSize: '12px' } },
+            h('span', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } }, trf('Строк: {n}', { n: rows.length })),
+            rows.length > CAP ? h('span', { class: 'muted', style: { fontSize: '12.5px' } },
                 trf('— показаны первые {n}, в Excel попадут все', { n: CAP })) : null,
         ));
         // Numeric columns right-align header AND cells (probe first non-empty value).
@@ -482,7 +482,7 @@ async function openReportBuilder(rep) {
         });
         const thStyle = {
             position: 'sticky', top: 0, background: 'var(--ink-50)', zIndex: 1,
-            padding: '8px 10px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
+            padding: '8px 10px', fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase',
             letterSpacing: '0.03em', color: 'var(--ink-600)', whiteSpace: 'nowrap', textAlign: 'left',
             borderBottom: '1px solid var(--ink-200)',
         };
@@ -508,7 +508,7 @@ async function openReportBuilder(rep) {
         previewEl.appendChild(h('div', {
             style: { overflow: 'auto', maxHeight: 'calc(100vh - 320px)', background: 'var(--white, #fff)', border: '1px solid var(--ink-100)', borderRadius: '12px' },
         },
-            h('table', { style: { borderCollapse: 'collapse', fontSize: '12px', minWidth: '100%' } },
+            h('table', { style: { borderCollapse: 'collapse', fontSize: '12.5px', minWidth: '100%' } },
                 h('thead', null, h('tr', null,
                     ...columns.map((c, ci) => h('th', { style: { ...thStyle, textAlign: isNumCol[ci] ? 'right' : 'left' } }, c)),
                 )),
@@ -549,7 +549,7 @@ async function openReportBuilder(rep) {
 function renderOwnerCharts(el, d) {
     clear(el);
     if (!d || !d.kpis || (d.kpis.count === 0 && d.monthly.every(m => m.value === 0))) {
-        el.appendChild(h('div', { class: 'muted', style: { padding: '60px 20px', textAlign: 'center', fontSize: '13px' } },
+        el.appendChild(h('div', { class: 'muted', style: { padding: '60px 20px', textAlign: 'center', fontSize: '13.5px' } },
             'Нет данных за выбранный период. Попробуйте расширить диапазон дат или изменить филиалы.'));
         return;
     }
@@ -570,16 +570,16 @@ function renderOwnerCharts(el, d) {
 
 function ownerCard(title, sub, bodyEl) {
     return h('div', { style: { background: 'var(--white, #fff)', border: '1px solid var(--ink-100)', borderRadius: '12px', padding: '16px 18px', minWidth: 0 } },
-        h('div', { style: { fontSize: '13px', fontWeight: 700, color: 'var(--ink-900)' } }, title),
-        sub ? h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '2px' } }, sub) : null,
+        h('div', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } }, title),
+        sub ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, sub) : null,
         h('div', { style: { marginTop: '12px' } }, bodyEl));
 }
 
 function ownerKpiTile(label, value, sub) {
     return h('div', { style: { background: 'var(--white, #fff)', border: '1px solid var(--ink-100)', borderRadius: '12px', padding: '14px 18px', minWidth: 0 } },
-        h('div', { class: 'muted', style: { fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' } }, label),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' } }, label),
         h('div', { class: 'num', style: { fontSize: '24px', fontWeight: 800, color: 'var(--ink-900)', marginTop: '4px', fontVariantNumeric: 'tabular-nums' } }, value),
-        sub ? h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '2px' } }, sub) : null);
+        sub ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, sub) : null);
 }
 
 function ownerTip() {
@@ -609,7 +609,7 @@ function ownerBars(items, { hue = '#0d8a72', tip, total = null } = {}) {
                 it.name || it.label),
             h('span', { style: { display: 'block', height: '14px', background: 'var(--ink-50, #f3f5f7)', borderRadius: '4px', overflow: 'hidden' } },
                 h('span', { style: { display: 'block', height: '100%', width: pctW + '%', background: it.color || hue, borderRadius: '0 4px 4px 0' } })),
-            h('span', { class: 'num', style: { fontSize: '12px', color: 'var(--ink-800)', fontVariantNumeric: 'tabular-nums' } },
+            h('span', { class: 'num', style: { fontSize: '12.5px', color: 'var(--ink-800)', fontVariantNumeric: 'tabular-nums' } },
                 it.value.toLocaleString('ru-RU') + (sum > 0 ? '  · ' + share + '%' : '')));
         row.addEventListener('mousemove', (e) => tip && tip.show(e.clientX, e.clientY, trf('{name}: {value} сум · {share}%', { name: it.name || it.label, value: it.value.toLocaleString('ru-RU'), share })));
         row.addEventListener('mouseenter', () => { row.style.background = 'var(--ink-25, #fafbfb)'; });
@@ -682,7 +682,7 @@ function ownerLine(points, { hue = '#0d8a72', tip } = {}) {
 function renderCallcenterCharts(el, d) {
     clear(el);
     if (!d || !d.kpi || !d.kpi.total) {
-        el.appendChild(h('div', { class: 'muted', style: { padding: '60px 20px', textAlign: 'center', fontSize: '13px' } },
+        el.appendChild(h('div', { class: 'muted', style: { padding: '60px 20px', textAlign: 'center', fontSize: '13.5px' } },
             'За выбранный период заявок нет. Расширьте диапазон дат.'));
         return;
     }
@@ -776,7 +776,7 @@ function ccDayBars(days, tip) {
         // столбцами — тридцать лишних цифр, которые нечего сказать.
         if (d.count) {
             col.appendChild(h('div', { style: {
-                fontSize: '10px', fontWeight: '700', textAlign: 'center', marginBottom: '2px',
+                fontSize: '12.5px', fontWeight: '700', textAlign: 'center', marginBottom: '2px',
                 color: last ? 'var(--primary-700, #00695c)' : 'var(--ink-500)',
             } }, String(d.count)));
         }
@@ -799,7 +799,7 @@ function ccDayBars(days, tip) {
 
         const show = last || i % 5 === 0;
         labels.appendChild(h('div', { style: {
-            flex: '1 1 0', textAlign: 'center', fontSize: '9.5px',
+            flex: '1 1 0', textAlign: 'center', fontSize: '12.5px',
             color: last ? 'var(--primary-700, #00695c)' : 'var(--ink-400)',
             fontWeight: last ? '700' : '400', whiteSpace: 'nowrap',
         } }, show ? d.day.slice(8) + '.' + d.day.slice(5, 7) : ''));
@@ -820,7 +820,7 @@ function ccTrendLine(tr) {
         : (tr.delta_pct > 0 ? '+' : '') + tr.delta_pct + '%';
 
     return h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap', marginBottom: '4px' } },
-        h('span', { style: { fontSize: '19px', fontWeight: '800', color } }, arrow + ' ' + pctText),
+        h('span', { style: { fontSize: '20px', fontWeight: '800', color } }, arrow + ' ' + pctText),
         h('span', { class: 'muted', style: { fontSize: '12.5px' } },
             trf('за 7 дней {cur} · неделей раньше {prev}', { cur: tr.current, prev: tr.previous })));
 }
@@ -842,7 +842,7 @@ function ccrTile(label, value, tone) {
         flex: '1 1 220px', padding: '14px 18px', borderRadius: '12px',
         background: t.bg, border: '1px solid ' + t.bd,
     } },
-        h('div', { style: { fontSize: '11px', fontWeight: '700', letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--ink-500)' } }, label),
+        h('div', { style: { fontSize: '12.5px', fontWeight: '700', letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--ink-500)' } }, label),
         h('div', { style: { fontSize: '24px', fontWeight: '800', marginTop: '4px', color: t.fg } }, ccrMoney(value)));
 }
 
@@ -860,7 +860,7 @@ function ccrTable({ title, tone, columns, rows, numericCol, kind, period }) {
     const flt = columns.map(() => '');
     let shown = CCR_PAGE;
     const tbody = h('tbody');
-    const countEl = h('span', { class: 'muted', style: { fontSize: '12px', marginLeft: '8px' } });
+    const countEl = h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '8px' } });
     const totalEl = h('span', { style: { fontWeight: '700', marginLeft: '6px' } });
 
     const visible = () => rows.filter((r) => r.every((cell, i) =>
@@ -913,7 +913,7 @@ function ccrTable({ title, tone, columns, rows, numericCol, kind, period }) {
         ...columns.map((_, i) => h('th', { style: { padding: '6px 8px' } },
             h('input', {
                 placeholder: 'Поиск…',
-                style: { width: '100%', height: '26px', padding: '0 8px', fontSize: '12px', fontFamily: 'inherit',
+                style: { width: '100%', height: '26px', padding: '0 8px', fontSize: '12.5px', fontFamily: 'inherit',
                          border: '1px solid var(--ink-200)', borderRadius: '6px', boxSizing: 'border-box' },
                 // Новый отбор — снова с первой страницы: иначе после поиска
                 // остался бы «показать ещё» от прошлой выдачи.
@@ -947,13 +947,13 @@ function ccrTable({ title, tone, columns, rows, numericCol, kind, period }) {
             h('span', { style: { fontWeight: '700', color: tone === 'in' ? 'var(--ok-700,#1a7a44)' : 'var(--crit-600,#b03a3a)' } }, title),
             countEl,
             h('span', { style: { flex: '1' } }),
-            h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Итого:'), totalEl,
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Итого:'), totalEl,
             xlsBtn),
         h('div', { style: { overflowX: 'auto' } },
             h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
                 h('thead', null,
                     h('tr', null, ...columns.map((c, i) => h('th', {
-                        style: { textAlign: i === numericCol ? 'right' : 'left', padding: '8px 10px', fontSize: '11px',
+                        style: { textAlign: i === numericCol ? 'right' : 'left', padding: '8px 10px', fontSize: '12.5px',
                                  fontWeight: '700', letterSpacing: '.03em', textTransform: 'uppercase',
                                  color: 'var(--ink-500)', borderBottom: '1px solid var(--ink-100)', whiteSpace: 'nowrap' } }, c))),
                     filterRow),
@@ -998,10 +998,10 @@ function ccHourBars(byHour, tip) {
             bar.addEventListener('mouseleave', () => tip.hide());
         }
         wrap.appendChild(h('div', { style: { flex: '1', minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '100%' } },
-            h('div', { style: { fontSize: '9.5px', textAlign: 'center', color: 'var(--ink-500)', marginBottom: '2px', fontVariantNumeric: 'tabular-nums' } },
+            h('div', { style: { fontSize: '12.5px', textAlign: 'center', color: 'var(--ink-500)', marginBottom: '2px', fontVariantNumeric: 'tabular-nums' } },
                 slot.count || ''),
             bar,
-            h('div', { style: { fontSize: '9px', textAlign: 'center', color: work ? 'var(--ink-600)' : 'var(--ink-400)', marginTop: '3px' } }, slot.hour)));
+            h('div', { style: { fontSize: '12.5px', textAlign: 'center', color: work ? 'var(--ink-600)' : 'var(--ink-400)', marginTop: '3px' } }, slot.hour)));
     }
     return wrap;
 }
@@ -1017,7 +1017,7 @@ function ccHourBars(byHour, tip) {
 function ccStale(s) {
     if (!s || !s.total) {
         return h('div', { style: { padding: '18px 0', textAlign: 'center' } },
-            h('div', { style: { fontSize: '26px' } }, '✅'),
+            h('div', { style: { fontSize: '24px' } }, '✅'),
             h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } },
                 'Зависших заявок нет — все в работе тронуты за последние 3 дня.'));
     }
@@ -1028,9 +1028,9 @@ function ccStale(s) {
             background: b.count ? 'var(--warn-50, #fffbeb)' : 'var(--ink-25, #f6f8f9)',
             border: '1px solid ' + (b.count ? 'var(--warn-200, #fde68a)' : 'var(--ink-100)'),
         } },
-            h('div', { style: { fontSize: '18px', fontWeight: '800', color: b.count ? 'var(--warn-700, #b45309)' : 'var(--ink-400)' } },
+            h('div', { style: { fontSize: '17px', fontWeight: '800', color: b.count ? 'var(--warn-700, #b45309)' : 'var(--ink-400)' } },
                 String(b.count)),
-            h('div', { style: { fontSize: '10.5px', color: 'var(--ink-500)', marginTop: '2px' } }, b.label)))));
+            h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', marginTop: '2px' } }, b.label)))));
 
     for (const x of s.oldest) {
         wrap.appendChild(h('div', { style: {
@@ -1041,7 +1041,7 @@ function ccStale(s) {
                 trf('{n} дн.', { n: x.days })),
             h('span', { style: { flex: '1', minWidth: '0', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
                 x.name),
-            h('span', { class: 'muted', style: { flex: '0 0 auto', fontSize: '11.5px', fontVariantNumeric: 'tabular-nums' } },
+            h('span', { class: 'muted', style: { flex: '0 0 auto', fontSize: '12.5px', fontVariantNumeric: 'tabular-nums' } },
                 x.phone)));
     }
     return wrap;
@@ -1061,7 +1061,7 @@ function ccForward(days, tip) {
         const weekend = dow === 0 || dow === 6;
         const col = h('div', { style: { flex: '1 1 0', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '100%' } });
         if (d.count) {
-            col.appendChild(h('div', { style: { fontSize: '10px', fontWeight: '700', textAlign: 'center', marginBottom: '2px', color: 'var(--ink-600)' } },
+            col.appendChild(h('div', { style: { fontSize: '12.5px', fontWeight: '700', textAlign: 'center', marginBottom: '2px', color: 'var(--ink-600)' } },
                 String(d.count)));
         }
         const bar = h('div', { style: {
@@ -1077,7 +1077,7 @@ function ccForward(days, tip) {
         col.appendChild(bar);
         wrap.appendChild(col);
         labels.appendChild(h('div', { style: {
-            flex: '1 1 0', textAlign: 'center', fontSize: '9.5px', whiteSpace: 'nowrap',
+            flex: '1 1 0', textAlign: 'center', fontSize: '12.5px', whiteSpace: 'nowrap',
             color: i === 0 ? 'var(--primary-700, #00695c)' : 'var(--ink-400)',
             fontWeight: i === 0 ? '700' : '400',
         } }, i === 0 ? 'сег.' : d.day.slice(8)));

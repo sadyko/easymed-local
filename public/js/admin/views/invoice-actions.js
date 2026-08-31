@@ -89,14 +89,14 @@ export function openCancelInvoiceDialog(inv, { onDone } = {}) {
             willRefund && h('div', { class: 'field' },
                 h('label', null, 'Сумма возврата (сум)'),
                 amountInp,
-                h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '4px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
                     'По умолчанию — вся оплаченная сумма. Уменьшите для частичного возврата.'),
             ),
             h('div', { class: 'field' },
                 h('label', null, 'Заметки'),
                 notesInp,
             ),
-            h('div', { style: { padding: '10px 12px', background: 'var(--warn-50)', borderRadius: '8px', fontSize: '12px', color: 'var(--warn-700)', lineHeight: '1.55' } },
+            h('div', { style: { padding: '10px 12px', background: 'var(--warn-50)', borderRadius: '8px', fontSize: '12.5px', color: 'var(--warn-700)', lineHeight: '1.55' } },
                 willRefund
                     ? 'Счёт будет помечен как возвращённый, услуги разблокированы для повторного выставления, добавлена запись в журнал.'
                     : 'Счёт будет аннулирован, услуги разблокированы для повторного выставления, добавлена запись в журнал.',

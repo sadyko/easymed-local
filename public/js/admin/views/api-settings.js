@@ -42,7 +42,7 @@ export async function renderApiSettings(container, { onNavigate } = {}) {
         tokensCard.appendChild(h('div', { class: 'card-header' },
             h('h3', null, 'Токены доступа'),
             h('span', { class: 'grow' }),
-            h('span', { class: 'muted', style: { fontSize: '12px', marginRight: '10px' } }, trf('{n} из {max}', { n: clinicKeys.length, max: MAX_KEYS })),
+            h('span', { class: 'muted', style: { fontSize: '12.5px', marginRight: '10px' } }, trf('{n} из {max}', { n: clinicKeys.length, max: MAX_KEYS })),
             createBtn));
 
         if (!clinicKeys.length) {
@@ -55,10 +55,10 @@ export async function renderApiSettings(container, { onNavigate } = {}) {
         for (const k of clinicKeys) {
             tb.appendChild(h('tr', null,
                 h('td', { style: { fontWeight: 600 } }, k.name || '—'),
-                h('td', { class: 'cell-mono', style: { fontSize: '12px' } }, 'emk_' + (k.key_id || '') + '.…'),
+                h('td', { class: 'cell-mono', style: { fontSize: '12.5px' } }, 'emk_' + (k.key_id || '') + '.…'),
                 h('td', null, h('span', { class: 'tag tag-info' }, k.source || 'all')),
-                h('td', { class: 'muted', style: { fontSize: '12px' } }, fmtDate(k.created_at)),
-                h('td', { class: 'muted', style: { fontSize: '12px' } }, k.last_used_at ? fmtDate(k.last_used_at) : 'не использовался'),
+                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, fmtDate(k.created_at)),
+                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, k.last_used_at ? fmtDate(k.last_used_at) : 'не использовался'),
                 h('td', { style: { textAlign: 'right' } },
                     h('button', { class: 'btn btn-ghost btn-sm', style: { color: 'var(--crit-700)' },
                         onclick: async () => {
@@ -98,7 +98,7 @@ export async function renderApiSettings(container, { onNavigate } = {}) {
                 h('button', { class: 'modal-close', onclick: close }, '×')),
             h('div', { class: 'modal-body' },
                 h('div', { class: 'field' }, h('label', null, 'Название (для какой интеграции)'), nameInp),
-                h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '8px' } }, 'Секрет токена будет показан только один раз — скопируйте и сохраните его.')),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '8px' } }, 'Секрет токена будет показан только один раз — скопируйте и сохраните его.')),
             h('footer', { class: 'modal-foot' },
                 h('button', { class: 'btn', onclick: close }, 'Отмена'), h('span', { class: 'grow' }),
                 h('button', { class: 'btn btn-primary', onclick: (e) => create(e.currentTarget) }, Icon('Check', { size: 14 }), ' Создать'))));
@@ -110,7 +110,7 @@ export async function renderApiSettings(container, { onNavigate } = {}) {
         if (!token) { toast('Токен создан, но секрет не получен — отзовите и создайте заново.', 'fail'); return; }
         const banner = h('div', { style: { border: '1px solid var(--ok-500, #1f9254)', background: '#eafaf0', borderRadius: '10px', padding: '14px', marginBottom: '14px' } },
             h('div', { style: { fontWeight: 700, marginBottom: '6px' } }, trf('✓ Токен «{name}» создан', { name })),
-            h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '8px' } }, 'Скопируйте секрет сейчас — он показывается только один раз и больше не будет доступен.'),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '8px' } }, 'Скопируйте секрет сейчас — он показывается только один раз и больше не будет доступен.'),
             h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
                 h('input', { readonly: '', value: token, class: 'cell-mono', style: { flex: 1, height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '12.5px', fontFamily: 'inherit' },
                     onclick: (e) => e.target.select() }),
@@ -127,11 +127,11 @@ export async function renderApiSettings(container, { onNavigate } = {}) {
     function endpointRow(method, path, desc) {
         return h('tr', null,
             h('td', null, h('span', { class: 'tag ' + (method === 'GET' ? 'tag-ok' : 'tag-info'), style: { fontFamily: 'inherit' } }, method)),
-            h('td', { class: 'cell-mono', style: { fontSize: '12px', whiteSpace: 'nowrap' } }, path),
+            h('td', { class: 'cell-mono', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, path),
             h('td', { class: 'muted', style: { fontSize: '12.5px' } }, desc));
     }
     function codeBlock(text) {
-        return h('pre', { style: { background: '#0f1f1d', color: '#dfeee9', borderRadius: '9px', padding: '12px 14px', overflow: 'auto', fontSize: '12px', lineHeight: '1.5', margin: '6px 0 0' } }, text);
+        return h('pre', { style: { background: '#0f1f1d', color: '#dfeee9', borderRadius: '9px', padding: '12px 14px', overflow: 'auto', fontSize: '12.5px', lineHeight: '1.5', margin: '6px 0 0' } }, text);
     }
     function paintDocs() {
         clear(docsCard);
@@ -141,8 +141,8 @@ export async function renderApiSettings(container, { onNavigate } = {}) {
 
         body.appendChild(h('div', null,
             h('div', { style: { fontWeight: 600, marginBottom: '4px' } }, 'Базовый URL'),
-            h('div', { class: 'cell-mono', style: { fontSize: '13px' } }, apiBase()),
-            h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '4px' } }, 'Также доступен через easymed.uz/api/v1.')));
+            h('div', { class: 'cell-mono', style: { fontSize: '13.5px' } }, apiBase()),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } }, 'Также доступен через easymed.uz/api/v1.')));
 
         body.appendChild(h('div', null,
             h('div', { style: { fontWeight: 600, marginBottom: '4px' } }, 'Авторизация'),

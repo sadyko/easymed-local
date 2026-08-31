@@ -1067,7 +1067,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
         clear(preview);
         if (parsedRows.length === 0) return;
         const showRows = parsedRows.slice(0, 50);
-        preview.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '6px' } },
+        preview.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '6px' } },
             trf('Предпросмотр — первые {n} из {total}', { n: showRows.length, total: parsedRows.length })));
 
         // Show up to four columns in the preview so the table stays compact;
@@ -1090,7 +1090,7 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
                 h('td', null, statusPill(r.status)),
                 ...previewCols.map(c =>
                     h('td', null, (r.raw[c.key] != null && r.raw[c.key] !== '') ? String(r.raw[c.key]) : h('span', { class: 'muted' }, '—'))),
-                h('td', { style: { fontSize: '11.5px' } }, r.notes.length ? r.notes.join('; ') : ''),
+                h('td', { style: { fontSize: '12.5px' } }, r.notes.length ? r.notes.join('; ') : ''),
             ))),
         ));
     }

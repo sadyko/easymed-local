@@ -331,7 +331,7 @@ function paintModal({ row, emp, lookups, onSaved, readOnly }) {
     const rail  = h('nav', { class: 'emp-rail' });
     const headChrome = h('div', { class: 'emp-head-main' });
     const ringWrap   = h('div', { class: 'emp-progress' });
-    const footDirty  = h('span', { class: 'muted', style: { fontSize: '12px', display: 'inline-flex', alignItems: 'center', gap: '7px' } });
+    const footDirty  = h('span', { class: 'muted', style: { fontSize: '12.5px', display: 'inline-flex', alignItems: 'center', gap: '7px' } });
 
     let dirty = false;
     // markDirty: update model + refresh header/rail/footer only (safe to call
@@ -631,13 +631,13 @@ function extraRolesControl(emp, lookups, markDirty) {
             const r = byId.get(id);
             if (!r) continue;
             wrap.appendChild(h('span', { class: 'row', style: {
-                gap: '6px', alignItems: 'center', fontSize: '13px', fontWeight: 600,
+                gap: '6px', alignItems: 'center', fontSize: '13.5px', fontWeight: 600,
                 padding: '4px 6px 4px 12px', border: '1px solid #dbeafe', background: '#eff6ff',
                 color: '#1d4ed8', borderRadius: '999px' } },
                 fkLabel(r),
                 h('button', { type: 'button', title: 'Убрать', style: {
                     border: 'none', background: 'transparent', cursor: 'pointer', color: '#1d4ed8',
-                    fontSize: '16px', lineHeight: '1', padding: '0 2px' },
+                    fontSize: '17px', lineHeight: '1', padding: '0 2px' },
                     onclick: () => { markDirty({ extra_role_ids: current.filter(x => x !== id) }); render(); } }, '×')));
         }
         const rest = (lookups.roles || []).filter(r =>
@@ -645,7 +645,7 @@ function extraRolesControl(emp, lookups, markDirty) {
         if (rest.length) {
             const sel = h('select', { style: {
                 height: '34px', padding: '0 10px', border: '1px solid #d1d5db', borderRadius: '8px',
-                fontSize: '13px', background: 'white', fontFamily: 'inherit', maxWidth: '220px' } },
+                fontSize: '13.5px', background: 'white', fontFamily: 'inherit', maxWidth: '220px' } },
                 h('option', { value: '' }, '+ Добавить роль…'),
                 ...rest.map(r => h('option', { value: String(r.id) }, fkLabel(r))));
             sel.addEventListener('change', () => {
@@ -673,7 +673,7 @@ function specialtyPicker(emp, lookups, set) {
         const s = (lookups.specialties || []).find(x => x.slug === slug) || { slug, name_ru: slug };
         chips.appendChild(h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '4px 10px', background: '#eef2ff', borderRadius: '999px', fontSize: '12.5px' } },
             nameOf(s),
-            h('button', { type: 'button', style: { border: 'none', background: 'none', cursor: 'pointer', fontSize: '14px', lineHeight: '1', padding: '0' },
+            h('button', { type: 'button', style: { border: 'none', background: 'none', cursor: 'pointer', fontSize: '13.5px', lineHeight: '1', padding: '0' },
                 onclick: () => set({ specialties: emp.specialties.filter(x => x !== slug) }) }, '×')));
     }
     wrap.appendChild(chips);
@@ -682,7 +682,7 @@ function specialtyPicker(emp, lookups, set) {
         wrap.appendChild(selectInput('', [['', '+ Add specialty'], ...avail.map(s => [s.slug, nameOf(s)])],
             v => { if (v) set({ specialties: [...emp.specialties, v] }); }));
     } else {
-        wrap.appendChild(h('div', { class: 'muted', style: { fontSize: '12px' } }, 'Maximum 4 specialties.'));
+        wrap.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Maximum 4 specialties.'));
     }
     return wrap;
 }
@@ -734,7 +734,7 @@ const SECTION_RENDERERS = {
                     });
                     return h('div', { style: { padding: '12px 14px', border: '1px solid #e5e7eb', borderRadius: '10px' } },
                         fld(stL('label'), sel),
-                        h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '6px' } }, stL('help')),
+                        h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } }, stL('help')),
                     );
                 })(),
                 // EMP_SCHED_MODE_V1 — per-doctor scheduling mode (schedulable vs live queue)
@@ -748,7 +748,7 @@ const SECTION_RENDERERS = {
                     modeSel.addEventListener('change', () => markDirty({ scheduling_mode: modeSel.value }));
                     return h('div', { style: { padding: '12px 14px', border: '1px solid #e5e7eb', borderRadius: '10px' } },
                         fld('Приём услуг', modeSel),
-                        h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '6px' } },
+                        h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } },
                             '«По записи» — регистратор выбирает дату и время. «Живая очередь» — визит создаётся без времени.'),
                     );
                 })() : null,
@@ -765,7 +765,7 @@ const SECTION_RENDERERS = {
                 (emp.__extraRolesOk && (emp.role || '').toLowerCase() !== 'admin' && _canAssignRole())
                     ? fld('Additional roles', h('div', null,
                         extraRolesControl(emp, lookups, markDirty),
-                        h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '6px' } },
+                        h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } },
                             'Доступ = основная роль + отмеченные роли (объединение прав).')))
                     : null,
                 fld('Hire date', dateInput(emp.hire_date, v => markDirty({ hire_date: v }), { style: { maxWidth: '280px' } })),
@@ -838,9 +838,9 @@ const SECTION_RENDERERS = {
                 const allowed = _isBranchScopedActor() ? new Set(_actorBranchIds()) : null;   // EMP_BRANCH_SCOPE_V1
                 const visible = allowed ? lookups.branches.filter((b) => allowed.has(b.id)) : lookups.branches;
                 if (lookups.branches.length === 0)
-                    return h('div', { class: 'muted', style: { fontSize: '13px' } }, 'No branches configured yet.');
+                    return h('div', { class: 'muted', style: { fontSize: '13.5px' } }, 'No branches configured yet.');
                 if (visible.length === 0)
-                    return h('div', { class: 'muted', style: { fontSize: '13px' } },
+                    return h('div', { class: 'muted', style: { fontSize: '13.5px' } },
                         'У вас нет филиалов в управлении — обратитесь к администратору клиники.');
                 return h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '12px', maxWidth: '760px' } },
                     ...visible.map(makeCard),
@@ -903,7 +903,7 @@ const SECTION_RENDERERS = {
                     const _cClosed = d.on && !!_cw && _cw.enabled === false;
                     const _exceeds = d.on && _cw && _cw.enabled !== false && (_hm(d.start) < _hm(_cw.from) || _hm(d.end) > _hm(_cw.to));
                     const _warn = (_cClosed || _exceeds)
-                        ? h('span', { style: { fontSize: '11px', color: 'var(--crit-700)', whiteSpace: 'nowrap', fontWeight: '500' } },
+                        ? h('span', { style: { fontSize: '12.5px', color: 'var(--crit-700)', whiteSpace: 'nowrap', fontWeight: '500' } },
                             _cClosed ? '⚠ Клиника закрыта в этот день' : trf('⚠ Часы клиники: {from}–{to}', { from: _cw.from, to: _cw.to }))
                         : null;
                     return h('div', { class: 'day-row' + (d.on ? ' on' : '') },
@@ -959,7 +959,7 @@ const SECTION_RENDERERS = {
                 cbx(emp.active, () => set({ active: !emp.active })),
                 h('div', null,
                     h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } }, 'Account active'),
-                    h('div', { class: 'muted', style: { fontSize: '12px' } }, "Inactive employees can't sign in and are hidden from scheduling."),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, "Inactive employees can't sign in and are hidden from scheduling."),
                 ),
             ),
         ),
@@ -972,7 +972,7 @@ const SECTION_RENDERERS = {
         wrap.appendChild(secHead('Stethoscope', 'Consultations', "This doctor's price per consultation type (blank = clinic default)."));
         const types = lookups.consultationTypes || [];
         if (!types.length) {
-            wrap.appendChild(h('div', { class: 'muted', style: { padding: '24px 16px', textAlign: 'center', fontSize: '13px' } },
+            wrap.appendChild(h('div', { class: 'muted', style: { padding: '24px 16px', textAlign: 'center', fontSize: '13.5px' } },
                 'No consultation types yet. Add them under Settings → Doctor salary → Consultation types.'));
             return wrap;
         }
@@ -1012,7 +1012,7 @@ const SECTION_RENDERERS = {
 
             const nameRow = h('div', { style: { minWidth: 0 } },
                 h('div', { class: 'svc-name', title: t.name_ru || t.name_uz || '' }, t.name_ru || t.name_uz || t.name_en || '—'),
-                t.name_uz ? h('span', { class: 'muted', style: { fontSize: '12px' } }, t.name_uz) : null,
+                t.name_uz ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, t.name_uz) : null,
             );
             const controls = h('div', { style: { display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' } },
                 h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12.5px' } }, availI, 'Available'),
@@ -1080,7 +1080,7 @@ function ratesSection({ emp, markDirty, lookups }, cfg) {
         const list = visible();
         syncSelectAll();
         if (list.length === 0) {
-            scroll.appendChild(h('div', { class: 'muted', style: { padding: '24px 16px', textAlign: 'center', fontSize: '13px' } }, 'No services match your search.'));
+            scroll.appendChild(h('div', { class: 'muted', style: { padding: '24px 16px', textAlign: 'center', fontSize: '13.5px' } }, 'No services match your search.'));
             return;
         }
         for (const s of list) {
@@ -1519,32 +1519,32 @@ const EDITOR_CSS = `
 .emp-head { position: relative; display: flex; align-items: center; gap: 16px; padding: 18px 20px;
   border-bottom: 1px solid var(--ink-100); background: linear-gradient(115deg, var(--primary-50), white 58%); }
 .emp-avatar { position: relative; flex: 0 0 56px; width: 56px; height: 56px; border-radius: 16px; display: grid; place-items: center;
-  color: white; font-weight: 700; font-size: 19px; letter-spacing: 0.02em; box-shadow: 0 6px 16px rgba(11,20,24,0.16), 0 0 0 3px white; }
+  color: white; font-weight: 700; font-size: 20px; letter-spacing: 0.02em; box-shadow: 0 6px 16px rgba(11,20,24,0.16), 0 0 0 3px white; }
 .emp-cam { position: absolute; right: -5px; bottom: -5px; width: 22px; height: 22px; border-radius: 999px; background: white;
   color: var(--primary-700); display: grid; place-items: center; box-shadow: 0 1px 4px rgba(0,0,0,0.20); border: 1px solid var(--ink-100); cursor: pointer; }
 .emp-cam:hover { color: var(--primary-800); background: var(--primary-50); }
 .emp-head-main { flex: 1; min-width: 0; }
-.emp-title { font-size: 16px; font-weight: 700; color: var(--ink-900); letter-spacing: -0.01em; }
+.emp-title { font-size: 17px; font-weight: 700; color: var(--ink-900); letter-spacing: -0.01em; }
 .emp-sub { font-size: 12.5px; color: var(--ink-500); margin-top: 2px; }
-.emp-badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+.emp-badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 12.5px; font-weight: 700; }
 .emp-badge .d { width: 6px; height: 6px; border-radius: 999px; }
 .emp-badge.ok { background: var(--ok-50); color: var(--ok-700); } .emp-badge.ok .d { background: var(--ok-500); }
 .emp-badge.off { background: var(--ink-100); color: var(--ink-600); } .emp-badge.off .d { background: var(--ink-400); }
 .emp-chips { display: flex; gap: 7px; margin-top: 9px; flex-wrap: wrap; }
 .emp-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; background: white;
-  border: 1px solid var(--ink-200); font-size: 11.5px; font-weight: 600; color: var(--ink-700); }
+  border: 1px solid var(--ink-200); font-size: 12.5px; font-weight: 600; color: var(--ink-700); }
 .emp-chip svg { color: var(--ink-400); }
 .emp-chip.warn { background: var(--warn-50); border-color: color-mix(in oklab, var(--warn-500) 28%, white); color: var(--warn-700); }
 .emp-chip.warn svg { color: var(--warn-700); }
 .emp-progress { display: flex; flex-direction: column; align-items: center; gap: 3px; margin-right: 2px; }
-.emp-progress .lbl { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-500); }
+.emp-progress .lbl { font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-500); }
 
 .emp-body { flex: 1; display: grid; grid-template-columns: 220px 1fr; min-height: 0; }
 .emp-rail { border-right: 1px solid var(--ink-100); padding: 12px; display: flex; flex-direction: column; gap: 2px; background: var(--ink-25); overflow-y: auto; }
-.emp-rail-group { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-400); padding: 12px 12px 5px; }
+.emp-rail-group { font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-400); padding: 12px 12px 5px; }
 .emp-rail > div:first-child .emp-rail-group { padding-top: 4px; }
 .emp-rail-item { position: relative; display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 12px; border-radius: 9px;
-  background: transparent; border: none; color: var(--ink-600); font-size: 13px; font-weight: 500; font-family: inherit; cursor: pointer; }
+  background: transparent; border: none; color: var(--ink-600); font-size: 13.5px; font-weight: 500; font-family: inherit; cursor: pointer; }
 .emp-rail-item:hover { background: var(--ink-50); color: var(--ink-900); }
 .emp-rail-item.on { background: white; color: var(--primary-700); font-weight: 600; box-shadow: 0 1px 2px rgba(11,20,24,0.06); }
 .emp-rail-item.on svg { color: var(--primary-600); }
@@ -1562,12 +1562,12 @@ const EDITOR_CSS = `
 @media (prefers-reduced-motion: reduce) { .emp-panel > .fade-in { animation: none; } }
 .emp-foot { display: flex; align-items: center; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--ink-100); background: var(--ink-25); }
 
-.emp-panel .sec-title { font-size: 18px; font-weight: 700; color: var(--ink-900); letter-spacing: -0.015em; margin: 0; }
-.emp-panel .sec-sub { font-size: 13px; color: var(--ink-500); margin: 4px 0 0; max-width: 560px; line-height: 1.5; }
-.emp-panel .field-label { font-size: 12px; font-weight: 600; color: var(--ink-700); }
-.emp-panel .field label { font-size: 12px; font-weight: 600; color: var(--ink-700); }
+.emp-panel .sec-title { font-size: 17px; font-weight: 700; color: var(--ink-900); letter-spacing: -0.015em; margin: 0; }
+.emp-panel .sec-sub { font-size: 13.5px; color: var(--ink-500); margin: 4px 0 0; max-width: 560px; line-height: 1.5; }
+.emp-panel .field-label { font-size: 12.5px; font-weight: 600; color: var(--ink-700); }
+.emp-panel .field label { font-size: 12.5px; font-weight: 600; color: var(--ink-700); }
 .emp-panel .field input:not([type=checkbox]), .emp-panel .field select { width: 100%; box-sizing: border-box; }
-.emp-panel .hint { font-size: 11.5px; color: var(--ink-500); margin-top: 4px; display: block; }
+.emp-panel .hint { font-size: 12.5px; color: var(--ink-500); margin-top: 4px; display: block; }
 .sec-badge { flex: 0 0 38px; width: 38px; height: 38px; border-radius: 11px; background: var(--primary-50); color: var(--primary-700); display: grid; place-items: center; margin-right: 14px; }
 
 .cbx { flex: 0 0 20px; width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--ink-300); background: white;
@@ -1589,7 +1589,7 @@ const EDITOR_CSS = `
    the check became green-on-green and disappeared. */
 .branch-card.on > svg { color: var(--primary-600); } .branch-card > svg { color: var(--ink-300); }
 .branch-name { display: block; font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
-.branch-meta { display: block; font-size: 11.5px; color: var(--ink-500); margin-top: 2px; }
+.branch-meta { display: block; font-size: 12.5px; color: var(--ink-500); margin-top: 2px; }
 
 .check-list { display: flex; flex-direction: column; gap: 8px; }
 .check-row { display: flex; align-items: center; gap: 11px; padding: 11px 14px; border-radius: 10px; border: 1px solid var(--ink-200);
@@ -1603,7 +1603,7 @@ const EDITOR_CSS = `
 .day-name { font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
 .lunch-label { font-size: 12.5px; color: var(--ink-600); }
 .time-pair { display: inline-flex; align-items: center; gap: 8px; }
-.time-pair input { height: 34px; width: 104px; padding: 0 10px; border: 1px solid var(--ink-200); border-radius: 8px; font-size: 13px; color: var(--ink-900); background: white; font-family: inherit; }
+.time-pair input { height: 34px; width: 104px; padding: 0 10px; border: 1px solid var(--ink-200); border-radius: 8px; font-size: 13.5px; color: var(--ink-900); background: white; font-family: inherit; }
 .time-pair input:focus { outline: none; border-color: var(--primary-500); box-shadow: 0 0 0 3px var(--primary-50); }
 .time-pair input:disabled { background: var(--ink-50); color: var(--ink-400); }
 .time-pair .dash { color: var(--ink-400); }
@@ -1611,23 +1611,23 @@ const EDITOR_CSS = `
 .svc-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
 .svc-search { position: relative; flex: 1; min-width: 220px; display: flex; align-items: center; }
 .svc-search svg { position: absolute; left: 12px; color: var(--ink-400); }
-.svc-search input { width: 100%; height: 38px; padding: 0 12px 0 36px; border: 1px solid var(--ink-200); border-radius: 9px; font-family: inherit; font-size: 13px; color: var(--ink-900); }
+.svc-search input { width: 100%; height: 38px; padding: 0 12px 0 36px; border: 1px solid var(--ink-200); border-radius: 9px; font-family: inherit; font-size: 13.5px; color: var(--ink-900); }
 .svc-search input:focus { outline: none; border-color: var(--primary-500); box-shadow: 0 0 0 4px var(--primary-50); }
-.svc-type { height: 38px; padding: 0 30px 0 12px; border: 1px solid var(--ink-200); border-radius: 9px; font-family: inherit; font-size: 13px; color: var(--ink-800); background: white; }
+.svc-type { height: 38px; padding: 0 30px 0 12px; border: 1px solid var(--ink-200); border-radius: 9px; font-family: inherit; font-size: 13.5px; color: var(--ink-800); background: white; }
 .link-btn { display: inline-flex; align-items: center; gap: 7px; background: none; border: none; color: var(--primary-700); font-family: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
-.bulk-pct { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-600); }
+.bulk-pct { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-600); }
 .bulk-pct input { width: 56px; height: 32px; text-align: right; padding: 0 8px; border: 1px solid var(--ink-200); border-radius: 8px; font-family: var(--font-mono); font-size: 12.5px; }
 .bulk-pct input:focus, .svc-type:focus { outline: none; border-color: var(--primary-500); box-shadow: 0 0 0 3px var(--primary-50); }
 
 .svc-grid { display: grid; grid-template-columns: 28px 1fr 190px 96px 88px; gap: 12px; align-items: center; }
-.svc-grid-head { padding: 0 14px 8px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-500); }
+.svc-grid-head { padding: 0 14px 8px; font-size: 12.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-500); }
 .svc-scroll { border: 1px solid var(--ink-200); border-radius: 12px; overflow: hidden; max-height: 380px; overflow-y: auto; }
 .svc-row { padding: 12px 14px; border-bottom: 1px solid var(--ink-100); } .svc-row:last-child { border-bottom: none; } .svc-row.on { background: var(--primary-50); }
 .svc-name { font-size: 12.5px; color: var(--ink-900); font-weight: 500; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.svc-type-tag { display: inline-block; margin-top: 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-500); background: var(--ink-100); padding: 1px 7px; border-radius: 999px; }
+.svc-type-tag { display: inline-block; margin-top: 4px; font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-500); background: var(--ink-100); padding: 1px 7px; border-radius: 999px; }
 
 .bsel { position: relative; }
-.bsel-btn { display: flex; align-items: center; gap: 6px; width: 100%; height: 32px; padding: 0 9px; border: 1px solid var(--ink-200); border-radius: 8px; background: white; font-family: inherit; font-size: 12px; color: var(--ink-800); cursor: pointer; }
+.bsel-btn { display: flex; align-items: center; gap: 6px; width: 100%; height: 32px; padding: 0 9px; border: 1px solid var(--ink-200); border-radius: 8px; background: white; font-family: inherit; font-size: 12.5px; color: var(--ink-800); cursor: pointer; }
 .bsel-btn:hover { border-color: var(--ink-300); } .bsel-btn.open { border-color: var(--primary-500); box-shadow: 0 0 0 3px var(--primary-50); }
 .bsel-label { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bsel-btn svg { color: var(--ink-400); flex: 0 0 12px; }
@@ -1638,7 +1638,7 @@ const EDITOR_CSS = `
 .in-box { display: inline-flex; align-items: center; justify-content: flex-end; border: 1px solid var(--ink-200); border-radius: 8px; background: white; height: 32px; padding: 0 9px; gap: 3px; }
 .in-box:focus-within { border-color: var(--primary-500); box-shadow: 0 0 0 3px var(--primary-50); }
 .in-box input { border: none; outline: none; width: 100%; min-width: 0; text-align: right; font-family: var(--font-mono); font-size: 12.5px; color: var(--ink-900); background: transparent; padding: 0; }
-.in-box .suf { font-size: 11px; color: var(--ink-500); flex: 0 0 auto; }
+.in-box .suf { font-size: 12.5px; color: var(--ink-500); flex: 0 0 auto; }
 
 @media (max-width: 720px) {
   .emp-body { grid-template-columns: 1fr; }

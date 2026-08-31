@@ -542,9 +542,9 @@ export function openServicePickerModal({
                 borderBottom: '1px solid #c6efd9',
             },
         },
-            h('span', { style: { color: 'var(--ok-700)', fontWeight: 700, fontSize: '13px' } },
+            h('span', { style: { color: 'var(--ok-700)', fontWeight: 700, fontSize: '13.5px' } },
                 trf('Выбрано услуг: {n}', { n })),
-            h('span', { class: 'num', style: { fontWeight: 700, color: 'var(--ok-700)', fontSize: '13px' } },
+            h('span', { class: 'num', style: { fontWeight: 700, color: 'var(--ok-700)', fontSize: '13.5px' } },
                 total.toLocaleString('ru-RU'), ' сум'),
         ));
 
@@ -555,7 +555,7 @@ export function openServicePickerModal({
             style: {
                 display: 'grid', gridTemplateColumns: GRID, gap: '12px',
                 padding: '8px 14px', borderBottom: '1px solid var(--ink-100)',
-                fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
+                fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase',
                 letterSpacing: '0.06em', color: 'var(--ink-500)',
             },
         },
@@ -574,7 +574,7 @@ export function openServicePickerModal({
                     color: 'var(--crit-700)', cursor: 'pointer',
                     width: '24px', height: '24px', borderRadius: '6px',
                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: '13px', fontWeight: 700, padding: 0,
+                    fontSize: '13.5px', fontWeight: 700, padding: 0,
                 },
                 onmouseover: (e) => { e.currentTarget.style.background = 'var(--crit-50)'; e.currentTarget.style.borderColor = '#fecaca'; },
                 onmouseout:  (e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'transparent'; },
@@ -596,11 +596,11 @@ export function openServicePickerModal({
             const doctorLine = h('div', { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--ink-700)', fontSize: '12.5px' } });
             if (a.doctor?.full_name) {
                 doctorLine.appendChild(document.createTextNode(a.doctor.full_name));
-                if (a.doctor.specialty) doctorLine.appendChild(h('span', { class: 'muted', style: { fontSize: '11.5px' } }, ' · ' + a.doctor.specialty));
+                if (a.doctor.specialty) doctorLine.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } }, ' · ' + a.doctor.specialty));
             } else {
                 doctorLine.appendChild(document.createTextNode('—'));
             }
-            if (a.time && a.dateIso) doctorLine.appendChild(h('span', { class: 'muted', style: { fontSize: '11px', marginLeft: '6px' } }, schedDateLabel(a.dateIso) + ' ' + a.time));
+            if (a.time && a.dateIso) doctorLine.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '6px' } }, schedDateLabel(a.dateIso) + ' ' + a.time));
 
             el.appendChild(h('div', {
                 style: {
@@ -966,7 +966,7 @@ export function openServicePickerModal({
 
         const head = h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' } },
             h('span', { style: { color: 'var(--primary-700)' } }, Icon('Calendar', { size: 15 })),
-            h('div', { style: { fontSize: '13px', fontWeight: 700, color: 'var(--ink-900)' } }, 'Время приёма'),
+            h('div', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } }, 'Время приёма'),
         );
 
         if (!doctor) {
@@ -983,7 +983,7 @@ export function openServicePickerModal({
         const chosen = (state.schedDateIso === viewIso && state.schedStartMin != null) ? state.schedStartMin : null;
         const chosenChip = h('div', {
             style: {
-                marginLeft: 'auto', fontSize: '12px', fontWeight: 600,
+                marginLeft: 'auto', fontSize: '12.5px', fontWeight: 600,
                 padding: '3px 10px', borderRadius: '999px',
                 background: chosen != null ? 'var(--primary-50)' : 'var(--ink-25)',
                 color: chosen != null ? 'var(--primary-700)' : 'var(--ink-500)',
@@ -1007,9 +1007,9 @@ export function openServicePickerModal({
         }, '›');
         refs.schedule.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' } },
             prevBtn,
-            h('div', { style: { fontSize: '13px', fontWeight: 600, color: 'var(--ink-800)', minWidth: '150px', textAlign: 'center' } }, schedDateLabel(viewIso)),
+            h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-800)', minWidth: '150px', textAlign: 'center' } }, schedDateLabel(viewIso)),
             nextBtn,
-            h('div', { class: 'muted', style: { fontSize: '11.5px', marginLeft: '6px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '6px' } },
                 range ? `Working ${fmtMin(range.fromMin)}–${fmtMin(range.toMin)} · ${dur} min slot` : 'Not working this day'),
         ));
 
@@ -1032,7 +1032,7 @@ export function openServicePickerModal({
 
     function captionLine(text, kind) {
         const color = kind === 'warn' ? 'var(--warn-700, #b45309)' : 'var(--ink-500)';
-        return h('div', { style: { fontSize: '11.5px', color, marginTop: '8px' } }, text);
+        return h('div', { style: { fontSize: '12.5px', color, marginTop: '8px' } }, text);
     }
 
     // Builds the hour ruler + clickable track for one day.
@@ -1045,7 +1045,7 @@ export function openServicePickerModal({
         const ruler = h('div', { style: { position: 'relative', height: '20px', borderBottom: '1px solid var(--ink-100)' } });
         for (let hh = SCHED_GRID_START; hh <= SCHED_GRID_END; hh++) {
             ruler.appendChild(h('div', {
-                style: { position: 'absolute', left: ((hh - SCHED_GRID_START) * SCHED_HOUR_W) + 'px', top: '2px', fontSize: '10.5px', color: 'var(--ink-400)', transform: 'translateX(-50%)' },
+                style: { position: 'absolute', left: ((hh - SCHED_GRID_START) * SCHED_HOUR_W) + 'px', top: '2px', fontSize: '12.5px', color: 'var(--ink-400)', transform: 'translateX(-50%)' },
             }, String(hh).padStart(2, '0') + ':00'));
         }
         wrap.appendChild(ruler);
@@ -1076,7 +1076,7 @@ export function openServicePickerModal({
             if (right <= left) continue;
             track.appendChild(h('div', {
                 title: `Booked ${fmtMin(b.startMin)}–${fmtMin(b.endMin)} · ${b.label}`,
-                style: { position: 'absolute', top: '4px', bottom: '4px', left: left + 'px', width: (right - left) + 'px', background: 'var(--ink-100)', border: '1px solid var(--ink-200)', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', fontSize: '10.5px', color: 'var(--ink-600)', padding: '0 4px' },
+                style: { position: 'absolute', top: '4px', bottom: '4px', left: left + 'px', width: (right - left) + 'px', background: 'var(--ink-100)', border: '1px solid var(--ink-200)', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', fontSize: '12.5px', color: 'var(--ink-600)', padding: '0 4px' },
             }, b.label));
         }
 
@@ -1094,7 +1094,7 @@ export function openServicePickerModal({
             const left = xOf(chosen);
             const w = (dur / 60) * SCHED_HOUR_W;
             track.appendChild(h('div', {
-                style: { position: 'absolute', top: '4px', bottom: '4px', left: left + 'px', width: w + 'px', background: 'var(--primary-500, #2563eb)', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '11px', fontWeight: 600, boxShadow: '0 1px 4px rgba(0,0,0,0.18)' },
+                style: { position: 'absolute', top: '4px', bottom: '4px', left: left + 'px', width: w + 'px', background: 'var(--primary-500, #2563eb)', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '12.5px', fontWeight: 600, boxShadow: '0 1px 4px rgba(0,0,0,0.18)' },
             }, fmtMin(chosen)));
         }
 
@@ -1219,7 +1219,7 @@ export function openServicePickerModal({
         const resultsEl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px', maxHeight: '46vh', overflow: 'auto' } });
         const inp = h('input', {
             type: 'search', autocomplete: 'off',
-            style: { width: '100%', height: '36px', padding: '0 12px', borderRadius: '8px', border: '1px solid var(--ink-200)', fontSize: '13px' },
+            style: { width: '100%', height: '36px', padding: '0 12px', borderRadius: '8px', border: '1px solid var(--ink-200)', fontSize: '13.5px' },
             placeholder: 'Поиск по ФИО, ID или телефону…',
         });
 
@@ -1227,7 +1227,7 @@ export function openServicePickerModal({
         function paint(rows) {
             clear(resultsEl);
             if (!rows || rows.length === 0) {
-                resultsEl.appendChild(h('div', { style: { padding: '14px', textAlign: 'center', color: 'var(--ink-500)', fontSize: '13px' } }, 'Ничего не найдено'));
+                resultsEl.appendChild(h('div', { style: { padding: '14px', textAlign: 'center', color: 'var(--ink-500)', fontSize: '13.5px' } }, 'Ничего не найдено'));
                 return;
             }
             rows.forEach((p) => {
@@ -1470,7 +1470,7 @@ export function openServicePickerModal({
             h('header', { class: 'modal-head' }, h('h2', null, 'Сохранить как шаблон'),
                 h('button', { class: 'modal-close', onclick: () => ov.remove() }, '×')),
             h('div', { class: 'modal-body', style: { display: 'block' } },
-                h('div', { class: 'muted', style: { fontSize: '12px' } }, 'Шаблон сохранит список услуг — врач и время выбираются при записи.'),
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Шаблон сохранит список услуг — врач и время выбираются при записи.'),
                 nameIn),
             h('footer', { class: 'modal-foot' },
                 h('button', { class: 'btn', onclick: () => ov.remove() }, 'Отмена'),
@@ -1508,8 +1508,8 @@ export function openServicePickerModal({
             const row = h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', border: '1px solid var(--ink-100, #e8ecef)', borderRadius: '10px', padding: '9px 12px' } },
                 h('button', { type: 'button', style: { flex: '1 1 auto', minWidth: 0, border: '0', background: 'none', cursor: 'pointer', font: 'inherit', textAlign: 'left', padding: '0' },
                     onclick: async () => { ov.remove(); await applyServiceTemplate(t); } },
-                    h('div', { style: { fontWeight: 700, fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
-                    h('div', { class: 'muted', style: { fontSize: '11px' } }, tr('услуг') + ': ' + ids.length)),
+                    h('div', { style: { fontWeight: 700, fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('услуг') + ': ' + ids.length)),
                 h('button', { type: 'button', title: 'Удалить шаблон',
                     style: { border: '0', background: 'none', cursor: 'pointer', color: 'var(--crit-600, #dc2626)', fontSize: '15px', flex: 'none', padding: '2px 4px' },
                     onclick: async (e) => {
@@ -1662,7 +1662,7 @@ export function openServicePickerModal({
             onclick: () => { cat2.group = id; cat2.win = CAT_PAGE; paintCatGroups(); paintCatList(); } }, `${name} · ${n}`);
         catGroupsEl.appendChild(mk('', 'Все', elig.length));
         for (const t of state.types) { const n = counts[String(t.id)] || 0; if (n) catGroupsEl.appendChild(mk(String(t.id), t.name, n)); }
-        if (lockedDoctor) catGroupsEl.appendChild(h('span', { class: 'muted', style: { marginLeft: 'auto', fontSize: '11px', alignSelf: 'center' } },
+        if (lockedDoctor) catGroupsEl.appendChild(h('span', { class: 'muted', style: { marginLeft: 'auto', fontSize: '12.5px', alignSelf: 'center' } },
             trf('только услуги: {name}', { name: lockedDoctor.name || '' })));
     }
     function paintCatList() {
@@ -1739,25 +1739,25 @@ export function openServicePickerModal({
                     ` ${item.doctor.full_name || '—'}`,
                     item.doctor.specialty ? h('span', { class: 'muted', style: { fontWeight: 500 } }, ' · ' + item.doctor.specialty) : null,
                     item.service.__consult ? h('span', { class: 'num', style: { marginLeft: '6px', fontWeight: 700 } }, formatMoney(consultPriceFor(item.doctor.id, item.service.__ct || item.service))) : null),
-                (item.doctor.scheduling_mode || 'schedulable') === 'live_queue' ? h('span', { class: 'muted', style: { fontSize: '11.5px' } }, '· живая очередь') : null,
+                (item.doctor.scheduling_mode || 'schedulable') === 'live_queue' ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '· живая очередь') : null,
                 h('button', { class: 'btn btn-sm btn-outline', type: 'button', style: { flex: 'none' },
                     onclick: () => { item.doctor = null; item.startISO = null; item.time = null; item.dateIso = null; paintCatalog(); } }, 'Изменить')));
         } else {
             const search = h('input', { type: 'search', placeholder: 'Поиск врача…',
-                style: { width: '100%', maxWidth: '340px', height: '34px', padding: '0 10px', border: '1px solid var(--ink-200, #d1d5db)', borderRadius: '8px', fontSize: '13px', fontFamily: 'inherit' } });
+                style: { width: '100%', maxWidth: '340px', height: '34px', padding: '0 10px', border: '1px solid var(--ink-200, #d1d5db)', borderRadius: '8px', fontSize: '13.5px', fontFamily: 'inherit' } });
             const listBox = h('div', { style: { marginTop: '6px', maxHeight: '190px', overflow: 'auto', display: 'flex', flexDirection: 'column', gap: '3px' } });
             const paintOpts = () => {
                 listBox.replaceChildren();
                 const q = search.value.trim().toLowerCase();
                 const rows = perf.filter(d => !q || (d.full_name || '').toLowerCase().includes(q) || (d.specialty || '').toLowerCase().includes(q));
-                if (!rows.length) { listBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', padding: '6px' } }, 'Врач не найден')); return; }
+                if (!rows.length) { listBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '6px' } }, 'Врач не найден')); return; }
                 for (const d of rows) {
                     listBox.appendChild(h('button', { class: 'wzc-doc', type: 'button', style: { justifyContent: 'flex-start', textAlign: 'left' },
                         onclick: () => catPickDoc(item, d, false) },
                         h('span', { class: 'wzc-av' }, initials(d.full_name || '')),
                         ` ${d.full_name || '—'}`,
                         d.specialty ? h('span', { class: 'muted', style: { fontWeight: 500 } }, ' · ' + d.specialty) : null,
-                        (d.scheduling_mode || 'schedulable') === 'live_queue' ? h('span', { class: 'muted', style: { fontSize: '11px', marginLeft: '6px' } }, '· живая очередь') : null,
+                        (d.scheduling_mode || 'schedulable') === 'live_queue' ? h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '6px' } }, '· живая очередь') : null,
                         item.service.__consult ? h('span', { class: 'num', style: { marginLeft: 'auto', fontWeight: 700 } }, formatMoney(consultPriceFor(d.id, item.service.__ct || item.service))) : null));
                 }
             };
@@ -1825,13 +1825,13 @@ export function openServicePickerModal({
                 h('span', { class: 'wzc-av', style: { background: '#c47d12' } }, p.initials || initials(nm)),
                 h('div', { style: { minWidth: 0, flex: 1 } },
                     h('div', { style: { fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, nm),
-                    h('div', { class: 'muted', style: { fontSize: '11px' } }, [p.mrn, p.phone].filter(Boolean).join(' · ') || '—')),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [p.mrn, p.phone].filter(Boolean).join(' · ') || '—')),
                 patient ? null : h('button', { class: 'x', type: 'button', title: 'Отвязать пациента',
                     onclick: () => { refs.attachedPatient = null; wiz.depositBalance = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); } }, '×')));
         } else {
             catRailEl.appendChild(h('button', { class: 'wzc-attach', type: 'button', onclick: () => openAttachPatientModal() },
                 h('div', { style: { fontWeight: 700, color: 'var(--primary-700)' } }, 'Привязать пациента'),
-                h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '2px' } }, 'поиск по ФИО / телефону · или создать нового')));
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, 'поиск по ФИО / телефону · или создать нового')));
         }
         if (state.added.length) {
             // WIZ_RAIL_SCROLL_V1 — rows scroll; money block below stays visible.
@@ -1843,18 +1843,18 @@ export function openServicePickerModal({
                     onclick: () => { cat2.q = a.service.name; cat2.group = ''; cat2.win = CAT_PAGE;
                         if (catSearchEl) catSearchEl.value = cat2.q; paintCatalog(); } },
                     'выберите врача и время');
-                else if (a.doctor) who = h('div', { class: 'muted', style: { fontSize: '11px' } },
+                else if (a.doctor) who = h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     `${a.doctor.full_name || ''}${a.time ? ' · ' + (a.dateIso === catDays()[0].iso ? tr('сегодня') : (a.dateIso || '').slice(8) + '.' + (a.dateIso || '').slice(5, 7)) + ' ' + a.time : ''}`);
-                else who = h('div', { class: 'muted', style: { fontSize: '11px' } }, 'процедурный кабинет');
+                else who = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'процедурный кабинет');
                 rowsWrap.appendChild(h('div', { class: 'wzc-ln' },
                     h('div', { style: { minWidth: 0 } }, h('div', { style: { fontSize: '12.5px' } }, a.service.name), who),
                     h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flex: 'none' } },
                         h('span', { class: 'num', style: { fontWeight: 700 } }, formatMoney(Number(a.service.price || 0))),
                         itemComplete(a) ? h('button', { type: 'button', title: 'Изменить врача и время',
-                            style: { border: '0', background: 'none', cursor: 'pointer', font: 'inherit', fontSize: '11px', color: 'var(--primary-700, #115d5a)', textDecoration: 'underline', padding: '0', flex: 'none' },
+                            style: { border: '0', background: 'none', cursor: 'pointer', font: 'inherit', fontSize: '12.5px', color: 'var(--primary-700, #115d5a)', textDecoration: 'underline', padding: '0', flex: 'none' },
                             onclick: () => { a.__editSlot = true; cat2.q = a.service.name; cat2.group = ''; cat2.win = CAT_PAGE; if (catSearchEl) catSearchEl.value = a.service.name; paintCatalog(); } }, 'изменить') : null,
                         h('button', { type: 'button', title: 'Убрать услугу', 'aria-label': 'Убрать услугу',
-                            style: { border: '0', background: 'none', cursor: 'pointer', color: 'var(--crit-600, #dc2626)', fontSize: '16px', lineHeight: '1', padding: '2px 4px', flex: 'none' },
+                            style: { border: '0', background: 'none', cursor: 'pointer', color: 'var(--crit-600, #dc2626)', fontSize: '17px', lineHeight: '1', padding: '2px 4px', flex: 'none' },
                             onclick: () => catRemove(a) }, '×'))));
             }
             catRailEl.appendChild(rowsWrap);   // WIZ_RAIL_SCROLL_V1
@@ -1877,7 +1877,7 @@ export function openServicePickerModal({
             totBox.appendChild(h('div', { class: 'wzc-tot' },
                 h('span', null, 'Итого'), h('span', { class: 'num' }, formatMoney(wt.full))));
             if (wiz.payment.mode === 'patient') {
-                const line = (lbl, v) => h('div', { style: { display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '12px', color: 'var(--ink-500, #55636d)' } },
+                const line = (lbl, v) => h('div', { style: { display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '12.5px', color: 'var(--ink-500, #55636d)' } },
                     h('span', null, lbl), h('span', { class: 'num' }, '−' + formatMoney(v)));
                 if (wt.full - wt.afterDisc > 0) totBox.appendChild(line(trf('Скидка {n}%', { n: wizDiscountPct() }), wt.full - wt.afterDisc));
                 if (wt.promoOff > 0) totBox.appendChild(line('Промокод', wt.promoOff));
@@ -1886,7 +1886,7 @@ export function openServicePickerModal({
                 if (wt.due !== wt.full) totBox.appendChild(h('div', { class: 'wzc-tot', style: { borderTop: '1px dashed var(--ink-100, #e8ecef)', marginTop: '4px' } },
                     h('span', null, 'К оплате'), h('span', { class: 'num', style: { color: 'var(--primary-600, #0d8a72)' } }, formatMoney(wt.due))));
             } else {
-                totBox.appendChild(h('div', { class: 'muted', style: { fontSize: '11.5px', margin: '2px 0 4px' } },
+                totBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '2px 0 4px' } },
                     'Покрывает плательщик — распределение на шаге «Кто платит».'));
             }
             // ATTACH_CATALOG_V1 — attaching needs only a complete cart; the
@@ -1983,7 +1983,7 @@ export function openServicePickerModal({
             ensureWizData().then(() => { if (wiz.step === 1 && box.isConnected) { clear(box); fill(); refresh(); } }).catch(() => {});
         }
         function fill() {
-            box.appendChild(h('div', { style: { fontWeight: 700, fontSize: '12px', marginBottom: '6px' } }, 'Кто платит'));
+            box.appendChild(h('div', { style: { fontWeight: 700, fontSize: '12.5px', marginBottom: '6px' } }, 'Кто платит'));
             // WIZ_PAY_RAIL_V3 — сначала ТИП покрытия, затем отдельным полем КОМПАНИЯ
             // из Настроек (Payer management); номер полиса вводится ВРУЧНУЮ и
             // сохраняется в payer_policies при создании визита (WIZ_POLICY_MANUAL_V1).
@@ -2013,7 +2013,7 @@ export function openServicePickerModal({
                     oninput: (e) => { pm.policyNumber = e.target.value; } });
                 box.appendChild(payerSel);
                 box.appendChild(polIn);
-                box.appendChild(h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '4px' } },
+                box.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
                     'Визит сохраняется без счёта — расчёт с плательщиком отдельно (акт).'));
             } else {
                 const discIn = h('input', { class: 'tp-input', type: 'number', min: '0', max: '100', step: '1',
@@ -2029,7 +2029,7 @@ export function openServicePickerModal({
                         const lbl = d.kind === 'promo_code'
                             ? (d.discount_type === 'amount' ? '−' + formatMoney(d.amount) + ' ' + tr('сум') : `−${Number(d.percent || 0)}%`)
                             : formatMoney(d.remaining ?? d.amount ?? 0) + ' ' + tr('сум');
-                        appliedBox.appendChild(h('span', { class: 'tag tag-ok', style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11px' } },
+                        appliedBox.appendChild(h('span', { class: 'tag tag-ok', style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12.5px' } },
                             tr(KIND_RU3[d.kind] || d.kind) + ' ' + d.code + ' · ' + lbl,
                             h('button', { type: 'button', style: { background: 'none', border: '0', cursor: 'pointer', color: 'inherit', fontWeight: 700 },
                                 onclick: (e) => { e.stopPropagation(); wiz.applied = wiz.applied.filter(x => x !== d); paintRailApplied(); refresh(); } }, '×')));
@@ -2053,7 +2053,7 @@ export function openServicePickerModal({
                             refresh(); } },
                         pm.useBal ? 'Используется' : 'Использовать');
                     box.appendChild(h('div', { class: 'row', style: { justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginTop: '8px' } },
-                        h('span', { style: { fontSize: '12px' } }, 'Баланс: ', h('b', { class: 'num' }, formatMoney(balAvail))), balBtn));
+                        h('span', { style: { fontSize: '12.5px' } }, 'Баланс: ', h('b', { class: 'num' }, formatMoney(balAvail))), balBtn));
                 }
             }
         }
@@ -2214,7 +2214,7 @@ export function openServicePickerModal({
             Avatar({ initials: p.initials || initials(name), color: p.avColor || avColor(p.id || name) }),
             h('div', { style: { minWidth: 0 } },
                 h('div', { style: { fontWeight: 700, fontSize: '13.5px' } }, name),
-                h('div', { class: 'muted', style: { fontSize: '11.5px' } }, sub)));
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } }, sub)));
     }
 
     // ---- SVC_REFERRAL_V1 — step 2 «Направление»: источник направления по услугам ----
@@ -2264,7 +2264,7 @@ export function openServicePickerModal({
         root.appendChild(h('div', { style: { marginBottom: '14px' } },
             h('div', { style: { fontWeight: '600', marginBottom: '6px' } }, 'Источник направления для всех услуг'),
             h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, globalSel, globalSrcSel),
-            h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '4px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
                 '«Сам пациент» — обращение без направившего партнёра. Ниже категорию и партнёра можно уточнить для каждой услуги отдельно.'),
         ));
         state.added.forEach((a, i) => {
@@ -2276,8 +2276,8 @@ export function openServicePickerModal({
                 ...catOpts(row.catId));
             root.appendChild(h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', padding: '9px 0', borderTop: '1px solid var(--line, #e8ecef)' } },
                 h('div', { style: { flex: '1 1 38%', minWidth: 0 } },
-                    h('div', { style: { fontWeight: '600', fontSize: '13px' } }, a.service && a.service.name || '—'),
-                    a.doctor && a.doctor.full_name ? h('div', { class: 'muted', style: { fontSize: '11.5px' } }, a.doctor.full_name) : null),
+                    h('div', { style: { fontWeight: '600', fontSize: '13.5px' } }, a.service && a.service.name || '—'),
+                    a.doctor && a.doctor.full_name ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, a.doctor.full_name) : null),
                 catSel, srcSel));
         });
     }
@@ -2319,7 +2319,7 @@ export function openServicePickerModal({
             h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 payerName + ': ', h('b', null, formatMoney(s.payer)), ' · Пациент (в кассу): ',
                 h('b', { style: { color: 'var(--primary-700, #115d5a)' } }, formatMoney(s.patient)))));
-        if (selfPay) root.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '10px' } },
+        if (selfPay) root.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } },
             'Самооплата: все услуги оплачивает пациент. Чтобы распределить на плательщика, выберите ДМС / контракт на шаге «Оплата».'));
         const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
         state.added.forEach((a, i) => {
@@ -2339,7 +2339,7 @@ export function openServicePickerModal({
             list.appendChild(h('div', { class: 'row', style: { justifyContent: 'space-between', alignItems: 'center', gap: '12px', padding: '10px 12px', border: '1px solid var(--ink-100, #e7ebee)', borderRadius: '10px' } },
                 h('div', null,
                     h('div', { style: { fontWeight: 500 } }, a.service?.name || '—'),
-                    h('div', { class: 'muted', style: { fontSize: '12px' } }, formatMoney(price))),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, formatMoney(price))),
                 seg));
         });
         root.appendChild(list);
@@ -2391,7 +2391,7 @@ export function openServicePickerModal({
                 const a = state.added[i]; const unit = Number(a.service?.price || 0);
                 tb.appendChild(h('tr', null,
                     h('td', { style: { fontWeight: 500 } }, a.service?.name || '—',
-                        refUniform ? null : h('div', { class: 'muted', style: { fontSize: '11.5px', fontWeight: 400, marginTop: '2px' } }, trf('Направление: {ref}', { ref: refLabels[i] }))),   // SVC_REFERRAL_CONFIRM_V1
+                        refUniform ? null : h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 400, marginTop: '2px' } }, trf('Направление: {ref}', { ref: refLabels[i] }))),   // SVC_REFERRAL_CONFIRM_V1
                     h('td', { class: 'muted' }, a.doctor ? (a.doctor.full_name || a.doctor.name || '—') : '—'),
                     h('td', { class: 'num', style: { textAlign: 'right' } },
                         withDisc && wizDiscountPct()
@@ -2892,7 +2892,7 @@ export function openServicePickerModal({
                 fld('Телефон', fPhone), fld('Дата рождения', fDob),
                 fld('Пол', fSex)),
             h('footer', { class: 'modal-foot' },
-                h('div', { class: 'muted', style: { fontSize: '11.5px' } }, 'Полная анкета — на странице «Регистратура».'),
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Полная анкета — на странице «Регистратура».'),
                 h('span', { class: 'grow' }),
                 h('button', { class: 'btn', onclick: close }, 'Отмена'),
                 h('button', { class: 'btn btn-primary', onclick: (ev) => { const b = ev.currentTarget; if (b.disabled) return; b.disabled = true; Promise.resolve(doCreate(false)).finally(() => { b.disabled = false; }); } }, Icon('Check', { size: 14 }), ' Создать и привязать'))));
@@ -2925,7 +2925,7 @@ function rowEl(label, meta, on, onClick, opts = {}) {
         h('span', { class: 'row-label' }, label || '—'),
         meta && h('span', { class: 'row-meta' }, meta),
         badge && h('span', { style: {
-            marginLeft: '6px', fontSize: '10px', fontWeight: 700,
+            marginLeft: '6px', fontSize: '12.5px', fontWeight: 700,
             color: 'var(--ok-700)', background: 'var(--ok-50)',
             padding: '2px 7px', borderRadius: '999px',
             textTransform: 'uppercase', letterSpacing: '0.04em',

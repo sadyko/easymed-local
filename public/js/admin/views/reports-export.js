@@ -514,8 +514,8 @@ export async function buildOwnerReport({ period, branchId, branchIds, clinicId, 
 // ---- chart primitives (self-drawn, CSP-safe; text wears text tokens) ----
 function ownerCard(title, sub, bodyEl) {
     return h('div', { style: { background: 'var(--white)', border: '1px solid var(--ink-100)', borderRadius: '12px', padding: '16px 18px', minWidth: 0 } },
-        h('div', { style: { fontSize: '13px', fontWeight: 700, color: 'var(--ink-900)' } }, title),
-        sub ? h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '2px' } }, sub) : null,
+        h('div', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } }, title),
+        sub ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, sub) : null,
         h('div', { style: { marginTop: '12px' } }, bodyEl));
 }
 function ownerTip() {
@@ -544,7 +544,7 @@ function ownerBars(items, { hue = '#0d8a72', tip, total = null } = {}) {
                 it.name || it.label),
             h('span', { style: { display: 'block', height: '14px', background: 'var(--ink-50, #f3f5f7)', borderRadius: '4px', overflow: 'hidden' } },
                 h('span', { style: { display: 'block', height: '100%', width: pctW + '%', background: it.color || hue, borderRadius: '0 4px 4px 0' } })),
-            h('span', { class: 'num', style: { fontSize: '12px', color: 'var(--ink-800)', fontVariantNumeric: 'tabular-nums' } },
+            h('span', { class: 'num', style: { fontSize: '12.5px', color: 'var(--ink-800)', fontVariantNumeric: 'tabular-nums' } },
                 it.value.toLocaleString('ru-RU') + (sum > 0 ? '  · ' + share + '%' : '')));
         row.addEventListener('mousemove', (e) => tip && tip.show(e.clientX, e.clientY, trf('{name}: {value} сум · {share}%', { name: it.name || it.label, value: it.value.toLocaleString('ru-RU'), share })));
         row.addEventListener('mouseleave', () => tip && tip.hide());
@@ -607,15 +607,15 @@ function ownerLine(points, { hue = '#0d8a72', tip } = {}) {
 }
 function ownerKpiTile(label, value, sub) {
     return h('div', { style: { background: 'var(--white)', border: '1px solid var(--ink-100)', borderRadius: '12px', padding: '14px 18px', minWidth: 0 } },
-        h('div', { class: 'muted', style: { fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' } }, label),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' } }, label),
         h('div', { class: 'num', style: { fontSize: '24px', fontWeight: 800, color: 'var(--ink-900)', marginTop: '4px', fontVariantNumeric: 'tabular-nums' } }, value),
-        sub ? h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '2px' } }, sub) : null);
+        sub ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, sub) : null);
 }
 
 export function renderOwnerCharts(el, d) {
     clear(el);
     if (!d || !d.kpis || (d.kpis.count === 0 && d.monthly.every(m => m.value === 0))) {
-        el.appendChild(h('div', { class: 'muted', style: { padding: '60px 20px', textAlign: 'center', fontSize: '13px' } },
+        el.appendChild(h('div', { class: 'muted', style: { padding: '60px 20px', textAlign: 'center', fontSize: '13.5px' } },
             'Нет данных за выбранный период. Попробуйте расширить диапазон дат или изменить филиалы.'));
         return;
     }
@@ -1000,9 +1000,9 @@ function reportCard(rep, ctx) {
             },
         }, Icon(rep.icon || 'Download', { size: 18 })),
         h('div', { style: { minWidth: 0 } },
-            h('div', { style: { fontSize: '14.5px', fontWeight: 700, color: 'var(--ink-900)' } }, rep.title),
-            h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '4px', lineHeight: 1.45 } }, rep.desc),
-            h('div', { style: { marginTop: '10px', fontSize: '12px', fontWeight: 600, color: 'var(--primary-700)', display: 'inline-flex', alignItems: 'center', gap: '5px' } },
+            h('div', { style: { fontSize: '15px', fontWeight: 700, color: 'var(--ink-900)' } }, rep.title),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px', lineHeight: 1.45 } }, rep.desc),
+            h('div', { style: { marginTop: '10px', fontSize: '12.5px', fontWeight: 600, color: 'var(--primary-700)', display: 'inline-flex', alignItems: 'center', gap: '5px' } },
                 'Открыть отчёт ', Icon('ArrowRight', { size: 12 })),
         ),
     );
@@ -1062,8 +1062,8 @@ async function openReportBuilder(rep, ctx) {
             style: { width: '36px', height: '36px', borderRadius: '10px', background: 'var(--primary-50)', color: 'var(--primary-700)', display: 'grid', placeItems: 'center' },
         }, Icon(rep.icon || 'Download', { size: 17 })),
         h('div', null,
-            h('div', { style: { fontSize: '16px', fontWeight: 700, color: 'var(--ink-900)' } }, rep.title),
-            h('div', { class: 'muted', style: { fontSize: '12px' } }, 'Выберите период и филиалы, затем сформируйте отчёт'),
+            h('div', { style: { fontSize: '17px', fontWeight: 700, color: 'var(--ink-900)' } }, rep.title),
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Выберите период и филиалы, затем сформируйте отчёт'),
         ),
         h('span', { style: { flex: 1 } }),
         // REPORT_CLOSE_RED_V1 — the close control must be unmissable
@@ -1090,7 +1090,7 @@ async function openReportBuilder(rep, ctx) {
     // REPORT_HDR_ONELINE_V1 — the date inputs live in their own wrap and are
     // shown ONLY on «Произвольный»; the presets already imply the range.
     const dateWrap = h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
-        fromInp, h('span', { class: 'muted', style: { fontSize: '12px' } }, '→'), toInp);
+        fromInp, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '→'), toInp);
     function syncDateEditability() {
         const editable = st.preset === 'custom';
         dateWrap.style.display = editable ? 'flex' : 'none';
@@ -1140,9 +1140,9 @@ async function openReportBuilder(rep, ctx) {
             background: 'var(--white)', border: '1px solid var(--ink-100)',
             borderRadius: '10px', maxHeight: '64px', overflow: 'auto', maxWidth: '440px',
         },
-    }, h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Загрузка филиалов…'));
+    }, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Загрузка филиалов…'));
     const masterCb  = h('input', { type: 'checkbox' });
-    const summaryEl = h('span', { class: 'muted', style: { fontSize: '11.5px' } });
+    const summaryEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } });
 
     function refreshBranchUI() {
         const total = st.branches.length;
@@ -1178,7 +1178,7 @@ async function openReportBuilder(rep, ctx) {
         st.branchIds = new Set(list.map(b => b.id));
         clear(branchListEl);
         if (!list.length) {
-            branchListEl.appendChild(h('span', { class: 'muted', style: { fontSize: '12px' } },
+            branchListEl.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } },
                 'Филиалы не найдены — отчёт будет сформирован по всей клинике.'));
         } else {
             for (const b of list) {
@@ -1260,7 +1260,7 @@ async function openReportBuilder(rep, ctx) {
         presetsEl,
         dateWrap,
         hubLabel('Филиалы', true),
-        h('label', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--ink-700)', cursor: 'pointer', whiteSpace: 'nowrap' } },
+        h('label', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', color: 'var(--ink-700)', cursor: 'pointer', whiteSpace: 'nowrap' } },
             masterCb, h('span', null, 'Выбрать все')),
         branchListEl,
         summaryEl,
@@ -1281,14 +1281,14 @@ async function openReportBuilder(rep, ctx) {
         clear(previewEl);
         previewEl.appendChild(h('div', {
             class: 'muted',
-            style: { padding: '60px 20px', textAlign: 'center', fontSize: '13px' },
+            style: { padding: '60px 20px', textAlign: 'center', fontSize: '13.5px' },
         }, msg || 'Настройте период и филиалы, затем нажмите «Сформировать отчёт» — данные появятся здесь.'));
     }
     function paintPreviewLoading() {
         clear(previewEl);
         previewEl.appendChild(h('div', {
             class: 'muted',
-            style: { padding: '60px 20px', textAlign: 'center', fontSize: '13px' },
+            style: { padding: '60px 20px', textAlign: 'center', fontSize: '13.5px' },
         }, 'Формируем отчёт…'));
     }
     function paintPreview() {
@@ -1302,15 +1302,15 @@ async function openReportBuilder(rep, ctx) {
         const CAP = 300;
         const shown = rows.slice(0, CAP);
         previewEl.appendChild(h('div', { class: 'row', style: { alignItems: 'center', gap: '10px', marginBottom: '10px' } },
-            h('span', { style: { fontSize: '13px', fontWeight: 700, color: 'var(--ink-900)' } },
+            h('span', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } },
                 trf('Строк: {n}', { n: rows.length })),
-            rows.length > CAP ? h('span', { class: 'muted', style: { fontSize: '12px' } },
+            rows.length > CAP ? h('span', { class: 'muted', style: { fontSize: '12.5px' } },
                 trf('— показаны первые {n}, в Excel попадут все', { n: CAP })) : null,
         ));
         // Wide table in its own horizontal scroller.
         const thStyle = {
             position: 'sticky', top: 0, background: 'var(--ink-50)', zIndex: 1,
-            padding: '8px 10px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
+            padding: '8px 10px', fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase',
             letterSpacing: '0.03em', color: 'var(--ink-600)', whiteSpace: 'nowrap', textAlign: 'left',
             borderBottom: '1px solid var(--ink-150, var(--ink-200))',
         };
@@ -1342,7 +1342,7 @@ async function openReportBuilder(rep, ctx) {
         previewEl.appendChild(h('div', {
             style: { overflow: 'auto', maxHeight: 'calc(100vh - 320px)', background: 'var(--white)', border: '1px solid var(--ink-100)', borderRadius: '12px' },
         },
-            h('table', { style: { borderCollapse: 'collapse', fontSize: '12px', minWidth: '100%' } },
+            h('table', { style: { borderCollapse: 'collapse', fontSize: '12.5px', minWidth: '100%' } },
                 h('thead', null, h('tr', null,
                     ...rep.columns.map(c => h('th', { style: { ...thStyle, textAlign: isNumCol[c.key] ? 'right' : 'left' } }, c.label)),
                 )),
@@ -1378,7 +1378,7 @@ async function openReportBuilder(rep, ctx) {
 function hubLabel(text, inline) {
     return h('div', {
         style: {
-            fontSize: '11px', fontWeight: 700, textTransform: 'uppercase',
+            fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase',
             letterSpacing: '0.05em', color: 'var(--ink-500)',
             marginBottom: inline ? 0 : '6px',
         },

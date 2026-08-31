@@ -84,7 +84,7 @@ function ensureWsStyle() {
         '.ws3>.ws-hide{display:none!important;}' +
         '.a4-sec-add{display:none;}' +
         '.a4-sec-off>.a4-sec-tag,.a4-sec-off>.a4-sec-x,.a4-sec-off>.a4-input{display:none!important;}' +
-        '.a4-sec-off>.a4-sec-add{display:block;width:100%;text-align:left;padding:8px 12px;margin:3px 0;border:1px dashed var(--ink-200);border-radius:8px;background:var(--ink-25);color:var(--ink-500);font:inherit;font-size:12px;font-weight:600;cursor:pointer;}' +
+        '.a4-sec-off>.a4-sec-add{display:block;width:100%;text-align:left;padding:8px 12px;margin:3px 0;border:1px dashed var(--ink-200);border-radius:8px;background:var(--ink-25);color:var(--ink-500);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;}' +
         '.a4-sec-off>.a4-sec-add:hover{border-color:var(--primary-300);color:var(--primary-700);}' +
         '.a4-sec-x{position:absolute;top:2px;right:2px;border:0;background:transparent;color:var(--ink-300);font-size:15px;line-height:1;cursor:pointer;padding:2px 6px;border-radius:6px;z-index:2;}' +
         '.a4-sec-x:hover{color:var(--crit-600);background:var(--ink-50);}' +
@@ -104,13 +104,13 @@ function ensureWsStyle() {
         // WS_DOCBAR_RESPONSIVE_V1 — patient group + controls group each wrap; reflow by width
         '.ws-docbar-left{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;min-width:0;flex:1 1 300px;}' +
         '.ws-docbar-right{display:flex;align-items:center;flex-wrap:wrap;gap:8px;justify-content:flex-end;flex:1 1 auto;}' +
-        '.ws-doctype-lbl{font-size:12px;font-weight:600;color:var(--ink-700);white-space:nowrap;}' +
+        '.ws-doctype-lbl{font-size:12.5px;font-weight:600;color:var(--ink-700);white-space:nowrap;}' +
         '.ws-pb-row1>b{overflow-wrap:anywhere;}' +
         '.ws-patient-block{flex:1 1 auto;}' +
         '.doc-bar select{max-width:100%;}' +
         '.ws-rtab-body{margin-top:12px;padding-top:10px;border-top:1px solid var(--ink-100);max-height:300px;overflow:auto;}' +
         '.a4-scroll{padding:12px !important;}' +   // WS_TOPLINE_V1 — a little more room for the document
-        '.ws-savemark{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;white-space:nowrap;}' +
+        '.ws-savemark{display:inline-flex;align-items:center;gap:4px;font-size:12.5px;font-weight:600;padding:3px 10px;border-radius:999px;white-space:nowrap;}' +
         '.ws-savemark.saved{color:var(--ok-700,#15803d);background:var(--ok-50,#f0fdf4);}' +
         '.ws-savemark.unsaved{color:var(--crit-700,#b91c1c);background:var(--crit-50,#fef2f2);}' +
         '.ws-savemark svg{width:13px;height:13px;}' +
@@ -301,10 +301,10 @@ async function loadVitals(ctx) {
 function vitalChip(label, value, unit, status) {
     const c = status === 'warn' ? 'var(--warn-700)' : status === 'crit' ? 'var(--crit-700)' : 'var(--ok-700)';
     return h('div', { style: { padding: '4px 9px', textAlign: 'center', minWidth: '56px' } },
-        h('div', { class: 'muted', style: { fontSize: '9.5px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' } }, label),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' } }, label),
         h('div', { class: 'num', style: { fontSize: '13.5px', fontWeight: 700, color: c, marginTop: '1px', lineHeight: 1 } },
             String(value),
-            h('span', { style: { fontSize: '9.5px', color: 'var(--ink-500)', fontWeight: 500, marginLeft: '2px' } }, unit),
+            h('span', { style: { fontSize: '12.5px', color: 'var(--ink-500)', fontWeight: 500, marginLeft: '2px' } }, unit),
         ),
     );
 }
@@ -328,7 +328,7 @@ function openEmrModal(ctx) {
     overlay.appendChild(h('div', { class: 'modal-card', style: { width: '640px', maxWidth: 'calc(100vw - 32px)' } },
         h('header', { class: 'modal-head' },
             h('h2', null, Icon('Doc', { size: 16 }), ' Вставить результаты',
-                h('span', { class: 'muted', style: { fontSize: '12px', fontWeight: '400', marginLeft: '8px' } }, 'выберите результат → «Вставить в документ»')),
+                h('span', { class: 'muted', style: { fontSize: '12.5px', fontWeight: '400', marginLeft: '8px' } }, 'выберите результат → «Вставить в документ»')),
             h('button', { class: 'modal-close', type: 'button', onclick: close }, '×')),
         h('div', { class: 'segmented', 'data-emr-tabs': '', style: { margin: '12px 14px 0', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)' } },
             emrTabBtn('all',         'Все'),
@@ -381,7 +381,7 @@ function patientCard(ctx, p) {
             Avatar({ initials: p.initials || '?', color: p.avColor || 'av-1', size: 'lg' }),
             h('div', { style: { flex: 1, minWidth: 0 } },
                 h('div', { style: { fontSize: '15px', fontWeight: 600, color: 'var(--ink-900)', letterSpacing: '-0.01em' } }, name),
-                h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '2px' } }, 'ID ' + (p.mrn || p.id || '—')),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, 'ID ' + (p.mrn || p.id || '—')),
             ),
         ),
         h('div', { style: { display: 'flex', flexDirection: 'column' } },
@@ -391,7 +391,7 @@ function patientCard(ctx, p) {
         ),
         (p.allergies && p.allergies.length)
             ? h('div', { style: { marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--ink-100)' } },
-                h('div', { class: 'muted', style: { fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '5px' } }, 'Аллергии'),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '5px' } }, 'Аллергии'),
                 Tag(p.allergies.join(', '), { kind: 'crit' }),
               )
             : null,
@@ -442,7 +442,7 @@ function recsCard(ctx) {
                 Icon('Plus', { size: 12 }), ' Добавить'),
         ),
         h('div', { 'data-recommendations-list': '', style: { padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: '8px' } }),
-        h('div', { class: 'muted', style: { padding: '0 14px 12px', fontSize: '11px' } },
+        h('div', { class: 'muted', style: { padding: '0 14px 12px', fontSize: '12.5px' } },
             'Реферальный бонус начисляется при выполнении.'),
     );
 }
@@ -562,12 +562,12 @@ function paintDispensed(ctx) {
                 h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } },
                     it.name,
                     h('span', { style: { color: 'var(--ink-500)', fontWeight: 500 } }, ' × ' + it.qty)),
-                h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     it.total.toLocaleString('ru-RU') + ' UZS'
                     + (it.invoiced ? ' · в счёте' : '')),
             ),
             (it.invoiced
-                ? h('span', { class: 'muted', style: { fontSize: '11px' }, title: 'Уже в счёте — отмена недоступна' }, Icon('Check', { size: 12 }))
+                ? h('span', { class: 'muted', style: { fontSize: '12.5px' }, title: 'Уже в счёте — отмена недоступна' }, Icon('Check', { size: 12 }))
                 : (canDeleteRole('consultation')
                     ? h('button', {
                         class: 'btn btn-ghost btn-sm', type: 'button', title: 'Отменить (вернуть на склад)',
@@ -660,14 +660,14 @@ function _pastePickField(ctx, html, defaultField, okMsg) {
             class: 'btn btn-outline', type: 'button',
             style: { justifyContent: 'flex-start', ...(isDef ? { borderColor: 'var(--primary-500)', color: 'var(--primary-700)', fontWeight: 700 } : {}) },
             onclick: () => { try { wsAddSection(ctx, sd.sec); } catch (e) {} a4InsertHtml(ctx, html, sd.field, okMsg || 'Вставлено в документ'); close(); },
-        }, sd.label, isDef ? h('span', { class: 'muted', style: { marginLeft: 'auto', fontSize: '11px', fontWeight: 400 } }, 'рекомендуется') : null));
+        }, sd.label, isDef ? h('span', { class: 'muted', style: { marginLeft: 'auto', fontSize: '12.5px', fontWeight: 400 } }, 'рекомендуется') : null));
     });
     overlay.appendChild(h('div', { class: 'modal-card', style: { width: '400px', maxWidth: 'calc(100vw - 32px)' } },
         h('header', { class: 'modal-head' },
             h('h2', { style: { margin: 0, fontSize: '15px' } }, Icon('Plus', { size: 15 }), ' Куда вставить?'),
             h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { class: 'modal-body' },
-            h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '10px' } }, 'Выберите раздел документа для вставки результата'),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } }, 'Выберите раздел документа для вставки результата'),
             list),
     ));
     document.body.appendChild(overlay);
@@ -708,7 +708,7 @@ function a4InsertHtml(ctx, html, field, okMsg) {
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 // Tiny alignment glyph helper (no align icons in the registry).
-function glyph(ch) { return h('span', { style: { fontSize: '13px' } }, ch); }
+function glyph(ch) { return h('span', { style: { fontSize: '13.5px' } }, ch); }
 
 // A2.3 rich-text + auto-insert toolbar. Formatting buttons fire on MOUSEDOWN
 // with preventDefault so the contentEditable keeps its selection/focus.
@@ -741,20 +741,20 @@ function fmtToolbar(ctx) {
             h('option', { value: v, selected: v === '3' ? '' : null }, l)),
     );
 
-    const bold = fb('Полужирный (Ctrl+B)', h('b', { style: { fontSize: '14px' } }, 'Ж'), exec('bold'));
-    const ital = fb('Курсив (Ctrl+I)', h('i', { style: { fontFamily: 'Georgia,serif', fontSize: '14px' } }, 'К'), exec('italic'));
-    const under = fb('Подчёркнутый (Ctrl+U)', h('u', { style: { fontSize: '14px' } }, 'Ч'), exec('underline'));
-    const strike = fb('Зачёркнутый', h('s', { style: { fontSize: '14px' } }, 'З'), exec('strikeThrough'));
+    const bold = fb('Полужирный (Ctrl+B)', h('b', { style: { fontSize: '13.5px' } }, 'Ж'), exec('bold'));
+    const ital = fb('Курсив (Ctrl+I)', h('i', { style: { fontFamily: 'Georgia,serif', fontSize: '13.5px' } }, 'К'), exec('italic'));
+    const under = fb('Подчёркнутый (Ctrl+U)', h('u', { style: { fontSize: '13.5px' } }, 'Ч'), exec('underline'));
+    const strike = fb('Зачёркнутый', h('s', { style: { fontSize: '13.5px' } }, 'З'), exec('strikeThrough'));
 
     const TEXT_COLORS = ['var(--ink-900)', 'var(--primary-600)', 'var(--crit-600)', 'var(--ok-600)', 'var(--warn-700)'];
     const HL_COLORS = ['#fff3bf', '#d3f9d8', '#ffe3e3', '#d0ebff'];   // highlight tints — hiliteColor needs literal hex
     const swatch = (c, cmd) => h('button', { class: 'sw', type: 'button', style: { background: c }, onmousedown: exec(cmd, c) });
     const colorPop = h('div', { class: 'fmt-pop-wrap' },
-        h('button', { class: 'fmt-b', type: 'button', 'data-tip': 'Цвет текста' }, h('span', { style: { fontWeight: '700', fontSize: '14px', color: 'var(--primary-600)' } }, 'A')),
+        h('button', { class: 'fmt-b', type: 'button', 'data-tip': 'Цвет текста' }, h('span', { style: { fontWeight: '700', fontSize: '13.5px', color: 'var(--primary-600)' } }, 'A')),
         h('div', { class: 'fmt-pop' }, ...TEXT_COLORS.map(c => swatch(c, 'foreColor'))),
     );
     const hlPop = h('div', { class: 'fmt-pop-wrap' },
-        h('button', { class: 'fmt-b', type: 'button', 'data-tip': 'Выделение цветом' }, h('span', { style: { background: '#fff3bf', padding: '0 4px', borderRadius: '3px', fontSize: '13px' } }, 'A')),
+        h('button', { class: 'fmt-b', type: 'button', 'data-tip': 'Выделение цветом' }, h('span', { style: { background: '#fff3bf', padding: '0 4px', borderRadius: '3px', fontSize: '13.5px' } }, 'A')),
         h('div', { class: 'fmt-pop' }, ...HL_COLORS.map(c => swatch(c, 'hiliteColor'))),
     );
 
@@ -766,7 +766,7 @@ function fmtToolbar(ctx) {
     const ol = fb('Нумерованный список', h('span', { style: { fontWeight: '700' } }, '1.'), exec('insertOrderedList'));
     const outd = fb('Уменьшить отступ', h('span', null, '⇤'), exec('outdent'));
     const ind = fb('Увеличить отступ', h('span', null, '⇥'), exec('indent'));
-    const quote = fb('Цитата', h('span', { style: { fontSize: '16px' } }, '“'), exec('formatBlock', 'blockquote'));
+    const quote = fb('Цитата', h('span', { style: { fontSize: '17px' } }, '“'), exec('formatBlock', 'blockquote'));
     const link = fb('Ссылка', h('span', null, '🔗'), (e) => { e.preventDefault(); const url = prompt('Ссылка (URL):', 'https://'); if (url) { document.execCommand('createLink', false, url); wsState.saved = false; resetSaveBtn(ctx); } });
     const clearF = fb('Очистить форматирование', h('span', null, '⌫'), exec('removeFormat'));
 
@@ -864,7 +864,7 @@ function soapForm(ctx) {
     // as a live read-only preview of that template (their data comes from other modules).
     const doctypeSel = h('select', {
         'data-doctype': '',
-        style: { height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: 'var(--r-sm)', background: 'var(--white)', fontFamily: 'inherit', fontSize: '13px', color: 'var(--ink-900)' },
+        style: { height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: 'var(--r-sm)', background: 'var(--white)', fontFamily: 'inherit', fontSize: '13.5px', color: 'var(--ink-900)' },
         onchange: (ev) => {
             wsState.docType = ev.currentTarget.value || 'conclusion';
             if (!wsState.blank) setBlankMode(ctx, true);
@@ -937,7 +937,7 @@ function soapForm(ctx) {
         onclick: () => { wsState.docZoom = Math.min(2, Math.max(0.5, Math.round(((wsState.docZoom || 1) + delta) * 10) / 10)); applyDocZoom(ctx); } }, sym);
     const zoomCtl = h('div', { title: 'Масштаб документа', style: { display: 'inline-flex', alignItems: 'center', gap: '3px' } },
         _zoomBtn('−', 'Уменьшить документ', -0.1),
-        h('span', { 'data-zoom-label': '', style: { fontSize: '12px', fontWeight: 600, color: 'var(--ink-700)', minWidth: '42px', textAlign: 'center' } }, Math.round((wsState.docZoom || 1) * 100) + '%'),
+        h('span', { 'data-zoom-label': '', style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-700)', minWidth: '42px', textAlign: 'center' } }, Math.round((wsState.docZoom || 1) * 100) + '%'),
         _zoomBtn('+', 'Увеличить документ', 0.1));
 
     const pcell = (label, value) => h('div', { class: 'a4-pcell' }, h('b', null, label), value);
@@ -1029,7 +1029,7 @@ function soapForm(ctx) {
                     h('div', { class: 'a4-dx-tools no-print' },
                         patientTabCanEdit('overview') && h('button', { class: 'btn btn-outline btn-sm', type: 'button', style: { background: '#fef9c3', borderColor: '#e6c74c', color: '#854d0e' }, onclick: () => openDiagnosisModal(ctx) },   // ICD_BTN_YELLOW_V1
                             Icon('Plus', { size: 12 }), ' Выбрать из МКБ-10'),
-                        h('span', { class: 'h-count', 'data-dx-count': '', style: { color: 'var(--ink-600)', fontSize: '12px' } }, ''),
+                        h('span', { class: 'h-count', 'data-dx-count': '', style: { color: 'var(--ink-600)', fontSize: '12.5px' } }, ''),
                     ),
                     h('div', { 'data-dx-list': '', class: 'no-print', style: { display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '8px' } }),
                 ),
@@ -1042,7 +1042,7 @@ function soapForm(ctx) {
                 h('div', { class: 'a4-actions no-print' },
                     h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-revisit-btn': '', onclick: () => openRevisitModal(ctx) },
                         Icon('Repeat', { size: 13 }), ' Повторный визит',
-                        h('span', { class: 'ws-ba-sub', style: { marginLeft: '6px', fontSize: '11px', color: 'var(--ink-600)' } })),
+                        h('span', { class: 'ws-ba-sub', style: { marginLeft: '6px', fontSize: '12.5px', color: 'var(--ink-600)' } })),
                     h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => openHospitalizationRequestModal(ctx) },
                         Icon('Bed', { size: 13 }), ' Заявка на госпитализацию'),
                 ),
@@ -1051,7 +1051,7 @@ function soapForm(ctx) {
                     h('div', null, h('b', null, 'ВРАЧ · SHIFOKOR'),
                         h('div', { class: 'a4-foot-name' }, svc.doctorName || me().full_name || '—'),
                         h('div', null, 'Врач-специалист'),
-                        h('div', { 'data-docphone': '', class: (wsState.docPhone ? '' : 'a4-sec-off'), style: { marginTop: '3px', fontSize: '12px' } },
+                        h('div', { 'data-docphone': '', class: (wsState.docPhone ? '' : 'a4-sec-off'), style: { marginTop: '3px', fontSize: '12.5px' } },
                             h('b', null, 'Тел.: '),
                             h('span', { class: 'a4-input', 'data-field': 'doctor_phone', contentEditable: 'true', 'data-ph': 'телефон врача', style: { display: 'inline-block', minWidth: '120px' }, oninput: () => { wsState.saved = false; } }))),
                     h('div', { style: { textAlign: 'right' } }, h('b', null, 'КОНТАКТ'),
@@ -1091,7 +1091,7 @@ function soapBlock(title, color, ...children) {
         h('div', {
             style: {
                 display: 'flex', alignItems: 'center', gap: '8px',
-                fontSize: '13px', fontWeight: 600, color: 'var(--ink-900)',
+                fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)',
                 paddingLeft: '8px',
                 borderLeft: `3px solid ${color}`,
                 lineHeight: '1.1',
@@ -1162,10 +1162,10 @@ function rightColumn(ctx) {
         // «Завершить приём» = sign + finalize.
         h('div', { style: { display: 'flex', gap: '8px' } },
             h('button', { class: 'btn btn-outline', type: 'button', 'data-ws-pause': '',
-                style: { minHeight: '34px', fontSize: '13px' }, onclick: () => pauseAndLeave(ctx) },
+                style: { minHeight: '34px', fontSize: '13.5px' }, onclick: () => pauseAndLeave(ctx) },
                 Icon('Pause', { size: 13 }), ' Пауза'),
             h('button', { class: 'ws-bigaction is-finish', type: 'button', 'data-ws-finish': '',
-                style: { flex: '1', minHeight: '34px', fontSize: '13px' }, onclick: () => tryFinish(ctx) },
+                style: { flex: '1', minHeight: '34px', fontSize: '13.5px' }, onclick: () => tryFinish(ctx) },
                 Icon('Check', { size: 14 }), ' Завершить приём'),
         ),
 
@@ -1224,7 +1224,7 @@ function paintRtab(ctx) {
                 h('div', { style: { width: '26px', height: '26px', borderRadius: '7px', background: 'var(--primary-50)', color: 'var(--primary-700)', display: 'grid', placeItems: 'center', flex: '0 0 auto' } }, Icon('Doc', { size: 13 })),
                 h('div', { style: { flex: 1, minWidth: 0 } },
                     h('div', { style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-900)' } }, 'Черновик'),
-                    h('div', { class: 'muted', style: { fontSize: '11px' } }, dateTimeShort(e.savedAt)),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, dateTimeShort(e.savedAt)),
                 ),
                 h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => { applyFields(ctx, e.fields); toast('Черновик загружен', 'ok'); } },
                     Icon('Repeat', { size: 12 }), ' Возобновить'),
@@ -1255,7 +1255,7 @@ function aiSuggestion(kind, iconName, text) {
     const bg = kind === 'warn' ? 'var(--warn-50)'  : kind === 'info' ? 'var(--info-50)'  : 'var(--ok-50)';
     return h('div', { style: { display: 'flex', gap: '8px', padding: '8px 10px', background: bg, borderRadius: '7px' } },
         h('span', { style: { color: c, marginTop: '1px', flex: '0 0 auto' } }, Icon(iconName, { size: 13 })),
-        h('span', { style: { fontSize: '12px', color: 'var(--ink-800)', lineHeight: '1.4' } }, text),
+        h('span', { style: { fontSize: '12.5px', color: 'var(--ink-800)', lineHeight: '1.4' } }, text),
     );
 }
 
@@ -1335,7 +1335,7 @@ async function openHospitalizationRequestModal(ctx) {
             h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { class: 'modal-body' },
             fld('Тип', pathwaySel), fld('Диагноз направления', dxInput), fld('Повод / жалобы', ccInput),
-            h('div', { class: 'muted', style: { fontSize: '11.5px' } }, 'Заявка появится в стационаре для оформления.')),
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Заявка появится в стационаре для оформления.')),
         h('footer', { class: 'modal-foot' }, h('button', { class: 'btn', onclick: close }, 'Отмена'), submit)));
     document.body.appendChild(overlay);
 }
@@ -1439,7 +1439,7 @@ async function openRevisitModal(ctx) {
             slotsWrap.appendChild(h('div', { class: 'rv-pickhint muted' }, Icon('Calendar', { size: 16 }), ' Выберите день, чтобы увидеть свободное время'));
             return;
         }
-        slotsWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', padding: '6px 0' } }, 'Загрузка…'));
+        slotsWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '6px 0' } }, 'Загрузка…'));
         const booked = await loadBookedSlots(doctorId, state.sel.y, state.sel.m, state.sel.d);
         clear(slotsWrap);
         // 20-min slots 08:00–19:00, lunch 13:00–14:00 disabled.
@@ -1706,7 +1706,7 @@ function paintEmr() {
         },
             Icon('Folder', { size: 24 }),
             h('div', { style: { fontSize: '12.5px', marginTop: '6px', fontWeight: 500 } }, 'Завершённых записей пока нет'),
-            h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '2px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
                 'Записи появятся после подписания услуги.'),
         ));
         return;
@@ -1730,19 +1730,19 @@ function paintEmr() {
                          color: accent, display: 'grid', placeItems: 'center', flex: '0 0 auto' },
             }, Icon(g.icon, { size: 13 })),
             h('span', {
-                style: { fontSize: '11px', fontWeight: 700, color: 'var(--ink-800)',
+                style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-800)',
                          letterSpacing: '0.05em', textTransform: 'uppercase' },
             }, g.label),
             h('span', { class: 'grow' }),
             h('span', {
                 class: 'num',
-                style: { fontSize: '11px', fontWeight: 700, color: accent,
+                style: { fontSize: '12.5px', fontWeight: 700, color: accent,
                          padding: '1px 8px', background: 'white',
                          border: '1px solid var(--ink-100)', borderRadius: '999px' },
             }, String(g.rows.length)),
         ));
         if (g.rows.length === 0) {
-            body.appendChild(h('div', { class: 'muted', style: { padding: '10px 14px', fontSize: '11.5px' } }, 'Нет'));
+            body.appendChild(h('div', { class: 'muted', style: { padding: '10px 14px', fontSize: '12.5px' } }, 'Нет'));
             continue;
         }
         g.rows.forEach(r => body.appendChild(emrRow(r, accent, g.id)));
@@ -1778,7 +1778,7 @@ function emrRow(r, accent, groupId) {
                          lineHeight: '1.35', wordBreak: 'break-word' },
                 title: r.serviceName,
             }, r.serviceName),
-            h('div', { class: 'row', style: { gap: '8px', marginTop: '4px', fontSize: '11px', color: 'var(--ink-600)', flexWrap: 'wrap' } },
+            h('div', { class: 'row', style: { gap: '8px', marginTop: '4px', fontSize: '12.5px', color: 'var(--ink-600)', flexWrap: 'wrap' } },
                 h('span', null, Icon('Calendar', { size: 10 }), ' ', dateLabel),
                 r.doctorName && h('span', null, Icon('Stethoscope', { size: 10 }), ' ', r.doctorName),
             ),
@@ -1786,9 +1786,9 @@ function emrRow(r, accent, groupId) {
         h('div', { style: { flex: '0 0 auto', textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px' } },
             r.total > 0 && h('div', {
                 class: 'num',
-                style: { fontSize: '11px', color: 'var(--ink-700)', fontWeight: 600, whiteSpace: 'nowrap' },
+                style: { fontSize: '12.5px', color: 'var(--ink-700)', fontWeight: 600, whiteSpace: 'nowrap' },
             }, r.total.toLocaleString('ru-RU'), h('span', { class: 'muted', style: { fontWeight: 500 } }, ' UZS')),
-            h('span', { class: 'muted', style: { fontSize: '10.5px' } }, Icon('ArrowRight', { size: 10 })),
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, Icon('ArrowRight', { size: 10 })),
         ),
     );
 }
@@ -1825,7 +1825,7 @@ async function openEmrResultModal(row, groupId) {
         h('header', { class: 'modal-head' },
             h('div', null,
                 h('h2', { style: { margin: 0 } }, Icon(groupId === 'labs' ? 'Flask' : groupId === 'diagnostics' ? 'Activity' : 'Stethoscope', { size: 16 }), ' ', row.serviceName),
-                h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '3px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '3px' } },
                     dateLabel, row.doctorName ? ' · ' + row.doctorName : ''),
             ),
             h('button', { class: 'modal-close', onclick: close }, '×'),
@@ -1906,7 +1906,7 @@ async function openStudyHistoryModal(ctx, mode) {
             h('div', { class: 'st-body' }, listEl, prev),
         ),
         h('footer', { class: 'modal-foot' },
-            h('span', { class: 'muted', style: { fontSize: '11.5px', marginRight: 'auto' } }, 'Выберите фрагмент и вставьте его в текущий приём'),
+            h('span', { class: 'muted', style: { fontSize: '12.5px', marginRight: 'auto' } }, 'Выберите фрагмент и вставьте его в текущий приём'),
             h('button', { class: 'btn', onclick: close }, 'Закрыть'),
         ),
     );
@@ -1937,7 +1937,7 @@ async function renderStudyPreview(ctx, prev, study, mode, close) {
         const bodyText = results.length
             ? results.map(r => `${esc(r.parameter)}: ${esc(r.value)}${r.unit ? ' ' + esc(r.unit) : ''}`).join('; ')
             : '—';
-        prev.appendChild(h('div', { style: { fontSize: '13px', color: 'var(--ink-800)', lineHeight: '1.5' } }, bodyText));
+        prev.appendChild(h('div', { style: { fontSize: '13.5px', color: 'var(--ink-800)', lineHeight: '1.5' } }, bodyText));
         prev.appendChild(h('button', { class: 'btn btn-primary btn-sm', style: { marginTop: '12px' }, onclick: () => {
             // i18n-exempt: HTML вставляется В ДОКУМЕНТ приёма
             const html = `<div><b>${esc(study.serviceName)} от ${dateLabel}.</b> ${bodyText}</div>`;
@@ -2010,14 +2010,14 @@ async function fillServiceConclusion(body, row) {
         body.appendChild(h('div', {
             style: { marginBottom: '12px', padding: '8px 10px', background: 'var(--ok-50)',
                      border: '1px solid #c7e8d2', borderRadius: '8px',
-                     fontSize: '11.5px', color: 'var(--ok-700)', fontWeight: 600,
+                     fontSize: '12.5px', color: 'var(--ok-700)', fontWeight: 600,
                      display: 'flex', alignItems: 'center', gap: '6px' },
         }, Icon('Check', { size: 12 }), ' Подписано · ', dateTimeShort(signed.savedAt)));
     } else {
         body.appendChild(h('div', {
             style: { marginBottom: '12px', padding: '8px 10px', background: 'var(--warn-50)',
                      border: '1px solid #f0d29b', borderRadius: '8px',
-                     fontSize: '11.5px', color: 'var(--warn-700)', fontWeight: 600 },
+                     fontSize: '12.5px', color: 'var(--warn-700)', fontWeight: 600 },
         }, 'Черновик (не подписан)'));
     }
     const f = latest.fields || {};
@@ -2061,7 +2061,7 @@ async function fillLabResults(body, row) {
         body.appendChild(h('div', {
             style: { marginBottom: '12px', padding: '8px 10px',
                      background: 'var(--warn-50)', border: '1px solid #f0d29b',
-                     borderRadius: '8px', fontSize: '11.5px', color: 'var(--warn-700)', fontWeight: 600 },
+                     borderRadius: '8px', fontSize: '12.5px', color: 'var(--warn-700)', fontWeight: 600 },
         }, Icon('Warning', { size: 12 }), ' ', String(flagged), ' показатель(ей) вне нормы'));
     }
     const tbl = h('table', { class: 'tbl', style: { fontSize: '12.5px' } },
@@ -2081,15 +2081,15 @@ async function fillLabResults(body, row) {
                 h('td', { class: 'num cell-strong', style: { textAlign: 'right', color: flagColor } },
                     r.value != null ? String(r.value) : '—'),
                 h('td', { class: 'muted' }, r.unit || '—'),
-                h('td', { class: 'muted num', style: { fontSize: '11.5px' } }, r.reference_range || '—'),
+                h('td', { class: 'muted num', style: { fontSize: '12.5px' } }, r.reference_range || '—'),
                 h('td', null, r.flag && r.flag !== 'normal'
                     ? h('span', {
-                        style: { fontSize: '10.5px', fontWeight: 700, color: flagColor,
+                        style: { fontSize: '12.5px', fontWeight: 700, color: flagColor,
                                  padding: '1px 7px', borderRadius: '999px',
                                  background: 'color-mix(in oklab, ' + flagColor + ' 10%, white)',
                                  textTransform: 'uppercase', letterSpacing: '0.04em' },
                     }, r.flag)
-                    : h('span', { class: 'muted', style: { fontSize: '11px' } }, '—')),
+                    : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '—')),
             );
         })),
     );
@@ -2288,8 +2288,8 @@ function paintRxDoc(ctx) {
     const els = ctx.container ? ctx.container.querySelectorAll('[data-rx-doc]') : null;
     if (!els || !els.length) return;
     const list = (wsState.payload && wsState.payload.prescriptions || []).filter(r => r && r.name);
-    const th = { textAlign: 'left', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--ink-500,#6b7285)', fontWeight: '700', padding: '0 8px 5px 0', borderBottom: '1.5px solid var(--ink-200,#e3e6ec)' };
-    const td = { padding: '6px 8px 6px 0', borderBottom: '1px solid var(--ink-100,#eef0f4)', fontSize: '13px', verticalAlign: 'top' };
+    const th = { textAlign: 'left', fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--ink-500,#6b7285)', fontWeight: '700', padding: '0 8px 5px 0', borderBottom: '1.5px solid var(--ink-200,#e3e6ec)' };
+    const td = { padding: '6px 8px 6px 0', borderBottom: '1px solid var(--ink-100,#eef0f4)', fontSize: '13.5px', verticalAlign: 'top' };
     for (const el of els) {
         el.replaceChildren();
         if (!list.length) { el.classList.add('a4-sec-off'); continue; }
@@ -2304,7 +2304,7 @@ function paintRxDoc(ctx) {
                 h('th', { style: th }, 'Длительность'))),
             h('tbody', null, list.map((r, i) => h('tr', null,
                 h('td', { style: Object.assign({}, td, { color: 'var(--primary-600,#167873)', fontWeight: '700' }) }, String(i + 1)),
-                h('td', { style: Object.assign({}, td, { fontWeight: '600' }) }, r.name, r.notes ? h('div', { style: { fontWeight: '400', fontStyle: 'italic', color: '#7a8290', fontSize: '11.5px', marginTop: '2px' } }, r.notes) : null, r.nurse ? h('div', { style: { fontWeight: '400', color: '#7a8290', fontSize: '11.5px', marginTop: '2px' } }, trf('Медсестре: {name}', { name: r.nurse })) : null),
+                h('td', { style: Object.assign({}, td, { fontWeight: '600' }) }, r.name, r.notes ? h('div', { style: { fontWeight: '400', fontStyle: 'italic', color: '#7a8290', fontSize: '12.5px', marginTop: '2px' } }, r.notes) : null, r.nurse ? h('div', { style: { fontWeight: '400', color: '#7a8290', fontSize: '12.5px', marginTop: '2px' } }, trf('Медсестре: {name}', { name: r.nurse })) : null),
                 h('td', { style: td }, r.dose || '—'),
                 h('td', { style: td }, r.freq || '—'),
                 h('td', { style: td }, r.dur || '—'))))));
@@ -2341,8 +2341,8 @@ function paintPrescriptions(ctx) {
                 h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } },
                     rx.name || '(без названия)',
                     rx.dose ? h('span', { style: { color: 'var(--ink-500)', fontWeight: 500 } }, ' · ' + rx.dose) : null),
-                meta && h('div', { class: 'muted', style: { fontSize: '11.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, meta),
-                rx.nurse && h('div', { style: { fontSize: '11.5px', color: 'var(--warn-700, #b45309)', marginTop: '2px' } }, trf('Медсестре: {name}', { name: rx.nurse })),
+                meta && h('div', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, meta),
+                rx.nurse && h('div', { style: { fontSize: '12.5px', color: 'var(--warn-700, #b45309)', marginTop: '2px' } }, trf('Медсестре: {name}', { name: rx.nurse })),
             ),
             h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: 'Изменить', onclick: () => openPrescriptionDialog(ctx, i) }, Icon('Edit', { size: 12 })),
             canDeleteRole('consultation') && h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: 'Удалить', style: { color: 'var(--crit-700)' }, onclick: () => removePrescription(ctx, i) }, Icon('Trash', { size: 12 })),
@@ -2529,10 +2529,10 @@ function paintRecommendations(ctx) {
                 h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } },
                     rec.__service_name,
                     isThisVisit && h('span', {
-                        style: { marginLeft: '6px', fontSize: '10px', fontWeight: 700, color: 'var(--info-700)', background: 'white', padding: '1px 6px', borderRadius: '999px', letterSpacing: '0.05em' },
+                        style: { marginLeft: '6px', fontSize: '12.5px', fontWeight: 700, color: 'var(--info-700)', background: 'white', padding: '1px 6px', borderRadius: '999px', letterSpacing: '0.05em' },
                     }, 'СЕЙЧАС'),
                 ),
-                h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     'Рекомендовал ', h('b', { style: { color: 'var(--info-700)' } }, rec.__doctor_name),
                     rec.notes ? ' · ' + rec.notes : '',
                     rec.__price != null ? ' · ' + Number(rec.__price).toLocaleString('ru-RU') + ' UZS' : '',
@@ -2602,7 +2602,7 @@ async function paintPatientDocs(ctx) {
         h('div', { style: { width: '26px', height: '26px', borderRadius: '7px', background: 'var(--primary-50)', color: 'var(--primary-700)', display: 'grid', placeItems: 'center', flex: '0 0 auto' } }, Icon('Doc', { size: 13 })),
         h('div', { style: { flex: 1, minWidth: 0 } },
             h('div', { style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, d.title || DOC_LABEL[d.doc_type] || 'Документ'),
-            h('div', { class: 'muted', style: { fontSize: '11px' } }, dateTimeShort(d.created_at)),
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, dateTimeShort(d.created_at)),
         ),
         h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => openPatientDoc(ctx, d) }, Icon('ArrowRight', { size: 12 }), ' Открыть'),
     )));
@@ -2687,13 +2687,13 @@ function historyRow(item, isFirst, ctx, originalIdx) {
             h('div', { style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-900)' } }, meta.title),
             meta.subtitle && h('div', {
                 class: 'muted',
-                style: { fontSize: '11.5px', marginTop: '1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                style: { fontSize: '12.5px', marginTop: '1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
                 title: meta.subtitle,
             }, meta.subtitle),
         ),
         h('div', { style: { flex: '0 0 auto', textAlign: 'right' } },
-            h('div', { class: 'num', style: { fontSize: '11.5px', color: 'var(--ink-700)', fontWeight: 600, whiteSpace: 'nowrap' } }, shortTime(item.savedAt)),
-            h('div', { class: 'muted num', style: { fontSize: '10.5px', whiteSpace: 'nowrap' } }, dateOnly(item.savedAt)),
+            h('div', { class: 'num', style: { fontSize: '12.5px', color: 'var(--ink-700)', fontWeight: 600, whiteSpace: 'nowrap' } }, shortTime(item.savedAt)),
+            h('div', { class: 'muted num', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, dateOnly(item.savedAt)),
         ),
         trashBtn,
         h('span', {
@@ -2779,16 +2779,16 @@ function syncSections(ctx) {
 }
 function paintSectionManager(ctx, bar) {
     ensureDocSections(); clear(bar);
-    bar.appendChild(h('span', { style: { fontSize: '11px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.04em', marginRight: '2px' } }, 'Разделы'));
+    bar.appendChild(h('span', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.04em', marginRight: '2px' } }, 'Разделы'));
     for (const sdef of DOC_SECTIONS) {
         if (!wsState.docSections.has(sdef.sec)) continue;
-        bar.appendChild(h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 5px 3px 10px', background: 'var(--info-50)', border: '1px solid #c7dcfd', borderRadius: '999px', fontSize: '12px', fontWeight: 560, color: 'var(--ink-800)' } },
+        bar.appendChild(h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 5px 3px 10px', background: 'var(--info-50)', border: '1px solid #c7dcfd', borderRadius: '999px', fontSize: '12.5px', fontWeight: 560, color: 'var(--ink-800)' } },
             sdef.label,
             h('button', { type: 'button', title: 'Убрать раздел', style: { border: '0', background: 'transparent', cursor: 'pointer', color: 'var(--ink-500)', fontSize: '15px', lineHeight: '1', padding: '0 2px' }, onclick: () => wsRemoveSection(ctx, sdef.sec) }, '×')));
     }
     const inactive = DOC_SECTIONS.filter(sd => !wsState.docSections.has(sd.sec));
     if (inactive.length) {
-        const sel = h('select', { style: { height: '28px', padding: '0 8px', border: '1px dashed var(--ink-300)', borderRadius: '999px', fontSize: '12px', color: 'var(--primary-700, #1a7f77)', background: 'var(--surface, #fff)', cursor: 'pointer' },
+        const sel = h('select', { style: { height: '28px', padding: '0 8px', border: '1px dashed var(--ink-300)', borderRadius: '999px', fontSize: '12.5px', color: 'var(--primary-700, #1a7f77)', background: 'var(--surface, #fff)', cursor: 'pointer' },
             onchange: (e) => { const v = e.target.value; if (v) wsAddSection(ctx, v); } },
             h('option', { value: '' }, '+ Добавить раздел'),
             ...inactive.map(sd => h('option', { value: sd.sec }, sd.label)));
@@ -3203,7 +3203,7 @@ function openTemplateLibraryModal(ctx) {
                 h('div', { class: 'tplm-item-main' },
                     h('div', { class: 'tplm-name' }, t.name || '—'),
                     h('div', { class: 'tplm-by' }, (t.author_name || '—') + ' · ' + tplDate(t.updated_at)),
-                    h('div', { class: 'tplm-meta' }, scopePill(t.scope), h('span', { class: 'muted', style: { fontSize: '11px', marginLeft: '6px' } }, tplTypeOf(t.doc_type).dt === 1 ? '· Диагностика' : '· Приём')),
+                    h('div', { class: 'tplm-meta' }, scopePill(t.scope), h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '6px' } }, tplTypeOf(t.doc_type).dt === 1 ? '· Диагностика' : '· Приём')),
                 ),
                 rowact,
             );
@@ -3234,7 +3234,7 @@ function openTemplateLibraryModal(ctx) {
             h('div', { style: { minWidth: 0 } },
                 h('div', { class: 'tplm-view-name' }, sel.name || '—'),
                 h('div', { class: 'tplm-meta' }, scopePill(sel.scope),
-                    h('span', { class: 'muted', style: { fontSize: '12px' } }, (sel.author_name || '—') + ' · ' + tplDate(sel.updated_at))),
+                    h('span', { class: 'muted', style: { fontSize: '12.5px' } }, (sel.author_name || '—') + ' · ' + tplDate(sel.updated_at))),
             ),
             acts,
         ));
@@ -3286,7 +3286,7 @@ function openTemplateLibraryModal(ctx) {
             Icon('Doc', { size: 14 }), ' Из текущего документа');
 
         detailEl.appendChild(h('div', { class: 'tplm-form' },
-            h('b', { style: { fontSize: '14px', color: 'var(--ink-900)' } }, d.id ? 'Изменение шаблона' : 'Новый шаблон'),
+            h('b', { style: { fontSize: '13.5px', color: 'var(--ink-900)' } }, d.id ? 'Изменение шаблона' : 'Новый шаблон'),
             h('div', { class: 'tplm-field' },
                 h('label', null, 'Название'), nameIn),
             h('div', { class: 'tplm-field' },
@@ -3309,7 +3309,7 @@ function openTemplateLibraryModal(ctx) {
                     } }, Icon('Doc', { size: 13 }), ' ' + _T.label)))),
             h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
                 fromDoc,
-                h('span', { class: 'muted', style: { fontSize: '12px' } }, 'или заполните секции вручную')),
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'или заполните секции вручную')),
             secFields,
         ));
     }
@@ -3325,7 +3325,7 @@ function openTemplateLibraryModal(ctx) {
                 Icon('Check', { size: 14 }), ' Сохранить шаблон'));
             return;
         }
-        footEl.appendChild(h('span', { class: 'muted', style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px' } },
+        footEl.appendChild(h('span', { class: 'muted', style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12.5px' } },
             trf('{n} шаблон(ов)', { n: tplState.rows.length }), ' · ', Icon('Globe', { size: 12 }), ' общие видны всем врачам клиники'));
         footEl.appendChild(h('span', { class: 'grow' }));
         footEl.appendChild(h('button', { class: 'btn btn-ghost', type: 'button', onclick: close }, 'Закрыть'));
@@ -3420,7 +3420,7 @@ function paintOwnServices(ctx) {
     }
     items.forEach((svc, i) => list.appendChild(h('div', { class: 'cn-dx-row' },
         h('span', { class: 'cn-dx-name' }, svc.name || '—'),
-        h('span', { class: 'num', style: { fontSize: '12px', color: 'var(--ink-700)', whiteSpace: 'nowrap' } },
+        h('span', { class: 'num', style: { fontSize: '12.5px', color: 'var(--ink-700)', whiteSpace: 'nowrap' } },
             (svc.price != null ? Number(svc.price).toLocaleString('ru-RU') : '—'), ' сум'),
         patientTabCanEdit('services') && h('button', {   // AURORA_DX_DELETE_GATE_V1 — the doctor can remove a service they added
             class: 'btn btn-ghost btn-sm', type: 'button', title: 'Удалить', style: { color: 'var(--crit-700)' },
@@ -3699,7 +3699,7 @@ function openSnapshotModal(ctx, item) {
                 }, Icon(meta.icon, { size: 14 })),
                 h('div', null,
                     h('h2', { style: { margin: 0 } }, meta.title),
-                    h('div', { class: 'muted num', style: { fontSize: '11.5px', marginTop: '2px' } }, when),
+                    h('div', { class: 'muted num', style: { fontSize: '12.5px', marginTop: '2px' } }, when),
                 ),
             ),
             h('button', { class: 'modal-close', onclick: close }, '×'),
@@ -3717,11 +3717,11 @@ function snapshotKv(label, value, block) {
     return h('div', { style: { marginBottom: '12px' } },
         h('div', {
             class: 'muted',
-            style: { fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' },
+            style: { fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' },
         }, label),
         h('div', {
             style: {
-                fontSize: '13px', color: 'var(--ink-900)',
+                fontSize: '13.5px', color: 'var(--ink-900)',
                 padding: block ? '8px 10px' : '0',
                 background: block ? 'var(--ink-25)' : 'transparent',
                 border: block ? '1px solid var(--ink-100)' : 0,
@@ -3829,7 +3829,7 @@ async function openRecommendPickerModal(ctx) {
     card.appendChild(h('div', { class: 'modal-body', style: { display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
         searchInp, chipsEl, listEl));
     card.appendChild(h('footer', { class: 'modal-foot' },
-        h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Каждая кнопка добавляет рекомендацию сразу.'),
+        h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Каждая кнопка добавляет рекомендацию сразу.'),
         h('span', { class: 'grow' }),
         h('button', { class: 'btn btn-primary', onclick: () => overlay.remove() }, 'Готово')));
     document.body.appendChild(overlay);
@@ -3884,13 +3884,13 @@ async function openRecommendPickerModal(ctx) {
                 } }, isAdded ? '✓ Добавлено' : '+ Рекомендовать');
             listEl.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '9px 12px', background: 'var(--white)', border: '1px solid var(--ink-100)', borderRadius: '10px' } },
                 h('div', { style: { flex: '1 1 auto', minWidth: 0 } },
-                    h('div', { style: { fontWeight: 600, fontSize: '13px' } }, s.name),
-                    h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+                    h('div', { style: { fontWeight: 600, fontSize: '13.5px' } }, s.name),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                         typeName(s) + (s.duration_minutes ? ' · ' + trf('{n} мин', { n: s.duration_minutes }) : ''))),
                 h('div', { class: 'cell-mono', style: { whiteSpace: 'nowrap', fontWeight: 600 } }, Number(s.price || 0).toLocaleString('ru-RU'), ' сум'),
                 btn));
         }
-        if (rows.length > 200) listEl.appendChild(h('div', { class: 'muted', style: { padding: '8px', fontSize: '11.5px' } }, 'Показаны первые 200 — уточните поиск.'));
+        if (rows.length > 200) listEl.appendChild(h('div', { class: 'muted', style: { padding: '8px', fontSize: '12.5px' } }, 'Показаны первые 200 — уточните поиск.'));
     }
     paintChips(); paintList();
 }
@@ -4055,6 +4055,7 @@ async function openRecipeModal(ctx) {
     const svc = p.__service || {};
     const patientName = `${p.lastName || ''} ${p.firstName || ''} ${p.middle || ''}`.trim() || p.fullName || 'Пациент';
     /* i18n-exempt-start: «Рецепт» — печатный бланк (Rp., ru+uz), содержимое документа */
+    /* type-scale-exempt-start: печатный документ — семейство Onest, размеры остаются его выверенными метриками (дизайн-док 2026-08-31) */
     const ageStr = (p.age != null && p.age !== '') ? (String(p.age) + ' лет') : '—';
     const sexStr = (p.gender === 'M' ? 'Муж.' : p.gender === 'F' ? 'Жен.' : (p.gender || '—'));
     const dob = p.dob || p.birthDate || '—';
@@ -4211,6 +4212,7 @@ ${PRINT_FONT_FACE_CSS}
         w.document.write(html);
         w.document.close();
     }
+    /* type-scale-exempt-end */
     /* i18n-exempt-end */
 
     // -------- modal chassis (canonical openPrescriptionDialog pattern) --------
@@ -4427,9 +4429,9 @@ function _wireBlankPreview(ctx, frame) {
     const doc = frame.contentDocument;
     const st = doc.createElement('style');
     st.textContent = '.bk-pagesep{position:relative;display:block;}' +
-        '.bk-pageedge{position:absolute;left:-60px;right:-60px;height:26px;background:#dde5e3;box-shadow:inset 0 7px 7px -7px rgba(0,0,0,.3), inset 0 -7px 7px -7px rgba(0,0,0,.3);text-align:center;font:700 8.5px/26px "Onest",Arial,sans-serif;letter-spacing:.14em;color:#7b908c;}' +
+        '.bk-pageedge{position:absolute;left:-60px;right:-60px;height:26px;background:#dde5e3;box-shadow:inset 0 7px 7px -7px rgba(0,0,0,.3), inset 0 -7px 7px -7px rgba(0,0,0,.3);text-align:center;font:700 12.5px/26px "Onest",Arial,sans-serif;letter-spacing:.14em;color:#7b908c;}' +
         '@media print{.bk-pagesep{display:none !important;}.bk-preview-note{display:none;}}' +
-        '.bk-preview-note{background:#fff7e6;border:1px solid #f0d9a8;color:#8a6d1f;font:600 11px/1.45 "Onest",Arial,sans-serif;padding:8px 12px;border-radius:8px;margin:10px;}';
+        '.bk-preview-note{background:#fff7e6;border:1px solid #f0d9a8;color:#8a6d1f;font:600 12.5px/1.45 "Onest",Arial,sans-serif;padding:8px 12px;border-radius:8px;margin:10px;}';
     doc.head.appendChild(st);
     const note = doc.createElement('div');
     note.className = 'bk-preview-note';
@@ -4504,12 +4506,12 @@ function _wireBlankEditing(ctx, frame) {
         '[data-field]{min-height:3.2em;padding:2px 0;transition:background .12s;outline:none;}' +
         '[data-field]:empty::before{content:"' + tr('Нажмите, чтобы заполнить…') + '";color:#9fb3b0;font-style:italic;}' +
         '.bk-pagesep{position:relative;display:block;}' +
-        '.bk-pageedge{position:absolute;left:-60px;right:-60px;height:26px;background:#dde5e3;box-shadow:inset 0 7px 7px -7px rgba(0,0,0,.3), inset 0 -7px 7px -7px rgba(0,0,0,.3);text-align:center;font:700 8.5px/26px "Onest",Arial,sans-serif;letter-spacing:.14em;color:#7b908c;}' +
+        '.bk-pageedge{position:absolute;left:-60px;right:-60px;height:26px;background:#dde5e3;box-shadow:inset 0 7px 7px -7px rgba(0,0,0,.3), inset 0 -7px 7px -7px rgba(0,0,0,.3);text-align:center;font:700 12.5px/26px "Onest",Arial,sans-serif;letter-spacing:.14em;color:#7b908c;}' +
         '@media print{.bk-pagesep{display:none !important;}}' +
         '.dx .dh{display:flex;align-items:baseline;}' +
-        '.bk-rm{margin-left:auto;border:0;background:transparent;color:#c3ccd6;font-size:14px;line-height:1;cursor:pointer;padding:0 2px 0 8px;}' +
+        '.bk-rm{margin-left:auto;border:0;background:transparent;color:#c3ccd6;font-size:13.5px;line-height:1;cursor:pointer;padding:0 2px 0 8px;}' +
         '.bk-rm:hover{color:#dc2626;}' +
-        '.bk-add{display:block;width:100%;text-align:left;margin:7px 0;padding:8px 12px;border:1px dashed #cbd5e1;border-radius:8px;background:#f8fafc;color:#64748b;font:600 11px/1.2 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;}' +
+        '.bk-add{display:block;width:100%;text-align:left;margin:7px 0;padding:8px 12px;border:1px dashed #cbd5e1;border-radius:8px;background:#f8fafc;color:#64748b;font:600 12.5px/1.2 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;}' +
         '.bk-add:hover{border-color:var(--accent,#1a7f77);color:var(--accent,#1a7f77);}' +
         '.bk-ctl{margin-left:auto;display:inline-flex;align-items:center;gap:1px;}' +
         '.bk-up,.bk-dn{border:0;background:transparent;color:#9aa4b0;cursor:pointer;padding:2px 3px;border-radius:5px;display:inline-flex;align-items:center;}' +
@@ -4518,7 +4520,7 @@ function _wireBlankEditing(ctx, frame) {
         // PAPER_A4_KEEP_V1 — keep the full A4 page (no min-height override); buttons stack vertically.
         '[data-ws-actions]{display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;gap:8px;margin:16px 0 4px;}' +
         '[data-ws-actions] .ws-actbreak{flex-basis:100%;height:0;margin:0;}' +   // forces «Тел. врача» onto its own line
-        '[data-ws-actions] button{display:inline-flex;align-items:center;gap:6px;padding:8px 13px;border:1px solid #a7f3d0;border-radius:8px;background:#ecfdf5;color:#065f46;font:600 12px/1 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;}' +
+        '[data-ws-actions] button{display:inline-flex;align-items:center;gap:6px;padding:8px 13px;border:1px solid #a7f3d0;border-radius:8px;background:#ecfdf5;color:#065f46;font:600 12.5px/1 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;}' +
         '[data-ws-actions] button svg{width:15px;height:15px;flex:0 0 auto;}' +
         '[data-ws-actions] button:hover{border-color:#34d399;background:#d1fae5;}' +
         // DX_PLAIN_SECTION_V1 — in the editor the Диагноз block looks like every
@@ -4526,9 +4528,9 @@ function _wireBlankEditing(ctx, frame) {
         '.dx{background:#fff !important;border:1px solid #e2e8f0 !important;border-left:1px solid #e2e8f0 !important;border-radius:8px !important;padding:9px 12px 10px !important;margin:8px 0 !important;}' +
         '.dx:focus-within{border-color:var(--accent,#1a7f77) !important;box-shadow:0 0 0 2px rgba(22,120,115,.14);}' +
         '.dx .dh .ru,.dx .dh{color:#334155 !important;}' +
-        '.bk-icd{display:inline-flex;align-items:center;gap:6px;margin-top:7px;padding:7px 12px;border:1px dashed #e6c74c;border-radius:8px;background:#fef9c3;color:#854d0e;font:600 11.5px/1.2 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;}' + /* ICD_BTN_YELLOW_V1 */
+        '.bk-icd{display:inline-flex;align-items:center;gap:6px;margin-top:7px;padding:7px 12px;border:1px dashed #e6c74c;border-radius:8px;background:#fef9c3;color:#854d0e;font:600 12.5px/1.2 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;}' + /* ICD_BTN_YELLOW_V1 */
         '.bk-icd:hover{border-color:#ca8a04;background:#fef08a;color:#713f12;}' +
-        '.bk-recrm{margin-left:auto;border:0;background:transparent;color:#dc2626;font:600 11px/1 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;padding:2px 6px;border-radius:6px;opacity:.75;white-space:nowrap;}' +
+        '.bk-recrm{margin-left:auto;border:0;background:transparent;color:#dc2626;font:600 12.5px/1 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;padding:2px 6px;border-radius:6px;opacity:.75;white-space:nowrap;}' +
         '.svc .si,.recs li{display:flex;align-items:baseline;gap:6px;}' +   // REC_RM_INLINE_V1 — «Удалить» stays on the SAME line, pinned right
         '.recs li::before{content:"•";color:var(--accent,#1a7f77);}' +
         '.bk-recrm:hover{background:#fee2e2;opacity:1;}' +
@@ -4594,7 +4596,7 @@ function _wireBlankEditing(ctx, frame) {
         const fbar = doc.createElement('div');
         fbar.setAttribute('data-bk-fmt', '');
         fbar.style.cssText = 'position:absolute;display:none;z-index:99999;background:#111827;border-radius:8px;padding:3px;box-shadow:0 6px 18px rgba(0,0,0,.28);white-space:nowrap;';
-        const fbBtn = (cmd, label, val) => `<button type="button" data-cmd="${cmd}"${val ? ` data-val="${val}"` : ''} style="border:0;background:transparent;color:#fff;font:600 13px/1 Arial,sans-serif;cursor:pointer;padding:5px 8px;border-radius:5px;">${label}</button>`;
+        const fbBtn = (cmd, label, val) => `<button type="button" data-cmd="${cmd}"${val ? ` data-val="${val}"` : ''} style="border:0;background:transparent;color:#fff;font:600 13.5px/1 Arial,sans-serif;cursor:pointer;padding:5px 8px;border-radius:5px;">${label}</button>`;
         fbar.innerHTML =
             fbBtn('bold', tr('<b>Ж</b>')) + fbBtn('italic', tr('<i>К</i>')) + fbBtn('underline', tr('<u>Ч</u>')) + fbBtn('strikeThrough', tr('<s>З</s>')) +
             fbBtn('foreColor', '<span style="color:#4dabf7">A</span>', '#1971c2') +

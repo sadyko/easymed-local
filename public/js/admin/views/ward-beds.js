@@ -142,9 +142,9 @@ function kpiStrip(counts, root) {
             },
             onclick: () => { state.statusFilter = active ? 'all' : key; paint(root); },
         },
-            h('div', { class: 'muted', style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.04em' } }, label),
-            h('div', { style: { fontSize: '22px', fontWeight: 700, marginTop: '2px' } }, String(counts[key])),
-            sub ? h('div', { class: 'muted', style: { fontSize: '11px' } }, sub) : null,
+            h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '.04em' } }, label),
+            h('div', { style: { fontSize: '24px', fontWeight: 700, marginTop: '2px' } }, String(counts[key])),
+            sub ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, sub) : null,
         );
     };
     return h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '12px', marginBottom: '14px' } },
@@ -177,8 +177,8 @@ function wardCard(ward, beds, data, root) {
             h('h3', null,
                 ward.color ? h('span', { style: { display: 'inline-block', width: '10px', height: '10px', borderRadius: '3px', background: ward.color, marginRight: '7px' } }) : null,
                 ward.name,
-                h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '12px', marginLeft: '8px' } }, (ward.type || 'general') + ' · ' + (ward.billing_mode || 'daily'))),
-            h('span', { class: 'muted', style: { fontSize: '12px' } }, beds.length + ' beds'),
+                h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '12.5px', marginLeft: '8px' } }, (ward.type || 'general') + ' · ' + (ward.billing_mode || 'daily'))),
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, beds.length + ' beds'),
         ),
         tiles,
     );
@@ -196,22 +196,22 @@ function bedTile(bed, ward, data, root) {
         onclick: () => onBedClick(bed, ward, adm, root),
     },
         h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
-            h('strong', { style: { fontSize: '13px' } }, bed.code),
-            h('span', { style: { fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', color: style.fg } }, style.label),
+            h('strong', { style: { fontSize: '13.5px' } }, bed.code),
+            h('span', { style: { fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', color: style.fg } }, style.label),
         ),
     );
     if (adm) {
         const p = adm.patients || {};
         tile.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '7px', marginTop: '2px' } },
-            h('span', { style: { width: '22px', height: '22px', borderRadius: '50%', background: 'var(--primary-600, #1f7a72)', color: '#fff', fontSize: '9px', fontWeight: 700, display: 'grid', placeItems: 'center', flex: '0 0 22px' } }, initials(p.full_name || '?')),
+            h('span', { style: { width: '22px', height: '22px', borderRadius: '50%', background: 'var(--primary-600, #1f7a72)', color: '#fff', fontSize: '12.5px', fontWeight: 700, display: 'grid', placeItems: 'center', flex: '0 0 22px' } }, initials(p.full_name || '?')),
             h('div', { style: { minWidth: 0 } },
-                h('div', { style: { fontSize: '12px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, p.full_name || '—'),
-                h('div', { class: 'muted', style: { fontSize: '10.5px' } }, (p.mrn ? p.mrn + ' · ' : '') + lengthOfStay(adm.admitted_at)),
+                h('div', { style: { fontSize: '12.5px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, p.full_name || '—'),
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } }, (p.mrn ? p.mrn + ' · ' : '') + lengthOfStay(adm.admitted_at)),
             ),
         ));
-        if (adm.users && adm.users.full_name) tile.appendChild(h('div', { class: 'muted', style: { fontSize: '10.5px', display: 'flex', alignItems: 'center', gap: '4px' } }, Icon('Stethoscope', { size: 11 }), adm.users.full_name));
+        if (adm.users && adm.users.full_name) tile.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', display: 'flex', alignItems: 'center', gap: '4px' } }, Icon('Stethoscope', { size: 11 }), adm.users.full_name));
     } else {
-        tile.appendChild(h('div', { class: 'muted', style: { fontSize: '11px', marginTop: 'auto' } },
+        tile.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: 'auto' } },
             st === 'free' ? 'Tap to admit' : (bed.type && bed.type !== 'standard' ? bed.type : '—')));
     }
     return tile;
@@ -268,7 +268,7 @@ function admitModal(bed, ward, root) {
         h('span', { style: { position: 'absolute', left: '11px', top: '21px', transform: 'translateY(-50%)', color: 'var(--ink-400)', display: 'flex', pointerEvents: 'none' } }, Icon('Search', { size: 14 })),
         searchInp);
     const results = h('div', { style: { border: '1px solid var(--ink-100)', borderRadius: '8px', marginTop: '4px', maxHeight: '160px', overflow: 'auto', display: 'none' } });
-    const chosen = h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '4px' } });
+    const chosen = h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } });
     let timer = null;
     searchInp.addEventListener('input', () => {
         patientId = null; chosen.textContent = '';
@@ -289,7 +289,7 @@ function admitModal(bed, ward, root) {
             }
             for (const p of data) {
                 results.appendChild(h('div', {
-                    style: { padding: '7px 10px', cursor: 'pointer', fontSize: '13px' },
+                    style: { padding: '7px 10px', cursor: 'pointer', fontSize: '13.5px' },
                     onmouseover: (e) => e.currentTarget.style.background = 'var(--ink-25)',
                     onmouseout: (e) => e.currentTarget.style.background = 'transparent',
                     onclick: () => { patientId = p.id; searchInp.value = p.full_name; chosen.textContent = trf('Выбран: {name}', { name: p.full_name + (p.mrn ? ' · ' + p.mrn : '') }); results.style.display = 'none'; },
@@ -327,7 +327,7 @@ function admitModal(bed, ward, root) {
         [
             h('div', {
                 style: { padding: '9px 12px', background: 'var(--primary-25, #f2faf8)', border: '1px solid var(--primary-100, #d7efe9)',
-                         borderRadius: '10px', fontSize: '13px', fontWeight: 700, color: 'var(--primary-700)',
+                         borderRadius: '10px', fontSize: '13.5px', fontWeight: 700, color: 'var(--primary-700)',
                          display: 'flex', alignItems: 'center', gap: '7px' },
             }, Icon('Bed', { size: 14 }), trf('Палата {ward} · Койка {bed}', { ward: ward ? ward.name : '—', bed: bed.code })),
             field('Пациент', h('div', null,
@@ -395,7 +395,7 @@ function bedDetailModal(bed, ward, adm, root) {
                 h('span', { style: { width: '40px', height: '40px', borderRadius: '999px', background: 'var(--primary-600)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 700 } }, initials(p.full_name || '?')),
                 h('div', { style: { minWidth: 0 } },
                     h('div', { style: { fontWeight: 700, fontSize: '15px' } }, p.full_name || '—'),
-                    h('div', { class: 'muted', style: { fontSize: '12px' } }, [p.mrn, adm.chief_complaint].filter(Boolean).join(' · ')))),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [p.mrn, adm.chief_complaint].filter(Boolean).join(' · ')))),
             h('div', { style: { borderTop: '1px solid var(--ink-100)', margin: '12px 0' } }),
             kvRow('Admission #', adm.admission_no || ('#' + adm.id)),
             kvRow('Pathway', adm.pathway === 'surgical' ? 'Surgical' : 'Therapy'),
@@ -409,7 +409,7 @@ function bedDetailModal(bed, ward, adm, root) {
 
         const est = estimateCharge(ward, bed, adm.admitted_at, Number(discInp.value) || 0);
         leftEl.appendChild(h('div', { class: 'card', style: { padding: '16px', background: 'var(--primary-25, #f2faf8)', border: '1px solid var(--primary-100, #d7efe9)' } },
-            h('div', { style: { fontSize: '11px', fontWeight: 800, letterSpacing: '.06em', color: 'var(--primary-700)', marginBottom: '8px' } }, 'ACCOMMODATION'),
+            h('div', { style: { fontSize: '12.5px', fontWeight: 800, letterSpacing: '.06em', color: 'var(--primary-700)', marginBottom: '8px' } }, 'ACCOMMODATION'),
             kvRow('Дата поступления', fmtDateTime(adm.admitted_at)),
             kvRow('Длительность', lengthOfStay(adm.admitted_at)),
             kvRow('Ставка', fmtPrice(est.rate) + ' / ' + (est.unitLabel === 'day' ? tr('день') : tr('час'))),
@@ -463,7 +463,7 @@ function bedDetailModal(bed, ward, adm, root) {
             h('button', { class: 'btn', style: { background: 'var(--ok-600, #16a34a)', borderColor: 'var(--ok-600, #16a34a)', color: '#fff', fontWeight: 700 },
                 onclick: () => dischargeDialog() }, Icon('Check', { size: 14 }), ' Выписать'),
             h('span', { class: 'grow' }),
-            h('span', { style: { fontSize: '13px', fontWeight: 700 } }, 'К ОПЛАТЕ ', h('span', { class: 'num', style: { fontSize: '15px' } }, fmtPrice(unbilledSelectedTotal()) + ' UZS')),
+            h('span', { style: { fontSize: '13.5px', fontWeight: 700 } }, 'К ОПЛАТЕ ', h('span', { class: 'num', style: { fontSize: '15px' } }, fmtPrice(unbilledSelectedTotal()) + ' UZS')),
         ));
         // -- назначения врача --
         rightEl.appendChild(h('div', { class: 'card', style: { padding: '14px 16px' } },
@@ -499,7 +499,7 @@ function bedDetailModal(bed, ward, adm, root) {
             secTitle('Журнал движения пациента'),
             st.transfers.length ? j : h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Записей нет.')));
     }
-    const secTitle = (t) => h('div', { style: { fontSize: '11.5px', fontWeight: 800, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--ink-700)', marginBottom: '10px' } }, t);
+    const secTitle = (t) => h('div', { style: { fontSize: '12.5px', fontWeight: 800, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--ink-700)', marginBottom: '10px' } }, t);
     function bedNameById(id) {
         if (id == null) return '—';
         const b = (bedsCache || []).find(x => x.id === id);
@@ -530,11 +530,11 @@ function bedDetailModal(bed, ward, adm, root) {
             const unit = l.products && l.products.unit ? l.products.unit : '';
             tbody.appendChild(h('tr', null,
                 h('td', { style: { width: '30px' } }, billed ? null : chk),
-                h('td', null, h('span', { style: { fontWeight: 600 } }, name), unit ? h('span', { class: 'muted', style: { fontSize: '11.5px' } }, ' ' + unit) : null),
+                h('td', null, h('span', { style: { fontWeight: 600 } }, name), unit ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, ' ' + unit) : null),
                 h('td', { class: 'num' }, String(l.quantity)),
                 h('td', { class: 'num' }, fmtPrice(l.unit_price)),
                 h('td', { class: 'num', style: { fontWeight: 700 } }, fmtPrice(l.total)),
-                h('td', { class: 'num', style: { fontSize: '12px' } }, fmtDateTime(l.performed_at || l.created_at)),
+                h('td', { class: 'num', style: { fontSize: '12.5px' } }, fmtDateTime(l.performed_at || l.created_at)),
                 h('td', null, billed ? h('span', { class: 'row', style: { gap: '6px' } }, Tag('Invoiced', { kind: 'ok', dot: true }),
                         h('button', { class: 'btn btn-sm', type: 'button', title: 'Убрать строку из неоплаченного счёта',
                             onclick: async () => {
@@ -596,8 +596,8 @@ function bedDetailModal(bed, ward, adm, root) {
                     style: { width: '76px', height: '34px', padding: '0 10px', textAlign: 'right', border: '1px solid var(--ink-200)', borderRadius: '9px', fontFamily: 'inherit', fontSize: '13.5px', outline: 'none' } });
                 qtyInp.addEventListener('input', () => { x.qty = qtyInp.value === '' ? 0 : Number(qtyInp.value); refreshTotal(); });
                 listEl.appendChild(h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', padding: '9px 12px', border: '1px solid var(--ink-100)', borderRadius: '12px', background: 'var(--ink-25, #f8fafa)' } },
-                    h('span', { style: { flex: 1, minWidth: 0, fontWeight: 600, fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-                        x.s.name, h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '11.5px' } }, ' · ' + fmtPrice(x.s.price), ' сум')),
+                    h('span', { style: { flex: 1, minWidth: 0, fontWeight: 600, fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                        x.s.name, h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '12.5px' } }, ' · ' + fmtPrice(x.s.price), ' сум')),
                     qtyInp,
                     h('button', { type: 'button', title: 'Убрать', style: { width: '28px', height: '28px', borderRadius: '999px', border: '1px solid var(--ink-150, var(--ink-200))', background: 'var(--white, #fff)', cursor: 'pointer', color: 'var(--ink-500)', fontWeight: 700, lineHeight: 1, flex: '0 0 auto' }, onmouseenter: (e) => { e.currentTarget.style.background = 'var(--crit-50, #fdecec)'; e.currentTarget.style.color = 'var(--crit-600, #dc2626)'; e.currentTarget.style.borderColor = 'var(--crit-200, #f5c2c2)'; }, onmouseleave: (e) => { e.currentTarget.style.background = 'var(--white, #fff)'; e.currentTarget.style.color = 'var(--ink-500)'; e.currentTarget.style.borderColor = 'var(--ink-150, var(--ink-200))'; },
                         onclick: () => { picked.splice(picked.indexOf(x), 1); paintPicked(); paintCatalog(); } }, '×')));
@@ -682,14 +682,14 @@ function bedDetailModal(bed, ward, adm, root) {
                     onmouseleave: (e) => { e.currentTarget.style.background = ''; },
                     onclick: () => { if (already) return; picked.push({ s: s2, qty: 1 }); paintPicked(); paintCatalog(); },
                 },
-                    h('span', { style: { flex: 1, minWidth: 0, fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                    h('span', { style: { flex: 1, minWidth: 0, fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
                         s2.name,
-                        h('span', { class: 'muted', style: { fontSize: '11.5px' } }, ' · ' + categoryOf(s2))),
+                        h('span', { class: 'muted', style: { fontSize: '12.5px' } }, ' · ' + categoryOf(s2))),
                     h('span', { class: 'num', style: { fontSize: '12.5px', fontWeight: 700, whiteSpace: 'nowrap' } }, fmtPrice(s2.price), ' сум'),
                     h('span', { style: { fontSize: '15px', fontWeight: 800, color: already ? 'var(--ink-300)' : 'var(--primary-600)', width: '16px', textAlign: 'center' } }, already ? '✓' : '+')));
             }
             if (pool.length > 200) {
-                catalogEl.appendChild(h('div', { class: 'muted', style: { padding: '10px', textAlign: 'center', fontSize: '11.5px' } },
+                catalogEl.appendChild(h('div', { class: 'muted', style: { padding: '10px', textAlign: 'center', fontSize: '12.5px' } },
                     trf('Показаны первые 200 из {n} — уточните поиск.', { n: pool.length })));
             }
         }
@@ -711,15 +711,15 @@ function bedDetailModal(bed, ward, adm, root) {
                 // разной высоты, и что делает выпадающий список, было неясно.
                 h('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 280px)', gap: '10px', alignItems: 'end' } },
                     h('div', { style: { minWidth: 0 } },
-                        h('div', { class: 'muted', style: { fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '4px' } }, 'Поиск услуги'),
+                        h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '4px' } }, 'Поиск услуги'),
                         svcSearch),
                     h('div', { style: { minWidth: 0 } },
-                        h('div', { class: 'muted', style: { fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '4px' } }, 'Врач'),
+                        h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '4px' } }, 'Врач'),
                         docPick)),
                 chipsEl,
                 catalogEl,
                 listEl,
-                h('div', { class: 'row', style: { justifyContent: 'flex-end', alignItems: 'baseline', gap: '7px', padding: '10px 14px', background: 'var(--primary-25, #f2faf8)', border: '1px solid var(--primary-100, #d7efe9)', borderRadius: '10px' } }, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Итого:'), h('span', { style: { fontSize: '17px', fontWeight: 800, color: 'var(--primary-700)' } }, totalEl), h('span', { class: 'muted', style: { fontSize: '12px' } }, 'UZS')),
+                h('div', { class: 'row', style: { justifyContent: 'flex-end', alignItems: 'baseline', gap: '7px', padding: '10px 14px', background: 'var(--primary-25, #f2faf8)', border: '1px solid var(--primary-100, #d7efe9)', borderRadius: '10px' } }, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Итого:'), h('span', { style: { fontSize: '17px', fontWeight: 800, color: 'var(--primary-700)' } }, totalEl), h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'UZS')),
             ],
             '+ Добавить',
             async () => {
@@ -767,8 +767,8 @@ function bedDetailModal(bed, ward, adm, root) {
                     style: { width: '76px', height: '34px', padding: '0 10px', textAlign: 'right', border: '1px solid var(--ink-200)', borderRadius: '9px', fontFamily: 'inherit', fontSize: '13.5px', outline: 'none' } });
                 qtyInp.addEventListener('input', () => { x.qty = qtyInp.value === '' ? 0 : Number(qtyInp.value); refreshTotal(); });
                 listEl.appendChild(h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', padding: '9px 12px', border: '1px solid var(--ink-100)', borderRadius: '12px', background: 'var(--ink-25, #f8fafa)' } },
-                    h('span', { style: { flex: 1, minWidth: 0, fontWeight: 600, fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-                        x.p.name, h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '11.5px' } }, ' ' + (x.p.base_unit || '') + ' · ' + fmtPrice(x.p.sale_price), ' сум')),
+                    h('span', { style: { flex: 1, minWidth: 0, fontWeight: 600, fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                        x.p.name, h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '12.5px' } }, ' ' + (x.p.base_unit || '') + ' · ' + fmtPrice(x.p.sale_price), ' сум')),
                     qtyInp,
                     h('button', { type: 'button', title: 'Убрать', style: { width: '28px', height: '28px', borderRadius: '999px', border: '1px solid var(--ink-150, var(--ink-200))', background: 'var(--white, #fff)', cursor: 'pointer', color: 'var(--ink-500)', fontWeight: 700, lineHeight: 1, flex: '0 0 auto' }, onmouseenter: (e) => { e.currentTarget.style.background = 'var(--crit-50, #fdecec)'; e.currentTarget.style.color = 'var(--crit-600, #dc2626)'; e.currentTarget.style.borderColor = 'var(--crit-200, #f5c2c2)'; }, onmouseleave: (e) => { e.currentTarget.style.background = 'var(--white, #fff)'; e.currentTarget.style.color = 'var(--ink-500)'; e.currentTarget.style.borderColor = 'var(--ink-150, var(--ink-200))'; },
                         onclick: () => { picked.splice(picked.indexOf(x), 1); paintPicked(); paintCatalog(); } }, '×')));
@@ -791,14 +791,14 @@ function bedDetailModal(bed, ward, adm, root) {
                 // это тот же список, и две разные раскладки рядом читались бы хуже,
                 // чем одна.
                 prodResults.appendChild(h('div', {
-                    style: { padding: '9px 12px', cursor: 'pointer', fontSize: '13px',
+                    style: { padding: '9px 12px', cursor: 'pointer', fontSize: '13.5px',
                              display: 'flex', alignItems: 'baseline', gap: '12px' },
                     onmouseenter: (e) => { e.currentTarget.style.background = 'var(--ink-25, #f6f8f9)'; },
                     onmouseleave: (e) => { e.currentTarget.style.background = ''; },
                     onmousedown: (e) => { e.preventDefault(); picked.push({ p: p2, qty: 1 }); prodSearch.value = ''; prodResults.style.display = 'none'; paintPicked(); },
                 },
                     h('span', { style: { flex: '1 1 auto', minWidth: 0, overflowWrap: 'anywhere' } }, p2.name),
-                    h('span', { class: 'muted', style: { flex: '0 0 auto', fontSize: '12px', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' } },
+                    h('span', { class: 'muted', style: { flex: '0 0 auto', fontSize: '12.5px', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' } },
                         trf('остаток {n} {unit}', { n: p2.on_hand || 0, unit: p2.base_unit || '' }))));
             }
         }
@@ -815,13 +815,13 @@ function bedDetailModal(bed, ward, adm, root) {
             [
                 h('div', { style: { position: 'relative' } }, prodSearch, prodResults),
                 listEl,
-                h('div', { class: 'row', style: { justifyContent: 'flex-end', alignItems: 'baseline', gap: '7px', padding: '10px 14px', background: 'var(--primary-25, #f2faf8)', border: '1px solid var(--primary-100, #d7efe9)', borderRadius: '10px' } }, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Итого:'), h('span', { style: { fontSize: '17px', fontWeight: 800, color: 'var(--primary-700)' } }, totalEl), h('span', { class: 'muted', style: { fontSize: '12px' } }, 'UZS')),
+                h('div', { class: 'row', style: { justifyContent: 'flex-end', alignItems: 'baseline', gap: '7px', padding: '10px 14px', background: 'var(--primary-25, #f2faf8)', border: '1px solid var(--primary-100, #d7efe9)', borderRadius: '10px' } }, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Итого:'), h('span', { style: { fontSize: '17px', fontWeight: 800, color: 'var(--primary-700)' } }, totalEl), h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'UZS')),
                 field('Примечание', noteInp),
                 h('label', { style: { display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '10px 12px', background: 'var(--ink-25, #f8fafa)', border: '1px solid var(--ink-100)', borderRadius: '10px', cursor: 'pointer' } },
                     billChk,
                     h('span', { style: { minWidth: 0 } },
-                        h('span', { style: { display: 'block', fontSize: '13px', fontWeight: 700 } }, 'Выставить в счёт пациенту'),
-                        h('span', { class: 'muted', style: { display: 'block', fontSize: '11.5px', marginTop: '1px' } },
+                        h('span', { style: { display: 'block', fontSize: '13.5px', fontWeight: 700 } }, 'Выставить в счёт пациенту'),
+                        h('span', { class: 'muted', style: { display: 'block', fontSize: '12.5px', marginTop: '1px' } },
                             'По умолчанию товары идут только в учёт расходов. Отметьте, чтобы выставить их в счёт пациенту.'))),
             ],
             '+ Добавить',
@@ -878,7 +878,7 @@ function bedDetailModal(bed, ward, adm, root) {
     function dischargeDialog() {
         const est = estimateCharge(ward, bed, adm.admitted_at, Number(adm.accommodation_discount_percent) || 0);
         modal('Выписать пациента', 'Check',
-            [h('div', { style: { fontSize: '13px', lineHeight: 1.6 } },
+            [h('div', { style: { fontSize: '13.5px', lineHeight: 1.6 } },
                 'Проживание (расчёт): ', h('b', null, fmtPrice(est.net), ' сум'), h('br'),
                 'Итог посчитает сервер и добавит в новый счёт. Небиллованные услуги/товары выставите кнопкой «Сформировать счёт».')],
             'Выписать',
@@ -896,7 +896,7 @@ function bedDetailModal(bed, ward, adm, root) {
         h('header', { class: 'modal-head' },
             h('div', null,
                 h('h2', { style: { margin: 0 } }, 'Bed ' + (bed.code || bed.id)),
-                h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' } }, (ward ? ward.name : '') + (bed.type ? ' · ' + bed.type : ''))),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, (ward ? ward.name : '') + (bed.type ? ' · ' + bed.type : ''))),
             h('div', { class: 'row', style: { gap: '10px' } },
                 Tag('ЗАНЯТО', { kind: 'ok', dot: true }),
                 h('button', { class: 'modal-close', onclick: close }, '×'))),
@@ -1060,9 +1060,9 @@ function accommodationDueRows(adm, est) {
                 st.invoiced.units + ' ' + unitRu + ' · ' + fmtPrice(st.invoiced.total) + ' ' + tr('сум')));
         }
         box.appendChild(kvRow(est.unitLabel === 'day' ? 'К оплате, дней' : 'К оплате, часов', String(units)));
-        box.appendChild(h('div', { style: { fontSize: '18px', fontWeight: 800, color: 'var(--primary-700)' } },
+        box.appendChild(h('div', { style: { fontSize: '17px', fontWeight: 800, color: 'var(--primary-700)' } },
             fmtPrice(net), ' сум'));
-        box.appendChild(h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '2px' } },
+        box.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
             units + ' × ' + fmtPrice(rate)));
     };
     _accDueRepaint[adm.id] = paint;
@@ -1083,7 +1083,7 @@ function accommodationBox(adm, est, onChanged) {
             // пролежал, уже в счетах. Кнопка, которая ответит отказом, хуже её
             // отсутствия — тот же принцип, что у поля ответа в чате.
             if (st && st.current && st.current.units <= 0) {
-                box.appendChild(h('div', { class: 'muted', style: { fontSize: '11.5px', textAlign: 'center' } },
+                box.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', textAlign: 'center' } },
                     'Всё проживание выставлено — новые сутки появятся здесь'));
                 return;
             }
@@ -1098,7 +1098,7 @@ function accommodationBox(adm, est, onChanged) {
                 if (onChanged) await onChanged();   // строка появилась в «Услугах» — обновляем списки
             });
             box.appendChild(btn);
-            box.appendChild(h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '6px', textAlign: 'center' } },
+            box.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px', textAlign: 'center' } },
                 'Пока не внесено — за проживание не выставляется'));
             return;
         }
@@ -1107,7 +1107,7 @@ function accommodationBox(adm, est, onChanged) {
             h('span', { style: { flex: 1, fontSize: '12.5px', fontWeight: 700, color: 'var(--ok-700, #047857)' } },
                 Icon('Check', { size: 12 }), ' ', trf('В счёте: {sum} сум', { sum: fmtPrice(billed.total) })),
             billed.invoiced
-                ? h('span', { class: 'muted', style: { fontSize: '11px' } }, 'выставлено')
+                ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'выставлено')
                 : h('button', { class: 'btn btn-ghost btn-sm', type: 'button', style: { color: 'var(--crit-600)' },
                     onclick: async () => {
                         if (!confirm(tr('Убрать проживание из счёта? За койку тогда денег не возьмут.'))) return;
@@ -1129,7 +1129,7 @@ function accommodationBox(adm, est, onChanged) {
                 await refreshAccommodation(adm.id, paint);
                 if (onChanged) await onChanged();
             });
-            box.appendChild(h('div', { style: { fontSize: '11px', color: 'var(--warn-700, #92400e)', marginTop: '6px' } },
+            box.appendChild(h('div', { style: { fontSize: '12.5px', color: 'var(--warn-700, #92400e)', marginTop: '6px' } },
                 trf('Срок вырос: в счёте {billed}, сейчас {current}', { billed: fmtPrice(billed.total), current: fmtPrice(st.current.net) })));
             box.appendChild(upd);
         }

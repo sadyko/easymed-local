@@ -362,10 +362,10 @@ async function loadExpiry() {
 function openDisposeModal(r) {
     const max = Number(r.qty) || 0;
     const inpStyle = { height: '36px', padding: '0 10px', border: '1px solid #d1d5db',
-        borderRadius: '8px', fontSize: '14px', width: '100%', boxSizing: 'border-box' };
+        borderRadius: '8px', fontSize: '13.5px', width: '100%', boxSizing: 'border-box' };
     const qtyIn = h('input', { type: 'number', min: '0.0001', step: 'any', max: String(max),
         value: String(max), style: { ...inpStyle, textAlign: 'right' } });
-    const noteIn = h('input', { type: 'text', placeholder: prL('utReasonPh'), style: { ...inpStyle, fontSize: '13px' } });
+    const noteIn = h('input', { type: 'text', placeholder: prL('utReasonPh'), style: { ...inpStyle, fontSize: '13.5px' } });
     const info = (label, val) => h('div', { class: 'row', style: { justifyContent: 'space-between', fontSize: '12.5px', padding: '3px 0' } },
         h('span', { class: 'muted' }, label), h('b', { style: { textAlign: 'right', overflowWrap: 'anywhere' } }, val));
 
@@ -419,7 +419,7 @@ function paintExpiry() {
     wrap.appendChild(h('div', { class: 'card-header' },
         h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
             h('h3', null, Icon('Clock', { size: 16 }), prL('exHdr')),
-            h('span', { class: 'muted', style: { fontSize: '12px' } }, prL('exSub')))));
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, prL('exSub')))));
 
     if (state.batchOk === false || exMig) {
         wrap.appendChild(h('div', { class: 'empty', style: { padding: '22px', color: 'var(--warn-700, #b45309)' } }, prL('exNeedMig')));
@@ -431,12 +431,12 @@ function paintExpiry() {
     }
 
     const badge = (days) => {
-        if (days == null) return h('span', { class: 'muted', style: { fontSize: '11px' } }, '—');
+        if (days == null) return h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '—');
         let bg = 'var(--ok-50)', fg = 'var(--ok-700)', txt = prL('exOk');
         if (days < 0)        { bg = 'var(--crit-50)'; fg = 'var(--crit-700)'; txt = prL('exExpired'); }
         else if (days <= 90) { bg = 'var(--warn-50, #fffbeb)'; fg = 'var(--warn-700, #b45309)'; txt = prL('exSoon'); }
         return h('span', { style: { display: 'inline-flex', gap: '5px', alignItems: 'center', padding: '1px 8px',
-            borderRadius: '999px', background: bg, color: fg, fontSize: '11px', fontWeight: 700 } }, txt);
+            borderRadius: '999px', background: bg, color: fg, fontSize: '12.5px', fontWeight: 700 } }, txt);
     };
 
     const tbody = h('tbody', null,
@@ -447,12 +447,12 @@ function paintExpiry() {
             return h('tr', null,
                 h('td', { style: { whiteSpace: 'normal', overflowWrap: 'anywhere' } },
                     h('div', { class: 'cell-strong' }, r.item.name || '—'),
-                    h('div', { class: 'muted', style: { fontSize: '11px' } },
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                         [r.item.strength, r.item.form, baseUnitOf(r.item)].filter(Boolean).join(' · '))),
                 h('td', { class: 'muted' }, r.batch),
                 h('td', { class: 'cell-strong', style: { color: crit ? 'var(--crit-700)' : (warn ? 'var(--warn-700, #b45309)' : '') } },
                     r.expiry || '—'),
-                h('td', { class: 'muted', style: { fontSize: '12px' } }, r.loc.name || '—'),
+                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, r.loc.name || '—'),
                 h('td', { class: 'num cell-strong' }, fmtNum(r.qty)),
                 h('td', { class: 'num' }, days == null ? '—' : fmtNum(days)),
                 h('td', null, badge(days)),
@@ -560,9 +560,9 @@ function paintValuation() {
     wrap.appendChild(h('div', { class: 'card-header' },
         h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
             h('h3', null, Icon('Chart', { size: 16 }), prL('vlHdr')),
-            h('span', { class: 'muted', style: { fontSize: '12px' } }, prL('vlSub'))),
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, prL('vlSub'))),
         h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
-            h('span', { class: 'muted', style: { fontSize: '12px' } }, prL('vlMethod') + ':'),
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, prL('vlMethod') + ':'),
             methodBtn('wac', prL('vlWac')), methodBtn('fifo', prL('vlFifo')))));
 
     if (state.costOk === false || vlMig) {
@@ -584,7 +584,7 @@ function paintValuation() {
             return h('tr', null,
                 h('td', { style: { whiteSpace: 'normal', overflowWrap: 'anywhere' } },
                     h('div', { class: 'cell-strong' }, r.item.name || '—'),
-                    h('div', { class: 'muted', style: { fontSize: '11px' } },
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                         [r.item.strength, r.item.form, baseUnitOf(r.item)].filter(Boolean).join(' · '))),
                 h('td', { class: 'num' }, fmtNum(r.qty)),
                 h('td', { class: 'num muted' }, cost == null
@@ -646,7 +646,7 @@ function reqStatusPill(status) {
     const bg = { warn: 'var(--warn-50, #fffbeb)', info: 'var(--primary-50)', crit: 'var(--crit-50)', ok: 'var(--ok-50)', muted: 'var(--ink-50)' }[kind];
     const fg = { warn: 'var(--warn-700, #b45309)', info: 'var(--primary-700)', crit: 'var(--crit-700)', ok: 'var(--ok-700)', muted: 'var(--ink-500)' }[kind];
     return h('span', { style: { display: 'inline-flex', padding: '1px 9px', borderRadius: '999px',
-        background: bg, color: fg, fontSize: '11px', fontWeight: 700 } }, prL(key));
+        background: bg, color: fg, fontSize: '12.5px', fontWeight: 700 } }, prL(key));
 }
 
 // PROC_FILTERS_V1 — per-tab filter state + a compact filter-bar builder.
@@ -663,14 +663,14 @@ function procFilterCtrl(d, onChange) {
     if (d.type === 'search') {
         const inp = h('input', { type: 'search', value: d.get() || '', placeholder: d.placeholder || '',
             style: { height: '30px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '8px',
-                     font: 'inherit', fontSize: '12px', width: '100%', minWidth: '110px', boxSizing: 'border-box' } });
+                     font: 'inherit', fontSize: '12.5px', width: '100%', minWidth: '110px', boxSizing: 'border-box' } });
         inp.addEventListener('input', () => { clearTimeout(inp._t); inp._t = setTimeout(() => { d.set(inp.value); _pfFocusKey = d.key || null; onChange(); }, 200); });
         if (d.key && _pfFocusKey === d.key) setTimeout(() => { inp.focus(); const n = inp.value.length; try { inp.setSelectionRange(n, n); } catch (_) {} _pfFocusKey = null; }, 0);
         return inp;
     }
     const sel = h('select', {
         style: { height: '30px', padding: '0 6px', border: '1px solid var(--ink-200)', borderRadius: '8px',
-                 font: 'inherit', fontSize: '12px', background: 'white', width: '100%', minWidth: '110px', boxSizing: 'border-box' } },
+                 font: 'inherit', fontSize: '12.5px', background: 'white', width: '100%', minWidth: '110px', boxSizing: 'border-box' } },
         ...d.options.map(o => h('option', { value: o.value, selected: String(o.value) === String(d.get()) }, o.label)));
     sel.addEventListener('change', () => { d.set(sel.value); onChange(); });
     return sel;
@@ -688,7 +688,7 @@ function prRequisitions() {
         h('div', { class: 'card-header' },
             h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
                 h('h3', null, Icon('Doc', { size: 16 }), prL('rqHdr')),
-                h('span', { class: 'muted', style: { fontSize: '12px' } }, prL('rqSub'))),
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } }, prL('rqSub'))),
             h('button', { class: 'btn btn-primary btn-sm', onclick: openNewRequisitionModal }, Icon('Plus', { size: 14 }), prL('rqNew'))),
         tableWrap));
     reqWrap._table = tableWrap;
@@ -745,7 +745,7 @@ function paintRequisitions() {
     const rowActions = (r) => {
         const btns = [];
         const mkBtn = (labelKey, cls, onclick) => h('button', {
-            class: 'btn btn-sm ' + cls, style: { height: '26px', padding: '0 9px', fontSize: '11px' },
+            class: 'btn btn-sm ' + cls, style: { height: '26px', padding: '0 9px', fontSize: '12.5px' },
             type: 'button', onclick }, prL(labelKey));
         if (r.status === 'submitted') {
             if (admin || canProcurementFull()) {   // REQ_APPROVE_ACCESS_V1 — procurement-role users can approve/reject
@@ -764,10 +764,10 @@ function paintRequisitions() {
             // warehouse into the department (approve_requisition_and_issue), so the
             // requisition is complete. No «В заказ» step; show the outcome instead.
             return h('div', { class: 'row', style: { gap: '6px', justifyContent: 'flex-end', alignItems: 'center' } },
-                h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--ok-700)', fontSize: '11px', fontWeight: 700 } },
+                h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--ok-700)', fontSize: '12.5px', fontWeight: 700 } },
                     Icon('Check', { size: 13 }), prL('rqIssued')));
         }
-        return btns.length ? h('div', { class: 'row', style: { gap: '6px', justifyContent: 'flex-end', flexWrap: 'wrap' } }, ...btns) : h('span', { class: 'muted', style: { fontSize: '11px' } }, '—');
+        return btns.length ? h('div', { class: 'row', style: { gap: '6px', justifyContent: 'flex-end', flexWrap: 'wrap' } }, ...btns) : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '—');
     };
 
     const rq = (reqFilter.q || '').trim().toLowerCase();   // PROC_FILTERS_V1
@@ -782,10 +782,10 @@ function paintRequisitions() {
             h('td', { class: 'cell-mono cell-strong', style: { fontSize: '12.5px' } }, r.req_number || r.id.slice(0, 8)),
             h('td', null, reqStatusPill(r.status),
                 r.status === 'rejected' && r.reject_reason
-                    ? h('div', { class: 'muted', style: { fontSize: '11px' } }, r.reject_reason) : null),
+                    ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, r.reject_reason) : null),
             h('td', null, reqDeptLabelText(r.department)),
             h('td', { class: 'num' }, String((r.purchase_requisition_items || []).length)),
-            h('td', { class: 'muted num', style: { fontSize: '12px' } }, fmtDate(r.created_at)),
+            h('td', { class: 'muted num', style: { fontSize: '12.5px' } }, fmtDate(r.created_at)),
             h('td', null, rowActions(r)),
         )) : [emptyRow(6, prL('rqEmpty'))]));
 
@@ -861,7 +861,7 @@ async function openApproveRequisitionModal(r) {
         subtitle: trf('Отдел: {dept}', { dept: deptLbl }) + (reqName ? ' · ' + trf('Заявитель: {name}', { name: reqName }) : ''),
         width: '560px',
         body: h('div', { class: 'modal-body' },
-            h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '10px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } },
                 trf('При согласовании товары списываются со склада в отдел «{dept}» и печатается требование-накладная для подписи заявителем.', { dept: deptLbl })),
             itemsTable),
         footerButtons: (close) => [
@@ -898,7 +898,7 @@ async function openApproveRequisitionModal(r) {
 function openNewRequisitionModal() {
     const inpStyle = {
         height: '34px', padding: '0 10px', border: '1px solid #d1d5db', borderRadius: '8px',
-        fontSize: '13px', background: 'white', fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', width: '100%',
+        fontSize: '13.5px', background: 'white', fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', width: '100%',
     };
     const lines = [];   // { item, qty, note }
     const linesWrap = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } });
@@ -915,7 +915,7 @@ function openNewRequisitionModal() {
                 placeholder: prL('rqQtyPh'), style: { ...inpStyle, width: '96px', textAlign: 'right' } });
             // REQ_UNIT_V1 — request in шт or уп; the hint shows what will actually
             // be issued (base units), so «1 уп = 10 шт» is visible before saving.
-            const rqConv = h('div', { class: 'muted', style: { fontSize: '11px' } });
+            const rqConv = h('div', { class: 'muted', style: { fontSize: '12.5px' } });
             const paintRqConv = () => {
                 const f = unitFactor(ln.item, ln.unit);
                 rqConv.textContent = f === 1 ? ''
@@ -930,8 +930,8 @@ function openNewRequisitionModal() {
             linesWrap.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px',
                 border: '1px solid var(--ink-100)', borderRadius: '10px', background: 'var(--white)' } },
                 h('div', { style: { minWidth: 0, flex: 1 } },
-                    h('div', { class: 'cell-strong', style: { fontSize: '13px', whiteSpace: 'normal', overflowWrap: 'anywhere' } }, ln.item.name || '—'),
-                    h('div', { class: 'muted', style: { fontSize: '11.5px' } }, [ln.item.strength, baseUnitOf(ln.item)].filter(Boolean).join(' · ') || '—'),
+                    h('div', { class: 'cell-strong', style: { fontSize: '13.5px', whiteSpace: 'normal', overflowWrap: 'anywhere' } }, ln.item.name || '—'),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [ln.item.strength, baseUnitOf(ln.item)].filter(Boolean).join(' · ') || '—'),
                     rqConv),
                 qtyIn, rqUnitSel, noteIn,
                 h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: prL('biRemove'),
@@ -961,7 +961,7 @@ function openNewRequisitionModal() {
         if (!hits.length) prodSuggest.appendChild(h('div', { class: 'muted', style: { padding: '10px 12px', fontSize: '12.5px' } }, prL('biNothing')));
         else for (const it of hits) prodSuggest.appendChild(h('button', { type: 'button',
             style: { display: 'block', width: '100%', padding: '9px 12px', border: 'none', background: 'transparent',
-                cursor: 'pointer', fontSize: '13px', color: 'var(--ink-800)', fontFamily: 'inherit', textAlign: 'left', whiteSpace: 'normal', overflowWrap: 'anywhere' },
+                cursor: 'pointer', fontSize: '13.5px', color: 'var(--ink-800)', fontFamily: 'inherit', textAlign: 'left', whiteSpace: 'normal', overflowWrap: 'anywhere' },
             onmousedown: (e) => e.preventDefault(),
             onclick: () => { addLine(it); prodInp.value = ''; prodSuggest.style.display = 'none'; prodInp.focus(); } }, itemLabel(it)));
         prodSuggest.style.display = 'block';
@@ -1032,7 +1032,7 @@ function prCounts() {
         h('div', { class: 'card-header' },
             h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
                 h('h3', null, Icon('Grid', { size: 16 }), prL('cnHdr')),
-                h('span', { class: 'muted', style: { fontSize: '12px' } }, prL('cnSub'))),
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } }, prL('cnSub'))),
             h('button', { class: 'btn btn-primary btn-sm', onclick: openNewCountModal }, Icon('Plus', { size: 14 }), prL('cnNew'))),
         tableWrap));
     wrap._table = tableWrap;
@@ -1073,10 +1073,10 @@ function paintCounts() {
             const varN = items.filter(i => Number(i.variance) !== 0).length;
             return h('tr', null,
                 h('td', { class: 'cell-mono cell-strong', style: { fontSize: '12.5px' } }, c.count_number || c.id.slice(0, 8)),
-                h('td', { class: 'muted', style: { fontSize: '12px' } }, locName(c.location_id)),
+                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, locName(c.location_id)),
                 h('td', { class: 'num' }, String(items.length)),
                 h('td', { class: 'num', style: { color: varN ? 'var(--warn-700, #b45309)' : 'var(--ink-400)', fontWeight: varN ? 700 : 400 } }, String(varN)),
-                h('td', { class: 'muted num', style: { fontSize: '12px' } }, fmtDate(c.posted_at || c.created_at)));
+                h('td', { class: 'muted num', style: { fontSize: '12.5px' } }, fmtDate(c.posted_at || c.created_at)));
         }) : [emptyRow(5, prL('cnEmpty'))]));
 
     tableWrap.appendChild(h('table', { class: 'tbl' },
@@ -1090,7 +1090,7 @@ function paintCounts() {
 function openNewCountModal() {
     if (!state.branches.length) { toast(prL('biNoBranches'), 'info'); return; }
     const inpStyle = { height: '34px', padding: '0 10px', border: '1px solid #d1d5db', borderRadius: '8px',
-        fontSize: '13px', background: 'white', fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', width: '100%' };
+        fontSize: '13.5px', background: 'white', fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', width: '100%' };
 
     let branchId = state.stockBranch !== 'all' ? state.stockBranch : (state.branches[0] && state.branches[0].id) || '';
     let onHand = new Map();     // item_id -> system on-hand at chosen location
@@ -1126,7 +1126,7 @@ function openNewCountModal() {
         clear(linesWrap);
         if (!lines.length) { linesWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '10px 2px' } }, prL('cnAddHint'))); return; }
         // header row
-        linesWrap.appendChild(h('div', { class: 'row', style: { gap: '10px', padding: '0 10px', fontSize: '11px', fontWeight: 700, color: 'var(--ink-500)' } },
+        linesWrap.appendChild(h('div', { class: 'row', style: { gap: '10px', padding: '0 10px', fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-500)' } },
             h('div', { style: { flex: 1 } }, prL('cnSystem').toUpperCase()),
             h('div', { style: { width: '96px', textAlign: 'right' } }, prL('cnSystem')),
             h('div', { style: { width: '96px', textAlign: 'right' } }, prL('cnCounted')),
@@ -1147,8 +1147,8 @@ function openNewCountModal() {
             linesWrap.appendChild(h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', padding: '8px 10px',
                 border: '1px solid var(--ink-100)', borderRadius: '10px', background: 'var(--white)' } },
                 h('div', { style: { flex: 1, minWidth: 0 } },
-                    h('div', { class: 'cell-strong', style: { fontSize: '13px', whiteSpace: 'normal', overflowWrap: 'anywhere' } }, ln.item.name || '—'),
-                    h('div', { class: 'muted', style: { fontSize: '11px' } }, [ln.item.strength, baseUnitOf(ln.item)].filter(Boolean).join(' · '))),
+                    h('div', { class: 'cell-strong', style: { fontSize: '13.5px', whiteSpace: 'normal', overflowWrap: 'anywhere' } }, ln.item.name || '—'),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [ln.item.strength, baseUnitOf(ln.item)].filter(Boolean).join(' · '))),
                 h('div', { class: 'num muted', style: { width: '96px', textAlign: 'right' } }, fmtNum(sys)),
                 countedIn, varEl,
                 h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: prL('biRemove'),
@@ -1176,7 +1176,7 @@ function openNewCountModal() {
         if (!hits.length) prodSuggest.appendChild(h('div', { class: 'muted', style: { padding: '10px 12px', fontSize: '12.5px' } }, prL('biNothing')));
         else for (const it of hits) prodSuggest.appendChild(h('button', { type: 'button',
             style: { display: 'block', width: '100%', padding: '9px 12px', border: 'none', background: 'transparent', cursor: 'pointer',
-                fontSize: '13px', color: 'var(--ink-800)', fontFamily: 'inherit', textAlign: 'left', whiteSpace: 'normal', overflowWrap: 'anywhere' },
+                fontSize: '13.5px', color: 'var(--ink-800)', fontFamily: 'inherit', textAlign: 'left', whiteSpace: 'normal', overflowWrap: 'anywhere' },
             onmousedown: (e) => e.preventDefault(),
             onclick: () => { addLine(it); prodInp.value = ''; prodSuggest.style.display = 'none'; prodInp.focus(); } }, itemLabel(it)));
         prodSuggest.style.display = 'block';
@@ -1297,9 +1297,9 @@ function paintAudit() {
     clear(wrap);
 
     const search = h('input', { type: 'text', value: audQ, placeholder: prL('auSearch'),
-        style: { height: '32px', padding: '0 10px', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '13px', width: '220px' } });
+        style: { height: '32px', padding: '0 10px', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '13.5px', width: '220px' } });
     search.addEventListener('input', () => { audQ = search.value; paintAudit(); setTimeout(() => search.focus(), 0); });
-    const kindSel = h('select', { style: { height: '32px', padding: '0 8px', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '13px' } },
+    const kindSel = h('select', { style: { height: '32px', padding: '0 8px', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '13.5px' } },
         h('option', { value: '' }, prL('auAll')), ...AUD_KINDS.map(k => h('option', { value: k }, k)));
     kindSel.value = audKind;
     kindSel.addEventListener('change', () => { audKind = kindSel.value; paintAudit(); });
@@ -1307,7 +1307,7 @@ function paintAudit() {
     wrap.appendChild(h('div', { class: 'card-header' },
         h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
             h('h3', null, Icon('Activity', { size: 16 }), prL('auHdr')),
-            h('span', { class: 'muted', style: { fontSize: '12px' } }, prL('auSub'))),
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, prL('auSub'))),
         h('div', { class: 'row', style: { gap: '8px' } },
             h('button', { class: 'btn btn-outline btn-sm', onclick: exportAuditXlsx }, Icon('Download', { size: 14 }), ' Excel'),   // AUDIT_XLSX_V1
             search, kindSel)));
@@ -1324,7 +1324,7 @@ function paintAudit() {
 
     const kindPill = (k) => {
         const c = { receipt: ['ok', '#059669'], issue: ['crit', '#dc2626'], adjustment: ['warn', '#b45309'], transfer: ['info', '#2563eb'] }[k] || ['muted', '#64748b'];
-        return h('span', { style: { fontSize: '11px', fontWeight: 700, color: c[1] } }, k || '—');
+        return h('span', { style: { fontSize: '12.5px', fontWeight: 700, color: c[1] } }, k || '—');
     };
     const whereOf = (m) => {
         const f = m.from_location_id ? locName(m.from_location_id) : null;
@@ -1338,14 +1338,14 @@ function paintAudit() {
             const it = itemById(m.item_id);
             const qn = Number(m.qty || 0);
             return h('tr', null,
-                h('td', { class: 'muted num', style: { fontSize: '11.5px', whiteSpace: 'nowrap' } }, fmtDate(m.created_at)),
+                h('td', { class: 'muted num', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, fmtDate(m.created_at)),
                 h('td', { style: { whiteSpace: 'normal', overflowWrap: 'anywhere' } }, h('span', { class: 'cell-strong' }, it?.name || '—')),
                 h('td', null, kindPill(m.kind)),
                 h('td', { class: 'num cell-strong', style: { color: qn < 0 ? 'var(--crit-700)' : 'var(--ok-700)' } }, (qn > 0 ? '+' : '') + fmtNum(qn)),
-                h('td', { class: 'muted', style: { fontSize: '11.5px' } }, whereOf(m)),
-                h('td', { class: 'muted', style: { fontSize: '11.5px', whiteSpace: 'normal', overflowWrap: 'anywhere' } },
+                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, whereOf(m)),
+                h('td', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'normal', overflowWrap: 'anywhere' } },
                     (m.reference_type || '') + (m.note ? ' · ' + m.note : '')),
-                h('td', { class: 'muted', style: { fontSize: '11.5px' } }, (m.users && m.users.full_name) || '—'));
+                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, (m.users && m.users.full_name) || '—'));
         }) : [emptyRow(7, prL('auEmpty'))]));
 
     wrap.appendChild(h('table', { class: 'tbl' },
@@ -1416,7 +1416,7 @@ export function renderProcurement(container) {
 // rounded data-end, hairline solid gridlines, native tooltips on hover targets.
 function prDashboard() {
     const wrap = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '16px', padding: '6px 12px 18px' } },
-        h('div', { class: 'muted', style: { padding: '30px', textAlign: 'center', fontSize: '13px' } }, 'Загрузка…'));
+        h('div', { class: 'muted', style: { padding: '30px', textAlign: 'center', fontSize: '13.5px' } }, 'Загрузка…'));
 
     const INK = '#0b0b0b', INK2 = '#52514e', MUT = '#898781', GRID = '#e1e0d9', BASE = '#c3c2b7';
     const S1 = '#2a78d6', S2 = '#eb6834', S3 = '#1baf7a';   // categorical slots 1/2/3 (validated set)
@@ -1439,7 +1439,7 @@ function prDashboard() {
 
     async function loadDash() {
         clear(wrap);
-        wrap.appendChild(h('div', { class: 'muted', style: { padding: '30px', textAlign: 'center', fontSize: '13px' } }, 'Загрузка…'));
+        wrap.appendChild(h('div', { class: 'muted', style: { padding: '30px', textAlign: 'center', fontSize: '13.5px' } }, 'Загрузка…'));
         const cid = currentClinicId();
         const { since, until } = dashRange();
         let mv = [], st = [], items = [], pos = [];
@@ -1562,21 +1562,21 @@ function prDashboard() {
             });
         }
         function barRows(rows, color, fmt) {
-            if (!rows.length) return h('div', { class: 'muted', style: { fontSize: '12px', padding: '10px 0' } }, 'Нет данных за период.');
+            if (!rows.length) return h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '10px 0' } }, 'Нет данных за период.');
             const max = Math.max(1, ...rows.map(r => r.v));
             return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
                 ...rows.map(r => h('div', { title: r.name + ': ' + fmt(r.v) + (r.sub ? ' · ' + r.sub : ''), style: { display: 'grid', gridTemplateColumns: '170px 1fr', gap: '10px', alignItems: 'center' } },
-                    h('div', { style: { minWidth: 0, fontSize: '12px', color: INK, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, r.name),
+                    h('div', { style: { minWidth: 0, fontSize: '12.5px', color: INK, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, r.name),
                     h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 } },
                         h('div', { style: { width: Math.max(1.5, (r.v / max) * 70) + '%', height: '20px', background: color, borderRadius: '0 4px 4px 0', flex: '0 0 auto' } }),
-                        h('div', { style: { fontSize: '11.5px', color: INK2, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' } }, fmt(r.v) + (r.sub ? ' · ' + r.sub : ''))))));
+                        h('div', { style: { fontSize: '12.5px', color: INK2, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' } }, fmt(r.v) + (r.sub ? ' · ' + r.sub : ''))))));
         }
         // DASH_PERIOD_V1 — roomier padding so text never sits in the corners.
         const card = (title, ...kids) => h('div', { style: { border: '1px solid var(--ink-100)', borderRadius: '14px', background: 'white', padding: '18px 20px', minWidth: 0 } },
-            h('div', { style: { fontSize: '13px', fontWeight: 600, color: INK, marginBottom: '12px' } }, title), ...kids);
+            h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: INK, marginBottom: '12px' } }, title), ...kids);
         const tile = (label, value, accent) => h('div', { style: { flex: '1 1 0', minWidth: '160px', padding: '16px 18px', border: '1px solid var(--ink-100)', borderRadius: '14px', background: 'white' } },
-            h('div', { style: { fontSize: '12px', color: INK2, marginBottom: '6px' } }, label),
-            h('div', { style: { fontSize: '22px', fontWeight: 600, color: accent || INK } }, value));
+            h('div', { style: { fontSize: '12.5px', color: INK2, marginBottom: '6px' } }, label),
+            h('div', { style: { fontSize: '24px', fontWeight: 600, color: accent || INK } }, value));
 
         // ---- paint ----------------------------------------------------
         clear(wrap);
@@ -1593,7 +1593,7 @@ function prDashboard() {
             },
         }, label);
         const dInp = (get, set) => {
-            const i = h('input', { type: 'date', value: get(), style: { height: '30px', padding: '0 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', font: 'inherit', fontSize: '12px' } });
+            const i = h('input', { type: 'date', value: get(), style: { height: '30px', padding: '0 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', font: 'inherit', fontSize: '12.5px' } });
             i.addEventListener('change', () => set(i.value));
             return i;
         };
@@ -1605,7 +1605,7 @@ function prDashboard() {
                 dInp(() => customTo, (v) => { customTo = v; }),
                 h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => loadDash() }, 'Применить'),
             ] : []),
-            h('div', { class: 'muted', style: { fontSize: '12px', marginLeft: '6px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '6px' } },
                 fmtDate(since.toISOString()) + ' — ' + fmtDate(until.toISOString())),
             h('span', { style: { flex: 1 } }),
             h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: exportDash }, Icon('Download', { size: 14 }), ' Excel')));
@@ -1622,7 +1622,7 @@ function prDashboard() {
         // PROC_DASHBOARD_V2 — most-ordered products + «Смотреть все» popup with Excel.
         wrap.appendChild(h('div', { style: { border: '1px solid var(--ink-100)', borderRadius: '14px', background: 'white', padding: '18px 20px', minWidth: 0 } },
             h('div', { class: 'row', style: { alignItems: 'center', gap: '10px', marginBottom: '12px' } },
-                h('div', { style: { fontSize: '13px', fontWeight: 600, color: INK } }, 'Заказанные товары — самые заказываемые'),
+                h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: INK } }, 'Заказанные товары — самые заказываемые'),
                 h('span', { style: { flex: 1 } }),
                 h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: openOrderedListModal }, 'Смотреть все')),
             barRows(orderedRows.slice(0, 8).map(r => ({ ...r, sub: fmtNum(r.sum) + ' ' + tr('сум') })), S3, (v) => fmtNum(v))));
@@ -1680,7 +1680,7 @@ function tabBar() {
                 // REQ_BADGE_V1 — red count pill of unclosed requisitions on the «Заявки» tab.
                 reqBadgeEl = h('span', { style: { display: 'none', alignItems: 'center', justifyContent: 'center',
                     marginLeft: '6px', minWidth: '18px', height: '18px', padding: '0 5px', borderRadius: '999px',
-                    background: 'var(--crit-600, #dc2626)', color: '#fff', fontSize: '11px', fontWeight: '700', lineHeight: '1' } });
+                    background: 'var(--crit-600, #dc2626)', color: '#fff', fontSize: '12.5px', fontWeight: '700', lineHeight: '1' } });
                 btn.appendChild(reqBadgeEl);
                 updateReqBadge();
             }
@@ -1825,7 +1825,7 @@ function paintDepartments() {
     // both on the left. The long description line is dropped for a cleaner header.
     const deptSel = h('select', {
         style: { height: '32px', padding: '0 10px', border: '1px solid var(--ink-200)',
-            borderRadius: '8px', fontSize: '13px', fontFamily: 'inherit', background: 'white',
+            borderRadius: '8px', fontSize: '13.5px', fontFamily: 'inherit', background: 'white',
             outline: 'none', minWidth: '170px' },
     }, ...BULK_DEPTS.map(d => h('option', { value: d.key }, prL(d.labelKey))));
     deptSel.value = dpDept;
@@ -1874,7 +1874,7 @@ function deptQtyCell(item, baseQty, extraClass, color) {
     const sub = deptQtySub(item, baseQty);
     return h('td', { class: 'num ' + (extraClass || ''), style: color ? { color } : {} },
         h('div', null, fmtNum(baseQty)),
-        sub ? h('div', { class: 'muted', style: { fontSize: '11px', fontWeight: '400' } }, sub) : null);
+        sub ? h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: '400' } }, sub) : null);
 }
 // DEPT_DISPENSE_QTY_V1 — the balance expressed in the item's dispense unit. With a
 // consumption_factor > 1 (e.g. Analgin: 1 base = 10 таб для выдачи) the base balance
@@ -1916,7 +1916,7 @@ function paintDeptRows() {
                 return h('tr', null,
                     h('td', { style: { whiteSpace: 'normal', overflowWrap: 'anywhere' } },
                         h('div', { class: 'cell-strong' }, r.item.name || '—'),
-                        h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+                        h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                             [r.item.strength, r.item.form, r.item.unit].filter(Boolean).join(' · '))),
                     deptQtyCell(r.item, r.got, 'cell-strong'),
                     deptQtyCell(r.item, r.used, ''),
@@ -2216,7 +2216,7 @@ function confirmDeleteProduct(p) {
         subtitle: p.name || '',
         width: '480px',
         body: h('div', { class: 'modal-body' },
-            h('p', { style: { margin: 0, fontSize: '13px', lineHeight: 1.5 } },
+            h('p', { style: { margin: 0, fontSize: '13.5px', lineHeight: 1.5 } },
                 'Товар исчезнет из каталога, поиска и приёмки. ',
                 h('b', null, 'История закупок сохранится'),
                 ' — движения по складу, партии и заказы останутся в отчётах и журнале.')),
@@ -2250,7 +2250,7 @@ function supplierById(id) { return state.suppliers.find(x => x.id === id) || nul
 
 // Build a <select> populated from {id,label} options. value preselected.
 function selectEl(options, { value = '', placeholder = null, required = false, style = {} } = {}) {
-    const inp = { height: '34px', padding: '0 10px', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '13px', background: 'white' };
+    const inp = { height: '34px', padding: '0 10px', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '13.5px', background: 'white' };
     const sel = h('select', { style: { ...inp, ...style } });
     if (required) sel.required = true;
     if (placeholder != null) sel.appendChild(h('option', { value: '' }, placeholder));
@@ -2285,7 +2285,7 @@ function openModal({ title, subtitle, body, footerButtons, width = null, height 
     const card = h('div', { class: 'modal-card modal-compact', style: cardStyle },
         h('header', { class: 'modal-head' },
             subtitle
-                ? h('div', null, h('h2', null, title), h('div', { class: 'muted', style: { fontSize: '12px' } }, subtitle))
+                ? h('div', null, h('h2', null, title), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, subtitle))
                 : h('h2', null, title),
             h('button', { class: 'modal-close', type: 'button', onclick: close }, '×'),
         ),
@@ -2457,17 +2457,17 @@ function paintStockTable() {
                 },
                     h('td', { class: 'cell-strong' }, it.name || '—',
                         (it.strength || it.form)
-                            ? h('div', { class: 'muted', style: { fontSize: '11px' } }, [it.strength, it.form].filter(Boolean).join(' · '))
+                            ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [it.strength, it.form].filter(Boolean).join(' · '))
                             : null),
                     // UNIT_ENGINE_V1 — on-hand is in the BASE unit; show the pack
                     // equivalent underneath when a conversion is declared.
                     h('td', { class: 'muted' }, baseUnitOf(it) || '—',
                         numOr1(it.pack_factor) !== 1 && it.purchase_unit
-                            ? h('div', { class: 'muted', style: { fontSize: '11px' } },
+                            ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                                 '1 ' + it.purchase_unit + ' = ' + fmtNum(numOr1(it.pack_factor)) + ' ' + baseUnitOf(it))
                             : null),
-                    state.branches.length > 1 ? h('td', { class: 'muted', style: { fontSize: '12px' } }, br.name || '—') : null,   // PROC_NO_BRANCH_V1
-                    h('td', { class: 'muted', style: { fontSize: '12px' } }, (r._supplier && r._supplier.name) || '—'),   // SUPPLIER_STOCK_V1
+                    state.branches.length > 1 ? h('td', { class: 'muted', style: { fontSize: '12.5px' } }, br.name || '—') : null,   // PROC_NO_BRANCH_V1
+                    h('td', { class: 'muted', style: { fontSize: '12.5px' } }, (r._supplier && r._supplier.name) || '—'),   // SUPPLIER_STOCK_V1
                     h('td', { class: 'num cell-strong', style: low ? { color: 'var(--crit-700)' } : {} },
                         low ? h('span', { title: 'At or below reorder level', style: { marginRight: '4px' } }, Icon('Warning', { size: 12 })) : null,
                         fmtNum(onHand)),
@@ -2479,7 +2479,7 @@ function paintStockTable() {
                         display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '1px 8px', borderRadius: '999px',
                         background: low ? 'var(--crit-50)' : 'var(--ok-50)',
                         color: low ? 'var(--crit-700)' : 'var(--ok-700)',
-                        fontSize: '11px', fontWeight: 700,
+                        fontSize: '12.5px', fontWeight: 700,
                     } }, low ? 'Reorder' : 'OK')),
                     h('td', null, (() => {   // STOCK_ORDER_BTN_V1
                         // STOCK_ORDER_BTN_V2 — a supplier-split row only shows «Принять
@@ -2490,7 +2490,7 @@ function paintStockTable() {
                             : openPOByItem.get(String(r.item_id));
                         return h('button', {
                             class: 'btn btn-sm ' + (openPO ? 'btn-primary' : 'btn-outline'),
-                            style: { height: '26px', padding: '0 10px', fontSize: '11px', whiteSpace: 'nowrap' },
+                            style: { height: '26px', padding: '0 10px', fontSize: '12.5px', whiteSpace: 'nowrap' },
                             type: 'button',
                             title: openPO ? (openPO.po_number || '') : prL('stOrder'),
                             onclick: (e) => {
@@ -2726,18 +2726,18 @@ async function openStockLogModal(item, branch) {
             return h('tr', null,
                 h('td', { class: 'num muted', style: { whiteSpace: 'nowrap' } }, when),
                 h('td', null, h('span', { style: { color: meta.color, fontWeight: 600 } }, meta.label),
-                    m.reference_type === 'po' ? h('span', { class: 'muted', style: { fontSize: '11px' } }, ' · из заказа') : null),
+                    m.reference_type === 'po' ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, ' · из заказа') : null),
                 h('td', { class: 'num cell-strong', style: { textAlign: 'right', color: qty >= 0 ? 'var(--ok-700)' : 'var(--crit-700)' } },
                     (qty >= 0 ? '+' : '') + fmtNum(qty)),
                 h('td', { class: 'num muted', style: { textAlign: 'right' } }, m.unit_cost != null ? fmtMoney(Number(m.unit_cost)) : '—'),
-                h('td', { class: 'muted', style: { fontSize: '12px', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, m.note || '—'),
+                h('td', { class: 'muted', style: { fontSize: '12.5px', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, m.note || '—'),
                 // «Кто принял»: for issues — the staff member who TOOK the goods
                 // (plus who issued, muted); otherwise the movement's author.
                 h('td', null,
                     m.kind === 'issue' && m.reference_type === 'staff'
                         ? h('div', null,
                             h('div', null, staffById[m.reference_id] || '—'),
-                            m.users?.full_name ? h('div', { class: 'muted', style: { fontSize: '10.5px' } }, trf('выдал: {name}', { name: m.users.full_name })) : null)
+                            m.users?.full_name ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, trf('выдал: {name}', { name: m.users.full_name })) : null)
                         : (m.users?.full_name || h('span', { class: 'muted' }, '—'))),
             );
         })),
@@ -2809,7 +2809,7 @@ function openBulkIssueModal() {
     if (!state.branches.length) { toast(prL('biNoBranches'), 'info'); return; }
     const inpStyle = {
         height: '34px', padding: '0 10px', border: '1px solid #d1d5db',
-        borderRadius: '8px', fontSize: '13px', background: 'white',
+        borderRadius: '8px', fontSize: '13.5px', background: 'white',
         fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', width: '100%',
     };
 
@@ -2847,7 +2847,7 @@ function openBulkIssueModal() {
                 style: { ...inpStyle, width: '110px', textAlign: 'right' },
             });
             // UNIT_ENGINE_V1 — compare against on-hand in BASE units, not entry units.
-            const issConv = h('div', { class: 'muted', style: { fontSize: '11px' } });
+            const issConv = h('div', { class: 'muted', style: { fontSize: '12.5px' } });
             function paintIssConv() {
                 const f = ln.unitF > 0 ? ln.unitF : unitFactor(ln.item, ln.unit);   // ISSUE_PACK_V1
                 issConv.textContent = f === 1 ? ''
@@ -2885,8 +2885,8 @@ function openBulkIssueModal() {
                 },
             },
                 h('div', { style: { minWidth: 0, flex: 1 } },
-                    h('div', { class: 'cell-strong', style: { fontSize: '13px' } }, ln.item.name || '—'),
-                    h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+                    h('div', { class: 'cell-strong', style: { fontSize: '13.5px' } }, ln.item.name || '—'),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                         prL('biOnHand') + fmtNum(ln.onHand) + ' ' + baseUnitOf(ln.item)),
                     issConv),
                 qtyIn, issUnitSel,
@@ -2928,7 +2928,7 @@ function openBulkIssueModal() {
                     style: {
                         display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', width: '100%',
                         padding: '9px 12px', border: 'none', background: 'transparent', cursor: 'pointer',
-                        fontSize: '13px', color: 'var(--ink-800)', fontFamily: 'inherit', textAlign: 'left',
+                        fontSize: '13.5px', color: 'var(--ink-800)', fontFamily: 'inherit', textAlign: 'left',
                     },
                     onmousedown: (e) => e.preventDefault(),
                     onclick: () => {
@@ -2939,7 +2939,7 @@ function openBulkIssueModal() {
                     },
                 },
                     h('span', null, r._item?.name || '—'),
-                    h('span', { class: 'muted', style: { fontSize: '11.5px' } }, fmtNum(r.qty_on_hand || 0) + ' ' + (r._item?.unit || ''))));
+                    h('span', { class: 'muted', style: { fontSize: '12.5px' } }, fmtNum(r.qty_on_hand || 0) + ' ' + (r._item?.unit || ''))));
             }
         }
         prodSuggest.style.display = 'block';
@@ -2964,7 +2964,7 @@ function openBulkIssueModal() {
     function paintRecipientChip() {
         clear(chipEl);
         if (!recipient) {
-            chipEl.appendChild(h('span', { class: 'muted', style: { fontSize: '12px' } }, prL('noStaffSel')));
+            chipEl.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } }, prL('noStaffSel')));
             return;
         }
         chipEl.appendChild(h('span', {
@@ -2997,7 +2997,7 @@ function openBulkIssueModal() {
                     style: {
                         display: 'flex', alignItems: 'center', gap: '8px', width: '100%',
                         padding: '9px 12px', border: 'none', background: 'transparent', cursor: 'pointer',
-                        fontSize: '13px', color: 'var(--ink-800)', fontFamily: 'inherit', textAlign: 'left',
+                        fontSize: '13.5px', color: 'var(--ink-800)', fontFamily: 'inherit', textAlign: 'left',
                     },
                     onmousedown: (e) => e.preventDefault(),
                     onclick: () => {
@@ -3005,7 +3005,7 @@ function openBulkIssueModal() {
                     },
                 },
                     h('span', null, u.full_name || '—'),
-                    u.role ? h('span', { class: 'muted', style: { fontSize: '11.5px' } }, u.role) : null));
+                    u.role ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, u.role) : null));
             }
         }
         staffSuggest.style.display = 'block';
@@ -3089,6 +3089,7 @@ function openBulkIssueModal() {
 }
 
 // Multi-row требование-накладная for the bulk issue (BULK_ISSUE_V1).
+/* type-scale-exempt-start: печатный документ — семейство Onest, размеры остаются его выверенными метриками (дизайн-док 2026-08-31) */
 function openBulkIssueSlip({ lines, branch, recipient, issuer, dept, note }) {
     const now = new Date();
     const pad = n => String(n).padStart(2, '0');
@@ -3150,13 +3151,14 @@ ${PRINT_FONT_FACE_CSS}
     w.document.write(html);
     w.document.close();
 }
+/* type-scale-exempt-end */
 
 // BULK_ISSUE_ONLY_V1 — UNUSED since the per-row «Выдать» button was removed;
 // kept (with openIssueSlip) so a single-product issue can be re-enabled easily.
 function openIssueModal(item, branch, onHand) {
     const inpStyle = {
         height: '34px', padding: '0 10px', border: '1px solid #d1d5db',
-        borderRadius: '8px', fontSize: '13px', background: 'white',
+        borderRadius: '8px', fontSize: '13.5px', background: 'white',
         fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', width: '100%',
     };
     const qtyInput  = h('input', { type: 'number', min: '0.0001', step: 'any', placeholder: 'напр. 10', required: true, style: inpStyle });
@@ -3181,7 +3183,7 @@ function openIssueModal(item, branch, onHand) {
     function paintRecipient() {
         clear(chipEl);
         if (!recipient) {
-            chipEl.appendChild(h('span', { class: 'muted', style: { fontSize: '12px' } }, prL('noStaffSel')));
+            chipEl.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } }, prL('noStaffSel')));
             return;
         }
         chipEl.appendChild(h('span', {
@@ -3193,13 +3195,13 @@ function openIssueModal(item, branch, onHand) {
             },
         },
             recipient.full_name,
-            recipient.role ? h('span', { class: 'muted', style: { fontSize: '11px', fontWeight: 400 } }, recipient.role) : null,
+            recipient.role ? h('span', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 400 } }, recipient.role) : null,
             h('button', {
                 type: 'button', title: 'Убрать',
                 style: {
                     width: '18px', height: '18px', border: 'none', borderRadius: '50%',
                     background: 'var(--primary-100, #d3ece9)', color: 'var(--primary-700)',
-                    cursor: 'pointer', fontSize: '12px', lineHeight: '1', padding: 0,
+                    cursor: 'pointer', fontSize: '12.5px', lineHeight: '1', padding: 0,
                     display: 'grid', placeItems: 'center',
                 },
                 onclick: () => { recipient = null; paintRecipient(); },
@@ -3226,7 +3228,7 @@ function openIssueModal(item, branch, onHand) {
                     style: {
                         display: 'flex', alignItems: 'center', gap: '8px', width: '100%',
                         padding: '9px 12px', border: 'none', background: 'transparent',
-                        cursor: 'pointer', fontSize: '13px', color: 'var(--ink-800)',
+                        cursor: 'pointer', fontSize: '13.5px', color: 'var(--ink-800)',
                         fontFamily: 'inherit', textAlign: 'left',
                     },
                     onmouseenter: (e) => { e.currentTarget.style.background = 'var(--ink-50)'; },
@@ -3239,7 +3241,7 @@ function openIssueModal(item, branch, onHand) {
                     },
                 },
                     h('span', { style: { fontWeight: 600 } }, u.full_name),
-                    h('span', { class: 'muted', style: { fontSize: '11.5px' } }, [u.role, u.specialty].filter(Boolean).join(' · ')),
+                    h('span', { class: 'muted', style: { fontSize: '12.5px' } }, [u.role, u.specialty].filter(Boolean).join(' · ')),
                 ));
             }
         }
@@ -3250,9 +3252,9 @@ function openIssueModal(item, branch, onHand) {
     searchInp.addEventListener('blur', () => setTimeout(() => { suggestEl.style.display = 'none'; }, 150));
 
     const body = h('form', { class: 'modal-body' },
-        h('div', { style: { padding: '10px 12px', background: 'var(--ink-25, #fafafa)', border: '1px solid var(--ink-100)', borderRadius: '10px', marginBottom: '12px', fontSize: '13px' } },
+        h('div', { style: { padding: '10px 12px', background: 'var(--ink-25, #fafafa)', border: '1px solid var(--ink-100)', borderRadius: '10px', marginBottom: '12px', fontSize: '13.5px' } },
             h('div', { class: 'cell-strong' }, item.name || '—'),
-            h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
                 (branch?.name || '—') + ' · ' + trf('В наличии: {n} {unit}', { n: fmtNum(onHand), unit: item.unit || '' })),
         ),
         fieldRow(prL('qty'), qtyInput),
@@ -3310,6 +3312,7 @@ function openIssueModal(item, branch, onHand) {
 // Printable issue slip (требование-накладная) with signature lines — the
 // storage manager keeps the signed paper copy.
 /* i18n-exempt-start: требование-накладная (ТН) — печатный документ, намеренно русский */
+    /* type-scale-exempt-start: печатный документ — семейство Onest, размеры остаются его выверенными метриками (дизайн-док 2026-08-31) */
 function openIssueSlip({ item, branch, qty, recipient, issuer, note }) {
     const now = new Date();
     const pad = n => String(n).padStart(2, '0');
@@ -3363,7 +3366,8 @@ ${PRINT_FONT_FACE_CSS}
     w.document.write(html);
     w.document.close();
 }
-/* i18n-exempt-end */
+/* type-scale-exempt-end */
+    /* i18n-exempt-end */
 
 // ---- Receive modal: INSERT stock_movements kind='receipt', qty = +quantity ---
 // ---------------------------------------------------------------------------
@@ -3393,7 +3397,7 @@ function openReceiveModal() {
 
     const inpStyle = {
         height: '34px', padding: '0 10px', border: '1px solid #d1d5db',
-        borderRadius: '8px', fontSize: '13px', background: 'white',
+        borderRadius: '8px', fontSize: '13.5px', background: 'white',
         fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', width: '100%',
     };
 
@@ -3455,7 +3459,7 @@ function openReceiveModal() {
                 h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
                     nmIn, mgIn, phIn, emIn,
                     h('div', null,
-                        h('div', { class: 'muted', style: { fontSize: '11.5px', marginBottom: '3px' } },
+                        h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '3px' } },
                             trf('Цена закупки у этого поставщика (за {unit})', { unit: baseUnitOf(ln.item) })),
                         prIn))),
             footerButtons: (close) => [
@@ -3542,7 +3546,7 @@ function openReceiveModal() {
             costIn.addEventListener('input', () => { ln.cost = costIn.value === '' ? '' : Number(costIn.value); recalcTotal(); });
             // UNIT_ENGINE_V1 — pick the unit the goods arrive in; the movement is
             // always written in base units so stock stays comparable.
-            const convHint = h('div', { class: 'muted', style: { fontSize: '11px' } });
+            const convHint = h('div', { class: 'muted', style: { fontSize: '12.5px' } });
             function paintConv() {
                 const f = lineFactor(ln);   // SUPPLIER_PACK_V1 — supplier-specific pack size
                 convHint.textContent = f === 1 ? ''
@@ -3573,10 +3577,10 @@ function openReceiveModal() {
                     style: { ...inpStyle, width: '150px', fontFamily: 'ui-monospace, monospace' } });
             if (codeIn) codeIn.addEventListener('input', () => { ln.batch = codeIn.value; });
             const codeGen = codeIn ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: prL('bxGen'),
-                style: { padding: '0 8px', fontSize: '14px' },
+                style: { padding: '0 8px', fontSize: '13.5px' },
                 onclick: () => { ln.batch = genBatchCode(ln.item); codeIn.value = ln.batch; } }, '\u21bb') : null;
             const codeGroup = codeIn ? h('div', { class: 'row', style: { gap: '4px', alignItems: 'center' } },
-                h('span', { class: 'muted', style: { fontSize: '11.5px', whiteSpace: 'nowrap' } }, prL('bxBatch')),
+                h('span', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, prL('bxBatch')),
                 codeIn, codeGen) : null;
 
             // PRODUCT_EXPIRY_V2 — expiration date INLINE, right next to the product.
@@ -3590,7 +3594,7 @@ function openReceiveModal() {
                 if (expIn.value && codeIn && !ln.batch) { ln.batch = genBatchCode(ln.item); codeIn.value = ln.batch; }
             });
             const expGroup = expIn ? h('div', { class: 'row', style: { gap: '5px', alignItems: 'center' } },
-                h('span', { class: 'muted', style: { fontSize: '11.5px', whiteSpace: 'nowrap' } },
+                h('span', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } },
                     Icon('Clock', { size: 12 }), ' ' + prL('bxExpiry')),
                 expIn) : null;
 
@@ -3629,7 +3633,7 @@ function openReceiveModal() {
                     background: '#fde68a', border: '1px solid #fbcf4a', color: '#7c5a00', fontWeight: 700, borderRadius: '8px' },
                 onclick: () => openLineSupplierModal(ln) }, '+');
             const supGroup = h('div', { class: 'row', style: { gap: '5px', alignItems: 'center' } },
-                h('span', { class: 'muted', style: { fontSize: '11.5px', whiteSpace: 'nowrap' } }, prL('rcSupplier')),
+                h('span', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, prL('rcSupplier')),
                 supSel, supAdd);
 
             linesWrap.appendChild(h('div', {
@@ -3641,9 +3645,9 @@ function openReceiveModal() {
                 // RECEIVE_MULTI_V1 / WIDE_RECEIVE_LINE_V1 — the row stays on ONE line;
                 // only a long product NAME wraps inside its own cell (below), never the row.
                 h('div', { style: { minWidth: '140px', flex: 1 } },
-                    h('div', { class: 'cell-strong', style: { fontSize: '13px', whiteSpace: 'normal', overflowWrap: 'anywhere' } },
+                    h('div', { class: 'cell-strong', style: { fontSize: '13.5px', whiteSpace: 'normal', overflowWrap: 'anywhere' } },
                         ln.item.name || '—'),
-                    h('div', { class: 'muted', style: { fontSize: '11.5px', whiteSpace: 'normal', overflowWrap: 'anywhere' } },
+                    h('div', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'normal', overflowWrap: 'anywhere' } },
                         [ln.item.strength, ln.item.form, baseUnitOf(ln.item)].filter(Boolean).join(' · ') || '—'),
                     convHint),
                 supGroup,   // SUPPLIER_LINE_V1 — supplier right next to the product
@@ -3684,7 +3688,7 @@ function openReceiveModal() {
                     type: 'button',
                     style: {
                         display: 'block', width: '100%', padding: '9px 12px', border: 'none', background: 'transparent',
-                        cursor: 'pointer', fontSize: '13px', color: 'var(--ink-800)', fontFamily: 'inherit',
+                        cursor: 'pointer', fontSize: '13.5px', color: 'var(--ink-800)', fontFamily: 'inherit',
                         textAlign: 'left', whiteSpace: 'normal', overflowWrap: 'anywhere',
                     },
                     onmousedown: (e) => e.preventDefault(),
@@ -3729,7 +3733,7 @@ function openReceiveModal() {
     const body = h('form', { class: 'modal-body' },
         h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } }, prodWrap, createBtn),
         h('div', { class: 'field', style: { marginTop: '2px' } }, h('label', null, prL('rcItems')), linesWrap),
-        h('div', { class: 'row', style: { justifyContent: 'flex-end', gap: '6px', fontSize: '13px', marginTop: '2px' } },
+        h('div', { class: 'row', style: { justifyContent: 'flex-end', gap: '6px', fontSize: '13.5px', marginTop: '2px' } },
             h('span', { class: 'muted' }, prL('rcTotal')), totalEl, h('span', { class: 'muted' }, 'UZS')),
     );
 
@@ -3751,6 +3755,7 @@ function openReceiveModal() {
               <div class="bcnum">${esc(code)}</div>
             </div>`;
         }).join('');
+        /* type-scale-exempt-start: печатный документ — семейство Onest, размеры остаются его выверенными метриками (дизайн-док 2026-08-31) */
         const html = `<!doctype html><html><head><meta charset="utf-8"><title>Batch labels</title><style>
 ${PRINT_FONT_FACE_CSS}
           @page { size: 58mm 40mm; margin: 0; }
@@ -3770,6 +3775,7 @@ ${PRINT_FONT_FACE_CSS}
         </style></head><body>${cards}
         <script>window.onload=function(){(document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve()).then(function(){try{window.focus();window.print();}catch(e){}setTimeout(function(){window.close();},400);});};<\/script>
         </body></html>`;
+        /* type-scale-exempt-end */
         const win = window.open('', '_blank', 'width=460,height=380');
         if (!win) { toast('Разрешите всплывающие окна, чтобы печатать этикетки.', 'fail'); return; }
         win.document.write(html);
@@ -3956,7 +3962,7 @@ function prProducts() {
             ),
         ),
         !state.itemSuppliersOk ? h('div', {
-            style: { margin: '10px 14px 0', padding: '8px 12px', background: 'var(--warn-50)', border: '1px solid #fde9b6', borderRadius: '8px', fontSize: '12px', color: 'var(--warn-700)' },
+            style: { margin: '10px 14px 0', padding: '8px 12px', background: 'var(--warn-50)', border: '1px solid #fde9b6', borderRadius: '8px', fontSize: '12.5px', color: 'var(--warn-700)' },
         }, 'Supplier links are disabled — apply migration 062_item_suppliers.sql to enable connecting products to suppliers.') : null,
         tableWrap,
     ));
@@ -4032,21 +4038,21 @@ function paintProductsTable() {
                         return h('td', { style: { textAlign: 'center', width: '34px' } }, cb);
                     })()] : []),
                     h('td', { class: 'cell-strong' }, p.name || '—'),   // PROD_NO_SKU_V1 — КОД column dropped
-                    h('td', { class: 'muted', style: { fontSize: '12px' } }, catLabel(p.procurement_category) || (p.is_drug ? catLabel('medicines') : '—')),
+                    h('td', { class: 'muted', style: { fontSize: '12.5px' } }, catLabel(p.procurement_category) || (p.is_drug ? catLabel('medicines') : '—')),
                     h('td', { class: 'muted' }, p.unit || '—'),
                     h('td', { class: 'num' }, (lnk && lnk.last_price != null) ? fmtMoney(Number(lnk.last_price))
                         : (p.price != null ? fmtMoney(Number(p.price)) : '—')),
-                    h('td', { style: { fontSize: '12px' } },
+                    h('td', { style: { fontSize: '12.5px' } },
                         lnk ? h('span', { class: 'tag' }, supName[lnk.supplier_id]) : h('span', { class: 'muted' }, '—')),
                     h('td', null, p.active === false
                         ? h('span', { class: 'tag' }, 'Inactive')
                         : h('span', { class: 'tag tag-ok' }, 'Active')),
                     h('td', null, h('div', { class: 'row', style: { gap: '4px' } },
-                        h('button', { class: 'btn btn-ghost btn-sm', style: { height: '26px', padding: '0 8px', fontSize: '11px' }, onclick: () => openProductModal(p) }, Icon('Edit', { size: 12 }), ' Edit'),
+                        h('button', { class: 'btn btn-ghost btn-sm', style: { height: '26px', padding: '0 8px', fontSize: '12.5px' }, onclick: () => openProductModal(p) }, Icon('Edit', { size: 12 }), ' Edit'),
                         // PRODUCT_DELETE_V1 — soft-delete (history preserved); hidden until mig 136.
                         state.delOk !== false ? h('button', {
                             class: 'btn btn-ghost btn-sm',
-                            style: { height: '26px', padding: '0 8px', fontSize: '11px', color: 'var(--crit-700, #b91c1c)' },
+                            style: { height: '26px', padding: '0 8px', fontSize: '12.5px', color: 'var(--crit-700, #b91c1c)' },
                             onclick: () => confirmDeleteProduct(p),
                         }, Icon('Trash', { size: 12 }), ' Удалить') : null,
                     )),
@@ -4087,7 +4093,7 @@ function confirmDeleteProducts(items) {
         subtitle: names,
         width: '500px',
         body: h('div', { class: 'modal-body' },
-            h('p', { style: { margin: 0, fontSize: '13px', lineHeight: 1.5 } },
+            h('p', { style: { margin: 0, fontSize: '13.5px', lineHeight: 1.5 } },
                 'Выбранные товары исчезнут из каталога, поиска и приёмки. ',
                 h('b', null, 'История закупок сохранится'),
                 ' — движения по складу, партии и заказы останутся в отчётах и журнале.')),
@@ -4154,7 +4160,7 @@ function openProductModal(product, opts = {}) {   // RECEIVE_MULTI_V1 — opts.o
     }
     const inpStyle = {
         height: '34px', padding: '0 10px', border: '1px solid #d1d5db',
-        borderRadius: '8px', fontSize: '13px', background: 'white',
+        borderRadius: '8px', fontSize: '13.5px', background: 'white',
         fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box',
     };
 
@@ -4163,7 +4169,7 @@ function openProductModal(product, opts = {}) {   // RECEIVE_MULTI_V1 — opts.o
     function paintChips() {
         clear(chipsEl);
         if (!selected.size) {
-            chipsEl.appendChild(h('span', { class: 'muted', style: { fontSize: '12px', lineHeight: '28px' } },
+            chipsEl.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px', lineHeight: '28px' } },
                 'Поставщики не привязаны — найдите ниже или создайте нового.'));
             return;
         }
@@ -4186,10 +4192,10 @@ function openProductModal(product, opts = {}) {   // RECEIVE_MULTI_V1 — opts.o
                     borderRadius: '9px', background: 'var(--primary-50)', border: '1px solid var(--primary-200)',
                 },
             },
-                h('span', { style: { flex: 1, minWidth: 0, fontSize: '13px', fontWeight: 600, color: 'var(--primary-700)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, s.name),
-                h('span', { class: 'muted', style: { fontSize: '11px', whiteSpace: 'nowrap' } }, 'Цена закупки'),
+                h('span', { style: { flex: 1, minWidth: 0, fontSize: '13.5px', fontWeight: 600, color: 'var(--primary-700)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, s.name),
+                h('span', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, 'Цена закупки'),
                 priceIn,
-                h('span', { class: 'muted', style: { fontSize: '11px' } }, 'сум'),
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'сум'),
                 // SUPPLIER_PACK_V1 — this supplier's pack size: «1 уп = [N] шт».
                 ...(state.supPackOk !== false ? (() => {
                     const packIn = h('input', {
@@ -4211,11 +4217,11 @@ function openProductModal(product, opts = {}) {   // RECEIVE_MULTI_V1 — opts.o
                         if (unitSelS.value) supplierUnit.set(sid, unitSelS.value); else supplierUnit.delete(sid);
                     });
                     return [
-                        h('span', { class: 'muted', style: { fontSize: '11px', whiteSpace: 'nowrap' } }, '· 1'),
+                        h('span', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, '· 1'),
                         unitSelS,
-                        h('span', { class: 'muted', style: { fontSize: '11px' } }, '='),
+                        h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '='),
                         packIn,
-                        h('span', { class: 'muted', style: { fontSize: '11px', whiteSpace: 'nowrap' } },
+                        h('span', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } },
                             baseUnitIn.value.trim() || 'шт'),
                     ];
                 })() : []),
@@ -4224,7 +4230,7 @@ function openProductModal(product, opts = {}) {   // RECEIVE_MULTI_V1 — opts.o
                     style: {
                         width: '20px', height: '20px', border: 'none', borderRadius: '50%',
                         background: 'var(--primary-100, #d3ece9)', color: 'var(--primary-700)',
-                        cursor: 'pointer', fontSize: '13px', lineHeight: '1', padding: 0,
+                        cursor: 'pointer', fontSize: '13.5px', lineHeight: '1', padding: 0,
                         display: 'grid', placeItems: 'center', flex: '0 0 auto',
                     },
                     onclick: () => { selected.delete(sid); supplierPrice.delete(sid); paintChips(); },
@@ -4274,7 +4280,7 @@ function openProductModal(product, opts = {}) {   // RECEIVE_MULTI_V1 — opts.o
                     style: {
                         display: 'flex', alignItems: 'center', gap: '8px', width: '100%',
                         padding: '9px 12px', border: 'none', background: 'transparent',
-                        cursor: 'pointer', fontSize: '13px', color: 'var(--ink-800)',
+                        cursor: 'pointer', fontSize: '13.5px', color: 'var(--ink-800)',
                         fontFamily: 'inherit', textAlign: 'left',
                     },
                     onmouseenter: (e) => { e.currentTarget.style.background = 'var(--ink-50)'; },
@@ -4287,7 +4293,7 @@ function openProductModal(product, opts = {}) {   // RECEIVE_MULTI_V1 — opts.o
                     },
                 },
                     h('span', { style: { fontWeight: 600 } }, s.name),
-                    s.phone ? h('span', { class: 'muted', style: { fontSize: '11.5px' } }, s.phone) : null,
+                    s.phone ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, s.phone) : null,
                 ));
             }
         }
@@ -4371,7 +4377,7 @@ function openProductModal(product, opts = {}) {   // RECEIVE_MULTI_V1 — opts.o
     const consUnitIn  = selectEl(unitCatalogOptions(consVal),  { value: consVal,  style: unitStyle });
     const consFactIn  = h('input', { type: 'number', min: '0.0001', step: 'any', style: unitStyle,
         value: String(numOr1(product?.consumption_factor)) });
-    const unitPreview = h('div', { class: 'muted', style: { fontSize: '11.5px' } });
+    const unitPreview = h('div', { class: 'muted', style: { fontSize: '12.5px' } });
 
     // UNITS_CLEAR_V1 — compact right-aligned factor inputs; the dispensing factor
     // defaults to 1 (a dispensing unit usually equals the base unit). The two unit
@@ -4385,8 +4391,8 @@ function openProductModal(product, opts = {}) {   // RECEIVE_MULTI_V1 — opts.o
     Object.assign(baseUnitIn.style,  { width: '200px', maxWidth: '100%' });
     // Live base-unit name echoed at the tail of each equation ("= 250 [мл]").
     const _baseEcho = () => baseUnitIn.value.trim() || '—';
-    const baseEchoP = h('span', { style: { fontSize: '13px', color: 'var(--ink-700)', whiteSpace: 'nowrap', fontWeight: 600 } }, _baseEcho());
-    const baseEchoD = h('span', { style: { fontSize: '13px', color: 'var(--ink-700)', whiteSpace: 'nowrap', fontWeight: 600 } }, _baseEcho());
+    const baseEchoP = h('span', { style: { fontSize: '13.5px', color: 'var(--ink-700)', whiteSpace: 'nowrap', fontWeight: 600 } }, _baseEcho());
+    const baseEchoD = h('span', { style: { fontSize: '13.5px', color: 'var(--ink-700)', whiteSpace: 'nowrap', fontWeight: 600 } }, _baseEcho());
 
     function paintUnitPreview() {
         const b = _baseEcho();
@@ -4406,7 +4412,7 @@ function openProductModal(product, opts = {}) {   // RECEIVE_MULTI_V1 — opts.o
     const sugg = editing ? suggestUnitSplit(product) : null;
     const suggRow = sugg ? h('div', {
         class: 'row',
-        style: { gap: '8px', alignItems: 'center', fontSize: '11.5px', flexWrap: 'wrap' },
+        style: { gap: '8px', alignItems: 'center', fontSize: '12.5px', flexWrap: 'wrap' },
     },
         h('span', { class: 'muted' },
             prL('unSuggest') + ' 1 ' + sugg.purchase + ' = ' + fmtNum(sugg.factor) + ' ' + sugg.base),
@@ -4431,12 +4437,12 @@ function openProductModal(product, opts = {}) {   // RECEIVE_MULTI_V1 — opts.o
             borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '10px',
         },
     },
-        h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--ink-700)' } }, prL('unSection')),
+        h('div', { style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-700)' } }, prL('unSection')),
         // BASE — the reference unit; everything converts to it (no factor of its own).
         h('div', { class: 'row', style: { gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' } },
             h('div', { style: { minWidth: 0 } },
-                h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--ink-900)' } }, prL('unBase')),
-                h('div', { class: 'muted', style: { fontSize: '11px', marginBottom: '4px' } }, prL('unStockedIn')),
+                h('div', { style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-900)' } }, prL('unBase')),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '4px' } }, prL('unStockedIn')),
                 baseUnitIn)),
         // SUPPLIER_UNITS_V1 — the BUY conversion lives per supplier («Поставщики этого
         // товара» below); purchUnitIn/packFactIn stay DEFINED (unrendered) so stored
@@ -4444,11 +4450,11 @@ function openProductModal(product, opts = {}) {   // RECEIVE_MULTI_V1 — opts.o
         // owner request: «1 [unit] = [N] [base]», usually 1.
         h('div', { style: { height: '1px', background: 'var(--ink-100)' } }),
         h('div', { style: { display: 'flex', flexDirection: 'column', gap: '5px' } },
-            h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--ink-700)' } }, prL('unGiveHead')),
-            h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flexWrap: 'wrap', fontSize: '14px', color: 'var(--ink-900)' } },
+            h('div', { style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-700)' } }, prL('unGiveHead')),
+            h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flexWrap: 'wrap', fontSize: '13.5px', color: 'var(--ink-900)' } },
                 h('span', { style: { fontWeight: 700 } }, '1'), consUnitIn,
                 h('span', { style: { fontWeight: 700 } }, '='), consFactIn),
-            h('div', { class: 'muted', style: { fontSize: '11px' } }, prL('unGiveHint'))),
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, prL('unGiveHint'))),
     );
 
     paintChips();   // EDITOR_TDZ_FIX_V1 — first paint, now that the units inputs exist
@@ -4464,7 +4470,7 @@ function openProductModal(product, opts = {}) {   // RECEIVE_MULTI_V1 — opts.o
         // PROD_NO_SKU_V1 — Code field hidden; an existing code round-trips via codeInput.
         h('div', { style: { display: 'grid', gridTemplateColumns: '1fr auto', gap: '10px', alignItems: 'end', margin: '4px 0 10px' } },
             fieldRow(lang === 'ru' ? 'Категория' : lang === 'uz' ? 'Kategoriya' : 'Category', categorySel),
-            h('label', { class: 'row', style: { gap: '8px', cursor: 'pointer', fontSize: '13px', paddingBottom: '9px' } }, activeInput, 'Active'),
+            h('label', { class: 'row', style: { gap: '8px', cursor: 'pointer', fontSize: '13.5px', paddingBottom: '9px' } }, activeInput, 'Active'),
         ),
         state.unitsOk === false ? null : unitsBlock,
         state.itemSuppliersOk ? h('div', {
@@ -4474,15 +4480,15 @@ function openProductModal(product, opts = {}) {   // RECEIVE_MULTI_V1 — opts.o
                 borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '10px',
             },
         },
-            h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--ink-700)' } }, 'Поставщики этого товара'),
+            h('div', { style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-700)' } }, 'Поставщики этого товара'),
             chipsEl,
             searchWrap,
             // SUPPLIER_QUICK_POPUP_V1 — one yellow button; the form lives in a popup.
             h('div', { style: { borderTop: '1px dashed var(--ink-200)', paddingTop: '10px', display: 'flex', alignItems: 'center', gap: '10px' } },
-                h('div', { class: 'muted', style: { fontSize: '11.5px', flex: 1 } }, 'Нет нужного поставщика в списке?'),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', flex: 1 } }, 'Нет нужного поставщика в списке?'),
                 quickBtn,
             ),
-        ) : h('div', { class: 'muted', style: { fontSize: '12px' } },
+        ) : h('div', { class: 'muted', style: { fontSize: '12.5px' } },
             'Supplier linking needs migration 062_item_suppliers.sql.'),
     );
 
@@ -4625,15 +4631,15 @@ function paintSuppliersTable() {
             ? sRows.map(s => h('tr', { style: s.active === false ? { opacity: '0.55' } : {} },
                 h('td', { class: 'cell-strong' }, s.name || '—'),
                 h('td', { class: 'muted' }, s.contact_name || '—'),
-                h('td', { class: 'muted', style: { fontSize: '12px' } }, s.phone || '—'),
-                h('td', { class: 'muted', style: { fontSize: '12px' } }, s.email || '—'),
+                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, s.phone || '—'),
+                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, s.email || '—'),
                 h('td', null, s.active === false
                     ? h('span', { class: 'tag' }, 'Inactive')
                     : h('span', { class: 'tag tag-ok' }, 'Active')),
                 h('td', null, h('div', { class: 'row', style: { gap: '4px' } },
-                    h('button', { class: 'btn btn-ghost btn-sm', style: { height: '26px', padding: '0 8px', fontSize: '11px' }, onclick: () => openSupplierModal(s) }, Icon('Edit', { size: 12 }), ' Edit'),
+                    h('button', { class: 'btn btn-ghost btn-sm', style: { height: '26px', padding: '0 8px', fontSize: '12.5px' }, onclick: () => openSupplierModal(s) }, Icon('Edit', { size: 12 }), ' Edit'),
                     s.active === false
-                        ? h('button', { class: 'btn btn-ghost btn-sm', style: { height: '26px', padding: '0 8px', fontSize: '11px' }, onclick: () => setSupplierActive(s, true) }, 'Restore')
+                        ? h('button', { class: 'btn btn-ghost btn-sm', style: { height: '26px', padding: '0 8px', fontSize: '12.5px' }, onclick: () => setSupplierActive(s, true) }, 'Restore')
                         : h('button', { class: 'icon-btn', style: { width: '26px', height: '26px' }, title: 'Deactivate', onclick: () => setSupplierActive(s, false) }, Icon('Trash', { size: 13 })),
                 )),
             ))
@@ -4765,7 +4771,7 @@ function poStatusPill(status) {
         display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '2px 8px', borderRadius: '999px',
         background: `color-mix(in oklab, ${m.color} 12%, white)`, color: m.color,
         border: `1px solid color-mix(in oklab, ${m.color} 35%, white)`,
-        fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em',
+        fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em',
     } },
         h('span', { style: { width: '6px', height: '6px', borderRadius: '999px', background: m.color } }),
         m.label,
@@ -4820,11 +4826,11 @@ function paintPOTable() {
                 return h('tr', null,
                     h('td', { class: 'cell-mono cell-strong', style: { fontSize: '12.5px' } }, po.po_number || po.id.slice(0, 8)),
                     h('td', null, sup?.name || '—'),
-                    state.branches.length > 1 ? h('td', { class: 'muted', style: { fontSize: '12px' } }, br?.name || '—') : null,   // PROC_NO_BRANCH_V1
+                    state.branches.length > 1 ? h('td', { class: 'muted', style: { fontSize: '12.5px' } }, br?.name || '—') : null,   // PROC_NO_BRANCH_V1
                     h('td', null, poStatusPill(po.status)),
                     h('td', { class: 'num cell-strong' }, fmtMoney(po.total)),
-                    h('td', { class: 'muted num', style: { fontSize: '12px' } }, fmtDate(po.created_at)),
-                    h('td', null, h('button', { class: 'btn btn-ghost btn-sm', style: { height: '26px', padding: '0 8px', fontSize: '11px' }, onclick: () => openPODetail(po) }, 'Open ', Icon('ArrowRight', { size: 11 }))),
+                    h('td', { class: 'muted num', style: { fontSize: '12.5px' } }, fmtDate(po.created_at)),
+                    h('td', null, h('button', { class: 'btn btn-ghost btn-sm', style: { height: '26px', padding: '0 8px', fontSize: '12.5px' }, onclick: () => openPODetail(po) }, 'Open ', Icon('ArrowRight', { size: 11 }))),
                 );
             })
             : [emptyRow(state.branches.length > 1 ? 7 : 6, 'No purchase orders yet. Create one to start.')]),
@@ -4882,7 +4888,7 @@ function openNewPOModal(prefill = null) {   // PO_PREFILL_V1 — { item, supplie
 
     const inpStyle = {
         height: '34px', padding: '0 10px', border: '1px solid #d1d5db', borderRadius: '8px',
-        fontSize: '13px', background: 'white', fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box',
+        fontSize: '13.5px', background: 'white', fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box',
     };
     const poBranch = state.branches.find(b => String(b.id) === String(state.stockBranch)) || state.branches[0];   // PO_NOBRANCH_V1
     const lines = [];   // { item, supplierId, qty, cost, costTouched }
@@ -4944,9 +4950,9 @@ function openNewPOModal(prefill = null) {   // PO_PREFILL_V1 — { item, supplie
                          border: '1px solid var(--ink-100)', borderRadius: '10px', background: 'var(--white)', flexWrap: 'wrap' },
             },
                 h('div', { style: { minWidth: '140px', flex: 1 } },
-                    h('div', { class: 'cell-strong', style: { fontSize: '13px', whiteSpace: 'normal', overflowWrap: 'anywhere' } }, ln.item.name || '—'),
-                    h('div', { class: 'muted', style: { fontSize: '11.5px' } }, baseUnitOf(ln.item) || '—')),
-                h('span', { class: 'muted', style: { fontSize: '11.5px', whiteSpace: 'nowrap' } }, 'Поставщик'),
+                    h('div', { class: 'cell-strong', style: { fontSize: '13.5px', whiteSpace: 'normal', overflowWrap: 'anywhere' } }, ln.item.name || '—'),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, baseUnitOf(ln.item) || '—')),
+                h('span', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, 'Поставщик'),
                 supSel, qtyIn, costIn,
                 h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: prL('biRemove'),
                     onclick: () => { lines.splice(idx, 1); paintLines(); } }, '×'),
@@ -4979,7 +4985,7 @@ function openNewPOModal(prefill = null) {   // PO_PREFILL_V1 — { item, supplie
                 prodSuggest.appendChild(h('button', {
                     type: 'button',
                     style: { display: 'block', width: '100%', padding: '9px 12px', border: 'none', background: 'transparent',
-                             cursor: 'pointer', fontSize: '13px', color: 'var(--ink-800)', fontFamily: 'inherit',
+                             cursor: 'pointer', fontSize: '13.5px', color: 'var(--ink-800)', fontFamily: 'inherit',
                              textAlign: 'left', whiteSpace: 'normal', overflowWrap: 'anywhere' },
                     onmousedown: (e) => e.preventDefault(),
                     onclick: () => { addLine(it); prodInp.value = ''; prodSuggest.style.display = 'none'; prodInp.focus(); },
@@ -5000,7 +5006,7 @@ function openNewPOModal(prefill = null) {   // PO_PREFILL_V1 — { item, supplie
     const body = h('form', { class: 'modal-body', style: { display: 'block' } },
         h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', marginBottom: '12px' } }, prodWrap),
         h('div', { class: 'field', style: { marginBottom: '10px' } }, h('label', null, 'Позиции *'), linesWrap),
-        h('div', { class: 'row', style: { justifyContent: 'flex-end', gap: '6px', fontSize: '13px', margin: '2px 0 10px' } },
+        h('div', { class: 'row', style: { justifyContent: 'flex-end', gap: '6px', fontSize: '13.5px', margin: '2px 0 10px' } },
             h('span', { class: 'muted' }, 'Итого:'), totalEl, h('span', { class: 'muted' }, 'UZS')),
         // PO_NO_NOTES_V1 — «Заметки» removed; notesInput stays defined so the save
         // payload still reads it (always empty → null).
@@ -5109,14 +5115,14 @@ async function openPODetail(po) {
                         // product); entering it stores the goods as a dated lot.
                         if (state.batchOk !== false && it) {
                             const expiryEl = h('input', { type: 'date',
-                                style: { width: '150px', height: '26px', padding: '0 8px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '12px' } });
+                                style: { width: '150px', height: '26px', padding: '0 8px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '12.5px' } });
                             batchInputs[li.id] = { expiryEl };
                             parts.push(h('div', { class: 'row', style: { gap: '6px', marginTop: '5px', alignItems: 'center', flexWrap: 'wrap' } },
-                                h('span', { class: 'muted', style: { fontSize: '11px' } }, prL('bxExpiry')), expiryEl));
+                                h('span', { class: 'muted', style: { fontSize: '12.5px' } }, prL('bxExpiry')), expiryEl));
                         }
                         recvCell = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px' } }, ...parts);
                     } else {
-                        recvCell = remaining <= 0 ? h('span', { class: 'tag tag-ok' }, 'Done') : h('span', { class: 'muted', style: { fontSize: '11px' } }, '—');
+                        recvCell = remaining <= 0 ? h('span', { class: 'tag tag-ok' }, 'Done') : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '—');
                     }
                     return h('tr', null,
                         h('td', { class: 'cell-strong' }, it?.name || '—'),
@@ -5140,14 +5146,14 @@ async function openPODetail(po) {
 
     const body = h('div', { class: 'modal-body', style: { display: 'block' } },
         h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '4px' } },
-            h('div', null, h('div', { class: 'muted', style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } }, 'Supplier'),
-                h('div', { style: { fontSize: '13px', color: 'var(--ink-900)' } }, sup?.name || '—')),
-            h('div', null, h('div', { class: 'muted', style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } }, 'Destination branch'),
-                h('div', { style: { fontSize: '13px', color: 'var(--ink-900)' } }, br?.name || '—')),
-            h('div', null, h('div', { class: 'muted', style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } }, 'Status'),
+            h('div', null, h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } }, 'Supplier'),
+                h('div', { style: { fontSize: '13.5px', color: 'var(--ink-900)' } }, sup?.name || '—')),
+            h('div', null, h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } }, 'Destination branch'),
+                h('div', { style: { fontSize: '13.5px', color: 'var(--ink-900)' } }, br?.name || '—')),
+            h('div', null, h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } }, 'Status'),
                 h('div', { style: { marginTop: '2px' } }, poStatusPill(po.status))),
-            h('div', null, h('div', { class: 'muted', style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } }, 'Total'),
-                h('div', { class: 'num', style: { fontSize: '13px', color: 'var(--ink-900)' } }, fmtMoney(po.total))),
+            h('div', null, h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } }, 'Total'),
+                h('div', { class: 'num', style: { fontSize: '13.5px', color: 'var(--ink-900)' } }, fmtMoney(po.total))),
         ),
         linesWrap,
     );

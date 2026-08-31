@@ -18,7 +18,7 @@ export function renderProductsTab(container) {
     productRefs.tbody = h('tbody');
     productRefs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } },
         'Пока нет товаров — добавьте первый.');
-    productRefs.totalEl = h('span', { class: 'muted', style: { fontSize: '12px' } }, '');
+    productRefs.totalEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
 
     const addBtn = h('button', {
         class: 'btn btn-primary btn-sm', type: 'button',
@@ -158,8 +158,8 @@ function openProductModal(p, onSaved) {
 
     // компактно: панели без своих верхних отступов (их даёт grid-gap .modal-body)
     const panelStyle = { background: 'var(--ink-25, #f8fafa)', border: '1px solid var(--ink-100)', borderRadius: '12px', padding: '12px 14px' };
-    const cap = (t) => h('div', { style: { fontSize: '13px', fontWeight: 700, color: 'var(--ink-900)', marginBottom: '8px' } }, t);
-    const hint = (t) => h('div', { class: 'muted', style: { fontSize: '11.5px', margin: '2px 0 6px' } }, t);
+    const cap = (t) => h('div', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)', marginBottom: '8px' } }, t);
+    const hint = (t) => h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '2px 0 6px' } }, t);
 
     // ---- Name + Категория + Активен ----
     const nameInp = h('input', { type: 'text', required: true, value: p ? (p.name || '') : '', placeholder: 'e.g. Перчатки нитриловые М' });
@@ -175,7 +175,7 @@ function openProductModal(p, onSaved) {
     const packFactorInp   = h('input', { type: 'number', min: '0', step: 'any',
         value: (p && p.pack_factor != null) ? String(p.pack_factor) : '1',
         style: { ...numStyle, width: '90px' } });
-    const packEq = h('span', { style: { fontSize: '13px', color: 'var(--ink-700)' } }, dispenseUnitSel.value);
+    const packEq = h('span', { style: { fontSize: '13.5px', color: 'var(--ink-700)' } }, dispenseUnitSel.value);
     dispenseUnitSel.addEventListener('change', () => { packEq.textContent = dispenseUnitSel.value; });
 
     const unitsPanel = h('div', { style: panelStyle },
@@ -196,7 +196,7 @@ function openProductModal(p, onSaved) {
     let allSuppliers = [];
     const linked = [];   // [{ supplier_id, name, last_price, purchase_unit, pack_factor, _rowId? }]
     const linkedEl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
-    const linkedEmpty = h('div', { class: 'muted', style: { fontSize: '12px' } },
+    const linkedEmpty = h('div', { class: 'muted', style: { fontSize: '12.5px' } },
         'Поставщики не привязаны — найдите ниже или создайте нового.');
 
     function paintLinked() {
@@ -213,7 +213,7 @@ function openProductModal(p, onSaved) {
             const fInp = h('input', { type: 'number', min: '0', step: 'any',
                 value: ln.pack_factor != null ? String(ln.pack_factor) : '1', style: { ...numStyle, width: '60px', flex: '0 0 auto' } });
             fInp.addEventListener('input', () => { ln.pack_factor = fInp.value === '' ? 1 : Number(fInp.value); });
-            const lbl = (t) => h('span', { class: 'muted', style: { fontSize: '12px', flex: '0 0 auto', whiteSpace: 'nowrap' } }, t);
+            const lbl = (t) => h('span', { class: 'muted', style: { fontSize: '12.5px', flex: '0 0 auto', whiteSpace: 'nowrap' } }, t);
             linkedEl.appendChild(h('div', {
                 class: 'row',
                 style: { gap: '7px', alignItems: 'center', flexWrap: 'nowrap', padding: '8px 12px',
@@ -239,7 +239,7 @@ function openProductModal(p, onSaved) {
         style: {
             width: '100%', boxSizing: 'border-box', padding: '10px 12px 10px 34px',
             border: '1px solid var(--ink-200)', borderRadius: '10px',
-            fontFamily: 'inherit', fontSize: '13px', background: 'var(--white, #fff)',
+            fontFamily: 'inherit', fontSize: '13.5px', background: 'var(--white, #fff)',
             outline: 'none', transition: 'border-color .12s, box-shadow .12s',
         },
     });
@@ -261,7 +261,7 @@ function openProductModal(p, onSaved) {
         if (!pool.length) { supResults.appendChild(h('div', { class: 'muted', style: { padding: '9px 12px', fontSize: '12.5px' } }, 'Не найдено')); return; }
         for (const s of pool) {
             supResults.appendChild(h('div', {
-                style: { padding: '9px 12px', cursor: 'pointer', fontSize: '13px' },
+                style: { padding: '9px 12px', cursor: 'pointer', fontSize: '13.5px' },
                 onmouseenter: (e) => { e.currentTarget.style.background = 'var(--ink-25, #f6f8f9)'; },
                 onmouseleave: (e) => { e.currentTarget.style.background = ''; },
                 onmousedown: (e) => {
@@ -269,7 +269,7 @@ function openProductModal(p, onSaved) {
                     linked.push({ supplier_id: s.id, name: s.name, last_price: null, purchase_unit: stockUnitSel.value, pack_factor: Number(packFactorInp.value) || 1 });
                     supSearch.value = ''; supResults.style.display = 'none'; paintLinked();
                 },
-            }, s.name, s.phone ? h('span', { class: 'muted', style: { fontSize: '12px' } }, ' · ' + s.phone) : null));
+            }, s.name, s.phone ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, ' · ' + s.phone) : null));
         }
     }
     supSearch.addEventListener('input', paintResults);
@@ -303,7 +303,7 @@ function openProductModal(p, onSaved) {
         linkedEl,
         h('div', { style: { marginTop: '10px' } }, supSearchWrap, supResults),
         h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', marginTop: '10px', borderTop: '1px dashed var(--ink-150, var(--ink-200))', paddingTop: '10px' } },
-            h('span', { class: 'muted', style: { flex: 1, fontSize: '12px' } }, 'Нет нужного поставщика в списке?'),
+            h('span', { class: 'muted', style: { flex: 1, fontSize: '12.5px' } }, 'Нет нужного поставщика в списке?'),
             newSupplierBtn),
     );
 
@@ -394,7 +394,7 @@ function openProductModal(p, onSaved) {
         field('Name', nameInp, { required: true }),
         h('div', { class: 'row', style: { gap: '12px', alignItems: 'flex-end' } },
             h('div', { style: { flex: 1 } }, field('Категория', categorySel)),
-            h('label', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', paddingBottom: '12px', cursor: 'pointer', whiteSpace: 'nowrap' } },
+            h('label', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13.5px', paddingBottom: '12px', cursor: 'pointer', whiteSpace: 'nowrap' } },
                 activeChk, 'Активен'),
         ),
         unitsPanel,
@@ -404,7 +404,7 @@ function openProductModal(p, onSaved) {
             priceInp),
     ];
     if (isEdit) {
-        bodyChildren.push(h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '10px' } },
+        bodyChildren.push(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '10px' } },
             trf('В наличии: {qty} {unit} · себестоимость {cost}. Остаток меняется через «Принять» / «Корректировка».', { qty: fmtQty(p.on_hand), unit: p.base_unit || '', cost: fmtPrice(p.avg_cost) })));
     }
 
@@ -467,7 +467,7 @@ export function openReceiveModal(onSaved) {
     function paintLines() {
         clear(linesEl);
         if (!st.lines.length) { linesEl.appendChild(linesEmpty); refreshTotal(); return; }
-        const lbl = (t) => h('span', { class: 'muted', style: { fontSize: '11.5px', flex: '0 0 auto', whiteSpace: 'nowrap' } }, t);
+        const lbl = (t) => h('span', { class: 'muted', style: { fontSize: '12.5px', flex: '0 0 auto', whiteSpace: 'nowrap' } }, t);
         for (const ln of st.lines) {
             const supSel = supplierSelect(ln);
             const newSupBtn = h('button', {
@@ -505,8 +505,8 @@ export function openReceiveModal(onSaved) {
                          border: '1px solid var(--ink-100)', borderRadius: '12px', background: 'var(--white, #fff)' },
             },
                 h('span', { style: { minWidth: '90px', flex: '1 1 auto', overflow: 'hidden' } },
-                    h('span', { style: { display: 'block', fontWeight: 700, fontSize: '13px', color: 'var(--ink-900)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, ln.product.name),
-                    h('span', { class: 'muted', style: { fontSize: '11.5px' } }, unitLabel)),
+                    h('span', { style: { display: 'block', fontWeight: 700, fontSize: '13.5px', color: 'var(--ink-900)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, ln.product.name),
+                    h('span', { class: 'muted', style: { fontSize: '12.5px' } }, unitLabel)),
                 lbl('Поставщик'), supSel, newSupBtn,
                 lbl('Партия / серия №'), batchInp, regenBtn,
                 h('span', { style: { flex: '0 0 auto', display: 'flex', color: 'var(--ink-400)' } }, Icon('Clock', { size: 13 })),
@@ -550,11 +550,11 @@ export function openReceiveModal(onSaved) {
         prodResults.style.display = '';
         for (const p of pool) {
             prodResults.appendChild(h('div', {
-                style: { padding: '9px 12px', cursor: 'pointer', fontSize: '13px' },
+                style: { padding: '9px 12px', cursor: 'pointer', fontSize: '13.5px' },
                 onmouseenter: (e) => { e.currentTarget.style.background = 'var(--ink-25, #f6f8f9)'; },
                 onmouseleave: (e) => { e.currentTarget.style.background = ''; },
                 onmousedown: (e) => { e.preventDefault(); addLineFor(p); prodSearch.value = ''; prodResults.style.display = 'none'; },
-            }, p.name, h('span', { class: 'muted', style: { fontSize: '12px' } }, ' · ' + (p.base_unit || '') + ' · ', trf('остаток {n}', { n: fmtQty(p.on_hand) }))));
+            }, p.name, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, ' · ' + (p.base_unit || '') + ' · ', trf('остаток {n}', { n: fmtQty(p.on_hand) }))));
         }
     }
     prodSearch.addEventListener('input', paintProdResults);
@@ -584,6 +584,7 @@ export function openReceiveModal(onSaved) {
 
     // ---- печать этикеток (name · партия · годен до · Nx) ----
     /* i18n-exempt-start: печать этикеток — печатный документ */
+    /* type-scale-exempt-start: печатный документ — семейство Onest, размеры остаются его выверенными метриками (дизайн-док 2026-08-31) */
     function printLabels() {
         if (!st.lines.length) { toast('Нет строк для этикеток.', 'fail'); return; }
         const esc = (x) => String(x == null ? '' : x).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
@@ -600,6 +601,7 @@ export function openReceiveModal(onSaved) {
 <body onload="(document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve()).then(()=>print())" style="display:flex;flex-wrap:wrap;gap:10px;padding:16px;">${cells}</body></html>`);
         w.document.close();
     }
+    /* type-scale-exempt-end */
     /* i18n-exempt-end */
 
     const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Приход');
@@ -636,14 +638,14 @@ export function openReceiveModal(onSaved) {
         h('header', { class: 'modal-head' },
             h('div', null,
                 h('h2', { style: { margin: 0 } }, 'Принять товар'),
-                h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' } }, 'Фиксирует приход; остаток обновляется автоматически.')),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, 'Фиксирует приход; остаток обновляется автоматически.')),
             h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { class: 'modal-body', style: { overflowY: 'auto' } },
             h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } }, searchWrap, newProductBtn),
             h('div', null,
                 h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-800)', margin: '2px 0 8px' } }, 'Товары ', h('span', { style: { color: 'var(--crit-500, #ef4444)' } }, '*')),
                 linesEl),
-            h('div', { style: { textAlign: 'right', fontSize: '13px', color: 'var(--ink-700)' } }, 'Итого: ', totalEl, ' UZS'),
+            h('div', { style: { textAlign: 'right', fontSize: '13.5px', color: 'var(--ink-700)' } }, 'Итого: ', totalEl, ' UZS'),
         ),
         h('footer', { class: 'modal-foot' },
             h('button', { class: 'btn', type: 'button', onclick: printLabels }, Icon('Print', { size: 14 }), ' Печать этикеток'),
@@ -666,7 +668,7 @@ export function openAdjustModal(p, onSaved) {
 
     let current = p || null;
 
-    const infoEl = h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '10px' } }, '');
+    const infoEl = h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } }, '');
     function refreshInfo() {
         infoEl.textContent = current
             ? trf('Сейчас в наличии: {n} {unit}', { n: Number(current.on_hand) || 0, unit: current.base_unit || '' }).trim()
@@ -734,7 +736,7 @@ export function openAdjustModal(p, onSaved) {
             prodSel ? field('Товар', prodSel, { required: true }) : null,
             infoEl,
             field('Кол-во', qtyInp, { required: true }),
-            h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '-6px', marginBottom: '4px' } }, 'Плюс — добавить, минус — списать.'),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '-6px', marginBottom: '4px' } }, 'Плюс — добавить, минус — списать.'),
             field('Причина', noteInp, { required: true }),
         ),
         h('footer', { class: 'modal-foot' },

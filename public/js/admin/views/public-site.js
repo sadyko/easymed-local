@@ -61,7 +61,7 @@ export async function renderPublicSite(container, ctx = {}) {
     const tabsEl = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px' } });
     const contentEl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '18px' } });
     root.appendChild(h('div', null,
-        h('div', { class: 'muted', style: { fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: '600', marginBottom: '8px' } }, 'Филиал'),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: '600', marginBottom: '8px' } }, 'Филиал'),
         tabsEl));
     root.appendChild(contentEl);
 
@@ -114,7 +114,7 @@ function branchTab(b, active, onClick) {
     } },
         h('span', { style: { width: '9px', height: '9px', borderRadius: '999px', background: sm.dot, flex: '0 0 9px' } }),
         h('span', null, b.name),
-        h('span', { style: { fontSize: '11px', color: 'var(--ink-400)', fontWeight: '500' } }, (b.completion_score || 0) + '%'));
+        h('span', { style: { fontSize: '12.5px', color: 'var(--ink-400)', fontWeight: '500' } }, (b.completion_score || 0) + '%'));
 }
 
 // ── Hero ─────────────────────────────────────────────────────────────────────
@@ -123,8 +123,8 @@ function hero() {
         h('div', { style: { position: 'absolute', right: '-40px', top: '-40px', width: '230px', height: '230px', background: 'radial-gradient(circle, rgba(255,255,255,0.10) 0%, transparent 65%)' } }),
         h('div', { class: 'row', style: { gap: '8px', marginBottom: '8px', position: 'relative' } },
             Icon('Globe', { size: 15 }),
-            h('span', { style: { fontSize: '11.5px', letterSpacing: '0.08em', textTransform: 'uppercase', opacity: '0.8', fontWeight: '600' } }, 'Symptex · публичный профиль')),
-        h('h2', { style: { margin: '0', fontSize: '22px', fontWeight: '700', letterSpacing: '-0.02em', position: 'relative' } }, 'Ваши филиалы на Symptex'),
+            h('span', { style: { fontSize: '12.5px', letterSpacing: '0.08em', textTransform: 'uppercase', opacity: '0.8', fontWeight: '600' } }, 'Symptex · публичный профиль')),
+        h('h2', { style: { margin: '0', fontSize: '24px', fontWeight: '700', letterSpacing: '-0.02em', position: 'relative' } }, 'Ваши филиалы на Symptex'),
         h('p', { style: { margin: '6px 0 0', fontSize: '13.5px', opacity: '0.88', maxWidth: '700px', position: 'relative', lineHeight: '1.6' } },
             'Каждый филиал — отдельная клиника на Symptex со своими врачами, услугами и записью. Выберите филиал, заполните профиль и отправьте его на публикацию — чем полнее данные, тем больше обращений пациентов.'));
 }
@@ -135,14 +135,14 @@ function statusBanner(dash, reload) {
     const shell = (bg, border, kids) => h('div', { style: { borderRadius: '16px', padding: '20px 24px', background: bg, border: '1px solid ' + border, display: 'flex', alignItems: 'center', gap: '18px', flexWrap: 'wrap' } }, ...kids);
     const chip = (color, icon) => h('div', { style: { width: '50px', height: '50px', borderRadius: '13px', background: color, color: '#fff', display: 'grid', placeItems: 'center', flex: '0 0 50px', boxShadow: '0 6px 16px ' + tint(color, 35) } }, Icon(icon, { size: 25 }));
     const txt = (title, sub, tc, sc) => h('div', { style: { flex: '1', minWidth: '240px' } },
-        h('div', { style: { fontWeight: '700', fontSize: '18px', color: tc } }, title),
-        h('div', { style: { fontSize: '13px', color: sc, marginTop: '4px', lineHeight: '1.5' } }, sub));
+        h('div', { style: { fontWeight: '700', fontSize: '17px', color: tc } }, title),
+        h('div', { style: { fontSize: '13.5px', color: sc, marginTop: '4px', lineHeight: '1.5' } }, sub));
     const bn = dash.branch_name || 'Филиал';
 
     if (st === 'published') {
         let date = null;
         try { date = dash.published_at ? new Date(dash.published_at).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }) : null; } catch (e) {}
-        const link = dash.slug ? h('a', { href: 'https://symptex.uz/clinics/' + dash.slug, target: '_blank', rel: 'noopener', class: 'btn', style: { background: '#059669', color: '#fff', fontWeight: '600', padding: '11px 20px', fontSize: '14px', boxShadow: '0 4px 14px rgba(5,150,105,.3)' } }, Icon('Globe', { size: 16 }), ' Открыть страницу') : null;
+        const link = dash.slug ? h('a', { href: 'https://symptex.uz/clinics/' + dash.slug, target: '_blank', rel: 'noopener', class: 'btn', style: { background: '#059669', color: '#fff', fontWeight: '600', padding: '11px 20px', fontSize: '13.5px', boxShadow: '0 4px 14px rgba(5,150,105,.3)' } }, Icon('Globe', { size: 16 }), ' Открыть страницу') : null;
         return shell('linear-gradient(120deg,#ecfdf5,#d1fae5)', '#6ee7b7', [chip('#059669', 'Check'),
             txt(trf('«{name}» опубликован на Symptex', { name: bn }), date ? trf('Дата публикации: {date}. Пациенты видят филиал в маркетплейсе.', { date }) : 'Пациенты видят филиал в маркетплейсе.', '#065f46', '#047857'), link]);
     }
@@ -153,7 +153,7 @@ function statusBanner(dash, reload) {
     const BRANCH_PUBLISH_REQUIRED = ['Адрес', 'Часы работы'];
     const missingCore = BRANCH_PUBLISH_REQUIRED.filter((l) => (dash.clinic_missing || []).includes(l));
     const blocked = missingCore.length > 0;
-    const btn = h('button', { class: 'btn', style: { background: blocked ? '#cbb59a' : '#d97706', color: '#fff', fontWeight: '600', padding: '13px 24px', fontSize: '14.5px', boxShadow: blocked ? 'none' : '0 6px 18px rgba(217,119,6,.35)', whiteSpace: 'nowrap', cursor: blocked ? 'not-allowed' : 'pointer', opacity: blocked ? '0.85' : '1' }, disabled: blocked, title: blocked ? trf('Заполните профиль филиала: {what}', { what: missingCore.join(', ') }) : '' }, Icon('Megaphone', { size: 17 }), ' Запросить публикацию');
+    const btn = h('button', { class: 'btn', style: { background: blocked ? '#cbb59a' : '#d97706', color: '#fff', fontWeight: '600', padding: '13px 24px', fontSize: '15px', boxShadow: blocked ? 'none' : '0 6px 18px rgba(217,119,6,.35)', whiteSpace: 'nowrap', cursor: blocked ? 'not-allowed' : 'pointer', opacity: blocked ? '0.85' : '1' }, disabled: blocked, title: blocked ? trf('Заполните профиль филиала: {what}', { what: missingCore.join(', ') }) : '' }, Icon('Megaphone', { size: 17 }), ' Запросить публикацию');
     if (!blocked) btn.onclick = () => requestPublication(btn, reload, dash.branch_id);
     const sub = blocked
         ? trf('Чтобы отправить заявку, заполните профиль филиала: {what}.', { what: missingCore.join(', ') })
@@ -198,22 +198,22 @@ function bar(pct, color) {
         h('div', { style: { width: Math.max(0, Math.min(100, pct)) + '%', height: '100%', background: color, borderRadius: '999px', transition: 'width .3s' } }));
 }
 function chipMissing(label) {
-    return h('span', { style: { fontSize: '11.5px', fontWeight: '500', padding: '4px 10px', borderRadius: '999px', whiteSpace: 'nowrap', color: 'var(--warn-700, #92400e)', background: tint('var(--warn-500, #d97706)', 13) } }, label);
+    return h('span', { style: { fontSize: '12.5px', fontWeight: '500', padding: '4px 10px', borderRadius: '999px', whiteSpace: 'nowrap', color: 'var(--warn-700, #92400e)', background: tint('var(--warn-500, #d97706)', 13) } }, label);
 }
 function completionBlock(dash) {
     const card = h('div', { class: 'card', style: { padding: '18px 20px' } });
     card.appendChild(h('div', { class: 'row', style: { marginBottom: '10px' } },
-        h('h3', { style: { margin: '0', fontSize: '14px', fontWeight: '700' } }, 'Заполненность филиала'),
+        h('h3', { style: { margin: '0', fontSize: '13.5px', fontWeight: '700' } }, 'Заполненность филиала'),
         h('span', { class: 'grow' }),
         h('span', { style: { fontSize: '20px', fontWeight: '700', color: 'var(--primary-700)' } }, dash.completion_score + '%')));
     card.appendChild(bar(dash.completion_score, 'var(--primary-500)'));
     const mini = (label, pct) => h('div', { style: { minWidth: '120px', flex: '1' } },
-        h('div', { class: 'row', style: { fontSize: '12px', marginBottom: '4px' } }, h('span', { class: 'muted' }, label), h('span', { class: 'grow' }), h('span', { style: { fontWeight: '600' } }, pct + '%')),
+        h('div', { class: 'row', style: { fontSize: '12.5px', marginBottom: '4px' } }, h('span', { class: 'muted' }, label), h('span', { class: 'grow' }), h('span', { style: { fontWeight: '600' } }, pct + '%')),
         bar(pct, 'var(--primary-400, #5eb0a8)'));
     card.appendChild(h('div', { class: 'row', style: { gap: '20px', marginTop: '12px', flexWrap: 'wrap' } }, mini('Филиал', dash.clinic_score), mini('Врачи', dash.doctors_score)));
     if ((dash.clinic_missing || []).length) {
         card.appendChild(h('div', { style: { marginTop: '14px' } },
-            h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '6px' } }, 'Не хватает по филиалу:'),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '6px' } }, 'Не хватает по филиалу:'),
             h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px' } }, ...dash.clinic_missing.map(chipMissing))));
     } else {
         card.appendChild(h('div', { style: { marginTop: '12px', fontSize: '12.5px', color: 'var(--ok-600, #047857)', display: 'inline-flex', alignItems: 'center', gap: '6px' } }, Icon('Check', { size: 14 }), 'Профиль филиала заполнен полностью.'));
@@ -245,7 +245,7 @@ function docRow(d) {
             h('span', { style: { fontSize: '12.5px', fontWeight: '600', color: full ? 'var(--ok-600, #047857)' : 'var(--ink-700)' } }, d.completion + '%'))),
         h('td', null, (d.missing && d.missing.length)
             ? h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '5px' } }, ...d.missing.map(chipMissing))
-            : h('span', { style: { fontSize: '12px', color: 'var(--ok-600, #047857)', display: 'inline-flex', alignItems: 'center', gap: '5px' } }, Icon('Check', { size: 13 }), 'Готов')));
+            : h('span', { style: { fontSize: '12.5px', color: 'var(--ok-600, #047857)', display: 'inline-flex', alignItems: 'center', gap: '5px' } }, Icon('Check', { size: 13 }), 'Готов')));
 }
 
 // ── Public preview — the REAL Symptex page (iframe, desktop) ─────────────────
@@ -269,20 +269,20 @@ function previewBlock(dash, preview, previewMeta) {
     card.appendChild(h('div', { class: 'card-header' },
         h('h3', null, Icon('Globe', { size: 16 }), ' Страница филиала на Symptex'),
         frameUrl ? h('a', { href: frameUrl, target: '_blank', rel: 'noopener', class: 'btn btn-ghost btn-sm' }, 'Открыть полностью ', Icon('ArrowRight', { size: 14 }))
-                 : h('span', { class: 'muted', style: { fontSize: '11.5px' } }, 'Предпросмотр')));
+                 : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Предпросмотр')));
     const body = h('div', { style: { padding: '14px 16px' } });
     card.appendChild(body);
     if (frameUrl) {
-        body.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '7px' } },
+        body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '7px' } },
             published ? [Icon('Check', { size: 13 }), 'Это настоящая страница филиала на Symptex (десктоп).']
-                      : [h('span', { style: { fontSize: '10.5px', fontWeight: '700', color: 'var(--warn-700, #92400e)', background: tint('var(--warn-500, #d97706)', 15), padding: '2px 8px', borderRadius: '6px' } }, 'ЧЕРНОВИК'),
+                      : [h('span', { style: { fontSize: '12.5px', fontWeight: '700', color: 'var(--warn-700, #92400e)', background: tint('var(--warn-500, #d97706)', 15), padding: '2px 8px', borderRadius: '6px' } }, 'ЧЕРНОВИК'),
                          'Настоящая страница Symptex с данными филиала — видна только вам, пока он не опубликован.']));
         body.appendChild(symptexFrame(frameUrl));
     } else {
         body.appendChild(h('div', { style: { borderRadius: '14px', border: '1px dashed var(--ink-200)', background: 'var(--warm-50, #fafaf9)', padding: '28px 24px', textAlign: 'center' } },
             h('div', { style: { width: '52px', height: '52px', borderRadius: '14px', margin: '0 auto 12px', background: tint('var(--primary-600)', 12), color: 'var(--primary-700)', display: 'grid', placeItems: 'center' } }, Icon('Globe', { size: 26 })),
             h('div', { style: { fontWeight: '700', fontSize: '15px', color: 'var(--ink-900)' } }, 'Филиал ещё не синхронизирован'),
-            h('div', { class: 'muted', style: { fontSize: '13px', marginTop: '6px', maxWidth: '460px', marginLeft: 'auto', marginRight: 'auto', lineHeight: '1.55' } },
+            h('div', { class: 'muted', style: { fontSize: '13.5px', marginTop: '6px', maxWidth: '460px', marginLeft: 'auto', marginRight: 'auto', lineHeight: '1.55' } },
                 trf('Заполните и сохраните профиль филиала — после этого здесь появится предпросмотр настоящей страницы Symptex. Сейчас: {doctors} врач(ей), {services} услуг(и).', { doctors: (preview.doctors || []).length, services: preview.services_count || 0 }))));
     }
     return card;

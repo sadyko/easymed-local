@@ -26,7 +26,7 @@ export async function renderLabSettings(container, { onNavigate } = {}) {
                         // so new JavaScript only arrives on a full page reload — without a
                         // marker there is no way to tell which build you are looking at,
                         // and "I can't see any changes" is impossible to diagnose.
-                        h('span', { class: 'muted', style: { fontSize: '10px', opacity: '0.6', marginLeft: '8px', fontWeight: '400' } }, LAB_BUILD)),
+                        h('span', { class: 'muted', style: { fontSize: '12.5px', opacity: '0.6', marginLeft: '8px', fontWeight: '400' } }, LAB_BUILD)),
                     h('p', { class: 'page-subtitle' }, 'Панели исследований, показатели и референсные значения. Создайте панели своей клиники и заполните референсные значения.')),
             ),
         ),

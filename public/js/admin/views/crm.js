@@ -224,7 +224,7 @@ async function paint() {
             width: '100%', height: '40px', padding: '0 36px 0 40px',
             border: '1px solid var(--ink-200, #d1d5db)', borderRadius: '12px',
             background: 'var(--white, #fff)', fontFamily: 'inherit',
-            fontSize: '14px', fontWeight: '500', color: 'var(--ink-900)',
+            fontSize: '13.5px', fontWeight: '500', color: 'var(--ink-900)',
             outline: 'none', boxShadow: 'var(--shadow-sm)',
             transition: 'border-color .12s, box-shadow .12s',
         },
@@ -264,7 +264,7 @@ async function paint() {
         h('div', null,
             h('h1', { class: 'page-title' }, 'CRM · Заявки'),
             h('p', { class: 'page-subtitle' }, 'Обращения в клинику: фиксируйте каждый запрос и превращайте его в пациента. ',
-                h('span', { class: 'muted', style: { fontSize: '10px', opacity: '0.6' } }, 'v11'))),
+                h('span', { class: 'muted', style: { fontSize: '12.5px', opacity: '0.6' } }, 'v11'))),
         h('div', { class: 'page-head-actions', style: { flexWrap: 'wrap' } },
             viewBtn('kanban', 'Канбан', 'Grid'),
             viewBtn('list', 'Список', 'Layers'),
@@ -308,7 +308,7 @@ async function paint() {
     function paintFilters() {
         clear(filtersEl);
         const lbl = (t) => h('span', { class: 'muted', style: {
-            fontSize: '11px', fontWeight: 700, textTransform: 'uppercase',
+            fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase',
             letterSpacing: '.04em', alignSelf: 'center', marginRight: '2px',
         } }, t);
         const chip = (on, label, onclick) => h('button', { class: 'wzc-cat' + (on ? ' on' : ''), type: 'button', onclick }, label);
@@ -427,7 +427,7 @@ async function paint() {
                     // Счётчик — ПОЛНОЕ число заявок в статусе, а не сколько
                     // отрисовано: это цифра воронки, и зависеть от того, сколько
                     // раз нажали «показать ещё», она не должна.
-                    h('span', { class: 'muted', style: { fontSize: '12px', fontWeight: 700 } }, String(colRows.length)),
+                    h('span', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700 } }, String(colRows.length)),
                     h('span', { class: 'grow' }),
                     key === stageKey('in_process') ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: 'Новая заявка', onclick: () => requestModal(null) }, '+') : null),
                 list,
@@ -448,8 +448,8 @@ async function paint() {
             onclick: (ev) => { if (ev.target.closest('button, select')) return; requestModal(r); },
         },
             h('div', { class: 'row', style: { gap: '6px', alignItems: 'baseline' } },
-                h('span', { style: { flex: 1, minWidth: 0, fontWeight: 700, fontSize: '13px', overflowWrap: 'anywhere' } }, r.full_name || '—'),
-                h('span', { class: 'muted', style: { fontSize: '11px', whiteSpace: 'nowrap' } }, fmtD(r.created_at))),
+                h('span', { style: { flex: 1, minWidth: 0, fontWeight: 700, fontSize: '13.5px', overflowWrap: 'anywhere' } }, r.full_name || '—'),
+                h('span', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, fmtD(r.created_at))),
             line(h('span', { class: 'num' }, r.phone || '—')),
             line(Tag(SOURCE_RU[r.source] || r.source, { kind: '' })),
             r.services ? line(h('span', { class: 'muted' }, 'Услуга: '), r.services.name) : null,
@@ -541,7 +541,7 @@ async function paint() {
         // Компактный переключатель статуса. «Пришёл» в нём нет: конверсия
         // происходит АВТОМАТИЧЕСКИ при создании визита (CRM_AUTO_CAME_V1);
         // вручную — перетаскиванием в колонку «Пришёл» или из окна заявки.
-        const sel = h('select', { title: 'Сменить статус', style: { padding: '4px 6px', fontSize: '11.5px', borderRadius: '8px', border: '1px solid var(--ink-200)', fontFamily: 'inherit', maxWidth: '150px', background: 'var(--white, #fff)', cursor: 'pointer' } },
+        const sel = h('select', { title: 'Сменить статус', style: { padding: '4px 6px', fontSize: '12.5px', borderRadius: '8px', border: '1px solid var(--ink-200)', fontFamily: 'inherit', maxWidth: '150px', background: 'var(--white, #fff)', cursor: 'pointer' } },
             ...STATUSES.filter(([k]) => k !== CONVERT_STATUS)
                 .map(([k, l]) => h('option', { value: k, selected: r.status === k }, l)));
         sel.addEventListener('change', async () => {
@@ -562,7 +562,7 @@ async function paint() {
             const [stLabel, stKind] = STATUS_RU[r.status] || [r.status, ''];
             tbody.appendChild(h('tr', { class: 'row-click', style: { cursor: 'pointer' }, onclick: (ev) => { if (ev.target.closest('button, select')) return; requestModal(r); } },
                 h('td', { class: 'cell-strong' }, r.full_name || '—',
-                    r.patients ? h('div', { class: 'muted', style: { fontSize: '11.5px' } }, r.patients.mrn || '') : null),
+                    r.patients ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, r.patients.mrn || '') : null),
                 h('td', { class: 'num' }, r.phone || '—'),
                 h('td', null, SOURCE_RU[r.source] || r.source || '—'),
                 h('td', null, r.services ? r.services.name : h('span', { class: 'muted' }, '—')),
@@ -677,7 +677,7 @@ async function paint() {
         // услуги» с интересующей услугой в смете. Строка ниже — просто анонс.
         const svcName = r.services ? r.services.name : null;
         const orderRow = r.service_id
-            ? h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', padding: '9px 12px', border: '1px solid var(--teal-200, #b2dfdb)', background: 'var(--teal-25, #f0faf9)', borderRadius: '10px', fontSize: '13px' } },
+            ? h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', padding: '9px 12px', border: '1px solid var(--teal-200, #b2dfdb)', background: 'var(--teal-25, #f0faf9)', borderRadius: '10px', fontSize: '13.5px' } },
                 Icon('Check', { size: 14 }),
                 h('span', null, 'После регистрации оформим услугу: ', h('b', null, svcName || ('#' + r.service_id))))
             : null;
@@ -741,7 +741,7 @@ async function paint() {
             field('Адрес', addrInp),
             field('Примечание', noteInp),
             orderRow,
-            h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 'MRN присвоится автоматически. Остальные данные можно дозаполнить позже в карте пациента.'));
         // CRM_REG_WIDTH_V1 — вне .modal-grouped у .field input нет width:100%, и
         // поля держат ширину по умолчанию (~200px). Три имени в строку переставали
@@ -758,7 +758,7 @@ async function paint() {
             h('header', { class: 'modal-head' },
                 h('div', null,
                     h('h2', { style: { margin: 0 } }, 'Регистрация пациента'),
-                    h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' } },
+                    h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
                         requestRow && requestRow.created_at
                             ? trf('Из заявки: {src} · {when}', { src: tr(SOURCE_RU[r.source] || r.source), when: fmtDateTime(r.created_at) })
                             : 'Карта заводится сразу — дальше выберем врача и дату')),
@@ -789,7 +789,7 @@ async function paint() {
         const phoneInp = phoneInput('phone', '+998 … или без кода', { value: r ? r.phone : '' });
         const nameInp = h('input', {
             type: 'text', value: r ? (r.full_name || '') : '', placeholder: 'Фамилия Имя — или найдите пациента клиники…', autocomplete: 'off',
-            style: { width: '100%', boxSizing: 'border-box', padding: '10px 12px 10px 32px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13px', outline: 'none' },
+            style: { width: '100%', boxSizing: 'border-box', padding: '10px 12px 10px 32px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13.5px', outline: 'none' },
         });
         const patResults = h('div', { style: { display: 'none', position: 'absolute', left: 0, right: 0, top: 'calc(100% + 4px)', zIndex: 41, maxHeight: '230px', overflow: 'auto', background: 'var(--white, #fff)', border: '1px solid var(--ink-200)', borderRadius: '10px', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' } });
         const nameWrap = h('div', { style: { position: 'relative' } },
@@ -808,11 +808,11 @@ async function paint() {
                 nameWrap.firstChild.style.display = 'none';
                 let chip = nameWrap.querySelector('[data-chip]');
                 if (chip) chip.remove();
-                chip = h('div', { 'data-chip': '1', class: 'row', style: { gap: '8px', alignItems: 'center', padding: '9px 12px', border: '1px solid var(--teal-200, #b2dfdb)', background: 'var(--teal-25, #f0faf9)', borderRadius: '10px', fontSize: '13px' } },
+                chip = h('div', { 'data-chip': '1', class: 'row', style: { gap: '8px', alignItems: 'center', padding: '9px 12px', border: '1px solid var(--teal-200, #b2dfdb)', background: 'var(--teal-25, #f0faf9)', borderRadius: '10px', fontSize: '13.5px' } },
                     h('span', { style: { color: 'var(--teal-700, #00796b)', display: 'flex' } }, Icon('User', { size: 15 })),
                     h('b', { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, linkedPatient.full_name),
                     linkedPatient.mrn ? Tag(linkedPatient.mrn, { kind: 'ok' }) : null,
-                    h('span', { class: 'muted', style: { fontSize: '12px' } }, 'пациент клиники'),
+                    h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'пациент клиники'),
                     h('span', { class: 'grow' }),
                     h('button', { type: 'button', title: 'Отвязать — ввести имя вручную', style: { border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-400)', fontWeight: 700, fontSize: '15px' },
                         onclick: () => { linkedPatient = null; paintLinked(); nameInp.focus(); } }, '×'));
@@ -837,10 +837,10 @@ async function paint() {
             const pool = data || [];
             if (!pool.length) { patResults.style.display = 'none'; return; }
             patResults.style.display = '';
-            patResults.appendChild(h('div', { style: { padding: '7px 12px 4px', fontSize: '10.5px', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--ink-400)' } }, 'Пациенты клиники'));
+            patResults.appendChild(h('div', { style: { padding: '7px 12px 4px', fontSize: '12.5px', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--ink-400)' } }, 'Пациенты клиники'));
             for (const p of pool) {
                 patResults.appendChild(h('div', {
-                    class: 'row', style: { gap: '8px', alignItems: 'center', padding: '8px 12px', cursor: 'pointer', fontSize: '13px' },
+                    class: 'row', style: { gap: '8px', alignItems: 'center', padding: '8px 12px', cursor: 'pointer', fontSize: '13.5px' },
                     onmouseenter: (e) => { e.currentTarget.style.background = 'var(--ink-25, #f6f8f9)'; },
                     onmouseleave: (e) => { e.currentTarget.style.background = ''; },
                     onmousedown: (e) => {
@@ -852,9 +852,9 @@ async function paint() {
                     },
                 }, h('b', { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, p.full_name),
                    p.mrn ? Tag(p.mrn, { kind: 'ok' }) : null,
-                   h('span', { class: 'muted', style: { fontSize: '12px', marginLeft: 'auto' } }, p.phone || '')));
+                   h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: 'auto' } }, p.phone || '')));
             }
-            patResults.appendChild(h('div', { class: 'muted', style: { padding: '5px 12px 8px', fontSize: '11.5px', borderTop: '1px solid var(--ink-50, #eef1f3)' } },
+            patResults.appendChild(h('div', { class: 'muted', style: { padding: '5px 12px 8px', fontSize: '12.5px', borderTop: '1px solid var(--ink-50, #eef1f3)' } },
                 'Не он? Просто продолжайте вводить имя — заявка создастся как новый лид.'));
         }
         let patTimer = null;
@@ -880,10 +880,10 @@ async function paint() {
                 clear(results);
                 if (!pool.length) { results.style.display = 'none'; return; }
                 results.style.display = '';
-                results.appendChild(h('div', { style: { padding: '7px 12px 4px', fontSize: '10.5px', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--ink-400)' } }, 'Пациенты клиники'));
+                results.appendChild(h('div', { style: { padding: '7px 12px 4px', fontSize: '12.5px', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--ink-400)' } }, 'Пациенты клиники'));
                 for (const p of pool) {
                     results.appendChild(h('div', {
-                        class: 'row', style: { gap: '8px', alignItems: 'center', padding: '8px 12px', cursor: 'pointer', fontSize: '13px' },
+                        class: 'row', style: { gap: '8px', alignItems: 'center', padding: '8px 12px', cursor: 'pointer', fontSize: '13.5px' },
                         onmouseenter: (e) => { e.currentTarget.style.background = 'var(--ink-25, #f6f8f9)'; },
                         onmouseleave: (e) => { e.currentTarget.style.background = ''; },
                         onmousedown: (e) => {
@@ -895,9 +895,9 @@ async function paint() {
                         },
                     }, h('b', { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, p.full_name),
                        p.mrn ? Tag(p.mrn, { kind: 'ok' }) : null,
-                       h('span', { class: 'muted', style: { fontSize: '12px', marginLeft: 'auto' } }, p.phone || '')));
+                       h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: 'auto' } }, p.phone || '')));
                 }
-                results.appendChild(h('div', { class: 'muted', style: { padding: '5px 12px 8px', fontSize: '11.5px', borderTop: '1px solid var(--ink-50, #eef1f3)' } }, hint));
+                results.appendChild(h('div', { class: 'muted', style: { padding: '5px 12px 8px', fontSize: '12.5px', borderTop: '1px solid var(--ink-50, #eef1f3)' } }, hint));
             }
             // PHONE_INPUT_V1 — the phone anchor is now the country-code control,
             // a wrapper around the real <input>. Listen on that inner field:
@@ -976,7 +976,7 @@ async function paint() {
         };
         const svcInp = h('input', {
             type: 'text', placeholder: 'Поиск услуги — начните вводить название…', autocomplete: 'off',
-            style: { width: '100%', boxSizing: 'border-box', padding: '10px 12px 10px 32px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13px', outline: 'none' },
+            style: { width: '100%', boxSizing: 'border-box', padding: '10px 12px 10px 32px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13.5px', outline: 'none' },
         });
         const svcResults = h('div', { style: { display: 'none', position: 'absolute', left: 0, right: 0, top: 'calc(100% + 4px)', zIndex: 40, maxHeight: '200px', overflow: 'auto', background: 'var(--white, #fff)', border: '1px solid var(--ink-200)', borderRadius: '10px', boxShadow: '0 8px 24px rgba(0,0,0,0.12)' } });
         const svcWrap = h('div', { style: { position: 'relative' } },
@@ -1021,11 +1021,11 @@ async function paint() {
                 dateInp.addEventListener('change', () => { p.date = dateInp.value; syncPrimary(); });
                 pickedList.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 10px', background: 'var(--teal-25, #f0faf9)', border: '1px solid var(--teal-200, #b2dfdb)', borderRadius: '10px' } },
                     h('div', { style: { flex: 1, minWidth: 0 } },
-                        h('div', { style: { fontSize: '13px', fontWeight: 600, overflowWrap: 'anywhere' } }, p.name),
-                        h('div', { class: 'muted', style: { fontSize: '11.5px' } }, String(p.price || 0), ' сум')),
+                        h('div', { style: { fontSize: '13.5px', fontWeight: 600, overflowWrap: 'anywhere' } }, p.name),
+                        h('div', { class: 'muted', style: { fontSize: '12.5px' } }, String(p.price || 0), ' сум')),
                     dateInp,
                     h('button', { type: 'button', title: 'Убрать услугу',
-                        style: { border: 0, background: 'transparent', cursor: 'pointer', color: 'var(--crit-500, #ef4444)', fontSize: '16px', lineHeight: 1, padding: '0 2px' },
+                        style: { border: 0, background: 'transparent', cursor: 'pointer', color: 'var(--crit-500, #ef4444)', fontSize: '17px', lineHeight: 1, padding: '0 2px' },
                         onclick: () => removePicked(p.service_id) }, '×')));
             }
         }
@@ -1074,11 +1074,11 @@ async function paint() {
             }
             for (const sv of pool) {
                 svcResults.appendChild(h('div', {
-                    style: { padding: '8px 12px', cursor: 'pointer', fontSize: '13px' },
+                    style: { padding: '8px 12px', cursor: 'pointer', fontSize: '13.5px' },
                     onmouseenter: (e) => { e.currentTarget.style.background = 'var(--ink-25, #f6f8f9)'; },
                     onmouseleave: (e) => { e.currentTarget.style.background = ''; },
                     onmousedown: (e) => { e.preventDefault(); addPicked(sv); svcInp.value = ''; svcResults.style.display = 'none'; },
-                }, sv.name, h('span', { class: 'muted', style: { fontSize: '12px' } }, ' · ' + sv.price)));
+                }, sv.name, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, ' · ' + sv.price)));
             }
         }
         svcInp.addEventListener('input', paintSvcResults);
@@ -1247,7 +1247,7 @@ async function paint() {
                 clear(rows);
                 for (const p of picked) {
                     const inp = h('input', { type: 'date', value: p.date || '',
-                        style: { width: '155px', flex: '0 0 auto', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '13px' } });
+                        style: { width: '155px', flex: '0 0 auto', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '13.5px' } });
                     inp.addEventListener('change', () => { p.date = inp.value; });
                     inputs.set(String(p.service_id), inp);
 
@@ -1265,20 +1265,20 @@ async function paint() {
                         sel.addEventListener('change', () => { p.doctor_id = sel.value ? Number(sel.value) : null; });
                         docCell = sel;
                     } else {
-                        docCell = h('span', { class: 'muted', style: { width: '210px', flex: '0 0 auto', fontSize: '11.5px' } }, 'врач не требуется');
+                        docCell = h('span', { class: 'muted', style: { width: '210px', flex: '0 0 auto', fontSize: '12.5px' } }, 'врач не требуется');
                     }
 
                     rows.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 11px', border: '1px solid var(--ink-100)', borderRadius: '10px' } },
                         h('div', { style: { flex: 1, minWidth: 0 } },
-                            h('div', { style: { fontSize: '13px', fontWeight: 600, overflowWrap: 'anywhere' } }, p.name),
-                            h('div', { class: 'muted', style: { fontSize: '11.5px' } }, String(p.price || 0), ' сум')),
+                            h('div', { style: { fontSize: '13.5px', fontWeight: 600, overflowWrap: 'anywhere' } }, p.name),
+                            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, String(p.price || 0), ' сум')),
                         docCell, inp));
                 }
             };
             paintRows();
 
             const allInp = h('input', { type: 'date',
-                style: { width: '160px', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '13px' } });
+                style: { width: '160px', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '13.5px' } });
             const applyAll = h('button', { class: 'btn btn-outline btn-sm', type: 'button',
                 onclick: () => {
                     if (!allInp.value) { toast('Выберите дату.', 'fail'); return; }
@@ -1312,7 +1312,7 @@ async function paint() {
                     h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } },
                         'Назначьте дату каждой услуге и врача там, где он нужен. Регистратура увидит услугу в смете именно в этот день.'),
                     h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 11px', marginBottom: '12px', background: 'var(--ink-25, #f6f8f9)', border: '1px solid var(--ink-100)', borderRadius: '10px' } },
-                        h('span', { style: { flex: 1, fontSize: '13px', fontWeight: 600 } }, 'Одна дата для всех'),
+                        h('span', { style: { flex: 1, fontSize: '13.5px', fontWeight: 600 } }, 'Одна дата для всех'),
                         allInp, applyAll),
                     rows),
                 h('footer', { class: 'modal-foot' },
@@ -1340,7 +1340,7 @@ async function paint() {
                         Icon('Headset', { size: 17 })),
                     h('div', null,
                         h('h2', { style: { margin: 0, fontSize: '15px' } }, isEdit ? 'Заявка' : 'Новая заявка'),
-                        h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '1px' } },
+                        h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '1px' } },
                             isEdit ? trf('Создана {when}', { when: fmtDateTime(r.created_at) }) : 'Найдите пациента клиники или зафиксируйте нового'))),
                 h('button', { class: 'modal-close', onclick: close }, '×')),
             h('div', { class: 'modal-body' },
@@ -1407,8 +1407,8 @@ async function paint() {
                 chip(1, 'Сегодня'), chip(7, '7 дней'), chip(30, '30 дней'), chip(0, 'Всё время')));
 
             const kpi = (label, value, color) => h('div', { class: 'card', style: { flex: 1, padding: '12px 14px', textAlign: 'center' } },
-                h('div', { class: 'muted', style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.04em' } }, label),
-                h('div', { style: { fontSize: '22px', fontWeight: 800, marginTop: '2px', color: color || 'var(--ink-900)' } }, String(value)));
+                h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '.04em' } }, label),
+                h('div', { style: { fontSize: '24px', fontWeight: 800, marginTop: '2px', color: color || 'var(--ink-900)' } }, String(value)));
             bodyEl.appendChild(h('div', { class: 'row', style: { gap: '10px', marginBottom: '14px' } },
                 kpi('Заявок', rows.length),
                 kpi('Пришло', conv, 'var(--ok-600, #16a34a)'),

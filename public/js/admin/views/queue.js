@@ -248,7 +248,7 @@ function paint() {
         if (g.kind !== lastKind) {
             lastKind = g.kind;
             refs.body.appendChild(h('div', { style: {
-                fontSize: '11px', fontWeight: '700', letterSpacing: '.06em', textTransform: 'uppercase',
+                fontSize: '12.5px', fontWeight: '700', letterSpacing: '.06em', textTransform: 'uppercase',
                 color: 'var(--ink-500)', margin: '18px 0 10px',
             } }, KIND_TITLE[g.kind] || KIND_TITLE.other));
             grid = h('div', { style: {
@@ -271,17 +271,17 @@ function groupCard(g) {
         background: nowNumbers.length ? 'var(--primary-600)' : 'var(--ink-50, #f1f4f5)',
         color: nowNumbers.length ? '#fff' : 'var(--ink-400, #9aa7ab)',
     } },
-        h('div', { style: { fontSize: '26px', fontWeight: '800', lineHeight: '1.05' } },
+        h('div', { style: { fontSize: '24px', fontWeight: '800', lineHeight: '1.05' } },
             nowNumbers.length ? nowNumbers.join(', ') : '—'),
-        h('div', { style: { fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '.05em', marginTop: '3px', opacity: '0.9' } },
+        h('div', { style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '.05em', marginTop: '3px', opacity: '0.9' } },
             'сейчас'));
 
     const head = h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center', padding: '14px 16px' } },
         nowBox,
         h('div', { style: { minWidth: '0', flex: '1' } },
-            h('div', { style: { fontSize: '14.5px', fontWeight: '700', color: 'var(--ink-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+            h('div', { style: { fontSize: '15px', fontWeight: '700', color: 'var(--ink-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
                 g.label),
-            h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '3px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '3px' } },
                 trf('ждут: {n}', { n: g.waiting_count }) +
                 (g.unpaid_count ? ' · ' + trf('без оплаты: {n}', { n: g.unpaid_count }) : '') +
                 ' · ' + trf('принято: {n}', { n: g.done_count }))));
@@ -306,18 +306,18 @@ function groupCard(g) {
         } },
             h('div', { style: {
                 width: '30px', flex: '0 0 auto', textAlign: 'center',
-                fontSize: '14px', fontWeight: '700',
+                fontSize: '13.5px', fontWeight: '700',
                 color: t.state === 'serving' ? 'var(--primary-700)' : 'var(--ink-700)',
             } }, String(t.number)),
             h('div', { style: { minWidth: '0', flex: '1' } },
-                h('div', { style: { fontSize: '13px', lineHeight: '17px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                h('div', { style: { fontSize: '13.5px', lineHeight: '17px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
                     t.patient_name),
                 t.services && t.services.length
-                    ? h('div', { class: 'muted', style: { fontSize: '11.5px', lineHeight: '15px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                    ? h('div', { class: 'muted', style: { fontSize: '12.5px', lineHeight: '15px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
                         t.services.join(' · '))
                     : null),
             h('span', { style: {
-                flex: '0 0 auto', fontSize: '11px', fontWeight: '600',
+                flex: '0 0 auto', fontSize: '12.5px', fontWeight: '600',
                 padding: '3px 8px', borderRadius: '99px',
                 background: st.bg, color: st.fg,
             } }, st.label)));

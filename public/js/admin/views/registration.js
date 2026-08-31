@@ -102,7 +102,7 @@ function leftCard(formNode, onNavigate) {
         name: '__age', readOnly: true, placeholder: tr('—'),
         style: { background: 'var(--ink-25)', color: 'var(--ink-600)' },
     });
-    const legalRepHint = h('div', { style: { fontSize: '12px', color: 'var(--warn-700)', fontWeight: 600, marginBottom: '10px' } }, '');
+    const legalRepHint = h('div', { style: { fontSize: '12.5px', color: 'var(--warn-700)', fontWeight: 600, marginBottom: '10px' } }, '');
     const legalRepCard = section('4', 'Данные опекуна',
         'Требуется, если пациенту меньше 18 или больше 63 лет',
         guardianBody(legalRepHint),
@@ -246,7 +246,7 @@ function photoBlock() {
     const img = h('img', { alt: 'Фото пациента', style: { display: 'none', width: '156px', height: '156px', objectFit: 'cover', borderRadius: '12px' } });
     const ph  = h('div', { class: 'cam-ph' },
         Icon('Image', { size: 28 }),
-        h('span', { style: { fontSize: '12px', fontWeight: 500 } }, 'Фото пациента'),
+        h('span', { style: { fontSize: '12.5px', fontWeight: 500 } }, 'Фото пациента'),
     );
     const box = h('div', { class: 'cam-box' }, ph, img);
     const setPhoto = (url) => {
@@ -353,7 +353,7 @@ function section(num, title, desc, body, { foldable = false, open = false } = {}
     body.style.marginTop = '14px';
     // REG_FOLD_SECTIONS_V2 — the folded head is a compact clickable pill with an
     // explicit «Развернуть/Свернуть» affordance, not a bare header.
-    const chev = h('span', { style: { marginLeft: 'auto', fontSize: '12px', fontWeight: '700', color: 'var(--primary-700)', display: 'inline-flex', alignItems: 'center', gap: '5px', flex: '0 0 auto', whiteSpace: 'nowrap' } }, open ? 'Свернуть ▾' : 'Развернуть ▸');
+    const chev = h('span', { style: { marginLeft: 'auto', fontSize: '12.5px', fontWeight: '700', color: 'var(--primary-700)', display: 'inline-flex', alignItems: 'center', gap: '5px', flex: '0 0 auto', whiteSpace: 'nowrap' } }, open ? 'Свернуть ▾' : 'Развернуть ▸');
     const head = h('div', { class: 'form-section-head', style: {
             cursor: 'pointer', userSelect: 'none', margin: '0',
             background: 'var(--ink-25)', border: '1px solid var(--ink-100)',
@@ -485,7 +485,7 @@ async function runPatientSearch(term, resultsEl, onNavigate) {
             },
                 h('div', { style: { flex: 1, minWidth: 0 } },
                     h('div', { class: 'cell-strong', style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, name),
-                    meta && h('div', { class: 'muted', style: { fontSize: '11.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, meta),
+                    meta && h('div', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, meta),
                 ),
                 h('span', { style: { color: 'var(--ink-400)' } }, Icon('ArrowRight', { size: 14 })),
             ));
@@ -729,7 +729,7 @@ export function openDuplicatePatientDialog(err, { onOpenExisting, onForceCreate 
             const name = [c.last_name, c.first_name, c.middle_name].filter(Boolean).join(' ').trim() || c.full_name || '(unnamed)';
             const reasonChips = (c._reasons || []).map(r => h('span', {
                 style: {
-                    fontSize: '10.5px', fontWeight: 600, padding: '1px 8px',
+                    fontSize: '12.5px', fontWeight: 600, padding: '1px 8px',
                     borderRadius: '999px', background: 'var(--primary-50)',
                     color: 'var(--primary-700)', textTransform: 'uppercase',
                     letterSpacing: '0.04em',
@@ -756,9 +756,9 @@ export function openDuplicatePatientDialog(err, { onOpenExisting, onForceCreate 
                 h('div', { style: { flex: 1, minWidth: 0 } },
                     h('div', { class: 'row', style: { gap: '8px', marginBottom: '3px', flexWrap: 'wrap' } },
                         h('span', { class: 'cell-strong', style: { fontSize: '13.5px' } }, name),
-                        c.mrn && h('span', { class: 'cell-mono muted', style: { fontSize: '11.5px' } }, c.mrn),
+                        c.mrn && h('span', { class: 'cell-mono muted', style: { fontSize: '12.5px' } }, c.mrn),
                     ),
-                    h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '4px' } },
+                    h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '4px' } },
                         [
                             `DOB ${fmtDob(c.date_of_birth)}`,
                             c.phone || '—',
@@ -890,7 +890,7 @@ function categoryFromAge(age) {
 // --- Telegram opt-in block. --------------------------------------------------
 function telegramBlock() {
     const chip = h('span', { class: 'tg-chip' }, Icon('Send', { size: 13 }), ' ', h('span', { class: 'tg-chip-t' }, 'Не подключён'));
-    const note = h('div', { class: 'muted', style: { fontSize: '11.5px', display: 'none', marginTop: '6px' } });
+    const note = h('div', { class: 'muted', style: { fontSize: '12.5px', display: 'none', marginTop: '6px' } });
     const btn = h('button', { class: 'btn btn-outline btn-sm', type: 'button',
         onclick: () => {
             state.tgSent = true;
@@ -992,7 +992,7 @@ function guardianFromBase(onPick) {
         picked.append(
             h('div', { class: 'grd-picked-main' },
                 h('div', { class: 'cell-strong' }, name),
-                h('div', { class: 'muted', style: { fontSize: '11.5px' } }, [p.mrn, p.phone].filter(Boolean).join(' · '))),
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [p.mrn, p.phone].filter(Boolean).join(' · '))),
             h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: clearPick }, 'Изменить'),
         );
         picked.style.display = ''; wrap.querySelector('.grd-field').style.display = 'none'; results.style.display = 'none';
@@ -1022,7 +1022,7 @@ function guardianFromBase(onPick) {
                 results.appendChild(h('button', { type: 'button', class: 'grd-opt', onclick: () => showPicked(p) },
                     h('div', { style: { flex: 1, minWidth: 0 } },
                         h('div', { class: 'cell-strong' }, name),
-                        h('div', { class: 'muted', style: { fontSize: '11px' } }, [p.mrn, p.phone].filter(Boolean).join(' · '))),
+                        h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [p.mrn, p.phone].filter(Boolean).join(' · '))),
                     Icon('Plus', { size: 13 })));
             }
         }

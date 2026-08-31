@@ -90,7 +90,7 @@ export async function openCustDev() {
                     Icon('PhoneOut', { size: 17 })),
                 h('div', null,
                     h('h2', { style: { margin: 0, fontSize: '15px' } }, 'Cust Dev · Обзвон пациентов'),
-                    h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '1px' } },
+                    h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '1px' } },
                         state.editable
                             ? 'Пришли и оплатили: спросите про регистратуру, кассу и врача'
                             : 'Доступ «Только просмотр»: оценивать карточки нельзя'))),
@@ -108,7 +108,7 @@ export async function openCustDev() {
 
         const search = h('input', {
             class: 'crm-search', type: 'search', placeholder: 'Поиск по имени или телефону…', value: state.search,
-            style: { width: '260px', height: '36px', padding: '0 12px', border: '1px solid var(--ink-200, #d1d5db)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13px' },
+            style: { width: '260px', height: '36px', padding: '0 12px', border: '1px solid var(--ink-200, #d1d5db)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13.5px' },
         });
         search.addEventListener('input', () => { state.search = search.value; paintBoard(); });
         filters.appendChild(search);
@@ -202,7 +202,7 @@ export async function openCustDev() {
             },
                 h('div', { class: 'row', style: { gap: '8px', marginBottom: '8px' } },
                     Tag(label, { kind, dot: true }),
-                    h('span', { class: 'muted', style: { fontSize: '12px', fontWeight: 700 } }, String(colRows.length))),
+                    h('span', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700 } }, String(colRows.length))),
                 list));
         }
         body.appendChild(board);
@@ -221,8 +221,8 @@ export async function openCustDev() {
             onclick: () => openRate(r, reload, state.editable),
         },
             h('div', { class: 'row', style: { gap: '6px', alignItems: 'baseline' } },
-                h('span', { style: { flex: 1, minWidth: 0, fontWeight: 700, fontSize: '13px', overflowWrap: 'anywhere' } }, r.patient_name || '—'),
-                h('span', { class: 'muted', style: { fontSize: '11px', whiteSpace: 'nowrap' } }, fmtD(r.visit_date))),
+                h('span', { style: { flex: 1, minWidth: 0, fontWeight: 700, fontSize: '13.5px', overflowWrap: 'anywhere' } }, r.patient_name || '—'),
+                h('span', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, fmtD(r.visit_date))),
             line(h('span', { class: 'num' }, r.phone || '—')),
             r.mrn ? line(Tag(r.mrn, { kind: 'ok' })) : null,
             line(h('span', { class: 'muted' }, 'Оплачено: '), money(r.paid_amount), ' сум'),
@@ -317,13 +317,13 @@ function openRate(r, onSaved, editable) {
 
     const comment = h('textarea', {
         rows: 3, placeholder: 'Что сказал пациент',
-        style: { width: '100%', fontFamily: 'inherit', fontSize: '13px', padding: '8px 10px', borderRadius: '10px', border: '1px solid var(--ink-200, #d1d5db)' },
+        style: { width: '100%', fontFamily: 'inherit', fontSize: '13.5px', padding: '8px 10px', borderRadius: '10px', border: '1px solid var(--ink-200, #d1d5db)' },
     });
     comment.value = r.comment || '';
     comment.disabled = !editable;
     comment.addEventListener('input', syncSave);
 
-    const hint = h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '6px' } });
+    const hint = h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } });
     const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, Icon('Check', { size: 14 }), ' Сохранить');
 
     const groups = {};
@@ -405,7 +405,7 @@ function openRate(r, onSaved, editable) {
         h('header', { class: 'modal-head' },
             h('div', null,
                 h('h2', { style: { margin: 0, fontSize: '15px' } }, r.patient_name || 'Карточка'),
-                h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '1px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '1px' } },
                     trf('Визит {date} · {phone}', { date: fmtD(r.visit_date), phone: r.phone || tr('телефон не указан') }))),
             h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { class: 'modal-body' },
@@ -448,14 +448,14 @@ async function openReport(b) {
     }
 
     const kpi = (label, value, sub) => h('div', { class: 'card', style: { padding: '12px 14px', flex: '1 1 150px' } },
-        h('div', { class: 'muted', style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.04em' } }, label),
-        h('div', { style: { fontSize: '22px', fontWeight: 700, marginTop: '4px' } }, String(value)),
-        sub ? h('div', { class: 'muted', style: { fontSize: '11.5px' } }, sub) : null);
+        h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '.04em' } }, label),
+        h('div', { style: { fontSize: '24px', fontWeight: 700, marginTop: '4px' } }, String(value)),
+        sub ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, sub) : null);
 
     function staffTable(title, rows) {
         if (!rows.length) {
             return h('div', { style: { marginTop: '16px' } },
-                h('h3', { style: { fontSize: '13px', margin: '0 0 6px' } }, title),
+                h('h3', { style: { fontSize: '13.5px', margin: '0 0 6px' } }, title),
                 h('p', { class: 'muted', style: { fontSize: '12.5px' } }, 'Нет оценённых карточек за период.'));
         }
         const tb = h('tbody');
@@ -467,7 +467,7 @@ async function openReport(b) {
                 h('td', { style: { textAlign: 'right', fontWeight: 700 } }, r.pct + ' %')));
         }
         return h('div', { style: { marginTop: '16px' } },
-            h('h3', { style: { fontSize: '13px', margin: '0 0 6px' } }, title),
+            h('h3', { style: { fontSize: '13.5px', margin: '0 0 6px' } }, title),
             h('table', { class: 'table' },
                 h('thead', null, h('tr', null,
                     h('th', null, 'Сотрудник'),
@@ -478,7 +478,7 @@ async function openReport(b) {
     }
 
     clear(body);
-    body.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '10px' } },
+    body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } },
         trf('Период: {from} — {to}', { from: fmtD(b.from), to: fmtD(b.to) })));
     body.appendChild(h('div', { class: 'row', style: { gap: '10px', flexWrap: 'wrap' } },
         kpi('Карточек', rep.total),

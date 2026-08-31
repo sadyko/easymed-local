@@ -312,7 +312,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     display: 'inline-flex', alignItems: 'center', gap: '7px',
                     padding: '9px 16px', borderRadius: '10px', cursor: 'pointer',
                     border: 'none', background: '#fff', color: 'var(--ink-900)',
-                    fontFamily: 'inherit', fontSize: '13px', fontWeight: 700,
+                    fontFamily: 'inherit', fontSize: '13.5px', fontWeight: 700,
                     boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
                 },
             }, Icon('Plus', { size: 14 }), 'Добавить услуги'),   // DAY_VISIT_V1 — работаем услугами, визит (день) считается сам
@@ -321,7 +321,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         // -- name / demographics row --
         const age = ageFromDob(p.date_of_birth);
         const sep = () => h('span', { style: { color: 'var(--ink-300)' } }, '·');
-        const demo = h('div', { class: 'row', style: { gap: '10px', flexWrap: 'wrap', alignItems: 'center', marginTop: '8px', fontSize: '13px', color: 'var(--ink-600)' } },
+        const demo = h('div', { class: 'row', style: { gap: '10px', flexWrap: 'wrap', alignItems: 'center', marginTop: '8px', fontSize: '13.5px', color: 'var(--ink-600)' } },
             h('span', { class: 'num', style: { fontWeight: 700, color: 'var(--ink-800)' } }, p.mrn || '—'),
         );
         const demoBits = [];
@@ -341,7 +341,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         const activePill = h('span', {
             style: {
                 display: 'inline-flex', alignItems: 'center', gap: '6px',
-                padding: '3px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 600,
+                padding: '3px 12px', borderRadius: '999px', fontSize: '12.5px', fontWeight: 600,
                 background: p.active === 0 ? 'var(--ink-50)' : 'var(--ok-50, #ecfdf5)',
                 color: p.active === 0 ? 'var(--ink-600)' : 'var(--ok-700, #047857)',
             },
@@ -382,16 +382,16 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     },
                 }, Icon('Flag', { size: 16 })),
                 h('div', { style: { minWidth: 0, flex: 1 } },
-                    h('div', { class: 'muted', style: { fontSize: '10.5px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase' } }, 'Особые отметки'),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase' } }, 'Особые отметки'),
                     marks.length
                         ? h('div', { style: { marginTop: '4px', display: 'flex', gap: '6px', flexWrap: 'wrap' } },
                             ...marks.map(m => h('span', {
-                                style: { background: 'var(--crit-50, #fef2f2)', color: 'var(--crit-700, #b91c1c)', borderRadius: '999px', padding: '2px 10px', fontSize: '11.5px', fontWeight: 600 },
+                                style: { background: 'var(--crit-50, #fef2f2)', color: 'var(--crit-700, #b91c1c)', borderRadius: '999px', padding: '2px 10px', fontSize: '12.5px', fontWeight: 600 },
                             }, m)))
                         : h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } }, 'Нет отметок'),
                 ),
                 h('div', { style: { textAlign: 'right', minWidth: '160px', maxWidth: '340px' } },
-                    h('div', { class: 'muted', style: { fontSize: '10.5px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase' } }, 'Последняя заметка'),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase' } }, 'Последняя заметка'),
                     h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
                         note || 'Заметок нет'),
                 ),
@@ -438,9 +438,9 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     },
                 }, Icon(icon, { size: 14 })),
                 h('div', { style: { minWidth: 0 } },
-                    h('div', { class: 'muted', style: { fontSize: '10.5px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase' } }, label),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase' } }, label),
                     h('div', { style: { fontSize: '15px', fontWeight: 700, marginTop: '3px', color: valueColor || 'var(--ink-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, value),
-                    sub ? h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '1px' } }, sub) : null,
+                    sub ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '1px' } }, sub) : null,
                 ),
             ),
         );
@@ -499,7 +499,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     style: {
                         background: active ? 'var(--primary-600)' : 'var(--ink-100)',
                         color: active ? '#fff' : 'var(--ink-600)',
-                        borderRadius: '999px', padding: '1px 8px', fontSize: '11px', fontWeight: 700,
+                        borderRadius: '999px', padding: '1px 8px', fontSize: '12.5px', fontWeight: 700,
                     },
                 }, String(visits.length))
                 : null;
@@ -514,7 +514,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 style: {
                     display: 'inline-flex', alignItems: 'center', gap: '7px',
                     padding: '14px 12px', border: 'none', background: 'none', cursor: 'pointer',
-                    fontFamily: 'inherit', fontSize: '13px',
+                    fontFamily: 'inherit', fontSize: '13.5px',
                     fontWeight: active ? 700 : 500,
                     color: active ? 'var(--primary-700)' : 'var(--ink-600)',
                     borderBottom: '2px solid ' + (active ? 'var(--primary-600)' : 'transparent'),
@@ -550,14 +550,14 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
 
         const kvRow = (label, valueEl) => h('div', { class: 'row', style: { gap: '10px', alignItems: 'flex-start', padding: '9px 0', borderBottom: '1px solid var(--ink-50)' } },
             h('div', { class: 'muted', style: { flex: '0 0 130px', fontSize: '12.5px' } }, label),
-            h('div', { style: { fontSize: '13px', color: 'var(--ink-900)', fontWeight: 500, wordBreak: 'break-word' } },
+            h('div', { style: { fontSize: '13.5px', color: 'var(--ink-900)', fontWeight: 500, wordBreak: 'break-word' } },
                 valueEl == null || valueEl === '' ? '—' : valueEl),
         );
 
         const contacts = h('div', { class: 'card' },
             h('div', { class: 'card-header' },
                 h('h3', null, Icon('User', { size: 15 }), ' Контакты и документы'),
-                h('span', { class: 'muted', style: { fontSize: '11.5px' } }, 'звонки и сообщения из системы — скоро'),
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'звонки и сообщения из системы — скоро'),
             ),
             h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0 36px', padding: '10px 20px 16px' } },
                 h('div', null,
@@ -590,7 +590,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         const miniTile = (icon, label, value, color) => h('div', {
             style: { background: 'var(--ink-25, #f8fafa)', borderRadius: '10px', padding: '12px 14px', minWidth: 0 },
         },
-            h('div', { class: 'row', style: { gap: '6px', alignItems: 'center', color: 'var(--ink-500)', fontSize: '11px', fontWeight: 600 } },
+            h('div', { class: 'row', style: { gap: '6px', alignItems: 'center', color: 'var(--ink-500)', fontSize: '12.5px', fontWeight: 600 } },
                 Icon(icon, { size: 12 }), label),
             h('div', { class: 'num', style: { fontSize: '17px', fontWeight: 800, marginTop: '4px', color: color || 'var(--ink-900)' } }, value),
         );
@@ -668,7 +668,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
 
     function renderServices() {
         const wrap = h('div', { class: 'card' });
-        const countEl = h('span', { class: 'muted', style: { fontSize: '12px', fontWeight: 500, marginLeft: '8px' } });
+        const countEl = h('span', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 500, marginLeft: '8px' } });
         // Строится ОДИН раз: перерисовываем только строки таблицы, иначе поле
         // пересоздавалось бы на каждый символ и теряло фокус (тот же приём, что
         // в фильтрах списка услуг и сотрудников).
@@ -898,14 +898,14 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         for (const inv of invoices) {
             const balance = Number(inv.total_amount || 0) - Number(inv.paid_amount || 0);
             const svcTd = h('td', { style: { maxWidth: '340px' } },
-                h('span', { class: 'muted', style: { fontSize: '11.5px' } }, 'Загрузка…'));
-            const docTd = h('td', null, h('span', { class: 'muted', style: { fontSize: '11.5px' } }, '…'));
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Загрузка…'));
+            const docTd = h('td', null, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '…'));
             svcCells.set(inv.id, svcTd);
             docCells.set(inv.id, docTd);
             tbody.appendChild(h('tr', null,
                 h('td', null,
                     h('div', { class: 'cell-strong' }, inv.invoice_number || ('#' + inv.id)),
-                    h('div', { class: 'muted num', style: { fontSize: '11px', marginTop: '2px' } }, fmtDateTime(inv.created_at)),
+                    h('div', { class: 'muted num', style: { fontSize: '12.5px', marginTop: '2px' } }, fmtDateTime(inv.created_at)),
                 ),
                 svcTd,
                 docTd,
@@ -1262,6 +1262,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             referral: 'Направление', instrumental: 'Инструментальные данные', doctor_phone: 'Телефон врача',
         };
         /* i18n-exempt-start: печать «Заключения врача» — печатный документ, намеренно русский */
+        /* type-scale-exempt-start: печатный документ — семейство Onest, размеры остаются его выверенными метриками (дизайн-док 2026-08-31) */
         function printWsDoc(d) {
             const esc = (x) => String(x == null ? '' : x).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
             const blocks = Object.entries(d.fields || {})
@@ -1271,6 +1272,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             const bodyHtml = `<h3 style="margin:0 0 4px">Заключение врача</h3>
 <div style="color:#667;font-size:12px;margin-bottom:8px">${esc(patient.full_name || '')} · ${esc(patient.mrn || '')}${d.doctorName ? ' · Врач: ' + esc(d.doctorName) : ''} · ${esc(String(d.created_at || '').slice(0, 10).split('-').reverse().join('.'))}</div>
 ${blocks || '<div style="color:#889;font-size:13px">Документ подписан без заполненных разделов.</div>'}`;
+            /* type-scale-exempt-end */
             /* i18n-exempt-end */
             printableSheet({ type: 'conclusion', title: d.title, bodyHtml });
         }
@@ -1337,7 +1339,7 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                         onclick: (ev) => { ev.preventDefault(); openRow(d); },
                     }, d.title || d.file_name || trf('Документ #{id}', { id: d.id })),
                         h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', marginTop: '3px' } },
-                            h('span', { class: 'muted', style: { fontSize: '11.5px' } }, DOC_TYPE_RU[d.doc_type] || d.doc_type || ''),
+                            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, DOC_TYPE_RU[d.doc_type] || d.doc_type || ''),
                             // LAB_DOC_PENDING_V1 — статус виден в списке: «Не
                             // готов» это ответ на вопрос пациента у стойки.
                             d.st ? Tag(d.st.label, { kind: d.st.kind, dot: true }) : null)),
@@ -1419,7 +1421,7 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                 const rows = data || [];
                 if (!rows.length) { policiesEl.textContent = tr('У плательщика нет активных полисов.'); return; }
                 policiesEl.appendChild(h('div', null,
-                    h('div', { style: { fontWeight: 700, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' } }, 'Полисы'),
+                    h('div', { style: { fontWeight: 700, fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' } }, 'Полисы'),
                     ...rows.map(r => h('div', { class: 'row', style: { padding: '5px 0', borderBottom: '1px solid var(--ink-50)', gap: '10px' } },
                         h('span', { style: { flex: 1, color: 'var(--ink-800)' } }, r.name),
                         h('span', { class: 'num', style: { fontWeight: 600 } }, trf('покрытие {n}%', { n: r.coverage_percent || 0 })))),
@@ -1464,18 +1466,18 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
             h('div', {
                 style: { background: 'var(--ink-25, #f8fafa)', borderRadius: '10px', padding: '22px 14px', textAlign: 'center' },
             },
-                h('div', { class: 'num', style: { fontSize: '22px', fontWeight: 800 } }, '0 сум'),
-                h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '4px' } },
+                h('div', { class: 'num', style: { fontSize: '24px', fontWeight: 800 } }, '0 сум'),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
                     'Начислений пока нет — история кэшбэка появится здесь после первых начислений.'),
             ),
             rules.length
                 ? h('div', { style: { marginTop: '14px' } },
-                    h('div', { style: { fontWeight: 700, fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--ink-500)', marginBottom: '6px' } }, 'Действующие правила'),
+                    h('div', { style: { fontWeight: 700, fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--ink-500)', marginBottom: '6px' } }, 'Действующие правила'),
                     ...rules.map(r => h('div', { class: 'row', style: { padding: '6px 0', borderBottom: '1px solid var(--ink-50)', gap: '10px', fontSize: '12.5px' } },
                         h('span', { style: { flex: 1, color: 'var(--ink-800)' } }, r.name),
                         h('span', { class: 'num', style: { fontWeight: 700, color: 'var(--primary-700)' } }, r.percent + '%'))),
                 )
-                : h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '12px' } },
+                : h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '12px' } },
                     'Правила кэшбэка не настроены (Настройки → Кэшбэк).'),
         ]);
     }
@@ -1523,11 +1525,11 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                 totalPaid += ev.amount;
             }
             rows.push(h('div', { class: 'row', style: { padding: '7px 0', borderBottom: '1px solid var(--ink-50)', gap: '10px', fontSize: '12.5px' } },
-                h('span', { class: 'muted num', style: { flex: '0 0 118px', fontSize: '11.5px' } }, ev.t ? fmtDateTime(ev.t) : '—'),
+                h('span', { class: 'muted num', style: { flex: '0 0 118px', fontSize: '12.5px' } }, ev.t ? fmtDateTime(ev.t) : '—'),
                 h('span', { style: { flex: 1, minWidth: 0, color: ev.voided ? 'var(--ink-400)' : 'var(--ink-800)', textDecoration: ev.voided ? 'line-through' : 'none' } }, ev.label),
                 h('span', { class: 'num', style: { fontWeight: 700, color: ev.kind === 'payment' ? 'var(--ok-700)' : (ev.voided ? 'var(--ink-400)' : 'var(--ink-900)') } },
                     (ev.kind === 'payment' ? '−' : '+') + fmtPrice(ev.amount)),
-                h('span', { class: 'num muted', style: { flex: '0 0 96px', textAlign: 'right', fontSize: '11.5px' } },
+                h('span', { class: 'num muted', style: { flex: '0 0 96px', textAlign: 'right', fontSize: '12.5px' } },
                     trf('долг {sum}', { sum: fmtPrice(Math.max(running, 0)) })),
             ));
         }
@@ -1559,7 +1561,7 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
             // Заведённый, но не принятый кассой депозит — не деньги. Показываем
             // отдельно, иначе регистратура ждала бы, что баланс уже вырос.
             pending.length
-                ? h('span', { class: 'muted', style: { fontSize: '12px' } },
+                ? h('span', { class: 'muted', style: { fontSize: '12.5px' } },
                     '· ', trf('ждёт приёма кассой: {sum} сум', { sum: fmtPrice(pending.reduce((n, d) => n + Number(d.amount || 0), 0)) }))
                 : null);
 

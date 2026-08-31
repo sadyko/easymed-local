@@ -121,7 +121,7 @@ function banner(kind, icon, title, note) {
         h('span', { style: { flex: '0 0 auto', marginTop: '1px' } }, Icon(icon, { size: 15 })),
         h('div', null,
             h('div', { style: { fontWeight: '600' } }, title),
-            note ? h('div', { style: { fontSize: '13px', opacity: '.85', marginTop: '2px' } }, note) : null),
+            note ? h('div', { style: { fontSize: '13.5px', opacity: '.85', marginTop: '2px' } }, note) : null),
     );
 }
 
@@ -200,7 +200,7 @@ function tokenCard() {
 
     if (s.bot_username) {
         const link = 'https://t.me/' + s.bot_username;
-        card.appendChild(h('div', { class: 'muted', style: { marginTop: '14px', fontSize: '13px' } },
+        card.appendChild(h('div', { class: 'muted', style: { marginTop: '14px', fontSize: '13.5px' } },
             'Ссылка для пациентов: ',
             h('a', { href: link, target: '_blank', rel: 'noopener' }, link),
             ' · ',
@@ -239,17 +239,17 @@ function modeCard() {
         } });
     const push = h('input', { type: 'checkbox', checked: !!s.push_enabled });
     card.appendChild(checkField('Бот включён', enabled));
-    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', margin: '-6px 0 12px 26px' } },
+    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 12px 26px' } },
         'Сохраняется сразу. Пока выключено, бот не отвечает пациентам и ничего не рассылает.'));
     card.appendChild(checkField('Отправлять документ сразу, как он готов', push));
-    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', margin: '-6px 0 14px 26px' } },
+    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 14px 26px' } },
         'Без этого бот молчит и отдаёт документы только по запросу пациента. Счета не рассылаются автоматически в любом случае.'));
 
     const boxes = DOC_KINDS.map(([key, label, note]) => {
         const cb = h('input', { type: 'checkbox', checked: s.doc_kinds.includes(key) });
         return { key, cb, node: h('div', null,
             checkField(label, cb),
-            h('div', { class: 'muted', style: { fontSize: '12px', margin: '-6px 0 10px 26px' } }, note)) };
+            h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 10px 26px' } }, note)) };
     });
     card.appendChild(h('div', { style: { marginTop: '6px' } },
         h('div', { style: { fontWeight: '600', marginBottom: '8px' } }, 'Какие документы разрешено выдавать'),
@@ -316,7 +316,7 @@ function helpCard() {
         h('li', null, 'Вставьте его в поле выше и нажмите «Проверить связь».'),
     );
     card.appendChild(ol);
-    card.appendChild(h('div', { class: 'muted', style: { marginTop: '14px', fontSize: '13px' } },
+    card.appendChild(h('div', { class: 'muted', style: { marginTop: '14px', fontSize: '13.5px' } },
         'Токен — это полный доступ к боту и переписке с пациентами. Не пересылайте его в чатах и не храните в текстовых файлах: ' +
         'на сервере он лежит зашифрованным и обратно в браузер не выдаётся. Если токен всё же куда-то попал — отзовите его ' +
         'в @BotFather командой /revoke и сохраните здесь новый.'));

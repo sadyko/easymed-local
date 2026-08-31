@@ -55,7 +55,7 @@ export async function renderDiscountsSettings(container, { onNavigate } = {}) {
         const rem = Number(r.remaining ?? r.amount ?? 0);
         return h('span', null,
             h('span', { class: 'num', style: { fontWeight: 700, color: rem > 0 ? 'var(--ok-700)' : 'var(--ink-400)' } }, fmtUZS(rem)),
-            h('span', { class: 'muted', style: { fontSize: '11px' } }, ' / ' + fmtUZS(r.amount), ' сум'));
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, ' / ' + fmtUZS(r.amount), ' сум'));
     }
     function limitsCell(r) {
         const bits = [];
@@ -91,7 +91,7 @@ export async function renderDiscountsSettings(container, { onNavigate } = {}) {
                     onclick: () => { state.kind = k; paintList(); } }, `${l} · ${n}`);
             }));
         const search = h('input', { type: 'search', placeholder: 'Код, название или пациент…', value: state.q,
-            style: { height: '34px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13px', minWidth: '240px', fontFamily: 'inherit' },
+            style: { height: '34px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', minWidth: '240px', fontFamily: 'inherit' },
             oninput: (e) => { state.q = e.target.value; paintBody(); } });
         const tb = h('tbody');
         for (const r of rows) tb.appendChild(rowEl(r));
@@ -125,9 +125,9 @@ export async function renderDiscountsSettings(container, { onNavigate } = {}) {
                 h('td', null, h('span', { class: 'tag ' + (r.kind === 'promo_code' ? 'tag-info' : 'tag-purple') }, KIND_RU[r.kind] || r.kind)),
                 h('td', null, r.name || '—'),
                 h('td', null, valueCell(r)),
-                h('td', { class: 'muted', style: { fontSize: '12px' } }, r.patient_id ? (state.patients[r.patient_id] || '…') : 'любой пациент'),
-                h('td', { class: 'muted', style: { fontSize: '12px' } }, limitsCell(r)),
-                h('td', { class: 'muted', style: { fontSize: '12px' } }, validityCell(r)),
+                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, r.patient_id ? (state.patients[r.patient_id] || '…') : 'любой пациент'),
+                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, limitsCell(r)),
+                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, validityCell(r)),
                 h('td', null, statusTag(r)),
                 h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
                     h('button', { class: 'btn btn-ghost btn-sm', onclick: () => openEditor(r) }, 'Изменить'),

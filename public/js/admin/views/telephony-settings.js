@@ -136,7 +136,7 @@ function connectionCard() {
     const card = h('div', { style: { padding: '18px' } });
 
     card.appendChild(field('Провайдер', h('div', { style: { fontWeight: '600' } }, 'Binotel')));
-    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', margin: '-6px 0 14px' } },
+    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 14px' } },
         'Ключ и secret выдаёт поддержка Binotel — support@binotel.ua.'));
 
     const keyInput = h('input', {
@@ -171,12 +171,12 @@ function connectionCard() {
         value: s.company_id || '',
     });
     card.appendChild(field('Company ID', cidInput));
-    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', margin: '-6px 0 14px' } },
+    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 14px' } },
         'Номер компании в Binotel — указан в письме с данными интеграции'));
 
     // role="status" — живая область: результат проверки объявляется читалке,
     // где бы ни был фокус (тот же приём, что на экране «Модуль не подключён»).
-    const resultLine = h('div', { role: 'status', style: { marginTop: '10px', fontSize: '13px', minHeight: '18px' } });
+    const resultLine = h('div', { role: 'status', style: { marginTop: '10px', fontSize: '13.5px', minHeight: '18px' } });
     const setResult = (ok, text) => {
         resultLine.style.color = ok ? 'var(--ok-700, #2e8b52)' : 'var(--crit-700, #b03a3a)';
         resultLine.textContent = text;
@@ -261,7 +261,7 @@ function pollingCard() {
             } finally { enabled.disabled = false; }
         } });
     card.appendChild(checkField('Опрос включён', enabled));
-    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', margin: '-6px 0 12px 26px' } },
+    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 12px 26px' } },
         'Сохраняется сразу. Система сама опрашивает Binotel и записывает новые звонки в журнал.'));
 
     const intInput = h('input', {
@@ -283,14 +283,14 @@ function pollingCard() {
     card.appendChild(field('Интервал опроса, секунд',
         h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } }, intInput, intBtn)));
 
-    const statusRow = (label, value) => h('div', { class: 'muted', style: { fontSize: '13px', marginTop: '4px' } },
+    const statusRow = (label, value) => h('div', { class: 'muted', style: { fontSize: '13.5px', marginTop: '4px' } },
         label, ': ', h('span', { style: { color: 'var(--ink-700, inherit)' } }, value));
     card.appendChild(h('div', { style: { marginTop: '10px' } },
         statusRow('Последняя проверка', statusTime(s.last_poll_at)),
         statusRow('Последний звонок', statusTime(s.last_call_at)),
         statusRow('Последняя ошибка', textOrDash(s.last_error))));
 
-    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '12px' } },
+    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '12px' } },
         'Звонки появляются в журнале с задержкой до одного интервала опроса. Карточка звонка прямо в момент вызова — только через WebHook-и.'));
 
     return h('div', { class: 'card', style: { marginBottom: '16px' } },
@@ -318,7 +318,7 @@ function webhooksCard() {
             } finally { wh.disabled = false; }
         } });
     card.appendChild(checkField('WebHook-и включены', wh));
-    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', margin: '-6px 0 12px 26px' } },
+    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 12px 26px' } },
         'Сохраняется сразу. По умолчанию выключено — включайте только после настройки адреса у Binotel.'));
 
     const urlInput = h('input', {
@@ -357,7 +357,7 @@ function webhooksCard() {
     // Честные ограничения — прямо на экране, не в документации: у большинства
     // локальных установок публичного адреса нет, и обещать им всплывающую
     // карточку звонка было бы враньём.
-    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '12px', lineHeight: '1.6' } },
+    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '12px', lineHeight: '1.6' } },
         h('div', null, 'WebHook-и работают, только когда клиника доступна из интернета по этому адресу. Большинство локальных установок работают без них — звонки собирает опрос.'),
         h('div', null, 'Binotel присылает события только со своих серверных адресов — приём ограничен этим списком IP, чужие запросы отбрасываются.')));
 

@@ -91,7 +91,7 @@ async function paint(root) {
                 h('td', null, fmtDateTime(v.visit_date)),
                 h('td', null,
                     h('span', { style: { fontWeight: 600 } }, p.full_name || '—'),
-                    p.mrn ? h('span', { class: 'muted', style: { fontSize: '11px', marginLeft: '6px' } }, p.mrn) : null),
+                    p.mrn ? h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '6px' } }, p.mrn) : null),
                 admin ? h('td', null, (v.doctor && v.doctor.full_name) || '—') : null,
                 h('td', null, Tag(VISIT_STATUSES[v.status] || v.status, { kind: v.status === 'arrived' ? 'ok' : (v.status === 'cancelled' || v.status === 'no_show' ? 'crit' : ''), dot: true })),
                 h('td', null, (v.conclusion || '').trim() ? Icon('Check', { size: 15 }) : h('span', { class: 'muted' }, '—')),
@@ -122,7 +122,7 @@ function consultationModal(visit, root) {
     };
     const renderStatus = () => {
         clear(statusWrap);
-        statusWrap.appendChild(h('span', { class: 'muted', style: { fontSize: '12px', alignSelf: 'center' } }, 'Status: ', h('strong', null, VISIT_STATUSES[visit.status] || visit.status)));
+        statusWrap.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px', alignSelf: 'center' } }, 'Status: ', h('strong', null, VISIT_STATUSES[visit.status] || visit.status)));
         if (visit.status !== 'arrived') statusWrap.appendChild(h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => setStatus('arrived') }, 'Mark arrived'));
         if (visit.status !== 'no_show') statusWrap.appendChild(h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => setStatus('no_show') }, 'No-show'));
         if (visit.status !== 'cancelled') statusWrap.appendChild(h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => setStatus('cancelled') }, 'Cancel'));
@@ -169,19 +169,19 @@ function consultationModal(visit, root) {
             h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { class: 'modal-body' },
             h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' } },
-                h('span', { style: { width: '34px', height: '34px', borderRadius: '50%', background: 'var(--primary-600, #1f7a72)', color: '#fff', fontSize: '12px', fontWeight: 700, display: 'grid', placeItems: 'center' } }, initials(p.full_name || '?')),
-                h('div', null, h('div', { style: { fontWeight: 700 } }, p.full_name || '—'), h('div', { class: 'muted', style: { fontSize: '11.5px' } }, (p.mrn ? p.mrn + ' · ' : '') + fmtDateTime(visit.visit_date))),
+                h('span', { style: { width: '34px', height: '34px', borderRadius: '50%', background: 'var(--primary-600, #1f7a72)', color: '#fff', fontSize: '12.5px', fontWeight: 700, display: 'grid', placeItems: 'center' } }, initials(p.full_name || '?')),
+                h('div', null, h('div', { style: { fontWeight: 700 } }, p.full_name || '—'), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, (p.mrn ? p.mrn + ' · ' : '') + fmtDateTime(visit.visit_date))),
             ),
             statusWrap,
             h('div', { style: { borderTop: '1px solid var(--ink-100)', margin: '12px 0', paddingTop: '10px' } },
-                h('div', { class: 'muted', style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '6px' } }, 'Conclusion'),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '6px' } }, 'Conclusion'),
                 field('Type', typeSel),
                 conclInp,
                 h('div', { style: { marginTop: '8px' } }, saveConcl),
             ),
             h('div', { style: { borderTop: '1px solid var(--ink-100)', margin: '12px 0', paddingTop: '10px' } },
                 h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' } },
-                    h('div', { class: 'muted', style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.04em' } }, 'Ordered services'),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '.04em' } }, 'Ordered services'),
                     orderBtn),
                 h('table', { class: 'tbl' },
                     h('thead', null, h('tr', null, h('th', null, 'Service'), h('th', { style: { textAlign: 'right' } }, 'Qty'), h('th', null, 'Status'))),
@@ -215,7 +215,7 @@ function orderServiceModal(visit, onOrdered) {
                 onmouseout: (e) => e.currentTarget.style.background = 'transparent',
                 onclick: () => order(s),
             },
-                h('span', null, s.name, s.is_lab ? h('span', { class: 'muted', style: { fontSize: '10px', marginLeft: '6px' } }, 'lab') : null),
+                h('span', null, s.name, s.is_lab ? h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '6px' } }, 'lab') : null),
                 ));   // DOC_NO_MONEY_V1 — без цены
         }
     };
@@ -258,7 +258,7 @@ function newConsultationModal(root) {
     let patientId = null;
     const searchInp = h('input', { type: 'text', placeholder: 'Search patient by name…', autocomplete: 'off' });
     const results = h('div', { style: { border: '1px solid var(--ink-100)', borderRadius: '8px', marginTop: '4px', maxHeight: '160px', overflow: 'auto', display: 'none' } });
-    const chosen = h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '4px' } });
+    const chosen = h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } });
     let timer = null;
     searchInp.addEventListener('input', () => {
         patientId = null; chosen.textContent = '';
@@ -271,7 +271,7 @@ function newConsultationModal(root) {
             if (!data || !data.length) { results.style.display = 'none'; return; }
             for (const pt of data) {
                 results.appendChild(h('div', {
-                    style: { padding: '7px 10px', cursor: 'pointer', fontSize: '13px' },
+                    style: { padding: '7px 10px', cursor: 'pointer', fontSize: '13.5px' },
                     onmouseover: (e) => e.currentTarget.style.background = 'var(--ink-25)',
                     onmouseout: (e) => e.currentTarget.style.background = 'transparent',
                     onclick: () => { patientId = pt.id; searchInp.value = pt.full_name; chosen.textContent = 'Selected: ' + pt.full_name + (pt.mrn ? ' · ' + pt.mrn : ''); results.style.display = 'none'; },

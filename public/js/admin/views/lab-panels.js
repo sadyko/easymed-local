@@ -142,7 +142,7 @@ export async function mountLabPanels(container) {
         for (const p of _shown) (byMod[p.modality] || byMod.lab).push(p);
         for (const mod of ['lab', 'diagnostic']) {
             if (!byMod[mod].length) continue;
-            listEl.appendChild(h('div', { style: { fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-400)', fontWeight: 700, padding: '8px 6px 2px' } }, MODALITY_RU[mod]));
+            listEl.appendChild(h('div', { style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-400)', fontWeight: 700, padding: '8px 6px 2px' } }, MODALITY_RU[mod]));
             for (const p of byMod[mod]) {
                 const on = state.selected && state.selected.id === p.id;
                 listEl.appendChild(h('button', {
@@ -152,7 +152,7 @@ export async function mountLabPanels(container) {
                 },
                     h('span', { class: 'nav-icon' }, Icon(mod === 'lab' ? 'Flask' : 'Activity', { size: 14 })),
                     h('span', { style: { flex: 1, minWidth: '0', overflowWrap: 'anywhere' } }, p.name),
-                    !p.active ? h('span', { class: 'tag', style: { fontSize: '10px' } }, 'выкл') : null));
+                    !p.active ? h('span', { class: 'tag', style: { fontSize: '12.5px' } }, 'выкл') : null));
             }
         }
     }
@@ -207,7 +207,7 @@ export async function mountLabPanels(container) {
         document.addEventListener('keydown', onKey);
 
         const listBox = h('div', { style: { marginTop: '10px', maxHeight: '52vh', overflowY: 'auto', border: '1px solid var(--ink-100)', borderRadius: '10px' } });
-        const countEl = h('span', { class: 'muted', style: { fontSize: '12px' } }, '');
+        const countEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
         const searchInp = h('input', { placeholder: 'Поиск: название анализа…', style: { width: '100%' } });
         const catSel = h('select', { style: { width: '100%' } }, h('option', { value: '' }, 'Все разделы'));
 
@@ -251,7 +251,7 @@ export async function mountLabPanels(container) {
                     h('span', { class: 'nav-icon', style: { marginTop: '2px' } }, Icon('Flask', { size: 14 })),
                     h('span', { style: { flex: 1, minWidth: 0 } },
                         h('div', { style: { fontWeight: 600, fontSize: '12.5px', lineHeight: '1.35' } }, t.name),
-                        h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '2px' } },
+                        h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
                             [t.category, t.specimen].filter(Boolean).join(' · '))),
                     Icon('Plus', { size: 14 })));
             }
@@ -263,7 +263,7 @@ export async function mountLabPanels(container) {
             h('header', { class: 'modal-head' },
                 h('div', null,
                     h('h2', null, Icon('Layers', { size: 16 }), ' Каталог исследований'),
-                    h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' } },
+                    h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
                         'Выберите анализ — панель со всеми показателями скопируется в вашу клинику. Референсные значения заполняете вы.')),
                 h('button', { class: 'modal-close', onclick: close }, '×')),
             h('div', { class: 'modal-body' },
@@ -428,13 +428,13 @@ export async function mountLabPanels(container) {
         const linkedSvc = state.services.find(s => s.id === (p.service_id || svcSel.value));
         body.appendChild(
             !p.service_id
-                ? h('div', { class: 'muted', style: { fontSize: '12px', margin: '-6px 0 12px' } },
+                ? h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 12px' } },
                     Icon('Warning', { size: 12 }), ' Панель ни к чему не привязана — заказать её пока нельзя.')
                 : (linkedSvc && !isLabSvc(linkedSvc))
-                    ? h('div', { style: { fontSize: '12px', margin: '-6px 0 12px', color: 'var(--warn-700, #92400e)' } },
+                    ? h('div', { style: { fontSize: '12.5px', margin: '-6px 0 12px', color: 'var(--warn-700, #92400e)' } },
                         Icon('Warning', { size: 12 }),
                         ' ', trf('Услуга «{name}» не помечена как лабораторная. Поставьте ей тип «Лаборатория» в Настройки → Услуги, иначе заказ не попадёт в очередь лаборатории.', { name: linkedSvc.name }))
-                    : h('div', { class: 'muted', style: { fontSize: '12px', margin: '-6px 0 12px' } },
+                    : h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 12px' } },
                         Icon('Check', { size: 12 }), ' ', linkedSvc ? trf('Привязана к услуге «{name}» — заказы попадут в «Лабораторию».', { name: linkedSvc.name }) : 'Привязана — заказы попадут в «Лабораторию».'));
         body.appendChild(h('div', { class: 'row', style: { gap: '10px', margin: '14px 0 18px' } },
             h('label', { class: 'lp-check' }, narrChk, ' Текстовое заключение'),
@@ -442,8 +442,8 @@ export async function mountLabPanels(container) {
 
         // ── analyte table ──
         body.appendChild(h('div', { class: 'row', style: { alignItems: 'center', margin: '4px 0 8px' } },
-            h('h4', { style: { margin: 0, fontSize: '13px' } }, 'Показатели'),
-            h('span', { class: 'tag tag-teal', style: { marginLeft: '8px', fontSize: '10.5px' } }, String(state.rows.length)),
+            h('h4', { style: { margin: 0, fontSize: '13.5px' } }, 'Показатели'),
+            h('span', { class: 'tag tag-teal', style: { marginLeft: '8px', fontSize: '12.5px' } }, String(state.rows.length)),
             h('span', { style: { flex: 1 } }),
             // LAB_ANALYTE_LIBRARY_V1 — two ways to add an indicator, mirroring the
             // panel level above: pick from the dictionary, or start an empty row.
@@ -500,7 +500,7 @@ export async function mountLabPanels(container) {
         const already = new Set(state.rows.map(r => String(r.name || '').trim().toLowerCase()).filter(Boolean));
 
         const listBox = h('div', { style: { marginTop: '10px', maxHeight: '50vh', overflowY: 'auto', border: '1px solid var(--ink-100)', borderRadius: '10px' } });
-        const countEl = h('span', { class: 'muted', style: { fontSize: '12px' } }, '');
+        const countEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
         const searchInp = h('input', { placeholder: 'Поиск: название показателя…', style: { width: '100%' } });
         const catSel = h('select', { style: { width: '100%' } }, h('option', { value: '' }, 'Все разделы'));
         const addBtn = h('button', { class: 'btn btn-primary', disabled: true, onclick: () => commit() }, Icon('Check', { size: 14 }), ' Добавить');
@@ -556,9 +556,9 @@ export async function mountLabPanels(container) {
                     box,
                     h('span', { style: { flex: 1, minWidth: 0, marginLeft: '9px' } },
                         h('div', { style: { fontWeight: 600, fontSize: '12.5px', lineHeight: '1.35' } }, t.name),
-                        h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '2px' } },
+                        h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
                             [t.category, t.unit, t.value_type === 'select' ? 'список' : (t.value_type === 'text' ? 'текст' : 'число')].filter(Boolean).join(' · '))),
-                    dup ? h('span', { class: 'tag', style: { fontSize: '10px' } }, 'уже добавлен') : null));
+                    dup ? h('span', { class: 'tag', style: { fontSize: '12.5px' } }, 'уже добавлен') : null));
             }
         }
 
@@ -589,7 +589,7 @@ export async function mountLabPanels(container) {
             h('header', { class: 'modal-head' },
                 h('div', null,
                     h('h2', null, Icon('Layers', { size: 16 }), ' Справочник показателей'),
-                    h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' } },
+                    h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
                         'Отметьте нужные показатели. Название, единицы и тип подставятся; референсные значения заполняете вы.')),
                 h('button', { class: 'modal-close', onclick: close }, '×')),
             h('div', { class: 'modal-body' },
@@ -661,7 +661,7 @@ export async function mountLabPanels(container) {
                 h('h2', null, trf('Диапазоны нормы · {name}', { name: r.name || tr('показатель') })),
                 h('button', { class: 'modal-close', onclick: close }, '×')),
             h('div', { style: { padding: '16px 20px' } },
-                h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '10px', lineHeight: '1.5' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px', lineHeight: '1.5' } },
                     'Для показателей, у которых норма зависит не только от пола — фаза цикла, менопауза, триместр беременности, возрастные группы. ',
                     h('b', null, 'Если задать два и более диапазона, в бланк печатаются все, а автоматический флаг (H/L) для этого показателя не ставится'),
                     ' — фазу цикла программа знать не может, решает врач. Пол и возраст нужны только чтобы отметить подходящую строку жирным.'),

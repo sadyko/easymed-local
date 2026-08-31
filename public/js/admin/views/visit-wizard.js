@@ -303,7 +303,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         h('button', {
             class: 'btn',
             style: {
-                fontSize: '13px', fontWeight: '700',
+                fontSize: '13.5px', fontWeight: '700',
                 background: '#dc2626', borderColor: '#dc2626', color: 'white',
                 padding: '8px 16px', borderRadius: '10px',
                 boxShadow: '0 2px 8px rgba(220,38,38,0.35)',
@@ -602,7 +602,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 h('span', {
                     style: {
                         width: '22px', height: '22px', borderRadius: '999px',
-                        display: 'grid', placeItems: 'center', fontSize: '11px', fontWeight: 700,
+                        display: 'grid', placeItems: 'center', fontSize: '12.5px', fontWeight: 700,
                         background: active || done ? 'var(--primary-600)' : 'var(--ink-100)',
                         color: active || done ? '#fff' : 'var(--ink-500)',
                     },
@@ -637,7 +637,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             style: {
                 height: '40px', padding: '0 14px', width: '100%',
                 border: '1px solid var(--ink-200)', borderRadius: '10px',
-                fontSize: '13px', fontFamily: 'inherit', background: 'var(--white, #fff)',
+                fontSize: '13.5px', fontFamily: 'inherit', background: 'var(--white, #fff)',
             },
         });
         let tmr = null;
@@ -706,7 +706,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     onclick: () => { wiz.cat = label; repaintCatalog({ toTop: true }); },
                     style: {
                         padding: '6px 13px', borderRadius: '999px', cursor: 'pointer',
-                        fontFamily: 'inherit', fontSize: '12px', fontWeight: 600,
+                        fontFamily: 'inherit', fontSize: '12.5px', fontWeight: 600,
                         border: '1px solid ' + (active ? 'var(--primary-400, #4bb39a)' : 'var(--ink-150, var(--ink-200))'),
                         background: active ? 'var(--primary-50)' : 'var(--white, #fff)',
                         color: active ? 'var(--primary-700)' : 'var(--ink-600)',
@@ -743,12 +743,12 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                             s.name, inCart ? (inCart.svc.requires_doctor && !inCart.doctorId ? ' — выберите врача' : ' — добавлено') : '',
                             // CRM_CONVERT_V1 — услуга пришла из заявки колл-центра
                             inCart && inCart.fromCrm
-                                ? h('span', { style: { marginLeft: '8px', padding: '2px 8px', borderRadius: '999px', fontSize: '10.5px', fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase', background: 'var(--teal-50, #e0f2f1)', color: 'var(--teal-700, #00796b)', verticalAlign: 'middle' } }, 'из заявки')
+                                ? h('span', { style: { marginLeft: '8px', padding: '2px 8px', borderRadius: '999px', fontSize: '12.5px', fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase', background: 'var(--teal-50, #e0f2f1)', color: 'var(--teal-700, #00796b)', verticalAlign: 'middle' } }, 'из заявки')
                                 : null),
-                        h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '2px' } },
+                        h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
                             [categoryOf(s), trf('{n} мин', { n: s.duration_minutes || 30 }), s.requires_doctor ? tr('нужен врач') : tr('врач не требуется')].join(' · ')),
                     ),
-                    h('span', { class: 'num', style: { fontSize: '13px', fontWeight: 700, color: 'var(--ink-900)', whiteSpace: 'nowrap' } },
+                    h('span', { class: 'num', style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)', whiteSpace: 'nowrap' } },
                         fmtPrice(s.price), ' сум'),
                     inCart
                         ? h('button', {
@@ -792,7 +792,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         style: { borderRadius: '999px', minWidth: '180px', fontWeight: 600 },
                         onclick: () => { wiz.limit += PAGE_SIZE; repaintCatalog(); },
                     }, trf('Показать ещё {n}', { n: Math.min(PAGE_SIZE, rows.length - shown) })),
-                    h('span', { class: 'muted', style: { fontSize: '11.5px' } },
+                    h('span', { class: 'muted', style: { fontSize: '12.5px' } },
                         trf('показано {shown} из {total}', { shown, total: rows.length })),
                 ));
             }
@@ -811,9 +811,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 });
                 return h('div', {
                     style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed var(--ink-150, var(--ink-200))' },
-                }, h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Дата'),
+                }, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Дата'),
                     dateInp,
-                    h('span', { class: 'muted', style: { fontSize: '11.5px' } }, 'время не требуется — услуга без врача'));
+                    h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'время не требуется — услуга без врача'));
             }
 
             // SCHED_V1_COMPACT — компактный планировщик: три дропдауна в одну строку
@@ -863,7 +863,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                             onmouseenter: (e) => { e.currentTarget.style.background = 'var(--ink-25, #f6f8f9)'; },
                             onmouseleave: (e) => { e.currentTarget.style.background = active ? 'var(--primary-25, #f2faf8)' : ''; },
                             style: {
-                                padding: '9px 12px', cursor: 'pointer', fontSize: '13px',
+                                padding: '9px 12px', cursor: 'pointer', fontSize: '13.5px',
                                 fontWeight: active ? 700 : 500,
                                 color: active ? 'var(--primary-700)' : 'var(--ink-800)',
                                 background: active ? 'var(--primary-25, #f2faf8)' : '',
@@ -913,12 +913,12 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     }, txt);
                     calPop.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' } },
                         navBtn('‹', line.ui.calShift === 0, () => { line.ui.calShift = 0; paintCal(); }),
-                        h('span', { style: { flex: 1, textAlign: 'center', fontSize: '13px', fontWeight: 800 } }, monthName + ' ' + base.getFullYear()),
+                        h('span', { style: { flex: 1, textAlign: 'center', fontSize: '13.5px', fontWeight: 800 } }, monthName + ' ' + base.getFullYear()),
                         navBtn('›', line.ui.calShift === 1, () => { line.ui.calShift = 1; paintCal(); }),
                     ));
                     calPop.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '2px', marginBottom: '4px' } },
                         ...['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(w =>
-                            h('div', { class: 'muted', style: { textAlign: 'center', fontSize: '10px', fontWeight: 800 } }, w))));
+                            h('div', { class: 'muted', style: { textAlign: 'center', fontSize: '12.5px', fontWeight: 800 } }, w))));
                     const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '2px' } });
                     const firstDow = (base.getDay() + 6) % 7;   // Пн = 0
                     for (let i = 0; i < firstDow; i++) grid.appendChild(h('div'));
@@ -949,7 +949,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                             },
                         },
                             h('div', { style: { fontSize: '12.5px', fontWeight: 700, lineHeight: 1.1 } }, String(dd)),
-                            h('div', { style: { fontSize: '8.5px', lineHeight: 1, opacity: active ? 0.9 : 0.75, minHeight: '9px' } },
+                            h('div', { style: { fontSize: '12.5px', lineHeight: 1, opacity: active ? 0.9 : 0.75, minHeight: '9px' } },
                                 (!disabled || active) && free ? trf('{n} окн', { n: free }) : ''),
                         ));
                     }
@@ -988,16 +988,16 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 let summary = null;
                 if (liveQ) {
                     summary = h('span', {
-                        style: { fontSize: '12px', fontWeight: 700, color: 'var(--primary-700)', background: 'var(--primary-25, #f2faf8)', border: '1px solid var(--primary-200, #bfe3d8)', borderRadius: '999px', padding: '6px 12px', whiteSpace: 'nowrap' },
+                        style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--primary-700)', background: 'var(--primary-25, #f2faf8)', border: '1px solid var(--primary-200, #bfe3d8)', borderRadius: '999px', padding: '6px 12px', whiteSpace: 'nowrap' },
                     }, 'Живая очередь — приём без записи');
                 } else if (line.when) {
                     const t = new Date(line.when);
                     const dur = Number(line.svc.duration_minutes) || 30;
                     const end = new Date(t.getTime() + dur * 60000);
-                    summary = h('span', { class: 'muted', style: { fontSize: '12px', whiteSpace: 'nowrap' } },
+                    summary = h('span', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } },
                         fmtSlot(t.getTime()) + '–' + fmtSlot(end.getTime()) + ' · ' + trf('{n} мин', { n: dur }));
                 } else if (line.svc.requires_doctor && !line.doctorId) {
-                    summary = h('span', { style: { fontSize: '12px', color: 'var(--crit-600, #dc2626)', whiteSpace: 'nowrap' } }, 'выберите врача');
+                    summary = h('span', { style: { fontSize: '12.5px', color: 'var(--crit-600, #dc2626)', whiteSpace: 'nowrap' } }, 'выберите врача');
                 }
 
                 return h('div', { style: { marginTop: '10px', borderTop: '1px dashed var(--ink-100)', paddingTop: '10px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
@@ -1005,7 +1005,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             }
 
             if (rows.length > 200) {
-                listEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', padding: '8px 4px' } },
+                listEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '8px 4px' } },
                     trf('Показаны первые 200 из {n} — уточните поиск.', { n: rows.length })));
             }
         }
@@ -1206,7 +1206,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         notesInp.addEventListener('input', () => { wiz.notes = notesInp.value; });
 
         root.appendChild(h('div', { class: 'card', style: { padding: '18px 20px', maxWidth: '640px' } },
-            h('h3', { style: { margin: '0 0 14px', fontSize: '14px' } }, Icon('Send', { size: 15 }), ' Направление'),
+            h('h3', { style: { margin: '0 0 14px', fontSize: '13.5px' } }, Icon('Send', { size: 15 }), ' Направление'),
             h('div', { class: 'field-row', style: { gridTemplateColumns: '1fr 1fr' } },
                 field('Источник направления', catSel),
                 // Второе поле показываем ТОЛЬКО после выбора источника.
@@ -1290,7 +1290,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 },
             },
                 h('div', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } }, p.name),
-                h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '3px' } }, payerKindRu(p.kind)),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '3px' } }, payerKindRu(p.kind)),
             ));
         }
 
@@ -1301,13 +1301,13 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         polInp.addEventListener('input', () => { wiz.policyNo = polInp.value; });
 
         root.appendChild(h('div', { class: 'card', style: { padding: '18px 20px' } },
-            h('h3', { style: { margin: '0 0 6px', fontSize: '14px' } }, Icon(b2b ? 'Building' : 'Receipt', { size: 15 }),
+            h('h3', { style: { margin: '0 0 6px', fontSize: '13.5px' } }, Icon(b2b ? 'Building' : 'Receipt', { size: 15 }),
                 b2b ? ' Кто платит — организация (B2B)' : ' Кто платит — ДМС / страховая'),
-            h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '14px' } }, b2b
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '14px' } }, b2b
                 ? 'Счёт пойдёт на организацию по договору, а не пациенту.'
                 : 'Укажите номер полиса. Счёт пойдёт на страховую; кассир оформит покрытие при приёме. Страховую можно сменить здесь же.'),
             list.length ? grid : h('div', {
-                style: { background: 'var(--ink-25, #f8fafa)', borderRadius: '10px', padding: '20px 14px', textAlign: 'center', color: 'var(--ink-500)', fontSize: '13px' },
+                style: { background: 'var(--ink-25, #f8fafa)', borderRadius: '10px', padding: '20px 14px', textAlign: 'center', color: 'var(--ink-500)', fontSize: '13.5px' },
             }, 'Плательщики не заведены — добавьте их в Настройки → Компании-плательщики.'),
             // Полис — только у ДМС: у договора с организацией его нет.
             b2b ? null : h('div', { style: { marginTop: '14px', display: 'flex', flexDirection: 'column', gap: '6px' } },
@@ -1342,13 +1342,13 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     },
                 },
                     chk,
-                    h('span', { style: { flex: 1, minWidth: 0, fontSize: '13px', fontWeight: 600, color: 'var(--ink-900)' } },
+                    h('span', { style: { flex: 1, minWidth: 0, fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } },
                         c.svc.name, c.qty > 1 ? h('span', { class: 'muted', style: { marginLeft: '6px', fontWeight: 500 } }, '×' + c.qty) : null),
                     h('span', { class: 'num', style: { fontSize: '12.5px', fontWeight: 700, whiteSpace: 'nowrap', color: 'var(--ink-900)' } },
                         fmtPrice(cartLinePrice(c) * c.qty), ' сум'),
                     h('span', {
                         style: {
-                            fontSize: '11px', fontWeight: 700, padding: '2px 9px', borderRadius: '999px', whiteSpace: 'nowrap',
+                            fontSize: '12.5px', fontWeight: 700, padding: '2px 9px', borderRadius: '999px', whiteSpace: 'nowrap',
                             background: on ? 'var(--primary-50, #f2faf8)' : 'var(--ink-50, #eef1f2)',
                             color: on ? 'var(--primary-700)' : 'var(--ink-600)',
                         },
@@ -1358,7 +1358,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             const tile = (label, sum, fg, bg) => h('div', {
                 style: { flex: '1 1 200px', padding: '10px 12px', borderRadius: '10px', background: bg, color: fg },
             },
-                h('div', { style: { fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', opacity: '.85' } }, label),
+                h('div', { style: { fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', opacity: '.85' } }, label),
                 h('div', { class: 'num', style: { fontSize: '17px', fontWeight: 800, marginTop: '2px' } }, fmtPrice(sum), ' сум'));
             totals.appendChild(tile(trf('Покрывает {name}', { name: payerName }), coveredTotal(), 'var(--primary-700)', 'var(--primary-50, #f2faf8)'));
             totals.appendChild(tile('Платит пациент', patientTotal(), 'var(--ink-900)', 'var(--ink-25, #f6f8f9)'));
@@ -1366,10 +1366,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         paint2();
 
         return h('div', { class: 'card', style: { padding: '18px 20px', marginTop: '14px' } },
-            h('h3', { style: { margin: '0 0 6px', fontSize: '14px' } }, Icon('Layers', { size: 15 }), ' Что покрывает плательщик'),
-            h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '12px' } },
+            h('h3', { style: { margin: '0 0 6px', fontSize: '13.5px' } }, Icon('Layers', { size: 15 }), ' Что покрывает плательщик'),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '12px' } },
                 trf('Услуги перенесены с первого шага. Отмеченные уйдут в счёт «{name}», снятые — в счёт пациента. Визит будет выставлен двумя счетами.', { name: payerName })),
-            wiz.cart.length ? rows : h('div', { class: 'muted', style: { fontSize: '13px' } }, 'В смете пока нет услуг.'),
+            wiz.cart.length ? rows : h('div', { class: 'muted', style: { fontSize: '13.5px' } }, 'В смете пока нет услуг.'),
             wiz.cart.length ? totals : null,
         );
     }
@@ -1416,7 +1416,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             return (days.length > 1 ? d.getDate() + ' ' + RU_M_GEN[d.getMonth()] + ', ' : '') + t;
         };
 
-        const kv = (l, v) => h('div', { class: 'row', style: { padding: '7px 0', borderBottom: '1px solid var(--ink-50)', fontSize: '13px', gap: '12px' } },
+        const kv = (l, v) => h('div', { class: 'row', style: { padding: '7px 0', borderBottom: '1px solid var(--ink-50)', fontSize: '13.5px', gap: '12px' } },
             h('span', { class: 'muted', style: { flex: '0 0 170px' } }, l),
             h('span', { style: { fontWeight: 600, color: 'var(--ink-900)' } }, v || '—'));
 
@@ -1424,7 +1424,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         invoiceCb.addEventListener('change', () => { wiz.raiseInvoice = invoiceCb.checked; });
 
         root.appendChild(h('div', { class: 'card', style: { padding: '18px 20px', maxWidth: '680px' } },
-            h('h3', { style: { margin: '0 0 12px', fontSize: '14px' } }, Icon('Check', { size: 15 }), ' Подтверждение'),
+            h('h3', { style: { margin: '0 0 12px', fontSize: '13.5px' } }, Icon('Check', { size: 15 }), ' Подтверждение'),
             kv('Пациент', [patient.full_name, patient.mrn].filter(Boolean).join(' · ')),
             kv('Дата', dateLine),
             kv(docs.length > 1 ? 'Врачи' : 'Врач', docLine),
@@ -1437,22 +1437,22 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 ? payer.name + ' · ' + tr(payerKindRu(payer.kind))
                     + (wiz.payMethod === 'dms' && wiz.policyNo.trim() ? ' · ' + trf('полис {no}', { no: wiz.policyNo.trim() }) : '')
                 : tr('Пациент — оплата в кассе')),
-            h('div', { style: { margin: '14px 0 6px', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--ink-500)' } }, 'Услуги'),
+            h('div', { style: { margin: '14px 0 6px', fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--ink-500)' } }, 'Услуги'),
             ...wiz.cart.map(c => {
                 const dn = lineDocName(c);
                 const sub = [dn, lineWhen(c)].filter(Boolean).join(' · ');
-                return h('div', { class: 'row', style: { padding: '6px 0', borderBottom: '1px solid var(--ink-50)', fontSize: '13px', gap: '10px' } },
+                return h('div', { class: 'row', style: { padding: '6px 0', borderBottom: '1px solid var(--ink-50)', fontSize: '13.5px', gap: '10px' } },
                     h('span', { style: { flex: 1, minWidth: 0 } },
                         h('span', null, c.svc.name),
-                        sub ? h('span', { class: 'muted', style: { fontSize: '12px' } }, ' · ' + sub) : null),
+                        sub ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, ' · ' + sub) : null),
                     h('span', { class: 'muted num' }, c.qty + ' ×'),
                     h('span', { class: 'num', style: { fontWeight: 600 } }, fmtPrice(cartLinePrice(c) * c.qty)),
                 );
             }),
-            discountAmount() > 0 ? h('div', { class: 'row', style: { padding: '8px 0 0', fontSize: '13px', gap: '10px' } },
+            discountAmount() > 0 ? h('div', { class: 'row', style: { padding: '8px 0 0', fontSize: '13.5px', gap: '10px' } },
                 h('span', { class: 'muted', style: { flex: 1 } }, 'Скидка'),
                 h('span', { class: 'num', style: { fontWeight: 700, color: 'var(--crit-600, #dc2626)' } }, '−' + fmtPrice(discountAmount()), ' сум')) : null,
-            h('div', { class: 'row', style: { padding: '10px 0 0', fontSize: '14px', gap: '10px' } },
+            h('div', { class: 'row', style: { padding: '10px 0 0', fontSize: '13.5px', gap: '10px' } },
                 h('span', { style: { flex: 1, fontWeight: 700 } }, 'Итого'),
                 h('span', { class: 'num', style: { fontWeight: 800, color: 'var(--primary-700)' } }, fmtPrice(grandTotal()), ' сум')),
             h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px', fontSize: '12.5px', color: 'var(--ink-700)', cursor: 'pointer' } },
@@ -1478,7 +1478,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const nameIn = h('input', {
             type: 'text', placeholder: 'Название шаблона',
             style: { width: '100%', height: '38px', padding: '0 12px', marginTop: '10px', boxSizing: 'border-box',
-                     border: '1px solid var(--ink-200)', borderRadius: '9px', fontSize: '13px', fontFamily: 'inherit' },
+                     border: '1px solid var(--ink-200)', borderRadius: '9px', fontSize: '13.5px', fontFamily: 'inherit' },
         });
         const doSave = async (btn) => {
             btn.disabled = true;
@@ -1496,7 +1496,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             h('header', { class: 'modal-head' }, h('h2', null, Icon('Folder', { size: 15 }), ' Сохранить как шаблон'),
                 h('button', { class: 'modal-close', type: 'button', onclick: shut }, '×')),
             h('div', { class: 'modal-body', style: { display: 'block', padding: '14px' } },
-                h('div', { class: 'muted', style: { fontSize: '12px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     trf('Шаблон сохранит только список услуг ({n}) — врач и время выбираются при каждой записи.', { n: wiz.cart.length })),
                 nameIn),
             h('footer', { class: 'modal-foot' },
@@ -1539,11 +1539,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     style: { flex: '1 1 auto', minWidth: 0, border: '0', background: 'none', cursor: 'pointer', font: 'inherit', textAlign: 'left', padding: '0' },
                     onclick: () => { shut(); applyTemplate(t); },
                 },
-                    h('div', { style: { fontWeight: 700, fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
-                    h('div', { class: 'muted', style: { fontSize: '11.5px' } }, trf('услуг: {n}', { n: templateSize(t) }))),
+                    h('div', { style: { fontWeight: 700, fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, trf('услуг: {n}', { n: templateSize(t) }))),
                 h('button', {
                     type: 'button', title: 'Убрать шаблон из списка',
-                    style: { border: '0', background: 'none', cursor: 'pointer', color: 'var(--crit-600, #dc2626)', fontSize: '16px', flex: 'none', padding: '2px 6px' },
+                    style: { border: '0', background: 'none', cursor: 'pointer', color: 'var(--crit-600, #dc2626)', fontSize: '17px', flex: 'none', padding: '2px 6px' },
                     onclick: async (e) => {
                         e.stopPropagation();
                         const { error: dErr } = await retireTemplate(supabase, t.id);
@@ -1627,7 +1627,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // и появляется, только когда в ней есть что сохранять. Шаблон хранит
         // ТОЛЬКО услуги: врач и время выбираются при каждой записи.
         railEl.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
-            h('div', { style: { fontSize: '13px', fontWeight: 800, letterSpacing: '0.07em', color: 'var(--ink-500)' } }, 'СМЕТА'),
+            h('div', { style: { fontSize: '13.5px', fontWeight: 800, letterSpacing: '0.07em', color: 'var(--ink-500)' } }, 'СМЕТА'),
             h('span', { style: { flex: 1 } }),
             wiz.cart.length
                 ? h('button', {
@@ -1649,7 +1649,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const pendingDoc = wiz.cart.length - shownCart.length;
         if (wiz.cart.length === 0) {
             railEl.appendChild(h('div', {
-                style: { background: 'var(--ink-25, #f8fafa)', borderRadius: '10px', padding: '26px 12px', textAlign: 'center', color: 'var(--ink-400)', fontSize: '13px' },
+                style: { background: 'var(--ink-25, #f8fafa)', borderRadius: '10px', padding: '26px 12px', textAlign: 'center', color: 'var(--ink-400)', fontSize: '13.5px' },
             }, 'Услуги появятся здесь'));
         } else {
             const list = h('div', { style: { display: 'flex', flexDirection: 'column' } });
@@ -1666,13 +1666,13 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 // у процедур] · цена · ✕. Подпись «разово за визит» убрана
                 // (SINGLE_PER_VISIT_V1 по-прежнему действует: без счётчика = 1).
                 list.appendChild(h('div', { class: 'row', style: { gap: '8px', padding: '9px 0', borderBottom: '1px solid var(--ink-50)' } },
-                    h('span', { style: { flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 600, color: 'var(--ink-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, c.svc.name),
+                    h('span', { style: { flex: 1, minWidth: 0, fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, c.svc.name),
                     ...(isMultiQty(c.svc) ? [
                         stepBtn('−', () => { c.qty = Math.max(1, c.qty - 1); repaintRail(); }),
-                        h('span', { class: 'num', style: { fontSize: '14px', minWidth: '20px', textAlign: 'center' } }, String(c.qty)),
+                        h('span', { class: 'num', style: { fontSize: '13.5px', minWidth: '20px', textAlign: 'center' } }, String(c.qty)),
                         stepBtn('+', () => { c.qty += 1; repaintRail(); }),
                     ] : []),
-                    h('span', { class: 'num', style: { fontSize: '14px', fontWeight: 700, whiteSpace: 'nowrap' } }, fmtPrice(cartLinePrice(c) * c.qty), ' сум'),
+                    h('span', { class: 'num', style: { fontSize: '13.5px', fontWeight: 700, whiteSpace: 'nowrap' } }, fmtPrice(cartLinePrice(c) * c.qty), ' сум'),
                     h('button', {
                         type: 'button', title: 'Убрать',
                         onclick: () => { wiz.cart = wiz.cart.filter(x => x !== c); repaintRail(); if (wiz.step === 1) paint(); },
@@ -1691,7 +1691,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // регистратура не знает, что именно искать.
             if (pendingDoc > 0) {
                 const wait = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '8px', padding: '9px 10px', background: 'var(--warn-50, #fffbeb)', border: '1px solid var(--warn-200, #fde68a)', borderRadius: '10px' } },
-                    h('div', { style: { fontSize: '11.5px', fontWeight: 700, color: 'var(--warn-700, #a16207)' } },
+                    h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--warn-700, #a16207)' } },
                         trf('Выберите врача — {n} услуг(и) ждут', { n: pendingDoc })));
                 for (const c of wiz.cart.filter(x => x.svc.requires_doctor && !x.doctorId)) {
                     const pool = doctorsForService(c.svc.id);
@@ -1712,7 +1712,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     wait.appendChild(h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
                         h('div', { style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-900)', overflowWrap: 'anywhere' } },
                             c.svc.name,
-                            c.fromCrm ? h('span', { style: { marginLeft: '6px', fontSize: '10px', fontWeight: 700, color: 'var(--primary-700)', background: 'var(--primary-50, #e8f3f2)', borderRadius: '999px', padding: '1px 7px' } }, 'из заявки') : null),
+                            c.fromCrm ? h('span', { style: { marginLeft: '6px', fontSize: '12.5px', fontWeight: 700, color: 'var(--primary-700)', background: 'var(--primary-50, #e8f3f2)', borderRadius: '999px', padding: '1px 7px' } }, 'из заявки') : null),
                         sel));
                 }
                 railEl.appendChild(wait);
@@ -1746,7 +1746,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             refChk,
             h('span', { style: { minWidth: 0 } },
                 h('span', { style: { display: 'block', fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } }, 'Пациент по направлению'),
-                h('span', { class: 'muted', style: { display: 'block', fontSize: '11.5px', marginTop: '1px' } },
+                h('span', { class: 'muted', style: { display: 'block', fontSize: '12.5px', marginTop: '1px' } },
                     wiz.hasReferral ? 'шаг «Направление» включён' : 'без направления — шаг пропускается')),
         ));
 
@@ -1794,29 +1794,29 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             : !_payer
                 // Компания ещё не выбрана — её выбирают на шаге «Кто платит»,
                 // и «Далее» без неё не пропустит (nextBlockReason).
-                ? h('div', { style: { fontSize: '11.5px', color: 'var(--warn-700, #a16207)' } },
+                ? h('div', { style: { fontSize: '12.5px', color: 'var(--warn-700, #a16207)' } },
                     'компанию выберете на шаге «Кто платит»')
                 // COVERAGE_SPLIT_V1 — итог: кто платит и сколько из сметы берёт
                 // на себя. Смета обязана показывать, на кого пойдёт счёт, даже
                 // когда сам выбор переехал на следующий шаг.
-                : h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+                : h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     trf('{name} · покрывает {covered} из {total} сум', { name: _payer.name, covered: fmtPrice(coveredTotal()), total: fmtPrice(cartTotal()) }));
         // Единственная кнопка «Пациент» без объяснения выглядит как поломка —
         // но сказать «не заведены», когда список просто не загрузился, ХУЖЕ: это
         // отправляет заводить то, что уже заведено. PAYER_LOAD_V2.
         const noPayersHint = wiz.payers.length ? null
             : wiz.payersError
-                ? h('div', { style: { fontSize: '11.5px', color: 'var(--crit-700, #b91c1c)' } },
+                ? h('div', { style: { fontSize: '12.5px', color: 'var(--crit-700, #b91c1c)' } },
                     trf('Плательщики не загрузились: {msg}. Список в Настройки → Компании-плательщики цел — обновите страницу.', { msg: wiz.payersError }))
-                : h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+                : h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     'Плательщики не заведены — добавьте их в Настройки → Компании-плательщики.');
 
         // Скидка/итого обновляются без полного repaint, чтобы инпуты не теряли фокус.
-        const discEl  = h('span', { class: 'num', style: { fontWeight: 700, fontSize: '14px', color: 'var(--crit-600, #dc2626)' } });
+        const discEl  = h('span', { class: 'num', style: { fontWeight: 700, fontSize: '13.5px', color: 'var(--crit-600, #dc2626)' } });
         const discRow = h('div', { class: 'row', style: { gap: '10px', display: 'none' } },
             h('span', { class: 'muted', style: { flex: 1, fontSize: '13.5px' } }, 'Скидка'),
             discEl);
-        const totEl = h('span', { class: 'num', style: { fontWeight: 800, fontSize: '19px', color: 'var(--ink-900)' } });
+        const totEl = h('span', { class: 'num', style: { fontWeight: 800, fontSize: '20px', color: 'var(--ink-900)' } });
         const refreshTotals = () => {
             const d = discountAmount();
             discRow.style.display = d > 0 ? '' : 'none';
@@ -1828,7 +1828,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const discLabelEl = h('span', { style: { flex: 1, fontSize: '13.5px', color: 'var(--ink-700)' } });
         const discInp = h('input', {
             type: 'number', min: '0', step: '1',
-            style: { width: '116px', padding: '10px 12px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '14px', textAlign: 'right' },
+            style: { width: '116px', padding: '10px 12px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13.5px', textAlign: 'right' },
         });
         const isAbs = () => wiz.discountMode === 'abs';
         // Значение и ограничения зависят от режима: процент ограничен сотней,
@@ -1863,7 +1863,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 },
                 style: {
                     padding: '6px 12px', cursor: 'pointer', fontFamily: 'inherit',
-                    fontSize: '12px', fontWeight: 700, lineHeight: 1,
+                    fontSize: '12.5px', fontWeight: 700, lineHeight: 1,
                     border: '1px solid ' + (on ? 'var(--primary-400, #4bb39a)' : 'var(--ink-200)'),
                     background: on ? 'var(--primary-50, #e8f3f2)' : 'var(--white, #fff)',
                     color: on ? 'var(--primary-700)' : 'var(--ink-500)',
@@ -1913,11 +1913,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             if (!wiz.promoOpen && wiz.promo) { wiz.promo = null; promoInp.value = ''; refreshTotals(); }   // снятие галочки снимает код
             if (wiz.promoOpen) promoInp.focus();
         });
-        const promoTick = h('label', { style: { display: 'flex', alignItems: 'center', gap: '7px', cursor: 'pointer', fontSize: '12px', color: 'var(--ink-500)' } },
+        const promoTick = h('label', { style: { display: 'flex', alignItems: 'center', gap: '7px', cursor: 'pointer', fontSize: '12.5px', color: 'var(--ink-500)' } },
             promoChk, 'Промокод / карта / сертификат');
 
         railEl.appendChild(h('div', { style: { borderTop: '1px solid var(--ink-100)', paddingTop: '12px', display: 'flex', flexDirection: 'column', gap: '10px' } },
-            h('div', { style: { fontSize: '14px', fontWeight: 800, color: 'var(--ink-900)' } }, 'Кто платит'),
+            h('div', { style: { fontSize: '13.5px', fontWeight: 800, color: 'var(--ink-900)' } }, 'Кто платит'),
             payRow,
             noPayersHint,
             dmsHint,
@@ -1930,7 +1930,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         railEl.appendChild(h('div', { style: { borderTop: '2px solid var(--ink-100)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '4px' } },
             discRow,
             h('div', { class: 'row', style: { gap: '10px' } },
-                h('span', { style: { flex: 1, fontWeight: 800, fontSize: '16px' } }, 'Итого'),
+                h('span', { style: { flex: 1, fontWeight: 800, fontSize: '17px' } }, 'Итого'),
                 totEl),
         ));
         refreshTotals();

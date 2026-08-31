@@ -140,7 +140,7 @@ function injectTrialStyles() {
 #trial-banner.danger .tb-quiet { color:#ffffffdd; }
 #trial-banner button.tb-cta { text-decoration:none; padding:8px 18px; border-radius:9px;
   background:#0d1e2c; color:white; border:none; cursor:pointer; white-space:nowrap;
-  font-weight:700; font-family:inherit; transition:transform .08s, box-shadow .15s; font-size:13px; letter-spacing:.02em;
+  font-weight:700; font-family:inherit; transition:transform .08s, box-shadow .15s; font-size:13.5px; letter-spacing:.02em;
   display:inline-flex; align-items:center; gap:6px; animation:tb-cta-pulse 1.8s ease-in-out infinite; }
 #trial-banner button.tb-cta:hover { transform:translateY(-1px); box-shadow:0 4px 14px rgba(13,30,44,0.22); }
 #trial-banner button.tb-cta::after { content:'→'; opacity:.7; transition:transform .15s; }

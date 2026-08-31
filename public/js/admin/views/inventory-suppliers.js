@@ -13,7 +13,7 @@ export function renderSuppliersTab(container) {
     refs.tbody = h('tbody');
     refs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } },
         'Пока нет поставщиков — добавьте первого.');
-    refs.totalEl = h('span', { class: 'muted', style: { fontSize: '12px' } }, '');
+    refs.totalEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
 
     const addBtn = h('button', {
         class: 'btn btn-primary btn-sm', type: 'button',

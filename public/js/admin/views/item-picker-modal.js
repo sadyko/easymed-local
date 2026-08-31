@@ -182,12 +182,12 @@ export function openItemPickerModal({
     function renderList() {
         clear(listEl);
         if (state.loading) {
-            listEl.appendChild(h('div', { style: { padding: '28px', textAlign: 'center', color: 'var(--ink-500)', fontSize: '13px' } }, 'Загрузка…'));
+            listEl.appendChild(h('div', { style: { padding: '28px', textAlign: 'center', color: 'var(--ink-500)', fontSize: '13.5px' } }, 'Загрузка…'));
             return;
         }
         const rows = filtered();
         if (!rows.length) {
-            listEl.appendChild(h('div', { style: { padding: '28px', textAlign: 'center', color: 'var(--ink-500)', fontSize: '13px' } },
+            listEl.appendChild(h('div', { style: { padding: '28px', textAlign: 'center', color: 'var(--ink-500)', fontSize: '13.5px' } },
                 state.items.length ? 'Ничего не найдено.' : 'В каталоге клиники нет активных товаров.'));
             return;
         }
@@ -211,11 +211,11 @@ export function openItemPickerModal({
             },
                 h('div', { style: { minWidth: 0 } },
                     h('div', { style: { fontWeight: 600, fontSize: '13.5px', color: 'var(--ink-900)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }, title: it.name }, it.name || '—'),
-                    meta && h('div', { class: 'muted', style: { fontSize: '11.5px' } }, meta),
+                    meta && h('div', { class: 'muted', style: { fontSize: '12.5px' } }, meta),
                 ),
                 h('div', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
-                    h('div', { class: 'num', style: { fontSize: '13px', fontWeight: 600, color: 'var(--ink-900)' } }, Number(it.price || 0).toLocaleString('ru-RU') + ' UZS'),
-                    h('div', { style: { fontSize: '11px', color: lowStock ? 'var(--crit-700)' : 'var(--ink-500)' } }, trf('Остаток: {n}', { n: onLabel })),
+                    h('div', { class: 'num', style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } }, Number(it.price || 0).toLocaleString('ru-RU') + ' UZS'),
+                    h('div', { style: { fontSize: '12.5px', color: lowStock ? 'var(--crit-700)' : 'var(--ink-500)' } }, trf('Остаток: {n}', { n: onLabel })),
                 ),
                 inCart
                     ? h('span', { style: { minWidth: '22px', height: '22px', borderRadius: '999px', background: 'var(--primary-500)', color: 'white', font: '700 11px/22px inherit', textAlign: 'center', flexShrink: 0, padding: '0 6px' } }, '×' + Number(inCart.qty || 0))
@@ -227,17 +227,17 @@ export function openItemPickerModal({
     function renderCart() {
         clear(cartEl);
         if (!state.lines.length) {
-            cartEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', textAlign: 'center', padding: '4px 0' } },
+            cartEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', textAlign: 'center', padding: '4px 0' } },
                 'Выберите товары в списке выше — можно добавить несколько.'));
             return;
         }
         for (const l of state.lines) {
             const qtyInp = h('input', { type: 'number', min: '0.0001', step: 'any', value: String(l.qty), class: 'num',
-                style: { width: '66px', height: '32px', padding: '0 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13px', textAlign: 'right' } });
+                style: { width: '66px', height: '32px', padding: '0 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', textAlign: 'right' } });
             qtyInp.addEventListener('input', () => { l.qty = qtyInp.value; updateSummary(); });
             // ITEM_UNIT_V1 — per-line unit; changing it corrects the item's
             // catalog unit (gateway) so the per-unit price basis is unambiguous.
-            const unitSel = h('select', { style: { height: '32px', padding: '0 4px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13px', background: 'white', fontFamily: 'inherit', width: '72px' } },
+            const unitSel = h('select', { style: { height: '32px', padding: '0 4px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', background: 'white', fontFamily: 'inherit', width: '72px' } },
                 ...unitOptions(l.unit).map(u => h('option', { value: u }, u)));
             unitSel.value = l.unit || '';
             unitSel.addEventListener('change', () => {
@@ -252,10 +252,10 @@ export function openItemPickerModal({
             cartEl.appendChild(h('div', {
                 style: { display: 'flex', alignItems: 'center', gap: '7px', padding: '6px 10px', marginBottom: '6px', background: 'var(--ink-25, #fafafa)', border: '1px solid var(--ink-100)', borderRadius: '8px' },
             },
-                h('span', { style: { flex: 1, minWidth: 0, fontSize: '13px', fontWeight: 600, color: 'var(--ink-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: l.item.name }, l.item.name),
+                h('span', { style: { flex: 1, minWidth: 0, fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: l.item.name }, l.item.name),
                 qtyInp,
                 unitSel,
-                h('span', { class: 'muted', style: { fontSize: '11px' } }, '×'),
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '×'),
                 h('span', { class: 'num', style: { fontSize: '12.5px', color: 'var(--ink-700)', minWidth: '62px', textAlign: 'right' } }, Number(l.item.price || 0).toLocaleString('ru-RU')),
                 h('button', { type: 'button', title: 'Убрать', class: 'btn btn-ghost btn-sm',
                     style: { color: 'var(--crit-700)', width: '28px', padding: 0 }, onclick: () => removeLine(l) },

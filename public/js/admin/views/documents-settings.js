@@ -132,7 +132,7 @@ function buildForm(card) {
         // SETTINGS_SPLIT_V1 — сказано ровно один раз и там, где раньше стояли
         // переехавшие переключатели: иначе администратор, помнящий «размер
         // бумаги» на этом экране, решит, что настройка пропала.
-        h('p', { class: 'muted', style: { fontSize: '12px', marginTop: '10px' } },
+        h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '10px' } },
             'Размер бумаги, водяной знак и подписи внизу документов настраиваются в разделе «Документы».'),
     ));
 }
@@ -207,7 +207,7 @@ function paintThumb() {
         refs.thumbWrap.appendChild(h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: removeLogo },
             Icon('Trash', { size: 13 }), ' ', 'Удалить логотип'));
     } else {
-        refs.thumbWrap.appendChild(h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Логотип не загружен'));
+        refs.thumbWrap.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Логотип не загружен'));
     }
 }
 
@@ -294,9 +294,9 @@ function renderPreview() {
     const headerRow = h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', position: 'relative' } },
         logoEl,
         h('div', { style: { flex: '1', minWidth: 0 } },
-            h('div', { style: { fontWeight: '700', fontSize: '16px', color: accent } }, state.clinic_name || 'Название клиники'),
+            h('div', { style: { fontWeight: '700', fontSize: '17px', color: accent } }, state.clinic_name || 'Название клиники'),
             contactBits.length
-                ? h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '2px' } }, contactBits.join(' · '))
+                ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, contactBits.join(' · '))
                 : null,
         ));
 
@@ -310,6 +310,6 @@ function renderPreview() {
         },
     }, headerRow, rule));
 
-    refs.previewEl.appendChild(h('p', { class: 'muted', style: { fontSize: '12px', marginTop: '12px', textAlign: 'center' } },
+    refs.previewEl.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '12px', textAlign: 'center' } },
         'Так клиника подписана в шапке программы и во всех печатных документах.'));
 }

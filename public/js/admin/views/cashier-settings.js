@@ -100,9 +100,9 @@ export async function renderCashierSettings(container) {
                         background: 'var(--ink-50)', color: 'var(--ink-700)', display: 'grid', placeItems: 'center' } },
                     Icon(m.icon, { size: 16 })),
                 h('div', { style: { minWidth: 0 } },
-                    h('div', { style: { fontSize: '14.5px', fontWeight: 700, color: 'var(--ink-900)' } }, m.title),
+                    h('div', { style: { fontSize: '15px', fontWeight: 700, color: 'var(--ink-900)' } }, m.title),
                     h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px', lineHeight: 1.45 } }, m.sub),
-                    h('ul', { style: { margin: '8px 0 0', paddingLeft: '18px', color: 'var(--ink-600)', fontSize: '12px', lineHeight: 1.6 } },
+                    h('ul', { style: { margin: '8px 0 0', paddingLeft: '18px', color: 'var(--ink-600)', fontSize: '12.5px', lineHeight: 1.6 } },
                         ...m.bullets.map(b => h('li', null, b))),
                 ),
             ),
@@ -124,7 +124,7 @@ export async function renderCashierSettings(container) {
         } finally { if (saveBtn.isConnected) saveBtn.disabled = false; }
     });
 
-    wrap.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', lineHeight: 1.5, marginTop: '2px' } },
+    wrap.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', lineHeight: 1.5, marginTop: '2px' } },
         'Автоматический режим применяется при открытии страницы «Касса»: если смена осталась открытой со вчера, она закрывается задним числом на 00:00 и сразу открывается новая. Отчёты за день от этого не смещаются.'));
     wrap.appendChild(h('div', { class: 'row', style: { marginTop: '6px' } }, saveBtn));
 

@@ -50,7 +50,7 @@ export function openTelegramReport() {
         h('div', { style: { width: '36px', height: '36px', borderRadius: '10px', background: 'var(--primary-50)', color: 'var(--primary-700)', display: 'grid', placeItems: 'center' } },
             Icon('Bot', { size: 17 })),
         h('div', null,
-            h('div', { style: { fontSize: '16px', fontWeight: 700, color: 'var(--ink-900)' } }, 'Telegram-бот'),
+            h('div', { style: { fontSize: '17px', fontWeight: 700, color: 'var(--ink-900)' } }, 'Telegram-бот'),
             // TELEGRAM_BROADCAST_V2 — больше не обещаем здесь рассылку: она в чате.
             h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)' } },
                 'Кто подключился к боту и что он им выдал')),
@@ -101,7 +101,7 @@ function tile(label, value, note) {
     } },
         h('div', { style: { fontSize: '24px', fontWeight: 700, color: 'var(--ink-900)' } }, String(value)),
         h('div', { style: { fontSize: '12.5px', color: 'var(--ink-600)', marginTop: '2px' } }, label),
-        note ? h('div', { style: { fontSize: '11.5px', color: 'var(--ink-500)', marginTop: '4px' } }, note) : null);
+        note ? h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', marginTop: '4px' } }, note) : null);
 }
 
 // TG_STATS_ONE_LINE_V1 — карточка сжата до одной строки плиток.
@@ -170,7 +170,7 @@ function daily30Chart(s) {
     const tip = h('div', { style: {
         position: 'absolute', display: 'none', pointerEvents: 'none', zIndex: '5',
         padding: '3px 8px', borderRadius: '7px', whiteSpace: 'nowrap',
-        background: 'var(--ink-900,#13272e)', color: '#fff', fontSize: '11.5px',
+        background: 'var(--ink-900,#13272e)', color: '#fff', fontSize: '12.5px',
         fontVariantNumeric: 'tabular-nums', transform: 'translateX(-50%)',
     } });
 
@@ -198,11 +198,11 @@ function daily30Chart(s) {
         bars.appendChild(col);
     }
 
-    const axisLabel = (t) => h('span', { style: { fontSize: '11px', color: 'var(--ink-500)', fontVariantNumeric: 'tabular-nums' } }, t);
+    const axisLabel = (t) => h('span', { style: { fontSize: '12.5px', color: 'var(--ink-500)', fontVariantNumeric: 'tabular-nums' } }, t);
     return h('div', { style: { marginTop: '16px' } },
         h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '8px' } },
             h('div', { style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-700)' } }, 'Новые подключения по дням'),
-            h('span', { style: { fontSize: '11.5px', color: 'var(--ink-500)' } }, trf('макс. {n} в день', { n: max }))),
+            h('span', { style: { fontSize: '12.5px', color: 'var(--ink-500)' } }, trf('макс. {n} в день', { n: max }))),
         h('div', { style: { position: 'relative' } }, tip, bars),
         h('div', { style: { display: 'flex', justifyContent: 'space-between', marginTop: '4px' } },
             axisLabel(shortDate(days[0].iso)), axisLabel('сегодня')));
@@ -256,7 +256,7 @@ function linksRows() {
 // отвязанная строка осталась бы на экране активной.
 function linksTable(rows, bodyEl, onRevoked) {
     const th = (t, w) => h('th', { style: {
-        textAlign: 'left', padding: '8px 10px', fontSize: '11px', fontWeight: '700',
+        textAlign: 'left', padding: '8px 10px', fontSize: '12.5px', fontWeight: '700',
         letterSpacing: '.03em', textTransform: 'uppercase', color: 'var(--ink-500)',
         borderBottom: '1px solid var(--ink-100)', whiteSpace: 'nowrap',
         ...(w ? { width: w } : {}),
@@ -265,7 +265,7 @@ function linksTable(rows, bodyEl, onRevoked) {
     // единственное место, где вторая строка допустима, и она вынужденная,
     // а не заложенная в вёрстку.
     const td = (content, extra = {}) => h('td', { style: {
-        padding: '8px 10px', fontSize: '13px', borderBottom: '1px solid var(--ink-50,#f1f4f5)',
+        padding: '8px 10px', fontSize: '13.5px', borderBottom: '1px solid var(--ink-50,#f1f4f5)',
         verticalAlign: 'middle', lineHeight: '1.35', ...extra,
     } }, content);
 
@@ -308,7 +308,7 @@ function linksTable(rows, bodyEl, onRevoked) {
                 l.tg_username
                     ? h('span', { style: { color: 'var(--primary-700)' } }, '@' + l.tg_username)
                     : h('span', null, l.tg_name || '—'),
-                l.revoked ? h('span', { class: 'muted', style: { fontSize: '11.5px' } }, ' · отвязан') : null),
+                l.revoked ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, ' · отвязан') : null),
                 { whiteSpace: 'nowrap' }),
             td(p && p.last_visit
                 // Числовая дата, а не «17 августа 2026 г.»: в таблице важно,
@@ -355,11 +355,11 @@ function linksCard(bodyEl) {
             } },
                 h('button', { class: 'btn btn-sm', type: 'button',
                     onclick: () => openLinksModal(bodyEl) }, trf('Показать все · {n}', { n: rows.length })),
-                h('span', { class: 'muted', style: { fontSize: '11.5px' } },
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } },
                     trf('показано {shown} из {total}', { shown: shown.length, total: rows.length }))));
         }
 
-        box.appendChild(h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '10px' } }, LINKS_HINT));
+        box.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '10px' } }, LINKS_HINT));
     }
 
     return h('div', { class: 'card' },
@@ -392,7 +392,7 @@ function openLinksModal(bodyEl) {
     // здесь обычный вертикальный поток (см. openBroadcastModal ниже).
     const box = h('div', { class: 'modal-body', style: { display: 'block' } });
     const listBox = h('div', null);
-    const countEl = h('span', { class: 'muted', style: { fontSize: '12px', whiteSpace: 'nowrap' } });
+    const countEl = h('span', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } });
 
     // Поиск, а не одна прокрутка: список отсортирован по дате последнего визита,
     // и найти в нём конкретного человека глазами нельзя. Ищем по всему, что
@@ -401,7 +401,7 @@ function openLinksModal(bodyEl) {
         type: 'search', placeholder: 'Поиск по имени, номеру карты, телефону или @нику',
         style: {
             flex: '1', minWidth: '0', height: '36px', padding: '0 12px', fontFamily: 'inherit',
-            fontSize: '13px', border: '1px solid var(--ink-200)', borderRadius: '9px',
+            fontSize: '13.5px', border: '1px solid var(--ink-200)', borderRadius: '9px',
         },
     });
 
@@ -435,7 +435,7 @@ function openLinksModal(bodyEl) {
         display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px',
     } }, search, countEl));
     box.appendChild(listBox);
-    box.appendChild(h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '10px' } }, LINKS_HINT));
+    box.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '10px' } }, LINKS_HINT));
 
     overlay.appendChild(h('div', { class: 'modal-card' },
         h('header', { class: 'modal-head', style: { gap: '12px' } },
@@ -446,7 +446,7 @@ function openLinksModal(bodyEl) {
             } }, Icon('Patients', { size: 17 })),
             h('div', { style: { flex: '1', minWidth: '0' } },
                 h('h2', null, 'Подключённые пациенты'),
-                h('div', { style: { fontSize: '12px', color: 'var(--ink-500)', marginTop: '2px', lineHeight: 1.4 } },
+                h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', marginTop: '2px', lineHeight: 1.4 } },
                     'Все, кто открыл бота и поделился номером телефона')),
             h('button', { class: 'modal-close', type: 'button', onclick: close }, '×')),
         box));
@@ -510,7 +510,7 @@ export function openBroadcastModal({ onDone } = {}) {
     // Счётчик существует не ради красоты: с картинкой подпись вмещает 1024
     // символа против 4096 у обычного сообщения, и длинный текст уедет ВТОРЫМ
     // сообщением. Пусть это будет видно заранее, а не выяснится у пациента.
-    const counter = h('div', { style: { fontSize: '11.5px', textAlign: 'right', marginTop: '5px', color: 'var(--ink-500)' } });
+    const counter = h('div', { style: { fontSize: '12.5px', textAlign: 'right', marginTop: '5px', color: 'var(--ink-500)' } });
     const composedLength = () => {
         const r = ru.value.trim(), u = uz.value.trim();
         return (u ? r + '\n\n' + u : r).length;
@@ -602,9 +602,9 @@ export function openBroadcastModal({ onDone } = {}) {
             clear(zone);
             zone.appendChild(h('div', { style: { padding: '16px' } },
                 h('div', { style: { color: 'var(--primary-600)' } }, Icon('Image', { size: 22 })),
-                h('div', { style: { fontSize: '13px', fontWeight: 600, color: 'var(--ink-700)', marginTop: '6px' } },
+                h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-700)', marginTop: '6px' } },
                     'Перетащите картинку или нажмите'),
-                h('div', { style: { fontSize: '11.5px', marginTop: '3px' } },
+                h('div', { style: { fontSize: '12.5px', marginTop: '3px' } },
                     'Любой размер — обрежем по центру до 16:9')));
             syncCounter();
         }
@@ -749,7 +749,7 @@ export function openBroadcastModal({ onDone } = {}) {
             } }, Icon('Megaphone', { size: 17 })),
             h('div', { style: { flex: '1', minWidth: '0' } },
                 h('h2', null, 'Сообщение пациентам'),
-                h('div', { style: { fontSize: '12px', color: 'var(--ink-500)', marginTop: '2px', lineHeight: 1.4 } },
+                h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', marginTop: '2px', lineHeight: 1.4 } },
                     'Уйдёт всем, кто подключил Telegram-бота и подходит под фильтр')),
             h('button', { class: 'modal-close', type: 'button', onclick: close }, '×')),
         box,
@@ -769,7 +769,7 @@ export function openBroadcastModal({ onDone } = {}) {
 function section(title, ...children) {
     return h('div', { style: { marginBottom: '18px' } },
         h('div', { style: {
-            fontSize: '11px', fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase',
+            fontSize: '12.5px', fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase',
             color: 'var(--ink-500)', marginBottom: '9px',
             paddingBottom: '7px', borderBottom: '1px solid var(--ink-100)',
         } }, title),
@@ -777,7 +777,7 @@ function section(title, ...children) {
 }
 
 function hint(text) {
-    return h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '6px', lineHeight: 1.45 } }, text);
+    return h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px', lineHeight: 1.45 } }, text);
 }
 
 // Кнопку только блокируем. Раньше здесь ещё и восстанавливали

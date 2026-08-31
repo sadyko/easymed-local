@@ -33,7 +33,7 @@ export function searchableSelect(sel, { placeholder = 'Поиск…', backgroun
     });
     const caret = h('span', { style: {
         position: 'absolute', right: '11px', top: '50%', transform: 'translateY(-50%)',
-        pointerEvents: 'none', color: 'var(--ink-400)', fontSize: '11px',
+        pointerEvents: 'none', color: 'var(--ink-400)', fontSize: '12.5px',
     } }, '▼');
     const list = h('div', { style: {
         position: 'absolute', left: '0', right: '0', top: 'calc(100% + 4px)', zIndex: '30',

@@ -118,15 +118,15 @@ function injectStyles() {
 .em-onb-btn.primary { background: #167873; border-color: #167873; color: #fff; }
 .em-onb-btn.primary:hover { background: #115d5a; }
 .em-onb-btn.ghost { border-color: transparent; color: #55636d; }
-.em-onb-step { font-size: 11.5px; color: #7a8892; font-weight: 600; }
+.em-onb-step { font-size: 12.5px; color: #7a8892; font-weight: 600; }
 .em-onb-arrow { position: fixed; z-index: 99002; width: 0; height: 0; pointer-events: none; }
 .em-onb-pop.em-onb-center { position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%); max-width: 420px; padding: 24px 26px; text-align: center; }
-.em-onb-pop.em-onb-center h4 { font-size: 19px; margin-bottom: 8px; }
+.em-onb-pop.em-onb-center h4 { font-size: 20px; margin-bottom: 8px; }
 .em-onb-pop.em-onb-center p { color: #324049; }
 .em-onb-pop.em-onb-center .em-onb-foot { flex-wrap: wrap; }
 .em-onb-helpbtn { position: fixed; left: 18px; bottom: 18px; z-index: 98000; width: 44px; height: 44px; border-radius: 50%; background: #167873; color: #fff; border: 0; cursor: pointer; box-shadow: 0 6px 18px rgba(13,138,114,.4); font-size: 20px; font-weight: 700; display: grid; place-items: center; }
 .em-onb-helpbtn.on { background: #b45309; }
-.em-onb-marker { position: fixed; z-index: 98500; width: 20px; height: 20px; border-radius: 50%; background: #167873; color: #fff; border: 2px solid #fff; box-shadow: 0 2px 8px rgba(11,20,24,.3); cursor: pointer; font: 700 12px/16px sans-serif; text-align: center; pointer-events: auto; }
+.em-onb-marker { position: fixed; z-index: 98500; width: 20px; height: 20px; border-radius: 50%; background: #167873; color: #fff; border: 2px solid #fff; box-shadow: 0 2px 8px rgba(11,20,24,.3); cursor: pointer; font: 700 12.5px/16px sans-serif; text-align: center; pointer-events: auto; }
 @keyframes em-onb-pulse { 0%{box-shadow:0 0 0 3px #167873,0 0 0 0 rgba(22,120,115,.5)} 70%{box-shadow:0 0 0 3px #167873,0 0 0 10px rgba(22,120,115,0)} 100%{box-shadow:0 0 0 3px #167873,0 0 0 0 rgba(22,120,115,0)} }
 .em-onb-ring.pulse { animation: em-onb-pulse 1.8s infinite; }
 `;

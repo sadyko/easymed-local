@@ -15,7 +15,7 @@ export function renderPlaceholder(container, { def, view, onNavigate }) {
                     display: 'grid', placeItems: 'center', margin: '0 auto 14px',
                 },
             }, Icon('Settings', { size: 26 })),
-            h('h3', { style: { fontSize: '18px', margin: '0 0 6px', color: 'var(--ink-900)', fontWeight: 600 } }, meta.label + ' module'),
+            h('h3', { style: { fontSize: '17px', margin: '0 0 6px', color: 'var(--ink-900)', fontWeight: 600 } }, meta.label + ' module'),
             h('p', { class: 'muted', style: { margin: '0 auto 18px', maxWidth: '520px', fontSize: '13.5px' } },
                 meta.description || 'Pick a section from the top menus to get started.'),
         ),

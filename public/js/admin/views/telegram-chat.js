@@ -117,7 +117,7 @@ export async function renderTelegramChat(container) {
         style: {
             width: '100%', border: '1px solid transparent', borderRadius: '99px',
             background: 'var(--ink-50,#f1f4f5)', padding: '8px 30px 8px 32px',
-            fontSize: '13px', outline: 'none', transition: 'background .12s, border-color .12s',
+            fontSize: '13.5px', outline: 'none', transition: 'background .12s, border-color .12s',
         },
         onfocus: (e) => { e.target.style.background = 'var(--white,#fff)'; e.target.style.borderColor = 'var(--primary-300)'; },
         onblur: (e) => { e.target.style.background = 'var(--ink-50,#f1f4f5)'; e.target.style.borderColor = 'transparent'; },
@@ -195,7 +195,7 @@ function railItem({ label, icon, count, active, onclick, ondblclick, title }) {
     const badge = count ? h('span', { style: {
         position: 'absolute', top: '2px', right: '10px',
         background: active ? 'var(--primary-600)' : 'var(--ink-400)', color: '#fff',
-        borderRadius: '99px', fontSize: '10px', lineHeight: '1', padding: '3px 5px', minWidth: '16px',
+        borderRadius: '99px', fontSize: '12.5px', lineHeight: '1', padding: '3px 5px', minWidth: '16px',
         textAlign: 'center', fontWeight: '600',
     } }, String(count)) : null;
 
@@ -214,7 +214,7 @@ function railItem({ label, icon, count, active, onclick, ondblclick, title }) {
     },
         Icon(icon, { size: 19 }),
         h('span', { style: {
-            fontSize: '10.5px', fontWeight: active ? '600' : '500', lineHeight: '1.15',
+            fontSize: '12.5px', fontWeight: active ? '600' : '500', lineHeight: '1.15',
             textAlign: 'center', maxWidth: '64px', overflow: 'hidden',
             textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block',
         } }, label),
@@ -296,7 +296,7 @@ async function openFolderPicker(chat, anchor) {
         boxShadow: '0 12px 34px rgba(11,20,24,.16)', minWidth: '200px',
     } });
     menu.appendChild(h('div', { style: {
-        fontSize: '10.5px', fontWeight: '700', letterSpacing: '.04em', textTransform: 'uppercase',
+        fontSize: '12.5px', fontWeight: '700', letterSpacing: '.04em', textTransform: 'uppercase',
         color: 'var(--ink-400)', padding: '4px 8px 6px',
     } }, 'Папки чата'));
 
@@ -308,7 +308,7 @@ async function openFolderPicker(chat, anchor) {
         const inIt = (chat.folders || []).includes(f.id);
         menu.appendChild(h('label', { style: {
             display: 'flex', gap: '9px', alignItems: 'center', padding: '7px 8px',
-            cursor: 'pointer', fontSize: '13px', borderRadius: '8px',
+            cursor: 'pointer', fontSize: '13.5px', borderRadius: '8px',
         },
             onmouseenter: (e) => { e.currentTarget.style.background = 'var(--ink-25,#f6f8f9)'; },
             onmouseleave: (e) => { e.currentTarget.style.background = 'transparent'; },
@@ -332,7 +332,7 @@ async function openFolderPicker(chat, anchor) {
 function paintList() {
     clear(refs.list);
     if (!state.chats.length) {
-        refs.list.appendChild(h('div', { class: 'muted', style: { padding: '24px', fontSize: '13px' } },
+        refs.list.appendChild(h('div', { class: 'muted', style: { padding: '24px', fontSize: '13.5px' } },
             'Пока никто не писал. Пациенты появляются здесь, как только подключат бота.'));
         return;
     }
@@ -347,7 +347,7 @@ function paintList() {
     ].some((v) => String(v || '').toLowerCase().includes(q)));
 
     if (!rows.length) {
-        refs.list.appendChild(h('div', { class: 'muted', style: { padding: '24px', fontSize: '13px' } },
+        refs.list.appendChild(h('div', { class: 'muted', style: { padding: '24px', fontSize: '13.5px' } },
             q ? 'Ничего не найдено.'
               : state.tab === 'unread' ? 'Непрочитанных нет.' : 'В этой папке пока нет чатов.'));
         return;
@@ -404,7 +404,7 @@ function paintList() {
         },
             h('div', { class: 'avatar ' + avColor(name), style: {
                 width: '44px', height: '44px', flex: '0 0 auto', borderRadius: '50%',
-                display: 'grid', placeItems: 'center', fontSize: '14.5px', fontWeight: '600',
+                display: 'grid', placeItems: 'center', fontSize: '15px', fontWeight: '600',
             } }, initials(name)),
 
             h('div', { style: { flex: '1', minWidth: '0' } },
@@ -414,12 +414,12 @@ function paintList() {
                         fontWeight: '600', fontSize: '13.5px', color: 'var(--ink-900)',
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1',
                     } }, name),
-                    h('span', { style: { fontSize: '11px', color: 'var(--ink-400)', flex: '0 0 auto' } },
+                    h('span', { style: { fontSize: '12.5px', color: 'var(--ink-400)', flex: '0 0 auto' } },
                         listStamp(c.last_at))),
 
                 // Строка 2: кто это в клинике.
                 h('div', { style: {
-                    fontSize: '11.5px', color: 'var(--ink-500)', marginTop: '1px',
+                    fontSize: '12.5px', color: 'var(--ink-500)', marginTop: '1px',
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 } }, who),
 
@@ -437,12 +437,12 @@ function paintList() {
                         c.last_text || 'нет сообщений'),
                     c.unread ? h('span', { style: {
                         background: 'var(--primary-500)', color: '#fff', borderRadius: '99px',
-                        fontSize: '11px', fontWeight: '600', padding: '1px 6px', minWidth: '18px',
+                        fontSize: '12.5px', fontWeight: '600', padding: '1px 6px', minWidth: '18px',
                         textAlign: 'center', flex: '0 0 auto',
                     } }, String(c.unread)) : null),
 
                 c.blocked ? h('div', { style: {
-                    fontSize: '10.5px', color: 'var(--crit-500,#b03a3a)', marginTop: '2px',
+                    fontSize: '12.5px', color: 'var(--crit-500,#b03a3a)', marginTop: '2px',
                 } }, '⃠ заблокировал бота') : null,
 
                 // Связать может только тот, кто вправе отвечать: связка открывает
@@ -451,7 +451,7 @@ function paintList() {
                 c.unlinked && c.candidate_phone ? h('div', { style: { marginTop: '4px' } },
                     h('button', {
                         class: 'btn btn-sm', type: 'button',
-                        style: { fontSize: '11px', padding: '2px 8px', background: '#fffbe6', borderColor: 'var(--warn-300, #fcd34d)' },
+                        style: { fontSize: '12.5px', padding: '2px 8px', background: '#fffbe6', borderColor: 'var(--warn-300, #fcd34d)' },
                         onclick: async (ev) => {
                             ev.stopPropagation();
                             const cand = (c.candidates && c.candidates[0]) || null;
@@ -564,15 +564,15 @@ function paintPane(thread, loading = false) {
     } },
         h('div', { class: 'avatar ' + avColor(name), style: {
             width: '40px', height: '40px', flex: '0 0 auto', borderRadius: '50%',
-            display: 'grid', placeItems: 'center', fontSize: '14px', fontWeight: '600',
+            display: 'grid', placeItems: 'center', fontSize: '13.5px', fontWeight: '600',
         } }, initials(name)),
         h('div', { style: { flex: '1', minWidth: '0' } },
             h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '7px' } },
-                h('span', { style: { fontWeight: '700', fontSize: '14.5px', color: 'var(--ink-900)' } }, name),
-                l.tg_username ? h('span', { style: { fontSize: '12px', color: 'var(--ink-400)' } }, '@' + l.tg_username) : null,
+                h('span', { style: { fontWeight: '700', fontSize: '15px', color: 'var(--ink-900)' } }, name),
+                l.tg_username ? h('span', { style: { fontSize: '12.5px', color: 'var(--ink-400)' } }, '@' + l.tg_username) : null,
                 l.blocked ? chip('заблокировал бота', 'crit') : null),
             h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '5px', alignItems: 'center', marginTop: '3px' } },
-                h('span', { style: { fontSize: '11.5px', color: 'var(--ink-500)' } },
+                h('span', { style: { fontSize: '12.5px', color: 'var(--ink-500)' } },
                     'ID ' + (l.tg_user_id || thread.chat_id) + ' · +' + (l.phone || '')),
                 ...(thread.patients.length
                     ? thread.patients.map((p) => chip(p.name + ' · ' + p.mrn))
@@ -583,7 +583,7 @@ function paintPane(thread, loading = false) {
         flex: '1', overflow: 'auto', padding: '18px 20px', minHeight: '0', ...FEED_BG,
     } });
     if (!thread.messages.length) {
-        feed.appendChild(h('div', { class: 'muted', style: { textAlign: 'center', padding: '20px', fontSize: '13px' } },
+        feed.appendChild(h('div', { class: 'muted', style: { textAlign: 'center', padding: '20px', fontSize: '13.5px' } },
             'Сообщений пока нет.'));
     }
 
@@ -734,7 +734,7 @@ function paintTray() {
         tray.appendChild(h('span', { style: {
             display: 'inline-flex', alignItems: 'center', gap: '6px', maxWidth: '260px',
             background: 'var(--ink-50,#f1f4f5)', border: '1px solid var(--ink-100)',
-            borderRadius: '10px', padding: '4px 6px 4px 8px', fontSize: '12px', color: 'var(--ink-700)',
+            borderRadius: '10px', padding: '4px 6px 4px 8px', fontSize: '12.5px', color: 'var(--ink-700)',
         } },
             Icon(isImageName(f.name) ? 'Image' : 'Doc', { size: 13 }),
             h('span', { style: {
@@ -761,7 +761,7 @@ function chip(text, tone = 'plain') {
     const t = tones[tone] || tones.plain;
     return h('span', { style: {
         background: t.bg, color: t.fg, borderRadius: '99px', padding: '2px 8px',
-        fontSize: '11px', fontWeight: '500', whiteSpace: 'nowrap',
+        fontSize: '12.5px', fontWeight: '500', whiteSpace: 'nowrap',
     } }, text);
 }
 
@@ -780,7 +780,7 @@ function dayDivider(iso) {
     return h('div', { style: { display: 'flex', justifyContent: 'center', margin: '14px 0 10px' } },
         h('span', { style: {
             background: 'rgba(11,20,24,.06)', color: 'var(--ink-600)', borderRadius: '99px',
-            padding: '3px 11px', fontSize: '11px', fontWeight: '600',
+            padding: '3px 11px', fontSize: '12.5px', fontWeight: '600',
         } }, label));
 }
 
@@ -796,7 +796,7 @@ function bubble(m, grouped = false) {
         return h('div', { style: { display: 'flex', justifyContent: 'center', margin: '4px 0' } },
             h('div', { style: {
                 maxWidth: '80%', background: 'rgba(11,20,24,.05)', color: 'var(--ink-500)',
-                borderRadius: '12px', padding: '5px 11px', fontSize: '11.5px', textAlign: 'center',
+                borderRadius: '12px', padding: '5px 11px', fontSize: '12.5px', textAlign: 'center',
                 whiteSpace: 'pre-wrap', wordBreak: 'break-word',
             } }, trimText(m.text, 220),
                 h('span', { style: { opacity: '.7' } }, '  ' + timeShort(m.created_at))));
@@ -821,14 +821,14 @@ function bubble(m, grouped = false) {
             // Кто ответил — над текстом и заметно: пациенту отвечают разные
             // сотрудники, и «кто это сказал» важнее, чем выглядит.
             (m.author && !grouped) ? h('div', { style: {
-                fontSize: '11.5px', fontWeight: '600', marginBottom: '2px',
+                fontSize: '12.5px', fontWeight: '600', marginBottom: '2px',
                 color: out ? 'rgba(255,255,255,.9)' : 'var(--primary-700)',
             } }, m.author) : null,
 
             isDoc ? fileLine(m, out) : m.text,
 
             h('div', { style: {
-                fontSize: '10.5px', marginTop: '3px', textAlign: 'right',
+                fontSize: '12.5px', marginTop: '3px', textAlign: 'right',
                 color: out ? 'rgba(255,255,255,.75)' : 'var(--ink-400)',
             } },
                 (KIND_NOTE[m.kind] ? KIND_NOTE[m.kind] + ' · ' : '') + timeShort(m.created_at))));

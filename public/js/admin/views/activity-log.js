@@ -81,13 +81,13 @@ export function activityCard(rows) {
         h('div', { class: 'card-header' },
             h('h3', null, Icon('Doc', { size: 14 }), ' Activity log ',
                 h('span', { class: 'h-count' }, String((rows || []).length))),
-            h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 'Cancellations, refunds, referrals, service edits — newest first.'),
         ),
         (!rows || rows.length === 0)
             ? h('div', { class: 'empty', style: { padding: '24px 20px' } },
                 h('p', null, 'No activity recorded yet.'),
-                h('p', { class: 'muted', style: { fontSize: '12px', marginTop: '4px' } },
+                h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
                     'Every invoice cancel, refund, referral, and service edit for this patient will appear here.'))
             : h('table', { class: 'tbl', style: { fontSize: '12.5px' } },
                 h('thead', null, h('tr', null,
@@ -103,15 +103,15 @@ export function activityCard(rows) {
 
 function activityRow(r) {
     return h('tr', null,
-        h('td', { class: 'muted', style: { fontSize: '11.5px' } }, formatStamp(r.created_at)),
+        h('td', { class: 'muted', style: { fontSize: '12.5px' } }, formatStamp(r.created_at)),
         h('td', null, activityTag(r.entity_type, r.action)),
         h('td', null,
             h('div', { style: { fontWeight: 500, color: 'var(--ink-800)' } }, r.summary || '—'),
-            r.entity_label && h('div', { class: 'muted', style: { fontSize: '11px' } }, r.entity_label),
+            r.entity_label && h('div', { class: 'muted', style: { fontSize: '12.5px' } }, r.entity_label),
         ),
         h('td', null,
             h('div', { style: { fontWeight: 600, color: 'var(--ink-800)' } }, r.__actor_name || 'Unknown'),
-            r.__actor_role && h('div', { class: 'muted', style: { fontSize: '11px' } }, r.__actor_role),
+            r.__actor_role && h('div', { class: 'muted', style: { fontSize: '12.5px' } }, r.__actor_role),
         ),
     );
 }

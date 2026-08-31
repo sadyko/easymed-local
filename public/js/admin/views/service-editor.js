@@ -181,9 +181,9 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
 
     const performersSection = h('section', { class: 'mg-section span-full' },
         h('h3', null, 'Исполнители'),
-        h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13px', padding: '0 0 10px', cursor: 'pointer' } },
+        h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13.5px', padding: '0 0 10px', cursor: 'pointer' } },
             docChk, h('span', null, 'Врач'),
-            h('span', { class: 'muted', style: { fontSize: '11.5px' } }, '(снимите — другие сотрудники)')),
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '(снимите — другие сотрудники)')),
         staffBox);
     // Блок виден только при «оказывает специалист» — как в опубликованном
     // диалоге. Скрытие НЕ очищает picked: члены остаются членами, пока их

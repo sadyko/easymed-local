@@ -103,7 +103,7 @@ const MAX_RENDERED = 1000;
 const FILTER_STYLE = {
     width: '100%', height: '28px', padding: '0 8px', borderRadius: '6px',
     border: '1px solid var(--ink-200)', background: 'var(--white, #fff)',
-    fontSize: '12px', fontFamily: 'inherit', boxSizing: 'border-box',
+    fontSize: '12.5px', fontFamily: 'inherit', boxSizing: 'border-box',
 };
 const YES_NO = [['', 'All'], ['yes', 'Yes'], ['no', 'No']];
 
@@ -163,10 +163,10 @@ function mount() {
     refs.tbody = h('tbody');
     refs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } },
         'No services yet — add the first one.');
-    refs.totalEl = h('span', { class: 'muted', style: { fontSize: '12px' } }, '');
+    refs.totalEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
     refs.capNote = h('div', {
         class: 'muted',
-        style: { display: 'none', padding: '8px 12px', fontSize: '12px', borderTop: '1px solid var(--ink-100)' },
+        style: { display: 'none', padding: '8px 12px', fontSize: '12.5px', borderTop: '1px solid var(--ink-100)' },
     }, '');
 
     // SVC_COL_FILTERS_V1 — one control per column, wired to the shared `flt`.
@@ -202,7 +202,7 @@ function mount() {
     // page head — where the "N of M" it undoes is already shown.
     refs.resetBtn = h('button', {
         class: 'btn btn-outline btn-sm', type: 'button', title: 'Clear all filters',
-        style: { display: 'none', padding: '2px 10px', fontSize: '11.5px', marginLeft: '8px' },
+        style: { display: 'none', padding: '2px 10px', fontSize: '12.5px', marginLeft: '8px' },
         onclick: () => {
             clearFilters();
             for (const el of filterRow.querySelectorAll('input, select')) el.value = '';

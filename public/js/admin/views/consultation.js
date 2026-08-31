@@ -274,8 +274,8 @@ function inpatientsView() {
     }
     const rows = state.inpt.rows || [];
     wrap.appendChild(h('div', { class: 'row', style: { alignItems: 'center', gap: '10px' } },
-        h('div', { style: { fontWeight: 700, fontSize: '14px' } }, 'Пациенты в стационаре'),
-        h('span', { class: 'muted', style: { fontSize: '12px' } }, trf('активные госпитализации: {n}', { n: rows.length })),
+        h('div', { style: { fontWeight: 700, fontSize: '13.5px' } }, 'Пациенты в стационаре'),
+        h('span', { class: 'muted', style: { fontSize: '12.5px' } }, trf('активные госпитализации: {n}', { n: rows.length })),
         h('span', { style: { flex: 1 } }),
         h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => {
             state.inpt.loading = true; paint();
@@ -301,16 +301,16 @@ function inpatientsView() {
                 onChange: () => { loadInpatients().then(paint); },
             }),
         },
-            h('span', { class: 'av ' + avColor(r.patient_id || nm), style: { width: '38px', height: '38px', borderRadius: '50%', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: '13px', flex: 'none', background: 'var(--primary-50)', color: 'var(--primary-700)' } }, initials(nm)),
+            h('span', { class: 'av ' + avColor(r.patient_id || nm), style: { width: '38px', height: '38px', borderRadius: '50%', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: '13.5px', flex: 'none', background: 'var(--primary-50)', color: 'var(--primary-700)' } }, initials(nm)),
             h('div', { style: { flex: 1, minWidth: 0 } },
                 h('div', { style: { fontWeight: 700, fontSize: '13.5px' } }, nm,
-                    h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '11.5px', marginLeft: '8px' } }, p.mrn || '')),
-                h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' } },
+                    h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '12.5px', marginLeft: '8px' } }, p.mrn || '')),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
                     (place || 'без койки'),
                     ' · ' + trf('поступил {date}', { date: String(r.admitted_at || '').slice(0, 10) }),
                     r.admission_diagnosis ? ' · ' + r.admission_diagnosis : ''),
             ),
-            h('span', { class: 'muted', style: { fontSize: '12px', flex: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px' } },
+            h('span', { class: 'muted', style: { fontSize: '12.5px', flex: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px' } },
                 'Назначения ', Icon('ArrowRight', { size: 13 })),
         ));
     }
@@ -342,7 +342,7 @@ function topTab(id, label, icon) {
             border: '1px solid ' + (on ? 'var(--primary-500)' : 'var(--ink-200)'),
             background: on ? 'var(--primary-50)' : 'white',
             color: on ? 'var(--primary-700)' : 'var(--ink-700)',
-            fontWeight: on ? 600 : 500, fontSize: '14px',
+            fontWeight: on ? 600 : 500, fontSize: '13.5px',
             cursor: 'pointer', fontFamily: 'inherit',
         },
     }, Icon(icon, { size: 15 }), label);
@@ -363,11 +363,11 @@ function appointmentsView() {
                         placeholder: 'Поиск по ФИО, MRN, телефону, услуге…',
                         value: state.search,
                         oninput: (e) => { state.search = e.target.value; paintBody(); },
-                        style: { height: '34px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13px', width: '360px', maxWidth: '100%' },
+                        style: { height: '34px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', width: '360px', maxWidth: '100%' },
                     }),
                     statusFilterSelect(),
                 ),
-                h('div', { class: 'muted', style: { fontSize: '12px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     'Показано ', h('b', { id: 'svc-count', style: { color: 'var(--ink-800)' } }, '0'),
                     ' из ', String(state.rows.length)),
             ),
@@ -518,7 +518,7 @@ function statusFilterSelect() {
     return h('select', {
         value: state.statusFilter,
         onchange: (e) => setStatusFilter(e.target.value),
-        style: { height: '34px', borderRadius: '8px', border: '1px solid var(--ink-200)', padding: '0 10px', fontSize: '13px' },
+        style: { height: '34px', borderRadius: '8px', border: '1px solid var(--ink-200)', padding: '0 10px', fontSize: '13.5px' },
     },
         h('option', { value: 'all',         selected: state.statusFilter === 'all' },         'Все статусы'),
         h('option', { value: 'queued',      selected: state.statusFilter === 'queued' },      STATUS_RU.queued),
@@ -658,7 +658,7 @@ function listRow(r, i) {
                 h('div', { class: 'avatar sm ' + avColor(r.patientId || r.patientName) }, initials(r.patientName)),
                 h('div', null,
                     nameLink(r),
-                    r.patientMrn && h('div', { class: 'muted', style: { fontSize: '11.5px' } }, r.patientMrn),
+                    r.patientMrn && h('div', { class: 'muted', style: { fontSize: '12.5px' } }, r.patientMrn),
                 ),
             ),
         ),
@@ -695,8 +695,8 @@ function gridCard(r) {
         h('div', { class: 'row', style: { gap: '10px', alignItems: 'flex-start' } },
             h('div', { class: 'avatar ' + avColor(r.patientId || r.patientName) }, initials(r.patientName)),
             h('div', { style: { flex: 1, minWidth: 0 } },
-                nameLink(r, { fontSize: '14px' }),
-                h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+                nameLink(r, { fontSize: '13.5px' }),
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     [r.patientMrn, r.patientPhone].filter(Boolean).join(' · ')),
             ),
             statusBadge(r.status),
@@ -710,15 +710,15 @@ function gridCard(r) {
             },
         },
             h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } }, r.serviceName),
-            h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '2px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
                 // DOCTOR_ROOM_V1
                 r.doctorName + (r.doctorSpecialty ? ' · ' + r.doctorSpecialty : '')
                 + (r.doctorRoom ? ' · ' + trf('Кабинет {room}', { room: r.doctorRoom }) + (r.doctorFloor ? ' · ' + trf('Этаж {n}', { n: r.doctorFloor }) : '') : '')),
             h('div', { class: 'row', style: { marginTop: '8px', gap: '10px' } },
-                h('span', { class: 'num cell-strong', style: { fontSize: '13px' } },
+                h('span', { class: 'num cell-strong', style: { fontSize: '13.5px' } },
                     Number(r.price || 0).toLocaleString('ru-RU') + ' UZS'),
                 h('span', { class: 'grow' }),
-                h('span', { class: 'muted', style: { fontSize: '11.5px' } }, formatDateTime(r.createdAt)),
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } }, formatDateTime(r.createdAt)),
             ),
         ),
         h('div', { class: 'row', style: { justifyContent: 'flex-end' } }, actionButton(r)),
@@ -1107,7 +1107,7 @@ function openRecsModal(mode) {
                     h('th', null, 'Статус'),
                 )),
                 h('tbody', null, ...list.map(r => h('tr', null,
-                    h('td', { class: 'num muted', style: { fontSize: '11.5px' } }, formatDateTime(r.createdAt)),
+                    h('td', { class: 'num muted', style: { fontSize: '12.5px' } }, formatDateTime(r.createdAt)),
                     h('td', null, r.patientName),
                     h('td', { class: 'cell-strong' }, r.serviceName),
                     h('td', null, referralIsDone(r.status)
@@ -1398,7 +1398,7 @@ function dashboardView() {
             state.dash.loaded = false; state.dash.loading = true; paint();
             loadDashboardData().then(() => { state.dash.loading = false; paint(); });
         },
-        style: { height: '34px', borderRadius: '8px', border: '1px solid var(--ink-200)', padding: '0 10px', fontSize: '13px', minWidth: '220px' },
+        style: { height: '34px', borderRadius: '8px', border: '1px solid var(--ink-200)', padding: '0 10px', fontSize: '13.5px', minWidth: '220px' },
     },
         ...state.dash.doctors.map(d => h('option', { value: d.id, selected: state.dash.doctorId === d.id },
             d.full_name + (d.specialty ? ' · ' + d.specialty : ''))),
@@ -1497,10 +1497,10 @@ function kpiTile({ label, value, sub, icon, color, detailsLabel, onDetails }) {
     return h('div', { style: { padding: '14px 16px', border: '1px solid var(--ink-100)', borderRadius: '12px', background: 'white', display: 'flex', flexDirection: 'column', gap: '8px' } },
         h('div', { class: 'row', style: { gap: '8px', color } },
             Icon(icon, { size: 16 }),
-            h('span', { style: { fontSize: '11.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' } }, label),
+            h('span', { style: { fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' } }, label),
         ),
         h('div', { class: 'num', style: { fontSize: '24px', fontWeight: 700, color: 'var(--ink-900)', letterSpacing: '-0.02em' } }, value),
-        sub && h('div', { class: 'muted', style: { fontSize: '11.5px' } }, sub),
+        sub && h('div', { class: 'muted', style: { fontSize: '12.5px' } }, sub),
         onDetails && h('button', {
             class: 'btn btn-outline btn-sm', onclick: onDetails,
             style: { marginTop: 'auto', alignSelf: 'flex-start' },
@@ -1514,7 +1514,7 @@ function salaryConfigCard(salary) {
     return h('div', { class: 'card', style: { padding: '16px 18px' } },
         h('div', { class: 'row', style: { gap: '8px', marginBottom: '10px' } },
             Icon('Wallet', { size: 16 }),
-            h('span', { style: { fontSize: '13px', fontWeight: 700, color: 'var(--ink-900)', textTransform: 'uppercase', letterSpacing: '0.04em' } }, 'Salary setup'),
+            h('span', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)', textTransform: 'uppercase', letterSpacing: '0.04em' } }, 'Salary setup'),
         ),
         kvRow('Plan',          salaryKindLabel(salary.kind)),
         kvRow('Fixed amount',  Number(doc.salary_fixed || 0).toLocaleString('ru-RU') + ' UZS / month'),
@@ -1582,7 +1582,7 @@ function referralAnalyticsCard() {
         h('div', { class: 'card-header' },
             h('h3', null, Icon('ArrowRight', { size: 16 }), ' Referral analytics'),
             h('div', { class: 'row', style: { gap: '10px' } },
-                h('span', { class: 'muted', style: { fontSize: '12px' } }, periodLabel()),
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } }, periodLabel()),
                 h('button', {
                     class: 'btn btn-outline btn-sm',
                     onclick: () => openReferralDetails(),
@@ -1606,15 +1606,15 @@ function referralAnalyticsCard() {
                         h('td', { class: 'num', style: { textAlign: 'right' } }, String(r.referred)),
                         h('td', { class: 'num', style: { textAlign: 'right' } },
                             String(r.arrived),
-                            h('span', { class: 'muted', style: { fontSize: '11px', marginLeft: '4px' } },
+                            h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '4px' } },
                                 r.referred ? `(${Math.round(r.arrived / r.referred * 100)}%)` : ''),
                         ),
                         h('td', { class: 'num', style: { textAlign: 'right' } },
                             Math.round(r.revenueAfter).toLocaleString('ru-RU'),
-                            h('span', { class: 'muted', style: { fontSize: '11px', marginLeft: '4px' } }, 'UZS')),
+                            h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '4px' } }, 'UZS')),
                         h('td', { class: 'num cell-strong', style: { textAlign: 'right', color: 'var(--ok-700)' } },
                             r.reward.toLocaleString('ru-RU'),
-                            h('span', { class: 'muted', style: { fontSize: '11px', marginLeft: '4px' } }, 'UZS')),
+                            h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '4px' } }, 'UZS')),
                     )),
                     // Totals
                     h('tr', { style: { background: 'var(--ink-25)', borderTop: '2px solid var(--ink-200)' } },
@@ -1623,10 +1623,10 @@ function referralAnalyticsCard() {
                         h('td', { class: 'num cell-strong', style: { textAlign: 'right' } }, String(total.arrived)),
                         h('td', { class: 'num cell-strong', style: { textAlign: 'right' } },
                             Math.round(total.revenueAfter).toLocaleString('ru-RU'),
-                            h('span', { class: 'muted', style: { fontSize: '11px', marginLeft: '4px' } }, 'UZS')),
+                            h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '4px' } }, 'UZS')),
                         h('td', { class: 'num cell-strong', style: { textAlign: 'right', color: 'var(--ok-700)' } },
                             total.reward.toLocaleString('ru-RU'),
-                            h('span', { class: 'muted', style: { fontSize: '11px', marginLeft: '4px' } }, 'UZS')),
+                            h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '4px' } }, 'UZS')),
                     ),
                 ),
             ),
@@ -1638,16 +1638,16 @@ function referralBySectorCard(rewards) {
     return h('div', { class: 'card', style: { padding: '16px 18px' } },
         h('div', { class: 'row', style: { gap: '8px', marginBottom: '10px' } },
             Icon('ArrowRight', { size: 16 }),
-            h('span', { style: { fontSize: '13px', fontWeight: 700, color: 'var(--ink-900)', textTransform: 'uppercase', letterSpacing: '0.04em' } }, 'Rewards by sector'),
+            h('span', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)', textTransform: 'uppercase', letterSpacing: '0.04em' } }, 'Rewards by sector'),
         ),
         sectors.length === 0
             ? h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '8px 0' } }, 'No referrals in this period.')
             : h('div', null, ...sectors.map(([name, s]) =>
                 h('div', { class: 'row', style: { padding: '6px 0', borderBottom: '1px solid var(--ink-100)', gap: '10px' } },
-                    h('span', { style: { fontSize: '13px', color: 'var(--ink-900)' } }, name),
+                    h('span', { style: { fontSize: '13.5px', color: 'var(--ink-900)' } }, name),
                     h('span', { class: 'grow' }),
-                    h('span', { class: 'muted num', style: { fontSize: '11.5px' } }, s.count + ' ref'),
-                    h('span', { class: 'num cell-strong', style: { fontSize: '13px', color: 'var(--ok-700)', minWidth: '90px', textAlign: 'right' } },
+                    h('span', { class: 'muted num', style: { fontSize: '12.5px' } }, s.count + ' ref'),
+                    h('span', { class: 'num cell-strong', style: { fontSize: '13.5px', color: 'var(--ok-700)', minWidth: '90px', textAlign: 'right' } },
                         s.commission.toLocaleString('ru-RU') + ' UZS'),
                 ),
             )),
@@ -1659,7 +1659,7 @@ function recentServicesCard() {
     return h('div', { class: 'card' },
         h('div', { class: 'card-header' },
             h('h3', null, Icon('Activity', { size: 16 }), ' Recent services'),
-            h('span', { class: 'muted', style: { fontSize: '12px' } }, periodLabel()),
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, periodLabel()),
         ),
         rows.length === 0
             ? h('div', { class: 'empty', style: { padding: '30px 20px', fontSize: '12.5px' } }, 'No services in this period.')
@@ -1670,10 +1670,10 @@ function recentServicesCard() {
                     h('th', { style: { textAlign: 'right' } }, 'Amount'),
                 )),
                 h('tbody', null, ...rows.map(s => h('tr', null,
-                    h('td', { class: 'num muted', style: { fontSize: '11.5px' } }, formatDateTime(s.createdAt)),
+                    h('td', { class: 'num muted', style: { fontSize: '12.5px' } }, formatDateTime(s.createdAt)),
                     h('td', { class: 'cell-strong' }, s.serviceName),
                     h('td', null, s.patientName,
-                        s.patientMrn && h('div', { class: 'muted', style: { fontSize: '11px' } }, s.patientMrn)),
+                        s.patientMrn && h('div', { class: 'muted', style: { fontSize: '12.5px' } }, s.patientMrn)),
                     h('td', null, statusBadge(s.status)),
                     h('td', { class: 'num cell-strong', style: { textAlign: 'right' } }, s.total.toLocaleString('ru-RU')),
                 ))),
@@ -1686,18 +1686,18 @@ function recentReferralsCard() {
     return h('div', { class: 'card' },
         h('div', { class: 'card-header' },
             h('h3', null, Icon('ArrowRight', { size: 16 }), ' Recent referrals'),
-            h('span', { class: 'muted', style: { fontSize: '12px' } }, periodLabel()),
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, periodLabel()),
         ),
         rows.length === 0
             ? h('div', { class: 'empty', style: { padding: '30px 20px', fontSize: '12.5px' } }, 'No referrals in this period.')
             : h('div', null, ...rows.map(r => h('div', { class: 'row', style: { padding: '10px 16px', borderTop: '1px solid var(--ink-100)', gap: '10px' } },
                 h('div', { style: { flex: 1, minWidth: 0 } },
                     h('div', { class: 'cell-strong', style: { fontSize: '12.5px' } }, r.serviceName),
-                    h('div', { class: 'muted', style: { fontSize: '11.5px' } }, r.patientName + (r.serviceCat ? ' · ' + r.serviceCat : '')),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, r.patientName + (r.serviceCat ? ' · ' + r.serviceCat : '')),
                 ),
                 tagEl(r.status === 'done' ? 'Done' : r.status === 'cancelled' ? 'Cancelled' : 'Pending',
                       r.status === 'done' ? 'ok' : r.status === 'cancelled' ? 'crit' : 'warn', null),
-                h('span', { class: 'num cell-strong', style: { fontSize: '13px', minWidth: '80px', textAlign: 'right', color: 'var(--ok-700)' } },
+                h('span', { class: 'num cell-strong', style: { fontSize: '13.5px', minWidth: '80px', textAlign: 'right', color: 'var(--ok-700)' } },
                     commissionFor(r, state.dash.bonusRules).toLocaleString('ru-RU')),
             ))),
     );
@@ -1705,9 +1705,9 @@ function recentReferralsCard() {
 
 function kvRow(k, v) {
     return h('div', { class: 'row', style: { padding: '4px 0', gap: '10px' } },
-        h('span', { style: { fontSize: '11.5px', color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 } }, k),
+        h('span', { style: { fontSize: '12.5px', color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 } }, k),
         h('span', { class: 'grow' }),
-        h('span', { style: { fontSize: '13px', color: 'var(--ink-900)', fontWeight: 500 } }, v),
+        h('span', { style: { fontSize: '13.5px', color: 'var(--ink-900)', fontWeight: 500 } }, v),
     );
 }
 
@@ -1744,7 +1744,7 @@ function openSalaryDetails() {
                     placeholder: 'Filter by service / patient name…',
                     value: filterText,
                     oninput: (e) => { filterText = e.target.value; repaintList(); },
-                    style: { flex: 1, height: '34px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13px' },
+                    style: { flex: 1, height: '34px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px' },
                 }),
                 h('div', { class: 'segmented' },
                     h('button', { class: statusFilter === 'all' ? 'on' : '',
@@ -1793,12 +1793,12 @@ function openSalaryDetails() {
                 if (rate && rate.percentage) ruleParts.push(rate.percentage + '%');
                 const ruleLabel = ruleParts.length ? ruleParts.join(' + ') : '—';
                 return h('tr', null,
-                    h('td', { class: 'num muted', style: { fontSize: '11.5px' } }, formatDateTime(s.createdAt)),
+                    h('td', { class: 'num muted', style: { fontSize: '12.5px' } }, formatDateTime(s.createdAt)),
                     h('td', { class: 'cell-strong' }, s.serviceName),
                     h('td', null, s.patientName),
                     h('td', { class: 'num', style: { textAlign: 'right' } }, s.total.toLocaleString('ru-RU')),
                     h('td', { class: 'num', style: { textAlign: 'right' } }, Math.round(net).toLocaleString('ru-RU')),
-                    h('td', { class: 'num muted', style: { textAlign: 'right', fontSize: '11.5px' } }, ruleLabel),
+                    h('td', { class: 'num muted', style: { textAlign: 'right', fontSize: '12.5px' } }, ruleLabel),
                     h('td', { class: 'num cell-strong', style: { textAlign: 'right', color: share ? 'var(--ok-700)' : 'var(--ink-400)' } }, share.toLocaleString('ru-RU')),
                 );
             })),
@@ -1859,11 +1859,11 @@ function openReferralDetails() {
                     placeholder: 'Filter by service / patient name…',
                     value: serviceFilter,
                     oninput: (e) => { serviceFilter = e.target.value; repaintList(); },
-                    style: { flex: 1, minWidth: '200px', height: '34px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13px' },
+                    style: { flex: 1, minWidth: '200px', height: '34px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px' },
                 }),
                 (() => {
                     const sel = h('select', {
-                        style: { height: '34px', borderRadius: '8px', border: '1px solid var(--ink-200)', padding: '0 10px', fontSize: '13px' },
+                        style: { height: '34px', borderRadius: '8px', border: '1px solid var(--ink-200)', padding: '0 10px', fontSize: '13.5px' },
                         onchange: (e) => { sectorFilter = e.target.value; repaintList(); },
                     },
                         ...sectors().map(s => h('option', { value: s, selected: sectorFilter === s }, s === 'all' ? 'All sectors' : s)),
@@ -1903,7 +1903,7 @@ function openReferralDetails() {
                 const c = commissionFor(r, state.dash.bonusRules);
                 const sec = r.serviceCat || r.serviceType || '(uncategorised)';
                 return h('tr', null,
-                    h('td', { class: 'num muted', style: { fontSize: '11.5px' } }, formatDateTime(r.createdAt)),
+                    h('td', { class: 'num muted', style: { fontSize: '12.5px' } }, formatDateTime(r.createdAt)),
                     h('td', { class: 'cell-strong' }, r.serviceName),
                     h('td', { class: 'muted' }, sec),
                     h('td', null, r.patientName),
@@ -1934,7 +1934,7 @@ function openReferralDetails() {
 
 function kvBlock(label, value, color) {
     return h('div', { style: { minWidth: '140px' } },
-        h('div', { class: 'muted', style: { fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } }, label),
-        h('div', { class: 'num', style: { fontSize: '16px', fontWeight: 700, color: color || 'var(--ink-900)', marginTop: '2px' } }, value),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } }, label),
+        h('div', { class: 'num', style: { fontSize: '17px', fontWeight: 700, color: color || 'var(--ink-900)', marginTop: '2px' } }, value),
     );
 }

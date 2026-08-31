@@ -110,7 +110,7 @@ export async function renderDocsArchive(container, ctx) {
     state.q = ''; state.kind = 'all'; state.loaded = false; state.docs = [];
 
     const search = h('input', { type: 'search', placeholder: 'Поиск: пациент, MRN, услуга, название…',
-        style: { height: '36px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13px', minWidth: '280px', fontFamily: 'inherit' },
+        style: { height: '36px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', minWidth: '280px', fontFamily: 'inherit' },
         oninput: (e) => { state.q = e.target.value; repaintList(); } });
 
     const chips = h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } });

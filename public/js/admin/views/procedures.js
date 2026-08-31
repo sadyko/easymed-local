@@ -126,7 +126,7 @@ function rowEl(r, body) {
     return h('div', { class: 'row', style: { justifyContent: 'space-between', alignItems: 'center', gap: '12px', padding: '12px 14px', borderBottom: '1px solid var(--ink-50, #f3f3f3)' } },
         h('div', { style: { minWidth: '0' } },
             h('div', { style: { fontWeight: '600', fontSize: '13.5px' } }, r.service),
-            h('div', { class: 'muted', style: { fontSize: '12px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 [r.patient, r.phone, whoLine, fmtDateTime(r.when)].filter(Boolean).join(' · '))),
         h('div', { class: 'row', style: { gap: '8px', flex: 'none', alignItems: 'center' } },
             // Свободную процедуру берёт себе тот, кто её выполняет — отдельного
@@ -136,13 +136,13 @@ function rowEl(r, body) {
                 ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', title: 'Назначить процедуру на себя',
                     onclick: () => takeProcedure(r, body) }, Icon('User', { size: 13 }), ' Взять')
                 : null,
-            h('span', { class: 'tag' + (done ? ' tag-ok' : r.unassigned ? ' tag-warn' : ''), style: { fontSize: '11px' } },
+            h('span', { class: 'tag' + (done ? ' tag-ok' : r.unassigned ? ' tag-warn' : ''), style: { fontSize: '12.5px' } },
                 STATUS_RU[r.status] || r.status),
             r.status === 'added'
                 // #15 — un-released (pay-first): the nurse can't perform it until the cashier confirms (payment/debt).
-                ? h('span', { class: 'tag', style: { fontSize: '11px', opacity: '.75' } }, Icon('Wallet', { size: 11 }), ' Ожидает кассу')
+                ? h('span', { class: 'tag', style: { fontSize: '12.5px', opacity: '.75' } }, Icon('Wallet', { size: 11 }), ' Ожидает кассу')
                 : done
-                    ? h('span', { class: 'muted', style: { fontSize: '11.5px', maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: [r.doneBy, r.doneAt ? fmtDateTime(r.doneAt) : '', r.notes].filter(Boolean).join(' · ') },
+                    ? h('span', { class: 'muted', style: { fontSize: '12.5px', maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: [r.doneBy, r.doneAt ? fmtDateTime(r.doneAt) : '', r.notes].filter(Boolean).join(' · ') },
                         // PROC_DONE_STAMP_V1 — who pressed «Выполнить» and when
                         [r.doneBy ? '✓ ' + r.doneBy : '✓', r.doneAt ? fmtDateTime(r.doneAt) : '', r.notes].filter(Boolean).join(' · '))
                     : h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openDone(r, body) }, 'Выполнить')));
@@ -168,7 +168,7 @@ function openDone(r, body) {
         const items = await loadProcItems(r.visit_id);
         clear(itemsWrap);
         if (!items.length) {
-            itemsWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', padding: '8px 4px', textAlign: 'center' } },
+            itemsWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '8px 4px', textAlign: 'center' } },
                 r.visit_id ? 'Товаров пока нет. Нажмите «Добавить товары», чтобы списать расходники.' : 'Визит не привязан — добавить товары нельзя.'));
             return;
         }
@@ -176,10 +176,10 @@ function openDone(r, body) {
             itemsWrap.appendChild(h('div', { class: 'proc-item' },
                 Icon('Pill', { size: 15 }),
                 h('div', { style: { flex: 1, minWidth: 0 } },
-                    h('div', { style: { fontSize: '13px', fontWeight: 600 } }, it.name, h('span', { class: 'muted', style: { fontWeight: 500 } }, ' × ' + it.qty)),
-                    h('div', { class: 'muted', style: { fontSize: '11.5px' } }, it.total.toLocaleString('ru-RU') + ' UZS' + (it.invoiced ? ' · в счёте' : ''))),
+                    h('div', { style: { fontSize: '13.5px', fontWeight: 600 } }, it.name, h('span', { class: 'muted', style: { fontWeight: 500 } }, ' × ' + it.qty)),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, it.total.toLocaleString('ru-RU') + ' UZS' + (it.invoiced ? ' · в счёте' : ''))),
                 it.invoiced
-                    ? h('span', { class: 'muted', style: { fontSize: '11px' }, title: 'Уже в счёте — убрать нельзя' }, Icon('Check', { size: 12 }))
+                    ? h('span', { class: 'muted', style: { fontSize: '12.5px' }, title: 'Уже в счёте — убрать нельзя' }, Icon('Check', { size: 12 }))
                     : h('button', { class: 'btn btn-ghost btn-sm', type: 'button', style: { color: 'var(--crit-700)' }, title: 'Убрать (вернуть на склад)',
                         onclick: async () => {
                             if (!confirm(trf('Убрать «{name}»? Товар вернётся на склад.', { name: it.name }))) return;
@@ -227,7 +227,7 @@ function openDone(r, body) {
                 h('div', { class: 'proc-av' }, procInitials(r.patient)),
                 h('div', { style: { minWidth: 0 } },
                     h('div', { class: 'cell-strong', style: { fontSize: '15px' } }, r.patient),
-                    h('div', { class: 'muted', style: { fontSize: '12px' } },
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                         [r.mrn, age != null ? age + ' y' : null, sex, r.phone].filter(Boolean).join(' · ') || '—'))),
             // Products section (расходные материалы)
             h('div', { class: 'proc-sec' },
@@ -238,7 +238,7 @@ function openDone(r, body) {
                 itemsWrap),
             // Note
             h('div', null,
-                h('div', { class: 'muted', style: { fontSize: '11.5px', marginBottom: '4px' } }, 'Примечание'),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '4px' } }, 'Примечание'),
                 note),
         ),
         h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px', padding: '12px 14px', borderTop: '1px solid var(--ink-100, #eee)' } },
@@ -279,13 +279,13 @@ function injectProcStyles() {
 .modal-card.proc-done-card > .modal-body { flex: 0 1 auto !important; }
 .proc-title-block { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--primary-50, #eff6ff); border: 1px solid var(--primary-200, #bfdbfe); border-radius: 12px; }
 .proc-title-ic { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 11px; background: var(--primary-100, #dbeafe); color: var(--primary-700, #1d4ed8); display: flex; align-items: center; justify-content: center; }
-.proc-title-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 700; color: var(--primary-600, #2563eb); }
-.proc-title-name { font-size: 19px; font-weight: 700; color: var(--ink-900); line-height: 1.2; overflow-wrap: anywhere; }
+.proc-title-label { font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 700; color: var(--primary-600, #2563eb); }
+.proc-title-name { font-size: 20px; font-weight: 700; color: var(--ink-900); line-height: 1.2; overflow-wrap: anywhere; }
 .proc-pcard { display: flex; gap: 12px; align-items: center; padding: 12px 14px; background: var(--ink-25); border: 1px solid var(--ink-100); border-radius: 12px; }
 .proc-av { width: 42px; height: 42px; flex: 0 0 42px; border-radius: 50%; background: var(--primary-100, #dbeafe); color: var(--primary-700, #1d4ed8); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; }
 .proc-sec { border: 1px solid var(--ink-100); border-radius: 12px; overflow: hidden; }
 .proc-sec-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--ink-100); background: var(--ink-25); }
-.proc-sec-head h4 { margin: 0; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-700); }
+.proc-sec-head h4 { margin: 0; font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-700); }
 .proc-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: var(--primary-50); border: 1px solid var(--primary-200); border-radius: 9px; }
 `;
     document.head.appendChild(s);

@@ -104,13 +104,13 @@ function mount() {
         'Пациент не найден. ',
         h('button', { class: 'link-btn', type: 'button', onclick: () => refs.onNavigate('registration') }, 'Создать нового пациента?'),
     );
-    refs.pagerLabel = h('span', { class: 'muted', style: { fontSize: '12px' } }, '');
+    refs.pagerLabel = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
     refs.totalEl = h('span', { class: 'cell-strong' }, '0');
 
     refs.searchInp = h('input', {
         type: 'search',
         autocomplete: 'off',
-        style: { width: '100%', height: '34px', padding: '0 12px 0 34px', borderRadius: '8px', border: '1px solid var(--ink-200)', fontSize: '13px' },
+        style: { width: '100%', height: '34px', padding: '0 12px 0 34px', borderRadius: '8px', border: '1px solid var(--ink-200)', fontSize: '13.5px' },
         placeholder: 'Поиск пациента по ФИО, ID или номеру телефона…',
     });
     let searchTimer = null;
@@ -130,7 +130,7 @@ function mount() {
     refs.dobInp = h('input', {
         type: 'date',
         title: 'Поиск по дате рождения',
-        style: { height: '34px', padding: '0 10px', borderRadius: '8px', border: '1px solid var(--ink-200)', fontSize: '13px', fontFamily: 'inherit', color: 'var(--ink-700)' },
+        style: { height: '34px', padding: '0 10px', borderRadius: '8px', border: '1px solid var(--ink-200)', fontSize: '13.5px', fontFamily: 'inherit', color: 'var(--ink-700)' },
     });
     refs.dobInp.addEventListener('change', () => {
         state.dob = refs.dobInp.value;
@@ -186,7 +186,7 @@ function mount() {
     refs.mergeCount = mergeCount;
     const mergeBar = h('div', { class: 'dup-merge-bar', style: {
         display: 'none', alignItems: 'center', gap: '12px', padding: '10px 20px',
-        background: 'var(--warn-50, #fffbeb)', borderBottom: '1px solid var(--warn-200, #fde68a)', fontSize: '13px' } },
+        background: 'var(--warn-50, #fffbeb)', borderBottom: '1px solid var(--warn-200, #fde68a)', fontSize: '13.5px' } },
         Icon('Warning', { size: 15 }),
         h('span', null, 'Выбрано дубликатов: ', mergeCount),
         h('span', { class: 'grow' }),
@@ -211,7 +211,7 @@ function mount() {
                     sortSegmented,
                 ),
                 h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
-                    h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Всего ', refs.totalEl),
+                    h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Всего ', refs.totalEl),
                     dupChip, calcBtn,
                     createBtn,
                 ),
@@ -290,7 +290,7 @@ function filterCard(key, m) {
     },
         h('div', { class: 'row', style: { gap: '8px' } },
             h('span', { class: 'flt-icon', style: { color: m.color } }, Icon(m.icon, { size: 16 })),
-            h('span', { style: { fontSize: '12px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.04em', color: m.color } }, m.label),
+            h('span', { style: { fontSize: '12.5px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.04em', color: m.color } }, m.label),
         ),
         countEl,
     );
@@ -436,9 +436,9 @@ function openMergeModal() {
                     h('div', { class: 'cell-strong' },
                         h('span', { class: 'num', style: { color: 'var(--ink-400)', marginRight: '6px' } }, p.mrn || '—'),
                         nameOf(p)),
-                    h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                         (p.dob || '—') + ' · ' + (p.phone || '—') + ' · ' + trf('визитов: {n}', { n: p.visitCount || 0 }))),
-                on ? h('span', { class: 'tag tag-ok', style: { marginLeft: 'auto', fontSize: '10px' } }, 'Оставить') : null,
+                on ? h('span', { class: 'tag tag-ok', style: { marginLeft: 'auto', fontSize: '12.5px' } }, 'Оставить') : null,
             ));
         }
     };
@@ -516,10 +516,10 @@ function patientRow(p) {
                     h('div', { class: 'cell-strong' },
                         h('span', { class: 'num', style: { color: 'var(--ink-400)', marginRight: '6px' } }, p.mrn || '—'),
                         `${p.lastName} ${p.firstName} ${p.middle || ''}`.trim(),
-                        duplicateIdSet.has(p.id) ? h('span', { class: 'tag tag-warn', style: { marginLeft: '8px', fontSize: '10px' }, title: 'Возможный дубликат — то же имя на том же телефоне (или общий ПИНФЛ). Откройте карточку для объединения.' }, 'Дубликат') : null,
+                        duplicateIdSet.has(p.id) ? h('span', { class: 'tag tag-warn', style: { marginLeft: '8px', fontSize: '12.5px' }, title: 'Возможный дубликат — то же имя на том же телефоне (или общий ПИНФЛ). Откройте карточку для объединения.' }, 'Дубликат') : null,
                     ),
                     p.city
-                        ? h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '1px' } }, p.city)
+                        ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '1px' } }, p.city)
                         : null,
                 ),
             ),
@@ -527,7 +527,7 @@ function patientRow(p) {
         // 2 — Дата рожд. / возраст
         h('td', null,
             h('div', { class: 'num', style: { fontSize: '12.5px' } }, p.dob || '—'),
-            h('div', { class: 'muted', style: { fontSize: '11.5px' } }, p.age != null ? trf('{n} лет', { n: p.age }) : '—'),
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, p.age != null ? trf('{n} лет', { n: p.age }) : '—'),
         ),
         // 3 — Пол
         h('td', { style: { textAlign: 'center' } },

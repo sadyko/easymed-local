@@ -124,7 +124,7 @@ function summary() {
 // ---- rendering ------------------------------------------------------------
 function selectEl(options, value, onchange) {
     const el = h('select', {
-        style: { height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13px', background: 'var(--surface, #fff)' },
+        style: { height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', background: 'var(--surface, #fff)' },
         onchange,
     }, ...options.map(([v, l]) => h('option', { value: v }, l)));
     el.value = value;
@@ -134,8 +134,8 @@ function selectEl(options, value, onchange) {
 function statCard(icon, label, big, sub, color) {
     return h('div', { class: 'card', style: { padding: '16px 18px', flex: '1 1 200px', minWidth: '180px', display: 'flex', flexDirection: 'column', gap: '5px' } },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '7px', color: 'var(--ink-500)', fontSize: '12.5px', fontWeight: '600' } }, Icon(icon, { size: 15 }), label),
-        h('div', { style: { fontSize: '21px', fontWeight: '700', color: color || 'var(--ink-900)' } }, big),
-        sub ? h('div', { class: 'muted', style: { fontSize: '12px' } }, sub) : null,
+        h('div', { style: { fontSize: '20px', fontWeight: '700', color: color || 'var(--ink-900)' } }, big),
+        sub ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, sub) : null,
     );
 }
 
@@ -144,7 +144,7 @@ function typeBadge(kind, qty) {
     let label = 'Корректировка', bg = 'var(--ink-100, #eef1f4)', fg = 'var(--ink-600, #55606b)';
     if (kind === 'receipt' || (kind === 'adjustment' && q >= 0)) { label = 'Приход'; bg = 'var(--ok-50, #e9f7ef)'; fg = 'var(--ok-700, #1a7f4b)'; }
     else if (kind === 'issue' || (kind === 'adjustment' && q < 0)) { label = 'Расход'; bg = 'var(--crit-50, #fdecec)'; fg = 'var(--crit-700, #c0392b)'; }
-    return h('span', { style: { display: 'inline-block', padding: '1px 9px', borderRadius: '999px', background: bg, color: fg, fontSize: '11px', fontWeight: '700' } }, label);
+    return h('span', { style: { display: 'inline-block', padding: '1px 9px', borderRadius: '999px', background: bg, color: fg, fontSize: '12.5px', fontWeight: '700' } }, label);
 }
 
 function rowSum(m) {
@@ -156,13 +156,13 @@ function rowSum(m) {
 function movementsTable() {
     if (!state.movements.length) {
         return h('div', { class: 'card', style: { padding: '34px', textAlign: 'center' } },
-            h('div', { class: 'muted', style: { fontSize: '13px' } }, 'Нет движений за выбранный период. Нажмите «Добавить приход», чтобы записать поступление.'));
+            h('div', { class: 'muted', style: { fontSize: '13.5px' } }, 'Нет движений за выбранный период. Нажмите «Добавить приход», чтобы записать поступление.'));
     }
     const body = h('tbody', null, ...state.movements.map(m => {
         const q = Number(m.qty) || 0;
         const isIn = m.kind === 'receipt' || (m.kind === 'adjustment' && q >= 0);
         return h('tr', null,
-            h('td', { class: 'muted', style: { fontSize: '12px', whiteSpace: 'nowrap' } }, fmtDateTime(m.created_at)),
+            h('td', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, fmtDateTime(m.created_at)),
             h('td', { class: 'cell-strong' }, itemName(m.item_id)),
             h('td', null, typeBadge(m.kind, q)),
             h('td', { class: 'num', style: { color: isIn ? 'var(--ok-700, #1a7f4b)' : 'var(--crit-700, #c0392b)', fontWeight: '600' } },
@@ -206,7 +206,7 @@ function addForm() {
         h('div', { style: { fontWeight: '600', fontSize: '13.5px', display: 'flex', alignItems: 'center', gap: '7px' } }, Icon('ArrowDown', { size: 15 }), 'Новый приход (поступление на склад)'),
         h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' } },
             nameInput, unitInput, costInput, qtyInput, branchSel),
-        h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+        h('div', { class: 'muted', style: { fontSize: '12.5px' } },
             'Если такого товара ещё нет — он будет создан автоматически. Стоимость считается по цене поступления.'),
         h('div', { style: { display: 'flex', gap: '8px' } },
             saveBtn,
@@ -215,7 +215,7 @@ function addForm() {
 }
 function inpStyle(minW) {
     return { flex: minW ? '0 0 auto' : '1 1 220px', minWidth: minW || '220px', height: '36px', padding: '0 12px',
-             border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13px' };
+             border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px' };
 }
 
 async function onSaveReceipt(e, f) {

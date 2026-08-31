@@ -63,16 +63,16 @@ export async function renderPharmacy(container, { onNavigate } = {}) {
         const total = state.items.length;
         const lowN = state.items.filter(i => onHandFor(i.id).low).length;
         const kpi = (label, value, tone) => h('div', { class: 'card', style: { flex: 1, padding: '14px 16px' } },
-            h('div', { class: 'muted', style: { fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '.05em' } }, label),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '.05em' } }, label),
             h('div', { style: { fontSize: '24px', fontWeight: 800, color: tone || 'var(--ink-900)' } }, value));
         body.appendChild(h('div', { class: 'row', style: { gap: '14px', marginBottom: '14px' } },
             kpi('Препаратов', String(total)),
             kpi('Заканчиваются', String(lowN), lowN ? 'var(--warn-700, #b45309)' : 'var(--ink-900)')));
 
         const search = h('input', { placeholder: 'Поиск по названию…', value: state.search,
-            style: { height: '34px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13px', minWidth: '240px', fontFamily: 'inherit' },
+            style: { height: '34px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', minWidth: '240px', fontFamily: 'inherit' },
             oninput: (e) => { state.search = e.target.value; renderTable(); } });
-        const branchSel = state.branches.length > 1 ? h('select', { style: { height: '34px', padding: '0 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '13px' },
+        const branchSel = state.branches.length > 1 ? h('select', { style: { height: '34px', padding: '0 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '13.5px' },
             onchange: (e) => { state.branchId = e.target.value; renderTable(); } },
             h('option', { value: '' }, 'Все филиалы'),
             ...state.branches.map(b => h('option', { value: b.id, selected: state.branchId === b.id }, b.name))) : null;
@@ -101,7 +101,7 @@ export async function renderPharmacy(container, { onNavigate } = {}) {
             for (const i of list) {
                 const { qty, reorder, low } = onHandFor(i.id);
                 tb.appendChild(h('tr', null,
-                    h('td', { style: { fontWeight: 500 } }, i.name, !i.active ? h('span', { class: 'tag', style: { marginLeft: '6px', fontSize: '10px' } }, 'выкл') : null),
+                    h('td', { style: { fontWeight: 500 } }, i.name, !i.active ? h('span', { class: 'tag', style: { marginLeft: '6px', fontSize: '12.5px' } }, 'выкл') : null),
                     h('td', { class: 'muted', style: { fontSize: '12.5px' } }, [i.form, i.strength].filter(Boolean).join(' · ') || '—'),
                     h('td', { class: 'muted' }, i.unit || '—'),
                     h('td', { class: 'num' }, fmt(i.price), ' сум'),
@@ -148,13 +148,13 @@ export async function renderPharmacy(container, { onNavigate } = {}) {
         const tb = h('tbody');
         for (const r of rows) {
             tb.appendChild(h('tr', null,
-                h('td', { class: 'muted', style: { fontSize: '12px', whiteSpace: 'nowrap' } }, fmtDateTime(r.when)),
+                h('td', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, fmtDateTime(r.when)),
                 h('td', null, h('span', { class: r.kind === 'Стационар' ? 'tag tag-purple' : 'tag tag-info' }, r.kind)),
                 h('td', { style: { fontWeight: 500 } }, r.item),
                 h('td', { class: 'num muted' }, r.qty || ''),
                 h('td', { class: 'muted' }, r.patient),
-                h('td', { class: 'muted', style: { fontSize: '12px' } }, r.by),
-                h('td', { class: 'muted', style: { fontSize: '12px' } }, r.note)));
+                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, r.by),
+                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, r.note)));
         }
         body.appendChild(h('table', { class: 'tbl', style: { width: '100%' } },
             h('thead', null, h('tr', null,

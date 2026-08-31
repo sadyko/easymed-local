@@ -598,7 +598,7 @@ function escapeAttr(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':
 .ts-controls .topbar-lang button {
     border: none; background: transparent;
     padding: 4px 10px;
-    font-family: inherit; font-size: 11.5px; font-weight: 700; letter-spacing: 0.02em;
+    font-family: inherit; font-size: 12.5px; font-weight: 700; letter-spacing: 0.02em;
     color: var(--ts-ink-muted);
     border-radius: 6px;
     cursor: pointer;
@@ -610,7 +610,7 @@ function escapeAttr(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':
     box-shadow: 0 1px 4px var(--ts-brand-glow);
 }
 .ts-controls #supabase-status {
-    font-size: 11.5px; font-weight: 600; color: var(--ts-ink-muted);
+    font-size: 12.5px; font-weight: 600; color: var(--ts-ink-muted);
     display: inline-flex; align-items: center; gap: 6px;
     white-space: nowrap;
 }
@@ -635,7 +635,7 @@ function escapeAttr(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':
     border: 1px solid transparent;
     border-bottom: none;
     border-radius: 10px 10px 0 0;
-    font-size: 13px; font-weight: 600; letter-spacing: -0.005em;
+    font-size: 13.5px; font-weight: 600; letter-spacing: -0.005em;
     cursor: pointer; user-select: none;
     max-width: 240px; min-width: 110px; flex-shrink: 0;
     transition:
@@ -838,9 +838,9 @@ function comingSoonOverlay() {
                     width: '60px', height: '60px', borderRadius: '50%', marginBottom: '16px',
                     background: 'var(--teal-50, #ecfeff)', color: 'var(--teal-600, #0e7490)',
                 } }, Icon('Clock', { size: 30 })),
-            h('div', { style: { fontWeight: '600', fontSize: '18px', color: 'var(--ink-900)', marginBottom: '14px' } },
+            h('div', { style: { fontWeight: '600', fontSize: '17px', color: 'var(--ink-900)', marginBottom: '14px' } },
                 'Скоро · Tez orada · Coming soon'),
-            h('div', { style: { color: 'var(--ink-600)', fontSize: '14px', lineHeight: '1.7' } },
+            h('div', { style: { color: 'var(--ink-600)', fontSize: '13.5px', lineHeight: '1.7' } },
                 h('div', null, 'Этот раздел скоро будет доступен.'),
                 h('div', null, 'Bu bo‘lim tez orada ishga tushadi.'),
                 h('div', null, 'This section will be available soon.'))));
@@ -1003,8 +1003,8 @@ function accessDenied() {
     return h('div', { class: 'error-state', style: { textAlign: 'center', padding: '48px 24px' } },
         h('div', { style: { color: 'var(--crit-700)', display: 'flex', justifyContent: 'center', marginBottom: '10px' } },
             Icon('Warning', { size: 28 })),
-        h('div', { style: { fontSize: '16px', fontWeight: 700, color: 'var(--ink-900)' } }, 'No access'),
-        h('div', { class: 'muted', style: { marginTop: '4px', fontSize: '13px' } },
+        h('div', { style: { fontSize: '17px', fontWeight: 700, color: 'var(--ink-900)' } }, 'No access'),
+        h('div', { class: 'muted', style: { marginTop: '4px', fontSize: '13.5px' } },
             role ? `The “${role}” role doesn’t have access to this section.` : 'You don’t have access to this section.'),
         h('button', { class: 'btn btn-outline', style: { marginTop: '16px' }, onclick: () => navigate(firstAllowedView()) },
             'Go to my home page'),
@@ -1482,7 +1482,7 @@ function renderSettingsIndex(container) {
                 }, Icon(meta.icon, { size: 17 })),
                 h('div', { style: { flex: 1, minWidth: 0 } },
                     h('div', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } }, name),
-                    h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '1px' } },
+                    h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '1px' } },
                         `${count} section${count === 1 ? '' : 's'}`),
                 ),
             ),
@@ -1607,8 +1607,8 @@ function renderSettingsIndex(container) {
                 },
             }, Icon(iconName, { size: 15 })),
             h('div', { style: { flex: 1, minWidth: 0 } },
-                h('div', { style: { fontSize: '13px', fontWeight: 600, color: 'var(--ink-900)' } }, label),
-                desc && h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '1px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, desc),
+                h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } }, label),
+                desc && h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '1px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, desc),
             ),
             h('span', { style: { color: 'var(--ink-300)', flex: '0 0 14px', display: 'flex' } },
                 Icon('ChevronRight', { size: 14 })),
@@ -1741,7 +1741,7 @@ function renderAccountControls() {
             style: {
                 width: '100%', height: '32px', padding: '0 8px',
                 border: '1px solid var(--ink-200)', borderRadius: '8px',
-                fontSize: '12px', fontFamily: 'inherit', background: 'white',
+                fontSize: '12.5px', fontFamily: 'inherit', background: 'white',
                 color: 'var(--ink-800)', cursor: 'pointer',
             },
             onchange: (e) => applyPreview(e.target.value || null),
@@ -1750,7 +1750,7 @@ function renderAccountControls() {
             ...rolesCache.map(r => h('option', { value: r.id, selected: saved === r.id }, r.name || 'Role')),
         );
         wrap.appendChild(h('div', null,
-            h('div', { style: { fontSize: '10px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '4px' } }, 'View as role'),
+            h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '4px' } }, 'View as role'),
             select,
         ));
         if (saved) applyPreview(saved, { persist: false });
@@ -1930,7 +1930,7 @@ function showLogin() {
     });
     const btn = h('button', {
         type: 'submit', class: 'btn btn-primary',
-        style: { width: '100%', justifyContent: 'center', height: '40px', fontSize: '14px' },
+        style: { width: '100%', justifyContent: 'center', height: '40px', fontSize: '13.5px' },
     }, 'Sign in');
 
     const submit = async () => {
@@ -1970,12 +1970,12 @@ function showLogin() {
     const createAcctBtn = h('button', {
         type: 'button',
         class: 'btn btn-outline',
-        style: { width: '100%', justifyContent: 'center', height: '38px', fontSize: '13px' },
+        style: { width: '100%', justifyContent: 'center', height: '38px', fontSize: '13.5px' },
         onclick: () => showSignup(),
     }, 'Create an account');
 
     const signupRow = h('div', { style: { width: '100%', display: 'flex', flexDirection: 'column', gap: '8px' } },
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--ink-400)', fontSize: '11.5px' } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--ink-400)', fontSize: '12.5px' } },
             h('div', { style: { flex: '1', height: '1px', background: 'var(--ink-100)' } }),
             h('span', null, "Don't have an account?"),
             h('div', { style: { flex: '1', height: '1px', background: 'var(--ink-100)' } }),
@@ -2000,7 +2000,7 @@ function showLogin() {
             html: '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="26" height="26"><path d="M4 12 L8 12 L10 6 L12 18 L14 9 L16 12 L20 12"/></svg>',
         }),
         h('div', { style: { textAlign: 'center' } },
-            h('div', { style: { fontSize: '18px', fontWeight: 700, color: 'var(--ink-900)' } }, 'Easy-Med'),
+            h('div', { style: { fontSize: '17px', fontWeight: 700, color: 'var(--ink-900)' } }, 'Easy-Med'),
             h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', marginTop: '2px' } }, 'Sign in to continue'),
         ),
         form,
@@ -2024,7 +2024,7 @@ function loginInputStyle() {
     return {
         width: '100%', height: '40px', padding: '0 12px',
         border: '1px solid var(--ink-200)', borderRadius: '9px',
-        fontSize: '14px', fontFamily: 'inherit', outline: 'none',
+        fontSize: '13.5px', fontFamily: 'inherit', outline: 'none',
         boxSizing: 'border-box',
     };
 }
@@ -2065,12 +2065,12 @@ function showSignup() {
 
     const btn = h('button', {
         type: 'submit', class: 'btn btn-primary',
-        style: { width: '100%', justifyContent: 'center', height: '40px', fontSize: '14px' },
+        style: { width: '100%', justifyContent: 'center', height: '40px', fontSize: '13.5px' },
     }, 'Request access');
 
     const backBtn = h('button', {
         type: 'button', class: 'btn btn-outline',
-        style: { width: '100%', justifyContent: 'center', height: '38px', fontSize: '13px' },
+        style: { width: '100%', justifyContent: 'center', height: '38px', fontSize: '13.5px' },
         onclick: () => showLogin(),
     }, 'Back to sign in');
 
@@ -2138,7 +2138,7 @@ function showSignup() {
             html: '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="26" height="26"><path d="M4 12 L8 12 L10 6 L12 18 L14 9 L16 12 L20 12"/></svg>',
         }),
         h('div', { style: { textAlign: 'center' } },
-            h('div', { style: { fontSize: '18px', fontWeight: 700, color: 'var(--ink-900)' } },
+            h('div', { style: { fontSize: '17px', fontWeight: 700, color: 'var(--ink-900)' } },
                 window.CLINIC?.name || 'Easy-Med'),
             h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', marginTop: '2px', lineHeight: '1.45' } },
                 'For staff joining ',
@@ -2210,7 +2210,7 @@ function showCreateClinicOnly() {
             html: '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="28" height="28"><path d="M4 12 L8 12 L10 6 L12 18 L14 9 L16 12 L20 12"/></svg>',
         }),
         h('div', null,
-            h('div', { style: { fontSize: '22px', fontWeight: 800, color: 'var(--ink-900)', letterSpacing: '-0.01em' } }, 'Open your clinic'),
+            h('div', { style: { fontSize: '24px', fontWeight: 800, color: 'var(--ink-900)', letterSpacing: '-0.01em' } }, 'Open your clinic'),
             h('div', { style: { fontSize: '13.5px', color: 'var(--ink-500)', marginTop: '8px', lineHeight: '1.5' } },
                 'Pick a name, get your own subdomain at ',
                 h('strong', null, '<your-clinic>.easymed.uz'),
@@ -2229,10 +2229,10 @@ function showCreateClinicOnly() {
         }, 'Create my clinic →'),
         h('button', {
             type: 'button', class: 'btn btn-outline',
-            style: { width: '100%', justifyContent: 'center', height: '40px', fontSize: '13px' },
+            style: { width: '100%', justifyContent: 'center', height: '40px', fontSize: '13.5px' },
             onclick: () => showLogin(),
         }, 'Back to sign in'),
-        h('div', { style: { fontSize: '12px', color: 'var(--ink-500)', marginTop: '4px', lineHeight: '1.45' } },
+        h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', marginTop: '4px', lineHeight: '1.45' } },
             'Already on a clinic? Sign in at ',
             h('strong', null, '<your-slug>.easymed.uz'),
             ' instead.'),
@@ -2283,15 +2283,15 @@ function showPendingReview(clinic) {
                 width: '64px', height: '64px', borderRadius: '16px',
                 background: status === 'rejected' ? '#fff0f0' : '#fffbe6',
                 color: status === 'rejected' ? '#c83434' : '#a07810',
-                display: 'grid', placeItems: 'center', fontSize: '28px', fontWeight: '700',
+                display: 'grid', placeItems: 'center', fontSize: '30px', fontWeight: '700',
             },
         }, status === 'rejected' ? '!' : '⏱'),
         h('div', null,
-            h('div', { style: { fontSize: '22px', fontWeight: 800, color: 'var(--ink-900)', letterSpacing: '-0.01em' } }, titleMap[status] || 'Account pending'),
-            h('div', { style: { fontSize: '13px', color: 'var(--ink-500)', marginTop: '10px', lineHeight: '1.6' } }, bodyMap[status] || ''),
+            h('div', { style: { fontSize: '24px', fontWeight: 800, color: 'var(--ink-900)', letterSpacing: '-0.01em' } }, titleMap[status] || 'Account pending'),
+            h('div', { style: { fontSize: '13.5px', color: 'var(--ink-500)', marginTop: '10px', lineHeight: '1.6' } }, bodyMap[status] || ''),
         ),
         clinic.rejection_reason
-            ? h('div', { style: { background: '#fff0f0', color: '#7a1a1a', padding: '12px 14px', borderRadius: '10px', fontSize: '13px', width: '100%', lineHeight: '1.45', textAlign: 'left' } },
+            ? h('div', { style: { background: '#fff0f0', color: '#7a1a1a', padding: '12px 14px', borderRadius: '10px', fontSize: '13.5px', width: '100%', lineHeight: '1.45', textAlign: 'left' } },
                 h('strong', null, 'Reason: '),
                 clinic.rejection_reason,
               )
@@ -2299,11 +2299,11 @@ function showPendingReview(clinic) {
         h('a', {
             href: 'mailto:hello@easymed.uz?subject=' + encodeURIComponent('Clinic verification — ' + (clinic.name || clinic.slug)),
             class: 'btn btn-primary',
-            style: { width: '100%', justifyContent: 'center', height: '44px', fontSize: '14px', textDecoration: 'none', marginTop: '6px' },
+            style: { width: '100%', justifyContent: 'center', height: '44px', fontSize: '13.5px', textDecoration: 'none', marginTop: '6px' },
         }, 'Contact support'),
         h('button', {
             type: 'button', class: 'btn btn-outline',
-            style: { width: '100%', justifyContent: 'center', height: '40px', fontSize: '13px' },
+            style: { width: '100%', justifyContent: 'center', height: '40px', fontSize: '13.5px' },
             onclick: () => { window.location.href = 'https://easymed.uz/'; },
         }, 'Back to easymed.uz'),
     );
@@ -2334,7 +2334,7 @@ function showFirstLoginReset(user) {
     const confirm = h('input', { type: 'password', placeholder: 'Repeat new password',            autocomplete: 'new-password', style: loginInputStyle() });
     const btn = h('button', {
         type: 'submit', class: 'btn btn-primary',
-        style: { width: '100%', justifyContent: 'center', height: '40px', fontSize: '14px' },
+        style: { width: '100%', justifyContent: 'center', height: '40px', fontSize: '13.5px' },
     }, 'Set new password');
 
     const submit = async () => {
@@ -2386,7 +2386,7 @@ function showFirstLoginReset(user) {
             html: '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="26" height="26"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
         }),
         h('div', { style: { textAlign: 'center' } },
-            h('div', { style: { fontSize: '18px', fontWeight: 700, color: 'var(--ink-900)' } }, 'Set your password'),
+            h('div', { style: { fontSize: '17px', fontWeight: 700, color: 'var(--ink-900)' } }, 'Set your password'),
             h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', marginTop: '4px', lineHeight: '1.5' } },
                 'Signed in as ', h('b', null, user.username || user.full_name || ''),
                 '. Replace the temporary password to continue.'),

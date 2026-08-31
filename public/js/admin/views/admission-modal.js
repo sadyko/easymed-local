@@ -52,7 +52,7 @@ export function openAdmissionRegistrarModal({ admissionId, onChange } = {}) {
     overlay.appendChild(card);
 
     const headerEl = h('header', { class: 'modal-head', style: { gap: '12px', flexWrap: 'wrap' } },
-        h('div', { class: 'muted', style: { fontSize: '12px' } }, 'Loading admission…'),
+        h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Loading admission…'),
         h('button', { class: 'modal-close', onclick: () => close() }, '×'),
     );
     card.appendChild(headerEl);
@@ -185,7 +185,7 @@ export function openAdmissionRegistrarModal({ admissionId, onChange } = {}) {
         headerEl.append(
             h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px' } },
                 h('h2', null, 'Inpatient visit · ', a.admission_no || a.id.slice(0, 8)),
-                h('div', { class: 'muted', style: { fontSize: '12px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     [a.wards?.name, a.beds?.code && 'Bed ' + a.beds.code,
                      a.users?.full_name].filter(Boolean).join(' · ')),
             ),
@@ -289,7 +289,7 @@ function banner(a) {
             h('div', { class: 'avatar ' + avColor(a.patient_id || name) }, initials(name)),
             h('div', { style: { minWidth: 0 } },
                 h('div', { class: 'cell-strong', style: { fontSize: '15px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, name),
-                h('div', { class: 'muted', style: { fontSize: '12px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     [p.mrn, age != null ? age + ' y' : null,
                      p.gender === 'male' ? 'M' : p.gender === 'female' ? 'F' : null,
                      p.phone].filter(Boolean).join(' · ')),
@@ -301,7 +301,7 @@ function banner(a) {
 }
 function bannerKv(label, value) {
     return h('div', { style: { minWidth: 0 } },
-        h('div', { class: 'muted', style: { fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } }, label),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 } }, label),
         h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, value || '—'),
     );
 }
@@ -354,10 +354,10 @@ function servicesTab(state, onReload) {
 
     return h('div', null,
         h('div', { class: 'row', style: { marginBottom: '12px', gap: '8px' } },
-            h('h3', { style: { margin: 0, fontSize: '14px', fontWeight: 600, color: 'var(--ink-900)' } },
+            h('h3', { style: { margin: 0, fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } },
                 'Services performed during this stay'),
             h('span', { class: 'grow' }),
-            h('div', { class: 'num', style: { fontWeight: 700, fontSize: '14px', color: 'var(--ink-900)' } },
+            h('div', { class: 'num', style: { fontWeight: 700, fontSize: '13.5px', color: 'var(--ink-900)' } },
                 selected.size > 0
                     ? `${selected.size} selected · ${selectedTotal.toLocaleString('ru-RU')} UZS`
                     : `Total ${rows.reduce((s, r) => s + Number(r.__subtotal || 0), 0).toLocaleString('ru-RU')} UZS`),
@@ -443,7 +443,7 @@ function servicesTab(state, onReload) {
                     h('td', null, r.__billed ? Tag('Billed', { kind: 'info' }) : Tag('Pending', { kind: 'warn' })),
                     h('td', { style: { textAlign: 'right' } },
                         r.__billed
-                            ? h('span', { class: 'muted', style: { fontSize: '11.5px' } }, '🔒 invoiced')
+                            ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '🔒 invoiced')
                             // DISPENSE_ITEM_V1: item lines void via the RPC (returns
                             // stock + deletes the line; RAISEs if already invoiced).
                             : r.__is_item && canDelete('beds')
@@ -596,10 +596,10 @@ function invoiceCard(inv, onReload) {
     const owed  = Math.max(total - paid, 0);
     return h('div', { class: 'card', style: { padding: '16px 18px' } },
         h('div', { class: 'row', style: { gap: '24px', flexWrap: 'wrap' } },
-            kv('Invoice #', h('span', { class: 'cell-mono cell-strong', style: { fontSize: '14px' } }, inv.invoice_number || inv.id.slice(0, 8))),
+            kv('Invoice #', h('span', { class: 'cell-mono cell-strong', style: { fontSize: '13.5px' } }, inv.invoice_number || inv.id.slice(0, 8))),
             kv('Total',    h('span', { class: 'num cell-strong', style: { fontSize: '15px' } }, total.toLocaleString('ru-RU') + ' UZS')),
-            kv('Paid',     h('span', { class: 'num', style: { fontSize: '14px', color: 'var(--ok-700)' } }, paid.toLocaleString('ru-RU') + ' UZS')),
-            kv('Debt',     h('span', { class: 'num cell-strong', style: { fontSize: '14px', color: owed > 0 ? 'var(--crit-700)' : 'var(--ink-500)' } }, owed.toLocaleString('ru-RU') + ' UZS')),
+            kv('Paid',     h('span', { class: 'num', style: { fontSize: '13.5px', color: 'var(--ok-700)' } }, paid.toLocaleString('ru-RU') + ' UZS')),
+            kv('Debt',     h('span', { class: 'num cell-strong', style: { fontSize: '13.5px', color: owed > 0 ? 'var(--crit-700)' : 'var(--ink-500)' } }, owed.toLocaleString('ru-RU') + ' UZS')),
             kv('Status',   StatusTag(inv.status || 'unpaid')),
             kv('Created',  formatDateTime(inv.created_at)),
         ),
@@ -621,7 +621,7 @@ function paymentMethodSelect(pm) {
     const METHODS = [['cash', 'Cash'], ['card', 'Card'], ['online', 'Online / acquiring'], ['insurance', 'Insurance'], ['transfer', 'Bank transfer']];
     return h('select', {
         class: 'input',
-        style: { height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13px', background: '#fff' },
+        style: { height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', background: '#fff' },
         onchange: (e) => { pm.method = e.target.value; },
     }, ...METHODS.map(([v, l]) => h('option', { value: v }, l)));
 }
@@ -694,7 +694,7 @@ function openPartialDialog(inv, owed, onReload) {
             h('button', { class: 'modal-close', onclick: () => overlay.remove() }, '×')),
         h('div', { class: 'modal-body' },
             h('div', { style: { padding: '10px 12px', background: 'var(--ink-25)', borderRadius: '8px', marginBottom: '14px' } },
-                h('div', { class: 'muted', style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, 'Outstanding'),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, 'Outstanding'),
                 h('div', { class: 'num', style: { fontSize: '20px', fontWeight: 700, color: 'var(--crit-700)' } }, owed.toLocaleString('ru-RU') + ' UZS')),
             h('div', { class: 'field' }, h('label', null, 'Amount paid now'), input),
             h('div', { class: 'field' }, h('label', null, 'Payment method'), paymentMethodSelect(pmDlg))),
@@ -726,8 +726,8 @@ function statusTagFor(s) {
 }
 function kv(k, v) {
     return h('div', null,
-        h('div', { class: 'muted', style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, k),
-        h('div', { style: { fontSize: '14px', color: 'var(--ink-900)', marginTop: '2px' } }, v),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, k),
+        h('div', { style: { fontSize: '13.5px', color: 'var(--ink-900)', marginTop: '2px' } }, v),
     );
 }
 function displayName(p) {
@@ -853,7 +853,7 @@ function medsTab(state) {
         } }, Icon('Plus', { size: 13 }), ' Назначение');
         ordersCard.appendChild(h('div', { class: 'card-header' },
             h('h3', null, Icon('Pill', { size: 15 }), ' Назначения врача'),
-            h('span', { class: 'muted', style: { fontSize: '11.5px', marginLeft: 'auto' } }, 'стационарные и из консультаций'),
+            h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: 'auto' } }, 'стационарные и из консультаций'),
             addRxBtn));
         const ob = h('div', { class: 'card-pad', style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
         if (!orders.length) {
@@ -938,12 +938,12 @@ function medsTab(state) {
                 ob.appendChild(h('div', { class: 'row', style: { padding: '10px 12px', background: 'var(--primary-50)', border: '1px solid var(--primary-200)', borderRadius: '9px', gap: '12px', alignItems: 'center' } },
                     Icon('Pill', { size: 15 }),
                     h('div', { style: { flex: 1, minWidth: 0 } },
-                        h('div', { style: { fontWeight: 600, fontSize: '13px' } },
+                        h('div', { style: { fontWeight: 600, fontSize: '13.5px' } },
                             rx.name, rx.dose ? h('span', { class: 'muted', style: { fontWeight: 500 } }, ' · ' + rx.dose) : null,
-                            h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '11px', marginLeft: '8px' } }, rx.srcDate || ''),
-                            rx._by ? h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '11px', marginLeft: '6px' } }, '· ' + rx._by) : null),
-                        rx.freq && h('div', { class: 'muted', style: { fontSize: '11.5px' } }, rx.freq),
-                        rx.nurse && h('div', { style: { fontSize: '12px', color: 'var(--warn-700, #b45309)', marginTop: '2px', fontWeight: 600 } }, trf('Медсестре: {name}', { name: rx.nurse })),
+                            h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '12.5px', marginLeft: '8px' } }, rx.srcDate || ''),
+                            rx._by ? h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '12.5px', marginLeft: '6px' } }, '· ' + rx._by) : null),
+                        rx.freq && h('div', { class: 'muted', style: { fontSize: '12.5px' } }, rx.freq),
+                        rx.nurse && h('div', { style: { fontSize: '12.5px', color: 'var(--warn-700, #b45309)', marginTop: '2px', fontWeight: 600 } }, trf('Медсестре: {name}', { name: rx.nurse })),
                     ),
                     giveBtn, doneBtn, cancelBtn));
             }
@@ -963,10 +963,10 @@ function medsTab(state) {
             for (const m of log) {
                 const t = String(m.administered_at || '').replace('T', ' ').slice(0, 16);
                 lb.appendChild(h('div', { class: 'row', style: { gap: '10px', padding: '7px 10px', borderBottom: '1px solid var(--ink-100)', fontSize: '12.5px', alignItems: 'baseline' } },
-                    h('span', { class: 'muted', style: { flex: '0 0 auto', fontSize: '11.5px' } }, t),
+                    h('span', { class: 'muted', style: { flex: '0 0 auto', fontSize: '12.5px' } }, t),
                     h('span', { style: { fontWeight: 600 } }, m.med_name, m.dose ? ' · ' + m.dose : ''),
-                    m.instructions && h('span', { class: 'muted', style: { fontSize: '11.5px' } }, m.instructions),
-                    h('span', { class: 'muted', style: { marginLeft: 'auto', fontSize: '11.5px' } }, m.administered_by_name || '')));
+                    m.instructions && h('span', { class: 'muted', style: { fontSize: '12.5px' } }, m.instructions),
+                    h('span', { class: 'muted', style: { marginLeft: 'auto', fontSize: '12.5px' } }, m.administered_by_name || '')));
             }
         }
         logCard.appendChild(lb);

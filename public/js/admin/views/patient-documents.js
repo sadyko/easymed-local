@@ -121,7 +121,7 @@ function searchCard() {
         placeholder: 'Пациент: имя, телефон или № карты — или название услуги…',
         style: {
             width: '100%', boxSizing: 'border-box',
-            padding: '10px 14px 10px 38px', fontSize: '14px',
+            padding: '10px 14px 10px 38px', fontSize: '13.5px',
             border: '1px solid var(--ink-200)', borderRadius: '10px',
             background: 'var(--ink-25, #f8fafa)', outline: 'none',
         },
@@ -206,9 +206,9 @@ function paintPeriodRow() {
         return el;
     };
 
-    refs.periodRow.appendChild(h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Период'));
+    refs.periodRow.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Период'));
     refs.periodRow.appendChild(dateInp(feed.from, (v) => { feed.from = v; }));
-    refs.periodRow.appendChild(h('span', { class: 'muted', style: { fontSize: '12px' } }, '—'));
+    refs.periodRow.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '—'));
     refs.periodRow.appendChild(dateInp(feed.to, (v) => { feed.to = v; }));
     refs.periodRow.appendChild(chip(feed.from === today && feed.to === today, 'Сегодня', () => {
         feed.from = ymdLocal(new Date()); feed.to = ymdLocal(new Date());
@@ -269,7 +269,7 @@ function paintResults(rows, resultsEl) {
             },
                 h('div', { style: { flex: 1, minWidth: 0 } },
                     h('div', { class: 'cell-strong' }, p.full_name || '—'),
-                    h('div', { class: 'muted', style: { fontSize: '11.5px' } }, [p.mrn, p.phone].filter(Boolean).join(' · ') || '—'),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [p.mrn, p.phone].filter(Boolean).join(' · ') || '—'),
                 ),
                 h('span', { style: { color: 'var(--ink-400)' } }, Icon('ChevronRight', { size: 14 })),
             ));
@@ -303,7 +303,7 @@ function selectedHeader() {
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 16px' } },
             h('div', { style: { flex: 1, minWidth: 0 } },
                 h('div', { style: { fontWeight: '700', fontSize: '15px' } }, p.full_name || '—'),
-                h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
                     [p.mrn ? ('MRN ' + p.mrn) : null, p.phone || null].filter(Boolean).join(' · ') || '—'),
             ),
             h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: clearPatient }, 'Change'),
@@ -485,7 +485,7 @@ function visitCard(v) {
         h('div', { class: 'card-header' },
             h('h3', null, fmtDateTime(v.visit_date)),
             h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
-                h('span', { class: 'muted', style: { fontSize: '12px' } }, v.visit_type || '—'),
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } }, v.visit_type || '—'),
                 StatusTag(v.status),
             ),
         ),
@@ -796,7 +796,7 @@ function feedRow(r) {
     // результат по телефону, не открывая архив. Отклонения — красным, тем же
     // словарём флагов, что печатный бланк (всё, что не 'normal' и не пусто).
     const answers = (r.results || []).length ? h('div', {
-        style: { fontSize: '11.5px', marginTop: '2px', lineHeight: '1.5' },
+        style: { fontSize: '12.5px', marginTop: '2px', lineHeight: '1.5' },
     }, ...(r.results.map((res, i) => {
         const abnormal = res.flag && res.flag !== 'normal';
         return h('span', { style: { color: abnormal ? 'var(--crit-600, #dc2626)' : 'var(--ink-500)', fontWeight: abnormal ? '600' : '400' } },
@@ -833,11 +833,11 @@ function feedRow(r) {
         h('div', { style: { flex: '1 1 34%', minWidth: '0' } },
             h('div', { style: { fontSize: '13.5px', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
                 r.patient_name || '—'),
-            h('div', { class: 'muted', style: { fontSize: '11.5px' } }, r.mrn || '')),
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, r.mrn || '')),
         h('div', { style: { flex: '1 1 46%', minWidth: '0' } },
-            h('div', { style: { fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+            h('div', { style: { fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
                 r.service_name || '—'),
-            answers || h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+            answers || h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 (DOC_TYPE_RU[r.service_type] || r.service_type || '')
                 + (r.doc_type ? ' · заключение' : ''))),
         h('span', { style: { flex: '0 0 auto' } }, Tag(done ? 'Выдан' : 'Готовится', { kind: done ? 'ok' : 'warn', dot: true })),

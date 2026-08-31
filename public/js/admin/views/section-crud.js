@@ -180,7 +180,7 @@ function paintShell(container, onNavigate) {
                     h('input', {
                         id: 'crud-search',
                         placeholder: tr('Search…'),
-                        style: { height: '34px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13px', minWidth: '240px' },
+                        style: { height: '34px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', minWidth: '240px' },
                         value: state.search,
                         oninput: (e) => { state.search = e.target.value; onFilterChanged(container, onNavigate); },
                     }),
@@ -230,9 +230,9 @@ function paintHeaderStats(container) {
         } },
             h('div', { class: 'row', style: { gap: '8px', color: s.color || 'var(--ink-700)' } },
                 s.icon && Icon(s.icon, { size: 16 }),
-                h('span', { style: { fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' } }, tr(s.label)),
+                h('span', { style: { fontSize: '12.5px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' } }, tr(s.label)),
             ),
-            h('div', { class: 'num', style: { fontSize: '22px', fontWeight: 700, color: 'var(--ink-900)', letterSpacing: '-0.02em' } }, String(value)),
+            h('div', { class: 'num', style: { fontSize: '24px', fontWeight: 700, color: 'var(--ink-900)', letterSpacing: '-0.02em' } }, String(value)),
         ));
     }
     slot.appendChild(grid);
@@ -458,14 +458,14 @@ function paintList(container, onNavigate) {
                             title: 'Clear all column filters',
                             style: {
                                 background: 'transparent', border: 0, padding: 0, cursor: 'pointer',
-                                color: 'var(--crit-700)', fontSize: '14px', lineHeight: '1',
+                                color: 'var(--crit-700)', fontSize: '13.5px', lineHeight: '1',
                             },
                             onclick: () => {
                                 state.columnFilters = {};
                                 onFilterChanged(container, onNavigate);
                             },
                         }, '×')
-                        : h('span', { class: 'muted', style: { fontSize: '11px' } }, '⌕'),
+                        : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '⌕'),
                 ),
                 ...def.columns.map(c => h('th', null, columnFilterInput(c, container, onNavigate))),
                 h('th'),
@@ -476,7 +476,7 @@ function paintList(container, onNavigate) {
             // reset button when filters are the cause) INSIDE the table so the
             // filter row above stays usable in every case.
             h('tr', null, h('td', { colspan: String(def.columns.length + 2), style: { textAlign: 'center', padding: '32px 16px' } },
-                h('div', { class: 'muted', style: { fontSize: '13px', marginBottom: '10px' } },
+                h('div', { class: 'muted', style: { fontSize: '13.5px', marginBottom: '10px' } },
                     state.rows.length
                         ? 'Ни одна строка не соответствует фильтрам.'
                         : (state.sectionKey === 'services'
@@ -515,7 +515,7 @@ function paintList(container, onNavigate) {
                 ...def.columns.map(c => h('td', null, renderCell(row, c))),
                 h('td', { style: { textAlign: 'right' } },
                     h('div', { class: 'row', style: { justifyContent: 'flex-end', gap: '6px', alignItems: 'center' } },
-                        (def.table === 'roles' && row.locked) ? h('span', { title: 'Built-in role - cannot be edited or deleted', style: { fontSize: '11px', color: 'var(--ink-500)', whiteSpace: 'nowrap' } }, 'Built-in') : null,
+                        (def.table === 'roles' && row.locked) ? h('span', { title: 'Built-in role - cannot be edited or deleted', style: { fontSize: '12.5px', color: 'var(--ink-500)', whiteSpace: 'nowrap' } }, 'Built-in') : null,
                         h('button', { class: 'btn btn-outline btn-sm',
                             onclick: () => openEditor(container, onNavigate, row) },
                             mayEdit ? 'Edit' : 'View'),
@@ -600,7 +600,7 @@ function paintBulkBar(container, onNavigate, def) {
         },
     },
         h('span', { style: { color: 'var(--primary-700)' } }, Icon('Check', { size: 14 })),
-        h('span', { style: { fontSize: '13px', color: 'var(--primary-700)', fontWeight: 600 } },
+        h('span', { style: { fontSize: '13.5px', color: 'var(--primary-700)', fontWeight: 600 } },
             String(count) + ' selected'),
         h('button', {
             class: 'btn btn-ghost btn-sm', type: 'button',
@@ -747,7 +747,7 @@ function columnFilterInput(col, container, onNavigate) {
     const baseStyle = {
         width: '100%', height: '28px', padding: '0 8px',
         borderRadius: '6px', border: '1px solid var(--ink-200)',
-        background: 'white', fontSize: '12px', fontFamily: 'inherit',
+        background: 'white', fontSize: '12.5px', fontFamily: 'inherit',
         boxSizing: 'border-box',
     };
 
@@ -1115,7 +1115,7 @@ export function openServiceRequestModal() {
 
     const overlay = h('div', { class: 'modal', style: { zIndex: '160' } });
     const body = h('form', { class: 'modal-body' },
-        h('p', { style: { gridColumn: '1 / -1', margin: '0 0 4px', fontSize: '13px', color: 'var(--ink-500, #667)' } },
+        h('p', { style: { gridColumn: '1 / -1', margin: '0 0 4px', fontSize: '13.5px', color: 'var(--ink-500, #667)' } },
             "New services are added by our team. Tell us what you need and our team will set it up."),
         field('Service name *', nameInput),
         field('Category', catInput),
@@ -1377,7 +1377,7 @@ function renderField(f, values) {
             // (manual mode does NOT fall back to the general table).
             const cur = (v && typeof v === 'object') ? v : {};
             input = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
-                h('div', { class: 'muted', style: { fontSize: '11.5px' } }, 'Загрузка групп услуг…'));
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Загрузка групп услуг…'));
             (async () => {
                 try {
                     const cid = currentClinicId();
@@ -1389,14 +1389,14 @@ function renderField(f, values) {
                     if (!data || !data.length) { input.appendChild(h('div', { class: 'muted' }, 'Нет групп услуг.')); return; }
                     for (const t of data) {
                         input.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' } },
-                            h('span', { style: { fontSize: '13px', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }, t.name),
+                            h('span', { style: { fontSize: '13.5px', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }, t.name),
                             h('span', { style: { flex: 'none' } },
                                 h('input', { type: 'number', min: '0', max: '100', step: '0.1', 'data-rr-type': t.id,
                                     value: cur[t.id] != null ? String(cur[t.id]) : '', placeholder: '0',
                                     style: { width: '86px', textAlign: 'right' } }),
                                 h('span', { class: 'muted', style: { marginLeft: '6px' } }, '%'))));
                     }
-                    input.appendChild(h('div', { class: 'muted', style: { fontSize: '11px' } },
+                    input.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                         'Пусто = 0% для группы. Общие ставки в ручном режиме не подставляются.'));
                 } catch (e) { console.warn('[referral_rates]', e.message); }
             })();
@@ -1486,7 +1486,7 @@ function renderField(f, values) {
                     const cb = h('input', { type: 'checkbox', value: row.id });
                     if (selected.has(row.id)) cb.checked = true;
                     input.appendChild(h('label', {
-                        style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px' },
+                        style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13.5px' },
                     },
                         cb,
                         h('span', null, row[labelCol] || row.full_name || row.name || row.id),
@@ -1512,7 +1512,7 @@ function renderField(f, values) {
                 const cb = h('input', { type: 'checkbox', value: val });
                 if (selected.has(val)) cb.checked = true;
                 input.appendChild(h('label', {
-                    style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px' },
+                    style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13.5px' },
                 },
                     cb,
                     h('span', null, label),
@@ -1596,7 +1596,7 @@ function imageFieldEditor(f, v) {
     const wrap = h('div', { class: 'file-field' });
     wrap.dataset.fileValue = (v != null && v !== '') ? String(v) : '';
     const preview = h('div', { class: 'file-preview', style: { margin: '6px 0' } });
-    const status  = h('span', { class: 'muted small', style: { fontSize: '12px' } }, '');
+    const status  = h('span', { class: 'muted small', style: { fontSize: '12.5px' } }, '');
     const fileInput = h('input', { type: 'file', accept: 'image/*' });
     const clearBtn = h('button', {
         type: 'button', class: 'btn btn-outline', style: { display: v ? '' : 'none', marginLeft: '8px' },
@@ -1636,7 +1636,7 @@ function fileListFieldEditor(f, v) {
     const items = Array.isArray(v) ? v.slice() : [];
     const wrap = h('div', { class: 'file-list-field' });
     const listEl = h('div', { class: 'file-list', style: { display: 'flex', flexDirection: 'column', gap: '6px', margin: '6px 0' } });
-    const status = h('span', { class: 'muted small', style: { fontSize: '12px' } }, '');
+    const status = h('span', { class: 'muted small', style: { fontSize: '12.5px' } }, '');
     function serialize() { wrap.dataset.fileValue = JSON.stringify(items); }
     function rowFor(it, idx) {
         const open = h('button', { type: 'button', class: 'btn btn-outline', onclick: async () => {
@@ -1649,7 +1649,7 @@ function fileListFieldEditor(f, v) {
             serialize(); redraw();
         } }, 'Remove');
         return h('div', { class: 'file-row', style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', border: '1px solid var(--ink-200)', borderRadius: '8px' } },
-            h('span', { style: { flex: 1, fontSize: '13px' } }, it.name || it.path || 'file'), open, del);
+            h('span', { style: { flex: 1, fontSize: '13.5px' } }, it.name || it.path || 'file'), open, del);
     }
     function redraw() {
         listEl.innerHTML = '';
@@ -1723,7 +1723,7 @@ function weeklyHoursEditor(v) {
         const fromInp = timeInput(from, { whFrom: key });
         const toInp   = timeInput(to,   { whTo: key });
         const timeWrap = h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto' } },
-            fromInp, h('span', { style: { color: 'var(--ink-400)', fontSize: '12px' } }, '–'), toInp);
+            fromInp, h('span', { style: { color: 'var(--ink-400)', fontSize: '12.5px' } }, '–'), toInp);
 
         // Lunch break sub-row — indented under the day.
         const lunchCb = h('input', { type: 'checkbox', dataset: { whLunchEnabled: key } });
@@ -1731,12 +1731,12 @@ function weeklyHoursEditor(v) {
         const lunchFromInp = timeInput(lunchFrom, { whLunchFrom: key });
         const lunchToInp   = timeInput(lunchTo,   { whLunchTo: key });
         const lunchTimeWrap = h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto' } },
-            lunchFromInp, h('span', { style: { color: 'var(--ink-400)', fontSize: '12px' } }, '–'), lunchToInp);
+            lunchFromInp, h('span', { style: { color: 'var(--ink-400)', fontSize: '12.5px' } }, '–'), lunchToInp);
         const lunchRow = h('label', {
             style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0 8px 26px', cursor: 'pointer' },
         },
             lunchCb,
-            h('span', { style: { fontSize: '12px', color: 'var(--ink-600)', minWidth: '78px' } }, 'Lunch break'),
+            h('span', { style: { fontSize: '12.5px', color: 'var(--ink-600)', minWidth: '78px' } }, 'Lunch break'),
             lunchTimeWrap,
         );
 
@@ -1760,7 +1760,7 @@ function weeklyHoursEditor(v) {
                 style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '5px 0', cursor: 'pointer' },
             },
                 cb,
-                h('span', { style: { fontSize: '13px', fontWeight: 600, color: 'var(--ink-800)', minWidth: '92px' } }, label),
+                h('span', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-800)', minWidth: '92px' } }, label),
                 timeWrap,
             ),
             lunchRow,
@@ -1775,7 +1775,7 @@ function weeklyHoursEditor(v) {
         style: {
             alignSelf: 'flex-start', marginTop: '6px', background: 'transparent',
             border: 0, padding: 0, cursor: 'pointer', fontFamily: 'inherit',
-            color: 'var(--primary-700)', fontSize: '12px', fontWeight: 600,
+            color: 'var(--primary-700)', fontSize: '12.5px', fontWeight: 600,
         },
         onclick: () => {
             const src = rows.find(r => r.cb.checked) || rows[0];
@@ -1825,7 +1825,7 @@ function doctorServicesEditor(v) {
     } });
 
     if (!services.length) {
-        container.appendChild(h('div', { class: 'muted', style: { fontSize: '13px', padding: '16px' } },
+        container.appendChild(h('div', { class: 'muted', style: { fontSize: '13.5px', padding: '16px' } },
             'No active services found. Add them under Settings → Service list first.'));
         return container;
     }
@@ -1841,7 +1841,7 @@ function doctorServicesEditor(v) {
         style: { width: '60px', height: '30px', border: '1px solid var(--ink-200)', borderRadius: '6px',
                  padding: '0 8px', fontSize: '12.5px', fontFamily: 'inherit', textAlign: 'right' },
     });
-    const pctCell = (input) => h('span', { style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: '5px', color: 'var(--ink-400)', fontSize: '12px' } },
+    const pctCell = (input) => h('span', { style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: '5px', color: 'var(--ink-400)', fontSize: '12.5px' } },
         input, '%');
     // Doctor's fixed price for the service (UZS).
     const priceInput = (val) => h('input', {
@@ -1850,20 +1850,20 @@ function doctorServicesEditor(v) {
         style: { width: '96px', height: '30px', border: '1px solid var(--ink-200)', borderRadius: '6px',
                  padding: '0 8px', fontSize: '12.5px', fontFamily: 'inherit', textAlign: 'right' },
     });
-    const unitLabel = (txt) => h('span', { style: { color: 'var(--ink-400)', fontSize: '12px' } }, txt);
+    const unitLabel = (txt) => h('span', { style: { color: 'var(--ink-400)', fontSize: '12.5px' } }, txt);
     // Compact toggle chips for the branches a service's rate applies at
     // (empty selection = all branches).
     const branchList = dsBranches || [];
     const chipStyle = (on) => ({
         padding: '2px 8px', borderRadius: '999px', cursor: 'pointer', fontFamily: 'inherit',
-        fontSize: '11px', fontWeight: 600, whiteSpace: 'nowrap',
+        fontSize: '12.5px', fontWeight: 600, whiteSpace: 'nowrap',
         border: '1px solid ' + (on ? 'var(--primary-400)' : 'var(--ink-200)'),
         background: on ? 'var(--primary-50)' : 'var(--white)',
         color: on ? 'var(--primary-700)' : 'var(--ink-600)',
     });
     const branchChips = (sid, selected) => {
         const wrap = h('div', { style: { display: 'flex', gap: '4px', flexWrap: 'wrap', justifyContent: 'flex-end' } });
-        if (!branchList.length) { wrap.appendChild(h('span', { class: 'muted', style: { fontSize: '11px' } }, 'All')); return wrap; }
+        if (!branchList.length) { wrap.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'All')); return wrap; }
         const sel = new Set((selected || []).map(String));
         for (const b of branchList) {
             const bid = String(b.id);
@@ -1883,11 +1883,11 @@ function doctorServicesEditor(v) {
     const search = h('input', {
         type: 'text', placeholder: 'Search services…', autocomplete: 'off',
         style: { height: '36px', width: '100%', padding: '0 12px', border: '1px solid var(--ink-200)',
-                 borderRadius: '8px', fontSize: '13px', fontFamily: 'inherit', outline: 'none' },
+                 borderRadius: '8px', fontSize: '13.5px', fontFamily: 'inherit', outline: 'none' },
     });
     const typeSel = h('select', {
         style: { height: '34px', width: '220px', border: '1px solid var(--ink-200)', borderRadius: '8px',
-                 fontSize: '13px', fontFamily: 'inherit', background: 'var(--white)', padding: '0 30px 0 10px' },
+                 fontSize: '13.5px', fontFamily: 'inherit', background: 'var(--white)', padding: '0 30px 0 10px' },
     },
         h('option', { value: '' }, 'All types'),
         ...types.map(t => h('option', { value: String(t.id) }, t.name)),
@@ -1919,7 +1919,7 @@ function doctorServicesEditor(v) {
     // ---- Column header (flex, mirrors the row widths below) ---------------
     container.appendChild(h('div', { style: {
         display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 14px 7px',
-        fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--ink-500)',
+        fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--ink-500)',
     } },
         h('span', { style: { flex: '0 0 16px' } }),
         h('span', { style: { flex: '1 1 auto', minWidth: '0' } }, 'Service'),
@@ -1948,7 +1948,7 @@ function doctorServicesEditor(v) {
             padding: '8px 14px', borderTop: '1px solid var(--ink-100)',
         } },
             cb,
-            h('span', { style: { flex: '1 1 auto', minWidth: '0', fontSize: '13px', color: 'var(--ink-800)',
+            h('span', { style: { flex: '1 1 auto', minWidth: '0', fontSize: '13.5px', color: 'var(--ink-800)',
                 whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }, title: s.name }, s.name),
             h('span', { style: { flex: '0 0 132px', display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: '5px' } }, price, unitLabel('UZS')),
             h('span', { style: { flex: '0 0 80px',  display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: '5px' } }, pct, unitLabel('%')),
@@ -2032,7 +2032,7 @@ function sectionPicker(v) {
         const cb = h('input', { type: 'checkbox' });
         cb.checked = !!checked;
         cb.addEventListener('change', () => onChange(cb));
-        return { cb, el: h('label', { class: 'row', style: { gap: '6px', alignItems: 'center', fontSize: '12px', cursor: 'pointer', userSelect: 'none' } }, cb, label) };
+        return { cb, el: h('label', { class: 'row', style: { gap: '6px', alignItems: 'center', fontSize: '12.5px', cursor: 'pointer', userSelect: 'none' } }, cb, label) };
     }
     function moduleRow(it) {
         const lvl = levelFor(it.key);
@@ -2049,9 +2049,9 @@ function sectionPicker(v) {
             recount();
         }
         const labelEl = it.soon
-            ? h('span', { style: { fontSize: '13px', color: 'var(--ink-500)', display: 'inline-flex', alignItems: 'center', gap: '6px' } }, it.label,
-                h('span', { style: { fontSize: '9.5px', fontWeight: '700', color: 'var(--ink-500)', background: 'var(--ink-100)', borderRadius: '4px', padding: '1px 6px', letterSpacing: '.04em', textTransform: 'uppercase' } }, 'Скоро'))   // ROLE_EDITOR_AVAIL_V1
-            : h('span', { style: { fontSize: '13px', color: 'var(--ink-800)' } }, it.label);
+            ? h('span', { style: { fontSize: '13.5px', color: 'var(--ink-500)', display: 'inline-flex', alignItems: 'center', gap: '6px' } }, it.label,
+                h('span', { style: { fontSize: '12.5px', fontWeight: '700', color: 'var(--ink-500)', background: 'var(--ink-100)', borderRadius: '4px', padding: '1px 6px', letterSpacing: '.04em', textTransform: 'uppercase' } }, 'Скоро'))   // ROLE_EDITOR_AVAIL_V1
+            : h('span', { style: { fontSize: '13.5px', color: 'var(--ink-800)' } }, it.label);
         return h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 96px 96px 104px', alignItems: 'center', gap: '8px', padding: '9px 6px', borderTop: '1px solid var(--ink-100)' } },
             labelEl, read.el, edit.el, del.el);
     }
@@ -2069,7 +2069,7 @@ function sectionPicker(v) {
             if (src === del.cb && del.cb.checked) { edit.cb.checked = true; read.cb.checked = true; }
         }
         return h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 96px 96px 104px', alignItems: 'center', gap: '8px', padding: '9px 6px', borderTop: '1px solid var(--ink-100)' } },
-            h('span', { style: { fontSize: '13px', color: 'var(--ink-800)' } }, it.label), read.el, edit.el, del.el);
+            h('span', { style: { fontSize: '13.5px', color: 'var(--ink-800)' } }, it.label), read.el, edit.el, del.el);
     }
     function select(gi) {
         for (const b of rail.querySelectorAll('[data-rail-idx]')) b.classList.toggle('active', b.dataset.railIdx === String(gi));
@@ -2089,9 +2089,9 @@ function sectionPicker(v) {
         rail.appendChild(h('button', { type: 'button', class: 'nav-item' + (gi === 0 ? ' active' : ''), dataset: { railIdx: String(gi) },
             style: { width: '100%', textAlign: 'left', fontSize: '12.5px' }, onclick: () => select(gi) },
             h('span', { style: { flex: 1 } }, g.group),
-            h('span', { dataset: { railCount: String(gi) }, class: 'num', style: { fontSize: '10px', color: 'var(--primary-700)', background: 'var(--primary-50)', borderRadius: '999px', padding: '1px 7px' } })));
+            h('span', { dataset: { railCount: String(gi) }, class: 'num', style: { fontSize: '12.5px', color: 'var(--primary-700)', background: 'var(--primary-50)', borderRadius: '999px', padding: '1px 7px' } })));
         panesWrap.appendChild(h('div', { dataset: { paneIdx: String(gi) }, style: { display: gi === 0 ? 'block' : 'none' } },
-            h('div', { style: { fontSize: '11.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-600)', padding: '2px 0 6px' } }, g.group),
+            h('div', { style: { fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-600)', padding: '2px 0 6px' } }, g.group),
             ...g.items.map(it => g.patientTabs ? tabRow(it) : moduleRow(it))));
     });
     setTimeout(recount, 0);
@@ -2410,19 +2410,19 @@ function serviceDoctorsEditor(values) {
     function renderList() {
         listEl.replaceChildren();
         const src = docChk.checked ? doctors : others;
-        if (!sid) listEl.appendChild(h('div', { class: 'muted', style: { fontSize: '11.5px', marginBottom: '2px' } }, 'Сначала сохраните услугу, затем откройте её снова, чтобы отметить исполнителей.'));
+        if (!sid) listEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '2px' } }, 'Сначала сохраните услугу, затем откройте её снова, чтобы отметить исполнителей.'));
         if (!src.length) { listEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, docChk.checked ? 'Нет врачей.' : 'Нет других сотрудников.')); return; }
         for (const d of src) {
             const cb = h('input', { type: 'checkbox', 'data-sd-doctor': d.id });
             if (svcHas(d)) cb.checked = true;
             const sub = docChk.checked ? (d.specialty || '') : (d.role || '');
-            listEl.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer' } },
-                cb, h('span', null, d.full_name || '—'), sub ? h('span', { class: 'muted', style: { fontSize: '11.5px' } }, '· ' + sub) : null));
+            listEl.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13.5px', cursor: 'pointer' } },
+                cb, h('span', null, d.full_name || '—'), sub ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '· ' + sub) : null));
         }
     }
     docChk.onchange = renderList;
-    wrap.appendChild(h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer' } },
-        docChk, h('span', null, 'Врач'), h('span', { class: 'muted', style: { fontSize: '11.5px' } }, '(снимите — медсёстры и другие сотрудники)')));
+    wrap.appendChild(h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13.5px', cursor: 'pointer' } },
+        docChk, h('span', null, 'Врач'), h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '(снимите — медсёстры и другие сотрудники)')));
     wrap.appendChild(listEl);
     renderList();
     return wrap;
@@ -2506,13 +2506,13 @@ async function openAddServiceModal(container, onNavigate) {
         const wrap = h('div', { dataset: { svc: row.id }, style: { borderBottom: '1px solid var(--ink-100)' } });
         let card = null, open = false;
         const title = h('div', { style: { flex: 1, minWidth: 0 } },
-            h('div', { style: { fontWeight: 500, fontSize: '13px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, row.name_ru || row.slug),
-            sub && h('div', { class: 'muted', style: { fontSize: '11.5px' } }, sub));
+            h('div', { style: { fontWeight: 500, fontSize: '13.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, row.name_ru || row.slug),
+            sub && h('div', { class: 'muted', style: { fontSize: '12.5px' } }, sub));
         const actionWrap = h('span', { style: { flex: '0 0 auto' } });
         const header = h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px' } }, title, actionWrap);
         function setAdded() {
             wrap.style.opacity = '0.55';
-            clear(actionWrap); actionWrap.appendChild(h('span', { class: 'muted', style: { fontSize: '12px' } }, '✓ Добавлена'));
+            clear(actionWrap); actionWrap.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '✓ Добавлена'));
             if (card) { card.remove(); card = null; open = false; }
         }
         if (existingCores.has(row.id)) { wrap.appendChild(header); setAdded(); return wrap; }
@@ -2550,7 +2550,7 @@ async function openAddServiceModal(container, onNavigate) {
         renderDocBox();
         const docField = h('div', { style: { display: 'none', marginTop: '10px' } },
             fld('Доля исполнителя по умолчанию, %', pctInp),
-            h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13px', padding: '4px 0 8px', cursor: 'pointer' } }, docChk, h('span', null, 'Врач'), h('span', { class: 'muted', style: { fontSize: '11.5px' } }, '(снимите — другие сотрудники)')),
+            h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13.5px', padding: '4px 0 8px', cursor: 'pointer' } }, docChk, h('span', null, 'Врач'), h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '(снимите — другие сотрудники)')),
             fld('Исполнители', docBox));
         reqDoc.onchange = () => { docField.style.display = reqDoc.checked ? '' : 'none'; };
         const addBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button' }, Icon('Check', { size: 14 }), ' Добавить услугу');
@@ -2582,7 +2582,7 @@ async function openAddServiceModal(container, onNavigate) {
         };
         return h('div', { style: { padding: '4px 12px 14px', background: 'var(--ink-25)', borderTop: '1px dashed var(--ink-200)' } },
             h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' } }, fld('Цена (сум)', priceInp), fld('НДС (%)', vatInp), fld('Длительность (мин)', durInp)),
-            h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13px', padding: '10px 0 0' } }, reqDoc, ' Услугу оказывает специалист (врач / медсестра)'),
+            h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13.5px', padding: '10px 0 0' } }, reqDoc, ' Услугу оказывает специалист (врач / медсестра)'),
             docField,
             h('div', { style: { textAlign: 'right', marginTop: '10px' } }, addBtn));
     }
@@ -2602,7 +2602,7 @@ async function openAddServiceModal(container, onNavigate) {
             clear(listBox);
             if (!rows.length) { listBox.appendChild(h('div', { class: 'muted', style: { padding: '12px' } }, 'Ничего не найдено. Если услуги нет в каталоге — запросите её (ссылка внизу).')); return; }
             const addedN = rows.filter(r => existingCores.has(r.id)).length;
-            listBox.appendChild(h('div', { class: 'muted', style: { padding: '8px 12px', fontSize: '11.5px', borderBottom: '1px solid var(--ink-100)' } }, trf('{n} услуг · {added} уже добавлено', { n: rows.length, added: addedN })));
+            listBox.appendChild(h('div', { class: 'muted', style: { padding: '8px 12px', fontSize: '12.5px', borderBottom: '1px solid var(--ink-100)' } }, trf('{n} услуг · {added} уже добавлено', { n: rows.length, added: addedN })));
             for (const row of rows) listBox.appendChild(renderRow(row));
         } catch (e) {
             clear(listBox);

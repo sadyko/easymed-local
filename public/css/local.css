@@ -54,10 +54,10 @@ body {
   background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 32px; width: 100%; max-width: 380px; box-shadow: 0 10px 30px rgba(2, 6, 23, .08);
 }
-.brand { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
+.brand { font-size: 24px; font-weight: 700; margin: 0 0 4px; }
 .brand span { color: var(--primary); }
 .sub { color: var(--muted); margin: 0 0 24px; }
-label { display: block; font-weight: 600; font-size: 13px; margin: 14px 0 4px; }
+label { display: block; font-weight: 600; font-size: 13.5px; margin: 14px 0 4px; }
 input, select {
   width: 100%; padding: 9px 11px; border: 1px solid var(--border);
   border-radius: 8px; font: inherit; background: #fff;
@@ -70,18 +70,18 @@ button {
 button:hover { background: var(--primary-dark); }
 button:disabled { opacity: .6; cursor: default; }
 button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
-.error { color: var(--danger); min-height: 20px; margin: 10px 0 0; font-size: 14px; }
+.error { color: var(--danger); min-height: 20px; margin: 10px 0 0; font-size: 13.5px; }
 .full { width: 100%; margin-top: 20px; }
 
 /* management pages */
 .page { max-width: 900px; margin: 0 auto; padding: 24px 16px; }
 .topbar { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
-.topbar .brand { font-size: 18px; margin: 0; flex: 1; }
-.topbar .who { color: var(--muted); font-size: 14px; }
+.topbar .brand { font-size: 17px; margin: 0; flex: 1; }
+.topbar .who { color: var(--muted); font-size: 13.5px; }
 table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
-th { background: #f8fafc; font-size: 13px; color: var(--muted); }
+th { background: #f8fafc; font-size: 13.5px; color: var(--muted); }
 tr.inactive td { opacity: .5; }
 .panel { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-top: 24px; }
-.panel h2 { margin: 0 0 12px; font-size: 16px; }
+.panel h2 { margin: 0 0 12px; font-size: 17px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 16px; }

@@ -257,7 +257,7 @@ function openShiftCard(root) {
     const card = h('div', { class: 'card', style: { padding: '26px', textAlign: 'center' } },
         h('div', { style: { color: 'var(--ink-400)', marginBottom: '8px' } }, Icon('Wallet', { size: 32 })),
         h('h3', { style: { margin: '0 0 4px' } }, 'Смена не открыта'),
-        h('p', { class: 'muted', style: { fontSize: '13px', margin: '0 0 16px' } },
+        h('p', { class: 'muted', style: { fontSize: '13.5px', margin: '0 0 16px' } },
             'Откройте смену, чтобы принимать оплаты. Укажите наличные, которые уже лежат в кассе, как начальный остаток.'),
     );
     card.appendChild(h('button', { class: 'btn btn-primary', type: 'button', onclick: () => openShiftModal(root) },
@@ -319,12 +319,12 @@ function shiftBanner(root, summary) {
         h('div', { style: { minWidth: 0 } },
             h('div', { style: { color: '#fff', fontWeight: 700, fontSize: '15px' } },
                 (summary.cashier_name || 'Кассир') + (summary.branch_name ? ' · ' + summary.branch_name : '')),
-            h('div', { style: { color: 'rgba(255,255,255,0.75)', fontSize: '12px', marginTop: '3px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+            h('div', { style: { color: 'rgba(255,255,255,0.75)', fontSize: '12.5px', marginTop: '3px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
                 trf('Смена {no} · открыта {when} · платежей: {n}', { no: shiftNo(shift), when: fmtRuShort(shift.opened_at), n: totals.count }),
                 stale ? h('span', {
                     style: {
                         background: '#fbe8b5', color: '#7a5b00', borderRadius: '999px',
-                        padding: '2px 10px', fontSize: '11.5px', fontWeight: 600,
+                        padding: '2px 10px', fontSize: '12.5px', fontWeight: 600,
                     },
                 }, 'смена не сегодняшняя — закройте и откройте новую') : null,
             ),
@@ -358,12 +358,12 @@ function kpiTiles(summary) {
                 display: 'grid', placeItems: 'center', border: '1px solid var(--ink-100)',
             },
         }, Icon(icon, { size: 15 })),
-        h('div', { class: 'muted', style: { fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' } }, label),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' } }, label),
         h('div', { style: { marginTop: '4px', display: 'flex', alignItems: 'baseline', gap: '5px' } },
-            h('span', { class: 'num', style: { fontSize: '19px', fontWeight: 800, color: 'var(--ink-900)', fontVariantNumeric: 'tabular-nums' } }, value),
-            h('span', { class: 'muted', style: { fontSize: '10.5px', fontWeight: 700 } }, 'UZS'),
+            h('span', { class: 'num', style: { fontSize: '20px', fontWeight: 800, color: 'var(--ink-900)', fontVariantNumeric: 'tabular-nums' } }, value),
+            h('span', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700 } }, 'UZS'),
         ),
-        sub ? h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '2px' } }, sub) : null,
+        sub ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, sub) : null,
     );
 
     return h('div', {
@@ -416,13 +416,13 @@ async function loadShiftReport() {
 function xReportModal() {
     loadShiftReport().then((r) => {
         if (!r) return;
-        const line = (label, value, strong) => h('div', { class: 'row', style: { padding: '7px 0', borderBottom: '1px solid var(--ink-50)', fontSize: '13px' } },
+        const line = (label, value, strong) => h('div', { class: 'row', style: { padding: '7px 0', borderBottom: '1px solid var(--ink-50)', fontSize: '13.5px' } },
             h('span', { style: { color: 'var(--ink-600)' } }, label),
             h('span', { class: 'grow' }),
             h('span', { class: 'num', style: { fontWeight: strong ? 800 : 600, color: strong ? 'var(--primary-700)' : 'var(--ink-900)' } }, value));
         modal(trf('X-отчёт · {no}', { no: shiftNo(r.shift) }), 'Doc',
             [
-                h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '10px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } },
                     trf('Открыта {when} · касса остаётся открытой', { when: fmtRuShort(r.shift.opened_at) })),
                 line('Старт смены', fmtPrice(r.shift.opening_float)),
                 line('Наличные', fmtPrice(r.totals.cash)),
@@ -498,7 +498,7 @@ async function historyModal(root) {
             h('span', { style: { flex: 1, minWidth: 0, fontWeight: 700, color: titleColor || 'var(--ink-900)' } }, title),
             action || null,
             right),
-        sub ? h('div', { class: 'muted', style: { fontSize: '11.5px', margin: '3px 0 0 54px', lineHeight: 1.5, wordBreak: 'break-word' } }, sub) : null,
+        sub ? h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '3px 0 0 54px', lineHeight: 1.5, wordBreak: 'break-word' } }, sub) : null,
     );
 
     const refundBtnSmall = (p) => h('button', {
@@ -514,7 +514,7 @@ async function historyModal(root) {
         const day = ymdLocal(d);
         if (day !== lastDay) {
             lastDay = day;
-            rows.push(h('div', { style: { padding: '12px 0 4px', fontSize: '11px', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--ink-500)' } },
+            rows.push(h('div', { style: { padding: '12px 0 4px', fontSize: '12.5px', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--ink-500)' } },
                 fmtDate(d)));
         }
         if (ev.kind === 'payment' || ev.kind === 'refund') {
@@ -579,6 +579,7 @@ async function printShiftReport(withPayments) {
 }
 
 /* i18n-exempt-start: печатная форма X-отчёта / внутреннего отчёта смены — печатный документ, намеренно русский */
+/* type-scale-exempt-start: печатный документ — семейство Onest, размеры остаются его выверенными метриками (дизайн-док 2026-08-31) */
 function printReportDoc(r, withPayments) {
     const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const row = (l, v, strong) => `<tr><td style="padding:4px 0;color:#555">${esc(l)}</td><td style="padding:4px 0;text-align:right;font-weight:${strong ? 800 : 600}">${esc(v)}</td></tr>`;
@@ -617,13 +618,14 @@ function printReportDoc(r, withPayments) {
       <script>window.onload = () => (document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve()).then(() => window.print());</script></body></html>`);
     w.document.close();
 }
+/* type-scale-exempt-end */
 /* i18n-exempt-end */
 
 // ---- Close shift ---------------------------------------------------------------
 function closeShiftModal(root, shift, expectedDrawer) {
     const countedInp = moneyfy(h('input', { type: 'number', min: '0', step: '1', value: '' }));
     const notesInp = h('input', { type: 'text', placeholder: 'Комментарий (необязательно)' });
-    const diffEl = h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '6px' } });
+    const diffEl = h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } });
     const renderDiff = () => {
         clear(diffEl);
         const c = moneyVal(countedInp);
@@ -763,10 +765,10 @@ function paintChips(el, onChange) {
                     boxShadow: active ? '0 0 0 3px var(--primary-50)' : 'none',
                 },
             },
-                h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', color: chip.color, fontSize: '10.5px', fontWeight: 800, letterSpacing: '0.05em' } },
+                h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', color: chip.color, fontSize: '12.5px', fontWeight: 800, letterSpacing: '0.05em' } },
                     Icon(chip.icon, { size: 13 }), chip.label),
                 h('div', { class: 'num', style: { fontSize: '20px', fontWeight: 800, color: 'var(--ink-900)', marginTop: '4px' } }, String(agg.n)),
-                h('div', { class: 'muted num', style: { fontSize: '11px', marginTop: '1px' } },
+                h('div', { class: 'muted num', style: { fontSize: '12.5px', marginTop: '1px' } },
                     chip.key === 'all' || chip.key === 'paid' || chip.key === 'cancelled'
                         ? fmtPrice(agg.sum) + ' UZS'
                         : fmtPrice(agg.sum) + ' UZS'),
@@ -908,7 +910,7 @@ function paintSearch(el, onChange) {
     el.appendChild(h('div', { class: 'row', style: { alignItems: 'center', gap: '10px', margin: '2px 0 12px' } },
         inp,
         h('span', { class: 'grow' }),
-        h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Показано ', h('strong', null, String(shown)), ' из ', String(total)),
+        h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Показано ', h('strong', null, String(shown)), ' из ', String(total)),
     ));
     // keep focus while typing (repaint replaces the node)
     if (state.search) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
@@ -1044,14 +1046,14 @@ function invoiceRow(inv, root) {
             Avatar({ initials: initials(inv.patient_name || '?'), color: avColor(inv.id) }),
             h('div', { style: { minWidth: 0 } },
                 h('div', { class: 'cell-strong', style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }, title: inv.patient_name || '' }, inv.patient_name || '—'),
-                h('div', { class: 'muted', style: { fontSize: '11px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } },
                     [inv.mrn, inv.phone].filter(Boolean).join(' · ')),
                 // COVERAGE_SPLIT_V1 — платит не пациент: видно ещё в списке, до
                 // открытия окна оплаты, иначе кассир потянется взять эти деньги.
                 inv.payer_id ? h('span', {
                     style: {
                         display: 'inline-block', marginTop: '3px', padding: '1px 8px', borderRadius: '999px',
-                        fontSize: '10.5px', fontWeight: 700, whiteSpace: 'nowrap',
+                        fontSize: '12.5px', fontWeight: 700, whiteSpace: 'nowrap',
                         background: 'var(--warn-50, #fffbeb)', color: 'var(--warn-700, #b45309)',
                     },
                     title: 'Счёт выставлен плательщику — не долг пациента',
@@ -1064,7 +1066,7 @@ function invoiceRow(inv, root) {
         // demanded more width than any other column and is what starved the
         // patient cell. In a list the cashier scans by row, the day and time are
         // what matter; the full form stays in the tooltip.
-        h('td', { class: 'num', style: { fontSize: '12px', whiteSpace: 'nowrap' }, title: fmtRuLong(inv.created_at) },
+        h('td', { class: 'num', style: { fontSize: '12.5px', whiteSpace: 'nowrap' }, title: fmtRuLong(inv.created_at) },
             fmtRuNumeric(inv.created_at)),
         h('td', { class: 'num', style: { textAlign: 'right', fontWeight: 600 } }, fmtPrice(inv.total_amount)),
         h('td', { class: 'num', style: { textAlign: 'right', color: 'var(--ok-700)', fontWeight: 600 } }, fmtPrice(inv.paid_amount)),
@@ -1102,7 +1104,7 @@ function payModal(root, inv, balance) {
     const renderLines = (items) => {
         clear(linesEl);
         if (!items) {   // ещё грузятся
-            linesEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12px', padding: '10px 12px' } }, 'Загрузка состава счёта…'));
+            linesEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '10px 12px' } }, 'Загрузка состава счёта…'));
             return;
         }
         const box = h('div', {
@@ -1112,7 +1114,7 @@ function payModal(root, inv, balance) {
             },
         });
         box.appendChild(h('div', {
-            style: { fontSize: '11px', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--ink-500)', marginBottom: '6px' },
+            style: { fontSize: '12.5px', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--ink-500)', marginBottom: '6px' },
         }, 'За что платим'));
 
         // COVERAGE_SPLIT_V1 — счёт может быть выставлен НЕ пациенту: эти деньги
@@ -1173,7 +1175,7 @@ function payModal(root, inv, balance) {
     // моноширинным шрифтом на сером фоне: подпись и сумма сливались, а «Счёт
     // закрывается полностью» читалось как ещё одна цифра. Теперь — сумма
     // крупно справа, а под ней ЦВЕТНАЯ плашка с исходом: закрыт / долг / перебор.
-    const payAmountEl = h('span', { class: 'num', style: { fontSize: '22px', fontWeight: 800, color: 'var(--ink-900)', letterSpacing: '-0.02em', whiteSpace: 'nowrap' } });
+    const payAmountEl = h('span', { class: 'num', style: { fontSize: '24px', fontWeight: 800, color: 'var(--ink-900)', letterSpacing: '-0.02em', whiteSpace: 'nowrap' } });
     const statusIcoEl = h('span', { style: { display: 'inline-flex', flexShrink: '0' } });
     const statusTxtEl = h('span', { style: { flex: '1', minWidth: '0' } });
     const statusAmtEl = h('span', { class: 'num', style: { fontWeight: 800, whiteSpace: 'nowrap' } });
@@ -1181,7 +1183,7 @@ function payModal(root, inv, balance) {
         style: {
             display: 'flex', alignItems: 'center', gap: '8px',
             padding: '9px 12px', borderRadius: '10px',
-            fontSize: '13px', fontWeight: 700, lineHeight: '1.3',
+            fontSize: '13.5px', fontWeight: 700, lineHeight: '1.3',
         },
     }, statusIcoEl, statusTxtEl, statusAmtEl);
 
@@ -1251,7 +1253,7 @@ function payModal(root, inv, balance) {
                 type: 'text', inputmode: 'numeric', autocomplete: 'off',
                 value: t.amount ? fmtPrice(t.amount) : '',
                 placeholder: 'Сумма',
-                style: { flex: '1', padding: '9px 11px', border: '1px solid var(--ink-200)', borderRadius: '9px', fontFamily: 'inherit', fontSize: '14px', textAlign: 'right' },
+                style: { flex: '1', padding: '9px 11px', border: '1px solid var(--ink-200)', borderRadius: '9px', fontFamily: 'inherit', fontSize: '13.5px', textAlign: 'right' },
             });
             amtInp.addEventListener('input', () => {
                 const digits = amtInp.value.replace(/\D+/g, '');
@@ -1302,7 +1304,7 @@ function payModal(root, inv, balance) {
 
     modal(trf('Оплата · {no}', { no: inv.invoice_number || ('#' + inv.id) }), 'Receipt',
         [
-            h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '8px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '8px' } },
                 trf('{name} — к оплате', { name: inv.patient_name }), ' ', h('strong', null, fmtPrice(balance)), ' сум'),
             linesEl,   // PAY_DETAILS_V1 — состав счёта перед выбором способа оплаты
             bodyEl,
@@ -1384,7 +1386,7 @@ function payModal(root, inv, balance) {
 
 function voidModal(root, inv) {
     modal(trf('Отменить счёт · {no}', { no: inv.invoice_number || ('#' + inv.id) }), 'X',
-        [h('div', { style: { fontSize: '13px', lineHeight: 1.55 } },
+        [h('div', { style: { fontSize: '13.5px', lineHeight: 1.55 } },
             'Счёт пациента ', h('strong', null, inv.patient_name || '—'), ' на ',
             h('strong', null, fmtPrice(inv.total_amount)), ' сум будет отменён. ',
             h('span', { class: 'muted' }, 'Неначатые услуги счёта снова станут доступны для выставления.'))],
@@ -1443,7 +1445,7 @@ function openRefundConfirm(p, info, root) {
                 + ' — ' + fmtPrice(p.amount) + ' ' + tr('сум')),
             field('Сумма возврата', amtInp, { required: true }),
             field('Причина', reasonInp),
-            h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 'Возврат уменьшит «Оплачено» по счёту; наличный возврат выдаётся из кассы текущей смены.'),
         ],
         'Оформить возврат',
@@ -1568,7 +1570,7 @@ async function loadUnassignedCash(wrap) {
             h('span', { style: { color: 'var(--warn-600, #b98200)', flex: '0 0 16px', marginTop: '1px' } }, Icon('Warning', { size: 15 })),
             h('div', { style: { fontSize: '12.5px', lineHeight: '1.5' } },
                 h('strong', null, 'Off-drawer cash: ', fmtPrice(total), more, ' сум'),
-                h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     data.length + more + ' cash payment(s) were taken without an open shift, so they are not tied to any drawer. Ask cashiers to open a shift before taking cash.'),
             ),
         ));
@@ -1642,18 +1644,18 @@ function openAcceptDepositModal(d, root) {
     buttons.forEach(([b, v]) => styleBtn(b, v === method));
 
     const head = h('div', { style: { border: '1px solid var(--ink-100)', borderRadius: '12px', padding: '11px 13px' } },
-        h('div', { style: { fontSize: '11px', fontWeight: 700, letterSpacing: '0.05em', color: 'var(--ink-500)', textTransform: 'uppercase', marginBottom: '6px' } },
+        h('div', { style: { fontSize: '12.5px', fontWeight: 700, letterSpacing: '0.05em', color: 'var(--ink-500)', textTransform: 'uppercase', marginBottom: '6px' } },
             'Депозит'),
-        h('div', { style: { display: 'flex', gap: '10px', alignItems: 'baseline', fontSize: '13px' } },
+        h('div', { style: { display: 'flex', gap: '10px', alignItems: 'baseline', fontSize: '13.5px' } },
             h('span', { style: { flex: 1 } }, d.patient_name || '—'),
             h('span', { class: 'muted' }, d.patient_mrn || '')),
         h('div', { style: { display: 'flex', gap: '10px', alignItems: 'baseline', marginTop: '6px', fontWeight: 800, fontSize: '15px' } },
             h('span', { style: { flex: 1 } }, 'К приёму'), money(d.amount)),
-        d.notes ? h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '6px' } }, d.notes) : null);
+        d.notes ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } }, d.notes) : null);
 
     // Наличные меняют ящик смены, безнал — нет. Кассир должен знать это ДО
     // подтверждения: именно из-за молчаливой записи наличных ящик и расходился.
-    const hint = h('div', { class: 'muted', style: { fontSize: '12px' } },
+    const hint = h('div', { class: 'muted', style: { fontSize: '12.5px' } },
         'Наличные попадут в ящик смены, карта и эквайринг — нет.');
 
     modal(trf('Приём депозита · {no}', { no: d.deposit_number || ('#' + d.id) }), 'Wallet',

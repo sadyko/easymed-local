@@ -384,7 +384,7 @@ export async function renderDoctorProfile(container, doctorId) {
         const img = h('img', { alt: 'Фото врача', style: { display: 'none', width: '156px', height: '156px', objectFit: 'cover', borderRadius: '12px' } });
         const ph = h('div', { class: 'cam-ph' },
             Icon('Image', { size: 28 }),
-            h('span', { style: { fontSize: '12px', fontWeight: 500 } }, 'Фото врача'),
+            h('span', { style: { fontSize: '12.5px', fontWeight: 500 } }, 'Фото врача'),
         );
         const box = h('div', { class: 'cam-box' }, ph, img);
         const setPhoto = (url) => {
@@ -543,8 +543,8 @@ export async function renderDoctorProfile(container, doctorId) {
                 if (st.selectedConds.has(k)) cb.checked = true;
                 listWrap.appendChild(h('label', { class: 'docprof-cond-row' },
                     cb,
-                    h('span', { style: { flex: '1' } }, x.name_ru || x.slug, x.name_uz ? h('span', { class: 'muted', style: { fontSize: '12px' } }, '  ·  ' + x.name_uz) : null),
-                    h('span', { class: 'tag ' + (x.kind === 'diagnosis' ? 'tag-info' : 'tag-purple'), style: { fontSize: '11px' } }, x.kind === 'diagnosis' ? 'Болезнь' : 'Симптом')));
+                    h('span', { style: { flex: '1' } }, x.name_ru || x.slug, x.name_uz ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '  ·  ' + x.name_uz) : null),
+                    h('span', { class: 'tag ' + (x.kind === 'diagnosis' ? 'tag-info' : 'tag-purple'), style: { fontSize: '12.5px' } }, x.kind === 'diagnosis' ? 'Болезнь' : 'Симптом')));
             }
             updateStatus();
         }

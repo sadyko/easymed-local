@@ -260,7 +260,7 @@ function plansDashboard() {
                 ])),
             ),
             cardBox('Channel efficiency', 'Chart',
-                h('span', { class: 'muted', style: { fontSize: '12px' } }, 'cost per lead'),
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'cost per lead'),
                 h('div', { style: { padding: '10px 4px 6px' } }, ...MK_CHANNELS.map(c => {
                     const cpl = c.leads ? Math.round((c.spent * 1_000_000) / c.leads) : 0;
                     const max = Math.max(...MK_CHANNELS.map(x => x.leads));
@@ -270,8 +270,8 @@ function plansDashboard() {
                         h('div', { style: { minWidth: '110px', fontSize: '12.5px', fontWeight: 500, color: 'var(--ink-800)' } }, c.name),
                         h('div', { style: { flex: 1, height: '8px', background: 'var(--ink-100)', borderRadius: '999px', overflow: 'hidden' } },
                             h('div', { style: { width: w + '%', height: '100%', background: c.color, borderRadius: '999px' } })),
-                        h('div', { class: 'num', style: { width: '56px', textAlign: 'right', fontSize: '12px', color: 'var(--ink-700)', fontWeight: 600 } }, String(c.leads)),
-                        h('div', { class: 'num muted', style: { width: '72px', textAlign: 'right', fontSize: '11.5px' } }, (cpl/1000).toFixed(1) + 'k'),
+                        h('div', { class: 'num', style: { width: '56px', textAlign: 'right', fontSize: '12.5px', color: 'var(--ink-700)', fontWeight: 600 } }, String(c.leads)),
+                        h('div', { class: 'num muted', style: { width: '72px', textAlign: 'right', fontSize: '12.5px' } }, (cpl/1000).toFixed(1) + 'k'),
                     );
                 })),
             ),
@@ -285,10 +285,10 @@ function plansDashboard() {
                     Avatar({ initials: t.initials, color: t.color }),
                     h('div', { style: { minWidth: 0, flex: '0 0 200px' } },
                         h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } }, t.name),
-                        h('div', { class: 'muted', style: { fontSize: '11.5px' } }, t.role),
+                        h('div', { class: 'muted', style: { fontSize: '12.5px' } }, t.role),
                     ),
                     h('div', { style: { minWidth: 0, flex: 1 } },
-                        h('div', { class: 'row', style: { fontSize: '11px', color: 'var(--ink-500)', marginBottom: '3px' } },
+                        h('div', { class: 'row', style: { fontSize: '12.5px', color: 'var(--ink-500)', marginBottom: '3px' } },
                             h('span', null, 'Load'),
                             h('span', { class: 'grow' }),
                             h('span', { class: 'num', style: { color: 'var(--ink-800)', fontWeight: 600 } }, Math.round(t.load * 100) + '%'),
@@ -298,15 +298,15 @@ function plansDashboard() {
                                 background: t.load > 0.85 ? 'var(--crit-500)' : t.load > 0.7 ? 'var(--warn-500)' : 'var(--primary-500)',
                                 borderRadius: '999px' } })),
                     ),
-                    h('div', { class: 'num', style: { width: '90px', textAlign: 'right', fontSize: '12px' } },
+                    h('div', { class: 'num', style: { width: '90px', textAlign: 'right', fontSize: '12.5px' } },
                         h('span', { style: { color: 'var(--ink-900)', fontWeight: 600 } }, String(t.open)),
                         h('span', { class: 'muted' }, '/' + (t.open + t.done)),
-                        h('div', { class: 'muted', style: { fontSize: '10.5px', marginTop: '1px', textTransform: 'uppercase', letterSpacing: '0.05em' } }, 'open · total'),
+                        h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '1px', textTransform: 'uppercase', letterSpacing: '0.05em' } }, 'open · total'),
                     ),
                 ))),
             ),
             cardBox('Pipeline health', 'Activity',
-                h('span', { class: 'muted', style: { fontSize: '12px', marginLeft: 'auto' } }, 'this week'),
+                h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: 'auto' } }, 'this week'),
                 h('div', { style: { padding: '18px 22px', display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '12px' } },
                     ...MK_COLS.map(col => {
                         const count = state.mk.tasks.filter(t => t.status === col.id).length;
@@ -315,9 +315,9 @@ function plansDashboard() {
                         },
                             h('div', { class: 'row', style: { marginBottom: '6px' } },
                                 h('span', { style: { width: '8px', height: '8px', borderRadius: '999px', background: col.color } }),
-                                h('span', { style: { fontSize: '11px', color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 } }, col.title),
+                                h('span', { style: { fontSize: '12.5px', color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 } }, col.title),
                             ),
-                            h('div', { class: 'num', style: { fontSize: '26px', fontWeight: 700, color: 'var(--ink-900)' } }, String(count)),
+                            h('div', { class: 'num', style: { fontSize: '24px', fontWeight: 700, color: 'var(--ink-900)' } }, String(count)),
                         );
                     }),
                 ),
@@ -339,7 +339,7 @@ function plansWorkspace() {
     const filtered = liveTasks();
     return h('div', { class: 'card', style: { padding: '18px 18px 22px' } },
         h('div', { class: 'row', style: { marginBottom: '14px' } },
-            h('h3', { style: { margin: 0, fontSize: '14.5px', color: 'var(--ink-900)' } }, 'Team kanban · ', String(filtered.length), ' tasks'),
+            h('h3', { style: { margin: 0, fontSize: '15px', color: 'var(--ink-900)' } }, 'Team kanban · ', String(filtered.length), ' tasks'),
             h('span', { class: 'grow' }),
             h('div', { class: 'segmented' },
                 wsFilter('all',  'All'),
@@ -365,9 +365,9 @@ function plansWorkspace() {
                 },
                     h('div', { class: 'row', style: { padding: '0 4px 4px' } },
                         h('span', { style: { width: '8px', height: '8px', borderRadius: '999px', background: col.color } }),
-                        h('span', { style: { fontSize: '12px', fontWeight: 700, color: 'var(--ink-800)', textTransform: 'uppercase', letterSpacing: '0.05em' } }, col.title),
+                        h('span', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-800)', textTransform: 'uppercase', letterSpacing: '0.05em' } }, col.title),
                         h('span', { class: 'grow' }),
-                        h('span', { style: { fontSize: '11.5px', color: 'var(--ink-500)', fontWeight: 600, background: 'white', padding: '1px 7px', borderRadius: '999px', border: '1px solid var(--ink-100)' } }, String(tasks.length)),
+                        h('span', { style: { fontSize: '12.5px', color: 'var(--ink-500)', fontWeight: 600, background: 'white', padding: '1px 7px', borderRadius: '999px', border: '1px solid var(--ink-100)' } }, String(tasks.length)),
                     ),
                     ...tasks.map(t => taskCard(t)),
                     h('button', { class: 'btn btn-ghost btn-sm',
@@ -407,17 +407,17 @@ function taskCard(t) {
         onmouseenter: (ev) => { ev.currentTarget.style.borderColor = 'var(--primary-300)'; ev.currentTarget.style.boxShadow = '0 2px 6px rgba(11,20,24,0.08)'; },
         onmouseleave: (ev) => { ev.currentTarget.style.borderColor = 'var(--ink-100)'; ev.currentTarget.style.boxShadow = '0 1px 2px rgba(11,20,24,0.04)'; },
     },
-        h('div', { style: { fontSize: '13px', fontWeight: 600, color: 'var(--ink-900)', lineHeight: 1.35, marginBottom: '9px' } }, t.title),
+        h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)', lineHeight: 1.35, marginBottom: '9px' } }, t.title),
         h('div', { class: 'row', style: { gap: '6px', marginBottom: '10px', flexWrap: 'wrap' } },
             t.tag && Tag(t.tag, { kind: t.tag_kind || '' }),
-            h('span', { style: { fontSize: '10.5px', fontWeight: 700, padding: '2px 7px', borderRadius: '999px',
+            h('span', { style: { fontSize: '12.5px', fontWeight: 700, padding: '2px 7px', borderRadius: '999px',
                 background: p.bg, color: p.fg, textTransform: 'uppercase', letterSpacing: '0.04em' } }, p.label),
         ),
         h('div', { class: 'row', style: { gap: '6px' } },
             t.owner_initials && Avatar({ initials: t.owner_initials, color: t.owner_color || 'av-1', size: 'sm' }),
             h('span', { class: 'grow' }),
             dueLabel && h('span', {
-                class: 'muted', style: { fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px',
+                class: 'muted', style: { fontSize: '12.5px', display: 'inline-flex', alignItems: 'center', gap: '4px',
                     color: dueOverdue ? 'var(--crit-700)' : undefined, fontWeight: dueOverdue ? 600 : 400 },
             }, Icon('Clock', { size: 11 }), ' ', dueLabel),
         ),
@@ -577,14 +577,14 @@ function plansCampaigns() {
                                 return h('span', { title: m.name, style: { width: '22px', height: '22px', borderRadius: '6px', background: m.color, opacity: 0.18, display: 'grid', placeItems: 'center' } },
                                     h('span', { style: { width: '8px', height: '8px', borderRadius: '999px', background: m.color } }));
                             }),
-                            h('span', { class: 'muted', style: { fontSize: '11.5px', marginLeft: '4px' } },
+                            h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '4px' } },
                                 c.channels.map(x => channelMeta(x).name).join(', ')),
                         ),
                     ),
                     h('td', null, Avatar({ initials: c.owner, color: c.oc, size: 'sm' })),
-                    h('td', { class: 'muted num', style: { fontSize: '12px' } }, c.start + ' → ' + c.end),
+                    h('td', { class: 'muted num', style: { fontSize: '12.5px' } }, c.start + ' → ' + c.end),
                     h('td', { style: { width: '160px' } },
-                        h('div', { class: 'row', style: { fontSize: '11.5px', marginBottom: '3px' } },
+                        h('div', { class: 'row', style: { fontSize: '12.5px', marginBottom: '3px' } },
                             h('span', { class: 'num', style: { color: 'var(--ink-800)', fontWeight: 600 } }, c.spent + 'M'),
                             h('span', { class: 'muted' }, '/' + c.budget + 'M UZS'),
                             h('span', { class: 'grow' }),
@@ -616,9 +616,9 @@ function plansBudget() {
     return h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1.7fr', gap: '16px' } },
         // Envelope
         h('div', { class: 'card', style: { padding: '22px' } },
-            h('div', { class: 'muted', style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, 'May budget · UZS'),
-            h('div', { class: 'num', style: { fontSize: '34px', fontWeight: 700, color: 'var(--ink-900)', letterSpacing: '-0.02em', margin: '6px 0 12px' } },
-                spent + 'M ', h('span', { style: { fontSize: '16px', color: 'var(--ink-400)', fontWeight: 500 } }, '/ ' + total + 'M')),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, 'May budget · UZS'),
+            h('div', { class: 'num', style: { fontSize: '30px', fontWeight: 700, color: 'var(--ink-900)', letterSpacing: '-0.02em', margin: '6px 0 12px' } },
+                spent + 'M ', h('span', { style: { fontSize: '17px', color: 'var(--ink-400)', fontWeight: 500 } }, '/ ' + total + 'M')),
             h('div', { style: { height: '10px', background: 'var(--ink-100)', borderRadius: '999px', marginBottom: '18px', overflow: 'hidden' } },
                 h('div', { style: { width: pct + '%', height: '100%', background: 'linear-gradient(90deg, var(--primary-500), var(--primary-700))', borderRadius: '999px' } })),
             h('div', { class: 'row', style: { gap: '14px', alignItems: 'flex-start' } },
@@ -633,36 +633,36 @@ function plansBudget() {
                 ),
             ),
             h('div', { style: { height: '1px', background: 'var(--ink-100)', margin: '20px 0 16px' } }),
-            h('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--ink-700)', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.05em' } }, 'Approvals queue'),
+            h('div', { style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-700)', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.05em' } }, 'Approvals queue'),
             ...approvals.map((a, i) => h('div', { class: 'row', style: { padding: '8px 0', borderBottom: i < approvals.length - 1 ? '1px solid var(--ink-100)' : 'none', gap: '10px' } },
                 h('div', { style: { flex: 1, minWidth: 0 } },
-                    h('div', { style: { fontSize: '13px', fontWeight: 600, color: 'var(--ink-900)' } }, a.what),
-                    h('div', { class: 'muted', style: { fontSize: '11.5px' } }, 'requested by ' + a.who),
+                    h('div', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } }, a.what),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'requested by ' + a.who),
                 ),
-                h('span', { class: 'num', style: { fontSize: '13px', fontWeight: 700, color: 'var(--ink-900)' } }, a.amount),
+                h('span', { class: 'num', style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } }, a.amount),
                 Tag(a.state, { kind: a.state === 'approved' ? 'ok' : 'warn', dot: true }),
             )),
         ),
         // Allocation by channel
         cardBox('Allocation by channel', 'Coins',
-            h('span', { class: 'muted', style: { fontSize: '12px', marginLeft: 'auto' } }, 'budgets in M UZS'),
+            h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: 'auto' } }, 'budgets in M UZS'),
             h('div', { style: { padding: '18px 22px 22px' } }, ...MK_CHANNELS.map((c, i) => {
                 const cPct = Math.round((c.spent / c.budget) * 100);
                 return h('div', { style: { marginBottom: i === MK_CHANNELS.length - 1 ? '0' : '16px' } },
                     h('div', { class: 'row', style: { marginBottom: '6px' } },
                         h('div', { style: { width: '28px', height: '28px', borderRadius: '7px', background: c.color, opacity: 0.14, display: 'grid', placeItems: 'center' } },
                             h('span', { style: { width: '10px', height: '10px', borderRadius: '999px', background: c.color } })),
-                        h('span', { style: { marginLeft: '10px', fontSize: '13px', fontWeight: 600, color: 'var(--ink-900)' } }, c.name),
+                        h('span', { style: { marginLeft: '10px', fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } }, c.name),
                         h('span', { class: 'grow' }),
-                        h('span', { class: 'num muted', style: { fontSize: '12px' } },
+                        h('span', { class: 'num muted', style: { fontSize: '12.5px' } },
                             h('b', { style: { color: 'var(--ink-900)' } }, c.spent + 'M'), ' spent · ' + c.budget + 'M allocated'),
                     ),
                     h('div', { style: { position: 'relative', height: '18px', background: 'var(--ink-50)', borderRadius: '6px', overflow: 'hidden' } },
                         h('div', { style: { width: cPct + '%', height: '100%', background: c.color, borderRadius: '6px' } }),
                         h('span', { style: { position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)',
-                            fontFamily: 'var(--font-mono)', fontSize: '11px', fontWeight: 600, color: 'var(--ink-700)' } }, cPct + '%'),
+                            fontFamily: 'var(--font-mono)', fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-700)' } }, cPct + '%'),
                     ),
-                    h('div', { class: 'row', style: { marginTop: '6px', gap: '14px', fontSize: '11.5px', color: 'var(--ink-500)' } },
+                    h('div', { class: 'row', style: { marginTop: '6px', gap: '14px', fontSize: '12.5px', color: 'var(--ink-500)' } },
                         h('span', null, h('span', { class: 'num', style: { color: 'var(--ink-800)', fontWeight: 600 } }, String(c.leads)), ' leads'),
                         h('span', null, 'CPL ', h('span', { class: 'num', style: { color: 'var(--ink-800)', fontWeight: 600 } }, (c.spent * 1000 / Math.max(c.leads, 1)).toFixed(1) + 'k'), ' UZS'),
                         h('span', { class: 'grow' }),
@@ -768,7 +768,7 @@ function notifDashboard() {
         // Channel mix + Top automations
         h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: '16px' } },
             cardBox('Channel mix', 'Layers',
-                h('span', { class: 'muted', style: { fontSize: '12px', marginLeft: 'auto' } }, 'this week · ' + totalSent.toLocaleString('ru-RU') + ' sent'),
+                h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: 'auto' } }, 'this week · ' + totalSent.toLocaleString('ru-RU') + ' sent'),
                 h('div', { style: { padding: '18px 22px 22px', display: 'flex', flexDirection: 'column', gap: '14px' } },
                     h('div', { class: 'row', style: { gap: '22px', alignItems: 'center', justifyContent: 'center' } },
                         donut(NT_CHANNELS.map(c => ({ value: c.sent, color: c.color })), 140, 20, '9.4K', 'sent'),
@@ -780,8 +780,8 @@ function notifDashboard() {
                                 h('span', { style: { width: '9px', height: '9px', borderRadius: '3px', background: c.color } }),
                                 h('span', { style: { fontSize: '12.5px', color: 'var(--ink-800)', fontWeight: 500 } }, c.name),
                                 h('span', { class: 'grow' }),
-                                h('span', { class: 'num', style: { fontSize: '12px', color: 'var(--ink-900)', fontWeight: 600 } }, c.sent.toLocaleString('ru-RU')),
-                                h('span', { class: 'num muted', style: { fontSize: '11.5px', minWidth: '38px', textAlign: 'right' } }, pct + '%'),
+                                h('span', { class: 'num', style: { fontSize: '12.5px', color: 'var(--ink-900)', fontWeight: 600 } }, c.sent.toLocaleString('ru-RU')),
+                                h('span', { class: 'num muted', style: { fontSize: '12.5px', minWidth: '38px', textAlign: 'right' } }, pct + '%'),
                             );
                         }),
                     ),
@@ -804,7 +804,7 @@ function notifDashboard() {
                         return h('tr', null,
                             h('td', null,
                                 h('div', { class: 'cell-strong', style: { fontSize: '12.5px' } }, a.name),
-                                h('div', { class: 'muted', style: { fontSize: '11px' } },
+                                h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                                     a.channels.map(ch => channelInfo(ch).name).join(' · ')),
                             ),
                             h('td', { class: 'num' }, a.sent.toLocaleString('ru-RU')),
@@ -815,7 +815,7 @@ function notifDashboard() {
                                 h('div', { style: { height: '5px', background: 'var(--ink-100)', borderRadius: '999px', overflow: 'hidden' } },
                                     h('div', { style: { width: score + '%', height: '100%',
                                         background: score > 50 ? 'var(--ok-500)' : score > 25 ? 'var(--warn-500)' : 'var(--ink-300)' } })),
-                                h('div', { class: 'num muted', style: { fontSize: '11px', marginTop: '2px' } }, book + '% book'),
+                                h('div', { class: 'num muted', style: { fontSize: '12.5px', marginTop: '2px' } }, book + '% book'),
                             ),
                         );
                     })),
@@ -825,7 +825,7 @@ function notifDashboard() {
         // Reachability + compliance
         h('div', { style: { display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '16px' } },
             cardBox('Send volume · last 14 days', 'Activity',
-                h('div', { class: 'row', style: { gap: '6px', fontSize: '11.5px', color: 'var(--ink-500)', marginLeft: 'auto' } },
+                h('div', { class: 'row', style: { gap: '6px', fontSize: '12.5px', color: 'var(--ink-500)', marginLeft: 'auto' } },
                     ...NT_CHANNELS.map(c => h('span', { class: 'row', style: { gap: '4px' } },
                         h('span', { style: { width: '8px', height: '8px', borderRadius: '999px', background: c.color } }), c.name,
                     )),
@@ -842,7 +842,7 @@ function notifDashboard() {
                 )),
             ),
             h('div', { class: 'card', style: { padding: '22px' } },
-                h('div', { style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-500)', fontWeight: 600, marginBottom: '8px' } },
+                h('div', { style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-500)', fontWeight: 600, marginBottom: '8px' } },
                     'Reachability · base of 8,420 patients'),
                 reachBar([
                     { label: 'Telegram',   pct: 71, color: 'var(--info-500)' },
@@ -851,7 +851,7 @@ function notifDashboard() {
                     { label: 'No consent', pct:  4, color: 'var(--ink-300)' },
                 ]),
                 h('div', { style: { height: '1px', background: 'var(--ink-100)', margin: '18px 0' } }),
-                h('div', { style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-500)', fontWeight: 600, marginBottom: '12px' } },
+                h('div', { style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--ink-500)', fontWeight: 600, marginBottom: '12px' } },
                     'Compliance & health'),
                 h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' } },
                     miniStat('Opt-out · 30d',         '0.4%', 'down', 'var(--ok-500)'),
@@ -887,10 +887,10 @@ function notifAutomations() {
             } },
                 h('div', null,
                     h('div', { class: 'row', style: { gap: '8px' } },
-                        h('span', { class: 'cell-strong', style: { fontSize: '14px' } }, a.name),
+                        h('span', { class: 'cell-strong', style: { fontSize: '13.5px' } }, a.name),
                         Tag(a.status, { kind: statusKind(a.status), dot: true }),
                     ),
-                    h('div', { class: 'muted', style: { fontSize: '11.5px', marginTop: '3px' } },
+                    h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '3px' } },
                         Icon('Clock', { size: 11 }), ' ', a.schedule,
                         h('span', { style: { color: 'var(--ink-300)' } }, ' · '),
                         'trigger: ', a.trigger,
@@ -912,8 +912,8 @@ function notifAutomations() {
                 })),
                 h('div', null,
                     h('div', { class: 'num cell-strong' }, a.audience.toLocaleString('ru-RU')),
-                    h('div', { class: 'muted', style: { fontSize: '11px' } }, 'audience'),
-                    h('div', { class: 'row', style: { marginTop: '8px', gap: '10px', fontSize: '11px' } },
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'audience'),
+                    h('div', { class: 'row', style: { marginTop: '8px', gap: '10px', fontSize: '12.5px' } },
                         h('span', null, h('b', { style: { color: 'var(--ink-800)' } }, openR + '%'), ' ', h('span', { class: 'muted' }, 'open')),
                         h('span', null, h('b', { style: { color: 'var(--ink-800)' } }, ctrR  + '%'), ' ', h('span', { class: 'muted' }, 'ctr')),
                         h('span', null, h('b', { style: { color: 'var(--primary-700)' } }, bookR + '%'), ' ', h('span', { class: 'muted' }, 'book')),
@@ -932,9 +932,9 @@ function segChip(label, value) {
     return h('span', { style: {
         display: 'inline-flex', alignItems: 'center', gap: '6px',
         padding: '2px 8px 2px 4px', borderRadius: '999px',
-        background: 'var(--ink-25)', border: '1px solid var(--ink-100)', fontSize: '11.5px',
+        background: 'var(--ink-25)', border: '1px solid var(--ink-100)', fontSize: '12.5px',
     } },
-        h('span', { style: { fontSize: '9.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
+        h('span', { style: { fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
             background: 'white', padding: '2px 6px', borderRadius: '999px', color: 'var(--ink-500)' } }, label),
         h('span', { style: { fontWeight: 500, color: 'var(--ink-800)' } }, value),
     );
@@ -965,13 +965,13 @@ function notifSegments() {
         h('div', { class: 'card' },
             h('div', { class: 'card-header' },
                 h('h3', null, Icon('Filter', { size: 16 }), ' Build a segment'),
-                h('span', { class: 'muted', style: { fontSize: '12px', marginLeft: 'auto' } }, 'Combine rules — patients auto-include as data changes.'),
+                h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: 'auto' } }, 'Combine rules — patients auto-include as data changes.'),
             ),
             h('div', { style: { padding: '20px 24px 24px', display: 'flex', flexDirection: 'column', gap: '22px' } },
                 // 1. Age
                 segSection('1', 'Age range', 'Match patients in this age window',
                     h('div', { class: 'row', style: { gap: '14px', marginTop: '10px' } },
-                        h('span', { class: 'num', style: { fontSize: '22px', fontWeight: 700, color: 'var(--ink-900)', minWidth: '80px' } },
+                        h('span', { class: 'num', style: { fontSize: '24px', fontWeight: 700, color: 'var(--ink-900)', minWidth: '80px' } },
                             s.age[0] + ' – ' + s.age[1]),
                         dualRange(0, 100, s.age, (v) => { s.age = v; paint(); }),
                         h('div', { class: 'row', style: { gap: '4px' } },
@@ -1040,7 +1040,7 @@ function notifSegments() {
                                     border: '1.5px solid ' + (on ? c.color : 'var(--ink-200)'),
                                     background: on ? 'color-mix(in oklab, ' + c.color + ' 10%, white)' : 'white',
                                     color: on ? c.color : 'var(--ink-700)',
-                                    fontSize: '13px', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+                                    fontSize: '13.5px', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
                                 },
                             }, Icon(c.icon, { size: 14 }), c.name);
                         }),
@@ -1051,13 +1051,13 @@ function notifSegments() {
         // Preview
         h('div', { style: { display: 'flex', flexDirection: 'column', gap: '16px' } },
             h('div', { class: 'card', style: { padding: '20px', background: 'linear-gradient(135deg, var(--primary-50) 0%, white 60%)' } },
-                h('div', { class: 'muted', style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, 'Live audience'),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, 'Live audience'),
                 h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '10px', marginTop: '6px' } },
-                    h('span', { class: 'num', style: { fontSize: '44px', fontWeight: 700, color: 'var(--primary-700)', letterSpacing: '-0.02em', lineHeight: 1 } },
+                    h('span', { class: 'num', style: { fontSize: '40px', fontWeight: 700, color: 'var(--primary-700)', letterSpacing: '-0.02em', lineHeight: 1 } },
                         liveAudience().toLocaleString('ru-RU')),
-                    h('span', { style: { fontSize: '14px', color: 'var(--ink-500)' } }, 'patients match'),
+                    h('span', { style: { fontSize: '13.5px', color: 'var(--ink-500)' } }, 'patients match'),
                 ),
-                h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '6px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } },
                     'Updated in real time as you adjust filters. Audiences refresh every 15 min.'),
                 h('div', { style: { marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' } },
                     previewRow('User',        `Ages ${s.age[0]} – ${s.age[1]}` + (s.gender !== 'any' ? `, ${s.gender === 'f' ? 'female' : 'male'}` : '')),
@@ -1080,9 +1080,9 @@ function notifSegments() {
                         { name: 'Post-op week-1 follow-up',       size:   64, kind: 'crit' },
                     ].map(s2 => h('div', { class: 'row', style: { padding: '11px 18px', borderTop: '1px solid var(--ink-100)', gap: '10px' } },
                         Tag('', { kind: s2.kind, dot: true }),
-                        h('span', { style: { fontSize: '13px', fontWeight: 500, color: 'var(--ink-900)' } }, s2.name),
+                        h('span', { style: { fontSize: '13.5px', fontWeight: 500, color: 'var(--ink-900)' } }, s2.name),
                         h('span', { class: 'grow' }),
-                        h('span', { class: 'num muted', style: { fontSize: '12px' } }, s2.size.toLocaleString('ru-RU') + ' patients'),
+                        h('span', { class: 'num muted', style: { fontSize: '12.5px' } }, s2.size.toLocaleString('ru-RU') + ' patients'),
                         h('button', { class: 'icon-btn', style: { width: '28px', height: '28px' } }, Icon('ChevronRight', { size: 13 })),
                     )),
                 ),
@@ -1095,9 +1095,9 @@ function segSection(num, title, sub, body) {
     return h('div', null,
         h('div', { class: 'row', style: { gap: '10px' } },
             h('span', { style: { width: '22px', height: '22px', borderRadius: '6px', background: 'var(--primary-50)', color: 'var(--primary-700)',
-                fontWeight: 700, fontSize: '11px', display: 'grid', placeItems: 'center', border: '1px solid var(--primary-200)' } }, num),
+                fontWeight: 700, fontSize: '12.5px', display: 'grid', placeItems: 'center', border: '1px solid var(--primary-200)' } }, num),
             h('span', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } }, title),
-            sub && h('span', { class: 'muted', style: { fontSize: '12px' } }, '· ' + sub),
+            sub && h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '· ' + sub),
         ),
         body,
     );
@@ -1195,7 +1195,7 @@ function notifTemplates() {
                             h('span', { style: { width: '28px', height: '28px', borderRadius: '7px', background: c.color, opacity: 0.16,
                                 display: 'grid', placeItems: 'center' } },
                                 h('span', { style: { color: c.color, display: 'grid', placeItems: 'center' } }, Icon(c.icon, { size: 14 }))),
-                            h('span', { style: { fontSize: '13px', fontWeight: 600, color: 'var(--ink-900)' } }, t.name),
+                            h('span', { style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } }, t.name),
                             h('span', { class: 'grow' }),
                             h('button', {
                                 class: 'icon-btn', style: { width: '26px', height: '26px' },
@@ -1213,10 +1213,10 @@ function notifTemplates() {
                                 },
                             }, Icon('Trash', { size: 13 })),
                         ),
-                        t.subject && h('div', { class: 'muted', style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 } },
+                        t.subject && h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 } },
                             'Subject: ', t.subject),
                         h('div', { style: {
-                            fontSize: '12px', color: 'var(--ink-700)', lineHeight: 1.5,
+                            fontSize: '12.5px', color: 'var(--ink-700)', lineHeight: 1.5,
                             background: 'var(--ink-25)', borderRadius: '8px', padding: '10px 12px',
                             borderLeft: '3px solid ' + c.color, minHeight: '64px', whiteSpace: 'pre-wrap',
                         } }, t.body || ''),
@@ -1273,10 +1273,10 @@ function messageRow(m) {
     const name = [p.last_name, p.first_name].filter(Boolean).join(' ').trim() || p.full_name || '(unknown)';
     const c = channelInfo(m.channel) || { color: 'var(--ink-500)', icon: 'Doc', name: m.channel };
     return h('tr', null,
-        h('td', { class: 'num muted', style: { fontSize: '11.5px' } }, formatDateTime(m.queued_at)),
+        h('td', { class: 'num muted', style: { fontSize: '12.5px' } }, formatDateTime(m.queued_at)),
         h('td', null,
             h('div', { class: 'cell-strong' }, name),
-            h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 [p.mrn, m.address].filter(Boolean).join(' · ')),
         ),
         h('td', null,
@@ -1286,11 +1286,11 @@ function messageRow(m) {
                 h('span', null, c.name),
             ),
         ),
-        h('td', { style: { maxWidth: '320px', fontSize: '12px' } },
+        h('td', { style: { maxWidth: '320px', fontSize: '12.5px' } },
             m.subject && h('div', { class: 'cell-strong' }, m.subject),
             h('div', { class: 'muted', style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }, title: m.body }, m.body),
         ),
-        h('td', null, messageStatusTag(m.status), m.error && h('div', { class: 'muted', style: { fontSize: '11px', color: 'var(--crit-700)', marginTop: '2px' } }, m.error)),
+        h('td', null, messageStatusTag(m.status), m.error && h('div', { class: 'muted', style: { fontSize: '12.5px', color: 'var(--crit-700)', marginTop: '2px' } }, m.error)),
         h('td', { style: { textAlign: 'right' } }, messageActions(m)),
     );
 }
@@ -1337,7 +1337,7 @@ function messageActions(m) {
                 'Opened'),
         );
     } else {
-        buttons.push(h('span', { class: 'muted', style: { fontSize: '11.5px' } }, '—'));
+        buttons.push(h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '—'));
     }
     return h('div', { class: 'row', style: { justifyContent: 'flex-end', gap: '4px' } }, ...buttons);
 }
@@ -1452,7 +1452,7 @@ function openPushNowModal(preset) {
             Icon('User', { size: 14 }),
             h('div', null,
                 h('div', { class: 'cell-strong' }, name),
-                h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     [p.mrn, p.phone].filter(Boolean).join(' · ')),
             ),
             h('span', { class: 'grow' }),
@@ -1472,7 +1472,7 @@ function openPushNowModal(preset) {
     const previewBox = h('div', { style: {
         marginTop: '8px', padding: '12px', background: 'var(--ink-25)',
         border: '1px solid var(--ink-100)', borderRadius: '8px', whiteSpace: 'pre-wrap',
-        fontSize: '13px', color: 'var(--ink-900)', minHeight: '60px',
+        fontSize: '13.5px', color: 'var(--ink-900)', minHeight: '60px',
     } });
     const addressInput = h('input', { placeholder: 'phone / chat-id / email — auto-filled if available' });
 
@@ -1559,7 +1559,7 @@ async function doPatientSearch(term, resultsEl, onPick) {
     }));
     clear(resultsEl);
     if (rows.length === 0) {
-        resultsEl.appendChild(h('div', { class: 'muted', style: { padding: '10px 12px', fontSize: '12px' } },
+        resultsEl.appendChild(h('div', { class: 'muted', style: { padding: '10px 12px', fontSize: '12.5px' } },
             `No patient matched "${t}".`));
     } else {
         for (const p of rows.slice(0, 8)) {
@@ -1574,7 +1574,7 @@ async function doPatientSearch(term, resultsEl, onPick) {
             },
                 h('div', { class: 'cell-strong' },
                     [p.last_name, p.first_name].filter(Boolean).join(' ').trim() || p.full_name || '(unnamed)'),
-                h('div', { class: 'muted', style: { fontSize: '11.5px' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     [p.mrn, p.phone, p.date_of_birth].filter(Boolean).join(' · ')),
             ));
         }
@@ -1637,7 +1637,7 @@ function callout(kind, text, detail) {
     }[kind];
     return h('div', { class: 'row', style: { gap: '10px', padding: '8px 12px', background: map.bg, borderRadius: '8px' } },
         h('span', { style: { width: '8px', height: '8px', borderRadius: '999px', background: map.dot, flex: '0 0 8px' } }),
-        h('span', { style: { fontSize: '12px', fontWeight: 700, color: map.fg, minWidth: '60px' } }, text),
+        h('span', { style: { fontSize: '12.5px', fontWeight: 700, color: map.fg, minWidth: '60px' } }, text),
         h('span', { style: { fontSize: '12.5px', color: 'var(--ink-700)' } }, detail),
     );
 }
@@ -1652,7 +1652,7 @@ function funnel(rows) {
                 h('div', { class: 'row', style: { marginBottom: '4px', fontSize: '12.5px' } },
                     h('span', { style: { color: 'var(--ink-800)', fontWeight: 500 } }, r.label),
                     h('span', { class: 'grow' }),
-                    conv && h('span', { class: 'muted', style: { fontSize: '11.5px', marginRight: '10px' } }, '→ ' + conv + '%'),
+                    conv && h('span', { class: 'muted', style: { fontSize: '12.5px', marginRight: '10px' } }, '→ ' + conv + '%'),
                     h('span', { class: 'num', style: { fontWeight: 600, color: 'var(--ink-900)' } }, r.value.toLocaleString('ru-RU')),
                 ),
                 h('div', { style: { height: '16px', background: 'var(--ink-50)', borderRadius: '5px', overflow: 'hidden' } },
@@ -1683,8 +1683,8 @@ function donut(segments, size = 140, stroke = 20, centerLabel, centerSub) {
     </svg>`;
     wrap.appendChild(h('div', { style: { position: 'absolute', inset: 0, display: 'grid', placeItems: 'center' } },
         h('div', { style: { textAlign: 'center' } },
-            h('div', { class: 'num', style: { fontSize: '22px', fontWeight: 700, color: 'var(--ink-900)', letterSpacing: '-0.02em' } }, centerLabel),
-            h('div', { class: 'muted', style: { fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, centerSub),
+            h('div', { class: 'num', style: { fontSize: '24px', fontWeight: 700, color: 'var(--ink-900)', letterSpacing: '-0.02em' } }, centerLabel),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 } }, centerSub),
         ),
     ));
     return wrap;
@@ -1705,7 +1705,7 @@ function stackedBars(labels, series) {
             y -= bh;
             svg += `<rect x="${x}" y="${y}" width="${bw}" height="${bh}" fill="${ss.color}"/>`;
         }
-        svg += `<text x="${x + bw/2}" y="${hgt + 14}" text-anchor="middle" font-size="10" fill="var(--ink-400)" font-family="var(--font-mono)">${labels[i]}</text></g>`;
+        svg += `<text x="${x + bw/2}" y="${hgt + 14}" text-anchor="middle" font-size="12.5" fill="var(--ink-400)" font-family="var(--font-mono)">${labels[i]}</text></g>`;
     }
     svg += `</svg>`;
     const wrap = document.createElement('div');
@@ -1719,7 +1719,7 @@ function reachBar(segments) {
             ...segments.map(s => h('div', { title: s.label + ' · ' + s.pct + '%', style: { width: s.pct + '%', background: s.color } })),
         ),
         h('div', { class: 'row', style: { marginTop: '10px', gap: '6px', flexWrap: 'wrap' } },
-            ...segments.map(s => h('span', { class: 'row', style: { gap: '6px', fontSize: '12px' } },
+            ...segments.map(s => h('span', { class: 'row', style: { gap: '6px', fontSize: '12.5px' } },
                 h('span', { style: { width: '8px', height: '8px', borderRadius: '2px', background: s.color } }),
                 h('span', { style: { color: 'var(--ink-700)' } }, s.label),
                 h('span', { class: 'num', style: { color: 'var(--ink-900)', fontWeight: 600 } }, s.pct + '%'),
@@ -1730,10 +1730,10 @@ function reachBar(segments) {
 
 function miniStat(label, value, trend, color) {
     return h('div', { style: { padding: '10px 12px', background: 'var(--ink-25)', border: '1px solid var(--ink-100)', borderRadius: '8px' } },
-        h('div', { class: 'muted', style: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 } }, label),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 } }, label),
         h('div', { class: 'row', style: { marginTop: '2px', gap: '6px' } },
-            h('span', { class: 'num', style: { fontSize: '18px', fontWeight: 700, color: 'var(--ink-900)' } }, value),
-            h('span', { style: { fontSize: '10px', color } }, trend === 'up' ? '↑' : trend === 'down' ? '↓' : '–'),
+            h('span', { class: 'num', style: { fontSize: '17px', fontWeight: 700, color: 'var(--ink-900)' } }, value),
+            h('span', { style: { fontSize: '12.5px', color } }, trend === 'up' ? '↑' : trend === 'down' ? '↓' : '–'),
         ),
     );
 }

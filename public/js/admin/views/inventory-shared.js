@@ -80,8 +80,8 @@ export const CATEGORY_LABEL = {
 };
 
 // Inline styles for selects / numeric inputs inside modal line tables.
-export const selStyle = { width: '100%', height: '34px', padding: '0 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13px', background: 'white', fontFamily: 'inherit' };
-export const numStyle = { width: '100%', height: '34px', padding: '0 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13px', textAlign: 'right' };
+export const selStyle = { width: '100%', height: '34px', padding: '0 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', background: 'white', fontFamily: 'inherit' };
+export const numStyle = { width: '100%', height: '34px', padding: '0 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', textAlign: 'right' };
 
 // RU movement tag; «Выдача» is kind 'dispense' + reference_type 'issue'
 // (issue_stock_lines). A plain 'dispense' is a visit dispense (Списание).
