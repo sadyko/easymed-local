@@ -4171,6 +4171,11 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .rs-act{ flex:0 0 84px; display:flex; justify-content:flex-end; }
 
 /* Type picker — the first step of the dialog. */
+/* ROOM_CATS_V1 — заголовок категории в выборе типа. Первый без отступа сверху:
+   он идёт сразу за подписью шага. */
+.rs-catlb{ font-size:12.5px; font-weight:700; letter-spacing:.04em; text-transform:uppercase;
+  color:var(--ink-500); margin:14px 0 7px; }
+.rs-catlb:first-of-type{ margin-top:0; }
 .rs-typegrid{ display:grid; grid-template-columns:repeat(2,1fr); gap:9px; }
 .rs-type-card{
   display:flex; align-items:flex-start; gap:11px; text-align:left; width:100%;

@@ -22,18 +22,33 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, PageHead } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 
+// ROOM_CATS_V1 — типы сгруппированы в четыре категории по постановке владельца.
+// cat — это ТОЛЬКО раскладка выбора; на запись она не влияет: kind по-прежнему
+// решает, куда ляжет строка (rooms или wards), а key — что попадёт в room_type /
+// wards.type. Операционная стоит в «Стационаре» рядом с ПИТ, потому что так её
+// ищут, но остаётся КАБИНЕТОМ: коек и проживания у операционной нет.
+const CATS = [
+    ['ambulatory',  'Амбулаторные'],
+    ['stationary',  'Стационар'],
+    ['diagnostics', 'Диагностика'],
+    ['laboratory',  'Лаборатория'],
+];
+
 const TYPES = [
-    { key: 'consultation', kind: 'room', label: 'Консультация',     icon: 'Stethoscope', hint: 'Кабинет приёма' },
-    { key: 'diagnostics',  kind: 'room', label: 'Диагностика',      icon: 'Activity',    hint: 'УЗИ, ЭКГ, рентген' },
-    { key: 'lab',          kind: 'room', label: 'Лаборатория',      icon: 'Flask',       hint: 'Окно забора' },
-    { key: 'procedure',    kind: 'room', label: 'Процедурная',      icon: 'Plus',        hint: 'Уколы, капельницы' },
-    { key: 'surgery',      kind: 'room', label: 'Операционная',     icon: 'Pulse',       hint: 'Операции' },
-    { key: 'general',      kind: 'ward', label: 'Палата (общая)',   icon: 'Bed',         hint: 'Стационар' },
-    { key: 'icu',          kind: 'ward', label: 'ПИТ / реанимация', icon: 'Heart',       hint: 'Интенсивная терапия' },
-    { key: 'isolation',    kind: 'ward', label: 'Изолятор',         icon: 'Shield',      hint: 'Инфекционный бокс' },
-    { key: 'vip',          kind: 'ward', label: 'VIP',              icon: 'Sparkles',    hint: 'Повышенной комфортности' },
-    { key: 'maternity',    kind: 'ward', label: 'Родильная',        icon: 'Heart',       hint: 'Роды и послеродовые' },
-    { key: 'pediatrics',   kind: 'ward', label: 'Детская',          icon: 'Patients',    hint: 'Детский стационар' },
+    { key: 'consultation', cat: 'ambulatory',  kind: 'room', label: 'Консультация',     icon: 'Stethoscope', hint: 'Кабинет приёма' },
+    { key: 'procedure',    cat: 'ambulatory',  kind: 'room', label: 'Процедурная',      icon: 'Plus',        hint: 'Уколы, капельницы' },
+
+    { key: 'general',      cat: 'stationary',  kind: 'ward', label: 'Палата (общая)',   icon: 'Bed',         hint: 'Стационар' },
+    { key: 'vip',          cat: 'stationary',  kind: 'ward', label: 'VIP',              icon: 'Sparkles',    hint: 'Повышенной комфортности' },
+    { key: 'pediatrics',   cat: 'stationary',  kind: 'ward', label: 'Детская',          icon: 'Patients',    hint: 'Детский стационар' },
+    { key: 'isolation',    cat: 'stationary',  kind: 'ward', label: 'Изолятор',         icon: 'Shield',      hint: 'Инфекционный бокс' },
+    { key: 'maternity',    cat: 'stationary',  kind: 'ward', label: 'Родильная',        icon: 'Heart',       hint: 'Роды и послеродовые' },
+    { key: 'icu',          cat: 'stationary',  kind: 'ward', label: 'ПИТ / реанимация', icon: 'Heart',       hint: 'Интенсивная терапия' },
+    { key: 'surgery',      cat: 'stationary',  kind: 'room', label: 'Операционная',     icon: 'Pulse',       hint: 'Операции' },
+
+    { key: 'diagnostics',  cat: 'diagnostics', kind: 'room', label: 'Диагностика',      icon: 'Activity',    hint: 'УЗИ, ЭКГ, рентген' },
+
+    { key: 'lab',          cat: 'laboratory',  kind: 'room', label: 'Лаборатория',      icon: 'Flask',       hint: 'Окно забора' },
 ];
 const TYPE_BY_KEY = Object.fromEntries(TYPES.map(t => [t.key, t]));
 
@@ -390,19 +405,26 @@ function openWizard(row) {
         clear(m.bodyEl); clear(m.footEl);
         m.bodyEl.appendChild(h('div', { class: 'muted', style: { fontSize: '13.5px', marginBottom: '12px' } },
             tr('Шаг 1 из 2 — что это за помещение?')));
-        const grid = h('div', { class: 'rs-typegrid' });
-        for (const t of TYPES) {
-            grid.appendChild(h('button', {
-                class: 'rs-type-card' + (d.type === t.key ? ' is-on' : ''), type: 'button',
-                onclick: () => { d.type = t.key; d.kind = t.kind; step2(); },
-            },
-                h('span', { class: 'rs-type-ic' }, Icon(t.icon, { size: 17 })),
-                h('span', { style: { minWidth: '0' } },
-                    h('span', { class: 'rs-type-lb' }, tr(t.label)),
-                    h('span', { class: 'rs-type-hint muted' }, tr(t.hint))),
-            ));
+        // ROOM_CATS_V1 — выбор разложен по категориям: подряд одиннадцать плиток
+        // читались как один список, где палата стоит рядом с лабораторией.
+        for (const [catKey, catLabel] of CATS) {
+            const items = TYPES.filter(t => t.cat === catKey);
+            if (!items.length) continue;
+            m.bodyEl.appendChild(h('div', { class: 'rs-catlb' }, tr(catLabel)));
+            const grid = h('div', { class: 'rs-typegrid' });
+            for (const t of items) {
+                grid.appendChild(h('button', {
+                    class: 'rs-type-card' + (d.type === t.key ? ' is-on' : ''), type: 'button',
+                    onclick: () => { d.type = t.key; d.kind = t.kind; step2(); },
+                },
+                    h('span', { class: 'rs-type-ic' }, Icon(t.icon, { size: 17 })),
+                    h('span', { style: { minWidth: '0' } },
+                        h('span', { class: 'rs-type-lb' }, tr(t.label)),
+                        h('span', { class: 'rs-type-hint muted' }, tr(t.hint))),
+                ));
+            }
+            m.bodyEl.appendChild(grid);
         }
-        m.bodyEl.appendChild(grid);
         m.footEl.appendChild(h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: m.close }, tr('Отмена')));
     }
 

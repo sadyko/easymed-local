@@ -5807,4 +5807,7 @@ export const STRINGS = {
   "врачей: {n}": {"en":"doctors: {n}","ru":"врачей: {n}","uz":"shifokorlar: {n}"},
   "без врача": {"en":"no doctor","ru":"без врача","uz":"shifokorsiz"},
   "коек нет": {"en":"no beds","ru":"коек нет","uz":"koyka yo'q"},
+
+  // ROOM_CATS_V1 — категории в выборе типа помещения.
+  "Амбулаторные": {"en":"Outpatient","ru":"Амбулаторные","uz":"Ambulator"},
 };
