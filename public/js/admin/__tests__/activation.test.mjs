@@ -56,7 +56,10 @@ globalThis.requestAnimationFrame=(fn)=>fn();
 
 const walk = (e, o = []) => { o.push(e); for (const c of e.children || []) walk(c, o); return o; };
 const textOf = (el) => walk(el).map((n) => n._t || '').join('');
-const findButton = (root) => walk(root).find((n) => n.tagName === 'BUTTON');
+const findButton = (root) => walk(root).find(
+  (n) => n.tagName === 'BUTTON' && /act-cta/.test(n.className || ''));
+const findTab = (root, re) => walk(root).find(
+  (n) => n.tagName === 'BUTTON' && !/act-cta/.test(n.className || '') && re.test(textOf(n)));
 const findInput  = (root) => walk(root).find((n) => n.tagName === 'INPUT');
 const findByClass = (root, cls) => walk(root).find((n) => String(n.className).split(/\s+/).includes(cls));
 
@@ -192,11 +195,13 @@ test('не привязана — заголовок про активацию, 
   assert.match(text, /Активация Easy-Med/, 'заголовок первой установки: ' + text);
   assert.doesNotMatch(text, /Нет связи с Easy-Med/, 'новой установке нельзя говорить, что её интернет сломан');
   assert.doesNotMatch(text, /Подписка не активна/, 'и нельзя обвинять её в неоплате');
-  // BRANCH_KEY_ACTIVATES_V1 — то же требование, новая формулировка: экран
-  // просит код активации, и с недавних пор принимает вместо него ключ филиала
-  // (код лежит внутри ключа). Проверяем смысл, а не буквальную старую строку.
-  assert.match(text, /Введите код активации/);
-  assert.match(text, /ключ филиала/, 'филиалу сказано, что его ключ здесь тоже подойдёт');
+  // INSTALL_KIND_V1 — то же требование, третья формулировка. Экран больше не
+  // намекает одной строкой, что «ключ филиала тоже подойдёт»: он прямо
+  // спрашивает, что ставят. Требование то же — установщик филиала должен
+  // увидеть, что этот экран и для него, — но выполняет его видимая вкладка.
+  assert.match(text, /код активации/i);
+  assert.ok(findTab(root, /^Филиал$/), 'филиалу видно, что для него есть свой путь: ' + text);
+  assert.ok(findTab(root, /^Клиника$/), 'и что по умолчанию это обычная клиника');
 });
 
 test('не привязана — поле под EM-код, без телефонного кода разблокировки', async () => {
@@ -301,4 +306,105 @@ test('главная клиника пропускает шаг филиала, 
   buttons[1].click();
   await new Promise((r) => setTimeout(r, 20));
   assert.strictEqual(pairCalls, 0, 'пропуск ничего не связывает');
+});
+
+// INSTALL_KIND_V1 — вкладка «Филиал». Экран спрашивает, ЧТО ставят, потому что
+// сервер этого спросить не может: на любой негодный код он отвечает одинаково
+// (иначе по ответам перебирали бы живые коды). Установщик филиала, вводивший
+// код главной клиники, получал «Код неверный» — правду, из которой ничего не
+// следует: код уже погашен на другой установке, и перевводить его бесполезно.
+const openBranchTab = (root) => findTab(root, /^Филиал$/).click();
+const KEY_WITH_CODE = 'EMB2-eyJ2IjoyLCJnIjoiZzEiLCJzIjoic3J2IiwidSI6Imh0dHA6Ly94IiwiayI6ImtrIiwibCI6ItCT0LvQsNCy0L3QsNGPIiwidCI6MSwiZSI6IkVNLTk5OTktMDAwMCJ9';
+const KEY_NO_CODE = 'EMB2-eyJ2IjoyLCJnIjoiZzEiLCJzIjoic3J2IiwidSI6Imh0dHA6Ly94IiwiayI6ImtrIiwibCI6ItCT0LvQsNCy0L3QsNGPIiwidCI6MX0';
+
+test('на вкладке «Филиал» не-ключ отвергается на месте, не тревожа сервер', async () => {
+  statusRespond = () => jsonOk({ challenge: null });
+  enrollCalls = 0;
+
+  const root = mk('div');
+  await renderActivation(root, { reason: 'not_enrolled', days_left: 0, locked: true, state: 'locked' });
+  openBranchTab(root);
+  findInput(root).value = 'EM-1111-2222';
+  findButton(root).click();
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.strictEqual(enrollCalls, 0, 'код клиники на вкладке филиала до сервера не доходит');
+  assert.match(textOf(findByClass(root, 'act-status')), /Это не похоже на ключ филиала/);
+  assert.strictEqual(findButton(root).disabled, false, 'можно исправить и попробовать снова');
+});
+
+test('ключ филиала без кода активации получает объяснение, а не «код неверный»', async () => {
+  statusRespond = () => jsonOk({ challenge: null });
+  enrollCalls = 0;
+
+  const root = mk('div');
+  await renderActivation(root, { reason: 'not_enrolled', days_left: 0, locked: true, state: 'locked' });
+  openBranchTab(root);
+  findInput(root).value = KEY_NO_CODE;
+  findButton(root).click();
+  await new Promise((r) => setTimeout(r, 20));
+
+  // Такой ключ выписан офлайн: связать им филиал можно, активировать — нет.
+  // Отправить его в licence_enroll значило бы получить «Код неверный» и
+  // оставить человека гадать, что именно неверно.
+  assert.strictEqual(enrollCalls, 0);
+  const text = textOf(findByClass(root, 'act-status'));
+  assert.match(text, /нет кода активации/);
+  assert.match(text, /выдать ключ заново/, 'назван выход: ' + text);
+});
+
+test('ключ филиала с кодом внутри активирует — в RPC уходит код, а не ключ', async () => {
+  statusRespond = () => jsonOk({ challenge: null });
+  enrollRespond = () => jsonOk({ ok: true, clinic_id: 'c-main-b1', clinic_name: 'Филиал' });
+  enrollCalls = 0; enrollBody = null;
+
+  const root = mk('div');
+  await renderActivation(root, { reason: 'not_enrolled', days_left: 0, locked: true, state: 'locked' });
+  openBranchTab(root);
+  findInput(root).value = KEY_WITH_CODE;
+  findButton(root).click();
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.strictEqual(enrollCalls, 1);
+  assert.strictEqual(enrollBody.code, 'EM-9999-0000', 'активирует код из ключа, сам ключ не код');
+  assert.match(textOf(findByClass(root, 'act-status')), /Система активирована/);
+});
+
+test('«Код неверный» на вкладке клиники подсказывает про филиал, не трогая слова сервера', async () => {
+  statusRespond = () => jsonOk({ challenge: null });
+  enrollRespond = () => jsonErr({ message: 'Код неверный. Проверьте и введите ещё раз.' }, 400);
+
+  const root = mk('div');
+  await renderActivation(root, { reason: 'not_enrolled', days_left: 0, locked: true, state: 'locked' });
+  findInput(root).value = 'EM-USED-ELSEWHERE';
+  findButton(root).click();
+  await new Promise((r) => setTimeout(r, 20));
+
+  // Ровно тот случай, ради которого всё это: код главной клиники уже погашен.
+  const hint = findByClass(root, 'act-hint');
+  assert.ok(hint, 'подсказка есть');
+  assert.match(textOf(hint), /Переключитесь на «Филиал»/);
+  // И она ОТДЕЛЬНАЯ строка: ответ сервера остаётся дословным (см. тест выше).
+  assert.notStrictEqual(hint, findByClass(root, 'act-status'));
+});
+
+// Ровно тот случай, с которого началась правка: ключ филиала уже вставили в
+// одну установку, потом вставляют во вторую. Код внутри ключа погашен, сервер
+// отвечает тем же «Код неверный», что и на выдуманный код (различать их он
+// намеренно не умеет), и без подсказки человек перевводит ту же строку.
+test('уже использованный ключ филиала объясняется, а не просто «неверный»', async () => {
+  statusRespond = () => jsonOk({ challenge: null });
+  enrollRespond = () => jsonErr({ message: 'Код неверный. Проверьте и введите ещё раз.' }, 400);
+
+  const root = mk('div');
+  await renderActivation(root, { reason: 'not_enrolled', days_left: 0, locked: true, state: 'locked' });
+  openBranchTab(root);
+  findInput(root).value = KEY_WITH_CODE;
+  findButton(root).click();
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.match(textOf(findByClass(root, 'act-status')), /Код неверный/, 'слова сервера на месте');
+  const hint = textOf(findByClass(root, 'act-hint'));
+  assert.match(hint, /уже активировали другую установку/);
+  assert.match(hint, /новый ключ/, 'сказано, что делать дальше: ' + hint);
 });

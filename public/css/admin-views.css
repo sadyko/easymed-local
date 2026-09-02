@@ -3697,6 +3697,9 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     background: var(--primary-50); color: var(--primary-700);
 }
 .activation-screen .act-title { font-size: 24px; line-height: 1.25; margin: 0 0 14px; font-weight: 700; color: var(--ink-900); }
+/* INSTALL_KIND_V1 — выбор «клиника или филиал» и подсказка под ошибкой. */
+.activation-screen .act-kind { margin: 0 0 18px; }
+.activation-screen .act-hint { margin-top: 8px; font-size: 13.5px; line-height: 1.5; color: var(--ink-600); }
 .activation-screen .act-reassure { font-size: 15px; line-height: 1.6; color: var(--ink-600); margin: 0 0 26px; }
 .activation-screen .act-code-wrap:empty { display: none; }
 .activation-screen .act-call { font-size: 13.5px; color: var(--ink-600); margin: 0 0 10px; }

@@ -163,25 +163,48 @@ function enrollCodeFromBranchKey(raw) {
 }
 
 function renderEnrollment(root) {
-    // BRANCH_FIRST_RUN_V1 — первый запуск в два шага. Первый обязателен для
-    // ЛЮБОЙ установки, включая филиал: у филиала своя подписка и свой код
-    // активации (на control plane это отдельная клиника со своей подпиской —
-    // см. POST /clinics). Ключ филиала подпиской не является и активировать им
-    // нельзя: он присоединяет уже активированную установку к главной клинике,
-    // чтобы та отдала справочник.
-    const { input, btn, statusEl } = buildEnrollForm(() => renderBranchStep(root));
+    // INSTALL_KIND_V1 — экран сначала спрашивает, ЧТО ставят, и только потом
+    // просит строку.
+    //
+    // Раньше поле было одно и подписано «код активации». Установщик филиала,
+    // у которого на руках ключ главной клиники, вводил его — и получал
+    // «Код неверный. Проверьте и введите ещё раз.», потому что код уже погашен
+    // на другой установке. Сообщение верное и совершенно бесполезное: человек
+    // перевводит ту же строку, снова упирается и решает, что система сломана.
+    // Сервер тут ни при чём — он намеренно отвечает одинаково на любой негодный
+    // код, чтобы по ответам нельзя было перебирать живые. Значит развести пути
+    // должен ЭКРАН, до отправки.
+    let kind = 'clinic';   // 'clinic' | 'branch'
 
-    root.appendChild(h('div', { class: 'card activation-screen' },
-        h('div', { class: 'act-icon' }, Icon('Lock', { size: 26 })),
-        h('h1', { class: 'act-title' }, 'Активация Easy-Med'),
-        h('p', { class: 'act-reassure' },
-            'Введите код активации от менеджера Easy-Med — или вставьте ключ филиала, выданный главной клиникой: код активации уже внутри него.'),
-        field('Введите код активации', input),
-        btn,
-        statusEl,
-    ));
+    const card = h('div', { class: 'card activation-screen' });
+    root.appendChild(card);
+
+    function paint() {
+        clear(card);
+        const isBranch = kind === 'branch';
+        const { input, btn, statusEl } = buildEnrollForm(() => renderBranchStep(root), {
+            branch: isBranch,
+        });
+
+        const pick = (id, label) => h('button', {
+            type: 'button', class: kind === id ? 'on' : '',
+            onclick: () => { if (kind !== id) { kind = id; paint(); } },
+        }, label);
+
+        card.appendChild(h('div', { class: 'act-icon' }, Icon(isBranch ? 'Building' : 'Lock', { size: 26 })));
+        card.appendChild(h('h1', { class: 'act-title' }, 'Активация Easy-Med'));
+        card.appendChild(h('div', { class: 'segmented act-kind' },
+            pick('clinic', 'Клиника'), pick('branch', 'Филиал')));
+        card.appendChild(h('p', { class: 'act-reassure' }, isBranch
+            ? 'Вставьте ключ филиала, выданный главной клиникой. Код активации уже внутри него — отдельный код не нужен.'
+            : 'Введите код активации, полученный от менеджера Easy-Med.'));
+        card.appendChild(field(isBranch ? 'Ключ филиала' : 'Код активации', input));
+        card.appendChild(btn);
+        card.appendChild(statusEl);
+    }
+
+    paint();
 }
-
 // Шаг 2: присоединить филиал к главной клинике. Пропускаемый — главной клинике
 // присоединяться не к чему, и заставлять её что-то вводить было бы неправдой.
 // Ключ, которым активировались: шаг 2 подставит его сам, чтобы не заставлять
@@ -246,11 +269,12 @@ function renderBranchStep(root) {
 // the server exactly as typed (normalisation lives control-plane-side, so no
 // screen can disagree with it), the server's Russian sentence is shown as-is
 // on failure, and success reloads — the whole app must re-read its licence.
-export function buildEnrollForm(onEnrolled) {
+export function buildEnrollForm(onEnrolled, { branch = false } = {}) {
     const statusEl = h('div', { class: 'act-status', role: 'status' });
 
     const input = h('input', {
-        type: 'text', class: 'act-input', placeholder: 'EM-XXXX-XXXX',
+        type: 'text', class: 'act-input',
+        placeholder: branch ? 'EMB2-…' : 'EM-XXXX-XXXX',
         autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false',
     });
 
@@ -270,8 +294,29 @@ export function buildEnrollForm(onEnrolled) {
             // ОДНОЙ строки вместо двух из двух разных мест. Ключ запоминаем,
             // чтобы сразу после активации связать филиал, не прося ввести его
             // второй раз.
+            // INSTALL_KIND_V1 — что можно проверить здесь, здесь и проверяем.
+            // Сервер на любой негодный код отвечает одинаково (и правильно
+            // делает: иначе по ответам можно было бы перебирать живые коды),
+            // поэтому «в этом ключе нет кода активации» способен сказать
+            // только экран — по самому ключу, никуда его не отправляя.
+            // В RPC уходит ровно то, что набрали: нормализация — дело сервера.
             const typed = String(input.value || '');
             const embedded = enrollCodeFromBranchKey(typed);
+            const refuse = (msg) => {
+                statusEl.className = 'act-status error';
+                statusEl.textContent = tr(msg);
+                btn.disabled = false;
+            };
+            if (branch) {
+                if (!typed.trim().startsWith('EMB2-')) {
+                    return refuse('Это не похоже на ключ филиала. Ключ выдаёт главная клиника: «Настройки → Помещения → Филиалы».');
+                }
+                if (!embedded) {
+                    // Ключ выписан без связи с Easy-Med: связать филиал им можно,
+                    // активировать — нет. Называем оба выхода, а не «код неверный».
+                    return refuse('В этом ключе нет кода активации — его выдали без связи с Easy-Med. Попросите главную клинику выдать ключ заново при интернете, либо активируйте филиал его собственным кодом на вкладке «Клиника».');
+                }
+            }
             if (embedded) pendingBranchKey = typed.trim();
             const { error } = await supabase.rpc('licence_enroll', { code: embedded || typed });
             if (error) throw error;
@@ -296,6 +341,21 @@ export function buildEnrollForm(onEnrolled) {
             // limit, no internet, vendor error — in services/rpc/licence.js).
             statusEl.className = 'act-status error';
             statusEl.textContent = (e && e.message) || tr('Не удалось активировать.');
+            // INSTALL_KIND_V1 — «Код неверный» правда и, для того кто ставит
+            // филиал кодом главной клиники, совершенно бесполезная правда: код
+            // уже погашен на другой установке, и перевод той же строки не
+            // поможет. Подсказка идёт ОТДЕЛЬНОЙ строкой, а не подмешивается в
+            // ответ сервера — сервер отвечает за свои слова, мы за свои.
+            // Тот же приём на вкладке филиала, но причина другая и она
+            // единственная правдоподобная: ключ уже активировали на другой
+            // машине. Код внутри ключа гасится при первом использовании —
+            // сервер отвечает так же, как на выдуманный код, и различить их
+            // может только человек, знающий, куда этот ключ уже вставляли.
+            if (/неверн/i.test(String((e && e.message) || ''))) {
+                statusEl.appendChild(h('div', { class: 'act-hint' }, tr(branch
+                    ? 'Похоже, этим ключом уже активировали другую установку: код внутри ключа срабатывает один раз. Попросите главную клинику завести филиал заново и выдать новый ключ.'
+                    : 'Ставите филиал? Переключитесь на «Филиал»: код главной клиники второй раз не подойдёт.')));
+            }
             btn.disabled = false;
         }
     };
