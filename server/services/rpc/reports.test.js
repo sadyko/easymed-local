@@ -280,7 +280,17 @@ test('owner_report: KPIs, 12 months, payer buckets; branch_ids filters', () => {
   assert.equal(o.kpis.revenue, 1090000);
   assert.equal(o.kpis.count, 2);
   assert.equal(o.monthly.length, 12);
-  assert.equal(o.monthly[11].value, 1090000);   // current month is the last point
+  // Данные засеяны фиксированным августом 2026, а ряд всегда заканчивается
+  // ТЕКУЩИМ месяцем — поэтому индекс августа зависит от даты запуска. Раньше
+  // здесь стояло monthly[11] («последняя точка»), и тест сломался сам собой
+  // 1 сентября: выручка уехала в monthly[10], а последней точкой стал
+  // сентябрь с нулём. Ищем месяц по подписи: в окне из 12 месяцев август
+  // ровно один, поэтому проверка больше не зависит от календаря.
+  const augIdx = o.monthly.findIndex((m) => m.label === 'авг');
+  assert.ok(augIdx >= 0, 'в 12-месячном ряду всегда есть август');
+  assert.equal(o.monthly[augIdx].value, 1090000);
+  const others = o.monthly.reduce((sum, m, i) => sum + (i === augIdx ? 0 : m.value), 0);
+  assert.equal(others, 0, 'выручка стоит ровно в одном месяце');
   const payerLabels = o.byPayer.map(x => x.label);
   assert.ok(payerLabels.includes('Пациент (самооплата)'));
   assert.ok(payerLabels.includes('B2B (корпоратив)'));
