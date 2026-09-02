@@ -401,11 +401,38 @@ test('progressView: an interrupted record (a restart killed the install) says so
   assert.match(render(v.note), /прервалась/);
 });
 
-test('progressView: a failed download says what to check, and shows no bar', () => {
+// UPDATE_FAILURE_REASON_V1 - the note names the actual cause.
+//
+// Раньше здесь проверялось слово «интернет» — и оно печаталось на ВСЕ
+// одиннадцать причин отказа. Владелец 2026-09-02 читал совет проверить
+// интернет на машине, которая в ту же минуту ходила на сервер каждую минуту:
+// совет, который нельзя выполнить, отправляет чинить исправное.
+test('progressView: a failed download names the real cause, and shows no bar', () => {
   const v = progressView({ version: '0.4.6', phase: 'failed', reason: 'network', bytes: 0, total: null, age_ms: 1000 });
   assert.equal(v.tone, 'warn');
   assert.equal(v.percent, null);
-  assert.match(render(v.note), /интернет/);
+  assert.match(render(v.note), /связь прервалась/);
+});
+
+test('progressView: a full disk is not blamed on the internet', () => {
+  const v = progressView({ version: '0.4.6', phase: 'failed', reason: 'disk', bytes: 0, total: null, age_ms: 1000 });
+  const note = render(v.note);
+  assert.match(note, /места/, 'сказано про место на диске: ' + note);
+  assert.doesNotMatch(note, /интернет/, 'и НЕ предложено чинить исправную сеть');
+});
+
+test('progressView: a refused bundle tells the clinic to call Easy-Med, not to check cables', () => {
+  const v = progressView({ version: '0.4.6', phase: 'failed', reason: 'bundle_refused', bytes: 0, total: null, age_ms: 1000 });
+  const note = render(v.note);
+  assert.match(note, /подлинности/);
+  assert.match(note, /Easy-Med/, 'это не чинится в клинике: ' + note);
+});
+
+test('progressView: an unrecognised reason falls back instead of inventing one', () => {
+  const v = progressView({ version: '0.4.6', phase: 'failed', reason: 'something_new', bytes: 0, total: null, age_ms: 1000 });
+  const note = render(v.note);
+  assert.match(note, /Не удалось установить обновление/);
+  assert.doesNotMatch(note, /интернет|диск/, 'выдумывать причину опаснее, чем признать, что её не знаем');
 });
 
 test('progressView: an unknown phase from a newer server says nothing rather than something wrong', () => {
