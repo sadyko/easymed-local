@@ -209,3 +209,55 @@ test('местная неотправленная правка защищает 
   assert.equal(v.patient_id, px, 'перевесить визит на ДРУГОГО пациента не лучше, чем стереть телефон');
   db.close();
 });
+
+// ССЫЛКА — ТАКАЯ ЖЕ КОЛОНКА. Три теста ниже — про один и тот же промах первой
+// реализации: поколоночное правило применялось к полям из SHIPPED, а
+// разрешённые ссылки (patient_id, visit_id, visit_service_id, service_id)
+// клались в UPDATE безусловно. Визит молча переезжал к другому пациенту —
+// в карте это не «конфликт слияния», это чужая история болезни.
+test('приехавшая СТАРАЯ ссылка не перевешивает визит', () => {
+  const db = fresh();
+  applyBatch(db, [
+    put('patients', 'pA2', '000000000001-0000-C', { full_name: 'А' }),
+    put('patients', 'pB2', '000000000002-0000-C', { full_name: 'Б' }),
+    put('visits', 'v2', '000000000007-0000-C', { visit_date: '2026-09-02', status: 'scheduled' }, { patient_id: 'pA2' }),
+  ], S);
+  const pa = db.prepare("SELECT id FROM patients WHERE uid = 'pA2'").get().id;
+  // Та же строка, метка СТАРШЕ принятой, ссылка — на другого пациента.
+  applyBatch(db, [put('visits', 'v2', '000000000003-0000-C', {}, { patient_id: 'pB2' })], S);
+  assert.equal(db.prepare("SELECT patient_id FROM visits WHERE uid = 'v2'").get().patient_id, pa,
+    'ссылка принята под более новой меткой — старая её не отменяет');
+  db.close();
+});
+
+test('ожидание, перекрытое более новой записью, снимается, а не ждёт своего часа', () => {
+  const db = fresh();
+  applyBatch(db, [put('patients', 'pZ', '000000000004-0000-C', { full_name: 'Есть' })], S);
+  const r = applyBatch(db, [put('visits', 'vZ', '000000000001-0000-C',
+    { visit_date: '2026-09-01', status: 'scheduled' }, { patient_id: 'pПРОПАЛ' })], S);
+  assert.equal(r.deferred, 1);
+  applyBatch(db, [put('visits', 'vZ', '000000000003-0000-C',
+    { visit_date: '2026-09-02', status: 'arrived' }, { patient_id: 'pZ' })], S);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM sync_pending WHERE uid = 'vZ'").get().n, 0,
+    'хранить заведомо проигравшую запись — значит проигрывать её заново каждую порцию');
+  db.close();
+});
+
+test('опоздавший родитель не воспроизводит устаревшее ожидание поверх нового состояния', () => {
+  const db = fresh();
+  applyBatch(db, [put('patients', 'pNEW', '000000000004-0000-C', { full_name: 'Новый' })], S);
+  // Запись S1 приезжает первой и ложится ждать pOLD.
+  applyBatch(db, [put('visits', 'v1', '000000000001-0000-C',
+    { visit_date: '2026-09-01', status: 'scheduled' }, { patient_id: 'pOLD' })], S);
+  // Более новая запись S3 про ТОТ ЖЕ визит применяется напрямую: её родитель на месте.
+  applyBatch(db, [put('visits', 'v1', '000000000003-0000-C',
+    { visit_date: '2026-09-02', status: 'arrived' }, { patient_id: 'pNEW' })], S);
+  const pnew = db.prepare("SELECT id FROM patients WHERE uid = 'pNEW'").get().id;
+  // Родитель устаревшей записи доезжает последним.
+  applyBatch(db, [put('patients', 'pOLD', '000000000005-0000-C', { full_name: 'Старый' })], S);
+  const v = db.prepare("SELECT patient_id, status, visit_date FROM visits WHERE uid = 'v1'").get();
+  assert.equal(v.patient_id, pnew, 'визит остаётся у того пациента, к которому его привязали новее');
+  assert.equal(v.status, 'arrived', 'и не разъезжается: статус от одной записи, ссылка от другой');
+  assert.equal(v.visit_date, '2026-09-02');
+  db.close();
+});

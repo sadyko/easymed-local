@@ -24,6 +24,8 @@ import { SHIPPED, REFS, CODE_REFS, readClock, writeClock } from './journal.js';
 const SEEN = 'sync_seen';
 // Приехавшая запись больше этого — не хранится в ожидании, а пропускается:
 // предел релея (12 МБ сжатых) ничего не говорит о размере ОДНОЙ строки.
+// БАЙТЫ, а не символы: в кириллице буква — два байта, и .length занизил бы
+// размер русской записи вдвое ровно там, где предел и нужен.
 const MAX_PENDING_BYTES = 256 * 1024;
 const PENDING_MAX_DAYS = 30;
 // sync_seen растёт быстрее журнала: ~190 строк на принятый визит с панелью
@@ -118,6 +120,13 @@ function newCtx(db) {
 // HLC: приняв нашу метку, отставший сосед подтягивает свои часы (пол в
 // nextStamp), и со следующего обмена удержание работает как обычно.
 //
+// Чего эта граница НЕ закрывает, и об этом надо знать вслух: порция от соседа
+// с нормальными часами, пришедшая МЕЖДУ двумя порциями отставшего, поднимает
+// границу до «сейчас» и вычищает метки эпохи 1970 — вместе с надгробиями.
+// Случай узкий (нужен именно такой порядок порций) и ограниченный по ущербу,
+// но он есть: полное лечение — своя граница на КАЖДОГО соседа, то есть ещё
+// одна таблица, а не строчка здесь.
+//
 // Порция без единой годной метки границы не двигает: чистить нечем и незачем.
 function seenHorizon(maxReceived) {
   if (!maxReceived) return null;
@@ -211,6 +220,18 @@ function applyOne(db, rec, stats, ctx) {
       if (id == null) { stats.skipped++; return; }
       continue;
     }
+    // Ссылка — такая же КОЛОНКА, как телефон, и подчиняется тому же правилу.
+    // Без этой проверки запись, отлежавшая в ожидании, при освобождении
+    // перевешивала бы визит на пациента из своей УСТАРЕВШЕЙ ссылки, оставляя
+    // статус от более новой записи: половина строки от вчера, половина от
+    // сегодня, и никакой ошибки в логах.
+    const prevRef = seenCol.get(rec.tbl, rec.uid, col);
+    if (prevRef && compareStamps(rec.stamp, prevRef.stamp) <= 0) {
+      // Ссылку уже приняли новее. Существующей строке это ничем не грозит, а
+      // НОВУЮ без обязательного родителя не собрать — и выдумывать его нельзя.
+      if (id == null) { stats.skipped++; return; }
+      continue;
+    }
     const pid = localId(db, ctx, parent, parentUid);
     if (pid == null) { waiting = { tbl: parent, uid: parentUid }; break; }
     cols.push(col); vals.push(pid);
@@ -219,6 +240,10 @@ function applyOne(db, rec, stats, ctx) {
     for (const [col, spec] of Object.entries(CODE_REFS[rec.tbl] || {})) {
       const code = rec.refs ? rec.refs[spec.ref] : null;
       if (!code) continue;
+      // То же правило. Колонка необязательная (visit_services.service_id
+      // допускает NULL), поэтому устаревшую ссылку достаточно не трогать.
+      const prevRef = seenCol.get(rec.tbl, rec.uid, col);
+      if (prevRef && compareStamps(rec.stamp, prevRef.stamp) <= 0) continue;
       const pid = catalogueId(db, ctx, spec, code);
       if (pid == null) { waiting = { tbl: spec.table, uid: code }; break; }
       cols.push(col); vals.push(pid);
@@ -228,7 +253,7 @@ function applyOne(db, rec, stats, ctx) {
     const json = JSON.stringify(rec);
     // Ожидание — рабочая таблица, а не свалка: одна раздутая запись, которую
     // всё равно нечем применить, не должна занимать место годами.
-    if (json.length > MAX_PENDING_BYTES) { stats.skipped++; return; }
+    if (Buffer.byteLength(json, 'utf8') > MAX_PENDING_BYTES) { stats.skipped++; return; }
     // Более поздняя запись про ту же строку замещает более раннюю; более ранняя
     // НЕ затирает более позднюю — порядок прихода не гарантирован ничем.
     ctx.q(`INSERT INTO sync_pending (tbl, uid, stamp, record, waits_tbl, waits_uid)
@@ -262,6 +287,14 @@ function applyOne(db, rec, stats, ctx) {
     ctx.q(`UPDATE ${rec.tbl} SET ${cols.map(c => c + ' = ?').join(', ')} WHERE id = ?`)
       .run(...vals, id);
   }
+  // Строка применена напрямую. Всё, что лежит по ней в ожидании со МЕНЬШЕЙ
+  // меткой, устарело: дождавшись своего родителя, оно воспроизвело бы старое
+  // состояние поверх нового. Поколоночное правило выше и так не дало бы ему
+  // победить, но снять перекрытое ожидание дешевле, чем годами хранить и
+  // раз за разом проигрывать его заново. Ожидание с БОЛЬШЕЙ меткой остаётся:
+  // оно новее и выиграет по колонкам, когда придёт его час.
+  ctx.q('DELETE FROM sync_pending WHERE tbl = ? AND uid = ? AND stamp <= ?')
+    .run(rec.tbl, rec.uid, rec.stamp);
   const remember = ctx.q(`INSERT INTO ${SEEN} (tbl, uid, col, stamp) VALUES (?,?,?,?)
               ON CONFLICT(tbl, uid, col) DO UPDATE SET stamp = excluded.stamp`);
   for (const col of cols) remember.run(rec.tbl, rec.uid, col, rec.stamp);
