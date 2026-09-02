@@ -44,7 +44,13 @@ const TYPES = [
     { key: 'isolation',    cat: 'stationary',  kind: 'ward', label: 'Изолятор',         icon: 'Shield',      hint: 'Инфекционный бокс' },
     { key: 'maternity',    cat: 'stationary',  kind: 'ward', label: 'Родильная',        icon: 'Heart',       hint: 'Роды и послеродовые' },
     { key: 'icu',          cat: 'stationary',  kind: 'ward', label: 'ПИТ / реанимация', icon: 'Heart',       hint: 'Интенсивная терапия' },
-    { key: 'surgery',      cat: 'stationary',  kind: 'room', label: 'Операционная',     icon: 'Pulse',       hint: 'Операции' },
+    // OPERATING_WARD_V1 — операционная заводится как ПАЛАТА, а не кабинет:
+    // иначе в неё нельзя положить пациента (госпитализация цепляется за койку),
+    // а именно этого от неё и ждут. Опасение «начнём брать за койко-день в
+    // операционной» снимается самой биллинговой логикой: ставка 0 даёт счёт 0
+    // (accommodation.js: rate = resolved > 0 ? resolved : 0), а 0 здесь по
+    // умолчанию. «Койки» операционной — это столы: их столько, сколько мест.
+    { key: 'surgery',      cat: 'stationary',  kind: 'ward', label: 'Операционная',     icon: 'Pulse',       hint: 'Операции' },
 
     { key: 'diagnostics',  cat: 'diagnostics', kind: 'room', label: 'Диагностика',      icon: 'Activity',    hint: 'УЗИ, ЭКГ, рентген' },
 
@@ -396,7 +402,7 @@ function openWizard(row) {
         active: src ? (src.active !== false && src.active !== 0) : true,
         queue_mode: src && src.queue_mode ? src.queue_mode : 'none',
         doctorIds: editing && row.kind === 'room' ? doctorsIn(row.id).map(x => x.id) : [],
-        beds: 4,
+        beds: 4, addBeds: 0,
         billing_mode: src && src.billing_mode ? src.billing_mode : 'daily',
         price: src ? (src.billing_mode === 'hourly' ? src.price_per_hour : src.price_per_day) || 0 : 0,
     };
@@ -450,15 +456,26 @@ function openWizard(row) {
             ...state.floors.map(f => h('option', { value: String(f.id), selected: String(d.floor_id) === String(f.id) }, f.name)))));
 
         if (isWard) {
+            // WARD_BEDS_EDIT_V1 — число коек правится и ПОСЛЕ создания. Раньше поле
+            // показывалось только при заведении, а «Койки» жили кнопкой в списке —
+            // в режиме «План» её нет вовсе, и добавить койку было физически негде.
             if (!editing) {
                 m.bodyEl.appendChild(field(tr('Сколько коек создать'), h('input', {
                     class: 'inp', type: 'number', min: '0', max: '200', value: String(d.beds),
                     oninput: (e) => { d.beds = e.target.value; },
-                }), { hint: tr('Койки пронумеруются автоматически: 1, 2, 3… Позже можно добавить ещё кнопкой «Койки».') }));
+                }), { hint: tr('Койки пронумеруются автоматически: 1, 2, 3… Позже можно добавить ещё.') }));
+            } else {
+                const have = (state.bedsByWard[row.id] || []).length;
+                m.bodyEl.appendChild(field(trf('Коек сейчас: {n}. Добавить ещё', { n: have }), h('input', {
+                    class: 'inp', type: 'number', min: '0', max: '200', value: '0',
+                    oninput: (e) => { d.addBeds = e.target.value; },
+                }), { hint: tr('Новые койки продолжат нумерацию. Существующие не трогаются — занятая койка не должна поменять номер под пациентом.') }));
             }
             const priceFld = field(d.billing_mode === 'daily' ? tr('Цена за сутки, сум') : tr('Цена за час, сум'),
                 h('input', { class: 'inp', type: 'number', min: '0', step: '1000', value: String(d.price), oninput: (e) => { d.price = e.target.value; } }),
-                { hint: tr('Ставка палаты. Отдельная койка может стоить иначе — это задаётся в карточке койки.') });
+                { hint: d.type === 'surgery'
+                    ? tr('Для операционной оставьте 0 — тогда за пребывание не начисляется ничего, а операция выставляется как услуга.')
+                    : tr('Ставка палаты. Отдельная койка может стоить иначе — это задаётся в карточке койки.') });
             m.bodyEl.appendChild(field(tr('Как считать проживание'), h('select', {
                 class: 'inp',
                 onchange: (e) => {
@@ -559,7 +576,13 @@ async function save(d, row) {
     if (row) {
         const { error } = await supabase.from('wards').update(payload).eq('id', row.id);
         if (error) throw new Error(error.message);
-        toast(tr('Сохранено.'), 'ok');
+        const add = Math.max(0, Math.min(200, parseInt(d.addBeds, 10) || 0));
+        if (add > 0) {
+            const have = state.bedsByWard[row.id] || [];
+            const maxNo = have.reduce((mx, b) => Math.max(mx, parseInt(b.code, 10) || 0), 0);
+            await insertBeds(row.id, d.type, maxNo + 1, add);
+        }
+        toast(add ? trf('Сохранено. Добавлено коек: {n}.', { n: add }) : tr('Сохранено.'), 'ok');
         return;
     }
     // Палата, затем койки — двумя запросами и именно в этом порядке: если

@@ -5833,4 +5833,11 @@ export const STRINGS = {
 
   // STATIONARY_ROOMS_V1 — операционные на доске стационара.
   "без коек · правятся в «Помещениях»": {"en":"no beds - edited in Rooms","ru":"без коек · правятся в «Помещениях»","uz":"koykasiz - «Xonalar» da tahrirlanadi"},
+
+  // WARD_BEDS_EDIT_V1 / OPERATING_WARD_V1 — правка числа коек и операционная как палата.
+  "Коек сейчас: {n}. Добавить ещё": {"en":"Beds now: {n}. Add more","ru":"Коек сейчас: {n}. Добавить ещё","uz":"Hozir koykalar: {n}. Yana qo'shish"},
+  "Койки пронумеруются автоматически: 1, 2, 3… Позже можно добавить ещё.": {"en":"Beds are numbered automatically: 1, 2, 3... You can add more later.","ru":"Койки пронумеруются автоматически: 1, 2, 3… Позже можно добавить ещё.","uz":"Koykalar avtomatik raqamlanadi: 1, 2, 3... Keyinroq qo'shish mumkin."},
+  "Новые койки продолжат нумерацию. Существующие не трогаются — занятая койка не должна поменять номер под пациентом.": {"en":"New beds continue the numbering. Existing ones are untouched - an occupied bed must not change its number under a patient.","ru":"Новые койки продолжат нумерацию. Существующие не трогаются — занятая койка не должна поменять номер под пациентом.","uz":"Yangi koykalar raqamlashni davom ettiradi. Mavjudlari tegilmaydi - band koyka bemor ostida raqamini o'zgartirmasligi kerak."},
+  "Сохранено. Добавлено коек: {n}.": {"en":"Saved. Beds added: {n}.","ru":"Сохранено. Добавлено коек: {n}.","uz":"Saqlandi. Qo'shilgan koykalar: {n}."},
+  "Для операционной оставьте 0 — тогда за пребывание не начисляется ничего, а операция выставляется как услуга.": {"en":"For an operating room leave 0 - nothing is charged for the stay, and the operation is billed as a service.","ru":"Для операционной оставьте 0 — тогда за пребывание не начисляется ничего, а операция выставляется как услуга.","uz":"Operatsiya xonasi uchun 0 qoldiring - turish uchun hech narsa hisoblanmaydi, operatsiya xizmat sifatida hisoblanadi."},
 };
