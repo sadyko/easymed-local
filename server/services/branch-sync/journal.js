@@ -122,12 +122,18 @@ function seedHeads(db, limit) {
 
 // Хвост, отданный ВСЕМ соседям, больше не нужен: без чистки журнал растёт
 // ~4.7 млн строк в год на клинике с 300 визитами в день, а сборка порции
-// сканирует его целиком. Соседи без удачной отправки за STALE_DAYS не держат
-// чистку: заброшенный или ещё не подключённый филиал иначе замораживал бы её
-// навсегда — он всё равно получит холодный засев из таблиц.
+// сканирует его целиком. Сосед, молчавший дольше STALE_DAYS, забывается: его
+// строка удаляется, и по возвращении он получает холодный засев из таблиц —
+// иначе он навсегда пропустил бы всё, что вычищено за время его отсутствия.
+// Удалять строку ОБЯЗАТЕЛЬНО раньше, чем считать пол: если просто исключить
+// такого соседа из MIN(sent_seq), его собственная sync_peers-строка
+// (старый sent_seq) остаётся на месте — buildBatch увидит её, посчитает
+// соседа тёплым и станет читать хвост журнала НИЖЕ уже вычищенного места:
+// дыра, а не переотправка.
 const STALE_DAYS = 30;
 export function pruneJournal(db, { now = () => new Date() } = {}) {
   const cutoff = new Date(now().getTime() - STALE_DAYS * 86400000).toISOString();
+  db.prepare('DELETE FROM sync_peers WHERE last_ok IS NULL OR last_ok < ?').run(cutoff);
   const floor = db.prepare('SELECT MIN(sent_seq) AS m FROM sync_peers WHERE last_ok IS NOT NULL AND last_ok >= ?').get(cutoff);
   if (!floor || floor.m == null || floor.m <= 0) return 0;
   return db.prepare('DELETE FROM sync_journal WHERE seq <= ?').run(floor.m).changes;

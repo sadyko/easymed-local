@@ -96,6 +96,25 @@ test('отданный всем хвост журнала вычищается; 
   db.close();
 });
 
+test('заброшенный сосед по возвращении получает холодный засев, а не дыру', () => {
+  const db = fresh(); warm(db);
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  const b = buildBatch(db, { self: 'B', peer: 'C' });
+  markSent(db, 'C', b.upto, b.clock);
+  db.prepare("INSERT INTO sync_peers (node, sent_seq, last_ok) VALUES ('D', 0, ?)")
+    .run(new Date(Date.now() - 40 * 86400000).toISOString());   // 40 дней молчит
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Петров')").run();
+  const b2 = buildBatch(db, { self: 'B', peer: 'C' });
+  markSent(db, 'C', b2.upto, b2.clock);   // чистка: журнал ниже позиции D вычищен
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM sync_peers WHERE node = 'D'").get().n, 0,
+    'молчавший 40 дней сосед забыт, а не оставлен с устаревшим sent_seq');
+  const forD = buildBatch(db, { self: 'B', peer: 'D' });
+  const names = forD.records.filter(r => r.tbl === 'patients').map(r => r.data.full_name);
+  assert.deepEqual(names.sort(), ['Иванов', 'Петров'],
+    'без строки в sync_peers D снова холодный — засев из таблиц покрывает и то, что уже вычищено из журнала');
+  db.close();
+});
+
 test('деньги из visit_services не уезжают', () => {
   const db = fresh(); warm(db);
   const pid = db.prepare("INSERT INTO patients (full_name) VALUES ('И')").run().lastInsertRowid;
