@@ -17,9 +17,9 @@
 --      зажурналится, а осиротевшие дети — нет, и на приёме их никто не удалит.
 --
 -- Эта миграция сознательно НЕ досоздаёт журнал задним числом для уже
--- существующих строк: холодного соседа (sent_seq = 0) сеет из самих таблиц
--- отправитель (Задача 4) — бэкфилл журнала добавлял бы ~1 запись на КАЖДУЮ
--- уже существующую строку НАВСЕГДА, в каждой клинике.
+-- существующих строк: холодного соседа (нет строки в sync_peers) сеет из
+-- самих таблиц отправитель (Задача 4) — бэкфилл журнала добавлял бы ~1 запись
+-- на КАЖДУЮ уже существующую строку НАВСЕГДА, в каждой клинике.
 CREATE TABLE sync_journal (
   seq        INTEGER PRIMARY KEY AUTOINCREMENT,  -- локальный порядок отдачи
   tbl        TEXT NOT NULL,
@@ -109,12 +109,13 @@ CREATE TRIGGER lab_results_journal_del AFTER DELETE ON lab_results
 -- когда родитель приезжает. Ключ — (tbl, uid): у одной строки одно последнее
 -- состояние; более поздняя запись про ту же строку замещает более раннюю.
 CREATE TABLE sync_pending (
-  tbl        TEXT NOT NULL,
-  uid        TEXT NOT NULL,
-  stamp      TEXT NOT NULL,
-  record     TEXT NOT NULL,          -- JSON всей записи, как приехала
-  waits_tbl  TEXT NOT NULL,          -- какого родителя ждёт
-  waits_uid  TEXT NOT NULL,
+  tbl          TEXT NOT NULL,
+  uid          TEXT NOT NULL,
+  stamp        TEXT NOT NULL,
+  record       TEXT NOT NULL,          -- JSON всей записи, как приехала
+  waits_tbl    TEXT NOT NULL,          -- какого родителя ждёт
+  waits_uid    TEXT NOT NULL,
+  received_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),  -- для выселения: ребёнок, чей родитель удалён у источника, ждал бы вечно
   PRIMARY KEY (tbl, uid)
 );
 CREATE INDEX idx_sync_pending_parent ON sync_pending(waits_tbl, waits_uid);
@@ -136,5 +137,6 @@ CREATE TABLE sync_seen (
 -- колонкам отслеживает sync_seen, а не эта таблица.
 CREATE TABLE sync_peers (
   node       TEXT PRIMARY KEY,
-  sent_seq   INTEGER NOT NULL DEFAULT 0   -- наш журнал: докуда отдали
+  sent_seq   INTEGER NOT NULL DEFAULT 0,  -- наш журнал: докуда отдали
+  last_ok    TEXT                         -- когда последний раз отдали успешно
 );

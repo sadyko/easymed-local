@@ -94,9 +94,9 @@ test('084: журнал ведётся для всех четырёх табли
 test('084: таблицы ожидания и соседей существуют с нужными ключами', () => {
   const db = fresh();
   const pend = db.prepare("PRAGMA table_info(sync_pending)").all().map(c => c.name);
-  assert.deepEqual(pend, ['tbl', 'uid', 'stamp', 'record', 'waits_tbl', 'waits_uid']);
+  assert.deepEqual(pend, ['tbl', 'uid', 'stamp', 'record', 'waits_tbl', 'waits_uid', 'received_at']);
   const peers = db.prepare("PRAGMA table_info(sync_peers)").all().map(c => c.name);
-  assert.deepEqual(peers, ['node', 'sent_seq']);
+  assert.deepEqual(peers, ['node', 'sent_seq', 'last_ok']);
   // Один и тот же (tbl, uid) в ожидании — одна строка: более поздняя замещает.
   db.prepare("INSERT INTO sync_pending (tbl, uid, stamp, record, waits_tbl, waits_uid) VALUES ('visits','v1','s1','{}','patients','p1')").run();
   assert.throws(() => db.prepare("INSERT INTO sync_pending (tbl, uid, stamp, record, waits_tbl, waits_uid) VALUES ('visits','v1','s2','{}','patients','p1')").run(), /UNIQUE|PRIMARY/);
