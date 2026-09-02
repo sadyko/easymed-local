@@ -617,7 +617,31 @@ async function ensureBranchToken(db, dataDir, branchId, mintImpl) {
   const existing = getState(db, branchTokenKey(branchId));
   if (existing) return { ok: true };
 
-  const r = await mintImpl(dataDir);
+  // BRANCH_RECORDS_V1 (Задача 7a) — буквы ВСЕХ узлов группы, из которых выписка
+  // выведет адреса: справочник, свой узел и узлы соседей. Буквы знает только эта
+  // сторона (branches ведёт главная клиника), поэтому список собирается здесь, а
+  // не внутри mintRelayToken.
+  //
+  // `letter IS NOT NULL AND letter <> ''` — фильтр обязательный, а не
+  // косметический: филиалы заводили и до появления букв, и через общий редактор
+  // списка, который про буквы не знает, так что строки без буквы в этой таблице
+  // обычны, а пустая буква даёт адрес СПРАВОЧНИКА (relay-crypto.js relayIdFor
+  // без узла) — то есть тихо расширила бы область не туда.
+  //
+  // Собственная строка клиники сюда ВХОДИТ, и должна: у главного филиала тоже
+  // есть узел (буква A), и его журнал читают все остальные.
+  let letters = [];
+  try {
+    letters = db.prepare(
+      "SELECT letter FROM branches WHERE letter IS NOT NULL AND letter <> '' ORDER BY id"
+    ).all().map((row) => row.letter);
+  } catch (e) {
+    // Не повод срывать выдачу ключа: без букв выписка попросит один адрес —
+    // справочник, — то есть ровно то, что работало до Фазы 2.
+    console.warn('[branch-sync] could not list branch letters for the relay scope:', e && e.message);
+  }
+
+  const r = await mintImpl(dataDir, { letters });
   if (!r.ok) return { ok: false, reason: r.reason, message: reasonText(r.reason) };
   try {
     putState(db, branchTokenKey(branchId), r.token);

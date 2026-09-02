@@ -698,3 +698,41 @@ test('упавшая первая выгрузка не срывает заве�
   assert.ok(res.branch.key, 'ключ выдан несмотря на неудачную выгрузку');
   assert.equal(res.published.ok, false);
 });
+
+// BRANCH_RECORDS_V1 (Задача 7a) — выписке передаются буквы ВСЕЙ группы.
+//
+// Единственное место, где эти два куска кода встречаются. Заглушка выписки в
+// остальных тестах аргументы игнорирует, поэтому без этого теста связь порвалась
+// бы молча — и порвалась бы в сторону, которую на одной машине не увидеть:
+// главная клиника ходит по install_token и работала бы дальше, а каждый
+// вторичный филиал получал бы 401 на своём же адресе.
+test('выписка получает буквы всех узлов группы, а не только заводимого филиала', async () => {
+  inDir('relay-scope');
+  const db = asMain();
+  const seen = [];
+  const spy = async (dataDir, opts) => {
+    seen.push(opts && opts.letters);
+    return { ok: true, token: 'relay-tok-' + seen.length, relay_id: 'a'.repeat(32) };
+  };
+
+  await branchSyncAddBranch(db, { name: 'Чиланзар' }, admin, { mintImpl: spy, branchImpl: cpOk, publishImpl: pubOk });
+  assert.deepEqual(seen[0], ['A', 'B'], 'своя буква тоже: журнал главного филиала читают все');
+
+  await branchSyncAddBranch(db, { name: 'Юнусабад' }, admin, { mintImpl: spy, branchImpl: cpOk, publishImpl: pubOk });
+  assert.deepEqual(seen[1], ['A', 'B', 'C'], 'третий филиал должен уметь читать и первого, и второго');
+
+  // Строка без буквы в список не попадает. Их в этой таблице сколько угодно:
+  // филиалы заводили и до появления букв, и через общий редактор списка, который
+  // про буквы не знает. Буква даёт адрес УЗЛА, и строка без неё дала бы адрес
+  // справочника вторым экземпляром (relay-crypto.js relayIdFor без узла).
+  // Пустую строку сюда не записать вовсе — миграция 080 держит CHECK на форму
+  // буквы, — так что `letter <> ''` в запросе второй рубеж, а не первый.
+  db.prepare("INSERT INTO branches (name, letter) VALUES ('Без буквы', NULL)").run();
+  assert.throws(() => db.prepare("INSERT INTO branches (name, letter) VALUES ('Пустая', '')").run(), /CHECK/i);
+  const row = db.prepare("SELECT id FROM branches WHERE name = 'Без буквы'").get();
+  const issued = await branchSyncBranchKey(db, { branch_id: row.id }, admin,
+    { mintImpl: spy, branchImpl: cpOk });
+  assert.equal(issued.ok, true);
+  assert.deepEqual(seen[2], ['A', 'B', 'C', 'D'], 'строки без буквы в области не участвуют');
+  db.close();
+});

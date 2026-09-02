@@ -391,6 +391,78 @@ test('пустая учётка в ответе — это не учётка', a
   }
 });
 
+// BRANCH_RECORDS_V1 (Задача 7a) — область токена: филиал, а не один адрес.
+//
+// До Фазы 2 у группы был ОДИН адрес — справочник, — и «токен на адрес» значило
+// то же, что «токен на филиал». Фаза 2 даёт каждому филиалу СВОЙ адрес под его
+// журнал (relay-crypto.js relayIdFor(ключ, буква)), и вторичный филиал обязан
+// писать по своему адресу и читать адреса соседей. Пока выписка просила один
+// адрес, каждая такая попытка была 401 → «главный филиал отозвал доступ», то
+// есть неверный совет на ошибку кода.
+
+test('выписка просит адреса ВСЕХ узлов группы, а не только справочник', async () => {
+  const { dir } = clinic('mint-scope', { role: 'main' });
+  const vendor = fakeMint();
+  const r = await mintRelayToken(dir, { fetchImpl: vendor.fetchImpl, env: {}, letters: ['A', 'B', 'C'] });
+  assert.equal(r.ok, true, JSON.stringify(r));
+
+  const body = vendor.calls[0].body;
+  assert.deepEqual(body.relay_ids, [
+    relayIdFor(KEY),            // справочник — первым: это и есть «основной» адрес
+    relayIdFor(KEY, 'A'),
+    relayIdFor(KEY, 'B'),
+    relayIdFor(KEY, 'C'),
+  ], 'справочник, свой узел и узлы соседей — все выводятся из ключа группы');
+  // Старое поле остаётся в запросе НАРОЧНО: панель поставщика обновляется
+  // отдельно от клиник (по SSH), и клиника, обновившаяся первой, обязана
+  // выписывать токены и против старого сервера — он прочитает relay_id и
+  // выпишет то же, что выписывал вчера, вместо 400 на всю сеть.
+  assert.equal(body.relay_id, relayIdFor(KEY));
+  assert.deepEqual(r.relay_ids, body.relay_ids, 'что попросили, то и вернули вызывающему');
+});
+
+test('без букв выписка просит ровно то же, что просила раньше', async () => {
+  // Старая форма вызова обязана остаться рабочей: относительно неё написан
+  // весь путь ключа подключения, и менять её вместе со схемой значило бы
+  // менять две вещи сразу.
+  const { dir } = clinic('mint-scope-none', { role: 'main' });
+  const vendor = fakeMint();
+  await mintRelayToken(dir, { fetchImpl: vendor.fetchImpl, env: {} });
+  assert.deepEqual(vendor.calls[0].body.relay_ids, [relayIdFor(KEY)]);
+  assert.equal(vendor.calls[0].body.relay_id, relayIdFor(KEY));
+});
+
+test('мусорные и повторяющиеся буквы не портят запрос', async () => {
+  // Буквы приходят из таблицы branches, куда их пишет не только этот код:
+  // пустая строка, пробелы и NULL там встречаются, а собственная буква клиники
+  // приезжает дважды (своя строка и список соседей). Ни то ни другое не повод
+  // отказать владельцу в резервном канале, и повтор адреса на той стороне —
+  // нарушение первичного ключа, то есть 500 вместо выписки.
+  const { dir } = clinic('mint-scope-dirty', { role: 'main' });
+  const vendor = fakeMint();
+  await mintRelayToken(dir, {
+    fetchImpl: vendor.fetchImpl, env: {},
+    letters: ['B', 'B', '', '   ', null, undefined, 'не-буква', 'C'],
+  });
+  assert.deepEqual(vendor.calls[0].body.relay_ids,
+    [relayIdFor(KEY), relayIdFor(KEY, 'B'), relayIdFor(KEY, 'C')]);
+});
+
+test('область обрезается по потолку сервера, а не отправляется заведомо на отказ', async () => {
+  // MAX_SCOPE = 64 в control-plane/server/routes/relay-token.js: запрос шире
+  // отвечает 400, и филиал остался бы БЕЗ ТОКЕНА ВООБЩЕ. Сеть такого размера
+  // сегодня не существует (буквы считают единицами), но выбор между «токен без
+  // нескольких соседей» и «токена нет» очевиден.
+  const { dir } = clinic('mint-scope-cap', { role: 'main' });
+  const vendor = fakeMint();
+  const many = Array.from({ length: 100 }, (_, i) =>
+    String.fromCharCode(65 + Math.floor(i / 26)) + String.fromCharCode(65 + (i % 26)));
+  const r = await mintRelayToken(dir, { fetchImpl: vendor.fetchImpl, env: {}, letters: many });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(vendor.calls[0].body.relay_ids.length, 64);
+  assert.equal(vendor.calls[0].body.relay_ids[0], relayIdFor(KEY), 'справочник не выпадает при обрезке');
+});
+
 test('предсказание кнопки совпадает с тем, что делает выписка', async () => {
   // relayMintable() решает, показывать ли на экране «Выдать доступ», и делает
   // это БЕЗ СЕТИ — открытие списка филиалов в сеть ходить не должно.

@@ -31,7 +31,7 @@ import { hashPassword } from '../auth.js';
 import { licensedDataDir } from '../control/licensed-fixture.js';
 import { readPairing, writePairing, makeMainKey, encodeKey, b64url, GROUP_KEY_BYTES } from './pairing.js';
 import { relayIdFor } from './relay-crypto.js';
-import { publishCatalogue } from './relay.js';
+import { publishCatalogue, mintRelayToken } from './relay.js';
 import { readSyncGroup, regenerateSyncGroup } from './sync-group.js';
 
 import { openDb as openCpDb } from '../../../control-plane/server/db/connection.js';
@@ -564,4 +564,99 @@ test('филиал, не активированный у поставщика: �
     const ok = await fetch(cp.base + relayPathFor(relayId), { headers: { Authorization: 'Bearer ' + tokenMain } });
     assert.equal(ok.status, 200);
   });
+});
+
+// BRANCH_RECORDS_V1 (Задача 7a) — ДВА ВТОРИЧНЫХ ФИЛИАЛА, и выгружает вторичный.
+//
+// Почему именно так, и почему ни один прежний тест этого не показывал: главная
+// клиника ходит к поставщику по install_token, который к адресу не привязан
+// ВОВСЕ, — её выгрузка проходит при любой ошибке в области токена. Вторичный
+// филиал не имеет ничего, кроме токена из ключа подключения, и до этой задачи
+// токен разрешал ровно один адрес — справочник. Значит, в Фазе 2 выгрузка
+// журнала со ВТОРИЧНОГО филиала (свой адрес relayIdFor(ключ, буква)) была бы
+// 401 → relay_branch_revoked → «возьмите новый ключ у главной» — неверный совет
+// на ошибку кода, и на одной машине его не увидеть.
+//
+// Настоящая контрольная панель, настоящий HTTP, настоящая проверка доступа.
+// Клиентские установки здесь не поднимаются: проверяется выписка (клиентская
+// функция mintRelayToken) и то, что выписанным токеном МОЖНО сделать, — а для
+// этого филиалу нужен каталог данных с парой и install_token главной, не больше.
+test('Задача 7a: вторичный филиал пишет по СВОЕМУ адресу, второй вторичный читает', async (t) => {
+  const cpDb = openCpDb(':memory:');
+  migrateCp(cpDb);
+  const cp = await listen(createCpApp(cpDb));
+  const installToken = redeemEnrollmentCode(cpDb, {
+    code: createEnrollmentCode(cpDb, { clinicId: 'cp-group', name: 'Сеть' }),
+  }).install_token;
+
+  // Каталог данных ГЛАВНОЙ клиники: пара с ключом группы и учётка у поставщика.
+  const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-relay-7a-'));
+  const groupKey = b64url(randomBytes(GROUP_KEY_BYTES));
+  fs.writeFileSync(path.join(mainDir, 'control.json'),
+    JSON.stringify({ clinic_id: 'cp-group', install_token: installToken }));
+  writePairing(mainDir, {
+    role: 'main', group_id: 'BR-7A0000000001', secret: 'sss',
+    main_url: 'http://10.0.0.5:8000', group_key: groupKey, relay: true,
+  });
+
+  t.after(async () => {
+    await shutdown(cp.server);
+    cpDb.close();
+    fs.rmSync(mainDir, { recursive: true, force: true });
+  });
+
+  const env = { EASYMED_CONTROL_URL: cp.base };
+  // Сеть из трёх зданий: A — главное, B и C — филиалы. Буквы приходят из
+  // таблицы branches главной клиники, ровно так их и передаёт
+  // rpc/branch-sync.js ensureBranchToken.
+  const letters = ['A', 'B', 'C'];
+  const mintedB = await mintRelayToken(mainDir, { env, letters });
+  const mintedC = await mintRelayToken(mainDir, { env, letters });
+  assert.equal(mintedB.ok, true, JSON.stringify(mintedB));
+  assert.equal(mintedC.ok, true, JSON.stringify(mintedC));
+
+  // ОДНА строка токена на филиал, а не по строке на адрес: иначе сеть из девяти
+  // зданий упирается в потолок клиники (MAX_LIVE_TOKENS_PER_CLINIC = 64) на
+  // ровном месте.
+  assert.equal(cpDb.prepare('SELECT COUNT(*) n FROM relay_tokens').get().n, 2);
+  assert.equal(cpDb.prepare('SELECT COUNT(*) n FROM relay_token_scopes').get().n, 8, '4 адреса × 2 филиала');
+
+  const addr = (letter) => cp.base + relayPathFor(relayIdFor(groupKey, letter));
+  const blob = Buffer.from('журнал филиала B, зашифрованный');
+
+  // ВОТ ОНО: вторичный филиал выгружает СВОЙ журнал по СВОЕМУ адресу, своим
+  // токеном из ключа подключения. До Задачи 7a — 401.
+  const up = await fetch(addr('B'), {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${mintedB.token}`, 'Content-Type': 'application/octet-stream' },
+    body: blob,
+  });
+  assert.equal(up.status, 200, 'вторичный филиал обязан уметь писать по адресу своего узла');
+
+  // И второй вторичный его читает — обмен между филиалами, а не только вниз от
+  // главной.
+  const down = await fetch(addr('B'), { headers: { Authorization: `Bearer ${mintedC.token}` } });
+  assert.equal(down.status, 200, 'сосед обязан уметь прочитать чужой узел');
+  assert.equal(Buffer.from(await down.arrayBuffer()).toString(), blob.toString());
+
+  // Справочник по-прежнему доступен обоим: адрес группы входит в область.
+  for (const [name, m] of [['B', mintedB], ['C', mintedC]]) {
+    const res = await fetch(cp.base + relayPathFor(relayIdFor(groupKey)), {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${m.token}`, 'Content-Type': 'application/octet-stream' },
+      body: Buffer.from('x'),
+    });
+    assert.equal(res.status, 200, 'филиал ' + name + ' обязан видеть справочник');
+  }
+
+  // Область осталась ОБЛАСТЬЮ: адрес узла, которого в группе нет, закрыт.
+  const outside = await fetch(addr('Z'), { headers: { Authorization: `Bearer ${mintedB.token}` } });
+  assert.equal(outside.status, 401, 'шире выписанного токен не пускает никуда');
+
+  // И отзыв по-прежнему выключает ИМЕННО этот филиал — сразу и на всех адресах.
+  cpDb.prepare('UPDATE relay_tokens SET revoked_at = ? WHERE token = ?')
+    .run(new Date().toISOString(), mintedC.token);
+  assert.equal((await fetch(addr('B'), { headers: { Authorization: `Bearer ${mintedC.token}` } })).status, 401);
+  assert.equal((await fetch(addr('B'), { headers: { Authorization: `Bearer ${mintedB.token}` } })).status, 200,
+    'сосед филиала C ничего не потерял');
 });
