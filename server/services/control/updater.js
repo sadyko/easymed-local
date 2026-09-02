@@ -825,11 +825,34 @@ async function runPipeline(db, dataDir, offer, {
     }
 
     if (!layout.versioned) {
-      console.warn('[updater] dev layout — staged only; apply is skipped (a dev machine must never have its `current` switched)');
-      // A dev checkout has no screen a clinic is watching, and leaving
-      // «распаковка…» standing forever on one would be the exact stale record
-      // this feature exists to prevent.
-      progress.clear();
+      // BROKEN_LAYOUT_VISIBLE_V1 — «не могу обновиться» обязано быть СКАЗАНО.
+      //
+      // Здесь встречаются два совершенно разных случая, и раньше оба молчали:
+      //
+      //   1. Машина разработчика. Обновлять её нечего и незачем, экрана, на
+      //      который кто-то смотрит, у неё нет — молчание правильно.
+      //   2. НАСТОЯЩАЯ клиника, разложенная неправильно: без versions\<v> и
+      //      без current переключать нечего, и она не примет ни одного
+      //      обновления НИКОГДА. Молчание тут — худшее из возможных: филиал
+      //      владельца 2026-09-02 скачивал и распаковывал обновление раз за
+      //      разом, показывал «доступно обновление» и не двигался с места, а
+      //      причина существовала только в логе.
+      //
+      // Различаем по .git: рабочее дерево разработчика его имеет, распакованный
+      // релиз — нет (сборка его не кладёт). Признак грубый, но честный, и
+      // ошибается в безопасную сторону: лишний раз показать «переустановите
+      // правильно» разработчику не страшно, а промолчать клинике — страшно.
+      let looksLikeCheckout = false;
+      try { looksLikeCheckout = fs.existsSync(path.join(appRoot, '.git')); } catch { /* не смогли — считаем клиникой */ }
+
+      if (looksLikeCheckout) {
+        console.warn('[updater] dev layout — staged only; apply is skipped (a dev machine must never have its `current` switched)');
+        progress.clear();
+        return;
+      }
+
+      console.warn('[updater] this install has no versions/current layout — it can never apply an update. Reinstall with the official package.');
+      progress.fail('not_installed');
       return;
     }
 

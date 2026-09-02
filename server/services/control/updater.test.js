@@ -830,18 +830,51 @@ test('progress: a refused bundle is recorded as failed, not left mid-download fo
   assert.equal(readProgress(db).reason, 'bundle_refused');
 });
 
+// BROKEN_LAYOUT_VISIBLE_V1 — две разные вещи, которые раньше молчали одинаково.
+//
+// Машина разработчика молчит по-прежнему: обновлять её нечего, и запись
+// «распаковка…», застрявшая навсегда, была бы такой же ложью, как и раньше.
+// А вот НАСТОЯЩАЯ клиника без versions/current не примет обновление никогда, и
+// молчание про это — худшее из возможных: филиал владельца 2026-09-02 скачивал
+// и распаковывал обновление раз за разом, ничего не менялось, и причина
+// существовала только в логе.
 test('progress: a dev checkout leaves NO record — a stale «распаковка…» on a dev box is the same lie', async () => {
   const { tarBytes, manifest } = makeSignedBundle({ version: '2.4.0' });
   const offer = makeOffer({ manifest });
   const { db, dataDir } = approvedWorkspace(offer);
+  // Настоящее рабочее дерево: с .git. Именно по нему обновление отличает
+  // разработчика от криво поставленной клиники.
+  const checkout = tmpDir('em-updater-dev-');
+  fs.mkdirSync(path.join(checkout, '.git'), { recursive: true });
 
   const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
   try {
-    await tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW, appRoot: tmpDir('em-updater-dev-') });
+    await tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW, appRoot: checkout });
   } finally {
     server.close();
   }
   assert.equal(readProgress(db), null);
+});
+
+test('progress: a real clinic laid out without versions/current SAYS it cannot update', async () => {
+  const { tarBytes, manifest } = makeSignedBundle({ version: '2.4.0' });
+  const offer = makeOffer({ manifest });
+  const { db, dataDir } = approvedWorkspace(offer);
+  // Ни versions/<v>, ни current, ни .git — ровно то, что делает установщик,
+  // раскладывающий приложение плоско в одну папку.
+  const flat = tmpDir('em-updater-flat-');
+
+  const { server, endpoint } = await fakeServer((req, res) => { res.writeHead(200); res.end(tarBytes); });
+  try {
+    await tickUpdater(db, dataDir, { endpoint, now: IN_WINDOW_NOW, appRoot: flat });
+  } finally {
+    server.close();
+  }
+
+  const rec = readProgress(db);
+  assert.ok(rec, 'молчать про «я никогда не обновлюсь» нельзя');
+  assert.equal(rec.phase, 'failed');
+  assert.equal(rec.reason, 'not_installed');
 });
 
 test('progress: reporting is best-effort — a database that refuses every progress write still installs', async () => {
