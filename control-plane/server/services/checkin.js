@@ -332,9 +332,28 @@ export function checkIn(db, { installToken, version, fingerprint, moduleRequests
       ).run(clinic.clinic_id, module_key, requested_at);
     }
 
+    // BRANCH_MODULES_INHERIT_V1 — a branch runs the modules of its network.
+    //
+    // Owner's decision (2026-09-02), in their words: "everything in the main
+    // clinic should be active as if it is a one system". A branch is a separate
+    // row here with its own subscription and its own bill — that stays — but it
+    // is not a separate BUSINESS. Reception in the second building answers the
+    // same phone numbers and works the same leads as reception in the first.
+    //
+    // Resolved through the parent on every check-in rather than copied into the
+    // branch's rows when it was created. A copy is a snapshot: enable telephony
+    // for the network next month and every branch created before that stays
+    // dark, with nothing on any screen to explain why. This cannot drift.
+    //
+    // UNION, not replacement: a branch may also have been granted something of
+    // its own, and taking that away because it has a parent would be a silent
+    // downgrade nobody asked for.
     const modules = db.prepare(
-      `SELECT module_key FROM clinic_modules WHERE clinic_id = ? ORDER BY module_key`
-    ).all(clinic.clinic_id).map((m) => m.module_key);
+      `SELECT DISTINCT module_key FROM clinic_modules
+        WHERE clinic_id = ?
+           OR clinic_id = (SELECT parent_clinic_id FROM clinics WHERE clinic_id = ?)
+        ORDER BY module_key`
+    ).all(clinic.clinic_id, clinic.clinic_id).map((m) => m.module_key);
 
     // UPDATE_DELIVERY_V1 — the clinic's report on ITS OWN update attempt.
     // Already recorded (evidence, unconditionally) in the payload above; what

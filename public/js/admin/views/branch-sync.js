@@ -267,9 +267,24 @@ function paintMain(card, status, admin) {
 
     paintBranchList(card);
 
+    // BRANCH_RELAY_VISIBLE_WHEN_OFF_V1 — прячем то, с чем всё хорошо, а не то,
+    // что требует действия.
+    //
+    // Резервный канал уехал под «Дополнительно» вместе с остальным служебным —
+    // и в тот же день выяснилось, чем это кончается: филиал в другой сети не
+    // видел главный напрямую, запасной путь был его единственным, а копии на
+    // сервере не появлялось, потому что ВЫКЛЮЧЕННЫЙ переключатель лежал в
+    // свёрнутом блоке. На экране филиала стояло «включите отправку копии в
+    // главном филиале», а в главном включать было нечего — оно не показывалось.
+    //
+    // Поэтому: выключенный канал остаётся на виду (это незакрытое дело),
+    // включённый уходит под «Дополнительно» (делать нечего).
+    const relayNeedsAttention = !status.relay_enabled;
+    if (relayNeedsAttention) paintRelay(card, status, admin);
+
     const more = h('details', { class: 'bsync-more' },
         h('summary', null, 'Дополнительно'));
-    paintRelay(more, status, admin);
+    if (!relayNeedsAttention) paintRelay(more, status, admin);
     paintSyncKey(more, status, admin);
     more.appendChild(unlinkBlock(card, UNLINK_WARNING_MAIN));
     card.appendChild(more);

@@ -919,3 +919,50 @@ test('a version string longer than the bound is truncated, not rejected outright
   const stored = JSON.parse(row.payload).update_result;
   assert.ok(stored.version.length <= 32, 'version must be bounded, matching normaliseUpdateResult\'s own cap');
 });
+
+// BRANCH_MODULES_INHERIT_V1 — a branch runs the modules of its network.
+//
+// Owner's decision (2026-09-02): "everything in the main clinic should be
+// active as if it is a one system". Without this the branch activated fine and
+// then sat there with CRM and telephony dark, and nothing on any screen said
+// why — the modules simply were not in its licence.
+test('a branch inherits its parent clinic modules', () => {
+  const db = freshDb();
+  enrol(db, 'c-1');
+  const branchToken = enrol(db, 'c-1-b1');
+  db.prepare('UPDATE clinics SET parent_clinic_id = ? WHERE clinic_id = ?').run('c-1', 'c-1-b1');
+  grantModule(db, 'c-1', 'crm');
+  grantModule(db, 'c-1', 'callcenter');
+
+  const calls = [];
+  checkIn(db, { installToken: branchToken }, { signLicence: fakeSigner(calls) });
+  assert.deepEqual(calls[0].modules, ['callcenter', 'crm'],
+    'the branch gets what the network has, without a row of its own');
+});
+
+test('a branch keeps a module granted only to it', () => {
+  const db = freshDb();
+  enrol(db, 'c-1');
+  const branchToken = enrol(db, 'c-1-b1');
+  db.prepare('UPDATE clinics SET parent_clinic_id = ? WHERE clinic_id = ?').run('c-1', 'c-1-b1');
+  grantModule(db, 'c-1', 'crm');
+  grantModule(db, 'c-1-b1', 'telegram');
+
+  const calls = [];
+  checkIn(db, { installToken: branchToken }, { signLicence: fakeSigner(calls) });
+  // Union, not replacement: inheriting must never take something away.
+  assert.deepEqual(calls[0].modules, ['crm', 'telegram']);
+});
+
+test('a clinic with no parent is unaffected', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-solo');
+  grantModule(db, 'c-solo', 'crm');
+  const other = enrol(db, 'c-other');
+  grantModule(db, 'c-other', 'callcenter');
+
+  const calls = [];
+  checkIn(db, { installToken: token }, { signLicence: fakeSigner(calls) });
+  assert.deepEqual(calls[0].modules, ['crm'], 'no parent means nothing borrowed from anyone');
+  assert.ok(!calls[0].modules.includes('callcenter'));
+});
