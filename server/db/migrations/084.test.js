@@ -15,7 +15,8 @@ test('084: создание пациента попадает в журнал б
   const db = fresh();
   db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
   const rows = db.prepare("SELECT tbl, op, uid FROM sync_journal WHERE tbl = 'patients'").all();
-  assert.equal(rows.length >= 1, true, 'один INSERT даёт одну или две записи (ins + upd uid-триггера)');
+  assert.equal(rows.length >= 1 && rows.length <= 2, true,
+    'один INSERT даёт одну или две записи (ins + upd uid-триггера) — третьей взяться неоткуда');
   assert.equal(rows.every((r) => r.op === 'put'), true);
   assert.equal(rows.every((r) => typeof r.uid === 'string' && r.uid.length === 32), true,
     'в журнале НИКОГДА нет записи без uid — иначе NOT NULL уронил бы регистрацию');
@@ -29,6 +30,39 @@ test('084: правка пишется отдельной записью', () =>
   db.prepare("UPDATE patients SET phone = '+998900000000' WHERE id = ?").run(id);
   const after = db.prepare('SELECT COUNT(*) n FROM sync_journal').get().n;
   assert.equal(after > before, true, 'правку обязаны увидеть соседи');
+  db.close();
+});
+
+test('084: правка одной служебной колонки (updated_at) тоже журналируется', () => {
+  const db = fresh();
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
+  const before = db.prepare('SELECT COUNT(*) n FROM sync_journal').get().n;
+  db.prepare("UPDATE patients SET updated_at = '2026-09-02T00:00:00Z' WHERE id = ?").run(id);
+  const after = db.prepare('SELECT COUNT(*) n FROM sync_journal').get().n;
+  assert.equal(after, before + 1,
+    'колонка выглядит "служебной", но триггер не различает колонки — это опора для правила защиты в Задаче 5');
+  db.close();
+});
+
+test('084: seq — AUTOINCREMENT: после удаления хвоста журнала номера не переиспользуются', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Первый')").run();
+  const maxBefore = db.prepare('SELECT MAX(seq) m FROM sync_journal').get().m;
+  db.prepare('DELETE FROM sync_journal').run();   // Задача 5 подчищает хвост после отправки батча
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Второй')").run();
+  const minAfter = db.prepare('SELECT MIN(seq) m FROM sync_journal').get().m;
+  assert.equal(minAfter > maxBefore, true,
+    'обычный INTEGER PRIMARY KEY переиспользовал бы seq=1 — тогда правка упала бы НИЖЕ sent_seq соседа и никогда бы не уехала');
+  db.close();
+});
+
+test('084: sync_seen существует с ключом (tbl, uid, col)', () => {
+  const db = fresh();
+  const cols = db.prepare("PRAGMA table_info(sync_seen)").all().map(c => c.name);
+  assert.deepEqual(cols, ['tbl', 'uid', 'col', 'stamp']);
+  db.prepare("INSERT INTO sync_seen (tbl, uid, col, stamp) VALUES ('patients','p1','phone','s1')").run();
+  assert.throws(() => db.prepare("INSERT INTO sync_seen (tbl, uid, col, stamp) VALUES ('patients','p1','phone','s2')").run(),
+    /UNIQUE|PRIMARY/, 'вторая метка для той же (tbl, uid, col) должна заменять, а не дублировать строку');
   db.close();
 });
 
@@ -62,7 +96,7 @@ test('084: таблицы ожидания и соседей существую�
   const pend = db.prepare("PRAGMA table_info(sync_pending)").all().map(c => c.name);
   assert.deepEqual(pend, ['tbl', 'uid', 'stamp', 'record', 'waits_tbl', 'waits_uid']);
   const peers = db.prepare("PRAGMA table_info(sync_peers)").all().map(c => c.name);
-  assert.deepEqual(peers, ['node', 'sent_seq', 'recv_stamp']);
+  assert.deepEqual(peers, ['node', 'sent_seq']);
   // Один и тот же (tbl, uid) в ожидании — одна строка: более поздняя замещает.
   db.prepare("INSERT INTO sync_pending (tbl, uid, stamp, record, waits_tbl, waits_uid) VALUES ('visits','v1','s1','{}','patients','p1')").run();
   assert.throws(() => db.prepare("INSERT INTO sync_pending (tbl, uid, stamp, record, waits_tbl, waits_uid) VALUES ('visits','v1','s2','{}','patients','p1')").run(), /UNIQUE|PRIMARY/);
