@@ -5,7 +5,7 @@
 // числом. Гибридные часы дают порядок, который не ломается от этого.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { nextStamp, compareStamps } from './hlc.js';
+import { nextStamp, compareStamps, parseStamp, isStamp } from './hlc.js';
 
 test('метка растёт даже когда часы стоят на месте', () => {
   const clock = () => 1000;
@@ -39,4 +39,56 @@ test('узел входит в метку — две машины в одну м
   const b = nextStamp(null, 'B', clock);
   const c = nextStamp(null, 'C', clock);
   assert.notEqual(b.stamp, c.stamp);
+  assert.notEqual(compareStamps(b.stamp, c.stamp), 0);
+});
+
+test('свежая метка соответствует замороженному формату', () => {
+  const stamp = nextStamp(null, 'B', () => 42).stamp;
+  assert.equal(isStamp(stamp), true);
+  assert.match(stamp, /^[0-9a-f]{12}-[0-9a-f]{4}-[A-Z]{1,8}$/);
+});
+
+test('переполнение счётчика переносится в следующую миллисекунду', () => {
+  const state = { ms: 1000, cnt: 0xffff };
+  const next = nextStamp(state, 'B', () => 1000);
+  assert.equal(next.ms, 1001);
+  assert.equal(next.cnt, 0);
+});
+
+test('гибридность: своя метка обгоняет полученную от узла с более быстрыми часами', () => {
+  const received = '0000000005dc-0002-C'; // ms=1500, cnt=2, узел C
+  const next = nextStamp(null, 'B', () => 1000, received);
+  assert.equal(next.ms, 1500);
+  assert.equal(next.cnt, 3);
+  assert.match(next.stamp, /-B$/);
+  assert.equal(compareStamps(next.stamp, received) > 0, true,
+    'иначе отстающий по часам узел молча проигрывал бы даже более поздние правки');
+});
+
+test('буква узла может быть длиннее одного символа, но обязана существовать', () => {
+  const stamp = nextStamp(null, 'AA', () => 1).stamp;
+  assert.match(stamp, /-AA$/);
+  assert.throws(() => nextStamp(null, undefined, () => 1), /node letter required/);
+  assert.throws(() => nextStamp(null, 'b1', () => 1), /node letter required/);
+});
+
+test('isStamp отличает валидную метку от мусора', () => {
+  const stamp = nextStamp(null, 'B', () => 1).stamp;
+  assert.equal(isStamp(stamp), true);
+  assert.equal(isStamp('not-a-stamp'), false);
+  assert.equal(isStamp(''), false);
+  assert.equal(isStamp(null), false);
+});
+
+test('parseStamp — обратное преобразование к nextStamp', () => {
+  const { stamp } = nextStamp(null, 'C', () => 777);
+  const parsed = parseStamp(stamp);
+  assert.deepEqual(parsed, { ms: 777, cnt: 0, node: 'C' });
+  assert.equal(parseStamp('garbage'), null);
+});
+
+test('состояние из control_state приходит строками — коэрсия не должна ронять счётчик', () => {
+  const next = nextStamp({ ms: '5000', cnt: '3' }, 'B', () => 1000);
+  assert.equal(next.ms, 5000);
+  assert.equal(next.cnt, 4);
 });
