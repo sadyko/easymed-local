@@ -128,9 +128,31 @@ export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date
       ? { tbl: null, at: '', id: 0 }
       : { tbl: from.seed_tbl, at: from.seed_at || '', id: from.seed_id || 0 };
 
-    const page = seedPage(db, limit, cursor);
+    // НАБОР СТРОК ЗАМОРОЖЕН ВМЕСТЕ С ПОЛОМ. Иначе «страница 1», собранная
+    // второй раз (сосед не подтвердил первую), — уже другой набор: клиника за
+    // это время завела новых пациентов. На этом ломаются оба способа обойтись
+    // с повтором — и отсев по номеру, и повторное применение (см. шапку
+    // sync_peers в 084). Заведённое позже уедет журналом: его seq выше пола.
+    //
+    // ФОРМАТ — КАК У created_at, СЕКУНДНЫЙ. Сравнение здесь строковое, а
+    // toISOString() даёт миллисекунды: '…:22Z' <= '…:22.563Z' ЛОЖНО ('Z' в
+    // таблице ASCII больше точки), и все строки той же секунды выпали бы из
+    // засева. Поймано тестами: у соседа не оказывалось вообще ничего.
+    const started = (from && from.seed_started)
+      || new Date(clockFn()).toISOString().replace(/\.\d+Z$/, 'Z');
+
+    const page = seedPage(db, limit, cursor, started);
     heads = page.heads;
-    seed = { floor, done: page.done, tbl: page.cursor.tbl, at: page.cursor.at, id: page.cursor.id };
+    // НОМЕР СТРАНИЦЫ (Задача 7b): курсор в базе — ПОДТВЕРЖДЁННОЕ место, и
+    // страница собирается от него КАЖДЫЙ раз, пока сосед не отчитается. Значит
+    // выкладывается всегда следующая за подтверждённой, а её конец уедет в
+    // seed_next_* и переедет в курсор только по квитанции с этим номером.
+    // Повторный сбор даёт ТЕ ЖЕ строки: пол заморожен, порядок детерминирован.
+    seed = {
+      floor, started, done: page.done,
+      tbl: page.cursor.tbl, at: page.cursor.at, id: page.cursor.id,
+      page: (from ? from.seed_page : 0) + 1,
+    };
     upto = floor;
   } else {
     // Хвост журнала. Последняя запись про каждую строку: у пациента,
@@ -252,6 +274,15 @@ export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date
       ...(seeding ? {} : { changed_at: changedAt }),
     });
   }
+  // Сколько строк реально уехало этой страницей засева. Ноль — особый случай,
+  // и без него засев встаёт намертво: пустой срез в блоб не кладётся вовсе
+  // (publishJournal), сосед его не видит и подтвердить не может, а курсор без
+  // подтверждения не двигается. Узел, впервые выложившийся ПУСТЫМ (клиника,
+  // где ещё никого не завели), остался бы «в засеве» навсегда, и первый же
+  // заведённый пациент не уехал бы никуда: заморозка набора его из засева
+  // исключает, а журнал у засеваемого соседа не читается. Ловится сквозным
+  // тестом сразу: «срез для C обязан уехать».
+  if (seed) seed.rows = records.length;
   return { records, upto, clock, seed };
 }
 
@@ -297,7 +328,8 @@ const SEED_PRESENCE_SQL = `
     UNION ALL
     SELECT 'lab_results' AS tbl, 3 AS rank, uid, created_at AS at, id FROM lab_results WHERE uid IS NOT NULL
   )
-  WHERE at > @at OR (at = @at AND (rank > @rank OR (rank = @rank AND id > @id)))
+  WHERE at <= @started
+    AND (at > @at OR (at = @at AND (rank > @rank OR (rank = @rank AND id > @id))))
   ORDER BY at, rank, id
   LIMIT @limit
 `;
@@ -331,13 +363,14 @@ const SEED_PRESENCE_SQL = `
  *   null tbl — самое начало (ни одна фаза ещё не пройдена).
  * @returns {{heads: Array, cursor: object, done: boolean}}
  */
-function seedPage(db, limit, cursor) {
+function seedPage(db, limit, cursor, started) {
   const out = [];
   let next = cursor;
 
   if (next.tbl !== TOMB_PHASE) {
     const rank = next.tbl ? TABLE_RANK[next.tbl] : -1;
-    const rows = db.prepare(SEED_PRESENCE_SQL).all({ at: next.at || '', rank, id: next.id || 0, limit });
+    const rows = db.prepare(SEED_PRESENCE_SQL)
+      .all({ at: next.at || '', rank, id: next.id || 0, limit, started });
     for (const r of rows) out.push({ tbl: r.tbl, uid: r.uid, seq: 0, at: r.at });
     // rows.length === limit — страница заполнена целиком присутствиями,
     // дальше ещё могут быть; курсор остаётся в этой фазе. rows.length < limit
@@ -354,8 +387,9 @@ function seedPage(db, limit, cursor) {
     // sync_tombstones целиком, и курсор соседа, остановившийся посреди этой
     // фазы, молча пропускает новое надгробие с переиспользованным номером.
     const rows = db.prepare(`
-      SELECT tbl, uid, at, seq FROM sync_tombstones WHERE seq > ? ORDER BY seq LIMIT ?
-    `).all(next.id, limit - out.length);
+      SELECT tbl, uid, at, seq FROM sync_tombstones
+       WHERE seq > ? AND at <= ? ORDER BY seq LIMIT ?
+    `).all(next.id, started, limit - out.length);
     for (const r of rows) out.push({ tbl: r.tbl, uid: r.uid, seq: 0, at: r.at });
     if (rows.length) next = { tbl: TOMB_PHASE, at: '', id: rows[rows.length - 1].seq };
   }
@@ -396,7 +430,14 @@ const STALE_DAYS = 30;
 const TOMBSTONE_DAYS = STALE_DAYS * 2;
 export function pruneJournal(db, { now = () => new Date() } = {}) {
   const cutoff = new Date(now().getTime() - STALE_DAYS * 86400000).toISOString();
-  db.prepare('DELETE FROM sync_peers WHERE last_ok IS NULL OR last_ok < ?').run(cutoff);
+  // ЗАБЫВАЕМ ПО КВИТАНЦИИ, А НЕ ПО ВЫГРУЗКЕ (Задача 7b). last_ok — «когда МЫ
+  // последний раз удачно выложились», и у соседа, выключенного навсегда, он
+  // всё равно свежий: блоб-то на сервер лёг. Пока горизонты были одним числом,
+  // это ничего не значило; теперь такой сосед держал бы и свой недосеянный
+  // засев, и чистку нашего журнала ВЕЧНО. last_ack ставится при заведении
+  // строки (фора новому соседу) и обновляется каждой пришедшей квитанцией.
+  db.prepare('DELETE FROM sync_peers WHERE COALESCE(last_ack, last_ok) IS NULL OR COALESCE(last_ack, last_ok) < ?')
+    .run(cutoff);
 
   const tombCutoff = new Date(now().getTime() - TOMBSTONE_DAYS * 86400000).toISOString();
   db.prepare('DELETE FROM sync_tombstones WHERE at < ?').run(tombCutoff);
@@ -501,26 +542,40 @@ export function markPublished(db, peer, upto, clock = null, seed = null, { now =
     }
 
     if (seed) {
-      const done = seed.done;
+      // КУРСОР ЗАСЕВА ЗДЕСЬ НЕ ДВИГАЕТСЯ (Задача 7b). Выгрузка означает «блоб
+      // лежит на сервере», а страницу засева, которую сосед не забрал до
+      // следующей выгрузки, надо выложить СНОВА — иначе у клиники на 70 000
+      // пациентов в засеве остаётся дыра ровно там, где её никто не заметит.
+      // Запоминаем только КОНЕЦ выложенной страницы; курсор переедет туда,
+      // когда придёт квитанция с её номером (markConfirmed).
+      //
+      // seed_floor держится до подтверждения ПОСЛЕДНЕЙ страницы: сбрось его
+      // здесь по seed.done — и незабранная последняя страница потерялась бы,
+      // а сосед стал бы «тёплым» с непривезённым хвостом таблиц.
+      // ПУСТАЯ И ПОСЛЕДНЯЯ страница закрывает засев прямо здесь: подтверждать
+      // в ней нечего, доставлять — тоже. Ждать квитанции за ноль строк значило
+      // бы ждать её вечно (см. seed.rows в buildBatch).
+      const finished = seed.done && !seed.rows;
       db.prepare(`
-        INSERT INTO sync_peers (node, pub_seq, last_ok, seed_floor, seed_tbl, seed_at, seed_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO sync_peers (node, pub_seq, last_ok, last_ack, seed_floor, seed_started,
+                                seed_next_tbl, seed_next_at, seed_next_id, seed_next_done)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(node) DO UPDATE SET
           pub_seq = MAX(pub_seq, excluded.pub_seq), last_ok = excluded.last_ok,
-          seed_floor = excluded.seed_floor, seed_tbl = excluded.seed_tbl,
-          seed_at = excluded.seed_at, seed_id = excluded.seed_id
+          seed_floor = excluded.seed_floor, seed_started = excluded.seed_started,
+          seed_next_tbl = excluded.seed_next_tbl, seed_next_at = excluded.seed_next_at,
+          seed_next_id = excluded.seed_next_id, seed_next_done = excluded.seed_next_done
       `).run(
-        peer, seed.floor, now().toISOString(),
-        done ? null : seed.floor,
-        done ? null : seed.tbl,
-        done ? null : seed.at,
-        done ? 0 : seed.id,
+        peer, seed.floor, now().toISOString(), now().toISOString(),
+        finished ? null : seed.floor, finished ? null : seed.started,
+        finished ? null : seed.tbl, finished ? null : seed.at,
+        finished ? 0 : seed.id, finished ? 0 : (seed.done ? 1 : 0),
       );
     } else {
       db.prepare(`
-        INSERT INTO sync_peers (node, pub_seq, last_ok) VALUES (?, ?, ?)
+        INSERT INTO sync_peers (node, pub_seq, last_ok, last_ack) VALUES (?, ?, ?, ?)
         ON CONFLICT(node) DO UPDATE SET pub_seq = MAX(pub_seq, excluded.pub_seq), last_ok = excluded.last_ok
-      `).run(peer, upto, now().toISOString());
+      `).run(peer, upto, now().toISOString(), now().toISOString());
     }
     writeClock(db, clock);
     pruneJournal(db, { now });
@@ -543,23 +598,53 @@ export function markPublished(db, peer, upto, clock = null, seed = null, { now =
  *
  * @returns {number} новый sent_seq (0 — ничего не изменилось)
  */
-export function markConfirmed(db, peer, upto, { now = () => new Date() } = {}) {
+export function markConfirmed(db, peer, upto, seedPage = 0, { now = () => new Date() } = {}) {
   const ack = Math.floor(Number(upto));
-  if (!Number.isFinite(ack) || ack <= 0) return 0;
+  const page = Math.floor(Number(seedPage));
+  const gotUpto = Number.isFinite(ack) && ack > 0;
+  const gotPage = Number.isFinite(page) && page > 0;
+  if (!gotUpto && !gotPage) return 0;
+
   const run = db.transaction(() => {
-    const row = db.prepare('SELECT pub_seq, sent_seq FROM sync_peers WHERE node = ?').get(peer);
+    const row = db.prepare('SELECT * FROM sync_peers WHERE node = ?').get(peer);
     if (!row) return 0;
-    const next = Math.max(row.sent_seq, Math.min(ack, row.pub_seq));
-    if (next === row.sent_seq) return row.sent_seq;
-    db.prepare('UPDATE sync_peers SET sent_seq = ? WHERE node = ?').run(next, peer);
+
+    let sent = row.sent_seq;
+    if (gotUpto) sent = Math.max(row.sent_seq, Math.min(ack, row.pub_seq));
+
+    // СТРАНИЦА ЗАСЕВА ПОДТВЕРЖДЕНА — и только ровно СЛЕДУЮЩАЯ за
+    // подтверждённой. Номер из будущего (сломанная сборка соседа, подделанный
+    // блоб) курсор не двигает: перепрыгнув страницу, мы оставили бы у соседа
+    // дыру, которую уже нечем закрыть.
+    const advance = gotPage && row.seed_floor != null && page === row.seed_page + 1;
+    if (advance && row.seed_next_done) {
+      // Последняя страница принята — засев закончен. Дальше сосед тёплый и
+      // читает хвост журнала выше пола, как обычно.
+      db.prepare(`UPDATE sync_peers SET seed_floor = NULL, seed_started = NULL, seed_tbl = NULL,
+                         seed_at = NULL, seed_id = 0, seed_page = 0, seed_next_tbl = NULL,
+                         seed_next_at = NULL, seed_next_id = 0, seed_next_done = 0 WHERE node = ?`).run(peer);
+    } else if (advance) {
+      db.prepare(`UPDATE sync_peers SET seed_tbl = ?, seed_at = ?, seed_id = ?, seed_page = ?,
+                         seed_next_tbl = NULL, seed_next_at = NULL, seed_next_id = 0, seed_next_done = 0
+                   WHERE node = ?`)
+        .run(row.seed_next_tbl, row.seed_next_at, row.seed_next_id, page, peer);
+    }
+
+    // Квитанция пришла — сосед жив и разговаривает. По этой дате его и
+    // забывают (pruneJournal), а не по last_ok: тот обновляется на каждой
+    // НАШЕЙ выгрузке и у выключенного навсегда соседа всё равно свежий.
+    db.prepare('UPDATE sync_peers SET sent_seq = ?, last_ack = ? WHERE node = ?')
+      .run(sent, now().toISOString(), peer);
+
     // Горизонт подтверждённого — это и есть пол чистки: сдвинулся он —
     // появилось, что чистить. В markPublished чистка теперь почти всегда
     // холостая, а настоящая работа у неё здесь.
-    pruneJournal(db, { now });
-    return next;
+    if (sent !== row.sent_seq) pruneJournal(db, { now });
+    return sent;
   });
   return run();
 }
+
 
 /**
  * Оба события разом. Осталось РАДИ ВЫЗЫВАЮЩИХ, которым релей не нужен:
@@ -570,5 +655,5 @@ export function markConfirmed(db, peer, upto, { now = () => new Date() } = {}) {
  */
 export function markSent(db, peer, upto, clock = null, seed = null, opts = {}) {
   markPublished(db, peer, upto, clock, seed, opts);
-  markConfirmed(db, peer, seed ? seed.floor : upto, opts);
+  markConfirmed(db, peer, seed ? seed.floor : upto, seed ? seed.page : 0, opts);
 }

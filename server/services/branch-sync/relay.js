@@ -481,8 +481,8 @@ export async function fetchCatalogue(dataDir, {
 // Поэтому узел выкладывает ОДИН блоб со срезами для всех соседей:
 //
 //   { v: 1, from: 'B', generated_at: '…',
-//     acks: { A: 4120, C: 3970 },
-//     batches: { A: {records, upto, seed?}, C: {…} } }
+//     acks: { A: {upto: 4120, seed_page: 0}, C: {…} },
+//     batches: { A: {records, upto, seed?, seed_page?}, C: {…} } }
 //
 // acks — КВИТАНЦИИ (Задача 7b): докуда B применил журнал каждого соседа.
 // Лежат в общем блобе, а не в срезе, ровно потому же, почему и всё остальное:
@@ -585,9 +585,16 @@ export function journalPeers(db, self) {
 function journalAcks(db) {
   const out = {};
   try {
-    for (const row of db.prepare('SELECT node, recv_upto FROM sync_peers WHERE recv_upto > 0').all()) {
+    const rows = db.prepare(
+      'SELECT node, recv_upto, recv_seed_page FROM sync_peers WHERE recv_upto > 0 OR recv_seed_page > 0'
+    ).all();
+    for (const row of rows) {
       const letter = String(row.node || '').trim().toUpperCase();
-      if (letter) out[letter] = row.recv_upto;
+      // ОБЪЕКТ, а не число: у засева номер страницы — единственное, чем его
+      // страницы различаются (upto у всех один, замороженный пол). Сборка до
+      // Задачи 7b читала здесь число; получив объект, она просто не двигает
+      // свой sent_seq — то есть повторяет срез, но ничего не теряет.
+      if (letter) out[letter] = { upto: row.recv_upto, seed_page: row.recv_seed_page };
     }
   } catch (e) {
     // Квитанции — не повод сорвать выгрузку: без них сосед просто повторит
@@ -602,7 +609,8 @@ function sameAcks(prev, next) {
   const a = prev && typeof prev === 'object' && !Array.isArray(prev) ? prev : {};
   const keys = Object.keys(next);
   if (keys.length !== Object.keys(a).length) return false;
-  return keys.every((k) => a[k] === next[k]);
+  return keys.every((k) => a[k] && next[k]
+    && a[k].upto === next[k].upto && a[k].seed_page === next[k].seed_page);
 }
 
 /** Буква ЭТОГО узла. Нет служебной записи — нет и обмена: подписаться нечем. */
@@ -744,7 +752,14 @@ export async function publishJournal(db, dataDir, {
   // никогда не вычистится.
   const acks = journalAcks(db);
 
-  let page = Math.max(MIN_JOURNAL_LIMIT, Number(limit) || JOURNAL_LIMIT);
+  // ЯВНО ЗАДАННЫЙ РАЗМЕР СТРАНИЦЫ УВАЖАЕТСЯ (ревью 7/7b, I3). Раньше здесь
+  // стоял Math.max(MIN_JOURNAL_LIMIT, …), и вызов с limit: 2 молча превращался
+  // в 5000: сквозной тест «засев страницами» отдавал всё ОДНОЙ выгрузкой и
+  // ничего постраничного не проверял. MIN_JOURNAL_LIMIT — это дно ДЕЛЕНИЯ
+  // пополам при слишком большом блобе, а не запрет на маленькую страницу.
+  const requested = Math.max(1, Math.floor(Number(limit) || JOURNAL_LIMIT));
+  const smallest = Math.min(MIN_JOURNAL_LIMIT, requested);
+  let page = requested;
   let built;
   let carrying;
   let sealed;
@@ -769,7 +784,7 @@ export async function publishJournal(db, dataDir, {
       // не отсечь страницу как «уже применённую»: у ВСЕХ страниц засева upto
       // один и тот же — замороженный пол журнала (см. buildBatch).
       batches[peer] = batch.seed
-        ? { records: batch.records, upto: batch.upto, seed: true }
+        ? { records: batch.records, upto: batch.upto, seed: true, seed_page: batch.seed.page }
         : { records: batch.records, upto: batch.upto };
     }
     // generated_at — как у справочника: возраст копии виден получателю.
@@ -778,8 +793,8 @@ export async function publishJournal(db, dataDir, {
     });
     if (!sealed) return { ok: false, reason: 'relay_no_key' };
     if (sealed.length <= maxBlobBytes) break;
-    if (page <= MIN_JOURNAL_LIMIT) return { ok: false, reason: 'relay_too_large' };
-    page = Math.max(MIN_JOURNAL_LIMIT, Math.floor(page / 2));
+    if (page <= smallest) return { ok: false, reason: 'relay_too_large' };
+    page = Math.max(smallest, Math.floor(page / 2));
   }
 
   if (!carrying) {
@@ -878,8 +893,17 @@ function journalSlice(payload, peer, self) {
   // сегодня нечего нам слать, всё равно обязан отчитаться о полученном, и
   // пустой блоб с одной квитанцией — совершенно нормальный блоб.
   const acks = payload.acks;
-  const ack = acks && typeof acks === 'object' && !Array.isArray(acks) ? Number(acks[self]) : NaN;
-  const head = { upto: 0, seed: false, ack: Number.isFinite(ack) ? Math.floor(ack) : 0 };
+  const mine = acks && typeof acks === 'object' && !Array.isArray(acks) ? acks[self] : null;
+  // ЧИСЛО — квитанция соседа сборки до страниц засева: в ней есть только
+  // «докуда по журналу». Объект — нынешняя форма. Принимаются обе: узлы в
+  // сети обновляются не одновременно.
+  const ackUpto = Number(mine && typeof mine === 'object' ? mine.upto : mine);
+  const ackPage = Number(mine && typeof mine === 'object' ? mine.seed_page : 0);
+  const head = {
+    upto: 0, seed: false, seedPage: 0,
+    ack: Number.isFinite(ackUpto) && ackUpto > 0 ? Math.floor(ackUpto) : 0,
+    ackPage: Number.isFinite(ackPage) && ackPage > 0 ? Math.floor(ackPage) : 0,
+  };
 
   const slice = batches[self];
   if (slice === undefined || slice === null) return { ...head, records: [] };
@@ -890,11 +914,13 @@ function journalSlice(payload, peer, self) {
   if (Array.isArray(slice)) return { ...head, records: slice };
   if (typeof slice === 'object' && Array.isArray(slice.records)) {
     const upto = Number(slice.upto);
+    const seedPage = Number(slice.seed_page);
     return {
       ...head,
       records: slice.records,
       upto: Number.isFinite(upto) && upto > 0 ? Math.floor(upto) : 0,
       seed: slice.seed === true,
+      seedPage: Number.isFinite(seedPage) && seedPage > 0 ? Math.floor(seedPage) : 0,
     };
   }
   return null;
@@ -992,9 +1018,9 @@ export async function fetchJournals(db, dataDir, {
     // сообщает, докуда он нас применил, и только теперь мы вправе перестать
     // это повторять и вычистить свой хвост. Не сложится применение ниже —
     // подтверждение всё равно верно: оно уже случилось у него.
-    if (got.ack) {
+    if (got.ack || got.ackPage) {
       try {
-        markConfirmed(db, peer, got.ack);
+        markConfirmed(db, peer, got.ack, got.ackPage);
       } catch (e) {
         // Худшее следствие — лишний повтор среза через час. Ради него обмен
         // не срывают.
@@ -1013,7 +1039,7 @@ export async function fetchJournals(db, dataDir, {
     // такт всегда. Спросить надо ЗДЕСЬ, до резервной копии: снимать копию базы
     // ради среза, который мы уже разобрали, значит заваливать диск клиники
     // копиями каждый час.
-    if (sliceAlreadyApplied(db, { peer, upto: got.upto, seed: got.seed })) {
+    if (sliceAlreadyApplied(db, { peer, upto: got.upto, seed: got.seed, seedPage: got.seedPage })) {
       out[peer] = noWork(got.records.length, true);
       continue;
     }
@@ -1033,7 +1059,9 @@ export async function fetchJournals(db, dataDir, {
       // upto/seed — заголовок среза: по ним приём отличает неподтверждённый
       // повтор (применять второй раз незачем) от новой работы и знает, какую
       // квитанцию записать.
-      out[peer] = applyImpl(db, got.records, { self: ctx.self, peer, upto: got.upto, seed: got.seed });
+      out[peer] = applyImpl(db, got.records, {
+        self: ctx.self, peer, upto: got.upto, seed: got.seed, seedPage: got.seedPage,
+      });
     } catch (e) {
       // Транзакция приёма откатилась целиком (её держит applyBatch) — база
       // ровно такая, какой была, и порция приедет снова.

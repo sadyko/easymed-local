@@ -309,17 +309,38 @@ test('BRANCH_RECORDS_V1: пациенты и лабораторная очере
 
     let backups = 0;
     const backupImpl = async () => { backups++; };
-    // limit = 2 — страница вдвое меньше самой маленькой порции: засев обязан
-    // доехать за несколько кругов, а не потеряться после первого.
-    for (let r = 0; r < 8; r++) {
+    // limit = 2 — по две строки на страницу: засев обязан доехать за несколько
+    // кругов. Число это теперь и вправду соблюдается (ревью, I3): раньше его
+    // молча поднимали до 100, и «постраничный» засев уезжал одной выгрузкой.
+    //
+    // КРУГ ЗДЕСЬ ПОЛНЫЙ, с квитанцией: страница засева подтверждается номером,
+    // и без выгрузки D (в ней и едет квитанция) курсор B не сдвинется. Это не
+    // усложнение теста, а то, как теперь работает доставка.
+    //
+    // НА ВТОРОМ КРУГЕ D ВЫКЛЮЧЕН — то самое, ради чего всё и делалось: блоб B
+    // замещается следующей выгрузкой, и раньше эта страница пропала бы у D
+    // навсегда. Теперь неподтверждённая страница уезжает снова.
+    let done = 0;
+    let pages = 0;
+    for (let r = 0; r < 14 && !done; r++) {
       const pub = await publishJournal(B.db, B.dir, { limit: 2 });
       assert.notEqual(pub.ok, false, 'выгрузка не должна отказывать: ' + JSON.stringify(pub));
+      if (r === 1) continue;   // D выключен: чужой блоб он не забирает
+
       const got = await fetchJournals(D.db, D.dir, { backupImpl });
       assert.equal(got.ok, true, JSON.stringify(got));
+      await publishJournal(D.db, D.dir, {});          // в блобе D едет квитанция
+      await fetchJournals(B.db, B.dir, { backupImpl });   // B её забирает
+
+      const peer = B.db.prepare("SELECT seed_floor, seed_page FROM sync_peers WHERE node = 'D'").get();
+      pages = Math.max(pages, peer.seed_page);
+      if (peer.seed_floor === null) done = r + 1;
     }
     assert.ok(backups > 0, 'перед первым применением обязана сниматься резервная копия');
+    assert.ok(done > 0, 'засев филиала D обязан завершиться, а не встать на первой странице');
+    assert.ok(pages >= 2, 'при limit = 2 засев обязан занять НЕСКОЛЬКО страниц, иначе тест ничего не проверяет; страниц: ' + pages);
     assert.equal(B.db.prepare("SELECT seed_floor FROM sync_peers WHERE node = 'D'").get().seed_floor, null,
-      'засев филиала D обязан завершиться, а не встать на первой странице');
+      'подтверждённый до конца засев закрывается');
 
     assert.deepEqual(patientNames(D.db), ['Иванов'], 'пациент доехал холодным засевом');
     assert.equal(count(D.db, 'visits'), 1, 'и его визит');

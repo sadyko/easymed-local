@@ -550,3 +550,100 @@ test('дрейф: список колонок в триггере и списо�
   }
   db.close();
 });
+
+// --- Задача 7b: страницы засева подтверждаются по номеру ---------------------
+//
+// Курсор засева двигался по ВЫГРУЗКЕ, а блоб узла замещается следующей: у
+// клиники на 70 000 пациентов сосед, выключенный на ночь, пропускал страницу
+// целиком, и дыра приходилась на старых пациентов, которых никто не трогает,
+// то есть была невидимой. Теперь у страницы есть номер, и курсор двигает
+// только квитанция с этим номером.
+
+test('7b: невыложенная… то есть неподтверждённая страница засева уезжает снова, и ТА ЖЕ', () => {
+  const db = fresh();
+  for (const name of ['Первый', 'Второй', 'Третий', 'Четвёртый']) {
+    db.prepare('INSERT INTO patients (full_name) VALUES (?)').run(name);
+  }
+  const first = buildBatch(db, { self: 'B', peer: 'C', limit: 2 });
+  assert.equal(first.seed.page, 1, 'первая страница засева');
+  const names = first.records.map(r => r.data.full_name).sort();
+  markPublished(db, 'C', first.upto, first.clock, first.seed);
+
+  const again = buildBatch(db, { self: 'B', peer: 'C', limit: 2 });
+  assert.equal(again.seed.page, 1, 'страница не подтверждена — номер тот же');
+  assert.deepEqual(again.records.map(r => r.data.full_name).sort(), names,
+    'и строки те же: набор заморожен на начало засева, иначе сосед отсеял бы страницу и потерял её');
+
+  markConfirmed(db, 'C', again.upto, again.seed.page);
+  const second = buildBatch(db, { self: 'B', peer: 'C', limit: 2 });
+  assert.equal(second.seed.page, 2, 'подтверждение сдвинуло курсор на следующую страницу');
+  assert.equal(second.records.some(r => names.includes(r.data.full_name)), false,
+    'вторая страница — про другие строки');
+  db.close();
+});
+
+test('7b: строка, заведённая ПОСЛЕ начала засева, в засев не попадает — её везёт журнал', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Старожил')").run();
+  // Время в created_at — секундной точности, поэтому «до» и «после» в одном
+  // тесте надо разводить явно, иначе обе строки попадают в одну секунду и
+  // граница засева ничего не разделяет.
+  const minuteAgo = new Date(Date.now() - 60000).toISOString().replace(/\.\d+Z$/, 'Z');
+  db.prepare("UPDATE patients SET created_at = ? WHERE full_name = 'Старожил'").run(minuteAgo);
+  const first = buildBatch(db, { self: 'B', peer: 'C', limit: 50, clock: () => Date.now() - 30000 });
+  markPublished(db, 'C', first.upto, first.clock, first.seed);
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Новенький')").run();
+
+  const again = buildBatch(db, { self: 'B', peer: 'C', limit: 50 });
+  assert.deepEqual(again.records.map(r => r.data.full_name), ['Старожил'],
+    'иначе «страница 1» во второй выгрузке — уже другой набор, и отсев по номеру терял бы новичка');
+  markConfirmed(db, 'C', again.upto, again.seed.page);
+
+  const warm = buildBatch(db, { self: 'B', peer: 'C', limit: 50 });
+  assert.equal(warm.seed, null, 'засев закончен');
+  assert.equal(warm.records.some(r => r.data.full_name === 'Новенький'), true,
+    'а новичок приезжает журналом: его seq выше замороженного пола');
+  db.close();
+});
+
+test('7b: пустой засев закрывается сразу — подтверждать в нём нечего', () => {
+  const db = fresh();
+  const b = buildBatch(db, { self: 'B', peer: 'C' });
+  assert.deepEqual(b.records, [], 'клиника, где ещё никого не завели');
+  markPublished(db, 'C', b.upto, b.clock, b.seed);
+  assert.equal(db.prepare("SELECT seed_floor FROM sync_peers WHERE node = 'C'").get().seed_floor, null,
+    'иначе узел ждал бы квитанцию за ноль строк вечно, а пустой срез в блоб даже не кладётся');
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Первый пациент')").run();
+  assert.equal(buildBatch(db, { self: 'B', peer: 'C' }).records.length > 0, true,
+    'и первый же заведённый пациент уезжает журналом');
+  db.close();
+});
+
+test('7b: номер страницы из будущего курсор не двигает', () => {
+  const db = fresh();
+  for (const name of ['А', 'Б', 'В', 'Г']) db.prepare('INSERT INTO patients (full_name) VALUES (?)').run(name);
+  const first = buildBatch(db, { self: 'B', peer: 'C', limit: 2 });
+  markPublished(db, 'C', first.upto, first.clock, first.seed);
+
+  markConfirmed(db, 'C', first.upto, 7);   // сосед со сломанной сборкой
+  const after = buildBatch(db, { self: 'B', peer: 'C', limit: 2 });
+  assert.equal(after.seed.page, 1,
+    'перепрыгнув страницу, мы оставили бы у соседа дыру, которую уже нечем закрыть');
+  db.close();
+});
+
+test('7b: молчуна забывают по КВИТАНЦИИ, а не по нашей выгрузке', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  const b = buildBatch(db, { self: 'B', peer: 'C' });
+  markPublished(db, 'C', b.upto, b.clock, b.seed);
+  // Выгрузки идут исправно (last_ok свежий), а квитанций нет уже 40 дней:
+  // сосед выключен навсегда. Раньше last_ok держал бы его в списке вечно, а с
+  // ним — и наш журнал, и его недосеянный засев.
+  db.prepare("UPDATE sync_peers SET last_ack = ? WHERE node = 'C'")
+    .run(new Date(Date.now() - 40 * 86400000).toISOString());
+  pruneJournal(db);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM sync_peers WHERE node = 'C'").get().n, 0,
+    'сосед, который сорок дней ничего не подтверждает, забыт — по возвращении он получит засев заново');
+  db.close();
+});

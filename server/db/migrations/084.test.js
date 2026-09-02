@@ -152,8 +152,11 @@ test('084: таблицы ожидания и соседей существую�
   // собирается срез и чистится журнал), recv_upto — наша квитанция ему.
   // Слить их обратно в одну нельзя: на задержке подтверждения узлы начинают
   // защищать строки друг от друга и не сходятся вовсе.
-  assert.deepEqual(peers,
-    ['node', 'pub_seq', 'sent_seq', 'recv_upto', 'last_ok', 'seed_floor', 'seed_tbl', 'seed_at', 'seed_id']);
+  assert.deepEqual(peers, [
+    'node', 'pub_seq', 'sent_seq', 'recv_upto', 'recv_seed_page', 'last_ok', 'last_ack',
+    'seed_floor', 'seed_started', 'seed_tbl', 'seed_at', 'seed_id', 'seed_page',
+    'seed_next_tbl', 'seed_next_at', 'seed_next_id', 'seed_next_done',
+  ]);
   // Один и тот же (tbl, uid) в ожидании — одна строка: более поздняя замещает.
   db.prepare("INSERT INTO sync_pending (tbl, uid, stamp, record, waits_tbl, waits_uid) VALUES ('visits','v1','s1','{}','patients','p1')").run();
   assert.throws(() => db.prepare("INSERT INTO sync_pending (tbl, uid, stamp, record, waits_tbl, waits_uid) VALUES ('visits','v1','s2','{}','patients','p1')").run(), /UNIQUE|PRIMARY/);

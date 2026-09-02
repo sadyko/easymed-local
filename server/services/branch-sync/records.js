@@ -90,7 +90,7 @@ const SELF_RE = /^[A-Z]{1,8}$/;
  *   строк ЖДЁТ родителя на конец транзакции (не «сколько раз отложили»);
  *   already — срез уже применён раньше, работы не было.
  */
-export function applyBatch(db, records, { self, peer = null, upto = 0, seed = false } = {}) {
+export function applyBatch(db, records, { self, peer = null, upto = 0, seed = false, seedPage = 0 } = {}) {
   // Без self часы после приёма не чеканятся, и узел с отставшими часами
   // проигрывал бы слияние вечно — это тихая потеря данных, а не мелочь.
   // Проверяется ФОРМА буквы, а не просто «не пусто»: self уходит в nextStamp,
@@ -108,11 +108,13 @@ export function applyBatch(db, records, { self, peer = null, upto = 0, seed = fa
   // живёт всегда. Считаем записи пропущенными, чтобы в журнале сервера было
   // видно, что срез приезжал, а не что его не было.
   const reach = sliceUpto(upto);
+  const page = sliceUpto(seedPage);
   // Квитанция, СНЯТАЯ ДО ПРИЁМА: ею сужается авторство повторов (narrowChanged),
   // и снимать её после обновления в конце транзакции значило бы отобрать
   // авторство у той самой порции, которую мы сейчас применяем.
-  ctx.recvUpto = peer ? receivedUpto(db, peer) : 0;
-  if (sliceAlreadyApplied(db, { peer, upto, seed })) {
+  const before = peer ? receipt(db, peer) : { recv_upto: 0, recv_seed_page: 0 };
+  ctx.recvUpto = before.recv_upto;
+  if (sliceAlreadyApplied(db, { peer, upto, seed, seedPage })) {
     return { ...stats, skipped: Array.isArray(records) ? records.length : 0, already: true };
   }
 
@@ -179,8 +181,20 @@ export function applyBatch(db, records, { self, peer = null, upto = 0, seed = fa
     // подтверждение того, чего у нас нет, а он по нему вычистил бы свой
     // журнал. MAX — квитанция не откатывается назад: срез мог приехать
     // повторно, старым (сосед выгрузился раньше, чем прочитал нашу).
-    if (peer && reach) {
-      db.prepare('UPDATE sync_peers SET recv_upto = MAX(recv_upto, ?) WHERE node = ?').run(reach, peer);
+    //
+    // НОМЕР СТРАНИЦЫ ЗАСЕВА — вторая половина квитанции: по нему отправитель
+    // двигает курсор засева, и без него страница, которую мы забрали,
+    // считалась бы у него неотданной вечно. Номера имеют смысл ТОЛЬКО в
+    // пределах одного пола (upto): сосед, забывший нас и начавший засев
+    // заново, нумерует страницы с единицы, и сравнивать их со старыми нельзя —
+    // отсюда сброс, когда пол сменился.
+    if (peer && (reach || page)) {
+      const sameSeed = reach === before.recv_upto;
+      const nextPage = page
+        ? (sameSeed ? Math.max(before.recv_seed_page, page) : page)
+        : before.recv_seed_page;
+      db.prepare('UPDATE sync_peers SET recv_upto = MAX(recv_upto, ?), recv_seed_page = ? WHERE node = ?')
+        .run(reach, nextPage, peer);
     }
   });
 
@@ -540,10 +554,26 @@ const EMPTY = new Set();
  * Засев (seed) под правило не подпадает: все его страницы несут один и тот же
  * upto — замороженный пол журнала.
  */
-export function sliceAlreadyApplied(db, { peer = null, upto = 0, seed = false } = {}) {
+export function sliceAlreadyApplied(db, { peer = null, upto = 0, seed = false, seedPage = 0 } = {}) {
+  if (!peer) return false;
   const reach = sliceUpto(upto);
-  if (!peer || !reach || seed) return false;
-  return receivedUpto(db, peer) >= reach;
+  const got = receipt(db, peer);
+  if (seed) {
+    // Страница засева: её upto ни о чём не говорит — он у всех страниц один
+    // (замороженный пол). Сравнивается НОМЕР, и только в пределах того же
+    // пола: сменился пол — засев начат заново, номера с ним тоже.
+    //
+    // Отсев здесь ОБЯЗАТЕЛЕН, а не бережлив. Отправитель повторяет страницу,
+    // пока не придёт квитанция, а записи засева несут авторство '*' — всю
+    // строку — и каждый раз под новой меткой. Применив повтор, мы отдали бы
+    // ему СВОИ правки, сделанные с прошлого раза (сквозной тест ловит это на
+    // телефоне и адресе). А безопасен отсев ровно потому, что набор строк
+    // заморожен на начало засева (seed_started): содержимое страницы с тем же
+    // номером не меняется, а заведённое позже приезжает журналом.
+    const page = sliceUpto(seedPage);
+    return !!page && reach === got.recv_upto && got.recv_seed_page >= page;
+  }
+  return !!reach && got.recv_upto >= reach;
 }
 
 // Заголовок среза приезжает СНАРУЖИ: строка, дробь, отрицательное число и
@@ -554,10 +584,10 @@ function sliceUpto(upto) {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-/** Докуда мы уже дошли по журналу этого соседа. Нет строки — ни докуда. */
-function receivedUpto(db, peer) {
-  const row = db.prepare('SELECT recv_upto FROM sync_peers WHERE node = ?').get(peer);
-  return row ? row.recv_upto : 0;
+/** Наша квитанция этому соседу: докуда дошли по журналу и по засеву. */
+function receipt(db, peer) {
+  const row = db.prepare('SELECT recv_upto, recv_seed_page FROM sync_peers WHERE node = ?').get(peer);
+  return row || { recv_upto: 0, recv_seed_page: 0 };
 }
 
 // Какие колонки отправитель ПРАВИЛ (а не просто прислал в снимке). Запись без
