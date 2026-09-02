@@ -56,7 +56,7 @@ import { renderCrm }          from './admin/views/crm.js?v=aug18d';   // CRM_V10
 import { renderDocsArchive }  from './admin/views/docs-archive.js?v=q3one';   // CLINICAL_DOCS_ARCHIVE_V1 — restored after concurrent clobber
 import { renderReports }      from './admin/views/reports.js?v=vatincl1';
 import { renderReportsHub }   from './admin/views/reports-hub.js?v=ru6';   // REPORTS_HUB_RU_V1 — «Отчёты» card grid + full-screen report builder
-import { renderWardBeds }     from './admin/views/ward-beds.js?v=console8';   // INPATIENT_LOCAL_V1 — fresh local ward/bed board (legacy beds.js was cloud-coupled)
+import { renderWardBeds }     from './admin/views/ward-beds.js?v=board2';   // INPATIENT_LOCAL_V1 — fresh local ward/bed board (legacy beds.js was cloud-coupled)
 import { renderDoctorRoom }   from './admin/views/doctor-room.js?v=docroom1';   // DOCTOR_ROOM_V1 — Кабинет врача (consultation queue)
 import { renderEmployees }    from './admin/views/employees.js?v=arch1';   // EMPLOYEE_EDITOR_V3 — per-service rate tables; v11 = RATE_LOAD_V2 (fixed rate survives reopen)
 import { renderMarketing }    from './admin/views/marketing.js?v=btnright1';

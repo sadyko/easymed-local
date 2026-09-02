@@ -4241,3 +4241,44 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
   .rs-plan{ grid-template-columns:repeat(auto-fill, minmax(144px,1fr)); }
 }
 /* ---- end ROOMS_PLAN_V1 --------------------------------------------------- */
+
+/* ============================ WARD_BOARD_V2 — доска стационара ============================ */
+/* Плитки-счётчики: они же фильтр. Выбранная отмечена заливкой и рамкой, а не
+   голым outline — тот читался как фокус с клавиатуры, а не как выбор. */
+.wb-kpis{ display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; }
+.wb-kpi{
+  flex:1 1 132px; min-width:132px; display:flex; flex-direction:column; gap:2px;
+  padding:11px 13px; text-align:left; cursor:pointer; font-family:inherit;
+  border:1px solid var(--ink-100); border-radius:12px; background:var(--white);
+  transition:border-color .12s, background .12s, box-shadow .12s;
+}
+.wb-kpi:hover{ border-color:var(--primary-300); }
+.wb-kpi.is-on{ border-color:var(--primary-600); background:var(--primary-50); box-shadow:0 0 0 1px var(--primary-600) inset; }
+.wb-kpi__lb{ display:flex; align-items:center; gap:6px; font-size:12.5px; text-transform:uppercase;
+  letter-spacing:.04em; color:var(--ink-500); font-weight:600; }
+.wb-kpi__dot{ width:8px; height:8px; border-radius:50%; flex:0 0 auto; }
+.wb-kpi__n{ font-size:24px; font-weight:700; line-height:1.1; color:var(--ink-900); font-variant-numeric:tabular-nums; }
+.wb-kpi__sub{ font-size:12.5px; }
+
+/* Шапка палаты: имя + тариф словами слева, заполненность справа. Полоса
+   считается по ВСЕМ койкам палаты, поэтому не врёт при включённом фильтре. */
+.wb-ward__head{ display:flex; align-items:center; justify-content:space-between; gap:14px;
+  padding:13px 15px; border-bottom:1px solid var(--ink-50); flex-wrap:wrap; }
+.wb-ward__id{ display:flex; align-items:center; gap:8px; min-width:0; flex-wrap:wrap; }
+.wb-ward__dot{ width:10px; height:10px; border-radius:3px; flex:0 0 auto; }
+.wb-ward__name{ font-size:15px; font-weight:700; margin:0; }
+.wb-ward__meta{ font-size:12.5px; font-weight:400; }
+.wb-ward__occ{ display:flex; align-items:center; gap:9px; flex:0 0 auto; }
+.wb-ward__occlb{ font-size:12.5px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.wb-bar{ display:block; width:96px; height:6px; border-radius:999px; background:var(--ink-100); overflow:hidden; }
+.wb-bar__fill{ display:block; height:100%; background:var(--primary-600); border-radius:999px; }
+.wb-tiles{ display:grid; grid-template-columns:repeat(auto-fill, minmax(160px,1fr)); gap:10px; padding:12px 14px; }
+.wb-dot{ width:7px; height:7px; border-radius:50%; display:inline-block; flex:0 0 auto; }
+
+@media (max-width: 560px){
+  .wb-kpi{ flex:1 1 45%; min-width:0; }
+  .wb-ward__head{ gap:8px; }
+  .wb-ward__occ{ width:100%; justify-content:space-between; }
+  .wb-bar{ width:120px; }
+}
+/* ============================ end WARD_BOARD_V2 ============================ */

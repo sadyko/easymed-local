@@ -5810,4 +5810,24 @@ export const STRINGS = {
 
   // ROOM_CATS_V1 — категории в выборе типа помещения.
   "Амбулаторные": {"en":"Outpatient","ru":"Амбулаторные","uz":"Ambulator"},
+
+  // WARD_BOARD_V2 — доска стационара по-русски (экран говорил по-английски).
+  "Госпитализации": {"en":"Admissions","ru":"Госпитализации","uz":"Yotqizishlar"},
+  "Койки, госпитализации и выписки. Нажмите на койку, чтобы действовать.": {"en":"Beds, admissions and discharges. Click a bed to act on it.","ru":"Койки, госпитализации и выписки. Нажмите на койку, чтобы действовать.","uz":"Koykalar, yotqizish va chiqarish. Amal qilish uchun koykani bosing."},
+  "Все койки": {"en":"All beds","ru":"Все койки","uz":"Barcha koykalar"},
+  "Уборка": {"en":"Cleaning","ru":"Уборка","uz":"Tozalash"},
+  "Ремонт": {"en":"Maintenance","ru":"Ремонт","uz":"Ta'mirlash"},
+  "Свободна": {"en":"Free","ru":"Свободна","uz":"Bo'sh"},
+  "Занята": {"en":"Occupied","ru":"Занята","uz":"Band"},
+  "занято {n}%": {"en":"{n}% occupied","ru":"занято {n}%","uz":"{n}% band"},
+  "занято {busy} из {all}": {"en":"{busy} of {all} occupied","ru":"занято {busy} из {all}","uz":"{all} dan {busy} band"},
+  "можно класть": {"en":"available","ru":"можно класть","uz":"joylashtirish mumkin"},
+  "пациенты в палате": {"en":"patients in care","ru":"пациенты в палате","uz":"palatadagi bemorlar"},
+  "готовится": {"en":"turning over","ru":"готовится","uz":"tayyorlanmoqda"},
+  "не используется": {"en":"out of service","ru":"не используется","uz":"ishlatilmaydi"},
+  "Все палаты · {n}": {"en":"All wards · {n}","ru":"Все палаты · {n}","uz":"Barcha palatalar · {n}"},
+  "Нажмите, чтобы положить": {"en":"Tap to admit","ru":"Нажмите, чтобы положить","uz":"Yotqizish uchun bosing"},
+  "Койки не найдены. Заведите палаты и койки в «Настройки → Помещения».": {"en":"No beds found. Create wards and beds in Settings -> Rooms.","ru":"Койки не найдены. Заведите палаты и койки в «Настройки → Помещения».","uz":"Koyka topilmadi. Palata va koykalarni «Sozlamalar -> Xonalar» da yarating."},
+  "ПИТ": {"en":"ICU","ru":"ПИТ","uz":"RIB"},
+  "Наблюдение": {"en":"Observation","ru":"Наблюдение","uz":"Kuzatuv"},
 };

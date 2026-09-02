@@ -17,10 +17,22 @@ import { phoneInput } from '../phone-input.js?v=ph1';
 import { searchableSelect } from './searchable-select.js?v=ss2';   // SEARCHABLE_SELECT_V1
 
 const STATUS = {
-    free:        { label: 'Free',        bg: 'var(--ok-50, #e9f7ef)',   fg: 'var(--ok-700, #1a7a44)',   bd: 'var(--ok-200, #bde5cd)' },
-    occupied:    { label: 'Occupied',    bg: 'var(--primary-50, #e8f3f2)', fg: 'var(--primary-700, #1f7a72)', bd: 'var(--primary-200, #bcdedb)' },
-    cleaning:    { label: 'Cleaning',    bg: 'var(--warn-50, #fdf5e6)', fg: 'var(--warn-700, #9a6b00)', bd: 'var(--warn-200, #f0dca8)' },
-    maintenance: { label: 'Out of svc.', bg: 'var(--ink-50, #f1f2f4)',  fg: 'var(--ink-600, #545b66)',  bd: 'var(--ink-200, #d5d8dd)' },
+    free:        { label: 'Свободна',  bg: 'var(--ok-50, #e9f7ef)',      fg: 'var(--ok-700, #1a7a44)',      bd: 'var(--ok-200, #bde5cd)',      dot: 'var(--ok-500, #2e8b52)' },
+    occupied:    { label: 'Занята',    bg: 'var(--primary-50, #e8f3f2)', fg: 'var(--primary-700, #1f7a72)', bd: 'var(--primary-200, #bcdedb)', dot: 'var(--primary-600, #1f7a72)' },
+    cleaning:    { label: 'Уборка',    bg: 'var(--warn-50, #fdf5e6)',    fg: 'var(--warn-700, #9a6b00)',    bd: 'var(--warn-200, #f0dca8)',    dot: 'var(--warn-500, #d9a441)' },
+    maintenance: { label: 'Ремонт',    bg: 'var(--ink-50, #f1f2f4)',     fg: 'var(--ink-600, #545b66)',     bd: 'var(--ink-200, #d5d8dd)',     dot: 'var(--ink-300, #b9c0cc)' },
+};
+
+// WARD_BOARD_V2 — enum-значения больше не показываются как есть: в шапке палаты
+// стояло "general · daily", то есть код таблицы вместо слов.
+const WARD_TYPE_LABEL = {
+    general: 'Общая', icu: 'ПИТ / реанимация', maternity: 'Родильная',
+    pediatrics: 'Детская', surgery: 'Хирургическая', oncology: 'Онкологическая',
+    isolation: 'Изолятор', other: 'Прочее',
+};
+const BED_TYPE_LABEL = {
+    standard: 'Обычная', icu: 'ПИТ', isolation: 'Изолятор',
+    vip: 'VIP', recovery: 'Послеоперационная', observation: 'Наблюдение',
 };
 const PATHWAYS = [['therapy', 'Therapy (medical)'], ['surgical', 'Surgical']];
 
@@ -85,19 +97,19 @@ async function paint(root) {
     clear(root);
     root.appendChild(h('div', { class: 'page-head' },
         h('div', null,
-            h('h1', { class: 'page-title' }, 'Ward & beds'),
-            h('p', { class: 'page-subtitle' }, 'Live bed board, admissions and discharges. Click a bed to act on it.'),
+            h('h1', { class: 'page-title' }, tr('Стационар')),
+            h('p', { class: 'page-subtitle' }, tr('Койки, госпитализации и выписки. Нажмите на койку, чтобы действовать.')),
         ),
         h('div', { class: 'segmented' },
-            tabBtn('Bed board', 'board', root),
-            tabBtn('Admissions', 'admissions', root),
+            tabBtn(tr('Койки'), 'board', root),
+            tabBtn(tr('Госпитализации'), 'admissions', root),
         ),
     ));
 
     let data;
     try { data = await loadData(); }
     catch (e) {
-        root.appendChild(h('div', { class: 'card', style: { padding: '18px' } }, h('div', { class: 'empty' }, 'Could not load: ' + ((e && e.message) || e))));
+        root.appendChild(h('div', { class: 'card', style: { padding: '18px' } }, h('div', { class: 'empty' }, trf('Не удалось загрузить: {msg}', { msg: (e && e.message) || e }))));
         return;
     }
 
@@ -122,7 +134,7 @@ async function paint(root) {
         shownBeds += wardBeds.length;
         grid.appendChild(wardCard(w, wardBeds, data, root));
     }
-    if (!shownBeds) grid.appendChild(h('div', { class: 'card', style: { padding: '20px' } }, h('div', { class: 'empty' }, 'No beds match. Add wards & beds in Settings → Стационар.')));
+    if (!shownBeds) grid.appendChild(h('div', { class: 'card', style: { padding: '20px' } }, h('div', { class: 'empty' }, tr('Койки не найдены. Заведите палаты и койки в «Настройки → Помещения».'))));
     root.appendChild(grid);
 }
 
@@ -133,26 +145,27 @@ function tabBtn(label, tab, root) {
 
 function kpiStrip(counts, root) {
     const occPct = counts.all ? Math.round(counts.occupied / counts.all * 100) : 0;
-    const tile = (key, label, sub) => {
-        const active = state.statusFilter === key;
-        return h('div', {
-            class: 'card', style: {
-                flex: '1 1 120px', minWidth: '120px', padding: '12px 14px', cursor: 'pointer',
-                outline: active ? '2px solid var(--primary-400, #7cc4bd)' : 'none',
-            },
-            onclick: () => { state.statusFilter = active ? 'all' : key; paint(root); },
-        },
-            h('div', { class: 'muted', style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '.04em' } }, label),
-            h('div', { style: { fontSize: '24px', fontWeight: 700, marginTop: '2px' } }, String(counts[key])),
-            sub ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, sub) : null,
-        );
-    };
-    return h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '12px', marginBottom: '14px' } },
-        tile('all', 'All beds', occPct + '% occupied'),
-        tile('free', 'Free', 'available'),
-        tile('occupied', 'Occupied', 'in care'),
-        tile('cleaning', 'Cleaning', 'turning over'),
-        tile('maintenance', 'Out of svc.', 'maintenance'),
+    // WARD_BOARD_V2 — плитки одновременно ФИЛЬТР, а выбранная была отмечена
+    // голым outline: это читается как фокус с клавиатуры, а не как выбор.
+    // Теперь у выбранной свой класс с заливкой и точкой статуса.
+    const tile = (key, label, sub) => h('button', {
+        class: 'card wb-kpi' + (state.statusFilter === key ? ' is-on' : ''),
+        type: 'button',
+        'aria-pressed': state.statusFilter === key ? 'true' : 'false',
+        onclick: () => { state.statusFilter = state.statusFilter === key ? 'all' : key; paint(root); },
+    },
+        h('span', { class: 'wb-kpi__lb' },
+            key !== 'all' ? h('span', { class: 'wb-kpi__dot', style: { background: (STATUS[key] || {}).dot || 'var(--ink-300)' } }) : null,
+            label),
+        h('span', { class: 'wb-kpi__n' }, String(counts[key])),
+        sub ? h('span', { class: 'wb-kpi__sub muted' }, sub) : null,
+    );
+    return h('div', { class: 'wb-kpis' },
+        tile('all', tr('Все койки'), trf('занято {n}%', { n: occPct })),
+        tile('free', tr('Свободно'), tr('можно класть')),
+        tile('occupied', tr('Занято'), tr('пациенты в палате')),
+        tile('cleaning', tr('Уборка'), tr('готовится')),
+        tile('maintenance', tr('Ремонт'), tr('не используется')),
     );
 }
 
@@ -161,7 +174,7 @@ function wardPills(data, root) {
         class: 'segmented-btn' + (String(state.wardFilter) === String(id) ? ' on' : ''),
         type: 'button', onclick: () => { state.wardFilter = id; paint(root); },
     }, label);
-    const wrap = h('div', { class: 'segmented', style: { flexWrap: 'wrap', marginBottom: '14px' } }, pill('all', 'All wards · ' + data.beds.length));
+    const wrap = h('div', { class: 'segmented', style: { flexWrap: 'wrap', marginBottom: '14px' } }, pill('all', trf('Все палаты · {n}', { n: data.beds.length })));
     for (const w of data.wards) {
         const n = data.beds.filter(b => b.ward_id === w.id).length;
         wrap.appendChild(pill(w.id, w.name + ' · ' + n));
@@ -170,16 +183,29 @@ function wardPills(data, root) {
 }
 
 function wardCard(ward, beds, data, root) {
-    const tiles = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '10px', padding: '12px 14px' } });
+    const tiles = h('div', { class: 'wb-tiles' });
     for (const bed of beds) tiles.appendChild(bedTile(bed, ward, data, root));
-    return h('div', { class: 'card' },
-        h('div', { class: 'card-header' },
-            h('h3', null,
-                ward.color ? h('span', { style: { display: 'inline-block', width: '10px', height: '10px', borderRadius: '3px', background: ward.color, marginRight: '7px' } }) : null,
-                ward.name,
-                h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '12.5px', marginLeft: '8px' } }, (ward.type || 'general') + ' · ' + (ward.billing_mode || 'daily'))),
-            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, beds.length + ' beds'),
-        ),
+
+    // WARD_BOARD_V2 — «6 beds» не отвечало на вопрос, ради которого на эту
+    // доску и смотрят: сколько мест ещё есть. Считаем по ВСЕМ койкам палаты, а
+    // не по отфильтрованным, иначе полоса врала бы при включённом фильтре.
+    const all = data.beds.filter(b => b.ward_id === ward.id);
+    const busy = all.filter(b => bedStatus(b, data.currentByBed) === 'occupied').length;
+    const pct = all.length ? Math.round(busy / all.length * 100) : 0;
+    const rate = ward.billing_mode === 'hourly'
+        ? trf('{price} / час', { price: fmtPrice(ward.price_per_hour) })
+        : trf('{price} / сут', { price: fmtPrice(ward.price_per_day) });
+
+    return h('div', { class: 'card wb-ward' },
+        h('div', { class: 'wb-ward__head' },
+            h('div', { class: 'wb-ward__id' },
+                ward.color ? h('span', { class: 'wb-ward__dot', style: { background: ward.color } }) : null,
+                h('h3', { class: 'wb-ward__name' }, ward.name),
+                h('span', { class: 'muted wb-ward__meta' },
+                    tr(WARD_TYPE_LABEL[ward.type] || ward.type || 'Общая') + ' · ' + rate)),
+            h('div', { class: 'wb-ward__occ' },
+                h('span', { class: 'muted wb-ward__occlb' }, trf('занято {busy} из {all}', { busy, all: all.length })),
+                h('span', { class: 'wb-bar' }, h('span', { class: 'wb-bar__fill', style: { width: pct + '%' } })))),
         tiles,
     );
 }
@@ -195,9 +221,11 @@ function bedTile(bed, ward, data, root) {
         },
         onclick: () => onBedClick(bed, ward, adm, root),
     },
-        h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+        h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' } },
             h('strong', { style: { fontSize: '13.5px' } }, bed.code),
-            h('span', { style: { fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', color: style.fg } }, style.label),
+            h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12.5px', fontWeight: '700', color: style.fg } },
+                h('span', { class: 'wb-dot', style: { background: style.dot } }),
+                tr(style.label)),
         ),
     );
     if (adm) {
@@ -212,7 +240,7 @@ function bedTile(bed, ward, data, root) {
         if (adm.users && adm.users.full_name) tile.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', display: 'flex', alignItems: 'center', gap: '4px' } }, Icon('Stethoscope', { size: 11 }), adm.users.full_name));
     } else {
         tile.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: 'auto' } },
-            st === 'free' ? 'Tap to admit' : (bed.type && bed.type !== 'standard' ? bed.type : '—')));
+            st === 'free' ? tr('Нажмите, чтобы положить') : (bed.type && bed.type !== 'standard' ? tr(BED_TYPE_LABEL[bed.type] || bed.type) : '—')));
     }
     return tile;
 }
