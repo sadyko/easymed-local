@@ -1,0 +1,1277 @@
+# Фаза 2: пациенты и клинические записи ездят между филиалами
+
+> **Для агентов:** ОБЯЗАТЕЛЬНЫЙ НАВЫК — superpowers:subagent-driven-development
+> (рекомендуется) или superpowers:executing-plans. Шаги отмечаются `- [ ]`.
+
+**Цель:** пациент, заведённый в одном филиале, виден во всех; лабораторная
+очередь и результаты — тоже.
+
+**Архитектура:** у каждой синхронизируемой строки появляется `uid` — глобально
+уникальный и неизменный. Триггеры БД пишут журнал изменений (`sync_journal`) с
+гибридными логическими часами. Филиал выкладывает ХВОСТ своего журнала на тот же
+шифрованный релей, что уже возит справочник, и забирает чужие. Приём переводит
+`uid` в собственные локальные `id`, сливает поколоночно по правилу «последняя
+правка побеждает» и никогда не удаляет строку, которую правили позже.
+
+**Стек:** Node 24, better-sqlite3, node:test. Транспорт — существующий
+`relay.js` (AES-256-GCM + gzip через settings.easymed.uz).
+
+---
+
+## Что входит и что НЕ входит
+
+**Входит** (ровно то, что нужно для списка пациентов и лабораторной очереди):
+`patients`, `visits`, `visit_services`, `lab_results`.
+
+**НЕ входит, намеренно:**
+
+- `invoices`, `payments`, `cash_movements` — Фаза 3. Требование владельца:
+  тестовая клиника должна отработать на Фазе 2 прежде, чем деньги поедут.
+- `users`, `roles`, `role_permissions` — они однонаправленные (главная →
+  филиалы) и поедут расширением списка справочника, а не журналом. Отдельная
+  задача, не смешивать с двусторонним потоком.
+- `rooms`, `wards`, `beds`, `floors`, `service_queue_tickets` — решение
+  владельца: «which is clinics own».
+
+**Почему `visit_services` входит, хотя это на первый взгляд про деньги:** на
+`visit_services.status` построена ЛАБОРАТОРНАЯ ОЧЕРЕДЬ
+(`public/js/admin/views/laboratory.js`: ordered → collected → in_progress →
+completed). Без неё «лабораторная очередь между филиалами» невозможна. Денежные
+поля строки (`unit_price`, `total`, `invoice_item_id`) при этом НЕ переносятся —
+см. Задачу 5.
+
+---
+
+## Структура файлов
+
+| Файл | Ответственность |
+|---|---|
+| `server/db/migrations/083_sync_uid.sql` | колонка `uid` на четырёх таблицах, засев для существующих строк, уникальные индексы |
+| `server/db/migrations/083.test.js` | что засев ничего не потерял и `uid` не повторяется |
+| `server/db/migrations/084_sync_journal.sql` | таблица `sync_journal` + триггеры INSERT/UPDATE/DELETE на четырёх таблицах |
+| `server/db/migrations/084.test.js` | что журнал пишется САМ, в обход прикладного кода |
+| `server/services/branch-sync/hlc.js` | гибридные логические часы: строковая метка, сравнимая лексикографически |
+| `server/services/branch-sync/hlc.test.js` | порядок при разошедшихся часах |
+| `server/services/branch-sync/journal.js` | чтение хвоста журнала, отметка «докуда отдано», сборка порции |
+| `server/services/branch-sync/journal.test.js` | границы порции, отметки, пустой хвост |
+| `server/services/branch-sync/records.js` | ПРИЁМ: uid→локальный id, поколоночное слияние, правило удалений |
+| `server/services/branch-sync/records.test.js` | слияние, конфликты, удаления, ссылки на неприехавшие строки |
+| `server/services/branch-sync/relay-crypto.js` (правка) | адрес блоба ДЛЯ УЗЛА, а не для группы |
+| `server/services/branch-sync/relay.js` (правка) | выложить/забрать журнальные блобы |
+| `server/services/rpc/branch-sync.js` (правка) | обмен записями в том же вызове, что и справочник |
+
+---
+
+## Задача 1: колонка `uid`
+
+**Файлы:**
+- Создать: `server/db/migrations/083_sync_uid.sql`
+- Создать: `server/db/migrations/083.test.js`
+
+- [ ] **Шаг 1: миграция**
+
+```sql
+-- 083_sync_uid.sql — BRANCH_RECORDS_V1: глобальная личность строки.
+--
+-- Локальный id — счётчик ВНУТРИ базы: пациент №500 есть в каждом филиале и это
+-- разные люди. Пока базы не встречались, это безвредно; в тот момент, когда
+-- они встретятся, каждая ссылка «визит → пациент» должна пережить границу.
+-- uid переживает, локальный id — нет.
+--
+-- Почему не переиспользуем branch_sync_map (079): та карта односторонняя и
+-- рассчитана на один пишущий узел (главный отдаёт справочник). Здесь пишут все.
+--
+-- TEXT, а не BLOB: uid попадает в JSON выгрузки, и hex-строка не требует
+-- кодирования на каждом шаге.
+ALTER TABLE patients        ADD COLUMN uid TEXT;
+ALTER TABLE visits          ADD COLUMN uid TEXT;
+ALTER TABLE visit_services  ADD COLUMN uid TEXT;
+ALTER TABLE lab_results     ADD COLUMN uid TEXT;
+
+-- Засев для строк, которые уже есть. lower(hex(randomblob(16))) — 128 бит из
+-- ГСЧ SQLite: столкновение невероятнее, чем потеря базы.
+UPDATE patients       SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL;
+UPDATE visits         SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL;
+UPDATE visit_services SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL;
+UPDATE lab_results    SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL;
+
+-- UNIQUE, а не просто INDEX: приём ищет строку по uid, и два совпадения
+-- означали бы, что одна запись приехала дважды под разными локальными id —
+-- молча выбрать любую из них хуже, чем упасть.
+CREATE UNIQUE INDEX idx_patients_uid       ON patients(uid);
+CREATE UNIQUE INDEX idx_visits_uid         ON visits(uid);
+CREATE UNIQUE INDEX idx_visit_services_uid ON visit_services(uid);
+CREATE UNIQUE INDEX idx_lab_results_uid    ON lab_results(uid);
+
+-- Новые строки получают uid сами: прикладной код о нём знать не обязан, а
+-- строка без uid не поедет никуда и обнаружится через недели.
+CREATE TRIGGER patients_uid_autogen AFTER INSERT ON patients
+  WHEN NEW.uid IS NULL
+  BEGIN UPDATE patients SET uid = lower(hex(randomblob(16))) WHERE id = NEW.id; END;
+CREATE TRIGGER visits_uid_autogen AFTER INSERT ON visits
+  WHEN NEW.uid IS NULL
+  BEGIN UPDATE visits SET uid = lower(hex(randomblob(16))) WHERE id = NEW.id; END;
+CREATE TRIGGER visit_services_uid_autogen AFTER INSERT ON visit_services
+  WHEN NEW.uid IS NULL
+  BEGIN UPDATE visit_services SET uid = lower(hex(randomblob(16))) WHERE id = NEW.id; END;
+CREATE TRIGGER lab_results_uid_autogen AFTER INSERT ON lab_results
+  WHEN NEW.uid IS NULL
+  BEGIN UPDATE lab_results SET uid = lower(hex(randomblob(16))) WHERE id = NEW.id; END;
+```
+
+- [ ] **Шаг 2: тест**
+
+```js
+// 083.test.js — BRANCH_RECORDS_V1: uid есть у всех и ни у кого не повторяется.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { openDb } from '../connection.js';
+import { migrate } from '../migrate.js';
+
+const TABLES = ['patients', 'visits', 'visit_services', 'lab_results'];
+
+test('083: у каждой существующей строки появляется uid', () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов Иван')").run();
+  for (const t of TABLES) {
+    const missing = db.prepare(`SELECT COUNT(*) n FROM ${t} WHERE uid IS NULL`).get().n;
+    assert.equal(missing, 0, t + ': строка без uid никуда не поедет');
+  }
+  db.close();
+});
+
+test('083: новая строка получает uid без участия прикладного кода', () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Петров Пётр')").lastInsertRowid;
+  const uid = db.prepare('SELECT uid FROM patients WHERE id = ?').get(id).uid;
+  assert.match(uid, /^[0-9a-f]{32}$/, 'uid проставлен триггером: ' + uid);
+  db.close();
+});
+
+test('083: uid уникален — две записи под одним uid означали бы двойной приём', () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  const a = db.prepare("INSERT INTO patients (full_name) VALUES ('А')").lastInsertRowid;
+  const uid = db.prepare('SELECT uid FROM patients WHERE id = ?').get(a).uid;
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Б')").run();
+  assert.throws(
+    () => db.prepare('UPDATE patients SET uid = ? WHERE full_name = ?').run(uid, 'Б'),
+    /UNIQUE/,
+    'база обязана отказать, а не выбрать одну из двух молча');
+  db.close();
+});
+```
+
+- [ ] **Шаг 3: прогнать — должно упасть**
+
+Запустить: `node --test server/db/migrations/083.test.js`
+Ожидается: FAIL — «no such column: uid».
+
+- [ ] **Шаг 4: прогнать после миграции — должно пройти**
+
+Запустить: `node --test server/db/migrations/083.test.js`
+Ожидается: 3 из 3 PASS.
+
+- [ ] **Шаг 5: реестр колонок**
+
+`server/db/schema-registry.js` управляет тем, какие колонки видит `/api/db`.
+Добавить `uid` в разрешённые для четырёх таблиц НЕЛЬЗЯ: наружу он не нужен, а
+лишняя колонка в ответе — лишняя поверхность. Проверить, что реестр не
+перечисляет колонки через `SELECT *`:
+
+Запустить: `grep -n "SELECT \*" server/db/schema-registry.js`
+Ожидается: пусто. Если найдётся — открыть находку и убедиться, что `uid` не
+утекает в ответы API.
+
+- [ ] **Шаг 6: коммит**
+
+```bash
+git add server/db/migrations/083_sync_uid.sql server/db/migrations/083.test.js
+git commit -m "feat(sync): глобальный uid у пациентов, визитов, услуг и результатов"
+```
+
+---
+
+## Задача 2: гибридные логические часы
+
+**Файлы:**
+- Создать: `server/services/branch-sync/hlc.js`
+- Создать: `server/services/branch-sync/hlc.test.js`
+
+- [ ] **Шаг 1: тест**
+
+```js
+// hlc.test.js — BRANCH_RECORDS_V1: порядок событий, переживающий разные часы.
+//
+// Сравнивать updated_at нельзя: часы двух зданий расходятся, а переведённые
+// назад часы одного филиала ОТМЕНЯЛИ БЫ правки другого — молча и задним
+// числом. Гибридные часы дают порядок, который не ломается от этого.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { nextStamp, compareStamps } from './hlc.js';
+
+test('метка растёт даже когда часы стоят на месте', () => {
+  const clock = () => 1000;
+  let state = null;
+  const a = nextStamp(state, 'B', clock); state = a;
+  const b = nextStamp(state, 'B', clock);
+  assert.equal(compareStamps(b.stamp, a.stamp) > 0, true, 'вторая метка больше первой');
+});
+
+test('метка растёт, когда часы перевели НАЗАД', () => {
+  let now = 5000;
+  const clock = () => now;
+  let state = nextStamp(null, 'B', clock);
+  now = 1000;                       // кто-то поправил время на машине
+  const after = nextStamp(state, 'B', clock);
+  assert.equal(compareStamps(after.stamp, state.stamp) > 0, true,
+    'иначе правки после перевода часов проиграли бы старым');
+});
+
+test('метки сравниваются лексикографически — как строки в SQL ORDER BY', () => {
+  const clock = () => 2000;
+  const a = nextStamp(null, 'B', clock);
+  const b = nextStamp(a, 'B', clock);
+  const sorted = [b.stamp, a.stamp].sort();
+  assert.deepEqual(sorted, [a.stamp, b.stamp],
+    'порядок строк обязан совпадать с порядком событий: журнал читают SQL-ом');
+});
+
+test('узел входит в метку — две машины в одну миллисекунду не сольются', () => {
+  const clock = () => 3000;
+  const b = nextStamp(null, 'B', clock);
+  const c = nextStamp(null, 'C', clock);
+  assert.notEqual(b.stamp, c.stamp);
+});
+```
+
+- [ ] **Шаг 2: прогнать — должно упасть**
+
+Запустить: `node --test server/services/branch-sync/hlc.test.js`
+Ожидается: FAIL — «Cannot find module './hlc.js'».
+
+- [ ] **Шаг 3: реализация**
+
+```js
+// BRANCH_RECORDS_V1 — гибридные логические часы.
+//
+// Метка: <миллисекунды в hex, 12 знаков>-<счётчик в hex, 4 знака>-<буква узла>.
+// Ширина фиксирована, поэтому лексикографическое сравнение строк совпадает с
+// хронологическим — журнал можно читать обычным ORDER BY, без разбора.
+//
+// Счётчик существует ради двух случаев, и оба реальны: несколько правок в одну
+// миллисекунду и часы, переведённые назад. Во втором случае физическое время
+// не растёт, и единственное, что удерживает порядок, — счётчик.
+//
+// Буква узла в хвосте: две машины, изменившие разные строки в одну и ту же
+// миллисекунду, обязаны получить разные метки, иначе одна из правок исчезнет
+// при слиянии.
+
+const MS_HEX = 12;
+const CNT_HEX = 4;
+const MAX_CNT = 0xffff;
+
+/**
+ * @param {{ms:number, cnt:number}|null} state предыдущее состояние часов
+ * @param {string} node буква филиала
+ * @param {() => number} [clock]
+ * @returns {{stamp:string, ms:number, cnt:number}}
+ */
+export function nextStamp(state, node, clock = Date.now) {
+  const wall = Math.max(0, Math.floor(clock()));
+  const prevMs = state && Number.isFinite(state.ms) ? state.ms : 0;
+  const prevCnt = state && Number.isFinite(state.cnt) ? state.cnt : 0;
+
+  let ms = wall;
+  let cnt = 0;
+  if (wall <= prevMs) {
+    // Часы не ушли вперёд — держим порядок счётчиком.
+    ms = prevMs;
+    cnt = prevCnt + 1;
+    if (cnt > MAX_CNT) { ms = prevMs + 1; cnt = 0; }
+  }
+  const stamp = ms.toString(16).padStart(MS_HEX, '0')
+    + '-' + cnt.toString(16).padStart(CNT_HEX, '0')
+    + '-' + String(node || '?').toUpperCase();
+  return { stamp, ms, cnt };
+}
+
+/** Отрицательное / 0 / положительное — как у любого компаратора. */
+export function compareStamps(a, b) {
+  const x = String(a || '');
+  const y = String(b || '');
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+```
+
+- [ ] **Шаг 4: прогнать — должно пройти**
+
+Запустить: `node --test server/services/branch-sync/hlc.test.js`
+Ожидается: 4 из 4 PASS.
+
+- [ ] **Шаг 5: коммит**
+
+```bash
+git add server/services/branch-sync/hlc.js server/services/branch-sync/hlc.test.js
+git commit -m "feat(sync): гибридные логические часы для порядка правок между филиалами"
+```
+
+---
+
+## Задача 3: журнал изменений
+
+**Файлы:**
+- Создать: `server/db/migrations/084_sync_journal.sql`
+- Создать: `server/db/migrations/084.test.js`
+
+- [ ] **Шаг 1: миграция**
+
+```sql
+-- 084_sync_journal.sql — BRANCH_RECORDS_V1: что изменилось и когда.
+--
+-- Пишется ТРИГГЕРАМИ, а не прикладным кодом. Это не стилистика: путей, которыми
+-- строка меняется, в этом проекте десятки (RPC, импорт, ручные правки), и
+-- дописать журнал в каждый — значит однажды забыть. Триггер обойти нельзя.
+--
+-- Побочная выгода, которую стоит назвать вслух: у большинства этих таблиц не
+-- было аудиторского следа вообще.
+CREATE TABLE sync_journal (
+  seq        INTEGER PRIMARY KEY AUTOINCREMENT,  -- локальный порядок отдачи
+  tbl        TEXT NOT NULL,
+  uid        TEXT NOT NULL,
+  op         TEXT NOT NULL CHECK (op IN ('put', 'del')),
+  stamp      TEXT NOT NULL DEFAULT '',           -- HLC; проставляется приложением
+  at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
+-- Хвост читают по seq, а сжатие — по (tbl, uid): у строки, изменённой сто раз,
+-- отдавать надо последнее состояние, а не сто записей.
+CREATE INDEX idx_sync_journal_seq ON sync_journal(seq);
+CREATE INDEX idx_sync_journal_row ON sync_journal(tbl, uid);
+
+-- op='put', а не 'insert'/'update': принимающей стороне разница не нужна —
+-- у неё этой строки либо нет (создаст), либо есть (сольёт). Две операции
+-- вместо трёх убирают целый класс вопросов «а что если insert приехал после
+-- update».
+CREATE TRIGGER patients_journal_ins AFTER INSERT ON patients
+  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('patients', NEW.uid, 'put'); END;
+CREATE TRIGGER patients_journal_upd AFTER UPDATE ON patients
+  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('patients', NEW.uid, 'put'); END;
+CREATE TRIGGER patients_journal_del AFTER DELETE ON patients
+  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('patients', OLD.uid, 'del'); END;
+
+CREATE TRIGGER visits_journal_ins AFTER INSERT ON visits
+  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('visits', NEW.uid, 'put'); END;
+CREATE TRIGGER visits_journal_upd AFTER UPDATE ON visits
+  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('visits', NEW.uid, 'put'); END;
+CREATE TRIGGER visits_journal_del AFTER DELETE ON visits
+  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('visits', OLD.uid, 'del'); END;
+
+CREATE TRIGGER visit_services_journal_ins AFTER INSERT ON visit_services
+  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('visit_services', NEW.uid, 'put'); END;
+CREATE TRIGGER visit_services_journal_upd AFTER UPDATE ON visit_services
+  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('visit_services', NEW.uid, 'put'); END;
+CREATE TRIGGER visit_services_journal_del AFTER DELETE ON visit_services
+  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('visit_services', OLD.uid, 'del'); END;
+
+CREATE TRIGGER lab_results_journal_ins AFTER INSERT ON lab_results
+  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('lab_results', NEW.uid, 'put'); END;
+CREATE TRIGGER lab_results_journal_upd AFTER UPDATE ON lab_results
+  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('lab_results', NEW.uid, 'put'); END;
+CREATE TRIGGER lab_results_journal_del AFTER DELETE ON lab_results
+  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('lab_results', OLD.uid, 'del'); END;
+
+-- Докуда каждому соседу уже отдано и что от него принято. Ключ — буква узла.
+CREATE TABLE sync_peers (
+  node       TEXT PRIMARY KEY,
+  sent_seq   INTEGER NOT NULL DEFAULT 0,   -- наш журнал: докуда отдали
+  recv_stamp TEXT NOT NULL DEFAULT ''      -- его журнал: до какой метки приняли
+);
+```
+
+- [ ] **Шаг 2: тест**
+
+```js
+// 084.test.js — BRANCH_RECORDS_V1: журнал пишется САМ.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { openDb } from '../connection.js';
+import { migrate } from '../migrate.js';
+
+function fresh() {
+  const db = openDb(':memory:');
+  migrate(db);
+  db.prepare('DELETE FROM sync_journal').run();   // засев миграции 083 не мешает
+  return db;
+}
+
+test('084: создание пациента попадает в журнал без участия кода', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  const rows = db.prepare("SELECT tbl, op FROM sync_journal WHERE tbl = 'patients'").all();
+  assert.equal(rows.length >= 1, true);
+  assert.equal(rows[0].op, 'put');
+  db.close();
+});
+
+test('084: правка пишется отдельной записью', () => {
+  const db = fresh();
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").lastInsertRowid;
+  const before = db.prepare('SELECT COUNT(*) n FROM sync_journal').get().n;
+  db.prepare("UPDATE patients SET phone = '+998900000000' WHERE id = ?").run(id);
+  const after = db.prepare('SELECT COUNT(*) n FROM sync_journal').get().n;
+  assert.equal(after > before, true, 'правку обязаны увидеть соседи');
+  db.close();
+});
+
+test('084: удаление записывается по uid УДАЛЁННОЙ строки', () => {
+  const db = fresh();
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").lastInsertRowid;
+  const uid = db.prepare('SELECT uid FROM patients WHERE id = ?').get(id).uid;
+  db.prepare('DELETE FROM patients WHERE id = ?').run(id);
+  const del = db.prepare("SELECT uid FROM sync_journal WHERE op = 'del'").get();
+  assert.equal(del.uid, uid, 'без uid соседи не поймут, что удалять');
+  db.close();
+});
+
+test('084: журнал ведётся для всех четырёх таблиц', () => {
+  const db = fresh();
+  const pid = db.prepare("INSERT INTO patients (full_name) VALUES ('И')").lastInsertRowid;
+  const vid = db.prepare('INSERT INTO visits (patient_id, visit_date) VALUES (?, ?)')
+    .run(pid, '2026-09-02').lastInsertRowid;
+  const sid = db.prepare("INSERT INTO services (name, code, price, type, active) VALUES ('Анализ','S-9',1000,'lab',1)").lastInsertRowid;
+  const vsid = db.prepare('INSERT INTO visit_services (visit_id, service_id, quantity) VALUES (?, ?, 1)')
+    .run(vid, sid).lastInsertRowid;
+  db.prepare("INSERT INTO lab_results (visit_service_id, value) VALUES (?, '5.2')").run(vsid);
+
+  const tables = db.prepare('SELECT DISTINCT tbl FROM sync_journal ORDER BY tbl').all().map(r => r.tbl);
+  assert.deepEqual(tables, ['lab_results', 'patients', 'visit_services', 'visits']);
+  db.close();
+});
+```
+
+- [ ] **Шаг 3: прогнать — должно упасть**
+
+Запустить: `node --test server/db/migrations/084.test.js`
+Ожидается: FAIL — «no such table: sync_journal».
+
+- [ ] **Шаг 4: прогнать после миграции — должно пройти**
+
+Запустить: `node --test server/db/migrations/084.test.js`
+Ожидается: 4 из 4 PASS.
+
+- [ ] **Шаг 5: коммит**
+
+```bash
+git add server/db/migrations/084_sync_journal.sql server/db/migrations/084.test.js
+git commit -m "feat(sync): журнал изменений, который пишут триггеры"
+```
+
+---
+
+## Задача 4: сборка порции для соседа
+
+**Файлы:**
+- Создать: `server/services/branch-sync/journal.js`
+- Создать: `server/services/branch-sync/journal.test.js`
+
+- [ ] **Шаг 1: тест**
+
+```js
+// journal.test.js — BRANCH_RECORDS_V1: что уезжает соседу.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { openDb } from '../../db/connection.js';
+import { migrate } from '../../db/migrate.js';
+import { buildBatch, markSent } from './journal.js';
+
+function fresh() {
+  const db = openDb(':memory:');
+  migrate(db);
+  db.prepare('DELETE FROM sync_journal').run();
+  return db;
+}
+
+test('порция несёт ПОЛНУЮ строку, а не поля, которые менялись', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (full_name, phone) VALUES ('Иванов', '+998901112233')").run();
+  const batch = buildBatch(db, { node: 'B' });
+  const rec = batch.records.find(r => r.tbl === 'patients');
+  assert.equal(rec.data.full_name, 'Иванов');
+  assert.equal(rec.data.phone, '+998901112233');
+  // Дельта по полям потребовала бы, чтобы у соседа СОВПАДАЛА история. У филиала,
+  // включённого впервые, истории нет вовсе.
+  db.close();
+});
+
+test('строка, изменённая много раз, уезжает ОДИН раз', () => {
+  const db = fresh();
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").lastInsertRowid;
+  for (let i = 0; i < 5; i++) db.prepare('UPDATE patients SET phone = ? WHERE id = ?').run('+9989' + i, id);
+  const batch = buildBatch(db, { node: 'B' });
+  const forPatients = batch.records.filter(r => r.tbl === 'patients');
+  assert.equal(forPatients.length, 1, 'уезжает состояние, а не история правок');
+  db.close();
+});
+
+test('удалённая строка уезжает как удаление, без данных', () => {
+  const db = fresh();
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").lastInsertRowid;
+  db.prepare('DELETE FROM patients WHERE id = ?').run(id);
+  const batch = buildBatch(db, { node: 'B' });
+  const rec = batch.records.find(r => r.tbl === 'patients');
+  assert.equal(rec.op, 'del');
+  assert.equal(rec.data, undefined, 'данных удалённой строки у нас уже нет');
+  db.close();
+});
+
+test('markSent сдвигает отметку, и следующая порция пуста', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  const first = buildBatch(db, { node: 'B' });
+  assert.equal(first.records.length > 0, true);
+  markSent(db, 'B', first.upto);
+  const second = buildBatch(db, { node: 'B' });
+  assert.deepEqual(second.records, [], 'дважды одно и то же по узкому каналу не гоняем');
+  db.close();
+});
+
+test('деньги из visit_services не уезжают', () => {
+  const db = fresh();
+  const pid = db.prepare("INSERT INTO patients (full_name) VALUES ('И')").lastInsertRowid;
+  const vid = db.prepare('INSERT INTO visits (patient_id, visit_date) VALUES (?, ?)').run(pid, '2026-09-02').lastInsertRowid;
+  const sid = db.prepare("INSERT INTO services (name, code, price, type, active) VALUES ('Анализ','S-9',1000,'lab',1)").lastInsertRowid;
+  db.prepare('INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total) VALUES (?, ?, 1, 50000, 50000)').run(vid, sid);
+
+  const rec = buildBatch(db, { node: 'B' }).records.find(r => r.tbl === 'visit_services');
+  assert.equal(rec.data.status !== undefined, true, 'статус нужен: на нём лабораторная очередь');
+  assert.equal(rec.data.unit_price, undefined, 'цена — Фаза 3');
+  assert.equal(rec.data.total, undefined, 'сумма — Фаза 3');
+  db.close();
+});
+```
+
+- [ ] **Шаг 2: прогнать — должно упасть**
+
+Запустить: `node --test server/services/branch-sync/journal.test.js`
+Ожидается: FAIL — «Cannot find module './journal.js'».
+
+- [ ] **Шаг 3: реализация**
+
+```js
+// BRANCH_RECORDS_V1 — что именно уезжает соседу.
+//
+// ПЕРЕЧЕНЬ КОЛОНОК В КОДЕ, как у справочника (catalogue.js) и по той же
+// причине: фильтр «уберём лишнее перед отправкой» забывают обновить, когда в
+// таблицу добавляют колонку, а перечень — нет, потому что новая колонка просто
+// не попадает в выгрузку, пока её сюда не впишут.
+//
+// Денежные поля visit_services (unit_price, total, invoice_item_id) НЕ
+// перечислены намеренно: статус нужен лабораторной очереди, деньги — Фаза 3.
+import { nextStamp } from './hlc.js';
+
+export const SHIPPED = {
+  patients: [
+    'mrn', 'full_name', 'first_name', 'last_name', 'middle_name',
+    'date_of_birth', 'gender', 'blood_type', 'phone', 'email', 'national_id',
+    'address', 'nationality', 'occupation',
+    'emergency_contact_name', 'emergency_contact_phone',
+    'allergies', 'chronic_conditions', 'notes', 'active', 'registration_date',
+  ],
+  visits: [
+    'visit_date', 'duration_minutes', 'visit_kind', 'visit_type', 'status', 'notes',
+  ],
+  visit_services: ['quantity', 'status'],
+  lab_results: [
+    'value', 'numeric_value', 'unit', 'reference_range', 'flag', 'notes',
+    'entered_at', 'verified_at',
+  ],
+};
+
+// Ссылки: колонка → таблица, на которую она смотрит. Уезжает uid родителя, а не
+// его локальный id — id у соседа другой (см. миграцию 083).
+export const REFS = {
+  visits: { patient_id: 'patients' },
+  visit_services: { visit_id: 'visits' },
+  lab_results: { visit_service_id: 'visit_services' },
+};
+
+const TABLES = Object.keys(SHIPPED);
+
+/**
+ * Собрать порцию для узла: по одной записи на изменённую строку.
+ *
+ * @returns {{records: Array, upto: number}} upto — seq, до которого собрано
+ */
+export function buildBatch(db, { node, limit = 5000 } = {}) {
+  const from = db.prepare('SELECT sent_seq FROM sync_peers WHERE node = ?').get(node);
+  const since = from ? from.sent_seq : 0;
+
+  // Последняя запись про каждую строку: у пациента, правленного сто раз, есть
+  // одно текущее состояние, а не сто.
+  const heads = db.prepare(`
+    SELECT tbl, uid, MAX(seq) AS seq
+      FROM sync_journal
+     WHERE seq > ?
+     GROUP BY tbl, uid
+     ORDER BY seq
+     LIMIT ?
+  `).all(since, limit);
+
+  let clock = null;
+  const records = [];
+  let upto = since;
+
+  for (const h of heads) {
+    upto = Math.max(upto, h.seq);
+    if (!TABLES.includes(h.tbl)) continue;
+
+    const row = db.prepare(`SELECT * FROM ${h.tbl} WHERE uid = ?`).get(h.uid);
+    clock = nextStamp(clock, node);
+
+    if (!row) {
+      records.push({ tbl: h.tbl, uid: h.uid, op: 'del', stamp: clock.stamp });
+      continue;
+    }
+
+    const data = {};
+    for (const col of SHIPPED[h.tbl]) if (row[col] !== undefined) data[col] = row[col];
+
+    // Родителей — по uid. Ссылка на строку, которой у соседа ещё нет, разрешится
+    // при приёме (см. records.js): порядок прихода не гарантирован ничем.
+    const refs = {};
+    for (const [col, parent] of Object.entries(REFS[h.tbl] || {})) {
+      const pid = row[col];
+      if (pid == null) continue;
+      const p = db.prepare(`SELECT uid FROM ${parent} WHERE id = ?`).get(pid);
+      if (p) refs[col] = p.uid;
+    }
+
+    records.push({
+      tbl: h.tbl, uid: h.uid, op: 'put', stamp: clock.stamp,
+      data, refs, origin: node,
+    });
+  }
+  return { records, upto };
+}
+
+/** Отметить, докуда узлу отдано. Вызывать ТОЛЬКО после подтверждённой отправки. */
+export function markSent(db, node, upto) {
+  db.prepare(`
+    INSERT INTO sync_peers (node, sent_seq) VALUES (?, ?)
+    ON CONFLICT(node) DO UPDATE SET sent_seq = MAX(sent_seq, excluded.sent_seq)
+  `).run(node, upto);
+}
+```
+
+- [ ] **Шаг 4: прогнать — должно пройти**
+
+Запустить: `node --test server/services/branch-sync/journal.test.js`
+Ожидается: 5 из 5 PASS.
+
+- [ ] **Шаг 5: коммит**
+
+```bash
+git add server/services/branch-sync/journal.js server/services/branch-sync/journal.test.js
+git commit -m "feat(sync): сборка порции изменений для соседнего филиала"
+```
+
+---
+
+## Задача 5: приём порции
+
+**Файлы:**
+- Создать: `server/services/branch-sync/records.js`
+- Создать: `server/services/branch-sync/records.test.js`
+
+- [ ] **Шаг 1: тест**
+
+```js
+// records.test.js — BRANCH_RECORDS_V1: приём чужих изменений.
+//
+// Здесь живут все решения, которые нельзя переиграть после того, как данные
+// разъехались: что побеждает при конфликте, что делать со ссылкой на строку,
+// которая ещё не приехала, и почему удаление проигрывает более поздней правке.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { openDb } from '../../db/connection.js';
+import { migrate } from '../../db/migrate.js';
+import { applyBatch } from './records.js';
+
+function fresh() {
+  const db = openDb(':memory:');
+  migrate(db);
+  db.prepare('DELETE FROM sync_journal').run();
+  return db;
+}
+
+test('новый пациент приезжает и заводится под СВОИМ локальным id', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Местный')").run();   // занимаем id=1
+
+  applyBatch(db, [{
+    tbl: 'patients', uid: 'aaaa', op: 'put', stamp: '000000000001-0000-C',
+    data: { full_name: 'Приезжий', phone: '+998900000001' }, refs: {}, origin: 'C',
+  }]);
+
+  const row = db.prepare("SELECT id, full_name FROM patients WHERE uid = 'aaaa'").get();
+  assert.equal(row.full_name, 'Приезжий');
+  assert.notEqual(row.id, 1, 'локальные id не переносятся: они уже заняты');
+  db.close();
+});
+
+test('поколоночное слияние: телефон здесь, адрес там — выживают оба', () => {
+  const db = fresh();
+  applyBatch(db, [{
+    tbl: 'patients', uid: 'bbbb', op: 'put', stamp: '000000000001-0000-C',
+    data: { full_name: 'Иванов', phone: '+998900000001', address: '' }, refs: {}, origin: 'C',
+  }]);
+  // Здесь правят адрес — позже.
+  db.prepare("UPDATE patients SET address = 'Ташкент' WHERE uid = 'bbbb'").run();
+  // Оттуда приезжает правка телефона с БОЛЕЕ ПОЗДНЕЙ меткой, но старым адресом.
+  applyBatch(db, [{
+    tbl: 'patients', uid: 'bbbb', op: 'put', stamp: '000000000009-0000-C',
+    data: { phone: '+998900000002' }, refs: {}, origin: 'C',
+  }]);
+
+  const row = db.prepare("SELECT phone, address FROM patients WHERE uid = 'bbbb'").get();
+  assert.equal(row.phone, '+998900000002', 'приехавшая правка применилась');
+  assert.equal(row.address, 'Ташкент', 'и не стёрла то, чего в ней не было');
+  db.close();
+});
+
+test('ссылка на ещё не приехавшего родителя не теряется', () => {
+  const db = fresh();
+  // Визит приезжает ПЕРЕД пациентом: порядок прихода не гарантирован ничем.
+  applyBatch(db, [{
+    tbl: 'visits', uid: 'v1', op: 'put', stamp: '000000000001-0000-C',
+    data: { visit_date: '2026-09-02', status: 'open' },
+    refs: { patient_id: 'p1' }, origin: 'C',
+  }]);
+  let v = db.prepare("SELECT patient_id FROM visits WHERE uid = 'v1'").get();
+  assert.equal(v.patient_id, null, 'висячей ссылки в базе быть не должно');
+
+  applyBatch(db, [{
+    tbl: 'patients', uid: 'p1', op: 'put', stamp: '000000000002-0000-C',
+    data: { full_name: 'Опоздавший' }, refs: {}, origin: 'C',
+  }]);
+  v = db.prepare("SELECT patient_id FROM visits WHERE uid = 'v1'").get();
+  const p = db.prepare("SELECT id FROM patients WHERE uid = 'p1'").get();
+  assert.equal(v.patient_id, p.id, 'связь достроилась, когда родитель приехал');
+  db.close();
+});
+
+test('удаление проигрывает более поздней правке', () => {
+  const db = fresh();
+  applyBatch(db, [{
+    tbl: 'patients', uid: 'cccc', op: 'put', stamp: '000000000001-0000-C',
+    data: { full_name: 'Иванов' }, refs: {}, origin: 'C',
+  }]);
+  db.prepare("UPDATE patients SET full_name = 'Иванов-Петров' WHERE uid = 'cccc'").run();
+
+  // Удаление СТАРЕЕ нашей правки: кто-то удалил строку, не зная о ней.
+  applyBatch(db, [{ tbl: 'patients', uid: 'cccc', op: 'del', stamp: '000000000000-0000-C' }]);
+
+  const row = db.prepare("SELECT full_name FROM patients WHERE uid = 'cccc'").get();
+  assert.ok(row, 'молча уничтожать запись, с которой кто-то работал, нельзя');
+  assert.equal(row.full_name, 'Иванов-Петров');
+  db.close();
+});
+
+test('своё же изменение, вернувшееся обратно, ничего не портит', () => {
+  const db = fresh();
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").lastInsertRowid;
+  const uid = db.prepare('SELECT uid FROM patients WHERE id = ?').get(id).uid;
+  const before = db.prepare('SELECT COUNT(*) n FROM patients').get().n;
+
+  applyBatch(db, [{
+    tbl: 'patients', uid, op: 'put', stamp: '000000000001-0000-C',
+    data: { full_name: 'Иванов' }, refs: {}, origin: 'C',
+  }]);
+
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM patients').get().n, before, 'дубля не появилось');
+  db.close();
+});
+
+test('приём НЕ пишет в журнал: иначе изменения ходили бы по кругу вечно', () => {
+  const db = fresh();
+  applyBatch(db, [{
+    tbl: 'patients', uid: 'dddd', op: 'put', stamp: '000000000001-0000-C',
+    data: { full_name: 'Приезжий' }, refs: {}, origin: 'C',
+  }]);
+  const n = db.prepare("SELECT COUNT(*) n FROM sync_journal WHERE uid = 'dddd'").get().n;
+  assert.equal(n, 0, 'принятое не пересылаем обратно');
+  db.close();
+});
+```
+
+- [ ] **Шаг 2: прогнать — должно упасть**
+
+Запустить: `node --test server/services/branch-sync/records.test.js`
+Ожидается: FAIL — «Cannot find module './records.js'».
+
+- [ ] **Шаг 3: реализация**
+
+```js
+// BRANCH_RECORDS_V1 — приём чужих изменений.
+//
+// ТРИ ПРАВИЛА, каждое из которых нельзя переиграть после того, как данные
+// разъехались:
+//
+//   1. Строки приезжают по СВОИМ локальным id (uid → id через таблицу).
+//      Перенести чужой id значило бы перевесить местные счета и смены кассы на
+//      чужие строки — разбор этого есть в миграции 079.
+//   2. Слияние ПОКОЛОНОЧНОЕ: приехавшая запись меняет только те колонки, что в
+//      ней есть. Телефон, исправленный здесь, и адрес, исправленный там,
+//      обязаны выжить оба.
+//   3. Удаление проигрывает более поздней правке. Молча уничтожить запись, с
+//      которой кто-то ещё работал, — единственная невосстановимая ошибка в
+//      этом файле.
+import { compareStamps } from './hlc.js';
+import { SHIPPED, REFS } from './journal.js';
+
+// Метка последнего ПРИНЯТОГО изменения строки. Без неё нечем сравнивать: у
+// местной правки метки нет вовсе.
+const SEEN = 'sync_seen';
+
+function ensureSeen(db) {
+  db.prepare(`CREATE TABLE IF NOT EXISTS ${SEEN} (
+    tbl TEXT NOT NULL, uid TEXT NOT NULL, stamp TEXT NOT NULL,
+    PRIMARY KEY (tbl, uid)
+  )`).run();
+}
+
+function localId(db, tbl, uid) {
+  const r = db.prepare(`SELECT id FROM ${tbl} WHERE uid = ?`).get(uid);
+  return r ? r.id : null;
+}
+
+/**
+ * Применить порцию. Всё в ОДНОЙ транзакции: половина приехавшей истории хуже,
+ * чем ничего — в ней визиты без пациентов.
+ *
+ * ЖУРНАЛ ПРИ ЭТОМ НЕ ПИШЕТСЯ (триггеры временно отключить нельзя, поэтому
+ * записи, порождённые приёмом, удаляются в конце транзакции). Иначе принятое
+ * изменение уехало бы обратно, вернулось снова и ходило бы по кругу вечно.
+ *
+ * @returns {{applied:number, skipped:number, deleted:number}}
+ */
+export function applyBatch(db, records) {
+  ensureSeen(db);
+  const stats = { applied: 0, skipped: 0, deleted: 0 };
+
+  const run = db.transaction((batch) => {
+    const mark = db.prepare('SELECT MAX(seq) AS s FROM sync_journal').get();
+    const journalFrom = mark && mark.s ? mark.s : 0;
+
+    for (const rec of batch) {
+      if (!rec || !SHIPPED[rec.tbl] || typeof rec.uid !== 'string') { stats.skipped++; continue; }
+
+      const seen = db.prepare(`SELECT stamp FROM ${SEEN} WHERE tbl = ? AND uid = ?`).get(rec.tbl, rec.uid);
+      if (seen && compareStamps(rec.stamp, seen.stamp) <= 0) { stats.skipped++; continue; }
+
+      const id = localId(db, rec.tbl, rec.uid);
+
+      if (rec.op === 'del') {
+        // Правило 3. Строку, изменённую здесь ПОСЛЕ этого удаления, не трогаем.
+        const changedHere = id != null && (!seen || compareStamps(seen.stamp, rec.stamp) < 0)
+          && db.prepare(`SELECT 1 FROM sync_journal WHERE tbl = ? AND uid = ?`).get(rec.tbl, rec.uid);
+        if (changedHere) { stats.skipped++; continue; }
+        if (id != null) { db.prepare(`DELETE FROM ${rec.tbl} WHERE id = ?`).run(id); stats.deleted++; }
+        db.prepare(`INSERT INTO ${SEEN} (tbl, uid, stamp) VALUES (?,?,?)
+                    ON CONFLICT(tbl, uid) DO UPDATE SET stamp = excluded.stamp`)
+          .run(rec.tbl, rec.uid, rec.stamp);
+        continue;
+      }
+
+      const cols = [];
+      const vals = [];
+      for (const col of SHIPPED[rec.tbl]) {
+        if (rec.data && Object.prototype.hasOwnProperty.call(rec.data, col)) {
+          cols.push(col); vals.push(rec.data[col]);
+        }
+      }
+      // Ссылки: uid родителя → его местный id. Родителя ещё нет — пишем NULL и
+      // достраиваем связь, когда он приедет (см. resolvePending ниже).
+      for (const [col, parent] of Object.entries(REFS[rec.tbl] || {})) {
+        const parentUid = rec.refs ? rec.refs[col] : null;
+        if (!parentUid) continue;
+        cols.push(col); vals.push(localId(db, parent, parentUid));
+      }
+
+      if (id == null) {
+        db.prepare(
+          `INSERT INTO ${rec.tbl} (uid${cols.length ? ', ' + cols.join(', ') : ''})
+           VALUES (?${cols.map(() => ', ?').join('')})`
+        ).run(rec.uid, ...vals);
+      } else if (cols.length) {
+        db.prepare(`UPDATE ${rec.tbl} SET ${cols.map(c => c + ' = ?').join(', ')} WHERE id = ?`)
+          .run(...vals, id);
+      }
+      db.prepare(`INSERT INTO ${SEEN} (tbl, uid, stamp) VALUES (?,?,?)
+                  ON CONFLICT(tbl, uid) DO UPDATE SET stamp = excluded.stamp`)
+        .run(rec.tbl, rec.uid, rec.stamp);
+      stats.applied++;
+    }
+
+    resolvePending(db, batch);
+
+    // Приём не порождает исходящих изменений — см. заголовок.
+    db.prepare('DELETE FROM sync_journal WHERE seq > ?').run(journalFrom);
+  });
+
+  run(records);
+  return stats;
+}
+
+// Достроить ссылки, которые не с чем было связать в момент приезда ребёнка.
+// Дешевле, чем сортировать порцию по зависимостям: родитель может приехать не
+// просто позже в этой порции, а вообще в следующей.
+function resolvePending(db, batch) {
+  for (const rec of batch) {
+    if (!rec || rec.op !== 'put') continue;
+    for (const [childTable, refs] of Object.entries(REFS)) {
+      for (const [col, parent] of Object.entries(refs)) {
+        if (parent !== rec.tbl) continue;
+        const pid = localId(db, parent, rec.uid);
+        if (pid == null) continue;
+        db.prepare(`
+          UPDATE ${childTable} SET ${col} = ?
+           WHERE ${col} IS NULL
+             AND uid IN (SELECT uid FROM ${childTable} WHERE ${col} IS NULL)
+        `).run(pid);
+      }
+    }
+  }
+}
+```
+
+> **Замечание для исполнителя:** `resolvePending` в этом виде связывает
+> ВСЕ висячие ссылки на таблицу-родителя, а не только те, что ждали именно
+> этот uid. Первый же тест «ссылка на ещё не приехавшего родителя» это
+> поймает, если детей больше одного. Правильная форма — хранить ожидаемый
+> uid родителя: добавьте колонку `pending_ref` в `sync_seen` или отдельную
+> таблицу `sync_pending (tbl, uid, col, parent_uid)` и связывайте точечно.
+> Сделайте это в Шаге 3 сразу, не откладывая: тест на двух детей одного
+> родителя обязателен.
+
+- [ ] **Шаг 4: тест на двух детей — обязателен**
+
+```js
+test('двое детей ждут разных родителей и получают именно своих', () => {
+  const db = fresh();
+  applyBatch(db, [
+    { tbl: 'visits', uid: 'vA', op: 'put', stamp: '000000000001-0000-C',
+      data: { visit_date: '2026-09-01' }, refs: { patient_id: 'pA' }, origin: 'C' },
+    { tbl: 'visits', uid: 'vB', op: 'put', stamp: '000000000002-0000-C',
+      data: { visit_date: '2026-09-02' }, refs: { patient_id: 'pB' }, origin: 'C' },
+  ]);
+  applyBatch(db, [
+    { tbl: 'patients', uid: 'pA', op: 'put', stamp: '000000000003-0000-C',
+      data: { full_name: 'А' }, refs: {}, origin: 'C' },
+    { tbl: 'patients', uid: 'pB', op: 'put', stamp: '000000000004-0000-C',
+      data: { full_name: 'Б' }, refs: {}, origin: 'C' },
+  ]);
+  const pa = db.prepare("SELECT id FROM patients WHERE uid = 'pA'").get().id;
+  const pb = db.prepare("SELECT id FROM patients WHERE uid = 'pB'").get().id;
+  assert.equal(db.prepare("SELECT patient_id FROM visits WHERE uid = 'vA'").get().patient_id, pa);
+  assert.equal(db.prepare("SELECT patient_id FROM visits WHERE uid = 'vB'").get().patient_id, pb,
+    'перепутать родителей хуже, чем не связать вовсе');
+  db.close();
+});
+```
+
+- [ ] **Шаг 5: прогнать — должно пройти**
+
+Запустить: `node --test server/services/branch-sync/records.test.js`
+Ожидается: 7 из 7 PASS.
+
+- [ ] **Шаг 6: коммит**
+
+```bash
+git add server/services/branch-sync/records.js server/services/branch-sync/records.test.js
+git commit -m "feat(sync): приём чужих записей — слияние поколоночное, удаление проигрывает правке"
+```
+
+---
+
+## Задача 6: адрес блоба для УЗЛА
+
+**Файлы:**
+- Изменить: `server/services/branch-sync/relay-crypto.js`
+- Изменить: `server/services/branch-sync/relay-crypto.test.js`
+
+- [ ] **Шаг 1: тест**
+
+```js
+test('у каждого узла свой адрес блоба, и он выводится из ключа группы', () => {
+  const key = 'k'.repeat(43);
+  const b = relayIdFor(key, 'B');
+  const c = relayIdFor(key, 'C');
+  assert.match(b, /^[0-9a-f]{32}$/);
+  assert.notEqual(b, c, 'иначе филиалы затирали бы журналы друг друга');
+  assert.equal(relayIdFor(key, 'B'), b, 'адрес постоянен: его не с кем согласовывать');
+});
+
+test('без узла адрес прежний — справочник лежит там же, где лежал', () => {
+  const key = 'k'.repeat(43);
+  assert.equal(relayIdFor(key).length, 32);
+  assert.notEqual(relayIdFor(key), relayIdFor(key, 'B'));
+});
+```
+
+- [ ] **Шаг 2: прогнать — должно упасть**
+
+Запустить: `node --test server/services/branch-sync/relay-crypto.test.js`
+Ожидается: FAIL — адреса совпадают (второй аргумент игнорируется).
+
+- [ ] **Шаг 3: реализация**
+
+```js
+// BRANCH_RECORDS_V1 — адрес блоба ДЛЯ УЗЛА.
+//
+// У справочника адрес один на группу: пишет его только главная клиника.
+// Журналы пишут все, и общий адрес означал бы, что филиалы затирают выгрузки
+// друг друга. Адрес по-прежнему выводится из ключа группы, поэтому его не надо
+// нигде согласовывать: каждый узел вычисляет и свой, и чужие.
+export function relayIdFor(key, node) {
+  const k = decodeGroupKey(key);
+  if (!k) return null;
+  const info = node ? RELAY_ID_INFO + ':' + String(node).toUpperCase() : RELAY_ID_INFO;
+  return createHmac('sha256', k).update(info).digest('hex').slice(0, RELAY_ID_CHARS);
+}
+```
+
+- [ ] **Шаг 4: прогнать — должно пройти**
+
+Запустить: `node --test server/services/branch-sync/relay-crypto.test.js`
+Ожидается: все PASS, включая прежние (адрес без узла не изменился).
+
+- [ ] **Шаг 5: коммит**
+
+```bash
+git add server/services/branch-sync/relay-crypto.js server/services/branch-sync/relay-crypto.test.js
+git commit -m "feat(sync): у каждого филиала свой адрес блоба для журнала"
+```
+
+---
+
+## Задача 7: обмен по релею
+
+**Файлы:**
+- Изменить: `server/services/branch-sync/relay.js`
+- Изменить: `server/services/rpc/branch-sync.js`
+- Создать: `server/services/branch-sync/records-e2e.test.js`
+
+- [ ] **Шаг 1: сквозной тест на двух базах**
+
+```js
+// records-e2e.test.js — BRANCH_RECORDS_V1: две базы сходятся.
+//
+// Главный инвариант всей фазы, и проверять его надо именно так: две базы,
+// правки в обеих «в разрыве связи», обмен, обе обязаны прийти к одному
+// состоянию. Всё остальное — детали реализации.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { openDb } from '../../db/connection.js';
+import { migrate } from '../../db/migrate.js';
+import { buildBatch, markSent } from './journal.js';
+import { applyBatch } from './records.js';
+
+function node() {
+  const db = openDb(':memory:');
+  migrate(db);
+  db.prepare('DELETE FROM sync_journal').run();
+  return db;
+}
+const exchange = (from, to, fromNode) => {
+  const b = buildBatch(from, { node: fromNode });
+  applyBatch(to, b.records);
+  markSent(from, 'peer', b.upto);
+};
+
+test('пациент, заведённый в B, виден в C', () => {
+  const B = node(); const C = node();
+  B.prepare("INSERT INTO patients (full_name, phone) VALUES ('Иванов', '+998901112233')").run();
+  exchange(B, C, 'B');
+  const p = C.prepare("SELECT full_name, phone FROM patients WHERE full_name = 'Иванов'").get();
+  assert.equal(p.phone, '+998901112233');
+  B.close(); C.close();
+});
+
+test('лабораторная очередь: услуга и результат доезжают вместе с визитом', () => {
+  const B = node(); const C = node();
+  const pid = B.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").lastInsertRowid;
+  const vid = B.prepare('INSERT INTO visits (patient_id, visit_date) VALUES (?, ?)').run(pid, '2026-09-02').lastInsertRowid;
+  const sid = B.prepare("INSERT INTO services (name, code, price, type, active) VALUES ('ОАК','S-1',1000,'lab',1)").lastInsertRowid;
+  const vsid = B.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, status) VALUES (?,?,1,'ordered')").run(vid, sid).lastInsertRowid;
+  B.prepare("INSERT INTO lab_results (visit_service_id, value) VALUES (?, '5.2')").run(vsid);
+
+  exchange(B, C, 'B');
+
+  const q = C.prepare(`
+    SELECT vs.status, lr.value FROM visit_services vs
+      JOIN lab_results lr ON lr.visit_service_id = vs.id
+  `).get();
+  assert.equal(q.status, 'ordered', 'очередь строится на статусе');
+  assert.equal(q.value, '5.2');
+  B.close(); C.close();
+});
+
+test('обе базы сходятся после правок в разрыве связи', () => {
+  const B = node(); const C = node();
+  B.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  exchange(B, C, 'B');
+
+  // Связи нет. Каждый правит своё поле.
+  B.prepare("UPDATE patients SET phone = '+998901112233' WHERE full_name = 'Иванов'").run();
+  C.prepare("UPDATE patients SET address = 'Ташкент' WHERE full_name = 'Иванов'").run();
+
+  exchange(B, C, 'B');
+  exchange(C, B, 'C');
+
+  const inB = B.prepare("SELECT phone, address FROM patients WHERE full_name = 'Иванов'").get();
+  const inC = C.prepare("SELECT phone, address FROM patients WHERE full_name = 'Иванов'").get();
+  assert.deepEqual(inB, inC, 'две базы обязаны сойтись к одному состоянию');
+  assert.equal(inB.phone, '+998901112233');
+  assert.equal(inB.address, 'Ташкент');
+  B.close(); C.close();
+});
+
+test('повторный обмен ничего не меняет и ничего не дублирует', () => {
+  const B = node(); const C = node();
+  B.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  exchange(B, C, 'B');
+  const n1 = C.prepare('SELECT COUNT(*) n FROM patients').get().n;
+  exchange(B, C, 'B');
+  assert.equal(C.prepare('SELECT COUNT(*) n FROM patients').get().n, n1);
+  B.close(); C.close();
+});
+
+test('деньги не уезжают: счетов в приёмнике не появляется', () => {
+  const B = node(); const C = node();
+  const pid = B.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").lastInsertRowid;
+  B.prepare('INSERT INTO invoices (patient_id, total_amount, status) VALUES (?, 100000, ?)').run(pid, 'open');
+  exchange(B, C, 'B');
+  assert.equal(C.prepare('SELECT COUNT(*) n FROM invoices').get().n, 0, 'счета — Фаза 3');
+  B.close(); C.close();
+});
+```
+
+- [ ] **Шаг 2: прогнать — должно упасть**
+
+Запустить: `node --test server/services/branch-sync/records-e2e.test.js`
+Ожидается: FAIL на первом же тесте.
+
+- [ ] **Шаг 3: довести до зелёного**
+
+Реализация уже написана в Задачах 4–5; здесь чинятся расхождения, которые
+покажет сквозной тест. НЕ ослаблять утверждения: тест «обе базы сходятся» —
+главный инвариант фазы.
+
+- [ ] **Шаг 4: выгрузка журнала на релей**
+
+В `relay.js` добавить `publishJournal(db, dataDir, node)` и
+`fetchJournals(db, dataDir, peers)` по образцу `publishCatalogue`/
+`fetchCatalogue`: то же уплотнение gzip, то же шифрование `sealPayload`, тот же
+предел `MAX_BLOB_BYTES`, адрес — `relayIdFor(groupKey, node)`.
+
+- [ ] **Шаг 5: вызвать из синхронизации**
+
+В `server/services/rpc/branch-sync.js`, в `runBranchSync`, ПОСЛЕ применения
+справочника: собрать порцию, выложить, забрать чужие, применить. Порядок важен:
+справочник несёт услуги, на которые ссылаются `visit_services`.
+
+- [ ] **Шаг 6: прогнать всё**
+
+Запустить: `npm test > /tmp/s.log 2>&1; echo "EXIT=$?"; grep -E "^ℹ (tests|pass|fail)" /tmp/s.log | tail -3`
+Ожидается: `EXIT=0`, `fail 0`. **Не пропускать вывод через `tail` без
+`echo $?`:** код выхода тогда принадлежит `tail`, а не тестам — на этом уже
+обжигались 2026-09-02.
+
+- [ ] **Шаг 7: коммит**
+
+```bash
+git add server/services/branch-sync/relay.js server/services/rpc/branch-sync.js \
+        server/services/branch-sync/records-e2e.test.js
+git commit -m "feat(sync): журналы ездят по релею — пациенты и лабораторная очередь видны во всех филиалах"
+```
+
+---
+
+## Задача 8: на экране видно, откуда запись
+
+**Файлы:**
+- Изменить: `public/js/admin/views/patients.js`
+- Изменить: `public/js/admin/views/laboratory.js`
+- Создать: `public/js/admin/__tests__/record-origin.test.mjs`
+
+- [ ] **Шаг 1: тест**
+
+```js
+test('в списке пациентов запись из другого филиала подписана его буквой', () => {
+  // MRN уже несёт букву филиала (B-26-00042), поэтому источник не надо
+  // передавать отдельно — он в номере.
+  const row = patientRow({ mrn: 'C-26-00042', full_name: 'Иванов' }, { selfLetter: 'B' });
+  assert.equal(row.branchTag, 'C', 'видно, что пациент заведён в другом здании');
+});
+
+test('своя запись не подписывается — метка на всём подряд перестаёт значить что-либо', () => {
+  const row = patientRow({ mrn: 'B-26-00042', full_name: 'Иванов' }, { selfLetter: 'B' });
+  assert.equal(row.branchTag, null);
+});
+```
+
+- [ ] **Шаг 2: прогнать — должно упасть**
+
+Запустить: `node --experimental-vm-modules --test public/js/admin/__tests__/record-origin.test.mjs`
+Ожидается: FAIL.
+
+- [ ] **Шаг 3: реализация**
+
+Извлечь букву из MRN (`/^([A-Z]+)-/`) и, если она не равна букве этой
+установки, показать её меткой в строке списка и в лабораторной очереди.
+
+- [ ] **Шаг 4: рабочие списки остаются пофилиальными**
+
+Решение владельца 2026-09-02: очередь и кабинет врача — своего здания.
+Убедиться, что списки НЕ начали показывать чужую работу: лабораторная очередь
+фильтруется по `visit_services`, чьи визиты принадлежат этому филиалу; чужие
+видны только при открытии карты пациента.
+
+Добавить тест, закрепляющий это:
+
+```js
+test('лабораторная очередь показывает работу СВОЕГО здания', () => {
+  const rows = labQueueRows([
+    { uid: 'a', mrn: 'B-26-1', status: 'ordered' },
+    { uid: 'b', mrn: 'C-26-1', status: 'ordered' },
+  ], { selfLetter: 'B' });
+  assert.deepEqual(rows.map(r => r.mrn), ['B-26-1'],
+    'иначе очередь Юнусабада наполнится работой Чиланзара');
+});
+```
+
+- [ ] **Шаг 5: прогнать и закоммитить**
+
+```bash
+npm test > /tmp/s.log 2>&1; echo "EXIT=$?"
+git add public/js/admin/views/patients.js public/js/admin/views/laboratory.js \
+        public/js/admin/__tests__/record-origin.test.mjs
+git commit -m "feat(sync): в списках видно, из какого филиала запись"
+```
+
+---
+
+## Проверка перед выпуском
+
+- [ ] `npm test` — `EXIT=0`, `fail 0` (код выхода читать напрямую, не через `tail`)
+- [ ] Сквозной тест «обе базы сходятся» проходит
+- [ ] Счетов и платежей в приёмнике не появляется
+- [ ] На тестовой клинике: завести пациента в филиале, нажать «Синхронизация» в
+      главной, убедиться, что пациент виден, а его номер начинается с буквы
+      филиала
+- [ ] Владелец подтверждает на тестовой клинике ДО выката в живой филиал —
+      требование из спецификации
