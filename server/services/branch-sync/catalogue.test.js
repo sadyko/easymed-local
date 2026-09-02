@@ -19,6 +19,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { exportCatalogue, applyCatalogue, TABLES, DOC_SETTINGS_COLUMNS } from './catalogue.js';
+import { becomeSecondary } from './identity.js';
 
 const MARKER = 'ZZMARKERPATIENT';
 
@@ -360,4 +361,58 @@ test('усыновление сквозь ё/е и NFD: «Прием карди�
   const s2 = apply(dst2, { services: [nfd] });
   assert.equal(s2.adopted.services, 1, 'NFD против NFC — то же имя');
   assert.equal(s2.created.services ?? 0, 0);
+});
+
+// BRANCH_ROSTER_V1 — филиал называется своим именем, а главная — своим.
+//
+// Снимок владельца 2026-09-02 с машины филиала: в списке филиалов «C» и
+// «Main Branch». Имя знает только главная клиника; ключ с именем (0.6.9) чинит
+// лишь новые подключения. Список сети в справочнике чинит уже подключённые при
+// первой же синхронизации.
+test('справочник несёт список сети: буква -> имя, только строки с буквой', () => {
+  const db = fresh();
+  db.prepare("UPDATE branches SET name = 'Heal point' WHERE letter = 'A'").run();
+  db.prepare("INSERT INTO branches (name, letter) VALUES ('Клиника на Чиланзаре', 'C')").run();
+  db.prepare("INSERT INTO branches (name) VALUES ('Кабинет без буквы')").run();
+  const out = exportCatalogue(db);
+  assert.deepEqual(out.roster, [
+    { letter: 'A', name: 'Heal point' },
+    { letter: 'C', name: 'Клиника на Чиланзаре' },
+  ], 'строка без буквы — не узел сети, соседям ни к чему');
+  db.close();
+});
+
+test('филиал переименовывает СВОЮ строку и строку главной по списку', () => {
+  const db = fresh();
+  becomeSecondary(db, { letter: 'C' });   // как при активации старым ключом: имя = буква
+  assert.equal(db.prepare("SELECT name FROM branches WHERE letter = 'C'").get().name, 'C');
+  assert.equal(db.prepare("SELECT name FROM branches WHERE letter = 'A'").get().name, 'Main Branch');
+
+  const r = applyCatalogue(db, { roster: [
+    { letter: 'A', name: 'Heal point' },
+    { letter: 'C', name: 'Клиника на Чиланзаре' },
+  ] });
+
+  assert.equal(db.prepare("SELECT name FROM branches WHERE letter = 'C'").get().name, 'Клиника на Чиланзаре');
+  assert.equal(db.prepare("SELECT name FROM branches WHERE letter = 'A'").get().name, 'Heal point');
+  assert.equal(r.roster, 2);
+  assert.equal(r.changed >= 2, true, 'переименование — это изменение: копия и применение обязаны сработать');
+  db.close();
+});
+
+test('холостой прогон видит переименования, но ничего не пишет', () => {
+  const db = fresh();
+  becomeSecondary(db, { letter: 'C' });
+  const r = applyCatalogue(db, { roster: [{ letter: 'C', name: 'Чиланзар' }] }, { dryRun: true });
+  assert.equal(r.roster, 1);
+  assert.equal(db.prepare("SELECT name FROM branches WHERE letter = 'C'").get().name, 'C', 'dryRun не пишет');
+  db.close();
+});
+
+test('совпадающее имя — не изменение: повторная синхронизация не делает копий зря', () => {
+  const db = fresh();
+  becomeSecondary(db, { letter: 'C', name: 'Чиланзар' });
+  const r = applyCatalogue(db, { roster: [{ letter: 'C', name: 'Чиланзар' }] });
+  assert.equal(r.roster || 0, 0);
+  db.close();
 });

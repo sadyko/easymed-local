@@ -138,6 +138,21 @@ export function exportCatalogue(db, { now = () => new Date() } = {}) {
     out.doc_settings = picked;
   }
 
+  // BRANCH_ROSTER_V1 — кто есть в сети: буква -> имя.
+  //
+  // Имя филиала знает ТОЛЬКО главная клиника: его вводили там, заводя филиал.
+  // Филиал же называл себя буквой, а строку главной клиники у себя держал под
+  // засеянным «Main Branch» — на его экране стояли «C» и «Main Branch», одно
+  // не имя, другое чужое (снимок владельца 2026-09-02). Ключ с именем (0.6.9)
+  // чинит только НОВЫЕ подключения; этот список чинит уже подключённые при
+  // первой же синхронизации и держит имена в согласии дальше.
+  //
+  // Только строки с буквой: без буквы это не узел сети, а адрес внутри одной
+  // установки, и соседям он ни к чему.
+  out.roster = db.prepare(
+    "SELECT letter, name FROM branches WHERE letter IS NOT NULL AND letter <> '' ORDER BY letter"
+  ).all().map((r) => ({ letter: r.letter, name: r.name || '' }));
+
   for (const spec of TABLES) {
     const cols = ['id', ...spec.columns].map((c) => `"${c}"`).join(', ');
     // Имена таблиц и колонок — из константы выше, не из запроса, поэтому
@@ -226,6 +241,26 @@ export function applyCatalogue(db, payload, { dryRun = false } = {}) {
             .run(...keys.map((k) => changes[k]));
         }
       }
+    }
+  }
+
+  // ---- имена филиалов (BRANCH_ROSTER_V1) --------------------------------------
+  // Главная клиника — единственный источник имён (решение владельца 3:
+  // справочное правит только главная). Совпадение по БУКВЕ, не по id: буквы
+  // одинаковы во всей сети, локальные id — нет. Своя строка (буква из
+  // branch_identity) и строка главной (A) переименовываются одинаково — это
+  // одно правило, а не два.
+  if (Array.isArray(payload.roster)) {
+    const rename = db.prepare('UPDATE branches SET name = ? WHERE letter = ?');
+    for (const entry of payload.roster) {
+      if (!entry || typeof entry.letter !== 'string' || typeof entry.name !== 'string') continue;
+      const name = entry.name.trim().slice(0, 120);
+      if (!name) continue;
+      const row = db.prepare('SELECT id, name FROM branches WHERE letter = ?').get(entry.letter);
+      if (!row || row.name === name) continue;
+      summary.roster = (summary.roster || 0) + 1;
+      summary.changed += 1;
+      if (!dryRun) rename.run(name, entry.letter);
     }
   }
 
