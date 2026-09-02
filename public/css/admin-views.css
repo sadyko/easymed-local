@@ -3700,6 +3700,13 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 /* INSTALL_KIND_V1 — выбор «клиника или филиал» и подсказка под ошибкой. */
 .activation-screen .act-kind { margin: 0 0 18px; }
 .activation-screen .act-hint { margin-top: 8px; font-size: 13.5px; line-height: 1.5; color: var(--ink-600); }
+/* BRANCH_SETTINGS_LEAN_V1 — служебные действия филиалов: свёрнуто по умолчанию. */
+.bsync-more { margin-top: 14px; border-top: 1px solid var(--line-200); padding-top: 12px; }
+.bsync-more > summary { cursor: pointer; font-size: 13.5px; color: var(--ink-600); list-style: none; }
+.bsync-more > summary::-webkit-details-marker { display: none; }
+.bsync-more > summary::before { content: '+'; display: inline-block; width: 14px; color: var(--ink-400); }
+.bsync-more[open] > summary::before { content: '2'; }
+.bsync-more > summary:hover { color: var(--ink-900); }
 .activation-screen .act-reassure { font-size: 15px; line-height: 1.6; color: var(--ink-600); margin: 0 0 26px; }
 .activation-screen .act-code-wrap:empty { display: none; }
 .activation-screen .act-call { font-size: 13.5px; color: var(--ink-600); margin: 0 0 10px; }

@@ -224,8 +224,13 @@ test('владельцу сказано, что потерянный ключ н
 
 test('переключатель объясняет РАЗНОЕ главному и подключённому филиалу', () => {
   // Главный отдаёт байты наружу — на это он и соглашается.
-  assert.match(relayExplainer({ role: 'main' }), /сервере Easy-Med/);
-  assert.match(relayExplainer({ role: 'main' }), /зашифрованной/);
+  assert.match(relayExplainer({ role: 'main', relay_enabled: true }), /сервере Easy-Med/);
+  assert.match(relayExplainer({ role: 'main', relay_enabled: true }), /зашифрованной/);
+  // RELAY_COPY_TRUTH_V1 — при выключенном канале копии на сервере НЕТ, и
+  // говорить «копия лежит» рядом с «копия не отправляется» (publishLine)
+  // значит рассказывать об одном и том же две разные вещи.
+  assert.doesNotMatch(relayExplainer({ role: 'main', relay_enabled: false }), /Копия лежит/);
+  assert.match(relayExplainer({ role: 'main', relay_enabled: false }), /включите канал/i);
   // Подключённый ничего не отдаёт: он только берёт, и только когда прямой путь
   // не удался.
   assert.match(relayExplainer({ role: 'secondary' }), /Прямая связь пробуется первой/);

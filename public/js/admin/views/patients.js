@@ -7,6 +7,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { registrarHeader } from './registrar-header.js?v=roleaud1';
 import { loadPatientsPaged, findAllDuplicatePatientIds, mergePatients } from '../data.js';   // DUP_MERGE_V1
 import { scopedDoctorId } from '../permissions.js';
+import { branchSyncButton } from './branch-sync-button.js';   // BRANCH_SYNC_HOURLY_V1
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
 
 // DATA_TRANSFER_V1 — the Шаблон / Импорт / Экспорт trio used to sit in this
@@ -213,6 +214,11 @@ function mount() {
                 h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
                     h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Всего ', refs.totalEl),
                     dupChip, calcBtn,
+                    // BRANCH_SYNC_HOURLY_V1 — сама покажется, только если это
+                    // подключённый филиал. onDone перечитывает список: карта,
+                    // заведённая в соседнем здании, уже в базе, но на экране
+                    // её ещё нет.
+                    branchSyncButton({ onDone: () => fetchAndPaint() }),
                     createBtn,
                 ),
             ),

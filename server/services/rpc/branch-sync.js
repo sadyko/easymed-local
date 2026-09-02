@@ -37,6 +37,15 @@ export class RpcError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
 }
 
+// BRANCH_SYNC_HOURLY_V1 — «любой, кто вошёл», а не «любой». Синхронизацию
+// теперь запускает регистратура и лаборатория, но это по-прежнему действие
+// сотрудника клиники, а не анонимного запроса к порту.
+function requireUser(user) {
+  if (!user || (user.id === undefined && user.user_id === undefined)) {
+    throw new RpcError('Требуется вход в систему.', 401);
+  }
+}
+
 function requireAdmin(user) {
   // hasAnyRole, а не user.role — правило ADMIN_DOCTOR_V1: у администратора
   // клиники основной ролью нередко стоит «врач», и проверка по user.role
@@ -843,10 +852,22 @@ export function branchSyncUnpair(db, args, user) {
  * между зданиями и должен видеть, работает ли тот на самом деле, а не узнавать
  * об обратном через полгода.
  */
-export async function branchSyncNow(db, args, user, {
+// BRANCH_SYNC_HOURLY_V1 — как часто ОДНА установка вообще ходит за
+// справочником. Часы (schedule-pull.js) стучат раз в час, но кнопку теперь
+// видят регистратура и лаборатория, а не только администратор, и двойной клик
+// по ней не должен превращаться в два скачивания справочника по узкому каналу.
+// Десять секунд гасят повтор и дребезг и незаметны человеку, который нажал
+// осознанно: починив связь, он ждёт результата дольше десяти секунд.
+const MIN_GAP_MS = 10_000;
+let lastStartedAt = 0;
+
+/**
+ * Забрать справочник и применить. Без пользователя и без проверки прав:
+ * вызывается и часами, и RPC. Права — забота вызывающего.
+ */
+export async function runBranchSync(db, {
   pullImpl = pullCatalogue, backupImpl = createBackup, relayImpl = fetchCatalogue,
 } = {}) {
-  requireAdmin(user);
   const dataDir = getDataDir();
 
   let route = 'direct';
@@ -924,6 +945,34 @@ export async function branchSyncNow(db, args, user, {
 // что «синхронизировано» без указания пути скрывает самое интересное: владелец,
 // оплативший VPN между зданиями, должен видеть, что справочник полгода ездит
 // через сервер поставщика, а не догадываться об этом.
+/**
+ * RPC `branch_sync_now`.
+ *
+ * BRANCH_SYNC_HOURLY_V1 — раньше здесь стоял requireAdmin. Решение владельца
+ * 2026-09-02: кнопка «Синхронизация» появляется в окне регистратуры и
+ * лаборатории, то есть у людей, которые администраторами не являются и не
+ * должны ими становиться ради того, чтобы подтянуть данные соседнего филиала.
+ *
+ * Отдавать это всем безопасно ровно потому, что действие УЖЕ выполняется без
+ * человека: ровно то же самое делают часы раз в час. Кнопка не даёт новых
+ * возможностей, она лишь не заставляет ждать до следующего часа. Настройка
+ * связи (связать, отвязать, перевыпустить ключ) остаётся администраторской —
+ * там requireAdmin на месте.
+ */
+export async function branchSyncNow(db, args, user, deps = {}) {
+  requireUser(user);
+
+  const now = Date.now();
+  if (now - lastStartedAt < MIN_GAP_MS) {
+    // Не ошибка и не отказ: только что уже сходили. Отдаём последний
+    // результат, чтобы экран показал правду, а не «подождите».
+    const last = readJsonState(db, LAST_ATTEMPT);
+    if (last) return { ...last, throttled: true };
+  }
+  lastStartedAt = now;
+  return runBranchSync(db, deps);
+}
+
 function finish(db, result, message) {
   const at = new Date().toISOString();
   const record = { at, ...result };

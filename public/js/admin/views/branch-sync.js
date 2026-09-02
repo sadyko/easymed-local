@@ -113,14 +113,24 @@ async function paint(card) {
 
     const admin = isAdminActor();
     const badge = roleBadge(status);
-    // Роль и то, что она значит, — ОДНОЙ СТРОКОЙ: метка и короткая подпись
-    // рядом, а не метка и абзац под ней.
-    card.appendChild(h('div', { class: 'sys-info' },
-        h('span', { class: 'sys-info-label' }, 'Роль этой установки'),
-        h('span', { class: 'sys-info-value bsync-role' },
-            Tag(badge.label, { kind: badge.kind }),
-            h('span', { class: 'muted bsync-note' }, roleExplainer(status))),
-    ));
+    // BRANCH_SETTINGS_LEAN_V1 — на ГЛАВНОЙ клинике строки про роль нет.
+    // Требование владельца 2026-09-02: «leave only the list of the branches,
+    // and dialogue window of the branch key issue and activation. and remove
+    // unnecessary information ... which is not used by users».
+    //
+    // Роль здесь и правда лишняя: в списке ниже собственная строка подписана
+    // «Эта установка», то есть ответ на вопрос «кто я» уже стоит на экране, и
+    // строка над списком повторяла его другими словами. На филиале и на ещё
+    // не связанной установке она остаётся: там списка нет, и заменить её
+    // нечем.
+    if (status.role !== 'main') {
+        card.appendChild(h('div', { class: 'sys-info' },
+            h('span', { class: 'sys-info-label' }, 'Роль этой установки'),
+            h('span', { class: 'sys-info-value bsync-role' },
+                Tag(badge.label, { kind: badge.kind }),
+                h('span', { class: 'muted bsync-note' }, roleExplainer(status))),
+        ));
+    }
 
     if (status.role === 'main') paintMain(card, status, admin);
     else if (status.role === 'secondary') paintSecondary(card, status, admin);
@@ -241,18 +251,28 @@ function paintMakeMain(card, status) {
 
 // --- главный филиал --------------------------------------------------------
 function paintMain(card, status, admin) {
-    card.appendChild(h('div', { class: 'sys-info' },
-        h('span', { class: 'sys-info-label' }, 'Адрес для филиалов'),
-        h('span', { class: 'sys-info-value' }, status.main_url || DASH),
-        h('span', { class: 'sys-info-label' }, 'Группа филиалов'),
-        h('span', { class: 'sys-info-value' }, status.group_id || DASH),
-    ));
+    // BRANCH_SETTINGS_LEAN_V1 — экран главной клиники: СПИСОК ФИЛИАЛОВ и
+    // выдача ключа. Всё остальное ушло под «Дополнительно».
+    //
+    // «Адрес для филиалов» и «Группа филиалов» убраны с виду не потому, что
+    // неверны, а потому, что ими никто не пользуется: адрес система
+    // подставляет в ключ сама, а идентификатор группы человеку нечего с ним
+    // делать — он нужен при разборе неисправности, и там его и видно.
+    //
+    // Служебное СПРЯТАНО, а не удалено. Резервный канал, перевыпуск ключа и
+    // отвязка — редкие, но настоящие действия; удалить их значило бы отнять
+    // возможность, а не убрать беспорядок. Свёрнутый блок решает ровно ту
+    // задачу, которую поставил владелец: на экране этого не видно.
     if (!admin) return;
 
     paintBranchList(card);
-    paintRelay(card, status, admin);
-    paintSyncKey(card, status, admin);
-    card.appendChild(unlinkBlock(card, UNLINK_WARNING_MAIN));
+
+    const more = h('details', { class: 'bsync-more' },
+        h('summary', null, 'Дополнительно'));
+    paintRelay(more, status, admin);
+    paintSyncKey(more, status, admin);
+    more.appendChild(unlinkBlock(card, UNLINK_WARNING_MAIN));
+    card.appendChild(more);
 }
 
 // --- список филиалов и их ПОСТОЯННЫЕ ключи (BRANCH_IDENTITY_V1) ------------

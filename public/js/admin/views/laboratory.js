@@ -43,6 +43,7 @@ import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';
 import { labFlagCell, labPosFor, fmtDMY, labSexRu, labRefText, matchResultsToAnalytes, labAccession, labIssueDates, labMaxDate,
          namedRangeCell, ageYears } from './lab-doc.js?v=labshared1';
 import { analyteIndex, resolveAnalyte, resolveAnalyteWhy, nk } from './lab-analyte-index.js?v=labshared1';   // LAB_BLANK_DESIGNED_V1
+import { branchSyncButton } from './branch-sync-button.js';   // BRANCH_SYNC_HOURLY_V1
 
 function currentUser() {
     try { return (window.easymed && window.easymed.state && window.easymed.state.user) || {}; }
@@ -265,6 +266,7 @@ function pageHead(subtitle, actions) {
             h('p', { class: 'page-subtitle' }, subtitle),
         ),
         h('div', { class: 'page-head-actions', style: { display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
+            branchSyncButton({ onDone: () => fetchAndPaint() }),
             ...actions),
     );
 }

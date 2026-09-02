@@ -16,6 +16,9 @@ import { setDataDir, setAppVersion } from './services/control/config.js';   // S
 import { scheduleCheckin } from './services/control/checkin.js';   // LICENCE_CORE_V1
 import { scheduleUpdater } from './services/control/updater.js';   // UPDATE_DELIVERY_V1
 import { scheduleRelayPublish } from './services/branch-sync/relay.js';   // BRANCH_SYNC_RELAY_V1
+import { scheduleBranchPull } from './services/branch-sync/schedule-pull.js';   // BRANCH_SYNC_HOURLY_V1
+import { readPairing } from './services/branch-sync/pairing.js';
+import { runBranchSync } from './services/rpc/branch-sync.js';
 import { recordEvent, pruneOpsEvents } from './services/ops-log.js';   // OPS_EVENTS_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -295,6 +298,20 @@ if (isMain) {
   // the copy is a day old — see relay.js REFRESH_MS, which is about the
   // vendor's retention sweep, not about freshness).
   scheduleRelayPublish(db, DATA_DIR);
+
+  // BRANCH_SYNC_HOURLY_V1 — обратная сторона того же расписания. Главный
+  // филиал выкладывал копию по часам и раньше, а ЗАБИРАТЬ её было некому:
+  // единственным путём вниз оставалась кнопка администратора. Филиал жил на
+  // том справочнике, который кто-то однажды не поленился нажать.
+  //
+  // Роль проверяется на каждом такте внутри scheduleBranchPull, а не здесь:
+  // установку связывают филиалом без перезапуска сервера.
+  scheduleBranchPull(db, {
+    isSecondary: () => {
+      try { return readPairing(DATA_DIR)?.role === 'secondary'; } catch { return false; }
+    },
+    syncImpl: (database) => runBranchSync(database),
+  });
 }
 
 function lanAddresses() {
