@@ -19,6 +19,7 @@ import { openDb as openClinicDb } from '../../../server/db/connection.js';
 import { migrate as migrateClinic } from '../../../server/db/migrate.js';
 import { controlState, __setPublicKeyForTests } from '../../../server/services/control/state.js';
 import { COUNTER_NAMES } from '../../../server/services/control/metrics.js';
+import { listen } from '../test-helpers/listen.js';
 
 // --- test harness ------------------------------------------------------------
 
@@ -43,12 +44,6 @@ function freshRegistry() {
   const db = openDb(':memory:');
   migrate(db);
   return db;
-}
-
-function listen(app) {
-  return new Promise((resolve) => {
-    const server = app.listen(0, '127.0.0.1', () => resolve(server));
-  });
 }
 
 function harness() {

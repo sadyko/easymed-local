@@ -6,6 +6,7 @@ import express from 'express';
 import { slowLog } from './slow-log.js';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
+import { listen } from '../../control-plane/server/test-helpers/listen.js';
 
 // srv.unref() — иначе ПАДАЮЩАЯ проверка вешает весь прогон вместо того, чтобы
 // честно упасть: assert бросает, до srv.close() в конце теста дело не доходит,
@@ -13,11 +14,10 @@ import { migrate } from '../db/migrate.js';
 // умолчанию. Один такой файл 29.08.2026 остановил всю сборку на полчаса —
 // снаружи это выглядело как «тесты идут», хотя не шло уже ничего. unref()
 // делает провал провалом: процесс завершается и рантайм печатает причину.
-function serve(app) {
-  return new Promise((resolve) => {
-    const srv = app.listen(0, '127.0.0.1', () => resolve({ srv, base: `http://127.0.0.1:${srv.address().port}` }));
-    srv.unref();
-  });
+async function serve(app) {
+  const srv = await listen(app);
+  srv.unref();
+  return { srv, base: `http://127.0.0.1:${srv.address().port}` };
 }
 
 function freshDb() { const db = openDb(':memory:'); migrate(db); return db; }

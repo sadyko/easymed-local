@@ -21,6 +21,7 @@ import { hashPassword } from '../auth.js';
 import { createApp } from '../../app.js';
 import { licensedDataDir } from '../control/licensed-fixture.js';
 import { labUsageStats } from './lab-stats.js';
+import { listen } from '../../../control-plane/server/test-helpers/listen.js';
 
 const admin     = { id: 1, role: 'admin' };
 const lab       = { id: 2, role: 'lab' };
@@ -215,7 +216,7 @@ test('роль-гейт как у записей панелей: все четы
 const LABS_ROLES = ['admin', 'doctor', 'lab', 'nurse'];
 const NO_LABS_ROLES = ['registrar', 'cashier'];
 
-function startServer() {
+async function startServer() {
   const db = openDb(':memory:');
   migrate(db);
   for (const role of [...LABS_ROLES, ...NO_LABS_ROLES]) {
@@ -226,11 +227,8 @@ function startServer() {
   const patient = db.prepare("INSERT INTO patients (full_name) VALUES ('Пациент')").run().lastInsertRowid;
   const visit = db.prepare("INSERT INTO visits (patient_id, visit_date) VALUES (?, date('now'))").run(patient).lastInsertRowid;
   db.prepare("INSERT INTO visit_services (visit_id, service_id, status) VALUES (?,?, 'completed')").run(visit, sBare);
-  return new Promise((resolve) => {
-    const server = createApp(db, { dataDir: licensedDataDir() }).listen(0, '127.0.0.1', () => {
-      resolve({ db, server, base: `http://127.0.0.1:${server.address().port}` });
-    });
-  });
+  const server = await listen(createApp(db, { dataDir: licensedDataDir() }));
+  return { db, server, base: `http://127.0.0.1:${server.address().port}` };
 }
 
 async function login(base, role) {

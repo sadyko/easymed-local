@@ -12,6 +12,7 @@ import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { hashPassword } from '../services/auth.js';
 import { createApp } from '../app.js';
+import { listen } from '../../control-plane/server/test-helpers/listen.js';
 
 const PEOPLE = [
   ['Эргашев Жахонгир Нурийигит Ўғли', 'P-26-70002', '998948776767', '2004-02-17'],
@@ -20,7 +21,7 @@ const PEOPLE = [
   ['Эргашева Малика Собировна',       'P-26-69990', '998901112233', '1990-12-10'],
 ];
 
-function startServer() {
+async function startServer() {
   const db = openDb(':memory:');
   migrate(db);
   db.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)')
@@ -28,11 +29,8 @@ function startServer() {
   for (const [full_name, mrn, phone, dob] of PEOPLE) {
     db.prepare('INSERT INTO patients (full_name, mrn, phone, date_of_birth) VALUES (?,?,?,?)').run(full_name, mrn, phone, dob);
   }
-  return new Promise((resolve) => {
-    const server = createApp(db).listen(0, '127.0.0.1', () => {
-      resolve({ db, server, base: `http://127.0.0.1:${server.address().port}` });
-    });
-  });
+  const server = await listen(createApp(db));
+  return { db, server, base: `http://127.0.0.1:${server.address().port}` };
 }
 async function login(base) {
   const res = await fetch(base + '/api/auth/login', {

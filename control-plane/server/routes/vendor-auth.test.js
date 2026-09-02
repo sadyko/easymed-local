@@ -6,6 +6,7 @@ import { migrate } from '../db/migrate.js';
 import { hashPassword } from '../services/vendor-auth.js';
 import { createApp } from '../app.js';
 import { VENDOR_SESSION_COOKIE } from './vendor-auth.js';
+import { listen } from '../test-helpers/listen.js';
 
 // --- test harness ------------------------------------------------------------
 
@@ -19,12 +20,6 @@ function withVendorUser(db, username, password) {
   db.prepare('INSERT INTO vendor_users (username, password_hash, full_name) VALUES (?,?,?)')
     .run(username, hashPassword(password), 'Test Vendor');
   return db;
-}
-
-function listen(app) {
-  return new Promise((resolve) => {
-    const server = app.listen(0, '127.0.0.1', () => resolve(server));
-  });
 }
 
 async function post(server, path, body, cookie) {

@@ -15,6 +15,7 @@ import { expectedResponse } from '../../../server/services/control/unlock.js';
 import { SELLABLE_MODULES } from '../../../server/services/rpc/licence.js';
 import { COUNTERS, COUNTER_NAMES } from '../../../server/services/control/metrics.js';
 import { ADMIN_ROUTE_TABLE } from './admin.js';
+import { listen } from '../test-helpers/listen.js';
 
 // --- test harness ------------------------------------------------------------
 
@@ -52,12 +53,6 @@ function withVendorUser(db, username = 'vendor', password = 'secret123') {
   db.prepare('INSERT INTO vendor_users (username, password_hash, full_name) VALUES (?,?,?)')
     .run(username, hashPassword(password), 'Test Vendor');
   return db;
-}
-
-function listen(app) {
-  return new Promise((resolve) => {
-    const server = app.listen(0, '127.0.0.1', () => resolve(server));
-  });
 }
 
 function req(server, method, path, { body, cookie } = {}) {

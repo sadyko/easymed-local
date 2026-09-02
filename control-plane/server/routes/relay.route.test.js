@@ -13,6 +13,7 @@ import { relayPathFor, pruneRelayBlobs } from './relay.js';
 import { RELAY_TOKEN_MOUNT } from './relay-token.js';   // BRANCH_RECORDS_V1 (Задача 7a)
 import { sealPayload } from '../../../server/services/branch-sync/relay-crypto.js';
 import { b64url, GROUP_KEY_BYTES } from '../../../server/services/branch-sync/pairing.js';
+import { listen } from '../test-helpers/listen.js';
 
 // BRANCH_SYNC_RELAY_V1 — the vendor's half of Route B.
 //
@@ -43,12 +44,6 @@ test.after(() => {
     try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best-effort temp cleanup */ }
   }
 });
-
-function listen(app) {
-  return new Promise((resolve) => {
-    const server = app.listen(0, '127.0.0.1', () => resolve(server));
-  });
-}
 
 async function harness(t) {
   useSigningKey();

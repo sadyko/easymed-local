@@ -20,8 +20,9 @@ import { migrate } from '../db/migrate.js';
 import { hashPassword } from '../services/auth.js';
 import { createApp } from '../app.js';
 import { licensedDataDir } from '../services/control/licensed-fixture.js';   // LICENCE_CORE_V1
+import { listen } from '../../control-plane/server/test-helpers/listen.js';
 
-function startServer() {
+async function startServer() {
   const db = openDb(':memory:');
   migrate(db);
   db.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)')
@@ -29,13 +30,10 @@ function startServer() {
   db.prepare('INSERT INTO services (name, price, type, is_lab) VALUES (?,?,?,1)').run('Гомоцистеин', 90000, 'lab');
   db.prepare("INSERT INTO lab_panels (name, modality, service_id, active) VALUES ('ГОМОЦИСТЕИН','lab',1,1)").run();
   db.prepare("INSERT INTO lab_panels (name, modality, active) VALUES ('Новая панель','lab',1)").run();
-  return new Promise((resolve) => {
-    // LICENCE_CORE_V1 — enrolled+active so the write gate (routes/db.js,
-    // routes/rpc.js) never fires; this file predates licensing.
-    const server = createApp(db, { dataDir: licensedDataDir() }).listen(0, '127.0.0.1', () => {
-      resolve({ db, server, base: `http://127.0.0.1:${server.address().port}` });
-    });
-  });
+  // LICENCE_CORE_V1 — enrolled+active so the write gate (routes/db.js,
+  // routes/rpc.js) never fires; this file predates licensing.
+  const server = await listen(createApp(db, { dataDir: licensedDataDir() }));
+  return { db, server, base: `http://127.0.0.1:${server.address().port}` };
 }
 
 async function login(base, who) {

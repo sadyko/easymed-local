@@ -11,6 +11,7 @@ import { canonical } from '../services/control/canonical.js';
 import { __setPublicKeyForTests } from '../services/control/state.js';
 import { expectedResponse } from '../services/control/unlock.js';
 import { createApp } from '../app.js';
+import { listen } from '../../control-plane/server/test-helpers/listen.js';
 
 const { publicKey, privateKey } = generateKeyPairSync('ed25519');
 __setPublicKeyForTests(publicKey);
@@ -37,8 +38,6 @@ function harness({ validUntil }) {
   db.prepare('UPDATE users SET must_change_password = 0').run();
   return { db, dir, password, app: createApp(db, { dataDir: dir }) };
 }
-
-const listen = (app) => new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
 
 async function login(server, password) {
   const res = await fetch(`http://127.0.0.1:${server.address().port}/api/auth/login`, {

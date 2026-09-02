@@ -11,6 +11,7 @@ import { migrate } from '../db/migrate.js';
 import { createEnrollmentCode, redeemEnrollmentCode } from '../services/enrollment.js';
 import { createApp } from '../app.js';
 import { DEPLOY_PATH, MIN_TOKEN_CHARS } from './deploy.js';
+import { listen } from '../test-helpers/listen.js';
 
 // AUTO_ROLLOUT_V1 — the CI-facing publish endpoint. The one thing this whole
 // file is protecting: a token that can publish to EVERY clinic in the country
@@ -47,12 +48,6 @@ test.after(() => {
     try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best-effort temp cleanup */ }
   }
 });
-
-function listen(app) {
-  return new Promise((resolve) => {
-    const server = app.listen(0, '127.0.0.1', () => resolve(server));
-  });
-}
 
 // The token and the releases directory are read when the router is BUILT, so
 // every test sets them before createApp() — the same way the real service

@@ -32,6 +32,7 @@ import { migrate as migrateCp } from '../../../control-plane/server/db/migrate.j
 import { createEnrollmentCode, redeemEnrollmentCode } from '../../../control-plane/server/services/enrollment.js';
 import { createApp as createCpApp } from '../../../control-plane/server/app.js';
 import { hashPassword } from '../../../control-plane/server/services/vendor-auth.js';
+import { listen } from '../../../control-plane/server/test-helpers/listen.js';
 
 // --- test harness ------------------------------------------------------------
 //
@@ -87,7 +88,7 @@ function signedLicence(over = {}) {
 // server also tracks how many requests it has received, since several tests
 // (no install_token, idempotent resend) assert on call COUNT, not just on
 // what a call did.
-function fakeServer(handler) {
+async function fakeServer(handler) {
   const state = { count: 0, bodies: [] };
   const server = http.createServer((req, res) => {
     let body = '';
@@ -98,9 +99,8 @@ function fakeServer(handler) {
       handler(req, res, body);
     });
   });
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => resolve({ server, state, endpoint: `http://127.0.0.1:${server.address().port}` }));
-  });
+  await listen(server);
+  return { server, state, endpoint: `http://127.0.0.1:${server.address().port}` };
 }
 
 function jsonHandler(status, obj) {
@@ -704,10 +704,7 @@ test('acceptance: a module granted in the control plane reaches the clinic on th
   __setPublicKeyForTests(vendorPublicKey);        // checkin.js's own verifier
   __setStatePublicKeyForTests(vendorPublicKey);    // the clinic app's own verifier, for the final assertion
 
-  const cpApp = createCpApp(registryDb);
-  const cpServer = await new Promise((resolve) => {
-    const s = cpApp.listen(0, '127.0.0.1', () => resolve(s));
-  });
+  const cpServer = await listen(createCpApp(registryDb));
   t.after(() => cpServer.close());
   const cpEndpoint = `http://127.0.0.1:${cpServer.address().port}`;
 
@@ -906,10 +903,7 @@ test('acceptance: vendor sets a collect subset, two check-ins later the numbers 
     __setStatePublicKeyForTests(publicKey);
   });
 
-  const cpApp = createCpApp(registryDb);
-  const cpServer = await new Promise((resolve) => {
-    const s = cpApp.listen(0, '127.0.0.1', () => resolve(s));
-  });
+  const cpServer = await listen(createCpApp(registryDb));
   t.after(() => cpServer.close());
   const cpEndpoint = `http://127.0.0.1:${cpServer.address().port}`;
 

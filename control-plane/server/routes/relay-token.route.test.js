@@ -13,6 +13,7 @@ import { relayPathFor, RELAY_MOUNT, RELAY_ID_RE as RELAY_ID_RE_ROUTE } from './r
 import {
   RELAY_TOKEN_MOUNT, RELAY_ID_RE as RELAY_ID_RE_MINT, clinicForRelayToken, pruneRelayTokens,
 } from './relay-token.js';
+import { listen } from '../test-helpers/listen.js';
 
 // BRANCH_IDENTITY_V1 — the credential a SECONDARY branch uses on the relay.
 //
@@ -50,12 +51,6 @@ test.after(() => {
     try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best-effort temp cleanup */ }
   }
 });
-
-function listen(app) {
-  return new Promise((resolve) => {
-    const server = app.listen(0, '127.0.0.1', () => resolve(server));
-  });
-}
 
 async function harness(t) {
   useSigningKey();

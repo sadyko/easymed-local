@@ -20,6 +20,7 @@ import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { createEnrollmentCode, redeemEnrollmentCode } from '../services/enrollment.js';
 import { createApp } from '../app.js';
+import { listen } from '../test-helpers/listen.js';
 
 const tmpDirs = [];
 function tmpDir(prefix) {
@@ -40,11 +41,6 @@ test.after(() => {
   }
 });
 
-function listen(app) {
-  return new Promise((resolve) => {
-    const server = app.listen(0, '127.0.0.1', () => resolve(server));
-  });
-}
 async function harness(t) {
   useSigningKey();
   const db = openDb(':memory:');

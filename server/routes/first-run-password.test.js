@@ -7,6 +7,7 @@ import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { bootstrapAdmin, FIRST_RUN_PASSWORD } from '../services/auth.js';
 import { createApp } from '../app.js';
+import { listen } from '../../control-plane/server/test-helpers/listen.js';
 
 // FIRST_RUN_PASSWORD_V1 — the whole point of the fixed default password is the
 // gate that comes with it: until the first-run admin sets their own password,
@@ -21,8 +22,6 @@ function makeApp() {
   bootstrapAdmin(db);   // deliberately NOT clearing the flag — the flag is the subject here
   return { db, dir, app: createApp(db, { dataDir: dir }) };
 }
-
-const listen = (app) => new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
 
 async function login(server, password = FIRST_RUN_PASSWORD) {
   const res = await fetch(`http://127.0.0.1:${server.address().port}/api/auth/login`, {

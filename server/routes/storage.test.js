@@ -5,13 +5,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { storageRoutes } from './storage.js';
+import { listen } from '../../control-plane/server/test-helpers/listen.js';
 
-function start(storageDir) {
+async function start(storageDir) {
   const app = express();
   app.use('/api/storage', storageRoutes(storageDir));   // mounted without auth for the unit test
-  return new Promise((resolve) => {
-    const srv = app.listen(0, '127.0.0.1', () => resolve({ srv, port: srv.address().port }));
-  });
+  const srv = await listen(app);
+  return { srv, port: srv.address().port };
 }
 
 test('storage: upload -> serve -> delete round-trip, with bucket + traversal + empty guards', async () => {

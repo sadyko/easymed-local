@@ -26,24 +26,22 @@ import { migrate } from '../db/migrate.js';
 import { hashPassword } from '../services/auth.js';
 import { createApp } from '../app.js';
 import { licensedDataDir } from '../services/control/licensed-fixture.js';   // LICENCE_CORE_V1
+import { listen } from '../../control-plane/server/test-helpers/listen.js';
 
 // Roles whose seeded role_permissions row carries the 'labs' section → may
 // write panels. Everyone else in VALID_ROLES must be refused.
 const LABS_ROLES = ['admin', 'doctor', 'lab', 'nurse'];
 const NO_LABS_ROLES = ['registrar', 'cashier', 'inventory', 'callcenter'];
 
-function startServer() {
+async function startServer() {
   const db = openDb(':memory:');
   migrate(db);
   for (const role of [...LABS_ROLES, ...NO_LABS_ROLES]) {
     db.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)')
       .run('u_' + role, hashPassword('password1'), 'Тест ' + role, role);
   }
-  return new Promise((resolve) => {
-    const server = createApp(db, { dataDir: licensedDataDir() }).listen(0, '127.0.0.1', () => {
-      resolve({ db, server, base: `http://127.0.0.1:${server.address().port}` });
-    });
-  });
+  const server = await listen(createApp(db, { dataDir: licensedDataDir() }));
+  return { db, server, base: `http://127.0.0.1:${server.address().port}` };
 }
 
 async function login(base, role) {

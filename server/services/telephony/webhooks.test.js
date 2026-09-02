@@ -4,6 +4,7 @@ import express from 'express';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { telephonyWebhooks, normalizeIp, BINOTEL_SOURCE_IPS } from './webhooks.js';
+import { listen } from '../../../control-plane/server/test-helpers/listen.js';
 
 const fresh = () => { const db = openDb(':memory:'); migrate(db); return db; };
 
@@ -11,18 +12,13 @@ const fresh = () => { const db = openDb(':memory:'); migrate(db); return db; };
 // JSON parser and attachControl's req.control, both of which the router
 // relies on being upstream. control defaults to "callcenter granted" so each
 // test states only what it is about.
-function startHook(db, { allowedIps, control = { has: (k) => k === 'callcenter' } } = {}) {
+async function startHook(db, { allowedIps, control = { has: (k) => k === 'callcenter' } } = {}) {
   const app = express();
   app.use('/api', express.json({ limit: '100kb' }));
   app.use((req, res, next) => { req.control = control; next(); });
   app.use('/api/telephony/binotel', telephonyWebhooks(db, { allowedIps }));
-  return new Promise((resolve) => {
-    // Wait for 'listening' before reading address() — app.test.js's rule for
-    // this Node/Windows combination.
-    const server = app.listen(0, '127.0.0.1', () => {
-      resolve({ server, base: `http://127.0.0.1:${server.address().port}/api/telephony/binotel` });
-    });
-  });
+  const server = await listen(app);
+  return { server, base: `http://127.0.0.1:${server.address().port}/api/telephony/binotel` };
 }
 
 // Binotel POSTs application/x-www-form-urlencoded (support's letter, 2026-08).
@@ -219,9 +215,8 @@ test('through the REAL app: mounted before session auth, refusals fail closed at
   console.warn = (...a) => warns.push(a.join(' '));
   try {
     const app = createApp(db, { dataDir: licensedDataDir({ modules: ['callcenter'] }) });
-    const { server, port } = await new Promise((resolve) => {
-      const s = app.listen(0, '127.0.0.1', () => resolve({ server: s, port: s.address().port }));
-    });
+    const server = await listen(app);
+    const port = server.address().port;
     try {
       const res = await postForm(`http://127.0.0.1:${port}/api/telephony/binotel`, {
         requestType: 'apiCallCompleted', 'callDetails[generalCallID]': 'GC-1', 'callDetails[startTime]': '1755950400',

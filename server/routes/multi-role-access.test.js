@@ -19,8 +19,9 @@ import { migrate } from '../db/migrate.js';
 import { hashPassword } from '../services/auth.js';
 import { createApp } from '../app.js';
 import { licensedDataDir } from '../services/control/licensed-fixture.js';   // LICENCE_CORE_V1
+import { listen } from '../../control-plane/server/test-helpers/listen.js';
 
-function startServer() {
+async function startServer() {
   const db = openDb(':memory:');
   migrate(db);
   // Exactly the shipped shape of the account that hit this: a склад primary
@@ -30,13 +31,10 @@ function startServer() {
   // The control: the same primary role with NO extras must stay denied.
   db.prepare('INSERT INTO users (username, password_hash, full_name, role, extra_roles) VALUES (?,?,?,?,?)')
     .run('sklad', hashPassword('password1'), 'Склад Без Ролей', 'inventory', '');
-  return new Promise((resolve) => {
-    // LICENCE_CORE_V1 — enrolled+active so the write gate (routes/db.js,
-    // routes/rpc.js) never fires; this file predates licensing.
-    const server = createApp(db, { dataDir: licensedDataDir() }).listen(0, '127.0.0.1', () => {
-      resolve({ db, server, base: `http://127.0.0.1:${server.address().port}` });
-    });
-  });
+  // LICENCE_CORE_V1 — enrolled+active so the write gate (routes/db.js,
+  // routes/rpc.js) never fires; this file predates licensing.
+  const server = await listen(createApp(db, { dataDir: licensedDataDir() }));
+  return { db, server, base: `http://127.0.0.1:${server.address().port}` };
 }
 
 async function login(base, who) {

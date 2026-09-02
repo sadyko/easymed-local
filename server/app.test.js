@@ -7,24 +7,19 @@ import { hashPassword } from './services/auth.js';
 import { createApp } from './app.js';
 import { licensedDataDir } from './services/control/licensed-fixture.js';   // LICENCE_CORE_V1
 import { RPC } from './services/rpc/index.js';   // OPS_EVENTS_V1 — used below to prove a real finding, see the test
+import { listen } from '../control-plane/server/test-helpers/listen.js';
 
-function startServer() {
+async function startServer() {
   const db = openDb(':memory:');
   migrate(db);
   db.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)')
     .run('boss', hashPassword('password1'), 'Boss', 'admin');
-  // Wait for the 'listening' callback rather than reading server.address()
-  // synchronously right after .listen(): on this Node/Windows combination
-  // the bind completes asynchronously, so address() is null until then.
-  return new Promise((resolve) => {
-    // LICENCE_CORE_V1 — this file predates licensing and isn't testing it;
-    // without an enrolled dataDir the write gate treats the real (unenrolled)
-    // ./data default as locked and every write here starts 402'ing.
-    const server = createApp(db, { dataDir: licensedDataDir() }).listen(0, '127.0.0.1', () => {
-      const base = `http://127.0.0.1:${server.address().port}`;
-      resolve({ db, server, base });
-    });
-  });
+  // LICENCE_CORE_V1 — this file predates licensing and isn't testing it;
+  // without an enrolled dataDir the write gate treats the real (unenrolled)
+  // ./data default as locked and every write here starts 402'ing.
+  const server = await listen(createApp(db, { dataDir: licensedDataDir() }));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  return { db, server, base };
 }
 
 async function post(base, path, body, cookie) {
@@ -413,8 +408,7 @@ test('EMPIRICAL: req.route.path IS populated inside error-handling middleware fo
     seen.push(req.route?.path ?? null);
     res.status(500).json({ error: { code: 'internal' } });
   });
-  const server = app.listen(0, '127.0.0.1');
-  await new Promise((r) => server.once('listening', r));
+  const server = await listen(app);
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
     await fetch(`${base}/patients/42`);

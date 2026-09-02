@@ -12,17 +12,15 @@ import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { hashPassword } from '../services/auth.js';
 import { createApp } from '../app.js';
+import { listen } from '../../control-plane/server/test-helpers/listen.js';
 
-function startServer() {
+async function startServer() {
   const db = openDb(':memory:');
   migrate(db);
   db.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)')
     .run('boss', hashPassword('password1'), 'Boss', 'admin');
-  return new Promise((resolve) => {
-    const server = createApp(db).listen(0, '127.0.0.1', () => {
-      resolve({ db, server, base: `http://127.0.0.1:${server.address().port}` });
-    });
-  });
+  const server = await listen(createApp(db));
+  return { db, server, base: `http://127.0.0.1:${server.address().port}` };
 }
 // fetch сам разжимает gzip, поэтому для проверки байтов ходим без него.
 const rawGet = (base, path, headers = {}) => fetch(base + path, { headers, redirect: 'manual' });

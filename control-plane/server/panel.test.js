@@ -11,6 +11,7 @@ import { hashPassword } from './services/vendor-auth.js';
 import { checkIn } from './services/checkin.js';
 import { expectedResponse } from '../../server/services/control/unlock.js';
 import { createApp } from './app.js';
+import { listen } from './test-helpers/listen.js';
 
 // CONTROL_PLANE_PANEL_V1 — the required "HTTP-level proof" from Task 6b: boot
 // the REAL app (not a mock), including the static file serving app.js now
@@ -48,12 +49,6 @@ function withVendorUser(db, username = 'vendor', password = 'secret123') {
   db.prepare('INSERT INTO vendor_users (username, password_hash, full_name) VALUES (?,?,?)')
     .run(username, hashPassword(password), 'Test Vendor');
   return db;
-}
-
-function listen(app) {
-  return new Promise((resolve) => {
-    const server = app.listen(0, '127.0.0.1', () => resolve(server));
-  });
 }
 
 function req(server, method, urlPath, { body, cookie, headers } = {}) {

@@ -21,6 +21,7 @@ import { readProgress, writeProgress } from './update-progress.js';
 import { runCheckin, readJsonFile } from './checkin.js';
 import { setAppVersion } from './config.js';
 import { updateApprove } from '../rpc/updates.js';
+import { listen } from '../../../control-plane/server/test-helpers/listen.js';
 
 // --- test harness -------------------------------------------------------------
 
@@ -61,16 +62,15 @@ function storeConsent(db, consent) { controlStatePut(db, 'update_consent', JSON.
 function storeScheduledAt(db, date) { controlStatePut(db, 'update_scheduled_at', date.toISOString()); }
 
 // A standalone HTTP server standing in for the release download host.
-function fakeServer(handler) {
+async function fakeServer(handler) {
   const state = { count: 0, requests: [] };
   const server = http.createServer((req, res) => {
     state.count += 1;
     state.requests.push(req.url);
     handler(req, res);
   });
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => resolve({ server, state, endpoint: `http://127.0.0.1:${server.address().port}` }));
-  });
+  await listen(server);
+  return { server, state, endpoint: `http://127.0.0.1:${server.address().port}` };
 }
 
 // Builds a real, signed bundle from a tiny synthetic source tree, using the
@@ -580,7 +580,7 @@ test('acceptance: offered, approved, installed, and reported — end to end', as
     }
     res.writeHead(404); res.end();
   });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await listen(server);
   const endpoint = `http://127.0.0.1:${server.address().port}`;
 
   try {

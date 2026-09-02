@@ -18,8 +18,9 @@ import { migrate } from '../db/migrate.js';
 import { hashPassword } from '../services/auth.js';
 import { createApp } from '../app.js';
 import { licensedDataDir } from '../services/control/licensed-fixture.js';   // LICENCE_CORE_V1
+import { listen } from '../../control-plane/server/test-helpers/listen.js';
 
-function startServer() {
+async function startServer() {
   const db = openDb(':memory:');
   migrate(db);
   // Two actors on purpose: the catalogue is admin-only to write, but every read
@@ -30,13 +31,10 @@ function startServer() {
     .run('boss', hashPassword('password1'), 'Admin', 'admin');
   db.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)')
     .run('reg', hashPassword('password1'), 'Registrar', 'registrar');
-  return new Promise((resolve) => {
-    // LICENCE_CORE_V1 — enrolled+active so the write gate (routes/db.js,
-    // routes/rpc.js) never fires; this file predates licensing.
-    const server = createApp(db, { dataDir: licensedDataDir() }).listen(0, '127.0.0.1', () => {
-      resolve({ db, server, base: `http://127.0.0.1:${server.address().port}` });
-    });
-  });
+  // LICENCE_CORE_V1 — enrolled+active so the write gate (routes/db.js,
+  // routes/rpc.js) never fires; this file predates licensing.
+  const server = await listen(createApp(db, { dataDir: licensedDataDir() }));
+  return { db, server, base: `http://127.0.0.1:${server.address().port}` };
 }
 
 async function login(base, who = 'reg') {

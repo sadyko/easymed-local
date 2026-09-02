@@ -6,22 +6,20 @@ import { hashPassword } from '../services/auth.js';
 import { createApp } from '../app.js';
 import { parseEmployeeFields } from './users.js';
 import { licensedDataDir } from '../services/control/licensed-fixture.js';   // LICENCE_CORE_V1
+import { listen } from '../../control-plane/server/test-helpers/listen.js';
 
 // Mirrors server/app.test.js's harness (startServer/post) since that file
 // does not export its helpers.
-function startServer() {
+async function startServer() {
   const db = openDb(':memory:');
   migrate(db);
   db.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)')
     .run('boss', hashPassword('password1'), 'Boss', 'admin');
-  return new Promise((resolve) => {
-    // LICENCE_CORE_V1 — enrolled+active so the write gate on POST/PATCH/DELETE
-    // /api/users (this file's whole subject) never fires; predates licensing.
-    const server = createApp(db, { dataDir: licensedDataDir() }).listen(0, '127.0.0.1', () => {
-      const base = `http://127.0.0.1:${server.address().port}`;
-      resolve({ db, server, base });
-    });
-  });
+  // LICENCE_CORE_V1 — enrolled+active so the write gate on POST/PATCH/DELETE
+  // /api/users (this file's whole subject) never fires; predates licensing.
+  const server = await listen(createApp(db, { dataDir: licensedDataDir() }));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  return { db, server, base };
 }
 
 async function post(base, path, body, cookie) {
