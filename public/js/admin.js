@@ -51,7 +51,7 @@ import { renderCashier, renderCashierHead } from './admin/views/cashier-desk.js?
 import { renderReport }       from './admin/views/report.js';
 import { renderLaboratory }   from './admin/views/laboratory.js?v=labstats4';   // LAB_STATS_V1 — third mode «Статистика» (usage counters, no money) on the shared LAB_HEAD_ONE_V1 head
 import { renderProcedures }   from './admin/views/procedures.js?v=unassigned1';
-import { renderQueue }       from './admin/views/queue.js?v=q6';   // QUEUE_BOARD_V1
+import { renderQueue }       from './admin/views/queue.js?v=q7';   // QUEUE_BOARD_V1
 import { renderCrm }          from './admin/views/crm.js?v=aug18d';   // CRM_V10 — поиск пациента: телефон (и короткая форма), дата рождения; CRM_SERVICE_FILTER_V1 — рейка категорий (тег поднят, иначе браузер оставит старую копию)
 import { renderDocsArchive }  from './admin/views/docs-archive.js?v=q3one';   // CLINICAL_DOCS_ARCHIVE_V1 — restored after concurrent clobber
 import { renderReports }      from './admin/views/reports.js?v=vatincl1';
@@ -67,7 +67,7 @@ import { renderApiSettings } from './admin/views/api-settings.js?v=api4';   // C
 import { renderDoctorPay } from './admin/views/doctor-pay.js?v=dp1';   // DOCTOR_PAY_BULK_V1
 import { renderReferralSettings } from './admin/views/referral-settings.js?v=rr1';   // REFERRAL_REWARDS_V1
 import { renderCashierSettings } from './admin/views/cashier-settings.js?v=shiftmode1';   // CASHIER_SHIFT_MODE_V1
-import { renderRoomsSetup } from './admin/views/rooms-setup.js?v=rooms1';   // ROOMS_SETUP_V1 — кабинеты и палаты одним разделом
+import { renderRoomsSetup } from './admin/views/rooms-setup.js?v=rooms2';   // ROOMS_SETUP_V1 — кабинеты и палаты одним разделом
 import { renderTelegramSettings } from './admin/views/telegram-settings.js?v=tg3';   // TELEGRAM_BOT_V1
 import { renderTelephonySettings } from './admin/views/telephony-settings.js?v=tel1';   // TELEPHONY_V1 — Binotel call-center integration
 import { renderCrmSettings } from './admin/views/crm-settings.js?v=crmcfg2';   // CRM_CONFIG_V1 — configurable kanban stages/sources/call routing

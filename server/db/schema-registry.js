@@ -285,12 +285,14 @@ export const REGISTRY = {
   floors: { read:{roles:ALL_STAFF,columns:['id','name','level','active','created_at']},
     write:{insert:{roles:['admin'],columns:['name','level','active']},update:{roles:['admin'],columns:['name','level','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
-  rooms: { read:{roles:ALL_STAFF,columns:['id','name','floor_id','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','floor_id','active']},update:{roles:['admin'],columns:['name','floor_id','active']},delete:{roles:[]}},
+  // ROOMS_SETUP_V1 — code/room_type/capacity/queue_mode добавлены миграцией 082;
+  // без них объединённый раздел «Помещения» мог создать строку, но не описать её.
+  rooms: { read:{roles:ALL_STAFF,columns:['id','name','code','room_type','capacity','queue_mode','floor_id','active','created_at']},
+    write:{insert:{roles:['admin'],columns:['name','code','room_type','capacity','queue_mode','floor_id','active']},update:{roles:['admin'],columns:['name','code','room_type','capacity','queue_mode','floor_id','active']},delete:{roles:[]}},
+    filters:['id','active','floor_id','room_type','queue_mode'], embed:{ floors:{table:'floors',fk:'floor_id',columns:['id','name']} } },
+  wards: { read:{roles:ALL_STAFF,columns:['id','name','code','floor_id','active','created_at','type','billing_mode','price_per_day','price_per_hour','color']},
+    write:{insert:{roles:['admin'],columns:['name','code','floor_id','active','type','billing_mode','price_per_day','price_per_hour','color']},update:{roles:['admin'],columns:['name','code','floor_id','active','type','billing_mode','price_per_day','price_per_hour','color']},delete:{roles:[]}},
     filters:['id','active','floor_id'], embed:{ floors:{table:'floors',fk:'floor_id',columns:['id','name']} } },
-  wards: { read:{roles:ALL_STAFF,columns:['id','name','active','created_at','type','billing_mode','price_per_day','price_per_hour','color']},
-    write:{insert:{roles:['admin'],columns:['name','active','type','billing_mode','price_per_day','price_per_hour','color']},update:{roles:['admin'],columns:['name','active','type','billing_mode','price_per_day','price_per_hour','color']},delete:{roles:[]}},
-    filters:['id','active'], embed:{} },
   // `status` is intentionally NOT writable via /api/db — bed occupancy/housekeeping
   // is changed only by the inpatient RPCs (admit → occupied, discharge → cleaning,
   // set_bed_status → free/cleaning/maintenance), so a config edit can never desync a

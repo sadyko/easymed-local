@@ -40,6 +40,7 @@ function todayLocal() {
 
 const KIND_TITLE = {
     doctor:    'Врачи',
+    room:      'Кабинеты',   // ROOMS_QUEUE_V1 — очередь к двери, а не к врачу
     procedure: 'Процедуры',
     lab:       'Лаборатория',
     imaging:   'Диагностика',

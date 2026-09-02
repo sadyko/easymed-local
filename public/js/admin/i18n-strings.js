@@ -5770,4 +5770,25 @@ export const STRINGS = {
   // LAB_STATS_XLSX_V1 (2026-08-31) — выгрузка статистики лаборатории в Excel.
   "Выгрузить статистику за выбранный период в Excel": {"en":"Download the statistics for the selected period as Excel","ru":"Выгрузить статистику за выбранный период в Excel","uz":"Tanlangan davr statistikasini Excel'ga yuklash"},
   "Нечего выгружать: за выбранный период данных нет.": {"en":"Nothing to export: there is no data for the selected period.","ru":"Нечего выгружать: за выбранный период данных нет.","uz":"Yuklash uchun ma'lumot yo'q: tanlangan davrda ma'lumot yo'q."},
+
+  // ROOMS_SETUP_V1 — этажи, редактирование помещений, очередь кабинета, врачи.
+  "Новый этаж": {"en":"New floor","ru":"Новый этаж","uz":"Yangi qavat"},
+  "2-й этаж": {"en":"2nd floor","ru":"2-й этаж","uz":"2-qavat"},
+  "Уровень (для порядка)": {"en":"Level (for ordering)","ru":"Уровень (для порядка)","uz":"Daraja (tartib uchun)"},
+  "Чем меньше число, тем выше этаж в списке.": {"en":"The lower the number, the higher the floor sits in the list.","ru":"Чем меньше число, тем выше этаж в списке.","uz":"Raqam qanchalik kichik bo'lsa, qavat ro'yxatda shunchalik yuqori turadi."},
+  "Этажей пока нет — добавьте первый, чтобы раскладывать по ним кабинеты и палаты.": {"en":"No floors yet — add the first one so rooms and wards can be placed on it.","ru":"Этажей пока нет — добавьте первый, чтобы раскладывать по ним кабинеты и палаты.","uz":"Hozircha qavat yo'q — xona va palatalarni joylashtirish uchun birinchisini qo'shing."},
+  "уровень {n}": {"en":"level {n}","ru":"уровень {n}","uz":"daraja {n}"},
+  "Активно": {"en":"Active","ru":"Активно","uz":"Faol"},
+  "Помещение": {"en":"Room","ru":"Помещение","uz":"Xona"},
+  "Врачи / койки": {"en":"Doctors / beds","ru":"Врачи / койки","uz":"Shifokorlar / koykalar"},
+  "Без очереди": {"en":"No queue","ru":"Без очереди","uz":"Navbatsiz"},
+  "Очередь к кабинету": {"en":"Queue to the room","ru":"Очередь к кабинету","uz":"Xonaga navbat"},
+  "Очередь к врачу": {"en":"Queue to the doctor","ru":"Очередь к врачу","uz":"Shifokorga navbat"},
+  "«К кабинету» — один номер на дверь (УЗИ, рентген, забор). «К врачу» — номер идёт в линию врача, который здесь принимает.": {"en":"'To the room' — one number per door (ultrasound, X-ray, sample collection). 'To the doctor' — the number joins the line of the doctor working here.","ru":"«К кабинету» — один номер на дверь (УЗИ, рентген, забор). «К врачу» — номер идёт в линию врача, который здесь принимает.","uz":"'Xonaga' — har eshikka bitta raqam (UTT, rentgen, namuna olish). 'Shifokorga' — raqam shu yerda qabul qiladigan shifokor navbatiga tushadi."},
+  "Врачи в этом кабинете": {"en":"Doctors in this room","ru":"Врачи в этом кабинете","uz":"Bu xonadagi shifokorlar"},
+  "Врач может сидеть только в одном кабинете — отметка здесь переносит его сюда.": {"en":"A doctor can sit in only one room — ticking here moves them here.","ru":"Врач может сидеть только в одном кабинете — отметка здесь переносит его сюда.","uz":"Shifokor faqat bitta xonada o'tira oladi — bu yerda belgilash uni shu yerga ko'chiradi."},
+  "Врачей в справочнике нет.": {"en":"There are no doctors in the directory.","ru":"Врачей в справочнике нет.","uz":"Ma'lumotnomada shifokor yo'q."},
+  "сейчас: {room}": {"en":"now: {room}","ru":"сейчас: {room}","uz":"hozir: {room}"},
+  "Помещение сохранено, но врачи не привязались: {msg}": {"en":"The room was saved but the doctors were not linked: {msg}","ru":"Помещение сохранено, но врачи не привязались: {msg}","uz":"Xona saqlandi, lekin shifokorlar bog'lanmadi: {msg}"},
+  "Этажи, кабинеты и палаты в одном разделе. Здесь же — очередь кабинета и врачи, которые в нём принимают.": {"en":"Floors, rooms and wards in one section — along with the room's queue and the doctors who work in it.","ru":"Этажи, кабинеты и палаты в одном разделе. Здесь же — очередь кабинета и врачи, которые в нём принимают.","uz":"Qavatlar, xonalar va palatalar bitta bo'limda — xona navbati va unda qabul qiladigan shifokorlar bilan birga."},
 };

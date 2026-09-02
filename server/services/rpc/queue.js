@@ -64,11 +64,13 @@ export function issueQueueNumbers(db, args, user) {
                v.patient_id, v.visit_date,
                ${localDate('COALESCE(vs.scheduled_at, v.visit_date)')} AS day_local,
                s.type AS svc_type, s.is_lab AS svc_is_lab, s.name AS svc_name, s.requires_doctor,
-               st.name AS svc_type_name
+               st.name AS svc_type_name,
+               s.room_id AS svc_room_id, r.queue_mode AS room_queue_mode   -- ROOMS_QUEUE_V1
           FROM visit_services vs
           JOIN visits v ON v.id = vs.visit_id
           LEFT JOIN services s ON s.id = vs.service_id
           LEFT JOIN service_types st ON st.id = s.type_id
+          LEFT JOIN rooms r ON r.id = s.room_id
          WHERE vs.id = ?
       `).get(id);
       if (!row) throw new RpcError('visit_service ' + id + ' not found.', 400);
@@ -136,7 +138,21 @@ export function issueQueueNumbers(db, args, user) {
       //
       // Лаборатория проверяется ПЕРВОЙ и остаётся сама собой: это место (одно
       // окно забора), а не врач, даже если в строке проставлен назначивший.
-      if (isLab)                             key = `lab:${day}`;
+      // ROOMS_QUEUE_V1 — у кабинета есть собственный режим очереди, и он
+      // сильнее общих правил по типу услуги. services.room_id существовал и был
+      // подписан «Кабинет (очередь диагностики)», но маршрутизатор не читал его
+      // НИ РАЗУ: процедуры сваливались в одну линию 'proc:room' на все
+      // процедурные сразу, а диагностика без врача считалась по услуге, а не по
+      // двери. Теперь администратор в разделе «Помещения» говорит явно:
+      //   'room'   — очередь к КАБИНЕТУ: один номер на дверь, кто бы ни принимал;
+      //   'doctor' — очередь к ВРАЧУ этого кабинета (ниже, обычная линия врача);
+      //   'none'   — режим не задан, работают прежние правила.
+      // Лаборатория проверяется РАНЬШЕ и остаётся собой: это одно окно забора.
+      const roomMode = String(row.room_queue_mode || 'none');
+      if (!isLab && roomMode === 'room' && row.svc_room_id) {
+        key = `room:${row.svc_room_id}:${day}`;
+      }
+      else if (isLab)                        key = `lab:${day}`;
       else if (row.doctor_id)                key = `doc:${row.doctor_id}:${day}`;
       else if (type === 'consultation')      key = `doc:0:${day}`;
       else if (type === 'procedure')         key = `proc:room:${day}`;
@@ -172,6 +188,15 @@ export function issueQueueNumbers(db, args, user) {
 
 // Human label for the destination — printed above the number on the slip.
 export function labelFor(db, row, key) {
+  // ROOMS_QUEUE_V1 — очередь к кабинету подписывается ДВЕРЬЮ: пациента зовут
+  // в кабинет, а не к услуге, и на талоне должно стоять то, что написано на
+  // двери. Номер кабинета (code) добавляется, когда он задан.
+  if (key.startsWith('room:')) {
+    const id = Number(key.split(':')[1]);
+    const r = id ? db.prepare('SELECT name, code FROM rooms WHERE id = ?').get(id) : null;
+    if (!r) return row.svc_name || 'Кабинет';
+    return r.code ? r.name + ' · ' + r.code : r.name;
+  }
   if (key.startsWith('lab:')) return 'Лаборатория';
   if (key.startsWith('doc:') || key.startsWith('proc:doc:')) {
     const doc = row.doctor_id ? db.prepare('SELECT full_name FROM users WHERE id = ?').get(row.doctor_id) : null;
@@ -209,6 +234,7 @@ const BOARD_KEY = 'queue';
 const KIND_ORDER = { doctor: 0, procedure: 1, lab: 2, imaging: 3, other: 4 };
 
 function kindOf(key) {
+  if (key.startsWith('room:')) return 'room';   // ROOMS_QUEUE_V1
   if (key.startsWith('lab:')) return 'lab';
   if (key.startsWith('proc:')) return 'procedure';   // раньше doc: — 'proc:doc:' тоже процедура
   if (key.startsWith('img:')) return 'imaging';
