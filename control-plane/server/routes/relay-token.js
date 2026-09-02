@@ -102,7 +102,12 @@ const MAX_LIVE_TOKENS_PER_CLINIC = 64;
 // was revoked" for half the network — a fault nobody could diagnose from the
 // outside. A 400 says exactly what happened, and the clinic app trims its own
 // list before it ever asks (services/branch-sync/relay.js).
-const MAX_SCOPE = 64;
+// Exported for the drift test in services/branch-sync/relay-e2e.test.js — the one
+// file that imports both halves. The clinic app trims its list by ITS copy of
+// this number and this route refuses by this one: were the client's larger, a
+// whole network would get a 400 and no token at all; were it smaller, the client
+// would silently drop peers this route would have accepted.
+export const MAX_SCOPE = 64;
 
 // How long an unused token survives. Deliberately the same 30 days
 // routes/relay.js gives a blob, and for the same reason: a branch polls the
@@ -140,9 +145,9 @@ function bearerToken(header) {
  * scope is the worst outcome on offer.
  *
  * Duplicates are folded, not refused. The clinic app derives the scope from the
- * group key — the catalogue address, its own node address, one per peer — and a
- * clinic whose own letter also appears in its branch list sends the same id
- * twice. That is an ordinary request, and answering it with an owner-visible
+ * group key — the catalogue address plus one node address per branch letter —
+ * and sends the same id twice whenever a letter it was handed is also one the
+ * alphabet already covers. That is an ordinary request, and answering it with an owner-visible
  * refusal would be a bug report about nothing. The cap is applied to what was
  * ASKED FOR, before folding: 65 addresses is over the line whether or not some
  * of them repeat.

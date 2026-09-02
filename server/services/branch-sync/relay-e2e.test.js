@@ -31,7 +31,7 @@ import { hashPassword } from '../auth.js';
 import { licensedDataDir } from '../control/licensed-fixture.js';
 import { readPairing, writePairing, makeMainKey, encodeKey, b64url, GROUP_KEY_BYTES } from './pairing.js';
 import { relayIdFor } from './relay-crypto.js';
-import { publishCatalogue, mintRelayToken } from './relay.js';
+import { publishCatalogue, mintRelayToken, MAX_SCOPE } from './relay.js';
 import { readSyncGroup, regenerateSyncGroup } from './sync-group.js';
 
 import { openDb as openCpDb } from '../../../control-plane/server/db/connection.js';
@@ -39,7 +39,7 @@ import { migrate as migrateCp } from '../../../control-plane/server/db/migrate.j
 import { createApp as createCpApp } from '../../../control-plane/server/app.js';
 import { createEnrollmentCode, redeemEnrollmentCode } from '../../../control-plane/server/services/enrollment.js';
 import { relayPathFor } from '../../../control-plane/server/routes/relay.js';
-import { RELAY_TOKEN_MOUNT } from '../../../control-plane/server/routes/relay-token.js';   // BRANCH_IDENTITY_V1
+import { RELAY_TOKEN_MOUNT, MAX_SCOPE as MAX_SCOPE_CP } from '../../../control-plane/server/routes/relay-token.js';   // BRANCH_IDENTITY_V1
 
 const MARKER = 'ZZPATIENTMARKER';
 
@@ -619,7 +619,8 @@ test('Задача 7a: вторичный филиал пишет по СВОЕ�
   // зданий упирается в потолок клиники (MAX_LIVE_TOKENS_PER_CLINIC = 64) на
   // ровном месте.
   assert.equal(cpDb.prepare('SELECT COUNT(*) n FROM relay_tokens').get().n, 2);
-  assert.equal(cpDb.prepare('SELECT COUNT(*) n FROM relay_token_scopes').get().n, 8, '4 адреса × 2 филиала');
+  assert.equal(cpDb.prepare('SELECT COUNT(*) n FROM relay_token_scopes').get().n, 54,
+    'справочник и 26 узлов алфавита × 2 филиала');
 
   const addr = (letter) => cp.base + relayPathFor(relayIdFor(groupKey, letter));
   const blob = Buffer.from('журнал филиала B, зашифрованный');
@@ -649,9 +650,18 @@ test('Задача 7a: вторичный филиал пишет по СВОЕ�
     assert.equal(res.status, 200, 'филиал ' + name + ' обязан видеть справочник');
   }
 
-  // Область осталась ОБЛАСТЬЮ: адрес узла, которого в группе нет, закрыт.
-  const outside = await fetch(addr('Z'), { headers: { Authorization: `Bearer ${mintedB.token}` } });
-  assert.equal(outside.status, 401, 'шире выписанного токен не пускает никуда');
+  // Область осталась ОБЛАСТЬЮ. Алфавит A..Z выдаётся авансом (иначе филиал,
+  // заведённый позже, никто не прочтёт — см. тест ниже), но шире него токен не пускает:
+  // ни к многобуквенному узлу чужой большой сети, ни к адресу другой группы.
+  for (const [what, id] of [
+    ['многобуквенный узел', relayIdFor(groupKey, 'AA')],
+    ['чужая группа', relayIdFor(b64url(randomBytes(GROUP_KEY_BYTES)))],
+  ]) {
+    const outside = await fetch(cp.base + relayPathFor(id), {
+      headers: { Authorization: `Bearer ${mintedB.token}` },
+    });
+    assert.equal(outside.status, 401, 'шире выписанного токен не пускает: ' + what);
+  }
 
   // И отзыв по-прежнему выключает ИМЕННО этот филиал — сразу и на всех адресах.
   cpDb.prepare('UPDATE relay_tokens SET revoked_at = ? WHERE token = ?')
@@ -659,4 +669,79 @@ test('Задача 7a: вторичный филиал пишет по СВОЕ�
   assert.equal((await fetch(addr('B'), { headers: { Authorization: `Bearer ${mintedC.token}` } })).status, 401);
   assert.equal((await fetch(addr('B'), { headers: { Authorization: `Bearer ${mintedB.token}` } })).status, 200,
     'сосед филиала C ничего не потерял');
+});
+
+// Потолок области — ОДНО число на две стороны, и разъехаться им нельзя.
+//
+// Тот же приём, что держит вместе RELAY_ID_RE выписки и релея
+// (relay-token.route.test.js): клиника режет список по своему числу, сервер
+// отказывает по своему. Стань клиентское больше — сеть получала бы 400 и
+// оставалась БЕЗ ТОКЕНА; стань меньше — клиника молча роняла бы соседей,
+// которых сервер принял бы. Здесь оба значения сравниваются напрямую, потому
+// что этот файл — единственное место, которое видит обе половины сразу.
+test('потолок области у клиники и у поставщика — одно и то же число', () => {
+  assert.equal(MAX_SCOPE, MAX_SCOPE_CP);
+});
+
+// BRANCH_RECORDS_V1 (Задача 7a) — филиал, заведённый ПОСЛЕ выдачи ключа соседу.
+//
+// Настоящий порядок событий в клинике, а не крайний случай: филиалы заводят по
+// одному, месяцами. Область токена считается ОДИН РАЗ — ensureBranchToken
+// выписывает только если токена ещё нет, а ключ подключения потом собирается из
+// СОХРАНЁННОГО токена (branchKeyFor). Значит, у филиала B, получившего ключ,
+// когда в сети были только A и B, права на адрес филиала C не появятся никогда:
+// ни повторный показ ключа, ни новый ключ подключения не перевыписывают токен.
+// Чтение журнала C давало бы 401 → «доступ отозван» → «возьмите новый ключ»,
+// и новый ключ не чинил бы ничего.
+test('Задача 7a: токен, выписанный ДО появления филиала C, пускает его к адресу C', async (t) => {
+  const cpDb = openCpDb(':memory:');
+  migrateCp(cpDb);
+  const cp = await listen(createCpApp(cpDb));
+  const installToken = redeemEnrollmentCode(cpDb, {
+    code: createEnrollmentCode(cpDb, { clinicId: 'cp-later', name: 'Сеть' }),
+  }).install_token;
+
+  const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-relay-7a-later-'));
+  const groupKey = b64url(randomBytes(GROUP_KEY_BYTES));
+  fs.writeFileSync(path.join(mainDir, 'control.json'),
+    JSON.stringify({ clinic_id: 'cp-later', install_token: installToken }));
+  writePairing(mainDir, {
+    role: 'main', group_id: 'BR-7A0000000002', secret: 'sss',
+    main_url: 'http://10.0.0.5:8000', group_key: groupKey, relay: true,
+  });
+
+  t.after(async () => {
+    await shutdown(cp.server);
+    cpDb.close();
+    fs.rmSync(mainDir, { recursive: true, force: true });
+  });
+
+  const env = { EASYMED_CONTROL_URL: cp.base };
+  // МОМЕНТ t₁: в сети два здания. Филиал C ещё даже не задуман.
+  const mintedB = await mintRelayToken(mainDir, { env, letters: ['A', 'B'] });
+  assert.equal(mintedB.ok, true, JSON.stringify(mintedB));
+  assert.equal(cpDb.prepare('SELECT COUNT(*) n FROM relay_token_scopes WHERE token = ?')
+    .get(mintedB.token).n, 27, 'справочник и весь алфавит узлов');
+
+  // МОМЕНТ t₂, месяцем позже: заводят филиал C, он получает свой токен и
+  // выкладывает журнал по своему адресу.
+  const mintedC = await mintRelayToken(mainDir, { env, letters: ['A', 'B', 'C'] });
+  assert.equal(mintedC.ok, true, JSON.stringify(mintedC));
+  const addrC = cp.base + relayPathFor(relayIdFor(groupKey, 'C'));
+  assert.equal((await fetch(addrC, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${mintedC.token}`, 'Content-Type': 'application/octet-stream' },
+    body: Buffer.from('журнал филиала C'),
+  })).status, 200);
+
+  // И ВОТ ОНО: старый токен B читает нового соседа. Без предварительной выдачи
+  // алфавита здесь был бы 401, а на экране — «главный филиал отозвал доступ».
+  const read = await fetch(addrC, { headers: { Authorization: `Bearer ${mintedB.token}` } });
+  assert.equal(read.status, 200, 'токен, выписанный до появления C, обязан читать журнал C');
+  assert.equal(Buffer.from(await read.arrayBuffer()).toString(), 'журнал филиала C');
+
+  // Область осталась ОБЛАСТЬЮ: адрес вне алфавита закрыт обоим.
+  const outside = cp.base + relayPathFor(relayIdFor(groupKey, 'AA'));
+  assert.equal((await fetch(outside, { headers: { Authorization: `Bearer ${mintedB.token}` } })).status, 401,
+    'алфавит — это A..Z, а не «любой адрес группы»');
 });

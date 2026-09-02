@@ -8,7 +8,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { b64url, writePairing, readPairing, GROUP_KEY_BYTES } from './pairing.js';
 import { relayIdFor, openPayload } from './relay-crypto.js';
-import { publishCatalogue, fetchCatalogue, maybePublish, mintRelayToken, relayMintable, relayUrl, relayTokenUrl, readLastPublish, scheduleRelayPublish } from './relay.js';
+import { publishCatalogue, fetchCatalogue, maybePublish, mintRelayToken, relayMintable, relayUrl, relayTokenUrl, readLastPublish, scheduleRelayPublish, MAX_SCOPE } from './relay.js';
 
 // BRANCH_SYNC_RELAY_V1 — транспорт Маршрута Б на подставном fetch.
 //
@@ -400,19 +400,19 @@ test('пустая учётка в ответе — это не учётка', a
 // адрес, каждая такая попытка была 401 → «главный филиал отозвал доступ», то
 // есть неверный совет на ошибку кода.
 
-test('выписка просит адреса ВСЕХ узлов группы, а не только справочник', async () => {
+// Весь алфавит узлов, как его выписывает relayScope: справочник и A..Z.
+const ALPHABET = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
+const FULL_SCOPE = [relayIdFor(KEY), ...ALPHABET.map((L) => relayIdFor(KEY, L))];
+
+test('выписка просит адрес КАЖДОГО узла алфавита, а не только заведённых сегодня', async () => {
   const { dir } = clinic('mint-scope', { role: 'main' });
   const vendor = fakeMint();
   const r = await mintRelayToken(dir, { fetchImpl: vendor.fetchImpl, env: {}, letters: ['A', 'B', 'C'] });
   assert.equal(r.ok, true, JSON.stringify(r));
 
   const body = vendor.calls[0].body;
-  assert.deepEqual(body.relay_ids, [
-    relayIdFor(KEY),            // справочник — первым: это и есть «основной» адрес
-    relayIdFor(KEY, 'A'),
-    relayIdFor(KEY, 'B'),
-    relayIdFor(KEY, 'C'),
-  ], 'справочник, свой узел и узлы соседей — все выводятся из ключа группы');
+  assert.deepEqual(body.relay_ids, FULL_SCOPE, 'справочник первым, затем узлы A..Z');
+  assert.equal(body.relay_ids.length, 27);
   // Старое поле остаётся в запросе НАРОЧНО: панель поставщика обновляется
   // отдельно от клиник (по SSH), и клиника, обновившаяся первой, обязана
   // выписывать токены и против старого сервера — он прочитает relay_id и
@@ -421,46 +421,74 @@ test('выписка просит адреса ВСЕХ узлов группы,
   assert.deepEqual(r.relay_ids, body.relay_ids, 'что попросили, то и вернули вызывающему');
 });
 
-test('без букв выписка просит ровно то же, что просила раньше', async () => {
-  // Старая форма вызова обязана остаться рабочей: относительно неё написан
-  // весь путь ключа подключения, и менять её вместе со схемой значило бы
-  // менять две вещи сразу.
+test('филиал, заведённый ПОЗЖЕ, попадает в область токена, выписанного РАНЬШЕ', async () => {
+  // ЭТО И ЕСТЬ ПРИЧИНА ПРЕДВАРИТЕЛЬНОЙ ВЫДАЧИ АЛФАВИТА, и без неё всё остальное
+  // в этой задаче работает ровно до второго филиала. Область считается ОДИН РАЗ,
+  // в момент выписки (ensureBranchToken выписывает только если токена ещё нет), а
+  // ключ подключения потом собирается из СОХРАНЁННОГО токена (branchKeyFor) —
+  // перевыписки не происходит нигде, кроме перевыпуска ключа группы. Значит,
+  // филиал B, заведённый когда в сети были A и B, никогда не получил бы права на
+  // адрес филиала C: чтение журнала C давало бы 401 → «доступ отозван» → «возьмите
+  // новый ключ», а новый ключ несёт ТОТ ЖЕ токен и не чинит ничего.
+  //
+  // Адреса — HMAC от ключа группы; право на адрес, по которому никто ничего не
+  // выкладывал, не даёт ничего. Поэтому дешевле выдать весь алфавит сразу, чем
+  // заводить механизм дозаписи прав.
+  const { dir } = clinic('mint-scope-future', { role: 'main' });
+  const vendor = fakeMint();
+  await mintRelayToken(dir, { fetchImpl: vendor.fetchImpl, env: {}, letters: ['A', 'B'] });
+
+  const asked = vendor.calls[0].body.relay_ids;
+  for (const later of ['C', 'D', 'Z']) {
+    assert.ok(asked.includes(relayIdFor(KEY, later)),
+      'филиал ' + later + ' ещё не заведён, но его адрес обязан быть в области');
+  }
+});
+
+test('без букв выписка просит тот же полный алфавит', async () => {
+  // Старая форма вызова обязана остаться рабочей: относительно неё написан весь
+  // путь ключа подключения. Область у неё теперь та же, что у любой другой, —
+  // буквы больше не сужают её, а только дополняют.
   const { dir } = clinic('mint-scope-none', { role: 'main' });
   const vendor = fakeMint();
   await mintRelayToken(dir, { fetchImpl: vendor.fetchImpl, env: {} });
-  assert.deepEqual(vendor.calls[0].body.relay_ids, [relayIdFor(KEY)]);
+  assert.deepEqual(vendor.calls[0].body.relay_ids, FULL_SCOPE);
   assert.equal(vendor.calls[0].body.relay_id, relayIdFor(KEY));
 });
 
-test('мусорные и повторяющиеся буквы не портят запрос', async () => {
-  // Буквы приходят из таблицы branches, куда их пишет не только этот код:
-  // пустая строка, пробелы и NULL там встречаются, а собственная буква клиники
-  // приезжает дважды (своя строка и список соседей). Ни то ни другое не повод
-  // отказать владельцу в резервном канале, и повтор адреса на той стороне —
-  // нарушение первичного ключа, то есть 500 вместо выписки.
-  const { dir } = clinic('mint-scope-dirty', { role: 'main' });
+test('буквы только ДОПОЛНЯЮТ алфавит: многобуквенные узлы попадают, мусор — нет', async () => {
+  // Буквы длиннее одной существуют: letters.js раздаёт их по-табличному (A..Z,
+  // AA..AZ, BA..), и сеть больше 26 зданий получит 'AA'. Алфавит их не покрывает,
+  // поэтому переданные буквы добавляются сверх него.
+  //
+  // Мусор приходит оттуда же: в branches пишет не только этот код, NULL там
+  // обычен, а собственная буква клиники приезжает дважды. Повтор адреса на той
+  // стороне — нарушение первичного ключа, то есть 500 вместо выписки.
+  const { dir } = clinic('mint-scope-extra', { role: 'main' });
   const vendor = fakeMint();
   await mintRelayToken(dir, {
     fetchImpl: vendor.fetchImpl, env: {},
-    letters: ['B', 'B', '', '   ', null, undefined, 'не-буква', 'C'],
+    letters: ['B', 'B', '', '   ', null, undefined, 'не-буква', 'AA'],
   });
-  assert.deepEqual(vendor.calls[0].body.relay_ids,
-    [relayIdFor(KEY), relayIdFor(KEY, 'B'), relayIdFor(KEY, 'C')]);
+  assert.deepEqual(vendor.calls[0].body.relay_ids, [...FULL_SCOPE, relayIdFor(KEY, 'AA')]);
 });
 
 test('область обрезается по потолку сервера, а не отправляется заведомо на отказ', async () => {
   // MAX_SCOPE = 64 в control-plane/server/routes/relay-token.js: запрос шире
   // отвечает 400, и филиал остался бы БЕЗ ТОКЕНА ВООБЩЕ. Сеть такого размера
   // сегодня не существует (буквы считают единицами), но выбор между «токен без
-  // нескольких соседей» и «токена нет» очевиден.
+  // нескольких дальних соседей» и «токена нет» очевиден.
   const { dir } = clinic('mint-scope-cap', { role: 'main' });
   const vendor = fakeMint();
   const many = Array.from({ length: 100 }, (_, i) =>
     String.fromCharCode(65 + Math.floor(i / 26)) + String.fromCharCode(65 + (i % 26)));
   const r = await mintRelayToken(dir, { fetchImpl: vendor.fetchImpl, env: {}, letters: many });
   assert.equal(r.ok, true, JSON.stringify(r));
-  assert.equal(vendor.calls[0].body.relay_ids.length, 64);
+  assert.equal(vendor.calls[0].body.relay_ids.length, MAX_SCOPE);
   assert.equal(vendor.calls[0].body.relay_ids[0], relayIdFor(KEY), 'справочник не выпадает при обрезке');
+  // Алфавит обрезка не трогает: он идёт первым и целиком, а режется хвост из
+  // многобуквенных узлов.
+  assert.deepEqual(vendor.calls[0].body.relay_ids.slice(0, 27), FULL_SCOPE);
 });
 
 test('предсказание кнопки совпадает с тем, что делает выписка', async () => {

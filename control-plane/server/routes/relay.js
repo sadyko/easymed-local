@@ -38,7 +38,8 @@ import { clinicForRelayToken } from './relay-token.js';   // BRANCH_IDENTITY_V1
 //
 // BRANCH_IDENTITY_V1 — with ONE exception, added when real branch installs
 // arrived: a RELAY TOKEN (routes/relay-token.js) is also accepted, and only ever
-// for the single relay id it was minted against. It exists because a SECONDARY
+// for the relay ids in its scope — checked on every request, against the id in
+// this request's path (Задача 7a: db/migrations/008_relay_token_scopes.sql). It exists because a SECONDARY
 // branch never enrols — it joins a clinic, not the vendor — so it has no
 // install_token and could not use this route at all. It is NOT a second identity
 // with the vendor: it names no clinic to check-in, carries no entitlement, and is
