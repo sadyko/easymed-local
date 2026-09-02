@@ -274,8 +274,13 @@ test('failure sweep: endpoint down (connection refused)', async () => {
   const offer = makeOffer({ manifest });
   const { db, dataDir } = approvedWorkspace(offer);
 
-  // Nothing listening on this port.
-  await tickUpdater(db, dataDir, { endpoint: 'http://127.0.0.1:1', now: IN_WINDOW_NOW });
+  // Nothing listening on this port. NOT port 1: it's on fetch()'s WHATWG
+  // "bad ports" blocklist, so fetch() refuses it before attempting a
+  // connection at all — the client sees "bad port", not ECONNREFUSED, which
+  // is a different failure than this test's name claims to cover. 65535 is
+  // off that list and outside this machine's dynamic port range
+  // (1024-14999), so it's free and genuinely unreachable.
+  await tickUpdater(db, dataDir, { endpoint: 'http://127.0.0.1:65535', now: IN_WINDOW_NOW });
 
   assert.equal(controlStateGet(db, 'update_offer'), JSON.stringify(offer), 'offer stays exactly as it was');
   assert.equal(fs.existsSync(path.join(dataDir, 'update-download.tmp')), false, 'no leftover temp file');

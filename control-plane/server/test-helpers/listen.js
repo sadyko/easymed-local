@@ -4,7 +4,7 @@
 // blocklist (https://fetch.spec.whatwg.org/#port-blocking), throwing
 // `TypeError: fetch failed` / `cause: Error: bad port` before a socket is
 // even attempted. This machine's TCP dynamic port range (1024-14999)
-// contains 14 of those blocked ports, so roughly 1 in 800 ephemeral-port
+// contains 19 of those blocked ports, so roughly 1 in 735 ephemeral-port
 // draws is unusable — an intermittent flake, not a real bug in the route
 // under test. `listen()` below is the one place that knows about the list:
 // it redraws a fresh ephemeral port whenever the OS hands back a blocked
@@ -12,14 +12,21 @@
 //
 // Not Node-version- or platform-specific: this is the same fixed list on
 // every OS and every fetch()-capable runtime (undici ships it verbatim), so
-// there is nothing to detect at runtime — it's just data.
+// there is nothing to detect at runtime — it's just data. It DOES need to
+// stay a verbatim copy, though: 4190 and 6679 were missing from an earlier
+// transcription of this list, so `isBadPort()` said a real bad port was
+// fine, `listen()` never redrew it, and a much later `fetch()` against it —
+// in a completely different test, sometimes many tests later — died with
+// exactly the "bad port" error this file exists to prevent. Confirmed
+// against the real undici blocklist by probing every port 1-15000 with a
+// live fetch() and diffing the two lists, not by re-reading the spec page.
 export const FETCH_BAD_PORTS = new Set([
   1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79,
   87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135,
   137, 139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531,
   532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719,
-  1720, 1723, 2049, 3659, 4045, 5060, 5061, 6000, 6566, 6665, 6666, 6667,
-  6668, 6669, 6697, 10080,
+  1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666,
+  6667, 6668, 6669, 6679, 6697, 10080,
 ]);
 
 export function isBadPort(port) {

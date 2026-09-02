@@ -7,6 +7,17 @@ test('isBadPort: matches the WHATWG bad-port list fetch() enforces', () => {
   assert.equal(isBadPort(59999), false); // ordinary ephemeral port — not on the list
 });
 
+// Regression guard: 4190 and 6679 are real entries in undici's own blocklist
+// (confirmed by probing live fetch() against every port 1-15000) but were
+// missing from FETCH_BAD_PORTS here — isBadPort() said they were fine, so
+// listen() never redrew one, and whichever test's fetch() next happened to
+// hit that port died with "bad port", often nowhere near the test whose
+// listen() actually drew it. Both are inside this machine's dynamic range.
+test('isBadPort: 4190 and 6679 are on the real blocklist too — a past gap in this hand-kept copy', () => {
+  assert.equal(isBadPort(4190), true);
+  assert.equal(isBadPort(6679), true);
+});
+
 test('FETCH_BAD_PORTS: exported set backs isBadPort, not a separate copy', () => {
   assert.equal(FETCH_BAD_PORTS.has(6000), true);
   assert.equal(FETCH_BAD_PORTS.has(59999), false);
