@@ -126,6 +126,26 @@ test('без узла адрес прежний — справочник леж�
   assert.notEqual(relayIdFor(key), relayIdFor(key, 'B'));
 });
 
+test('адреса заморожены: справочник и узел B — байт в байт', () => {
+  // Значения зафиксированы, а не выведены заново расчётом внутри теста: цель —
+  // поймать будущий рефакторинг (смена HMAC-конструкции, замена разделителя,
+  // перестановка аргументов внутри update), который тихо переселил бы блоб уже
+  // работающей группы на новый адрес. Такой блоб на сервере поставщика никто
+  // не переносит — установки просто перестали бы находить свою же копию.
+  const key = 'k'.repeat(43);
+  assert.equal(relayIdFor(key), '335a62fe023b253286a0efdde7f1c316');
+  assert.equal(relayIdFor(key, 'B'), 'a3e146e85247f72beb44254d542f3c00');
+});
+
+test('буква узла проверяется по форме: не буква — не адрес', () => {
+  const key = 'k'.repeat(43);
+  assert.match(relayIdFor(key, 'b'), /^[0-9a-f]{32}$/, 'строчная буква — нормальный узел');
+  assert.equal(relayIdFor(key, 'ß'), null, 'после верхнего регистра ß даёт SS — это не A-Z, это подделка формы');
+  assert.equal(relayIdFor(key, 'B1'), null, 'цифра в узле — не буква филиала');
+  assert.equal(relayIdFor(key, ''), relayIdFor(key), 'пустая строка — то же самое, что узла нет: адрес справочника');
+  assert.equal(relayIdFor(key, undefined), relayIdFor(key));
+});
+
 test('перевыпуск ключа уводит группу на другой адрес — старый блоб становится сиротой', () => {
   const before = relayIdFor(newKey());
   const after = relayIdFor(newKey());
