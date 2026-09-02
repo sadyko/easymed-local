@@ -5791,4 +5791,8 @@ export const STRINGS = {
   "сейчас: {room}": {"en":"now: {room}","ru":"сейчас: {room}","uz":"hozir: {room}"},
   "Помещение сохранено, но врачи не привязались: {msg}": {"en":"The room was saved but the doctors were not linked: {msg}","ru":"Помещение сохранено, но врачи не привязались: {msg}","uz":"Xona saqlandi, lekin shifokorlar bog'lanmadi: {msg}"},
   "Этажи, кабинеты и палаты в одном разделе. Здесь же — очередь кабинета и врачи, которые в нём принимают.": {"en":"Floors, rooms and wards in one section — along with the room's queue and the doctors who work in it.","ru":"Этажи, кабинеты и палаты в одном разделе. Здесь же — очередь кабинета и врачи, которые в нём принимают.","uz":"Qavatlar, xonalar va palatalar bitta bo'limda — xona navbati va unda qabul qiladigan shifokorlar bilan birga."},
+
+  // ROOMS_SETUP_V1 — карточки объединённого раздела в хабе настроек.
+  "Этажи, кабинеты и палаты в одном экране · койки, цена, очередь, врачи": {"en":"Floors, rooms and wards on one screen - beds, price, queue, doctors","ru":"Этажи, кабинеты и палаты в одном экране · койки, цена, очередь, врачи","uz":"Qavatlar, xonalar va palatalar bitta ekranda - koyka, narx, navbat, shifokorlar"},
+  "Завести палату сразу с койками и ценой": {"en":"Create a ward together with its beds and price","ru":"Завести палату сразу с койками и ценой","uz":"Palatani koykalari va narxi bilan birga yaratish"},
 };

@@ -253,6 +253,11 @@ const GROUPS = [
     {
         title: 'Кабинеты и этажи', icon: 'Grid', color: { bg: '#e8f6ed', fg: '#2e8b52' },
         items: [
+            // ROOMS_SETUP_V1 — объединённый экран стоит ПЕРВЫМ: он делает всё, что
+            // делают четыре таблицы ниже, и добавляет то, чего в них нет — очередь
+            // кабинета и врачей в нём. Старые построчные редакторы оставлены: они
+            // дают доступ к полям, которых нет в мастере, и к массовому импорту.
+            { label: 'Помещения', desc: 'Этажи, кабинеты и палаты в одном экране · койки, цена, очередь, врачи', icon: 'Building', live: true, action: nav('rooms-setup') },
             { label: 'Этажи',    desc: 'Этажи и уровни здания',              icon: 'Layers', live: true, action: () => openSection('floors') },
             { label: 'Кабинеты', desc: 'Кабинеты приёма и процедурные по этажам', icon: 'Grid', live: true, action: () => openSection('rooms') },
         ],
@@ -260,6 +265,8 @@ const GROUPS = [
     {
         title: 'Стационар', icon: 'Bed', color: { bg: '#fbe8f0', fg: '#b0417a' },
         items: [
+            // ROOMS_SETUP_V1 — палата вместе с койками и ценой заводится там же.
+            { label: 'Помещения', desc: 'Завести палату сразу с койками и ценой', icon: 'Building', live: true, action: nav('rooms-setup') },
             { label: 'Палаты',  desc: 'Палаты стационара',   icon: 'Bed', live: true, action: () => openSection('wards') },
             { label: 'Кровати', desc: 'Койки по палатам',    icon: 'Bed', live: true, action: () => openSection('beds') },
         ],

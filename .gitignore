@@ -38,3 +38,7 @@ control-plane/releases/
 vendor-private.pem
 control-*.json
 licence-*.dat
+
+# ROOMS_SETUP_V1 — local run logs from a manual start, never committed
+server-out.log
+server-err.log
