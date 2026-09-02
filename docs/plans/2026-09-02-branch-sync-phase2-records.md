@@ -663,6 +663,20 @@ test('отданный всем хвост журнала вычищается; 
   db.close();
 });
 
+test('заброшенный сосед по возвращении получает холодный засев, а не дыру', () => {
+  const db = fresh(); warm(db);
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  const b1 = buildBatch(db, { self: 'B', peer: 'C' }); markSent(db, 'C', b1.upto, b1.clock);
+  db.prepare("INSERT INTO sync_peers (node, sent_seq, last_ok) VALUES ('D', 0, ?)")
+    .run(new Date(Date.now() - 40 * 86400000).toISOString());
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Петров')").run();
+  const b2 = buildBatch(db, { self: 'B', peer: 'C' }); markSent(db, 'C', b2.upto, b2.clock);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM sync_peers WHERE node = 'D'").get().n, 0, 'молчун забыт');
+  const names = buildBatch(db, { self: 'B', peer: 'D' }).records.filter(r => r.tbl === 'patients').map(r => r.data.full_name).sort();
+  assert.deepEqual(names, ['Иванов', 'Петров'], 'вернувшийся получает ВСЁ, а не только то, что после его ухода');
+  db.close();
+});
+
 test('деньги из visit_services не уезжают', () => {
   const db = fresh();
   const pid = db.prepare("INSERT INTO patients (full_name) VALUES ('И')").run().lastInsertRowid;
@@ -830,10 +844,15 @@ function seedHeads(db, limit) {
 // ещё не подключённый филиал иначе замораживал бы её навсегда — он всё равно
 // получит холодный засев из таблиц. Защита местных правок (hasLocalUnshipped)
 // от чистки не страдает: вычищенное отдано всем, и «false» — верный ответ.
+// Сосед, молчавший дольше STALE_DAYS, ЗАБЫВАЕТСЯ: его строка удаляется, и по
+// возвращении он получает холодный засев из таблиц. Просто исключить его из
+// MIN было бы дырой навсегда: строка осталась бы, засев не сработал бы, а
+// журнал ниже его sent_seq уже вычищен (повторное ревью Задачи 3).
 const STALE_DAYS = 30;
 export function pruneJournal(db, { now = () => new Date() } = {}) {
   const cutoff = new Date(now().getTime() - STALE_DAYS * 86400000).toISOString();
-  const floor = db.prepare('SELECT MIN(sent_seq) AS m FROM sync_peers WHERE last_ok IS NOT NULL AND last_ok >= ?').get(cutoff);
+  db.prepare('DELETE FROM sync_peers WHERE last_ok IS NULL OR last_ok < ?').run(cutoff);
+  const floor = db.prepare('SELECT MIN(sent_seq) AS m FROM sync_peers').get();
   if (!floor || floor.m == null || floor.m <= 0) return 0;
   return db.prepare('DELETE FROM sync_journal WHERE seq <= ?').run(floor.m).changes;
 }
@@ -1120,6 +1139,12 @@ const SEEN = 'sync_seen';
 // предел релея (12 МБ сжатых) ничего не говорит о размере ОДНОЙ строки.
 const MAX_PENDING_BYTES = 256 * 1024;
 const PENDING_MAX_DAYS = 30;
+// sync_seen растёт быстрее журнала: ~190 строк на принятый визит с панелью
+// (повторное ревью Задачи 3: ~17 млн строк, 1.4 ГБ в год у принимающего
+// филиала). Метка старше SEEN_DAYS не нужна: порции — минутной давности, а
+// холодный засев несёт СВЕЖИЕ метки (пол HLC), не created_at. Надгробия '*'
+// живут столько же: запоздавший put старше 90 дней — не сценарий.
+const SEEN_DAYS = 90;
 
 
 function localId(db, tbl, uid) {
@@ -1230,6 +1255,11 @@ export function applyBatch(db, records, { self } = {}) {
     // Ребёнок, чей родитель удалён у источника, ждал бы вечно.
     db.prepare(`DELETE FROM sync_pending WHERE received_at < ?`)
       .run(new Date(Date.now() - PENDING_MAX_DAYS * 86400000).toISOString());
+    // Метки, старше которых ничего не приедет. Сравнение строковое: метка —
+    // hex миллисекунд фиксированной ширины (hlc.js), и «старше даты» — это
+    // «меньше метки этой даты».
+    const seenCutoff = (Date.now() - SEEN_DAYS * 86400000).toString(16).padStart(12, '0');
+    db.prepare(`DELETE FROM ${SEEN} WHERE stamp < ?`).run(seenCutoff);
 
     // Приём не порождает исходящих изменений — см. заголовок.
     db.prepare('DELETE FROM sync_journal WHERE seq > ?').run(journalFrom);
