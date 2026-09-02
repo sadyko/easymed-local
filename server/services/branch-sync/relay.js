@@ -2,7 +2,9 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readJsonFile } from '../control/checkin.js';
 import { exportCatalogue } from './catalogue.js';
-import { readPairing, relayEnabled } from './pairing.js';
+import { readPairing, writePairing, relayEnabled } from './pairing.js';
+import { ensureSyncGroup } from './sync-group.js';
+import { readIdentity } from './identity.js';
 import { relayIdFor, sealPayload, openPayload } from './relay-crypto.js';
 
 // BRANCH_SYNC_RELAY_V1 — МАРШРУТ Б: справочник едет через сервер поставщика,
@@ -553,9 +555,45 @@ export async function mintRelayToken(dataDir, {
  * Установка, не назначенная главным филиалом или не давшая согласия, здесь
  * ничего не делает: maybePublish() отвечает relay_disabled и выходит.
  */
+// BRANCH_RELAY_ON_BY_DEFAULT_V1 — у сети, где филиалы УЖЕ заведены, канал тоже
+// включается сам.
+//
+// Заведение филиала включает канал при создании — но это не помогает тем, кто
+// связал филиалы раньше. Ровно в это упёрся владелец 2026-09-02: главная
+// клиника обновилась до версии с автовключением, а канал остался выключенным,
+// потому что филиал заведён ДО неё, и relay_blobs на сервере так и остался
+// нулём — при живом филиале, который весь день просил копию.
+//
+// Различаем ТРИ состояния, а не два. undefined — человек никогда не выбирал, и
+// за него решаем мы: есть филиалы с ключами — значит канал нужен. false —
+// человек выключил ОСОЗНАННО, и включать обратно за его спиной нельзя: это его
+// данные и его решение, отправлять ли копию на чужой сервер.
+function adoptRelayForExistingBranches(db, dataDir) {
+  try {
+    const pairing = readPairing(dataDir);
+    if (!pairing || pairing.role !== 'main') return;
+    if (pairing.relay !== undefined && pairing.relay !== null) return;   // выбор уже сделан
+    // ЧУЖИЕ филиалы, а не любые строки с буквой. Собственная строка клиники
+    // тоже имеет букву (A) — считать её значило бы включать канал одиночной
+    // клинике, которой не с кем синхронизироваться.
+    let selfBranchId = null;
+    try { selfBranchId = readIdentity(db).branch_id; } catch (e) { selfBranchId = null; }
+    const row = db.prepare(
+      "SELECT COUNT(*) n FROM branches WHERE letter IS NOT NULL AND letter <> '' AND id IS NOT ?"
+    ).get(selfBranchId);
+    if (!row || row.n < 1) return;   // филиалов нет — включать нечего и незачем
+    ensureSyncGroup(dataDir);
+    writePairing(dataDir, { ...readPairing(dataDir), relay: true });
+    console.log('[branch-sync] relay switched on: this clinic has branches and nobody had chosen');
+  } catch (e) {
+    console.warn('[branch-sync] could not adopt the relay setting:', e && e.message);
+  }
+}
+
 export function scheduleRelayPublish(db, dataDir, opts = {}) {
   const { initialDelayMs = INITIAL_DELAY_MS, intervalMs = INTERVAL_MS, ...runOpts } = opts;
   const run = () => {
+    adoptRelayForExistingBranches(db, dataDir);
     maybePublish(db, dataDir, runOpts)
       .then((r) => {
         if (r && r.ok === false && r.reason !== 'relay_disabled' && r.reason !== 'relay_no_key') {

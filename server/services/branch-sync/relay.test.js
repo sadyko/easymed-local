@@ -6,9 +6,9 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { b64url, writePairing, GROUP_KEY_BYTES } from './pairing.js';
+import { b64url, writePairing, readPairing, GROUP_KEY_BYTES } from './pairing.js';
 import { relayIdFor, openPayload } from './relay-crypto.js';
-import { publishCatalogue, fetchCatalogue, maybePublish, mintRelayToken, relayMintable, relayUrl, relayTokenUrl, readLastPublish } from './relay.js';
+import { publishCatalogue, fetchCatalogue, maybePublish, mintRelayToken, relayMintable, relayUrl, relayTokenUrl, readLastPublish, scheduleRelayPublish } from './relay.js';
 
 // BRANCH_SYNC_RELAY_V1 — транспорт Маршрута Б на подставном fetch.
 //
@@ -415,4 +415,61 @@ test('предсказание кнопки совпадает с тем, что
     assert.equal(!PREFLIGHT.has(r.reason), expected, tag + ': выписка судит так же');
     if (!expected) assert.equal(vendor.calls.length, 0, tag + ': предполётный отказ до сети не доходит');
   }
+});
+
+// BRANCH_RELAY_ON_BY_DEFAULT_V1 — сеть, связанная ДО появления автовключения.
+//
+// Владелец 2026-09-02: главная клиника обновилась, филиал был заведён раньше,
+// и канал остался выключенным — relay_blobs на сервере ноль при живом филиале,
+// который весь день просил копию. Заведение филиала включает канал только у
+// тех, кого заводят ПОСЛЕ обновления; этим — вот это.
+// relay: undefined в clinic() не работает — это ЗНАЧЕНИЕ ПО УМОЛЧАНИЮ параметра,
+// и undefined включает default (true). Состояние «выбор не делали» надо
+// записать явно, убрав ключ из файла.
+function unchoose(dir) {
+  const p = readPairing(dir);
+  delete p.relay;
+  writePairing(dir, p);
+}
+
+const addBranchRow = (db, letter) => db.prepare(
+  "INSERT INTO branches (name, letter, active) VALUES (?, ?, 1)").run('Филиал ' + letter, letter);
+
+test('канал включается сам, если филиалы уже заведены, а выбор не делали', async () => {
+  const { dir, db } = clinic('adopt-undef');
+  unchoose(dir);
+  addBranchRow(db, 'B');
+  assert.equal(readPairing(dir).relay, undefined, 'выбор не сделан');
+
+  const vendor = fakeVendor();
+  const timers = scheduleRelayPublish(db, dir, { initialDelayMs: 1, intervalMs: 10_000, fetchImpl: vendor.fetch });
+  await new Promise((r) => setTimeout(r, 60));
+  clearTimeout(timers.initial); clearInterval(timers.interval);
+
+  assert.equal(readPairing(dir).relay, true, 'канал включён, и это записано на диск');
+});
+
+test('осознанно выключенный канал не включают обратно за спиной', async () => {
+  const { dir, db } = clinic('adopt-false', { relay: false });
+  addBranchRow(db, 'B');
+
+  const vendor = fakeVendor();
+  const timers = scheduleRelayPublish(db, dir, { initialDelayMs: 1, intervalMs: 10_000, fetchImpl: vendor.fetch });
+  await new Promise((r) => setTimeout(r, 60));
+  clearTimeout(timers.initial); clearInterval(timers.interval);
+
+  // Это его данные и его решение, отправлять ли копию на чужой сервер.
+  assert.equal(readPairing(dir).relay, false);
+});
+
+test('клинике без филиалов канал не включают', async () => {
+  const { dir, db } = clinic('adopt-nobranch');
+  unchoose(dir);
+
+  const vendor = fakeVendor();
+  const timers = scheduleRelayPublish(db, dir, { initialDelayMs: 1, intervalMs: 10_000, fetchImpl: vendor.fetch });
+  await new Promise((r) => setTimeout(r, 60));
+  clearTimeout(timers.initial); clearInterval(timers.interval);
+
+  assert.notEqual(readPairing(dir).relay, true, 'включать нечего и незачем');
 });
