@@ -147,7 +147,13 @@ test('084: таблицы ожидания и соседей существую�
   const pend = db.prepare("PRAGMA table_info(sync_pending)").all().map(c => c.name);
   assert.deepEqual(pend, ['tbl', 'uid', 'stamp', 'record', 'waits_tbl', 'waits_uid', 'received_at']);
   const peers = db.prepare("PRAGMA table_info(sync_peers)").all().map(c => c.name);
-  assert.deepEqual(peers, ['node', 'sent_seq', 'last_ok', 'seed_floor', 'seed_tbl', 'seed_at', 'seed_id']);
+  // ТРИ ОТМЕТКИ, а не одна (Задача 7b): pub_seq — докуда ВЫЛОЖЕНО (снимает
+  // защиту местной правки), sent_seq — докуда сосед ПОДТВЕРДИЛ (по нему
+  // собирается срез и чистится журнал), recv_upto — наша квитанция ему.
+  // Слить их обратно в одну нельзя: на задержке подтверждения узлы начинают
+  // защищать строки друг от друга и не сходятся вовсе.
+  assert.deepEqual(peers,
+    ['node', 'pub_seq', 'sent_seq', 'recv_upto', 'last_ok', 'seed_floor', 'seed_tbl', 'seed_at', 'seed_id']);
   // Один и тот же (tbl, uid) в ожидании — одна строка: более поздняя замещает.
   db.prepare("INSERT INTO sync_pending (tbl, uid, stamp, record, waits_tbl, waits_uid) VALUES ('visits','v1','s1','{}','patients','p1')").run();
   assert.throws(() => db.prepare("INSERT INTO sync_pending (tbl, uid, stamp, record, waits_tbl, waits_uid) VALUES ('visits','v1','s2','{}','patients','p1')").run(), /UNIQUE|PRIMARY/);

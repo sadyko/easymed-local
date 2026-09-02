@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { buildBatch, markSent, pruneJournal, SHIPPED, REFS, CODE_REFS } from './journal.js';
+import { buildBatch, markSent, markPublished, markConfirmed, pruneJournal, SHIPPED, REFS, CODE_REFS } from './journal.js';
 import { parseStamp } from './hlc.js';
 import { applyBatch } from './records.js';
 
@@ -104,6 +104,74 @@ test('markSent сдвигает отметку, и следующая порци
   assert.equal(first.records.length > 0, true);
   markSent(db, 'C', first.upto, first.clock);
   assert.deepEqual(buildBatch(db, { self: 'B', peer: 'C' }).records, [], 'дважды одно и то же по узкому каналу не гоняем');
+  db.close();
+});
+
+// --- Задача 7b: подтверждённая доставка -------------------------------------
+//
+// Отметок стало две. «Выложено» (pub_seq) значит только «блоб лежит на
+// сервере»: сосед мог его не читать, и следующая выгрузка блоб ЗАМЕЩАЕТ.
+// Поэтому срез собирается от «подтверждено» (sent_seq), и всё, о чём сосед не
+// отчитался, повторяется в каждом следующем блобе. Раньше здесь терялась
+// целая ночь работы филиала.
+
+test('7b: выложенное, но не подтверждённое, уезжает ЕЩЁ РАЗ', () => {
+  const db = fresh(); warm(db);
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  const first = buildBatch(db, { self: 'B', peer: 'C' });
+  assert.equal(first.records.length > 0, true);
+
+  markPublished(db, 'C', first.upto, first.clock, first.seed);   // 2xx от релея, и только
+  const again = buildBatch(db, { self: 'B', peer: 'C' });
+  assert.deepEqual(again.records.map(r => r.uid), first.records.map(r => r.uid),
+    'сосед не подтвердил — содержимое обязано лежать и в следующем блобе');
+  assert.equal(again.upto, first.upto, 'докуда доходит срез, от повтора не меняется');
+
+  markConfirmed(db, 'C', first.upto);                            // квитанция приехала
+  assert.deepEqual(buildBatch(db, { self: 'B', peer: 'C' }).records, [],
+    'подтверждённое по узкому каналу второй раз не гоняем');
+  db.close();
+});
+
+test('7b: неподтверждённый хвост журнала чистка не трогает', () => {
+  const db = fresh(); warm(db);
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  const b = buildBatch(db, { self: 'B', peer: 'C' });
+  markPublished(db, 'C', b.upto, b.clock, b.seed);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_journal').get().n > 0, true,
+    'вычистив хвост по одному лишь 2xx, повторить его было бы нечем');
+
+  pruneJournal(db);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_journal').get().n > 0, true,
+    'чистка идёт по ПОДТВЕРЖДЁННОМУ горизонту, а он ещё на нуле');
+
+  markConfirmed(db, 'C', b.upto);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_journal').get().n, 0,
+    'а вот теперь хвост не нужен никому');
+  db.close();
+});
+
+test('7b: подтвердить больше выложенного нельзя — квитанция приезжает снаружи', () => {
+  const db = fresh(); warm(db);
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  const b = buildBatch(db, { self: 'B', peer: 'C' });
+  markPublished(db, 'C', b.upto, b.clock, b.seed);
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Петров')").run();   // это ещё не выкладывали
+
+  markConfirmed(db, 'C', 999999);
+  const row = db.prepare("SELECT pub_seq, sent_seq FROM sync_peers WHERE node = 'C'").get();
+  assert.equal(row.sent_seq, row.pub_seq,
+    'сосед со сломанной сборкой не должен уметь перепрыгнуть нас через невыложенное');
+  assert.equal(buildBatch(db, { self: 'B', peer: 'C' }).records.some(r => r.data && r.data.full_name === 'Петров'), true,
+    'иначе Петров не уехал бы никогда, а журнал его бы уже вычистил');
+  db.close();
+});
+
+test('7b: квитанция несуществующему соседу ничего не заводит', () => {
+  const db = fresh();
+  markConfirmed(db, 'Z', 5);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM sync_peers WHERE node = 'Z'").get().n, 0,
+    'соседу, которому мы ни разу не выгружались, нечего было и получать');
   db.close();
 });
 

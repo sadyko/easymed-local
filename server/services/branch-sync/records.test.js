@@ -461,3 +461,97 @@ test('deferred — сколько ЖДЁТ на конец порции; release
   assert.equal(r2.released, 0);
   db.close();
 });
+
+// --- Задача 7b: подтверждённая доставка -------------------------------------
+//
+// Защита местной неотправленной правки читает теперь pub_seq («выложено»), а
+// не sent_seq («подтверждено соседом»). Разница в одну колонку, а решает она
+// всё: подтверждение отстаёт от выгрузки на такт, и держи защита строку до
+// него — B не принимал бы адрес от C, C не принимал бы телефон от B, и оба
+// узла не сошлись бы вовсе (пробная сборка Задачи 7, воспроизведено).
+
+test('7b: выгрузка снимает защиту — дальше спор решают метки, а не защита', () => {
+  const db = fresh();
+  applyBatch(db, [put('patients', 'sh1', '000000000005-0000-C',
+    { full_name: 'Иванов', phone: '+998900000001' })], S);
+  // Сосед известен и тёплый, но НИЧЕГО ему ещё не выложено (pub_seq = 0).
+  db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
+    .run(new Date().toISOString());
+  db.prepare("UPDATE patients SET phone = '+998909999999' WHERE uid = 'sh1'").run();   // местная, не выложена
+
+  const held = applyBatch(db, [{
+    ...put('patients', 'sh1', '000000000009-0000-C', { phone: '+998900000002' }), changed: ['phone'],
+  }], S);
+  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'sh1'").get().phone, '+998909999999',
+    'пока правка не выложена, её держит защита: сосед о ней знать не мог');
+  assert.equal(held.protected, 1);
+
+  // Выложили — но сосед ещё НЕ подтвердил (sent_seq на месте).
+  const top = db.prepare('SELECT MAX(seq) AS s FROM sync_journal').get().s;
+  db.prepare("UPDATE sync_peers SET pub_seq = ? WHERE node = 'C'").run(top);
+
+  const older = applyBatch(db, [{
+    ...put('patients', 'sh1', '000000000003-0000-C', { phone: '+998900000003' }), changed: ['phone'],
+  }], S);
+  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'sh1'").get().phone, '+998909999999',
+    'запись СТАРШЕ уже принятой проигрывает по метке — но проигрывает она метке, а не защите');
+  assert.equal(older.protected, 0, 'защиты здесь больше нет: наше авторство сосед уже видит');
+
+  const newer = applyBatch(db, [{
+    ...put('patients', 'sh1', '000000000011-0000-C', { phone: '+998900000004' }), changed: ['phone'],
+  }], S);
+  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'sh1'").get().phone, '+998900000004',
+    'а более новая — применяется: на задержке подтверждения узлы обязаны сходиться, а не окапываться');
+  assert.equal(newer.protected, 0);
+  db.close();
+});
+
+test('7b: тот же срез, применённый дважды, второй раз не делает ничего', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
+    .run(new Date().toISOString());
+  const slice = [put('patients', 'id1', '000000000001-0000-C', { full_name: 'Иванов', phone: '+998900000001' })];
+
+  const first = applyBatch(db, slice, { ...S, peer: 'C', upto: 40 });
+  assert.equal(first.applied, 1);
+  assert.equal(db.prepare("SELECT recv_upto FROM sync_peers WHERE node = 'C'").get().recv_upto, 40,
+    'квитанция записана: без неё сосед повторял бы срез вечно');
+
+  // Сосед повторяет неподтверждённое в каждом блобе — это норма, а не поломка.
+  const second = applyBatch(db, slice, { ...S, peer: 'C', upto: 40 });
+  assert.equal(second.already, true, JSON.stringify(second));
+  assert.equal(second.applied, 0, 'разбирать второй раз нечего');
+
+  // Местная правка после приёма НЕ должна пострадать от повтора.
+  db.prepare("UPDATE patients SET phone = '+998907777777' WHERE uid = 'id1'").run();
+  applyBatch(db, slice, { ...S, peer: 'C', upto: 40 });
+  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'id1'").get().phone, '+998907777777');
+  db.close();
+});
+
+test('7b: в повторе живёт СТАРОЕ авторство — сужается по квитанции, иначе стирает свежую правку соседа', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
+    .run(new Date().toISOString());
+  // Вставка у соседа — авторство '*' на номере 7: вся строка.
+  applyBatch(db, [{
+    ...put('patients', 'nw1', '000000000001-0000-C', { full_name: 'Иванов', phone: 'p0', address: '' }),
+    changed: ['*'], changed_at: { '*': 7 },
+  }], { ...S, peer: 'C', upto: 7 });
+  // Здесь правят адрес и ВЫКЛАДЫВАЮТ его: защиты больше нет.
+  db.prepare("UPDATE patients SET address = 'Ташкент' WHERE uid = 'nw1'").run();
+  db.prepare("UPDATE sync_peers SET pub_seq = (SELECT MAX(seq) FROM sync_journal) WHERE node = 'C'").run();
+
+  // Сосед своей квитанции ещё не видел и повторяет ту же вставку — вместе со
+  // своей новой правкой телефона (номер 9) и СНИМКОМ, в котором адреса нет.
+  const r = applyBatch(db, [{
+    ...put('patients', 'nw1', '000000000009-0000-C', { full_name: 'Иванов', phone: 'p1', address: '' }),
+    changed: ['*'], changed_at: { '*': 7, phone: 9 },
+  }], { ...S, peer: 'C', upto: 9 });
+  const row = db.prepare("SELECT phone, address FROM patients WHERE uid = 'nw1'").get();
+  assert.equal(row.phone, 'p1', 'новое авторство (номер выше квитанции) применяется');
+  assert.equal(row.address, 'Ташкент',
+    'а повтор старого авторства — нет: иначе местная правка пропадала бы НАВСЕГДА');
+  assert.equal(r.protected, 0, 'держала её не защита — та снята выгрузкой, — а сужение авторства');
+  db.close();
+});

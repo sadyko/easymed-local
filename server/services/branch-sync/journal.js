@@ -75,6 +75,18 @@ function cachedPrep(db) {
  * self — буква ЭТОЙ установки (идёт в метку и в origin); peer — буква узла,
  * КОМУ собираем (по нему читается sent_seq). Два имени — две вещи.
  *
+ * СРЕЗ НАКОПИТЕЛЬНЫЙ (Задача 7b). Хвост читается от sent_seq — горизонта
+ * ПОДТВЕРЖДЁННОГО, а не выложенного, — поэтому запись, о получении которой
+ * сосед ещё не отчитался, попадает и в следующий блоб, и в тот, что за ним.
+ * Так закрывается пропущенная выгрузка: блоб на релее один и замещается
+ * следующим, но его СОДЕРЖИМОЕ повторяется, пока не придёт квитанция.
+ *
+ * ПРЕДЕЛ У ЭТОГО ЕСТЬ, и он тот же, что у засева, — страница. Если
+ * неподтверждённого накопилось больше `limit` строк (сосед молчит вторые
+ * сутки, а клиника работает), уезжают САМЫЕ СТАРЫЕ limit строк, остальные —
+ * следующими выгрузками. Не теряется ничего: пока квитанции нет, sent_seq
+ * стоит, и хвост никуда не девается.
+ *
  * Пока сосед ХОЛОДНЫЙ (строки в sync_peers ещё нет) или ЗАСЕИВАЕТСЯ (строка
  * есть, но seed_floor не NULL — ревью Задачи 4, C1), heads читаются
  * ПОСТРАНИЧНО из самих таблиц (+ надгробий) через seedPage, а не из журнала —
@@ -130,19 +142,22 @@ export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date
     // строка, у которой правили сперва телефон, потом адрес, уезжает одной
     // записью, и обе колонки в ней авторские. Взять cols только с MAX(seq)
     // значило бы отдать телефон под чужим авторством — ровно тот дефект, от
-    // которого весь этот механизм (см. шапку 084).
-    //
-    // DISTINCT — против размера, а не против дублей (их всё равно снимает
-    // uniqueCols): у строки, правленной тысячу раз, склейка была бы строкой
-    // на несколько килобайт, хотя различных наборов там два-три.
+    // которого весь этот механизм (см. шапку 084). Собираются они отдельным
+    // запросом на строку (COLS_AT_SQL ниже) — вместе с НОМЕРОМ, на котором
+    // каждая колонка правилась в последний раз.
     heads = db.prepare(`
-      SELECT tbl, uid, MAX(seq) AS seq, at, GROUP_CONCAT(DISTINCT cols) AS cols
+      SELECT tbl, uid, MAX(seq) AS seq, at
         FROM sync_journal
        WHERE seq > ?
        GROUP BY tbl, uid
        ORDER BY seq
        LIMIT ?
     `).all(from.sent_seq, limit);
+    // ОТ ПОДТВЕРЖДЁННОГО, А НЕ ОТ ВЫЛОЖЕННОГО (Задача 7b): sent_seq двигает
+    // только квитанция соседа, поэтому здесь и берётся накопительный срез.
+    // ORDER BY seq + LIMIT — это самые СТАРЫЕ группы, то есть срез накрывает
+    // журнал сплошь до `upto`, без дыр посередине: всё, что ниже, либо в этом
+    // срезе, либо перекрыто более поздней записью о той же строке.
     upto = from.sent_seq;
   }
 
@@ -195,6 +210,26 @@ export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date
       if (p && p.k) refs[spec.ref] = p.k;
     }
 
+    // ГДЕ ИМЕННО мы правили каждую колонку — номер журнала её последней
+    // правки. Нужен ПРИЁМНИКУ (Задача 7b), и вот зачем. Срез теперь
+    // накопительный: пока квитанции нет, он повторяет и то, что сосед давно
+    // применил. Вместе со старой записью повторяется и её авторство — а у
+    // ВСТАВКИ авторство это '*', вся строка. Сосед, успевший с тех пор
+    // поправить у себя адрес, получал бы наш снимок (в котором адреса ещё
+    // нет) под свежей меткой и терял свою правку — воспроизведено на двух
+    // базах. Имея номер, он отбрасывает ровно те притязания, которые уже
+    // учёл (recv_upto), и оставляет только новые.
+    const changedAt = seeding ? null : {};
+    if (!seeding) {
+      for (const c of q(COLS_AT_SQL).all(h.tbl, h.uid, from.sent_seq)) {
+        for (const part of String(c.cols || '*').split(',')) {
+          const col = part.trim();
+          if (!col) continue;
+          if (!(col in changedAt) || changedAt[col] < c.seq) changedAt[col] = c.seq;
+        }
+      }
+    }
+
     records.push({
       tbl: h.tbl, uid: h.uid, op: 'put', stamp: clock.stamp, data, refs, origin: self,
       // КАКИЕ колонки мы действительно правили. data — по-прежнему ВСЯ строка:
@@ -210,28 +245,35 @@ export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date
       // — это N меток на проводе и N сравнений на приёме; сегодня цена
       // неточности ограничена: обе колонки правил ОДИН узел, и спорит она
       // только с правкой соседа, попавшей в те же пять минут.
-      changed: seeding ? ['*'] : uniqueCols(h.cols),
+      changed: seeding ? ['*'] : unionCols(changedAt),
+      // Приёмник СТАРОЙ сборки этого поля не знает и просто читает changed —
+      // ровно как читал до Задачи 7b. Поэтому changed остаётся списком, а не
+      // становится картой: обновляются узлы не одновременно.
+      ...(seeding ? {} : { changed_at: changedAt }),
     });
   }
   return { records, upto, clock, seed };
 }
 
+// Колонки строки и номер их последней правки — по НАБОРАМ, как их записал
+// триггер. GROUP BY cols, а не строка за строкой: у пациента, правленного
+// тысячу раз, различных наборов два-три, и группировка превращает тысячу
+// строк в три ещё в базе.
+const COLS_AT_SQL = `
+  SELECT cols, MAX(seq) AS seq FROM sync_journal
+   WHERE tbl = ? AND uid = ? AND seq > ?
+   GROUP BY cols
+`;
+
 /**
- * Склейка `cols` журнальных записей одной строки → список колонок без дублей.
- * '*' поглощает всё: строка уезжает целиком (вставка, засев, появление uid).
- * Пустая/отсутствующая склейка — тоже '*': запись старой сборки без cols
- * значит «неизвестно, что менялось», и осторожность здесь дороже точности.
+ * Ключи карты «колонка → номер» в список для `changed`. '*' поглощает всё:
+ * строка уезжает целиком (вставка, засев, появление uid). Пусто — тоже '*':
+ * «неизвестно, что менялось», и осторожность здесь дороже точности.
  */
-function uniqueCols(concat) {
-  if (!concat) return ['*'];
-  const seen = new Set();
-  for (const part of String(concat).split(',')) {
-    const col = part.trim();
-    if (!col) continue;
-    if (col === '*') return ['*'];
-    seen.add(col);
-  }
-  return seen.size ? [...seen] : ['*'];
+function unionCols(changedAt) {
+  const cols = Object.keys(changedAt || {});
+  if (!cols.length || cols.includes('*')) return ['*'];
+  return cols;
 }
 
 // Ранг таблицы — тай-брейк порядка засева, СТРОГО порядок зависимостей REFS:
@@ -325,7 +367,7 @@ function seedPage(db, limit, cursor) {
   return { heads: out, cursor: next, done: out.length < limit };
 }
 
-// Хвост, отданный ВСЕМ соседям, больше не нужен: без чистки журнал растёт
+// Хвост, ПОДТВЕРЖДЁННЫЙ всеми соседями, больше не нужен: без чистки журнал растёт
 // ~4.7 млн строк в год на клинике с 300 визитами в день, а сборка порции
 // сканирует его целиком. Сосед, молчавший дольше STALE_DAYS, забывается: его
 // строка удаляется, и по возвращении он получает холодный засев из таблиц —
@@ -335,6 +377,13 @@ function seedPage(db, limit, cursor) {
 // (старый sent_seq) остаётся на месте — buildBatch увидит её, посчитает
 // соседа тёплым и станет читать хвост журнала НИЖЕ уже вычищенного места:
 // дыра, а не переотправка.
+//
+// ПОЛ — ПО ПОДТВЕРЖДЁННОМУ (Задача 7b), а не по выложенному: журнальная
+// запись, о которой сосед не отчитался, обязана дожить до следующего блоба,
+// иначе вся эта задача бессмысленна. Цена названа вслух: сосед, который
+// принимает, но не выкладывает свой блоб (а значит, и квитанции), держит
+// журнал целиком, пока не станет STALE_DAYS-молчуном и не будет забыт. Это
+// та же граница, что и раньше, — просто теперь она сторожит и чистку.
 const STALE_DAYS = 30;
 // Надгробия переживают забытого соседа ДОЛЬШЕ, чем сама запись о нём (ревью
 // Задачи 4, C2): удалить строку из sync_tombstones раньше, чем сосед успеет
@@ -406,10 +455,26 @@ export function writeClock(db, clock) {
 }
 
 /**
- * Отметить, докуда соседу отдано, сохранить часы, вычистить хвост. ТОЛЬКО
- * после подтверждённой отправки — buildBatch сам ничего не пишет в базу
- * именно поэтому: не долетевшая до соседа порция обязана прийти снова, а
- * записанное здесь состояние это ей запретит.
+ * ДВА ГОРИЗОНТА, А НЕ ОДИН (Задача 7b — подтверждённая доставка).
+ *
+ * До неё была одна отметка `markSent`, и ставилась она по ответу релея 2xx.
+ * Но 2xx означает «блоб лежит на сервере», а не «сосед его прочитал»: блоб
+ * узла ОДИН и замещается следующей выгрузкой, поэтому сосед, выключенный на
+ * ночь, пропускал ВСЁ, что выложили за эту ночь, — отправитель второй раз это
+ * не слал. Теперь событий два, и у каждого своя колонка в sync_peers:
+ *
+ *   markPublished — выложено (2xx). Двигает pub_seq, курсор засева, часы и
+ *                   last_ok. pub_seq снимает защиту местной правки
+ *                   (records.js localUnshippedCols).
+ *   markConfirmed — подтверждено соседом (квитанция в его блобе). Двигает
+ *                   sent_seq, по которому собирается срез и чистится журнал.
+ *
+ * Развести их ОБЯЗАТЕЛЬНО. Пробная сборка Задачи 7 двигала по квитанции один
+ * общий sent_seq — и на задержке подтверждения защита местной правки (она
+ * читала тот же sent_seq) держала строки с обеих сторон: B не принимал адрес
+ * от C, C не принимал телефон от B, ни один не подтверждал, сеть не сходилась
+ * вовсе. Защиту снимает ВЫГРУЗКА (наше авторство уже видно соседу, а спор
+ * разбирают поколоночные метки), журнал держит ПОДТВЕРЖДЕНИЕ.
  *
  * seed — ОБЯЗАТЕЛЕН, когда buildBatch вернул его (сосед холодный или
  * засевается): это курсор страницы, а не необязательная деталь. Без него
@@ -420,10 +485,10 @@ export function writeClock(db, clock) {
  *
  * @param {object|null} seed batch.seed из buildBatch, без изменений
  */
-export function markSent(db, peer, upto, clock = null, seed = null, { now = () => new Date() } = {}) {
+export function markPublished(db, peer, upto, clock = null, seed = null, { now = () => new Date() } = {}) {
   // I5 (ревью Задачи 4): всё внутри одной транзакции — состояние соседа,
   // часы и чистка журнала обязаны либо примениться целиком, либо не
-  // примениться вовсе. Половина (например, sent_seq сдвинут, а чистка
+  // примениться вовсе. Половина (например, pub_seq сдвинут, а чистка
   // журнала прервалась) — это ровно тот же класс дыры, что и остальной файл
   // старается не допустить.
   const run = db.transaction(() => {
@@ -431,17 +496,17 @@ export function markSent(db, peer, upto, clock = null, seed = null, { now = () =
     const wasSeeding = existing == null || existing.seed_floor != null;
     if (wasSeeding && !seed) {
       throw new Error(
-        `journal: markSent(${JSON.stringify(peer)}) called without seed info while the peer is cold or mid-seed`
+        `journal: markPublished(${JSON.stringify(peer)}) called without seed info while the peer is cold or mid-seed`
       );
     }
 
     if (seed) {
       const done = seed.done;
       db.prepare(`
-        INSERT INTO sync_peers (node, sent_seq, last_ok, seed_floor, seed_tbl, seed_at, seed_id)
+        INSERT INTO sync_peers (node, pub_seq, last_ok, seed_floor, seed_tbl, seed_at, seed_id)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(node) DO UPDATE SET
-          sent_seq = excluded.sent_seq, last_ok = excluded.last_ok,
+          pub_seq = MAX(pub_seq, excluded.pub_seq), last_ok = excluded.last_ok,
           seed_floor = excluded.seed_floor, seed_tbl = excluded.seed_tbl,
           seed_at = excluded.seed_at, seed_id = excluded.seed_id
       `).run(
@@ -453,12 +518,57 @@ export function markSent(db, peer, upto, clock = null, seed = null, { now = () =
       );
     } else {
       db.prepare(`
-        INSERT INTO sync_peers (node, sent_seq, last_ok) VALUES (?, ?, ?)
-        ON CONFLICT(node) DO UPDATE SET sent_seq = MAX(sent_seq, excluded.sent_seq), last_ok = excluded.last_ok
+        INSERT INTO sync_peers (node, pub_seq, last_ok) VALUES (?, ?, ?)
+        ON CONFLICT(node) DO UPDATE SET pub_seq = MAX(pub_seq, excluded.pub_seq), last_ok = excluded.last_ok
       `).run(peer, upto, now().toISOString());
     }
     writeClock(db, clock);
     pruneJournal(db, { now });
   });
   run();
+}
+
+/**
+ * Квитанция соседа: он ПРИМЕНИЛ наш срез до `upto`. Только теперь эти записи
+ * можно перестать повторять и вычистить из журнала.
+ *
+ * ОГРАНИЧИВАЕТСЯ pub_seq, и это не формальность: квитанция приезжает СНАРУЖИ,
+ * из чужого блоба. Сосед со сломанной сборкой (или тот, кто подделал блоб)
+ * прислал бы число из будущего, sent_seq перепрыгнул бы через ещё не
+ * отправленные записи, а pruneJournal их бы стёр — молча и навсегда. Больше
+ * выложенного не подтверждают.
+ *
+ * Строки нет — подтверждать нечего: соседу, которому мы ни разу не
+ * выгружались, нечего было и получать (строку заводит markPublished).
+ *
+ * @returns {number} новый sent_seq (0 — ничего не изменилось)
+ */
+export function markConfirmed(db, peer, upto, { now = () => new Date() } = {}) {
+  const ack = Math.floor(Number(upto));
+  if (!Number.isFinite(ack) || ack <= 0) return 0;
+  const run = db.transaction(() => {
+    const row = db.prepare('SELECT pub_seq, sent_seq FROM sync_peers WHERE node = ?').get(peer);
+    if (!row) return 0;
+    const next = Math.max(row.sent_seq, Math.min(ack, row.pub_seq));
+    if (next === row.sent_seq) return row.sent_seq;
+    db.prepare('UPDATE sync_peers SET sent_seq = ? WHERE node = ?').run(next, peer);
+    // Горизонт подтверждённого — это и есть пол чистки: сдвинулся он —
+    // появилось, что чистить. В markPublished чистка теперь почти всегда
+    // холостая, а настоящая работа у неё здесь.
+    pruneJournal(db, { now });
+    return next;
+  });
+  return run();
+}
+
+/**
+ * Оба события разом. Осталось РАДИ ВЫЗЫВАЮЩИХ, которым релей не нужен:
+ * прямой обмен (Маршрут А) отвечает 2xx только после того, как сосед порцию
+ * ПРИМЕНИЛ, — там «выложено» и «подтверждено» действительно одно событие.
+ * Путь через релей обязан звать две функции раздельно: в нём между ними
+ * проходит цикл, и вся Задача 7b именно про этот промежуток.
+ */
+export function markSent(db, peer, upto, clock = null, seed = null, opts = {}) {
+  markPublished(db, peer, upto, clock, seed, opts);
+  markConfirmed(db, peer, seed ? seed.floor : upto, opts);
 }

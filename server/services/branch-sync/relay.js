@@ -7,8 +7,8 @@ import { ensureSyncGroup } from './sync-group.js';
 import { readIdentity } from './identity.js';
 import { relayIdFor, sealPayload, openPayload } from './relay-crypto.js';
 // BRANCH_RECORDS_V1 (Задача 7) — журнал изменений ездит тем же каналом, что и справочник.
-import { buildBatch, markSent } from './journal.js';
-import { applyBatch } from './records.js';
+import { buildBatch, markPublished, markConfirmed } from './journal.js';
+import { applyBatch, sliceAlreadyApplied } from './records.js';
 // Резервная копия перед применением чужих записей — то же правило, что у справочника.
 import { createBackup } from '../backup.js';
 
@@ -480,7 +480,13 @@ export async function fetchCatalogue(dataDir, {
 // удержания у поставщика: сеть из восьми зданий — 56 выгрузок в час вместо 8.
 // Поэтому узел выкладывает ОДИН блоб со срезами для всех соседей:
 //
-//   { v: 1, from: 'B', generated_at: '…', batches: { A: {records, upto}, C: {…} } }
+//   { v: 1, from: 'B', generated_at: '…',
+//     acks: { A: 4120, C: 3970 },
+//     batches: { A: {records, upto, seed?}, C: {…} } }
+//
+// acks — КВИТАНЦИИ (Задача 7b): докуда B применил журнал каждого соседа.
+// Лежат в общем блобе, а не в срезе, ровно потому же, почему и всё остальное:
+// адрес на узел один, и заводить второй ради одного числа незачем.
 //
 // Каждый сосед читает СВОЙ срез. Деление здесь — про то, кому какие записи
 // АДРЕСОВАНЫ, а не про секреты внутри клиники: ключ группы один на всех, и
@@ -570,6 +576,35 @@ export function journalPeers(db, self) {
   return out;
 }
 
+/**
+ * КВИТАНЦИИ, которые уедут в нашем блобе: сосед → докуда мы применили ЕГО
+ * журнал (sync_peers.recv_upto, пишет его applyBatch той же транзакцией, что
+ * и сами записи). Нули не кладутся: «ничего не применили» — это отсутствие
+ * квитанции, и слать его незачем.
+ */
+function journalAcks(db) {
+  const out = {};
+  try {
+    for (const row of db.prepare('SELECT node, recv_upto FROM sync_peers WHERE recv_upto > 0').all()) {
+      const letter = String(row.node || '').trim().toUpperCase();
+      if (letter) out[letter] = row.recv_upto;
+    }
+  } catch (e) {
+    // Квитанции — не повод сорвать выгрузку: без них сосед просто повторит
+    // срез ещё раз, а вот не уехавшие записи никто не повторит.
+    console.warn('[branch-sync] could not read the journal receipts:', e && e.message);
+  }
+  return out;
+}
+
+/** Те же квитанции, что в прошлый раз? Только ради решения «выгружаться ли». */
+function sameAcks(prev, next) {
+  const a = prev && typeof prev === 'object' && !Array.isArray(prev) ? prev : {};
+  const keys = Object.keys(next);
+  if (keys.length !== Object.keys(a).length) return false;
+  return keys.every((k) => a[k] === next[k]);
+}
+
 /** Буква ЭТОГО узла. Нет служебной записи — нет и обмена: подписаться нечем. */
 function selfLetter(db) {
   try {
@@ -613,29 +648,41 @@ function journalContext(db, dataDir, self) {
 const unauthorizedReason = (pairing) => (pairing.role === 'main' ? 'relay_unauthorized' : 'relay_branch_revoked');
 
 /**
- * ЧТО ЗНАЧИТ ЗДЕСЬ «ОТДАНО СОСЕДУ» — И ЧЕГО ЭТО НЕ ЗНАЧИТ.
+ * ЧТО ЗНАЧИТ ЗДЕСЬ «ОТДАНО СОСЕДУ» — И ЧЕГО ЭТО НЕ ЗНАЧИТ (Задача 7b).
  *
  * У Маршрута А (филиал отдаёт порцию прямо соседу по HTTP) ответ 2xx означает
- * «сосед ПРИНЯЛ И ПРИМЕНИЛ», и markSent после него честен. У релея 2xx означает
- * только «блоб лежит на сервере». Блоб ОДИН на узел, и следующая выгрузка его
- * ЗАМЕЩАЕТ, поэтому сосед, не забравший его до следующей выгрузки, содержимое
- * пропускает, а отправитель отметку уже сдвинул.
+ * «сосед ПРИНЯЛ И ПРИМЕНИЛ». У релея 2xx означает только «блоб лежит на
+ * сервере»: блоб ОДИН на узел и ЗАМЕЩАЕТСЯ следующей выгрузкой. Узел,
+ * выключенный на ночь, чужую вечернюю выгрузку не увидит вовсе — а раньше
+ * отправитель по этому 2xx уже сдвигал единственную отметку и второй раз
+ * содержимое не слал. Так терялись вечерние анализы филиала, молча.
  *
- * ЭТО ОГРАНИЧЕНИЕ, А НЕ ПОДРАЗУМЕВАЕМОЕ СВОЙСТВО, и оно записано здесь потому,
- * что стоит дорого: узел, выключенный на ночь, не получит того, что соседи
- * выложили за эту ночь. Обмен рассчитан на то, что КАЖДЫЙ узел забирает чужие
- * блобы не реже, чем соседи их выкладывают, — то есть на общий часовой ритм
- * (schedule-pull.js и scheduleRelayPublish, оба раз в час).
+ * ТЕПЕРЬ СОБЫТИЙ ДВА, и у каждого своя отметка в sync_peers (шапка
+ * markPublished в journal.js — там же, почему одной не хватает):
  *
- * ПОЧЕМУ НЕ ПОЧИНЕНО ЗДЕСЬ. Лечится это квитанциями: срез несёт отпечаток
- * содержимого, сосед кладёт применённый отпечаток в СВОЙ блоб, и sent_seq
- * двигается только по нему. Пробная сборка показала, что одних квитанций мало:
- * защита местной неотправленной правки (records.js localUnshippedCols) читает
- * тот же sent_seq, и на задержке подтверждения оба узла начинают защищать свои
- * строки друг от друга и не сходятся вовсе. Правильное решение разделяет два
- * горизонта — «выложено» (снимает защиту) и «подтверждено» (двигает журнал), —
- * то есть требует новой колонки в sync_peers и правки records.js. Это отдельная
- * задача с отдельным разбором, а не примечание к транспорту.
+ *   1. ВЫЛОЖЕНО (2xx) → `markPublished` двигает pub_seq. Он снимает защиту
+ *      местной неотправленной правки: наше авторство теперь видно соседу.
+ *   2. ПОДТВЕРЖДЕНО → `markConfirmed` двигает sent_seq. Двигает его только
+ *      КВИТАНЦИЯ соседа, а по sent_seq собирается срез и чистится журнал.
+ *
+ * КВИТАНЦИЯ ЕДЕТ В БЛОБЕ, отдельного канала не заводится: у каждого узла и
+ * так есть свой адрес и своя выгрузка раз в час.
+ *
+ *   { v: 1, from: 'B', generated_at: '…',
+ *     acks: { A: 4120, C: 3970 },              // докуда B применил ИХ журналы
+ *     batches: { A: {records, upto, seed?}, C: {…} } }
+ *
+ * `upto` — номер журнала отправителя, до которого доходит срез; сосед,
+ * применив его, кладёт это число в свой `acks[отправитель]`. Пока число не
+ * вернулось, срез собирается ОТ ТОГО ЖЕ sent_seq и повторяется в каждом
+ * следующем блобе — вот и вся починка. Оба узла выкладываются и забирают раз
+ * в час, поэтому подтверждение отстаёт на один такт, не больше.
+ *
+ * ЧТО НЕ ЗАКРЫТО. Курсор ХОЛОДНОГО ЗАСЕВА по-прежнему двигается по выгрузке:
+ * все его страницы несут один и тот же upto (замороженный пол журнала), и по
+ * квитанции их не различить. Пропущенная страница засева повторена не будет.
+ * Это окно первого знакомства с соседом, а не ежедневная работа, и закрывать
+ * его надо отдельным номером страницы в квитанции — отдельной задачей.
  */
 
 /**
@@ -691,6 +738,12 @@ export async function publishJournal(db, dataDir, {
   // некому. Это не отказ канала, поэтому вызывающий такую причину не показывает.
   if (!peers.length) return { ok: false, reason: 'relay_no_peers' };
 
+  // КВИТАНЦИИ (Задача 7b) считаются ДО срезов и не зависят от них: узел,
+  // которому сегодня нечего сказать, обязан всё равно отчитаться о том, что
+  // принял, — иначе сосед будет вечно повторять уже полученное, а его журнал
+  // никогда не вычистится.
+  const acks = journalAcks(db);
+
   let page = Math.max(MIN_JOURNAL_LIMIT, Number(limit) || JOURNAL_LIMIT);
   let built;
   let carrying;
@@ -712,11 +765,16 @@ export async function publishJournal(db, dataDir, {
       built.push({ peer, batch });
       if (!batch.records.length) continue;   // пустой срез в блоб не кладётся
       carrying++;
-      batches[peer] = { records: batch.records, upto: batch.upto };
+      // seed — пометка страницы ХОЛОДНОГО ЗАСЕВА. Приёмнику она нужна, чтобы
+      // не отсечь страницу как «уже применённую»: у ВСЕХ страниц засева upto
+      // один и тот же — замороженный пол журнала (см. buildBatch).
+      batches[peer] = batch.seed
+        ? { records: batch.records, upto: batch.upto, seed: true }
+        : { records: batch.records, upto: batch.upto };
     }
     // generated_at — как у справочника: возраст копии виден получателю.
     sealed = sealPayload(ctx.pairing.group_key, {
-      v: 1, from: ctx.self, generated_at: now().toISOString(), batches,
+      v: 1, from: ctx.self, generated_at: now().toISOString(), acks, batches,
     });
     if (!sealed) return { ok: false, reason: 'relay_no_key' };
     if (sealed.length <= maxBlobBytes) break;
@@ -729,7 +787,13 @@ export async function publishJournal(db, dataDir, {
     const at = last && last.at ? Date.parse(last.at) : NaN;
     // Свежая копия и нечего сказать — молчим. Иначе выгружаем пустой блоб:
     // это и есть keep-alive против удержания на той стороне.
-    if (Number.isFinite(at) && (now().getTime() - at) < REFRESH_MS) {
+    //
+    // НОВАЯ КВИТАНЦИЯ — ЕСТЬ ЧТО СКАЗАТЬ (Задача 7b), даже когда своих записей
+    // нет. Промолчав, мы оставили бы соседа без подтверждения на сутки
+    // (REFRESH_MS): он всё это время повторял бы нам уже применённое и не мог
+    // бы вычистить свой журнал. Сравнение — с квитанциями ПОСЛЕДНЕЙ выгрузки,
+    // а не с датой: изменились они или нет, видно только так.
+    if (Number.isFinite(at) && (now().getTime() - at) < REFRESH_MS && sameAcks(last && last.acks, acks)) {
       return { ok: true, skipped: true, peers: {} };
     }
   }
@@ -754,10 +818,12 @@ export async function publishJournal(db, dataDir, {
     return { ok: false, reason: 'relay_server_error' };
   }
 
-  // ТОЛЬКО ТЕПЕРЬ. Блоб на сервере — см. оговорку про смысл этого слова в
-  // абзаце над функцией. Каждому соседу своя отметка: срезы лежат в одном
-  // блобе, но в журнале у каждого свой sent_seq, и общая отметка потеряла бы
-  // разницу.
+  // ТОЛЬКО ТЕПЕРЬ, и только ВЫЛОЖЕНО. markPublished двигает pub_seq (снимает
+  // защиту местной правки) и курсор засева; sent_seq, по которому собирается
+  // срез и чистится журнал, ждёт КВИТАНЦИИ соседа — её приносит fetchJournals.
+  // Смысл этого разделения — в абзаце над функцией. Каждому соседу своя
+  // отметка: срезы лежат в одном блобе, но горизонты у каждого свои, и общая
+  // отметка потеряла бы разницу.
   //
   // МЕТКИ РАЗНЫХ СРЕЗОВ. buildBatch читает часы из базы и НЕ пишет их, поэтому
   // порции всем соседям чеканятся от ОДНОГО состояния часов: одна и та же
@@ -771,17 +837,17 @@ export async function publishJournal(db, dataDir, {
   const applied = {};
   for (const { peer, batch } of built) {
     try {
-      markSent(db, peer, batch.upto, batch.clock, batch.seed);
+      markPublished(db, peer, batch.upto, batch.clock, batch.seed);
       if (batch.records.length) applied[peer] = batch.records.length;
     } catch (e) {
       // Порция доставлена, отметка не сдвинулась: сосед получит её ещё раз.
       // Повтор безвреден (приём идемпотентен), молчание — нет.
-      console.warn('[branch-sync] journal delivered but not marked sent for', peer, ':', e && e.message);
+      console.warn('[branch-sync] journal delivered but not marked published for', peer, ':', e && e.message);
     }
   }
 
   const at = now().toISOString();
-  try { putState(db, LAST_JOURNAL_KEY, JSON.stringify({ at, bytes: sealed.length, peers: applied })); }
+  try { putState(db, LAST_JOURNAL_KEY, JSON.stringify({ at, bytes: sealed.length, peers: applied, acks })); }
   catch (e) {
     // Худшее следствие — лишняя выгрузка через час. Ради него уже
     // состоявшуюся выгрузку неудачной не объявляют.
@@ -795,7 +861,9 @@ export async function publishJournal(db, dataDir, {
  * и по той же причине: тег GCM доказал происхождение блоба, но не его смысл —
  * блоб мог остаться от прошлой версии, от другой группы или от сбоя сборки.
  *
- * @returns {Array|null} записи для нас; [] — среза нет (норма); null — форма не та
+ * @returns {{records:Array, upto:number, seed:boolean, ack:number}|null}
+ *   records [] — среза нет (норма); null — форма не та. ack — КВИТАНЦИЯ
+ *   соседа: докуда он применил НАШ журнал (Задача 7b).
  */
 function journalSlice(payload, peer, self) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
@@ -806,14 +874,41 @@ function journalSlice(payload, peer, self) {
   if (typeof payload.from !== 'string' || payload.from.trim().toUpperCase() !== peer) return null;
   const batches = payload.batches;
   if (!batches || typeof batches !== 'object' || Array.isArray(batches)) return null;
+  // Квитанция читается ОТДЕЛЬНО от среза и раньше него: сосед, которому
+  // сегодня нечего нам слать, всё равно обязан отчитаться о полученном, и
+  // пустой блоб с одной квитанцией — совершенно нормальный блоб.
+  const acks = payload.acks;
+  const ack = acks && typeof acks === 'object' && !Array.isArray(acks) ? Number(acks[self]) : NaN;
+  const head = { upto: 0, seed: false, ack: Number.isFinite(ack) ? Math.floor(ack) : 0 };
+
   const slice = batches[self];
-  if (slice === undefined || slice === null) return [];
-  // Массив — форма попроще, объект {records, upto} — та, что кладёт
-  // publishJournal. Принимаются обе: узлы в сети обновляются не одновременно.
-  if (Array.isArray(slice)) return slice;
-  if (typeof slice === 'object' && Array.isArray(slice.records)) return slice.records;
+  if (slice === undefined || slice === null) return { ...head, records: [] };
+  // Массив — форма ДО Задачи 7b (сборка без заголовка среза), объект
+  // {records, upto, seed} — та, что кладёт publishJournal. Принимаются обе:
+  // узлы в сети обновляются не одновременно, и срез без upto просто
+  // применяется без проверки на повтор — ровно как применялся раньше.
+  if (Array.isArray(slice)) return { ...head, records: slice };
+  if (typeof slice === 'object' && Array.isArray(slice.records)) {
+    const upto = Number(slice.upto);
+    return {
+      ...head,
+      records: slice.records,
+      upto: Number.isFinite(upto) && upto > 0 ? Math.floor(upto) : 0,
+      seed: slice.seed === true,
+    };
+  }
   return null;
 }
+
+/**
+ * «Ничего делать не пришлось» в той же форме, что и статистика приёма: у
+ * читающего ответ не должно быть двух разных фигур для одного «ноль работы».
+ * already — срез уже был применён (неподтверждённый повтор соседа).
+ */
+const noWork = (skipped = 0, already = false) => {
+  const stats = { applied: 0, released: 0, skipped, protected: 0, deferred: 0, deleted: 0 };
+  return already ? { ...stats, already: true } : stats;
+};
 
 /** Скачать и распечатать журнал ОДНОГО соседа. Ничего не пишет в базу. */
 async function downloadJournal(ctx, peer, { fetchImpl, timeoutMs, maxBlobBytes, env }) {
@@ -848,9 +943,9 @@ async function downloadJournal(ctx, peer, { fetchImpl, timeoutMs, maxBlobBytes, 
   if (!opened.ok) {
     return { ok: false, reason: opened.reason === 'bad_key' ? 'relay_bad_key' : 'relay_bad_response' };
   }
-  const records = journalSlice(opened.payload, peer, ctx.self);
-  if (records === null) return { ok: false, reason: 'relay_bad_response' };
-  return { ok: true, records };
+  const slice = journalSlice(opened.payload, peer, ctx.self);
+  if (slice === null) return { ok: false, reason: 'relay_bad_response' };
+  return { ok: true, ...slice };
 }
 
 /**
@@ -891,10 +986,35 @@ export async function fetchJournals(db, dataDir, {
   for (const peer of list) {
     const got = await downloadJournal(ctx, peer, { fetchImpl, timeoutMs, maxBlobBytes, env });
     if (!got.ok) { out[peer] = { reason: got.reason }; continue; }
+
+    // КВИТАНЦИЯ — ПЕРВЫМ ДЕЛОМ (Задача 7b), до всякого применения и независимо
+    // от того, есть ли для нас срез. Она про НАШ журнал, а не про его: сосед
+    // сообщает, докуда он нас применил, и только теперь мы вправе перестать
+    // это повторять и вычистить свой хвост. Не сложится применение ниже —
+    // подтверждение всё равно верно: оно уже случилось у него.
+    if (got.ack) {
+      try {
+        markConfirmed(db, peer, got.ack);
+      } catch (e) {
+        // Худшее следствие — лишний повтор среза через час. Ради него обмен
+        // не срывают.
+        console.warn('[branch-sync] could not record the receipt from', peer, ':', e && e.message);
+      }
+    }
+
     if (!got.records.length) {
       // Блоб есть, среза для нас в нём нет: сосед выгрузился, но нам ничего не
       // адресовал. Это успех с нулём работы, а не отказ.
-      out[peer] = { applied: 0, released: 0, skipped: 0, protected: 0, deferred: 0, deleted: 0 };
+      out[peer] = noWork();
+      continue;
+    }
+    // НЕПОДТВЕРЖДЁННЫЙ ПОВТОР — не работа (Задача 7b). Сосед повторяет срез в
+    // каждом блобе, пока не увидит нашу квитанцию, то есть как минимум один
+    // такт всегда. Спросить надо ЗДЕСЬ, до резервной копии: снимать копию базы
+    // ради среза, который мы уже разобрали, значит заваливать диск клиники
+    // копиями каждый час.
+    if (sliceAlreadyApplied(db, { peer, upto: got.upto, seed: got.seed })) {
+      out[peer] = noWork(got.records.length, true);
       continue;
     }
     if (!backed) {
@@ -910,7 +1030,10 @@ export async function fetchJournals(db, dataDir, {
       }
     }
     try {
-      out[peer] = applyImpl(db, got.records, { self: ctx.self, peer });
+      // upto/seed — заголовок среза: по ним приём отличает неподтверждённый
+      // повтор (применять второй раз незачем) от новой работы и знает, какую
+      // квитанцию записать.
+      out[peer] = applyImpl(db, got.records, { self: ctx.self, peer, upto: got.upto, seed: got.seed });
     } catch (e) {
       // Транзакция приёма откатилась целиком (её держит applyBatch) — база
       // ровно такая, какой была, и порция приедет снова.
