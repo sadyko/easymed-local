@@ -207,6 +207,10 @@ test('смена группы стирает карту соответствий
 // settings.easymed.uz, and the test's result starts depending on someone
 // else's server and on there being internet at all.
 const cpOk = async () => ({ ok: true, enrollment_code: 'EM-TEST-0001', clinic_id: 'c-1-b1' });
+// BRANCH_RELAY_ON_BY_DEFAULT_V1 - заведение филиала теперь само включает
+// резервный канал и сразу кладёт копию. Без заглушки publishCatalogue пошёл бы
+// в СЕТЬ, к живому settings.easymed.uz, из каждого такого теста.
+const pubOk = async () => ({ ok: true, bytes: 1024 });
 
 const mintOk = async () => ({ ok: true, token: 'relay-tok-1', relay_id: 'a'.repeat(32) });
 const mintOk2 = async () => ({ ok: true, token: 'relay-tok-2', relay_id: 'b'.repeat(32) });
@@ -236,7 +240,7 @@ test('список филиалов даёт имя, букву и ключ, а 
 test('ключ филиала читается сколько угодно раз и не меняется — это и просил владелец', async () => {
   inDir('permanent');
   const db = asMain();
-  const added = await branchSyncAddBranch(db, { name: 'Чиланзар' }, admin, { mintImpl: mintOk, branchImpl: cpOk });
+  const added = await branchSyncAddBranch(db, { name: 'Чиланзар' }, admin, { mintImpl: mintOk, branchImpl: cpOk, publishImpl: pubOk });
   assert.equal(added.ok, true);
   assert.equal(added.branch.letter, 'B', 'A занята главным филиалом ещё миграцией 080');
   assert.ok(added.branch.key, 'ключ выдаётся сразу, а не «покажется один раз»');
@@ -262,7 +266,7 @@ test('ключ филиала читается сколько угодно ра�
 test('буква тратится безвозвратно, поэтому двойное нажатие ловится по названию', async () => {
   inDir('dup');
   const db = asMain();
-  await branchSyncAddBranch(db, { name: 'Юнусабад' }, admin, { mintImpl: mintOk, branchImpl: cpOk });
+  await branchSyncAddBranch(db, { name: 'Юнусабад' }, admin, { mintImpl: mintOk, branchImpl: cpOk, publishImpl: pubOk });
   await assert.rejects(
     () => branchSyncAddBranch(db, { name: 'юнусабад' }, admin, { mintImpl: mintOk }),
     (e) => e.message === reasonText('branch_duplicate_name'),
@@ -279,7 +283,7 @@ test('без интернета филиал всё равно заводитс�
   // сделать офлайновую клинику заложником чужого сервера.
   inDir('offline-mint');
   const db = asMain();
-  const added = await branchSyncAddBranch(db, { name: 'Себзар' }, admin, { mintImpl: mintOffline, branchImpl: cpOk });
+  const added = await branchSyncAddBranch(db, { name: 'Себзар' }, admin, { mintImpl: mintOffline, branchImpl: cpOk, publishImpl: pubOk });
   assert.equal(added.ok, true);
   assert.ok(added.branch.key, 'ключ выдан');
   assert.equal(added.relay.ok, false);
@@ -300,7 +304,7 @@ test('филиал без буквы — не тупик: ключ ему выд
   assert.equal(before.letter, null);
   assert.equal(before.key, null);
 
-  const issued = await branchSyncBranchKey(db, { branch_id: id }, admin, { mintImpl: mintOk, branchImpl: cpOk });
+  const issued = await branchSyncBranchKey(db, { branch_id: id }, admin, { mintImpl: mintOk, branchImpl: cpOk, publishImpl: pubOk });
   assert.equal(issued.branch.letter, 'B');
   assert.equal(parseKey(issued.branch.key).letter, 'B');
   db.close();
@@ -416,7 +420,7 @@ test('после перевыпуска ключа филиал ВИДНО и д
   fs.writeFileSync(path.join(dir, 'control.json'),
     JSON.stringify({ clinic_id: 'c-1', install_token: 'tok-AAAA' }));
   const db = asMain();
-  const added = await branchSyncAddBranch(db, { name: 'Чиланзар' }, admin, { mintImpl: mintOk, branchImpl: cpOk });
+  const added = await branchSyncAddBranch(db, { name: 'Чиланзар' }, admin, { mintImpl: mintOk, branchImpl: cpOk, publishImpl: pubOk });
   assert.equal(parseKey(added.branch.key).relay_token, 'relay-tok-1');
 
   branchSyncRegenerateKey(db, {}, admin);
@@ -429,7 +433,7 @@ test('после перевыпуска ключа филиал ВИДНО и д
   assert.equal(branchRows(after).find((r) => r.id === row.id).state, 'key_no_relay');
 
   // И лекарство работает: тот же вызов выписывает учётку заново.
-  const fixed = await branchSyncBranchKey(db, { branch_id: row.id }, admin, { mintImpl: mintOk2, branchImpl: cpOk });
+  const fixed = await branchSyncBranchKey(db, { branch_id: row.id }, admin, { mintImpl: mintOk2, branchImpl: cpOk, publishImpl: pubOk });
   assert.equal(fixed.relay.ok, true);
   assert.equal(parseKey(fixed.branch.key).relay_token, 'relay-tok-2');
   const healed = branchSyncBranches(db, {}, admin);
@@ -446,7 +450,7 @@ test('филиал, заведённый без интернета, получа
   fs.writeFileSync(path.join(dir, 'control.json'),
     JSON.stringify({ clinic_id: 'c-1', install_token: 'tok-AAAA' }));
   const db = asMain();
-  const added = await branchSyncAddBranch(db, { name: 'Себзар' }, admin, { mintImpl: mintOffline, branchImpl: cpOk });
+  const added = await branchSyncAddBranch(db, { name: 'Себзар' }, admin, { mintImpl: mintOffline, branchImpl: cpOk, publishImpl: pubOk });
   assert.equal(added.relay.ok, false);
   assert.equal(parseKey(added.branch.key).relay_token, null);
 
@@ -454,7 +458,7 @@ test('филиал, заведённый без интернета, получа
   assert.equal(branchRows(before).find((r) => r.id === added.branch.id).state, 'key_no_relay',
     'экран обязан показать кнопку, иначе филиал остаётся без канала навсегда');
 
-  const fixed = await branchSyncBranchKey(db, { branch_id: added.branch.id }, admin, { mintImpl: mintOk, branchImpl: cpOk });
+  const fixed = await branchSyncBranchKey(db, { branch_id: added.branch.id }, admin, { mintImpl: mintOk, branchImpl: cpOk, publishImpl: pubOk });
   assert.equal(parseKey(fixed.branch.key).relay_token, 'relay-tok-1');
   db.close();
 });
@@ -464,7 +468,7 @@ test('неактивированной клинике кнопку не пока
   // кнопка отказывала бы всегда.
   inDir('no-enrol');
   const db = asMain();
-  const added = await branchSyncAddBranch(db, { name: 'Мирзо' }, admin, { mintImpl: mintOffline, branchImpl: cpOk });
+  const added = await branchSyncAddBranch(db, { name: 'Мирзо' }, admin, { mintImpl: mintOffline, branchImpl: cpOk, publishImpl: pubOk });
   const list = branchSyncBranches(db, {}, admin);
   assert.equal(list.can_relay, false);
   assert.equal(branchRows(list).find((r) => r.id === added.branch.id).state, 'key');
@@ -477,7 +481,7 @@ test('перевыпуск ключа синхронизации гасит и �
   // 401 вместо честного «учётки нет».
   inDir('regen');
   const db = asMain();
-  const added = await branchSyncAddBranch(db, { name: 'Мирзо' }, admin, { mintImpl: mintOk, branchImpl: cpOk });
+  const added = await branchSyncAddBranch(db, { name: 'Мирзо' }, admin, { mintImpl: mintOk, branchImpl: cpOk, publishImpl: pubOk });
   assert.equal(parseKey(added.branch.key).relay_token, 'relay-tok-1');
 
   assert.equal(branchSyncRegenerateKey(db, {}, admin).ok, true);
@@ -631,4 +635,66 @@ test('ключ без кода активации дочиняется на ме
   assert.equal(calls, 0, 'у строки с кодом лекарство не тревожит Easy-Med');
   assert.equal(parseKey(again.branch.key).enroll_code, 'EM-REPAIR-01', 'и код не подменяется');
   db.close();
+});
+
+// BRANCH_RELAY_ON_BY_DEFAULT_V1 — филиалы в разных зданиях: запасной путь и
+// есть единственный.
+//
+// Владелец 2026-09-02, дословно и дважды: «branches are not located within one
+// network so clinic data should be transferred by the settings.easymed.uz».
+// Резервный канал по умолчанию был ВЫКЛЮЧЕН, поэтому копия на сервер не
+// уходила; филиал честно писал «включите отправку копии в главном филиале», а в
+// главном включать было нечего — переключатель существовал, но о нём никто не
+// знал. Целый день ушёл на эту одну галочку.
+test('заведение филиала само включает резервный канал и сразу кладёт копию', async () => {
+  const dir = inDir('relay-default-on');
+  fs.writeFileSync(path.join(dir, 'control.json'),
+    JSON.stringify({ clinic_id: 'c-1', install_token: 'tok-AAAA' }));
+  const db = asMain();
+  assert.notEqual(readPairing(dir).relay, true, 'до заведения филиала канал выключен');
+
+  let published = 0;
+  const countingPub = async () => { published += 1; return { ok: true, bytes: 10 }; };
+  const res = await branchSyncAddBranch(db, { name: 'Чиланзар' }, admin,
+    { mintImpl: mintOk, branchImpl: cpOk, publishImpl: countingPub });
+
+  assert.equal(res.relay_turned_on, true);
+  assert.equal(readPairing(dir).relay, true, 'канал включён и это записано на диск');
+  // Копия ложится СРАЗУ, а не через час: филиал ставят через минуты после
+  // выдачи ключа, и первая же его синхронизация не должна упереться в пустоту.
+  assert.equal(published, 1);
+  assert.equal(res.published.ok, true);
+});
+
+test('уже включённый канал не трогают, но копию всё равно обновляют', async () => {
+  const dir = inDir('relay-already-on');
+  fs.writeFileSync(path.join(dir, 'control.json'),
+    JSON.stringify({ clinic_id: 'c-1', install_token: 'tok-AAAA' }));
+  const db = asMain();
+  writePairing(dir, { ...readPairing(dir), relay: true });
+
+  let published = 0;
+  const countingPub = async () => { published += 1; return { ok: true, bytes: 10 }; };
+  const res = await branchSyncAddBranch(db, { name: 'Себзар' }, admin,
+    { mintImpl: mintOk, branchImpl: cpOk, publishImpl: countingPub });
+
+  assert.equal(res.relay_turned_on, false, 'включать было нечего');
+  assert.equal(published, 1, 'а копию обновить всё равно надо — у филиала её ещё нет');
+});
+
+test('упавшая первая выгрузка не срывает заведение филиала', async () => {
+  const dir = inDir('relay-pub-fails');
+  fs.writeFileSync(path.join(dir, 'control.json'),
+    JSON.stringify({ clinic_id: 'c-1', install_token: 'tok-AAAA' }));
+  const db = asMain();
+  const boom = async () => { throw new Error('нет сети'); };
+  const res = await branchSyncAddBranch(db, { name: 'Юнусабад' }, admin,
+    { mintImpl: mintOk, branchImpl: cpOk, publishImpl: boom });
+
+  // Ключ уже выдан и он рабочий. Сорвать заведение филиала из-за недоступного
+  // сервера значило бы сделать офлайновую клинику заложником чужого сервера —
+  // то же правило, что и у выдачи кода активации.
+  assert.equal(res.ok, true);
+  assert.ok(res.branch.key, 'ключ выдан несмотря на неудачную выгрузку');
+  assert.equal(res.published.ok, false);
 });

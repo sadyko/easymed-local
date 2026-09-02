@@ -550,33 +550,21 @@ function paintRelay(card, status, admin) {
     // написано на нём самом; здесь — только то, чего на нём нет.
     box.appendChild(h('p', { class: 'muted bsync-note bsync-hint' }, relayExplainer(status)));
 
-    // Кнопка и строка о последней выгрузке — В ОДНУ СТРОКУ, а не абзацем над
-    // кнопкой: это одно и то же дело, «когда отправлялось» и «отправить».
+    // BRANCH_RELAY_AUTOMATIC_V1 — кнопки «Отправить копию сейчас» здесь БОЛЬШЕ
+    // НЕТ, и это требование владельца 2026-09-02, дословно: «why there is send
+    // copy button it should be fetched by request and constantly every 1 hour».
+    //
+    // Он прав, и кнопка была симптомом более старой ошибки. Копия уходит по
+    // расписанию (relay.js: через 90 секунд после старта и дальше раз в час) и
+    // сразу при заведении филиала (rpc/branch-sync.js). Ничего, что человек
+    // обязан нажать, в этой цепочке быть не должно: филиал в другом здании
+    // ломается не тогда, когда владелец забыл нажать, а через час после этого,
+    // и связь между двумя событиями с экрана не видна.
+    //
+    // Строка о последней выгрузке ОСТАЁТСЯ: «когда отправлялось» — это ответ на
+    // вопрос «работает ли оно», а не приглашение к действию.
     const line = publishLine(status);
-    if (status.role === 'main' && status.relay_enabled) {
-        const pubBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, 'Отправить копию сейчас');
-        const pubStatus = h('p', { class: 'upd-action-status', role: 'status' });
-        pubBtn.addEventListener('click', async () => {
-            pubBtn.disabled = true;
-            pubStatus.textContent = tr('Отправляем копию на сервер…');
-            try {
-                const data = await rpc('branch_sync_relay_publish');
-                // ok:false здесь не исключение: отсутствие интернета для этой
-                // клиники норма, и звучать оно должно как состояние.
-                toast(data && data.ok ? tr('Копия отправлена') : (data && data.message) || tr('Не удалось отправить копию'),
-                    data && data.ok ? 'ok' : 'fail');
-            } catch (e) {
-                toast(e.message, 'fail');
-            }
-            await paint(card);
-        });
-        box.appendChild(h('div', { class: 'bsync-actions' },
-            pubBtn,
-            line ? h('span', { class: 'muted bsync-note' }, say(line)) : null,
-            pubStatus));
-    } else if (line) {
-        box.appendChild(h('p', { class: 'muted bsync-note' }, say(line)));
-    }
+    if (line) box.appendChild(h('p', { class: 'muted bsync-note' }, say(line)));
 
     // KEY_LOSS_WARNING ЗДЕСЬ БОЛЬШЕ НЕТ. Он стоял абзацем под этим блоком на
     // каждой отрисовке и переехал в окно подтверждения перевыпуска — туда, где

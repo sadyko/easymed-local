@@ -708,7 +708,10 @@ export function branchSyncBranches(db, args, user) {
  * второй филиал с тем же именем почти всегда означает двойное нажатие, а платит
  * за него клиника буквой из общей очереди.
  */
-export async function branchSyncAddBranch(db, args, user, { mintImpl = mintRelayToken, branchImpl = createBranchOnControlPlane } = {}) {
+export async function branchSyncAddBranch(db, args, user, {
+  mintImpl = mintRelayToken, branchImpl = createBranchOnControlPlane,
+  publishImpl = publishCatalogue,
+} = {}) {
   requireAdmin(user);
   const dataDir = getDataDir();
   const pairing = readPairing(dataDir);
@@ -756,7 +759,54 @@ export async function branchSyncAddBranch(db, args, user, { mintImpl = mintRelay
 
   const relay = await ensureBranchToken(db, dataDir, branch.id, mintImpl);
   const enroll = await ensureBranchEnroll(db, dataDir, branch.id, branch.name, branchImpl);
-  return { ok: true, branch: branchRow(db, pairing, branch, null), relay, enroll };
+
+  // BRANCH_RELAY_ON_BY_DEFAULT_V1 — у филиала, который заводят прямо сейчас,
+  // запасной путь включается сам.
+  //
+  // Резервный канал задумывался как «запасной» и по умолчанию был выключен.
+  // Это верно ровно для одного случая — филиалы в одном здании, — и неверно
+  // для того, ради которого филиалы вообще заводят. Владелец 2026-09-02,
+  // дословно и дважды: «branches are not located within one network so clinic
+  // data should be transferred by the settings.easymed.uz». Для такой сети это
+  // не запасной путь, а ЕДИНСТВЕННЫЙ.
+  //
+  // Чем оборачивалось «выключено по умолчанию»: филиал ставили, он не видел
+  // главного напрямую, честно писал «включите отправку копии в главном
+  // филиале» — а в главном включать было нечего, потому что человек и не знал
+  // о существовании этого переключателя. Кнопка «Отправить копию сейчас» тоже
+  // появляется только после галочки, так что и она была невидима.
+  //
+  // Выключить по-прежнему можно: галочка на месте. Меняется умолчание, а не
+  // возможность выбора.
+  let relayTurnedOn = false;
+  if (!relayEnabled(pairing)) {
+    try {
+      ensureSyncGroup(dataDir);
+      writePairing(dataDir, { ...readPairing(dataDir), relay: true });
+      relayTurnedOn = true;
+    } catch (e) {
+      // Не повод срывать заведение филиала: ключ уже выдан и он рабочий, а
+      // канал можно включить галочкой руками.
+      console.warn('[branch-sync] could not switch the relay on for a new branch:', e && e.message);
+    }
+  }
+
+  // И сразу кладём копию, не дожидаясь часового расписания. Филиал ставят
+  // через минуты после выдачи ключа, а не через час: без этого первая же
+  // попытка синхронизации упирается в «на сервере пока нет копии справочника»
+  // — то самое сообщение, которое владелец видел весь день.
+  let published = null;
+  if (relayEnabled(readPairing(dataDir))) {
+    try {
+      published = await publishImpl(db, dataDir);
+    } catch (e) {
+      console.warn('[branch-sync] first relay publish did not go through:', e && e.message);
+      published = { ok: false, reason: 'relay_publish_failed' };
+    }
+  }
+
+  return { ok: true, branch: branchRow(db, readPairing(dataDir), branch, null), relay, enroll,
+    relay_turned_on: relayTurnedOn, published };
 }
 
 /**
