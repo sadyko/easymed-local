@@ -5,7 +5,7 @@
 // числом. Гибридные часы дают порядок, который не ломается от этого.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { nextStamp, compareStamps, parseStamp, isStamp } from './hlc.js';
+import { nextStamp, compareStamps, parseStamp, isStamp, stampAt } from './hlc.js';
 
 test('метка растёт даже когда часы стоят на месте', () => {
   const clock = () => 1000;
@@ -113,4 +113,50 @@ test('негодная полученная метка не проглатыва
   // null/undefined — это «нечего мёржить», а не мусор; часы просто не растут от чужого.
   assert.doesNotThrow(() => nextStamp(null, 'B', () => 1000, null));
   assert.doesNotThrow(() => nextStamp(null, 'B', () => 1000, undefined));
+});
+
+// --- Задача 7d: метка от времени ПРАВКИ -------------------------------------
+//
+// nextStamp отвечает за причинность: его пол поднимается до Date.now() на
+// каждом приёме, поэтому метка, отчеканенная выгрузкой, — это время ОТПРАВКИ.
+// Пока по метке решался только порядок приёма, это ничему не мешало; как
+// только по ней стали разбирать, чья правка колонки новее, понадобилась
+// вторая, честная ось — stampAt.
+
+test('stampAt: формат тот же, что у nextStamp, и сравним тем же компаратором', () => {
+  const s = stampAt(Date.UTC(2026, 8, 3, 10, 0, 0), 'B');
+  assert.equal(isStamp(s), true, 'ширины полей — замороженный контракт на проводе');
+  assert.match(s, /^[0-9a-f]{12}-0000-B$/, 'счётчик всегда ноль: различает не он, а время и буква');
+  assert.equal(parseStamp(s).ms, Date.UTC(2026, 8, 3, 10, 0, 0));
+});
+
+test('stampAt: правка двухчасовой давности несёт ДВА ЧАСА НАЗАД даже после приёма чужой свежей метки', () => {
+  // Это ровно то измерение, из-за которого задача и появилась. У nextStamp
+  // после единственного приёма метка той же правки становится «сейчас».
+  const editedMs = Date.now() - 2 * 3600000;
+  const fresh = nextStamp(null, 'B', () => Date.now()).stamp;      // приняли что-то свежее
+  const clock = parseStamp(fresh);
+
+  const viaHlc = nextStamp({ ms: clock.ms, cnt: clock.cnt }, 'B', () => editedMs).stamp;
+  assert.equal(parseStamp(viaHlc).ms, clock.ms,
+    'nextStamp отдаёт ПОЛ часов, то есть время отправки — на этом и терялось «кто правил позже»');
+
+  const viaEdit = stampAt(editedMs, 'B');
+  assert.equal(parseStamp(viaEdit).ms, editedMs, 'stampAt отдаёт время самой правки, и никакой приём его не двигает');
+  assert.equal(compareStamps(viaEdit, viaHlc) < 0, true);
+});
+
+test('stampAt: одна миллисекунда на двух узлах — тай-брейк по букве, одинаковый у обоих', () => {
+  const ms = Date.now();
+  const a = stampAt(ms, 'A');
+  const b = stampAt(ms, 'B');
+  assert.equal(compareStamps(a, b) < 0, true, 'B побеждает A');
+  // Главное: сравниваются ОДНИ И ТЕ ЖЕ две строки на обеих сторонах, поэтому
+  // победитель у них получается один — на этом и держится сходимость.
+  assert.equal(compareStamps(a, b), -compareStamps(b, a));
+});
+
+test('stampAt: мусор вместо времени — явная ошибка, а не метка эпохи 1970', () => {
+  assert.throws(() => stampAt(NaN, 'B'), /millisecond/);
+  assert.throws(() => stampAt(Date.now(), 'узел'), /node letter/);
 });

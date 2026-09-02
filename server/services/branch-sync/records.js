@@ -19,7 +19,7 @@
 // Всё это — в ОДНОЙ транзакции: половина приехавшей истории хуже, чем ничего,
 // потому что в ней визиты без пациентов.
 import { SqliteError } from 'better-sqlite3';
-import { compareStamps, isStamp, nextStamp, parseStamp } from './hlc.js';
+import { compareStamps, isStamp, nextStamp, parseStamp, stampAt } from './hlc.js';
 import { SHIPPED, REFS, CODE_REFS, readClock, writeClock } from './journal.js';
 
 // sync_seen (миграция 084): метка последнего ПРИНЯТОГО изменения каждой
@@ -386,6 +386,13 @@ function applyOne(db, rec, stats, ctx) {
   // «кто новее» шло между чужой меткой и ЧУЖОЙ ЖЕ (sync_seen помнит только
   // принятое), а местная правка в нём не участвовала вовсе.
   const localStamps = id == null ? null : localEditStamps(db, ctx, rec.tbl, rec.uid);
+  // МЕТКА ИМЕННО ЭТОЙ КОЛОНКИ (Задача 7d). Запись сборки до 7d поля stamps не
+  // несёт — тогда, как и раньше, у всех колонок метка одна, общая для записи.
+  const colStamp = (col) => {
+    const per = rec.stamps && typeof rec.stamps === 'object' && !Array.isArray(rec.stamps)
+      ? rec.stamps[col] : null;
+    return isStamp(per) ? per : rec.stamp;
+  };
   // true — местная правка этой колонки НОВЕЕ приехавшей записи.
   //
   // ЗАПОМИНАТЬ эту метку в sync_seen НЕЛЬЗЯ, хотя руки чешутся: пробовал,
@@ -399,7 +406,10 @@ function applyOne(db, rec, stats, ctx) {
   const localWins = (col) => {
     if (!localStamps) return false;
     const mine = localStamps.get(col) || localStamps.get('*');
-    return !!mine && compareStamps(rec.stamp, mine) <= 0;
+    // Строго БОЛЬШЕ — иначе приехавшая не применяется. На равных
+    // миллисекундах спор решает буква узла внутри самой метки, и решает
+    // ОДИНАКОВО на обеих сторонах: сравниваются одни и те же две строки.
+    return !!mine && compareStamps(colStamp(col), mine) <= 0;
   };
 
   if (rec.op === 'del') {
@@ -415,6 +425,9 @@ function applyOne(db, rec, stats, ctx) {
     // которой здесь только что работали, стирать нельзя, даже если наша
     // правка уже уехала соседу.
     if (localWins('*') || SHIPPED[rec.tbl].some((c) => localWins(c))) { stats.skipped++; return; }
+    // «Удаление проигрывает более поздней правке» считается на ТОЙ ЖЕ оси, что
+    // и сами правки: надгробие несёт время удаления, колонка — время своей
+    // правки (Задача 7d).
     if (id != null) { ctx.q(`DELETE FROM ${rec.tbl} WHERE id = ?`).run(id); stats.deleted++; }
     // Надгробие вместо поколоночных меток: строки больше нет, помнить по
     // колонкам нечего, а помнить САМ ФАКТ удаления обязательно (правило ниже).
@@ -464,8 +477,8 @@ function applyOne(db, rec, stats, ctx) {
     if (!rec.data || !Object.prototype.hasOwnProperty.call(rec.data, col)) continue;
     if (!wanted(col)) continue;
     const prev = seenCol.get(rec.tbl, rec.uid, col);
-    if (prev && compareStamps(rec.stamp, prev.stamp) <= 0) continue;   // эта колонка новее у нас
-    if (localWins(col)) continue;                                      // и местная правка тоже новее
+    if (prev && compareStamps(colStamp(col), prev.stamp) <= 0) continue;   // эта колонка новее у нас
+    if (localWins(col)) continue;                                          // и местная правка тоже новее
     cols.push(col); vals.push(rec.data[col]);
   }
   // Новая строка: у неё ничего не защищено и ничего не видено — все колонки едут.
@@ -499,7 +512,7 @@ function applyOne(db, rec, stats, ctx) {
     // статус от более новой записи: половина строки от вчера, половина от
     // сегодня, и никакой ошибки в логах.
     const prevRef = seenCol.get(rec.tbl, rec.uid, col);
-    if ((prevRef && compareStamps(rec.stamp, prevRef.stamp) <= 0) || localWins(col)) {
+    if ((prevRef && compareStamps(colStamp(col), prevRef.stamp) <= 0) || localWins(col)) {
       // Ссылку уже приняли новее — или новее её правили здесь. Существующей
       // строке это ничем не грозит, а НОВУЮ без обязательного родителя не
       // собрать — и выдумывать его нельзя.
@@ -518,7 +531,7 @@ function applyOne(db, rec, stats, ctx) {
       // То же правило. Колонка необязательная (visit_services.service_id
       // допускает NULL), поэтому устаревшую ссылку достаточно не трогать.
       const prevRef = seenCol.get(rec.tbl, rec.uid, col);
-      if (prevRef && compareStamps(rec.stamp, prevRef.stamp) <= 0) continue;
+      if (prevRef && compareStamps(colStamp(col), prevRef.stamp) <= 0) continue;
       if (localWins(col)) continue;
       const pid = catalogueId(db, ctx, spec, code);
       if (pid == null) { waiting = { tbl: spec.table, uid: code }; break; }
@@ -594,7 +607,9 @@ function applyOne(db, rec, stats, ctx) {
   // Метка пишется ТОЛЬКО применённым колонкам. Написать её всему снимку
   // значило бы объявить отправителя автором каждой колонки строки — с этого
   // и начинался дефект, который чинит вся эта задача.
-  for (const col of cols) rememberApplied.run(rec.tbl, rec.uid, col, rec.stamp);
+  // Метка КОЛОНКИ, а не записи: именно её сравнивает следующая приехавшая
+  // запись, и подменив её общей, мы вернули бы «автор всего снимка».
+  for (const col of cols) rememberApplied.run(rec.tbl, rec.uid, col, colStamp(col));
   if (held) stats.protected++;
   if (cols.length || id == null) stats.applied++; else stats.skipped++;
 }
@@ -756,7 +771,8 @@ function localUnshippedCols(db, ctx, tbl, uid, peer) {
 }
 
 /**
- * МЕТКИ МЕСТНЫХ ПРАВОК строки, по колонкам (ревью 7/7b, C1).
+ * МЕТКИ МЕСТНЫХ ПРАВОК строки, по колонкам (ревью 7/7b — C1; ось исправлена
+ * Задачей 7d).
  *
  * Дефект, который это чинит, воспроизводится на двух базах и НЕ лечится
  * порядком выгрузки и выборки. B правит телефон в 09:00 и выкладывает; A этого
@@ -768,42 +784,27 @@ function localUnshippedCols(db, ctx, tbl, uid, peer) {
  * только ПРИНЯТЫЕ метки, то есть сравнение шло чужая-против-чужой, а своя
  * держалась одной лишь защитой — а та по построению временная.
  *
- * ОСЬ СРАВНЕНИЯ — ТА ЖЕ, ЧТО У buildBatch: nextStamp от времени правки и от
- * тех же сохранённых часов. Что это значит на самом деле, стоит записать, иначе
- * следующий читатель будет искать здесь «время правки» и не найдёт: часы HLC
- * поднимаются до Date.now() при КАЖДОМ приёме (writeClock), поэтому метка,
- * которую любой узел чеканит выгрузкой, — это его время ОТПРАВКИ. Значит и
- * сравнение здесь по сути такое: «наша неотправленная правка против записи,
- * отчеканенной соседом ДО нашего последнего приёма». Записи старше нашего
- * последнего обмена — заведомо устаревшие, и своя правка их переживает; более
- * свежая чужая запись выигрывает, как и должна.
+ * ОСЬ — ВРЕМЯ ПРАВКИ (stampAt), без пола часов. Метка приехавшей колонки
+ * чеканится у соседа ровно так же, поэтому обе стороны сравнивают ОДНИ И ТЕ ЖЕ
+ * две строки и выбирают одного победителя — вот и вся сходимость. Пробовать
+ * здесь nextStamp бесполезно: его пол поднимается до Date.now() на каждом
+ * приёме, и «новее» означало бы «позже вышел на связь» (замерено, разбор — в
+ * плане, Задача 7d).
  *
- * ПРОБОВАЛ И ОТКАТИЛ, чтобы не пробовали снова (замерено прогоном 40 случайных
- * сетей, см. план — Задача 7c):
- *   - чеканить метку от ТЕКУЩИХ часов, то есть «любая неподтверждённая правка
- *     сильнее любой приехавшей»: 26 расхождений из 40 — ХУЖЕ, чем до правки
- *     (24), потому что узлы начинают отказывать друг другу симметрично;
- *   - запоминать выигравшую местную метку в sync_seen: 19 из 40. Отказ по
- *     живой журнальной записи безопасен (она ещё не подтверждена — значит,
- *     ещё уедет, и сосед придёт к тому же значению), а отказ по метке в
- *     sync_seen переживает чистку журнала и делается от имени правки, которую
- *     больше никто не пришлёт: расхождение застывает навсегда.
- *   - нынешний вариант: 16 из 40.
+ * Проигравшая сторона ничего не теряет: её правка не подтверждена, значит
+ * уедет соседу и победит там по той же метке.
  */
 function localEditStamps(db, ctx, tbl, uid) {
   const rows = ctx.q('SELECT cols, MAX(at) AS at FROM sync_journal WHERE tbl = ? AND uid = ? GROUP BY cols')
     .all(tbl, uid);
   if (!rows.length) return null;
-  // Часы читаются ОДИН раз на порцию: по ходу приёма они не меняются
-  // (writeClock в самом конце), а чтение на каждую строку стоило бы запроса.
-  if (ctx.clock === undefined) ctx.clock = readClock(db);
   const out = new Map();
   for (const row of rows) {
     const ms = Date.parse(row.at);
     if (!Number.isFinite(ms)) continue;
     let stamp;
     try {
-      stamp = nextStamp(ctx.clock, ctx.self, () => ms).stamp;
+      stamp = stampAt(ms, ctx.self);
     } catch {
       continue;   // буква проверена на входе; это страховка, а не путь
     }

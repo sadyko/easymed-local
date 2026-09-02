@@ -13,7 +13,7 @@
 // результаты по visit_service_id+parameter, и панель на 20 показателей
 // приехавшая без него схлопывается в одну безымянную строку — не «неполно»,
 // а неотличимо от одного анализа.
-import { nextStamp } from './hlc.js';
+import { nextStamp, stampAt } from './hlc.js';
 
 export const SHIPPED = {
   patients: [
@@ -212,10 +212,26 @@ export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date
     // молча portила бы соседу порядок слияния. Падаем обратно на часы
     // вызова — как для новой правки без собственной сохранённой метки.
     const atMs = h.at ? Date.parse(h.at) : NaN;
+    // ЧАСЫ ПО-ПРЕЖНЕМУ ДВИГАЮТСЯ — но метку авторства больше не выдают
+    // (Задача 7d). Их дело осталось прежним: не дать порядку приёма
+    // развалиться и запомнить, что в сети видели время новее нашего. А вот
+    // ответ на вопрос «чья правка колонки новее» они давали неверный: пол
+    // часов поднимается до Date.now() на каждом приёме, поэтому метка,
+    // отчеканенная выгрузкой, — это время ОТПРАВКИ, и побеждал не тот, кто
+    // правил позже, а тот, кто позже вышел на связь.
     clock = nextStamp(clock, self, Number.isFinite(atMs) ? () => atMs : clockFn);
+    // Время правки строки: у тёплого хвоста — из журнала, у засева — из самой
+    // строки (updated_at, где он есть; иначе created_at), и НИКОГДА не
+    // «сейчас». Иначе поздний засев затирал бы у соседа правки, которые он
+    // принял от третьего филиала, — тем и опасен снимок под авторством '*'.
+    const rowAtMs = rowEditedAt(row, atMs, clockFn);
+    const rowStamp = mintAt(rowAtMs, self, clock);
 
     if (!row) {
-      records.push({ tbl: h.tbl, uid: h.uid, op: 'del', stamp: clock.stamp, origin: self });
+      // Надгробие несёт время УДАЛЕНИЯ (журнал/sync_tombstones.at): правило
+      // «удаление проигрывает более поздней правке» обязано считаться на той
+      // же оси, что и сами правки.
+      records.push({ tbl: h.tbl, uid: h.uid, op: 'del', stamp: rowStamp, origin: self });
       continue;
     }
 
@@ -248,18 +264,53 @@ export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date
     // базах. Имея номер, он отбрасывает ровно те притязания, которые уже
     // учёл (recv_upto), и оставляет только новые.
     const changedAt = seeding ? null : {};
-    if (!seeding) {
+    // МЕТКА НА КАЖДУЮ АВТОРСКУЮ КОЛОНКУ (Задача 7d) — от времени, когда её
+    // правили здесь. Приёмник по ней и решает поколоночный спор: сравниваются
+    // ОДНИ И ТЕ ЖЕ две строки на обеих сторонах, поэтому победитель у них
+    // получается один, и слияние сходится.
+    const stamps = {};
+    if (seeding) {
+      // ЗАСЕВ ОТДАЁТ ЧУЖОЕ АВТОРСТВО КАК ЧУЖОЕ (Задача 7d). Журнала по этой
+      // строке у нас нет — есть время самой строки, и им подписываются наши
+      // собственные колонки. Но часть колонок мы не правили, а ПРИНЯЛИ от
+      // третьего филиала, и их настоящее время лежит в sync_seen: это метка,
+      // под которой мы их приняли.
+      //
+      // Без этого поздний засев был разрушителен, и это уже ловилось: B правит
+      // адрес и засевает им C, а следом C засевает A, который про правку B ещё
+      // не знает, — и адрес у C откатывается на старый. Подписав чужую колонку
+      // её собственной меткой, мы отдаём соседу ровно то, что знаем: «вот это
+      // значение, и оно от такого-то времени», а он сам решает, новее оно его
+      // или нет.
+      const seen = new Map(
+        q('SELECT col, stamp FROM sync_seen WHERE tbl = ? AND uid = ?').all(h.tbl, h.uid)
+          .map((r) => [r.col, r.stamp])
+      );
+      const mark = (col) => { stamps[col] = seen.get(col) || rowStamp; };
+      for (const col of SHIPPED[h.tbl]) mark(col);
+      for (const col of Object.keys(REFS[h.tbl] || {})) mark(col);
+      for (const spec of Object.values(CODE_REFS[h.tbl] || {})) mark(spec.ref);
+      // '*' — про строку целиком (её заведение), и метка у неё своя, строчная.
+      stamps['*'] = rowStamp;
+    } else {
       for (const c of q(COLS_AT_SQL).all(h.tbl, h.uid, from.sent_seq)) {
+        const colMs = c.at ? Date.parse(c.at) : NaN;
+        const colStamp = mintAt(Number.isFinite(colMs) ? colMs : rowAtMs, self, clock);
         for (const part of String(c.cols || '*').split(',')) {
           const col = part.trim();
           if (!col) continue;
           if (!(col in changedAt) || changedAt[col] < c.seq) changedAt[col] = c.seq;
+          const prev = stamps[col];
+          if (!prev || prev < colStamp) stamps[col] = colStamp;
         }
       }
     }
 
     records.push({
-      tbl: h.tbl, uid: h.uid, op: 'put', stamp: clock.stamp, data, refs, origin: self,
+      tbl: h.tbl, uid: h.uid, op: 'put', stamp: rowStamp, data, refs, origin: self,
+      // Метка на колонку. Приёмник сборки до 7d этого поля не знает и читает
+      // record.stamp для всех колонок разом — ровно как читал раньше.
+      stamps,
       // КАКИЕ колонки мы действительно правили. data — по-прежнему ВСЯ строка:
       // у соседа этой строки может не быть вовсе, и заводить её из трёх
       // изменённых полей нечем (NOT NULL без умолчания). Разница в том, что
@@ -292,12 +343,39 @@ export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date
   return { records, upto, clock, seed };
 }
 
-// Колонки строки и номер их последней правки — по НАБОРАМ, как их записал
+/**
+ * Время, которым подписывается СТРОКА. Тёплый хвост знает его из журнала;
+ * засев — из самой строки: updated_at там, где он есть (patients, visits), и
+ * created_at там, где его нет (visit_services, lab_results). «Сейчас» не
+ * подставляется никогда: именно оно и делало поздний засев разрушительным.
+ */
+function rowEditedAt(row, atMs, clockFn) {
+  const fromRow = row ? Date.parse(row.updated_at || row.created_at || '') : NaN;
+  if (Number.isFinite(fromRow) && (!Number.isFinite(atMs) || fromRow > atMs)) return fromRow;
+  if (Number.isFinite(atMs)) return atMs;
+  // Ни журнал, ни строка не дали читаемой даты — берём часы вызова, как и
+  // раньше в этом случае: метка «1970» проиграла бы вообще всему и молча.
+  return Math.floor(clockFn());
+}
+
+/**
+ * Метка от времени правки. Падает обратно на метку часов, если время
+ * нечитаемо: пустая строка на проводе хуже приблизительной.
+ */
+function mintAt(ms, self, clock) {
+  try {
+    return stampAt(ms, self);
+  } catch {
+    return clock.stamp;
+  }
+}
+
+// Колонки строки, номер и ВРЕМЯ их последней правки — по НАБОРАМ, как их записал
 // триггер. GROUP BY cols, а не строка за строкой: у пациента, правленного
 // тысячу раз, различных наборов два-три, и группировка превращает тысячу
 // строк в три ещё в базе.
 const COLS_AT_SQL = `
-  SELECT cols, MAX(seq) AS seq FROM sync_journal
+  SELECT cols, MAX(seq) AS seq, MAX(at) AS at FROM sync_journal
    WHERE tbl = ? AND uid = ? AND seq > ?
    GROUP BY cols
 `;

@@ -343,7 +343,12 @@ test('C2: забытый сосед по возвращении получает
   // Старая правка — чтобы отличить «метка от created_at» от «метка от
   // надгробия, прошедшего первым» (ревью Задачи 4, N2): 2020 год не спутать
   // с «сейчас» ни при какой раскладке.
-  db.prepare("UPDATE patients SET created_at = '2020-01-01T00:00:00Z' WHERE id = ?").run(survivorId);
+  // Отматывается и updated_at: с Задачи 7d метка засева идёт от времени
+  // ПОСЛЕДНЕЙ правки строки (updated_at там, где он есть), а created_at —
+  // запасной вариант. Строка, созданная в 2020-м и с тех пор не тронутая,
+  // должна и уехать с меткой 2020 года.
+  db.prepare("UPDATE patients SET created_at = '2020-01-01T00:00:00Z', updated_at = '2020-01-01T00:00:00Z' WHERE id = ?")
+    .run(survivorId);
   const xId = db.prepare("INSERT INTO patients (full_name) VALUES ('X')").run().lastInsertRowid;
   db.prepare('DELETE FROM patients WHERE id = ?').run(xId);   // у X теперь и presence нет, и есть надгробие
 
@@ -493,14 +498,19 @@ test('N4: I6 — соседей не осталось после чистки з
   db.close();
 });
 
-test('N4: I4 — испорченная дата в журнале не чеканит метку эпохи 1970, а падает на часы вызова', () => {
+test('N4: I4 — испорченная дата в журнале не чеканит метку эпохи 1970, а берёт время самой строки', () => {
   const db = fresh(); warm(db);
   db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
   db.prepare("UPDATE sync_journal SET at = 'garbage' WHERE tbl = 'patients'").run();
   const batch = buildBatch(db, { self: 'B', peer: 'C', clock: () => 1234 });
   const rec = batch.records.find(r => r.tbl === 'patients');
   const stamp = parseStamp(rec.stamp);
-  assert.equal(stamp.ms, 1234, 'NaN от Date.parse("garbage") не должен стать эпохой 1970 — используем часы вызова');
+  assert.notEqual(stamp.ms, 0, 'NaN от Date.parse("garbage") не должен стать эпохой 1970: такая метка проиграла бы всему');
+  // С Задачи 7d запасной вариант честнее часов вызова: у строки есть
+  // СОБСТВЕННОЕ время правки (updated_at/created_at), и оно ближе к правде,
+  // чем «сейчас» у того, кто собирает порцию.
+  const rowAt = Date.parse(db.prepare("SELECT updated_at FROM patients WHERE full_name = 'Иванов'").get().updated_at);
+  assert.equal(stamp.ms, rowAt, 'метка берётся из самой строки, а не из часов вызова');
   db.close();
 });
 

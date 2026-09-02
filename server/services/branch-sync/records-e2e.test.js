@@ -489,6 +489,97 @@ test('BRANCH_RECORDS_V1: пациенты и лабораторная очере
     assert.ok(seen > 0, 'хотя бы одна копия обязана была сняться: иначе тест ничего не проверяет');
   });
 
+  // ОДНОИМЁННАЯ ПРАВКА В ОДИН ТАКТ (Задача 7d). До неё это был единственный
+  // случай, который не сходился вовсе: каждый узел отказывал другому по своей
+  // неподтверждённой правке, оба подтверждали приём среза — и оставались при
+  // своём НАВСЕГДА. Теперь у колонки есть метка её собственного времени
+  // правки, обе стороны сравнивают ОДНИ И ТЕ ЖЕ две строки и выбирают одного
+  // победителя — позже правившего.
+  await t.test('оба филиала правят один телефон: побеждает тот, кто правил ПОЗЖЕ', async () => {
+    // Время правки проставляется явно: весь файл укладывается в секунду, а
+    // спор идёт именно о том, кто правил ПОЗЖЕ. Отсчёт — ВПЕРЁД от «сейчас», и
+    // это не хитрость: за предыдущие подтесты тот же телефон уже правили и
+    // принимали, sync_seen помнит те метки, и правка «час назад» честно
+    // проиграла бы им. Здесь важен порядок двух новых правок между собой.
+    //
+    // Переставляются прежние правки ТОГО ЖЕ ТЕЛЕФОНА: журнал помнит их все, а
+    // сравнивается последняя. И только телефона — тронув записи про адрес или
+    // про заведение строки ('*'), тест назначил бы этому узлу авторство и над
+    // ними, и следующий подтест разбирал бы уже не свой спор.
+    const editAt = (node, secondsAhead, value) => {
+      node.db.prepare("UPDATE patients SET phone = ? WHERE full_name = 'Иванов'").run(value);
+      const uid = node.db.prepare("SELECT uid FROM patients WHERE full_name = 'Иванов'").get().uid;
+      node.db.prepare("UPDATE sync_journal SET at = ? WHERE tbl = 'patients' AND uid = ? AND cols = 'phone'")
+        .run(new Date(Date.now() + secondsAhead * 1000).toISOString(), uid);
+    };
+    const phoneIn = (node) => node.db.prepare("SELECT phone FROM patients WHERE full_name = 'Иванов'").get().phone;
+
+    // B правил раньше, C — позже; такт у обоих один, порядок обхода B → C.
+    editAt(B, 10, '+998900000900');
+    editAt(C, 20, '+998900000950');
+    await round();
+    await round();
+    assert.equal(phoneIn(B), '+998900000950', 'у B');
+    assert.equal(phoneIn(C), '+998900000950', 'у C');
+    assert.equal(phoneIn(A), '+998900000950', 'и у главной клиники');
+
+    // ТОТ ЖЕ СПОР В ОБРАТНОМ ПОРЯДКЕ: позже правит B, а такт по-прежнему
+    // начинается с него. Победить обязано время правки, а не очерёдность.
+    editAt(C, 30, '+998900001900');
+    editAt(B, 40, '+998900001950');
+    await round();
+    await round();
+    assert.equal(phoneIn(B), '+998900001950', 'у B');
+    assert.equal(phoneIn(C), '+998900001950', 'у C');
+    assert.equal(phoneIn(A), '+998900001950', 'и у главной клиники');
+  });
+
+  // ПОЗДНИЙ ЗАСЕВ НЕ ЗАТИРАЕТ ЧУЖИЕ СВЕЖИЕ ПРАВКИ (Задача 7d, gap iii).
+  // Засев отдаёт снимок ВСЕЙ строки, и раньше — под свежей меткой «сейчас».
+  // Значит филиал, засеявший соседа позже, откатывал у него колонку, которую
+  // тот успел принять от третьего здания. Теперь у каждой колонки в засеве
+  // метка её настоящего времени: своя — из строки, чужая — из sync_seen, то
+  // есть та, под которой мы её сами приняли.
+  await t.test('засев не откатывает колонку, принятую соседом от третьего филиала', async () => {
+    // C правит адрес и доносит его до B (и до A).
+    C.db.prepare("UPDATE patients SET address = 'Юнусабад, свежий' WHERE full_name = 'Иванов'").run();
+    await round();
+    await round();
+    assert.equal(
+      B.db.prepare("SELECT address FROM patients WHERE full_name = 'Иванов'").get().address,
+      'Юнусабад, свежий', 'предпосылка: B принял свежий адрес от C');
+
+    // Филиал F подключают только сейчас. Его засевает B — и в снимке B адрес
+    // ПРИНЯТЫЙ от C, а не свой. Подписать его «сейчас» значило бы объявить B
+    // автором чужой правки.
+    A.db.prepare("INSERT INTO branches (name, letter) VALUES ('Яшнабад', 'F')").run();
+    assert.equal((await publishCatalogue(A.db, A.dir)).ok, true);
+    const F = await enrol('f', 'F', 'Яшнабад');
+    for (const node of [B, F]) {
+      const cat = await fetchCatalogue(node.dir);
+      assert.equal(cat.ok, true, node.tag + ': ' + JSON.stringify(cat));
+      applyCatalogue(node.db, cat.catalogue);
+    }
+    const backupImpl = async () => {};
+    for (let r = 0; r < 8; r++) {
+      await publishJournal(B.db, B.dir, {});
+      await fetchJournals(F.db, F.dir, { backupImpl });
+      await publishJournal(F.db, F.dir, {});
+      await fetchJournals(B.db, B.dir, { backupImpl });
+    }
+    assert.equal(
+      F.db.prepare("SELECT address FROM patients WHERE full_name = 'Иванов'").get().address,
+      'Юнусабад, свежий', 'засеянный филиал получает АКТУАЛЬНЫЙ адрес, а не снимок «как было у B»');
+
+    // И обратно: засев F не откатил адрес ни у кого.
+    await round();
+    for (const node of [A, B, C]) {
+      assert.equal(
+        node.db.prepare("SELECT address FROM patients WHERE full_name = 'Иванов'").get().address,
+        'Юнусабад, свежий', node.tag + ': поздний засев не откатывает чужую правку');
+    }
+  });
+
   await t.test('поставщик хранит шифротекст: ни имени пациента, ни телефона', () => {
     const rows = cpDb.prepare('SELECT relay_id, clinic_id, bytes FROM relay_blobs').all();
     assert.ok(rows.length >= 3, 'у каждого узла свой адрес — иначе они затирали бы друг друга');

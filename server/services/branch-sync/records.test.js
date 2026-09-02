@@ -692,3 +692,86 @@ test('7c: строку, которую отвергла база, видно в 
   assert.equal(db.prepare("SELECT recv_upto FROM sync_peers WHERE node = 'C'").get().recv_upto, 77);
   db.close();
 });
+
+// --- Задача 7d: поколоночный спор решает ВРЕМЯ ПРАВКИ ------------------------
+
+// Помощник: местная правка колонки «столько-то минут назад». Журнал пишет
+// время сам, но тест укладывается в миллисекунды, поэтому проставляем явно.
+const editAgo = (db, minutes, sql) => {
+  const before = db.prepare('SELECT COALESCE(MAX(seq), 0) s FROM sync_journal').get().s;
+  db.prepare(sql).run();
+  db.prepare('UPDATE sync_journal SET at = ? WHERE seq > ?')
+    .run(new Date(Date.now() - minutes * 60000).toISOString(), before);
+};
+
+test('7d: приехавшая колонка НОВЕЕ местной правки — применяется', () => {
+  const db = fresh();
+  const now = Date.now();
+  applyBatch(db, [put('patients', 'ax1', stampAt(now - 7200000), { full_name: 'Иванов', phone: 'исходный' })], S);
+  db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
+    .run(new Date().toISOString());
+  editAgo(db, 60, "UPDATE patients SET phone = 'моё 09:00' WHERE uid = 'ax1'");   // правили час назад
+  // Правка ВЫЛОЖЕНА: пока она не выложена, её держит защита (сосед о ней знать
+  // не мог), и спор метками до этого просто не доходит.
+  db.prepare('UPDATE sync_peers SET pub_seq = (SELECT MAX(seq) FROM sync_journal) WHERE node = ?').run('C');
+
+  applyBatch(db, [{
+    ...put('patients', 'ax1', stampAt(now - 600000), { phone: 'соседское 09:50' }),
+    changed: ['phone'], stamps: { phone: stampAt(now - 600000, 'C') },   // сосед правил 10 минут назад
+  }], S);
+  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'ax1'").get().phone, 'соседское 09:50',
+    'позже правил сосед — его значение и должно остаться');
+  db.close();
+});
+
+test('7d: приехавшая колонка СТАРШЕ местной правки — пропускается', () => {
+  const db = fresh();
+  const now = Date.now();
+  applyBatch(db, [put('patients', 'ax2', stampAt(now - 7200000), { full_name: 'Иванов', phone: 'исходный' })], S);
+  db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
+    .run(new Date().toISOString());
+  editAgo(db, 10, "UPDATE patients SET phone = 'моё 09:50' WHERE uid = 'ax2'");
+  // Правка уже выложена — защиты нет, спорит только метка.
+  db.prepare('UPDATE sync_peers SET pub_seq = (SELECT MAX(seq) FROM sync_journal) WHERE node = ?').run('C');
+
+  const r = applyBatch(db, [{
+    ...put('patients', 'ax2', stampAt(now - 3600000), { phone: 'соседское 09:00' }),
+    changed: ['phone'], stamps: { phone: stampAt(now - 3600000, 'C') },
+  }], S);
+  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'ax2'").get().phone, 'моё 09:50',
+    'позже правили здесь — вчерашний блоб соседа этого не отменяет');
+  assert.equal(r.protected, 0, 'держит МЕТКА, а не защита: защита снята выгрузкой');
+  db.close();
+});
+
+test('7d: одна миллисекунда, разные буквы — решает буква, и одинаково у обеих сторон', () => {
+  const db = fresh();
+  const now = Date.now();
+  applyBatch(db, [put('patients', 'ax3', stampAt(now - 7200000), { full_name: 'Иванов', phone: 'исходный' })], S);
+  db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
+    .run(new Date().toISOString());
+  const tie = now - 600000;
+  editAgo(db, 10, "UPDATE patients SET phone = 'от B' WHERE uid = 'ax3'");
+  db.prepare("UPDATE sync_journal SET at = ? WHERE tbl = 'patients' AND uid = 'ax3' AND cols = 'phone'")
+    .run(new Date(tie).toISOString());
+  db.prepare('UPDATE sync_peers SET pub_seq = (SELECT MAX(seq) FROM sync_journal) WHERE node = ?').run('C');
+
+  // Этот узел — B, приехало от C: та же миллисекунда, буква C больше.
+  applyBatch(db, [{
+    ...put('patients', 'ax3', stampAt(tie), { phone: 'от C' }),
+    changed: ['phone'], stamps: { phone: stampAt(tie, 'C') },
+  }], S);
+  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'ax3'").get().phone, 'от C',
+    'C > B по букве — и ровно так же это посчитает сам C, сравнивая те же две строки');
+  db.close();
+});
+
+test('7d: запись без stamps (сборка соседа до 7d) читается по метке записи', () => {
+  const db = fresh();
+  const now = Date.now();
+  applyBatch(db, [put('patients', 'ax4', stampAt(now - 7200000), { full_name: 'Иванов', phone: 'исходный' })], S);
+  applyBatch(db, [put('patients', 'ax4', stampAt(now - 60000), { phone: 'от старой сборки' })], S);
+  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'ax4'").get().phone, 'от старой сборки',
+    'узлы в сети обновляются не одновременно — запись без поколоночных меток обязана работать как раньше');
+  db.close();
+});

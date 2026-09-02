@@ -31,6 +31,7 @@ import { hashPassword } from '../auth.js';
 import { licensedDataDir } from '../control/licensed-fixture.js';
 import { readPairing, writePairing, signRequest, CATALOGUE_PATH } from './pairing.js';
 import { isReadOnlyRpc, isAlwaysAllowedRpc } from '../control/gate.js';
+import { listen as listenOnFreePort } from '../../../control-plane/server/test-helpers/listen.js';
 
 const MARKER = 'ZZPATIENTMARKER';
 
@@ -45,12 +46,14 @@ function install(dataDir, name) {
   return db;
 }
 
+// Порт берётся ОБЩИМ помощником (FETCH_BAD_PORT_V1): fetch() отказывается
+// соединяться с портами из списка WHATWG «bad ports», а динамический диапазон
+// этой машины (1024-14999) содержит 14 таких. Свой listen(0) изредка вытягивал
+// именно их, и тест падал с «bad port» — не поломкой кода, а невезением.
 function listen(db, dataDir) {
-  return new Promise((resolve) => {
-    const server = createApp(db, { dataDir }).listen(0, '127.0.0.1', () => {
-      resolve({ server, base: `http://127.0.0.1:${server.address().port}` });
-    });
-  });
+  return listenOnFreePort(createApp(db, { dataDir })).then((server) => ({
+    server, base: `http://127.0.0.1:${server.address().port}`,
+  }));
 }
 
 // Закрывать надо вместе с живыми keep-alive соединениями: fetch держит их
