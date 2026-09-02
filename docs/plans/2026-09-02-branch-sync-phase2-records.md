@@ -368,6 +368,13 @@ CREATE INDEX idx_sync_journal_row ON sync_journal(tbl, uid);
 -- UPDATE uid-триггера через *_journal_upd мгновением позже. Один INSERT даёт
 -- ДВЕ записи журнала — это нормально, buildBatch уплотняет по (tbl, uid).
 --
+-- ТО ЖЕ ПРАВИЛО ДЛЯ UPDATE. patients_mrn_autogen тоже делает UPDATE строки из
+-- своего AFTER INSERT; сработай он РАНЬШЕ uid-триггера — *_journal_upd с
+-- NEW.uid записал бы NULL и уронил регистрацию. Проверено в обоих порядках:
+-- с SELECT из таблицы — зелено, с NEW.uid — падает. Порядок, напомню, не
+-- определён и в этом репозитории уже менялся. *_journal_del получает
+-- WHEN OLD.uid IS NOT NULL — достижимого NULL там не построить, это страховка.
+--
 -- op='put', а не 'insert'/'update': принимающей стороне разница не нужна —
 -- у неё этой строки либо нет (создаст), либо есть (сольёт). Две операции
 -- вместо трёх убирают целый класс вопросов «а что если insert приехал после
@@ -377,8 +384,11 @@ CREATE TRIGGER patients_journal_ins AFTER INSERT ON patients
         SELECT 'patients', uid, 'put' FROM patients
          WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER patients_journal_upd AFTER UPDATE ON patients
-  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('patients', NEW.uid, 'put'); END;
+  BEGIN INSERT INTO sync_journal (tbl, uid, op)
+        SELECT 'patients', uid, 'put' FROM patients
+         WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER patients_journal_del AFTER DELETE ON patients
+  WHEN OLD.uid IS NOT NULL
   BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('patients', OLD.uid, 'del'); END;
 
 CREATE TRIGGER visits_journal_ins AFTER INSERT ON visits
@@ -386,8 +396,11 @@ CREATE TRIGGER visits_journal_ins AFTER INSERT ON visits
         SELECT 'visits', uid, 'put' FROM visits
          WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER visits_journal_upd AFTER UPDATE ON visits
-  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('visits', NEW.uid, 'put'); END;
+  BEGIN INSERT INTO sync_journal (tbl, uid, op)
+        SELECT 'visits', uid, 'put' FROM visits
+         WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER visits_journal_del AFTER DELETE ON visits
+  WHEN OLD.uid IS NOT NULL
   BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('visits', OLD.uid, 'del'); END;
 
 CREATE TRIGGER visit_services_journal_ins AFTER INSERT ON visit_services
@@ -395,8 +408,11 @@ CREATE TRIGGER visit_services_journal_ins AFTER INSERT ON visit_services
         SELECT 'visit_services', uid, 'put' FROM visit_services
          WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER visit_services_journal_upd AFTER UPDATE ON visit_services
-  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('visit_services', NEW.uid, 'put'); END;
+  BEGIN INSERT INTO sync_journal (tbl, uid, op)
+        SELECT 'visit_services', uid, 'put' FROM visit_services
+         WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER visit_services_journal_del AFTER DELETE ON visit_services
+  WHEN OLD.uid IS NOT NULL
   BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('visit_services', OLD.uid, 'del'); END;
 
 CREATE TRIGGER lab_results_journal_ins AFTER INSERT ON lab_results
@@ -404,9 +420,26 @@ CREATE TRIGGER lab_results_journal_ins AFTER INSERT ON lab_results
         SELECT 'lab_results', uid, 'put' FROM lab_results
          WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER lab_results_journal_upd AFTER UPDATE ON lab_results
-  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('lab_results', NEW.uid, 'put'); END;
+  BEGIN INSERT INTO sync_journal (tbl, uid, op)
+        SELECT 'lab_results', uid, 'put' FROM lab_results
+         WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER lab_results_journal_del AFTER DELETE ON lab_results
+  WHEN OLD.uid IS NOT NULL
   BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('lab_results', OLD.uid, 'del'); END;
+
+-- Записи, у которых ещё нет родителя. Хранятся целиком (JSON) и применяются,
+-- когда родитель приезжает. Ключ — (tbl, uid): у одной строки одно последнее
+-- состояние; более поздняя запись про ту же строку замещает более раннюю.
+CREATE TABLE sync_pending (
+  tbl        TEXT NOT NULL,
+  uid        TEXT NOT NULL,
+  stamp      TEXT NOT NULL,
+  record     TEXT NOT NULL,          -- JSON всей записи, как приехала
+  waits_tbl  TEXT NOT NULL,          -- какого родителя ждёт
+  waits_uid  TEXT NOT NULL,
+  PRIMARY KEY (tbl, uid)
+);
+CREATE INDEX idx_sync_pending_parent ON sync_pending(waits_tbl, waits_uid);
 
 -- Докуда каждому соседу уже отдано и что от него принято. Ключ — буква узла.
 CREATE TABLE sync_peers (
@@ -522,7 +555,7 @@ function fresh() {
 test('порция несёт ПОЛНУЮ строку, а не поля, которые менялись', () => {
   const db = fresh();
   db.prepare("INSERT INTO patients (full_name, phone) VALUES ('Иванов', '+998901112233')").run();
-  const batch = buildBatch(db, { node: 'B' });
+  const batch = buildBatch(db, { self: 'B', peer: 'C' });
   const rec = batch.records.find(r => r.tbl === 'patients');
   assert.equal(rec.data.full_name, 'Иванов');
   assert.equal(rec.data.phone, '+998901112233');
@@ -535,7 +568,7 @@ test('строка, изменённая много раз, уезжает ОД�
   const db = fresh();
   const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
   for (let i = 0; i < 5; i++) db.prepare('UPDATE patients SET phone = ? WHERE id = ?').run('+9989' + i, id);
-  const batch = buildBatch(db, { node: 'B' });
+  const batch = buildBatch(db, { self: 'B', peer: 'C' });
   const forPatients = batch.records.filter(r => r.tbl === 'patients');
   assert.equal(forPatients.length, 1, 'уезжает состояние, а не история правок');
   db.close();
@@ -545,7 +578,7 @@ test('удалённая строка уезжает как удаление, б
   const db = fresh();
   const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
   db.prepare('DELETE FROM patients WHERE id = ?').run(id);
-  const batch = buildBatch(db, { node: 'B' });
+  const batch = buildBatch(db, { self: 'B', peer: 'C' });
   const rec = batch.records.find(r => r.tbl === 'patients');
   assert.equal(rec.op, 'del');
   assert.equal(rec.data, undefined, 'данных удалённой строки у нас уже нет');
@@ -555,11 +588,25 @@ test('удалённая строка уезжает как удаление, б
 test('markSent сдвигает отметку, и следующая порция пуста', () => {
   const db = fresh();
   db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
-  const first = buildBatch(db, { node: 'B' });
+  const first = buildBatch(db, { self: 'B', peer: 'C' });
   assert.equal(first.records.length > 0, true);
-  markSent(db, 'B', first.upto);
-  const second = buildBatch(db, { node: 'B' });
+  markSent(db, 'C', first.upto, first.clock);
+  const second = buildBatch(db, { self: 'B', peer: 'C' });
   assert.deepEqual(second.records, [], 'дважды одно и то же по узкому каналу не гоняем');
+  db.close();
+});
+
+test('часы переживают перевод времени назад между двумя порциями', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  const first = buildBatch(db, { self: 'B', peer: 'C' });
+  markSent(db, 'C', first.upto, first.clock);
+  // Часы машины ушли назад (NTP). Новая правка обязана получить метку ВЫШЕ
+  // отправленной, иначе приёмник её пропустит, а sent_seq уже ушёл вперёд.
+  db.prepare("UPDATE patients SET phone = '+998900000000' WHERE full_name = 'Иванов'").run();
+  const second = buildBatch(db, { self: 'B', peer: 'C', clock: () => 1 });
+  const a = first.records[0].stamp, b = second.records[0].stamp;
+  assert.equal(b > a, true, 'метка не откатилась вместе с часами: ' + a + ' -> ' + b);
   db.close();
 });
 
@@ -570,7 +617,7 @@ test('деньги из visit_services не уезжают', () => {
   const sid = db.prepare("INSERT INTO services (name, code, price, type, active) VALUES ('Анализ','S-9',1000,'lab',1)").run().lastInsertRowid;
   db.prepare('INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total) VALUES (?, ?, 1, 50000, 50000)').run(vid, sid);
 
-  const rec = buildBatch(db, { node: 'B' }).records.find(r => r.tbl === 'visit_services');
+  const rec = buildBatch(db, { self: 'B', peer: 'C' }).records.find(r => r.tbl === 'visit_services');
   assert.equal(rec.data.status !== undefined, true, 'статус нужен: на нём лабораторная очередь');
   assert.equal(rec.data.unit_price, undefined, 'цена — Фаза 3');
   assert.equal(rec.data.total, undefined, 'сумма — Фаза 3');
@@ -630,8 +677,14 @@ const TABLES = Object.keys(SHIPPED);
  *
  * @returns {{records: Array, upto: number}} upto — seq, до которого собрано
  */
-export function buildBatch(db, { node, limit = 5000 } = {}) {
-  const from = db.prepare('SELECT sent_seq FROM sync_peers WHERE node = ?').get(node);
+/**
+ * self — буква ЭТОЙ установки (идёт в метку и в origin); peer — буква узла,
+ * КОМУ собираем (по нему читается sent_seq). Раньше оба смысла жили в одном
+ * параметре `node`, и e2e-помощник помечал отправку под ключом, которого
+ * buildBatch не читал (ревью Задачи 2). Два имени — две вещи.
+ */
+export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date.now } = {}) {
+  const from = db.prepare('SELECT sent_seq FROM sync_peers WHERE node = ?').get(peer);
   const since = from ? from.sent_seq : 0;
 
   // Последняя запись про каждую строку: у пациента, правленного сто раз, есть
@@ -645,7 +698,12 @@ export function buildBatch(db, { node, limit = 5000 } = {}) {
      LIMIT ?
   `).all(since, limit);
 
-  let clock = null;
+  // ЧАСЫ ХРАНЯТСЯ, а не заводятся заново на каждую порцию. Иначе часы,
+  // переведённые назад между двумя синхронизациями (обычная NTP-коррекция),
+  // дали бы метку НИЖЕ уже отправленной — приёмник её пропустит, а sent_seq
+  // уже ушёл вперёд: правка исчезает молча (ревью Задачи 2). Читаем один раз
+  // на порцию, не на запись: 5000 записей — это не 5000 записей в WAL.
+  let clock = readClock(db);
   const records = [];
   let upto = since;
 
@@ -654,7 +712,7 @@ export function buildBatch(db, { node, limit = 5000 } = {}) {
     if (!TABLES.includes(h.tbl)) continue;
 
     const row = db.prepare(`SELECT * FROM ${h.tbl} WHERE uid = ?`).get(h.uid);
-    clock = nextStamp(clock, node);
+    clock = nextStamp(clock, self, clockFn);
 
     if (!row) {
       records.push({ tbl: h.tbl, uid: h.uid, op: 'del', stamp: clock.stamp });
@@ -676,18 +734,42 @@ export function buildBatch(db, { node, limit = 5000 } = {}) {
 
     records.push({
       tbl: h.tbl, uid: h.uid, op: 'put', stamp: clock.stamp,
-      data, refs, origin: node,
+      data, refs, origin: self,
     });
   }
-  return { records, upto };
+  return { records, upto, clock };
 }
 
-/** Отметить, докуда узлу отдано. Вызывать ТОЛЬКО после подтверждённой отправки. */
-export function markSent(db, node, upto) {
+const CLOCK_KEY = 'sync_clock';
+
+/** Последнее состояние часов из control_state. Строки → числа (TEXT-колонка). */
+export function readClock(db) {
+  const raw = db.prepare('SELECT value FROM control_state WHERE key = ?').get(CLOCK_KEY);
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw.value);
+    return { ms: Number(v.ms), cnt: Number(v.cnt) };
+  } catch { return null; }
+}
+
+/** Записать часы — только если ушли вперёд. Вызывать после удачной отправки и
+ *  после каждого приёма (приём двигает часы за чужую метку, см. Задачу 5). */
+export function writeClock(db, clock) {
+  if (!clock) return;
+  const cur = readClock(db);
+  if (cur && (cur.ms > clock.ms || (cur.ms === clock.ms && cur.cnt >= clock.cnt))) return;
+  db.prepare(`INSERT INTO control_state (key, value) VALUES (?, ?)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+    .run(CLOCK_KEY, JSON.stringify({ ms: clock.ms, cnt: clock.cnt }));
+}
+
+/** Отметить, докуда соседу отдано, и сохранить часы. ТОЛЬКО после подтверждённой отправки. */
+export function markSent(db, peer, upto, clock = null) {
   db.prepare(`
     INSERT INTO sync_peers (node, sent_seq) VALUES (?, ?)
     ON CONFLICT(node) DO UPDATE SET sent_seq = MAX(sent_seq, excluded.sent_seq)
-  `).run(node, upto);
+  `).run(peer, upto);
+  writeClock(db, clock);
 }
 ```
 
@@ -725,23 +807,31 @@ git commit -m "feat(sync): сборка порции изменений для �
 `visits.status` ограничен `CHECK (status IN ('scheduled','confirmed','arrived','cancelled','no_show'))`
 (`003_visits.sql:11`) — в тестах использовать `'scheduled'`, не `'open'`.
 
-- [ ] **Шаг 0: таблица ожидания** — добавить в `084_sync_journal.sql` (Задача 3):
+Таблица ожидания `sync_pending` создаётся в `084_sync_journal.sql` (Задача 3) —
+одна миграция пишется один раз.
 
-```sql
--- Записи, у которых ещё нет родителя. Хранятся целиком (JSON) и применяются,
--- когда родитель приезжает. Ключ — (tbl, uid): у одной строки одно последнее
--- состояние; более поздняя запись про ту же строку замещает более раннюю.
-CREATE TABLE sync_pending (
-  tbl        TEXT NOT NULL,
-  uid        TEXT NOT NULL,
-  stamp      TEXT NOT NULL,
-  record     TEXT NOT NULL,          -- JSON всей записи, как приехала
-  waits_tbl  TEXT NOT NULL,          -- какого родителя ждёт
-  waits_uid  TEXT NOT NULL,
-  PRIMARY KEY (tbl, uid)
-);
-CREATE INDEX idx_sync_pending_parent ON sync_pending(waits_tbl, waits_uid);
-```
+**Поколоночно — значит поколоночно (ревью Задачи 2).** Первый набросок держал
+ОДНУ метку на строку (`sync_seen(tbl, uid)`) и отбрасывал целиком запись со
+старой меткой. Это не «последняя правка побеждает по колонкам», а «по строкам»:
+телефон, исправленный в B, и адрес, исправленный в C, — и весь адрес пропадает,
+если метка B старше. Спецификация обещает поколоночное слияние, и она права.
+Поэтому:
+
+- `sync_seen` — по КОЛОНКЕ: `(tbl, uid, col, stamp)`. Приехавшая запись
+  применяет каждую свою колонку независимо: только если её метка новее метки,
+  под которой эта колонка менялась в последний раз.
+- **Местная неотправленная правка защищает свои колонки.** У местной правки
+  метки нет — она появится при отправке. Пока она не отправлена, её колонки
+  считаются НОВЕЕ любой приехавшей: `sync_journal` знает, что строка менялась
+  (seq > sent_seq хотя бы для одного соседа). Без этого запись с меткой 10:00,
+  приехавшая в 10:06, стёрла бы местную правку 10:05. Какие именно колонки
+  менялись местно, журнал не знает — защищаются ВСЕ колонки строки до
+  отправки; это грубее, но теряет ноль правок, а точность придёт с отправкой.
+- **Приём двигает часы.** После применения порции `writeClock` с меткой
+  `nextStamp(readClock(db), self, Date.now, maxReceivedStamp)`: узел с отставшими
+  часами перестаёт проигрывать вечно (ревью Задачи 2).
+- **Метка проверяется на входе.** `isStamp(rec.stamp)` из `hlc.js`; запись без
+  метки — `skipped`, а не падение всей транзакции на NOT NULL в `sync_seen`.
 
 - [ ] **Шаг 1: тест**
 
@@ -796,6 +886,25 @@ test('поколоночное слияние: телефон здесь, адр
   const row = db.prepare("SELECT phone, address FROM patients WHERE uid = 'bbbb'").get();
   assert.equal(row.phone, '+998900000002', 'приехавшая правка применилась');
   assert.equal(row.address, 'Ташкент', 'и не стёрла то, чего в ней не было');
+  db.close();
+});
+
+test('приехавшая СТАРАЯ запись не стирает местную неотправленную правку', () => {
+  const db = fresh();
+  applyBatch(db, [{
+    tbl: 'patients', uid: 'eeee', op: 'put', stamp: '000000000001-0000-C',
+    data: { full_name: 'Иванов', phone: '+998900000001' }, refs: {}, origin: 'C',
+  }], { self: 'B' });
+  // Здесь поправили телефон и ещё никому не отправили.
+  db.prepare("UPDATE patients SET phone = '+998900000009' WHERE uid = 'eeee'").run();
+  // Оттуда приезжает полная строка с более НОВОЙ меткой, но старым телефоном
+  // (её собрали до того, как узнали о нашей правке).
+  applyBatch(db, [{
+    tbl: 'patients', uid: 'eeee', op: 'put', stamp: '000000000005-0000-C',
+    data: { full_name: 'Иванов', phone: '+998900000001' }, refs: {}, origin: 'C',
+  }], { self: 'B' });
+  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'eeee'").get().phone, '+998900000009',
+    'неотправленная местная правка новее любой приехавшей');
   db.close();
 });
 
@@ -888,17 +997,18 @@ test('приём НЕ пишет в журнал: иначе изменения 
 //   3. Удаление проигрывает более поздней правке. Молча уничтожить запись, с
 //      которой кто-то ещё работал, — единственная невосстановимая ошибка в
 //      этом файле.
-import { compareStamps } from './hlc.js';
+import { compareStamps, isStamp, nextStamp } from './hlc.js';
+import { readClock, writeClock } from './journal.js';
 import { SHIPPED, REFS } from './journal.js';
 
-// Метка последнего ПРИНЯТОГО изменения строки. Без неё нечем сравнивать: у
-// местной правки метки нет вовсе.
+// Метка последнего ПРИНЯТОГО изменения КАЖДОЙ колонки. Местная правка метки
+// не имеет — до отправки её колонки защищает журнал (см. hasLocalUnshipped).
 const SEEN = 'sync_seen';
 
 function ensureSeen(db) {
   db.prepare(`CREATE TABLE IF NOT EXISTS ${SEEN} (
-    tbl TEXT NOT NULL, uid TEXT NOT NULL, stamp TEXT NOT NULL,
-    PRIMARY KEY (tbl, uid)
+    tbl TEXT NOT NULL, uid TEXT NOT NULL, col TEXT NOT NULL, stamp TEXT NOT NULL,
+    PRIMARY KEY (tbl, uid, col)
   )`).run();
 }
 
@@ -915,46 +1025,52 @@ function localId(db, tbl, uid) {
  * записи, порождённые приёмом, удаляются в конце транзакции). Иначе принятое
  * изменение уехало бы обратно, вернулось снова и ходило бы по кругу вечно.
  *
- * @returns {{applied:number, skipped:number, deleted:number}}
+ * @returns {{applied:number, skipped:number, deferred:number, deleted:number}}
  */
-export function applyBatch(db, records) {
+export function applyBatch(db, records, { self = null } = {}) {
   ensureSeen(db);
-  const stats = { applied: 0, skipped: 0, deleted: 0 };
+  const stats = { applied: 0, skipped: 0, deferred: 0, deleted: 0 };
 
+  let maxReceived = '';
   const run = db.transaction((batch) => {
     const mark = db.prepare('SELECT MAX(seq) AS s FROM sync_journal').get();
     const journalFrom = mark && mark.s ? mark.s : 0;
 
     for (const rec of batch) {
-      if (!rec || !SHIPPED[rec.tbl] || typeof rec.uid !== 'string') { stats.skipped++; continue; }
-
-      const seen = db.prepare(`SELECT stamp FROM ${SEEN} WHERE tbl = ? AND uid = ?`).get(rec.tbl, rec.uid);
-      if (seen && compareStamps(rec.stamp, seen.stamp) <= 0) { stats.skipped++; continue; }
+      if (!rec || !SHIPPED[rec.tbl] || typeof rec.uid !== 'string' || !isStamp(rec.stamp)) { stats.skipped++; continue; }
 
       const id = localId(db, rec.tbl, rec.uid);
+      const protectedHere = id != null && hasLocalUnshipped(db, rec.tbl, rec.uid);
 
       if (rec.op === 'del') {
-        // Правило 3. Строку, изменённую здесь ПОСЛЕ этого удаления, не трогаем.
-        const changedHere = id != null && (!seen || compareStamps(seen.stamp, rec.stamp) < 0)
-          && db.prepare(`SELECT 1 FROM sync_journal WHERE tbl = ? AND uid = ?`).get(rec.tbl, rec.uid);
-        if (changedHere) { stats.skipped++; continue; }
+        // Правило 3. Удаление проигрывает любой более поздней правке — местной
+        // неотправленной или приехавшей с более новой меткой по любой колонке.
+        const newerCol = db.prepare(`SELECT 1 FROM ${SEEN} WHERE tbl = ? AND uid = ? AND stamp > ? LIMIT 1`)
+          .get(rec.tbl, rec.uid, rec.stamp);
+        if (protectedHere || newerCol) { stats.skipped++; continue; }
         if (id != null) { db.prepare(`DELETE FROM ${rec.tbl} WHERE id = ?`).run(id); stats.deleted++; }
-        db.prepare(`INSERT INTO ${SEEN} (tbl, uid, stamp) VALUES (?,?,?)
-                    ON CONFLICT(tbl, uid) DO UPDATE SET stamp = excluded.stamp`)
-          .run(rec.tbl, rec.uid, rec.stamp);
+        db.prepare(`DELETE FROM ${SEEN} WHERE tbl = ? AND uid = ?`).run(rec.tbl, rec.uid);
+        db.prepare(`INSERT INTO ${SEEN} (tbl, uid, col, stamp) VALUES (?,?,'*',?)`).run(rec.tbl, rec.uid, rec.stamp);
         continue;
       }
 
       const cols = [];
       const vals = [];
+      const seenCol = db.prepare(`SELECT stamp FROM ${SEEN} WHERE tbl = ? AND uid = ? AND col = ?`);
       for (const col of SHIPPED[rec.tbl]) {
-        if (rec.data && Object.prototype.hasOwnProperty.call(rec.data, col)) {
-          cols.push(col); vals.push(rec.data[col]);
-        }
+        if (!rec.data || !Object.prototype.hasOwnProperty.call(rec.data, col)) continue;
+        if (protectedHere) continue;                       // местная правка ещё не уехала — не трогаем
+        const prev = seenCol.get(rec.tbl, rec.uid, col);
+        if (prev && compareStamps(rec.stamp, prev.stamp) <= 0) continue;   // эта колонка новее у нас
+        cols.push(col); vals.push(rec.data[col]);
       }
+      // Новая строка: у неё ничего не защищено и ничего не видено — все колонки едут.
       // Ссылки: uid родителя → его местный id. Родителя ещё нет — запись
       // ЦЕЛИКОМ уходит в ожидание: NOT NULL и внешние ключи не дадут вставить
       // ребёнка с пустой ссылкой, и это правильно.
+      // sync_pending хранит ОДНОГО ожидаемого родителя, и break ниже — на
+      // первом отсутствующем. Сегодня у каждой таблицы в REFS ровно одна
+      // ссылка, поэтому этого достаточно; вторая ссылка потребует ждать обоих.
       let waiting = null;
       for (const [col, parent] of Object.entries(REFS[rec.tbl] || {})) {
         const parentUid = rec.refs ? rec.refs[col] : null;
@@ -969,7 +1085,7 @@ export function applyBatch(db, records) {
                     ON CONFLICT(tbl, uid) DO UPDATE SET stamp = excluded.stamp, record = excluded.record,
                       waits_tbl = excluded.waits_tbl, waits_uid = excluded.waits_uid`)
           .run(rec.tbl, rec.uid, rec.stamp, JSON.stringify(rec), waiting.tbl, waiting.uid);
-        stats.skipped++;
+        stats.deferred++;   // не «пропущено» — ждёт родителя; читающему лог это две разные новости
         continue;
       }
 
@@ -982,20 +1098,35 @@ export function applyBatch(db, records) {
         db.prepare(`UPDATE ${rec.tbl} SET ${cols.map(c => c + ' = ?').join(', ')} WHERE id = ?`)
           .run(...vals, id);
       }
-      db.prepare(`INSERT INTO ${SEEN} (tbl, uid, stamp) VALUES (?,?,?)
-                  ON CONFLICT(tbl, uid) DO UPDATE SET stamp = excluded.stamp`)
-        .run(rec.tbl, rec.uid, rec.stamp);
-      stats.applied++;
+      const remember = db.prepare(`INSERT INTO ${SEEN} (tbl, uid, col, stamp) VALUES (?,?,?,?)
+                  ON CONFLICT(tbl, uid, col) DO UPDATE SET stamp = excluded.stamp`);
+      for (const col of cols) remember.run(rec.tbl, rec.uid, col, rec.stamp);
+      if (cols.length || id == null) stats.applied++; else stats.skipped++;
+      if (rec.stamp > maxReceived) maxReceived = rec.stamp;
     }
 
     releasePending(db, batch, stats);
 
     // Приём не порождает исходящих изменений — см. заголовок.
     db.prepare('DELETE FROM sync_journal WHERE seq > ?').run(journalFrom);
+
+    // Часы этой машины двигаются за самую новую чужую метку: узел с отставшими
+    // часами иначе проигрывал бы каждое слияние вечно.
+    if (maxReceived && self) writeClock(db, nextStamp(readClock(db), self, Date.now, maxReceived));
   });
 
   run(records);
   return stats;
+}
+
+// Строка менялась здесь и ещё не уехала ни одному соседу? Тогда её колонки
+// новее любой приехавшей записи. Какие именно колонки — журнал не знает,
+// поэтому защищаются все: грубее, но теряет ноль правок.
+function hasLocalUnshipped(db, tbl, uid) {
+  const last = db.prepare('SELECT MAX(seq) AS s FROM sync_journal WHERE tbl = ? AND uid = ?').get(tbl, uid);
+  if (!last || !last.s) return false;
+  const minSent = db.prepare('SELECT MIN(sent_seq) AS m FROM sync_peers').get();
+  return !minSent || minSent.m == null || last.s > minSent.m;
 }
 
 // Применить тех, кто ждал ИМЕННО этих родителей. Точечно, по (waits_tbl,
@@ -1003,6 +1134,10 @@ export function applyBatch(db, records) {
 // не «не связать», а перепутать — хуже. Освобождённый ребёнок сам может быть
 // родителем (визит → услуга → результат), поэтому цикл до неподвижной точки.
 function releasePending(db, batch, stats) {
+  // Стартуем со ВСЕХ put порции, включая те, что сами ушли в ожидание: такой
+  // ребёнок просто переждёт ещё раз, а next растёт только на настоящем
+  // применении, поэтому цикл конечен. Чуть расточительно, зато без второго
+  // списка «кто применился».
   let arrived = batch.filter((r) => r && r.op === 'put').map((r) => ({ tbl: r.tbl, uid: r.uid }));
   while (arrived.length) {
     const next = [];
@@ -1155,16 +1290,19 @@ function node() {
   db.prepare('DELETE FROM sync_journal').run();
   return db;
 }
-const exchange = (from, to, fromNode) => {
-  const b = buildBatch(from, { node: fromNode });
-  applyBatch(to, b.records);
-  markSent(from, 'peer', b.upto);
+// self = буква отправителя, peer = буква получателя. Обе стороны реальные:
+// первый набросок помечал отправку под литералом 'peer', которого buildBatch
+// не читал (ревью Задачи 2).
+const exchange = (from, to, self, peer) => {
+  const b = buildBatch(from, { self, peer });
+  applyBatch(to, b.records, { self: peer });
+  markSent(from, peer, b.upto, b.clock);
 };
 
 test('пациент, заведённый в B, виден в C', () => {
   const B = node(); const C = node();
   B.prepare("INSERT INTO patients (full_name, phone) VALUES ('Иванов', '+998901112233')").run();
-  exchange(B, C, 'B');
+  exchange(B, C, 'B', 'C');
   const p = C.prepare("SELECT full_name, phone FROM patients WHERE full_name = 'Иванов'").get();
   assert.equal(p.phone, '+998901112233');
   B.close(); C.close();
@@ -1178,7 +1316,7 @@ test('лабораторная очередь: услуга и результа�
   const vsid = B.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, status) VALUES (?,?,1,'ordered')").run(vid, sid).lastInsertRowid;
   B.prepare("INSERT INTO lab_results (visit_service_id, value) VALUES (?, '5.2')").run(vsid);
 
-  exchange(B, C, 'B');
+  exchange(B, C, 'B', 'C');
 
   const q = C.prepare(`
     SELECT vs.status, lr.value FROM visit_services vs
@@ -1192,14 +1330,14 @@ test('лабораторная очередь: услуга и результа�
 test('обе базы сходятся после правок в разрыве связи', () => {
   const B = node(); const C = node();
   B.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
-  exchange(B, C, 'B');
+  exchange(B, C, 'B', 'C');
 
   // Связи нет. Каждый правит своё поле.
   B.prepare("UPDATE patients SET phone = '+998901112233' WHERE full_name = 'Иванов'").run();
   C.prepare("UPDATE patients SET address = 'Ташкент' WHERE full_name = 'Иванов'").run();
 
-  exchange(B, C, 'B');
-  exchange(C, B, 'C');
+  exchange(B, C, 'B', 'C');
+  exchange(C, B, 'C', 'B');
 
   const inB = B.prepare("SELECT phone, address FROM patients WHERE full_name = 'Иванов'").get();
   const inC = C.prepare("SELECT phone, address FROM patients WHERE full_name = 'Иванов'").get();
@@ -1212,9 +1350,9 @@ test('обе базы сходятся после правок в разрыве
 test('повторный обмен ничего не меняет и ничего не дублирует', () => {
   const B = node(); const C = node();
   B.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
-  exchange(B, C, 'B');
+  exchange(B, C, 'B', 'C');
   const n1 = C.prepare('SELECT COUNT(*) n FROM patients').get().n;
-  exchange(B, C, 'B');
+  exchange(B, C, 'B', 'C');
   assert.equal(C.prepare('SELECT COUNT(*) n FROM patients').get().n, n1);
   B.close(); C.close();
 });
@@ -1223,7 +1361,7 @@ test('деньги не уезжают: счетов в приёмнике не 
   const B = node(); const C = node();
   const pid = B.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
   B.prepare('INSERT INTO invoices (patient_id, total_amount, status) VALUES (?, 100000, ?)').run(pid, 'open');
-  exchange(B, C, 'B');
+  exchange(B, C, 'B', 'C');
   assert.equal(C.prepare('SELECT COUNT(*) n FROM invoices').get().n, 0, 'счета — Фаза 3');
   B.close(); C.close();
 });
