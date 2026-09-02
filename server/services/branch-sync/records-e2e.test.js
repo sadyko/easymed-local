@@ -47,17 +47,27 @@ import { openDb as openCpDb } from '../../../control-plane/server/db/connection.
 import { migrate as migrateCp } from '../../../control-plane/server/db/migrate.js';
 import { createApp as createCpApp } from '../../../control-plane/server/app.js';
 import { createEnrollmentCode, redeemEnrollmentCode } from '../../../control-plane/server/services/enrollment.js';
+import { listen as listenOnFreePort } from '../../../control-plane/server/test-helpers/listen.js';
 
 // Порт, на котором заведомо никто не слушает: прямой путь обязан отказать
 // быстро (ECONNREFUSED), а не ждать таймаута.
-const CLOSED_MAIN = 'http://127.0.0.1:1';
+//
+// НЕ ПОРТ 1: он сам стоит в списке WHATWG «bad ports», и fetch() отказывает
+// на нём ДО всякой попытки соединения — «bad port» вместо ECONNREFUSED.
+// Отказ выглядел так же, поэтому подмена и не замечалась, но проверялся при
+// этом не тот путь, ради которого тест написан. 65535 вне списка и вне
+// динамического диапазона этой машины (1024-14999), то есть свободен.
+const CLOSED_MAIN = 'http://127.0.0.1:65535';
 
+// Порт берётся ОБЩИМ помощником (FETCH_BAD_PORT_V1): fetch() отказывается
+// соединяться с портами из списка WHATWG «bad ports», а динамический диапазон
+// этой машины (1024-14999) содержит 14 таких. Свой app.listen(0) изредка
+// вытягивал именно их, и тест падал с «bad port» — не поломкой кода, а
+// невезением. Помощник перетягивает порт заново.
 function listen(app) {
-  return new Promise((resolve) => {
-    const server = app.listen(0, '127.0.0.1', () => {
-      resolve({ server, base: `http://127.0.0.1:${server.address().port}` });
-    });
-  });
+  return listenOnFreePort(app).then((server) => ({
+    server, base: `http://127.0.0.1:${server.address().port}`,
+  }));
 }
 
 function shutdown(server) {
@@ -410,6 +420,73 @@ test('BRANCH_RECORDS_V1: пациенты и лабораторная очере
     assert.equal(got.peers.B.applied, 0);
     assert.equal(backups, 0,
       'ради повтора, который сосед кладёт в каждый блоб, копию базы не снимают — иначе диск клиники завален');
+  });
+
+  // ОДНОИМЁННАЯ ПРАВКА (ревью 7/7b, C1) — сценарий целиком, как он был найден.
+  // B правит телефон в 09:00 и выкладывается; A этот блоб не забирал. В 09:50 A
+  // правит ТОТ ЖЕ телефон. В 10:00 у A обычный такт: сперва ВЫГРУЗКА (pub_seq
+  // уходит за правку A, защита снимается в тот же миг), потом ВЫБОРКА — и
+  // вчерашний блоб B ложился поверх свежей правки A. Откат этот в журнал не
+  // пишется, а B к тому времени уже применил значение A: у A телефон B, у B
+  // телефон A, и так навсегда. Перестановкой выгрузки и выборки это не
+  // лечится — лечится тем, что у местной правки появилась метка.
+  //
+  // ЧАСЫ ЗДЕСЬ ВЫСТАВЛЯЮТСЯ ЯВНО, и без этого тест проверял бы не то. Весь
+  // файл укладывается в одну-две миллисекунды, а метка, которую узел чеканит
+  // выгрузкой, идёт от его часов HLC — то есть от времени ОТПРАВКИ. «Час
+  // назад» и «сейчас» надо задать, иначе обе метки совпадают до миллисекунды
+  // и сравнивать нечего. Вживую этот час набегает сам: узлы синхронизируются
+  // раз в час.
+  await t.test('одноимённая правка: свежая местная переживает вчерашний блоб соседа', async () => {
+    const setClock = (node, msAgo) => node.db.prepare(
+      `INSERT INTO control_state (key, value, updated_at)
+       VALUES ('sync_clock', ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).run(JSON.stringify({ ms: Date.now() - msAgo, cnt: 0 }));
+    const phoneIn = (node) => node.db.prepare("SELECT phone FROM patients WHERE full_name = 'Иванов'").get().phone;
+
+    // 09:00 — B правит телефон и выкладывается. Его часы (а с ними и метка
+    // записи) отстают на час: блоб пролежит на сервере нетронутым.
+    setClock(B, 3600000);
+    B.db.prepare("UPDATE patients SET phone = '+998900000900' WHERE full_name = 'Иванов'").run();
+    assert.equal((await publishJournal(B.db, B.dir, {})).ok, true, 'блоб B лежит на сервере, A его не забирал');
+
+    // 09:50 — A правит ТОТ ЖЕ телефон. A с тех пор синхронизировался с сетью,
+    // поэтому его часы — «сейчас».
+    setClock(A, 0);
+    A.db.prepare("UPDATE patients SET phone = '+998900000950' WHERE full_name = 'Иванов'").run();
+
+    await syncAt(A);   // ВЫГРУЗКА, затем ВЫБОРКА — тот самый порядок
+    assert.equal(phoneIn(A), '+998900000950',
+      'своя правка 09:50 обязана пережить приехавшую 09:00 — иначе откат, о котором никто не узнает');
+
+    await syncAt(B);
+    assert.equal(phoneIn(B), '+998900000950', 'и сосед приходит к тому же значению');
+    assert.equal(phoneIn(A), phoneIn(B), 'две базы обязаны сойтись');
+  });
+
+  // РЕЗЕРВНЫЕ КОПИИ НЕ НАКАПЛИВАЮТСЯ (ревью 7/7b, I1). Копия снимается перед
+  // КАЖДЫМ обменом, в котором есть что применять, — у клиники с тремя
+  // филиалами это десятки файлов в сутки, а на порции, которую база отвергает,
+  // и вовсе по копии в час бесконечно. Чистка же по видам вызывалась только
+  // при старте и внутри суточной копии, то есть могла не случиться неделями:
+  // диск заполнялся молча. Теперь она идёт сразу за копией.
+  await t.test('копии перед приёмом чистятся, а не копятся', async () => {
+    const safety = (node) => {
+      let files = [];
+      try { files = fs.readdirSync(path.join(node.dir, 'backups')); } catch { /* ещё не было */ }
+      return files.filter((f) => f.startsWith('safety-'));
+    };
+    // За этот тест каждый узел принимал чужие записи много раз — заведомо
+    // больше пяти (KEEP_BY_KIND.safety).
+    let seen = 0;
+    for (const node of [A, B, C]) {
+      const kept = safety(node);
+      seen += kept.length;
+      assert.ok(kept.length <= 5,
+        node.tag + ': копий безопасности осталось ' + kept.length + ' — чистка не сработала');
+    }
+    assert.ok(seen > 0, 'хотя бы одна копия обязана была сняться: иначе тест ничего не проверяет');
   });
 
   await t.test('поставщик хранит шифротекст: ни имени пациента, ни телефона', () => {

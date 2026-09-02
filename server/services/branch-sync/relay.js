@@ -10,7 +10,7 @@ import { relayIdFor, sealPayload, openPayload } from './relay-crypto.js';
 import { buildBatch, markPublished, markConfirmed } from './journal.js';
 import { applyBatch, sliceAlreadyApplied } from './records.js';
 // Резервная копия перед применением чужих записей — то же правило, что у справочника.
-import { createBackup } from '../backup.js';
+import { createBackup, pruneBackupsByKind } from '../backup.js';
 
 // BRANCH_SYNC_RELAY_V1 — МАРШРУТ Б: справочник едет через сервер поставщика,
 // который не может его прочитать.
@@ -932,7 +932,7 @@ function journalSlice(payload, peer, self) {
  * already — срез уже был применён (неподтверждённый повтор соседа).
  */
 const noWork = (skipped = 0, already = false) => {
-  const stats = { applied: 0, released: 0, skipped, protected: 0, deferred: 0, deleted: 0 };
+  const stats = { applied: 0, released: 0, skipped, protected: 0, deferred: 0, deleted: 0, refused: 0 };
   return already ? { ...stats, already: true } : stats;
 };
 
@@ -1047,12 +1047,25 @@ export async function fetchJournals(db, dataDir, {
       try {
         await backupImpl(db, dataDir, 'safety');
         backed = true;
+        // ЧИСТКА СРАЗУ ЗА КОПИЕЙ (ревью 7/7b, I1). Копия снимается на каждый
+        // обмен, где есть что применять, — это 10–24 файла в сутки у клиники с
+        // тремя филиалами, а на порции, которую база отвергает, и вовсе по
+        // копии в час бесконечно. Чистка же по видам вызывалась только при
+        // старте и внутри суточной копии, то есть могла не случиться неделями:
+        // диск клиники заполнялся молча. KEEP_BY_KIND.safety = 5.
+        pruneBackupsByKind(path.join(dataDir, 'backups'));
       } catch (e) {
         // Без копии не применяем — то же правило, что у справочника, и здесь
         // оно весомее: справочник можно привезти заново, чужие записи — нет.
+        //
+        // И это причина ПО СОСЕДУ, а не конец обмена (ревью 7/7b, M3): раньше
+        // здесь стоял break, и остальные соседи молча оставались без ответа
+        // вовсе — в таблице «сосед → что вышло» их просто не было, а обмен
+        // при этом объявлялся успешным. Место на диске может кончиться, и
+        // тогда важно видеть, что не применилось НИЧЕГО, у каждого поимённо.
         console.warn('[branch-sync] refusing to apply records without a backup:', e && e.message);
         out[peer] = { reason: 'backup_failed' };
-        break;
+        continue;
       }
     }
     try {
@@ -1077,6 +1090,8 @@ export async function fetchJournals(db, dataDir, {
  * выгрузка: сосед, который синхронизируется через минуту, должен увидеть уже
  * сегодняшнее состояние, а не вчерашнее.
  */
+let exchangeInFlight = false;
+
 export async function exchangeJournals(db, dataDir, opts = {}) {
   return {
     published: await publishJournal(db, dataDir, opts),
@@ -1336,7 +1351,16 @@ export function scheduleRelayPublish(db, dataDir, opts = {}) {
     // и лишний вопрос «почему выгрузка дважды» в журнале сервера.
     try {
       if (readPairing(dataDir)?.role !== 'main') return;
-      const ex = await exchangeJournals(db, dataDir, runOpts);
+      // ОДИН ОБМЕН ЗА РАЗ (ревью 7/7b, M5). Кнопка «Синхронизация» и часы —
+      // это два входа в одну и ту же работу, и раньше они могли пойти
+      // одновременно: обмен идёт секунды, а под нагрузкой и минуты. Два
+      // параллельных обмена — это две резервные копии, две выгрузки одного
+      // блоба и две транзакции приёма, спорящие за одну базу. Кнопка своё
+      // совмещение имеет давно (inFlight в rpc/branch-sync.js), расписание —
+      // теперь тоже.
+      if (exchangeInFlight) return;
+      exchangeInFlight = true;
+      const ex = await exchangeJournals(db, dataDir, runOpts).finally(() => { exchangeInFlight = false; });
       const pub = ex.published;
       if (pub && pub.ok === false && !QUIET_JOURNAL_REASONS.has(pub.reason)) {
         console.warn('[branch-sync] journal publish did not happen:', pub.reason);

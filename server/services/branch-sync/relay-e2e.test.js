@@ -38,6 +38,7 @@ import { openDb as openCpDb } from '../../../control-plane/server/db/connection.
 import { migrate as migrateCp } from '../../../control-plane/server/db/migrate.js';
 import { createApp as createCpApp } from '../../../control-plane/server/app.js';
 import { createEnrollmentCode, redeemEnrollmentCode } from '../../../control-plane/server/services/enrollment.js';
+import { listen as listenOnFreePort } from '../../../control-plane/server/test-helpers/listen.js';
 import { relayPathFor } from '../../../control-plane/server/routes/relay.js';
 import { RELAY_TOKEN_MOUNT, MAX_SCOPE as MAX_SCOPE_CP } from '../../../control-plane/server/routes/relay-token.js';   // BRANCH_IDENTITY_V1
 
@@ -52,12 +53,15 @@ function install(dataDir, name) {
   return db;
 }
 
+// Порт берётся ОБЩИМ помощником (FETCH_BAD_PORT_V1): fetch() отказывается
+// соединяться с портами из списка WHATWG «bad ports», а динамический диапазон
+// этой машины (1024-14999) содержит 14 таких. Свой app.listen(0) изредка
+// вытягивал именно их, и тест падал с «bad port» — не поломкой кода, а
+// невезением. Помощник перетягивает порт заново.
 function listen(app) {
-  return new Promise((resolve) => {
-    const server = app.listen(0, '127.0.0.1', () => {
-      resolve({ server, base: `http://127.0.0.1:${server.address().port}` });
-    });
-  });
+  return listenOnFreePort(app).then((server) => ({
+    server, base: `http://127.0.0.1:${server.address().port}`,
+  }));
 }
 
 // Закрывать надо вместе с живыми keep-alive соединениями: fetch держит их

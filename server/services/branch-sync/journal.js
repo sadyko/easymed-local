@@ -107,7 +107,13 @@ function cachedPrep(db) {
  */
 export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date.now } = {}) {
   const from = db.prepare('SELECT * FROM sync_peers WHERE node = ?').get(peer);
-  const seeding = from == null || from.seed_floor != null;
+  // ХОЛОДНЫЙ — это «строки нет» ИЛИ «строка есть, но мы ему ни разу не
+  // выкладывались» (last_ok IS NULL). Второе стало возможным с ревью M2:
+  // строку заводит и ПРИЁМ, чтобы запомнить квитанцию соседу, который
+  // выложился первым. Считай мы такого соседа тёплым — наши существующие
+  // строки не уехали бы к нему никогда: журнал их не помнит, а засев не
+  // случился бы.
+  const seeding = from == null || from.last_ok == null || from.seed_floor != null;
 
   let heads;
   let seed = null;
@@ -121,10 +127,10 @@ export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date
     // никогда. Читая пол первым, любая правка «в процессе засева» получает
     // seq строго ВЫШЕ него и гарантированно приезжает первой же тёплой
     // порцией после засева (тест «правка не теряется под полом»).
-    const floor = from == null
+    const floor = (from == null || from.seed_floor == null)
       ? db.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM sync_journal').get().m
       : from.seed_floor;
-    const cursor = from == null
+    const cursor = (from == null || from.seed_floor == null)
       ? { tbl: null, at: '', id: 0 }
       : { tbl: from.seed_tbl, at: from.seed_at || '', id: from.seed_id || 0 };
 
@@ -138,7 +144,7 @@ export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date
     // toISOString() даёт миллисекунды: '…:22Z' <= '…:22.563Z' ЛОЖНО ('Z' в
     // таблице ASCII больше точки), и все строки той же секунды выпали бы из
     // засева. Поймано тестами: у соседа не оказывалось вообще ничего.
-    const started = (from && from.seed_started)
+    const started = (from && from.seed_floor != null && from.seed_started)
       || new Date(clockFn()).toISOString().replace(/\.\d+Z$/, 'Z');
 
     const page = seedPage(db, limit, cursor, started);
@@ -151,7 +157,7 @@ export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date
     seed = {
       floor, started, done: page.done,
       tbl: page.cursor.tbl, at: page.cursor.at, id: page.cursor.id,
-      page: (from ? from.seed_page : 0) + 1,
+      page: (from && from.seed_floor != null ? from.seed_page : 0) + 1,
     };
     upto = floor;
   } else {
@@ -533,8 +539,8 @@ export function markPublished(db, peer, upto, clock = null, seed = null, { now =
   // журнала прервалась) — это ровно тот же класс дыры, что и остальной файл
   // старается не допустить.
   const run = db.transaction(() => {
-    const existing = db.prepare('SELECT seed_floor FROM sync_peers WHERE node = ?').get(peer);
-    const wasSeeding = existing == null || existing.seed_floor != null;
+    const existing = db.prepare('SELECT seed_floor, last_ok FROM sync_peers WHERE node = ?').get(peer);
+    const wasSeeding = existing == null || existing.last_ok == null || existing.seed_floor != null;
     if (wasSeeding && !seed) {
       throw new Error(
         `journal: markPublished(${JSON.stringify(peer)}) called without seed info while the peer is cold or mid-seed`

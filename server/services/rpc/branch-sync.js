@@ -115,6 +115,7 @@ const REASONS = {
   relay_no_pairing: 'Эта установка ни с кем не связана: ни главный филиал, ни подключённый. Записями меняться не с кем.',
   relay_no_peers: 'В сети пока одно здание — обмениваться записями не с кем. Заведите филиал в главной клинике.',
   relay_no_identity: 'Установка не знает, каким филиалом она является, поэтому подписать свои записи ей нечем. Восстановите базу из резервной копии или обратитесь в поддержку Easy-Med.',
+  records_refused: 'Часть записей соседнего филиала база не приняла — они остались в списке отказов (таблица sync_refused). Данные из-за этого неполные: покажите этот текст поддержке Easy-Med.',
   records_failed: 'Записи соседнего филиала приехали, но не были применены — база осталась прежней. Они приедут снова при следующей синхронизации; если повторится — обратитесь в поддержку Easy-Med.',
 
   // BRANCH_IDENTITY_V1 — то же самое, что двумя абзацами выше, но со стороны
@@ -1129,6 +1130,17 @@ async function syncRecords(db, dataDir, {
     const got = await fetchJournalsImpl(db, dataDir, { backupImpl });
     const peers = (got && got.peers) || {};
     if (Object.keys(peers).length) { summary.fetched = peers; told = true; }
+    // ОТКАЗЫ БАЗЫ — ОТДЕЛЬНОЙ СТРОКОЙ (ревью 7/7b, I2). Они уже посчитаны в
+    // skipped, но skipped — это и «уже применяли», и «проиграло по метке», то
+    // есть нормальная работа. Отказ базы нормальной работой не является:
+    // запись потеряна, сосед второй раз её не пришлёт, и владелец обязан это
+    // увидеть, а не узнать через полгода, что в филиале нет половины визитов.
+    const refused = Object.values(peers).reduce((n, r) => n + ((r && r.refused) || 0), 0);
+    if (refused) {
+      summary.refused = refused;
+      summary.fetch_reason = 'records_refused';
+      told = true;
+    }
     else if (got && !got.ok && !QUIET_JOURNAL_REASONS.has(got.reason)) {
       summary.fetch_reason = got.reason;
       told = true;

@@ -256,7 +256,12 @@ export function applyCatalogue(db, payload, { dryRun = false } = {}) {
   // branch_identity) и строка главной (A) переименовываются одинаково — это
   // одно правило, а не два.
   if (Array.isArray(payload.roster)) {
-    const rename = db.prepare('UPDATE branches SET name = ? WHERE letter = ?');
+    // COLLATE NOCASE — ТА ЖЕ, что у поиска строки ниже (ревью 7/7b, M4).
+    // Разъехавшись, эти два запроса делают именно то, чего список сети делать
+    // не должен: строка ищется без учёта регистра и НАХОДИТСЯ, а
+    // переименование ищет с учётом и не находит — филиал молча остаётся под
+    // старым именем, и никакой ошибки при этом нет.
+    const rename = db.prepare('UPDATE branches SET name = ? WHERE letter = ? COLLATE NOCASE');
     // BRANCH_RECORDS_V1 (Задача 7) — НЕЗНАКОМАЯ БУКВА ТЕПЕРЬ ЗАВОДИТСЯ, А НЕ
     // ПРОПУСКАЕТСЯ, и это не улучшение списка, а условие того, чтобы фаза
     // работала в сети больше двух зданий.

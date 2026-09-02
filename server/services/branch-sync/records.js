@@ -84,7 +84,7 @@ const SELF_RE = /^[A-Z]{1,8}$/;
  * @param {{self: string, peer?: string, upto?: number, seed?: boolean}} opts
  *   self — буква ЭТОГО узла (идёт в часы); peer — буква узла, ЧЕЙ блоб мы
  *   забрали, если она известна вызывающему; upto/seed — заголовок среза.
- * @returns {{applied:number, released:number, skipped:number, protected:number, deferred:number, deleted:number, already?:true}}
+ * @returns {{applied:number, released:number, skipped:number, protected:number, deferred:number, deleted:number, refused:number, already?:true}}
  *   released — сколько строк применено ИЗ ОЖИДАНИЯ; protected — сколько записей
  *   отдали хотя бы одну колонку местной неотправленной правке; deferred — сколько
  *   строк ЖДЁТ родителя на конец транзакции (не «сколько раз отложили»);
@@ -99,8 +99,13 @@ export function applyBatch(db, records, { self, peer = null, upto = 0, seed = fa
   if (!SELF_RE.test(String(self == null ? '' : self).toUpperCase())) {
     throw new Error('applyBatch: self letter required, got ' + JSON.stringify(self));
   }
-  const stats = { applied: 0, released: 0, skipped: 0, protected: 0, deferred: 0, deleted: 0 };
+  const stats = { applied: 0, released: 0, skipped: 0, protected: 0, deferred: 0, deleted: 0, refused: 0 };
   const ctx = newCtx(db);
+  // Буква нужна не только часам: ею чеканится метка МЕСТНОЙ правки, когда
+  // приехавшую запись надо с этой правкой сравнить (localEditStamps).
+  ctx.self = String(self).toUpperCase();
+  // Чей блоб разбираем — нужно записи об отказе (sync_refused).
+  ctx.peer = typeof peer === 'string' && peer ? peer : null;
 
   // Срез, который мы уже разбирали. Не ошибка и не потеря: сосед повторяет
   // неподтверждённое в каждом блобе, пока не увидит нашу квитанцию, а
@@ -130,6 +135,15 @@ export function applyBatch(db, records, { self, peer = null, upto = 0, seed = fa
       // запись не применяется: origin решает, чью защиту снимать (см.
       // localUnshippedCols) и чьей меткой подписывать строку.
       if (peer && (!rec || typeof rec !== 'object' || rec.origin !== peer)) { stats.skipped++; continue; }
+      // И ТА ЖЕ БУКВА В МЕТКЕ (ревью 7/7b, M1). origin решает, чью защиту
+      // снимать, а буква из метки уходит в sync_origin — «откуда строка» на
+      // экране. Разойдись они, и запись села бы в базу подписанной ОДНИМ
+      // филиалом, а слитой по правилам ДРУГОГО: подпись на карточке пациента
+      // указывала бы не туда, и проверить это владельцу нечем.
+      if (rec && rec.origin && isStamp(rec.stamp)) {
+        const signed = parseStamp(rec.stamp);
+        if (!signed || signed.node !== String(rec.origin).toUpperCase()) { stats.skipped++; continue; }
+      }
       applyGuarded(db, rec, stats, ctx);
     }
 
@@ -193,8 +207,22 @@ export function applyBatch(db, records, { self, peer = null, upto = 0, seed = fa
       const nextPage = page
         ? (sameSeed ? Math.max(before.recv_seed_page, page) : page)
         : before.recv_seed_page;
-      db.prepare('UPDATE sync_peers SET recv_upto = MAX(recv_upto, ?), recv_seed_page = ? WHERE node = ?')
-        .run(reach, nextPage, peer);
+      // СТРОКА ЗАВОДИТСЯ, ЕСЛИ ЕЁ НЕТ (ревью 7/7b, M2). Раньше здесь стоял
+      // голый UPDATE, и у соседа, который выложился ПЕРВЫМ (мы ему ещё ничего
+      // не отдавали), квитанция просто не записывалась: он повторял бы срез
+      // лишний такт, а мы каждый раз разбирали бы его заново.
+      //
+      // ТЁПЛЫМ ЕГО ЭТО НЕ ДЕЛАЕТ, и вот это здесь главное. «Холодный» для
+      // buildBatch — это отсутствие СТРОКИ, а теперь ещё и last_ok IS NULL:
+      // мы ему ни разу не выкладывались, значит холодный засев ему только
+      // предстоит. Без этой оговорки первая же полученная порция объявляла бы
+      // соседа тёплым, и НАШИ существующие строки не уехали бы к нему никогда.
+      db.prepare(`INSERT INTO sync_peers (node, recv_upto, recv_seed_page, last_ack)
+                  VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+                  ON CONFLICT(node) DO UPDATE SET
+                    recv_upto = MAX(sync_peers.recv_upto, excluded.recv_upto),
+                    recv_seed_page = excluded.recv_seed_page`)
+        .run(peer, reach, nextPage);
     }
   });
 
@@ -239,6 +267,26 @@ function applyGuarded(db, rec, stats, ctx) {
     // пока владелец не спросит, почему филиал пустой.
     if (!(e instanceof SqliteError)) throw e;
     stats.skipped++;
+    stats.refused++;
+    // ОТКАЗ ОСТАЁТСЯ НА ДИСКЕ (ревью 7/7b, I2), а не только в консоли сервера.
+    // Квитанция этому соседу всё равно уедет — иначе одна «ядовитая» строка
+    // повторялась бы в каждом блобе вечно, — то есть второй раз он её НЕ
+    // пришлёт. Значит это уже не «пропустили», а потеряли, и молча терять
+    // чужую работу нельзя: владелец увидит счётчик на экране синхронизации,
+    // поддержка — таблицу с причиной от самой базы.
+    //
+    // Пишется в ТОЙ ЖЕ транзакции: откатится порция — исчезнет и запись об
+    // отказе, потому что и отказа тогда не было.
+    try {
+      ctx.q(`INSERT INTO sync_refused (tbl, uid, peer, err)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(tbl, uid, peer) DO UPDATE SET
+               err = excluded.err, at = strftime('%Y-%m-%dT%H:%M:%SZ','now')`)
+        .run(String(rec && rec.tbl || '?'), String(rec && rec.uid || '?'), ctx.peer, e.message);
+    } catch (writeErr) {
+      // Не смогли записать отказ — это не повод уронить всю порцию.
+      console.warn('[sync] could not record the refusal:', writeErr && writeErr.message);
+    }
     // Именно предупреждением, а не молчанием: запись, которую база не берёт,
     // будет приезжать снова и снова, и знать об этом должен человек.
     console.warn('[sync] record refused', rec && rec.tbl, rec && rec.uid, rec && rec.stamp, e.message);
@@ -334,6 +382,25 @@ function applyOne(db, rec, stats, ctx) {
   // — защищать нечего. Новой строки (id == null) здесь не правили по
   // определению: терять нечего, защита не нужна.
   const guarded = id == null ? EMPTY : localUnshippedCols(db, ctx, rec.tbl, rec.uid, rec.origin);
+  // МЕТКИ МЕСТНЫХ ПРАВОК этой строки — по колонкам. Без них сравнение
+  // «кто новее» шло между чужой меткой и ЧУЖОЙ ЖЕ (sync_seen помнит только
+  // принятое), а местная правка в нём не участвовала вовсе.
+  const localStamps = id == null ? null : localEditStamps(db, ctx, rec.tbl, rec.uid);
+  // true — местная правка этой колонки НОВЕЕ приехавшей записи.
+  //
+  // ЗАПОМИНАТЬ эту метку в sync_seen НЕЛЬЗЯ, хотя руки чешутся: пробовал,
+  // стало хуже (19 расхождений из 40 против 16 — прогон о нём в плане).
+  // Причина ровно в том, почему отказ здесь вообще безопасен. Отказывая по
+  // ЖИВОЙ журнальной записи, мы отказываем от имени правки, которая ещё не
+  // подтверждена соседом, а значит ещё УЕДЕТ — сосед возьмёт наше значение, и
+  // обе стороны сойдутся на одном. Метка же в sync_seen переживает чистку
+  // журнала: отказ по ней делается от имени правки, которую больше никто
+  // никогда не пришлёт, и расхождение застывает навсегда.
+  const localWins = (col) => {
+    if (!localStamps) return false;
+    const mine = localStamps.get(col) || localStamps.get('*');
+    return !!mine && compareStamps(rec.stamp, mine) <= 0;
+  };
 
   if (rec.op === 'del') {
     // Правило 3. Удаление проигрывает любой более поздней правке — местной
@@ -344,6 +411,10 @@ function applyOne(db, rec, stats, ctx) {
       .get(rec.tbl, rec.uid, rec.stamp);
     if (guarded.size) { stats.skipped++; stats.protected++; return; }
     if (newerCol) { stats.skipped++; return; }
+    // Удаление проигрывает и МЕСТНОЙ правке, которая новее его: строку, с
+    // которой здесь только что работали, стирать нельзя, даже если наша
+    // правка уже уехала соседу.
+    if (localWins('*') || SHIPPED[rec.tbl].some((c) => localWins(c))) { stats.skipped++; return; }
     if (id != null) { ctx.q(`DELETE FROM ${rec.tbl} WHERE id = ?`).run(id); stats.deleted++; }
     // Надгробие вместо поколоночных меток: строки больше нет, помнить по
     // колонкам нечего, а помнить САМ ФАКТ удаления обязательно (правило ниже).
@@ -394,6 +465,7 @@ function applyOne(db, rec, stats, ctx) {
     if (!wanted(col)) continue;
     const prev = seenCol.get(rec.tbl, rec.uid, col);
     if (prev && compareStamps(rec.stamp, prev.stamp) <= 0) continue;   // эта колонка новее у нас
+    if (localWins(col)) continue;                                      // и местная правка тоже новее
     cols.push(col); vals.push(rec.data[col]);
   }
   // Новая строка: у неё ничего не защищено и ничего не видено — все колонки едут.
@@ -427,9 +499,10 @@ function applyOne(db, rec, stats, ctx) {
     // статус от более новой записи: половина строки от вчера, половина от
     // сегодня, и никакой ошибки в логах.
     const prevRef = seenCol.get(rec.tbl, rec.uid, col);
-    if (prevRef && compareStamps(rec.stamp, prevRef.stamp) <= 0) {
-      // Ссылку уже приняли новее. Существующей строке это ничем не грозит, а
-      // НОВУЮ без обязательного родителя не собрать — и выдумывать его нельзя.
+    if ((prevRef && compareStamps(rec.stamp, prevRef.stamp) <= 0) || localWins(col)) {
+      // Ссылку уже приняли новее — или новее её правили здесь. Существующей
+      // строке это ничем не грозит, а НОВУЮ без обязательного родителя не
+      // собрать — и выдумывать его нельзя.
       if (id == null) { stats.skipped++; return; }
       continue;
     }
@@ -446,6 +519,7 @@ function applyOne(db, rec, stats, ctx) {
       // допускает NULL), поэтому устаревшую ссылку достаточно не трогать.
       const prevRef = seenCol.get(rec.tbl, rec.uid, col);
       if (prevRef && compareStamps(rec.stamp, prevRef.stamp) <= 0) continue;
+      if (localWins(col)) continue;
       const pid = catalogueId(db, ctx, spec, code);
       if (pid == null) { waiting = { tbl: spec.table, uid: code }; break; }
       cols.push(col); vals.push(pid);
@@ -515,12 +589,12 @@ function applyOne(db, rec, stats, ctx) {
   // оно новее и выиграет по колонкам, когда придёт его час.
   ctx.q('DELETE FROM sync_pending WHERE tbl = ? AND uid = ? AND stamp <= ?')
     .run(rec.tbl, rec.uid, rec.stamp);
-  const remember = ctx.q(`INSERT INTO ${SEEN} (tbl, uid, col, stamp) VALUES (?,?,?,?)
+  const rememberApplied = ctx.q(`INSERT INTO ${SEEN} (tbl, uid, col, stamp) VALUES (?,?,?,?)
               ON CONFLICT(tbl, uid, col) DO UPDATE SET stamp = excluded.stamp`);
   // Метка пишется ТОЛЬКО применённым колонкам. Написать её всему снимку
   // значило бы объявить отправителя автором каждой колонки строки — с этого
   // и начинался дефект, который чинит вся эта задача.
-  for (const col of cols) remember.run(rec.tbl, rec.uid, col, rec.stamp);
+  for (const col of cols) rememberApplied.run(rec.tbl, rec.uid, col, rec.stamp);
   if (held) stats.protected++;
   if (cols.length || id == null) stats.applied++; else stats.skipped++;
 }
@@ -679,6 +753,68 @@ function localUnshippedCols(db, ctx, tbl, uid, peer) {
     }
   }
   return set;
+}
+
+/**
+ * МЕТКИ МЕСТНЫХ ПРАВОК строки, по колонкам (ревью 7/7b, C1).
+ *
+ * Дефект, который это чинит, воспроизводится на двух базах и НЕ лечится
+ * порядком выгрузки и выборки. B правит телефон в 09:00 и выкладывает; A этого
+ * не забирал и правит телефон в 09:50; в 10:00 A сперва ВЫКЛАДЫВАЕТ (pub_seq
+ * уходит за его правку, защита в тот же миг снимается), а потом забирает
+ * вчерашний блоб B и кладёт его 09:00 поверх своего 09:50. Откат этот в журнал
+ * не пишется, а B уже применил значение A. У A телефон B, у B телефон A —
+ * навсегда. Корень: местная правка не имела метки ВООБЩЕ. sync_seen помнит
+ * только ПРИНЯТЫЕ метки, то есть сравнение шло чужая-против-чужой, а своя
+ * держалась одной лишь защитой — а та по построению временная.
+ *
+ * ОСЬ СРАВНЕНИЯ — ТА ЖЕ, ЧТО У buildBatch: nextStamp от времени правки и от
+ * тех же сохранённых часов. Что это значит на самом деле, стоит записать, иначе
+ * следующий читатель будет искать здесь «время правки» и не найдёт: часы HLC
+ * поднимаются до Date.now() при КАЖДОМ приёме (writeClock), поэтому метка,
+ * которую любой узел чеканит выгрузкой, — это его время ОТПРАВКИ. Значит и
+ * сравнение здесь по сути такое: «наша неотправленная правка против записи,
+ * отчеканенной соседом ДО нашего последнего приёма». Записи старше нашего
+ * последнего обмена — заведомо устаревшие, и своя правка их переживает; более
+ * свежая чужая запись выигрывает, как и должна.
+ *
+ * ПРОБОВАЛ И ОТКАТИЛ, чтобы не пробовали снова (замерено прогоном 40 случайных
+ * сетей, см. план — Задача 7c):
+ *   - чеканить метку от ТЕКУЩИХ часов, то есть «любая неподтверждённая правка
+ *     сильнее любой приехавшей»: 26 расхождений из 40 — ХУЖЕ, чем до правки
+ *     (24), потому что узлы начинают отказывать друг другу симметрично;
+ *   - запоминать выигравшую местную метку в sync_seen: 19 из 40. Отказ по
+ *     живой журнальной записи безопасен (она ещё не подтверждена — значит,
+ *     ещё уедет, и сосед придёт к тому же значению), а отказ по метке в
+ *     sync_seen переживает чистку журнала и делается от имени правки, которую
+ *     больше никто не пришлёт: расхождение застывает навсегда.
+ *   - нынешний вариант: 16 из 40.
+ */
+function localEditStamps(db, ctx, tbl, uid) {
+  const rows = ctx.q('SELECT cols, MAX(at) AS at FROM sync_journal WHERE tbl = ? AND uid = ? GROUP BY cols')
+    .all(tbl, uid);
+  if (!rows.length) return null;
+  // Часы читаются ОДИН раз на порцию: по ходу приёма они не меняются
+  // (writeClock в самом конце), а чтение на каждую строку стоило бы запроса.
+  if (ctx.clock === undefined) ctx.clock = readClock(db);
+  const out = new Map();
+  for (const row of rows) {
+    const ms = Date.parse(row.at);
+    if (!Number.isFinite(ms)) continue;
+    let stamp;
+    try {
+      stamp = nextStamp(ctx.clock, ctx.self, () => ms).stamp;
+    } catch {
+      continue;   // буква проверена на входе; это страховка, а не путь
+    }
+    for (const part of String(row.cols || '*').split(',')) {
+      const col = part.trim();
+      if (!col) continue;
+      const prev = out.get(col);
+      if (!prev || prev < stamp) out.set(col, stamp);
+    }
+  }
+  return out.size ? out : null;
 }
 
 // Отдельная константа, а не new Set(['*']) на каждый вызов: множество только

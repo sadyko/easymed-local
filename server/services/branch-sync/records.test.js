@@ -289,9 +289,19 @@ test('приехавшая строка помечена буквой сосед
   applyBatch(db, [{ tbl: 'patients', uid: 'oo2', op: 'put', stamp: '000000000002-0000-C', data: { full_name: 'Безымянный' }, refs: {} }], S);
   assert.equal(db.prepare("SELECT sync_origin FROM patients WHERE uid = 'oo2'").get().sync_origin, 'C',
     'метка знает узел — поле origin для этого не нужно');
-  applyBatch(db, [{ tbl: 'patients', uid: 'oo4', op: 'put', stamp: '000000000003-0000-D', data: { full_name: 'Из D' }, refs: {}, origin: 'ПОДДЕЛКА' }], S);
-  assert.equal(db.prepare("SELECT sync_origin FROM patients WHERE uid = 'oo4'").get().sync_origin, 'D',
-    'в колонку не попадает то, что прислали в необязательном поле');
+  // А вот запись, у которой origin и метка называют РАЗНЫЕ узлы, не
+  // применяется вовсе (ревью 7/7b, M1). Раньше она применялась, а буква
+  // бралась из метки — «в колонку не попадает то, что прислали в поле».
+  // Оказалось, что этого мало: origin решает, ЧЬЮ защиту снимать при слиянии
+  // (localUnshippedCols), а метка — чьей буквой подписать строку. Разойдись
+  // они, и строка садится в базу подписанной одним филиалом, а слитой по
+  // правилам другого; на карточке пациента подпись указывает не туда, и
+  // проверить это владельцу нечем. Две разные личности в одной записи — это
+  // сломанная сборка или подделка, и место такой записи не в базе.
+  const forged = applyBatch(db, [{ tbl: 'patients', uid: 'oo4', op: 'put', stamp: '000000000003-0000-D', data: { full_name: 'Из D' }, refs: {}, origin: 'ПОДДЕЛКА' }], S);
+  assert.equal(forged.skipped, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM patients WHERE uid = 'oo4'").get().n, 0,
+    'запись, называющая себя двумя разными узлами сразу, не применяется вовсе');
   db.close();
 });
 
@@ -433,9 +443,14 @@ test('peer задан — запись с чужим origin не применя�
   assert.equal(r.applied, 1);
   assert.equal(r.skipped, 1);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM patients WHERE uid = 'pp2'").get().n, 0);
-  // Без peer проверять нечем — старые вызовы работают как работали.
+  // Без peer сверять origin не с чем — зато есть метка (ревью 7/7b, M1):
+  // запись, у которой origin и метка называют разные узлы, не применяется и
+  // здесь. Раньше она проезжала.
   applyBatch(db, [{ ...put('patients', 'pp2', '000000000003-0000-C', { full_name: 'Якобы от D' }), origin: 'D' }], S);
-  assert.equal(db.prepare("SELECT COUNT(*) n FROM patients WHERE uid = 'pp2'").get().n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM patients WHERE uid = 'pp2'").get().n, 0);
+  // А согласная сама с собой — применяется, как и applyBatch без peer вообще.
+  applyBatch(db, [put('patients', 'pp3', '000000000004-0000-C', { full_name: 'Честная от C' })], S);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM patients WHERE uid = 'pp3'").get().n, 1);
   db.close();
 });
 
@@ -470,9 +485,17 @@ test('deferred — сколько ЖДЁТ на конец порции; release
 // него — B не принимал бы адрес от C, C не принимал бы телефон от B, и оба
 // узла не сошлись бы вовсе (пробная сборка Задачи 7, воспроизведено).
 
+// Метка от РЕАЛЬНОГО времени: с Задачи 7c местная правка тоже имеет метку, и
+// синтетическая '000000000009-0000-C' (девять миллисекунд от 1970 года) теперь
+// честно проигрывает любой сегодняшней правке. Сравнивать надо на той оси, на
+// которой сеть работает вживую.
+const stampAt = (ms, node = 'C', cnt = 0) =>
+  Math.floor(ms).toString(16).padStart(12, '0') + '-' + cnt.toString(16).padStart(4, '0') + '-' + node;
+
 test('7b: выгрузка снимает защиту — дальше спор решают метки, а не защита', () => {
   const db = fresh();
-  applyBatch(db, [put('patients', 'sh1', '000000000005-0000-C',
+  const now = Date.now();
+  applyBatch(db, [put('patients', 'sh1', stampAt(now - 120000),
     { full_name: 'Иванов', phone: '+998900000001' })], S);
   // Сосед известен и тёплый, но НИЧЕГО ему ещё не выложено (pub_seq = 0).
   db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
@@ -480,7 +503,7 @@ test('7b: выгрузка снимает защиту — дальше спор
   db.prepare("UPDATE patients SET phone = '+998909999999' WHERE uid = 'sh1'").run();   // местная, не выложена
 
   const held = applyBatch(db, [{
-    ...put('patients', 'sh1', '000000000009-0000-C', { phone: '+998900000002' }), changed: ['phone'],
+    ...put('patients', 'sh1', stampAt(now + 60000), { phone: '+998900000002' }), changed: ['phone'],
   }], S);
   assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'sh1'").get().phone, '+998909999999',
     'пока правка не выложена, её держит защита: сосед о ней знать не мог');
@@ -491,14 +514,14 @@ test('7b: выгрузка снимает защиту — дальше спор
   db.prepare("UPDATE sync_peers SET pub_seq = ? WHERE node = 'C'").run(top);
 
   const older = applyBatch(db, [{
-    ...put('patients', 'sh1', '000000000003-0000-C', { phone: '+998900000003' }), changed: ['phone'],
+    ...put('patients', 'sh1', stampAt(now - 60000), { phone: '+998900000003' }), changed: ['phone'],
   }], S);
   assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'sh1'").get().phone, '+998909999999',
-    'запись СТАРШЕ уже принятой проигрывает по метке — но проигрывает она метке, а не защите');
+    'запись СТАРШЕ нашей правки проигрывает по метке — но проигрывает метке, а не защите');
   assert.equal(older.protected, 0, 'защиты здесь больше нет: наше авторство сосед уже видит');
 
   const newer = applyBatch(db, [{
-    ...put('patients', 'sh1', '000000000011-0000-C', { phone: '+998900000004' }), changed: ['phone'],
+    ...put('patients', 'sh1', stampAt(now + 120000), { phone: '+998900000004' }), changed: ['phone'],
   }], S);
   assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'sh1'").get().phone, '+998900000004',
     'а более новая — применяется: на задержке подтверждения узлы обязаны сходиться, а не окапываться');
@@ -553,5 +576,119 @@ test('7b: в повторе живёт СТАРОЕ авторство — су�
   assert.equal(row.address, 'Ташкент',
     'а повтор старого авторства — нет: иначе местная правка пропадала бы НАВСЕГДА');
   assert.equal(r.protected, 0, 'держала её не защита — та снята выгрузкой, — а сужение авторства');
+  db.close();
+});
+
+// --- Задача 7c: у местной правки появилась метка -----------------------------
+//
+// До этого местная правка метки не имела ВООБЩЕ: sync_seen помнит только
+// ПРИНЯТЫЕ метки, то есть сравнение «кто новее» шло чужая-против-чужой, а своя
+// держалась одной защитой — а защита по построению временная, она снимается
+// выгрузкой. Отсюда и расхождение навсегда: приехавшая вчерашняя правка
+// ложилась поверх сегодняшней местной.
+
+test('7c: неподтверждённая местная правка сильнее уже отчеканенной чужой метки', () => {
+  const db = fresh();
+  const now = Date.now();
+  applyBatch(db, [put('patients', 'lw1', stampAt(now - 7200000),
+    { full_name: 'Иванов', phone: 'старый' })], S);
+  // Сосед всё получил: и строка заведена, и наша правка ниже будет выложена.
+  db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
+    .run(new Date().toISOString());
+
+  // Местная правка «в 09:50».
+  const before = db.prepare('SELECT COALESCE(MAX(seq), 0) s FROM sync_journal').get().s;
+  db.prepare("UPDATE patients SET phone = '+998909995950' WHERE uid = 'lw1'").run();
+  db.prepare('UPDATE sync_journal SET at = ? WHERE seq > ?')
+    .run(new Date(now - 600000).toISOString().replace(/\.\d+Z$/, 'Z'), before);
+  // ...и она УЖЕ ВЫЛОЖЕНА: защиты больше нет, спорить нечем, кроме метки.
+  db.prepare('UPDATE sync_peers SET pub_seq = (SELECT MAX(seq) FROM sync_journal) WHERE node = ?').run('C');
+
+  // Сосед прислал свою правку той же колонки, но сделанную РАНЬШЕ («в 09:00»).
+  const r = applyBatch(db, [{
+    ...put('patients', 'lw1', stampAt(now - 3600000), { phone: '+998909995900' }), changed: ['phone'],
+  }], S);
+  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'lw1'").get().phone, '+998909995950',
+    'своя более поздняя правка обязана пережить чужую более раннюю');
+  assert.equal(r.protected, 0, 'держит её МЕТКА, а не защита: защита снята выгрузкой');
+  assert.equal(r.applied, 0, 'применять в записи оказалось нечего');
+  assert.equal(r.skipped, 1, 'и это именно пропуск, отдельного счётчика не заводим');
+  db.close();
+});
+
+// ОБРАТНАЯ СТОРОНА ТОГО ЖЕ ПРАВИЛА: как только наша правка ПОДТВЕРЖДЕНА и
+// вычищена из журнала, притязания у нас больше нет — дальше спор решает
+// sync_seen, и более новая приехавшая запись применяется. Иначе узел окопался
+// бы на своём значении навсегда.
+test('7c: подтверждённая (вычищенная из журнала) местная правка больше не спорит', () => {
+  const db = fresh();
+  const now = Date.now();
+  applyBatch(db, [put('patients', 'lw2', stampAt(now - 7200000),
+    { full_name: 'Иванов', phone: 'старый' })], S);
+  db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
+    .run(new Date().toISOString());
+  db.prepare("UPDATE patients SET phone = 'моё' WHERE uid = 'lw2'").run();
+
+  // Пока правка в журнале — она сильнее любой УЖЕ отчеканенной чужой метки, и
+  // это не произвол: она ещё не уехала, уедет позже, а значит и метку получит
+  // более позднюю — сосед сам предпочтёт её, когда она к нему приедет.
+  applyBatch(db, [{
+    ...put('patients', 'lw2', stampAt(now - 600000), { phone: 'соседское' }), changed: ['phone'],
+  }], S);
+  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'lw2'").get().phone, 'моё');
+
+  // Сосед подтвердил приём, журнал вычищен (pruneJournal) — притязания нет.
+  db.prepare('DELETE FROM sync_journal').run();
+  applyBatch(db, [{
+    ...put('patients', 'lw2', stampAt(now - 300000), { phone: 'соседское' }), changed: ['phone'],
+  }], S);
+  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'lw2'").get().phone, 'соседское',
+    'иначе узел окапывается на своём значении навсегда');
+  db.close();
+});
+
+test('7c: удаление не сносит строку, которую здесь правили ПОЗЖЕ', () => {
+  const db = fresh();
+  const now = Date.now();
+  applyBatch(db, [put('patients', 'lw3', stampAt(now - 7200000), { full_name: 'Иванов' })], S);
+  db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
+    .run(new Date().toISOString());
+  const before = db.prepare('SELECT COALESCE(MAX(seq), 0) s FROM sync_journal').get().s;
+  db.prepare("UPDATE patients SET phone = '+998900000001' WHERE uid = 'lw3'").run();
+  db.prepare('UPDATE sync_journal SET at = ? WHERE seq > ?')
+    .run(new Date(now - 600000).toISOString().replace(/\.\d+Z$/, 'Z'), before);
+  db.prepare('UPDATE sync_peers SET pub_seq = (SELECT MAX(seq) FROM sync_journal) WHERE node = ?').run('C');
+
+  const r = applyBatch(db, [del('patients', 'lw3', stampAt(now - 3600000))], S);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM patients WHERE uid = 'lw3'").get().n, 1,
+    'строку, с которой здесь только что работали, удаление из прошлого не уносит');
+  assert.equal(r.deleted, 0);
+  db.close();
+});
+
+// --- Задача 7c: отказ базы больше не молчит (ревью I2) ----------------------
+
+test('7c: строку, которую отвергла база, видно в sync_refused, а квитанция всё равно уезжает', () => {
+  const db = fresh();
+  const now = Date.now();
+  // Местный пациент занимает номер карты; приезжий приедет с тем же — UNIQUE.
+  db.prepare("INSERT INTO patients (full_name, mrn) VALUES ('Местный', 'B-000001')").run();
+  db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
+    .run(new Date().toISOString());
+
+  const r = applyBatch(db, [
+    put('patients', 'rf1', stampAt(now - 60000), { full_name: 'Приезжий', mrn: 'B-000001' }),
+    put('patients', 'rf2', stampAt(now - 50000), { full_name: 'Нормальный' }),
+  ], { ...S, peer: 'C', upto: 77 });
+
+  assert.equal(r.refused, 1, 'отказ базы считается отдельно от «пропущено»');
+  assert.equal(r.applied, 1, 'здоровая запись рядом применилась: одна кривая не отменяет порцию');
+  const row = db.prepare("SELECT tbl, uid, peer, err FROM sync_refused").get();
+  assert.equal(row.uid, 'rf1');
+  assert.equal(row.peer, 'C', 'видно, чей блоб её привёз');
+  assert.match(row.err, /UNIQUE|constraint/i, 'и что именно сказала база');
+  // Квитанция сдвигается ВСЁ РАВНО: иначе одна «ядовитая» строка повторялась бы
+  // в каждом блобе вечно и держала бы журнал соседа.
+  assert.equal(db.prepare("SELECT recv_upto FROM sync_peers WHERE node = 'C'").get().recv_upto, 77);
   db.close();
 });
