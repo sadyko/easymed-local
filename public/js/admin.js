@@ -27,7 +27,7 @@ import { renderBranchPicker } from './admin/branch-picker.js';
 import { loadDocBrandingAsync } from './admin/views/doc-settings.js?v=noqr1';   // DOC_SETTINGS_UNIFY_V1
 import { setLicence, isLicensed, licenceState } from './admin/licence.js';   // LICENCE_CORE_V1
 import { renderLockedModule } from './admin/views/locked-module.js';   // LICENCE_CORE_V1
-import { renderActivation } from './admin/views/activation.js';   // LICENCE_CORE_V1
+import { renderActivation } from './admin/views/activation.js?v=branch1';   // LICENCE_CORE_V1 + BRANCH_FIRST_RUN_V1
 import { renderUpdates } from './admin/views/updates.js';   // UPDATE_DELIVERY_V1
 // SETTINGS_SPLIT_V1 — «Система» split into three screens (views/updates.js's
 // header records what moved where); these are the two new halves.

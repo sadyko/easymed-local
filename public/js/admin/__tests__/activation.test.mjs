@@ -70,11 +70,14 @@ let statusCalls = 0, unlockCalls = 0, enrollCalls = 0, enrollBody = null;
 let statusRespond = () => jsonOk({ state: 'locked', locked: true, reason: 'offline', days_left: 0, modules: [], challenge: null });
 let unlockRespond = () => jsonOk({ ok: true, until: '2026-09-03T00:00:00Z' });
 let enrollRespond = () => jsonOk({ ok: true, clinic_id: 'c-000051', clinic_name: 'Нурафшон Мед' });
+let pairCalls = 0, pairBody = null;
+let pairRespond = () => jsonOk({ ok: true, role: 'secondary', group_id: 'g-1', letter: 'Б' });
 globalThis.fetch = async (url, init) => {
   const u = String(url);
   if (u.startsWith('/api/rpc/licence_status')) { statusCalls++; return statusRespond(); }
   if (u.startsWith('/api/rpc/licence_unlock')) { unlockCalls++; return unlockRespond(); }
   if (u.startsWith('/api/rpc/licence_enroll')) { enrollCalls++; try { enrollBody = JSON.parse(init?.body ?? 'null'); } catch { enrollBody = null; } return enrollRespond(); }
+  if (u.startsWith('/api/rpc/branch_sync_pair')) { pairCalls++; try { pairBody = JSON.parse(init?.body ?? 'null'); } catch { pairBody = null; } return pairRespond(); }
   return jsonOk({});
 };
 
@@ -244,4 +247,54 @@ test('неверный EM-код снова разрешает нажать и �
   const status = findByClass(root, 'act-status');
   assert.match(textOf(status), /Код неверный\. Проверьте и введите ещё раз\./, 'должен быть виден ИМЕННО ответ сервера: ' + textOf(status));
   assert.doesNotMatch(textOf(status), /Система активирована/);
+});
+
+// BRANCH_FIRST_RUN_V1 — второй шаг первого запуска. У филиала СВОЯ подписка и
+// свой код активации (на control plane это отдельная клиника), поэтому шаг 1
+// обязателен и для него; ключ филиала не активирует, а присоединяет уже
+// активированную установку к главной клинике.
+test('после активации предлагается подключить филиал, и ключ уходит в branch_sync_pair', async () => {
+  statusRespond = () => jsonOk({ challenge: null });
+  enrollRespond = () => jsonOk({ ok: true, clinic_id: 'c-000052', clinic_name: 'Филиал Б' });
+  pairCalls = 0; pairBody = null;
+
+  const root = mk('div');
+  await renderActivation(root, { reason: 'not_enrolled', days_left: 0, locked: true, state: 'locked' });
+  findInput(root).value = 'EM-1111-2222';
+  findButton(root).click();
+  await new Promise((r) => setTimeout(r, 20));
+
+  // Экран сначала ПОКАЗЫВАЕТ «Система активирована», и только потом уходит на
+  // шаг 2 — иначе подтверждение мелькнуло бы и человек не понял, что сработало.
+  assert.match(textOf(findByClass(root, 'act-status')), /Система активирована/);
+  await new Promise((r) => setTimeout(r, 1300));
+
+  const keyInput = findInput(root);
+  assert.ok(keyInput, 'на шаге 2 есть поле для ключа филиала');
+  keyInput.value = 'BR-TEST-KEY';
+  const buttons = walk(root).filter((n) => n.tagName === 'BUTTON');
+  buttons[0].click();
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.strictEqual(pairCalls, 1, 'ключ филиала уходит в branch_sync_pair');
+  assert.strictEqual(pairBody.key, 'BR-TEST-KEY');
+});
+
+test('главная клиника пропускает шаг филиала, не вызывая branch_sync_pair', async () => {
+  statusRespond = () => jsonOk({ challenge: null });
+  enrollRespond = () => jsonOk({ ok: true, clinic_id: 'c-000053', clinic_name: 'Главная' });
+  pairCalls = 0;
+
+  const root = mk('div');
+  await renderActivation(root, { reason: 'not_enrolled', days_left: 0, locked: true, state: 'locked' });
+  findInput(root).value = 'EM-3333-4444';
+  findButton(root).click();
+  await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, 1300));
+
+  const buttons = walk(root).filter((n) => n.tagName === 'BUTTON');
+  assert.ok(buttons.length >= 2, 'есть кнопка «пропустить»');
+  buttons[1].click();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.strictEqual(pairCalls, 0, 'пропуск ничего не связывает');
 });

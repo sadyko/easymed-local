@@ -144,15 +144,71 @@ export async function renderActivation(root, lic) {
 // in one place, control-plane-side (mirrored by control/enroll.js), so the
 // screen can never disagree with it.
 function renderEnrollment(root) {
-    const { input, btn, statusEl } = buildEnrollForm();
+    // BRANCH_FIRST_RUN_V1 — первый запуск в два шага. Первый обязателен для
+    // ЛЮБОЙ установки, включая филиал: у филиала своя подписка и свой код
+    // активации (на control plane это отдельная клиника со своей подпиской —
+    // см. POST /clinics). Ключ филиала подпиской не является и активировать им
+    // нельзя: он присоединяет уже активированную установку к главной клинике,
+    // чтобы та отдала справочник.
+    const { input, btn, statusEl } = buildEnrollForm(() => renderBranchStep(root));
 
     root.appendChild(h('div', { class: 'card activation-screen' },
         h('div', { class: 'act-icon' }, Icon('Lock', { size: 26 })),
         h('h1', { class: 'act-title' }, 'Активация Easy-Med'),
         h('p', { class: 'act-reassure' },
-            'Введите код активации, полученный от менеджера Easy-Med.'),
+            'Введите код активации, полученный от менеджера Easy-Med. Для филиала — код этого филиала.'),
         field('Введите код активации', input),
         btn,
+        statusEl,
+    ));
+}
+
+// Шаг 2: присоединить филиал к главной клинике. Пропускаемый — главной клинике
+// присоединяться не к чему, и заставлять её что-то вводить было бы неправдой.
+function renderBranchStep(root) {
+    clear(root);
+    const statusEl = h('div', { class: 'act-status', role: 'status' });
+    const keyInput = h('input', {
+        type: 'text', class: 'act-input', placeholder: 'BR-...',
+        autocomplete: 'off', spellcheck: 'false',
+    });
+    const done = () => { try { location.reload(); } catch (e) {} };
+
+    const joinBtn = h('button', {
+        type: 'button', class: 'btn btn-primary act-cta',
+        onclick: async () => {
+            const key = String(keyInput.value || '').trim();
+            if (!key) { keyInput.focus(); return; }
+            joinBtn.disabled = true;
+            statusEl.className = 'act-status';
+            statusEl.textContent = '';
+            try {
+                const { error } = await supabase.rpc('branch_sync_pair', { key });
+                if (error) throw error;
+                statusEl.className = 'act-status ok';
+                statusEl.textContent = tr('Филиал подключён. Справочник подтянется от главной клиники.');
+                setTimeout(done, 1400);
+            } catch (e) {
+                statusEl.className = 'act-status error';
+                statusEl.textContent = (e && e.message) || tr('Не удалось подключить филиал.');
+                joinBtn.disabled = false;
+            }
+        },
+    }, 'Подключить филиал');
+
+    keyInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault?.(); joinBtn.click(); } });
+
+    root.appendChild(h('div', { class: 'card activation-screen' },
+        h('div', { class: 'act-icon' }, Icon('Building', { size: 26 })),
+        h('h1', { class: 'act-title' }, 'Система активирована'),
+        h('p', { class: 'act-reassure' },
+            'Если это филиал — введите ключ филиала, выданный главной клиникой. Если это главная клиника, пропустите шаг.'),
+        field('Ключ филиала', keyInput),
+        joinBtn,
+        h('button', {
+            type: 'button', class: 'btn btn-outline act-cta', style: { marginTop: '8px' },
+            onclick: done,
+        }, 'Это главная клиника — пропустить'),
         statusEl,
     ));
 }
@@ -166,7 +222,7 @@ function renderEnrollment(root) {
 // the server exactly as typed (normalisation lives control-plane-side, so no
 // screen can disagree with it), the server's Russian sentence is shown as-is
 // on failure, and success reloads — the whole app must re-read its licence.
-export function buildEnrollForm() {
+export function buildEnrollForm(onEnrolled) {
     const statusEl = h('div', { class: 'act-status', role: 'status' });
 
     const input = h('input', {
@@ -193,6 +249,14 @@ export function buildEnrollForm() {
             // Same readable-before-reload delay as the unlock path: the reload
             // is what swaps this screen for the real app now that
             // licence_status will answer unlocked.
+            // BRANCH_FIRST_RUN_V1 — раньше здесь была только перезагрузка, и установщик
+            // филиала оставался с активированной, но ОДИНОКОЙ базой: чтобы подтянуть
+            // справочник главного филиала, он должен был сам догадаться зайти в
+            // «Настройки → Филиалы». Теперь второй шаг предлагается сразу, и его можно
+            // пропустить, если это главная клиника, а не филиал.
+            // Сообщение «Система активирована» должно быть видно, а не мелькнуть:
+            // шаг 2 показывается через ту же паузу, что раньше вела к перезагрузке.
+            if (typeof onEnrolled === 'function') { setTimeout(onEnrolled, 1200); return; }
             setTimeout(() => { try { location.reload(); } catch (e) {} }, 1200);
         } catch (e) {
             // The server's message is already the specific, Russian sentence
