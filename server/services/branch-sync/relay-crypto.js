@@ -70,11 +70,25 @@ export const RELAY_ID_RE = /^[0-9a-f]{32}$/;
  *
  * Побочная выгода: перевыпуск ключа сам собой меняет адрес, и старый блоб
  * становится сиротой, которого вычистит удержание на сервере.
+ *
+ * BRANCH_RECORDS_V1 — адрес блоба ДЛЯ УЗЛА.
+ *
+ * У справочника адрес один на группу: пишет его только главная клиника.
+ * Журналы пишут все, и общий адрес означал бы, что филиалы затирают выгрузки
+ * друг друга. Адрес по-прежнему выводится из ключа группы, поэтому его не надо
+ * нигде согласовывать: каждый узел вычисляет и свой, и чужие. Без узла —
+ * прежний адрес справочника, байт в байт: уже выложенные копии не переезжают.
+ *
+ * @param {string|Buffer} key   ключ группы
+ * @param {string} [node]       буква филиала. Регистр не важен — 'b' и 'B' это
+ *   один и тот же узел, а буква на экране и буква из ключа подключения не
+ *   всегда одного регистра.
  */
-export function relayIdFor(key) {
+export function relayIdFor(key, node) {
   const k = decodeGroupKey(key);
   if (!k) return null;
-  return createHmac('sha256', k).update(RELAY_ID_INFO).digest('hex').slice(0, RELAY_ID_CHARS);
+  const info = node ? RELAY_ID_INFO + ':' + String(node).toUpperCase() : RELAY_ID_INFO;
+  return createHmac('sha256', k).update(info).digest('hex').slice(0, RELAY_ID_CHARS);
 }
 
 /**

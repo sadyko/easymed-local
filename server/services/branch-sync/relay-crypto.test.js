@@ -110,6 +110,22 @@ test('адрес блоба выводится из ключа: одинаков
   assert.equal(id.includes(key.slice(0, 8)), false);
 });
 
+test('у каждого узла свой адрес блоба, и он выводится из ключа группы', () => {
+  const key = 'k'.repeat(43);
+  const b = relayIdFor(key, 'B');
+  const c = relayIdFor(key, 'C');
+  assert.match(b, /^[0-9a-f]{32}$/);
+  assert.notEqual(b, c, 'иначе филиалы затирали бы журналы друг друга');
+  assert.equal(relayIdFor(key, 'B'), b, 'адрес постоянен: его не с кем согласовывать');
+  assert.equal(relayIdFor(key, 'b'), b, 'буква нормализуется: b и B — один узел');
+});
+
+test('без узла адрес прежний — справочник лежит там же, где лежал', () => {
+  const key = 'k'.repeat(43);
+  assert.equal(relayIdFor(key).length, 32);
+  assert.notEqual(relayIdFor(key), relayIdFor(key, 'B'));
+});
+
 test('перевыпуск ключа уводит группу на другой адрес — старый блоб становится сиротой', () => {
   const before = relayIdFor(newKey());
   const after = relayIdFor(newKey());
