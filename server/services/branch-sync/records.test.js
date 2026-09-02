@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { applyBatch } from './records.js';
-import { SHIPPED } from './journal.js';
+import { SHIPPED, buildBatch, markSent } from './journal.js';
 
 function fresh() {
   const db = openDb(':memory:');
@@ -295,4 +295,164 @@ test('метка происхождения не уезжает обратно: 
     assert.ok(!SHIPPED[tbl].includes('sync_origin'),
       tbl + ': отправив метку, B объявил бы C, что собственные строки C — чужие');
   }
+});
+
+// --- ревью Задачи 5: поколоночное слияние по-настоящему ---
+//
+// Этот блок про один дефект и его цену. Отправитель отдавал СНИМОК всей строки
+// под ОДНОЙ меткой, приёмник записывал эту метку КАЖДОЙ колонке снимка, а
+// местная неотправленная правка защищалась ОТБРАСЫВАНИЕМ всей приехавшей
+// записи. Три решения вместе теряли данные, хотя каждое по отдельности
+// выглядело осторожным.
+
+// ГЛАВНЫЙ ИНВАРИАНТ ФАЗЫ. Настоящий обмен двух узлов, без ручных записей: B и C
+// — две базы, порции собирает buildBatch, применяет applyBatch, отметку двигает
+// markSent. B правит телефон, C — адрес, ни одна правка ещё не отдана.
+//
+// Как это ломалось раньше: B→C — C видит местную неотправленную правку и
+// ОТБРАСЫВАЕТ запись B целиком, а markSent у B уже сдвинулся, и телефон больше
+// никогда не уедет. C→B — снимок C несёт ПУСТОЙ телефон под меткой новее, и
+// номер стирается у B. Итог: {phone: '', address: 'Ташкент'} на обеих сторонах,
+// телефон исчез из сети целиком. Не «конфликт слияния» — потеря данных.
+test('ДВА УЗЛА: телефон из B и адрес из C, оба неотправленные, выживают у ОБОИХ', () => {
+  const B = fresh();
+  const C = fresh();
+
+  // Пациент заводится в B и уезжает в C холодным засевом.
+  B.prepare("INSERT INTO patients (full_name, phone, address) VALUES ('Иванов', '', '')").run();
+  const seed = buildBatch(B, { self: 'B', peer: 'C' });
+  applyBatch(C, seed.records, { self: 'C', peer: 'B' });
+  markSent(B, 'C', seed.upto, seed.clock, seed.seed);
+  assert.equal(seed.seed.done, true, 'один пациент помещается в одну страницу засева');
+
+  // C тоже считает B тёплым: без строки в sync_peers ЛЮБАЯ местная правка C
+  // защищалась бы целиком, и тест проверял бы не то.
+  C.prepare(`INSERT INTO sync_peers (node, sent_seq, last_ok)
+             VALUES ('B', (SELECT COALESCE(MAX(seq), 0) FROM sync_journal), ?)`)
+    .run(new Date().toISOString());
+
+  const uid = B.prepare('SELECT uid FROM patients').get().uid;
+  B.prepare("UPDATE patients SET phone = '+998901112233' WHERE uid = ?").run(uid);
+  C.prepare("UPDATE patients SET address = 'Ташкент' WHERE uid = ?").run(uid);
+
+  const b2c = buildBatch(B, { self: 'B', peer: 'C' });
+  assert.deepEqual(b2c.records.map(r => r.changed), [['phone']], 'B правил только телефон');
+  applyBatch(C, b2c.records, { self: 'C', peer: 'B' });
+  markSent(B, 'C', b2c.upto, b2c.clock, b2c.seed);   // отправлено — второй раз не приедет
+
+  const c2b = buildBatch(C, { self: 'C', peer: 'B' });
+  assert.deepEqual(c2b.records.map(r => r.changed), [['address']], 'C правил только адрес');
+  applyBatch(B, c2b.records, { self: 'B', peer: 'C' });
+  markSent(C, 'B', c2b.upto, c2b.clock, c2b.seed);
+
+  const inB = B.prepare('SELECT phone, address FROM patients WHERE uid = ?').get(uid);
+  const inC = C.prepare('SELECT phone, address FROM patients WHERE uid = ?').get(uid);
+  assert.deepEqual(inB, { phone: '+998901112233', address: 'Ташкент' }, 'у B');
+  assert.deepEqual(inC, { phone: '+998901112233', address: 'Ташкент' }, 'у C');
+  B.close(); C.close();
+});
+
+// Проверка формы записи ловит мусор, но не ловит отказ САМОЙ БАЗЫ: CHECK,
+// внешний ключ, длину поля. Без savepoint такой отказ уносил бы всю порцию.
+test('запись, которую отвергает база, пропускается поимённо — соседние применяются', () => {
+  const db = fresh();
+  const r = applyBatch(db, [
+    put('patients', 'ph1', '000000000001-0000-C', { full_name: 'Первый' }),
+    // status вне CHECK (003_visits.sql) — база откажет уже на вставке
+    put('visits', 'vBAD', '000000000002-0000-C', { visit_date: '2026-09-02', status: 'completed' }, { patient_id: 'ph1' }),
+    put('patients', 'ph2', '000000000003-0000-C', { full_name: 'Второй' }),
+  ], S);
+  assert.equal(r.skipped, 1, 'кривая — одна');
+  assert.equal(r.applied, 2, 'обе здоровые применились: транзакция не потеряна');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM patients WHERE uid IN ('ph1','ph2')").get().n, 2);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM visits WHERE uid = 'vBAD'").get().n, 0, 'и откатилась целиком');
+  db.close();
+});
+
+test('нескалярное значение в данных — пропуск по имени, а не падение', () => {
+  const db = fresh();
+  const r = applyBatch(db, [
+    { tbl: 'patients', uid: 'bad1', op: 'put', stamp: '000000000001-0000-C',
+      data: { full_name: 'Кривой', active: true }, refs: {}, origin: 'C' },
+    { tbl: 'patients', uid: 'bad2', op: 'put', stamp: '000000000002-0000-C',
+      data: { full_name: { ru: 'Объект' } }, refs: {}, origin: 'C' },
+    put('patients', 'good1', '000000000003-0000-C', { full_name: 'Нормальный' }),
+  ], S);
+  assert.equal(r.skipped, 2);
+  assert.equal(r.applied, 1);
+  assert.equal(db.prepare("SELECT full_name FROM patients WHERE uid = 'good1'").get().full_name, 'Нормальный');
+  db.close();
+});
+
+// Защита — по колонкам, а не по строке. Раньше здесь отбрасывалась вся запись,
+// и правка отправителя пропадала навсегда: он-то свой markSent уже сдвинул.
+test('защита поколоночная: чужая колонка применяется, местная неотправленная остаётся', () => {
+  const db = fresh();
+  applyBatch(db, [put('patients', 'pc1', '000000000001-0000-C',
+    { full_name: 'Иванов', phone: '+998900000001', address: '' })], S);
+  const top = db.prepare('SELECT MAX(seq) AS s FROM sync_journal').get().s || 0;
+  db.prepare("INSERT INTO sync_peers (node, sent_seq, last_ok) VALUES ('C', ?, ?)").run(top, new Date().toISOString());
+  db.prepare("UPDATE patients SET phone = '+998909999999' WHERE uid = 'pc1'").run();   // местная, C её не видел
+
+  const r1 = applyBatch(db, [{
+    ...put('patients', 'pc1', '000000000009-0000-C', { phone: '+998900000002', address: 'Ташкент' }),
+    changed: ['address'],
+  }], S);
+  const after1 = db.prepare("SELECT phone, address FROM patients WHERE uid = 'pc1'").get();
+  assert.equal(after1.address, 'Ташкент', 'адрес — авторская колонка соседа, применяется');
+  assert.equal(after1.phone, '+998909999999', 'телефон в снимке — его копия нашего старого значения, не правка');
+  assert.equal(r1.protected, 0, 'ни одна авторская колонка не наткнулась на защиту');
+  assert.equal(r1.applied, 1);
+
+  const r2 = applyBatch(db, [{
+    ...put('patients', 'pc1', '000000000010-0000-C', { phone: '+998900000003', address: 'Самарканд' }),
+    changed: ['phone', 'address'],
+  }], S);
+  const after2 = db.prepare("SELECT phone, address FROM patients WHERE uid = 'pc1'").get();
+  assert.equal(after2.address, 'Самарканд', 'адрес применился');
+  assert.equal(after2.phone, '+998909999999', 'а телефон держит местная неотправленная правка');
+  assert.equal(r2.protected, 1, 'запись отдала защите ровно одну колонку — и это надо видеть в логе');
+  assert.equal(r2.applied, 1, 'запись НЕ отброшена целиком: так и терялись правки');
+  db.close();
+});
+
+// origin приходит из порции, подписи у него нет. Но вызывающий знает, ЧЕЙ блоб
+// он забрал, и запись с чужой буквой в этом блобе — либо ошибка сборки, либо
+// попытка выдать себя за третий филиал: origin решает, чью защиту снимать.
+test('peer задан — запись с чужим origin не применяется', () => {
+  const db = fresh();
+  const r = applyBatch(db, [
+    put('patients', 'pp1', '000000000001-0000-C', { full_name: 'От C' }),          // origin: 'C'
+    { ...put('patients', 'pp2', '000000000002-0000-C', { full_name: 'Якобы от D' }), origin: 'D' },
+  ], { self: 'B', peer: 'C' });
+  assert.equal(r.applied, 1);
+  assert.equal(r.skipped, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM patients WHERE uid = 'pp2'").get().n, 0);
+  // Без peer проверять нечем — старые вызовы работают как работали.
+  applyBatch(db, [{ ...put('patients', 'pp2', '000000000003-0000-C', { full_name: 'Якобы от D' }), origin: 'D' }], S);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM patients WHERE uid = 'pp2'").get().n, 1);
+  db.close();
+});
+
+test('deferred — сколько ЖДЁТ на конец порции; released — сколько разобрано из ожидания', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO services (name, code, price, type, active) VALUES ('ОАК','S-1',1000,'lab',1)").run();
+  // Задом наперёд, одной порцией: родитель приезжает последним.
+  const r = applyBatch(db, [
+    put('lab_results', 'r1', '000000000001-0000-C', { value: '5.2' }, { visit_service_id: 's1' }),
+    put('visit_services', 's1', '000000000002-0000-C', { quantity: 1, status: 'ordered' }, { visit_id: 'v1', service_code: 'S-1' }),
+    put('visits', 'v1', '000000000003-0000-C', { visit_date: '2026-09-02', status: 'scheduled' }, { patient_id: 'p1' }),
+    put('patients', 'p1', '000000000004-0000-C', { full_name: 'И' }),
+  ], S);
+  assert.equal(r.deferred, 0, 'к концу транзакции не ждёт никто — «отложено 3 раза» сбивало бы с толку');
+  assert.equal(r.released, 3, 'цепочка разобрана из ожидания в этой же порции');
+  assert.equal(r.applied, 4);
+  assert.equal(db.prepare("SELECT value FROM lab_results WHERE uid = 'r1'").get().value, '5.2');
+
+  // А вот запись, чей родитель так и не приехал, в отчёте остаётся.
+  const r2 = applyBatch(db, [put('visits', 'vX', '000000000005-0000-C',
+    { visit_date: '2026-09-03', status: 'scheduled' }, { patient_id: 'pНЕТ' })], S);
+  assert.equal(r2.deferred, 1);
+  assert.equal(r2.released, 0);
+  db.close();
 });

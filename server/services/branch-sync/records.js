@@ -6,10 +6,12 @@
 //   1. Строки приезжают по СВОИМ локальным id (uid → id через таблицу).
 //      Перенести чужой id значило бы перевесить местные счета и смены кассы на
 //      чужие строки — разбор этого есть в миграции 079.
-//   2. Слияние ПОКОЛОНОЧНОЕ: приехавшая запись меняет только те колонки, что в
-//      ней есть, и только если её метка новее той, под которой эта колонка
-//      менялась в последний раз. Телефон, исправленный здесь, и адрес,
-//      исправленный там, обязаны выжить оба.
+//   2. Слияние ПОКОЛОНОЧНОЕ — и в обе стороны. Приехавшая запись меняет только
+//      те колонки, которые отправитель ПРАВИЛ (rec.changed), и только если её
+//      метка новее той, под которой эта колонка менялась в последний раз;
+//      местная неотправленная правка держит СВОИ колонки, а не строку целиком.
+//      Телефон, исправленный здесь, и адрес, исправленный там, обязаны выжить
+//      оба — включая случай, когда обе правки ещё не отданы (шапка 084).
 //   3. Удаление проигрывает более поздней правке. Молча уничтожить запись, с
 //      которой кто-то ещё работал, — единственная невосстановимая ошибка в
 //      этом файле.
@@ -40,6 +42,10 @@ const SEEN_DAYS = 90;
 // не ради нормы, а чтобы порция с неожиданной формой данных не завесила приём
 // навсегда: лучше оставить ожидание на следующую порцию, чем не вернуться.
 const MAX_RELEASE_ROUNDS = 64;
+// Та же граница, что NODE_RE в hlc.js и LETTER_MAX_CHARS в letters.js. Здесь
+// своя копия, а не импорт: hlc проверяет букву в чеканке метки, а нам нужно
+// отказать ДО транзакции — на входе, где отказ ничего не стоит.
+const SELF_RE = /^[A-Z]{1,8}$/;
 
 /**
  * Применить порцию.
@@ -52,21 +58,39 @@ const MAX_RELEASE_ROUNDS = 64;
  *
  * @param {import('better-sqlite3').Database} db
  * @param {Array} records порция, как её собрал buildBatch на той стороне
- * @param {{self: string}} opts буква ЭТОГО узла — идёт в часы
- * @returns {{applied:number, skipped:number, deferred:number, deleted:number}}
+ * @param {{self: string, peer?: string}} opts self — буква ЭТОГО узла (идёт в
+ *   часы); peer — буква узла, ЧЕЙ блоб мы забрали, если она известна вызывающему.
+ * @returns {{applied:number, released:number, skipped:number, protected:number, deferred:number, deleted:number}}
+ *   released — сколько строк применено ИЗ ОЖИДАНИЯ; protected — сколько записей
+ *   отдали хотя бы одну колонку местной неотправленной правке; deferred — сколько
+ *   строк ЖДЁТ родителя на конец транзакции (не «сколько раз отложили»).
  */
-export function applyBatch(db, records, { self } = {}) {
+export function applyBatch(db, records, { self, peer = null } = {}) {
   // Без self часы после приёма не чеканятся, и узел с отставшими часами
   // проигрывал бы слияние вечно — это тихая потеря данных, а не мелочь.
-  if (!self) throw new Error('applyBatch: self letter required');
-  const stats = { applied: 0, skipped: 0, deferred: 0, deleted: 0 };
+  // Проверяется ФОРМА буквы, а не просто «не пусто»: self уходит в nextStamp,
+  // и мусор вроде true или 'узел-1' уронил бы там ВСЮ транзакцию в самом
+  // конце — после того, как порция уже применена, но до записи часов.
+  if (!SELF_RE.test(String(self == null ? '' : self).toUpperCase())) {
+    throw new Error('applyBatch: self letter required, got ' + JSON.stringify(self));
+  }
+  const stats = { applied: 0, released: 0, skipped: 0, protected: 0, deferred: 0, deleted: 0 };
   const ctx = newCtx(db);
 
   const run = db.transaction((batch) => {
     const mark = db.prepare('SELECT MAX(seq) AS s FROM sync_journal').get();
     const journalFrom = mark && mark.s ? mark.s : 0;
 
-    for (const rec of batch) applyOne(db, rec, stats, ctx);
+    for (const rec of batch) {
+      // ЧУЖОЙ ОТПРАВИТЕЛЬ. origin приходит из порции, то есть от того, кто её
+      // прислал; проверить его подпись нечем. Но ВЫЗЫВАЮЩИЙ знает, чей блоб он
+      // сейчас забрал, и запись, подписанная другой буквой, в этом блобе —
+      // либо ошибка сборки, либо попытка выдать себя за третий филиал. Такая
+      // запись не применяется: origin решает, чью защиту снимать (см.
+      // localUnshippedCols) и чьей меткой подписывать строку.
+      if (peer && (!rec || typeof rec !== 'object' || rec.origin !== peer)) { stats.skipped++; continue; }
+      applyGuarded(db, rec, stats, ctx);
+    }
 
     releasePending(db, stats, ctx);
 
@@ -86,10 +110,45 @@ export function applyBatch(db, records, { self } = {}) {
     // Часы этой машины двигаются за самую новую чужую метку: узел с отставшими
     // часами иначе проигрывал бы каждое слияние вечно.
     if (ctx.maxReceived) writeClock(db, nextStamp(readClock(db), self, Date.now, ctx.maxReceived));
+
+    // deferred — сколько строк ЖДЁТ, а не сколько раз откладывали. Цепочка
+    // «результат → услуга → визит», приехавшая задом наперёд одной порцией и
+    // разобранная тут же, — это deferred 0 и released 3, а не «отложено три
+    // раза»: читающему лог важно, сколько работы ОСТАЛОСЬ висеть.
+    stats.deferred = db.prepare('SELECT COUNT(*) AS n FROM sync_pending').get().n;
   });
 
   run(Array.isArray(records) ? records : []);
   return stats;
+}
+
+// ОДНА КРИВАЯ ЗАПИСЬ НЕ ОТМЕНЯЕТ ПОРЦИЮ. Проверить форму записи на входе можно,
+// но не всё ловится проверкой: CHECK-ограничение (visits.status), внешний ключ,
+// длина поля — это отказ САМОЙ БАЗЫ уже посреди вставки. Без savepoint такой
+// отказ выбрасывает наружу всю транзакцию: сотня здоровых записей теряется
+// из-за одной, и следующая порция принесёт ту же кривую снова.
+//
+// ROLLBACK TO не снимает savepoint — RELEASE после него обязателен, иначе
+// метка копится на каждую запись до конца транзакции.
+//
+// Счётчики откатываются вместе с данными: applyOne успевает их тронуть до
+// падения, и без восстановления в статистике осталось бы «применено» то,
+// чего в базе нет.
+function applyGuarded(db, rec, stats, ctx) {
+  const before = { ...stats };
+  ctx.q('SAVEPOINT rec').run();
+  try {
+    applyOne(db, rec, stats, ctx);
+    ctx.q('RELEASE rec').run();
+  } catch (e) {
+    ctx.q('ROLLBACK TO rec').run();
+    ctx.q('RELEASE rec').run();
+    Object.assign(stats, before);
+    stats.skipped++;
+    // Именно предупреждением, а не молчанием: запись, которую база не берёт,
+    // будет приезжать снова и снова, и знать об этом должен человек.
+    console.warn('[sync] record refused', rec && rec.tbl, rec && rec.uid, rec && rec.stamp, e.message);
+  }
 }
 
 // Готовые запросы живут на порцию, а не на запись: порция — до 5000 записей, и
@@ -152,21 +211,28 @@ function applyOne(db, rec, stats, ctx) {
   // запись пропускается поимённо, а не роняет всю транзакцию: одна кривая
   // строка не должна отменять сотню здоровых.
   if (!rec || typeof rec !== 'object' || !SHIPPED[rec.tbl]
-      || typeof rec.uid !== 'string' || !isStamp(rec.stamp)) { stats.skipped++; return; }
+      || typeof rec.uid !== 'string' || !isStamp(rec.stamp)
+      || !scalarPayload(rec.data)) { stats.skipped++; return; }
   // Часы двигаются за ЛЮБОЙ годной приехавшей меткой — и за удалением, и за
   // отложенной в ожидание, и за пропущенной: иначе узел с отставшими часами,
   // получивший детей раньше родителей, ничему не учится и продолжает проигрывать.
   if (rec.stamp > ctx.maxReceived) ctx.maxReceived = rec.stamp;
 
   const id = localId(db, ctx, rec.tbl, rec.uid);
-  const protectedHere = id != null && hasLocalUnshipped(db, ctx, rec.tbl, rec.uid, rec.origin);
+  // Колонки, правленные ЗДЕСЬ и ещё не отданные этому соседу. Пустое множество
+  // — защищать нечего. Новой строки (id == null) здесь не правили по
+  // определению: терять нечего, защита не нужна.
+  const guarded = id == null ? EMPTY : localUnshippedCols(db, ctx, rec.tbl, rec.uid, rec.origin);
 
   if (rec.op === 'del') {
     // Правило 3. Удаление проигрывает любой более поздней правке — местной
     // неотправленной или приехавшей с более новой меткой по любой колонке.
+    // ЛЮБАЯ незаконченная местная правка держит строку целиком: удалять
+    // наполовину нечем, и «уцелела одна колонка» здесь не ответ.
     const newerCol = ctx.q(`SELECT 1 FROM ${SEEN} WHERE tbl = ? AND uid = ? AND stamp > ? LIMIT 1`)
       .get(rec.tbl, rec.uid, rec.stamp);
-    if (protectedHere || newerCol) { stats.skipped++; return; }
+    if (guarded.size) { stats.skipped++; stats.protected++; return; }
+    if (newerCol) { stats.skipped++; return; }
     if (id != null) { ctx.q(`DELETE FROM ${rec.tbl} WHERE id = ?`).run(id); stats.deleted++; }
     // Надгробие вместо поколоночных меток: строки больше нет, помнить по
     // колонкам нечего, а помнить САМ ФАКТ удаления обязательно (правило ниже).
@@ -182,19 +248,33 @@ function applyOne(db, rec, stats, ctx) {
   const tomb = ctx.q(`SELECT stamp FROM ${SEEN} WHERE tbl = ? AND uid = ? AND col = ?`).get(rec.tbl, rec.uid, '*');
   if (tomb && compareStamps(rec.stamp, tomb.stamp) <= 0) { stats.skipped++; return; }
 
-  // Здесь строку правили, и сосед, приславший запись, этой правки ещё не видел
-  // — значит, он писал, не зная о ней. Не трогаем строку ЦЕЛИКОМ, включая
-  // ссылки: перевесить защищённый визит на другого пациента ничем не лучше,
-  // чем стереть у него телефон. И не откладываем: ждать нечего, сосед просто
-  // не в курсе. Точность придёт с отправкой — тогда его следующая запись
-  // сольётся поколоночно, как положено.
-  if (protectedHere) { stats.skipped++; return; }
+  // ЧТО В ЭТОЙ ЗАПИСИ АВТОРСКОЕ. data — снимок ВСЕЙ строки отправителя (иначе
+  // новую строку у нас нечем было бы завести), но правил он только колонки из
+  // changed; остальное в снимке — его КОПИЯ чужих значений, часто устаревшая.
+  // Применять их «заодно» значит объявлять его автором того, чего он не
+  // касался: так телефон, исправленный здесь, возвращался пустым под меткой
+  // новее и пропадал из сети целиком (шапка 084).
+  //
+  // Запись СТАРОЙ сборки без changed — '*': «неизвестно, что менялось».
+  // Прежнее поведение слово в слово, и никакой сосед не ломается от обновления
+  // одной стороны раньше другой.
+  //
+  // У НОВОЙ строки (id == null) changed не спрашиваем вовсе: терять нечего,
+  // а собрать её из трёх изменённых полей нельзя — NOT NULL без умолчания.
+  const changed = id == null ? null : changedSet(rec);
+  let held = false;   // хоть одну авторскую колонку забрала местная правка
+  const wanted = (col) => {
+    if (changed && !changed.has('*') && !changed.has(col)) return false;
+    if (guarded.has('*') || guarded.has(col)) { held = true; return false; }
+    return true;
+  };
 
   const cols = [];
   const vals = [];
   const seenCol = ctx.q(`SELECT stamp FROM ${SEEN} WHERE tbl = ? AND uid = ? AND col = ?`);
   for (const col of SHIPPED[rec.tbl]) {
     if (!rec.data || !Object.prototype.hasOwnProperty.call(rec.data, col)) continue;
+    if (!wanted(col)) continue;
     const prev = seenCol.get(rec.tbl, rec.uid, col);
     if (prev && compareStamps(rec.stamp, prev.stamp) <= 0) continue;   // эта колонка новее у нас
     cols.push(col); vals.push(rec.data[col]);
@@ -220,8 +300,12 @@ function applyOne(db, rec, stats, ctx) {
       if (id == null) { stats.skipped++; return; }
       continue;
     }
-    // Ссылка — такая же КОЛОНКА, как телефон, и подчиняется тому же правилу.
-    // Без этой проверки запись, отлежавшая в ожидании, при освобождении
+    // Ссылка — такая же КОЛОНКА, как телефон, и подчиняется тем же правилам:
+    // и авторству (changed), и защите местной правки. У СУЩЕСТВУЮЩЕЙ строки
+    // ссылка уже проставлена — не наше дело её трогать. У новой она нужна
+    // всегда: без родителя строки не собрать.
+    if (id != null && !wanted(col)) continue;
+    // Без проверки ниже запись, отлежавшая в ожидании, при освобождении
     // перевешивала бы визит на пациента из своей УСТАРЕВШЕЙ ссылки, оставляя
     // статус от более новой записи: половина строки от вчера, половина от
     // сегодня, и никакой ошибки в логах.
@@ -240,6 +324,7 @@ function applyOne(db, rec, stats, ctx) {
     for (const [col, spec] of Object.entries(CODE_REFS[rec.tbl] || {})) {
       const code = rec.refs ? rec.refs[spec.ref] : null;
       if (!code) continue;
+      if (id != null && !wanted(col)) continue;
       // То же правило. Колонка необязательная (visit_services.service_id
       // допускает NULL), поэтому устаревшую ссылку достаточно не трогать.
       const prevRef = seenCol.get(rec.tbl, rec.uid, col);
@@ -264,7 +349,9 @@ function applyOne(db, rec, stats, ctx) {
              received_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
            WHERE excluded.stamp > sync_pending.stamp`)
       .run(rec.tbl, rec.uid, rec.stamp, json, waiting.tbl, waiting.uid);
-    stats.deferred++;   // не «пропущено» — ждёт родителя; читающему лог это две разные новости
+    // Не «пропущено» — ждёт родителя; читающему лог это две разные новости.
+    // Считается не здесь, а в конце транзакции: часть отложенных освободится
+    // в этой же порции, и «отложено 3, применено 3» сбивало бы с толку.
     return;
   }
 
@@ -304,8 +391,40 @@ function applyOne(db, rec, stats, ctx) {
     .run(rec.tbl, rec.uid, rec.stamp);
   const remember = ctx.q(`INSERT INTO ${SEEN} (tbl, uid, col, stamp) VALUES (?,?,?,?)
               ON CONFLICT(tbl, uid, col) DO UPDATE SET stamp = excluded.stamp`);
+  // Метка пишется ТОЛЬКО применённым колонкам. Написать её всему снимку
+  // значило бы объявить отправителя автором каждой колонки строки — с этого
+  // и начинался дефект, который чинит вся эта задача.
   for (const col of cols) remember.run(rec.tbl, rec.uid, col, rec.stamp);
+  if (held) stats.protected++;
   if (cols.length || id == null) stats.applied++; else stats.skipped++;
+}
+
+// Значения, которые better-sqlite3 умеет связать. Всё прочее (true, объект,
+// массив, undefined) роняет вставку — а обещание файла в том, что мусорная
+// запись пропускается ПОИМЁННО. Проверка на входе честнее savepoint'а: тот
+// откатит уже начатую работу, эта не даст её начать.
+function scalarPayload(data) {
+  if (data == null) return true;                                   // del и записи без данных
+  if (typeof data !== 'object' || Array.isArray(data)) return false;
+  for (const v of Object.values(data)) {
+    const t = typeof v;
+    if (v === null || t === 'number' || t === 'string' || t === 'bigint') continue;
+    if (Buffer.isBuffer(v)) continue;
+    return false;
+  }
+  return true;
+}
+
+const EMPTY = new Set();
+
+// Какие колонки отправитель ПРАВИЛ (а не просто прислал в снимке). Запись без
+// changed — старая сборка соседа: считаем авторской всю строку, ровно как до
+// этой задачи.
+function changedSet(rec) {
+  if (!Array.isArray(rec.changed) || !rec.changed.length) return null;
+  const set = new Set();
+  for (const col of rec.changed) if (typeof col === 'string' && col) set.add(col);
+  return set.size ? set : null;
 }
 
 // Строка справочника — по КОДУ. Дублей кода схема не запрещает, поэтому берём
@@ -317,22 +436,45 @@ function catalogueId(db, ctx, spec, code) {
   return r ? r.id : null;
 }
 
-// Строка менялась здесь и ещё не уехала соседу, от которого пришла порция?
-// Тогда её колонки новее любой приехавшей записи. Какие именно колонки —
-// журнал не знает, поэтому защищаются все: грубее, но теряет ноль правок.
+// КАКИЕ КОЛОНКИ этой строки правили здесь и ещё не отдали соседу, от которого
+// пришла порция. Пустое множество — защищать нечего; '*' в множестве — вся
+// строка (вставка или правка соседа неизвестной сборки).
+//
+// Раньше здесь был ответ «да/нет» на всю строку, и «да» означало ОТБРОСИТЬ
+// приехавшую запись целиком. Цена оказалась не в грубости, а в потере: сосед,
+// чью запись мы отбросили, уже сдвинул свой markSent и второй раз её не
+// пришлёт — правка исчезала из сети навсегда (шапка 084, ревью Задачи 5).
+// Теперь местная правка держит СВОИ колонки, а остальное сливается как обычно.
+//
 // ПО СОСЕДУ (origin записи), а не MIN по всем: с тремя филиалами заброшенный D
 // держал бы MIN(sent_seq) внизу вечно, и каждая строка, которую здесь хоть раз
 // правили, отвергала бы ВСЕ слияния, пока D не выйдет на связь (ревью Задачи 2).
-function hasLocalUnshipped(db, ctx, tbl, uid, peer) {
+function localUnshippedCols(db, ctx, tbl, uid, peer) {
   const last = ctx.q('SELECT MAX(seq) AS s FROM sync_journal WHERE tbl = ? AND uid = ?').get(tbl, uid);
-  if (!last || !last.s) return false;
+  if (!last || !last.s) return EMPTY;
   // Запись без origin (better-sqlite3 не связывает undefined и уронил бы всю
   // порцию) — соседа не назвали, значит доказать, что наша правка до него
-  // доехала, нечем: считаем строку защищённой. Осторожность здесь ничего не
-  // теряет — правка приедет снова.
+  // доехала, нечем: считаем защищённой всю строку. Осторожность здесь ничего
+  // не теряет — правка приедет снова.
   const sent = ctx.q('SELECT sent_seq FROM sync_peers WHERE node = ?').get(typeof peer === 'string' ? peer : '');
-  return !sent || last.s > sent.sent_seq;
+  if (!sent) return ALL;
+  const rows = ctx.q('SELECT DISTINCT cols FROM sync_journal WHERE tbl = ? AND uid = ? AND seq > ?')
+    .all(tbl, uid, sent.sent_seq);
+  const set = new Set();
+  for (const row of rows) {
+    for (const part of String(row.cols || '*').split(',')) {
+      const col = part.trim();
+      if (!col) continue;
+      if (col === '*') return ALL;
+      set.add(col);
+    }
+  }
+  return set;
 }
+
+// Отдельная константа, а не new Set(['*']) на каждый вызов: множество только
+// читают, и одно на процесс дешевле пяти тысяч одинаковых на порцию.
+const ALL = new Set(['*']);
 
 // Применить тех, кто ждал родителей, которые УЖЕ на месте.
 //
@@ -369,7 +511,14 @@ function releasePending(db, stats, ctx) {
           stats.skipped++;
           continue;
         }
-        applyOne(db, rec, stats, ctx);
+        // Дождавшаяся запись проходит те же savepoint и те же проверки, что и
+        // только что приехавшая: за месяцы ожидания схема могла уйти вперёд, и
+        // отказ базы на СТАРОЙ записи не должен отменять свежую порцию.
+        const appliedBefore = stats.applied;
+        applyGuarded(db, rec, stats, ctx);
+        // Освобождением считается только настоящее применение: запись, ушедшая
+        // ждать ВТОРОГО родителя, из ожидания не вышла.
+        if (stats.applied > appliedBefore) stats.released++;
       }
     }
   }

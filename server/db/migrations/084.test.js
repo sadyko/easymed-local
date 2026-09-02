@@ -33,14 +33,65 @@ test('084: правка пишется отдельной записью', () =>
   db.close();
 });
 
-test('084: правка одной служебной колонки (updated_at) тоже журналируется', () => {
+// РАНЬШЕ этот тест утверждал обратное — что служебная правка тоже журналируется,
+// и называл это «опорой для правила защиты». Опора оказалась ловушкой: каждое
+// касание updated_at поднимало ВСЮ строку в сеть и, что хуже, объявляло её
+// «правленной здесь и не отправленной», то есть защищённой от слияния с
+// соседями. Журнал пишется только о колонках, которые вообще уезжают
+// (SHIPPED + ссылки, см. journal.js).
+test('084: правка одной служебной колонки (updated_at) НЕ журналируется вовсе', () => {
   const db = fresh();
   const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
   const before = db.prepare('SELECT COUNT(*) n FROM sync_journal').get().n;
   db.prepare("UPDATE patients SET updated_at = '2026-09-02T00:00:00Z' WHERE id = ?").run(id);
   const after = db.prepare('SELECT COUNT(*) n FROM sync_journal').get().n;
-  assert.equal(after, before + 1,
-    'колонка выглядит "служебной", но триггер не различает колонки — это опора для правила защиты в Задаче 5');
+  assert.equal(after, before,
+    'колонки нет в SHIPPED — соседу нечего показать, а «правка» защищала бы строку от его записей');
+  db.close();
+});
+
+test('084: cols — правка ОДНОЙ колонки журналируется именно ей', () => {
+  const db = fresh();
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
+  db.prepare('DELETE FROM sync_journal').run();   // интересует только правка
+  db.prepare("UPDATE patients SET phone = '+998900000000' WHERE id = ?").run(id);
+  const rows = db.prepare('SELECT cols FROM sync_journal').all();
+  assert.deepEqual(rows.map(r => r.cols), ['phone'],
+    'снимок всей строки под одной меткой объявлял бы отправителя автором и адреса, и имени');
+  db.close();
+});
+
+test('084: cols — правка двух колонок перечисляет обе', () => {
+  const db = fresh();
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
+  db.prepare('DELETE FROM sync_journal').run();
+  db.prepare("UPDATE patients SET phone = '+998900000000', address = 'Ташкент' WHERE id = ?").run(id);
+  const rows = db.prepare('SELECT cols FROM sync_journal').all();
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].cols.split(',').sort(), ['address', 'phone']);
+  db.close();
+});
+
+test('084: cols — вставка журналируется как ВСЯ строка', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  const rows = db.prepare("SELECT cols FROM sync_journal WHERE tbl = 'patients'").all();
+  assert.equal(rows.some(r => r.cols === '*'), true,
+    'у соседа этой строки нет вовсе — ему нужны все колонки, а не последняя правленная');
+  db.close();
+});
+
+test('084: cols — смена ССЫЛКИ журналируется как колонка', () => {
+  const db = fresh();
+  const p1 = db.prepare("INSERT INTO patients (full_name) VALUES ('Первый')").run().lastInsertRowid;
+  const p2 = db.prepare("INSERT INTO patients (full_name) VALUES ('Второй')").run().lastInsertRowid;
+  const vid = db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (?, ?, 'scheduled')")
+    .run(p1, '2026-09-02').lastInsertRowid;
+  db.prepare('DELETE FROM sync_journal').run();
+  db.prepare('UPDATE visits SET patient_id = ? WHERE id = ?').run(p2, vid);
+  const rows = db.prepare("SELECT cols FROM sync_journal WHERE tbl = 'visits'").all();
+  assert.deepEqual(rows.map(r => r.cols), ['patient_id'],
+    'ссылка — такая же колонка: перевешенный визит слияние обязано замечать наравне с телефоном');
   db.close();
 });
 

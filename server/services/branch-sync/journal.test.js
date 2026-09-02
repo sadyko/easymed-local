@@ -30,6 +30,54 @@ test('порция несёт ПОЛНУЮ строку, а не поля, ко�
   db.close();
 });
 
+// changed — какие колонки мы правили. Снимок строки (data) уезжает целиком, но
+// авторство теперь адресное: без него приёмник записывал бы нашу метку на
+// КАЖДУЮ колонку снимка и объявлял нас автором того, чего мы не касались.
+test('changed: уезжают ровно те колонки, что правили, и по одному разу', () => {
+  const db = fresh(); warm(db);
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
+  const first = buildBatch(db, { self: 'B', peer: 'C' });
+  markSent(db, 'C', first.upto, first.clock, first.seed);   // сосед эту строку уже знает
+
+  for (let i = 0; i < 3; i++) db.prepare('UPDATE patients SET phone = ? WHERE id = ?').run('+9989' + i, id);
+  db.prepare("UPDATE patients SET address = 'Ташкент' WHERE id = ?").run(id);
+
+  const recs = buildBatch(db, { self: 'B', peer: 'C' }).records.filter(r => r.tbl === 'patients');
+  assert.equal(recs.length, 1, 'одна строка — одна запись');
+  assert.deepEqual([...recs[0].changed].sort(), ['address', 'phone'],
+    'обе колонки правили ЗДЕСЬ — обе и должны считаться нашими');
+  assert.equal(recs[0].data.full_name, 'Иванов', 'а данные едут полной строкой: у соседа её может не быть вовсе');
+  db.close();
+});
+
+test('changed: новая строка едет как «вся строка» (*)', () => {
+  const db = fresh(); warm(db);
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  const rec = buildBatch(db, { self: 'B', peer: 'C' }).records.find(r => r.tbl === 'patients');
+  assert.deepEqual(rec.changed, ['*'], 'у соседа этой строки нет — авторские в ней все колонки');
+  db.close();
+});
+
+test('changed: холодный засев едет как «вся строка» (*)', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Старожил')").run();
+  db.prepare('DELETE FROM sync_journal').run();   // как на живой клинике после 083+084
+  const rec = buildBatch(db, { self: 'B', peer: 'C' }).records.find(r => r.tbl === 'patients');
+  assert.deepEqual(rec.changed, ['*'], 'засев читает таблицы, а не журнал: что там менялось, неизвестно');
+  db.close();
+});
+
+test('changed: правка служебной колонки не поднимает строку в сеть вовсе', () => {
+  const db = fresh(); warm(db);
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
+  const first = buildBatch(db, { self: 'B', peer: 'C' });
+  markSent(db, 'C', first.upto, first.clock, first.seed);
+  db.prepare("UPDATE patients SET updated_at = '2026-09-02T00:00:00Z' WHERE id = ?").run(id);
+  assert.deepEqual(buildBatch(db, { self: 'B', peer: 'C' }).records, [],
+    'касание updated_at не сетевое событие — раньше было, и вдобавок защищало строку от соседей');
+  db.close();
+});
+
 test('строка, изменённая много раз, уезжает ОДИН раз', () => {
   const db = fresh(); warm(db);
   const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;

@@ -25,7 +25,8 @@ CREATE TABLE sync_journal (
   tbl        TEXT NOT NULL,
   uid        TEXT NOT NULL,
   op         TEXT NOT NULL CHECK (op IN ('put', 'del')),
-  at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))  -- время правки; из него отправитель чеканит метку HLC
+  at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),  -- время правки; из него отправитель чеканит метку HLC
+  cols       TEXT NOT NULL DEFAULT '*'  -- какие колонки менялись: 'phone,address'; '*' — вся строка (вставка, удаление)
 );
 
 -- Хвост читают по seq — это alias rowid'а (INTEGER PRIMARY KEY AUTOINCREMENT),
@@ -57,14 +58,64 @@ CREATE INDEX idx_sync_journal_row ON sync_journal(tbl, uid);
 -- у неё этой строки либо нет (создаст), либо есть (сольёт). Две операции
 -- вместо трёх убирают целый класс вопросов «а что если insert приехал после
 -- update».
+
+-- КАКИЕ КОЛОНКИ ИЗМЕНИЛИСЬ (cols) — не украшение, а условие того, чтобы
+-- слияние вообще было поколоночным. Отправитель отдаёт СНИМОК всей строки под
+-- ОДНОЙ меткой; приёмник, записав эту метку в sync_seen КАЖДОЙ колонке снимка,
+-- объявляет отправителя автором колонок, которых тот не касался. Ревью Задачи 5
+-- воспроизвело цену на обмене двух узлов: B правит телефон, C — адрес, оба ещё
+-- не отправлены. B→C: C защищает строку и ОТБРАСЫВАЕТ запись целиком, а markSent
+-- у B уже сдвинулся — правка B больше не уедет никогда. C→B: снимок C несёт
+-- ПУСТОЙ телефон под меткой новее — и номер пропадает из СЕТИ, на обеих
+-- сторонах сразу. Теперь журнал помнит, что именно правили, отправитель отдаёт
+-- этот список полем `changed`, а приёмник применяет и защищает ровно эти
+-- колонки, а не строку целиком.
+--
+-- Перечисляются только колонки, которые вообще уезжают: SHIPPED + ссылки
+-- (journal.js). Правка ОДНОЙ неотправляемой колонки (updated_at, created_by,
+-- queue_no) не даёт записи в журнал ВОВСЕ. Раньше давала — и каждое касание
+-- служебного поля поднимало всю строку в сеть и «защищало» её от соседей.
+--
+-- OLD.uid IS NULL → '*', и это не мелочь. Проверено на этой самой схеме: у
+-- нового пациента *_journal_ins срабатывает РАНЬШЕ *_uid_autogen (083), видит
+-- uid IS NULL и не пишет ничего; всю запись о новой строке даёт UPDATE
+-- uid-триггера мгновением позже. Считай мы «изменённой» только колонку uid
+-- (её в списке нет) — вставка не попадала бы в журнал НИ ОДНОЙ записью, и
+-- новый пациент не уехал бы соседу вовсе. Строка, у которой uid только что
+-- появился, для сети новая целиком — отсюда '*'.
 CREATE TRIGGER patients_journal_ins AFTER INSERT ON patients
-  BEGIN INSERT INTO sync_journal (tbl, uid, op)
-        SELECT 'patients', uid, 'put' FROM patients
+  BEGIN INSERT INTO sync_journal (tbl, uid, op, cols)
+        SELECT 'patients', uid, 'put', '*' FROM patients
          WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER patients_journal_upd AFTER UPDATE ON patients
-  BEGIN INSERT INTO sync_journal (tbl, uid, op)
-        SELECT 'patients', uid, 'put' FROM patients
-         WHERE id = NEW.id AND uid IS NOT NULL; END;
+  BEGIN
+    INSERT INTO sync_journal (tbl, uid, op, cols)
+    SELECT 'patients', uid, 'put', cols FROM (
+      SELECT r.uid AS uid, CASE WHEN OLD.uid IS NULL THEN '*' ELSE rtrim(
+             CASE WHEN NEW.mrn IS NOT OLD.mrn THEN 'mrn,' ELSE '' END ||
+             CASE WHEN NEW.full_name IS NOT OLD.full_name THEN 'full_name,' ELSE '' END ||
+             CASE WHEN NEW.first_name IS NOT OLD.first_name THEN 'first_name,' ELSE '' END ||
+             CASE WHEN NEW.last_name IS NOT OLD.last_name THEN 'last_name,' ELSE '' END ||
+             CASE WHEN NEW.middle_name IS NOT OLD.middle_name THEN 'middle_name,' ELSE '' END ||
+             CASE WHEN NEW.date_of_birth IS NOT OLD.date_of_birth THEN 'date_of_birth,' ELSE '' END ||
+             CASE WHEN NEW.gender IS NOT OLD.gender THEN 'gender,' ELSE '' END ||
+             CASE WHEN NEW.blood_type IS NOT OLD.blood_type THEN 'blood_type,' ELSE '' END ||
+             CASE WHEN NEW.phone IS NOT OLD.phone THEN 'phone,' ELSE '' END ||
+             CASE WHEN NEW.email IS NOT OLD.email THEN 'email,' ELSE '' END ||
+             CASE WHEN NEW.national_id IS NOT OLD.national_id THEN 'national_id,' ELSE '' END ||
+             CASE WHEN NEW.address IS NOT OLD.address THEN 'address,' ELSE '' END ||
+             CASE WHEN NEW.nationality IS NOT OLD.nationality THEN 'nationality,' ELSE '' END ||
+             CASE WHEN NEW.occupation IS NOT OLD.occupation THEN 'occupation,' ELSE '' END ||
+             CASE WHEN NEW.emergency_contact_name IS NOT OLD.emergency_contact_name THEN 'emergency_contact_name,' ELSE '' END ||
+             CASE WHEN NEW.emergency_contact_phone IS NOT OLD.emergency_contact_phone THEN 'emergency_contact_phone,' ELSE '' END ||
+             CASE WHEN NEW.allergies IS NOT OLD.allergies THEN 'allergies,' ELSE '' END ||
+             CASE WHEN NEW.chronic_conditions IS NOT OLD.chronic_conditions THEN 'chronic_conditions,' ELSE '' END ||
+             CASE WHEN NEW.notes IS NOT OLD.notes THEN 'notes,' ELSE '' END ||
+             CASE WHEN NEW.active IS NOT OLD.active THEN 'active,' ELSE '' END ||
+             CASE WHEN NEW.registration_date IS NOT OLD.registration_date THEN 'registration_date,' ELSE '' END, ',') END AS cols
+        FROM patients r WHERE r.id = NEW.id AND r.uid IS NOT NULL
+    ) WHERE cols <> '';
+  END;
 -- Надгробие (sync_tombstones) пишется ТЕМ ЖЕ триггером, что и запись в
 -- журнал, а не отдельно: смысл в том, что триггер обойти нельзя (см. шапку
 -- файла), и то же самое должно быть верно для факта удаления, а не только
@@ -77,13 +128,24 @@ CREATE TRIGGER patients_journal_del AFTER DELETE ON patients
   END;
 
 CREATE TRIGGER visits_journal_ins AFTER INSERT ON visits
-  BEGIN INSERT INTO sync_journal (tbl, uid, op)
-        SELECT 'visits', uid, 'put' FROM visits
+  BEGIN INSERT INTO sync_journal (tbl, uid, op, cols)
+        SELECT 'visits', uid, 'put', '*' FROM visits
          WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER visits_journal_upd AFTER UPDATE ON visits
-  BEGIN INSERT INTO sync_journal (tbl, uid, op)
-        SELECT 'visits', uid, 'put' FROM visits
-         WHERE id = NEW.id AND uid IS NOT NULL; END;
+  BEGIN
+    INSERT INTO sync_journal (tbl, uid, op, cols)
+    SELECT 'visits', uid, 'put', cols FROM (
+      SELECT r.uid AS uid, CASE WHEN OLD.uid IS NULL THEN '*' ELSE rtrim(
+             CASE WHEN NEW.visit_date IS NOT OLD.visit_date THEN 'visit_date,' ELSE '' END ||
+             CASE WHEN NEW.duration_minutes IS NOT OLD.duration_minutes THEN 'duration_minutes,' ELSE '' END ||
+             CASE WHEN NEW.visit_kind IS NOT OLD.visit_kind THEN 'visit_kind,' ELSE '' END ||
+             CASE WHEN NEW.visit_type IS NOT OLD.visit_type THEN 'visit_type,' ELSE '' END ||
+             CASE WHEN NEW.status IS NOT OLD.status THEN 'status,' ELSE '' END ||
+             CASE WHEN NEW.notes IS NOT OLD.notes THEN 'notes,' ELSE '' END ||
+             CASE WHEN NEW.patient_id IS NOT OLD.patient_id THEN 'patient_id,' ELSE '' END, ',') END AS cols
+        FROM visits r WHERE r.id = NEW.id AND r.uid IS NOT NULL
+    ) WHERE cols <> '';
+  END;
 CREATE TRIGGER visits_journal_del AFTER DELETE ON visits
   WHEN OLD.uid IS NOT NULL
   BEGIN
@@ -92,13 +154,21 @@ CREATE TRIGGER visits_journal_del AFTER DELETE ON visits
   END;
 
 CREATE TRIGGER visit_services_journal_ins AFTER INSERT ON visit_services
-  BEGIN INSERT INTO sync_journal (tbl, uid, op)
-        SELECT 'visit_services', uid, 'put' FROM visit_services
+  BEGIN INSERT INTO sync_journal (tbl, uid, op, cols)
+        SELECT 'visit_services', uid, 'put', '*' FROM visit_services
          WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER visit_services_journal_upd AFTER UPDATE ON visit_services
-  BEGIN INSERT INTO sync_journal (tbl, uid, op)
-        SELECT 'visit_services', uid, 'put' FROM visit_services
-         WHERE id = NEW.id AND uid IS NOT NULL; END;
+  BEGIN
+    INSERT INTO sync_journal (tbl, uid, op, cols)
+    SELECT 'visit_services', uid, 'put', cols FROM (
+      SELECT r.uid AS uid, CASE WHEN OLD.uid IS NULL THEN '*' ELSE rtrim(
+             CASE WHEN NEW.quantity IS NOT OLD.quantity THEN 'quantity,' ELSE '' END ||
+             CASE WHEN NEW.status IS NOT OLD.status THEN 'status,' ELSE '' END ||
+             CASE WHEN NEW.visit_id IS NOT OLD.visit_id THEN 'visit_id,' ELSE '' END ||
+             CASE WHEN NEW.service_id IS NOT OLD.service_id THEN 'service_id,' ELSE '' END, ',') END AS cols
+        FROM visit_services r WHERE r.id = NEW.id AND r.uid IS NOT NULL
+    ) WHERE cols <> '';
+  END;
 CREATE TRIGGER visit_services_journal_del AFTER DELETE ON visit_services
   WHEN OLD.uid IS NOT NULL
   BEGIN
@@ -107,13 +177,29 @@ CREATE TRIGGER visit_services_journal_del AFTER DELETE ON visit_services
   END;
 
 CREATE TRIGGER lab_results_journal_ins AFTER INSERT ON lab_results
-  BEGIN INSERT INTO sync_journal (tbl, uid, op)
-        SELECT 'lab_results', uid, 'put' FROM lab_results
+  BEGIN INSERT INTO sync_journal (tbl, uid, op, cols)
+        SELECT 'lab_results', uid, 'put', '*' FROM lab_results
          WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER lab_results_journal_upd AFTER UPDATE ON lab_results
-  BEGIN INSERT INTO sync_journal (tbl, uid, op)
-        SELECT 'lab_results', uid, 'put' FROM lab_results
-         WHERE id = NEW.id AND uid IS NOT NULL; END;
+  BEGIN
+    INSERT INTO sync_journal (tbl, uid, op, cols)
+    SELECT 'lab_results', uid, 'put', cols FROM (
+      SELECT r.uid AS uid, CASE WHEN OLD.uid IS NULL THEN '*' ELSE rtrim(
+             CASE WHEN NEW.parameter IS NOT OLD.parameter THEN 'parameter,' ELSE '' END ||
+             CASE WHEN NEW.value IS NOT OLD.value THEN 'value,' ELSE '' END ||
+             CASE WHEN NEW.numeric_value IS NOT OLD.numeric_value THEN 'numeric_value,' ELSE '' END ||
+             CASE WHEN NEW.unit IS NOT OLD.unit THEN 'unit,' ELSE '' END ||
+             CASE WHEN NEW.reference_range IS NOT OLD.reference_range THEN 'reference_range,' ELSE '' END ||
+             CASE WHEN NEW.ref_low IS NOT OLD.ref_low THEN 'ref_low,' ELSE '' END ||
+             CASE WHEN NEW.ref_high IS NOT OLD.ref_high THEN 'ref_high,' ELSE '' END ||
+             CASE WHEN NEW.flag IS NOT OLD.flag THEN 'flag,' ELSE '' END ||
+             CASE WHEN NEW.notes IS NOT OLD.notes THEN 'notes,' ELSE '' END ||
+             CASE WHEN NEW.entered_at IS NOT OLD.entered_at THEN 'entered_at,' ELSE '' END ||
+             CASE WHEN NEW.verified_at IS NOT OLD.verified_at THEN 'verified_at,' ELSE '' END ||
+             CASE WHEN NEW.visit_service_id IS NOT OLD.visit_service_id THEN 'visit_service_id,' ELSE '' END, ',') END AS cols
+        FROM lab_results r WHERE r.id = NEW.id AND r.uid IS NOT NULL
+    ) WHERE cols <> '';
+  END;
 CREATE TRIGGER lab_results_journal_del AFTER DELETE ON lab_results
   WHEN OLD.uid IS NOT NULL
   BEGIN
