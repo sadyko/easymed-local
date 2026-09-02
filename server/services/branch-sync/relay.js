@@ -563,3 +563,53 @@ export function scheduleRelayPublish(db, dataDir, opts = {}) {
   interval.unref();
   return { initial, interval };
 }
+
+// BRANCH_SELF_SERVICE_V1 — попросить control plane завести филиал этой сети.
+//
+// Тот же приём, что и mintRelayToken выше, и по той же причине: предъявляем
+// install_token ГЛАВНОЙ клиники — единственной машины в группе, у которой есть
+// чем доказать вендору, кто она. Отличие одно: relay-token делегирует узкий
+// доступ, а здесь создаётся НОВАЯ клиника со своей подпиской и своим счётом.
+//
+// Возвращает код активации филиала. Он не сохраняется на этой машине: код
+// одноразовый и принадлежит филиалу — здесь он живёт ровно до того, как ляжет
+// в ключ связывания (pairing.js, encodeKey → body.e).
+//
+// Ошибки НЕ глотаем в успех: ключ без кода — это ключ, которым филиал не
+// активируется, и выдать такой молча значит отправить человека ставить систему,
+// которая не заведётся. Причина возвращается вызывающему словом.
+export async function createBranchOnControlPlane(dataDir, {
+  name = null,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = MINT_TIMEOUT_MS,
+  env = process.env,
+} = {}) {
+  const token = installToken(dataDir);
+  if (!token) return { ok: false, reason: 'branch_not_enrolled' };
+
+  const base = String((env && env.EASYMED_CONTROL_URL) || DEFAULT_ENDPOINT).trim().replace(/\/+$/, '');
+  let res;
+  try {
+    res = await fetchImpl(base + '/cp/v1/branch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ install_token: token, name: name || undefined }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch {
+    return { ok: false, reason: 'branch_offline' };
+  }
+
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) return { ok: false, reason: 'branch_unauthorized' };
+    if (res.status === 402) return { ok: false, reason: 'branch_parent_unpaid' };
+    if (res.status === 409) return { ok: false, reason: 'branch_of_branch' };
+    return { ok: false, reason: 'branch_server_error' };
+  }
+
+  let body;
+  try { body = await res.json(); } catch { return { ok: false, reason: 'branch_server_error' }; }
+  const code = body && typeof body.enrollment_code === 'string' ? body.enrollment_code.trim() : '';
+  if (!code) return { ok: false, reason: 'branch_server_error' };
+  return { ok: true, enrollment_code: code, clinic_id: body.clinic_id || null, name: body.name || null };
+}

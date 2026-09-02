@@ -8,6 +8,7 @@ import { adminRoutes } from './routes/admin.js';
 import { deployRoutes, DEPLOY_MOUNT } from './routes/deploy.js';
 import { relayRoutes, RELAY_MOUNT } from './routes/relay.js';   // BRANCH_SYNC_RELAY_V1
 import { relayTokenRouter, RELAY_TOKEN_MOUNT } from './routes/relay-token.js';   // BRANCH_IDENTITY_V1
+import { branchRouter } from './routes/branch.js';   // BRANCH_SELF_SERVICE_V1
 
 // control-plane/server/app.js -> control-plane/ -> control-plane/public
 const CONTROL_PLANE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -92,6 +93,10 @@ export function createApp(db) {
   // prefix on segment boundaries, so '/cp/v1/relay-token' is not '/cp/v1/relay'.
   // relay-token.route.test.js proves it by minting over real HTTP.
   app.use(RELAY_TOKEN_MOUNT, relayTokenRouter(db));
+  // BRANCH_SELF_SERVICE_V1 — рядом с relay-token и по той же причине: обе
+  // ручки предъявляет ГЛАВНАЯ клиника своим install_token, тело у обеих
+  // крошечное, и обе клиентские, а не вендорские.
+  app.use('/cp/v1/branch', branchRouter(db));
 
   // VENDOR-FACING — the panel's own login (/login, /logout, /me are
   // themselves how a vendor becomes authenticated, so this router is not

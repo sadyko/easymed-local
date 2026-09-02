@@ -16,6 +16,7 @@ import { readIdentity } from '../branch-sync/identity.js';
 import { ensureSyncGroup, regenerateSyncGroup, readSyncGroup } from '../branch-sync/sync-group.js';
 import {
   fetchCatalogue, publishCatalogue, readLastPublish, mintRelayToken, relayMintable, LAST_PUBLISH_KEY,
+  createBranchOnControlPlane,   // BRANCH_SELF_SERVICE_V1
 } from '../branch-sync/relay.js';
 import { relayIdFor } from '../branch-sync/relay-crypto.js';
 
@@ -159,6 +160,16 @@ const REASONS = {
 // владелец, а «нет фразы для кода» ничем не отличается от рабочего кода, пока
 // кто-нибудь не наткнётся на этот отказ в живой клинике. Тест проходит по всему
 // набору и требует, чтобы ни один код не свалился в общую фразу.
+// BRANCH_SELF_SERVICE_V1 — отказы control plane при заведении филиала. Каждый
+// говорит, ЧТО делать: молчаливое «не получилось» на этом шаге оставляет
+// человека с ключом, которым филиал не активируется.
+REASONS.branch_not_enrolled  = 'Эта установка сама не активирована. Сначала введите код активации, потом выдавайте ключи филиалам.';
+REASONS.branch_offline       = 'Нет связи с Easy-Med. Ключ филиала выдаётся вместе с кодом активации, а для кода нужна связь — проверьте интернет.';
+REASONS.branch_unauthorized  = 'Easy-Med не признал эту установку. Обратитесь к менеджеру Easy-Med.';
+REASONS.branch_parent_unpaid = 'Подписка клиники не активна — новые филиалы не заводятся. Обратитесь к менеджеру Easy-Med.';
+REASONS.branch_of_branch     = 'Филиал не может заводить свои филиалы. Ключ выдаёт главная клиника.';
+REASONS.branch_server_error  = 'Easy-Med не смог завести филиал. Попробуйте ещё раз позже.';
+
 export const reasonText = (reason) => REASONS[reason] || 'Не удалось выполнить действие. Попробуйте ещё раз.';
 const lowerFirst = (s) => (s ? s.charAt(0).toLowerCase() + s.slice(1) : s);
 
@@ -376,6 +387,7 @@ export function branchSyncMakeKey(db, args, user) {
     group_id: r.record.group_id,
     main_url: r.record.main_url,
     key: r.key,
+
     relay_ready: !!relayIdFor(r.record.group_key),
   };
 }
@@ -548,6 +560,12 @@ export function branchSyncRegenerateKey(db, args, user) {
 // секрет, выписанный поставщиком.
 const BRANCH_TOKEN_PREFIX = 'branch_relay_token:';
 const branchTokenKey = (branchId) => BRANCH_TOKEN_PREFIX + branchId;
+// BRANCH_SELF_SERVICE_V1 — код активации филиала хранится РЯДОМ с учёткой
+// резервного канала и по той же причине: ключ филиала собирается заново при
+// каждом чтении, и всё, что в нём есть, должно где-то лежать — иначе ключ
+// менялся бы от показа к показу, чего владелец как раз просил не делать.
+const BRANCH_ENROLL_PREFIX = 'branch_sync.enroll.';
+const branchEnrollKey = (branchId) => BRANCH_ENROLL_PREFIX + branchId;
 
 /**
  * Ключ подключения для строки списка — или null, если выдавать его не из чего.
@@ -566,6 +584,7 @@ function branchKeyFor(db, pairing, branch) {
     group_key: pairing.group_key,
     letter: branch.letter,
     relay_token: getState(db, branchTokenKey(branch.id)) || null,
+    enroll_code: getState(db, branchEnrollKey(branch.id)) || null,
   });
 }
 
@@ -596,6 +615,26 @@ async function ensureBranchToken(db, dataDir, branchId, mintImpl) {
     return { ok: false, reason: 'write_failed', message: reasonText('write_failed') };
   }
   return { ok: true };
+}
+
+// BRANCH_SELF_SERVICE_V1 — завести филиал у вендора и запомнить его код.
+// Best-effort ровно как ensureBranchToken выше: сорвать выдачу ключа из-за
+// недоступного сервера значило бы сделать офлайновую клинику заложником чужого
+// сервера. Не вышло — ключ выдаётся без кода и работает как раньше (связывает,
+// но не активирует), а причина возвращается словами.
+async function ensureBranchEnroll(db, dataDir, branchId, branchName, branchImpl) {
+  const existing = getState(db, branchEnrollKey(branchId));
+  if (existing) return { ok: true };
+
+  const r = await branchImpl(dataDir, { name: branchName });
+  if (!r.ok) return { ok: false, reason: r.reason, message: reasonText(r.reason) };
+  try {
+    putState(db, branchEnrollKey(branchId), r.enrollment_code);
+  } catch (e) {
+    console.warn('[branch-sync] got a branch enrollment code and could not store it:', e && e.message);
+    return { ok: false, reason: 'write_failed', message: reasonText('write_failed') };
+  }
+  return { ok: true, clinic_id: r.clinic_id };
 }
 
 /** Строка списка в том виде, в каком её ждёт экран. */
@@ -657,7 +696,7 @@ export function branchSyncBranches(db, args, user) {
  * второй филиал с тем же именем почти всегда означает двойное нажатие, а платит
  * за него клиника буквой из общей очереди.
  */
-export async function branchSyncAddBranch(db, args, user, { mintImpl = mintRelayToken } = {}) {
+export async function branchSyncAddBranch(db, args, user, { mintImpl = mintRelayToken, branchImpl = createBranchOnControlPlane } = {}) {
   requireAdmin(user);
   const dataDir = getDataDir();
   const pairing = readPairing(dataDir);
@@ -704,7 +743,8 @@ export async function branchSyncAddBranch(db, args, user, { mintImpl = mintRelay
   if (!branch) throw new RpcError(reasonText('branch_add_failed'), 400);
 
   const relay = await ensureBranchToken(db, dataDir, branch.id, mintImpl);
-  return { ok: true, branch: branchRow(db, pairing, branch, null), relay };
+  const enroll = await ensureBranchEnroll(db, dataDir, branch.id, branch.name, branchImpl);
+  return { ok: true, branch: branchRow(db, pairing, branch, null), relay, enroll };
 }
 
 /**

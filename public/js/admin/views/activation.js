@@ -143,6 +143,25 @@ export async function renderActivation(root, lic) {
 // about). The code goes to the server exactly as typed — normalisation lives
 // in one place, control-plane-side (mirrored by control/enroll.js), so the
 // screen can never disagree with it.
+// BRANCH_KEY_ACTIVATES_V1 — код активации, вложенный в ключ филиала.
+//
+// Ключ EMB2 — это base64url от JSON; поле `e` кладёт туда ГЛАВНАЯ клиника,
+// получив код у control plane своим install_token (branch-sync/relay.js →
+// /cp/v1/branch). Разбор здесь намеренно МИНИМАЛЬНЫЙ: достать одно поле, а не
+// повторять серверный decodeKey. Если поля нет (ключ выписан офлайн или старой
+// версией), возвращаем null — и экран честно просит код отдельно.
+function enrollCodeFromBranchKey(raw) {
+    const str = String(raw || '').trim();
+    if (!str.startsWith('EMB2-')) return null;
+    try {
+        const b64 = str.slice(5).replace(/-/g, '+').replace(/_/g, '/');
+        const json = decodeURIComponent(escape(atob(b64)));
+        const body = JSON.parse(json);
+        const code = body && typeof body.e === 'string' ? body.e.trim() : '';
+        return code || null;
+    } catch (e) { return null; }
+}
+
 function renderEnrollment(root) {
     // BRANCH_FIRST_RUN_V1 — первый запуск в два шага. Первый обязателен для
     // ЛЮБОЙ установки, включая филиал: у филиала своя подписка и свой код
@@ -156,7 +175,7 @@ function renderEnrollment(root) {
         h('div', { class: 'act-icon' }, Icon('Lock', { size: 26 })),
         h('h1', { class: 'act-title' }, 'Активация Easy-Med'),
         h('p', { class: 'act-reassure' },
-            'Введите код активации, полученный от менеджера Easy-Med. Для филиала — код этого филиала.'),
+            'Введите код активации от менеджера Easy-Med — или вставьте ключ филиала, выданный главной клиникой: код активации уже внутри него.'),
         field('Введите код активации', input),
         btn,
         statusEl,
@@ -165,12 +184,17 @@ function renderEnrollment(root) {
 
 // Шаг 2: присоединить филиал к главной клинике. Пропускаемый — главной клинике
 // присоединяться не к чему, и заставлять её что-то вводить было бы неправдой.
+// Ключ, которым активировались: шаг 2 подставит его сам, чтобы не заставлять
+// вводить одну и ту же строку дважды.
+let pendingBranchKey = null;
+
 function renderBranchStep(root) {
     clear(root);
     const statusEl = h('div', { class: 'act-status', role: 'status' });
     const keyInput = h('input', {
         type: 'text', class: 'act-input', placeholder: 'BR-...',
         autocomplete: 'off', spellcheck: 'false',
+        value: pendingBranchKey || '',
     });
     const done = () => { try { location.reload(); } catch (e) {} };
 
@@ -241,7 +265,15 @@ export function buildEnrollForm(onEnrolled) {
         statusEl.className = 'act-status';
         statusEl.textContent = '';
         try {
-            const { error } = await supabase.rpc('licence_enroll', { code: input.value });
+            // BRANCH_KEY_ACTIVATES_V1 — в это поле можно вставить и ключ филиала:
+            // код активации лежит внутри него. Установщику филиала так хватает
+            // ОДНОЙ строки вместо двух из двух разных мест. Ключ запоминаем,
+            // чтобы сразу после активации связать филиал, не прося ввести его
+            // второй раз.
+            const typed = String(input.value || '');
+            const embedded = enrollCodeFromBranchKey(typed);
+            if (embedded) pendingBranchKey = typed.trim();
+            const { error } = await supabase.rpc('licence_enroll', { code: embedded || typed });
             if (error) throw error;
             statusEl.className = 'act-status ok';
             statusEl.textContent = tr('Система активирована.');

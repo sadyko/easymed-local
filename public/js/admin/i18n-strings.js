@@ -5866,7 +5866,6 @@ export const STRINGS = {
   "последнее обновление не установилось": {"en":"the last update did not install","ru":"последнее обновление не установилось","uz":"oxirgi yangilanish o'rnatilmadi"},
 
   // BRANCH_FIRST_RUN_V1 — второй шаг первого запуска: подключение филиала.
-  "Введите код активации, полученный от менеджера Easy-Med. Для филиала — код этого филиала.": {"en":"Enter the activation code from your Easy-Med manager. For a branch, use that branch's own code.","ru":"Введите код активации, полученный от менеджера Easy-Med. Для филиала — код этого филиала.","uz":"Easy-Med menejeridan olingan faollashtirish kodini kiriting. Filial uchun - o'sha filialning kodi."},
   "Система активирована": {"en":"The system is activated","ru":"Система активирована","uz":"Tizim faollashtirildi"},
   "Если это филиал — введите ключ филиала, выданный главной клиникой. Если это главная клиника, пропустите шаг.": {"en":"If this is a branch, enter the branch key issued by the main clinic. If this is the main clinic, skip this step.","ru":"Если это филиал — введите ключ филиала, выданный главной клиникой. Если это главная клиника, пропустите шаг.","uz":"Agar bu filial bo'lsa, bosh klinika bergan filial kalitini kiriting. Bu bosh klinika bo'lsa, qadamni o'tkazib yuboring."},
   "Ключ филиала": {"en":"Branch key","ru":"Ключ филиала","uz":"Filial kaliti"},
@@ -5874,4 +5873,7 @@ export const STRINGS = {
   "Это главная клиника — пропустить": {"en":"This is the main clinic - skip","ru":"Это главная клиника — пропустить","uz":"Bu bosh klinika - o'tkazib yuborish"},
   "Филиал подключён. Справочник подтянется от главной клиники.": {"en":"The branch is connected. Its directory will come from the main clinic.","ru":"Филиал подключён. Справочник подтянется от главной клиники.","uz":"Filial ulandi. Ma'lumotnoma bosh klinikadan keladi."},
   "Не удалось подключить филиал.": {"en":"Could not connect the branch.","ru":"Не удалось подключить филиал.","uz":"Filialni ulab bo'lmadi."},
+
+  // BRANCH_KEY_ACTIVATES_V1 — код активации внутри ключа филиала.
+  "Введите код активации от менеджера Easy-Med — или вставьте ключ филиала, выданный главной клиникой: код активации уже внутри него.": {"en":"Enter the activation code from your Easy-Med manager - or paste the branch key issued by the main clinic: the activation code is already inside it.","ru":"Введите код активации от менеджера Easy-Med — или вставьте ключ филиала, выданный главной клиникой: код активации уже внутри него.","uz":"Easy-Med menejeridan faollashtirish kodini kiriting - yoki bosh klinika bergan filial kalitini joylashtiring: faollashtirish kodi uning ichida."},
 };

@@ -217,6 +217,10 @@ const newGroupId = () => 'BR-' + randomBytes(6).toString('hex').toUpperCase();
  */
 export function makeMainKey(dataDir, {
   url, groupId, groupKey, rotate = false, now = () => new Date(), writeFileSync, renameSync,
+  // BRANCH_SELF_SERVICE_V1 — код активации филиала. НЕ попадает в record и не
+  // пишется в файл пары: он одноразовый и принадлежит филиалу, а не этой
+  // машине. Живёт ровно столько, сколько нужно, чтобы попасть в ключ.
+  enrollCode = null,
 } = {}) {
   const existing = readPairing(dataDir);
   // Установка не может быть одновременно источником и приёмником справочника:
@@ -264,7 +268,7 @@ export function makeMainKey(dataDir, {
     console.warn('[branch-sync] could not write the pairing file:', e && e.message);
     return { ok: false, reason: 'write_failed' };
   }
-  return { ok: true, record, key: encodeKey(record) };
+  return { ok: true, record, key: encodeKey({ ...record, enroll_code: enrollCode }) };
 }
 
 /**
@@ -275,10 +279,10 @@ export function makeMainKey(dataDir, {
  * бумажка, флешка), и это сознательно выбранный канал: он не проходит через
  * settings.easymed.uz, поэтому поставщик не видит ключа даже мельком.
  */
-export function encodeKey({ group_id, secret, main_url, group_key, letter, relay_token }) {
+export function encodeKey({ group_id, secret, main_url, group_key, letter, relay_token, enroll_code }) {
   // Нечего нести сверх старого набора — значит и формат старый. Не экономия
   // байтов, а совместимость вниз: см. KEY_PREFIX_V2.
-  if (!letter && !relay_token) return encodeLegacyV1({ group_id, secret, main_url, group_key });
+  if (!letter && !relay_token && !enroll_code) return encodeLegacyV1({ group_id, secret, main_url, group_key });
   const body = { v: 2, g: group_id, s: secret, u: main_url };
   if (group_key) body.k = group_key;
   // `l` — буква филиала (её выдал ГЛАВНЫЙ филиал, letters.js), `t` — токен
@@ -286,6 +290,11 @@ export function encodeKey({ group_id, secret, main_url, group_key, letter, relay
   // Оба поля необязательны и оба разбираются по-разному — см. parseKey.
   if (letter) body.l = letter;
   if (relay_token) body.t = relay_token;
+  // BRANCH_SELF_SERVICE_V1 — код активации филиала, выданный control plane по
+  // запросу ГЛАВНОЙ клиники. Едет в ключе, потому что другого канала к машине
+  // филиала нет: её ещё не существует, когда ключ выписывают. Ключ и так
+  // передаётся из рук в руки как секрет — код не делает его секретнее.
+  if (enroll_code) body.e = enroll_code;
   return KEY_PREFIX_V2 + b64url(Buffer.from(JSON.stringify(body), 'utf8'));
 }
 
@@ -418,6 +427,10 @@ export function parseKey(text) {
   return {
     ok: true, group_id: body.g, secret: body.s, main_url: mainUrl, group_key: groupKey,
     letter, relay_token: relayToken,
+    // Код активации не валидируем формой: его проверяет control plane при
+    // погашении, и вторая, независимая проверка формата здесь означала бы, что
+    // смена формата кода на сервере молча ломает ключи.
+    enroll_code: version === 2 && typeof body.e === 'string' && body.e.trim() ? body.e.trim() : null,
   };
 }
 
