@@ -447,6 +447,18 @@ async function paintUpdateStatus() {
     el.textContent = line;
     el.setAttribute('title', line);
     if (kind) el.setAttribute('data-update-kind', kind);
+
+    // UPDATE_BADGE_V1 — та же точка, что в меню, но на строке: пользователь
+    // пришёл в настройки по бейджу и должен увидеть, ЧТО именно его позвало, а
+    // не искать глазами среди двух десятков строк. Показываем только когда есть
+    // что ставить — 'актуальная версия' бейджа не заслуживает.
+    if (kind === 'offer' || kind === 'busy') {
+        const row = el.closest ? el.closest('.set-row') : null;
+        const nameEl = row && row.querySelector ? row.querySelector('.set-row-name') : null;
+        if (nameEl && !nameEl.querySelector('.set-row-dot')) {
+            nameEl.appendChild(h('span', { class: 'set-row-dot' + (kind === 'busy' ? ' is-busy' : '') }, '1'));
+        }
+    }
 }
 // -----------------------------------------------------------------------------
 // LOOKUP EDITOR — shared, config-driven CRUD.

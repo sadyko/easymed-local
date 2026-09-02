@@ -78,7 +78,7 @@ import { renderProcurement }  from './admin/views/procurement.js?v=vendorxlsx2';
 import { renderRequestsInbox } from './admin/views/requests-inbox.js?v=btnright1';
 import { renderPacs }         from './admin/views/pacs.js';
 import { renderInventory }    from './admin/views/inventory.js?v=inv4';   // INVENTORY_UI_V1 — Suppliers/PO/Requisitions/Counts tabs live
-import { renderSettingsHub }  from './admin/views/settings-hub.js?v=updstatus1';   // SETTINGS_HUB_V1 — Документы -> rich designer; Пациенты -> settings:patients route
+import { renderSettingsHub }  from './admin/views/settings-hub.js?v=updbadge1';   // SETTINGS_HUB_V1 — Документы -> rich designer; Пациенты -> settings:patients route
 import { renderPatientDocuments } from './admin/views/patient-documents.js?v=docstoolbar1';   // PATIENT_DOCUMENTS_V1 + DOCS_TOOLBAR_V1
 import { renderDocumentsSettings } from './admin/views/documents-settings.js?v=doc2';   // DOCUMENTS_SETTINGS_V1
 
@@ -116,7 +116,7 @@ const NAV = [
     { section: 'Analytics' },
     { id: 'dashboard', label: 'Dashboard', icon: 'Dashboard' },
     { id: 'reports-hub', label: 'Reports', icon: 'Chart' },   // REPORTS_HUB_V1
-    { id: 'settings', label: 'Settings', icon: 'Settings' },   // SETTINGS_HUB_V1
+    { id: 'settings', label: 'Settings', icon: 'Settings', badgeKind: 'alert' },   // SETTINGS_HUB_V1 + UPDATE_BADGE_V1
 ];
 
 // Live nav badges — populated by loadNavCounts() from Supabase. Updated on
@@ -128,6 +128,10 @@ const navCounts = {
     consultation: null,    // queued + in_progress visit_services (active work)
     'cashier-shifts': null,   // CASHIER_UNPAID_BADGE_V1 — unpaid + partial + debt invoices (money to collect)
     pacs:         12,      // studies awaiting read — TODO: wire to a `studies` count once table exists
+    // UPDATE_BADGE_V1 — не «сколько», а «есть»: 1 = ждёт обновление. Счётчик, а
+    // не отдельный флаг, потому что бейдж в меню уже умеет ровно это, и второй
+    // механизм рядом означал бы два места, где рисуется одна и та же точка.
+    settings:     null,
     'telegram-chat': null,   // TELEGRAM_CHAT_BADGE_V1 — входящие без read_at
 };
 
@@ -1158,7 +1162,26 @@ function formatBadge(n) {
 
 // Pull real counts from Supabase + re-render the sidebar. Errors fail silent —
 // the badges just don't appear, the rest of the app keeps working.
+// UPDATE_BADGE_V1 — обновление ждёт установки: 1 или 0.
+//
+// Ошибку глотаем: бейдж — это подсказка, а не операция. Нет связи с control
+// plane или роль без прав — бейджа просто нет, что честнее, чем зажечь его на
+// пустом месте и отправить человека искать несуществующее обновление.
+async function loadUpdateBadge() {
+    try {
+        const { data, error } = await supabase.rpc('update_status', {});
+        if (error || !data) return;
+        const LIVE = ['downloading', 'verifying', 'unpacking', 'snapshot', 'switching'];
+        const busy = data.progress && LIVE.indexOf(data.progress.phase) !== -1;
+        const offered = !!(data.offer && data.offer.version && data.offer.version !== data.current_version);
+        navCounts.settings = (busy || offered) ? 1 : 0;
+    } catch (e) { /* подсказка, не операция */ }
+}
+
 async function loadNavCounts() {
+    // UPDATE_BADGE_V1 — своим вызовом, а не внутри чужого try: упавший
+    // запрос пациентов не должен молча гасить бейдж обновления.
+    loadUpdateBadge();
     // PHASE2A_SHELL — once trimmed to the Patients count only, because the
     // other badge tables didn't exist in local mode yet. Restored since:
     // telegram-chat (TELEGRAM_CHAT_BADGE_V1) and invoices

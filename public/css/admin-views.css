@@ -4311,3 +4311,13 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .set-row-desc[data-update-kind="offer"]{ color:var(--primary-700); font-weight:600; }
 .set-row-desc[data-update-kind="busy"]{ color:var(--warn-700, #9a6b00); font-weight:600; }
 .set-row-desc[data-update-kind="fail"]{ color:var(--crit-700, #96271b); font-weight:600; }
+
+/* UPDATE_BADGE_V1 — «1» на строке «Система», когда обновление ждёт установки.
+   Тот же смысл, что у бейджа в меню, поэтому и вид тот же: маленький кружок с
+   числом, а не новая форма, которую надо разгадывать. */
+.set-row-dot{
+  display:inline-grid; place-items:center; min-width:17px; height:17px; padding:0 5px;
+  margin-left:7px; border-radius:999px; background:var(--primary-600); color:#fff;
+  font-size:12.5px; font-weight:700; line-height:1; vertical-align:1px;
+}
+.set-row-dot.is-busy{ background:var(--warn-600, #b98523); }
