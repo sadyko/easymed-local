@@ -73,3 +73,27 @@ test('неизвестный kind отвергается', () => {
   const db = freshDb();
   assert.throws(() => roomsSetupDelete(db, { kind: 'building', id: 1 }, admin), (e) => e.status === 400);
 });
+
+// BED_LIST_V1 — койки удаляются из карточки палаты, поэтому ветка kind='bed'
+// стала достижимой для пользователя и пиняется отдельно.
+test('свободная койка удаляется', () => {
+  const db = freshDb();
+  const w = db.prepare("INSERT INTO wards (name) VALUES ('Палата 7')").run().lastInsertRowid;
+  const b = db.prepare("INSERT INTO beds (code, ward_id) VALUES ('1', ?)").run(w).lastInsertRowid;
+  const out = roomsSetupDelete(db, { kind: 'bed', id: b }, admin);
+  assert.equal(out.deleted, true);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM beds WHERE id = ?').get(b).c, 0);
+});
+
+test('койка с госпитализацией в истории отключается, а не удаляется', () => {
+  const db = freshDb();
+  const w = db.prepare("INSERT INTO wards (name) VALUES ('Палата 8')").run().lastInsertRowid;
+  const b = db.prepare("INSERT INTO beds (code, ward_id) VALUES ('1', ?)").run(w).lastInsertRowid;
+  const p = db.prepare("INSERT INTO patients (full_name) VALUES ('Пациент П.')").run().lastInsertRowid;
+  db.prepare("INSERT INTO admissions (patient_id, ward_id, bed_id, status, admitted_at) VALUES (?,?,?,'discharged',datetime('now'))").run(p, w, b);
+  const out = roomsSetupDelete(db, { kind: 'bed', id: b }, admin);
+  assert.equal(out.deleted, false);
+  // строка цела: выписанная госпитализация помнит, на какой койке лежал пациент
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM beds WHERE id = ?').get(b).c, 1);
+  assert.equal(db.prepare('SELECT active FROM beds WHERE id = ?').get(b).active, 0);
+});

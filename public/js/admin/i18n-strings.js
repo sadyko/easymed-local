@@ -5840,4 +5840,12 @@ export const STRINGS = {
   "Новые койки продолжат нумерацию. Существующие не трогаются — занятая койка не должна поменять номер под пациентом.": {"en":"New beds continue the numbering. Existing ones are untouched - an occupied bed must not change its number under a patient.","ru":"Новые койки продолжат нумерацию. Существующие не трогаются — занятая койка не должна поменять номер под пациентом.","uz":"Yangi koykalar raqamlashni davom ettiradi. Mavjudlari tegilmaydi - band koyka bemor ostida raqamini o'zgartirmasligi kerak."},
   "Сохранено. Добавлено коек: {n}.": {"en":"Saved. Beds added: {n}.","ru":"Сохранено. Добавлено коек: {n}.","uz":"Saqlandi. Qo'shilgan koykalar: {n}."},
   "Для операционной оставьте 0 — тогда за пребывание не начисляется ничего, а операция выставляется как услуга.": {"en":"For an operating room leave 0 - nothing is charged for the stay, and the operation is billed as a service.","ru":"Для операционной оставьте 0 — тогда за пребывание не начисляется ничего, а операция выставляется как услуга.","uz":"Operatsiya xonasi uchun 0 qoldiring - turish uchun hech narsa hisoblanmaydi, operatsiya xizmat sifatida hisoblanadi."},
+
+  // BED_LIST_V1 — список коек палаты в её карточке.
+  "Койки палаты": {"en":"Beds in this ward","ru":"Койки палаты","uz":"Palata koykalari"},
+  "Коек нет.": {"en":"No beds.","ru":"Коек нет.","uz":"Koyka yo'q."},
+  "Удалить койку": {"en":"Delete this bed","ru":"Удалить койку","uz":"Koykani o'chirish"},
+  "Койка занята — сначала выпишите пациента": {"en":"The bed is occupied - discharge the patient first","ru":"Койка занята — сначала выпишите пациента","uz":"Koyka band - avval bemorni chiqaring"},
+  "Койка удалена.": {"en":"Bed deleted.","ru":"Койка удалена.","uz":"Koyka o'chirildi."},
+  "Новые койки продолжают нумерацию. Удалить можно только свободную койку.": {"en":"New beds continue the numbering. Only a free bed can be deleted.","ru":"Новые койки продолжают нумерацию. Удалить можно только свободную койку.","uz":"Yangi koykalar raqamlashni davom ettiradi. Faqat bo'sh koykani o'chirish mumkin."},
 };

@@ -70,6 +70,11 @@ function bedTypeFor(key) {
 }
 
 // Очередь кабинета. Смысл режимов — в миграции 082 и в маршрутизаторе очереди.
+// BED_LIST_V1 — статусы койки словами: в таблице они лежат кодом.
+const BED_STATUS_LABEL = {
+    free: 'Свободна', occupied: 'Занята', cleaning: 'Уборка', maintenance: 'Ремонт',
+};
+
 const QUEUE_MODES = [
     ['none',   'Без очереди'],
     ['room',   'Очередь к кабинету'],
@@ -402,7 +407,7 @@ function openWizard(row) {
         active: src ? (src.active !== false && src.active !== 0) : true,
         queue_mode: src && src.queue_mode ? src.queue_mode : 'none',
         doctorIds: editing && row.kind === 'room' ? doctorsIn(row.id).map(x => x.id) : [],
-        beds: 4, addBeds: 0,
+        beds: 4,
         billing_mode: src && src.billing_mode ? src.billing_mode : 'daily',
         price: src ? (src.billing_mode === 'hourly' ? src.price_per_hour : src.price_per_day) || 0 : 0,
     };
@@ -465,11 +470,10 @@ function openWizard(row) {
                     oninput: (e) => { d.beds = e.target.value; },
                 }), { hint: tr('Койки пронумеруются автоматически: 1, 2, 3… Позже можно добавить ещё.') }));
             } else {
-                const have = (state.bedsByWard[row.id] || []).length;
-                m.bodyEl.appendChild(field(trf('Коек сейчас: {n}. Добавить ещё', { n: have }), h('input', {
-                    class: 'inp', type: 'number', min: '0', max: '200', value: '0',
-                    oninput: (e) => { d.addBeds = e.target.value; },
-                }), { hint: tr('Новые койки продолжат нумерацию. Существующие не трогаются — занятая койка не должна поменять номер под пациентом.') }));
+                // BED_LIST_V1 — счётчик «Коек сейчас: 9» ничего не позволял с ними
+                // сделать: добавил лишние — и убрать негде. Здесь список коек с
+                // номером и статусом, у каждой своя кнопка удаления.
+                m.bodyEl.appendChild(bedListField(row, m));
             }
             const priceFld = field(d.billing_mode === 'daily' ? tr('Цена за сутки, сум') : tr('Цена за час, сум'),
                 h('input', { class: 'inp', type: 'number', min: '0', step: '1000', value: String(d.price), oninput: (e) => { d.price = e.target.value; } }),
@@ -576,13 +580,7 @@ async function save(d, row) {
     if (row) {
         const { error } = await supabase.from('wards').update(payload).eq('id', row.id);
         if (error) throw new Error(error.message);
-        const add = Math.max(0, Math.min(200, parseInt(d.addBeds, 10) || 0));
-        if (add > 0) {
-            const have = state.bedsByWard[row.id] || [];
-            const maxNo = have.reduce((mx, b) => Math.max(mx, parseInt(b.code, 10) || 0), 0);
-            await insertBeds(row.id, d.type, maxNo + 1, add);
-        }
-        toast(add ? trf('Сохранено. Добавлено коек: {n}.', { n: add }) : tr('Сохранено.'), 'ok');
+        toast(tr('Сохранено.'), 'ok');   // BED_LIST_V1 — койки добавляются из списка выше, не при сохранении
         return;
     }
     // Палата, затем койки — двумя запросами и именно в этом порядке: если
@@ -620,6 +618,69 @@ async function insertBeds(wardId, typeKey, from, count) {
     }
     const { error } = await supabase.from('beds').insert(rows);
     if (error) throw new Error(trf('Палата создана, но койки не добавились: {msg}', { msg: error.message }));
+}
+
+// BED_LIST_V1 — койки палаты прямо в её карточке: список + добавление.
+// Удалять можно только СВОБОДНУЮ койку. На занятой кнопка выключена, а не
+// прячется: администратор должен видеть, что койка есть и почему её нельзя
+// убрать, иначе он будет искать пропавшую строку. Сервер проверяет то же самое
+// второй раз (rooms_setup_delete: койка с госпитализацией отключается, а не
+// удаляется), так что клиентская блокировка — удобство, а не защита.
+function bedListField(ward, parent) {
+    const box = h('div', { class: 'rs-bedlist' });
+
+    function repaint() {
+        clear(box);
+        const beds = (state.bedsByWard[ward.id] || [])
+            .slice().sort((a, b) => (parseInt(a.code, 10) || 0) - (parseInt(b.code, 10) || 0));
+        if (!beds.length) {
+            box.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '4px 0' } }, tr('Коек нет.')));
+        }
+        for (const b of beds) {
+            const st = String(b.status || 'free');
+            const free = st === 'free';
+            box.appendChild(h('div', { class: 'rs-bedrow' },
+                h('span', { class: 'rs-bed is-' + st }),
+                h('span', { class: 'rs-bedrow__code' }, b.code || '—'),
+                h('span', { class: 'rs-bedrow__st muted' }, tr(BED_STATUS_LABEL[st] || st)),
+                h('button', {
+                    class: 'btn btn-outline btn-sm rs-del', type: 'button',
+                    disabled: !free,
+                    title: free ? tr('Удалить койку') : tr('Койка занята — сначала выпишите пациента'),
+                    onclick: async (e) => {
+                        const btn = e.currentTarget; btn.disabled = true;
+                        try {
+                            const { data, error } = await supabase.rpc('rooms_setup_delete', { kind: 'bed', id: Number(b.id) });
+                            if (error) throw new Error(error.message);
+                            toast(data && data.deleted ? tr('Койка удалена.') : ((data && data.message) || tr('Отключено.')),
+                                  data && data.deleted ? 'ok' : 'info');
+                            await load(); repaint(); paint();
+                        } catch (err) { toast((err && err.message) || tr('Не удалось удалить.'), 'fail'); btn.disabled = false; }
+                    },
+                }, tr('Удалить')),
+            ));
+        }
+    }
+    repaint();
+
+    const addInp = h('input', { class: 'inp rs-bedadd__inp', type: 'number', min: '1', max: '200', value: '1' });
+    const addBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: async () => {
+        addBtn.disabled = true;
+        try {
+            const n = Math.max(1, Math.min(200, parseInt(addInp.value, 10) || 1));
+            const have = state.bedsByWard[ward.id] || [];
+            const maxNo = have.reduce((mx, b) => Math.max(mx, parseInt(b.code, 10) || 0), 0);
+            await insertBeds(ward.id, ward.type, maxNo + 1, n);
+            toast(trf('Добавлено коек: {n}.', { n }), 'ok');
+            await load(); repaint(); paint();
+        } catch (e) { toast((e && e.message) || tr('Не удалось добавить койки.'), 'fail'); }
+        addBtn.disabled = false;
+    } }, Icon('Plus', { size: 13 }), ' ', tr('Добавить'));
+
+    const wrap = h('div', null, box,
+        h('div', { class: 'rs-bedadd' }, addInp, addBtn));
+    return field(tr('Койки палаты'), wrap,
+        { hint: tr('Новые койки продолжают нумерацию. Удалить можно только свободную койку.') });
 }
 
 // ROOMS_DELETE_V1 — удаление подтверждается и НЕ обещает больше, чем сделает.

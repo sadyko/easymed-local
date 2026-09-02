@@ -4290,3 +4290,17 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
   display:flex; flex-direction:column; gap:3px; background:var(--ink-25, #fafbfc); }
 .wb-op__top{ display:flex; align-items:center; gap:7px; min-width:0; }
 .wb-op__ic{ color:var(--ink-500); display:inline-flex; flex:0 0 auto; }
+
+/* BED_LIST_V1 — койки палаты прямо в её карточке. Список прокручивается: у
+   палаты может быть двадцать коек, и диалог не должен из-за этого расти. */
+.rs-bedlist{ display:flex; flex-direction:column; max-height:210px; overflow:auto;
+  border:1px solid var(--ink-100); border-radius:10px; padding:4px 8px; }
+.rs-bedrow{ display:flex; align-items:center; gap:9px; padding:5px 0; border-top:1px solid var(--ink-50); }
+.rs-bedrow:first-child{ border-top:none; }
+.rs-bedrow__code{ font-size:13.5px; font-weight:600; min-width:34px; font-variant-numeric:tabular-nums; }
+.rs-bedrow__st{ flex:1 1 auto; font-size:12.5px; }
+/* Кнопка удаления занятой койки ВЫКЛЮЧЕНА, а не спрятана: администратор должен
+   видеть, что койка есть и почему её нельзя убрать. */
+.rs-bedrow .btn[disabled]{ opacity:.45; cursor:not-allowed; }
+.rs-bedadd{ display:flex; gap:8px; align-items:center; margin-top:8px; }
+.rs-bedadd__inp{ width:88px; }
