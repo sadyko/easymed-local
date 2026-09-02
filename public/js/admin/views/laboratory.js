@@ -522,11 +522,20 @@ async function fetchAndPaint() {
                 // department_id/type_id ride along so the lab-service rule can check
                 // the department and catalogue-type branches (LAB_SERVICE_ROUTING_V1).
                 .select('*, services(name,is_lab,type,department_id,type_id,result_unit,ref_low,ref_high,ref_text,specimen,tube_color)')
+                // BRANCH_ORIGIN_V1 — решение владельца 2026-09-02: «очередь и кабинет
+                // врача — своего здания». sync_origin IS NULL и есть «заведено здесь»;
+                // приехавшая работа соседа видна в карте пациента, но не в этой очереди —
+                // иначе очередь Юнусабада наполнилась бы пробирками Чиланзара.
+                .is('sync_origin', null)
                 .in('status', ['added', 'queued', 'collected', 'in_progress', 'resulted'])
                 .order('id', { ascending: false })
                 .limit(5000),
             supabase.from('visit_services')
                 .select('*, services(name,is_lab,type,department_id,type_id,result_unit,ref_low,ref_high,ref_text,specimen,tube_color)')
+                // BRANCH_ORIGIN_V1 — та же граница на истории закрытых: это второй
+                // запрос ОДНОГО списка, и отфильтровать только половину значило бы
+                // показывать чужую работу во вкладке «Готово», но не в очереди.
+                .is('sync_origin', null)
                 .eq('status', 'completed')
                 .order('id', { ascending: false })
                 .limit(LAB_DONE_WINDOW),

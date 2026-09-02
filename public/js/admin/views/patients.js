@@ -7,6 +7,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { registrarHeader } from './registrar-header.js?v=roleaud1';
 import { loadPatientsPaged, findAllDuplicatePatientIds, mergePatients } from '../data.js';   // DUP_MERGE_V1
 import { scopedDoctorId } from '../permissions.js';
+import { originTag } from '../record-origin.js';   // BRANCH_ORIGIN_V1 — откуда запись
 import { branchSyncButton } from './branch-sync-button.js';   // BRANCH_SYNC_HOURLY_V1
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
 
@@ -505,6 +506,19 @@ function setDisabled(btn, disabled) {
 // -----------------------------------------------------------------------------
 // ROW
 // -----------------------------------------------------------------------------
+// BRANCH_ORIGIN_V1 — «эта карта заведена в другом здании». Буква берётся из
+// хранимой метки sync_origin (её ставит приём порции), а НЕ из буквы MRN: MRN
+// говорит, где пациент заведён, и на визитах врал бы — пациент из «C», пришедший
+// в «B», лечится здесь. У пациента эти два ответа совпадают, но правило одно на
+// все списки, чтобы карточка и очередь не расходились в том, что считают чужим.
+// shapePatient не переносит сырые колонки наверх, поэтому метка читается из _raw.
+function branchTag(p) {
+    const letter = originTag((p && p._raw) || p);
+    if (!letter) return null;
+    return h('span', { class: 'tag', style: { marginLeft: '8px', fontSize: '12.5px' } },
+        trf('Филиал {letter}', { letter }));
+}
+
 function patientRow(p) {
     // DUP_MERGE_V1 — leading checkbox; only interactive in the Duplicates filter.
     const isDup = state.filter === 'duplicates';
@@ -523,6 +537,11 @@ function patientRow(p) {
                         h('span', { class: 'num', style: { color: 'var(--ink-400)', marginRight: '6px' } }, p.mrn || '—'),
                         `${p.lastName} ${p.firstName} ${p.middle || ''}`.trim(),
                         duplicateIdSet.has(p.id) ? h('span', { class: 'tag tag-warn', style: { marginLeft: '8px', fontSize: '12.5px' }, title: 'Возможный дубликат — то же имя на том же телефоне (или общий ПИНФЛ). Откройте карточку для объединения.' }, 'Дубликат') : null,
+                        // BRANCH_ORIGIN_V1 — регистр КЛИНИЧЕСКИЙ, а не пофилиальный: поиск
+                        // обязан находить всех (PATIENTS_CLINIC_WIDE_V1), поэтому список не
+                        // фильтруется — подписывается. Метка только на чужих: подпись на
+                        // каждой строке перестала бы что-либо значить.
+                        branchTag(p),
                     ),
                     p.city
                         ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '1px' } }, p.city)

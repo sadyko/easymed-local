@@ -97,3 +97,23 @@ test('083: засев проставляет uid всем УЖЕ существ�
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// BRANCH_ORIGIN_V1 — «откуда запись». Отдельная колонка, а не буква MRN:
+// MRN говорит, где ЗАВЕДЁН пациент, а работа принадлежит тому зданию, где
+// сделана. NULL по умолчанию — это и есть «своё»: миграция не смеет объявить
+// уже существующие строки клиники чужими.
+test('083: sync_origin есть у всех четырёх таблиц и по умолчанию пуст — своя работа', () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  for (const t of TABLES) {
+    const col = db.prepare(`SELECT type, "notnull", dflt_value FROM pragma_table_info('${t}') WHERE name='sync_origin'`).get();
+    assert.ok(col, t + ': без колонки рабочие списки не отличат своё от чужого');
+    assert.equal(col.type, 'TEXT', t + ': хранится буква узла');
+    assert.equal(col.notnull, 0, t + ': NULL и есть «заведено здесь»');
+    assert.equal(col.dflt_value, null, t + ': умолчание — пусто, а не выдуманная буква');
+  }
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Свой')").run().lastInsertRowid;
+  assert.equal(db.prepare('SELECT sync_origin FROM patients WHERE id = ?').get(id).sync_origin, null,
+    'строка, заведённая здесь, ничем не помечается');
+  db.close();
+});

@@ -95,7 +95,12 @@ async function loadServices() {
             visits(visit_date, patient_id,
                    patients(full_name, last_name, first_name, mrn, phone))
         `)
-        .in('status', ['added', 'queued', 'in_progress', 'completed']);
+        .in('status', ['added', 'queued', 'in_progress', 'completed'])
+        // BRANCH_ORIGIN_V1 — решение владельца 2026-09-02: «очередь и кабинет врача —
+        // своего здания». sync_origin IS NULL = строка заведена здесь; работа, приехавшая
+        // от соседнего филиала, остаётся в его кабинете и видна тут только через карту
+        // пациента. Фильтр серверный: .limit(300) ниже иначе тратился бы на чужие строки.
+        .is('sync_origin', null);
     // M1 — scope to this clinic; super-admin/platform-staff JWT bypasses company RLS, so the
     // client filter is the only tenant boundary here (mirrors procedures.js loadServices).
     const cid = (window.CLINIC && window.CLINIC.id) || null;

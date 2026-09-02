@@ -5894,6 +5894,10 @@ export const STRINGS = {
   "Дополнительно": {"en":"More","ru":"Дополнительно","uz":"Qo'shimcha"},
   "Копия шифруется здесь: включите канал — на сервер ляжет блоб, который там не прочитать.": {"en":"The copy is encrypted here: switch the channel on and the server receives a blob it cannot read.","ru":"Копия шифруется здесь: включите канал — на сервер ляжет блоб, который там не прочитать.","uz":"Nusxa shu yerda shifrlanadi: kanalni yoqsangiz, serverga u o'qiy olmaydigan blob tushadi."},
 
+  // BRANCH_ORIGIN_V1 — метка «эта запись приехала из другого здания».
+  // Буква подставляется ПОСЛЕ перевода: в узбекском она идёт первой.
+  "Филиал {letter}": {"en":"Branch {letter}","ru":"Филиал {letter}","uz":"{letter} filiali"},
+
   // BRANCH_ENROLL_REPAIR_V1 — ключ без кода активации и его лечение.
   "Без кода активации": {"en":"No activation code","ru":"Без кода активации","uz":"Faollashtirish kodisiz"},
   "Получить код": {"en":"Get the code","ru":"Получить код","uz":"Kodni olish"},

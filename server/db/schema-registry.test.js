@@ -314,3 +314,18 @@ test('services.type is filterable, so "the lab services" is one query', () => {
   assert.ok(filterAllowed('services', 'type'), 'type can be filtered on');
   assert.ok(readableColumns('services').includes('type'), 'and it was already readable');
 });
+
+// BRANCH_ORIGIN_V1 (mig 083) — «откуда запись». Клиент обязан уметь и ПОКАЗАТЬ
+// метку, и отфильтровать по ней («своё здание» = sync_origin IS NULL), но не
+// выставить: её ставит только приём порции. Список писателей проверяется
+// поимённо — доступ, выданный «на всякий случай», выдал бы чужую работу за свою.
+test('sync_origin читается и фильтруется на всех четырёх таблицах синхронизации, но не пишется', () => {
+  for (const t of ['patients', 'visits', 'visit_services', 'lab_results']) {
+    assert.ok(readableColumns(t).includes('sync_origin'), t + ': метку надо показать в списке');
+    assert.ok(filterAllowed(t, 'sync_origin'), t + ': «своё здание» — это запрос, а не фильтр в браузере после limit');
+    for (const op of ['insert', 'update']) {
+      assert.ok(!writableColumns(t, op).includes('sync_origin'),
+        t + '.' + op + ': происхождение ставит только приём порции (branch-sync/records.js)');
+    }
+  }
+});

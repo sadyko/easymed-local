@@ -15,6 +15,23 @@ ALTER TABLE visits          ADD COLUMN uid TEXT;
 ALTER TABLE visit_services  ADD COLUMN uid TEXT;
 ALTER TABLE lab_results     ADD COLUMN uid TEXT;
 
+-- BRANCH_ORIGIN_V1 — ОТКУДА строка. NULL = заведена здесь; буква = приехала от
+-- того узла. Ставится один раз, при ВСТАВКЕ приехавшей записи (records.js), и
+-- не меняется, когда сосед потом правит ту же строку: происхождение — не
+-- состояние, а факт.
+--
+-- Почему не буква MRN: MRN говорит, где ЗАВЕДЁН ПАЦИЕНТ, а не где сделана
+-- работа. Пациент из «C», пришедший в «B», лечится в B, и его визит — работа B;
+-- по MRN лаборатория B не увидела бы собственный анализ. visits.branch_id тоже
+-- не годится: до Фазы 1 мастер проставляет туда первый активный филиал.
+--
+-- Колонка НЕ уезжает соседу (её нет в SHIPPED): у каждого узла своя точка
+-- зрения — то, что здесь «из C», у самого C помечено NULL.
+ALTER TABLE patients        ADD COLUMN sync_origin TEXT;
+ALTER TABLE visits          ADD COLUMN sync_origin TEXT;
+ALTER TABLE visit_services  ADD COLUMN sync_origin TEXT;
+ALTER TABLE lab_results     ADD COLUMN sync_origin TEXT;
+
 -- Засев для строк, которые уже есть. lower(hex(randomblob(16))) — 128 бит из
 -- ГСЧ SQLite: столкновение невероятнее, чем потеря базы.
 UPDATE patients       SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL;

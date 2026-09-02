@@ -67,7 +67,8 @@ export const REGISTRY = {
               'occupation','emergency_contact_name','emergency_contact_phone','allergies','chronic_conditions',
               'branch_id','primary_doctor_id','payer_id','referral_source_id','notes','photo_url','active',
               'registration_date','created_by','created_at','updated_at',
-              'marital_status','emergency_contact_relation','payer_policy_id','insurance_policy_number','insurance_expiry_date'] },
+              'marital_status','emergency_contact_relation','payer_policy_id','insurance_policy_number','insurance_expiry_date',
+              'sync_origin'] },   // sync_origin: BRANCH_ORIGIN_V1 — см. комментарий у filters
     write:  {
       // CALLCENTER_ROLE_V1 — «Зарегистрировать» on a CRM card creates the patient
       // card from the call. INSERT only: the call centre opens a card for the
@@ -93,21 +94,29 @@ export const REGISTRY = {
     // PAGED_LIST_V1 — email/gender/payer_id/payer_policy_id: раздел «Пациенты»
     // ищет и фильтрует по ним, а на 70k строк это считает SQL, а не браузер;
     // без них серверная фильтрация отвергала бы запрос как unknown column.
-    filters: ['id','mrn','phone','national_id','full_name','email','gender','date_of_birth','branch_id','primary_doctor_id','payer_id','payer_policy_id','active','created_at','registration_date'],
+    // BRANCH_ORIGIN_V1 (mig 083) — откуда строка: NULL = заведена здесь, буква =
+    // приехала от того филиала. Читается, чтобы списки могли ПОКАЗАТЬ метку, и
+    // фильтруется, чтобы рабочие списки (лабораторная очередь, кабинет врача)
+    // спрашивали `.is('sync_origin', null)` одним запросом, а не отсеивали
+    // чужое в браузере после limit. НЕ writable ни в одной операции: метку
+    // ставит только приём порции (branch-sync/records.js) — экран, способный её
+    // выставить, мог бы выдать чужую работу за свою.
+    filters: ['id','mrn','phone','national_id','full_name','email','gender','date_of_birth','branch_id','primary_doctor_id','payer_id','payer_policy_id','active','created_at','registration_date','sync_origin'],
     embed:   { branches: { table:'branches', fk:'branch_id', columns:['id','name'] },
                payers:   { table:'payers',   fk:'payer_id',  columns:['id','name'] } },
   },
   visits: {
     read:  { roles: ALL_STAFF, columns: ['id','patient_id','doctor_id','branch_id','visit_date',
              'duration_minutes','visit_kind','visit_type','status','referral_source_id','notes',
-             'conclusion','conclusion_type','created_by','created_at','updated_at'] },
+             'conclusion','conclusion_type','created_by','created_at','updated_at',
+             'sync_origin'] },   // sync_origin: BRANCH_ORIGIN_V1 (mig 083) — откуда строка; ставится только приёмом порции, поэтому не writable
     write: {
       insert: { roles: ['admin','registrar','doctor'], columns: ['patient_id','doctor_id','branch_id','visit_date',
                 'duration_minutes','visit_kind','visit_type','status','referral_source_id','notes','created_by'] },
       update: { roles: ['admin','registrar','doctor'], columns: ['status','visit_date','duration_minutes','doctor_id','notes','conclusion','conclusion_type'] },
       delete: { roles: ['admin'] },
     },
-    filters: ['id','patient_id','doctor_id','branch_id','status','visit_date'],
+    filters: ['id','patient_id','doctor_id','branch_id','status','visit_date','sync_origin'],   // sync_origin: BRANCH_ORIGIN_V1
     embed:   { patients: { table:'patients', fk:'patient_id', columns:['id','mrn','full_name','first_name','last_name','middle_name','phone','date_of_birth','gender'] },
                doctor:   { table:'users',    fk:'doctor_id',  columns:['id','full_name'] } },
   },
@@ -133,12 +142,16 @@ export const REGISTRY = {
   },
   visit_services: {
     read:  { roles: ALL_STAFF, columns: ['id','visit_id','service_id','clinic_item_id','doctor_id','quantity','unit_price','total','status','invoice_item_id','created_by','created_at','consultation_type_id','scheduled_at','queue_key','queue_no','notes',
-             'sample_collected_at','verified_by','verified_at'] },   // queue_* set ONLY by issue_queue_numbers; notes = WS consult document JSON (mig 039); sample/verify: LAB_HANDLING_V1 (mig 041)
+             'sample_collected_at','verified_by','verified_at','sync_origin'] },   // queue_* set ONLY by issue_queue_numbers; notes = WS consult document JSON (mig 039); sample/verify: LAB_HANDLING_V1 (mig 041); sync_origin: BRANCH_ORIGIN_V1 (mig 083)
     write: { insert: { roles: ['admin','registrar','doctor'], columns: ['visit_id','service_id','doctor_id','quantity','unit_price','total','status','created_by','consultation_type_id','scheduled_at'] },
              update: { roles: ['admin','registrar','doctor','lab','nurse'], columns: ['status','doctor_id','consultation_type_id','notes',
              'sample_collected_at','verified_by','verified_at'] },   // LAB_HANDLING_V1 (lab) + PROCEDURES_V1 (nurse отмечает выполнение)
              delete: { roles: ['admin','registrar'] } },
-    filters: ['id','visit_id','service_id','status','invoice_item_id','doctor_id','created_at','notes'],   // notes filter: WS_DERIVED_DOCS_V1 (.not('notes','is',null))
+    // BRANCH_ORIGIN_V1 — правило то же, что у patients выше, и здесь оно и
+    // работает: лабораторная очередь и кабинет врача спрашивают
+    // `.is('sync_origin', null)` — «работа этого здания» (решение владельца
+    // 2026-09-02). Фильтр серверный: их .limit() иначе тратился бы на чужие строки.
+    filters: ['id','visit_id','service_id','status','invoice_item_id','doctor_id','created_at','notes','sync_origin'],   // notes filter: WS_DERIVED_DOCS_V1 (.not('notes','is',null))
     // DOCTOR_WORKSPACE_V1 — the My-services queue joins the whole clinical
     // context off one row: services (+nested type/department), the booked
     // consultation type, the provider (doctor_id -> users, easymed aliases it
@@ -156,11 +169,11 @@ export const REGISTRY = {
                visits: { table:'visits', fk:'visit_id', columns:['id','visit_date','patient_id','status','doctor_id'] } },
   },
   lab_results: {
-    read:  { roles: ALL_STAFF, columns: ['id','visit_service_id','parameter','value','numeric_value','unit','reference_range','flag','notes','entered_by','entered_at','verified_by','verified_at','created_at','ref_low','ref_high'] },   // ref_low/high: LAB_HANDLING_V1 (mig 041)
+    read:  { roles: ALL_STAFF, columns: ['id','visit_service_id','parameter','value','numeric_value','unit','reference_range','flag','notes','entered_by','entered_at','verified_by','verified_at','created_at','ref_low','ref_high','sync_origin'] },   // ref_low/high: LAB_HANDLING_V1 (mig 041); sync_origin: BRANCH_ORIGIN_V1 (mig 083)
     write: { insert: { roles: ['admin','lab'], columns: ['visit_service_id','parameter','value','numeric_value','unit','reference_range','flag','notes','entered_by','ref_low','ref_high'] },
              update: { roles: ['admin','lab'], columns: ['parameter','value','numeric_value','unit','reference_range','flag','notes','verified_by','verified_at','ref_low','ref_high'] },
              delete: { roles: ['admin'] } },
-    filters: ['id','visit_service_id'],
+    filters: ['id','visit_service_id','sync_origin'],   // sync_origin: BRANCH_ORIGIN_V1 — «своё здание» одним запросом
     embed:   {},
   },
   invoices: {

@@ -279,10 +279,17 @@ function applyOne(db, rec, stats, ctx) {
   if (id == null && !cols.length) { stats.skipped++; return; }
 
   if (id == null) {
+    // BRANCH_ORIGIN_V1 — откуда строка, ставится ОДИН РАЗ, при вставке. UPDATE
+    // её не трогает: то, что сосед потом поправил запись, не делает её своей и
+    // наоборот. В SHIPPED колонки нет — у каждого узла своя точка зрения, и
+    // отправить её значило бы объявить соседу его собственные строки чужими.
+    // Не строка (undefined у записи без origin) → NULL: better-sqlite3 не
+    // связывает undefined и уронил бы всю порцию.
+    const origin = typeof rec.origin === 'string' && rec.origin !== '' ? rec.origin : null;
     ctx.q(
-      `INSERT INTO ${rec.tbl} (uid${cols.length ? ', ' + cols.join(', ') : ''})
-       VALUES (?${cols.map(() => ', ?').join('')})`
-    ).run(rec.uid, ...vals);
+      `INSERT INTO ${rec.tbl} (uid, sync_origin${cols.length ? ', ' + cols.join(', ') : ''})
+       VALUES (?, ?${cols.map(() => ', ?').join('')})`
+    ).run(rec.uid, origin, ...vals);
   } else if (cols.length) {
     ctx.q(`UPDATE ${rec.tbl} SET ${cols.map(c => c + ' = ?').join(', ')} WHERE id = ?`)
       .run(...vals, id);

@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { applyBatch } from './records.js';
+import { SHIPPED } from './journal.js';
 
 function fresh() {
   const db = openDb(':memory:');
@@ -260,4 +261,38 @@ test('опоздавший родитель не воспроизводит ус
   assert.equal(v.status, 'arrived', 'и не разъезжается: статус от одной записи, ссылка от другой');
   assert.equal(v.visit_date, '2026-09-02');
   db.close();
+});
+
+// BRANCH_ORIGIN_V1 — «откуда запись». Хранимая метка, а не буква MRN: MRN
+// говорит, где пациент ЗАВЕДЁН, а рабочие списки спрашивают, где сделана
+// РАБОТА. Ставится при вставке и больше никогда — иначе правка соседа
+// перекрашивала бы чужую строку в свою и обратно.
+test('приехавшая строка помечена буквой соседа, местная — ничем, и правка метку не меняет', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Местный')").run();
+  applyBatch(db, [put('patients', 'oo1', '000000000001-0000-C', { full_name: 'Приезжий', phone: '+998900000001' })], S);
+
+  assert.equal(db.prepare("SELECT sync_origin FROM patients WHERE uid = 'oo1'").get().sync_origin, 'C',
+    'строка приехала из C — очередь и кабинет врача не должны считать её своей работой');
+  assert.equal(db.prepare("SELECT sync_origin FROM patients WHERE full_name = 'Местный'").get().sync_origin, null,
+    'заведённое здесь не помечается ничем: NULL и есть «своё здание»');
+
+  // Та же строка правится в C ещё раз. Происхождение — факт, а не состояние.
+  applyBatch(db, [put('patients', 'oo1', '000000000009-0000-C', { phone: '+998900000002' })], S);
+  const row = db.prepare("SELECT phone, sync_origin FROM patients WHERE uid = 'oo1'").get();
+  assert.equal(row.phone, '+998900000002', 'правка применилась');
+  assert.equal(row.sync_origin, 'C', 'и не переписала происхождение');
+
+  // Запись без origin (сосед старой сборки) не должна ронять порцию.
+  applyBatch(db, [{ tbl: 'patients', uid: 'oo2', op: 'put', stamp: '000000000002-0000-C', data: { full_name: 'Безымянный' }, refs: {} }], S);
+  assert.equal(db.prepare("SELECT sync_origin FROM patients WHERE uid = 'oo2'").get().sync_origin, null,
+    'без origin метку выдумывать нечем — строка просто не подписана');
+  db.close();
+});
+
+test('метка происхождения не уезжает обратно: у соседа своя точка зрения', () => {
+  for (const tbl of Object.keys(SHIPPED)) {
+    assert.ok(!SHIPPED[tbl].includes('sync_origin'),
+      tbl + ': отправив метку, B объявил бы C, что собственные строки C — чужие');
+  }
 });

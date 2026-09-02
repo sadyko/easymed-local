@@ -21,6 +21,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { labFlagCell, labPosFor, fmtDMY, labSexRu, labRefLines, labRefText, matchResultsToAnalytes, labAccession, labIssueDates, labMaxDate,
          namedRangeCell, ageYears } from './lab-doc.js?v=labshared1';
 import { analyteIndex, resolveAnalyte, analytesForService } from './lab-analyte-index.js?v=labshared1';   // LAB_BLANK_DESIGNED_V1
+import { originTag } from '../record-origin.js';   // BRANCH_ORIGIN_V1 — откуда запись
 import { openVisitWizard } from './visit-wizard.js?v=aug17e';
 import { printInvoiceCheck } from './receipt-print.js?v=rp1';   // REPRINT_SERVICE_CHECK_V1
 import { printableSheet as _printSheet } from './doc-settings.js?v=noqr1';   // VISIT_WIZARD_LOCAL_V1 — full-screen «Добавить услугу к визиту»
@@ -612,6 +613,16 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
     }
 
     // ---- Визиты ----
+    // BRANCH_ORIGIN_V1 — буква филиала, в котором запись ЗАВЕДЕНА, по хранимой
+    // метке sync_origin. Своя запись (NULL) не подписывается: подпись на каждой
+    // строке ничего не сообщает.
+    function visitBranchTag(v) {
+        const letter = originTag(v);
+        if (!letter) return null;
+        return h('span', { class: 'tag', style: { marginLeft: '8px', fontSize: '12.5px' } },
+            trf('Филиал {letter}', { letter }));
+    }
+
     function renderVisits() {
         const wrap = h('div', { class: 'card' });
         // ADD_SERVICES_IN_TABBAR_V1 — кнопка «Добавить услуги» живёт в строке
@@ -630,7 +641,14 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 class: 'row-click', style: { cursor: 'pointer' },
                 onclick: () => openVisitBillModal(v, reload),
             },
-                h('td', { class: 'num', style: { fontSize: '12.5px' } }, fmtDateTime(v.visit_date)),
+                // BRANCH_ORIGIN_V1 — карта пациента показывает ВСЮ историю, включая
+                // визиты в других зданиях (в этом и смысл общей карты), поэтому здесь
+                // не фильтр, а подпись: читающий должен видеть, что этот визит делали
+                // не здесь. Метка идёт в ячейку даты — колонок в таблице ровно четыре,
+                // и пятая разошлась бы с заголовками.
+                h('td', { class: 'num', style: { fontSize: '12.5px' } },
+                    fmtDateTime(v.visit_date),
+                    visitBranchTag(v)),
                 h('td', null, doc ? (doc.full_name || '—') : '—'),
                 h('td', null, v.visit_type || '—'),
                 h('td', null, StatusTag(v.status)),
