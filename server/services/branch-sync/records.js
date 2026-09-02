@@ -18,7 +18,7 @@
 //
 // Всё это — в ОДНОЙ транзакции: половина приехавшей истории хуже, чем ничего,
 // потому что в ней визиты без пациентов.
-import { compareStamps, isStamp, nextStamp } from './hlc.js';
+import { compareStamps, isStamp, nextStamp, parseStamp } from './hlc.js';
 import { SHIPPED, REFS, CODE_REFS, readClock, writeClock } from './journal.js';
 
 // sync_seen (миграция 084): метка последнего ПРИНЯТОГО изменения каждой
@@ -370,9 +370,13 @@ function applyOne(db, rec, stats, ctx) {
     // её не трогает: то, что сосед потом поправил запись, не делает её своей и
     // наоборот. В SHIPPED колонки нет — у каждого узла своя точка зрения, и
     // отправить её значило бы объявить соседу его собственные строки чужими.
-    // Не строка (undefined у записи без origin) → NULL: better-sqlite3 не
-    // связывает undefined и уронил бы всю порцию.
-    const origin = typeof rec.origin === 'string' && rec.origin !== '' ? rec.origin : null;
+    // Буква берётся из МЕТКИ, а не из rec.origin: метка уже проверена isStamp
+    // выше (^[0-9a-f]{12}-[0-9a-f]{4}-[A-Z]{1,8}$), а origin — необязательное
+    // поле, которое отправитель заполняет сам. Так в колонку не попадёт ни
+    // мусор, ни чужое имя: подписаться буквой соседа можно только подделав
+    // метку, а по ней же считается и порядок слияния.
+    const stamped = parseStamp(rec.stamp);
+    const origin = stamped ? stamped.node : null;
     ctx.q(
       `INSERT INTO ${rec.tbl} (uid, sync_origin${cols.length ? ', ' + cols.join(', ') : ''})
        VALUES (?, ?${cols.map(() => ', ?').join('')})`

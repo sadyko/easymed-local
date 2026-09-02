@@ -42,7 +42,11 @@ async function paint(root) {
 
     let rows = [];
     try {
-        let q = supabase.from('visits').select('*, patients(mrn, full_name), doctor(full_name)');
+        // BRANCH_ORIGIN_V1 — решение владельца 2026-09-02: очередь и кабинет врача —
+        // своего здания. Фильтр стоит на ОБОИХ путях, но важен он на неограниченном
+        // (админском): там нет doctor_id, который иначе отсеял бы чужие строки сам.
+        let q = supabase.from('visits').select('*, patients(mrn, full_name), doctor(full_name)')
+            .is('sync_origin', null);
         if (scoped) q = q.eq('doctor_id', scoped);
         const { data, error } = await q.order('visit_date', { ascending: false }).limit(80);
         if (error) throw error;

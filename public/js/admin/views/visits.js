@@ -83,6 +83,12 @@ async function fetchAndPaint() {
     try {
         const { data, error, count } = await supabase.from('visits')
             .select('*, patients(full_name,mrn,phone), doctor(full_name)', { count: 'exact' })
+            // BRANCH_ORIGIN_V1 — решение владельца 2026-09-02: рабочие списки — своего
+            // здания. Дата, статус и тип визита уезжают соседу, а пациент к ним
+            // резолвится, поэтому чужой визит выглядел бы здесь настоящей записью на
+            // приём — и стойка ждала бы пациента, который придёт в другой филиал.
+            // История видна там, где она и нужна: в карте пациента.
+            .is('sync_origin', null)
             .order('visit_date', { ascending: true })
             .limit(200);
         if (token !== lastFetchToken) return;   // a newer fetch already landed

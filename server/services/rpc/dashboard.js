@@ -19,9 +19,16 @@ export function dashboardSummary(db, _args, _user) {
   const collected_today = one(`SELECT COALESCE(SUM(amount),0) s FROM payments WHERE ${INFLOW_SQL} AND ${isLocalToday('paid_at')}`).s;
   const out = one(`SELECT COUNT(*) n, COALESCE(SUM(total_amount - paid_amount),0) s FROM invoices WHERE ${outstandingWhere()}`);
   const low_stock_count = one("SELECT COUNT(*) n FROM products WHERE active=1 AND reorder_level>0 AND on_hand<=reorder_level").n;
+  // BRANCH_ORIGIN_V1 (mig 083) — плитка обязана считать ТО ЖЕ, что показывает
+  // лабораторная очередь под ней, а очередь фильтрует «своё здание»
+  // (sync_origin IS NULL, решение владельца 2026-09-02: «очередь и кабинет
+  // врача — своего здания»). Без этого условия число на плитке росло бы от
+  // работы соседнего филиала, которой в очереди нет, и лаборант искал бы
+  // пробирки, которых у него никогда не было.
   const lab_pending_count = one(`SELECT COUNT(*) n FROM visit_services vs
       JOIN services s ON s.id = vs.service_id
       WHERE s.is_lab=1 AND vs.status IN ('queued','in_progress')
+        AND vs.sync_origin IS NULL
         AND NOT EXISTS (SELECT 1 FROM lab_results lr WHERE lr.visit_service_id=vs.id AND lr.verified_at IS NOT NULL)`).n;
 
   return {

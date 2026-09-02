@@ -283,10 +283,15 @@ test('приехавшая строка помечена буквой сосед
   assert.equal(row.phone, '+998900000002', 'правка применилась');
   assert.equal(row.sync_origin, 'C', 'и не переписала происхождение');
 
-  // Запись без origin (сосед старой сборки) не должна ронять порцию.
+  // Буква берётся из МЕТКИ, а не из поля origin: origin отправитель заполняет
+  // сам, а метка проверена isStamp. Запись без origin всё равно подписана
+  // правильно, а запись, назвавшаяся чужим именем, — своей настоящей буквой.
   applyBatch(db, [{ tbl: 'patients', uid: 'oo2', op: 'put', stamp: '000000000002-0000-C', data: { full_name: 'Безымянный' }, refs: {} }], S);
-  assert.equal(db.prepare("SELECT sync_origin FROM patients WHERE uid = 'oo2'").get().sync_origin, null,
-    'без origin метку выдумывать нечем — строка просто не подписана');
+  assert.equal(db.prepare("SELECT sync_origin FROM patients WHERE uid = 'oo2'").get().sync_origin, 'C',
+    'метка знает узел — поле origin для этого не нужно');
+  applyBatch(db, [{ tbl: 'patients', uid: 'oo4', op: 'put', stamp: '000000000003-0000-D', data: { full_name: 'Из D' }, refs: {}, origin: 'ПОДДЕЛКА' }], S);
+  assert.equal(db.prepare("SELECT sync_origin FROM patients WHERE uid = 'oo4'").get().sync_origin, 'D',
+    'в колонку не попадает то, что прислали в необязательном поле');
   db.close();
 });
 

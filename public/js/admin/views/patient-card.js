@@ -201,7 +201,10 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             // LAB_DOC_PENDING_V1 — is_lab/type тянем, чтобы отличить лабораторный
             // ЗАКАЗ от остальных услуг: документ «Результаты анализов» должен
             // появляться с момента назначения, а не с первой введённой цифры.
-            .select('id,visit_id,quantity,unit_price,total,status,invoice_item_id,doctor_id,service_id,scheduled_at,services(name,result_unit,ref_low,ref_high,is_lab,type),users:doctor_id(full_name)')
+            // BRANCH_ORIGIN_V1 — sync_origin едет в выборке, чтобы подписать результат,
+            // сделанный в другом здании: карта пациента показывает всю историю и
+            // обязана сказать, где именно её сделали.
+            .select('id,visit_id,quantity,unit_price,total,status,invoice_item_id,doctor_id,service_id,scheduled_at,sync_origin,services(name,result_unit,ref_low,ref_high,is_lab,type),users:doctor_id(full_name)')
             .in('visit_id', visitIds);
         if (vsErr || !vsRows || vsRows.length === 0) return;
 
@@ -270,6 +273,9 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 unit:      lr.unit || (svc && svc.result_unit) || '',
                 reference: reference || '—',
                 flag:      lr.flag || null,
+                // BRANCH_ORIGIN_V1 — сам результат мог приехать строкой lab_results, а мог
+                // приехать вместе с заказом: берём ту метку, которая есть.
+                origin:    originTag(lr) || originTag(vs),
                 date:      (vst && vst.visit_date) || lr.entered_at || lr.created_at || null,
                 _id:       lr.id,
             });
@@ -616,11 +622,13 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
     // BRANCH_ORIGIN_V1 — буква филиала, в котором запись ЗАВЕДЕНА, по хранимой
     // метке sync_origin. Своя запись (NULL) не подписывается: подпись на каждой
     // строке ничего не сообщает.
-    function visitBranchTag(v) {
-        const letter = originTag(v);
-        if (!letter) return null;
+    function branchLabel(letter) {
         return h('span', { class: 'tag', style: { marginLeft: '8px', fontSize: '12.5px' } },
             trf('Филиал {letter}', { letter }));
+    }
+    function visitBranchTag(v) {
+        const letter = originTag(v);
+        return letter ? branchLabel(letter) : null;
     }
 
     function renderVisits() {
@@ -1021,7 +1029,9 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         const tbody = h('tbody');
         for (const r of labs) {
             tbody.appendChild(h('tr', null,
-                h('td', null, r.name),
+                // BRANCH_ORIGIN_V1 — не фильтр, а подпись: анализы других зданий здесь и
+                // должны быть видны, но врач обязан знать, чья это лаборатория.
+                h('td', null, r.name, r.origin ? branchLabel(r.origin) : null),
                 h('td', { class: 'num' }, [r.value, r.unit].filter(Boolean).join(' ') || '—'),
                 h('td', null, r.reference),
                 h('td', null, r.flag ? StatusTag(r.flag) : '—'),

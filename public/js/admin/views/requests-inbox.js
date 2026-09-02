@@ -91,10 +91,14 @@ export async function renderRequestsInbox(container) {
 
         const counts = { requested: 0, processed: 0, dropped: 0 };
         try {
+            // BRANCH_ORIGIN_V1 — решение владельца 2026-09-02: рабочие списки — своего
+            // здания. Заявка соседнего филиала — его работа: обработав её здесь, стойка
+            // записала бы пациента не в то здание. Счётчики фильтруются вместе со
+            // списком, иначе плитки показывали бы больше, чем открывается ниже.
             const [tot, req, drop] = await Promise.all([
-                supabase.from('visits').select('id', { count: 'exact', head: true }).ilike('notes', SYMPTEX_LIKE),
-                supabase.from('visits').select('id', { count: 'exact', head: true }).ilike('notes', SYMPTEX_LIKE).eq('status', 'requested'),
-                supabase.from('visits').select('id', { count: 'exact', head: true }).ilike('notes', SYMPTEX_LIKE).in('status', ['cancelled', 'no_show']),
+                supabase.from('visits').select('id', { count: 'exact', head: true }).is('sync_origin', null).ilike('notes', SYMPTEX_LIKE),
+                supabase.from('visits').select('id', { count: 'exact', head: true }).is('sync_origin', null).ilike('notes', SYMPTEX_LIKE).eq('status', 'requested'),
+                supabase.from('visits').select('id', { count: 'exact', head: true }).is('sync_origin', null).ilike('notes', SYMPTEX_LIKE).in('status', ['cancelled', 'no_show']),
             ]);
             counts.requested = req.count || 0;
             counts.dropped = drop.count || 0;
@@ -103,7 +107,7 @@ export async function renderRequestsInbox(container) {
 
         let visits = [];
         try {
-            let qb = supabase.from('visits');
+            let qb = supabase.from('visits').is('sync_origin', null);   // BRANCH_ORIGIN_V1 — см. счётчики выше: только заявки своего здания
             qb = state.mode === 'active'
                 ? qb.select(ACTIVE_SEL).eq('status', 'requested').order('created_at', { ascending: false })
                 : qb.select(HIST_SEL).ilike('notes', SYMPTEX_LIKE).neq('status', 'requested').order('created_at', { ascending: false }).limit(100);

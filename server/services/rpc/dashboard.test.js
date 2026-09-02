@@ -45,3 +45,19 @@ test('dashboard_summary counts debt invoices as outstanding', () => {
   assert.equal(s.outstanding_count, 2);          // partial + debt, never the void one
   assert.equal(s.outstanding_amount, 140000);    // 60000 + 80000
 });
+
+// BRANCH_ORIGIN_V1 — плитка «Анализы в работе» и лабораторная очередь под ней
+// обязаны считать ОДНО И ТО ЖЕ. Очередь показывает работу своего здания
+// (sync_origin IS NULL); если плитка считает и приехавшую, лаборант видит
+// число, под которое в очереди нет ни одной пробирки.
+test('dashboard_summary: анализы соседнего филиала не попадают в плитку «в работе»', () => {
+  const db = openDb(':memory:'); migrate(db);
+  const pid = db.prepare("INSERT INTO patients (full_name, branch_id) VALUES ('C',1)").run().lastInsertRowid;
+  const vid = db.prepare("INSERT INTO visits (patient_id, branch_id, visit_date) VALUES (?,1,date('now'))").run(pid).lastInsertRowid;
+  const sid = db.prepare("INSERT INTO services (name, code, price, type, is_lab, active) VALUES ('ОАК','CBC',50000,'lab',1,1)").run().lastInsertRowid;
+  db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, status) VALUES (?,?,1,'queued')").run(vid, sid);
+  db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, status, sync_origin) VALUES (?,?,1,'queued','C')").run(vid, sid);
+
+  const s = dashboardSummary(db, {}, { id: 1, role: 'admin' });
+  assert.equal(s.lab_pending_count, 1, 'считается только заказ, заведённый здесь');
+});

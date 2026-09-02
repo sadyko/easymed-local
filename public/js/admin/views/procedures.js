@@ -43,6 +43,11 @@ async function load() {
                  users:doctor_id(full_name), verified_at, performer:verified_by(full_name),
                  visits(id, visit_date, patient_id, patients(full_name, last_name, first_name, phone, mrn, date_of_birth, gender))`)
         .eq('company_id', cid)
+        // BRANCH_ORIGIN_V1 — решение владельца 2026-09-02: «очередь и кабинет врача —
+        // своего здания». Это тот же visit_services, что и «Мои услуги»: чужая процедура
+        // приезжает с настоящим статусом и разрешённой услугой и встала бы в очередь
+        // медсестры пустой строкой — без врача и без цены.
+        .is('sync_origin', null)
         .in('status', ['added', 'queued', 'in_progress', 'completed'])   // SERVICE_BADGE_SENT_V1 — показываем 'added' (Назначено) как «пациент направлен»; провести всё равно нельзя до оплаты (см. #15)
         .order('created_at', { ascending: false }).limit(300);
     if (error) {
