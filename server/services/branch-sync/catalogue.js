@@ -164,6 +164,11 @@ export function exportCatalogue(db, { now = () => new Date() } = {}) {
   return out;
 }
 
+// Форма буквы узла — та же, что у letters.js (LETTER_MAX_CHARS) и identity.js.
+// Своя копия, а не импорт: там это правило выдачи буквы, здесь — проверка
+// того, что приехало по сети.
+const ROSTER_LETTER_RE = /^[A-Z]{1,8}$/;
+
 // Одинаковы ли значения, приехавшее и местное. SQLite вернёт цену как 250000
 // (INTEGER) там, где JSON привёз 250000.0, а пустая строка и NULL в этих
 // таблицах взаимозаменяемы по смыслу — без нормализации каждая синхронизация
@@ -252,12 +257,42 @@ export function applyCatalogue(db, payload, { dryRun = false } = {}) {
   // одно правило, а не два.
   if (Array.isArray(payload.roster)) {
     const rename = db.prepare('UPDATE branches SET name = ? WHERE letter = ?');
+    // BRANCH_RECORDS_V1 (Задача 7) — НЕЗНАКОМАЯ БУКВА ТЕПЕРЬ ЗАВОДИТСЯ, А НЕ
+    // ПРОПУСКАЕТСЯ, и это не улучшение списка, а условие того, чтобы фаза
+    // работала в сети больше двух зданий.
+    //
+    // Филиал знает ровно две строки: свою (её заводит identity.js при
+    // активации) и главную (засеяна миграцией 080 под буквой A). О третьем
+    // филиале он не узнаёт ниоткуда — а с Фазы 2 адрес журнала соседа
+    // выводится из его БУКВЫ (relay.js journalPeers). Без этой вставки Филиал B и
+    // Филиал C обменивались бы записями только через главную клинику... точнее,
+    // НЕ обменивались вовсе: пересылки чужих записей в этом механизме нет
+    // (applyBatch чистит свой хвост журнала), каждый узел говорит с каждым сам.
+    //
+    // active = 0 НАРОЧНО. Строка заводится, чтобы была ИЗВЕСТНА БУКВА
+    // соседа, а не чтобы чужое здание появилось в выборе кабинетов этой
+    // установки: членство исполнителей и карточка сотрудника сеют «все филиалы»
+    // по `WHERE active = 1` (rpc/service-save.js), и тихое появление там чужого здания
+    // было бы изменением поведения, о котором никто не просил. journalPeers
+    // по `active` не фильтрует именно поэтому.
+    //
+    // Форма буквы проверяется та же, что в letters.js и identity.js: список приехал
+    // снаружи, а UNIQUE-индекс по букве — NOCASE: кириллическая «С» или пустая
+    // строка здесь стоила бы строки-призрака, которую нечем убрать.
+    const adopt = db.prepare('INSERT INTO branches (name, letter, active) VALUES (?, ?, 0)');
     for (const entry of payload.roster) {
       if (!entry || typeof entry.letter !== 'string' || typeof entry.name !== 'string') continue;
       const name = entry.name.trim().slice(0, 120);
       if (!name) continue;
-      const row = db.prepare('SELECT id, name FROM branches WHERE letter = ?').get(entry.letter);
-      if (!row || row.name === name) continue;
+      const row = db.prepare('SELECT id, name FROM branches WHERE letter = ? COLLATE NOCASE').get(entry.letter);
+      if (!row) {
+        if (!ROSTER_LETTER_RE.test(entry.letter)) continue;
+        summary.roster = (summary.roster || 0) + 1;
+        summary.changed += 1;
+        if (!dryRun) adopt.run(name, entry.letter);
+        continue;
+      }
+      if (row.name === name) continue;
       summary.roster = (summary.roster || 0) + 1;
       summary.changed += 1;
       if (!dryRun) rename.run(name, entry.letter);

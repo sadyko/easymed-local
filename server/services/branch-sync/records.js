@@ -18,6 +18,7 @@
 //
 // Всё это — в ОДНОЙ транзакции: половина приехавшей истории хуже, чем ничего,
 // потому что в ней визиты без пациентов.
+import { SqliteError } from 'better-sqlite3';
 import { compareStamps, isStamp, nextStamp, parseStamp } from './hlc.js';
 import { SHIPPED, REFS, CODE_REFS, readClock, writeClock } from './journal.js';
 
@@ -36,6 +37,9 @@ const PENDING_MAX_DAYS = 30;
 // холодный засев несёт СВЕЖИЕ метки (пол HLC), не created_at. Надгробия '*'
 // живут столько же: запоздавший put старше 90 дней — не сценарий.
 const SEEN_DAYS = 90;
+// Где лежит ПОСЛЕДНИЙ ПРИМЕНЁННЫЙ рубеж чистки sync_seen. Та же
+// control_state, что у часов (journal.js) и у записей о выгрузках (relay.js).
+const SEEN_CUTOFF_KEY = 'sync_seen_cutoff';
 // Предохранитель цикла освобождения. Настоящая глубина цепочки — четыре
 // (пациент → визит → услуга → результат), и каждый круг освобождает ВСЕХ, кому
 // родитель уже приехал, поэтому кругов нужно не больше пяти. Ограничение стоит
@@ -101,8 +105,25 @@ export function applyBatch(db, records, { self, peer = null } = {}) {
     // Метки, старше которых ничего не приедет. Сравнение строковое: метка —
     // hex миллисекунд фиксированной ширины (hlc.js), и «старше даты» это
     // «меньше метки этой даты».
+    //
+    // ЧИСТИТСЯ ТОЛЬКО КОГДА ГОРИЗОНТ СДВИНУЛСЯ (ревью Задачи 5b). `stamp` не
+    // индексирован, а sync_seen — самая большая таблица фазы (~190 строк на
+    // принятый визит с панелью), то есть каждая порция платила полным сканом
+    // за удаление нуля строк: горизонт сдвигается на десятки минут в час, а
+    // выселять надо то, что старше 90 дней. Прошлый рубеж лежит в control_state:
+    // отдельная таблица ради одной строки не заводится, а сравнение строковое:
+    // рубеж — hex фиксированной ширины (12 знаков), как и сами метки.
     const seenCutoff = seenHorizon(ctx.maxReceived);
-    if (seenCutoff) db.prepare(`DELETE FROM ${SEEN} WHERE stamp < ?`).run(seenCutoff);
+    if (seenCutoff) {
+      const prev = ctx.q('SELECT value FROM control_state WHERE key = ?').get(SEEN_CUTOFF_KEY);
+      if (!prev || String(prev.value) < seenCutoff) {
+        db.prepare(`DELETE FROM ${SEEN} WHERE stamp < ?`).run(seenCutoff);
+        ctx.q(`INSERT INTO control_state (key, value, updated_at)
+               VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+          .run(SEEN_CUTOFF_KEY, seenCutoff);
+      }
+    }
 
     // Приём не порождает исходящих изменений — см. заголовок.
     db.prepare('DELETE FROM sync_journal WHERE seq > ?').run(journalFrom);
@@ -136,6 +157,12 @@ export function applyBatch(db, records, { self, peer = null } = {}) {
 // чего в базе нет.
 function applyGuarded(db, rec, stats, ctx) {
   const before = { ...stats };
+  // ИМЯ МЕТКИ ФИКСИРОВАННОЕ ('rec'), и это верно ровно пока эти метки не
+  // ВКЛАДЫВАЮТСЯ одна в другую: одна запись — одна метка, снятая до
+  // следующей (RELEASE в обеих ветвях ниже), и releasePending зовёт эту функцию
+  // последовательно, а не изнутри applyOne. Появись вложенность — внутренний
+  // ROLLBACK TO rec откатил бы и ВНЕШНЮЮ запись вместе со своей, молча;
+  // тогда имя придётся сделать счётчиком глубины, а не константой.
   ctx.q('SAVEPOINT rec').run();
   try {
     applyOne(db, rec, stats, ctx);
@@ -144,6 +171,14 @@ function applyGuarded(db, rec, stats, ctx) {
     ctx.q('ROLLBACK TO rec').run();
     ctx.q('RELEASE rec').run();
     Object.assign(stats, before);
+    // ПРОПУСКАЕТСЯ ТОЛЬКО ОТКАЗ БАЗЫ (ревью Задачи 5b). Обещание
+    // этой функции — «одна кривая ЗАПИСЬ не отменяет порцию», а не «любая
+    // ошибка здесь не важна». TypeError от опечатки в applyOne или RangeError из
+    // чужой библиотеки — ошибка КОДА, и записав её в «запись отвергнута»,
+    // мы получили бы тихо пустую синхронизацию на всей сети: каждая запись
+    // «отказана», счётчики растут, данные не едут, и никто не узнает об этом,
+    // пока владелец не спросит, почему филиал пустой.
+    if (!(e instanceof SqliteError)) throw e;
     stats.skipped++;
     // Именно предупреждением, а не молчанием: запись, которую база не берёт,
     // будет приезжать снова и снова, и знать об этом должен человек.

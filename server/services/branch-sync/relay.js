@@ -6,6 +6,11 @@ import { readPairing, writePairing, relayEnabled } from './pairing.js';
 import { ensureSyncGroup } from './sync-group.js';
 import { readIdentity } from './identity.js';
 import { relayIdFor, sealPayload, openPayload } from './relay-crypto.js';
+// BRANCH_RECORDS_V1 (Задача 7) — журнал изменений ездит тем же каналом, что и справочник.
+import { buildBatch, markSent } from './journal.js';
+import { applyBatch } from './records.js';
+// Резервная копия перед применением чужих записей — то же правило, что у справочника.
+import { createBackup } from '../backup.js';
 
 // BRANCH_SYNC_RELAY_V1 — МАРШРУТ Б: справочник едет через сервер поставщика,
 // который не может его прочитать.
@@ -460,6 +465,475 @@ export async function fetchCatalogue(dataDir, {
   };
 }
 
+// ===========================================================================
+// BRANCH_RECORDS_V1 (Задача 7) — ЖУРНАЛЫ ФИЛИАЛОВ ПО ТОМУ ЖЕ КАНАЛУ.
+//
+// Всё, что выше, возит СПРАВОЧНИК: один блоб на группу, пишет его главная
+// клиника, читают остальные. Записи так возить нельзя — их пишут ВСЕ узлы
+// сразу, и общий адрес означал бы, что филиалы затирают выгрузки друг друга.
+// Отсюда адрес НА УЗЕЛ (Задача 6, relayIdFor(ключ, буква)) и область токена на
+// весь алфавит (Задача 7a), уже выкаченная на живую панель поставщика.
+//
+// ОДИН БЛОБ НА УЗЕЛ, А НЕ НА ПАРУ. Порции по построению разные для разных
+// соседей (у каждого свой sent_seq), поэтому напрашивался блоб на пару
+// «отправитель → получатель». Это N² адресов, N² выгрузок в час и N² строк
+// удержания у поставщика: сеть из восьми зданий — 56 выгрузок в час вместо 8.
+// Поэтому узел выкладывает ОДИН блоб со срезами для всех соседей:
+//
+//   { v: 1, from: 'B', generated_at: '…', batches: { A: {records, upto}, C: {…} } }
+//
+// Каждый сосед читает СВОЙ срез. Деление здесь — про то, кому какие записи
+// АДРЕСОВАНЫ, а не про секреты внутри клиники: ключ группы один на всех, и
+// весь блоб виден каждому соседу в любом случае.  Пустой срез не кладётся
+// вовсе — сосед, которому нечего слать, не должен раздувать блоб.
+//
+// ЧТО ЗДЕСЬ НЕ ХУЖЕ СПРАВОЧНИКА. Тот же sealPayload тем же ключом группы:
+// поставщик видит длину и ритм выгрузок, и больше ничего. Согласие владельца —
+// то же самое (relayEnabled), и это принципиально: по этому каналу теперь едут
+// ПАЦИЕНТЫ, а не прайс, и включать его молча нельзя.
+//
+// РОЛИ ЗДЕСЬ НЕТ. Справочник раздаёт главная клиника — записи пишут все, и
+// главная клиника в этом обмене такой же узел, как любой филиал. Ветки по роли
+// в этих двух функциях нет намеренно: она означала бы, что пациент, заведённый
+// в филиале, не доедет до главной.
+
+// Порция журнала на одну выгрузку — то же число, что у buildBatch по умолчанию.
+const JOURNAL_LIMIT = 5000;
+// Ниже этого порция не ужимается. Если и сотня записей не влезает в предел
+// блоба, дело не в размере страницы, а в одной чудовищной строке — её надо
+// увидеть отказом, а не резать страницу до нуля бесконечным делением.
+const MIN_JOURNAL_LIMIT = 100;
+
+// Запись о последней выгрузке ЖУРНАЛА — отдельно от LAST_PUBLISH_KEY
+// (справочник): у них разные адреса, разное содержимое и разные поводы
+// повторить. Экспортирован по той же причине, что и тот: перевыпуск ключа
+// группы обязан её стереть, иначе keep-alive считает свежей копию по адресу,
+// которого больше нет.
+// ПРИЧИНЫ, КОТОРЫЕ НЕ НАДО ПОКАЗЫВАТЬ И НЕ НАДО ЛОГИРОВАТЬ.
+//
+// Все четыре значат одно: у этой установки канала для журналов нет и не
+// должно быть — одиночная клиника (нет соседей), несвязанная установка,
+// выключенный владельцем канал или пара без ключа группы (Маршрут А без
+// Маршрута Б). Ни одна из них не поломка, а строка в журнале каждый час
+// превращает журнал в шум, в котором настоящую поломку уже не видно.
+export const QUIET_JOURNAL_REASONS = new Set([
+  'relay_no_pairing', 'relay_disabled', 'relay_no_peers', 'relay_no_key',
+]);
+
+export const LAST_JOURNAL_KEY = 'branch_sync_relay_journal';
+
+/** Последняя удачная выгрузка журнала: {at, bytes, peers} — либо null. */
+export function readLastJournal(db) {
+  const raw = getState(db, LAST_JOURNAL_KEY);
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+  } catch { return null; }
+}
+
+/**
+ * Буквы СОСЕДЕЙ — все узлы группы, кроме этого.
+ *
+ * `letter IS NOT NULL AND letter <> ''` — фильтр обязательный, а не
+ * косметический (тот же, что в ensureBranchToken и в списке сети справочника):
+ * строки без буквы в этой таблице обычны — филиалы заводили и до появления
+ * букв, — а пустая буква дала бы адрес СПРАВОЧНИКА (relayIdFor без узла), то
+ * есть узел молча выгружал бы журнал поверх справочника главной клиники.
+ *
+ * DISTINCT и своя буква вон: обе ошибки стоили бы одинаково дорого — выгрузка
+ * самому себе и двойное применение одной и той же порции.
+ *
+ * ОТКУДА У ФИЛИАЛА БЕРУТСЯ СОСЕДИ. Свою строку филиал заводит сам при
+ * активации (identity.js becomeSecondary), строка главной приезжает засеянной
+ * (миграция 080, буква A), а остальные — списком сети в справочнике
+ * (catalogue.js roster). Без этого списка филиал B знал бы только главную и
+ * никогда не прочитал бы журнал филиала C.
+ */
+export function journalPeers(db, self) {
+  const me = String(self == null ? '' : self).trim().toUpperCase();
+  let rows;
+  try {
+    rows = db.prepare(
+      "SELECT letter FROM branches WHERE letter IS NOT NULL AND letter <> '' ORDER BY letter"
+    ).all();
+  } catch (e) {
+    console.warn('[branch-sync] could not list the group letters:', e && e.message);
+    return [];
+  }
+  const out = [];
+  for (const row of rows) {
+    const letter = String(row.letter || '').trim().toUpperCase();
+    if (!letter || letter === me || out.includes(letter)) continue;
+    out.push(letter);
+  }
+  return out;
+}
+
+/** Буква ЭТОГО узла. Нет служебной записи — нет и обмена: подписаться нечем. */
+function selfLetter(db) {
+  try {
+    const letter = readIdentity(db).letter;
+    return letter ? String(letter).trim().toUpperCase() : null;
+  } catch (e) {
+    console.warn('[branch-sync] this install does not know which branch it is:', e && e.message);
+    return null;
+  }
+}
+
+/**
+ * Общие для обеих функций проверки: пара, согласие владельца, ключ группы,
+ * учётка. Одним местом, потому что разъехавшись, выгрузка и загрузка отвечали
+ * бы разными причинами на одно и то же состояние установки.
+ *
+ * @returns {{ok:true, pairing:object, self:string, token:string}|{ok:false, reason:string}}
+ */
+function journalContext(db, dataDir, self) {
+  const pairing = readPairing(dataDir);
+  // Установка вне группы журналами не обменивается: соседей нет по построению.
+  if (!pairing) return { ok: false, reason: 'relay_no_pairing' };
+  if (!relayEnabled(pairing)) return { ok: false, reason: 'relay_disabled' };
+
+  const me = (self ? String(self).trim().toUpperCase() : '') || selfLetter(db);
+  if (!me) return { ok: false, reason: 'relay_no_identity' };
+  // Ключ группы — он же адрес: без него канала нет вовсе (установка, связанная
+  // ключом до Маршрута Б). Маршрут А при этом работает — это не поломка.
+  if (!relayIdFor(pairing.group_key, me)) return { ok: false, reason: 'relay_no_key' };
+
+  const token = relayCredential(dataDir, pairing);
+  if (!token) {
+    // Те же два разных лекарства, что у справочника: главной клинике —
+    // «проверьте активацию», филиалу — «возьмите новый ключ подключения».
+    return { ok: false, reason: pairing.role === 'main' ? 'relay_not_enrolled' : 'relay_branch_no_token' };
+  }
+  return { ok: true, pairing, self: me, token };
+}
+
+/** 401/403 — разный совет у главной клиники и у филиала (см. fetchCatalogue). */
+const unauthorizedReason = (pairing) => (pairing.role === 'main' ? 'relay_unauthorized' : 'relay_branch_revoked');
+
+/**
+ * ЧТО ЗНАЧИТ ЗДЕСЬ «ОТДАНО СОСЕДУ» — И ЧЕГО ЭТО НЕ ЗНАЧИТ.
+ *
+ * У Маршрута А (филиал отдаёт порцию прямо соседу по HTTP) ответ 2xx означает
+ * «сосед ПРИНЯЛ И ПРИМЕНИЛ», и markSent после него честен. У релея 2xx означает
+ * только «блоб лежит на сервере». Блоб ОДИН на узел, и следующая выгрузка его
+ * ЗАМЕЩАЕТ, поэтому сосед, не забравший его до следующей выгрузки, содержимое
+ * пропускает, а отправитель отметку уже сдвинул.
+ *
+ * ЭТО ОГРАНИЧЕНИЕ, А НЕ ПОДРАЗУМЕВАЕМОЕ СВОЙСТВО, и оно записано здесь потому,
+ * что стоит дорого: узел, выключенный на ночь, не получит того, что соседи
+ * выложили за эту ночь. Обмен рассчитан на то, что КАЖДЫЙ узел забирает чужие
+ * блобы не реже, чем соседи их выкладывают, — то есть на общий часовой ритм
+ * (schedule-pull.js и scheduleRelayPublish, оба раз в час).
+ *
+ * ПОЧЕМУ НЕ ПОЧИНЕНО ЗДЕСЬ. Лечится это квитанциями: срез несёт отпечаток
+ * содержимого, сосед кладёт применённый отпечаток в СВОЙ блоб, и sent_seq
+ * двигается только по нему. Пробная сборка показала, что одних квитанций мало:
+ * защита местной неотправленной правки (records.js localUnshippedCols) читает
+ * тот же sent_seq, и на задержке подтверждения оба узла начинают защищать свои
+ * строки друг от друга и не сходятся вовсе. Правильное решение разделяет два
+ * горизонта — «выложено» (снимает защиту) и «подтверждено» (двигает журнал), —
+ * то есть требует новой колонки в sync_peers и правки records.js. Это отдельная
+ * задача с отдельным разбором, а не примечание к транспорту.
+ */
+
+/**
+ * Выложить свой журнал на сервер поставщика — ОДИН блоб со срезами для всех
+ * соседей. Сторона ЛЮБОГО узла.
+ *
+ * НИКОГДА не бросает. `markSent` вызывается ТОЛЬКО после ответа 2xx и отдельно
+ * на каждого соседа: не долетевшая до сервера порция обязана уехать снова, а
+ * сдвинутая заранее отметка это запретила бы навсегда.
+ *
+ * ПУСТОЙ СРЕЗ ТОЖЕ ОТМЕЧАЕТСЯ, и это не мелочь. Соседу, которому нечего слать,
+ * ничего и не кладётся в блоб, но отметка ему нужна: без неё узел, у которого
+ * на момент первой выгрузки не было ни строки, остаётся для соседа ХОЛОДНЫМ
+ * навсегда, и первая же его правка уезжает не правкой, а ЗАСЕВОМ — снимком
+ * всей строки под авторством '*', затирающим у соседа его собственные колонки.
+ * Поймано сквозным тестом: адрес, исправленный в C, возвращался туда пустым.
+ *
+ * РАЗМЕР. Блоб больше предела не режется по строкам — уменьшается СТРАНИЦА
+ * (limit), и порция собирается заново, вдвое меньше, до MIN_JOURNAL_LIMIT.
+ * Холодный засев большой клиники так и доезжает: страницами, по одной за
+ * выгрузку, то есть за несколько часовых прогонов. Это осознанная цена —
+ * альтернативой был бы блоб на десятки мегабайт, который узкий канал филиала
+ * не вытянет ни разу.
+ *
+ * ПОВОД ВЫГРУЗИТЬ. Отпечаток содержимого, как у справочника, здесь не нужен:
+ * журнал сам знает, что нового, — buildBatch отдаёт только то, что выше
+ * sent_seq. Непустая порция = новое содержимое. Пустая — выгружаем всё равно,
+ * но не чаще REFRESH_MS: поставщик сметает блобы, к которым не обращались
+ * (удержание), и группа, работающая раз в полгода, не должна однажды
+ * обнаружить, что её адреса больше нет.
+ *
+ * reason: relay_no_pairing | relay_disabled | relay_no_identity | relay_no_key |
+ *   relay_not_enrolled | relay_branch_no_token | relay_no_peers | relay_offline |
+ *   relay_unauthorized | relay_branch_revoked | relay_too_large | relay_server_error
+ *
+ * @returns {Promise<{ok:true, at:string, bytes:number, peers:object}
+ *   |{ok:true, skipped:true, peers:object}|{ok:false, reason:string}>}
+ */
+export async function publishJournal(db, dataDir, {
+  fetchImpl = globalThis.fetch,
+  timeoutMs = UPLOAD_TIMEOUT_MS,
+  maxBlobBytes = MAX_BLOB_BYTES,
+  env = process.env,
+  now = () => new Date(),
+  limit = JOURNAL_LIMIT,
+  self = null,
+} = {}) {
+  const ctx = journalContext(db, dataDir, self);
+  if (!ctx.ok) return ctx;
+
+  const peers = journalPeers(db, ctx.self);
+  // Одиночная клиника и клиника, где филиалы ещё не заведены: выкладывать
+  // некому. Это не отказ канала, поэтому вызывающий такую причину не показывает.
+  if (!peers.length) return { ok: false, reason: 'relay_no_peers' };
+
+  let page = Math.max(MIN_JOURNAL_LIMIT, Number(limit) || JOURNAL_LIMIT);
+  let built;
+  let carrying;
+  let sealed;
+  for (;;) {
+    built = [];
+    carrying = 0;
+    const batches = {};
+    for (const peer of peers) {
+      let batch;
+      try {
+        batch = buildBatch(db, { self: ctx.self, peer, limit: page });
+      } catch (e) {
+        // Один негодный сосед не отменяет выгрузку остальным: его срез просто
+        // не поедет, и это видно в журнале сервера.
+        console.warn('[branch-sync] could not build the journal batch for', peer, ':', e && e.message);
+        continue;
+      }
+      built.push({ peer, batch });
+      if (!batch.records.length) continue;   // пустой срез в блоб не кладётся
+      carrying++;
+      batches[peer] = { records: batch.records, upto: batch.upto };
+    }
+    // generated_at — как у справочника: возраст копии виден получателю.
+    sealed = sealPayload(ctx.pairing.group_key, {
+      v: 1, from: ctx.self, generated_at: now().toISOString(), batches,
+    });
+    if (!sealed) return { ok: false, reason: 'relay_no_key' };
+    if (sealed.length <= maxBlobBytes) break;
+    if (page <= MIN_JOURNAL_LIMIT) return { ok: false, reason: 'relay_too_large' };
+    page = Math.max(MIN_JOURNAL_LIMIT, Math.floor(page / 2));
+  }
+
+  if (!carrying) {
+    const last = readLastJournal(db);
+    const at = last && last.at ? Date.parse(last.at) : NaN;
+    // Свежая копия и нечего сказать — молчим. Иначе выгружаем пустой блоб:
+    // это и есть keep-alive против удержания на той стороне.
+    if (Number.isFinite(at) && (now().getTime() - at) < REFRESH_MS) {
+      return { ok: true, skipped: true, peers: {} };
+    }
+  }
+
+  let res;
+  try {
+    res = await fetchImpl(relayUrl(relayIdFor(ctx.pairing.group_key, ctx.self), env), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/octet-stream', Authorization: `Bearer ${ctx.token}` },
+      body: sealed,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch {
+    // Офлайновая клиника — норма, а не поломка: порция уедет в следующий раз,
+    // и уедет ЦЕЛИКОМ, потому что markSent ниже не выполнился.
+    return { ok: false, reason: 'relay_offline' };
+  }
+
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) return { ok: false, reason: unauthorizedReason(ctx.pairing) };
+    if (res.status === 413) return { ok: false, reason: 'relay_too_large' };
+    return { ok: false, reason: 'relay_server_error' };
+  }
+
+  // ТОЛЬКО ТЕПЕРЬ. Блоб на сервере — см. оговорку про смысл этого слова в
+  // абзаце над функцией. Каждому соседу своя отметка: срезы лежат в одном
+  // блобе, но в журнале у каждого свой sent_seq, и общая отметка потеряла бы
+  // разницу.
+  //
+  // МЕТКИ РАЗНЫХ СРЕЗОВ. buildBatch читает часы из базы и НЕ пишет их, поэтому
+  // порции всем соседям чеканятся от ОДНОГО состояния часов: одна и та же
+  // строка может уехать к A с меткой …-0003, а к C с …-0004. Значения при этом
+  // одинаковы (снимок один), расходится только счётчик внутри миллисекунды, и
+  // дальше он никуда не распространяется — принятая запись в журнал не
+  // возвращается (applyBatch чистит свой хвост). Приближение названо здесь, а
+  // не спрятано: точное решение — писать часы между срезами, но тогда сосед,
+  // оказавшийся вторым в списке, получал бы метки НОВЕЕ первого без всякой на
+  // то причины.
+  const applied = {};
+  for (const { peer, batch } of built) {
+    try {
+      markSent(db, peer, batch.upto, batch.clock, batch.seed);
+      if (batch.records.length) applied[peer] = batch.records.length;
+    } catch (e) {
+      // Порция доставлена, отметка не сдвинулась: сосед получит её ещё раз.
+      // Повтор безвреден (приём идемпотентен), молчание — нет.
+      console.warn('[branch-sync] journal delivered but not marked sent for', peer, ':', e && e.message);
+    }
+  }
+
+  const at = now().toISOString();
+  try { putState(db, LAST_JOURNAL_KEY, JSON.stringify({ at, bytes: sealed.length, peers: applied })); }
+  catch (e) {
+    // Худшее следствие — лишняя выгрузка через час. Ради него уже
+    // состоявшуюся выгрузку неудачной не объявляют.
+    console.warn('[branch-sync] could not record the journal publish:', e && e.message);
+  }
+  return { ok: true, at, bytes: sealed.length, peers: applied };
+}
+
+/**
+ * Форма приехавшего журнала. Проверяется так же придирчиво, как у справочника,
+ * и по той же причине: тег GCM доказал происхождение блоба, но не его смысл —
+ * блоб мог остаться от прошлой версии, от другой группы или от сбоя сборки.
+ *
+ * @returns {Array|null} записи для нас; [] — среза нет (норма); null — форма не та
+ */
+function journalSlice(payload, peer, self) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  if (payload.v !== 1) return null;
+  // from — подпись отправителя ВНУТРИ блоба. Не сойдясь с адресом, по которому
+  // мы его взяли, она означает перепутанный адрес или чужую выгрузку; применять
+  // такое нельзя: origin решает, чью защиту снимать при слиянии.
+  if (typeof payload.from !== 'string' || payload.from.trim().toUpperCase() !== peer) return null;
+  const batches = payload.batches;
+  if (!batches || typeof batches !== 'object' || Array.isArray(batches)) return null;
+  const slice = batches[self];
+  if (slice === undefined || slice === null) return [];
+  // Массив — форма попроще, объект {records, upto} — та, что кладёт
+  // publishJournal. Принимаются обе: узлы в сети обновляются не одновременно.
+  if (Array.isArray(slice)) return slice;
+  if (typeof slice === 'object' && Array.isArray(slice.records)) return slice.records;
+  return null;
+}
+
+/** Скачать и распечатать журнал ОДНОГО соседа. Ничего не пишет в базу. */
+async function downloadJournal(ctx, peer, { fetchImpl, timeoutMs, maxBlobBytes, env }) {
+  const relayId = relayIdFor(ctx.pairing.group_key, peer);
+  if (!relayId) return { ok: false, reason: 'relay_no_key' };
+
+  let res;
+  try {
+    res = await fetchImpl(relayUrl(relayId, env), {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${ctx.token}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch {
+    return { ok: false, reason: 'relay_offline' };
+  }
+
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) return { ok: false, reason: unauthorizedReason(ctx.pairing) };
+    // САМЫЙ ОБЫЧНЫЙ СЛУЧАЙ, и он не ошибка: сосед ещё ни разу не выгружался
+    // (только что заведён, выключен, без интернета). Остальные соседи от этого
+    // не страдают — потому эта причина и возвращается ПО СОСЕДУ, а не на обмен.
+    if (res.status === 404) return { ok: false, reason: 'relay_empty' };
+    return { ok: false, reason: 'relay_server_error' };
+  }
+
+  const bytes = await readBoundedBytes(res, maxBlobBytes).catch(() => null);
+  if (bytes === null) return { ok: false, reason: 'relay_too_large' };
+  if (!bytes.length) return { ok: false, reason: 'relay_empty' };
+
+  const opened = openPayload(ctx.pairing.group_key, bytes);
+  if (!opened.ok) {
+    return { ok: false, reason: opened.reason === 'bad_key' ? 'relay_bad_key' : 'relay_bad_response' };
+  }
+  const records = journalSlice(opened.payload, peer, ctx.self);
+  if (records === null) return { ok: false, reason: 'relay_bad_response' };
+  return { ok: true, records };
+}
+
+/**
+ * Забрать журналы соседей и применить их. Сторона ЛЮБОГО узла.
+ *
+ * НИКОГДА не бросает и НИКОГДА не отменяет обмен целиком из-за одного соседа:
+ * ответ — таблица «сосед → что вышло». Молчащий сосед (`relay_empty`) не мешает
+ * остальным, и это главное свойство этой функции: сеть из пяти зданий, где
+ * одно выключено, обязана продолжать работать вчетвером.
+ *
+ * РЕЗЕРВНАЯ КОПИЯ — ровно как у справочника, но ТОЛЬКО когда есть что
+ * применять: снимать копию базы на каждый пустой часовой прогон значило бы
+ * заваливать диск клиники копиями ради ничего. Снимается ОДИН раз на обмен,
+ * перед первым применением; не удалось — не применяем ничего.
+ *
+ * @returns {Promise<{ok:true, peers:object}|{ok:false, reason:string, peers:object}>}
+ */
+export async function fetchJournals(db, dataDir, {
+  fetchImpl = globalThis.fetch,
+  timeoutMs = DOWNLOAD_TIMEOUT_MS,
+  maxBlobBytes = MAX_BLOB_BYTES,
+  env = process.env,
+  self = null,
+  peers = null,
+  applyImpl = applyBatch,
+  backupImpl = createBackup,
+} = {}) {
+  const ctx = journalContext(db, dataDir, self);
+  if (!ctx.ok) return { ...ctx, peers: {} };
+
+  const list = Array.isArray(peers) && peers.length
+    ? peers.map((p) => String(p == null ? '' : p).trim().toUpperCase()).filter((p) => p && p !== ctx.self)
+    : journalPeers(db, ctx.self);
+  if (!list.length) return { ok: false, reason: 'relay_no_peers', peers: {} };
+
+  const out = {};
+  let backed = false;
+  for (const peer of list) {
+    const got = await downloadJournal(ctx, peer, { fetchImpl, timeoutMs, maxBlobBytes, env });
+    if (!got.ok) { out[peer] = { reason: got.reason }; continue; }
+    if (!got.records.length) {
+      // Блоб есть, среза для нас в нём нет: сосед выгрузился, но нам ничего не
+      // адресовал. Это успех с нулём работы, а не отказ.
+      out[peer] = { applied: 0, released: 0, skipped: 0, protected: 0, deferred: 0, deleted: 0 };
+      continue;
+    }
+    if (!backed) {
+      try {
+        await backupImpl(db, dataDir, 'safety');
+        backed = true;
+      } catch (e) {
+        // Без копии не применяем — то же правило, что у справочника, и здесь
+        // оно весомее: справочник можно привезти заново, чужие записи — нет.
+        console.warn('[branch-sync] refusing to apply records without a backup:', e && e.message);
+        out[peer] = { reason: 'backup_failed' };
+        break;
+      }
+    }
+    try {
+      out[peer] = applyImpl(db, got.records, { self: ctx.self, peer });
+    } catch (e) {
+      // Транзакция приёма откатилась целиком (её держит applyBatch) — база
+      // ровно такая, какой была, и порция приедет снова.
+      console.warn('[branch-sync] could not apply the journal from', peer, ':', e && e.message);
+      out[peer] = { reason: 'records_failed' };
+    }
+  }
+  return { ok: true, peers: out };
+}
+
+/**
+ * Обмен целиком: выложить своё, забрать чужое. Порядок важен — сначала
+ * выгрузка: сосед, который синхронизируется через минуту, должен увидеть уже
+ * сегодняшнее состояние, а не вчерашнее.
+ */
+export async function exchangeJournals(db, dataDir, opts = {}) {
+  return {
+    published: await publishJournal(db, dataDir, opts),
+    fetched: await fetchJournals(db, dataDir, opts),
+  };
+}
+
+
 /**
  * МОЖЕТ ЛИ эта установка выписать учётку резервного канала — да/нет, без сети.
  *
@@ -686,19 +1160,46 @@ function adoptRelayForExistingBranches(db, dataDir) {
 
 export function scheduleRelayPublish(db, dataDir, opts = {}) {
   const { initialDelayMs = INITIAL_DELAY_MS, intervalMs = INTERVAL_MS, ...runOpts } = opts;
-  const run = () => {
+  const run = async () => {
     adoptRelayForExistingBranches(db, dataDir);
-    maybePublish(db, dataDir, runOpts)
-      .then((r) => {
-        if (r && r.ok === false && r.reason !== 'relay_disabled' && r.reason !== 'relay_no_key') {
-          console.warn('[branch-sync] relay publish did not happen:', r.reason);
-        }
-      })
-      .catch((e) => console.warn('[branch-sync] scheduled relay publish failed:', e && e.message));
+    try {
+      const r = await maybePublish(db, dataDir, runOpts);
+      if (r && r.ok === false && r.reason !== 'relay_disabled' && r.reason !== 'relay_no_key') {
+        console.warn('[branch-sync] relay publish did not happen:', r.reason);
+      }
+    } catch (e) {
+      console.warn('[branch-sync] scheduled relay publish failed:', e && e.message);
+    }
+
+    // BRANCH_RECORDS_V1 (Задача 7) — обмен ЗАПИСЯМИ на ГЛАВНОЙ клинике, и только на ней.
+    //
+    // НОВОГО РАСПИСАНИЯ НЕ ЗАВОДИТСЯ (правило владельца: «по запросу и
+    // постоянно раз в час»). Филиалы меняются записями внутри часового
+    // runBranchSync (schedule-pull.js), но тот часовой прогон включается только
+    // у ПОДКЛЮЧЁННОГО филиала (isSecondary): главной клинике справочник
+    // забирать не у кого. Без этих двух строк пациент, заведённый в филиале,
+    // появлялся бы в главной только после ручного нажатия «Синхронизация».
+    //
+    // У филиала этот же обмен делает runBranchSync, поэтому здесь проверка
+    // роли: два разных таймера, делающих одно и то же, — это лишний трафик
+    // и лишний вопрос «почему выгрузка дважды» в журнале сервера.
+    try {
+      if (readPairing(dataDir)?.role !== 'main') return;
+      const ex = await exchangeJournals(db, dataDir, runOpts);
+      const pub = ex.published;
+      if (pub && pub.ok === false && !QUIET_JOURNAL_REASONS.has(pub.reason)) {
+        console.warn('[branch-sync] journal publish did not happen:', pub.reason);
+      }
+    } catch (e) {
+      console.warn('[branch-sync] scheduled journal exchange failed:', e && e.message);
+    }
   };
-  const initial = setTimeout(run, initialDelayMs);
+  // Таймер не ждёт обещаний: run свои ошибки ловит сам, но страховка
+  // от непойманного отказа стоит одной строки, а уронить может сервер клиники.
+  const tick = () => { run().catch((e) => console.warn('[branch-sync] relay tick failed:', e && e.message)); };
+  const initial = setTimeout(tick, initialDelayMs);
   initial.unref();
-  const interval = setInterval(run, intervalMs);
+  const interval = setInterval(tick, intervalMs);
   interval.unref();
   return { initial, interval };
 }

@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { buildBatch, markSent, pruneJournal } from './journal.js';
+import { buildBatch, markSent, pruneJournal, SHIPPED, REFS, CODE_REFS } from './journal.js';
 import { parseStamp } from './hlc.js';
 import { applyBatch } from './records.js';
 
@@ -433,5 +433,52 @@ test('N4: I4 — испорченная дата в журнале не чека
   const rec = batch.records.find(r => r.tbl === 'patients');
   const stamp = parseStamp(rec.stamp);
   assert.equal(stamp.ms, 1234, 'NaN от Date.parse("garbage") не должен стать эпохой 1970 — используем часы вызова');
+  db.close();
+});
+
+// BRANCH_RECORDS_V1 (ревю Задачи 5b) — ТЕСТ ДРЕЙФА МЕЖДУ СПИСКОМ И ТРИГГЕРАМИ.
+//
+// Перечень отправляемых колонок живёт в ДВУХ местах сразу: в SHIPPED/REFS/
+// CODE_REFS (что уезжает) и в CASE-списке каждого *_journal_upd (что считается
+// изменённым). Разъехаться им нельзя, и обе половины дрейфа молчаливы:
+//
+//   * колонка в SHIPPED, но не в триггере — её правка не попадает в cols,
+//     значит не попадает в changed, значит приёмник её НЕ ПРИМЕНИТ — правка
+//     тихо остаётся в одном здании навсегда (правка ТОЛЬКО этой колонки
+//     вообще не даёт записи в журнале);
+//   * колонка в триггере, но не в SHIPPED — каждое её касание поднимает
+//     строку в сеть и «защищает» её от соседей ради поля, которое не едет.
+//
+// Списки читаются из sqlite_master — то есть из того, что ДЕЙСТВИТЕЛЬНО лежит
+// в базе после миграций, а не из текста файла 084: триггер, пересозданный
+// позднейшей миграцией, должен проверяться тоже.
+test('дрейф: список колонок в триггере и список отправляемых колонок — одно и то же', () => {
+  const db = fresh();
+  for (const tbl of Object.keys(SHIPPED)) {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?")
+      .get(tbl + '_journal_upd');
+    assert.ok(row && row.sql, tbl + ': триггер ' + tbl + '_journal_upd обязан существовать');
+
+    // NEW.<col> IS NOT OLD.<col> — единственная форма, которой триггер
+    // объявляет колонку изменённой. Стоит кому-то написать её иначе —
+    // этот тест упадёт, и это правильно: форма здесь — часть договора.
+    const inTrigger = new Set();
+    for (const m of row.sql.matchAll(/NEW\.(\w+)\s+IS\s+NOT\s+OLD\.(\w+)/gi)) {
+      assert.equal(m[1], m[2], tbl + ': сравниваются РАЗНЫЕ колонки — ' + m[1] + ' и ' + m[2]);
+      inTrigger.add(m[1]);
+    }
+
+    const shipped = new Set([
+      ...SHIPPED[tbl],
+      ...Object.keys(REFS[tbl] || {}),
+      ...Object.keys(CODE_REFS[tbl] || {}),
+    ]);
+    assert.deepEqual(
+      [...inTrigger].sort(),
+      [...shipped].sort(),
+      tbl + ': список в триггере разошёлся с SHIPPED ∪ REFS ∪ CODE_REFS — '
+        + 'колонка, добавленная в одно место и забытая в другом, теряет правки молча',
+    );
+  }
   db.close();
 });

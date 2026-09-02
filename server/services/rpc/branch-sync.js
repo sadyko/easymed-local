@@ -17,6 +17,9 @@ import { ensureSyncGroup, regenerateSyncGroup, readSyncGroup } from '../branch-s
 import {
   fetchCatalogue, publishCatalogue, readLastPublish, mintRelayToken, relayMintable, LAST_PUBLISH_KEY,
   createBranchOnControlPlane,   // BRANCH_SELF_SERVICE_V1
+  // BRANCH_RECORDS_V1 (Задача 7) — тот же канал, что и у справочника, только возит
+  // записи и в ОБЕ стороны: главная клиника здесь — узел, а не источник.
+  publishJournal, fetchJournals, QUIET_JOURNAL_REASONS, LAST_JOURNAL_KEY,
 } from '../branch-sync/relay.js';
 import { relayIdFor } from '../branch-sync/relay-crypto.js';
 
@@ -103,6 +106,16 @@ const REASONS = {
   relay_bad_key: 'Ключи филиалов не совпадают: копию с сервера расшифровать не удалось. Скорее всего, в главном филиале перевыпустили ключ — получите новый ключ подключения и введите его здесь.',
   relay_bad_response: 'Копия с сервера повреждена и не была применена.',
   relay_is_secondary: 'Перевыпустить ключ можно только в главном филиале — этот филиал получает ключ от него.',
+
+  // BRANCH_RECORDS_V1 (Задача 7) — обмен ЗАПИСЯМИ между филиалами. Первые три
+  // кода владелец в норме не видит (QUIET_JOURNAL_REASONS в relay.js): они значат
+  // «обмениваться не с кем», а не «сломалось». Фразы у них всё равно есть: код без
+  // фразы однажды всё равно доедет до экрана — в отчёте о диагностике, в журнале
+  // попыток, в поддержке, — и «не удалось выполнить действие» ничего не объяснит.
+  relay_no_pairing: 'Эта установка ни с кем не связана: ни главный филиал, ни подключённый. Записями меняться не с кем.',
+  relay_no_peers: 'В сети пока одно здание — обмениваться записями не с кем. Заведите филиал в главной клинике.',
+  relay_no_identity: 'Установка не знает, каким филиалом она является, поэтому подписать свои записи ей нечем. Восстановите базу из резервной копии или обратитесь в поддержку Easy-Med.',
+  records_failed: 'Записи соседнего филиала приехали, но не были применены — база осталась прежней. Они приедут снова при следующей синхронизации; если повторится — обратитесь в поддержку Easy-Med.',
 
   // BRANCH_IDENTITY_V1 — то же самое, что двумя абзацами выше, но со стороны
   // ПОДКЛЮЧЁННОГО филиала, и лекарство здесь другое. Он у поставщика не
@@ -523,6 +536,11 @@ export function branchSyncRegenerateKey(db, args, user) {
   // приёмнику), поэтому стирать здесь нечего — а вот журнал прошлых выгрузок
   // стереть надо: он говорит про блоб, до которого больше нет адреса.
   db.prepare('DELETE FROM control_state WHERE key = ?').run(LAST_PUBLISH_KEY);
+  // BRANCH_RECORDS_V1 (Задача 7) — и запись о выгрузке ЖУРНАЛА вместе с ней, по
+  // той же причине: адрес узла выводится из ключа группы, ключ сменился —
+  // значит, «выгружались час назад» теперь говорит про адрес, которого нет,
+  // и keep-alive молчал бы сутки после перевыпуска.
+  db.prepare('DELETE FROM control_state WHERE key = ?').run(LAST_JOURNAL_KEY);
   // BRANCH_IDENTITY_V1 — и учётки филиалов для резервного канала вместе с ним.
   // Они выписаны НА АДРЕС, который выводится из ключа группы (relay-crypto.js
   // relayIdFor), а ключ группы только что сменился: адреса, к которому они
@@ -977,11 +995,32 @@ let inFlight = null;
  * Забрать справочник и применить. Без пользователя и без проверки прав:
  * вызывается и часами, и RPC. Права — забота вызывающего.
  */
-export async function runBranchSync(db, {
+export async function runBranchSync(db, deps = {}) {
+  const dataDir = getDataDir();
+  // ПОРЯДОК ОБЯЗАТЕЛЕН: сначала справочник, потом записи. Справочник
+  // несёт УСЛУГИ, на которые ссылаются visit_services (CODE_REFS по коду
+  // услуги), и строка лабораторной очереди, приехавшая РАНЬШЕ своей
+  // услуги, ушла бы в ожидание и появилась бы на экране только через час.
+  const step = await syncCatalogue(db, dataDir, deps);
+  // ЗАПИСИ МЕНЯЮТСЯ ВСЕГДА И ОБЕИМИ СТОРОНАМИ, даже если справочник не
+  // приехал. Две причины, и обе из жизни: у ГЛАВНОЙ клиники шаг
+  // справочника всегда отвечает not_secondary (ей его забирать не у кого), а у
+  // филиала главная может быть просто выключена — но соседний филиал при этом
+  // работает, и его пациенты обязаны доехать.
+  const records = await syncRecords(db, dataDir, deps);
+  return finish(db, records ? { ...step.result, records } : step.result, step.message);
+}
+
+/**
+ * Шаг справочника — ровно то, что runBranchSync делал целиком до Фазы 2.
+ * Вынесен отдельно только ради одного: теперь его ранние выходы НЕ
+ * завершают синхронизацию — после них обязан случиться обмен записями.
+ *
+ * @returns {{result: object, message?: string}} в точности то, что раньше шло в finish()
+ */
+async function syncCatalogue(db, dataDir, {
   pullImpl = pullCatalogue, backupImpl = createBackup, relayImpl = fetchCatalogue,
 } = {}) {
-  const dataDir = getDataDir();
-
   let route = 'direct';
   let relayedAt = null;
   let pulled = await pullImpl(dataDir);
@@ -1004,11 +1043,11 @@ export async function runBranchSync(db, {
         // текст из нескольких предложений, и toLowerCase() на всей строке
         // ронял начало второго предложения в середину фразы.
         : `${reasonText(pulled.reason)} Резервный канал тоже не сработал: ${lowerFirst(reasonText(viaRelay.reason))}`;
-      return finish(db, { ok: false, reason: pulled.reason, relay_reason: viaRelay.reason }, message);
+      return { result: { ok: false, reason: pulled.reason, relay_reason: viaRelay.reason }, message };
     }
   }
 
-  if (!pulled.ok) return finish(db, { ok: false, reason: pulled.reason });
+  if (!pulled.ok) return { result: { ok: false, reason: pulled.reason } };
 
   // Холостой прогон — вне транзакции: он ничего не пишет по построению
   // (см. applyCatalogue, dryRun).
@@ -1017,12 +1056,12 @@ export async function runBranchSync(db, {
     preview = applyCatalogue(db, pulled.catalogue, { dryRun: true });
   } catch (e) {
     console.warn('[branch-sync] could not read the incoming catalogue:', e && e.message);
-    return finish(db, { ok: false, reason: 'bad_response' });
+    return { result: { ok: false, reason: 'bad_response' } };
   }
   if (!preview.changed) {
-    return finish(db, {
+    return { result: {
       ok: true, changed: 0, created: {}, updated: {}, adopted: {}, settings: false, route, relayed_at: relayedAt,
-    });
+    } };
   }
 
   try {
@@ -1031,7 +1070,7 @@ export async function runBranchSync(db, {
     // Без копии не применяем. Справочник — не та ценность, ради которой стоит
     // рисковать базой без пути назад.
     console.warn('[branch-sync] refusing to apply without a backup:', e && e.message);
-    return finish(db, { ok: false, reason: 'backup_failed' });
+    return { result: { ok: false, reason: 'backup_failed' } };
   }
 
   let summary;
@@ -1042,10 +1081,65 @@ export async function runBranchSync(db, {
     // шага 3 остаётся лежать: она не понадобилась, но её наличие и есть
     // доказательство, что откат был не единственным путём назад.
     console.warn('[branch-sync] apply failed, rolled back:', e && e.message);
-    return finish(db, { ok: false, reason: 'server_error' });
+    return { result: { ok: false, reason: 'server_error' } };
   }
 
-  return finish(db, { ok: true, ...summary, route, relayed_at: relayedAt });
+  return { result: { ok: true, ...summary, route, relayed_at: relayedAt } };
+}
+
+/**
+ * BRANCH_RECORDS_V1 (Задача 7) — шаг ЗАПИСЕЙ: выложить своё, забрать чужое.
+ *
+ * НИКОГДА НЕ БРОСАЕТ и никогда не срывает синхронизацию справочника: тот
+ * работал до Фазы 2 и обязан работать дальше, что бы ни случилось здесь.
+ *
+ * РЕЗЕРВНАЯ КОПИЯ — та же, что у справочника, и снимается внутри
+ * fetchJournals ровно тогда, когда есть что применять: копия базы на каждый
+ * пустой часовой прогон завалила бы диск клиники ради ничего.
+ *
+ * @returns {Promise<object|null>} null — рассказывать нечего (одиночная клиника,
+ *   выключенный канал): статус такой же установки не должен обрастать
+ *   полем, которое всегда пусто.
+ */
+async function syncRecords(db, dataDir, {
+  publishJournalImpl = publishJournal,
+  fetchJournalsImpl = fetchJournals,
+  backupImpl = createBackup,
+} = {}) {
+  const summary = { published: {}, fetched: {} };
+  let told = false;
+
+  try {
+    const pub = await publishJournalImpl(db, dataDir, {});
+    if (pub && pub.ok) {
+      summary.published = pub.peers || {};
+      if (Object.keys(summary.published).length) told = true;
+    } else if (pub && !QUIET_JOURNAL_REASONS.has(pub.reason)) {
+      summary.publish_reason = pub.reason;
+      told = true;
+    }
+  } catch (e) {
+    // Сюда попадает только ошибка КОДА: publishJournal по договору не бросает.
+    console.warn('[branch-sync] journal publish failed:', e && e.message);
+    summary.publish_reason = 'records_failed';
+    told = true;
+  }
+
+  try {
+    const got = await fetchJournalsImpl(db, dataDir, { backupImpl });
+    const peers = (got && got.peers) || {};
+    if (Object.keys(peers).length) { summary.fetched = peers; told = true; }
+    else if (got && !got.ok && !QUIET_JOURNAL_REASONS.has(got.reason)) {
+      summary.fetch_reason = got.reason;
+      told = true;
+    }
+  } catch (e) {
+    console.warn('[branch-sync] journal fetch failed:', e && e.message);
+    summary.fetch_reason = 'records_failed';
+    told = true;
+  }
+
+  return told ? summary : null;
 }
 
 // Итог попытки записывается всегда — и удачной, и нет. Экран должен уметь
