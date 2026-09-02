@@ -75,7 +75,10 @@ try {
 
     if (Test-Path $outPath) { Remove-Item $outPath -Force }
 
-    & $csc -nologo -optimize+ -platform:anycpu -target:exe `
+    # -target:winexe, а не exe: у установщика не должно мелькать чёрное окно
+    # консоли. Ссылки на WinForms — окно мастера; на Compression — распаковка.
+    & $csc -nologo -optimize+ -platform:anycpu -target:winexe `
+        -r:System.Windows.Forms.dll -r:System.Drawing.dll `
         -r:System.IO.Compression.dll -r:System.IO.Compression.FileSystem.dll `
         -resource:"$zipPath,payload.zip" `
         -out:"$outPath" "$src"
