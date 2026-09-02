@@ -55,7 +55,7 @@ const QUEUE_MODES = [
     ['doctor', 'Очередь к врачу'],
 ];
 
-const state = { floors: [], rooms: [], wards: [], bedsByWard: {}, doctors: [] };
+const state = { floors: [], rooms: [], wards: [], bedsByWard: {}, doctors: [], view: 'plan' };
 let containerRef = null;
 
 export async function renderRoomsSetup(container) {
@@ -106,42 +106,39 @@ function doctorsIn(roomId) {
 // -----------------------------------------------------------------------------
 // Список
 // -----------------------------------------------------------------------------
-function paint() {
-    clear(containerRef);
-
-    const rows = [
+function buildRows() {
+    return [
         ...state.rooms.map(r => {
             const docs = doctorsIn(r.id);
             return {
                 kind: 'room', id: r.id, name: r.name, code: r.code, type: r.room_type,
                 floor_id: r.floor_id, active: r.active !== false && r.active !== 0, raw: r,
-                meta: docs.length ? docs.map(d => d.full_name).join(', ') : '—',
+                docs,
+                meta: docs.length ? docs.map(d => d.full_name).join(', ') : '\u2014',
+                queueMode: r.queue_mode || 'none',
                 queue: (QUEUE_MODES.find(q => q[0] === (r.queue_mode || 'none')) || QUEUE_MODES[0])[1],
-                price: '—',
+                price: '\u2014',
             };
         }),
         ...state.wards.map(w => {
-            const beds = (state.bedsByWard[w.id] || []).length;
+            const beds = state.bedsByWard[w.id] || [];
             return {
                 kind: 'ward', id: w.id, name: w.name, code: w.code, type: w.type,
                 floor_id: w.floor_id, active: w.active !== false && w.active !== 0, raw: w,
-                meta: trf('коек: {n}', { n: beds }),
-                queue: '—',
+                beds,
+                meta: trf('\u043a\u043e\u0435\u043a: {n}', { n: beds.length }),
+                queue: '\u2014',
                 price: w.billing_mode === 'daily'
-                    ? trf('{price} / сут', { price: money(w.price_per_day) })
-                    : trf('{price} / час', { price: money(w.price_per_hour) }),
+                    ? trf('{price} / \u0441\u0443\u0442', { price: money(w.price_per_day) })
+                    : trf('{price} / \u0447\u0430\u0441', { price: money(w.price_per_hour) }),
             };
         }),
     ];
+}
 
-    const body = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } });
-    body.appendChild(floorsCard());
-
-    if (!rows.length) {
-        body.appendChild(h('div', { class: 'card', style: { padding: '28px', textAlign: 'center' } },
-            h('div', { class: 'muted' }, tr('Помещений пока нет. Начните с кабинета приёма или палаты.'))));
-    }
-
+// Этажи сверху вниз: меньший level — выше. Помещения без этажа собираются в
+// отдельную группу в конце, иначе их не видно вовсе.
+function groupByFloor(rows) {
     const byFloor = new Map();
     for (const r of rows) {
         const key = r.floor_id == null ? '' : String(r.floor_id);
@@ -153,56 +150,135 @@ function paint() {
         const fb = state.floors.find(f => String(f.id) === b);
         return (fa && fa.level != null ? fa.level : 999) - (fb && fb.level != null ? fb.level : 999);
     });
+    return { byFloor, order };
+}
+
+function paint() {
+    clear(containerRef);
+    const rows = buildRows();
+    const { byFloor, order } = groupByFloor(rows);
+
+    const body = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } });
+    body.appendChild(floorsCard());
+
+    if (!rows.length) {
+        body.appendChild(h('div', { class: 'card', style: { padding: '28px', textAlign: 'center' } },
+            h('div', { class: 'muted' }, tr('\u041f\u043e\u043c\u0435\u0449\u0435\u043d\u0438\u0439 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442. \u041d\u0430\u0447\u043d\u0438\u0442\u0435 \u0441 \u043a\u0430\u0431\u0438\u043d\u0435\u0442\u0430 \u043f\u0440\u0438\u0451\u043c\u0430 \u0438\u043b\u0438 \u043f\u0430\u043b\u0430\u0442\u044b.'))));
+    }
 
     for (const key of order) {
-        body.appendChild(h('div', { class: 'card rs-card' },
-            h('div', { class: 'rs-floor' }, floorName(key) || tr('Этаж не указан')),
-            h('div', { class: 'rs-tbl' },
-                h('div', { class: 'rs-row rs-row--head' },
-                    h('span', { class: 'rs-name' }, tr('Название')),
-                    h('span', { class: 'rs-type' }, tr('Тип')),
-                    h('span', { class: 'rs-meta' }, tr('Врачи / койки')),
-                    h('span', { class: 'rs-queue' }, tr('Очередь')),
-                    h('span', { class: 'rs-price' }, tr('Проживание')),
-                    h('span', { class: 'rs-act' }, ''),
-                ),
-                ...byFloor.get(key).map(rowEl),
-            )));
+        body.appendChild(state.view === 'plan'
+            ? planFloorCard(key, byFloor.get(key))
+            : listFloorCard(key, byFloor.get(key)));
     }
 
     containerRef.appendChild(h('div', { class: 'fade-in' },
         PageHead({
-            title: tr('Помещения'),
-            subtitle: tr('Этажи, кабинеты и палаты в одном разделе. Здесь же — очередь кабинета и врачи, которые в нём принимают.'),
-            right: h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openWizard() },
-                Icon('Plus', { size: 14 }), ' ', tr('Добавить помещение')),
+            title: tr('\u041f\u043e\u043c\u0435\u0449\u0435\u043d\u0438\u044f'),
+            subtitle: tr('\u042d\u0442\u0430\u0436\u0438, \u043a\u0430\u0431\u0438\u043d\u0435\u0442\u044b \u0438 \u043f\u0430\u043b\u0430\u0442\u044b \u0432 \u043e\u0434\u043d\u043e\u043c \u0440\u0430\u0437\u0434\u0435\u043b\u0435. \u0417\u0434\u0435\u0441\u044c \u0436\u0435 \u2014 \u043e\u0447\u0435\u0440\u0435\u0434\u044c \u043a\u0430\u0431\u0438\u043d\u0435\u0442\u0430 \u0438 \u0432\u0440\u0430\u0447\u0438, \u043a\u043e\u0442\u043e\u0440\u044b\u0435 \u0432 \u043d\u0451\u043c \u043f\u0440\u0438\u043d\u0438\u043c\u0430\u044e\u0442.'),
+            right: h('div', { style: { display: 'flex', gap: '10px', alignItems: 'center' } },
+                viewSwitch(),
+                h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openWizard() },
+                    Icon('Plus', { size: 14 }), ' ', tr('\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u043f\u043e\u043c\u0435\u0449\u0435\u043d\u0438\u0435'))),
         }),
         body,
     ));
+}
+
+function viewSwitch() {
+    const wrap = h('div', { class: 'segmented', role: 'group' });
+    for (const [id, label] of [['plan', '\u041f\u043b\u0430\u043d'], ['list', '\u0421\u043f\u0438\u0441\u043e\u043a']]) {
+        wrap.appendChild(h('button', {
+            type: 'button', class: state.view === id ? 'is-on' : '',
+            onclick: () => { state.view = id; paint(); },
+        }, tr(label)));
+    }
+    return wrap;
+}
+
+// ---- ПЛАН: этаж = полоса, помещение = плитка -------------------------------
+// Не чертёж по координатам: координат в схеме нет, и рисовать их с потолка
+// значило бы показывать неправду. Плитки дают то, ради чего в план смотрят —
+// сколько чего на этаже, кто где сидит и сколько коек занято.
+function planFloorCard(key, rows) {
+    const grid = h('div', { class: 'rs-plan' });
+    for (const r of rows) grid.appendChild(planTile(r));
+    return h('div', { class: 'card rs-card' },
+        h('div', { class: 'rs-floor rs-floor--row' },
+            h('span', null, floorName(key) || tr('\u042d\u0442\u0430\u0436 \u043d\u0435 \u0443\u043a\u0430\u0437\u0430\u043d')),
+            h('span', { class: 'muted', style: { fontWeight: '400', fontSize: '12.5px' } },
+                trf('\u043f\u043e\u043c\u0435\u0449\u0435\u043d\u0438\u0439: {n}', { n: rows.length }))),
+        grid);
+}
+
+function planTile(r) {
+    const t = TYPE_BY_KEY[r.type] || {};
+    const kids = [
+        h('div', { class: 'rs-tile__top' },
+            h('span', { class: 'rs-tile__ic' }, Icon(t.icon || 'Grid', { size: 15 })),
+            h('span', { class: 'rs-tile__code' }, r.code || '')),
+        h('div', { class: 'rs-tile__name', title: r.name || '' }, r.name || '\u2014'),
+        h('div', { class: 'rs-tile__type muted' }, t.label ? tr(t.label) : (r.type || '')),
+    ];
+    if (r.kind === 'ward') {
+        const dots = h('div', { class: 'rs-beds' });
+        for (const b of r.beds) {
+            dots.appendChild(h('span', {
+                class: 'rs-bed is-' + (b.status || 'free'),
+                title: (b.code || '') + ' \u00b7 ' + (b.status || 'free'),
+            }));
+        }
+        if (!r.beds.length) dots.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('\u043a\u043e\u0435\u043a \u043d\u0435\u0442')));
+        kids.push(dots);
+    } else {
+        kids.push(h('div', { class: 'rs-tile__foot muted' },
+            r.docs.length ? trf('\u0432\u0440\u0430\u0447\u0435\u0439: {n}', { n: r.docs.length }) : tr('\u0431\u0435\u0437 \u0432\u0440\u0430\u0447\u0430'),
+            r.queueMode !== 'none' ? h('span', { class: 'rs-qbadge' }, Icon('Clock', { size: 11 })) : null));
+    }
+    return h('button', {
+        class: 'rs-tile rs-tile--' + (r.kind === 'ward' ? 'ward' : 'room') + (r.active ? '' : ' is-off'),
+        type: 'button', onclick: () => openWizard(r),
+        title: r.active ? '' : tr('\u0432\u044b\u043a\u043b\u044e\u0447\u0435\u043d\u043e'),
+    }, ...kids);
+}
+
+// ---- СПИСОК ----------------------------------------------------------------
+function listFloorCard(key, rows) {
+    return h('div', { class: 'card rs-card' },
+        h('div', { class: 'rs-floor' }, floorName(key) || tr('\u042d\u0442\u0430\u0436 \u043d\u0435 \u0443\u043a\u0430\u0437\u0430\u043d')),
+        h('div', { class: 'rs-tbl' },
+            h('div', { class: 'rs-row rs-row--head' },
+                h('span', { class: 'rs-name' }, tr('\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435')),
+                h('span', { class: 'rs-type' }, tr('\u0422\u0438\u043f')),
+                h('span', { class: 'rs-meta' }, tr('\u0412\u0440\u0430\u0447\u0438 / \u043a\u043e\u0439\u043a\u0438')),
+                h('span', { class: 'rs-queue' }, tr('\u041e\u0447\u0435\u0440\u0435\u0434\u044c')),
+                h('span', { class: 'rs-price' }, tr('\u041f\u0440\u043e\u0436\u0438\u0432\u0430\u043d\u0438\u0435')),
+                h('span', { class: 'rs-act' }, ''),
+            ),
+            ...rows.map(rowEl),
+        ));
 }
 
 function rowEl(r) {
     const t = TYPE_BY_KEY[r.type] || {};
     return h('div', { class: 'rs-row' },
         h('span', { class: 'rs-name', title: r.name || '' },
-            r.name || '—',
-            r.code ? h('span', { class: 'muted', style: { fontWeight: '400' } }, ' · ' + r.code) : null,
-            r.active ? null : h('span', { class: 'muted', style: { fontWeight: '400' } }, ' · ', tr('выключено'))),
-        h('span', { class: 'rs-type' }, Tag(t.label ? tr(t.label) : (r.type || '—'), { kind: r.kind === 'ward' ? 'warn' : '' })),
-        h('span', { class: 'rs-meta muted', title: r.meta || '' }, r.meta || '—'),
-        h('span', { class: 'rs-queue muted' }, r.kind === 'room' ? tr(r.queue) : '—'),
-        h('span', { class: 'rs-price' }, r.price || '—'),
+            r.name || '\u2014',
+            r.code ? h('span', { class: 'muted', style: { fontWeight: '400' } }, ' \u00b7 ' + r.code) : null,
+            r.active ? null : h('span', { class: 'muted', style: { fontWeight: '400' } }, ' \u00b7 ', tr('\u0432\u044b\u043a\u043b\u044e\u0447\u0435\u043d\u043e'))),
+        h('span', { class: 'rs-type' }, Tag(t.label ? tr(t.label) : (r.type || '\u2014'), { kind: r.kind === 'ward' ? 'warn' : '' })),
+        h('span', { class: 'rs-meta muted', title: r.meta || '' }, r.meta || '\u2014'),
+        h('span', { class: 'rs-queue muted' }, r.kind === 'room' ? tr(r.queue) : '\u2014'),
+        h('span', { class: 'rs-price' }, r.price || '\u2014'),
         h('span', { class: 'rs-act' },
             r.kind === 'ward'
-                ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => openAddBeds(r.raw) }, tr('Койки'))
+                ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => openAddBeds(r.raw) }, tr('\u041a\u043e\u0439\u043a\u0438'))
                 : null,
-            h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => openWizard(r) }, tr('Изменить')),
+            h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => openWizard(r) }, tr('\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u044c')),
         ),
     );
 }
 
-// -----------------------------------------------------------------------------
-// Этажи
 // -----------------------------------------------------------------------------
 function floorsCard() {
     const list = h('div', { class: 'rs-tbl' });
@@ -239,6 +315,13 @@ function openFloor(row) {
     }), { hint: tr('Чем меньше число, тем выше этаж в списке.') }));
     m.bodyEl.appendChild(activeRow(d));
 
+    if (row) {
+        m.footEl.appendChild(h('button', {
+            class: 'btn btn-outline btn-sm rs-del', type: 'button',
+            onclick: () => confirmDelete('floor', { id: row.id, name: row.name }, m),
+        }, tr('Удалить')));
+        m.footEl.appendChild(h('div', { style: { flex: '1 1 auto' } }));
+    }
     m.footEl.appendChild(h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: m.close }, tr('Отмена')));
     const btn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: async () => {
         btn.disabled = true;
@@ -374,6 +457,15 @@ function openWizard(row) {
 
         m.bodyEl.appendChild(activeRow(d));
 
+        // ROOMS_DELETE_V1 — «Удалить» стоит слева, отдельно от «Сохранить»:
+        // это единственная необратимая кнопка в диалоге.
+        if (editing) {
+            m.footEl.appendChild(h('button', {
+                class: 'btn btn-outline btn-sm rs-del', type: 'button',
+                onclick: () => confirmDelete(t.kind === 'ward' ? 'ward' : 'room', row, m),
+            }, tr('Удалить')));
+            m.footEl.appendChild(h('div', { style: { flex: '1 1 auto' } }));
+        }
         if (!editing) m.footEl.appendChild(h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: step1 }, tr('Назад')));
         else m.footEl.appendChild(h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: m.close }, tr('Отмена')));
         const saveBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: async () => {
@@ -483,6 +575,32 @@ async function insertBeds(wardId, typeKey, from, count) {
     }
     const { error } = await supabase.from('beds').insert(rows);
     if (error) throw new Error(trf('Палата создана, но койки не добавились: {msg}', { msg: error.message }));
+}
+
+// ROOMS_DELETE_V1 — удаление подтверждается и НЕ обещает больше, чем сделает.
+// Сервер сам решает: если на помещении висят приёмы, талоны или
+// госпитализации, оно отключается, а не удаляется, и возвращает, что именно
+// его держит. Здесь мы честно показываем этот ответ, а не «удалено».
+function confirmDelete(kind, row, parent) {
+    const m = modalShell(tr('Удалить помещение?'));
+    m.bodyEl.appendChild(h('div', { style: { fontSize: '13.5px', lineHeight: '1.55' } },
+        trf('Удалить «{name}»?', { name: row.name || '' })));
+    m.bodyEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '10px', lineHeight: '1.5' } },
+        tr('Если на помещении есть приёмы, талоны или госпитализации, оно будет отключено, а не удалено — история останется целой.')));
+    m.footEl.appendChild(h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: m.close }, tr('Отмена')));
+    const btn = h('button', { class: 'btn btn-primary btn-sm rs-del', type: 'button', onclick: async () => {
+        btn.disabled = true;
+        try {
+            const { data, error } = await supabase.rpc('rooms_setup_delete', { kind, id: Number(row.id) });
+            if (error) throw new Error(error.message);
+            toast(data && data.deleted ? tr('Удалено.') : ((data && data.message) || tr('Отключено.')),
+                  data && data.deleted ? 'ok' : 'info');
+            m.close();
+            if (parent && parent.close) parent.close();
+            await load(); paint();
+        } catch (e) { toast((e && e.message) || tr('Не удалось удалить.'), 'fail'); btn.disabled = false; }
+    } }, tr('Удалить'));
+    m.footEl.appendChild(btn);
 }
 
 // «Койки» дозаводит СЛЕДУЮЩИЕ номера, не трогая существующие: занятая койка не

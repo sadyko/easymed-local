@@ -5795,4 +5795,16 @@ export const STRINGS = {
   // ROOMS_SETUP_V1 — карточки объединённого раздела в хабе настроек.
   "Этажи, кабинеты и палаты в одном экране · койки, цена, очередь, врачи": {"en":"Floors, rooms and wards on one screen - beds, price, queue, doctors","ru":"Этажи, кабинеты и палаты в одном экране · койки, цена, очередь, врачи","uz":"Qavatlar, xonalar va palatalar bitta ekranda - koyka, narx, navbat, shifokorlar"},
   "Завести палату сразу с койками и ценой": {"en":"Create a ward together with its beds and price","ru":"Завести палату сразу с койками и ценой","uz":"Palatani koykalari va narxi bilan birga yaratish"},
+
+  // ROOMS_DELETE_V1 / ROOMS_PLAN_V1 — удаление помещения и визуальный план этажа.
+  "Удалить помещение?": {"en":"Delete this room?","ru":"Удалить помещение?","uz":"Xona o'chirilsinmi?"},
+  "Удалить «{name}»?": {"en":"Delete '{name}'?","ru":"Удалить «{name}»?","uz":"'{name}' o'chirilsinmi?"},
+  "Если на помещении есть приёмы, талоны или госпитализации, оно будет отключено, а не удалено — история останется целой.": {"en":"If the room has appointments, queue tickets or admissions it will be disabled rather than deleted, so the history stays intact.","ru":"Если на помещении есть приёмы, талоны или госпитализации, оно будет отключено, а не удалено — история останется целой.","uz":"Agar xonada qabullar, navbat talonlari yoki yotqizishlar bo'lsa, u o'chirilmaydi, balki faolsizlantiriladi — tarix saqlanib qoladi."},
+  "Отключено.": {"en":"Disabled.","ru":"Отключено.","uz":"Faolsizlantirildi."},
+  "Не удалось удалить.": {"en":"Could not delete.","ru":"Не удалось удалить.","uz":"O'chirib bo'lmadi."},
+  "План": {"en":"Plan","ru":"План","uz":"Reja"},
+  "помещений: {n}": {"en":"rooms: {n}","ru":"помещений: {n}","uz":"xonalar: {n}"},
+  "врачей: {n}": {"en":"doctors: {n}","ru":"врачей: {n}","uz":"shifokorlar: {n}"},
+  "без врача": {"en":"no doctor","ru":"без врача","uz":"shifokorsiz"},
+  "коек нет": {"en":"no beds","ru":"коек нет","uz":"koyka yo'q"},
 };

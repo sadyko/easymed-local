@@ -21,6 +21,7 @@ import { serviceSave } from './service-save.js';   // SERVICE_EDITOR_V1
 import { saveLabResults } from './lab.js';   // LAB_SAVE_BATCH_V1
 import { labUsageStats } from './lab-stats.js';   // LAB_STATS_V1
 import { roomAssignDoctors } from './rooms.js';   // ROOMS_SETUP_V1
+import { roomsSetupDelete } from './rooms-delete.js';   // ROOMS_DELETE_V1
 import { cashierReport } from './cashier-report.js';   // CASHIER_REPORT_V1
 import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
 import { licenceStatus, licenceUnlock, licenceEnroll, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
@@ -152,6 +153,7 @@ export const RPC = {
   // счётчики, никаких денег; доступ — LAB_SECTION_ROLES, как у записей панелей.
   lab_usage_stats:                (db, args, user) => labUsageStats(db, args, user),
   room_assign_doctors:            (db, args, user) => roomAssignDoctors(db, args, user),   // ROOMS_SETUP_V1
+  rooms_setup_delete:             (db, args, user) => roomsSetupDelete(db, args, user),   // ROOMS_DELETE_V1
 
   // CASHIER_REPORT_V1 — «Отчёт кассира»: приход, расход и итог за ПЕРИОД
   // (в отличие от X-отчёта смены, который смотрит на одну смену).

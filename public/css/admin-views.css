@@ -4194,3 +4194,45 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
   .rs-row--head{ display:none; }
 }
 /* ============================ end ROOMS_SETUP_V1 ============================ */
+
+/* ---- ROOMS_PLAN_V1 — визуальный план этажа -------------------------------
+   Не чертёж по координатам: координат в схеме нет, рисовать их с потолка
+   значило бы показывать неправду. Плитки отвечают на то, ради чего в план и
+   смотрят: сколько чего на этаже, кто где сидит, сколько коек занято. */
+.rs-plan{ display:grid; grid-template-columns:repeat(auto-fill, minmax(178px,1fr)); gap:10px; }
+.rs-tile{
+  display:flex; flex-direction:column; gap:5px; text-align:left; width:100%;
+  padding:11px 12px; border:1px solid var(--ink-100); border-left:3px solid var(--primary-400);
+  border-radius:11px; background:var(--white); cursor:pointer; font-family:inherit;
+  transition:border-color .12s, box-shadow .12s, transform .12s;
+}
+.rs-tile:hover{ border-color:var(--primary-300); border-left-color:var(--primary-600); transform:translateY(-1px); box-shadow:var(--shadow-sm); }
+.rs-tile--ward{ border-left-color:#b0417a; }
+.rs-tile--ward:hover{ border-left-color:#b0417a; }
+.rs-tile.is-off{ opacity:.55; border-left-style:dashed; }
+.rs-tile__top{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.rs-tile__ic{ color:var(--ink-500); display:inline-flex; }
+.rs-tile__code{ font-size:12.5px; font-weight:700; color:var(--ink-400); font-variant-numeric:tabular-nums; }
+.rs-tile__name{ font-size:13.5px; font-weight:600; color:var(--ink-900); line-height:1.25;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rs-tile__type{ font-size:12.5px; }
+.rs-tile__foot{ display:flex; align-items:center; gap:6px; font-size:12.5px; margin-top:2px; }
+.rs-qbadge{ display:inline-flex; align-items:center; color:var(--primary-700); }
+
+/* Койки: одна точка = одна койка. Цвет читается без легенды — свободная
+   зелёная, занятая красная, уборка/ремонт серо-жёлтые. */
+.rs-beds{ display:flex; flex-wrap:wrap; gap:4px; margin-top:3px; }
+.rs-bed{ width:11px; height:11px; border-radius:3px; background:var(--ok-500, #2e8b52); display:inline-block; }
+.rs-bed.is-occupied{ background:var(--crit-500, #c0392b); }
+.rs-bed.is-cleaning{ background:var(--warn-500, #d9a441); }
+.rs-bed.is-maintenance{ background:var(--ink-300, #b9c0cc); }
+
+/* Удаление — единственная необратимая кнопка в диалоге, поэтому она красная
+   и стоит слева, отдельно от «Сохранить». */
+.rs-del{ color:var(--crit-700, #96271b); border-color:var(--crit-200, #f0c2bc); }
+.rs-del:hover{ background:var(--crit-50, #fdf0ee); border-color:var(--crit-400, #d9776a); }
+
+@media (max-width: 560px){
+  .rs-plan{ grid-template-columns:repeat(auto-fill, minmax(144px,1fr)); }
+}
+/* ---- end ROOMS_PLAN_V1 --------------------------------------------------- */
