@@ -336,6 +336,16 @@ git commit -m "feat(sync): гибридные логические часы дл
 ```sql
 -- 084_sync_journal.sql — BRANCH_RECORDS_V1: что изменилось и когда.
 --
+-- ВНИМАНИЕ. Любой массовый UPDATE этих четырёх таблиц теперь сетевое событие:
+-- каждая тронутая строка уедет соседям целиком. Служебные правки ограничивайте
+-- WHERE (например, WHERE phone <> trim(phone)) или временно снимайте журнальные
+-- триггеры вокруг них. И никогда не удаляйте из этих таблиц с foreign_keys =
+-- OFF: удаление зажурналится, а осиротевшие дети — нет.
+--
+-- Журнал НЕ засевается для уже существующих строк: холодного соседа (без строки
+-- в sync_peers) отправитель кормит из самих таблиц (Задача 4). Засев в миграции
+-- добавил бы по строке на каждую запись на каждой клинике навсегда.
+--
 -- Пишется ТРИГГЕРАМИ, а не прикладным кодом. Это не стилистика: путей, которыми
 -- строка меняется, в этом проекте десятки (RPC, импорт, ручные правки), и
 -- дописать журнал в каждый — значит однажды забыть. Триггер обойти нельзя.
@@ -347,13 +357,14 @@ CREATE TABLE sync_journal (
   tbl        TEXT NOT NULL,
   uid        TEXT NOT NULL,
   op         TEXT NOT NULL CHECK (op IN ('put', 'del')),
-  stamp      TEXT NOT NULL DEFAULT '',           -- HLC; проставляется приложением
   at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 
--- Хвост читают по seq, а сжатие — по (tbl, uid): у строки, изменённой сто раз,
--- отдавать надо последнее состояние, а не сто записей.
-CREATE INDEX idx_sync_journal_seq ON sync_journal(seq);
+-- seq — это rowid (INTEGER PRIMARY KEY AUTOINCREMENT): отдельный индекс по нему
+-- дублировал бы rowid. AUTOINCREMENT обязателен: приём вычищает хвост журнала,
+-- и без него следующий seq мог бы оказаться НИЖЕ sent_seq соседа — местная
+-- правка никогда бы не уехала. Сжатие — по (tbl, uid): у строки, изменённой сто
+-- раз, отдавать надо последнее состояние, а не сто записей.
 CREATE INDEX idx_sync_journal_row ON sync_journal(tbl, uid);
 
 -- ВСТАВКА ЧИТАЕТ СТРОКУ, А НЕ NEW. В AFTER INSERT триггере NEW.uid — значение,
@@ -437,15 +448,29 @@ CREATE TABLE sync_pending (
   record     TEXT NOT NULL,          -- JSON всей записи, как приехала
   waits_tbl  TEXT NOT NULL,          -- какого родителя ждёт
   waits_uid  TEXT NOT NULL,
+  received_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
   PRIMARY KEY (tbl, uid)
 );
 CREATE INDEX idx_sync_pending_parent ON sync_pending(waits_tbl, waits_uid);
+
+-- Метка последнего ПРИНЯТОГО изменения КАЖДОЙ колонки строки: слияние
+-- поколоночное. col = '*' — надгробие: строка удалена с этой меткой, и put
+-- старше него не воскрешает строку. Здесь, а не CREATE IF NOT EXISTS в коде:
+-- таблица, о которой не знает schema_migrations, не попадает в решение о
+-- резервной копии перед миграцией и не поддаётся следующей миграции.
+CREATE TABLE sync_seen (
+  tbl   TEXT NOT NULL,
+  uid   TEXT NOT NULL,
+  col   TEXT NOT NULL,
+  stamp TEXT NOT NULL,
+  PRIMARY KEY (tbl, uid, col)
+);
 
 -- Докуда каждому соседу уже отдано и что от него принято. Ключ — буква узла.
 CREATE TABLE sync_peers (
   node       TEXT PRIMARY KEY,
   sent_seq   INTEGER NOT NULL DEFAULT 0,   -- наш журнал: докуда отдали
-  recv_stamp TEXT NOT NULL DEFAULT ''      -- его журнал: до какой метки приняли
+  last_ok    TEXT                          -- когда последний раз отдали успешно
 );
 ```
 
@@ -543,7 +568,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { buildBatch, markSent } from './journal.js';
+import { buildBatch, markSent, pruneJournal } from './journal.js';
 
 function fresh() {
   const db = openDb(':memory:');
@@ -607,6 +632,34 @@ test('часы переживают перевод времени назад м�
   const second = buildBatch(db, { self: 'B', peer: 'C', clock: () => 1 });
   const a = first.records[0].stamp, b = second.records[0].stamp;
   assert.equal(b > a, true, 'метка не откатилась вместе с часами: ' + a + ' -> ' + b);
+  db.close();
+});
+
+test('холодному соседу уезжают строки, существовавшие ДО журнала', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Старожил')").run();
+  db.prepare('DELETE FROM sync_journal').run();   // как на живой клинике после 083+084
+  const batch = buildBatch(db, { self: 'B', peer: 'C' });
+  assert.equal(batch.records.some((r) => r.tbl === 'patients' && r.data.full_name === 'Старожил'), true,
+    'иначе «у соседа просто нет этого пациента» — неотличимо от поломки транспорта');
+  markSent(db, 'C', batch.upto, batch.clock);
+  assert.deepEqual(buildBatch(db, { self: 'B', peer: 'C' }).records, [], 'засев не повторяется');
+  db.close();
+});
+
+test('отданный всем хвост журнала вычищается; заброшенный сосед чистку не держит', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  const b = buildBatch(db, { self: 'B', peer: 'C' });
+  markSent(db, 'C', b.upto, b.clock);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_journal').get().n, 0, 'единственный сосед всё получил');
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Петров')").run();
+  // Второй сосед, не выходивший на связь 40 дней, не должен держать чистку.
+  db.prepare("INSERT INTO sync_peers (node, sent_seq, last_ok) VALUES ('D', 0, ?)")
+    .run(new Date(Date.now() - 40 * 86400000).toISOString());
+  const b2 = buildBatch(db, { self: 'B', peer: 'C' });
+  markSent(db, 'C', b2.upto, b2.clock);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_journal').get().n, 0);
   db.close();
 });
 
@@ -689,8 +742,14 @@ export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date
 
   // Последняя запись про каждую строку: у пациента, правленного сто раз, есть
   // одно текущее состояние, а не сто.
-  const heads = db.prepare(`
-    SELECT tbl, uid, MAX(seq) AS seq
+  // ХОЛОДНЫЙ СОСЕД — строки в sync_peers ещё нет. «Холодный» значит «ни разу не
+  // отдавали», а не sent_seq = 0: журнал мог быть пуст в момент засева, и по
+  // нулю засев повторялся бы вечно. Журнал не засеян для строк, существовавших
+  // до миграции 084 (ревью Задачи 3: на живой клинике после 083+084 журнал
+  // ПУСТ), поэтому первую порцию собираем из самих таблиц — тот же приём, что
+  // у справочника (catalogue.js). Дальше — только хвост журнала.
+  const heads = from == null ? seedHeads(db, limit) : db.prepare(`
+    SELECT tbl, uid, MAX(seq) AS seq, at
       FROM sync_journal
      WHERE seq > ?
      GROUP BY tbl, uid
@@ -705,14 +764,24 @@ export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date
   // на порцию, не на запись: 5000 записей — это не 5000 записей в WAL.
   let clock = readClock(db);
   const records = [];
-  let upto = since;
+  // Для холодного засева upto — текущий MAX(seq) журнала: всё, что накопилось
+  // до засева, уже покрыто снимком таблиц и не должно уехать вторым разом.
+  let upto = from == null
+    ? (db.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM sync_journal').get().m)
+    : since;
 
   for (const h of heads) {
     upto = Math.max(upto, h.seq);
     if (!TABLES.includes(h.tbl)) continue;
 
     const row = db.prepare(`SELECT * FROM ${h.tbl} WHERE uid = ?`).get(h.uid);
-    clock = nextStamp(clock, self, clockFn);
+    // Метка — от ВРЕМЕНИ ПРАВКИ (journal.at), не от времени отправки: иначе
+    // правка в 10:00, отправленная в 10:15, побеждала бы настоящую правку соседа
+    // в 10:05, и «последняя правка побеждает» значило бы «побеждает тот, кто
+    // синхронизировался позже». Монотонный пол HLC при этом сохраняется: метка
+    // никогда не упадёт ниже уже отправленной. `at` — секундной точности; внутри
+    // секунды порядок отдачи, и это строго лучше, чем целый интервал синхронизации.
+    clock = nextStamp(clock, self, h.at ? () => Date.parse(h.at) : clockFn);
 
     if (!row) {
       records.push({ tbl: h.tbl, uid: h.uid, op: 'del', stamp: clock.stamp });
@@ -740,6 +809,35 @@ export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date
   return { records, upto, clock };
 }
 
+// Первая порция холодному соседу: все строки четырёх таблиц как «изменённые».
+// seq = 0 у всех: настоящий журнал начнётся после этой порции. Порядок —
+// родители раньше детей, чтобы приёмнику меньше держать в ожидании.
+function seedHeads(db, limit) {
+  const out = [];
+  for (const tbl of TABLES) {
+    for (const r of db.prepare(`SELECT uid, created_at AS at FROM ${tbl} WHERE uid IS NOT NULL ORDER BY id`).all()) {
+      out.push({ tbl, uid: r.uid, seq: 0, at: r.at });
+      if (out.length >= limit) return out;
+    }
+  }
+  return out;
+}
+
+// Хвост, отданный ВСЕМ соседям, больше не нужен: без чистки журнал растёт
+// ~4.7 млн строк в год на клинике с 300 визитами в день, а сборка порции
+// сканирует его целиком (ревью Задачи 3: 453 мс на «ничего нового»).
+// Соседи без удачной отправки за STALE_DAYS не держат чистку: заброшенный или
+// ещё не подключённый филиал иначе замораживал бы её навсегда — он всё равно
+// получит холодный засев из таблиц. Защита местных правок (hasLocalUnshipped)
+// от чистки не страдает: вычищенное отдано всем, и «false» — верный ответ.
+const STALE_DAYS = 30;
+export function pruneJournal(db, { now = () => new Date() } = {}) {
+  const cutoff = new Date(now().getTime() - STALE_DAYS * 86400000).toISOString();
+  const floor = db.prepare('SELECT MIN(sent_seq) AS m FROM sync_peers WHERE last_ok IS NOT NULL AND last_ok >= ?').get(cutoff);
+  if (!floor || floor.m == null || floor.m <= 0) return 0;
+  return db.prepare('DELETE FROM sync_journal WHERE seq <= ?').run(floor.m).changes;
+}
+
 const CLOCK_KEY = 'sync_clock';
 
 /** Последнее состояние часов из control_state. Строки → числа (TEXT-колонка). */
@@ -764,12 +862,13 @@ export function writeClock(db, clock) {
 }
 
 /** Отметить, докуда соседу отдано, и сохранить часы. ТОЛЬКО после подтверждённой отправки. */
-export function markSent(db, peer, upto, clock = null) {
+export function markSent(db, peer, upto, clock = null, { now = () => new Date() } = {}) {
   db.prepare(`
-    INSERT INTO sync_peers (node, sent_seq) VALUES (?, ?)
-    ON CONFLICT(node) DO UPDATE SET sent_seq = MAX(sent_seq, excluded.sent_seq)
-  `).run(peer, upto);
+    INSERT INTO sync_peers (node, sent_seq, last_ok) VALUES (?, ?, ?)
+    ON CONFLICT(node) DO UPDATE SET sent_seq = MAX(sent_seq, excluded.sent_seq), last_ok = excluded.last_ok
+  `).run(peer, upto, now().toISOString());
   writeClock(db, clock);
+  pruneJournal(db, { now });
 }
 ```
 
@@ -861,7 +960,7 @@ test('новый пациент приезжает и заводится под 
   applyBatch(db, [{
     tbl: 'patients', uid: 'aaaa', op: 'put', stamp: '000000000001-0000-C',
     data: { full_name: 'Приезжий', phone: '+998900000001' }, refs: {}, origin: 'C',
-  }]);
+  }], { self: 'B' });
 
   const row = db.prepare("SELECT id, full_name FROM patients WHERE uid = 'aaaa'").get();
   assert.equal(row.full_name, 'Приезжий');
@@ -874,14 +973,14 @@ test('поколоночное слияние: телефон здесь, адр
   applyBatch(db, [{
     tbl: 'patients', uid: 'bbbb', op: 'put', stamp: '000000000001-0000-C',
     data: { full_name: 'Иванов', phone: '+998900000001', address: '' }, refs: {}, origin: 'C',
-  }]);
+  }], { self: 'B' });
   // Здесь правят адрес — позже.
   db.prepare("UPDATE patients SET address = 'Ташкент' WHERE uid = 'bbbb'").run();
   // Оттуда приезжает правка телефона с БОЛЕЕ ПОЗДНЕЙ меткой, но старым адресом.
   applyBatch(db, [{
     tbl: 'patients', uid: 'bbbb', op: 'put', stamp: '000000000009-0000-C',
     data: { phone: '+998900000002' }, refs: {}, origin: 'C',
-  }]);
+  }], { self: 'B' });
 
   const row = db.prepare("SELECT phone, address FROM patients WHERE uid = 'bbbb'").get();
   assert.equal(row.phone, '+998900000002', 'приехавшая правка применилась');
@@ -915,7 +1014,7 @@ test('ссылка на ещё не приехавшего родителя не
     tbl: 'visits', uid: 'v1', op: 'put', stamp: '000000000001-0000-C',
     data: { visit_date: '2026-09-02', status: 'scheduled' },
     refs: { patient_id: 'p1' }, origin: 'C',
-  }]);
+  }], { self: 'B' });
   assert.equal(db.prepare("SELECT COUNT(*) n FROM visits WHERE uid = 'v1'").get().n, 0,
     'visits.patient_id NOT NULL: ребёнка без родителя вставить нельзя — он ждёт');
   assert.equal(db.prepare("SELECT waits_uid FROM sync_pending WHERE uid = 'v1'").get().waits_uid, 'p1');
@@ -923,7 +1022,7 @@ test('ссылка на ещё не приехавшего родителя не
   applyBatch(db, [{
     tbl: 'patients', uid: 'p1', op: 'put', stamp: '000000000002-0000-C',
     data: { full_name: 'Опоздавший' }, refs: {}, origin: 'C',
-  }]);
+  }], { self: 'B' });
   const v = db.prepare("SELECT patient_id FROM visits WHERE uid = 'v1'").get();
   const p = db.prepare("SELECT id FROM patients WHERE uid = 'p1'").get();
   assert.equal(v.patient_id, p.id, 'ребёнок применился, когда родитель приехал');
@@ -936,15 +1035,28 @@ test('удаление проигрывает более поздней прав
   applyBatch(db, [{
     tbl: 'patients', uid: 'cccc', op: 'put', stamp: '000000000001-0000-C',
     data: { full_name: 'Иванов' }, refs: {}, origin: 'C',
-  }]);
+  }], { self: 'B' });
   db.prepare("UPDATE patients SET full_name = 'Иванов-Петров' WHERE uid = 'cccc'").run();
 
   // Удаление СТАРЕЕ нашей правки: кто-то удалил строку, не зная о ней.
-  applyBatch(db, [{ tbl: 'patients', uid: 'cccc', op: 'del', stamp: '000000000000-0000-C' }]);
+  applyBatch(db, [{ tbl: 'patients', uid: 'cccc', op: 'del', stamp: '000000000000-0000-C', origin: 'C' }], { self: 'B' });
 
   const row = db.prepare("SELECT full_name FROM patients WHERE uid = 'cccc'").get();
   assert.ok(row, 'молча уничтожать запись, с которой кто-то работал, нельзя');
   assert.equal(row.full_name, 'Иванов-Петров');
+  db.close();
+});
+
+test('запоздавший put не воскрешает удалённую строку', () => {
+  const db = fresh();
+  applyBatch(db, [{ tbl: 'patients', uid: 'tttt', op: 'put', stamp: '000000000001-0000-C',
+    data: { full_name: 'Иванов' }, refs: {}, origin: 'C' }], { self: 'B' });
+  applyBatch(db, [{ tbl: 'patients', uid: 'tttt', op: 'del', stamp: '000000000009-0000-C', origin: 'C' }], { self: 'B' });
+  // Порция, собранная ДО удаления, приехала после него.
+  applyBatch(db, [{ tbl: 'patients', uid: 'tttt', op: 'put', stamp: '000000000005-0000-C',
+    data: { full_name: 'Иванов' }, refs: {}, origin: 'C' }], { self: 'B' });
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM patients WHERE uid = 'tttt'").get().n, 0,
+    'отправитель удаление не повторит — воскрешение было бы навсегда');
   db.close();
 });
 
@@ -957,7 +1069,7 @@ test('своё же изменение, вернувшееся обратно, �
   applyBatch(db, [{
     tbl: 'patients', uid, op: 'put', stamp: '000000000001-0000-C',
     data: { full_name: 'Иванов' }, refs: {}, origin: 'C',
-  }]);
+  }], { self: 'B' });
 
   assert.equal(db.prepare('SELECT COUNT(*) n FROM patients').get().n, before, 'дубля не появилось');
   db.close();
@@ -968,7 +1080,7 @@ test('приём НЕ пишет в журнал: иначе изменения 
   applyBatch(db, [{
     tbl: 'patients', uid: 'dddd', op: 'put', stamp: '000000000001-0000-C',
     data: { full_name: 'Приезжий' }, refs: {}, origin: 'C',
-  }]);
+  }], { self: 'B' });
   const n = db.prepare("SELECT COUNT(*) n FROM sync_journal WHERE uid = 'dddd'").get().n;
   assert.equal(n, 0, 'принятое не пересылаем обратно');
   db.close();
@@ -1001,16 +1113,14 @@ import { compareStamps, isStamp, nextStamp } from './hlc.js';
 import { readClock, writeClock } from './journal.js';
 import { SHIPPED, REFS } from './journal.js';
 
-// Метка последнего ПРИНЯТОГО изменения КАЖДОЙ колонки. Местная правка метки
-// не имеет — до отправки её колонки защищает журнал (см. hasLocalUnshipped).
+// sync_seen (миграция 084): метка последнего ПРИНЯТОГО изменения каждой
+// колонки. Местная правка метки не имеет — до отправки её защищает журнал.
 const SEEN = 'sync_seen';
+// Приехавшая запись больше этого — не хранится в ожидании, а пропускается:
+// предел релея (12 МБ сжатых) ничего не говорит о размере ОДНОЙ строки.
+const MAX_PENDING_BYTES = 256 * 1024;
+const PENDING_MAX_DAYS = 30;
 
-function ensureSeen(db) {
-  db.prepare(`CREATE TABLE IF NOT EXISTS ${SEEN} (
-    tbl TEXT NOT NULL, uid TEXT NOT NULL, col TEXT NOT NULL, stamp TEXT NOT NULL,
-    PRIMARY KEY (tbl, uid, col)
-  )`).run();
-}
 
 function localId(db, tbl, uid) {
   const r = db.prepare(`SELECT id FROM ${tbl} WHERE uid = ?`).get(uid);
@@ -1027,8 +1137,8 @@ function localId(db, tbl, uid) {
  *
  * @returns {{applied:number, skipped:number, deferred:number, deleted:number}}
  */
-export function applyBatch(db, records, { self = null } = {}) {
-  ensureSeen(db);
+export function applyBatch(db, records, { self } = {}) {
+  if (!self) throw new Error('applyBatch: self letter required');
   const stats = { applied: 0, skipped: 0, deferred: 0, deleted: 0 };
 
   let maxReceived = '';
@@ -1038,9 +1148,13 @@ export function applyBatch(db, records, { self = null } = {}) {
 
     for (const rec of batch) {
       if (!rec || !SHIPPED[rec.tbl] || typeof rec.uid !== 'string' || !isStamp(rec.stamp)) { stats.skipped++; continue; }
+      // Часы двигаются за ЛЮБОЙ годной приехавшей меткой — и за удалением, и за
+      // отложенной в ожидание, и за пропущенной: иначе узел с отставшими часами,
+      // получивший детей раньше родителей, ничему не учится и продолжает проигрывать.
+      if (rec.stamp > maxReceived) maxReceived = rec.stamp;
 
       const id = localId(db, rec.tbl, rec.uid);
-      const protectedHere = id != null && hasLocalUnshipped(db, rec.tbl, rec.uid);
+      const protectedHere = id != null && hasLocalUnshipped(db, rec.tbl, rec.uid, rec.origin);
 
       if (rec.op === 'del') {
         // Правило 3. Удаление проигрывает любой более поздней правке — местной
@@ -1056,6 +1170,12 @@ export function applyBatch(db, records, { self = null } = {}) {
 
       const cols = [];
       const vals = [];
+      // Надгробие: строка удалена с меткой '*'. put, который старше надгробия,
+      // не воскрешает её — иначе запоздавший put после удаления оживлял бы
+      // строку у приёмника навсегда (отправитель удаление не повторяет).
+      const tomb = db.prepare(`SELECT stamp FROM ${SEEN} WHERE tbl = ? AND uid = ? AND col = '*'`).get(rec.tbl, rec.uid);
+      if (tomb && compareStamps(rec.stamp, tomb.stamp) <= 0) { stats.skipped++; continue; }
+      if (tomb) db.prepare(`DELETE FROM ${SEEN} WHERE tbl = ? AND uid = ? AND col = '*'`).run(rec.tbl, rec.uid);
       const seenCol = db.prepare(`SELECT stamp FROM ${SEEN} WHERE tbl = ? AND uid = ? AND col = ?`);
       for (const col of SHIPPED[rec.tbl]) {
         if (!rec.data || !Object.prototype.hasOwnProperty.call(rec.data, col)) continue;
@@ -1080,11 +1200,13 @@ export function applyBatch(db, records, { self = null } = {}) {
         cols.push(col); vals.push(pid);
       }
       if (waiting) {
+        const json = JSON.stringify(rec);
+        if (json.length > MAX_PENDING_BYTES) { stats.skipped++; continue; }
         db.prepare(`INSERT INTO sync_pending (tbl, uid, stamp, record, waits_tbl, waits_uid)
                     VALUES (?,?,?,?,?,?)
                     ON CONFLICT(tbl, uid) DO UPDATE SET stamp = excluded.stamp, record = excluded.record,
                       waits_tbl = excluded.waits_tbl, waits_uid = excluded.waits_uid`)
-          .run(rec.tbl, rec.uid, rec.stamp, JSON.stringify(rec), waiting.tbl, waiting.uid);
+          .run(rec.tbl, rec.uid, rec.stamp, json, waiting.tbl, waiting.uid);
         stats.deferred++;   // не «пропущено» — ждёт родителя; читающему лог это две разные новости
         continue;
       }
@@ -1102,17 +1224,19 @@ export function applyBatch(db, records, { self = null } = {}) {
                   ON CONFLICT(tbl, uid, col) DO UPDATE SET stamp = excluded.stamp`);
       for (const col of cols) remember.run(rec.tbl, rec.uid, col, rec.stamp);
       if (cols.length || id == null) stats.applied++; else stats.skipped++;
-      if (rec.stamp > maxReceived) maxReceived = rec.stamp;
     }
 
     releasePending(db, batch, stats);
+    // Ребёнок, чей родитель удалён у источника, ждал бы вечно.
+    db.prepare(`DELETE FROM sync_pending WHERE received_at < ?`)
+      .run(new Date(Date.now() - PENDING_MAX_DAYS * 86400000).toISOString());
 
     // Приём не порождает исходящих изменений — см. заголовок.
     db.prepare('DELETE FROM sync_journal WHERE seq > ?').run(journalFrom);
 
     // Часы этой машины двигаются за самую новую чужую метку: узел с отставшими
     // часами иначе проигрывал бы каждое слияние вечно.
-    if (maxReceived && self) writeClock(db, nextStamp(readClock(db), self, Date.now, maxReceived));
+    if (maxReceived) writeClock(db, nextStamp(readClock(db), self, Date.now, maxReceived));
   });
 
   run(records);
@@ -1122,11 +1246,15 @@ export function applyBatch(db, records, { self = null } = {}) {
 // Строка менялась здесь и ещё не уехала ни одному соседу? Тогда её колонки
 // новее любой приехавшей записи. Какие именно колонки — журнал не знает,
 // поэтому защищаются все: грубее, но теряет ноль правок.
-function hasLocalUnshipped(db, tbl, uid) {
+// ПО СОСЕДУ, от которого пришла порция (origin записи), а не MIN по всем:
+// с тремя филиалами заброшенный D держал бы MIN(sent_seq) внизу вечно, и
+// каждая строка, которую здесь хоть раз правили, отвергала бы ВСЕ слияния,
+// пока D не выйдет на связь (ревью Задачи 2).
+function hasLocalUnshipped(db, tbl, uid, peer) {
   const last = db.prepare('SELECT MAX(seq) AS s FROM sync_journal WHERE tbl = ? AND uid = ?').get(tbl, uid);
   if (!last || !last.s) return false;
-  const minSent = db.prepare('SELECT MIN(sent_seq) AS m FROM sync_peers').get();
-  return !minSent || minSent.m == null || last.s > minSent.m;
+  const sent = db.prepare('SELECT sent_seq FROM sync_peers WHERE node = ?').get(peer);
+  return !sent || last.s > sent.sent_seq;
 }
 
 // Применить тех, кто ждал ИМЕННО этих родителей. Точечно, по (waits_tbl,
@@ -1390,6 +1518,11 @@ test('деньги не уезжают: счетов в приёмнике не 
 В `server/services/rpc/branch-sync.js`, в `runBranchSync`, ПОСЛЕ применения
 справочника: собрать порцию, выложить, забрать чужие, применить. Порядок важен:
 справочник несёт услуги, на которые ссылаются `visit_services`.
+
+- [ ] **Шаг 5а: чистка и холодный засев вживую** — в `runBranchSync` после
+`markSent` журнал уже вычищен (Задача 4). Проверить на двух базах: сосед,
+подключённый через месяц после включения журнала, получает ВСЕ строки
+(холодный засев), а не только правки последнего месяца.
 
 - [ ] **Шаг 6: прогнать всё**
 
