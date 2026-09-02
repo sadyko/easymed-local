@@ -194,11 +194,18 @@ export function relayRoutes(db, { env = process.env, now = () => new Date() } = 
     // lookup has already failed, so the enrolled main branch's path is exactly
     // what it was before this existed.
     //
-    // Scoped to the relay id in THIS request's path and to nothing else: the
-    // same token presented for another id gets the same generic 401 as a token
-    // that was never issued. clinicForRelayToken also refuses a revoked token and
-    // one whose clinic has been deactivated, so a retired clinic loses the relay
-    // for EVERY branch at once, not just for the one holding the install_token.
+    // Checked against the relay id in THIS request's path, every request: the
+    // token is accepted only if that id is in the scope it was minted with, and
+    // the same token presented for any other id gets the same generic 401 as a
+    // token that was never issued. clinicForRelayToken also refuses a revoked
+    // token and one whose clinic has been deactivated, so a retired clinic loses
+    // the relay for EVERY branch at once, not just for the one holding the
+    // install_token.
+    //
+    // THE SCOPE IS A SET SINCE Задача 7a (db/migrations/008_relay_token_scopes.sql),
+    // because a branch now has an address of its own for its journal and must
+    // reach its peers' too. Nothing here changed: this middleware still asks the
+    // same question about the same single id, and gets a yes or a no.
     //
     // req.params.relayId — express's own parse, byte-identical to what the PUT
     // and GET handlers below will use as the storage key. See the mount comment.

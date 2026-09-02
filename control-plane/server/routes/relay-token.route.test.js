@@ -17,11 +17,15 @@ import {
 // BRANCH_IDENTITY_V1 — the credential a SECONDARY branch uses on the relay.
 //
 // What this file is protecting, in one sentence: this token must be able to do
-// EXACTLY ONE THING — read and write ONE relay id — and must be worth nothing
-// anywhere else in the control plane. Everything below is that sentence, taken
-// apart: it is refused on another relay id, refused by check-in, refused once
-// revoked, refused once its clinic is deactivated or deleted, and cannot mint
-// another one of itself.
+// EXACTLY ONE THING — read and write the relay ids it was minted for — and must
+// be worth nothing anywhere else in the control plane. Everything below is that
+// sentence, taken apart: it is refused on any relay id outside its scope,
+// refused by check-in, refused once revoked, refused once its clinic is
+// deactivated or deleted, and cannot mint another one of itself.
+//
+// The scope was a SINGLE relay id until Задача 7a and is a set now — because a
+// branch needs its own node address and its peers', not just the catalogue. The
+// sentence above did not change; only how many addresses satisfy it.
 
 // --- test harness (copied from relay.route.test.js on purpose, so the two -----
 // --- files cannot drift about what "an enrolled clinic" means) ---------------
@@ -192,6 +196,164 @@ test('a relay_id that is not 32 lowercase hex is refused before it can become a 
       .run('t', 'c-1', 'NOT-32-LOWERCASE-HEX'),
     /CHECK/i,
   );
+});
+
+// --- the scope: a token belongs to a BRANCH, not to one address ---------------
+//
+// BRANCH_RECORDS_V1 (Задача 7a). Until Phase 2 the whole group shared ONE relay
+// address — the catalogue — so "one token, one address" was the same statement
+// as "one token, one branch". Phase 2 gives every branch its own address for its
+// journal (services/branch-sync/relay-crypto.js relayIdFor(key, letter)), and a
+// secondary branch has to write its own and read every peer's. What these tests
+// pin is that widening the scope did NOT widen anything else: a token is still
+// worthless on an address it was not minted for, still revocable in one place,
+// and still costs its clinic exactly ONE of its 64 slots however many addresses
+// it names.
+
+const NODE_B_RELAY_ID = 'ab'.repeat(16);
+const NODE_C_RELAY_ID = 'cd'.repeat(16);
+
+const scopeOf = (db, token) => db.prepare(
+  'SELECT relay_id FROM relay_token_scopes WHERE token = ? ORDER BY relay_id'
+).all(token).map((r) => r.relay_id);
+
+test('a token is minted for a SET of relay ids, and holds exactly that set', async (t) => {
+  const { db, base } = await harness(t);
+  const installToken = enrol(db);
+
+  const ids = [RELAY_ID, NODE_B_RELAY_ID, NODE_C_RELAY_ID];
+  const res = await mint(base, installToken, { relay_ids: ids });
+  assert.equal(res.status, 201);
+  const body = await res.json();
+  assert.deepEqual(body.relay_ids, ids, 'the answer names the scope, in the order it was asked for');
+  // The FIRST id stays in relay_tokens.relay_id and in `relay_id` of the answer:
+  // that is the catalogue address the clinic app asks for first, and the field a
+  // pre-Phase-2 caller reads. Widening the scope must not change what an older
+  // client sees.
+  assert.equal(body.relay_id, RELAY_ID);
+
+  assert.deepEqual(scopeOf(db, body.token), [...ids].sort());
+  assert.equal(db.prepare('SELECT relay_id FROM relay_tokens WHERE token = ?').get(body.token).relay_id, RELAY_ID);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM relay_tokens').get().n, 1,
+    'ONE row per branch — the whole point of the scope is that N branches cost N tokens, not N²');
+});
+
+test('the legacy single relay_id still mints, and gets exactly the one address it named', async (t) => {
+  const { db, base } = await harness(t);
+  const installToken = enrol(db);
+
+  // NOT a nicety: tokens minted this way are already inside branch keys that
+  // were carried to other buildings by hand. If this shape stopped working, or
+  // silently got a wider scope, a deploy would either break working branches or
+  // quietly hand them access nobody granted.
+  const res = await mint(base, installToken, { relay_id: RELAY_ID });
+  assert.equal(res.status, 201);
+  const body = await res.json();
+  assert.equal(body.relay_id, RELAY_ID);
+  assert.deepEqual(body.relay_ids, [RELAY_ID]);
+  assert.deepEqual(scopeOf(db, body.token), [RELAY_ID], 'one address asked for, one address granted');
+});
+
+test('a scope longer than the cap is refused before it can become a row', async (t) => {
+  const { db, base } = await harness(t);
+  const installToken = enrol(db);
+
+  const id = (i) => i.toString(16).padStart(32, '0');
+  const sixtyFour = Array.from({ length: 64 }, (_, i) => id(i));
+  assert.equal((await mint(base, installToken, { relay_ids: sixtyFour })).status, 201,
+    '64 addresses is a real network at its very largest, and must still work');
+
+  const sixtyFive = Array.from({ length: 65 }, (_, i) => id(i));
+  const over = await mint(base, installToken, { relay_ids: sixtyFive });
+  assert.equal(over.status, 400);
+  assert.equal((await over.json()).error.code, 'bad_relay_id');
+
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM relay_tokens').get().n, 1, 'the refused call wrote nothing');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM relay_token_scopes').get().n, 64);
+});
+
+test('one malformed address poisons the whole mint — nothing is written, not even the good ones', async (t) => {
+  const { db, base } = await harness(t);
+  const installToken = enrol(db);
+
+  // Partial success would be the worst outcome available: the branch would hold
+  // a token that works for some of its peers and 401s for the rest, which on the
+  // clinic screen reads as "your access was revoked" for half the network.
+  const bad = [
+    [RELAY_ID, 'not-hex'],
+    [RELAY_ID, 'B3'.repeat(16)],
+    [RELAY_ID, '0'.repeat(31)],
+    [RELAY_ID, null],
+    [RELAY_ID, 42],
+    [],
+    'not-an-array',
+    [[RELAY_ID]],
+  ];
+  for (const relay_ids of bad) {
+    const res = await mint(base, installToken, { relay_ids });
+    assert.equal(res.status, 400, `${JSON.stringify(relay_ids)} must not be mintable`);
+    assert.equal((await res.json()).error.code, 'bad_relay_id');
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM relay_tokens').get().n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM relay_token_scopes').get().n, 0);
+});
+
+test('a broken relay_ids is refused even when a good relay_id sits beside it', async (t) => {
+  const { db, base } = await harness(t);
+  const installToken = enrol(db);
+  // The clinic app sends BOTH fields (an older control plane reads relay_id and
+  // ignores the rest). So falling back to relay_id when relay_ids is malformed
+  // would answer a broken scope request with a working CATALOGUE-ONLY token: the
+  // branch would be 401ed on every node address and its owner told the main
+  // branch had revoked it. Silently narrower is worse than refused.
+  for (const relay_ids of ['x', 42, {}, { 0: RELAY_ID }]) {
+    const res = await mint(base, installToken, { relay_id: RELAY_ID, relay_ids });
+    assert.equal(res.status, 400, JSON.stringify(relay_ids));
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM relay_tokens').get().n, 0);
+});
+
+test('the same address named twice is one grant, not a duplicate-key crash', async (t) => {
+  const { db, base } = await harness(t);
+  const installToken = enrol(db);
+  // The clinic app derives the scope from the group key: the catalogue address,
+  // its own node address, and every peer's. A clinic whose own letter is also
+  // listed among the branches sends the same id twice, and that is an ordinary
+  // request, not an error worth an owner-visible refusal.
+  const res = await mint(base, installToken, { relay_ids: [RELAY_ID, NODE_B_RELAY_ID, RELAY_ID] });
+  assert.equal(res.status, 201);
+  const body = await res.json();
+  assert.deepEqual(scopeOf(db, body.token), [NODE_B_RELAY_ID, RELAY_ID].sort());
+});
+
+test('the cap counts TOKENS, so a branch reaching ten addresses still costs its clinic one slot', async (t) => {
+  const { db, base } = await harness(t);
+  const installToken = enrol(db);
+  seedTokens(db, 'c-1', 63);
+
+  // This is the arithmetic the scope exists for. One token per ADDRESS gives a
+  // group of N branches ≈ N² tokens (63 at eight nodes, 409 at nine) and the
+  // network hits the 64 cap on its ninth branch. One token per BRANCH grows as N.
+  const ten = Array.from({ length: 10 }, (_, i) => (0xa0 + i).toString(16).padStart(32, '0'));
+  assert.equal((await mint(base, installToken, { relay_ids: ten })).status, 201, 'the 64th token is still allowed');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM relay_tokens WHERE clinic_id = ?').get('c-1').n, 64);
+
+  const over = await mint(base, installToken, { relay_ids: ten });
+  assert.equal(over.status, 409, 'the 65th TOKEN is refused, however few addresses it names');
+  assert.equal((await over.json()).error.code, 'too_many_tokens');
+});
+
+test('the sweep takes a swept token\'s grants with it', async (t) => {
+  const { db, base } = await harness(t);
+  const installToken = enrol(db);
+  const res = await mint(base, installToken, { relay_ids: [RELAY_ID, NODE_B_RELAY_ID] });
+  const token = (await res.json()).token;
+  db.prepare('UPDATE relay_tokens SET created_at = ?, last_used = ? WHERE token = ?')
+    .run('2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z', token);
+
+  assert.equal(pruneRelayTokens(db, { days: 30 }), 1);
+  assert.deepEqual(scopeOf(db, token), [],
+    'a grant left behind would be a live permission waiting for a token string to be minted again');
 });
 
 // --- the bound on the table --------------------------------------------------

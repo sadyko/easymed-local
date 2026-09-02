@@ -10,6 +10,7 @@ import { migrate } from '../db/migrate.js';
 import { createEnrollmentCode, redeemEnrollmentCode } from '../services/enrollment.js';
 import { createApp } from '../app.js';
 import { relayPathFor, pruneRelayBlobs } from './relay.js';
+import { RELAY_TOKEN_MOUNT } from './relay-token.js';   // BRANCH_RECORDS_V1 (Задача 7a)
 import { sealPayload } from '../../../server/services/branch-sync/relay-crypto.js';
 import { b64url, GROUP_KEY_BYTES } from '../../../server/services/branch-sync/pairing.js';
 
@@ -268,4 +269,96 @@ test('retention never throws, whatever the table is doing', async (t) => {
   // Housekeeping attached to an upload must never be the thing that fails the
   // upload — see pruneRelayBlobs' own comment.
   assert.equal(pruneRelayBlobs(db, { days: 30 }), 0);
+});
+
+// --- a branch token reaches EVERY address in its scope, and none outside it ---
+//
+// BRANCH_RECORDS_V1 (Задача 7a). This is the half of the change that decides
+// whether Phase 2 works at all, and it is invisible on one machine: the MAIN
+// branch authenticates on install_token, which is not scoped to an address, so
+// its own journal upload passes whatever this code does. Only a SECONDARY branch
+// — which holds nothing but the token from its branch key — can show it.
+
+test('a token minted for two addresses works at both, and is refused at a third', async (t) => {
+  const { db, base } = await harness(t);
+  const installToken = enrol(db);
+
+  const catalogue = RELAY_ID;
+  const nodeB = 'ab'.repeat(16);
+  const nodeC = 'cd'.repeat(16);
+
+  const res = await fetch(base + RELAY_TOKEN_MOUNT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${installToken}` },
+    body: JSON.stringify({ relay_ids: [catalogue, nodeB] }),
+  });
+  assert.equal(res.status, 201);
+  const token = (await res.json()).token;
+
+  // Its own node address: this is the write that was a 401 for every secondary
+  // branch in the group before the scope existed.
+  assert.equal((await put(base, nodeB, Buffer.from('journal of B'), token)).status, 200);
+  assert.equal(await (await get(base, nodeB, token)).text(), 'journal of B');
+  // And the catalogue, which is what it already had.
+  assert.equal((await put(base, catalogue, Buffer.from('catalogue'), token)).status, 200);
+  assert.equal((await get(base, catalogue, token)).status, 200);
+
+  // A third address it was not granted stays shut, in both directions. The scope
+  // got wider; it did not stop being a scope.
+  assert.equal((await get(base, nodeC, token)).status, 401);
+  assert.equal((await put(base, nodeC, Buffer.from('not mine'), token)).status, 401);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM relay_blobs WHERE relay_id = ?').get(nodeC).n, 0,
+    'a refused request must not have stored anything');
+
+  // Every blob it did write belongs to the MINTING clinic, not to a branch
+  // identity of its own: the vendor still knows only which clinic uploaded.
+  const owners = db.prepare('SELECT DISTINCT clinic_id FROM relay_blobs').all().map((r) => r.clinic_id);
+  assert.deepEqual(owners, ['c-1']);
+});
+
+test('a token minted the legacy way still reaches its one address, and no other', async (t) => {
+  const { db, base } = await harness(t);
+  const installToken = enrol(db);
+  // The shape already sitting inside branch keys in other buildings. Migration
+  // 008 backfilled it a scope of exactly one address; if that had missed, this
+  // branch would have been 401ed by a deploy it never asked for.
+  const res = await fetch(base + RELAY_TOKEN_MOUNT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${installToken}` },
+    body: JSON.stringify({ relay_id: RELAY_ID }),
+  });
+  const token = (await res.json()).token;
+
+  assert.equal((await put(base, RELAY_ID, Buffer.from('mine'), token)).status, 200);
+  assert.equal((await get(base, RELAY_ID, token)).status, 200);
+  assert.equal((await get(base, 'ab'.repeat(16), token)).status, 401);
+  assert.deepEqual(db.prepare('SELECT relay_id FROM relay_token_scopes WHERE token = ?').all(token),
+    [{ relay_id: RELAY_ID }]);
+});
+
+test('revocation is per token, so it closes every address at once', async (t) => {
+  const { db, base } = await harness(t);
+  const installToken = enrol(db);
+  const catalogue = RELAY_ID;
+  const nodeB = 'ab'.repeat(16);
+
+  const res = await fetch(base + RELAY_TOKEN_MOUNT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${installToken}` },
+    body: JSON.stringify({ relay_ids: [catalogue, nodeB] }),
+  });
+  const token = (await res.json()).token;
+  assert.equal((await put(base, nodeB, Buffer.from('x'), token)).status, 200);
+
+  // One UPDATE, one branch cut off — everywhere. A scope spread over rows would
+  // have made "revoke this branch" a multi-row operation that could half-finish.
+  db.prepare('UPDATE relay_tokens SET revoked_at = ? WHERE token = ?').run(new Date().toISOString(), token);
+
+  for (const id of [catalogue, nodeB]) {
+    assert.equal((await get(base, id, token)).status, 401, id);
+    assert.equal((await put(base, id, Buffer.from('y'), token)).status, 401, id);
+  }
+  // The clinic itself has lost nothing: it was the branch's credential that was
+  // revoked, not the clinic's.
+  assert.equal((await get(base, nodeB, installToken)).status, 200);
 });
