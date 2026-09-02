@@ -594,6 +594,11 @@ function branchKeyFor(db, pairing, branch) {
     letter: branch.letter,
     relay_token: getState(db, branchTokenKey(branch.id)) || null,
     enroll_code: getState(db, branchEnrollKey(branch.id)) || null,
+    // BRANCH_NAME_IN_KEY_V1 — имя знает ТОЛЬКО главная клиника: его вводили
+    // здесь, заводя филиал. Без него филиал назовёт себя буквой, и в его
+    // собственном списке будут стоять «C» и «Main Branch» — одно не имя,
+    // другое чужое.
+    branch_name: branch.name || null,
   });
 }
 

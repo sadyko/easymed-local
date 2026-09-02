@@ -279,7 +279,7 @@ export function makeMainKey(dataDir, {
  * бумажка, флешка), и это сознательно выбранный канал: он не проходит через
  * settings.easymed.uz, поэтому поставщик не видит ключа даже мельком.
  */
-export function encodeKey({ group_id, secret, main_url, group_key, letter, relay_token, enroll_code }) {
+export function encodeKey({ group_id, secret, main_url, group_key, letter, relay_token, enroll_code, branch_name }) {
   // Нечего нести сверх старого набора — значит и формат старый. Не экономия
   // байтов, а совместимость вниз: см. KEY_PREFIX_V2.
   if (!letter && !relay_token && !enroll_code) return encodeLegacyV1({ group_id, secret, main_url, group_key });
@@ -289,6 +289,17 @@ export function encodeKey({ group_id, secret, main_url, group_key, letter, relay
   // резервного канала, выписанный главным филиалом на сервере поставщика.
   // Оба поля необязательны и оба разбираются по-разному — см. parseKey.
   if (letter) body.l = letter;
+  // BRANCH_NAME_IN_KEY_V1 — имя филиала едет вместе с буквой.
+  //
+  // Без него филиал называл себя БУКВОЙ: в списке филиалов на его машине
+  // стояли «C» и «Main Branch» — одно не имя, другое чужое. Имя знает главная
+  // клиника (она его и вводила, заводя филиал), а узнать его самому филиалу
+  // неоткуда: справочник он получит позже, а назваться должен в момент
+  // активации.
+  //
+  // Поле необязательное: ключи, выданные до этой версии, его не имеют, и
+  // филиал по-прежнему возьмёт букву как имя — хуже, чем раньше, не станет.
+  if (branch_name) body.n = branch_name;
   if (relay_token) body.t = relay_token;
   // BRANCH_SELF_SERVICE_V1 — код активации филиала, выданный control plane по
   // запросу ГЛАВНОЙ клиники. Едет в ключе, потому что другого канала к машине
@@ -411,8 +422,10 @@ export function parseKey(text) {
   // ИЗГОТОВИТЬ латинскую букву из нелатинской ('ß' -> 'SS'). Здесь только
   // обрезаются пробелы по краям.
   let letter = null;
+  let branchName = '';
   if (version === 2 && body.l !== undefined && body.l !== null) {
     letter = typeof body.l === 'string' ? body.l.trim() : '';
+    branchName = typeof body.n === 'string' ? body.n.trim().slice(0, 120) : '';
     if (!/^[A-Za-z]+$/.test(letter)) return { ok: false, reason: 'bad_letter' };
   }
 
@@ -425,7 +438,7 @@ export function parseKey(text) {
     ? rawToken : null;
 
   return {
-    ok: true, group_id: body.g, secret: body.s, main_url: mainUrl, group_key: groupKey,
+    ok: true, group_id: body.g, secret: body.s, main_url: mainUrl, group_key: groupKey, branch_name: branchName,
     letter, relay_token: relayToken,
     // Код активации не валидируем формой: его проверяет control plane при
     // погашении, и вторая, независимая проверка формата здесь означала бы, что
@@ -576,7 +589,7 @@ export function pairWithKey(dataDir, keyText, {
   try {
     // Имя филиала в ключе не едет: переименование — дело реестра филиалов
     // (Задача 6), а не активации. identity.js назовёт строку буквой.
-    identity = becomeSecondary(db, { letter: parsed.letter });
+    identity = becomeSecondary(db, { letter: parsed.letter, name: parsed.branch_name });
   } catch (e) {
     const restored = restorePairingFile(dataDir, previousRaw, {
       writeFileSync, renameSync, unlinkSync, readFileSync,

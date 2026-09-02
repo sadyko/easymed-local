@@ -616,3 +616,34 @@ test('откат возвращает БАЙТЫ, а не перекодиров
   assert.equal(r.reason, 'letter_spent');
   assert.deepEqual(fs.readFileSync(pairingPath(dir)), cp1251, 'байт в байт, включая CP1251');
 });
+
+// BRANCH_NAME_IN_KEY_V1 — филиал должен называться своим именем, а не буквой.
+//
+// Владелец 2026-09-02 прислал снимок фильтра филиалов на машине филиала: там
+// стояли «C» и «Main Branch». Первое — буква вместо имени (имя знает только
+// главная клиника, она его и вводила), второе — строка главного филиала,
+// которую вторичный намеренно сохраняет: на неё уже ссылаются его счета и
+// смены кассы.
+test('ключ несёт имя филиала, и филиал берёт его себе', () => {
+  const key = encodeKey({
+    group_id: 'BR-ABCDEF012345', secret: 'sss', main_url: 'http://10.0.0.5:8000',
+    group_key: 'k'.repeat(43), letter: 'C', branch_name: 'Клиника на Чиланзаре',
+  });
+  const parsed = parseKey(key);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.letter, 'C');
+  assert.equal(parsed.branch_name, 'Клиника на Чиланзаре');
+});
+
+test('ключ без имени по-прежнему разбирается — старые ключи не ломаются', () => {
+  const key = encodeKey({
+    group_id: 'BR-ABCDEF012345', secret: 'sss', main_url: 'http://10.0.0.5:8000',
+    group_key: 'k'.repeat(43), letter: 'C',
+  });
+  const parsed = parseKey(key);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.letter, 'C');
+  // Пусто, а не undefined и не падение: филиал возьмёт букву как имя, как и до
+  // этой версии. Хуже, чем было, не становится.
+  assert.equal(parsed.branch_name, '');
+});
