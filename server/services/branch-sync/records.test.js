@@ -586,7 +586,7 @@ test('7b: в повторе живёт СТАРОЕ авторство — су�
   assert.equal(row.phone, 'p1', 'новое авторство (номер выше квитанции) применяется');
   assert.equal(row.address, 'Ташкент',
     'а повтор старого авторства — нет: иначе местная правка пропадала бы НАВСЕГДА');
-  assert.equal(r.protected, 0, 'держала её не защита — та снята выгрузкой, — а сужение авторства');
+  assert.ok(!('protected' in r), 'держала её не защита, а сужение авторства: счётчика защиты больше нет вовсе');
   db.close();
 });
 
@@ -621,7 +621,7 @@ test('7c: неподтверждённая местная правка силь�
   }], S);
   assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'lw1'").get().phone, '+998909995950',
     'своя более поздняя правка обязана пережить чужую более раннюю');
-  assert.equal(r.protected, 0, 'держит её МЕТКА, а не защита: защита снята выгрузкой');
+  assert.ok(!('protected' in r), 'держит её МЕТКА, а не защита: счётчика защиты больше нет вовсе');
   assert.equal(r.applied, 0, 'применять в записи оказалось нечего');
   assert.equal(r.skipped, 1, 'и это именно пропуск, отдельного счётчика не заводим');
   db.close();
@@ -757,7 +757,7 @@ test('7d: приехавшая колонка СТАРШЕ местной пра
   }], S);
   assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'ax2'").get().phone, 'моё 09:50',
     'позже правили здесь — вчерашний блоб соседа этого не отменяет');
-  assert.equal(r.protected, 0, 'держит МЕТКА, а не защита: защита снята выгрузкой');
+  assert.ok(!('protected' in r), 'держит МЕТКА, а не защита: счётчика защиты больше нет вовсе');
   db.close();
 });
 
@@ -853,6 +853,33 @@ test('7e: метка из будущего подрезается, запись 
   assert.ok(parseInt(st.slice(0, 12), 16) <= Date.now() + 5 * 60000 + 1000,
     'метка «завтра» подрезана до «сейчас + допуск», а не сохранена как есть');
   db2.close();
+});
+
+test('7f: подделанная метка не записывает перекос в миллионы лет', () => {
+  // Формат метки допускает 48 бит миллисекунд: 'ffffffffffff' — это примерно
+  // 8,9 миллиона лет вперёд. Число это едет в sync_peers.clock_skew_ms и на
+  // экран, и «часы филиала C спешат на 3 218 000 000 дн» — не подсказка, а
+  // мусор вместо неё. Потолок — десять лет: выше него «на сколько именно» уже
+  // ничего не меняет.
+  const db = fresh();
+  db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
+    .run(new Date().toISOString());
+  applyBatch(db, [put('patients', 'sk9', stampAt(T0), { full_name: 'Иванов', phone: 'исходный' })], S);
+
+  const forged = 'ffffffffffff-0000-C';
+  const r = applyBatch(db, [{
+    ...put('patients', 'sk9', forged, { phone: 'из конца времён' }),
+    changed: ['phone'], stamps: { phone: forged },
+  }], { ...S, peer: 'C', skewMaxMs: 0 });
+
+  const TEN_YEARS = 10 * 365 * 24 * 3600 * 1000;
+  assert.ok(r.skewed > 0, 'подрезку всё равно надо посчитать: метка была из будущего');
+  assert.equal(r.skew_ms, TEN_YEARS, 'перекос назван потолком, а не восемью миллионами лет');
+  assert.equal(db.prepare("SELECT clock_skew_ms FROM sync_peers WHERE node = 'C'").get().clock_skew_ms,
+    TEN_YEARS, 'и в базе лежит то же число — карточка филиала читает его');
+  // Сама запись при этом применена: подрезаем метку, а не выбрасываем работу.
+  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'sk9'").get().phone, 'из конца времён');
+  db.close();
 });
 
 test('7e: отказ снимается, когда строка всё-таки применяется', () => {

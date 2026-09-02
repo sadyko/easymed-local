@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { STRINGS } from '../i18n-strings.js';
 import { fill } from '../updates-logic.js';
 import {
-  roleBadge, roleExplainer, syncLine, syncKeyLine, relayExplainer, publishLine, whenLabel,
+  roleBadge, roleExplainer, syncLine, syncKeyLine, relayExplainer, publishLine, seedLine, whenLabel,
   letterExplainer, branchRows, branchListNote, changesLabel, routeLabel,
   pairedMessage, KEY_LOSS_WARNING, KEY_REISSUE_WARNING, KEY_REISSUE_QUESTION,
   LETTER_PERMANENCE_WARNING, ADD_BRANCH_QUESTION, ISSUE_KEY_QUESTION,
@@ -172,6 +172,12 @@ function everyPhrase() {
   take(publishLine({ role: 'main', relay_enabled: false }));
   take(publishLine({ role: 'main', relay_enabled: true }));
   take(publishLine({ role: 'main', relay_enabled: true, relay_last_publish: { at: '2026-08-29T09:00:00Z' } }));
+
+  // Первичная загрузка: все три фразы — та, что видит филиал (с оценкой числа
+  // страниц и без неё), и та, что видит главная.
+  take(seedLine({ seed: { receiving: { from: 'B', page: 3, pages: 12 } } }));
+  take(seedLine({ seed: { receiving: { from: 'B', page: 1, pages: 0 } } }));
+  take(seedLine({ seed: { sending: [{ letter: 'B', page: 3 }] } }));
 
   take(letterExplainer({ letter: 'C' }));
   out.add(branchListNote({ role: 'secondary' }));

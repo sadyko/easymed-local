@@ -1008,7 +1008,7 @@ function journalSlice(payload, peer, self) {
  * already — срез уже был применён (неподтверждённый повтор соседа).
  */
 const noWork = (skipped = 0, already = false) => {
-  const stats = { applied: 0, released: 0, skipped, protected: 0, deferred: 0, deleted: 0, refused: 0 };
+  const stats = { applied: 0, released: 0, skipped, deferred: 0, deleted: 0, refused: 0 };
   return already ? { ...stats, already: true } : stats;
 };
 

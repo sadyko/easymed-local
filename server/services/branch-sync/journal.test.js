@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { buildBatch, markSent, markPublished, markConfirmed, pruneJournal, SHIPPED, REFS, CODE_REFS } from './journal.js';
-import { parseStamp } from './hlc.js';
+import { parseStamp, stampAt, compareStamps } from './hlc.js';
 import { applyBatch } from './records.js';
 
 function fresh() {
@@ -667,5 +667,46 @@ test('7b: молчуна забывают по КВИТАНЦИИ, а не по 
   pruneJournal(db);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM sync_peers WHERE node = 'C'").get().n, 0,
     'сосед, который сорок дней ничего не подтверждает, забыт — по возвращении он получит засев заново');
+  db.close();
+});
+
+// --- ревью Задачи 7e (Задача 7f): пол ЧУЖОЙ строки переживает чистку sync_seen
+
+test('7f: колонка приехавшей строки, забытая чисткой sync_seen, уезжает эпохой, а не нашим «сегодня»', () => {
+  const db = fresh();
+
+  // Строка приехала от C с меткой марта 2025-го. created_at у неё — СЕГОДНЯ:
+  // это время, когда её приняли ЗДЕСЬ, и в этом вся находка.
+  const authored = Date.parse('2025-03-01T10:00:00Z');
+  const arrived = {
+    tbl: 'patients', uid: 'p-from-c', op: 'put',
+    stamp: stampAt(authored, 'C'), origin: 'C',
+    data: { full_name: 'Петров', phone: '+998901112233' },
+    refs: {}, changed: ['*'],
+  };
+  applyBatch(db, [arrived], { self: 'B', peer: 'C', upto: 1 });
+  assert.equal(db.prepare("SELECT sync_origin FROM patients WHERE uid = 'p-from-c'").get().sync_origin, 'C',
+    'строка обязана считаться приехавшей — иначе тест ниже проверяет не тот пол');
+
+  // Пока sync_seen помнит её метки, засев отдаёт настоящее время правки C.
+  const known = buildBatch(db, { self: 'B', peer: 'E' }).records.find(r => r.uid === 'p-from-c');
+  assert.equal(known.stamps.phone, stampAt(authored, 'C'), 'известную метку засев обязан отдавать как есть');
+
+  // А теперь горизонт сдвинулся и sync_seen вычищен — ровно то, что делает
+  // приём каждые 90 дней (и что случается ВНУТРИ одного холодного засева
+  // клиники с историей: поздние страницы двигают горизонт).
+  db.prepare('DELETE FROM sync_seen').run();
+
+  const cold = buildBatch(db, { self: 'B', peer: 'D' }).records.find(r => r.uid === 'p-from-c');
+  assert.notEqual(cold, undefined, 'строка обязана попасть в засев холодного соседа');
+  const yesterday = stampAt(Date.now() - 86400000, 'X');
+  for (const [col, stamp] of Object.entries(cold.stamps)) {
+    // '*' — про строку целиком, её приёмник по колонкам не читает (colStamp
+    // спрашивают только настоящие колонки), и время заведения строки ЗДЕСЬ —
+    // это правда о нашей копии, а не притязание на авторство поля.
+    if (col === '*') continue;
+    assert.ok(compareStamps(stamp, yesterday) < 0,
+      `колонка ${col} уехала меткой ${stamp} — это «сегодня», и она навсегда побьёт настоящую правку соседа`);
+  }
   db.close();
 });

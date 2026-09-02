@@ -25,7 +25,7 @@ import { branchRows } from '../../../public/js/admin/branch-sync-logic.js';
 import {
   branchSyncPair, branchSyncStatus, branchSyncMakeKey, branchSyncBranches,
   branchSyncAddBranch, branchSyncBranchKey, branchSyncRegenerateKey,
-  branchSyncUnpair, reasonText,
+  branchSyncUnpair, reasonText, runBranchSync,
 } from './branch-sync.js';
 
 const admin = { id: 1, role: 'admin' };
@@ -734,5 +734,81 @@ test('выписка получает буквы всех узлов групп�
     { mintImpl: spy, branchImpl: cpOk });
   assert.equal(issued.ok, true);
   assert.deepEqual(seen[2], ['A', 'B', 'C', 'D'], 'строки без буквы в области не участвуют');
+  db.close();
+});
+
+// --- Задача 7f: причины о часах доезжают ЧИСЛАМИ, а не дырками --------------
+//
+// Обе фразы о сбитых часах написаны с дырками ({letter}, {offset}) — иначе они
+// не сказали бы ни какой филиал, ни насколько, — а подставлять их было некому:
+// reasonText был голым поиском по словарю. На экран уезжало «Часы филиала
+// {letter} спешат на {offset}», то есть отладочный мусор вместо совета.
+
+const REASON_BAD_URL = 'Адрес указан неверно. Пример: 10.0.0.5:8000';
+
+test('7f: фраза о часах называет филиал и смещение словами человека', () => {
+  const text = reasonText('peer_clock_skew', { clock_skew: { letter: 'B', offset_ms: 3 * 3600 * 1000 } });
+  assert.match(text, /филиала B/, 'без буквы владелец не знает, на какой компьютер идти');
+  assert.match(text, /на 3 ч/, 'и без числа не знает, что там крутить');
+  assert.doesNotMatch(text, /[{}]/, 'дырка на экране — это ошибка, которую видит владелец');
+
+  // Минуты и дни — теми же сокращениями: «12 мин» и «2 дн» читаются одинаково
+  // и в две минуты, и в пять дней, без правил склонения.
+  assert.match(reasonText('local_clock_behind', { clock_skew: { offset_ms: 12 * 60 * 1000 } }), /на 12 мин/);
+  assert.match(reasonText('peer_clock_skew', { clock_skew: { letter: 'C', offset_ms: 2 * 86400000 } }), /на 2 дн/);
+
+  // Старый вызов — слово в слово как был: словарь читают ещё десяток мест.
+  assert.equal(reasonText('bad_url'), REASON_BAD_URL);
+  assert.doesNotMatch(reasonText('peer_clock_skew'), /[{}]/,
+    'даже без значений скобки на экран не уезжают');
+});
+
+
+test('7f: отказ базы и сбитые часы — код остаётся за отказом, текст рассказывает про оба', async () => {
+  // Совпадают они не случайно: сбитые часы соседа — ровно та причина, по
+  // которой база отвергает его записи. Раньше причина о часах ЗАТИРАЛА отказ,
+  // и «часть записей не принята» с экрана исчезала — как раз тогда, когда
+  // записи действительно терялись.
+  inDir('records-summary');
+  const db = freshDb();
+  const res = await runBranchSync(db, {
+    pullImpl: async () => ({ ok: false, reason: 'not_secondary' }),
+    publishJournalImpl: async () => ({ ok: false, reason: 'relay_no_peers' }),
+    fetchJournalsImpl: async () => ({
+      ok: true,
+      peers: { B: { applied: 1, refused: 2, skew_ms: 3 * 3600 * 1000 } },
+    }),
+  });
+
+  const s = res.records;
+  assert.equal(s.fetch_reason, 'records_refused', 'потерянные записи — новость тяжелее часов');
+  assert.equal(s.clock_skew_reason, 'peer_clock_skew');
+  assert.equal(s.refused, 2);
+  assert.match(s.fetch_message, /списке отказов/, 'про отказ базы обязано остаться');
+  assert.match(s.fetch_message, /Часы филиала B спешат на 3 ч/, 'и про часы тоже');
+  assert.doesNotMatch(s.fetch_message, /[{}]/);
+  db.close();
+});
+
+test('7f: спешат ВСЕ соседи — значит отстаём мы, и названо самое большое смещение', async () => {
+  inDir('records-behind');
+  const db = freshDb();
+  const res = await runBranchSync(db, {
+    pullImpl: async () => ({ ok: false, reason: 'not_secondary' }),
+    publishJournalImpl: async () => ({ ok: false, reason: 'relay_no_peers' }),
+    fetchJournalsImpl: async () => ({
+      ok: true,
+      peers: {
+        B: { applied: 1, skew_ms: 3 * 3600 * 1000 },
+        C: { applied: 1, skew_ms: 4 * 3600 * 1000 },
+      },
+    }),
+  });
+
+  const s = res.records;
+  assert.equal(s.fetch_reason, 'local_clock_behind', 'крутить часы надо здесь, а не у обоих соседей');
+  assert.equal(s.clock_skew.offset_ms, 4 * 3600 * 1000, 'отстаём не меньше, чем от самого дальнего');
+  assert.match(s.fetch_message, /на 4 ч/);
+  assert.doesNotMatch(s.fetch_message, /[{}]/);
   db.close();
 });

@@ -17,7 +17,7 @@ import assert from 'node:assert';
 import { fill } from '../updates-logic.js';
 import {
   roleBadge, roleExplainer, syncLine, changesLabel, whenLabel, canSyncNow, addressValue,
-  routeLabel, syncKeyLine, relayExplainer, publishLine, canRegenerateKey, KEY_LOSS_WARNING,
+  routeLabel, syncKeyLine, relayExplainer, publishLine, seedLine, canRegenerateKey, KEY_LOSS_WARNING,
   branchRows, branchListNote, KEY_REISSUE_WARNING, KEY_REISSUE_QUESTION,
   LETTER_PERMANENCE_WARNING, ADD_BRANCH_QUESTION, ISSUE_KEY_QUESTION,
   UNLINK_WARNING_MAIN, UNLINK_WARNING_SECONDARY, UNLINK_QUESTION, UNLINKED_BRANCH_NOTE,
@@ -247,6 +247,45 @@ test('главный филиал видит, отправляется ли ко
   const last = publishLine({ role: 'main', relay_enabled: true, relay_last_publish: { at: '2026-08-29T09:00:00Z' } });
   assert.equal(last.template, 'Копия на сервере обновлена {date}.', 'дата — в дырке, иначе фраза непереводима');
   assert.match(say(last), /Копия на сервере обновлена 29\.08\.2026/);
+});
+
+// --- Задача 7e/7f: первичная загрузка --------------------------------------
+//
+// Засев большой клиники идёт страницами и часами. Экран, который в это время
+// говорит «идёт синхронизация» и больше ничего, неотличим от зависшего, и
+// владелец звонит в поддержку на второй час. Строку считали с Задачи 7e, но
+// НИКТО ЕЁ НЕ РИСОВАЛ (её экранный провод доделан 7f) — отсюда и эти тесты:
+// сама строка и её отсутствие проверяются здесь, провод — в
+// branch-sync-view.test.mjs.
+
+test('7f: филиал видит, какую страницу первичной загрузки он получает', () => {
+  const line = seedLine({ role: 'secondary', seed: { receiving: { from: 'B', page: 3, pages: 12 } } });
+  assert.equal(line.tone, 'info');
+  assert.match(say(line), /Первичная загрузка из филиала B/);
+  assert.match(say(line), /страница 3 из ~12/, 'без числа страниц это неотличимо от «зависло»');
+
+  // Оценки числа страниц ещё нет (первая страница) — говорим то, что знаем.
+  const noTotal = seedLine({ role: 'secondary', seed: { receiving: { from: 'B', page: 1, pages: 0 } } });
+  assert.match(say(noTotal), /страница 1\./);
+  assert.doesNotMatch(say(noTotal), /~/, 'выдуманная оценка хуже её отсутствия');
+});
+
+test('7f: главная видит, в какие филиалы идёт первичная загрузка и на какой она странице', () => {
+  const line = seedLine({
+    role: 'main',
+    seed: { sending: [{ letter: 'B', page: 5 }, { letter: 'C', page: 3 }] },
+  });
+  assert.match(say(line), /в филиалы: B, C/);
+  assert.match(say(line), /страница 3/, 'страница — САМАЯ ОТСТАЮЩАЯ: она и есть ответ «сколько ещё ждать»');
+});
+
+test('7f: засева нет — строки нет вовсе', () => {
+  // Пустая строка «загрузка не идёт», висящая каждый день, учит не читать это
+  // место — и в тот день, когда загрузка пойдёт, её не прочитают тоже.
+  assert.equal(seedLine(null), null);
+  assert.equal(seedLine({ role: 'main' }), null);
+  assert.equal(seedLine({ role: 'main', seed: null }), null);
+  assert.equal(seedLine({ role: 'main', seed: { sending: [] } }), null);
 });
 
 test('перевыпустить ключ может главный филиал, но не подключённый', () => {

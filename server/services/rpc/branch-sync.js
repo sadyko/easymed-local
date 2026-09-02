@@ -196,7 +196,65 @@ REASONS.branch_parent_unpaid = 'Подписка клиники не актив�
 REASONS.branch_of_branch     = 'Филиал не может заводить свои филиалы. Ключ выдаёт главная клиника.';
 REASONS.branch_server_error  = 'Easy-Med не смог завести филиал. Попробуйте ещё раз позже.';
 
-export const reasonText = (reason) => REASONS[reason] || 'Не удалось выполнить действие. Попробуйте ещё раз.';
+/**
+ * ФРАЗА ПО КОДУ ОТКАЗА — и подстановка того, без чего фраза не фраза.
+ *
+ * Второй аргумент необязателен, и старый вызов `reasonText(code)` работает
+ * дословно как работал. Он появился ради двух причин о часах: в них стоят
+ * дырки `{letter}` и `{offset}`, а подставлять их было некому — на экран
+ * уезжало «Часы филиала {letter} спешат на {offset}», то есть текст, который
+ * владельцу не говорит ни какой филиал, ни насколько.
+ *
+ * Принимается либо сам итог обмена (в нём лежит `clock_skew`), либо готовая
+ * карта значений. Незаполненная дырка не остаётся на экране фигурными
+ * скобками: она вырезается вместе с лишним пробелом — фраза без числа хуже
+ * фразы с числом, но лучше отладочного мусора.
+ *
+ * @param {string} reason код отказа
+ * @param {object|null} vars итог обмена ({clock_skew}) или {letter, offset_ms}
+ */
+export function reasonText(reason, vars = null) {
+  const raw = REASONS[reason] || 'Не удалось выполнить действие. Попробуйте ещё раз.';
+  return fillReason(raw, reasonVars(vars));
+}
+
+/** Значения для дырок: и из итога обмена, и из готовой карты. */
+function reasonVars(vars) {
+  if (!vars || typeof vars !== 'object') return {};
+  const skew = vars.clock_skew && typeof vars.clock_skew === 'object' ? vars.clock_skew : vars;
+  const out = {};
+  if (skew.letter) out.letter = String(skew.letter);
+  if (Number.isFinite(Number(skew.offset_ms))) out.offset = humanOffset(Number(skew.offset_ms));
+  else if (typeof skew.offset === 'string' && skew.offset) out.offset = skew.offset;
+  return out;
+}
+
+/**
+ * «3 ч», «12 мин», «2 дн» — на сколько сбиты часы, словами человека, а не
+ * миллисекундами. Сокращения не склоняются намеренно: «2 дн» верно и для
+ * двух, и для пяти, а «5 дней/2 дня» потребовало бы правил склонения ради
+ * строки, которую в норме не видит никто.
+ */
+function humanOffset(ms) {
+  const abs = Math.abs(Math.floor(ms));
+  const HOUR = 3600000;
+  const DAY = 24 * HOUR;
+  if (abs >= DAY) return Math.round(abs / DAY) + ' дн';
+  if (abs >= HOUR) return Math.round(abs / HOUR) + ' ч';
+  return Math.max(1, Math.round(abs / 60000)) + ' мин';
+}
+
+/** Подставить значения; дырку без значения вырезать вместе с лишним пробелом. */
+function fillReason(text, values) {
+  if (!/\{\w+\}/.test(text)) return text;
+  return String(text)
+    .replace(/ ?\{(\w+)\}/g, (whole, key) => (
+      Object.prototype.hasOwnProperty.call(values, key)
+        ? (whole.startsWith(' ') ? ' ' : '') + values[key]
+        : ''
+    ));
+}
+
 const lowerFirst = (s) => (s ? s.charAt(0).toLowerCase() + s.slice(1) : s);
 
 // BRANCH_SYNC_RELAY_V1 — когда неудача ПРЯМОГО пути оправдывает попытку через
@@ -1211,9 +1269,20 @@ async function syncRecords(db, dataDir, {
       const answered = Object.values(peers).filter((r) => r && !r.reason).length;
       const [letter, worst] = skewed[0];
       summary.clock_skew = { letter, offset_ms: worst.skew_ms, peers: skewed.length };
-      summary.fetch_reason = skewed.length > 1 && skewed.length === answered
+      // ЗЕРКАЛЬНАЯ ПРИЧИНА, когда спешат ВСЕ: крутить надо часы здесь.
+      // Смещение для неё — САМОЕ БОЛЬШОЕ из наблюдённых: отстаём мы не меньше,
+      // чем от самого дальнего соседа, и назвать меньшее число значило бы
+      // отправить владельца искать разницу в четверть часа там, где её три.
+      summary.clock_skew_reason = skewed.length > 1 && skewed.length === answered
         ? 'local_clock_behind'
         : 'peer_clock_skew';
+      // ЧАСЫ НЕ ЗАТИРАЮТ ОТКАЗ БАЗЫ (Задача 7f, F-2). Раньше эта строка
+      // была `summary.fetch_reason = …`, и совпади оба (сбитые часы соседа —
+      // ровно та причина, по которой записи и отвергаются), владелец узнал бы
+      // только про часы: «часть записей не принята» с экрана исчезала.
+      // Потерянные записи — новость тяжелее, поэтому КОД остаётся за отказом,
+      // а часы дописываются текстом (см. fetch_message ниже).
+      if (!summary.fetch_reason) summary.fetch_reason = summary.clock_skew_reason;
       told = true;
     }
   } catch (e) {
@@ -1221,6 +1290,21 @@ async function syncRecords(db, dataDir, {
     summary.fetch_reason = 'records_failed';
     told = true;
   }
+
+  // ГОТОВЫЙ ТЕКСТ, А НЕ ОДИН КОД. Коды о часах несут дырки ({letter},
+  // {offset}), и подставить их может только это место: сюда приехал сам
+  // перекос. Экран, собирающий фразу по коду, показал бы «Часы филиала
+  // {letter} спешат на {offset}» — так оно и было до этой правки.
+  //
+  // Две фразы через пробел, когда случились обе беды: код у ответа один
+  // (машинный разбор ждёт одного), а рассказать надо про обе.
+  const said = [];
+  if (summary.fetch_reason) said.push(reasonText(summary.fetch_reason, summary));
+  if (summary.clock_skew_reason && summary.clock_skew_reason !== summary.fetch_reason) {
+    said.push(reasonText(summary.clock_skew_reason, summary));
+  }
+  if (said.length) summary.fetch_message = said.join(' ');
+  if (summary.publish_reason) summary.publish_message = reasonText(summary.publish_reason, summary);
 
   return told ? summary : null;
 }

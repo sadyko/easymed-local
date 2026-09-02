@@ -45,7 +45,7 @@ import { DASH } from '../system-logic.js';
 import { isAdminActor } from '../admin-actor.js';
 import {
     roleBadge, roleExplainer, syncLine, whenLabel, canSyncNow, addressValue,
-    syncKeyLine, relayExplainer, publishLine, canRegenerateKey, KEY_LOSS_WARNING,
+    syncKeyLine, relayExplainer, publishLine, seedLine, canRegenerateKey, KEY_LOSS_WARNING,
     branchRows, branchListNote, KEY_REISSUE_WARNING, KEY_REISSUE_QUESTION,
     LETTER_PERMANENCE_WARNING, ADD_BRANCH_QUESTION, ISSUE_KEY_QUESTION,
     UNLINK_WARNING_MAIN, UNLINK_WARNING_SECONDARY, UNLINK_QUESTION,
@@ -130,6 +130,22 @@ async function paint(card) {
                 Tag(badge.label, { kind: badge.kind }),
                 h('span', { class: 'muted bsync-note' }, roleExplainer(status))),
         ));
+    }
+
+    // ПЕРВИЧНАЯ ЗАГРУЗКА — строкой вверху карточки, до всего остального
+    // (Задача 7e, I-3; провод доделан Задачей 7f: строку считали, но никто не
+    // рисовал). Засев большой клиники идёт часами, и «идёт синхронизация» без
+    // числа страниц неотличимо от «зависло» — владелец звонит в поддержку на
+    // второй час. Стоит она ВЫШЕ разбора по ролям намеренно: и филиал
+    // («страница 3 из ~12»), и главная («идёт загрузка в филиалы B, C») ждут
+    // одного и того же и должны увидеть это в одном месте.
+    //
+    // Засева нет — строки нет вовсе: пустая строка «загрузка не идёт» на
+    // экране каждый день учит не читать это место.
+    const seeding = seedLine(status);
+    if (seeding) {
+        card.appendChild(h('p', { class: 'bsync-line', role: 'status' },
+            Icon('Clock', { size: 14 }), ' ', say(seeding)));
     }
 
     if (status.role === 'main') paintMain(card, status, admin);

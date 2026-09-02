@@ -65,6 +65,15 @@ const SELF_RE = /^[A-Z]{1,8}$/;
 // только что» — то есть запись применится, а следующая честная правка
 // спокойно её обгонит.
 const SKEW_MAX_MS = 5 * 60 * 1000;
+// А НАСКОЛЬКО БОЛЬШИМ ПОЗВОЛЕНО БЫТЬ САМОМУ ПЕРЕКОСУ, который мы запомним и
+// покажем (Задача 7f, F-2). Метка приезжает снаружи, её формат
+// допускает 48 бит миллисекунд, и подделанная 'ffffffffffff' даёт перекос
+// примерно в 8,9 миллиона лет. Число это едет в sync_peers.clock_skew_ms и на
+// экран — и там оно превращает настоящую подсказку («часы филиала B спешат на
+// 3 ч — проверьте время») в бессмыслицу, по которой ничего не сделаешь.
+// Десять лет — потолок, выше которого «на сколько именно» уже не важно: часы
+// сбиты, и это единственное, что нужно знать.
+const SKEW_REPORT_MAX_MS = 10 * 365 * 24 * 60 * 60 * 1000;
 
 /**
  * Применить порцию.
@@ -99,11 +108,15 @@ const SKEW_MAX_MS = 5 * 60 * 1000;
  * @param {{self: string, peer?: string, upto?: number, seed?: boolean}} opts
  *   self — буква ЭТОГО узла (идёт в часы); peer — буква узла, ЧЕЙ блоб мы
  *   забрали, если она известна вызывающему; upto/seed — заголовок среза.
- * @returns {{applied:number, released:number, skipped:number, protected:number, deferred:number, deleted:number, refused:number, already?:true}}
- *   released — сколько строк применено ИЗ ОЖИДАНИЯ; protected — сколько записей
- *   отдали хотя бы одну колонку местной неотправленной правке; deferred — сколько
+ * @returns {{applied:number, released:number, skipped:number, deferred:number, deleted:number, refused:number, already?:true}}
+ *   released — сколько строк применено ИЗ ОЖИДАНИЯ; deferred — сколько
  *   строк ЖДЁТ родителя на конец транзакции (не «сколько раз отложили»);
  *   already — срез уже применён раньше, работы не было.
+ *
+ *   ПОЛЯ `protected` БОЛЬШЕ НЕТ (Задача 7f). Защита снята в 7e, и с тех
+ *   пор счётчик был вечным нулём: поле, которое всегда ноль, читающий ответ
+ *   понимает как «защищать не пришлось», хотя правильный ответ — «защиты не
+ *   существует».
  */
 export function applyBatch(db, records, {
   self, peer = null, upto = 0, seed = false, seedPage = 0, skewMaxMs = SKEW_MAX_MS,
@@ -117,7 +130,7 @@ export function applyBatch(db, records, {
     throw new Error('applyBatch: self letter required, got ' + JSON.stringify(self));
   }
   const stats = {
-    applied: 0, released: 0, skipped: 0, protected: 0, deferred: 0, deleted: 0, refused: 0,
+    applied: 0, released: 0, skipped: 0, deferred: 0, deleted: 0, refused: 0,
     skewed: 0, skew_ms: 0,
   };
   const ctx = newCtx(db);
@@ -268,7 +281,13 @@ export function applyBatch(db, records, {
     }
   });
 
-  run(Array.isArray(records) ? records : []);
+  // .immediate() — как в identity.js и letters.js, и по той же причине: эта
+  // транзакция ЧИТАЕТ (квитанция, sync_seen, местные метки), а потом ПИШЕТ по
+  // прочитанному. Отложенная транзакция начинается читателем и берёт запись
+  // только у первого INSERT — и если между чтением и записью влез чужой
+  // писатель, SQLite отвечает SQLITE_BUSY_SNAPSHOT и откатывает уже сделанную
+  // работу вместо того, чтобы подождать. BEGIN IMMEDIATE берёт запись сразу.
+  run.immediate(Array.isArray(records) ? records : []);
   return stats;
 }
 
@@ -754,7 +773,10 @@ function clampSkew(ctx, stamp) {
   const parsed = parseStamp(stamp);
   const limit = Date.now() + ctx.skewMax;
   if (!parsed || parsed.ms <= limit) return stamp;
-  const ahead = parsed.ms - Date.now();
+  // Перекос запоминается ОГРАНИЧЕННЫМ: см. SKEW_REPORT_MAX_MS. Подрезка метки
+  // (ниже) от этого не меняется — ограничивается только число, которое мы
+  // потом покажем человеку.
+  const ahead = Math.min(parsed.ms - Date.now(), SKEW_REPORT_MAX_MS);
   if (ahead > ctx.skewMs) ctx.skewMs = ahead;
   ctx.skewed++;
   try {
