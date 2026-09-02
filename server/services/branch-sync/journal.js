@@ -54,6 +54,28 @@ export const CODE_REFS = {
 
 const TABLES = Object.keys(SHIPPED);
 
+/**
+ * КТО ПРАВИЛ КОЛОНКУ ЗДЕСЬ И КОГДА — из sync_authored (Задача 7e).
+ *
+ * Отдельная таблица, а не журнал, ровно потому, что журнал ЧИСТИТСЯ: подтвердил
+ * сосед приём — строка ушла, и наша свежая правка осталась без метки, а
+ * следующий блоб соседа со СТАРЫМ значением лёг поверх неё. Здесь же авторство
+ * живёт столько же, сколько сама строка.
+ *
+ * @param {(sql: string) => object} q подготовитель запросов вызывающего (у
+ *   сборки порции и у приёма он свой, а таблица одна)
+ * @returns {Map<string, string>} колонка → время её последней здешней правки
+ */
+export function authoredAt(q, tbl, uid) {
+  const out = new Map();
+  try {
+    for (const r of q('SELECT col, at FROM sync_authored WHERE tbl = ? AND uid = ?').all(tbl, uid)) {
+      if (r && r.col && r.at) out.set(r.col, r.at);
+    }
+  } catch { /* таблицы нет (старая база) — авторство просто неизвестно */ }
+  return out;
+}
+
 // I7 (ревью Задачи 4): без кэша каждая ссылка (REFS + CODE_REFS) и каждый
 // снимок строки компилируют СВОЙ SQL заново на КАЖДУЮ запись — на партии
 // visit_services в 5000 строк это 15 000 компиляций (замерено ревью), хотя
@@ -286,13 +308,47 @@ export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date
         q('SELECT col, stamp FROM sync_seen WHERE tbl = ? AND uid = ?').all(h.tbl, h.uid)
           .map((r) => [r.col, r.stamp])
       );
-      const mark = (col) => { stamps[col] = seen.get(col) || rowStamp; };
+      // Своё авторство — из sync_authored (Задача 7e): настоящее время правки
+      // ИМЕННО этой колонки. Раньше здесь стоял rowStamp от updated_at, то есть
+      // «последнее касание строки», и правка заметки старила адрес.
+      const mine = authoredAt(q, h.tbl, h.uid);
+      // ПОЛ ДЛЯ КОЛОНКИ, ПРО КОТОРУЮ МЫ НЕ ЗНАЕМ НИЧЕГО. У строки, заведённой
+      // ЗДЕСЬ, это её created_at — честное «раньше не было». У строки
+      // ПРИЕХАВШЕЙ created_at означает совсем другое: когда МЫ её приняли, то
+      // есть заведомо позже настоящей правки, которая её и привезла. Поставив
+      // его, узел выдавал бы чужому значению метку новее всего на свете и
+      // замораживал колонку по всей сети — в прогоне это видно как «адрес
+      // больше никогда не меняется» (16 расхождений из 40).
+      //
+      // Поэтому у приехавшей строки пол — САМАЯ РАННЯЯ из известных нам меток
+      // этой строки: ниже неё мы всё равно ничего не знаем, а низкая метка
+      // безопасна. Сосед, у которого нет ничего, значение возьмёт; сосед, у
+      // которого есть что-то новее, оставит своё.
+      let floorStamp = rowStamp;
+      if (row.sync_origin != null) {
+        let earliest = null;
+        for (const [col, st] of seen) {
+          if (col === '*') continue;
+          if (!earliest || st < earliest) earliest = st;
+        }
+        if (earliest) floorStamp = earliest;
+      }
+      const mark = (col) => {
+        const ours = mine.has(col) ? mintAt(Date.parse(mine.get(col)), self, clock) : null;
+        const theirs = seen.get(col) || null;
+        // Позже правили — того и метка.
+        let best = floorStamp;
+        if (ours && ours > best) best = ours;
+        if (theirs && theirs > best) best = theirs;
+        stamps[col] = best;
+      };
       for (const col of SHIPPED[h.tbl]) mark(col);
       for (const col of Object.keys(REFS[h.tbl] || {})) mark(col);
       for (const spec of Object.values(CODE_REFS[h.tbl] || {})) mark(spec.ref);
       // '*' — про строку целиком (её заведение), и метка у неё своя, строчная.
       stamps['*'] = rowStamp;
     } else {
+      const mine = authoredAt(q, h.tbl, h.uid);
       for (const c of q(COLS_AT_SQL).all(h.tbl, h.uid, from.sent_seq)) {
         const colMs = c.at ? Date.parse(c.at) : NaN;
         const colStamp = mintAt(Number.isFinite(colMs) ? colMs : rowAtMs, self, clock);
@@ -300,8 +356,12 @@ export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date
           const col = part.trim();
           if (!col) continue;
           if (!(col in changedAt) || changedAt[col] < c.seq) changedAt[col] = c.seq;
+          // Время берём из АВТОРСТВА, а журнальное — запасное: у обеих
+          // сторон спор решает одна и та же таблица, и расходиться им нельзя.
+          const authored = mine.has(col) ? mintAt(Date.parse(mine.get(col)), self, clock) : null;
+          const best = authored && authored > colStamp ? authored : colStamp;
           const prev = stamps[col];
-          if (!prev || prev < colStamp) stamps[col] = colStamp;
+          if (!prev || prev < best) stamps[col] = best;
         }
       }
     }
@@ -350,8 +410,14 @@ export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date
  * подставляется никогда: именно оно и делало поздний засев разрушительным.
  */
 function rowEditedAt(row, atMs, clockFn) {
-  const fromRow = row ? Date.parse(row.updated_at || row.created_at || '') : NaN;
-  if (Number.isFinite(fromRow) && (!Number.isFinite(atMs) || fromRow > atMs)) return fromRow;
+  // ПОЛ — created_at, а НЕ updated_at (Задача 7e, I-1). updated_at один на всю
+  // строку: подставив его как время правки КОЛОНКИ, мы объявляли бы, что
+  // правка заметки обновила и возраст адреса, — и сосед держал бы устаревший
+  // адрес вечно (воспроизведено ревью). Настоящее поколоночное время лежит в
+  // sync_authored; сюда оно приходит отдельно, а здесь — только пол для тех
+  // колонок, которых здесь не правили ни разу.
+  const born = row ? Date.parse(row.created_at || '') : NaN;
+  if (Number.isFinite(born) && (!Number.isFinite(atMs) || born > atMs)) return born;
   if (Number.isFinite(atMs)) return atMs;
   // Ни журнал, ни строка не дали читаемой даты — берём часы вызова, как и
   // раньше в этом случае: метка «1970» проиграла бы вообще всему и молча.

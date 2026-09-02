@@ -20,6 +20,7 @@ import {
   // BRANCH_RECORDS_V1 (Задача 7) — тот же канал, что и у справочника, только возит
   // записи и в ОБЕ стороны: главная клиника здесь — узел, а не источник.
   publishJournal, fetchJournals, QUIET_JOURNAL_REASONS, LAST_JOURNAL_KEY,
+  withExchangeLock, SEED_PROGRESS_KEY,
 } from '../branch-sync/relay.js';
 import { relayIdFor } from '../branch-sync/relay-crypto.js';
 
@@ -115,6 +116,8 @@ const REASONS = {
   relay_no_pairing: 'Эта установка ни с кем не связана: ни главный филиал, ни подключённый. Записями меняться не с кем.',
   relay_no_peers: 'В сети пока одно здание — обмениваться записями не с кем. Заведите филиал в главной клинике.',
   relay_no_identity: 'Установка не знает, каким филиалом она является, поэтому подписать свои записи ей нечем. Восстановите базу из резервной копии или обратитесь в поддержку Easy-Med.',
+  peer_clock_skew: 'Часы филиала {letter} спешат на {offset} — метки его правок приходят из будущего, и правки других филиалов по этим полям пришлось бы отвергать. Проверьте дату и время на компьютере этого филиала.',
+  local_clock_behind: 'Часы ЭТОГО компьютера отстают от остальных филиалов примерно на {offset}. Пока это так, его правки будут проигрывать чужим при совпадении полей. Проверьте дату и время.',
   records_refused: 'Часть записей соседнего филиала база не приняла — они остались в списке отказов (таблица sync_refused). Данные из-за этого неполные: покажите этот текст поддержке Easy-Med.',
   records_failed: 'Записи соседнего филиала приехали, но не были применены — база осталась прежней. Они приедут снова при следующей синхронизации; если повторится — обратитесь в поддержку Easy-Med.',
 
@@ -283,7 +286,46 @@ export function branchSyncStatus(db, args, user) {
     // её всем, кому открыты настройки, ровно потому, что вопрос «что за буква в
     // номере» задаёт регистратура, а не администратор.
     ...identityFields(db),
+
+    // ПЕРВИЧНАЯ ЗАГРУЗКА — на экране (Задача 7e, I-3). Засев большой клиники
+    // идёт страницами и часами; «идёт синхронизация» без числа неотличимо от
+    // «зависло», и владелец звонит в поддержку на второй час.
+    seed: seedProgress(db, pairing),
   };
+}
+
+/**
+ * Что показать про первичную загрузку. У ЗАСЕВАЮЩЕГО (обычно главная клиника)
+ * — по каждому филиалу, которому она сейчас идёт; у ЗАСЕВАЕМОГО — своя
+ * страница, как её назвал отправитель в последнем срезе.
+ *
+ * null — засева нет; экран тогда про него и не заговаривает.
+ */
+function seedProgress(db, pairing) {
+  const out = {};
+  try {
+    const rows = db.prepare(
+      'SELECT node, seed_page FROM sync_peers WHERE seed_floor IS NOT NULL ORDER BY node'
+    ).all();
+    if (rows.length) {
+      out.sending = rows.map((r) => ({ letter: r.node, page: (r.seed_page || 0) + 1 }));
+    }
+  } catch { /* база старой сборки — просто нечего показать */ }
+
+  const raw = getState(db, SEED_PROGRESS_KEY);
+  if (raw) {
+    try {
+      const v = JSON.parse(raw);
+      // Старее получаса — засев кончился (страницы перестали приходить), и
+      // держать на экране «идёт загрузка» было бы враньём.
+      const at = v && v.at ? Date.parse(v.at) : NaN;
+      if (Number.isFinite(at) && Date.now() - at < 30 * 60 * 1000) {
+        out.receiving = { from: v.from, page: v.page, pages: v.pages || 0 };
+      }
+    } catch { /* испорченная запись — не повод ронять статус */ }
+  }
+  void pairing;
+  return out.sending || out.receiving ? out : null;
 }
 
 // ДВЕ ФУНКЦИИ, ОДИН ВОПРОС К БАЗЕ И РАЗНАЯ ЦЕНА МОЛЧАНИЯ. Обе спрашивают, каким
@@ -990,7 +1032,6 @@ export function branchSyncUnpair(db, args, user) {
 // Правильная защита — не пауза, а склейка: пока запрос в полёте, все, кто
 // нажал, ждут ЕГО и получают ЕГО настоящий результат. Скачивание одно,
 // ответов столько, сколько нажавших, и каждый ответ правдив.
-let inFlight = null;
 
 /**
  * Забрать справочник и применить. Без пользователя и без проверки прав:
@@ -1135,14 +1176,44 @@ async function syncRecords(db, dataDir, {
     // есть нормальная работа. Отказ базы нормальной работой не является:
     // запись потеряна, сосед второй раз её не пришлёт, и владелец обязан это
     // увидеть, а не узнать через полгода, что в филиале нет половины визитов.
+    // ОБЩИЙ ОТКАЗ ВЫБОРКИ — первым: он про весь обмен, а не про одного соседа.
+    // Раньше он висел в else за отказами базы и молчал ровно тогда, когда
+    // отказы были, — то есть в самом интересном случае. Порядок здесь читается
+    // как «сперва про канал, потом про содержимое», и так же он и работает.
+    if (got && !got.ok && !QUIET_JOURNAL_REASONS.has(got.reason)) {
+      summary.fetch_reason = got.reason;
+      told = true;
+    }
+
+    // ОТКАЗЫ БАЗЫ — ОТДЕЛЬНОЙ СТРОКОЙ (ревью 7/7b, I2). Они уже посчитаны в
+    // skipped, но skipped — это и «уже применяли», и «проиграло по метке», то
+    // есть нормальная работа. Отказ базы нормальной работой не является:
+    // запись потеряна, сосед второй раз её не пришлёт, и владелец обязан это
+    // увидеть, а не узнать через полгода, что в филиале нет половины визитов.
     const refused = Object.values(peers).reduce((n, r) => n + ((r && r.refused) || 0), 0);
     if (refused) {
       summary.refused = refused;
       summary.fetch_reason = 'records_refused';
       told = true;
     }
-    else if (got && !got.ok && !QUIET_JOURNAL_REASONS.has(got.reason)) {
-      summary.fetch_reason = got.reason;
+
+    // ЧАСЫ (Задача 7e, I-2). Метка решает, чья правка новее, поэтому филиал с
+    // часами из будущего останавливает правки этого поля у всех остальных.
+    // Подрезка спасает данные, но чинить надо часы — и сказать об этом надо
+    // словами, назвав филиал и насколько он спешит.
+    //
+    // Спешат ВСЕ соседи сразу — значит отстаём мы: показываем зеркальную
+    // причину, иначе владелец пойдёт крутить часы не на том компьютере.
+    const skewed = Object.entries(peers)
+      .filter(([, r]) => r && r.skew_ms > 0)
+      .sort((a, b) => b[1].skew_ms - a[1].skew_ms);
+    if (skewed.length) {
+      const answered = Object.values(peers).filter((r) => r && !r.reason).length;
+      const [letter, worst] = skewed[0];
+      summary.clock_skew = { letter, offset_ms: worst.skew_ms, peers: skewed.length };
+      summary.fetch_reason = skewed.length > 1 && skewed.length === answered
+        ? 'local_clock_behind'
+        : 'peer_clock_skew';
       told = true;
     }
   } catch (e) {
@@ -1180,9 +1251,12 @@ async function syncRecords(db, dataDir, {
 export async function branchSyncNow(db, args, user, deps = {}) {
   requireUser(user);
 
-  if (inFlight) return inFlight;
-  inFlight = runBranchSync(db, deps).finally(() => { inFlight = null; });
-  return inFlight;
+  // ОДИН ЗАМОК С ЧАСАМИ (ревью M5). Раньше здесь был свой флаг, а у часового
+  // обмена — свой, и они друг друга не видели: нажатие кнопки в ту же секунду,
+  // когда сработало расписание, запускало вторую резервную копию, вторую
+  // выгрузку и вторую транзакцию приёма. Замок живёт в relay.js — там, где сам
+  // обмен, — и оба входа берут именно его.
+  return withExchangeLock(() => runBranchSync(db, deps));
 }
 
 function finish(db, result, message) {

@@ -20,7 +20,7 @@
 // потому что в ней визиты без пациентов.
 import { SqliteError } from 'better-sqlite3';
 import { compareStamps, isStamp, nextStamp, parseStamp, stampAt } from './hlc.js';
-import { SHIPPED, REFS, CODE_REFS, readClock, writeClock } from './journal.js';
+import { SHIPPED, REFS, CODE_REFS, readClock, writeClock, authoredAt } from './journal.js';
 
 // sync_seen (миграция 084): метка последнего ПРИНЯТОГО изменения каждой
 // колонки. Местная правка метки не имеет — до отправки её защищает журнал.
@@ -31,6 +31,10 @@ const SEEN = 'sync_seen';
 // размер русской записи вдвое ровно там, где предел и нужен.
 const MAX_PENDING_BYTES = 256 * 1024;
 const PENDING_MAX_DAYS = 30;
+// Сколько держим запись об отказе базы. Дольше, чем ожидание родителя: отказ
+// читает человек, а не механизм, и «пришло на прошлой неделе» — это ещё
+// разбираемо, «пришло вчера» — уже поздно.
+const REFUSED_MAX_DAYS = 60;
 // sync_seen растёт быстрее журнала: ~190 строк на принятый визит с панелью
 // (повторное ревью Задачи 3: ~17 млн строк, 1.4 ГБ в год у принимающего
 // филиала). Метка старше SEEN_DAYS не нужна: порции — минутной давности, а
@@ -50,6 +54,17 @@ const MAX_RELEASE_ROUNDS = 64;
 // своя копия, а не импорт: hlc проверяет букву в чеканке метки, а нам нужно
 // отказать ДО транзакции — на входе, где отказ ничего не стоит.
 const SELF_RE = /^[A-Z]{1,8}$/;
+// НАСКОЛЬКО МЕТКЕ ПОЗВОЛЕНО ОБГОНЯТЬ НАШИ ЧАСЫ (Задача 7e, I-2). Метка теперь
+// решает, чья правка новее, — значит компьютер с часами, ушедшими вперёд,
+// раздаёт всей сети метки из будущего, и КАЖДАЯ честная правка этой колонки
+// отвергается, пока настенное время не догонит. Пять минут — обычный дрейф без
+// NTP; всё, что выше, — сбитые часы, и такую метку мы подрезаем.
+//
+// ПОДРЕЗАЕМ, А НЕ ОТБРАСЫВАЕМ: в записи настоящая работа филиала, и терять её
+// из-за севшей батарейки CMOS нельзя. Подрезанная метка означает «пришло
+// только что» — то есть запись применится, а следующая честная правка
+// спокойно её обгонит.
+const SKEW_MAX_MS = 5 * 60 * 1000;
 
 /**
  * Применить порцию.
@@ -90,7 +105,9 @@ const SELF_RE = /^[A-Z]{1,8}$/;
  *   строк ЖДЁТ родителя на конец транзакции (не «сколько раз отложили»);
  *   already — срез уже применён раньше, работы не было.
  */
-export function applyBatch(db, records, { self, peer = null, upto = 0, seed = false, seedPage = 0 } = {}) {
+export function applyBatch(db, records, {
+  self, peer = null, upto = 0, seed = false, seedPage = 0, skewMaxMs = SKEW_MAX_MS,
+} = {}) {
   // Без self часы после приёма не чеканятся, и узел с отставшими часами
   // проигрывал бы слияние вечно — это тихая потеря данных, а не мелочь.
   // Проверяется ФОРМА буквы, а не просто «не пусто»: self уходит в nextStamp,
@@ -99,13 +116,25 @@ export function applyBatch(db, records, { self, peer = null, upto = 0, seed = fa
   if (!SELF_RE.test(String(self == null ? '' : self).toUpperCase())) {
     throw new Error('applyBatch: self letter required, got ' + JSON.stringify(self));
   }
-  const stats = { applied: 0, released: 0, skipped: 0, protected: 0, deferred: 0, deleted: 0, refused: 0 };
+  const stats = {
+    applied: 0, released: 0, skipped: 0, protected: 0, deferred: 0, deleted: 0, refused: 0,
+    skewed: 0, skew_ms: 0,
+  };
   const ctx = newCtx(db);
   // Буква нужна не только часам: ею чеканится метка МЕСТНОЙ правки, когда
   // приехавшую запись надо с этой правкой сравнить (localEditStamps).
   ctx.self = String(self).toUpperCase();
   // Чей блоб разбираем — нужно записи об отказе (sync_refused).
   ctx.peer = typeof peer === 'string' && peer ? peer : null;
+  // Снимки авторства строк, которых коснулся приём: восстанавливаются в конце
+  // транзакции, чтобы принятая колонка не считалась здешней правкой.
+  ctx.authored = new Map();
+  // Насколько метки этого соседа обгоняют наши часы и сколько записей пришлось
+  // подрезать: и то, и другое едет на экран синхронизации.
+  ctx.skewMs = 0;
+  ctx.skewed = 0;
+  // Допуск вынесен в параметр ради теста: подождать пять минут он не может.
+  ctx.skewMax = Number.isFinite(Number(skewMaxMs)) && Number(skewMaxMs) >= 0 ? Number(skewMaxMs) : SKEW_MAX_MS;
 
   // Срез, который мы уже разбирали. Не ошибка и не потеря: сосед повторяет
   // неподтверждённое в каждом блобе, пока не увидит нашу квитанцию, а
@@ -153,6 +182,10 @@ export function applyBatch(db, records, { self, peer = null, upto = 0, seed = fa
     // появилась в справочнике), ждал бы вечно.
     db.prepare('DELETE FROM sync_pending WHERE received_at < ?')
       .run(new Date(Date.now() - PENDING_MAX_DAYS * 86400000).toISOString());
+    // Отказы тоже не вечны: строка, которую база не взяла полгода назад и
+    // которую с тех пор никто не переслал, — это уже не список дел, а мусор.
+    db.prepare('DELETE FROM sync_refused WHERE at < ?')
+      .run(new Date(Date.now() - REFUSED_MAX_DAYS * 86400000).toISOString());
     // Метки, старше которых ничего не приедет. Сравнение строковое: метка —
     // hex миллисекунд фиксированной ширины (hlc.js), и «старше даты» это
     // «меньше метки этой даты».
@@ -178,6 +211,15 @@ export function applyBatch(db, records, { self, peer = null, upto = 0, seed = fa
 
     // Приём не порождает исходящих изменений — см. заголовок.
     db.prepare('DELETE FROM sync_journal WHERE seq > ?').run(journalFrom);
+    restoreAuthorship(db, ctx);
+
+    stats.skewed = ctx.skewed;
+    stats.skew_ms = ctx.skewMs;
+    // Последний замеченный перекос хранится по соседу: карточка филиала в
+    // главной клинике показывает его словами, а не «ничего не синхронизируется».
+    if (peer && ctx.skewMs) {
+      db.prepare('UPDATE sync_peers SET clock_skew_ms = ? WHERE node = ?').run(Math.floor(ctx.skewMs), peer);
+    }
 
     // Часы этой машины двигаются за самую новую чужую метку: узел с отставшими
     // часами иначе проигрывал бы каждое слияние вечно.
@@ -282,7 +324,15 @@ function applyGuarded(db, rec, stats, ctx) {
              VALUES (?, ?, ?, ?)
              ON CONFLICT(tbl, uid, peer) DO UPDATE SET
                err = excluded.err, at = strftime('%Y-%m-%dT%H:%M:%SZ','now')`)
-        .run(String(rec && rec.tbl || '?'), String(rec && rec.uid || '?'), ctx.peer, e.message);
+        .run(
+          String(rec && rec.tbl || '?'), String(rec && rec.uid || '?'),
+          // Колонка NOT NULL: сосед не назван вызывающим — берём букву из
+          // самой записи (она сверена с меткой), и лишь в совсем безымянном
+          // случае '?'. NULL здесь был бы хуже всего: в PRIMARY KEY он не
+          // склеивается, и одна и та же строка копилась бы тысячами.
+          ctx.peer || String((rec && rec.origin) || '?'),
+          e.message,
+        );
     } catch (writeErr) {
       // Не смогли записать отказ — это не повод уронить всю порцию.
       console.warn('[sync] could not record the refusal:', writeErr && writeErr.message);
@@ -375,13 +425,35 @@ function applyOne(db, rec, stats, ctx) {
   // Часы двигаются за ЛЮБОЙ годной приехавшей меткой — и за удалением, и за
   // отложенной в ожидание, и за пропущенной: иначе узел с отставшими часами,
   // получивший детей раньше родителей, ничему не учится и продолжает проигрывать.
+  rec = { ...rec, stamp: clampSkew(ctx, rec.stamp) };
   if (rec.stamp > ctx.maxReceived) ctx.maxReceived = rec.stamp;
 
   const id = localId(db, ctx, rec.tbl, rec.uid);
+  // АВТОРСТВО ПРИ ПРИЁМЕ НЕ ПИШЕТСЯ — по той же причине, по которой не пишется
+  // журнал (см. заголовок файла): триггеры висят на самих таблицах, снять их на
+  // время приёма нельзя, и applyBatch убирает за собой. Без этого узел объявлял
+  // бы СВОИМ авторством каждую принятую колонку, да ещё и временем «сейчас», —
+  // и следующая честная правка соседа, сделанная минуту назад, проигрывала бы
+  // ей. В прогоне сети это видно сразу: правки перестают расходиться по узлам
+  // вовсе (40 расхождений из 40).
+  rememberAuthorship(db, ctx, rec.tbl, rec.uid);
   // Колонки, правленные ЗДЕСЬ и ещё не отданные этому соседу. Пустое множество
   // — защищать нечего. Новой строки (id == null) здесь не правили по
   // определению: терять нечего, защита не нужна.
-  const guarded = id == null ? EMPTY : localUnshippedCols(db, ctx, rec.tbl, rec.uid, rec.origin);
+  // ЗАЩИТЫ БОЛЬШЕ НЕТ (Задача 7e). Она держала колонки, правленные здесь и ещё
+  // не выложенные соседу, и была нужна, пока у местной правки не было метки:
+  // сравнивать было нечем, и единственным способом не потерять свою работу
+  // было не принимать чужую. Теперь метка есть у обеих сторон, она поколоночная
+  // и от времени правки — спор решается сравнением, а не удержанием.
+  //
+  // И удержание стало ВРЕДНЫМ, а не просто лишним. Наша правка СТАРШЕ
+  // приехавшей — защита всё равно оставляла бы наше устаревшее значение, а
+  // сосед, приняв нашу правку и увидев её младше своей, оставил бы своё: две
+  // базы разошлись бы на ровном месте. Плюс квитанция уезжала и на
+  // «защищённую» запись — сосед считал её доставленной и второй раз не слал.
+  //
+  // pub_seq остался: он показывает, докуда мы выложились (экран синхронизации),
+  // и ограничивает квитанцию соседа. Решать, что применять, он больше не может.
   // МЕТКИ МЕСТНЫХ ПРАВОК этой строки — по колонкам. Без них сравнение
   // «кто новее» шло между чужой меткой и ЧУЖОЙ ЖЕ (sync_seen помнит только
   // принятое), а местная правка в нём не участвовала вовсе.
@@ -391,7 +463,7 @@ function applyOne(db, rec, stats, ctx) {
   const colStamp = (col) => {
     const per = rec.stamps && typeof rec.stamps === 'object' && !Array.isArray(rec.stamps)
       ? rec.stamps[col] : null;
-    return isStamp(per) ? per : rec.stamp;
+    return clampSkew(ctx, isStamp(per) ? per : rec.stamp);
   };
   // true — местная правка этой колонки НОВЕЕ приехавшей записи.
   //
@@ -419,7 +491,6 @@ function applyOne(db, rec, stats, ctx) {
     // наполовину нечем, и «уцелела одна колонка» здесь не ответ.
     const newerCol = ctx.q(`SELECT 1 FROM ${SEEN} WHERE tbl = ? AND uid = ? AND stamp > ? LIMIT 1`)
       .get(rec.tbl, rec.uid, rec.stamp);
-    if (guarded.size) { stats.skipped++; stats.protected++; return; }
     if (newerCol) { stats.skipped++; return; }
     // Удаление проигрывает и МЕСТНОЙ правке, которая новее его: строку, с
     // которой здесь только что работали, стирать нельзя, даже если наша
@@ -428,7 +499,13 @@ function applyOne(db, rec, stats, ctx) {
     // «Удаление проигрывает более поздней правке» считается на ТОЙ ЖЕ оси, что
     // и сами правки: надгробие несёт время удаления, колонка — время своей
     // правки (Задача 7d).
-    if (id != null) { ctx.q(`DELETE FROM ${rec.tbl} WHERE id = ?`).run(id); stats.deleted++; }
+    if (id != null) {
+      ctx.q(`DELETE FROM ${rec.tbl} WHERE id = ?`).run(id);
+      stats.deleted++;
+      // Строки нет — и авторства её колонок быть не должно: восстанавливать
+      // снимок поверх удаления значило бы оставить след от того, чего нет.
+      ctx.authored.delete(rec.tbl + '|' + rec.uid);
+    }
     // Надгробие вместо поколоночных меток: строки больше нет, помнить по
     // колонкам нечего, а помнить САМ ФАКТ удаления обязательно (правило ниже).
     ctx.q(`DELETE FROM ${SEEN} WHERE tbl = ? AND uid = ?`).run(rec.tbl, rec.uid);
@@ -463,10 +540,8 @@ function applyOne(db, rec, stats, ctx) {
   // У НОВОЙ строки (id == null) changed не спрашиваем вовсе: терять нечего,
   // а собрать её из трёх изменённых полей нельзя — NOT NULL без умолчания.
   const changed = id == null ? null : changedSet(rec);
-  let held = false;   // хоть одну авторскую колонку забрала местная правка
   const wanted = (col) => {
     if (changed && !changed.has('*') && !changed.has(col)) return false;
-    if (guarded.has('*') || guarded.has(col)) { held = true; return false; }
     return true;
   };
 
@@ -602,6 +677,10 @@ function applyOne(db, rec, stats, ctx) {
   // оно новее и выиграет по колонкам, когда придёт его час.
   ctx.q('DELETE FROM sync_pending WHERE tbl = ? AND uid = ? AND stamp <= ?')
     .run(rec.tbl, rec.uid, rec.stamp);
+  // Строка применилась — прежний отказ по ней больше не факт, а история.
+  // Оставить его значило бы держать на экране «N записей не приняты» после
+  // того, как всё починилось (в базе-то теперь есть).
+  ctx.q('DELETE FROM sync_refused WHERE tbl = ? AND uid = ?').run(rec.tbl, rec.uid);
   const rememberApplied = ctx.q(`INSERT INTO ${SEEN} (tbl, uid, col, stamp) VALUES (?,?,?,?)
               ON CONFLICT(tbl, uid, col) DO UPDATE SET stamp = excluded.stamp`);
   // Метка пишется ТОЛЬКО применённым колонкам. Написать её всему снимку
@@ -610,7 +689,6 @@ function applyOne(db, rec, stats, ctx) {
   // Метка КОЛОНКИ, а не записи: именно её сравнивает следующая приехавшая
   // запись, и подменив её общей, мы вернули бы «автор всего снимка».
   for (const col of cols) rememberApplied.run(rec.tbl, rec.uid, col, colStamp(col));
-  if (held) stats.protected++;
   if (cols.length || id == null) stats.applied++; else stats.skipped++;
 }
 
@@ -628,6 +706,87 @@ function scalarPayload(data) {
     return false;
   }
   return true;
+}
+
+/**
+ * МЕТКИ МЕСТНЫХ ПРАВОК строки, по колонкам (ревью C1 → ось 7d → источник 7e).
+ *
+ * Читается sync_authored, а НЕ журнал, и это третья и последняя поправка к
+ * одному и тому же месту. Журнал вычищается по подтверждению соседей, и вместе
+ * с ним исчезала метка нашей собственной свежей правки: следующий блоб соседа
+ * со СТАРЫМ значением ложился поверх неё, сеть сходилась на более ранней
+ * правке, а оба журнала при этом были пусты — искать нечего. Воспроизводится
+ * без экзотики: у филиала выгрузка отвечает 500, а выборка работает.
+ *
+ * Пол — created_at строки, и ТОЛЬКО у строки, заведённой ЗДЕСЬ
+ * (sync_origin IS NULL). У приехавшей строки created_at — это момент, когда мы
+ * её приняли, то есть заведомо позже чужой правки, которая её и привезла;
+ * объявив его своим авторством, узел отвергал бы всё, что сосед пришлёт следом.
+ * Авторство приехавших колонок хранит sync_seen, и его достаточно.
+ */
+function localEditStamps(db, ctx, tbl, uid) {
+  const mine = authoredAt(ctx.q, tbl, uid);
+  const out = new Map();
+  const put = (col, ms) => {
+    if (!Number.isFinite(ms)) return;
+    let stamp;
+    try {
+      stamp = stampAt(ms, ctx.self);
+    } catch {
+      return;   // буква проверена на входе; это страховка, а не путь
+    }
+    const prev = out.get(col);
+    if (!prev || prev < stamp) out.set(col, stamp);
+  };
+  for (const [col, at] of mine) put(col, Date.parse(at));
+  const born = ctx.q(`SELECT created_at, sync_origin FROM ${tbl} WHERE uid = ?`).get(uid);
+  if (born && born.sync_origin == null && born.created_at) put('*', Date.parse(born.created_at));
+  return out.size ? out : null;
+}
+
+/**
+ * Метка из БУДУЩЕГО — подрезать до «сейчас + допуск» и запомнить, на сколько
+ * сосед спешит (Задача 7e, I-2). Возвращается метка, годная для сравнения и
+ * для хранения в sync_seen; буква узла сохраняется — по ней и решается ничья.
+ */
+function clampSkew(ctx, stamp) {
+  if (!isStamp(stamp)) return stamp;
+  const parsed = parseStamp(stamp);
+  const limit = Date.now() + ctx.skewMax;
+  if (!parsed || parsed.ms <= limit) return stamp;
+  const ahead = parsed.ms - Date.now();
+  if (ahead > ctx.skewMs) ctx.skewMs = ahead;
+  ctx.skewed++;
+  try {
+    return stampAt(limit, parsed.node);
+  } catch {
+    return stamp;
+  }
+}
+
+/**
+ * Снимок авторства строки ДО того, как приём её тронет. Берётся один раз на
+ * строку: applyOne может вернуться к ней ещё раз (освобождение из ожидания), и
+ * второй снимок был бы уже испорчен первой записью.
+ */
+function rememberAuthorship(db, ctx, tbl, uid) {
+  const key = tbl + '|' + uid;
+  if (ctx.authored.has(key)) return;
+  ctx.authored.set(key, ctx.q('SELECT col, at FROM sync_authored WHERE tbl = ? AND uid = ?').all(tbl, uid));
+}
+
+/** Вернуть авторство ровно таким, каким оно было до приёма. */
+function restoreAuthorship(db, ctx) {
+  if (!ctx.authored.size) return;
+  const wipe = ctx.q('DELETE FROM sync_authored WHERE tbl = ? AND uid = ?');
+  const put = ctx.q('INSERT INTO sync_authored (tbl, uid, col, at) VALUES (?,?,?,?)');
+  for (const [key, rows] of ctx.authored) {
+    const sep = key.indexOf('|');
+    const tbl = key.slice(0, sep);
+    const uid = key.slice(sep + 1);
+    wipe.run(tbl, uid);
+    for (const r of rows) put.run(tbl, uid, r.col, r.at);
+  }
 }
 
 const EMPTY = new Set();
@@ -721,106 +880,6 @@ function catalogueId(db, ctx, spec, code) {
   const r = ctx.q(`SELECT id FROM ${spec.table} WHERE ${spec.key} = ? ORDER BY id LIMIT 1`).get(code);
   return r ? r.id : null;
 }
-
-// КАКИЕ КОЛОНКИ этой строки правили здесь и ещё не отдали соседу, от которого
-// пришла порция. Пустое множество — защищать нечего; '*' в множестве — вся
-// строка (вставка или правка соседа неизвестной сборки).
-//
-// Раньше здесь был ответ «да/нет» на всю строку, и «да» означало ОТБРОСИТЬ
-// приехавшую запись целиком. Цена оказалась не в грубости, а в потере: сосед,
-// чью запись мы отбросили, уже сдвинул свой markSent и второй раз её не
-// пришлёт — правка исчезала из сети навсегда (шапка 084, ревью Задачи 5).
-// Теперь местная правка держит СВОИ колонки, а остальное сливается как обычно.
-//
-// ПО СОСЕДУ (origin записи), а не MIN по всем: с тремя филиалами заброшенный D
-// держал бы MIN(pub_seq) внизу вечно, и каждая строка, которую здесь хоть раз
-// правили, отвергала бы ВСЕ слияния, пока D не выйдет на связь (ревью Задачи 2).
-//
-// ПО pub_seq — «ВЫЛОЖЕНО», а не по sent_seq — «ПОДТВЕРЖДЕНО» (Задача 7b).
-// Разница видна только на задержке подтверждения, зато там она решает всё.
-// Защита закрывает ровно одно окно: нашей правки ещё НЕ ВИДНО соседу, поэтому
-// его запись физически не могла её учесть, и применить эту запись значило бы
-// затереть нашу работу снимком, ничего о ней не знающим. Как только наш блоб
-// лёг на сервер, окно закрыто: ближайшая выборка соседа наше авторство
-// увидит, а настоящий спор двух правок разбирают поколоночные метки
-// (sync_seen), для которых защита не нужна. Читай мы здесь sent_seq —
-// подтверждение отстаёт от выгрузки на цикл, и оба узла держали бы строки
-// друг от друга, не сходясь вовсе: ровно это показала пробная сборка
-// Задачи 7 (шапка markPublished в journal.js).
-function localUnshippedCols(db, ctx, tbl, uid, peer) {
-  const last = ctx.q('SELECT MAX(seq) AS s FROM sync_journal WHERE tbl = ? AND uid = ?').get(tbl, uid);
-  if (!last || !last.s) return EMPTY;
-  // Запись без origin (better-sqlite3 не связывает undefined и уронил бы всю
-  // порцию) — соседа не назвали, значит доказать, что наша правка до него
-  // доехала, нечем: считаем защищённой всю строку. Осторожность здесь ничего
-  // не теряет — правка приедет снова.
-  const sent = ctx.q('SELECT pub_seq FROM sync_peers WHERE node = ?').get(typeof peer === 'string' ? peer : '');
-  if (!sent) return ALL;
-  const rows = ctx.q('SELECT DISTINCT cols FROM sync_journal WHERE tbl = ? AND uid = ? AND seq > ?')
-    .all(tbl, uid, sent.pub_seq);
-  const set = new Set();
-  for (const row of rows) {
-    for (const part of String(row.cols || '*').split(',')) {
-      const col = part.trim();
-      if (!col) continue;
-      if (col === '*') return ALL;
-      set.add(col);
-    }
-  }
-  return set;
-}
-
-/**
- * МЕТКИ МЕСТНЫХ ПРАВОК строки, по колонкам (ревью 7/7b — C1; ось исправлена
- * Задачей 7d).
- *
- * Дефект, который это чинит, воспроизводится на двух базах и НЕ лечится
- * порядком выгрузки и выборки. B правит телефон в 09:00 и выкладывает; A этого
- * не забирал и правит телефон в 09:50; в 10:00 A сперва ВЫКЛАДЫВАЕТ (pub_seq
- * уходит за его правку, защита в тот же миг снимается), а потом забирает
- * вчерашний блоб B и кладёт его 09:00 поверх своего 09:50. Откат этот в журнал
- * не пишется, а B уже применил значение A. У A телефон B, у B телефон A —
- * навсегда. Корень: местная правка не имела метки ВООБЩЕ. sync_seen помнит
- * только ПРИНЯТЫЕ метки, то есть сравнение шло чужая-против-чужой, а своя
- * держалась одной лишь защитой — а та по построению временная.
- *
- * ОСЬ — ВРЕМЯ ПРАВКИ (stampAt), без пола часов. Метка приехавшей колонки
- * чеканится у соседа ровно так же, поэтому обе стороны сравнивают ОДНИ И ТЕ ЖЕ
- * две строки и выбирают одного победителя — вот и вся сходимость. Пробовать
- * здесь nextStamp бесполезно: его пол поднимается до Date.now() на каждом
- * приёме, и «новее» означало бы «позже вышел на связь» (замерено, разбор — в
- * плане, Задача 7d).
- *
- * Проигравшая сторона ничего не теряет: её правка не подтверждена, значит
- * уедет соседу и победит там по той же метке.
- */
-function localEditStamps(db, ctx, tbl, uid) {
-  const rows = ctx.q('SELECT cols, MAX(at) AS at FROM sync_journal WHERE tbl = ? AND uid = ? GROUP BY cols')
-    .all(tbl, uid);
-  if (!rows.length) return null;
-  const out = new Map();
-  for (const row of rows) {
-    const ms = Date.parse(row.at);
-    if (!Number.isFinite(ms)) continue;
-    let stamp;
-    try {
-      stamp = stampAt(ms, ctx.self);
-    } catch {
-      continue;   // буква проверена на входе; это страховка, а не путь
-    }
-    for (const part of String(row.cols || '*').split(',')) {
-      const col = part.trim();
-      if (!col) continue;
-      const prev = out.get(col);
-      if (!prev || prev < stamp) out.set(col, stamp);
-    }
-  }
-  return out.size ? out : null;
-}
-
-// Отдельная константа, а не new Set(['*']) на каждый вызов: множество только
-// читают, и одно на процесс дешевле пяти тысяч одинаковых на порцию.
-const ALL = new Set(['*']);
 
 // Применить тех, кто ждал родителей, которые УЖЕ на месте.
 //

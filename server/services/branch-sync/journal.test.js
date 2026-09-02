@@ -175,15 +175,27 @@ test('7b: квитанция несуществующему соседу нич�
   db.close();
 });
 
-test('метка — от времени ПРАВКИ, и растёт при переводе часов назад между порциями', () => {
+test('метка — от времени ПРАВКИ: часы машины, переведённые назад, её не двигают', () => {
   const db = fresh(); warm(db);
   db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
   const first = buildBatch(db, { self: 'B', peer: 'C' });
-  markSent(db, 'C', first.upto, first.clock);
+  markSent(db, 'C', first.upto, first.clock, first.seed);
+
+  // Правка «через минуту после заведения». Время проставляется явно: тест
+  // укладывается в миллисекунды, а речь именно о РАЗНЫХ моментах правки.
+  const later = new Date(Date.now() + 60000).toISOString();
+  const before = db.prepare('SELECT COALESCE(MAX(seq), 0) s FROM sync_journal').get().s;
   db.prepare("UPDATE patients SET phone = '+998900000000' WHERE full_name = 'Иванов'").run();
-  const second = buildBatch(db, { self: 'B', peer: 'C', clock: () => 1 });   // часы машины «ушли в 1970»
-  const a = first.records[0].stamp, b = second.records[0].stamp;
+  db.prepare('UPDATE sync_journal SET at = ? WHERE seq > ?').run(later, before);
+  db.prepare("UPDATE sync_authored SET at = ? WHERE col = 'phone'").run(later);
+
+  // Часы машины «ушли в 1970» — метку это больше не касается вовсе: она от
+  // времени правки, а не от времени отправки (Задача 7d).
+  const second = buildBatch(db, { self: 'B', peer: 'C', clock: () => 1 });
+  const a = first.records[0].stamp;
+  const b = second.records[0].stamp;
   assert.equal(b > a, true, 'метка не откатилась вместе с часами: ' + a + ' -> ' + b);
+  assert.equal(parseStamp(b).ms, Date.parse(later), 'и она — ровно время правки');
   db.close();
 });
 

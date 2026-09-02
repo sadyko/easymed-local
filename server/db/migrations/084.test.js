@@ -153,7 +153,7 @@ test('084: таблицы ожидания и соседей существую�
   // Слить их обратно в одну нельзя: на задержке подтверждения узлы начинают
   // защищать строки друг от друга и не сходятся вовсе.
   assert.deepEqual(peers, [
-    'node', 'pub_seq', 'sent_seq', 'recv_upto', 'recv_seed_page', 'last_ok', 'last_ack',
+    'node', 'pub_seq', 'sent_seq', 'recv_upto', 'recv_seed_page', 'last_ok', 'last_ack', 'clock_skew_ms',
     'seed_floor', 'seed_started', 'seed_tbl', 'seed_at', 'seed_id', 'seed_page',
     'seed_next_tbl', 'seed_next_at', 'seed_next_id', 'seed_next_done',
   ]);

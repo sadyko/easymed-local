@@ -509,6 +509,38 @@ const JOURNAL_LIMIT = 5000;
 // блоба, дело не в размере страницы, а в одной чудовищной строке — её надо
 // увидеть отказом, а не резать страницу до нуля бесконечным делением.
 const MIN_JOURNAL_LIMIT = 100;
+// СТРАНИЦА ЗАСЕВА — крупнее обычной (Задача 7e, I-3). Страница подтверждается
+// соседом, а такт у сети часовой, поэтому каждая страница стоит примерно трёх
+// часов: выложили — забрал — подтвердил. При 5000 строк на страницу клиника на
+// 70 000 пациентов (со всеми визитами и результатами это ~250 000 строк)
+// засевала бы филиал больше месяца. Двадцать тысяч строк на страницу и
+// десятиминутный такт на время засева сводят это к нескольким часам.
+// Предел блоба по-прежнему главнее: не влезло — страница делится пополам.
+const SEED_LIMIT = 20000;
+// Пока кого-то засеваем, обмен идёт не раз в час, а раз в десять минут — и на
+// той, и на другой стороне. Ускорение временное: закончился засев — вернулись
+// к часовому ритму, ради которого всё и строилось.
+export const SEEDING_INTERVAL_MS = 10 * 60 * 1000;
+// Отметка «нас сейчас засевают»: её ставит приём, когда разобрал страницу
+// засева. Филиалу больше неоткуда узнать, что первичная загрузка идёт, — а
+// торопиться нужно именно ему.
+export const SEEDING_KEY = 'branch_sync_seeding';
+
+/** Идёт ли первичная загрузка — в любую сторону. Читается расписаниями. */
+export function seedingNow(db, { now = () => new Date() } = {}) {
+  try {
+    const mine = db.prepare('SELECT 1 FROM sync_peers WHERE seed_floor IS NOT NULL LIMIT 1').get();
+    if (mine) return true;
+    const raw = getState(db, SEEDING_KEY);
+    if (!raw) return false;
+    // Свежесть, а не флаг: «засев кончился» приёмнику никто не объявляет, он
+    // просто перестаёт получать страницы. Полчаса тишины — значит кончился.
+    const seen = Date.parse(String(raw));
+    return Number.isFinite(seen) && (now().getTime() - seen) < 30 * 60 * 1000;
+  } catch {
+    return false;
+  }
+}
 
 // Запись о последней выгрузке ЖУРНАЛА — отдельно от LAST_PUBLISH_KEY
 // (справочник): у них разные адреса, разное содержимое и разные поводы
@@ -527,6 +559,8 @@ export const QUIET_JOURNAL_REASONS = new Set([
 ]);
 
 export const LAST_JOURNAL_KEY = 'branch_sync_relay_journal';
+// Докуда дошла первичная загрузка ЭТОГО узла — для экрана: {from, page, pages}.
+export const SEED_PROGRESS_KEY = 'branch_sync_seed_progress';
 
 /** Последняя удачная выгрузка журнала: {at, bytes, peers} — либо null. */
 export function readLastJournal(db) {
@@ -611,6 +645,33 @@ function sameAcks(prev, next) {
   if (keys.length !== Object.keys(a).length) return false;
   return keys.every((k) => a[k] && next[k]
     && a[k].upto === next[k].upto && a[k].seed_page === next[k].seed_page);
+}
+
+/** Этому соседу сейчас идёт засев? (строки нет — значит, ещё предстоит) */
+function isSeedingPeer(db, peer) {
+  try {
+    const row = db.prepare('SELECT last_ok, seed_floor FROM sync_peers WHERE node = ?').get(peer);
+    return !row || row.last_ok == null || row.seed_floor != null;
+  } catch { return false; }
+}
+
+/**
+ * Сколько страниц засева примерно осталось. Считается по числу строк в самих
+ * таблицах — тех же, что читает seedPage, — и делится на размер отданной
+ * страницы. Оценка грубая (строки прибавляются по ходу), поэтому и «~».
+ */
+function seedPagesEstimate(db, pageRows) {
+  if (!pageRows) return 0;
+  try {
+    const n = db.prepare(`
+      SELECT (SELECT COUNT(*) FROM patients WHERE uid IS NOT NULL)
+           + (SELECT COUNT(*) FROM visits WHERE uid IS NOT NULL)
+           + (SELECT COUNT(*) FROM visit_services WHERE uid IS NOT NULL)
+           + (SELECT COUNT(*) FROM lab_results WHERE uid IS NOT NULL)
+           + (SELECT COUNT(*) FROM sync_tombstones) AS n
+    `).get().n;
+    return Math.max(1, Math.ceil(n / pageRows));
+  } catch { return 0; }
 }
 
 /** Буква ЭТОГО узла. Нет служебной записи — нет и обмена: подписаться нечем. */
@@ -735,7 +796,7 @@ export async function publishJournal(db, dataDir, {
   maxBlobBytes = MAX_BLOB_BYTES,
   env = process.env,
   now = () => new Date(),
-  limit = JOURNAL_LIMIT,
+  limit = null,
   self = null,
 } = {}) {
   const ctx = journalContext(db, dataDir, self);
@@ -757,6 +818,9 @@ export async function publishJournal(db, dataDir, {
   // в 5000: сквозной тест «засев страницами» отдавал всё ОДНОЙ выгрузкой и
   // ничего постраничного не проверял. MIN_JOURNAL_LIMIT — это дно ДЕЛЕНИЯ
   // пополам при слишком большом блобе, а не запрет на маленькую страницу.
+  // Явно заданный размер страницы уважается КАК ЕСТЬ — и множитель засева к
+  // нему тоже не применяется: вызывающий, попросивший две строки, просит две.
+  const explicitLimit = limit != null;
   const requested = Math.max(1, Math.floor(Number(limit) || JOURNAL_LIMIT));
   const smallest = Math.min(MIN_JOURNAL_LIMIT, requested);
   let page = requested;
@@ -770,7 +834,11 @@ export async function publishJournal(db, dataDir, {
     for (const peer of peers) {
       let batch;
       try {
-        batch = buildBatch(db, { self: ctx.self, peer, limit: page });
+        // Засеваемому соседу — крупная страница; делится пополам она вместе с
+        // обычной, поэтому предел блоба остаётся главным.
+        const seedingPeer = !explicitLimit && isSeedingPeer(db, peer);
+        const peerLimit = seedingPeer ? Math.max(1, Math.round(page * (SEED_LIMIT / JOURNAL_LIMIT))) : page;
+        batch = buildBatch(db, { self: ctx.self, peer, limit: peerLimit });
       } catch (e) {
         // Один негодный сосед не отменяет выгрузку остальным: его срез просто
         // не поедет, и это видно в журнале сервера.
@@ -784,7 +852,13 @@ export async function publishJournal(db, dataDir, {
       // не отсечь страницу как «уже применённую»: у ВСЕХ страниц засева upto
       // один и тот же — замороженный пол журнала (см. buildBatch).
       batches[peer] = batch.seed
-        ? { records: batch.records, upto: batch.upto, seed: true, seed_page: batch.seed.page }
+        ? {
+          records: batch.records, upto: batch.upto, seed: true, seed_page: batch.seed.page,
+          // Сколько всего страниц примерно будет. Нужно ТОЛЬКО для экрана
+          // филиала: «страница 3 из ~12» — это ожидание, а «идёт загрузка» без
+          // числа неотличимо от «зависло».
+          seed_pages: seedPagesEstimate(db, batch.records.length),
+        }
         : { records: batch.records, upto: batch.upto };
     }
     // generated_at — как у справочника: возраст копии виден получателю.
@@ -900,7 +974,7 @@ function journalSlice(payload, peer, self) {
   const ackUpto = Number(mine && typeof mine === 'object' ? mine.upto : mine);
   const ackPage = Number(mine && typeof mine === 'object' ? mine.seed_page : 0);
   const head = {
-    upto: 0, seed: false, seedPage: 0,
+    upto: 0, seed: false, seedPage: 0, seedPages: 0,
     ack: Number.isFinite(ackUpto) && ackUpto > 0 ? Math.floor(ackUpto) : 0,
     ackPage: Number.isFinite(ackPage) && ackPage > 0 ? Math.floor(ackPage) : 0,
   };
@@ -921,6 +995,8 @@ function journalSlice(payload, peer, self) {
       upto: Number.isFinite(upto) && upto > 0 ? Math.floor(upto) : 0,
       seed: slice.seed === true,
       seedPage: Number.isFinite(seedPage) && seedPage > 0 ? Math.floor(seedPage) : 0,
+      seedPages: Number.isFinite(Number(slice.seed_pages)) && Number(slice.seed_pages) > 0
+        ? Math.floor(Number(slice.seed_pages)) : 0,
     };
   }
   return null;
@@ -1075,6 +1151,18 @@ export async function fetchJournals(db, dataDir, {
       out[peer] = applyImpl(db, got.records, {
         self: ctx.self, peer, upto: got.upto, seed: got.seed, seedPage: got.seedPage,
       });
+      if (got.seed) {
+        // Первичная загрузка идёт — расписание на этой стороне ускоряется, а
+        // экран показывает, на какой мы странице.
+        try {
+          putState(db, SEEDING_KEY, new Date().toISOString());
+          putState(db, SEED_PROGRESS_KEY, JSON.stringify({
+            from: peer, page: got.seedPage, pages: got.seedPages, at: new Date().toISOString(),
+          }));
+        } catch (e) {
+          console.warn('[branch-sync] could not record the seeding progress:', e && e.message);
+        }
+      }
     } catch (e) {
       // Транзакция приёма откатилась целиком (её держит applyBatch) — база
       // ровно такая, какой была, и порция приедет снова.
@@ -1090,7 +1178,26 @@ export async function fetchJournals(db, dataDir, {
  * выгрузка: сосед, который синхронизируется через минуту, должен увидеть уже
  * сегодняшнее состояние, а не вчерашнее.
  */
-let exchangeInFlight = false;
+// ОДИН ЗАМОК НА ОБА ВХОДА (ревью M5). Обмен запускают двое: часы и кнопка
+// «Синхронизация» в окне регистратуры. Раньше у каждого был свой флаг, и они
+// друг друга не видели — при том, что комментарий уверял в обратном. Два
+// параллельных обмена — это две резервные копии, две выгрузки одного блоба и
+// две транзакции приёма, спорящие за одну базу. Замок общий и живёт здесь,
+// потому что здесь сам обмен; rpc/branch-sync.js берёт его же.
+let exchangeInFlight = null;
+
+/**
+ * Пропустить работу через общий замок. Если обмен уже идёт, возвращается его же
+ * обещание: и часы, и кнопка дождутся одного результата вместо того, чтобы
+ * запускать второй проход.
+ */
+export function withExchangeLock(work) {
+  if (exchangeInFlight) return exchangeInFlight;
+  exchangeInFlight = Promise.resolve()
+    .then(work)
+    .finally(() => { exchangeInFlight = null; });
+  return exchangeInFlight;
+}
 
 export async function exchangeJournals(db, dataDir, opts = {}) {
   return {
@@ -1358,9 +1465,7 @@ export function scheduleRelayPublish(db, dataDir, opts = {}) {
       // блоба и две транзакции приёма, спорящие за одну базу. Кнопка своё
       // совмещение имеет давно (inFlight в rpc/branch-sync.js), расписание —
       // теперь тоже.
-      if (exchangeInFlight) return;
-      exchangeInFlight = true;
-      const ex = await exchangeJournals(db, dataDir, runOpts).finally(() => { exchangeInFlight = false; });
+      const ex = await withExchangeLock(() => exchangeJournals(db, dataDir, runOpts));
       const pub = ex.published;
       if (pub && pub.ok === false && !QUIET_JOURNAL_REASONS.has(pub.reason)) {
         console.warn('[branch-sync] journal publish did not happen:', pub.reason);
@@ -1376,7 +1481,18 @@ export function scheduleRelayPublish(db, dataDir, opts = {}) {
   initial.unref();
   const interval = setInterval(tick, intervalMs);
   interval.unref();
-  return { initial, interval };
+  // ПОКА ИДЁТ ПЕРВИЧНАЯ ЗАГРУЗКА — чаще (Задача 7e, I-3). Отдельный таймер, а
+  // не переменный интервал: он ничего не делает, пока засева нет, и не трогает
+  // часовой ритм, на который рассчитано всё остальное. Страница засева стоит
+  // трёх тактов (выложили — забрали — подтвердили), поэтому именно такт и надо
+  // укорачивать, иначе большая клиника засевает филиал неделями.
+  const seedTick = () => {
+    if (!seedingNow(db)) return;
+    tick();
+  };
+  const seeding = setInterval(seedTick, SEEDING_INTERVAL_MS);
+  seeding.unref();
+  return { initial, interval, seeding };
 }
 
 // BRANCH_SELF_SERVICE_V1 — попросить control plane завести филиал этой сети.

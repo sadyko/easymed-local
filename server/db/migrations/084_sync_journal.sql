@@ -134,6 +134,38 @@ CREATE TRIGGER patients_journal_upd AFTER UPDATE ON patients
              CASE WHEN NEW.registration_date IS NOT OLD.registration_date THEN 'registration_date,' ELSE '' END, ',') END AS cols
         FROM patients r WHERE r.id = NEW.id AND r.uid IS NOT NULL
     ) WHERE cols <> '';
+
+    -- Авторство колонок — тем же условием, что и журнал, но БЕЗ срока годности
+    -- (журнал вычищается, авторство остаётся). Одним запросом, а не по запросу
+    -- на колонку: правка пациента не должна стоить двух десятков вставок.
+    INSERT INTO sync_authored (tbl, uid, col, at)
+    SELECT 'patients', r.uid, v.col, strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      FROM patients r
+      JOIN (
+            SELECT 'mrn' AS col WHERE NEW.mrn IS NOT OLD.mrn
+            UNION ALL SELECT 'full_name' WHERE NEW.full_name IS NOT OLD.full_name
+            UNION ALL SELECT 'first_name' WHERE NEW.first_name IS NOT OLD.first_name
+            UNION ALL SELECT 'last_name' WHERE NEW.last_name IS NOT OLD.last_name
+            UNION ALL SELECT 'middle_name' WHERE NEW.middle_name IS NOT OLD.middle_name
+            UNION ALL SELECT 'date_of_birth' WHERE NEW.date_of_birth IS NOT OLD.date_of_birth
+            UNION ALL SELECT 'gender' WHERE NEW.gender IS NOT OLD.gender
+            UNION ALL SELECT 'blood_type' WHERE NEW.blood_type IS NOT OLD.blood_type
+            UNION ALL SELECT 'phone' WHERE NEW.phone IS NOT OLD.phone
+            UNION ALL SELECT 'email' WHERE NEW.email IS NOT OLD.email
+            UNION ALL SELECT 'national_id' WHERE NEW.national_id IS NOT OLD.national_id
+            UNION ALL SELECT 'address' WHERE NEW.address IS NOT OLD.address
+            UNION ALL SELECT 'nationality' WHERE NEW.nationality IS NOT OLD.nationality
+            UNION ALL SELECT 'occupation' WHERE NEW.occupation IS NOT OLD.occupation
+            UNION ALL SELECT 'emergency_contact_name' WHERE NEW.emergency_contact_name IS NOT OLD.emergency_contact_name
+            UNION ALL SELECT 'emergency_contact_phone' WHERE NEW.emergency_contact_phone IS NOT OLD.emergency_contact_phone
+            UNION ALL SELECT 'allergies' WHERE NEW.allergies IS NOT OLD.allergies
+            UNION ALL SELECT 'chronic_conditions' WHERE NEW.chronic_conditions IS NOT OLD.chronic_conditions
+            UNION ALL SELECT 'notes' WHERE NEW.notes IS NOT OLD.notes
+            UNION ALL SELECT 'active' WHERE NEW.active IS NOT OLD.active
+            UNION ALL SELECT 'registration_date' WHERE NEW.registration_date IS NOT OLD.registration_date
+           ) v
+     WHERE r.id = NEW.id AND r.uid IS NOT NULL AND OLD.uid IS NOT NULL
+    ON CONFLICT(tbl, uid, col) DO UPDATE SET at = excluded.at;
   END;
 -- Надгробие (sync_tombstones) пишется ТЕМ ЖЕ триггером, что и запись в
 -- журнал, а не отдельно: смысл в том, что триггер обойти нельзя (см. шапку
@@ -144,6 +176,8 @@ CREATE TRIGGER patients_journal_del AFTER DELETE ON patients
   BEGIN
     INSERT INTO sync_journal (tbl, uid, op) VALUES ('patients', OLD.uid, 'del');
     INSERT OR REPLACE INTO sync_tombstones (tbl, uid) VALUES ('patients', OLD.uid);
+    -- Строки больше нет — хранить, кто правил её колонки, незачем.
+    DELETE FROM sync_authored WHERE tbl = 'patients' AND uid = OLD.uid;
   END;
 
 CREATE TRIGGER visits_journal_ins AFTER INSERT ON visits
@@ -164,12 +198,32 @@ CREATE TRIGGER visits_journal_upd AFTER UPDATE ON visits
              CASE WHEN NEW.patient_id IS NOT OLD.patient_id THEN 'patient_id,' ELSE '' END, ',') END AS cols
         FROM visits r WHERE r.id = NEW.id AND r.uid IS NOT NULL
     ) WHERE cols <> '';
+
+    -- Авторство колонок — тем же условием, что и журнал, но БЕЗ срока годности
+    -- (журнал вычищается, авторство остаётся). Одним запросом, а не по запросу
+    -- на колонку: правка пациента не должна стоить двух десятков вставок.
+    INSERT INTO sync_authored (tbl, uid, col, at)
+    SELECT 'visits', r.uid, v.col, strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      FROM visits r
+      JOIN (
+            SELECT 'visit_date' AS col WHERE NEW.visit_date IS NOT OLD.visit_date
+            UNION ALL SELECT 'duration_minutes' WHERE NEW.duration_minutes IS NOT OLD.duration_minutes
+            UNION ALL SELECT 'visit_kind' WHERE NEW.visit_kind IS NOT OLD.visit_kind
+            UNION ALL SELECT 'visit_type' WHERE NEW.visit_type IS NOT OLD.visit_type
+            UNION ALL SELECT 'status' WHERE NEW.status IS NOT OLD.status
+            UNION ALL SELECT 'notes' WHERE NEW.notes IS NOT OLD.notes
+            UNION ALL SELECT 'patient_id' WHERE NEW.patient_id IS NOT OLD.patient_id
+           ) v
+     WHERE r.id = NEW.id AND r.uid IS NOT NULL AND OLD.uid IS NOT NULL
+    ON CONFLICT(tbl, uid, col) DO UPDATE SET at = excluded.at;
   END;
 CREATE TRIGGER visits_journal_del AFTER DELETE ON visits
   WHEN OLD.uid IS NOT NULL
   BEGIN
     INSERT INTO sync_journal (tbl, uid, op) VALUES ('visits', OLD.uid, 'del');
     INSERT OR REPLACE INTO sync_tombstones (tbl, uid) VALUES ('visits', OLD.uid);
+    -- Строки больше нет — хранить, кто правил её колонки, незачем.
+    DELETE FROM sync_authored WHERE tbl = 'visits' AND uid = OLD.uid;
   END;
 
 CREATE TRIGGER visit_services_journal_ins AFTER INSERT ON visit_services
@@ -187,12 +241,29 @@ CREATE TRIGGER visit_services_journal_upd AFTER UPDATE ON visit_services
              CASE WHEN NEW.service_id IS NOT OLD.service_id THEN 'service_id,' ELSE '' END, ',') END AS cols
         FROM visit_services r WHERE r.id = NEW.id AND r.uid IS NOT NULL
     ) WHERE cols <> '';
+
+    -- Авторство колонок — тем же условием, что и журнал, но БЕЗ срока годности
+    -- (журнал вычищается, авторство остаётся). Одним запросом, а не по запросу
+    -- на колонку: правка пациента не должна стоить двух десятков вставок.
+    INSERT INTO sync_authored (tbl, uid, col, at)
+    SELECT 'visit_services', r.uid, v.col, strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      FROM visit_services r
+      JOIN (
+            SELECT 'quantity' AS col WHERE NEW.quantity IS NOT OLD.quantity
+            UNION ALL SELECT 'status' WHERE NEW.status IS NOT OLD.status
+            UNION ALL SELECT 'visit_id' WHERE NEW.visit_id IS NOT OLD.visit_id
+            UNION ALL SELECT 'service_id' WHERE NEW.service_id IS NOT OLD.service_id
+           ) v
+     WHERE r.id = NEW.id AND r.uid IS NOT NULL AND OLD.uid IS NOT NULL
+    ON CONFLICT(tbl, uid, col) DO UPDATE SET at = excluded.at;
   END;
 CREATE TRIGGER visit_services_journal_del AFTER DELETE ON visit_services
   WHEN OLD.uid IS NOT NULL
   BEGIN
     INSERT INTO sync_journal (tbl, uid, op) VALUES ('visit_services', OLD.uid, 'del');
     INSERT OR REPLACE INTO sync_tombstones (tbl, uid) VALUES ('visit_services', OLD.uid);
+    -- Строки больше нет — хранить, кто правил её колонки, незачем.
+    DELETE FROM sync_authored WHERE tbl = 'visit_services' AND uid = OLD.uid;
   END;
 
 CREATE TRIGGER lab_results_journal_ins AFTER INSERT ON lab_results
@@ -218,12 +289,37 @@ CREATE TRIGGER lab_results_journal_upd AFTER UPDATE ON lab_results
              CASE WHEN NEW.visit_service_id IS NOT OLD.visit_service_id THEN 'visit_service_id,' ELSE '' END, ',') END AS cols
         FROM lab_results r WHERE r.id = NEW.id AND r.uid IS NOT NULL
     ) WHERE cols <> '';
+
+    -- Авторство колонок — тем же условием, что и журнал, но БЕЗ срока годности
+    -- (журнал вычищается, авторство остаётся). Одним запросом, а не по запросу
+    -- на колонку: правка пациента не должна стоить двух десятков вставок.
+    INSERT INTO sync_authored (tbl, uid, col, at)
+    SELECT 'lab_results', r.uid, v.col, strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      FROM lab_results r
+      JOIN (
+            SELECT 'parameter' AS col WHERE NEW.parameter IS NOT OLD.parameter
+            UNION ALL SELECT 'value' WHERE NEW.value IS NOT OLD.value
+            UNION ALL SELECT 'numeric_value' WHERE NEW.numeric_value IS NOT OLD.numeric_value
+            UNION ALL SELECT 'unit' WHERE NEW.unit IS NOT OLD.unit
+            UNION ALL SELECT 'reference_range' WHERE NEW.reference_range IS NOT OLD.reference_range
+            UNION ALL SELECT 'ref_low' WHERE NEW.ref_low IS NOT OLD.ref_low
+            UNION ALL SELECT 'ref_high' WHERE NEW.ref_high IS NOT OLD.ref_high
+            UNION ALL SELECT 'flag' WHERE NEW.flag IS NOT OLD.flag
+            UNION ALL SELECT 'notes' WHERE NEW.notes IS NOT OLD.notes
+            UNION ALL SELECT 'entered_at' WHERE NEW.entered_at IS NOT OLD.entered_at
+            UNION ALL SELECT 'verified_at' WHERE NEW.verified_at IS NOT OLD.verified_at
+            UNION ALL SELECT 'visit_service_id' WHERE NEW.visit_service_id IS NOT OLD.visit_service_id
+           ) v
+     WHERE r.id = NEW.id AND r.uid IS NOT NULL AND OLD.uid IS NOT NULL
+    ON CONFLICT(tbl, uid, col) DO UPDATE SET at = excluded.at;
   END;
 CREATE TRIGGER lab_results_journal_del AFTER DELETE ON lab_results
   WHEN OLD.uid IS NOT NULL
   BEGIN
     INSERT INTO sync_journal (tbl, uid, op) VALUES ('lab_results', OLD.uid, 'del');
     INSERT OR REPLACE INTO sync_tombstones (tbl, uid) VALUES ('lab_results', OLD.uid);
+    -- Строки больше нет — хранить, кто правил её колонки, незачем.
+    DELETE FROM sync_authored WHERE tbl = 'lab_results' AND uid = OLD.uid;
   END;
 
 -- ЗАПИСИ, КОТОРЫЕ ОТВЕРГЛА САМА БАЗА (ревью 7/7b, I2). Приём заворачивает
@@ -244,10 +340,41 @@ CREATE TRIGGER lab_results_journal_del AFTER DELETE ON lab_results
 CREATE TABLE sync_refused (
   tbl  TEXT NOT NULL,
   uid  TEXT NOT NULL,
-  peer TEXT,                        -- чей блоб её привёз; NULL — если вызывающий не назвал
+  peer TEXT NOT NULL,               -- чей блоб её привёз; без имени соседа строка бесполезна, а в PRIMARY KEY NULL ещё и не склеивается
   err  TEXT NOT NULL,               -- что именно сказала база
   at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
   PRIMARY KEY (tbl, uid, peer)
+);
+
+-- КТО И КОГДА ПРАВИЛ КОЛОНКУ ЗДЕСЬ (Задача 7e). Метка авторства нужна на
+-- КАЖДОМ слиянии, а брать её было неоткуда, кроме журнала — и это ломалось
+-- дважды.
+--
+-- Первое: журнал ЧИСТИТСЯ. Подтвердил сосед приём — pruneJournal сносит
+-- строку, и наша собственная свежая правка остаётся БЕЗ метки; следующий блоб
+-- соседа с его СТАРЫМ значением ложится поверх неё, и сеть сходится на более
+-- ранней правке. Воспроизведено на обычном сбое: у филиала выгрузка отвечает
+-- 500, а выборка работает.
+--
+-- Второе: у строки есть updated_at, и он ОДИН на строку. Подставлять его как
+-- время правки КОЛОНКИ — значит объявлять, что правка заметки обновила и
+-- возраст адреса; сосед после этого держит устаревший адрес вечно. А у
+-- visit_services и lab_results updated_at нет вовсе.
+--
+-- Поэтому авторство хранится отдельно и поколоночно. Пишется теми же
+-- триггерами, что и журнал (обойти нельзя — см. шапку файла), живёт столько же,
+-- сколько строка, и чисткой журнала не затрагивается.
+--
+-- ВСТАВКА СЮДА НЕ ПИШЕТ: у новой строки пол авторства — её created_at, он и
+-- так есть. Пишет только UPDATE, и только по тем колонкам, которые вправду
+-- изменились (то же условие NEW.x IS NOT OLD.x, что и у журнала). Удаление
+-- строки уносит и её авторство.
+CREATE TABLE sync_authored (
+  tbl TEXT NOT NULL,
+  uid TEXT NOT NULL,
+  col TEXT NOT NULL,
+  at  TEXT NOT NULL,   -- время ПОСЛЕДНЕЙ здешней правки этой колонки, с миллисекундами
+  PRIMARY KEY (tbl, uid, col)
 );
 
 -- Записи, у которых ещё нет родителя. Хранятся целиком (JSON) и применяются,
@@ -307,7 +434,7 @@ CREATE TABLE sync_tombstones (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   tbl TEXT NOT NULL,
   uid TEXT NOT NULL,
-  at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),   -- с миллисекундами, как sync_journal.at: из него тоже чеканится метка
   UNIQUE (tbl, uid)
 );
 
@@ -390,6 +517,7 @@ CREATE TABLE sync_peers (
   recv_seed_page INTEGER NOT NULL DEFAULT 0,  -- ЕГО засев: до какой страницы мы дошли (номера считаются в пределах одного пола)
   last_ok        TEXT,                        -- когда последний раз отдали успешно
   last_ack       TEXT,                        -- когда последний раз пришла квитанция ОТ НЕГО; по нему и забываем молчуна
+  clock_skew_ms  INTEGER NOT NULL DEFAULT 0,  -- на сколько его метки уходят в БУДУЩЕЕ: сбитые часы в филиале иначе замораживают колонку у всех
   seed_floor     INTEGER,                     -- пол журнала на начало засева; NULL = не засеивается (тёплый или ещё не приходил)
   seed_started   TEXT,                        -- время начала засева: НАБОР строк заморожен по нему — иначе «страница 1» во второй выгрузке — уже другие строки
   seed_tbl       TEXT,                        -- ПОДТВЕРЖДЁННЫЙ курсор: таблица (или 'sync_tombstones' — фаза надгробий)

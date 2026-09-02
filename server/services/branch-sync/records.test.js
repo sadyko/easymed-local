@@ -17,6 +17,13 @@ function fresh() {
   return db;
 }
 const S = { self: 'B' };
+// Метка от РЕАЛЬНОГО времени. С Задачи 7d спор решает время правки, а с 7e
+// местное авторство хранится в sync_authored и переживает чистку журнала —
+// поэтому синтетическая метка «девять миллисекунд от 1970 года» честно
+// проигрывает любому здешнему касанию строки, включая выданный ей номер карты.
+const stampAt = (ms, node = 'C', cnt = 0) =>
+  Math.floor(ms).toString(16).padStart(12, '0') + '-' + cnt.toString(16).padStart(4, '0') + '-' + node;
+const T0 = Date.now() - 24 * 3600000;   // «сутки назад» — старше всего местного
 const put = (tbl, uid, stamp, data, refs = {}) => ({ tbl, uid, op: 'put', stamp, data, refs, origin: 'C' });
 const del = (tbl, uid, stamp) => ({ tbl, uid, op: 'del', stamp, origin: 'C' });
 
@@ -113,12 +120,16 @@ test('удаление проигрывает более поздней прав
 
 test('запоздавший put не воскрешает удалённую строку', () => {
   const db = fresh();
-  applyBatch(db, [put('patients', 'tttt', '000000000001-0000-C', { full_name: 'Иванов' })], S);
-  applyBatch(db, [del('patients', 'tttt', '000000000009-0000-C')], S);
-  applyBatch(db, [put('patients', 'tttt', '000000000005-0000-C', { full_name: 'Иванов' })], S);   // собран ДО удаления
+  applyBatch(db, [put('patients', 'tttt', stampAt(T0), { full_name: 'Иванов' })], S);
+  // Удаление ПОЗЖЕ всего здешнего: номер карты этой строке выдали тут же, при
+  // приёме, и это — местное авторство колонки mrn. Удаление из 1970 года
+  // проиграло бы ему, и правильно: строку, которую здесь только что трогали,
+  // не сносят меткой из прошлого.
+  applyBatch(db, [del('patients', 'tttt', stampAt(Date.now() + 60000))], S);
+  applyBatch(db, [put('patients', 'tttt', stampAt(T0 + 1000), { full_name: 'Иванов' })], S);   // собран ДО удаления
   assert.equal(db.prepare("SELECT COUNT(*) n FROM patients WHERE uid = 'tttt'").get().n, 0, 'отправитель удаление не повторит — воскрешение было бы навсегда');
   // А put НОВЕЕ надгробия — законное повторное заведение.
-  applyBatch(db, [put('patients', 'tttt', '000000000012-0000-C', { full_name: 'Иванов снова' })], S);
+  applyBatch(db, [put('patients', 'tttt', stampAt(Date.now() + 120000), { full_name: 'Иванов снова' })], S);
   assert.equal(db.prepare("SELECT full_name FROM patients WHERE uid = 'tttt'").get().full_name, 'Иванов снова');
   db.close();
 });
@@ -194,20 +205,32 @@ test('услуга с неизвестным местным кодом ждёт 
 // Защита местной правки — на ВСЮ строку, включая ссылки. Отдельным тестом,
 // потому что первая реализация защищала только поля из SHIPPED: приехавшая
 // запись оставляла статус в покое, но перевешивала визит на другого пациента.
-test('местная неотправленная правка защищает и ССЫЛКИ, а не только поля', () => {
+test('7e: ссылку держит МЕТКА, а не защита — визит не перевешивают на другого пациента', () => {
   const db = fresh();
   applyBatch(db, [
-    put('patients', 'pX', '000000000001-0000-C', { full_name: 'Первый' }),
-    put('patients', 'pY', '000000000002-0000-C', { full_name: 'Второй' }),
-    put('visits', 'vX', '000000000003-0000-C', { visit_date: '2026-09-01', status: 'scheduled' }, { patient_id: 'pX' }),
+    put('patients', 'pX', stampAt(T0), { full_name: 'Первый' }),
+    put('patients', 'pY', stampAt(T0), { full_name: 'Второй' }),
+    put('visits', 'vX', stampAt(T0), { visit_date: '2026-09-01', status: 'scheduled' }, { patient_id: 'pX' }),
   ], S);
   const px = db.prepare("SELECT id FROM patients WHERE uid = 'pX'").get().id;
-  db.prepare("UPDATE visits SET status = 'arrived' WHERE uid = 'vX'").run();   // соседу C ещё не отправлено
-  applyBatch(db, [put('visits', 'vX', '000000000009-0000-C',
+  db.prepare("UPDATE visits SET status = 'arrived' WHERE uid = 'vX'").run();   // здешняя правка, только что
+
+  // Приехавшая запись СТАРШЕ и поля, и ссылки — устоять обязаны обе. Раньше их
+  // держала защита «неотправленного», теперь — метка правки, и работает она
+  // независимо от того, выложились мы соседу или ещё нет.
+  applyBatch(db, [put('visits', 'vX', stampAt(T0 - 1000),
     { visit_date: '2026-09-01', status: 'scheduled' }, { patient_id: 'pY' })], S);
   const v = db.prepare("SELECT patient_id, status FROM visits WHERE uid = 'vX'").get();
-  assert.equal(v.status, 'arrived', 'поле защищено');
+  assert.equal(v.status, 'arrived', 'поле новее приехавшего');
   assert.equal(v.patient_id, px, 'перевесить визит на ДРУГОГО пациента не лучше, чем стереть телефон');
+
+  // А ссылка, которую сосед вправду переставил ПОЗЖЕ, применяется: это уже не
+  // «перевесить исподтишка», а его законная правка.
+  applyBatch(db, [put('visits', 'vX', stampAt(Date.now() + 60000),
+    { visit_date: '2026-09-01', status: 'scheduled' }, { patient_id: 'pY' })], S);
+  assert.equal(db.prepare("SELECT patient_id FROM visits WHERE uid = 'vX'").get().patient_id,
+    db.prepare("SELECT id FROM patients WHERE uid = 'pY'").get().id,
+    'иначе визит навсегда остался бы у не того пациента');
   db.close();
 });
 
@@ -401,32 +424,31 @@ test('нескалярное значение в данных — пропуск
 
 // Защита — по колонкам, а не по строке. Раньше здесь отбрасывалась вся запись,
 // и правка отправителя пропадала навсегда: он-то свой markSent уже сдвинул.
-test('защита поколоночная: чужая колонка применяется, местная неотправленная остаётся', () => {
+test('7e: поколоночность без защиты — чужая колонка применяется, своя более свежая остаётся', () => {
   const db = fresh();
-  applyBatch(db, [put('patients', 'pc1', '000000000001-0000-C',
+  applyBatch(db, [put('patients', 'pc1', stampAt(T0),
     { full_name: 'Иванов', phone: '+998900000001', address: '' })], S);
-  const top = db.prepare('SELECT MAX(seq) AS s FROM sync_journal').get().s || 0;
-  db.prepare("INSERT INTO sync_peers (node, sent_seq, last_ok) VALUES ('C', ?, ?)").run(top, new Date().toISOString());
-  db.prepare("UPDATE patients SET phone = '+998909999999' WHERE uid = 'pc1'").run();   // местная, C её не видел
+  db.prepare("INSERT INTO sync_peers (node, sent_seq, last_ok) VALUES ('C', 0, ?)").run(new Date().toISOString());
+  editAgo(db, 5, "UPDATE patients SET phone = '+998909999999' WHERE uid = 'pc1'");   // здешняя, 5 минут назад
 
   const r1 = applyBatch(db, [{
-    ...put('patients', 'pc1', '000000000009-0000-C', { phone: '+998900000002', address: 'Ташкент' }),
-    changed: ['address'],
+    ...put('patients', 'pc1', stampAt(Date.now() - 60000), { phone: '+998900000002', address: 'Ташкент' }),
+    changed: ['address'], stamps: { address: stampAt(Date.now() - 60000, 'C') },
   }], S);
   const after1 = db.prepare("SELECT phone, address FROM patients WHERE uid = 'pc1'").get();
   assert.equal(after1.address, 'Ташкент', 'адрес — авторская колонка соседа, применяется');
   assert.equal(after1.phone, '+998909999999', 'телефон в снимке — его копия нашего старого значения, не правка');
-  assert.equal(r1.protected, 0, 'ни одна авторская колонка не наткнулась на защиту');
   assert.equal(r1.applied, 1);
 
+  // Сосед объявляет своим и телефон, но правил он его РАНЬШЕ нас.
   const r2 = applyBatch(db, [{
-    ...put('patients', 'pc1', '000000000010-0000-C', { phone: '+998900000003', address: 'Самарканд' }),
+    ...put('patients', 'pc1', stampAt(Date.now() - 30000), { phone: '+998900000003', address: 'Самарканд' }),
     changed: ['phone', 'address'],
+    stamps: { phone: stampAt(Date.now() - 600000, 'C'), address: stampAt(Date.now() - 30000, 'C') },
   }], S);
   const after2 = db.prepare("SELECT phone, address FROM patients WHERE uid = 'pc1'").get();
-  assert.equal(after2.address, 'Самарканд', 'адрес применился');
-  assert.equal(after2.phone, '+998909999999', 'а телефон держит местная неотправленная правка');
-  assert.equal(r2.protected, 1, 'запись отдала защите ровно одну колонку — и это надо видеть в логе');
+  assert.equal(after2.address, 'Самарканд', 'адрес применился: сосед правил его позже');
+  assert.equal(after2.phone, '+998909999999', 'а телефон остался наш: мы правили его позже');
   assert.equal(r2.applied, 1, 'запись НЕ отброшена целиком: так и терялись правки');
   db.close();
 });
@@ -485,48 +507,37 @@ test('deferred — сколько ЖДЁТ на конец порции; release
 // него — B не принимал бы адрес от C, C не принимал бы телефон от B, и оба
 // узла не сошлись бы вовсе (пробная сборка Задачи 7, воспроизведено).
 
-// Метка от РЕАЛЬНОГО времени: с Задачи 7c местная правка тоже имеет метку, и
-// синтетическая '000000000009-0000-C' (девять миллисекунд от 1970 года) теперь
-// честно проигрывает любой сегодняшней правке. Сравнивать надо на той оси, на
-// которой сеть работает вживую.
-const stampAt = (ms, node = 'C', cnt = 0) =>
-  Math.floor(ms).toString(16).padStart(12, '0') + '-' + cnt.toString(16).padStart(4, '0') + '-' + node;
+// Здесь стоял тест «выгрузка снимает защиту». Защиты больше нет вовсе
+// (Задача 7e): и до выгрузки, и после спор решает одно и то же — чья правка
+// колонки позже. Это и проверяем: результат не зависит от того, успели мы
+// выложиться соседу или ещё нет.
+test('7e: исход не зависит от того, выложились мы соседу или нет', () => {
+  for (const published of [false, true]) {
+    const db = fresh();
+    applyBatch(db, [put('patients', 'sh1', stampAt(T0),
+      { full_name: 'Иванов', phone: '+998900000001' })], S);
+    db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
+      .run(new Date().toISOString());
+    editAgo(db, 10, "UPDATE patients SET phone = 'моё' WHERE uid = 'sh1'");
+    if (published) {
+      db.prepare('UPDATE sync_peers SET pub_seq = (SELECT MAX(seq) FROM sync_journal) WHERE node = ?').run('C');
+    }
 
-test('7b: выгрузка снимает защиту — дальше спор решают метки, а не защита', () => {
-  const db = fresh();
-  const now = Date.now();
-  applyBatch(db, [put('patients', 'sh1', stampAt(now - 120000),
-    { full_name: 'Иванов', phone: '+998900000001' })], S);
-  // Сосед известен и тёплый, но НИЧЕГО ему ещё не выложено (pub_seq = 0).
-  db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
-    .run(new Date().toISOString());
-  db.prepare("UPDATE patients SET phone = '+998909999999' WHERE uid = 'sh1'").run();   // местная, не выложена
+    applyBatch(db, [{
+      ...put('patients', 'sh1', stampAt(Date.now() - 3600000), { phone: 'соседское старое' }),
+      changed: ['phone'], stamps: { phone: stampAt(Date.now() - 3600000, 'C') },
+    }], S);
+    assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'sh1'").get().phone, 'моё',
+      'выложено=' + published + ': своя более поздняя правка остаётся');
 
-  const held = applyBatch(db, [{
-    ...put('patients', 'sh1', stampAt(now + 60000), { phone: '+998900000002' }), changed: ['phone'],
-  }], S);
-  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'sh1'").get().phone, '+998909999999',
-    'пока правка не выложена, её держит защита: сосед о ней знать не мог');
-  assert.equal(held.protected, 1);
-
-  // Выложили — но сосед ещё НЕ подтвердил (sent_seq на месте).
-  const top = db.prepare('SELECT MAX(seq) AS s FROM sync_journal').get().s;
-  db.prepare("UPDATE sync_peers SET pub_seq = ? WHERE node = 'C'").run(top);
-
-  const older = applyBatch(db, [{
-    ...put('patients', 'sh1', stampAt(now - 60000), { phone: '+998900000003' }), changed: ['phone'],
-  }], S);
-  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'sh1'").get().phone, '+998909999999',
-    'запись СТАРШЕ нашей правки проигрывает по метке — но проигрывает метке, а не защите');
-  assert.equal(older.protected, 0, 'защиты здесь больше нет: наше авторство сосед уже видит');
-
-  const newer = applyBatch(db, [{
-    ...put('patients', 'sh1', stampAt(now + 120000), { phone: '+998900000004' }), changed: ['phone'],
-  }], S);
-  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'sh1'").get().phone, '+998900000004',
-    'а более новая — применяется: на задержке подтверждения узлы обязаны сходиться, а не окапываться');
-  assert.equal(newer.protected, 0);
-  db.close();
+    applyBatch(db, [{
+      ...put('patients', 'sh1', stampAt(Date.now()), { phone: 'соседское свежее' }),
+      changed: ['phone'], stamps: { phone: stampAt(Date.now(), 'C') },
+    }], S);
+    assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'sh1'").get().phone, 'соседское свежее',
+      'выложено=' + published + ': более поздняя чужая — применяется');
+    db.close();
+  }
 });
 
 test('7b: тот же срез, применённый дважды, второй раз не делает ничего', () => {
@@ -616,33 +627,36 @@ test('7c: неподтверждённая местная правка силь�
   db.close();
 });
 
-// ОБРАТНАЯ СТОРОНА ТОГО ЖЕ ПРАВИЛА: как только наша правка ПОДТВЕРЖДЕНА и
-// вычищена из журнала, притязания у нас больше нет — дальше спор решает
-// sync_seen, и более новая приехавшая запись применяется. Иначе узел окопался
-// бы на своём значении навсегда.
-test('7c: подтверждённая (вычищенная из журнала) местная правка больше не спорит', () => {
+// ЧИСТКА ЖУРНАЛА БОЛЬШЕ НЕ СТИРАЕТ АВТОРСТВО (Задача 7e). Раньше этот тест
+// закреплял ОБРАТНОЕ: подтверждённая соседом правка теряла метку вместе с
+// журнальной записью, и приехавшее старое значение ложилось поверх неё. Ровно
+// на этом сеть сходилась на более ранней правке — при обычном сбое, когда у
+// филиала выгрузка отвечает 500, а выборка работает.
+test('7e: авторство переживает чистку журнала — старое значение соседа не ложится поверх', () => {
   const db = fresh();
-  const now = Date.now();
-  applyBatch(db, [put('patients', 'lw2', stampAt(now - 7200000),
-    { full_name: 'Иванов', phone: 'старый' })], S);
+  applyBatch(db, [put('patients', 'lw2', stampAt(T0), { full_name: 'Иванов', phone: 'старый' })], S);
   db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
     .run(new Date().toISOString());
-  db.prepare("UPDATE patients SET phone = 'моё' WHERE uid = 'lw2'").run();
+  editAgo(db, 30, "UPDATE patients SET phone = 'моё' WHERE uid = 'lw2'");
 
-  // Пока правка в журнале — она сильнее любой УЖЕ отчеканенной чужой метки, и
-  // это не произвол: она ещё не уехала, уедет позже, а значит и метку получит
-  // более позднюю — сосед сам предпочтёт её, когда она к нему приедет.
-  applyBatch(db, [{
-    ...put('patients', 'lw2', stampAt(now - 600000), { phone: 'соседское' }), changed: ['phone'],
-  }], S);
-  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'lw2'").get().phone, 'моё');
-
-  // Сосед подтвердил приём, журнал вычищен (pruneJournal) — притязания нет.
+  // Сосед подтвердил приём, журнал вычищен (pruneJournal) — как в жизни.
   db.prepare('DELETE FROM sync_journal').run();
+  assert.ok(db.prepare("SELECT COUNT(*) n FROM sync_authored WHERE col = 'phone'").get().n > 0,
+    'авторство лежит отдельно и чисткой журнала не затрагивается');
+
   applyBatch(db, [{
-    ...put('patients', 'lw2', stampAt(now - 300000), { phone: 'соседское' }), changed: ['phone'],
+    ...put('patients', 'lw2', stampAt(Date.now() - 3600000), { phone: 'соседское час назад' }),
+    changed: ['phone'], stamps: { phone: stampAt(Date.now() - 3600000, 'C') },
   }], S);
-  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'lw2'").get().phone, 'соседское',
+  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'lw2'").get().phone, 'моё',
+    'правка получасовой давности новее часовой — и остаётся, хотя журнал давно пуст');
+
+  // А по-настоящему более новая чужая правка по-прежнему применяется.
+  applyBatch(db, [{
+    ...put('patients', 'lw2', stampAt(Date.now()), { phone: 'соседское только что' }),
+    changed: ['phone'], stamps: { phone: stampAt(Date.now(), 'C') },
+  }], S);
+  assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'lw2'").get().phone, 'соседское только что',
     'иначе узел окапывается на своём значении навсегда');
   db.close();
 });
@@ -695,13 +709,16 @@ test('7c: строку, которую отвергла база, видно в 
 
 // --- Задача 7d: поколоночный спор решает ВРЕМЯ ПРАВКИ ------------------------
 
-// Помощник: местная правка колонки «столько-то минут назад». Журнал пишет
-// время сам, но тест укладывается в миллисекунды, поэтому проставляем явно.
-const editAgo = (db, minutes, sql) => {
+// Помощник: местная правка колонки «столько-то минут назад». Время пишут
+// триггеры («сейчас»), а тест укладывается в миллисекунды, поэтому проставляем
+// его явно — и в журнал, и в sync_authored: с Задачи 7e спор решает именно
+// авторство, журнал же чистится и метки не хранит.
+const editAgo = (db, minutes, sql, cols = ['phone']) => {
   const before = db.prepare('SELECT COALESCE(MAX(seq), 0) s FROM sync_journal').get().s;
   db.prepare(sql).run();
-  db.prepare('UPDATE sync_journal SET at = ? WHERE seq > ?')
-    .run(new Date(Date.now() - minutes * 60000).toISOString(), before);
+  const at = new Date(Date.now() - minutes * 60000).toISOString();
+  db.prepare('UPDATE sync_journal SET at = ? WHERE seq > ?').run(at, before);
+  for (const col of cols) db.prepare('UPDATE sync_authored SET at = ? WHERE col = ?').run(at, col);
 };
 
 test('7d: приехавшая колонка НОВЕЕ местной правки — применяется', () => {
@@ -754,6 +771,8 @@ test('7d: одна миллисекунда, разные буквы — реш�
   editAgo(db, 10, "UPDATE patients SET phone = 'от B' WHERE uid = 'ax3'");
   db.prepare("UPDATE sync_journal SET at = ? WHERE tbl = 'patients' AND uid = 'ax3' AND cols = 'phone'")
     .run(new Date(tie).toISOString());
+  db.prepare("UPDATE sync_authored SET at = ? WHERE tbl = 'patients' AND uid = 'ax3' AND col = 'phone'")
+    .run(new Date(tie).toISOString());
   db.prepare('UPDATE sync_peers SET pub_seq = (SELECT MAX(seq) FROM sync_journal) WHERE node = ?').run('C');
 
   // Этот узел — B, приехало от C: та же миллисекунда, буква C больше.
@@ -773,5 +792,84 @@ test('7d: запись без stamps (сборка соседа до 7d) чит�
   applyBatch(db, [put('patients', 'ax4', stampAt(now - 60000), { phone: 'от старой сборки' })], S);
   assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'ax4'").get().phone, 'от старой сборки',
     'узлы в сети обновляются не одновременно — запись без поколоночных меток обязана работать как раньше');
+  db.close();
+});
+
+// --- Задача 7e: сбитые часы соседа не замораживают колонку -------------------
+//
+// Метка решает, чья правка новее, поэтому компьютер с часами из будущего
+// раздаёт всей сети метки, которые не обгонит ни одна честная правка, — поле
+// застывает у ВСЕХ, пока настенное время не догонит. Подрезаем, а не
+// отбрасываем: в записи настоящая работа филиала.
+
+test('7e: метка из будущего подрезается, запись применяется, колонка не застревает', () => {
+  // База на каждый перекос своя: тест укладывается в миллисекунды, и метки
+  // предыдущего прохода мешали бы следующему просто потому, что они соседние.
+  for (const [ahead, label] of [[15 * 60000, 'на 15 минут'], [365 * 86400000, 'на год']]) {
+    const db = fresh();
+    db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
+      .run(new Date().toISOString());
+    applyBatch(db, [put('patients', 'sk1', stampAt(T0), { full_name: 'Иванов', phone: 'исходный' })], S);
+    const future = stampAt(Date.now() + ahead, 'C');
+    // Допуск нулевой — иначе «пока часы не догонят» пришлось бы ждать пять
+    // минут прямо в тесте. Смысл от этого не меняется: подрезка ограничивает
+    // заморозку колонки ДОПУСКОМ, а не годом (и не пятнадцатью годами, если у
+    // филиала села батарейка CMOS и часы показывают 2036-й).
+    const r = applyBatch(db, [{
+      ...put('patients', 'sk1', future, { phone: 'из будущего ' + label }),
+      changed: ['phone'], stamps: { phone: future },
+    }], { ...S, peer: 'C', skewMaxMs: 0 });
+    assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'sk1'").get().phone,
+      'из будущего ' + label, label + ': работу филиала не теряем');
+    assert.equal(r.skewed > 0, true, label + ': подрезку надо посчитать');
+    assert.ok(r.skew_ms >= ahead - 60000, label + ': и назвать, на сколько он спешит');
+
+    const stored = db.prepare("SELECT stamp FROM sync_seen WHERE uid = 'sk1' AND col = 'phone'").get().stamp;
+    const storedMs = parseInt(stored.slice(0, 12), 16);
+    assert.ok(storedMs <= Date.now() + 1000,
+      label + ': в sync_seen метка уже подрезана — иначе она заморозит колонку у всех');
+
+    const honest = stampAt(storedMs + 1, 'C');
+    applyBatch(db, [{
+      ...put('patients', 'sk1', honest, { phone: 'честное ' + label }),
+      changed: ['phone'], stamps: { phone: honest },
+    }], { ...S, peer: 'C', skewMaxMs: 60000 });
+    assert.equal(db.prepare("SELECT phone FROM patients WHERE uid = 'sk1'").get().phone, 'честное ' + label,
+      label + ': колонка не заморожена дольше допуска');
+    assert.ok(db.prepare("SELECT clock_skew_ms FROM sync_peers WHERE node = 'C'").get().clock_skew_ms > 0,
+      label + ': перекос запомнен по соседу — карточка филиала покажет его словами');
+    db.close();
+  }
+
+  // А допуск по умолчанию — пять минут: столько метке из будущего позволено
+  // обгонять наши часы, и ровно столько длится заморозка в худшем случае.
+  const db2 = fresh();
+  applyBatch(db2, [put('patients', 'sk2', stampAt(T0), { full_name: 'Иванов' })], S);
+  applyBatch(db2, [{
+    ...put('patients', 'sk2', stampAt(Date.now() + 86400000, 'C'), { phone: 'из завтра' }),
+    changed: ['phone'], stamps: { phone: stampAt(Date.now() + 86400000, 'C') },
+  }], S);
+  const st = db2.prepare("SELECT stamp FROM sync_seen WHERE uid = 'sk2' AND col = 'phone'").get().stamp;
+  assert.ok(parseInt(st.slice(0, 12), 16) <= Date.now() + 5 * 60000 + 1000,
+    'метка «завтра» подрезана до «сейчас + допуск», а не сохранена как есть');
+  db2.close();
+});
+
+test('7e: отказ снимается, когда строка всё-таки применяется', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (full_name, mrn) VALUES ('Местный', 'B-000001')").run();
+  db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
+    .run(new Date().toISOString());
+  applyBatch(db, [put('patients', 'rf9', stampAt(T0), { full_name: 'Приезжий', mrn: 'B-000001' })],
+    { ...S, peer: 'C', upto: 11 });
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_refused').get().n, 1, 'база отвергла — видно');
+
+  // Номер освободили, запись приехала снова — отказ больше не факт.
+  db.prepare("UPDATE patients SET mrn = 'B-000002' WHERE full_name = 'Местный'").run();
+  applyBatch(db, [put('patients', 'rf9', stampAt(Date.now()), { full_name: 'Приезжий', mrn: 'B-000001' })],
+    { ...S, peer: 'C', upto: 12 });
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM patients WHERE uid = 'rf9'").get().n, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_refused').get().n, 0,
+    'иначе экран годами показывал бы «N записей не приняты» после того, как всё починилось');
   db.close();
 });

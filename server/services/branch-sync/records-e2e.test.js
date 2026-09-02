@@ -509,8 +509,13 @@ test('BRANCH_RECORDS_V1: пациенты и лабораторная очере
     const editAt = (node, secondsAhead, value) => {
       node.db.prepare("UPDATE patients SET phone = ? WHERE full_name = 'Иванов'").run(value);
       const uid = node.db.prepare("SELECT uid FROM patients WHERE full_name = 'Иванов'").get().uid;
+      const at = new Date(Date.now() + secondsAhead * 1000).toISOString();
       node.db.prepare("UPDATE sync_journal SET at = ? WHERE tbl = 'patients' AND uid = ? AND cols = 'phone'")
-        .run(new Date(Date.now() + secondsAhead * 1000).toISOString(), uid);
+        .run(at, uid);
+      // И в АВТОРСТВО: с Задачи 7e спор решает sync_authored, а журнал только
+      // говорит, ЧТО отдавать, — время он больше не хранит.
+      node.db.prepare("UPDATE sync_authored SET at = ? WHERE tbl = 'patients' AND uid = ? AND col = 'phone'")
+        .run(at, uid);
     };
     const phoneIn = (node) => node.db.prepare("SELECT phone FROM patients WHERE full_name = 'Иванов'").get().phone;
 
@@ -578,6 +583,47 @@ test('BRANCH_RECORDS_V1: пациенты и лабораторная очере
         node.db.prepare("SELECT address FROM patients WHERE full_name = 'Иванов'").get().address,
         'Юнусабад, свежий', node.tag + ': поздний засев не откатывает чужую правку');
     }
+  });
+
+  // C-1 ЦЕЛИКОМ (ревью 7d → Задача 7e). Один обычный сбой: у филиала PUT
+  // отвечает 500, а GET работает. Раньше это кончалось так: B забирает срез A,
+  // ничего из него не применяет (её правка новее), НО квитанцию всё равно
+  // пишет; A читает квитанцию, двигает sent_seq, pruneJournal сносит
+  // журнальную строку — и метка правки A исчезает вместе с ней, потому что
+  // жила только в журнале. Дальше B присылает своё СТАРОЕ значение, и A его
+  // принимает: сеть сходится на более ранней правке, оба журнала пусты, искать
+  // нечего. Теперь авторство лежит в sync_authored и чистку переживает.
+  await t.test('C-1: сбой выгрузки у соседа не откатывает более позднюю правку', async () => {
+    const phoneIn = (node) => node.db.prepare("SELECT phone FROM patients WHERE full_name = 'Иванов'").get().phone;
+    const editAt = (node, secondsAhead, value) => {
+      node.db.prepare("UPDATE patients SET phone = ? WHERE full_name = 'Иванов'").run(value);
+      const uid = node.db.prepare("SELECT uid FROM patients WHERE full_name = 'Иванов'").get().uid;
+      const at = new Date(Date.now() + secondsAhead * 1000).toISOString();
+      node.db.prepare("UPDATE sync_journal SET at = ? WHERE tbl = 'patients' AND uid = ? AND cols = 'phone'")
+        .run(at, uid);
+      node.db.prepare("UPDATE sync_authored SET at = ? WHERE tbl = 'patients' AND uid = ? AND col = 'phone'")
+        .run(at, uid);
+    };
+
+    // B правит телефон, A — секундой ПОЗЖЕ. Отсчёт вперёд от «сейчас» и с
+    // запасом: предыдущие подтесты уже оставили в сети метки на полминуты
+    // вперёд, и правка «десять секунд вперёд» была бы честно старше их.
+    editAt(B, 120, '+998900001000');
+    editAt(A, 121, '+998900001100');
+
+    // Выгрузка B один раз не удалась: блоб на сервере остался прежним, отметка
+    // «выложено» не сдвинулась. Забирать чужое B при этом продолжает.
+    const failingFetch = async () => { throw new Error('PUT failed: 500'); };
+    const pub = await publishJournal(B.db, B.dir, { fetchImpl: failingFetch });
+    assert.equal(pub.ok, false, 'выгрузка обязана честно отказать: ' + JSON.stringify(pub));
+    await fetchJournals(B.db, B.dir, { backupImpl: async () => {} });
+
+    // Шесть чистых кругов — больше чем достаточно, чтобы всё устоялось.
+    for (let i = 0; i < 6; i++) await round();
+
+    assert.equal(phoneIn(A), '+998900001100', 'правка A позже — она и остаётся у A');
+    assert.equal(phoneIn(B), '+998900001100', 'и у B: сеть сходится на ПОЗДНЕЙ правке, а не на ранней');
+    assert.equal(phoneIn(C), '+998900001100', 'и у третьего филиала');
   });
 
   await t.test('поставщик хранит шифротекст: ни имени пациента, ни телефона', () => {
