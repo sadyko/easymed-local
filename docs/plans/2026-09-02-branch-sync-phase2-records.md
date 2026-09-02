@@ -144,7 +144,7 @@ test('083: у каждой существующей строки появляе�
 test('083: новая строка получает uid без участия прикладного кода', () => {
   const db = openDb(':memory:');
   migrate(db);
-  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Петров Пётр')").lastInsertRowid;
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Петров Пётр')").run().lastInsertRowid;
   const uid = db.prepare('SELECT uid FROM patients WHERE id = ?').get(id).uid;
   assert.match(uid, /^[0-9a-f]{32}$/, 'uid проставлен триггером: ' + uid);
   db.close();
@@ -153,7 +153,7 @@ test('083: новая строка получает uid без участия п
 test('083: uid уникален — две записи под одним uid означали бы двойной приём', () => {
   const db = openDb(':memory:');
   migrate(db);
-  const a = db.prepare("INSERT INTO patients (full_name) VALUES ('А')").lastInsertRowid;
+  const a = db.prepare("INSERT INTO patients (full_name) VALUES ('А')").run().lastInsertRowid;
   const uid = db.prepare('SELECT uid FROM patients WHERE id = ?').get(a).uid;
   db.prepare("INSERT INTO patients (full_name) VALUES ('Б')").run();
   assert.throws(
@@ -182,8 +182,13 @@ test('083: uid уникален — две записи под одним uid о
 перечисляет колонки через `SELECT *`:
 
 Запустить: `grep -n "SELECT \*" server/db/schema-registry.js`
-Ожидается: пусто. Если найдётся — открыть находку и убедиться, что `uid` не
-утекает в ответы API.
+Ожидается: пусто (реестр — явный список колонок, `uid` в нём нет).
+
+**Что эта проверка НЕ доказывает** (ревью Задачи 1): `uid` всё же доходит до
+клиента через RPC, отдающие строку целиком — `rpc/visits.js:110` (`SELECT *`),
+`rpc/billing.js`, `rpc/inpatient.js`, `rpc/inventory.js`. Вред низкий: случайный
+непрозрачный id, только для сотрудников. Записано, чтобы никто не строил на
+«uid не покидает сервер».
 
 - [ ] **Шаг 6: коммит**
 
@@ -351,33 +356,53 @@ CREATE TABLE sync_journal (
 CREATE INDEX idx_sync_journal_seq ON sync_journal(seq);
 CREATE INDEX idx_sync_journal_row ON sync_journal(tbl, uid);
 
+-- ВСТАВКА ЧИТАЕТ СТРОКУ, А НЕ NEW. В AFTER INSERT триггере NEW.uid — значение,
+-- КАК ВСТАВИЛИ: NULL, потому что приложение uid не задаёт. Триггер
+-- *_uid_autogen (083) чинит СТРОКУ, но соседний AFTER INSERT триггер этого
+-- UPDATE в своём NEW не увидит ни при каком порядке срабатывания, а порядок
+-- AFTER-триггеров SQLite не определяет вовсе (на деле — обратный порядку
+-- создания, и patients_mrn_autogen в этом репозитории пересоздавали уже
+-- дважды: 034, 080). Записать NEW.uid значило бы NOT NULL constraint failed на
+-- КАЖДОЙ регистрации пациента (проверено ревью Задачи 1). Поэтому — SELECT из
+-- самой таблицы, и только если uid уже есть; если нет, строку зажурналит
+-- UPDATE uid-триггера через *_journal_upd мгновением позже. Один INSERT даёт
+-- ДВЕ записи журнала — это нормально, buildBatch уплотняет по (tbl, uid).
+--
 -- op='put', а не 'insert'/'update': принимающей стороне разница не нужна —
 -- у неё этой строки либо нет (создаст), либо есть (сольёт). Две операции
 -- вместо трёх убирают целый класс вопросов «а что если insert приехал после
 -- update».
 CREATE TRIGGER patients_journal_ins AFTER INSERT ON patients
-  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('patients', NEW.uid, 'put'); END;
+  BEGIN INSERT INTO sync_journal (tbl, uid, op)
+        SELECT 'patients', uid, 'put' FROM patients
+         WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER patients_journal_upd AFTER UPDATE ON patients
   BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('patients', NEW.uid, 'put'); END;
 CREATE TRIGGER patients_journal_del AFTER DELETE ON patients
   BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('patients', OLD.uid, 'del'); END;
 
 CREATE TRIGGER visits_journal_ins AFTER INSERT ON visits
-  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('visits', NEW.uid, 'put'); END;
+  BEGIN INSERT INTO sync_journal (tbl, uid, op)
+        SELECT 'visits', uid, 'put' FROM visits
+         WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER visits_journal_upd AFTER UPDATE ON visits
   BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('visits', NEW.uid, 'put'); END;
 CREATE TRIGGER visits_journal_del AFTER DELETE ON visits
   BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('visits', OLD.uid, 'del'); END;
 
 CREATE TRIGGER visit_services_journal_ins AFTER INSERT ON visit_services
-  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('visit_services', NEW.uid, 'put'); END;
+  BEGIN INSERT INTO sync_journal (tbl, uid, op)
+        SELECT 'visit_services', uid, 'put' FROM visit_services
+         WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER visit_services_journal_upd AFTER UPDATE ON visit_services
   BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('visit_services', NEW.uid, 'put'); END;
 CREATE TRIGGER visit_services_journal_del AFTER DELETE ON visit_services
   BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('visit_services', OLD.uid, 'del'); END;
 
 CREATE TRIGGER lab_results_journal_ins AFTER INSERT ON lab_results
-  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('lab_results', NEW.uid, 'put'); END;
+  BEGIN INSERT INTO sync_journal (tbl, uid, op)
+        SELECT 'lab_results', uid, 'put' FROM lab_results
+         WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER lab_results_journal_upd AFTER UPDATE ON lab_results
   BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('lab_results', NEW.uid, 'put'); END;
 CREATE TRIGGER lab_results_journal_del AFTER DELETE ON lab_results
@@ -418,7 +443,7 @@ test('084: создание пациента попадает в журнал б
 
 test('084: правка пишется отдельной записью', () => {
   const db = fresh();
-  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").lastInsertRowid;
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
   const before = db.prepare('SELECT COUNT(*) n FROM sync_journal').get().n;
   db.prepare("UPDATE patients SET phone = '+998900000000' WHERE id = ?").run(id);
   const after = db.prepare('SELECT COUNT(*) n FROM sync_journal').get().n;
@@ -428,7 +453,7 @@ test('084: правка пишется отдельной записью', () =>
 
 test('084: удаление записывается по uid УДАЛЁННОЙ строки', () => {
   const db = fresh();
-  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").lastInsertRowid;
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
   const uid = db.prepare('SELECT uid FROM patients WHERE id = ?').get(id).uid;
   db.prepare('DELETE FROM patients WHERE id = ?').run(id);
   const del = db.prepare("SELECT uid FROM sync_journal WHERE op = 'del'").get();
@@ -438,10 +463,10 @@ test('084: удаление записывается по uid УДАЛЁННОЙ
 
 test('084: журнал ведётся для всех четырёх таблиц', () => {
   const db = fresh();
-  const pid = db.prepare("INSERT INTO patients (full_name) VALUES ('И')").lastInsertRowid;
+  const pid = db.prepare("INSERT INTO patients (full_name) VALUES ('И')").run().lastInsertRowid;
   const vid = db.prepare('INSERT INTO visits (patient_id, visit_date) VALUES (?, ?)')
     .run(pid, '2026-09-02').lastInsertRowid;
-  const sid = db.prepare("INSERT INTO services (name, code, price, type, active) VALUES ('Анализ','S-9',1000,'lab',1)").lastInsertRowid;
+  const sid = db.prepare("INSERT INTO services (name, code, price, type, active) VALUES ('Анализ','S-9',1000,'lab',1)").run().lastInsertRowid;
   const vsid = db.prepare('INSERT INTO visit_services (visit_id, service_id, quantity) VALUES (?, ?, 1)')
     .run(vid, sid).lastInsertRowid;
   db.prepare("INSERT INTO lab_results (visit_service_id, value) VALUES (?, '5.2')").run(vsid);
@@ -508,7 +533,7 @@ test('порция несёт ПОЛНУЮ строку, а не поля, ко�
 
 test('строка, изменённая много раз, уезжает ОДИН раз', () => {
   const db = fresh();
-  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").lastInsertRowid;
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
   for (let i = 0; i < 5; i++) db.prepare('UPDATE patients SET phone = ? WHERE id = ?').run('+9989' + i, id);
   const batch = buildBatch(db, { node: 'B' });
   const forPatients = batch.records.filter(r => r.tbl === 'patients');
@@ -518,7 +543,7 @@ test('строка, изменённая много раз, уезжает ОД�
 
 test('удалённая строка уезжает как удаление, без данных', () => {
   const db = fresh();
-  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").lastInsertRowid;
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
   db.prepare('DELETE FROM patients WHERE id = ?').run(id);
   const batch = buildBatch(db, { node: 'B' });
   const rec = batch.records.find(r => r.tbl === 'patients');
@@ -540,9 +565,9 @@ test('markSent сдвигает отметку, и следующая порци
 
 test('деньги из visit_services не уезжают', () => {
   const db = fresh();
-  const pid = db.prepare("INSERT INTO patients (full_name) VALUES ('И')").lastInsertRowid;
+  const pid = db.prepare("INSERT INTO patients (full_name) VALUES ('И')").run().lastInsertRowid;
   const vid = db.prepare('INSERT INTO visits (patient_id, visit_date) VALUES (?, ?)').run(pid, '2026-09-02').lastInsertRowid;
-  const sid = db.prepare("INSERT INTO services (name, code, price, type, active) VALUES ('Анализ','S-9',1000,'lab',1)").lastInsertRowid;
+  const sid = db.prepare("INSERT INTO services (name, code, price, type, active) VALUES ('Анализ','S-9',1000,'lab',1)").run().lastInsertRowid;
   db.prepare('INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total) VALUES (?, ?, 1, 50000, 50000)').run(vid, sid);
 
   const rec = buildBatch(db, { node: 'B' }).records.find(r => r.tbl === 'visit_services');
@@ -686,6 +711,38 @@ git commit -m "feat(sync): сборка порции изменений для �
 - Создать: `server/services/branch-sync/records.js`
 - Создать: `server/services/branch-sync/records.test.js`
 
+**Схема, которую отвергает база (проверено ревью Задачи 1):** `visits.patient_id`,
+`visit_services.visit_id`, `lab_results.visit_service_id` — `NOT NULL`, и
+`foreign_keys = ON` (`server/db/connection.js:8`). Дочернюю строку, чей родитель
+ещё не приехал, НЕЛЬЗЯ вставить с NULL-ссылкой. Поэтому:
+
+**Правило приёма:** запись применяется только если ВСЕ её родители уже есть
+локально. Иначе она целиком кладётся в таблицу ожидания `sync_pending` и
+применяется, когда родитель приезжает — в этой же порции или в любой
+следующей. Порядок прихода не гарантирован ничем, и сортировка порции
+родителями вперёд его не спасает: родитель может приехать в следующей порции.
+
+`visits.status` ограничен `CHECK (status IN ('scheduled','confirmed','arrived','cancelled','no_show'))`
+(`003_visits.sql:11`) — в тестах использовать `'scheduled'`, не `'open'`.
+
+- [ ] **Шаг 0: таблица ожидания** — добавить в `084_sync_journal.sql` (Задача 3):
+
+```sql
+-- Записи, у которых ещё нет родителя. Хранятся целиком (JSON) и применяются,
+-- когда родитель приезжает. Ключ — (tbl, uid): у одной строки одно последнее
+-- состояние; более поздняя запись про ту же строку замещает более раннюю.
+CREATE TABLE sync_pending (
+  tbl        TEXT NOT NULL,
+  uid        TEXT NOT NULL,
+  stamp      TEXT NOT NULL,
+  record     TEXT NOT NULL,          -- JSON всей записи, как приехала
+  waits_tbl  TEXT NOT NULL,          -- какого родителя ждёт
+  waits_uid  TEXT NOT NULL,
+  PRIMARY KEY (tbl, uid)
+);
+CREATE INDEX idx_sync_pending_parent ON sync_pending(waits_tbl, waits_uid);
+```
+
 - [ ] **Шаг 1: тест**
 
 ```js
@@ -747,19 +804,21 @@ test('ссылка на ещё не приехавшего родителя не
   // Визит приезжает ПЕРЕД пациентом: порядок прихода не гарантирован ничем.
   applyBatch(db, [{
     tbl: 'visits', uid: 'v1', op: 'put', stamp: '000000000001-0000-C',
-    data: { visit_date: '2026-09-02', status: 'open' },
+    data: { visit_date: '2026-09-02', status: 'scheduled' },
     refs: { patient_id: 'p1' }, origin: 'C',
   }]);
-  let v = db.prepare("SELECT patient_id FROM visits WHERE uid = 'v1'").get();
-  assert.equal(v.patient_id, null, 'висячей ссылки в базе быть не должно');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM visits WHERE uid = 'v1'").get().n, 0,
+    'visits.patient_id NOT NULL: ребёнка без родителя вставить нельзя — он ждёт');
+  assert.equal(db.prepare("SELECT waits_uid FROM sync_pending WHERE uid = 'v1'").get().waits_uid, 'p1');
 
   applyBatch(db, [{
     tbl: 'patients', uid: 'p1', op: 'put', stamp: '000000000002-0000-C',
     data: { full_name: 'Опоздавший' }, refs: {}, origin: 'C',
   }]);
-  v = db.prepare("SELECT patient_id FROM visits WHERE uid = 'v1'").get();
+  const v = db.prepare("SELECT patient_id FROM visits WHERE uid = 'v1'").get();
   const p = db.prepare("SELECT id FROM patients WHERE uid = 'p1'").get();
-  assert.equal(v.patient_id, p.id, 'связь достроилась, когда родитель приехал');
+  assert.equal(v.patient_id, p.id, 'ребёнок применился, когда родитель приехал');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM sync_pending").get().n, 0, 'и вышел из ожидания');
   db.close();
 });
 
@@ -782,7 +841,7 @@ test('удаление проигрывает более поздней прав
 
 test('своё же изменение, вернувшееся обратно, ничего не портит', () => {
   const db = fresh();
-  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").lastInsertRowid;
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
   const uid = db.prepare('SELECT uid FROM patients WHERE id = ?').get(id).uid;
   const before = db.prepare('SELECT COUNT(*) n FROM patients').get().n;
 
@@ -893,12 +952,25 @@ export function applyBatch(db, records) {
           cols.push(col); vals.push(rec.data[col]);
         }
       }
-      // Ссылки: uid родителя → его местный id. Родителя ещё нет — пишем NULL и
-      // достраиваем связь, когда он приедет (см. resolvePending ниже).
+      // Ссылки: uid родителя → его местный id. Родителя ещё нет — запись
+      // ЦЕЛИКОМ уходит в ожидание: NOT NULL и внешние ключи не дадут вставить
+      // ребёнка с пустой ссылкой, и это правильно.
+      let waiting = null;
       for (const [col, parent] of Object.entries(REFS[rec.tbl] || {})) {
         const parentUid = rec.refs ? rec.refs[col] : null;
         if (!parentUid) continue;
-        cols.push(col); vals.push(localId(db, parent, parentUid));
+        const pid = localId(db, parent, parentUid);
+        if (pid == null) { waiting = { tbl: parent, uid: parentUid }; break; }
+        cols.push(col); vals.push(pid);
+      }
+      if (waiting) {
+        db.prepare(`INSERT INTO sync_pending (tbl, uid, stamp, record, waits_tbl, waits_uid)
+                    VALUES (?,?,?,?,?,?)
+                    ON CONFLICT(tbl, uid) DO UPDATE SET stamp = excluded.stamp, record = excluded.record,
+                      waits_tbl = excluded.waits_tbl, waits_uid = excluded.waits_uid`)
+          .run(rec.tbl, rec.uid, rec.stamp, JSON.stringify(rec), waiting.tbl, waiting.uid);
+        stats.skipped++;
+        continue;
       }
 
       if (id == null) {
@@ -916,7 +988,7 @@ export function applyBatch(db, records) {
       stats.applied++;
     }
 
-    resolvePending(db, batch);
+    releasePending(db, batch, stats);
 
     // Приём не порождает исходящих изменений — см. заголовок.
     db.prepare('DELETE FROM sync_journal WHERE seq > ?').run(journalFrom);
@@ -926,36 +998,33 @@ export function applyBatch(db, records) {
   return stats;
 }
 
-// Достроить ссылки, которые не с чем было связать в момент приезда ребёнка.
-// Дешевле, чем сортировать порцию по зависимостям: родитель может приехать не
-// просто позже в этой порции, а вообще в следующей.
-function resolvePending(db, batch) {
-  for (const rec of batch) {
-    if (!rec || rec.op !== 'put') continue;
-    for (const [childTable, refs] of Object.entries(REFS)) {
-      for (const [col, parent] of Object.entries(refs)) {
-        if (parent !== rec.tbl) continue;
-        const pid = localId(db, parent, rec.uid);
-        if (pid == null) continue;
-        db.prepare(`
-          UPDATE ${childTable} SET ${col} = ?
-           WHERE ${col} IS NULL
-             AND uid IN (SELECT uid FROM ${childTable} WHERE ${col} IS NULL)
-        `).run(pid);
+// Применить тех, кто ждал ИМЕННО этих родителей. Точечно, по (waits_tbl,
+// waits_uid): связать всех висящих детей с первым попавшимся родителем было бы
+// не «не связать», а перепутать — хуже. Освобождённый ребёнок сам может быть
+// родителем (визит → услуга → результат), поэтому цикл до неподвижной точки.
+function releasePending(db, batch, stats) {
+  let arrived = batch.filter((r) => r && r.op === 'put').map((r) => ({ tbl: r.tbl, uid: r.uid }));
+  while (arrived.length) {
+    const next = [];
+    for (const parent of arrived) {
+      const rows = db.prepare('SELECT record FROM sync_pending WHERE waits_tbl = ? AND waits_uid = ?')
+        .all(parent.tbl, parent.uid);
+      for (const row of rows) {
+        const rec = JSON.parse(row.record);
+        db.prepare('DELETE FROM sync_pending WHERE tbl = ? AND uid = ?').run(rec.tbl, rec.uid);
+        const before = stats.applied;
+        applyOne(db, rec, stats);            // та же логика, что в основном цикле
+        if (stats.applied > before) next.push({ tbl: rec.tbl, uid: rec.uid });
       }
     }
+    arrived = next;
   }
 }
 ```
 
-> **Замечание для исполнителя:** `resolvePending` в этом виде связывает
-> ВСЕ висячие ссылки на таблицу-родителя, а не только те, что ждали именно
-> этот uid. Первый же тест «ссылка на ещё не приехавшего родителя» это
-> поймает, если детей больше одного. Правильная форма — хранить ожидаемый
-> uid родителя: добавьте колонку `pending_ref` в `sync_seen` или отдельную
-> таблицу `sync_pending (tbl, uid, col, parent_uid)` и связывайте точечно.
-> Сделайте это в Шаге 3 сразу, не откладывая: тест на двух детей одного
-> родителя обязателен.
+> **Для исполнителя:** тело основного цикла вынести в `applyOne(db, rec, stats)`,
+> чтобы `releasePending` применяло ожидавшие записи тем же кодом. В `applyOne`
+> запись, чей родитель по-прежнему отсутствует, снова уходит в `sync_pending`.
 
 - [ ] **Шаг 4: тест на двух детей — обязателен**
 
@@ -1103,9 +1172,9 @@ test('пациент, заведённый в B, виден в C', () => {
 
 test('лабораторная очередь: услуга и результат доезжают вместе с визитом', () => {
   const B = node(); const C = node();
-  const pid = B.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").lastInsertRowid;
+  const pid = B.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
   const vid = B.prepare('INSERT INTO visits (patient_id, visit_date) VALUES (?, ?)').run(pid, '2026-09-02').lastInsertRowid;
-  const sid = B.prepare("INSERT INTO services (name, code, price, type, active) VALUES ('ОАК','S-1',1000,'lab',1)").lastInsertRowid;
+  const sid = B.prepare("INSERT INTO services (name, code, price, type, active) VALUES ('ОАК','S-1',1000,'lab',1)").run().lastInsertRowid;
   const vsid = B.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, status) VALUES (?,?,1,'ordered')").run(vid, sid).lastInsertRowid;
   B.prepare("INSERT INTO lab_results (visit_service_id, value) VALUES (?, '5.2')").run(vsid);
 
@@ -1152,7 +1221,7 @@ test('повторный обмен ничего не меняет и ничег
 
 test('деньги не уезжают: счетов в приёмнике не появляется', () => {
   const B = node(); const C = node();
-  const pid = B.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").lastInsertRowid;
+  const pid = B.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
   B.prepare('INSERT INTO invoices (patient_id, total_amount, status) VALUES (?, 100000, ?)').run(pid, 'open');
   exchange(B, C, 'B');
   assert.equal(C.prepare('SELECT COUNT(*) n FROM invoices').get().n, 0, 'счета — Фаза 3');
