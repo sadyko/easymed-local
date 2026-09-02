@@ -85,10 +85,22 @@ export function branchSyncButton({ onDone } = {}) {
  */
 async function revealIfBranch(btn) {
     try {
-        const { data, error } = await supabase.rpc('branch_sync_status');
-        if (error) return;
-        if (data && data.role === 'secondary') btn.hidden = false;
+        if (rolePromise === null) rolePromise = askRole();
+        if (await rolePromise) btn.hidden = false;
     } catch (e) {
         /* роль не выяснили — кнопки нет */
     }
+}
+
+// Роль спрашивается ОДИН раз за сессию, а не при каждом открытии экрана.
+// Кнопка живёт на двух экранах, между которыми ходят весь день, и установка
+// не превращается из филиала в одиночную клинику между двумя кликами по меню.
+// Лишний запрос на каждом открытии был бы не только тратой: он попадает в
+// список вызовов, которым экраны проверяются, и делает их хрупкими.
+let rolePromise = null;
+
+async function askRole() {
+    const { data, error } = await supabase.rpc('branch_sync_status');
+    if (error) return false;
+    return !!(data && data.role === 'secondary');
 }

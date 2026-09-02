@@ -313,7 +313,19 @@ test('два филиала: связывание, перенос справоч
       'секрет не должен уходить на экран — статус читают все, кому открыты настройки');
   });
 
-  await t.test('не администратор синхронизировать не может', async () => {
+  // BRANCH_SYNC_HOURLY_V1 — правило ПЕРЕВЁРНУТО, осознанно.
+  //
+  // Раньше здесь проверялось, что медсестра получает 403. Решение владельца
+  // 2026-09-02: кнопка «Синхронизация» появляется в окне регистратуры и
+  // лаборатории, то есть у людей без прав администратора. Отдавать им это
+  // безопасно ровно потому, что ровно то же самое каждый час выполняют часы
+  // (schedule-pull.js) вообще без человека: кнопка не даёт новых возможностей,
+  // она лишь избавляет от ожидания до следующего часа.
+  //
+  // Граница осталась и проверяется здесь же: НАСТРОЙКА связи по-прежнему
+  // администраторская. Подтянуть справочник — можно всем вошедшим; отвязать
+  // филиал — нельзя.
+  await t.test('синхронизировать может любой сотрудник, настраивать связь — нет', async () => {
     dbSec.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)')
       .run('nurse1', hashPassword('password1'), 'Nurse', 'nurse');
     const res = await fetch(sec.base + '/api/auth/login', {
@@ -322,8 +334,12 @@ test('два филиала: связывание, перенос справоч
       body: JSON.stringify({ username: 'nurse1', password: 'password1' }),
     });
     const nurseCookie = res.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
-    const r = await rpc(sec.base, nurseCookie, 'branch_sync_now');
-    assert.equal(r.status, 403);
+
+    const sync = await rpc(sec.base, nurseCookie, 'branch_sync_now');
+    assert.notEqual(sync.status, 403, 'медсестре не нужен админ, чтобы подтянуть данные');
+
+    const unpair = await rpc(sec.base, nurseCookie, 'branch_sync_unpair');
+    assert.equal(unpair.status, 403, 'а вот отвязать филиал — по-прежнему только администратор');
   });
 
   await t.test('главный филиал выключен: честный отказ, база не тронута', async () => {

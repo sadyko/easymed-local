@@ -69,22 +69,45 @@ test('анонимный запрос отклоняется', async () => {
     'открыть всем вошедшим — не то же самое, что открыть всем');
 });
 
-test('повторное нажатие не скачивает справочник второй раз', async () => {
+test('два нажатия одновременно — одно скачивание и два ЧЕСТНЫХ ответа', async () => {
+  const { db } = harness();
+  let pulls = 0;
+  const slow = {
+    pullImpl: async () => {
+      pulls += 1;
+      await new Promise((r) => setTimeout(r, 20));
+      return { ok: false, reason: 'offline' };
+    },
+    relayImpl: async () => ({ ok: false, reason: 'offline' }),
+  };
+
+  // Регистратор и лаборант нажали почти одновременно.
+  const [a, b] = await Promise.all([
+    branchSyncNow(db, {}, REGISTRAR, slow),
+    branchSyncNow(db, {}, LABORANT, slow),
+  ]);
+
+  assert.equal(pulls, 1, 'справочник по узкому каналу качается один раз');
+  // И это ГЛАВНОЕ: оба видят настоящий результат, а не «подождите» и не чужой
+  // прошлый ответ. Пауза с отдачей прошлого результата показывала бы второму
+  // бодрое «обновлено» там, где его собственная попытка ничего бы не дала.
+  assert.equal(a.reason, 'offline');
+  assert.equal(b.reason, 'offline');
+});
+
+test('после завершения следующий запуск идёт в сеть заново', async () => {
   const { db } = harness();
   let pulls = 0;
   const counting = {
     pullImpl: async () => { pulls += 1; return { ok: false, reason: 'offline' }; },
     relayImpl: async () => ({ ok: false, reason: 'offline' }),
   };
-
   await branchSyncNow(db, {}, REGISTRAR, counting);
-  const second = await branchSyncNow(db, {}, REGISTRAR, counting);
-
-  assert.equal(pulls, 1, 'второе нажатие подряд не идёт в сеть');
-  assert.equal(second.throttled, true, 'и честно говорит, что показывает прошлый результат');
-  assert.equal(second.reason, 'offline', 'показанный результат — настоящий, а не заглушка');
+  await branchSyncNow(db, {}, REGISTRAR, counting);
+  // Склейка — только на время полёта. Иначе починивший связь администратор
+  // жал бы кнопку и получал старый отказ.
+  assert.equal(pulls, 2, 'последовательные нажатия — настоящие попытки');
 });
-
 test('часам пользователь не нужен вообще', async () => {
   const { db } = harness();
   // runBranchSync — то, что вызывает scheduleBranchPull: без user, без прав.
