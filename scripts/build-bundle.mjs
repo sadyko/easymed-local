@@ -323,7 +323,29 @@ export function buildBundle({ sourceDir, outDir, version, notesRu, minFrom, keyP
     // sitting in sourceDir — including this very outDir, if it were ever placed
     // inside sourceDir under a name not on the allow-list — is never even looked
     // at, let alone archived.
-    execFileSync(tar.exe, [...tar.extraFlags, '-czf', tarPath, '-C', resolvedSource, ...entries], { stdio: 'pipe' });
+  // BUNDLE_NO_SYMLINKS_V1 — сборка кладёт КОПИИ, а не ссылки (-h).
+  //
+  // Windows не даёт обычному пользователю создавать символические ссылки. Сборка
+  // делается на Linux, где `npm ci` заводит в node_modules/.bin настоящий symlink
+  // на каждую зависимость с полем "bin" — и распаковка такого архива на машине
+  // клиники падала:
+  //
+  //   node_modules/.bin/bcrypt: Can't create '\?\C:\...\.bincrypt':
+  //   Invalid argument
+  //   tar.exe: Error exit delayed from previous errors.
+  //
+  // Почему это не всплывало раньше: клиника, поставленная СЛУЖБОЙ, работает от
+  // LocalSystem, у которого право на создание ссылок есть, и разворачивалась
+  // нормально. Установка, запущенная обычным пользователем со своего рабочего
+  // стола, не могла принять НИ ОДНО обновление — и говорила при этом «проверьте
+  // интернет», потому что интернет был ни при чём.
+  //
+  // -h (--dereference) кладёт в архив содержимое цели вместо ссылки. Ничего не
+  // теряется, .bin остаётся рабочим, архив прирастает на несколько килобайт.
+  // Опасные ссылки (петли и выходы за дерево) по-прежнему отклоняются ДО tar —
+  // dereference их не легализует, а сделал бы хуже, поэтому проверка выше
+  // остаётся на месте и обязана оставаться.
+    execFileSync(tar.exe, [...tar.extraFlags, '-h', '-czf', tarPath, '-C', resolvedSource, ...entries], { stdio: 'pipe' });
   } catch (e) {
     throw new Error(`tar failed to build the archive: ${e.message}`);
   }

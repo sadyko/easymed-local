@@ -608,3 +608,52 @@ test('nothing under server/ imports outside the allow-listed bundle contents', (
     'These runtime imports escape the bundle, so an unpacked release cannot start:\n  ' + offenders.join('\n  '),
   );
 });
+
+// BUNDLE_NO_SYMLINKS_V1 — в архиве не должно быть символических ссылок.
+//
+// Не гигиена, а работоспособность обновлений. Сборка идёт на Linux, где
+// `npm ci` заводит в node_modules/.bin настоящий symlink на каждую
+// зависимость с полем "bin". Windows не даёт обычному пользователю создавать
+// ссылки, поэтому распаковка такого архива падала:
+//
+//   node_modules/.bin/bcrypt: Can't create '...': Invalid argument
+//   tar.exe: Error exit delayed from previous errors.
+//
+// Клиника, поставленная службой (LocalSystem), право на ссылки имеет и
+// обновлялась нормально — поэтому дыру не замечали. Установка, запущенная
+// обычным пользователем, не могла принять НИ ОДНО обновление и показывала при
+// этом «проверьте подключение к интернету».
+test('bundle: no symbolic links in the archive — a non-admin Windows user cannot unpack them', function (t) {
+  let linked = false;
+  const src = mkTmp('em-bundle-link-src-');
+  const out = mkTmp('em-bundle-link-out-');
+  try {
+    buildSourceTree(src);
+    const binDir = path.join(src, 'node_modules', '.bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    try {
+      // Ровно то, что делает npm ci на Linux: ссылка на файл ВНУТРИ дерева.
+      fs.symlinkSync(path.join('..', 'dummy-pkg', 'index.js'), path.join(binDir, 'bcrypt'));
+      linked = true;
+    } catch (e) {
+      // Windows без прав на ссылки — ровно та машина, ради которой всё это.
+      // Проверять нечего: создать ссылку здесь нельзя в принципе.
+      t.skip('this machine cannot create symlinks: ' + e.code);
+      return;
+    }
+
+    const { tarPath } = buildBundle({
+      sourceDir: src, outDir: out, version: '2.4.0', minFrom: '2.0.0', keyPath: KEY_PATH,
+    });
+
+    // -v печатает тип записи: у ссылки строка начинается с 'l'.
+    const TAR = tarCommand();
+    const listing = execFileSync(TAR.exe, [...TAR.extraFlags, '-tvzf', tarPath], { encoding: 'utf8' });
+    const links = listing.split(/\r?\n/).filter((l) => /^l/.test(l));
+    assert.deepStrictEqual(links, [], 'archive contains symbolic links: ' + links.join(', '));
+    // И содержимое доехало: dereference кладёт копию, а не выбрасывает запись.
+    assert.match(listing, /node_modules\/\.bin\/bcrypt/, 'ссылка должна стать файлом, а не исчезнуть');
+  } finally {
+    if (!linked) { /* nothing built */ }
+  }
+});
