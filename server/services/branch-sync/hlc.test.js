@@ -92,3 +92,25 @@ test('состояние из control_state приходит строками �
   assert.equal(next.ms, 5000);
   assert.equal(next.cnt, 4);
 });
+
+test('счётчик у пола берёт максимум своего и полученного, а не первый совпавший', () => {
+  // Проба ревьюера: свой счётчик отстаёт (1), у пришедшей метки он далеко
+  // впереди (0x30=48). Взять «первый совпавший» (свой) значило бы отдать
+  // узлу C выигрыш даже там, где B обязан был обогнать.
+  const next = nextStamp({ ms: 1500, cnt: 1 }, 'B', () => 1000, '0000000005dc-0030-C');
+  assert.equal(next.ms, 1500);
+  assert.equal(next.cnt, 0x31);
+  assert.equal(compareStamps(next.stamp, '0000000005dc-0030-C') > 0, true,
+    'иначе B молча проигрывает C, которого только что обогнал');
+  assert.equal(compareStamps(next.stamp, '0000000005dc-0001-B') > 0, true);
+});
+
+test('негодная полученная метка не проглатывается молча', () => {
+  assert.throws(() => nextStamp(null, 'B', () => 1000, 'garbage'),
+    /malformed received stamp/);
+  assert.throws(() => nextStamp(null, 'B', () => 1000, '0000000005DC-0002-C'),
+    /malformed received stamp/, 'формат заморожен на нижнем регистре hex');
+  // null/undefined — это «нечего мёржить», а не мусор; часы просто не растут от чужого.
+  assert.doesNotThrow(() => nextStamp(null, 'B', () => 1000, null));
+  assert.doesNotThrow(() => nextStamp(null, 'B', () => 1000, undefined));
+});

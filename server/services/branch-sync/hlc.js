@@ -16,7 +16,9 @@
 // только свои собственные часы, и филиал, чьи часы отстают на два часа,
 // проигрывал бы слиянием даже те правки, что реально сделал позже. С ним
 // метка растёт до max(свои часы, свой счётчик, чужая полученная метка) —
-// приняв метку от другого узла, часы навсегда узнают о его скорости.
+// приняв метку от другого узла, часы навсегда узнают о его скорости. Метка
+// от чужого узла, не прошедшая isStamp, не игнорируется, а роняет вызов —
+// молчание здесь спрятало бы ровно тот случай, о котором важнее всего знать.
 //
 // Формат строки — замороженный контракт на проводе: ширины полей менять
 // нельзя. Метки уже лежат в журнале синхронизации; смена ширины развернула
@@ -53,6 +55,12 @@ function coerceNumber(value) {
  */
 export function nextStamp(state, node, clock = Date.now, received = null) {
   const nodeLetter = requireNode(node);
+  if (received != null && !isStamp(received)) {
+    // Молча проигнорировать мусор значило бы молчать именно там, где узнать
+    // о неисправном источнике важнее всего — часы просто не выросли бы от
+    // чужой метки, а вызывающий код не узнал бы почему.
+    throw new Error('hlc: malformed received stamp: ' + JSON.stringify(received));
+  }
   const wall = Math.max(0, Math.floor(clock()));
   const prevMs = state ? coerceNumber(state.ms) : 0;
   const prevCnt = state ? coerceNumber(state.cnt) : 0;
@@ -65,10 +73,16 @@ export function nextStamp(state, node, clock = Date.now, received = null) {
     ms = wall;
     cnt = 0;
   } else {
-    // Часы (свои или чужие) не ушли вперёд — держим порядок счётчиком того
-    // источника, который сейчас на вершине.
+    // Часы (свои или чужие) не ушли вперёд — держим порядок счётчиком.
+    // Оба источника могут стоять на одном и том же floor одновременно —
+    // тогда берём МАКСИМУМ их счётчиков, а не первый совпавший, иначе узел
+    // с меньшим локальным счётчиком молча проигрывал бы метку, которую
+    // только что обогнал по факту получения.
     ms = floor;
-    cnt = (floor === prevMs ? prevCnt : (parsed && floor === parsed.ms ? parsed.cnt : 0)) + 1;
+    let base = -1;
+    if (floor === prevMs) base = Math.max(base, prevCnt);
+    if (parsed && floor === parsed.ms) base = Math.max(base, parsed.cnt);
+    cnt = base + 1;
     if (cnt > MAX_CNT) { ms = floor + 1; cnt = 0; }
   }
   if (ms > MAX_MS) {
