@@ -96,9 +96,25 @@ test('084: таблицы ожидания и соседей существую�
   const pend = db.prepare("PRAGMA table_info(sync_pending)").all().map(c => c.name);
   assert.deepEqual(pend, ['tbl', 'uid', 'stamp', 'record', 'waits_tbl', 'waits_uid', 'received_at']);
   const peers = db.prepare("PRAGMA table_info(sync_peers)").all().map(c => c.name);
-  assert.deepEqual(peers, ['node', 'sent_seq', 'last_ok']);
+  assert.deepEqual(peers, ['node', 'sent_seq', 'last_ok', 'seed_floor', 'seed_tbl', 'seed_at', 'seed_id']);
   // Один и тот же (tbl, uid) в ожидании — одна строка: более поздняя замещает.
   db.prepare("INSERT INTO sync_pending (tbl, uid, stamp, record, waits_tbl, waits_uid) VALUES ('visits','v1','s1','{}','patients','p1')").run();
   assert.throws(() => db.prepare("INSERT INTO sync_pending (tbl, uid, stamp, record, waits_tbl, waits_uid) VALUES ('visits','v1','s2','{}','patients','p1')").run(), /UNIQUE|PRIMARY/);
+  db.close();
+});
+
+test('084: удаление оставляет надгробие в sync_tombstones — независимо от журнала', () => {
+  const db = fresh();
+  const cols = db.prepare("PRAGMA table_info(sync_tombstones)").all().map(c => c.name);
+  assert.deepEqual(cols, ['tbl', 'uid', 'at']);
+  const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
+  const uid = db.prepare('SELECT uid FROM patients WHERE id = ?').get(id).uid;
+  db.prepare('DELETE FROM patients WHERE id = ?').run(id);
+  const tomb = db.prepare("SELECT uid FROM sync_tombstones WHERE tbl = 'patients'").get();
+  assert.equal(tomb.uid, uid, 'холодный засев читает ЭТУ таблицу, не журнал — журнал у отправителя может быть уже вычищен');
+  // (tbl, uid) — ключ: второй записи о том же удалении взяться неоткуда,
+  // но сама вставка идёт INSERT OR REPLACE и не должна падать, случись такое.
+  db.prepare("INSERT OR REPLACE INTO sync_tombstones (tbl, uid) VALUES ('patients', ?)").run(uid);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM sync_tombstones WHERE tbl = 'patients' AND uid = ?").get(uid).n, 1);
   db.close();
 });

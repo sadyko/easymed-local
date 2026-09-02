@@ -65,9 +65,16 @@ CREATE TRIGGER patients_journal_upd AFTER UPDATE ON patients
   BEGIN INSERT INTO sync_journal (tbl, uid, op)
         SELECT 'patients', uid, 'put' FROM patients
          WHERE id = NEW.id AND uid IS NOT NULL; END;
+-- Надгробие (sync_tombstones) пишется ТЕМ ЖЕ триггером, что и запись в
+-- журнал, а не отдельно: смысл в том, что триггер обойти нельзя (см. шапку
+-- файла), и то же самое должно быть верно для факта удаления, а не только
+-- для журнальной записи о нём. Разбор — у самой таблицы sync_tombstones ниже.
 CREATE TRIGGER patients_journal_del AFTER DELETE ON patients
   WHEN OLD.uid IS NOT NULL
-  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('patients', OLD.uid, 'del'); END;
+  BEGIN
+    INSERT INTO sync_journal (tbl, uid, op) VALUES ('patients', OLD.uid, 'del');
+    INSERT OR REPLACE INTO sync_tombstones (tbl, uid) VALUES ('patients', OLD.uid);
+  END;
 
 CREATE TRIGGER visits_journal_ins AFTER INSERT ON visits
   BEGIN INSERT INTO sync_journal (tbl, uid, op)
@@ -79,7 +86,10 @@ CREATE TRIGGER visits_journal_upd AFTER UPDATE ON visits
          WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER visits_journal_del AFTER DELETE ON visits
   WHEN OLD.uid IS NOT NULL
-  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('visits', OLD.uid, 'del'); END;
+  BEGIN
+    INSERT INTO sync_journal (tbl, uid, op) VALUES ('visits', OLD.uid, 'del');
+    INSERT OR REPLACE INTO sync_tombstones (tbl, uid) VALUES ('visits', OLD.uid);
+  END;
 
 CREATE TRIGGER visit_services_journal_ins AFTER INSERT ON visit_services
   BEGIN INSERT INTO sync_journal (tbl, uid, op)
@@ -91,7 +101,10 @@ CREATE TRIGGER visit_services_journal_upd AFTER UPDATE ON visit_services
          WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER visit_services_journal_del AFTER DELETE ON visit_services
   WHEN OLD.uid IS NOT NULL
-  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('visit_services', OLD.uid, 'del'); END;
+  BEGIN
+    INSERT INTO sync_journal (tbl, uid, op) VALUES ('visit_services', OLD.uid, 'del');
+    INSERT OR REPLACE INTO sync_tombstones (tbl, uid) VALUES ('visit_services', OLD.uid);
+  END;
 
 CREATE TRIGGER lab_results_journal_ins AFTER INSERT ON lab_results
   BEGIN INSERT INTO sync_journal (tbl, uid, op)
@@ -103,7 +116,10 @@ CREATE TRIGGER lab_results_journal_upd AFTER UPDATE ON lab_results
          WHERE id = NEW.id AND uid IS NOT NULL; END;
 CREATE TRIGGER lab_results_journal_del AFTER DELETE ON lab_results
   WHEN OLD.uid IS NOT NULL
-  BEGIN INSERT INTO sync_journal (tbl, uid, op) VALUES ('lab_results', OLD.uid, 'del'); END;
+  BEGIN
+    INSERT INTO sync_journal (tbl, uid, op) VALUES ('lab_results', OLD.uid, 'del');
+    INSERT OR REPLACE INTO sync_tombstones (tbl, uid) VALUES ('lab_results', OLD.uid);
+  END;
 
 -- Записи, у которых ещё нет родителя. Хранятся целиком (JSON) и применяются,
 -- когда родитель приезжает. Ключ — (tbl, uid): у одной строки одно последнее
@@ -133,10 +149,46 @@ CREATE TABLE sync_seen (
   PRIMARY KEY (tbl, uid, col)
 );
 
+-- Надгробия НЕЗАВИСИМО от журнала (обзор Задачи 4, C2). Журнал у отправителя
+-- к моменту, когда забытый (pruneJournal, STALE_DAYS) сосед вернётся,
+-- скорее всего уже вычищен — а холодный засев, который тогда собирается,
+-- читает ТЕКУЩЕЕ СОСТОЯНИЕ таблиц и по построению не содержит удалённых
+-- строк вообще. Без отдельного списка удалений вернувшийся сосед не узнал бы,
+-- что строки, которой у него ещё нет, на самом деле уже не будет НИКОГДА —
+-- он молча решил бы, что она просто ещё не доехала, и держал бы её у себя
+-- вечно (в лучшем случае) или заново прислал бы её нам (в худшем).
+--
+-- Отдельная таблица, а не индекс поверх sync_journal: журнал хранит ИСТОРИЮ
+-- (одна строка правится — много записей), а здесь по определению ровно одна
+-- строка на когда-либо удалённый (tbl, uid) — INSERT OR REPLACE в триггерах
+-- ниже это и обеспечивает.
+CREATE TABLE sync_tombstones (
+  tbl TEXT NOT NULL,
+  uid TEXT NOT NULL,
+  at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  PRIMARY KEY (tbl, uid)
+);
+
 -- Докуда каждому соседу уже отдано. Ключ — буква узла. Что от него принято по
 -- колонкам отслеживает sync_seen, а не эта таблица.
+--
+-- seed_* — курсор ПОСТРАНИЧНОГО холодного засева (обзор Задачи 4, C1). Без
+-- него первая же страница засева делала бы соседа тёплым на sent_seq этой
+-- страницы, и всё, что не поместилось в лимит (у клиники на 70 000 пациентов
+-- это почти весь засев), терялось бы навсегда: хвост журнала ниже этой точки
+-- рано или поздно вычищается, а сосед уже считается тёплым и туда не
+-- смотрит. Пока seed_floor NOT NULL, сосед ЗАСЕИВАЕТСЯ, а не тёплый:
+-- sent_seq всё это время держится на seed_floor (пол журнала, замороженный
+-- НА МОМЕНТ НАЧАЛА засева — см. buildBatch), и только когда засев
+-- заканчивается, seed_floor/seed_tbl/seed_at обнуляются, а sent_seq остаётся
+-- на нём же: дальше сосед читает хвост журнала как обычно, и ничего из
+-- накопившегося за время засева не потеряно (оно всё выше пола).
 CREATE TABLE sync_peers (
   node       TEXT PRIMARY KEY,
   sent_seq   INTEGER NOT NULL DEFAULT 0,  -- наш журнал: докуда отдали
-  last_ok    TEXT                         -- когда последний раз отдали успешно
+  last_ok    TEXT,                        -- когда последний раз отдали успешно
+  seed_floor INTEGER,                     -- пол журнала на начало засева; NULL = не засеивается (тёплый или ещё не приходил)
+  seed_tbl   TEXT,                        -- курсор страницы: таблица (или 'sync_tombstones' — фаза надгробий)
+  seed_at    TEXT,                        -- курсор страницы: created_at последней засеянной строки
+  seed_id    INTEGER NOT NULL DEFAULT 0   -- курсор страницы: id последней засеянной строки — разрыв внутри одного created_at
 );
