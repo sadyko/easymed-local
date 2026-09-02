@@ -4282,3 +4282,11 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
   .wb-bar{ width:120px; }
 }
 /* ============================ end WARD_BOARD_V2 ============================ */
+
+/* STATIONARY_ROOMS_V1 — операционные на доске стационара. Намеренно НЕ похожи
+   на койку: у них нет статуса и на них нельзя нажать, и плитка не должна
+   обещать действие, которого нет. */
+.wb-op{ border:1px dashed var(--ink-200); border-radius:10px; padding:10px 11px;
+  display:flex; flex-direction:column; gap:3px; background:var(--ink-25, #fafbfc); }
+.wb-op__top{ display:flex; align-items:center; gap:7px; min-width:0; }
+.wb-op__ic{ color:var(--ink-500); display:inline-flex; flex:0 0 auto; }

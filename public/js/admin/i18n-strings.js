@@ -5830,4 +5830,7 @@ export const STRINGS = {
   "Койки не найдены. Заведите палаты и койки в «Настройки → Помещения».": {"en":"No beds found. Create wards and beds in Settings -> Rooms.","ru":"Койки не найдены. Заведите палаты и койки в «Настройки → Помещения».","uz":"Koyka topilmadi. Palata va koykalarni «Sozlamalar -> Xonalar» da yarating."},
   "ПИТ": {"en":"ICU","ru":"ПИТ","uz":"RIB"},
   "Наблюдение": {"en":"Observation","ru":"Наблюдение","uz":"Kuzatuv"},
+
+  // STATIONARY_ROOMS_V1 — операционные на доске стационара.
+  "без коек · правятся в «Помещениях»": {"en":"no beds - edited in Rooms","ru":"без коек · правятся в «Помещениях»","uz":"koykasiz - «Xonalar» da tahrirlanadi"},
 };

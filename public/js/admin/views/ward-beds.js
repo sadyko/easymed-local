@@ -34,6 +34,11 @@ const BED_TYPE_LABEL = {
     standard: 'Обычная', icu: 'ПИТ', isolation: 'Изолятор',
     vip: 'VIP', recovery: 'Послеоперационная', observation: 'Наблюдение',
 };
+// STATIONARY_ROOMS_V1 — какие КАБИНЕТЫ относятся к стационарному блоку. Список
+// намеренно узкий: приём, процедурная, диагностика и лаборатория к койкам
+// отношения не имеют и на этой доске были бы шумом.
+const STATIONARY_ROOM_TYPES = ['surgery'];
+
 const PATHWAYS = [['therapy', 'Therapy (medical)'], ['surgical', 'Surgical']];
 
 function fmtPrice(n) {
@@ -74,17 +79,24 @@ export async function renderWardBeds(container) {
 }
 
 async function loadData() {
-    const [wardsR, bedsR, admR] = await Promise.all([
+    const [wardsR, bedsR, admR, roomsR] = await Promise.all([
         supabase.from('wards').select('*').eq('active', 1).order('name'),
         supabase.from('beds').select('*, wards(name)').eq('active', 1).order('code'),
         supabase.from('admissions').select('*, patients(mrn, full_name), users(full_name)').eq('status', 'active'),
+        // STATIONARY_ROOMS_V1 — операционная заводится в «Помещениях» как КАБИНЕТ
+        // (коек и платы за проживание у неё нет), но по смыслу она стационарная и
+        // владелец ищет её здесь. Доска грузит такие кабинеты отдельно и показывает
+        // их своей карточкой — без коек и без госпитализации.
+        supabase.from('rooms').select('id, name, code, room_type, floor_id, active')
+            .eq('active', 1).in('room_type', STATIONARY_ROOM_TYPES),
     ]);
     if (wardsR.error) throw wardsR.error;
     if (bedsR.error) throw bedsR.error;
     if (admR.error) throw admR.error;
     const currentByBed = new Map();
     for (const a of (admR.data || [])) if (a.bed_id != null) currentByBed.set(a.bed_id, a);
-    return { wards: wardsR.data || [], beds: bedsR.data || [], admissions: admR.data || [], currentByBed };
+    return { wards: wardsR.data || [], beds: bedsR.data || [], admissions: admR.data || [], currentByBed,
+             opRooms: (roomsR && roomsR.data) || [] };
 }
 
 // Effective status of a bed = occupied if an active admission points at it,
@@ -134,8 +146,36 @@ async function paint(root) {
         shownBeds += wardBeds.length;
         grid.appendChild(wardCard(w, wardBeds, data, root));
     }
+    // STATIONARY_ROOMS_V1 — операционные идут ПОСЛЕ палат: это не койки, и
+    // подниматься выше коечного фонда им незачем. Фильтр по статусу к ним не
+    // применяется — у кабинета нет статуса койки, и прятать его за «Свободно»
+    // значило бы терять его без объяснения.
+    if (data.opRooms.length && state.statusFilter === 'all') grid.appendChild(opRoomsCard(data));
+
     if (!shownBeds) grid.appendChild(h('div', { class: 'card', style: { padding: '20px' } }, h('div', { class: 'empty' }, tr('Койки не найдены. Заведите палаты и койки в «Настройки → Помещения».'))));
     root.appendChild(grid);
+}
+
+// STATIONARY_ROOMS_V1 — карточка операционных. Плитки НЕ кликабельны: положить
+// пациента в операционную нельзя (коек нет), а делать вид, что можно, хуже, чем
+// не делать ничего. Правятся они там же, где заводятся — в «Помещениях».
+function opRoomsCard(data) {
+    const tiles = h('div', { class: 'wb-tiles' });
+    for (const r of data.opRooms) {
+        tiles.appendChild(h('div', { class: 'wb-op' },
+            h('div', { class: 'wb-op__top' },
+                h('span', { class: 'wb-op__ic' }, Icon('Pulse', { size: 14 })),
+                h('strong', { style: { fontSize: '13.5px' } }, r.name || '—'),
+                r.code ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, r.code) : null),
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Операционная'))));
+    }
+    return h('div', { class: 'card wb-ward' },
+        h('div', { class: 'wb-ward__head' },
+            h('div', { class: 'wb-ward__id' },
+                h('h3', { class: 'wb-ward__name' }, tr('Операционные')),
+                h('span', { class: 'muted wb-ward__meta' }, tr('без коек · правятся в «Помещениях»'))),
+            h('span', { class: 'muted wb-ward__occlb' }, trf('помещений: {n}', { n: data.opRooms.length }))),
+        tiles);
 }
 
 function tabBtn(label, tab, root) {
