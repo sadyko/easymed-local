@@ -24,7 +24,7 @@ import { renderSetupChecklist } from './admin/setup-checklist.js?v=nolicense1'; 
 import { renderNotifications } from './admin/notifications.js?v=nolicense1';      // NOTIF_CENTER_V1
 import { initBranchContext, onBranchChange } from './admin/branch-context.js?v=bc3';
 import { renderBranchPicker } from './admin/branch-picker.js';
-import { loadDocBrandingAsync } from './admin/views/doc-settings.js?v=q3company1';   // DOC_SETTINGS_UNIFY_V1
+import { loadDocBrandingAsync } from './admin/views/doc-settings.js?v=noqr1';   // DOC_SETTINGS_UNIFY_V1
 import { setLicence, isLicensed, licenceState } from './admin/licence.js';   // LICENCE_CORE_V1
 import { renderLockedModule } from './admin/views/locked-module.js';   // LICENCE_CORE_V1
 import { renderActivation } from './admin/views/activation.js';   // LICENCE_CORE_V1
@@ -61,7 +61,7 @@ import { renderDoctorRoom }   from './admin/views/doctor-room.js?v=docroom1';   
 import { renderEmployees }    from './admin/views/employees.js?v=arch1';   // EMPLOYEE_EDITOR_V3 — per-service rate tables; v11 = RATE_LOAD_V2 (fixed rate survives reopen)
 import { renderMarketing }    from './admin/views/marketing.js?v=btnright1';
 import { renderCallCenter }   from './admin/views/callcenter.js';
-import { renderDocuments }    from './admin/views/documents.js?v=doc-company1';
+import { renderDocuments }    from './admin/views/documents.js?v=noqr1';
 import { renderDiscountsSettings } from './admin/views/discounts-settings.js?v=btnright1';   // PATIENT_DISCOUNTS_V1
 import { renderApiSettings } from './admin/views/api-settings.js?v=api4';   // CLINIC_API_V1
 import { renderDoctorPay } from './admin/views/doctor-pay.js?v=dp1';   // DOCTOR_PAY_BULK_V1

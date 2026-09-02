@@ -31,7 +31,7 @@ import { h, Icon, clear, toast, Tag, StatusTag, fmtDateTime, field } from '../ui
 import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 // LAB_BLANK_ONE_TEMPLATE_V1 — печатаем шаблоном из «Настройки → Документы»,
 // тем же, что лаборатория, карта пациента и Telegram-бот.
-import { printableSheet } from './doc-settings.js?v=q3company1';
+import { printableSheet } from './doc-settings.js?v=noqr1';
 import { labFlagCell, labPosFor, fmtDMY, labSexRu, labRefLines, labRefText, matchResultsToAnalytes,
          namedRangeCell, ageYears, labAccession, labIssueDates, labMaxDate } from './lab-doc.js?v=labshared1';
 import { analyteIndex, resolveAnalyte, analytesForService } from './lab-analyte-index.js?v=labshared1';

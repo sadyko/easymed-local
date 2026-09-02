@@ -5848,4 +5848,11 @@ export const STRINGS = {
   "Койка занята — сначала выпишите пациента": {"en":"The bed is occupied - discharge the patient first","ru":"Койка занята — сначала выпишите пациента","uz":"Koyka band - avval bemorni chiqaring"},
   "Койка удалена.": {"en":"Bed deleted.","ru":"Койка удалена.","uz":"Koyka o'chirildi."},
   "Новые койки продолжают нумерацию. Удалить можно только свободную койку.": {"en":"New beds continue the numbering. Only a free bed can be deleted.","ru":"Новые койки продолжают нумерацию. Удалить можно только свободную койку.","uz":"Yangi koykalar raqamlashni davom ettiradi. Faqat bo'sh koykani o'chirish mumkin."},
+
+  // THERMAL_WIDTH_V1 — ширина ролика термопринтера.
+  "Термочек (ширина в настройках)": {"en":"Thermal receipt (width in settings)","ru":"Термочек (ширина в настройках)","uz":"Termocheck (kengligi sozlamalarda)"},
+  "Чек · ширина ролика": {"en":"Receipt - roll width","ru":"Чек · ширина ролика","uz":"Chek - rulon kengligi"},
+  "40 мм": {"en":"40 mm","ru":"40 мм","uz":"40 mm"},
+  "58 мм": {"en":"58 mm","ru":"58 мм","uz":"58 mm"},
+  "80 мм": {"en":"80 mm","ru":"80 мм","uz":"80 mm"},
 };

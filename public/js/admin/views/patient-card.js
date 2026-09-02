@@ -23,10 +23,10 @@ import { labFlagCell, labPosFor, fmtDMY, labSexRu, labRefLines, labRefText, matc
 import { analyteIndex, resolveAnalyte, analytesForService } from './lab-analyte-index.js?v=labshared1';   // LAB_BLANK_DESIGNED_V1
 import { openVisitWizard } from './visit-wizard.js?v=aug17e';
 import { printInvoiceCheck } from './receipt-print.js?v=rp1';   // REPRINT_SERVICE_CHECK_V1
-import { printableSheet as _printSheet } from './doc-settings.js?v=q3company1';   // VISIT_WIZARD_LOCAL_V1 — full-screen «Добавить услугу к визиту»
+import { printableSheet as _printSheet } from './doc-settings.js?v=noqr1';   // VISIT_WIZARD_LOCAL_V1 — full-screen «Добавить услугу к визиту»
 import { openVisitBillModal } from './visit-bill.js';
 import { BRANCH_BUCKET, uploadFile, signedUrl, removeFile } from '../storage.js?v=aurora20b';   // PATIENT_DOCS_TAB_V1 — same URL as service-workspace (one instance)
-import { printableSheet } from './doc-settings.js?v=q3company1';   // PATIENT_DOCS_CLINICAL_V1 — заключения/результаты открываются брендированным бланком
+import { printableSheet } from './doc-settings.js?v=noqr1';   // PATIENT_DOCS_CLINICAL_V1 — заключения/результаты открываются брендированным бланком
 // PATIENT_EDIT_REG_V1 — редактирование карты в стиле формы регистрации: те же
 // контролы (флаг-телефон, чипы пола, email с иконкой). Тот же ?v=, что в
 // admin.js → один экземпляр модуля; цикл registration↔patient-card безопасен,

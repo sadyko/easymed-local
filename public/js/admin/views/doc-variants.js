@@ -71,9 +71,7 @@ ul.recs li::before{ background:none !important; border:1.2px solid var(--ink); }
   table.res tbody td, table.rx tbody td, table.items tbody td{ border-bottom:.75px solid var(--line-2); }
   .pstrip{ border-top:1px solid var(--muted); border-bottom:1px solid var(--muted); }
   .fld{ border-bottom:1px dotted var(--muted); }
-  .qr{ border:1px solid var(--ink); }
-}`;
-const QR_SVG = `<svg viewBox="0 0 25 25" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg"><path d="M0 0h7v7h-7z M1 1v5h5v-5z M2 2h3v3h-3z M18 0h7v7h-7z M19 1v5h5v-5z M20 2h3v3h-3z M0 18h7v7h-7z M1 19v5h5v-5z M2 20h3v3h-3z"/><rect x="9" y="1" width="1" height="1"/><rect x="11" y="1" width="1" height="1"/><rect x="13" y="1" width="1" height="1"/><rect x="9" y="9" width="2" height="2"/><rect x="13" y="9" width="1" height="1"/><rect x="15" y="9" width="1" height="1"/><rect x="11" y="11" width="1" height="1"/><rect x="14" y="11" width="1" height="1"/><rect x="9" y="13" width="1" height="1"/><rect x="12" y="13" width="1" height="1"/><rect x="16" y="13" width="1" height="1"/><rect x="18" y="9" width="1" height="1"/><rect x="20" y="10" width="1" height="1"/><rect x="22" y="9" width="1" height="1"/><rect x="9" y="18" width="1" height="1"/><rect x="11" y="19" width="1" height="1"/><rect x="13" y="18" width="1" height="1"/><rect x="18" y="18" width="1" height="1"/><rect x="20" y="19" width="1" height="1"/><rect x="22" y="20" width="1" height="1"/><rect x="24" y="18" width="1" height="1"/></svg>`;
+  }`;
 const SIG_SVG = `<svg viewBox="0 0 180 40" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 28 C 18 6, 26 6, 30 22 C 33 34, 40 34, 46 18 C 52 4, 60 6, 60 22 C 60 32, 68 30, 78 18 C 92 2, 104 2, 100 20 C 96 36, 112 32, 128 16 C 140 4, 150 10, 146 22 C 158 18, 170 16, 176 20" stroke="var(--ink)" stroke-width="2.2" stroke-linecap="round"/></svg>`;
 
 // LAB_MULTI_REF_V1 — the reference cell used to be a single string. An analyte
@@ -82,6 +80,21 @@ const SIG_SVG = `<svg viewBox="0 0 180 40" fill="none" xmlns="http://www.w3.org/
 // line, with «•» marking the range that matches this patient's sex/age. Render
 // those as stacked lines and bold the match; a single-line value is emitted
 // exactly as before, so every existing report is byte-identical.
+// THERMAL_WIDTH_V1 — ширина термочека выбирается в настройках документов.
+// Ролики бывают 40 / 58 / 80 мм; печатать «в край» нельзя — у головки есть
+// непечатаемые поля по бокам, поэтому у каждого ролика своя ПОЛЕЗНАЯ ширина.
+// Значения консервативные: лучше узкая колонка на дешёвом принтере, чем
+// обрезанная сумма. 58 мм оставлен ровно таким, каким был (46 мм), чтобы
+// у тех, кто уже печатает, ничего не поехало.
+const THERMAL_SIZES = {
+    '40': { paper: 40, body: 34, font: 10,   title: 11,   name: 12.5, total: 12 },
+    '58': { paper: 58, body: 46, font: 11,   title: 12,   name: 14,   total: 13.5 },
+    '80': { paper: 80, body: 72, font: 12,   title: 14,   name: 17,   total: 15 },
+};
+function thermal(s) {
+    const key = String((s && s.thermalWidth) || '58');
+    return THERMAL_SIZES[key] || THERMAL_SIZES['58'];
+}
 function refCellHtml(ref) {
     const raw = String(ref == null ? '' : ref);
     if (!raw) return '';
@@ -300,9 +313,8 @@ ul.recs{ list-style:none; padding-left:11px; display:flex; flex-direction:column
 .rx-wrap{ break-inside:avoid; padding-left:11px; } table.rx{ width:100%; border-collapse:collapse; font-size:14px; } table.rx thead th{ font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:700; text-align:left; padding:0 9px 6px 0; border-bottom:1.5px solid var(--line); } table.rx thead th .uz{ display:block; color:var(--faint); font-weight:600; font-style:italic; margin-top:1px; } table.rx tbody td{ padding:7px 9px 7px 0; border-bottom:1px solid var(--line-2); vertical-align:top; break-inside:avoid; } table.rx tbody tr:last-child td{ border-bottom:none; } table.rx .num{ width:20px; color:var(--accent); font-weight:800; } table.rx .drug{ font-weight:700; color:var(--ink); } table.rx .drug small{ display:block; font-weight:400; color:var(--faint); font-style:italic; }
 .svc{ display:flex; flex-direction:column; gap:5px; padding-left:11px; } .svc .si{ display:flex; align-items:baseline; gap:10px; font-size:14px; color:var(--ink-2); padding-left:16px; position:relative; line-height:1.45; break-inside:avoid; } .svc .si-nm{ flex:1; min-width:0; overflow-wrap:anywhere; } .svc .si::before{ content:"+"; position:absolute; left:2px; top:0; color:var(--accent); font-weight:800; }
 .signoff{ display:flex; justify-content:space-between; align-items:flex-end; gap:20px; margin-top:22px; break-inside:avoid; } .sig{ flex:1; max-width:320px; } .sig .role{ font-size:11.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); } .sig .role i{ font-style:italic; color:var(--faint); } .sig .mark{ height:34px; margin:2px 0 1px; display:flex; align-items:flex-end; } .sig .mark svg{ height:32px; width:auto; } .sig .name{ font-size:15px; font-weight:700; color:var(--ink); border-top:1px solid var(--ink); padding-top:4px; } .sig .spec{ font-size:13px; color:var(--muted); margin-top:2px; }
-.sign-right{ display:flex; align-items:flex-end; gap:18px; } .qr{ width:60px; height:60px; flex:none; padding:5px; border:1px solid var(--line); border-radius:6px; } .qr svg{ width:100%; height:100%; display:block; } .qr svg path,.qr svg rect{ fill:var(--ink); } .qr-cap{ font-size:10px; color:var(--faint); text-align:center; margin-top:3px; }
-.stamp{ width:86px; height:86px; flex:none; border:2px dashed var(--muted); border-radius:50%; position:relative; transform:rotate(-11deg); opacity:.78; } .stamp::before{ content:""; position:absolute; inset:7px; border:1px solid var(--line); border-radius:50%; } .stamp .sc{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--muted); } .stamp .sc .mp{ font-size:17.5px; font-weight:800; } .stamp .sc .sm{ font-size:9px; letter-spacing:.12em; text-transform:uppercase; margin-top:2px; }
-.sheet:not(.show-stamp) .stamp, .sheet:not(.show-qr) .qr-box, .sheet:not(.show-qr) .qr, .sheet:not(.show-signature) .sig{ display:none; }   /* STAMP_ONLY_V1 */
+.sign-right{ display:flex; align-items:flex-end; gap:18px; } .stamp{ width:86px; height:86px; flex:none; border:2px dashed var(--muted); border-radius:50%; position:relative; transform:rotate(-11deg); opacity:.78; } .stamp::before{ content:""; position:absolute; inset:7px; border:1px solid var(--line); border-radius:50%; } .stamp .sc{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--muted); } .stamp .sc .mp{ font-size:17.5px; font-weight:800; } .stamp .sc .sm{ font-size:9px; letter-spacing:.12em; text-transform:uppercase; margin-top:2px; }
+.sheet:not(.show-stamp) .stamp, .sheet:not(.show-signature) .sig{ display:none; }   /* STAMP_ONLY_V1 */
 .thanks{ text-align:center; font-size:14px; color:var(--ink-2); margin-top:18px; } .thanks b{ color:var(--accent); }
 .legal{ font-size:11px; color:var(--faint); text-align:center; margin-top:10px; padding:0 8mm; line-height:1.5; }
 .foot{ margin-top:auto; padding-top:10px; border-top:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; } .foot .fl{ font-size:13px; color:var(--ink); } .foot .fl b{ font-weight:700; } .foot .fr{ font-size:13px; font-weight:700; color:var(--ink); }
@@ -340,7 +352,7 @@ ul.recs{ list-style:none; padding-left:11px; display:flex; flex-direction:column
   </div>
   <div class="signoff">
     <div class="sig"><div class="role">Лечащий врач <i>· Davolovchi shifokor</i></div><div class="mark">${SIG_SVG}</div><div class="name">${esc(d.doctorName || '—')}</div><div class="spec">${esc(d.doctorSpec || '')} · подпись</div></div>
-    <div class="sign-right"><div class="qr-box" style="text-align:center"><div class="qr">${QR_SVG}</div><div class="qr-cap">Проверка<br>подлинности</div></div>
+    <div class="sign-right">
       </div>
   </div>
   ${s.footerNote ? `<div class="thanks">${esc(s.footerNote)}</div>` : ''}
@@ -409,8 +421,8 @@ ${PRINT_FONT_FACE_CSS}
 ul.recs{ list-style:none; padding:0 2px; display:grid; grid-template-columns:1fr 1fr; gap:2px 22px; } ul.recs li{ font-size:12.5px; line-height:1.45; color:var(--ink); font-weight:500; padding-left:12px; position:relative; } ul.recs li::before{ content:""; position:absolute; left:2px; top:6px; width:3.5px; height:3.5px; border-radius:50%; background:var(--accent); }
 table.rx{ width:100%; border-collapse:collapse; font-size:12px; } table.rx thead th{ font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); font-weight:700; text-align:left; padding:0 9px 4px 0; border-bottom:1px solid var(--line); } table.rx tbody td{ padding:4px 9px 4px 0; border-bottom:1px solid var(--line-2); vertical-align:top; } table.rx .num{ width:16px; color:var(--accent); font-weight:800; } table.rx .drug{ font-weight:700; color:var(--ink); }
 .signoff{ display:flex; justify-content:space-between; align-items:flex-end; gap:16px; margin-top:14px; break-inside:avoid; } .sig{ flex:1; max-width:280px; } .sig .role{ font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); } .sig .name{ font-size:14px; font-weight:700; color:var(--ink); border-top:1px solid var(--ink); padding-top:3px; margin-top:18px; } .sig .spec{ font-size:11.5px; color:var(--muted); margin-top:1px; }
-.sign-right{ display:flex; align-items:flex-end; gap:12px; } .qr{ width:46px; height:46px; flex:none; padding:3px; border:1px solid var(--line); border-radius:5px; } .qr svg{ width:100%; height:100%; } .qr svg path,.qr svg rect{ fill:var(--ink); } .stamp{ width:62px; height:62px; flex:none; border:1.5px dashed var(--muted); border-radius:50%; position:relative; transform:rotate(-10deg); opacity:.75; } .stamp .sc{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:13.5px; font-weight:800; }
-.sheet:not(.show-stamp) .stamp, .sheet:not(.show-qr) .qr, .sheet:not(.show-signature) .sig{ display:none; }   /* STAMP_ONLY_V1 */
+.sign-right{ display:flex; align-items:flex-end; gap:12px; } .stamp{ width:62px; height:62px; flex:none; border:1.5px dashed var(--muted); border-radius:50%; position:relative; transform:rotate(-10deg); opacity:.75; } .stamp .sc{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:13.5px; font-weight:800; }
+.sheet:not(.show-stamp) .stamp, .sheet:not(.show-signature) .sig{ display:none; }   /* STAMP_ONLY_V1 */
 .legal{ font-size:10px; color:var(--faint); text-align:center; margin-top:9px; line-height:1.45; padding:0 6mm; }
 .foot{ margin-top:auto; padding-top:7px; border-top:1px solid var(--ink); display:flex; align-items:center; justify-content:space-between; font-size:11.5px; color:var(--ink); } .foot b{ font-weight:700; }
 @media print{ @page{ size:A4; margin:12mm 13mm; } html,body{ background:#fff; padding:0; } body{ display:block; } /* DOC_A4_PRINT_V1 */ :root{ --ink:#000; --ink-2:#0f131b; --muted:#20242e; --faint:#333a45; } .sheet{ box-shadow:none; width:auto; min-height:268mm; padding:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
@@ -434,7 +446,7 @@ ${ECONOMY_BW_CSS}
   ${refsHtml}
   <div class="signoff">
     <div class="sig"><div class="role">Лечащий врач · Davolovchi shifokor</div><div class="name">${esc(d.doctorName || '—')}</div><div class="spec">${esc(d.doctorSpec || '')} · подпись</div></div>
-    <div class="sign-right"><div class="qr">${QR_SVG}</div></div>
+    <div class="sign-right"></div>
   </div>
   ${s.legalNote ? `<div class="legal">${esc(s.legalNote)}</div>` : ''}
   ${s.footerNote ? `<div class="thanks-eco">${esc(s.footerNote)}</div>` : ''}
@@ -475,8 +487,8 @@ table.res{ width:100%; table-layout:fixed; border-collapse:collapse; font-size:1
 .legend{ display:flex; gap:16px; margin-top:11px; padding-left:11px; font-size:12px; color:var(--muted); } .legend span{ display:flex; align-items:center; gap:5px; } .legend .dh{ width:18px; height:11px; background:var(--accent-2); border-radius:3px; } .legend .dl{ width:18px; height:11px; background:var(--low); border-radius:3px; } .legend .dn{ width:9px; height:9px; border-radius:50%; background:var(--ink); }
 .concl{ margin-top:16px; border:1px solid var(--card-line); border-left:4px solid var(--line); background:var(--accent-soft); border-radius:9px; padding:11px 15px; } .concl .ch{ font-size:15px; font-weight:800; text-transform:uppercase; color:var(--accent); margin-bottom:5px; } .concl .ch .uz{ font-size:13px; font-style:normal; color:var(--faint); font-weight:400; margin-left:6px; } .concl p{ font-size:14px; line-height:1.55; color:var(--ink-2); white-space:pre-wrap; }
 .signoff{ display:flex; justify-content:space-between; align-items:flex-end; gap:20px; margin-top:20px; break-inside:avoid; } .sig{ flex:1; max-width:320px; } .sig .role{ font-size:11.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); } .sig .role i{ font-style:normal; color:var(--faint); } .sig .mark{ height:34px; margin:2px 0 1px; display:flex; align-items:flex-end; } .sig .mark svg{ height:32px; } .sig .name{ font-size:15px; font-weight:700; color:var(--ink); border-top:1px solid var(--ink); padding-top:4px; } .sig .spec{ font-size:13px; color:var(--muted); margin-top:2px; }
-.sign-right{ display:flex; align-items:flex-end; gap:18px; } .qr{ width:60px; height:60px; flex:none; padding:5px; border:1px solid var(--line); border-radius:6px; } .qr svg{ width:100%; height:100%; } .qr svg path,.qr svg rect{ fill:var(--ink); } .qr-cap{ font-size:10px; color:var(--faint); text-align:center; margin-top:3px; } .stamp{ width:86px; height:86px; flex:none; border:2px dashed var(--muted); border-radius:50%; position:relative; transform:rotate(-11deg); opacity:.78; } .stamp::before{ content:""; position:absolute; inset:7px; border:1px solid var(--line); border-radius:50%; } .stamp .sc{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--muted); } .stamp .sc .mp{ font-size:17.5px; font-weight:800; } .stamp .sc .sm{ font-size:9px; letter-spacing:.12em; text-transform:uppercase; margin-top:2px; }
-.sheet:not(.show-stamp) .stamp, .sheet:not(.show-qr) .qr-box, .sheet:not(.show-qr) .qr, .sheet:not(.show-signature) .sig{ display:none; }   /* STAMP_ONLY_V1 */
+.sign-right{ display:flex; align-items:flex-end; gap:18px; } .stamp{ width:86px; height:86px; flex:none; border:2px dashed var(--muted); border-radius:50%; position:relative; transform:rotate(-11deg); opacity:.78; } .stamp::before{ content:""; position:absolute; inset:7px; border:1px solid var(--line); border-radius:50%; } .stamp .sc{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--muted); } .stamp .sc .mp{ font-size:17.5px; font-weight:800; } .stamp .sc .sm{ font-size:9px; letter-spacing:.12em; text-transform:uppercase; margin-top:2px; }
+.sheet:not(.show-stamp) .stamp, .sheet:not(.show-signature) .sig{ display:none; }   /* STAMP_ONLY_V1 */
 .legal{ font-size:11px; color:var(--faint); text-align:center; margin-top:13px; padding:0 8mm; line-height:1.5; }
 .foot{ margin-top:auto; padding-top:10px; border-top:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; } .foot .fl{ font-size:13px; color:var(--ink); } .foot .fl b{ font-weight:700; } .foot .fr{ font-size:13px; font-weight:700; color:var(--ink); }
 @media print{ @page{ size:A4; margin:13mm 14mm; } html,body{ background:#fff; padding:0; } body{ display:block; } /* DOC_A4_PRINT_V1 */ :root{ --ink:#000; --ink-2:#0f131b; --muted:#20242e; --faint:#333a45; } .sheet{ box-shadow:none; width:auto; min-height:268mm; padding:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
@@ -489,7 +501,7 @@ table.res{ width:100%; table-layout:fixed; border-collapse:collapse; font-size:1
   <div class="legend"><span><i class="dh"></i> \u2303 выше нормы</span><span><i class="dl"></i> \u2304 ниже нормы</span><span><i class="dn"></i> · в норме</span></div>
   ${d.conclusion ? `<div class="concl"><div class="ch">Заключение <span class="uz">· Xulosa</span></div><p>${esc(d.conclusion)}</p></div>` : ''}
   <div class="signoff"><div class="sig"><div class="role">Заведующий лабораторией <i>· Laboratoriya boshlig‘i</i></div><div class="mark">${SIG_SVG}</div><div class="name">${esc(d.labChief || '—')}</div><div class="spec">${esc(d.labChiefSpec || '')} · подпись</div></div>
-    <div class="sign-right"><div class="qr-box" style="text-align:center"><div class="qr">${QR_SVG}</div><div class="qr-cap">Проверка<br>подлинности</div></div></div></div>
+    <div class="sign-right"></div></div>
   ${s.legalNote ? `<div class="legal">${esc(s.legalNote)}</div>` : ''}
   <div class="foot"><div class="fl">${s.web ? `<b>${esc(s.web)}</b> · ` : ''}${esc(s.clinicName || '')}</div><div class="fr">${esc(s.phone || '')}</div></div>
 </section></body></html>`;
@@ -515,8 +527,8 @@ ${PRINT_FONT_FACE_CSS}
 table.res{ width:100%; table-layout:fixed; border-collapse:collapse; font-size:11px; } table.res th, table.res td{ border:1px solid var(--line); padding:3px 7px; } table.res tbody tr:nth-child(even) td{ background:#f4f5f7; } thead{ display:table-header-group; } table.res tr{ break-inside:avoid; page-break-inside:avoid; } table.res thead th{ font-size:9.5px; text-transform:uppercase; color:var(--muted); font-weight:700; text-align:left; padding:2px 6px; border:1px solid var(--line); background:#eef1f4; } table.res th.c,table.res td.c{ text-align:center; } table.res th.r,table.res td.r{ text-align:right; } table.res tbody td{ padding:2px 6px; border:1px solid var(--line); overflow-wrap:anywhere; word-break:break-word; } .pname{ color:var(--ink); } .pname small{ color:var(--faint); } .ref{ color:var(--ink-2); font-weight:600; white-space:nowrap; } .ref .rr{ display:block; white-space:nowrap; line-height:1.35; } .ref .rr.hit{ font-weight:800; color:var(--ink); } td.flag{ font-weight:800; color:var(--ink); }
 .concl{ margin-top:10px; border-left:3px solid var(--ink); padding:1px 0 1px 10px; } .concl .ch{ font-size:12px; font-weight:800; text-transform:uppercase; color:var(--accent); margin-bottom:2px; } .concl p{ font-size:11.5px; line-height:1.45; color:var(--ink-2); white-space:pre-wrap; }
 .signoff{ display:flex; justify-content:space-between; align-items:flex-end; gap:16px; margin-top:14px; break-inside:avoid; } .sig{ flex:1; max-width:280px; } .sig .role{ font-size:11px; text-transform:uppercase; color:var(--muted); } .sig .name{ font-size:13.5px; font-weight:700; color:var(--ink); border-top:1px solid var(--ink); padding-top:3px; margin-top:16px; } .sig .spec{ font-size:11px; color:var(--muted); }
-.sign-right{ display:flex; align-items:flex-end; gap:12px; } .qr{ width:46px; height:46px; flex:none; padding:3px; border:1px solid var(--line); border-radius:5px; } .qr svg{ width:100%; height:100%; } .qr svg path,.qr svg rect{ fill:var(--ink); } .stamp{ width:58px; height:58px; flex:none; border:1.5px dashed var(--muted); border-radius:50%; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:12px; font-weight:800; transform:rotate(-10deg); opacity:.75; }
-.sheet:not(.show-stamp) .stamp, .sheet:not(.show-qr) .qr, .sheet:not(.show-signature) .sig{ display:none; }   /* STAMP_ONLY_V1 */
+.sign-right{ display:flex; align-items:flex-end; gap:12px; } .stamp{ width:58px; height:58px; flex:none; border:1.5px dashed var(--muted); border-radius:50%; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:12px; font-weight:800; transform:rotate(-10deg); opacity:.75; }
+.sheet:not(.show-stamp) .stamp, .sheet:not(.show-signature) .sig{ display:none; }   /* STAMP_ONLY_V1 */
 .legal{ font-size:10px; color:var(--faint); text-align:center; margin-top:9px; line-height:1.45; } .foot{ margin-top:auto; padding-top:7px; border-top:1px solid var(--ink); display:flex; justify-content:space-between; font-size:11.5px; color:var(--ink); } .foot b{ font-weight:700; }
 @media print{ @page{ size:A4; margin:12mm 13mm; } html,body{ background:#fff; padding:0; } body{ display:block; } /* DOC_A4_PRINT_V1 */ :root{ --ink:#000; --ink-2:#0f131b; --muted:#20242e; --faint:#333a45; } .sheet{ box-shadow:none; width:auto; min-height:268mm; padding:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
 ${ECONOMY_BW_CSS}
@@ -530,7 +542,7 @@ ${ECONOMY_BW_CSS}
   ${(d.groups || []).map(grp).join('')}
   ${d.conclusion ? `<div class="concl"><div class="ch">Заключение · Xulosa</div><p>${esc(d.conclusion)}</p></div>` : ''}
   <div class="signoff"><div class="sig"><div class="role">Заведующий лабораторией</div><div class="name">${esc(d.labChief || '—')}</div><div class="spec">${esc(d.labChiefSpec || '')} · подпись</div></div>
-    <div class="sign-right"><div class="qr">${QR_SVG}</div></div></div>
+    <div class="sign-right"></div></div>
   ${s.legalNote ? `<div class="legal">${esc(s.legalNote)}</div>` : ''}
   ${s.footerNote ? `<div class="thanks-eco">${esc(s.footerNote)}</div>` : ''}
   <div class="foot"><div>${s.web ? `<b>${esc(s.web)}</b> · ` : ''}${esc(s.clinicName || '')}</div><div>${esc(s.phone || '')}</div></div>
@@ -582,8 +594,8 @@ ${PRINT_FONT_FACE_CSS}
 .sec-b{ font-size:14px; line-height:1.6; color:var(--ink-2); padding-left:11px; } .sec-b p{ margin-bottom:7px; } .sec-b p:last-child{ margin-bottom:0; }
 .concl{ margin-top:16px; border:1px solid var(--card-line); border-left:4px solid var(--line); background:var(--accent-soft); border-radius:9px; padding:11px 15px; } .concl .ch{ font-size:15px; font-weight:800; text-transform:uppercase; color:var(--accent); margin-bottom:5px; } .concl .ch .uz{ font-size:13px; font-style:italic; color:var(--faint); font-weight:400; margin-left:6px; } .concl p{ font-size:14px; line-height:1.55; color:var(--ink-2); white-space:pre-wrap; }
 .signoff{ display:flex; justify-content:space-between; align-items:flex-end; gap:20px; margin-top:20px; break-inside:avoid; } .sig{ flex:1; max-width:320px; } .sig .role{ font-size:11.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); } .sig .role i{ font-style:italic; color:var(--faint); } .sig .mark{ height:34px; margin:2px 0 1px; display:flex; align-items:flex-end; } .sig .mark svg{ height:32px; } .sig .name{ font-size:15px; font-weight:700; color:var(--ink); border-top:1px solid var(--ink); padding-top:4px; } .sig .spec{ font-size:13px; color:var(--muted); margin-top:2px; }
-.sign-right{ display:flex; align-items:flex-end; gap:18px; } .qr{ width:60px; height:60px; flex:none; padding:5px; border:1px solid var(--line); border-radius:6px; } .qr svg{ width:100%; height:100%; } .qr svg path,.qr svg rect{ fill:var(--ink); } .qr-cap{ font-size:10px; color:var(--faint); text-align:center; margin-top:3px; } .stamp{ width:86px; height:86px; flex:none; border:2px dashed var(--muted); border-radius:50%; position:relative; transform:rotate(-11deg); opacity:.78; } .stamp::before{ content:""; position:absolute; inset:7px; border:1px solid var(--line); border-radius:50%; } .stamp .sc{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--muted); } .stamp .sc .mp{ font-size:17.5px; font-weight:800; } .stamp .sc .sm{ font-size:9px; letter-spacing:.12em; text-transform:uppercase; margin-top:2px; }
-.sheet:not(.show-stamp) .stamp, .sheet:not(.show-qr) .qr-box, .sheet:not(.show-qr) .qr, .sheet:not(.show-signature) .sig{ display:none; }   /* STAMP_ONLY_V1 */
+.sign-right{ display:flex; align-items:flex-end; gap:18px; } .stamp{ width:86px; height:86px; flex:none; border:2px dashed var(--muted); border-radius:50%; position:relative; transform:rotate(-11deg); opacity:.78; } .stamp::before{ content:""; position:absolute; inset:7px; border:1px solid var(--line); border-radius:50%; } .stamp .sc{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--muted); } .stamp .sc .mp{ font-size:17.5px; font-weight:800; } .stamp .sc .sm{ font-size:9px; letter-spacing:.12em; text-transform:uppercase; margin-top:2px; }
+.sheet:not(.show-stamp) .stamp, .sheet:not(.show-signature) .sig{ display:none; }   /* STAMP_ONLY_V1 */
 .legal{ font-size:11px; color:var(--faint); text-align:center; margin-top:13px; padding:0 8mm; line-height:1.5; } .foot{ margin-top:auto; padding-top:10px; border-top:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; } .foot .fl{ font-size:13px; color:var(--ink); } .foot .fl b{ font-weight:700; } .foot .fr{ font-size:13px; font-weight:700; color:var(--ink); }
 @media print{ @page{ size:A4; margin:13mm 14mm; } html,body{ background:#fff; padding:0; } body{ display:block; } /* DOC_A4_PRINT_V1 */ :root{ --ink:#000; --ink-2:#0f131b; --muted:#20242e; --faint:#333a45; } .sheet{ box-shadow:none; width:auto; min-height:268mm; padding:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
 </style></head><body><section class="sheet ${toggleCls(s)}">
@@ -599,7 +611,7 @@ ${PRINT_FONT_FACE_CSS}
   ${(d.conclusion || d.__editor) ? `<div class="concl"><div class="ch">Заключение <span class="uz">· Xulosa</span></div><p data-field="primary_diagnosis">${esc(d.conclusion)}</p></div>` : ''}
   ${imagingImages(d)}
   <div class="signoff"><div class="sig"><div class="role">Врач-рентгенолог <i>· Rentgenolog shifokor</i></div><div class="mark">${SIG_SVG}</div><div class="name">${esc(d.radiologist || '—')}</div><div class="spec">${esc(d.radiologistSpec || '')} · подпись</div></div>
-    <div class="sign-right"><div class="qr-box" style="text-align:center"><div class="qr">${QR_SVG}</div><div class="qr-cap">Проверка<br>подлинности</div></div></div></div>
+    <div class="sign-right"></div></div>
   ${s.legalNote ? `<div class="legal">${esc(s.legalNote)}</div>` : ''}
   <div class="foot"><div class="fl">${s.web ? `<b>${esc(s.web)}</b> · ` : ''}${esc(s.clinicName || '')}</div><div class="fr">${esc(s.phone || '')}</div></div>
 </section></body></html>`;
@@ -624,7 +636,7 @@ ${PRINT_FONT_FACE_CSS}
 .sec-b{ font-size:12px; line-height:1.45; color:var(--ink-2); padding:0 2px; } .sec-b p{ margin-bottom:5px; }
 .concl{ margin-top:8px; border-left:3px solid var(--ink); padding:1px 0 1px 10px; } .concl .ch{ font-size:12px; font-weight:800; text-transform:uppercase; color:var(--accent); margin-bottom:2px; } .concl p{ font-size:11.5px; line-height:1.45; color:var(--ink-2); white-space:pre-wrap; }
 .signoff{ display:flex; justify-content:space-between; align-items:flex-end; gap:16px; margin-top:14px; break-inside:avoid; } .sig{ flex:1; max-width:280px; } .sig .role{ font-size:11px; text-transform:uppercase; color:var(--muted); } .sig .name{ font-size:13.5px; font-weight:700; border-top:1px solid var(--ink); padding-top:3px; margin-top:16px; } .sig .spec{ font-size:11px; color:var(--muted); }
-.sign-right{ display:flex; align-items:flex-end; gap:12px; } .qr{ width:46px; height:46px; flex:none; padding:3px; border:1px solid var(--line); border-radius:5px; } .qr svg{ width:100%; height:100%; } .qr svg path,.qr svg rect{ fill:var(--ink); } .stamp{ width:58px; height:58px; flex:none; border:1.5px dashed var(--muted); border-radius:50%; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:12px; font-weight:800; transform:rotate(-10deg); opacity:.75; }
+.sign-right{ display:flex; align-items:flex-end; gap:12px; } .stamp{ width:58px; height:58px; flex:none; border:1.5px dashed var(--muted); border-radius:50%; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:12px; font-weight:800; transform:rotate(-10deg); opacity:.75; }
 .legal{ font-size:10px; color:var(--faint); text-align:center; margin-top:9px; line-height:1.45; } .foot{ margin-top:auto; padding-top:7px; border-top:1px solid var(--ink); display:flex; justify-content:space-between; font-size:11.5px; color:var(--ink); } .foot b{ font-weight:700; }
 @media print{ @page{ size:A4; margin:12mm 13mm; } html,body{ background:#fff; padding:0; } body{ display:block; } /* DOC_A4_PRINT_V1 */ :root{ --ink:#000; --ink-2:#0f131b; --muted:#20242e; --faint:#333a45; } .sheet{ box-shadow:none; width:auto; min-height:268mm; padding:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
 ${ECONOMY_BW_CSS}
@@ -643,7 +655,7 @@ ${ECONOMY_BW_CSS}
   ${(d.conclusion || d.__editor) ? `<div class="concl"><div class="ch">Заключение · Xulosa</div><p data-field="primary_diagnosis">${esc(d.conclusion)}</p></div>` : ''}
   ${imagingImages(d)}
   <div class="signoff"><div class="sig"><div class="role">Врач-рентгенолог</div><div class="name">${esc(d.radiologist || '—')}</div><div class="spec">${esc(d.radiologistSpec || '')} · подпись</div></div>
-    <div class="sign-right"><div class="qr">${QR_SVG}</div></div></div>
+    <div class="sign-right"></div></div>
   ${s.legalNote ? `<div class="legal">${esc(s.legalNote)}</div>` : ''}
   ${s.footerNote ? `<div class="thanks-eco">${esc(s.footerNote)}</div>` : ''}
   <div class="foot"><div>${s.web ? `<b>${esc(s.web)}</b> · ` : ''}${esc(s.clinicName || '')}</div><div>${esc(s.phone || '')}</div></div>
@@ -712,8 +724,8 @@ ${PRINT_FONT_FACE_CSS}
 table.items{ width:100%; border-collapse:collapse; font-size:14px; } table.items thead th{ font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:700; text-align:left; padding:0 10px 6px 0; border-bottom:1.5px solid var(--line); } table.items th.r,table.items td.r{ text-align:right; } table.items th.c,table.items td.c{ text-align:center; } table.items tbody td{ padding:8px 10px 8px 0; border-bottom:1px solid var(--line-2); vertical-align:top; break-inside:avoid; } table.items .num{ width:20px; color:var(--accent); font-weight:800; } table.items .svc{ font-weight:600; color:var(--ink); } table.items .money{ white-space:nowrap; } table.items .sum{ font-weight:700; }
 .below{ display:flex; justify-content:flex-end; margin-top:14px; break-inside:avoid; } .totals{ width:300px; border:1px solid var(--card-line); border-radius:10px; overflow:hidden; } .totals .tr{ display:flex; justify-content:space-between; padding:8px 14px; font-size:14px; } .totals .tr .tl{ color:var(--muted); } .totals .tr .tv{ font-weight:700; color:var(--ink); } .totals .tr.disc .tv{ color:var(--accent-2); } .totals .tr + .tr{ border-top:1px solid var(--line-2); } .totals .due{ background:var(--accent); color:#fff; padding:11px 14px; display:flex; justify-content:space-between; align-items:center; } .totals .due .dl{ font-size:15px; font-weight:700; text-transform:uppercase; } .totals .due .dv{ font-size:20px; font-weight:800; } .totals .due .dv span{ font-size:15px; font-weight:600; opacity:.9; margin-left:3px; }
 .signoff{ display:flex; justify-content:space-between; align-items:flex-end; gap:20px; margin-top:18px; break-inside:avoid; } .sig{ flex:1; max-width:300px; } .sig .role{ font-size:11.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); } .sig .role i{ font-style:italic; color:var(--faint); } .sig .mark{ height:34px; margin:2px 0 1px; display:flex; align-items:flex-end; } .sig .mark svg{ height:32px; } .sig .name{ font-size:15px; font-weight:700; color:var(--ink); border-top:1px solid var(--ink); padding-top:4px; } .sig .spec{ font-size:13px; color:var(--muted); margin-top:2px; }
-.sign-right{ display:flex; align-items:flex-end; gap:18px; } .qr{ width:60px; height:60px; flex:none; padding:5px; border:1px solid var(--line); border-radius:6px; } .qr svg{ width:100%; height:100%; } .qr svg path,.qr svg rect{ fill:var(--ink); } .qr-cap{ font-size:10px; color:var(--faint); text-align:center; margin-top:3px; } .stamp{ width:86px; height:86px; flex:none; border:2px dashed var(--muted); border-radius:50%; position:relative; transform:rotate(-11deg); opacity:.78; } .stamp::before{ content:""; position:absolute; inset:7px; border:1px solid var(--line); border-radius:50%; } .stamp .sc{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--muted); } .stamp .sc .mp{ font-size:16px; font-weight:800; } .stamp .sc .sm{ font-size:8px; letter-spacing:.12em; text-transform:uppercase; margin-top:2px; }
-.sheet:not(.show-stamp) .stamp, .sheet:not(.show-qr) .qr-box, .sheet:not(.show-qr) .qr, .sheet:not(.show-signature) .sig{ display:none; }   /* STAMP_ONLY_V1 */
+.sign-right{ display:flex; align-items:flex-end; gap:18px; } .stamp{ width:86px; height:86px; flex:none; border:2px dashed var(--muted); border-radius:50%; position:relative; transform:rotate(-11deg); opacity:.78; } .stamp::before{ content:""; position:absolute; inset:7px; border:1px solid var(--line); border-radius:50%; } .stamp .sc{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--muted); } .stamp .sc .mp{ font-size:16px; font-weight:800; } .stamp .sc .sm{ font-size:8px; letter-spacing:.12em; text-transform:uppercase; margin-top:2px; }
+.sheet:not(.show-stamp) .stamp, .sheet:not(.show-signature) .sig{ display:none; }   /* STAMP_ONLY_V1 */
 .note{ font-size:11.5px; color:var(--muted); text-align:center; margin-top:12px; padding:0 6mm; line-height:1.55; } .note b{ color:var(--ink-2); } .foot{ margin-top:auto; padding-top:10px; border-top:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; } .foot .fl{ font-size:13px; color:var(--ink); } .foot .fl b{ font-weight:700; } .foot .fr{ font-size:13px; font-weight:700; color:var(--ink); }
 @media print{ @page{ size:A4; margin:13mm 14mm; } html,body{ background:#fff; padding:0; } body{ display:block; } /* DOC_A4_PRINT_V1 */ :root{ --ink:#000; --ink-2:#0f131b; --muted:#20242e; --faint:#333a45; } .sheet{ box-shadow:none; width:auto; min-height:268mm; padding:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
 </style></head><body><section class="sheet ${toggleCls(s)}">
@@ -727,7 +739,7 @@ table.items{ width:100%; border-collapse:collapse; font-size:14px; } table.items
   <div class="below"><div class="totals"><div class="tr"><span class="tl">Подытог</span><span class="tv">${money(t.subtotal)}</span></div>${t.discount > 0 ? `<div class="tr disc"><span class="tl">Скидка</span><span class="tv">−${money(t.discount)}</span></div>` : ''}<div class="due"><span class="dl">К оплате</span><span class="dv">${money(t.total)}<span>сум</span></span></div></div></div>
   ${queueBlockA4(d)}
   <div class="signoff"><div class="sig"><div class="role">Кассир · бухгалтер <i>· Kassir</i></div><div class="mark">${SIG_SVG}</div><div class="name">${esc(d.cashierName || '—')}</div><div class="spec">${esc(d.status || '')} · подпись</div></div>
-    <div class="sign-right"><div class="qr-box" style="text-align:center"><div class="qr">${QR_SVG}</div><div class="qr-cap">Оплата<br>по QR</div></div></div></div>
+    <div class="sign-right"></div></div>
   <div class="note">Счёт действителен к оплате до указанной даты. НДС включён в стоимость услуг. Документ сформирован в ИС клиники.</div>
   <div class="foot"><div class="fl">${s.web ? `<b>${esc(s.web)}</b> · ` : ''}${esc(s.clinicName || '')}</div><div class="fr">${esc(s.phone || '')}</div></div>
 </section></body></html>`;
@@ -753,7 +765,7 @@ ${PRINT_FONT_FACE_CSS}
 table.items{ width:100%; border-collapse:collapse; font-size:12px; } table.items thead th{ font-size:9.5px; text-transform:uppercase; color:var(--muted); font-weight:700; text-align:left; padding:0 8px 3px 0; border-bottom:1px solid var(--line); } table.items th.r,table.items td.r{ text-align:right; } table.items th.c,table.items td.c{ text-align:center; } table.items tbody td{ padding:3px 8px 3px 0; border-bottom:1px solid var(--line-2); } table.items .num{ width:16px; color:var(--accent); font-weight:800; } table.items .svc{ color:var(--ink); } table.items .sum{ font-weight:700; }
 .tot{ display:flex; justify-content:flex-end; gap:24px; margin-top:8px; font-size:13.5px; align-items:baseline; } .tot .due{ font-size:16px; font-weight:800; color:var(--ink); } .tot .due span{ font-size:12px; font-weight:600; color:var(--muted); margin-left:3px; } .tot .sub{ color:var(--muted); }
 .signoff{ display:flex; justify-content:space-between; align-items:flex-end; gap:16px; margin-top:14px; break-inside:avoid; } .sig{ flex:1; max-width:260px; } .sig .role{ font-size:11px; text-transform:uppercase; color:var(--muted); } .sig .name{ font-size:13.5px; font-weight:700; border-top:1px solid var(--ink); padding-top:3px; margin-top:16px; } .sig .spec{ font-size:11px; color:var(--muted); }
-.sign-right{ display:flex; align-items:flex-end; gap:12px; } .qr{ width:46px; height:46px; flex:none; padding:3px; border:1px solid var(--line); border-radius:5px; } .qr svg{ width:100%; height:100%; } .qr svg path,.qr svg rect{ fill:var(--ink); } .stamp{ width:58px; height:58px; flex:none; border:1.5px dashed var(--muted); border-radius:50%; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:12px; font-weight:800; transform:rotate(-10deg); opacity:.75; }
+.sign-right{ display:flex; align-items:flex-end; gap:12px; } .stamp{ width:58px; height:58px; flex:none; border:1.5px dashed var(--muted); border-radius:50%; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:12px; font-weight:800; transform:rotate(-10deg); opacity:.75; }
 .note{ font-size:10px; color:var(--faint); text-align:center; margin-top:9px; line-height:1.45; } .foot{ margin-top:auto; padding-top:7px; border-top:1px solid var(--ink); display:flex; justify-content:space-between; font-size:11.5px; color:var(--ink); } .foot b{ font-weight:700; }
 @media print{ @page{ size:A4; margin:12mm 13mm; } html,body{ background:#fff; padding:0; } body{ display:block; } /* DOC_A4_PRINT_V1 */ :root{ --ink:#000; --ink-2:#0f131b; --muted:#20242e; --faint:#333a45; } .sheet{ box-shadow:none; width:auto; min-height:268mm; padding:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
 ${ECONOMY_BW_CSS}
@@ -769,7 +781,7 @@ ${ECONOMY_BW_CSS}
   <div class="tot">${t.discount > 0 ? `<span class="sub">Подытог ${money(t.subtotal)} · Скидка −${money(t.discount)}</span>` : ''}<span class="due">К оплате: ${money(t.total)}<span>сум</span></span></div>
   ${queueBlockA4(d)}
   <div class="signoff"><div class="sig"><div class="role">Кассир · бухгалтер</div><div class="name">${esc(d.cashierName || '—')}</div><div class="spec">${esc(d.status || '')} · подпись</div></div>
-    <div class="sign-right"><div class="qr">${QR_SVG}</div></div></div>
+    <div class="sign-right"></div></div>
   <div class="note">НДС включён в стоимость услуг. Документ сформирован в ИС клиники.</div>
   ${s.footerNote ? `<div class="thanks-eco">${esc(s.footerNote)}</div>` : ''}
   <div class="foot"><div>${s.web ? `<b>${esc(s.web)}</b> · ` : ''}${esc(s.clinicName || '')}</div><div>${esc(s.phone || '')}</div></div>
@@ -814,6 +826,7 @@ function dobRow(d) {
 const PERFORMER_CSS = '.f-item-p{ font-size:9.5px; font-weight:700; margin-top:1px; }';
 
 function invoiceThermal(s, d) {
+    const TW = thermal(s);   // THERMAL_WIDTH_V1
     // Same 58mm geometry as the cashier cheque (fiscalClassic): left-aligned to the printer's
     // left-anchored printable area, 46mm wide, pure black + bold, 6mm blank top feed so the logo
     // clears the thermal head's smashed leading edge. No signature/QR/stamp (those need A4).
@@ -833,16 +846,16 @@ function invoiceThermal(s, d) {
     const items = (d.items || []).map((it, i) => `<div class="f-item"><div class="f-item-n">${i + 1}. ${esc(it.name)}</div><div class="f-item-r"><span>${esc(it.qty || 1)} × ${money(it.price)}</span><b>${money(Number(it.qty || 1) * Number(it.price || 0))}</b></div>${performerLine(it)}</div>`).join('');
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Счёт · ${esc(d.docNo || '')}</title><style>
 ${PRINT_FONT_FACE_CSS}
-@page{ size:58mm auto; margin:0; }
+@page{ size:${TW.paper}mm auto; margin:0; }
 *{ margin:0; padding:0; box-sizing:border-box; }
 html,body{ background:#fff; }
-body{ width:46mm; margin:0; padding-top:6mm; font-family:'Onest',"Helvetica Neue",Arial,sans-serif; color:#000; font-size:11px; line-height:1.28; overflow-wrap:anywhere; }
+body{ width:${TW.body}mm; margin:0; padding-top:6mm; font-family:'Onest',"Helvetica Neue",Arial,sans-serif; color:#000; font-size:${TW.font}px; line-height:1.3; overflow-wrap:anywhere; }
 .f-logo{ display:flex; justify-content:center; margin-bottom:2px; }
-.f-name{ text-align:center; font-size:14px; font-weight:800; line-height:1.12; }
+.f-name{ text-align:center; font-size:${TW.name}px; font-weight:800; line-height:1.14; letter-spacing:-.01em; }
 .f-sub{ text-align:center; font-size:9px; font-weight:700; margin-top:1px; }
 .f-hr{ border-top:1px dashed #000; margin:4px 0; }
 .f-hr2{ border-top:2px solid #000; margin:4px 0; }
-.f-title{ text-align:center; font-size:12px; font-weight:800; text-transform:uppercase; margin:2px 0; }
+.f-title{ text-align:center; font-size:${TW.title}px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; margin:3px 0 2px; }
 .f-kv{ display:flex; justify-content:space-between; gap:6px; font-size:11px; font-weight:700; margin:1px 0; }
 .f-kv b{ font-weight:800; text-align:right; }
 .f-item{ margin:3px 0; }
@@ -850,11 +863,11 @@ body{ width:46mm; margin:0; padding-top:6mm; font-family:'Onest',"Helvetica Neue
 .f-item-r{ display:flex; justify-content:space-between; gap:6px; font-size:10.5px; font-weight:700; }
 .f-item-r b{ font-weight:800; white-space:nowrap; }
 ${PERFORMER_CSS}
-.f-tot{ display:flex; justify-content:space-between; align-items:baseline; gap:6px; font-size:13.5px; font-weight:800; margin:3px 0; border-top:1.5px solid #000; border-bottom:1.5px solid #000; padding:3px 0; }
+.f-tot{ display:flex; justify-content:space-between; align-items:baseline; gap:6px; font-size:${TW.total}px; font-weight:800; margin:5px 0; border-top:2px solid #000; border-bottom:2px solid #000; padding:4px 0; }
 .f-tot b{ white-space:nowrap; }
 .f-thanks{ text-align:center; font-size:10px; font-weight:700; margin-top:5px; }
 ${QUEUE_CSS}
-@media print{ body{ width:46mm; margin:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; color:#000 !important; } }
+@media print{ body{ width:${TW.body}mm; margin:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; color:#000 !important; } }
 </style></head><body>
 ${logo}<div class="f-name">${esc(s.clinicName || 'Клиника')}</div>
 ${s.address ? `<div class="f-sub">${esc(s.address)}</div>` : ''}${s.taxId ? `<div class="f-sub">ИНН: ${esc(s.taxId)}</div>` : ''}${s.phone ? `<div class="f-sub">${esc(s.phone)}</div>` : ''}
@@ -881,6 +894,7 @@ ${queueBlock}
 // FISCAL RECEIPT · thermal 80mm (monochrome, monospace, ОФД)
 // ---------------------------------------------------------------------------
 function fiscalClassic(s, d) {
+    const TW = thermal(s);   // THERMAL_WIDTH_V1
     // FISCAL_RECEIPT_58MM_V2 — clean cashier receipt sized for the ~48mm printable width of a 58mm
     // thermal head so nothing runs off the paper. Black, bold, short. No ОФД/QR/barcode (mock).
     const t = invoiceTotals(d);
@@ -888,16 +902,16 @@ function fiscalClassic(s, d) {
     const items = (d.items || []).map((it, i) => `<div class="f-item"><div class="f-item-n">${i + 1}. ${esc(it.name)}</div><div class="f-item-r"><span>${esc(it.qty || 1)} × ${money(it.price)}</span><b>${money(Number(it.qty || 1) * Number(it.price || 0))}</b></div>${performerLine(it)}</div>`).join('');
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Чек · ${esc(d.docNo || '')}</title><style>
 ${PRINT_FONT_FACE_CSS}
-@page{ size:58mm auto; margin:0; }
+@page{ size:${TW.paper}mm auto; margin:0; }
 *{ margin:0; padding:0; box-sizing:border-box; }
 html,body{ background:#fff; }
-body{ width:46mm; margin:0; padding-top:6mm; font-family:'Onest',"Helvetica Neue",Arial,sans-serif; color:#000; font-size:11px; line-height:1.28; overflow-wrap:anywhere; }
+body{ width:${TW.body}mm; margin:0; padding-top:6mm; font-family:'Onest',"Helvetica Neue",Arial,sans-serif; color:#000; font-size:${TW.font}px; line-height:1.3; overflow-wrap:anywhere; }
 .f-logo{ display:flex; justify-content:center; margin-bottom:2px; }
-.f-name{ text-align:center; font-size:14px; font-weight:800; line-height:1.12; }
+.f-name{ text-align:center; font-size:${TW.name}px; font-weight:800; line-height:1.14; letter-spacing:-.01em; }
 .f-sub{ text-align:center; font-size:9px; font-weight:700; margin-top:1px; }
 .f-hr{ border-top:1px dashed #000; margin:4px 0; }
 .f-hr2{ border-top:2px solid #000; margin:4px 0; }
-.f-title{ text-align:center; font-size:12px; font-weight:800; text-transform:uppercase; margin:2px 0; }
+.f-title{ text-align:center; font-size:${TW.title}px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; margin:3px 0 2px; }
 /* FISCAL_PATIENT_NAME_V1 — the patient is the first thing staff and the patient
    themselves look for when a cheque is handed over, so it sits above the
    «Кассовый чек» title at the largest size on the roll. anywhere-wrapping keeps
@@ -910,11 +924,11 @@ body{ width:46mm; margin:0; padding-top:6mm; font-family:'Onest',"Helvetica Neue
 .f-item-r{ display:flex; justify-content:space-between; gap:6px; font-size:10.5px; font-weight:700; }
 .f-item-r b{ font-weight:800; white-space:nowrap; }
 ${PERFORMER_CSS}
-.f-tot{ display:flex; justify-content:space-between; align-items:baseline; gap:6px; font-size:13.5px; font-weight:800; margin:3px 0; border-top:1.5px solid #000; border-bottom:1.5px solid #000; padding:3px 0; }
+.f-tot{ display:flex; justify-content:space-between; align-items:baseline; gap:6px; font-size:${TW.total}px; font-weight:800; margin:5px 0; border-top:2px solid #000; border-bottom:2px solid #000; padding:4px 0; }
 .f-tot b{ white-space:nowrap; }
 .f-thanks{ text-align:center; font-size:10px; font-weight:700; margin-top:5px; }
 ${QUEUE_CSS}
-@media print{ body{ width:46mm; margin:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; color:#000 !important; } }
+@media print{ body{ width:${TW.body}mm; margin:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; color:#000 !important; } }
 </style></head><body>
 ${logo}<div class="f-name">${esc(s.clinicName || 'Клиника')}</div>
 ${s.address ? `<div class="f-sub">${esc(s.address)}</div>` : ''}${s.taxId ? `<div class="f-sub">ИНН: ${esc(s.taxId)}</div>` : ''}${s.phone ? `<div class="f-sub">${esc(s.phone)}</div>` : ''}
@@ -942,6 +956,7 @@ ${queueBlockHtml(d)}
 // CLINIC RECEIPT · A5 (compact paid-receipt)
 // ---------------------------------------------------------------------------
 function receiptClassic(s, d) {
+    const TW = thermal(s);   // THERMAL_WIDTH_V1
     // CLINIC_CHEQUE_58MM_V1 — the clinic cheque (type 'check') was A5 (148x210mm), so it printed a
     // long, mostly-empty page on a 58mm thermal roll. Now a clean 58mm thermal receipt (same
     // geometry as the cashier fiscal cheque): left-aligned, 46mm, bold black, 6mm top feed.
@@ -950,16 +965,16 @@ function receiptClassic(s, d) {
     const items = (d.items || []).map((it, i) => `<div class="f-item"><div class="f-item-n">${i + 1}. ${esc(it.name)}</div><div class="f-item-r"><span>${esc(it.qty || 1)} × ${money(it.price)}</span><b>${money(Number(it.qty || 1) * Number(it.price || 0))}</b></div>${performerLine(it)}</div>`).join('');
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Чек · ${esc(d.docNo || '')}</title><style>
 ${PRINT_FONT_FACE_CSS}
-@page{ size:58mm auto; margin:0; }
+@page{ size:${TW.paper}mm auto; margin:0; }
 *{ margin:0; padding:0; box-sizing:border-box; }
 html,body{ background:#fff; }
-body{ width:46mm; margin:0; padding-top:6mm; font-family:'Onest',"Helvetica Neue",Arial,sans-serif; color:#000; font-size:11px; line-height:1.28; overflow-wrap:anywhere; }
+body{ width:${TW.body}mm; margin:0; padding-top:6mm; font-family:'Onest',"Helvetica Neue",Arial,sans-serif; color:#000; font-size:${TW.font}px; line-height:1.3; overflow-wrap:anywhere; }
 .f-logo{ display:flex; justify-content:center; margin-bottom:2px; }
-.f-name{ text-align:center; font-size:14px; font-weight:800; line-height:1.12; }
+.f-name{ text-align:center; font-size:${TW.name}px; font-weight:800; line-height:1.14; letter-spacing:-.01em; }
 .f-sub{ text-align:center; font-size:9px; font-weight:700; margin-top:1px; }
 .f-hr{ border-top:1px dashed #000; margin:4px 0; }
 .f-hr2{ border-top:2px solid #000; margin:4px 0; }
-.f-title{ text-align:center; font-size:12px; font-weight:800; text-transform:uppercase; margin:2px 0; }
+.f-title{ text-align:center; font-size:${TW.title}px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; margin:3px 0 2px; }
 .f-kv{ display:flex; justify-content:space-between; gap:6px; font-size:11px; font-weight:700; margin:1px 0; }
 .f-kv b{ font-weight:800; text-align:right; }
 .f-item{ margin:3px 0; }
@@ -967,10 +982,10 @@ body{ width:46mm; margin:0; padding-top:6mm; font-family:'Onest',"Helvetica Neue
 .f-item-r{ display:flex; justify-content:space-between; gap:6px; font-size:10.5px; font-weight:700; }
 .f-item-r b{ font-weight:800; white-space:nowrap; }
 ${PERFORMER_CSS}
-.f-tot{ display:flex; justify-content:space-between; align-items:baseline; gap:6px; font-size:13.5px; font-weight:800; margin:3px 0; border-top:1.5px solid #000; border-bottom:1.5px solid #000; padding:3px 0; }
+.f-tot{ display:flex; justify-content:space-between; align-items:baseline; gap:6px; font-size:${TW.total}px; font-weight:800; margin:5px 0; border-top:2px solid #000; border-bottom:2px solid #000; padding:4px 0; }
 .f-tot b{ white-space:nowrap; }
 .f-thanks{ text-align:center; font-size:10px; font-weight:700; margin-top:5px; }
-@media print{ body{ width:46mm; margin:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; color:#000 !important; } }
+@media print{ body{ width:${TW.body}mm; margin:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; color:#000 !important; } }
 </style></head><body>
 ${logo}<div class="f-name">${esc(s.clinicName || 'Клиника')}</div>
 ${s.address ? `<div class="f-sub">${esc(s.address)}</div>` : ''}${s.taxId ? `<div class="f-sub">ИНН: ${esc(s.taxId)}</div>` : ''}${s.phone ? `<div class="f-sub">${esc(s.phone)}</div>` : ''}

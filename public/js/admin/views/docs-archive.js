@@ -6,7 +6,7 @@
 // Storage URL (uploaded files). Read-only archive — editing happens in the workspace.
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, fmtDate } from '../ui.js';
-import { printableSheet, loadDocSettings } from './doc-settings.js?v=q3company1';   // ONE shared instance — ?v=db9
+import { printableSheet, loadDocSettings } from './doc-settings.js?v=noqr1';   // ONE shared instance — ?v=db9
 
 const _DOC_TEMPLATE = { protocol: 'conclusion', conclusion: 'conclusion', diag: 'diag', lab: 'lab' };
 const _KINDS = [

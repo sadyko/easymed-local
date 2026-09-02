@@ -49,12 +49,15 @@ export const DEFAULT_DOC_SETTINGS = {
 
     showWatermark:    true,
     watermarkOpacity: 0.04,     // 0–0.20 — faintness of the logo watermark
-    showQR:           true,
     showStamp:        true,
     showSignature:    true,
 
     language:    'en',
     paperSize:   'A4',          // A4 / A5 / Letter
+    // THERMAL_WIDTH_V1 — ролик термопринтера: 40 / 58 / 80 мм. Влияет только на
+    // чековые макеты (счёт-термочек, фискальный чек, кассовый чек); A4-бланки
+    // печатаются по paperSize и этой настройки не видят.
+    thermalWidth: '58',
     density:     'comfortable', // compact / comfortable / airy
     fontPair:    'modern',      // modern / serif / clinical
     cornerStyle: 'rounded',
@@ -72,7 +75,7 @@ export const DOC_VARIANTS = {
     conclusion: [{ key: 'classic', label: 'Классический (цвет)' }, { key: 'compact', label: 'Компактный · эконом' }],
     lab:        [{ key: 'classic', label: 'Классический (цвет)' }, { key: 'compact', label: 'Компактный · эконом' }],
     diag:       [{ key: 'classic', label: 'Классический (цвет)' }, { key: 'compact', label: 'Компактный · эконом' }],
-    invoice:    [{ key: 'classic', label: 'Классический' }, { key: 'compact', label: 'Компактный · эконом' }, { key: 'thermal', label: 'Термочек 58мм' }],
+    invoice:    [{ key: 'classic', label: 'Классический' }, { key: 'compact', label: 'Компактный · эконом' }, { key: 'thermal', label: 'Термочек (ширина в настройках)' }],
     check:      [{ key: 'classic', label: 'Классический' }],
     fiscal:     [{ key: 'classic', label: 'Термо-чек' }],
 };

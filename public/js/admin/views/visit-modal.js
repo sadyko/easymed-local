@@ -17,7 +17,7 @@ import { openItemPickerModal } from './item-picker-modal.js?v=billoptin1';   // 
 import { creditCashbackOnPaid } from './cashback.js?v=cb1';
 import { openCancelInvoiceDialog, logInvoiceAction as _logInvoiceAction } from './invoice-actions.js?v=ia3';
 import { logPatientActivity } from './activity-log.js';
-import { printableSheet } from './doc-settings.js?v=q3company1';   // must match every other importer (one module instance)
+import { printableSheet } from './doc-settings.js?v=noqr1';   // must match every other importer (one module instance)
 
 let active = null;
 

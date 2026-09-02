@@ -33,7 +33,7 @@ import { logPatientActivity } from './activity-log.js';   // BOOK_WIZARD_V1
 import { gw } from '../gateway.js';
 import { clinicFlags } from '../clinic-flags.js';   // CUSTOM_CLINIC_V1
 import { loadClinicHours, clinicRangeForDay } from '../clinic-hours.js?v=ch1';   // WORKING_HOURS_CLINIC_BOUND_V1
-import { printableSheet } from './doc-settings.js?v=q3company1';   // insurance/B2B: print statistics act
+import { printableSheet } from './doc-settings.js?v=noqr1';   // insurance/B2B: print statistics act
 import { tr, trf } from '../i18n.js';   // WIZ_TEMPLATES_V1 + I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { resolveTypeId } from './service-group.js?v=aug17e';   // SERVICE_GROUPS_V1 — group filtering must survive a NULL type_id

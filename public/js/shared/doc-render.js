@@ -13,7 +13,7 @@
 // Единственная правка при переносе: buildSheetHtml больше не подставляет
 // loadDocSettings() сам (это localStorage) — настройки передаёт вызывающий.
 
-import { renderDesignedVariant } from '../admin/views/doc-variants.js?v=labref19a';
+import { renderDesignedVariant } from '../admin/views/doc-variants.js?v=noqr1';
 // ONEST_TYPOGRAPHY_V1 — печатное окно/PDF — отдельный документ, admin.css туда
 // не попадает; @font-face приезжает из общего модуля (см. его шапку).
 import { PRINT_FONT_FACE_CSS } from './print-fonts.js';

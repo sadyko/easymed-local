@@ -22,7 +22,7 @@ import {
     DOC_VARIANTS,
     loadDocBrandingAsync,
     applyCompanyBranding,
-} from './doc-settings.js?v=q3company1';   // ONE shared instance — ?v=db9 must match in EVERY importer (incl. admin.js + visit-modal)
+} from './doc-settings.js?v=noqr1';   // ONE shared instance — ?v=db9 must match in EVERY importer (incl. admin.js + visit-modal)
 
 const DOC_TYPES = [
     { id: 'conclusion', label: 'Заключение врача', icon: 'Stethoscope', sub: 'Клинический отчёт',    paper: 'A4' },
@@ -190,6 +190,11 @@ function settingsPanel() {
             segmented('density', [['compact','Compact'], ['comfortable','Default'], ['airy','Airy']]),
             mini('Paper size',  { mt: 14 }),
             segmented('paperSize', [['A4','A4'], ['A5','A5'], ['Letter','Letter']]),
+            // THERMAL_WIDTH_V1 — ролик термопринтера. Отдельно от paperSize:
+            // A4-бланк и чек печатаются на разных устройствах, и одна настройка
+            // на оба означала бы, что выбор формата бланка ломает кассовый чек.
+            mini('Чек · ширина ролика', { mt: 14 }),
+            segmented('thermalWidth', [['40','40 мм'], ['58','58 мм'], ['80','80 мм']]),
             mini('Language',    { mt: 14 }),
             segmented('language', [['en','EN'], ['ru','RU'], ['uz','UZ']]),
             mini('Corner style', { mt: 14 }),
@@ -198,7 +203,6 @@ function settingsPanel() {
         editorCard('Elements', 'Filter', [
             toggle('Watermark',         'showWatermark'),
             state.s.showWatermark ? watermarkOpacityControl() : null,
-            toggle('QR · verification', 'showQR'),
             toggle('Doctor signature',  'showSignature'),
         ]),
         editorCard('Footer copy', 'Doc', [

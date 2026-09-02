@@ -33,7 +33,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, fmtDate, fmtDateTime, field, avColor, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { printBarcodeLabel } from './lab-barcode.js';
-import { printableSheet } from './doc-settings.js?v=q3company1';   // same URL as patient-card/service-workspace (one instance)
+import { printableSheet } from './doc-settings.js?v=noqr1';   // same URL as patient-card/service-workspace (one instance)
 import { canDelete, canEditLabPanels } from '../permissions.js';   // LAB_PANELS_BY_SECTION_V1 — the gate IS lab-section access (same predicate as the sidebar)
 import { mountLabPanels, LAB_BUILD } from './lab-panels.js';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now
 // ?v= is required here, not decorative: this module gained selectOptionsFor, and a
