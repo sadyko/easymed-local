@@ -106,15 +106,34 @@ test('084: таблицы ожидания и соседей существую�
 test('084: удаление оставляет надгробие в sync_tombstones — независимо от журнала', () => {
   const db = fresh();
   const cols = db.prepare("PRAGMA table_info(sync_tombstones)").all().map(c => c.name);
-  assert.deepEqual(cols, ['tbl', 'uid', 'at']);
+  assert.deepEqual(cols, ['seq', 'tbl', 'uid', 'at']);
   const id = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
   const uid = db.prepare('SELECT uid FROM patients WHERE id = ?').get(id).uid;
   db.prepare('DELETE FROM patients WHERE id = ?').run(id);
-  const tomb = db.prepare("SELECT uid FROM sync_tombstones WHERE tbl = 'patients'").get();
+  const tomb = db.prepare("SELECT uid, seq FROM sync_tombstones WHERE tbl = 'patients'").get();
   assert.equal(tomb.uid, uid, 'холодный засев читает ЭТУ таблицу, не журнал — журнал у отправителя может быть уже вычищен');
-  // (tbl, uid) — ключ: второй записи о том же удалении взяться неоткуда,
-  // но сама вставка идёт INSERT OR REPLACE и не должна падать, случись такое.
+  // UNIQUE(tbl, uid) — второй записи о том же удалении взяться неоткуда, но
+  // сама вставка идёт INSERT OR REPLACE и не должна падать, случись такое.
+  // REPLACE удаляет старую строку и вставляет новую — seq у неё БОЛЬШЕ
+  // прежнего (это нормально и даже желательно: страница засева видит только
+  // рост seq, а не переиспользование).
   db.prepare("INSERT OR REPLACE INTO sync_tombstones (tbl, uid) VALUES ('patients', ?)").run(uid);
-  assert.equal(db.prepare("SELECT COUNT(*) n FROM sync_tombstones WHERE tbl = 'patients' AND uid = ?").get(uid).n, 1);
+  const after = db.prepare("SELECT COUNT(*) n, MAX(seq) s FROM sync_tombstones WHERE tbl = 'patients' AND uid = ?").get(uid);
+  assert.equal(after.n, 1, 'REPLACE не должен оставлять дубль строки');
+  assert.equal(after.s > tomb.seq, true, 'REPLACE обязан выдать НОВЫЙ seq, а не сохранить старый (N1)');
+  db.close();
+});
+
+test('084: seq у sync_tombstones — AUTOINCREMENT: после чистки всех надгробий номера не переиспользуются', () => {
+  const db = fresh();
+  const id1 = db.prepare("INSERT INTO patients (full_name) VALUES ('Первый')").run().lastInsertRowid;
+  db.prepare('DELETE FROM patients WHERE id = ?').run(id1);
+  const maxBefore = db.prepare('SELECT MAX(seq) m FROM sync_tombstones').get().m;
+  db.prepare('DELETE FROM sync_tombstones').run();   // таблица опустела целиком, как после pruneJournal (N1 review)
+  const id2 = db.prepare("INSERT INTO patients (full_name) VALUES ('Второй')").run().lastInsertRowid;
+  db.prepare('DELETE FROM patients WHERE id = ?').run(id2);
+  const minAfter = db.prepare('SELECT MIN(seq) m FROM sync_tombstones').get().m;
+  assert.equal(minAfter > maxBefore, true,
+    'обычный rowid переиспользовал бы seq=1 — курсор соседа, остановившийся посреди фазы надгробий, молча пропустил бы новое надгробие');
   db.close();
 });

@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { buildBatch, markSent, pruneJournal } from './journal.js';
+import { parseStamp } from './hlc.js';
+import { applyBatch } from './records.js';
 
 function fresh() {
   const db = openDb(':memory:');
@@ -219,25 +221,47 @@ test('C1: правка, случившаяся ПОКА идёт засев, н�
 
 // --- C2 — надгробие переживает чистку журнала у забытого соседа ---
 
-test('C2: забытый сосед по возвращении получает надгробие раньше, чем presence-строки', () => {
-  const db = fresh(); warm(db);   // C — посторонний тёплый сосед, чтобы было кому вызвать pruneJournal
+test('C2: забытый сосед по возвращении получает и надгробие, и presence со своей НАСТОЯЩЕЙ меткой (не «сейчас»)', () => {
+  const db = fresh();
+  const survivorId = db.prepare("INSERT INTO patients (full_name) VALUES ('Остаётся')").run().lastInsertRowid;
+  // Старая правка — чтобы отличить «метка от created_at» от «метка от
+  // надгробия, прошедшего первым» (ревью Задачи 4, N2): 2020 год не спутать
+  // с «сейчас» ни при какой раскладке.
+  db.prepare("UPDATE patients SET created_at = '2020-01-01T00:00:00Z' WHERE id = ?").run(survivorId);
   const xId = db.prepare("INSERT INTO patients (full_name) VALUES ('X')").run().lastInsertRowid;
-  db.prepare("INSERT INTO patients (full_name) VALUES ('Остаётся')").run();
   db.prepare('DELETE FROM patients WHERE id = ?').run(xId);   // у X теперь и presence нет, и есть надгробие
 
   db.prepare("INSERT INTO sync_peers (node, sent_seq, last_ok) VALUES ('D', 0, ?)")
     .run(new Date(Date.now() - 40 * 86400000).toISOString());   // D молчит 40 дней
 
-  const c = buildBatch(db, { self: 'B', peer: 'C' });
-  markSent(db, 'C', c.upto, c.clock);   // эта чистка обязана забыть D (ревью Задачи 4/5, C2 в связке с прошлым фиксом)
+  // pruneJournal напрямую, а не через buildBatch+markSent постороннего соседа:
+  // тот прогнал бы survivor/X через хвост ЖУРНАЛА (его `at` — время ЗАПИСИ,
+  // всегда «сейчас») и поднял бы часы узла ДО того, как мы вообще посмотрим
+  // на засев D — тогда 2020 год «испортился» бы этим посторонним шагом, а не
+  // порядком фаз внутри seedPage, который здесь и проверяется.
+  pruneJournal(db);   // обязана забыть D (ревью Задачи 4/5, C2 в связке с прошлым фиксом)
   assert.equal(db.prepare("SELECT COUNT(*) n FROM sync_peers WHERE node = 'D'").get().n, 0);
 
   const forD = buildBatch(db, { self: 'B', peer: 'D' });
-  const delIdx = forD.records.findIndex(r => r.op === 'del');
-  const putIdx = forD.records.findIndex(r => r.op === 'put');
-  assert.equal(delIdx >= 0, true, 'надгробие X обязано попасть в засев — иначе D решит, что X ещё существует');
-  assert.equal(putIdx >= 0, true, 'и живая строка ("Остаётся") тоже должна доехать');
-  assert.equal(delIdx < putIdx, true, 'del раньше put — тот же порядок, что задаёт seedPage');
+  const delRec = forD.records.find(r => r.op === 'del');
+  const survivorRec = forD.records.find(r => r.op === 'put' && r.data.full_name === 'Остаётся');
+  assert.notEqual(delRec, undefined, 'надгробие X обязано попасть в засев — иначе D решит, что X ещё существует');
+  assert.notEqual(survivorRec, undefined, 'и живая строка тоже должна доехать');
+
+  // N2: presence несёт метку от СВОЕГО created_at, а не «сейчас», раздутого
+  // надгробием, прошедшим первым в старом порядке фаз.
+  const stamp = parseStamp(survivorRec.stamp);
+  assert.equal(Math.abs(stamp.ms - Date.parse('2020-01-01T00:00:00Z')) < 2000, true,
+    'метка присутствия обязана нести её собственное время правки: ' + stamp.ms + ' vs ' + Date.parse('2020-01-01T00:00:00Z'));
+
+  // Круглый путь до приёмника: D применяет свою порцию и должна остаться без
+  // X — порядок применения решают метки и надгробия (records.js), не порядок
+  // записей внутри порции.
+  const receiver = fresh();
+  applyBatch(receiver, forD.records, { self: 'D' });
+  assert.equal(receiver.prepare("SELECT 1 FROM patients WHERE full_name = 'X'").get(), undefined, 'X не должен появиться у соседа');
+  assert.notEqual(receiver.prepare("SELECT 1 FROM patients WHERE full_name = 'Остаётся'").get(), undefined, 'живая строка обязана приехать');
+  receiver.close();
   db.close();
 });
 
@@ -259,5 +283,107 @@ test('C3: параметр анализа и границы нормы уезж�
   assert.equal(byParam.WBC.value, '6.2');
   assert.equal(byParam.HGB.ref_low, 120);
   assert.equal(byParam.HGB.ref_high, 160);
+  db.close();
+});
+
+test('C3: круглый путь до приёмника — два аналита приезжают как две строки, а не одна', () => {
+  const db = fresh(); warm(db);
+  const pid = db.prepare("INSERT INTO patients (full_name) VALUES ('И')").run().lastInsertRowid;
+  const vid = db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (?, ?, 'scheduled')").run(pid, '2026-09-02').lastInsertRowid;
+  const sid = db.prepare("INSERT INTO services (name, code, price, type, active) VALUES ('ОАК','S-1',1000,'lab',1)").run().lastInsertRowid;
+  const vsid = db.prepare('INSERT INTO visit_services (visit_id, service_id, quantity) VALUES (?, ?, 1)').run(vid, sid).lastInsertRowid;
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value) VALUES (?, 'HGB', '142')").run(vsid);
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value) VALUES (?, 'WBC', '6.2')").run(vsid);
+
+  const batch = buildBatch(db, { self: 'B', peer: 'C' });
+
+  const receiver = fresh();
+  // Код услуги приёмник уже знает — этим в реальности занимается catalogue.js
+  // (Этап 1); здесь заводим строку руками, ровно так, как её застал бы приём.
+  receiver.prepare("INSERT INTO services (name, code, price, type, active) VALUES ('ОАК','S-1',1000,'lab',1)").run();
+  applyBatch(receiver, batch.records, { self: 'C' });
+
+  const rows = receiver.prepare('SELECT parameter, value FROM lab_results').all();
+  assert.equal(rows.length, 2, 'два аналита обязаны прийти как две строки, а не одна перезаписанная другой');
+  const byParam = Object.fromEntries(rows.map(r => [r.parameter, r.value]));
+  assert.equal(byParam.HGB, '142');
+  assert.equal(byParam.WBC, '6.2');
+  receiver.close();
+  db.close();
+});
+
+// --- ревью Задачи 4 (e3f035f): N1 — надгробия по seq, не по rowid ---
+
+test('N1: возобновлённый курсор фазы надгробий не теряет новую запись после того, как таблица опустела (seq, не rowid)', () => {
+  const db = fresh(); warm(db, 'C');   // тёплый посторонний сосед — есть кому не мешать чистке
+  const id1 = db.prepare("INSERT INTO patients (full_name) VALUES ('Первый')").run().lastInsertRowid;
+  db.prepare('DELETE FROM patients WHERE id = ?').run(id1);   // presence нет ни одного — курсор D сразу в фазе надгробий
+
+  const first = buildBatch(db, { self: 'B', peer: 'D', limit: 1 });
+  assert.equal(first.seed.tbl, 'sync_tombstones', 'без единой presence-строки курсор сразу в фазе надгробий');
+  markSent(db, 'D', first.upto, first.clock, first.seed);
+
+  // Чистка вычищает ВСЕ надгробия разом — таблица пустеет. С обычным rowid
+  // (без AUTOINCREMENT) следующий INSERT получил бы rowid=1 — тот самый номер,
+  // что курсор D уже прошёл.
+  db.prepare('UPDATE sync_tombstones SET at = ?').run(new Date(Date.now() - 61 * 86400000).toISOString());
+  pruneJournal(db);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_tombstones').get().n, 0, 'обе (пока одна) записи старше 60 дней вычищены целиком');
+
+  const id2 = db.prepare("INSERT INTO patients (full_name) VALUES ('Второй')").run().lastInsertRowid;
+  db.prepare('DELETE FROM patients WHERE id = ?').run(id2);   // новое надгробие — родилось ПОСЛЕ чистки
+
+  const second = buildBatch(db, { self: 'B', peer: 'D', limit: 5000 });
+  assert.equal(second.records.some(r => r.op === 'del'), true,
+    'новое надгробие обязано попасть в засев — с переиспользованным rowid курсор молча пропустил бы его');
+  db.close();
+});
+
+// --- N4 — регрессии на защиты, которые до этого проверялись только вручную ---
+
+test('N4: markSent без seed для холодного соседа падает и не заводит строку в sync_peers (I5 — транзакция целиком)', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  assert.throws(() => markSent(db, 'C', 0, null), /without seed info/);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM sync_peers WHERE node = 'C'").get().n, 0,
+    'ошибка обязана откатить ВСЁ — иначе сосед считался бы наполовину заведённым');
+  db.close();
+});
+
+test('N4: markSent без seed для соседа В ПРОЦЕССЕ засева падает и не сдвигает курсор', () => {
+  const db = fresh();
+  for (const n of ['А', 'Б', 'В']) db.prepare('INSERT INTO patients (full_name) VALUES (?)').run(n);
+  const first = buildBatch(db, { self: 'B', peer: 'C', limit: 1 });
+  markSent(db, 'C', first.upto, first.clock, first.seed);
+  const before = db.prepare("SELECT * FROM sync_peers WHERE node = 'C'").get();
+  assert.equal(before.seed_floor != null, true, 'сосед действительно посреди засева');
+
+  const next = buildBatch(db, { self: 'B', peer: 'C', limit: 1 });
+  assert.throws(() => markSent(db, 'C', next.upto, next.clock), /without seed info/);
+  const after = db.prepare("SELECT * FROM sync_peers WHERE node = 'C'").get();
+  assert.deepEqual(after, before, 'ошибка обязана откатить транзакцию целиком — курсор не сдвинулся ни на страницу');
+  db.close();
+});
+
+test('N4: I6 — соседей не осталось после чистки забытых, журнал вычищается целиком', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  db.prepare("INSERT INTO sync_peers (node, sent_seq, last_ok) VALUES ('C', 0, ?)")
+    .run(new Date(Date.now() - 40 * 86400000).toISOString());   // единственный сосед молчит 40 дней
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_journal').get().n > 0, true);
+  pruneJournal(db);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_peers').get().n, 0, 'единственный сосед забыт');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_journal').get().n, 0, 'держать хвост больше некому — I6');
+  db.close();
+});
+
+test('N4: I4 — испорченная дата в журнале не чеканит метку эпохи 1970, а падает на часы вызова', () => {
+  const db = fresh(); warm(db);
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  db.prepare("UPDATE sync_journal SET at = 'garbage' WHERE tbl = 'patients'").run();
+  const batch = buildBatch(db, { self: 'B', peer: 'C', clock: () => 1234 });
+  const rec = batch.records.find(r => r.tbl === 'patients');
+  const stamp = parseStamp(rec.stamp);
+  assert.equal(stamp.ms, 1234, 'NaN от Date.parse("garbage") не должен стать эпохой 1970 — используем часы вызова');
   db.close();
 });

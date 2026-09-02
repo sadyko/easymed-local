@@ -215,14 +215,23 @@ const SEED_PRESENCE_SQL = `
  * ({tbl, uid, seq: 0, at}): buildBatch дальше не различает засев и журнал —
  * put/del решается одним и тем же способом («есть ли сейчас такая строка»).
  *
- * ДВЕ ФАЗЫ СТРОГО ПОСЛЕДОВАТЕЛЬНО: сперва ВСЕ надгробия (ревью Задачи 4, C2),
- * потом присутствующие строки. Так — а не общим списком, перемешанным по
- * времени — потому что надгробие не должно зависеть от того, на какой
- * странице курсор окажется по чистой случайности created_at; «сначала все
- * del» проще читать и проверять, чем «где-то раньше своего put, если он
- * вообще есть». Порядку ДОЛЖНА доверять только эта функция: сторона приёма
- * (records.js) защищена от порядка стампами и надгробиями независимо от
- * того, в каком порядке применяются записи одной порции.
+ * ДВЕ ФАЗЫ СТРОГО ПОСЛЕДОВАТЕЛЬНО: сперва присутствующие строки (по
+ * created_at — реальному времени правки), ПОТОМ все надгробия. Не наоборот
+ * (ревью Задачи 4, N2 — измерено на живом воспроизведении): buildBatch
+ * чеканит метку каждой головы часами HLC, а у HLC пол монотонный и НИКОГДА не
+ * опускается. Надгробие несёт время УДАЛЕНИЯ — почти всегда «только что», то
+ * есть позже любого created_at из присутствий. Пусти его ПЕРВЫМ — и пол,
+ * поднятый этой одной меткой, придавит ВСЕ следующие метки вверх до «сейчас»:
+ * правка 2020 года приехала бы с меткой 2026, и подлинно более новая местная
+ * правка соседа проиграла бы ей слияние (было: без надгробия первым —
+ * P0 2020-01-01 cnt0; с ним первым — всё 2026-09-02). Присутствия по
+ * created_at ASC, потом надгробия (тоже по времени, обычно позже любого
+ * created_at) — это и есть настоящий хронологический порядок правок, и HLC
+ * растёт по нему монотонно САМ, без скачков.
+ *
+ * Порядку ПРИМЕНЕНИЯ на приёме это не мешает: records.js разбирает put/del
+ * по меткам и надгробиям независимо от порядка записей внутри порции — важен
+ * только порядок ЧЕКАНКИ метки, а его задаёт именно эта функция.
  *
  * @param {import('better-sqlite3').Database} db
  * @param {number} limit
@@ -234,26 +243,29 @@ function seedPage(db, limit, cursor) {
   const out = [];
   let next = cursor;
 
-  if (next.tbl == null || next.tbl === TOMB_PHASE) {
-    const startId = next.tbl === TOMB_PHASE ? next.id : 0;
-    const rows = db.prepare(`
-      SELECT tbl, uid, at, rowid AS rid FROM sync_tombstones WHERE rowid > ? ORDER BY rowid LIMIT ?
-    `).all(startId, limit);
+  if (next.tbl !== TOMB_PHASE) {
+    const rank = next.tbl ? TABLE_RANK[next.tbl] : -1;
+    const rows = db.prepare(SEED_PRESENCE_SQL).all({ at: next.at || '', rank, id: next.id || 0, limit });
     for (const r of rows) out.push({ tbl: r.tbl, uid: r.uid, seq: 0, at: r.at });
-    // rows.length === limit — страница заполнена целиком надгробиями, дальше
-    // ещё могут быть; курсор остаётся в этой фазе. rows.length < limit (в том
-    // числе 0) — надгробия ТОЧНО исчерпаны (запрошено limit, получено меньше),
-    // переходим к присутствиям с нуля — в этой же странице, если бюджет остался.
+    // rows.length === limit — страница заполнена целиком присутствиями,
+    // дальше ещё могут быть; курсор остаётся в этой фазе. rows.length < limit
+    // (в том числе 0) — присутствия ТОЧНО исчерпаны, переходим к надгробиям
+    // с нуля — в этой же странице, если бюджет остался.
     next = rows.length === limit
-      ? { tbl: TOMB_PHASE, at: '', id: rows[rows.length - 1].rid }
-      : { tbl: '', at: '', id: 0 };
+      ? { tbl: rows[rows.length - 1].tbl, at: rows[rows.length - 1].at, id: rows[rows.length - 1].id }
+      : { tbl: TOMB_PHASE, at: '', id: 0 };
   }
 
-  if (out.length < limit && next.tbl !== TOMB_PHASE) {
-    const rank = next.tbl ? TABLE_RANK[next.tbl] : -1;
-    const rows = db.prepare(SEED_PRESENCE_SQL).all({ at: next.at, rank, id: next.id, limit: limit - out.length });
+  if (out.length < limit && next.tbl === TOMB_PHASE) {
+    // seq, а не rowid (ревью Задачи 4, N1 — воспроизведено ревью): rowid без
+    // AUTOINCREMENT переиспользуется, как только pruneJournal вычищает
+    // sync_tombstones целиком, и курсор соседа, остановившийся посреди этой
+    // фазы, молча пропускает новое надгробие с переиспользованным номером.
+    const rows = db.prepare(`
+      SELECT tbl, uid, at, seq FROM sync_tombstones WHERE seq > ? ORDER BY seq LIMIT ?
+    `).all(next.id, limit - out.length);
     for (const r of rows) out.push({ tbl: r.tbl, uid: r.uid, seq: 0, at: r.at });
-    if (rows.length) next = { tbl: rows[rows.length - 1].tbl, at: rows[rows.length - 1].at, id: rows[rows.length - 1].id };
+    if (rows.length) next = { tbl: TOMB_PHASE, at: '', id: rows[rows.length - 1].seq };
   }
 
   // out.length < limit (а не «обе фазы явно исчерпаны») — значит, ровно
