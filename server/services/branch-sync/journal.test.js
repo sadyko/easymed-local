@@ -128,3 +128,15 @@ test('деньги из visit_services не уезжают', () => {
   assert.equal(rec.refs.visit_id.length, 32, 'родитель — по uid, локальный id у соседа другой');
   db.close();
 });
+
+test('услуга уезжает КОДОМ справочника, а не своим локальным id', () => {
+  const db = fresh(); warm(db);
+  const pid = db.prepare("INSERT INTO patients (full_name) VALUES ('И')").run().lastInsertRowid;
+  const vid = db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (?, ?, 'scheduled')").run(pid, '2026-09-02').lastInsertRowid;
+  const sid = db.prepare("INSERT INTO services (name, code, price, type, active) VALUES ('Анализ','S-9',1000,'lab',1)").run().lastInsertRowid;
+  db.prepare('INSERT INTO visit_services (visit_id, service_id, quantity) VALUES (?, ?, 1)').run(vid, sid);
+  const rec = buildBatch(db, { self: 'B', peer: 'C' }).records.find(r => r.tbl === 'visit_services');
+  assert.equal(rec.data.service_id, undefined, 'id услуги у соседа означал бы ДРУГУЮ услугу');
+  assert.equal(rec.refs.service_code, 'S-9', 'справочник синхронизирует catalogue.js — общее у обеих сторон только код');
+  db.close();
+});

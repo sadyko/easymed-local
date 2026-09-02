@@ -30,6 +30,19 @@ export const REFS = {
   lab_results: { visit_service_id: 'visit_services' },
 };
 
+// Ссылки на СПРАВОЧНИК — не по uid, а по коду. services синхронизирует
+// catalogue.js (Этап 1), у него своя карта соответствий и никакого uid; id
+// одной и той же услуги в двух филиалах разный, поэтому visit_services.service_id
+// не может уехать как есть. Код услуги — то единственное, что у обеих сторон
+// одинаково (catalogue.js усыновляет местную строку по natural: ['code','name']).
+// Без этой ссылки принятая строка лабораторной очереди приезжала бы БЕЗ услуги:
+// в очереди появляется работа, о которой неизвестно, что это за анализ.
+//
+//   колонка → { table, key, ref } — ref это имя поля в refs записи.
+export const CODE_REFS = {
+  visit_services: { service_id: { table: 'services', key: 'code', ref: 'service_code' } },
+};
+
 const TABLES = Object.keys(SHIPPED);
 
 /**
@@ -99,6 +112,14 @@ export function buildBatch(db, { self, peer, limit = 5000, clock: clockFn = Date
       if (pid == null) continue;
       const p = db.prepare(`SELECT uid FROM ${parent} WHERE id = ?`).get(pid);
       if (p) refs[col] = p.uid;
+    }
+    for (const [col, spec] of Object.entries(CODE_REFS[h.tbl] || {})) {
+      const pid = row[col];
+      if (pid == null) continue;
+      const p = db.prepare(`SELECT ${spec.key} AS k FROM ${spec.table} WHERE id = ?`).get(pid);
+      // Услуга без кода не едет вовсе: приёмник опознаёт её ТОЛЬКО по коду, а
+      // подобрать «похожую по названию» значило бы привязать чужую работу.
+      if (p && p.k) refs[spec.ref] = p.k;
     }
 
     records.push({ tbl: h.tbl, uid: h.uid, op: 'put', stamp: clock.stamp, data, refs, origin: self });
