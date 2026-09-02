@@ -23,7 +23,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, checkField } from '../ui.js';
-import { getLang, tr } from '../i18n.js';
+import { getLang, tr, trf } from '../i18n.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
 // ROLES_EDITOR_V2 — «Роли» — свой файл экрана (views/roles-editor.js). Он жил
 // здесь и тянул за собой NAV_MODULES; вынесен по конвенции «один файл на
@@ -56,6 +56,7 @@ async function repaint() {
     if (state.section === 'roles') await renderRolesEditor(refs.container, { onBack: backToHub });
     else if (state.section) await renderEditor(refs.container, state.section);
     else renderHub(refs.container);
+    if (!state.section) paintUpdateStatus();   // UPDATE_STATUS_ROW_V1
 }
 
 function openSection(key) { state.section = key; repaint(); }
@@ -237,7 +238,7 @@ const GROUPS = [
             //   Система        → 'updates'      (версия + «что нового»)
             //   Подписка       → 'subscription' (состояние подписки + модули)
             //   Данные клиники → 'clinic-data'  (копии + опасная зона)
-            { label: 'Система',             desc: 'Версия системы и что нового в последнем обновлении', icon: 'Shield', live: true, action: nav('updates') },
+            { label: 'Система',             desc: 'Версия системы и что нового в последнем обновлении', icon: 'Shield', live: true, action: nav('updates'), statusKey: 'update' },   // UPDATE_STATUS_ROW_V1
             // «Подписка» — теперь собственный экран, но карточка внутри него
             // ТА ЖЕ САМАЯ (views/system-subscription.js): экран её импортирует,
             // а не копирует. Второй копии подписки в системе нет.
@@ -366,9 +367,13 @@ function buildItemRow(item) {
     // Both lines ellipsize, and at three columns there is less room to do it in —
     // so each carries its full text as a tooltip rather than being unreadable.
     const desc = item.live ? item.desc : 'Раздел скоро будет доступен';
+    // UPDATE_STATUS_ROW_V1 — строка «Система» несёт живой статус обновления,
+    // чтобы не нужно было открывать экран ради ответа «а мы обновлены?».
+    const descEl = h('div', { class: 'set-row-desc', title: desc }, desc);
+    if (item.statusKey === 'update') descEl.setAttribute('data-update-status', '1');
     const text = h('div', { class: 'set-row-txt' },
         h('div', { class: 'set-row-name', title: item.label }, name),
-        h('div', { class: 'set-row-desc', title: desc }, desc),
+        descEl,
     );
 
     if (!item.live) return h('div', { class: 'set-row set-row-soon' }, chip, text);
@@ -385,6 +390,64 @@ function buildItemRow(item) {
     return row;
 }
 
+
+// UPDATE_STATUS_ROW_V1 — статус обновления прямо в строке «Система».
+//
+// Механика обновления есть давно (update_status + экран views/updates.js), но
+// узнать «мы обновлены или нет» можно было ТОЛЬКО открыв экран. Здесь тот же
+// RPC зовётся один раз при отрисовке хаба и переписывает подпись строки.
+//
+// Ошибку глотаем молча: это подпись в списке настроек, а не операция. Если
+// сервер не ответил (нет сети до control plane, роль без прав), строка просто
+// остаётся со своим обычным описанием — лучше, чем «ошибка» там, где человек
+// искал версию.
+async function paintUpdateStatus() {
+    const el = refs.container && refs.container.querySelector('[data-update-status]');
+    if (!el) return;
+    let d;
+    try {
+        const res = await supabase.rpc('update_status', {});
+        if (res.error) return;
+        d = res.data;
+    } catch (e) { return; }
+    if (!d) return;
+
+    const ver = d.current_version ? trf('Версия {v}', { v: d.current_version }) : '';
+    const parts = [ver];
+    let kind = '';
+    // Запись прогресса несёт phase/bytes/total (см. control/update-progress.js),
+    // а НЕ state/percent — процент считаем сами и только когда известен размер.
+    const LIVE = ['downloading', 'verifying', 'unpacking', 'snapshot', 'switching'];
+    const prog = d.progress;
+    if (prog && LIVE.indexOf(prog.phase) !== -1) {
+        // Идёт прямо сейчас — это важнее всего остального в строке.
+        const pct = (prog.total > 0 && prog.bytes >= 0)
+            ? Math.min(100, Math.round(prog.bytes / prog.total * 100)) : null;
+        parts.push(pct != null
+            ? trf('обновление устанавливается — {n}%', { n: pct })
+            : tr('обновление устанавливается'));
+        kind = 'busy';
+    } else if (prog && prog.phase === 'failed') {
+        parts.push(tr('последнее обновление не установилось'));
+        kind = 'fail';
+    } else if (d.offer && d.offer.version && d.offer.version !== d.current_version) {
+        parts.push(d.approved
+            ? trf('запланировано обновление до {v}', { v: d.offer.version })
+            : trf('доступно обновление до {v}', { v: d.offer.version }));
+        kind = d.approved ? 'busy' : 'offer';
+    } else if (d.last_result && d.last_result.ok === false) {
+        parts.push(tr('последнее обновление не установилось'));
+        kind = 'fail';
+    } else if (d.current_version) {
+        parts.push(tr('актуальная версия'));
+        kind = 'ok';
+    }
+    const line = parts.filter(Boolean).join(' · ');
+    if (!line) return;
+    el.textContent = line;
+    el.setAttribute('title', line);
+    if (kind) el.setAttribute('data-update-kind', kind);
+}
 // -----------------------------------------------------------------------------
 // LOOKUP EDITOR — shared, config-driven CRUD.
 //   field types: text | number | select (static options) | fk (async options)

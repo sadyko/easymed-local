@@ -4304,3 +4304,10 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .rs-bedrow .btn[disabled]{ opacity:.45; cursor:not-allowed; }
 .rs-bedadd{ display:flex; gap:8px; align-items:center; margin-top:8px; }
 .rs-bedadd__inp{ width:88px; }
+
+/* UPDATE_STATUS_ROW_V1 — статус обновления в строке «Система». Цвет несёт
+   смысл, но не единственный: сам текст говорит то же самое словами, поэтому
+   строка читается и в чёрно-белой печати, и при дальтонизме. */
+.set-row-desc[data-update-kind="offer"]{ color:var(--primary-700); font-weight:600; }
+.set-row-desc[data-update-kind="busy"]{ color:var(--warn-700, #9a6b00); font-weight:600; }
+.set-row-desc[data-update-kind="fail"]{ color:var(--crit-700, #96271b); font-weight:600; }

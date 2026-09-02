@@ -5855,4 +5855,13 @@ export const STRINGS = {
   "40 мм": {"en":"40 mm","ru":"40 мм","uz":"40 mm"},
   "58 мм": {"en":"58 mm","ru":"58 мм","uz":"58 mm"},
   "80 мм": {"en":"80 mm","ru":"80 мм","uz":"80 mm"},
+
+  // UPDATE_STATUS_ROW_V1 — статус обновления в строке «Система».
+  "Версия {v}": {"en":"Version {v}","ru":"Версия {v}","uz":"Versiya {v}"},
+  "актуальная версия": {"en":"up to date","ru":"актуальная версия","uz":"so'nggi versiya"},
+  "доступно обновление до {v}": {"en":"update to {v} available","ru":"доступно обновление до {v}","uz":"{v} gacha yangilanish mavjud"},
+  "запланировано обновление до {v}": {"en":"update to {v} scheduled","ru":"запланировано обновление до {v}","uz":"{v} gacha yangilanish rejalashtirilgan"},
+  "обновление устанавливается": {"en":"update installing","ru":"обновление устанавливается","uz":"yangilanish o'rnatilmoqda"},
+  "обновление устанавливается — {n}%": {"en":"update installing - {n}%","ru":"обновление устанавливается — {n}%","uz":"yangilanish o'rnatilmoqda - {n}%"},
+  "последнее обновление не установилось": {"en":"the last update did not install","ru":"последнее обновление не установилось","uz":"oxirgi yangilanish o'rnatilmadi"},
 };
