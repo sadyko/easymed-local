@@ -201,6 +201,13 @@ test('смена группы стирает карту соответствий
 
 // Учётка резервного канала выписывается у поставщика по сети. В этих тестах
 // сети нет: подставляем выписку, чтобы проверять СВОЙ код, а не чужой сервер.
+// BRANCH_ENROLL_REPAIR_V1 - stub for the control plane. Needed wherever a test
+// is about the RELAY and not about the activation code: without it
+// createBranchOnControlPlane goes OUT TO THE NETWORK, to the live
+// settings.easymed.uz, and the test's result starts depending on someone
+// else's server and on there being internet at all.
+const cpOk = async () => ({ ok: true, enrollment_code: 'EM-TEST-0001', clinic_id: 'c-1-b1' });
+
 const mintOk = async () => ({ ok: true, token: 'relay-tok-1', relay_id: 'a'.repeat(32) });
 const mintOk2 = async () => ({ ok: true, token: 'relay-tok-2', relay_id: 'b'.repeat(32) });
 const mintOffline = async () => ({ ok: false, reason: 'relay_offline' });
@@ -229,7 +236,7 @@ test('список филиалов даёт имя, букву и ключ, а 
 test('ключ филиала читается сколько угодно раз и не меняется — это и просил владелец', async () => {
   inDir('permanent');
   const db = asMain();
-  const added = await branchSyncAddBranch(db, { name: 'Чиланзар' }, admin, { mintImpl: mintOk });
+  const added = await branchSyncAddBranch(db, { name: 'Чиланзар' }, admin, { mintImpl: mintOk, branchImpl: cpOk });
   assert.equal(added.ok, true);
   assert.equal(added.branch.letter, 'B', 'A занята главным филиалом ещё миграцией 080');
   assert.ok(added.branch.key, 'ключ выдаётся сразу, а не «покажется один раз»');
@@ -255,7 +262,7 @@ test('ключ филиала читается сколько угодно ра�
 test('буква тратится безвозвратно, поэтому двойное нажатие ловится по названию', async () => {
   inDir('dup');
   const db = asMain();
-  await branchSyncAddBranch(db, { name: 'Юнусабад' }, admin, { mintImpl: mintOk });
+  await branchSyncAddBranch(db, { name: 'Юнусабад' }, admin, { mintImpl: mintOk, branchImpl: cpOk });
   await assert.rejects(
     () => branchSyncAddBranch(db, { name: 'юнусабад' }, admin, { mintImpl: mintOk }),
     (e) => e.message === reasonText('branch_duplicate_name'),
@@ -272,7 +279,7 @@ test('без интернета филиал всё равно заводитс�
   // сделать офлайновую клинику заложником чужого сервера.
   inDir('offline-mint');
   const db = asMain();
-  const added = await branchSyncAddBranch(db, { name: 'Себзар' }, admin, { mintImpl: mintOffline });
+  const added = await branchSyncAddBranch(db, { name: 'Себзар' }, admin, { mintImpl: mintOffline, branchImpl: cpOk });
   assert.equal(added.ok, true);
   assert.ok(added.branch.key, 'ключ выдан');
   assert.equal(added.relay.ok, false);
@@ -293,7 +300,7 @@ test('филиал без буквы — не тупик: ключ ему выд
   assert.equal(before.letter, null);
   assert.equal(before.key, null);
 
-  const issued = await branchSyncBranchKey(db, { branch_id: id }, admin, { mintImpl: mintOk });
+  const issued = await branchSyncBranchKey(db, { branch_id: id }, admin, { mintImpl: mintOk, branchImpl: cpOk });
   assert.equal(issued.branch.letter, 'B');
   assert.equal(parseKey(issued.branch.key).letter, 'B');
   db.close();
@@ -409,7 +416,7 @@ test('после перевыпуска ключа филиал ВИДНО и д
   fs.writeFileSync(path.join(dir, 'control.json'),
     JSON.stringify({ clinic_id: 'c-1', install_token: 'tok-AAAA' }));
   const db = asMain();
-  const added = await branchSyncAddBranch(db, { name: 'Чиланзар' }, admin, { mintImpl: mintOk });
+  const added = await branchSyncAddBranch(db, { name: 'Чиланзар' }, admin, { mintImpl: mintOk, branchImpl: cpOk });
   assert.equal(parseKey(added.branch.key).relay_token, 'relay-tok-1');
 
   branchSyncRegenerateKey(db, {}, admin);
@@ -422,7 +429,7 @@ test('после перевыпуска ключа филиал ВИДНО и д
   assert.equal(branchRows(after).find((r) => r.id === row.id).state, 'key_no_relay');
 
   // И лекарство работает: тот же вызов выписывает учётку заново.
-  const fixed = await branchSyncBranchKey(db, { branch_id: row.id }, admin, { mintImpl: mintOk2 });
+  const fixed = await branchSyncBranchKey(db, { branch_id: row.id }, admin, { mintImpl: mintOk2, branchImpl: cpOk });
   assert.equal(fixed.relay.ok, true);
   assert.equal(parseKey(fixed.branch.key).relay_token, 'relay-tok-2');
   const healed = branchSyncBranches(db, {}, admin);
@@ -439,7 +446,7 @@ test('филиал, заведённый без интернета, получа
   fs.writeFileSync(path.join(dir, 'control.json'),
     JSON.stringify({ clinic_id: 'c-1', install_token: 'tok-AAAA' }));
   const db = asMain();
-  const added = await branchSyncAddBranch(db, { name: 'Себзар' }, admin, { mintImpl: mintOffline });
+  const added = await branchSyncAddBranch(db, { name: 'Себзар' }, admin, { mintImpl: mintOffline, branchImpl: cpOk });
   assert.equal(added.relay.ok, false);
   assert.equal(parseKey(added.branch.key).relay_token, null);
 
@@ -447,7 +454,7 @@ test('филиал, заведённый без интернета, получа
   assert.equal(branchRows(before).find((r) => r.id === added.branch.id).state, 'key_no_relay',
     'экран обязан показать кнопку, иначе филиал остаётся без канала навсегда');
 
-  const fixed = await branchSyncBranchKey(db, { branch_id: added.branch.id }, admin, { mintImpl: mintOk });
+  const fixed = await branchSyncBranchKey(db, { branch_id: added.branch.id }, admin, { mintImpl: mintOk, branchImpl: cpOk });
   assert.equal(parseKey(fixed.branch.key).relay_token, 'relay-tok-1');
   db.close();
 });
@@ -457,7 +464,7 @@ test('неактивированной клинике кнопку не пока
   // кнопка отказывала бы всегда.
   inDir('no-enrol');
   const db = asMain();
-  const added = await branchSyncAddBranch(db, { name: 'Мирзо' }, admin, { mintImpl: mintOffline });
+  const added = await branchSyncAddBranch(db, { name: 'Мирзо' }, admin, { mintImpl: mintOffline, branchImpl: cpOk });
   const list = branchSyncBranches(db, {}, admin);
   assert.equal(list.can_relay, false);
   assert.equal(branchRows(list).find((r) => r.id === added.branch.id).state, 'key');
@@ -470,7 +477,7 @@ test('перевыпуск ключа синхронизации гасит и �
   // 401 вместо честного «учётки нет».
   inDir('regen');
   const db = asMain();
-  const added = await branchSyncAddBranch(db, { name: 'Мирзо' }, admin, { mintImpl: mintOk });
+  const added = await branchSyncAddBranch(db, { name: 'Мирзо' }, admin, { mintImpl: mintOk, branchImpl: cpOk });
   assert.equal(parseKey(added.branch.key).relay_token, 'relay-tok-1');
 
   assert.equal(branchSyncRegenerateKey(db, {}, admin).ok, true);
@@ -583,5 +590,45 @@ test('БЕЗ СЛУЖЕБНОЙ ЗАПИСИ УСТАНОВКА НЕ РАЗДА�
   assert.equal(st.role, 'none');
   const list = branchSyncBranches(db, {}, admin);
   assert.equal(list.can_issue, false, 'кнопок выдачи не показываем: они откажут всегда');
+  db.close();
+});
+
+// BRANCH_ENROLL_REPAIR_V1 — филиал, заведённый при недоступном Easy-Med,
+// чинится кнопкой, а не новой буквой.
+//
+// Ровно то положение, в котором владелец оказался 2026-09-02: control plane не
+// умел заводить филиалы (404 на /cp/v1/branch), ключ выписался без кода
+// активации, и филиал им активировать было нельзя. Код запрашивался только при
+// заведении строки, поэтому единственным «лекарством» оставалось завести филиал
+// заново — то есть потратить ещё одну букву, а буквы не возвращаются.
+test('ключ без кода активации дочиняется на месте, не тратя новую букву', async () => {
+  const dir = inDir('enroll-repair');
+  fs.writeFileSync(path.join(dir, 'control.json'),
+    JSON.stringify({ clinic_id: 'c-1', install_token: 'tok-AAAA' }));
+  const db = asMain();
+
+  // Easy-Med недоступен: строка заводится, ключ выписывается, кода в нём нет.
+  const down = async () => ({ ok: false, reason: 'branch_offline' });
+  const added = await branchSyncAddBranch(db, { name: 'Чиланзар' }, admin,
+    { mintImpl: mintOk, branchImpl: down });
+  const letterBefore = added.branch.letter;
+  assert.equal(parseKey(added.branch.key).enroll_code, null, 'кода в ключе нет — это и есть поломка');
+
+  // Easy-Med вернулся. Та же кнопка на той же строке.
+  const up = async () => ({ ok: true, enrollment_code: 'EM-REPAIR-01', clinic_id: 'c-1-b1' });
+  const fixed = await branchSyncBranchKey(db, { branch_id: added.branch.id }, admin,
+    { mintImpl: mintOk, branchImpl: up });
+
+  assert.equal(fixed.enroll.ok, true);
+  assert.equal(parseKey(fixed.branch.key).enroll_code, 'EM-REPAIR-01', 'код теперь внутри ключа');
+  assert.equal(fixed.branch.letter, letterBefore, 'буква та же — новая не потрачена');
+
+  // И повторное нажатие никуда не ходит: код уже есть.
+  let calls = 0;
+  const countUp = async () => { calls += 1; return { ok: true, enrollment_code: 'EM-OTHER' }; };
+  const again = await branchSyncBranchKey(db, { branch_id: added.branch.id }, admin,
+    { mintImpl: mintOk, branchImpl: countUp });
+  assert.equal(calls, 0, 'у строки с кодом лекарство не тревожит Easy-Med');
+  assert.equal(parseKey(again.branch.key).enroll_code, 'EM-REPAIR-01', 'и код не подменяется');
   db.close();
 });

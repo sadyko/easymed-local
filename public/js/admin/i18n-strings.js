@@ -5893,4 +5893,9 @@ export const STRINGS = {
   "Не удалось синхронизировать.": {"en":"Could not synchronise.","ru":"Не удалось синхронизировать.","uz":"Sinxronlab bo'lmadi."},
   "Дополнительно": {"en":"More","ru":"Дополнительно","uz":"Qo'shimcha"},
   "Копия шифруется здесь: включите канал — на сервер ляжет блоб, который там не прочитать.": {"en":"The copy is encrypted here: switch the channel on and the server receives a blob it cannot read.","ru":"Копия шифруется здесь: включите канал — на сервер ляжет блоб, который там не прочитать.","uz":"Nusxa shu yerda shifrlanadi: kanalni yoqsangiz, serverga u o'qiy olmaydigan blob tushadi."},
+
+  // BRANCH_ENROLL_REPAIR_V1 — ключ без кода активации и его лечение.
+  "Без кода активации": {"en":"No activation code","ru":"Без кода активации","uz":"Faollashtirish kodisiz"},
+  "Получить код": {"en":"Get the code","ru":"Получить код","uz":"Kodni olish"},
+  "Код получен — передайте филиалу ключ заново.": {"en":"The code is in. Give the branch its key again.","ru":"Код получен — передайте филиалу ключ заново.","uz":"Kod olindi - filialga kalitni qayta bering."},
 };

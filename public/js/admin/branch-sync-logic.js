@@ -381,6 +381,14 @@ export function branchRows(status) {
     const key = typeof row.key === 'string' && row.key ? row.key : null;
     let state;
     if (row.is_self) state = 'self';
+    // BRANCH_ENROLL_REPAIR_V1 — отсутствие КОДА АКТИВАЦИИ проверяется раньше
+    // резервного канала, потому что тяжелее: без канала филиал работает и
+    // просто не имеет запасного пути, а без кода он не запускается вообще.
+    // canRelay здесь по той же причине, что и ниже: код активации филиалу
+    // выписывает Easy-Med по install_token главной клиники. Неактивированной
+    // клинике выписывать нечем, и метка «Без кода активации» с кнопкой стала
+    // бы обвинением, на которое человек не может ответить.
+    else if (key && canRelay && row.has_enroll_code === false) state = 'key_no_enroll';
     else if (key) state = (canRelay && row.has_relay_token === false) ? 'key_no_relay' : 'key';
     else if (!letter) state = 'no_letter';
     else state = 'no_key';
@@ -398,16 +406,23 @@ export function branchRows(status) {
       // Что стоит вместо ключа, когда ключа нет: пара слов, не абзац.
       keyStatus: KEY_CELL[state] || null,
       // Метка вместо трёх строк: почему у рабочего ключа всё же не всё хорошо.
-      warnTag: state === 'key_no_relay' ? 'Без резервного канала' : null,
+      warnTag: WARN_TAG[state] || null,
       action: rowAction(state, canIssue),
     };
   });
 }
 
+// Метка у рабочего с виду ключа: чем именно он неполон.
+const WARN_TAG = {
+  key_no_relay: 'Без резервного канала',
+  key_no_enroll: 'Без кода активации',
+};
+
 const KEY_CELL = {
   self: null,
   key: null,
   key_no_relay: null,
+  key_no_enroll: null,
   no_letter: 'Буквы и ключа ещё нет',
   no_key: 'Нужен адрес для филиалов',
 };
@@ -437,6 +452,11 @@ function rowAction(state, canIssue) {
   if (state === 'key_no_relay') {
     return { label: 'Выдать доступ', confirmLetter: false, done: RELAY_ACCESS_ISSUED };
   }
+  // BRANCH_ENROLL_REPAIR_V1 — тот же вызов дочиняет и код активации, поэтому
+  // кнопка та же, а обещание другое: этим ключом филиал наконец запустится.
+  if (state === 'key_no_enroll') {
+    return { label: 'Получить код', confirmLetter: false, done: ENROLL_CODE_ISSUED };
+  }
   return null;
 }
 
@@ -447,6 +467,12 @@ function rowAction(state, canIssue) {
  * когда её надо выполнить.
  */
 export const RELAY_ACCESS_ISSUED = 'Доступ выписан — передайте филиалу ключ заново.';
+
+/**
+ * Код активации добрался до ключа. Передать ключ заново — обязательно: тот, что
+ * у филиала на руках, активировать по-прежнему не может.
+ */
+export const ENROLL_CODE_ISSUED = 'Код получен — передайте филиалу ключ заново.';
 
 /**
  * Почему список без ключей — про УСТАНОВКУ, а не про отдельный филиал.

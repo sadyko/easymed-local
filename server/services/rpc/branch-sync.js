@@ -663,6 +663,9 @@ function branchRow(db, pairing, branch, selfId) {
     // работает), и для этого достаточно факта. Значение уезжает только внутри
     // ключа.
     has_relay_token: !!getState(db, branchTokenKey(branch.id)),
+    // BRANCH_ENROLL_REPAIR_V1 — без этого экран не мог показать самую тяжёлую
+    // из поломок: ключ выглядит исправным, а филиал им не активируется.
+    has_enroll_code: !!getState(db, branchEnrollKey(branch.id)),
   };
 }
 
@@ -764,7 +767,9 @@ export async function branchSyncAddBranch(db, args, user, { mintImpl = mintRelay
  * ничего не знает. Без этого вызова такая строка осталась бы в списке навсегда
  * без ключа и без способа его получить.
  */
-export async function branchSyncBranchKey(db, args, user, { mintImpl = mintRelayToken } = {}) {
+export async function branchSyncBranchKey(db, args, user, {
+  mintImpl = mintRelayToken, branchImpl = createBranchOnControlPlane,
+} = {}) {
   requireAdmin(user);
   const dataDir = getDataDir();
   const pairing = readPairing(dataDir);
@@ -807,7 +812,24 @@ export async function branchSyncBranchKey(db, args, user, { mintImpl = mintRelay
   }
 
   const relay = await ensureBranchToken(db, dataDir, branch.id, mintImpl);
-  return { ok: true, branch: branchRow(db, pairing, branch, me.branch_id), relay };
+
+  // BRANCH_ENROLL_REPAIR_V1 — код активации добирается и СТАРОЙ строке, а не
+  // только новорождённой.
+  //
+  // Раньше код запрашивался ровно один раз — при заведении филиала. Если в ту
+  // секунду Easy-Med был недоступен (а он был недоступен всё время, пока
+  // control plane не умел заводить филиалы), строка оставалась с ключом без
+  // кода НАВСЕГДА. Починить это можно было только одним способом: завести
+  // филиал заново — то есть потратить ещё одну букву, которых конечное число
+  // и которые не возвращаются (см. letters.js). Владелец 2026-09-02 упёрся
+  // ровно в это.
+  //
+  // ensureBranchEnroll идемпотентен: у строки с кодом он ничего не делает и
+  // никуда не ходит. Поэтому кнопка на строке филиала теперь и выдаёт доступ,
+  // и дочиняет то, что не получилось в прошлый раз.
+  const enroll = await ensureBranchEnroll(db, dataDir, branch.id, branch.name, branchImpl);
+
+  return { ok: true, branch: branchRow(db, pairing, branch, me.branch_id), relay, enroll };
 }
 
 /**

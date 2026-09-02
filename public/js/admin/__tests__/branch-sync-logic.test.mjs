@@ -501,3 +501,31 @@ test('установке, потерявшей свою запись, сказа
   assert.match(IDENTITY_UNKNOWN_NOTE, /регистрир/i);
   assert.match(IDENTITY_UNKNOWN_NOTE, /резервной копии/i);
 });
+
+// BRANCH_ENROLL_REPAIR_V1 — ключ, которым нельзя активироваться, обязан
+// выглядеть иначе, чем исправный. Владелец 2026-09-02 смотрел на строку без
+// единого признака беды и узнал о ней только на экране активации филиала — то
+// есть в другом здании, от другого человека, по телефону.
+test('ключ без кода активации помечен и предлагает лекарство', () => {
+  const rows = branchRows({
+    can_issue: true,
+    can_relay: true,
+    branches: [{ id: 2, name: 'dilmirod clinic', letter: 'B', key: 'EMB2-x',
+                 has_relay_token: true, has_enroll_code: false }],
+  });
+  assert.equal(rows[0].state, 'key_no_enroll');
+  assert.equal(rows[0].warnTag, 'Без кода активации');
+  assert.equal(rows[0].action.label, 'Получить код');
+  assert.equal(rows[0].action.confirmLetter, false, 'лекарство не тратит букву');
+});
+
+test('нет и кода, и канала — говорится про код: без него филиал не запустится вовсе', () => {
+  const rows = branchRows({
+    can_issue: true,
+    can_relay: true,
+    branches: [{ id: 3, name: 'Ф', letter: 'C', key: 'EMB2-y',
+                 has_relay_token: false, has_enroll_code: false }],
+  });
+  assert.equal(rows[0].warnTag, 'Без кода активации',
+    'без канала филиал работает, без кода — не начинает работать');
+});
