@@ -139,6 +139,7 @@ export const STRINGS = {
   "Назначьте один компьютер главным, на остальных введите его ключ подключения.": {"en":"Make one computer the main branch and enter its connection key on the others.","ru":"Назначьте один компьютер главным, на остальных введите его ключ подключения.","uz":"Bitta kompyuterni bosh filial qiling, qolganlarida uning ulanish kalitini kiriting."},
   "{message} (попытка {when}). Последний раз получилось: {last} ({route}).": {"en":"{message} (attempt {when}). It last worked: {last} ({route}).","ru":"{message} (попытка {when}). Последний раз получилось: {last} ({route}).","uz":"{message} ({when} dagi urinish). Oxirgi marta ishlagani: {last} ({route})."},
   "{message} (попытка {when}).": {"en":"{message} (attempt {when}).","ru":"{message} (попытка {when}).","uz":"{message} ({when} dagi urinish)."},
+  "{message} (синхронизация {when}).": {"en":"{message} (sync {when}).","ru":"{message} (синхронизация {when}).","uz":"{message} (sinxronlash {when})."},
   "Синхронизировано {when} — {route}. {changes}": {"en":"Synchronised {when} — {route}. {changes}","ru":"Синхронизировано {when} — {route}. {changes}","uz":"{when} da sinxronlandi — {route}. {changes}"},
   "Синхронизировано {when} — {route}. Копия главного филиала от {copy}. {changes}": {"en":"Synchronised {when} — {route}. Main-branch copy from {copy}. {changes}","ru":"Синхронизировано {when} — {route}. Копия главного филиала от {copy}. {changes}","uz":"{when} da sinxronlandi — {route}. Bosh filial nusxasi {copy} dan. {changes}"},
   "Не удалось синхронизироваться.": {"en":"Could not synchronise.","ru":"Не удалось синхронизироваться.","uz":"Sinxronlab bo'lmadi."},
@@ -5891,6 +5892,7 @@ export const STRINGS = {
   // BRANCH_SYNC_HOURLY_V1 — кнопка «Синхронизация» у стойки и в лаборатории.
   "Синхронизация": {"en":"Synchronise","ru":"Синхронизация","uz":"Sinxronlash"},
   "Забрать данные других филиалов": {"en":"Fetch data from the other branches","ru":"Забрать данные других филиалов","uz":"Boshqa filiallar ma'lumotini olish"},
+  "Обменяться данными с другими филиалами": {"en":"Exchange data with the other branches","ru":"Обменяться данными с другими филиалами","uz":"Boshqa filiallar bilan ma'lumot almashish"},
   "Данные обновлены": {"en":"The data is up to date","ru":"Данные обновлены","uz":"Ma'lumotlar yangilandi"},
   "Новых данных нет": {"en":"There is nothing new","ru":"Новых данных нет","uz":"Yangi ma'lumot yo'q"},
   "Не удалось синхронизировать.": {"en":"Could not synchronise.","ru":"Не удалось синхронизировать.","uz":"Sinxronlab bo'lmadi."},

@@ -177,6 +177,27 @@ export function syncLine(status, translate = ID) {
   }
 
   const rec = okRec || attempt;
+
+  // BRANCH_MAIN_PUSH_V1 — УСПЕХ ГЛАВНОЙ КЛИНИКИ РАССКАЗЫВАЕТ СЕРВЕР.
+  //
+  // Всё, что ниже, описывает ПРИНЯТЫЙ справочник: путь, возраст копии,
+  // перечень изменений. У главной клиники ничего этого нет и быть не может —
+  // она справочник не принимает, а раздаёт, — поэтому её удачное нажатие
+  // рисовалось строкой «Синхронизировано … — напрямую. Изменений не было —
+  // справочник уже совпадает.», то есть отчётом о пустом действии ровно там,
+  // где копия ушла на сервер, а записи соседей приехали.
+  //
+  // Фраза берётся с сервера целиком (reasonText в rpc/branch-sync.js): она
+  // несёт размер копии и числа записей, то есть то, чего экран не знает.
+  // Через словарь она не проходит — известная дыра, отмеченная выше.
+  if (rec && rec.ok === true && typeof rec.message === 'string' && rec.message) {
+    return {
+      tone: 'ok',
+      template: '{message} (синхронизация {when}).',
+      params: { message: rec.message, when: whenLabel(rec.at) },
+    };
+  }
+
   const route = routeLabel(rec, translate);
   const changes = changesLabel(rec, translate);
   // Возраст копии договаривается только для резервного пути, и это не
@@ -346,6 +367,67 @@ export function canRegenerateKey(status, admin) {
 /** Можно ли вообще нажимать «Синхронизировать сейчас». */
 export function canSyncNow(status, admin) {
   return !!(admin && status && status.role === 'secondary');
+}
+
+// --- BRANCH_MAIN_PUSH_V1: маленькая кнопка в окнах регистратуры и лаборатории
+//
+// Решения о ней живут ЗДЕСЬ, а не в views/branch-sync-button.js, по той же
+// причине, что и всё остальное в этом файле: тот модуль тянет ui.js и
+// supabase.js, то есть требует DOM и сети, и проверить его правила иначе как
+// глазами нельзя. Здесь они — чистые функции.
+
+/**
+ * Показывать ли маленькую кнопку «Синхронизация».
+ *
+ * ГЛАВНАЯ КЛИНИКА ТОЖЕ ВИДИТ ЕЁ, и это правка по жалобе владельца
+ * (2026-09-03): кнопку он нажимает именно там, поменяв цены. Раньше условием
+ * было «role === secondary», потому что кнопка означала только «забрать
+ * справочник»; теперь у главной она означает «отправить копию и обменяться
+ * записями» — действие не менее настоящее.
+ *
+ * Одиночная клиника кнопки по-прежнему не видит: синхронизироваться ей не с
+ * кем, и нажатие, после которого ничего не происходит, читается как поломка.
+ */
+export function syncButtonShown(status) {
+  const role = status && status.role;
+  return role === 'main' || role === 'secondary';
+}
+
+/**
+ * Что сказать человеку за стойкой после нажатия.
+ *
+ * translate:false — фраза пришла С СЕРВЕРА и уже по-русски; она несёт размер
+ * копии и числа записей, поэтому целой строкой в словаре не найдётся никогда
+ * (та же известная дыра, что у syncLine).
+ *
+ * @returns {{tone:'ok'|'err', text:string, translate:boolean}}
+ */
+export function syncButtonToast(data) {
+  const message = data && typeof data.message === 'string' && data.message ? data.message : null;
+  if (data && data.ok) {
+    if (message) return { tone: 'ok', text: message, translate: false };
+    // changed === 0 — это УСПЕХ, а не пустое действие: «у соседей ничего
+    // нового» и «связи нет» для человека за стойкой две совершенно разные
+    // новости, и путать их нельзя.
+    return { tone: 'ok', text: data.changed ? 'Данные обновлены' : 'Новых данных нет', translate: true };
+  }
+  if (message) return { tone: 'err', text: message, translate: false };
+  return { tone: 'err', text: 'Не удалось синхронизировать.', translate: true };
+}
+
+/**
+ * Стоит ли перерисовать список после нажатия.
+ *
+ * НЕ ТОЛЬКО changed, и это вторая половина той же ошибки: changed считает
+ * строки СПРАВОЧНИКА, которых у главной клиники не меняется никогда, а
+ * пациенты соседнего филиала приезжают шагом записей. Список, не обновившийся
+ * после нажатия, выглядит как кнопка, которая ничего не сделала.
+ */
+export function syncRefreshes(data) {
+  if (!data || data.ok !== true) return false;
+  if (Number(data.changed) > 0) return true;
+  const fetched = data.records && data.records.fetched;
+  return Object.values(fetched || {}).some((r) => Number(r && r.applied) > 0);
 }
 
 /**

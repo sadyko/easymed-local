@@ -108,6 +108,21 @@ const REASONS = {
   relay_bad_response: 'Копия с сервера повреждена и не была применена.',
   relay_is_secondary: 'Перевыпустить ключ можно только в главном филиале — этот филиал получает ключ от него.',
 
+  // BRANCH_MAIN_PUSH_V1 — единственная причина в этом словаре, которая
+  // означает УСПЕХ, и заведена она ровно потому, что успех у главной клиники
+  // выглядит иначе, чем у филиала. Филиал говорит «справочник обновлён»;
+  // главной обновлять нечего — она справочник РАЗДАЁТ, и её итог: «копия ушла
+  // на сервер, филиалы заберут её в течение часа». Без этой фразы кнопка в
+  // главной клинике отвечала владельцу отказом not_secondary («он раздаёт
+  // справочник, а не забирает его»), то есть объясняла устройство программы
+  // вместо того, чтобы выполнить его просьбу.
+  //
+  // ЧАС — не обещание с потолка: филиал забирает копию сам раз в час
+  // (schedule-pull.js HOURLY_INTERVAL_MS). Назвать срок обязательно, иначе
+  // владелец, не увидев цены в филиале через минуту, нажмёт кнопку ещё десять
+  // раз и позвонит в поддержку.
+  published: 'Копия справочника отправлена на сервер {size}. Филиалы заберут её при следующей синхронизации — не позже чем через час.',
+
   // BRANCH_RECORDS_V1 (Задача 7) — обмен ЗАПИСЯМИ между филиалами. Первые три
   // кода владелец в норме не видит (QUIET_JOURNAL_REASONS в relay.js): они значат
   // «обмениваться не с кем», а не «сломалось». Фразы у них всё равно есть: код без
@@ -196,6 +211,14 @@ REASONS.branch_parent_unpaid = 'Подписка клиники не актив�
 REASONS.branch_of_branch     = 'Филиал не может заводить свои филиалы. Ключ выдаёт главная клиника.';
 REASONS.branch_server_error  = 'Easy-Med не смог завести филиал. Попробуйте ещё раз позже.';
 
+// BRANCH_MAIN_PUSH_V1 — вторая половина ответа кнопки: обмен ЗАПИСЯМИ. Не
+// причина отказа, поэтому и не в REASONS: это то, что случилось, а не то, что
+// не получилось. Числа названы обе стороны — «получено» и «отправлено», —
+// потому что кнопку жмут по двум разным поводам («у соседа завели пациента,
+// хочу его видеть» и «я завёл, хочу чтобы увидели»), и одно число из двух
+// отвечает только на половину вопросов.
+const RECORDS_SENTENCE = 'Записи: получено {in}, отправлено {out}.';
+
 /**
  * ФРАЗА ПО КОДУ ОТКАЗА — и подстановка того, без чего фраза не фраза.
  *
@@ -226,6 +249,12 @@ function reasonVars(vars) {
   if (skew.letter) out.letter = String(skew.letter);
   if (Number.isFinite(Number(skew.offset_ms))) out.offset = humanOffset(Number(skew.offset_ms));
   else if (typeof skew.offset === 'string' && skew.offset) out.offset = skew.offset;
+  // BRANCH_MAIN_PUSH_V1 — размер отправленной копии, уже собранный в скобки
+  // (humanSize). В скобках он приезжает не для красоты: дырка без значения
+  // вырезается вместе с ПРЕДШЕСТВУЮЩИМ пробелом (fillReason), поэтому фраза
+  // остаётся целой и когда размер неизвестен, — а «отправлена на сервер ()»
+  // выглядело бы поломкой.
+  if (typeof vars.size === 'string' && vars.size) out.size = vars.size;
   return out;
 }
 
@@ -242,6 +271,23 @@ function humanOffset(ms) {
   if (abs >= DAY) return Math.round(abs / DAY) + ' дн';
   if (abs >= HOUR) return Math.round(abs / HOUR) + ' ч';
   return Math.max(1, Math.round(abs / 60000)) + ' мин';
+}
+
+/**
+ * «(17 КБ)» — сколько байт ушло на сервер, словами человека.
+ *
+ * BRANCH_MAIN_PUSH_V1. Байты владельцу не говорят ничего, а размер копии —
+ * говорят: это единственное подтверждение, что отправился весь справочник, а
+ * не пустая обёртка. null — размера мы не знаем, и тогда фраза обходится без
+ * него (см. fillReason).
+ */
+function humanSize(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const MB = 1024 * 1024;
+  if (n >= MB) return '(' + (n / MB).toFixed(1).replace('.', ',') + ' МБ)';
+  if (n >= 1024) return '(' + Math.round(n / 1024) + ' КБ)';
+  return '(' + Math.round(n) + ' Б)';
 }
 
 /** Подставить значения; дырку без значения вырезать вместе с лишним пробелом. */
@@ -1095,20 +1141,127 @@ export function branchSyncUnpair(db, args, user) {
  * Забрать справочник и применить. Без пользователя и без проверки прав:
  * вызывается и часами, и RPC. Права — забота вызывающего.
  */
-export async function runBranchSync(db, deps = {}) {
+export async function runBranchSync(db, deps = {}, { push = false } = {}) {
   const dataDir = getDataDir();
+  // BRANCH_MAIN_PUSH_V1 — РОЛЬ РЕШАЕТ, В КАКУЮ СТОРОНУ ЕДЕТ СПРАВОЧНИК.
+  //
+  // У филиала первый шаг — забрать. У главной клиники забирать не у кого, и
+  // до этой правки её первый шаг просто отказывал (not_secondary), а фраза
+  // отказа уезжала на экран как итог ВСЕЙ синхронизации. Владелец нажимал
+  // кнопку, поменяв цены, и читал «это главный филиал — он раздаёт справочник,
+  // а не забирает его»: объяснение устройства программы вместо выполнения его
+  // просьбы. Зеркальный шаг — ОТПРАВИТЬ копию — и есть то, чего он просил.
+  //
+  // push приходит только от кнопки (branchSyncNow). Часы (schedule-pull.js) на
+  // главной клинике не работают вовсе, а сквозные тесты обмена записями зовут
+  // runBranchSync напрямую — гнать из них весь справочник на сервер незачем.
+  const pairing = push ? readPairing(dataDir) : null;
+  const sending = !!(pairing && pairing.role === 'main');
+
   // ПОРЯДОК ОБЯЗАТЕЛЕН: сначала справочник, потом записи. Справочник
   // несёт УСЛУГИ, на которые ссылаются visit_services (CODE_REFS по коду
   // услуги), и строка лабораторной очереди, приехавшая РАНЬШЕ своей
   // услуги, ушла бы в ожидание и появилась бы на экране только через час.
-  const step = await syncCatalogue(db, dataDir, deps);
+  const step = sending
+    ? await sendCatalogue(db, dataDir, pairing, deps)
+    : await syncCatalogue(db, dataDir, deps);
   // ЗАПИСИ МЕНЯЮТСЯ ВСЕГДА И ОБЕИМИ СТОРОНАМИ, даже если справочник не
   // приехал. Две причины, и обе из жизни: у ГЛАВНОЙ клиники шаг
   // справочника всегда отвечает not_secondary (ей его забирать не у кого), а у
   // филиала главная может быть просто выключена — но соседний филиал при этом
   // работает, и его пациенты обязаны доехать.
   const records = await syncRecords(db, dataDir, deps);
-  return finish(db, records ? { ...step.result, records } : step.result, step.message);
+  const result = records ? { ...step.result, records } : step.result;
+  if (!sending) return finish(db, result, step.message);
+
+  // Итог главной клиники собирается ИЗ ОБОИХ шагов, а не из первого: отправка
+  // копии и обмен записями — два разных дела, и «получилось» у них бывает
+  // порознь.
+  const recordsOk = !!records && !records.fetch_reason && !records.publish_reason;
+  return finish(db, {
+    ...result,
+    ok: result.ok || recordsOk,
+    // ok:true с причиной — не противоречие. Причина здесь отвечает на вопрос
+    // «что случилось с копией»: 'published' — ушла, 'relay_disabled' — канал
+    // выключен, но записями обменялись. Молчание вместо неё скрыло бы ровно то,
+    // ради чего кнопку и нажимали.
+    reason: result.ok ? 'published' : result.reason,
+  }, sendMessage(step, records));
+}
+
+/**
+ * BRANCH_MAIN_PUSH_V1 — шаг справочника у ГЛАВНОЙ клиники: отправить копию.
+ *
+ * ОТПРАВЛЯЕТ ВСЕГДА, не сверяясь с хэшем и не глядя на сутки с прошлой
+ * выгрузки, — то есть publishCatalogue, а не maybePublish. Владелец нажал
+ * кнопку именно потому, что что-то изменил; «мы решили, что менять нечего»
+ * выглядит как сломанная кнопка, и экономия здесь стоила бы доверия к ней.
+ * Экономию делает фоновый прогон, где человека нет (relay.js maybePublish).
+ *
+ * Выключенный резервный канал — НЕ конец синхронизации: записи уезжают своим
+ * каналом, и обмен ими обязан случиться. Отсюда возвращается причина, а
+ * решение о том, чем всё кончилось, принимает runBranchSync.
+ *
+ * @returns {{result: object, message: string}}
+ */
+async function sendCatalogue(db, dataDir, pairing, { publishImpl = publishCatalogue } = {}) {
+  if (!relayEnabled(pairing)) {
+    return { result: { ok: false, reason: 'relay_disabled' }, message: reasonText('relay_disabled') };
+  }
+
+  let r;
+  try {
+    r = await publishImpl(db, dataDir);
+  } catch (e) {
+    // publishCatalogue по договору не бросает — сюда попадает только ошибка
+    // кода. Ронять из-за неё обмен записями нельзя: он к отправке копии
+    // отношения не имеет.
+    console.warn('[branch-sync] could not publish the catalogue copy:', e && e.message);
+    r = { ok: false, reason: 'relay_server_error' };
+  }
+
+  if (!r || !r.ok) {
+    const reason = (r && r.reason) || 'relay_server_error';
+    return { result: { ok: false, reason }, message: reasonText(reason) };
+  }
+  return {
+    result: { ok: true, published: true, bytes: r.bytes, published_at: r.at || null },
+    message: reasonText('published', { size: humanSize(r.bytes) }),
+  };
+}
+
+/**
+ * BRANCH_MAIN_PUSH_V1 — что прочитает владелец главной клиники, нажав кнопку.
+ *
+ * Одной фразой про ОБА шага, потому что нажатие было одно. Про записи —
+ * только когда есть что сказать: у одиночной клиники и у главной без филиалов
+ * шаг записей молчит (syncRecords вернул null), и «получено 0, отправлено 0»
+ * было бы не честностью, а шумом.
+ */
+function sendMessage(step, records) {
+  const said = [step.message];
+  if (records) {
+    said.push(fillReason(RECORDS_SENTENCE, {
+      in: countApplied(records.fetched),
+      out: countSent(records.published),
+    }));
+    // Неудачи обмена записями дописываются СВОИМИ фразами (их собрал
+    // syncRecords, подставив букву филиала и смещение часов), а не общим
+    // «что-то пошло не так».
+    if (records.fetch_message) said.push(records.fetch_message);
+    if (records.publish_message) said.push(records.publish_message);
+  }
+  return said.filter(Boolean).join(' ');
+}
+
+/** Сколько чужих записей ЛЕГЛО в базу: fetchJournals отдаёт срез по каждому соседу. */
+function countApplied(peers) {
+  return Object.values(peers || {}).reduce((n, r) => n + (Number(r && r.applied) || 0), 0);
+}
+
+/** Сколько своих записей УЕХАЛО: publishJournal отдаёт по числу на соседа. */
+function countSent(peers) {
+  return Object.values(peers || {}).reduce((n, v) => n + (Number(v) || 0), 0);
 }
 
 /**
@@ -1340,13 +1493,21 @@ export async function branchSyncNow(db, args, user, deps = {}) {
   // когда сработало расписание, запускало вторую резервную копию, вторую
   // выгрузку и вторую транзакцию приёма. Замок живёт в relay.js — там, где сам
   // обмен, — и оба входа берут именно его.
-  return withExchangeLock(() => runBranchSync(db, deps));
+  // push: true — и в этом вся правка BRANCH_MAIN_PUSH_V1. Кнопку нажал
+  // ЧЕЛОВЕК, и у главной клиники это значит «отправь копию сейчас».
+  return withExchangeLock(() => runBranchSync(db, deps, { push: true }));
 }
 
 function finish(db, result, message) {
   const at = new Date().toISOString();
   const record = { at, ...result };
-  if (!result.ok) record.message = message || reasonText(result.reason);
+  // BRANCH_MAIN_PUSH_V1 — ФРАЗА ТЕПЕРЬ БЫВАЕТ И У УДАЧИ. Раньше сообщение
+  // писалось только к отказу: у филиала успех рассказывает сам перечень
+  // изменений («добавлено: услуги — 4»), и слов не требовалось. У главной
+  // клиники менять нечего — она отправляет, — поэтому без этой строки её
+  // успех выглядел бы на экране как «Изменений не было».
+  if (message) record.message = message;
+  else if (!result.ok) record.message = reasonText(result.reason);
   try {
     putState(db, LAST_ATTEMPT, JSON.stringify(record));
     if (result.ok) putState(db, LAST_OK, JSON.stringify(record));

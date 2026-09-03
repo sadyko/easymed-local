@@ -281,6 +281,21 @@ function paintMain(card, status, admin) {
     // задачу, которую поставил владелец: на экране этого не видно.
     if (!admin) return;
 
+    // BRANCH_MAIN_PUSH_V1 — ЧТО СЛУЧИЛОСЬ В ПРОШЛУЮ СИНХРОНИЗАЦИЮ. На экране
+    // главной клиники этой строки не было вовсе: пока её кнопка означала
+    // «забрать справочник», рассказывать было не о чем — шаг всегда отвечал
+    // «это главный филиал». Теперь есть: копия ушла на сервер такого-то
+    // размера, записей получено столько-то. Единственное место, где владелец
+    // может убедиться, что филиалы получат новые цены, — и оно же покажет
+    // отказ, если сервер был недоступен.
+    const line = syncLine(status, tr);
+    if (line.tone !== 'none') {
+        card.appendChild(h('p', {
+            class: line.tone === 'warn' ? 'bsync-line bsync-line-warn' : 'bsync-line',
+            role: 'status',
+        }, Icon(line.tone === 'warn' ? 'Warning' : 'Check', { size: 14 }), ' ', say(line)));
+    }
+
     paintBranchList(card);
 
     // BRANCH_RELAY_VISIBLE_WHEN_OFF_V1 — прячем то, с чем всё хорошо, а не то,

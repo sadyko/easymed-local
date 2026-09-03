@@ -22,6 +22,7 @@ import {
   LETTER_PERMANENCE_WARNING, ADD_BRANCH_QUESTION, ISSUE_KEY_QUESTION,
   UNLINK_WARNING_MAIN, UNLINK_WARNING_SECONDARY, UNLINK_QUESTION, UNLINKED_BRANCH_NOTE,
   RELAY_ACCESS_ISSUED, pairedMessage, letterExplainer, becomeMainState, IDENTITY_UNKNOWN_NOTE,
+  syncButtonShown, syncButtonToast, syncRefreshes,
 } from '../branch-sync-logic.js';
 
 /** Тем же порядком, что и экран (views/branch-sync.js say): перевод, потом подстановка. */
@@ -567,4 +568,71 @@ test('нет и кода, и канала — говорится про код: 
   });
   assert.equal(rows[0].warnTag, 'Без кода активации',
     'без канала филиал работает, без кода — не начинает работать');
+});
+
+// --- BRANCH_MAIN_PUSH_V1: как выглядит успех ГЛАВНОЙ клиники ---------------
+//
+// У филиала успех рассказывает сам перечень изменений: «добавлено: услуги — 4».
+// У главной клиники менять нечего — она справочник РАЗДАЁТ, — поэтому перечень
+// пуст всегда, и без фразы сервера её удачная синхронизация выглядела бы на
+// экране как «Изменений не было — справочник уже совпадает.», то есть как
+// пустое действие ровно там, где действие и произошло.
+
+const PUBLISHED = 'Копия справочника отправлена на сервер (17 КБ). Филиалы заберут её при следующей синхронизации — не позже чем через час. Записи: получено 5, отправлено 12.';
+
+test('успех главной клиники рассказывает про отправленную копию, а не «изменений не было»', () => {
+  const rec = { at: '2026-09-03T08:41:40Z', ok: true, reason: 'published', published: true, message: PUBLISHED };
+  const line = syncLine({ role: 'main', last_attempt: rec, last_ok: rec });
+  assert.equal(line.tone, 'ok');
+  assert.ok(say(line).includes('отправлена на сервер (17 КБ)'), say(line));
+  assert.ok(say(line).includes('получено 5, отправлено 12'), say(line));
+  assert.equal(say(line).includes('Изменений не было'), false,
+    'копия ушла — называть это пустым прогоном было бы враньём');
+  assert.equal(/undefined/.test(say(line)), false);
+});
+
+test('успех филиала фразы сервера не ждёт — перечень изменений остался прежним', () => {
+  const line = syncLine({ last_ok: { at: '2026-08-29T10:00:00Z', ok: true, changed: 2, created: { services: 2 } } });
+  assert.equal(line.tone, 'ok');
+  assert.match(say(line), /Синхронизировано/);
+  assert.match(say(line), /добавлено: услуги — 2/);
+});
+
+// --- BRANCH_MAIN_PUSH_V1: маленькая кнопка в окне регистратуры -------------
+
+test('маленькая кнопка видна и в главной клинике — там её и нажимает владелец', () => {
+  assert.equal(syncButtonShown({ role: 'secondary' }), true);
+  assert.equal(syncButtonShown({ role: 'main' }), true,
+    'главная отправляет копию и меняется записями — ей эта кнопка нужна не меньше');
+  // Одиночная клиника — единственный случай, когда кнопки быть не должно:
+  // синхронизироваться ей не с кем, и нажатие выглядело бы поломкой.
+  assert.equal(syncButtonShown({ role: 'none' }), false);
+  assert.equal(syncButtonShown(null), false);
+  assert.equal(syncButtonShown({}), false);
+});
+
+test('маленькая кнопка показывает фразу сервера, когда она есть', () => {
+  const ok = syncButtonToast({ ok: true, reason: 'published', message: PUBLISHED });
+  assert.equal(ok.tone, 'ok');
+  assert.equal(ok.text, PUBLISHED);
+  assert.equal(ok.translate, false, 'фраза сервера уже по-русски и словаря экрана не проходит');
+
+  // У филиала фразы нет — там по-прежнему два коротких ответа, и они разные:
+  // «у соседей ничего нового» и «связи нет» — это две разные новости.
+  assert.deepEqual(syncButtonToast({ ok: true, changed: 3 }), { tone: 'ok', text: 'Данные обновлены', translate: true });
+  assert.deepEqual(syncButtonToast({ ok: true, changed: 0 }), { tone: 'ok', text: 'Новых данных нет', translate: true });
+
+  const bad = syncButtonToast({ ok: false, reason: 'relay_offline', message: 'Нет связи с сервером Easy-Med.' });
+  assert.equal(bad.tone, 'err');
+  assert.equal(bad.text, 'Нет связи с сервером Easy-Med.');
+  assert.deepEqual(syncButtonToast(null), { tone: 'err', text: 'Не удалось синхронизировать.', translate: true });
+});
+
+test('обновлять список после нажатия стоит и без changed — записи приехали молча', () => {
+  // changed считает только справочник. У главной клиники он равен нулю всегда,
+  // а пациенты соседнего филиала при этом приезжают именно этим нажатием.
+  assert.equal(syncRefreshes({ ok: true, changed: 0, records: { fetched: { B: { applied: 4 } } } }), true);
+  assert.equal(syncRefreshes({ ok: true, changed: 2 }), true);
+  assert.equal(syncRefreshes({ ok: true, changed: 0 }), false);
+  assert.equal(syncRefreshes({ ok: false }), false);
 });
