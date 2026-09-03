@@ -78,21 +78,38 @@ let branches = null;
 // Ответ на нажатие «Синхронизировать сейчас». null — в этом состоянии экран
 // звать его не должен, и попытка по-прежнему взрывается.
 let syncNow = null;
+// Ревью 2026-09-03. Оба вызова отвечают ФУНКЦИЕЙ ОТ ТЕЛА ЗАПРОСА, а не готовым
+// объектом: у перевыпуска ответ зависит от `confirm` в теле (второе окно), а у
+// подключения ключом важен ПОБОЧНЫЙ ЭФФЕКТ — пара записана на сервере даже
+// тогда, когда вызов кончился отказом. null — экран звать их не должен, и
+// попытка по-прежнему взрывается.
+let reissue = null;
+let pair = null;
 const calls = [];
-globalThis.fetch = async (url) => {
+globalThis.fetch = async (url, init) => {
   const name = String(url).replace('/api/rpc/', '');
   calls.push(name);
+  let body = null;
+  try { body = JSON.parse((init && init.body) || 'null'); } catch { body = null; }
   if (name === 'branch_sync_status') return { ok: true, json: async () => ({ data: status }) };
   if (name === 'branch_sync_branches' && branches) return { ok: true, json: async () => ({ data: branches }) };
   if (name === 'branch_sync_now' && syncNow) return { ok: true, json: async () => ({ data: syncNow }) };
+  if (name === 'branch_sync_reissue_key' && reissue) return { ok: true, json: async () => ({ data: reissue(body) }) };
+  if (name === 'branch_sync_pair' && pair) return pair(body);
   throw new Error('экран не должен звать ' + name + ' в этом состоянии');
 };
 
 // BRANCH_LIST_V2 — окно подтверждения теперь ЕДИНСТВЕННЫЙ адрес всего
 // необратимого на этом экране, поэтому тест его записывает.
 let confirms = [];
+// Обычно это «да» или «нет» на все окна разом. Функцией — там, где окон ДВА и
+// ответы у них разные (перевыпуск филиала с вычисленным номером): она получает
+// порядковый номер окна и его текст.
 let confirmAnswer = true;
-globalThis.window.confirm = (text) => { confirms.push(String(text)); return confirmAnswer; };
+globalThis.window.confirm = (text) => {
+  confirms.push(String(text));
+  return typeof confirmAnswer === 'function' ? confirmAnswer(confirms.length - 1, String(text)) : confirmAnswer;
+};
 // navigator в Node 24 — геттер без сеттера: присвоение бросает.
 const copied = [];
 Object.defineProperty(globalThis, 'navigator', {
@@ -110,6 +127,8 @@ async function paint(st, br = null) {
   status = st;
   branches = br;
   syncNow = null;
+  reissue = null;
+  pair = null;
   calls.length = 0;
   confirms = [];
   confirmAnswer = true;
@@ -432,10 +451,31 @@ test('перевыпуск филиала предлагается ровно т
   await paint(MAIN_STATUS, REISSUE_BRANCHES);
   const [selfRow, known, old] = tags(tags(tags(card, 'table')[0], 'tbody')[0], 'tr');
 
-  assert.ok(buttonWith(known, 'Перевыпустить ключ'), 'филиалу с известным номером — кнопка');
-  assert.equal(!!buttonWith(old, 'Перевыпустить ключ'), false,
-    'филиалу из старой версии кнопки нет: перевыпуск ему недоступен, а отказывающая кнопка хуже отсутствующей');
+  const live = buttonWith(known, 'Перевыпустить ключ');
+  assert.ok(live, 'филиалу с известным номером — кнопка');
+  assert.notEqual(live.disabled, true, 'и она нажимается');
   assert.equal(tags(selfRow, 'button').length, 0, 'этой установке перевыпускать нечего');
+
+  // Ревью 2026-09-03 (I5): у филиала старого выпуска кнопка НЕ ПРЯЧЕТСЯ, а
+  // стоит неактивной вместе с причиной. Пустая клетка была ответом на вопрос
+  // «почему я не могу починить переустановленный компьютер», и ответом этим
+  // было молчание.
+  const dead = buttonWith(old, 'Перевыпустить ключ');
+  assert.ok(dead, 'кнопка обязана быть видна: иначе причину некуда написать');
+  assert.equal(dead.disabled, true, 'но нажать её нельзя — сервер откажет');
+  assert.ok(textOf(old).includes('Easy-Med не знает номер этого филиала'), textOf(old));
+  assert.ok(textOf(old).includes('букву'), 'и цена «завести заново» названа, а не умолчана');
+  assert.equal(/заведите филиал заново/i.test(textOf(old)), false);
+});
+
+test('неактивная кнопка перевыпуска НИЧЕГО не зовёт, даже если по ней щёлкнуть', async () => {
+  await paint(MAIN_STATUS, REISSUE_BRANCHES);
+  const old = tags(tags(tags(card, 'table')[0], 'tbody')[0], 'tr')[2];
+  confirms = [];
+  calls.length = 0;
+  buttonWith(old, 'Перевыпустить ключ').click();
+  assert.deepEqual(confirms, [], 'у неактивной кнопки не должно быть даже окна');
+  assert.equal(calls.includes('branch_sync_reissue_key'), false);
 });
 
 test('перевыпуск филиала ВСЕГДА спрашивает и называет филиал по имени', async () => {
@@ -451,6 +491,87 @@ test('перевыпуск филиала ВСЕГДА спрашивает и �
   assert.ok(confirms[0].includes(BRANCH_KEY_REISSUE_WARNING));
   assert.ok(confirms[0].includes('Чиланзар'), 'без имени филиала вопрос ни о чём');
   assert.equal(calls.includes('branch_sync_reissue_key'), false, '«отмена» обязана отменять');
+});
+
+// --- ревью 2026-09-03 (C1): ВТОРОЕ окно у филиала с вычисленным номером -----
+//
+// Сервер на такой перевыпуск в сеть не ходит вовсе: он отвечает
+// reason: 'reissue_confirm' и присылает номер, который вычислил. Это не отказ,
+// а второй вопрос — «тот ли это филиал», — и экран обязан отличать одно от
+// другого: на отказе он печатает красную строку, здесь — показывает окно.
+
+test('вычисленный номер спрашивают ВТОРЫМ окном, и в нём стоят номер и имя', async () => {
+  await paint(MAIN_STATUS, REISSUE_BRANCHES);
+  reissue = (body) => (body && body.confirm === true
+    ? { ok: true, key: 'EMB2-NEW', relay: { ok: true } }
+    : { ok: false, reason: 'reissue_confirm', vendor_id: 'c-000005-b2', branch_name: 'Чиланзар' });
+  confirms = [];
+  calls.length = 0;
+  confirmAnswer = true;
+
+  buttonWith(tags(tags(tags(card, 'table')[0], 'tbody')[0], 'tr')[1], 'Перевыпустить ключ').click();
+  await flush();
+
+  assert.equal(confirms.length, 2, 'окна ДВА: про цену действия и про его адресата');
+  assert.ok(confirms[1].includes('c-000005-b2'), 'без номера сверять нечего: ' + confirms[1]);
+  assert.ok(confirms[1].includes('Чиланзар'), 'и без имени вопрос ни о чём');
+  assert.ok(confirms[1].includes('чужому филиалу'), 'цена промаха названа: ' + confirms[1]);
+  assert.equal(calls.filter((c) => c === 'branch_sync_reissue_key').length, 2,
+    'согласие обязано повторить вызов — уже с подтверждением');
+});
+
+test('«отмена» во ВТОРОМ окне отменяет перевыпуск, а не подтверждает его', async () => {
+  // Самая дорогая кнопка «нет» на этом экране: за ней стоит работающий
+  // компьютер в другом здании.
+  await paint(MAIN_STATUS, REISSUE_BRANCHES);
+  let confirmed = 0;
+  reissue = (body) => {
+    if (body && body.confirm === true) { confirmed += 1; return { ok: true, key: 'EMB2-NEW' }; }
+    return { ok: false, reason: 'reissue_confirm', vendor_id: 'c-000005-b2', branch_name: 'Чиланзар' };
+  };
+  confirms = [];
+  calls.length = 0;
+  confirmAnswer = (i) => i === 0;   // «да» первому окну, «нет» второму
+
+  buttonWith(tags(tags(tags(card, 'table')[0], 'tbody')[0], 'tr')[1], 'Перевыпустить ключ').click();
+  await flush();
+
+  assert.equal(confirms.length, 2);
+  assert.equal(confirmed, 0, 'подтверждённого перевыпуска быть не должно');
+  assert.equal(calls.filter((c) => c === 'branch_sync_reissue_key').length, 1,
+    'первый вызов — тот, что и задал вопрос; второго быть не должно');
+  confirmAnswer = true;
+});
+
+// --- ревью 2026-09-03 (I4): отказ ПОСЛЕ удачного подключения ----------------
+
+test('подключение удалось, а переселение — нет: экран перерисован, отказ на виду', async () => {
+  // branch_sync_pair делает два дела подряд: записывает пару и переселяет
+  // установку в филиал. Второе может не удаться уже после того, как первое
+  // удалось («код активации в этом ключе уже использован»). Экран печатал
+  // отказ строкой и оставался прежним — то есть предлагал вставить ключ
+  // подключения установке, которая УЖЕ подключена, и владелец вводил ключ,
+  // который только что сработал.
+  const FAIL = 'Код активации в этом ключе уже использован. В главной клинике '
+    + 'нажмите «Перевыпустить ключ» для этого филиала и введите новый ключ.';
+  await paint({ role: 'none', identity_role: 'main', letter: 'A', suggested_url: '10.0.0.5:8000' });
+  pair = () => {
+    // Ровно то, что происходит на сервере: пара ЗАПИСАНА, отказ пришёл после.
+    status = {
+      role: 'secondary', identity_role: 'secondary', letter: 'C',
+      main_url: '10.0.0.5:8000', group_id: 'grp-1', paired_at: '2026-09-03T08:00:00Z',
+    };
+    return { ok: false, status: 400, json: async () => ({ error: { message: FAIL } }) };
+  };
+
+  buttonWith(card, PAIR).click();
+  await flush();
+
+  const text = textOf(card);
+  assert.ok(text.includes(FAIL), 'отказ обязан остаться на виду: ' + text);
+  assert.equal(text.includes('Вставьте ключ подключения'), false,
+    'экран не должен звать вводить ключ на установке, которая уже подключена');
+  assert.ok(text.includes('Главный филиал'), 'карточка перерисована в состоянии филиала: ' + text);
 });
 
 // ===========================================================================

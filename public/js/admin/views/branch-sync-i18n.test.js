@@ -14,6 +14,9 @@ import {
   UNLINK_WARNING_MAIN, UNLINK_WARNING_SECONDARY, UNLINK_QUESTION,
   UNLINKED_BRANCH_NOTE, IDENTITY_UNKNOWN_NOTE, RELAY_ACCESS_ISSUED,
   BRANCH_KEY_REISSUE_WARNING, BRANCH_KEY_REISSUE_QUESTION,   // BRANCH_REISSUE_V1
+  // Ревью 2026-09-03: второе окно (вычисленный номер филиала) и причина, по
+  // которой кнопка перевыпуска неактивна.
+  BRANCH_REISSUE_GUESS_WARNING, BRANCH_REISSUE_GUESS_QUESTION, BRANCH_REISSUE_UNAVAILABLE,
   syncButtonToast,                                           // BRANCH_MAIN_PUSH_V1
 } from '../branch-sync-logic.js';
 
@@ -215,11 +218,16 @@ function everyPhrase() {
     // BRANCH_REISSUE_V1 — строка, у которой известен номер филиала у
     // поставщика: только у неё есть кнопка «Перевыпустить ключ».
     [{ id: 6, name: 'Себзар', letter: 'E', key: 'EMB2-z', has_relay_token: true, has_enroll_code: true, has_clinic_id: true }],
+    // ...и строка филиала старого выпуска: кнопка есть, но неактивна, а рядом
+    // с ней стоит причина — своя фраза, которой без этого случая не собрать
+    // (ревью 2026-09-03, I5).
+    [{ id: 7, name: 'Старый', letter: 'F', key: 'EMB2-w', has_relay_token: true, has_enroll_code: true, has_clinic_id: false }],
   ]) {
     for (const row of branchRows({ role: 'main', can_issue: true, can_relay: true, branches })) {
       for (const v of [row.selfTag, row.keyStatus, row.warnTag,
         row.action && row.action.label, row.action && row.action.done,
-        row.reissue && row.reissue.label, row.reissue && row.reissue.done]) {
+        row.reissue && row.reissue.label, row.reissue && row.reissue.done,
+        row.reissue && row.reissue.why]) {
         if (v) out.add(v);
       }
     }
@@ -231,7 +239,9 @@ function everyPhrase() {
     LETTER_PERMANENCE_WARNING, ADD_BRANCH_QUESTION, ISSUE_KEY_QUESTION,
     UNLINK_WARNING_MAIN, UNLINK_WARNING_SECONDARY, UNLINK_QUESTION,
     UNLINKED_BRANCH_NOTE, IDENTITY_UNKNOWN_NOTE, RELAY_ACCESS_ISSUED,
-    BRANCH_KEY_REISSUE_WARNING, BRANCH_KEY_REISSUE_QUESTION]) out.add(s);
+    BRANCH_KEY_REISSUE_WARNING, BRANCH_KEY_REISSUE_QUESTION,
+    BRANCH_REISSUE_GUESS_WARNING, BRANCH_REISSUE_GUESS_QUESTION,
+    BRANCH_REISSUE_UNAVAILABLE]) out.add(s);
 
   return [...out];
 }

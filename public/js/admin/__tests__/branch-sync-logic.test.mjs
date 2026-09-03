@@ -24,6 +24,8 @@ import {
   RELAY_ACCESS_ISSUED, pairedMessage, letterExplainer, becomeMainState, IDENTITY_UNKNOWN_NOTE,
   syncButtonShown, syncButtonToast, syncRefreshes,
   BRANCH_KEY_REISSUED, BRANCH_KEY_REISSUE_WARNING, BRANCH_KEY_REISSUE_QUESTION,   // BRANCH_REISSUE_V1
+  // Ревью 2026-09-03: второе окно (вычисленный номер) и причина неактивной кнопки.
+  BRANCH_REISSUE_GUESS_WARNING, BRANCH_REISSUE_GUESS_QUESTION, BRANCH_REISSUE_UNAVAILABLE,
 } from '../branch-sync-logic.js';
 
 /** Тем же порядком, что и экран (views/branch-sync.js say): перевод, потом подстановка. */
@@ -722,7 +724,9 @@ const reissuable = (over = {}) => ({
 test('перевыпуск предлагается филиалу с ключом, чей номер у Easy-Med известен', () => {
   const [row] = branchRows(reissuable());
   assert.equal(row.state, 'key');
-  assert.deepEqual(row.reissue, { label: 'Перевыпустить ключ', done: BRANCH_KEY_REISSUED });
+  assert.deepEqual(row.reissue, {
+    label: 'Перевыпустить ключ', done: BRANCH_KEY_REISSUED, disabled: false, why: null,
+  });
   // И НЕ ВМЕСТО обычного действия строки: у рабочего ключа его и так нет, а у
   // ключа без резервного канала «Выдать доступ» остаётся на месте.
   assert.equal(row.action, null);
@@ -731,15 +735,24 @@ test('перевыпуск предлагается филиалу с ключо
   assert.equal(warn.reissue.label, 'Перевыпустить ключ', 'починка и замена — две разные кнопки');
 });
 
-test('номер филиала у Easy-Med неизвестен — кнопки нет', () => {
-  // Филиал, заведённый до этой версии: адресовать перевыпуск не по чему, а
-  // угадывать номер нельзя — промах перевыпустил бы ЧУЖОЙ филиал. Сервер
-  // восстанавливает номера по порядку заведения, когда может, и тогда кнопка
-  // появляется сама.
-  assert.equal(branchRows(reissuable({ has_clinic_id: false }))[0].reissue, null);
-  // Поле новое: там, где его нет вовсе, честнее не показать кнопку, чем
-  // показать отказывающую.
-  assert.equal(branchRows(reissuable({ has_clinic_id: undefined }))[0].reissue, null);
+test('номер филиала у Easy-Med неизвестен — кнопка НЕАКТИВНА, и рядом сказано почему', () => {
+  // Ревью 2026-09-03 (I5). Прежде кнопка здесь ПРЯТАЛАСЬ, и это была ошибка
+  // того же рода, что и «кнопка, которая всегда отказывает»: у владельца
+  // филиала старого выпуска ломается ровно то, что эта кнопка чинит
+  // (переустановленный компьютер), а на экране в этом месте была пустота — и
+  // узнать, что делать, было неоткуда.
+  for (const over of [{ has_clinic_id: false }, { has_clinic_id: undefined }]) {
+    const [row] = branchRows(reissuable(over));
+    assert.equal(row.reissue.disabled, true, JSON.stringify(over));
+    assert.equal(row.reissue.why, BRANCH_REISSUE_UNAVAILABLE);
+  }
+  // И ПРИЧИНА НЕ СОВЕТУЕТ ТОГО, ЧТО СТОИТ ДЕНЕГ, не назвав цену: «заведите
+  // филиал заново» тратит ещё одну букву (их конечное число) и заводит у
+  // поставщика ВТОРУЮ клинику — то есть вторую подписку в счёте.
+  assert.equal(/заведите филиал заново/i.test(BRANCH_REISSUE_UNAVAILABLE), false);
+  assert.match(BRANCH_REISSUE_UNAVAILABLE, /букву/);
+  assert.match(BRANCH_REISSUE_UNAVAILABLE, /счёт/);
+  assert.match(BRANCH_REISSUE_UNAVAILABLE, /поддержку/);
 });
 
 test('ни своей установке, ни строке без ключа, ни не-главной клинике перевыпуск не предлагается', () => {
@@ -753,13 +766,41 @@ test('окно перевыпуска филиала называет и пос�
   // Обычно кнопку нажимают, потому что компьютер сменили. Иногда — «на всякий
   // случай», и тогда она выключает работающее здание: имя в вопросе это
   // последнее, что стоит между тем и другим.
-  assert.match(BRANCH_KEY_REISSUE_WARNING, /перестанет приниматься/);
+  assert.match(BRANCH_KEY_REISSUE_WARNING, /перестанет отчитываться/);
   assert.equal(fill(BRANCH_KEY_REISSUE_QUESTION, { name: 'Чиланзар' }),
     'Перевыпустить ключ филиала «Чиланзар»?');
+  // ...И НЕ ОБЕЩАЕТ БОЛЬШЕГО, ЧЕМ ДЕЛАЕТ (ревью 2026-09-03, I2). Прежнее
+  // «перестанет приниматься» владелец читал как «старый компьютер отключён».
+  // Отключён он наполовину: check-in гаснет сразу, а доступ к обмену данными
+  // остаётся — учётку резервного канала никто не отзывает, она уходит только
+  // по сроку (30 дней без использования). Окно называет и срок, и способ
+  // отобрать доступ немедленно.
+  assert.match(BRANCH_KEY_REISSUE_WARNING, /30 дней/);
+  assert.match(BRANCH_KEY_REISSUE_WARNING, /ключ синхронизации/);
   // И это НЕ то же самое окно, что у перевыпуска ключа синхронизации: то
   // отключает ВСЕ филиалы разом.
   assert.notEqual(BRANCH_KEY_REISSUE_WARNING, KEY_REISSUE_WARNING);
   // Подтверждение успеха зовёт передать ключ: пока он не доехал до филиала,
   // филиала у владельца нет — старая установка уже не принимается.
   assert.match(BRANCH_KEY_REISSUED, /передайте филиалу новый ключ/);
+});
+
+test('второе окно — про АДРЕСАТА: оно называет вычисленный номер и филиал', () => {
+  // Ревью 2026-09-03 (C1). Первое окно спрашивает про цену действия, это —
+  // про то, ТОМУ ЛИ филиалу оно адресовано: у филиалов старого выпуска номер у
+  // Easy-Med восстановлен по порядку заведения, и достаточно одного филиала, о
+  // котором эта клиника не знает, чтобы номера съехали на единицу. Промах гасит
+  // работающий компьютер в другом здании.
+  assert.match(BRANCH_REISSUE_GUESS_WARNING, /чужому филиалу/);
+  assert.equal(
+    fill(BRANCH_REISSUE_GUESS_QUESTION, { name: 'Себзар', vendor: 'c-000005-b2' }),
+    'Easy-Med определил филиал «Себзар» как «c-000005-b2». Продолжить?',
+  );
+  // Оба значения обязаны быть В ВОПРОСЕ, а не в предупреждении: подстановку
+  // экран делает только в вопросе (views/branch-sync.js confirmAction).
+  assert.match(BRANCH_REISSUE_GUESS_QUESTION, /\{name\}/);
+  assert.match(BRANCH_REISSUE_GUESS_QUESTION, /\{vendor\}/);
+  assert.equal(/\{\w+\}/.test(BRANCH_REISSUE_GUESS_WARNING), false);
+  // И это НЕ первое окно: у вопросов разные ответы, и слить их в один нельзя.
+  assert.notEqual(BRANCH_REISSUE_GUESS_WARNING, BRANCH_KEY_REISSUE_WARNING);
 });

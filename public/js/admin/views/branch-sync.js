@@ -48,6 +48,7 @@ import {
     syncKeyLine, relayExplainer, publishLine, seedLine, canRegenerateKey, KEY_LOSS_WARNING,
     branchRows, branchListNote, KEY_REISSUE_WARNING, KEY_REISSUE_QUESTION,
     BRANCH_KEY_REISSUE_WARNING, BRANCH_KEY_REISSUE_QUESTION,
+    BRANCH_REISSUE_GUESS_WARNING, BRANCH_REISSUE_GUESS_QUESTION,   // ревью 2026-09-03 (C1)
     LETTER_PERMANENCE_WARNING, ADD_BRANCH_QUESTION, ISSUE_KEY_QUESTION,
     UNLINK_WARNING_MAIN, UNLINK_WARNING_SECONDARY, UNLINK_QUESTION,
     UNLINKED_BRANCH_NOTE, pairedMessage, letterExplainer, becomeMainState,
@@ -96,10 +97,20 @@ export async function renderBranchSyncCard(container) {
     return card;
 }
 
-async function paint(card) {
+/**
+ * Перерисовать карточку целиком.
+ *
+ * `notice` — отказ, который обязан пережить перерисовку (ревью 2026-09-03, I4).
+ * Строка состояния живёт внутри блока и вместе с ним стирается, а бывает, что
+ * перерисовать НАДО и сказать НАДО одновременно: подключение ключом удалось, а
+ * переселение установки в филиал — нет. Текст приходит с сервера готовым, через
+ * словарь экрана он не проходит (известная дыра шире этого файла).
+ */
+async function paint(card, notice = '') {
     clear(card);
     card.appendChild(h('div', { class: 'sys-card-head' }, Icon('Building', { size: 16 }),
         h('span', null, 'Синхронизация филиалов')));
+    if (notice) card.appendChild(h('p', { class: 'upd-error bsync-note', role: 'alert' }, notice));
 
     let status;
     try {
@@ -231,8 +242,18 @@ function paintUnlinked(card, status, admin) {
             toast(done.letter ? `${tr(done.base)}. ${tr('Этот филиал')} — ${done.letter}` : tr(done.base), 'ok');
             await paint(card);
         } catch (e) {
+            // ПЕРЕРИСОВЫВАЕМ И ПРИ ОТКАЗЕ (ревью 2026-09-03, I4). Этот вызов
+            // делает ДВА дела подряд: подключает ключом и переселяет установку
+            // в филиал (branchSyncPairAdopt). Второе может не удаться уже
+            // после того, как первое удалось, — чаще всего «код активации в
+            // этом ключе уже использован». Раньше отказ печатался строкой, а
+            // экран оставался прежним: «Вставьте ключ подключения» стояло на
+            // подключённой установке, и владелец вводил ключ, который УЖЕ
+            // сработал. Экран обязан показывать то, что есть на самом деле, —
+            // отказ при этом никуда не девается, он переезжает наверх карточки.
             pairBtn.disabled = false;
             pairStatus.textContent = e.message;
+            await paint(card, e.message);
         }
     });
 
@@ -461,7 +482,12 @@ function paintBranchList(card) {
             row.action ? actionBtn(row) : null,
             // BRANCH_REISSUE_V1 — вторая кнопка, и она заменяет ключ, а не
             // чинит его: старая установка филиала перестаёт приниматься.
-            row.reissue ? reissueBtn(row) : null);
+            row.reissue ? reissueBtn(row) : null,
+            // ...и почему она неактивна, если неактивна (ревью 2026-09-03,
+            // I5). Причина стоит РЯДОМ С КНОПКОЙ, а не в подсказке: подсказку
+            // не видно ни на сенсорном экране, ни тому, кто просто смотрит.
+            row.reissue && row.reissue.why
+                ? h('p', { class: 'muted bsync-note' }, row.reissue.why) : null);
 
         return h('tr', { class: row.state === 'self' ? 'bsync-tr-self' : null },
             nameCell, letterCell, keyCell, actCell);
@@ -509,16 +535,35 @@ function paintBranchList(card) {
      * НОВЫЙ КЛЮЧ ПОКАЗЫВАЕТСЯ ТАМ ЖЕ, ГДЕ И СТАРЫЙ: reload() перерисовывает
      * строку, и в её поле уже лежит ключ с новым кодом — копировать его
      * владелец будет оттуда же, откуда копировал прежний.
+     *
+     * ВТОРОЕ ОКНО — ДЛЯ ФИЛИАЛА С ВЫЧИСЛЕННЫМ НОМЕРОМ (ревью 2026-09-03, C1).
+     * Сервер на такой перевыпуск в сеть не ходит вовсе: он отвечает
+     * reason: 'reissue_confirm' и присылает номер, который вычислил. Это не
+     * отказ, а второй вопрос — «тот ли это филиал», — и задать его обязательно
+     * ДО обращения к Easy-Med: там старый код гаснет сразу, и отменить попадание
+     * в чужой филиал будет уже нечем. Ответил «да» — тот же вызов повторяется
+     * с confirm.
+     *
+     * НЕАКТИВНАЯ КНОПКА (row.reissue.disabled) — филиал старого выпуска, номер
+     * которого восстановить не удалось. Она стоит на экране ради причины рядом
+     * с ней, а не ради нажатия.
      */
     function reissueBtn(row) {
         const btn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, row.reissue.label);
+        if (row.reissue.disabled) btn.disabled = true;
         btn.addEventListener('click', async () => {
             if (btn.disabled) return;
             if (!confirmAction(BRANCH_KEY_REISSUE_WARNING, BRANCH_KEY_REISSUE_QUESTION, { name: row.name })) return;
             btn.disabled = true;
             actionStatus.textContent = '';
             try {
-                const data = await rpc('branch_sync_reissue_key', { branch_id: row.id });
+                let data = await rpc('branch_sync_reissue_key', { branch_id: row.id });
+                if (data && data.ok === false && data.reason === 'reissue_confirm') {
+                    const ok = confirmAction(BRANCH_REISSUE_GUESS_WARNING, BRANCH_REISSUE_GUESS_QUESTION,
+                        { name: data.branch_name || row.name, vendor: data.vendor_id });
+                    if (!ok) { btn.disabled = false; return; }
+                    data = await rpc('branch_sync_reissue_key', { branch_id: row.id, confirm: true });
+                }
                 toast(tr(row.reissue.done), 'ok');
                 // Учётка резервного канала выписывается заново вместе с кодом,
                 // и не выписаться она может так же, как при заведении филиала.
