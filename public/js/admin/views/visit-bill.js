@@ -16,6 +16,10 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, StatusTag, Tag, fmtDateTime, field } from '../ui.js';
+import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+// BRANCH_BILL_GUARD_V1 — тот же предикат, на котором стоят рабочие списки
+// (visits.js:91, procedures.js:50 — там он же, но в SQL: .is('sync_origin', null)).
+import { isOwnBuilding, originTag } from '../record-origin.js';
 
 function currentUserId() {
     try { return (window.easymed && window.easymed.state && window.easymed.state.user && window.easymed.state.user.id) || null; }
@@ -45,9 +49,68 @@ function loadingRow(colspan) {
 }
 
 // -----------------------------------------------------------------------------
+// BRANCH_BILL_GUARD_V1 — касса чужого визита закрыта, и закрыта ЦЕЛИКОМ.
+//
+// Карта пациента показывает ВСЮ историю, включая визиты, сделанные в соседнем
+// здании (patient-card.js подписывает их меткой «Филиал X»), и открывала на
+// клик по такой строке эту самую панель. Дальше сходились три факта:
+//
+//   1. `loadLines()` читает visit_services визита без всякой границы;
+//   2. `invoice_item_id` НЕ входит в перечень колонок, которые едут между
+//      филиалами (server/services/branch-sync/journal.js SHIPPED: quantity,
+//      status, visit_id, service_id) — значит каждая приехавшая строка выглядит
+//      здесь НЕВЫСТАВЛЕННОЙ, даже если в своём филиале она давно в счёте;
+//   3. `invoices`/`invoice_items`/`payments` не едут ВООБЩЕ — их здесь нет.
+//
+// Итог на экране: «All services are billed» никогда, «No invoices yet —
+// generate one above» всегда. Кассир нажимает «Generate invoice» — и пациент
+// платит второй раз за работу, оплаченную в другом здании. А «Remove» на такой
+// строке выполняет DELETE FROM visit_services, триггер журнала (миграция 084)
+// пишет надгробие, и строка исчезает В ТОМ ФИЛИАЛЕ, ГДЕ ЕЁ СДЕЛАЛИ.
+//
+// Почему отказ, а не панель «только для чтения». Читать здесь нечего: деньги
+// чужого визита в эту базу не приезжают, поэтому read-only панель показала бы
+// пустой список счетов и полный список «неоплаченных» услуг — ровно ту самую
+// картину, из-за которой пациента и выставляют к оплате дважды. Тихо убрать две
+// кнопки значило бы оставить на экране ложь без кнопок. Экран говорит, где
+// выставляют счёт, и закрывается.
+//
+// Формулировка «Филиал {letter}» — та же, что у меток в списках (patient-card.js
+// visitBranchTag, patients.js), и буква берётся тем же originTag().
+// -----------------------------------------------------------------------------
+function openForeignVisitNotice(letter) {
+    const overlay = h('div', { class: 'modal' });
+    const close = () => overlay.remove();
+    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
+
+    overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '460px', maxWidth: 'calc(100vw - 32px)' } },
+        h('header', { class: 'modal-head' },
+            h('div', null,
+                h('h2', null, Icon('Receipt', { size: 16 }), ' ', 'Визит другого филиала'),
+                h('div', { style: { marginTop: '4px' } }, Tag(trf('Филиал {letter}', { letter }), { kind: 'info' })),
+            ),
+            h('button', { class: 'modal-close', onclick: close }, '×')),
+        h('div', { class: 'modal-body' },
+            h('div', { style: { fontSize: '13.5px', fontWeight: '600' } },
+                trf('Этот визит сделан в филиале {letter} — счёт выставляют там', { letter })),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '8px' } },
+                'Счета и платежи между филиалами не передаются, поэтому здесь не видно, что уже оплачено. Выставить счёт отсюда — значит взять с пациента деньги второй раз, а удалить услугу — стереть её и в том здании.'),
+        ),
+        h('footer', { class: 'modal-foot' },
+            h('button', { class: 'btn', type: 'button', onclick: close }, 'Понятно')),
+    ));
+    document.body.appendChild(overlay);
+}
+
+// -----------------------------------------------------------------------------
 // ENTRY POINT
 // -----------------------------------------------------------------------------
 export function openVisitBillModal(visit, onChanged) {
+    // BRANCH_BILL_GUARD_V1 — раньше любой другой строки: ни одна кнопка кассы
+    // (Remove / Add / Dispense / Generate invoice / Take payment) не должна
+    // существовать для визита, сделанного в другом здании.
+    if (!isOwnBuilding(visit)) { openForeignVisitNotice(originTag(visit)); return; }
+
     const p = visit.patients || {};
     const patientName = p.full_name || '—';
     const mrn = p.mrn || '—';

@@ -5906,6 +5906,12 @@ export const STRINGS = {
   // Буква подставляется ПОСЛЕ перевода: в узбекском она идёт первой.
   "Филиал {letter}": {"en":"Branch {letter}","ru":"Филиал {letter}","uz":"{letter} filiali"},
 
+  // BRANCH_BILL_GUARD_V1 — касса отказывает по визиту другого филиала
+  // (views/visit-bill.js). Буква — ПОСЛЕ перевода, как и у метки выше.
+  "Визит другого филиала": {"en":"A visit from another branch","ru":"Визит другого филиала","uz":"Boshqa filialning tashrifi"},
+  "Этот визит сделан в филиале {letter} — счёт выставляют там": {"en":"This visit was made at branch {letter} — the invoice is raised there","ru":"Этот визит сделан в филиале {letter} — счёт выставляют там","uz":"Bu tashrif {letter} filialida bo'lgan — hisob o'sha yerda chiqariladi"},
+  "Счета и платежи между филиалами не передаются, поэтому здесь не видно, что уже оплачено. Выставить счёт отсюда — значит взять с пациента деньги второй раз, а удалить услугу — стереть её и в том здании.": {"en":"Invoices and payments do not travel between branches, so what has already been paid is invisible here. Raising an invoice from here would charge the patient a second time, and removing a service would delete it in that building too.","ru":"Счета и платежи между филиалами не передаются, поэтому здесь не видно, что уже оплачено. Выставить счёт отсюда — значит взять с пациента деньги второй раз, а удалить услугу — стереть её и в том здании.","uz":"Hisoblar va to'lovlar filiallar o'rtasida uzatilmaydi, shuning uchun bu yerda nima to'langani ko'rinmaydi. Bu yerdan hisob chiqarish — bemordan pulni ikkinchi marta olish, xizmatni o'chirish esa uni o'sha binoda ham o'chirish demakdir."},
+
   // BRANCH_ENROLL_REPAIR_V1 — ключ без кода активации и его лечение.
   "Без кода активации": {"en":"No activation code","ru":"Без кода активации","uz":"Faollashtirish kodisiz"},
   "Получить код": {"en":"Get the code","ru":"Получить код","uz":"Kodni olish"},
