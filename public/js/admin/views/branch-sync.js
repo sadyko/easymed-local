@@ -49,6 +49,7 @@ import {
     branchRows, branchListNote, KEY_REISSUE_WARNING, KEY_REISSUE_QUESTION,
     BRANCH_KEY_REISSUE_WARNING, BRANCH_KEY_REISSUE_QUESTION,
     BRANCH_REISSUE_GUESS_WARNING, BRANCH_REISSUE_GUESS_QUESTION,   // ревью 2026-09-03 (C1)
+    BRANCH_REISSUE_NAME_WARNING, BRANCH_REISSUE_NAME_QUESTION,     // ...и разговор про имя
     LETTER_PERMANENCE_WARNING, ADD_BRANCH_QUESTION, ISSUE_KEY_QUESTION,
     UNLINK_WARNING_MAIN, UNLINK_WARNING_SECONDARY, UNLINK_QUESTION,
     UNLINKED_BRANCH_NOTE, pairedMessage, letterExplainer, becomeMainState,
@@ -86,8 +87,13 @@ function say(line) {
  * все предупреждения экрана.
  */
 function confirmAction(warning, question, params = null) {
+    // Подстановка идёт и в ПРЕДУПРЕЖДЕНИЕ тоже (ревью 2026-09-03, второй круг):
+    // разговор про имя филиала («Easy-Med знает этот филиал как …») называет имя
+    // в первой же фразе, а не в вопросе. Предупреждения без дырок это не
+    // трогает — fill() возвращает такой текст как есть.
+    const w = params ? fill(tr(warning), params) : tr(warning);
     const q = params ? fill(tr(question), params) : tr(question);
-    return window.confirm(`${tr(warning)}\n\n${q}`);
+    return window.confirm(`${w}\n\n${q}`);
 }
 
 export async function renderBranchSyncCard(container) {
@@ -563,6 +569,18 @@ function paintBranchList(card) {
                         { name: data.branch_name || row.name, vendor: data.vendor_id });
                     if (!ok) { btn.disabled = false; return; }
                     data = await rpc('branch_sync_reissue_key', { branch_id: row.id, confirm: true });
+                }
+                // ...и ТРЕТЬЕ окно, если поставщик знает этот филиал под другим
+                // именем. Это снова не отказ, а вопрос, ответить на который может
+                // только владелец: либо филиал переименовали здесь — тогда это
+                // тот же самый филиал и надо продолжать, — либо номер съехал, и
+                // ключ уйдёт чужому. Оба имени у него при этом перед глазами.
+                if (data && data.ok === false && data.reason === 'reissue_name_mismatch') {
+                    const same = confirmAction(BRANCH_REISSUE_NAME_WARNING, BRANCH_REISSUE_NAME_QUESTION,
+                        { vendor: data.vendor_name, name: data.local_name || row.name });
+                    if (!same) { btn.disabled = false; return; }
+                    data = await rpc('branch_sync_reissue_key',
+                        { branch_id: row.id, confirm: true, accept_name: true });
                 }
                 toast(tr(row.reissue.done), 'ok');
                 // Учётка резервного канала выписывается заново вместе с кодом,

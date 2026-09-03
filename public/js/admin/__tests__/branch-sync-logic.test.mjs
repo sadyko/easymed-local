@@ -26,6 +26,7 @@ import {
   BRANCH_KEY_REISSUED, BRANCH_KEY_REISSUE_WARNING, BRANCH_KEY_REISSUE_QUESTION,   // BRANCH_REISSUE_V1
   // Ревью 2026-09-03: второе окно (вычисленный номер) и причина неактивной кнопки.
   BRANCH_REISSUE_GUESS_WARNING, BRANCH_REISSUE_GUESS_QUESTION, BRANCH_REISSUE_UNAVAILABLE,
+  BRANCH_REISSUE_NAME_WARNING, BRANCH_REISSUE_NAME_QUESTION,
 } from '../branch-sync-logic.js';
 
 /** Тем же порядком, что и экран (views/branch-sync.js say): перевод, потом подстановка. */
@@ -803,4 +804,27 @@ test('второе окно — про АДРЕСАТА: оно называет
   assert.equal(/\{\w+\}/.test(BRANCH_REISSUE_GUESS_WARNING), false);
   // И это НЕ первое окно: у вопросов разные ответы, и слить их в один нельзя.
   assert.notEqual(BRANCH_REISSUE_GUESS_WARNING, BRANCH_KEY_REISSUE_WARNING);
+});
+
+test('разговор про имя даёт переименованному филиалу ВЫХОД, а не тупик', () => {
+  // Ревью 2026-09-03, второй круг. Имена расходятся по двум разным причинам, и
+  // различить их может только владелец: либо он переименовал филиал здесь
+  // (обычное дело, поставщику это не уезжает), либо номер съехал. Поэтому здесь
+  // вопрос с обоими именами, а не отказ: отказ означал бы, что переименованный
+  // филиал не перевыпустить никогда.
+  assert.match(BRANCH_REISSUE_NAME_WARNING, /\{vendor\}/, 'чужое написание — в первой же фразе');
+  assert.match(BRANCH_REISSUE_NAME_QUESTION, /\{name\}/, '...а своё — в вопросе');
+  assert.match(BRANCH_REISSUE_NAME_WARNING, /переименовали/, 'самая частая причина названа первой');
+  assert.match(BRANCH_REISSUE_NAME_WARNING, /перестанет работать/, 'и цена ошибки — тоже');
+  // ЦЕНА УЖЕ УПЛАЧЕНА, и молчать об этом нельзя: код у поставщика погашен ещё
+  // до этого вопроса, и владелец, нажав «Отмена», остался бы со старым ключом,
+  // который считает рабочим.
+  assert.match(BRANCH_REISSUE_NAME_WARNING, /недействителен/);
+  // «ОК» в этом окне обязано читаться как «это тот же филиал»: других кнопок у
+  // window.confirm нет.
+  assert.match(BRANCH_REISSUE_NAME_QUESTION, /^Это тот же филиал/);
+  assert.equal(
+    fill(BRANCH_REISSUE_NAME_QUESTION, { name: 'Третий филиал (Себзар)' }),
+    'Это тот же филиал — перевыпустить ключ для «Третий филиал (Себзар)»?',
+  );
 });

@@ -543,6 +543,56 @@ test('«отмена» во ВТОРОМ окне отменяет перевы�
   confirmAnswer = true;
 });
 
+test('поставщик знает филиал под другим именем — экран спрашивает, а не отказывает', async () => {
+  // Ревью 2026-09-03, второй круг. Расхождение имён у ВЫЧИСЛЕННОГО номера — это
+  // вопрос, ответить на который может только владелец: он ли переименовал
+  // филиал здесь. Красная строка вместо вопроса означала бы, что
+  // переименованный филиал не перевыпустить никогда.
+  await paint(MAIN_STATUS, REISSUE_BRANCHES);
+  const sent = [];
+  reissue = (body) => {
+    sent.push(body);
+    if (body && body.accept_name === true) return { ok: true, key: 'EMB2-NEW', relay: { ok: true } };
+    if (body && body.confirm === true) {
+      return { ok: false, reason: 'reissue_name_mismatch', vendor_name: 'Второй', local_name: 'Чиланзар-2' };
+    }
+    return { ok: false, reason: 'reissue_confirm', vendor_id: 'c-000005-b2', branch_name: 'Чиланзар-2' };
+  };
+  confirms = [];
+  confirmAnswer = true;
+
+  buttonWith(tags(tags(tags(card, 'table')[0], 'tbody')[0], 'tr')[1], 'Перевыпустить ключ').click();
+  await flush();
+
+  assert.equal(confirms.length, 3, 'цена действия, адресат, имя — три разных вопроса');
+  assert.ok(confirms[2].includes('Второй'), 'чужое написание обязано быть на экране: ' + confirms[2]);
+  assert.ok(confirms[2].includes('Чиланзар-2'), '...и своё рядом с ним');
+  assert.ok(confirms[2].includes('Это тот же филиал'), '«ОК» обязано читаться ответом: ' + confirms[2]);
+  assert.equal(sent.length, 3);
+  assert.equal(sent[2].accept_name, true, 'ответ владельца обязан доехать до сервера');
+});
+
+test('«Отмена» в разговоре про имя не перевыпускает ничего', async () => {
+  await paint(MAIN_STATUS, REISSUE_BRANCHES);
+  let accepted = 0;
+  reissue = (body) => {
+    if (body && body.accept_name === true) { accepted += 1; return { ok: true, key: 'EMB2-NEW' }; }
+    if (body && body.confirm === true) {
+      return { ok: false, reason: 'reissue_name_mismatch', vendor_name: 'Второй', local_name: 'Чиланзар' };
+    }
+    return { ok: false, reason: 'reissue_confirm', vendor_id: 'c-000005-b2', branch_name: 'Чиланзар' };
+  };
+  confirms = [];
+  confirmAnswer = (i) => i < 2;   // «да» первым двум окнам, «нет» разговору про имя
+
+  buttonWith(tags(tags(tags(card, 'table')[0], 'tbody')[0], 'tr')[1], 'Перевыпустить ключ').click();
+  await flush();
+
+  assert.equal(confirms.length, 3);
+  assert.equal(accepted, 0, 'без ответа владельца чужой филиал не перевыпускается');
+  confirmAnswer = true;
+});
+
 // --- ревью 2026-09-03 (I4): отказ ПОСЛЕ удачного подключения ----------------
 
 test('подключение удалось, а переселение — нет: экран перерисован, отказ на виду', async () => {

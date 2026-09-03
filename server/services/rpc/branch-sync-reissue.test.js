@@ -455,19 +455,15 @@ test('C1: ПРИЗРАК У ПОСТАВЩИКА — подтверждённы�
   // единицу из-за призрачного ребёнка. Номер он повторит за нами всегда —
   // ловится это только именем.
   const cpr = fakeReissue(null, { 'c-000005-b3': 'Второй' });
-  await assert.rejects(
-    () => branchSyncReissueKey(db, confirmed(third), admin,
-      { reissueImpl: cpr.reissueImpl, mintImpl: mintOk2 }),
-    (e) => {
-      assert.equal(e.status, 400);
-      // ОБА ИМЕНИ В ФРАЗЕ: без них владельцу не с чем идти в поддержку.
-      assert.match(e.message, /«Второй»/);
-      assert.match(e.message, /«Третий»/);
-      // И ЦЕНА НАЗВАНА: код у поставщика уже погашен, старый ключ мёртв.
-      assert.match(e.message, /больше не действует/);
-      return true;
-    },
-  );
+  const r = await branchSyncReissueKey(db, confirmed(third), admin,
+    { reissueImpl: cpr.reissueImpl, mintImpl: mintOk2 });
+
+  // ok:false, а не исключение: это ВОПРОС владельцу, а не поломка, — экран из
+  // двух имён собирает разговор «не вы ли его переименовали».
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'reissue_name_mismatch');
+  assert.equal(r.vendor_name, 'Второй', 'как филиал зовут у поставщика');
+  assert.equal(r.local_name, 'Третий', '...и как он зовётся здесь');
   assert.deepEqual(cpr.asked, ['c-000005-b3'], 'запрос ушёл — но записать ответ мы отказались');
 
   // МЕСТНОГО НЕ ИЗМЕНИЛОСЬ НИЧЕГО: ни кода, ни ключа, ни пометки «вычислен».
@@ -588,6 +584,117 @@ test('C1: ответ без имени сверять нечем — перев�
   assert.equal(
     db.prepare('SELECT COUNT(*) n FROM control_state WHERE key = ?').get('branch_sync.clinic_guessed.' + third).n, 1,
     'без имени доказательства нет — спрашивать будем и дальше',
+  );
+  db.close();
+});
+
+// ===========================================================================
+// РЕВЬЮ 2026-09-03, ВТОРОЙ КРУГ — ПЕРЕИМЕНОВАННЫЙ ФИЛИАЛ.
+//
+// Сверка имени, поставленная на КАЖДЫЙ перевыпуск, ломала обычное дело:
+// филиал переименовывают в «Настройки → Филиалы», поставщику это не уезжает
+// никуда, и его копия имени остаётся старой навсегда. Каждая попытка
+// перевыпуска гасила бы у поставщика ещё один код и упиралась в отказ —
+// тупик, из которого владелец сам не выйдет, потому что чужого написания он
+// не знает, пока ему его не назовут.
+//
+// Поэтому имя сверяется ТОЛЬКО там, где номер вычислен, и даже там отказ —
+// не тупик, а вопрос с выходом (accept_name).
+// ===========================================================================
+
+test('СОХРАНЁННЫЙ номер: филиал переименовали здесь — перевыпуск проходит, расхождение уходит в журнал', async () => {
+  // Номер записан из ответа поставщика на заведение ИМЕННО ЭТОЙ строки:
+  // совпадение clinic_id уже доказательство адресата, и добавить к нему имя
+  // нечего. А отказ здесь означал бы, что переименованный филиал не
+  // перевыпустить НИКОГДА.
+  const dir = inDir('rename-stored');
+  const db = asMain(dir);
+  const cp = fakeCp();
+  const added = await branchSyncAddBranch(db, { name: 'Чиланзар' }, admin,
+    { mintImpl: mintOk, branchImpl: cp.branchImpl, publishImpl: pubOk });
+  // Владелец переименовал филиал в списке. Поставщик по-прежнему помнит старое.
+  db.prepare('UPDATE branches SET name = ? WHERE id = ?').run('Чиланзар-2', added.branch.id);
+
+  const cpr = fakeReissue(null, { 'c-000005-b1': 'Чиланзар' });
+  const spy = await (async () => {
+    const said = [];
+    const real = console.warn;
+    console.warn = (...args) => { said.push(args.map(String).join(' ')); };
+    try {
+      const r = await branchSyncReissueKey(db, { branch_id: added.branch.id }, admin,
+        { reissueImpl: cpr.reissueImpl, mintImpl: mintOk2 });
+      return { said, r };
+    } finally { console.warn = real; }
+  })();
+
+  assert.equal(spy.r.ok, true, 'переименование — не повод отказать в перевыпуске');
+  assert.equal(parseKey(spy.r.key).enroll_code, 'EM-FRESH-9', 'новый код обязан быть записан');
+  assert.equal(
+    db.prepare('SELECT value FROM control_state WHERE key = ?').get('branch_sync.enroll.' + added.branch.id).value,
+    'EM-FRESH-9',
+  );
+  // Но молчать об этом нельзя: расхождение имён — единственный след того, что
+  // копия у поставщика устарела.
+  assert.ok(spy.said.some((line) => line.includes('renamed here')), spy.said.join(' | '));
+  assert.ok(spy.said.some((line) => line.includes('Чиланзар-2')), 'в журнале обязаны быть оба имени');
+  db.close();
+});
+
+test('ВЫЧИСЛЕННЫЙ номер: переименованный филиал получает ВЫХОД, а не тупик', async () => {
+  const dir = inDir('rename-guessed');
+  const db = asMain(dir);
+  const [, , third] = threeLegacyBranches(db);
+  backfillBranchClinicIds(db, dir);
+  // Тот же филиал, переименованный здесь: у поставщика он «Третий».
+  db.prepare('UPDATE branches SET name = ? WHERE id = ?').run('Третий филиал (Себзар)', third);
+
+  const cpr = fakeReissue(null, { 'c-000005-b3': 'Третий' });
+  const first = await branchSyncReissueKey(db, confirmed(third), admin,
+    { reissueImpl: cpr.reissueImpl, mintImpl: mintOk2 });
+  assert.equal(first.reason, 'reissue_name_mismatch', 'сначала спрашиваем: имена разошлись');
+  assert.equal(first.vendor_name, 'Третий');
+  assert.equal(first.local_name, 'Третий филиал (Себзар)');
+
+  // «Это тот же филиал» — и перевыпуск состоялся. Код у поставщика к этому
+  // моменту погашен дважды, поэтому запрос уходит СНОВА, за свежим кодом.
+  const second = await branchSyncReissueKey(db, { branch_id: third, confirm: true, accept_name: true }, admin,
+    { reissueImpl: cpr.reissueImpl, mintImpl: mintOk2 });
+  assert.equal(second.ok, true);
+  assert.equal(parseKey(second.key).enroll_code, 'EM-FRESH-9');
+  assert.deepEqual(cpr.asked, ['c-000005-b3', 'c-000005-b3']);
+
+  // И БОЛЬШЕ НЕ СПРАШИВАЕМ: владелец подтвердил филиал лично, номер перестал
+  // быть догадкой.
+  assert.equal(
+    db.prepare('SELECT COUNT(*) n FROM control_state WHERE key = ?').get('branch_sync.clinic_guessed.' + third).n, 0,
+  );
+  const thirdCall = await branchSyncReissueKey(db, { branch_id: third }, admin,
+    { reissueImpl: cpr.reissueImpl, mintImpl: mintOk2 });
+  assert.equal(thirdCall.ok, true, 'ни первого окна, ни разговора про имя — всё уже сказано');
+  db.close();
+});
+
+test('accept_name НЕ ОБХОДИТ сверку номера: чужой clinic_id отвергается и с ним', async () => {
+  // Единственная проверка, которую нельзя отменить ничьим подтверждением:
+  // записать код, про который неизвестно, чей он, нельзя ни при каких словах
+  // владельца — он этого номера даже не видел.
+  const dir = inDir('accept-no-bypass');
+  const db = asMain(dir);
+  const [, , third] = threeLegacyBranches(db);
+  backfillBranchClinicIds(db, dir);
+  const codeBefore = db.prepare('SELECT value FROM control_state WHERE key = ?').get('branch_sync.enroll.' + third).value;
+
+  const cpr = fakeReissue({ ok: true, enrollment_code: 'EM-ALIEN', clinic_id: 'c-000005-b9', name: 'Третий' });
+  for (const args of [confirmed(third), { branch_id: third, confirm: true, accept_name: true }]) {
+    await assert.rejects(
+      () => branchSyncReissueKey(db, args, admin, { reissueImpl: cpr.reissueImpl, mintImpl: mintOk2 }),
+      (e) => e.message === reasonText('reissue_wrong_branch'),
+      JSON.stringify(args),
+    );
+  }
+  assert.equal(
+    db.prepare('SELECT value FROM control_state WHERE key = ?').get('branch_sync.enroll.' + third).value,
+    codeBefore, 'чужой код не записывается себе ни по какому подтверждению',
   );
   db.close();
 });

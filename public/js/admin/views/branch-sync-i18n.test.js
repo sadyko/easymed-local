@@ -17,6 +17,7 @@ import {
   // Ревью 2026-09-03: второе окно (вычисленный номер филиала) и причина, по
   // которой кнопка перевыпуска неактивна.
   BRANCH_REISSUE_GUESS_WARNING, BRANCH_REISSUE_GUESS_QUESTION, BRANCH_REISSUE_UNAVAILABLE,
+  BRANCH_REISSUE_NAME_WARNING, BRANCH_REISSUE_NAME_QUESTION,
   syncButtonToast,                                           // BRANCH_MAIN_PUSH_V1
 } from '../branch-sync-logic.js';
 
@@ -241,6 +242,7 @@ function everyPhrase() {
     UNLINKED_BRANCH_NOTE, IDENTITY_UNKNOWN_NOTE, RELAY_ACCESS_ISSUED,
     BRANCH_KEY_REISSUE_WARNING, BRANCH_KEY_REISSUE_QUESTION,
     BRANCH_REISSUE_GUESS_WARNING, BRANCH_REISSUE_GUESS_QUESTION,
+    BRANCH_REISSUE_NAME_WARNING, BRANCH_REISSUE_NAME_QUESTION,
     BRANCH_REISSUE_UNAVAILABLE]) out.add(s);
 
   return [...out];
