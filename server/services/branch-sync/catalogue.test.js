@@ -246,6 +246,61 @@ test('сведения о клинике приезжают, а собствен
   assert.equal(s.email, 'branch@clinic.uz');
 });
 
+// LAB_ONE_CLINIC_V1 — настройка «кого обслуживает лаборатория» (миграция 085).
+//
+// Она обязана путешествовать. Если бы каждое здание решало у себя, филиал ждал
+// бы, что его пробирки возьмёт в работу главный корпус, а главный корпус их бы
+// не видел — и никто бы не узнал, потому что молчащая очередь выглядит как
+// «сегодня нет заказов». Поэтому проверяется не значение в одной базе, а то,
+// что решение главного филиала доезжает до принимающей.
+test('лаборатория: настройка «обслуживает всю клинику» приезжает из главного филиала', () => {
+  const src = seedMain(fresh());
+  const dst = receiver();
+
+  assert.equal(dst.prepare('SELECT lab_scope FROM doc_settings WHERE id=1').get().lab_scope, 'clinic',
+    'по умолчанию — вся клиника: так просил владелец');
+
+  // Главный решает, что у него две настоящие лаборатории.
+  src.prepare("UPDATE doc_settings SET lab_scope='building' WHERE id=1").run();
+  apply(dst, exportCatalogue(src));
+  assert.equal(dst.prepare('SELECT lab_scope FROM doc_settings WHERE id=1').get().lab_scope, 'building',
+    'филиал обязан согласиться с главным, а не остаться при своём');
+
+  // И обратно — настройка не «однократная», она живёт.
+  src.prepare("UPDATE doc_settings SET lab_scope='clinic' WHERE id=1").run();
+  apply(dst, exportCatalogue(src));
+  assert.equal(dst.prepare('SELECT lab_scope FROM doc_settings WHERE id=1').get().lab_scope, 'clinic');
+});
+
+test('лаборатория: выгрузка главного филиала СТАРОЙ версии не сбрасывает настройку', () => {
+  // Обновления приезжают помашинно: главный неделями может отдавать справочник
+  // без этой колонки. Отсутствующий ключ — «оставь как есть», а не NULL.
+  const src = seedMain(fresh());
+  const dst = receiver();
+  dst.prepare("UPDATE doc_settings SET lab_scope='building' WHERE id=1").run();
+
+  const cat = exportCatalogue(src);
+  delete cat.doc_settings.lab_scope;
+  apply(dst, cat);
+
+  assert.equal(dst.prepare('SELECT lab_scope FROM doc_settings WHERE id=1').get().lab_scope, 'building');
+});
+
+test('лаборатория: филиал СТАРОЙ версии не падает на колонке, которой у него ещё нет', () => {
+  // Обратная сторона того же: главный уже обновлён и шлёт lab_scope, а филиал
+  // ещё нет. Приём справочника идёт ОДНОЙ транзакцией — упади он на «no such
+  // column», филиал перестал бы получать и прайс тоже, пока не обновится.
+  const src = seedMain(fresh());
+  const dst = receiver();
+  dst.prepare('ALTER TABLE doc_settings DROP COLUMN lab_scope').run();   // база до 085
+
+  const summary = apply(dst, exportCatalogue(src));
+
+  assert.equal(dst.prepare("SELECT clinic_name FROM doc_settings WHERE id=1").get().clinic_name, 'Клиника Луч',
+    'остальные сведения о клинике обязаны доехать');
+  assert.ok(summary.changed > 0);
+});
+
 test('строку, удалённую в филиале руками, следующая синхронизация заводит заново', () => {
   const src = seedMain(fresh());
   const dst = receiver();

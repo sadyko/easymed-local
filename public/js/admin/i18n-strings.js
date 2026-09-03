@@ -5912,6 +5912,16 @@ export const STRINGS = {
   "Этот визит сделан в филиале {letter} — счёт выставляют там": {"en":"This visit was made at branch {letter} — the invoice is raised there","ru":"Этот визит сделан в филиале {letter} — счёт выставляют там","uz":"Bu tashrif {letter} filialida bo'lgan — hisob o'sha yerda chiqariladi"},
   "Счета и платежи между филиалами не передаются, поэтому здесь не видно, что уже оплачено. Выставить счёт отсюда — значит взять с пациента деньги второй раз, а удалить услугу — стереть её и в том здании.": {"en":"Invoices and payments do not travel between branches, so what has already been paid is invisible here. Raising an invoice from here would charge the patient a second time, and removing a service would delete it in that building too.","ru":"Счета и платежи между филиалами не передаются, поэтому здесь не видно, что уже оплачено. Выставить счёт отсюда — значит взять с пациента деньги второй раз, а удалить услугу — стереть её и в том здании.","uz":"Hisoblar va to'lovlar filiallar o'rtasida uzatilmaydi, shuning uchun bu yerda nima to'langani ko'rinmaydi. Bu yerdan hisob chiqarish — bemordan pulni ikkinchi marta olish, xizmatni o'chirish esa uni o'sha binoda ham o'chirish demakdir."},
 
+  // LAB_ONE_CLINIC_V1 — одна лаборатория на всю клинику (views/laboratory.js).
+  "Лаборатория обслуживает": {"en":"The laboratory serves","ru":"Лаборатория обслуживает","uz":"Laboratoriya xizmat ko'rsatadi"},
+  "Всю клинику": {"en":"The whole clinic","ru":"Всю клинику","uz":"Butun klinikaga"},
+  "Своё здание": {"en":"This building","ru":"Своё здание","uz":"O'z binosiga"},
+  "Лаборатория обслуживает всю клинику: в очереди — заказы всех филиалов": {"en":"The laboratory serves the whole clinic: the queue holds orders from every branch","ru":"Лаборатория обслуживает всю клинику: в очереди — заказы всех филиалов","uz":"Laboratoriya butun klinikaga xizmat ko'rsatadi: navbatda barcha filiallarning buyurtmalari"},
+  "Лаборатория обслуживает только своё здание: заказы соседних филиалов сюда не попадают": {"en":"The laboratory serves this building only: orders from the neighbouring branches do not appear here","ru":"Лаборатория обслуживает только своё здание: заказы соседних филиалов сюда не попадают","uz":"Laboratoriya faqat o'z binosiga xizmat ko'rsatadi: qo'shni filiallarning buyurtmalari bu yerga tushmaydi"},
+  "Лаборатория обслуживает всю клинику": {"en":"The laboratory now serves the whole clinic","ru":"Лаборатория обслуживает всю клинику","uz":"Laboratoriya butun klinikaga xizmat ko'rsatadi"},
+  "Лаборатория обслуживает только своё здание": {"en":"The laboratory now serves this building only","ru":"Лаборатория обслуживает только своё здание","uz":"Laboratoriya faqat o'z binosiga xizmat ko'rsatadi"},
+  "Не удалось сохранить настройку: {msg}": {"en":"Could not save the setting: {msg}","ru":"Не удалось сохранить настройку: {msg}","uz":"Sozlamani saqlab bo'lmadi: {msg}"},
+
   // BRANCH_ENROLL_REPAIR_V1 — ключ без кода активации и его лечение.
   "Без кода активации": {"en":"No activation code","ru":"Без кода активации","uz":"Faollashtirish kodisiz"},
   "Получить код": {"en":"Get the code","ru":"Получить код","uz":"Kodni olish"},

@@ -6,6 +6,8 @@
 // one card per patient-VISIT, keyed by visit_id, falling back to
 // '_solo_' + id for an order with no visit.
 
+import { originTag } from '../record-origin.js';   // LAB_ONE_CLINIC_V1 — тоже чистый модуль
+
 // Russian plural-form picker: 1 анализ / 2 анализа / 5 анализов.
 export function pluralRu(n, one, few, many) {
     const m10 = n % 10, m100 = n % 100;
@@ -24,7 +26,15 @@ export function pluralRu(n, one, few, many) {
 //
 // Returns an array of groups, in first-seen order:
 //   { key, visitId, patientId, patientName, patientMrn, patientSex,
-//     patientDob, accession, rows: [visit_services row, ...] }
+//     patientDob, accession, originLetter, rows: [visit_services row, ...] }
+//
+// LAB_ONE_CLINIC_V1 — originLetter: буква филиала, в котором заказ ЗАВЕДЁН
+// (record-origin.js, колонка sync_origin), или null для своей работы. Когда
+// лаборатория обслуживает всю клинику, в одной очереди стоят пробирки разных
+// зданий, и лаборант обязан видеть, где пациента регистрировали, — иначе он
+// ищет человека, которого в его корпусе никогда не было. Метка на ГРУППЕ, а не
+// на каждой строке: группа — это один визит, а визит целиком сделан в одном
+// здании; берётся первая непустая буква группы.
 export function groupLabRows(rows, patientMap, accessionOf) {
     const pm = patientMap || {};
     const groups = [];
@@ -44,11 +54,13 @@ export function groupLabRows(rows, patientMap, accessionOf) {
                 patientSex: (patient.gender || '').toLowerCase(),
                 patientDob: patient.date_of_birth || null,
                 accession: accessionOf ? accessionOf(r) : null,
+                originLetter: null,
                 rows: [],
             };
             byKey.set(key, g);
             groups.push(g);
         }
+        if (g.originLetter == null) g.originLetter = originTag(r);
         g.rows.push(r);
     }
     return groups;

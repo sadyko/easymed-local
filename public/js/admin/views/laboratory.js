@@ -38,8 +38,11 @@ import { canDelete, canEditLabPanels } from '../permissions.js';   // LAB_PANELS
 import { mountLabPanels, LAB_BUILD } from './lab-panels.js';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now
 // ?v= is required here, not decorative: this module gained selectOptionsFor, and a
 // browser holding the older cached copy would fail the named import and blank the view.
-import { pluralRu, groupLabRows, selectOptionsFor } from './lab-grouping.js?v=labsel1';   // LAB_GROUP_V1 / LAB_SELECT_OPTIONS_V1 — pure helpers, unit-tested separately
+import { pluralRu, groupLabRows, selectOptionsFor } from './lab-grouping.js?v=labbranch1';   // LAB_GROUP_V1 / LAB_SELECT_OPTIONS_V1 — pure helpers, unit-tested separately
 import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';
+// LAB_ONE_CLINIC_V1 — «лаборатория обслуживает всю клинику / только своё здание».
+import { scopeQuery, normalizeLabScope, LAB_SCOPE_CLINIC, LAB_SCOPE_BUILDING, LAB_SCOPE_DEFAULT } from './lab-scope.js';
+import { isAdminActor } from '../admin-actor.js';   // настройку клиники меняет администратор (сервер требует того же)
 import { labFlagCell, labPosFor, fmtDMY, labSexRu, labRefText, matchResultsToAnalytes, labAccession, labIssueDates, labMaxDate,
          namedRangeCell, ageYears } from './lab-doc.js?v=labshared1';
 import { analyteIndex, resolveAnalyte, resolveAnalyteWhy, nk } from './lab-analyte-index.js?v=labshared1';   // LAB_BLANK_DESIGNED_V1
@@ -102,7 +105,7 @@ function flagTag(f) {
 // -----------------------------------------------------------------------------
 // State
 // -----------------------------------------------------------------------------
-const refs = { container: null, list: null, emptyEl: null, totalEl: null, filterWrap: null, searchInp: null, panelsHost: null, statsHost: null, periodWrap: null, tabId: null };
+const refs = { container: null, list: null, emptyEl: null, totalEl: null, filterWrap: null, searchInp: null, panelsHost: null, statsHost: null, periodWrap: null, scopeWrap: null, tabId: null };
 const state = {
     rows: [],          // lab visit_services, newest first
     patientMap: {},    // visit_id -> { visit_date, patient }
@@ -115,7 +118,21 @@ const state = {
     mode: 'queue',     // LAB_PANELS_MODE_V1 / LAB_STATS_V1 — 'queue' | 'panels' | 'stats'
     statsPeriod: '30d',
     statsData: null,   // LAB_STATS_XLSX_V1 — last painted stats, for the Excel export// LAB_STATS_V1 — the period chip in force ('today'|'7d'|'30d'|'all')
+    // LAB_ONE_CLINIC_V1 — doc_settings.lab_scope, перечитывается на каждой
+    // загрузке очереди: настройка приезжает из главного филиала со справочником,
+    // и филиал должен подхватить её без перезапуска приложения.
+    labScope: LAB_SCOPE_DEFAULT,
 };
+
+// LAB_ONE_CLINIC_V1 — две стороны переключателя в шапке очереди.
+const LAB_SCOPES = [
+    { key: LAB_SCOPE_CLINIC,   label: 'Всю клинику',
+      title: 'Лаборатория обслуживает всю клинику: в очереди — заказы всех филиалов',
+      done:  'Лаборатория обслуживает всю клинику' },
+    { key: LAB_SCOPE_BUILDING, label: 'Своё здание',
+      title: 'Лаборатория обслуживает только своё здание: заказы соседних филиалов сюда не попадают',
+      done:  'Лаборатория обслуживает только своё здание' },
+];
 
 // LAB_PANELS_MODE_V1 — «Панели» is a MODE of Лаборатория, not a second sidebar
 // entry: the technician stays in the section they already live in, and the
@@ -302,6 +319,20 @@ function mount() {
     refs.panelsHost = h('div');
     refs.statsHost = h('div', { class: 'lab-stats' });
     refs.periodWrap = h('div', { class: 'segmented', role: 'group', 'aria-label': 'Период' });
+    // LAB_ONE_CLINIC_V1 — переключатель «кого обслуживает лаборатория». Живёт
+    // ЗДЕСЬ, в разделе, а не в «Настройках»: настройки лаборатории оттуда убраны
+    // решением владельца (LAB_PANELS_BY_SECTION_V1, settings-hub.js), и человек,
+    // которому этот вопрос вообще приходит в голову, стоит именно перед
+    // очередью. Показываем только администратору — сервер разрешает менять
+    // doc_settings тоже только ему (schema-registry.js), а неактивная кнопка
+    // рядом с чужой пробиркой лаборанту ничего не объясняет: почему в очереди
+    // соседний филиал, говорит метка «Филиал X» на карточке.
+    refs.scopeWrap = h('div', { class: 'segmented', role: 'group', 'aria-label': 'Лаборатория обслуживает' });
+    const scopeBox = isAdminActor()
+        ? h('div', { class: 'row', style: { gap: '6px', alignItems: 'center' } },
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Лаборатория обслуживает'),
+            refs.scopeWrap)
+        : null;
     const mode = state.mode;
 
     const SUBTITLES = {
@@ -326,6 +357,7 @@ function mount() {
             refs.filterWrap,
             h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => fetchAndPaint() },
                 Icon('Refresh', { size: 13 }), ' Обновить'),
+            scopeBox,   // LAB_ONE_CLINIC_V1 — null для не-администратора; h() пропускает
         ],
     };
 
@@ -338,8 +370,56 @@ function mount() {
                 refs.emptyEl,
             ),
     ));
-    if (mode === 'queue') paintFilters();
+    if (mode === 'queue') { paintFilters(); paintScopeSwitch(); }
     if (mode === 'stats') paintPeriodChips();
+}
+
+// LAB_ONE_CLINIC_V1 — рисуется отдельно от mount() по той же причине, что и
+// фильтры: настоящее значение приезжает из базы ПОСЛЕ того, как шапка уже
+// построена (fetchAndPaint), и переключатель должен переехать на него, не
+// пересобирая экран.
+function paintScopeSwitch() {
+    if (!refs.scopeWrap) return;
+    clear(refs.scopeWrap);
+    for (const s of LAB_SCOPES) {
+        const on = state.labScope === s.key;
+        refs.scopeWrap.appendChild(h('button', {
+            type: 'button',
+            class: on ? 'on' : null,
+            'aria-pressed': on ? 'true' : 'false',
+            title: s.title,
+            onclick: () => setLabScope(s.key),
+        }, s.label));
+    }
+}
+
+// Сохраняем СНАЧАЛА, применяем ПОТОМ: настройка клиники, и экран не должен
+// показывать границу, которой в базе нет. Отказ сервера (не администратор)
+// оставляет всё как было.
+async function setLabScope(scope) {
+    if (state.labScope === scope) return;
+    const { error } = await supabase.from('doc_settings').update({ lab_scope: scope }).eq('id', 1);
+    if (error) {
+        toast(trf('Не удалось сохранить настройку: {msg}', { msg: (error && error.message) || error }), 'fail');
+        return;
+    }
+    state.labScope = normalizeLabScope(scope);
+    paintScopeSwitch();
+    toast((LAB_SCOPES.find(s => s.key === state.labScope) || LAB_SCOPES[0]).done, 'ok');
+    await fetchAndPaint();
+}
+
+// Настройка живёт в doc_settings (миграция 085) и приезжает филиалам со
+// справочником. Любая ошибка чтения — «вся клиника»: см. normalizeLabScope,
+// молча сузить очередь до своего здания хуже, чем показать лишнее.
+async function loadLabScope() {
+    try {
+        const { data, error } = await supabase.from('doc_settings').select('lab_scope').eq('id', 1).single();
+        if (error) return LAB_SCOPE_DEFAULT;
+        return normalizeLabScope(data && data.lab_scope);
+    } catch (e) {
+        return LAB_SCOPE_DEFAULT;
+    }
 }
 
 function paintFilters() {
@@ -504,6 +584,13 @@ async function fetchAndPaint() {
     refs.list.appendChild(h('div', { class: 'empty' }, 'Загрузка…'));
     refs.emptyEl.style.display = 'none';
 
+    // LAB_ONE_CLINIC_V1 — границу очереди решает настройка клиники, и её надо
+    // знать ДО запросов: фильтр накладывается на запрос, а не на полученные
+    // строки (у выборки есть .limit — отсев после неё выбросил бы часть работы).
+    state.labScope = await loadLabScope();
+    if (token !== lastFetchToken) return;
+    paintScopeSwitch();
+
     try {
         const [{ data: vsOpen, error: vsErr }, { data: vsDone }, { data: panels }, deptsRes, typesRes] = await Promise.all([
             // LAB_QUEUE_NO_TRUNCATION_V1 — открытую работу НЕ обрезаем.
@@ -518,24 +605,28 @@ async function fetchAndPaint() {
             // очередь — терять из неё строки нельзя ни при каком объёме), а
             // история закрытых ограничена окном. Раздел перестаёт зависеть от
             // того, сколько строк успели завести после нужной.
-            supabase.from('visit_services')
+            // LAB_ONE_CLINIC_V1 — граница очереди задаётся настройкой клиники, и
+            // накладывает её ОДНА функция (lab-scope.js scopeQuery) на оба запроса
+            // ОДНОГО списка: очередь и историю «Готово». Здесь стоял жёсткий
+            // `.is('sync_origin', null)` — «только своё здание» (решение владельца
+            // 2026-09-02, когда лаборатория считалась службой здания). Владелец
+            // после этого попросил обратное: «the lab can be one single … all
+            // clinics laborants should see the list of the patients and enter the
+            // data», поэтому по умолчанию границы нет, а клиника с двумя
+            // настоящими лабораториями возвращает прежнее поведение настройкой.
+            // Очередь врача, регистратура, процедуры и заявки остаются
+            // пофилиальными — их это не касается.
+            scopeQuery(supabase.from('visit_services')
                 // department_id/type_id ride along so the lab-service rule can check
                 // the department and catalogue-type branches (LAB_SERVICE_ROUTING_V1).
-                .select('*, services(name,is_lab,type,department_id,type_id,result_unit,ref_low,ref_high,ref_text,specimen,tube_color)')
-                // BRANCH_ORIGIN_V1 — решение владельца 2026-09-02: «очередь и кабинет
-                // врача — своего здания». sync_origin IS NULL и есть «заведено здесь»;
-                // приехавшая работа соседа видна в карте пациента, но не в этой очереди —
-                // иначе очередь Юнусабада наполнилась бы пробирками Чиланзара.
-                .is('sync_origin', null)
+                .select('*, services(name,is_lab,type,department_id,type_id,result_unit,ref_low,ref_high,ref_text,specimen,tube_color)'), state.labScope)
                 .in('status', ['added', 'queued', 'collected', 'in_progress', 'resulted'])
                 .order('id', { ascending: false })
                 .limit(5000),
-            supabase.from('visit_services')
-                .select('*, services(name,is_lab,type,department_id,type_id,result_unit,ref_low,ref_high,ref_text,specimen,tube_color)')
-                // BRANCH_ORIGIN_V1 — та же граница на истории закрытых: это второй
-                // запрос ОДНОГО списка, и отфильтровать только половину значило бы
-                // показывать чужую работу во вкладке «Готово», но не в очереди.
-                .is('sync_origin', null)
+            // Та же граница на истории закрытых: отфильтровать только половину
+            // значило бы показывать чужую работу во вкладке «Готово», но не в очереди.
+            scopeQuery(supabase.from('visit_services')
+                .select('*, services(name,is_lab,type,department_id,type_id,result_unit,ref_low,ref_high,ref_text,specimen,tube_color)'), state.labScope)
                 .eq('status', 'completed')
                 .order('id', { ascending: false })
                 .limit(LAB_DONE_WINDOW),
@@ -726,6 +817,11 @@ function labGroupCard(g) {
                     sexTxt ? h('span', { class: 'chip' }, sexTxt) : null,
                     ageTxt ? h('span', { class: 'chip' }, ageTxt) : null,
                     h('span', { class: 'chip' }, trf('{n} анализ(ов)', { n: total })),
+                    // LAB_ONE_CLINIC_V1 / BRANCH_ORIGIN_V1 — «Филиал X»: тот же
+                    // текст и та же буква (sync_origin), что у меток в карте
+                    // пациента и в списках. Своя работа не подписывается —
+                    // подпись на каждой карточке перестала бы что-либо значить.
+                    g.originLetter ? h('span', { class: 'chip' }, trf('Филиал {letter}', { letter: g.originLetter })) : null,
                     critCount ? h('span', { class: 'chip', style: { background: 'var(--crit-50)', borderColor: '#fecaca', color: 'var(--crit-700)' } }, trf('⚠ {n} критич.', { n: critCount })) : null,
                 ),
             ),

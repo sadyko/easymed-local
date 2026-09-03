@@ -148,9 +148,13 @@ export const REGISTRY = {
              'sample_collected_at','verified_by','verified_at'] },   // LAB_HANDLING_V1 (lab) + PROCEDURES_V1 (nurse отмечает выполнение)
              delete: { roles: ['admin','registrar'] } },
     // BRANCH_ORIGIN_V1 — правило то же, что у patients выше, и здесь оно и
-    // работает: лабораторная очередь и кабинет врача спрашивают
-    // `.is('sync_origin', null)` — «работа этого здания» (решение владельца
-    // 2026-09-02). Фильтр серверный: их .limit() иначе тратился бы на чужие строки.
+    // работает: кабинет врача и процедуры спрашивают `.is('sync_origin', null)`
+    // — «работа этого здания» (решение владельца 2026-09-02). Фильтр серверный:
+    // их .limit() иначе тратился бы на чужие строки.
+    // LAB_ONE_CLINIC_V1 (миграция 085) — лаборатория с тех пор спрашивает этот фильтр
+    // УСЛОВНО: doc_settings.lab_scope решает, обслуживает она всю клинику (по
+    // умолчанию) или только своё здание. Фильтр остаётся здесь ради второго
+    // случая — см. views/lab-scope.js.
     filters: ['id','visit_id','service_id','status','invoice_item_id','doctor_id','created_at','notes','sync_origin'],   // notes filter: WS_DERIVED_DOCS_V1 (.not('notes','is',null))
     // DOCTOR_WORKSPACE_V1 — the My-services queue joins the whole clinical
     // context off one row: services (+nested type/department), the booked
@@ -262,10 +266,15 @@ export const REGISTRY = {
     filters: ['id','product_id','kind'],
     embed:   { products: { table:'products', fk:'product_id', columns:['id','name','unit','base_unit'] } },
   },
+  // lab_scope: LAB_ONE_CLINIC_V1 (mig 085) — «лаборатория обслуживает всю
+  // клинику / только своё здание». ЧИТАЮТ ВСЕ (лаборант должен знать, почему в
+  // его очереди пробирки соседнего корпуса — раздел решает это на каждой
+  // загрузке), МЕНЯЕТ ТОЛЬКО АДМИНИСТРАТОР: это устройство клиники, и оно
+  // уезжает филиалам со справочником (branch-sync/catalogue.js).
   doc_settings: {
-    read:  { roles: ALL_STAFF, columns: ['id','clinic_name','address','phone','email','license','logo_data_url','accent_color','paper_size','show_watermark','footer_note','legal_note','updated_at'] },
+    read:  { roles: ALL_STAFF, columns: ['id','clinic_name','address','phone','email','license','logo_data_url','accent_color','paper_size','show_watermark','footer_note','legal_note','lab_scope','updated_at'] },
     write: { insert: { roles: [] },
-             update: { roles: ['admin'], columns: ['clinic_name','address','phone','email','license','logo_data_url','accent_color','paper_size','show_watermark','footer_note','legal_note'] },
+             update: { roles: ['admin'], columns: ['clinic_name','address','phone','email','license','logo_data_url','accent_color','paper_size','show_watermark','footer_note','legal_note','lab_scope'] },
              delete: { roles: [] } },
     filters: ['id'],
     embed:   {},

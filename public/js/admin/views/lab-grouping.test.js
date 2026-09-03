@@ -143,3 +143,40 @@ test('selectOptionsFor: analyte with no options configured -> empty (form shows 
   assert.deepEqual(selectOptionsFor({ value_type: 'select' }, null), []);
   assert.deepEqual(selectOptionsFor(null, null), []);
 });
+
+// ---------------------------------------------------------------------------
+// LAB_ONE_CLINIC_V1 — метка филиала на карточке очереди.
+//
+// Когда лаборатория обслуживает всю клинику (doc_settings.lab_scope, миграция
+// 085), в одной очереди стоят пробирки разных зданий. Без буквы лаборант ищет
+// пациента, которого в его корпусе никогда не было, — а найдя пустоту, решает,
+// что заказ ошибочный.
+// ---------------------------------------------------------------------------
+
+test('groupLabRows: заказ из другого здания несёт букву своего филиала', () => {
+  const groups = groupLabRows(
+    [{ id: 1, visit_id: 10, sync_origin: 'C' }, { id: 2, visit_id: 10, sync_origin: 'C' }],
+    { 10: { patient: { id: 5, full_name: 'Иванов', mrn: 'C-26-00042' } } },
+    null);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].originLetter, 'C', 'карточка подписана филиалом, где пациента регистрировали');
+});
+
+test('groupLabRows: своя работа не подписывается', () => {
+  const groups = groupLabRows(
+    [{ id: 1, visit_id: 10, sync_origin: null }, { id: 2, visit_id: 10 }],
+    { 10: { patient: { id: 5, full_name: 'Иванов', mrn: 'B-26-00001' } } },
+    null);
+  assert.equal(groups[0].originLetter, null,
+    'подпись на каждой карточке перестала бы что-либо значить');
+});
+
+test('groupLabRows: буква — из sync_origin, а НЕ из буквы MRN', () => {
+  // Пациент заведён в C, пришёл лечиться в B: работа сделана здесь, и очередь
+  // не должна называть её чужой.
+  const groups = groupLabRows(
+    [{ id: 1, visit_id: 10, sync_origin: null }],
+    { 10: { patient: { id: 5, full_name: 'Иванов', mrn: 'C-26-00042' } } },
+    null);
+  assert.equal(groups[0].originLetter, null);
+});
