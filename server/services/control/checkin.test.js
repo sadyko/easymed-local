@@ -534,31 +534,44 @@ test('checkinUrl honours EASYMED_CONTROL_URL, trimming a trailing slash', () => 
 });
 
 // --- checkinIntervalMs ------------------------------------------------------
+//
+// ONE_HOUR_SYNC_V1 (2026-09-02) — the default moved from once a day to once
+// an hour (the owner's standing "every clinic hears about updates and
+// reports its numbers within the hour" requirement); the override's FLOOR
+// stayed at one minute, but its CEILING can no longer be "the default
+// itself" (that would silently cap every override at one hour too — see
+// checkinIntervalMs's own comment) so it is now a fixed 24h.
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 
-test('checkinIntervalMs defaults to 24h when the override is absent', () => {
-  assert.equal(checkinIntervalMs({}), DAY_MS);
+test('checkinIntervalMs defaults to one hour when the override is absent', () => {
+  assert.equal(checkinIntervalMs({}), HOUR_MS);
 });
 
-test('checkinIntervalMs honours EASYMED_CHECKIN_INTERVAL_MS (one hour)', () => {
-  assert.equal(checkinIntervalMs({ EASYMED_CHECKIN_INTERVAL_MS: '3600000' }), 3_600_000);
+test('checkinIntervalMs floors a below-one-minute override (30s) up to one minute', () => {
+  assert.equal(checkinIntervalMs({ EASYMED_CHECKIN_INTERVAL_MS: '30000' }), 60_000);
+});
+
+test('checkinIntervalMs honours an override well above the default (6h)', () => {
+  assert.equal(checkinIntervalMs({ EASYMED_CHECKIN_INTERVAL_MS: String(6 * HOUR_MS) }), 6 * HOUR_MS,
+    'a 6h override must be honoured, not silently clamped down to the 1h default');
+});
+
+test('checkinIntervalMs caps an override above 24h (48h) down to the 24h ceiling', () => {
+  assert.equal(checkinIntervalMs({ EASYMED_CHECKIN_INTERVAL_MS: String(48 * HOUR_MS) }), DAY_MS);
 });
 
 test('checkinIntervalMs treats garbage as "a normal clinic", never "no check-ins"', () => {
   // Number('') and Number(null) are both 0 — the blank-string guard is what
   // keeps an empty env var from meaning "poll every minute" by accident.
   for (const bad of ['soon', '', '   ', '-5', '0', 'NaN', 'Infinity']) {
-    assert.equal(checkinIntervalMs({ EASYMED_CHECKIN_INTERVAL_MS: bad }), DAY_MS, JSON.stringify(bad));
+    assert.equal(checkinIntervalMs({ EASYMED_CHECKIN_INTERVAL_MS: bad }), HOUR_MS, JSON.stringify(bad));
   }
 });
 
-test('checkinIntervalMs clamps below one minute up to one minute', () => {
+test('checkinIntervalMs clamps a pathological below-one-minute override (1ms) up to one minute', () => {
   assert.equal(checkinIntervalMs({ EASYMED_CHECKIN_INTERVAL_MS: '1' }), 60_000);
-});
-
-test('checkinIntervalMs clamps above 24h down to 24h', () => {
-  assert.equal(checkinIntervalMs({ EASYMED_CHECKIN_INTERVAL_MS: String(7 * DAY_MS) }), DAY_MS);
 });
 
 // --- scheduleCheckin: never holds the process open, never fires early ------

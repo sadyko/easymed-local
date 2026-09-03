@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { createEnrollmentCode, redeemEnrollmentCode } from './enrollment.js';
-import { checkIn } from './checkin.js';
+import { checkIn, pruneCheckins } from './checkin.js';
 import { COUNTER_NAMES } from '../../../server/services/control/metrics.js';
 
 // --- test harness ------------------------------------------------------------
@@ -965,4 +965,93 @@ test('a clinic with no parent is unaffected', () => {
   checkIn(db, { installToken: token }, { signLicence: fakeSigner(calls) });
   assert.deepEqual(calls[0].modules, ['crm'], 'no parent means nothing borrowed from anyone');
   assert.ok(!calls[0].modules.includes('callcenter'));
+});
+
+// --- EVIDENCE_RETENTION_V1: pruneCheckins ------------------------------------
+//
+// ONE_HOUR_SYNC_V1 (2026-09-02) raised the clinic-side check-in cadence from
+// once a day to once an hour — 24 rows/clinic/day instead of 1 — which is
+// what makes bounding this table worth doing at all now. Same shape as
+// relay.route.test.js's own pruneRelayBlobs tests: a direct row-age test,
+// then a "never throws" backstop test.
+
+test('pruneCheckins deletes rows older than `days`, keeps newer ones', () => {
+  const db = freshDb();
+  const token = enrol(db, 'c-1');
+  checkIn(db, { installToken: token }, { signLicence: fakeSigner() }); // one live row, timestamped "now"
+
+  const old = db.prepare(
+    "INSERT INTO checkins (clinic_id, at, payload) VALUES ('c-1', '2000-01-01T00:00:00Z', '{}')"
+  ).run();
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM checkins').get().n, 2, 'sanity: two rows before pruning');
+
+  const removed = pruneCheckins(db, { days: 90 });
+  assert.equal(removed, 1, 'exactly the one ancient row was removed');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM checkins WHERE rowid = ?').get(old.lastInsertRowid).n, 0,
+    'the row older than the window is gone');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM checkins').get().n, 1, 'the freshly-recorded row survives');
+});
+
+test('pruneCheckins honours an injected `now`, the same seam pruneRelayBlobs/pruneRelayTokens use', () => {
+  const db = freshDb();
+  db.prepare(
+    "INSERT INTO checkins (clinic_id, at, payload) VALUES ('c-1', '2026-01-01T00:00:00Z', '{}')"
+  ).run();
+
+  // 30 days after the row, with a 90-day window: not yet due.
+  const notYet = pruneCheckins(db, { days: 90, now: () => new Date('2026-01-31T00:00:00Z') });
+  assert.equal(notYet, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM checkins').get().n, 1);
+
+  // 91 days after the row, with the same 90-day window: due.
+  const due = pruneCheckins(db, { days: 90, now: () => new Date('2026-04-02T00:00:00Z') });
+  assert.equal(due, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM checkins').get().n, 0);
+});
+
+test('pruneCheckins never throws, whatever the table is doing', () => {
+  const db = freshDb();
+  db.exec('DROP TABLE checkins');
+  // Housekeeping attached to a check-in must never be the thing that fails
+  // it — see pruneCheckins' own comment.
+  assert.equal(pruneCheckins(db, { days: 90 }), 0);
+});
+
+test('a real check-in runs the sweep itself — nothing external has to schedule it', () => {
+  const db = freshDb();
+  db.prepare(
+    "INSERT INTO checkins (clinic_id, at, payload) VALUES ('c-ancient', '2000-01-01T00:00:00Z', '{}')"
+  ).run();
+
+  const token = enrol(db, 'c-1');
+  checkIn(db, { installToken: token }, { signLicence: fakeSigner() });
+
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM checkins WHERE clinic_id = 'c-ancient'").get().n, 0,
+    'the ancient row from a since-vanished clinic is swept by the very next check-in, from ANY clinic');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM checkins WHERE clinic_id = 'c-1'").get().n, 1,
+    'and the check-in that triggered the sweep is still recorded');
+});
+
+test('the sweep runs AFTER the check-in commits, never inside its transaction', () => {
+  // A DB whose checkins table is fine cannot exercise the "housekeeping
+  // rolled back the check-in" failure mode directly (better-sqlite3 has no
+  // hook for "throw only on the second statement of a transaction" short of
+  // monkey-patching prepare()), so this pins the OBSERVABLE contract instead:
+  // a check-in is recorded even when the table has so much old evidence in it
+  // that a real sweep has real work to do, proving the recording step and the
+  // sweep step are not one atomic unit that could fail together.
+  const db = freshDb();
+  for (let i = 0; i < 50; i++) {
+    db.prepare(
+      `INSERT INTO checkins (clinic_id, at, payload) VALUES ('c-old-${i}', '2000-01-01T00:00:00Z', '{}')`
+    ).run();
+  }
+  const token = enrol(db, 'c-1');
+  const calls = [];
+  const result = checkIn(db, { installToken: token }, { signLicence: fakeSigner(calls) });
+
+  assert.ok(result, 'the check-in itself must succeed');
+  assert.equal(calls.length, 1, 'and the licence must still have been signed');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM checkins WHERE clinic_id LIKE 'c-old-%'").get().n, 0,
+    'the sweep did run — 90 days of history is gone');
 });

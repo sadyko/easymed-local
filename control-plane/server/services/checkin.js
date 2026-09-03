@@ -61,8 +61,59 @@ const MAX_STATS_KEYS = 50;
 // enormous string into a column that only ever needs to match a releases.version.
 const MAX_UPDATE_RESULT_VERSION_LEN = 32;
 
+// EVIDENCE_RETENTION_V1 (2026-09-02) — checkins is "evidence, not state"
+// (see migrations/001_registry.sql's own comment on the table) and was never
+// pruned: at the old once-a-day check-in cadence that was one row/clinic/day,
+// small enough nobody had to care. ONE_HOUR_SYNC_V1 raised the clinic-side
+// interval (server/services/control/checkin.js INTERVAL_MS) to once an
+// hour — 24 rows/clinic/day instead of 1 — so this table is now worth
+// bounding, following the exact "retention that only runs as a side effect
+// of traffic" idiom pruneRelayBlobs (routes/relay.js) and pruneRelayTokens
+// (routes/relay-token.js) already use in this same service, rather than
+// inventing a second pattern for the same problem.
+//
+// 90 days, not the 30 those two use: this table is read for real diagnosis
+// (routes/admin.js's clinic-detail check-in history, and latestStats()'s own
+// walk back through payloads) and answers billing-adjacent questions months
+// later — a longer memory than a relay blob or a bearer token needs. Even at
+// the new hourly rate that is ~2,160 rows/clinic over 90 days: trivial for
+// SQLite, and migrations/009_checkins_at_index.sql gives the DELETE below an
+// index to run against instead of a full-table scan on every check-in.
+const DEFAULT_CHECKIN_RETENTION_DAYS = 90;
+
 function normaliseToken(token) {
   return typeof token === 'string' && token.length > 0 ? token : null;
+}
+
+/**
+ * Delete check-in evidence older than `days`.
+ *
+ * Exported for the same reason pruneRelayBlobs/pruneRelayTokens are:
+ * retention that only runs as a side effect of traffic is retention nobody
+ * can test or trigger. Called from checkIn() itself, AFTER its own
+ * transaction has already committed — never from inside it. A housekeeping
+ * DELETE must not be able to roll back the check-in it is attached to: this
+ * file's header (rule 2) is explicit that recording the visit is the one
+ * thing here that may never fail, and better-sqlite3's db.transaction()
+ * rolls back the WHOLE transaction on any thrown error, so nesting this
+ * inside checkIn's txn would put a housekeeping bug on the same failure path
+ * as the licence renewal it is deliberately unrelated to. The internal
+ * try/catch below is a second, independent backstop for the same reason —
+ * belt and braces, not redundant.
+ *
+ * @returns {number} rows removed
+ */
+export function pruneCheckins(db, { days = DEFAULT_CHECKIN_RETENTION_DAYS, now = () => new Date() } = {}) {
+  const cutoff = new Date(now().getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    const info = db.prepare('DELETE FROM checkins WHERE at < ?').run(cutoff);
+    return info.changes;
+  } catch (e) {
+    // Housekeeping must never fail the check-in it is attached to — same rule
+    // pruneRelayBlobs/pruneRelayTokens state for their own callers.
+    console.warn('[control-plane] checkins retention sweep failed:', e && e.message);
+    return 0;
+  }
 }
 
 // Advisory only — version and fingerprint are informational, never a reason
@@ -454,6 +505,13 @@ export function checkIn(db, { installToken, version, fingerprint, moduleRequests
   // of this function to the caller, but the checkins row (and the clinics/
   // module_requests writes) this call made stay exactly as they are. See
   // checkin.test.js's "signLicence throws" test.
+
+  // EVIDENCE_RETENTION_V1 — deliberately here, not inside txn() above: see
+  // pruneCheckins' own comment for why housekeeping must never be able to
+  // roll back the check-in this call just committed. pruneCheckins never
+  // throws on its own (internal try/catch), so this can never cost a clinic
+  // its licence renewal below either.
+  pruneCheckins(db);
   const eligible = isEntitled(recorded.subscription, recorded.subscriptionUntil);
   const licence = eligible && signLicence
     ? signLicence({ clinicId: recorded.clinicId, clinicName: recorded.clinicName, modules: recorded.modules })

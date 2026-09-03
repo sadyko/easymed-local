@@ -1,0 +1,18 @@
+-- 009_checkins_at_index.sql — EVIDENCE_RETENTION_V1: an index for pruning.
+--
+-- checkins was never pruned (see 001_registry.sql's own comment: "evidence,
+-- not state") because at the old once-a-day check-in cadence it grew slowly
+-- enough nobody had to care. ONE_HOUR_SYNC_V1 (2026-09-02) raised the
+-- clinic-side interval to once an hour — 24 rows/clinic/day instead of 1 —
+-- so services/checkin.js:pruneCheckins() now deletes rows older than 90 days
+-- on every check-in, the same "runs as a side effect of traffic" idiom
+-- pruneRelayBlobs/pruneRelayTokens already use in this same directory.
+--
+-- The existing checkins_clinic_at index is (clinic_id, at DESC) — its
+-- leading column is clinic_id, so it cannot serve a `WHERE at < ?` scan
+-- across every clinic. Without a column that leads with `at`, pruning would
+-- be a full-table scan on every single check-in, which is exactly the
+-- "traffic gets slower as the table it's cleaning up grows" trap this
+-- migration exists to avoid — mirroring 005_relay_blobs.sql's own
+-- relay_blobs_updated index, added for the identical reason.
+CREATE INDEX IF NOT EXISTS checkins_at ON checkins (at);

@@ -7,29 +7,60 @@ import { verifyLicence } from './licence.js';
 import { buildStatsPayload as defaultBuildStatsPayload } from './metrics.js';
 import { assertControlUrlIsTestSafe } from './prod-guard.js';   // PROD_GUARD_V1
 
-// LICENCE_CORE_V1 — the clinic's half of the daily call.
+// LICENCE_CORE_V1 — the clinic's half of the hourly call.
 //
 // THE RULE THAT OUTRANKS EVERYTHING ELSE HERE: if the control plane is
 // unreachable, broken, or lying, the clinic must not notice. Every clinic
-// holds a licence valid for 14 more days, so a day of vendor downtime is
-// invisible — but only if this file treats every failure (a timeout, a 500,
-// an HTML error page, a licence for someone else, a licence signed with the
-// wrong key, a truncated body, a gigantic body) as "try again tomorrow" and
-// nothing else. Nothing below this comment is allowed to throw out of
-// runCheckin(), overwrite a good licence with an unverifiable one, or leave a
-// half-written file on disk.
+// holds a licence valid for 14 more days, so even a full day of vendor
+// downtime is invisible — but only if this file treats every failure (a
+// timeout, a 500, an HTML error page, a licence for someone else, a licence
+// signed with the wrong key, a truncated body, a gigantic body) as "try
+// again next hour" and nothing else. Nothing below this comment is allowed
+// to throw out of runCheckin(), overwrite a good licence with an
+// unverifiable one, or leave a half-written file on disk.
 
 const DEFAULT_ENDPOINT = 'https://settings.easymed.uz';
 const CHECKIN_PATH = '/cp/v1/checkin';
 
 // Delay chosen so a slow or dead control plane can never be blamed for a slow
 // boot: the server is already listening and serving patients long before this
-// ever fires. The interval is simply "once a day" — the licence itself is
-// good for 14, so there is no urgency to poll more often, and polling less
-// would shrink the safety margin between "vendor is down" and "licence
-// visibly expires" for no benefit.
+// ever fires.
+//
+// The interval itself is the owner's standing requirement for the whole
+// system, not a guess: "add 1 hour synchronization period for the entire
+// system, so clinic owners get data and other reports every 1 hour."
+// server/services/branch-sync/relay.js (and schedule-pull.js) already poll
+// hourly; this file was the one piece still left at a day, and that gap was
+// not theoretical — on 2026-09-02 three released fixes did not reach any
+// clinic for hours, and every symptom looked like "sync is broken" when the
+// machines had simply not asked yet.
+//
+// What the shorter interval costs: a check-in body is install_token +
+// version + a sha256 fingerprint + whatever module_requests/stats/
+// update_result happen to be pending (see the fetch call in performCheckin
+// below). Measured against a realistic payload — the full stats catalogue,
+// no pending module request — that is ~420 bytes; with a small update_result
+// attached, ~500 bytes; the bare minimum (nothing pending, empty stats) is
+// ~180 bytes. Nowhere near the 1MB MAX_RESPONSE_BYTES backstop below. Going
+// from 1 call/day to 24 turns "a few hundred bytes a day" into "a few
+// kilobytes a day" per clinic — still nothing.
+//
+// What it buys: a release published to a ring reaches a clinic within the
+// hour instead of within the day, and the vendor's dashboard statistics for
+// a clinic are never more than an hour stale.
+//
+// Why the vendor server can carry it: this is a handful of clinics, not
+// thousands — even at 24 check-ins/clinic/day the whole fleet is a trivial
+// request rate for one small JSON endpoint. The 14-day licence validity
+// remains the real safety margin against vendor downtime, and it is
+// completely independent of this number: polling more often does not touch
+// it either way, and polling less would only shrink it for no benefit.
 const INITIAL_DELAY_MS = 60_000;
-const INTERVAL_MS = 24 * 60 * 60 * 1000;
+const INTERVAL_MS = 60 * 60 * 1000;
+// Absolute ceiling for an EASYMED_CHECKIN_INTERVAL_MS override — see
+// checkinIntervalMs()'s own comment for why this can no longer just be
+// INTERVAL_MS itself now that INTERVAL_MS is an hour, not a day.
+const MAX_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 // The HTTP call itself must not hang indefinitely — a clinic PC with no
 // internet must fail fast and quietly, not pile up open sockets. 15s is
@@ -62,13 +93,16 @@ let _testPublicKey = null;
  */
 export function __setPublicKeyForTests(key) { _testPublicKey = key; }
 
-// TWO_OVERLAPPING_CHECKINS_V1 — the boot-time timer and the 24h interval
-// timer share this one module-level flag. In real operation they can never
-// coincide (60s after boot vs. once every 24h), but a run that somehow took
-// longer than a day (the TIMEOUT_MS bound above makes this practically
-// impossible, but "practically" is not "provably") must not let a second,
-// overlapping run send duplicate module_requests or race two file writes
-// against each other. The guard lives in the OUTER function (runCheckin),
+// TWO_OVERLAPPING_CHECKINS_V1 — the boot-time timer and the interval timer
+// share this one module-level flag. In real operation they can never
+// coincide (60s after boot vs. every INTERVAL_MS, an hour by default), but a
+// run that somehow took longer than the interval (the TIMEOUT_MS bound above
+// makes this practically impossible, but "practically" is not "provably" —
+// and less so than it used to be: a clinic that has set
+// EASYMED_CHECKIN_INTERVAL_MS down near the one-minute floor is only 4x
+// TIMEOUT_MS away from a real overlap) must not let a second, overlapping
+// run send duplicate module_requests or race two file writes against each
+// other. The guard lives in the OUTER function (runCheckin),
 // not inside the logic it wraps, so that a call which bails out early here
 // never touches the flag that the ACTUAL in-progress call is relying on to
 // reset itself in its own `finally` — see the "two overlapping check-ins"
@@ -169,31 +203,40 @@ export function writeAtomic(file, content, { writeFileSync = fs.writeFileSync, r
   renameSync(tmp, file);
 }
 
-/** Where the daily call goes. Exported so the endpoint-resolution logic itself is unit-testable without a real network call. */
+/** Where the check-in call goes. Exported so the endpoint-resolution logic itself is unit-testable without a real network call. */
 export function checkinUrl(env = process.env) {
   const base = String((env && env.EASYMED_CONTROL_URL) || DEFAULT_ENDPOINT).trim().replace(/\/+$/, '');
   return base + CHECKIN_PATH;
 }
 
 /**
- * How often the scheduled check-in repeats. 24 hours (see INTERVAL_MS's own
- * comment for why that is the right pace for a real clinic) unless
- * EASYMED_CHECKIN_INTERVAL_MS says otherwise — the override exists for the
- * vendor's own test install, which wants to hear about a freshly published
- * release within the hour rather than within the day.
+ * How often the scheduled check-in repeats. One hour by default (see
+ * INTERVAL_MS's own comment for the full reasoning — that number IS the
+ * owner's standing "every clinic hears about updates and reports its
+ * numbers within the hour" requirement for the whole product, not a
+ * vendor-only fast path) unless EASYMED_CHECKIN_INTERVAL_MS says otherwise.
  *
- * Clamped, not trusted: a typo like "1" must not turn the daily call into a
- * hammer on the control plane (floor: one minute), and anything above 24h
- * would quietly shrink the 14-day margin between "vendor is down" and
- * "licence visibly expires", which no override is allowed to do (ceiling:
- * the default itself). Garbage falls back to the default — a misspelled
- * value must degrade to "a normal clinic", never to "no check-ins at all".
+ * Clamped, not trusted: a typo like "1" must not turn an hourly call into a
+ * hammer on the control plane (floor: one minute, unchanged from before).
+ *
+ * The ceiling is now the fixed MAX_INTERVAL_MS (24h), not "the default
+ * itself" as it used to be when the default was also 24h. Clamping an
+ * override to the default would, now that the default is one hour, silently
+ * cap EVERY override at one hour too — defeating the one legitimate reason
+ * to raise it (a clinic on a metered or unreliable link that wants to poll
+ * less often than the norm). 24h is still a real ceiling, not a formality:
+ * it keeps the worst case an operator can configure — the override pushed
+ * all the way up — comfortably inside the 14-day licence margin, and still
+ * guarantees an update offer or a reported statistic is never more than a
+ * day stale even for that one deliberately-slow install. Garbage falls back
+ * to the default — a misspelled value must degrade to "a normal clinic",
+ * never to "no check-ins at all".
  */
 export function checkinIntervalMs(env = process.env) {
   const raw = env && env.EASYMED_CHECKIN_INTERVAL_MS;
   const n = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN;
   if (!Number.isFinite(n) || n <= 0) return INTERVAL_MS;
-  return Math.min(INTERVAL_MS, Math.max(60_000, Math.floor(n)));
+  return Math.min(MAX_INTERVAL_MS, Math.max(60_000, Math.floor(n)));
 }
 
 /**
@@ -383,7 +426,7 @@ async function performCheckin(db, dataDir, {
     } catch (e) {
       // Connection refused, DNS failure, timeout — all land here. Exactly the
       // "vendor is unreachable" case the whole file exists for.
-      console.warn('[checkin] could not reach the control plane, will retry tomorrow:', e && e.message);
+      console.warn('[checkin] could not reach the control plane, will retry next hour:', e && e.message);
       return;
     }
 
@@ -544,16 +587,17 @@ async function performCheckin(db, dataDir, {
     }
   } catch (e) {
     // Backstop. Every meaningful step above already has its own guard; this
-    // exists so that something unforeseen still resolves to "try again
-    // tomorrow" rather than an uncaught exception reaching the caller.
-    console.warn('[checkin] unexpected error, treating as "try again tomorrow":', e && e.message);
+    // exists so that something unforeseen still resolves to "try again next
+    // hour" rather than an uncaught exception reaching the caller.
+    console.warn('[checkin] unexpected error, treating as "try again next hour":', e && e.message);
   }
 }
 
 /**
- * Wires the daily call into the running process. Fires once ~60s after boot
- * (so it can never slow startup or delay listen()) and then every 24h — or
- * every EASYMED_CHECKIN_INTERVAL_MS, see checkinIntervalMs() above.
+ * Wires the check-in into the running process. Fires once ~60s after boot
+ * (so it can never slow startup or delay listen()) and then every hour by
+ * default — or every EASYMED_CHECKIN_INTERVAL_MS (60s floor, 24h ceiling),
+ * see checkinIntervalMs() above.
  * .unref() on both timers so neither can hold the process open — a clinic
  * shutting down must not wait on a licensing timer that has nothing urgent
  * to do.
