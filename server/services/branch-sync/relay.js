@@ -96,6 +96,46 @@ const INTERVAL_MS = 60 * 60 * 1000;
 export const LAST_PUBLISH_KEY = 'branch_sync_relay_publish';
 const LAST_PUBLISH = LAST_PUBLISH_KEY;
 
+// BRANCH_SELF_TOKEN_V1 — учётка, которую филиал выписывает СЕБЕ САМ.
+//
+// ЧТО СЛОМАЛОСЬ. Учётки, выписанные до Задачи 7a, имеют область из ОДНОГО
+// адреса — справочника (control-plane/server/db/migrations/008_relay_token_scopes.sql
+// выкачена 2026-09-02, а ключи выдавались и раньше). Записи Фазы 2 ездят по
+// адресам УЗЛОВ, поэтому поставщик отвечает 401 на каждую выгрузку журнала и
+// каждое чтение чужого, а экран филиала говорит «доступ отозван» — неверный
+// совет на ошибку кода. До этой правки лекарство было одно: перевыпустить ключ
+// подключения и отвезти его в другое здание.
+//
+// ПОЧЕМУ ФИЛИАЛ ВПРАВЕ ВЫПИСАТЬ ЕЁ СЕБЕ. Вторичный филиал — тоже
+// АКТИВИРОВАННАЯ клиника у поставщика: /cp/v1/branch заводит ему собственный
+// clinic_id вида c-…-bN и собственный install_token (проверено на филиале
+// владельца, c-000005-b2). Маршрут выписки пускает ЛЮБУЮ активированную
+// клинику (`SELECT clinic_id FROM clinics WHERE install_token = ? AND active = 1`
+// в control-plane/server/routes/relay-token.js) и выдаёт права на те адреса,
+// которые попросили; сами адреса выводятся из ключа группы, который у филиала и
+// так есть (relay-crypto.js relayIdFor). Значит выписка не даёт филиалу НИЧЕГО,
+// чего у него не было: тем же install_token-ом он и так открывает на релее
+// любой адрес, который знает (routes/relay.js, первая ветка аутентификации).
+//
+// ЧТО ЭТО МЕНЯЕТ В ОТЗЫВЕ, сказано прямо. Отзыв учётки филиала
+// (relay_tokens.revoked_at — руками в базе поставщика, кнопки для этого нет)
+// перестаёт что-либо значить для АКТИВИРОВАННОГО филиала: он выпишет себе
+// новую. Он и раньше значил немногое — install_token того же филиала открывает
+// те же адреса, — но теперь это происходит само. Рычаг, который работает:
+// снять активацию с клиники филиала (`clinics.active = 0` гасит и её
+// install_token, и все выписанные ей учётки — и мы, и clinicForRelayToken
+// смотрят на active) либо перевыпустить ключ группы в главной клинике (сменятся
+// все адреса сразу). Для филиала БЕЗ активации — того самого, которому ключ
+// привезли руками, — отзыв работает ровно как работал: выписывать ему нечем.
+export const OWN_TOKEN_KEY = 'branch_sync_own_relay_token';
+// Отметка ПОПЫТКИ выписки — предохранитель от установки, сломанной навсегда.
+export const OWN_TOKEN_TRY_KEY = 'branch_sync_own_relay_token_try';
+// Не чаще раза в час, то есть не чаще одного часового прогона. Потолок у
+// поставщика — 64 живых учётки на клинику (MAX_LIVE_TOKENS_PER_CLINIC), и
+// выписка на каждый отказ съела бы его за трое суток, после чего 409 закрыл бы
+// филиалу и этот путь.
+const OWN_TOKEN_RETRY_MS = 60 * 60 * 1000;
+
 /** Куда ходить. Читает окружение при каждом вызове — как checkinUrl(). */
 export function relayUrl(relayId, env = process.env) {
   const base = String((env && env.EASYMED_CONTROL_URL) || DEFAULT_ENDPOINT).trim().replace(/\/+$/, '');
@@ -156,9 +196,44 @@ function installToken(dataDir) {
  * гарантированный 401, который на экране не отличить от «сервер не принял
  * установку», тогда как правильный ответ — «учётки нет» (relay_not_enrolled).
  */
-function relayCredential(dataDir, pairing) {
+function relayCredential(db, dataDir, pairing) {
+  // BRANCH_SELF_TOKEN_V1 — СВОЯ выписанная учётка сильнее приехавшей в ключе, и
+  // это следствие того, зачем она заводится: та, что в ключе, может не знать
+  // адресов узлов вовсе (выписана до Задачи 7a), и предпочесть её значило бы
+  // чинить 401 ровно до следующего запроса. Обратный порядок дал бы вечный
+  // цикл «отказ → выписка → отказ». Учётку из ключа при этом НЕ ТРОГАЕМ: она
+  // остаётся запасной и остаётся доказательством связывания.
+  const own = ownRelayToken(db, pairing);
+  if (own) return own;
   const fromKey = pairing && typeof pairing.relay_token === 'string' ? pairing.relay_token.trim() : '';
   return fromKey || installToken(dataDir);
+}
+
+/**
+ * Сохранённая СВОЯ учётка филиала — или null.
+ *
+ * ТОЛЬКО У ВТОРИЧНОГО ФИЛИАЛА: главная клиника предъявляет install_token и
+ * ветки для неё здесь не заводится (её путь этой правкой не меняется вовсе).
+ *
+ * И ТОЛЬКО НА ТОМ КЛЮЧЕ ГРУППЫ, НА КОТОРЫЙ ВЫПИСАНА. Перевыпуск ключа группы
+ * меняет все адреса разом, и учётка, выписанная на прежние, мертва — а вот
+ * учётка из НОВОГО ключа подключения рабочая. Не сверив адрес, мы бы
+ * предъявляли мёртвую и отвечали 401 на ровно то действие, которым владелец
+ * всё починил. Сверяется адрес справочника: он первый в области и выводится из
+ * ключа группы так же, как остальные.
+ */
+function ownRelayToken(db, pairing) {
+  if (!db || !pairing || pairing.role !== 'secondary') return null;
+  const raw = getState(db, OWN_TOKEN_KEY);
+  if (!raw) return null;
+  let rec = null;
+  try { rec = JSON.parse(raw); } catch { rec = null; }
+  if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return null;
+  const token = typeof rec.token === 'string' ? rec.token.trim() : '';
+  if (!token) return null;
+  const relayId = relayIdFor(pairing.group_key);
+  if (typeof rec.relay_id === 'string' && rec.relay_id && rec.relay_id !== relayId) return null;
+  return token;
 }
 
 // control_state — те же две строчки, что в rpc/branch-sync.js и checkin.js.
@@ -260,7 +335,7 @@ export async function publishCatalogue(db, dataDir, {
   const relayId = relayIdFor(pairing.group_key);
   if (!relayId) return { ok: false, reason: 'relay_no_key' };
 
-  const token = relayCredential(dataDir, pairing);
+  const token = relayCredential(db, dataDir, pairing);
   // Клиника, активированная по телефону и никогда не ходившая к поставщику,
   // резервным каналом пользоваться не может — и это честный отказ, а не молчание:
   // маршрут на той стороне пускает только активированные установки.
@@ -290,6 +365,11 @@ export async function publishCatalogue(db, dataDir, {
   }
 
   if (!res.ok) {
+    // ЗДЕСЬ ПОЧИНКИ УЧЁТКОЙ НЕТ, и это не пропуск (BRANCH_SELF_TOKEN_V1).
+    // Выгружает справочник только ГЛАВНАЯ клиника, а она предъявляет
+    // install_token — учётку, у которой области нет вовсе: 401 у неё означает
+    // не «адрес вне области», а «поставщик не признал эту установку», и
+    // выписывать по такому отказу нечем и незачем.
     if (res.status === 401 || res.status === 403) return { ok: false, reason: 'relay_unauthorized' };
     if (res.status === 413) return { ok: false, reason: 'relay_too_large' };
     return { ok: false, reason: 'relay_server_error' };
@@ -382,6 +462,14 @@ export async function fetchCatalogue(dataDir, {
   timeoutMs = DOWNLOAD_TIMEOUT_MS,
   maxBlobBytes = MAX_BLOB_BYTES,
   env = process.env,
+  now = () => new Date(),
+  // BRANCH_SELF_TOKEN_V1 — база НЕОБЯЗАТЕЛЬНА и по умолчанию её нет: эта
+  // функция ничего в базу не пишет по построению (решение о применении
+  // принимает вызывающий), и менять это ради починки учётки не стоит.
+  // Передали — филиал умеет выписать себе новую и сохранить её; не передали —
+  // поведение ровно прежнее. Выписывать учётку, которую негде сохранить,
+  // значило бы терять её на каждом запросе.
+  db = null,
 } = {}) {
   const pairing = readPairing(dataDir);
   if (!pairing || pairing.role !== 'secondary') return { ok: false, reason: 'relay_not_secondary' };
@@ -390,7 +478,7 @@ export async function fetchCatalogue(dataDir, {
   const relayId = relayIdFor(pairing.group_key);
   if (!relayId) return { ok: false, reason: 'relay_no_key' };
 
-  const token = relayCredential(dataDir, pairing);
+  let token = relayCredential(db, dataDir, pairing);
   // ОТДЕЛЬНЫЙ КОД, А НЕ relay_not_enrolled, и это правка про лекарство, а не про
   // оттенок формулировки. Эта функция по построению работает только у
   // ПОДКЛЮЧЁННОГО филиала (проверка role выше), а подключённый филиал у
@@ -402,15 +490,24 @@ export async function fetchCatalogue(dataDir, {
   if (!token) return { ok: false, reason: 'relay_branch_no_token' };
 
   assertControlUrlIsTestSafe(env, fetchImpl);   // PROD_GUARD_V1
+  const heal = selfHealToken(db, dataDir, pairing, { fetchImpl, env, now });
   let res;
-  try {
-    res = await fetchImpl(relayUrl(relayId, env), {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch {
-    return { ok: false, reason: 'relay_offline' };
+  for (;;) {
+    try {
+      res = await fetchImpl(relayUrl(relayId, env), {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch {
+      return { ok: false, reason: 'relay_offline' };
+    }
+    if (res.ok || (res.status !== 401 && res.status !== 403)) break;
+    // BRANCH_SELF_TOKEN_V1 — ОДИН ПОВТОР, и только своей выпиской. heal()
+    // отвечает второй раз null по построению, поэтому цикла здесь быть не может.
+    const fresh = await heal();
+    if (!fresh || fresh === token) break;
+    token = fresh;
   }
 
   if (!res.ok) {
@@ -421,14 +518,16 @@ export async function fetchCatalogue(dataDir, {
     // действием и на ДРУГОЙ машине — новым ключом подключения, — а «проверьте
     // активацию клиники» не чинится ничем.
     //
-    // ТРЕТЬЕГО СЛУЧАЯ — «адрес вне области токена» — ЗДЕСЬ БЫТЬ НЕ ДОЛЖНО,
-    // и это не надежда, а свойство выписки: область токена — весь алфавит узлов
-    // сразу (relayScope), а не буквы, заведённые на момент выдачи ключа. Именно
-    // потому, что новый ключ подключения его бы НЕ ЧИНИЛ: ключ собирается из
-    // СОХРАНЁННОГО токена (rpc/branch-sync.js branchKeyFor), а выписка повторно
-    // не идёт никогда (ensureBranchToken), так что совет «возьмите новый ключ» на
-    // такой 401 был бы таким же неверным, как до Задачи 7a. Если этот отказ всё
-    // же придёт на адрес узла из A..Z — это ошибка кода, а не отзыв доступа.
+    // ТРЕТИЙ СЛУЧАЙ — «адрес вне области токена» — ВСЁ-ТАКИ СУЩЕСТВУЕТ, и
+    // здесь стояло обратное. Область в весь алфавит сразу (relayScope) выдаётся
+    // с Задачи 7a, но только тем, кого выписали ПОСЛЕ неё: учётки, уехавшие в
+    // ключах раньше, знают один адрес — этот самый справочник. Такой филиал
+    // забирает копию и не может ни выложить свой журнал, ни прочитать чужой, а
+    // новый ключ подключения его НЕ ЧИНИТ: ключ собирается из СОХРАНЁННОГО
+    // токена (rpc/branch-sync.js branchKeyFor), а выписка повторно не идёт
+    // никогда (ensureBranchToken). Поэтому филиал выписывает учётку себе сам —
+    // цикл выше, BRANCH_SELF_TOKEN_V1. Сюда мы доходим, только если и это не
+    // вышло, и тогда совет прежний и верный.
     if (res.status === 401 || res.status === 403) return { ok: false, reason: 'relay_branch_revoked' };
     // 404 — блоба нет. Самый обычный случай: главный филиал не включал выгрузку
     // либо ещё ни разу не выгружался. Отдельная причина, потому что чинится это
@@ -707,7 +806,7 @@ function journalContext(db, dataDir, self) {
   // ключом до Маршрута Б). Маршрут А при этом работает — это не поломка.
   if (!relayIdFor(pairing.group_key, me)) return { ok: false, reason: 'relay_no_key' };
 
-  const token = relayCredential(dataDir, pairing);
+  const token = relayCredential(db, dataDir, pairing);
   if (!token) {
     // Те же два разных лекарства, что у справочника: главной клинике —
     // «проверьте активацию», филиалу — «возьмите новый ключ подключения».
@@ -895,18 +994,30 @@ export async function publishJournal(db, dataDir, {
   }
 
   assertControlUrlIsTestSafe(env, fetchImpl);   // PROD_GUARD_V1
+  // BRANCH_SELF_TOKEN_V1 — ИМЕННО ЗДЕСЬ ЖИЛА ПОЛОМКА: адрес узла (relayIdFor с
+  // буквой) в область старой учётки не входит, и 401 приходил на КАЖДУЮ
+  // выгрузку журнала. Филиал берёт себе новую учётку и повторяет запрос ОДИН
+  // раз; не вышло — прежняя причина и прежняя фраза на экране.
+  const heal = selfHealToken(db, dataDir, ctx.pairing, { fetchImpl, env, now });
+  let token = ctx.token;
   let res;
-  try {
-    res = await fetchImpl(relayUrl(relayIdFor(ctx.pairing.group_key, ctx.self), env), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/octet-stream', Authorization: `Bearer ${ctx.token}` },
-      body: sealed,
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch {
-    // Офлайновая клиника — норма, а не поломка: порция уедет в следующий раз,
-    // и уедет ЦЕЛИКОМ, потому что markSent ниже не выполнился.
-    return { ok: false, reason: 'relay_offline' };
+  for (;;) {
+    try {
+      res = await fetchImpl(relayUrl(relayIdFor(ctx.pairing.group_key, ctx.self), env), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream', Authorization: `Bearer ${token}` },
+        body: sealed,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch {
+      // Офлайновая клиника — норма, а не поломка: порция уедет в следующий раз,
+      // и уедет ЦЕЛИКОМ, потому что markSent ниже не выполнился.
+      return { ok: false, reason: 'relay_offline' };
+    }
+    if (res.ok || (res.status !== 401 && res.status !== 403)) break;
+    const fresh = await heal();
+    if (!fresh || fresh === token) break;
+    token = fresh;
   }
 
   if (!res.ok) {
@@ -1031,21 +1142,34 @@ const noWork = (skipped = 0, already = false) => {
   return already ? { ...stats, already: true } : stats;
 };
 
-/** Скачать и распечатать журнал ОДНОГО соседа. Ничего не пишет в базу. */
-async function downloadJournal(ctx, peer, { fetchImpl, timeoutMs, maxBlobBytes, env }) {
+/**
+ * Скачать и распечатать журнал ОДНОГО соседа. Ничего не пишет в базу.
+ *
+ * BRANCH_SELF_TOKEN_V1 — `auth` общий на весь обмен и `heal` тоже: учётка
+ * берётся ОДИН раз на прогон, а не на каждого соседа (иначе сеть из пяти
+ * зданий выписывала бы пять штук за один часовой такт), и починившись на
+ * первом соседе, мы несём новую учётку всем следующим.
+ */
+async function downloadJournal(ctx, peer, { fetchImpl, timeoutMs, maxBlobBytes, env, auth, heal }) {
   const relayId = relayIdFor(ctx.pairing.group_key, peer);
   if (!relayId) return { ok: false, reason: 'relay_no_key' };
 
   assertControlUrlIsTestSafe(env, fetchImpl);   // PROD_GUARD_V1
   let res;
-  try {
-    res = await fetchImpl(relayUrl(relayId, env), {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${ctx.token}` },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch {
-    return { ok: false, reason: 'relay_offline' };
+  for (;;) {
+    try {
+      res = await fetchImpl(relayUrl(relayId, env), {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${auth.token}` },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch {
+      return { ok: false, reason: 'relay_offline' };
+    }
+    if (res.ok || (res.status !== 401 && res.status !== 403)) break;
+    const fresh = await heal();
+    if (!fresh || fresh === auth.token) break;
+    auth.token = fresh;
   }
 
   if (!res.ok) {
@@ -1090,6 +1214,7 @@ export async function fetchJournals(db, dataDir, {
   timeoutMs = DOWNLOAD_TIMEOUT_MS,
   maxBlobBytes = MAX_BLOB_BYTES,
   env = process.env,
+  now = () => new Date(),
   self = null,
   peers = null,
   applyImpl = applyBatch,
@@ -1105,8 +1230,11 @@ export async function fetchJournals(db, dataDir, {
 
   const out = {};
   let backed = false;
+  // Одна учётка и одна попытка починки на ВЕСЬ обмен — см. шапку downloadJournal.
+  const auth = { token: ctx.token };
+  const heal = selfHealToken(db, dataDir, ctx.pairing, { fetchImpl, env, now });
   for (const peer of list) {
-    const got = await downloadJournal(ctx, peer, { fetchImpl, timeoutMs, maxBlobBytes, env });
+    const got = await downloadJournal(ctx, peer, { fetchImpl, timeoutMs, maxBlobBytes, env, auth, heal });
     if (!got.ok) { out[peer] = { reason: got.reason }; continue; }
 
     // КВИТАНЦИЯ — ПЕРВЫМ ДЕЛОМ (Задача 7b), до всякого применения и независимо
@@ -1391,6 +1519,21 @@ export async function mintRelayToken(dataDir, {
   const token = installToken(dataDir);
   if (!token) return { ok: false, reason: 'relay_not_enrolled' };
 
+  return requestRelayToken({ token, relayId, relayIds, fetchImpl, timeoutMs, env });
+}
+
+/**
+ * САМ ПОХОД ЗА УЧЁТКОЙ: один POST и перевод ответа в закрытый словарь причин.
+ *
+ * Вынесен из mintRelayToken, когда за учёткой пошёл ещё и сам филиал
+ * (ensureOwnRelayToken ниже). Общая функция здесь обязательна, а не удобна:
+ * разъехавшись, две половины отправляли бы РАЗНЫЕ тела на один маршрут — а тело
+ * тут несёт совместимость со старой панелью поставщика (оба поля), и вторая
+ * копия однажды осталась бы без одного из них.
+ *
+ * НИКОГДА не бросает; кто предъявляется и на какие адреса — решает вызывающий.
+ */
+async function requestRelayToken({ token, relayId, relayIds, fetchImpl, timeoutMs, env }) {
   assertControlUrlIsTestSafe(env, fetchImpl);   // PROD_GUARD_V1
   let res;
   try {
@@ -1431,6 +1574,143 @@ export async function mintRelayToken(dataDir, {
   // relay_ids — то, что ПОПРОСИЛИ, а не то, что вернул сервер: старая панель
   // этого поля не отдаёт вовсе, и вызывающему нужна одна форма ответа, а не две.
   return { ok: true, token: minted, relay_id: relayId, relay_ids: relayIds };
+}
+
+/**
+ * BRANCH_SELF_TOKEN_V1 — ФИЛИАЛ ВЫПИСЫВАЕТ УЧЁТКУ РЕЗЕРВНОГО КАНАЛА СЕБЕ САМ.
+ *
+ * Зачем это вообще возможно и что меняет в отзыве — в шапке OWN_TOKEN_KEY.
+ * Коротко: филиал предъявляет СВОЙ install_token (у активированного филиала он
+ * есть — c-…-bN), а просит адреса, которые и так выводит из своего ключа
+ * группы, поэтому нового доступа не получает.
+ *
+ * ОБЛАСТЬ — ТА ЖЕ, что просит главная клиника: справочник плюс весь алфавит
+ * узлов (relayScope). Ровно та же функция, а не своя копия: филиал, выписавший
+ * себе область уже, чем чужая, снова упёрся бы в 401 на соседе, заведённом
+ * завтра, — то есть починил бы сегодняшний день и сломал следующий.
+ *
+ * НЕ ЧАЩЕ РАЗА В ЧАС и никогда не бросает. Отметка ставится на КАЖДУЮ попытку,
+ * удачную и нет: удачная и так закрывает вопрос сохранённой учёткой, а
+ * неудачная не должна повторяться каждым часовым прогоном — у поставщика
+ * потолок 64 живых учётки на клинику.
+ *
+ * @param {boolean} [options.force] обойти часовой предохранитель — только для
+ *   ДЕЙСТВИЯ ЧЕЛОВЕКА (связывание ключом), где ждать час бессмысленно.
+ * @returns {Promise<{ok:true, token:string, relay_id:string, relay_ids:string[]}
+ *   |{ok:false, reason:string}>}
+ */
+export async function ensureOwnRelayToken(db, dataDir, {
+  fetchImpl = globalThis.fetch,
+  timeoutMs = MINT_TIMEOUT_MS,
+  env = process.env,
+  now = () => new Date(),
+  retryMs = OWN_TOKEN_RETRY_MS,
+  force = false,
+} = {}) {
+  if (!db) return { ok: false, reason: 'relay_no_db' };
+  const pairing = readPairing(dataDir);
+  // ТОЛЬКО ВТОРИЧНЫЙ ФИЛИАЛ. Главная клиника предъявляет install_token и на
+  // релее, и на check-in-е; выписывать ей учётку означало бы завести ей вторую
+  // личность ради задачи, которой у неё нет.
+  if (!pairing || pairing.role !== 'secondary') return { ok: false, reason: 'relay_not_secondary' };
+
+  const relayId = relayIdFor(pairing.group_key);
+  if (!relayId) return { ok: false, reason: 'relay_no_key' };
+  const relayIds = relayScope(pairing.group_key, relayId, groupLetters(db));
+
+  // Установка, связанная ключом, но НИКОГДА не активированная — тот самый
+  // филиал, которому ключ привезли руками. Предъявить поставщику нечего, поход
+  // кончился бы 401 и только задержал бы ответ на экране. Проверка ДО
+  // предохранителя и до сети: это не «сегодня не вышло», а «нечем».
+  const token = installToken(dataDir);
+  if (!token) return { ok: false, reason: 'relay_not_enrolled' };
+
+  const at = now();
+  if (!force) {
+    const last = Date.parse(getState(db, OWN_TOKEN_TRY_KEY) || '');
+    if (Number.isFinite(last) && at.getTime() - last < retryMs) {
+      return { ok: false, reason: 'relay_mint_throttled' };
+    }
+  }
+  // ОТМЕТКА ДО ПОХОДА, а не после: упавший на середине запрос — ровно тот
+  // случай, ради которого предохранитель и стоит.
+  try { putState(db, OWN_TOKEN_TRY_KEY, at.toISOString()); }
+  catch (e) { console.warn('[branch-sync] could not record the relay-token attempt:', e && e.message); }
+
+  const r = await requestRelayToken({ token, relayId, relayIds, fetchImpl, timeoutMs, env });
+  if (!r.ok) return r;
+
+  try {
+    // Вместе с АДРЕСОМ, на который выписана: перевыпуск ключа группы меняет все
+    // адреса, и по этому полю сохранённая учётка становится негодной сама
+    // (ownRelayToken), без чистки на стороне того, кто ключ перевыпустил.
+    putState(db, OWN_TOKEN_KEY, JSON.stringify({ token: r.token, relay_id: relayId, at: at.toISOString() }));
+  } catch (e) {
+    // Учётка у поставщика уже выписана и второй раз её не покажут. Записать не
+    // вышло — пользуемся ею хотя бы в этом запросе (ради него и шли), а вот
+    // молчать нельзя: следующий прогон выпишет ещё одну и съест потолок.
+    console.warn('[branch-sync] minted an own relay token and could not store it:', e && e.message);
+    return { ...r, stored: false };
+  }
+  return r;
+}
+
+/**
+ * Буквы узлов группы для области — best-effort.
+ *
+ * Тот же запрос, что у главной клиники (rpc/branch-sync.js ensureBranchToken), и
+ * та же оговорка: буквы только ДОПОЛНЯЮТ алфавит A..Z и сузить область не
+ * могут, поэтому пустой ответ ничего не ломает. Филиал знает соседей из списка
+ * сети в справочнике (catalogue.js roster).
+ */
+function groupLetters(db) {
+  try {
+    return db.prepare(
+      "SELECT letter FROM branches WHERE letter IS NOT NULL AND letter <> '' ORDER BY id"
+    ).all().map((row) => row.letter);
+  } catch (e) {
+    console.warn('[branch-sync] could not list branch letters for the relay scope:', e && e.message);
+    return [];
+  }
+}
+
+/**
+ * ОДНА попытка починки на вызов — замыкание, а не флаг в базе.
+ *
+ * Возвращает функцию, которая ПЕРВЫЙ раз пробует выписать учётку и отдаёт её,
+ * а дальше всегда null. Отсюда и невозможность цикла: место вызова повторяет
+ * запрос ровно тогда, когда получило непустой ответ, а второго непустого не
+ * будет. Второй предохранитель — часовой, в самой выписке — про ПРОГОНЫ, этот
+ * про один вызов; нужны оба, и путать их не надо.
+ *
+ * Главная клиника здесь не чинится никогда (проверка роли внутри выписки), и
+ * установка без базы — тоже: сохранить учётку негде.
+ */
+function selfHealToken(db, dataDir, pairing, opts) {
+  let used = false;
+  return async () => {
+    if (used) return null;
+    used = true;
+    if (!db || !pairing || pairing.role !== 'secondary') return null;
+    let r;
+    try {
+      r = await ensureOwnRelayToken(db, dataDir, opts);
+    } catch (e) {
+      // Починка не вправе уронить синхронизацию: без неё было плохо, с
+      // исключением станет хуже.
+      console.warn('[branch-sync] could not mint an own relay token:', e && e.message);
+      return null;
+    }
+    if (!r.ok) {
+      // Не ошибка, а обычный ход событий: офлайн, предохранитель, нет активации.
+      // Причина уедет на экран прежняя — та, что была до починки.
+      if (r.reason !== 'relay_mint_throttled') {
+        console.warn('[branch-sync] the branch could not mint its own relay token:', r.reason);
+      }
+      return null;
+    }
+    return r.token;
+  };
 }
 
 /**

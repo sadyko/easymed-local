@@ -29,6 +29,7 @@ import {
   // записи и в ОБЕ стороны: главная клиника здесь — узел, а не источник.
   publishJournal, fetchJournals, QUIET_JOURNAL_REASONS, LAST_JOURNAL_KEY,
   withExchangeLock, SEED_PROGRESS_KEY,
+  ensureOwnRelayToken,   // BRANCH_SELF_TOKEN_V1 — филиал берёт себе доступ сам
 } from '../branch-sync/relay.js';
 import { relayIdFor } from '../branch-sync/relay-crypto.js';
 
@@ -1644,8 +1645,18 @@ const BRANCH_CLINIC_ID_RE = /-b\d+$/;
  * (enroll_offline). Отложенное погашение кода означало бы, что установка
  * однажды сменит личность сама, без человека, в неизвестный момент, — цена
  * куда выше сэкономленного нажатия.
+ *
+ * BRANCH_SELF_TOKEN_V1 — И ТРЕТЬЕ ДЕЛО, ПОСЛЕДНИМ: активированный филиал берёт
+ * себе учётку резервного канала (relay.js ensureOwnRelayToken). Учётка в ключе
+ * могла быть выписана до Задачи 7a и знать один адрес — справочник, — и тогда
+ * записи не поедут ни в одну сторону; без этой строки филиал узнал бы об этом
+ * только через час, первым отказом. Неудача сюда не поднимается никогда: пара
+ * записана, Маршрут А от поставщика не зависит, а на 401 филиал починится сам.
  */
-export async function branchSyncPairAdopt(db, args, user, { enrollImpl = enrollWithCode } = {}) {
+export async function branchSyncPairAdopt(db, args, user, {
+  enrollImpl = enrollWithCode,
+  ownTokenImpl = ensureOwnRelayToken,   // BRANCH_SELF_TOKEN_V1
+} = {}) {
   // Связывание — как было, со всеми его проверками и откатами. Отказ здесь
   // бросает, и до переселения дело не доходит: личность меняет только тот
   // ключ, который эта установка приняла целиком, вместе с буквой.
@@ -1654,19 +1665,47 @@ export async function branchSyncPairAdopt(db, args, user, { enrollImpl = enrollW
   const dataDir = getDataDir();
   const parsed = parseKey(args && args.key);
   const code = parsed.ok && parsed.enroll_code ? parsed.enroll_code : null;
-  // Ключ старого выпуска (без кода) связывает и ничего больше — ровно как до
-  // этой правки.
-  if (!code) return paired;
 
   const identity = readJsonFile(path.join(dataDir, 'control.json'));
   const enrolled = !!(identity && typeof identity.install_token === 'string' && identity.install_token);
-  if (!enrolled) return paired;
   const myId = typeof (identity && identity.clinic_id) === 'string' ? identity.clinic_id : '';
-  if (BRANCH_CLINIC_ID_RE.test(myId)) return paired;
+  // Ключ старого выпуска (без кода) связывает и ничего больше; не активированная
+  // установка активируется своим экраном; уже филиал — переселять некуда.
+  // Каждый из трёх случаев ниже — ровно как до этой правки.
+  let adopted = null;
+  if (code && enrolled && !BRANCH_CLINIC_ID_RE.test(myId)) {
+    const r = await enrollImpl(dataDir, code, { replace: true });
+    if (!r.ok) throw new RpcError(reasonText(ADOPT_REASONS[r.reason] || 'enroll_server_error'), 400);
+    adopted = { clinic_id: r.clinic_id, clinic_name: r.clinic_name };
+  }
 
-  const r = await enrollImpl(dataDir, code, { replace: true });
-  if (!r.ok) throw new RpcError(reasonText(ADOPT_REASONS[r.reason] || 'enroll_server_error'), 400);
-  return { ...paired, adopted: { clinic_id: r.clinic_id, clinic_name: r.clinic_name } };
+  // BRANCH_SELF_TOKEN_V1 — УЧЁТКА БЕРЁТСЯ СРАЗУ, а не через первый отказ.
+  //
+  // ПОСЛЕ переселения намеренно: до него install_token принадлежит ЧУЖОЙ
+  // клинике (установку активировали как отдельную), и выписанная им учётка
+  // записала бы блобы филиала на чужой номер.
+  //
+  // Ключ подключения мог приехать с учёткой старого выпуска — той самой, что
+  // знает один адрес, — и тогда без этой строки филиал узнал бы о поломке
+  // только через час, первым 401. Успех не проверяется и наружу не идёт: пара
+  // уже записана, Маршрут А от поставщика не зависит вовсе, и клиника без
+  // интернета обязана уметь подключить филиал. Не вышло — починимся на 401.
+  await mintOwnRelayToken(db, dataDir, ownTokenImpl);
+
+  return adopted ? { ...paired, adopted } : paired;
+}
+
+/** Взять себе учётку резервного канала. Best-effort: НИКОГДА не бросает. */
+async function mintOwnRelayToken(db, dataDir, ownTokenImpl) {
+  try {
+    // force — потому что это ДЕЙСТВИЕ ЧЕЛОВЕКА: часовой предохранитель выписки
+    // сторожит фоновые прогоны, а владелец, только что введший ключ, ждать час
+    // не должен.
+    const r = await ownTokenImpl(db, dataDir, { force: true });
+    if (r && r.ok === false) console.warn('[branch-sync] paired without an own relay token:', r.reason);
+  } catch (e) {
+    console.warn('[branch-sync] could not mint an own relay token while pairing:', e && e.message);
+  }
 }
 
 // Словарь enroll.js -> словарь этого экрана. Отдельная таблица, а не общие
@@ -1926,7 +1965,10 @@ async function syncCatalogue(db, dataDir, {
   let pulled = await pullImpl(dataDir);
 
   if (!pulled.ok && RELAY_FALLBACK_REASONS.has(pulled.reason)) {
-    const viaRelay = await relayImpl(dataDir);
+    // БАЗА ПЕРЕДАЁТСЯ (BRANCH_SELF_TOKEN_V1) — и это единственное, ради чего:
+    // получив 401, филиал выписывает себе учётку сам и обязан её СОХРАНИТЬ.
+    // Сама fetchCatalogue в базу по-прежнему не пишет ничего другого.
+    const viaRelay = await relayImpl(dataDir, { db });
     if (viaRelay.ok) {
       route = 'relay';
       relayedAt = viaRelay.generated_at;
