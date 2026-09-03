@@ -47,6 +47,7 @@ import {
     roleBadge, roleExplainer, syncLine, whenLabel, canSyncNow, addressValue,
     syncKeyLine, relayExplainer, publishLine, seedLine, canRegenerateKey, KEY_LOSS_WARNING,
     branchRows, branchListNote, KEY_REISSUE_WARNING, KEY_REISSUE_QUESTION,
+    BRANCH_KEY_REISSUE_WARNING, BRANCH_KEY_REISSUE_QUESTION,
     LETTER_PERMANENCE_WARNING, ADD_BRANCH_QUESTION, ISSUE_KEY_QUESTION,
     UNLINK_WARNING_MAIN, UNLINK_WARNING_SECONDARY, UNLINK_QUESTION,
     UNLINKED_BRANCH_NOTE, pairedMessage, letterExplainer, becomeMainState,
@@ -449,7 +450,10 @@ function paintBranchList(card) {
 
         const actCell = h('td', { class: 'bsync-td-act' },
             row.warnTag ? Tag(row.warnTag, { kind: 'warn' }) : null,
-            row.action ? actionBtn(row) : null);
+            row.action ? actionBtn(row) : null,
+            // BRANCH_REISSUE_V1 — вторая кнопка, и она заменяет ключ, а не
+            // чинит его: старая установка филиала перестаёт приниматься.
+            row.reissue ? reissueBtn(row) : null);
 
         return h('tr', { class: row.state === 'self' ? 'bsync-tr-self' : null },
             nameCell, letterCell, keyCell, actCell);
@@ -473,6 +477,43 @@ function paintBranchList(card) {
             try {
                 const data = await rpc('branch_sync_branch_key', { branch_id: row.id });
                 toast(tr(row.action.done), 'ok');
+                noteRelay(actionStatus, data);
+                await reload();
+                return;   // строка перерисована — кнопки больше нет
+            } catch (e) {
+                actionStatus.textContent = e.message;
+            }
+            btn.disabled = false;
+        });
+        return btn;
+    }
+
+    /**
+     * BRANCH_REISSUE_V1 — «Перевыпустить ключ»: новый код активации филиалу,
+     * чей компьютер переустановили.
+     *
+     * СВОЙ обработчик, а не ветка в actionBtn, по той же причине, по которой
+     * это отдельная кнопка: здесь ВСЕГДА спрашивают. Нажатие гасит прежнюю
+     * установку филиала у Easy-Med — она перестаёт проходить проверку в ту же
+     * секунду, — и это ровно тот случай, ради которого окно подтверждения на
+     * этом экране и заведено.
+     *
+     * НОВЫЙ КЛЮЧ ПОКАЗЫВАЕТСЯ ТАМ ЖЕ, ГДЕ И СТАРЫЙ: reload() перерисовывает
+     * строку, и в её поле уже лежит ключ с новым кодом — копировать его
+     * владелец будет оттуда же, откуда копировал прежний.
+     */
+    function reissueBtn(row) {
+        const btn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, row.reissue.label);
+        btn.addEventListener('click', async () => {
+            if (btn.disabled) return;
+            if (!confirmAction(BRANCH_KEY_REISSUE_WARNING, BRANCH_KEY_REISSUE_QUESTION, { name: row.name })) return;
+            btn.disabled = true;
+            actionStatus.textContent = '';
+            try {
+                const data = await rpc('branch_sync_reissue_key', { branch_id: row.id });
+                toast(tr(row.reissue.done), 'ok');
+                // Учётка резервного канала выписывается заново вместе с кодом,
+                // и не выписаться она может так же, как при заведении филиала.
                 noteRelay(actionStatus, data);
                 await reload();
                 return;   // строка перерисована — кнопки больше нет

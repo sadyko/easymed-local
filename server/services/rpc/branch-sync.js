@@ -1,11 +1,18 @@
+import path from 'node:path';
 import { hasAnyRole } from '../roles.js';
 import { getDataDir } from '../control/config.js';
 import { createBackup } from '../backup.js';
 import { applyCatalogue } from '../branch-sync/catalogue.js';
 import { pullCatalogue } from '../branch-sync/pull.js';
+// BRANCH_REISSUE_V1 — личность ЭТОЙ установки у поставщика (control.json) и
+// погашение кода активации. Оба нужны обеим половинам перевыпуска: главная
+// клиника доказывает своим install_token-ом, кто она, а филиал этим же кодом
+// меняет свою личность на филиальную.
+import { readJsonFile } from '../control/checkin.js';
+import { enrollWithCode } from '../control/enroll.js';
 import {
   readPairing, writePairing, makeMainKey, pairWithKey, clearPairing, suggestMainUrl, relayEnabled,
-  encodeKey,
+  encodeKey, parseKey,
 } from '../branch-sync/pairing.js';
 // BRANCH_IDENTITY_V1 — буква филиала: её выдаёт ГЛАВНЫЙ филиал (letters.js), а
 // читает эта установка про себя (identity.js).
@@ -17,6 +24,7 @@ import { ensureSyncGroup, regenerateSyncGroup, readSyncGroup } from '../branch-s
 import {
   fetchCatalogue, publishCatalogue, readLastPublish, mintRelayToken, relayMintable, LAST_PUBLISH_KEY,
   createBranchOnControlPlane,   // BRANCH_SELF_SERVICE_V1
+  reissueBranchOnControlPlane,   // BRANCH_REISSUE_V1
   // BRANCH_RECORDS_V1 (Задача 7) — тот же канал, что и у справочника, только возит
   // записи и в ОБЕ стороны: главная клиника здесь — узел, а не источник.
   publishJournal, fetchJournals, QUIET_JOURNAL_REASONS, LAST_JOURNAL_KEY,
@@ -210,6 +218,32 @@ REASONS.branch_unauthorized  = 'Easy-Med не признал эту устано
 REASONS.branch_parent_unpaid = 'Подписка клиники не активна — новые филиалы не заводятся. Обратитесь к менеджеру Easy-Med.';
 REASONS.branch_of_branch     = 'Филиал не может заводить свои филиалы. Ключ выдаёт главная клиника.';
 REASONS.branch_server_error  = 'Easy-Med не смог завести филиал. Попробуйте ещё раз позже.';
+
+// BRANCH_REISSUE_V1 — «Перевыпустить ключ» филиала (главная клиника) и приём
+// такого ключа на переустановленном компьютере (филиал). Две стороны одного
+// действия, поэтому и коды рядом.
+//
+// Отказы перевыпуска берут ГОТОВЫЕ фразы branch_offline / branch_unauthorized /
+// branch_server_error: это тот же сервер, та же аутентификация и то же
+// лекарство. Своих здесь ровно два — те, у которых лекарство ДРУГОЕ.
+REASONS.reissue_not_found = 'Easy-Med не знает такого филиала за этой клиникой: возможно, он уже удалён. Обратитесь в поддержку Easy-Med.';
+// Филиал, заведённый до этой версии — то есть до того, как главная клиника начала
+// запоминать, под каким номером филиал заведён у поставщика. Перевыпустить ему
+// код не по чему: угадывать номер нельзя, промах перевыпустил бы ЧУЖОЙ филиал.
+REASONS.reissue_unknown_branch = 'Этот филиал заведён старой версией — перевыпуск ключа для него недоступен; заведите филиал заново.';
+
+// ...и то же самое, увиденное с другой машины. Владелец вводит ключ на
+// компьютере филиала, а код в этом ключе уже погашен: либо филиал этим ключом
+// однажды активировался, либо ключ старый. Фраза называет ТУ КНОПКУ, которую
+// надо нажать, и ту машину, на которой она есть, — иначе владелец ищет
+// решение там, где его нет.
+REASONS.enroll_code_used = 'Код активации в этом ключе уже использован. В главной клинике нажмите «Перевыпустить ключ» для этого филиала и введите новый ключ.';
+// СВОЙ код на офлайн, а не общий `offline`: тот говорит «нет связи с ГЛАВНЫМ
+// филиалом, проверьте его компьютер и сеть», а код активации гасится у
+// Easy-Med. Совет проверять компьютер главного филиала здесь не чинит ничего.
+REASONS.enroll_offline = 'Связь с филиалами настроена, но подтвердить активацию у Easy-Med не удалось: нет связи с сервером Easy-Med. Проверьте интернет и введите ключ ещё раз.';
+REASONS.enroll_server_error = 'Связь с филиалами настроена, но Easy-Med не подтвердил активацию: сервер ответил ошибкой. Попробуйте ввести ключ ещё раз позже.';
+REASONS.enroll_too_many = 'Слишком много попыток активации подряд. Подождите несколько минут и введите ключ ещё раз.';
 
 // BRANCH_MAIN_PUSH_V1 — вторая половина ответа кнопки: обмен ЗАПИСЯМИ. Не
 // причина отказа, поэтому и не в REASONS: это то, что случилось, а не то, что
@@ -740,6 +774,104 @@ const branchTokenKey = (branchId) => BRANCH_TOKEN_PREFIX + branchId;
 // менялся бы от показа к показу, чего владелец как раз просил не делать.
 const BRANCH_ENROLL_PREFIX = 'branch_sync.enroll.';
 const branchEnrollKey = (branchId) => BRANCH_ENROLL_PREFIX + branchId;
+// BRANCH_REISSUE_V1 — ПОД КАКИМ НОМЕРОМ этот филиал заведён у поставщика.
+//
+// Рядом с кодом и учёткой, и по той же причине, что и они: поставщик выдаёт
+// clinic_id филиала ОДИН раз, в ответе на заведение (control-plane
+// routes/branch.js), и второй раз его показать негде — списка филиалов у
+// клиники поставщик не отдаёт вовсе. Не сохранив его тогда, перевыпустить код
+// этому филиалу невозможно никогда: перевыпуск адресуется именно по нему.
+const BRANCH_CLINIC_PREFIX = 'branch_sync.clinic.';
+const branchClinicKey = (branchId) => BRANCH_CLINIC_PREFIX + branchId;
+
+/** clinic_id ЭТОЙ установки у поставщика — из той же control.json, что и check-in. */
+function ownClinicId(dataDir) {
+  const identity = readJsonFile(path.join(dataDir, 'control.json'));
+  return identity && typeof identity.clinic_id === 'string' && identity.clinic_id ? identity.clinic_id : null;
+}
+
+/**
+ * BRANCH_REISSUE_V1 — ДОСТАВИТЬ номера филиалам, заведённым до этой правки.
+ *
+ * ПОЧЕМУ ЭТО ВООБЩЕ МОЖНО. Номера филиалов выдаёт поставщик, и выдаёт их
+ * ДЕТЕРМИНИРОВАННО: `nextBranchId` в control-plane/server/routes/branch.js
+ * складывает `<clinic_id родителя>-b<N>`, где N — «сколько детей у родителя уже
+ * есть, плюс один» (при столкновении номер увеличивается, пока свободный не
+ * найдётся). Строки филиалов у поставщика не удаляются — погашенный филиал
+ * помечается active = 0 и в COUNT(*) остаётся, — поэтому нумерация детей одной
+ * клиники строго последовательна и совпадает с ПОРЯДКОМ ЗАВЕДЕНИЯ: b1, b2, b3.
+ *
+ * ПОРЯДОК ЗАВЕДЕНИЯ У НАС ЗАПИСАН, и не по догадке: код активации кладётся в
+ * control_state в ту же секунду, когда поставщик его выдал (ensureBranchEnroll
+ * ниже), а control_state хранит updated_at. Сортировка по нему — это и есть
+ * последовательность обращений к поставщику. Порядок строк `branches` для
+ * этого НЕ ГОДИТСЯ: филиал, заведённый без интернета, получает код позже
+ * соседа, заведённого после него (BRANCH_ENROLL_REPAIR_V1 добирает код по
+ * кнопке), и по id порядок был бы обратным настоящему.
+ *
+ * ЧЕГО ЭТА ДОГАДКА НЕ ВИДИТ, названо прямо: ребёнка, которого поставщик завёл,
+ * а мы не записали (ответ не доехал; putState не смог записать — там стоит
+ * console.warn). Такой ребёнок занимает номер, и все следующие съезжают на
+ * единицу. Поэтому здесь стоит ПРОВЕРКА ЯКОРЯМИ: филиалы, чей номер сохранён
+ * при заведении (то есть известен точно), обязаны совпасть с вычисленными. Не
+ * совпали — не пишем НИЧЕГО и оставляем перевыпуск недоступным: отказ
+ * «заведите филиал заново» стоит дёшево, а перевыпуск чужого филиала гасит
+ * работающий компьютер в другом здании.
+ *
+ * ИДЕМПОТЕНТНА и ничего не переписывает: сохранённый номер сильнее вычисленного
+ * всегда.
+ *
+ * @returns {{ok:true, filled:number}|{ok:false, reason:string}}
+ */
+export function backfillBranchClinicIds(db, dataDir) {
+  const parent = ownClinicId(dataDir);
+  // Установка, которая сама не активирована, номеров филиалов не знает и знать
+  // не может: их выдают вместе с её собственным clinic_id.
+  if (!parent) return { ok: false, reason: 'branch_not_enrolled' };
+
+  let rows;
+  try {
+    // substr, НЕ LIKE, по той же причине, что и у BRANCH_TOKEN_PREFIX выше:
+    // в 'branch_sync.enroll.' есть точки и подчёркивания, а в LIKE '_' — это
+    // «любой знак».
+    rows = db.prepare(
+      'SELECT key, updated_at FROM control_state WHERE substr(key, 1, ?) = ?'
+    ).all(BRANCH_ENROLL_PREFIX.length, BRANCH_ENROLL_PREFIX);
+  } catch (e) {
+    console.warn('[branch-sync] could not read the branch enrolment records:', e && e.message);
+    return { ok: false, reason: 'branch_add_failed' };
+  }
+
+  const ordered = rows
+    .map((r) => ({ id: Number(String(r.key).slice(BRANCH_ENROLL_PREFIX.length)), at: String(r.updated_at || '') }))
+    .filter((r) => Number.isInteger(r.id) && r.id > 0)
+    // Секундная точность updated_at даёт совпадения; их разводит id, то есть
+    // порядок заведения строк — для филиалов, заведённых в одну секунду, он и
+    // есть порядок обращений.
+    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.id - b.id));
+
+  const plan = ordered.map((r, i) => ({
+    id: r.id,
+    guess: `${parent}-b${i + 1}`,
+    stored: getState(db, branchClinicKey(r.id)),
+  }));
+  const anchor = plan.find((p) => p.stored && p.stored !== p.guess);
+  if (anchor) {
+    // Именно предупреждение, а не тишина: это единственный признак того, что у
+    // поставщика есть филиал, о котором эта клиника не знает.
+    console.warn('[branch-sync] branch numbering does not line up with the vendor (branch', anchor.id,
+      'is recorded as a different one) — not guessing the rest');
+    return { ok: false, reason: 'reissue_unknown_branch' };
+  }
+
+  let filled = 0;
+  for (const p of plan) {
+    if (p.stored) continue;
+    try { putState(db, branchClinicKey(p.id), p.guess); filled += 1; }
+    catch (e) { console.warn('[branch-sync] could not record a branch clinic id:', e && e.message); }
+  }
+  return { ok: true, filled };
+}
 
 /**
  * Ключ подключения для строки списка — или null, если выдавать его не из чего.
@@ -842,6 +974,19 @@ async function ensureBranchEnroll(db, dataDir, branchId, branchName, branchImpl)
     console.warn('[branch-sync] got a branch enrollment code and could not store it:', e && e.message);
     return { ok: false, reason: 'write_failed', message: reasonText('write_failed') };
   }
+  // BRANCH_REISSUE_V1 — НОМЕР ФИЛИАЛА У ПОСТАВЩИКА, и записывается он ровно
+  // здесь, потому что больше его нигде не покажут: списка филиалов клиники
+  // control plane не отдаёт. Без него перевыпуск кода этому филиалу
+  // недоступен навсегда — а именно он и чинит переустановленный компьютер.
+  //
+  // ОТДЕЛЬНЫМ try, ПОСЛЕ кода: код — то, ради чего сюда шли, и потерять уже
+  // выданный код из-за неудачной записи номера было бы худшим разменом.
+  // Не записалось — филиал остаётся рабочим, а номер восстановит
+  // backfillBranchClinicIds по порядку заведения.
+  if (typeof r.clinic_id === 'string' && r.clinic_id) {
+    try { putState(db, branchClinicKey(branchId), r.clinic_id); }
+    catch (e) { console.warn('[branch-sync] could not store the branch clinic id:', e && e.message); }
+  }
   return { ok: true, clinic_id: r.clinic_id };
 }
 
@@ -865,6 +1010,11 @@ function branchRow(db, pairing, branch, selfId) {
     // BRANCH_ENROLL_REPAIR_V1 — без этого экран не мог показать самую тяжёлую
     // из поломок: ключ выглядит исправным, а филиал им не активируется.
     has_enroll_code: !!getState(db, branchEnrollKey(branch.id)),
+    // BRANCH_REISSUE_V1 — знаем ли мы, под каким номером филиал заведён у
+    // поставщика. Ровно ФАКТ, а не сам номер: экран решает по нему, показывать
+    // ли кнопку «Перевыпустить ключ», а кнопка, которую показали и которая
+    // всегда отказывает, хуже отсутствующей.
+    has_clinic_id: !!getState(db, branchClinicKey(branch.id)),
   };
 }
 
@@ -877,8 +1027,28 @@ function branchRow(db, pairing, branch, selfId) {
  */
 export function branchSyncBranches(db, args, user) {
   requireAdmin(user);
-  const pairing = readPairing(getDataDir());
+  const dataDir = getDataDir();
+  const pairing = readPairing(dataDir);
   const me = identityFields(db);
+  // BRANCH_REISSUE_V1 — ДА, ЧТЕНИЕ СПИСКА ПИШЕТ, и это решение, а не оплошность.
+  //
+  // Правило «открытие экрана ничего не пишет на диск» стоит на
+  // branch_sync_status: его читают все, кому открыты настройки. Этот вызов —
+  // другой: он закрыт ролью администратора, отдаёт ключи и существует ради
+  // управления филиалами. Пишет он ровно производную бухгалтерию — номер, под
+  // которым филиал заведён у поставщика, вычисленный из уже сохранённого
+  // (см. backfillBranchClinicIds), — и от неё зависит честность кнопки
+  // «Перевыпустить ключ»: без записи строка старого филиала показывала бы
+  // кнопку, которая всегда отказывает, либо не показывала бы её тому, кому она
+  // как раз и нужна.
+  //
+  // ЗДЕСЬ, А НЕ ТОЛЬКО В САМОМ ПЕРЕВЫПУСКЕ, ещё по одной причине: перевыпуск
+  // ПЕРЕЗАПИСЫВАЕТ код активации, а значит и его updated_at — то самое, по
+  // чему восстанавливается порядок заведения. Список грузится раньше любой
+  // кнопки на нём, поэтому к моменту первого перевыпуска порядок уже прочитан
+  // с нетронутых меток.
+  try { backfillBranchClinicIds(db, dataDir); }
+  catch (e) { console.warn('[branch-sync] could not backfill branch clinic ids:', e && e.message); }
   // ORDER BY id — порядок заведения, он же порядок выдачи букв. Сортировка по
   // букве была бы красивее ровно до двадцать седьмого филиала: 'AA' встаёт
   // перед 'B' лексически, и список начал бы врать про очерёдность.
@@ -1080,6 +1250,173 @@ export async function branchSyncBranchKey(db, args, user, {
 
   return { ok: true, branch: branchRow(db, pairing, branch, me.branch_id), relay, enroll };
 }
+
+/**
+ * BRANCH_REISSUE_V1 — «Перевыпустить ключ» филиала.
+ *
+ * ЧТО ЭТО ЧИНИТ. Компьютер филиала переустановили (сломался диск, купили новый),
+ * и активировать его нечем: код активации в ключе одноразовый и сгорел при
+ * ПЕРВОЙ активации, а ключ главная клиника показывает всё тот же — она собирает
+ * его из сохранённого кода. До этой кнопки выхода не было вовсе: владелец
+ * 2026-09-02 активировал ноутбук как ОТДЕЛЬНУЮ клинику, и тот перестал быть
+ * филиалом — чужая личность, никакой синхронизации.
+ *
+ * ЧТО ЭТО ЛОМАЕТ, и почему экран спрашивает перед нажатием: поставщик гасит
+ * install_token ПРЕЖНЕЙ установки этого филиала (routes/branch.js). Старый
+ * компьютер с этой секунды не проходит check-in. Это и есть смысл: один филиал
+ * — один компьютер, а две машины, молча делящие одну лицензию и один счёт,
+ * рано или поздно расходятся в данных.
+ *
+ * ЧТО ЗДЕСЬ ПЕРЕВЫПУСКАЕТСЯ ЦЕЛИКОМ: код активации И учётка резервного канала.
+ * Вторая — потому что старый компьютер уносит с собой рабочую копию ключа
+ * подключения, а вместе с ней и доступ к узлам группы на сервере поставщика.
+ * Оставить ему живую учётку значило бы, что «перестанет приниматься» — правда
+ * только наполовину.
+ *
+ * НЕ ТРОГАЕТ БУКВУ. Филиал возвращается ТЕМ ЖЕ филиалом: та же буква, те же
+ * номера пациентов, та же строка у поставщика с той же подпиской. Новая буква
+ * означала бы новую серию номеров в том же здании.
+ */
+export async function branchSyncReissueKey(db, args, user, {
+  reissueImpl = reissueBranchOnControlPlane, mintImpl = mintRelayToken,
+} = {}) {
+  requireAdmin(user);
+  const dataDir = getDataDir();
+  const pairing = readPairing(dataDir);
+  // Те же две проверки и в том же порядке, что у выдачи ключа: перевыпускает
+  // код ГЛАВНАЯ клиника (только у неё есть install_token, которым это
+  // доказывается), и ключ, который она соберёт после, должен куда-то вести.
+  if (!pairing || pairing.role !== 'main') throw new RpcError(reasonText('branch_not_main'), 400);
+  if (!pairing.main_url) throw new RpcError(reasonText('branch_no_url'), 400);
+
+  const id = Number(args && args.branch_id);
+  if (!Number.isInteger(id) || id <= 0) throw new RpcError(reasonText('branch_unknown'), 400);
+  const branch = db.prepare('SELECT id, name, letter FROM branches WHERE id = ?').get(id);
+  if (!branch) throw new RpcError(reasonText('branch_unknown'), 400);
+  const me = identityFields(db);
+  if (me.branch_id != null && branch.id === me.branch_id) throw new RpcError(reasonText('branch_is_self'), 400);
+
+  // Номер филиала у поставщика — единственный адресат перевыпуска. Догадка
+  // здесь (см. backfillBranchClinicIds) идёт ДО сети и проверяется якорями;
+  // не сложилась — честный отказ, а не выстрел наугад в чужой филиал.
+  backfillBranchClinicIds(db, dataDir);
+  const clinicId = getState(db, branchClinicKey(branch.id));
+  if (!clinicId) throw new RpcError(reasonText('reissue_unknown_branch'), 400);
+
+  const r = await reissueImpl(dataDir, { clinicId });
+  if (!r.ok) throw new RpcError(reasonText(r.reason), 400);
+
+  try {
+    // Новый код ЗАМЕЩАЕТ старый: тот у поставщика уже стёрт, и хранить его
+    // значило бы каждый раз собирать ключ, которым филиал не активируется.
+    putState(db, branchEnrollKey(branch.id), r.enrollment_code);
+    if (r.clinic_id) putState(db, branchClinicKey(branch.id), r.clinic_id);
+  } catch (e) {
+    // Код у поставщика уже перевыпущен, а записать его сюда не вышло: он
+    // потерян — второй раз тот же код не покажут. Молчать нельзя, следующая
+    // попытка перевыпустит ещё один.
+    console.warn('[branch-sync] reissued a branch code and could not store it:', e && e.message);
+    throw new RpcError(reasonText('write_failed'), 400);
+  }
+
+  // Учётка резервного канала — заново, поэтому сначала стираем старую:
+  // ensureBranchToken по построению ничего не делает там, где учётка уже есть.
+  try { db.prepare('DELETE FROM control_state WHERE key = ?').run(branchTokenKey(branch.id)); }
+  catch (e) { console.warn('[branch-sync] could not drop the old branch relay token:', e && e.message); }
+  const relay = await ensureBranchToken(db, dataDir, branch.id, mintImpl);
+
+  // САМ КОД И САМ КЛЮЧ В ЖУРНАЛ НЕ ПОПАДАЮТ — ни здесь, ни у поставщика
+  // (routes/branch.js о том же): это одноразовый пароль на активацию.
+  console.log('[branch-sync] branch', branch.id, 'got a fresh activation code; its previous install is now refused');
+
+  return {
+    ok: true,
+    key: branchKeyFor(db, pairing, branch),
+    branch: branchRow(db, pairing, branch, me.branch_id),
+    relay,
+  };
+}
+
+// BRANCH_REISSUE_V1 — как выглядит номер ФИЛИАЛА у поставщика: '<родитель>-b<N>'
+// (control-plane/server/routes/branch.js nextBranchId). Отдельной клинике такой
+// номер не выдаётся никогда, поэтому по нему и только по нему установка может
+// сказать про себя «я уже филиал» — не спрашивая никого.
+const BRANCH_CLINIC_ID_RE = /-b\d+$/;
+
+/**
+ * BRANCH_REISSUE_V1 — ввод ключа на УЖЕ АКТИВИРОВАННОЙ установке делает её филиалом.
+ *
+ * ЗАЧЕМ. Второй половиной той же поломки владелец остался с ноутбуком, который
+ * активирован как ОТДЕЛЬНАЯ клиника: связать его ключом было можно, но личность
+ * оставалась чужой — свой clinic_id, своя подписка, свой счёт, — и филиалом он
+ * не становился. Ключ теперь не только связывает, но и ПЕРЕСЕЛЯЕТ установку:
+ * код активации из ключа гасится, и она становится тем самым c-…-bN.
+ *
+ * КОГО МЫ НЕ ТРОГАЕМ, и это главное решение здесь. Переселение идёт ровно на
+ * установке, которая активирована и при этом НЕ является филиалом:
+ *
+ *   • НЕ активирована (нет install_token) — это первый запуск, и активацией
+ *     занимается экран активации своим licence_enroll. Полезли бы сюда — тот
+ *     экран получал бы already_enrolled на собственном втором шаге;
+ *   • УЖЕ ФИЛИАЛ (clinic_id вида …-bN) — ключ ей вводят по совершенно другому
+ *     поводу: «возьмите в главном филиале новый ключ подключения» стоит в
+ *     пяти отказах этого файла (учётка отозвана, ключ группы перевыпущен,
+ *     копия не расшифровалась). Код в таком ключе почти всегда уже погашен —
+ *     этой же установкой, — и попытка обязательно уперлась бы в 400. Владелец
+ *     чинил бы связь и получал бы красным «код уже использован» на успешное
+ *     действие.
+ *
+ * ОТКАЗ ПЕРЕСЕЛЕНИЯ НЕ ОТМЕНЯЕТ СВЯЗЫВАНИЕ. Пара уже записана, и это лучшее из
+ * доступного: справочник и записи поедут, даже если личность осталась прежней.
+ * Поэтому здесь бросается ошибка ПОСЛЕ удачного pairWithKey — экран покажет
+ * фразу, а связь останется.
+ *
+ * ПОВТОРА НЕТ НАМЕРЕННО. Ни флага в control_state, ни попытки в часовом
+ * прогоне: офлайн — это «введите ключ ещё раз», и так сказано словами
+ * (enroll_offline). Отложенное погашение кода означало бы, что установка
+ * однажды сменит личность сама, без человека, в неизвестный момент, — цена
+ * куда выше сэкономленного нажатия.
+ */
+export async function branchSyncPairAdopt(db, args, user, { enrollImpl = enrollWithCode } = {}) {
+  // Связывание — как было, со всеми его проверками и откатами. Отказ здесь
+  // бросает, и до переселения дело не доходит: личность меняет только тот
+  // ключ, который эта установка приняла целиком, вместе с буквой.
+  const paired = branchSyncPair(db, args, user);
+
+  const dataDir = getDataDir();
+  const parsed = parseKey(args && args.key);
+  const code = parsed.ok && parsed.enroll_code ? parsed.enroll_code : null;
+  // Ключ старого выпуска (без кода) связывает и ничего больше — ровно как до
+  // этой правки.
+  if (!code) return paired;
+
+  const identity = readJsonFile(path.join(dataDir, 'control.json'));
+  const enrolled = !!(identity && typeof identity.install_token === 'string' && identity.install_token);
+  if (!enrolled) return paired;
+  const myId = typeof (identity && identity.clinic_id) === 'string' ? identity.clinic_id : '';
+  if (BRANCH_CLINIC_ID_RE.test(myId)) return paired;
+
+  const r = await enrollImpl(dataDir, code, { replace: true });
+  if (!r.ok) throw new RpcError(reasonText(ADOPT_REASONS[r.reason] || 'enroll_server_error'), 400);
+  return { ...paired, adopted: { clinic_id: r.clinic_id, clinic_name: r.clinic_name } };
+}
+
+// Словарь enroll.js -> словарь этого экрана. Отдельная таблица, а не общие
+// фразы активации: человек здесь вводил КЛЮЧ ФИЛИАЛА, а не код активации, и
+// лекарство у него на ДРУГОЙ машине — в главной клинике, кнопкой
+// «Перевыпустить ключ».
+const ADOPT_REASONS = {
+  invalid_code: 'enroll_code_used',
+  offline: 'enroll_offline',
+  too_many_attempts: 'enroll_too_many',
+  server_error: 'enroll_server_error',
+  bad_response: 'enroll_server_error',
+  write_failed: 'write_failed',
+  // Оба недостижимы (код взят из разобранного ключа; replace снимает вторую),
+  // но код без фразы однажды доедет до экрана — в отчёте, в журнале, в поддержку.
+  empty_code: 'enroll_server_error',
+  already_enrolled: 'enroll_server_error',
+};
 
 /**
  * «Отвязать».

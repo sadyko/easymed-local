@@ -13,6 +13,7 @@ import {
   LETTER_PERMANENCE_WARNING, ADD_BRANCH_QUESTION, ISSUE_KEY_QUESTION,
   UNLINK_WARNING_MAIN, UNLINK_WARNING_SECONDARY, UNLINK_QUESTION,
   UNLINKED_BRANCH_NOTE, IDENTITY_UNKNOWN_NOTE, RELAY_ACCESS_ISSUED,
+  BRANCH_KEY_REISSUE_WARNING, BRANCH_KEY_REISSUE_QUESTION,   // BRANCH_REISSUE_V1
 } from '../branch-sync-logic.js';
 
 // BRANCH_SYNC_I18N_V1 (2026-08-30) — то, что не даёт экрану «Настройки →
@@ -193,10 +194,14 @@ function everyPhrase() {
     [{ id: 3, name: 'Юнусабад', letter: 'C', key: 'EMB2-y', has_relay_token: true }],
     [{ id: 4, name: 'Старый', letter: null, key: null }],
     [{ id: 5, name: 'Без ключа', letter: 'D', key: null }],
+    // BRANCH_REISSUE_V1 — строка, у которой известен номер филиала у
+    // поставщика: только у неё есть кнопка «Перевыпустить ключ».
+    [{ id: 6, name: 'Себзар', letter: 'E', key: 'EMB2-z', has_relay_token: true, has_enroll_code: true, has_clinic_id: true }],
   ]) {
     for (const row of branchRows({ role: 'main', can_issue: true, can_relay: true, branches })) {
       for (const v of [row.selfTag, row.keyStatus, row.warnTag,
-        row.action && row.action.label, row.action && row.action.done]) {
+        row.action && row.action.label, row.action && row.action.done,
+        row.reissue && row.reissue.label, row.reissue && row.reissue.done]) {
         if (v) out.add(v);
       }
     }
@@ -207,7 +212,8 @@ function everyPhrase() {
   for (const s of [KEY_LOSS_WARNING, KEY_REISSUE_WARNING, KEY_REISSUE_QUESTION,
     LETTER_PERMANENCE_WARNING, ADD_BRANCH_QUESTION, ISSUE_KEY_QUESTION,
     UNLINK_WARNING_MAIN, UNLINK_WARNING_SECONDARY, UNLINK_QUESTION,
-    UNLINKED_BRANCH_NOTE, IDENTITY_UNKNOWN_NOTE, RELAY_ACCESS_ISSUED]) out.add(s);
+    UNLINKED_BRANCH_NOTE, IDENTITY_UNKNOWN_NOTE, RELAY_ACCESS_ISSUED,
+    BRANCH_KEY_REISSUE_WARNING, BRANCH_KEY_REISSUE_QUESTION]) out.add(s);
 
   return [...out];
 }

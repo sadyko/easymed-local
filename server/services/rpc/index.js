@@ -31,9 +31,10 @@ import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './upd
 import { backupList, backupCreate, backupRestore, factoryReset } from './backup.js';   // SYSTEM_SETTINGS_V1
 import { custdevList, custdevSync, custdevRate, custdevMark, custdevReport } from './custdev.js';   // CUSTDEV_V1
 import {
-  branchSyncStatus, branchSyncMakeKey, branchSyncPair, branchSyncUnpair, branchSyncNow,
+  branchSyncStatus, branchSyncMakeKey, branchSyncPairAdopt, branchSyncUnpair, branchSyncNow,
   branchSyncRelaySet, branchSyncRelayPublish, branchSyncRegenerateKey,   // BRANCH_SYNC_RELAY_V1
   branchSyncBranches, branchSyncAddBranch, branchSyncBranchKey,   // BRANCH_IDENTITY_V1
+  branchSyncReissueKey,   // BRANCH_REISSUE_V1
 } from './branch-sync.js';   // BRANCH_SYNC_V1
 
 export const RPC = {
@@ -259,7 +260,10 @@ export const RPC = {
   // клиника с просроченной лицензией их не получает.
   branch_sync_status:   (db, args, user) => branchSyncStatus(db, args, user),
   branch_sync_make_key: (db, args, user) => branchSyncMakeKey(db, args, user),
-  branch_sync_pair:     (db, args, user) => branchSyncPair(db, args, user),
+  // BRANCH_REISSUE_V1 — тот же вызов экрана, но ключ теперь не только
+  // связывает: на установке, активированной как ОТДЕЛЬНАЯ клиника по ошибке,
+  // он ещё и переселяет её в филиал, которому принадлежит (branchSyncPairAdopt).
+  branch_sync_pair:     (db, args, user) => branchSyncPairAdopt(db, args, user),
   branch_sync_unpair:   (db, args, user) => branchSyncUnpair(db, args, user),
   branch_sync_now:      (db, args, user) => branchSyncNow(db, args, user),
   // BRANCH_SYNC_RELAY_V1 — резервный канал через сервер Easy-Med: согласие на
@@ -275,6 +279,10 @@ export const RPC = {
   branch_sync_branches:   (db, args, user) => branchSyncBranches(db, args, user),
   branch_sync_add_branch: (db, args, user) => branchSyncAddBranch(db, args, user),
   branch_sync_branch_key: (db, args, user) => branchSyncBranchKey(db, args, user),
+  // BRANCH_REISSUE_V1 — новый код активации филиалу, чей компьютер
+  // переустановили. Гасит прежнюю установку этого филиала у поставщика,
+  // поэтому стоит за той же ролью, что и выдача ключей.
+  branch_sync_reissue_key: (db, args, user) => branchSyncReissueKey(db, args, user),
 };
 
 export function getRpc(name) {

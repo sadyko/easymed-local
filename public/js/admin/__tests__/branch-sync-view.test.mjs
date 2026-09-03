@@ -21,6 +21,7 @@ import assert from 'node:assert';
 import {
   KEY_REISSUE_WARNING, KEY_LOSS_WARNING, LETTER_PERMANENCE_WARNING,
   UNLINK_WARNING_MAIN, RELAY_ACCESS_ISSUED,
+  BRANCH_KEY_REISSUE_WARNING,   // BRANCH_REISSUE_V1
 } from '../branch-sync-logic.js';
 
 class F{constructor(t){this.tagName=String(t).toUpperCase();this.style={};this.children=[];this.attrs={};this.className='';this._t='';this._l={};this.dataset={};this.value='';}
@@ -400,4 +401,49 @@ test('7f: главная клиника видит, в какие филиалы
 test('7f: засева нет — строки о нём на экране тоже нет', async () => {
   const text = await paint(MAIN_STATUS, MAIN_BRANCHES);
   assert.ok(!text.includes('Первичная загрузка'), 'постоянная строка «загрузка не идёт» учит не читать это место');
+});
+
+// ===========================================================================
+// BRANCH_REISSUE_V1 — «Перевыпустить ключ» на строке филиала.
+//
+// Кнопка, чьё нажатие ГАСИТ прежнюю установку филиала у Easy-Med. Проверяется
+// то же самое свойство, что и у всех остальных кнопок этого экрана, только
+// цена ошибки здесь другая: лишняя кнопка тут не отказывает, а выключает
+// работающий компьютер в другом здании.
+// ===========================================================================
+
+const REISSUE_BRANCHES = {
+  ok: true, role: 'main', can_issue: true, can_relay: true,
+  branches: [
+    { id: 1, name: 'Головной офис', letter: 'A', key: null, is_self: true },
+    // Номер у Easy-Med известен — перевыпуск возможен.
+    { id: 2, name: 'Чиланзар', letter: 'B', key: 'EMB2-BBBB-2222', has_relay_token: true, has_enroll_code: true, has_clinic_id: true },
+    // Филиал из старой версии: номера нет, адресовать перевыпуск не по чему.
+    { id: 3, name: 'Юнусабад', letter: 'C', key: 'EMB2-CCCC-3333', has_relay_token: true, has_enroll_code: true, has_clinic_id: false },
+  ],
+};
+
+test('перевыпуск филиала предлагается ровно там, где сервер его примет', async () => {
+  await paint(MAIN_STATUS, REISSUE_BRANCHES);
+  const [selfRow, known, old] = tags(tags(tags(card, 'table')[0], 'tbody')[0], 'tr');
+
+  assert.ok(buttonWith(known, 'Перевыпустить ключ'), 'филиалу с известным номером — кнопка');
+  assert.equal(!!buttonWith(old, 'Перевыпустить ключ'), false,
+    'филиалу из старой версии кнопки нет: перевыпуск ему недоступен, а отказывающая кнопка хуже отсутствующей');
+  assert.equal(tags(selfRow, 'button').length, 0, 'этой установке перевыпускать нечего');
+});
+
+test('перевыпуск филиала ВСЕГДА спрашивает и называет филиал по имени', async () => {
+  await paint(MAIN_STATUS, REISSUE_BRANCHES);
+  confirmAnswer = false;   // владелец передумал
+  confirms = [];
+  calls.length = 0;
+
+  const known = tags(tags(tags(card, 'table')[0], 'tbody')[0], 'tr')[1];
+  buttonWith(known, 'Перевыпустить ключ').click();
+
+  assert.equal(confirms.length, 1, 'нажатие гасит старую установку — спросить обязательно');
+  assert.ok(confirms[0].includes(BRANCH_KEY_REISSUE_WARNING));
+  assert.ok(confirms[0].includes('Чиланзар'), 'без имени филиала вопрос ни о чём');
+  assert.equal(calls.includes('branch_sync_reissue_key'), false, '«отмена» обязана отменять');
 });

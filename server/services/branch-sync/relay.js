@@ -1551,3 +1551,90 @@ export async function createBranchOnControlPlane(dataDir, {
   if (!code) return { ok: false, reason: 'branch_server_error' };
   return { ok: true, enrollment_code: code, clinic_id: body.clinic_id || null, name: body.name || null };
 }
+
+// BRANCH_REISSUE_V1 — попросить control plane выдать филиалу НОВЫЙ код активации.
+//
+// ЗАЧЕМ. Код активации филиала одноразовый: погашая его, поставщик стирает код
+// и выдаёт установке install_token (control-plane/server/services/enrollment.js).
+// Главная клиника же хранит выданный код навсегда (rpc/branch-sync.js,
+// branch_sync.enroll.<id>) и вкладывает его в ключ подключения при каждом
+// показе. Значит ПЕРЕУСТАНОВЛЕННЫЙ компьютер филиала не активируется НИКОГДА:
+// код в ключе сгорел при первой активации, а взять другой главной клинике
+// неоткуда. Поймано на тестовом филиале владельца 2026-09-02; обходной путь,
+// которым он воспользовался, — активировать ноутбук как ОТДЕЛЬНУЮ клинику —
+// оставляет установку с чужой личностью, которая синхронизироваться не может.
+//
+// ТА ЖЕ АУТЕНТИФИКАЦИЯ, ЧТО У ЗАВЕДЕНИЯ ФИЛИАЛА, и это не совпадение: на той
+// стороне обе ручки лежат в одном файле и ходят через одну функцию
+// (control-plane/server/routes/branch.js callerByInstallToken). Предъявляется
+// install_token ГЛАВНОЙ клиники — единственной машины в группе, у которой есть
+// чем доказать поставщику, кто она.
+//
+// ЦЕНА, КОТОРУЮ ПЛАТИТ СТАРАЯ УСТАНОВКА, названа прямо и вызывающим показана в
+// окне подтверждения: перевыпуск гасит install_token прежней установки, и она
+// перестаёт проходить check-in. Один филиал — один компьютер; две машины,
+// молча делящие одну лицензию и один счёт, были бы хуже.
+//
+// clinic_id ФИЛИАЛА ЗДЕСЬ НЕ УГАДЫВАЕТСЯ: его передаёт вызывающий, который
+// хранит его с момента заведения филиала (см. branch_sync.clinic.<id> в
+// rpc/branch-sync.js). Промах здесь означал бы перевыпуск ЧУЖОГО филиала,
+// поэтому неизвестный идентификатор — отказ, а не попытка.
+//
+// НИКОГДА не бросает; reason — тот же закрытый словарь, что у создания филиала,
+// плюс reissue_not_found (поставщик такого филиала за этой клиникой не знает).
+export async function reissueBranchOnControlPlane(dataDir, {
+  clinicId = null,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = MINT_TIMEOUT_MS,
+  env = process.env,
+} = {}) {
+  const id = typeof clinicId === 'string' ? clinicId.trim() : '';
+  // До сети, а не после: запрос без идентификатора — это POST на /reissue без
+  // адресата, то есть 404 у поставщика и «филиал не найден» на экране. Правда
+  // другая, и лечится она по-другому.
+  if (!id) return { ok: false, reason: 'reissue_unknown_branch' };
+
+  const token = installToken(dataDir);
+  if (!token) return { ok: false, reason: 'branch_not_enrolled' };
+
+  const base = String((env && env.EASYMED_CONTROL_URL) || DEFAULT_ENDPOINT).trim().replace(/\/+$/, '');
+  assertControlUrlIsTestSafe(env, fetchImpl);   // PROD_GUARD_V1
+  let res;
+  try {
+    res = await fetchImpl(base + '/cp/v1/branch/' + encodeURIComponent(id) + '/reissue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ install_token: token }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch {
+    return { ok: false, reason: 'branch_offline' };
+  }
+
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) return { ok: false, reason: 'branch_unauthorized' };
+    // 404 у этой ручки означает сразу три вещи — нет такого филиала, он не ваш,
+    // он погашен, — и поставщик отвечает на все три одинаково НАМЕРЕННО (иначе
+    // по разнице ответов перебирался бы чужой реестр). Значит и здесь причина
+    // одна, и фраза у неё ведёт в поддержку, а не советует чинить своё.
+    if (res.status === 404) return { ok: false, reason: 'reissue_not_found' };
+    return { ok: false, reason: 'branch_server_error' };
+  }
+
+  let body;
+  try { body = await res.json(); } catch { return { ok: false, reason: 'branch_server_error' }; }
+  const code = body && typeof body.enrollment_code === 'string' ? body.enrollment_code.trim() : '';
+  // Пустой ответ — это ключ без кода, то есть ключ, которым филиал не
+  // активируется. Молча выдать такой значит отправить человека ставить систему,
+  // которая не заведётся, — ровно та ошибка, ради которой этот перевыпуск и
+  // написан.
+  if (!code) return { ok: false, reason: 'branch_server_error' };
+  return {
+    ok: true,
+    enrollment_code: code,
+    // Тот же идентификатор, что и просили, — но берём ИЗ ОТВЕТА: это
+    // подтверждение поставщика, что перевыпущен именно он.
+    clinic_id: typeof body.clinic_id === 'string' && body.clinic_id ? body.clinic_id : id,
+    name: typeof body.name === 'string' && body.name ? body.name : null,
+  };
+}

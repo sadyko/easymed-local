@@ -49,6 +49,10 @@ function readJson(file) {
  * @param {string} code     what the admin typed, as typed
  * @param {object} [opts]   fetchImpl/endpoint/timeoutMs and the atomic-write
  *                          seams, same shape as performCheckin's
+ * @param {boolean} [opts.replace]  BRANCH_REISSUE_V1 — redeem the code even
+ *                          though this install ALREADY carries an identity,
+ *                          and replace that identity with the one the code
+ *                          belongs to. See REPLACE below.
  * @returns {Promise<{ok:true, clinic_id:string, clinic_name:string|null}
  *                 | {ok:false, reason:string}>}
  *
@@ -63,6 +67,7 @@ export async function enrollWithCode(dataDir, code, {
   maxResponseBytes = MAX_RESPONSE_BYTES,
   writeFileSync,
   renameSync,
+  replace = false,   // BRANCH_REISSUE_V1
 } = {}) {
   // The same normalisation the control plane applies before matching
   // (control-plane/server/services/enrollment.js) — applied here TOO so what
@@ -74,8 +79,31 @@ export async function enrollWithCode(dataDir, code, {
   // Refusing here, before the network, is what keeps the single-use code
   // alive: the control plane burns it on redemption, so an already-enrolled
   // install that reached the server would waste a code just to be told no.
+  //
+  // REPLACE — BRANCH_REISSUE_V1, and the ONE case where that refusal is wrong.
+  //
+  // A branch PC that was reinstalled and then activated as a brand-new
+  // STANDALONE clinic (the owner's own workaround on 2026-09-02, because the
+  // branch's one-time code had already burned) carries a perfectly valid
+  // identity — the WRONG one. It cannot sync (wrong clinic, no pairing on the
+  // main's side) and no amount of re-typing the branch key fixes it, because
+  // this very refusal fires before the code ever reaches the vendor. So the
+  // one cure is to redeem the branch's fresh code ON TOP of the identity the
+  // install already has: it stops being clinic X and becomes branch
+  // c-…-bN, with that branch's subscription, modules and check-in.
+  //
+  // WHAT THIS DOES NOT WEAKEN. Everything below this line is untouched, so
+  // the guarantees the rest of this file argues for hold exactly as before:
+  // the code is still single-use server-side, a refused code (400) still
+  // writes NOTHING and leaves the install exactly as it was, and the licence
+  // must still verify against the vendor key FOR THE clinic_id the response
+  // claims before a single byte is written. `replace` buys one thing only —
+  // the right to spend a code from an install that already has an identity —
+  // and it is never inferred: the caller (rpc/branch-sync.js) asks for it
+  // explicitly, having first established that this install is licensed as
+  // something that is not a branch at all.
   const existing = readJson(path.join(dataDir, 'control.json'));
-  if (existing && typeof existing === 'object' && !Array.isArray(existing)
+  if (!replace && existing && typeof existing === 'object' && !Array.isArray(existing)
       && typeof existing.install_token === 'string' && existing.install_token) {
     return { ok: false, reason: 'already_enrolled' };
   }
@@ -148,6 +176,15 @@ export async function enrollWithCode(dataDir, code, {
   // fetches a fresh licence and completes the pair with no human involved.
   // Licence-first would instead leave 'not_enrolled' with a dead code: a stuck
   // install only the vendor can rescue. Pinned by the two write-order tests.
+  //
+  // The same order is the right one for a REPLACE, and for the same reason.
+  // Crash between the two writes and control.json names the new clinic while
+  // licence.dat still holds the old one: the licence no longer verifies for
+  // the clinic_id on disk, so the install reads as unlicensed WITH an
+  // install_token, and the next check-in fetches the branch's own licence
+  // with no human involved. The other order would leave a licence for a
+  // clinic this install no longer claims to be — the same stuck install,
+  // reached from the other side.
   try {
     writeAtomic(path.join(dataDir, 'control.json'), JSON.stringify(identity), { writeFileSync, renameSync });
     writeAtomic(path.join(dataDir, 'licence.dat'), JSON.stringify(licence), { writeFileSync, renameSync });

@@ -5908,6 +5908,12 @@ export const STRINGS = {
   "Получить код": {"en":"Get the code","ru":"Получить код","uz":"Kodni olish"},
   "Код получен — передайте филиалу ключ заново.": {"en":"The code is in. Give the branch its key again.","ru":"Код получен — передайте филиалу ключ заново.","uz":"Kod olindi - filialga kalitni qayta bering."},
 
+  // BRANCH_REISSUE_V1 — переустановленный компьютер филиала: новый код активации.
+  "Перевыпустить ключ": {"en":"Reissue the key","ru":"Перевыпустить ключ","uz":"Kalitni qayta chiqarish"},
+  "Ключ перевыпущен — передайте филиалу новый ключ.": {"en":"The key was reissued. Give the branch the new key.","ru":"Ключ перевыпущен — передайте филиалу новый ключ.","uz":"Kalit qayta chiqarildi - filialga yangi kalitni bering."},
+  "Старая установка этого филиала перестанет приниматься.": {"en":"This branch's old installation will stop being accepted.","ru":"Старая установка этого филиала перестанет приниматься.","uz":"Bu filialning eski o'rnatmasi endi qabul qilinmaydi."},
+  "Перевыпустить ключ филиала «{name}»?": {"en":"Reissue the key for branch “{name}”?","ru":"Перевыпустить ключ филиала «{name}»?","uz":"“{name}” filialining kaliti qayta chiqarilsinmi?"},
+
   // UPDATE_FAILURE_REASON_V1 - what exactly went wrong with the update.
   "Не удалось скачать обновление — связь прервалась. Мы попробуем снова.": {"en":"The update could not be downloaded - the connection dropped. We will try again.","ru":"Не удалось скачать обновление — связь прервалась. Мы попробуем снова.","uz":"Yangilanishni yuklab bo'lmadi - aloqa uzildi. Yana urinib ko'ramiz."},
   "Сервер обновлений ответил отказом. Мы попробуем снова; если это повторится, сообщите в Easy-Med.": {"en":"The update server refused. We will try again; if this repeats, tell Easy-Med.","ru":"Сервер обновлений ответил отказом. Мы попробуем снова; если это повторится, сообщите в Easy-Med.","uz":"Yangilanish serveri rad etdi. Yana urinib ko'ramiz; takrorlansa, Easy-Med ga xabar bering."},
