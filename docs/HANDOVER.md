@@ -66,6 +66,18 @@ registry is separate: 4 migrations in `control-plane/server/db/migrations/`.
   `licence_enroll` RPC → `server/services/control/enroll.js`, which verifies the returned
   licence against the compiled-in key BEFORE writing `control.json`/`licence.dat`).
   The script path below still works for break-glass.
+- **Branches (BRANCH_SELF_SERVICE_V1 / BRANCH_REISSUE_V1):** the MAIN clinic creates its own
+  branch — `POST /cp/v1/branch {install_token, name}` → `{clinic_id, name, enrollment_code}`;
+  the branch is a SEPARATE clinics row (own subscription, own install_token, `parent_clinic_id`
+  = the caller). That code is one-use, and the branch key the main clinic shows has the code
+  baked into it — so a REINSTALLED branch PC could never activate again. The way back:
+  `POST /cp/v1/branch/:clinic_id/reissue {install_token}` — same auth (the parent's install_token
+  in the BODY, not a header), same `{clinic_id, name, enrollment_code}` response, fresh code —
+  and it clears the branch's `install_token`: one branch, one PC, so the old install goes dark
+  instead of two machines sharing one licence. 401 = bad/missing token; 404 = not yours /
+  unknown / retired (one answer for all three, so nobody can probe other clinics' ids).
+  Creates no rows, changes nothing else on the row (subscription, unlock_secret, modules).
+  `control-plane/server/routes/branch.js`, `services/enrollment.js` reissueEnrollmentCode().
 - **Staying licensed:** `server/services/control/checkin.js` calls
   `POST https://settings.easymed.uz/cp/v1/checkin` daily; a paid clinic gets a fresh 14-day
   licence (the dead-man's switch — the vendor stops re-arming, the clinic lapses by itself).

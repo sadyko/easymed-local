@@ -116,6 +116,79 @@ export function createEnrollmentCode(db, { clinicId, name, contactPhone = null, 
   throw new Error(`createEnrollmentCode: could not generate a unique code after ${MAX_CODE_ATTEMPTS} attempts.`);
 }
 
+/**
+ * Re-issue a clinic's one-time enrollment code, and cut the current install
+ * loose.
+ *
+ * BRANCH_REISSUE_V1 — an enrollment code is single-use by design (see
+ * redeemEnrollmentCode: redemption clears enrollment_code and sets
+ * install_token, so the code matches nothing afterwards). That is right for a
+ * clinic that enrols once and keeps its machine. It is wrong for the one case
+ * this function exists for: the branch PC was reinstalled, and the branch key
+ * its main clinic holds embeds a code that was already burned. Without this,
+ * the branch can NEVER activate again, and the only way back is the vendor
+ * hand-editing a row.
+ *
+ * Deliberately ONE UPDATE, not two statements:
+ *   - enrollment_code = <fresh>  — a code, in the same format and from the same
+ *     generator as createEnrollmentCode; nothing downstream can tell a reissued
+ *     code from a first one, so redeemEnrollmentCode needs no new branch.
+ *   - install_token = NULL       — one branch, one PC. The previous install
+ *     stops being able to check in, mint relay tokens or read the relay the
+ *     instant a new code is issued, so the reinstalled machine cannot end up
+ *     as a SECOND install claiming one branch's identity. The owner sees the
+ *     old PC go dark, which is the truth, instead of two machines quietly
+ *     sharing one licence. It also keeps redeemEnrollmentCode's defensive
+ *     "a row with a code must not already hold a token" refusal unreachable:
+ *     if this left the old token in place, the new code would be refused by
+ *     that very check.
+ * Both in one statement means there is no instant in which the row has a fresh
+ * code AND a live token — not because two requests could interleave (they
+ * cannot; better-sqlite3 is synchronous and there is no await here, the same
+ * reasoning as redeemEnrollmentCode's own ATOMICITY note), but because a crash
+ * between two statements would leave exactly that state on disk.
+ *
+ * Everything else on the row is untouched ON PURPOSE: unlock_secret (the
+ * clinic's half of the telephone-unlock secret — regenerating it would break
+ * unlock for a clinic that is merely reinstalling), subscription and
+ * subscription_until (the branch keeps paying for what it paid for),
+ * parent_clinic_id, name, and the clinic_modules rows keyed by clinic_id. The
+ * reinstalled branch comes back as the SAME clinic, which is the whole point;
+ * a new row would be a new customer, a new bill and a new licence identity.
+ *
+ * Never INSERTs. A caller pointing this at an id that does not exist gets null,
+ * not a new clinic — see the route, which has already refused that case, and
+ * `info.changes === 0` here, which is the second line of the same guarantee.
+ *
+ * @param {Database} db
+ * @param {object} args
+ * @param {string} args.clinicId
+ * @returns {string|null} the new code (EM-XXXX-XXXX), or null if no such row
+ */
+export function reissueEnrollmentCode(db, { clinicId }) {
+  if (typeof clinicId !== 'string' || clinicId.length === 0) {
+    throw new Error(`reissueEnrollmentCode: clinicId must be a non-empty string, got ${JSON.stringify(clinicId)}.`);
+  }
+
+  // Same loop, same bound, same reasoning as createEnrollmentCode's: not a
+  // real collision handler at 32**8 codes, but a loud failure if the generator
+  // ever breaks. Retried on a colliding enrollment_code only; anything else
+  // (a constraint this function has no business hitting) is a real failure.
+  for (let attempt = 0; attempt < MAX_CODE_ATTEMPTS; attempt++) {
+    const code = nextCode();
+    try {
+      const info = db.prepare(
+        'UPDATE clinics SET enrollment_code = ?, install_token = NULL WHERE clinic_id = ?'
+      ).run(code, clinicId);
+      return info.changes === 0 ? null : code;
+    } catch (e) {
+      if (isUniqueViolation(e, 'enrollment_code')) continue;
+      throw e;
+    }
+  }
+  throw new Error(`reissueEnrollmentCode: could not generate a unique code after ${MAX_CODE_ATTEMPTS} attempts.`);
+}
+
 // Typed by a human off a phone call: case and spacing are not the point, and
 // this mirrors unlock.js's own redeem() normalisation exactly (same reasoning,
 // same shape of input) rather than inventing a second convention.

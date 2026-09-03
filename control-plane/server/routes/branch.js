@@ -19,8 +19,25 @@
 // Почему код возвращается, а не отправляется филиалу: у вендора нет связи с
 // машиной филиала — её ещё не существует. Код едет к филиалу внутри ключа
 // связывания, который главная клиника и так передаёт из рук в руки.
+//
+// BRANCH_REISSUE_V1 — вторая ручка файла, POST /:clinic_id/reissue, и вот
+// зачем она нужна. Код активации ОДНОРАЗОВЫЙ: при активации он стирается, а
+// строке выдаётся install_token (см. services/enrollment.js). Ключ связывания,
+// который главная клиника показывает у себя на экране, содержит внутри тот
+// код, который филиал получил при создании — один раз и навсегда. Значит
+// ПЕРЕУСТАНОВЛЕННЫЙ компьютер филиала уже не активируется НИКОГДА: его код
+// сгорел при первой активации, а другого главной клинике взять неоткуда.
+// Проверено на тестовом филиале владельца 2026-09-02. Единственным выходом до
+// сих пор была правка строки в базе вендора руками.
+//
+// Перевыпуск даёт филиалу новый код и одновременно гасит install_token
+// прежней установки — один филиал, один компьютер. Старый компьютер честно
+// «темнеет» (перестаёт проходить check-in), вместо того чтобы две машины молча
+// делили одну лицензию и один счёт. Новой строки при этом НЕ создаётся: тот же
+// clinic_id, та же подписка, тот же unlock_secret, те же модули — филиал
+// возвращается тем же клиентом, а не становится новым.
 import { Router } from 'express';
-import { createEnrollmentCode } from '../services/enrollment.js';
+import { createEnrollmentCode, reissueEnrollmentCode } from '../services/enrollment.js';
 
 // Политика подписки новорождённого филиала. 'active' — сеть заводит филиалы
 // сама и платит за них; 'unpaid' — филиал ставится и связывается, но остаётся
@@ -40,14 +57,8 @@ export function branchRouter(db) {
   const router = Router();
 
   router.post('/', (req, res) => {
-    const { install_token: installToken, name } = req.body || {};
-    if (typeof installToken !== 'string' || installToken.length === 0) {
-      return res.status(GENERIC_FAILURE_STATUS).json(GENERIC_FAILURE_BODY);
-    }
-
-    const parent = db.prepare(
-      'SELECT clinic_id, name, subscription, parent_clinic_id FROM clinics WHERE install_token = ?'
-    ).get(installToken);
+    const { name } = req.body || {};
+    const parent = callerByInstallToken(db, req);
     if (!parent) return res.status(GENERIC_FAILURE_STATUS).json(GENERIC_FAILURE_BODY);
 
     // Филиал филиала — нет. Дерево глубже одного уровня никто не просил, а
@@ -82,7 +93,83 @@ export function branchRouter(db) {
     return res.json({ clinic_id: clinicId, name: branchName, enrollment_code: code });
   });
 
+  // BRANCH_REISSUE_V1 — новый код активации для УЖЕ СУЩЕСТВУЮЩЕГО филиала.
+  // Предъявляет её тот же, кто заводил филиал, и тем же способом: главная
+  // клиника со своим install_token в теле запроса (см. callerByInstallToken —
+  // одна функция на обе ручки, чтобы «аутентификация та же» было правдой по
+  // построению, а не по совпадению двух копий).
+  router.post('/:clinic_id/reissue', (req, res) => {
+    const parent = callerByInstallToken(db, req);
+    if (!parent) return res.status(GENERIC_FAILURE_STATUS).json(GENERIC_FAILURE_BODY);
+
+    // ОДНО условие на три отказа — не существует, погашен (active = 0), или
+    // это вообще не твой филиал — и ОДИН ответ 404 на все три. Иначе по
+    // различию ответов сеть перебирала бы чужие clinic_id: «404 — такого нет»
+    // против «403 — есть, но не твой» это и есть готовый сканер реестра. Та же
+    // причина, по которой enroll.js отвечает одинаково на любой плохой код.
+    //
+    // parent_clinic_id = вызывающая клиника — это ВСЯ авторизация, и её
+    // достаточно: у филиала своих филиалов нет (см. branch_of_branch выше),
+    // поэтому филиал, дотянувшийся сюда, не найдёт ни одной подходящей строки
+    // и получит тот же 404, без отдельной проверки.
+    //
+    // Подписка НЕ проверяется, в отличие от создания филиала выше, и это
+    // осознанно: 402 там означает «неоплаченная сеть не наращивает филиалы»,
+    // то есть не заводит НОВЫХ платящих клиентов. Здесь ничего не заводится —
+    // это восстановление уже существующего филиала после переустановки, и
+    // запирать его за оплатой значило бы, что просроченная на день сеть не
+    // может поднять упавший компьютер. Заперт филиал или нет, решает check-in
+    // по СВОЕЙ подписке, ровно как и до перевыпуска.
+    const branch = db.prepare(
+      `SELECT clinic_id, name FROM clinics
+        WHERE clinic_id = ? AND parent_clinic_id = ? AND active = 1`
+    ).get(String(req.params.clinic_id), parent.clinic_id);
+    if (!branch) return res.status(404).json({ error: 'not_found' });
+
+    let code;
+    try {
+      // Одна UPDATE: новый код + install_token = NULL. Строк не создаёт —
+      // см. reissueEnrollmentCode, там же и почему обе половины в одном
+      // запросе.
+      code = reissueEnrollmentCode(db, { clinicId: branch.clinic_id });
+    } catch (e) {
+      return res.status(500).json({ error: 'could_not_reissue' });
+    }
+    // Строка была прочитана строкой выше в том же синхронном обработчике, так
+    // что null здесь недостижим; на всякий случай — тот же 404, а не 500.
+    if (!code) return res.status(404).json({ error: 'not_found' });
+
+    // САМ КОД В ЛОГ НЕ ПОПАДАЕТ — ни здесь, ни где-либо ещё: это одноразовый
+    // пароль на активацию (см. routes/enroll.js и обработчик ошибок в app.js,
+    // который по той же причине никогда не печатает тело запроса). В журнале
+    // нужны факт и время: какой филиал перевыпущен, кем, и что прежняя
+    // установка с этой секунды в check-in не проходит.
+    console.log(`[control-plane] branch ${branch.clinic_id} got a fresh enrollment code (asked for by ${parent.clinic_id}); its previous install token is now dead`);
+
+    return res.json({ clinic_id: branch.clinic_id, name: branch.name, enrollment_code: code });
+  });
+
   return router;
+}
+
+// Аутентификация обеих ручек файла: главная клиника предъявляет свой
+// install_token В ТЕЛЕ запроса — не заголовком. Так это делает вся клиентская
+// половина control plane (enroll, checkin), и менять конвенцию ради второй
+// ручки одного файла значило бы, что клиент шлёт токен то так, то эдак.
+//
+// Ровно тот же SELECT, что был у создания филиала, — теперь буквально один на
+// двоих, чтобы две проверки не разъехались при следующей правке.
+//
+// active = 1 здесь НЕ проверяется, и это сознательно оставлено как было: у
+// создания филиала этой проверки нет с самого начала, а расходиться двум
+// ручкам одного файла нельзя. Если погашенной клинике надо закрывать и эту
+// дверь — закрывать её надо ОБЕИМ ручкам сразу, одной правкой здесь.
+function callerByInstallToken(db, req) {
+  const token = (req.body || {}).install_token;
+  if (typeof token !== 'string' || token.length === 0) return null;
+  return db.prepare(
+    'SELECT clinic_id, name, subscription, parent_clinic_id FROM clinics WHERE install_token = ?'
+  ).get(token) || null;
 }
 
 // c-000005-b1, -b2, … — читаемо в панели и сразу видно, чей это филиал.
