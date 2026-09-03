@@ -75,12 +75,16 @@ const textOf = (el) => walk(el).map((n) => n._t || '').join(' ');
 // тестов, и попытка его позвать там по-прежнему взрывается.
 let status = null;
 let branches = null;
+// Ответ на нажатие «Синхронизировать сейчас». null — в этом состоянии экран
+// звать его не должен, и попытка по-прежнему взрывается.
+let syncNow = null;
 const calls = [];
 globalThis.fetch = async (url) => {
   const name = String(url).replace('/api/rpc/', '');
   calls.push(name);
   if (name === 'branch_sync_status') return { ok: true, json: async () => ({ data: status }) };
   if (name === 'branch_sync_branches' && branches) return { ok: true, json: async () => ({ data: branches }) };
+  if (name === 'branch_sync_now' && syncNow) return { ok: true, json: async () => ({ data: syncNow }) };
   throw new Error('экран не должен звать ' + name + ' в этом состоянии');
 };
 
@@ -105,6 +109,7 @@ let card = null;
 async function paint(st, br = null) {
   status = st;
   branches = br;
+  syncNow = null;
   calls.length = 0;
   confirms = [];
   confirmAnswer = true;
@@ -446,4 +451,53 @@ test('перевыпуск филиала ВСЕГДА спрашивает и �
   assert.ok(confirms[0].includes(BRANCH_KEY_REISSUE_WARNING));
   assert.ok(confirms[0].includes('Чиланзар'), 'без имени филиала вопрос ни о чём');
   assert.equal(calls.includes('branch_sync_reissue_key'), false, '«отмена» обязана отменять');
+});
+
+// ===========================================================================
+// РЕВЬЮ BRANCH_MAIN_PUSH_V1 (2026-09-03) — КНОПКА ТАМ, ГДЕ МЕНЯЮТ ЦЕНЫ.
+//
+// Строку «что случилось в прошлую синхронизацию» на экран главной клиники уже
+// вернули — а нажать рядом с ней было по-прежнему нечего: кнопка жила только в
+// окнах регистратуры и лаборатории. Владелец меняет цены ЗДЕСЬ, в настройках,
+// и отправить их отсюда же — то самое действие, за которым он сюда и пришёл.
+// ===========================================================================
+
+const SYNC = 'Синхронизировать сейчас';
+
+test('на карточке ГЛАВНОЙ клиники есть кнопка «Синхронизировать сейчас», и она зовёт тот же RPC', async () => {
+  await paint(MAIN_STATUS, MAIN_BRANCHES);
+  const btn = buttonWith(card, SYNC);
+  assert.ok(btn, 'кнопки не было вовсе — за ней приходилось идти в чужое окно');
+  assert.equal(btn.disabled, false, 'резервный канал включён — кнопка живая');
+
+  calls.length = 0;
+  syncNow = { ok: true, reason: 'published', message: 'Копия справочника отправлена на сервер (17 КБ).' };
+  btn.click();
+  await flush();
+  assert.ok(calls.includes('branch_sync_now'),
+    'та же кнопка, тот же вызов, что и у маленькой кнопки за стойкой');
+});
+
+test('без резервного канала кнопка главной клиники не нажимается', async () => {
+  // Оба её дела у главной идут через сервер поставщика: и копия справочника, и
+  // записи. При выключенном канале нажатие не сделало бы НИЧЕГО — а лекарство
+  // стоит тут же, переключателем: выключенный канал остаётся на виду.
+  await paint({ ...MAIN_STATUS, relay_enabled: false }, MAIN_BRANCHES);
+  const btn = buttonWith(card, SYNC);
+  assert.ok(btn);
+  assert.equal(btn.disabled, true);
+});
+
+test('у не-администратора кнопки на карточке главной клиники нет вовсе', async () => {
+  // Весь экран главной клиники закрыт ролью (paintMain выходит сразу), и кнопка
+  // не должна оказаться исключением: сервер её всё равно примет только от того,
+  // кто вошёл, но обещать действие человеку без прав экран не должен.
+  const saved = globalThis.window.easymed.state.user;
+  globalThis.window.easymed.state.user = { id: 'u-2', full_name: 'Регистратор', role: 'registrar' };
+  try {
+    await paint(MAIN_STATUS, MAIN_BRANCHES);
+    assert.equal(!!buttonWith(card, SYNC), false);
+  } finally {
+    globalThis.window.easymed.state.user = saved;
+  }
 });

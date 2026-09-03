@@ -790,8 +790,12 @@ const unauthorizedReason = (pairing) => (pairing.role === 'main' ? 'relay_unauth
  *   relay_not_enrolled | relay_branch_no_token | relay_no_peers | relay_offline |
  *   relay_unauthorized | relay_branch_revoked | relay_too_large | relay_server_error
  *
- * @returns {Promise<{ok:true, at:string, bytes:number, peers:object}
- *   |{ok:true, skipped:true, peers:object}|{ok:false, reason:string}>}
+ * peers — сколько строк уехало КАЖДОМУ соседу; rows — сколько их было РАЗНЫХ
+ * (одна карта пациента едет в том же блобе всем сразу, и сумма по соседям
+ * говорит не «сколько записей отправлено», а «сколько раз»).
+ *
+ * @returns {Promise<{ok:true, at:string, bytes:number, peers:object, rows:number}
+ *   |{ok:true, skipped:true, peers:object, rows:number}|{ok:false, reason:string}>}
  */
 export async function publishJournal(db, dataDir, {
   fetchImpl = globalThis.fetch,
@@ -886,7 +890,7 @@ export async function publishJournal(db, dataDir, {
     // бы вычистить свой журнал. Сравнение — с квитанциями ПОСЛЕДНЕЙ выгрузки,
     // а не с датой: изменились они или нет, видно только так.
     if (Number.isFinite(at) && (now().getTime() - at) < REFRESH_MS && sameAcks(last && last.acks, acks)) {
-      return { ok: true, skipped: true, peers: {} };
+      return { ok: true, skipped: true, peers: {}, rows: 0 };
     }
   }
 
@@ -927,6 +931,17 @@ export async function publishJournal(db, dataDir, {
   // не спрятано: точное решение — писать часы между срезами, но тогда сосед,
   // оказавшийся вторым в списке, получал бы метки НОВЕЕ первого без всякой на
   // то причины.
+
+  // СКОЛЬКО СТРОК УЕХАЛО НА САМОМ ДЕЛЕ — не сумма по соседям (BRANCH_MAIN_PUSH_V1,
+  // ревью). Блоб один, и одна и та же карта пациента едет в нём КАЖДОМУ соседу:
+  // сложив срезы, экран показывал бы «отправлено 36» там, где клиника завела 12
+  // строк, — и рядом честное «получено 5». Считаем РАЗНЫЕ строки (таблица+uid);
+  // сумму по соседям по-прежнему видно поимённо в peers.
+  const rows = new Set();
+  for (const { batch } of built) {
+    for (const r of batch.records) rows.add(r.tbl + ' ' + r.uid);
+  }
+
   const applied = {};
   for (const { peer, batch } of built) {
     try {
@@ -946,7 +961,7 @@ export async function publishJournal(db, dataDir, {
     // состоявшуюся выгрузку неудачной не объявляют.
     console.warn('[branch-sync] could not record the journal publish:', e && e.message);
   }
-  return { ok: true, at, bytes: sealed.length, peers: applied };
+  return { ok: true, at, bytes: sealed.length, peers: applied, rows: rows.size };
 }
 
 /**
@@ -1189,19 +1204,43 @@ export async function fetchJournals(db, dataDir, {
 // параллельных обмена — это две резервные копии, две выгрузки одного блоба и
 // две транзакции приёма, спорящие за одну базу. Замок общий и живёт здесь,
 // потому что здесь сам обмен; rpc/branch-sync.js берёт его же.
-let exchangeInFlight = null;
+//
+// ОЧЕРЕДЬ, А НЕ СКЛЕЙКА (ревью BRANCH_MAIN_PUSH_V1, 2026-09-03). Раньше
+// опоздавший получал ОБЕЩАНИЕ ТОГО, кто уже в полёте, — и это тихо ломало
+// кнопку главной клиники. Часовой такт на главной держит замок вокруг
+// exchangeJournals, а тот отвечает {published, fetched}: ни ok, ни reason, ни
+// message. Владелец, нажавший «Синхронизация» в эту секунду, не выкладывал
+// копию справочника вовсе (publishCatalogue не звался), не получал записи
+// своего прогона, ответ приходил чужой формы — и экран честно читал его как
+// неудачу: «Не удалось синхронизировать». То есть ровно тот отказ, ради
+// устранения которого правку и делали, возвращался раз в час на минуту.
+//
+// Теперь опоздавший ВСТАЁТ В ОЧЕРЕДЬ: дожидается идущей работы и выполняет
+// СВОЮ целиком, со своим результатом. Смысл замка от этого не меняется — две
+// работы по-прежнему никогда не идут одновременно, — а обещание каждый
+// получает своё. Цена: два нажатия подряд теперь и правда два прогона, а не
+// один; это честнее, чем показать второму нажавшему чужой ответ (та же
+// причина, по которой здесь никогда не было «подождите, уже идёт»).
+let exchangeTail = null;
 
 /**
- * Пропустить работу через общий замок. Если обмен уже идёт, возвращается его же
- * обещание: и часы, и кнопка дождутся одного результата вместо того, чтобы
- * запускать второй проход.
+ * Пропустить работу через общий замок: если обмен уже идёт, наша работа
+ * начнётся сразу после него.
+ *
+ * @param {() => (Promise<any>|any)} work
+ * @returns {Promise<any>} результат ИМЕННО ЭТОЙ работы, а не соседней.
  */
 export function withExchangeLock(work) {
-  if (exchangeInFlight) return exchangeInFlight;
-  exchangeInFlight = Promise.resolve()
-    .then(work)
-    .finally(() => { exchangeInFlight = null; });
-  return exchangeInFlight;
+  const prev = exchangeTail;
+  // Чужая неудача не отменяет нашу работу: замок стоит в очередь по ЗАВЕРШЕНИЮ
+  // предыдущей, каким бы оно ни было (оба обработчика — один и тот же work).
+  const mine = prev ? prev.then(work, work) : Promise.resolve().then(work);
+  // Хвост очереди отказов не помнит — иначе первая же неудача осталась бы
+  // непойманным отказом и роняла бы сервер клиники.
+  const tail = mine.then(() => {}, () => {});
+  exchangeTail = tail;
+  tail.then(() => { if (exchangeTail === tail) exchangeTail = null; });
+  return mine;
 }
 
 export async function exchangeJournals(db, dataDir, opts = {}) {
@@ -1442,7 +1481,16 @@ export function scheduleRelayPublish(db, dataDir, opts = {}) {
   const run = async () => {
     adoptRelayForExistingBranches(db, dataDir);
     try {
-      const r = await maybePublish(db, dataDir, runOpts);
+      // ТОТ ЖЕ ЗАМОК, ЧТО У ОБМЕНА ЗАПИСЯМИ (ревью BRANCH_MAIN_PUSH_V1).
+      // Выгрузка копии — единственное, что оставалось снаружи: кнопка главной
+      // клиники выкладывает справочник ПРИНУДИТЕЛЬНО (publishCatalogue, без
+      // сверки хэша), и обе выгрузки могли пойти внахлёст. Кончалось это не
+      // ошибкой, а тихой ложью: блоб на сервере ОДИН, побеждает тот, кто
+      // дописал последним, а запись о выгрузке (LAST_PUBLISH) остаётся от
+      // того, кто закончил позже. Разъехались бы они на одну правку цен —
+      // филиалы сутки (REFRESH_MS) забирали бы старую копию, а экран главной
+      // показывал бы, что новая отправлена.
+      const r = await withExchangeLock(() => maybePublish(db, dataDir, runOpts));
       if (r && r.ok === false && r.reason !== 'relay_disabled' && r.reason !== 'relay_no_key') {
         console.warn('[branch-sync] relay publish did not happen:', r.reason);
       }

@@ -70,6 +70,9 @@ export const STRINGS = {
   "Ключ скопирован": {"en":"Key copied","ru":"Ключ скопирован","uz":"Kalit nusxalandi"},
   "Скопируйте выделенный ключ": {"en":"Copy the selected key","ru":"Скопируйте выделенный ключ","uz":"Ajratilgan kalitni nusxalang"},
   "Связываемся с главным филиалом…": {"en":"Contacting the main branch…","ru":"Связываемся с главным филиалом…","uz":"Bosh filial bilan bog'lanilmoqda…"},
+  // BRANCH_MAIN_PUSH_V1 — то же ожидание, но у ГЛАВНОЙ клиники: она не
+  // связывается с главным филиалом, она сама им является и отправляет копию.
+  "Отправляем справочник на сервер…": {"en":"Sending the catalogue to the server…","ru":"Отправляем справочник на сервер…","uz":"Ma'lumotnoma serverga yuborilmoqda…"},
   "Справочник обновлён": {"en":"The catalogue is up to date","ru":"Справочник обновлён","uz":"Ma'lumotnoma yangilandi"},
   "Не удалось синхронизироваться": {"en":"Could not synchronise","ru":"Не удалось синхронизироваться","uz":"Sinxronlab bo'lmadi"},
   "Филиал назначен главным": {"en":"This branch is now the main one","ru":"Филиал назначен главным","uz":"Filial bosh filial etib belgilandi"},

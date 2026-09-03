@@ -133,10 +133,18 @@ test('дата и время показываются так, как их чит
   assert.match(whenLabel('2026-08-29T09:05:00Z'), /^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$/);
 });
 
-test('кнопка синхронизации доступна только администратору подключённого филиала', () => {
+test('кнопка синхронизации доступна администратору там, где есть с кем меняться данными', () => {
   assert.equal(canSyncNow({ role: 'secondary' }, true), true);
   assert.equal(canSyncNow({ role: 'secondary' }, false), false);
-  assert.equal(canSyncNow({ role: 'main' }, true), false, 'главному филиалу неоткуда забирать справочник');
+  // ГЛАВНАЯ КЛИНИКА ТОЖЕ (ревью 2026-09-03): цены владелец меняет в настройках
+  // и отправляет их оттуда же. Правило — одно с маленькой кнопкой у стойки
+  // (syncButtonShown), иначе на одном экране кнопка есть, а на другом нет при
+  // одном и том же действии.
+  assert.equal(canSyncNow({ role: 'main', relay_enabled: true }, true), true);
+  assert.equal(canSyncNow({ role: 'main', relay_enabled: true }, false), false);
+  assert.equal(canSyncNow({ role: 'main' }, true), false,
+    'без резервного канала главной нечем ни отправить копию, ни обменяться записями');
+  assert.equal(canSyncNow({ role: 'none' }, true), false);
   assert.equal(canSyncNow(null, true), false);
 });
 
@@ -579,17 +587,62 @@ test('нет и кода, и канала — говорится про код: 
 // экране как «Изменений не было — справочник уже совпадает.», то есть как
 // пустое действие ровно там, где действие и произошло.
 
-const PUBLISHED = 'Копия справочника отправлена на сервер (17 КБ). Филиалы заберут её при следующей синхронизации — не позже чем через час. Записи: получено 5, отправлено 12.';
+const PUBLISHED = 'Копия справочника отправлена на сервер (17 КБ). Филиалы заберут её при следующей синхронизации — не позже чем через час. Записи: получено 5, отправлено на сервер 12.';
 
 test('успех главной клиники рассказывает про отправленную копию, а не «изменений не было»', () => {
-  const rec = { at: '2026-09-03T08:41:40Z', ok: true, reason: 'published', published: true, message: PUBLISHED };
+  const rec = { at: '2026-09-03T08:41:40Z', ok: true, reason: 'published', published: true, message: PUBLISHED, records_ok: true };
   const line = syncLine({ role: 'main', last_attempt: rec, last_ok: rec });
   assert.equal(line.tone, 'ok');
   assert.ok(say(line).includes('отправлена на сервер (17 КБ)'), say(line));
-  assert.ok(say(line).includes('получено 5, отправлено 12'), say(line));
+  assert.ok(say(line).includes('получено 5, отправлено на сервер 12'), say(line));
   assert.equal(say(line).includes('Изменений не было'), false,
     'копия ушла — называть это пустым прогоном было бы враньём');
   assert.equal(/undefined/.test(say(line)), false);
+});
+
+// --- ревью 2026-09-03: чего эта строка НЕ должна показывать -----------------
+
+test('копия ушла, а записи отвергнуты — строка ЖЁЛТАЯ, а не с зелёной галочкой', () => {
+  // ok у главной клиники значит «получилось хоть одно из двух дел»: копия
+  // справочника ушла — и ok:true, даже когда чужие записи база отвергла
+  // (records_refused — строка потеряна, сосед второй раз её не пришлёт). Про
+  // потерю сказано текстом в той же фразе, но текст читают не всегда, а цвет
+  // видят всегда: зелёная галочка над такой строкой — неправда в один взгляд.
+  const rec = {
+    at: '2026-09-03T08:41:40Z', ok: true, reason: 'published', records_ok: false,
+    message: 'Копия справочника отправлена на сервер (17 КБ). Часть записей не принята базой.',
+  };
+  const line = syncLine({ role: 'main', last_attempt: rec, last_ok: rec });
+  assert.equal(line.tone, 'warn', 'потерянные записи — это незакрытое дело, а не удача');
+  assert.match(say(line), /Часть записей не принята/);
+  // Поля нет вовсе (ответ старой версии) — прежнее поведение: удача.
+  const old = { ...rec, records_ok: undefined, message: 'Копия справочника отправлена на сервер (17 КБ).' };
+  assert.equal(syncLine({ role: 'main', last_attempt: old, last_ok: old }).tone, 'ok');
+});
+
+test('старый отказ «это главный филиал» читается как «ещё не запускалась»', () => {
+  // След ОБНОВЛЕНИЯ. У каждой работающей главной клиники в журнале попыток
+  // лежит отказ с прошлой версии (ok:false, not_secondary) — ровно тот, на
+  // который владелец и пожаловался. Записи такой формы взяться больше неоткуда:
+  // главная теперь справочник отправляет, а не забирает. До первого нового
+  // нажатия экран показывал бы неверный отказ; переписывать журнал задним
+  // числом нельзя — значит читаем его как пустое состояние.
+  const stale = { at: '2026-09-02T09:00:00Z', ok: false, reason: 'not_secondary',
+    message: 'Это главный филиал — он раздаёт справочник, а не забирает его.' };
+  const line = syncLine({ role: 'main', last_attempt: stale });
+  assert.equal(line.tone, 'none');
+  assert.equal(say(line), 'Синхронизации ещё не было.');
+
+  // У ФИЛИАЛА та же запись — настоящая новость: он отвязался и не знает.
+  const branch = syncLine({ role: 'secondary', last_attempt: stale });
+  assert.equal(branch.tone, 'warn');
+  assert.match(say(branch), /раздаёт справочник/);
+
+  // И любой другой отказ главной клиники по-прежнему виден: прячется ровно
+  // одна причина, а не «всё, что не нравится».
+  const offline = { at: '2026-09-02T09:00:00Z', ok: false, reason: 'relay_offline',
+    message: 'Нет связи с сервером Easy-Med.' };
+  assert.equal(syncLine({ role: 'main', last_attempt: offline }).tone, 'warn');
 });
 
 test('успех филиала фразы сервера не ждёт — перечень изменений остался прежним', () => {
@@ -603,13 +656,27 @@ test('успех филиала фразы сервера не ждёт — пе
 
 test('маленькая кнопка видна и в главной клинике — там её и нажимает владелец', () => {
   assert.equal(syncButtonShown({ role: 'secondary' }), true);
-  assert.equal(syncButtonShown({ role: 'main' }), true,
+  assert.equal(syncButtonShown({ role: 'main', relay_enabled: true }), true,
     'главная отправляет копию и меняется записями — ей эта кнопка нужна не меньше');
   // Одиночная клиника — единственный случай, когда кнопки быть не должно:
   // синхронизироваться ей не с кем, и нажатие выглядело бы поломкой.
   assert.equal(syncButtonShown({ role: 'none' }), false);
   assert.equal(syncButtonShown(null), false);
   assert.equal(syncButtonShown({}), false);
+});
+
+test('у главной с ВЫКЛЮЧЕННЫМ резервным каналом кнопки нет — она умела бы только отказывать', () => {
+  // Ревью 2026-09-03. Оба дела этой кнопки у главной клиники идут через сервер
+  // поставщика: и копия справочника (publishCatalogue), и записи
+  // (journalContext отвечает relay_disabled раньше всего прочего). При
+  // выключенном канале нажатие не «сделает поменьше» — оно не сделает НИЧЕГО.
+  // Так выглядят две настоящие установки: главная, работающая в одной сети с
+  // филиалами, и главная, у которой филиалов ещё нет.
+  assert.equal(syncButtonShown({ role: 'main', relay_enabled: false }), false);
+  assert.equal(syncButtonShown({ role: 'main' }), false, 'поля нет — значит канал не включён');
+  // У ФИЛИАЛА канал ни при чём: справочник он забирает прямо у главной, а
+  // сервер поставщика — его запасной путь, а не единственный.
+  assert.equal(syncButtonShown({ role: 'secondary', relay_enabled: false }), true);
 });
 
 test('маленькая кнопка показывает фразу сервера, когда она есть', () => {

@@ -22,6 +22,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { setDataDir } from '../control/config.js';
 import { writePairing } from '../branch-sync/pairing.js';
+import { withExchangeLock, publishCatalogue, maybePublish } from '../branch-sync/relay.js';
 import { branchSyncNow, runBranchSync } from './branch-sync.js';
 
 const dirs = [];
@@ -70,7 +71,21 @@ test('анонимный запрос отклоняется', async () => {
     'открыть всем вошедшим — не то же самое, что открыть всем');
 });
 
-test('два нажатия одновременно — одно скачивание и два ЧЕСТНЫХ ответа', async () => {
+test('два нажатия одновременно — по очереди, и каждый получает СВОЙ ответ', async () => {
+  // ОЧЕРЕДЬ, А НЕ СКЛЕЙКА (ревью BRANCH_MAIN_PUSH_V1, 2026-09-03). Раньше здесь
+  // утверждалось «одно скачивание на два нажатия»: опоздавший получал обещание
+  // того, кто уже в полёте. Экономию пришлось разменять, и вот на что.
+  //
+  // Замок общий с часами (relay.js), а часовой такт главной клиники держит его
+  // вокруг exchangeJournals, чей ответ — {published, fetched}: ни ok, ни reason,
+  // ни message. Нажавший в эту секунду владелец получал ЧУЖОЙ ответ чужой
+  // формы: копия справочника не отправлялась вовсе, а экран читал ответ как
+  // неудачу — «Не удалось синхронизировать». Одно и то же действие раз в час на
+  // минуту переставало работать, и объяснить это было нечем.
+  //
+  // Цена размена — два прогона вместо одного при одновременном нажатии двух
+  // человек; каждый из них при этом настоящий. Одиночное нажатие (99% случаев)
+  // не изменилось никак.
   const { db } = harness();
   let pulls = 0;
   const slow = {
@@ -88,7 +103,7 @@ test('два нажатия одновременно — одно скачива
     branchSyncNow(db, {}, LABORANT, slow),
   ]);
 
-  assert.equal(pulls, 1, 'справочник по узкому каналу качается один раз');
+  assert.equal(pulls, 2, 'второй нажавший делает свой прогон, а не пересказывает чужой');
   // И это ГЛАВНОЕ: оба видят настоящий результат, а не «подождите» и не чужой
   // прошлый ответ. Пауза с отдачей прошлого результата показывала бы второму
   // бодрое «обновлено» там, где его собственная попытка ничего бы не дала.
@@ -183,7 +198,9 @@ test('главная клиника: кнопка ОТПРАВЛЯЕТ копи�
   assert.match(res.message, /отправлена/, 'владелец должен прочитать, что копия ушла');
   assert.match(res.message, /17 КБ/, 'и сколько её ушло');
   assert.match(res.message, /получено 3/);
-  assert.match(res.message, /отправлено 4/);
+  // «на сервер» — потому что записи уезжают на сервер поставщика, а филиалы
+  // забирают их оттуда сами (ревью 2026-09-03).
+  assert.match(res.message, /отправлено на сервер 4/);
   assert.doesNotMatch(res.message, /[{}]/, 'дырка на экране — это ошибка, которую видит владелец');
 
   // Журнал попыток — то, что рисует карточка «Настройки → Филиалы».
@@ -278,5 +295,217 @@ test('часы на главной клинике копию не шлют — �
   });
 
   assert.equal(published, 0);
+  db.close();
+});
+
+// ===========================================================================
+// РЕВЬЮ BRANCH_MAIN_PUSH_V1 (2026-09-03) — четыре дыры, найденные разбором.
+//
+// Все четыре об одном: кнопка обязана делать СВОЁ дело и рассказывать о нём
+// правду. Разбор нашёл, что в час пик она делала чужое, а в остальное время
+// пересчитывала и пересказывала своё неверно.
+// ===========================================================================
+
+test('часовой обмен в полёте — кнопка ЖДЁТ его и делает свой прогон, а не пересказывает чужой', async () => {
+  // САМАЯ ДОРОГАЯ ИЗ ЧЕТЫРЁХ. Замок общий с часами, а часовой такт главной
+  // клиники держит его вокруг exchangeJournals — та отвечает {published,
+  // fetched}: ни ok, ни reason, ни message. Пока замок отдавал опоздавшему
+  // ОБЕЩАНИЕ ИДУЩЕЙ работы, нажатие в эту секунду не отправляло копию
+  // справочника вовсе (publishCatalogue не звался), не обменивалось записями
+  // от своего имени и возвращало ответ чужой формы — который экран честно
+  // читал как неудачу: «Не удалось синхронизировать». Владелец, поменявший
+  // цены, получал отказ и не мог понять, почему кнопка работает не всегда.
+  const { db, dir } = harness();
+  mainPairing(dir, { relay: true });
+
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const hourly = withExchangeLock(async () => {
+    await held;
+    return { published: { ok: true, peers: {} }, fetched: { ok: true, peers: {} } };
+  });
+
+  let published = 0;
+  const pressed = branchSyncNow(db, {}, REGISTRAR, {
+    publishImpl: async () => { published += 1; return { ok: true, bytes: 17 * 1024 }; },
+    publishJournalImpl: async () => ({ ok: true, peers: { B: 3 }, rows: 3 }),
+    fetchJournalsImpl: async () => ({ ok: true, peers: { B: { applied: 2 } } }),
+  });
+
+  // Пока чужая работа не кончилась, наша не начинается: два обмена разом — это
+  // две резервные копии и две транзакции приёма, спорящие за одну базу.
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(published, 0, 'замок обязан остаться замком, а не превратиться в два потока');
+
+  release();
+  await hourly;
+  const res = await pressed;
+
+  assert.equal(published, 1, 'дождавшись, кнопка выполняет СВОЙ полный прогон');
+  assert.equal(res.ok, true);
+  assert.equal(res.reason, 'published', 'и отвечает своей формой: ok, reason, message');
+  assert.match(res.message, /отправлена на сервер/);
+  assert.equal(res.fetched, undefined, 'форма часового обмена ({published, fetched}) наружу не уезжает');
+  assert.equal(lastAttempt(db).reason, 'published');
+  db.close();
+});
+
+test('нет интернета — ОДНА новость, а не три подряд', async () => {
+  // Все три вызова офлайн отвечают одной причиной, и владелец читал:
+  // «Нет связи с сервером Easy-Med. Записи: получено 0, отправлено на сервер 0.
+  //  Нет связи с сервером Easy-Med. Нет связи с сервером Easy-Med.»
+  // Трижды повторённая новость выглядит как сломанная программа — ровно там,
+  // где программа исправна, а выключен интернет.
+  const { db, dir } = harness();
+  mainPairing(dir, { relay: true });
+
+  const res = await branchSyncNow(db, {}, REGISTRAR, {
+    publishImpl: async () => ({ ok: false, reason: 'relay_offline' }),
+    publishJournalImpl: async () => ({ ok: false, reason: 'relay_offline' }),
+    fetchJournalsImpl: async () => ({ ok: false, reason: 'relay_offline' }),
+  });
+
+  const OFFLINE = 'Нет связи с сервером Easy-Med.';
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'relay_offline');
+  assert.equal(res.message, OFFLINE, 'одна причина — одна фраза');
+  assert.equal(res.message.split(OFFLINE).length - 1, 1, 'и ровно один раз');
+  assert.doesNotMatch(res.message, /Записи/,
+    'два нуля рядом с «нет связи» ничего не добавляют: их объясняет сама причина');
+  assert.equal(lastAttempt(db).message, res.message, 'экран и кнопка говорят одно и то же');
+  db.close();
+});
+
+test('но при УДАЧНОМ обмене нули остаются: «получено 0» — это ответ, а не шум', async () => {
+  // Обратная сторона правки выше, без которой она была бы просто сокрытием:
+  // причины нет, значит спросили и узнали — новых записей у соседей не было.
+  const { db, dir } = harness();
+  mainPairing(dir, { relay: true });
+
+  const res = await branchSyncNow(db, {}, REGISTRAR, {
+    publishImpl: async () => ({ ok: true, bytes: 2048 }),
+    publishJournalImpl: async () => ({ ok: true, peers: { B: 0 }, rows: 0 }),
+    fetchJournalsImpl: async () => ({ ok: true, peers: { B: { applied: 0 } } }),
+  });
+
+  assert.equal(res.ok, true);
+  assert.match(res.message, /получено 0, отправлено на сервер 0/,
+    'молчание здесь читалось бы как «кнопка ничего не сделала»');
+  db.close();
+});
+
+test('копия ушла, а чужие записи база ОТВЕРГЛА — это не зелёная галочка', async () => {
+  // ok у главной клиники значит «получилось хоть одно из двух дел». Копия
+  // справочника ушла — и ok:true, даже когда записи соседа отвергнуты
+  // (records_refused: строка потеряна, второй раз её не пришлют). Экран красил
+  // такую попытку обычной удачей.
+  const { db, dir } = harness();
+  mainPairing(dir, { relay: true });
+
+  const res = await branchSyncNow(db, {}, REGISTRAR, {
+    publishImpl: async () => ({ ok: true, bytes: 17 * 1024 }),
+    publishJournalImpl: async () => ({ ok: true, peers: { B: 2 }, rows: 2 }),
+    fetchJournalsImpl: async () => ({ ok: true, peers: { B: { applied: 1, refused: 3 } } }),
+  });
+
+  assert.equal(res.ok, true, 'копия и правда ушла — врать в другую сторону тоже нельзя');
+  assert.equal(res.records_ok, false, 'а записи — нет, и это отдельная новость');
+  assert.equal(res.records.fetch_reason, 'records_refused');
+  assert.equal(lastAttempt(db).records_ok, false, 'экран рисует по журналу попыток, а не по ответу RPC');
+  db.close();
+});
+
+test('удачный обмен помечен records_ok:true — иначе экран ругался бы всегда', async () => {
+  const { db, dir } = harness();
+  mainPairing(dir, { relay: true });
+
+  const res = await branchSyncNow(db, {}, REGISTRAR, {
+    publishImpl: async () => ({ ok: true, bytes: 1024 }),
+    publishJournalImpl: async () => ({ ok: true, peers: { B: 1 }, rows: 1 }),
+    fetchJournalsImpl: async () => ({ ok: true, peers: { B: { applied: 1 } } }),
+  });
+  assert.equal(res.records_ok, true);
+  db.close();
+});
+
+test('«отправлено на сервер» считает РАЗНЫЕ записи, а не сумму по филиалам', async () => {
+  // Блоб один, и одна и та же карта пациента едет в нём каждому соседу.
+  // Сложив срезы, клиника с двумя филиалами читала «отправлено 24» там, где
+  // завела 12 строк, — и рядом честное «получено 5», посчитанное по разным
+  // строкам. Число, вдвое больше правды, хуже отсутствующего.
+  const { db, dir } = harness();
+  mainPairing(dir, { relay: true });
+
+  const res = await branchSyncNow(db, {}, REGISTRAR, {
+    publishImpl: async () => ({ ok: true, bytes: 1024 }),
+    publishJournalImpl: async () => ({ ok: true, peers: { B: 12, C: 12 }, rows: 12 }),
+    fetchJournalsImpl: async () => ({ ok: true, peers: { B: { applied: 3 }, C: { applied: 2 } } }),
+  });
+
+  assert.match(res.message, /получено 5/);
+  assert.match(res.message, /отправлено на сервер 12/);
+  assert.doesNotMatch(res.message, /24/, 'сумма по соседям — это «сколько раз», а не «сколько записей»');
+  // Поимённый срез остаётся: он отвечает на другой вопрос — «кому и сколько».
+  assert.deepEqual(res.records.published, { B: 12, C: 12 });
+  db.close();
+});
+
+test('старая выгрузка без rows считается по САМОМУ БОЛЬШОМУ срезу, а не по сумме', async () => {
+  // Запасной путь для ответа, пришедшего без rows: самый большой срез — нижняя
+  // граница числа разных строк, и соврать в большую сторону она не даст.
+  const { db, dir } = harness();
+  mainPairing(dir, { relay: true });
+
+  const res = await branchSyncNow(db, {}, REGISTRAR, {
+    publishImpl: async () => ({ ok: true, bytes: 1024 }),
+    publishJournalImpl: async () => ({ ok: true, peers: { B: 7, C: 4 } }),
+    fetchJournalsImpl: async () => ({ ok: true, peers: { B: { applied: 1 } } }),
+  });
+  assert.match(res.message, /отправлено на сервер 7/);
+  db.close();
+});
+
+/** Подставной сервер поставщика: считает выгрузки и ничего не отдаёт. */
+function fakeVendor() {
+  const vendor = { puts: 0 };
+  vendor.fetchImpl = async (url, init = {}) => {
+    if ((init.method || 'GET') === 'PUT') vendor.puts += 1;
+    return { ok: true, status: 200, body: null, arrayBuffer: async () => new ArrayBuffer(0) };
+  };
+  return vendor;
+}
+
+test('нажатие отправляет копию ДАЖЕ при совпавшем хэше — экономия тут не к месту', async () => {
+  // Проверка ПРИНУДИТЕЛЬНОСТИ, а не самого факта отправки: фоновый прогон
+  // (maybePublish) молчит, пока справочник не изменился, и владелец, поменявший
+  // цены и нажавший кнопку, не должен зависеть от того, совпал ли отпечаток.
+  // Поэтому здесь отпечаток заранее ПРИВЕДЁН К ТЕКУЩЕМУ — состоянием, в котором
+  // фоновая выгрузка заведомо промолчала бы.
+  const { db, dir } = harness();
+  mainPairing(dir, { relay: true });
+  fs.writeFileSync(path.join(dir, 'control.json'),
+    JSON.stringify({ clinic_id: 'c-1', install_token: 'tok-AAAA' }));
+
+  const vendor = fakeVendor();
+  const opts = { fetchImpl: vendor.fetchImpl, env: {} };
+
+  const first = await maybePublish(db, dir, opts);
+  assert.equal(first.ok, true, 'первая выгрузка записывает отпечаток: ' + JSON.stringify(first));
+  assert.equal(vendor.puts, 1);
+
+  // Страж на месте: справочник не менялся — фоновый прогон не ходит на сервер.
+  const again = await maybePublish(db, dir, opts);
+  assert.equal(again.skipped, true, 'иначе тест ниже не доказывал бы ничего');
+  assert.equal(vendor.puts, 1);
+
+  const res = await branchSyncNow(db, {}, REGISTRAR, {
+    publishImpl: (d, dd) => publishCatalogue(d, dd, opts),
+    publishJournalImpl: async () => ({ ok: false, reason: 'relay_no_peers' }),
+    fetchJournalsImpl: async () => ({ ok: false, reason: 'relay_no_peers' }),
+  });
+
+  assert.equal(vendor.puts, 2, 'кнопка обязана отправить копию поверх совпавшего отпечатка');
+  assert.equal(res.reason, 'published');
+  assert.match(res.message, /отправлена на сервер/);
   db.close();
 });

@@ -51,7 +51,7 @@ import {
     LETTER_PERMANENCE_WARNING, ADD_BRANCH_QUESTION, ISSUE_KEY_QUESTION,
     UNLINK_WARNING_MAIN, UNLINK_WARNING_SECONDARY, UNLINK_QUESTION,
     UNLINKED_BRANCH_NOTE, pairedMessage, letterExplainer, becomeMainState,
-    IDENTITY_UNKNOWN_NOTE,
+    IDENTITY_UNKNOWN_NOTE, syncButtonToast,
 } from '../branch-sync-logic.js';
 
 async function rpc(name, args = {}) {
@@ -296,6 +296,14 @@ function paintMain(card, status, admin) {
             role: 'status',
         }, Icon(line.tone === 'warn' ? 'Warning' : 'Check', { size: 14 }), ' ', say(line)));
     }
+
+    // И КНОПКА РЯДОМ С НЕЙ (ревью 2026-09-03). Строку о прошлой синхронизации
+    // на этот экран уже вернули, а нажать было по-прежнему нечего: кнопка жила
+    // только в окнах регистратуры и лаборатории. Цены владелец меняет ЗДЕСЬ,
+    // в настройках, и отправить их отсюда же — это ровно то действие, за
+    // которым он на этот экран и пришёл. Идти за ним в чужое окно — не
+    // «лишний клик», а причина решить, что отправки не существует.
+    card.appendChild(syncNowBlock(card, status, admin));
 
     paintBranchList(card);
 
@@ -713,32 +721,54 @@ function paintSecondary(card, status, admin) {
         return;
     }
 
-    const syncBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button' },
+    // Абзаца «Синхронизация переносит только справочник: …» здесь больше нет:
+    // он дословно повторял подпись под ролью установки («Пациенты, визиты и
+    // деньги остаются здесь»), стоявшую двумя блоками выше на том же экране.
+    card.appendChild(syncNowBlock(card, status, admin));
+    paintRelay(card, status, admin);
+    card.appendChild(unlinkBlock(card, UNLINK_WARNING_SECONDARY));
+}
+
+/**
+ * «Синхронизировать сейчас» — ОДНА кнопка на обе карточки.
+ *
+ * Была только у филиала: пока синхронизация означала «забрать справочник»,
+ * главной клинике нажимать было нечего. Теперь у главной то же нажатие
+ * означает зеркальное действие — отправить копию справочника на сервер и
+ * обменяться записями, — и живёт оно здесь, а не двумя похожими копиями:
+ * разъехавшись, они начали бы рассказывать об одном действии разное.
+ *
+ * ОТВЕТ БЕРЁТСЯ ТОТ ЖЕ, что у маленькой кнопки в окне регистратуры
+ * (syncButtonToast, чистая функция с тестом): сервер присылает готовую фразу с
+ * размером копии и числами записей, и своё «обновлено» поверх неё было бы
+ * пересказом с потерей всего, что владелец хотел узнать.
+ */
+function syncNowBlock(card, status, admin) {
+    const btn = h('button', { class: 'btn btn-primary btn-sm', type: 'button' },
         Icon('Refresh', { size: 14 }), ' ', 'Синхронизировать сейчас');
-    const syncStatus = h('p', { class: 'upd-action-status', role: 'status' });
-    syncBtn.disabled = !canSyncNow(status, admin);
-    syncBtn.addEventListener('click', async () => {
-        syncBtn.disabled = true;
-        syncStatus.textContent = tr('Связываемся с главным филиалом…');
+    const statusEl = h('p', { class: 'upd-action-status', role: 'status' });
+    // Выключенный резервный канал у главной клиники — единственный случай,
+    // когда кнопка есть, но нажать нельзя: оба её дела идут через сервер
+    // поставщика (см. syncButtonShown). Правило одно на обе кнопки экрана.
+    btn.disabled = !canSyncNow(status, admin);
+    btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        statusEl.textContent = tr(status && status.role === 'main'
+            ? 'Отправляем справочник на сервер…'
+            : 'Связываемся с главным филиалом…');
         try {
             const data = await rpc('branch_sync_now');
             // ok:false здесь — НЕ исключение: недоступный главный филиал это
             // норма. Текст берётся тот же, что уйдёт в журнал попыток, чтобы
             // кнопка и строка состояния не рассказывали разное.
-            toast(data && data.ok ? tr('Справочник обновлён') : (data && data.message) || tr('Не удалось синхронизироваться'),
-                data && data.ok ? 'ok' : 'fail');
+            const said = syncButtonToast(data);
+            toast(said.translate ? tr(said.text) : said.text, said.tone);
         } catch (e) {
-            toast(e.message, 'fail');
+            toast(e.message, 'err');
         }
         await paint(card);
     });
-
-    // Абзаца «Синхронизация переносит только справочник: …» здесь больше нет:
-    // он дословно повторял подпись под ролью установки («Пациенты, визиты и
-    // деньги остаются здесь»), стоявшую двумя блоками выше на том же экране.
-    card.appendChild(h('div', { class: 'bsync-actions' }, syncBtn, syncStatus));
-    paintRelay(card, status, admin);
-    card.appendChild(unlinkBlock(card, UNLINK_WARNING_SECONDARY));
+    return h('div', { class: 'bsync-actions' }, btn, statusEl);
 }
 
 /**

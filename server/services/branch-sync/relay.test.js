@@ -8,7 +8,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { b64url, writePairing, readPairing, GROUP_KEY_BYTES } from './pairing.js';
 import { relayIdFor, openPayload } from './relay-crypto.js';
-import { publishCatalogue, fetchCatalogue, maybePublish, mintRelayToken, relayMintable, relayUrl, relayTokenUrl, readLastPublish, scheduleRelayPublish, MAX_SCOPE } from './relay.js';
+import { publishCatalogue, fetchCatalogue, maybePublish, mintRelayToken, relayMintable, relayUrl, relayTokenUrl, readLastPublish, scheduleRelayPublish, publishJournal, withExchangeLock, MAX_SCOPE } from './relay.js';
 
 // BRANCH_SYNC_RELAY_V1 — транспорт Маршрута Б на подставном fetch.
 //
@@ -572,4 +572,63 @@ test('клинике без филиалов канал не включают', 
   clearTimeout(timers.initial); clearInterval(timers.interval); clearInterval(timers.seeding);
 
   assert.notEqual(readPairing(dir).relay, true, 'включать нечего и незачем');
+});
+
+// --- ревью BRANCH_MAIN_PUSH_V1 (2026-09-03): замок и счёт отправленного -----
+
+test('часовая выгрузка копии идёт под ТЕМ ЖЕ замком, что и кнопка', async () => {
+  // Выгрузка копии была единственной работой, оставшейся снаружи замка. Кнопка
+  // главной клиники выкладывает справочник ПРИНУДИТЕЛЬНО (без сверки хэша), и
+  // обе выгрузки могли пойти внахлёст. Кончилось бы это не ошибкой, а тихой
+  // ложью: блоб на сервере ОДИН, побеждает дописавший последним, а запись о
+  // выгрузке остаётся от закончившего позже. Разъехавшись на одну правку цен,
+  // филиалы сутки забирали бы старую копию, пока экран главной показывал бы,
+  // что новая отправлена.
+  const { dir, db } = clinic('lock');
+  const order = [];
+  const vendor = fakeVendor();
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let held = false;
+  const slow = async (url, init) => {
+    // Держим ПЕРВУЮ выгрузку — ту самую, часовую.
+    if (!held) { held = true; order.push('часы'); await gate; }
+    return vendor.fetchImpl(url, init);
+  };
+
+  const timers = scheduleRelayPublish(db, dir, { initialDelayMs: 1, intervalMs: 10_000, fetchImpl: slow, env: {} });
+  for (let i = 0; i < 200 && !order.length; i += 1) await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(order, ['часы'], 'фоновая выгрузка обязана начаться — иначе замок нечего проверять');
+
+  // Владелец нажал кнопку ровно в эту секунду.
+  const pressed = withExchangeLock(async () => { order.push('кнопка'); return { ok: true }; });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.deepEqual(order, ['часы'], 'её работа не должна начаться поверх идущей выгрузки');
+
+  release();
+  await pressed;
+  clearTimeout(timers.initial); clearInterval(timers.interval); clearInterval(timers.seeding);
+
+  assert.deepEqual(order, ['часы', 'кнопка'], 'дождалась своей очереди — и сделала своё');
+});
+
+test('выгрузка записей считает РАЗНЫЕ строки, а не сумму срезов по соседям', async () => {
+  // Блоб один, и одна и та же карта пациента едет в нём КАЖДОМУ соседу.
+  // peers отвечает на вопрос «кому и сколько», rows — на вопрос «сколько
+  // записей отправлено», и именно его читает владелец («отправлено на сервер
+  // 12»). До этой правки экран складывал peers и втрое завышал число.
+  const { dir, db } = clinic('rows');
+  addBranchRow(db, 'B');
+  addBranchRow(db, 'C');
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Петров')").run();
+
+  const vendor = fakeVendor();
+  const r = await publishJournal(db, dir, { self: 'A', fetchImpl: vendor.fetchImpl, env: {} });
+
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.ok(r.peers.B > 1, 'соседу уехали хотя бы обе карты: ' + JSON.stringify(r.peers));
+  assert.equal(r.peers.B, r.peers.C, 'обоим соседям уехало одно и то же — это один блоб');
+  assert.equal(r.rows, r.peers.B, 'разных строк ровно столько, сколько их в срезе одного соседа');
+  assert.notEqual(r.rows, r.peers.B + r.peers.C, 'сумма по соседям — это «сколько раз», а не «сколько строк»');
 });

@@ -14,6 +14,7 @@ import {
   UNLINK_WARNING_MAIN, UNLINK_WARNING_SECONDARY, UNLINK_QUESTION,
   UNLINKED_BRANCH_NOTE, IDENTITY_UNKNOWN_NOTE, RELAY_ACCESS_ISSUED,
   BRANCH_KEY_REISSUE_WARNING, BRANCH_KEY_REISSUE_QUESTION,   // BRANCH_REISSUE_V1
+  syncButtonToast,                                           // BRANCH_MAIN_PUSH_V1
 } from '../branch-sync-logic.js';
 
 // BRANCH_SYNC_I18N_V1 (2026-08-30) — то, что не даёт экрану «Настройки →
@@ -46,6 +47,12 @@ import {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const VIEW_PATH = path.join(HERE, 'branch-sync.js');
+// BRANCH_SYNC_HOURLY_V1 — та же карточка, но её кнопка в окнах регистратуры и
+// лаборатории: отдельный файл, и до ревью 2026-09-03 его не читал никто. Там
+// живут три строки, которые видит человек за стойкой, — включая подсказку
+// кнопки (title), уехавшую бы в узбекскую клинику по-русски: h() переводит и
+// title тоже, но только если он есть в словаре.
+const BUTTON_PATH = path.join(HERE, 'branch-sync-button.js');
 
 const CYRILLIC = /[Ѐ-ӿ]/;
 const LANGS = ['ru', 'uz', 'en'];
@@ -116,6 +123,7 @@ function collectLiterals(src) {
 }
 
 const viewSrc = fs.readFileSync(VIEW_PATH, 'utf8');
+const buttonSrc = fs.readFileSync(BUTTON_PATH, 'utf8');
 
 /**
  * Каждая фраза, которую branch-sync-logic.js реально ОТДАЁТ экрану — собранная
@@ -187,6 +195,16 @@ function everyPhrase() {
   take(letterExplainer({ letter: 'C' }));
   out.add(branchListNote({ role: 'secondary' }));
 
+  // BRANCH_MAIN_PUSH_V1 — ответ маленькой кнопки за стойкой. Берём только те
+  // ветки, где текст СВОЙ (translate:true): фраза сервера приходит готовой,
+  // несёт размер копии и числа записей и ключом словаря не будет никогда — это
+  // известная дыра, отмеченная в шапке, а не пропущенный перевод.
+  for (const data of [{ ok: true, changed: 3 }, { ok: true, changed: 0 }, null,
+    { ok: true, reason: 'published', message: 'Копия справочника отправлена на сервер (17 КБ).' }]) {
+    const said = syncButtonToast(data);
+    if (said.translate) out.add(said.text);
+  }
+
   // Список филиалов: все пять состояний строки, с кнопками и без.
   for (const branches of [
     [{ id: 1, name: 'Главный', letter: 'A', key: null, is_self: true }],
@@ -248,6 +266,21 @@ test('branch-sync.js: каждый русский литерал экрана е
   );
 });
 
+test('branch-sync-button.js: подпись, подсказка и ответ кнопки — тоже ключи словаря', () => {
+  // Ревью 2026-09-03. Файл кнопки этот тест не читал вовсе, и её подсказка
+  // (title) меняется вместе со смыслом кнопки: «Забрать данные других филиалов»
+  // → «Обменяться данными с другими филиалами», потому что в главной клинике
+  // она ещё и отправляет копию справочника. h() переводит title так же, как
+  // текст, — но только если он есть в словаре.
+  const lits = collectLiterals(buttonSrc);
+  assert.ok(lits.length >= 3, `ожидались подпись, подсказка и отказ, найдено: ${lits.length}`);
+  const raws = lits.map((l) => l.raw);
+  assert.ok(raws.includes('Синхронизация'), 'подпись кнопки');
+  assert.ok(raws.some((r) => r.startsWith('Обменяться данными')), 'подсказка кнопки (title)');
+  assert.deepEqual(missingFrom(raws), [],
+    'эти строки уедут в клинику по-русски:\n  ' + missingFrom(raws).join('\n  '));
+});
+
 test('branch-sync-logic.js: каждая фраза, которую он отдаёт экрану, — ключ словаря во всех трёх языках', () => {
   // Экран рисует их через say() → tr(template) → fill(). Шаблон, которого нет в
   // словаре, — тот же молчаливый русский проход, только на модуль дальше от
@@ -287,7 +320,7 @@ test('ни один перевод не является копией русск
     for (const lang of ['uz', 'en']) if (e[lang] === e.ru) same.push(`${JSON.stringify(raw)} — ${lang} совпадает с ru`);
   };
   for (const raw of everyPhrase()) check(raw);
-  for (const { raw } of collectLiterals(viewSrc)) check(raw);
+  for (const { raw } of [...collectLiterals(viewSrc), ...collectLiterals(buttonSrc)]) check(raw);
   assert.deepEqual(same, [], same.join('\n'));
 });
 
@@ -298,7 +331,7 @@ test('перевести дважды — то же самое, что пере�
   // означающим что-то другое, — а в STRINGS есть английские ключи, так что
   // ловушка настоящая, а не теоретическая.
   const used = new Set(everyPhrase());
-  for (const { raw } of collectLiterals(viewSrc)) used.add(raw);
+  for (const { raw } of [...collectLiterals(viewSrc), ...collectLiterals(buttonSrc)]) used.add(raw);
 
   const problems = [];
   for (const raw of used) {

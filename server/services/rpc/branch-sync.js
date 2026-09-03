@@ -251,7 +251,14 @@ REASONS.enroll_too_many = 'Слишком много попыток актива
 // потому что кнопку жмут по двум разным поводам («у соседа завели пациента,
 // хочу его видеть» и «я завёл, хочу чтобы увидели»), и одно число из двух
 // отвечает только на половину вопросов.
-const RECORDS_SENTENCE = 'Записи: получено {in}, отправлено {out}.';
+//
+// «НА СЕРВЕР», А НЕ ПРОСТО «ОТПРАВЛЕНО» (ревью 2026-09-03). Записи уезжают
+// ОДНИМ блобом на сервер поставщика, и соседи забирают их оттуда сами — каждый
+// в свой час. «Отправлено 12» без этих двух слов читается как «12 доехали до
+// филиалов», а это неправда до тех пор, пока филиал не вышел на связь. И
+// считается число теперь так же честно: РАЗНЫХ строк, а не сумма срезов по
+// соседям (см. countSent и rows в relay.js).
+const RECORDS_SENTENCE = 'Записи: получено {in}, отправлено на сервер {out}.';
 
 /**
  * ФРАЗА ПО КОДУ ОТКАЗА — и подстановка того, без чего фраза не фраза.
@@ -314,6 +321,13 @@ function humanOffset(ms) {
  * говорят: это единственное подтверждение, что отправился весь справочник, а
  * не пустая обёртка. null — размера мы не знаем, и тогда фраза обходится без
  * него (см. fillReason).
+ *
+ * ЭТО РАЗМЕР ЗАПЕЧАТАННОЙ КОПИИ — того, что реально уехало по каналу:
+ * справочник сжат и зашифрован (relay.js sealPayload → gzip + AES-GCM), и
+ * publishCatalogue возвращает длину именно этих байт. Он в разы меньше самого
+ * справочника, и фраза «отправлено на сервер (17 КБ)» отвечает на вопрос
+ * «сколько потратил мой интернет», а не «сколько весит мой прайс». Считать
+ * здесь несжатый размер значило бы называть цифру, которой не было нигде.
  */
 function humanSize(bytes) {
   const n = Number(bytes);
@@ -1515,7 +1529,7 @@ export async function runBranchSync(db, deps = {}, { push = false } = {}) {
   // копии и обмен записями — два разных дела, и «получилось» у них бывает
   // порознь.
   const recordsOk = !!records && !records.fetch_reason && !records.publish_reason;
-  return finish(db, {
+  const out = {
     ...result,
     ok: result.ok || recordsOk,
     // ok:true с причиной — не противоречие. Причина здесь отвечает на вопрос
@@ -1523,7 +1537,17 @@ export async function runBranchSync(db, deps = {}, { push = false } = {}) {
     // выключен, но записями обменялись. Молчание вместо неё скрыло бы ровно то,
     // ради чего кнопку и нажимали.
     reason: result.ok ? 'published' : result.reason,
-  }, sendMessage(step, records));
+  };
+  // ЗЕЛЁНАЯ ГАЛОЧКА НЕ НАКРЫВАЕТ ПОТЕРЮ ЗАПИСЕЙ (ревью 2026-09-03). ok здесь —
+  // это «хоть что-то из двух дел получилось», и копия справочника, ушедшая на
+  // сервер, делает его true даже тогда, когда чужие записи база ОТВЕРГЛА
+  // (fetch_reason: records_refused — строка потеряна, сосед второй раз её не
+  // пришлёт). Экран рисовал такую попытку обычной удачей: галочка, обычный
+  // цвет, а под ней текстом — про непринятые записи, которого при беглом
+  // взгляде не видно. Отдельным полем, потому что одного ok на два разных дела
+  // не хватает; экран красит строку по нему (branch-sync-logic.js syncLine).
+  if (records) out.records_ok = recordsOk;
+  return finish(db, out, sendMessage(step, records));
 }
 
 /**
@@ -1574,19 +1598,36 @@ async function sendCatalogue(db, dataDir, pairing, { publishImpl = publishCatalo
  * только когда есть что сказать: у одиночной клиники и у главной без филиалов
  * шаг записей молчит (syncRecords вернул null), и «получено 0, отправлено 0»
  * было бы не честностью, а шумом.
+ *
+ * НИ ОДНОЙ ФРАЗЫ ДВАЖДЫ (ревью 2026-09-03). Без интернета все три вызова —
+ * копия справочника, выгрузка записей, приём записей — отвечают ОДНОЙ и той же
+ * причиной relay_offline, и владелец читал: «Нет связи с сервером Easy-Med.
+ * Записи: получено 0, отправлено на сервер 0. Нет связи с сервером Easy-Med.
+ * Нет связи с сервером Easy-Med.» Повтор одной новости трижды выглядит как
+ * сломанная программа — ровно там, где программа как раз исправна, а выключен
+ * интернет. Поэтому:
+ *   • строка про записи молчит, когда обе стороны пусты И шаг записей назвал
+ *     причину: «нечего сказать» рассказывает причина, а не два нуля;
+ *   • причина записей не повторяет причину копии, если она та же самая.
+ * Нули при этом НЕ прячутся, когда причины нет: «получено 0, отправлено на
+ * сервер 0» после удачного обмена — это ответ на вопрос «а приехало ли что-то»,
+ * и молчание вместо него читалось бы как «кнопка ничего не сделала».
  */
 function sendMessage(step, records) {
   const said = [step.message];
   if (records) {
-    said.push(fillReason(RECORDS_SENTENCE, {
-      in: countApplied(records.fetched),
-      out: countSent(records.published),
-    }));
+    const got = countApplied(records.fetched);
+    const sent = countSent(records);
+    const excused = !!(records.fetch_reason || records.publish_reason);
+    if (got || sent || !excused) {
+      said.push(fillReason(RECORDS_SENTENCE, { in: got, out: sent }));
+    }
     // Неудачи обмена записями дописываются СВОИМИ фразами (их собрал
     // syncRecords, подставив букву филиала и смещение часов), а не общим
-    // «что-то пошло не так».
-    if (records.fetch_message) said.push(records.fetch_message);
-    if (records.publish_message) said.push(records.publish_message);
+    // «что-то пошло не так». Одинаковые — один раз.
+    for (const line of [records.fetch_message, records.publish_message]) {
+      if (line && !said.includes(line)) said.push(line);
+    }
   }
   return said.filter(Boolean).join(' ');
 }
@@ -1596,9 +1637,24 @@ function countApplied(peers) {
   return Object.values(peers || {}).reduce((n, r) => n + (Number(r && r.applied) || 0), 0);
 }
 
-/** Сколько своих записей УЕХАЛО: publishJournal отдаёт по числу на соседа. */
-function countSent(peers) {
-  return Object.values(peers || {}).reduce((n, v) => n + (Number(v) || 0), 0);
+/**
+ * Сколько СВОИХ записей уехало на сервер — РАЗНЫХ, а не сумма по соседям.
+ *
+ * Ревью 2026-09-03: здесь стояла сумма `batch.records.length` по всем соседям,
+ * а блоб один и та же карта пациента едет в нём каждому. Клиника с тремя
+ * филиалами, заведя 12 строк, читала «отправлено 36» — рядом с честным
+ * «получено 5», посчитанным по РАЗНЫМ строкам. Число, которое втрое больше
+ * правды, хуже отсутствующего: по нему невозможно понять, доехало ли всё.
+ *
+ * rows считает сам publishJournal (relay.js): только он видит сами строки.
+ * Запасной путь — САМЫЙ БОЛЬШОЙ срез, а не сумма: он и есть нижняя граница
+ * числа разных строк, и соврать в большую сторону не даст.
+ */
+function countSent(records) {
+  const rows = Number(records && records.published_rows);
+  if (Number.isFinite(rows) && rows >= 0) return rows;
+  return Object.values((records && records.published) || {})
+    .reduce((max, v) => Math.max(max, Number(v) || 0), 0);
 }
 
 /**
@@ -1703,6 +1759,10 @@ async function syncRecords(db, dataDir, {
     const pub = await publishJournalImpl(db, dataDir, {});
     if (pub && pub.ok) {
       summary.published = pub.peers || {};
+      // СКОЛЬКО СТРОК БЫЛО РАЗНЫХ — то, что показывается владельцу («отправлено
+      // на сервер 12»). peers остаётся поимённым срезом по соседям: он отвечает
+      // на другой вопрос — «кому именно и сколько», — и нужен при разборе.
+      if (Number.isFinite(Number(pub.rows))) summary.published_rows = Number(pub.rows);
       if (Object.keys(summary.published).length) told = true;
     } else if (pub && !QUIET_JOURNAL_REASONS.has(pub.reason)) {
       summary.publish_reason = pub.reason;
