@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readJsonFile } from '../control/checkin.js';
+import { assertControlUrlIsTestSafe } from '../control/prod-guard.js';   // PROD_GUARD_V1
 import { exportCatalogue } from './catalogue.js';
 import { readPairing, writePairing, relayEnabled } from './pairing.js';
 import { ensureSyncGroup } from './sync-group.js';
@@ -270,6 +271,7 @@ export async function publishCatalogue(db, dataDir, {
   if (!sealed) return { ok: false, reason: 'relay_no_key' };
   if (sealed.length > maxBlobBytes) return { ok: false, reason: 'relay_too_large' };
 
+  assertControlUrlIsTestSafe(env, fetchImpl);   // PROD_GUARD_V1
   let res;
   try {
     res = await fetchImpl(relayUrl(relayId, env), {
@@ -399,6 +401,7 @@ export async function fetchCatalogue(dataDir, {
   // учётка резервного канала приезжает ВНУТРИ ключа.
   if (!token) return { ok: false, reason: 'relay_branch_no_token' };
 
+  assertControlUrlIsTestSafe(env, fetchImpl);   // PROD_GUARD_V1
   let res;
   try {
     res = await fetchImpl(relayUrl(relayId, env), {
@@ -887,6 +890,7 @@ export async function publishJournal(db, dataDir, {
     }
   }
 
+  assertControlUrlIsTestSafe(env, fetchImpl);   // PROD_GUARD_V1
   let res;
   try {
     res = await fetchImpl(relayUrl(relayIdFor(ctx.pairing.group_key, ctx.self), env), {
@@ -1017,6 +1021,7 @@ async function downloadJournal(ctx, peer, { fetchImpl, timeoutMs, maxBlobBytes, 
   const relayId = relayIdFor(ctx.pairing.group_key, peer);
   if (!relayId) return { ok: false, reason: 'relay_no_key' };
 
+  assertControlUrlIsTestSafe(env, fetchImpl);   // PROD_GUARD_V1
   let res;
   try {
     res = await fetchImpl(relayUrl(relayId, env), {
@@ -1347,6 +1352,7 @@ export async function mintRelayToken(dataDir, {
   const token = installToken(dataDir);
   if (!token) return { ok: false, reason: 'relay_not_enrolled' };
 
+  assertControlUrlIsTestSafe(env, fetchImpl);   // PROD_GUARD_V1
   let res;
   try {
     res = await fetchImpl(relayTokenUrl(env), {
@@ -1519,6 +1525,7 @@ export async function createBranchOnControlPlane(dataDir, {
   if (!token) return { ok: false, reason: 'branch_not_enrolled' };
 
   const base = String((env && env.EASYMED_CONTROL_URL) || DEFAULT_ENDPOINT).trim().replace(/\/+$/, '');
+  assertControlUrlIsTestSafe(env, fetchImpl);   // PROD_GUARD_V1
   let res;
   try {
     res = await fetchImpl(base + '/cp/v1/branch', {

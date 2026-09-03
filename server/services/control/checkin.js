@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { verifyLicence } from './licence.js';
 import { buildStatsPayload as defaultBuildStatsPayload } from './metrics.js';
+import { assertControlUrlIsTestSafe } from './prod-guard.js';   // PROD_GUARD_V1
 
 // LICENCE_CORE_V1 — the clinic's half of the daily call.
 //
@@ -361,6 +362,7 @@ async function performCheckin(db, dataDir, {
     // clinic disks — see readJsonFile's own comment.
     const updateResult = readJsonFile(updateResultPath);
 
+    if (!endpoint) assertControlUrlIsTestSafe(process.env, fetchImpl);   // PROD_GUARD_V1
     const url = endpoint ? String(endpoint).replace(/\/+$/, '') + CHECKIN_PATH : checkinUrl();
 
     let res;

@@ -542,9 +542,9 @@ test('канал включается сам, если филиалы уже з�
   assert.equal(readPairing(dir).relay, undefined, 'выбор не сделан');
 
   const vendor = fakeVendor();
-  const timers = scheduleRelayPublish(db, dir, { initialDelayMs: 1, intervalMs: 10_000, fetchImpl: vendor.fetch });
+  const timers = scheduleRelayPublish(db, dir, { initialDelayMs: 1, intervalMs: 10_000, fetchImpl: vendor.fetchImpl });
   await new Promise((r) => setTimeout(r, 60));
-  clearTimeout(timers.initial); clearInterval(timers.interval);
+  clearTimeout(timers.initial); clearInterval(timers.interval); clearInterval(timers.seeding);
 
   assert.equal(readPairing(dir).relay, true, 'канал включён, и это записано на диск');
 });
@@ -554,9 +554,9 @@ test('осознанно выключенный канал не включают
   addBranchRow(db, 'B');
 
   const vendor = fakeVendor();
-  const timers = scheduleRelayPublish(db, dir, { initialDelayMs: 1, intervalMs: 10_000, fetchImpl: vendor.fetch });
+  const timers = scheduleRelayPublish(db, dir, { initialDelayMs: 1, intervalMs: 10_000, fetchImpl: vendor.fetchImpl });
   await new Promise((r) => setTimeout(r, 60));
-  clearTimeout(timers.initial); clearInterval(timers.interval);
+  clearTimeout(timers.initial); clearInterval(timers.interval); clearInterval(timers.seeding);
 
   // Это его данные и его решение, отправлять ли копию на чужой сервер.
   assert.equal(readPairing(dir).relay, false);
@@ -567,9 +567,9 @@ test('клинике без филиалов канал не включают', 
   unchoose(dir);
 
   const vendor = fakeVendor();
-  const timers = scheduleRelayPublish(db, dir, { initialDelayMs: 1, intervalMs: 10_000, fetchImpl: vendor.fetch });
+  const timers = scheduleRelayPublish(db, dir, { initialDelayMs: 1, intervalMs: 10_000, fetchImpl: vendor.fetchImpl });
   await new Promise((r) => setTimeout(r, 60));
-  clearTimeout(timers.initial); clearInterval(timers.interval);
+  clearTimeout(timers.initial); clearInterval(timers.interval); clearInterval(timers.seeding);
 
   assert.notEqual(readPairing(dir).relay, true, 'включать нечего и незачем');
 });

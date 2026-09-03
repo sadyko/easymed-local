@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 // ERR_MODULE_NOT_FOUND before the server ever bound its port. See bundle.js.
 import { verifyBundle, tarCommand, compareVersions } from './bundle.js';
 import { readAppVersion, readJsonFile, writeAtomic } from './checkin.js';
+import { assertControlUrlIsTestSafe } from './prod-guard.js';   // PROD_GUARD_V1
 // The ONE WAL-safe snapshot implementation, reused rather than copied — a
 // second one would drift, and the whole rollback story rests on this being
 // db.backup() and never fs.copyFileSync (see db/backup.js's own header).
@@ -694,6 +695,7 @@ async function runPipeline(db, dataDir, offer, {
   fetchImpl, execFileSyncImpl, mkdirSync, rmSync, writeFileSync, realpathSync,
   endpoint, publicKey, appRoot, exitImpl, now, timeoutMs, maxBytes,
 }) {
+  if (!endpoint) assertControlUrlIsTestSafe(process.env, fetchImpl);   // PROD_GUARD_V1
   const base = endpoint ? String(endpoint).replace(/\/+$/, '') : controlBaseUrl();
   const resolved = resolveDownloadUrl(offer.url, base);
   if (!resolved.ok) {

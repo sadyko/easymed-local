@@ -3,6 +3,7 @@ import path from 'node:path';
 import { verifyLicence } from './licence.js';
 import { computeFingerprint, writeAtomic, readBounded } from './checkin.js';
 import { ensureSyncGroup } from '../branch-sync/sync-group.js';   // BRANCH_SYNC_RELAY_V1
+import { assertControlUrlIsTestSafe } from './prod-guard.js';   // PROD_GUARD_V1
 
 // ENROLLMENT_SCREEN_V1 — the clinic's half of first-run enrollment.
 //
@@ -79,6 +80,7 @@ export async function enrollWithCode(dataDir, code, {
     return { ok: false, reason: 'already_enrolled' };
   }
 
+  if (!endpoint) assertControlUrlIsTestSafe(process.env, fetchImpl);   // PROD_GUARD_V1
   const url = endpoint ? String(endpoint).replace(/\/+$/, '') + ENROLL_PATH : enrollUrl();
 
   let res;
