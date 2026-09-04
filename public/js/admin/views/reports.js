@@ -29,6 +29,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, Tag, Spark, Bars, Delta, PageHead, Avatar, clear, toast, initials, avColor } from '../ui.js';
 import { getAvailableBranches } from '../branch-context.js';
 import { renderDownloadsPanel } from './reports-export.js?v=vendorxlsx1';
+import { isInBed } from '../../shared/admission-status.js';   // INPATIENT_FLOW_V1
 
 const state = {
     period:   'month',     // 'today' | 'week' | 'month' | 'quarter' | 'year'
@@ -843,7 +844,9 @@ async function loadMetrics(period, branchId) {
             w.total++; if (occ) w.used++; wardMap.set(wn, w);
         }
         // Fall back to active admissions if bed.status isn't maintained.
-        const activeAdmissions = admRows.filter(a => a.status === 'active' && inBranch(a.wards?.branch_id ?? null)).length;
+        // INPATIENT_FLOW_V1 — занятость считается по всем, кто в койке (миграция
+        // 091), иначе отчёт показал бы отделение полупустым.
+        const activeAdmissions = admRows.filter(a => isInBed(a.status) && inBranch(a.wards?.branch_id ?? null)).length;
         if (bedsOccupied === 0 && activeAdmissions > 0) bedsOccupied = Math.min(activeAdmissions, bedsTotal);
         const wardsOccupancy = [...wardMap.values()].sort((a, b) => (b.used / (b.total || 1)) - (a.used / (a.total || 1)));
         const occupancyPct = bedsTotal > 0 ? Math.round((bedsOccupied / bedsTotal) * 100) : null;

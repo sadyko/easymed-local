@@ -48,13 +48,39 @@ for (const entity of Object.keys(TRANSITIONS)) {
   });
 }
 
-test('admission: the request dead end is gone — requested can be fulfilled or declined', () => {
-  assert.ok(canTransition('admission', 'requested', 'active'));
-  assert.ok(canTransition('admission', 'requested', 'cancelled'));
-  // …but a request is not a stay: it cannot be discharged, and a finished stay
-  // cannot be reopened.
-  assert.throws(() => assertTransition('admission', 'requested', 'discharged'), TransitionError);
+// INPATIENT_FLOW_V1 (миграция 091) — 'requested' переименован в 'ordered', и у
+// заявки появился настоящий маршрут вместо «сразу в лечение».
+test('admission: заявка не тупик — её можно выполнить или отклонить', () => {
+  assert.ok(canTransition('admission', 'ordered', 'admitted'), 'медсестра кладёт на койку');
+  assert.ok(canTransition('admission', 'ordered', 'cancelled'), 'регистратура отклоняет');
+  // …но заявка — ещё не госпитализация: выписать её нельзя, а законченную —
+  // не открыть заново.
+  assert.throws(() => assertTransition('admission', 'ordered', 'discharged'), TransitionError);
   assert.throws(() => assertTransition('admission', 'discharged', 'active'), TransitionError);
+  // Слова 'requested' в маршруте больше нет вовсе.
+  assert.ok(!('requested' in TRANSITIONS.admission));
+});
+
+// Порядок шагов — то, ради чего маршрут и заведён (решение владельца
+// 2026-09-04). Пропуск ступени отвергается САМОЙ таблицей, без ролей.
+test('admission: ступени маршрута идут по одной', () => {
+  for (const [from, to] of [['ordered', 'examined'], ['admitted', 'active'],
+    ['admitted', 'discharging'], ['examined', 'discharging'], ['examined', 'discharged']]) {
+    assert.throws(() => assertTransition('admission', from, to), TransitionError, `${from} → ${to}`);
+  }
+  assert.ok(canTransition('admission', 'admitted', 'examined'));
+  assert.ok(canTransition('admission', 'examined', 'active'));
+  assert.ok(canTransition('admission', 'active', 'discharging'));
+  assert.ok(canTransition('admission', 'discharging', 'discharged'));
+});
+
+// Две стрелки-наследства v0.8.0: их проходят СТАРЫЕ RPC (admit_patient,
+// discharge_patient), и до Задач 2 и 8 они обязаны оставаться законными —
+// иначе клиника теряет обе кнопки в день обновления. Машина маршрута их не
+// предлагает (см. LEGACY_EDGES в rpc/inpatient-flow.js).
+test('admission: наследственные прямые шаги v0.8.0 остаются законными', () => {
+  assert.ok(canTransition('admission', 'ordered', 'active'), 'admit_patient');
+  assert.ok(canTransition('admission', 'active', 'discharged'), 'discharge_patient');
 });
 
 test('re-asserting the current state is allowed; an unknown entity throws', () => {

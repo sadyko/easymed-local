@@ -10,6 +10,8 @@
 
 import { supabase } from '../../supabase.js';
 import { isAccommodationLine, isServiceLine, isGoodsLine, ACCOMMODATION_LABEL } from '../../shared/accommodation-line.js';
+// INPATIENT_FLOW_V1 — «в койке» это ЧЕТЫРЕ состояния, а не 'active' (миграция 091).
+import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
 import { CAT_ORDER, categoryOf, filterCatalog, categoryCounts } from '../../shared/service-categories.js';   // SERVICE_CATALOG_FILTER_V1   // ACCOMMODATION_AS_SERVICE_V1
 import { h, Icon, clear, toast, Tag, field, fmtDateTime, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — tr() matches WHOLE strings, so assembled sentences go through trf(): translate first, substitute second
@@ -82,7 +84,12 @@ async function loadData() {
     const [wardsR, bedsR, admR, roomsR] = await Promise.all([
         supabase.from('wards').select('*').eq('active', 1).order('name'),
         supabase.from('beds').select('*, wards(name)').eq('active', 1).order('code'),
-        supabase.from('admissions').select('*, patients(mrn, full_name), users(full_name)').eq('status', 'active'),
+        // INPATIENT_FLOW_V1 — доска коек СЧИТАЕТ ЗАНЯТОСТЬ ПО ЭТОМУ ЗАПРОСУ, и
+        // до 091 он спрашивал ровно status='active'. Пациент, которого медсестра
+        // положила, но главный врач ещё не осмотрел, лежит в 'admitted': оставь
+        // здесь 'active', и его койка показалась бы свободной, проживание за неё
+        // никто бы не внёс, а сверху положили бы второго пациента.
+        supabase.from('admissions').select('*, patients(mrn, full_name), users(full_name)').in('status', IN_BED_STATUSES),
         // STATIONARY_ROOMS_V1 — операционная заводится в «Помещениях» как КАБИНЕТ
         // (коек и платы за проживание у неё нет), но по смыслу она стационарная и
         // владелец ищет её здесь. Доска грузит такие кабинеты отдельно и показывает
@@ -1032,7 +1039,9 @@ async function admissionsTable() {
     clear(tbody);
     if (!rows.length) { tbody.appendChild(h('tr', null, h('td', { colspan: '8', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } }, 'No admissions yet.'))); return card; }
     for (const a of rows) {
-        const active = a.status === 'active';
+        // Строка «Госпитализации» показывает ВСЕ, включая закрытые: зелёной
+        // отметкой выделяем тех, кто лежит сейчас.
+        const active = IN_BED_STATUSES.includes(a.status);
         tbody.appendChild(h('tr', null,
             h('td', null, a.admission_no || ('#' + a.id)),
             h('td', null, (a.patients && a.patients.full_name) || '—'),
@@ -1041,7 +1050,7 @@ async function admissionsTable() {
             h('td', null, fmtDateTime(a.admitted_at)),
             h('td', null, a.discharged_at ? fmtDateTime(a.discharged_at) : '—'),
             h('td', { style: { textAlign: 'right' } }, a.charge_amount != null ? fmtPrice(a.charge_amount) : '—'),
-            h('td', null, Tag(active ? 'Active' : (a.status === 'discharged' ? 'Discharged' : 'Cancelled'), { kind: active ? 'ok' : '', dot: true })),
+            h('td', null, Tag(admissionStatusLabel(a.status), { kind: active ? 'ok' : '', dot: true })),
         ));
     }
     return card;

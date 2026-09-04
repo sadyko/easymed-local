@@ -19,6 +19,7 @@ import { scopedDoctorId, selfDoctorId, scopedProviderId } from '../permissions.j
 import { renderDoctorProfile } from './doctor-profile.js?v=btnright1';
 import { openAdmissionRegistrarModal } from './admission-modal.js?v=aug17e';   // INPATIENT_TAB_V1
 import { currentUser, loadPatientById } from '../data.js';
+import { IN_BED_STATUSES } from '../../shared/admission-status.js';   // INPATIENT_FLOW_V1
 
 // ---------------------------------------------------------------------------
 // Aurora queue (AURORA_QUEUE_V1) — local RU helpers. These are intentionally
@@ -259,7 +260,10 @@ async function loadInpatients() {
             wards(name),
             beds!admissions_bed_id_fkey(code)
         `)
-        .eq('status', 'active')
+        // INPATIENT_FLOW_V1 — вкладка «Стационар» показывает пациентов В КОЙКЕ,
+        // а не только тех, кто дошёл до 'active': врач обязан видеть своего
+        // пациента с первой минуты, а не после первичного осмотра.
+        .in('status', IN_BED_STATUSES)
         .order('admitted_at', { ascending: false })
         .limit(200);
     if (cid) q = q.eq('company_id', cid);

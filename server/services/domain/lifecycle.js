@@ -4,9 +4,10 @@
 // Nothing described the shape of a lifecycle, so two opposite faults appeared
 // and neither was visible from any single call site:
 //
-//   • states that could never be LEFT — a 'requested' admission had no handler
-//     that could fulfil or cancel it, and because request_admission refuses a
-//     second open request, the first one blocked that patient forever;
+//   • states that could never be LEFT — an 'ordered' (тогда 'requested')
+//     admission had no handler that could fulfil or cancel it, and because
+//     request_admission refuses a second open request, the first one blocked
+//     that patient forever;
 //   • states that could never be REACHED — 'refunded' is checked in five places
 //     and assigned by nobody.
 //
@@ -26,12 +27,44 @@ export class TransitionError extends Error {
 // entity -> { from -> [allowed to] }. A state mapping to [] is TERMINAL BY
 // DESIGN; the reachability test asserts each one is deliberate.
 export const TRANSITIONS = {
+  // INPATIENT_FLOW_V1 — маршрут госпитализации целиком (миграция 091, решение
+  // владельца 2026-09-04). Порядок шагов ЖЁСТКО блокируется: нет заявки — нет
+  // койки, нет первичного осмотра — нет назначений, нет лечащего врача — нет
+  // лечения. Кто вправе совершить каждый переход — отдельный вопрос, и он
+  // живёт в rpc/inpatient-flow.js: здесь только «что вообще возможно».
+  //
+  // 'requested' переименован в 'ordered' миграцией 091. Это то же самое
+  // состояние («заявка оформлена, койки нет»), а не новое.
   admission: {
-    // A doctor files a request; the ward either gives it a bed or declines it.
-    requested:  ['active', 'cancelled'],
-    active:     ['discharged'],
-    discharged: [],   // terminal: the stay is over and billed
-    cancelled:  [],   // terminal: the request was declined
+    // Заявка: медсестра кладёт на койку, регистратура — отменяет.
+    //
+    // 'active' в этом списке — НАСЛЕДСТВО v0.8.0, названное вслух. Так ходит
+    // существующий admit_patient: он выполняет заявку и кладёт пациента одним
+    // движением, потому что до 091 между «на койке» и «лечится» разницы не
+    // было. Стрелка живёт здесь, чтобы работающая клиника продолжала работать,
+    // но МАШИНА МАРШРУТА ЕЁ НЕ ПРЕДЛАГАЕТ: в TRANSITION_ROLES
+    // (rpc/inpatient-flow.js) строки 'ordered→active' нет, и admissionTransition
+    // отвечает на неё «нельзя пропустить шаг». Задача 2 заменяет admit_patient
+    // на admission_admit и убирает стрелку.
+    ordered:     ['admitted', 'active', 'cancelled'],
+    // На койке: суточное начисление идёт, ждём первичный осмотр.
+    admitted:    ['examined', 'cancelled'],
+    // Осмотрен главным врачом: остаётся назначить лечащего.
+    examined:    ['active', 'cancelled'],
+    // ЛЕЧЕНИЕ ИДЁТ. Отсюда два пути, и второй — наследство, названное вслух:
+    //   'discharging' — новый порядок: врач подаёт заявку на выписку, старшая
+    //                   медсестра её оформляет (Задача 8);
+    //   'discharged'  — ПРЯМАЯ выписка существующего discharge_patient
+    //                   (v0.8.0). Она работает в живых клиниках прямо сейчас, и
+    //                   убрать её здесь значило бы сломать кнопку «Выписать» до
+    //                   того, как появится та, что придёт ей на смену. Задача 8
+    //                   уберёт эту стрелку вместе с самим прямым путём.
+    // Отмены отсюда нет намеренно: законченную госпитализацию закрывает
+    // ВЫПИСКА, а не отмена — иначе исчезли бы деньги за уже прожитые сутки.
+    active:      ['discharging', 'discharged'],
+    discharging: ['discharged'],
+    discharged:  [],   // terminal: the stay is over and billed
+    cancelled:   [],   // terminal: the request was declined
   },
   invoice: {
     unpaid:   ['partial', 'paid', 'debt', 'void'],
@@ -52,7 +85,7 @@ export const TERMINAL = {
 
 // The state every entity starts in.
 export const INITIAL = {
-  admission: ['requested', 'active'],   // a walk-in is admitted without a request
+  admission: ['ordered', 'active'],   // a walk-in is admitted without a request (admit_patient, v0.8.0)
   invoice: ['unpaid', 'paid'],          // a zero-balance invoice is born paid
 };
 

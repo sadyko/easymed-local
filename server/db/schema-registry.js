@@ -323,17 +323,34 @@ export const REGISTRY = {
   beds: { read:{roles:ALL_STAFF,columns:['id','code','ward_id','status','active','created_at','type','price_per_day','price_per_hour','notes']},
     write:{insert:{roles:['admin'],columns:['code','ward_id','active','type','price_per_day','price_per_hour','notes']},update:{roles:['admin'],columns:['code','ward_id','active','type','price_per_day','price_per_hour','notes']},delete:{roles:[]}},
     filters:['id','active','ward_id'], embed:{ wards:{table:'wards',fk:'ward_id',columns:['id','name']} } },
+  // INPATIENT_FLOW_V1 (миграция 091) — колонки маршрута ЧИТАЮТСЯ, но по-прежнему
+  // не пишутся: write остаётся пустым во всех трёх операциях. Это не
+  // формальность — статус двигает ТОЛЬКО машина маршрута
+  // (rpc/inpatient-flow.js), которая проверяет и порядок шагов, и роль. Откройте
+  // здесь update, и «первичный осмотр» можно будет проставить себе самому одним
+  // PATCH'ем мимо всех проверок.
+  //
+  // attending_doctor_id добавлен в чтение ещё и потому, что кабинет врача и
+  // выгрузка отчётов УЖЕ его запрашивали (consultation.js, reports-export.js) —
+  // и получали отказ компилятора: колонки не существовало вовсе.
   admissions: {
     read:  { roles: ALL_STAFF, columns: ['id','admission_no','patient_id','bed_id','ward_id','doctor_id','pathway',
              'chief_complaint','admission_diagnosis','admitted_at','discharged_at','status',
-             'accommodation_discount_percent','charge_amount','invoice_id','created_by','created_at'] },
+             'accommodation_discount_percent','charge_amount','invoice_id','created_by','created_at',
+             'ordered_at','ordered_by','admitted_by','examined_at','examined_by','attending_doctor_id',
+             'admission_type','stay_mode','planned_discharge_at','cancel_reason'] },
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },  // admissions are created/updated ONLY via inpatient RPCs (server-computed money)
-    filters: ['id','patient_id','bed_id','ward_id','status','doctor_id'],
+    filters: ['id','patient_id','bed_id','ward_id','status','doctor_id','attending_doctor_id','admission_type','stay_mode'],
     embed: {
       patients: { table:'patients', fk:'patient_id', columns:['id','mrn','full_name'] },
       beds:     { table:'beds',     fk:'bed_id',     columns:['id','code'] },
       wards:    { table:'wards',    fk:'ward_id',    columns:['id','name'] },
       users:    { table:'users',    fk:'doctor_id',  columns:['id','full_name'] },
+      // Лечащий врач — второй JOIN на users в той же строке. Ключ — сама
+      // колонка FK (алиасный embed, `users:attending_doctor_id(full_name)`),
+      // как у admission_transfers ниже: без него карта госпитализации не может
+      // показать имя лечащего рядом с именем направившего.
+      attending_doctor_id: { table:'users', fk:'attending_doctor_id', columns:['id','full_name','specialty'] },
     },
   },
   payer_policies: { read:{roles:ALL_STAFF,columns:['id','name','payer_id','coverage_percent','active','created_at']},

@@ -1,0 +1,356 @@
+// INPATIENT_FLOW_V1 — маршрут госпитализации: ОДНО место, которое двигает
+// пациента по состояниям, и одно место, которое отвечает «а можно ли уже».
+//
+// Решение владельца (2026-09-04) дословно: «Порядок шагов жёстко блокируется:
+// нет заявки — нет койки; нет первичного осмотра — нет назначений; нет лечащего
+// врача — нет лечения». Слово «жёстко» здесь означает СЕРВЕР, а не экран:
+// спрятанная кнопка — украшение, /api/rpc открыт curl'ом с любого компьютера
+// клиники (тот же довод, что в control/gate.js).
+//
+// Почему отдельный файл, а не ещё десяток проверок в inpatient.js. Через год
+// маршрут будут трогать шесть задач (окно медсестры, первичный осмотр, лист
+// назначений, списание, стол, выписка), и каждая захочет спросить одно и то же:
+// «пациент дошёл до нужного состояния?» и «этому человеку это можно?». Если
+// ответ живёт в каждом обработчике отдельно, то через год их шесть, они
+// разошлись, и клиника узнаёт об этом на пациенте.
+//
+// ЧЕГО ЗДЕСЬ НЕТ. Самих RPC заявки, размещения и осмотра (Задачи 2 и 3). Здесь
+// только машина, охранники и матрица прав — то, на что те RPC обопрутся.
+//
+// ─── ЧТО ВЫЗЫВАТЬ ИЗ ЗАДАЧ 4–6 ──────────────────────────────────────────────
+//
+//   assertAdmissionAtLeast(db, admissionId, state) -> admission row
+//       «Госпитализация дошла хотя бы до `state` и ещё не закрыта». Бросает
+//       RpcError(400) с русским текстом, называющим НЕДОСТАЮЩИЙ ШАГ, а не
+//       «нельзя». Возвращает саму строку — вызывающему она почти всегда нужна
+//       следом, и второй SELECT не нужен.
+//
+//   assertCanPrescribe(db, admissionId, user) -> admission row
+//       «Этому человеку можно назначать/начислять по этой госпитализации».
+//       Складывает два вопроса: дошёл ли пациент до 'active' И вправе ли
+//       именно ЭТОТ человек (лечащий врач своего пациента, главный врач,
+//       администратор). Задачи 4 и 5 вызывают её первой строкой обработчика.
+//
+// Обе принимают admissionId числом и user'а в том виде, в каком его отдаёт
+// auth.js ({ id, role, extra_roles }). Обе НЕ открывают транзакцию: их зовут
+// внутри уже открытой db.transaction(...)() вызывающего.
+
+import { assertTransition, TransitionError } from '../domain/lifecycle.js';
+import { effectiveRoles, hasAnyRole } from '../roles.js';
+// Набор состояний — ОДНА копия на сервер и браузер (тот же приём, что у
+// accommodation-line.js): доска коек и кабинет врача спрашивают ровно тот же
+// список, каким сервер решает, занята ли койка.
+import {
+  ADMISSION_FLOW, IN_BED_STATUSES, OPEN_STATUSES, CLOSED_STATUSES,
+} from '../../../public/js/shared/admission-status.js';
+
+export class RpcError extends Error {
+  constructor(msg, status = 400) {
+    super(msg);
+    this.status = status;
+  }
+}
+
+// Порядок маршрута. Число — «как далеко зашла госпитализация»; сравнение рангов
+// и есть весь смысл assertAdmissionAtLeast.
+//
+// 'cancelled' ранга НЕ ИМЕЕТ намеренно: отменённая заявка не «где-то на
+// маршруте», она с него сошла. Дай мы ей ранг, любое сравнение «хотя бы до…»
+// пришлось бы писать с оговоркой, и рано или поздно кто-нибудь её забудет.
+export const FLOW_ORDER = ADMISSION_FLOW;
+const RANK = new Map(FLOW_ORDER.map((s, i) => [s, i]));
+
+// Пере-экспорт, чтобы серверный код не тянул путь в public/js напрямую:
+// «в койке», «открыта», «закончена» — см. shared/admission-status.js.
+export { IN_BED_STATUSES, OPEN_STATUSES, CLOSED_STATUSES };
+
+// ─── Матрица прав (план, раздел «Роли») ──────────────────────────────────────
+//
+// Ключ — сам переход, «откуда→куда»: право относится к ДЕЙСТВИЮ, а не к
+// состоянию. «Отменить заявку» и «положить на койку» уходят из одного и того же
+// 'ordered', и совершают их разные люди.
+//
+// 'admin' есть в каждой строке намеренно: администратор клиники — та, к кому
+// идут, когда главный врач в отпуске, а пациент лежит. Отнять у неё маршрут
+// значило бы, что клиника встанет из-за одного отсутствующего человека.
+export const TRANSITION_ROLES = Object.freeze({
+  // Медсестра кладёт на койку. Врач — не кладёт: койками распоряжается
+  // отделение, и это ровно та граница, ради которой окно медсестры существует.
+  'ordered→admitted':      ['nurse', 'senior_nurse', 'head_doctor', 'admin'],
+  // Отменяет заявку тот, кто её оформлял (регистратура), либо старший в
+  // отделении. Медсестры в этом списке нет: её дело — разместить.
+  'ordered→cancelled':     ['registrar', 'senior_nurse', 'head_doctor', 'admin'],
+  // Первичный осмотр — только главный врач. Это и есть суть решения владельца.
+  'admitted→examined':     ['head_doctor', 'admin'],
+  'admitted→cancelled':    ['registrar', 'senior_nurse', 'head_doctor', 'admin'],
+  // Лечащего врача назначает главный врач — тем же движением, что закрывает
+  // осмотр.
+  'examined→active':       ['head_doctor', 'admin'],
+  'examined→cancelled':    ['registrar', 'senior_nurse', 'head_doctor', 'admin'],
+  // Заявку на выписку подаёт лечащий врач (проверку «свой пациент» делает
+  // Задача 8 — здесь только роль).
+  'active→discharging':    ['doctor', 'head_doctor', 'admin'],
+  // Оформляет выписку старшая медсестра: счёт, документы, койка.
+  'discharging→discharged': ['senior_nurse', 'head_doctor', 'admin'],
+});
+
+// НАСЛЕДСТВО v0.8.0: два шага, которые база пока разрешает, а МАШИНА — НЕТ.
+//
+// Их делают существующие RPC, каждый одним движением, потому что до миграции
+// 091 промежуточных состояний не существовало:
+//   'ordered→active'    — admit_patient: выполнить заявку и положить на койку;
+//   'active→discharged' — discharge_patient: прямая выписка.
+// Они перечислены в TRANSITIONS (domain/lifecycle.js), иначе работающая клиника
+// потеряла бы обе кнопки в день обновления. Но в матрице прав выше их нет
+// НАМЕРЕННО: пройди 'ordered→active' через admissionTransition, и медсестра
+// одним запросом перепрыгнула бы первичный осмотр — ровно то, что решение
+// владельца запрещает. Машина отвечает на них «нельзя пропустить шаг».
+//
+// Задачи 2 и 8 заменяют оба RPC и убирают отсюда обе строки — вместе со
+// стрелками в lifecycle.js.
+export const LEGACY_EDGES = Object.freeze(['ordered→active', 'active→discharged']);
+
+// Чего не хватает, чтобы дойти до состояния — СЛОВАМИ, а не «нельзя».
+//
+// Текст называет недостающий ШАГ и того, кто его делает: человек у экрана
+// должен понять, кого позвать, а не что система сломалась. Это тот же принцип,
+// по которому в gate.js разведены «не заплатили» и «нет связи».
+const MISSING_STEP = {
+  ordered:     'Заявка на госпитализацию ещё не оформлена.',
+  admitted:    'Пациент ещё не размещён на койке — позовите медсестру.',
+  examined:    'Пациент ещё не осмотрен главным врачом.',
+  active:      'Лечащий врач ещё не назначен — назначения недоступны.',
+  discharging: 'Заявка на выписку ещё не подана лечащим врачом.',
+  discharged:  'Пациент ещё не выписан.',
+};
+
+const CLOSED_MESSAGE = {
+  discharged: 'Пациент уже выписан — госпитализация закрыта.',
+  cancelled:  'Заявка на госпитализацию отменена.',
+};
+
+/** Строка госпитализации или понятный отказ вместо «undefined is not an object». */
+export function loadAdmission(db, admissionId) {
+  const id = Number(admissionId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new RpcError('admission_id must be a positive integer.', 400);
+  }
+  const adm = db.prepare('SELECT * FROM admissions WHERE id = ?').get(id);
+  if (!adm) throw new RpcError('Госпитализация не найдена.', 400);
+  return adm;
+}
+
+/**
+ * Дошла ли госпитализация ХОТЯ БЫ до `state` и открыта ли она ещё.
+ *
+ * Закрытая (выписан / отменена) отвергается ВСЕГДА, даже когда её ранг формально
+ * выше требуемого. Это не придирка: дописать услугу выписанному пациенту —
+ * значит начислить деньги на закрытый счёт, и раньше от этого спасала ровно
+ * проверка `status !== 'active'` в inventory.js. Правило сохранено дословно.
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {number} admissionId
+ * @param {'ordered'|'admitted'|'examined'|'active'|'discharging'|'discharged'} state
+ * @returns {object} строка admissions
+ * @throws {RpcError} 400 с русским текстом, называющим недостающий шаг
+ */
+export function assertAdmissionAtLeast(db, admissionId, state) {
+  if (!RANK.has(state)) throw new RpcError(`unknown admission state: ${state}`, 400);
+  const adm = loadAdmission(db, admissionId);
+
+  if (CLOSED_STATUSES.includes(adm.status)) {
+    // Единственное исключение: спросили ровно про то состояние, в котором она и
+    // находится («выписан ли пациент?» о выписанном).
+    if (adm.status === state) return adm;
+    throw new RpcError(CLOSED_MESSAGE[adm.status], 400);
+  }
+
+  const have = RANK.get(adm.status);
+  if (have === undefined) {
+    // Статус, которого нет в маршруте, — испорченная строка, а не «пока рано».
+    throw new RpcError(`Неизвестное состояние госпитализации: ${adm.status}.`, 400);
+  }
+  if (have < RANK.get(state)) {
+    // Называем СЛЕДУЮЩИЙ шаг, а не тот, о котором спросили. Пациенту, который
+    // ещё даже не на койке, ответ «лечащий врач ещё не назначен» правдив и
+    // бесполезен: человеку у экрана нужно знать, кого звать ПРЯМО СЕЙЧАС.
+    throw new RpcError(MISSING_STEP[FLOW_ORDER[have + 1]], 400);
+  }
+  return adm;
+}
+
+/**
+ * Может ли ЭТОТ человек назначать и начислять по этой госпитализации.
+ *
+ * Два вопроса в одном, потому что порознь их всё равно никто не задаёт:
+ *   1) дошёл ли пациент до 'active' (осмотрен, лечащий врач назначен);
+ *   2) вправе ли именно этот человек — лечащий врач СВОЕГО пациента, главный
+ *      врач или администратор.
+ *
+ * Про (2) в матрице плана сказано «✔ (свой пациент)»: обычный врач ведёт
+ * назначения только там, где он лечащий. Главный врач — по всему отделению,
+ * администратор — везде.
+ *
+ * @returns {object} строка admissions
+ * @throws {RpcError} 400 (рано) или 403 (не тому человеку)
+ */
+export function assertCanPrescribe(db, admissionId, user) {
+  const adm = loadAdmission(db, admissionId);
+
+  if (CLOSED_STATUSES.includes(adm.status)) {
+    throw new RpcError(CLOSED_MESSAGE[adm.status] + ' Назначения недоступны.', 400);
+  }
+  const have = RANK.get(adm.status);
+  if (have === undefined || have < RANK.get('active')) {
+    // Тот самый текст из решения владельца: экран обязан сказать, КОГО ждут.
+    throw new RpcError(have !== undefined && have >= RANK.get('examined')
+      ? 'Лечащий врач ещё не назначен — назначения недоступны.'
+      : 'Пациент ещё не осмотрен главным врачом — назначения недоступны.', 400);
+  }
+
+  if (hasAnyRole(user, ['admin', 'head_doctor'])) return adm;
+  const uid = user && user.id;
+  if (hasAnyRole(user, ['doctor']) && uid && adm.attending_doctor_id === uid) return adm;
+
+  throw new RpcError('Назначения ведёт лечащий врач этого пациента или главный врач.', 403);
+}
+
+/**
+ * ЕДИНСТВЕННЫЙ способ сдвинуть госпитализацию по маршруту.
+ *
+ * Порядок проверок несущий: сперва «возможен ли такой переход вообще»
+ * (lifecycle.js), потом «вправе ли этот человек». Наоборот было бы хуже:
+ * медсестра, пытающаяся положить на койку уже выписанного пациента, услышала
+ * бы «вам нельзя» вместо правды о состоянии.
+ *
+ * Записывает только status и то, что относится к САМОМУ шагу (кто и когда его
+ * сделал). Всё остальное — койка, лечащий врач, эпикриз — дело вызывающего RPC:
+ * машина не должна знать, что такое койка.
+ *
+ * @param {object} db
+ * @param {{admission_id:number, to:string, at?:string, reason?:string}} args
+ * @param {{id:number, role:string, extra_roles?:string[]}} user
+ * @returns {{admission: object, from: string, to: string}}
+ */
+export function admissionTransition(db, args, user) {
+  const to = args && args.to;
+  if (typeof to !== 'string' || !to) throw new RpcError('to must be a state name.', 400);
+
+  const adm = loadAdmission(db, args && args.admission_id);
+  const from = adm.status;
+
+  // 1. Возможен ли такой шаг вообще.
+  try {
+    assertTransition('admission', from, to);
+  } catch (e) {
+    if (e instanceof TransitionError) throw new RpcError(explainRefusal(from, to), 400);
+    throw e;
+  }
+  if (from === to) return { admission: adm, from, to };   // идемпотентный повтор
+
+  // 2. Вправе ли этот человек.
+  const allowed = TRANSITION_ROLES[`${from}→${to}`];
+  if (!allowed) throw new RpcError(explainRefusal(from, to), 400);
+  if (!hasAnyRole(user, allowed)) {
+    throw new RpcError(
+      `${ACTION_NAME[`${from}→${to}`]} — недоступно вашей роли. Это делает: ${allowed.map(roleTitle).join(', ')}.`,
+      403,
+    );
+  }
+
+  const at = typeof (args && args.at) === 'string' && args.at
+    ? args.at
+    : db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now') t").get().t;
+  const by = (user && user.id) || null;
+
+  // 3. Отметка шага. Каждый шаг подписан — кем и когда; без этого разбор
+  // «почему пациент лежит третьи сутки без осмотра» упирается в пустоту.
+  const sets = ["status = ?"];
+  const vals = [to];
+  if (to === 'admitted')   { sets.push('admitted_by = ?', 'admitted_at = ?'); vals.push(by, at); }
+  if (to === 'examined')   { sets.push('examined_by = ?', 'examined_at = ?'); vals.push(by, at); }
+  if (to === 'cancelled')  {
+    sets.push('cancel_reason = ?', 'discharged_at = ?');
+    vals.push(String((args && args.reason) || '').slice(0, 300), at);
+  }
+  if (to === 'discharged') { sets.push('discharged_at = COALESCE(discharged_at, ?)'); vals.push(at); }
+  vals.push(adm.id);
+
+  db.prepare(`UPDATE admissions SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+  return { admission: db.prepare('SELECT * FROM admissions WHERE id = ?').get(adm.id), from, to };
+}
+
+// Почему шаг невозможен — словами маршрута, а не «cannot go from X to Y».
+// Пропуск ступени и попытка вернуться назад — разные ошибки человека, и
+// говорить о них одинаково значит не сказать ничего.
+function explainRefusal(from, to) {
+  if (CLOSED_STATUSES.includes(from)) return CLOSED_MESSAGE[from];
+  const a = RANK.get(from), b = RANK.get(to);
+  if (to === 'cancelled') {
+    return 'Отменить можно только госпитализацию, которая ещё не дошла до лечения; начатую — выписывают.';
+  }
+  if (a !== undefined && b !== undefined && b < a) {
+    return 'Госпитализацию нельзя вернуть на предыдущий шаг.';
+  }
+  if (a !== undefined && b !== undefined && b > a + 1) {
+    return `Нельзя пропустить шаг: ${MISSING_STEP[FLOW_ORDER[a + 1]]}`;
+  }
+  return `Такой переход маршрутом не предусмотрен: ${from} → ${to}.`;
+}
+
+// Названия действий и ролей для текста отказа. Экран показывает то, что вернул
+// сервер, поэтому слова живут здесь, рядом с матрицей, — иначе они разойдутся с
+// ней при первой же правке.
+const ACTION_NAME = {
+  'ordered→admitted':       'Размещение на койке',
+  'ordered→cancelled':      'Отмена заявки на госпитализацию',
+  'admitted→examined':      'Первичный осмотр',
+  'admitted→cancelled':     'Отмена госпитализации',
+  'examined→active':        'Назначение лечащего врача',
+  'examined→cancelled':     'Отмена госпитализации',
+  'active→discharging':     'Заявка на выписку',
+  'discharging→discharged': 'Оформление выписки',
+  'active→discharged':      'Выписка',
+};
+
+const ROLE_TITLE = {
+  admin: 'администратор',
+  registrar: 'регистратура',
+  nurse: 'медсестра',
+  senior_nurse: 'старшая медсестра',
+  doctor: 'врач',
+  head_doctor: 'главный врач',
+  cashier: 'кассир',
+  lab: 'лаборант',
+  inventory: 'склад',
+  callcenter: 'колл-центр',
+};
+const roleTitle = (r) => ROLE_TITLE[r] || r;
+
+/**
+ * Чтение: где госпитализация на маршруте и что этот человек может с ней
+ * сделать. Экранам Задач 2, 3 и 8 нужен ровно этот ответ, и считать его в
+ * браузере нельзя — матрица прав живёт на сервере.
+ *
+ * Ничего не меняет, поэтому стоит в READ_ONLY_RPCS (control/gate.js): клиника
+ * с просроченной лицензией обязана видеть, что происходит с её пациентами.
+ */
+export function admissionFlowState(db, args, user) {
+  const adm = loadAdmission(db, args && args.admission_id);
+  const roles = effectiveRoles(user);
+  const can = {};
+  for (const [key, allowed] of Object.entries(TRANSITION_ROLES)) {
+    const [from, to] = key.split('→');
+    if (from !== adm.status) continue;
+    can[to] = roles.some((r) => allowed.includes(r));
+  }
+  return {
+    admission_id: adm.id,
+    status: adm.status,
+    in_bed: IN_BED_STATUSES.includes(adm.status),
+    open: OPEN_STATUSES.includes(adm.status),
+    attending_doctor_id: adm.attending_doctor_id,
+    examined_at: adm.examined_at,
+    can,
+  };
+}

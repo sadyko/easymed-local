@@ -293,14 +293,15 @@ test('bed console: discount is admin/cashier-only and clamped', () => {
   assert.throws(() => setAdmissionDiscount(db, { admission_id: adm.id, percent: 150 }, { id: 3, role: 'admin' }), /0\.\.100/);
 });
 
-// ADM_REQUEST_LIFECYCLE_V1 — REGRESSION: a 'requested' admission could never be
+// ADM_REQUEST_LIFECYCLE_V1 — REGRESSION: an 'ordered' admission (called
+// 'requested' before migration 091 renamed it) could never be
 // left. admit_patient opened a SECOND row and nothing could ever move the first
 // one, so — because request_admission refuses a second open request — the very
 // first referral blocked that patient from inpatient care permanently.
 test('admit fulfils an open request in place instead of orphaning it', () => {
   const { db, patientId, wardId, bed1 } = seed();
   const req = requestAdmission(db, { patient_id: patientId, doctor_id: 3, pathway: 'surgical', chief_complaint: 'боль в животе' }, { id: 3, role: 'doctor' }).admission;
-  assert.equal(req.status, 'requested');
+  assert.equal(req.status, 'ordered');   // INPATIENT_FLOW_V1 — прежнее 'requested'
   assert.equal(req.bed_id, null);
 
   const adm = admitPatient(db, { patient_id: patientId, bed_id: bed1 }, nurse).admission;
@@ -320,7 +321,7 @@ test('admit fulfils an open request in place instead of orphaning it', () => {
   // And the patient can be referred again after the stay ends.
   dischargePatient(db, { admission_id: adm.id }, cashier);
   const again = requestAdmission(db, { patient_id: patientId, pathway: 'therapy' }, { id: 3, role: 'doctor' }).admission;
-  assert.equal(again.status, 'requested');
+  assert.equal(again.status, 'ordered');
 });
 
 test('a hospitalisation request can be declined, freeing the patient to be referred again', () => {
@@ -338,7 +339,7 @@ test('a hospitalisation request can be declined, freeing the patient to be refer
   assert.equal(log.reason, 'состояние улучшилось');
 
   // The patient is free again.
-  assert.equal(requestAdmission(db, { patient_id: patientId, pathway: 'therapy' }, { id: 3, role: 'doctor' }).admission.status, 'requested');
+  assert.equal(requestAdmission(db, { patient_id: patientId, pathway: 'therapy' }, { id: 3, role: 'doctor' }).admission.status, 'ordered');
 });
 
 test('cancel refuses an ACTIVE stay (that is what discharge is for) and a bad role', () => {

@@ -8,6 +8,7 @@ import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitio
 import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest } from './inpatient.js';
+import { admissionFlowState } from './inpatient-flow.js';   // INPATIENT_FLOW_V1
 import { ensureVisit } from './visits.js';
 import { issueQueueNumbers, queueBoard } from './queue.js';
 import { createDeposit, acceptDeposit, cancelDeposit, refundDeposit, listDeposits, depositBalance } from './deposits.js';   // DEPOSIT_V1
@@ -139,6 +140,13 @@ export const RPC = {
   // был тупиком: выйти из него не мог никто, и пациента больше нельзя было
   // направить в стационар. (Выполнение заявки делает admit_patient.)
   cancel_admission_request:       (db, args, user) => cancelAdmissionRequest(db, args, user),
+
+  // INPATIENT_FLOW_V1 — где госпитализация на маршруте и что ЭТОТ человек
+  // может с ней сделать. Чистое чтение (см. READ_ONLY_RPCS в control/gate.js):
+  // матрица прав живёт на сервере, и экранам Задач 2, 3 и 8 её надо спросить, а
+  // не пересчитать у себя — вторая копия матрицы разошлась бы с первой.
+  // Сами шаги маршрута (заявка, размещение, осмотр, выписка) — Задачи 2, 3, 8.
+  admission_flow_state:           (db, args, user) => admissionFlowState(db, args, user),
 
   // SERVICE_DELETE_V1 — «Удалить услугу». Hard-deletes only a service with no
   // visit / invoice / admission / queue / lab / CRM history; anything used is

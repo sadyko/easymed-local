@@ -4,7 +4,30 @@
 // board. It exists because the clinic had been repurposing 'inventory' for the
 // job and widening one account with the registrar role as an extra, which hands
 // a phone operator the whole registrar right set (patients, visits, invoices).
-export const VALID_ROLES = ['admin', 'registrar', 'doctor', 'cashier', 'lab', 'nurse', 'inventory', 'callcenter'];
+// Роли, которые человек носит КАК ОСНОВНУЮ: это его профессия в клинике, и
+// именно по ней реестр таблиц (schema-registry.js) выдаёт права на данные.
+export const PRIMARY_ROLES = ['admin', 'registrar', 'doctor', 'cashier', 'lab', 'nurse', 'inventory', 'callcenter'];
+
+// INPATIENT_FLOW_V1 — НАДСТРОЕЧНЫЕ роли: только через «Дополнительные роли».
+//
+// «Главный врач» и «старшая медсестра» — не профессии, а полномочия ПОВЕРХ
+// профессии: главный врач остаётся врачом (ведёт своих пациентов, свою очередь,
+// свой кабинет) и вдобавок проводит первичный осмотр и назначает лечащего
+// врача. Решение владельца дословно: «„Главный врач“ — роль, её может держать
+// несколько врачей».
+//
+// Основной ролью они быть НЕ МОГУТ, и это не вкусовщина: в списках реестра
+// (ALL_STAFF и все write.roles) слова 'head_doctor' нет ни в одной строке, так
+// что человек с такой ОСНОВНОЙ ролью увидел бы пустое приложение. Сервер
+// авторизует по ОБЪЕДИНЕНИЮ основной и дополнительных (effectiveRoles ниже),
+// поэтому врач с надстройкой имеет и права врача, и права главного врача.
+//
+// routes/users.js проверяет основную роль по PRIMARY_ROLES, а дополнительные —
+// по VALID_ROLES. Разница намеренная, и объявлена она здесь.
+export const EXTRA_ONLY_ROLES = ['head_doctor', 'senior_nurse'];
+
+// Всё, что человек вправе носить в любом качестве.
+export const VALID_ROLES = [...PRIMARY_ROLES, ...EXTRA_ONLY_ROLES];
 
 // MULTI_ROLE_SERVER_V1 — every role a request may be authorised by: the primary
 // role plus «Дополнительные роли» (users.extra_roles, admin-only to set). The

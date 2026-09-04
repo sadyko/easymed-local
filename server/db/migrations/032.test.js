@@ -33,7 +33,7 @@ function seedWorkspace(db) {
   return db;
 }
 
-test('032 schema: new columns + active mirror + admissions requested', () => {
+test('032 schema: new columns + active mirror + admissions ordered', () => {
   const db = freshDb();
   // table_xinfo, not table_info: the generated `active` mirror is a hidden
   // (h2) column and plain table_info omits it.
@@ -51,9 +51,12 @@ test('032 schema: new columns + active mirror + admissions requested', () => {
   db.prepare('UPDATE users SET is_active=0 WHERE id=9').run();
   assert.equal(db.prepare('SELECT active FROM users WHERE id=9').get().active, 0);
 
-  // admissions: 'requested' allowed, indexes recreated
+  // admissions: заявка без койки допустима, индексы пересозданы.
+  // INPATIENT_FLOW_V1 — база собрана ВСЕМИ миграциями, а 091 переименовала
+  // 'requested' в 'ordered' (то же состояние, новое слово). Проверяем то, что
+  // 032 и обещала: заявку можно завести, и индексы на месте.
   db.prepare("INSERT INTO patients (id, full_name) VALUES (1,'P')").run();
-  db.prepare("INSERT INTO admissions (patient_id, status) VALUES (1,'requested')").run();
+  db.prepare("INSERT INTO admissions (patient_id, status) VALUES (1,'ordered')").run();
   const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='admissions'").all().map((r) => r.name);
   assert.ok(idx.includes('idx_admissions_status') && idx.includes('idx_admissions_bed'));
 });
@@ -144,7 +147,7 @@ test('032 RPC aliases: dispense_visit_item / void_dispensed_visit_item (easymed 
 test('032 RPC alias: request_admission creates a bed-less requested admission, one per patient', () => {
   const db = seedWorkspace(freshDb());
   const { admission } = RPC.request_admission(db, { p_patient_id: 1, p_doctor_id: 2, p_pathway: 'therapy', p_chief_complaint: 'Боли', p_diagnosis: 'J06.9' }, DOCTOR);
-  assert.equal(admission.status, 'requested');
+  assert.equal(admission.status, 'ordered');   // INPATIENT_FLOW_V1 — прежнее 'requested'
   assert.equal(admission.bed_id, null);
   assert.match(admission.admission_no, /^ADM-\d{5}$/);
   assert.equal(admission.admission_diagnosis, 'J06.9');

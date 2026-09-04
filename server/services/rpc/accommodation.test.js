@@ -125,3 +125,47 @@ test('нулевая ставка не создаёт строку', () => {
   assert.equal(lines(db, adm.id).length, 0);
   db.close();
 });
+
+// ---------------------------------------------------------------------------
+// INPATIENT_FLOW_V1 — САМАЯ ДОРОГАЯ ОШИБКА ЭТОЙ ЗАДАЧИ, если её допустить.
+//
+// До миграции 091 «пациент в койке» значило ровно status='active'. Теперь между
+// поступлением и лечением стоят два шага: пациент лежит в 'admitted' (медсестра
+// положила), потом в 'examined' (главный врач осмотрел), и только потом в
+// 'active'. Всё это время койка занята и деньги за неё идут.
+//
+// Оставь мы где-нибудь проверку «только active» — клиника молча перестала бы
+// брать за первые сутки, и заметила бы это не на экране, а в конце месяца.
+// Поэтому проверяется прямо: проживание вносится в КАЖДОМ состоянии, в котором
+// пациент лежит, и одинаковой суммой.
+test('проживание начисляется в КАЖДОМ состоянии «в койке», а не только в active', async () => {
+  const { IN_BED_STATUSES } = await import('./inpatient-flow.js');
+  assert.deepEqual(IN_BED_STATUSES, ['admitted', 'examined', 'active', 'discharging'],
+    'список «в койке» изменился — этот тест обязан измениться вместе с ним');
+
+  for (const status of IN_BED_STATUSES) {
+    const { db, adm } = seed({ daysAgo: 2 });
+    db.prepare('UPDATE admissions SET status = ? WHERE id = ?').run(status, adm.id);
+
+    const res = billAccommodation(db, { admission_id: adm.id }, NURSE);
+    assert.equal(res.line.quantity, 2, status + ': двое суток должны быть посчитаны');
+    assert.equal(res.line.total, 400000, status + ': сумма не зависит от шага маршрута');
+    assert.equal(lines(db, adm.id).length, 1, status + ': ровно одна строка проживания');
+    db.close();
+  }
+});
+
+// Тот же вопрос с другой стороны: пациент, которого только что положили и ещё
+// не осмотрели, — обычный лежащий пациент, и карточка обязана показать ему счёт
+// за койку так же, как лечащемуся.
+test('карточка показывает начисление поступившему, но ещё не осмотренному', async () => {
+  const { accommodationState } = await import('./accommodation.js');
+  const { db, adm } = seed({ daysAgo: 3 });
+  db.prepare("UPDATE admissions SET status = 'admitted' WHERE id = ?").run(adm.id);
+
+  const st = accommodationState(db, { admission_id: adm.id }, NURSE);
+  assert.equal(st.stay_units, 3, 'лежит трое суток с момента поступления');
+  assert.equal(st.current.units, 3, 'и все трое ещё не выставлены');
+  assert.equal(st.current.net, 600000);
+  db.close();
+});

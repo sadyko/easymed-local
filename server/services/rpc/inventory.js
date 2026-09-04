@@ -8,6 +8,10 @@ import { hasAnyRole } from '../roles.js';
 // BRANCH_MONEY_GUARD_V1 — одна проверка «своё ли это здание» на весь сервер
 // (billing.js), а не копия в каждом файле: отказ обязан звучать одинаково.
 import { assertOwnBuilding } from './billing.js';
+// INPATIENT_FLOW_V1 — «нет лечащего врача — нет лечения» (решение владельца
+// 2026-09-04). Проверка живёт в одном месте на весь стационар, а не копией
+// здесь: см. rpc/inpatient-flow.js.
+import { assertAdmissionAtLeast } from './inpatient-flow.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -231,9 +235,19 @@ export function dispenseAdmissionItem(db, args, user) {
   const note = (args && typeof args.note === 'string' ? args.note.trim().slice(0, 300) : '') || null;
 
   const run = db.transaction(() => {
-    const adm = db.prepare('SELECT * FROM admissions WHERE id = ?').get(admissionId);
-    if (!adm) throw new RpcError('admission not found.', 400);
-    if (adm.status !== 'active') throw new RpcError('admission is not active.', 400);
+    // INPATIENT_FLOW_V1 — было `adm.status !== 'active'`, и это ПРАВИЛО
+    // СОХРАНЕНО ДОСЛОВНО: выдать препарат можно, только когда лечение
+    // действительно началось, а закрытой (выписанной или отменённой)
+    // госпитализации — нельзя вовсе. Изменилось одно: отказ теперь называет
+    // недостающий шаг («Пациент ещё не осмотрен главным врачом») вместо
+    // «admission is not active», и то же самое правило спрашивают все
+    // остальные задачи маршрута — одной функцией, а не своей копией.
+    //
+    // Здесь именно assertAdmissionAtLeast, а НЕ assertCanPrescribe: препарат у
+    // койки выдаёт медсестра, и она не лечащий врач. Кому можно выдавать,
+    // решает DISPENSE_ROLES выше; эта строка отвечает только на вопрос «дошёл
+    // ли пациент до лечения».
+    const adm = assertAdmissionAtLeast(db, admissionId, 'active');
     const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId);
     if (!product) throw new RpcError('product not found.', 400);
     if (!product.active) throw new RpcError('product is not active.', 400);

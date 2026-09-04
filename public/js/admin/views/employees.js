@@ -21,12 +21,23 @@ const ROLES = [
     ['callcenter', 'Колл-центр'],   // CALLCENTER_ROLE_V1
     ['admin', 'Администратор'],
 ];
+// INPATIENT_FLOW_V1 — НАДСТРОЕЧНЫЕ роли: только «Дополнительные роли», в
+// «Основной роли» их нет намеренно (зеркало EXTRA_ONLY_ROLES в
+// server/services/roles.js — сервер отвечает «Unknown role.» на попытку
+// поставить их основной). Главный врач остаётся врачом, старшая медсестра —
+// медсестрой; надстройка добавляет полномочия в стационаре, а не заменяет
+// профессию.
+const EXTRA_ONLY_ROLES = [
+    ['head_doctor', 'Главный врач'],
+    ['senior_nurse', 'Старшая медсестра'],
+];
+const ALL_ASSIGNABLE_ROLES = [...ROLES, ...EXTRA_ONLY_ROLES];
 const STAFF_TYPES = [['doctor', 'Врачи'], ['admin_staff', 'Административный персонал'], ['mid_low', 'Средний и младший персонал']];
 const DOCTOR_CATEGORIES = [['', '—'], ['highest', 'Высшая'], ['first', 'Первая'], ['second', 'Вторая'], ['none', 'Без категории']];
 const EMPLOYMENT_TYPES = [['', '—'], ['official', 'Официально'], ['civil_law', 'ГПХ (договор)'], ['unofficial', 'Неофициально']];
 const SALARY_TYPES = [['', '—'], ['fixed', 'Оклад'], ['percentage', 'Процент от выручки'], ['fix_plus_kpi', 'Оклад + KPI']];
 const DAYS = [['mon', 'Пн'], ['tue', 'Вт'], ['wed', 'Ср'], ['thu', 'Чт'], ['fri', 'Пт'], ['sat', 'Сб'], ['sun', 'Вс']];
-const roleLabel = (r) => (ROLES.find(x => x[0] === r) || [r, r])[1];
+const roleLabel = (r) => (ALL_ASSIGNABLE_ROLES.find(x => x[0] === r) || [r, r])[1];
 // STAFF_SYNC_V1 (миграция 086) — сотрудника завела главная клиника, и этот
 // экран его только показывает. Сравнение именно с false: установка старой
 // версии ключа не присылает вовсе, и «неизвестно» обязано значить «свой», иначе
@@ -494,7 +505,7 @@ function openEditor(user, root) {
         } else if (active === 'access') {
             const roleSel = sel('role', ROLES.map(r => [r[0], r[1]]), (v) => { markDirty({ role: v, extra_roles: (emp.extra_roles || []).filter(r => r !== v) }); renderBody(); });
             const extraRoles = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px' } });
-            for (const [rk, rl] of ROLES) {
+            for (const [rk, rl] of ALL_ASSIGNABLE_ROLES) {
                 if (rk === emp.role) continue;
                 const on = (emp.extra_roles || []).includes(rk);
                 const c = h('input', { type: 'checkbox', checked: on });

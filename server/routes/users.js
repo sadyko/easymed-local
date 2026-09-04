@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import { requireRole } from '../middleware/auth.js';
 import { hashPassword, validPassword } from '../services/auth.js';
-import { VALID_ROLES } from '../services/roles.js';
+import { VALID_ROLES, PRIMARY_ROLES } from '../services/roles.js';
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 
-export { VALID_ROLES };
+export { VALID_ROLES, PRIMARY_ROLES };
 
 const TEXT_FIELDS = ['first_name', 'last_name', 'middle_name', 'phone', 'email', 'specialty', 'position', 'license_number'];
 const DOCTOR_CATEGORIES = ['', 'highest', 'first', 'second', 'none'];
@@ -310,7 +310,11 @@ export function userRoutes(db) {
     if (!/^[a-z0-9._-]{3,30}$/.test(name)) return bad(res, 'Username must be 3-30 characters: letters, digits, . _ -');
     if (!validPassword(password)) return bad(res, 'Password must be 8 characters or more (max 72 bytes).');
     if (typeof full_name !== 'string') return bad(res, 'Full name must be text.');
-    if (!VALID_ROLES.includes(role)) return bad(res, 'Unknown role.');
+    // INPATIENT_FLOW_V1 — ОСНОВНОЙ ролью может быть только профессия.
+    // 'head_doctor'/'senior_nurse' — надстройки поверх неё и живут в
+    // extra_roles (см. EXTRA_ONLY_ROLES в services/roles.js): человек с такой
+    // основной ролью не имел бы прав ни на одну таблицу реестра.
+    if (!PRIMARY_ROLES.includes(role)) return bad(res, 'Unknown role.');
     if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(name)) return bad(res, 'Username already exists.');
 
     const parsed = parseEmployeeFields(req.body, db);
@@ -346,7 +350,7 @@ export function userRoutes(db) {
       if (typeof is_active !== 'boolean') return bad(res, 'is_active must be true or false.');
       active = is_active;
     }
-    if (role !== undefined && !VALID_ROLES.includes(role)) return bad(res, 'Unknown role.');
+    if (role !== undefined && !PRIMARY_ROLES.includes(role)) return bad(res, 'Unknown role.');   // INPATIENT_FLOW_V1 — см. POST выше
     if (password !== undefined && !validPassword(password)) {
       return bad(res, 'Password must be 8 characters or more (max 72 bytes).');
     }

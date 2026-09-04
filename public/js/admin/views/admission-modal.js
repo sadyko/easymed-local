@@ -21,6 +21,7 @@
 
 import { supabase } from '../../supabase.js';
 import { isAccommodationLine, ACCOMMODATION_LABEL } from '../../shared/accommodation-line.js';   // ACCOMMODATION_AS_SERVICE_V1
+import { isInBed, admissionStatusLabel } from '../../shared/admission-status.js';   // INPATIENT_FLOW_V1
 import { h, Icon, Tag, StatusTag, toast, clear, avColor, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
@@ -718,11 +719,14 @@ function openPartialDialog(inv, owed, onReload) {
 // Small helpers (kept local so this file is drop-in independent).
 // ---------------------------------------------------------------------------
 function statusTagFor(s) {
-    if (s === 'active')      return h('span', { class: 'tag tag-info' }, 'Active');
-    if (s === 'discharged')  return h('span', { class: 'tag tag-ok' },   'Discharged');
-    if (s === 'transferred') return h('span', { class: 'tag tag-warn' },'Transferred');
-    if (s === 'cancelled')   return h('span', { class: 'tag tag-crit' },'Cancelled');
-    return h('span', { class: 'tag' }, s || '—');
+    // INPATIENT_FLOW_V1 — подписи всех состояний маршрута берутся из общего
+    // словаря (shared/admission-status.js), иначе новые шаги показывались бы
+    // сырым английским ключом из базы.
+    if (s === 'discharged')  return h('span', { class: 'tag tag-ok' },   admissionStatusLabel(s));
+    if (s === 'cancelled')   return h('span', { class: 'tag tag-crit' }, admissionStatusLabel(s));
+    if (isInBed(s))          return h('span', { class: 'tag tag-info' }, admissionStatusLabel(s));
+    if (s === 'ordered')     return h('span', { class: 'tag tag-warn' }, admissionStatusLabel(s));
+    return h('span', { class: 'tag' }, admissionStatusLabel(s));
 }
 function kv(k, v) {
     return h('div', null,

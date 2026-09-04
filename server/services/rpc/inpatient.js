@@ -6,6 +6,11 @@
 import { nextInvoiceNumber } from './billing.js';
 import { assertTransition } from '../domain/lifecycle.js';
 import { hasAnyRole } from '../roles.js';
+// INPATIENT_FLOW_V1 (миграция 091) — «в койке» это ЧЕТЫРЕ состояния, а не одно.
+// Каждый запрос ниже, который раньше спрашивал status='active', спрашивает этот
+// список: поступивший, но ещё не осмотренный пациент лежит в койке точно так же,
+// как лечащийся, — койка занята, и суточное за неё идёт.
+import { IN_BED_STATUSES, OPEN_STATUSES } from './inpatient-flow.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -28,6 +33,12 @@ const PATHWAYS = ['therapy', 'surgical'];
 // the stored charge_amount, the created invoice, and any report that SUMs
 // across invoices.
 const MAX_MONEY = 1e12;
+
+// Списки состояний для SQL. Строятся из одного источника (inpatient-flow.js),
+// а не переписываются в каждом запросе: разошедшиеся копии этого списка — самый
+// дорогой способ сломать стационар (койка «свободна», пациент в ней).
+const IN_BED_SQL = IN_BED_STATUSES.map((s) => `'${s}'`).join(',');
+const OPEN_SQL = OPEN_STATUSES.map((s) => `'${s}'`).join(',');
 
 function requireRole(user, allowed) {
   // MULTI_ROLE_SERVER_V1 — extras count too, not the primary role alone.
@@ -79,16 +90,19 @@ export function requestAdmission(db, args, user) {
     if (doctorId !== null && !db.prepare('SELECT 1 FROM users WHERE id = ?').get(doctorId)) {
       throw new RpcError('doctor not found.', 400);
     }
-    const open = db.prepare("SELECT status FROM admissions WHERE patient_id=? AND status IN ('requested','active')").get(patientId);
+    // INPATIENT_FLOW_V1 — открыта = заявка ИЛИ любое состояние в койке. Раньше
+    // список был ('requested','active'); между ними теперь два шага, и пациент,
+    // лежащий в 'admitted', получил бы вторую заявку в стационар.
+    const open = db.prepare(`SELECT status FROM admissions WHERE patient_id=? AND status IN (${OPEN_SQL})`).get(patientId);
     if (open) {
-      throw new RpcError(open.status === 'active'
-        ? 'patient already has an active admission.'
-        : 'patient already has a pending admission request.', 400);
+      throw new RpcError(open.status === 'ordered'
+        ? 'patient already has a pending admission request.'
+        : 'patient already has an active admission.', 400);
     }
 
     const info = db.prepare(`
       INSERT INTO admissions (patient_id, doctor_id, pathway, chief_complaint, admission_diagnosis, status, created_by)
-      VALUES (?, ?, ?, ?, ?, 'requested', ?)
+      VALUES (?, ?, ?, ?, ?, 'ordered', ?)
     `).run(patientId, doctorId, pathway, chiefComplaint, admissionDiagnosis, user.id);
     const admissionId = info.lastInsertRowid;
     db.prepare("UPDATE admissions SET admission_no = 'ADM-' || substr('00000'||id,-5,5) WHERE id=?").run(admissionId);
@@ -119,7 +133,7 @@ export function cancelAdmissionRequest(db, args, user) {
     // says so, and this is the error the ward sees if they try.
     assertTransition('admission', adm.status, 'cancelled');
 
-    db.prepare("UPDATE admissions SET status = 'cancelled', discharged_at = ? WHERE id = ? AND status = 'requested'")
+    db.prepare("UPDATE admissions SET status = 'cancelled', discharged_at = ? WHERE id = ? AND status = 'ordered'")
       .run(nowIso(db), admissionId);
     db.prepare(`
       INSERT INTO admission_transfers (admission_id, kind, reason, transferred_at, transferred_by)
@@ -174,11 +188,13 @@ export function admitPatient(db, args, user) {
       throw new RpcError('doctor not found.', 400);   // clean 400 instead of an FK 500 (review finding #4)
     }
 
-    const patientActive = db.prepare("SELECT 1 FROM admissions WHERE patient_id=? AND status='active'").get(patientId);
+    // INPATIENT_FLOW_V1 — один пациент, одна койка: считаем ВСЕ состояния в
+    // койке, а не только 'active'.
+    const patientActive = db.prepare(`SELECT 1 FROM admissions WHERE patient_id=? AND status IN (${IN_BED_SQL})`).get(patientId);
     if (patientActive) {
       throw new RpcError('patient already has an active admission.', 400);
     }
-    const bedActive = db.prepare("SELECT 1 FROM admissions WHERE bed_id=? AND status='active'").get(bedId);
+    const bedActive = db.prepare(`SELECT 1 FROM admissions WHERE bed_id=? AND status IN (${IN_BED_SQL})`).get(bedId);
     if (bedActive) {
       throw new RpcError('bed already has an active admission.', 400);
     }
@@ -190,7 +206,7 @@ export function admitPatient(db, args, user) {
     // request_admission refuses a second open request, that patient could never
     // be referred for inpatient care again. Fulfilling in place also keeps the
     // doctor's referral joined to the stay it produced.
-    const pending = db.prepare("SELECT * FROM admissions WHERE patient_id=? AND status='requested' ORDER BY id LIMIT 1").get(patientId);
+    const pending = db.prepare("SELECT * FROM admissions WHERE patient_id=? AND status='ordered' ORDER BY id LIMIT 1").get(patientId);
 
     let admissionId;
     if (pending) {
@@ -205,7 +221,7 @@ export function admitPatient(db, args, user) {
                pathway = ?,
                chief_complaint = CASE WHEN ? <> '' THEN ? ELSE chief_complaint END,
                admission_diagnosis = CASE WHEN ? <> '' THEN ? ELSE admission_diagnosis END
-         WHERE id = ? AND status = 'requested'
+         WHERE id = ? AND status = 'ordered'
       `).run(bedId, bed.ward_id, doctorId, pathway,
              chiefComplaint, chiefComplaint, admissionDiagnosis, admissionDiagnosis, pending.id);
       admissionId = pending.id;
@@ -260,8 +276,15 @@ export function dischargePatient(db, args, user) {
   const run = db.transaction(() => {
     const admission = db.prepare('SELECT * FROM admissions WHERE id = ?').get(admissionId);
     if (!admission) throw new RpcError('admission not found or not active.', 400);
-    // Only an active stay can be discharged — a 'requested' one has no bed and
+    // Only an active stay can be discharged — an 'ordered' one has no bed and
     // no elapsed time to bill, and a discharged one is terminal.
+    //
+    // INPATIENT_FLOW_V1 — ЭТО НАМЕРЕННО ОСТАЛОСЬ 'active' И ТОЛЬКО 'active'.
+    // Прямая выписка — путь v0.8.0, и трогать её здесь значило бы переписывать
+    // выписку до Задачи 8, которая и делает её двухшаговой (заявка врача →
+    // оформление старшей медсестрой). Пока Задачи 2/3 не переведут поступление
+    // на новый маршрут, все лежащие пациенты по-прежнему в 'active', и эта
+    // строка работает ровно как работала.
     if (admission.status !== 'active') {
       assertTransition('admission', admission.status, 'discharged');
       throw new RpcError('admission not found or not active.', 400);
@@ -374,7 +397,9 @@ export function setBedStatus(db, args, user) {
     if (!bed) {
       throw new RpcError('bed not found.', 400);
     }
-    const activeAdmission = db.prepare("SELECT 1 FROM admissions WHERE bed_id=? AND status='active'").get(bedId);
+    // INPATIENT_FLOW_V1 — койку нельзя объявить свободной под кем угодно из
+    // лежащих, а не только под лечащимся: до 091 запрос смотрел на 'active'.
+    const activeAdmission = db.prepare(`SELECT 1 FROM admissions WHERE bed_id=? AND status IN (${IN_BED_SQL})`).get(bedId);
     if (activeAdmission) {
       throw new RpcError('bed has an active admission; discharge the patient instead of changing bed status.', 400);
     }
@@ -400,11 +425,13 @@ export function transferAdmission(db, args, user) {
   const run = db.transaction(() => {
     const adm = db.prepare('SELECT * FROM admissions WHERE id = ?').get(admissionId);
     if (!adm) throw new RpcError('admission not found.', 400);
-    if (adm.status !== 'active') throw new RpcError('admission is not active.', 400);
+    // INPATIENT_FLOW_V1 — перевести можно любого, кто лежит: пациента переводят
+    // и до первичного осмотра (палата занята, освободилась другая).
+    if (!IN_BED_STATUSES.includes(adm.status)) throw new RpcError('admission is not active.', 400);
     const toBed = db.prepare('SELECT * FROM beds WHERE id = ?').get(toBedId);
     if (!toBed || !toBed.active) throw new RpcError('bed not found.', 400);
     if (toBed.id === adm.bed_id) throw new RpcError('пациент уже на этой койке.', 400);
-    if (toBed.status !== 'free' || db.prepare("SELECT 1 FROM admissions WHERE bed_id=? AND status='active'").get(toBedId)) {
+    if (toBed.status !== 'free' || db.prepare(`SELECT 1 FROM admissions WHERE bed_id=? AND status IN (${IN_BED_SQL})`).get(toBedId)) {
       throw new RpcError('койка занята или недоступна.', 400);
     }
 

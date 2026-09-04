@@ -56,9 +56,14 @@ const PROCUREMENT_CATEGORY_MAP = {
     'стоматология': 'dental', 'радиология': 'radiology', 'офис': 'office_it', 'хозяйственные': 'facility',
 };
 
-// STAFF_IMPORT_V1 — mirrors server/services/roles.js VALID_ROLES and the
+// STAFF_IMPORT_V1 — mirrors server/services/roles.js PRIMARY_ROLES and the
 // STAFF_TYPES list in server/routes/users.js. Both are validated server-side;
 // these copies only drive the template's Excel dropdowns and the hints.
+//
+// INPATIENT_FLOW_V1 — 'head_doctor'/'senior_nurse' здесь НЕТ намеренно: это
+// колонка ОСНОВНОЙ роли, а надстроечные роли основными быть не могут (сервер
+// проверяет по PRIMARY_ROLES и ответил бы «Unknown role.»). Их выдают в
+// карточке сотрудника, в «Дополнительных ролях».
 const VALID_ROLE_KEYS = ['admin', 'registrar', 'doctor', 'cashier', 'lab', 'nurse', 'inventory', 'callcenter'];   // CALLCENTER_ROLE_V1
 const STAFF_TYPE_KEYS = ['doctor', 'admin_staff', 'mid_low'];
 

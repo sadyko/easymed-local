@@ -6001,4 +6001,13 @@ export const STRINGS = {
   "Доход этого здания": {"en":"This building's income","ru":"Доход этого здания","uz":"Shu binoning daromadi"},
   "Расход этого здания": {"en":"This building's expense","ru":"Расход этого здания","uz":"Shu binoning xarajati"},
   "Итого по этому зданию (доход − расход)": {"en":"Total for this building (income − expense)","ru":"Итого по этому зданию (доход − расход)","uz":"Shu bino bo'yicha jami (daromad − xarajat)"},
+
+  // INPATIENT_FLOW_V1 — маршрут госпитализации (миграция 091) — added 2026-09-04
+  "Главный врач": {"en":"Head doctor","ru":"Главный врач","uz":"Bosh shifokor"},
+  "Старшая медсестра": {"en":"Head nurse","ru":"Старшая медсестра","uz":"Katta hamshira"},
+  "Ждёт размещения": {"en":"Awaiting a bed","ru":"Ждёт размещения","uz":"Joylashtirishni kutmoqda"},
+  "На койке": {"en":"In a bed","ru":"На койке","uz":"Yotoqda"},
+  "Лечение": {"en":"In treatment","ru":"Лечение","uz":"Davolanmoqda"},
+  "Оформляется выписка": {"en":"Discharge in progress","ru":"Оформляется выписка","uz":"Chiqarish rasmiylashtirilmoqda"},
+  "Выписан": {"en":"Discharged","ru":"Выписан","uz":"Chiqarilgan"},
 };
