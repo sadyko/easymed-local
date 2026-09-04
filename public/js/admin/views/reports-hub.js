@@ -244,7 +244,28 @@ async function paintFreshness(target) {
                     // это её собственные слова, и подменять их нельзя.
                     b.refused_error ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, b.refused_error) : null,
                 );
-            })),
+            }),
+            // ЗАПИСИ, ЧЬЁ ЗДАНИЕ НЕИЗВЕСТНО. Сервер считает их отдельно
+            // (pending_unattributed / refused_unattributed) именно потому, что
+            // приписать их какому-нибудь зданию наугад — та же ошибка, что и
+            // всё, что чинила эта задача. До сих пор экран их не рисовал вовсе,
+            // то есть единственная строка, говорящая «мы не смогли понять, чьё
+            // это», молчала — а вместе с ней и её записи, которых нет ни в
+            // одной строке выше.
+            (data.pending_unattributed || data.refused_unattributed) ? h('div', {
+                style: {
+                    display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px',
+                    padding: '7px 12px', borderRadius: '10px', fontSize: '12.5px',
+                    background: FRESHNESS_TONE.never.bg, border: '1px solid ' + FRESHNESS_TONE.never.bd,
+                    color: FRESHNESS_TONE.never.fg,
+                },
+            },
+                h('span', { style: { fontWeight: 700, minWidth: '120px' } }, tr('Здание не определено')),
+                h('span', null, trf('Записи есть, но чьи они — прочитать не удалось · ждут: {pending} · не приняты: {refused}', {
+                    pending: data.pending_unattributed || 0,
+                    refused: data.refused_unattributed || 0,
+                })),
+            ) : null),
         // Версия соседа по проводу не едет — экран обязан сказать это сам,
         // иначе пустая графа читается как «версия совпадает».
         data.version_note ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '8px', lineHeight: 1.45 } },

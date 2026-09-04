@@ -874,3 +874,43 @@ test('деньги: холодный засев везёт и деньги, в �
   assert.ok(order.indexOf('invoices') < order.indexOf('payments'), 'платёж после счёта');
   db.close();
 });
+
+// --- ревью Фазы 3, NEW-1: ЧУЖУЮ СТРОКУ МЫ ПЕРЕСЫЛАЕМ КАК ЧУЖУЮ ---------------
+//
+// origin у записи означает «порцию собрал такой-то», и приёмник сверяет его с
+// тем соседом, чей блоб забрал. Но пересылаем мы и чужие строки — засев отдаёт
+// таблицы целиком. Без отдельного поля такая строка приезжала соседу
+// подписанной НАМИ: и «Здание» в отчёте, и буква перечеканенного номера
+// называли не тот дом, а один и тот же счёт носил в сети столько номеров,
+// сколько было маршрутов доставки.
+
+test('home: своя строка уезжает как своя, чужая — с домом того, кто её завёл', () => {
+  const db = fresh();
+  // Строка здания C, принятая нами (мы — B).
+  applyBatch(db, [{
+    tbl: 'patients', uid: 'p-from-c', op: 'put',
+    stamp: stampAt(Date.parse('2026-08-01T10:00:00Z'), 'C'), origin: 'C',
+    data: { full_name: 'Петров' }, refs: {}, changed: ['*'],
+  }], { self: 'B', peer: 'C', upto: 1 });
+  // И наша собственная.
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+
+  const recs = buildBatch(db, { self: 'B', peer: 'E' }).records.filter(r => r.tbl === 'patients');
+  const byName = new Map(recs.map((r) => [r.data.full_name, r]));
+
+  assert.equal(byName.get('Иванов').origin, 'B', 'порцию собрали мы — это не менялось');
+  assert.equal(byName.get('Иванов').home, 'B', 'нашего пациента завели здесь');
+  assert.equal(byName.get('Петров').origin, 'B', 'везём её тоже мы, и приёмник сверяет именно это');
+  assert.equal(byName.get('Петров').home, 'C', 'а работа сделана в C — это и едет отдельным полем');
+  db.close();
+});
+
+test('home: испорченная метка происхождения не выдаётся за нашу работу', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  db.prepare("UPDATE patients SET sync_origin = 'филиал-1' WHERE full_name = 'Иванов'").run();
+  const rec = buildBatch(db, { self: 'B', peer: 'E' }).records.find((r) => r.tbl === 'patients');
+  assert.equal(rec.home, null,
+    'дом не назван — приёмник честно падает на прежнее поведение, а не считает строку нашей');
+  db.close();
+});

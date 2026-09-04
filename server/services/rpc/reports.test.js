@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness } from './reports.js';
+import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, pluralRu } from './reports.js';
 
 function seed() {
   const db = openDb(':memory:'); migrate(db);
@@ -555,8 +555,26 @@ test('недоехавшие позиции: считаются, названы 
   const rowsTotal = r.rows.reduce((n, row) => n + row[r.columns.indexOf('После скидки')], 0);
   assert.equal(rowsTotal, 1090000 + 560000, 'ни одной выдуманной строки: итог = сумма строк');
 
-  assert.match(r.pending_items.note, /Позиции ещё не доехали: 2 счетов, 240 300 сум/);
+  assert.match(r.pending_items.note, /Позиции ещё не доехали: 2 счета, 240 300 сум/,
+    'число и слово согласованы: под этим отчётом владелец разговаривает с бухгалтером');
   db.close();
+});
+
+// «1 счетов» вылезало в самом частом случае из всех — доехал ОДИН счёт без
+// позиций. Правило проверяется на числах, а не сборкой отчёта на сто счетов.
+test('примечания: число и слово в них согласованы по-русски', () => {
+  const счёт = (n) => n + ' ' + pluralRu(n, 'счёт', 'счета', 'счетов');
+  assert.equal(счёт(1), '1 счёт');
+  assert.equal(счёт(2), '2 счета');
+  assert.equal(счёт(4), '4 счета');
+  assert.equal(счёт(5), '5 счетов');
+  assert.equal(счёт(11), '11 счетов', 'одиннадцать — то исключение, на котором ломается наивное правило');
+  assert.equal(счёт(14), '14 счетов');
+  assert.equal(счёт(21), '21 счёт');
+  assert.equal(счёт(101), '101 счёт');
+  assert.equal(счёт(112), '112 счетов');
+  assert.equal(счёт(122), '122 счета');
+  assert.equal(счёт(0), '0 счетов');
 });
 
 test('недоехавшие позиции: видны во всех отчётах по строкам и у владельца', () => {

@@ -5992,6 +5992,8 @@ export const STRINGS = {
   "Идёт первичная загрузка, страница {page} · ждут: {pending}": {"en":"First-time load in progress, page {page} · waiting: {pending}","ru":"Идёт первичная загрузка, страница {page} · ждут: {pending}","uz":"Dastlabki yuklash ketmoqda, {page}-sahifa · kutmoqda: {pending}"},
   "Данные не приходили с {when} · ждут: {pending} · не приняты: {refused}": {"en":"No data since {when} · waiting: {pending} · refused: {refused}","ru":"Данные не приходили с {when} · ждут: {pending} · не приняты: {refused}","uz":"{when} dan beri ma'lumot kelmadi · kutmoqda: {pending} · qabul qilinmadi: {refused}"},
   "Последние данные: {when} · ждут: {pending} · не приняты: {refused}": {"en":"Last data: {when} · waiting: {pending} · refused: {refused}","ru":"Последние данные: {when} · ждут: {pending} · не приняты: {refused}","uz":"Oxirgi ma'lumot: {when} · kutmoqda: {pending} · qabul qilinmadi: {refused}"},
+  "Здание не определено": {"en":"Building unknown","ru":"Здание не определено","uz":"Bino aniqlanmadi"},
+  "Записи есть, но чьи они — прочитать не удалось · ждут: {pending} · не приняты: {refused}": {"en":"Records are here, but whose they are could not be read · waiting: {pending} · refused: {refused}","ru":"Записи есть, но чьи они — прочитать не удалось · ждут: {pending} · не приняты: {refused}","uz":"Yozuvlar bor, lekin ular kimniki ekanini o'qib bo'lmadi · kutmoqda: {pending} · qabul qilinmadi: {refused}"},
   "ещё едет: {amount}": {"en":"still in transit: {amount}","ru":"ещё едет: {amount}","uz":"hali yo'lda: {amount}"},
   // CASHIER_NET_SCOPE_V1 — плитки «Отчёта кассира» называют свой охват: приход
   // ездит между зданиями, расход — нет — added 2026-09-04

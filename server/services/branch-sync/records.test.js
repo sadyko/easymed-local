@@ -1244,3 +1244,185 @@ test('номера: старая карта соседа не теряется �
     'наша карта напечатана — её номер не меняется');
   db.close();
 });
+
+// ---------------------------------------------------------------------------
+// BRANCH_NUMBER_REMINT_V1, часть вторая (ревью Фазы 3, NEW-2 и NEW-1).
+//
+// Перечеканка чинила потерю документа, но сама заводила две беды, и обе видит
+// владелец:
+//
+//   NEW-2  номер не был УСТОЙЧИВЫМ. Решение пересчитывалось на каждом приезде
+//          от текущего состояния таблицы, а состояние движется: освободился
+//          местный номер — и чужая карта 'P-26-00001-C' схлопывалась обратно в
+//          'P-26-00001'. Номер, который человек уже видел, искал и печатал, не
+//          имеет права смениться.
+//   NEW-1  буква могла назвать НЕ ТО здание. Она бралась из метки, а метку
+//          чеканит собравший порцию: строку здания C, узнанную через здание R,
+//          подписывали буквой R. В сети из трёх зданий один и тот же счёт
+//          носил три разных номера.
+// ---------------------------------------------------------------------------
+
+/** Запись, которую нам ПЕРЕСЫЛАЕТ здание-посредник: дом строки — не отправитель. */
+const relayed = (tbl, uid, stamp, data, refs = {}, home = null, from = 'R') =>
+  ({ tbl, uid, op: 'put', stamp, data, refs, origin: from, ...(home ? { home } : {}) });
+
+test('номера: перечеканенный номер не возвращается назад, когда местный номер освободился', () => {
+  const db = fresh();
+  const mine = legacyInvoice(db, 'INV-26-00001');
+  const arrive = (stamp, status) => applyBatch(db, [
+    put('patients', 'p-c', stampAt(T0 + 1), { full_name: 'Соседский' }),
+    put('invoices', 'inv-c', stamp, {
+      invoice_number: 'INV-26-00001', subtotal: 65000, total_amount: 65000, status,
+    }, { patient_id: 'p-c' }),
+  ], S);
+
+  arrive(stampAt(T0 + 2), 'unpaid');
+  assert.equal(db.prepare("SELECT invoice_number FROM invoices WHERE uid = 'inv-c'").get().invoice_number,
+    'INV-26-00001-C', 'предпосылка: номер уже перечеканен и уже показан человеку');
+  assert.equal(db.prepare("SELECT value FROM sync_minted WHERE uid = 'inv-c'").get().value,
+    'INV-26-00001-C', 'решение записано, а не выводится заново каждый раз');
+
+  // Наш собственный счёт аннулировали и удалили — 'INV-26-00001' свободен.
+  db.prepare('DELETE FROM invoices WHERE id = ?').run(mine.id);
+  // Сосед присылает очередную правку той же строки — со своим прежним номером
+  // в снимке (у него он не менялся и не изменится).
+  arrive(stampAt(T0 + 9), 'paid');
+
+  const inv = db.prepare("SELECT invoice_number, status FROM invoices WHERE uid = 'inv-c'").get();
+  assert.equal(inv.status, 'paid', 'правка обязана примениться как обычно');
+  assert.equal(inv.invoice_number, 'INV-26-00001-C',
+    'номер напечатан на квитанции и лежит в поиске — он не меняется, даже когда «можно вернуть красивее»');
+  db.close();
+});
+
+test('номера: карта пациента так же не переименовывается задним числом', () => {
+  const db = fresh();
+  const ours = db.prepare("INSERT INTO patients (full_name, mrn) VALUES ('Наш','P-26-00001')").run().lastInsertRowid;
+  applyBatch(db, [put('patients', 'p-old', stampAt(T0 + 1), { full_name: 'Соседский', mrn: 'P-26-00001' })], S);
+  assert.equal(db.prepare("SELECT mrn FROM patients WHERE uid = 'p-old'").get().mrn, 'P-26-00001-C');
+
+  // Нашего пациента слили с дублем и удалили — номер карты освободился.
+  db.prepare('DELETE FROM patients WHERE id = ?').run(ours);
+  applyBatch(db, [put('patients', 'p-old', stampAt(T0 + 9),
+    { full_name: 'Соседский', mrn: 'P-26-00001', phone: '+998900000001' })], S);
+
+  const p = db.prepare("SELECT mrn, phone FROM patients WHERE uid = 'p-old'").get();
+  assert.equal(p.phone, '+998900000001', 'правка применилась');
+  assert.equal(p.mrn, 'P-26-00001-C', 'а номер карты — тот, который выдан и вписан в карту');
+  db.close();
+});
+
+test('номера: решение уходит вместе со строкой — заведённая заново строка чеканится с нуля', () => {
+  const db = fresh();
+  legacyInvoice(db, 'INV-26-00001');
+  applyBatch(db, [
+    put('patients', 'p-c', stampAt(T0 + 1), { full_name: 'Соседский' }),
+    put('invoices', 'inv-c', stampAt(T0 + 2), {
+      invoice_number: 'INV-26-00001', subtotal: 65000, total_amount: 65000, status: 'unpaid',
+    }, { patient_id: 'p-c' }),
+  ], S);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_minted').get().n, 1);
+  db.prepare("DELETE FROM invoices WHERE uid = 'inv-c'").run();
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_minted').get().n, 0,
+    'иначе строка с тем же uid получила бы номер из прошлой жизни');
+  db.close();
+});
+
+test('номера: буква — из здания, ГДЕ выписан документ, а не из того, кто его привёз', () => {
+  const db = fresh();
+  legacyInvoice(db, 'INV-26-00001');
+  db.prepare("INSERT INTO patients (full_name, mrn) VALUES ('Наш','P-26-00001')").run();
+  // Здание R пересылает нам работу здания C — так и выглядит холодный засев в
+  // сети из трёх домов: R отдаёт таблицы целиком, включая принятое от C.
+  const r = applyBatch(db, [
+    relayed('patients', 'p-c', stampAt(T0 + 1, 'R'), { full_name: 'Соседский', mrn: 'P-26-00001' }, {}, 'C'),
+    relayed('invoices', 'inv-c', stampAt(T0 + 2, 'R'), {
+      invoice_number: 'INV-26-00001', subtotal: 65000, total_amount: 65000, status: 'unpaid',
+    }, { patient_id: 'p-c' }, 'C'),
+  ], S);
+
+  assert.equal(r.refused, 0);
+  const inv = db.prepare("SELECT invoice_number, sync_origin FROM invoices WHERE uid = 'inv-c'").get();
+  assert.equal(inv.invoice_number, 'INV-26-00001-C', 'счёт выписан в C — его и называет буква');
+  assert.equal(inv.sync_origin, 'C',
+    'и «Здание» в отчёте, и подпись на карточке, и запрет правки читают ту же колонку');
+  assert.equal(db.prepare("SELECT mrn FROM patients WHERE uid = 'p-c'").get().mrn, 'P-26-00001-C');
+  db.close();
+});
+
+test('номера: сосед старой сборки дома не называет — всё остаётся как было', () => {
+  const db = fresh();
+  legacyInvoice(db, 'INV-26-00001');
+  // Ни поля home, ни знания о нём: буква берётся из метки, как до этой задачи.
+  const r = applyBatch(db, [
+    relayed('patients', 'p-c', stampAt(T0 + 1, 'R'), { full_name: 'Соседский' }),
+    relayed('invoices', 'inv-c', stampAt(T0 + 2, 'R'), {
+      invoice_number: 'INV-26-00001', subtotal: 65000, total_amount: 65000, status: 'unpaid',
+    }, { patient_id: 'p-c' }),
+  ], S);
+  assert.equal(r.refused, 0);
+  const inv = db.prepare("SELECT invoice_number, sync_origin FROM invoices WHERE uid = 'inv-c'").get();
+  assert.equal(inv.invoice_number, 'INV-26-00001-R');
+  assert.equal(inv.sync_origin, 'R');
+  db.close();
+});
+
+test('номера: приехавшая позже правильная буква номер уже не меняет', () => {
+  const db = fresh();
+  legacyInvoice(db, 'INV-26-00001');
+  // Сначала — пересылка от старого R, без дома: счёт лёг как '-R'.
+  applyBatch(db, [
+    relayed('patients', 'p-c', stampAt(T0 + 1, 'R'), { full_name: 'Соседский' }),
+    relayed('invoices', 'inv-c', stampAt(T0 + 2, 'R'), {
+      invoice_number: 'INV-26-00001', subtotal: 65000, total_amount: 65000, status: 'unpaid',
+    }, { patient_id: 'p-c' }),
+  ], S);
+  assert.equal(db.prepare("SELECT invoice_number FROM invoices WHERE uid = 'inv-c'").get().invoice_number,
+    'INV-26-00001-R');
+
+  // Теперь его доставляет САМО здание C, и дом назван верно.
+  applyBatch(db, [relayed('invoices', 'inv-c', stampAt(T0 + 9, 'C'), {
+    invoice_number: 'INV-26-00001', subtotal: 65000, total_amount: 65000, status: 'paid',
+  }, { patient_id: 'p-c' }, 'C', 'C')], S);
+
+  const inv = db.prepare("SELECT invoice_number, status FROM invoices WHERE uid = 'inv-c'").get();
+  assert.equal(inv.status, 'paid');
+  assert.equal(inv.invoice_number, 'INV-26-00001-R',
+    'буква неидеальна, но номер уже на бумаге: переименовать документ хуже, чем оставить букву маршрута');
+  db.close();
+});
+
+// ОТКАЗ БАЗЫ ПО УНИКАЛЬНОМУ КЛЮЧУ — путь, который перечеканка сузила, но не
+// закрыла. Проверять его надо: он единственный, на котором чужая работа
+// теряется НАСОВСЕМ (квитанция уезжает, сосед второй раз строку не шлёт), и
+// после C2 ни один тест по нему больше не ходил.
+test('номера: свободного варианта не нашлось — база отказывает, и отказ виден', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
+    .run(new Date().toISOString());
+  // Занят и сам номер, и ВСЕ REMINT_MAX_TRIES вариантов с буквой C.
+  const ins = db.prepare("INSERT INTO patients (full_name, mrn) VALUES ('Занято', ?)");
+  ins.run('P-26-00001');
+  for (let n = 1; n <= 99; n++) ins.run('P-26-00001-C' + (n === 1 ? '' : n));
+
+  const r = applyBatch(db, [
+    put('patients', 'p-x', stampAt(T0 + 1), { full_name: 'Соседский', mrn: 'P-26-00001' }),
+    put('patients', 'p-ok', stampAt(T0 + 2), { full_name: 'Здоровый', mrn: 'P-26-00777' }),
+  ], { ...S, peer: 'C', upto: 42 });
+
+  assert.equal(r.refused, 1, 'отказ базы считается отдельно от «пропущено»');
+  assert.equal(r.applied, 1, 'здоровая запись рядом применилась: одна кривая не отменяет порцию');
+  const row = db.prepare("SELECT tbl, uid, peer, err FROM sync_refused").get();
+  assert.equal(row.tbl, 'patients');
+  assert.equal(row.uid, 'p-x');
+  assert.equal(row.peer, 'C', 'видно, чей блоб её привёз');
+  assert.match(row.err, /UNIQUE|constraint/i, 'и что именно сказала база');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM patients WHERE uid = 'p-x'").get().n, 0,
+    'строка не встала — иначе отказ был бы не отказом');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_minted').get().n, 0,
+    'и памяти о номере, которого никто не видел, не осталось');
+  // Квитанция сдвигается ВСЁ РАВНО: иначе «ядовитая» строка повторялась бы в
+  // каждом блобе вечно.
+  assert.equal(db.prepare("SELECT recv_upto FROM sync_peers WHERE node = 'C'").get().recv_upto, 42);
+  db.close();
+});

@@ -837,3 +837,57 @@ test('BRANCH_NUMBER_REMINT_V1: засев не теряет счёт сосед�
 
   A.close(); B.close();
 });
+
+// ---------------------------------------------------------------------------
+// BRANCH_NUMBER_REMINT_V1 / NEW-1 (ревью Фазы 3) — ТРИ ЗДАНИЯ, И РАБОТА ЕДЕТ
+// ЧЕРЕЗ ПОСРЕДНИКА.
+//
+// Двух зданий этому дефекту мало: пока обмен прямой, «кто прислал» и «где
+// сделано» — одно и то же. Третье здание их разводит. R подключили раньше, он
+// принял историю C; потом подключили A, и весь массив C приезжает к A ЧЕРЕЗ R.
+// Метку порции чеканит собравший её — то есть R, — и до этой правки строка C
+// садилась у A как «филиал R»: так её называла карточка пациента, так её
+// считал отчёт по зданиям, такой буквой подписывался перечеканенный номер, и
+// таким же образом запрет правки отправлял бухгалтера не в то здание.
+// ---------------------------------------------------------------------------
+
+test('NEW-1: работа, приехавшая через третье здание, называет СВОЙ дом, а не маршрут', () => {
+  const A = standalone('A');
+  const R = standalone('R');
+  const C = standalone('C');
+  const ownR = paperworkFromBefore(R, 'Рахимов');
+  const ownC = paperworkFromBefore(C, 'Собиров');
+  paperworkFromBefore(A, 'Азизов');
+
+  // R подключили раньше: он принял всю историю C.
+  coldSeed(C, 'C', R, 'R');
+  assert.equal(R.prepare('SELECT sync_origin FROM invoices WHERE uid = ?').get(ownC.uid).sync_origin, 'C');
+
+  // Теперь подключают A — и массив C приезжает к нему ЧЕРЕЗ R.
+  const stats = coldSeed(R, 'R', A, 'A');
+  assert.equal(stats.refused, 0, 'отказ — это потерянные насовсем деньги');
+
+  const fromC = A.prepare('SELECT * FROM invoices WHERE uid = ?').get(ownC.uid);
+  const fromR = A.prepare('SELECT * FROM invoices WHERE uid = ?').get(ownR.uid);
+  assert.ok(fromC && fromR, 'доехать обязаны оба счёта');
+  assert.equal(fromC.sync_origin, 'C',
+    'счёт выписан в C — так его и обязан назвать отчёт, карточка и запрет правки');
+  assert.equal(fromR.sync_origin, 'R', 'а счёт самого посредника — как был');
+  assert.equal(A.prepare("SELECT sync_origin FROM patients WHERE full_name = 'Собиров'").get().sync_origin, 'C',
+    'пациента это касается ровно так же: буква стоит у него на карточке');
+
+  // И номер: буква называет здание, где документ выписан.
+  assert.equal(fromC.invoice_number, 'INV-26-00001-C');
+  assert.equal(fromR.invoice_number, 'INV-26-00001-R');
+
+  // ТЕПЕРЬ C ПОДКЛЮЧАЮТ К A НАПРЯМУЮ и он отдаёт ту же историю сам. Номер,
+  // который у A уже показан и найден поиском, не имеет права шевельнуться.
+  const direct = coldSeed(C, 'C', A, 'A');
+  assert.equal(direct.refused, 0);
+  const again = A.prepare('SELECT * FROM invoices WHERE uid = ?').get(ownC.uid);
+  assert.equal(again.invoice_number, 'INV-26-00001-C', 'тот же документ — тот же номер, каким бы маршрутом он ни пришёл');
+  assert.equal(A.prepare('SELECT COUNT(*) n FROM invoices').get().n, 3,
+    'счетов ровно три: свой, посредника и настоящего автора');
+
+  A.close(); R.close(); C.close();
+});
