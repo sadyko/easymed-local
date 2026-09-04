@@ -1321,9 +1321,9 @@ function renderCrumbs() {
         'Laboratory':            t('sidebar.nav.labs',         'Laboratory'),
         'Ward & beds':           t('sidebar.nav.beds',         'Ward & beds'),
         'Inpatient ward':        t('sidebar.nav.admissions',   'Inpatient ward'),   // ADMISSION_ORDER_V1
-        'Treatment tasks':       t('sidebar.nav.marNurse',     'Treatment tasks'),   // MAR_NURSE_V1
-        'Treatment sheet':       t('sidebar.nav.marSheet',     'Treatment sheet'),   // MAR_SHEET_V1
-        'Kitchen sheet':         t('sidebar.nav.kitchenSheet', 'Kitchen sheet'),   // KITCHEN_SHEET_V1
+        'Treatment tasks':       t('sidebar.nav.mar-nurse',     'Treatment tasks'),   // MAR_NURSE_V1
+        'Treatment sheet':       t('sidebar.nav.mar-sheet',     'Treatment sheet'),   // MAR_SHEET_V1
+        'Kitchen sheet':         t('sidebar.nav.kitchen-sheet', 'Kitchen sheet'),   // KITCHEN_SHEET_V1
         'Discharges':            t('sidebar.nav.discharge',    'Discharges'),   // TWO_STEP_DISCHARGE_V1
         'Pharmacy':              t('sidebar.nav.pharmacy',     'Pharmacy'),
         'Cashier':               t('sidebar.nav.cashier',      'Cashier'),

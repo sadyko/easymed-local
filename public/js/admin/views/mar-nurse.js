@@ -45,6 +45,19 @@
 // Причина обязательна и здесь, и снятие оставляет след (кто снял, когда,
 // почему) — окно даёт СКОРОСТЬ, а не тишину.
 
+// ─── ПИТАНИЕ — ЗДЕСЬ ЖЕ, НО НИЖЕ ЛЕКАРСТВ ───────────────────────────────────
+//
+// Приёмы пищи медсестра отмечает «как выдачу препарата» (Задача 7 плана), и
+// отмечать их она должна ТАМ, ГДЕ УЖЕ РАБОТАЕТ. Отдельный экран «Питание»
+// означал бы третий список тех же людей, в который она зайдёт в лучшем случае
+// вечером и заполнит по памяти — то есть напишет неправду.
+//
+// Но полоса питания стоит НИЖЕ четырёх групп назначений и мельче их, и это не
+// вкус: на этом экране безопасность — лекарства. Съеденный или несъеденный
+// обед — важная запись; пропущенный антибиотик — вред пациенту. Как только
+// питание получит здесь ту же величину, что доза, экран перестанет отвечать на
+// вопрос «что сделать прямо сейчас» одним взглядом.
+//
 // ─── «5 ПРАВ» ───────────────────────────────────────────────────────────────
 //
 // Подтверждение показывает пять вещей крупно — пациент, препарат, доза, путь
@@ -58,6 +71,10 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { isModuleAllowed } from '../permissions.js';
 import { inpatientModal } from './admission-modal.js?v=inp5';
 import { todayLocal, hhmm, cellStateLabel } from './mar-sheet.js?v=inp5';
+// DIET_TABLES_V1 — названия приёмов пищи и отметок берутся у порционника: три
+// копии одного списка разошлись бы молча, и «Полдник» здесь перестал бы быть
+// «Полдником» на кухне.
+import { mealTitle, mealStatusTitle, mealStatusTone, mealsTitle, MEAL_STATUS_OPTIONS } from './kitchen-sheet.js';
 
 export function canOpenMarNurse() {
     return isModuleAllowed('mar-nurse');
@@ -461,6 +478,10 @@ export async function renderMarNurse(root, ctx = {}) {
     const state = {
         date: todayLocal(), wardId: '', wards: [],
         due: null, allergies: new Map(), selected: null,
+        // Питание выбранного пациента на выбранный день (admission_meals_list).
+        // Спрашивается по ОДНОМУ человеку, а не по отделению: полоса стоит в
+        // карточке выбранного, и лист на всех был бы запросом впрок.
+        meals: null,
     };
 
     const wrap = h('div', { class: 'fade-in' });
@@ -502,6 +523,18 @@ export async function renderMarNurse(root, ctx = {}) {
         } catch (e) { /* без карты аллергий экран работает, но баннера не будет */ }
     }
 
+    // Питание грузится ОТДЕЛЬНЫМ запросом и его отказ не роняет смену: экран
+    // медсестры существует ради доз, и «не удалось прочитать обед» не имеет
+    // права стереть с него лист назначений.
+    async function loadMeals() {
+        state.meals = null;
+        if (!state.selected) return;
+        const { data } = await supabase.rpc('admission_meals_list', {
+            admission_id: state.selected, meal_date: state.date,
+        });
+        if (data && Array.isArray(data.meals)) state.meals = data;
+    }
+
     async function load() {
         clear(body);
         body.appendChild(h('div', { class: 'muted', style: { padding: '18px', fontSize: '13.5px' } }, tr('Загрузка…')));
@@ -522,6 +555,7 @@ export async function renderMarNurse(root, ctx = {}) {
         if (!people.some((p) => p.admission_id === state.selected)) {
             state.selected = people.length ? people[0].admission_id : null;
         }
+        await loadMeals();
         paint(people);
     }
 
@@ -551,7 +585,16 @@ export async function renderMarNurse(root, ctx = {}) {
                     background: active ? 'var(--primary-25, #f2faf8)' : 'transparent',
                     cursor: 'pointer', font: 'inherit',
                 },
-                onclick: () => { state.selected = p.admission_id; paint(people); },
+                // Список перерисовывается СРАЗУ (выбор человека обязан быть
+                // мгновенным), а полоса питания догружается и перерисовывает
+                // себя следом: ждать сервер, чтобы подсветить строку, — значит
+                // заставить медсестру нажать второй раз.
+                onclick: () => {
+                    state.selected = p.admission_id;
+                    state.meals = null;
+                    paint(people);
+                    loadMeals().then(() => paint(people));
+                },
             },
                 h('span', {
                     style: {
@@ -607,9 +650,85 @@ export async function renderMarNurse(root, ctx = {}) {
             box.appendChild(card);
         }
 
+        // Питание — ПОСЛЕ работы с лекарствами и ДО списка сделанного.
+        box.appendChild(mealsCard(people, p));
+
         const done = tasks.done || [];
         if (done.length) box.appendChild(doneCard(done, p));
         return box;
+    }
+
+    /**
+     * Полоса приёмов пищи на сегодня: по строке на приём, положенный разовостью
+     * питания этого пациента (её разворачивает сервер, admission_meals_list —
+     * «какие приёмы входят в 5-разовое» это факт диетологии, а не свойство
+     * массива).
+     *
+     * Отметка ставится ОДНИМ выбором из списка, без окна подтверждения. Это
+     * сознательная разница с дозой: «5 прав» существуют потому, что неверный
+     * препарат вредит пациенту, а неверно отмеченный полдник исправляется
+     * следующим нажатием — и второй экран подтверждения на каждый из пяти
+     * приёмов пищи привёл бы к тому, что не отмечали бы вовсе.
+     */
+    function mealsCard(people, p) {
+        const card = h('div', { class: 'card' },
+            h('div', { class: 'card-header' },
+                h('h3', null, tr('Питание сегодня')),
+                h('span', { style: { flex: 1 } }),
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } }, dietLine(state.meals))));
+
+        const data = state.meals;
+        if (!data || !data.meals.length) {
+            card.appendChild(h('div', { class: 'muted', style: { padding: '14px 16px', fontSize: '12.5px' } },
+                tr('Лист питания не загружен.')));
+            return card;
+        }
+
+        for (const m of data.meals) {
+            const status = (m.mark && m.mark.status) || 'waiting';
+            const sel = h('select', { class: 'input' },
+                h('option', { value: '' }, tr('Отметить…')),
+                ...MEAL_STATUS_OPTIONS.map(([v, l]) => h('option', { value: v }, tr(l))));
+            sel.addEventListener('change', async () => {
+                const value = sel.value;
+                if (!value) return;
+                sel.disabled = true;
+                const { error } = await supabase.rpc('admission_meal_mark', {
+                    admission_id: p.admission_id, meal_date: data.meal_date,
+                    meal_key: m.meal_key, status: value,
+                });
+                if (error) {
+                    // Слова сервера, а не пересказ: отказ «пациент выписан»
+                    // объясняет медсестре, что произошло, а «не удалось» — нет.
+                    toast(error.message || tr('Не удалось отметить приём пищи.'), 'fail');
+                    sel.disabled = false;
+                    sel.value = '';
+                    return;
+                }
+                await loadMeals();
+                paint(people);
+            });
+            card.appendChild(h('div', {
+                style: {
+                    display: 'flex', alignItems: 'center', gap: '12px',
+                    padding: '9px 16px', borderTop: '1px solid var(--ink-100)', flexWrap: 'wrap',
+                },
+            },
+                h('div', { style: { fontSize: '13.5px', fontWeight: 700, minWidth: '128px' } }, mealTitle(m.meal_key)),
+                h('div', { style: { flex: 1, minWidth: '120px' } },
+                    Tag(mealStatusTitle(status), { kind: mealStatusTone(status), dot: status !== 'waiting' })),
+                h('div', { style: { flex: '0 1 190px' } }, sel)));
+        }
+        return card;
+    }
+
+    /** «Стол №9 · 5-разовое» в шапке полосы — или прямое «Стол не назначен». */
+    function dietLine(data) {
+        if (!data) return '';
+        const diet = data.diet_code
+            ? trf('Стол №{code}', { code: data.diet_code })
+            : tr('Стол не назначен');
+        return data.meals_per_day ? [diet, mealsTitle(data.meals_per_day)].join(' · ') : diet;
     }
 
     // «Сделано за смену» — список, из которого снимают промах. Он идёт ПОСЛЕДНИМ

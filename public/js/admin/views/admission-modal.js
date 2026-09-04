@@ -30,6 +30,8 @@
 //                              открываются назначения.
 //   openAdmissionDischargeRequestModal / openAdmissionDischargeCancelModal —
 //                              ЗАЯВКА НА ВЫПИСКУ и её отзыв (Задача 8, ШАГ 1).
+//   openAdmissionDietModal   — ЛЕЧЕБНЫЙ СТОЛ (Задача 7): выбор стола из
+//                              справочника, разовость питания и примечание.
 //
 // Все шесть — вокруг ОДНОГО источника правды: RPC `admission_order_create`,
 // `admission_admit`, `admission_order_cancel`, `admission_review_save`,
@@ -44,13 +46,17 @@
 
 import { supabase } from '../../supabase.js';
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
-import { h, Icon, Tag, toast, clear, field, fmtDateTime, initials } from '../ui.js';
+import { h, Icon, Tag, toast, clear, field, fmtDate, fmtDateTime, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 // TWO_STEP_DISCHARGE_V1 — исход госпитализации спрашивают ЗДЕСЬ (врач подаёт
 // заявку) и показывают ТАМ (очередь оформления). Список и подписи берутся из
 // экрана очереди, а не заводятся вторые: разойдись они, один экран называл бы
 // исход словом, которого другой не знает.
 import { DISCHARGE_OUTCOMES, outcomeTitle } from './discharge.js';
+// DIET_TABLES_V1 — словарь питания берётся у порционника, а не заводится второй
+// раз здесь: «Стол не назначен» в карте и «Стол не назначен» на кухне обязаны
+// быть одной строкой, иначе они разъедутся в переводе, а потом и по смыслу.
+import { dietTitle, mealsTitle, MEAL_FREQUENCIES } from './kitchen-sheet.js';
 
 const ADMISSION_TYPES = [['planned', 'Плановая'], ['emergency', 'Экстренная']];
 const STAY_MODES = [['round', 'Круглосуточно'], ['day', 'Дневной стационар']];
@@ -381,7 +387,7 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
         h('span', { class: 'muted' }, k), h('span', { style: { fontWeight: 600, textAlign: 'right' } }, v || '—'));
 
     (async () => {
-        const [admR, flowR, capsR] = await Promise.all([
+        const [admR, flowR, capsR, dietR] = await Promise.all([
             supabase.from('admissions')
                 // КТО ОСМОТРЕЛ и КТО ЛЕЧИТ — два разных человека и два разных
                 // JOIN'а на users в одной строке (алиасные embed'ы, реестр
@@ -399,6 +405,12 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
             // браузере по названию роли — та самая вторая копия матрицы, из-за
             // которой кнопка появляется у того, кому сервер откажет.
             supabase.rpc('inpatient_capabilities', {}),
+            // DIET_TABLES_V1 — СТОЛ ЕДЕТ ВМЕСТЕ С КАРТОЙ, а не догружается по
+            // нажатию: врач, открывший карту своего пациента, обязан увидеть,
+            // чем его кормят, тем же взглядом, каким видит лечащего врача и
+            // диагноз. Отдельная кнопка «показать стол» означала бы, что
+            // назначенный стол никто не перечитывает.
+            supabase.rpc('admission_diet_history', { admission_id: admissionId }),
         ]);
         clear(body);
         if (admR.error || !admR.data) {
@@ -439,6 +451,26 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
             a.discharge_destination ? kv(tr('Куда переведён'), a.discharge_destination) : null,
             a.status === 'discharged' && a.discharged_at ? kv(tr('Выписан'), fmtDateTime(a.discharged_at)) : null,
         ));
+
+        // DIET_TABLES_V1 — стол СРАЗУ ПОД фактами госпитализации и НАД шагами
+        // маршрута: это не действие, а состояние пациента — такое же, как
+        // палата и лечащий врач.
+        const dietBox = h('div');
+        body.appendChild(dietBox);
+        const paintDiet = (data) => {
+            clear(dietBox);
+            const el = dietSection(a, data, reloadDiet);
+            if (el) dietBox.appendChild(el);
+        };
+        async function reloadDiet() {
+            const r = await supabase.rpc('admission_diet_history', { admission_id: admissionId });
+            paintDiet((r && r.data) || null);
+            if (onChange) await onChange();
+        }
+        // Право читать стол есть не у всех, кто открывает карту (регистратура
+        // его не видит — READ_ROLES в rpc/diet.js). Отказ здесь не ломает
+        // карточку и не кричит: блока просто нет.
+        paintDiet((dietR && dietR.data) || null);
 
         const actions = h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } });
         if (can.admitted) {
@@ -508,6 +540,193 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
         if (actions.children.length) body.appendChild(actions);
         else body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
             tr('Следующий шаг маршрута делает другая роль.')));
+    })();
+}
+
+// ---------------------------------------------------------------------------
+// 4б. ЛЕЧЕБНЫЙ СТОЛ (DIET_TABLES_V1, Задача 7)
+// ---------------------------------------------------------------------------
+// СЕРВЕР ЭТО УМЕЛ, А НАЖАТЬ БЫЛО НЕГДЕ. Пять RPC (rpc/diet.js) написаны и
+// покрыты тестами, порционник печатается — и при этом ни один стол в системе
+// никогда не был назначен: у admission_diet_set не было ни одного вызывающего.
+// Кухня получала «Стол не назначен» на КАЖДОГО пациента навсегда. Это тот же
+// род дыры, что и экран выписок без пункта меню: части работали, целого не
+// было.
+//
+// СТОЛ ЖИВЁТ В КАРТЕ ГОСПИТАЛИЗАЦИИ, а не на отдельном экране, и это решение о
+// месте. Стол назначают, глядя на диагноз, — то есть там же, где диагноз
+// написан. Отдельный экран «Лечебные столы» заставил бы врача искать своего
+// пациента во втором списке, а лишний поиск — ровно то, чего отделение не
+// делает: оно скажет стол медсестре голосом, и на кухню он не попадёт.
+//
+// ИСТОРИЯ НА ВИДУ, А НЕ ПОД «ПОДРОБНЕЕ». Таблица admission_diets заведена
+// историей (одна строка — один период) ради одного вопроса: с какого дня
+// пациент на девятом столе. Спрятанная под раскрывашку история отвечает на
+// него только тому, кто заранее знает, что она там есть.
+//
+// ПО УМОЛЧАНИЮ СТОЛА НЕТ — решение владельца от 2026-09-04. Госпитализация не
+// получает стол автоматически: «Стол не назначен» в порционнике — не пустое
+// место, а вопрос кухни отделению, и подставлять вместо него общий
+// пятнадцатый значило бы ответить на него молча и наугад.
+
+/** «назначен 4 сентября 2026 г., 16:14 · Каримов Р.» — кто нажал и когда. */
+export function dietAuthorLine(row) {
+    if (!row) return '';
+    const who = String(row.assigned_by_name || '').trim();
+    const when = fmtDateTime(row.since);
+    return who ? trf('назначен {when} · {who}', { when, who }) : trf('назначен {when}', { when });
+}
+
+/**
+ * Период строки истории. Закрытый — с датой конца, действующий — словом
+ * «действует»: пустое место на месте конца читается как потерянные данные.
+ */
+export function dietPeriodLine(row) {
+    if (!row) return '';
+    const from = fmtDate(row.since);
+    return row.ended_at
+        ? trf('{from} — {to}', { from, to: fmtDate(row.ended_at) })
+        : trf('с {from}, действует', { from });
+}
+
+/**
+ * Блок «стол» в карточке госпитализации: действующий стол, кто его назначил,
+ * кнопка смены и вся история периодов.
+ *
+ * ПРАВО НА КНОПКУ СЧИТАЕТ СЕРВЕР. `can_set` приходит из admission_diet_history
+ * и посчитан ТОЙ ЖЕ функцией, которой admissionDietSet потом откажет
+ * (assertCanSetDiet в rpc/diet.js): она проверяет и роль, и то, что пациент
+ * дошёл до лечения. Своей копии этих двух правил здесь нет намеренно — та же
+ * причина, по которой заявку на выписку рисует ответ inpatient_capabilities, а
+ * не название роли: вторая копия матрицы разошлась бы с первой молча.
+ *
+ * @returns {Node|null} null, когда сервер вообще не дал прочитать стол
+ */
+export function dietSection(admission, data, onChange) {
+    if (!data) return null;
+    const current = data.current || null;
+    const history = Array.isArray(data.history) ? data.history : [];
+
+    const head = h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' } },
+        h('div', { style: { fontSize: '17px', fontWeight: 800, color: 'var(--ink-900)' } }, dietTitle(current)),
+        current ? Tag(mealsTitle(current.meals_per_day)) : null,
+        h('span', { style: { flex: 1 } }),
+        data.can_set === true
+            ? h('button', {
+                class: 'btn btn-sm', type: 'button',
+                onclick: () => openAdmissionDietModal({ admission, current, onDone: onChange }),
+            }, Icon('Doc', { size: 13 }), ' ', tr('Сменить стол'))
+            : null);
+
+    const lines = [];
+    if (current) {
+        lines.push(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, dietAuthorLine(current)));
+        if (current.diet_indication) {
+            lines.push(h('div', { style: { fontSize: '13.5px' } }, current.diet_indication));
+        }
+        if (current.note) {
+            lines.push(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, current.note));
+        }
+    } else {
+        lines.push(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+            tr('Кухня кормит и без назначения, но в порционнике этот пациент так и стоит строкой «Стол не назначен».')));
+    }
+
+    // ИСТОРИЯ ЦЕЛИКОМ, включая действующий период: «стол №9» без даты, с
+    // которой пациент на нём, не отвечает ни на один вопрос, ради которого
+    // стол вообще записывают.
+    const historyBox = history.length
+        ? h('div', { style: { display: 'grid', gap: '5px', borderTop: '1px solid var(--ink-100)', paddingTop: '9px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700 } }, tr('История стола')),
+            ...history.map((r) => h('div', {
+                style: { display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: '12.5px', flexWrap: 'wrap' },
+            },
+                h('span', { style: { fontWeight: 600 } }, dietTitle(r)),
+                h('span', { class: 'muted', style: { textAlign: 'right' } },
+                    [dietPeriodLine(r), String(r.assigned_by_name || '').trim() || null].filter(Boolean).join(' · ')))))
+        : null;
+
+    return h('div', { class: 'card', style: { padding: '12px 14px', display: 'grid', gap: '8px' } },
+        head, ...lines, historyBox);
+}
+
+/**
+ * Выбор стола. Список — из справочника (diet_tables_list), с ПОКАЗАНИЕМ под
+ * каждым номером: врач выбирает стол по диагнозу, и голый список номеров
+ * заставляет держать таблицу Певзнера в голове.
+ *
+ * Разовость и примечание спрашиваются здесь же, потому что меняются вместе со
+ * столом и по тем же поводам (одна строка admission_diets — один период).
+ */
+export function openAdmissionDietModal({ admission, current = null, onDone } = {}) {
+    if (!admission || !admission.id) { toast(tr('Госпитализация не найдена.'), 'fail'); return; }
+    const p = admission.patients || {};
+    let chosen = current ? String(current.diet_code) : '';
+
+    const list = h('div', {
+        style: {
+            display: 'grid', gap: '2px', maxHeight: '260px', overflowY: 'auto',
+            border: '1px solid var(--ink-100)', borderRadius: '11px', padding: '4px',
+        },
+    }, h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '8px' } }, tr('Загрузка…')));
+
+    const mealsSel = h('select', null, ...MEAL_FREQUENCIES.map((n) => h('option', { value: String(n) }, mealsTitle(n))));
+    mealsSel.value = String((current && current.meals_per_day) || 4);
+    const noteInp = h('input', { type: 'text', placeholder: 'Например: без соли, дробно' });
+    noteInp.value = current ? String(current.note || '') : '';
+
+    const paint = (diets) => {
+        clear(list);
+        for (const d of diets) {
+            const row = h('button', {
+                type: 'button',
+                style: {
+                    display: 'block', width: '100%', textAlign: 'left', border: '0', borderRadius: '9px',
+                    padding: '9px 11px', cursor: 'pointer', font: 'inherit',
+                    background: String(d.code) === chosen ? 'var(--primary-25, #f2faf8)' : 'transparent',
+                },
+            },
+                h('span', { style: { display: 'block', fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } },
+                    d.name || d.code || ''),
+                d.indication
+                    ? h('span', { class: 'muted', style: { display: 'block', fontSize: '12.5px' } }, d.indication)
+                    : null);
+            row.addEventListener('click', () => { chosen = String(d.code); paint(diets); });
+            list.appendChild(row);
+        }
+    };
+
+    modal(tr('Лечебный стол'), 'Doc', [
+        patientAnchor(p.full_name || '', [p.mrn, admission.admission_no].filter(Boolean).join(' · ')),
+        list,
+        field(tr('Разовость питания'), mealsSel),
+        field(tr('Примечание для кухни'), noteInp),
+        h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+            tr('Прежний стол не стирается: его период закрывается, и оба остаются в истории госпитализации.')),
+    ], tr('Назначить стол'), async () => {
+        if (!chosen) { toast(tr('Выберите стол.'), 'fail'); return false; }
+        const { error } = await supabase.rpc('admission_diet_set', {
+            admission_id: admission.id,
+            diet_code: chosen,
+            meals_per_day: Number(mealsSel.value),
+            note: noteInp.value.trim(),
+        });
+        if (error) { toast(error.message || tr('Не удалось назначить стол.'), 'fail'); return false; }
+        toast(tr('Стол назначен — он появится в порционнике на сегодня.'), 'ok');
+        if (onDone) await onDone();
+        return true;
+    }, { width: 560 });
+
+    (async () => {
+        const { data, error } = await supabase.rpc('diet_tables_list', {});
+        const diets = (data && data.diets) || [];
+        clear(list);
+        if (error || !diets.length) {
+            list.appendChild(h('div', { class: 'empty', style: { padding: '18px' } },
+                tr('Справочник столов пуст — заведите столы в настройках.')));
+            return;
+        }
+        paint(diets);
     })();
 }
 

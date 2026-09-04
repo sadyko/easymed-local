@@ -221,6 +221,40 @@ test('несуществующий и погашенный стол назнач
   db.close();
 });
 
+// ─── 3б. Право на смену стола едет вместе с историей ────────────────────────
+//
+// Карта госпитализации рисует кнопку «Сменить стол» по этому флагу, и считает
+// его ТА ЖЕ функция, которой admissionDietSet потом откажет. Своей копии двух
+// правил (роль + шаг маршрута) в браузере нет намеренно: вторая копия матрицы
+// разошлась бы с первой молча, и кнопка появилась бы у того, кому сервер
+// откажет, — то есть программа пообещала бы то, чего не делает.
+
+test('can_set в истории совпадает с тем, что сервер РАЗРЕШИТ: по ролям', () => {
+  const db = oneActive();
+  for (const who of ['doctor', 'head_doctor', 'senior_nurse', 'admin']) {
+    assert.equal(admissionDietHistory(db, { admission_id: 1 }, ACTOR[who]).can_set, true, who);
+  }
+  // Обычная медсестра читать стол ВПРАВЕ, менять — нет: кнопки у неё быть не
+  // должно, а сам стол она видеть обязана.
+  assert.equal(admissionDietHistory(db, { admission_id: 1 }, ACTOR.nurse).can_set, false);
+  db.close();
+});
+
+test('can_set гаснет там же, где отказывает admissionDietSet: маршрут и выписка', () => {
+  const db = seed();
+  admission(db, { id: 1, patient: 1, bed: 1, ward: 1, status: 'admitted' });
+  admission(db, { id: 2, patient: 2, bed: 2, ward: 1, status: 'active' });
+  admission(db, { id: 3, patient: 3, bed: 3, ward: 2, status: 'discharged' });
+
+  for (const id of [1, 3]) {
+    assert.equal(admissionDietHistory(db, { admission_id: id }, ACTOR.doctor).can_set, false, 'id ' + id);
+    assert.throws(() => admissionDietSet(db, { admission_id: id, diet_code: '9' }, ACTOR.doctor),
+      (e) => e instanceof RpcError, 'флаг и отказ обязаны сходиться, id ' + id);
+  }
+  assert.equal(admissionDietHistory(db, { admission_id: 2 }, ACTOR.doctor).can_set, true);
+  db.close();
+});
+
 // ─── 4. Отметка приёма пищи ─────────────────────────────────────────────────
 
 test('отметка идемпотентна: повтор перезаписывает свою строку', () => {

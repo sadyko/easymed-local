@@ -42,6 +42,13 @@ const I18N = {
                 'docs-archive': 'Documents',
                 'cashier-shifts': 'Cashier',
                 pacs:         'Imaging · PACS',
+                // INPATIENT_NAV_KEYS_V1 — the key IS the nav id (admin.js asks
+                // for 'sidebar.nav.' + item.id). Camel-cased keys — marNurse,
+                // marSheet, kitchenSheet — matched nothing, so these three
+                // rendered their English fallback inside the Russian sidebar.
+                'mar-nurse':     'Treatment tasks',   // MAR_NURSE_V1
+                'mar-sheet':     'Treatment sheet',   // MAR_SHEET_V1
+                'kitchen-sheet': 'Kitchen sheet',   // KITCHEN_SHEET_V1
                 discharge:    'Discharges',   // TWO_STEP_DISCHARGE_V1
             },
             logout: 'Log out',
@@ -125,6 +132,9 @@ const I18N = {
                 'docs-archive': 'Документы',
                 'cashier-shifts': 'Касса',
                 pacs:         'Снимки · PACS',
+                'mar-nurse':     'Задачи медсестры',   // MAR_NURSE_V1
+                'mar-sheet':     'Лист назначений',   // MAR_SHEET_V1
+                'kitchen-sheet': 'Порционник',   // KITCHEN_SHEET_V1
                 discharge:    'Выписки',   // TWO_STEP_DISCHARGE_V1
             },
             logout: 'Выйти',
@@ -209,6 +219,9 @@ const I18N = {
                 'docs-archive': 'Hujjatlar',
                 'cashier-shifts': 'Kassa',
                 pacs:         'Tasvirlar · PACS',
+                'mar-nurse':     'Hamshira vazifalari',   // MAR_NURSE_V1
+                'mar-sheet':     'Tayinlovlar varaqasi',   // MAR_SHEET_V1
+                'kitchen-sheet': 'Porsiyalar varaqasi',   // KITCHEN_SHEET_V1
                 discharge:    'Chiqarishlar',   // TWO_STEP_DISCHARGE_V1
             },
             logout: 'Chiqish',

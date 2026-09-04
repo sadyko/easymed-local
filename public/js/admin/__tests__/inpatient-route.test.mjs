@@ -14,8 +14,10 @@
 //   медсестра     → положить на койку        (окно «Стационар»)
 //   главный врач  → первичный осмотр         → и сразу лечащий врач
 //   лечащий врач  → назначение               (лист назначений)
+//   лечащий врач  → ЛЕЧЕБНЫЙ СТОЛ            (карта госпитализации)
 //   медсестра     → отметка дозы «5 прав»    (задачи медсестры)
-//   кухня         → порционник видит пациента
+//                 → и отметка приёма пищи    (там же, полосой ниже)
+//   кухня         → порционник видит пациента НА НАЗНАЧЕННОМ СТОЛЕ
 //   лечащий врач  → ЗАЯВКА НА ВЫПИСКУ        (карта госпитализации)
 //   ст. медсестра → оформление выписки       (экран «Выписки к оформлению»)
 //
@@ -107,6 +109,10 @@ const settle = () => new Promise((r) => setTimeout(r, 30));
 
 // ─── правá берём у СЕРВЕРА, а не переписываем ──────────────────────────────
 const { TRANSITION_ROLES, inpatientCapabilities } = await import('../../../../server/services/rpc/inpatient-flow.js');
+// DIET_TABLES_V1 — список ролей, которым можно менять стол, и правило «какие
+// приёмы входят в N-разовое питание» тоже берутся у сервера: переписанные
+// здесь, они перестали бы падать в тот день, когда их поправят там.
+const { SET_ROLES: DIET_SET_ROLES, mealsForFrequency } = await import('../../../../server/services/rpc/diet.js');
 
 function flowCan(status, roles) {
     const can = {};
@@ -152,8 +158,24 @@ const WORLD = {
     reviews: [],
     orders: [],
     marks: [],
-    nextId: { admission: 500, review: 600, order: 700, mark: 800 },
+    diets: [],
+    meals: [],
+    nextId: { admission: 500, review: 600, order: 700, mark: 800, diet: 900 },
 };
+
+// Четыре стола из настоящего справочника (миграция 094) — маршруту хватает
+// четырёх. Что справочник Певзнера полон и что №12 в нём нет, проверяет
+// admission-diet.test.mjs на настоящей базе, а не этот файл.
+const DIET_TABLES = [
+    { code: '0', name: 'Стол №0 — хирургический (зондовый)', indication: 'Первые дни после операций на ЖКТ', active: 1, sort_order: 0 },
+    { code: '5', name: 'Стол №5', indication: 'Болезни печени и желчевыводящих путей', active: 1, sort_order: 5 },
+    { code: '9', name: 'Стол №9', indication: 'Сахарный диабет; контроль углеводов', active: 1, sort_order: 9 },
+    { code: '15', name: 'Стол №15 — общий', indication: 'Общий стол без ограничений', active: 1, sort_order: 15 },
+];
+
+/** Действующий стол госпитализации — строка с ended_at === null, или null. */
+const currentDiet = (admissionId) =>
+    WORLD.diets.find((d) => d.admission_id === admissionId && d.ended_at === null) || null;
 let rpcCalls = [];
 
 const adm = () => WORLD.admissions[0];
@@ -313,6 +335,74 @@ function rpcAnswer(name, a) {
             return { ok: true, data: { administration: mark, already: false, warnings: [] } };
         }
 
+        // ── Лечебный стол (Задача 7) ─────────────────────────────────────────
+        case 'diet_tables_list':
+            return { ok: true, data: { diets: DIET_TABLES.filter((d) => d.active) } };
+
+        case 'admission_diet_set': {
+            const row = adm();
+            // ПРАВО — по серверному списку ролей, а не по названию экрана.
+            if (!DIET_SET_ROLES.includes(actor.role)) {
+                return { ok: false, message: 'Назначение стола — недоступно вашей роли.' };
+            }
+            if (!['active', 'discharging'].includes(row.status)) {
+                return { ok: false, message: 'Лечащий врач ещё не назначен.' };
+            }
+            const table = DIET_TABLES.find((t) => t.code === a.diet_code);
+            if (!table) return { ok: false, message: `Стол не найден: ${a.diet_code}.` };
+            // Смена НЕ ПРАВИТ строку: закрывает период и открывает новый.
+            const prev = currentDiet(row.id);
+            const at = new Date().toISOString();
+            if (prev) prev.ended_at = at;
+            const d = {
+                id: ++WORLD.nextId.diet, admission_id: row.id, diet_code: table.code,
+                since: at, ended_at: null,
+                assigned_by: actor.id, assigned_by_name: actor.full_name,
+                note: a.note || '', meals_per_day: Number(a.meals_per_day) || 4,
+                diet_name: table.name, diet_indication: table.indication,
+            };
+            WORLD.diets.push(d);
+            return { ok: true, data: { diet: d, previous: prev, changed: true } };
+        }
+
+        case 'admission_diet_history': {
+            const row = adm();
+            const rows = WORLD.diets.filter((d) => d.admission_id === row.id).slice().reverse();
+            return {
+                ok: true,
+                data: {
+                    admission_id: row.id,
+                    current: rows.find((d) => d.ended_at === null) || null,
+                    history: rows,
+                    can_set: DIET_SET_ROLES.includes(actor.role) && ['active', 'discharging'].includes(row.status),
+                },
+            };
+        }
+
+        case 'admission_meals_list': {
+            const row = adm();
+            const cur = currentDiet(row.id);
+            const marks = WORLD.meals.filter((m) => m.admission_id === row.id);
+            return {
+                ok: true,
+                data: {
+                    admission_id: row.id, meal_date: a.meal_date || TODAY,
+                    diet_code: cur ? cur.diet_code : null,
+                    meals_per_day: cur ? cur.meals_per_day : null,
+                    meals: mealsForFrequency(cur ? cur.meals_per_day : 4)
+                        .map((key) => ({ meal_key: key, mark: marks.find((m) => m.meal_key === key) || null })),
+                },
+            };
+        }
+
+        case 'admission_meal_mark': {
+            const row = adm();
+            let m = WORLD.meals.find((x) => x.admission_id === row.id && x.meal_key === a.meal_key);
+            if (!m) { m = { admission_id: row.id, meal_date: a.meal_date, meal_key: a.meal_key }; WORLD.meals.push(m); }
+            m.status = a.status; m.marked_by = actor.id;
+            return { ok: true, data: { meal: m } };
+        }
+
         case 'kitchen_sheet': {
             const rows = WORLD.admissions
                 .filter((r) => ['admitted', 'examined', 'active', 'discharging'].includes(r.status))
@@ -320,13 +410,18 @@ function rpcAnswer(name, a) {
                     const p = WORLD.patients.find((x) => x.id === r.patient_id) || {};
                     const bed = WORLD.beds.find((b) => b.id === r.bed_id) || {};
                     const ward = WORLD.wards.find((w) => w.id === r.ward_id) || {};
+                    const d = currentDiet(r.id);
                     return {
                         admission_id: r.id, ward_id: ward.id, ward_name: ward.name, bed_code: bed.code,
-                        patient_name: p.full_name, diet_code: null, diet_name: null,
-                        meals_per_day: null, diet_note: '',
+                        patient_name: p.full_name,
+                        diet_code: d ? d.diet_code : null,
+                        diet_name: d ? d.diet_name : null,
+                        meals_per_day: d ? d.meals_per_day : null,
+                        diet_note: d ? d.note : '',
                     };
                 });
-            return { ok: true, data: { date: a.date || TODAY, rows, totals: [], total_portions: rows.length } };
+            const totals = rows.map((r) => ({ diet_code: r.diet_code, diet_name: r.diet_name, portions: 1 }));
+            return { ok: true, data: { date: a.date || TODAY, rows, totals, total_portions: rows.length } };
         }
 
         // ── ШАГ 1 выписки: заявка врача ──────────────────────────────────────
@@ -588,6 +683,38 @@ test('маршрут стационара проходится целиком: �
         assert.equal(WORLD.orders.length, 1);
     });
 
+    await t.test('лечащий врач назначает стол в карте своего пациента', async () => {
+        // ЭТОГО ШАГА В ПРОГРАММЕ НЕ БЫЛО. Пять RPC стола были написаны и покрыты
+        // тестами, порционник печатался — и ни у одного из них не было
+        // вызывающего: кухня получала «Стол не назначен» на каждого пациента
+        // навсегда. Здесь шаг делается ровно тем нажатием, каким его делает врач.
+        beActor('doctor');
+        BODY.children.length = 0; rpcCalls = [];
+        modals.openAdmissionCard({ admissionId: adm().id });
+        await settle();
+        const card = topOverlay();
+        assert.ok(textOf(card).includes('Стол не назначен'),
+            'до назначения стол назван словом, а не пустой строкой');
+
+        findBtn(card, 'Сменить стол').click();
+        await settle();
+        const picker = topOverlay();
+        assert.ok(textOf(picker).includes('Сахарный диабет'),
+            'столы предлагают без показаний — врач выбирал бы по памяти');
+        findBtn(picker, 'Стол №9').click();
+        walk(picker).find((e) => e.tagName === 'SELECT').value = '5';
+        findBtn(picker, 'Назначить стол').click();
+        await settle();
+
+        const call = rpcCalls.find((c) => c.name === 'admission_diet_set');
+        assert.ok(call, 'назначение стола не ушло на сервер');
+        assert.equal(call.args.diet_code, '9');
+        assert.equal(call.args.meals_per_day, 5);
+        assert.equal(WORLD.diets.length, 1);
+        assert.equal(WORLD.diets[0].assigned_by, ACTORS.doctor.id, 'автором пишется ТОТ, КТО НАЖАЛ');
+        assert.ok(textOf(topOverlay()).includes('Стол №9'), 'назначенный стол не вернулся в карточку');
+    });
+
     await t.test('медсестра вводит дозу через сверку «5 прав»', async () => {
         beActor('nurse');
         BODY.children.length = 0; rpcCalls = [];
@@ -596,6 +723,27 @@ test('маршрут стационара проходится целиком: �
         assert.ok(textOf(root).includes('Цефтриаксон'), 'назначение врача не дошло до медсестры');
         assert.ok(textOf(root).includes('Аллергия') && textOf(root).includes('Пенициллин'),
             'аллергия из карты пациента обязана быть на экране ДО открытия окна');
+
+        // И ТУТ ЖЕ ПИТАНИЕ — на том же экране, полосой НИЖЕ назначений. Стол,
+        // назначенный врачом шагом выше, доехал до того, кто носит еду; отмечает
+        // она приём пищи здесь же, а не на третьем экране, куда зайдёт вечером и
+        // заполнит по памяти.
+        const meals = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Питание сегодня'));
+        assert.ok(meals, 'полосы питания на рабочем месте медсестры нет');
+        assert.ok(textOf(meals).includes('Стол №9'), 'стол врача не доехал до медсестры: ' + textOf(meals));
+        const lunch = meals.children.find((c) => textOf(c).includes('Обед'));
+        const mealSel = walk(lunch).find((e) => e.tagName === 'SELECT');
+        rpcCalls = [];
+        mealSel.value = 'refused';
+        mealSel.dispatchEvent({ type: 'change', currentTarget: mealSel });
+        await settle();
+        const fed = rpcCalls.find((c) => c.name === 'admission_meal_mark');
+        assert.ok(fed, 'отметка приёма пищи не ушла на сервер');
+        assert.equal(fed.args.meal_key, 'lunch');
+        assert.equal(fed.args.status, 'refused');
+        assert.equal(WORLD.meals.length, 1);
+
+        rpcCalls = [];
 
         findBtn(root, 'Выполнить').click();
         await settle();
@@ -613,6 +761,7 @@ test('маршрут стационара проходится целиком: �
         assert.equal(call.args.status, 'given');
         assert.equal(call.args.order_id, WORLD.orders[0].id);
         assert.equal(WORLD.marks.length, 1);
+
     });
 
     await t.test('порционник видит лежащего пациента', async () => {
@@ -622,10 +771,11 @@ test('маршрут стационара проходится целиком: �
         assert.ok(textOf(root).includes('Порционник'));
         assert.ok(textOf(root).includes('Иванов Иван Иванович'), 'пациента на койке нет в заказе на кухню');
         assert.ok(textOf(root).includes('T-2'), 'койка в порционнике не названа');
-        // СТОЛ ПОКА НЕ НАЗНАЧЕН, и порционник говорит это словом, а не пустой
-        // клеткой: экрана, который назначает стол, в программе ещё нет
-        // (RPC admission_diet_set написан и не вызывается ниоткуда).
-        assert.ok(textOf(root).includes('Стол не назначен'));
+        // И СТОЛ, НАЗНАЧЕННЫЙ ВРАЧОМ, — ЗДЕСЬ. Это и есть замкнувшийся круг:
+        // раньше в этой строке стояло «Стол не назначен» навсегда, потому что
+        // назначить его было негде.
+        assert.ok(textOf(root).includes('Стол №9'), 'стол врача не доехал до кухни');
+        assert.ok(textOf(root).includes('5-разовое'), 'разовость питания на кухню не доехала');
     });
 
     await t.test('медсестре заявку на выписку не показывают — исход объявляет врач', async () => {

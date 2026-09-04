@@ -45,7 +45,11 @@ export { RpcError };
 // (assertCanPrescribe). Так в матрице плана, и так правильно: стол отменяют
 // перед экстренной операцией, и хирург, впервые увидевший пациента, обязан
 // сделать это не разыскивая лечащего врача.
-const SET_ROLES = ['doctor', 'head_doctor', 'senior_nurse', 'admin'];
+// Экспортируется: тест маршрута (public/js/admin/__tests__/inpatient-route.test.mjs)
+// строит по нему ответ своего игрушечного сервера, вместо того чтобы
+// переписать список ролей у себя — переписанный, он перестал бы падать в тот
+// день, когда список здесь поправят.
+export const SET_ROLES = ['doctor', 'head_doctor', 'senior_nurse', 'admin'];
 const MARK_ROLES = ['nurse', 'senior_nurse', 'admin'];
 // Читают те же, кто ведёт пациента в отделении (тот же список, что READ_ROLES
 // в rpc/treatment-orders.js). Касса и склад — нет: стол это история болезни.
@@ -139,6 +143,30 @@ export function dietTablesList(db, args, user) {
 // ─── 2. Назначить стол ──────────────────────────────────────────────────────
 
 /**
+ * ДВА УСЛОВИЯ СМЕНЫ СТОЛА, СОБРАННЫЕ В ОДНО МЕСТО: роль и шаг маршрута.
+ *
+ * Отдельная функция ровно затем, чтобы ЧИТАЮЩИЙ и ПИШУЩИЙ спрашивали одно и то
+ * же. Карте госпитализации нужно знать, рисовать ли кнопку «Сменить стол», и
+ * посчитать это в браузере она не может: вторая копия списка ролей разошлась бы
+ * с этой в тот день, когда список поправят, — и кнопка появилась бы у того, кому
+ * сервер откажет. Поэтому право считает сервер и отдаёт готовым (`can_set` в
+ * admissionDietHistory) — тем же приёмом, каким лист медсестры получает
+ * `undo.allowed` вместо того, чтобы сверять часы у себя.
+ *
+ * @returns {object} строка admissions
+ */
+function assertCanSetDiet(db, admissionId, user) {
+  requireRole(user, SET_ROLES, 'Назначение стола');
+  return assertAdmissionAtLeast(db, admissionId, 'active');
+}
+
+/** То же самое вопросом, а не отказом: для экрана, который решает, рисовать ли кнопку. */
+function canSetDiet(db, admissionId, user) {
+  try { assertCanSetDiet(db, admissionId, user); return true; }
+  catch (e) { if (e instanceof RpcError) return false; throw e; }
+}
+
+/**
  * Сменить стол: закрыть действующий период и открыть новый.
  *
  * Первая строка — охранник маршрута: до 'active' стола не назначают. Это не
@@ -150,8 +178,7 @@ export function dietTablesList(db, args, user) {
  */
 export function admissionDietSet(db, args, user) {
   const a = args || {};
-  requireRole(user, SET_ROLES, 'Назначение стола');
-  const adm = assertAdmissionAtLeast(db, a.admission_id, 'active');
+  const adm = assertCanSetDiet(db, a.admission_id, user);
 
   const code = str(a.diet_code, 20);
   if (!code) throw new RpcError('Выберите стол.', 400);
@@ -233,6 +260,10 @@ export function admissionDietHistory(db, args, user) {
     admission_id: adm.id,
     current: rows.find((r) => r.ended_at === null) || null,
     history: rows,
+    // Право на СМЕНУ стола едет вместе с историей, потому что спрашивают их
+    // одним движением: карта госпитализации рисует стол и кнопку рядом.
+    // Считает его та же функция, которой admissionDietSet потом откажет.
+    can_set: canSetDiet(db, adm.id, user),
   };
 }
 

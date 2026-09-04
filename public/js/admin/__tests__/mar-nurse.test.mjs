@@ -16,6 +16,12 @@
 //      в запросе сервер отвергнет.
 //   6. ДОПОЛНИТЕЛЬНЫЙ РАСХОД (брак / перерасход) уезжает в отметку.
 //   7. РАЗДЕЛ ОТКРЫВАЕТСЯ МЕДСЕСТРЕ и не открывается кассе.
+//   8а. ПИТАНИЕ — ЗДЕСЬ ЖЕ, НО НИЖЕ ЛЕКАРСТВ (DIET_TABLES_V1). Приёмы пищи
+//      медсестра отмечает на своём рабочем месте, а не на третьем экране, куда
+//      она зайдёт вечером и заполнит по памяти. Но полоса питания стоит ПОСЛЕ
+//      четырёх групп назначений и подписана мельче: несъеденный обед — важная
+//      запись, пропущенный антибиотик — вред пациенту, и порядок на экране
+//      обязан говорить это сам. Проверяется и то, и другое.
 //   8. СВОЮ ОТМЕТКУ СНИМАЮТ ЗДЕСЬ ЖЕ (UNMARK_WINDOW_V1): список «Сделано»
 //      показывает кнопку РОВНО там, где сервер разрешил (`undo.allowed`), а где
 //      не разрешил — его же словами объясняет, кого звать. Своих часов и своей
@@ -164,6 +170,31 @@ const PATIENTS = [
     { id: 104, allergies: '' },
 ];
 
+// DIET_TABLES_V1 — лист питания выбранного пациента на сегодня. Разовость
+// разворачивает СЕРВЕР (admission_meals_list): «какие приёмы входят в
+// 5-разовое» — факт диетологии, а не свойство массива, и браузер его не считает.
+const MEALS = {
+    13: {
+        admission_id: 13, meal_date: TODAY, diet_code: '9', meals_per_day: 5,
+        meals: [
+            { meal_key: 'breakfast', mark: { status: 'eaten', marked_by: 2 } },
+            { meal_key: 'breakfast2', mark: null },
+            { meal_key: 'lunch', mark: null },
+            { meal_key: 'tea', mark: null },
+            { meal_key: 'dinner', mark: null },
+        ],
+    },
+    14: {
+        admission_id: 14, meal_date: TODAY, diet_code: null, meals_per_day: null,
+        meals: [
+            { meal_key: 'breakfast', mark: null },
+            { meal_key: 'lunch', mark: null },
+            { meal_key: 'tea', mark: null },
+            { meal_key: 'dinner', mark: null },
+        ],
+    },
+};
+
 let rpcCalls = [];
 let dbCalls = [];
 let markWarnings = [];
@@ -181,6 +212,16 @@ globalThis.fetch = async (url, opts = {}) => {
         const name = decodeURIComponent(u.slice('/api/rpc/'.length));
         rpcCalls.push({ name, args: body });
         if (name === 'treatment_tasks_due') return ok(DUE);
+        if (name === 'admission_meals_list') return ok(MEALS[body.admission_id] || null);
+        if (name === 'admission_meal_mark') {
+            // Сервер идемпотентен по (госпитализация · дата · приём) — здесь то
+            // же: повтор перезаписывает свою строку, а не заводит вторую.
+            const sheet = MEALS[body.admission_id];
+            const meal = sheet && sheet.meals.find((m) => m.meal_key === body.meal_key);
+            if (!meal) return fail('Неизвестный приём пищи.');
+            meal.mark = { status: body.status, marked_by: 2 };
+            return ok({ meal: { ...meal.mark, meal_key: body.meal_key } });
+        }
         if (name === 'treatment_admin_mark') {
             const a = markAnswer();
             return a.ok ? ok(a.data) : fail(a.message);
@@ -581,4 +622,106 @@ test('«строка уже в счёте» доходит до того, кто
     await settle();
     // Медицинская запись снята, а деньги остались — молчать об этом нельзя.
     assert.ok(lastToast().includes('через кассу'), 'предупреждение о счёте: ' + lastToast());
+});
+
+// ─── 3. Питание (DIET_TABLES_V1) ────────────────────────────────────────────
+
+/** Заголовки карточек в порядке, в каком их читают сверху вниз. */
+const headings = (root) => walk(root).filter((e) => e.tagName === 'H3').map((e) => textOf(e));
+const headingIndex = (root, label) => headings(root).findIndex((x) => x.includes(label));
+
+test('полоса питания стоит ПОСЛЕ четырёх групп назначений и ДО списка сделанного', async () => {
+    const root = await renderScreen();
+    const meals = headingIndex(root, 'Питание сегодня');
+    assert.ok(meals > -1, 'полосы питания на экране медсестры нет: ' + headings(root).join(' | '));
+    // Лекарства — первое, чем этот экран отвечает на вопрос «что сделать
+    // сейчас». Питание, поднятое над ними, стоило бы дозы.
+    for (const group of ['Просрочено', 'Сейчас', 'Позже', 'По требованию']) {
+        assert.ok(headingIndex(root, group) < meals, 'группа «' + group + '» оказалась ниже питания');
+    }
+    assert.ok(meals < headingIndex(root, 'Сделано'), 'полоса питания уехала под список сделанного');
+});
+
+test('питание подписано мельче назначений — приоритет виден размером, а не только порядком', async () => {
+    const root = await renderScreen();
+    const sized = (label) => walk(root).find((e) => e.style && e.style.fontSize && textOf(e).trim() === label);
+    const drug = sized('Цефтриаксон');
+    const meal = sized('Обед');
+    assert.ok(drug && meal, 'не найдены строки препарата и приёма пищи');
+    assert.equal(drug.style.fontSize, '15px');
+    assert.equal(meal.style.fontSize, '13.5px', 'приём пищи не должен быть крупнее препарата');
+});
+
+test('в шапке полосы названы стол и разовость — то же, что напечатает кухня', async () => {
+    const root = await renderScreen();
+    const call = rpcCalls.find((c) => c.name === 'admission_meals_list');
+    assert.ok(call, 'лист питания не запрошен');
+    assert.deepEqual(call.args, { admission_id: 13, meal_date: TODAY });
+
+    const card = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Питание сегодня'));
+    const txt = textOf(card);
+    assert.ok(txt.includes('Стол №9'), 'стол пациента в полосе питания не назван: ' + txt);
+    assert.ok(txt.includes('5-разовое'), 'разовость питания не названа');
+    // Пять приёмов — по разовости, а не «все, какие бывают»: шестого нет.
+    for (const meal of ['Завтрак', 'Второй завтрак', 'Обед', 'Полдник', 'Ужин']) {
+        assert.ok(txt.includes(meal), 'нет приёма пищи «' + meal + '»');
+    }
+    assert.ok(!txt.includes('На ночь'), 'ночной приём в 5-разовое питание не входит');
+    // Уже отмеченный завтрак назван словом, а не галочкой.
+    assert.ok(txt.includes('Съеден'), 'отметка сервера не показана');
+    assert.ok(txt.includes('Не отмечено'), 'неотмеченный приём обязан говорить это словом');
+});
+
+test('медсестра отмечает обед — отметка уходит на сервер и возвращается на экран', async () => {
+    const root = await renderScreen();
+    const card = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Питание сегодня'));
+    const row = card.children.find((c) => textOf(c).includes('Обед'));
+    const sel = walk(row).find((e) => e.tagName === 'SELECT');
+    assert.ok(sel, 'у приёма пищи нет выбора отметки');
+
+    rpcCalls = [];
+    sel.value = 'eaten';
+    sel.dispatchEvent({ type: 'change', currentTarget: sel });
+    await settle();
+
+    const call = rpcCalls.find((c) => c.name === 'admission_meal_mark');
+    assert.ok(call, 'отметка приёма пищи не ушла на сервер');
+    assert.deepEqual(call.args, { admission_id: 13, meal_date: TODAY, meal_key: 'lunch', status: 'eaten' });
+
+    // Экран перечитывает лист и показывает то, что ответил сервер, а не то,
+    // что нажали: расхождение между ними — как раз то, чем врут листы питания.
+    assert.ok(rpcCalls.some((c) => c.name === 'admission_meals_list'), 'лист питания не перечитан');
+    const after = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Питание сегодня'));
+    const lunch = after.children.find((c) => textOf(c).includes('Обед'));
+    assert.ok(textOf(lunch).includes('Съеден'), 'отметка не вернулась в строку: ' + textOf(lunch));
+    // Отказ и НПО — не пустая строка: их предлагают наравне с «съеден».
+    assert.ok(textOf(lunch).includes('Отказ') && textOf(lunch).includes('НПО'),
+        'медсестре нечем сказать, что пациент не ел');
+
+    // Возврат к «Отметить…» ничего не отправляет: это не отметка, а её отсутствие.
+    rpcCalls = [];
+    const sel2 = walk(lunch).find((e) => e.tagName === 'SELECT');
+    sel2.value = '';
+    sel2.dispatchEvent({ type: 'change', currentTarget: sel2 });
+    await settle();
+    assert.equal(rpcCalls.filter((c) => c.name === 'admission_meal_mark').length, 0);
+});
+
+test('выбор другого пациента перечитывает ЕГО лист питания, а не оставляет чужой', async () => {
+    const root = await renderScreen();
+    const people = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Пациенты'));
+    rpcCalls = [];
+    findBtn(people, 'Каримова Дилноза').click();
+    await settle();
+
+    const call = rpcCalls.filter((c) => c.name === 'admission_meals_list').pop();
+    assert.ok(call, 'лист питания второго пациента не запрошен');
+    assert.equal(call.args.admission_id, 14, 'на экране остался бы лист питания предыдущего пациента');
+
+    const card = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Питание сегодня'));
+    const txt = textOf(card);
+    // Стол ей не назначен — кухня всё равно её кормит, и полоса это говорит.
+    assert.ok(txt.includes('Стол не назначен'), 'пустое место вместо стола: ' + txt);
+    assert.ok(txt.includes('Завтрак') && !txt.includes('Второй завтрак'),
+        '4-разовое питание не разворачивают в пятиразовое');
 });
