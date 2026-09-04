@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { createInvoiceForVisit, recordPayment, createInvoiceForAdmission } from './billing.js';
-import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice } from './cashier.js';
+import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
 import { admitPatient } from './inpatient.js';
 
 function seed() {
@@ -308,4 +308,83 @@ test('void refuses an already-void invoice via the lifecycle table', () => {
   const { invoice } = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1] }, registrar);
   voidInvoice(db, { invoice_id: invoice.id }, cashier);
   assert.throws(() => voidInvoice(db, { invoice_id: invoice.id }, cashier), /отменён/i);
+});
+
+// ---------------------------------------------------------------------------
+// BRANCH_MONEY_GUARD_V1 — ЧУЖИЕ ДЕНЬГИ ОТСЮДА ТОЛЬКО ДЛЯ ЧТЕНИЯ.
+//
+// С миграции 087 счета соседнего здания лежат в этой базе — за этим они и
+// едут, чтобы главная клиника видела выручку по всем зданиям. Но касса,
+// открытая здесь, править их не может ничем: у отмены и удаления есть
+// продолжение за пределами этой базы. Отмена меняет status — колонку, которая
+// ЕЗДИТ, и уехала бы соседу; удаление чеканит надгробие (миграция 087,
+// invoices_journal_del) и стёрло бы документ там, где касса взяла эти деньги.
+//
+// Экран это уже запрещает (f9615ab), но экран — не граница: RPC зовут по
+// invoice_id. Те же проверки для оплаты, долга и возврата стоят в billing.js.
+// ---------------------------------------------------------------------------
+
+/** Счёт соседнего здания — ровно так он и выглядит после приёма порции. */
+function foreignInvoice(db, { letter = 'B', name = 'Чиланзар', status = 'void' } = {}) {
+  db.prepare('INSERT INTO branches (name, letter) VALUES (?, ?)').run(name, letter);
+  const pid = db.prepare("INSERT INTO patients (full_name, sync_origin) VALUES ('Приезжий', ?)").run(letter).lastInsertRowid;
+  const iid = db.prepare(`INSERT INTO invoices (invoice_number, patient_id, subtotal, total_amount,
+                            paid_amount, status, sync_origin)
+                          VALUES ('INV-B-26-00001', ?, 50000, 50000, 0, ?, ?)`)
+    .run(pid, status, letter).lastInsertRowid;
+  db.prepare(`INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total)
+              VALUES (?, NULL, 'Приём', 1, 50000, 50000)`).run(iid);
+  return { pid, iid };
+}
+
+test('чужой счёт: отменить отсюда нельзя — отмена уехала бы и погасила живой документ', () => {
+  const { db } = seed();
+  const f = foreignInvoice(db, { status: 'unpaid' });
+  assert.throws(
+    () => voidInvoice(db, { invoice_id: f.iid }, cashier),
+    (e) => {
+      assert.match(e.message, /Чиланзар \(B\)/, 'отказ обязан называть здание теми же словами, что и метки в списках');
+      assert.equal(e.status, 403);
+      return true;
+    });
+  assert.equal(db.prepare('SELECT status FROM invoices WHERE id = ?').get(f.iid).status, 'unpaid',
+    'статус чужого счёта не изменился ни на букву');
+});
+
+test('чужой счёт: удалить отсюда нельзя — надгробие стёрло бы его и в том здании', () => {
+  const { db } = seed();
+  const f = foreignInvoice(db);   // уже отменён: по всем ОСТАЛЬНЫМ правилам удаление разрешено
+  assert.throws(() => deleteInvoice(db, { invoice_id: f.iid }, admin), /Чиланзар \(B\)/);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM invoices WHERE id = ?').get(f.iid).n, 1, 'счёт цел');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM invoice_items WHERE invoice_id = ?').get(f.iid).n, 1, 'позиции целы');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM sync_tombstones WHERE tbl = 'invoices'").get().n, 0,
+    'ни одного надгробия: соседу нечего применять');
+});
+
+test('чужой счёт: «своё здание» проверяется раньше статуса — причина отказа та, что есть на самом деле', () => {
+  const { db } = seed();
+  const f = foreignInvoice(db, { status: 'paid' });
+  // Оплаченный чужой счёт нельзя удалить по двум причинам сразу. Названа должна
+  // быть та, которую владелец не сможет обойти, отменив счёт.
+  assert.throws(() => deleteInvoice(db, { invoice_id: f.iid }, admin), /Чиланзар/);
+  assert.throws(() => voidInvoice(db, { invoice_id: f.iid }, cashier), /Чиланзар/);
+});
+
+test('чужой счёт: имя филиала ещё не приехало — в отказе остаётся буква', () => {
+  const { db } = seed();
+  const pid = db.prepare("INSERT INTO patients (full_name, sync_origin) VALUES ('Приезжий', 'E')").run().lastInsertRowid;
+  const iid = db.prepare(`INSERT INTO invoices (invoice_number, patient_id, total_amount, status, sync_origin)
+                          VALUES ('INV-E-26-00001', ?, 1000, 'void', 'E')`).run(pid).lastInsertRowid;
+  assert.throws(() => deleteInvoice(db, { invoice_id: iid }, admin), /филиала E/);
+});
+
+test('своя работа не задета: свой счёт отменяется и удаляется как прежде', () => {
+  const { db, vid, vs1 } = seed();
+  foreignInvoice(db);   // рядом лежат чужие деньги — они ничему не мешают
+  const { invoice } = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1] }, registrar);
+  voidInvoice(db, { invoice_id: invoice.id }, cashier);
+  assert.equal(db.prepare('SELECT status FROM invoices WHERE id = ?').get(invoice.id).status, 'void');
+  const out = deleteInvoice(db, { invoice_id: invoice.id }, admin);
+  assert.equal(out.deleted, true);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM invoices WHERE id = ?').get(invoice.id).n, 0);
 });

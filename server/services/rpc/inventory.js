@@ -5,6 +5,9 @@
 // completely untouched.
 
 import { hasAnyRole } from '../roles.js';
+// BRANCH_MONEY_GUARD_V1 — одна проверка «своё ли это здание» на весь сервер
+// (billing.js), а не копия в каждом файле: отказ обязан звучать одинаково.
+import { assertOwnBuilding } from './billing.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -170,6 +173,14 @@ export function voidDispense(db, args, user) {
     if (!line) {
       throw new RpcError('line not found.', 400);
     }
+    // BRANCH_MONEY_GUARD_V1 — чужую строку отсюда не отменяют. Сегодня сюда не
+    // доедет ни одна ВЫДАННАЯ строка (clinic_item_id — местная ссылка, она не
+    // ездит, и проверка ниже отвергла бы такую строку как «не выдача»), но
+    // запрет стоит там, где стоит DELETE, а не там, где сегодня о нём известно:
+    // удаление строки визита чеканит надгробие (миграция 084), и оно стёрло бы
+    // строку у соседа. Ту же цену уже заплатили один раз в billing.js
+    // (remove_unpaid_service) — второй раз платить незачем.
+    assertOwnBuilding(db, line, 'Услуга');
     if (line.clinic_item_id == null) {
       throw new RpcError('not a dispensed line.', 400);
     }

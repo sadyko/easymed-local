@@ -8,7 +8,7 @@ import { ensureSyncGroup } from './sync-group.js';
 import { readIdentity } from './identity.js';
 import { relayIdFor, sealPayload, openPayload } from './relay-crypto.js';
 // BRANCH_RECORDS_V1 (Задача 7) — журнал изменений ездит тем же каналом, что и справочник.
-import { buildBatch, markPublished, markConfirmed } from './journal.js';
+import { buildBatch, markPublished, markConfirmed, SHIPPED } from './journal.js';
 import { applyBatch, sliceAlreadyApplied } from './records.js';
 // Резервная копия перед применением чужих записей — то же правило, что у справочника.
 import { createBackup, pruneBackupsByKind } from '../backup.js';
@@ -761,17 +761,26 @@ function isSeedingPeer(db, peer) {
  * Сколько страниц засева примерно осталось. Считается по числу строк в самих
  * таблицах — тех же, что читает seedPage, — и делится на размер отданной
  * страницы. Оценка грубая (строки прибавляются по ходу), поэтому и «~».
+ *
+ * СПИСОК ТАБЛИЦ БЕРЁТСЯ ИЗ SHIPPED (journal.js), А НЕ ПЕРЕЧИСЛЯЕТСЯ ЗДЕСЬ.
+ * Своя копия списка уже разошлась однажды: Фаза 3 отправила в путь invoices,
+ * invoice_items и payments, а здесь остались прежние четыре таблицы записей —
+ * и строка «Первичная загрузка: страница 9 из ~4» на экране синхронизации
+ * обещала конец раньше, чем он наступал. Пересчитать деньги было некому:
+ * список знает journal.js, а не этот файл. Теперь добавленная там таблица
+ * попадает в оценку сама.
  */
-function seedPagesEstimate(db, pageRows) {
+export function seedPagesEstimate(db, pageRows) {
   if (!pageRows) return 0;
   try {
-    const n = db.prepare(`
-      SELECT (SELECT COUNT(*) FROM patients WHERE uid IS NOT NULL)
-           + (SELECT COUNT(*) FROM visits WHERE uid IS NOT NULL)
-           + (SELECT COUNT(*) FROM visit_services WHERE uid IS NOT NULL)
-           + (SELECT COUNT(*) FROM lab_results WHERE uid IS NOT NULL)
-           + (SELECT COUNT(*) FROM sync_tombstones) AS n
-    `).get().n;
+    // Имена таблиц — из константы модуля, не из запроса: подставлять их в SQL
+    // текстом здесь безопасно, а COUNT по каждой берётся тем же условием
+    // uid IS NOT NULL, каким их читает seedPage.
+    const counts = Object.keys(SHIPPED)
+      .map((t) => `(SELECT COUNT(*) FROM ${t} WHERE uid IS NOT NULL)`)
+      .concat('(SELECT COUNT(*) FROM sync_tombstones)')   // вторая фаза засева
+      .join(' + ');
+    const n = db.prepare(`SELECT ${counts} AS n`).get().n;
     return Math.max(1, Math.ceil(n / pageRows));
   } catch { return 0; }
 }

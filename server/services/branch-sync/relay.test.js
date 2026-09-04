@@ -8,7 +8,8 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { b64url, writePairing, readPairing, GROUP_KEY_BYTES } from './pairing.js';
 import { relayIdFor, openPayload } from './relay-crypto.js';
-import { publishCatalogue, fetchCatalogue, maybePublish, mintRelayToken, relayMintable, relayUrl, relayTokenUrl, readLastPublish, scheduleRelayPublish, publishJournal, withExchangeLock, MAX_SCOPE } from './relay.js';
+import { publishCatalogue, fetchCatalogue, maybePublish, mintRelayToken, relayMintable, relayUrl, relayTokenUrl, readLastPublish, scheduleRelayPublish, publishJournal, withExchangeLock, seedPagesEstimate, MAX_SCOPE } from './relay.js';
+import { SHIPPED } from './journal.js';
 
 // BRANCH_SYNC_RELAY_V1 — транспорт Маршрута Б на подставном fetch.
 //
@@ -631,4 +632,70 @@ test('выгрузка записей считает РАЗНЫЕ строки, 
   assert.equal(r.peers.B, r.peers.C, 'обоим соседям уехало одно и то же — это один блоб');
   assert.equal(r.rows, r.peers.B, 'разных строк ровно столько, сколько их в срезе одного соседа');
   assert.notEqual(r.rows, r.peers.B + r.peers.C, 'сумма по соседям — это «сколько раз», а не «сколько строк»');
+});
+
+// ---------------------------------------------------------------------------
+// «Первичная загрузка: страница N из ~M» — откуда берётся M.
+//
+// Оценка считала четыре таблицы записей и остановилась на них. Фаза 3
+// отправила в путь ещё и деньги (invoices, invoice_items, payments), список
+// здесь не обновили — и на холодном засеве клиники с полугодом счетов экран
+// обещал конец втрое раньше, чем он наступал: «страница 9 из ~4». Теперь
+// список берётся из SHIPPED (journal.js) — оттуда же, откуда его берёт сам
+// засев, и разъехаться им больше нечем.
+// ---------------------------------------------------------------------------
+
+/** Одна строка в каждой таблице записей: то, что ездило до Фазы 3. */
+function seedRecords(db) {
+  const pid = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
+  const vid = db.prepare("INSERT INTO visits (patient_id, visit_date) VALUES (?, '2026-09-02')").run(pid).lastInsertRowid;
+  const sid = db.prepare('SELECT id FROM services LIMIT 1').get().id;
+  const vs = db.prepare('INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total) VALUES (?,?,1,1,1)')
+    .run(vid, sid).lastInsertRowid;
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value) VALUES (?, 'Hb', '12')").run(vs);
+  return { pid, vid, vs };
+}
+
+/** Одна строка в каждой денежной таблице — они ездят с миграции 087. */
+function seedMoney(db, pid) {
+  const iid = db.prepare("INSERT INTO invoices (invoice_number, patient_id, total_amount, status) VALUES ('INV-A-26-00001', ?, 100, 'unpaid')")
+    .run(pid).lastInsertRowid;
+  db.prepare("INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, total) VALUES (?, 'Приём', 1, 100, 100)").run(iid);
+  db.prepare("INSERT INTO payments (invoice_id, amount, method) VALUES (?, 100, 'cash')").run(iid);
+  return iid;
+}
+
+test('оценка страниц засева считает и деньги, а не одни записи', () => {
+  const { db } = clinic('seed-pages');
+  const { pid } = seedRecords(db);
+  assert.equal(seedPagesEstimate(db, 1), 4, 'четыре строки записей — четыре страницы по одной строке');
+
+  seedMoney(db, pid);
+  assert.equal(seedPagesEstimate(db, 1), 7,
+    'счёт, позиция и платёж тоже едут — до этой правки здесь оставалось 4, и экран обещал конец раньше срока');
+});
+
+test('оценка страниц засева знает ровно те таблицы, что везёт journal.js', () => {
+  const { db } = clinic('seed-pages-list');
+  const { pid } = seedRecords(db);
+  seedMoney(db, pid);
+  // По одной строке в каждой таблице SHIPPED — значит страниц по одной строке
+  // ровно столько, сколько таблиц. Появится новая таблица, о которой оценка не
+  // знает, — равенство сломается здесь, а не на экране у владельца.
+  assert.equal(seedPagesEstimate(db, 1), Object.keys(SHIPPED).length);
+});
+
+test('оценка страниц засева считает и надгробия — вторую фазу засева', () => {
+  const { db } = clinic('seed-pages-tomb');
+  const { pid, vs } = seedRecords(db);
+  seedMoney(db, pid);
+  db.prepare('DELETE FROM lab_results WHERE visit_service_id = ?').run(vs);   // триггер 084 чеканит надгробие
+  assert.ok(db.prepare('SELECT COUNT(*) n FROM sync_tombstones').get().n > 0, 'надгробие есть');
+  assert.equal(seedPagesEstimate(db, 1), 7, 'строка ушла, надгробие пришло — страниц столько же');
+});
+
+test('размер страницы 0 — оценки нет, а не деление на ноль', () => {
+  const { db } = clinic('seed-pages-zero');
+  seedRecords(db);
+  assert.equal(seedPagesEstimate(db, 0), 0);
 });

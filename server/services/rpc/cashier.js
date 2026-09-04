@@ -8,6 +8,12 @@ import { outstandingWhere } from '../domain/money.js';
 import { assertTransition } from '../domain/lifecycle.js';
 import { hasAnyRole } from '../roles.js';
 import { countsAsInflow } from '../../../public/js/shared/payment-methods.js';   // DEPOSIT_REVENUE_V1
+// BRANCH_MONEY_GUARD_V1 — тот же запрет и та же формулировка, что в billing.js:
+// чужие деньги отсюда только для чтения. Импорт, а не своя копия проверки:
+// правило одно, и звучать оно обязано одинаково, с какого бы экрана в счёт ни
+// пришли. Касса — последний экран, у которого счёт открыт целиком, и первый, с
+// которого его можно стереть.
+import { assertOwnBuilding } from './billing.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -419,6 +425,16 @@ export function deleteInvoice(db, args, user) {
   const run = db.transaction(() => {
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
     if (!invoice) throw new RpcError('invoice not found.', 400);
+    // BRANCH_MONEY_GUARD_V1 — ЧУЖОЙ СЧЁТ ОТСЮДА НЕ УДАЛЯЕТСЯ НИКОГДА, и это
+    // проверяется раньше статуса: «не отменён» — не та причина, по которой
+    // нельзя.
+    //
+    // Удаление здесь не остаётся здесь. Триггер invoices_journal_del (миграция
+    // 087) на каждый DELETE чеканит надгробие, надгробие уезжает соседу — и
+    // документ исчезает в ТОМ здании, где касса эти деньги приняла. Уборка
+    // мусора в одной базе стала бы потерей чужого документа в другой, а узнали
+    // бы об этом не здесь, а по несходящейся смене у соседа.
+    assertOwnBuilding(db, invoice, 'Счёт');
 
     if (invoice.status !== 'void') {
       throw new RpcError('Удалить можно только отменённый счёт (Отменён). Этот — «' + invoice.status + '».', 400);
@@ -470,6 +486,14 @@ export function voidInvoice(db, args, user) {
     if (!invoice) {
       throw new RpcError('invoice not found.', 400);
     }
+    // BRANCH_MONEY_GUARD_V1 — отменить чужой счёт отсюда нельзя. status — та
+    // самая колонка, которая ЕЗДИТ (journal.js, SHIPPED.invoices): отмена ушла
+    // бы соседу следующей же порцией и погасила бы там живой документ, по
+    // которому его касса уже взяла деньги. Дальше по коду отмена ещё и снимает
+    // с чужих строк визита ссылку на счёт — то есть переписывает работу
+    // соседнего здания.
+    assertOwnBuilding(db, invoice, 'Счёт');
+
     if (invoice.status === 'void' || invoice.status === 'refunded') {
       throw new RpcError('Счёт уже отменён.', 400);
     }

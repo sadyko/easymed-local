@@ -91,3 +91,32 @@ test('dispense rejects bad visit_id/doctor_id types with 400 not 500', () => {
   assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 1, doctor_id: 'x' }, doc), /doctor_id/);
   assert.equal(db.prepare('SELECT on_hand FROM products WHERE id=?').get(prod).on_hand, 5); // unchanged
 });
+
+// BRANCH_MONEY_GUARD_V1 — отмена выдачи УДАЛЯЕТ строку визита, а удаление
+// чеканит надгробие (миграция 084) и уезжает соседу. Сегодня приехавшая строка
+// сюда не попадает (clinic_item_id — местная ссылка, она не ездит), поэтому
+// строку в тесте помечаем чужой руками — так она выглядела бы, начни ездить
+// выдачи. Запрет обязан стоять у самого DELETE, а не держаться на том, что
+// сегодня до него не доходит.
+test('чужая строка: отменить выдачу отсюда нельзя — надгробие стёрло бы её и в том здании', () => {
+  const { db, vid, prod } = seed();
+  db.prepare("INSERT INTO branches (name, letter) VALUES ('Чиланзар', 'B')").run();
+  receiveStock(db, { product_id: prod, quantity: 10 }, inv);
+  const d = dispenseItem(db, { product_id: prod, quantity: 2, visit_id: vid }, doc);
+  db.prepare("UPDATE visit_services SET sync_origin = 'B' WHERE id = ?").run(d.visit_service_id);
+
+  assert.throws(() => voidDispense(db, { visit_service_id: d.visit_service_id }, inv), /Чиланзар \(B\)/);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE id = ?').get(d.visit_service_id).n, 1,
+    'строка цела');
+  assert.equal(db.prepare('SELECT on_hand FROM products WHERE id = ?').get(prod).on_hand, 8,
+    'склад не тронут: отказ обязан не менять НИЧЕГО');
+});
+
+test('своя выдача отменяется как прежде — запрет касается только чужих строк', () => {
+  const { db, vid, prod } = seed();
+  receiveStock(db, { product_id: prod, quantity: 10 }, inv);
+  const d = dispenseItem(db, { product_id: prod, quantity: 2, visit_id: vid }, doc);
+  const v = voidDispense(db, { visit_service_id: d.visit_service_id }, inv);
+  assert.equal(v.on_hand, 10);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE id = ?').get(d.visit_service_id).n, 0);
+});
