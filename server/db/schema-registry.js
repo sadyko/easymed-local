@@ -591,6 +591,8 @@ export const REGISTRY = {
   // READ_ROLES в rpc/treatment-orders.js).
   treatment_orders: {
     read:  { roles: INPATIENT_CARE_ROLES, columns: ['id','admission_id','kind','name','service_id','stock_item_id',
+             // MED_ADMIN_CHARGE_V1 (096) — сколько единиц склада на одну дозу.
+             'stock_qty',
              'dose','route','freq_code','slots','prn','starts_on','days','ends_on','prescribed_by','prescribed_at',
              'source','status','cancel_reason','cancel_note','cancel_by','cancel_at',
              'volume','rate_ml_h','duration_min','continuous','note','created_at'] },
@@ -602,9 +604,13 @@ export const REGISTRY = {
   },
   treatment_administrations: {
     read:  { roles: INPATIENT_CARE_ROLES, columns: ['id','order_id','due_date','due_slot','status','given_at',
-             'given_by','reason','note','extra_consumption','voided_at','voided_by','void_reason','created_at'] },
+             'given_by','reason','note','extra_consumption','voided_at','voided_by','void_reason','created_at',
+             // MED_ADMIN_CHARGE_V1 (096) — вторая, СКЛАДСКАЯ судьба отметки:
+             // списалось ли, и если нет — почему. Экран показывает это рядом с
+             // дозой, иначе несписанное видно только при инвентаризации.
+             'stock_status','stock_note'] },
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },
-    filters: ['id','order_id','due_date','due_slot','status','voided_at'],
+    filters: ['id','order_id','due_date','due_slot','status','voided_at','stock_status'],
     embed:   { users: { table:'users', fk:'given_by', columns:['id','full_name'] } },
   },
   // DIET_TABLES_V1 (миграция 094) — лечебные столы.

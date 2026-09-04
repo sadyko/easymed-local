@@ -413,7 +413,9 @@ test('задачи смены разложены по группам «Прос�
   assert.deepEqual(res.groups.later.map((t) => t.slot), [22]);
   assert.equal(res.groups.prn.length, 1);
   assert.equal(res.groups.prn[0].given_today, 0);
-  assert.deepEqual(res.counts, { overdue: 1, now: 1, later: 1, prn: 1 });
+  // stock_issues — счётчик несписанного (MED_ADMIN_CHARGE_V1, Задача 6): в
+  // этой смене ни одной отметки ещё не поставлено, значит и хвоста нет.
+  assert.deepEqual(res.counts, { overdue: 1, now: 1, later: 1, prn: 1, stock_issues: 0 });
 
   // Пациент — якорь: у каждой задачи есть палата, койка и имя.
   const task = res.groups.overdue[0];

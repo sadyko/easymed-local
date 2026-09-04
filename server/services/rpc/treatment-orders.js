@@ -16,9 +16,16 @@
 // domain/mar-schedule.js — чистом модуле без базы, потому что тот же ответ
 // нужен экрану врача и списанию (Задача 6).
 //
-// Денег. Списание со склада и начисление за введённую дозу — Задача 6. Место
-// под них в схеме есть (service_id, stock_item_id, extra_consumption), но ни
-// одной строки в invoices/stock_movements этот файл не пишет.
+// Своего движения товара. Отметка «дала» ДЕЙСТВИТЕЛЬНО списывает препарат и
+// начисляет за него (MED_ADMIN_CHARGE_V1, ниже), но остаток, строка
+// admission_services и запись в stock_movements пишутся кодом склада
+// (rpc/inventory.js, dispenseAdmissionItemCore) — тем же самым, что и у койки.
+// Своя копия разъехалась бы с ней молча.
+//
+// Ни одной строки в `invoices` этот файл по-прежнему не пишет: начисление —
+// это строка admission_services, а в счёт её собирает касса
+// (billing.js create_invoice_for_admission), как и всякую другую услугу
+// госпитализации. Предупреждение из шапки 084_sync_journal.sql соблюдено.
 
 import {
   RpcError, loadAdmission, assertAdmissionAtLeast, assertCanPrescribe,
@@ -29,6 +36,20 @@ import {
   FREQ_CODES, ROUTES, freqSlots, isPrnFreq,
   expandCourse, courseEnd, dueState, isDate,
 } from '../domain/mar-schedule.js';
+// MED_ADMIN_CHARGE_V1 — склад и деньги за введённую дозу.
+import { doseQuantity } from '../domain/dose.js';
+// StockError — это ДРУГОЙ класс, не тот RpcError, что импортирован выше:
+// inventory.js объявляет свой (как и accommodation.js), и они не родственники.
+// Псевдоним стоит здесь не для красоты: отказ склада ловится по классу, и
+// `instanceof RpcError` молча не поймал бы ничего — «нет остатка» улетело бы
+// наружу отказом всей отметки, то есть ровно тем запретом, которого план
+// велит избегать («Нет остатка — предупреждение, а не запрет»).
+import {
+  dispenseAdmissionItemCore, voidDispensedAdmissionItemCore, RpcError as StockError,
+} from './inventory.js';
+import {
+  doseNotePrefix, extraNotePrefix, administrationNotePrefix,
+} from '../../../public/js/shared/med-admin-line.js';
 
 export { RpcError };
 
@@ -149,16 +170,28 @@ export function treatmentOrderCreate(db, args, user) {
   const serviceId = refOrNull(db, 'services', a.service_id, 'Услуга');
   const stockItemId = refOrNull(db, 'products', a.stock_item_id, 'Позиция склада');
 
+  // MED_ADMIN_CHARGE_V1 — сколько единиц склада уходит на ОДНУ дозу.
+  //
+  // Необязательно, и в этом вся мысль: `dose` — свободный текст врача, и «1 г»
+  // при складе в штуках количества не даёт (см. domain/dose.js). Когда экран
+  // назначения знает ответ — он говорит его здесь, и списание перестаёт
+  // зависеть от разбора текста. Когда не знает — доза разбирается, а не
+  // угадывается, и неудача становится видимой (stock_status).
+  const stockQty = numOrNull(a.stock_qty);
+  if (stockQty !== null && !(stockQty > 0)) {
+    throw new RpcError('Количество для списания должно быть больше нуля.', 400);
+  }
+
   const isInfusion = kind === 'infusion';
   const at = nowUtc(db);
 
   const info = db.prepare(`INSERT INTO treatment_orders
-      (admission_id, kind, name, service_id, stock_item_id, dose, route,
+      (admission_id, kind, name, service_id, stock_item_id, stock_qty, dose, route,
        freq_code, slots, prn, starts_on, days, ends_on,
        prescribed_by, prescribed_at, source, status,
        volume, rate_ml_h, duration_min, continuous, note)
-    VALUES (?,?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,?, 'active', ?,?,?,?,?)`).run(
-    adm.id, kind, name, serviceId, stockItemId, str(a.dose, 100), route,
+    VALUES (?,?,?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,?, 'active', ?,?,?,?,?)`).run(
+    adm.id, kind, name, serviceId, stockItemId, stockQty, str(a.dose, 100), route,
     freqCode, JSON.stringify(slots), prn, startsOn, days, endsOn,
     (user && user.id) || null, at, source,
     isInfusion ? numOrNull(a.volume) : null,
@@ -269,7 +302,284 @@ export function treatmentOrdersList(db, args, user) {
     };
   });
 
-  return { admission_id: adm.id, from, to, include_cancelled: includeCancelled, orders };
+  // MED_ADMIN_CHARGE_V1 — НЕСПИСАННОЕ. Отметка «дала», за которой не пошёл
+  // склад (количество не выведено из дозы, либо остатка не хватило), — это
+  // работа для человека, и она обязана быть на виду. Молча она нашлась бы при
+  // инвентаризации, через месяц, когда уже нельзя вспомнить, что вводили.
+  const issues = db.prepare(`
+    SELECT a.id, a.order_id, a.due_date, a.due_slot, a.stock_status, a.stock_note,
+           o.name, o.dose, o.stock_item_id
+      FROM treatment_administrations a
+      JOIN treatment_orders o ON o.id = a.order_id
+     WHERE o.admission_id = ?
+       AND a.voided_at IS NULL
+       AND a.due_date BETWEEN ? AND ?
+       AND a.stock_status IN (${STOCK_ISSUE.map(() => '?').join(',')})
+     ORDER BY a.due_date, a.due_slot, a.id`).all(adm.id, from, to, ...STOCK_ISSUE);
+
+  return {
+    admission_id: adm.id, from, to, include_cancelled: includeCancelled, orders,
+    stock_issues: { count: issues.length, items: issues },
+  };
+}
+
+// ─── MED_ADMIN_CHARGE_V1 — склад и деньги за введённую дозу ─────────────────
+//
+// Медсестра нажала «дала». С этой секунды в клинике произошли ТРИ разные вещи,
+// и путать их нельзя:
+//
+//   1. МЕДИЦИНСКИЙ ФАКТ — доза введена. Записывается ВСЕГДА и ничем не
+//      отменяется: ни пустым складом, ни непонятной дозой, ни погашенной
+//      позицией. История болезни не зависит от состояния склада.
+//   2. СКЛАД — препарат физически ушёл. Может не получиться (нет остатка,
+//      количество не выводится из дозы) — и тогда это ПРЕДУПРЕЖДЕНИЕ, а не
+//      запрет (правило плана: «Нет остатка — предупреждение»).
+//   3. ДЕНЬГИ — строка admission_services, которую касса соберёт в счёт стаци-
+//      онара наравне с проживанием и процедурами.
+//
+// Пункты 2 и 3 — ОДНА пара и делаются одним вызовом склада
+// (dispenseAdmissionItemCore): не бывает списанного, но не начисленного, и не
+// бывает начисленного, но не списанного. Если склад отказал — нет ни того, ни
+// другого, и человек об этом слышит; тогда провести препарат вручную можно
+// консолью койки, ровно как раньше.
+//
+// ─── ИДЕМПОТЕНТНОСТЬ ────────────────────────────────────────────────────────
+//
+// Три замка, и каждый держит сам по себе:
+//   • частичный UNIQUE (order_id, due_date, due_slot) в миграции 093;
+//   • ранний возврат по liveMark — повторное нажатие тем же статусом даже не
+//     доходит сюда;
+//   • сами строки счёта помечены id ОТМЕТКИ (shared/med-admin-line.js), и
+//     перед списанием мы смотрим, нет ли их уже. Это последний замок: он
+//     работает, даже если первые два кто-то обойдёт.
+// Снятие отметки ищет по той же метке — и после первого снятия строк уже нет,
+// поэтому второе снятие возвращать нечего (а до него оно и не дойдёт: voided_at
+// отвечает раньше).
+
+// Порядок «серьёзности» складского исхода: итог отметки — САМЫЙ ПЛОХОЙ из
+// случившегося. Одна списанная доза не отменяет одну несписанную ампулу.
+const STOCK_RANK = { '': 0, none: 1, ok: 2, reversed: 2, skipped: 3, short: 4 };
+const STOCK_ISSUE = ['skipped', 'short'];
+
+function worseStock(a, b) {
+  return (STOCK_RANK[b] || 0) > (STOCK_RANK[a] || 0) ? b : a;
+}
+
+/** Все строки счёта, рождённые этой отметкой (и дозу, и расход сверх неё). */
+function administrationLines(db, administrationId) {
+  return db.prepare('SELECT * FROM admission_services WHERE notes LIKE ? ORDER BY id')
+    .all(`${administrationNotePrefix(administrationId)}%`);
+}
+
+/**
+ * Начисленное этой отметкой — в виде, годном для экрана.
+ *
+ * ЧИТАЕТСЯ ИЗ БАЗЫ, а не собирается по дороге, и это осознанно: ответ на
+ * первое нажатие и ответ на повторное обязаны быть ОДНОЙ формы. Собери мы
+ * первый из возвратов склада, а второй запросом — экран получал бы то
+ * `line_id`, то `id`, и «повторное нажатие» выглядело бы как несостоявшееся
+ * списание ровно там, где оно как раз состоялось.
+ */
+function chargeSummary(db, administrationId) {
+  return db.prepare(`
+    SELECT s.id AS line_id, s.clinic_item_id AS product_id, p.name AS item_name,
+           s.quantity, s.unit_price, s.total, s.billable, s.invoice_item_id, s.notes
+      FROM admission_services s
+      LEFT JOIN products p ON p.id = s.clinic_item_id
+     WHERE s.notes LIKE ? ORDER BY s.id`)
+    .all(`${administrationNotePrefix(administrationId)}%`)
+    .map((r) => ({ ...r, kind: r.notes.includes('/extra:') ? 'extra' : 'dose' }));
+}
+
+/**
+ * Расход СВЕРХ дозы, записанный медсестрой у койки: разбитая ампула, второй
+ * шприц. JSON-текст `[{product_id, qty}]` (миграция 093).
+ *
+ * Одинаковые позиции складываются: две записи об одном товаре — это один
+ * расход в две строки, а не два расхода. Метка строки счёта содержит
+ * product_id, и два расхода одного товара получили бы одинаковую метку, то
+ * есть перестали бы различаться при снятии.
+ */
+function parseExtraConsumption(raw) {
+  if (raw === null || raw === undefined || raw === '') return { items: [], unreadable: false };
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { return { items: [], unreadable: true }; }
+  if (!Array.isArray(parsed)) return { items: [], unreadable: true };
+
+  const byProduct = new Map();
+  let unreadable = false;
+  for (const e of parsed) {
+    if (!e || typeof e !== 'object') { unreadable = true; continue; }
+    const pid = posIntOrNull(e.product_id !== undefined ? e.product_id : e.stock_item_id);
+    const qtyRaw = e.qty !== undefined ? e.qty : e.quantity;
+    const qty = Number(qtyRaw);
+    if (pid === null || !Number.isFinite(qty) || qty <= 0) { unreadable = true; continue; }
+    const prev = byProduct.get(pid);
+    // billable: false — «в учёт расходов, не в счёт пациенту». Разбитую
+    // медсестрой ампулу клиника вправе не выставлять больному, и это её
+    // решение, а не наше: по умолчанию строка идёт в счёт, как всякий расходник.
+    const billable = e.billable === false || e.billable === 0 ? 0 : 1;
+    if (prev) { prev.quantity += qty; prev.billable = prev.billable && billable; }
+    else byProduct.set(pid, { product_id: pid, quantity: qty, billable, name: str(e.name, 100) });
+  }
+  return { items: [...byProduct.values()], unreadable };
+}
+
+/**
+ * Списать и начислить за одну отметку. Возвращает исход, НЕ бросает: срыв
+ * склада — предупреждение, а не отказ от медицинской записи.
+ *
+ * Вызывается ВНУТРИ транзакции отметки. Склад открывает свою (better-sqlite3
+ * делает вложенную транзакцию SAVEPOINT'ом), поэтому его отказ откатывает
+ * ровно свою половину — остаток и строка счёта, — а отметка остаётся.
+ */
+function chargeAdministration(db, order, administration, user) {
+  const warnings = [];
+  const notes = [];
+
+  // Последний замок идемпотентности: за эту отметку уже начислено.
+  if (administrationLines(db, administration.id).length) {
+    return {
+      stock_status: administration.stock_status || 'ok',
+      stock_note: administration.stock_note || '',
+      lines: chargeSummary(db, administration.id), warnings, already: true, basis: null,
+    };
+  }
+
+  let stockStatus = 'none';
+  // Откуда взялось количество дозы: явно из назначения, счётом или приведением
+  // единиц. Экран показывает это рядом с «списано 1 шт», чтобы медсестра
+  // видела, ЧЕМУ она верит.
+  let basis = null;
+
+  // ─── 1. Сама доза ───────────────────────────────────────────────────────
+  //
+  // Препарат ПАЦИЕНТА (source='patient') не списывают и не начисляют — его
+  // принесли родственники, склада он не касался (правило Задачи 6). Отметка о
+  // введении при этом делается точно такая же: лечение состоялось.
+  //
+  // Назначение без ссылки на склад (уход, режим, процедура) — тоже 'none': не
+  // ошибка, а нечего списывать.
+  if (order.source === 'clinic' && order.stock_item_id) {
+    const product = db.prepare('SELECT id, name, unit FROM products WHERE id = ?').get(order.stock_item_id);
+    const q = doseQuantity({
+      dose: order.dose,
+      stock_qty: order.stock_qty,
+      product_unit: product ? product.unit : null,
+    });
+    if (!q.ok) {
+      // НЕ УГАДЫВАЕМ. Отметка записана, списание пропущено, и это видно
+      // человеку (stock_status='skipped' считается отдельно).
+      stockStatus = worseStock(stockStatus, 'skipped');
+      notes.push(q.message);
+      warnings.push({ code: 'quantity', reason: q.reason, message: q.message });
+    } else {
+      try {
+        dispenseAdmissionItemCore(db, {
+          admission_id: order.admission_id,
+          product_id: order.stock_item_id,
+          quantity: q.quantity,
+          doctor_id: order.prescribed_by,
+          billable: true,
+          note: `${doseNotePrefix(administration.id)}${order.name}${order.dose ? ` · ${order.dose}` : ''}`,
+        }, user);
+        stockStatus = worseStock(stockStatus, 'ok');
+        basis = q.basis;
+      } catch (e) {
+        // Нет остатка / позиция погашена / товара нет в каталоге. Склад ведёт
+        // себя ТОЧНО КАК В АМБУЛАТОРИИ: он не уходит в минус и отказывает
+        // целиком (inventory.js dispenseItem). Разница только в том, что здесь
+        // отказ не отменяет отметку — он становится предупреждением.
+        if (!(e instanceof StockError)) throw e;
+        stockStatus = worseStock(stockStatus, 'short');
+        notes.push(`не списано: ${e.message}`);
+        warnings.push({ code: 'stock', message: e.message });
+      }
+    }
+  }
+
+  // ─── 2. Расход сверх дозы ───────────────────────────────────────────────
+  //
+  // ОТДЕЛЬНОЙ строкой, а не прибавкой к дозе (правило референса): разбитая
+  // ампула должна быть ВИДНА. Спрятав её в количество дозы, мы получили бы
+  // «введено 2 г» там, где ввели 1, — то есть враньё в истории болезни ради
+  // аккуратности склада.
+  //
+  // Списывается при ЛЮБОМ источнике, включая препарат пациента: сверхрасход
+  // назван product_id — это позиция КЛИНИЧЕСКОГО склада (шприц, разбитая
+  // ампула физраствора), и она ушла со склада независимо от того, чей был сам
+  // препарат.
+  const extra = parseExtraConsumption(administration.extra_consumption);
+  if (extra.unreadable && extra.items.length === 0) {
+    const msg = 'расход сверх дозы записан текстом — списать его сможет только человек';
+    notes.push(msg);
+    warnings.push({ code: 'extra_unreadable', message: msg });
+  }
+  for (const item of extra.items) {
+    try {
+      dispenseAdmissionItemCore(db, {
+        admission_id: order.admission_id,
+        product_id: item.product_id,
+        quantity: item.quantity,
+        doctor_id: order.prescribed_by,
+        billable: !!item.billable,
+        note: `${extraNotePrefix(administration.id, item.product_id)}${item.name || 'расход сверх дозы'}`,
+      }, user);
+      stockStatus = worseStock(stockStatus, 'ok');
+    } catch (e) {
+      if (!(e instanceof StockError)) throw e;
+      stockStatus = worseStock(stockStatus, 'short');
+      notes.push(`расход сверх дозы не списан: ${e.message}`);
+      warnings.push({ code: 'stock_extra', product_id: item.product_id, message: e.message });
+    }
+  }
+
+  const stockNote = notes.join(' · ').slice(0, 1000);
+  db.prepare('UPDATE treatment_administrations SET stock_status = ?, stock_note = ? WHERE id = ?')
+    .run(stockStatus, stockNote, administration.id);
+
+  return {
+    stock_status: stockStatus, stock_note: stockNote,
+    lines: chargeSummary(db, administration.id), warnings, already: false, basis,
+  };
+}
+
+/**
+ * Вернуть склад и убрать начисление — обратная сторона отметки.
+ *
+ * ВЫСТАВЛЕННУЮ строку не трогаем: за ней уже стоят деньги пациента, и убрать
+ * её должна касса своим путём (то же правило и та же фраза, что у проживания в
+ * rpc/accommodation.js). Молчать при этом нельзя — иначе снятие выглядело бы
+ * полным, а счёт продолжал бы требовать деньги за неведённую дозу.
+ */
+function reverseAdministration(db, administration, user) {
+  const lines = administrationLines(db, administration.id);
+  const warnings = [];
+  let reversed = 0;
+  let kept = 0;
+
+  for (const line of lines) {
+    if (line.invoice_item_id != null) {
+      kept += 1;
+      warnings.push({ code: 'invoiced', line_id: line.id,
+                      message: 'Строка уже в счёте — уберите её через кассу.' });
+      continue;
+    }
+    // Тот же код возврата, что у консоли койки: остаток обратно, движение
+    // 'void' в журнал, строка удалена.
+    voidDispensedAdmissionItemCore(db, { line_id: line.id }, user);
+    reversed += 1;
+  }
+
+  if (lines.length) {
+    const note = kept
+      ? `снято; возвращено строк: ${reversed}; в счёте осталось: ${kept} — уберите через кассу`
+      : `снято; возвращено строк: ${reversed}`;
+    db.prepare('UPDATE treatment_administrations SET stock_status = ?, stock_note = ? WHERE id = ?')
+      .run('reversed', note.slice(0, 1000), administration.id);
+  }
+
+  return { reversal: { reversed, kept, lines: lines.length }, warnings };
 }
 
 // ─── 4. Отметка медсестры ───────────────────────────────────────────────────
@@ -333,29 +643,55 @@ export function treatmentAdminMark(db, args, user) {
     }
   }
 
-  const existing = isPrn ? null : liveMark(db, order.id, date, slot);
-  if (existing) {
-    if (existing.status === status) return { administration: existing, already: true };
-    throw new RpcError('Отметка на этот час уже стоит. Снять её может старшая медсестра.', 400);
-  }
-
   let extra = null;
   if (a.extra !== undefined && a.extra !== null && a.extra !== '') {
     extra = typeof a.extra === 'string' ? a.extra.slice(0, 2000) : JSON.stringify(a.extra).slice(0, 2000);
   }
 
-  const at = nowUtc(db);
-  const info = db.prepare(`INSERT INTO treatment_administrations
-      (order_id, due_date, due_slot, status, given_at, given_by, reason, note, extra_consumption)
-    VALUES (?,?,?,?,?,?,?,?,?)`).run(
-    order.id, date, slot, status, at, (user && user.id) || null,
-    reason, str(a.note, 500), extra,
-  );
+  // MED_ADMIN_CHARGE_V1 — отметка, списание и начисление в ОДНОЙ транзакции.
+  // Иначе бывало бы списанное без отметки (упали после склада) и отмеченное
+  // без списания, причём молча.
+  return db.transaction(() => {
+    const existing = isPrn ? null : liveMark(db, order.id, date, slot);
+    if (existing) {
+      if (existing.status === status) {
+        // Двойное нажатие на общем планшете: НИЧЕГО не создаём — ни отметки,
+        // ни движения товара, ни строки счёта, — но отвечаем тем же, чем
+        // ответили в первый раз, чтобы экран не решил, что списание не прошло.
+        return {
+          administration: existing, already: true,
+          stock: { status: existing.stock_status || '', note: existing.stock_note || '', basis: null },
+          charges: chargeSummary(db, existing.id),
+          warnings: [],
+        };
+      }
+      throw new RpcError('Отметка на этот час уже стоит. Снять её может старшая медсестра.', 400);
+    }
 
-  return {
-    administration: db.prepare('SELECT * FROM treatment_administrations WHERE id = ?').get(info.lastInsertRowid),
-    already: false,
-  };
+    const at = nowUtc(db);
+    const info = db.prepare(`INSERT INTO treatment_administrations
+        (order_id, due_date, due_slot, status, given_at, given_by, reason, note, extra_consumption)
+      VALUES (?,?,?,?,?,?,?,?,?)`).run(
+      order.id, date, slot, status, at, (user && user.id) || null,
+      reason, str(a.note, 500), extra,
+    );
+    const administration = db.prepare('SELECT * FROM treatment_administrations WHERE id = ?')
+      .get(info.lastInsertRowid);
+
+    // Списывает и начисляет ТОЛЬКО «дала». Отказ, пропуск и задержка — это
+    // невведённая доза: со склада ничего не ушло, платить не за что.
+    const charge = status === 'given'
+      ? chargeAdministration(db, order, administration, user)
+      : { stock_status: '', stock_note: '', lines: [], warnings: [], basis: null };
+
+    return {
+      administration: db.prepare('SELECT * FROM treatment_administrations WHERE id = ?').get(administration.id),
+      already: false,
+      stock: { status: charge.stock_status, note: charge.stock_note, basis: charge.basis },
+      charges: charge.lines,
+      warnings: charge.warnings,
+    };
+  })();
 }
 
 // ─── 5. Снять отметку ───────────────────────────────────────────────────────
@@ -366,6 +702,12 @@ export function treatmentAdminMark(db, args, user) {
  * бесследно и разобраться, кто и что снял, уже невозможно. Здесь остаётся
  * след: кто снял, когда и почему; из действующих строку выводит voided_at, и
  * слот снова свободен для верной отметки.
+ *
+ * MED_ADMIN_CHARGE_V1 — снятие ВОЗВРАЩАЕТ и склад, и деньги: препарат идёт
+ * обратно на остаток движением 'void', а строка начисления убирается. Двойное
+ * снятие не возвращает дважды — на этот вопрос отвечает voided_at ниже, ещё до
+ * всякой работы, а за ним стоит второй ответ: после первого снятия строк с
+ * меткой этой отметки уже нет, и возвращать нечего.
  */
 export function treatmentAdminUnmark(db, args, user) {
   requireRole(user, UNMARK_ROLES, 'Снятие отметки');
@@ -373,26 +715,38 @@ export function treatmentAdminUnmark(db, args, user) {
   const id = posIntOrNull(a.administration_id);
   if (id === null) throw new RpcError('administration_id must be a positive integer.', 400);
 
-  const row = db.prepare('SELECT * FROM treatment_administrations WHERE id = ?').get(id);
-  if (!row) throw new RpcError('Отметка не найдена.', 400);
-  if (row.voided_at) return { administration: row, already: true };
-
   const reason = str(a.reason, 300);
-  if (!reason) throw new RpcError('Снятие отметки без причины невозможно.', 400);
 
-  const order = loadOrder(db, row.order_id);
-  assertAdmissionAtLeast(db, order.admission_id, 'active');
+  return db.transaction(() => {
+    const row = db.prepare('SELECT * FROM treatment_administrations WHERE id = ?').get(id);
+    if (!row) throw new RpcError('Отметка не найдена.', 400);
+    if (row.voided_at) {
+      return {
+        administration: row, already: true,
+        reversal: { reversed: 0, kept: 0, lines: 0 }, warnings: [],
+      };
+    }
 
-  const at = nowUtc(db);
-  db.prepare(`UPDATE treatment_administrations
-                 SET voided_at = ?, voided_by = ?, void_reason = ?
-               WHERE id = ?`)
-    .run(at, (user && user.id) || null, reason, row.id);
+    if (!reason) throw new RpcError('Снятие отметки без причины невозможно.', 400);
 
-  return {
-    administration: db.prepare('SELECT * FROM treatment_administrations WHERE id = ?').get(row.id),
-    already: false,
-  };
+    const order = loadOrder(db, row.order_id);
+    assertAdmissionAtLeast(db, order.admission_id, 'active');
+
+    const at = nowUtc(db);
+    db.prepare(`UPDATE treatment_administrations
+                   SET voided_at = ?, voided_by = ?, void_reason = ?
+                 WHERE id = ?`)
+      .run(at, (user && user.id) || null, reason, row.id);
+
+    const back = reverseAdministration(db, row, user);
+
+    return {
+      administration: db.prepare('SELECT * FROM treatment_administrations WHERE id = ?').get(row.id),
+      already: false,
+      reversal: back.reversal,
+      warnings: back.warnings,
+    };
+  })();
 }
 
 // ─── 6. Задачи медсестры на смену ───────────────────────────────────────────
@@ -494,6 +848,21 @@ export function treatmentTasksDue(db, args, user) {
     groups[key].sort((x, y) => (x.slot - y.slot) || String(x.patient_name).localeCompare(String(y.patient_name)));
   }
 
+  // MED_ADMIN_CHARGE_V1 — сколько сегодняшних отметок остались НЕ СПИСАННЫМИ
+  // по отделению. Это не задача медсестры (доза уже введена), а хвост для
+  // старшей: разобрать и провести вручную. Считается там же, где смена, чтобы
+  // счётчик было где показать.
+  const issues = db.prepare(`
+    SELECT COUNT(*) n
+      FROM treatment_administrations a
+      JOIN treatment_orders o ON o.id = a.order_id
+      JOIN admissions adm ON adm.id = o.admission_id
+     WHERE a.due_date = ?
+       AND a.voided_at IS NULL
+       AND a.stock_status IN (${STOCK_ISSUE.map(() => '?').join(',')})
+       ${wardId === null ? '' : 'AND adm.ward_id = ?'}`)
+    .get(...(wardId === null ? [date, ...STOCK_ISSUE] : [date, ...STOCK_ISSUE, wardId]));
+
   return {
     date,
     now: new Date(nowMs).toISOString(),
@@ -501,6 +870,7 @@ export function treatmentTasksDue(db, args, user) {
     counts: {
       overdue: groups.overdue.length, now: groups.now.length,
       later: groups.later.length, prn: groups.prn.length,
+      stock_issues: Number(issues && issues.n) || 0,
     },
     groups,
   };

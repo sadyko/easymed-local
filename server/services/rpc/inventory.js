@@ -222,6 +222,25 @@ export function voidDispense(db, args, user) {
 // =============================================================================
 export function dispenseAdmissionItem(db, args, user) {
   requireRole(user, DISPENSE_ROLES);
+  return dispenseAdmissionItemCore(db, args, user);
+}
+
+// MED_ADMIN_CHARGE_V1 — ТО ЖЕ САМОЕ, но без вопроса о роли.
+//
+// Существует ради одного вызывающего: отметки медсестры о введении дозы
+// (rpc/treatment-orders.js, Задача 6). Списание там уже разрешено — но ДРУГИМ
+// списком ролей: дозу отмечает медсестра или старшая, снимает отметку только
+// старшая, и оба списка живут в листе назначений, где они и решаются. Спроси
+// мы здесь ещё и DISPENSE_ROLES/VOID_ROLES — на один вопрос было бы два
+// ответа, и старшая медсестра, которой лист назначений снять отметку разрешил,
+// получила бы 403 от склада на полпути, оставив дозу снятой, а деньги на месте.
+//
+// Второй экземпляр движения товара при этом НЕ заводится, и в этом весь смысл
+// такой разделки: остаток, строка admission_services и запись в
+// stock_movements пишутся ровно тем же кодом, что и у койки. Своя копия
+// разъехалась бы с этой в мелочах (знак qty, reference_type, цена из
+// каталога), и нашлось бы это при сверке склада, через месяц.
+export function dispenseAdmissionItemCore(db, args, user) {
   const admissionId = args && args.admission_id;
   if (!isPositiveInt(admissionId)) throw new RpcError('admission_id must be a positive integer.', 400);
   const productId = args && args.product_id;
@@ -245,8 +264,9 @@ export function dispenseAdmissionItem(db, args, user) {
     //
     // Здесь именно assertAdmissionAtLeast, а НЕ assertCanPrescribe: препарат у
     // койки выдаёт медсестра, и она не лечащий врач. Кому можно выдавать,
-    // решает DISPENSE_ROLES выше; эта строка отвечает только на вопрос «дошёл
-    // ли пациент до лечения».
+    // решает вызывающий (DISPENSE_ROLES у консоли койки, MARK_ROLES у листа
+    // назначений); эта строка отвечает только на вопрос «дошёл ли пациент до
+    // лечения».
     const adm = assertAdmissionAtLeast(db, admissionId, 'active');
     const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId);
     if (!product) throw new RpcError('product not found.', 400);
@@ -278,6 +298,14 @@ export function dispenseAdmissionItem(db, args, user) {
 
 export function voidDispensedAdmissionItem(db, args, user) {
   requireRole(user, VOID_ROLES);
+  return voidDispensedAdmissionItemCore(db, args, user);
+}
+
+// MED_ADMIN_CHARGE_V1 — возврат без вопроса о роли; парная к
+// dispenseAdmissionItemCore и заведена по той же причине (см. её комментарий).
+// Снятие отметки о введении делает СТАРШАЯ МЕДСЕСТРА, а её нет в VOID_ROLES —
+// и не должно быть: чужую выдачу у койки она не отменяет.
+export function voidDispensedAdmissionItemCore(db, args, user) {
   const lineId = args && args.line_id;
   if (!isPositiveInt(lineId)) throw new RpcError('line_id must be a positive integer.', 400);
 
