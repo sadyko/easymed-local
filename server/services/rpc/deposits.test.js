@@ -25,7 +25,9 @@ test('регистратура заводит депозит: pending, свой 
   const { deposit } = createDeposit(db, { patient_id: pid, amount: 500000, method: 'cash' }, REG);
   assert.equal(deposit.status, 'pending');
   assert.equal(deposit.amount, 500000);
-  assert.match(deposit.deposit_number, /^DEP-\d{2}-\d{5}$/);
+  // Буква здания — та же причина, что у счёта: номер депозита СТАНОВИТСЯ
+  // номером счёта при приёме, то есть попадает в тот же UNIQUE-индекс.
+  assert.match(deposit.deposit_number, /^DEP-[A-Z]{1,8}-\d{2}-\d{5}$/);
   assert.equal(deposit.created_by, REG.id);
   assert.equal(deposit.created_by_name, 'Каримова Шахзода');
 });

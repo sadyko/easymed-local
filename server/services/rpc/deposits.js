@@ -19,6 +19,11 @@
 
 import { hasAnyRole } from '../roles.js';
 import { ensureOpenShift } from './cashier.js';
+// BRANCH_MONEY_NUMBER_V1 — буква здания для номера депозита. Импорт из
+// billing.js, а не своя копия: номер депозита СТАНОВИТСЯ номером счёта (см.
+// acceptDeposit ниже), то есть попадает в тот же UNIQUE-индекс, и правило
+// уникальности у них обязано быть буквально одно.
+import { branchLetter, assertOwnBuilding } from './billing.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -45,14 +50,23 @@ function requireRole(user, allowed) {
 const round2 = (n) => Math.round(n * 100) / 100;
 const isPositiveInt = (v) => Number.isInteger(v) && v > 0;
 
-// DEP-<ГГ>-<00001>. Зеркалит nextInvoiceNumber (billing.js) — см. миграцию 069.
+// DEP-<буква здания>-<ГГ>-<00001>. Зеркалит nextInvoiceNumber (billing.js) —
+// см. миграции 069 и 088.
+//
+// БУКВА ЗДЕСЬ ОБЯЗАТЕЛЬНА РОВНО ПОТОМУ, что приём депозита создаёт настоящий
+// счёт и кладёт номер депозита в invoices.invoice_number (DEPOSIT_REVENUE_V1,
+// ниже). Значит номер депозита живёт в том же уникальном индексе, что и номера
+// счетов, и ездит между зданиями вместе с ними: два здания без буквы выдали бы
+// одинаковый 'DEP-26-00001', и депозит соседа был бы отвергнут при приёме.
+// Старые номера не переписываются — буква только у новых.
 export function nextDepositNumber(db) {
   const year4 = db.prepare("SELECT strftime('%Y','now') AS y").get().y;
   const yy = year4.slice(-2);
+  const letter = branchLetter(db);
   db.prepare('INSERT INTO deposit_counters (year, next_seq) VALUES (?, 1) ON CONFLICT(year) DO NOTHING').run(year4);
   const seq = db.prepare('SELECT next_seq FROM deposit_counters WHERE year = ?').get(year4).next_seq;
   db.prepare('UPDATE deposit_counters SET next_seq = next_seq + 1 WHERE year = ?').run(year4);
-  return `DEP-${yy}-${String(seq).padStart(5, '0')}`;
+  return `DEP-${letter}-${yy}-${String(seq).padStart(5, '0')}`;
 }
 
 export function createDeposit(db, args, user) {
@@ -253,6 +267,11 @@ export function refundDeposit(db, args, user) {
 
       // Счёт депозита закрыт возвратом — полным или частичным.
       const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(dep.invoice_id);
+      // BRANCH_MONEY_GUARD_V1 — сам депозит между зданиями не ездит, поэтому
+      // его счёт здешний почти по определению; проверка стоит на случай, когда
+      // «почти» перестанет быть правдой, и стоит она ровно там, где пишутся
+      // деньги.
+      if (inv) assertOwnBuilding(db, inv, 'Счёт депозита');
       if (inv) {
         const paid = round2(Number(inv.paid_amount || 0) - amount);
         db.prepare('UPDATE invoices SET paid_amount = ?, status = ? WHERE id = ?')

@@ -6,7 +6,41 @@
 // не попадает в выгрузку, пока её сюда не впишут.
 //
 // Денежные поля visit_services (unit_price, total, invoice_item_id) НЕ
-// перечислены намеренно: статус нужен лабораторной очереди, деньги — Фаза 3.
+// перечислены намеренно и после Фазы 3: деньги везёт ДОКУМЕНТ —
+// invoices/invoice_items, — а не строка визита. invoice_item_id вообще
+// локальная ссылка, а unit_price/total на строке визита это КОПИЯ позиции
+// счёта, которую держит биллинг; вези мы её отдельно, у соседа появилось бы
+// второе, расходящееся мнение о той же сумме.
+//
+// BRANCH_MONEY_V1 (Фаза 3) — деньги. invoices, invoice_items и payments едут по
+// тем же правилам, что и записи (миграция 087), но с двумя отличиями, и за
+// каждым стоит настоящая ошибка в отчёте:
+//
+//   1. НАСТОЯЩЕЕ ВРЕМЯ, а не время приёма. created_at и paid_at перечислены
+//      ОБЫЧНЫМИ колонками и уезжают. Записям это было не нужно: визит попадает
+//      в списки по visit_date, результат — по entered_at, и то, что created_at
+//      у приехавшей строки означает «когда МЫ её приняли», никому не мешало. У
+//      денег же created_at счёта и paid_at платежа — единственные даты, по
+//      которым считается КАЖДЫЙ денежный отчёт. Не вези мы их, счёт, выписанный
+//      в филиале во вторник и доехавший в четверг, лёг бы в выручку ЧЕТВЕРГА, и
+//      день в главной клинике не сошёлся бы ни с одним днём в филиале.
+//   2. paid_amount НЕ уезжает. Это сумма платежей по счёту, и каждое здание
+//      считает её из тех платежей, которые к нему доехали (records.js). Так у
+//      каждой базы сходится собственная касса: сумма payments равна
+//      invoices.paid_amount в любой момент — равенство, на котором стоят
+//      кассовый отчёт и возвраты. Приезжай оно готовым числом, счёт показывал
+//      бы «оплачено» рядом с пустой таблицей платежей, пока платёж не доедет.
+//      status, наоборот, уезжает: 'debt', 'void' и 'refunded' — не арифметика,
+//      а решение человека, вычислить их из сумм нельзя, и посчитанный статус
+//      превратил бы отменённый в филиале счёт в долг пациента (разбор — в 087).
+//
+// НЕ ЕДУТ локальные ссылки: invoices.branch_id, created_by, payer_id,
+// admission_id; payments.cashier_id, shift_id. Все они — id ЭТОЙ базы и у
+// соседа указывали бы в чужие строки или в пустоту (foreign_keys=ON). Что от
+// этого теряет отчёт по чужому зданию, надо знать заранее: на платеже нет имени
+// кассира, на счёте нет врача (их справочник едет отдельным каналом и по своим
+// ключам), нет разбивки по контрагенту (payer) и привязки к госпитализации, и
+// нет внутреннего branch_id — «здание» считается по sync_origin.
 //
 // lab_results.parameter/ref_low/ref_high (ревью Задачи 4, C3) — имя аналита и
 // границы нормы. Без parameter документ-фид (documents.js) группирует
@@ -29,6 +63,16 @@ export const SHIPPED = {
     'parameter', 'value', 'numeric_value', 'unit', 'reference_range',
     'ref_low', 'ref_high', 'flag', 'notes', 'entered_at', 'verified_at',
   ],
+  // BRANCH_MONEY_V1. paid_amount здесь НЕТ — он считается из платежей (см.
+  // шапку и records.js recomputePaid). created_at/paid_at есть, и это не
+  // недосмотр, а требование отчётов: деньги обязаны попасть в тот день, когда
+  // они произошли, а не в день доставки.
+  invoices: [
+    'invoice_number', 'subtotal', 'discount_amount', 'total_amount',
+    'status', 'created_at', 'paid_at',
+  ],
+  invoice_items: ['description', 'quantity', 'unit_price', 'total', 'created_at'],
+  payments: ['amount', 'method', 'notes', 'paid_at', 'created_at'],
 };
 
 // Ссылки: колонка → таблица, на которую она смотрит. Уезжает uid родителя, а не
@@ -37,6 +81,17 @@ export const REFS = {
   visits: { patient_id: 'patients' },
   visit_services: { visit_id: 'visits' },
   lab_results: { visit_service_id: 'visit_services' },
+  // BRANCH_MONEY_V1. У счёта ДВЕ ссылки на строки, и это первый такой случай:
+  // records.js уводит запись в ожидание по ПЕРВОМУ отсутствующему родителю, а
+  // дождавшись его, тут же уходит ждать второго. Работает, но лишним кругом —
+  // и лишний круг здесь честнее, чем счёт без пациента.
+  //
+  // visit_id необязателен (счёт за госпитализацию и счёт-депозит визита не
+  // имеют), patient_id — NOT NULL: счёт без пациента вставить нельзя, и запись
+  // будет ждать столько, сколько нужно.
+  invoices: { patient_id: 'patients', visit_id: 'visits' },
+  invoice_items: { invoice_id: 'invoices' },
+  payments: { invoice_id: 'invoices' },
 };
 
 // Ссылки на СПРАВОЧНИК — не по uid, а по коду. services синхронизирует
@@ -50,6 +105,34 @@ export const REFS = {
 //   колонка → { table, key, ref } — ref это имя поля в refs записи.
 export const CODE_REFS = {
   visit_services: { service_id: { table: 'services', key: 'code', ref: 'service_code' } },
+  // Позиция счёта — та же ссылка и по той же причине. Название услуги в
+  // description у неё уже есть (его пишет биллинг), поэтому даже без
+  // разрешённой ссылки счёт читается человеком; ссылка нужна отчёту «выручка по
+  // услугам». Если кода в справочнике принимающего нет, позиция ЖДЁТ его в
+  // sync_pending — как ждёт строка лабораторной очереди. ШАПКА СЧЁТА при этом
+  // приезжает отдельной записью и не ждёт ничего: сумма счёта в отчёте верна
+  // даже тогда, когда его разбивка по позициям ещё не полна. Отчётам это надо
+  // знать: итог считается по invoices, а не суммированием invoice_items.
+  invoice_items: { service_id: { table: 'services', key: 'code', ref: 'service_code' } },
+};
+
+// ССЫЛКИ, БЕЗ КОТОРЫХ СТРОКУ ВСЁ РАВНО ЗАВОДЯТ. У записей такого не было:
+// visits.patient_id, visit_services.visit_id и lab_results.visit_service_id все
+// NOT NULL, поэтому приёмник и уводил запись в ожидание, не найдя родителя.
+// invoices.visit_id — первая необязательная ссылка (счёт за госпитализацию и
+// счёт-депозит визита не имеют вовсе), и обращаться с ней как с обязательной
+// нельзя ДВАЖДЫ:
+//
+//   • запись без этой ссылки не «кривая» — таких счетов в клинике много, и
+//     пропустить их значило бы не показать в главной часть выручки;
+//   • ждать ненайденный визит опаснее, чем потерять ссылку. Визиты ездят с
+//     Фазы 2, но счёт может ссылаться на визит СТАРШЕ того дня, когда здания
+//     связали, — такого визита у соседа нет и не будет. Счёт прождал бы 30
+//     дней в sync_pending и был бы выселен: деньги молча исчезли бы из отчёта.
+//     Поэтому не найден визит — счёт заводится БЕЗ него: сумма, дата и статус
+//     важнее связи с визитом, а связь остаётся пустой и видна как пустая.
+export const SOFT_REFS = {
+  invoices: ['visit_id'],
 };
 
 const TABLES = Object.keys(SHIPPED);
@@ -469,7 +552,13 @@ function unionCols(changedAt) {
 // родителя раньше ребёнка почти всегда (ребёнок создаётся позже), ранг нужен
 // только чтобы разрешить редкую ничью created_at (секундная точность) в ТУ ЖЕ
 // сторону, а не в произвольную.
-const TABLE_RANK = { patients: 0, visits: 1, visit_services: 2, lab_results: 3 };
+//
+// BRANCH_MONEY_V1 — деньги встают ПОСЛЕ записей и в своём порядке зависимостей:
+// счёт смотрит на пациента и визит, позиция и платёж — на счёт.
+const TABLE_RANK = {
+  patients: 0, visits: 1, visit_services: 2, lab_results: 3,
+  invoices: 4, invoice_items: 5, payments: 6,
+};
 
 // Курсор засева одалживает поле seed_tbl как имя фазы, пока идут надгробия —
 // ни одна настоящая таблица так не называется, столкновения быть не может.
@@ -484,6 +573,12 @@ const SEED_PRESENCE_SQL = `
     SELECT 'visit_services' AS tbl, 2 AS rank, uid, created_at AS at, id FROM visit_services WHERE uid IS NOT NULL
     UNION ALL
     SELECT 'lab_results' AS tbl, 3 AS rank, uid, created_at AS at, id FROM lab_results WHERE uid IS NOT NULL
+    UNION ALL
+    SELECT 'invoices' AS tbl, 4 AS rank, uid, created_at AS at, id FROM invoices WHERE uid IS NOT NULL
+    UNION ALL
+    SELECT 'invoice_items' AS tbl, 5 AS rank, uid, created_at AS at, id FROM invoice_items WHERE uid IS NOT NULL
+    UNION ALL
+    SELECT 'payments' AS tbl, 6 AS rank, uid, created_at AS at, id FROM payments WHERE uid IS NOT NULL
   )
   WHERE at <= @started
     AND (at > @at OR (at = @at AND (rank > @rank OR (rank = @rank AND id > @id))))

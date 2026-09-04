@@ -36,17 +36,82 @@ function isPositiveInt(v) {
   return Number.isInteger(v) && v > 0;
 }
 
-// INV-<2-digit year>-<5-digit seq>, seq scoped to the current year via a
-// dedicated per-year counter table (invoice_counters). This is monotonic
-// even if invoices are later deleted or a number is otherwise skipped —
-// unlike COUNT(*)+1, which would reuse a number after a deletion.
+// BRANCH_MONEY_NUMBER_V1 — буква ЭТОГО здания, та же, что стоит в номере карты
+// пациента (миграция 080). Читается из branch_identity — одной строки, которая
+// отвечает на вопрос «какое здание эта установка».
+//
+// ОТКАЗ, А НЕ МОЛЧАЛИВЫЙ ЗАПАСНОЙ ВАРИАНТ. Выписать номер без буквы значило бы
+// вернуться к 'INV-26-00001' — тому самому номеру, который в этот же день
+// чеканит соседнее здание; приехав туда, счёт был бы отвергнут UNIQUE-индексом
+// и потерян молча, а обнаружилось бы это не здесь, а в чужом отчёте. То же
+// решение и по той же причине принял триггер MRN в 080: он РАЗБИРАЕТ
+// регистрацию пациента ('branch identity missing'), а не выдаёт карту без
+// номера. Строка branch_identity создаётся миграцией 080 и есть у любой
+// клиники; её отсутствие — не «старая база», а поломка, и говорить о ней надо
+// вслух.
+export function branchLetter(db) {
+  const row = db.prepare('SELECT letter FROM branch_identity WHERE id = 1').get();
+  const letter = row && row.letter ? String(row.letter).toUpperCase() : '';
+  if (!/^[A-Z]{1,8}$/.test(letter)) {
+    throw new RpcError(
+      'Здание не определено: у этой установки нет буквы филиала. Без неё номер счёта'
+      + ' совпал бы с номером соседнего здания. Обратитесь в поддержку.', 500);
+  }
+  return letter;
+}
+
+// INV-<буква здания>-<2-digit year>-<5-digit seq>, seq scoped to the current
+// year via a dedicated per-year counter table (invoice_counters). This is
+// monotonic even if invoices are later deleted or a number is otherwise
+// skipped — unlike COUNT(*)+1, which would reuse a number after a deletion.
+//
+// БУКВА (миграция 088): счета теперь ездят между зданиями, а invoice_number
+// объявлен UNIQUE. Два здания со своими счётчиками чеканят один и тот же
+// 'INV-26-00001', и приехавший счёт соседа база отвергла бы навсегда. Старые
+// номера не переписываются — они на чеках и в бумагах; буква появляется только
+// у выданных с этого дня, а нумерация продолжается с того же места.
 export function nextInvoiceNumber(db) {
   const year4 = db.prepare("SELECT strftime('%Y','now') AS y").get().y; // e.g. '2026'
   const yy = year4.slice(-2);
+  const letter = branchLetter(db);
   db.prepare('INSERT INTO invoice_counters (year, next_seq) VALUES (?, 1) ON CONFLICT(year) DO NOTHING').run(year4);
   const seq = db.prepare('SELECT next_seq FROM invoice_counters WHERE year = ?').get(year4).next_seq;
   db.prepare('UPDATE invoice_counters SET next_seq = next_seq + 1 WHERE year = ?').run(year4);
-  return `INV-${yy}-${String(seq).padStart(5, '0')}`;
+  return `INV-${letter}-${yy}-${String(seq).padStart(5, '0')}`;
+}
+
+// BRANCH_MONEY_GUARD_V1 — ЧУЖИЕ ДЕНЬГИ ТОЛЬКО ДЛЯ ЧТЕНИЯ, и решается это на
+// сервере, а не на экране.
+//
+// С миграции 087 счета, позиции и платежи ездят между зданиями, и в главной
+// клинике теперь лежат строки филиала. Их видно — за этим они и едут, — но
+// править их отсюда нельзя ни одним способом: сумма, статус и платежи чужого
+// счёта живут в том здании, где стоит касса, которая эти деньги взяла. Приняв
+// оплату по чужому счёту здесь, клиника получила бы две несовместимые правды об
+// одной сумме, а удалив его — стёрла бы работу соседнего здания (тот же исход,
+// что описан в f9615ab для строки визита).
+//
+// Экран кассы это уже запрещает (visit-bill.js, f9615ab), но экран — не
+// граница: RPC вызывается по invoice_id, и запрет обязан стоять там, где
+// пишется строка.
+//
+// Филиал НАЗЫВАЕТСЯ теми же словами, что и метки в списках: имя из справочника
+// филиалов, если оно приехало, иначе одна буква.
+function branchName(db, letter) {
+  const tag = String(letter || '').toUpperCase();
+  try {
+    const row = db.prepare('SELECT name FROM branches WHERE letter = ? COLLATE NOCASE').get(tag);
+    if (row && row.name) return `${row.name} (${tag})`;
+  } catch { /* справочник филиалов ещё не приехал — хватит буквы */ }
+  return tag || 'другого здания';
+}
+
+// row — любая строка с колонкой sync_origin (invoices, payments, invoice_items,
+// visits, visit_services). what — о чём речь, в родительном падеже.
+export function assertOwnBuilding(db, row, what) {
+  if (!row || row.sync_origin == null) return;
+  throw new RpcError(
+    `${what} из филиала ${branchName(db, row.sync_origin)} — изменить его можно только там.`, 403);
 }
 
 export function createInvoiceForVisit(db, args, user) {
@@ -60,6 +125,10 @@ export function createInvoiceForVisit(db, args, user) {
   if (!visit) {
     throw new RpcError('visit not found.', 400);
   }
+  // BRANCH_MONEY_GUARD_V1 — счёт по визиту выставляют там, где визит сделан.
+  // Здесь это тем важнее, что счёт СОСЕДА по этому визиту сюда уже приехал (087)
+  // и второй счёт был бы вторым требованием денег за одну и ту же работу.
+  assertOwnBuilding(db, visit, 'Визит');
 
   const ids = args && args.visit_service_ids;
   if (!Array.isArray(ids) || ids.length === 0 || !ids.every(isPositiveInt)) {
@@ -246,6 +315,7 @@ export function recordPayment(db, args, user) {
     if (!invoice) {
       throw new RpcError('invoice not found.', 400);
     }
+    assertOwnBuilding(db, invoice, 'Счёт');   // BRANCH_MONEY_GUARD_V1
     if (invoice.status === 'void' || invoice.status === 'refunded') {
       throw new RpcError(`invoice is ${invoice.status}.`, 400);
     }
@@ -335,6 +405,7 @@ export function recordPaymentSplit(db, args, user) {
   const run = db.transaction(() => {
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
     if (!invoice) throw new RpcError('invoice not found.', 400);
+    assertOwnBuilding(db, invoice, 'Счёт');   // BRANCH_MONEY_GUARD_V1
     if (invoice.status === 'void' || invoice.status === 'refunded') {
       throw new RpcError(`invoice is ${invoice.status}.`, 400);
     }
@@ -388,6 +459,7 @@ export function markInvoiceDebt(db, args, user) {
   const run = db.transaction(() => {
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
     if (!invoice) throw new RpcError('invoice not found.', 400);
+    assertOwnBuilding(db, invoice, 'Счёт');   // BRANCH_MONEY_GUARD_V1
     if (invoice.status === 'void' || invoice.status === 'refunded') {
       throw new RpcError(`invoice is ${invoice.status}.`, 400);
     }
@@ -426,6 +498,9 @@ export function removeUnpaidService(db, args, user) {
   const run = db.transaction(() => {
     const vs = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId);
     if (!vs) throw new RpcError('service line not found.', 400);
+    // BRANCH_MONEY_GUARD_V1 — удаление здесь означает надгробие в журнале (084),
+    // то есть строка исчезнет и в том здании, где её сделали.
+    assertOwnBuilding(db, vs, 'Услуга');
     if (vs.status === 'in_progress' || vs.status === 'completed') {
       throw new RpcError('услуга уже оказывается/оказана — удалить нельзя.', 400);
     }
@@ -438,6 +513,7 @@ export function removeUnpaidService(db, args, user) {
       : null;
     const inv = item ? db.prepare('SELECT * FROM invoices WHERE id = ?').get(item.invoice_id) : null;
     if (item && !inv) throw new RpcError('invoice not found.', 500);
+    if (inv) assertOwnBuilding(db, inv, 'Счёт');   // BRANCH_MONEY_GUARD_V1
     if (inv && (inv.paid_amount > 0 || inv.status !== 'unpaid')) {
       throw new RpcError('счёт уже ' + (inv.paid_amount > 0 ? 'оплачен (частично)' : inv.status) + ' — сначала отмените его в кассе.', 400);
     }
@@ -482,6 +558,7 @@ export function changeUnpaidService(db, args, user) {
   const run = db.transaction(() => {
     const vs = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId);
     if (!vs) throw new RpcError('service line not found.', 400);
+    assertOwnBuilding(db, vs, 'Услуга');   // BRANCH_MONEY_GUARD_V1
     if (vs.status === 'in_progress' || vs.status === 'completed') {
       throw new RpcError('услуга уже оказывается/оказана — заменить нельзя.', 400);
     }
@@ -493,6 +570,7 @@ export function changeUnpaidService(db, args, user) {
       : null;
     const inv = item ? db.prepare('SELECT * FROM invoices WHERE id = ?').get(item.invoice_id) : null;
     if (item && !inv) throw new RpcError('invoice not found.', 500);
+    if (inv) assertOwnBuilding(db, inv, 'Счёт');   // BRANCH_MONEY_GUARD_V1
     if (inv && (inv.paid_amount > 0 || inv.status !== 'unpaid')) {
       throw new RpcError('счёт уже ' + (inv.paid_amount > 0 ? 'оплачен (частично)' : inv.status) + ' — сначала отмените его в кассе.', 400);
     }
@@ -548,6 +626,11 @@ export function refundPayment(db, args, user) {
     if (!invoice) {
       throw new RpcError('invoice not found.', 400);
     }
+    // BRANCH_MONEY_GUARD_V1 — возврат делают там, где взяли деньги: из ЭТОГО
+    // ящика они не выходили, и отрицательный платёж отсюда исказил бы и смену
+    // соседа, и его выручку.
+    assertOwnBuilding(db, p, 'Платёж');
+    assertOwnBuilding(db, invoice, 'Счёт');
 
     // The tag must match on a BOUNDARY, not a bare prefix: `LIKE 'REFUND#1%'`
     // also matches REFUND#10 / REFUND#123, so refunds of other payments were
@@ -693,6 +776,7 @@ export function removeAdmissionLineFromInvoice(db, args, user) {
     if (!item) throw new RpcError('invoice item not found.', 500);
     const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(item.invoice_id);
     if (!inv) throw new RpcError('invoice not found.', 500);
+    assertOwnBuilding(db, inv, 'Счёт');   // BRANCH_MONEY_GUARD_V1
     if (inv.paid_amount > 0 || inv.status !== 'unpaid') {
       throw new RpcError('счёт уже ' + (inv.paid_amount > 0 ? 'оплачен (частично)' : inv.status) + ' — сначала отмените его в кассе.', 400);
     }

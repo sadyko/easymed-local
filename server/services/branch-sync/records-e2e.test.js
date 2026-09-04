@@ -42,6 +42,9 @@ import { mintRelayToken, publishCatalogue, fetchCatalogue, publishJournal, fetch
 import { applyCatalogue } from './catalogue.js';
 import { buildBatch } from './journal.js';
 import { runBranchSync } from '../rpc/branch-sync.js';
+// Настоящие денежные RPC, а не INSERT руками: проверяется в том числе номер
+// счёта с буквой здания (миграция 088) и запрет на правку чужих денег.
+import { createInvoiceForVisit, recordPayment, markInvoiceDebt, removeUnpaidService } from '../rpc/billing.js';
 
 import { openDb as openCpDb } from '../../../control-plane/server/db/connection.js';
 import { migrate as migrateCp } from '../../../control-plane/server/db/migrate.js';
@@ -279,15 +282,73 @@ test('BRANCH_RECORDS_V1: пациенты и лабораторная очере
     assert.equal('reason' in r.records.fetched.A, false, 'и главная тоже');
   });
 
-  await t.test('деньги не уезжают: счетов у соседей не появляется', async () => {
-    const pid = B.db.prepare("SELECT id FROM patients WHERE full_name = 'Иванов'").get().id;
-    B.db.prepare("INSERT INTO invoices (invoice_number, patient_id, total_amount, status) VALUES ('B-INV-1', ?, 35000, 'unpaid')")
-      .run(pid);
+  // ОБЕЩАНИЕ ФАЗЫ 3, ЦЕЛИКОМ. Здесь стоял тест, закреплявший ОБРАТНОЕ —
+  // «счета у соседей не появляются», — и владелец видел ровно это: денежный
+  // отчёт главной клиники показывал по филиалам не «мало», а ноль. Теперь счёт,
+  // выставленный в филиале настоящей кассой, обязан доехать до главной со
+  // своими позициями, платежами и НАСТОЯЩИМ днём выставления — и остаться там
+  // неприкосновенным.
+  await t.test('деньги едут: счёт филиала виден в главной клинике, и править его оттуда нельзя', async () => {
+    // Регистратор и кассир филиала: created_by и cashier_id — настоящие внешние
+    // ключи, и без строк в users счёт не выписать.
+    B.db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (91,'reg-b','x','registrar')").run();
+    B.db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (92,'cash-b','x','cashier')").run();
+    const regB = { id: 91, role: 'registrar' };
+    const cashB = { id: 92, role: 'cashier' };
+
+    const vid = B.db.prepare('SELECT id FROM visits ORDER BY id LIMIT 1').get().id;
+    const sid = B.db.prepare("SELECT id FROM services WHERE code = 'S-OAK'").get().id;
+    const vs1 = B.db.prepare('SELECT id FROM visit_services ORDER BY id LIMIT 1').get().id;
+    const vs2 = B.db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, status) VALUES (?,?,1,'ordered')")
+      .run(vid, sid).lastInsertRowid;
+
+    const made = createInvoiceForVisit(B.db, { visit_id: vid, visit_service_ids: [vs1, vs2] }, regB);
+    assert.match(made.invoice.invoice_number, /^INV-B-\d{2}-\d{5}$/,
+      'номер несёт букву здания: без неё главная чеканит такой же и отвергает приехавший по UNIQUE');
+    assert.equal(made.items.length, 2);
+    assert.equal(made.invoice.total_amount, 70000);
+    recordPayment(B.db, { invoice_id: made.invoice.id, amount: 35000, method: 'cash' }, cashB);
+
     await round();
+    await round();
+
     for (const node of [A, C]) {
-      assert.equal(count(node.db, 'invoices'), 0, node.tag + ': счета — Фаза 3');
-      assert.equal(count(node.db, 'invoice_items'), 0);
+      const inv = node.db.prepare('SELECT * FROM invoices WHERE invoice_number = ?').get(made.invoice.invoice_number);
+      assert.ok(inv, node.tag + ': счёт филиала обязан доехать — иначе денежный отчёт главной показывает ноль');
+      assert.equal(inv.sync_origin, 'B', node.tag + ': на строке видно, чьё это здание');
+      assert.equal(inv.total_amount, 70000, node.tag);
+      assert.equal(inv.status, 'partial', node.tag + ': статус — решение кассы, и он едет как есть');
+      assert.equal(inv.created_at, made.invoice.created_at,
+        node.tag + ': день выставления настоящий, а не день доставки — иначе отчёт бьётся не тем днём');
+      assert.equal(node.db.prepare('SELECT COUNT(*) n FROM invoice_items WHERE invoice_id = ?').get(inv.id).n, 2,
+        node.tag + ': обе позиции счёта');
+      assert.equal(node.db.prepare('SELECT COALESCE(SUM(amount),0) s FROM payments WHERE invoice_id = ?').get(inv.id).s,
+        35000, node.tag + ': платёж');
+      assert.equal(inv.paid_amount, 35000,
+        node.tag + ': оплачено ровно столько, сколько платежей сюда доехало — сумма считается здесь, а не приезжает');
+
+      // Локальные ссылки соседа сюда не приехали, и отчёт обязан это знать.
+      assert.equal(inv.created_by, null, node.tag + ': id пользователя соседа указывал бы в пустоту');
+      assert.equal(inv.branch_id, null, node.tag + ': «здание» считается по sync_origin, а не по внутреннему branch_id');
+      const pay = node.db.prepare('SELECT * FROM payments WHERE invoice_id = ?').get(inv.id);
+      assert.equal(pay.cashier_id, null, node.tag + ': имени кассира чужого здания в отчёте не будет — и это честно');
+      assert.equal(pay.shift_id, null, node.tag + ': смена кассы остаётся в своём здании');
+      assert.equal(pay.method, 'cash', node.tag + ': а способ оплаты кассовому отчёту нужен, и он едет');
     }
+
+    // ПРАВИТЬ ЧУЖИЕ ДЕНЬГИ ОТСЮДА НЕЛЬЗЯ. Главная их видит — за этим они и
+    // едут, — но касса, взявшая их, стоит в филиале.
+    A.db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (93,'cash-a','x','cashier')").run();
+    const cashA = { id: 93, role: 'cashier' };
+    const invA = A.db.prepare('SELECT * FROM invoices WHERE invoice_number = ?').get(made.invoice.invoice_number);
+    const vsA = A.db.prepare("SELECT id FROM visit_services WHERE sync_origin = 'B' ORDER BY id LIMIT 1").get().id;
+    assert.throws(() => recordPayment(A.db, { invoice_id: invA.id, amount: 1000 }, cashA), /Чиланзар \(B\)/,
+      'две несовместимые правды об одной сумме — это и есть потеря денег');
+    assert.throws(() => markInvoiceDebt(A.db, { invoice_id: invA.id }, cashA), /Чиланзар \(B\)/);
+    assert.throws(() => removeUnpaidService(A.db, { visit_service_id: vsA }, { id: 93, role: 'admin' }), /Чиланзар \(B\)/,
+      'удаление здесь означало бы надгробие в журнале — строка исчезла бы и в филиале');
+    assert.equal(A.db.prepare('SELECT paid_amount FROM invoices WHERE id = ?').get(invA.id).paid_amount, 35000,
+      'ни один отказ не тронул сумму');
   });
 
   await t.test('повторная синхронизация ничего не меняет и ничего не дублирует', async () => {
@@ -354,10 +415,16 @@ test('BRANCH_RECORDS_V1: пациенты и лабораторная очере
 
     assert.deepEqual(patientNames(D.db), ['Иванов'], 'пациент доехал холодным засевом');
     assert.equal(count(D.db, 'visits'), 1, 'и его визит');
-    assert.equal(count(D.db, 'visit_services'), 1, 'и его услуга');
+    assert.equal(count(D.db, 'visit_services'), 2, 'и обе его услуги');
     assert.equal(count(D.db, 'lab_results'), 1, 'и её результат');
     assert.equal(count(D.db, 'sync_pending'), 0, 'ничего не осталось ждать родителя');
-    assert.equal(count(D.db, 'invoices'), 0, 'счета не едут даже засевом');
+    // ДЕНЬГИ ЕДУТ И ЗАСЕВОМ. Иначе здание, подключённое позже, не увидело бы ни
+    // одного счёта, выписанного до его подключения, — а это вся история клиники.
+    assert.equal(count(D.db, 'invoices'), 1, 'счёт доехал холодным засевом');
+    assert.equal(count(D.db, 'invoice_items'), 2, 'обе позиции');
+    assert.equal(count(D.db, 'payments'), 1, 'и платёж');
+    assert.equal(D.db.prepare('SELECT paid_amount FROM invoices LIMIT 1').get().paid_amount, 35000,
+      'оплачено пересчитано из приехавшего платежа, а не принято на веру');
     const p = D.db.prepare("SELECT phone, address, sync_origin FROM patients WHERE full_name = 'Иванов'").get();
     assert.equal(p.phone, '+998909998877');
     assert.equal(p.address, 'Ташкент, Юнусабад');

@@ -20,7 +20,7 @@
 // потому что в ней визиты без пациентов.
 import { SqliteError } from 'better-sqlite3';
 import { compareStamps, isStamp, nextStamp, parseStamp, stampAt } from './hlc.js';
-import { SHIPPED, REFS, CODE_REFS, readClock, writeClock, authoredAt } from './journal.js';
+import { SHIPPED, REFS, CODE_REFS, SOFT_REFS, readClock, writeClock, authoredAt } from './journal.js';
 
 // sync_seen (миграция 084): метка последнего ПРИНЯТОГО изменения каждой
 // колонки. Местная правка метки не имеет — до отправки её защищает журнал.
@@ -146,6 +146,9 @@ export function applyBatch(db, records, {
   // подрезать: и то, и другое едет на экран синхронизации.
   ctx.skewMs = 0;
   ctx.skewed = 0;
+  // Счета, у которых в этой порции менялись платежи: им в конце пересчитывается
+  // paid_amount (BRANCH_MONEY_V1, recomputePaid).
+  ctx.money = new Set();
   // Допуск вынесен в параметр ради теста: подождать пять минут он не может.
   ctx.skewMax = Number.isFinite(Number(skewMaxMs)) && Number(skewMaxMs) >= 0 ? Number(skewMaxMs) : SKEW_MAX_MS;
 
@@ -190,6 +193,10 @@ export function applyBatch(db, records, {
     }
 
     releasePending(db, stats, ctx);
+    // СТРОГО ПОСЛЕ освобождения: платёж, приехавший раньше своего счёта, лежит
+    // в ожидании и применяется именно там — пересчитай мы раньше, счёт остался
+    // бы с нулём оплаты до следующей порции.
+    recomputePaid(db, ctx);
 
     // Ребёнок, чей родитель удалён у источника (или чья услуга так и не
     // появилась в справочнике), ждал бы вечно.
@@ -519,6 +526,13 @@ function applyOne(db, rec, stats, ctx) {
     // и сами правки: надгробие несёт время удаления, колонка — время своей
     // правки (Задача 7d).
     if (id != null) {
+      // Снятый платёж меняет сумму оплаченного по счёту ровно так же, как
+      // пришедший, — счёт запоминаем ДО удаления, иначе спрашивать будет уже
+      // не у кого (BRANCH_MONEY_V1).
+      if (rec.tbl === 'payments') {
+        const p = ctx.q('SELECT invoice_id FROM payments WHERE id = ?').get(id);
+        if (p && p.invoice_id != null) ctx.money.add(p.invoice_id);
+      }
       ctx.q(`DELETE FROM ${rec.tbl} WHERE id = ?`).run(id);
       stats.deleted++;
       // Строки нет — и авторства её колонок быть не должно: восстанавливать
@@ -588,12 +602,18 @@ function applyOne(db, rec, stats, ctx) {
   // ждать второго; вторая ссылка НА СТРОКУ потребует ждать обоих сразу.
   let waiting = null;
   for (const [col, parent] of Object.entries(REFS[rec.tbl] || {})) {
+    // BRANCH_MONEY_V1 — «мягкая» ссылка: колонка допускает NULL, и строка без
+    // неё законна (invoices.visit_id у счёта за госпитализацию или у депозита).
+    // Такую ссылку нельзя ни требовать, ни ждать: разбор — у SOFT_REFS в
+    // journal.js. Коротко: ожидание ненайденного визита стоило бы выселения
+    // счёта через 30 дней, то есть молча пропавших из отчёта денег.
+    const soft = (SOFT_REFS[rec.tbl] || []).includes(col);
     const parentUid = rec.refs ? rec.refs[col] : null;
     if (!parentUid) {
       // Ссылки нет в самой записи. У существующей строки она давно проставлена
       // — не трогаем. У НОВОЙ вставить нечего: колонка NOT NULL, и попытка
       // уронила бы ВСЮ порцию на строке, которую всё равно нечем применить.
-      if (id == null) { stats.skipped++; return; }
+      if (id == null && !soft) { stats.skipped++; return; }
       continue;
     }
     // Ссылка — такая же КОЛОНКА, как телефон, и подчиняется тем же правилам:
@@ -610,11 +630,17 @@ function applyOne(db, rec, stats, ctx) {
       // Ссылку уже приняли новее — или новее её правили здесь. Существующей
       // строке это ничем не грозит, а НОВУЮ без обязательного родителя не
       // собрать — и выдумывать его нельзя.
-      if (id == null) { stats.skipped++; return; }
+      if (id == null && !soft) { stats.skipped++; return; }
       continue;
     }
     const pid = localId(db, ctx, parent, parentUid);
-    if (pid == null) { waiting = { tbl: parent, uid: parentUid }; break; }
+    if (pid == null) {
+      // Мягкая ссылка на строку, которой здесь нет: заводим БЕЗ неё. Сумма,
+      // дата и статус счёта важнее связи с визитом, а пустая связь честно
+      // видна как пустая — в отличие от счёта, который не приехал вовсе.
+      if (soft) continue;
+      waiting = { tbl: parent, uid: parentUid }; break;
+    }
     cols.push(col); vals.push(pid);
   }
   if (!waiting) {
@@ -685,8 +711,41 @@ function applyOne(db, rec, stats, ctx) {
        VALUES (?, ?${cols.map(() => ', ?').join('')})`
     ).run(rec.uid, origin, ...vals);
   } else if (cols.length) {
-    ctx.q(`UPDATE ${rec.tbl} SET ${cols.map(c => c + ' = ?').join(', ')} WHERE id = ?`)
-      .run(...vals, id);
+    // ПИШЕМ ТОЛЬКО ТО, ЧТО ДЕЙСТВИТЕЛЬНО ОТЛИЧАЕТСЯ (BRANCH_MONEY_V1).
+    // Проверка стоит здесь, а не выше, и это важно: колонка, чьё значение уже
+    // такое же, всё равно считается ПРИНЯТОЙ — её метка уходит в sync_seen, как
+    // и раньше, иначе следующая, более СТАРАЯ запись про ту же колонку прошла
+    // бы как новая. Меняется только одно: строку не переписывают ради того же
+    // самого значения.
+    //
+    // Дело не в экономии. Деньги — это REAL, они едут через JSON и
+    // сравниваются в триггере журнала (миграция 087) выражением
+    // NEW.x IS NOT OLD.x, а «одно и то же число» в двух представлениях (100 и
+    // 100.0, целое из JS и REAL из базы) там неразличимо только пока значение
+    // и вправду одно. Лишняя запись того же значения — это лишняя журнальная
+    // запись у себя и лишний повтор строки по всей сети на ровном месте.
+    // Сравнение — численное (sameValue): строковое объявило бы 100 и 100.0
+    // разными и вернуло бы ту самую призрачную правку.
+    const before = ctx.q(`SELECT * FROM ${rec.tbl} WHERE id = ?`).get(id);
+    const write = [];
+    const writeVals = [];
+    for (let i = 0; i < cols.length; i++) {
+      if (before && sameValue(before[cols[i]], vals[i])) continue;
+      write.push(cols[i]); writeVals.push(vals[i]);
+    }
+    if (write.length) {
+      ctx.q(`UPDATE ${rec.tbl} SET ${write.map(c => c + ' = ?').join(', ')} WHERE id = ?`)
+        .run(...writeVals, id);
+    }
+  }
+  // BRANCH_MONEY_V1 — приехал платёж, значит счёту, к которому он относится,
+  // надо пересчитать paid_amount. Собираем счета здесь, а считаем ОДИН РАЗ в
+  // конце транзакции (recomputePaid): платежей по одному счёту в порции может
+  // быть несколько, а ещё часть их освободится из ожидания уже после этого
+  // места — считать на каждом было бы и лишней работой, и неверным ответом.
+  if (rec.tbl === 'payments') {
+    const p = ctx.q('SELECT invoice_id FROM payments WHERE uid = ?').get(rec.uid);
+    if (p && p.invoice_id != null) ctx.money.add(p.invoice_id);
   }
   // Строка применена напрямую. Всё, что лежит по ней в ожидании со МЕНЬШЕЙ
   // меткой, устарело: дождавшись своего родителя, оно воспроизвело бы старое
@@ -725,6 +784,75 @@ function scalarPayload(data) {
     return false;
   }
   return true;
+}
+
+// ОДНО И ТО ЖЕ ЗНАЧЕНИЕ ИЛИ РАЗНЫЕ (BRANCH_MONEY_V1). Та же логика, что у
+// sameValue в catalogue.js, и здесь она нужна по той же причине, только цена
+// ошибки денежная: все суммы в этой схеме — REAL, они едут через JSON и
+// возвращаются то целым (100), то дробным (100.0), а сравнение строк объявило
+// бы их разными и породило правку, которой не было. Такая «правка» пишется в
+// журнал триггером 087 и уезжает соседям — на ровном месте, кругами.
+//
+// Копия, а не импорт из catalogue.js: там функция не экспортирована, а тянуть
+// ради шести строк весь модуль справочника — лишняя связь между двумя
+// механизмами, которые ничего друг о друге знать не должны.
+function sameValue(a, b) {
+  const na = a === undefined ? null : a;
+  const nb = b === undefined ? null : b;
+  if (na === null || nb === null) return na === nb;
+  if (typeof na === 'number' || typeof nb === 'number') {
+    const fa = Number(na); const fb = Number(nb);
+    if (Number.isFinite(fa) && Number.isFinite(fb)) return fa === fb;
+  }
+  return String(na) === String(nb);
+}
+
+// Копейки. Тот же round2, что в billing.js: сумма платежей считается ЗДЕСЬ и
+// обязана давать ровно то число, которое кладёт в paid_amount касса, иначе одна
+// и та же оплата выглядела бы по-разному в двух зданиях.
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * PAID_AMOUNT СЧИТАЕТСЯ, А НЕ ПРИЕЗЖАЕТ (BRANCH_MONEY_V1).
+ *
+ * invoices.paid_amount — сумма платежей по счёту, и она НЕ входит в SHIPPED
+ * (journal.js). Каждое здание считает её из платежей, которые к нему доехали, и
+ * поэтому у него всегда верно равенство «сумма payments = invoices.paid_amount»
+ * — то самое, на котором стоят кассовый отчёт, остаток к оплате и возвраты.
+ *
+ * Почему не слиянием «кто позже»: paid_amount производна, а слияние решает спор
+ * двух АВТОРОВ. Приехав готовым числом, оно спорило бы с местной суммой
+ * платежей — и на любой задержке доставки счёт показывал бы «оплачено 500 000»
+ * при пустой таблице платежей. Пересчёт даёт другое обещание, честное: пока
+ * платежи едут, здесь видно ровно столько денег, сколько сюда доехало, и ни
+ * рублём больше. Когда доедут все — числа сойдутся сами, потому что это одна и
+ * та же функция от одного и того же множества строк.
+ *
+ * Считается ПО ВСЕМ тронутым счетам, а не только по чужим: свой счёт трогает
+ * касса, у неё то же равенство, и пересчёт по нему — тождественная операция.
+ * Разойдись они хоть раз, правда — сумма платежей, а не колонка.
+ *
+ * Сетевым событием это не становится: paid_amount нет ни в SHIPPED, ни в списке
+ * колонок журнального триггера (087), поэтому UPDATE ниже не даёт ни записи в
+ * журнал, ни строки авторства — иначе пересчёт гонял бы счёт по сети кругами.
+ */
+function recomputePaid(db, ctx) {
+  if (!ctx.money || !ctx.money.size) return;
+  const read = ctx.q('SELECT paid_amount FROM invoices WHERE id = ?');
+  const total = ctx.q('SELECT COALESCE(SUM(amount), 0) AS s FROM payments WHERE invoice_id = ?');
+  const write = ctx.q('UPDATE invoices SET paid_amount = ? WHERE id = ?');
+  for (const invoiceId of ctx.money) {
+    const inv = read.get(invoiceId);
+    if (!inv) continue;   // счёт удалён этой же порцией — считать нечего
+    const paid = round2(Number(total.get(invoiceId).s) || 0);
+    // Численно, а не строкой: 0.1 + 0.2 даёт 0.30000000000000004, и без
+    // округления с последующим сравнением по числу счёт переписывался бы каждой
+    // порцией тем же самым значением.
+    if (sameValue(inv.paid_amount, paid)) continue;
+    write.run(paid, invoiceId);
+  }
 }
 
 /**

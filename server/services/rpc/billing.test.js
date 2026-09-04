@@ -33,7 +33,10 @@ test('create_invoice_for_visit computes subtotal server-side and links items', (
   assert.equal(res.invoice.total_amount, 110000);
   assert.equal(res.invoice.paid_amount, 0);
   assert.equal(res.invoice.status, 'unpaid');
-  assert.match(res.invoice.invoice_number, /^INV-\d{2}-\d{5}$/);
+  // BRANCH_MONEY_NUMBER_V1 (миграция 088) — номер несёт БУКВУ здания: счета
+  // ездят между филиалами, а invoice_number объявлен UNIQUE, и без буквы два
+  // здания чеканили бы один и тот же 'INV-26-00001'.
+  assert.match(res.invoice.invoice_number, /^INV-[A-Z]{1,8}-\d{2}-\d{5}$/);
   assert.equal(res.items.length, 2);
   // visit_services are now linked
   const linked = db.prepare('SELECT invoice_item_id FROM visit_services WHERE id=?').get(vs1).invoice_item_id;
@@ -318,4 +321,79 @@ test('remove_unpaid_service: in-progress/completed lines and foreign roles refus
   assert.throws(() => removeUnpaidService(db, { visit_service_id: vs1 }, registrar), /уже оказыва/);
   db.prepare("UPDATE visit_services SET status='added' WHERE id=?").run(vs1);
   assert.throws(() => removeUnpaidService(db, { visit_service_id: vs1 }, lab), /not allowed/);
+});
+
+// ---------------------------------------------------------------------------
+// BRANCH_MONEY_GUARD_V1 — чужие деньги только для чтения.
+//
+// С миграции 087 счета, позиции и платежи соседнего здания лежат в этой базе:
+// за этим они и едут — чтобы главная клиника видела отчёт по всем зданиям. Но
+// править их отсюда нельзя ничем: касса, взявшая эти деньги, стоит в другом
+// здании, и вторая правда об одной сумме здесь никому не нужна. Экран кассы это
+// уже запрещает (f9615ab), но экран — не граница: RPC зовут по invoice_id.
+// ---------------------------------------------------------------------------
+
+/** Счёт соседнего здания — ровно так он и выглядит после приёма порции. */
+function foreign(db, { letter = 'B', name = 'Чиланзар' } = {}) {
+  db.prepare('INSERT INTO branches (name, letter) VALUES (?, ?)').run(name, letter);
+  const pid = db.prepare("INSERT INTO patients (full_name, sync_origin) VALUES ('Приезжий', ?)").run(letter).lastInsertRowid;
+  const vid = db.prepare("INSERT INTO visits (patient_id, visit_date, sync_origin) VALUES (?, '2026-09-02', ?)")
+    .run(pid, letter).lastInsertRowid;
+  const vsid = db.prepare(`INSERT INTO visit_services (visit_id, service_id, quantity, status, sync_origin)
+                           VALUES (?, 1, 1, 'added', ?)`).run(vid, letter).lastInsertRowid;
+  const iid = db.prepare(`INSERT INTO invoices (invoice_number, visit_id, patient_id, subtotal, total_amount,
+                            paid_amount, status, sync_origin)
+                          VALUES ('INV-B-26-00001', ?, ?, 50000, 50000, 50000, 'paid', ?)`)
+    .run(vid, pid, letter).lastInsertRowid;
+  const payid = db.prepare(`INSERT INTO payments (invoice_id, amount, method, sync_origin)
+                            VALUES (?, 50000, 'cash', ?)`).run(iid, letter).lastInsertRowid;
+  return { pid, vid, vsid, iid, payid };
+}
+
+test('чужой счёт: оплатить отсюда нельзя, и отказ называет здание', () => {
+  const { db } = seed();
+  const f = foreign(db);
+  assert.throws(
+    () => recordPayment(db, { invoice_id: f.iid, amount: 1000 }, cashier),
+    (e) => {
+      assert.match(e.message, /Чиланзар \(B\)/, 'отказ обязан называть филиал теми же словами, что и метки в списках');
+      assert.equal(e.status, 403);
+      return true;
+    });
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM payments WHERE invoice_id = ?').get(f.iid).n, 1,
+    'ни одной новой строки: деньги чужого здания эта касса не трогает');
+});
+
+test('чужой счёт: долг, возврат и повторное выставление тоже отказывают', () => {
+  const { db } = seed();
+  const f = foreign(db);
+  assert.throws(() => markInvoiceDebt(db, { invoice_id: f.iid }, cashier), /Чиланзар/);
+  assert.throws(() => refundPayment(db, { payment_id: f.payid, amount: 100 }, cashier), /Чиланзар/);
+  assert.throws(() => createInvoiceForVisit(db, { visit_id: f.vid, visit_service_ids: [f.vsid] }, registrar), /Чиланзар/);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM invoices WHERE visit_id = ?').get(f.vid).n, 1,
+    'второй счёт по чужому визиту — это второе требование денег за одну работу');
+});
+
+test('чужая услуга: удалить отсюда нельзя — надгробие стёрло бы её и в том здании', () => {
+  const { db } = seed();
+  const f = foreign(db);
+  assert.throws(() => removeUnpaidService(db, { visit_service_id: f.vsid }, registrar), /Чиланзар/);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE id = ?').get(f.vsid).n, 1);
+});
+
+test('чужой счёт: имя филиала ещё не приехало — в отказе остаётся буква', () => {
+  const { db } = seed();
+  const pid = db.prepare("INSERT INTO patients (full_name, sync_origin) VALUES ('Приезжий', 'E')").run().lastInsertRowid;
+  const iid = db.prepare(`INSERT INTO invoices (invoice_number, patient_id, total_amount, status, sync_origin)
+                          VALUES ('INV-E-26-00001', ?, 1000, 'unpaid', 'E')`).run(pid).lastInsertRowid;
+  assert.throws(() => recordPayment(db, { invoice_id: iid, amount: 100 }, cashier), /филиала E/);
+});
+
+test('своя работа не задета: счёт и оплата в своём здании идут как прежде', () => {
+  const { db, vid, vs1 } = seed();
+  foreign(db);   // рядом лежат чужие деньги — они ничему не мешают
+  const res = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1] }, registrar);
+  assert.equal(res.invoice.sync_origin, null, 'выписано здесь');
+  const paid = recordPayment(db, { invoice_id: res.invoice.id, amount: 50000 }, cashier);
+  assert.equal(paid.invoice.status, 'paid');
 });

@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { buildBatch, markSent, markPublished, markConfirmed, pruneJournal, SHIPPED, REFS, CODE_REFS } from './journal.js';
+import { buildBatch, markSent, markPublished, markConfirmed, pruneJournal, SHIPPED, REFS, CODE_REFS, SOFT_REFS } from './journal.js';
 import { parseStamp, stampAt, compareStamps } from './hlc.js';
 import { applyBatch } from './records.js';
 
@@ -245,7 +245,11 @@ test('заброшенный сосед по возвращении получа
   db.close();
 });
 
-test('деньги из visit_services не уезжают', () => {
+// Деньги ездят с Фазы 3 (миграция 087), но ДОКУМЕНТОМ — invoices/invoice_items,
+// — а не строкой визита. unit_price/total на visit_services это копия позиции
+// счёта, которую держит биллинг; вези мы её отдельно, у соседа было бы второе,
+// расходящееся мнение о той же сумме, а invoice_item_id вообще локальная ссылка.
+test('деньги из visit_services не уезжают: их везёт счёт, а не строка визита', () => {
   const db = fresh(); warm(db);
   const pid = db.prepare("INSERT INTO patients (full_name) VALUES ('И')").run().lastInsertRowid;
   const vid = db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (?, ?, 'scheduled')").run(pid, '2026-09-02').lastInsertRowid;
@@ -253,8 +257,9 @@ test('деньги из visit_services не уезжают', () => {
   db.prepare('INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total) VALUES (?, ?, 1, 50000, 50000)').run(vid, sid);
   const rec = buildBatch(db, { self: 'B', peer: 'C' }).records.find(r => r.tbl === 'visit_services');
   assert.equal(rec.data.status !== undefined, true, 'статус нужен: на нём лабораторная очередь');
-  assert.equal(rec.data.unit_price, undefined, 'цена — Фаза 3');
-  assert.equal(rec.data.total, undefined, 'сумма — Фаза 3');
+  assert.equal(rec.data.unit_price, undefined, 'цену везёт позиция счёта (invoice_items)');
+  assert.equal(rec.data.total, undefined, 'и сумму тоже — двух мнений об одной сумме быть не должно');
+  assert.equal(rec.data.invoice_item_id, undefined, 'ссылка на позицию счёта локальная: у соседа это другая строка');
   assert.equal(rec.refs.visit_id.length, 32, 'родитель — по uid, локальный id у соседа другой');
   db.close();
 });
@@ -708,5 +713,164 @@ test('7f: колонка приехавшей строки, забытая чи�
     assert.ok(compareStamps(stamp, yesterday) < 0,
       `колонка ${col} уехала меткой ${stamp} — это «сегодня», и она навсегда побьёт настоящую правку соседа`);
   }
+  db.close();
+});
+
+// ---------------------------------------------------------------------------
+// BRANCH_MONEY_V1 (Фаза 3) — деньги. Здесь закреплён ПЕРЕЧЕНЬ: что именно
+// уезжает соседу и чего в порции нет. От этого списка зависят отчёты главной
+// клиники, поэтому меняется он только вместе с ними.
+// ---------------------------------------------------------------------------
+
+/** Пациент, визит, счёт на две позиции и платёж — как их делает биллинг. */
+function money(db) {
+  const pid = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
+  const vid = db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (?, '2026-09-02', 'arrived')")
+    .run(pid).lastInsertRowid;
+  const sid = db.prepare("INSERT INTO services (name, code, price, type, active) VALUES ('Анализ','S-9',35000,'lab',1)")
+    .run().lastInsertRowid;
+  const uid = db.prepare("INSERT INTO users (username, password_hash, role) VALUES ('u','x','cashier')")
+    .run().lastInsertRowid;
+  const iid = db.prepare(`INSERT INTO invoices
+      (invoice_number, visit_id, patient_id, branch_id, subtotal, discount_amount, total_amount,
+       paid_amount, status, created_by, created_at, paid_at)
+      VALUES ('INV-B-26-00001', ?, ?, 1, 70000, 5000, 65000, 65000, 'paid', ?, '2026-09-02T09:00:00Z', '2026-09-02T09:30:00Z')`)
+    .run(vid, pid, uid).lastInsertRowid;
+  db.prepare(`INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total)
+              VALUES (?, ?, 'Анализ', 2, 35000, 70000)`).run(iid, sid);
+  db.prepare(`INSERT INTO payments (invoice_id, amount, method, cashier_id, notes, paid_at)
+              VALUES (?, 65000, 'card', ?, 'у окошка', '2026-09-02T09:30:00Z')`).run(iid, uid);
+  return { pid, vid, sid, iid, uid };
+}
+
+test('деньги: счёт, позиция и платёж уезжают соседу', () => {
+  const db = fresh(); warm(db);
+  money(db);
+  const recs = buildBatch(db, { self: 'B', peer: 'C' }).records;
+  const inv = recs.find(r => r.tbl === 'invoices');
+  const item = recs.find(r => r.tbl === 'invoice_items');
+  const pay = recs.find(r => r.tbl === 'payments');
+  assert.ok(inv && item && pay, 'без всех трёх в главной клинике не сойдётся ни один денежный отчёт');
+
+  assert.equal(inv.data.invoice_number, 'INV-B-26-00001');
+  assert.equal(inv.data.subtotal, 70000);
+  assert.equal(inv.data.discount_amount, 5000);
+  assert.equal(inv.data.total_amount, 65000);
+  assert.equal(inv.data.status, 'paid');
+  assert.equal(inv.refs.patient_id.length, 32, 'пациент — по uid: локальный id у соседа другой');
+  assert.equal(inv.refs.visit_id.length, 32, 'и визит тоже');
+
+  assert.equal(item.data.description, 'Анализ');
+  assert.equal(item.data.quantity, 2);
+  assert.equal(item.data.unit_price, 35000);
+  assert.equal(item.data.total, 70000);
+  assert.equal(item.refs.invoice_id, inv.uid, 'позиция знает свой счёт по uid');
+  assert.equal(item.refs.service_code, 'S-9', 'услуга — КОДОМ: id одной и той же услуги у филиалов разный');
+
+  assert.equal(pay.data.amount, 65000);
+  assert.equal(pay.data.method, 'card', 'способ оплаты нужен кассовому отчёту');
+  assert.equal(pay.data.notes, 'у окошка');
+  assert.equal(pay.refs.invoice_id, inv.uid);
+  db.close();
+});
+
+// НАСТОЯЩЕЕ ВРЕМЯ. Записям это было не нужно, деньгам — обязательно: у соседа
+// created_at приехавшей строки означает «когда МЫ её приняли», и счёт, выписанный
+// во вторник и доехавший в четверг, лёг бы в выручку ЧЕТВЕРГА.
+test('деньги: едет НАСТОЯЩЕЕ время счёта и платежа, а не время приёма', () => {
+  const db = fresh(); warm(db);
+  money(db);
+  const recs = buildBatch(db, { self: 'B', peer: 'C' }).records;
+  const inv = recs.find(r => r.tbl === 'invoices');
+  const pay = recs.find(r => r.tbl === 'payments');
+  assert.equal(inv.data.created_at, '2026-09-02T09:00:00Z', 'иначе счёт попадёт в отчёт не тем днём');
+  assert.equal(inv.data.paid_at, '2026-09-02T09:30:00Z');
+  assert.equal(pay.data.paid_at, '2026-09-02T09:30:00Z', 'выручка дня считается по времени оплаты');
+  db.close();
+});
+
+// paid_amount — производная: сумма платежей. Она считается на каждой стороне из
+// ТЕХ платежей, которые туда доехали (records.js recomputePaid), поэтому у
+// каждой базы сходится собственная касса. status, наоборот, решение человека.
+test('деньги: paid_amount НЕ уезжает, а status уезжает', () => {
+  const db = fresh(); warm(db);
+  money(db);
+  const inv = buildBatch(db, { self: 'B', peer: 'C' }).records.find(r => r.tbl === 'invoices');
+  assert.equal(inv.data.paid_amount, undefined,
+    'приехав готовым числом, оно спорило бы с местной суммой платежей');
+  assert.equal(inv.data.status, 'paid',
+    'а статус вычислить из сумм нельзя: void и debt — не арифметика');
+  assert.equal(SHIPPED.invoices.includes('paid_amount'), false);
+  assert.equal(SHIPPED.invoices.includes('status'), true);
+  db.close();
+});
+
+// ЛОКАЛЬНЫЕ ССЫЛКИ НЕ ЕЗДЯТ. Это id ЭТОЙ базы: у соседа они указывали бы в
+// чужие строки или в пустоту (foreign_keys = ON). Отчёт по чужому зданию
+// поэтому не знает ни кассира, ни врача, ни контрагента — и должен об этом
+// писать честно, а не показывать чужие имена.
+test('деньги: локальные ссылки не уезжают вовсе', () => {
+  const db = fresh(); warm(db);
+  money(db);
+  const recs = buildBatch(db, { self: 'B', peer: 'C' }).records;
+  const inv = recs.find(r => r.tbl === 'invoices');
+  const pay = recs.find(r => r.tbl === 'payments');
+  for (const col of ['branch_id', 'created_by', 'payer_id', 'admission_id', 'id']) {
+    assert.equal(inv.data[col], undefined, 'invoices.' + col + ' — локальный id, у соседа он чужой');
+  }
+  for (const col of ['cashier_id', 'shift_id', 'id']) {
+    assert.equal(pay.data[col], undefined, 'payments.' + col + ' — локальный id');
+  }
+  db.close();
+});
+
+// Счёт за госпитализацию и счёт-депозит визита не имеют вовсе. Первая
+// необязательная ссылка в этом файле (SOFT_REFS) — и она не должна ни мешать
+// отправке, ни превращаться в ожидание у принимающего.
+test('деньги: счёт без визита уезжает как есть', () => {
+  const db = fresh(); warm(db);
+  const pid = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
+  db.prepare(`INSERT INTO invoices (invoice_number, patient_id, subtotal, total_amount, status)
+              VALUES ('DEP-B-26-00001', ?, 500000, 500000, 'paid')`).run(pid);
+  const inv = buildBatch(db, { self: 'B', peer: 'C' }).records.find(r => r.tbl === 'invoices');
+  assert.ok(inv, 'депозит и госпитализация — тоже деньги клиники');
+  assert.equal(inv.refs.visit_id, undefined, 'визита у него нет, и выдумывать его нечем');
+  assert.equal(inv.refs.patient_id.length, 32, 'а пациент есть всегда: колонка NOT NULL');
+  assert.deepEqual(SOFT_REFS.invoices, ['visit_id']);
+  db.close();
+});
+
+// ХОЛОДНЫЙ ЗАСЕВ. Новому зданию деньги едут из самих таблиц — иначе счета,
+// выписанные до его подключения, не попали бы в отчёт главной никогда.
+//
+// ПОРЯДОК засева — по created_at, а внутри одной секунды по рангу зависимостей
+// (счёт раньше своей позиции и своего платежа). Ранга достаточно ровно потому,
+// что в ОДНОМ здании родитель заведён раньше ребёнка. У ПЕРЕСЫЛАЮЩЕГО узла это
+// уже не так: у приехавшего счёта created_at настоящий, из чужого здания, а у
+// пациента — время приёма ЗДЕСЬ, то есть позже. Тогда счёт уезжает раньше
+// своего пациента, и разбирает это не порядок, а ожидание родителя
+// (sync_pending): запись ждёт и применяется, когда пациент приедет. Тест ниже
+// закрепляет обе половины — и порядок в обычном случае, и то, что деньги
+// вообще попадают в засев.
+test('деньги: холодный засев везёт и деньги, в порядке зависимостей', () => {
+  const db = fresh();
+  // Без явных дат: у своей работы created_at идёт по-настоящему, родитель
+  // раньше ребёнка — как в живой клинике.
+  const pid = db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run().lastInsertRowid;
+  const iid = db.prepare(`INSERT INTO invoices (invoice_number, patient_id, subtotal, total_amount, status)
+                          VALUES ('INV-B-26-00001', ?, 65000, 65000, 'paid')`).run(pid).lastInsertRowid;
+  db.prepare(`INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, total)
+              VALUES (?, 'Анализ', 1, 65000, 65000)`).run(iid);
+  db.prepare("INSERT INTO payments (invoice_id, amount, method) VALUES (?, 65000, 'cash')").run(iid);
+  db.prepare('DELETE FROM sync_journal').run();   // как на живой клинике после миграций
+
+  const recs = buildBatch(db, { self: 'B', peer: 'NEW' }).records;
+  const order = recs.map(r => r.tbl);
+  for (const t of ['patients', 'invoices', 'invoice_items', 'payments']) {
+    assert.ok(order.includes(t), 'засев обязан нести ' + t + ': иначе прежние счета не увидит никто');
+  }
+  assert.ok(order.indexOf('patients') < order.indexOf('invoices'), 'счёт после пациента');
+  assert.ok(order.indexOf('invoices') < order.indexOf('invoice_items'), 'позиция после счёта');
+  assert.ok(order.indexOf('invoices') < order.indexOf('payments'), 'платёж после счёта');
   db.close();
 });

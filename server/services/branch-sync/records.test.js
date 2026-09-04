@@ -900,3 +900,193 @@ test('7e: отказ снимается, когда строка всё-таки
     'иначе экран годами показывал бы «N записей не приняты» после того, как всё починилось');
   db.close();
 });
+
+// ---------------------------------------------------------------------------
+// BRANCH_MONEY_V1 (Фаза 3) — приём денег.
+//
+// Два правила, которых у записей не было:
+//   • paid_amount не приезжает, а СЧИТАЕТСЯ из платежей, которые сюда доехали;
+//   • у счёта есть необязательная ссылка (visit_id), и её отсутствие не повод
+//     ни пропустить счёт, ни заставить его ждать.
+// ---------------------------------------------------------------------------
+
+/** Пациент + счёт на 65 000, как они приезжают из соседнего здания. */
+function arrivedInvoice(db, { total = 65000, at = T0 } = {}) {
+  applyBatch(db, [
+    put('patients', 'p-money', stampAt(at + 1), { full_name: 'Иванов' }),
+    put('invoices', 'inv-money', stampAt(at + 2), {
+      invoice_number: 'INV-C-26-00001', subtotal: total, discount_amount: 0,
+      total_amount: total, status: 'unpaid', created_at: '2026-09-02T09:00:00Z',
+    }, { patient_id: 'p-money' }),
+  ], S);
+  return db.prepare("SELECT * FROM invoices WHERE uid = 'inv-money'").get();
+}
+
+test('деньги: приехавший счёт заводится и подписан буквой соседа', () => {
+  const db = fresh();
+  const inv = arrivedInvoice(db);
+  assert.equal(inv.invoice_number, 'INV-C-26-00001');
+  assert.equal(inv.total_amount, 65000);
+  assert.equal(inv.status, 'unpaid');
+  assert.equal(inv.sync_origin, 'C', 'по этой метке сервер и откажет в правке чужого счёта');
+  assert.equal(inv.created_at, '2026-09-02T09:00:00Z',
+    'настоящее время выставления: иначе счёт лёг бы в отчёт днём доставки');
+  assert.equal(inv.paid_amount, 0, 'платежей сюда ещё не приезжало — значит и оплаты здесь нет');
+  db.close();
+});
+
+// ГЛАВНОЕ ОБЕЩАНИЕ: paid_amount чужого счёта равен сумме ПРИЕХАВШИХ платежей.
+test('деньги: paid_amount чужого счёта — сумма приехавших платежей', () => {
+  const db = fresh();
+  arrivedInvoice(db);
+  applyBatch(db, [put('payments', 'pay-1', stampAt(T0 + 3), { amount: 30000, method: 'cash' }, { invoice_id: 'inv-money' })], S);
+  assert.equal(db.prepare("SELECT paid_amount FROM invoices WHERE uid = 'inv-money'").get().paid_amount, 30000,
+    'доехала половина денег — столько и показываем, ни рублём больше');
+  applyBatch(db, [put('payments', 'pay-2', stampAt(T0 + 4), { amount: 35000, method: 'card' }, { invoice_id: 'inv-money' })], S);
+  assert.equal(db.prepare("SELECT paid_amount FROM invoices WHERE uid = 'inv-money'").get().paid_amount, 65000,
+    'доехали все — сумма сошлась сама, без слияния «кто позже»');
+  const sum = db.prepare(`SELECT COALESCE(SUM(amount),0) s FROM payments
+                           WHERE invoice_id = (SELECT id FROM invoices WHERE uid = 'inv-money')`).get().s;
+  assert.equal(sum, 65000, 'равенство «сумма платежей = paid_amount» — на нём стоит кассовый отчёт');
+  db.close();
+});
+
+test('деньги: paid_amount из чужой записи не берётся, даже если его прислали', () => {
+  const db = fresh();
+  arrivedInvoice(db);
+  applyBatch(db, [put('invoices', 'inv-money', stampAt(T0 + 9), {
+    invoice_number: 'INV-C-26-00001', total_amount: 65000, status: 'partial', paid_amount: 999999,
+  }, { patient_id: 'p-money' })], S);
+  const inv = db.prepare("SELECT paid_amount, status FROM invoices WHERE uid = 'inv-money'").get();
+  assert.equal(inv.paid_amount, 0, 'колонки нет в SHIPPED — принимать её значило бы поверить чужой арифметике');
+  assert.equal(inv.status, 'partial', 'а статус принимается: его вычислить нельзя, его решает человек');
+  db.close();
+});
+
+// Платёж может приехать раньше своего счёта: порядок записей в порции ничем не
+// гарантирован, а порции ходят по разным каналам. Механизм ожидания у файла уже
+// есть — деньги обязаны им пользоваться так же, как записи.
+test('деньги: платёж, приехавший раньше счёта, ждёт и применяется потом', () => {
+  const db = fresh();
+  const first = applyBatch(db, [
+    put('payments', 'pay-early', stampAt(T0 + 5), { amount: 65000, method: 'cash' }, { invoice_id: 'inv-late' }),
+  ], S);
+  assert.equal(first.deferred, 1, 'счёта ещё нет — вставить платёж некуда');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM payments WHERE uid = 'pay-early'").get().n, 0);
+  assert.equal(db.prepare("SELECT waits_tbl FROM sync_pending WHERE uid = 'pay-early'").get().waits_tbl, 'invoices');
+
+  const second = applyBatch(db, [
+    put('patients', 'p-late', stampAt(T0 + 6), { full_name: 'Петров' }),
+    put('invoices', 'inv-late', stampAt(T0 + 7), {
+      invoice_number: 'INV-C-26-00002', total_amount: 65000, status: 'paid',
+    }, { patient_id: 'p-late' }),
+  ], S);
+  assert.equal(second.released, 1, 'счёт приехал — платёж обязан выйти из ожидания в этой же порции');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_pending').get().n, 0);
+  assert.equal(db.prepare("SELECT paid_amount FROM invoices WHERE uid = 'inv-late'").get().paid_amount, 65000,
+    'пересчёт идёт ПОСЛЕ освобождения — иначе счёт остался бы с нулём до следующей порции');
+  db.close();
+});
+
+test('деньги: снятый платёж уменьшает paid_amount обратно', () => {
+  const db = fresh();
+  arrivedInvoice(db);
+  applyBatch(db, [put('payments', 'pay-x', stampAt(T0 + 3), { amount: 65000, method: 'cash' }, { invoice_id: 'inv-money' })], S);
+  assert.equal(db.prepare("SELECT paid_amount FROM invoices WHERE uid = 'inv-money'").get().paid_amount, 65000);
+  applyBatch(db, [del('payments', 'pay-x', stampAt(T0 + 8))], S);
+  assert.equal(db.prepare("SELECT paid_amount FROM invoices WHERE uid = 'inv-money'").get().paid_amount, 0,
+    'платежа больше нет — и оплаты по счёту здесь больше нет');
+  db.close();
+});
+
+// SOFT_REFS. Счёт за госпитализацию и счёт-депозит визита не имеют вовсе, а
+// счёт по СТАРОМУ визиту ссылается на визит, которого у нас может не быть
+// никогда. Ни то, ни другое не повод потерять деньги.
+test('деньги: счёт без визита заводится, а не пропускается', () => {
+  const db = fresh();
+  const r = applyBatch(db, [
+    put('patients', 'p-dep', stampAt(T0 + 1), { full_name: 'Сидоров' }),
+    put('invoices', 'inv-dep', stampAt(T0 + 2), {
+      invoice_number: 'DEP-C-26-00001', total_amount: 500000, status: 'paid',
+    }, { patient_id: 'p-dep' }),
+  ], S);
+  assert.equal(r.applied, 2);
+  const inv = db.prepare("SELECT visit_id, total_amount FROM invoices WHERE uid = 'inv-dep'").get();
+  assert.equal(inv.visit_id, null, 'визита у него нет и не было');
+  assert.equal(inv.total_amount, 500000, 'а деньги есть, и в отчёт они обязаны попасть');
+  db.close();
+});
+
+test('деньги: счёт на НЕИЗВЕСТНЫЙ визит заводится без связи, а не уходит в ожидание', () => {
+  const db = fresh();
+  const r = applyBatch(db, [
+    put('patients', 'p-old', stampAt(T0 + 1), { full_name: 'Старый' }),
+    put('invoices', 'inv-old', stampAt(T0 + 2), {
+      invoice_number: 'INV-C-26-00003', total_amount: 40000, status: 'paid',
+    }, { patient_id: 'p-old', visit_id: 'visit-never-arrives' }),
+  ], S);
+  assert.equal(r.deferred, 0,
+    'ожидание визита, которого не будет, кончилось бы выселением через 30 дней — молча пропавшими деньгами');
+  const inv = db.prepare("SELECT visit_id, total_amount FROM invoices WHERE uid = 'inv-old'").get();
+  assert.ok(inv, 'счёт обязан приехать');
+  assert.equal(inv.visit_id, null, 'пустая связь честно видна как пустая');
+  assert.equal(inv.total_amount, 40000);
+  db.close();
+});
+
+// ДЕНЬГИ — ЭТО REAL, и они едут через JSON. Значение обязано вернуться тем же
+// самым, а повторная запись того же числа не должна ничего менять в базе:
+// иначе триггер журнала (087) счёл бы это правкой и погнал счёт по сети.
+test('деньги: 1234.56 переживает дорогу и не порождает призрачной правки', () => {
+  const db = fresh();
+  applyBatch(db, [put('patients', 'p-r', stampAt(T0 + 1), { full_name: 'Иванов' })], S);
+  const rec = put('invoices', 'inv-r', stampAt(T0 + 2), {
+    invoice_number: 'INV-C-26-00004', subtotal: 1234.56, total_amount: 1234.56, status: 'unpaid',
+  }, { patient_id: 'p-r' });
+  // Через провод: ровно так порция и приезжает.
+  applyBatch(db, JSON.parse(JSON.stringify([rec])), S);
+  const inv = db.prepare("SELECT total_amount FROM invoices WHERE uid = 'inv-r'").get();
+  assert.equal(inv.total_amount, 1234.56, 'копейки обязаны вернуться теми же');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_journal').get().n, 0,
+    'приём не порождает исходящих изменений — иначе принятое поехало бы обратно');
+
+  const changes = () => db.prepare('SELECT total_changes() AS n').get().n;
+  // ТО ЖЕ САМОЕ число под более новой меткой: применить его надо (метка новее),
+  // а переписывать строку — нечем.
+  const before = changes();
+  applyBatch(db, JSON.parse(JSON.stringify([{ ...rec, stamp: stampAt(T0 + 3), changed: ['total_amount'] }])), S);
+  const sameCost = changes() - before;
+  // А теперь настоящая копейка разницы — та же работа плюс запись строки.
+  const before2 = changes();
+  applyBatch(db, JSON.parse(JSON.stringify([{
+    ...rec, stamp: stampAt(T0 + 4), changed: ['total_amount'],
+    data: { ...rec.data, total_amount: 1234.57 },
+  }])), S);
+  const realCost = changes() - before2;
+  assert.ok(sameCost < realCost,
+    `запись того же числа обошлась в ${sameCost} изменений, настоящая правка — в ${realCost}: `
+    + 'одинаковые значения означали бы, что строку переписывают впустую');
+  assert.equal(db.prepare("SELECT total_amount FROM invoices WHERE uid = 'inv-r'").get().total_amount, 1234.57,
+    'а настоящая правка обязана примениться');
+  db.close();
+});
+
+test('деньги: позиция счёта ждёт услугу справочника, а сам счёт — нет', () => {
+  const db = fresh();
+  arrivedInvoice(db);
+  const r = applyBatch(db, [put('invoice_items', 'item-1', stampAt(T0 + 3), {
+    description: 'Анализ', quantity: 1, unit_price: 65000, total: 65000,
+  }, { invoice_id: 'inv-money', service_code: 'S-NOT-HERE' })], S);
+  assert.equal(r.deferred, 1, 'услуги с таким кодом здесь нет — позиция ждёт справочник');
+  // ШАПКА СЧЁТА при этом на месте: итог отчёта считается по invoices, а не
+  // суммированием позиций, и именно поэтому он верен даже сейчас.
+  assert.equal(db.prepare("SELECT total_amount FROM invoices WHERE uid = 'inv-money'").get().total_amount, 65000);
+
+  db.prepare("INSERT INTO services (name, code, price, active) VALUES ('Анализ','S-NOT-HERE',65000,1)").run();
+  const r2 = applyBatch(db, [], S);
+  assert.equal(r2.released, 1, 'справочник приехал — позиция обязана разобраться сама');
+  const item = db.prepare("SELECT service_id, total FROM invoice_items WHERE uid = 'item-1'").get();
+  assert.ok(item.service_id, 'услуга опознана по коду: локальные id у зданий разные');
+  assert.equal(item.total, 65000);
+  db.close();
+});
