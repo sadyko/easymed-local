@@ -318,6 +318,29 @@ export function isModuleAllowed(navId) {
     // тот класс ошибки, который чинила 055. Приём тот же, что у
     // 'cashier-shifts' → 'cashier' строкой выше.
     if (navId === 'admissions') return _effective.has('admissions') || _effective.has('beds');
+    // MAR_SHEET_V1 / MAR_NURSE_V1 / KITCHEN_SHEET_V1 — ещё три экрана ОДНОГО
+    // раздела «Стационар и палаты», и ключ у них тот же `beds`, по тому же
+    // доводу, что строкой выше: клиника, которой стационар уже выдан, обязана
+    // увидеть новые экраны БЕЗ похода в настройки ролей, а завести новый
+    // грантовый ключ здесь значило бы спрятать лист назначений и порционник от
+    // всех, включая медсестру, ради которой они и написаны (миграция 092
+    // раздала `beds` медсестре, старшей, главному врачу и регистратуре).
+    //
+    // ЛИСТ НАЗНАЧЕНИЙ — ИСКЛЮЧЕНИЕ В ОДНУ СТОРОНУ: его ведёт ЛЕЧАЩИЙ ВРАЧ, а
+    // `beds` ему не выдают (у роли `doctor` его нет ни в 055, ни в 092).
+    // Поэтому лист открывает и владелец кабинета врача (`consultation`) —
+    // иначе единственный человек, который вправе назначать, не смог бы дойти
+    // до экрана, на котором это делается.
+    //
+    // Меню — это МЕНЮ, а не доступ к данным (admin.js говорит это дословно):
+    // сервер отвечает второй раз и строже — читает лист только тот, кто ведёт
+    // пациента (READ_ROLES в rpc/treatment-orders.js), отмечает дозу только
+    // медсестра, старшая или админ. Регистратура, которой `beds` выдан ради
+    // заявок, увидит пункт меню и получит отказ сервера — это осознанный
+    // размен в пользу того, чтобы функция вообще существовала для тех, кому
+    // она нужна.
+    if (navId === 'mar-nurse' || navId === 'kitchen-sheet') return _effective.has('beds');
+    if (navId === 'mar-sheet') return _effective.has('beds') || _effective.has('consultation');
     // CASHIER_HEAD_KEY_V1 — Старший кассир is its OWN explicit grant (was derived
     // from Cashier: Admin, which made every delete-level cashier a head cashier).
     if (navId === 'cashier-head') return _effective.has('cashier-head');
@@ -395,6 +418,10 @@ export function isRouteAllowed(view) {
     if (view === 'docs-archive') return _effective.has('docs-archive');   // ROLE_AUDIT_V2 — explicit grant only
     if (view === 'cashier-shifts') return _effective.has('cashier-shifts') || _effective.has('cashier');   // CASHIER_SHIFTS_MAP_V1
     if (view === 'admissions') return isModuleAllowed('admissions');   // ADMISSION_ORDER_V1 — один ключ на оба экрана стационара
+    // MAR_SHEET_V1 — маршрут листа назначений открывается и с номером
+    // госпитализации ('#mar-sheet/13', payload.sub), и без него: без номера
+    // экран показывает лежащих и просит выбрать. Право одно на оба случая.
+    if (view === 'mar-sheet' || view === 'mar-nurse' || view === 'kitchen-sheet') return isModuleAllowed(view);
     if (view === 'cashier-head') return isModuleAllowed('cashier-head');   // CASHIER_HEAD_NAV_V1
     if (view === 'registration') return _effective.has('registration') && canEdit('patients');   // ROLE_AUDIT_V1 (fix #2)
     if (view === 'procurement') return _effective.has('procurement') || _effective.has('procurement:requisitions');   // PROCUREMENT_REQ_GRANT_V1

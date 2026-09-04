@@ -57,7 +57,12 @@ const STAY_MODES = [['round', 'Круглосуточно'], ['day', 'Дневн
 // писать документ целиком с первого раза, либо терять начатое (см. шапку
 // rpc/inpatient-reviews.js). Второе действие НЕ закрывает окно: черновик
 // сохраняют, чтобы продолжить.
-function modal(title, icon, bodyEls, submitLabel, onSubmit, { width = 520, secondaryLabel = null, onSecondary = null } = {}) {
+// MAR_SHEET_V1 — оболочка ЭКСПОРТИРУЕТСЯ (Задача 5). Лист назначений и рабочее
+// место медсестры открывают свои диалоги — «+ Назначение», «Отменить
+// назначение», подтверждение «5 прав», «Не введено» — и это те же окна того же
+// раздела. Второй shell рядом означал бы два вида окна госпитализации: одна
+// рамка у заявки, другая у дозы, которую по этой заявке вводят.
+export function inpatientModal(title, icon, bodyEls, submitLabel, onSubmit, { width = 520, secondaryLabel = null, onSecondary = null } = {}) {
     const overlay = h('div', { class: 'modal' });
     const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
     const onKey = (ev) => { if (ev.key === 'Escape') close(); };
@@ -103,11 +108,24 @@ function modal(title, icon, bodyEls, submitLabel, onSubmit, { width = 520, secon
     return { close, overlay };
 }
 
+const modal = inpatientModal;
+
 // ПАЦИЕНТ — ЯКОРЬ. Одна плашка на все четыре окна: имя крупнее всего
 // остального. Это та самая защита от «не того пациента», ради которой построен
 // экран медсестры, и в диалоге она нужна ровно так же — подтверждают действие
 // именно здесь, а не в списке.
-function patientAnchor(name, sub) {
+// MAR_SHEET_V1 — переход на лист назначений. Идёт через маршрутизатор
+// (window.easymed.navigate), а не через location.hash: голый хеш этот экран не
+// маршрутизирует (слушателя hashchange нет, историю ведёт navigate()), и
+// ссылка молча открывала бы прежнюю вкладку.
+export function goToMarSheet(admissionId, onNavigate) {
+    const nav = onNavigate || (typeof window !== 'undefined' && window.easymed && window.easymed.navigate);
+    if (!nav) return false;
+    nav('mar-sheet', { sub: String(admissionId) });
+    return true;
+}
+
+export function patientAnchor(name, sub) {
     return h('div', {
         style: {
             display: 'flex', alignItems: 'center', gap: '11px', padding: '11px 13px',
@@ -346,7 +364,7 @@ export function openAdmissionCancelModal({ admission, onDone } = {}) {
 // Что МОЖНО сделать, спрашиваем у сервера (admission_flow_state), а не считаем
 // в браузере: матрица прав живёт в rpc/inpatient-flow.js, и её вторая копия
 // здесь разошлась бы с первой ровно в тот день, когда матрицу поправят.
-export function openAdmissionCard({ admissionId, onChange } = {}) {
+export function openAdmissionCard({ admissionId, onChange, onNavigate = null } = {}) {
     if (!admissionId) { toast(tr('Госпитализация не найдена.'), 'fail'); return; }
     const body = h('div', { style: { display: 'grid', gap: '12px' } },
         h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Загрузка…')));
@@ -420,6 +438,16 @@ export function openAdmissionCard({ admissionId, onChange } = {}) {
                 class: 'btn btn-primary btn-sm', type: 'button',
                 onclick: () => { close(); openAdmissionAttendingModal({ admission: a, onDone: onChange }); },
             }, Icon('User', { size: 13 }), ' ', tr('Назначить лечащего врача')));
+        }
+        // MAR_SHEET_V1 — лечение открыто: у пациента есть лист назначений, и
+        // это первое, куда идут из карточки. Кнопка появляется ровно с того
+        // состояния, с которого сервер вообще принимает назначения ('active';
+        // 'discharging' — тот же пациент, лечение ещё идёт).
+        if (a.status === 'active' || a.status === 'discharging') {
+            actions.appendChild(h('button', {
+                class: 'btn btn-primary btn-sm', type: 'button',
+                onclick: () => { close(); goToMarSheet(a.id, onNavigate); },
+            }, Icon('Pill', { size: 13 }), ' ', tr('Лист назначений')));
         }
         if (can.cancelled) {
             actions.appendChild(h('button', {

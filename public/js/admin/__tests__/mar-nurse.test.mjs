@@ -1,0 +1,449 @@
+// MAR_NURSE_V1 — рабочее место медсестры: задачи листа назначений.
+//
+// Что здесь проверяется и почему именно это:
+//   1. ПАЦИЕНТ — ЯКОРЬ. Слева люди, справа задачи выбранного человека, и имя
+//      на строке крупнее всего остального. Это защита от «не того пациента», а
+//      не раскладка: она должна ломать тест, а не тихо съезжать.
+//   2. ЧЕТЫРЕ ГРУППЫ СРОЧНОСТИ приходят с сервера и остаются четырьмя:
+//      Просрочено / Сейчас / Позже / По требованию.
+//   3. «5 ПРАВ» И АЛЛЕРГИЯ. Подтверждение показывает ровно пять пунктов в
+//      закреплённом порядке и красный баннер аллергии, если она есть в карте
+//      пациента (patients.allergies).
+//   4. ОТКАЗ И ПРОПУСК — ПЕРВОГО КЛАССА. «Не введено» требует выбрать, что
+//      случилось, и написать причину; без причины запрос не уходит вовсе.
+//      Именно этого пути нет в референсе, и это его худшая дыра.
+//   5. PRN ОТМЕЧАЕТСЯ БЕЗ ЧАСА: у «по требованию» плановых точек нет, и слот
+//      в запросе сервер отвергнет.
+//   6. ДОПОЛНИТЕЛЬНЫЙ РАСХОД (брак / перерасход) уезжает в отметку.
+//   7. РАЗДЕЛ ОТКРЫВАЕТСЯ МЕДСЕСТРЕ и не открывается кассе.
+
+import { test } from 'node:test';
+import assert from 'node:assert';
+
+// ─── минимальный DOM (тот же стенд, что у admissions-window.test.mjs) ───────
+class FakeNode {
+    constructor(tag) {
+        this.tagName = String(tag).toUpperCase();
+        this.style = {}; this.children = []; this.attrs = {};
+        this.className = ''; this._text = ''; this._l = {}; this.dataset = {};
+        this.value = '';
+    }
+    appendChild(c) { this.children.push(c); return c; }
+    removeChild(c) { const i = this.children.indexOf(c); if (i > -1) this.children.splice(i, 1); return c; }
+    get firstChild() { return this.children.length ? this.children[0] : null; }
+    replaceChildren() { this.children.length = 0; }
+    setAttribute(k, v) { this.attrs[k] = String(v); }
+    getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; }
+    hasAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k); }
+    addEventListener(t, fn) { (this._l[t] || (this._l[t] = [])).push(fn); }
+    removeEventListener() {}
+    dispatchEvent(e) { for (const fn of this._l[e.type] || []) fn(e); return true; }
+    click() { this.dispatchEvent({ type: 'click', currentTarget: this, preventDefault() {}, stopPropagation() {} }); }
+    querySelector() { return null; }
+    querySelectorAll() { return []; }
+    remove() {}
+    focus() {} blur() {}
+    get textContent() { return this._text + this.children.map((c) => c.textContent).join(''); }
+    set textContent(v) { this._text = String(v); this.children.length = 0; }
+    get classList() { const s = this; return { contains: (c) => String(s.className).split(/\s+/).includes(c), add() {}, remove() {}, toggle() {} }; }
+    get isConnected() { return true; }
+}
+class FakeText extends FakeNode { constructor(t) { super('#text'); this.nodeType = 3; this._text = String(t); } }
+function mkEl(tag) {
+    const el = new FakeNode(tag);
+    if (el.tagName === 'TEMPLATE') {
+        el.content = { firstChild: null };
+        Object.defineProperty(el, 'innerHTML', {
+            set(v) { const s = new FakeNode('svg'); s._text = String(v); el.content.firstChild = s; },
+            get() { return ''; },
+        });
+    }
+    return el;
+}
+globalThis.Node = FakeNode;
+const BODY = mkEl('body');
+globalThis.document = {
+    createElement: mkEl, createElementNS: (_n, t) => mkEl(t), createTextNode: (t) => new FakeText(t),
+    head: mkEl('head'), body: BODY, documentElement: mkEl('html'),
+    addEventListener() {}, removeEventListener() {},
+    getElementById(id) { return BODY.children.find((c) => c.attrs && c.attrs.id === id) || null; },
+};
+// I18N_LOCALE_PIN_V1 — экран рисуется по-русски независимо от локали машины.
+globalThis.localStorage = { getItem: (k) => (k === 'admin.lang' ? 'ru' : null), setItem() {}, removeItem() {}, clear() {} };
+globalThis.window = { location: { hostname: 'localhost' }, localStorage: globalThis.localStorage, addEventListener() {}, open: () => null };
+globalThis.MutationObserver = class { observe() {} disconnect() {} };
+globalThis.requestAnimationFrame = (fn) => fn();
+
+const walk = (e, out = []) => { if (!e || typeof e !== 'object') return out; out.push(e); for (const c of e.children || []) walk(c, out); return out; };
+const textOf = (e) => walk(e).map((x) => x._text || '').join(' ');
+const findBtn = (root, label) => walk(root).find((e) => e.tagName === 'BUTTON' && textOf(e).includes(label));
+const lastToast = () => {
+    const t = BODY.children.filter((c) => c.attrs && c.attrs.id === 'toast').pop();
+    return t ? t.textContent : '';
+};
+const settle = () => new Promise((r) => setTimeout(r, 30));
+
+const nurse = await import('../views/mar-nurse.js');
+const perms = await import('../permissions.js');
+const { todayLocal } = await import('../views/mar-sheet.js');
+
+const {
+    MAR_TASK_GROUPS, OMISSION_OPTIONS, EXTRA_KINDS,
+    patientsFromTasks, tasksForAdmission, fiveRights, allergyOf, extraPayload,
+    bedLine, renderMarNurse, canOpenMarNurse,
+} = nurse;
+
+// ─── данные «сервера» ───────────────────────────────────────────────────────
+
+const TODAY = todayLocal();
+
+const patientA = {
+    admission_id: 13, patient_id: 103, patient_name: 'Сидоров Сидор',
+    ward_id: 1, ward_name: 'Терапия', bed_id: 5, bed_code: 'T-1',
+};
+const patientB = {
+    admission_id: 14, patient_id: 104, patient_name: 'Каримова Дилноза',
+    ward_id: 1, ward_name: 'Терапия', bed_id: 6, bed_code: 'T-2',
+};
+
+const TASK_OVERDUE = {
+    ...patientA, order_id: 1, kind: 'med', name: 'Цефтриаксон', dose: '1 г', route: 'в/в',
+    source: 'clinic', freq_code: '2x', prn: 0, service_id: null, stock_item_id: 55,
+    date: TODAY, slot: 6, due_at: `${TODAY} 06:00`, state: 'missed', late_min: 130,
+};
+const TASK_NOW = {
+    ...patientA, order_id: 2, kind: 'proc', name: 'Перевязка', dose: '', route: null,
+    source: 'clinic', freq_code: '1x', prn: 0, service_id: null, stock_item_id: null,
+    date: TODAY, slot: 10, due_at: `${TODAY} 10:00`, state: 'delayed', late_min: 20,
+};
+const TASK_PRN = {
+    ...patientA, order_id: 3, kind: 'med', name: 'Кеторол', dose: '1 мл', route: 'в/м',
+    source: 'clinic', freq_code: 'prn', prn: 1, service_id: null, stock_item_id: 55,
+    date: TODAY, given_today: 1,
+};
+const TASK_LATER = {
+    ...patientB, order_id: 5, kind: 'med', name: 'Омепразол', dose: '20 мг', route: 'внутрь',
+    source: 'clinic', freq_code: '1x', prn: 0,
+    date: TODAY, slot: 22, due_at: `${TODAY} 22:00`, state: 'pending', late_min: 0,
+};
+
+const DUE = {
+    date: TODAY, now: new Date().toISOString(), ward_id: null,
+    counts: { overdue: 1, now: 1, later: 1, prn: 1 },
+    groups: { overdue: [TASK_OVERDUE], now: [TASK_NOW], later: [TASK_LATER], prn: [TASK_PRN] },
+};
+
+const PATIENTS = [
+    { id: 103, allergies: 'Пенициллин, новокаин' },
+    { id: 104, allergies: '' },
+];
+
+let rpcCalls = [];
+let dbCalls = [];
+let markWarnings = [];
+let markAnswer = () => ({ ok: true, data: { administration: { id: 900 }, already: false, warnings: markWarnings } });
+
+globalThis.fetch = async (url, opts = {}) => {
+    const u = String(url);
+    let body = {}; try { body = JSON.parse(opts.body || '{}'); } catch { /* not ours */ }
+    const ok = (data) => ({ ok: true, status: 200, json: async () => ({ data }), headers: { getSetCookie: () => [] } });
+    const fail = (message) => ({ ok: false, status: 400, json: async () => ({ error: { message } }), headers: { getSetCookie: () => [] } });
+
+    if (u.startsWith('/api/rpc/')) {
+        const name = decodeURIComponent(u.slice('/api/rpc/'.length));
+        rpcCalls.push({ name, args: body });
+        if (name === 'treatment_tasks_due') return ok(DUE);
+        if (name === 'treatment_admin_mark') {
+            const a = markAnswer();
+            return a.ok ? ok(a.data) : fail(a.message);
+        }
+        return ok({});
+    }
+    if (u === '/api/db') {
+        dbCalls.push(body);
+        if (body.table === 'wards') return ok([{ id: 1, name: 'Терапия' }]);
+        if (body.table === 'patients') return ok(PATIENTS);
+        return ok([]);
+    }
+    return ok([]);
+};
+
+async function renderScreen() {
+    BODY.children.length = 0;
+    rpcCalls = []; dbCalls = []; markWarnings = [];
+    const container = mkEl('div');
+    await renderMarNurse(container, { onNavigate: () => {} });
+    await settle();
+    return container;
+}
+
+// ─── 1. Чистые правила ──────────────────────────────────────────────────────
+
+test('четыре группы срочности — те же, что считает сервер, и в том же порядке', () => {
+    assert.deepEqual(MAR_TASK_GROUPS.map(([k]) => k), ['overdue', 'now', 'later', 'prn']);
+    assert.deepEqual(MAR_TASK_GROUPS.map(([, l]) => l), ['Просрочено', 'Сейчас', 'Позже', 'По требованию']);
+});
+
+test('люди собираются из плоского ответа, и просроченные — первыми', () => {
+    const people = patientsFromTasks(DUE);
+    assert.deepEqual(people.map((p) => p.admission_id), [13, 14],
+        'у кого просрочено, тот наверху: сначала решают, к кому идти');
+    assert.equal(people[0].counts.overdue, 1);
+    assert.equal(people[0].counts.prn, 1);
+    assert.equal(people[0].total, 3);
+    assert.equal(people[1].counts.later, 1);
+    assert.equal(bedLine(people[0]), 'Терапия · койка T-1');
+});
+
+test('задачи режутся по выбранному пациенту, а не по всему отделению', () => {
+    const mine = tasksForAdmission(DUE, 13);
+    assert.deepEqual(mine.overdue.map((t) => t.name), ['Цефтриаксон']);
+    assert.deepEqual(mine.now.map((t) => t.name), ['Перевязка']);
+    assert.deepEqual(mine.later.map((t) => t.name), []);
+    assert.deepEqual(mine.prn.map((t) => t.name), ['Кеторол']);
+    assert.deepEqual(tasksForAdmission(DUE, 14).later.map((t) => t.name), ['Омепразол']);
+});
+
+test('«5 прав» — пять пунктов в закреплённом порядке', () => {
+    const rights = fiveRights(TASK_OVERDUE, patientA);
+    assert.deepEqual(rights.map((r) => r.key), ['patient', 'drug', 'dose', 'route', 'time'],
+        'порядок сверки читают сверху вниз, вслух, у койки — переставлять его нельзя');
+    assert.deepEqual(rights.map((r) => r.label), ['Пациент', 'Препарат', 'Доза', 'Путь введения', 'Время']);
+    assert.ok(rights[0].value.includes('Сидоров Сидор') && rights[0].value.includes('T-1'),
+        'пациент называется именем И койкой: одного имени в палате на четверых мало');
+    assert.equal(rights[1].value, 'Цефтриаксон');
+    assert.equal(rights[2].value, '1 г');
+    assert.equal(rights[3].value, 'в/в');
+    assert.equal(rights[4].value, `${TODAY} 06:00`);
+    // У процедуры дозы и пути нет — прочерк, а не пустое место.
+    assert.equal(fiveRights(TASK_NOW, patientA)[2].value, '—');
+    assert.equal(fiveRights(TASK_NOW, patientA)[3].value, '—');
+});
+
+test('аллергия читается из карты пациента, а пустая строка аллергией не считается', () => {
+    const map = new Map([[103, 'Пенициллин, новокаин'], [104, '  ']]);
+    assert.equal(allergyOf(map, 103), 'Пенициллин, новокаин');
+    assert.equal(allergyOf(map, 104), '');
+    assert.equal(allergyOf(map, 999), '');
+});
+
+test('дополнительный расход собирается в форму сервера, и брак не выставляется пациенту', () => {
+    assert.equal(extraPayload([], 55), null);
+    assert.equal(extraPayload([{ kind: 'waste', qty: '', note: '' }], 55), null, 'строка без количества не расход');
+    assert.equal(extraPayload([{ kind: 'нечто', qty: 2, note: '' }], 55), null, 'неизвестный род расхода не проходит');
+    assert.equal(extraPayload([{ kind: 'waste', qty: 2, note: 'ампула' }], null), null,
+        'без позиции склада списывать нечего — и сервер записал бы это текстом');
+
+    // Форма — та, которую читает parseExtraConsumption (rpc/treatment-orders.js):
+    // массив позиций склада, а не своя структура.
+    assert.deepEqual(extraPayload([{ kind: 'waste', qty: '2', note: 'разбита ампула' }], 55),
+        [{ product_id: 55, qty: 2, billable: false, name: 'разбита ампула' }],
+        'брак списывается со склада, но в счёт пациенту не идёт');
+    assert.deepEqual(extraPayload([{ kind: 'overuse', qty: '1', note: '' }], 55),
+        [{ product_id: 55, qty: 1, billable: true, name: 'Перерасход' }],
+        'перерасход выставляется, как всякий расходник');
+    assert.deepEqual(EXTRA_KINDS.map(([k]) => k), ['waste', 'overuse']);
+});
+
+// ─── 2. Экран ───────────────────────────────────────────────────────────────
+
+test('экран спрашивает задачи на сегодня и ставит пациентов слева со значком просрочки', async () => {
+    const root = await renderScreen();
+    const calls = rpcCalls.filter((c) => c.name === 'treatment_tasks_due');
+    assert.equal(calls.length, 1, 'один запрос задач на открытие');
+    assert.equal(calls[0].args.date, TODAY);
+    assert.equal('ward_id' in calls[0].args, false, 'без фильтра отделение не передаётся');
+
+    const list = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Пациенты'));
+    assert.ok(list, 'списка пациентов нет');
+    assert.ok(textOf(list).includes('Сидоров Сидор') && textOf(list).includes('Каримова Дилноза'));
+    assert.ok(textOf(list).includes('просрочено: 1'), 'значок просрочки на карточке пациента: ' + textOf(list));
+
+    // ИМЯ — САМОЕ КРУПНОЕ НА СТРОКЕ.
+    const name = walk(list).find((e) => (e._text || '') === 'Сидоров Сидор');
+    assert.ok(name, 'имя пациента не найдено');
+    const nameBox = walk(list).find((e) => e.children.includes(name));
+    assert.equal(nameBox.style.fontSize, '17px', 'имя пациента крупнее подписи под ним');
+    const bed = walk(list).find((e) => (e._text || '').includes('койка T-1'));
+    const bedBox = walk(list).find((e) => e.children.includes(bed));
+    assert.equal(bedBox.style.fontSize, '12.5px', 'койка — подпись под именем, а не соперник ему');
+});
+
+test('справа — задачи выбранного пациента в четырёх группах и красный баннер аллергии', async () => {
+    const root = await renderScreen();
+    const txt = textOf(root);
+    for (const [, label] of MAR_TASK_GROUPS) assert.ok(txt.includes(label), 'нет группы «' + label + '»');
+    assert.ok(txt.includes('Цефтриаксон') && txt.includes('Перевязка') && txt.includes('Кеторол'),
+        'задачи выбранного пациента');
+    assert.ok(!txt.includes('Омепразол'), 'чужая задача в списке выбранного пациента появиться не может');
+    assert.ok(txt.includes('Аллергия') && txt.includes('Пенициллин'), 'аллергия видна ещё до открытия окна');
+
+    // Аллергии спрошены ОДНИМ запросом на всех показанных пациентов.
+    const q = dbCalls.filter((c) => c.table === 'patients');
+    assert.equal(q.length, 1, 'аллергии грузятся одним запросом, а не по одному на окно');
+
+    // Второй пациент — без аллергии, и баннера у него быть не должно.
+    const list = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Пациенты'));
+    const btn = walk(list).find((e) => e.tagName === 'BUTTON' && textOf(e).includes('Каримова Дилноза'));
+    btn.click();
+    await settle();
+    const txt2 = textOf(root);
+    assert.ok(txt2.includes('Омепразол'), 'переключение пациента меняет правую половину');
+    assert.ok(!txt2.includes('Аллергия'), 'у пациента без аллергии красного баннера быть не должно');
+});
+
+// ─── 3. «5 прав» и подтверждение ────────────────────────────────────────────
+
+test('«Выполнить» показывает пять прав, аллергию и отмечает дозу как введённую', async () => {
+    const root = await renderScreen();
+    const overdueCard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Просрочено'));
+    findBtn(overdueCard, 'Выполнить').click();
+    await settle();
+
+    const overlay = BODY.children[BODY.children.length - 1];
+    const txt = textOf(overlay);
+    assert.ok(txt.includes('Подтвердите введение'));
+    for (const label of ['Пациент', 'Препарат', 'Доза', 'Путь введения', 'Время']) {
+        assert.ok(txt.includes(label), 'в подтверждении нет права «' + label + '»');
+    }
+    assert.ok(txt.includes('Сидоров Сидор') && txt.includes('T-1'), 'пациент назван именем и койкой');
+    assert.ok(txt.includes('Цефтриаксон') && txt.includes('1 г') && txt.includes('в/в'));
+    assert.ok(txt.includes(`${TODAY} 06:00`), 'время дозы по расписанию');
+    assert.ok(txt.includes('Аллергия') && txt.includes('Пенициллин'),
+        'красный баннер аллергии — последнее место, где неверный препарат ещё можно не ввести');
+
+    rpcCalls = [];
+    findBtn(overlay, 'Подтвердить введение').click();
+    await settle();
+    const call = rpcCalls.find((c) => c.name === 'treatment_admin_mark');
+    assert.ok(call, 'отметка не ушла на сервер');
+    assert.equal(call.args.order_id, 1);
+    assert.equal(call.args.status, 'given');
+    assert.equal(call.args.date, TODAY);
+    assert.equal(call.args.slot, 6, 'час дозы уходит на сервер: ключ отметки это (назначение, дата, слот)');
+    assert.equal('extra' in call.args, false, 'пустой дополнительный расход не отправляется');
+});
+
+test('дополнительный расход у койки уезжает в отметку', async () => {
+    const root = await renderScreen();
+    const overdueCard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Просрочено'));
+    findBtn(overdueCard, 'Выполнить').click();
+    await settle();
+
+    const overlay = BODY.children[BODY.children.length - 1];
+    assert.ok(textOf(overlay).includes('Дополнительный расход (брак / перерасход)'),
+        'строки брака и перерасхода записывает тот, кто стоит у койки');
+    const qty = walk(overlay).find((e) => e.tagName === 'INPUT' && e.attrs.type === 'number');
+    const note = walk(overlay).find((e) => e.tagName === 'INPUT' && (e.attrs.placeholder || '').includes('Что случилось'));
+    const kind = walk(overlay).find((e) => e.tagName === 'SELECT');
+    kind.value = 'waste'; qty.value = '2'; note.value = 'разбита ампула';
+
+    rpcCalls = [];
+    findBtn(overlay, 'Подтвердить введение').click();
+    await settle();
+    const call = rpcCalls.find((c) => c.name === 'treatment_admin_mark');
+    assert.deepEqual(call.args.extra, [{ product_id: 55, qty: 2, billable: false, name: 'разбита ампула' }],
+        'форма расхода — та, которую читает сервер, а не своя');
+});
+
+test('у назначения без позиции склада расход не предлагают, а объясняют', async () => {
+    const root = await renderScreen();
+    const nowCard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Сейчас'));
+    findBtn(nowCard, 'Выполнить').click();   // Перевязка: stock_item_id = null
+    await settle();
+    const overlay = BODY.children[BODY.children.length - 1];
+    assert.ok(textOf(overlay).includes('у назначения не указана позиция склада'),
+        'пустая форма расхода была бы обещанием, которого сервер не выполнит');
+    rpcCalls = [];
+    findBtn(overlay, 'Подтвердить введение').click();
+    await settle();
+    const call = rpcCalls.find((c) => c.name === 'treatment_admin_mark');
+    assert.equal('extra' in call.args, false);
+});
+
+test('предупреждение склада доходит до того, кто стоит у койки', async () => {
+    const root = await renderScreen();
+    markWarnings = [{ code: 'stock_dose', message: 'не списано: на складе нет остатка' }];
+    const overdueCard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Просрочено'));
+    findBtn(overdueCard, 'Выполнить').click();
+    await settle();
+    const overlay = BODY.children[BODY.children.length - 1];
+    findBtn(overlay, 'Подтвердить введение').click();
+    await settle();
+    assert.match(lastToast(), /не списано/i,
+        'пустой остаток не отменяет медицинскую запись, но молчать о нём нельзя');
+});
+
+// ─── 4. Отказ и пропуск ─────────────────────────────────────────────────────
+
+test('«Не введено» требует причину, и без неё запрос не уходит вовсе', async () => {
+    const root = await renderScreen();
+    const overdueCard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Просрочено'));
+    findBtn(overdueCard, 'Не введено').click();
+    await settle();
+
+    const overlay = BODY.children[BODY.children.length - 1];
+    const txt = textOf(overlay);
+    assert.ok(txt.includes('Доза не введена'));
+    for (const [, label] of OMISSION_OPTIONS) {
+        assert.ok(txt.includes(label), 'в окне нет варианта «' + label + '»');
+    }
+    assert.ok(txt.includes('Причина'), 'причина спрашивается прямо здесь');
+
+    rpcCalls = [];
+    findBtn(overlay, 'Записать').click();
+    await settle();
+    assert.match(lastToast(), /причину/i);
+    assert.equal(rpcCalls.filter((c) => c.name === 'treatment_admin_mark').length, 0,
+        'без причины отметка не отправляется — сервер откажет, но сказать это должно окно');
+
+    const statusSel = walk(overlay).find((e) => e.tagName === 'SELECT');
+    statusSel.value = 'refused';
+    const reason = walk(overlay).find((e) => e.tagName === 'INPUT' && (e.attrs.placeholder || '').includes('пациент отказался'));
+    reason.value = 'пациент отказался, тошнота';
+    findBtn(overlay, 'Записать').click();
+    await settle();
+    const call = rpcCalls.find((c) => c.name === 'treatment_admin_mark');
+    assert.ok(call, 'отказ не ушёл на сервер');
+    assert.equal(call.args.status, 'refused');
+    assert.equal(call.args.reason, 'пациент отказался, тошнота');
+    assert.equal(call.args.order_id, 1);
+    assert.equal(call.args.slot, 6);
+});
+
+test('«по требованию» отмечается БЕЗ часа — плановых точек у него нет', async () => {
+    const root = await renderScreen();
+    const prnCard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('По требованию'));
+    assert.ok(textOf(prnCard).includes('Кеторол'));
+    rpcCalls = [];
+    findBtn(prnCard, 'Выполнить').click();
+    await settle();
+    const overlay = BODY.children[BODY.children.length - 1];
+    findBtn(overlay, 'Подтвердить введение').click();
+    await settle();
+    const call = rpcCalls.find((c) => c.name === 'treatment_admin_mark');
+    assert.ok(call, 'отметка PRN не ушла');
+    assert.equal(call.args.order_id, 3);
+    assert.equal('slot' in call.args, false, 'слот у «по требованию» сервер отвергнет — его и не шлём');
+    assert.equal(call.args.date, TODAY);
+});
+
+// ─── 5. Права ───────────────────────────────────────────────────────────────
+
+test('задачи медсестры открывает отделение и не открывает касса', () => {
+    const nurseRole = { name: 'Медсестра', permissions: { sections: ['patients', 'labs', 'procedures', 'queue', 'beds'], levels: { beds: 'editor' } } };
+    const cashier = { name: 'Кассир', permissions: { sections: ['cashier', 'patients', 'queue'], levels: { cashier: 'admin' } } };
+
+    perms.setEffectiveFromRole(nurseRole);
+    assert.strictEqual(canOpenMarNurse(), true, 'экран построен для медсестры — ей он и открывается');
+    assert.strictEqual(perms.isRouteAllowed('mar-nurse'), true);
+    assert.strictEqual(perms.isRouteAllowed('kitchen-sheet'), true, 'порционник идёт тем же ключом стационара');
+
+    perms.setEffectiveFromRole(cashier);
+    assert.strictEqual(canOpenMarNurse(), false);
+    assert.strictEqual(perms.isRouteAllowed('mar-nurse'), false);
+    assert.strictEqual(perms.isRouteAllowed('kitchen-sheet'), false, 'заказ на кухню — не документ кассы');
+
+    perms.setFullAccess('Admin');
+    assert.strictEqual(canOpenMarNurse(), true);
+});

@@ -44,7 +44,7 @@ import { h, Icon, Tag, clear, PageHead, fmtDateTime, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { isModuleAllowed } from '../permissions.js';
 import { openAdmissionOrderModal, openAdmissionBedPicker, openAdmissionCancelModal, openAdmissionCard,
-         openAdmissionReviewModal, openAdmissionAttendingModal } from './admission-modal.js?v=inp2';
+         openAdmissionReviewModal, openAdmissionAttendingModal, goToMarSheet } from './admission-modal.js?v=inp5';
 
 // Раздел живёт под ключом `beds` («Стационар и палаты»): окно медсестры и доска
 // коек — две стороны одной работы, и раздавать их порознь значило бы выдать
@@ -68,11 +68,11 @@ function sinceLabel(iso) {
     return trf('{n} сут назад', { n: Math.floor(hours / 24) });
 }
 
-export async function renderAdmissions(container) {
+export async function renderAdmissions(container, ctx = {}) {
     clear(container);
     const root = h('div', { class: 'fade-in' });
     container.appendChild(root);
-    await paint(root);
+    await paint(root, ctx.onNavigate || null);
 }
 
 async function load() {
@@ -89,9 +89,9 @@ async function load() {
     return data || [];
 }
 
-async function paint(root) {
+async function paint(root, onNavigate = null) {
     clear(root);
-    const reload = () => paint(root);
+    const reload = () => paint(root, onNavigate);
 
     // ЧТО ЭТОТ ЧЕЛОВЕК ВПРАВЕ ДЕЛАТЬ — спрашиваем СЕРВЕР, один раз на экран.
     // Матрица прав живёт в rpc/inpatient-flow.js, и вторая её копия здесь
@@ -132,10 +132,10 @@ async function paint(root) {
     const waitingDoc  = rows.filter((r) => r.status === 'examined');
 
     const grid = h('div', { style: { display: 'grid', gap: '16px' } });
-    grid.appendChild(waitingBedCard(waitingBed, reload));
-    grid.appendChild(inWardCard(inWard, reload));
-    grid.appendChild(waitingExamCard(waitingExam, reload, can));
-    grid.appendChild(waitingAttendingCard(waitingDoc, reload, can));
+    grid.appendChild(waitingBedCard(waitingBed, reload, onNavigate));
+    grid.appendChild(inWardCard(inWard, reload, onNavigate));
+    grid.appendChild(waitingExamCard(waitingExam, reload, can, onNavigate));
+    grid.appendChild(waitingAttendingCard(waitingDoc, reload, can, onNavigate));
     root.appendChild(grid);
 }
 
@@ -197,7 +197,7 @@ function listCard(title, icon, count, hint, rowsEls, emptyText) {
 // ---------------------------------------------------------------------------
 // 1. «Ждут размещения» — заявки
 // ---------------------------------------------------------------------------
-function waitingBedCard(list, reload) {
+function waitingBedCard(list, reload, onNavigate) {
     const els = list.map((a) => {
         const p = a.patients || {};
         const meta = [
@@ -222,7 +222,7 @@ function waitingBedCard(list, reload) {
                 class: 'btn btn-sm', type: 'button',
                 onclick: () => openAdmissionCancelModal({ admission: a, onDone: reload }),
             }, tr('Отменить')),
-        ], () => openAdmissionCard({ admissionId: a.id, onChange: reload }));
+        ], () => openAdmissionCard({ admissionId: a.id, onChange: reload, onNavigate }));
     });
     return listCard(tr('Ждут размещения'), 'Clock', list.length,
         tr('Заявки регистратуры и направления врачей. Койка занимается только здесь.'),
@@ -232,7 +232,7 @@ function waitingBedCard(list, reload) {
 // ---------------------------------------------------------------------------
 // 2. «В отделении» — кто лежит, по палатам
 // ---------------------------------------------------------------------------
-function inWardCard(list, reload) {
+function inWardCard(list, reload, onNavigate) {
     const byWard = new Map();
     for (const a of list) {
         const key = (a.wards && a.wards.name) || tr('Без палаты');
@@ -266,7 +266,16 @@ function inWardCard(list, reload) {
                 // Именно её отсутствие и делало заявку «Отменено» на прежнем
                 // экране: подпись собиралась на месте и знала не все состояния.
                 Tag(tr(admissionStatusLabel(a.status)), { kind: 'ok', dot: true }),
-            ], () => openAdmissionCard({ admissionId: a.id, onChange: reload })));
+                // MAR_SHEET_V1 — лист назначений СО СТРОКИ, а не только из
+                // карточки: во время обхода к нему возвращаются чаще, чем ко
+                // всему остальному в окне госпитализации.
+                (a.status === 'active' || a.status === 'discharging')
+                    ? h('button', {
+                        class: 'btn btn-sm', type: 'button',
+                        onclick: (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); goToMarSheet(a.id, onNavigate); },
+                    }, Icon('Pill', { size: 13 }), ' ', tr('Лист назначений'))
+                    : null,
+            ], () => openAdmissionCard({ admissionId: a.id, onChange: reload, onNavigate })));
         }
     }
     return listCard(tr('В отделении'), 'Bed', list.length,
@@ -281,7 +290,7 @@ function inWardCard(list, reload) {
 // сервера, см. paint). Обычный врач её не видит, и это не косметика: первичный
 // осмотр проводит главный врач, а кнопка, которая ответит отказом, отправляет
 // человека в тупик вместо того, чтобы сказать, кого звать.
-function waitingExamCard(list, reload, can) {
+function waitingExamCard(list, reload, can, onNavigate) {
     const els = list.map((a) => {
         const p = a.patients || {};
         const meta = [
@@ -297,7 +306,7 @@ function waitingExamCard(list, reload, can) {
                     onclick: () => openAdmissionReviewModal({ admission: a, onDone: reload }),
                 }, Icon('Stethoscope', { size: 13 }), ' ', tr('Провести первичный осмотр'))
                 : Tag(tr('Ждёт главного врача'), { kind: 'warn', dot: true }),
-        ], () => openAdmissionCard({ admissionId: a.id, onChange: reload }));
+        ], () => openAdmissionCard({ admissionId: a.id, onChange: reload, onNavigate }));
     });
     return listCard(tr('Ждут первичного осмотра'), 'Stethoscope', list.length,
         tr('Осмотр проводит главный врач: до него лечащего врача и назначений нет.'),
@@ -310,7 +319,7 @@ function waitingExamCard(list, reload, can) {
 // Самое дорогое состояние маршрута: пациент осмотрен, койка занята, суточное
 // начисление идёт — а лечения нет, потому что не назначен тот, кто его ведёт.
 // Список существует затем, чтобы это не длилось сутки.
-function waitingAttendingCard(list, reload, can) {
+function waitingAttendingCard(list, reload, can, onNavigate) {
     const els = list.map((a) => {
         const p = a.patients || {};
         const meta = [
@@ -327,7 +336,7 @@ function waitingAttendingCard(list, reload, can) {
                     onclick: () => openAdmissionAttendingModal({ admission: a, onDone: reload }),
                 }, Icon('User', { size: 13 }), ' ', tr('Назначить лечащего врача'))
                 : Tag(tr('Ждёт лечащего врача'), { kind: 'warn', dot: true }),
-        ], () => openAdmissionCard({ admissionId: a.id, onChange: reload }));
+        ], () => openAdmissionCard({ admissionId: a.id, onChange: reload, onNavigate }));
     });
     return listCard(tr('Ждут лечащего врача'), 'User', list.length,
         tr('Осмотр проведён. Пока лечащий врач не назначен, назначений и стола у пациента нет.'),

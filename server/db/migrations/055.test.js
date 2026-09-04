@@ -88,6 +88,13 @@ test('every sidebar module can be granted to a role', () => {
     // the right to put a patient in a bed without the right to see whether it
     // is free.
     if (id === 'admissions') return !grantable.has('beds');
+    // MAR_NURSE_V1 / KITCHEN_SHEET_V1 — the same shape again: «Задачи
+    // медсестры» (#mar-nurse) and «Порционник» (#kitchen-sheet) are further
+    // screens of the ONE inpatient section, granted by the same `beds` key
+    // (permissions.js isModuleAllowed). The doctor's treatment sheet
+    // (#mar-sheet) is not in this list because it is not a sidebar module —
+    // it is opened per admission, like #patient-card.
+    if (id === 'mar-nurse' || id === 'kitchen-sheet') return !grantable.has('beds');
     return true;
   });
   assert.deepEqual(ungrantable, [], 'sidebar modules with no way to grant them:\n' + ungrantable.join('\n'));

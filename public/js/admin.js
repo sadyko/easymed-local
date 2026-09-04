@@ -58,6 +58,9 @@ import { renderReports }      from './admin/views/reports.js?v=vatincl1';
 import { renderReportsHub }   from './admin/views/reports-hub.js?v=ru6';   // REPORTS_HUB_RU_V1 — «Отчёты» card grid + full-screen report builder
 import { renderWardBeds }     from './admin/views/ward-beds.js?v=board3';   // INPATIENT_LOCAL_V1 — fresh local ward/bed board (legacy beds.js was cloud-coupled)
 import { renderAdmissions }   from './admin/views/admissions.js?v=inp2';   // ADMISSION_ORDER_V1 — «Стационар»: окно медсестры (заявки, размещение, очередь осмотра)
+import { renderMarSheet }    from './admin/views/mar-sheet.js?v=inp5';   // MAR_SHEET_V1 — лист назначений: сетка врача «назначение × час»
+import { renderMarNurse }    from './admin/views/mar-nurse.js?v=inp5';   // MAR_NURSE_V1 — задачи медсестры: пациент — якорь, «5 прав»
+import { renderKitchenSheet } from './admin/views/kitchen-sheet.js?v=diet1';   // KITCHEN_SHEET_V1 — порционник (Задача 7; экран был написан без маршрута)
 import { renderDoctorRoom }   from './admin/views/doctor-room.js?v=docroom1';   // DOCTOR_ROOM_V1 — Кабинет врача (consultation queue)
 import { renderEmployees }    from './admin/views/employees.js?v=arch1';   // EMPLOYEE_EDITOR_V3 — per-service rate tables; v11 = RATE_LOAD_V2 (fixed rate survives reopen)
 import { renderMarketing }    from './admin/views/marketing.js?v=btnright1';
@@ -107,6 +110,13 @@ const NAV = [
     // клиники. Один пункт меню на оба заставлял бы медсестру искать свою
     // очередь внутри плана этажа. Права у них общие (ключ `beds`).
     { id: 'admissions', label: 'Inpatient ward', icon: 'Bed' },
+    // MAR_NURSE_V1 — задачи медсестры по листу назначений. Отдельный пункт, а не
+    // вкладка внутри «Стационара»: это работа СМЕНЫ, к которой возвращаются
+    // каждый час, а окно госпитализации открывают, когда кого-то кладут.
+    { id: 'mar-nurse', label: 'Treatment tasks', icon: 'Pill' },
+    // KITCHEN_SHEET_V1 — порционник. Экран был написан Задачей 7 и остался без
+    // единого входа: ни пункта меню, ни ветки маршрута. Здесь он их получает.
+    { id: 'kitchen-sheet', label: 'Kitchen sheet', icon: 'Doc' },
     { id: 'beds',     label: 'Ward & beds', icon: 'Bed' },   // INPATIENT_LOCAL_V1 — Стационар и палаты
     { id: 'patient-documents', label: 'Documents', icon: 'Doc' },   // PATIENT_DOCUMENTS_V1
     { section: 'Operations' },
@@ -162,6 +172,9 @@ const CRUMBS = {
     'patient-documents': ['Clinical', 'Documents'],   // PATIENT_DOCUMENTS_V1
     procedures:    ['Clinical', 'Procedures'],
     admissions:    ['Clinical', 'Inpatient ward'],   // ADMISSION_ORDER_V1
+    'mar-nurse':   ['Clinical', 'Treatment tasks'],   // MAR_NURSE_V1
+    'mar-sheet':   ['Clinical', 'Inpatient ward', 'Treatment sheet'],   // MAR_SHEET_V1
+    'kitchen-sheet': ['Clinical', 'Kitchen sheet'],   // KITCHEN_SHEET_V1
     beds:          ['Clinical', 'Ward & beds'],
     pacs:          ['Clinical', 'Imaging · PACS'],
     pharmacy:      ['Operations', 'Pharmacy'],
@@ -972,6 +985,9 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'crm':           return void await renderCrm(viewRoot, ctx);   // CRM_V1
             case 'docs-archive':  return void await renderDocsArchive(viewRoot, ctx);   // CLINICAL_DOCS_ARCHIVE_V1
             case 'admissions':    return void await renderAdmissions(viewRoot, ctx);   // ADMISSION_ORDER_V1
+            case 'mar-sheet':     return void await renderMarSheet(viewRoot, ctx);   // MAR_SHEET_V1
+            case 'mar-nurse':     return void await renderMarNurse(viewRoot, ctx);   // MAR_NURSE_V1
+            case 'kitchen-sheet': return void await renderKitchenSheet(viewRoot, ctx);   // KITCHEN_SHEET_V1
             case 'beds':          return void await renderWardBeds(viewRoot, ctx);   // INPATIENT_LOCAL_V1
             case 'doctor-room':   return void await renderDoctorRoom(viewRoot, ctx);   // DOCTOR_ROOM_V1
             case 'pacs':          return void await renderComingSoon(viewRoot, ctx, renderPacs);          // COMING_SOON_V1
@@ -1294,6 +1310,9 @@ function renderCrumbs() {
         'Laboratory':            t('sidebar.nav.labs',         'Laboratory'),
         'Ward & beds':           t('sidebar.nav.beds',         'Ward & beds'),
         'Inpatient ward':        t('sidebar.nav.admissions',   'Inpatient ward'),   // ADMISSION_ORDER_V1
+        'Treatment tasks':       t('sidebar.nav.marNurse',     'Treatment tasks'),   // MAR_NURSE_V1
+        'Treatment sheet':       t('sidebar.nav.marSheet',     'Treatment sheet'),   // MAR_SHEET_V1
+        'Kitchen sheet':         t('sidebar.nav.kitchenSheet', 'Kitchen sheet'),   // KITCHEN_SHEET_V1
         'Pharmacy':              t('sidebar.nav.pharmacy',     'Pharmacy'),
         'Cashier':               t('sidebar.nav.cashier',      'Cashier'),
         'Procurement':           t('sidebar.nav.procurement',  'Procurement'),
