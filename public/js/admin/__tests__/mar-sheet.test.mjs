@@ -92,7 +92,7 @@ const schedule = await import('../../../../server/services/domain/mar-schedule.j
 
 const {
     ROUTES, FREQ_OPTIONS, KIND_OPTIONS, MAR_GRACE_MIN, MAR_MISSED_MIN,
-    todayLocal, shiftDate, dueMsOf, marDueState, cellFor, markAt, isPlanned,
+    todayLocal, shiftDate, dueMsOf, marDueState, cellFor, markAt, voidedAt, isPlanned, VOIDED_GLYPH,
     gridHours, splitOrders, groupByKind, hhmm, orderSubtitle, cellGlyph,
     cellStateLabel, cellTitle, marSheetPrintHtml, renderMarSheet, canOpenMarSheet,
 } = sheet;
@@ -132,6 +132,26 @@ const KETOROL = {
     due: [], marks: [], voided_marks: [],
     prn_marks: [{ id: 503, order_id: 3, due_date: TODAY, due_slot: null, status: 'given', given_at: PRN_AT, given_by: 8, reason: '', voided_at: null }],
 };
+// UNMARK_WINDOW_V1 — назначение, у которого отметку СНЯЛИ. В десять часах
+// снятая отметка сменилась верной (доза всё-таки введена), в двадцать двух —
+// час снова ждёт дозу. Оба следа обязаны остаться видимыми: с этого дня их
+// оставляет не только старшая, но и медсестра, поправившая свой промах.
+const VOIDED_AT = isoLocal(10, 12);
+const HEPARIN = {
+    id: 5, admission_id: 13, kind: 'med', name: 'Гепарин', dose: '5000 ЕД', route: 'п/к',
+    freq_code: '2x', prn: 0, status: 'active', source: 'clinic',
+    starts_on: TODAY, days: 5, ends_on: null, slot_hours: [10, 22],
+    due: [due(TODAY, 10), due(TODAY, 22)],
+    marks: [{ id: 601, order_id: 5, due_date: TODAY, due_slot: 10, status: 'given', given_at: isoLocal(10, 15), given_by: 8, reason: '', voided_at: null }],
+    voided_marks: [
+        { id: 600, order_id: 5, due_date: TODAY, due_slot: 10, status: 'given', given_at: GIVEN_AT, given_by: 7,
+          voided_at: VOIDED_AT, voided_by: 7, void_reason: 'нажала не ту строку' },
+        { id: 602, order_id: 5, due_date: TODAY, due_slot: 22, status: 'given', given_at: isoLocal(9, 0), given_by: 7,
+          voided_at: isoLocal(9, 5), voided_by: 9, void_reason: 'не тот пациент' },
+    ],
+    prn_marks: [],
+};
+
 const CANCELLED = {
     id: 4, admission_id: 13, kind: 'med', name: 'Анальгин', dose: '500 мг', route: 'внутрь',
     freq_code: '1x', prn: 0, status: 'cancelled', source: 'clinic',
@@ -241,6 +261,52 @@ test('три степени опоздания считаются от слот�
     // Пропуск, ЗАПИСАННЫЙ медсестрой, и просрочка — разные вещи и разные знаки.
     assert.notEqual(cellGlyph('missed'), cellGlyph('overdue'));
     assert.notEqual(cellStateLabel('missed'), cellStateLabel('overdue'));
+});
+
+// ─── 2б. Снятая отметка — след, а не пустота (UNMARK_WINDOW_V1) ─────────────
+
+test('снятая отметка остаётся видна на листе врача — со временем, автором и причиной', () => {
+    const now = dueMsOf(TODAY, 23);
+
+    // Час, где снятую отметку сменила верная: состояние — по ДЕЙСТВУЮЩЕЙ
+    // отметке, но след снятия едет рядом.
+    const fixed = cellFor(HEPARIN, TODAY, 10, now);
+    assert.equal(fixed.state, 'given');
+    assert.equal(fixed.mark.id, 601);
+    assert.equal(fixed.voided.id, 600);
+
+    // Час, где отметку сняли и не переставили: клетка снова ждёт дозу — это
+    // правда, и она не должна выглядеть так, будто отметки НИКОГДА не было.
+    const undone = cellFor(HEPARIN, TODAY, 22, now);
+    assert.equal(undone.state, 'overdue');
+    assert.equal(undone.mark, null);
+    assert.equal(undone.voided.id, 602);
+
+    assert.equal(voidedAt(HEPARIN, TODAY, 10).id, 600);
+    assert.equal(voidedAt(CEF, TODAY, 10), null, 'у назначения без снятых отметок следа нет');
+
+    const people = new Map(USERS.map((u) => [u.id, u.full_name]));
+    const t = cellTitle(undone, people);
+    assert.ok(t.includes('отметка снята'), t);
+    assert.ok(t.includes('09:05'), 'когда сняли: ' + t);
+    assert.ok(t.includes('Юсупов Азиз'), 'кто снял: ' + t);
+    assert.ok(t.includes('не тот пациент'), 'почему сняли: ' + t);
+});
+
+test('след снятия виден и на экране, и на бумаге', async () => {
+    const before = orders;
+    orders = [CEF, HEPARIN];
+    try {
+        const root = await renderScreen();
+        assert.ok(textOf(root).includes(VOIDED_GLYPH), 'знака снятой отметки нет в сетке врача');
+
+        const html = marSheetPrintHtml({
+            date: TODAY, admission: ADMISSION, orders,
+            people: new Map(USERS.map((u) => [u.id, u.full_name])), now_ms: dueMsOf(TODAY, 23),
+        });
+        // Распечатанный лист — документ: «здесь было и снято» в нём не пропадает.
+        assert.ok(html.includes(VOIDED_GLYPH), 'знака снятой отметки нет на бумаге');
+    } finally { orders = before; }
 });
 
 // ─── 3. Введено ≠ отказ ─────────────────────────────────────────────────────

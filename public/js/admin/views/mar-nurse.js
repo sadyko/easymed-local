@@ -28,6 +28,23 @@
 // придержано / пропущено) и написать причину. Сервер требует причину второй
 // раз, независимо от этого экрана.
 //
+// ─── СВОЮ ОТМЕТКУ МОЖНО СНЯТЬ САМОЙ — ПЯТНАДЦАТЬ МИНУТ ──────────────────────
+//
+// Закрытая точка уходит из четырёх групп работы, и до сих пор уходила совсем:
+// последняя отметка пациента убирала его из списка вместе с единственной
+// дорогой к исправлению промаха. Поэтому здесь есть пятый список — «Сделано»,
+// и в нём кнопка «Снять отметку».
+//
+// КОГДА ОНА ЕСТЬ, РЕШАЕТ СЕРВЕР (unmarkVerdict в rpc/treatment-orders.js) и
+// присылает готовый ответ в `undo` каждой строки: своя отметка и не старше
+// пятнадцати минут — кнопка; иначе — та же фраза, которой ответил бы сервер,
+// прямо в строке. Повторить правило в браузере значило бы завести вторые часы
+// и вторые права: экран показал бы кнопку там, где сервер откажет, — и
+// медсестра узнала бы об отказе после нажатия, у койки.
+//
+// Причина обязательна и здесь, и снятие оставляет след (кто снял, когда,
+// почему) — окно даёт СКОРОСТЬ, а не тишину.
+
 // ─── «5 ПРАВ» ───────────────────────────────────────────────────────────────
 //
 // Подтверждение показывает пять вещей крупно — пациент, препарат, доза, путь
@@ -40,7 +57,7 @@ import { h, Icon, Tag, clear, toast, field, PageHead, initials } from '../ui.js'
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { isModuleAllowed } from '../permissions.js';
 import { inpatientModal } from './admission-modal.js?v=inp5';
-import { todayLocal } from './mar-sheet.js?v=inp5';
+import { todayLocal, hhmm, cellStateLabel } from './mar-sheet.js?v=inp5';
 
 export function canOpenMarNurse() {
     return isModuleAllowed('mar-nurse');
@@ -75,7 +92,12 @@ export const OMISSION_OPTIONS = [
 // признаком `billable`, и здесь он и проставляется.
 export const EXTRA_KINDS = [['waste', 'Брак'], ['overuse', 'Перерасход']];
 
-const GROUP_LABEL = Object.fromEntries(MAR_TASK_GROUPS);
+// «Сделано» — не пятая группа СРОЧНОСТИ, а список уже закрытых точек: работы в
+// нём нет, и в счётчике задач ему не место. Отсюда отдельная константа, а не
+// пятая строка в MAR_TASK_GROUPS.
+export const MAR_DONE_GROUP = ['done', 'Сделано'];
+
+const GROUP_LABEL = Object.fromEntries([...MAR_TASK_GROUPS, MAR_DONE_GROUP]);
 const GROUP_TONE = { overdue: 'crit', now: 'warn', later: '', prn: 'info' };
 
 export function groupLabel(key) { return GROUP_LABEL[key] || ''; }
@@ -93,25 +115,32 @@ export function groupLabel(key) { return GROUP_LABEL[key] || ''; }
 export function patientsFromTasks(due) {
     const groups = (due && due.groups) || {};
     const byAdmission = new Map();
+    const rowFor = (t) => {
+        const id = Number(t.admission_id);
+        if (!byAdmission.has(id)) {
+            byAdmission.set(id, {
+                admission_id: id,
+                patient_id: t.patient_id,
+                patient_name: t.patient_name || '',
+                ward_id: t.ward_id, ward_name: t.ward_name || '',
+                bed_id: t.bed_id, bed_code: t.bed_code || '',
+                counts: { overdue: 0, now: 0, later: 0, prn: 0, done: 0 },
+                total: 0,
+            });
+        }
+        return byAdmission.get(id);
+    };
     for (const [key] of MAR_TASK_GROUPS) {
         for (const t of (groups[key] || [])) {
-            const id = Number(t.admission_id);
-            if (!byAdmission.has(id)) {
-                byAdmission.set(id, {
-                    admission_id: id,
-                    patient_id: t.patient_id,
-                    patient_name: t.patient_name || '',
-                    ward_id: t.ward_id, ward_name: t.ward_name || '',
-                    bed_id: t.bed_id, bed_code: t.bed_code || '',
-                    counts: { overdue: 0, now: 0, later: 0, prn: 0 },
-                    total: 0,
-                });
-            }
-            const row = byAdmission.get(id);
+            const row = rowFor(t);
             row.counts[key] += 1;
-            row.total += 1;
+            row.total += 1;      // «total» — это РАБОТА; «Сделано» в неё не входит
         }
     }
+    // Человек, у которого на сегодня всё отмечено, из списка НЕ исчезает: пока
+    // окно самоисправления открыто, к нему есть зачем вернуться. Счётчик задач
+    // при этом остаётся честным нулём.
+    for (const t of (groups.done || [])) rowFor(t).counts.done += 1;
     return [...byAdmission.values()].sort((a, b) =>
         (b.counts.overdue - a.counts.overdue)
         || (b.counts.now - a.counts.now)
@@ -122,10 +151,39 @@ export function patientsFromTasks(due) {
 export function tasksForAdmission(due, admissionId) {
     const groups = (due && due.groups) || {};
     const out = {};
-    for (const [key] of MAR_TASK_GROUPS) {
+    for (const [key] of [...MAR_TASK_GROUPS, MAR_DONE_GROUP]) {
         out[key] = (groups[key] || []).filter((t) => Number(t.admission_id) === Number(admissionId));
     }
     return out;
+}
+
+/**
+ * Подпись закрытой точки: что именно отмечено и кем.
+ *
+ * Статус называется СЛОВОМ («Введено», «Отказ пациента»), а не галочкой: в
+ * списке, из которого отметку снимают, «✓» без слова и имени — украшение.
+ */
+export function doneLine(task) {
+    const t = task || {};
+    return [
+        cellStateLabel(t.status) ? tr(cellStateLabel(t.status)) : '',
+        t.given_by_name || '',
+    ].filter(Boolean).join(' · ');
+}
+
+/**
+ * Кнопка снятия — ровно там, где сервер её разрешил (`undo.allowed`), и ни
+ * строкой дальше. Своих часов и своей копии правила здесь нет намеренно:
+ * см. шапку файла.
+ */
+export function canUndo(task) {
+    return !!(task && task.undo && task.undo.allowed && task.administration_id);
+}
+
+/** Почему кнопки нет — словами сервера, а не «недоступно». */
+export function undoRefusal(task) {
+    const u = (task && task.undo) || {};
+    return u.allowed ? '' : String(u.message || '');
 }
 
 /** Койка и палата одной строкой — то, что называют вслух вместе с именем. */
@@ -358,6 +416,45 @@ export function openOmitModal({ task, patient, allergy = '', onDone } = {}) {
     }, { width: 560 });
 }
 
+/**
+ * «Снять отметку» — своя, по горячим следам.
+ *
+ * ПРИЧИНА ОБЯЗАТЕЛЬНА, и запрос без неё не уходит (сервер откажет второй раз,
+ * но человеку это говорит окно, а не красная плашка после ожидания). Окно
+ * ГОВОРИТ ВСЛУХ, что снятие остаётся в истории: медсестра должна понимать, что
+ * исправляет запись, а не стирает её.
+ */
+export function openUndoModal({ task, patient, onDone } = {}) {
+    if (!task || !task.administration_id) { toast(tr('Отметка не найдена.'), 'fail'); return; }
+    if (!canUndo(task)) { toast(undoRefusal(task) || tr('Снять эту отметку может старшая медсестра.'), 'fail'); return; }
+    const reasonInp = h('input', { type: 'text', placeholder: tr('Например: нажала не ту строку') });
+
+    inpatientModal(tr('Снять отметку'), 'Warning', [
+        anchorBig(task.patient_name || (patient && patient.patient_name) || '', bedLine(task)),
+        h('div', { class: 'card', style: { padding: '13px 15px' } },
+            h('div', { style: { fontSize: '17px', fontWeight: 700 } }, task.name || ''),
+            h('div', { class: 'muted', style: { fontSize: '13.5px', marginTop: '2px' } },
+                [task.dose || null, task.route || null,
+                    task.given_at ? hhmm(task.given_at) : null, doneLine(task)].filter(Boolean).join(' · '))),
+        field(tr('Причина'), reasonInp, { required: true }),
+        h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+            tr('Отметка не исчезнет: в истории останется, кто её снял, когда и почему. Списанный препарат вернётся на склад, начисление снимется — кроме уже выставленного в счёт.')),
+    ], tr('Снять отметку'), async () => {
+        const reason = reasonInp.value.trim();
+        if (!reason) { toast(tr('Укажите причину: без неё отметка не снимается.'), 'fail'); return false; }
+        const { data, error } = await supabase.rpc('treatment_admin_unmark', {
+            administration_id: task.administration_id, reason,
+        });
+        if (error) { toast((error.message) || tr('Не удалось снять отметку.'), 'fail'); return false; }
+        // «Строка уже в счёте — уберите её через кассу»: клиническая запись
+        // снята, а деньги остались, и молчать об этом нельзя.
+        const warn = (data && Array.isArray(data.warnings) ? data.warnings : []).find((w) => w && w.message);
+        toast(warn ? warn.message : tr('Отметка снята. Час снова свободен.'), warn ? 'info' : 'ok');
+        if (onDone) await onDone();
+        return true;
+    }, { width: 560 });
+}
+
 // ─── Экран ──────────────────────────────────────────────────────────────────
 
 export async function renderMarNurse(root, ctx = {}) {
@@ -509,7 +606,46 @@ export async function renderMarNurse(root, ctx = {}) {
             }
             box.appendChild(card);
         }
+
+        const done = tasks.done || [];
+        if (done.length) box.appendChild(doneCard(done, p));
         return box;
+    }
+
+    // «Сделано за смену» — список, из которого снимают промах. Он идёт ПОСЛЕДНИМ
+    // и не спорит с работой: сверху то, что надо сделать, внизу то, что сделано.
+    function doneCard(list, p) {
+        const card = h('div', { class: 'card' },
+            h('div', { class: 'card-header' },
+                h('h3', null, tr(MAR_DONE_GROUP[1])),
+                h('span', { style: { flex: 1 } }),
+                Tag(trf('отметок: {n}', { n: list.length }))));
+        for (const t of list) card.appendChild(doneRow(t, p));
+        return card;
+    }
+
+    function doneRow(t, p) {
+        const refusal = undoRefusal(t);
+        return h('div', {
+            style: {
+                display: 'flex', alignItems: 'center', gap: '12px',
+                padding: '12px 16px', borderTop: '1px solid var(--ink-100)', flexWrap: 'wrap',
+            },
+        },
+            h('div', { style: { fontSize: '17px', fontWeight: 800, minWidth: '64px' } }, hhmm(t.given_at)),
+            h('div', { style: { flex: 1, minWidth: '160px' } },
+                h('div', { style: { fontSize: '15px', fontWeight: 700, color: 'var(--ink-900)' } }, t.name || ''),
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                    [t.dose || null, t.route || null, doneLine(t) || null].filter(Boolean).join(' · '))),
+            canUndo(t)
+                ? h('button', {
+                    class: 'btn btn-sm', type: 'button',
+                    onclick: () => openUndoModal({ task: t, patient: p, onDone: load }),
+                }, tr('Снять отметку'))
+                // Не серая кнопка, а ПРИЧИНА: «недоступно» отправило бы медсестру
+                // искать, что она сделала не так, вместо того чтобы позвать старшую.
+                : h('div', { class: 'muted', style: { fontSize: '12.5px', maxWidth: '320px', textAlign: 'right' } },
+                    refusal));
     }
 
     function taskRow(t, p, allergy) {

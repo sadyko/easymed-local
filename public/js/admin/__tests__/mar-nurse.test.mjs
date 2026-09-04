@@ -16,6 +16,10 @@
 //      в запросе сервер отвергнет.
 //   6. ДОПОЛНИТЕЛЬНЫЙ РАСХОД (брак / перерасход) уезжает в отметку.
 //   7. РАЗДЕЛ ОТКРЫВАЕТСЯ МЕДСЕСТРЕ и не открывается кассе.
+//   8. СВОЮ ОТМЕТКУ СНИМАЮТ ЗДЕСЬ ЖЕ (UNMARK_WINDOW_V1): список «Сделано»
+//      показывает кнопку РОВНО там, где сервер разрешил (`undo.allowed`), а где
+//      не разрешил — его же словами объясняет, кого звать. Своих часов и своей
+//      копии правила у экрана нет: они разошлись бы с сервером молча.
 
 import { test } from 'node:test';
 import assert from 'node:assert';
@@ -88,9 +92,9 @@ const perms = await import('../permissions.js');
 const { todayLocal } = await import('../views/mar-sheet.js');
 
 const {
-    MAR_TASK_GROUPS, OMISSION_OPTIONS, EXTRA_KINDS,
+    MAR_TASK_GROUPS, MAR_DONE_GROUP, OMISSION_OPTIONS, EXTRA_KINDS,
     patientsFromTasks, tasksForAdmission, fiveRights, allergyOf, extraPayload,
-    bedLine, renderMarNurse, canOpenMarNurse,
+    bedLine, canUndo, undoRefusal, doneLine, renderMarNurse, canOpenMarNurse,
 } = nurse;
 
 // ─── данные «сервера» ───────────────────────────────────────────────────────
@@ -127,10 +131,32 @@ const TASK_LATER = {
     date: TODAY, slot: 22, due_at: `${TODAY} 22:00`, state: 'pending', late_min: 0,
 };
 
+// Закрытые точки. Право снятия сервер уже посчитал и прислал готовым — экран
+// его не выводит, а показывает (UNMARK_WINDOW_V1).
+const REFUSAL = 'Свою отметку можно снять в течение 15 мин после записи — это время вышло. '
+    + 'Дальше снимает старшая медсестра или администратор: позовите её.';
+const DONE_MINE = {
+    ...patientA, order_id: 7, kind: 'med', name: 'Гепарин', dose: '5000 ЕД', route: 'п/к',
+    source: 'clinic', freq_code: '2x', prn: 0, stock_item_id: 55,
+    administration_id: 701, status: 'given', date: TODAY, slot: 10,
+    given_at: `${TODAY}T09:58:00Z`, given_by: 2, given_by_name: 'Медсестра',
+    undo: { allowed: true, scope: 'own', window_min: 15, left_min: 12 },
+};
+const DONE_LATE = {
+    ...patientA, order_id: 8, kind: 'med', name: 'Анальгин', dose: '1 мл', route: 'в/м',
+    source: 'clinic', freq_code: '1x', prn: 0, stock_item_id: 55,
+    administration_id: 702, status: 'refused', date: TODAY, slot: 8,
+    given_at: `${TODAY}T05:00:00Z`, given_by: 2, given_by_name: 'Медсестра',
+    undo: { allowed: false, scope: 'late', window_min: 15, message: REFUSAL },
+};
+
 const DUE = {
     date: TODAY, now: new Date().toISOString(), ward_id: null,
-    counts: { overdue: 1, now: 1, later: 1, prn: 1 },
-    groups: { overdue: [TASK_OVERDUE], now: [TASK_NOW], later: [TASK_LATER], prn: [TASK_PRN] },
+    counts: { overdue: 1, now: 1, later: 1, prn: 1, done: 2 },
+    groups: {
+        overdue: [TASK_OVERDUE], now: [TASK_NOW], later: [TASK_LATER], prn: [TASK_PRN],
+        done: [DONE_MINE, DONE_LATE],
+    },
 };
 
 const PATIENTS = [
@@ -142,6 +168,8 @@ let rpcCalls = [];
 let dbCalls = [];
 let markWarnings = [];
 let markAnswer = () => ({ ok: true, data: { administration: { id: 900 }, already: false, warnings: markWarnings } });
+let unmarkWarnings = [];
+let unmarkAnswer = () => ({ ok: true, data: { administration: { id: 701 }, already: false, warnings: unmarkWarnings } });
 
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
@@ -157,6 +185,10 @@ globalThis.fetch = async (url, opts = {}) => {
             const a = markAnswer();
             return a.ok ? ok(a.data) : fail(a.message);
         }
+        if (name === 'treatment_admin_unmark') {
+            const a = unmarkAnswer();
+            return a.ok ? ok(a.data) : fail(a.message);
+        }
         return ok({});
     }
     if (u === '/api/db') {
@@ -170,7 +202,7 @@ globalThis.fetch = async (url, opts = {}) => {
 
 async function renderScreen() {
     BODY.children.length = 0;
-    rpcCalls = []; dbCalls = []; markWarnings = [];
+    rpcCalls = []; dbCalls = []; markWarnings = []; unmarkWarnings = [];
     const container = mkEl('div');
     await renderMarNurse(container, { onNavigate: () => {} });
     await settle();
@@ -243,6 +275,40 @@ test('дополнительный расход собирается в форм
         [{ product_id: 55, qty: 1, billable: true, name: 'Перерасход' }],
         'перерасход выставляется, как всякий расходник');
     assert.deepEqual(EXTRA_KINDS.map(([k]) => k), ['waste', 'overuse']);
+});
+
+// ─── 1б. Своя отметка снимается здесь же (UNMARK_WINDOW_V1) ─────────────────
+
+test('«Сделано» — не пятая группа срочности: работы в нём нет и в счётчик задач он не идёт', () => {
+    assert.deepEqual(MAR_TASK_GROUPS.map(([k]) => k), ['overdue', 'now', 'later', 'prn']);
+    assert.deepEqual(MAR_DONE_GROUP, ['done', 'Сделано']);
+
+    const people = patientsFromTasks(DUE);
+    assert.equal(people[0].counts.done, 2);
+    assert.equal(people[0].total, 3, 'сделанное — не задача');
+
+    // Пациент, у которого на сегодня ВСЁ отмечено, из списка не исчезает: пока
+    // открыто окно самоисправления, к нему есть зачем вернуться.
+    const onlyDone = { groups: { done: [DONE_MINE] } };
+    const solo = patientsFromTasks(onlyDone);
+    assert.deepEqual(solo.map((p) => p.admission_id), [13]);
+    assert.equal(solo[0].total, 0);
+    assert.equal(solo[0].counts.done, 1);
+
+    assert.deepEqual(tasksForAdmission(DUE, 13).done.map((t) => t.name), ['Гепарин', 'Анальгин']);
+    assert.deepEqual(tasksForAdmission(DUE, 14).done, [], 'чужое сделанное в список не попадает');
+});
+
+test('право снятия берётся у сервера, а не считается заново в браузере', () => {
+    assert.equal(canUndo(DONE_MINE), true);
+    assert.equal(undoRefusal(DONE_MINE), '');
+    assert.equal(canUndo(DONE_LATE), false);
+    assert.equal(undoRefusal(DONE_LATE), REFUSAL);
+    // Ответа нет вовсе (старый сервер) — кнопки тоже нет: молчание не «можно».
+    assert.equal(canUndo({ administration_id: 5 }), false);
+    // Статус называется словом, а не галочкой.
+    assert.equal(doneLine(DONE_MINE), 'Введено · Медсестра');
+    assert.equal(doneLine(DONE_LATE), 'Отказ пациента · Медсестра');
 });
 
 // ─── 2. Экран ───────────────────────────────────────────────────────────────
@@ -446,4 +512,73 @@ test('задачи медсестры открывает отделение и �
 
     perms.setFullAccess('Admin');
     assert.strictEqual(canOpenMarNurse(), true);
+});
+
+// ─── 8. Снятие своей отметки на экране ──────────────────────────────────────
+
+test('в «Сделано» кнопка стоит у своей свежей отметки, а у остывшей — причина', async () => {
+    const root = await renderScreen();
+    const doneCard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Сделано'));
+    assert.ok(doneCard, 'списка «Сделано» нет: снимать промах было бы негде');
+    assert.ok(textOf(doneCard).includes('отметок: 2'));
+    assert.ok(textOf(doneCard).includes('Гепарин') && textOf(doneCard).includes('Анальгин'));
+
+    const rows = doneCard.children.filter((c) => textOf(c).includes('Гепарин') || textOf(c).includes('Анальгин'));
+    const mine = rows.find((r) => textOf(r).includes('Гепарин'));
+    const late = rows.find((r) => textOf(r).includes('Анальгин'));
+    assert.ok(findBtn(mine, 'Снять отметку'), 'у своей свежей отметки кнопки нет');
+    assert.equal(findBtn(late, 'Снять отметку'), undefined, 'кнопка стоит там, где сервер откажет');
+    // Не серая кнопка, а СЛОВА сервера: медсестра должна знать, кого звать.
+    assert.ok(textOf(late).includes('старшая медсестра'), 'причина отказа: ' + textOf(late));
+    assert.ok(textOf(late).includes('позовите'));
+
+    // Сделанное — внизу: сверху то, что надо сделать.
+    const cards = walk(root).filter((e) => e.className === 'card');
+    assert.ok(cards.indexOf(doneCard) > cards.findIndex((e) => textOf(e).includes('Просрочено')));
+});
+
+test('снятие требует причины, а запрос уходит с номером отметки', async () => {
+    const root = await renderScreen();
+    const doneCard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Сделано'));
+    const mine = doneCard.children.find((c) => textOf(c).includes('Гепарин'));
+    findBtn(mine, 'Снять отметку').click();
+    await settle();
+
+    const overlay = BODY.children[BODY.children.length - 1];
+    const txt = textOf(overlay);
+    assert.ok(txt.includes('Сидоров Сидор') && txt.includes('Гепарин'), 'окно называет пациента и препарат');
+    assert.ok(txt.includes('Отметка не исчезнет'), 'окно говорит, что снятие остаётся в истории');
+
+    // Без причины запрос НЕ УХОДИТ вовсе.
+    rpcCalls = [];
+    findBtn(overlay, 'Снять отметку').click();
+    await settle();
+    assert.equal(rpcCalls.filter((c) => c.name === 'treatment_admin_unmark').length, 0);
+    assert.ok(lastToast().includes('Укажите причину'), 'молчаливого отказа быть не должно: ' + lastToast());
+
+    const reason = walk(overlay).find((e) => e.tagName === 'INPUT' && (e.attrs.placeholder || '').includes('не ту строку'));
+    reason.value = 'нажала не ту строку';
+    findBtn(overlay, 'Снять отметку').click();
+    await settle();
+    const call = rpcCalls.find((c) => c.name === 'treatment_admin_unmark');
+    assert.ok(call, 'снятие не ушло на сервер');
+    assert.deepEqual(call.args, { administration_id: 701, reason: 'нажала не ту строку' });
+    assert.ok(lastToast().includes('Отметка снята'));
+    // Экран перечитывает задачи: снятая отметка возвращает час в работу.
+    assert.ok(rpcCalls.filter((c) => c.name === 'treatment_tasks_due').length >= 1);
+});
+
+test('«строка уже в счёте» доходит до того, кто снял отметку', async () => {
+    const root = await renderScreen();
+    unmarkWarnings = [{ code: 'invoiced', line_id: 3, message: 'Строка уже в счёте — уберите её через кассу.' }];
+    const doneCard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Сделано'));
+    const mine = doneCard.children.find((c) => textOf(c).includes('Гепарин'));
+    findBtn(mine, 'Снять отметку').click();
+    await settle();
+    const overlay = BODY.children[BODY.children.length - 1];
+    walk(overlay).find((e) => e.tagName === 'INPUT' && (e.attrs.placeholder || '').includes('не ту строку')).value = 'ошиблась';
+    findBtn(overlay, 'Снять отметку').click();
+    await settle();
+    // Медицинская запись снята, а деньги остались — молчать об этом нельзя.
+    assert.ok(lastToast().includes('через кассу'), 'предупреждение о счёте: ' + lastToast());
 });

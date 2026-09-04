@@ -80,6 +80,12 @@ function order(db, admissionId, over = {}) {
 const mark = (db, o, over = {}, who = ACTOR.nurse) =>
   treatmentAdminMark(db, { order_id: o.id, date: START, slot: 6, status: 'given', ...over }, who);
 
+// UNMARK_WINDOW_V1 — состарить отметку, не поспав пятнадцати минут: given_at
+// переписывается ТЕМИ ЖЕ часами, по которым правило её и читает.
+const ageMark = (db, id, minutes) => db.prepare(
+  "UPDATE treatment_administrations SET given_at = strftime('%Y-%m-%dT%H:%M:%SZ','now',?) WHERE id = ?")
+  .run(`-${minutes} minutes`, id);
+
 const onHand = (db, id) => db.prepare('SELECT on_hand FROM products WHERE id = ?').get(id).on_hand;
 const movements = (db, productId) => db.prepare(
   'SELECT * FROM stock_movements WHERE product_id = ? ORDER BY id').all(productId);
@@ -188,6 +194,61 @@ test('снятие отметки возвращает препарат на с�
   assert.equal(mv.length, 2);
   assert.equal(mv[1].kind, 'void');
   assert.equal(mv[1].qty, 1);
+  db.close();
+});
+
+// UNMARK_WINDOW_V1 — быстрое исправление медсестры идёт ТЕМ ЖЕ путём. Отдельная
+// дорога для «своей» отметки означала бы вторую реализацию возврата денег, и
+// разошлась бы она молча: склад вернулся бы, а строка счёта осталась.
+test('своё снятие в первые 15 минут возвращает склад и деньги так же, как снятие старшей', () => {
+  const db = seed();
+  const adm = admission(db);
+  const o = order(db, adm);
+  const m = mark(db, o);                                  // отметила медсестра (id 2)
+  assert.equal(onHand(db, 1), 19);
+  assert.equal(lines(db, adm).length, 1);
+  ageMark(db, m.administration.id, 3);
+
+  const back = treatmentAdminUnmark(db,
+    { administration_id: m.administration.id, reason: 'нажала не ту строку' }, ACTOR.nurse);
+
+  assert.equal(back.already, false);
+  assert.equal(back.reversal.reversed, 1);
+  assert.equal(back.reversal.kept, 0);
+  assert.equal(onHand(db, 1), 20, 'остаток вернулся полностью');
+  assert.equal(lines(db, adm).length, 0, 'начисление снято');
+  // След — такой же, как у старшей: скорость, а не тишина.
+  assert.ok(back.administration.voided_at);
+  assert.equal(back.administration.voided_by, 2);
+  assert.equal(back.administration.void_reason, 'нажала не ту строку');
+  assert.equal(back.administration.stock_status, 'reversed');
+  const mv = movements(db, 1);
+  assert.equal(mv.length, 2);
+  assert.equal(mv[1].kind, 'void');
+  db.close();
+});
+
+test('выставленная в счёт строка не отменяется и медсестрой — правило то же', () => {
+  const db = seed();
+  const adm = admission(db);
+  const o = order(db, adm);
+  const m = mark(db, o);
+  const lineId = lines(db, adm)[0].id;
+  createInvoiceForAdmission(db, { admission_id: adm, admission_service_ids: [lineId] }, ACTOR.registrar);
+  ageMark(db, m.administration.id, 3);
+
+  const back = treatmentAdminUnmark(db,
+    { administration_id: m.administration.id, reason: 'ошиблась' }, ACTOR.nurse);
+
+  // Ровно то же поведение, что у старшей (см. тест выше): клиническая запись
+  // снимается, деньги — нет, и об этом говорят вслух.
+  assert.equal(back.reversal.reversed, 0);
+  assert.equal(back.reversal.kept, 1);
+  assert.equal(back.warnings[0].code, 'invoiced');
+  assert.match(back.warnings[0].message, /через кассу/);
+  assert.equal(lines(db, adm).length, 1);
+  assert.equal(onHand(db, 1), 19);
+  assert.ok(back.administration.voided_at, 'сама отметка при этом снята');
   db.close();
 });
 

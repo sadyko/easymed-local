@@ -59,14 +59,20 @@ export { RpcError };
 //   создать/отменить назначение   — врач (свой пациент), главный врач, admin
 //                                   → это и есть assertCanPrescribe;
 //   отметить выполнение дозы      — медсестра, старшая медсестра, admin;
-//   снять отметку                 — ТОЛЬКО старшая медсестра и admin.
+//   снять отметку                 — старшая медсестра и admin без ограничений,
+//                                   медсестра — свою и по горячим следам
+//                                   (UNMARK_WINDOW_V1 ниже).
 //
 // Разница между двумя последними строками — весь смысл отдельного RPC на
-// снятие: поставить отметку может любая медсестра, отменить чужую — только
-// старшая. Врача в них нет намеренно: доза либо введена, либо нет, и это
-// сестринская запись.
+// снятие: поставить отметку может любая медсестра, отменить ЧУЖУЮ (или свою,
+// но остывшую) — только старшая. Врача в них нет намеренно: доза либо введена,
+// либо нет, и это сестринская запись.
 const MARK_ROLES = ['nurse', 'senior_nurse', 'admin'];
-const UNMARK_ROLES = ['senior_nurse', 'admin'];
+// Кого RPC снятия вообще пускает на порог. Кто из них что может — решает
+// unmarkVerdict, и только он.
+const UNMARK_ROLES = ['nurse', 'senior_nurse', 'admin'];
+// Снимают без оглядки на автора и на часы.
+const UNMARK_ANY_ROLES = ['senior_nurse', 'admin'];
 // Читают лист все, кто ведёт пациента в отделении. Касса и склад — нет: лист
 // назначений это история болезни, а не счёт.
 const READ_ROLES = ['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse'];
@@ -696,12 +702,83 @@ export function treatmentAdminMark(db, args, user) {
 
 // ─── 5. Снять отметку ───────────────────────────────────────────────────────
 
+// ─── UNMARK_WINDOW_V1 — своя отметка, снятая по горячим следам ──────────────
+//
+// Решение владельца (2026-09-04): «медсестра может снять свою отметку в
+// течение короткого времени, дальше — старшая». До этого дня снять могла
+// ТОЛЬКО старшая, и цена ошибки на планшете была несоразмерна ей самой: на
+// общем экране палец попадает в соседнюю строку, и чтобы убрать промах,
+// сделанный секунду назад, приходилось искать по отделению человека с другой
+// ролью. Это не строгость, а очередь — и она учит не исправлять промахи.
+//
+// Пятнадцать минут — не круглое число ради круглости: это тот же допуск, по
+// которому расписание считает дозу «вовремя» (GRACE_MIN в
+// domain/mar-schedule.js). Одна и та же смена, один и тот же порядок величин:
+// пока доза ещё считается введённой вовремя, её отметку можно поправить самой.
+// Константа своя, а не импорт: совпадение величин — это довод, а не связь, и
+// сдвиг допуска расписания не должен молча переписывать чьи-то права.
+//
+// ЧЕГО ОКНО НЕ ДЕЛАЕТ: оно не отменяет ни причину, ни след. Быстрое
+// исправление медсестры пишет voided_at / voided_by / void_reason ровно так же,
+// как снятие старшей, и возвращает склад и деньги тем же путём. Смысл окна —
+// СКОРОСТЬ, а не тишина: запись о том, что отметка была и её сняли, остаётся
+// в истории болезни навсегда.
+export const UNMARK_WINDOW_MIN = 15;
+
 /**
- * Только старшая медсестра и администратор (матрица плана), и строка НЕ
- * УДАЛЯЕТСЯ — в этом отличие от референса, где снятая отметка исчезает
- * бесследно и разобраться, кто и что снял, уже невозможно. Здесь остаётся
- * след: кто снял, когда и почему; из действующих строку выводит voided_at, и
- * слот снова свободен для верной отметки.
+ * Кому эта строка по силам — единственное место, где живёт правило.
+ *
+ * `nowMs` и `windowMin` — ПАРАМЕТРЫ, а не глобальные часы, и это ради теста:
+ * проверить границу окна иначе можно было бы только сном на пятнадцать минут.
+ * Часы сюда подаёт вызывающий, и подаёт их СЕРВЕРНЫЕ (nowUtc): окно — это
+ * право, а право, посчитанное по часам браузера, снимается подстановкой
+ * `now` в запрос. По той же причине treatment_tasks_due считает эту же
+ * подсказку серверными часами, а не своим тестовым `now`.
+ *
+ * Возвращает `{ allowed: true, … }` либо `{ allowed: false, status, message }`,
+ * а не бросает: тот же ответ нужен экрану медсестры, чтобы показать кнопку
+ * там, где она сработает, и сказать словами, где не сработает.
+ */
+export function unmarkVerdict(row, user, nowMs, windowMin = UNMARK_WINDOW_MIN) {
+  if (hasAnyRole(user, UNMARK_ANY_ROLES)) {
+    return { allowed: true, scope: 'any', window_min: windowMin, left_min: null };
+  }
+  if (!hasAnyRole(user, UNMARK_ROLES)) {
+    return { allowed: false, status: 403, scope: 'none',
+             message: 'Снятие отметки — недоступно вашей роли.' };
+  }
+
+  // Чужую отметку не снимают вовсе — ни через минуту, ни через час.
+  const mine = row && row.given_by != null && user && user.id != null
+    && Number(row.given_by) === Number(user.id);
+  if (!mine) {
+    return { allowed: false, status: 403, scope: 'other',
+             message: 'Снять можно только свою отметку, а эту записал другой человек. '
+                    + 'Снимет старшая медсестра или администратор — позовите её.' };
+  }
+
+  const givenMs = Date.parse(row.given_at || '');
+  const ageMin = Number.isFinite(givenMs) ? (Number(nowMs) - givenMs) / 60000 : Infinity;
+  if (!(ageMin < windowMin)) {
+    return { allowed: false, status: 403, scope: 'late', window_min: windowMin,
+             message: `Свою отметку можно снять в течение ${windowMin} мин после записи — `
+                    + 'это время вышло. Дальше снимает старшая медсестра или '
+                    + 'администратор: позовите её.' };
+  }
+
+  return {
+    allowed: true, scope: 'own', window_min: windowMin,
+    left_min: Math.max(0, Math.ceil(windowMin - ageMin)),
+  };
+}
+
+/**
+ * Старшая медсестра и администратор — без ограничений; медсестра — свою
+ * отметку и в пределах UNMARK_WINDOW_MIN (правило выше). Строка НЕ УДАЛЯЕТСЯ —
+ * в этом отличие от референса, где снятая отметка исчезает бесследно и
+ * разобраться, кто и что снял, уже невозможно. Здесь остаётся след: кто снял,
+ * когда и почему; из действующих строку выводит voided_at, и слот снова
+ * свободен для верной отметки.
  *
  * MED_ADMIN_CHARGE_V1 — снятие ВОЗВРАЩАЕТ и склад, и деньги: препарат идёт
  * обратно на остаток движением 'void', а строка начисления убирается. Двойное
@@ -727,6 +804,13 @@ export function treatmentAdminUnmark(db, args, user) {
       };
     }
 
+    // Часы — серверные (nowUtc), и другого источника у окна нет: `now` из
+    // запроса открыл бы его кому угодно и насколько угодно.
+    const verdict = unmarkVerdict(row, user, Date.parse(nowUtc(db)));
+    if (!verdict.allowed) throw new RpcError(verdict.message, verdict.status || 403);
+
+    // Причина обязательна ВСЕМ, включая быстрое исправление автора: снятая
+    // отметка без причины — дыра в истории болезни, а не экономия движения.
     if (!reason) throw new RpcError('Снятие отметки без причины невозможно.', 400);
 
     const order = loadOrder(db, row.order_id);
@@ -815,7 +899,7 @@ export function treatmentTasksDue(db, args, user) {
     else marked.add(`${m.order_id}|${m.due_slot}`);
   }
 
-  const groups = { overdue: [], now: [], later: [], prn: [] };
+  const groups = { overdue: [], now: [], later: [], prn: [], done: [] };
 
   for (const o of rows) {
     const patient = {
@@ -848,6 +932,49 @@ export function treatmentTasksDue(db, args, user) {
     groups[key].sort((x, y) => (x.slot - y.slot) || String(x.patient_name).localeCompare(String(y.patient_name)));
   }
 
+  // UNMARK_WINDOW_V1 — «Сделано за смену». Закрытая точка исчезает из четырёх
+  // групп работы (её больше не надо делать), и до этого дня исчезала совсем:
+  // отметить дозу последнему пациенту значило убрать его из списка — вместе с
+  // единственной дорогой к исправлению промаха. Пятнадцатиминутное окно без
+  // этого списка было бы правом без кнопки.
+  //
+  // Право считается ЗДЕСЬ и серверными часами, ровно тем же unmarkVerdict, что
+  // стоит на самом снятии: экран не повторяет правило, он его показывает —
+  // кнопку там, где она сработает, и текст отказа там, где нет.
+  const nowSrv = Date.parse(nowUtc(db));
+  for (const d of db.prepare(`
+    SELECT a.*, o.kind, o.name, o.dose, o.route, o.source, o.freq_code, o.prn,
+           o.service_id, o.stock_item_id,
+           adm.id AS admission_id, adm.patient_id, adm.ward_id, adm.bed_id,
+           p.full_name AS patient_name, w.name AS ward_name, b.code AS bed_code,
+           u.full_name AS given_by_name
+      FROM treatment_administrations a
+      JOIN treatment_orders o ON o.id = a.order_id
+      JOIN admissions adm ON adm.id = o.admission_id
+      LEFT JOIN patients p ON p.id = adm.patient_id
+      LEFT JOIN wards w ON w.id = adm.ward_id
+      LEFT JOIN beds b ON b.id = adm.bed_id
+      LEFT JOIN users u ON u.id = a.given_by
+     WHERE a.due_date = ?
+       AND a.voided_at IS NULL
+       AND adm.status IN ('active','discharging')
+       ${wardId === null ? '' : 'AND adm.ward_id = ?'}
+     ORDER BY a.given_at DESC, a.id DESC`)
+    .all(...(wardId === null ? [date] : [date, wardId]))) {
+    groups.done.push({
+      admission_id: d.admission_id, patient_id: d.patient_id, patient_name: d.patient_name,
+      ward_id: d.ward_id, ward_name: d.ward_name, bed_id: d.bed_id, bed_code: d.bed_code,
+      order_id: d.order_id, kind: d.kind, name: d.name, dose: d.dose, route: d.route,
+      source: d.source, freq_code: d.freq_code, prn: d.prn,
+      service_id: d.service_id, stock_item_id: d.stock_item_id,
+      administration_id: d.id, status: d.status, reason: d.reason,
+      date: d.due_date, slot: d.due_slot,
+      given_at: d.given_at, given_by: d.given_by, given_by_name: d.given_by_name || '',
+      stock_status: d.stock_status || '', stock_note: d.stock_note || '',
+      undo: unmarkVerdict(d, user, nowSrv),
+    });
+  }
+
   // MED_ADMIN_CHARGE_V1 — сколько сегодняшних отметок остались НЕ СПИСАННЫМИ
   // по отделению. Это не задача медсестры (доза уже введена), а хвост для
   // старшей: разобрать и провести вручную. Считается там же, где смена, чтобы
@@ -870,6 +997,7 @@ export function treatmentTasksDue(db, args, user) {
     counts: {
       overdue: groups.overdue.length, now: groups.now.length,
       later: groups.later.length, prn: groups.prn.length,
+      done: groups.done.length,
       stock_issues: Number(issues && issues.n) || 0,
     },
     groups,

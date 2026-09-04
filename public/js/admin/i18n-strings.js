@@ -6280,4 +6280,18 @@ export const STRINGS = {
   "Долг выписке не мешает — подтвердите, что он согласован.": {"en":"The balance does not block the discharge — confirm that it has been agreed.","ru":"Долг выписке не мешает — подтвердите, что он согласован.","uz":"Qarz chiqarishga to'sqinlik qilmaydi — kelishilganini tasdiqlang."},
   "Долг согласован (гарантия / рассрочка)": {"en":"Balance agreed (guarantee / instalments)","ru":"Долг согласован (гарантия / рассрочка)","uz":"Qarz kelishilgan (kafolat / bo'lib to'lash)"},
   "Долга по госпитализации нет.": {"en":"The stay has no outstanding balance.","ru":"Долга по госпитализации нет.","uz":"Yotqizish bo'yicha qarz yo'q."},
+  // UNMARK_WINDOW_V1 — медсестра снимает СВОЮ отметку первые 15 минут, дальше
+  // старшая: список «Сделано» на экране медсестры и след снятия на листе врача
+  // (views/mar-nurse.js, views/mar-sheet.js) — added 2026-09-04
+  "Сделано": {"en":"Done","ru":"Сделано","uz":"Bajarildi"},
+  "отметок: {n}": {"en":"records: {n}","ru":"отметок: {n}","uz":"belgilar: {n}"},
+  "Снять отметку": {"en":"Undo the record","ru":"Снять отметку","uz":"Belgini olib tashlash"},
+  "Отметка не найдена.": {"en":"The record was not found.","ru":"Отметка не найдена.","uz":"Belgi topilmadi."},
+  "Снять эту отметку может старшая медсестра.": {"en":"The senior nurse can undo this record.","ru":"Снять эту отметку может старшая медсестра.","uz":"Bu belgini katta hamshira olib tashlashi mumkin."},
+  "Например: нажала не ту строку": {"en":"For example: tapped the wrong line","ru":"Например: нажала не ту строку","uz":"Masalan: noto'g'ri qatorni bosdim"},
+  "Отметка не исчезнет: в истории останется, кто её снял, когда и почему. Списанный препарат вернётся на склад, начисление снимется — кроме уже выставленного в счёт.": {"en":"The record will not vanish: the history keeps who undid it, when and why. The deducted medicine goes back to stock and the charge is removed — except one already put on an invoice.","ru":"Отметка не исчезнет: в истории останется, кто её снял, когда и почему. Списанный препарат вернётся на склад, начисление снимется — кроме уже выставленного в счёт.","uz":"Belgi yo'qolmaydi: tarixda uni kim, qachon va nima uchun olib tashlagani qoladi. Hisobdan chiqarilgan dori omborga qaytadi, hisob esa olib tashlanadi — hisob-fakturaga allaqachon qo'yilganidan tashqari."},
+  "Укажите причину: без неё отметка не снимается.": {"en":"State the reason: without it the record is not undone.","ru":"Укажите причину: без неё отметка не снимается.","uz":"Sababni ko'rsating: usiz belgi olib tashlanmaydi."},
+  "Не удалось снять отметку.": {"en":"The record could not be undone.","ru":"Не удалось снять отметку.","uz":"Belgini olib tashlab bo'lmadi."},
+  "Отметка снята. Час снова свободен.": {"en":"The record is undone. The hour is free again.","ru":"Отметка снята. Час снова свободен.","uz":"Belgi olib tashlandi. Soat yana bo'sh."},
+  "отметка снята": {"en":"record undone","ru":"отметка снята","uz":"belgi olib tashlangan"},
 };

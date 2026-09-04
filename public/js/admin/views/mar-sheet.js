@@ -137,6 +137,27 @@ export function markAt(order, date, slot) {
 }
 
 /**
+ * СНЯТАЯ отметка этого часа — самая свежая, если снимали не раз.
+ *
+ * UNMARK_WINDOW_V1 — с этого дня отметку снимает не только старшая: медсестра
+ * поправляет СВОЙ промах первые пятнадцать минут, и таких строк на листе стало
+ * больше, а не меньше. Значит, показывать их надо тем более: врач, читающий
+ * лист, обязан видеть, что в этом часу отметка БЫЛА и её сняли, — иначе клетка
+ * выглядит как «никто не дошёл», и разговор о дозе начинается с неверного места.
+ * Строка не удаляется никогда (093), сервер отдаёт её отдельным списком
+ * (voided_marks), и здесь она становится видимой.
+ */
+export function voidedAt(order, date, slot) {
+    let last = null;
+    for (const m of ((order && order.voided_marks) || [])) {
+        if (!m.voided_at) continue;
+        if (m.due_date !== date || Number(m.due_slot) !== Number(slot)) continue;
+        if (!last || String(m.voided_at) > String(last.voided_at)) last = m;
+    }
+    return last;
+}
+
+/**
  * Состояние одной клетки.
  *   none      — этого часа у назначения нет (не планировалось);
  *   given     — введено (✓, время и кто);
@@ -146,11 +167,15 @@ export function markAt(order, date, slot) {
  *   pending / delayed / overdue — плановая точка без отметки.
  */
 export function cellFor(order, date, slot, nowMs) {
-    if (!isPlanned(order, date, slot)) return { state: 'none', mark: null, due_ms: null };
+    if (!isPlanned(order, date, slot)) return { state: 'none', mark: null, voided: null, due_ms: null };
     const dueMs = dueMsOf(date, slot);
     const mark = markAt(order, date, slot);
-    if (mark) return { state: mark.status, mark, due_ms: dueMs };
-    return { state: marDueState(dueMs, nowMs), mark: null, due_ms: dueMs };
+    // Снятая отметка НЕ меняет состояния клетки: час снова ждёт дозу (или уже
+    // закрыт верной отметкой), и это правда. Она едет рядом, отдельным полем, —
+    // след поверх состояния, а не вместо него.
+    const voided = voidedAt(order, date, slot);
+    if (mark) return { state: mark.status, mark, voided, due_ms: dueMs };
+    return { state: marDueState(dueMs, nowMs), mark: null, voided, due_ms: dueMs };
 }
 
 /** Введённая доза и записанный пропуск рисуются РАЗНО — и это проверяется. */
@@ -161,6 +186,10 @@ const GLYPH = {
     given: '✓', refused: '✕', held: '‖', missed: '⊘',
     overdue: '!', delayed: '•', pending: '·', none: '',
 };
+
+// Знак снятой отметки. Он не спорит со знаком состояния и стоит под ним: клетка
+// говорит сначала «что сейчас», потом «а тут было и снято».
+export const VOIDED_GLYPH = '↺';
 
 const STATE_LABEL = {
     given: 'Введено', refused: 'Отказ пациента', held: 'Придержано', missed: 'Пропущено',
@@ -242,6 +271,14 @@ export function cellTitle(cell, people) {
         if (who) parts.push(who);
         if (c.mark.reason) parts.push(c.mark.reason);
     }
+    if (c.voided) {
+        // Кто снял, когда и почему — те же три вопроса, что и у самой отметки.
+        parts.push(tr('отметка снята'));
+        if (c.voided.voided_at) parts.push(hhmm(c.voided.voided_at));
+        const vw = personName(people, c.voided.voided_by);
+        if (vw) parts.push(vw);
+        if (c.voided.void_reason) parts.push(c.voided.void_reason);
+    }
     return parts.filter(Boolean).join(' · ');
 }
 
@@ -274,7 +311,10 @@ export function marSheetPrintHtml(sheet) {
         if (c.state === 'none') return '<td class="p-c"></td>';
         const time = c.mark && c.mark.given_at ? hhmm(c.mark.given_at) : '';
         const who = c.mark ? initials(personName(people, c.mark.given_by) || '') : '';
-        return `<td class="p-c"><b>${esc(cellGlyph(c.state))}</b>${time ? '<br>' + esc(time) : ''}${who ? '<br>' + esc(who) : ''}</td>`;
+        // Снятая отметка видна и на бумаге: распечатанный лист — документ, и
+        // «здесь было и снято» в нём не должно исчезать.
+        const undone = c.voided ? '<br>' + esc(VOIDED_GLYPH) : '';
+        return `<td class="p-c"><b>${esc(cellGlyph(c.state))}</b>${time ? '<br>' + esc(time) : ''}${who ? '<br>' + esc(who) : ''}${undone}</td>`;
     };
 
     const groups = groupByKind(scheduled).map((g) => `
@@ -703,7 +743,8 @@ export async function renderMarSheet(root, ctx = {}) {
             },
                 h('div', { style: { fontSize: '15px', fontWeight: 700 } }, cellGlyph(c.state)),
                 time ? h('div', null, time) : null,
-                who ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, who) : null));
+                who ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, who) : null,
+                c.voided ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, VOIDED_GLYPH) : null));
         }
         return row;
     }

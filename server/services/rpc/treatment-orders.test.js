@@ -16,7 +16,16 @@ import { dueAtMs } from '../domain/mar-schedule.js';
 import {
   treatmentOrderCreate, treatmentOrderCancel, treatmentOrdersList,
   treatmentAdminMark, treatmentAdminUnmark, treatmentTasksDue, RpcError,
+  unmarkVerdict, UNMARK_WINDOW_MIN,
 } from './treatment-orders.js';
+
+// UNMARK_WINDOW_V1 — состарить отметку, не поспав пятнадцати минут: given_at
+// переписывается ТЕМИ ЖЕ часами, по которым правило её и читает (nowUtc →
+// strftime('now')), поэтому «три минуты назад» здесь значит ровно то же, что
+// значило бы три минуты ожидания.
+const ageMark = (db, id, minutes) => db.prepare(
+  "UPDATE treatment_administrations SET given_at = strftime('%Y-%m-%dT%H:%M:%SZ','now',?) WHERE id = ?")
+  .run(`-${minutes} minutes`, id);
 
 // Носитель роли: надстроечные роли живут ТОЛЬКО в extra_roles — врач остаётся
 // врачом, медсестра медсестрой (см. roles.js EXTRA_ONLY_ROLES).
@@ -26,6 +35,7 @@ const ACTOR = {
   other_doctor: { id: 3, role: 'doctor' },              // чужой врач
   head_doctor:  { id: 4, role: 'doctor', extra_roles: ['head_doctor'] },
   nurse:        { id: 2, role: 'nurse' },
+  other_nurse:  { id: 8, role: 'nurse' },              // та же роль, ДРУГОЙ человек
   senior_nurse: { id: 5, role: 'nurse', extra_roles: ['senior_nurse'] },
   registrar:    { id: 6, role: 'registrar' },
   cashier:      { id: 7, role: 'cashier' },
@@ -47,6 +57,7 @@ function seed() {
   u.run(5, 'snur', 'x', 'Старшая', 'nurse');
   u.run(6, 'reg', 'x', 'Регистратура', 'registrar');
   u.run(7, 'cash', 'x', 'Касса', 'cashier');
+  u.run(8, 'nur2', 'x', 'Вторая медсестра', 'nurse');
   u.run(9, 'boss', 'x', 'Админ', 'admin');
   db.prepare("INSERT INTO patients (id, full_name) VALUES (1,'Иванов Иван')").run();
   db.prepare("INSERT INTO patients (id, full_name) VALUES (2,'Петров Пётр')").run();
@@ -365,16 +376,29 @@ test('отметка по выписанному пациенту не прин�
 
 // ─── 5. Снятие отметки ──────────────────────────────────────────────────────
 
-test('снять отметку может только старшая медсестра (и админ), и снятие оставляет след', () => {
+test('снятие отметки — сестринское дело: врачу и регистратуре его не дают', () => {
   const db = seed();
   const id = admission(db);
   const o = order(db, id);
   const m = treatmentAdminMark(db, { order_id: o.id, date: START, slot: 6, status: 'given' }, ACTOR.nurse).administration;
 
-  for (const who of ['nurse', 'doctor', 'head_doctor', 'registrar']) {
+  // Доза либо введена, либо нет, и это сестринская запись: врача в снятии нет
+  // намеренно — ни лечащего, ни главного.
+  for (const who of ['doctor', 'head_doctor', 'registrar', 'cashier']) {
     assert.throws(() => treatmentAdminUnmark(db, { administration_id: m.id, reason: 'ошибка' }, ACTOR[who]),
-      (e) => e.status === 403, who);
+      (e) => e.status === 403 && /недоступно вашей роли/.test(e.message), who);
   }
+  db.close();
+});
+
+test('старшая медсестра (и админ) снимает любую отметку и в любой час — со следом', () => {
+  const db = seed();
+  const id = admission(db);
+  const o = order(db, id);
+  const m = treatmentAdminMark(db, { order_id: o.id, date: START, slot: 6, status: 'given' }, ACTOR.nurse).administration;
+
+  // Чужая и давно остывшая — старшей это не мешает: её право безусловно.
+  ageMark(db, m.id, 600);
   assert.throws(() => treatmentAdminUnmark(db, { administration_id: m.id }, ACTOR.senior_nurse), /без причины/);
 
   const res = treatmentAdminUnmark(db, { administration_id: m.id, reason: 'не тот пациент' }, ACTOR.senior_nurse);
@@ -397,6 +421,136 @@ test('снять отметку может только старшая медс�
   db.close();
 });
 
+// ─── 5б. Окно самоисправления (UNMARK_WINDOW_V1) ────────────────────────────
+//
+// Решение владельца: медсестра снимает СВОЮ отметку в течение пятнадцати минут,
+// дальше — старшая. Проверяются все четыре угла правила (свой/чужой × внутри
+// окна/за окном) и то, что след и причина остаются даже у самого быстрого
+// исправления: смысл окна — скорость, а не тишина.
+
+test('автор снимает свою отметку в первые 15 минут — со следом и причиной', () => {
+  const db = seed();
+  const id = admission(db);
+  const o = order(db, id);
+  const m = treatmentAdminMark(db, { order_id: o.id, date: START, slot: 6, status: 'given' }, ACTOR.nurse).administration;
+  ageMark(db, m.id, 3);
+
+  // Причина обязательна и здесь: скорость — не повод писать «снято» без ответа
+  // на вопрос «почему».
+  assert.throws(() => treatmentAdminUnmark(db, { administration_id: m.id }, ACTOR.nurse), /без причины/);
+
+  const res = treatmentAdminUnmark(db, { administration_id: m.id, reason: 'нажала не ту строку' }, ACTOR.nurse);
+  assert.equal(res.already, false);
+  assert.equal(res.administration.voided_by, 2, 'сняла она сама');
+  assert.equal(res.administration.void_reason, 'нажала не ту строку');
+  assert.ok(res.administration.voided_at, 'след пишется и у быстрого исправления');
+
+  // Строка не удалена, и слот снова свободен под верную отметку.
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM treatment_administrations').get().n, 1);
+  const lst = treatmentOrdersList(db, { admission_id: id, from: START, to: START }, ACTOR.doctor);
+  assert.equal(lst.orders[0].marks.length, 0);
+  assert.equal(lst.orders[0].voided_marks.length, 1);
+  db.close();
+});
+
+test('через 20 минут своя отметка уже не снимается, и отказ называет старшую', () => {
+  const db = seed();
+  const id = admission(db);
+  const o = order(db, id);
+  const m = treatmentAdminMark(db, { order_id: o.id, date: START, slot: 6, status: 'given' }, ACTOR.nurse).administration;
+  ageMark(db, m.id, 20);
+
+  assert.throws(() => treatmentAdminUnmark(db, { administration_id: m.id, reason: 'ошиблась' }, ACTOR.nurse),
+    (e) => e instanceof RpcError && e.status === 403
+        && /старшая медсестра/.test(e.message)       // КТО может
+        && /позовите/i.test(e.message));             // и что делать дальше
+  // Отметка цела: отказ не оставляет полуснятого состояния.
+  assert.equal(db.prepare('SELECT voided_at FROM treatment_administrations WHERE id = ?').get(m.id).voided_at, null);
+
+  // А старшей те же двадцать минут не мешают.
+  assert.ok(treatmentAdminUnmark(db, { administration_id: m.id, reason: 'разобрались' }, ACTOR.senior_nurse)
+    .administration.voided_at);
+  db.close();
+});
+
+test('чужую отметку медсестра не снимает даже через три минуты', () => {
+  const db = seed();
+  const id = admission(db);
+  const o = order(db, id);
+  const m = treatmentAdminMark(db, { order_id: o.id, date: START, slot: 6, status: 'given' }, ACTOR.nurse).administration;
+  ageMark(db, m.id, 3);
+
+  assert.throws(() => treatmentAdminUnmark(db, { administration_id: m.id, reason: 'по-моему, не дали' }, ACTOR.other_nurse),
+    (e) => e instanceof RpcError && e.status === 403
+        && /только свою отметку/.test(e.message)
+        && /старшая медсестра/.test(e.message));
+  assert.equal(db.prepare('SELECT voided_at FROM treatment_administrations WHERE id = ?').get(m.id).voided_at, null);
+  db.close();
+});
+
+test('граница окна: правило читает часы ПАРАМЕТРОМ, а не ждёт пятнадцати минут', () => {
+  assert.equal(UNMARK_WINDOW_MIN, 15);
+  const at = Date.parse('2026-09-04T10:00:00Z');
+  const own = { given_by: 2, given_at: '2026-09-04T10:00:00Z' };
+  const min = (n) => at + n * 60000;
+
+  assert.equal(unmarkVerdict(own, ACTOR.nurse, min(0)).allowed, true);
+  assert.equal(unmarkVerdict(own, ACTOR.nurse, min(14.9)).allowed, true);
+  assert.equal(unmarkVerdict(own, ACTOR.nurse, min(15)).allowed, false, 'ровно пятнадцать — уже поздно');
+  assert.equal(unmarkVerdict(own, ACTOR.nurse, min(3)).scope, 'own');
+  assert.equal(unmarkVerdict(own, ACTOR.nurse, min(3)).left_min, 12);
+
+  // Окно — параметр той же функции: подставь другое, и граница поедет с ним.
+  assert.equal(unmarkVerdict(own, ACTOR.nurse, min(30), 60).allowed, true);
+  assert.equal(unmarkVerdict(own, ACTOR.nurse, min(30), 5).allowed, false);
+
+  // Старшая — вне часов; чужой человек — вне окна вовсе.
+  assert.equal(unmarkVerdict(own, ACTOR.senior_nurse, min(99999)).allowed, true);
+  assert.equal(unmarkVerdict(own, ACTOR.senior_nurse, min(99999)).scope, 'any');
+  assert.equal(unmarkVerdict(own, ACTOR.other_nurse, min(1)).scope, 'other');
+  assert.equal(unmarkVerdict(own, ACTOR.doctor, min(1)).scope, 'none');
+  // Отметка без автора (строка, пришедшая до этой правки) ничьей своей не становится.
+  assert.equal(unmarkVerdict({ given_by: null, given_at: '2026-09-04T10:00:00Z' }, ACTOR.nurse, min(1)).scope, 'other');
+});
+
+test('«Сделано» несёт право снятия — и считает его сервер, а не экран', () => {
+  const db = seed();
+  const id = admission(db);
+  const o = order(db, id);
+  const fresh = treatmentAdminMark(db, { order_id: o.id, date: START, slot: 6, status: 'given' }, ACTOR.nurse).administration;
+  const stale = treatmentAdminMark(db, { order_id: o.id, date: START, slot: 14, status: 'given' }, ACTOR.nurse).administration;
+  ageMark(db, fresh.id, 3);
+  ageMark(db, stale.id, 40);
+
+  const mine = treatmentTasksDue(db, { date: START, now: localTs(START, 14, 30) }, ACTOR.nurse);
+  assert.equal(mine.counts.done, 2);
+  const byId = new Map(mine.groups.done.map((d) => [d.administration_id, d]));
+  assert.equal(byId.get(fresh.id).undo.allowed, true);
+  assert.equal(byId.get(fresh.id).undo.scope, 'own');
+  assert.equal(byId.get(stale.id).undo.allowed, false);
+  assert.match(byId.get(stale.id).undo.message, /старшая медсестра/);
+  // Пациент и препарат едут вместе с правом: «Сделано» — рабочий список, а не журнал.
+  assert.equal(byId.get(fresh.id).patient_name, 'Иванов Иван');
+  assert.equal(byId.get(fresh.id).name, 'Цефтриаксон');
+  assert.equal(byId.get(fresh.id).given_by_name, 'Медсестра');
+
+  // Та же строка глазами другой медсестры и старшей.
+  const other = treatmentTasksDue(db, { date: START, now: localTs(START, 14, 30) }, ACTOR.other_nurse);
+  assert.equal(other.groups.done.find((d) => d.administration_id === fresh.id).undo.allowed, false);
+  const senior = treatmentTasksDue(db, { date: START, now: localTs(START, 14, 30) }, ACTOR.senior_nurse);
+  for (const d of senior.groups.done) assert.equal(d.undo.allowed, true);
+
+  // Час запроса окно не двигает: `now` — это часы РАСПИСАНИЯ, а право считается
+  // серверными. Иначе окно открывалось бы подстановкой времени в запрос.
+  const faked = treatmentTasksDue(db, { date: START, now: localTs(START, 6, 1) }, ACTOR.nurse);
+  assert.equal(faked.groups.done.find((d) => d.administration_id === stale.id).undo.allowed, false);
+
+  // Снятая отметка из «Сделано» уходит: это список того, что стоит.
+  treatmentAdminUnmark(db, { administration_id: fresh.id, reason: 'не та строка' }, ACTOR.nurse);
+  assert.equal(treatmentTasksDue(db, { date: START, now: localTs(START, 14, 30) }, ACTOR.nurse).counts.done, 1);
+  db.close();
+});
+
 // ─── 6. Задачи медсестры ────────────────────────────────────────────────────
 
 test('задачи смены разложены по группам «Просрочено / Сейчас / Позже / По требованию»', () => {
@@ -415,7 +569,7 @@ test('задачи смены разложены по группам «Прос�
   assert.equal(res.groups.prn[0].given_today, 0);
   // stock_issues — счётчик несписанного (MED_ADMIN_CHARGE_V1, Задача 6): в
   // этой смене ни одной отметки ещё не поставлено, значит и хвоста нет.
-  assert.deepEqual(res.counts, { overdue: 1, now: 1, later: 1, prn: 1, stock_issues: 0 });
+  assert.deepEqual(res.counts, { overdue: 1, now: 1, later: 1, prn: 1, done: 0, stock_issues: 0 });
 
   // Пациент — якорь: у каждой задачи есть палата, койка и имя.
   const task = res.groups.overdue[0];
