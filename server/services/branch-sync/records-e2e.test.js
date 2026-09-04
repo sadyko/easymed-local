@@ -40,7 +40,10 @@ import { setDataDir } from '../control/config.js';
 import { writePairing, readPairing, encodeKey, pairWithKey, b64url, GROUP_KEY_BYTES } from './pairing.js';
 import { mintRelayToken, publishCatalogue, fetchCatalogue, publishJournal, fetchJournals } from './relay.js';
 import { applyCatalogue } from './catalogue.js';
-import { buildBatch } from './journal.js';
+import { buildBatch, markSent } from './journal.js';
+// Приём — напрямую: последний тест в файле гоняет ХОЛОДНЫЙ ЗАСЕВ двух зданий
+// без релея (дефект живёт в засеве, а не в транспорте).
+import { applyBatch } from './records.js';
 import { runBranchSync } from '../rpc/branch-sync.js';
 // Настоящие денежные RPC, а не INSERT руками: проверяется в том числе номер
 // счёта с буквой здания (миграция 088) и запрет на правку чужих денег.
@@ -705,4 +708,132 @@ test('BRANCH_RECORDS_V1: пациенты и лабораторная очере
       assert.equal(row.bytes.subarray(0, 4).toString('ascii'), 'EMR1', 'снаружи виден только формат');
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// BRANCH_NUMBER_REMINT_V1 (ревью Фазы 3, C2) — ХОЛОДНЫЙ ЗАСЕВ ДВУХ ЗДАНИЙ,
+// КОТОРЫЕ ДО ПАРЫ РАБОТАЛИ ПОРОЗНЬ.
+//
+// Здесь нет ни релея, ни поставщика, и это не упрощение: дефект живёт не в
+// транспорте, а в самом первом обмене — засеве. Оба здания годами работали
+// самостоятельно, счётчик у каждого шёл с единицы, обе установки считали себя
+// зданием A, а миграции 088 и 080 нарочно не переименовали УЖЕ ВЫДАННЫЕ
+// номера: они напечатаны на чеке и на карте. Значит у обоих зданий есть
+// 'INV-26-00001' и 'P-26-00001', и на первом же засеве UNIQUE-индекс
+// принимающей базы отвергал приехавшие строки — НАВСЕГДА, потому что
+// квитанция уезжала всё равно и сосед второй раз их не слал.
+//
+// Проверяется всё обещание целиком, а не одна колонка: доехал ли счёт, нашли
+// ли его позиция и платёж, сошлась ли оплата, цел ли пациент со своим визитом,
+// и осталась ли нетронутой бумага ПРИНИМАЮЩЕГО здания.
+// ---------------------------------------------------------------------------
+
+/** Установка, отработавшая год в одиночку: своя услуга и свои номера с единицы. */
+function standalone(letter) {
+  const db = openDb(':memory:');
+  migrate(db);
+  db.prepare('UPDATE branch_identity SET letter = ? WHERE id = 1').run(letter);
+  db.prepare("INSERT INTO services (name, code, price, active) VALUES ('Приём','S-1',65000,1)").run();
+  return db;
+}
+
+/** Пациент с ДОобновленческой картой, его визит и оплаченный счёт. */
+function paperworkFromBefore(db, name) {
+  const sid = db.prepare("SELECT id FROM services WHERE code = 'S-1'").get().id;
+  const pid = db.prepare("INSERT INTO patients (full_name, mrn) VALUES (?, 'P-26-00001')").run(name).lastInsertRowid;
+  const vid = db.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (?, '2026-08-01', 'confirmed')")
+    .run(pid).lastInsertRowid;
+  const iid = db.prepare(`INSERT INTO invoices (patient_id, visit_id, invoice_number, subtotal, total_amount, paid_amount, status)
+                          VALUES (?, ?, 'INV-26-00001', 65000, 65000, 65000, 'paid')`).run(pid, vid).lastInsertRowid;
+  db.prepare(`INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total)
+              VALUES (?, ?, 'Приём', 1, 65000, 65000)`).run(iid, sid);
+  db.prepare("INSERT INTO payments (invoice_id, amount, method) VALUES (?, 65000, 'cash')").run(iid);
+  return db.prepare('SELECT * FROM invoices WHERE id = ?').get(iid);
+}
+
+/** Засев целиком: страница за страницей, ровно как его гоняет relay.js. */
+function coldSeed(from, fromLetter, to, toLetter) {
+  const stats = { applied: 0, refused: 0, reminted: 0, deferred: 0 };
+  for (let page = 0; page < 50; page++) {
+    const b = buildBatch(from, { self: fromLetter, peer: toLetter, limit: 3 });
+    const r = applyBatch(to, b.records, {
+      self: toLetter, peer: fromLetter, upto: b.upto,
+      seed: !!b.seed, seedPage: b.seed ? b.seed.page : 0,
+    });
+    for (const k of Object.keys(stats)) stats[k] += r[k] || 0;
+    markSent(from, toLetter, b.upto, b.clock, b.seed);
+    if (!b.seed || b.seed.done) break;
+  }
+  return stats;
+}
+
+test('BRANCH_NUMBER_REMINT_V1: засев не теряет счёт соседа с таким же старым номером', () => {
+  const A = standalone('A');
+  const B = standalone('B');
+  const ownA = paperworkFromBefore(A, 'Абдуллаев');
+  const ownB = paperworkFromBefore(B, 'Бекмуратов');
+  assert.equal(ownA.invoice_number, ownB.invoice_number,
+    'предпосылка теста и всей беды: у двух зданий один и тот же старый номер');
+
+  const stats = coldSeed(B, 'B', A, 'A');
+
+  assert.equal(stats.refused, 0, 'отказ — это потерянные насовсем деньги: сосед второй раз строку не пришлёт');
+  assert.equal(A.prepare('SELECT COUNT(*) n FROM sync_refused').get().n, 0);
+  assert.ok(stats.reminted >= 2, 'перечеканены оба столкнувшихся номера: счёта и карты, было ' + stats.reminted);
+
+  // --- приехавшее ---------------------------------------------------------
+  const theirs = A.prepare('SELECT * FROM invoices WHERE uid = ?').get(ownB.uid);
+  assert.ok(theirs, 'счёт соседа обязан доехать — иначе его нет в отчёте главной клиники');
+  assert.equal(theirs.invoice_number, 'INV-26-00001-B', 'приехавший номер несёт букву здания, откуда он');
+  assert.equal(theirs.total_amount, 65000);
+  assert.equal(theirs.sync_origin, 'B');
+  const items = A.prepare('SELECT COUNT(*) n, SUM(total) s FROM invoice_items WHERE invoice_id = ?').get(theirs.id);
+  assert.equal(items.n, 1, 'позиция нашла свой счёт: она привязана по uid, а не по номеру');
+  assert.equal(items.s, 65000);
+  const pay = A.prepare('SELECT COUNT(*) n, SUM(amount) s FROM payments WHERE invoice_id = ?').get(theirs.id);
+  assert.equal(pay.n, 1, 'и платёж тоже — иначе он ждал бы родителя, которого нет, и был бы выселен через 30 дней');
+  assert.equal(pay.s, 65000);
+  assert.equal(theirs.paid_amount, 65000, 'оплата сошлась: paid_amount считается из доехавших платежей');
+
+  const theirPatient = A.prepare("SELECT * FROM patients WHERE full_name = 'Бекмуратов'").get();
+  assert.ok(theirPatient, 'пациент соседа обязан доехать: без него у счёта нет родителя вовсе');
+  assert.equal(theirPatient.mrn, 'P-26-00001-B', 'старая карта сталкивается ровно так же, и лечится так же');
+  assert.equal(A.prepare('SELECT COUNT(*) n FROM visits WHERE patient_id = ?').get(theirPatient.id).n, 1,
+    'и его визит приехал за ним');
+
+  // --- наше -------------------------------------------------------------
+  const mine = A.prepare('SELECT * FROM invoices WHERE id = ?').get(ownA.id);
+  assert.equal(mine.invoice_number, 'INV-26-00001', 'НАШ номер напечатан на чеке — засев соседа его не трогает');
+  assert.equal(mine.paid_amount, 65000, 'и наша оплата на месте');
+  assert.equal(A.prepare("SELECT mrn FROM patients WHERE full_name = 'Абдуллаев'").get().mrn, 'P-26-00001',
+    'наша карта — тоже');
+  assert.equal(A.prepare('SELECT COUNT(*) n FROM invoices').get().n, 2, 'счетов ровно два, ни один не потерян и не задвоен');
+
+  // --- ЕЩЁ ОДИН ЗАСЕВ ТОГО ЖЕ САМОГО ------------------------------------
+  // Засев повторяется в жизни: сосед не подтвердил страницу, обмен пошёл
+  // заново. Перечеканка обязана быть идемпотентной, иначе каждый круг двигал
+  // бы номер на шаг вперёд ('-B', '-B2', '-B3') и документ терял бы имя.
+  A.prepare("DELETE FROM sync_peers WHERE node = 'B'").run();
+  B.prepare("DELETE FROM sync_peers WHERE node = 'A'").run();
+  const again = coldSeed(B, 'B', A, 'A');
+  assert.equal(again.refused, 0);
+  assert.equal(A.prepare('SELECT invoice_number FROM invoices WHERE uid = ?').get(ownB.uid).invoice_number,
+    'INV-26-00001-B', 'тот же засев — тот же номер');
+  assert.equal(A.prepare("SELECT mrn FROM patients WHERE full_name = 'Бекмуратов'").get().mrn, 'P-26-00001-B');
+  assert.equal(A.prepare('SELECT COUNT(*) n FROM invoices').get().n, 2, 'и по-прежнему ровно два счёта');
+
+  // --- ОБРАТНЫЙ ЗАСЕВ ----------------------------------------------------
+  // A засевает B — и везёт ОБРАТНО строку самого B под перечеканенным
+  // номером: засев отдаёт все строки, включая чужие. Принять её значило бы
+  // переименовать у соседа его собственный, напечатанный чек.
+  const back = coldSeed(A, 'A', B, 'B');
+  assert.equal(back.refused, 0);
+  assert.equal(B.prepare('SELECT invoice_number FROM invoices WHERE uid = ?').get(ownB.uid).invoice_number,
+    'INV-26-00001', 'номер здания-автора не меняется ничем и никогда');
+  assert.equal(B.prepare("SELECT mrn FROM patients WHERE full_name = 'Бекмуратов'").get().mrn, 'P-26-00001');
+  assert.equal(B.prepare('SELECT invoice_number FROM invoices WHERE uid = ?').get(ownA.uid).invoice_number,
+    'INV-26-00001-A', 'а счёт A у себя получает букву A — симметрично');
+  assert.equal(B.prepare('SELECT COUNT(*) n FROM invoices').get().n, 2);
+
+  A.close(); B.close();
 });

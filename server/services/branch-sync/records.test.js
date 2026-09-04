@@ -685,13 +685,18 @@ test('7c: удаление не сносит строку, которую зде
 test('7c: строку, которую отвергла база, видно в sync_refused, а квитанция всё равно уезжает', () => {
   const db = fresh();
   const now = Date.now();
-  // Местный пациент занимает номер карты; приезжий приедет с тем же — UNIQUE.
-  db.prepare("INSERT INTO patients (full_name, mrn) VALUES ('Местный', 'B-000001')").run();
+  // ОТКАЗ ЗДЕСЬ — CHECK, А НЕ СОВПАВШИЙ НОМЕР КАРТЫ. Раньше тест занимал MRN
+  // местным пациентом, но с BRANCH_NUMBER_REMINT_V1 занятый номер больше не
+  // отказ, а рабочий ход: приезжий получает букву здания и заводится (тесты
+  // «номера: …» в конце файла). Отказ базы от этого никуда не делся, и
+  // проверять его надо тем, чего не чинит ни ожидание родителя, ни
+  // перечеканка, — значением, которого схема не допускает вовсе
+  // (patients.gender, CHECK из 002).
   db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
     .run(new Date().toISOString());
 
   const r = applyBatch(db, [
-    put('patients', 'rf1', stampAt(now - 60000), { full_name: 'Приезжий', mrn: 'B-000001' }),
+    put('patients', 'rf1', stampAt(now - 60000), { full_name: 'Приезжий', gender: 'мужской' }),
     put('patients', 'rf2', stampAt(now - 50000), { full_name: 'Нормальный' }),
   ], { ...S, peer: 'C', upto: 77 });
 
@@ -700,7 +705,7 @@ test('7c: строку, которую отвергла база, видно в 
   const row = db.prepare("SELECT tbl, uid, peer, err FROM sync_refused").get();
   assert.equal(row.uid, 'rf1');
   assert.equal(row.peer, 'C', 'видно, чей блоб её привёз');
-  assert.match(row.err, /UNIQUE|constraint/i, 'и что именно сказала база');
+  assert.match(row.err, /CHECK|constraint/i, 'и что именно сказала база');
   // Квитанция сдвигается ВСЁ РАВНО: иначе одна «ядовитая» строка повторялась бы
   // в каждом блобе вечно и держала бы журнал соседа.
   assert.equal(db.prepare("SELECT recv_upto FROM sync_peers WHERE node = 'C'").get().recv_upto, 77);
@@ -884,16 +889,16 @@ test('7f: подделанная метка не записывает перек
 
 test('7e: отказ снимается, когда строка всё-таки применяется', () => {
   const db = fresh();
-  db.prepare("INSERT INTO patients (full_name, mrn) VALUES ('Местный', 'B-000001')").run();
   db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq, last_ok) VALUES ('C', 0, 0, ?)")
     .run(new Date().toISOString());
-  applyBatch(db, [put('patients', 'rf9', stampAt(T0), { full_name: 'Приезжий', mrn: 'B-000001' })],
+  // Тот же CHECK, что и в 7c, и по той же причине: совпавший номер карты
+  // отказом базы больше не является.
+  applyBatch(db, [put('patients', 'rf9', stampAt(T0), { full_name: 'Приезжий', gender: 'мужской' })],
     { ...S, peer: 'C', upto: 11 });
   assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_refused').get().n, 1, 'база отвергла — видно');
 
-  // Номер освободили, запись приехала снова — отказ больше не факт.
-  db.prepare("UPDATE patients SET mrn = 'B-000002' WHERE full_name = 'Местный'").run();
-  applyBatch(db, [put('patients', 'rf9', stampAt(Date.now()), { full_name: 'Приезжий', mrn: 'B-000001' })],
+  // У соседа значение исправили, запись приехала снова — отказ больше не факт.
+  applyBatch(db, [put('patients', 'rf9', stampAt(Date.now()), { full_name: 'Приезжий', gender: 'male' })],
     { ...S, peer: 'C', upto: 12 });
   assert.equal(db.prepare("SELECT COUNT(*) n FROM patients WHERE uid = 'rf9'").get().n, 1);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_refused').get().n, 0,
@@ -1088,5 +1093,154 @@ test('деньги: позиция счёта ждёт услугу справо
   const item = db.prepare("SELECT service_id, total FROM invoice_items WHERE uid = 'item-1'").get();
   assert.ok(item.service_id, 'услуга опознана по коду: локальные id у зданий разные');
   assert.equal(item.total, 65000);
+  db.close();
+});
+
+// ---------------------------------------------------------------------------
+// BRANCH_NUMBER_REMINT_V1 (Фаза 3, ревью C2) — СТАРЫЙ НОМЕР ИЗ ДРУГОГО ЗДАНИЯ.
+//
+// Миграция 088 даёт букву здания только НОВЫМ номерам, и это решено нарочно:
+// 'INV-26-00041' напечатан на чеке и лежит в бумагах, переименовать его
+// нельзя. Но холодный засев везёт ВСЮ историю, а счётчик у каждой установки
+// шёл с единицы — значит у двух зданий есть один и тот же 'INV-26-00001', и
+// UNIQUE-индекс принимающей базы отвергает приехавший счёт. Отказ этот
+// НАВСЕГДА: квитанция уезжает, сосед вторично строку не шлёт, а её платежи
+// потом ждут родителя, которого не будет, и выселяются через 30 дней.
+//
+// Лечится ровно так, как 088 и разрешает в своей шапке: «номер счёта не
+// становится ключом слияния: строки по-прежнему опознаются по uid». Приехавший
+// номер получает БУКВУ ЗДАНИЯ, откуда он приехал.
+// ---------------------------------------------------------------------------
+
+/** Наш собственный, ДОобновленческий счёт: номер без буквы здания. */
+function legacyInvoice(db, number, total = 50000) {
+  const pid = db.prepare("INSERT INTO patients (full_name) VALUES ('Наш пациент')").run().lastInsertRowid;
+  db.prepare(`INSERT INTO invoices (patient_id, invoice_number, subtotal, total_amount, status)
+              VALUES (?, ?, ?, ?, 'paid')`).run(pid, number, total, total);
+  return db.prepare('SELECT * FROM invoices WHERE invoice_number = ?').get(number);
+}
+
+test('номера: старый счёт соседа не теряется — при совпадении номер получает букву здания', () => {
+  const db = fresh();
+  const mine = legacyInvoice(db, 'INV-26-00001');
+  // У соседа C свой счёт с ТЕМ ЖЕ старым номером — его счётчик тоже шёл с 1.
+  const r = applyBatch(db, [
+    put('patients', 'p-c', stampAt(T0 + 1), { full_name: 'Соседский' }),
+    put('invoices', 'inv-c', stampAt(T0 + 2), {
+      invoice_number: 'INV-26-00001', subtotal: 65000, total_amount: 65000, status: 'unpaid',
+    }, { patient_id: 'p-c' }),
+    put('payments', 'pay-c', stampAt(T0 + 3), { amount: 65000, method: 'cash' }, { invoice_id: 'inv-c' }),
+  ], S);
+
+  assert.equal(r.refused, 0, 'отказ здесь — это молча и навсегда потерянные деньги');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sync_refused').get().n, 0);
+  const theirs = db.prepare("SELECT * FROM invoices WHERE uid = 'inv-c'").get();
+  assert.ok(theirs, 'чужой счёт обязан доехать');
+  assert.equal(theirs.invoice_number, 'INV-26-00001-C', 'номер получил букву здания, откуда приехал');
+  assert.equal(theirs.total_amount, 65000);
+  assert.equal(theirs.paid_amount, 65000, 'платёж нашёл свой счёт: он привязан по uid, а не по номеру');
+  assert.equal(
+    db.prepare('SELECT invoice_number FROM invoices WHERE id = ?').get(mine.id).invoice_number,
+    'INV-26-00001', 'НАШ номер напечатан на чеке — его не трогают');
+  db.close();
+});
+
+test('номера: повторное применение той же записи не перечеканивает номер и не двоит строку', () => {
+  const db = fresh();
+  legacyInvoice(db, 'INV-26-00001');
+  const batch = [
+    put('patients', 'p-c', stampAt(T0 + 1), { full_name: 'Соседский' }),
+    put('invoices', 'inv-c', stampAt(T0 + 2), {
+      invoice_number: 'INV-26-00001', subtotal: 65000, total_amount: 65000, status: 'unpaid',
+    }, { patient_id: 'p-c' }),
+  ];
+  applyBatch(db, JSON.parse(JSON.stringify(batch)), S);
+  applyBatch(db, JSON.parse(JSON.stringify(batch)), S);
+  applyBatch(db, JSON.parse(JSON.stringify(batch)), S);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM invoices WHERE invoice_number LIKE 'INV-26-00001%'").get().n, 2,
+    'счетов ровно два: наш и соседский — перечеканка идемпотентна');
+  assert.equal(db.prepare("SELECT invoice_number FROM invoices WHERE uid = 'inv-c'").get().invoice_number,
+    'INV-26-00001-C', 'та же приехавшая строка всегда ложится на тот же номер');
+  db.close();
+});
+
+test('номера: ПРАВКА приехавшего счёта находит его по uid и не воскрешает совпадение', () => {
+  const db = fresh();
+  legacyInvoice(db, 'INV-26-00001');
+  applyBatch(db, [
+    put('patients', 'p-c', stampAt(T0 + 1), { full_name: 'Соседский' }),
+    put('invoices', 'inv-c', stampAt(T0 + 2), {
+      invoice_number: 'INV-26-00001', subtotal: 65000, total_amount: 65000, status: 'unpaid',
+    }, { patient_id: 'p-c' }),
+  ], S);
+  // Через час сосед меняет статус и присылает снимок ВСЕЙ строки — со своим,
+  // прежним номером: у него он не менялся и меняться не будет.
+  const r = applyBatch(db, [put('invoices', 'inv-c', stampAt(T0 + 9), {
+    invoice_number: 'INV-26-00001', subtotal: 65000, total_amount: 65000, status: 'paid',
+  }, { patient_id: 'p-c' })], S);
+  assert.equal(r.refused, 0);
+  const inv = db.prepare("SELECT invoice_number, status FROM invoices WHERE uid = 'inv-c'").get();
+  assert.equal(inv.status, 'paid', 'правка обязана примениться: строка опознаётся по uid');
+  assert.equal(inv.invoice_number, 'INV-26-00001-C', 'а номер остаётся тем же — второй перечеканки нет');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM invoices WHERE invoice_number LIKE 'INV-26-00001%'").get().n, 2);
+  db.close();
+});
+
+test('номера: буква занята третьим зданием — суффикс продолжается, а не отказывает', () => {
+  const db = fresh();
+  legacyInvoice(db, 'INV-26-00001');
+  // 'INV-26-00001-C' у нас уже есть: так его напечатали в третьем здании, и
+  // оно доехало раньше.
+  legacyInvoice(db, 'INV-26-00001-C', 40000);
+  const r = applyBatch(db, [
+    put('patients', 'p-c', stampAt(T0 + 1), { full_name: 'Соседский' }),
+    put('invoices', 'inv-c', stampAt(T0 + 2), {
+      invoice_number: 'INV-26-00001', subtotal: 65000, total_amount: 65000, status: 'unpaid',
+    }, { patient_id: 'p-c' }),
+  ], S);
+  assert.equal(r.refused, 0);
+  assert.equal(db.prepare("SELECT invoice_number FROM invoices WHERE uid = 'inv-c'").get().invoice_number,
+    'INV-26-00001-C2', 'вторая перечеканка — тоже детерминированная и ограниченная');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM invoices WHERE invoice_number LIKE 'INV-26-00001%'").get().n, 3);
+  db.close();
+});
+
+test('номера: наш собственный номер сосед переименовать не может', () => {
+  const db = fresh();
+  const mine = legacyInvoice(db, 'INV-26-00001');
+  // Обратный засев: сосед вернул НАШУ ЖЕ строку — с номером, который он у себя
+  // перечеканил. Принять его значило бы переименовать наш чек.
+  //
+  // Метка — СВЕЖЕЕ нашей (минута вперёд, в пределах допустимого перекоса
+  // SKEW_MAX_MS): иначе запись проиграла бы слияние целиком, и тест доказывал
+  // бы не то правило. Спор должен быть настоящим: приехавшее новее нашего.
+  applyBatch(db, [put('invoices', mine.uid, stampAt(Date.now() + 60000), {
+    invoice_number: 'INV-26-00001-A', subtotal: 50000, total_amount: 50000, status: 'debt',
+  }, {})], S);
+  const inv = db.prepare('SELECT invoice_number, status FROM invoices WHERE id = ?').get(mine.id);
+  assert.equal(inv.invoice_number, 'INV-26-00001', 'номер наш и остаётся нашим');
+  assert.equal(inv.status, 'debt', 'а всё остальное в строке сливается как обычно');
+  db.close();
+});
+
+// ТО ЖЕ САМОЕ И С НОМЕРОМ КАРТЫ. 080 не переименовывает существующие MRN
+// («existing MRNs are deliberately NOT renumbered»), а до обновления обе
+// установки печатали 'P-YY-NNNNN' и обе считали себя зданием A. Значит на
+// холодном засеве старые карты сталкиваются точно так же, как счета, — и цена
+// отказа выше: теряется ПАЦИЕНТ, а с ним всё, что на него ссылается.
+test('номера: старая карта соседа не теряется — MRN тоже получает букву здания', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (full_name, mrn) VALUES ('Наш','P-26-00001')").run();
+  const r = applyBatch(db, [
+    put('patients', 'p-old', stampAt(T0 + 1), { full_name: 'Соседский', mrn: 'P-26-00001' }),
+    put('visits', 'v-old', stampAt(T0 + 2), { visit_date: '2026-09-02', status: 'scheduled' }, { patient_id: 'p-old' }),
+  ], S);
+  assert.equal(r.refused, 0, 'потерянный пациент утаскивает за собой визиты, счета и анализы');
+  const p = db.prepare("SELECT id, mrn FROM patients WHERE uid = 'p-old'").get();
+  assert.ok(p, 'пациент обязан доехать');
+  assert.equal(p.mrn, 'P-26-00001-C');
+  assert.equal(db.prepare("SELECT patient_id FROM visits WHERE uid = 'v-old'").get().patient_id, p.id);
+  assert.equal(db.prepare("SELECT mrn FROM patients WHERE full_name = 'Наш'").get().mrn, 'P-26-00001',
+    'наша карта напечатана — её номер не меняется');
   db.close();
 });

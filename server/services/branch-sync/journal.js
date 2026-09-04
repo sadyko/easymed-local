@@ -564,6 +564,13 @@ const TABLE_RANK = {
 // ни одна настоящая таблица так не называется, столкновения быть не может.
 const TOMB_PHASE = 'sync_tombstones';
 
+// ЗАСЕВ ВЕЗЁТ ВСЮ ИСТОРИЮ, ВКЛЮЧАЯ ДОАПГРЕЙДНУЮ, — и это здесь верно, менять
+// нечего. Но у этого есть следствие, о котором надо знать, читая запрос:
+// номера, выданные ДО того, как здание получило свою букву (088 — счёту, 080 —
+// карте), у двух установок СОВПАДАЮТ, а invoices.invoice_number и patients.mrn
+// объявлены UNIQUE. Разбирается это на ПРИЁМЕ — records.js, UNIQUE_TEXT_KEYS:
+// занятый номер получает букву здания-автора. Отправитель об этом не знает и
+// знать не должен: он отдаёт ровно то, что у него напечатано.
 const SEED_PRESENCE_SQL = `
   SELECT tbl, uid, at, id FROM (
     SELECT 'patients' AS tbl, 0 AS rank, uid, created_at AS at, id FROM patients WHERE uid IS NOT NULL
