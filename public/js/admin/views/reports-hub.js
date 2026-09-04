@@ -33,6 +33,10 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, PageHead } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ (в ccTrendLine параметр tr затеняет импорт — там только trf)
 import { reportTotals } from './report-totals.js?v=rt1';   // REPORT_TOTALS_V1
+// BUILDING_FRESHNESS_V1 — решение «это хорошая новость или плохая» живёт в
+// чистом модуле рядом с buildingOptions: экран без DOM не поднимается, а
+// проверять это правило надо. Слова к состоянию подбираются здесь, через i18n.
+import { freshnessState, freshnessWorthShowing } from './report-buildings.js?v=fresh1';
 
 // Экспортируется, чтобы определения (в т.ч. рисовалку графиков) можно было
 // проверить тестом — страница целиком без DOM не поднимается.
@@ -126,11 +130,17 @@ export const REPORT_DEFS = [
 // ---------------------------------------------------------------------------
 export async function renderReportsHub(container) {
     clear(container);
+    // BUILDING_FRESHNESS_V1 — полоса заполняется ПОСЛЕ отрисовки карточек:
+    // «Отчёты» не должны ждать сети, чтобы открыться, а у клиники в одном
+    // здании полоса не появится вовсе.
+    const freshEl = h('div');
+    paintFreshness(freshEl);
     container.appendChild(h('div', { class: 'fade-in', style: { display: 'flex', flexDirection: 'column', gap: '16px' } },
         PageHead({
             title: 'Отчёты',
             subtitle: 'Выберите отчёт — настройка периода, филиалов и предпросмотр откроются на весь экран.',
         }),
+        freshEl,
         h('div', {
             style: {
                 display: 'grid', gap: '14px',
@@ -146,6 +156,99 @@ export async function renderReportsHub(container) {
                 gridAutoRows: '1fr',
             },
         }, ...REPORT_DEFS.map(rep => reportCard(rep))),
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// BUILDING_FRESHNESS_V1 — «данные ещё едут» одной строкой на здание.
+//
+// ЕДИНСТВЕННЫЙ орган управления, из-за отсутствия которого всё остальное на
+// этой странице читалось неверно. Пока записи соседнего здания в пути, отчёты
+// показывают правду, которая выглядит как ошибка: счёт «Оплачен · Оплачено 0 ·
+// Остаток 100 000» (статус едет, а paid_amount пересчитывается на месте), нули
+// у здания, которое выключили, и выручка меньше кассы, когда позиции счетов
+// ещё не доехали. Каждое из этих состояний само себя исправит — но без строки,
+// которая говорит «данные ещё приходят», владелец видит пропавшие деньги.
+//
+// Полоса не показывается клинике в одном здании: ей не о чем сообщать.
+// ---------------------------------------------------------------------------
+
+const FRESHNESS_TONE = {
+    own:     { bg: 'var(--primary-50)',       fg: 'var(--primary-700)', bd: 'var(--primary-200, #cfe6df)' },
+    ok:      { bg: 'var(--ink-50, #f1f4f5)',  fg: 'var(--ink-700)',     bd: 'var(--ink-100)' },
+    pending: { bg: '#fff7e6', fg: '#8a5a00', bd: '#f3ddb0' },
+    seeding: { bg: '#fff7e6', fg: '#8a5a00', bd: '#f3ddb0' },
+    stale:   { bg: '#fff7e6', fg: '#8a5a00', bd: '#f3ddb0' },
+    never:   { bg: '#fdeeee', fg: '#b03a3a', bd: '#f3cfcf' },
+    refused: { bg: '#fdeeee', fg: '#b03a3a', bd: '#f3cfcf' },
+};
+
+// Дата печатается ЧИСЛАМИ и подставляется в переведённый шаблон (trf), а не
+// склеивается со словами: собранная из кусков фраза не переводится никогда.
+function freshWhen(iso) {
+    const t = iso ? Date.parse(iso) : NaN;
+    return Number.isFinite(t) ? new Date(t).toLocaleString('ru-RU') : '—';
+}
+
+// Одно состояние — одна фраза. Каждая фраза целиком лежит в словаре i18n
+// вместе со своими {дырками}: см. I18N_COVERAGE_V1 в i18n.js.
+export function freshnessLine(b, state) {
+    const p = { when: freshWhen(b.last_received), pending: b.pending || 0, refused: b.refused || 0 };
+    if (state === 'own') return tr('Это здание — записи создаются здесь');
+    if (state === 'never') return trf('Данных от этого здания ещё не приходило · ждут: {pending} · не приняты: {refused}', p);
+    if (state === 'refused') return trf('База не приняла записи: {refused} · последние данные: {when} · ждут: {pending}', p);
+    if (state === 'seeding') return trf('Идёт первичная загрузка, страница {page} · ждут: {pending}', { page: b.seed_page || 1, pending: p.pending });
+    if (state === 'stale') return trf('Данные не приходили с {when} · ждут: {pending} · не приняты: {refused}', p);
+    return trf('Последние данные: {when} · ждут: {pending} · не приняты: {refused}', p);
+}
+
+async function paintFreshness(target) {
+    let data = null;
+    try {
+        const { data: d, error } = await supabase.rpc('report_freshness', {});
+        if (error) throw new Error(error.message || String(error));
+        data = d;
+    } catch (e) {
+        // Полоса — вспомогательная: не удалось её загрузить — страница отчётов
+        // всё равно работает, и пугать этим владельца нечем.
+        console.warn('[reports-hub] freshness:', e);
+        return;
+    }
+    if (!freshnessWorthShowing(data)) return;
+    const now = Date.now();
+    clear(target);
+    target.appendChild(h('div', {
+        style: {
+            background: 'var(--white, #fff)', border: '1px solid var(--ink-100)',
+            borderRadius: '12px', padding: '14px 18px',
+        },
+    },
+        h('div', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } },
+            'Свежесть данных по зданиям'),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
+            'Когда каждое здание в последний раз выходило на связь, сколько его записей ещё ждут и сколько база не приняла.'),
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' } },
+            ...data.buildings.map((b) => {
+                const state = freshnessState(b, now);
+                const t = FRESHNESS_TONE[state] || FRESHNESS_TONE.ok;
+                return h('div', {
+                    style: {
+                        display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px',
+                        padding: '7px 12px', borderRadius: '10px', fontSize: '12.5px',
+                        background: t.bg, border: '1px solid ' + t.bd, color: t.fg,
+                    },
+                },
+                    h('span', { style: { fontWeight: 700, minWidth: '120px' } }, b.label),
+                    h('span', null, freshnessLine(b, state)),
+                    // Текст отказа приходит от базы и по-русски не переводится:
+                    // это её собственные слова, и подменять их нельзя.
+                    b.refused_error ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, b.refused_error) : null,
+                );
+            })),
+        // Версия соседа по проводу не едет — экран обязан сказать это сам,
+        // иначе пустая графа читается как «версия совпадает».
+        data.version_note ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '8px', lineHeight: 1.45 } },
+            data.version_note) : null,
     ));
 }
 
@@ -533,6 +636,13 @@ async function openReportBuilder(rep) {
     function paintBuildingSummary(target, data) {
         const list = (data && data.by_building) || [];
         const notes = (data && data.notes) || [];
+        // PENDING_ITEMS_V1 — деньги, у которых приехала шапка счёта, но не
+        // приехали его позиции. Отдельной величиной, отдельной строкой: в итог
+        // отчёта они НЕ входят (какие это услуги — неизвестно), и подмешать их
+        // туда значило бы починить одно расхождение, заведя другое.
+        const pending = (data && data.pending_items) || null;
+        const pendingBy = new Map(((pending && pending.by_building) || [])
+            .filter(b => b.amount > 0).map(b => [b.key, b.amount]));
         // Клиника в одном здании ничего этого не видит: строка «Main Branch:
         // 100%» не сообщает ничего.
         if (list.length > 1) {
@@ -550,7 +660,24 @@ async function openReportBuilder(rep) {
                 h('span', { style: { fontWeight: 700 } }, b.label),
                 h('span', { class: 'num', style: { fontVariantNumeric: 'tabular-nums' } },
                     Number(b.total != null ? b.total : b.rows || 0).toLocaleString('ru-RU')),
+                // Недостача стоит РЯДОМ с итогом здания, а не внутри него:
+                // видно и сколько посчитано, и сколько ещё в пути.
+                pendingBy.has(b.key) ? h('span', {
+                    style: { color: '#8a5a00', fontVariantNumeric: 'tabular-nums' },
+                }, trf('ещё едет: {amount}', { amount: Number(pendingBy.get(b.key)).toLocaleString('ru-RU') })) : null,
             ))));
+        }
+        // Строка «Позиции ещё не доехали: N счетов, X сум» приходит с сервера
+        // готовой (rpc/reports.js, PENDING_ITEMS_V1) — там же, где считаются
+        // сами деньги, чтобы число и слова про него не разъехались.
+        if (pending && pending.invoices > 0 && pending.note) {
+            target.appendChild(h('div', {
+                style: {
+                    fontSize: '12.5px', lineHeight: 1.45, marginBottom: '10px',
+                    padding: '9px 12px', borderRadius: '10px',
+                    background: '#fff7e6', border: '1px solid #f3ddb0', color: '#8a5a00',
+                },
+            }, pending.note));
         }
         for (const n of notes) {
             target.appendChild(h('div', {
@@ -1074,10 +1201,21 @@ function renderCashierReport(el, d, period) {
         el.appendChild(h('div', { class: 'muted', style: { padding: '50px 20px', textAlign: 'center' } }, 'Нет данных за период.'));
         return;
     }
+    // CASHIER_NET_SCOPE_V1 — плитки НАЗЫВАЮТ свой охват.
+    //
+    // Приход ездит между зданиями, расход — нет (движение кассы принадлежит
+    // смене, а смены не ездят). Пока плитки назывались «Общий доход» и «Общий
+    // расход», а итог считался как разность, заголовок вычитал расход одного
+    // дома из дохода двух — число, которое не отвечает ни на один вопрос.
+    // Теперь итог считается ПО ЭТОМУ ЗДАНИЮ, а приход по клинике стоит рядом
+    // отдельной плиткой и назван своим именем. Клиника в одном здании видит
+    // прежние три плитки: у неё оба охвата совпадают.
+    const multi = !!(d.kpi && d.kpi.multi_building);
     el.appendChild(h('div', { style: { display: 'flex', gap: '14px', flexWrap: 'wrap' } },
-        ccrTile('Общий доход', d.kpi.income, 'in'),
-        ccrTile('Общий расход', d.kpi.expense, 'out'),
-        ccrTile('Итого (доход − расход)', d.kpi.net, 'net')));
+        ccrTile(multi ? tr('Доход по всем зданиям') : tr('Общий доход'), d.kpi.income, 'in'),
+        multi ? ccrTile(tr('Доход этого здания'), d.kpi.income_own, 'in') : null,
+        ccrTile(multi ? tr('Расход этого здания') : tr('Общий расход'), d.kpi.expense, 'out'),
+        ccrTile(multi ? tr('Итого по этому зданию (доход − расход)') : tr('Итого (доход − расход)'), d.kpi.net, 'net')));
 
     el.appendChild(ccrTable({ title: 'Поступления', tone: 'in', kind: 'income', period: period || '',
         columns: d.income.columns, rows: d.income.rows, numericCol: 5 }));

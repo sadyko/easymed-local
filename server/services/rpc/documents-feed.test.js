@@ -295,3 +295,58 @@ test('лента: при lab_scope=building остаются только сво
   assert.ok(r.rows.every((x) => x.origin === ''), 'остались только свои строки');
   db.close();
 });
+
+// ---------------------------------------------------------------------------
+// Разрез по зданиям считает БАЗА, а не JS. Раньше на каждую страницу ленты шёл
+// третий полный скан, поднимавший в память по строке на каждый документ только
+// затем, чтобы сложить их в две-три корзины. Здесь проверяется ровно то, что
+// обязано было сохраниться при переносе счёта в GROUP BY: те же числа.
+// ---------------------------------------------------------------------------
+
+// Прежняя реализация, воспроизведённая в тесте: по строке на документ,
+// сложенные снаружи. Считается по ТОЙ ЖЕ выборке — без фильтра по типу и без
+// постраничного среза.
+function byBuildingTheOldWay(db, args = {}) {
+  const all = feed(db, { ...args, types: [], limit: 100, offset: 0 });
+  const acc = new Map();
+  for (const row of all.rows) {
+    const key = row.origin === '' || row.origin == null ? '~own~' : row.origin;
+    acc.set(key, (acc.get(key) || 0) + 1);
+  }
+  return acc;
+}
+
+test('разрез по зданиям: GROUP BY даёт ровно те же числа, что прежний подсчёт в JS', () => {
+  const db = seedTwoBuildings();
+  // Ещё один свой документ и ещё один приехавший: корзины должны быть больше
+  // единицы, иначе сравнение ничего не доказывает.
+  const v2 = visit(db, 2, day(db, -1));
+  addResult(db, line(db, v2, 1), 'PLT');
+  const foreign2 = db.prepare(
+    "INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, sync_origin) VALUES (?,2,1,0,0,'completed','B') RETURNING id")
+    .get(v2).id;
+  addResult(db, foreign2, 'ЭХО');
+
+  const expected = byBuildingTheOldWay(db);
+  // Фильтр по типу и постраничный срез на разрез НЕ влияют — как и раньше.
+  const r = feed(db, { types: ['lab'], limit: 1 });
+  const own = r.by_building.find((x) => x.own);
+  const b = r.by_building.find((x) => x.key === 'B');
+  assert.equal(own.rows, expected.get('~own~'));
+  assert.equal(b.rows, expected.get('B'));
+  assert.equal(own.rows, 2);
+  assert.equal(b.rows, 2);
+  assert.equal(r.rows.length, 1, 'страница по-прежнему одна строка');
+  assert.deepEqual(Object.keys(b).sort(), ['key', 'label', 'own', 'rows'].sort(),
+    'форма ответа не изменилась: разрез несёт только счётчик строк');
+  db.close();
+});
+
+test('разрез по зданиям: здание без документов остаётся в списке с нулём', () => {
+  const db = seedTwoBuildings();
+  db.prepare("UPDATE doc_settings SET lab_scope = 'building' WHERE id = 1").run();
+  const r = feed(db, {});
+  const b = r.by_building.find((x) => x.key === 'B');
+  assert.equal(b.rows, 0, 'ноль напротив здания и отсутствие здания читаются по-разному');
+  db.close();
+});

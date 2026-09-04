@@ -5,7 +5,7 @@ import { createInvoiceForVisit, recordPayment, recordPaymentSplit, markInvoiceDe
 import { receiveStock, dispenseItem, voidDispense, dispenseAdmissionItem, voidDispensedAdmissionItem } from './inventory.js';
 import { dashboardSummary } from './dashboard.js';
 import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel } from './procurement.js';
-import { reportsOverview, runReport, ownerReport, reportBuildings } from './reports.js';   // BUILDING_REPORTS_V1
+import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest } from './inpatient.js';
 import { ensureVisit } from './visits.js';
@@ -76,6 +76,10 @@ export const RPC = {
   // а прежняя выборка филиалов грузилась с active = 1 — соседнее здание же
   // заводится как active = 0 и в список не попадало вовсе.
   report_buildings:         (db, args, user) => reportBuildings(db, args, user),
+  // BUILDING_FRESHNESS_V1 — свежесть данных по каждому зданию: когда его записи
+  // приходили в последний раз, сколько их ждёт родителя и сколько база не
+  // приняла. Чистое чтение — ровно та же категория, что report_buildings.
+  report_freshness:         (db, args, user) => reportFreshness(db, args, user),
   open_cash_shift:          (db, args, user) => openCashShift(db, args, user),
   close_cash_shift:         (db, args, user) => closeCashShift(db, args, user),
   cash_shift_summary:       (db, args, user) => cashShiftSummary(db, args, user),

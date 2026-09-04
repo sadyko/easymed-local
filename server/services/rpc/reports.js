@@ -10,6 +10,7 @@ import { outstandingWhere } from '../domain/money.js';
 // branch_id: см. шапку domain/buildings.js.
 import {
   buildingContext, buildingWhere, originExpr, summariseByBuilding, hasColumn,
+  normalizeLetter, stampLetter,
 } from '../domain/buildings.js';
 // INVOICE_METHOD_COLUMN_V1 — словарь способов оплаты общий с браузером. Тот же
 // приём, что в services/telegram/render.js, который берёт оттуда doc-render.js:
@@ -385,6 +386,109 @@ function itemRowsQuery(db, args, ctx) {
      ORDER BY origin, i.created_at, ii.id
   `).all(from, to, ...bf.params, ...gf.params);
   return rows;
+}
+
+// ---------------------------------------------------------------------------
+// PENDING_ITEMS_V1 — деньги, у которых приехала ШАПКА, но не приехали ПОЗИЦИИ.
+//
+// Счёт едет двумя разными записями. Шапка (invoices) ложится сразу; строка
+// счёта (invoice_items) ссылается на услугу ПО КОДУ, и пока такого кода нет в
+// справочнике приёмника, она ждёт родителя в sync_pending. Поэтому две семьи
+// отчётов НЕ СХОДЯТСЯ, и расходятся они молча:
+//
+//   отчёты ПО ШАПКАМ   — «Счета», «Собрано» (reports_overview) — деньги ВИДЯТ;
+//   отчёты ПО СТРОКАМ  — «Общая выручка», «Отчёт владельца», «Рефералы»,
+//                        «Зарплаты врачей», «Рентабельность операций» и
+//                        выгрузка в Excel (все они читают itemRowsQuery) — НЕТ.
+//
+// Замерено ревью на одном таком счёте: 300 в «Собрано» и 300 в «Счетах» против
+// 0 в «Общей выручке» и 0 в KPI владельца. Через 30 дней невостребованная
+// запись выселяется (branch-sync/records.js, PENDING_MAX_DAYS) — и расхождение
+// становится ВЕЧНЫМ, уже без всякой надежды сойтись самому.
+//
+// Дорисовать недостающие строки НЕЛЬЗЯ: какая это была услуга и чей врач —
+// неизвестно, а выдумать их значит подменить данные (то же правило, что у
+// подписи «<здание>, врач не указан»). Поэтому считается ОДНА честная величина
+// и показывается ОТДЕЛЬНОЙ строкой, а не подмешивается в итог:
+//
+//   недостача = total_amount − (сумма приехавших строк ПОСЛЕ скидки)
+//
+// Скидка разносится на строки ровно так же, как в самом отчёте
+// (ITEM_DISCOUNT_SQL — доля строки в subtotal), поэтому «шапка минус строки» и
+// «итог отчёта» — числа из одной арифметики, а не два независимых счёта.
+//
+// ТОЛЬКО ПРИЕХАВШИЕ СЧЕТА (sync_origin IS NOT NULL). У своего счёта строкам
+// ехать неоткуда: расхождение там означало бы ошибку ввода, а не задержку
+// доставки, и смешивать одно с другим — значит перестать понимать оба.
+//
+// ОДНО ОПРЕДЕЛЕНИЕ НА ВСЕ ОТЧЁТЫ. Сузить недостачу под фильтры каждого отчёта
+// («только хирургия», «только оплаченные») невозможно честно: услуги-то как раз
+// и не приехали. Пять отчётов дали бы пять разных чисел про один и тот же факт,
+// и владельцу пришлось бы выбирать, какому верить.
+// ---------------------------------------------------------------------------
+
+// Разряды пробелом, без Intl: число в примечании обязано выглядеть одинаково на
+// компьютере клиники и в тесте, какая бы ICU ни была собрана в Node.
+function moneyRu(n) {
+  return String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+
+const PENDING_ITEMS_TAIL = 'Деньги видны в счетах, но строк этих счетов здесь пока нет: какая это услуга и чей врач — неизвестно, поэтому в суммы и в разбивку этого отчёта они НЕ включены. Позиции приедут следующей синхронизацией; если здание молчит, посмотрите «Свежесть данных по зданиям» на странице «Отчёты».';
+
+function pendingItemsNote(p) {
+  if (!p || !p.invoices) return null;
+  return 'Позиции ещё не доехали: ' + p.invoices + ' счетов, ' + moneyRu(p.amount) + ' сум. ' + PENDING_ITEMS_TAIL;
+}
+
+/**
+ * Недоехавшие позиции за тот же период и по тем же фильтрам, что и отчёт.
+ * @returns {{invoices:number, amount:number, note:string|null, by_building:Array}}
+ */
+function pendingItemsMoney(db, args, ctx) {
+  const empty = {
+    invoices: 0,
+    amount: 0,
+    note: null,
+    by_building: summariseByBuilding(ctx, [], { invoices: () => 0, amount: () => 0 }),
+  };
+  // База, где деньги ещё не научились ездить: приехавших счетов нет по
+  // построению, и ссылка на несуществующую колонку уронила бы отчёт.
+  if (!hasColumn(db, 'invoices', 'sync_origin')) return empty;
+
+  const { from, to } = resolveRange(db, args);
+  const bf = branchFilter(args, 'i.branch_id');
+  const gf = buildingWhere(db, ctx, args, 'invoices', 'i');
+  const rows = db.prepare(`
+    SELECT origin, COUNT(*) AS invoices, COALESCE(SUM(gap), 0) AS amount FROM (
+      SELECT ${originExpr(db, 'invoices', 'i')} AS origin,
+             COALESCE(i.total_amount, 0)
+               - COALESCE((SELECT SUM(ii.total) FROM invoice_items ii WHERE ii.invoice_id = i.id), 0)
+                 -- * 1.0 обязательно: subtotal и discount_amount целые, и без
+                 -- него SQLite поделил бы нацело — доля скидки стала бы 0 или 1.
+                 * (CASE WHEN COALESCE(i.subtotal, 0) > 0
+                         THEN (i.subtotal - COALESCE(i.discount_amount, 0)) * 1.0 / i.subtotal
+                         ELSE 1.0 END) AS gap
+        FROM invoices i
+       WHERE i.sync_origin IS NOT NULL
+         AND i.status <> 'void'
+         AND ${inLocalRange('i.created_at')}${bf.clause}${gf.clause}
+    )
+     -- Порог, а не «> 0»: суммы целые в сумах, а деление на subtotal — плавающее,
+     -- и копеечный хвост округления не должен объявляться недоехавшими деньгами.
+     WHERE gap > 0.5
+     GROUP BY origin
+  `).all(from, to, ...bf.params, ...gf.params);
+
+  const out = {
+    invoices: rows.reduce((n, r) => n + (r.invoices || 0), 0),
+    amount: round2(rows.reduce((n, r) => n + (r.amount || 0), 0)),
+    by_building: summariseByBuilding(ctx, rows, {
+      invoices: (r) => r.invoices || 0,
+      amount: (r) => r.amount || 0,
+    }),
+  };
+  out.note = pendingItemsNote(out);
+  return out;
 }
 
 // BUILDING_REPORTS_V1 — общий словарь денежных отчётов.
@@ -771,15 +875,33 @@ export function ownerReport(db, args, _user) {
       avg: k.count ? Math.round(k.revenue / k.count) : 0,
     },
     monthly, byGroup, byPayer, buildings, from, to,
+    // PENDING_ITEMS_V1 — KPI владельца считается по СТРОКАМ счетов, значит
+    // недоехавших позиций в нём нет. Это ровно тот экран, где «выручка 0» при
+    // непустой кассе пугает сильнее всего, поэтому недостача едет рядом с KPI.
+    pending_items: pendingItemsMoney(db, args, ctx),
   };
 }
+
+// PENDING_ITEMS_V1 — отчёты, которые читают СТРОКИ счетов (itemRowsQuery либо
+// прямой запрос по invoice_items). Ровно им и не хватает недоехавших позиций;
+// «Счета» и «Закупки» считают по шапкам и по складу, у них этой дыры нет.
+const ITEM_BASED_REPORTS = new Set([
+  'total_revenue', 'referrals', 'surgery_profit', 'doctor_salaries',
+]);
 
 export function runReport(db, args, _user) {
   const kind = args && args.kind;
   const ru = REPORTS_RU[kind];
   if (ru) {
-    const { columns, rows, by_building, notes, total_label } = ru(db, args, buildingContext(db));
-    return { kind, columns, rows, by_building: by_building || [], notes: notes || [], total_label: total_label || '' };
+    const ctx = buildingContext(db);
+    const { columns, rows, by_building, notes, total_label } = ru(db, args, ctx);
+    return {
+      kind, columns, rows,
+      by_building: by_building || [], notes: notes || [], total_label: total_label || '',
+      // Считается ОДИН раз на отчёт и тем же контекстом зданий, что и сам отчёт:
+      // разъехавшийся ctx дал бы недостачу под другими подписями.
+      pending_items: ITEM_BASED_REPORTS.has(kind) ? pendingItemsMoney(db, args, ctx) : null,
+    };
   }
   const report = legacyReports(db)[kind];
   if (!report) {
@@ -819,5 +941,188 @@ export function reportBuildings(db, _args, _user) {
     buildings: ctx.options.map((o) => ({
       key: o.key, letter: o.letter, own: o.own, label: ctx.label(o.key),
     })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// BUILDING_FRESHNESS_V1 — ОДИН экран, на котором видно, что данные ещё едут.
+//
+// Всё, что делают отчёты по зданиям, держится на невысказанном допущении: что
+// записи соседнего здания уже приехали. Когда они НЕ приехали, каждый отчёт
+// врёт по-своему и молча:
+//
+//   * `status` счёта путешествует, а `paid_amount` пересчитывается на месте
+//     (recomputePaid), и в окно доставки счёт честно показывает «Оплачен ·
+//     Оплачено 0 · Остаток 100 000». Это верно по построению и само себя
+//     исправит следующей порцией — но без строки «данные ещё приходят»
+//     выглядит как пропавшие деньги;
+//   * строка счёта ждёт в sync_pending неизвестного справочнику кода услуги —
+//     см. PENDING_ITEMS_V1 выше;
+//   * запись, которую база не приняла, лежит в sync_refused и не приедет уже
+//     никогда сама;
+//   * а выключенное (или просто не выходящее на связь) здание не даёт НИЧЕГО,
+//     и ноль напротив него неотличим от честного «там сегодня не работали».
+//
+// Поэтому здесь собирается ровно то, что об этом знает база, — по зданиям и
+// без единой догадки. Источники уже есть, их просто никто не показывал:
+//   sync_peers   — с кем связь: recv_upto (докуда применён его журнал), last_ok
+//                  (когда мы ему выложились), last_ack (когда от него последний
+//                  раз приходила квитанция, то есть когда мы его слышали),
+//                  seed_floor/seed_page (идёт ли первичная загрузка),
+//                  clock_skew_ms (насколько его часы уходят вперёд);
+//   sync_pending — сколько записей ждёт родителя. Буква здания у них зашита в
+//                  МЕТКУ (stampLetter), отдельной колонки нет;
+//   sync_refused — сколько записей база НЕ приняла и что именно она сказала;
+//   control_state — общие по клинике попытки обмена (branch_sync_last_attempt /
+//                  _last_ok) и последняя выгрузка копии (branch_sync_relay_journal).
+//
+// ВЕРСИИ СОСЕДА ЗДЕСЬ НЕТ И БЫТЬ НЕ МОЖЕТ. В обмене едет только версия ФОРМАТА
+// блоба (`v: 1`), а версия программы соседа — нет. Честный ответ «отсюда не
+// видно» лучше выдуманного: version_known = false говорит это прямо, а
+// refused_error показывает то единственное, что о расхождении сборок реально
+// известно — текст, которым база отказала принять запись.
+//
+// ЧИСТОЕ ЧТЕНИЕ. Ни одного INSERT: открытие «Отчётов» не должно ничего писать.
+// ---------------------------------------------------------------------------
+
+const FRESHNESS_VERSION_NOTE = 'Версия программы соседнего здания в обмене не передаётся — определить её отсюда нельзя. Если записи не принимаются, причина видна в тексте отказа.';
+
+/** JSON-значение control_state; испорченная запись — это «неизвестно», а не 500. */
+function jsonState(db, key) {
+  if (!hasColumn(db, 'control_state', 'value')) return null;
+  try {
+    const row = db.prepare('SELECT value FROM control_state WHERE key = ?').get(key);
+    if (!row || !row.value) return null;
+    const v = JSON.parse(row.value);
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+  } catch (_) { return null; }
+}
+
+/** Сколько записей ждёт родителя, по букве здания из метки. */
+function pendingByLetter(db) {
+  const byLetter = new Map();
+  let unattributed = 0;
+  if (!hasColumn(db, 'sync_pending', 'stamp')) return { byLetter, unattributed };
+  try {
+    for (const r of db.prepare(
+      'SELECT stamp, received_at FROM sync_pending').all()) {
+      const letter = stampLetter(r.stamp);
+      if (!letter) { unattributed += 1; continue; }
+      const prev = byLetter.get(letter) || { n: 0, oldest: null };
+      prev.n += 1;
+      if (r.received_at && (!prev.oldest || r.received_at < prev.oldest)) prev.oldest = r.received_at;
+      byLetter.set(letter, prev);
+    }
+  } catch (_) { /* таблицы может не быть — тогда и ждать нечему */ }
+  return { byLetter, unattributed };
+}
+
+/** Сколько записей база не приняла, по соседу, плюс последний текст отказа. */
+function refusedByLetter(db) {
+  const byLetter = new Map();
+  let unattributed = 0;
+  if (!hasColumn(db, 'sync_refused', 'peer')) return { byLetter, unattributed };
+  try {
+    const lastErr = db.prepare('SELECT err FROM sync_refused WHERE peer = ? ORDER BY at DESC LIMIT 1');
+    for (const r of db.prepare(
+      'SELECT peer, COUNT(*) AS n, MAX(at) AS last FROM sync_refused GROUP BY peer').all()) {
+      const letter = normalizeLetter(r.peer);
+      if (!letter) { unattributed += r.n; continue; }
+      const prev = byLetter.get(letter) || { n: 0, last: null, err: null };
+      prev.n += r.n;
+      if (r.last && (!prev.last || r.last > prev.last)) prev.last = r.last;
+      const e = lastErr.get(r.peer);
+      if (e && e.err) prev.err = String(e.err).slice(0, 300);
+      byLetter.set(letter, prev);
+    }
+  } catch (_) { /* таблицы может не быть */ }
+  return { byLetter, unattributed };
+}
+
+/** Строки sync_peers по букве соседа. */
+function peersByLetter(db) {
+  const byLetter = new Map();
+  if (!hasColumn(db, 'sync_peers', 'node')) return byLetter;
+  try {
+    for (const p of db.prepare(
+      `SELECT node, recv_upto, last_ok, last_ack, clock_skew_ms, seed_floor, seed_page
+         FROM sync_peers`).all()) {
+      const letter = normalizeLetter(p.node);
+      if (letter) byLetter.set(letter, p);
+    }
+  } catch (_) { /* база старой сборки */ }
+  return byLetter;
+}
+
+export function reportFreshness(db, _args, _user) {
+  const ctx = buildingContext(db);
+  const peers = peersByLetter(db);
+  const pend = pendingByLetter(db);
+  const ref = refusedByLetter(db);
+
+  // Перечень зданий — сначала известные (своё первым), затем буквы, о которых
+  // знает только обмен. Здание, приславшее отказ, обязано быть НАЗВАНО, даже
+  // если в перечне филиалов его строки нет: иначе самая плохая новость экрана —
+  // единственная, которая на него не попадёт.
+  const seen = new Set();
+  const slots = [];
+  for (const o of ctx.options) { slots.push({ key: o.key, letter: o.letter, own: o.own }); seen.add(o.key); }
+  for (const letter of [...peers.keys(), ...pend.byLetter.keys(), ...ref.byLetter.keys()]) {
+    if (seen.has(letter)) continue;
+    seen.add(letter);
+    slots.push({ key: letter, letter, own: false });
+  }
+
+  const buildings = slots.map(({ key, letter, own }) => {
+    // У СВОЕГО здания связи с самим собой нет: строки sync_peers, ожидания и
+    // отказы — это всегда про чужие записи. Приписать их себе значило бы
+    // объявить, что собственные данные к нам «ещё едут».
+    const p = own || !letter ? null : peers.get(letter) || null;
+    const pd = own || !letter ? null : pend.byLetter.get(letter) || null;
+    const rf = own || !letter ? null : ref.byLetter.get(letter) || null;
+    return {
+      key,
+      letter: letter || null,
+      label: ctx.label(key),
+      own,
+      // Есть ли вообще связь с этим зданием (строка в sync_peers).
+      linked: !!p,
+      // Когда мы его в последний раз СЛЫШАЛИ: квитанция приходит в каждом его
+      // блобе, поэтому это и есть «когда его записи приходили в последний раз».
+      last_received: (p && p.last_ack) || null,
+      // Когда мы в последний раз успешно выложились ЕМУ — вторая сторона связи.
+      last_sent_ok: (p && p.last_ok) || null,
+      recv_upto: p ? (p.recv_upto || 0) : 0,
+      // Первичная загрузка: страницы нумеруются с нуля, человеку показываем
+      // следующую — ту, которая едет сейчас.
+      seeding: !!(p && p.seed_floor != null),
+      seed_page: p && p.seed_floor != null ? (p.seed_page || 0) + 1 : null,
+      clock_skew_ms: p ? (p.clock_skew_ms || 0) : 0,
+      pending: pd ? pd.n : 0,
+      pending_oldest: pd ? pd.oldest : null,
+      refused: rf ? rf.n : 0,
+      refused_last: rf ? rf.last : null,
+      refused_error: rf ? rf.err : null,
+      version: null,
+      version_known: false,
+    };
+  });
+
+  return {
+    own_key: ctx.ownKey,
+    own_letter: ctx.ownLetter,
+    building_count: buildings.length,
+    buildings,
+    pending_total: buildings.reduce((n, b) => n + b.pending, 0),
+    refused_total: buildings.reduce((n, b) => n + b.refused, 0),
+    // Ожидания и отказы, чью букву прочитать не удалось: молча приписать их
+    // своему зданию было бы той же ошибкой, что и всё, что чинит эта задача.
+    pending_unattributed: pend.unattributed,
+    refused_unattributed: ref.unattributed,
+    last_attempt: jsonState(db, 'branch_sync_last_attempt'),
+    last_ok: jsonState(db, 'branch_sync_last_ok'),
+    relay_journal: jsonState(db, 'branch_sync_relay_journal'),
+    version_note: FRESHNESS_VERSION_NOTE,
+    checked_at: new Date().toISOString(),
   };
 }

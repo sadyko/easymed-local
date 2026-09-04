@@ -11,7 +11,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import {
   buildingContext, buildingWhere, originExpr, hasColumn, summariseByBuilding,
-  labScopeOf, labScopeWhere, ownBuildingLetter, OWN_KEY,
+  labScopeOf, labScopeWhere, ownBuildingLetter, OWN_KEY, stampLetter, normalizeLetter,
 } from './buildings.js';
 
 function db2() {
@@ -95,4 +95,29 @@ test('база без выданной буквы не теряет своё з�
   assert.equal(ctx.ownKey, OWN_KEY);
   assert.equal(ctx.options[0].own, true);
   assert.equal(ctx.label(''), 'Это здание');
+});
+
+// ---------------------------------------------------------------------------
+// BUILDING_FRESHNESS_V1 — буква здания из МЕТКИ синхронизации.
+//
+// У sync_pending отдельной колонки «чьё это» нет: буква зашита в метку
+// (hlc.js — 12 hex миллисекунд, дефис, 4 hex счётчика, дефис, буква). Разобрать
+// её надо ровно так же, как это делает обмен, — иначе ожидания соседнего здания
+// молча приписались бы своему, то есть ровно та ошибка, ради которой писалось
+// всё измерение «здание».
+// ---------------------------------------------------------------------------
+
+test('буква здания читается из метки, а мусор не выдаётся за своё здание', () => {
+  assert.equal(stampLetter('0000018f0000-0000-B'), 'B');
+  assert.equal(stampLetter('0000018f0000-000a-AB'), 'AB', 'буква может быть из нескольких знаков');
+  assert.equal(stampLetter('0000018f0000-0000-b'), 'B', 'регистр приводится, как и везде');
+
+  for (const bad of ['', 'мусор', null, undefined, 42, '0000018f0000-0000-', '0000018f0000-0000-Ж', 'короткая']) {
+    assert.equal(stampLetter(bad), null, JSON.stringify(bad) + ' — не буква здания');
+  }
+});
+
+test('правило «что считать буквой» одно на систему', () => {
+  assert.equal(normalizeLetter(' b '), 'B');
+  assert.equal(normalizeLetter('С'), null, 'кириллическая «С» буквой узла не является');
 });

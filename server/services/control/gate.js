@@ -24,6 +24,11 @@ const READ_ONLY_RPCS = new Set([
   // просроченной лицензией читает отчёты, и «читает» не должно означать
   // «конструктор без списка зданий».
   'report_buildings',
+  // BUILDING_FRESHNESS_V1 — «данные ещё едут»: счётчики ожиданий и отказов по
+  // зданиям. Чистое чтение, и для заблокированной клиники оно тем важнее:
+  // молчащее здание и просроченная лицензия — две разные беды с двумя разными
+  // починками, и путать их нельзя.
+  'report_freshness',
   'cashier_invoices', 'cash_shift_summary', 'shift_report', 'cashier_report',
   'callcenter_report', 'queue_board', 'documents_feed', 'accommodation_state',
   'deposit_balance', 'list_deposits', 'service_delete_check', 'get_clinic_by_slug',

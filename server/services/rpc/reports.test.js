@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { reportsOverview, runReport, ownerReport, reportBuildings } from './reports.js';
+import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness } from './reports.js';
 
 function seed() {
   const db = openDb(':memory:'); migrate(db);
@@ -496,4 +496,192 @@ test('одно здание: отчёт как раньше, а «только �
   assert.equal(onlyB.rows.length, 0, 'своих денег под чужим именем не показываем');
   const o = reportsOverview(db, { from: FROM, to: TO }, user);
   assert.equal(o.building_count, 2, 'здание B известно из перечня, даже пока пустое');
+});
+
+// ---------------------------------------------------------------------------
+// PENDING_ITEMS_V1 — счёт приехал ШАПКОЙ, а его позиции ещё в пути.
+//
+// Так и выглядит расхождение двух семей отчётов: «Счета» и «Собрано» деньги
+// видят (шапка приехала), «Общая выручка» и KPI владельца — нет (строк счёта в
+// базе ещё нет). Фикстура ставит sync_origin прямо, как это делает приём.
+// ---------------------------------------------------------------------------
+
+function seedItemsInTransit() {
+  const { db } = seedTwoBuildings();
+  const b = db.prepare("SELECT id FROM patients WHERE sync_origin = 'B'").get().id;
+  const own = db.prepare('SELECT id FROM patients WHERE sync_origin IS NULL ORDER BY id').get().id;
+  const sCons = db.prepare("SELECT id FROM services WHERE name = 'Консультация'").get().id;
+
+  // (1) Шапка приехала, позиций нет ВООБЩЕ — ровно случай ревью: 300 в кассе,
+  // 0 в выручке.
+  db.prepare(`INSERT INTO invoices
+      (invoice_number, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_at, paid_at, sync_origin)
+      VALUES ('B-INV-4',?,300,0,300,300,'paid','2026-08-08T09:30:00Z','2026-08-08T10:00:00Z','B')`).run(b);
+
+  // (2) Приехала ПОЛОВИНА позиций: 500 000 − 100 000 скидки = 400 000 по шапке,
+  // доехало строк на 200 000 (после своей доли скидки — 160 000). Недостача
+  // 240 000, и считается она той же арифметикой, что итог отчёта.
+  const inv5 = db.prepare(`INSERT INTO invoices
+      (invoice_number, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_at, sync_origin)
+      VALUES ('B-INV-5',?,500000,100000,400000,0,'unpaid','2026-08-08T09:40:00Z','B')`).run(b).lastInsertRowid;
+  db.prepare(`INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total, sync_origin)
+      VALUES (?,?,'Консультация',1,200000,200000,'B')`).run(inv5, sCons);
+
+  // (3) СВОЙ счёт без позиций. Это не задержка доставки, а ошибка ввода —
+  // считать его «ещё едет» значит соврать про совсем другую беду.
+  db.prepare(`INSERT INTO invoices
+      (invoice_number, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_at)
+      VALUES ('INV-9',?,777000,0,777000,0,'unpaid','2026-08-09T09:00:00Z')`).run(own);
+  return { db };
+}
+
+test('недоехавшие позиции: считаются, названы и в итог отчёта НЕ попадают', () => {
+  const { db } = seedItemsInTransit();
+  const r = runReport(db, { kind: 'total_revenue', from: FROM, to: TO }, user);
+
+  assert.equal(r.pending_items.invoices, 2, 'два приехавших счёта ждут свои позиции');
+  assert.equal(r.pending_items.amount, 240300, '300 целиком + 240 000 недостающей части');
+
+  const p = r.pending_items.by_building.find((x) => x.key === 'B');
+  assert.equal(p.invoices, 2);
+  assert.equal(p.amount, 240300, 'недостача приписана зданию, которое её прислало');
+  const pOwn = r.pending_items.by_building.find((x) => x.own);
+  assert.equal(pOwn.amount, 0, 'свой счёт без позиций — не доставка, а ввод');
+
+  // И ГЛАВНОЕ: сумма отчёта осталась суммой ПРИЕХАВШИХ строк.
+  const byB = r.by_building.find((x) => x.key === 'B');
+  assert.equal(byB.total, 560000, '400 000 прежнего счёта + 160 000 доехавшей строки');
+  assert.ok(!r.rows.some((row) => row.includes('B-INV-4')), 'счёта без позиций в строках нет');
+  const rowsTotal = r.rows.reduce((n, row) => n + row[r.columns.indexOf('После скидки')], 0);
+  assert.equal(rowsTotal, 1090000 + 560000, 'ни одной выдуманной строки: итог = сумма строк');
+
+  assert.match(r.pending_items.note, /Позиции ещё не доехали: 2 счетов, 240 300 сум/);
+  db.close();
+});
+
+test('недоехавшие позиции: видны во всех отчётах по строкам и у владельца', () => {
+  const { db } = seedItemsInTransit();
+  for (const kind of ['total_revenue', 'referrals', 'surgery_profit', 'doctor_salaries']) {
+    const r = runReport(db, { kind, from: FROM, to: TO }, user);
+    assert.equal(r.pending_items.amount, 240300, kind + ': отчёт по строкам обязан сказать о недостаче');
+  }
+  // Отчёты по шапкам и по складу этой дыры не имеют — им и говорить не о чем.
+  assert.equal(runReport(db, { kind: 'invoices_full', from: FROM, to: TO }, user).pending_items, null);
+  assert.equal(runReport(db, { kind: 'procurement', from: FROM, to: TO }, user).pending_items, null);
+
+  const o = ownerReport(db, { from: FROM, to: TO }, user);
+  assert.equal(o.pending_items.amount, 240300);
+  assert.ok(o.pending_items.note.includes('240 300'));
+  db.close();
+});
+
+test('недоехавшие позиции: фильтр по зданию и период действуют так же, как на отчёт', () => {
+  const { db } = seedItemsInTransit();
+  const onlyOwn = runReport(db, { kind: 'total_revenue', from: FROM, to: TO, buildings: ['A'] }, user);
+  assert.equal(onlyOwn.pending_items.invoices, 0, 'у своего здания недоехавших позиций нет');
+  assert.equal(onlyOwn.pending_items.note, null, 'нечего сказать — и не говорим');
+
+  const onlyB = runReport(db, { kind: 'total_revenue', from: FROM, to: TO, buildings: ['B'] }, user);
+  assert.equal(onlyB.pending_items.amount, 240300);
+
+  const other = runReport(db, { kind: 'total_revenue', from: '2026-09-01', to: '2026-09-30' }, user);
+  assert.equal(other.pending_items.invoices, 0, 'за другой период — своя недостача, а не общая');
+  db.close();
+});
+
+test('недоехавшие позиции: аннулированный счёт деньгами не считается', () => {
+  const { db } = seedItemsInTransit();
+  db.prepare("UPDATE invoices SET status = 'void' WHERE invoice_number = 'B-INV-4'").run();
+  const r = runReport(db, { kind: 'total_revenue', from: FROM, to: TO }, user);
+  assert.equal(r.pending_items.invoices, 1);
+  assert.equal(r.pending_items.amount, 240000);
+  db.close();
+});
+
+// ---------------------------------------------------------------------------
+// BUILDING_FRESHNESS_V1 — «данные ещё едут» по каждому зданию.
+// ---------------------------------------------------------------------------
+
+function seedSyncState(db) {
+  db.prepare(`INSERT INTO sync_peers (node, recv_upto, last_ok, last_ack, clock_skew_ms)
+              VALUES ('B', 4120, '2026-08-07T10:00:00Z', '2026-08-07T10:05:00Z', 250)`).run();
+  // Буква здания у ожидания зашита в МЕТКУ: отдельной колонки у sync_pending нет.
+  const pend = db.prepare(`INSERT INTO sync_pending (tbl, uid, stamp, record, waits_tbl, waits_uid, received_at)
+                           VALUES (?,?,?,'{}',?,?,?)`);
+  pend.run('invoice_items', 'u-1', '0000018f0000-0000-B', 'services', 'CODE-77', '2026-08-07T10:05:00Z');
+  pend.run('invoice_items', 'u-2', '0000018f0001-0000-B', 'services', 'CODE-78', '2026-08-07T10:06:00Z');
+  // Метка не той формы: приписать её своему зданию значило бы повторить ту же
+  // ошибку, ради которой всё это писалось.
+  pend.run('lab_results', 'u-3', 'мусор', 'visit_services', 'u-0', '2026-08-07T10:07:00Z');
+  db.prepare(`INSERT INTO sync_refused (tbl, uid, peer, err, at)
+              VALUES ('lab_results','u-9','B','NOT NULL constraint failed: lab_results.value','2026-08-07T11:00:00Z')`).run();
+}
+
+test('свежесть: по каждому зданию видно, когда его слышали, сколько ждёт и сколько не принято', () => {
+  const { db } = seedTwoBuildings();
+  seedSyncState(db);
+  const f = reportFreshness(db, {}, user);
+
+  assert.equal(f.building_count, 2);
+  const own = f.buildings.find((x) => x.own);
+  const b = f.buildings.find((x) => x.key === 'B');
+
+  assert.equal(own.label, 'Main Branch');
+  assert.equal(own.last_received, null, 'своё здание само себе ничего не присылает');
+  assert.equal(own.pending, 0);
+  assert.equal(own.refused, 0);
+
+  assert.equal(b.label, 'Чиланзар');
+  assert.equal(b.linked, true);
+  assert.equal(b.last_received, '2026-08-07T10:05:00Z');
+  assert.equal(b.last_sent_ok, '2026-08-07T10:00:00Z');
+  assert.equal(b.recv_upto, 4120);
+  assert.equal(b.clock_skew_ms, 250);
+  assert.equal(b.pending, 2, 'оба ожидания приписаны зданию по букве из метки');
+  assert.equal(b.pending_oldest, '2026-08-07T10:05:00Z');
+  assert.equal(b.refused, 1);
+  assert.equal(b.refused_last, '2026-08-07T11:00:00Z');
+  assert.match(b.refused_error, /NOT NULL/, 'на экран идёт то, что сказала база');
+  assert.equal(b.seeding, false);
+
+  assert.equal(f.pending_total, 2);
+  assert.equal(f.refused_total, 1);
+  assert.equal(f.pending_unattributed, 1, 'ожидание с нечитаемой меткой посчитано отдельно');
+
+  // Версия соседа по проводу не едет — и экран обязан сказать это прямо.
+  assert.equal(b.version, null);
+  assert.equal(b.version_known, false);
+  assert.match(f.version_note, /Версия/);
+  db.close();
+});
+
+test('свежесть: первичная загрузка названа страницей, а не «зависло»', () => {
+  const { db } = seedTwoBuildings();
+  db.prepare(`INSERT INTO sync_peers (node, seed_floor, seed_page, last_ack)
+              VALUES ('B', 100, 3, '2026-08-07T10:05:00Z')`).run();
+  const b = reportFreshness(db, {}, user).buildings.find((x) => x.key === 'B');
+  assert.equal(b.seeding, true);
+  assert.equal(b.seed_page, 4, 'страницы считаются с нуля, человеку показываем следующую');
+  db.close();
+});
+
+test('свежесть: здание, о котором знает только обмен, всё равно НАЗВАНО', () => {
+  const { db } = seedTwoBuildings();
+  db.prepare("INSERT INTO sync_refused (tbl, uid, peer, err) VALUES ('patients','u-7','C','no such column: x')").run();
+  const f = reportFreshness(db, {}, user);
+  const c = f.buildings.find((x) => x.key === 'C');
+  assert.ok(c, 'самая плохая новость экрана не должна быть единственной, которая на него не попала');
+  assert.equal(c.refused, 1);
+  assert.equal(c.label, 'Филиал C');
+  db.close();
+});
+
+test('свежесть: клиника без соседей и без обмена отвечает, а не падает', () => {
+  const { db } = seedRu();
+  const f = reportFreshness(db, {}, user);
+  assert.equal(f.building_count, 1);
+  assert.equal(f.buildings[0].own, true);
+  assert.equal(f.pending_total, 0);
+  assert.equal(f.refused_total, 0);
+  db.close();
 });

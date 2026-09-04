@@ -118,3 +118,61 @@ export function coversAll(keys, options) {
     const all = (options || []).map((o) => o.key);
     return all.length > 0 && all.every((k) => set.has(k));
 }
+
+// ---------------------------------------------------------------------------
+// BUILDING_FRESHNESS_V1 — «в каком состоянии данные этого здания».
+//
+// Логика ЗДЕСЬ, а не в экране, по той же причине, по которой здесь лежит
+// buildingOptions: экран без DOM не поднимается, а решение «эта строка —
+// хорошая новость или плохая» проверять надо. Русского текста здесь по-прежнему
+// нет (см. шапку файла): наружу отдаётся СОСТОЯНИЕ, а слова к нему подбирает
+// тот, кто показывает, — через словарь i18n.
+// ---------------------------------------------------------------------------
+
+/** Сколько часов молчания считать «давно». Сутки: сеанс связи идёт раз в час. */
+export const FRESHNESS_STALE_HOURS = 24;
+
+/**
+ * Состояние здания одним словом. Порядок проверок — от худшей новости к лучшей:
+ * строка на экране одна, и занять её обязана та беда, которую надо чинить.
+ *
+ *   own      — это здание: его записи создаются здесь и никуда не едут;
+ *   never    — связи ещё не было ни разу: ноль напротив него ничего не значит;
+ *   refused  — база НЕ ПРИНЯЛА записи. Само это не исправится никогда;
+ *   seeding  — идёт первичная загрузка: данные ещё едут, и это нормально;
+ *   pending  — записи ждут родителя (неизвестный код услуги, ещё не приехавший
+ *              визит). Приедут — или будут выселены через 30 дней;
+ *   stale    — связь была, но давно: цифры этого здания устарели;
+ *   ok       — данные свежие.
+ *
+ * @param {object} b строка buildings из report_freshness
+ * @param {number} nowMs
+ * @param {number} [staleHours]
+ * @returns {'own'|'never'|'refused'|'seeding'|'pending'|'stale'|'ok'}
+ */
+export function freshnessState(b, nowMs, staleHours = FRESHNESS_STALE_HOURS) {
+    if (!b || b.own) return 'own';
+    if (b.refused > 0) return 'refused';
+    if (!b.last_received) return 'never';
+    if (b.seeding) return 'seeding';
+    if (b.pending > 0) return 'pending';
+    const age = freshnessAgeHours(b, nowMs);
+    if (age != null && age > staleHours) return 'stale';
+    return 'ok';
+}
+
+/**
+ * Сколько часов назад это здание слышали в последний раз.
+ * null — не слышали ни разу или метка испорчена (её нельзя выдавать за «сейчас»).
+ */
+export function freshnessAgeHours(b, nowMs) {
+    const at = b && b.last_received ? Date.parse(b.last_received) : NaN;
+    if (!Number.isFinite(at)) return null;
+    return (nowMs - at) / 3600000;
+}
+
+/** Нужна ли эта полоса вообще: клинике в одном здании — нет. */
+export function freshnessWorthShowing(data) {
+    const list = (data && data.buildings) || [];
+    return list.filter((b) => !b.own).length > 0;
+}

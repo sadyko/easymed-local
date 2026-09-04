@@ -204,3 +204,52 @@ test('касса: выбор одного здания исключает вто
   assert.equal(onlyOwn.kpi.income, 100000);
   db.close();
 });
+
+// ---------------------------------------------------------------------------
+// CASHIER_NET_SCOPE_V1 — заголовок не смешивает охваты.
+//
+// Приход ездит между зданиями, расход — нет. Пока итог считался как «весь
+// приход минус свой расход», он вычитал расход одного дома из дохода двух —
+// число, которое не отвечает ни на один вопрос и тем красивее, чем больше
+// соседнее здание. Проверяется ИМЕННО арифметика и подпись охвата.
+// ---------------------------------------------------------------------------
+
+test('касса: итог считается по ЭТОМУ зданию, а приход по клинике назван отдельно', () => {
+  const db = seedTwoBuildings();
+  const sh = db.prepare("INSERT INTO cash_shifts (cashier_id, branch_id, status) VALUES (1,1,'open')").run().lastInsertRowid;
+  db.prepare("INSERT INTO cash_movements (shift_id, kind, amount, article, created_by) VALUES (?, 'out', 40000, 'Инкассация', 1)").run(sh);
+
+  const r = cashierReport(db, RANGE, {});
+  assert.equal(r.kpi.income, 350000, 'приход по клинике: 100 000 своих + 250 000 приехавших');
+  assert.equal(r.kpi.income_own, 100000, 'приход этого здания — половина итога с тем же охватом');
+  assert.equal(r.kpi.expense, 40000, 'расход только свой: движения кассы не ездят');
+  assert.equal(r.kpi.net, 60000, 'итог = 100 000 − 40 000, обе части из одного дома');
+  assert.notEqual(r.kpi.net, r.kpi.income - r.kpi.expense,
+    'и это ГЛАВНОЕ: 350 000 − 40 000 = 310 000 — как раз то смешение охватов, которого больше нет');
+  assert.equal(r.kpi.net_scope, 'own_building', 'охват итога назван в самих данных, а не только на экране');
+  assert.equal(r.kpi.multi_building, true);
+  assert.ok(r.notes.some((n) => n.includes('ПО ЭТОМУ ЗДАНИЮ')), 'на экране сказано, что именно посчитано');
+
+  // Разрез по зданиям остаётся вторым ответом: итог КАЖДОГО здания в отдельности.
+  const own = r.by_building.find((x) => x.own);
+  const b = r.by_building.find((x) => x.key === 'B');
+  assert.equal(own.net, 60000);
+  assert.equal(b.net, 250000, 'у соседа расхода здесь нет и быть не может — он не ездит');
+  assert.equal(own.income + b.income, r.kpi.income, 'приход по клинике = сумма зданий');
+  db.close();
+});
+
+test('касса: клинике в одном здании итог и подписи остаются прежними', () => {
+  const db = seed();
+  invoiceWith(db, { amount: 500000 });
+  const sh = db.prepare("INSERT INTO cash_shifts (cashier_id, branch_id, status) VALUES (1,1,'open')").run().lastInsertRowid;
+  db.prepare("INSERT INTO cash_movements (shift_id, kind, amount, article, created_by) VALUES (?, 'out', 120000, 'Закупка', 1)").run(sh);
+
+  const r = cashierReport(db, RANGE, {});
+  assert.equal(r.kpi.multi_building, false, 'две плитки про один и тот же приход читались бы как поломка');
+  assert.equal(r.kpi.income_own, r.kpi.income, 'у неё оба охвата — одно и то же число');
+  assert.equal(r.kpi.net, r.kpi.income - r.kpi.expense, 'итог тот же, что и был');
+  assert.equal(r.kpi.net, 380000);
+  assert.equal(r.notes.length, 1, 'объяснять нечего — примечания про охват нет');
+  db.close();
+});

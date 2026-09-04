@@ -31,7 +31,29 @@ import {
 // отвечать на вопрос «чьи это пробирки».
 import { normalizeLabScope, ownBuildingOnly } from '../../../public/js/admin/views/lab-scope.js';
 
-export { OWN_KEY, ownBuildingOnly };
+// BUILDING_FRESHNESS_V1 — normalizeLetter нужен и снаружи. «Свежесть данных»
+// раскладывает по зданиям строки, у которых буква зашита в метку синхронизации
+// (sync_pending.stamp) или лежит колонкой (sync_refused.peer, sync_peers.node).
+// Правило «что считать буквой» обязано быть ОДНО на всю систему: переписать его
+// во второй раз — значит однажды разойтись с первым.
+export { OWN_KEY, ownBuildingOnly, normalizeLetter };
+
+/**
+ * Буква здания, зашитая в МЕТКУ синхронизации.
+ *
+ * Формат метки заморожен (branch-sync/hlc.js): 12 hex миллисекунд, дефис,
+ * 4 hex счётчика, дефис, буква узла — то есть буква всегда начинается с 19-го
+ * знака. Разбирать её здесь, а не тащить hlc.js в отчёты, правильно по двум
+ * причинам: отчёты не участвуют в обмене (им нужна ровно буква, а не часы), и
+ * то же самое выражение считается в SQL, где импортировать нечего.
+ *
+ * @param {unknown} stamp
+ * @returns {string|null} буква или null, если метка не той формы
+ */
+export function stampLetter(stamp) {
+  if (typeof stamp !== 'string' || stamp.length < 19) return null;
+  return normalizeLetter(stamp.slice(18));
+}
 
 // Таблицы, у которых метка происхождения есть уже сейчас (083) или появится
 // вместе с переездом денег. Список нужен, чтобы собрать буквы, реально

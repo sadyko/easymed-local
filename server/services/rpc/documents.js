@@ -181,11 +181,22 @@ export function documentsFeed(db, args, user) {
     by_type: byType,
     // Разрез по зданиям считается по ТОЙ ЖЕ выборке (без постраничного среза и
     // без фильтра по типу — как и счётчики выше).
+    //
+    // СКЛАДЫВАЕТ БАЗА, А НЕ JS. Здесь третий раз за страницу шёл ПОЛНЫЙ скан
+    // ленты — все строки поднимались в память только затем, чтобы разложить их
+    // по двум-трём корзинам и выбросить; у клиники с десятками тысяч
+    // результатов это десятки тысяч объектов на КАЖДОЕ «Показать ещё». GROUP BY
+    // отдаёт ровно столько строк, сколько зданий.
+    //
+    // Форма ответа не изменилась: `rows` в разрезе означает «сколько строк
+    // легло в корзину», и теперь это число приходит из COUNT(*).
     by_building: summariseByBuilding(
       ctx,
-      db.prepare(`SELECT ${originExpr(db, 'visit_services', 'vs')} AS origin ${baseSql}`).all(...baseParams),
-      {},
-    ),
+      db.prepare(
+        `SELECT ${originExpr(db, 'visit_services', 'vs')} AS origin, COUNT(*) AS n ${baseSql}
+          GROUP BY origin`).all(...baseParams),
+      { n: (r) => r.n },
+    ).map(({ n, ...b }) => ({ ...b, rows: n })),
     lab_scope: labScope,
   };
 }
