@@ -5,6 +5,10 @@
 // bespoke read surface.
 const ALL_STAFF = ['admin','registrar','doctor','cashier','lab','nurse','inventory','callcenter'];
 
+// TREATMENT_ORDERS_V1 — кто ведёт пациента в отделении. Лист назначений
+// читают они; касса, склад, лаборатория и колл-центр — нет.
+const INPATIENT_CARE_ROLES = ['admin','doctor','head_doctor','nurse','senior_nurse'];
+
 // LAB_PANELS_BY_SECTION_V1 (2026-08-31, owner: «who ever will have permission
 // of the lab section will be able to edit the panels») — the roles whose
 // seeded role_permissions row (migration 013/016) carries the 'labs' section,
@@ -564,6 +568,35 @@ export const REGISTRY = {
              delete: { roles: ['admin'] } },
     filters: ['id','admission_id','administered_at','created_at'],
     embed:   { patients: { table:'patients', fk:'patient_id', columns:['id','full_name','first_name','last_name'] } },
+  },
+  // TREATMENT_ORDERS_V1 (миграция 093) — лист назначений: назначения врача и
+  // отметки медсестры. ТОЛЬКО ЧТЕНИЕ: write.roles пусты во всех трёх
+  // операциях, как у admissions выше и по той же причине — каждая запись сюда
+  // это проверка маршрута («пациент дошёл до лечения») и проверка роли, и
+  // делают её RPC (rpc/treatment-orders.js). Открой здесь insert — и отметку
+  // о введённой дозе можно будет поставить одним PATCH'ем мимо расписания,
+  // мимо ключа (назначение, дата, слот) и мимо требования причины у отказа.
+  //
+  // Круг читателей уже, чем ALL_STAFF: лист назначений — история болезни, а не
+  // счёт, и кассе со складом в нём делать нечего (тот же список, что
+  // READ_ROLES в rpc/treatment-orders.js).
+  treatment_orders: {
+    read:  { roles: INPATIENT_CARE_ROLES, columns: ['id','admission_id','kind','name','service_id','stock_item_id',
+             'dose','route','freq_code','slots','prn','starts_on','days','ends_on','prescribed_by','prescribed_at',
+             'source','status','cancel_reason','cancel_note','cancel_by','cancel_at',
+             'volume','rate_ml_h','duration_min','continuous','note','created_at'] },
+    write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },
+    filters: ['id','admission_id','status','kind','prn','starts_on','ends_on','source'],
+    embed:   { services: { table:'services', fk:'service_id',     columns:['id','name','price'] },
+               products: { table:'products', fk:'stock_item_id',  columns:['id','name','unit'] },
+               users:    { table:'users',    fk:'prescribed_by',  columns:['id','full_name'] } },
+  },
+  treatment_administrations: {
+    read:  { roles: INPATIENT_CARE_ROLES, columns: ['id','order_id','due_date','due_slot','status','given_at',
+             'given_by','reason','note','extra_consumption','voided_at','voided_by','void_reason','created_at'] },
+    write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },
+    filters: ['id','order_id','due_date','due_slot','status','voided_at'],
+    embed:   { users: { table:'users', fk:'given_by', columns:['id','full_name'] } },
   },
   // Lab/diagnostic panel definitions (config). views/lab-panels.js, mounted as
   // the «Панели» mode of Лаборатория. Owned by every labs-section role.

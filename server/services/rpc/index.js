@@ -9,6 +9,10 @@ import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshne
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest } from './inpatient.js';
 import { admissionFlowState } from './inpatient-flow.js';   // INPATIENT_FLOW_V1
+import {
+  treatmentOrderCreate, treatmentOrderCancel, treatmentOrdersList,
+  treatmentAdminMark, treatmentAdminUnmark, treatmentTasksDue,
+} from './treatment-orders.js';   // TREATMENT_ORDERS_V1
 import { ensureVisit } from './visits.js';
 import { issueQueueNumbers, queueBoard } from './queue.js';
 import { createDeposit, acceptDeposit, cancelDeposit, refundDeposit, listDeposits, depositBalance } from './deposits.js';   // DEPOSIT_V1
@@ -147,6 +151,19 @@ export const RPC = {
   // не пересчитать у себя — вторая копия матрицы разошлась бы с первой.
   // Сами шаги маршрута (заявка, размещение, осмотр, выписка) — Задачи 2, 3, 8.
   admission_flow_state:           (db, args, user) => admissionFlowState(db, args, user),
+
+  // TREATMENT_ORDERS_V1 — лист назначений (Задача 4 плана «Стационар»).
+  // Врач назначает и отменяет (assertCanPrescribe: пациент дошёл до лечения И
+  // это его лечащий врач), медсестра отмечает дозы по часам, старшая медсестра
+  // снимает ошибочную отметку — со следом, а не удалением. Экранов пока нет:
+  // их строит Задача 5, списание и начисление — Задача 6.
+  // treatment_orders_list и treatment_tasks_due — чтение (READ_ONLY_RPCS).
+  treatment_order_create:         (db, args, user) => treatmentOrderCreate(db, args, user),
+  treatment_order_cancel:         (db, args, user) => treatmentOrderCancel(db, args, user),
+  treatment_orders_list:          (db, args, user) => treatmentOrdersList(db, args, user),
+  treatment_admin_mark:           (db, args, user) => treatmentAdminMark(db, args, user),
+  treatment_admin_unmark:         (db, args, user) => treatmentAdminUnmark(db, args, user),
+  treatment_tasks_due:            (db, args, user) => treatmentTasksDue(db, args, user),
 
   // SERVICE_DELETE_V1 — «Удалить услугу». Hard-deletes only a service with no
   // visit / invoice / admission / queue / lab / CRM history; anything used is
