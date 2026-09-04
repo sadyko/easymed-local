@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import { compile, CompileError } from '../db/query-compiler.js';
-import { readableColumns } from '../db/schema-registry.js';
+import { readableColumns, MAIN_CLINIC_TABLES } from '../db/schema-registry.js';
+// STAFF_SYNC_V1 — «филиал я или сама по себе клиника» решается по базе, а не по
+// сборке: одна и та же установка сегодня одиночная, завтра филиал.
+import { readIdentity } from '../services/branch-sync/identity.js';
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 
@@ -26,6 +29,30 @@ export function dbRoutes(db) {
     // nothing. Placed after compile() so we know the operation, and before
     // execution so nothing has touched the database yet.
     if (req.control?.locked && compiled.meta.op !== 'select') return lockedResponse(res, req.control);
+
+    // STAFF_SYNC_V1 (ревью Фазы 3, I3) — ТАБЛИЦЫ ГЛАВНОЙ КЛИНИКИ В ФИЛИАЛЕ
+    // ТОЛЬКО ДЛЯ ЧТЕНИЯ.
+    //
+    // role_permissions приезжает по каналу справочника (catalogue.js, migration
+    // 086), и правка, сделанная в филиале, молча откатывается ближайшей
+    // синхронизацией — через час, без единого сообщения. Ровно этот призрак и
+    // закрывает 409 в routes/users.js для сотрудников; здесь тот же ответ для
+    // прав ролей.
+    //
+    // Стоит ЗДЕСЬ, а не в реестре: реестр статичен и роль установки ему не
+    // видна (см. MAIN_CLINIC_TABLES в schema-registry.js). И стоит ПОСЛЕ
+    // compile() — так известна и таблица, и операция, — но ДО выполнения:
+    // база ещё не тронута.
+    //
+    // ЧИТАТЬ по-прежнему можно всем: экран «Роли» в филиале обязан показывать
+    // то, что реально действует, а не пустоту.
+    const managed = MAIN_CLINIC_TABLES[compiled.meta.table];
+    if (managed && compiled.meta.op !== 'select' && isSecondary(db)) {
+      // 409, а не 403, и той же формы, что у routes/users.js: запрос
+      // правильный, и права у администратора есть — не даёт устройство самой
+      // клиники.
+      return res.status(409).json({ error: { code: 'conflict', message: managed } });
+    }
 
     try {
       const { sql, params, meta } = compiled;
@@ -117,6 +144,15 @@ export function dbRoutes(db) {
   });
 
   return r;
+}
+
+// STAFF_SYNC_V1 — эта установка является филиалом? Испорченная или отсутствующая
+// строка branch_identity читается как «нет» — та же трактовка, что у
+// readIdentity и exportCatalogue: свежая установка ещё никем не филиал, и
+// сомнение обязано трактоваться в сторону «клиника правит своё сама», а не в
+// сторону экрана, который вдруг перестал сохранять.
+function isSecondary(db) {
+  try { return readIdentity(db).role === 'secondary'; } catch { return false; }
 }
 
 // Shapes the row list according to desc.single: 'single' requires exactly

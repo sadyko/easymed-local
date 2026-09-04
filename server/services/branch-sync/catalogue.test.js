@@ -641,6 +641,42 @@ test('одинаковый логин с обеих сторон УСЫНОВЛ�
   main.close(); branch.close();
 });
 
+test('ХОЛОСТОЙ ПРОГОН СЧИТАЕТ УСЫНОВЛЕНИЕ — иначе оно тихо не случилось бы вовсе', () => {
+  // Ревью Фазы 3, I4. Переход строки под управление главной клиники
+  // (users.is_local 1 -> 0) стоял под `!dryRun` и НИ РАЗУ не попадал в summary.
+  // Два следствия, и второе хуже первого:
+  //   * предсказание недосчитывало самое необратимое из того, что делает приём;
+  //   * а когда переход был ЕДИНСТВЕННЫМ изменением (строки совпадают колонка в
+  //     колонку — так выглядит повторное связывание после отвязки), холостой
+  //     прогон возвращал changed = 0, и rpc/branch-sync.js выходил ДО применения.
+  //     То есть человек оставался «своим» в филиале, продолжал править
+  //     карточку — и правка исчезала при первом же настоящем изменении сверху.
+  const main = seedStaff(seedMain(fresh()));
+  const branch = staffReceiver();
+  apply(branch, exportCatalogue(main));
+
+  // Отвязали и связали заново: карта соответствий стёрта (так и делает
+  // «Отвязать»), строки стали снова местными. Ничего, кроме владения, не
+  // изменилось — все колонки совпадают.
+  branch.prepare("DELETE FROM branch_sync_map WHERE table_name = 'users'").run();
+  branch.prepare('UPDATE users SET is_local = 1').run();
+
+  const cat = exportCatalogue(main);
+  const preview = applyCatalogue(branch, cat, { dryRun: true });
+  assert.equal(preview.adopted.users, 2, 'холостой прогон видит усыновление обоих');
+  assert.equal(preview.changed, 2, 'и считает его изменением: только на этом переход и случится');
+
+  // И при этом НИЧЕГО не написал — вот вторая половина обещания dryRun.
+  assert.equal(branch.prepare('SELECT COUNT(*) n FROM users WHERE is_local = 0').get().n, 0);
+  assert.equal(branch.prepare("SELECT COUNT(*) n FROM branch_sync_map WHERE table_name = 'users'").get().n, 0);
+
+  const real = apply(branch, cat);
+  assert.equal(real.changed, preview.changed, 'предсказание и приём обязаны согласиться');
+  assert.equal(branch.prepare('SELECT COUNT(*) n FROM users WHERE is_local = 0').get().n, 2,
+    'строки действительно перешли под управление главной клиники');
+  main.close(); branch.close();
+});
+
 test('устаревшая карта соответствий не должна ронять весь приём справочника', () => {
   const main = seedStaff(seedMain(fresh()));
   const branch = staffReceiver();

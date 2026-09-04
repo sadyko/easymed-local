@@ -15,11 +15,17 @@ import { migrate } from '../db/migrate.js';
 import { hashPassword } from '../services/auth.js';
 import { createApp } from '../app.js';
 import { licensedDataDir } from '../services/control/licensed-fixture.js';
+// STAFF_SYNC_V1 (ревью Фазы 3, I3) — роль установки в базе: тем же кодом, каким
+// её выставляет настоящее связывание.
+import { becomeSecondary } from '../services/branch-sync/identity.js';
 import { listen } from '../../control-plane/server/test-helpers/listen.js';
 
-async function startServer() {
+async function startServer({ secondary = false } = {}) {
   const db = openDb(':memory:');
   migrate(db);
+  // Филиал — это строка branch_identity, а не сборка: одна и та же программа
+  // сегодня одиночная клиника, завтра филиал.
+  if (secondary) becomeSecondary(db, { letter: 'C', name: 'Чиланзар' });
   // Администратор филиала — заведён ЗДЕСЬ, поэтому себя и своих он править
   // вправе.
   db.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)')
@@ -109,6 +115,61 @@ test('свой пароль такой человек меняет в главн
     const ok = await send(base, '/api/auth/change-password', 'POST',
       { current_password: 'password1', new_password: 'password9' }, boss);
     assert.equal(ok.status, 200);
+    db.close();
+  } finally { server.close(); }
+});
+
+// ---------------------------------------------------------------------------
+// STAFF_SYNC_V1 (ревью Фазы 3, I3) — ПРАВА РОЛЕЙ: ТОТ ЖЕ ПРИЗРАК, ТОТ ЖЕ ОТВЕТ.
+//
+// role_permissions приезжает по каналу справочника с 9a1c75b, но в реестре
+// (schema-registry.js) у неё осталось `update: {roles:['admin']}` — то есть
+// администратор филиала правку сохранял, видел «Сохранено», а через час её
+// затирала синхронизация. Ровно то привидение, ради которого в users.js
+// написан 409.
+// ---------------------------------------------------------------------------
+
+/** Правка прав роли ТЕМ ЖЕ путём, каким её шлёт экран «Настройки → Роли». */
+const editRolePermissions = (base, cookie, permissions) => send(base, '/api/db', 'POST', {
+  table: 'role_permissions',
+  op: 'update',
+  values: { permissions: JSON.stringify(permissions) },
+  filters: [{ col: 'role', op: 'eq', val: 'nurse' }],
+}, cookie);
+
+test('филиал не правит права ролей — отказ, а не правка на час', async () => {
+  const { db, server, base } = await startServer({ secondary: true });
+  try {
+    const admin = await loginAs(base, 'boss', 'password1');
+    const before = db.prepare("SELECT permissions FROM role_permissions WHERE role = 'nurse'").get();
+
+    const res = await editRolePermissions(base, admin, { sections: ['labs'] });
+    assert.equal(res.status, 409, 'иначе экран сказал бы «Сохранено», а назавтра — прежние права');
+    const message = (await res.json()).error.message;
+    assert.match(message, /главная клиника|главной клиники/i, 'отказ обязан назвать, ГДЕ это меняют');
+    assert.match(message, /синхронизац/i, 'и почему здесь нельзя');
+
+    assert.deepEqual(db.prepare("SELECT permissions FROM role_permissions WHERE role = 'nurse'").get(), before,
+      'ни одного байта прав не должно было измениться');
+
+    // ЧИТАТЬ по-прежнему можно: экран «Роли» в филиале показывает то, что
+    // действует, а не пустоту.
+    const read = await send(base, '/api/db', 'POST',
+      { table: 'role_permissions', op: 'select', columns: '*' }, admin);
+    assert.equal(read.status, 200);
+    assert.ok((await read.json()).data.length > 0);
+    db.close();
+  } finally { server.close(); }
+});
+
+test('главная клиника (и одиночная) правит права ролей как раньше', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const admin = await loginAs(base, 'boss', 'password1');
+    const res = await editRolePermissions(base, admin, { sections: ['labs'] });
+    assert.equal(res.status, 200, JSON.stringify(await res.json()));
+    assert.match(db.prepare("SELECT permissions FROM role_permissions WHERE role = 'nurse'").get().permissions, /labs/,
+      'запрет адресный: он про роль УСТАНОВКИ, а не про роль человека');
     db.close();
   } finally { server.close(); }
 });

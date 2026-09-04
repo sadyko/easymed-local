@@ -39,6 +39,11 @@ export const STRINGS = {
   "сотрудники": {"en":"employees","ru":"сотрудники","uz":"xodimlar"},
   "права ролей": {"en":"role permissions","ru":"права ролей","uz":"rol huquqlari"},
   "отключено": {"en":"deactivated","ru":"отключено","uz":"o'chirildi"},
+  // Ревью Фазы 3 (I4) — усыновление строки: местная учётная запись переходит под
+  // управление главной клиники, и пароль, которым человек входил здесь, перестаёт
+  // работать. Две записи, а не одна склеенная фраза: число таблиц встаёт между ними.
+  "перешло под управление главной клиники": {"en":"taken over by the main clinic","ru":"перешло под управление главной клиники","uz":"bosh klinika boshqaruviga o'tdi"},
+  "вход теперь по паролю из главной клиники": {"en":"sign-in now uses the main clinic's password","ru":"вход теперь по паролю из главной клиники","uz":"kirish endi bosh klinika paroli bilan"},
   // BRANCH_SYNC_V1 — «Настройки → Филиалы»: связь между отдельными установками — added 2026-08-29
   "Синхронизация филиалов": {"en":"Branch synchronisation","ru":"Синхронизация филиалов","uz":"Filiallar sinxronizatsiyasi"},
   "Роль этой установки": {"en":"Role of this installation","ru":"Роль этой установки","uz":"Ushbu o'rnatma roli"},
@@ -5977,4 +5982,21 @@ export const STRINGS = {
   "Здания": {"en":"Buildings","ru":"Здания","uz":"Binolar"},
   "Все здания ({total})": {"en":"All buildings ({total})","ru":"Все здания ({total})","uz":"Barcha binolar ({total})"},
   "Здания не выбраны": {"en":"No buildings chosen","ru":"Здания не выбраны","uz":"Binolar tanlanmagan"},
+  // BUILDING_FRESHNESS_V1 — «данные ещё едут»: свежесть по каждому зданию на
+  // странице «Отчёты» + недоехавшие позиции счетов (PENDING_ITEMS_V1) — added 2026-09-04
+  "Свежесть данных по зданиям": {"en":"Data freshness by building","ru":"Свежесть данных по зданиям","uz":"Binolar bo'yicha ma'lumot yangiligi"},
+  "Когда каждое здание в последний раз выходило на связь, сколько его записей ещё ждут и сколько база не приняла.": {"en":"When each building was last heard from, how many of its records are still waiting and how many the database refused.","ru":"Когда каждое здание в последний раз выходило на связь, сколько его записей ещё ждут и сколько база не приняла.","uz":"Har bir bino oxirgi marta qachon aloqaga chiqqani, uning qancha yozuvi hali kutayotgani va bazaga qanchasi qabul qilinmagani."},
+  "Это здание — записи создаются здесь": {"en":"This building — records are created here","ru":"Это здание — записи создаются здесь","uz":"Bu bino — yozuvlar shu yerda yaratiladi"},
+  "Данных от этого здания ещё не приходило · ждут: {pending} · не приняты: {refused}": {"en":"No data has arrived from this building yet · waiting: {pending} · refused: {refused}","ru":"Данных от этого здания ещё не приходило · ждут: {pending} · не приняты: {refused}","uz":"Bu binodan hali ma'lumot kelmadi · kutmoqda: {pending} · qabul qilinmadi: {refused}"},
+  "База не приняла записи: {refused} · последние данные: {when} · ждут: {pending}": {"en":"The database refused {refused} records · last data: {when} · waiting: {pending}","ru":"База не приняла записи: {refused} · последние данные: {when} · ждут: {pending}","uz":"Baza yozuvlarni qabul qilmadi: {refused} · oxirgi ma'lumot: {when} · kutmoqda: {pending}"},
+  "Идёт первичная загрузка, страница {page} · ждут: {pending}": {"en":"First-time load in progress, page {page} · waiting: {pending}","ru":"Идёт первичная загрузка, страница {page} · ждут: {pending}","uz":"Dastlabki yuklash ketmoqda, {page}-sahifa · kutmoqda: {pending}"},
+  "Данные не приходили с {when} · ждут: {pending} · не приняты: {refused}": {"en":"No data since {when} · waiting: {pending} · refused: {refused}","ru":"Данные не приходили с {when} · ждут: {pending} · не приняты: {refused}","uz":"{when} dan beri ma'lumot kelmadi · kutmoqda: {pending} · qabul qilinmadi: {refused}"},
+  "Последние данные: {when} · ждут: {pending} · не приняты: {refused}": {"en":"Last data: {when} · waiting: {pending} · refused: {refused}","ru":"Последние данные: {when} · ждут: {pending} · не приняты: {refused}","uz":"Oxirgi ma'lumot: {when} · kutmoqda: {pending} · qabul qilinmadi: {refused}"},
+  "ещё едет: {amount}": {"en":"still in transit: {amount}","ru":"ещё едет: {amount}","uz":"hali yo'lda: {amount}"},
+  // CASHIER_NET_SCOPE_V1 — плитки «Отчёта кассира» называют свой охват: приход
+  // ездит между зданиями, расход — нет — added 2026-09-04
+  "Доход по всем зданиям": {"en":"Income across all buildings","ru":"Доход по всем зданиям","uz":"Barcha binolar bo'yicha daromad"},
+  "Доход этого здания": {"en":"This building's income","ru":"Доход этого здания","uz":"Shu binoning daromadi"},
+  "Расход этого здания": {"en":"This building's expense","ru":"Расход этого здания","uz":"Shu binoning xarajati"},
+  "Итого по этому зданию (доход − расход)": {"en":"Total for this building (income − expense)","ru":"Итого по этому зданию (доход − расход)","uz":"Shu bino bo'yicha jami (daromad − xarajat)"},
 };

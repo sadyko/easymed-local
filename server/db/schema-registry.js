@@ -361,6 +361,9 @@ export const REGISTRY = {
     write:{insert:{roles:['admin'],columns:['doctor_id','service_id','percent','active']},update:{roles:['admin'],columns:['doctor_id','service_id','percent','active']},delete:{roles:[]}},
     filters:['id','active','doctor_id','service_id'],
     embed:{ users:{table:'users',fk:'doctor_id',columns:['id','full_name']}, services:{table:'services',fk:'service_id',columns:['id','name']} } },
+  // STAFF_SYNC_V1 (migration 086) — GOVERNED BY THE MAIN CLINIC, and the role
+  // list below is deliberately NOT where that is enforced. See
+  // MAIN_CLINIC_TABLES at the bottom of this file for the whole argument.
   role_permissions: {
     read:  { roles: ALL_STAFF, columns: ['id','role','permissions','updated_at'] },
     write: { insert: { roles: ['admin'], columns: ['role','permissions'] },
@@ -905,3 +908,31 @@ export function embedEntry(t, name) {
   const e = REGISTRY[t];
   return e && Object.prototype.hasOwnProperty.call(e.embed, name) ? e.embed[name] : null;
 }
+
+// ---------------------------------------------------------------------------
+// STAFF_SYNC_V1 (ревью Фазы 3, I3) — ТАБЛИЦЫ, КОТОРЫМИ УПРАВЛЯЕТ ГЛАВНАЯ
+// КЛИНИКА: их правит только она, филиал получает их по каналу справочника.
+//
+// ПОЧЕМУ НЕ СПИСКОМ РОЛЕЙ ВЫШЕ. Роль в этом файле — свойство ЧЕЛОВЕКА, и она
+// одинакова во всех установках: администратор есть и в главной клинике, и в
+// филиале, и права у него по замыслу одни и те же. А запрет здесь — свойство
+// УСТАНОВКИ, и притом такое, которое до запуска неизвестно: одна и та же
+// сборка сегодня одиночная клиника, завтра филиал (branch_identity.role,
+// миграция 080), а послезавтра снова сама по себе. Записав `update: {roles: []}`,
+// мы отняли бы правку у ГЛАВНОЙ клиники, где она и должна жить; оставив
+// `['admin']`, мы пускаем правку в филиале, где её через час затрёт приехавший
+// справочник. Реестр — статическая таблица, он не видит базу и не может выбрать
+// между этими двумя ответами. Поэтому список живёт здесь (рядом с описанием
+// таблицы, чтобы автор следующей mainOnly-таблицы его увидел), а СПРАШИВАЕТ его
+// маршрут — routes/db.js, у которого база под рукой.
+//
+// ТОТ ЖЕ ОТВЕТ, ЧТО У СОТРУДНИКОВ. routes/users.js уже отвечает 409 на правку
+// строки главной клиники, и по той же причине: правка, принятая сервером,
+// дожила бы до ближайшей синхронизации и молча откатилась. Экран показал бы
+// «Сохранено», а назавтра — прежние права. Отказ на месте — единственный ответ,
+// говорящий правду о том, что произошло бы.
+export const MAIN_CLINIC_TABLES = Object.freeze({
+  role_permissions: 'Права ролей настраивает главная клиника — там же их и меняйте.'
+    + ' Изменение, сделанное здесь, будет отменено при ближайшей синхронизации'
+    + ' справочника (в течение часа).',
+});
