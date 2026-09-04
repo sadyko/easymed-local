@@ -27,6 +27,12 @@ const EMPLOYMENT_TYPES = [['', '—'], ['official', 'Официально'], ['c
 const SALARY_TYPES = [['', '—'], ['fixed', 'Оклад'], ['percentage', 'Процент от выручки'], ['fix_plus_kpi', 'Оклад + KPI']];
 const DAYS = [['mon', 'Пн'], ['tue', 'Вт'], ['wed', 'Ср'], ['thu', 'Чт'], ['fri', 'Пт'], ['sat', 'Сб'], ['sun', 'Вс']];
 const roleLabel = (r) => (ROLES.find(x => x[0] === r) || [r, r])[1];
+// STAFF_SYNC_V1 (миграция 086) — сотрудника завела главная клиника, и этот
+// экран его только показывает. Сравнение именно с false: установка старой
+// версии ключа не присылает вовсе, и «неизвестно» обязано значить «свой», иначе
+// клиника из одного здания после обновления нашла бы весь свой ростер
+// нередактируемым.
+const fromMain = (u) => !!u && u.is_local === false;
 const staffLabel = (s) => (STAFF_TYPES.find(x => x[0] === s) || ['', 'Не выбрана'])[1];
 // Routing type (раздел) — the fixed easymed set (mirrors services.js).
 const SERVICE_TYPES = [['imaging', 'Диагностика'], ['radiology', 'Лучевая диагностика'], ['consultation', 'Консультации'], ['lab', 'Лаборатория'], ['procedure', 'Процедуры'], ['other', 'Хирургия']];
@@ -203,7 +209,11 @@ async function paint(root) {
         }
         for (const u of rows) {
             const openBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, 'Открыть');
-            const backBtn = !showArchive ? null : h('button', {
+            // Кнопки «Вернуть» у сотрудника главной клиники нет: сервер ответил
+            // бы отказом (routes/users.js), а кнопка, которая всегда ругается, —
+            // хуже отсутствующей. Вернуть его на работу можно там же, где его
+            // отключили.
+            const backBtn = (!showArchive || fromMain(u)) ? null : h('button', {
                 class: 'btn btn-primary btn-sm', type: 'button', style: { marginRight: '6px' },
                 // stopPropagation: строка целиком открывает карточку, а тут
                 // нажали именно «Вернуть».
@@ -211,7 +221,11 @@ async function paint(root) {
             }, 'Вернуть');
 
             tbody.appendChild(h('tr', { class: 'row-click', style: { cursor: 'pointer' }, onclick: () => openEditor(u, root) },
-                h('td', null, h('span', { style: { fontWeight: 600 } }, u.full_name || u.username), h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '6px' } }, '@' + u.username)),
+                h('td', null, h('span', { style: { fontWeight: 600 } }, u.full_name || u.username), h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '6px' } }, '@' + u.username),
+                    // Метка сразу в списке, а не только внутри карточки: иначе
+                    // администратор филиала открывал бы карточку за карточкой,
+                    // чтобы понять, кого из них он вообще вправе править.
+                    fromMain(u) ? h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '8px', padding: '1px 7px', border: '1px solid var(--ink-100)', borderRadius: '20px', whiteSpace: 'nowrap' } }, 'Главная клиника') : null),
                 h('td', null, u.staff_type ? staffLabel(u.staff_type) : (u.is_doctor ? 'Врачи' : '—')),
                 h('td', null, roleLabel(u.role)),
                 h('td', null, u.phone || '—'),
@@ -318,6 +332,14 @@ function openEditor(user, root) {
     };
     let active = 'personal';
     let dirty = false;
+    // STAFF_SYNC_V1 — карточка сотрудника, приехавшего из главной клиники,
+    // ОТКРЫВАЕТСЯ, но не правится. Открывается — потому что филиалу нужно
+    // видеть телефон врача и его специальность; не правится — потому что
+    // правка дожила бы до ближайшей синхронизации и молча откатилась (сервер
+    // отвечает на неё 409, см. routes/users.js). Свой сотрудник филиала —
+    // is_local = 1 — правится как раньше, и на главной клинике таких строк нет
+    // вовсе, поэтому там этот экран не меняется ничем.
+    const readOnly = fromMain(user);
 
     const overlay = h('div', { class: 'modal' });
     const close = () => overlay.remove();
@@ -334,7 +356,7 @@ function openEditor(user, root) {
     function sectionComplete(sec) { const req = sec.key === 'access' ? (isEdit ? sec.required : sec.required.concat('password')) : sec.required; return req.every(reqFilled); }
     function completionPct() { const all = railSections().flatMap(s => (s.key === 'access' && !isEdit) ? s.required.concat('password') : s.required); if (!all.length) return 100; return Math.round(all.filter(reqFilled).length / all.length * 100); }
     function touch() { dirty = true; dirtyEl.textContent = tr('● Есть несохранённые изменения'); }
-    function markDirty(patch) { Object.assign(emp, patch); touch(); renderRail(); renderHead(); }
+    function markDirty(patch) { if (readOnly) return; Object.assign(emp, patch); touch(); renderRail(); renderHead(); }
 
     function renderHead() {
         clear(ringWrap);
@@ -394,8 +416,35 @@ function openEditor(user, root) {
         renderRail(); renderBody();
     }
 
+    // STAFF_SYNC_V1 — одна сеть на всю карточку, а не `disabled` по каждому полю.
+    // Поля строят и вложенные секции («Рабочее время», «Услуги и ставки») —
+    // своим кодом, мимо любого перечня; и новое поле, добавленное сюда завтра,
+    // родилось бы редактируемым, а узнали бы об этом по правке, уехавшей в
+    // никуда. Обход уже построенного поддерева не может пропустить ни то, ни
+    // другое.
+    function disableAll(node) {
+        for (const child of node.children || []) {
+            const tag = String(child.tagName || '').toUpperCase();
+            if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'BUTTON') child.disabled = true;
+            disableAll(child);
+        }
+    }
+
+    // Строка стоит ПЕРВОЙ и на каждом разделе карточки: администратор филиала
+    // должен узнать, почему поля серые, раньше, чем начнёт в них тыкать. Что
+    // делать — тоже сказано: карточка правится в главной клинике и приедет
+    // оттуда сама.
+    const managedNote = () => h('div', {
+        style: {
+            display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px',
+            padding: '9px 12px', borderRadius: '9px', fontSize: '12.5px', lineHeight: 1.5,
+            background: 'var(--ink-25, #f6f8f9)', border: '1px solid var(--ink-100)', color: 'var(--ink-600)',
+        },
+    }, Icon('Building', { size: 15 }), h('span', null, 'Этого сотрудника ведёт главная клиника — изменить его данные можно только там.'));
+
     function renderBody() {
         clear(body);
+        if (readOnly) body.appendChild(managedNote());
         const sec = ALL_SECTIONS.find(s => s.key === active) || ALL_SECTIONS[0];
         const head = (title, sub, right) => h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' } },
             h('span', { style: { width: '40px', height: '40px', borderRadius: '11px', background: 'var(--primary-50, #e8f3f2)', color: 'var(--primary-700, #1f7a72)', display: 'grid', placeItems: 'center', flex: '0 0 40px' } }, Icon(sec.icon, { size: 19 })),
@@ -461,6 +510,7 @@ function openEditor(user, root) {
                 h('div', { style: { marginTop: '12px' } }, checkField('Активен', (() => { const c = h('input', { type: 'checkbox', checked: emp.is_active }); c.addEventListener('change', () => markDirty({ is_active: c.checked })); return c; })())),
                 isEdit ? null : hint('Логин 3–30 символов (латиница, цифры, . _ -). Пароль от 8 символов.'));
         }
+        if (readOnly) disableAll(body);
     }
 
     const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, Icon('Check', { size: 14 }), ' Сохранить сотрудника');
@@ -544,7 +594,11 @@ function openEditor(user, root) {
     overlay.appendChild(h('div', { class: 'modal-card', style: { width: '960px', maxWidth: 'calc(100vw - 32px)', height: 'min(90vh, 780px)', display: 'flex', flexDirection: 'column' } },
         h('header', { class: 'modal-head', style: { alignItems: 'center' } }, headWrap, ringWrap, h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { style: { display: 'flex', flex: 1, minHeight: 0 } }, rail, body),
-        h('footer', { class: 'modal-foot' }, deleteBtn, dirtyEl, h('span', { class: 'grow' }), h('button', { class: 'btn', type: 'button', onclick: close }, 'Отмена'), saveBtn),
+        // Кнопок «Сохранить» и «Удалить» у карточки главной клиники нет вовсе —
+        // не отключённых, а отсутствующих: отключённая кнопка предлагает
+        // действие и молчит о том, почему оно недоступно, а причина уже сказана
+        // строкой над полями.
+        h('footer', { class: 'modal-foot' }, readOnly ? null : deleteBtn, dirtyEl, h('span', { class: 'grow' }), h('button', { class: 'btn', type: 'button', onclick: close }, readOnly ? 'Закрыть' : 'Отмена'), readOnly ? null : saveBtn),
     ));
     document.body.appendChild(overlay);
     renderHead(); renderRail(); renderBody();

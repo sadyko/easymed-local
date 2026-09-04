@@ -20,6 +20,10 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { exportCatalogue, applyCatalogue, TABLES, DOC_SETTINGS_COLUMNS } from './catalogue.js';
 import { becomeSecondary } from './identity.js';
+// STAFF_SYNC_V1 — вход проверяется НАСТОЯЩИМ путём входа, а не сравнением
+// хешей: обещание владельца звучит как «человек войдёт во втором здании», и
+// проверять его надо тем же кодом, которым клиника пускает людей каждый день.
+import { hashPassword, login, sessionUser } from '../auth.js';
 
 const MARKER = 'ZZMARKERPATIENT';
 
@@ -470,4 +474,244 @@ test('совпадающее имя — не изменение: повторн�
   const r = applyCatalogue(db, { roster: [{ letter: 'C', name: 'Чиланзар' }] });
   assert.equal(r.roster || 0, 0);
   db.close();
+});
+
+// ---------------------------------------------------------------------------
+// STAFF_SYNC_V1 — сотрудники и роли (миграция 086).
+//
+// Владелец: «the filial users (employees are not rendered to other branches)».
+// Правило то же, что у прайса: главная клиника управляет, филиал получает.
+// Проверяется здесь то, что стоит дороже всего, если сломается:
+//   * человек доезжает целиком — с ролью, отделением и паролем, и ВХОДИТ там;
+//   * увольнение доезжает: отключён здесь, отключён и там;
+//   * местного сотрудника филиала синхронизация не трогает ВООБЩЕ;
+//   * филиал не отдаёт своих людей наверх — канал односторонний физически.
+// ---------------------------------------------------------------------------
+
+/** Главная клиника с двумя сотрудниками: врач в отделении и главный врач. */
+function seedStaff(db) {
+  const dep = db.prepare('SELECT id FROM departments ORDER BY id LIMIT 1').get();
+  db.prepare(`INSERT INTO users (username, password_hash, full_name, last_name, first_name, role,
+              extra_roles, is_doctor, staff_type, specialty, phone, department_id)
+              VALUES ('ivanov', ?, 'Иванов Иван', 'Иванов', 'Иван', 'doctor',
+              '["lab"]', 1, 'doctor', 'Кардиолог', '+998901112233', ?)`)
+    .run(hashPassword('sekret12345'), dep.id);
+  db.prepare(`INSERT INTO users (username, password_hash, full_name, role)
+              VALUES ('glavvrach', ?, 'Каримова Дилноза', 'admin')`).run(hashPassword('adminpass1'));
+  return db;
+}
+
+/** Филиал, у которого свои id отделений заведомо разошлись с главной клиникой. */
+function staffReceiver() {
+  const db = receiver();
+  becomeSecondary(db, { letter: 'C', name: 'Чиланзар' });
+  db.prepare("UPDATE sqlite_sequence SET seq = 700 WHERE name = 'departments'").run();
+  return db;
+}
+
+test('сотрудники приезжают из главной клиники — с ролью, отделением и логином', () => {
+  const main = seedStaff(seedMain(fresh()));
+  const branch = staffReceiver();
+
+  const s = apply(branch, exportCatalogue(main));
+  assert.equal(s.created.users, 2, 'обоих сотрудников филиал завёл у себя');
+
+  const doc = branch.prepare("SELECT * FROM users WHERE username = 'ivanov'").get();
+  assert.equal(doc.role, 'doctor');
+  assert.equal(doc.extra_roles, '["lab"]', 'права авторизуются по объединению ролей — вторая половина обязана доехать');
+  assert.equal(doc.is_doctor, 1);
+  assert.equal(doc.specialty, 'Кардиолог');
+  assert.equal(doc.full_name, 'Иванов Иван');
+  assert.equal(doc.is_local, 0, 'этой строкой управляет главная клиника');
+
+  // Отделение — по СВОЕЙ строке, а не по чужому id: у филиала счётчик отделений
+  // сдвинут, и перенос «как есть» указал бы в никуда.
+  const mainDepId = main.prepare("SELECT department_id FROM users WHERE username = 'ivanov'").get().department_id;
+  const mainDep = main.prepare('SELECT name FROM departments WHERE id = ?').get(mainDepId);
+  const dep = branch.prepare('SELECT name FROM departments WHERE id = ?').get(doc.department_id);
+  assert.equal(dep.name, mainDep.name, 'сотрудник обязан оказаться в СВОЁМ отделении с тем же названием');
+
+  main.close(); branch.close();
+});
+
+test('человек входит в системе второго здания своим обычным паролем', () => {
+  const main = seedStaff(seedMain(fresh()));
+  const branch = staffReceiver();
+  apply(branch, exportCatalogue(main));
+
+  // Ради этого владелец и просил везти пароль: врач приехал принимать во второй
+  // корпус и входит там, не заводя себе второй логин.
+  const ok = login(branch, 'ivanov', 'sekret12345');
+  assert.ok(ok.session, 'приехавший из главной клиники обязан войти в филиале');
+  assert.equal(ok.user.username, 'ivanov');
+  assert.equal(ok.user.role, 'doctor');
+  // Сессия отдаёт ОБЕ роли: ACL авторизует по их объединению (services/roles.js
+  // effectiveRoles), и «дополнительная» роль, не доехавшая до филиала, была бы
+  // половиной прав, о потере которой никто не узнает до отказа на сохранении.
+  assert.deepEqual(sessionUser(branch, ok.session).extra_roles, ['lab']);
+
+  assert.equal(login(branch, 'ivanov', 'ne-tot-parol').error, 'invalid', 'чужой пароль по-прежнему не подходит');
+  main.close(); branch.close();
+});
+
+test('смена фамилии и роли в главной клинике доезжает до филиала', () => {
+  const main = seedStaff(seedMain(fresh()));
+  const branch = staffReceiver();
+  apply(branch, exportCatalogue(main));
+
+  main.prepare("UPDATE users SET full_name = 'Иванова Инна', last_name = 'Иванова', role = 'registrar', is_doctor = 0 WHERE username = 'ivanov'").run();
+  const s = apply(branch, exportCatalogue(main));
+  assert.equal(s.updated.users, 1);
+  assert.equal(s.created.users ?? 0, 0, 'двойник не создан — строка узнана по логину');
+
+  const row = branch.prepare("SELECT full_name, last_name, role, is_doctor FROM users WHERE username = 'ivanov'").get();
+  assert.equal(row.full_name, 'Иванова Инна');
+  assert.equal(row.role, 'registrar');
+  assert.equal(row.is_doctor, 0);
+  main.close(); branch.close();
+});
+
+test('отключённый в главной клинике отключается и в филиале', () => {
+  const main = seedStaff(seedMain(fresh()));
+  const branch = staffReceiver();
+  apply(branch, exportCatalogue(main));
+  assert.ok(login(branch, 'ivanov', 'sekret12345').session);
+
+  main.prepare("UPDATE users SET is_active = 0 WHERE username = 'ivanov'").run();
+  apply(branch, exportCatalogue(main));
+
+  assert.equal(branch.prepare("SELECT is_active FROM users WHERE username = 'ivanov'").get().is_active, 0);
+  assert.equal(login(branch, 'ivanov', 'sekret12345').error, 'invalid',
+    'человек, которому закрыли доступ, не должен входить во втором здании');
+  main.close(); branch.close();
+});
+
+test('пропавший из выгрузки — ОТКЛЮЧАЕТСЯ, а не удаляется: за ним история этого здания', () => {
+  const main = seedStaff(seedMain(fresh()));
+  const branch = staffReceiver();
+  apply(branch, exportCatalogue(main));
+
+  // Уволенного главная клиника удаляет из ростера совсем — пометки is_active = 0
+  // в выгрузке не будет вообще.
+  main.prepare("DELETE FROM users WHERE username = 'ivanov'").run();
+  const s = apply(branch, exportCatalogue(main));
+  assert.equal(s.deactivated.users, 1);
+
+  const row = branch.prepare("SELECT id, is_active FROM users WHERE username = 'ivanov'").get();
+  assert.ok(row, 'строка обязана остаться: на неё ссылаются визиты и счета филиала');
+  assert.equal(row.is_active, 0);
+  assert.equal(login(branch, 'ivanov', 'sekret12345').error, 'invalid');
+
+  // И это не повторяется каждый час: отключённого второй раз не отключают.
+  const again = apply(branch, exportCatalogue(main));
+  assert.equal(again.changed, 0, 'повторный прогон обязан быть пустышкой');
+  main.close(); branch.close();
+});
+
+test('сотрудник, нанятый в филиале, переживает приём, который его не упоминает', () => {
+  const main = seedStaff(seedMain(fresh()));
+  const branch = staffReceiver();
+  branch.prepare("INSERT INTO users (username, password_hash, full_name, role) VALUES ('registratura', ?, 'Своя регистратура', 'registrar')")
+    .run(hashPassword('mestnyi12345'));
+
+  apply(branch, exportCatalogue(main));
+
+  const own = branch.prepare("SELECT is_active, is_local FROM users WHERE username = 'registratura'").get();
+  assert.equal(own.is_active, 1, 'главная клиника его не знает — и не должна его отключать');
+  assert.equal(own.is_local, 1, 'он остаётся своим: филиал вправе его править');
+  assert.ok(login(branch, 'registratura', 'mestnyi12345').session);
+  main.close(); branch.close();
+});
+
+test('одинаковый логин с обеих сторон УСЫНОВЛЯЕТСЯ — иначе UNIQUE свалил бы весь приём', () => {
+  const main = seedStaff(seedMain(fresh()));
+  const branch = staffReceiver();
+  // Так выглядит любая пара установок: у каждой свой заведённый администратор.
+  branch.prepare("INSERT INTO users (username, password_hash, full_name, role) VALUES ('glavvrach', ?, 'Каримова Д.', 'admin')")
+    .run(hashPassword('localadmin1'));
+
+  const s = apply(branch, exportCatalogue(main));
+  assert.equal(s.adopted.users, 1);
+  assert.equal(branch.prepare("SELECT COUNT(*) AS n FROM users WHERE username = 'glavvrach'").get().n, 1,
+    'двух учётных записей с одним логином не бывает — UNIQUE COLLATE NOCASE');
+  assert.equal(branch.prepare("SELECT is_local FROM users WHERE username = 'glavvrach'").get().is_local, 0,
+    'усыновлённая строка переходит под управление главной клиники СРАЗУ');
+  // Главная клиника управляет и паролем — вход теперь по её паролю.
+  assert.ok(login(branch, 'glavvrach', 'adminpass1').session);
+  main.close(); branch.close();
+});
+
+test('устаревшая карта соответствий не должна ронять весь приём справочника', () => {
+  const main = seedStaff(seedMain(fresh()));
+  const branch = staffReceiver();
+  apply(branch, exportCatalogue(main));
+
+  // Так выглядит филиал, перепривязанный к пересобранной главной клинике: в
+  // карте остались чужие id, которых больше нет, а логины те же. Без повторного
+  // захвата строки INSERT упал бы на UNIQUE — вместе с прайсом, навсегда.
+  const localId = branch.prepare("SELECT id FROM users WHERE username = 'ivanov'").get().id;
+  branch.prepare("UPDATE branch_sync_map SET remote_id = remote_id + 9000 WHERE table_name = 'users' AND local_id = ?").run(localId);
+
+  const s = apply(branch, exportCatalogue(main));
+  assert.equal(branch.prepare("SELECT COUNT(*) AS n FROM users WHERE username = 'ivanov'").get().n, 1);
+  assert.equal(s.adopted.users, 1, 'строка захвачена заново, а не продублирована');
+  main.close(); branch.close();
+});
+
+test('ФИЛИАЛ НЕ ОТДАЁТ СОТРУДНИКОВ НАВЕРХ: канал односторонний физически', () => {
+  const branch = staffReceiver();
+  branch.prepare("INSERT INTO users (username, password_hash, full_name, role) VALUES ('registratura', 'x', 'Своя регистратура', 'registrar')").run();
+
+  const out = exportCatalogue(branch);
+  assert.deepEqual(out.users, [], 'учётные записи с паролями не уезжают из филиала никуда');
+  assert.deepEqual(out.role_permissions, [], 'права ролей настраивает главная клиника');
+  // Прайс филиал по-прежнему отдаёт: запрет адресный, а не «выгрузка выключена».
+  assert.ok(out.services.length > 0);
+
+  // А главная клиника — отдаёт.
+  const main = seedStaff(fresh());
+  assert.equal(exportCatalogue(main).users.length, 2);
+  main.close(); branch.close();
+});
+
+test('пустой список сотрудников НИКОГО не отключает', () => {
+  const main = seedStaff(seedMain(fresh()));
+  const branch = staffReceiver();
+  apply(branch, exportCatalogue(main));
+
+  // Две ситуации, неотличимые для приёмника: главная клиника старой версии
+  // (ключа нет вовсе) и установка-филиал (список пуст). Ни то ни другое не
+  // значит «в клинике не осталось людей», а последствие было бы необратимым:
+  // здание, где никто не может войти.
+  const cat = exportCatalogue(main);
+  const noKey = { ...cat }; delete noKey.users;
+  assert.equal(apply(branch, noKey).deactivated, undefined);
+  assert.equal(apply(branch, { ...cat, users: [] }).deactivated, undefined);
+  assert.equal(branch.prepare('SELECT COUNT(*) AS n FROM users WHERE is_active = 1').get().n, 2);
+  main.close(); branch.close();
+});
+
+test('права ролей приезжают из главной клиники и не удваиваются', () => {
+  const main = seedMain(fresh());
+  const branch = staffReceiver();
+  main.prepare("UPDATE role_permissions SET permissions = '{\"sections\":[\"procedures\"]}' WHERE role = 'nurse'").run();
+
+  const s = apply(branch, exportCatalogue(main));
+  assert.equal(s.created.role_permissions ?? 0, 0, 'роли засеяны одинаково — их усыновляют, а не заводят заново');
+  assert.equal(s.updated.role_permissions, 1);
+  assert.equal(branch.prepare("SELECT permissions FROM role_permissions WHERE role = 'nurse'").get().permissions,
+    '{"sections":["procedures"]}');
+  assert.equal(branch.prepare("SELECT COUNT(*) AS n FROM role_permissions WHERE role = 'nurse'").get().n, 1);
+  main.close(); branch.close();
+});
+
+test('холостой прогон видит ровно то же, что настоящий приём сотрудников', () => {
+  const main = seedStaff(seedMain(fresh()));
+  const branch = staffReceiver();
+  const cat = exportCatalogue(main);
+  const preview = applyCatalogue(branch, cat, { dryRun: true });
+  assert.equal(branch.prepare('SELECT COUNT(*) AS n FROM users').get().n, 0, 'dryRun не пишет');
+  const real = apply(branch, cat);
+  assert.equal(preview.changed, real.changed, 'предсказание и приём обязаны согласиться');
+  main.close(); branch.close();
 });

@@ -33,6 +33,12 @@ export const STRINGS = {
   "Справочник {table}: строка {id} не найдена.": {"en":"Reference list {table}: row {id} not found.","ru":"Справочник {table}: строка {id} не найдена.","uz":"{table} ma'lumotnomasida {id} qatori topilmadi."},
   "Сотрудник {id} не найден.": {"en":"Employee {id} not found.","ru":"Сотрудник {id} не найден.","uz":"Xodim {id} topilmadi."},
   "У сотрудника «{name}» повреждён список ставок — откройте его карточку и сохраните её заново, затем повторите.": {"en":"Employee «{name}» has a corrupt rate list — open their card, save it again, then retry.","ru":"У сотрудника «{name}» повреждён список ставок — откройте его карточку и сохраните её заново, затем повторите.","uz":"«{name}» xodimning stavkalar ro'yxati buzilgan — kartasini oching, qayta saqlang, so'ng yana urinib ko'ring."},
+  // STAFF_SYNC_V1 — сотрудники и роли едут в филиалы; главная клиника ими управляет — added 2026-09-04
+  "Главная клиника": {"en":"Main clinic","ru":"Главная клиника","uz":"Bosh klinika"},
+  "Этого сотрудника ведёт главная клиника — изменить его данные можно только там.": {"en":"This employee is managed by the main clinic — their details can only be changed there.","ru":"Этого сотрудника ведёт главная клиника — изменить его данные можно только там.","uz":"Bu xodimni bosh klinika yuritadi — ma'lumotlarini faqat o'sha yerda o'zgartirish mumkin."},
+  "сотрудники": {"en":"employees","ru":"сотрудники","uz":"xodimlar"},
+  "права ролей": {"en":"role permissions","ru":"права ролей","uz":"rol huquqlari"},
+  "отключено": {"en":"deactivated","ru":"отключено","uz":"o'chirildi"},
   // BRANCH_SYNC_V1 — «Настройки → Филиалы»: связь между отдельными установками — added 2026-08-29
   "Синхронизация филиалов": {"en":"Branch synchronisation","ru":"Синхронизация филиалов","uz":"Filiallar sinxronizatsiyasi"},
   "Роль этой установки": {"en":"Role of this installation","ru":"Роль этой установки","uz":"Ushbu o'rnatma roli"},

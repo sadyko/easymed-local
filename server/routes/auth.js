@@ -63,6 +63,19 @@ export function authRoutes(db) {
     if (ipThrottled(req.ip)) {
       return res.status(429).json({ error: { code: 'locked', message: 'Too many attempts. Try again in a few minutes.' } });
     }
+    // STAFF_SYNC_V1 (migration 086) — an account that arrived from the main
+    // clinic cannot change its password HERE, and this refusal is what keeps the
+    // owner's rule honest rather than merely stated. The password rides the
+    // catalogue channel, so a change accepted at a branch would live until the
+    // next hourly synchronisation and then revert with no message and no trace:
+    // the person would be locked out by a password they set themselves and
+    // watched being accepted. Saying so now costs one trip to the main clinic;
+    // the alternative costs a support call nobody can explain.
+    const me = db.prepare('SELECT is_local FROM users WHERE id = ?').get(req.user.id);
+    if (me && me.is_local === 0) {
+      return res.status(409).json({ error: { code: 'conflict',
+        message: 'This account is managed by the main clinic. Change the password there — it is the same login in every building.' } });
+    }
     const { current_password, new_password } = req.body || {};
     const result = changeOwnPassword(db, req.user.id, current_password, new_password, req.sessionId);
     if (result.error === 'weak_password') {

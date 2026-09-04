@@ -259,7 +259,28 @@ export function employeeView(u) {
     referral_rate_default: u.referral_rate_default,
     service_rates: parseJsonArray(u.service_rates), referral_rates: parseJsonArray(u.referral_rates),
     created_at: u.created_at, updated_at: u.updated_at,
+    // STAFF_SYNC_V1 (migration 086) — did this building create the row, or did
+    // it arrive from the main clinic? The employees screen needs it to decide
+    // whether the card is editable at all, and `=== 0` rather than `!u.is_local`
+    // on purpose: an install whose database predates the migration returns
+    // undefined for the column, and «unknown» must mean «local», not «managed
+    // elsewhere» — otherwise a single-building clinic would find its whole staff
+    // roster read-only after an upgrade.
+    is_local: u.is_local !== 0,
   };
+}
+
+// STAFF_SYNC_V1 — the row belongs to the main clinic; this building may read it
+// but not change it. Returns null when the row is this branch's own.
+//
+// The screen already hides the Save button for such a row, and this is still
+// here for the reason every server-side check is: the screen is one client. A
+// PATCH that went through would be overwritten by the next hourly sync anyway —
+// silently, hours later — so refusing it outright is not merely stricter, it is
+// the only answer that tells the truth about what would happen.
+function mainClinicRow(user) {
+  if (user.is_local !== 0) return null;
+  return 'This employee is managed by the main clinic. Change them there — a change made here would be overwritten by the next synchronisation.';
 }
 
 // Derives "Last First Middle" from whichever name parts were supplied.
@@ -311,6 +332,11 @@ export function userRoutes(db) {
     if (req.control?.locked) return lockedResponse(res, req.control);
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
     if (!user) return res.status(404).json({ error: { code: 'not_found', message: 'User not found.' } });
+    // STAFF_SYNC_V1 — 409, not 403: the request is well-formed and the caller is
+    // an admin; it is the clinic's own arrangement that forbids it. Same status
+    // and shape as the delete guard below.
+    const managed = mainClinicRow(user);
+    if (managed) return res.status(409).json({ error: { code: 'conflict', message: managed } });
     const { full_name, role, is_active, password } = req.body || {};
 
     // is_active must be a real boolean: `0`/`null`/`""` would slip past the
@@ -384,7 +410,8 @@ export function userRoutes(db) {
   r.get('/:id/delete-check', (req, res) => {
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
     if (!user) return res.status(404).json({ error: { code: 'not_found', message: 'User not found.' } });
-    const guard = staffDeleteGuard(db, user, req.user);
+    const managed = mainClinicRow(user);           // STAFF_SYNC_V1
+    const guard = managed ? { ok: false, reason: managed } : staffDeleteGuard(db, user, req.user);
     res.json({
       name: user.full_name || user.username,
       deletable: guard.ok,
@@ -399,6 +426,11 @@ export function userRoutes(db) {
     if (req.control?.locked) return lockedResponse(res, req.control);
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
     if (!user) return res.status(404).json({ error: { code: 'not_found', message: 'User not found.' } });
+    // STAFF_SYNC_V1 — and deleting is worse than editing: the next
+    // synchronisation would simply create the person again, under a NEW local
+    // id, leaving this building's history pointing at a row nobody works under.
+    const managedDelete = mainClinicRow(user);
+    if (managedDelete) return res.status(409).json({ error: { code: 'conflict', message: managedDelete } });
 
     const guard = staffDeleteGuard(db, user, req.user);
     if (!guard.ok) {
