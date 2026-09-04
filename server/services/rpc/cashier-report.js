@@ -14,6 +14,8 @@
 // следующие сутки, и суточная касса не сошлась бы с бумажной.
 
 import { localDate, inLocalRange } from '../domain/day.js';
+// BUILDING_REPORTS_V1 — здание как измерение; см. шапку domain/buildings.js.
+import { buildingContext, buildingWhere, originExpr, summariseByBuilding } from '../domain/buildings.js';
 
 const METHOD_RU = {
   cash: 'Наличные', card: 'Карта', acquiring: 'Эквайринг',
@@ -27,6 +29,20 @@ const MOVE_RU = {
 
 const num = (n) => Math.round(Number(n) || 0);
 
+// BUILDING_REPORTS_V1 — расход кассы принадлежит смене, а смены между зданиями
+// не передаются. Значит, «Расходы» всегда только свои, и отчёт обязан это
+// сказать: пустой расход у соседнего здания иначе читается как «там ничего не
+// тратили».
+const CASH_MOVE_LOCAL_NOTE = 'Расходы кассы между зданиями не передаются: раздел «Расходы» показывает только это здание.';
+
+// Кассир приехавшего платежа неизвестен: карточки сотрудников между зданиями
+// не передаются (cashier_id приезжает пустым). Подписываем строку зданием —
+// прятать её нельзя, это настоящие деньги.
+function cashierCell(ctx, r) {
+  if (r.cashier && r.cashier !== '—') return r.cashier;
+  return ctx.keyOf(r.origin) === ctx.ownKey ? '—' : ctx.label(r.origin);
+}
+
 export function cashierReport(db, args, _user) {
   const a = args || {};
   const from = String(a.from || '').slice(0, 10);
@@ -38,13 +54,28 @@ export function cashierReport(db, args, _user) {
   const branchIds = Array.isArray(a.branch_ids) ? a.branch_ids.map(Number).filter(Boolean) : [];
   const branchSql = branchIds.length ? ` AND i.branch_id IN (${branchIds.map(() => '?').join(',')})` : '';
 
+  // BUILDING_REPORTS_V1 — ЗДАНИЕ, а не филиал внутри базы. Фильтр по
+  // `i.branch_id` у приехавшего платежа не совпадал ни с чем (branch_id не
+  // путешествует и приезжает пустым), поэтому касса соседнего здания отдавала
+  // ПУСТО. Здание берётся у САМОГО ПЛАТЕЖА: деньги принял тот, у кого они
+  // физически легли в кассу, и метка на платеже — единственное, что об этом
+  // знает.
+  const ctx = buildingContext(db);
+  const gf = buildingWhere(db, ctx, args, 'payments', 'p');
+  const payOrigin = originExpr(db, 'payments', 'p');
+  // Движения кассы (cash_movements) между зданиями не передаются — они всегда
+  // свои. Фильтр это учитывает: «только соседнее здание» вернёт пусто, а не
+  // чужие расходы под чужим именем.
+  const gfm = buildingWhere(db, ctx, args, 'cash_movements', 'm');
+  const moveOrigin = originExpr(db, 'cash_movements', 'm');
+
   // ---- Поступления -------------------------------------------------------
   //
   // Строка = ОДИН платёж. Услуги и врачи склеиваются через « · », как в чеке:
   // один платёж закрывает счёт целиком, и разносить его по услугам значило бы
   // придумывать, какая часть денег за какую услугу — этого в данных нет.
   const income = db.prepare(`
-    SELECT p.id, p.amount, p.method, ${localDate('p.paid_at')} AS day,
+    SELECT p.id, p.amount, p.method, ${payOrigin} AS origin, ${localDate('p.paid_at')} AS day,
            strftime('%H:%M', p.paid_at, 'localtime') AS at,
            COALESCE(i.invoice_number, '') AS invoice_no,
            COALESCE(pat.full_name, '—')   AS patient,
@@ -61,8 +92,8 @@ export function cashierReport(db, args, _user) {
       LEFT JOIN invoices i  ON i.id = p.invoice_id
       LEFT JOIN patients pat ON pat.id = i.patient_id
       LEFT JOIN users cash   ON cash.id = p.cashier_id
-     WHERE ${inLocalRange('p.paid_at')}${branchSql}
-     ORDER BY p.paid_at DESC`).all(from, to, ...branchIds);
+     WHERE ${inLocalRange('p.paid_at')}${branchSql}${gf.clause}
+     ORDER BY origin, p.paid_at DESC`).all(from, to, ...branchIds, ...gf.params);
 
   // ---- Расходы -----------------------------------------------------------
   //
@@ -70,31 +101,31 @@ export function cashierReport(db, args, _user) {
   // принадлежит смене, а смена — филиалу.
   const moveBranchSql = branchIds.length ? ` AND sh.branch_id IN (${branchIds.map(() => '?').join(',')})` : '';
   const expense = db.prepare(`
-    SELECT m.id, m.amount, m.article, m.note, ${localDate('m.created_at')} AS day,
+    SELECT m.id, m.amount, m.article, m.note, ${moveOrigin} AS origin, ${localDate('m.created_at')} AS day,
            strftime('%H:%M', m.created_at, 'localtime') AS at,
            COALESCE(u.full_name, '—') AS author
       FROM cash_movements m
       LEFT JOIN cash_shifts sh ON sh.id = m.shift_id
       LEFT JOIN users u        ON u.id = m.created_by
-     WHERE m.kind = 'out' AND ${inLocalRange('m.created_at')}${moveBranchSql}
-     ORDER BY m.created_at DESC`).all(from, to, ...branchIds);
+     WHERE m.kind = 'out' AND ${inLocalRange('m.created_at')}${moveBranchSql}${gfm.clause}
+     ORDER BY origin, m.created_at DESC`).all(from, to, ...branchIds, ...gfm.params);
 
   const incomeTotal = income.reduce((n, r) => n + num(r.amount), 0);
   const expenseTotal = expense.reduce((n, r) => n + num(r.amount), 0);
 
-  const incomeColumns = ['Дата', 'Услуга', 'Врач', 'Пациент', 'Способ оплаты', 'Сумма', 'Счёт', 'Кассир'];
+  const incomeColumns = ['Здание', 'Дата', 'Услуга', 'Врач', 'Пациент', 'Способ оплаты', 'Сумма', 'Счёт', 'Кассир'];
   const incomeRows = income.map((r) => [
-    r.day + ' ' + (r.at || ''), r.services || '—', r.doctors || '—', r.patient,
-    METHOD_RU[r.method] || r.method || '—', num(r.amount), r.invoice_no || '—', r.cashier,
+    ctx.label(r.origin), r.day + ' ' + (r.at || ''), r.services || '—', r.doctors || '—', r.patient,
+    METHOD_RU[r.method] || r.method || '—', num(r.amount), r.invoice_no || '—', cashierCell(ctx, r),
   ]);
 
   // Колонки «Комментарий» здесь нет намеренно: у движения кассы всего два
   // текстовых поля — article (статья) и note (на что именно). Они уже заняты
   // «Типом расхода» и «На что»; третья колонка могла бы только повторить одно
   // из них, а пустая графа в отчёте читается как потерянные данные.
-  const expenseColumns = ['Дата', 'На что', 'Тип расхода', 'Сумма', 'Провёл'];
+  const expenseColumns = ['Здание', 'Дата', 'На что', 'Тип расхода', 'Сумма', 'Провёл'];
   const expenseRows = expense.map((r) => [
-    r.day + ' ' + (r.at || ''), r.note || r.article || '—',
+    ctx.label(r.origin), r.day + ' ' + (r.at || ''), r.note || r.article || '—',
     MOVE_RU[r.article] || r.article || '—', num(r.amount), r.author,
   ]);
 
@@ -105,18 +136,30 @@ export function cashierReport(db, args, _user) {
   // и приход, и расход — иначе владельцу пришлось бы качать два файла и
   // сводить их руками. Расход пишется со знаком минус: в одном столбце «Сумма»
   // приход и расход обязаны складываться в итог, а не спорить друг с другом.
-  const columns = ['Тип', 'Дата', 'Назначение', 'Врач / тип', 'Пациент', 'Способ оплаты', 'Сумма', 'Счёт', 'Провёл'];
+  const columns = ['Здание', 'Тип', 'Дата', 'Назначение', 'Врач / тип', 'Пациент', 'Способ оплаты', 'Сумма', 'Счёт', 'Провёл'];
   const rows = [
-    ...income.map((r) => ['Поступление', r.day + ' ' + (r.at || ''), r.services || '—', r.doctors || '—',
-      r.patient, METHOD_RU[r.method] || r.method || '—', num(r.amount), r.invoice_no || '—', r.cashier]),
-    ...expense.map((r) => ['Расход', r.day + ' ' + (r.at || ''), r.note || r.article || '—',
+    ...income.map((r) => [ctx.label(r.origin), 'Поступление', r.day + ' ' + (r.at || ''), r.services || '—',
+      r.doctors || '—', r.patient, METHOD_RU[r.method] || r.method || '—', num(r.amount),
+      r.invoice_no || '—', cashierCell(ctx, r)]),
+    ...expense.map((r) => [ctx.label(r.origin), 'Расход', r.day + ' ' + (r.at || ''), r.note || r.article || '—',
       MOVE_RU[r.article] || r.article || '—', '', '', -num(r.amount), '', r.author]),
   ];
+
+  // Разрез по зданиям: приход, расход и итог у каждого — и итог по клинике
+  // сверху. Одно число на два дома не сходится ни с одной бумажной кассой.
+  const by_building = summariseByBuilding(
+    ctx,
+    [...income.map((r) => ({ origin: r.origin, inc: num(r.amount), exp: 0 })),
+     ...expense.map((r) => ({ origin: r.origin, inc: 0, exp: num(r.amount) }))],
+    { income: (r) => r.inc, expense: (r) => r.exp },
+  ).map((b) => ({ ...b, net: b.income - b.expense }));
 
   return {
     kpi: { income: incomeTotal, expense: expenseTotal, net: incomeTotal - expenseTotal },
     income: { columns: incomeColumns, rows: incomeRows, total: incomeTotal },
     expense: { columns: expenseColumns, rows: expenseRows, total: expenseTotal },
+    by_building,
+    notes: [CASH_MOVE_LOCAL_NOTE],
     columns, rows,
   };
 }

@@ -101,32 +101,50 @@ const KPI_ACCENT = {
     info:    { fg: 'var(--info-700)',    bg: 'var(--info-50)' },
 };
 
+// BUILDING_REPORTS_V1 — вторая строка плитки: из чего сложено число.
+//
+// Клиника из нескольких ЗДАНИЙ (отдельных установок, соединённых branch-sync'ом)
+// видела на плитках ОДНО число на два дома и читала его как число своего дома.
+// Разрез приходит вместе со сводкой (dashboard_summary.buildings) и печатается
+// под значением; клиника в одном здании его не видит вовсе — строка «Main
+// Branch: 100%» не сообщает ничего.
+function splitLine(d, key, fmt) {
+    const list = (d && d.buildings) || [];
+    if (list.length < 2) return null;
+    return list.map(b => b.label + ': ' + fmt(b[key])).join(' · ');
+}
+
 function paintTiles(d) {
     if (!refs.grid) return;
     clear(refs.grid);
 
     const lowStock = Number(d.low_stock_count) || 0;
+    const n = (v) => String(Number(v) || 0);
 
     refs.grid.appendChild(kpi({
         icon: 'Patients', accent: 'primary',
         label: 'Patients today',
         value: String(Number(d.patients_today) || 0),
+        split: splitLine(d, 'patients_today', n),
     }));
     refs.grid.appendChild(kpi({
         icon: 'Calendar', accent: 'info',
         label: 'Visits today',
         value: String(Number(d.visits_today) || 0),
+        split: splitLine(d, 'visits_today', n),
     }));
     refs.grid.appendChild(kpi({
         icon: 'Coins', accent: 'ok',
         label: 'Collected today',
         value: fmtPrice(d.collected_today),
+        split: splitLine(d, 'collected_today', fmtPrice),
     }));
     refs.grid.appendChild(kpi({
         icon: 'Receipt', accent: 'crit',
         label: 'Outstanding',
         value: fmtPrice(d.outstanding_amount),
         meta: `(${Number(d.outstanding_count) || 0} invoices)`,
+        split: splitLine(d, 'outstanding_amount', fmtPrice),
     }));
     refs.grid.appendChild(kpi({
         icon: 'Pill', accent: 'warn',
@@ -139,11 +157,15 @@ function paintTiles(d) {
         icon: 'Flask', accent: 'info',
         label: 'Pending lab results',
         value: String(Number(d.lab_pending_count) || 0),
+        // Граница здесь — ТА ЖЕ, что у лабораторной очереди под ссылкой
+        // (doc_settings.lab_scope); при «вся клиника» разрез показывает, чьи
+        // это пробирки.
+        split: splitLine(d, 'lab_pending_count', n),
         onClick: () => refs.onNavigate && refs.onNavigate('labs'),
     }));
 }
 
-function kpi({ icon, accent, label, value, meta, valueWarn, onClick }) {
+function kpi({ icon, accent, label, value, meta, split, valueWarn, onClick }) {
     const a = KPI_ACCENT[accent] || KPI_ACCENT.primary;
     return h('div', {
         class: 'dash-kpi',
@@ -159,5 +181,6 @@ function kpi({ icon, accent, label, value, meta, valueWarn, onClick }) {
             style: valueWarn ? { color: 'var(--warn-700)' } : null,
         }, value),
         meta ? h('div', { class: 'dash-kpi-meta' }, meta) : null,
+        split ? h('div', { class: 'dash-kpi-meta', title: split }, split) : null,
     );
 }

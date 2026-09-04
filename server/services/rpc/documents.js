@@ -21,6 +21,17 @@
 
 import { canViewSection } from '../roles.js';
 import { inLocalRange, localDate } from '../domain/day.js';
+// LAB_ONE_CLINIC_V1 / BUILDING_REPORTS_V1 — граница «чьи это документы».
+//
+// У ленты не было фильтра ВООБЩЕ: она показывала документы всех зданий по
+// случайности, а не по решению, и настройку doc_settings.lab_scope (миграция
+// 085) не знала. Лента — это в первую очередь результаты анализов, то есть та
+// же лабораторная поверхность, что очередь и «Готово»; клиника, запершая
+// лабораторию в своём здании, обязана получить здесь то же самое, иначе
+// граница, закрытая в одном списке, открыта в соседнем.
+import {
+  buildingContext, originExpr, summariseByBuilding, labScopeOf, labScopeWhere,
+} from '../domain/buildings.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -71,6 +82,10 @@ export function documentsFeed(db, args, user) {
   const limit = Math.min(PAGE_MAX, Math.max(1, Number(a.limit) || PAGE_DEFAULT));
   const offset = Math.max(0, Number(a.offset) || 0);
 
+  const ctx = buildingContext(db);
+  const labScope = labScopeOf(db);
+  const scopeSql = labScopeWhere(db, labScope, 'visit_services', 'vs');
+
   const where = [HAS_DOC];
   const params = [];
   if (from && to) { where.push(inLocalRange('v.visit_date')); params.push(from, to); }
@@ -83,7 +98,7 @@ export function documentsFeed(db, args, user) {
       JOIN visits   v ON v.id = vs.visit_id
       LEFT JOIN patients p ON p.id = v.patient_id
       LEFT JOIN services s ON s.id = vs.service_id
-     WHERE ${where.join(' AND ')}${search.sql}`;
+     WHERE ${where.join(' AND ')}${scopeSql}${search.sql}`;
   const baseParams = params.concat(search.params);
 
   // Счётчики по типам считаются БЕЗ фильтра по типу — иначе, выбрав
@@ -113,7 +128,11 @@ export function documentsFeed(db, args, user) {
            COALESCE(s.type,'other') AS service_type,
            (SELECT COUNT(*) FROM lab_results lr WHERE lr.visit_service_id = vs.id)     AS result_count,
            (SELECT vd.doc_type FROM visit_documents vd WHERE vd.visit_service_id = vs.id
-             ORDER BY vd.created_at DESC LIMIT 1)                                      AS doc_type
+             ORDER BY vd.created_at DESC LIMIT 1)                                      AS doc_type,
+           -- BUILDING_REPORTS_V1 — из какого здания документ. Строка приходит
+           -- в список рядом с чужими, и без подписи регистратура не знает, к
+           -- кому идти за бумагой.
+           ${originExpr(db, 'visit_services', 'vs')}                                   AS origin
       ${baseSql}${typeWhere}
      ORDER BY ${localDate('v.visit_date')} DESC, vs.id DESC
      LIMIT ? OFFSET ?`).all(...listParams, limit, offset);
@@ -150,6 +169,7 @@ export function documentsFeed(db, args, user) {
     }
     for (const row of rows) row.results = byVs.get(row.visit_service_id) || [];
   }
+  for (const row of rows) row.building = ctx.label(row.origin);
 
   return {
     rows,
@@ -159,5 +179,13 @@ export function documentsFeed(db, args, user) {
     has_more: offset + rows.length < total,
     next_offset: offset + rows.length,
     by_type: byType,
+    // Разрез по зданиям считается по ТОЙ ЖЕ выборке (без постраничного среза и
+    // без фильтра по типу — как и счётчики выше).
+    by_building: summariseByBuilding(
+      ctx,
+      db.prepare(`SELECT ${originExpr(db, 'visit_services', 'vs')} AS origin ${baseSql}`).all(...baseParams),
+      {},
+    ),
+    lab_scope: labScope,
   };
 }

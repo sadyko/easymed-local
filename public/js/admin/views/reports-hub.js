@@ -6,11 +6,28 @@
 // live preview (first 300 rows), «Скачать Excel» exports everything via the
 // vendored SheetJS (lazy-loaded on demand, never in the boot graph).
 //
-// Data comes from two server RPCs (server/services/rpc/reports.js):
-//   run_report({kind, from, to, branch_ids})  -> { columns, rows } (aoa)
-//   owner_report({from, to, branch_ids})      -> { kpis, monthly, byGroup, byPayer }
+// Data comes from server RPCs (server/services/rpc/reports.js):
+//   run_report({kind, from, to, branch_ids, buildings})  -> { columns, rows } (aoa)
+//   owner_report({from, to, branch_ids, buildings})      -> { kpis, monthly, byGroup, byPayer }
+//   report_buildings()                                   -> { buildings, own_key }
 // branch_ids semantics: only a PROPER subset filters; all-selected (or none)
 // sends [] so invoices with branch_id NULL stay in (matches production).
+//
+// BUILDING_REPORTS_V1 — ДВА РАЗНЫХ «филиала», и выборка теперь различает их.
+//
+//   `branch_ids` — филиал ВНУТРИ этой базы (branches.id на счёте). Модель одной
+//   установки, которая ведёт два адреса в одной программе;
+//   `buildings`  — ЗДАНИЕ: отдельная установка со своей базой, соединённая
+//   branch-sync'ом. Признак строки — sync_origin (миграция 083).
+//
+// Выборка филиалов грузилась с `.eq('active', 1)`, а соседнее здание заводится
+// приёмом справочника ИМЕННО как active = 0 — то есть этот экран не мог даже
+// НАЗВАТЬ второе здание, не то что посчитать его. Список зданий приходит от
+// report_buildings (реестр /api/db не отдаёт браузеру branches.letter).
+//
+// Показывается ОДНА выборка, не две: зданий больше одного — выбираем здания,
+// одно — прежняя выборка филиалов. Две шкалы с почти одинаковым названием
+// рядом читались бы как одна сломанная.
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, PageHead } from '../ui.js';
@@ -196,6 +213,7 @@ async function openReportBuilder(rep) {
         preset: 'month',
         from: '', to: '',
         branches: [], branchIds: new Set(),
+        buildings: [], buildingKeys: new Set(),
         result: null,        // {columns, rows} — or the owner charts object
         generating: false,
     };
@@ -287,6 +305,13 @@ async function openReportBuilder(rep) {
     paintPresets();
     syncDates();
 
+    const label = (text) => h('div', {
+        style: {
+            fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase',
+            letterSpacing: '0.05em', color: 'var(--ink-500)',
+        },
+    }, text);
+
     // Branch checklist (async-loaded)
     const branchListEl = h('div', {
         style: {
@@ -298,39 +323,66 @@ async function openReportBuilder(rep) {
     }, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Загрузка филиалов…'));
     const masterCb  = h('input', { type: 'checkbox' });
     const summaryEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } });
+    // Заголовок выборки меняется вместе с ней: «Здания» у клиники из нескольких
+    // зданий, «Филиалы» у клиники в одном.
+    const pickerLabel = label('Филиалы');
+
+    // Клиника из нескольких ЗДАНИЙ выбирает здания; иначе — прежняя выборка
+    // филиалов внутри базы. Ровно одна из двух, см. шапку файла.
+    const byBuildings = () => st.buildings.length > 1;
+    const pickCount = () => (byBuildings() ? st.buildingKeys.size : st.branchIds.size);
+    const totalCount = () => (byBuildings() ? st.buildings.length : st.branches.length);
 
     function refreshBranchUI() {
-        const total = st.branches.length;
-        const picked = st.branchIds.size;
+        const total = totalCount();
+        const picked = pickCount();
         if (picked === 0) { masterCb.checked = false; masterCb.indeterminate = false; }
         else if (picked === total) { masterCb.checked = true; masterCb.indeterminate = false; }
         else { masterCb.checked = false; masterCb.indeterminate = true; }
         summaryEl.textContent = total === 0 ? ''
-            : picked === 0 ? tr('Филиалы не выбраны')
-            : picked === total ? trf('Все филиалы ({total})', { total })
+            : picked === 0 ? (byBuildings() ? tr('Здания не выбраны') : tr('Филиалы не выбраны'))
+            : picked === total ? (byBuildings() ? trf('Все здания ({total})', { total }) : trf('Все филиалы ({total})', { total }))
             : trf('{n} из {max}', { n: picked, max: total });
     }
     masterCb.addEventListener('change', () => {
-        if (masterCb.checked) st.branches.forEach(b => st.branchIds.add(b.id));
-        else                  st.branchIds.clear();
-        branchListEl.querySelectorAll('input[data-branch-id]').forEach(cb => {
-            cb.checked = st.branchIds.has(Number(cb.dataset.branchId));
-        });
+        if (byBuildings()) {
+            if (masterCb.checked) st.buildings.forEach(b => st.buildingKeys.add(b.key));
+            else                  st.buildingKeys.clear();
+            branchListEl.querySelectorAll('input[data-building-key]').forEach(cb => {
+                cb.checked = st.buildingKeys.has(cb.dataset.buildingKey);
+            });
+        } else {
+            if (masterCb.checked) st.branches.forEach(b => st.branchIds.add(b.id));
+            else                  st.branchIds.clear();
+            branchListEl.querySelectorAll('input[data-branch-id]').forEach(cb => {
+                cb.checked = st.branchIds.has(Number(cb.dataset.branchId));
+            });
+        }
         refreshBranchUI();
     });
 
-    (async () => {
-        const { data } = await supabase.from('branches')
-            .select('id, name').eq('active', 1).order('name');
-        const list = data || [];
-        st.branches = list;
-        st.branchIds = new Set(list.map(b => b.id));
+    function paintPicker() {
         clear(branchListEl);
-        if (!list.length) {
+        pickerLabel.textContent = byBuildings() ? tr('Здания') : tr('Филиалы');
+        if (byBuildings()) {
+            for (const b of st.buildings) {
+                const cb = h('input', {
+                    type: 'checkbox', checked: true, dataset: { buildingKey: b.key },
+                    onchange: (e) => {
+                        if (e.target.checked) st.buildingKeys.add(b.key);
+                        else                  st.buildingKeys.delete(b.key);
+                        refreshBranchUI();
+                    },
+                });
+                branchListEl.appendChild(h('label', {
+                    style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', color: 'var(--ink-800)', cursor: 'pointer' },
+                }, cb, h('span', null, b.label)));
+            }
+        } else if (!st.branches.length) {
             branchListEl.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } },
                 'Филиалы не найдены — отчёт будет сформирован по всей клинике.'));
         } else {
-            for (const b of list) {
+            for (const b of st.branches) {
                 const cb = h('input', {
                     type: 'checkbox', checked: true, dataset: { branchId: b.id },
                     onchange: (e) => {
@@ -345,6 +397,21 @@ async function openReportBuilder(rep) {
             }
         }
         refreshBranchUI();
+    }
+
+    (async () => {
+        // Список зданий и список филиалов грузятся ВМЕСТЕ: какой из них
+        // показать, решается только когда известны оба.
+        const [bres, brres] = await Promise.all([
+            supabase.rpc('report_buildings', {}),
+            supabase.from('branches').select('id, name').eq('active', 1).order('name'),
+        ]);
+        st.buildings = (bres && bres.data && bres.data.buildings) || [];
+        st.buildingKeys = new Set(st.buildings.map(b => b.key));
+        const list = (brres && brres.data) || [];
+        st.branches = list;
+        st.branchIds = new Set(list.map(b => b.id));
+        paintPicker();
     })();
 
     // ---- generate + download ----
@@ -388,6 +455,12 @@ async function openReportBuilder(rep) {
             const branch_ids = (st.branchIds.size && st.branchIds.size < st.branches.length)
                 ? [...st.branchIds] : [];
             const args = { from: st.from, to: st.to, branch_ids };
+            // BUILDING_REPORTS_V1 — та же семантика: фильтрует только СОБСТВЕННОЕ
+            // подмножество, «выбраны все» = фильтра нет.
+            if (byBuildings()) {
+                args.buildings = (st.buildingKeys.size && st.buildingKeys.size < st.buildings.length)
+                    ? [...st.buildingKeys] : [];
+            }
             // CALLCENTER_REPORT_V1 — режим «графики» больше не привязан к отчёту
             // владельца: определение отчёта само называет свой RPC и рисовалку.
             const { data, error } = rep.mode === 'charts'
@@ -410,13 +483,6 @@ async function openReportBuilder(rep) {
         }
     }
 
-    const label = (text) => h('div', {
-        style: {
-            fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase',
-            letterSpacing: '0.05em', color: 'var(--ink-500)',
-        },
-    }, text);
-
     overlay.appendChild(h('div', {
         style: {
             padding: '10px 22px', background: 'var(--white, #fff)',
@@ -429,7 +495,7 @@ async function openReportBuilder(rep) {
         dateWrap,
         // CALLCENTER_REPORT_V1 — у отчётов с noBranch выбор филиала СКРЫТ:
         // у crm_requests нет branch_id, и селектор молча ничего бы не делал.
-        rep.noBranch ? null : label('Филиалы'),
+        rep.noBranch ? null : pickerLabel,
         rep.noBranch ? null : h('label', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', color: 'var(--ink-700)', cursor: 'pointer', whiteSpace: 'nowrap' } },
             masterCb, h('span', null, 'Выбрать все')),
         rep.noBranch ? null : branchListEl,
@@ -459,9 +525,50 @@ async function openReportBuilder(rep) {
             style: { padding: '60px 20px', textAlign: 'center', fontSize: '13.5px' },
         }, 'Формируем отчёт…'));
     }
+    // BUILDING_REPORTS_V1 — разрез по зданиям и примечания над таблицей.
+    //
+    // «Итого» под списком отвечает на вопрос «сколько всего по клинике»; эта
+    // полоса — на вопрос «чей это вклад». Без неё одно число на два дома
+    // выглядит как число одного дома, и именно так его и читали.
+    function paintBuildingSummary(target, data) {
+        const list = (data && data.by_building) || [];
+        const notes = (data && data.notes) || [];
+        // Клиника в одном здании ничего этого не видит: строка «Main Branch:
+        // 100%» не сообщает ничего.
+        if (list.length > 1) {
+            target.appendChild(h('div', {
+                style: { display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '10px' },
+            }, ...list.map(b => h('span', {
+                style: {
+                    display: 'inline-flex', alignItems: 'center', gap: '8px',
+                    padding: '5px 11px', borderRadius: '999px', fontSize: '12.5px',
+                    background: b.own ? 'var(--primary-50)' : 'var(--ink-50, #f1f4f5)',
+                    color: b.own ? 'var(--primary-700)' : 'var(--ink-700)',
+                    border: '1px solid ' + (b.own ? 'var(--primary-200, #cfe6df)' : 'var(--ink-100)'),
+                },
+            },
+                h('span', { style: { fontWeight: 700 } }, b.label),
+                h('span', { class: 'num', style: { fontVariantNumeric: 'tabular-nums' } },
+                    Number(b.total != null ? b.total : b.rows || 0).toLocaleString('ru-RU')),
+            ))));
+        }
+        for (const n of notes) {
+            target.appendChild(h('div', {
+                class: 'muted',
+                style: { fontSize: '12.5px', marginBottom: '8px', lineHeight: 1.45 },
+            }, n));
+        }
+    }
+
     function paintPreview() {
         clear(previewEl);
-        if (rep.mode === 'charts') { (rep.render || renderOwnerCharts)(previewEl, st.result, st); return; }
+        paintBuildingSummary(previewEl, st.result);
+        if (rep.mode === 'charts') {
+            const body = h('div', null);
+            previewEl.appendChild(body);
+            (rep.render || renderOwnerCharts)(body, st.result, st);
+            return;
+        }
         const columns = (st.result && st.result.columns) || [];
         const rows = (st.result && st.result.rows) || [];
         if (rows.length === 0) {

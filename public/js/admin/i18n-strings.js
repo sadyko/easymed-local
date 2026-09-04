@@ -5970,4 +5970,11 @@ export const STRINGS = {
   "Не удалось распаковать обновление — проверьте место на диске. Мы попробуем снова.": {"en":"The update could not be unpacked - check disk space. We will try again.","ru":"Не удалось распаковать обновление — проверьте место на диске. Мы попробуем снова.","uz":"Yangilanishni ochib bo'lmadi - diskdagi joyni tekshiring. Yana urinib ko'ramiz."},
   "Не удалось установить обновление. Мы попробуем снова.": {"en":"The update could not be installed. We will try again.","ru":"Не удалось установить обновление. Мы попробуем снова.","uz":"Yangilanishni o'rnatib bo'lmadi. Yana urinib ko'ramiz."},
   "Эта установка не может обновляться: она разложена неправильно. Обратитесь в Easy-Med — систему нужно переустановить официальным пакетом, данные при этом сохраняются.": {"en":"This installation cannot update itself: its folders are laid out wrongly. Contact Easy-Med - it needs reinstalling with the official package; your data is kept.","ru":"Эта установка не может обновляться: она разложена неправильно. Обратитесь в Easy-Med — систему нужно переустановить официальным пакетом, данные при этом сохраняются.","uz":"Bu o'rnatma yangilana olmaydi: papkalari noto'g'ri joylashgan. Easy-Med ga murojaat qiling - tizimni rasmiy paket bilan qayta o'rnatish kerak, ma'lumotlar saqlanadi."},
+  // BUILDING_REPORTS_V1 — выборка ЗДАНИЙ в «Отчётах». Здание — это отдельная
+  // установка со своей базой (branch-sync), а не филиал внутри одной базы;
+  // прежние строки про филиалы остаются на месте и означают другое.
+  "Здание": {"en":"Building","ru":"Здание","uz":"Bino"},
+  "Здания": {"en":"Buildings","ru":"Здания","uz":"Binolar"},
+  "Все здания ({total})": {"en":"All buildings ({total})","ru":"Все здания ({total})","uz":"Barcha binolar ({total})"},
+  "Здания не выбраны": {"en":"No buildings chosen","ru":"Здания не выбраны","uz":"Binolar tanlanmagan"},
 };

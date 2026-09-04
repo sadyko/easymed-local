@@ -5,7 +5,7 @@ import { createInvoiceForVisit, recordPayment, recordPaymentSplit, markInvoiceDe
 import { receiveStock, dispenseItem, voidDispense, dispenseAdmissionItem, voidDispensedAdmissionItem } from './inventory.js';
 import { dashboardSummary } from './dashboard.js';
 import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel } from './procurement.js';
-import { reportsOverview, runReport, ownerReport } from './reports.js';
+import { reportsOverview, runReport, ownerReport, reportBuildings } from './reports.js';   // BUILDING_REPORTS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest } from './inpatient.js';
 import { ensureVisit } from './visits.js';
@@ -71,6 +71,11 @@ export const RPC = {
   reports_overview:         (db, args, user) => reportsOverview(db, args, user),
   run_report:               (db, args, user) => runReport(db, args, user),
   owner_report:             (db, args, user) => ownerReport(db, args, user),   // REPORTS_HUB_RU_V1 — «Отчёт владельца» charts
+  // BUILDING_REPORTS_V1 — перечень ЗДАНИЙ клиники для выборки в «Отчётах».
+  // Через /api/db его собрать нельзя: реестр не отдаёт браузеру branches.letter,
+  // а прежняя выборка филиалов грузилась с active = 1 — соседнее здание же
+  // заводится как active = 0 и в список не попадало вовсе.
+  report_buildings:         (db, args, user) => reportBuildings(db, args, user),
   open_cash_shift:          (db, args, user) => openCashShift(db, args, user),
   close_cash_shift:         (db, args, user) => closeCashShift(db, args, user),
   cash_shift_summary:       (db, args, user) => cashShiftSummary(db, args, user),

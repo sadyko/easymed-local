@@ -44,6 +44,16 @@ import { inLocalRange, today } from '../domain/day.js';
 // Pure browser-shared module (no DOM) — same cross-import precedent as
 // reports.js taking formatMethods from public/js/shared/payment-methods.js.
 import { LAB_NAME_RE } from '../../../public/js/admin/views/lab-service.js';
+// LAB_ONE_CLINIC_V1 / BUILDING_REPORTS_V1 — граница «чьи это заказы».
+//
+// У этого экрана фильтра не было ВООБЩЕ: он считал заказы всей клиники по
+// случайности, а не по решению, и настройку doc_settings.lab_scope (миграция
+// 085) не знал. Клиника с двумя настоящими лабораториями, переключившая очередь
+// на «только своё здание», видела здесь по-прежнему обе — статистика говорила
+// одно, очередь под ней другое. Правило берётся из общего с экраном модуля.
+import {
+  buildingContext, originExpr, summariseByBuilding, labScopeOf, labScopeWhere,
+} from '../domain/buildings.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -83,6 +93,13 @@ export function labUsageStats(db, args, user) {
   const range = from == null ? '1=1' : inLocalRange('vs.created_at');
   const rangeParams = from == null ? [] : [from, to];
 
+  // Граница лаборатории — та же, что у очереди: настройка клиники, а не
+  // константа и не «как получилось».
+  const ctx = buildingContext(db);
+  const labScope = labScopeOf(db);
+  const scopeSql = labScopeWhere(db, labScope, 'visit_services', 'vs');
+  const vsOrigin = originExpr(db, 'visit_services', 'vs');
+
   // The catalogue-TYPE branch of the lab rule: ids of service_types whose name
   // reads like a laboratory. Computed in JS (Cyrillic case-folding), fed to
   // SQL as a validated integer list.
@@ -108,7 +125,7 @@ export function labUsageStats(db, args, user) {
       JOIN lab_panels lp ON lp.id = pmap.panel_id
       JOIN visit_services vs ON vs.service_id = pmap.service_id
       LEFT JOIN services s ON s.id = pmap.service_id
-     WHERE ${range}
+     WHERE ${range}${scopeSql}
      GROUP BY lp.id
      ORDER BY ordered DESC, lp.name
   `).all(...rangeParams);
@@ -122,7 +139,7 @@ export function labUsageStats(db, args, user) {
            SUM(CASE WHEN vs.status = 'completed' THEN 1 ELSE 0 END) AS completed
       FROM visit_services vs
       JOIN services s ON s.id = vs.service_id
-     WHERE ${range}
+     WHERE ${range}${scopeSql}
        AND s.id NOT IN (SELECT service_id FROM pmap)
        AND (s.type = 'lab' OR s.is_lab = 1
             OR s.department_id IN (SELECT id FROM departments WHERE kind = 'laboratory')
@@ -131,7 +148,29 @@ export function labUsageStats(db, args, user) {
      ORDER BY ordered DESC, s.name
   `).all(...rangeParams, ...labTypeIds);
 
+  // BUILDING_REPORTS_V1 — сколько заказов дало каждое ЗДАНИЕ. Считается по тем
+  // же строкам и той же границе, что блоки выше: иначе разрез спорил бы с
+  // таблицами над ним.
+  const perBuilding = db.prepare(`
+    WITH ${PMAP_CTE}
+    SELECT ${vsOrigin} AS origin,
+           COUNT(vs.id) AS ordered,
+           SUM(CASE WHEN vs.status = 'completed' THEN 1 ELSE 0 END) AS completed
+      FROM visit_services vs
+      JOIN services s ON s.id = vs.service_id
+     WHERE ${range}${scopeSql}
+       AND (s.id IN (SELECT service_id FROM pmap)
+            OR s.type = 'lab' OR s.is_lab = 1
+            OR s.department_id IN (SELECT id FROM departments WHERE kind = 'laboratory')
+            ${typeClause})
+     GROUP BY origin
+  `).all(...rangeParams, ...labTypeIds);
+  const buildings = summariseByBuilding(ctx, perBuilding, {
+    ordered:   (r) => r.ordered || 0,
+    completed: (r) => r.completed || 0,
+  }).map((b) => { const { rows: _rows, ...rest } = b; return rest; });
+
   // Zero-use rows never appear: both blocks are built FROM the orders, so a
   // panel or service nobody ordered in the period has no row to group.
-  return { period, from, to, panels, services };
+  return { period, from, to, panels, services, buildings, lab_scope: labScope };
 }

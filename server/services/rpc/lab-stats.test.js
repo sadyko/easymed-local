@@ -264,3 +264,48 @@ test('по HTTP: четыре лабораторные роли читают с�
     assert.equal(res.status, 403, role + ' has no labs section and must stay refused');
   }
 });
+
+// ---------------------------------------------------------------------------
+// LAB_ONE_CLINIC_V1 / BUILDING_REPORTS_V1 — статистика подчиняется той же
+// границе, что очередь. Фильтра здесь не было вообще: экран считал всю клинику
+// по случайности и не знал настройки doc_settings.lab_scope, поэтому клиника,
+// запершая лабораторию в своём здании, видела в статистике обе.
+// ---------------------------------------------------------------------------
+
+// Приехавший заказ: так выглядит принятая строка — метка sync_origin стоит
+// прямо на visit_services (миграция 083).
+function foreignVs(db, visit, serviceId, daysAgo) {
+  return db.prepare(
+    "INSERT INTO visit_services (visit_id, service_id, status, created_at, sync_origin) VALUES (?,?,'completed',?, 'B')"
+  ).run(visit, serviceId, utcAtLocalNoon(db, daysAgo)).lastInsertRowid;
+}
+
+test('статистика: по умолчанию считает всю клинику, с разрезом по зданиям', () => {
+  const { db, visit, sPanel, addVs } = seed();
+  db.prepare("INSERT INTO branches (name, letter, active) VALUES ('Чиланзар','B',0)").run();
+  addVs(sPanel, 'completed', 1);
+  foreignVs(db, visit, sPanel, 1);
+
+  const r = labUsageStats(db, { period: '30d' }, admin);
+  assert.equal(r.lab_scope, 'clinic');
+  assert.equal(panelRow(r, 'Общий анализ крови').ordered, 2, 'очередь клиниковая — считаются оба заказа');
+  const b = r.buildings.find((x) => x.key === 'B');
+  assert.ok(b, 'соседнее здание названо');
+  assert.equal(b.label, 'Чиланзар', 'имя берётся из перечня, включая строку active = 0');
+  assert.equal(b.ordered, 1);
+  assert.equal(r.buildings.find((x) => x.own).ordered, 1);
+  db.close();
+});
+
+test('статистика: при lab_scope=building считает только своё здание — как очередь', () => {
+  const { db, visit, sPanel, addVs } = seed();
+  addVs(sPanel, 'completed', 1);
+  foreignVs(db, visit, sPanel, 1);
+
+  db.prepare("UPDATE doc_settings SET lab_scope = 'building' WHERE id = 1").run();
+  const r = labUsageStats(db, { period: '30d' }, admin);
+  assert.equal(r.lab_scope, 'building');
+  assert.equal(panelRow(r, 'Общий анализ крови').ordered, 1, 'приехавший заказ скрыт — как и в очереди');
+  assert.ok(!r.buildings.some((x) => x.key === 'B' && x.ordered > 0), 'чужого здания в разрезе нет');
+  db.close();
+});

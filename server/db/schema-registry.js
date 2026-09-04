@@ -182,9 +182,10 @@ export const REGISTRY = {
   },
   invoices: {
     // payer_id: COVERAGE_SPLIT_V1 (mig 054) — кому выставлен счёт (null = пациенту)
-    read:  { roles: ALL_STAFF, columns: ['id','invoice_number','visit_id','patient_id','branch_id','subtotal','discount_amount','total_amount','paid_amount','status','created_by','created_at','paid_at','admission_id','payer_id'] },   // admission_id: BED_CONSOLE_V1 (mig 040)
+    read:  { roles: ALL_STAFF, columns: ['id','invoice_number','visit_id','patient_id','branch_id','subtotal','discount_amount','total_amount','paid_amount','status','created_by','created_at','paid_at','admission_id','payer_id',
+             'sync_origin'] },   // admission_id: BED_CONSOLE_V1 (mig 040); sync_origin: BUILDING_REPORTS_V1 — из какого ЗДАНИЯ счёт (мигр. 087); ставится только приёмом порции, поэтому не writable
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },  // invoices are created/updated ONLY via billing RPCs (server-computed money)
-    filters: ['id','visit_id','patient_id','branch_id','status','admission_id','payer_id'],
+    filters: ['id','visit_id','patient_id','branch_id','status','admission_id','payer_id','sync_origin'],
     embed:   { patients: { table:'patients', fk:'patient_id', columns:['id','mrn','full_name'] },
                payers:   { table:'payers',   fk:'payer_id',   columns:['id','name','kind'] } },
   },

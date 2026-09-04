@@ -144,3 +144,63 @@ test('строка поступления несёт услугу, врача, �
   assert.equal(col('Сумма'), 100000);
   db.close();
 });
+
+// ---------------------------------------------------------------------------
+// BUILDING_REPORTS_V1 — касса считает ВСЕ ЗДАНИЯ клиники.
+//
+// Раньше отчёт фильтровался по `i.branch_id`, а у приехавшего платежа branch_id
+// пустой — «Отчёт кассира» по соседнему зданию отдавал ПУСТО. Теперь здание
+// берётся с метки `sync_origin` самого платежа (так выглядит принятая строка).
+// moneyTravels() доводит тестовую базу до состояния после миграции переезда
+// денег и ничего не делает, когда колонка уже есть.
+// ---------------------------------------------------------------------------
+
+function moneyTravels(db) {
+  for (const t of ['invoices', 'invoice_items', 'payments']) {
+    const has = db.prepare(`PRAGMA table_info(${t})`).all().some((c) => c.name === 'sync_origin');
+    if (!has) db.prepare(`ALTER TABLE ${t} ADD COLUMN sync_origin TEXT`).run();
+  }
+}
+
+function seedTwoBuildings() {
+  const db = seed();
+  moneyTravels(db);
+  // Соседнее здание заводится ИМЕННО как active = 0 — так его заводит приём
+  // справочника (branch-sync/catalogue.js).
+  db.prepare("INSERT INTO branches (name, letter, active) VALUES ('Чиланзар','B',0)").run();
+  invoiceWith(db, { amount: 100000 });                    // своё здание
+  const v = db.prepare("INSERT INTO visits (patient_id, visit_date) VALUES (10, date('now'))").run().lastInsertRowid;
+  const inv = db.prepare(`INSERT INTO invoices (invoice_number, visit_id, patient_id, total_amount, status, sync_origin)
+      VALUES ('B-INV-1',?,10,250000,'paid','B')`).run(v).lastInsertRowid;
+  db.prepare(`INSERT INTO payments (invoice_id, amount, method, paid_at, sync_origin)
+      VALUES (?,250000,'cash',strftime('%Y-%m-%dT%H:%M:%SZ','now'),'B')`).run(inv);
+  return db;
+}
+
+test('касса: поступления соседнего здания ВИДНЫ, с разрезом и итогом по клинике', () => {
+  const db = seedTwoBuildings();
+  const r = cashierReport(db, RANGE, {});
+  assert.equal(r.income.columns[0], 'Здание');
+  assert.equal(r.kpi.income, 350000, 'итог по клинике = 100 000 + 250 000');
+  const b = r.by_building.find((x) => x.key === 'B');
+  const own = r.by_building.find((x) => x.own);
+  assert.equal(b.income, 250000);
+  assert.equal(own.income, 100000);
+  assert.equal(own.income + b.income, r.kpi.income);
+  const foreign = r.income.rows.find((x) => x[0] === 'Чиланзар');
+  assert.ok(foreign, 'приехавший платёж есть в списке');
+  assert.equal(foreign[foreign.length - 1], 'Чиланзар',
+    'кассир приехавшего платежа неизвестен — строка подписана зданием, а не спрятана');
+  assert.ok(r.notes.some((n) => n.includes('Расходы кассы')), 'про расходы сказано, что они только свои');
+  db.close();
+});
+
+test('касса: выбор одного здания исключает второе', () => {
+  const db = seedTwoBuildings();
+  const onlyB = cashierReport(db, { ...RANGE, buildings: ['B'] }, {});
+  assert.equal(onlyB.kpi.income, 250000);
+  assert.equal(onlyB.income.rows.length, 1);
+  const onlyOwn = cashierReport(db, { ...RANGE, buildings: ['A'] }, {});
+  assert.equal(onlyOwn.kpi.income, 100000);
+  db.close();
+});

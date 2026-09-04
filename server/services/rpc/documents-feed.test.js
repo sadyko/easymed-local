@@ -252,3 +252,46 @@ test('новые документы идут первыми', () => {
   assert.equal(feed(db, {}).rows[0].visit_service_id, newer);
   db.close();
 });
+
+// ---------------------------------------------------------------------------
+// LAB_ONE_CLINIC_V1 / BUILDING_REPORTS_V1 — лента документов подчиняется той же
+// границе, что лабораторная очередь, и подписывает каждую строку зданием.
+// Фильтра здесь не было вообще: лента показывала документы всех зданий по
+// случайности и не знала настройки doc_settings.lab_scope.
+// ---------------------------------------------------------------------------
+
+function seedTwoBuildings() {
+  const db = seed();
+  db.prepare("INSERT INTO branches (name, letter, active) VALUES ('Чиланзар','B',0)").run();
+  const v1 = visit(db, 1, day(db, 0));
+  const own = line(db, v1, 1);
+  addResult(db, own, 'HGB');
+  const foreign = db.prepare(
+    "INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, sync_origin) VALUES (?,1,1,0,0,'completed','B') RETURNING id")
+    .get(v1).id;
+  addResult(db, foreign, 'WBC');
+  return db;
+}
+
+test('лента: по умолчанию видны документы всей клиники, каждая строка подписана зданием', () => {
+  const db = seedTwoBuildings();
+  const r = feed(db, {});
+  assert.equal(r.lab_scope, 'clinic');
+  assert.equal(r.total, 2);
+  const foreign = r.rows.find((x) => x.origin === 'B');
+  assert.ok(foreign, 'документ соседнего здания в ленте есть');
+  assert.equal(foreign.building, 'Чиланзар', 'строка названа зданием, включая строку перечня active = 0');
+  const b = r.by_building.find((x) => x.key === 'B');
+  assert.equal(b.rows, 1);
+  db.close();
+});
+
+test('лента: при lab_scope=building остаются только свои документы', () => {
+  const db = seedTwoBuildings();
+  db.prepare("UPDATE doc_settings SET lab_scope = 'building' WHERE id = 1").run();
+  const r = feed(db, {});
+  assert.equal(r.lab_scope, 'building');
+  assert.equal(r.total, 1, 'приехавший документ скрыт — как и в очереди');
+  assert.ok(r.rows.every((x) => x.origin === ''), 'остались только свои строки');
+  db.close();
+});

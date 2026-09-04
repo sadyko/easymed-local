@@ -6,6 +6,11 @@
 
 import { today, localDate, localMonth, inLocalRange } from '../domain/day.js';
 import { outstandingWhere } from '../domain/money.js';
+// BUILDING_REPORTS_V1 — «в каком ЗДАНИИ это произошло». Отдельное измерение от
+// branch_id: см. шапку domain/buildings.js.
+import {
+  buildingContext, buildingWhere, originExpr, summariseByBuilding, hasColumn,
+} from '../domain/buildings.js';
 // INVOICE_METHOD_COLUMN_V1 — словарь способов оплаты общий с браузером. Тот же
 // приём, что в services/telegram/render.js, который берёт оттуда doc-render.js:
 // модуль чистый (без DOM и без node-встроенных), поэтому грузится в обоих.
@@ -44,138 +49,208 @@ function resolveRange(db, args) {
   return { from, to };
 }
 
+// BUILDING_REPORTS_V1 — сводка за период ПО ЗДАНИЯМ.
+//
+// До этого у неё не было НИ ОДНОГО фильтра, и это давало обе ошибки сразу:
+// «Новых пациентов» и «Визитов» молча складывали своё здание с приехавшими
+// строками (числа завышены и ни с чем на экране не сходились), а деньги
+// приехать не могли вовсе — значит, выручка соседнего здания в сводке просто
+// отсутствовала. Теперь каждая цифра считается ПО ЗДАНИЯМ, наверх отдаётся
+// итог по клинике, а рядом — разрез, где видно, чей это вклад.
 export function reportsOverview(db, args, _user) {
   const { from, to } = resolveRange(db, args);
-  const one = (sql, ...p) => db.prepare(sql).get(...p);
+  const ctx = buildingContext(db);
+  const all = (sql, ...p) => db.prepare(sql).all(...p);
+  const bw = (table, alias) => buildingWhere(db, ctx, args, table, alias);
 
-  const cash_collected = one(
+  const pf = bw('payments', 'p');
+  const cash = all(
     // DEPOSIT_REVENUE_V1 — платежи «кошельком» уже посчитаны выручкой в день
     // приёма депозита; второй раз их считать нельзя.
-    `SELECT COALESCE(SUM(amount),0) s FROM payments WHERE ${INFLOW_SQL} AND ${inLocalRange('paid_at')}`,
-    from, to
-  ).s;
-  const invoices_created = one(
-    `SELECT COUNT(*) n FROM invoices WHERE ${inLocalRange('created_at')}`,
-    from, to
-  ).n;
-  const patients_new = one(
-    `SELECT COUNT(*) n FROM patients WHERE ${inLocalRange('created_at')}`,
-    from, to
-  ).n;
-  const visits_count = one(
-    `SELECT COUNT(*) n FROM visits WHERE ${inLocalRange('visit_date')}`,
-    from, to
-  ).n;
+    `SELECT ${originExpr(db, 'payments', 'p')} AS origin, COALESCE(SUM(p.amount),0) s
+       FROM payments p WHERE ${INFLOW_SQL} AND ${inLocalRange('p.paid_at')}${pf.clause}
+      GROUP BY origin`,
+    from, to, ...pf.params
+  );
+  const inf = bw('invoices', 'i');
+  const invoicesCreated = all(
+    `SELECT ${originExpr(db, 'invoices', 'i')} AS origin, COUNT(*) n
+       FROM invoices i WHERE ${inLocalRange('i.created_at')}${inf.clause}
+      GROUP BY origin`,
+    from, to, ...inf.params
+  );
+  const ptf = bw('patients', 'pt');
+  const patientsNew = all(
+    `SELECT ${originExpr(db, 'patients', 'pt')} AS origin, COUNT(*) n
+       FROM patients pt WHERE ${inLocalRange('pt.created_at')}${ptf.clause}
+      GROUP BY origin`,
+    from, to, ...ptf.params
+  );
+  const vf = bw('visits', 'v');
+  const visits = all(
+    `SELECT ${originExpr(db, 'visits', 'v')} AS origin, COUNT(*) n
+       FROM visits v WHERE ${inLocalRange('v.visit_date')}${vf.clause}
+      GROUP BY origin`,
+    from, to, ...vf.params
+  );
   // All-time (not range-limited): what's currently owed across all open invoices.
-  const outstanding_total = one(
-    `SELECT COALESCE(SUM(total_amount - paid_amount),0) s FROM invoices WHERE ${outstandingWhere()}`
-  ).s;
+  const outf = bw('invoices', 'i');
+  const outstanding = all(
+    `SELECT ${originExpr(db, 'invoices', 'i')} AS origin,
+            COALESCE(SUM(i.total_amount - i.paid_amount),0) s
+       FROM invoices i WHERE ${outstandingWhere('i.status')}${outf.clause}
+      GROUP BY origin`,
+    ...outf.params
+  );
 
+  // Один разрез на все пять метрик: строки разных запросов сводятся по ключу
+  // здания, а не печатаются пятью отдельными списками.
+  const merged = [
+    ...cash.map((r) => ({ origin: r.origin, cash_collected: r.s })),
+    ...invoicesCreated.map((r) => ({ origin: r.origin, invoices_created: r.n })),
+    ...patientsNew.map((r) => ({ origin: r.origin, patients_new: r.n })),
+    ...visits.map((r) => ({ origin: r.origin, visits_count: r.n })),
+    ...outstanding.map((r) => ({ origin: r.origin, outstanding_total: r.s })),
+  ];
+  const buildings = summariseByBuilding(ctx, merged, {
+    cash_collected:   (r) => r.cash_collected || 0,
+    invoices_created: (r) => r.invoices_created || 0,
+    patients_new:     (r) => r.patients_new || 0,
+    visits_count:     (r) => r.visits_count || 0,
+    outstanding_total:(r) => r.outstanding_total || 0,
+  }).map((b) => { const { rows: _rows, ...rest } = b; return rest; });
+
+  const sum = (k) => buildings.reduce((n, b) => n + b[k], 0);
   return {
-    cash_collected: round2(cash_collected),
-    invoices_created,
-    patients_new,
-    visits_count,
-    outstanding_total: round2(outstanding_total),
+    cash_collected: round2(sum('cash_collected')),
+    invoices_created: sum('invoices_created'),
+    patients_new: sum('patients_new'),
+    visits_count: sum('visits_count'),
+    outstanding_total: round2(sum('outstanding_total')),
+    // Разрез по зданиям + сколько их всего: экран, где зданий больше одного,
+    // обязан сказать это словами, а не показать одно число на два дома.
+    buildings,
+    building_count: buildings.length,
     from,
     to,
   };
 }
 
-const REPORTS = {
+// BUILDING_REPORTS_V1 — у каждого «сырого» отчёта тоже появляется здание.
+// Запрос строится ПО БАЗЕ, а не константой: метка происхождения есть не у всех
+// таблиц (у payments/invoices она появляется вместе с переездом денег), и
+// ссылка на несуществующую колонку не вернула бы нули — она уронила бы отчёт.
+// `origin` в выборке служебный: в строку его подставляет runReport подписью.
+function legacyReports(db) {
+  return {
   payments: {
     columns: ['Date', 'Patient', 'Invoice', 'Amount', 'Method', 'Cashier'],
-    sql: `
+    table: 'payments', alias: 'p',
+    sql: (bf) => `
       SELECT ${localDate('p.paid_at')} AS date,
              pt.full_name           AS patient,
              i.invoice_number       AS invoice,
              p.amount                AS amount,
              p.method                AS method,
-             u.full_name             AS cashier
+             u.full_name             AS cashier,
+             ${originExpr(db, 'payments', 'p')} AS origin
         FROM payments p
         JOIN invoices i ON i.id = p.invoice_id
         JOIN patients pt ON pt.id = i.patient_id
         LEFT JOIN users u ON u.id = p.cashier_id
-       WHERE ${inLocalRange('p.paid_at')}
+       WHERE ${inLocalRange('p.paid_at')}${bf.clause}
        ORDER BY p.paid_at
     `,
     row: (r) => [r.date, r.patient, r.invoice, round2(r.amount), r.method, r.cashier || ''],
   },
   invoices: {
     columns: ['Invoice #', 'Date', 'Patient', 'Total', 'Paid', 'Balance', 'Status'],
-    sql: `
+    table: 'invoices', alias: 'i',
+    sql: (bf) => `
       SELECT i.invoice_number AS invoice_number,
              ${localDate('i.created_at')} AS date,
              pt.full_name AS patient,
              i.total_amount AS total,
              i.paid_amount AS paid,
              (i.total_amount - i.paid_amount) AS balance,
-             i.status AS status
+             i.status AS status,
+             ${originExpr(db, 'invoices', 'i')} AS origin
         FROM invoices i
         JOIN patients pt ON pt.id = i.patient_id
-       WHERE ${inLocalRange('i.created_at')}
+       WHERE ${inLocalRange('i.created_at')}${bf.clause}
        ORDER BY i.created_at
     `,
     row: (r) => [r.invoice_number, r.date, r.patient, round2(r.total), round2(r.paid), round2(r.balance), r.status],
   },
   services: {
     columns: ['Service', 'Qty', 'Revenue'],
-    sql: `
+    table: 'invoices', alias: 'i',
+    sql: (bf) => `
       SELECT s.name AS service,
              SUM(ii.quantity) AS qty,
-             SUM(ii.total) AS revenue
+             SUM(ii.total) AS revenue,
+             ${originExpr(db, 'invoices', 'i')} AS origin
         FROM invoice_items ii
         JOIN invoices i ON i.id = ii.invoice_id
         JOIN services s ON s.id = ii.service_id
-       WHERE ${inLocalRange('i.created_at')}
-       GROUP BY s.id, s.name
+       WHERE ${inLocalRange('i.created_at')}${bf.clause}
+       GROUP BY origin, s.id, s.name
        ORDER BY revenue DESC
     `,
     row: (r) => [r.service, r.qty, round2(r.revenue)],
   },
   visits: {
     columns: ['Date', 'Patient', 'Doctor', 'Type', 'Status'],
-    sql: `
+    table: 'visits', alias: 'v',
+    sql: (bf) => `
       SELECT ${localDate('v.visit_date')} AS date,
              pt.full_name AS patient,
              u.full_name AS doctor,
              v.visit_type AS type,
-             v.status AS status
+             v.status AS status,
+             ${originExpr(db, 'visits', 'v')} AS origin
         FROM visits v
         JOIN patients pt ON pt.id = v.patient_id
         LEFT JOIN users u ON u.id = v.doctor_id
-       WHERE ${inLocalRange('v.visit_date')}
+       WHERE ${inLocalRange('v.visit_date')}${bf.clause}
        ORDER BY v.visit_date
     `,
     row: (r) => [r.date, r.patient, r.doctor || '', r.type, r.status],
   },
   patients: {
     columns: ['MRN', 'Name', 'Gender', 'Registered'],
-    sql: `
-      SELECT mrn, full_name, gender, ${localDate('created_at')} AS registered
-        FROM patients
-       WHERE ${inLocalRange('created_at')}
-       ORDER BY created_at
+    table: 'patients', alias: 'pt',
+    sql: (bf) => `
+      SELECT pt.mrn AS mrn, pt.full_name AS full_name, pt.gender AS gender,
+             ${localDate('pt.created_at')} AS registered,
+             ${originExpr(db, 'patients', 'pt')} AS origin
+        FROM patients pt
+       WHERE ${inLocalRange('pt.created_at')}${bf.clause}
+       ORDER BY pt.created_at
     `,
     row: (r) => [r.mrn, r.full_name, r.gender, r.registered],
   },
   stock_movements: {
     columns: ['Date', 'Product', 'Type', 'Qty', 'Unit cost'],
-    sql: `
+    // Складские движения между зданиями НЕ ездят — своя строка у каждого.
+    table: 'stock_movements', alias: 'sm',
+    sql: (bf) => `
       SELECT ${localDate('sm.created_at')} AS date,
              pr.name AS product,
              sm.kind AS kind,
              sm.qty AS qty,
              sm.unit_cost AS unit_cost,
-             sm.id AS id
+             sm.id AS id,
+             ${originExpr(db, 'stock_movements', 'sm')} AS origin
         FROM stock_movements sm
         JOIN products pr ON pr.id = sm.product_id
-       WHERE ${inLocalRange('sm.created_at')}
+       WHERE ${inLocalRange('sm.created_at')}${bf.clause}
        ORDER BY sm.id DESC
     `,
     row: (r) => [r.date, r.product, r.kind, r.qty, r.unit_cost == null ? null : round2(r.unit_cost)],
   },
-};
+  };
+}
 
 // ---------------------------------------------------------------------------
 // REPORTS_HUB_RU_V1 — the seven report kinds behind the card-grid Reports page
@@ -267,11 +342,16 @@ const ITEM_FEE_SQL = `CASE
   ELSE ${ITEM_NET_SQL} * ${ITEM_PCT_SQL} / 100.0
 END`;
 
-function itemRowsQuery(db, args) {
+function itemRowsQuery(db, args, ctx) {
   const { from, to } = resolveRange(db, args);
   const bf = branchFilter(args, 'i.branch_id');
+  // BUILDING_REPORTS_V1 — здание берётся у СЧЁТА, а не у строки счёта: деньги
+  // принадлежат тому зданию, которое счёт выставило, и разносить позиции одного
+  // счёта по разным зданиям было бы выдумкой.
+  const gf = buildingWhere(db, ctx, args, 'invoices', 'i');
   const rows = db.prepare(`
-    SELECT ${localDate('i.created_at')}       AS date,
+    SELECT ${originExpr(db, 'invoices', 'i')}  AS origin,
+           ${localDate('i.created_at')}       AS date,
            i.invoice_number                   AS invoice,
            i.status                           AS status,
            pt.full_name                       AS patient,
@@ -301,67 +381,117 @@ function itemRowsQuery(db, args) {
       LEFT JOIN referral_sources rs ON rs.id = COALESCE(v.referral_source_id, pt.referral_source_id)
       ${ITEM_DOCTOR_JOIN}
      WHERE ${inLocalRange('i.created_at')}
-       AND i.status <> 'void'${bf.clause}
-     ORDER BY i.created_at, ii.id
-  `).all(from, to, ...bf.params);
+       AND i.status <> 'void'${bf.clause}${gf.clause}
+     ORDER BY origin, i.created_at, ii.id
+  `).all(from, to, ...bf.params, ...gf.params);
   return rows;
 }
 
-function totalRevenueReport(db, args) {
+// BUILDING_REPORTS_V1 — общий словарь денежных отчётов.
+//
+// «Здание» стоит ПЕРВОЙ колонкой: это измерение, по которому владелец читает
+// лист сверху вниз, и строки уже отсортированы по нему (itemRowsQuery:
+// ORDER BY origin). Существующая колонка «Филиал» осталась и означает ДРУГОЕ —
+// branch_id внутри ЭТОЙ базы; см. шапку domain/buildings.js о том, почему это
+// два разных измерения.
+const BUILDING_COL = 'Здание';
+
+// Складские движения (stock_movements) между зданиями НЕ передаются: у каждой
+// установки свой склад. Отчёт, который их считает, обязан это сказать — иначе
+// ноль по товарам соседнего здания читается как «там ничего не расходовали».
+const STOCK_LOCAL_NOTE = 'Складские движения между зданиями не передаются: количество и стоимость товаров показаны только по этому зданию.';
+
+// Идентификаторы сотрудников (created_by, cashier_id, doctor_id) между
+// зданиями не путешествуют, поэтому у приехавшей строки врача нет. Строку
+// НЕЛЬЗЯ выбросить — это настоящие деньги; её подписывают зданием.
+const UNATTRIBUTED_NOTE = 'У строк соседних зданий не указан врач: между зданиями передаются деньги, но не карточки сотрудников. Такие строки собраны под подписью «<здание>, врач не указан», а не отброшены.';
+
+// Подпись врача в строке. Своя строка без врача остаётся пустой (так было и
+// раньше); приехавшая — называется зданием, чтобы сумма не выглядела ничьей.
+function doctorCell(ctx, r) {
+  if (r.doctor) return r.doctor;
+  const key = ctx.keyOf(r.origin);
+  return key === ctx.ownKey ? '' : ctx.unattributed(key);
+}
+
+// Есть ли в выборке строка чужого здания без врача — только тогда примечание
+// об этом уместно.
+function hasUnattributed(ctx, rows) {
+  return rows.some((r) => !r.doctor && ctx.keyOf(r.origin) !== ctx.ownKey);
+}
+
+function totalRevenueReport(db, args, ctx) {
+  const src = itemRowsQuery(db, args, ctx);
   return {
-    columns: ['Дата', '№ счёта', 'Пациент', 'МРН', 'Услуга', 'Кол-во', 'Цена', 'Сумма',
+    columns: [BUILDING_COL, 'Дата', '№ счёта', 'Пациент', 'МРН', 'Услуга', 'Кол-во', 'Цена', 'Сумма',
               'Скидка', 'После скидки', 'Налог %', 'Налог', 'Врач', 'Ставка врача', 'Доля врача',
               'Филиал', 'Регистратор', 'Реферал', 'Статус'],
-    rows: itemRowsQuery(db, args).map((r) => {
+    rows: src.map((r) => {
       const after = r.amount - r.discount;
       // DOCTOR_FIX_RATE_V1 — the rate column states WHICH rate applied. Printing
       // a percentage for a fixed-rate line would read as "this doctor gets 0%"
       // next to a non-zero fee.
       const rate = r.doctor_fix != null ? ('фикс ' + round2(r.doctor_fix)) : r.doctor_pct;
-      return [r.date, r.invoice || '', r.patient, r.mrn || '', r.service || '', r.qty,
+      return [ctx.label(r.origin), r.date, r.invoice || '', r.patient, r.mrn || '', r.service || '', r.qty,
               round2(r.price), round2(r.amount), round2(r.discount), round2(after),
-              r.tax_rate, round2(after * r.tax_rate / 100), r.doctor || '', rate,
+              r.tax_rate, round2(after * r.tax_rate / 100), doctorCell(ctx, r), rate,
               round2(r.doctor_fee), r.branch || '', r.registrar || '',
               r.referral || '', INV_STATUS_RU[r.status] || r.status];
     }),
+    by_building: summariseByBuilding(ctx, src, {
+      total: (r) => r.amount - r.discount,
+      doctor_fee: (r) => r.doctor_fee || 0,
+    }),
+    total_label: 'После скидки',
+    notes: hasUnattributed(ctx, src) ? [UNATTRIBUTED_NOTE] : [],
   };
 }
 
-function referralsReport(db, args) {
+function referralsReport(db, args, ctx) {
   const rewards = db.prepare('SELECT name, percent FROM referral_rewards WHERE active = 1').all();
   const rewardByName = new Map(rewards.map((r) => [r.name.trim().toLowerCase(), r.percent]));
+  // Ключ корзины — ЗДАНИЕ и источник. Один и тот же партнёр может приводить
+  // пациентов в оба здания, и складывать их в одну строку значило бы стереть
+  // ровно то, что этот отчёт теперь обязан показывать.
   const buckets = new Map();
-  for (const r of itemRowsQuery(db, args)) {
+  for (const r of itemRowsQuery(db, args, ctx)) {
     if (!r.referral) continue;
-    const b = buckets.get(r.referral) || {
-      source: r.referral, category: r.referral_category || '', count: 0, amount: 0,
+    const key = ctx.keyOf(r.origin) + '\u0000' + r.referral;
+    const b = buckets.get(key) || {
+      origin: r.origin, source: r.referral, category: r.referral_category || '', count: 0, amount: 0,
     };
     b.count += 1;
     b.amount += r.amount - r.discount;
-    buckets.set(r.referral, b);
+    buckets.set(key, b);
   }
-  const rows = [...buckets.values()]
-    .sort((a, b) => b.amount - a.amount)
-    .map((b) => {
-      // «Вручную» — a reward rate named exactly like the source; «Общий» — a
-      // rate named like the source's category; otherwise 0%.
-      const own = rewardByName.get(b.source.trim().toLowerCase());
-      const cat = rewardByName.get((b.category || '').trim().toLowerCase());
-      const pct = own != null ? own : (cat != null ? cat : 0);
-      const mode = own != null ? 'Вручную' : 'Общий';
-      return [b.source, b.category, mode, b.count, round2(b.amount), pct, round2(b.amount * pct / 100)];
-    });
+  const list = [...buckets.values()].sort((a, b) => b.amount - a.amount);
+  const rows = list.map((b) => {
+    // «Вручную» — a reward rate named exactly like the source; «Общий» — a
+    // rate named like the source's category; otherwise 0%.
+    const own = rewardByName.get(b.source.trim().toLowerCase());
+    const cat = rewardByName.get((b.category || '').trim().toLowerCase());
+    const pct = own != null ? own : (cat != null ? cat : 0);
+    const mode = own != null ? 'Вручную' : 'Общий';
+    return [ctx.label(b.origin), b.source, b.category, mode, b.count, round2(b.amount), pct,
+            round2(b.amount * pct / 100)];
+  });
   return {
-    columns: ['Источник', 'Категория', 'Режим ставок', 'Услуг', 'Сумма услуг', '% вознаграждения', 'Вознаграждение'],
+    columns: [BUILDING_COL, 'Источник', 'Категория', 'Режим ставок', 'Услуг', 'Сумма услуг',
+              '% вознаграждения', 'Вознаграждение'],
     rows,
+    by_building: summariseByBuilding(ctx, list, { total: (b) => b.amount }),
+    total_label: 'Сумма услуг',
+    notes: [],
   };
 }
 
-function invoicesFullReport(db, args) {
+function invoicesFullReport(db, args, ctx) {
   const { from, to } = resolveRange(db, args);
   const bf = branchFilter(args, 'i.branch_id');
+  const gf = buildingWhere(db, ctx, args, 'invoices', 'i');
   const rows = db.prepare(`
-    SELECT i.invoice_number AS number, ${localDate('i.created_at')} AS created,
+    SELECT ${originExpr(db, 'invoices', 'i')} AS origin,
+           i.invoice_number AS number, ${localDate('i.created_at')} AS created,
            pt.full_name AS patient, pt.mrn AS mrn, pt.phone AS phone,
            b.name AS branch, py.name AS payer,
            i.subtotal AS subtotal, i.discount_amount AS discount,
@@ -378,14 +508,14 @@ function invoicesFullReport(db, args) {
       LEFT JOIN branches b ON b.id = i.branch_id
       LEFT JOIN payers py  ON py.id = pt.payer_id
       LEFT JOIN users reg  ON reg.id = i.created_by
-     WHERE ${inLocalRange('i.created_at')}${bf.clause}
-     ORDER BY i.created_at DESC
-  `).all(from, to, ...bf.params);
+     WHERE ${inLocalRange('i.created_at')}${bf.clause}${gf.clause}
+     ORDER BY origin, i.created_at DESC
+  `).all(from, to, ...bf.params, ...gf.params);
   return {
-    columns: ['№ счёта', 'Дата', 'Пациент', 'МРН', 'Телефон', 'Филиал', 'Кто платит',
+    columns: [BUILDING_COL, '№ счёта', 'Дата', 'Пациент', 'МРН', 'Телефон', 'Филиал', 'Кто платит',
               'Сумма без скидки', 'Скидка', 'Итого', 'Оплачено', 'Остаток / долг',
               'Статус', 'Способ оплаты', 'Дата оплаты', 'Регистратор'],
-    rows: rows.map((r) => [r.number || '', r.created, r.patient, r.mrn || '', r.phone || '',
+    rows: rows.map((r) => [ctx.label(r.origin), r.number || '', r.created, r.patient, r.mrn || '', r.phone || '',
       r.branch || '', r.payer || 'Пациент', round2(r.subtotal), round2(r.discount),
       round2(r.total), round2(r.paid), round2(Math.max(r.total - r.paid, 0)),
       INV_STATUS_RU[r.status] || r.status,
@@ -394,32 +524,46 @@ function invoicesFullReport(db, args) {
       // же платёж одинаково.
       formatMethods(String(r.methods || '').split(',')),
       r.paid_at || '', r.registrar || '']),
+    by_building: summariseByBuilding(ctx, rows, {
+      total: (r) => r.total || 0,
+      paid: (r) => r.paid || 0,
+    }),
+    total_label: 'Итого по счетам',
+    notes: [],
   };
 }
 
-function procurementReport(db, args) {
+function procurementReport(db, args, ctx) {
   const { from, to } = resolveRange(db, args);
   const bf = branchFilter(args, 'sm.branch_id');
+  // Метки происхождения у stock_movements нет и не будет — склад не ездит.
+  // buildingWhere об этом знает: «только соседнее здание» вернёт пусто, а не
+  // молча свои же поступления под чужим именем.
+  const gf = buildingWhere(db, ctx, args, 'stock_movements', 'sm');
   const rows = db.prepare(`
-    SELECT ${localDate('sm.created_at')} AS date, pr.name AS product, sm.note AS note,
+    SELECT ${originExpr(db, 'stock_movements', 'sm')} AS origin,
+           ${localDate('sm.created_at')} AS date, pr.name AS product, sm.note AS note,
            sm.qty AS qty, sm.unit_cost AS unit_cost
       FROM stock_movements sm
       JOIN products pr ON pr.id = sm.product_id
      WHERE sm.kind = 'receive'
-       AND ${inLocalRange('sm.created_at')}${bf.clause}
+       AND ${inLocalRange('sm.created_at')}${bf.clause}${gf.clause}
      ORDER BY sm.created_at DESC
-  `).all(from, to, ...bf.params);
+  `).all(from, to, ...bf.params, ...gf.params);
   return {
-    columns: ['Дата', 'Товар', 'Поставщик / примечание', 'Количество', 'Цена за ед.', 'Сумма'],
-    rows: rows.map((r) => [r.date, r.product, r.note || '', r.qty,
+    columns: [BUILDING_COL, 'Дата', 'Товар', 'Поставщик / примечание', 'Количество', 'Цена за ед.', 'Сумма'],
+    rows: rows.map((r) => [ctx.label(r.origin), r.date, r.product, r.note || '', r.qty,
       r.unit_cost == null ? null : round2(r.unit_cost),
       round2(r.qty * (r.unit_cost || 0))]),
+    by_building: summariseByBuilding(ctx, rows, { total: (r) => r.qty * (r.unit_cost || 0) }),
+    total_label: 'Сумма закупок',
+    notes: [STOCK_LOCAL_NOTE],
   };
 }
 
 const SURGERY_RE = /хирург|операц|surg|operat/i;
 
-function surgeryProfitReport(db, args) {
+function surgeryProfitReport(db, args, ctx) {
   // Consumables per visit: dispense movements reference visit_services
   // (reference_type 'visit', reference_id = visit_service id). qty is negative
   // on dispense; cost falls back to the product's rolling average.
@@ -435,36 +579,58 @@ function surgeryProfitReport(db, args) {
   `).all()) consumablesByVisit.set(c.visit_id, Math.max(c.cost, 0));
 
   // SQLite lower() doesn't fold Cyrillic, so the «хирургия» match runs in JS.
-  const rows = itemRowsQuery(db, args)
-    .filter((r) => SURGERY_RE.test(r.service || ''))
-    .map((r) => {
-      const invoiced = r.amount - r.discount;
-      const tax = invoiced * r.tax_rate / 100;
-      // DOCTOR_SHARE_AFTER_TAX_V1 — гонорар хирурга считается от суммы ПОСЛЕ
-      // налога, как и доля врача везде. Здесь это было особенно заметно: строкой
-      // ниже налог вычитается из прибыли клиники, то есть один и тот же налог
-      // клиника «отдавала» дважды — государству и в базу гонорара.
-      // Фиксированную ставку (если она задана на услугу) берём из общего
-      // расчёта: она за единицу и налогом не режется.
-      const surgeonFee = r.doctor_fix != null ? r.doctor_fee : (invoiced - tax) * r.doctor_pct / 100;
-      const products = r.visit_id != null ? (consumablesByVisit.get(r.visit_id) || 0) : 0;
-      const profit = invoiced - tax - surgeonFee - products;
-      return [r.patient, r.service, round2(invoiced), r.tax_rate, round2(tax),
-              round2(surgeonFee), round2(products), round2(profit),
-              invoiced > 0 ? round2(profit / invoiced * 100) : 0];
-    });
+  const src = itemRowsQuery(db, args, ctx)
+    .filter((r) => SURGERY_RE.test(r.service || ''));
+  const computed = src.map((r) => {
+    const invoiced = r.amount - r.discount;
+    const tax = invoiced * r.tax_rate / 100;
+    // DOCTOR_SHARE_AFTER_TAX_V1 — гонорар хирурга считается от суммы ПОСЛЕ
+    // налога, как и доля врача везде. Здесь это было особенно заметно: строкой
+    // ниже налог вычитается из прибыли клиники, то есть один и тот же налог
+    // клиника «отдавала» дважды — государству и в базу гонорара.
+    // Фиксированную ставку (если она задана на услугу) берём из общего
+    // расчёта: она за единицу и налогом не режется.
+    const surgeonFee = r.doctor_fix != null ? r.doctor_fee : (invoiced - tax) * r.doctor_pct / 100;
+    // Расходники есть только у своего здания: движения склада не ездят.
+    const products = r.visit_id != null ? (consumablesByVisit.get(r.visit_id) || 0) : 0;
+    const profit = invoiced - tax - surgeonFee - products;
+    return { origin: r.origin, doctor: r.doctor, invoiced, profit, row: [
+      ctx.label(r.origin), r.patient, r.service, round2(invoiced), r.tax_rate, round2(tax),
+      round2(surgeonFee), round2(products), round2(profit),
+      invoiced > 0 ? round2(profit / invoiced * 100) : 0] };
+  });
+  const notes = [STOCK_LOCAL_NOTE];
+  if (hasUnattributed(ctx, src)) notes.push(UNATTRIBUTED_NOTE);
   return {
-    columns: ['Пациент', 'Операция', 'Сумма по счёту', 'Ставка налога (%)', 'Налог',
+    columns: [BUILDING_COL, 'Пациент', 'Операция', 'Сумма по счёту', 'Ставка налога (%)', 'Налог',
               'Гонорар хирурга', 'Расходники (товары)', 'Прибыль клиники', 'Маржа (%)'],
-    rows,
+    rows: computed.map((c) => c.row),
+    by_building: summariseByBuilding(ctx, computed, {
+      total: (c) => c.invoiced,
+      profit: (c) => c.profit,
+    }),
+    total_label: 'Сумма по счетам',
+    notes,
   };
 }
 
-function doctorSalariesReport(db, args) {
+function doctorSalariesReport(db, args, ctx) {
   const { from, to } = resolveRange(db, args);
   const bf = branchFilter(args, 'i.branch_id');
+  const gf = buildingWhere(db, ctx, args, 'invoices', 'i');
+  // BUILDING_REPORTS_V1 — приехавшая строка НЕ ОТБРАСЫВАЕТСЯ.
+  //
+  // Здесь стояло `AND vs.doctor_id IS NOT NULL` — правило «в зарплатном отчёте
+  // только то, что привязано к врачу». Для своего здания оно верное и остаётся.
+  // Но у строки соседнего здания врача нет и быть не может: карточки
+  // сотрудников между зданиями не путешествуют. Прежнее условие выбрасывало
+  // такую строку молча, и оплаченные услуги второго здания просто исчезали из
+  // отчёта. Теперь они остаются — одной строкой на здание с подписью
+  // «<здание>, врач не указан».
+  const foreignKeep = hasColumn(db, 'invoices', 'sync_origin') ? ' OR i.sync_origin IS NOT NULL' : '';
   const rows = db.prepare(`
-    SELECT doc.full_name AS doctor,
+    SELECT ${originExpr(db, 'invoices', 'i')} AS origin,
+           doc.full_name AS doctor,
            COUNT(ii.id)  AS services_count,
            SUM(ii.total - ${ITEM_DISCOUNT_SQL}) AS after_discount,
            -- DOCTOR_FIX_RATE_V1 — averaged over the PERCENTAGE lines only; a
@@ -477,18 +643,25 @@ function doctorSalariesReport(db, args) {
       JOIN invoices i ON i.id = ii.invoice_id
       ${ITEM_DOCTOR_JOIN}
      WHERE i.status = 'paid'
-       AND vs.doctor_id IS NOT NULL
-       AND ${inLocalRange('i.created_at')}${bf.clause}
-     GROUP BY vs.doctor_id
-     ORDER BY after_discount DESC
-  `).all(from, to, ...bf.params);
+       AND (vs.doctor_id IS NOT NULL${foreignKeep})
+       AND ${inLocalRange('i.created_at')}${bf.clause}${gf.clause}
+     GROUP BY origin, vs.doctor_id
+     ORDER BY origin, after_discount DESC
+  `).all(from, to, ...bf.params, ...gf.params);
   return {
-    columns: ['Врач', 'Оплаченных услуг', 'Сумма после скидки', 'Средний % врача',
+    columns: [BUILDING_COL, 'Врач', 'Оплаченных услуг', 'Сумма после скидки', 'Средний % врача',
               'Услуг по фикс. ставке', 'Доля врача (гонорар)'],
     // avg_pct is NULL when every line was fixed-rate — print '—' rather than 0,
     // which would claim the doctor works for nothing.
-    rows: rows.map((r) => [r.doctor, r.services_count, round2(r.after_discount),
+    rows: rows.map((r) => [ctx.label(r.origin), doctorCell(ctx, r) || '—', r.services_count,
+      round2(r.after_discount),
       r.avg_pct == null ? '—' : round2(r.avg_pct), r.fixed_lines || 0, round2(r.fee)]),
+    by_building: summariseByBuilding(ctx, rows, {
+      total: (r) => r.after_discount || 0,
+      fee: (r) => r.fee || 0,
+    }),
+    total_label: 'Сумма после скидки',
+    notes: hasUnattributed(ctx, rows) ? [UNATTRIBUTED_NOTE] : [],
   };
 }
 
@@ -509,6 +682,12 @@ const OWNER_M_RU = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 
 export function ownerReport(db, args, _user) {
   const { from, to } = resolveRange(db, args);
   const bf = branchFilter(args, 'i.branch_id');
+  // BUILDING_REPORTS_V1 — отчёт владельца тоже смотрит на клинику целиком:
+  // фильтр по зданиям и разрез рядом с KPI. Без этого «Общая выручка» на
+  // главном экране владельца показывала выручку одного здания и называла её
+  // общей.
+  const ctx = buildingContext(db);
+  const gf = buildingWhere(db, ctx, args, 'invoices', 'i');
 
   const base = `
     FROM invoice_items ii
@@ -516,12 +695,12 @@ export function ownerReport(db, args, _user) {
     JOIN patients pt ON pt.id = i.patient_id
     LEFT JOIN payers py ON py.id = pt.payer_id
     LEFT JOIN services s ON s.id = ii.service_id
-   WHERE i.status <> 'void'${bf.clause}`;
+   WHERE i.status <> 'void'${bf.clause}${gf.clause}`;
 
   const k = db.prepare(`
     SELECT COALESCE(SUM(ii.total - ${ITEM_DISCOUNT_SQL}), 0) AS revenue, COUNT(ii.id) AS count
     ${base} AND ${inLocalRange('i.created_at')}
-  `).get(...bf.params, from, to);
+  `).get(...bf.params, ...gf.params, from, to);
 
   const byGroupRaw = db.prepare(`
     SELECT COALESCE(s.name, ii.description) AS name,
@@ -529,7 +708,7 @@ export function ownerReport(db, args, _user) {
     ${base} AND ${inLocalRange('i.created_at')}
      GROUP BY COALESCE(s.name, ii.description)
      ORDER BY value DESC
-  `).all(...bf.params, from, to);
+  `).all(...bf.params, ...gf.params, from, to);
   const byGroup = byGroupRaw.slice(0, 8).map((g) => ({ name: g.name || '—', value: Math.round(g.value) }));
   const rest = byGroupRaw.slice(8).reduce((s, g) => s + g.value, 0);
   if (rest > 0) byGroup.push({ name: 'Прочее', value: Math.round(rest) });
@@ -548,7 +727,7 @@ export function ownerReport(db, args, _user) {
            SUM(ii.total - ${ITEM_DISCOUNT_SQL}) AS value
     ${base} AND ${localMonth('i.created_at')} >= ?
      GROUP BY ym
-  `).all(...bf.params, monthly[0].key)) {
+  `).all(...bf.params, ...gf.params, monthly[0].key)) {
     const i = mIdx.get(r.ym);
     if (i != null) monthly[i].value = Math.round(r.value);
   }
@@ -560,7 +739,7 @@ export function ownerReport(db, args, _user) {
            SUM(ii.total - ${ITEM_DISCOUNT_SQL}) AS value
     ${base} AND ${inLocalRange('i.created_at')}
      GROUP BY py.id
-  `).all(...bf.params, from, to)) {
+  `).all(...bf.params, ...gf.params, from, to)) {
     if (r.payer_id == null) P.patient += r.value;
     else if (r.kind === 'corporate' || r.kind === 'b2b') P.corporate += r.value;
     else if (r.kind === 'state' || r.kind === 'government') P.state += r.value;
@@ -573,13 +752,25 @@ export function ownerReport(db, args, _user) {
     { label: 'Госпрограмма',         color: '#7c3aed', value: Math.round(P.state) },
   ].filter((x) => x.value > 0);
 
+  // Разрез по зданиям — рядом с KPI, теми же деньгами и тем же периодом.
+  const perBuilding = db.prepare(`
+    SELECT ${originExpr(db, 'invoices', 'i')} AS origin,
+           SUM(ii.total - ${ITEM_DISCOUNT_SQL}) AS value, COUNT(ii.id) AS count
+    ${base} AND ${inLocalRange('i.created_at')}
+     GROUP BY origin
+  `).all(...bf.params, ...gf.params, from, to);
+  const buildings = summariseByBuilding(ctx, perBuilding, {
+    total: (r) => r.value || 0,
+    count: (r) => r.count || 0,
+  }).map((b2) => ({ key: b2.key, label: b2.label, own: b2.own, value: Math.round(b2.total), count: b2.count }));
+
   return {
     kpis: {
       revenue: Math.round(k.revenue),
       count: k.count,
       avg: k.count ? Math.round(k.revenue / k.count) : 0,
     },
-    monthly, byGroup, byPayer, from, to,
+    monthly, byGroup, byPayer, buildings, from, to,
   };
 }
 
@@ -587,15 +778,46 @@ export function runReport(db, args, _user) {
   const kind = args && args.kind;
   const ru = REPORTS_RU[kind];
   if (ru) {
-    const { columns, rows } = ru(db, args);
-    return { kind, columns, rows };
+    const { columns, rows, by_building, notes, total_label } = ru(db, args, buildingContext(db));
+    return { kind, columns, rows, by_building: by_building || [], notes: notes || [], total_label: total_label || '' };
   }
-  const report = REPORTS[kind];
+  const report = legacyReports(db)[kind];
   if (!report) {
     throw new RpcError('unknown report kind: ' + kind, 400);
   }
   const { from, to } = resolveRange(db, args);
+  const ctx = buildingContext(db);
+  const bf = buildingWhere(db, ctx, args, report.table, report.alias);
 
-  const rows = db.prepare(report.sql).all(from, to).map(report.row);
-  return { kind, columns: report.columns, rows };
+  const raw = db.prepare(report.sql(bf)).all(from, to, ...bf.params);
+  // BUILDING_REPORTS_V1 — «Здание» приписывается ПОСЛЕДНЕЙ колонкой: у этих
+  // выгрузок порядок колонок читают по позиции, и вставка в середину сдвинула
+  // бы всё, что правее.
+  return {
+    kind,
+    columns: [...report.columns, 'Здание'],
+    rows: raw.map((r) => [...report.row(r), ctx.label(r.origin)]),
+    by_building: summariseByBuilding(ctx, raw, {}),
+    notes: [],
+  };
+}
+
+// BUILDING_REPORTS_V1 — перечень ЗДАНИЙ для выборки в «Отчётах».
+//
+// Отдельный RPC, а не выборка из `branches` через /api/db, по двум причинам,
+// и обе делали прежний список неправильным: реестр не отдаёт браузеру колонку
+// `letter`, а выборка филиалов грузилась с `.eq('active', 1)` — соседнее
+// здание же заводится как `active = 0`, то есть в списке его быть НЕ МОГЛО.
+// Здесь список собирается из трёх источников сразу (перечень + своя буква +
+// буквы, встреченные в данных), поэтому здание нельзя потерять ни одним из
+// трёх способов.
+export function reportBuildings(db, _args, _user) {
+  const ctx = buildingContext(db);
+  return {
+    own_letter: ctx.ownLetter,
+    own_key: ctx.ownKey,
+    buildings: ctx.options.map((o) => ({
+      key: o.key, letter: o.letter, own: o.own, label: ctx.label(o.key),
+    })),
+  };
 }

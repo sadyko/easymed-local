@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { dashboardSummary } from './dashboard.js';
+import { ownBuildingOnly, LAB_SCOPE_CLINIC, LAB_SCOPE_BUILDING } from '../../../public/js/admin/views/lab-scope.js';
 
 test('dashboard_summary returns today counts, collected, outstanding, low-stock', () => {
   const db = openDb(':memory:'); migrate(db);
@@ -46,18 +47,70 @@ test('dashboard_summary counts debt invoices as outstanding', () => {
   assert.equal(s.outstanding_amount, 140000);    // 60000 + 80000
 });
 
-// BRANCH_ORIGIN_V1 — плитка «Анализы в работе» и лабораторная очередь под ней
-// обязаны считать ОДНО И ТО ЖЕ. Очередь показывает работу своего здания
-// (sync_origin IS NULL); если плитка считает и приехавшую, лаборант видит
-// число, под которое в очереди нет ни одной пробирки.
-test('dashboard_summary: анализы соседнего филиала не попадают в плитку «в работе»', () => {
+// LAB_ONE_CLINIC_V1 — плитка «Анализы в работе» и лабораторная очередь под ней
+// обязаны считать ОДНУ И ТУ ЖЕ ГРАНИЦУ, а её с миграции 085 задаёт настройка
+// doc_settings.lab_scope, а не константа.
+//
+// Раньше здесь стояло жёсткое «только своё здание», и с 0.7.0 это стало ЛОЖЬЮ:
+// очередь по умолчанию клиниковая, плитка считала меньше, чем показывал список
+// под ней. Тест проверяет ОБА значения настройки — именно то расхождение,
+// ради которого условие когда-то и появилось.
+function seedLab() {
   const db = openDb(':memory:'); migrate(db);
   const pid = db.prepare("INSERT INTO patients (full_name, branch_id) VALUES ('C',1)").run().lastInsertRowid;
   const vid = db.prepare("INSERT INTO visits (patient_id, branch_id, visit_date) VALUES (?,1,date('now'))").run(pid).lastInsertRowid;
   const sid = db.prepare("INSERT INTO services (name, code, price, type, is_lab, active) VALUES ('ОАК','CBC',50000,'lab',1,1)").run().lastInsertRowid;
   db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, status) VALUES (?,?,1,'queued')").run(vid, sid);
   db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, status, sync_origin) VALUES (?,?,1,'queued','C')").run(vid, sid);
+  return db;
+}
+
+// Что показала бы ОЧЕРЕДЬ при этой настройке. Границу задаёт ТОТ ЖЕ модуль,
+// которым её накладывает экран (views/lab-scope.js): переписать правило в тесте
+// значило бы проверять свою копию, а не то, что видит лаборант.
+function queueWouldShow(db, scope) {
+  const rows = db.prepare(`SELECT vs.sync_origin AS o FROM visit_services vs
+      JOIN services s ON s.id = vs.service_id
+      WHERE s.is_lab = 1 AND vs.status IN ('queued','in_progress')
+        AND NOT EXISTS (SELECT 1 FROM lab_results lr WHERE lr.visit_service_id = vs.id AND lr.verified_at IS NOT NULL)`).all();
+  return ownBuildingOnly(scope) ? rows.filter((r) => r.o == null).length : rows.length;
+}
+
+test('dashboard_summary: по умолчанию плитка «в работе» считает всю клинику — как очередь', () => {
+  const db = seedLab();
+  const s = dashboardSummary(db, {}, { id: 1, role: 'admin' });
+  assert.equal(s.lab_scope, LAB_SCOPE_CLINIC);
+  assert.equal(s.lab_pending_count, 2, 'заказ соседнего здания виден и в очереди, и на плитке');
+  assert.equal(s.lab_pending_count, queueWouldShow(db, s.lab_scope), 'плитка = очередь');
+});
+
+test('dashboard_summary: при lab_scope=building плитка считает только своё здание — как очередь', () => {
+  const db = seedLab();
+  db.prepare("UPDATE doc_settings SET lab_scope = 'building' WHERE id = 1").run();
+  const s = dashboardSummary(db, {}, { id: 1, role: 'admin' });
+  assert.equal(s.lab_scope, LAB_SCOPE_BUILDING);
+  assert.equal(s.lab_pending_count, 1, 'считается только заказ, заведённый здесь');
+  assert.equal(s.lab_pending_count, queueWouldShow(db, s.lab_scope), 'плитка = очередь');
+});
+
+// BUILDING_REPORTS_V1 — счётчики не смешивают здания молча: наверху итог по
+// клинике, рядом разрез, где видно, чей это вклад.
+test('dashboard_summary: пациенты и визиты считаются по зданиям и в сумме', () => {
+  const db = openDb(':memory:'); migrate(db);
+  db.prepare("INSERT INTO branches (name, letter, active) VALUES ('Чиланзар','B',0)").run();
+  const own = db.prepare("INSERT INTO patients (full_name, branch_id) VALUES ('Своя',1)").run().lastInsertRowid;
+  db.prepare("INSERT INTO patients (full_name, branch_id, sync_origin) VALUES ('Приехала',1,'B')").run();
+  db.prepare("INSERT INTO visits (patient_id, branch_id, visit_date) VALUES (?,1,strftime('%Y-%m-%dT%H:%M:%SZ','now'))").run(own);
+  db.prepare("INSERT INTO visits (patient_id, branch_id, visit_date, sync_origin) VALUES (?,1,strftime('%Y-%m-%dT%H:%M:%SZ','now'),'B')").run(own);
 
   const s = dashboardSummary(db, {}, { id: 1, role: 'admin' });
-  assert.equal(s.lab_pending_count, 1, 'считается только заказ, заведённый здесь');
+  assert.equal(s.patients_today, 2, 'итог по клинике');
+  assert.equal(s.visits_today, 2);
+  assert.equal(s.building_count, 2, 'два здания: своё и B');
+  const own_b = s.buildings.find((b) => b.own);
+  const b = s.buildings.find((x) => x.key === 'B');
+  assert.equal(own_b.patients_today, 1);
+  assert.equal(b.patients_today, 1, 'приехавшая строка приписана зданию B, а не своему');
+  assert.equal(b.label, 'Чиланзар', 'имя берётся из перечня, включая строку active = 0');
+  assert.equal(own_b.visits_today + b.visits_today, s.visits_today);
 });

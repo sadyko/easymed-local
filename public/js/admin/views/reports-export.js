@@ -10,6 +10,13 @@ import { h, Icon, toast, clear } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { formatMethods } from '../../shared/payment-methods.js?v=pm1';   // INVOICE_METHOD_COLUMN_V1 — общий словарь с сервером
 import { reportTotals } from './report-totals.js?v=rt1';   // REPORT_TOTALS_V1
+// BUILDING_REPORTS_V1 — «Здание» в выгрузках. Это НЕ «Branch»: Branch — филиал
+// внутри этой базы (invoices.branch_id), а здание — отдельная установка со
+// своей базой, соединённая branch-sync'ом, и признак строки у неё
+// sync_origin (миграция 083 для клиники, 087 для денег). У приехавшего счёта
+// branch_id пустой, поэтому колонка Branch про него не говорит ничего —
+// именно поэтому нужна вторая.
+import { originTag } from '../record-origin.js';
 
 // The exact column order the owner spec'd. Keys map to fields we produce
 // in buildRevenueRow(); labels are the header row in the .xlsx.
@@ -37,6 +44,7 @@ export const REVENUE_COLUMNS = [
     { key: 'doctor_payroll_pct',   label: 'Doctor Payroll for Service (%)' },
     { key: 'doctor_payroll_amt',   label: 'Doctor Payroll for Service' },
     { key: 'branch',               label: 'Branch' },
+    { key: 'building',             label: 'Building' },
     { key: 'registrar_name',       label: 'Registrar Name' },
     { key: 'referral_category',    label: 'Referal source category' },
     { key: 'referrer_name',        label: 'Referrer Name' },
@@ -44,6 +52,28 @@ export const REVENUE_COLUMNS = [
     { key: 'referral_payroll_amt', label: 'Referral Payroll' },
     { key: 'invoice_number',       label: 'Invoice number' },
 ];
+
+// BUILDING_REPORTS_V1 — подписи зданий приходят от сервера (report_buildings):
+// перечень branches браузеру буквы не отдаёт, а соседнее здание вдобавок лежит
+// в нём как active = 0. Ошибка загрузки не должна ронять выгрузку — тогда
+// колонка просто пустеет, а не исчезает вся таблица.
+async function loadBuildingLabels() {
+    try {
+        const { data } = await supabase.rpc('report_buildings', {});
+        const list = (data && data.buildings) || [];
+        const byKey = new Map(list.map((b) => [b.key, b.label]));
+        const ownKey = (data && data.own_key) || null;
+        return (row) => {
+            const letter = originTag(row);
+            const key = letter || ownKey;
+            // Перевод СНАЧАЛА, подстановка ПОТОМ — tr() ищет строку целиком.
+            return byKey.get(key) || (letter ? trf('Филиал {letter}', { letter }) : '');
+        };
+    } catch (e) {
+        console.warn('[reports-export] buildings:', e && e.message);
+        return () => '';
+    }
+}
 
 // Period selector maps to a [fromISO, toISO] window against invoices.created_at
 // so the report matches what the Reports page already displays.
@@ -107,7 +137,7 @@ function fmtDateTime(iso) {
 }
 
 // One invoice_items row + all resolved sidecar lookups → one Excel row.
-function buildRevenueRow({ ii, inv, svc, svcType, svcCategory, doctor, registrar, branch, payer, referral, admittingVisit, admissionRow, sourceServiceRow }) {
+function buildRevenueRow({ ii, inv, svc, svcType, svcCategory, doctor, registrar, branch, building, payer, referral, admittingVisit, admissionRow, sourceServiceRow }) {
     const price     = Number(svc?.price   ?? ii.unit_price ?? 0);
     const qty       = Number(ii.quantity  ?? 1);
     const amount    = Number(ii.unit_price ?? 0) * qty;
@@ -167,6 +197,7 @@ function buildRevenueRow({ ii, inv, svc, svcType, svcCategory, doctor, registrar
         doctor_payroll_pct:    docPct,
         doctor_payroll_amt:    Math.round(docAmt * 100) / 100,
         branch:                branch?.name || '',
+        building:              building || '',
         registrar_name:        registrar?.full_name || '',
         referral_category:     referral?.category || '',
         referrer_name:         referral?.name || '',
@@ -187,6 +218,7 @@ export async function buildRevenueReport({ period, branchId, branchIds, clinicId
     if (!fromIso || !toIso) {
         [fromIso, toIso] = periodWindow(period);
     }
+    const buildingLabel = await loadBuildingLabels();
     let q = supabase.from('invoice_items')
         .select(`
             id, invoice_id, service_id, description, quantity, unit_price, discount_percentage, total, created_at,
@@ -196,7 +228,7 @@ export async function buildRevenueReport({ period, branchId, branchIds, clinicId
             invoices!inner (
                 id, invoice_number, visit_id, admission_id, patient_id, branch_id,
                 payer_id, coverage_type, subtotal, discount_amount, tax_amount,
-                total_amount, paid_amount, status, created_by, created_at, paid_at,
+                total_amount, paid_amount, status, created_by, created_at, paid_at, sync_origin,
                 patients ( id, mrn, full_name, phone, referral_source_id ),
                 branches ( id, name ),
                 payers   ( id, name, type )
@@ -300,6 +332,7 @@ export async function buildRevenueReport({ period, branchId, branchIds, clinicId
             doctor,
             registrar:    inv.created_by                ? registrarsById[inv.created_by]                              : null,
             branch:       inv.branches                  || null,
+            building:     buildingLabel(inv),
             payer:        inv.payers                    || null,
             referral:     inv.patients?.referral_source_id ? referralsById[inv.patients.referral_source_id] : null,
             admittingVisit: inv.visit_id                ? visitsById[inv.visit_id]                                    : null,
@@ -651,6 +684,10 @@ export const INVOICE_COLUMNS = [
     { key: 'mrn',       label: 'МРН' },
     { key: 'phone',     label: 'Телефон' },
     { key: 'branch',    label: 'Филиал' },
+    // BUILDING_REPORTS_V1 — «Филиал» рядом означает branch_id ВНУТРИ этой базы,
+    // а «Здание» — установку, из которой счёт приехал. У приехавшего счёта
+    // branch_id пустой, поэтому одна колонка на оба вопроса не отвечает.
+    { key: 'building',  label: 'Здание' },
     { key: 'payer',     label: 'Кто платит' },
     { key: 'subtotal',  label: 'Сумма без скидки' },
     { key: 'discount',  label: 'Скидка' },
@@ -666,9 +703,10 @@ export const INVOICE_COLUMNS = [
 const INV_STATUS_RU = { unpaid: 'Не оплачен', partial: 'Частично', paid: 'Оплачен', refunded: 'Возврат', void: 'Отменён', cancelled: 'Отменён', debt: 'Долг' };
 
 export async function buildInvoicesReport({ branchId, branchIds, clinicId, fromIso, toIso }) {
+    const buildingLabel = await loadBuildingLabels();
     let q = supabase.from('invoices')
         .select(`id, invoice_number, created_at, paid_at, status, subtotal, discount_amount, total_amount, paid_amount,
-            coverage_type, created_by, branch_id,
+            coverage_type, created_by, branch_id, sync_origin,
             patients ( full_name, mrn, phone ), branches ( name ), payers ( name )`)
         .gte('created_at', fromIso).lte('created_at', toIso)
         .order('created_at', { ascending: false })
@@ -693,6 +731,7 @@ export async function buildInvoicesReport({ branchId, branchIds, clinicId, fromI
             mrn:       r.patients?.mrn || '',
             phone:     r.patients?.phone || '',
             branch:    r.branches?.name || '',
+            building:  buildingLabel(r),
             payer:     r.payers?.name || (r.coverage_type === 'patient' || !r.coverage_type ? 'Пациент' : r.coverage_type),
             subtotal:  Number(r.subtotal || 0),
             discount:  Number(r.discount_amount || 0),

@@ -19,6 +19,11 @@ import { controlState } from './state.js';
 // hole open for as long as nobody looked.
 const READ_ONLY_RPCS = new Set([
   'dashboard_summary', 'reports_overview', 'run_report', 'owner_report',
+  // BUILDING_REPORTS_V1 — перечень зданий для выборки в «Отчётах». Чистое
+  // чтение справочного порядка, как reports_overview рядом: клиника с
+  // просроченной лицензией читает отчёты, и «читает» не должно означать
+  // «конструктор без списка зданий».
+  'report_buildings',
   'cashier_invoices', 'cash_shift_summary', 'shift_report', 'cashier_report',
   'callcenter_report', 'queue_board', 'documents_feed', 'accommodation_state',
   'deposit_balance', 'list_deposits', 'service_delete_check', 'get_clinic_by_slug',
