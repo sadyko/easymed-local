@@ -16,6 +16,11 @@ import {
   // руками: состояние переводит машина маршрута, она же проверяет роль.
   admissionTransition, assertMayTransition, loadAdmission,
 } from './inpatient-flow.js';
+// ПРИЗНАК ВРАЧА — один на сервер (см. шапку функции в inpatient-reviews.js):
+// администратор клиники может быть врачом, и по тексту роли это не видно.
+// Старый путь поступления обязан спросить его тем же вопросом, что и новый, —
+// иначе «лечащий врач» на карточке и «лечащий врач» в назначениях разъедутся.
+import { isDoctorRow } from './inpatient-reviews.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -25,7 +30,25 @@ export class RpcError extends Error {
 }
 
 const ADMIT_ROLES = ['admin', 'registrar', 'nurse', 'doctor'];
-const DISCHARGE_ROLES = ['admin', 'registrar', 'nurse', 'cashier'];
+// ВЫПИСЫВАЮТ ТЕ, КТО СТОИТ У КОЙКИ. Кассир и регистратура убраны отсюда, и это
+// исправление, а не ужесточение.
+//
+// Прямая выписка закрывает госпитализацию из любого состояния «в койке»: без
+// исхода, без эпикриза, без врачебной подписи. Пока список звучал как
+// «admin, registrar, nurse, cashier», это означало, что человек за кассой или
+// за стойкой регистратуры мог закрыть чужую историю болезни — при том, что
+// исход госпитализации («выписан домой» / «переведён» / «летальный исход») по
+// правилу TWO_STEP_DISCHARGE_V1 объявляет ВРАЧ, а оформляет старшая медсестра.
+// Ни кассир, ни регистратор в новом порядке выписку не подписывают нигде
+// (TRANSITION_ROLES в inpatient-flow.js: 'active→discharging' — врач,
+// 'discharging→discharged' — старшая медсестра, главный врач, админ), и
+// оставлять им СТАРУЮ кнопку значило бы держать открытым ровно тот вход,
+// который новый маршрут закрыл.
+//
+// Старшая медсестра и главный врач, наоборот, добавлены: именно они оформляют
+// выписку в новом порядке, и наследственный путь не должен быть им закрыт там,
+// где открыт рядовой медсестре.
+const DISCHARGE_ROLES = ['admin', 'nurse', 'senior_nurse', 'head_doctor'];
 // Applying a money discount is a stricter privilege than discharging: a nurse
 // or registrar can discharge (at full accommodation price) but may NOT waive or
 // reduce the bill — only an admin or cashier can (adversarial-review finding #1).
@@ -70,6 +93,76 @@ function isPositiveInt(v) {
 function nowIso(db) {
   return db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now') n").get().n;
 }
+
+// ─── ГРАНИЦА ВЫПУСКА: КТО ЕЩЁ ВПРАВЕ ХОДИТЬ СТАРЫМ ПУТЁМ ────────────────────
+//
+// `admit_patient` и `discharge_patient` — RPC версии v0.8.0. Каждый делает
+// СВОИМ ОДНИМ ДВИЖЕНИЕМ то, на что новый маршрут тратит четыре подписи, и
+// потому каждый — обход маршрута:
+//
+//   admit_patient      писал status='active' с пустыми examined_* и
+//                      attending_doctor_id: заявка → медсестра → первичный
+//                      осмотр → лечащий врач пропускались одним нажатием, и
+//                      получившуюся госпитализацию нельзя было ни лечить
+//                      (assertCanPrescribe: «Назначения ведёт лечащий врач
+//                      этого пациента»), ни починить;
+//   discharge_patient  закрывал госпитализацию без исхода, без эпикриза и без
+//                      врачебной подписи — из любого состояния «в койке».
+//
+// УБРАТЬ ИХ СОВСЕМ БЫЛО НЕЛЬЗЯ, и довод тот же, каким жил LEGACY_EDGES: в день
+// обновления в койках лежат люди, которых клали ДО него. У них нет выписного
+// эпикриза (без него новый первый шаг заявку не примет), а у части — и
+// лечащего врача (091 переносит attending_doctor_id := doctor_id, а старый
+// admit_patient позволял ему быть пустым). Закрыть старый путь для них значит
+// запереть живого человека в клинике порядком сборки программы.
+//
+// ЗАТО ЕГО МОЖНО ЗАКРЫТЬ ДЛЯ ВСЕХ ОСТАЛЬНЫХ, и граница проходит там, где ей
+// естественно проходить: `schema_migrations.applied_at` миграции 091 — это
+// МОМЕНТ, КОГДА ЭТА КЛИНИКА ОБНОВИЛАСЬ. Госпитализация, заведённая раньше, —
+// наследство; заведённая позже — прошла новым маршрутом целиком, и старому
+// пути в ней делать нечего. Дата не выдумана и не захардкожена: у каждой
+// клиники она своя, и наследство естественно кончается само, когда выпишется
+// последний, кто лежал до обновления.
+const RELEASE_MIGRATION = '091_inpatient_workflow.sql';
+
+function releaseCutoff(db) {
+  let row = null;
+  try {
+    row = db.prepare('SELECT applied_at FROM schema_migrations WHERE name = ?').get(RELEASE_MIGRATION);
+  } catch {
+    row = null;   // база старше таблицы миграций — наследства в ней нет по определению
+  }
+  return (row && row.applied_at) || null;
+}
+
+/**
+ * Заведена ли эта госпитализация ДО обновления, то есть вправе ли она ходить
+ * старым путём.
+ *
+ * Обе даты — ISO 'YYYY-MM-DDTHH:MM:SSZ' в UTC (DEFAULT колонки и applied_at
+ * пишет одно и то же strftime), поэтому сравнение строк здесь — сравнение
+ * времени, а не совпадение.
+ */
+function isLegacyAdmission(db, adm) {
+  const cutoff = releaseCutoff(db);
+  if (!cutoff) return false;
+  const created = adm && (adm.created_at || adm.admitted_at);
+  return typeof created === 'string' && created !== '' && created < cutoff;
+}
+
+// Текст отказа — ОДИН на оба старых RPC: человек у экрана должен узнать не
+// «нельзя», а куда идти. Слова названы теми же, что стоят на экранах.
+const LEGACY_ADMIT_REFUSAL =
+  'Госпитализация одним нажатием больше не открывает лечение: так пациент оставался без '
+  + 'первичного осмотра и без лечащего врача. Оформите заявку и положите пациента в разделе '
+  + '«Стационар»: медсестра размещает на койке, главный врач проводит первичный осмотр и '
+  + 'назначает лечащего врача.';
+
+const LEGACY_DISCHARGE_REFUSAL =
+  'Прямая выписка осталась только для тех, кого положили до этого обновления. Эту '
+  + 'госпитализацию выписывают в два шага: лечащий врач подаёт заявку на выписку в карте '
+  + 'госпитализации (исход, эпикриз, рекомендации), старшая медсестра оформляет её на экране '
+  + '«Выписки к оформлению».';
 
 // REQUEST_ADMISSION_V1 — easymed's request_admission RPC: the doctor files an
 // inpatient request from the service workspace. No bed is taken and no money
@@ -158,6 +251,34 @@ export function cancelAdmissionRequest(db, args, user) {
   return run();
 }
 
+/**
+ * СТАРЫЙ ПУТЬ ПОСТУПЛЕНИЯ — ТОЛЬКО ДЛЯ ЗАЯВОК, ОФОРМЛЕННЫХ ДО ЭТОГО ОБНОВЛЕНИЯ.
+ *
+ * Что здесь изменилось и почему (разбор C1):
+ *
+ *   1. НОВУЮ госпитализацию этот RPC больше НЕ ЗАВОДИТ. Раньше он писал
+ *      status='active' на пустом месте: без заявки, без размещения медсестрой,
+ *      без первичного осмотра и без лечащего врача. Экран доски коек звал его
+ *      кнопкой «Госпитализировать», а миграция 092 выдала эту доску медсестре,
+ *      старшей медсестре, главному врачу и регистратуре — то есть весь маршрут
+ *      владельца обходился одним нажатием у четырёх ролей сразу, и пациент
+ *      оставался БЕЗ ЛЕЧАЩЕГО ВРАЧА: назначения ему отказывали (403 «Назначения
+ *      ведёт лечащий врач этого пациента»), а admission_set_attending отвечал
+ *      «Лечащий врач уже назначен», потому что смотрел на статус. Кнопка убрана
+ *      с экрана (views/ward-beds.js), а вход закрыт здесь — экран не защита,
+ *      /api/rpc открыт curl'ом с любого компьютера клиники.
+ *
+ *   2. ЗАЯВКУ, ОФОРМЛЕННУЮ ДО ОБНОВЛЕНИЯ, он по-прежнему выполняет. Это то же
+ *      наследство, ради которого живут LEGACY_EDGES: строки в 'ordered',
+ *      заведённые старым request_admission, существуют в живых базах, и
+ *      закрывать им дорогу в день обновления незачем — новый экран их тоже
+ *      кладёт, но внешние вызовы на этот RPC уже написаны.
+ *
+ *   3. И ДАЖЕ ТОГДА ОН НЕ ОСТАВЛЯЕТ ПАЦИЕНТА БЕЗ ЛЕЧАЩЕГО ВРАЧА. Раз этот путь
+ *      ведёт сразу в 'active' (лечение открыто), он ОБЯЗАН проставить то, чем
+ *      лечение подписывают: attending_doctor_id и отметку осмотра. Без врача
+ *      поступление отвергается, а не проходит молча.
+ */
 export function admitPatient(db, args, user) {
   requireRole(user, ADMIT_ROLES);
 
@@ -220,31 +341,67 @@ export function admitPatient(db, args, user) {
     // doctor's referral joined to the stay it produced.
     const pending = db.prepare("SELECT * FROM admissions WHERE patient_id=? AND status='ordered' ORDER BY id LIMIT 1").get(patientId);
 
-    let admissionId;
-    if (pending) {
-      assertTransition('admission', pending.status, 'active');
-      // Details supplied at the desk win; anything omitted keeps what the
-      // referring doctor filed.
-      db.prepare(`
-        UPDATE admissions
-           SET bed_id = ?, ward_id = ?, status = 'active',
-               admitted_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),
-               doctor_id = COALESCE(?, doctor_id),
-               pathway = ?,
-               chief_complaint = CASE WHEN ? <> '' THEN ? ELSE chief_complaint END,
-               admission_diagnosis = CASE WHEN ? <> '' THEN ? ELSE admission_diagnosis END
-         WHERE id = ? AND status = 'ordered'
-      `).run(bedId, bed.ward_id, doctorId, pathway,
-             chiefComplaint, chiefComplaint, admissionDiagnosis, admissionDiagnosis, pending.id);
-      admissionId = pending.id;
-    } else {
-      const info = db.prepare(`
-        INSERT INTO admissions
-          (patient_id, bed_id, ward_id, doctor_id, pathway, chief_complaint, admission_diagnosis, status, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)
-      `).run(patientId, bedId, bed.ward_id, doctorId, pathway, chiefComplaint, admissionDiagnosis, user.id);
-      admissionId = info.lastInsertRowid;
+    // ГРАНИЦА ВЫПУСКА (см. isLegacyAdmission выше). Заявки нет вовсе — значит
+    // этот вызов завёл бы НОВУЮ госпитализацию мимо маршрута; заявка есть, но
+    // оформлена уже после обновления — значит она пришла новым путём и им же
+    // должна дойти до койки. В обоих случаях отказ называет экран, а не «нельзя».
+    if (!pending || !isLegacyAdmission(db, pending)) {
+      throw new RpcError(LEGACY_ADMIT_REFUSAL, 400);
     }
+
+    // ЛЕЧАЩИЙ ВРАЧ ОБЯЗАТЕЛЕН НА ЭТОМ ПУТИ, и это прямое следствие того, куда
+    // путь ведёт: в 'active', где назначения уже открыты. Кто их подписывает,
+    // спрашивает assertCanPrescribe — и на пустом attending_doctor_id отвечает
+    // 403 всем, включая того самого врача, который пациента и ведёт. Раньше
+    // такая госпитализация была невосстановима; теперь её нельзя даже создать.
+    // Направивший (doctor_id заявки) годится в лечащие по умолчанию — чаще
+    // всего это один человек.
+    const attendingId = doctorId !== null ? doctorId : pending.doctor_id;
+    if (!attendingId) {
+      throw new RpcError(
+        'Укажите лечащего врача: без него по этой госпитализации нельзя будет ни назначить '
+        + 'лечение, ни выписать пациента заявкой. ' + LEGACY_ADMIT_REFUSAL, 400);
+    }
+    const attending = db.prepare(
+      'SELECT id, role, is_doctor, specialty, license_number, active FROM users WHERE id = ?').get(attendingId);
+    if (!attending) throw new RpcError('doctor not found.', 400);
+    if (!isDoctorRow(attending)) {
+      throw new RpcError('Лечащим врачом можно назначить только врача: у выбранного сотрудника нет признака врача.', 400);
+    }
+    if (attending.active === 0) {
+      throw new RpcError('Сотрудник уволен — лечащим врачом его назначить нельзя.', 400);
+    }
+
+    const at = nowIso(db);
+    assertTransition('admission', pending.status, 'active');
+    // Details supplied at the desk win; anything omitted keeps what the
+    // referring doctor filed.
+    //
+    // ПОДПИСИ ПРОПУЩЕННЫХ ШАГОВ. Этот путь сжимает размещение, первичный осмотр
+    // и назначение лечащего в ОДНО действие ОДНОГО человека, и все три отметки
+    // ставятся его именем. Оставить их пустыми было бы хуже, чем «неточно»:
+    // строка стала бы неотличима от мигрировавшей (091 намеренно оставляет
+    // examined_* пустыми у тех, кто лежал до обновления), а разбор «кто открыл
+    // лечение, минуя осмотр» обязан их различать. COALESCE — чтобы повторный
+    // вызов не переписал уже стоящую подпись.
+    db.prepare(`
+      UPDATE admissions
+         SET bed_id = ?, ward_id = ?, status = 'active',
+             admitted_at = ?,
+             admitted_by = COALESCE(admitted_by, ?),
+             examined_at = COALESCE(examined_at, ?),
+             examined_by = COALESCE(examined_by, ?),
+             attending_doctor_id = ?,
+             doctor_id = COALESCE(?, doctor_id, ?),
+             pathway = ?,
+             chief_complaint = CASE WHEN ? <> '' THEN ? ELSE chief_complaint END,
+             admission_diagnosis = CASE WHEN ? <> '' THEN ? ELSE admission_diagnosis END
+       WHERE id = ? AND status = 'ordered'
+    `).run(bedId, bed.ward_id, at,
+           (user && user.id) || null, at, (user && user.id) || null,
+           attendingId, doctorId, attendingId, pathway,
+           chiefComplaint, chiefComplaint, admissionDiagnosis, admissionDiagnosis, pending.id);
+    const admissionId = pending.id;
 
     db.prepare("UPDATE admissions SET admission_no = 'ADM-' || substr('00000'||id,-5,5) WHERE id=?").run(admissionId);
     db.prepare("UPDATE beds SET status='occupied' WHERE id=?").run(bedId);
@@ -314,6 +471,11 @@ export function dischargePatient(db, args, user) {
     // упёрлось бы в отказ на живом человеке. Стрелки перечислены в LEGACY_EDGES
     // (inpatient-flow.js), и тест держит инвариант: из КАЖДОГО состояния «в
     // койке» наружу ведёт хотя бы один путь.
+    //
+    // НО ТОЛЬКО ДЛЯ НИХ — см. границу выпуска ниже. «Оставлено работать» и
+    // «оставлено работать навсегда для всех» — разные вещи, и разбор C1 показал
+    // цену второго: 16 сочетаний роли и состояния закрывали чужую историю
+    // болезни без исхода, без эпикриза и без подписи врача.
     if (!IN_BED_STATUSES.includes(admission.status)) {
       throw new RpcError(
         admission.status === 'ordered'
@@ -322,6 +484,21 @@ export function dischargePatient(db, args, user) {
             ? 'Заявка на госпитализацию отменена — выписывать некого.'
             : 'Пациент уже выписан — госпитализация закрыта.', 400);
     }
+
+    // ГРАНИЦА ВЫПУСКА (см. isLegacyAdmission выше). ЭТА ПРОВЕРКА СТОИТ ПОСЛЕ
+    // проверки состояния намеренно: у заявки, у отменённой и у уже выписанной
+    // госпитализации свой точный ответ, и заменять его рассказом про два шага
+    // значило бы отвечать не на тот вопрос.
+    //
+    // Наследство — это ЛЮДИ В КОЙКАХ НА МОМЕНТ ОБНОВЛЕНИЯ, а не «кнопка
+    // навсегда». У них нет выписного эпикриза и не будет: их клали до того,
+    // как он стал обязателен, и новый первый шаг их заявку не примет. Всё, что
+    // завели ПОСЛЕ обновления, прошло маршрут целиком — у него есть лечащий
+    // врач, есть кому подписать исход, и обходить два шага незачем.
+    if (!isLegacyAdmission(db, admission)) {
+      throw new RpcError(LEGACY_DISCHARGE_REFUSAL, 400);
+    }
+
     // Правило базы: статус пишут только после того, как его одобрил маршрут.
     assertTransition('admission', admission.status, 'discharged');
 

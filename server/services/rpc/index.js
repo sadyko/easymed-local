@@ -10,7 +10,7 @@ import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport,
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit,
   admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue } from './inpatient.js';   // ADMISSION_ORDER_V1 / TWO_STEP_DISCHARGE_V1
 import { admissionFlowState, inpatientCapabilities } from './inpatient-flow.js';   // INPATIENT_FLOW_V1
-import { admissionReviewSave, admissionSetAttending, admissionReviewsList } from './inpatient-reviews.js';   // INPATIENT_REVIEW_V1
+import { admissionReviewSave, admissionSetAttending, admissionChangeAttending, admissionReviewsList } from './inpatient-reviews.js';   // INPATIENT_REVIEW_V1
 import {
   treatmentOrderCreate, treatmentOrderCancel, treatmentOrdersList,
   treatmentAdminMark, treatmentAdminUnmark, treatmentTasksDue,
@@ -203,6 +203,13 @@ export const RPC = {
   // в control/gate.js).
   admission_review_save:          (db, args, user) => admissionReviewSave(db, args, user),
   admission_set_attending:        (db, args, user) => admissionSetAttending(db, args, user),
+  // СМЕНА лечащего врача — то самое «делается отдельно», которым
+  // admission_set_attending отказывал, не имея за собой ничего. Главный врач
+  // или администратор, на 'active' и 'discharging'. Он же — единственный
+  // способ починить госпитализацию, у которой attending_doctor_id пуст:
+  // старый admit_patient позволял класть пациента без врача, 091 перенесла
+  // такие строки как есть, и назначения им отвечали 403 всем без исключения.
+  admission_change_attending:     (db, args, user) => admissionChangeAttending(db, args, user),
   admission_reviews_list:         (db, args, user) => admissionReviewsList(db, args, user),
   // Что ЭТА роль вправе делать в стационаре вообще. Один ответ на экран-очередь
   // вместо запроса по каждой строке: право на шаг зависит от роли, а не от

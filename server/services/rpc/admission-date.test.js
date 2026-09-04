@@ -15,14 +15,28 @@ import { billAccommodation, accommodationState } from './accommodation.js';
 
 const NURSE = { id: 2, role: 'nurse', full_name: 'Медсестра' };
 const LAB   = { id: 5, role: 'lab', full_name: 'Лаборант' };
+const DOC_ID = 3;
+
+// СТАРЫЙ ПУТЬ ПОСТУПЛЕНИЯ ТЕПЕРЬ ТОЛЬКО ДЛЯ ДООБНОВЛЕНЧЕСКИХ ЗАЯВОК.
+// `admit_patient` больше не заводит новую госпитализацию и требует лечащего
+// врача (isLegacyAdmission, rpc/inpatient.js): одно нажатие открывало лечение
+// без осмотра и без врача. Этой фикстуре нужен просто пациент в койке, поэтому
+// она заводит заявку с датой ДО обновления — ровно то, что видит клиника в день
+// установки.
+function legacyAdmit(db, args, user) {
+    db.prepare("INSERT INTO admissions (patient_id, doctor_id, status, created_at)"
+             + " VALUES (?,?,'ordered','2000-01-01T00:00:00Z')").run(args.patient_id, args.doctor_id ?? null);
+    return admitPatient(db, args, user);
+}
 
 function seed() {
   const db = openDb(':memory:'); migrate(db);
   db.prepare("INSERT INTO users (id,username,password_hash,role,full_name) VALUES (2,'n','x','nurse','Медсестра')").run();
+  db.prepare("INSERT INTO users (id,username,password_hash,role,full_name) VALUES (3,'d','x','doctor','Др. Азиза')").run();
   const pid = db.prepare("INSERT INTO patients (full_name) VALUES ('Пациент')").run().lastInsertRowid;
   const wid = db.prepare("INSERT INTO wards (name, billing_mode, price_per_day) VALUES ('201','daily',250000)").run().lastInsertRowid;
   const bid = db.prepare("INSERT INTO beds (ward_id, code, status) VALUES (?,'1','free')").run(wid).lastInsertRowid;
-  const adm = admitPatient(db, { patient_id: pid, bed_id: bid }, NURSE).admission;
+  const adm = legacyAdmit(db, { patient_id: pid, bed_id: bid, doctor_id: DOC_ID }, NURSE).admission;
   return { db, adm };
 }
 const iso = (daysAgo) => new Date(Date.now() - daysAgo * 86400000).toISOString().slice(0, 19) + 'Z';

@@ -2,9 +2,15 @@
 // built on the local /api (the legacy cloud beds.js was Supabase/RLS-coupled).
 // Occupancy is DERIVED from active admissions (not trusted from beds.status),
 // mirroring easymed's currentByBed map. Money is server-side:
-//   admit_patient / discharge_patient / set_bed_status (server/services/rpc/inpatient.js)
-//   discharge computes the accommodation charge and creates an unpaid invoice,
-//   which then appears in the Cashier's outstanding list.
+//   set_bed_status / transfer_admission / create_invoice_for_admission
+//   (server/services/rpc/inpatient.js).
+// INPATIENT_ROUTE — ПОСТУПЛЕНИЕ И ВЫПИСКА ЗДЕСЬ БОЛЬШЕ НЕ ЖИВУТ. Обе кнопки
+// звали RPC версии v0.8.0 (admit_patient / discharge_patient), каждый из
+// которых проходил весь маршрут госпитализации одним движением: поступление —
+// без осмотра и без лечащего врача, выписка — без исхода, без эпикриза и без
+// врачебной подписи. Поступление теперь в разделе «Стационар», выписка — в
+// карте госпитализации и на экране «Выписки к оформлению». Подробности у
+// каждого из двух мест ниже.
 // Deferred vs easymed (flagged): transfers/home-bed, per-stay service/product
 // line-items, prescriptions, monthly continuable accrual, full-screen console.
 
@@ -15,7 +21,6 @@ import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-st
 import { CAT_ORDER, categoryOf, filterCatalog, categoryCounts } from '../../shared/service-categories.js';   // SERVICE_CATALOG_FILTER_V1   // ACCOMMODATION_AS_SERVICE_V1
 import { h, Icon, clear, toast, Tag, field, fmtDateTime, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — tr() matches WHOLE strings, so assembled sentences go through trf(): translate first, substitute second
-import { phoneInput } from '../phone-input.js?v=ph1';
 import { searchableSelect } from './searchable-select.js?v=ss2';   // SEARCHABLE_SELECT_V1
 
 const STATUS = {
@@ -41,7 +46,6 @@ const BED_TYPE_LABEL = {
 // отношения не имеют и на этой доске были бы шумом.
 const STATIONARY_ROOM_TYPES = ['surgery'];
 
-const PATHWAYS = [['therapy', 'Therapy (medical)'], ['surgical', 'Surgical']];
 
 function fmtPrice(n) {
     const v = Math.round(Number(n) || 0);
@@ -297,7 +301,7 @@ function bedTile(bed, ward, data, root) {
         if (adm.users && adm.users.full_name) tile.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', display: 'flex', alignItems: 'center', gap: '4px' } }, Icon('Stethoscope', { size: 11 }), adm.users.full_name));
     } else {
         tile.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: 'auto' } },
-            st === 'free' ? tr('Нажмите, чтобы положить') : (bed.type && bed.type !== 'standard' ? tr(BED_TYPE_LABEL[bed.type] || bed.type) : '—')));
+            st === 'free' ? tr('Госпитализация — в разделе «Стационар»') : (bed.type && bed.type !== 'standard' ? tr(BED_TYPE_LABEL[bed.type] || bed.type) : '—')));
     }
     return tile;
 }
@@ -305,139 +309,39 @@ function bedTile(bed, ward, data, root) {
 function onBedClick(bed, ward, adm, root) {
     const st = adm ? 'occupied' : bed.status;
     if (adm) return bedDetailModal(bed, ward, adm, root);
-    if (st === 'free') return admitModal(bed, ward, root);
-    return housekeepingModal(bed, ward, root);   // cleaning / maintenance
+    // Свободная койка ведёт в то же окно состояния койки, что уборка и ремонт:
+    // госпитализация оформляется в разделе «Стационар» (см. блок ниже).
+    return housekeepingModal(bed, ward, root);   // free / cleaning / maintenance
 }
 
 // ---------------------------------------------------------------------------
-// Admit
+// ЗДЕСЬ БЫЛА КНОПКА «ГОСПИТАЛИЗИРОВАТЬ» — И ЕЁ УБРАЛИ НАМЕРЕННО
 // ---------------------------------------------------------------------------
-// QUICK_PATIENT_V1 — минимальная карточка пациента из окна госпитализации:
-// ФИО* + телефон (+ дата рождения) -> insert patients -> сразу подставляется
-// в форму. Полная карточка дозаполняется позже в «Пациентах».
-function quickCreatePatient(onCreated) {
-    const nameInp  = h('input', { type: 'text', placeholder: 'Фамилия Имя Отчество' });
-    const phoneInp = phoneInput('phone', '+998 90 961 00 04');
-    const dobInp   = h('input', { type: 'date' });
-    modal('Новый пациент', 'User',
-        [
-            field('ФИО', nameInp, { required: true }),
-            field('Телефон', phoneInp),
-            field('Дата рождения', dobInp),
-        ],
-        'Создать',
-        async () => {
-            const name = nameInp.value.trim();
-            if (!name) { toast('Укажите ФИО.', 'fail'); return false; }
-            const payload = { full_name: name };
-            if (phoneInp.value.trim()) payload.phone = phoneInp.value.trim();
-            if (dobInp.value) payload.date_of_birth = dobInp.value;
-            const { data, error } = await supabase.from('patients').insert(payload).select('id, full_name, mrn').single();
-            if (error) { toast(trf('Не удалось создать: {msg}', { msg: error.message }), 'fail'); return false; }
-            toast(trf('Пациент создан: {name}', { name: data.full_name + (data.mrn ? ' · ' + data.mrn : '') }), 'ok');
-            onCreated(data);
-            return true;
-        });
-}
-
-function admitModal(bed, ward, root) {
-    let patientId = null;
-    const searchInp = h('input', {
-        type: 'text', placeholder: 'Поиск пациента по имени, MRN, телефону…', autocomplete: 'off',
-        style: { width: '100%', boxSizing: 'border-box', padding: '11px 12px 11px 34px', border: '1px solid var(--ink-200)',
-                 borderRadius: '10px', fontFamily: 'inherit', fontSize: '13.5px', outline: 'none', transition: 'border-color .12s, box-shadow .12s' },
-    });
-    searchInp.addEventListener('focus', () => { searchInp.style.borderColor = 'var(--primary-400, #4bb39a)'; searchInp.style.boxShadow = '0 0 0 3px var(--primary-50, #f2faf8)'; });
-    searchInp.addEventListener('blur', () => { searchInp.style.borderColor = 'var(--ink-200)'; searchInp.style.boxShadow = 'none'; });
-    const searchWrap = h('div', { style: { position: 'relative', flex: 1 } },
-        h('span', { style: { position: 'absolute', left: '11px', top: '21px', transform: 'translateY(-50%)', color: 'var(--ink-400)', display: 'flex', pointerEvents: 'none' } }, Icon('Search', { size: 14 })),
-        searchInp);
-    const results = h('div', { style: { border: '1px solid var(--ink-100)', borderRadius: '8px', marginTop: '4px', maxHeight: '160px', overflow: 'auto', display: 'none' } });
-    const chosen = h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } });
-    let timer = null;
-    searchInp.addEventListener('input', () => {
-        patientId = null; chosen.textContent = '';
-        clearTimeout(timer);
-        const q = searchInp.value.trim();
-        if (q.length < 2) { results.style.display = 'none'; return; }
-        timer = setTimeout(async () => {
-            const { data, error } = await supabase.from('patients').select('id, mrn, full_name').or('full_name.ilike.%' + q + '%,mrn.ilike.%' + q + '%,phone.ilike.%' + q + '%').eq('active', 1).limit(8);
-            clear(results);
-            if (error) { console.warn('[admit] search:', error.message); }
-            if (!data || !data.length) {
-                // SEARCH_EMPTY_HINT_V1 — пустой результат объясняет себя,
-                // а не выглядит сломанным поиском.
-                results.appendChild(h('div', { class: 'muted', style: { padding: '9px 10px', fontSize: '12.5px' } },
-                    trf('Не найдено «{q}» — проверьте написание или создайте пациента кнопкой «+».', { q })));
-                results.style.display = '';
-                return;
-            }
-            for (const p of data) {
-                results.appendChild(h('div', {
-                    style: { padding: '7px 10px', cursor: 'pointer', fontSize: '13.5px' },
-                    onmouseover: (e) => e.currentTarget.style.background = 'var(--ink-25)',
-                    onmouseout: (e) => e.currentTarget.style.background = 'transparent',
-                    onclick: () => { patientId = p.id; searchInp.value = p.full_name; chosen.textContent = trf('Выбран: {name}', { name: p.full_name + (p.mrn ? ' · ' + p.mrn : '') }); results.style.display = 'none'; },
-                }, p.full_name + (p.mrn ? '  ·  ' + p.mrn : '')));
-            }
-            results.style.display = '';
-        }, 220);
-    });
-
-    const doctorSel = h('select', null, h('option', { value: '' }, 'Лечащий врач'));
-    supabase.from('users').select('id, full_name').eq('is_active', 1).eq('role', 'doctor').order('full_name').then(({ data }) => {
-        for (const d of (data || [])) doctorSel.appendChild(h('option', { value: String(d.id) }, d.full_name));
-    });
-    // SEARCHABLE_SELECT_V1 — врачей в списке больше двух десятков, и обычный
-    // <select> раскрывался стеной имён поверх всей формы. Оборачиваем: сам
-    // doctorSel остаётся и читается ниже как раньше (doctorSel.value).
-    const doctorPick = searchableSelect(doctorSel, { placeholder: 'Врач — начните вводить фамилию…' });
-    const pathwaySel = h('select', null, ...PATHWAYS.map(([v, l]) => h('option', { value: v }, l)));
-    const complaintInp = h('input', { type: 'text', placeholder: 'Основная жалоба / причина госпитализации' });
-    const dxInp = h('input', { type: 'text', placeholder: 'Диагноз при поступлении (необязательно)' });
-
-    // ADMIT_PRETTY_V1 — короткий заголовок + бирюзовый чип места; поиск с
-    // иконкой и жёлтым «+» (быстрое создание пациента); врач и pathway в ряд.
-    const newPatientBtn = h('button', {
-        type: 'button', title: 'Создать пациента',
-        style: { flex: '0 0 40px', height: '40px', borderRadius: '10px', cursor: 'pointer', fontWeight: 800, fontSize: '17px',
-                 background: 'var(--warn-50, #fdf3e1)', border: '1px solid var(--warn-200, #f2d9a6)', color: 'var(--warn-800, #8a6116)' },
-        onclick: () => quickCreatePatient((p) => {
-            patientId = p.id; searchInp.value = p.full_name;
-            chosen.textContent = trf('Выбран: {name}', { name: p.full_name + (p.mrn ? ' · ' + p.mrn : '') });
-            results.style.display = 'none';
-        }),
-    }, '+');
-    modal('Госпитализировать пациента', 'Bed',
-        [
-            h('div', {
-                style: { padding: '9px 12px', background: 'var(--primary-25, #f2faf8)', border: '1px solid var(--primary-100, #d7efe9)',
-                         borderRadius: '10px', fontSize: '13.5px', fontWeight: 700, color: 'var(--primary-700)',
-                         display: 'flex', alignItems: 'center', gap: '7px' },
-            }, Icon('Bed', { size: 14 }), trf('Палата {ward} · Койка {bed}', { ward: ward ? ward.name : '—', bed: bed.code })),
-            field('Пациент', h('div', null,
-                h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } }, searchWrap, newPatientBtn),
-                results, chosen), { required: true }),
-            h('div', { class: 'row', style: { gap: '12px', alignItems: 'flex-start' } },
-                h('div', { style: { flex: 1 } }, field('Лечащий врач', doctorPick)),
-                h('div', { style: { flex: 1 } }, field('Pathway', pathwaySel))),
-            field('Основная жалоба', complaintInp),
-            field('Диагноз при поступлении', dxInp),
-        ],
-        'Госпитализировать',
-        async () => {
-            if (!patientId) { toast('Выберите пациента.', 'fail'); return false; }
-            const { error } = await supabase.rpc('admit_patient', {
-                patient_id: patientId, bed_id: bed.id,
-                doctor_id: doctorSel.value ? Number(doctorSel.value) : null,
-                pathway: pathwaySel.value, chief_complaint: complaintInp.value || '', admission_diagnosis: dxInp.value || '',
-            });
-            if (error) { toast((error.message) || 'Failed to admit.', 'fail'); return false; }
-            toast('Пациент госпитализирован.', 'ok');
-            await paint(root);
-            return true;
-        });
-}
+//
+// Свободная койка открывала окно `admitModal`, а оно звало `admit_patient`:
+// один запрос писал status='active' с пустым первичным осмотром и пустым
+// лечащим врачом. Весь маршрут владельца — заявка → медсестра кладёт →
+// первичный осмотр главного врача → назначение лечащего — обходился одним
+// нажатием, а миграция 092 выдала эту доску медсестре, старшей медсестре,
+// главному врачу и РЕГИСТРАТУРЕ. Хуже того, получившаяся госпитализация не
+// лечилась: без attending_doctor_id назначения отвечали 403 «Назначения ведёт
+// лечащий врач этого пациента» — в том числе тому самому врачу, который
+// пациента и ведёт.
+//
+// Поступление живёт теперь в разделе «Стационар»: регистратура оформляет
+// заявку, медсестра размещает на койке, главный врач осматривает и назначает
+// лечащего врача. Каждый шаг подписан и проверен сервером
+// (rpc/inpatient-flow.js), и ни один не пропускается.
+//
+// ДОСКА КОЕК ОСТАЁТСЯ ПРИ СВОЁМ ДЕЛЕ, а не превращается в витрину: занятость,
+// статус койки (уборка / ремонт / свободна), услуги и товары пациента, счёт,
+// проживание, перевод, журнал движений. По свободной койке щёлкают, чтобы
+// поменять её СОСТОЯНИЕ, — это то, ради чего доска и нужна.
+//
+// Сервер закрыт отдельно: /api/rpc открыт curl'ом с любого компьютера клиники,
+// поэтому `admit_patient` отказывает сам (rpc/inpatient.js — он выполняет
+// только заявку, оформленную ДО этого обновления, и новых госпитализаций не
+// заводит). Спрятанная кнопка — не защита.
 
 // ---------------------------------------------------------------------------
 // Bed detail + discharge
@@ -545,8 +449,9 @@ function bedDetailModal(bed, ward, adm, root) {
                 onclick: () => transferDialog() }, '→ Перевести'),
             h('button', { class: 'btn btn-primary', disabled: !selCount,
                 onclick: () => generateInvoice() }, Icon('Plus', { size: 14 }), ' Сформировать счёт', selCount ? ' (' + selCount + ')' : ''),
-            h('button', { class: 'btn', style: { background: 'var(--ok-600, #16a34a)', borderColor: 'var(--ok-600, #16a34a)', color: '#fff', fontWeight: 700 },
-                onclick: () => dischargeDialog() }, Icon('Check', { size: 14 }), ' Выписать'),
+            // ЗДЕСЬ БЫЛА КНОПКА «ВЫПИСАТЬ» — см. блок «Выписка ушла отсюда» ниже.
+            h('span', { class: 'muted', style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12.5px' } },
+                Icon('Help', { size: 13 }), tr('Выписку оформляют в карте госпитализации')),
             h('span', { class: 'grow' }),
             h('span', { style: { fontSize: '13.5px', fontWeight: 700 } }, 'К ОПЛАТЕ ', h('span', { class: 'num', style: { fontSize: '15px' } }, fmtPrice(unbilledSelectedTotal()) + ' UZS')),
         ));
@@ -815,7 +720,14 @@ function bedDetailModal(bed, ward, adm, root) {
                     const qty = Math.max(1, Math.round(Number(x.qty)));
                     const price = Number(x.s.price) || 0;
                     const { error } = await supabase.from('admission_services').insert({
-                        admission_id: adm.id, service_id: x.s.id, doctor_id: adm.doctor_id || null,
+                        // ЛЕЧАЩИЙ, А НЕ НАПРАВИВШИЙ. `adm.doctor_id` — врач, который
+                        // ПРИСЛАЛ пациента в стационар; работу в отделении ведёт
+                        // лечащий (attending_doctor_id, миграция 091), и выработка
+                        // за услугу должна доставаться ему. Пока здесь стоял
+                        // doctor_id, каждая услуга и каждая выдача записывались на
+                        // направившего — вместе с деньгами за чужую работу.
+                        admission_id: adm.id, service_id: x.s.id,
+                        doctor_id: adm.attending_doctor_id || adm.doctor_id || null,
                         bed_id: adm.bed_id, ward_id: adm.ward_id,
                         quantity: qty, unit_price: price, total: price * qty, status: 'added', billable: 1,
                     });
@@ -917,7 +829,7 @@ function bedDetailModal(bed, ward, adm, root) {
                 for (const x of lines) {
                     const { error } = await supabase.rpc('dispense_admission_item', {
                         p_admission_id: adm.id, p_item_id: x.p.id, p_qty: Number(x.qty),
-                        p_doctor_id: adm.doctor_id || null,
+                        p_doctor_id: adm.attending_doctor_id || adm.doctor_id || null,   // лечащий, а не направивший — см. «Услуги» выше
                         p_billable: billChk.checked, p_note: noteInp.value.trim() || null,
                     });
                     if (error) fails.push(x.p.name + ': ' + error.message); else ok++;
@@ -959,22 +871,28 @@ function bedDetailModal(bed, ward, adm, root) {
             });
     }
 
-    // -- выписка (существующий RPC discharge_patient) --
-    function dischargeDialog() {
-        const est = estimateCharge(ward, bed, adm.admitted_at, Number(adm.accommodation_discount_percent) || 0);
-        modal('Выписать пациента', 'Check',
-            [h('div', { style: { fontSize: '13.5px', lineHeight: 1.6 } },
-                'Проживание (расчёт): ', h('b', null, fmtPrice(est.net), ' сум'), h('br'),
-                'Итог посчитает сервер и добавит в новый счёт. Небиллованные услуги/товары выставите кнопкой «Сформировать счёт».')],
-            'Выписать',
-            async () => {
-                const { error } = await supabase.rpc('discharge_patient', {
-                    admission_id: adm.id, discount_percent: Number(adm.accommodation_discount_percent) || 0 });
-                if (error) { toast(error.message, 'fail'); return false; }
-                toast('Пациент выписан — счёт за проживание в кассе.', 'ok');
-                close(); await paint(root); return true;
-            });
-    }
+    // ─── ВЫПИСКА УШЛА ОТСЮДА, И ЭТО ГЛАВНОЕ ИСПРАВЛЕНИЕ ЭТОГО ЭКРАНА ────────
+    //
+    // Здесь стояла кнопка «Выписать», и она звала `discharge_patient` — RPC
+    // версии v0.8.0, который закрывает госпитализацию ОДНИМ движением: без
+    // исхода («выписан домой» / «переведён» / «летальный исход»), без выписного
+    // эпикриза, без рекомендаций и без подписи врача — из любого состояния «в
+    // койке», включая пациента, которого главный врач ещё даже не осматривал.
+    // Список ролей у этого RPC был шире некуда (кассир, регистратура), а
+    // миграция 092 выдала саму доску коек ещё четырём ролям.
+    //
+    // В новом порядке выписка — ДВА ШАГА РАЗНЫХ ЛЮДЕЙ (TWO_STEP_DISCHARGE_V1):
+    // лечащий врач подаёт заявку в карте госпитализации (исход, опубликованный
+    // эпикриз, рекомендации), старшая медсестра оформляет её на экране «Выписки
+    // к оформлению» (фактическое время, чек-лист, долг, койка в «уборку»).
+    // Оставить рядом кнопку, которая делает то же самое, но без всего этого,
+    // значило бы оставить открытой дверь, ради закрытия которой два шага и
+    // придумали: отделение всегда выберет одно нажатие вместо двух.
+    //
+    // Сервер закрыт независимо от экрана: `discharge_patient` теперь отвечает
+    // отказом всем госпитализациям, заведённым ПОСЛЕ обновления, и остаётся
+    // только для тех, кто лежал в койке в день обновления (у них нет и не будет
+    // эпикриза). См. isLegacyAdmission в rpc/inpatient.js.
 
     // ---------------- shell ----------------
     overlay.appendChild(h('div', { class: 'modal-card', style: { width: 'calc(100vw - 48px)', height: 'calc(100vh - 48px)', maxWidth: 'calc(100vw - 48px)', maxHeight: 'calc(100vh - 48px)', display: 'flex', flexDirection: 'column' } },

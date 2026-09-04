@@ -112,7 +112,14 @@ export const TERMINAL = {
 
 // The state every entity starts in.
 export const INITIAL = {
-  admission: ['ordered', 'active'],   // a walk-in is admitted without a request (admit_patient, v0.8.0)
+  // КАЖДАЯ госпитализация начинается ЗАЯВКОЙ. 'active' стояло здесь потому, что
+  // старый admit_patient заводил лежащего пациента ОДНИМ движением, без заявки
+  // и без осмотра; этот вход закрыт (rpc/inpatient.js — RPC выполняет только
+  // заявку, оформленную ДО обновления, и новых строк не создаёт). Недостижимым
+  // 'active' от этого не стало: к нему ведёт маршрут
+  // ordered → admitted → examined → active, и тест достижимости проверяет
+  // именно это, а не список здесь.
+  admission: ['ordered'],
   invoice: ['unpaid', 'paid'],          // a zero-balance invoice is born paid
 };
 

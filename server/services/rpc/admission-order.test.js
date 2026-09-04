@@ -57,6 +57,17 @@ function seed() {
   return { db, p1, p2, wardA, wardB, bedA1, bedA2, bedB1, bedClean, bedFix, bedOff };
 }
 
+// Госпитализация, заведённая СТАРЫМ путём ДО обновления. `admit_patient`
+// больше не создаёт новых строк и требует лечащего врача (isLegacyAdmission,
+// rpc/inpatient.js): одним нажатием он открывал лечение без первичного осмотра
+// и без врача. Двум тестам ниже нужен именно результат старого пути — лежащий
+// пациент в 'active', — а не проверка самой границы.
+function legacyAdmit(db, patientId, bedId) {
+  db.prepare("INSERT INTO admissions (patient_id, doctor_id, status, created_at)"
+           + " VALUES (?,4,'ordered','2000-01-01T00:00:00Z')").run(patientId);
+  return admitPatient(db, { patient_id: patientId, bed_id: bedId, doctor_id: 4 }, nurse);
+}
+
 // Ровно тот запрос, которым живёт окно медсестры (views/admissions.js):
 // открытые госпитализации, разложенные по состояниям.
 function nurseWindow(db) {
@@ -267,7 +278,7 @@ test('отказ: заявки нет — пациент уже на койке,
   assert.throws(() => admissionAdmit(db2, { admission_id: cancelled.id, bed_id: b1 }, nurse), /отменена/);
 
   const { db: db3, p1: r1, bedA1: c1, bedA2: c2 } = seed();
-  const stay = admitPatient(db3, { patient_id: r1, bed_id: c1 }, nurse).admission;   // путь v0.8.0 → 'active'
+  const stay = legacyAdmit(db3, r1, c1).admission;   // путь v0.8.0 → 'active'
   assert.throws(() => admissionAdmit(db3, { admission_id: stay.id, bed_id: c2 }, nurse), /уже размещён на койке/);
 });
 
@@ -321,7 +332,7 @@ test('отмена уже размещённого пациента отпуск
 
 test('начатое лечение отменить нельзя — его выписывают', () => {
   const { db, p1, bedA1 } = seed();
-  const stay = admitPatient(db, { patient_id: p1, bed_id: bedA1 }, nurse).admission;   // 'active'
+  const stay = legacyAdmit(db, p1, bedA1).admission;   // 'active'
   assert.throws(() => admissionOrderCancel(db, { admission_id: stay.id, reason: 'причина' }, registrar),
     /Отменить можно только госпитализацию, которая ещё не дошла до лечения/);
   assert.equal(db.prepare('SELECT status FROM admissions WHERE id=?').get(stay.id).status, 'active');

@@ -200,6 +200,30 @@ test('091: индексы на месте, включая новый (status, wa
   db.close();
 });
 
+test('091: индекс на invoices(admission_id) создаётся ДО пересборки, и пересборка его не трогает', () => {
+  // Смысл — в скорости самой миграции: DROP TABLE при foreign_keys=ON проверяет
+  // `invoices` на КАЖДУЮ удаляемую госпитализацию, и без индекса делает это
+  // полным перебором (8 000 / 250 000 — 447 секунд без клиники). Проверяется
+  // ПРИЧИНА, а не время: порядок операторов в файле. Подробный разбор и случай
+  // «091 уже применена» — в 098.test.js.
+  const sql = fs.readFileSync(path.join(DIR, M091), 'utf8');
+  const NL = String.fromCharCode(10);
+  const code = sql.split(NL).filter((l) => !l.trim().startsWith('--')).join(NL);
+  assert.ok(code.indexOf('CREATE INDEX IF NOT EXISTS idx_invoices_admission')
+            < code.indexOf('DROP TABLE admissions'),
+    'индекс обязан существовать ДО пересборки — иначе он бесполезен именно там, где нужен');
+
+  const db = clinicBefore();
+  apply091(db);
+  const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='invoices'").all().map((r) => r.name);
+  assert.ok(idx.includes('idx_invoices_admission'), 'после 091 индекса на invoices нет');
+  // `invoices` — таблица с триггерами журнала филиалов: её нельзя ни
+  // пересобирать, ни массово обновлять. Счёт обязан остаться тем же и на той же
+  // госпитализации.
+  assert.equal(db.prepare('SELECT admission_id a FROM invoices WHERE id=1').get().a, 11);
+  db.close();
+});
+
 test('091: у главного врача и старшей медсестры есть строка прав — иначе роль не видит ничего', () => {
   const db = openDb(':memory:');
   migrate(db);

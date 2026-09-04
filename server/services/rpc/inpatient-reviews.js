@@ -48,7 +48,7 @@
 
 import {
   RpcError, loadAdmission, assertAdmissionAtLeast, assertCanPrescribe,
-  assertMayTransition, admissionTransition,
+  assertMayTransition, admissionTransition, CLOSED_STATUSES,
 } from './inpatient-flow.js';
 import { hasAnyRole, effectiveRoles } from '../roles.js';
 
@@ -66,6 +66,21 @@ const WRITE_ROLES = ['doctor', 'head_doctor', 'admin'];
 // назначений (READ_ROLES в treatment-orders.js). Касса и склад в историю
 // болезни не ходят.
 const READ_ROLES = ['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse'];
+
+// СМЕНУ ЛЕЧАЩЕГО ВРАЧА делает тот же, кто его НАЗНАЧАЕТ — главный врач или
+// администратор. Рядовой врач здесь отсутствует намеренно, и это не про
+// иерархию: «лечащий врач» — подпись под лечением и под деньгами за него, и
+// возможность переписать её на себя означала бы, что любой врач может забрать
+// чужого пациента вместе с его назначениями и выработкой.
+const CHANGE_ATTENDING_ROLES = ['head_doctor', 'admin'];
+
+// ГДЕ лечащего врача МЕНЯЮТ. До 'active' его НАЗНАЧАЮТ (первичный осмотр
+// главного врача, admission_set_attending) — там менять ещё нечего;
+// 'discharging' входит сюда намеренно: между заявкой на выписку и её
+// оформлением проходят часы, врач уходит с дежурства, а заявку можно отозвать
+// и лечение продолжить — тогда подписывать его должен тот, кто на месте.
+// Закрытая госпитализация (выписан / отменена) не меняется вовсе.
+const CHANGE_ATTENDING_STATUSES = ['active', 'discharging'];
 
 function str(v, max, fallback = '') {
   if (v === null || v === undefined) return fallback;
@@ -299,7 +314,13 @@ export function admissionSetAttending(db, args, user) {
     //    отказ называет недостающий шаг сам (assertAdmissionAtLeast).
     assertAdmissionAtLeast(db, adm.id, 'examined');
     if (adm.status !== 'examined') {
-      throw new RpcError('Лечащий врач уже назначен — смена лечащего врача делается отдельно.', 400);
+      // Текст обещает отдельное действие — и оно есть: admissionChangeAttending
+      // ниже (RPC `admission_change_attending`). До этой правки обещание было
+      // пустым: смены лечащего врача не существовало нигде, и госпитализация,
+      // дошедшая до 'active' с пустым attending_doctor_id (старый admit_patient
+      // позволял это, и 091 переносит такие строки как есть), не лечилась
+      // вообще — назначения отвечали 403, а назначить врача было нечем.
+      throw new RpcError('Лечащий врач уже назначен — смена лечащего врача делается отдельно (главный врач).', 400);
     }
 
     // 3. ВРАЧ ЛИ ЭТО. Отдельная проверка, а не доверие экрану: список врачей в
@@ -313,12 +334,164 @@ export function admissionSetAttending(db, args, user) {
     if (u.active === 0) throw new RpcError('Сотрудник уволен — лечащим врачом его назначить нельзя.', 400);
 
     // Лечащий врач — это ОТДЕЛЬНАЯ колонка, а не перезапись doctor_id:
-    // doctor_id хранит направившего, и потерять его значило бы потерять
-    // ответ на вопрос «кто прислал пациента».
-    db.prepare('UPDATE admissions SET attending_doctor_id = ? WHERE id = ?').run(doctorId, adm.id);
+    // doctor_id хранит НАПРАВИВШЕГО, и потерять его значило бы потерять ответ
+    // на вопрос «кто прислал пациента».
+    //
+    // НО ЕСЛИ НАПРАВИВШЕГО НЕТ, ДЫРУ ЗАПОЛНЯЕМ. Пациент, поступивший без
+    // направления (заявка регистратуры, приёмный покой), приходит с пустым
+    // doctor_id, а на него смотрят старые экраны и отчёты — они показывали
+    // прочерк там, где врач есть. COALESCE заполняет пустое и НЕ ТРОГАЕТ
+    // заполненное: это и есть «согласованы», обещанные шапкой миграции 091, —
+    // не равенство двух колонок, а отсутствие пустоты там, где ответ известен.
+    db.prepare(
+      'UPDATE admissions SET attending_doctor_id = ?, doctor_id = COALESCE(doctor_id, ?) WHERE id = ?',
+    ).run(doctorId, doctorId, adm.id);
     const res = admissionTransition(db, { admission_id: adm.id, to: 'active' }, user);
 
     return { admission: res.admission, attending: { id: u.id, full_name: u.full_name, specialty: u.specialty || '' } };
+  });
+
+  return run();
+}
+
+// ─── 2b. СМЕНИТЬ лечащего врача ─────────────────────────────────────────────
+
+/**
+ * СМЕНА ЛЕЧАЩЕГО ВРАЧА — и ЕДИНСТВЕННЫЙ способ вытащить госпитализацию,
+ * которая осталась без него совсем.
+ *
+ * ─── ЧЕГО НЕ ХВАТАЛО ────────────────────────────────────────────────────────
+ *
+ * `admission_set_attending` отказывал словами «смена лечащего врача делается
+ * отдельно», и ничего отдельного не существовало. Пустое обещание стоило
+ * дорого сразу в двух местах:
+ *
+ *   1. ОБЫЧНАЯ ЖИЗНЬ ОТДЕЛЕНИЯ. Лечащий врач уходит в отпуск, увольняется,
+ *      уезжает на неделю — пациент остаётся, и назначения ему подписывать
+ *      некому: assertCanPrescribe пускает лечащего врача ЭТОГО пациента,
+ *      главного врача и администратора, а обычный врач, которому пациента
+ *      передали по-человечески, получает 403.
+ *
+ *   2. ГОСПИТАЛИЗАЦИИ БЕЗ ЛЕЧАЩЕГО ВРАЧА ВООБЩЕ. Миграция 091 переносит
+ *      attending_doctor_id := doctor_id, а старый `admit_patient` разрешал
+ *      класть пациента с пустым doctor_id. На живом отделении это означает
+ *      десятки открытых госпитализаций, у которых attending_doctor_id NULL:
+ *      назначения им отвечают 403 всем без исключения, а `set_attending`
+ *      отказывает, потому что смотрит на СТАТУС ('active' — «уже назначен»),
+ *      а не на колонку. Такая госпитализация не лечилась и не чинилась ничем.
+ *      ЭТО И ЕСТЬ ГЛАВНАЯ РАБОТА ЭТОГО RPC: он спасает их поимённо.
+ *
+ * ─── ГДЕ ЭТО ЗАПИСАНО И ПОЧЕМУ ИМЕННО ТАМ ──────────────────────────────────
+ *
+ * В `admission_transfers` — журнале ДВИЖЕНИЙ госпитализации, kind='attending'.
+ * Тем же приёмом и по тому же доводу, что отзыв заявки на выписку
+ * (kind='discharge_cancel', rpc/inpatient.js): эта таблица уже отвечает на
+ * вопрос «что происходило с этой госпитализацией и кто это сделал» — заявка,
+ * поступление, перевод, отмена, выписка, отзыв, правка даты. Смена лечащего
+ * врача — событие ровно того же рода: не документ, а факт с подписью и
+ * временем, который читают подряд с остальными.
+ *
+ * `admission_reviews` (095) для этого не годится, и это не вкусовщина: там
+ * живут ВРАЧЕБНЫЕ ЗАПИСИ — осмотр, обход, эпикриз. У каждой есть автор,
+ * публикация, замещение исправлением и правило «опубликованное не
+ * переписывают». Смена врача ни одного из этих свойств не имеет: у неё нет
+ * черновика, её не публикуют и не исправляют новой редакцией. Положить её
+ * туда значило бы завести запись, которую экран истории болезни обязан
+ * показывать как документ, а она им не является.
+ *
+ * ─── ПОЧЕМУ ПРИЧИНА ОБЯЗАТЕЛЬНА НЕ ВСЕГДА ───────────────────────────────────
+ *
+ * Когда лечащий врач БЫЛ и его меняют — причина обязательна: замена врача
+ * посреди лечения это решение, за которым завтра придут («почему пациента
+ * забрали у Азизы?»), и журнал без ответа бесполезен. Когда лечащего НЕ БЫЛО
+ * (та самая мигрировавшая строка) — это не смена, а НАЗНАЧЕНИЕ, и требовать
+ * объяснения за починку данных значит мешать чинить.
+ *
+ * @param {{admission_id:number, doctor_id:number, reason?:string}} args
+ */
+export function admissionChangeAttending(db, args, user) {
+  const a = args || {};
+  const doctorId = posIntOrNull(a.doctor_id);
+  if (doctorId === null) throw new RpcError('doctor_id must be a positive integer.', 400);
+  const reason = str(a.reason, 300);
+
+  const run = db.transaction(() => {
+    const adm = loadAdmission(db, a.admission_id);
+
+    // 1. РОЛЬ — первой. Врачу, открывшему чужую карту, правильный ответ —
+    //    «это делает главный врач», а не «пациент ещё не дошёл до лечения».
+    requireRole(user, CHANGE_ATTENDING_ROLES, 'Смена лечащего врача');
+
+    // 2. СОСТОЯНИЕ.
+    if (CLOSED_STATUSES.includes(adm.status)) {
+      throw new RpcError(adm.status === 'discharged'
+        ? 'Пациент уже выписан — госпитализация закрыта, лечащего врача в ней не меняют.'
+        : 'Заявка на госпитализацию отменена — лечащего врача в ней не меняют.', 400);
+    }
+    if (!CHANGE_ATTENDING_STATUSES.includes(adm.status)) {
+      // До 'active' лечащего ещё НАЗНАЧАЮТ, а не меняют, и делает это первичный
+      // осмотр главного врача. Отказ называет тот шаг, а не этот.
+      throw new RpcError(
+        'Лечащего врача ещё не назначали — его назначает главный врач вместе с первичным осмотром.', 400);
+    }
+
+    // 3. ВРАЧ ЛИ ЭТО. Тот же вопрос и тем же признаком, что у назначения:
+    //    /api/rpc открыт curl'ом, а лечащий врач — подпись под лечением.
+    const u = db.prepare(
+      'SELECT id, full_name, role, is_doctor, specialty, license_number, active FROM users WHERE id = ?').get(doctorId);
+    if (!u) throw new RpcError('Врач не найден.', 400);
+    if (!isDoctorRow(u)) {
+      throw new RpcError('Лечащим врачом можно назначить только врача: у выбранного сотрудника нет признака врача.', 400);
+    }
+    if (u.active === 0) throw new RpcError('Сотрудник уволен — лечащим врачом его назначить нельзя.', 400);
+
+    const previousId = adm.attending_doctor_id || null;
+
+    // Повтор — не ошибка: нажали дважды, открыли на двух экранах. Ничего не
+    // меняем и не пишем в журнал вторую одинаковую строку.
+    if (previousId === doctorId) {
+      return {
+        admission: adm,
+        attending: { id: u.id, full_name: u.full_name, specialty: u.specialty || '' },
+        previous_attending_doctor_id: previousId,
+        changed: false,
+      };
+    }
+
+    // 4. ПРИЧИНА — см. шапку: обязательна там, где это СМЕНА.
+    if (previousId && !reason) {
+      throw new RpcError('Укажите причину смены лечащего врача.', 400);
+    }
+
+    // 5. ЗАПИСЬ. doctor_id (направивший) не перезаписывается — только
+    //    заполняется, если он пуст: см. тот же COALESCE в set_attending выше и
+    //    исправленную шапку миграции 091.
+    db.prepare(
+      'UPDATE admissions SET attending_doctor_id = ?, doctor_id = COALESCE(doctor_id, ?) WHERE id = ?',
+    ).run(doctorId, doctorId, adm.id);
+
+    const previous = previousId
+      ? db.prepare('SELECT full_name FROM users WHERE id = ?').get(previousId)
+      : null;
+    // Строка журнала читается человеком подряд с поступлением и переводами,
+    // поэтому в ней ИМЕНА, а не id: разбор через полгода не должен идти в
+    // таблицу users за каждой строкой. Койка и палата — только `to_*`: пациент
+    // никуда не переезжает, он остаётся там, где лежал.
+    const note = (previous
+      ? `Лечащий врач: ${previous.full_name || ('#' + previousId)} → ${u.full_name || ('#' + doctorId)}`
+      : `Лечащий врач назначен: ${u.full_name || ('#' + doctorId)} (был не указан)`)
+      + (reason ? ` · ${reason}` : '');
+    db.prepare(`
+      INSERT INTO admission_transfers (admission_id, to_bed_id, to_ward_id, kind, reason, transferred_at, transferred_by)
+      VALUES (?, ?, ?, 'attending', ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?)
+    `).run(adm.id, adm.bed_id, adm.ward_id, note, (user && user.id) || null);
+
+    return {
+      admission: db.prepare('SELECT * FROM admissions WHERE id = ?').get(adm.id),
+      attending: { id: u.id, full_name: u.full_name, specialty: u.specialty || '' },
+      previous_attending_doctor_id: previousId,
+      changed: true,
+    };
   });
 
   return run();

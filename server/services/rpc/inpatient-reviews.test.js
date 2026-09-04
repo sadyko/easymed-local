@@ -22,7 +22,10 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { admissionOrderCreate, admissionAdmit, dischargePatient } from './inpatient.js';
-import { admissionReviewSave, admissionSetAttending, admissionReviewsList, isDoctorRow } from './inpatient-reviews.js';
+import {
+  admissionReviewSave, admissionSetAttending, admissionChangeAttending,
+  admissionReviewsList, isDoctorRow,
+} from './inpatient-reviews.js';
 import { treatmentOrderCreate } from './treatment-orders.js';
 import { assertCanPrescribe, RpcError } from './inpatient-flow.js';
 
@@ -278,8 +281,25 @@ test('лечащего врача назначает главный врач: ex
   assert.equal(res.admission.status, 'active');
   assert.equal(res.admission.attending_doctor_id, doctor.id);
   assert.equal(res.attending.full_name, 'doc1');
-  // Направивший врач НЕ затёрт лечащим — это два разных вопроса к строке.
-  assert.equal(res.admission.doctor_id, null);
+  // doctor_id (НАПРАВИВШИЙ) и attending_doctor_id (ЛЕЧАЩИЙ) — два разных вопроса
+  // к строке, и путать их дорого: консоль койки ставила направившего в услуги и
+  // выдачи, и деньги за работу лечащего доставались ему (I4). Правило теперь
+  // такое: пустое ЗАПОЛНЯЕТСЯ, заполненное НЕ ТРОГАЕТСЯ. У этой заявки
+  // направившего не было — прочерк в старых отчётах хуже, чем лечащий врач.
+  assert.equal(res.admission.doctor_id, doctor.id, 'пустой doctor_id заполняется лечащим');
+  ctx.db.close();
+});
+
+test('направивший врач НЕ затирается лечащим, когда он есть', () => {
+  const ctx = seed();
+  const adm = inBed(ctx);
+  // Заявку прислал doctor2 — он направивший, и таким должен остаться.
+  ctx.db.prepare('UPDATE admissions SET doctor_id = ? WHERE id = ?').run(doctor2.id, adm.id);
+  admissionReviewSave(ctx.db, { admission_id: adm.id, kind: 'primary', ...EXAM, publish: true }, headDoctor);
+
+  const res = admissionSetAttending(ctx.db, { admission_id: adm.id, doctor_id: doctor.id }, headDoctor);
+  assert.equal(res.admission.attending_doctor_id, doctor.id);
+  assert.equal(res.admission.doctor_id, doctor2.id, 'кто прислал пациента — не должно потеряться');
   ctx.db.close();
 });
 
@@ -382,11 +402,150 @@ test('осмотренного пациента без лечащего врач
   const adm = inBed(ctx);
   admissionReviewSave(ctx.db, { admission_id: adm.id, kind: 'primary', ...EXAM, publish: true }, headDoctor);
 
+  // Прямая выписка осталась только для тех, кого положили ДО обновления
+  // (isLegacyAdmission, rpc/inpatient.js) — а именно у них и не бывает ни
+  // осмотра, ни лечащего врача, ни эпикриза.
+  ctx.db.prepare("UPDATE admissions SET created_at = '2000-01-01T00:00:00Z' WHERE id = ?").run(adm.id);
   const res = dischargePatient(ctx.db, { admission_id: adm.id }, admin);
   assert.equal(res.admission.status, 'discharged');
   // …и после выписки маршрут закрыт для всего остального.
   assert.throws(() => assertCanPrescribe(ctx.db, adm.id, doctor), /уже выписан/);
   assert.throws(() => admissionSetAttending(ctx.db, { admission_id: adm.id, doctor_id: doctor.id }, headDoctor),
     /уже выписан/);
+  ctx.db.close();
+});
+
+
+// ═══ 9. СМЕНА ЛЕЧАЩЕГО ВРАЧА (must-fix 3 + I3) ══════════════════════════════
+//
+// `admission_set_attending` отказывал словами «смена лечащего врача делается
+// отдельно», и НИЧЕГО ОТДЕЛЬНОГО НЕ СУЩЕСТВОВАЛО. Стоило это дорого дважды:
+// врач ушёл в отпуск — пациента некому вести; и, что хуже, миграция 091
+// переносит attending_doctor_id := doctor_id, а старый admit_patient разрешал
+// класть пациента БЕЗ ВРАЧА. На живом отделении это десятки открытых
+// госпитализаций с пустым лечащим: назначения им отвечают 403 всем без
+// исключения, а set_attending отказывает, потому что смотрит на СТАТУС.
+// Пациент лежит, лечить его нельзя, и починить нечем.
+
+/** Госпитализация в лечении, с лечащим врачом. */
+function inTreatment(ctx, attending = doctor) {
+  const adm = inBed(ctx);
+  admissionReviewSave(ctx.db, { admission_id: adm.id, kind: 'primary', ...EXAM, publish: true }, headDoctor);
+  return admissionSetAttending(ctx.db, { admission_id: adm.id, doctor_id: attending.id }, headDoctor).admission;
+}
+
+test('смену лечащего врача делает главный врач; рядовому врачу и медсестре — отказ', () => {
+  const ctx = seed();
+  const adm = inTreatment(ctx);
+
+  for (const who of [doctor, doctor2, nurse, cashier, registrar]) {
+    assert.throws(() => admissionChangeAttending(ctx.db, { admission_id: adm.id, doctor_id: doctor2.id, reason: 'отпуск' }, who),
+      (e) => e instanceof RpcError && e.status === 403 && /Смена лечащего врача/.test(e.message),
+      'роль ' + who.role + ' не должна менять лечащего врача');
+  }
+  // Подпись под лечением не переписана ни одной из отвергнутых попыток.
+  assert.equal(ctx.db.prepare('SELECT attending_doctor_id a FROM admissions WHERE id=?').get(adm.id).a, doctor.id);
+
+  const res = admissionChangeAttending(ctx.db, { admission_id: adm.id, doctor_id: doctor2.id, reason: 'врач в отпуске' }, headDoctor);
+  assert.equal(res.changed, true);
+  assert.equal(res.admission.attending_doctor_id, doctor2.id);
+  assert.equal(res.previous_attending_doctor_id, doctor.id);
+  assert.equal(res.admission.status, 'active', 'смена врача не двигает маршрут');
+
+  // Событие записано туда же, где живут заявка, поступление и переводы, — с
+  // именами, чтобы разбор через полгода не ходил в users за каждой строкой.
+  const log = ctx.db.prepare("SELECT * FROM admission_transfers WHERE admission_id=? AND kind='attending'").get(adm.id);
+  assert.ok(log, 'смена лечащего врача обязана остаться в журнале движений');
+  assert.equal(log.transferred_by, headDoctor.id);
+  assert.match(log.reason, /doc1/);
+  assert.match(log.reason, /doc2/);
+  assert.match(log.reason, /врач в отпуске/);
+  ctx.db.close();
+});
+
+test('лечащим можно поставить только врача, и только пока идёт лечение', () => {
+  const ctx = seed();
+  const adm = inTreatment(ctx);
+
+  // Не врач — тем же признаком, что и при назначении (is_doctor, а не текст роли).
+  for (const id of [nurse.id, cashier.id, registrar.id]) {
+    assert.throws(() => admissionChangeAttending(ctx.db, { admission_id: adm.id, doctor_id: id, reason: 'причина' }, headDoctor),
+      (e) => e instanceof RpcError && /только врача/.test(e.message), 'user ' + id);
+  }
+  // Уволенного — нельзя.
+  ctx.db.prepare('UPDATE users SET is_active = 0 WHERE id = ?').run(doctor2.id);   // active — генерируемая колонка (032)
+  assert.throws(() => admissionChangeAttending(ctx.db, { admission_id: adm.id, doctor_id: doctor2.id, reason: 'причина' }, headDoctor),
+    (e) => /уволен/.test(e.message));
+  ctx.db.prepare('UPDATE users SET is_active = 1 WHERE id = ?').run(doctor2.id);
+
+  // Смена БЕЗ причины — отказ: за заменой врача посреди лечения завтра придут.
+  assert.throws(() => admissionChangeAttending(ctx.db, { admission_id: adm.id, doctor_id: doctor2.id }, headDoctor),
+    (e) => /причину смены/.test(e.message));
+
+  // Администратор клиники, который врач (role='admin', is_doctor=1), — годится.
+  assert.equal(
+    admissionChangeAttending(ctx.db, { admission_id: adm.id, doctor_id: adminDoctor.id, reason: 'передан' }, admin)
+      .admission.attending_doctor_id, adminDoctor.id);
+
+  // До лечения лечащего НАЗНАЧАЮТ, а не меняют; после выписки — некому.
+  const ctx2 = seed();
+  const early = inBed(ctx2);
+  assert.throws(() => admissionChangeAttending(ctx2.db, { admission_id: early.id, doctor_id: doctor.id }, headDoctor),
+    (e) => /ещё не назначали/.test(e.message));
+  ctx2.db.prepare("UPDATE admissions SET status='discharged' WHERE id=?").run(early.id);
+  assert.throws(() => admissionChangeAttending(ctx2.db, { admission_id: early.id, doctor_id: doctor.id }, headDoctor),
+    (e) => /уже выписан/.test(e.message));
+  ctx.db.close(); ctx2.db.close();
+});
+
+// I3 — ГЛАВНОЕ. Мигрировавшая госпитализация с пустым лечащим врачом: до этого
+// RPC её нельзя было ни лечить, ни починить.
+test('I3: госпитализация без лечащего врача СПАСАЕТСЯ — и после этого по ней можно назначать', () => {
+  const ctx = seed();
+  const adm = inTreatment(ctx);
+  // Ровно то, что делает миграция 091 со строкой, положенной старым
+  // admit_patient без врача: attending_doctor_id := doctor_id := NULL.
+  ctx.db.prepare('UPDATE admissions SET attending_doctor_id = NULL, doctor_id = NULL WHERE id = ?').run(adm.id);
+
+  // Тупик, каким он был: лечить нельзя…
+  assert.throws(() => assertCanPrescribe(ctx.db, adm.id, doctor),
+    (e) => e.status === 403 && /лечащий врач/.test(e.message));
+  assert.throws(() => treatmentOrderCreate(ctx.db, { admission_id: adm.id, ...ORDER }, doctor),
+    (e) => e.status === 403);
+  // …и назначить врача старым способом тоже нельзя: он смотрит на статус.
+  assert.throws(() => admissionSetAttending(ctx.db, { admission_id: adm.id, doctor_id: doctor.id }, headDoctor),
+    (e) => /уже назначен/.test(e.message) && /отдельно/.test(e.message));
+
+  // Спасение. Причина здесь НЕ обязательна: это не смена, а назначение —
+  // требовать объяснения за починку данных значит мешать чинить.
+  const res = admissionChangeAttending(ctx.db, { admission_id: adm.id, doctor_id: doctor.id }, headDoctor);
+  assert.equal(res.changed, true);
+  assert.equal(res.previous_attending_doctor_id, null);
+  assert.equal(res.admission.attending_doctor_id, doctor.id);
+  assert.equal(res.admission.doctor_id, doctor.id, 'пустой doctor_id заполняется — прочерк в отчётах не ответ');
+
+  // И ГЛАВНОЕ: назначение теперь ПРОХОДИТ. Без этой строки тест доказывал бы
+  // только то, что колонка записалась.
+  const order = treatmentOrderCreate(ctx.db, { admission_id: adm.id, ...ORDER }, doctor);
+  assert.ok(order.order && order.order.id, 'лечащий врач обязан суметь назначить лечение');
+  ctx.db.close();
+});
+
+test('повторная смена на того же врача ничего не меняет и не плодит записей в журнале', () => {
+  const ctx = seed();
+  const adm = inTreatment(ctx);
+  const res = admissionChangeAttending(ctx.db, { admission_id: adm.id, doctor_id: doctor.id, reason: 'повтор' }, headDoctor);
+  assert.equal(res.changed, false);
+  assert.equal(ctx.db.prepare("SELECT COUNT(*) n FROM admission_transfers WHERE admission_id=? AND kind='attending'").get(adm.id).n, 0);
+  ctx.db.close();
+});
+
+test('лечащего врача можно сменить и когда заявка на выписку уже подана', () => {
+  const ctx = seed();
+  const adm = inTreatment(ctx);
+  ctx.db.prepare("UPDATE admissions SET status='discharging' WHERE id=?").run(adm.id);
+  const res = admissionChangeAttending(ctx.db, { admission_id: adm.id, doctor_id: doctor2.id, reason: 'смена дежурного' }, headDoctor);
+  assert.equal(res.admission.attending_doctor_id, doctor2.id);
+  assert.equal(res.admission.status, 'discharging', 'смена врача не двигает маршрут');
   ctx.db.close();
 });

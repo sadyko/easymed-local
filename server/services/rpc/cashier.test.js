@@ -14,6 +14,7 @@ function seed() {
   db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (10,'cashier2','x','cashier')").run();
   db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (1,'admin1','x','admin')").run();
   db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (5,'lab1','x','lab')").run();
+  db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (3,'doctor1','x','doctor')").run();
   // one patient, one visit, two services, two visit_services
   const pid = db.prepare("INSERT INTO patients (full_name, branch_id) VALUES ('P',1)").run().lastInsertRowid;
   const vid = db.prepare("INSERT INTO visits (patient_id, branch_id, visit_date) VALUES (?,1,'2026-08-12T09:00:00Z')").run(pid).lastInsertRowid;
@@ -284,7 +285,13 @@ test('voiding an admission invoice releases its admission lines so they can be r
   const { db, pid } = seed();
   const ward = db.prepare("INSERT INTO wards (name) VALUES ('W')").run().lastInsertRowid;
   const bed = db.prepare("INSERT INTO beds (code, ward_id, status) VALUES ('B1',?,'free')").run(ward).lastInsertRowid;
-  const adm = admitPatient(db, { patient_id: pid, bed_id: bed }, { id: 1, role: 'admin' }).admission;
+  // Старый путь поступления работает только с заявкой, оформленной ДО
+  // обновления, и требует лечащего врача (isLegacyAdmission, rpc/inpatient.js).
+  // Этому тесту нужна лежащая госпитализация со строкой услуги — не проверка
+  // границы, поэтому заявка заводится явно и с дообновленческой датой.
+  db.prepare("INSERT INTO admissions (patient_id, doctor_id, status, created_at)"
+           + " VALUES (?,3,'ordered','2000-01-01T00:00:00Z')").run(pid);
+  const adm = admitPatient(db, { patient_id: pid, bed_id: bed, doctor_id: 3 }, { id: 1, role: 'admin' }).admission;
   const svc = db.prepare("INSERT INTO services (name, price) VALUES ('Дренаж', 40000)").run().lastInsertRowid;
   const line = db.prepare("INSERT INTO admission_services (admission_id, service_id, quantity, unit_price, total, status, billable) VALUES (?,?,1,40000,40000,'added',1)").run(adm.id, svc).lastInsertRowid;
 

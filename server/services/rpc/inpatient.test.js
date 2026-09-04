@@ -41,10 +41,47 @@ function isoHoursAgo(hours) {
   return new Date(Date.now() - hours * 3600 * 1000).toISOString().slice(0, 19) + 'Z';
 }
 
+
+// ─── СТАРЫЙ ПУТЬ ЖИВ ТОЛЬКО ДЛЯ ТЕХ, КОГО ЗАВЕЛИ ДО ОБНОВЛЕНИЯ ───
+//
+// `admit_patient` и `discharge_patient` — RPC версии v0.8.0, и каждый проходит
+// весь маршрут госпитализации ОДНИМ движением: поступление без первичного
+// осмотра и без лечащего врача, выписка без исхода, без эпикриза и без
+// врачебной подписи. Убрать их было нельзя (в койках лежат люди, которых клали
+// ДО обновления, и выписного эпикриза у них не будет), поэтому граница
+// проведена по дате: isLegacyAdmission (rpc/inpatient.js) сравнивает
+// `created_at` строки с `schema_migrations.applied_at` миграции 091 — моментом,
+// когда ЭТА клиника обновилась.
+//
+// Тестам ниже, которым нужен просто лежащий пациент, наследство подделывается
+// честно: заявка с датой ДО обновления — ровно то, что видит клиника в день
+// установки. Тесты САМОЙ границы (кому отказано и кому нет) стоят отдельно, в
+// конце файла.
+const LEGACY_AT = '2000-01-01T00:00:00Z';
+const DOCTOR_ID = 3;   // seed(): users(3) — role 'doctor'
+
+/** Заявка, оформленная ДО обновления, — единственный вход старого admit_patient. */
+function legacyOrder(db, patientId, doctorId = DOCTOR_ID) {
+  return db.prepare('INSERT INTO admissions (patient_id, doctor_id, status, created_at)'
+                  + " VALUES (?,?,'ordered',?)").run(patientId, doctorId, LEGACY_AT).lastInsertRowid;
+}
+
+/** Пациент в койке старым путём: заявка ДО обновления + admit_patient. */
+function legacyAdmit(db, args, user) {
+  legacyOrder(db, args.patient_id, args.doctor_id ?? DOCTOR_ID);
+  return admitPatient(db, { doctor_id: DOCTOR_ID, ...args }, user);
+}
+
+/** Сделать существующую госпитализацию дообновленческой. */
+function legacy(db, admissionId) {
+  db.prepare('UPDATE admissions SET created_at = ? WHERE id = ?').run(LEGACY_AT, admissionId);
+  return admissionId;
+}
+
 // 1. admit occupies the bed, creates an active admission with admission_no, copies ward_id.
 test('admit_patient occupies the bed, creates an active admission with admission_no, copies ward_id', () => {
   const { db, patientId, wardId, bed1 } = seed();
-  const res = admitPatient(db, { patient_id: patientId, bed_id: bed1, pathway: 'therapy' }, nurse);
+  const res = legacyAdmit(db, { patient_id: patientId, bed_id: bed1, pathway: 'therapy' }, nurse);
 
   assert.equal(res.admission.status, 'active');
   assert.equal(res.admission.patient_id, patientId);
@@ -62,14 +99,15 @@ test('admit_patient rejects a non-free bed (400), a patient already admitted (40
   const { db, patientId, patientId3, bed1, bed2, bed3 } = seed();
 
   // bed3 seeded as 'occupied' -> not free.
-  assert.throws(() => admitPatient(db, { patient_id: patientId, bed_id: bed3 }, nurse), /400|free|occupied/i);
+  legacyOrder(db, patientId);
+  assert.throws(() => admitPatient(db, { patient_id: patientId, bed_id: bed3, doctor_id: DOCTOR_ID }, nurse), /400|free|occupied/i);
 
   // Admit patient to bed1; patient now has an active admission.
-  admitPatient(db, { patient_id: patientId, bed_id: bed1 }, nurse);
-  assert.throws(() => admitPatient(db, { patient_id: patientId, bed_id: bed2 }, nurse), /400|already|active/i);
+  admitPatient(db, { patient_id: patientId, bed_id: bed1, doctor_id: DOCTOR_ID }, nurse);
+  assert.throws(() => legacyAdmit(db, { patient_id: patientId, bed_id: bed2 }, nurse), /400|already|active/i);
 
   // Disallowed role (lab) rejected regardless of otherwise-valid args.
-  assert.throws(() => admitPatient(db, { patient_id: patientId3, bed_id: bed2 }, lab), /403|allow|forbid|role/i);
+  assert.throws(() => legacyAdmit(db, { patient_id: patientId3, bed_id: bed2 }, lab), /403|allow|forbid|role/i);
 });
 
 // 3. discharge (daily): units/charge computed from elapsed time, invoice + item created, bed -> cleaning.
@@ -77,7 +115,7 @@ test('discharge_patient computes a daily accommodation charge, creates an unpaid
   const { db, patientId, wardId, bed1 } = seed();
   db.prepare("UPDATE wards SET billing_mode='daily', price_per_day=100000 WHERE id=?").run(wardId);
 
-  const { admission } = admitPatient(db, { patient_id: patientId, bed_id: bed1 }, nurse);
+  const { admission } = legacyAdmit(db, { patient_id: patientId, bed_id: bed1 }, nurse);
   db.prepare('UPDATE admissions SET admitted_at=? WHERE id=?').run(isoHoursAgo(50), admission.id);
 
   // ACCOMMODATION_AS_SERVICE_V1 — арифметика та же, но живёт она теперь во
@@ -89,7 +127,7 @@ test('discharge_patient computes a daily accommodation charge, creates an unpaid
   assert.match(line.notes, /General Ward/);
   assert.match(line.notes, /B-101/);
 
-  const res = dischargePatient(db, { admission_id: admission.id }, cashier);
+  const res = dischargePatient(db, { admission_id: admission.id }, admin);
 
   assert.equal(res.mode, 'daily');
   assert.equal(res.units, 2);
@@ -113,10 +151,10 @@ test('discharge_patient computes an hourly accommodation charge', () => {
   const { db, patientId, wardId, bed1 } = seed();
   db.prepare("UPDATE wards SET billing_mode='hourly', price_per_hour=5000 WHERE id=?").run(wardId);
 
-  const { admission } = admitPatient(db, { patient_id: patientId, bed_id: bed1 }, nurse);
+  const { admission } = legacyAdmit(db, { patient_id: patientId, bed_id: bed1 }, nurse);
   db.prepare('UPDATE admissions SET admitted_at=? WHERE id=?').run(isoHoursAgo(1.5), admission.id);
 
-  const res = dischargePatient(db, { admission_id: admission.id }, cashier);
+  const res = dischargePatient(db, { admission_id: admission.id }, admin);
   assert.equal(res.mode, 'hourly');
   assert.equal(res.units, 2);
   assert.equal(res.rate, 5000);
@@ -133,7 +171,7 @@ test('discharge_patient: a per-bed rate override beats the ward rate, and discou
   db.prepare("UPDATE wards SET billing_mode='daily', price_per_day=100000 WHERE id=?").run(wardId);
   db.prepare('UPDATE beds SET price_per_day=150000 WHERE id=?').run(bed1);
 
-  const { admission } = admitPatient(db, { patient_id: patientId, bed_id: bed1 }, nurse);
+  const { admission } = legacyAdmit(db, { patient_id: patientId, bed_id: bed1 }, nurse);
   db.prepare('UPDATE admissions SET admitted_at=? WHERE id=?').run(isoHoursAgo(50), admission.id);
 
   // Скидка живёт на госпитализации; внесение проживания её применяет.
@@ -143,7 +181,7 @@ test('discharge_patient: a per-bed rate override beats the ward rate, and discou
   assert.equal(line.quantity, 2);
   assert.equal(line.total, 270000);        // 300 000 * 0.9
 
-  const res = dischargePatient(db, { admission_id: admission.id, discount_percent: 10 }, cashier);
+  const res = dischargePatient(db, { admission_id: admission.id, discount_percent: 10 }, admin);
   assert.equal(res.rate, 150000);
   assert.equal(res.gross, 300000);
   assert.equal(res.admission.accommodation_discount_percent, 10);
@@ -155,8 +193,8 @@ test('discharge_patient: a per-bed rate override beats the ward rate, and discou
 test('discharge_patient with no rate configured: charge is 0 and no invoice is created', () => {
   const { db, patientId, bed1 } = seed(); // ward defaults: price_per_day=0, price_per_hour=0
 
-  const { admission } = admitPatient(db, { patient_id: patientId, bed_id: bed1 }, nurse);
-  const res = dischargePatient(db, { admission_id: admission.id }, cashier);
+  const { admission } = legacyAdmit(db, { patient_id: patientId, bed_id: bed1 }, nurse);
+  const res = dischargePatient(db, { admission_id: admission.id }, admin);
 
   assert.equal(res.charge, 0);
   assert.equal(res.gross, 0);
@@ -176,20 +214,21 @@ test('discharge_patient: discount is admin/cashier-only; negative rate clamps to
   db.prepare("UPDATE wards SET billing_mode='daily', price_per_day=100000 WHERE id=?").run(wardId);
 
   // nurse discharging WITH a discount -> 403; WITHOUT one -> allowed.
-  const a1 = admitPatient(db, { patient_id: patientId, bed_id: bed1 }, nurse).admission;
+  const a1 = legacyAdmit(db, { patient_id: patientId, bed_id: bed1 }, nurse).admission;
   assert.throws(() => dischargePatient(db, { admission_id: a1.id, discount_percent: 25 }, nurse), /403|admin|cashier|discount/i);
   const ok = dischargePatient(db, { admission_id: a1.id }, nurse);
   assert.equal(ok.admission.status, 'discharged');
 
   // negative ward rate -> clamped to 0 -> no charge, no invoice, still discharged.
   db.prepare("UPDATE wards SET price_per_day=-500 WHERE id=?").run(wardId);
-  const a2 = admitPatient(db, { patient_id: patientId2, bed_id: bed2 }, nurse).admission;
-  const neg = dischargePatient(db, { admission_id: a2.id }, cashier);
+  const a2 = legacyAdmit(db, { patient_id: patientId2, bed_id: bed2 }, nurse).admission;
+  const neg = dischargePatient(db, { admission_id: a2.id }, admin);
   assert.equal(neg.gross, 0);
   assert.equal(neg.charge, 0);
   assert.equal(neg.invoice_id, null);
 
   // admit with a non-existent doctor_id -> clean 400 (not an FK 500).
+  legacyOrder(db, patientId3);
   assert.throws(() => admitPatient(db, { patient_id: patientId3, bed_id: bed4, doctor_id: 999999 }, nurse), /400|doctor/i);
 });
 
@@ -197,16 +236,16 @@ test('discharge_patient: discount is admin/cashier-only; negative rate clamps to
 test('discharge_patient rejects an already-discharged admission (400) and discount_percent outside [0,100] (400)', () => {
   const { db, patientId, patientId2, bed1, bed2 } = seed();
 
-  const { admission } = admitPatient(db, { patient_id: patientId, bed_id: bed1 }, nurse);
-  dischargePatient(db, { admission_id: admission.id }, cashier);
+  const { admission } = legacyAdmit(db, { patient_id: patientId, bed_id: bed1 }, nurse);
+  dischargePatient(db, { admission_id: admission.id }, admin);
   // INPATIENT_REVIEW_V1 (Задача 3) — отказ теперь называет ПРИЧИНУ по-русски
   // («Пациент уже выписан…») вместо «not found or not active»: выписка ходит
   // из любого состояния «в койке», и «не активна» перестало быть правдой.
-  assert.throws(() => dischargePatient(db, { admission_id: admission.id }, cashier), /400|active|not found|discharged|выписан/i);
+  assert.throws(() => dischargePatient(db, { admission_id: admission.id }, admin), /400|active|not found|discharged|выписан/i);
 
-  const { admission: admission2 } = admitPatient(db, { patient_id: patientId2, bed_id: bed2 }, nurse);
-  assert.throws(() => dischargePatient(db, { admission_id: admission2.id, discount_percent: 150 }, cashier), /400|discount/i);
-  assert.throws(() => dischargePatient(db, { admission_id: admission2.id, discount_percent: -5 }, cashier), /400|discount/i);
+  const { admission: admission2 } = legacyAdmit(db, { patient_id: patientId2, bed_id: bed2 }, nurse);
+  assert.throws(() => dischargePatient(db, { admission_id: admission2.id, discount_percent: 150 }, admin), /400|discount/i);
+  assert.throws(() => dischargePatient(db, { admission_id: admission2.id, discount_percent: -5 }, admin), /400|discount/i);
 
   // admission2 is still active after the rejected discharge attempts
   const stillActive = db.prepare('SELECT status FROM admissions WHERE id=?').get(admission2.id);
@@ -222,7 +261,7 @@ test('set_bed_status: free->cleaning ok; rejects occupied, a bed with an active 
 
   assert.throws(() => setBedStatus(db, { bed_id: bed2, status: 'occupied' }, nurse), /400|occupied|one of/i);
 
-  admitPatient(db, { patient_id: patientId, bed_id: bed1 }, nurse);
+  legacyAdmit(db, { patient_id: patientId, bed_id: bed1 }, nurse);
   assert.throws(() => setBedStatus(db, { bed_id: bed1, status: 'free' }, nurse), /400|active|admission/i);
 
   assert.throws(() => setBedStatus(db, { bed_id: bed2, status: 'free' }, lab), /403|allow|forbid|role/i);
@@ -241,7 +280,11 @@ function consoleSeed() {
   db.prepare("INSERT INTO beds (id, ward_id, code, status, active) VALUES (1,1,'K1','free',1),(2,2,'K2','free',1)").run();
   db.prepare("INSERT INTO services (id, name, price) VALUES (1,'Перевязка',30000)").run();
   db.prepare("INSERT INTO products (id, name, unit, sale_price, on_hand, active) VALUES (1,'Trimol','мл',5000,50,1)").run();
-  const { admission } = admitPatient(db, { patient_id: 1, bed_id: 1 }, { id: 1, role: 'registrar' });
+  db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (4,'d','x','doctor')").run();
+  // Старый путь принимает только дообновленческую заявку и требует лечащего
+  // врача — см. блок про границу выпуска в начале файла.
+  db.prepare("INSERT INTO admissions (patient_id, doctor_id, status, created_at) VALUES (1,4,'ordered','2000-01-01T00:00:00Z')").run();
+  const { admission } = admitPatient(db, { patient_id: 1, bed_id: 1, doctor_id: 4 }, { id: 1, role: 'registrar' });
   return { db, adm: admission };
 }
 
@@ -306,6 +349,7 @@ test('admit fulfils an open request in place instead of orphaning it', () => {
   const req = requestAdmission(db, { patient_id: patientId, doctor_id: 3, pathway: 'surgical', chief_complaint: 'боль в животе' }, { id: 3, role: 'doctor' }).admission;
   assert.equal(req.status, 'ordered');   // INPATIENT_FLOW_V1 — прежнее 'requested'
   assert.equal(req.bed_id, null);
+  legacy(db, req.id);   // заявка оформлена ДО обновления — иначе старый путь ей откажет
 
   const adm = admitPatient(db, { patient_id: patientId, bed_id: bed1 }, nurse).admission;
 
@@ -322,7 +366,7 @@ test('admit fulfils an open request in place instead of orphaning it', () => {
   assert.equal(adm.doctor_id, 3);
 
   // And the patient can be referred again after the stay ends.
-  dischargePatient(db, { admission_id: adm.id }, cashier);
+  dischargePatient(db, { admission_id: adm.id }, admin);
   const again = requestAdmission(db, { patient_id: patientId, pathway: 'therapy' }, { id: 3, role: 'doctor' }).admission;
   assert.equal(again.status, 'ordered');
 });
@@ -347,7 +391,7 @@ test('a hospitalisation request can be declined, freeing the patient to be refer
 
 test('cancel refuses an ACTIVE stay (that is what discharge is for) and a bad role', () => {
   const { db, patientId, bed1 } = seed();
-  const adm = admitPatient(db, { patient_id: patientId, bed_id: bed1 }, nurse).admission;
+  const adm = legacyAdmit(db, { patient_id: patientId, bed_id: bed1 }, nurse).admission;
   assert.throws(() => cancelAdmissionRequest(db, { admission_id: adm.id }, nurse), /cannot go from 'active'/);
   assert.throws(() => cancelAdmissionRequest(db, { admission_id: adm.id }, lab), /not allowed/);
   // the stay is untouched
@@ -362,7 +406,7 @@ test('discharge honours a discount stored during the stay, and an explicit argum
   db.prepare('UPDATE wards SET price_per_day = 100000, billing_mode = ?  WHERE id = ?').run('daily', wardId);
 
   // Stay A: 20% agreed mid-stay by an admin, discharged by a NURSE with no argument.
-  const a = admitPatient(db, { patient_id: patientId, bed_id: bed1 }, nurse).admission;
+  const a = legacyAdmit(db, { patient_id: patientId, bed_id: bed1 }, nurse).admission;
   db.prepare("UPDATE admissions SET admitted_at=? WHERE id=?").run(isoHoursAgo(2), a.id);
   setAdmissionDiscount(db, { admission_id: a.id, percent: 20 }, admin);
 
@@ -376,11 +420,11 @@ test('discharge honours a discount stored during the stay, and an explicit argum
   assert.equal(rA.admission.invoice_id, null);
 
   // Stay B: 50% stored, but the desk overrides with an explicit 0 at discharge.
-  const b = admitPatient(db, { patient_id: patientId2, bed_id: bed2 }, nurse).admission;
+  const b = legacyAdmit(db, { patient_id: patientId2, bed_id: bed2 }, nurse).admission;
   db.prepare("UPDATE admissions SET admitted_at=? WHERE id=?").run(isoHoursAgo(2), b.id);
   setAdmissionDiscount(db, { admission_id: b.id, percent: 50 }, admin);
 
-  const rB = dischargePatient(db, { admission_id: b.id, discount_percent: 0 }, cashier);
+  const rB = dischargePatient(db, { admission_id: b.id, discount_percent: 0 }, admin);
   assert.equal(rB.charge, 100000, 'an explicit argument wins over the stored percent');
   assert.equal(rB.admission.accommodation_discount_percent, 0);
 });
@@ -390,12 +434,12 @@ test('discharge: a nurse may discharge at a pre-approved discount but still cann
   db.prepare('UPDATE wards SET price_per_day = 100000 WHERE id = ?').run(wardId);
 
   // Pre-approved by an admin -> the nurse's discharge is allowed and discounted.
-  const a = admitPatient(db, { patient_id: patientId, bed_id: bed1 }, nurse).admission;
+  const a = legacyAdmit(db, { patient_id: patientId, bed_id: bed1 }, nurse).admission;
   setAdmissionDiscount(db, { admission_id: a.id, percent: 30 }, admin);
   assert.equal(dischargePatient(db, { admission_id: a.id }, nurse).charge, 70000);
 
   // Introducing one at the door is still 403 for a nurse.
-  const b = admitPatient(db, { patient_id: patientId2, bed_id: bed2 }, nurse).admission;
+  const b = legacyAdmit(db, { patient_id: patientId2, bed_id: bed2 }, nurse).admission;
   assert.throws(() => dischargePatient(db, { admission_id: b.id, discount_percent: 30 }, nurse),
     /403|admin|cashier|discount/i);
 });
@@ -435,14 +479,16 @@ test('bed console: line can be pulled back out of an UNPAID invoice', () => {
 // 'active'; между ними — первичный осмотр главного врача и назначение лечащего.
 // Пока их не было, пациент, положенный медсестрой, не мог быть выписан вообще.
 import { admissionOrderCreate, admissionAdmit } from './inpatient.js';
+import { assertCanPrescribe } from './inpatient-flow.js';
 
 test('пациент, положенный через окно медсестры, ВЫПИСЫВАЕТСЯ (до всякого осмотра)', () => {
   const { db, patientId, bed1 } = seed();
   const { admission: ordered } = admissionOrderCreate(db, { patient_id: patientId, department: 'Терапия' }, registrar);
   const { admission: inBed } = admissionAdmit(db, { admission_id: ordered.id, bed_id: bed1 }, nurse);
   assert.equal(inBed.status, 'admitted', 'Задача 2 доводит ровно до койки');
+  legacy(db, inBed.id);   // клали ДО обновления — иначе прямая выписка откажет
 
-  const res = dischargePatient(db, { admission_id: inBed.id }, cashier);
+  const res = dischargePatient(db, { admission_id: inBed.id }, admin);
   assert.equal(res.admission.status, 'discharged');
   assert.ok(res.admission.discharged_at);
   // Койка освобождается так же, как при любой другой выписке: в уборку.
@@ -452,9 +498,9 @@ test('пациент, положенный через окно медсестр�
 test('выписать можно из ЛЮБОГО состояния «в койке», и только из него', () => {
   for (const status of ['admitted', 'examined', 'active', 'discharging']) {
     const { db, patientId, bed1 } = seed();
-    const { admission } = admitPatient(db, { patient_id: patientId, bed_id: bed1 }, nurse);
+    const { admission } = legacyAdmit(db, { patient_id: patientId, bed_id: bed1 }, nurse);
     db.prepare('UPDATE admissions SET status=? WHERE id=?').run(status, admission.id);
-    const res = dischargePatient(db, { admission_id: admission.id }, cashier);
+    const res = dischargePatient(db, { admission_id: admission.id }, admin);
     assert.equal(res.admission.status, 'discharged', `выписка из '${status}'`);
     db.close();
   }
@@ -462,12 +508,12 @@ test('выписать можно из ЛЮБОГО состояния «в ко
   // Заявку не выписывают — её отменяют; закрытую не открывают заново.
   const { db, patientId, patientId2 } = seed();
   const { admission: ordered } = admissionOrderCreate(db, { patient_id: patientId }, registrar);
-  assert.throws(() => dischargePatient(db, { admission_id: ordered.id }, cashier), /не размещён на койке/);
+  assert.throws(() => dischargePatient(db, { admission_id: ordered.id }, admin), /не размещён на койке/);
   assert.equal(db.prepare('SELECT status FROM admissions WHERE id=?').get(ordered.id).status, 'ordered');
 
   const { admission: cancelled } = admissionOrderCreate(db, { patient_id: patientId2 }, registrar);
   db.prepare("UPDATE admissions SET status='cancelled' WHERE id=?").run(cancelled.id);
-  assert.throws(() => dischargePatient(db, { admission_id: cancelled.id }, cashier), /отменена/);
+  assert.throws(() => dischargePatient(db, { admission_id: cancelled.id }, admin), /отменена/);
   db.close();
 });
 
@@ -477,6 +523,7 @@ test('суточное начисление за пациента без осм�
   const { admission: ordered } = admissionOrderCreate(db, { patient_id: patientId }, registrar);
   admissionAdmit(db, { admission_id: ordered.id, bed_id: bed1 }, nurse);
   db.prepare('UPDATE admissions SET admitted_at=? WHERE id=?').run(isoHoursAgo(30), ordered.id);
+  legacy(db, ordered.id);   // прямая выписка осталась только для дообновленческих
 
   const res = dischargePatient(db, { admission_id: ordered.id }, admin);
   assert.equal(res.mode, 'daily');
@@ -485,4 +532,148 @@ test('суточное начисление за пациента без осм�
   // Главный врач тут не участвовал вовсе: выписка не спрашивает осмотра.
   assert.equal(db.prepare('SELECT examined_at FROM admissions WHERE id=?').get(ordered.id).examined_at, null);
   db.close();
+});
+
+
+// ═══ ГРАНИЦА ВЫПУСКА: СТАРЫЕ КНОПКИ БОЛЬШЕ НЕ ОБХОДЯТ МАРШРУТ ═══════════════
+//
+// Разбор C1 назвал дыру целиком: доска коек (views/ward-beds.js) звала
+// `admit_patient` и `discharge_patient`, а миграция 092 выдала эту доску
+// медсестре, старшей медсестре, главному врачу и РЕГИСТРАТУРЕ. Одно нажатие
+// писало status='active' с пустыми examined_* и attending_doctor_id — весь
+// маршрут владельца пропускался, и получившаяся госпитализация НЕ ЛЕЧИЛАСЬ:
+// назначения отвечали 403 «Назначения ведёт лечащий врач этого пациента».
+// Второе нажатие закрывало чужую историю болезни без исхода, без эпикриза и
+// без врачебной подписи.
+//
+// Кнопок на экране больше нет. Тесты ниже проверяют ВТОРУЮ половину — сервер:
+// /api/rpc открыт curl'ом с любого компьютера клиники, и спрятанная кнопка
+// защитой не является.
+
+test('C1: admit_patient больше не заводит госпитализацию — и говорит, куда идти', () => {
+  const { db, patientId, bed1 } = seed();
+
+  // Ровно тот вызов, который делала кнопка «Госпитализировать» на доске коек.
+  assert.throws(() => admitPatient(db, { patient_id: patientId, bed_id: bed1, doctor_id: DOCTOR_ID }, registrar),
+    (e) => e.status === 400 && /Стационар/.test(e.message) && /лечащего врача/.test(e.message));
+
+  // Ни строки, ни занятой койки после отказа.
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM admissions').get().n, 0);
+  assert.equal(db.prepare('SELECT status FROM beds WHERE id=?').get(bed1).status, 'free');
+  db.close();
+});
+
+test('C1: заявка, оформленная ПОСЛЕ обновления, старым путём не выполняется — а дообновленческая выполняется', () => {
+  const { db, patientId, patientId2, bed1, bed2 } = seed();
+
+  // Заявка нового маршрута (created_at = сейчас): её кладёт медсестра в окне
+  // «Стационар», а не старый RPC.
+  const fresh = admissionOrderCreate(db, { patient_id: patientId, department: 'Терапия' }, registrar).admission;
+  assert.throws(() => admitPatient(db, { patient_id: patientId, bed_id: bed1, doctor_id: DOCTOR_ID }, nurse),
+    (e) => e.status === 400 && /Стационар/.test(e.message));
+  assert.equal(db.prepare('SELECT status FROM admissions WHERE id=?').get(fresh.id).status, 'ordered',
+    'отказ не должен ничего сдвинуть');
+
+  // Та же заявка, но оформленная ДО обновления, — выполняется как раньше.
+  const old = admissionOrderCreate(db, { patient_id: patientId2, department: 'Терапия' }, registrar).admission;
+  legacy(db, old.id);
+  const res = admitPatient(db, { patient_id: patientId2, bed_id: bed2, doctor_id: DOCTOR_ID }, nurse);
+  assert.equal(res.admission.id, old.id, 'заявка должна СТАТЬ госпитализацией, а не породить вторую');
+  assert.equal(res.admission.status, 'active');
+  assert.equal(db.prepare('SELECT status FROM beds WHERE id=?').get(bed2).status, 'occupied');
+  db.close();
+});
+
+// САМОЕ ВАЖНОЕ В C1: старый путь, пока он жив, НЕ ОСТАВЛЯЕТ ПАЦИЕНТА БЕЗ
+// ЛЕЧАЩЕГО ВРАЧА. Именно это делало госпитализацию невосстановимой: назначения
+// отказывали всем, а admission_set_attending отвечал «уже назначен», потому что
+// смотрел на статус, а не на пустую колонку.
+test('C1: старый путь проставляет лечащего врача и отметку осмотра — иначе отказывает', () => {
+  const { db, patientId, patientId2, bed1, bed2 } = seed();
+
+  // Заявка без врача + вызов без врача = госпитализация, которую нельзя лечить.
+  // Такую сервер не создаёт вовсе.
+  legacyOrder(db, patientId, null);
+  assert.throws(() => admitPatient(db, { patient_id: patientId, bed_id: bed1 }, nurse),
+    (e) => e.status === 400 && /лечащего врача/.test(e.message));
+  assert.equal(db.prepare('SELECT status FROM beds WHERE id=?').get(bed1).status, 'free');
+
+  // Медсестра лечащим врачом быть не может — признак врача спрашивается тем же
+  // вопросом, что и в admission_set_attending.
+  assert.throws(() => admitPatient(db, { patient_id: patientId, bed_id: bed1, doctor_id: 6 }, nurse),
+    (e) => e.status === 400 && /только врача/.test(e.message));
+
+  // С врачом — проходит, и все три пропущенные подписи стоят.
+  const adm = legacyAdmit(db, { patient_id: patientId2, bed_id: bed2 }, nurse).admission;
+  assert.equal(adm.attending_doctor_id, DOCTOR_ID, 'без лечащего врача назначения невозможны');
+  assert.equal(adm.admitted_by, nurse.id);
+  assert.equal(adm.examined_by, nurse.id, 'шаг пройден одним движением — подписан тем, кто его сделал');
+  assert.ok(adm.examined_at, 'пустой осмотр сделал бы строку неотличимой от мигрировавшей');
+  // И проверка «изнутри»: этому врачу лечение открыто.
+  assert.equal(assertCanPrescribe(db, adm.id, { id: DOCTOR_ID, role: 'doctor' }).id, adm.id);
+  db.close();
+});
+
+test('C1: discharge_patient отказывает госпитализации, заведённой после обновления, и работает для дообновленческой', () => {
+  const { db, patientId, patientId2, bed1, bed2 } = seed();
+
+  // Новая госпитализация, дошедшая до лечения нормальным маршрутом.
+  const fresh = admissionOrderCreate(db, { patient_id: patientId }, registrar).admission;
+  admissionAdmit(db, { admission_id: fresh.id, bed_id: bed1 }, nurse);
+  db.prepare("UPDATE admissions SET status='active', attending_doctor_id=?, examined_at='2026-09-04T09:00:00Z' WHERE id=?")
+    .run(DOCTOR_ID, fresh.id);
+
+  assert.throws(() => dischargePatient(db, { admission_id: fresh.id }, nurse),
+    (e) => e.status === 400 && /два шага/.test(e.message) && /Выписки к оформлению/.test(e.message));
+  assert.equal(db.prepare('SELECT status FROM admissions WHERE id=?').get(fresh.id).status, 'active',
+    'отказ обязан ничего не менять');
+  assert.equal(db.prepare('SELECT status FROM beds WHERE id=?').get(bed1).status, 'occupied');
+
+  // Дообновленческая — выписывается по-прежнему: эпикриза у неё нет и не будет.
+  const old = legacyAdmit(db, { patient_id: patientId2, bed_id: bed2 }, nurse).admission;
+  const res = dischargePatient(db, { admission_id: old.id }, nurse);
+  assert.equal(res.admission.status, 'discharged');
+  assert.equal(db.prepare('SELECT status FROM beds WHERE id=?').get(bed2).status, 'cleaning');
+  db.close();
+});
+
+// Отказ по СОСТОЯНИЮ звучит раньше отказа по границе выпуска: у заявки, у
+// отменённой и у выписанной свой точный ответ, и подменять его рассказом про
+// два шага значит отвечать не на тот вопрос.
+test('C1: у заявки и у закрытой госпитализации ответ прежний, а не про два шага', () => {
+  const { db, patientId, patientId2 } = seed();
+  const ordered = admissionOrderCreate(db, { patient_id: patientId }, registrar).admission;
+  assert.throws(() => dischargePatient(db, { admission_id: ordered.id }, admin), /не размещён на койке/);
+
+  const cancelled = admissionOrderCreate(db, { patient_id: patientId2 }, registrar).admission;
+  db.prepare("UPDATE admissions SET status='cancelled' WHERE id=?").run(cancelled.id);
+  assert.throws(() => dischargePatient(db, { admission_id: cancelled.id }, admin), /отменена/);
+  db.close();
+});
+
+// C1, третья половина: КАССИР И РЕГИСТРАТУРА БОЛЬШЕ НЕ ВЫПИСЫВАЮТ.
+//
+// Исход госпитализации — врачебное заключение, оформление выписки — работа
+// старшей медсестры. Ни кассир, ни регистратор не подписывают ни того, ни
+// другого нигде в новом маршруте (TRANSITION_ROLES), и держать им старую
+// кнопку значило оставить открытым ровно тот вход, который маршрут закрыл.
+test('C1: кассир и регистратура выписать не могут; те, кто стоит у койки, — могут', () => {
+  for (const who of [cashier, registrar, lab]) {
+    const { db, patientId, bed1 } = seed();
+    const adm = legacyAdmit(db, { patient_id: patientId, bed_id: bed1 }, nurse).admission;
+    assert.throws(() => dischargePatient(db, { admission_id: adm.id }, who),
+      (e) => e.status === 403, 'роль ' + who.role + ' не должна выписывать');
+    assert.equal(db.prepare('SELECT status FROM admissions WHERE id=?').get(adm.id).status, 'active');
+    db.close();
+  }
+
+  const seniorNurse = { id: 6, role: 'nurse', extra_roles: ['senior_nurse'] };
+  const headDoctor  = { id: 3, role: 'doctor', extra_roles: ['head_doctor'] };
+  for (const who of [nurse, admin, seniorNurse, headDoctor]) {
+    const { db, patientId, bed1 } = seed();
+    const adm = legacyAdmit(db, { patient_id: patientId, bed_id: bed1 }, nurse).admission;
+    assert.equal(dischargePatient(db, { admission_id: adm.id }, who).admission.status, 'discharged',
+      'роль ' + (who.extra_roles || [who.role]).join(',') + ' обязана выписывать');
+    db.close();
+  }
 });

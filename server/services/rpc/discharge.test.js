@@ -61,6 +61,21 @@ function admission(db, status = 'active', extra = {}) {
     .run(...keys.map((k) => cols[k])).lastInsertRowid;
 }
 
+/**
+ * ГОСПИТАЛИЗАЦИЯ, ЗАВЕДЁННАЯ ДО ЭТОГО ОБНОВЛЕНИЯ.
+ *
+ * Прямая выписка (`discharge_patient`, v0.8.0) осталась ровно для них и ни для
+ * кого больше: isLegacyAdmission (rpc/inpatient.js) сравнивает created_at
+ * строки с моментом, когда клиника приняла миграцию 091. «Оставлено работать
+ * для тех, кого положили до обновления» — это про людей в койках в тот день, а
+ * не про вечную кнопку: без такой границы прямая выписка закрывала бы любую
+ * историю болезни без исхода, без эпикриза и без врачебной подписи.
+ */
+function legacy(db, admissionId) {
+  db.prepare("UPDATE admissions SET created_at = '2000-01-01T00:00:00Z' WHERE id = ?").run(admissionId);
+  return admissionId;
+}
+
 /** Опубликованный выписной эпикриз — то, без чего заявку не принимают. */
 function epicrisis(db, admissionId, { published = true } = {}) {
   return db.prepare(`
@@ -510,7 +525,7 @@ test('прямая выписка v0.8.0 РАБОТАЕТ из каждого с
   // клали до обновления. Если бы Задача 8 убрала прямой путь, каждый такой
   // пациент остался бы в клинике насовсем.
   for (const status of IN_BED_STATUSES) {
-    const id = admission(db, status, { bed_id: null });
+    const id = legacy(db, admission(db, status, { bed_id: null }));
     const res = dischargePatient(db, { admission_id: id }, NURSE);
     assert.equal(res.admission.status, 'discharged', status);
     assert.ok(res.admission.discharged_at, status + ': время выписки проставлено');
@@ -521,7 +536,12 @@ test('прямая выписка v0.8.0 РАБОТАЕТ из каждого с
 test('ИЗ КАЖДОГО состояния «в койке» наружу ведёт путь — инвариант, а не пример', () => {
   const db = seed();
   for (const status of IN_BED_STATUSES) {
-    const id = admission(db, status, { bed_id: null });
+    // Дообновленческая: иначе из 'admitted' и 'examined' выхода действительно
+    // нет — и это правильно, потому что у них его и не должно быть после
+    // обновления (пациент идёт по маршруту, а не выписывается из приёмного
+    // покоя одной кнопкой). Инвариант «никто не заперт» относится к тем, кто
+    // лежал в койке в день установки.
+    const id = legacy(db, admission(db, status, { bed_id: null }));
     // Двухшаговый путь открыт из 'active' (через заявку) и из 'discharging'
     // (оформление); из остальных выводит прямая выписка. Пустого списка быть
     // не должно ни у одного состояния.
@@ -546,7 +566,7 @@ test('ИЗ КАЖДОГО состояния «в койке» наружу ве
 
 test('прямая выписка тоже отпускает койку в уборку, а не в свободные', () => {
   const db = seed();
-  const id = admission(db, 'active');
+  const id = legacy(db, admission(db, 'active'));
   dischargePatient(db, { admission_id: id }, NURSE);
   assert.equal(db.prepare('SELECT status FROM beds WHERE id=1').get().status, 'cleaning');
   db.close();
