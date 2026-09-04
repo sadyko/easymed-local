@@ -6294,4 +6294,42 @@ export const STRINGS = {
   "Не удалось снять отметку.": {"en":"The record could not be undone.","ru":"Не удалось снять отметку.","uz":"Belgini olib tashlab bo'lmadi."},
   "Отметка снята. Час снова свободен.": {"en":"The record is undone. The hour is free again.","ru":"Отметка снята. Час снова свободен.","uz":"Belgi olib tashlandi. Soat yana bo'sh."},
   "отметка снята": {"en":"record undone","ru":"отметка снята","uz":"belgi olib tashlangan"},
+
+  // TWO_STEP_DISCHARGE_V1 (Задача 8, ШАГ 1) — ЗАЯВКА НА ВЫПИСКУ в карте
+  // госпитализации: исход объявляет лечащий врач, койку он не освобождает.
+  // Сюда же — дословные отказы сервера (rpc/inpatient.js): экран их
+  // ПОКАЗЫВАЕТ, а не пересказывает, и переводятся они здесь, как всякий
+  // текст, доходящий до человека через toast() — added 2026-09-04
+  "Заявка на выписку": {"en":"Discharge request","ru":"Заявка на выписку","uz":"Chiqarishga ariza"},
+  "Заявка на выписку подана": {"en":"Discharge request filed","ru":"Заявка на выписку подана","uz":"Chiqarishga ariza berilgan"},
+  "Исход госпитализации": {"en":"Outcome of the stay","ru":"Исход госпитализации","uz":"Yotqizish yakuni"},
+  "Куда переведён": {"en":"Transferred to","ru":"Куда переведён","uz":"Qayerga o'tkazildi"},
+  "Например: городская больница №1, реанимация": {"en":"For example: city hospital No. 1, intensive care","ru":"Например: городская больница №1, реанимация","uz":"Masalan: 1-son shahar shifoxonasi, reanimatsiya"},
+  "Рекомендации пациенту": {"en":"Recommendations for the patient","ru":"Рекомендации пациенту","uz":"Bemorga tavsiyalar"},
+  "Режим, препараты, явка на контроль": {"en":"Regimen, medicines, follow-up visit","ru":"Режим, препараты, явка на контроль","uz":"Rejim, dorilar, nazoratga kelish"},
+  "Планируемая дата и время выписки": {"en":"Planned discharge date and time","ru":"Планируемая дата и время выписки","uz":"Rejalashtirilgan chiqarish sanasi va vaqti"},
+  "Койка остаётся за пациентом. Выписку оформит старшая медсестра: фактическое время, счёт, документы.": {"en":"The bed stays with the patient. The senior nurse completes the discharge: actual time, bill, documents.","ru":"Койка остаётся за пациентом. Выписку оформит старшая медсестра: фактическое время, счёт, документы.","uz":"Koyka bemor ortida qoladi. Chiqarishni katta hamshira rasmiylashtiradi: haqiqiy vaqt, hisob, hujjatlar."},
+  "Подать заявку": {"en":"File the request","ru":"Подать заявку","uz":"Ariza berish"},
+  "Не удалось подать заявку на выписку.": {"en":"The discharge request could not be filed.","ru":"Не удалось подать заявку на выписку.","uz":"Chiqarishga ariza berib bo'lmadi."},
+  "Заявка на выписку подана. Оформит старшая медсестра.": {"en":"The discharge request is filed. The senior nurse will complete it.","ru":"Заявка на выписку подана. Оформит старшая медсестра.","uz":"Chiqarishga ariza berildi. Katta hamshira rasmiylashtiradi."},
+  "Отозвать заявку": {"en":"Withdraw the request","ru":"Отозвать заявку","uz":"Arizani qaytarib olish"},
+  "Отозвать заявку на выписку": {"en":"Withdraw the discharge request","ru":"Отозвать заявку на выписку","uz":"Chiqarishga arizani qaytarib olish"},
+  "Причина отзыва": {"en":"Reason for withdrawing","ru":"Причина отзыва","uz":"Qaytarib olish sababi"},
+  "Например: поднялась температура, выписка отложена": {"en":"For example: the temperature rose, the discharge is postponed","ru":"Например: поднялась температура, выписка отложена","uz":"Masalan: harorat ko'tarildi, chiqarish qoldirildi"},
+  "Пациент остаётся на своей койке, лечение продолжается. Исход и подпись заявки стираются — следующая заявка объявит их заново; рекомендации и эпикриз остаются.": {"en":"The patient stays in their bed and treatment continues. The outcome and the request's signature are cleared - the next request states them again; the recommendations and the epicrisis remain.","ru":"Пациент остаётся на своей койке, лечение продолжается. Исход и подпись заявки стираются — следующая заявка объявит их заново; рекомендации и эпикриз остаются.","uz":"Bemor o'z koykasida qoladi, davolash davom etadi. Yakun va arizaning imzosi o'chiriladi - keyingi ariza ularni qaytadan e'lon qiladi; tavsiyalar va epikriz qoladi."},
+  "Укажите причину отзыва заявки на выписку.": {"en":"State the reason for withdrawing the discharge request.","ru":"Укажите причину отзыва заявки на выписку.","uz":"Chiqarishga arizani qaytarib olish sababini ko'rsating."},
+  "Не удалось отозвать заявку на выписку.": {"en":"The discharge request could not be withdrawn.","ru":"Не удалось отозвать заявку на выписку.","uz":"Chiqarishga arizani qaytarib olib bo'lmadi."},
+  "Заявка на выписку отозвана. Пациент остаётся в отделении.": {"en":"The discharge request is withdrawn. The patient stays in the ward.","ru":"Заявка на выписку отозвана. Пациент остаётся в отделении.","uz":"Chiqarishga ariza qaytarib olindi. Bemor bo'limda qoladi."},
+  "Выписной эпикриз": {"en":"Discharge epicrisis","ru":"Выписной эпикриз","uz":"Chiqarish epikrizi"},
+  "Опубликовать эпикриз": {"en":"Publish the epicrisis","ru":"Опубликовать эпикриз","uz":"Epikrizni chop etish"},
+  "Заявку на выписку принимают только по ОПУБЛИКОВАННОМУ эпикризу: черновик — не документ.": {"en":"A discharge request is accepted only against a PUBLISHED epicrisis: a draft is not a document.","ru":"Заявку на выписку принимают только по ОПУБЛИКОВАННОМУ эпикризу: черновик — не документ.","uz":"Chiqarishga ariza faqat CHOP ETILGAN epikriz asosida qabul qilinadi: qoralama - hujjat emas."},
+  "Выписной эпикриз сохранён черновиком — опубликуйте его, затем подайте заявку.": {"en":"The discharge epicrisis is saved as a draft - publish it, then file the request.","ru":"Выписной эпикриз сохранён черновиком — опубликуйте его, затем подайте заявку.","uz":"Chiqarish epikrizi qoralama sifatida saqlangan - uni chop eting, so'ng ariza bering."},
+  "Выписной эпикриз не написан — заявку на выписку принять нельзя.": {"en":"The discharge epicrisis is not written - the discharge request cannot be accepted.","ru":"Выписной эпикриз не написан — заявку на выписку принять нельзя.","uz":"Chiqarish epikrizi yozilmagan - chiqarishga arizani qabul qilib bo'lmaydi."},
+  "Заявка на выписку уже подана.": {"en":"The discharge request has already been filed.","ru":"Заявка на выписку уже подана.","uz":"Chiqarishga ariza allaqachon berilgan."},
+  "Заявку на выписку подаёт лечащий врач этого пациента или главный врач.": {"en":"The discharge request is filed by this patient's attending doctor or by the head doctor.","ru":"Заявку на выписку подаёт лечащий врач этого пациента или главный врач.","uz":"Chiqarishga arizani shu bemorning davolovchi shifokori yoki bosh shifokor beradi."},
+  "Укажите исход: выписан домой, переведён, отказ от лечения или летальный исход.": {"en":"State the outcome: discharged home, transferred, refusal of treatment, or death.","ru":"Укажите исход: выписан домой, переведён, отказ от лечения или летальный исход.","uz":"Yakunni ko'rsating: uyiga chiqarildi, o'tkazildi, davolanishdan bosh tortish yoki o'lim holati."},
+  "Укажите, в какое учреждение переведён пациент.": {"en":"State which facility the patient is transferred to.","ru":"Укажите, в какое учреждение переведён пациент.","uz":"Bemor qaysi muassasaga o'tkazilganini ko'rsating."},
+  "Отозвать заявку может лечащий врач этого пациента или главный врач.": {"en":"This patient's attending doctor or the head doctor can withdraw the request.","ru":"Отозвать заявку может лечащий врач этого пациента или главный врач.","uz":"Arizani shu bemorning davolovchi shifokori yoki bosh shifokor qaytarib olishi mumkin."},
+  "Заявка на выписку не подана — отзывать нечего.": {"en":"No discharge request has been filed - there is nothing to withdraw.","ru":"Заявка на выписку не подана — отзывать нечего.","uz":"Chiqarishga ariza berilmagan - qaytarib oladigan narsa yo'q."},
+  "Пациент уже выписан — отзывать нечего.": {"en":"The patient is already discharged - there is nothing to withdraw.","ru":"Пациент уже выписан — отзывать нечего.","uz":"Bemor allaqachon chiqarilgan - qaytarib oladigan narsa yo'q."},
 };

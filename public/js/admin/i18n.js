@@ -42,6 +42,7 @@ const I18N = {
                 'docs-archive': 'Documents',
                 'cashier-shifts': 'Cashier',
                 pacs:         'Imaging · PACS',
+                discharge:    'Discharges',   // TWO_STEP_DISCHARGE_V1
             },
             logout: 'Log out',
             viewAsRole: 'View as role',
@@ -124,6 +125,7 @@ const I18N = {
                 'docs-archive': 'Документы',
                 'cashier-shifts': 'Касса',
                 pacs:         'Снимки · PACS',
+                discharge:    'Выписки',   // TWO_STEP_DISCHARGE_V1
             },
             logout: 'Выйти',
             viewAsRole: 'Просмотр как роль',
@@ -207,6 +209,7 @@ const I18N = {
                 'docs-archive': 'Hujjatlar',
                 'cashier-shifts': 'Kassa',
                 pacs:         'Tasvirlar · PACS',
+                discharge:    'Chiqarishlar',   // TWO_STEP_DISCHARGE_V1
             },
             logout: 'Chiqish',
             viewAsRole: 'Rol sifatida koʻrish',

@@ -61,6 +61,7 @@ import { renderAdmissions }   from './admin/views/admissions.js?v=inp2';   // AD
 import { renderMarSheet }    from './admin/views/mar-sheet.js?v=inp5';   // MAR_SHEET_V1 — лист назначений: сетка врача «назначение × час»
 import { renderMarNurse }    from './admin/views/mar-nurse.js?v=inp5';   // MAR_NURSE_V1 — задачи медсестры: пациент — якорь, «5 прав»
 import { renderKitchenSheet } from './admin/views/kitchen-sheet.js?v=diet1';   // KITCHEN_SHEET_V1 — порционник (Задача 7; экран был написан без маршрута)
+import { renderDischarge }   from './admin/views/discharge.js?v=disch1';   // TWO_STEP_DISCHARGE_V1 — «Выписки к оформлению» (Задача 8; экран был написан без маршрута)
 import { renderDoctorRoom }   from './admin/views/doctor-room.js?v=docroom1';   // DOCTOR_ROOM_V1 — Кабинет врача (consultation queue)
 import { renderEmployees }    from './admin/views/employees.js?v=arch1';   // EMPLOYEE_EDITOR_V3 — per-service rate tables; v11 = RATE_LOAD_V2 (fixed rate survives reopen)
 import { renderMarketing }    from './admin/views/marketing.js?v=btnright1';
@@ -117,6 +118,14 @@ const NAV = [
     // KITCHEN_SHEET_V1 — порционник. Экран был написан Задачей 7 и остался без
     // единого входа: ни пункта меню, ни ветки маршрута. Здесь он их получает.
     { id: 'kitchen-sheet', label: 'Kitchen sheet', icon: 'Doc' },
+    // TWO_STEP_DISCHARGE_V1 — «Выписки к оформлению»: ВТОРОЙ шаг выписки,
+    // рабочее место старшей медсестры. Тот же случай, что у порционника
+    // строкой выше: экран был написан Задачей 8 и остался без единого входа —
+    // ни пункта меню, ни ветки маршрута, ни ключа прав. Отдельный пункт, а не
+    // вкладка «Стационара»: заявку подаёт врач в карте пациента, а оформляет
+    // выписку другой человек и через несколько часов — это его собственный
+    // список работы на смену, а не часть окна госпитализации.
+    { id: 'discharge', label: 'Discharges', icon: 'Check' },
     { id: 'beds',     label: 'Ward & beds', icon: 'Bed' },   // INPATIENT_LOCAL_V1 — Стационар и палаты
     { id: 'patient-documents', label: 'Documents', icon: 'Doc' },   // PATIENT_DOCUMENTS_V1
     { section: 'Operations' },
@@ -175,6 +184,7 @@ const CRUMBS = {
     'mar-nurse':   ['Clinical', 'Treatment tasks'],   // MAR_NURSE_V1
     'mar-sheet':   ['Clinical', 'Inpatient ward', 'Treatment sheet'],   // MAR_SHEET_V1
     'kitchen-sheet': ['Clinical', 'Kitchen sheet'],   // KITCHEN_SHEET_V1
+    discharge:     ['Clinical', 'Discharges'],   // TWO_STEP_DISCHARGE_V1
     beds:          ['Clinical', 'Ward & beds'],
     pacs:          ['Clinical', 'Imaging · PACS'],
     pharmacy:      ['Operations', 'Pharmacy'],
@@ -988,6 +998,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'mar-sheet':     return void await renderMarSheet(viewRoot, ctx);   // MAR_SHEET_V1
             case 'mar-nurse':     return void await renderMarNurse(viewRoot, ctx);   // MAR_NURSE_V1
             case 'kitchen-sheet': return void await renderKitchenSheet(viewRoot, ctx);   // KITCHEN_SHEET_V1
+            case 'discharge':     return void await renderDischarge(viewRoot, ctx);   // TWO_STEP_DISCHARGE_V1
             case 'beds':          return void await renderWardBeds(viewRoot, ctx);   // INPATIENT_LOCAL_V1
             case 'doctor-room':   return void await renderDoctorRoom(viewRoot, ctx);   // DOCTOR_ROOM_V1
             case 'pacs':          return void await renderComingSoon(viewRoot, ctx, renderPacs);          // COMING_SOON_V1
@@ -1313,6 +1324,7 @@ function renderCrumbs() {
         'Treatment tasks':       t('sidebar.nav.marNurse',     'Treatment tasks'),   // MAR_NURSE_V1
         'Treatment sheet':       t('sidebar.nav.marSheet',     'Treatment sheet'),   // MAR_SHEET_V1
         'Kitchen sheet':         t('sidebar.nav.kitchenSheet', 'Kitchen sheet'),   // KITCHEN_SHEET_V1
+        'Discharges':            t('sidebar.nav.discharge',    'Discharges'),   // TWO_STEP_DISCHARGE_V1
         'Pharmacy':              t('sidebar.nav.pharmacy',     'Pharmacy'),
         'Cashier':               t('sidebar.nav.cashier',      'Cashier'),
         'Procurement':           t('sidebar.nav.procurement',  'Procurement'),

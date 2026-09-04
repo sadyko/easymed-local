@@ -339,7 +339,17 @@ export function isModuleAllowed(navId) {
     // заявок, увидит пункт меню и получит отказ сервера — это осознанный
     // размен в пользу того, чтобы функция вообще существовала для тех, кому
     // она нужна.
-    if (navId === 'mar-nurse' || navId === 'kitchen-sheet') return _effective.has('beds');
+    //
+    // TWO_STEP_DISCHARGE_V1 — «Выписки к оформлению» (#discharge) — четвёртый
+    // экран того же раздела и тот же ключ `beds`, ровно по доводу выше:
+    // клиника, у которой стационар уже есть, обязана увидеть второй шаг
+    // выписки без похода в настройки ролей, а собственный грантовый ключ
+    // спрятал бы очередь оформления от старшей медсестры, ради которой она и
+    // написана. Сервер отвечает второй раз и строже: ОФОРМИТЬ выписку вправе
+    // только старшая медсестра, главный врач и администратор
+    // ('discharging→discharged' в TRANSITION_ROLES), и экран рисует кнопку по
+    // ответу `inpatient_capabilities`, а не по этому ключу.
+    if (navId === 'mar-nurse' || navId === 'kitchen-sheet' || navId === 'discharge') return _effective.has('beds');
     if (navId === 'mar-sheet') return _effective.has('beds') || _effective.has('consultation');
     // CASHIER_HEAD_KEY_V1 — Старший кассир is its OWN explicit grant (was derived
     // from Cashier: Admin, which made every delete-level cashier a head cashier).
@@ -421,7 +431,7 @@ export function isRouteAllowed(view) {
     // MAR_SHEET_V1 — маршрут листа назначений открывается и с номером
     // госпитализации ('#mar-sheet/13', payload.sub), и без него: без номера
     // экран показывает лежащих и просит выбрать. Право одно на оба случая.
-    if (view === 'mar-sheet' || view === 'mar-nurse' || view === 'kitchen-sheet') return isModuleAllowed(view);
+    if (view === 'mar-sheet' || view === 'mar-nurse' || view === 'kitchen-sheet' || view === 'discharge') return isModuleAllowed(view);   // TWO_STEP_DISCHARGE_V1 добавил #discharge
     if (view === 'cashier-head') return isModuleAllowed('cashier-head');   // CASHIER_HEAD_NAV_V1
     if (view === 'registration') return _effective.has('registration') && canEdit('patients');   // ROLE_AUDIT_V1 (fix #2)
     if (view === 'procurement') return _effective.has('procurement') || _effective.has('procurement:requisitions');   // PROCUREMENT_REQ_GRANT_V1

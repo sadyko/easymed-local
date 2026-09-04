@@ -62,6 +62,14 @@ const OUTCOME_TITLE = {
   death:    'Летальный исход',
 };
 
+// Те же четыре кода и в том же порядке, что у сервера (DISCHARGE_OUTCOMES в
+// rpc/inpatient.js и CHECK миграции 097). Список ЭКСПОРТИРУЕТСЯ, потому что
+// исход спрашивают в ДВУХ местах: здесь его показывают, а в карте
+// госпитализации (views/admission-modal.js) его выбирает врач, подавая заявку.
+// Вторая копия списка означала бы, что один экран знает исход, которого не
+// знает другой, — и расходятся такие копии молча.
+export const DISCHARGE_OUTCOMES = Object.freeze(Object.keys(OUTCOME_TITLE));
+
 /** Подпись исхода. Заявка без исхода невозможна, но строка не должна пустеть. */
 export function outcomeTitle(code) {
   return OUTCOME_TITLE[code] ? tr(OUTCOME_TITLE[code]) : tr('Исход не указан');

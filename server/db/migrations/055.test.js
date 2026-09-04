@@ -95,6 +95,12 @@ test('every sidebar module can be granted to a role', () => {
     // (#mar-sheet) is not in this list because it is not a sidebar module —
     // it is opened per admission, like #patient-card.
     if (id === 'mar-nurse' || id === 'kitchen-sheet') return !grantable.has('beds');
+    // TWO_STEP_DISCHARGE_V1 — and once more for «Выписки к оформлению»
+    // (#discharge): the senior nurse's second step of the discharge is a
+    // fourth screen of that same inpatient section, granted by the same
+    // `beds` key. Who may PRESS «Оформить выписку» is a server question
+    // (TRANSITION_ROLES 'discharging→discharged'), not a menu one.
+    if (id === 'discharge') return !grantable.has('beds');
     return true;
   });
   assert.deepEqual(ungrantable, [], 'sidebar modules with no way to grant them:\n' + ungrantable.join('\n'));

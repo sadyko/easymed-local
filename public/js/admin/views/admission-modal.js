@@ -28,6 +28,8 @@
 //                              отдельно.
 //   openAdmissionAttendingModal — ЛЕЧАЩИЙ ВРАЧ (Задача 3): шаг, после которого
 //                              открываются назначения.
+//   openAdmissionDischargeRequestModal / openAdmissionDischargeCancelModal —
+//                              ЗАЯВКА НА ВЫПИСКУ и её отзыв (Задача 8, ШАГ 1).
 //
 // Все шесть — вокруг ОДНОГО источника правды: RPC `admission_order_create`,
 // `admission_admit`, `admission_order_cancel`, `admission_review_save`,
@@ -44,6 +46,11 @@ import { supabase } from '../../supabase.js';
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
 import { h, Icon, Tag, toast, clear, field, fmtDateTime, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+// TWO_STEP_DISCHARGE_V1 — исход госпитализации спрашивают ЗДЕСЬ (врач подаёт
+// заявку) и показывают ТАМ (очередь оформления). Список и подписи берутся из
+// экрана очереди, а не заводятся вторые: разойдись они, один экран называл бы
+// исход словом, которого другой не знает.
+import { DISCHARGE_OUTCOMES, outcomeTitle } from './discharge.js';
 
 const ADMISSION_TYPES = [['planned', 'Плановая'], ['emergency', 'Экстренная']];
 const STAY_MODES = [['round', 'Круглосуточно'], ['day', 'Дневной стационар']];
@@ -374,7 +381,7 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
         h('span', { class: 'muted' }, k), h('span', { style: { fontWeight: 600, textAlign: 'right' } }, v || '—'));
 
     (async () => {
-        const [admR, flowR] = await Promise.all([
+        const [admR, flowR, capsR] = await Promise.all([
             supabase.from('admissions')
                 // КТО ОСМОТРЕЛ и КТО ЛЕЧИТ — два разных человека и два разных
                 // JOIN'а на users в одной строке (алиасные embed'ы, реестр
@@ -385,6 +392,13 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
                       + 'attending:attending_doctor_id(full_name, specialty), examined:examined_by(full_name)')
                 .eq('id', admissionId).single(),
             supabase.rpc('admission_flow_state', { admission_id: admissionId }),
+            // TWO_STEP_DISCHARGE_V1 — второй ответ сервера, и он про ЧЕЛОВЕКА,
+            // а не про эту госпитализацию: подать заявку на выписку и отозвать
+            // её вправе лечащий врач, главный врач и администратор
+            // (CAPABILITY_TRANSITION в rpc/inpatient-flow.js). Считать это в
+            // браузере по названию роли — та самая вторая копия матрицы, из-за
+            // которой кнопка появляется у того, кому сервер откажет.
+            supabase.rpc('inpatient_capabilities', {}),
         ]);
         clear(body);
         if (admR.error || !admR.data) {
@@ -395,6 +409,7 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
         const a = admR.data;
         const p = a.patients || {};
         const can = (flowR.data && flowR.data.can) || {};
+        const may = (capsR && capsR.data && capsR.data.can) || {};
 
         body.appendChild(patientAnchor(p.full_name || '', [p.mrn, a.admission_no].filter(Boolean).join(' · ')));
         body.appendChild(h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
@@ -415,6 +430,14 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
             kv(tr('Повод / жалобы'), a.chief_complaint || '—'),
             kv(tr('Диагноз направления'), a.admission_diagnosis || '—'),
             a.status === 'cancelled' ? kv(tr('Причина отмены'), a.cancel_reason || '—') : null,
+            // TWO_STEP_DISCHARGE_V1 — судьба заявки видна ТОМУ, КТО ЕЁ ПОДАЛ.
+            // Врач подаёт заявку и уходит; между «готов» и «оформлено» стоят
+            // часы, и всё это время единственный его вопрос — «выписали уже
+            // или нет». Без этих строк ответ на него живёт на чужом экране.
+            a.discharge_requested_at ? kv(tr('Заявка на выписку подана'), fmtDateTime(a.discharge_requested_at)) : null,
+            a.discharge_outcome ? kv(tr('Исход'), outcomeTitle(a.discharge_outcome)) : null,
+            a.discharge_destination ? kv(tr('Куда переведён'), a.discharge_destination) : null,
+            a.status === 'discharged' && a.discharged_at ? kv(tr('Выписан'), fmtDateTime(a.discharged_at)) : null,
         ));
 
         const actions = h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } });
@@ -449,6 +472,33 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
                 onclick: () => { close(); goToMarSheet(a.id, onNavigate); },
             }, Icon('Pill', { size: 13 }), ' ', tr('Лист назначений')));
         }
+        // TWO_STEP_DISCHARGE_V1 — ШАГ 1 ВЫПИСКИ СТОИТ ЗДЕСЬ, и это решение о
+        // месте, а не о вёрстке. Исход госпитализации — «домой» / «переведён»
+        // / «отказ» / «летальный» — объявляет тот, кто лечил, и объявляет он
+        // его в карте СВОЕГО пациента, где уже стоит: осмотр, лечащий врач,
+        // лист назначений. Отдельный экран заявок означал бы, что врач ищет
+        // того же пациента заново в чужом списке — ровно тот шаг, который
+        // отделение и перестаёт делать, выписывая мимо программы.
+        //
+        // Койку врач НЕ ОСВОБОЖДАЕТ: заявка переводит госпитализацию в
+        // 'discharging', и на этом его часть кончается. Оформляет выписку
+        // старшая медсестра на своём экране («Выписки к оформлению»).
+        if (a.status === 'active' && may.request_discharge) {
+            actions.appendChild(h('button', {
+                class: 'btn btn-primary btn-sm', type: 'button',
+                onclick: () => { close(); openAdmissionDischargeRequestModal({ admission: a, onDone: onChange }); },
+            }, Icon('Check', { size: 13 }), ' ', tr('Заявка на выписку')));
+        }
+        // ЕДИНСТВЕННАЯ СТРЕЛКА НАЗАД во всём маршруте (lifecycle.js говорит это
+        // вслух). За часы между «готов» и «оформлено» состояние меняется, и без
+        // отзыва отделению оставалось бы выписать и завести госпитализацию
+        // заново — то есть соврать в истории болезни и в деньгах.
+        if (a.status === 'discharging' && may.cancel_discharge_request) {
+            actions.appendChild(h('button', {
+                class: 'btn btn-sm', type: 'button',
+                onclick: () => { close(); openAdmissionDischargeCancelModal({ admission: a, onDone: onChange }); },
+            }, tr('Отозвать заявку')));
+        }
         if (can.cancelled) {
             actions.appendChild(h('button', {
                 class: 'btn btn-sm', type: 'button',
@@ -472,10 +522,19 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
 // Две кнопки: «Сохранить черновик» не двигает ничего и не закрывает окно —
 // осмотр набирают по частям; «Опубликовать» — это шаг маршрута, после которого
 // у пациента появляется состояние 'examined' и сразу спрашивается лечащий врач.
+// TWO_STEP_DISCHARGE_V1 — ТРЕТИЙ РОД ЗАПИСИ НАЗЫВАЕТСЯ СВОИМ ИМЕНЕМ. Сервер
+// принимает три (KINDS в rpc/inpatient-reviews.js: primary / round /
+// discharge), а окно знало два и подписывало выписной эпикриз «Записью
+// обхода» — то есть врач, посланный отказом писать эпикриз, открывал бы
+// документ с чужим названием и не понимал, туда ли он попал.
+const REVIEW_TITLE = { primary: 'Первичный осмотр', round: 'Запись обхода', discharge: 'Выписной эпикриз' };
+const REVIEW_SUBMIT = { primary: 'Опубликовать осмотр', round: 'Опубликовать запись', discharge: 'Опубликовать эпикриз' };
+
 export function openAdmissionReviewModal({ admission, kind = 'primary', onDone } = {}) {
     if (!admission || !admission.id) { toast(tr('Госпитализация не найдена.'), 'fail'); return; }
     const p = admission.patients || {};
     const isPrimary = kind === 'primary';
+    const isDischarge = kind === 'discharge';
 
     const complaints = h('textarea', { rows: '2', placeholder: tr('Что беспокоит пациента') });
     const objective  = h('textarea', { rows: '3', placeholder: tr('Состояние, осмотр по системам, витальные показатели') });
@@ -512,7 +571,7 @@ export function openAdmissionReviewModal({ admission, kind = 'primary', onDone }
         publish,
     });
 
-    modal(isPrimary ? tr('Первичный осмотр') : tr('Запись обхода'), 'Stethoscope', [
+    modal(tr(REVIEW_TITLE[kind] || REVIEW_TITLE.round), isDischarge ? 'Doc' : 'Stethoscope', [
         patientAnchor(p.full_name || '', [p.mrn, admission.department, admission.admission_no].filter(Boolean).join(' · ')),
         field(tr('Жалобы'), complaints),
         field(tr('Объективно'), objective),
@@ -523,7 +582,14 @@ export function openAdmissionReviewModal({ admission, kind = 'primary', onDone }
             ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 tr('После публикации осмотра нужно назначить лечащего врача — без него назначений не будет.'))
             : null,
-    ], isPrimary ? tr('Опубликовать осмотр') : tr('Опубликовать запись'), async () => {
+        // Черновик эпикриза заявку на выписку НЕ ПРОПУСКАЕТ, и сказать это
+        // нужно здесь, до того как врач закроет окно кнопкой «Сохранить
+        // черновик» и вернётся к отказу, которого не ждал.
+        isDischarge
+            ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                tr('Заявку на выписку принимают только по ОПУБЛИКОВАННОМУ эпикризу: черновик — не документ.'))
+            : null,
+    ], tr(REVIEW_SUBMIT[kind] || REVIEW_SUBMIT.round), async () => {
         if (isPrimary && !diagnosis.value.trim()) { toast(tr('Укажите диагноз.'), 'fail'); return false; }
         const { data, error } = await supabase.rpc('admission_review_save', payload(true));
         if (error) { toast((error.message) || tr('Не удалось сохранить осмотр.'), 'fail'); return false; }
@@ -588,6 +654,124 @@ export function openAdmissionAttendingModal({ admission, onDone } = {}) {
         });
         if (error) { toast((error.message) || tr('Не удалось назначить лечащего врача.'), 'fail'); return false; }
         toast(tr('Лечащий врач назначен — лечение открыто.'), 'ok');
+        if (onDone) await onDone();
+        return true;
+    }, { width: 560 });
+}
+
+// ---------------------------------------------------------------------------
+// 7. Заявка на выписку — ШАГ 1 (TWO_STEP_DISCHARGE_V1, Задача 8)
+// ---------------------------------------------------------------------------
+// Врач говорит «готов» и НАЗЫВАЕТ ИСХОД. Койку это не освобождает, счёт не
+// закрывает и документов не печатает: между заявкой и оформлением стоят часы,
+// и делает второй шаг другой человек на своём экране. Ровно это разделение и
+// есть смысл двух шагов — одношаговая выписка v0.8.0 отдавала оба решения
+// одному человеку, и «домой» нажимала та, кто не лечила.
+
+// ОТКАЗЫ СЕРВЕРА, КОТОРЫЕ ЛЕЧАТСЯ ОДНИМ ДЕЙСТВИЕМ, — дословно (rpc/inpatient.js
+// admissionDischargeRequest, проверка 4). Экран НЕ ПЕРЕПИСЫВАЕТ их своими
+// словами: у сервера они точнее, и черновик от пустого места он различает
+// намеренно — одному врачу осталось нажать «Опубликовать», другому написать
+// документ. Здесь эти две строки нужны только затем, чтобы узнать отказ и
+// открыть тот самый бланк, а не оставить человека с сообщением и без выхода.
+// Тест читает серверный модуль и падает, если строки разъехались.
+export const EPICRISIS_REFUSALS = Object.freeze([
+    'Выписной эпикриз сохранён черновиком — опубликуйте его, затем подайте заявку.',
+    'Выписной эпикриз не написан — заявку на выписку принять нельзя.',
+]);
+
+/** Это ли отказ «сначала эпикриз» — то есть ведёт ли он в бланк эпикриза. */
+export function needsEpicrisis(message) {
+    return EPICRISIS_REFUSALS.includes(String(message == null ? '' : message).trim());
+}
+
+export function openAdmissionDischargeRequestModal({ admission, onDone } = {}) {
+    if (!admission || !admission.id) { toast(tr('Госпитализация не найдена.'), 'fail'); return; }
+    const p = admission.patients || {};
+
+    const outcomeSel = h('select', null,
+        ...DISCHARGE_OUTCOMES.map((code) => h('option', { value: code }, outcomeTitle(code))));
+    const destInp = h('input', { type: 'text', placeholder: tr('Например: городская больница №1, реанимация') });
+    const destBox = h('div', { style: { display: 'none' } },
+        field(tr('Куда переведён'), destInp, { required: true }));
+    const recInp = h('textarea', { rows: '3', placeholder: tr('Режим, препараты, явка на контроль') });
+    // РЕКОМЕНДАЦИИ ПОДХВАТЫВАЮТСЯ, А НЕ СПРАШИВАЮТСЯ ЗАНОВО. Отзыв заявки
+    // стирает исход и подпись, но рекомендации оставляет намеренно (шапка
+    // admissionDischargeCancelRequest): это набранный врачом клинический текст.
+    // Пустое поле в повторной заявке затёрло бы его — сервер пишет то, что
+    // прислали, — и весь смысл того решения пропал бы здесь.
+    recInp.value = (admission.discharge_recommendations || '');
+    const whenInp = h('input', { type: 'datetime-local' });
+
+    // Адрес спрашивается ТОЛЬКО у перевода. Поле «куда», висящее над выпиской
+    // домой, заполняют по инерции — и в отчётности появляются переводы, которых
+    // не было. Сервер требует его ровно в том же единственном случае.
+    const syncOutcome = () => { destBox.style.display = outcomeSel.value === 'transfer' ? '' : 'none'; };
+    outcomeSel.addEventListener('change', syncOutcome);
+    syncOutcome();
+
+    modal(tr('Заявка на выписку'), 'Check', [
+        patientAnchor(p.full_name || '', [p.mrn, admission.department, admission.admission_no].filter(Boolean).join(' · ')),
+        field(tr('Исход госпитализации'), outcomeSel, { required: true }),
+        destBox,
+        field(tr('Рекомендации пациенту'), recInp),
+        field(tr('Планируемая дата и время выписки'), whenInp),
+        h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+            tr('Койка остаётся за пациентом. Выписку оформит старшая медсестра: фактическое время, счёт, документы.')),
+    ], tr('Подать заявку'), async () => {
+        if (outcomeSel.value === 'transfer' && !destInp.value.trim()) {
+            toast(tr('Укажите, в какое учреждение переведён пациент.'), 'fail');
+            return false;
+        }
+        const { error } = await supabase.rpc('admission_discharge_request', {
+            admission_id: admission.id,
+            outcome: outcomeSel.value,
+            destination: destInp.value.trim(),
+            recommendations: recInp.value.trim(),
+            // <input type="datetime-local"> отдаёт «2026-09-05T14:00» без зоны —
+            // секунды и Z дописываются здесь, как в заявке на госпитализацию.
+            planned_discharge_at: whenInp.value ? whenInp.value + ':00Z' : null,
+        });
+        if (error) {
+            const msg = (error && error.message) || tr('Не удалось подать заявку на выписку.');
+            toast(msg, 'fail');
+            // ОТКАЗ ВЕДЁТ ТУДА, ГДЕ ЕГО СНИМАЮТ. «Напишите эпикриз» без бланка
+            // эпикриза — это тупик: врач закрывает окно и идёт искать, где
+            // такой документ вообще заводят. Бланк уже есть, и открывается он
+            // тем же родом записи, которого требует сервер (kind='discharge').
+            if (needsEpicrisis(msg)) openAdmissionReviewModal({ admission, kind: 'discharge', onDone });
+            return false;
+        }
+        toast(tr('Заявка на выписку подана. Оформит старшая медсестра.'), 'ok');
+        if (onDone) await onDone();
+        return true;
+    }, { width: 560 });
+}
+
+// ---------------------------------------------------------------------------
+// 8. Отзыв заявки на выписку — единственный шаг назад
+// ---------------------------------------------------------------------------
+export function openAdmissionDischargeCancelModal({ admission, onDone } = {}) {
+    if (!admission || !admission.id) { toast(tr('Госпитализация не найдена.'), 'fail'); return; }
+    const p = admission.patients || {};
+    const reasonInp = h('input', { type: 'text', placeholder: tr('Например: поднялась температура, выписка отложена') });
+
+    modal(tr('Отозвать заявку на выписку'), 'Warning', [
+        patientAnchor(p.full_name || '', [p.mrn, admission.admission_no].filter(Boolean).join(' · ')),
+        admission.discharge_outcome
+            ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, outcomeTitle(admission.discharge_outcome))
+            : null,
+        field(tr('Причина отзыва'), reasonInp, { required: true }),
+        h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+            tr('Пациент остаётся на своей койке, лечение продолжается. Исход и подпись заявки стираются — следующая заявка объявит их заново; рекомендации и эпикриз остаются.')),
+    ], tr('Отозвать заявку'), async () => {
+        const reason = reasonInp.value.trim();
+        if (!reason) { toast(tr('Укажите причину отзыва заявки на выписку.'), 'fail'); return false; }
+        const { error } = await supabase.rpc('admission_discharge_cancel_request', {
+            admission_id: admission.id, reason,
+        });
+        if (error) { toast((error.message) || tr('Не удалось отозвать заявку на выписку.'), 'fail'); return false; }
+        toast(tr('Заявка на выписку отозвана. Пациент остаётся в отделении.'), 'ok');
         if (onDone) await onDone();
         return true;
     }, { width: 560 });
