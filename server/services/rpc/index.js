@@ -8,7 +8,8 @@ import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitio
 import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit } from './inpatient.js';   // ADMISSION_ORDER_V1
-import { admissionFlowState } from './inpatient-flow.js';   // INPATIENT_FLOW_V1
+import { admissionFlowState, inpatientCapabilities } from './inpatient-flow.js';   // INPATIENT_FLOW_V1
+import { admissionReviewSave, admissionSetAttending, admissionReviewsList } from './inpatient-reviews.js';   // INPATIENT_REVIEW_V1
 import {
   treatmentOrderCreate, treatmentOrderCancel, treatmentOrdersList,
   treatmentAdminMark, treatmentAdminUnmark, treatmentTasksDue,
@@ -169,6 +170,22 @@ export const RPC = {
   // не пересчитать у себя — вторая копия матрицы разошлась бы с первой.
   // Сами шаги маршрута (заявка, размещение, осмотр, выписка) — Задачи 2, 3, 8.
   admission_flow_state:           (db, args, user) => admissionFlowState(db, args, user),
+
+  // INPATIENT_REVIEW_V1 — первичный осмотр и лечащий врач (Задача 3 плана
+  // «Стационар»). Осмотр публикует ГЛАВНЫЙ ВРАЧ, и публикация двигает
+  // 'admitted' → 'examined'; лечащего врача назначает он же, и это шаг
+  // 'examined' → 'active' — единственный, после которого открываются
+  // назначения (assertCanPrescribe). Черновик осмотра не двигает ничего, а
+  // исправление опубликованного — НОВАЯ запись, а не UPDATE поверх прежней.
+  // admission_reviews_list и inpatient_capabilities — чтение (READ_ONLY_RPCS
+  // в control/gate.js).
+  admission_review_save:          (db, args, user) => admissionReviewSave(db, args, user),
+  admission_set_attending:        (db, args, user) => admissionSetAttending(db, args, user),
+  admission_reviews_list:         (db, args, user) => admissionReviewsList(db, args, user),
+  // Что ЭТА роль вправе делать в стационаре вообще. Один ответ на экран-очередь
+  // вместо запроса по каждой строке: право на шаг зависит от роли, а не от
+  // пациента, но считать его в браузере нельзя — матрица живёт на сервере.
+  inpatient_capabilities:         (db, args, user) => inpatientCapabilities(db, args, user),
 
   // TREATMENT_ORDERS_V1 — лист назначений (Задача 4 плана «Стационар»).
   // Врач назначает и отменяет (assertCanPrescribe: пациент дошёл до лечения И

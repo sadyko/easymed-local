@@ -359,6 +359,11 @@ export const REGISTRY = {
       // как у admission_transfers ниже: без него карта госпитализации не может
       // показать имя лечащего рядом с именем направившего.
       attending_doctor_id: { table:'users', fk:'attending_doctor_id', columns:['id','full_name','specialty'] },
+      // Кто ПРОВЁЛ первичный осмотр — третий JOIN на users в той же строке
+      // (INPATIENT_REVIEW_V1). Карточка госпитализации и очередь «Ждут лечащего
+      // врача» называют его по имени: «осмотрен» без имени осмотревшего — это
+      // дата без документа.
+      examined_by: { table:'users', fk:'examined_by', columns:['id','full_name'] },
     },
   },
   payer_policies: { read:{roles:ALL_STAFF,columns:['id','name','payer_id','coverage_percent','active','created_at']},
@@ -639,6 +644,28 @@ export const REGISTRY = {
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },
     filters: ['id','admission_id','meal_date','meal_key','status'],
     embed:   { users: { table:'users', fk:'marked_by', columns:['id','full_name'] } },
+  },
+  // INPATIENT_REVIEW_V1 (миграция 095) — врачебные записи госпитализации:
+  // первичный осмотр, обходы, эпикриз.
+  //
+  // ТОЛЬКО ЧТЕНИЕ, как admissions и treatment_orders выше, и по той же причине:
+  // каждая запись сюда — это проверка маршрута («пациент на койке», «пациент
+  // дошёл до лечения») и проверка роли (первичный осмотр публикует главный
+  // врач), и делает её RPC (rpc/inpatient-reviews.js). Открой здесь insert — и
+  // первичный осмотр можно было бы «провести» одним PATCH'ем, не будучи
+  // главным врачом; открой update — и опубликованный осмотр переписывался бы
+  // на месте, то есть ровно тем способом, от которого эта таблица и построена
+  // (superseded_by вместо перезаписи).
+  //
+  // Круг читателей тот же, что у листа назначений: осмотр — история болезни, а
+  // не счёт, и кассе со складом в нём делать нечего.
+  admission_reviews: {
+    read:  { roles: INPATIENT_CARE_ROLES, columns: ['id','admission_id','kind','complaints','objective',
+             'diagnosis','plan','body','author_id','author_role','created_at','updated_at',
+             'published_at','superseded_by'] },
+    write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },
+    filters: ['id','admission_id','kind','published_at','superseded_by','author_id'],
+    embed:   { users: { table:'users', fk:'author_id', columns:['id','full_name'] } },
   },
   // Lab/diagnostic panel definitions (config). views/lab-panels.js, mounted as
   // the «Панели» mode of Лаборатория. Owned by every labs-section role.

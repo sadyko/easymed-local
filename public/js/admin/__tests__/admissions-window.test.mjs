@@ -15,6 +15,9 @@
 //      самыми аргументами, а отказ сервера доходит до человека словами.
 //   5. РАЗДЕЛ ДОСТУПЕН МЕДСЕСТРЕ. Именно этого не было: ключ `beds` держал
 //      один admin, и окно, построенное для медсестры, ей не открывалось.
+//   6. ОСМОТР И ЛЕЧАЩИЙ ВРАЧ (Задача 3). Кнопку осмотра видит только тот, кому
+//      сервер разрешит её нажать; после осмотра экран сам спрашивает лечащего
+//      врача; осмотренный без лечащего стоит в собственной очереди.
 
 import { test } from 'node:test';
 import assert from 'node:assert';
@@ -121,6 +124,9 @@ const BEDS = [
 let admissionsRows = [ORDER_REG, ORDER_DOC, IN_BED];
 let rpcCalls = [];
 let admitAnswer = () => ({ ok: true, data: { admission: { id: 11, status: 'admitted' } } });
+// INPATIENT_REVIEW_V1 — что этому человеку разрешает СЕРВЕР. Экран спрашивает
+// это одним запросом на отрисовку и рисует кнопки по ответу.
+let capsAnswer = { admit: true, cancel_order: true, examine: false, set_attending: false };
 
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
@@ -135,6 +141,18 @@ globalThis.fetch = async (url, opts = {}) => {
             const a = admitAnswer();
             return a.ok ? ok(a.data) : fail(a.message);
         }
+        if (name === 'inpatient_capabilities') return ok({ roles: [], can: capsAnswer });
+        if (name === 'admission_reviews_list') return ok({ admission_id: body.admission_id, reviews: [] });
+        if (name === 'admission_review_save') {
+            return ok({
+                review: { id: 501, kind: body.kind, published_at: body.publish ? '2026-09-04T11:00:00Z' : null },
+                admission: { id: body.admission_id, status: body.publish && body.kind === 'primary' ? 'examined' : 'admitted' },
+                published: !!body.publish,
+            });
+        }
+        if (name === 'admission_set_attending') {
+            return ok({ admission: { id: body.admission_id, status: 'active', attending_doctor_id: body.doctor_id } });
+        }
         return ok({});
     }
     if (u === '/api/db') {
@@ -142,6 +160,7 @@ globalThis.fetch = async (url, opts = {}) => {
         if (body.table === 'beds') return ok(BEDS);
         if (body.table === 'wards') return ok([{ id: 1, name: 'Терапия' }, { id: 2, name: 'Хирургия' }]);
         if (body.table === 'patients') return ok([]);
+        if (body.table === 'users') return ok([{ id: 77, full_name: 'Юсупов А.', specialty: 'Терапия', role: 'doctor', is_doctor: true, license_number: '' }]);
         return ok([]);
     }
     return ok([]);
@@ -308,4 +327,128 @@ test('окно «Стационар» открывается медсестре 
     // Полный доступ (администратор клиники / супер-админ) открывает всё.
     perms.setFullAccess('Admin');
     assert.strictEqual(view.canOpenAdmissions(), true);
+});
+
+// ─── 6. INPATIENT_REVIEW_V1 (Задача 3): осмотр и лечащий врач ───────────────
+//
+// Что здесь проверяется:
+//   • КНОПКУ ОСМОТРА ВИДИТ ТОЛЬКО ТОТ, КТО ВПРАВЕ. Право приходит с сервера
+//     (inpatient_capabilities), а не считается в браузере: вторая копия матрицы
+//     прав разошлась бы с первой молча. Обычный врач видит подпись «Ждёт
+//     главного врача» — и не видит кнопки, которая ответила бы ему отказом.
+//   • ОСМОТР УХОДИТ НА СЕРВЕР ПУБЛИКАЦИЕЙ, а не сохранением: publish:true, и
+//     «Сохранить черновик» рядом — это ДРУГОЙ запрос.
+//   • ПОСЛЕ ОСМОТРА ЭКРАН САМ СПРАШИВАЕТ ЛЕЧАЩЕГО ВРАЧА: искать того же
+//     пациента заново в другом списке — потерянный шаг.
+//   • ОЧЕРЕДЬ «ЖДУТ ЛЕЧАЩЕГО ВРАЧА» существует: это единственное состояние, в
+//     котором пациент лежит, койка считается занятой, а лечения нет.
+//   • КТО ОСМОТРЕЛ И КТО ЛЕЧИТ — видно на строке.
+
+const EXAMINED = {
+    id: 14, admission_no: 'ADM-00014', status: 'examined', patient_id: 104,
+    ward_id: 1, bed_id: 9, department: '', admission_type: 'planned', stay_mode: 'round',
+    ordered_at: '2026-09-03T07:00:00Z', admitted_at: '2026-09-03T08:00:00Z',
+    examined_at: '2026-09-03T10:00:00Z', attending_doctor_id: null,
+    patients: { mrn: 'M-104', full_name: 'Каримова Дилноза' }, wards: { name: 'Терапия' },
+    beds: { code: 'T-4' }, users: null, examined: { full_name: 'Главный врач' }, attending: null,
+};
+
+test('главный врач видит «Провести первичный осмотр», обычный врач — нет', async () => {
+    capsAnswer = { examine: true, set_attending: true, admit: true };
+    let root = await renderScreen();
+    const exam = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Ждут первичного осмотра'));
+    assert.ok(findBtn(exam, 'Провести первичный осмотр'), 'главному врачу кнопка обязана быть видна');
+
+    // Обычный врач: сервер на этот шаг ответит отказом, и экран не предлагает
+    // его вовсе — вместо кнопки подпись, кого ждут.
+    capsAnswer = { examine: false, set_attending: false, admit: false };
+    root = await renderScreen();
+    const exam2 = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Ждут первичного осмотра'));
+    assert.equal(findBtn(exam2, 'Провести первичный осмотр'), undefined, 'кнопка, которая ответит отказом, — тупик');
+    assert.ok(textOf(exam2).includes('Ждёт главного врача'), 'экран обязан сказать, кого ждут');
+});
+
+test('осмотр публикуется одним запросом, а черновик — другим', async () => {
+    capsAnswer = { examine: true, set_attending: true };
+    const root = await renderScreen();
+    findBtn(root, 'Провести первичный осмотр').click();
+    await settle();
+
+    let overlay = BODY.children[BODY.children.length - 1];
+    assert.ok(textOf(overlay).includes('Сидоров Сидор'), 'пациент — якорь и в окне осмотра');
+    for (const label of ['Жалобы', 'Объективно', 'Диагноз', 'План обследования и лечения']) {
+        assert.ok(textOf(overlay).includes(label), 'в форме осмотра нет поля «' + label + '»');
+    }
+
+    // Без диагноза первичный осмотр не публикуется — и на сервер не уходит.
+    findBtn(overlay, 'Опубликовать осмотр').click();
+    await settle();
+    assert.match(lastToast(), /диагноз/i);
+    assert.equal(rpcCalls.filter((c) => c.name === 'admission_review_save').length, 0);
+
+    // Черновик — отдельный запрос, publish:false, окно НЕ закрывается.
+    const inputs = walk(overlay).filter((e) => e.tagName === 'TEXTAREA' || e.tagName === 'INPUT');
+    inputs.forEach((el, i) => { el.value = 'т' + i; });
+    findBtn(overlay, 'Сохранить черновик').click();
+    await settle();
+    const draft = rpcCalls.find((c) => c.name === 'admission_review_save');
+    assert.ok(draft, 'черновик не ушёл на сервер');
+    assert.equal(draft.args.publish, false);
+    assert.equal(draft.args.admission_id, 13);
+    assert.equal(draft.args.kind, 'primary');
+
+    // Публикация — тот же RPC с publish:true.
+    findBtn(overlay, 'Опубликовать осмотр').click();
+    await settle();
+    const pub = rpcCalls.filter((c) => c.name === 'admission_review_save').pop();
+    assert.equal(pub.args.publish, true);
+    assert.ok(pub.args.diagnosis, 'диагноз уходит на сервер');
+});
+
+test('после публикации осмотра экран сразу спрашивает лечащего врача', async () => {
+    capsAnswer = { examine: true, set_attending: true };
+    const root = await renderScreen();
+    findBtn(root, 'Провести первичный осмотр').click();
+    await settle();
+
+    let overlay = BODY.children[BODY.children.length - 1];
+    walk(overlay).filter((e) => e.tagName === 'INPUT').forEach((el) => { el.value = 'Пневмония'; });
+    findBtn(overlay, 'Опубликовать осмотр').click();
+    await settle();
+
+    overlay = BODY.children[BODY.children.length - 1];
+    assert.ok(textOf(overlay).includes('Назначить лечащего врача'),
+        'после осмотра маршрут ждёт лечащего врача — окно обязано открыться само');
+
+    // Без выбранного врача запрос не уходит.
+    findBtn(overlay, 'Назначить').click();
+    await settle();
+    assert.equal(rpcCalls.filter((c) => c.name === 'admission_set_attending').length, 0);
+
+    const sel = walk(overlay).find((e) => e.tagName === 'SELECT');
+    sel.value = '77';
+    findBtn(overlay, 'Назначить').click();
+    await settle();
+    const call = rpcCalls.find((c) => c.name === 'admission_set_attending');
+    assert.ok(call, 'admission_set_attending не вызван');
+    assert.equal(call.args.doctor_id, 77);
+    assert.equal(call.args.admission_id, 13);
+});
+
+test('«Ждут лечащего врача» — отдельная очередь, и на строке видно, кто осмотрел', async () => {
+    capsAnswer = { examine: true, set_attending: true };
+    admissionsRows = [ORDER_REG, ORDER_DOC, IN_BED, EXAMINED];
+    const root = await renderScreen();
+    admissionsRows = [ORDER_REG, ORDER_DOC, IN_BED];
+
+    const card = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Ждут лечащего врача'));
+    assert.ok(card, 'осмотренный пациент без лечащего врача обязан быть виден отдельно');
+    assert.ok(textOf(card).includes('Каримова Дилноза'));
+    assert.ok(textOf(card).includes('Главный врач'), 'на строке видно, кто осмотрел');
+    assert.ok(findBtn(card, 'Назначить лечащего врача'), 'кнопка назначения — здесь');
+    // Осмотренный лежит: он и в «В отделении», и подписан «лечащий врач не назначен».
+    const inWard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('В отделении'));
+    assert.ok(textOf(inWard).includes('Каримова Дилноза'));
+    assert.ok(textOf(inWard).includes('лечащий врач не назначен'),
+        'лежащий пациент без лечащего врача — недоделанная работа отделения, и видно её отсюда');
 });

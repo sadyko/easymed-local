@@ -108,7 +108,20 @@ export const TRANSITION_ROLES = Object.freeze({
 //
 // Задачи 2 и 8 заменяют оба RPC и убирают отсюда обе строки — вместе со
 // стрелками в lifecycle.js.
-export const LEGACY_EDGES = Object.freeze(['ordered→active', 'active→discharged']);
+//
+// ЗАДАЧА 3 ДОБАВИЛА СЮДА ЕЩЁ ДВЕ, и по той же причине, названной вслух:
+//   'admitted→discharged', 'examined→discharged' — прямая выписка ИЗ ЛЮБОГО
+// состояния «в койке». Задача 2 научила медсестру класть пациента в
+// 'admitted', и до этой правки такой пациент не мог быть выписан ВООБЩЕ:
+// discharge_patient требовал 'active', а между 'admitted' и 'active' стоят
+// первичный осмотр и назначение лечащего врача. Держать человека в клинике
+// из-за того, что маршрут строится по частям, нельзя. Машина маршрута этих
+// шагов по-прежнему НЕ ПРЕДЛАГАЕТ (в TRANSITION_ROLES их нет — иначе выпиской
+// можно было бы «законно» перепрыгнуть осмотр), их проходит только
+// discharge_patient, и Задача 8 уберёт все четыре разом.
+export const LEGACY_EDGES = Object.freeze([
+  'ordered→active', 'admitted→discharged', 'examined→discharged', 'active→discharged',
+]);
 
 // Чего не хватает, чтобы дойти до состояния — СЛОВАМИ, а не «нельзя».
 //
@@ -374,4 +387,44 @@ export function admissionFlowState(db, args, user) {
     examined_at: adm.examined_at,
     can,
   };
+}
+
+// ─── Что этот человек вправе делать в стационаре ВООБЩЕ ─────────────────────
+//
+// admissionFlowState отвечает про ОДНУ госпитализацию, и этого хватает
+// карточке пациента. Экрану-очереди (views/admissions.js) не хватает: он рисует
+// список из десятков строк, и спрашивать сервер по строке — десятки запросов
+// ради ответа, который для всех строк ОДИН И ТОТ ЖЕ. Право на шаг маршрута
+// зависит только от роли (TRANSITION_ROLES), а не от пациента.
+//
+// Но и считать это в браузере нельзя — по той же причине, по которой матрица
+// живёт на сервере: вторая её копия разошлась бы с первой в тот день, когда
+// матрицу поправят, и кнопка «Провести первичный осмотр» появилась бы у того,
+// кому сервер откажет (или, что хуже, пропала бы у того, кто вправе). Поэтому
+// один запрос на экран — и ответ считает та же таблица.
+//
+// Ключи — ДЕЙСТВИЯ, а не состояния: экран рисует кнопки, а не переходы.
+export const CAPABILITY_TRANSITION = Object.freeze({
+  admit:         'ordered→admitted',        // положить на койку
+  cancel_order:  'ordered→cancelled',       // отменить заявку
+  examine:       'admitted→examined',       // провести первичный осмотр
+  set_attending: 'examined→active',         // назначить лечащего врача
+  request_discharge: 'active→discharging',  // заявка на выписку (Задача 8)
+  discharge:     'discharging→discharged',  // оформить выписку (Задача 8)
+});
+
+/**
+ * Ничего не меняет и ничего не читает из базы — только роль запрашивающего.
+ * Стоит в READ_ONLY_RPCS (control/gate.js): заблокированная клиника обязана
+ * видеть свои экраны.
+ *
+ * @returns {{roles:string[], can:Object<string,boolean>}}
+ */
+export function inpatientCapabilities(_db, _args, user) {
+  const roles = effectiveRoles(user);
+  const can = {};
+  for (const [action, key] of Object.entries(CAPABILITY_TRANSITION)) {
+    can[action] = (TRANSITION_ROLES[key] || []).some((r) => roles.includes(r));
+  }
+  return { roles, can };
 }

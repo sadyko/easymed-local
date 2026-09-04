@@ -22,9 +22,17 @@
 // Каждый отвечает на свой вопрос смены:
 //   «Ждут размещения»        (ordered)          — кого положить прямо сейчас;
 //   «В отделении»            (в койке, по палатам) — кто у меня лежит;
-//   «Ждут первичного осмотра» (admitted)        — кого не осмотрел главный врач.
-// Один список с колонкой «статус» отвечал бы на них хуже всех трёх сразу:
+//   «Ждут первичного осмотра» (admitted)        — кого не осмотрел главный врач;
+//   «Ждут лечащего врача»     (examined)         — кто осмотрен, но не лечится.
+// Один список с колонкой «статус» отвечал бы на них хуже всех четырёх сразу:
 // работа смены — не отчёт.
+//
+// ЧЕТВЁРТАЯ ОЧЕРЕДЬ ПОЯВИЛАСЬ ВМЕСТЕ С ОСМОТРОМ (Задача 3) и не для симметрии.
+// Между «осмотрен» и «лечится» стоит отдельное решение главного врача — кто
+// ведёт пациента; пока оно не принято, у пациента нет ни назначений, ни стола,
+// а суточное за койку уже идёт. Не показать этих людей отдельным списком
+// значило бы спрятать единственное состояние маршрута, в котором пациент лежит
+// и НЕ лечится.
 //
 // Состояния и подписи берутся из ОДНОГО источника (shared/admission-status.js),
 // который пишет сервер: расходиться экрану и базе в том, что значит «лежит»,
@@ -35,7 +43,8 @@ import { IN_BED_STATUSES, OPEN_STATUSES, admissionStatusLabel } from '../../shar
 import { h, Icon, Tag, clear, PageHead, fmtDateTime, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { isModuleAllowed } from '../permissions.js';
-import { openAdmissionOrderModal, openAdmissionBedPicker, openAdmissionCancelModal, openAdmissionCard } from './admission-modal.js?v=inp2';
+import { openAdmissionOrderModal, openAdmissionBedPicker, openAdmissionCancelModal, openAdmissionCard,
+         openAdmissionReviewModal, openAdmissionAttendingModal } from './admission-modal.js?v=inp2';
 
 // Раздел живёт под ключом `beds` («Стационар и палаты»): окно медсестры и доска
 // коек — две стороны одной работы, и раздавать их порознь значило бы выдать
@@ -68,7 +77,11 @@ export async function renderAdmissions(container) {
 
 async function load() {
     const { data, error } = await supabase.from('admissions')
-        .select('*, patients(mrn, full_name, phone), wards(name), beds(code), users(full_name)')
+        // КТО ОСМОТРЕЛ и КТО ЛЕЧИТ — два разных JOIN'а на users в той же строке
+        // (алиасные embed'ы реестра): очередь обязана называть лечащего врача,
+        // иначе «в отделении» отвечает «где пациент» и молчит о том, к кому идти.
+        .select('*, patients(mrn, full_name, phone), wards(name), beds(code), users(full_name), '
+              + 'attending:attending_doctor_id(full_name), examined:examined_by(full_name)')
         .in('status', OPEN_STATUSES)
         .order('id', { ascending: false })
         .limit(500);
@@ -79,6 +92,19 @@ async function load() {
 async function paint(root) {
     clear(root);
     const reload = () => paint(root);
+
+    // ЧТО ЭТОТ ЧЕЛОВЕК ВПРАВЕ ДЕЛАТЬ — спрашиваем СЕРВЕР, один раз на экран.
+    // Матрица прав живёт в rpc/inpatient-flow.js, и вторая её копия здесь
+    // разошлась бы с первой в тот день, когда матрицу поправят: кнопка
+    // «Провести первичный осмотр» появилась бы у того, кому сервер откажет, —
+    // или, что хуже, пропала бы у того, кто вправе. По строке спрашивать
+    // нельзя: право на шаг зависит от роли, а не от пациента, и это были бы
+    // десятки одинаковых запросов на один список.
+    let can = {};
+    try {
+        const { data } = await supabase.rpc('inpatient_capabilities', {});
+        can = (data && data.can) || {};
+    } catch (e) { can = {}; }
 
     root.appendChild(PageHead({
         title: 'Стационар',
@@ -103,11 +129,13 @@ async function paint(root) {
     const waitingBed  = rows.filter((r) => r.status === 'ordered');
     const inWard      = rows.filter((r) => IN_BED_STATUSES.includes(r.status));
     const waitingExam = rows.filter((r) => r.status === 'admitted');
+    const waitingDoc  = rows.filter((r) => r.status === 'examined');
 
     const grid = h('div', { style: { display: 'grid', gap: '16px' } });
     grid.appendChild(waitingBedCard(waitingBed, reload));
     grid.appendChild(inWardCard(inWard, reload));
-    grid.appendChild(waitingExamCard(waitingExam, reload));
+    grid.appendChild(waitingExamCard(waitingExam, reload, can));
+    grid.appendChild(waitingAttendingCard(waitingDoc, reload, can));
     root.appendChild(grid);
 }
 
@@ -226,7 +254,12 @@ function inWardCard(list, reload) {
                 p.mrn || null,
                 a.beds && a.beds.code ? trf('койка {code}', { code: a.beds.code }) : tr('койка не указана'),
                 a.admitted_at ? sinceLabel(a.admitted_at) : null,
-                a.users && a.users.full_name ? a.users.full_name : null,
+                // КТО ЛЕЧИТ — на строке, а не только в карточке. «Лечащий врач
+                // не назначен» у лежащего пациента это не пустое поле, а
+                // недоделанная работа отделения, и видно её должно быть отсюда.
+                a.attending && a.attending.full_name
+                    ? trf('лечащий: {name}', { name: a.attending.full_name })
+                    : tr('лечащий врач не назначен'),
             ].filter(Boolean).join(' · ');
             els.push(patientRow(a, meta, [
                 // Подпись состояния — из общей карты (shared/admission-status.js).
@@ -244,7 +277,11 @@ function inWardCard(list, reload) {
 // ---------------------------------------------------------------------------
 // 3. «Ждут первичного осмотра»
 // ---------------------------------------------------------------------------
-function waitingExamCard(list, reload) {
+// Кнопка осмотра видна ТОЛЬКО тому, кто вправе её нажать (can.examine — ответ
+// сервера, см. paint). Обычный врач её не видит, и это не косметика: первичный
+// осмотр проводит главный врач, а кнопка, которая ответит отказом, отправляет
+// человека в тупик вместо того, чтобы сказать, кого звать.
+function waitingExamCard(list, reload, can) {
     const els = list.map((a) => {
         const p = a.patients || {};
         const meta = [
@@ -254,10 +291,45 @@ function waitingExamCard(list, reload) {
             a.admitted_at ? trf('на койке {since}', { since: sinceLabel(a.admitted_at) || '—' }) : null,
         ].filter(Boolean).join(' · ');
         return patientRow(a, meta, [
-            Tag(tr('Ждёт главного врача'), { kind: 'warn', dot: true }),
+            can.examine
+                ? h('button', {
+                    class: 'btn btn-primary btn-sm', type: 'button',
+                    onclick: () => openAdmissionReviewModal({ admission: a, onDone: reload }),
+                }, Icon('Stethoscope', { size: 13 }), ' ', tr('Провести первичный осмотр'))
+                : Tag(tr('Ждёт главного врача'), { kind: 'warn', dot: true }),
         ], () => openAdmissionCard({ admissionId: a.id, onChange: reload }));
     });
     return listCard(tr('Ждут первичного осмотра'), 'Stethoscope', list.length,
         tr('Осмотр проводит главный врач: до него лечащего врача и назначений нет.'),
         els, tr('Все осмотрены.'));
+}
+
+// ---------------------------------------------------------------------------
+// 4. «Ждут лечащего врача»
+// ---------------------------------------------------------------------------
+// Самое дорогое состояние маршрута: пациент осмотрен, койка занята, суточное
+// начисление идёт — а лечения нет, потому что не назначен тот, кто его ведёт.
+// Список существует затем, чтобы это не длилось сутки.
+function waitingAttendingCard(list, reload, can) {
+    const els = list.map((a) => {
+        const p = a.patients || {};
+        const meta = [
+            p.mrn || null,
+            (a.wards && a.wards.name) || null,
+            a.beds && a.beds.code ? trf('койка {code}', { code: a.beds.code }) : null,
+            a.examined && a.examined.full_name ? trf('осмотрел: {name}', { name: a.examined.full_name }) : null,
+            a.examined_at ? trf('осмотрен {since}', { since: sinceLabel(a.examined_at) || '—' }) : null,
+        ].filter(Boolean).join(' · ');
+        return patientRow(a, meta, [
+            can.set_attending
+                ? h('button', {
+                    class: 'btn btn-primary btn-sm', type: 'button',
+                    onclick: () => openAdmissionAttendingModal({ admission: a, onDone: reload }),
+                }, Icon('User', { size: 13 }), ' ', tr('Назначить лечащего врача'))
+                : Tag(tr('Ждёт лечащего врача'), { kind: 'warn', dot: true }),
+        ], () => openAdmissionCard({ admissionId: a.id, onChange: reload }));
+    });
+    return listCard(tr('Ждут лечащего врача'), 'User', list.length,
+        tr('Осмотр проведён. Пока лечащий врач не назначен, назначений и стола у пациента нет.'),
+        els, tr('У всех есть лечащий врач.'));
 }

@@ -23,9 +23,15 @@
 //                              (медсестра, окно «Стационар»).
 //   openAdmissionCancelModal — отмена заявки с обязательной причиной.
 //   openAdmissionCard        — карточка маршрута: где пациент и что дальше.
+//   openAdmissionReviewModal — ПЕРВИЧНЫЙ ОСМОТР главного врача (Задача 3) и
+//                              запись обхода: черновик отдельно, публикация
+//                              отдельно.
+//   openAdmissionAttendingModal — ЛЕЧАЩИЙ ВРАЧ (Задача 3): шаг, после которого
+//                              открываются назначения.
 //
-// Все четыре — вокруг ОДНОГО источника правды: RPC `admission_order_create`,
-// `admission_admit`, `admission_order_cancel` и чтение `admission_flow_state`.
+// Все шесть — вокруг ОДНОГО источника правды: RPC `admission_order_create`,
+// `admission_admit`, `admission_order_cancel`, `admission_review_save`,
+// `admission_set_attending` и чтение `admission_flow_state`.
 // Экран не решает, кому что можно: матрица прав живёт на сервере
 // (rpc/inpatient-flow.js), и вторая её копия в браузере разошлась бы с первой.
 //
@@ -44,7 +50,14 @@ const STAY_MODES = [['round', 'Круглосуточно'], ['day', 'Дневн
 
 // Одна и та же оболочка окна для всех четырёх диалогов: два окна госпитализации
 // с разной рамкой читаются как два разных продукта.
-function modal(title, icon, bodyEls, submitLabel, onSubmit, { width = 520 } = {}) {
+//
+// `secondaryLabel` — ВТОРОЕ действие того же окна, и заведено оно ровно под
+// одно: «Сохранить черновик» рядом с «Опубликовать осмотр». Осмотр набирают по
+// частям, между двумя другими делами, и одна кнопка заставляла бы врача либо
+// писать документ целиком с первого раза, либо терять начатое (см. шапку
+// rpc/inpatient-reviews.js). Второе действие НЕ закрывает окно: черновик
+// сохраняют, чтобы продолжить.
+function modal(title, icon, bodyEls, submitLabel, onSubmit, { width = 520, secondaryLabel = null, onSecondary = null } = {}) {
     const overlay = h('div', { class: 'modal' });
     const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
     const onKey = (ev) => { if (ev.key === 'Escape') close(); };
@@ -52,6 +65,18 @@ function modal(title, icon, bodyEls, submitLabel, onSubmit, { width = 520 } = {}
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
     const foot = [h('button', { class: 'btn', type: 'button', onclick: close }, tr('Закрыть')), h('span', { class: 'grow' })];
+    if (secondaryLabel && onSecondary) {
+        const secBtn = h('button', { class: 'btn', type: 'button' }, secondaryLabel);
+        secBtn.addEventListener('click', async () => {
+            secBtn.disabled = true;
+            const prev = secBtn.textContent;
+            secBtn.textContent = tr('Выполняем…');
+            try { await onSecondary(); } catch (e) { toast((e && e.message) || tr('Не удалось.'), 'fail'); }
+            secBtn.disabled = false;
+            secBtn.textContent = prev;
+        });
+        foot.push(secBtn);
+    }
     if (submitLabel) {
         const submitBtn = h('button', { class: 'btn btn-primary', type: 'button' }, submitLabel);
         submitBtn.addEventListener('click', async () => {
@@ -333,7 +358,13 @@ export function openAdmissionCard({ admissionId, onChange } = {}) {
     (async () => {
         const [admR, flowR] = await Promise.all([
             supabase.from('admissions')
-                .select('*, patients(mrn, full_name), wards(name), beds(code)')
+                // КТО ОСМОТРЕЛ и КТО ЛЕЧИТ — два разных человека и два разных
+                // JOIN'а на users в одной строке (алиасные embed'ы, реестр
+                // admissions). Без них карточка называет состояние «Лечение», не
+                // называя лечащего врача, — то есть отвечает на вопрос «где
+                // пациент» и молчит о том, «к кому идти».
+                .select('*, patients(mrn, full_name), wards(name), beds(code), '
+                      + 'attending:attending_doctor_id(full_name, specialty), examined:examined_by(full_name)')
                 .eq('id', admissionId).single(),
             supabase.rpc('admission_flow_state', { admission_id: admissionId }),
         ]);
@@ -358,7 +389,10 @@ export function openAdmissionCard({ admissionId, onChange } = {}) {
             kv(tr('Палата · койка'), [(a.wards && a.wards.name) || null, (a.beds && a.beds.code) || null].filter(Boolean).join(' · ') || tr('койки нет')),
             kv(tr('Заявка оформлена'), a.ordered_at ? fmtDateTime(a.ordered_at) : '—'),
             kv(tr('Размещён на койке'), a.admitted_by ? fmtDateTime(a.admitted_at) : '—'),
-            kv(tr('Первичный осмотр'), a.examined_at ? fmtDateTime(a.examined_at) : tr('ещё не проведён')),
+            kv(tr('Первичный осмотр'), a.examined_at
+                ? [fmtDateTime(a.examined_at), (a.examined && a.examined.full_name) || null].filter(Boolean).join(' · ')
+                : tr('ещё не проведён')),
+            kv(tr('Лечащий врач'), (a.attending && a.attending.full_name) || tr('ещё не назначен')),
             kv(tr('Планируемая дата'), a.planned_at ? fmtDateTime(a.planned_at) : '—'),
             kv(tr('Повод / жалобы'), a.chief_complaint || '—'),
             kv(tr('Диагноз направления'), a.admission_diagnosis || '—'),
@@ -372,6 +406,21 @@ export function openAdmissionCard({ admissionId, onChange } = {}) {
                 onclick: () => { close(); openAdmissionBedPicker({ admission: a, onDone: onChange }); },
             }, Icon('Bed', { size: 13 }), ' ', tr('Положить на койку')));
         }
+        // INPATIENT_REVIEW_V1 — два шага главного врача. Показываем их по тому
+        // же ответу сервера, что и остальные: can.examined — «первичный осмотр»,
+        // can.active — «назначить лечащего врача».
+        if (can.examined) {
+            actions.appendChild(h('button', {
+                class: 'btn btn-primary btn-sm', type: 'button',
+                onclick: () => { close(); openAdmissionReviewModal({ admission: a, onDone: onChange }); },
+            }, Icon('Stethoscope', { size: 13 }), ' ', tr('Провести первичный осмотр')));
+        }
+        if (can.active) {
+            actions.appendChild(h('button', {
+                class: 'btn btn-primary btn-sm', type: 'button',
+                onclick: () => { close(); openAdmissionAttendingModal({ admission: a, onDone: onChange }); },
+            }, Icon('User', { size: 13 }), ' ', tr('Назначить лечащего врача')));
+        }
         if (can.cancelled) {
             actions.appendChild(h('button', {
                 class: 'btn btn-sm', type: 'button',
@@ -382,4 +431,136 @@ export function openAdmissionCard({ admissionId, onChange } = {}) {
         else body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
             tr('Следующий шаг маршрута делает другая роль.')));
     })();
+}
+
+// ---------------------------------------------------------------------------
+// 5. Первичный осмотр главного врача
+// ---------------------------------------------------------------------------
+// ФОРМА РАЗДЕЛЕНА НА ЧАСТИ, а не одно поле «текст осмотра», и это не
+// оформление: жалобы и объективный статус читает медсестра, диагноз уходит в
+// счёт и в выписку, план лечения превращается в лист назначений (Задача 4).
+// Склеенные в один абзац, они перестают быть данными (см. шапку миграции 095).
+//
+// Две кнопки: «Сохранить черновик» не двигает ничего и не закрывает окно —
+// осмотр набирают по частям; «Опубликовать» — это шаг маршрута, после которого
+// у пациента появляется состояние 'examined' и сразу спрашивается лечащий врач.
+export function openAdmissionReviewModal({ admission, kind = 'primary', onDone } = {}) {
+    if (!admission || !admission.id) { toast(tr('Госпитализация не найдена.'), 'fail'); return; }
+    const p = admission.patients || {};
+    const isPrimary = kind === 'primary';
+
+    const complaints = h('textarea', { rows: '2', placeholder: tr('Что беспокоит пациента') });
+    const objective  = h('textarea', { rows: '3', placeholder: tr('Состояние, осмотр по системам, витальные показатели') });
+    const diagnosis  = h('input', { type: 'text', placeholder: tr('Диагноз при поступлении') });
+    const plan       = h('textarea', { rows: '3', placeholder: tr('Обследование, лечение, режим, стол') });
+    const body       = h('textarea', { rows: '2', placeholder: tr('Анамнез, сопутствующее, обоснование') });
+
+    // Незаконченный черновик этого же осмотра подхватывается, а не заводится
+    // заново: иначе у одной госпитализации накапливались бы обрывки, и никто не
+    // знал бы, какой из них дописывать.
+    let reviewId = null;
+    (async () => {
+        const { data } = await supabase.rpc('admission_reviews_list', { admission_id: admission.id });
+        const drafts = ((data && data.reviews) || []).filter((r) => r.kind === kind && !r.published_at);
+        const draft = drafts.length ? drafts[drafts.length - 1] : null;
+        if (!draft) return;
+        reviewId = draft.id;
+        complaints.value = draft.complaints || '';
+        objective.value = draft.objective || '';
+        diagnosis.value = draft.diagnosis || '';
+        plan.value = draft.plan || '';
+        body.value = draft.body || '';
+    })();
+
+    const payload = (publish) => ({
+        admission_id: admission.id,
+        review_id: reviewId,
+        kind,
+        complaints: complaints.value.trim(),
+        objective: objective.value.trim(),
+        diagnosis: diagnosis.value.trim(),
+        plan: plan.value.trim(),
+        body: body.value.trim(),
+        publish,
+    });
+
+    modal(isPrimary ? tr('Первичный осмотр') : tr('Запись обхода'), 'Stethoscope', [
+        patientAnchor(p.full_name || '', [p.mrn, admission.department, admission.admission_no].filter(Boolean).join(' · ')),
+        field(tr('Жалобы'), complaints),
+        field(tr('Объективно'), objective),
+        field(tr('Диагноз'), diagnosis, { required: isPrimary }),
+        field(tr('План обследования и лечения'), plan),
+        field(tr('Дополнительно'), body),
+        isPrimary
+            ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                tr('После публикации осмотра нужно назначить лечащего врача — без него назначений не будет.'))
+            : null,
+    ], isPrimary ? tr('Опубликовать осмотр') : tr('Опубликовать запись'), async () => {
+        if (isPrimary && !diagnosis.value.trim()) { toast(tr('Укажите диагноз.'), 'fail'); return false; }
+        const { data, error } = await supabase.rpc('admission_review_save', payload(true));
+        if (error) { toast((error.message) || tr('Не удалось сохранить осмотр.'), 'fail'); return false; }
+        toast(isPrimary ? tr('Первичный осмотр проведён.') : tr('Запись сохранена.'), 'ok');
+        if (onDone) await onDone();
+        // Осмотр опубликован — маршрут ждёт лечащего врача, и спрашиваем его
+        // здесь же: заставлять главного врача искать того же пациента заново в
+        // другом списке значит терять шаг на ровном месте.
+        const adm = (data && data.admission) || null;
+        if (isPrimary && adm && adm.status === 'examined') {
+            openAdmissionAttendingModal({ admission: Object.assign({}, admission, adm, { patients: p }), onDone });
+        }
+        return true;
+    }, {
+        width: 600,
+        secondaryLabel: tr('Сохранить черновик'),
+        onSecondary: async () => {
+            const { data, error } = await supabase.rpc('admission_review_save', payload(false));
+            if (error) { toast((error.message) || tr('Не удалось сохранить черновик.'), 'fail'); return; }
+            if (data && data.review) reviewId = data.review.id;
+            toast(tr('Черновик осмотра сохранён.'), 'ok');
+        },
+    });
+}
+
+// ---------------------------------------------------------------------------
+// 6. Лечащий врач
+// ---------------------------------------------------------------------------
+// Список — ТОЛЬКО ВРАЧИ, и признак врача берётся не из текста роли:
+// ADMIN_DOCTOR_LIST_V1 (data.js) — администратор клиники может быть врачом, и у
+// такой учётной записи role='admin' и пустая специальность. Отфильтруй мы по
+// слову 'doctor' — его нельзя было бы назначить лечащим врачом собственного
+// пациента. Сервер проверяет тот же признак ещё раз (rpc/inpatient-reviews.js).
+export function openAdmissionAttendingModal({ admission, onDone } = {}) {
+    if (!admission || !admission.id) { toast(tr('Госпитализация не найдена.'), 'fail'); return; }
+    const p = admission.patients || {};
+    const sel = h('select', null, h('option', { value: '' }, tr('Выберите врача')));
+    supabase.from('users')
+        .select('id, full_name, specialty, role, is_doctor, license_number')
+        .eq('active', true).order('full_name')
+        .then(({ data }) => {
+            const doctors = (data || []).filter((u) =>
+                u.is_doctor === true || u.is_doctor === 1 ||
+                (u.role || '').toLowerCase() === 'doctor' ||
+                (u.specialty || '').length > 0 ||
+                (u.license_number || '').length > 0);
+            for (const d of doctors) {
+                sel.appendChild(h('option', { value: String(d.id) },
+                    d.full_name + (d.specialty ? '  ·  ' + d.specialty : '')));
+            }
+        });
+
+    modal(tr('Назначить лечащего врача'), 'User', [
+        patientAnchor(p.full_name || '', [p.mrn, admission.admission_no].filter(Boolean).join(' · ')),
+        field(tr('Лечащий врач'), sel, { required: true }),
+        h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+            tr('С этого момента идёт лечение: лечащий врач ведёт назначения, услуги и стол этого пациента.')),
+    ], tr('Назначить'), async () => {
+        if (!sel.value) { toast(tr('Выберите врача.'), 'fail'); return false; }
+        const { error } = await supabase.rpc('admission_set_attending', {
+            admission_id: admission.id, doctor_id: Number(sel.value),
+        });
+        if (error) { toast((error.message) || tr('Не удалось назначить лечащего врача.'), 'fail'); return false; }
+        toast(tr('Лечащий врач назначен — лечение открыто.'), 'ok');
+        if (onDone) await onDone();
+        return true;
+    }, { width: 560 });
 }

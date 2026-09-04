@@ -199,7 +199,10 @@ test('discharge_patient rejects an already-discharged admission (400) and discou
 
   const { admission } = admitPatient(db, { patient_id: patientId, bed_id: bed1 }, nurse);
   dischargePatient(db, { admission_id: admission.id }, cashier);
-  assert.throws(() => dischargePatient(db, { admission_id: admission.id }, cashier), /400|active|not found|discharged/i);
+  // INPATIENT_REVIEW_V1 (Задача 3) — отказ теперь называет ПРИЧИНУ по-русски
+  // («Пациент уже выписан…») вместо «not found or not active»: выписка ходит
+  // из любого состояния «в койке», и «не активна» перестало быть правдой.
+  assert.throws(() => dischargePatient(db, { admission_id: admission.id }, cashier), /400|active|not found|discharged|выписан/i);
 
   const { admission: admission2 } = admitPatient(db, { patient_id: patientId2, bed_id: bed2 }, nurse);
   assert.throws(() => dischargePatient(db, { admission_id: admission2.id, discount_percent: 150 }, cashier), /400|discount/i);
@@ -423,4 +426,63 @@ test('bed console: line can be pulled back out of an UNPAID invoice', () => {
   const inv2 = createInvoiceForAdmission(db, { admission_id: adm.id, admission_service_ids: [l3] }, reg).invoice;
   db.prepare("UPDATE invoices SET paid_amount=30000, status='paid' WHERE id=?").run(inv2.id);
   assert.throws(() => removeAdmissionLineFromInvoice(db, { line_id: l3 }, reg), /оплачен/);
+});
+
+// ─── INPATIENT_REVIEW_V1 (Задача 3): никто не остаётся запертым в койке ──────
+//
+// Это РЕГРЕССИЯ на дыру, открытую Задачей 2 и видимую только со стороны
+// пациента. Окно медсестры кладёт человека в 'admitted'; выписка требовала
+// 'active'; между ними — первичный осмотр главного врача и назначение лечащего.
+// Пока их не было, пациент, положенный медсестрой, не мог быть выписан вообще.
+import { admissionOrderCreate, admissionAdmit } from './inpatient.js';
+
+test('пациент, положенный через окно медсестры, ВЫПИСЫВАЕТСЯ (до всякого осмотра)', () => {
+  const { db, patientId, bed1 } = seed();
+  const { admission: ordered } = admissionOrderCreate(db, { patient_id: patientId, department: 'Терапия' }, registrar);
+  const { admission: inBed } = admissionAdmit(db, { admission_id: ordered.id, bed_id: bed1 }, nurse);
+  assert.equal(inBed.status, 'admitted', 'Задача 2 доводит ровно до койки');
+
+  const res = dischargePatient(db, { admission_id: inBed.id }, cashier);
+  assert.equal(res.admission.status, 'discharged');
+  assert.ok(res.admission.discharged_at);
+  // Койка освобождается так же, как при любой другой выписке: в уборку.
+  assert.equal(db.prepare('SELECT status FROM beds WHERE id=?').get(bed1).status, 'cleaning');
+});
+
+test('выписать можно из ЛЮБОГО состояния «в койке», и только из него', () => {
+  for (const status of ['admitted', 'examined', 'active', 'discharging']) {
+    const { db, patientId, bed1 } = seed();
+    const { admission } = admitPatient(db, { patient_id: patientId, bed_id: bed1 }, nurse);
+    db.prepare('UPDATE admissions SET status=? WHERE id=?').run(status, admission.id);
+    const res = dischargePatient(db, { admission_id: admission.id }, cashier);
+    assert.equal(res.admission.status, 'discharged', `выписка из '${status}'`);
+    db.close();
+  }
+
+  // Заявку не выписывают — её отменяют; закрытую не открывают заново.
+  const { db, patientId, patientId2 } = seed();
+  const { admission: ordered } = admissionOrderCreate(db, { patient_id: patientId }, registrar);
+  assert.throws(() => dischargePatient(db, { admission_id: ordered.id }, cashier), /не размещён на койке/);
+  assert.equal(db.prepare('SELECT status FROM admissions WHERE id=?').get(ordered.id).status, 'ordered');
+
+  const { admission: cancelled } = admissionOrderCreate(db, { patient_id: patientId2 }, registrar);
+  db.prepare("UPDATE admissions SET status='cancelled' WHERE id=?").run(cancelled.id);
+  assert.throws(() => dischargePatient(db, { admission_id: cancelled.id }, cashier), /отменена/);
+  db.close();
+});
+
+test('суточное начисление за пациента без осмотра считается от размещения', () => {
+  const { db, patientId, wardId, bed1 } = seed();
+  db.prepare('UPDATE wards SET billing_mode=?, price_per_day=? WHERE id=?').run('daily', 100000, wardId);
+  const { admission: ordered } = admissionOrderCreate(db, { patient_id: patientId }, registrar);
+  admissionAdmit(db, { admission_id: ordered.id, bed_id: bed1 }, nurse);
+  db.prepare('UPDATE admissions SET admitted_at=? WHERE id=?').run(isoHoursAgo(30), ordered.id);
+
+  const res = dischargePatient(db, { admission_id: ordered.id }, admin);
+  assert.equal(res.mode, 'daily');
+  assert.equal(res.units, 1, 'вторые начатые сутки не считаются лишними — правило v0.8.0 не изменилось');
+  assert.equal(res.rate, 100000);
+  // Главный врач тут не участвовал вовсе: выписка не спрашивает осмотра.
+  assert.equal(db.prepare('SELECT examined_at FROM admissions WHERE id=?').get(ordered.id).examined_at, null);
+  db.close();
 });

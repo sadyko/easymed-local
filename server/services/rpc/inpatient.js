@@ -281,19 +281,34 @@ export function dischargePatient(db, args, user) {
   const run = db.transaction(() => {
     const admission = db.prepare('SELECT * FROM admissions WHERE id = ?').get(admissionId);
     if (!admission) throw new RpcError('admission not found or not active.', 400);
-    // Only an active stay can be discharged — an 'ordered' one has no bed and
-    // no elapsed time to bill, and a discharged one is terminal.
+    // ВЫПИСЫВАЮТ ЛЮБОГО, КТО В КОЙКЕ, — а не только того, кто дошёл до лечения.
     //
-    // INPATIENT_FLOW_V1 — ЭТО НАМЕРЕННО ОСТАЛОСЬ 'active' И ТОЛЬКО 'active'.
-    // Прямая выписка — путь v0.8.0, и трогать её здесь значило бы переписывать
-    // выписку до Задачи 8, которая и делает её двухшаговой (заявка врача →
-    // оформление старшей медсестрой). Пока Задачи 2/3 не переведут поступление
-    // на новый маршрут, все лежащие пациенты по-прежнему в 'active', и эта
-    // строка работает ровно как работала.
-    if (admission.status !== 'active') {
-      assertTransition('admission', admission.status, 'discharged');
-      throw new RpcError('admission not found or not active.', 400);
+    // Здесь стояло `!== 'active'`, и это было верно ровно до Задачи 2. Она
+    // научила медсестру класть пациента в 'admitted', и в тот же день
+    // появилась дыра, которую видно только со стороны пациента: между
+    // 'admitted' и 'active' стоят первичный осмотр главного врача и назначение
+    // лечащего, а выписка требовала 'active'. Пациента, положенного через окно
+    // медсестры, НЕЛЬЗЯ БЫЛО ВЫПИСАТЬ ВООБЩЕ, пока главный врач его не
+    // осмотрит: человека держал в клинике порядок сборки программы. Домой
+    // уходят и из приёмного покоя — до всякого лечения.
+    //
+    // 'ordered' сюда не входит намеренно: у заявки нет ни койки, ни прожитого
+    // времени, и «выписывать» там нечего — её ОТМЕНЯЮТ
+    // (admission_order_cancel). Закрытую госпитализацию не открывают заново.
+    //
+    // Выписка остаётся ОДНОШАГОВОЙ: двухшаговую (заявка лечащего врача →
+    // оформление старшей медсестрой) строит Задача 8, она же уберёт этот путь
+    // целиком вместе со стрелками LEGACY_EDGES.
+    if (!IN_BED_STATUSES.includes(admission.status)) {
+      throw new RpcError(
+        admission.status === 'ordered'
+          ? 'Пациент ещё не размещён на койке — заявку на госпитализацию отменяют, а не выписывают.'
+          : admission.status === 'cancelled'
+            ? 'Заявка на госпитализацию отменена — выписывать некого.'
+            : 'Пациент уже выписан — госпитализация закрыта.', 400);
     }
+    // Правило базы: статус пишут только после того, как его одобрил маршрут.
+    assertTransition('admission', admission.status, 'discharged');
 
     // Effective discount: the explicit argument when one was given, otherwise
     // whatever set_admission_discount stored on the stay. The stored value is

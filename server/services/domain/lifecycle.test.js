@@ -65,7 +65,7 @@ test('admission: заявка не тупик — её можно выполни
 // 2026-09-04). Пропуск ступени отвергается САМОЙ таблицей, без ролей.
 test('admission: ступени маршрута идут по одной', () => {
   for (const [from, to] of [['ordered', 'examined'], ['admitted', 'active'],
-    ['admitted', 'discharging'], ['examined', 'discharging'], ['examined', 'discharged']]) {
+    ['admitted', 'discharging'], ['examined', 'discharging'], ['ordered', 'discharged']]) {
     assert.throws(() => assertTransition('admission', from, to), TransitionError, `${from} → ${to}`);
   }
   assert.ok(canTransition('admission', 'admitted', 'examined'));
@@ -74,13 +74,21 @@ test('admission: ступени маршрута идут по одной', () =
   assert.ok(canTransition('admission', 'discharging', 'discharged'));
 });
 
-// Две стрелки-наследства v0.8.0: их проходят СТАРЫЕ RPC (admit_patient,
-// discharge_patient), и до Задач 2 и 8 они обязаны оставаться законными —
-// иначе клиника теряет обе кнопки в день обновления. Машина маршрута их не
+// Стрелки-наследство: их проходят СТАРЫЕ RPC (admit_patient,
+// discharge_patient), и до Задачи 8 они обязаны оставаться законными — иначе
+// клиника теряет обе кнопки в день обновления. Машина маршрута их не
 // предлагает (см. LEGACY_EDGES в rpc/inpatient-flow.js).
+//
+// ПРЯМАЯ ВЫПИСКА ИДЁТ ИЗ ЛЮБОГО СОСТОЯНИЯ «В КОЙКЕ» (Задача 3). Пока она
+// умела только 'active', пациент, положенный медсестрой ('admitted'), не мог
+// быть выписан вовсе: между ним и выпиской стояли осмотр главного врача и
+// назначение лечащего. Человека нельзя держать в клинике из-за того, что
+// маршрут строится по частям.
 test('admission: наследственные прямые шаги v0.8.0 остаются законными', () => {
   assert.ok(canTransition('admission', 'ordered', 'active'), 'admit_patient');
-  assert.ok(canTransition('admission', 'active', 'discharged'), 'discharge_patient');
+  for (const from of ['admitted', 'examined', 'active', 'discharging']) {
+    assert.ok(canTransition('admission', from, 'discharged'), `discharge_patient из '${from}'`);
+  }
 });
 
 test('re-asserting the current state is allowed; an unknown entity throws', () => {
