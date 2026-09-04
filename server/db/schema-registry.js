@@ -602,6 +602,44 @@ export const REGISTRY = {
     filters: ['id','order_id','due_date','due_slot','status','voided_at'],
     embed:   { users: { table:'users', fk:'given_by', columns:['id','full_name'] } },
   },
+  // DIET_TABLES_V1 (миграция 094) — лечебные столы.
+  //
+  // Здесь ДВА разных режима записи, и разница между ними — суть задачи.
+  //
+  // `diet_tables` — ОБЫЧНЫЙ СПРАВОЧНИК с записью администратора: клиника
+  // вправе завести свой стол («1а» после операции на желудке, диету для
+  // гемодиализа) и погасить ненужный. Удаление не открыто НИКОМУ, включая
+  // администратора: погашенный стол остаётся в истории уже пролеченных
+  // пациентов, и DELETE порвал бы её строкой «стол №5» без стола №5.
+  //
+  // `admission_diets` и `admission_meals` — ТОЛЬКО ЧТЕНИЕ, как у admissions и
+  // treatment_orders выше и по той же причине: каждая запись сюда это проверка
+  // маршрута («пациент дошёл до лечения», «пациент лежит в койке») и проверка
+  // роли, и делают её RPC (rpc/diet.js). Открой здесь update — и стол можно
+  // было бы сменить одним PATCH'ем НА МЕСТЕ, стерев предыдущий период, то есть
+  // ровно тем способом, от которого эта таблица и заведена.
+  diet_tables: {
+    read:  { roles: ALL_STAFF, columns: ['id','code','name','indication','active','sort_order','created_at'] },
+    write: { insert: { roles: ['admin'], columns: ['code','name','indication','active','sort_order'] },
+             update: { roles: ['admin'], columns: ['name','indication','active','sort_order'] },
+             delete: { roles: [] } },
+    filters: ['id','code','active','sort_order'],
+    embed:   {},
+  },
+  admission_diets: {
+    read:  { roles: INPATIENT_CARE_ROLES, columns: ['id','admission_id','diet_code','since','ended_at',
+             'assigned_by','note','meals_per_day','created_at'] },
+    write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },
+    filters: ['id','admission_id','diet_code','since','ended_at'],
+    embed:   { users: { table:'users', fk:'assigned_by', columns:['id','full_name'] } },
+  },
+  admission_meals: {
+    read:  { roles: INPATIENT_CARE_ROLES, columns: ['id','admission_id','meal_date','meal_key','status',
+             'marked_by','marked_at','note','created_at'] },
+    write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },
+    filters: ['id','admission_id','meal_date','meal_key','status'],
+    embed:   { users: { table:'users', fk:'marked_by', columns:['id','full_name'] } },
+  },
   // Lab/diagnostic panel definitions (config). views/lab-panels.js, mounted as
   // the «Панели» mode of Лаборатория. Owned by every labs-section role.
   lab_panels: {

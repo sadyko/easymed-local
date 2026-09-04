@@ -6078,4 +6078,20 @@ export const STRINGS = {
   "Все осмотрены.": {"en":"Everyone has been examined.","ru":"Все осмотрены.","uz":"Hammasi ko'rikdan o'tgan."},
   "Заявка оформлена — пациент в очереди «Стационар → Ждут размещения».": {"en":"The order is filed — the patient is in the «Inpatient ward → Waiting for a bed» queue.","ru":"Заявка оформлена — пациент в очереди «Стационар → Ждут размещения».","uz":"Ariza rasmiylashtirildi — bemor «Statsionar → Joylashtirishni kutmoqda» navbatida."},
   "Заявка появится в разделе «Стационар» — медсестра положит пациента на койку.": {"en":"The order appears in the «Inpatient ward» section — a nurse will put the patient in a bed.","ru":"Заявка появится в разделе «Стационар» — медсестра положит пациента на койку.","uz":"Ariza «Statsionar» bo'limida paydo bo'ladi — hamshira bemorni koykaga yotqizadi."},
+
+  // DIET_TABLES_V1 — лечебные столы и порционник (Задача 7, миграция 094) — added 2026-09-04
+  "Порционник": {"en":"Kitchen sheet","ru":"Порционник","uz":"Porsiyalar varaqasi"},
+  "Заказ на кухню: палата, койка, пациент и лечебный стол на выбранную дату.": {"en":"The kitchen order: ward, bed, patient and therapeutic diet for the chosen date.","ru":"Заказ на кухню: палата, койка, пациент и лечебный стол на выбранную дату.","uz":"Oshxonaga buyurtma: tanlangan sanadagi palata, koyka, bemor va davolovchi parhez."},
+  "Порционник на {date}": {"en":"Kitchen sheet for {date}","ru":"Порционник на {date}","uz":"{date} uchun porsiyalar varaqasi"},
+  "Все отделения": {"en":"All wards","ru":"Все отделения","uz":"Barcha bo'limlar"},
+  "Итого по столам": {"en":"Totals by diet","ru":"Итого по столам","uz":"Parhezlar bo'yicha jami"},
+  "{diet} — {portions} порц.": {"en":"{diet} — {portions} portions","ru":"{diet} — {portions} порц.","uz":"{diet} — {portions} porsiya"},
+  "Всего порций: {count}": {"en":"Portions in total: {count}","ru":"Всего порций: {count}","uz":"Jami porsiya: {count}"},
+  "Стол": {"en":"Diet","ru":"Стол","uz":"Parhez"},
+  "Стол не назначен": {"en":"No diet assigned","ru":"Стол не назначен","uz":"Parhez tayinlanmagan"},
+  "Разовость": {"en":"Meals a day","ru":"Разовость","uz":"Kunlik ovqatlanish"},
+  "{n}-разовое": {"en":"{n} meals a day","ru":"{n}-разовое","uz":"{n} mahal"},
+  "В отделении никто не лежит — порционник пуст.": {"en":"Nobody is in a bed — the kitchen sheet is empty.","ru":"В отделении никто не лежит — порционник пуст.","uz":"Bo'limda hech kim yotmayapti — porsiyalar varaqasi bo'sh."},
+  "Не удалось загрузить порционник.": {"en":"Could not load the kitchen sheet.","ru":"Не удалось загрузить порционник.","uz":"Porsiyalar varaqasini yuklab bo'lmadi."},
+  "Разрешите всплывающие окна для печати.": {"en":"Allow pop-up windows to print.","ru":"Разрешите всплывающие окна для печати.","uz":"Chop etish uchun qalqib chiquvchi oynalarga ruxsat bering."},
 };

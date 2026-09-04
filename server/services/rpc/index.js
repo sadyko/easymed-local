@@ -13,6 +13,10 @@ import {
   treatmentOrderCreate, treatmentOrderCancel, treatmentOrdersList,
   treatmentAdminMark, treatmentAdminUnmark, treatmentTasksDue,
 } from './treatment-orders.js';   // TREATMENT_ORDERS_V1
+import {
+  dietTablesList, admissionDietSet, admissionDietHistory,
+  admissionMealMark, admissionMealsList, kitchenSheet,
+} from './diet.js';   // DIET_TABLES_V1
 import { ensureVisit } from './visits.js';
 import { issueQueueNumbers, queueBoard } from './queue.js';
 import { createDeposit, acceptDeposit, cancelDeposit, refundDeposit, listDeposits, depositBalance } from './deposits.js';   // DEPOSIT_V1
@@ -178,6 +182,23 @@ export const RPC = {
   treatment_admin_mark:           (db, args, user) => treatmentAdminMark(db, args, user),
   treatment_admin_unmark:         (db, args, user) => treatmentAdminUnmark(db, args, user),
   treatment_tasks_due:            (db, args, user) => treatmentTasksDue(db, args, user),
+
+  // DIET_TABLES_V1 — лечебные столы (Задача 7 плана «Стационар»).
+  // Стол меняют врач, главный врач, старшая медсестра и администратор, и в
+  // истории остаются ОБА периода: старый закрывается, новый открывается, а
+  // автором пишется ТОТ, КТО НАЖАЛ, — не лечащий врач (ошибка референса,
+  // разобранная в шапке rpc/diet.js). Питание отмечает медсестра, отметка
+  // идемпотентна по (госпитализация, дата, приём).
+  // diet_tables_list, admission_diet_history, admission_meals_list и
+  // kitchen_sheet — чтение (READ_ONLY_RPCS в control/gate.js).
+  diet_tables_list:               (db, args, user) => dietTablesList(db, args, user),
+  admission_diet_set:             (db, args, user) => admissionDietSet(db, args, user),
+  admission_diet_history:         (db, args, user) => admissionDietHistory(db, args, user),
+  admission_meal_mark:            (db, args, user) => admissionMealMark(db, args, user),
+  admission_meals_list:           (db, args, user) => admissionMealsList(db, args, user),
+  // Порционник — заказ на кухню на дату: палата · койка · пациент · стол плюс
+  // итог по столам. Считает КАЖДУЮ госпитализацию в койке (IN_BED_STATUSES).
+  kitchen_sheet:                  (db, args, user) => kitchenSheet(db, args, user),
 
   // SERVICE_DELETE_V1 — «Удалить услугу». Hard-deletes only a service with no
   // visit / invoice / admission / queue / lab / CRM history; anything used is

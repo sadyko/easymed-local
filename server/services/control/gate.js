@@ -69,6 +69,12 @@ const READ_ONLY_RPCS = new Set([
   // и что просрочено, отделение не может ни одной смены. Сами отметки
   // (treatment_admin_mark/unmark) и назначения — записи, и сюда не входят.
   'treatment_orders_list', 'treatment_tasks_due',
+  // DIET_TABLES_V1 — справочник столов, история стола, лист питания и
+  // ПОРЦИОННИК. Заказ на кухню — тот документ, который клинике с просроченной
+  // подпиской нужен раньше всех прочих: пациенты в койках, и завтрак им варят
+  // независимо от состояния счёта. Сама смена стола и отметка приёма пищи —
+  // записи, и сюда не входят.
+  'diet_tables_list', 'admission_diet_history', 'admission_meals_list', 'kitchen_sheet',
 ]);
 
 // The way back in. These must work while locked or a clinic that wants to pay
