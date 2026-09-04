@@ -216,6 +216,34 @@ export function assertCanPrescribe(db, admissionId, user) {
 }
 
 /**
+ * ВПРАВЕ ЛИ ЭТОТ ЧЕЛОВЕК совершить такой шаг — БЕЗ записи и без чтения базы.
+ *
+ * Вынесено из admissionTransition ради ПОРЯДКА ОТКАЗОВ, а не ради красоты.
+ * Размещение на койке (admission_admit, Задача 2) проверяет ещё и койку:
+ * свободна ли, из той ли палаты, не лежит ли пациент уже. Кассиру, который
+ * дёрнул этот RPC, правильный ответ — «это делает медсестра», а не «койка на
+ * уборке»: второй заставляет искать другую койку там, где дело вообще не в
+ * койке. Значит роль надо спросить ДО койки, а сдвинуть состояние — ПОСЛЕ неё.
+ * Одна функция обе половины сделать не может, поэтому их две, и текст отказа
+ * по-прежнему один — здесь.
+ *
+ * @param {string} from  состояние сейчас
+ * @param {string} to    состояние, куда идём
+ * @param {{role:string, extra_roles?:string[]}} user
+ * @throws {RpcError} 403 с названием действия и списком тех, кто его делает
+ */
+export function assertMayTransition(from, to, user) {
+  const allowed = TRANSITION_ROLES[`${from}→${to}`];
+  if (!allowed) throw new RpcError(explainRefusal(from, to), 400);
+  if (!hasAnyRole(user, allowed)) {
+    throw new RpcError(
+      `${ACTION_NAME[`${from}→${to}`]} — недоступно вашей роли. Это делает: ${allowed.map(roleTitle).join(', ')}.`,
+      403,
+    );
+  }
+}
+
+/**
  * ЕДИНСТВЕННЫЙ способ сдвинуть госпитализацию по маршруту.
  *
  * Порядок проверок несущий: сперва «возможен ли такой переход вообще»
@@ -249,14 +277,7 @@ export function admissionTransition(db, args, user) {
   if (from === to) return { admission: adm, from, to };   // идемпотентный повтор
 
   // 2. Вправе ли этот человек.
-  const allowed = TRANSITION_ROLES[`${from}→${to}`];
-  if (!allowed) throw new RpcError(explainRefusal(from, to), 400);
-  if (!hasAnyRole(user, allowed)) {
-    throw new RpcError(
-      `${ACTION_NAME[`${from}→${to}`]} — недоступно вашей роли. Это делает: ${allowed.map(roleTitle).join(', ')}.`,
-      403,
-    );
-  }
+  assertMayTransition(from, to, user);
 
   const at = typeof (args && args.at) === 'string' && args.at
     ? args.at

@@ -80,6 +80,14 @@ test('every sidebar module can be granted to a role', () => {
     if (grantable.has(id)) return false;
     // The NAV item is `cashier-shifts`; the grant key is its alias `cashier`.
     if (id === 'cashier-shifts') return !grantable.has('cashier');
+    // ADMISSION_ORDER_V1 — same shape: «Стационар» (окно медсестры, #admissions)
+    // and «Койки и палаты» (#beds) are two screens of ONE section, granted by
+    // the single key `beds` (permissions.js isModuleAllowed). A second key
+    // would be a trap in both directions: clinics that already granted the
+    // ward would silently not see the new screen, and a role could be given
+    // the right to put a patient in a bed without the right to see whether it
+    // is free.
+    if (id === 'admissions') return !grantable.has('beds');
     return true;
   });
   assert.deepEqual(ungrantable, [], 'sidebar modules with no way to grant them:\n' + ungrantable.join('\n'));

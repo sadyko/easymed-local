@@ -71,9 +71,14 @@ function estimateCharge(ward, bed, admittedAt, discountPct = 0) {
 }
 
 let state = { tab: 'board', wardFilter: 'all', statusFilter: 'all' };
+// ADMISSION_ORDER_V1 — переход в окно медсестры. Доска коек показывает ФОНД
+// (кто где лежит), очередь размещения живёт в «Стационаре»; без ссылки между
+// ними администратор, увидевший свободную койку, не знает, кого на неё ждут.
+let navigateTo = null;
 
-export async function renderWardBeds(container) {
+export async function renderWardBeds(container, ctx) {
     clear(container);
+    navigateTo = (ctx && ctx.onNavigate) || null;
     state = { tab: 'board', wardFilter: 'all', statusFilter: 'all' };
     const root = h('div', { class: 'fade-in' });
     container.appendChild(root);
@@ -119,9 +124,14 @@ async function paint(root) {
             h('h1', { class: 'page-title' }, tr('Стационар')),
             h('p', { class: 'page-subtitle' }, tr('Койки, госпитализации и выписки. Нажмите на койку, чтобы действовать.')),
         ),
-        h('div', { class: 'segmented' },
-            tabBtn(tr('Койки'), 'board', root),
-            tabBtn(tr('Госпитализации'), 'admissions', root),
+        h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
+            navigateTo ? h('button', {
+                class: 'btn btn-sm', type: 'button', onclick: () => navigateTo('admissions'),
+            }, Icon('Clock', { size: 13 }), ' ', tr('Ждут размещения')) : null,
+            h('div', { class: 'segmented' },
+                tabBtn(tr('Койки'), 'board', root),
+                tabBtn(tr('Госпитализации'), 'admissions', root),
+            ),
         ),
     ));
 
@@ -1050,7 +1060,15 @@ async function admissionsTable() {
             h('td', null, fmtDateTime(a.admitted_at)),
             h('td', null, a.discharged_at ? fmtDateTime(a.discharged_at) : '—'),
             h('td', { style: { textAlign: 'right' } }, a.charge_amount != null ? fmtPrice(a.charge_amount) : '—'),
-            h('td', null, Tag(admissionStatusLabel(a.status), { kind: active ? 'ok' : '', dot: true })),
+            // ADMISSION_ORDER_V1 — ПОДПИСЬ БЕРЁТСЯ ИЗ ОБЩЕЙ КАРТЫ и ниоткуда
+            // больше. Раньше она собиралась здесь на месте и знала не все
+            // состояния: заявка ('ordered') подписывалась «Отменено» — то есть
+            // экран сообщал, что госпитализации не будет, ровно про того
+            // пациента, которого ждут в отделении. Оттенок тоже разведён на
+            // три: ждёт размещения (жёлтый), лежит (зелёный), закрыта (серый).
+            h('td', null, Tag(admissionStatusLabel(a.status), {
+                kind: active ? 'ok' : (a.status === 'ordered' ? 'warn' : ''), dot: true,
+            })),
         ));
     }
     return card;

@@ -7,7 +7,7 @@ import { dashboardSummary } from './dashboard.js';
 import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel } from './procurement.js';
 import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
-import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest } from './inpatient.js';
+import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit } from './inpatient.js';   // ADMISSION_ORDER_V1
 import { admissionFlowState } from './inpatient-flow.js';   // INPATIENT_FLOW_V1
 import {
   treatmentOrderCreate, treatmentOrderCancel, treatmentOrdersList,
@@ -144,6 +144,20 @@ export const RPC = {
   // был тупиком: выйти из него не мог никто, и пациента больше нельзя было
   // направить в стационар. (Выполнение заявки делает admit_patient.)
   cancel_admission_request:       (db, args, user) => cancelAdmissionRequest(db, args, user),
+
+  // ADMISSION_ORDER_V1 (Задача 2) — ЗАЯВКА и РАЗМЕЩЕНИЕ, две первые стрелки
+  // маршрута владельца. Заявку оформляет регистратура (или врач из кабинета:
+  // request_admission выше пишет ту же строку в том же 'ordered' — это второй
+  // вход, а не дубль); кладёт на койку медсестра, старшая медсестра, главный
+  // врач или администратор (матрица в rpc/inpatient-flow.js).
+  //
+  // cancel_admission_request строкой выше — ПРЕДШЕСТВЕННИК admission_order_cancel:
+  // ни один экран его не зовёт (grep по public/), он остаётся ради внешних
+  // вызовов. Новый экран зовёт admission_order_cancel — тот требует причину,
+  // спрашивает матрицу прав и отпускает койку в 'cleaning'.
+  admission_order_create:         (db, args, user) => admissionOrderCreate(db, args, user),
+  admission_order_cancel:         (db, args, user) => admissionOrderCancel(db, args, user),
+  admission_admit:                (db, args, user) => admissionAdmit(db, args, user),
 
   // INPATIENT_FLOW_V1 — где госпитализация на маршруте и что ЭТОТ человек
   // может с ней сделать. Чистое чтение (см. READ_ONLY_RPCS в control/gate.js):

@@ -57,7 +57,7 @@ export const NAV_MODULES = [
         { key: 'queue',             label: 'Очередь',       desc: 'Доска номеров: кто у какого врача, в лаборатории и на процедурах' },
         { key: 'labs',              label: 'Лаборатория',   desc: 'Рабочий список и результаты' },
         { key: 'procedures',        label: 'Процедуры',     desc: 'Очередь процедур (медсестра)' },
-        { key: 'beds',              label: 'Стационар и палаты', desc: 'Койки, госпитализация и выписка' },
+        { key: 'beds',              label: 'Стационар и палаты', desc: 'Окно медсестры (заявки и размещение) и коечный фонд' },   // ADMISSION_ORDER_V1 — ключ открывает ОБА экрана: #admissions и #beds
         { key: 'patient-documents', label: 'Документы пациентов', desc: 'Печатные документы по пациентам' },
     ] },
     { group: 'Операционные', items: [
@@ -310,6 +310,14 @@ export function isModuleAllowed(navId) {
     }
     if (navId === 'docs-archive') return _effective.has('docs-archive');   // ROLE_AUDIT_V2 — explicit grant only (mig 106 backfilled roles that used the old labs/consultation implication)
     if (navId === 'cashier-shifts') return _effective.has('cashier-shifts') || _effective.has('cashier');   // CASHIER_SHIFTS_MAP_V1
+    // ADMISSION_ORDER_V1 — «Стационар» (окно медсестры) и «Койки и палаты»
+    // (коечный фонд) — ДВА экрана ОДНОГО раздела, и ключ у них один: `beds`.
+    // Отдельный грант здесь был бы ловушкой в обе стороны: у клиник, где
+    // стационар уже выдан, новый экран молча не появился бы, а выдать право
+    // класть на койку, не выдав права видеть, свободна ли она, — это как раз
+    // тот класс ошибки, который чинила 055. Приём тот же, что у
+    // 'cashier-shifts' → 'cashier' строкой выше.
+    if (navId === 'admissions') return _effective.has('admissions') || _effective.has('beds');
     // CASHIER_HEAD_KEY_V1 — Старший кассир is its OWN explicit grant (was derived
     // from Cashier: Admin, which made every delete-level cashier a head cashier).
     if (navId === 'cashier-head') return _effective.has('cashier-head');
@@ -386,6 +394,7 @@ export function isRouteAllowed(view) {
 
     if (view === 'docs-archive') return _effective.has('docs-archive');   // ROLE_AUDIT_V2 — explicit grant only
     if (view === 'cashier-shifts') return _effective.has('cashier-shifts') || _effective.has('cashier');   // CASHIER_SHIFTS_MAP_V1
+    if (view === 'admissions') return isModuleAllowed('admissions');   // ADMISSION_ORDER_V1 — один ключ на оба экрана стационара
     if (view === 'cashier-head') return isModuleAllowed('cashier-head');   // CASHIER_HEAD_NAV_V1
     if (view === 'registration') return _effective.has('registration') && canEdit('patients');   // ROLE_AUDIT_V1 (fix #2)
     if (view === 'procurement') return _effective.has('procurement') || _effective.has('procurement:requisitions');   // PROCUREMENT_REQ_GRANT_V1

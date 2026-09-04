@@ -13,6 +13,7 @@ import { savePatient, loadPatientById } from '../data.js';
 // ?v= как у остальных импортёров visit-wizard.js — иначе получится второй
 // экземпляр модуля.
 import { openVisitWizard } from './visit-wizard.js?v=aug17e';
+import { openAdmissionOrderModal } from './admission-modal.js?v=inp2';   // ADMISSION_ORDER_V1 — «Госпитализация» из регистратуры
 import { supabase } from '../../supabase.js';
 import { uploadFile } from '../storage.js';
 import { phoneInput, isCodeOnly } from '../phone-input.js?v=ph1';
@@ -80,6 +81,12 @@ function paint(container, onNavigate) {
             title: 'Создать пациента',
             subtitle: 'Создание или редактирование карты пациента и запись на первый приём',
             right: [
+                // ADMISSION_ORDER_V1 — второй вход в стационар (первый — карта
+                // пациента). Здесь пациента ещё может не быть выбрано, поэтому
+                // окно заявки ищет его само: на приёмном покое человека чаще
+                // находят по фамилии, чем открывают его карту.
+                h('button', { class: 'btn', type: 'button', onclick: () => openAdmissionOrderModal({}) },
+                    Icon('Bed', { size: 14 }), ' ', tr('Госпитализация')),
                 h('button', { class: 'btn btn-danger', onclick: () => onNavigate('dashboard') }, 'Отмена'),
             ],
         }),

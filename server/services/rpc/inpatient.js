@@ -10,7 +10,12 @@ import { hasAnyRole } from '../roles.js';
 // Каждый запрос ниже, который раньше спрашивал status='active', спрашивает этот
 // список: поступивший, но ещё не осмотренный пациент лежит в койке точно так же,
 // как лечащийся, — койка занята, и суточное за неё идёт.
-import { IN_BED_STATUSES, OPEN_STATUSES } from './inpatient-flow.js';
+import {
+  IN_BED_STATUSES, OPEN_STATUSES,
+  // ADMISSION_ORDER_V1 (Задача 2) — заявка и размещение НЕ двигают статус
+  // руками: состояние переводит машина маршрута, она же проверяет роль.
+  admissionTransition, assertMayTransition, loadAdmission,
+} from './inpatient-flow.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -463,4 +468,237 @@ export function setAdmissionDiscount(db, args, user) {
   if (!adm) throw new RpcError('admission not found.', 400);
   db.prepare('UPDATE admissions SET accommodation_discount_percent = ? WHERE id = ?').run(pct, admissionId);
   return { admission_id: admissionId, percent: pct };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ADMISSION_ORDER_V1 — заявка на госпитализацию и размещение на койке
+// (Задача 2 плана docs/plans/2026-09-04-inpatient-workflow.md)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Маршрут владельца начинается здесь: «регистрация пациента → ЗАЯВКА НА
+// ГОСПИТАЛИЗАЦИЮ → медсестра КЛАДЁТ НА КОЙКУ → …». Три обработчика ниже — эти
+// две стрелки и отмена между ними.
+//
+// ПОЧЕМУ ОНИ НЕ ТРОГАЮТ status НАПРЯМУЮ. Состояние двигает только
+// admissionTransition (inpatient-flow.js): она знает порядок шагов, знает
+// матрицу прав и подписывает шаг (кем, когда). Здесь остаётся то, чего машина
+// маршрута знать не должна, — что такое койка и что такое палата.
+//
+// ЧТО ОСТАЁТСЯ ЖИТЬ РЯДОМ. `request_admission` (выше) — та же заявка, поданная
+// ВРАЧОМ из кабинета: она пишет ту же строку в том же 'ordered' и попадает в то
+// же окно медсестры. Это не дубль, а второй вход, которым владелец пользуется:
+// направление в стационар рождается на приёме. `admit_patient` (выше) —
+// быстрый путь v0.8.0 (доска коек, поступление одним движением), он тоже
+// остаётся: убрать его до Задачи 3 значило бы, что положенного медсестрой
+// пациента некому перевести в 'active' и, следовательно, некому выписать.
+
+// Кто оформляет заявку — матрица плана, строка «Создать заявку на
+// госпитализацию»: регистратура, старшая медсестра, врач, главный врач,
+// администратор. Медсестры здесь нет намеренно: её дело — разместить.
+const ORDER_CREATE_ROLES = ['registrar', 'senior_nurse', 'doctor', 'head_doctor', 'admin'];
+const ADMISSION_TYPES = ['planned', 'emergency'];
+const STAY_MODES = ['round', 'day'];
+
+function textArg(v, max) {
+  return (typeof v === 'string' ? v : '').trim().slice(0, max);
+}
+
+/**
+ * Заявка на госпитализацию: строка в 'ordered', БЕЗ койки и без денег.
+ *
+ * Койку не занимает специально. Заявка — это «пациента ждут в отделении», а не
+ * «место забронировано»: подержи она койку, отделение считало бы занятыми
+ * места, на которых никто не лежит, и суточное начисление пришлось бы учить
+ * различать «лежит» и «обещали».
+ *
+ * @param {{patient_id:number, ward_id?:number, department?:string,
+ *          admission_type?:'planned'|'emergency', stay_mode?:'round'|'day',
+ *          planned_at?:string, note?:string, doctor_id?:number}} args
+ */
+export function admissionOrderCreate(db, args, user) {
+  if (!hasAnyRole(user, ORDER_CREATE_ROLES)) {
+    throw new RpcError('Оформить заявку на госпитализацию может регистратура, старшая медсестра, врач, главный врач или администратор.', 403);
+  }
+
+  const patientId = args && args.patient_id;
+  if (!isPositiveInt(patientId)) throw new RpcError('patient_id must be a positive integer.', 400);
+
+  const rawWard = args && args.ward_id;
+  const wardId = rawWard === undefined || rawWard === null || rawWard === '' ? null : Number(rawWard);
+  if (wardId !== null && !isPositiveInt(wardId)) throw new RpcError('ward_id must be a positive integer.', 400);
+
+  const rawDoctor = args && args.doctor_id;
+  const doctorId = rawDoctor === undefined || rawDoctor === null || rawDoctor === '' ? null : Number(rawDoctor);
+  if (doctorId !== null && !isPositiveInt(doctorId)) throw new RpcError('doctor_id must be a positive integer.', 400);
+
+  const admissionType = (args && args.admission_type) || 'planned';
+  if (!ADMISSION_TYPES.includes(admissionType)) {
+    throw new RpcError('Тип госпитализации: плановая или экстренная.', 400);
+  }
+  const stayMode = (args && args.stay_mode) || 'round';
+  if (!STAY_MODES.includes(stayMode)) {
+    throw new RpcError('Режим пребывания: круглосуточный или дневной.', 400);
+  }
+  const department = textArg(args && args.department, 120);
+  const plannedAt = textArg(args && args.planned_at, 40) || null;
+  const note = textArg(args && args.note, 500);
+
+  const run = db.transaction(() => {
+    if (!db.prepare('SELECT 1 FROM patients WHERE id = ?').get(patientId)) {
+      throw new RpcError('Пациент не найден.', 400);
+    }
+    if (wardId !== null && !db.prepare('SELECT 1 FROM wards WHERE id = ?').get(wardId)) {
+      throw new RpcError('Палата не найдена.', 400);
+    }
+    if (doctorId !== null && !db.prepare('SELECT 1 FROM users WHERE id = ?').get(doctorId)) {
+      throw new RpcError('Направивший врач не найден.', 400);
+    }
+    // ОДНА ОТКРЫТАЯ ГОСПИТАЛИЗАЦИЯ НА ПАЦИЕНТА — тот же список OPEN_SQL, что у
+    // request_admission: заявка врача и заявка регистратуры не должны
+    // складываться в две очереди на одного человека.
+    const open = db.prepare(`SELECT status FROM admissions WHERE patient_id=? AND status IN (${OPEN_SQL})`).get(patientId);
+    if (open) {
+      throw new RpcError(open.status === 'ordered'
+        ? 'У пациента уже есть незакрытая заявка на госпитализацию.'
+        : 'Пациент уже госпитализирован.', 400);
+    }
+
+    const at = nowIso(db);
+    const info = db.prepare(`
+      INSERT INTO admissions
+        (patient_id, ward_id, doctor_id, department, admission_type, stay_mode,
+         planned_at, chief_complaint, status, ordered_at, ordered_by, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ordered', ?, ?, ?)
+    `).run(patientId, wardId, doctorId, department, admissionType, stayMode,
+           plannedAt, note, at, user.id, user.id);
+    const admissionId = info.lastInsertRowid;
+    db.prepare("UPDATE admissions SET admission_no = 'ADM-' || substr('00000'||id,-5,5) WHERE id=?").run(admissionId);
+    // Журнал движений: заявка — тоже событие с пациентом, и «когда это
+    // началось» должно читаться из одного места вместе с поступлением и
+    // переводами (BED_CONSOLE_V1).
+    db.prepare(`
+      INSERT INTO admission_transfers (admission_id, to_ward_id, kind, reason, transferred_at, transferred_by)
+      VALUES (?, ?, 'order', ?, ?, ?)
+    `).run(admissionId, wardId, note || null, at, user.id);
+
+    return { admission: db.prepare('SELECT * FROM admissions WHERE id = ?').get(admissionId) };
+  });
+
+  return run();
+}
+
+/**
+ * Отмена заявки: 'cancelled' с ПРИЧИНОЙ.
+ *
+ * Причина обязательна. Отменённая заявка — единственный след того, что пациента
+ * ждали и не дождались; без слова «почему» этот след не отвечает ни на один
+ * вопрос, ради которого к нему приходят («передумали?», «увезли в другую
+ * клинику?», «завели по ошибке?»).
+ *
+ * Койку, если она уже занята (отмена возможна и из 'admitted'), отпускает в
+ * 'cleaning', а не в 'free' — правило референса, то же, что при выписке:
+ * освободившаяся койка не готова, пока её не убрали.
+ */
+export function admissionOrderCancel(db, args, user) {
+  const admissionId = args && args.admission_id;
+  if (!isPositiveInt(admissionId)) throw new RpcError('admission_id must be a positive integer.', 400);
+  const reason = textArg(args && args.reason, 300);
+  if (!reason) throw new RpcError('Укажите причину отмены заявки.', 400);
+
+  const run = db.transaction(() => {
+    const before = loadAdmission(db, admissionId);
+    const res = admissionTransition(db, { admission_id: admissionId, to: 'cancelled', reason }, user);
+    if (before.bed_id) {
+      db.prepare("UPDATE beds SET status='cleaning' WHERE id=?").run(before.bed_id);
+    }
+    db.prepare(`
+      INSERT INTO admission_transfers (admission_id, from_bed_id, from_ward_id, kind, reason, transferred_at, transferred_by)
+      VALUES (?, ?, ?, 'cancel', ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?)
+    `).run(admissionId, before.bed_id, before.ward_id, reason, user.id);
+    return { admission: res.admission };
+  });
+
+  return run();
+}
+
+/**
+ * Размещение на койке: медсестра выполняет заявку.
+ *
+ * ПОРЯДОК ПРОВЕРОК ЗДЕСЬ — СОДЕРЖАНИЕ, А НЕ ОФОРМЛЕНИЕ. Он отвечает на вопрос
+ * «что человеку у экрана делать дальше», и каждая перестановка делает ответ
+ * хуже:
+ *   1. состояние заявки — «пациент уже на койке» важнее всего остального;
+ *   2. РОЛЬ — кассиру нужно услышать «это делает медсестра», а не «койка на
+ *      уборке»: второй ответ отправляет искать другую койку там, где дело не в
+ *      койке (см. assertMayTransition);
+ *   3. койка — существует, в фонде, свободна, из той палаты, что названа в
+ *      заявке;
+ *   4. пациент — не лежит уже где-то ещё.
+ *
+ * 'cleaning' и 'maintenance' называются СВОИМИ СЛОВАМИ, а не «койка недоступна»:
+ * убрать палату и вызвать техника — разные действия разных людей, и экран
+ * обязан сказать, какое из них нужно.
+ */
+export function admissionAdmit(db, args, user) {
+  const admissionId = args && args.admission_id;
+  if (!isPositiveInt(admissionId)) throw new RpcError('admission_id must be a positive integer.', 400);
+  const bedId = args && args.bed_id;
+  if (!isPositiveInt(bedId)) throw new RpcError('bed_id must be a positive integer.', 400);
+  const at = typeof (args && args.at) === 'string' && args.at ? args.at : null;
+
+  const run = db.transaction(() => {
+    const adm = loadAdmission(db, admissionId);
+
+    // 1. Заявка ли это ещё.
+    if (adm.status !== 'ordered') {
+      throw new RpcError(
+        IN_BED_STATUSES.includes(adm.status) ? 'Пациент уже размещён на койке.'
+        : adm.status === 'cancelled'         ? 'Заявка на госпитализацию отменена — положить пациента нельзя.'
+        : adm.status === 'discharged'        ? 'Пациент уже выписан — госпитализация закрыта.'
+        : 'Положить на койку можно только по оформленной заявке.', 400);
+    }
+
+    // 2. Роль (до койки — см. шапку).
+    assertMayTransition('ordered', 'admitted', user);
+
+    // 3. Койка.
+    const bed = db.prepare('SELECT * FROM beds WHERE id = ?').get(bedId);
+    if (!bed) throw new RpcError('Койка не найдена.', 400);
+    if (bed.active !== 1) throw new RpcError('Койка выведена из коечного фонда.', 400);
+    if (bed.status === 'cleaning')    throw new RpcError('Койка на уборке — сначала подтвердите уборку.', 400);
+    if (bed.status === 'maintenance') throw new RpcError('Койка в ремонте — положить пациента нельзя.', 400);
+    if (bed.status !== 'free')        throw new RpcError('Койка занята.', 400);
+    // Занятость СЧИТАЕТСЯ ПО ГОСПИТАЛИЗАЦИЯМ, а не по beds.status: статус койки
+    // — housekeeping, и разойтись с правдой он может (ровно от этого доска коек
+    // считает occupied по admissions, а не по колонке).
+    if (db.prepare(`SELECT 1 FROM admissions WHERE bed_id=? AND status IN (${IN_BED_SQL})`).get(bedId)) {
+      throw new RpcError('Койка занята другим пациентом.', 400);
+    }
+    // Палата из заявки. Проверяем ТОЛЬКО когда заявка её называет: чаще всего
+    // палату выбирает та же медсестра в момент размещения, и требовать её
+    // заранее значило бы заставить регистратуру угадывать коечный фонд.
+    if (adm.ward_id != null && bed.ward_id !== adm.ward_id) {
+      const want = db.prepare('SELECT name FROM wards WHERE id = ?').get(adm.ward_id);
+      throw new RpcError('Койка из другой палаты: заявка оформлена в «' + ((want && want.name) || adm.ward_id) + '».', 400);
+    }
+
+    // 4. Один пациент — одна койка.
+    if (db.prepare(`SELECT 1 FROM admissions WHERE patient_id=? AND id<>? AND status IN (${IN_BED_SQL})`).get(adm.patient_id, adm.id)) {
+      throw new RpcError('У пациента уже есть открытая госпитализация на койке.', 400);
+    }
+
+    // Койка и палата — дело этого обработчика; состояние и подпись шага
+    // (admitted_by / admitted_at) — дело машины маршрута.
+    db.prepare('UPDATE admissions SET bed_id = ?, ward_id = ? WHERE id = ?').run(bedId, bed.ward_id, adm.id);
+    const res = admissionTransition(db, { admission_id: adm.id, to: 'admitted', at }, user);
+    db.prepare("UPDATE beds SET status='occupied' WHERE id=?").run(bedId);
+    db.prepare(`
+      INSERT INTO admission_transfers (admission_id, to_bed_id, to_ward_id, kind, transferred_at, transferred_by)
+      VALUES (?, ?, ?, 'admit', ?, ?)
+    `).run(adm.id, bedId, bed.ward_id, res.admission.admitted_at, user.id);
+
+    return { admission: res.admission, bed: db.prepare('SELECT * FROM beds WHERE id = ?').get(bedId) };
+  });
+
+  return run();
 }

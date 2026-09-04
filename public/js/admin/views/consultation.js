@@ -17,7 +17,7 @@ import { h, Icon, PageHead, toast, clear, avColor, initials, fmtDateTime } from 
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { scopedDoctorId, selfDoctorId, scopedProviderId } from '../permissions.js';   // ADMIN_DOCTOR_V2 / SERVICE_SCOPE_V1
 import { renderDoctorProfile } from './doctor-profile.js?v=btnright1';
-import { openAdmissionRegistrarModal } from './admission-modal.js?v=aug17e';   // INPATIENT_TAB_V1
+import { openAdmissionCard } from './admission-modal.js?v=inp2';   // INPATIENT_TAB_V1 / ADMISSION_ORDER_V1
 import { currentUser, loadPatientById } from '../data.js';
 import { IN_BED_STATUSES } from '../../shared/admission-status.js';   // INPATIENT_FLOW_V1
 
@@ -251,14 +251,13 @@ function profileView() {
 // lives in admissions/admission_services/admission_prescriptions).
 // ---------------------------------------------------------------------------
 async function loadInpatients() {
-    const cid = (window.CLINIC && window.CLINIC.id) || null;
     let q = supabase.from('admissions')
         .select(`
             id, admission_no, status, admission_diagnosis, admitted_at,
             patient_id, attending_doctor_id, ward_id, bed_id,
             patients(full_name, last_name, first_name, mrn, phone),
             wards(name),
-            beds!admissions_bed_id_fkey(code)
+            beds(code)
         `)
         // INPATIENT_FLOW_V1 — вкладка «Стационар» показывает пациентов В КОЙКЕ,
         // а не только тех, кто дошёл до 'active': врач обязан видеть своего
@@ -266,7 +265,12 @@ async function loadInpatients() {
         .in('status', IN_BED_STATUSES)
         .order('admitted_at', { ascending: false })
         .limit(200);
-    if (cid) q = q.eq('company_id', cid);
+    // ADMISSION_ORDER_V1 — фильтра по company_id здесь БЫТЬ НЕ МОЖЕТ: в
+    // schema-registry.js у admissions такой колонки нет ни в чтении, ни в
+    // фильтрах, и /api/db отвечал на этот запрос отказом. Вместе с embed'ом
+    // `beds!admissions_bed_id_fkey(…)` строкой выше (его не принимает
+    // query-compiler) это делало вкладку «Стационар» пустой ВСЕГДА. База
+    // локальная и однопользовательская по клинике — область и так одна.
     const docId = scopedDoctorId();
     if (docId) q = q.eq('attending_doctor_id', docId);
     const { data, error } = await q;
@@ -305,7 +309,7 @@ function inpatientsView() {
             style: { display: 'flex', gap: '14px', alignItems: 'center', textAlign: 'left', width: '100%',
                      padding: '14px 16px', background: 'var(--white)', border: '1px solid var(--ink-100)',
                      borderRadius: '12px', cursor: 'pointer', fontFamily: 'inherit' },
-            onclick: () => openAdmissionRegistrarModal({
+            onclick: () => openAdmissionCard({
                 admissionId: r.id,
                 onChange: () => { loadInpatients().then(paint); },
             }),
@@ -320,7 +324,7 @@ function inpatientsView() {
                     r.admission_diagnosis ? ' · ' + r.admission_diagnosis : ''),
             ),
             h('span', { class: 'muted', style: { fontSize: '12.5px', flex: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px' } },
-                'Назначения ', Icon('ArrowRight', { size: 13 })),
+                'Госпитализация ', Icon('ArrowRight', { size: 13 })),
         ));
     }
     return wrap;

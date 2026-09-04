@@ -15,7 +15,6 @@ import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
 import { openItemPickerModal } from './item-picker-modal.js?v=billoptin1';   // DISPENSE_ITEM_V1
 import { logPatientActivity } from './activity-log.js';
 import { canDelete as canDeleteRole, patientTabCanEdit } from '../permissions.js';
-import { openAdmissionRegistrarModal } from './admission-modal.js?v=aug17e';
 import { insertRow, currentUser } from '../data.js';   // AURORA_CONSULT_TOOLBAR_V1 + AURORA_CONSULT_TEMPLATES_V1
 import { currentClinicId } from '../tenant-tables.js';   // AURORA_CONSULT_TOOLBAR_V1
 import { BRANCH_BUCKET, signedUrl } from '../storage.js?v=aurora20b';   // SLICED2_PRINT_HEADER (dynamic company name + logo)
@@ -1324,7 +1323,12 @@ async function openHospitalizationRequestModal(ctx) {
             const _dx = dxInput.value.trim(); const _cc = ccInput.value.trim();
             // i18n-exempt: HTML вставляется В ДОКУМЕНТ приёма
             noteInRecommendations(ctx, `<div><b>Рекомендована госпитализация в стационар</b> (${esc(_pw)})${_dx ? '. Диагноз направления: ' + esc(_dx) : ''}${_cc ? '. Повод: ' + esc(_cc) : ''}.</div>`);
-            toast('Заявка на госпитализацию оформлена', 'ok');
+            // ADMISSION_ORDER_V1 — раньше окно обещало «Заявка появится в
+            // стационаре для оформления», и это обещание НИЧЕМ не выполнялось:
+            // экрана, который показывает заявку, не существовало. Теперь он
+            // есть — и сообщение называет его по имени, чтобы врач знал, куда
+            // смотреть, а не гадал, дошло ли направление.
+            toast(tr('Заявка оформлена — пациент в очереди «Стационар → Ждут размещения».'), 'ok');
             close();
         } catch (e) { toast(trf('Не удалось оформить заявку: {msg}', { msg: e.message || e }), 'fail'); }
         finally { if (ev.currentTarget && ev.currentTarget.isConnected) ev.currentTarget.disabled = false; }
@@ -1335,7 +1339,7 @@ async function openHospitalizationRequestModal(ctx) {
             h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { class: 'modal-body' },
             fld('Тип', pathwaySel), fld('Диагноз направления', dxInput), fld('Повод / жалобы', ccInput),
-            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Заявка появится в стационаре для оформления.')),
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Заявка появится в разделе «Стационар» — медсестра положит пациента на койку.'))),
         h('footer', { class: 'modal-foot' }, h('button', { class: 'btn', onclick: close }, 'Отмена'), submit)));
     document.body.appendChild(overlay);
 }

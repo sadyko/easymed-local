@@ -26,6 +26,7 @@ import { openVisitWizard } from './visit-wizard.js?v=aug17e';
 import { printInvoiceCheck } from './receipt-print.js?v=rp1';   // REPRINT_SERVICE_CHECK_V1
 import { printableSheet as _printSheet } from './doc-settings.js?v=noqr1';   // VISIT_WIZARD_LOCAL_V1 — full-screen «Добавить услугу к визиту»
 import { openVisitBillModal } from './visit-bill.js';
+import { openAdmissionOrderModal } from './admission-modal.js?v=inp2';   // ADMISSION_ORDER_V1 — «Госпитализация» с карты пациента
 import { BRANCH_BUCKET, uploadFile, signedUrl, removeFile } from '../storage.js?v=aurora20b';   // PATIENT_DOCS_TAB_V1 — same URL as service-workspace (one instance)
 import { printableSheet } from './doc-settings.js?v=noqr1';   // PATIENT_DOCS_CLINICAL_V1 — заключения/результаты открываются брендированным бланком
 // PATIENT_EDIT_REG_V1 — редактирование карты в стиле формы регистрации: те же
@@ -312,6 +313,25 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 },
             }, Icon('ChevronLeft', { size: 13 }), 'Пациенты'),
             h('span', { style: { flex: 1 } }),
+            // ADMISSION_ORDER_V1 — вход в стационар ОТСЮДА: заявку оформляет
+            // регистратура, а регистратура работает в карте пациента. Кнопка
+            // вторична по виду (прозрачная, как «Пациенты» слева), потому что
+            // на карте чаще заводят услуги, чем кладут в стационар, — но она
+            // здесь, а не в подменю: искать её через три клика на приёмном
+            // покое некогда.
+            h('button', {
+                type: 'button',
+                onclick: () => openAdmissionOrderModal({
+                    patientId: patient?.id, patientName: patient?.full_name, patientMrn: patient?.mrn,
+                    onDone: reload,
+                }),
+                style: {
+                    display: 'inline-flex', alignItems: 'center', gap: '6px',
+                    padding: '9px 14px', borderRadius: '10px', cursor: 'pointer',
+                    border: '1px solid rgba(255,255,255,0.35)', background: 'rgba(255,255,255,0.14)',
+                    color: '#fff', fontFamily: 'inherit', fontSize: '13.5px', fontWeight: 700,
+                },
+            }, Icon('Bed', { size: 14 }), 'Госпитализация'),
             h('button', {
                 type: 'button',
                 onclick: () => openVisitWizard(reload, patientStub()),

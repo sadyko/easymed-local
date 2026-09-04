@@ -342,9 +342,13 @@ export const REGISTRY = {
              'chief_complaint','admission_diagnosis','admitted_at','discharged_at','status',
              'accommodation_discount_percent','charge_amount','invoice_id','created_by','created_at',
              'ordered_at','ordered_by','admitted_by','examined_at','examined_by','attending_doctor_id',
-             'admission_type','stay_mode','planned_discharge_at','cancel_reason'] },
+             'admission_type','stay_mode','planned_discharge_at','cancel_reason',
+             // ADMISSION_ORDER_V1 (миграция 092) — отделение словами и дата, на
+             // которую госпитализация запланирована: окно медсестры сортирует
+             // очередь размещения по ним.
+             'department','planned_at'] },
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },  // admissions are created/updated ONLY via inpatient RPCs (server-computed money)
-    filters: ['id','patient_id','bed_id','ward_id','status','doctor_id','attending_doctor_id','admission_type','stay_mode'],
+    filters: ['id','patient_id','bed_id','ward_id','status','doctor_id','attending_doctor_id','admission_type','stay_mode','department'],
     embed: {
       patients: { table:'patients', fk:'patient_id', columns:['id','mrn','full_name'] },
       beds:     { table:'beds',     fk:'bed_id',     columns:['id','code'] },

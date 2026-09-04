@@ -57,6 +57,7 @@ import { renderDocsArchive }  from './admin/views/docs-archive.js?v=q3one';   //
 import { renderReports }      from './admin/views/reports.js?v=vatincl1';
 import { renderReportsHub }   from './admin/views/reports-hub.js?v=ru6';   // REPORTS_HUB_RU_V1 — «Отчёты» card grid + full-screen report builder
 import { renderWardBeds }     from './admin/views/ward-beds.js?v=board3';   // INPATIENT_LOCAL_V1 — fresh local ward/bed board (legacy beds.js was cloud-coupled)
+import { renderAdmissions }   from './admin/views/admissions.js?v=inp2';   // ADMISSION_ORDER_V1 — «Стационар»: окно медсестры (заявки, размещение, очередь осмотра)
 import { renderDoctorRoom }   from './admin/views/doctor-room.js?v=docroom1';   // DOCTOR_ROOM_V1 — Кабинет врача (consultation queue)
 import { renderEmployees }    from './admin/views/employees.js?v=arch1';   // EMPLOYEE_EDITOR_V3 — per-service rate tables; v11 = RATE_LOAD_V2 (fixed rate survives reopen)
 import { renderMarketing }    from './admin/views/marketing.js?v=btnright1';
@@ -100,6 +101,12 @@ const NAV = [
     { id: 'queue',    label: 'Очередь', icon: 'Clock' },
     { id: 'labs',     label: 'Laboratory', icon: 'Flask' },   // LABS_UI_V1
     { id: 'procedures', label: 'Процедуры', icon: 'Pulse' },   // PROCEDURES_V1 — очередь процедур (медсестра)
+    // ADMISSION_ORDER_V1 — «Стационар» это РАБОТА (кого положить, кто лежит,
+    // кого не осмотрели), а «Койки и палаты» — коечный ФОНД. Разные вопросы и
+    // разные люди: первым живёт смена медсестры, вторым — администратор
+    // клиники. Один пункт меню на оба заставлял бы медсестру искать свою
+    // очередь внутри плана этажа. Права у них общие (ключ `beds`).
+    { id: 'admissions', label: 'Inpatient ward', icon: 'Bed' },
     { id: 'beds',     label: 'Ward & beds', icon: 'Bed' },   // INPATIENT_LOCAL_V1 — Стационар и палаты
     { id: 'patient-documents', label: 'Documents', icon: 'Doc' },   // PATIENT_DOCUMENTS_V1
     { section: 'Operations' },
@@ -154,6 +161,7 @@ const CRUMBS = {
     inventory:     ['Clinical', 'Procurement'],   // INVENTORY_UI_V1 — PROCUREMENT_WORKSPACE_V1
     'patient-documents': ['Clinical', 'Documents'],   // PATIENT_DOCUMENTS_V1
     procedures:    ['Clinical', 'Procedures'],
+    admissions:    ['Clinical', 'Inpatient ward'],   // ADMISSION_ORDER_V1
     beds:          ['Clinical', 'Ward & beds'],
     pacs:          ['Clinical', 'Imaging · PACS'],
     pharmacy:      ['Operations', 'Pharmacy'],
@@ -963,6 +971,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'queue':         return void await renderQueue(viewRoot, ctx);   // QUEUE_BOARD_V1
             case 'crm':           return void await renderCrm(viewRoot, ctx);   // CRM_V1
             case 'docs-archive':  return void await renderDocsArchive(viewRoot, ctx);   // CLINICAL_DOCS_ARCHIVE_V1
+            case 'admissions':    return void await renderAdmissions(viewRoot, ctx);   // ADMISSION_ORDER_V1
             case 'beds':          return void await renderWardBeds(viewRoot, ctx);   // INPATIENT_LOCAL_V1
             case 'doctor-room':   return void await renderDoctorRoom(viewRoot, ctx);   // DOCTOR_ROOM_V1
             case 'pacs':          return void await renderComingSoon(viewRoot, ctx, renderPacs);          // COMING_SOON_V1
@@ -1284,6 +1293,7 @@ function renderCrumbs() {
         'My services':           t('sidebar.nav.consultation', 'My services'),
         'Laboratory':            t('sidebar.nav.labs',         'Laboratory'),
         'Ward & beds':           t('sidebar.nav.beds',         'Ward & beds'),
+        'Inpatient ward':        t('sidebar.nav.admissions',   'Inpatient ward'),   // ADMISSION_ORDER_V1
         'Pharmacy':              t('sidebar.nav.pharmacy',     'Pharmacy'),
         'Cashier':               t('sidebar.nav.cashier',      'Cashier'),
         'Procurement':           t('sidebar.nav.procurement',  'Procurement'),
