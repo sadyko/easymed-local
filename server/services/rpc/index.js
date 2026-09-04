@@ -7,7 +7,8 @@ import { dashboardSummary } from './dashboard.js';
 import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel } from './procurement.js';
 import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
-import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit } from './inpatient.js';   // ADMISSION_ORDER_V1
+import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit,
+  admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue } from './inpatient.js';   // ADMISSION_ORDER_V1 / TWO_STEP_DISCHARGE_V1
 import { admissionFlowState, inpatientCapabilities } from './inpatient-flow.js';   // INPATIENT_FLOW_V1
 import { admissionReviewSave, admissionSetAttending, admissionReviewsList } from './inpatient-reviews.js';   // INPATIENT_REVIEW_V1
 import {
@@ -163,6 +164,27 @@ export const RPC = {
   admission_order_create:         (db, args, user) => admissionOrderCreate(db, args, user),
   admission_order_cancel:         (db, args, user) => admissionOrderCancel(db, args, user),
   admission_admit:                (db, args, user) => admissionAdmit(db, args, user),
+
+  // TWO_STEP_DISCHARGE_V1 (Задача 8) — ВЫПИСКА В ДВА ШАГА. Клиническая
+  // готовность и административная выписка — разные события разных людей:
+  // ЛЕЧАЩИЙ ВРАЧ подаёт заявку (исход, опубликованный эпикриз, рекомендации) и
+  // на этом его часть кончается — койку он не освобождает; СТАРШАЯ МЕДСЕСТРА
+  // оформляет (фактическое время, чек-лист, долг) — но исхода она не объявляет.
+  // Заявку можно ОТОЗВАТЬ: между двумя шагами проходят часы, и за эти часы
+  // состояние пациента меняется (референс этого не умеет — см. lifecycle.js).
+  // Долг ПРЕДУПРЕЖДАЕТ, а не запрещает: он требует подписи «Долг согласован»,
+  // после которой выписка проходит с долгом. Койка уходит в 'cleaning', а не в
+  // 'free' — её открывает отдельное set_bed_status.
+  //
+  // discharge_patient (строкой выше) остаётся: он выписывает тех, кого
+  // положили ДО обновления, — у них нет и не будет выписного эпикриза, без
+  // которого новый первый шаг заявку не примет.
+  //
+  // admission_discharge_queue — чтение (READ_ONLY_RPCS в control/gate.js).
+  admission_discharge_request:        (db, args, user) => admissionDischargeRequest(db, args, user),
+  admission_discharge_cancel_request: (db, args, user) => admissionDischargeCancelRequest(db, args, user),
+  admission_discharge_finalize:       (db, args, user) => admissionDischargeFinalize(db, args, user),
+  admission_discharge_queue:          (db, args, user) => admissionDischargeQueue(db, args, user),
 
   // INPATIENT_FLOW_V1 — где госпитализация на маршруте и что ЭТОТ человек
   // может с ней сделать. Чистое чтение (см. READ_ONLY_RPCS в control/gate.js):

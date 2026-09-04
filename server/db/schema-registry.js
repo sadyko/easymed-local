@@ -346,9 +346,23 @@ export const REGISTRY = {
              // ADMISSION_ORDER_V1 (миграция 092) — отделение словами и дата, на
              // которую госпитализация запланирована: окно медсестры сортирует
              // очередь размещения по ним.
-             'department','planned_at'] },
+             'department','planned_at',
+             // TWO_STEP_DISCHARGE_V1 (миграция 097) — обе половины выписки:
+             // заявка врача (исход, куда, рекомендации, кто и когда подал) и
+             // оформление старшей медсестры (кем, чек-лист, согласованный долг).
+             // ТОЛЬКО ЧТЕНИЕ, как и весь остальной маршрут: write остаётся
+             // пустым во всех трёх операциях, и «выписан» нельзя проставить
+             // себе самому одним PATCH'ем мимо машины маршрута.
+             'discharge_outcome','discharge_destination','discharge_recommendations',
+             'discharge_requested_by','discharge_requested_at','discharged_by',
+             'discharge_orders_closed','discharge_bill_settled','discharge_docs_given',
+             'discharge_note','discharge_debt_ack','discharge_debt_ack_by',
+             'discharge_debt_ack_at','discharge_debt_amount'] },
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },  // admissions are created/updated ONLY via inpatient RPCs (server-computed money)
-    filters: ['id','patient_id','bed_id','ward_id','status','doctor_id','attending_doctor_id','admission_type','stay_mode','department'],
+    filters: ['id','patient_id','bed_id','ward_id','status','doctor_id','attending_doctor_id','admission_type','stay_mode','department',
+      // «Покажи выписанных с таким исходом» — отчёт по исходам спрашивает
+      // именно это (TWO_STEP_DISCHARGE_V1).
+      'discharge_outcome'],
     embed: {
       patients: { table:'patients', fk:'patient_id', columns:['id','mrn','full_name'] },
       beds:     { table:'beds',     fk:'bed_id',     columns:['id','code'] },

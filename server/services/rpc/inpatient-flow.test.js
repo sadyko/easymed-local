@@ -111,13 +111,23 @@ test('через ступень не перепрыгнуть — и отказ 
   db.close();
 });
 
-test('назад по маршруту хода нет', () => {
+test('назад по маршруту хода нет — кроме отзыва заявки на выписку', () => {
   const db = seed();
-  for (const [from, to] of [['admitted', 'ordered'], ['active', 'admitted'], ['examined', 'admitted'], ['discharging', 'active']]) {
+  for (const [from, to] of [['admitted', 'ordered'], ['active', 'admitted'], ['examined', 'admitted']]) {
     const id = admission(db, from);
     assert.throws(() => admissionTransition(db, { admission_id: id, to }, actor('admin')),
       /нельзя вернуть на предыдущий шаг/, `${from} → ${to}`);
   }
+  // ЕДИНСТВЕННОЕ ИСКЛЮЧЕНИЕ (TWO_STEP_DISCHARGE_V1, Задача 8): поданную заявку
+  // на выписку ОТЗЫВАЮТ. Между «врач признал готовым» и «медсестра оформила»
+  // проходят часы, и за эти часы состояние меняется. Референс этого не умеет —
+  // и заставляет отделение выписать и завести госпитализацию заново, то есть
+  // соврать в истории болезни и в деньгах. Койка при отзыве не трогается:
+  // 'discharging' — состояние «в койке», пациент никуда не уходил.
+  const back = admission(db, 'discharging', { bed_id: 1 });
+  const res = admissionTransition(db, { admission_id: back, to: 'active' }, actor('doctor', 2));
+  assert.equal(res.admission.status, 'active');
+  assert.equal(res.admission.bed_id, 1, 'койка осталась за пациентом');
   db.close();
 });
 

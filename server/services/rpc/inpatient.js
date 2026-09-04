@@ -30,7 +30,14 @@ const DISCHARGE_ROLES = ['admin', 'registrar', 'nurse', 'cashier'];
 // or registrar can discharge (at full accommodation price) but may NOT waive or
 // reduce the bill — only an admin or cashier can (adversarial-review finding #1).
 const DISCOUNT_ROLES = ['admin', 'cashier'];
-const BED_STATUS_ROLES = ['admin', 'registrar', 'nurse'];
+// TWO_STEP_DISCHARGE_V1 — «койку убрали, она готова» отмечает тот, кто в
+// отделении работает. Старшая медсестра и главный врач добавлены сюда Задачей
+// 8: после выписки койка уходит в 'cleaning', и вернуть её в 'free' — это
+// второе, отдельное действие (правило референса: выписанная койка не свободна).
+// Без них старшая медсестра могла ОФОРМИТЬ выписку и не могла открыть
+// освободившуюся койку — то есть шаг, который она же и породила, оставался ей
+// недоступен.
+const BED_STATUS_ROLES = ['admin', 'registrar', 'nurse', 'senior_nurse', 'head_doctor'];
 const BED_STATUS_VALUES = ['free', 'cleaning', 'maintenance'];
 const PATHWAYS = ['therapy', 'surgical'];
 // Upper bound on the computed accommodation charge. Guards round2() from
@@ -296,9 +303,17 @@ export function dischargePatient(db, args, user) {
     // времени, и «выписывать» там нечего — её ОТМЕНЯЮТ
     // (admission_order_cancel). Закрытую госпитализацию не открывают заново.
     //
-    // Выписка остаётся ОДНОШАГОВОЙ: двухшаговую (заявка лечащего врача →
-    // оформление старшей медсестрой) строит Задача 8, она же уберёт этот путь
-    // целиком вместе со стрелками LEGACY_EDGES.
+    // ЭТО ТЕПЕРЬ СТАРЫЙ ПУТЬ, И ОН ОСТАВЛЕН РАБОТАТЬ (TWO_STEP_DISCHARGE_V1,
+    // Задача 8). Новый порядок — два шага: admission_discharge_request
+    // (лечащий врач: исход и эпикриз) → admission_discharge_finalize (старшая
+    // медсестра: время, чек-лист, койка). Он построен РЯДОМ, ниже в этом файле.
+    //
+    // Убрать прямую выписку в тот же день было нельзя: в койках лежат
+    // пациенты, положенные ДО обновления, и выписного эпикриза у них нет — а
+    // новый первый шаг без опубликованного эпикриза заявку не примет. Отделение
+    // упёрлось бы в отказ на живом человеке. Стрелки перечислены в LEGACY_EDGES
+    // (inpatient-flow.js), и тест держит инвариант: из КАЖДОГО состояния «в
+    // койке» наружу ведёт хотя бы один путь.
     if (!IN_BED_STATUSES.includes(admission.status)) {
       throw new RpcError(
         admission.status === 'ordered'
@@ -716,4 +731,474 @@ export function admissionAdmit(db, args, user) {
   });
 
   return run();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TWO_STEP_DISCHARGE_V1 — ВЫПИСКА В ДВА ШАГА
+// (Задача 8 плана docs/plans/2026-09-04-inpatient-workflow.md)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// ─── ПОЧЕМУ ДВА, А НЕ ОДНА КНОПКА ───────────────────────────────────────────
+//
+// Клиническая готовность и административная выписка — разные события разных
+// людей, и между ними проходят часы. ВРАЧ НЕ ОСВОБОЖДАЕТ КОЙКУ: пациент ещё
+// лежит, счёт не собран, документы не выданы, перевозка приедет к трём.
+// МЕДСЕСТРА НЕ ОБЪЯВЛЯЕТ ИСХОД: «выписан домой» / «переведён» / «летальный
+// исход» — врачебное заключение, и подписывает его тот, кто лечил.
+//
+// Шаг 1  admission_discharge_request    'active' → 'discharging'
+//        лечащий врач / главный врач / администратор. Исход, эпикриз (уже
+//        опубликованный), рекомендации, планируемая дата.
+// Шаг 1' admission_discharge_cancel_request   'discharging' → 'active'
+//        ОТЗЫВ заявки. Референс этого не умеет — см. domain/lifecycle.js.
+// Шаг 2  admission_discharge_finalize   'discharging' → 'discharged'
+//        старшая медсестра / главный врач / администратор. Фактическое время,
+//        чек-лист, долг, койка в 'cleaning'.
+//
+// ─── ЧЕГО ЗДЕСЬ НЕТ ─────────────────────────────────────────────────────────
+//
+// Своих правил маршрута и своей матрицы прав: и «дошёл ли пациент», и «вправе
+// ли этот человек» спрашиваются у inpatient-flow.js — там же, где их
+// спрашивают Задачи 2, 3 и 4.
+//
+// Запрета выписывать по-старому: discharge_patient (выше) остаётся рабочим для
+// тех, кого положили до обновления. См. комментарий там.
+
+// Исход госпитализации. Четыре значения — то, что спрашивает отчётность, и то,
+// что записано в CHECK миграции 097. Список живёт ЗДЕСЬ, а не в двух местах:
+// экран получает его вместе с очередью.
+export const DISCHARGE_OUTCOMES = ['home', 'transfer', 'refuse', 'death'];
+
+// Кто ЧИТАЕТ очередь выписок. Шире, чем кто её оформляет: врач должен видеть,
+// что с его заявкой, а медсестра поста — кого сегодня отпускают. Кассы и склада
+// здесь нет: это не документ на деньги, а список людей.
+const DISCHARGE_QUEUE_ROLES = ['nurse', 'senior_nurse', 'doctor', 'head_doctor', 'admin'];
+
+// Причина, с которой закрываются оставшиеся назначения при оформлении выписки.
+// Ровно то слово, что уходит в treatment_orders.cancel_reason.
+const CLOSE_ORDERS_REASON = 'Выписка';
+
+/**
+ * СКОЛЬКО ГОСПИТАЛИЗАЦИЯ ОСТАЛАСЬ ДОЛЖНА — и что в это число НЕ ВХОДИТ.
+ *
+ * Считается из двух половин, потому что деньги стационара живут в двух местах:
+ *   • строки, ещё не попавшие в счёт (`admission_services` без invoice_item_id)
+ *     — начислено, но не выставлено;
+ *   • счета госпитализации (`invoices.admission_id`) — выставлено, и часть из
+ *     этого уже оплачена.
+ *
+ * долг = (не выставлено) + (выставлено) − (оплачено)
+ *
+ * ЧТО ИСКЛЮЧЕНО, НАМЕРЕННО И ВСЛУХ (возвращается в `excludes`, экран это
+ * показывает — «показать, чего число не покрывает» честнее, чем выдумать
+ * ровное):
+ *   1. строки «в учёте расходов» (billable = 0) — это внутренний расход
+ *      клиники, пациенту он не выставляется никогда;
+ *   2. аннулированные и возвращённые счета ('void', 'refunded') — по ним денег
+ *      не ждут;
+ *   3. счета ВИЗИТОВ того же пациента: у них invoices.admission_id пуст, и
+ *      привязать их к койке нечем. Приём в поликлинике во время лежания — не
+ *      долг стационара;
+ *   4. то, что ЕЩЁ НЕ ВНЕСЕНО строкой: непробитое проживание
+ *      (bill_accommodation — «не внесли, значит не выставили», решение
+ *      ACCOMMODATION_AS_SERVICE_V1), несписанные препараты (stock_status
+ *      'skipped'/'short', миграция 096). Программа не знает о них цены и не
+ *      имеет права её придумать.
+ *
+ * Невыставленные строки оценены по СОХРАНЁННОМУ total. В счёте они могут
+ * подорожать: create_invoice_for_admission берёт цену из каталога и из ставки
+ * исполняющего врача (unitPriceFor). Число поэтому — «не меньше чем», и в
+ * ЭТУ сторону ошибаться правильно: пугать долгом, которого нет, хуже, чем
+ * назвать чуть меньший.
+ *
+ * @returns {{balance:number, unbilled:number, invoiced:number, paid:number}}
+ */
+export function admissionBalance(db, admissionId) {
+  const lines = db.prepare(`
+    SELECT COALESCE(SUM(total), 0) AS sum, COUNT(*) AS n
+      FROM admission_services
+     WHERE admission_id = ? AND billable = 1 AND invoice_item_id IS NULL`).get(admissionId);
+  const internal = db.prepare(`
+    SELECT COALESCE(SUM(total), 0) AS sum, COUNT(*) AS n
+      FROM admission_services
+     WHERE admission_id = ? AND billable = 0`).get(admissionId);
+  const inv = db.prepare(`
+    SELECT COALESCE(SUM(total_amount), 0) AS total, COALESCE(SUM(paid_amount), 0) AS paid, COUNT(*) AS n
+      FROM invoices
+     WHERE admission_id = ? AND status NOT IN ('void', 'refunded')`).get(admissionId);
+  const dropped = db.prepare(`
+    SELECT COUNT(*) AS n FROM invoices
+     WHERE admission_id = ? AND status IN ('void', 'refunded')`).get(admissionId);
+
+  const unbilled = round2(lines.sum);
+  const invoiced = round2(inv.total);
+  const paid = round2(inv.paid);
+  return {
+    balance: round2(unbilled + invoiced - paid),
+    unbilled,
+    unbilled_lines: lines.n,
+    invoiced,
+    paid,
+    invoice_count: inv.n,
+    // Экран называет исключения словами; сервер отдаёт только счётчики, чтобы
+    // строки перевода жили там же, где остальные строки экрана (i18n-strings).
+    excludes: {
+      internal_lines: internal.n,
+      internal_amount: round2(internal.sum),
+      void_invoices: dropped.n,
+    },
+  };
+}
+
+/** Сколько назначений ещё идёт: то, что чек-лист выписки называет «лист назначений». */
+function activeOrderCount(db, admissionId) {
+  const row = db.prepare("SELECT COUNT(*) AS n FROM treatment_orders WHERE admission_id = ? AND status = 'active'")
+    .get(admissionId);
+  return row ? row.n : 0;
+}
+
+/**
+ * ШАГ 1 — ЗАЯВКА НА ВЫПИСКУ. Лечащий врач говорит «готов».
+ *
+ * ПОРЯДОК ПРОВЕРОК — содержание, а не оформление:
+ *   1. заявка уже подана? — «Заявка подана» важнее всего прочего, это двойное
+ *      нажатие, а не ошибка;
+ *   2. РОЛЬ — кассиру и медсестре правильный ответ «это делает лечащий врач», а
+ *      не «эпикриз не опубликован»: второй отправляет писать документ туда, где
+ *      дело вообще не в документе;
+ *   3. СВОЙ ли пациент — матрица плана говорит «✔ (свой пациент)»: чужого
+ *      выписывает главный врач, а не любой врач клиники;
+ *   4. ЭПИКРИЗ — и только опубликованный. Черновик не документ (095): пустить
+ *      выписку по недописанному эпикризу значит выдать человеку на руки
+ *      половину записи и закрыть историю болезни на ней же.
+ */
+export function admissionDischargeRequest(db, args, user) {
+  const admissionId = args && args.admission_id;
+  if (!isPositiveInt(admissionId)) throw new RpcError('admission_id must be a positive integer.', 400);
+
+  const outcome = (args && args.outcome) || '';
+  if (!DISCHARGE_OUTCOMES.includes(outcome)) {
+    throw new RpcError('Укажите исход: выписан домой, переведён, отказ от лечения или летальный исход.', 400);
+  }
+  const destination = textArg(args && args.destination, 300);
+  if (outcome === 'transfer' && !destination) {
+    throw new RpcError('Укажите, в какое учреждение переведён пациент.', 400);
+  }
+  const recommendations = textArg(args && args.recommendations, 4000);
+  const plannedAt = textArg(args && args.planned_discharge_at, 40) || null;
+  const at = textArg(args && args.at, 40) || null;
+
+  const run = db.transaction(() => {
+    const adm = loadAdmission(db, admissionId);
+
+    // 1. Повтор.
+    if (adm.status === 'discharging') {
+      throw new RpcError('Заявка на выписку уже подана.', 400);
+    }
+
+    // 2. Роль (и заодно состояние: маршрут отвечает «нельзя пропустить шаг»,
+    //    называя недостающий, — см. explainRefusal в inpatient-flow.js).
+    assertMayTransition(adm.status, 'discharging', user);
+
+    // 3. Свой пациент. Главный врач и администратор — по всему отделению; тот
+    //    же круг, что у назначений (assertCanPrescribe).
+    if (!hasAnyRole(user, ['admin', 'head_doctor'])
+        && adm.attending_doctor_id !== (user && user.id)) {
+      throw new RpcError('Заявку на выписку подаёт лечащий врач этого пациента или главный врач.', 403);
+    }
+
+    // 4. Выписной эпикриз — опубликованный и действующий (не заменённый
+    //    исправлением, superseded_by IS NULL: заменённый эпикриз — это история,
+    //    а не текущий документ).
+    const epicrisis = db.prepare(`
+      SELECT id, published_at FROM admission_reviews
+       WHERE admission_id = ? AND kind = 'discharge'
+         AND published_at IS NOT NULL AND superseded_by IS NULL
+       ORDER BY id DESC LIMIT 1`).get(admissionId);
+    if (!epicrisis) {
+      const draft = db.prepare(`
+        SELECT id FROM admission_reviews
+         WHERE admission_id = ? AND kind = 'discharge' AND published_at IS NULL
+         ORDER BY id DESC LIMIT 1`).get(admissionId);
+      // Черновик и пустое место — РАЗНЫЕ беды человека у экрана: одному
+      // осталось нажать «Опубликовать», другому — написать документ.
+      throw new RpcError(draft
+        ? 'Выписной эпикриз сохранён черновиком — опубликуйте его, затем подайте заявку.'
+        : 'Выписной эпикриз не написан — заявку на выписку принять нельзя.', 400);
+    }
+
+    db.prepare(`
+      UPDATE admissions
+         SET discharge_outcome = ?, discharge_destination = ?, discharge_recommendations = ?,
+             planned_discharge_at = COALESCE(?, planned_discharge_at)
+       WHERE id = ?`).run(outcome, destination, recommendations, plannedAt, admissionId);
+
+    // Состояние и подпись шага — дело машины маршрута; она же проверила бы
+    // роль второй раз, и это не лишнее: у неё это единственный способ.
+    const res = admissionTransition(db, { admission_id: admissionId, to: 'discharging', at }, user);
+    const stamp = at || nowIso(db);
+    db.prepare('UPDATE admissions SET discharge_requested_by = ?, discharge_requested_at = ? WHERE id = ?')
+      .run((user && user.id) || null, stamp, admissionId);
+
+    return {
+      admission: db.prepare('SELECT * FROM admissions WHERE id = ?').get(admissionId),
+      epicrisis_id: epicrisis.id,
+      // Чтобы врач видел, что оставляет старшей медсестре.
+      active_orders: activeOrderCount(db, admissionId),
+      balance: admissionBalance(db, admissionId),
+      from: res.from,
+    };
+  });
+
+  return run();
+}
+
+/**
+ * ШАГ 1' — ОТЗЫВ ЗАЯВКИ. 'discharging' → 'active'.
+ *
+ * Референс этого не умеет, и это его дыра, а не строгость: за часы между
+ * «готов» и «оформлено» состояние пациента меняется. Без отзыва отделению
+ * остаётся оформить выписку и завести новую госпитализацию — то есть соврать в
+ * истории болезни и в деньгах.
+ *
+ * Отзывает тот, кто подавал (врач своего пациента / главный врач / админ), а не
+ * старшая медсестра. Причина обязательна и уходит в журнал движений
+ * (`admission_transfers`, kind 'discharge_cancel'): отзыв — единственный след
+ * того, что человека собирались отпустить и передумали. Койка в строке —
+ * только `to_*`: пациент никуда не переезжает, он остаётся там, где лежал.
+ *
+ * ЧТО СТИРАЕТСЯ, А ЧТО ОСТАЁТСЯ. Стирается ПОДПИСЬ заявки (исход, куда, кем,
+ * когда): исход у лежащего пациента — ложь на карточке, и следующая заявка
+ * обязана объявить его заново. Остаются РЕКОМЕНДАЦИИ: это набранный врачом
+ * клинический текст, и стирать его за то, что выписку отложили на день, — терять
+ * работу на ровном месте. Эпикриз (admission_reviews) не трогается вовсе: он
+ * документ и живёт своей жизнью, с исправлениями через superseded_by.
+ */
+export function admissionDischargeCancelRequest(db, args, user) {
+  const admissionId = args && args.admission_id;
+  if (!isPositiveInt(admissionId)) throw new RpcError('admission_id must be a positive integer.', 400);
+  const reason = textArg(args && args.reason, 300);
+  if (!reason) throw new RpcError('Укажите причину отзыва заявки на выписку.', 400);
+
+  const run = db.transaction(() => {
+    const adm = loadAdmission(db, admissionId);
+    if (adm.status !== 'discharging') {
+      throw new RpcError(adm.status === 'discharged'
+        ? 'Пациент уже выписан — отзывать нечего.'
+        : 'Заявка на выписку не подана — отзывать нечего.', 400);
+    }
+    assertMayTransition('discharging', 'active', user);
+    if (!hasAnyRole(user, ['admin', 'head_doctor'])
+        && adm.attending_doctor_id !== (user && user.id)) {
+      throw new RpcError('Отозвать заявку может лечащий врач этого пациента или главный врач.', 403);
+    }
+
+    const res = admissionTransition(db, { admission_id: admissionId, to: 'active' }, user);
+    db.prepare(`
+      UPDATE admissions
+         SET discharge_outcome = NULL, discharge_destination = '',
+             discharge_requested_by = NULL, discharge_requested_at = NULL
+       WHERE id = ?`).run(admissionId);
+    db.prepare(`
+      INSERT INTO admission_transfers (admission_id, to_bed_id, to_ward_id,
+                                       kind, reason, transferred_at, transferred_by)
+      VALUES (?, ?, ?, 'discharge_cancel', ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?)
+    `).run(admissionId, adm.bed_id, adm.ward_id, reason, (user && user.id) || null);
+
+    return { admission: db.prepare('SELECT * FROM admissions WHERE id = ?').get(admissionId), from: res.from };
+  });
+
+  return run();
+}
+
+/**
+ * ШАГ 2 — ОФОРМЛЕНИЕ ВЫПИСКИ. Старшая медсестра закрывает госпитализацию.
+ *
+ * ─── ДОЛГ ПРЕДУПРЕЖДАЕТ, А НЕ ЗАПРЕЩАЕТ ────────────────────────────────────
+ *
+ * Правило референса, названное в плане дважды. Долг НЕ отменяет выписку — он
+ * требует, чтобы под ним поставили подпись: «Долг согласован (гарантия /
+ * рассрочка)». Первый вызов без подписи возвращает отказ С СУММОЙ; тот же вызов
+ * с debt_ack = true проходит, и выписка оформляется С ДОЛГОМ. Это НЕ «сначала
+ * заплатите»: программа, которая держит человека до оплаты, не сохраняет деньги,
+ * а заставляет отделение выписывать мимо системы — после чего база перестаёт
+ * знать, кто где лежит.
+ *
+ * Сумма записывается в строку (`discharge_debt_amount`), потому что она
+ * ИЗМЕНИТСЯ: касса примет деньги, счёт сторнируют, и пересчитанный через неделю
+ * «долг при выписке» покажет не то, под чем расписывались.
+ *
+ * ─── КОЙКА НЕ СТАНОВИТСЯ СВОБОДНОЙ ─────────────────────────────────────────
+ *
+ * Она уходит в 'cleaning'. В 'free' её переводит ОТДЕЛЬНОЕ действие
+ * (set_bed_status, медсестра / старшая медсестра). Правило референса, и то же
+ * самое уже делают прямая выписка, отмена заявки и перевод.
+ *
+ * ─── ЛИСТ НАЗНАЧЕНИЙ ───────────────────────────────────────────────────────
+ *
+ * Незакрытые назначения выписку НЕ ЗАПРЕЩАЮТ (план: «выписка без закрытого
+ * листа назначений — предупреждение, не запрет»), но с close_orders = true
+ * закрываются здесь же, с причиной «Выписка».
+ *
+ * Закрываются ПРЯМОЙ ЗАПИСЬЮ в те же колонки, что пишет treatment_order_cancel,
+ * а не вызовом самого RPC, и это осознанно: тот стоит за assertCanPrescribe,
+ * то есть за правом НАЗНАЧАТЬ, которого у старшей медсестры нет и быть не
+ * должно. Закрытие листа при выписке — административная часть выписки, а не
+ * врачебная отмена лечения, и разрешает её право оформлять выписку. Строка
+ * получает ровно те же поля (status, cancel_reason, cancel_by, cancel_at), так
+ * что для всех, кто её читает, разницы нет.
+ */
+export function admissionDischargeFinalize(db, args, user) {
+  const a = args || {};
+  const admissionId = a.admission_id;
+  if (!isPositiveInt(admissionId)) throw new RpcError('admission_id must be a positive integer.', 400);
+
+  const at = textArg(a.at, 40) || null;
+  const note = textArg(a.note, 1000);
+  const closeOrders = a.close_orders === true || a.close_orders === 1;
+  const debtAck = a.debt_ack === true || a.debt_ack === 1;
+  const billSettled = a.bill_settled === true || a.bill_settled === 1;
+  const docsGiven = a.docs_given === true || a.docs_given === 1;
+
+  const run = db.transaction(() => {
+    const adm = loadAdmission(db, admissionId);
+
+    // 1. Состояние. Из 'active' сюда не попадают: сначала заявка врача — в этом
+    //    и есть смысл двух шагов. Старый одношаговый путь остаётся у
+    //    discharge_patient, для тех, кого положили до обновления.
+    if (adm.status !== 'discharging') {
+      throw new RpcError(
+        adm.status === 'discharged' ? 'Пациент уже выписан — госпитализация закрыта.'
+        : adm.status === 'cancelled' ? 'Заявка на госпитализацию отменена — выписывать некого.'
+        : adm.status === 'ordered'   ? 'Пациент ещё не размещён на койке — заявку отменяют, а не выписывают.'
+        : 'Заявка на выписку не подана — её подаёт лечащий врач.', 400);
+    }
+
+    // 2. Роль. Врача (кроме главного) здесь нет — он подал заявку и на этом его
+    //    часть кончилась.
+    assertMayTransition('discharging', 'discharged', user);
+
+    // 3. Деньги: предупреждают, но требуют подписи.
+    const balance = admissionBalance(db, admissionId);
+    const owes = balance.balance > 0.005;
+    if (owes && !debtAck) {
+      throw new RpcError(
+        'По госпитализации есть неоплаченный остаток — ' + balance.balance
+        + '. Выписке это не мешает: подтвердите «Долг согласован (гарантия / рассрочка)».', 400);
+    }
+
+    // 4. Лист назначений.
+    let closed = 0;
+    if (closeOrders) {
+      const stamp = nowIso(db);
+      closed = db.prepare(`
+        UPDATE treatment_orders
+           SET status = 'cancelled', cancel_reason = ?, cancel_by = ?, cancel_at = ?
+         WHERE admission_id = ? AND status = 'active'`)
+        .run(CLOSE_ORDERS_REASON, (user && user.id) || null, stamp, admissionId).changes;
+    }
+    const remaining = activeOrderCount(db, admissionId);
+
+    // 5. Состояние и фактическое время. Машина маршрута ставит discharged_at
+    //    через COALESCE (она не должна знать, что время могут указать руками);
+    //    настоящее время выписки проставляется следом, явно и поверх.
+    const res = admissionTransition(db, { admission_id: admissionId, to: 'discharged', at }, user);
+    const dischargedAt = at || res.admission.discharged_at || nowIso(db);
+
+    // charge_amount — то, что ДЕЙСТВИТЕЛЬНО внесено за проживание строкой
+    // (ACCOMMODATION_AS_SERVICE_V1, тот же запрос, что у прямой выписки): не
+    // внесли — не выставили, и карточка не должна утверждать обратное.
+    const billedRow = db.prepare(
+      "SELECT total FROM admission_services WHERE admission_id = ? AND notes LIKE 'ACCOMMODATION%' LIMIT 1"
+    ).get(admissionId);
+
+    db.prepare(`
+      UPDATE admissions
+         SET discharged_at = ?, discharged_by = ?, charge_amount = ?, discharge_note = ?,
+             discharge_orders_closed = ?, discharge_bill_settled = ?, discharge_docs_given = ?,
+             discharge_debt_amount = ?, discharge_debt_ack = ?,
+             discharge_debt_ack_by = ?, discharge_debt_ack_at = ?
+       WHERE id = ?`).run(
+      dischargedAt, (user && user.id) || null,
+      billedRow ? round2(billedRow.total) : 0, note,
+      remaining === 0 ? 1 : 0, billSettled ? 1 : 0, docsGiven ? 1 : 0,
+      balance.balance, owes && debtAck ? 1 : 0,
+      owes && debtAck ? ((user && user.id) || null) : null,
+      owes && debtAck ? dischargedAt : null,
+      admissionId);
+
+    // 6. Койка: 'cleaning', НЕ 'free'.
+    if (adm.bed_id) {
+      db.prepare("UPDATE beds SET status = 'cleaning' WHERE id = ?").run(adm.bed_id);
+    }
+    db.prepare(`
+      INSERT INTO admission_transfers (admission_id, from_bed_id, from_ward_id, kind, reason, transferred_at, transferred_by)
+      VALUES (?, ?, ?, 'discharge', ?, ?, ?)
+    `).run(admissionId, adm.bed_id, adm.ward_id, note || null, dischargedAt, (user && user.id) || null);
+
+    return {
+      admission: db.prepare('SELECT * FROM admissions WHERE id = ?').get(admissionId),
+      bed: adm.bed_id ? db.prepare('SELECT * FROM beds WHERE id = ?').get(adm.bed_id) : null,
+      orders_closed: closed,
+      orders_left: remaining,
+      balance,
+      debt_acknowledged: owes && debtAck,
+    };
+  });
+
+  return run();
+}
+
+/**
+ * ОЧЕРЕДЬ СТАРШЕЙ МЕДСЕСТРЫ — кого сегодня оформлять.
+ *
+ * Все госпитализации в 'discharging', в порядке подачи заявки: пациент, палата,
+ * койка, лечащий врач, исход, кто и когда подал — и ДОЛГ. Долг считает сервер
+ * (admissionBalance), а не браузер, по той же причине, по какой доска коек не
+ * считает занятость сама: вторая копия правила разошлась бы с первой молча, и
+ * разошлась бы в сторону «долга нет».
+ *
+ * Ничего не меняет — стоит в READ_ONLY_RPCS (control/gate.js): клиника с
+ * просроченной лицензией обязана видеть, кого она сегодня отпускает.
+ */
+export function admissionDischargeQueue(db, args, user) {
+  requireRole(user, DISCHARGE_QUEUE_ROLES);
+  const a = args || {};
+  const rawWard = a.ward_id;
+  const wardId = rawWard === undefined || rawWard === null || rawWard === '' ? null : Number(rawWard);
+  if (wardId !== null && !isPositiveInt(wardId)) throw new RpcError('ward_id must be a positive integer.', 400);
+
+  const params = [];
+  let where = "a.status = 'discharging'";
+  if (wardId !== null) { where += ' AND a.ward_id = ?'; params.push(wardId); }
+
+  const rows = db.prepare(`
+    SELECT a.id AS admission_id, a.admission_no, a.status,
+           a.discharge_outcome, a.discharge_destination, a.discharge_recommendations,
+           a.discharge_requested_at, a.discharge_requested_by,
+           a.planned_discharge_at, a.admitted_at, a.department,
+           p.id AS patient_id, p.full_name AS patient_name,
+           w.id AS ward_id, w.name AS ward_name,
+           b.id AS bed_id, b.code AS bed_code,
+           doc.full_name AS attending_name,
+           req.full_name AS requested_by_name
+      FROM admissions a
+      JOIN patients p ON p.id = a.patient_id
+      LEFT JOIN wards w ON w.id = a.ward_id
+      LEFT JOIN beds  b ON b.id = a.bed_id
+      LEFT JOIN users doc ON doc.id = a.attending_doctor_id
+      LEFT JOIN users req ON req.id = a.discharge_requested_by
+     WHERE ${where}
+     ORDER BY a.discharge_requested_at, a.id
+  `).all(...params);
+
+  return {
+    ward_id: wardId,
+    outcomes: DISCHARGE_OUTCOMES,
+    rows: rows.map((r) => ({
+      ...r,
+      balance: admissionBalance(db, r.admission_id),
+      active_orders: activeOrderCount(db, r.admission_id),
+    })),
+  };
 }
