@@ -302,7 +302,7 @@ export function saveRouting(db, rows) {
 
   const seen = new Set();
   for (const r of wanted) {
-    const id = r.provider + ' ' + r.disposition;
+    const id = r.provider + '\0' + r.disposition;
     if (seen.has(id)) throw new CrmConfigError(`Статус звонка «${r.disposition}» указан дважды.`);
     seen.add(id);
   }

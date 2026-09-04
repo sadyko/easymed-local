@@ -329,3 +329,29 @@ test('sync_origin читается и фильтруется на всех че�
     }
   }
 });
+
+// INPATIENT_REVIEW_DRAFT_V1 — черновик осмотра не читается через /api/db.
+//
+// Реестр раздаёт КОЛОНКИ, а не строки: фильтровать «только опубликованные» ему
+// нечем, а `published_at` стоит в filters. Пока `body`/`diagnosis` были в
+// read.columns, любая медсестра одним запросом
+// `.is('published_at', null)` доставала НЕОПУБЛИКОВАННЫЙ диагноз, который RPC
+// (admission_reviews_list) прячет до публикации и который врач ещё правит.
+test('admission_reviews: через /api/db отдаются метаданные, а текст записи — нет', () => {
+  const cols = readableColumns('admission_reviews');
+  for (const secret of ['body', 'diagnosis', 'complaints', 'objective', 'plan']) {
+    assert.ok(!cols.includes(secret),
+      'текст врачебной записи «' + secret + '» читается сырым запросом — вместе с черновиками');
+  }
+  // Метаданные остаются: по ним экраны отвечают «эпикриз есть / осмотр
+  // проведён», не читая самой записи.
+  for (const meta of ['id', 'admission_id', 'kind', 'author_id', 'published_at', 'superseded_by']) {
+    assert.ok(cols.includes(meta), 'потеряна колонка ' + meta);
+  }
+  // Круг читателей не расширен и запись остаётся закрытой: пишет только RPC.
+  assert.ok(canRead('admission_reviews', 'nurse'));
+  assert.ok(!canRead('admission_reviews', 'cashier'));
+  for (const op of ['insert', 'update', 'delete']) {
+    assert.ok(!canWrite('admission_reviews', op, 'admin'), op + ' открыт через /api/db');
+  }
+});

@@ -95,6 +95,7 @@ const {
     todayLocal, shiftDate, dueMsOf, marDueState, cellFor, markAt, voidedAt, isPlanned, VOIDED_GLYPH,
     gridHours, splitOrders, groupByKind, hhmm, orderSubtitle, cellGlyph,
     cellStateLabel, cellTitle, marSheetPrintHtml, renderMarSheet, canOpenMarSheet,
+    orderHours, gridHoursAny, voidedTrace, voidedTraceLine, cellStateColor, cellStateTone,
 } = sheet;
 
 // ─── данные «сервера» ───────────────────────────────────────────────────────
@@ -152,12 +153,20 @@ const HEPARIN = {
     prn_marks: [],
 };
 
+// MAR_CANCELLED_MARKS_V1 — назначение, отменённое ПОСЛЕ первой дозы. Так и
+// отменяют: «аллергическая реакция» — первая причина в списке, и наступает она
+// на введённый препарат. Сервер перестаёт разворачивать курс (`due` пуст), но
+// отметку отдаёт — и она обязана остаться на листе.
+const CANCELLED_GIVEN_AT = isoLocal(8, 20);
 const CANCELLED = {
     id: 4, admission_id: 13, kind: 'med', name: 'Анальгин', dose: '500 мг', route: 'внутрь',
     freq_code: '1x', prn: 0, status: 'cancelled', source: 'clinic',
-    starts_on: TODAY, days: 5, ends_on: null, slot_hours: [10],
+    starts_on: TODAY, days: 5, ends_on: null, slot_hours: [8],
     cancel_reason: 'аллергическая реакция', cancel_by: 9, cancel_at: TODAY + 'T06:00:00Z',
-    due: [], marks: [], voided_marks: [], prn_marks: [],
+    due: [],
+    marks: [{ id: 504, order_id: 4, due_date: TODAY, due_slot: 8, status: 'given',
+              given_at: CANCELLED_GIVEN_AT, given_by: 7, reason: '', voided_at: null }],
+    voided_marks: [], prn_marks: [],
 };
 
 const ADMISSION = {
@@ -306,6 +315,74 @@ test('след снятия виден и на экране, и на бумаг�
         });
         // Распечатанный лист — документ: «здесь было и снято» в нём не пропадает.
         assert.ok(html.includes(VOIDED_GLYPH), 'знака снятой отметки нет на бумаге');
+    } finally { orders = before; }
+});
+
+// ─── 2в. Отменённое назначение хранит свои дозы (MAR_CANCELLED_MARKS_V1) ────
+
+test('у отменённого назначения введённая доза остаётся клеткой — на экране и на бумаге', async () => {
+    // Часы отменённого назначения считаются по ОТМЕТКАМ: расписания у него уже
+    // нет (сервер перестал разворачивать курс), а введённые дозы есть.
+    assert.deepEqual(orderHours(CANCELLED, TODAY), [8],
+        'час введённой дозы обязан найтись у назначения без расписания');
+    assert.deepEqual(gridHoursAny([CANCELLED], TODAY), [8]);
+
+    const c = cellFor(CANCELLED, TODAY, 8, dueMsOf(TODAY, 23));
+    assert.equal(c.state, 'given', 'отметка сильнее расписания: доза введена, и клетка это говорит');
+    assert.equal(c.mark.id, 504);
+    assert.equal(cellFor(CANCELLED, TODAY, 9, dueMsOf(TODAY, 23)).state, 'none',
+        'час без отметки и без плана так и остаётся пустым');
+
+    const root = await renderScreen();
+    assert.ok(!textOf(root).includes('08:20'), 'до нажатия переключателя отменённых не видно');
+    findBtn(root, 'Показать отменённые').click();
+    await settle();
+    const txt = textOf(root);
+    assert.ok(txt.includes('Анальгин') && txt.includes('аллергическая реакция'));
+    // ВОТ РАДИ ЧЕГО ЭТОТ ТЕСТ: окно отмены обещает врачу, что назначение
+    // останется «вместе с уже поставленными отметками».
+    assert.ok(txt.includes('08:20'), 'введённая доза исчезла с листа вместе с отменой назначения: ' + txt.slice(0, 400));
+    assert.ok(txt.includes('Введено до отмены'), 'клетки отменённого назначения не подписаны');
+
+    const html = marSheetPrintHtml({
+        date: TODAY, orders, people: new Map(USERS.map((u) => [u.id, u.full_name])),
+        now_ms: dueMsOf(TODAY, 23), patient_name: 'Сидоров Сидор',
+    });
+    assert.ok(html.includes('08:20'),
+        'на бумаге доза отменённого назначения тоже обязана быть: лист — история болезни');
+    assert.ok(html.includes('Анальгин') && html.includes('аллергическая реакция'));
+});
+
+// ─── 2г. Снятая отметка называет кто/когда/почему (MAR_UNDO_TRACE_V1) ───────
+
+test('снятая отметка называет кто, когда и почему — на экране и в печати, а не только в подсказке', async () => {
+    const people = new Map(USERS.map((u) => [u.id, u.full_name]));
+    const trace = voidedTrace([CEF, HEPARIN], TODAY);
+    assert.deepEqual(trace.map((t) => t.slot), [22, 10], 'след — по каждому снятию, в порядке снятия');
+    const line = voidedTraceLine(trace[0], people);
+    assert.ok(line.includes('22:00') && line.includes('09:05') && line.includes('Юсупов Азиз')
+        && line.includes('не тот пациент'), line);
+
+    const before = orders;
+    orders = [CEF, HEPARIN];
+    try {
+        const root = await renderScreen();
+        const card = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Снятые отметки'));
+        assert.ok(card, 'списка снятых отметок на листе нет — след жил бы только в подсказке мыши');
+        const txt = textOf(card);
+        assert.ok(txt.includes('Гепарин'), txt);
+        assert.ok(txt.includes('09:05'), 'когда сняли: ' + txt);
+        assert.ok(txt.includes('Юсупов Азиз'), 'кто снял: ' + txt);
+        assert.ok(txt.includes('не тот пациент'), 'почему сняли: ' + txt);
+
+        // И в самой клетке — не голый знак, а время и инициалы снявшего.
+        const grid = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Назначения по часам'));
+        assert.ok(textOf(grid).includes('ЮА'), 'в клетке нет инициалов того, кто снял: ' + textOf(grid));
+
+        const html = marSheetPrintHtml({ date: TODAY, orders, people, now_ms: dueMsOf(TODAY, 23) });
+        assert.ok(html.includes('Снятые отметки'), 'на бумаге следа снятия нет вовсе');
+        assert.ok(html.includes('не тот пациент'), 'причина снятия не напечатана');
+        assert.ok(html.includes('Юсупов Азиз'), 'кто снял — не напечатано');
     } finally { orders = before; }
 });
 
@@ -539,6 +616,23 @@ test('отмена назначения без причины не уходит 
 });
 
 // ─── 7. Права ───────────────────────────────────────────────────────────────
+
+test('знак, цвет и тон состояния — один словарь на лист врача и на экран медсестры', () => {
+    // MAR_OUTCOME_VISIBLE_V1 — экран медсестры красит «Сделано» ЭТИМИ функциями.
+    // Разъедутся они — и «отказ пациента» на двух экранах одной смены станет
+    // выглядеть по-разному.
+    for (const [a, b] of [['given', 'refused'], ['given', 'held'], ['given', 'missed'],
+        ['refused', 'held'], ['refused', 'missed'], ['held', 'missed']]) {
+        assert.notEqual(cellGlyph(a), cellGlyph(b), 'знаки ' + a + ' и ' + b + ' совпали');
+    }
+    assert.notEqual(cellStateColor('given').fg, cellStateColor('refused').fg,
+        'введённая доза и отказ не могут быть одного цвета');
+    assert.equal(cellStateTone('given'), 'ok');
+    assert.equal(cellStateTone('refused'), 'crit');
+    assert.equal(cellStateTone('held'), 'warn');
+    assert.equal(cellStateTone('missed'), 'crit');
+    assert.equal(cellStateTone('nonsense'), '');
+});
 
 test('лист назначений открывают отделение и лечащий врач, но не касса', () => {
     const nurse = { name: 'Медсестра', permissions: { sections: ['patients', 'labs', 'procedures', 'beds'], levels: { beds: 'editor' } } };

@@ -11,6 +11,9 @@
 //     отделению и не кормит выписанного.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import {
@@ -413,4 +416,37 @@ test('порционник читают отделение и админ, но �
       (e) => e instanceof RpcError && e.status === 403, who);
   }
   db.close();
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// SOURCE_NO_CONTROL_CHARS_V1 — исходник не должен быть «бинарным».
+//
+// В этом файле жил НАСТОЯЩИЙ байт NUL: разделитель ключа группировки написали
+// не escape-последовательностью `\0`, а самим символом. Программа от этого
+// работала, а вот POSIX-grep объявлял файл двоичным («Binary file … matches»)
+// и НЕ ПЕЧАТАЛ НИ ОДНОЙ СТРОКИ. То есть любой поиск по репозиторию — свой,
+// ревью, CI-грепы — молча пропускал весь модуль лечебных столов. Та же беда
+// была в server/services/crm/config.js.
+//
+// Проверяются БАЙТЫ, а не текст: в тексте такой символ невидим, и именно
+// поэтому он и прожил тут так долго.
+// ───────────────────────────────────────────────────────────────────────────
+test('в исходниках нет управляющих символов — иначе grep объявляет файл двоичным', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const files = [
+    path.join(here, 'diet.js'),
+    path.join(here, '..', 'crm', 'config.js'),
+  ];
+  for (const file of files) {
+    const bytes = readFileSync(file);
+    const bad = [];
+    for (let i = 0; i < bytes.length; i++) {
+      const b = bytes[i];
+      // Позволены только табуляция, перевод строки и возврат каретки.
+      if (b < 0x20 && b !== 0x09 && b !== 0x0a && b !== 0x0d) bad.push(i + ':0x' + b.toString(16));
+      if (b === 0x7f) bad.push(i + ':0x7f');
+    }
+    assert.deepEqual(bad, [], file + ' содержит управляющие символы: ' + bad.join(', ')
+      + ' — пишите их escape-последовательностью, иначе grep перестаёт видеть файл');
+  }
 });

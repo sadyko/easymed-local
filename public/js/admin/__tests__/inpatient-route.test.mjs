@@ -569,6 +569,50 @@ test('«Выписки к оформлению» — пункт меню, мар
     perms.setFullAccess('Admin');
 });
 
+test('регистратуре четыре экрана отделения в меню не показываются — сервер ей всё равно откажет', () => {
+    // INPATIENT_ROLE_GATE_V1. Миграция 092 выдала `beds` регистратуре — ради
+    // заявок на госпитализацию, которые она оформляет и отменяет. Побочный
+    // эффект: четыре пункта меню, за каждым из которых её ждёт отказ сервера
+    // (READ_ROLES листа, MARK_ROLES отметки, порционник, очередь выписок).
+    // Пункт, который всегда кончается словами «не разрешено», читается как
+    // сломанная программа.
+    const SCREENS = ['mar-sheet', 'mar-nurse', 'kitchen-sheet', 'discharge'];
+    const beds = { sections: ['patients', 'crm', 'registration', 'beds'], levels: { beds: 'editor' } };
+
+    perms.setEffectiveFromRole({ name: 'registrar', permissions: beds });
+    for (const view of SCREENS) {
+        assert.equal(perms.isModuleAllowed(view), false, 'регистратура видит «' + view + '»');
+        assert.equal(perms.isRouteAllowed(view), false, 'регистратуре открывается маршрут «' + view + '»');
+    }
+    // А ЗАЯВКИ ОСТАЮТСЯ: окно «Стационар» и коечный фонд — её работа, и ключ
+    // `beds` у неё не отбирают.
+    assert.equal(perms.isModuleAllowed('admissions'), true, 'у регистратуры отняли окно заявок');
+    assert.equal(perms.isModuleAllowed('beds'), true);
+
+    // Старшая медсестра (надстройка в extra_roles) видит все четыре.
+    perms.setEffectiveFromRoles([
+        { name: 'nurse', permissions: beds },
+        { name: 'senior_nurse', permissions: beds },
+    ]);
+    for (const view of SCREENS) assert.equal(perms.isModuleAllowed(view), true, 'старшая не видит «' + view + '»');
+
+    // Обычная медсестра лечит, но не оформляет выписку.
+    perms.setEffectiveFromRole({ name: 'nurse', permissions: beds });
+    assert.equal(perms.isModuleAllowed('mar-nurse'), true, 'экран построен для медсестры');
+    assert.equal(perms.isModuleAllowed('mar-sheet'), true);
+    assert.equal(perms.isModuleAllowed('kitchen-sheet'), true);
+    assert.equal(perms.isModuleAllowed('discharge'), false, 'оформляет выписку старшая, а не медсестра поста');
+
+    // Лечащий врач: лист назначений открывается кабинетом врача, задачи
+    // медсестры — нет (отметку дозы сервер от него не примет).
+    perms.setEffectiveFromRole({ name: 'doctor', permissions: { sections: ['patients', 'consultation'], levels: {} } });
+    assert.equal(perms.isModuleAllowed('mar-sheet'), true, 'назначает именно лечащий врач');
+    assert.equal(perms.isModuleAllowed('mar-nurse'), false);
+
+    perms.setFullAccess('Admin');
+    for (const view of SCREENS) assert.equal(perms.isModuleAllowed(view), true, 'админ не видит «' + view + '»');
+});
+
 test('отказы сервера, на которые опирается экран, — дословно те же строки', () => {
     const server = read('server/services/rpc/inpatient.js');
     for (const msg of modals.EPICRISIS_REFUSALS) {

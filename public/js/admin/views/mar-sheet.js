@@ -167,15 +167,23 @@ export function voidedAt(order, date, slot) {
  *   pending / delayed / overdue — плановая точка без отметки.
  */
 export function cellFor(order, date, slot, nowMs) {
-    if (!isPlanned(order, date, slot)) return { state: 'none', mark: null, voided: null, due_ms: null };
-    const dueMs = dueMsOf(date, slot);
     const mark = markAt(order, date, slot);
     // Снятая отметка НЕ меняет состояния клетки: час снова ждёт дозу (или уже
     // закрыт верной отметкой), и это правда. Она едет рядом, отдельным полем, —
     // след поверх состояния, а не вместо него.
     const voided = voidedAt(order, date, slot);
+    const planned = isPlanned(order, date, slot);
+    // ОТМЕТКА СИЛЬНЕЕ РАСПИСАНИЯ. Час, которого нет в расписании, но в котором
+    // СТОИТ отметка, — это не пустое место: так выглядит ОТМЕНЁННОЕ назначение
+    // (сервер перестаёт разворачивать ему плановые точки, а введённые дозы у
+    // него остаются) и так же выглядела бы доза, введённая после правки курса.
+    // Вернуть здесь 'none' значило бы стереть с листа факт введения.
+    if (!planned && !mark && !voided) return { state: 'none', mark: null, voided: null, due_ms: null };
+    const dueMs = dueMsOf(date, slot);
     if (mark) return { state: mark.status, mark, voided, due_ms: dueMs };
-    return { state: marDueState(dueMs, nowMs), mark: null, voided, due_ms: dueMs };
+    // Час без действующей отметки: плановая точка ждёт дозу, а час вне
+    // расписания остаётся пустым — но след снятия при нём виден.
+    return { state: planned ? marDueState(dueMs, nowMs) : 'none', mark: null, voided, due_ms: dueMs };
 }
 
 /** Введённая доза и записанный пропуск рисуются РАЗНО — и это проверяется. */
@@ -210,11 +218,99 @@ const STATE_COLOR = {
     none:    { fg: 'var(--ink-200, #dfe2e7)', bg: 'transparent' },
 };
 
+/**
+ * Цвет и тон состояния — ОДИН словарь на всю программу.
+ *
+ * Экран медсестры («Сделано») красит закрытые точки этими же цветами и тем же
+ * знаком: до MAR_OUTCOME_VISIBLE_V1 введённая доза и отказ пациента выглядели
+ * там одинаково — серой строкой в 12.5 px, — и отличить их можно было только
+ * прочитав слово. Вторая палитра рядом с этой означала бы, что «отказ» на двух
+ * экранах одной смены выглядит по-разному.
+ */
+export function cellStateColor(state) { return STATE_COLOR[state] || STATE_COLOR.none; }
+
+// Тон плашки (Tag kind) для того же состояния — тот же словарь, что у отметок
+// питания (kitchen-sheet.js mealStatusTone): введено зелёное, отказ и пропуск
+// красные, «придержано» жёлтое.
+const STATE_TONE = {
+    given: 'ok', refused: 'crit', missed: 'crit', held: 'warn',
+    overdue: 'crit', delayed: 'warn', pending: '', none: '',
+};
+export function cellStateTone(state) { return STATE_TONE[state] || ''; }
+
 /** Часы, которые вообще есть на этом листе за эту дату. */
 export function gridHours(orders, date) {
     const set = new Set();
     for (const o of orders || []) for (const d of duesOn(o, date)) set.add(Number(d.slot));
     return [...set].sort((a, b) => a - b);
+}
+
+/**
+ * Часы ОДНОГО назначения за дату: плановые точки И часы, в которых стоит
+ * отметка (действующая или снятая).
+ *
+ * Нужно это отменённым назначениям. Сервер перестаёт разворачивать им курс, но
+ * отметки при них отдаёт (`marks: 1` у отменённого — обычное дело: дозы вводили
+ * до отмены). Считать их часы по одному расписанию значило бы напечатать
+ * зачёркнутую строку БЕЗ единой клетки — то есть ровно то, чего окно отмены
+ * обещает не делать: «оно останется на листе зачёркнутым, вместе с уже
+ * поставленными отметками».
+ */
+export function orderHours(order, date) {
+    const set = new Set();
+    for (const d of duesOn(order, date)) set.add(Number(d.slot));
+    for (const m of ((order && order.marks) || [])) {
+        if (m.due_date === date && m.due_slot !== null && m.due_slot !== undefined) set.add(Number(m.due_slot));
+    }
+    for (const m of ((order && order.voided_marks) || [])) {
+        if (m.due_date === date && m.due_slot !== null && m.due_slot !== undefined) set.add(Number(m.due_slot));
+    }
+    return [...set].sort((a, b) => a - b);
+}
+
+/** Те же часы, но по группе назначений — одна сетка на всю группу. */
+export function gridHoursAny(orders, date) {
+    const set = new Set();
+    for (const o of orders || []) for (const sl of orderHours(o, date)) set.add(sl);
+    return [...set].sort((a, b) => a - b);
+}
+
+/**
+ * СНЯТЫЕ ОТМЕТКИ ЗА ДАТУ — списком, а не подсказкой.
+ *
+ * Знак «↺» в клетке говорит, что отметка БЫЛА и её сняли. Кто снял, когда и
+ * почему до сих пор жило только в `title` клетки: на планшете у койки такой
+ * подсказки не существует вовсе, а на распечатанном листе её нет и подавно —
+ * то есть обещание окна снятия («в истории останется, кто её снял, когда и
+ * почему») выполнялось только для мыши. Здесь тот же след становится строкой
+ * документа.
+ */
+export function voidedTrace(orders, date) {
+    const out = [];
+    for (const o of orders || []) {
+        for (const m of (o.voided_marks || [])) {
+            if (!m.voided_at || m.due_date !== date) continue;
+            out.push({
+                order_id: o.id, name: o.name || '', subtitle: orderSubtitle(o),
+                slot: m.due_slot, status: m.status,
+                given_at: m.given_at, given_by: m.given_by,
+                voided_at: m.voided_at, voided_by: m.voided_by, void_reason: m.void_reason || '',
+            });
+        }
+    }
+    return out.sort((a, b) => String(a.voided_at).localeCompare(String(b.voided_at)));
+}
+
+/** Одна строка следа словами: час, что стояло, когда сняли, кто и почему. */
+export function voidedTraceLine(item, people) {
+    const t = item || {};
+    return [
+        t.slot === null || t.slot === undefined ? tr('по требованию') : String(t.slot).padStart(2, '0') + ':00',
+        tr(cellStateLabel(t.status)),
+        t.voided_at ? trf('снята в {time}', { time: hhmm(t.voided_at) }) : null,
+        personName(people, t.voided_by) || null,
+        t.void_reason || null,
+    ].filter(Boolean).join(' · ');
 }
 
 /** Действующие / «по требованию» / отменённые — три разных места на листе. */
@@ -313,7 +409,10 @@ export function marSheetPrintHtml(sheet) {
         const who = c.mark ? initials(personName(people, c.mark.given_by) || '') : '';
         // Снятая отметка видна и на бумаге: распечатанный лист — документ, и
         // «здесь было и снято» в нём не должно исчезать.
-        const undone = c.voided ? '<br>' + esc(VOIDED_GLYPH) : '';
+        const undone = c.voided
+            ? '<br>' + esc([VOIDED_GLYPH, hhmm(c.voided.voided_at),
+                initials(personName(people, c.voided.voided_by) || '')].filter(Boolean).join(' '))
+            : '';
         return `<td class="p-c"><b>${esc(cellGlyph(c.state))}</b>${time ? '<br>' + esc(time) : ''}${who ? '<br>' + esc(who) : ''}${undone}</td>`;
     };
 
@@ -337,11 +436,35 @@ export function marSheetPrintHtml(sheet) {
       <td>${esc((o.prn_marks || []).map((m) => [hhmm(m.given_at), tr(cellStateLabel(m.status)), personName(people, m.given_by)].filter(Boolean).join(' ')).join('; '))}</td>
     </tr>`).join('')}</tbody></table>` : '';
 
+    // ОТМЕНЁННОЕ НАЗНАЧЕНИЕ ПЕЧАТАЕТСЯ СО СВОИМИ КЛЕТКАМИ. До этого дня здесь
+    // стояли имя, прочерк и причина отмены — и введённые по нему дозы исчезали
+    // с бумаги в ту секунду, когда врач нажимал «Отменить». Отменяют же чаще
+    // всего ПОСЛЕ первой дозы (аллергическая реакция — первая строка в списке
+    // причин), то есть лист терял ровно ту запись, ради которой его и хранят.
+    const cHours = gridHoursAny(cancelled, date);
     const cancelledBlock = cancelled.length ? `
     <h2 class="p-h2">${esc(trf('Отменённые назначения: {n}', { n: cancelled.length }))}</h2>
-    <table class="p-tbl"><tbody>${cancelled.map((o) => `<tr>
+    <table class="p-tbl">
+      <thead><tr><th class="p-name">${esc(tr('Назначение'))}</th>${
+        cHours.map((sl) => `<th>${esc(String(sl).padStart(2, '0'))}</th>`).join('')
+      }<th>${esc(tr('Отмена'))}</th></tr></thead>
+      <tbody>${cancelled.map((o) => `<tr>
       <td class="p-name"><s>${esc(o.name || '')}</s><br><span class="p-sub">${esc(orderSubtitle(o))}</span></td>
-      <td>${esc([o.cancel_reason || '', personName(people, o.cancel_by), o.cancel_at ? o.cancel_at.slice(0, 16).replace('T', ' ') : ''].filter(Boolean).join(' · '))}</td>
+      ${cHours.map((sl) => cellCell(o, sl)).join('')}
+      <td>${esc([o.cancel_reason || '', personName(people, o.cancel_by), o.cancel_at ? o.cancel_at.slice(0, 16).replace('T', ' ') : ''].filter(Boolean).join(' · '))}${
+        (o.prn_marks || []).length ? '<br>' + esc((o.prn_marks || []).map((m) => [hhmm(m.given_at), tr(cellStateLabel(m.status)), personName(people, m.given_by)].filter(Boolean).join(' ')).join('; ')) : ''
+      }</td>
+    </tr>`).join('')}</tbody></table>` : '';
+
+    // СНЯТЫЕ ОТМЕТКИ — отдельным списком под сеткой. Знак «↺» в клетке отвечает
+    // «здесь было и снято»; кто, когда и почему до сих пор жило только в
+    // подсказке мыши, которой на бумаге не существует.
+    const undoneAll = voidedTrace(orders, date);
+    const undoneBlock = undoneAll.length ? `
+    <h2 class="p-h2">${esc(trf('Снятые отметки: {n}', { n: undoneAll.length }))}</h2>
+    <table class="p-tbl"><tbody>${undoneAll.map((u) => `<tr>
+      <td class="p-name">${esc(u.name)}</td>
+      <td>${esc(VOIDED_GLYPH)} ${esc(voidedTraceLine(u, people))}</td>
     </tr>`).join('')}</tbody></table>` : '';
 
     return `<!doctype html><html><head><meta charset="utf-8">
@@ -370,6 +493,7 @@ thead { display: table-header-group; }
 ${grid}
 ${prnBlock}
 ${cancelledBlock}
+${undoneBlock}
 <p class="p-sign">${esc(trf('Лист назначений на {date}', { date }))} · ${esc(tr('Лечащий врач'))} ______________ · ${esc(tr('Ст. медсестра'))} ______________</p>
 <script>window.onload = function () { (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(function () { try { window.focus(); window.print(); } catch (e) {} }); };</scr` + `ipt>
 </body></html>`;
@@ -668,8 +792,9 @@ export async function renderMarSheet(root, ctx = {}) {
 
         body.appendChild(gridCard(scheduled, hours, nowMs));
         body.appendChild(stockIssuesCard());
+        body.appendChild(undoneCard(orders));
         if (prn.length) body.appendChild(prnCard(prn));
-        body.appendChild(cancelledCard(cancelled));
+        body.appendChild(cancelledCard(cancelled, nowMs));
         // Подпись листа — та же строка, что печатается внизу бумаги: экран и
         // распечатка обязаны называть один документ одинаково.
         body.appendChild(h('div', {
@@ -729,24 +854,37 @@ export async function renderMarSheet(root, ctx = {}) {
                         class: 'btn btn-sm', type: 'button', title: tr('Отменить назначение'),
                         onclick: () => openOrderCancel({ order: o, onDone: load }),
                     }, tr('Отменить')))));
-        for (const sl of hours) {
-            const c = cellFor(o, state.date, sl, nowMs);
-            const col = STATE_COLOR[c.state] || STATE_COLOR.none;
-            const time = c.mark && c.mark.given_at ? hhmm(c.mark.given_at) : '';
-            const who = c.mark ? initials(personName(state.people, c.mark.given_by) || '') : '';
-            row.appendChild(h('td', {
-                title: cellTitle(c, state.people),
-                style: {
-                    textAlign: 'center', background: col.bg, color: col.fg,
-                    fontSize: '12.5px', lineHeight: 1.25, whiteSpace: 'nowrap',
-                },
-            },
-                h('div', { style: { fontSize: '15px', fontWeight: 700 } }, cellGlyph(c.state)),
-                time ? h('div', null, time) : null,
-                who ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, who) : null,
-                c.voided ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, VOIDED_GLYPH) : null));
-        }
+        for (const sl of hours) row.appendChild(cellEl(o, sl, nowMs));
         return row;
+    }
+
+    /**
+     * Одна клетка «назначение × час» — ОДНА функция на сетку и на отменённые.
+     * Вторая её копия для отменённых назначений разошлась бы с первой ровно в
+     * том, ради чего эту клетку и рисуют.
+     */
+    function cellEl(o, sl, nowMs) {
+        const c = cellFor(o, state.date, sl, nowMs);
+        const col = cellStateColor(c.state);
+        const time = c.mark && c.mark.given_at ? hhmm(c.mark.given_at) : '';
+        const who = c.mark ? initials(personName(state.people, c.mark.given_by) || '') : '';
+        // След снятия называет ВРЕМЯ и ЧЕЛОВЕКА прямо в клетке: подсказки мыши
+        // на планшете у койки нет, а на бумаге нет и подавно.
+        const undone = c.voided
+            ? [VOIDED_GLYPH, hhmm(c.voided.voided_at), initials(personName(state.people, c.voided.voided_by) || '')]
+                .filter(Boolean).join(' ')
+            : '';
+        return h('td', {
+            title: cellTitle(c, state.people),
+            style: {
+                textAlign: 'center', background: col.bg, color: col.fg,
+                fontSize: '12.5px', lineHeight: 1.25, whiteSpace: 'nowrap',
+            },
+        },
+            h('div', { style: { fontSize: '15px', fontWeight: 700 } }, cellGlyph(c.state)),
+            time ? h('div', null, time) : null,
+            who ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, who) : null,
+            undone ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, undone) : null);
     }
 
     // MED_ADMIN_CHARGE_V1 (Задача 6) — НЕСПИСАННОЕ. Отметка «дала», за которой не
@@ -771,6 +909,41 @@ export async function renderMarSheet(root, ctx = {}) {
             ...(issues.items || []).slice(0, 8).map((it) => h('div', { style: { fontSize: '12.5px', marginTop: '3px' } },
                 [it.name || '', it.due_date || '', it.due_slot === null || it.due_slot === undefined ? '' : String(it.due_slot).padStart(2, '0') + ':00',
                     it.stock_note || ''].filter(Boolean).join(' · ')))));
+        return box;
+    }
+
+    /**
+     * СНЯТЫЕ ОТМЕТКИ ЗА ДЕНЬ — списком под сеткой, а не подсказкой мыши.
+     *
+     * Окно снятия обещает медсестре: «в истории останется, кто её снял, когда и
+     * почему». Знак «↺» в клетке выговаривает только первое слово этого
+     * обещания; остальное жило в `title` клетки — то есть не существовало ни на
+     * планшете у койки, ни на распечатанном листе.
+     */
+    function undoneCard(orders) {
+        const box = h('div');
+        const items = voidedTrace(orders, state.date);
+        if (!items.length) return box;
+        const card = h('div', { class: 'card', style: { marginTop: '14px' } },
+            h('div', { class: 'card-header' },
+                h('h3', null, Icon('Refresh', { size: 16 }), ' ', tr('Снятые отметки')),
+                h('span', { style: { flex: 1 } }),
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } },
+                    trf('отметок: {n}', { n: items.length }))));
+        card.appendChild(h('div', { class: 'muted', style: { padding: '0 16px 8px', fontSize: '12.5px' } },
+            tr('Отметка снята, но не стёрта: час снова ждёт дозу, а запись о снятии остаётся.')));
+        for (const u of items) {
+            card.appendChild(h('div', {
+                style: {
+                    padding: '10px 16px', borderTop: '1px solid var(--ink-100)',
+                    display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline',
+                },
+            },
+                h('div', { style: { fontSize: '15px', fontWeight: 700, color: 'var(--ink-500, #767b85)' } }, VOIDED_GLYPH),
+                h('div', { style: { fontSize: '13.5px', fontWeight: 700 } }, u.name),
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } }, voidedTraceLine(u, state.people))));
+        }
+        box.appendChild(card);
         return box;
     }
 
@@ -803,7 +976,18 @@ export async function renderMarSheet(root, ctx = {}) {
         return card;
     }
 
-    function cancelledCard(cancelled) {
+    /**
+     * ОТМЕНЁННОЕ НАЗНАЧЕНИЕ ОСТАЁТСЯ СО СВОИМИ КЛЕТКАМИ.
+     *
+     * Окно отмены обещает врачу дословно: «оно останется на листе зачёркнутым,
+     * ВМЕСТЕ С УЖЕ ПОСТАВЛЕННЫМИ ОТМЕТКАМИ». До этого дня обещание не
+     * выполнялось: здесь рисовались имя, подпись и причина — и ни одной клетки,
+     * хотя сервер отдаёт отметки отменённого назначения (`marks: 1` у
+     * отменённого — обычное дело: отменяют ПОСЛЕ первой дозы, «аллергическая
+     * реакция» стоит первой в списке причин). Введённая доза исчезала с листа в
+     * ту секунду, когда назначение отменяли.
+     */
+    function cancelledCard(cancelled, nowMs) {
         const box = h('div', { style: { marginTop: '14px' } });
         if (!cancelled.length) return box;
         const toggle = h('button', {
@@ -814,7 +998,7 @@ export async function renderMarSheet(root, ctx = {}) {
         if (!state.showCancelled) return box;
         const card = h('div', { class: 'card', style: { marginTop: '10px' } });
         for (const o of cancelled) {
-            card.appendChild(h('div', { style: { padding: '12px 16px', borderBottom: '1px solid var(--ink-100)' } },
+            const row = h('div', { style: { padding: '12px 16px', borderBottom: '1px solid var(--ink-100)' } },
                 h('div', {
                     style: {
                         fontSize: '13.5px', fontWeight: 700, textDecoration: 'line-through',
@@ -827,7 +1011,33 @@ export async function renderMarSheet(root, ctx = {}) {
                         o.cancel_reason ? trf('причина: {reason}', { reason: o.cancel_reason }) : null,
                         personName(state.people, o.cancel_by) ? trf('отменил: {name}', { name: personName(state.people, o.cancel_by) }) : null,
                         o.cancel_at ? o.cancel_at.slice(0, 16).replace('T', ' ') : null,
-                    ].filter(Boolean).join(' · '))));
+                    ].filter(Boolean).join(' · ')));
+
+            const hours = orderHours(o, state.date);
+            if (hours.length) {
+                const head = h('tr', null,
+                    h('th', { style: { textAlign: 'left', minWidth: '160px', fontSize: '12.5px' } }, tr('Введено до отмены')));
+                for (const sl of hours) {
+                    head.appendChild(h('th', { style: { textAlign: 'center', minWidth: '52px', fontSize: '12.5px' } },
+                        String(sl).padStart(2, '0')));
+                }
+                const cells = h('tr', null,
+                    h('td', { class: 'muted', style: { fontSize: '12.5px' } }, orderSubtitle(o) || o.name || ''));
+                for (const sl of hours) cells.appendChild(cellEl(o, sl, nowMs));
+                row.appendChild(h('div', { style: { overflowX: 'auto', marginTop: '8px' } },
+                    h('table', { class: 'table' }, h('thead', null, head), h('tbody', null, cells))));
+            }
+
+            // «По требованию» у отменённого назначения — те же события, что и в
+            // живом блоке PRN: часов у них нет, а введённые дозы есть.
+            const events = (o.prn_marks || []).map((m) => [
+                hhmm(m.given_at), tr(cellStateLabel(m.status)), personName(state.people, m.given_by), m.reason || null,
+            ].filter(Boolean).join(' · '));
+            if (events.length) {
+                row.appendChild(h('div', { style: { marginTop: '6px', fontSize: '12.5px' } },
+                    ...events.map((e) => h('div', null, e))));
+            }
+            card.appendChild(row);
         }
         box.appendChild(card);
         return box;

@@ -114,8 +114,92 @@ let _effective    = null;   // Set<string> | null (null = full access)
 let _levels       = {};     // { key: 'viewer'|'editor'|'admin' }
 let _patientTabs  = {};     // { tabId: 'none'|'view'|'edit' } — absent key = visible (default)
 let _roleLabel    = null;   // human label of the role currently in force
+let _actorRoles   = [];     // INPATIENT_ROLE_GATE_V1 — role CODES currently in force
 
 export const ACCESS_LEVELS = ['viewer', 'editor', 'admin'];
+
+// ---------------------------------------------------------------------------
+// INPATIENT_ROLE_GATE_V1 — WHICH ROLE the actor holds, not just which keys.
+//
+// The four inpatient screens (#mar-sheet, #mar-nurse, #kitchen-sheet,
+// #discharge) all hang off ONE grant key, `beds`, and migration 092 handed
+// `beds` to the registrar so she could see and cancel admission orders. The
+// side effect: the registrar got four more menu items whose every RPC refuses
+// her — the treatment sheet (READ_ROLES), the dose marks (MARK_ROLES), the
+// kitchen sheet and the discharge queue all check ROLES server-side, not
+// section keys. A menu item that always ends in «not allowed» is worse than no
+// menu item: it reads as a broken program.
+//
+// The correct role lists already existed and were unit-tested — and were wired
+// to nothing (views/discharge.js DISCHARGE_ROLES, views/kitchen-sheet.js
+// KITCHEN_SHEET_ROLES). They live HERE now, next to the gate that reads them,
+// and those two screens import them back, so there is still exactly one copy.
+//
+// The key gate stays: role AND grant. A clinic that took `beds` away from a
+// role still hides all four.
+export const ROLE_CODES = [
+    'admin', 'registrar', 'doctor', 'nurse', 'cashier', 'lab', 'inventory',
+    'callcenter', 'head_doctor', 'senior_nurse',
+];
+const _ROLE_CODE_SET = new Set(ROLE_CODES);
+
+// Server mirrors, one per screen:
+//   mar-sheet     — READ_ROLES (server/services/rpc/treatment-orders.js)
+//   mar-nurse     — MARK_ROLES: this screen exists to MARK doses; the doctor
+//                   and the head doctor read the sheet instead
+//   kitchen-sheet — KITCHEN_SHEET_ROLES (views/kitchen-sheet.js)
+//   discharge     — DISCHARGE_ROLES ('discharging→discharged' in TRANSITION_ROLES)
+export const INPATIENT_SCREEN_ROLES = Object.freeze({
+    'mar-sheet':     Object.freeze(['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse']),
+    'mar-nurse':     Object.freeze(['admin', 'nurse', 'senior_nurse']),
+    'kitchen-sheet': Object.freeze(['nurse', 'senior_nurse', 'head_doctor', 'admin']),
+    'discharge':     Object.freeze(['senior_nurse', 'head_doctor', 'admin']),
+});
+
+function rememberRoles(names) {
+    const out = [];
+    for (const n of (names || [])) {
+        const code = String(n == null ? '' : n).trim().toLowerCase();
+        if (_ROLE_CODE_SET.has(code) && !out.includes(code)) out.push(code);
+    }
+    _actorRoles = out;
+}
+
+/** Explicit setter for callers that know the actor's roles (tests, future shell). */
+export function setActorRoles(roles) { rememberRoles(roles); }
+
+/**
+ * The role codes in force: what the permission loader was given, PLUS whatever
+ * the signed-in actor carries on the app shell. Both, because neither is
+ * complete on its own — `role_permissions` rows are named by role code but a
+ * role with no row is dropped, and window.easymed.state.user carries the
+ * primary role but (today) no extra_roles.
+ *
+ * An EMPTY result means «unknown», and unknown never hides a menu item: this
+ * gate narrows what a known-wrong role sees, it is not a second access system.
+ * The server refuses on its own regardless.
+ */
+export function actorRoleCodes() {
+    const out = [..._actorRoles];
+    const u = (typeof window !== 'undefined' && window.easymed && window.easymed.state && window.easymed.state.user) || null;
+    if (u) {
+        const extra = Array.isArray(u.extra_roles) ? u.extra_roles : [];
+        for (const r of [u.role, ...extra]) {
+            const code = String(r == null ? '' : r).trim().toLowerCase();
+            if (_ROLE_CODE_SET.has(code) && !out.includes(code)) out.push(code);
+        }
+    }
+    return out;
+}
+
+/** Does the actor hold any of these roles? Unknown roles answer «yes». */
+export function hasActorRole(allowed) {
+    const need = allowed || [];
+    if (!need.length) return true;
+    const have = actorRoleCodes();
+    if (!have.length) return true;
+    return have.some((r) => need.includes(r));
+}
 
 export function currentRoleLabel() { return _roleLabel; }
 export function hasRestriction()   { return _effective instanceof Set; }
@@ -126,6 +210,9 @@ export function setFullAccess(label = null) {
     _levels    = {};
     _patientTabs = {};
     _roleLabel = label;
+    // Full access is granted to the super admin and to the clinic admin only
+    // (admin.js applyActorPermissions); the role gate must agree.
+    rememberRoles(['admin']);
 }
 
 // Apply a role row's permissions. An empty/missing sections list means the
@@ -147,6 +234,7 @@ export function setEffectiveFromRole(roleRow) {
         _effective = new Set(sections);
     }
     _roleLabel = roleRow ? (roleRow.name || 'Role') : null;
+    rememberRoles([roleRow && roleRow.name]);
 }
 
 // MULTI_ROLE_V1 — a user can hold a PRIMARY role plus extra roles. Effective access
@@ -194,6 +282,7 @@ export function setEffectiveFromRoles(roleRows) {
     _levels      = levels;
     _patientTabs = tabs;
     _roleLabel   = (rows[0] && rows[0].name) || 'Roles';
+    rememberRoles(rows.map((r) => r && r.name));
 }
 
 export function getEffectiveSet() { return _effective; }
@@ -349,8 +438,23 @@ export function isModuleAllowed(navId) {
     // только старшая медсестра, главный врач и администратор
     // ('discharging→discharged' в TRANSITION_ROLES), и экран рисует кнопку по
     // ответу `inpatient_capabilities`, а не по этому ключу.
-    if (navId === 'mar-nurse' || navId === 'kitchen-sheet' || navId === 'discharge') return _effective.has('beds');
-    if (navId === 'mar-sheet') return _effective.has('beds') || _effective.has('consultation');
+    //
+    // INPATIENT_ROLE_GATE_V1 — И РОЛЬ ТОЖЕ. Довод выше («меню — это меню, а не
+    // доступ к данным») оказался разменом не в ту сторону: регистратура,
+    // которой `beds` выдан ради заявок, видела ЧЕТЫРЕ пункта, за каждым из
+    // которых её ждёт отказ сервера — лист назначений (READ_ROLES), отметка
+    // дозы (MARK_ROLES), порционник и очередь выписок. Пункт меню, который
+    // всегда кончается словами «не разрешено», читается как сломанная
+    // программа, а не как аккуратно суженное право. Роль теперь спрашивается
+    // вместе с ключом (INPATIENT_SCREEN_ROLES выше — те же списки, которыми
+    // отвечает сервер).
+    if (navId === 'mar-nurse' || navId === 'kitchen-sheet' || navId === 'discharge') {
+        return _effective.has('beds') && hasActorRole(INPATIENT_SCREEN_ROLES[navId]);
+    }
+    if (navId === 'mar-sheet') {
+        return (_effective.has('beds') || _effective.has('consultation'))
+            && hasActorRole(INPATIENT_SCREEN_ROLES['mar-sheet']);
+    }
     // CASHIER_HEAD_KEY_V1 — Старший кассир is its OWN explicit grant (was derived
     // from Cashier: Admin, which made every delete-level cashier a head cashier).
     if (navId === 'cashier-head') return _effective.has('cashier-head');

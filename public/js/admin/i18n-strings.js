@@ -6365,7 +6365,24 @@ export const STRINGS = {
   "НПО (не кормить)": {"en":"NPO (nothing by mouth)","ru":"НПО (не кормить)","uz":"NPO (ovqatlantirilmasin)"},
   "Пропущен": {"en":"Missed","ru":"Пропущен","uz":"O'tkazib yuborildi"},
   "Питание сегодня": {"en":"Meals today","ru":"Питание сегодня","uz":"Bugungi ovqatlanish"},
+  // INPATIENT_ROUTE — доска коек больше не госпитализирует и не выписывает:
+  // оба действия ушли в раздел «Стационар» и в карту госпитализации
+  // (views/ward-beds.js). Эти две строки — указатели на их новое место.
+  "Госпитализация — в разделе «Стационар»": {"en":"Admission is in the “Inpatient” section","ru":"Госпитализация — в разделе «Стационар»","uz":"Yotqizish — “Statsionar” bo'limida"},
+  "Выписку оформляют в карте госпитализации": {"en":"Discharge is handled on the admission card","ru":"Выписку оформляют в карте госпитализации","uz":"Yozib yuborish yotqizish kartasida rasmiylashtiriladi"},
   "Лист питания не загружен.": {"en":"The meal sheet has not loaded.","ru":"Лист питания не загружен.","uz":"Ovqatlanish varaqasi yuklanmadi."},
   "Отметить…": {"en":"Mark…","ru":"Отметить…","uz":"Belgilash…"},
   "Не удалось отметить приём пищи.": {"en":"Could not mark the meal.","ru":"Не удалось отметить приём пищи.","uz":"Ovqatlanishni belgilab bo'lmadi."},
+
+  // MAR_UNDO_TRACE_V1 / MAR_CANCELLED_MARKS_V1 / ACCOMMODATION_GAP_V1 — след снятой
+  // отметки, клетки отменённого назначения и невнесённое проживание — added 2026-09-04
+  "Снятые отметки": {"en":"Withdrawn marks","ru":"Снятые отметки","uz":"Olib tashlangan belgilar"},
+  "Снятые отметки: {n}": {"en":"Withdrawn marks: {n}","ru":"Снятые отметки: {n}","uz":"Olib tashlangan belgilar: {n}"},
+  "снята в {time}": {"en":"withdrawn at {time}","ru":"снята в {time}","uz":"{time} da olib tashlangan"},
+  "Отметка снята, но не стёрта: час снова ждёт дозу, а запись о снятии остаётся.": {"en":"The mark is withdrawn, not erased: the hour awaits its dose again and the record of the withdrawal stays.","ru":"Отметка снята, но не стёрта: час снова ждёт дозу, а запись о снятии остаётся.","uz":"Belgi olib tashlandi, lekin o'chirilmadi: soat yana dozani kutadi, olib tashlash yozuvi esa qoladi."},
+  "Введено до отмены": {"en":"Given before the cancellation","ru":"Введено до отмены","uz":"Bekor qilingunga qadar yuborilgan"},
+  "Проживание не внесено в счёт": {"en":"Accommodation is not on the bill","ru":"Проживание не внесено в счёт","uz":"Yashash hisob-kitobga kiritilmagan"},
+  "Проживание не внесено: {units} {unit} на {amount} — эта сумма в остаток не вошла.": {"en":"Accommodation is not on the bill: {units} {unit} worth {amount} — that sum is not in the balance.","ru":"Проживание не внесено: {units} {unit} на {amount} — эта сумма в остаток не вошла.","uz":"Yashash kiritilmagan: {units} {unit}, {amount} — bu summa qoldiqqa kirmagan."},
+  "проживание не внесено: {amount}": {"en":"accommodation not billed: {amount}","ru":"проживание не внесено: {amount}","uz":"yashash kiritilmagan: {amount}"},
+  "Внесите проживание в карте госпитализации — иначе за эти сутки клиника не выставит ничего.": {"en":"Add the accommodation on the admission card — otherwise the clinic bills nothing for those days.","ru":"Внесите проживание в карте госпитализации — иначе за эти сутки клиника не выставит ничего.","uz":"Yashashni gospitalizatsiya kartasida kiriting — aks holda klinika bu kunlar uchun hech narsa qo'ymaydi."},
 };

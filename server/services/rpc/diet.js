@@ -391,7 +391,7 @@ export function kitchenSheet(db, args, user) {
   const buckets = new Map();
   for (const r of rows) {
     const code = r.diet_code || null;
-    const k = code === null ? ' ' : code;
+    const k = code === null ? '\0' : code;
     if (!buckets.has(k)) {
       buckets.set(k, {
         diet_code: code,

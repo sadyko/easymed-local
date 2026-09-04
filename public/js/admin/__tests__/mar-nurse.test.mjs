@@ -101,7 +101,9 @@ const {
     MAR_TASK_GROUPS, MAR_DONE_GROUP, OMISSION_OPTIONS, EXTRA_KINDS,
     patientsFromTasks, tasksForAdmission, fiveRights, allergyOf, extraPayload,
     bedLine, canUndo, undoRefusal, doneLine, renderMarNurse, canOpenMarNurse,
+    mrnOf, voidedPoints, voidedLine,
 } = nurse;
+const { cellGlyph, VOIDED_GLYPH } = await import('../views/mar-sheet.js');
 
 // ─── данные «сервера» ───────────────────────────────────────────────────────
 
@@ -156,6 +158,24 @@ const DONE_LATE = {
     undo: { allowed: false, scope: 'late', window_min: 15, message: REFUSAL },
 };
 
+// MAR_OUTCOME_VISIBLE_V1 — остальные два исхода закрытой точки. «Придержано» и
+// «пропущено» до сих пор выглядели ровно как введённая доза: серая строка в
+// 12.5 px и слово.
+const DONE_HELD = {
+    ...patientA, order_id: 9, kind: 'med', name: 'Метформин', dose: '500 мг', route: 'внутрь',
+    source: 'clinic', freq_code: '2x', prn: 0, stock_item_id: null,
+    administration_id: 703, status: 'held', reason: 'перед КТ с контрастом', date: TODAY, slot: 8,
+    given_at: `${TODAY}T05:10:00Z`, given_by: 2, given_by_name: 'Медсестра',
+    undo: { allowed: false, scope: 'late', window_min: 15, message: REFUSAL },
+};
+const DONE_MISSED = {
+    ...patientA, order_id: 10, kind: 'proc', name: 'Ингаляция', dose: '', route: null,
+    source: 'clinic', freq_code: '3x', prn: 0, stock_item_id: null,
+    administration_id: 704, status: 'missed', reason: 'пациент был на КТ', date: TODAY, slot: 12,
+    given_at: `${TODAY}T09:30:00Z`, given_by: 2, given_by_name: 'Медсестра',
+    undo: { allowed: false, scope: 'late', window_min: 15, message: REFUSAL },
+};
+
 const DUE = {
     date: TODAY, now: new Date().toISOString(), ward_id: null,
     counts: { overdue: 1, now: 1, later: 1, prn: 1, done: 2 },
@@ -165,10 +185,33 @@ const DUE = {
     },
 };
 
+// MAR_MRN_V1 — номер карты берётся тем же запросом, что и аллергия: «5 прав»
+// различают двух однофамильцев в одной палате именно им.
 const PATIENTS = [
-    { id: 103, allergies: 'Пенициллин, новокаин' },
-    { id: 104, allergies: '' },
+    { id: 103, allergies: 'Пенициллин, новокаин', mrn: 'M-103' },
+    { id: 104, allergies: '', mrn: 'M-104' },
 ];
+
+const USERS = [
+    { id: 2, full_name: 'Медсестра' },
+    { id: 3, full_name: 'Старшая медсестра' },
+];
+
+// MAR_UNDO_TRACE_V1 — лист назначений выбранного пациента. Экран берёт из него
+// ОДНО: снятые отметки (`treatment_tasks_due` отдаёт только действующие).
+let SHEET = {
+    admission_id: 13, from: TODAY, to: TODAY, include_cancelled: true,
+    orders: [{
+        id: 7, name: 'Гепарин', dose: '5000 ЕД', route: 'п/к', status: 'active',
+        due: [], marks: [], prn_marks: [],
+        voided_marks: [{
+            id: 700, order_id: 7, due_date: TODAY, due_slot: 10, status: 'given',
+            given_at: `${TODAY}T09:40:00Z`, given_by: 2,
+            voided_at: `${TODAY}T09:52:00Z`, voided_by: 3, void_reason: 'не тот пациент',
+        }],
+    }],
+    stock_issues: { count: 0, items: [] },
+};
 
 // DIET_TABLES_V1 — лист питания выбранного пациента на сегодня. Разовость
 // разворачивает СЕРВЕР (admission_meals_list): «какие приёмы входят в
@@ -212,6 +255,7 @@ globalThis.fetch = async (url, opts = {}) => {
         const name = decodeURIComponent(u.slice('/api/rpc/'.length));
         rpcCalls.push({ name, args: body });
         if (name === 'treatment_tasks_due') return ok(DUE);
+        if (name === 'treatment_orders_list') return ok(body.admission_id === 13 ? SHEET : { orders: [] });
         if (name === 'admission_meals_list') return ok(MEALS[body.admission_id] || null);
         if (name === 'admission_meal_mark') {
             // Сервер идемпотентен по (госпитализация · дата · приём) — здесь то
@@ -236,6 +280,7 @@ globalThis.fetch = async (url, opts = {}) => {
         dbCalls.push(body);
         if (body.table === 'wards') return ok([{ id: 1, name: 'Терапия' }]);
         if (body.table === 'patients') return ok(PATIENTS);
+        if (body.table === 'users') return ok(USERS);
         return ok([]);
     }
     return ok([]);
@@ -291,6 +336,37 @@ test('«5 прав» — пять пунктов в закреплённом п�
     // У процедуры дозы и пути нет — прочерк, а не пустое место.
     assert.equal(fiveRights(TASK_NOW, patientA)[2].value, '—');
     assert.equal(fiveRights(TASK_NOW, patientA)[3].value, '—');
+});
+
+test('«5 прав» называют НОМЕР КАРТЫ, а не одно имя с койкой', () => {
+    // MAR_MRN_V1 — двух Каримовых в одной палате разводит только код койки, а
+    // койку у поста меняют. Лист врача показывает MRN в шапке; окно, в котором
+    // дозу действительно вводят, обязано тем более.
+    const rights = fiveRights(TASK_OVERDUE, { ...patientA, mrn: 'M-103' });
+    assert.ok(rights[0].value.includes('M-103'), 'номера карты в сверке нет: ' + rights[0].value);
+    assert.ok(rights[0].value.includes('Сидоров Сидор') && rights[0].value.includes('T-1'),
+        'имя и койка при этом никуда не делись: ' + rights[0].value);
+    // Номера нет в карте — строка не пустеет и прочерка не выдумывает.
+    assert.equal(fiveRights(TASK_OVERDUE, patientA)[0].value.includes('M-103'), false);
+
+    assert.equal(mrnOf(new Map([[103, 'M-103']]), 103), 'M-103');
+    assert.equal(mrnOf(new Map([[103, 'M-103']]), 999), '');
+    assert.equal(mrnOf(null, 103), '');
+});
+
+test('снятые отметки собираются из листа назначений — со снявшим, временем и причиной', () => {
+    const points = voidedPoints(SHEET, TODAY);
+    assert.equal(points.length, 1);
+    assert.equal(points[0].name, 'Гепарин');
+    assert.equal(points[0].void_reason, 'не тот пациент');
+    // Чужой день в след не попадает: список — за выбранную дату.
+    assert.deepEqual(voidedPoints(SHEET, '2000-01-01'), []);
+    assert.deepEqual(voidedPoints(null, TODAY), []);
+
+    const line = voidedLine(points[0], new Map([[3, 'Старшая медсестра']]));
+    assert.ok(line.includes('Старшая медсестра'), 'кто снял: ' + line);
+    assert.ok(line.includes('не тот пациент'), 'почему сняли: ' + line);
+    assert.ok(/\d{2}:\d{2}/.test(line), 'когда сняли: ' + line);
 });
 
 test('аллергия читается из карты пациента, а пустая строка аллергией не считается', () => {
@@ -429,6 +505,17 @@ test('«Выполнить» показывает пять прав, аллер�
     assert.equal(call.args.date, TODAY);
     assert.equal(call.args.slot, 6, 'час дозы уходит на сервер: ключ отметки это (назначение, дата, слот)');
     assert.equal('extra' in call.args, false, 'пустой дополнительный расход не отправляется');
+});
+
+test('окно подтверждения называет пациента номером карты, а не только именем и койкой', async () => {
+    const root = await renderScreen();
+    const card = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Просрочено'));
+    findBtn(card, 'Выполнить').click();
+    await settle();
+    const overlay = BODY.children[BODY.children.length - 1];
+    const txt = textOf(overlay);
+    assert.ok(txt.includes('M-103'), 'номера карты в «5 правах» нет: ' + txt.slice(0, 300));
+    assert.ok(txt.includes('Сидоров Сидор') && txt.includes('T-1'));
 });
 
 test('дополнительный расход у койки уезжает в отметку', async () => {
@@ -622,6 +709,92 @@ test('«строка уже в счёте» доходит до того, кто
     await settle();
     // Медицинская запись снята, а деньги остались — молчать об этом нельзя.
     assert.ok(lastToast().includes('через кассу'), 'предупреждение о счёте: ' + lastToast());
+});
+
+// ─── 2б. Исход дозы виден, а не только читается (MAR_OUTCOME_VISIBLE_V1) ────
+
+/** Знак состояния в строке «Сделано» — крупный символ рядом со временем. */
+const glyphOf = (row) => {
+    const el = walk(row).find((e) => e.style && e.style.fontSize === '20px');
+    return el ? textOf(el).trim() : '';
+};
+const toneOf = (row) => {
+    const tag = walk(row).find((e) => String(e.className || '').startsWith('tag'));
+    return tag ? String(tag.className) : '';
+};
+const colorOf = (row) => {
+    const el = walk(row).find((e) => e.style && e.style.fontSize === '20px');
+    return el ? String(el.style.color || '') : '';
+};
+
+test('введено, отказ, придержано и пропуск в «Сделано» читаются РАЗНО, а не одним серым словом', async () => {
+    const before = DUE.groups.done;
+    DUE.groups.done = [DONE_MINE, DONE_LATE, DONE_HELD, DONE_MISSED];
+    try {
+        const root = await renderScreen();
+        const doneCard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Сделано'));
+        const rowFor = (name) => doneCard.children.find((c) => textOf(c).includes(name));
+        const rows = {
+            given: rowFor('Гепарин'), refused: rowFor('Анальгин'),
+            held: rowFor('Метформин'), missed: rowFor('Ингаляция'),
+        };
+        for (const [k, r] of Object.entries(rows)) assert.ok(r, 'строки исхода ' + k + ' нет в «Сделано»');
+
+        // ЗНАК — тот же, что на листе врача, и у всех четырёх он свой.
+        for (const [k, r] of Object.entries(rows)) {
+            assert.equal(glyphOf(r), cellGlyph(k), 'знак исхода ' + k + ' не совпал с листом врача');
+        }
+        const glyphs = Object.values(rows).map(glyphOf);
+        assert.equal(new Set(glyphs).size, 4, 'четыре исхода дозы нарисованы не четырьмя знаками: ' + glyphs.join(' '));
+
+        // И ЦВЕТ, И ТОН ПЛАШКИ: введённая доза не может выглядеть как невведённая.
+        assert.notEqual(colorOf(rows.given), colorOf(rows.refused), 'отказ и введение одного цвета');
+        assert.notEqual(colorOf(rows.given), colorOf(rows.held));
+        assert.notEqual(colorOf(rows.given), colorOf(rows.missed));
+        assert.ok(toneOf(rows.given).includes('tag-ok'), toneOf(rows.given));
+        assert.ok(toneOf(rows.refused).includes('tag-crit'), toneOf(rows.refused));
+        assert.ok(toneOf(rows.held).includes('tag-warn'), toneOf(rows.held));
+        assert.ok(toneOf(rows.missed).includes('tag-crit'), toneOf(rows.missed));
+
+        // Причина невведённой дозы стоит в строке, а не только в базе.
+        assert.ok(textOf(rows.held).includes('перед КТ с контрастом'), textOf(rows.held));
+        assert.ok(textOf(rows.missed).includes('пациент был на КТ'), textOf(rows.missed));
+        // И слово никуда не делось: знак объясняется подписью, а не заменяет её.
+        assert.ok(textOf(rows.refused).includes('Отказ пациента'), textOf(rows.refused));
+    } finally { DUE.groups.done = before; }
+});
+
+// ─── 2в. Снятая отметка оставляет след (MAR_UNDO_TRACE_V1) ─────────────────
+
+test('снятая отметка остаётся на экране медсестры — кто снял, когда и почему', async () => {
+    const root = await renderScreen();
+    const call = rpcCalls.find((c) => c.name === 'treatment_orders_list');
+    assert.ok(call, 'лист назначений выбранного пациента не запрошен — следа снятия взять неоткуда');
+    assert.deepEqual(call.args, { admission_id: 13, from: TODAY, to: TODAY, include_cancelled: true });
+
+    const doneCard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Сделано'));
+    const txt = textOf(doneCard);
+    assert.ok(txt.includes('Снятые отметки'),
+        'снятая точка просто ушла с экрана — окно снятия обещало историю, которой нигде нет');
+    assert.ok(txt.includes(VOIDED_GLYPH), 'знака снятой отметки нет: ' + txt);
+    assert.ok(txt.includes('Старшая медсестра'), 'кто снял: ' + txt);
+    assert.ok(txt.includes('не тот пациент'), 'почему сняли: ' + txt);
+    assert.ok(/снята в \d{2}:\d{2}/.test(txt), 'когда сняли: ' + txt);
+
+    // Строка ЗАЧЁРКНУТА: это не выполнение и не работа, а след.
+    const struck = walk(doneCard).find((e) => e.style && e.style.textDecoration === 'line-through');
+    assert.ok(struck && textOf(struck).includes('Гепарин'), 'снятая отметка не зачёркнута');
+});
+
+test('лист назначений не прочитался — смена работает дальше, просто без следа', async () => {
+    const before = SHEET;
+    SHEET = { orders: [] };
+    try {
+        const root = await renderScreen();
+        const doneCard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Сделано'));
+        assert.ok(doneCard, 'список сделанного пропал вместе с листом назначений');
+        assert.ok(!textOf(doneCard).includes('Снятые отметки'), 'следа нет — заголовка тоже быть не должно');
+    } finally { SHEET = before; }
 });
 
 // ─── 3. Питание (DIET_TABLES_V1) ────────────────────────────────────────────

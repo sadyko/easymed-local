@@ -67,6 +67,19 @@ const OWING = {
 };
 
 let QUEUE = { ward_id: null, outcomes: ['home', 'transfer', 'refuse', 'death'], rows: [CLEAN, OWING] };
+
+// ACCOMMODATION_GAP_V1 — что отвечает `accommodation_state`. У «чистого»
+// пациента ТРОЕ СУТОК в койке и НИ ОДНОЙ строки проживания: долг под подписью
+// показывает ноль, пока 450 000 койко-дней нигде не числятся. У должника
+// проживание внесено полностью — называть нечего.
+let ACCOMMODATION = {
+  1: { stay_units: 3, invoiced: { units: 0, total: 0 },
+       current: { units: 3, rate: 150000, gross: 450000, net: 450000, mode: 'daily', discount_pct: 0 },
+       billed: null, stale: false },
+  2: { stay_units: 2, invoiced: { units: 1, total: 200000 },
+       current: { units: 1, rate: 200000, gross: 200000, net: 200000, mode: 'daily', discount_pct: 0 },
+       billed: { id: 9, units: 1, rate: 200000, total: 200000, invoiced: false }, stale: false },
+};
 let CAN = { discharge: true };
 const rpcCalls = [];
 globalThis.fetch = async (url, opts) => {
@@ -76,6 +89,11 @@ globalThis.fetch = async (url, opts) => {
     rpcCalls.push({ name, args: JSON.parse((opts && opts.body) || '{}') });
     if (name === 'inpatient_capabilities') return { ok: true, json: async () => ({ data: { roles: [], can: CAN } }) };
     if (name === 'admission_discharge_queue') return { ok: true, json: async () => ({ data: QUEUE }) };
+    // ACCOMMODATION_GAP_V1 — расчёт проживания по каждому, кого оформляют.
+    if (name === 'accommodation_state') {
+      const a = JSON.parse((opts && opts.body) || '{}').admission_id;
+      return { ok: true, json: async () => ({ data: ACCOMMODATION[a] || null }) };
+    }
     return { ok: true, json: async () => ({ data: { admission: { status: 'discharged' } } }) };
   }
   return { ok: true, json: async () => ({ data: [{ id: 1, name: 'Терапия' }, { id: 2, name: 'Хирургия' }] }) };
@@ -84,7 +102,7 @@ globalThis.fetch = async (url, opts) => {
 const {
   renderDischarge, canSeeDischarge, DISCHARGE_ROLES, outcomeTitle, money,
   hasDebt, balanceLines, excludeNotes, placeTitle, canSubmit,
-  nowLocalInput, localToUtcIso,
+  nowLocalInput, localToUtcIso, accommodationGap, accommodationWarning,
 } = await import('../views/discharge.js');
 
 // ─── 1. Подписи и чистые функции ────────────────────────────────────────────
@@ -138,6 +156,60 @@ test('фактическое время набирается местным, а 
   assert.equal(iso, new Date('2026-09-05T15:40').toISOString().slice(0, 19) + 'Z');
   assert.equal(localToUtcIso(''), null, 'не указали — пусть сервер поставит своё');
   assert.equal(localToUtcIso('не дата'), null);
+});
+
+// ─── 1б. Койко-дни без строки (ACCOMMODATION_GAP_V1) ────────────────────────
+
+test('сутки в койке, за которые нет строки проживания, считаются и называются', () => {
+  const gap = accommodationGap(ACCOMMODATION[1]);
+  assert.ok(gap, 'три несчитанных койко-дня прошли молча — а это и есть недосчитанные деньги');
+  assert.equal(gap.units, 3);
+  assert.equal(gap.amount, 450000);
+  // Выставленное и открытая строка вычитаются: считать заново уже внесённое
+  // значило бы пугать кассу вторым счётом за те же сутки.
+  assert.equal(accommodationGap(ACCOMMODATION[2]), null, 'проживание внесено — называть нечего');
+  assert.equal(accommodationGap(null), null);
+  // Бесплатная койка — решение клиники, а не пропажа.
+  assert.equal(accommodationGap({ stay_units: 3, invoiced: { units: 0 }, current: { rate: 0 } }), null);
+
+  const text = accommodationWarning(gap);
+  assert.ok(text.includes('3') && text.includes(money(450000)), text);
+  assert.ok(/сут/.test(text), 'единица срока не названа: ' + text);
+  assert.equal(accommodationWarning(null), '');
+});
+
+test('экран называет невыставленное проживание рядом с остатком и в окне оформления', async () => {
+  const root = mk('div');
+  const view = await renderDischarge(root, {});
+  const text = textOf(root);
+  // Самый опасный случай — «Долга нет» при трёх невыставленных сутках.
+  assert.ok(text.includes('Долга нет'), 'у первого пациента долга и правда нет');
+  assert.ok(text.includes(money(450000)),
+    'экран молчит о 450 000 непосчитанных койко-дней: ' + text.slice(0, 400));
+
+  view.openFinalize(CLEAN);
+  const modal = document.body.children[document.body.children.length - 1];
+  const mtext = textOf(modal);
+  assert.ok(mtext.includes('Проживание не внесено в счёт'),
+    'окно оформления не называет пропажу: ' + mtext.slice(0, 400));
+  assert.ok(mtext.includes(money(450000)), 'сумма пропажи не названа');
+  assert.ok(mtext.includes('карте госпитализации'), 'не сказано, где это чинят');
+  // Пропажа ПРЕДУПРЕЖДАЕТ, а не запрещает: подписи под ней не просят.
+  const submit = walk(modal).find((n) => n.tagName === 'BUTTON' && /Оформить выписку/.test(textOf(n)));
+  assert.equal(submit.disabled, false, 'невнесённое проживание выписку не держит');
+});
+
+test('проживание внесено — экран об этом молчит', async () => {
+  const before = ACCOMMODATION;
+  ACCOMMODATION = { 1: { ...before[1], stay_units: 0 }, 2: before[2] };
+  try {
+    const root = mk('div');
+    const view = await renderDischarge(root, {});
+    assert.ok(!textOf(root).includes('проживание не внесено'), 'лишнее предупреждение хуже молчания');
+    view.openFinalize(CLEAN);
+    const modal = document.body.children[document.body.children.length - 1];
+    assert.ok(!textOf(modal).includes('Проживание не внесено в счёт'));
+  } finally { ACCOMMODATION = before; }
 });
 
 // ─── 2. Долг предупреждает, а не запрещает ──────────────────────────────────

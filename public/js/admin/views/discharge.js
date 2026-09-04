@@ -33,6 +33,12 @@
 import { supabase } from '../../supabase.js';
 import { h, clear, toast, Icon, Tag, checkField, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — переводим ПЕРВЫМ, подставляем ВТОРЫМ
+// INPATIENT_ROLE_GATE_V1 — список ролей теперь ЧИТАЕТ и меню (permissions.js
+// isModuleAllowed): он лежит там, где стоит гейт, и сюда возвращается тем же
+// именем. До этого список существовал, был покрыт тестом — и не был подключён
+// ни к чему: пункт меню открывался по одному ключу `beds`, который миграция 092
+// выдала в том числе регистратуре.
+import { INPATIENT_SCREEN_ROLES } from '../permissions.js';
 
 // Кто открывает экран. Это очередь ОФОРМЛЕНИЯ, и держат её те, кто вправе
 // оформить: старшая медсестра, главный врач, администратор
@@ -40,7 +46,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — переводи
 // её работа кончается на койке; врача нет — он подал заявку и видит её судьбу в
 // карте пациента (RPC очереди читает шире, чем этот экран показывает, и это
 // намеренно: смотреть можно, оформлять — нет).
-export const DISCHARGE_ROLES = ['senior_nurse', 'head_doctor', 'admin'];
+export const DISCHARGE_ROLES = INPATIENT_SCREEN_ROLES.discharge;
 
 /**
  * Роли считаются ПО ОБЪЕДИНЕНИЮ основной и дополнительных — так же, как их
@@ -123,6 +129,47 @@ export function excludeNotes(balance) {
   return out;
 }
 
+/**
+ * ACCOMMODATION_GAP_V1 — КОЙКО-ДНИ, ЗА КОТОРЫМИ НЕТ СТРОКИ.
+ *
+ * Долг под подписью считает `admissionBalance`, и считает он ЧЕСТНО — по
+ * строкам `admission_services`. Но проживание становится такой строкой только
+ * когда человек нажмёт «Внести проживание» (ACCOMMODATION_AS_SERVICE_V1): не
+ * нажали — строки нет, и трёхсуточная госпитализация показывает здесь долг в
+ * 25 000, пока 450 000 койко-дней нигде не числятся. Экран не может это
+ * посчитать сам (ставка, режим палаты и уже выставленные сутки — работа
+ * сервера), но обязан НАЗВАТЬ пропажу: `accommodation_state` отдаёт срок
+ * (stay_units), выставленное (invoiced.units) и открытую строку (billed).
+ * Разница между ними — сутки, за которые не выставят никогда, если промолчать
+ * сейчас.
+ *
+ * Возвращает null, когда называть нечего: срок покрыт строками, или ставка
+ * нулевая (бесплатная койка — это решение клиники, а не пропажа).
+ */
+export function accommodationGap(state) {
+  if (!state) return null;
+  const stay = Number(state.stay_units) || 0;
+  const invoiced = Number(state.invoiced && state.invoiced.units) || 0;
+  const open = Number(state.billed && state.billed.units) || 0;
+  const units = Math.max(0, stay - invoiced - open);
+  if (units <= 0) return null;
+  const cur = state.current || {};
+  const rate = Number(cur.rate) || 0;
+  if (rate <= 0) return null;
+  const mode = cur.mode === 'hourly' ? 'hourly' : 'daily';
+  return { units, rate, mode, amount: Math.round(units * rate) };
+}
+
+/** Пропажа словами: сколько суток и на какую сумму. Пусто — значит, всё внесено. */
+export function accommodationWarning(gap) {
+  if (!gap) return '';
+  return trf('Проживание не внесено: {units} {unit} на {amount} — эта сумма в остаток не вошла.', {
+    units: gap.units,
+    unit: gap.mode === 'hourly' ? tr('ч.') : tr('сут.'),
+    amount: money(gap.amount),
+  });
+}
+
 /** Палата и койка одной подписью; пациент без койки из списка не исчезает. */
 export function placeTitle(row) {
   const ward = (row && row.ward_name) || tr('Без палаты');
@@ -164,7 +211,9 @@ export function canSubmit(row, form) {
 }
 
 export async function renderDischarge(root, ctx = {}) {
-  const state = { wardId: '', wards: [], rows: [], can: {}, loading: true };
+  // ACCOMMODATION_GAP_V1 — расчёт проживания по каждой строке очереди:
+  // admission_id → ответ accommodation_state.
+  const state = { wardId: '', wards: [], rows: [], can: {}, loading: true, accommodation: new Map() };
 
   const wrap = h('div', { class: 'fade-in' });
   root.appendChild(wrap);
@@ -190,6 +239,25 @@ export async function renderDischarge(root, ctx = {}) {
     for (const w of state.wards) wardSelect.appendChild(h('option', { value: String(w.id) }, w.name || ''));
   }
 
+  // Расчёт проживания спрашивается ПО КАЖДОМУ, кого сегодня оформляют — очередь
+  // выписки это несколько человек, а не отделение. Отказ не роняет экран:
+  // выписку он не держит, он только называет пропажу.
+  async function loadAccommodation() {
+    const map = new Map();
+    await Promise.all(state.rows.map(async (r) => {
+      try {
+        const { data } = await supabase.rpc('accommodation_state', { admission_id: r.admission_id });
+        if (data && typeof data === 'object') map.set(r.admission_id, data);
+      } catch (e) { /* без расчёта проживания экран работает, но пропажу не назовёт */ }
+    }));
+    state.accommodation = map;
+  }
+
+  /** Пропажа проживания по строке очереди — или null, если всё внесено. */
+  function gapOf(row) {
+    return accommodationGap(state.accommodation.get(row && row.admission_id));
+  }
+
   async function loadCapabilities() {
     const { data } = await supabase.rpc('inpatient_capabilities', {});
     state.can = (data && data.can) || {};
@@ -208,6 +276,7 @@ export async function renderDischarge(root, ctx = {}) {
       return;
     }
     state.rows = Array.isArray(data.rows) ? data.rows : [];
+    await loadAccommodation();
     render();
   }
 
@@ -219,6 +288,7 @@ export async function renderDischarge(root, ctx = {}) {
     }
     const rows = state.rows.map((r) => {
       const debt = hasDebt(r.balance);
+      const gap = gapOf(r);
       const act = state.can.discharge
         ? h('button', { class: 'btn btn-primary btn-sm', onclick: () => openFinalize(r) }, tr('Оформить выписку'))
         : h('span', { class: 'muted' }, tr('Оформляет старшая медсестра'));
@@ -233,7 +303,10 @@ export async function renderDischarge(root, ctx = {}) {
           r.requested_by_name ? h('div', { class: 'muted' }, r.requested_by_name) : null),
         h('td', { class: 'num' }, debt
           ? Tag(money(r.balance.balance), { kind: 'warn' })
-          : h('span', { class: 'muted' }, tr('Долга нет'))),
+          : h('span', { class: 'muted' }, tr('Долга нет')),
+          // ACCOMMODATION_GAP_V1 — пропажу видно РЯДОМ С ОСТАТКОМ, а не в
+          // окне: именно на это число человек смотрит, решая, отпускать ли.
+          gap ? h('div', null, Tag(trf('проживание не внесено: {amount}', { amount: money(gap.amount) }), { kind: 'crit', dot: true })) : null),
         h('td', { class: 'num' }, r.active_orders
           ? trf('идёт: {count}', { count: r.active_orders })
           : tr('закрыт')),
@@ -296,6 +369,21 @@ export async function renderDischarge(root, ctx = {}) {
           checkField(tr('Долг согласован (гарантия / рассрочка)'), ackBox))
       : h('div', { class: 'muted', style: { marginTop: '10px' } }, 'Долга по госпитализации нет.');
 
+    // ACCOMMODATION_GAP_V1 — пропажа стоит В ОКНЕ ТОЖЕ, и НЕ внутри блока долга:
+    // самый опасный случай — «долга нет» при трёх невыставленных койко-днях,
+    // и как раз тогда блока долга на экране нет вовсе.
+    const gap = gapOf(row);
+    const gapBlock = gap
+      ? h('div', {
+          class: 'card',
+          style: { marginTop: '10px', border: '1px solid rgba(179,38,30,.35)', background: 'rgba(179,38,30,.08)' },
+        },
+          h('div', { class: 'card-title' }, tr('Проживание не внесено в счёт')),
+          h('div', null, accommodationWarning(gap)),
+          h('div', { class: 'muted', style: { marginTop: '6px' } },
+            tr('Внесите проживание в карте госпитализации — иначе за эти сутки клиника не выставит ничего.')))
+      : null;
+
     modal(tr('Оформление выписки') + ' — ' + (row.patient_name || ''), 'Check', [
       h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Фактическое время выписки'), atInput),
       h('div', { class: 'muted' }, outcomeTitle(row.discharge_outcome)
@@ -311,6 +399,7 @@ export async function renderDischarge(root, ctx = {}) {
       checkField(tr('Документы выданы на руки'), docsBox),
       h('label', { class: 'field', style: { marginTop: '10px' } },
         h('span', { class: 'field-label' }, 'Примечание'), noteInput),
+      gapBlock,
       debtBlock,
     ], submitBtn, async () => {
       const { data, error } = await supabase.rpc('admission_discharge_finalize', {

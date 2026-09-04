@@ -70,7 +70,12 @@ import { h, Icon, Tag, clear, toast, field, PageHead, initials } from '../ui.js'
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { isModuleAllowed } from '../permissions.js';
 import { inpatientModal } from './admission-modal.js?v=inp5';
-import { todayLocal, hhmm, cellStateLabel } from './mar-sheet.js?v=inp5';
+// MAR_OUTCOME_VISIBLE_V1 — знак, цвет и тон состояния берутся у ЛИСТА ВРАЧА, а
+// не заводятся здесь заново: «отказ пациента» обязан выглядеть одинаково на
+// обоих экранах одной смены (cellStateColor в views/mar-sheet.js).
+import {
+    todayLocal, hhmm, cellStateLabel, cellGlyph, cellStateColor, cellStateTone, VOIDED_GLYPH,
+} from './mar-sheet.js?v=inp5';
 // DIET_TABLES_V1 — названия приёмов пищи и отметок берутся у порционника: три
 // копии одного списка разошлись бы молча, и «Полдник» здесь перестал бы быть
 // «Полдником» на кухне.
@@ -220,8 +225,17 @@ export function bedLine(row) {
 export function fiveRights(task, patient) {
     const t = task || {};
     const p = patient || {};
+    // НОМЕР КАРТЫ — ЧАСТЬ ИМЕНИ ПАЦИЕНТА В ЭТОЙ СВЕРКЕ. Имя, палата и койка
+    // различают двух Каримовых в одной палате только кодом койки, а койку у
+    // поста меняют — и тогда сверять оказывается нечего. Лист врача показывает
+    // MRN в шапке; окно, в котором доза действительно вводится, показывать его
+    // обязано тем более (MAR_MRN_V1).
     return [
-        { key: 'patient', label: 'Пациент', value: [t.patient_name || p.patient_name || '', bedLine(t.bed_code ? t : p)].filter(Boolean).join(' · ') },
+        { key: 'patient', label: 'Пациент', value: [
+            t.patient_name || p.patient_name || '',
+            t.mrn || p.mrn || null,
+            bedLine(t.bed_code ? t : p),
+        ].filter(Boolean).join(' · ') },
         { key: 'drug', label: 'Препарат', value: t.name || '' },
         { key: 'dose', label: 'Доза', value: t.dose || '—' },
         { key: 'route', label: 'Путь введения', value: t.route || '—' },
@@ -234,6 +248,56 @@ export function allergyOf(allergyMap, patientId) {
     if (!patientId) return '';
     const v = allergyMap instanceof Map ? allergyMap.get(Number(patientId)) : (allergyMap || {})[patientId];
     return typeof v === 'string' ? v.trim() : '';
+}
+
+/** Номер карты пациента — оттуда же, тем же запросом (MAR_MRN_V1). */
+export function mrnOf(mrnMap, patientId) {
+    if (!patientId) return '';
+    const v = mrnMap instanceof Map ? mrnMap.get(Number(patientId)) : (mrnMap || {})[patientId];
+    return typeof v === 'string' ? v.trim() : (v ? String(v) : '');
+}
+
+/**
+ * СНЯТЫЕ ОТМЕТКИ ВЫБРАННОГО ПАЦИЕНТА — из листа назначений (treatment_orders_
+ * list отдаёт их отдельным списком `voided_marks`).
+ *
+ * Окно снятия обещает медсестре дословно: «Отметка не исчезнет: в истории
+ * останется, кто её снял, когда и почему». На этом экране обещание до сих пор
+ * не выполнялось вовсе — снятая точка просто уходила с экрана (в «Сделано»
+ * сервер отдаёт только `voided_at IS NULL`), и медсестра, снявшая отметку не у
+ * того пациента, не имела никакого способа увидеть, что она сделала.
+ *
+ * Задач тут нет: это НЕ работа, а след, и он стоит в самом низу, под списком
+ * сделанного.
+ */
+export function voidedPoints(sheet, date) {
+    const out = [];
+    for (const o of ((sheet && sheet.orders) || [])) {
+        for (const m of (o.voided_marks || [])) {
+            if (!m.voided_at) continue;
+            if (date && m.due_date !== date) continue;
+            out.push({
+                order_id: o.id, name: o.name || '', dose: o.dose || '', route: o.route || '',
+                administration_id: m.id, status: m.status, slot: m.due_slot, date: m.due_date,
+                given_at: m.given_at, given_by: m.given_by,
+                voided_at: m.voided_at, voided_by: m.voided_by, void_reason: m.void_reason || '',
+            });
+        }
+    }
+    // Свежее снятие — сверху: исправляют по горячим следам, и смотрят туда же.
+    return out.sort((a, b) => String(b.voided_at).localeCompare(String(a.voided_at)));
+}
+
+/** Кто снял, когда и почему — три вопроса одной строкой. */
+export function voidedLine(point, people) {
+    const v = point || {};
+    const who = people instanceof Map ? (people.get(Number(v.voided_by)) || '') : ((people || {})[v.voided_by] || '');
+    return [
+        tr(cellStateLabel(v.status)),
+        v.voided_at ? trf('снята в {time}', { time: hhmm(v.voided_at) }) : null,
+        who || null,
+        v.void_reason || null,
+    ].filter(Boolean).join(' · ');
 }
 
 /**
@@ -477,11 +541,15 @@ export function openUndoModal({ task, patient, onDone } = {}) {
 export async function renderMarNurse(root, ctx = {}) {
     const state = {
         date: todayLocal(), wardId: '', wards: [],
-        due: null, allergies: new Map(), selected: null,
+        due: null, allergies: new Map(), mrns: new Map(), people: new Map(), selected: null,
         // Питание выбранного пациента на выбранный день (admission_meals_list).
         // Спрашивается по ОДНОМУ человеку, а не по отделению: полоса стоит в
         // карточке выбранного, и лист на всех был бы запросом впрок.
         meals: null,
+        // Лист назначений выбранного пациента на тот же день. Нужен ровно ради
+        // СНЯТЫХ отметок: `treatment_tasks_due` отдаёт только действующие
+        // (voided_at IS NULL), а след снятия обещан медсестре окном снятия.
+        sheet: null,
     };
 
     const wrap = h('div', { class: 'fade-in' });
@@ -513,14 +581,34 @@ export async function renderMarNurse(root, ctx = {}) {
     // Аллергии берутся ОДНИМ запросом на всех, кого показываем, а не по одному
     // при открытии окна: баннер обязан быть уже на экране в момент, когда
     // медсестра нажала «Выполнить», а не догрузиться через полсекунды после.
+    // MAR_MRN_V1 — тем же запросом берётся НОМЕР КАРТЫ: «5 прав» называют
+    // пациента именем, номером карты и койкой, а второй запрос за номером
+    // означал бы, что окно подтверждения открывается раньше, чем узнаёт, кого
+    // подтверждает.
     async function loadAllergies(patientIds) {
         state.allergies = new Map();
+        state.mrns = new Map();
         const ids = [...new Set(patientIds.filter(Boolean).map(Number))];
         if (!ids.length) return;
         try {
-            const { data } = await supabase.from('patients').select('id, allergies').in('id', ids);
-            for (const p of (data || [])) state.allergies.set(Number(p.id), p.allergies || '');
+            const { data } = await supabase.from('patients').select('id, allergies, mrn').in('id', ids);
+            for (const p of (data || [])) {
+                state.allergies.set(Number(p.id), p.allergies || '');
+                state.mrns.set(Number(p.id), p.mrn || '');
+            }
         } catch (e) { /* без карты аллергий экран работает, но баннера не будет */ }
+    }
+
+    // Имена тех, кто снимал отметки. Список «Сделано» называет человека тем
+    // именем, которое прислал сервер (given_by_name); у снятой отметки такого
+    // поля нет — она приезжает из листа назначений, где стоит только id.
+    async function loadPeople() {
+        try {
+            const { data } = await supabase.from('users').select('id, full_name').limit(500);
+            const map = new Map();
+            for (const u of (data || [])) map.set(Number(u.id), u.full_name || '');
+            state.people = map;
+        } catch (e) { /* имена — украшение следа, след без них читается */ }
     }
 
     // Питание грузится ОТДЕЛЬНЫМ запросом и его отказ не роняет смену: экран
@@ -533,6 +621,18 @@ export async function renderMarNurse(root, ctx = {}) {
             admission_id: state.selected, meal_date: state.date,
         });
         if (data && Array.isArray(data.meals)) state.meals = data;
+    }
+
+    // Лист назначений выбранного пациента — ради СНЯТЫХ отметок. Отдельный
+    // запрос и отдельный отказ: не прочитался лист — смена работает дальше,
+    // просто без следа снятия.
+    async function loadSheet() {
+        state.sheet = null;
+        if (!state.selected) return;
+        const { data } = await supabase.rpc('treatment_orders_list', {
+            admission_id: state.selected, from: state.date, to: state.date, include_cancelled: true,
+        });
+        if (data && Array.isArray(data.orders)) state.sheet = data;
     }
 
     async function load() {
@@ -552,10 +652,13 @@ export async function renderMarNurse(root, ctx = {}) {
         state.due = data;
         const people = patientsFromTasks(data);
         await loadAllergies(people.map((p) => p.patient_id));
+        for (const p of people) p.mrn = mrnOf(state.mrns, p.patient_id);
         if (!people.some((p) => p.admission_id === state.selected)) {
             state.selected = people.length ? people[0].admission_id : null;
         }
+        await loadPeople();
         await loadMeals();
+        await loadSheet();
         paint(people);
     }
 
@@ -592,8 +695,9 @@ export async function renderMarNurse(root, ctx = {}) {
                 onclick: () => {
                     state.selected = p.admission_id;
                     state.meals = null;
+                    state.sheet = null;
                     paint(people);
-                    loadMeals().then(() => paint(people));
+                    Promise.all([loadMeals(), loadSheet()]).then(() => paint(people));
                 },
             },
                 h('span', {
@@ -608,7 +712,8 @@ export async function renderMarNurse(root, ctx = {}) {
                     // «Стационар»): это защита от «не того пациента».
                     h('span', { style: { display: 'block', fontSize: '17px', fontWeight: 800, color: 'var(--ink-900)' } },
                         p.patient_name || tr('без имени')),
-                    h('span', { class: 'muted', style: { display: 'block', fontSize: '12.5px' } }, bedLine(p))),
+                    h('span', { class: 'muted', style: { display: 'block', fontSize: '12.5px' } },
+                        [p.mrn || null, bedLine(p) || null].filter(Boolean).join(' · '))),
                 p.counts.overdue
                     ? Tag(trf('просрочено: {n}', { n: p.counts.overdue }), { kind: 'crit', dot: true })
                     : Tag(trf('задач: {n}', { n: p.total }))));
@@ -626,7 +731,7 @@ export async function renderMarNurse(root, ctx = {}) {
         }
         const allergy = allergyOf(state.allergies, p.patient_id);
         box.appendChild(h('div', { class: 'card', style: { padding: '14px 16px', display: 'grid', gap: '10px' } },
-            anchorBig(p.patient_name, bedLine(p)),
+            anchorBig(p.patient_name, [p.mrn || null, bedLine(p) || null].filter(Boolean).join(' · ')),
             allergyBanner(allergy),
             h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
                 h('button', {
@@ -654,7 +759,8 @@ export async function renderMarNurse(root, ctx = {}) {
         box.appendChild(mealsCard(people, p));
 
         const done = tasks.done || [];
-        if (done.length) box.appendChild(doneCard(done, p));
+        const undone = voidedPoints(state.sheet, state.date);
+        if (done.length || undone.length) box.appendChild(doneCard(done, undone, p));
         return box;
     }
 
@@ -733,29 +839,65 @@ export async function renderMarNurse(root, ctx = {}) {
 
     // «Сделано за смену» — список, из которого снимают промах. Он идёт ПОСЛЕДНИМ
     // и не спорит с работой: сверху то, что надо сделать, внизу то, что сделано.
-    function doneCard(list, p) {
+    function doneCard(list, undone, p) {
         const card = h('div', { class: 'card' },
             h('div', { class: 'card-header' },
                 h('h3', null, tr(MAR_DONE_GROUP[1])),
                 h('span', { style: { flex: 1 } }),
                 Tag(trf('отметок: {n}', { n: list.length }))));
         for (const t of list) card.appendChild(doneRow(t, p));
+        // СНЯТЫЕ — ниже сделанного и мельче его: это не работа и не выполнение,
+        // а след. Но он ЕСТЬ: до MAR_UNDO_TRACE_V1 снятая точка просто уходила с
+        // экрана, и окно снятия обещало историю, которой медсестра нигде не
+        // видела.
+        if ((undone || []).length) {
+            card.appendChild(h('div', {
+                style: { padding: '10px 16px 4px', borderTop: '1px solid var(--ink-100)' },
+            },
+                h('div', { style: { fontSize: '13.5px', fontWeight: 700 } }, tr('Снятые отметки')),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
+                    tr('Отметка снята, но не стёрта: час снова ждёт дозу, а запись о снятии остаётся.'))));
+            for (const u of undone) card.appendChild(undoneRow(u));
+        }
         return card;
     }
 
+    /**
+     * ОДНА ЗАКРЫТАЯ ТОЧКА. Введённая доза, отказ, «придержано» и записанный
+     * пропуск читаются РАЗНО — знаком, цветом и плашкой, а не одним словом в
+     * общей серой строке (MAR_OUTCOME_VISIBLE_V1).
+     *
+     * До этого дня все четыре исхода рисовались одинаково: 12.5 px серым,
+     * «Введено · Иванова» и «Отказ пациента · Иванова» в одном тоне и без
+     * знака. Лист врача уже различал их знаком, цветом и легендой, полоса
+     * питания на этом же экране — цветом плашки; список, в котором медсестра
+     * проверяет СВОЮ работу за смену, оставался единственным местом, где
+     * невведённая доза выглядела как введённая.
+     */
     function doneRow(t, p) {
         const refusal = undoRefusal(t);
+        const status = t.status || 'given';
+        const col = cellStateColor(status);
         return h('div', {
             style: {
                 display: 'flex', alignItems: 'center', gap: '12px',
                 padding: '12px 16px', borderTop: '1px solid var(--ink-100)', flexWrap: 'wrap',
+                // Полоска слева — тот же цвет состояния: строку видно с
+                // расстояния вытянутой руки, не читая её.
+                borderLeft: '3px solid ' + col.fg, background: col.bg,
             },
         },
             h('div', { style: { fontSize: '17px', fontWeight: 800, minWidth: '64px' } }, hhmm(t.given_at)),
+            h('div', {
+                style: { fontSize: '20px', fontWeight: 800, color: col.fg, minWidth: '24px', textAlign: 'center' },
+                title: tr(cellStateLabel(status)),
+            }, cellGlyph(status)),
             h('div', { style: { flex: 1, minWidth: '160px' } },
                 h('div', { style: { fontSize: '15px', fontWeight: 700, color: 'var(--ink-900)' } }, t.name || ''),
                 h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                    [t.dose || null, t.route || null, doneLine(t) || null].filter(Boolean).join(' · '))),
+                    [t.dose || null, t.route || null, t.given_by_name || null,
+                        t.reason || null].filter(Boolean).join(' · '))),
+            Tag(tr(cellStateLabel(status)), { kind: cellStateTone(status), dot: true }),
             canUndo(t)
                 ? h('button', {
                     class: 'btn btn-sm', type: 'button',
@@ -765,6 +907,26 @@ export async function renderMarNurse(root, ctx = {}) {
                 // искать, что она сделала не так, вместо того чтобы позвать старшую.
                 : h('div', { class: 'muted', style: { fontSize: '12.5px', maxWidth: '320px', textAlign: 'right' } },
                     refusal));
+    }
+
+    /** Снятая отметка: зачёркнутая, со знаком «↺» и с тем, кто, когда и почему. */
+    function undoneRow(u) {
+        return h('div', {
+            style: {
+                display: 'flex', alignItems: 'center', gap: '12px',
+                padding: '9px 16px', borderTop: '1px solid var(--ink-100)', flexWrap: 'wrap',
+            },
+        },
+            h('div', { class: 'muted', style: { fontSize: '15px', fontWeight: 700, minWidth: '64px' } },
+                hhmm(u.given_at)),
+            h('div', { class: 'muted', style: { fontSize: '17px', fontWeight: 800, minWidth: '24px', textAlign: 'center' } },
+                VOIDED_GLYPH),
+            h('div', { style: { flex: 1, minWidth: '160px' } },
+                h('div', {
+                    class: 'muted',
+                    style: { fontSize: '13.5px', fontWeight: 700, textDecoration: 'line-through' },
+                }, u.name || ''),
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } }, voidedLine(u, state.people))));
     }
 
     function taskRow(t, p, allergy) {

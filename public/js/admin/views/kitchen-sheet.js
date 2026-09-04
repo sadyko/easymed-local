@@ -26,11 +26,14 @@ import { supabase } from '../../supabase.js';
 import { h, clear, toast, Icon } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — переводим ПЕРВЫМ, подставляем ВТОРЫМ
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1
+// INPATIENT_ROLE_GATE_V1 — тот же список читает и меню (permissions.js
+// isModuleAllowed): одна копия, и лежит она у гейта.
+import { INPATIENT_SCREEN_ROLES } from '../permissions.js';
 
 // Кто открывает порционник. Врач в списке есть только главный: обычному врачу
 // заказ на кухню по всему отделению не нужен — стол своего пациента он видит в
 // его карте. Кассы и склада здесь нет: это не документ на деньги.
-export const KITCHEN_SHEET_ROLES = ['nurse', 'senior_nurse', 'head_doctor', 'admin'];
+export const KITCHEN_SHEET_ROLES = INPATIENT_SCREEN_ROLES['kitchen-sheet'];
 
 /**
  * Роли считаются ПО ОБЪЕДИНЕНИЮ основной и дополнительных — так же, как их

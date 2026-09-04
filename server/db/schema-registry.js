@@ -679,9 +679,23 @@ export const REGISTRY = {
   //
   // Круг читателей тот же, что у листа назначений: осмотр — история болезни, а
   // не счёт, и кассе со складом в нём делать нечего.
+  //
+  // INPATIENT_REVIEW_DRAFT_V1 — НО ТЕКСТ ЗАПИСИ ЧЕРЕЗ /api/db НЕ ОТДАЁТСЯ.
+  //
+  // Реестр умеет одно: «эта роль читает эти колонки». Строку он не фильтрует, и
+  // отдать здесь `body`/`diagnosis` значило отдать ЧЕРНОВИК: `published_at`
+  // стоит в filters, поэтому `.is('published_at', null)` одним запросом выдавал
+  // любой сестре ненапечатанный диагноз, который RPC (admission_reviews_list)
+  // прячет до публикации — и который врач ещё правит. Записать «читать только
+  // опубликованные» реестру нечем, поэтому убран сам текст: остаются метаданные
+  // (что за запись, чья, когда, опубликована ли, чем заменена) — по ним экраны
+  // считают «эпикриз есть / осмотр проведён», а ТЕКСТ приходит одной дорогой,
+  // через RPC, где проверка публикации и роли уже написана. Ни один экран этой
+  // таблицей через /api/db не пользуется (единственный читатель —
+  // views/admission-modal.js, и он зовёт RPC).
   admission_reviews: {
-    read:  { roles: INPATIENT_CARE_ROLES, columns: ['id','admission_id','kind','complaints','objective',
-             'diagnosis','plan','body','author_id','author_role','created_at','updated_at',
+    read:  { roles: INPATIENT_CARE_ROLES, columns: ['id','admission_id','kind',
+             'author_id','author_role','created_at','updated_at',
              'published_at','superseded_by'] },
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },
     filters: ['id','admission_id','kind','published_at','superseded_by','author_id'],
