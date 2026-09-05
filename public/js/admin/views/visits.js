@@ -13,6 +13,12 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, StatusTag, fmtDateTime, field } from '../ui.js';
 import { openVisitBillModal } from './visit-bill.js';
+// VISITS_ONE_DOOR_V1 — журнал визитов записывал пациента ПРЯМОЙ вставкой в
+// visits через /api/db, то есть мимо запрета двойной записи: свободное время
+// он не спрашивал вовсе (обычный datetime-local), и два регистратора спокойно
+// ставили одного врача на одно время. Теперь запись идёт тем же входом, что у
+// календаря и мастеров.
+import { bookVisit } from './visit-booking.js';
 
 const refs = {
     container: null,
@@ -147,11 +153,6 @@ function visitRow(v) {
 // -----------------------------------------------------------------------------
 // BOOK VISIT MODAL
 // -----------------------------------------------------------------------------
-function currentUserId() {
-    try { return (window.easymed && window.easymed.state && window.easymed.state.user && window.easymed.state.user.id) || null; }
-    catch (e) { return null; }
-}
-
 async function resolveBranchId() {
     if (_cachedBranchId !== undefined) return _cachedBranchId;
     try {
@@ -304,22 +305,32 @@ export function openBookVisitModal(onSaved, preselectPatient = null) {
         const prevLabel = saveBtn.textContent;
         saveBtn.textContent = 'Booking…';
         try {
-            const payload = {
+            const args = {
                 patient_id:       dialogState.patient.id,
-                visit_date:       new Date(dtInput.value).toISOString(),
+                start:            new Date(dtInput.value).toISOString(),
                 duration_minutes: 30,
-                visit_type:       typeSelect.value,
                 status:           'scheduled',
             };
-            if (doctorSelect.value) payload.doctor_id = Number(doctorSelect.value);
-            if (notesInput.value.trim()) payload.notes = notesInput.value.trim();
+            if (doctorSelect.value) args.doctor_id = Number(doctorSelect.value);
+            if (notesInput.value.trim()) args.notes = notesInput.value.trim();
             const branchId = await resolveBranchId();
-            if (branchId != null) payload.branch_id = branchId;
-            const uid = currentUserId();
-            if (uid != null) payload.created_by = uid;
+            if (branchId != null) args.branch_id = branchId;
 
-            const { error } = await supabase.from('visits').insert(payload).select().single();
-            if (error) throw error;
+            // Отказ («время занято, у врача уже есть приём 14:30–15:00») и
+            // экстренная запись с причиной — работа общего клиента записи.
+            // null = регистратор передумал записывать поверх занятого: в базе
+            // не создано ничего, окно остаётся открытым.
+            const res = await bookVisit(args);
+            if (!res) { saveBtn.disabled = false; saveBtn.textContent = prevLabel; return; }
+
+            // Тип приёма — не расписание, и записью он не ставится: у
+            // calendar_book новый визит всегда 'outpatient'. Дописываем его
+            // отдельно и только когда он отличается от этого умолчания.
+            if (typeSelect.value && typeSelect.value !== 'outpatient' && res.visit) {
+                const { error: tErr } = await supabase.from('visits')
+                    .update({ visit_type: typeSelect.value }).eq('id', res.visit.id);
+                if (tErr) console.warn('[visits] visit_type not saved:', tErr.message);
+            }
 
             toast('Visit booked', 'ok');
             close();

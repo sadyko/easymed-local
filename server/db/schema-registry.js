@@ -109,19 +109,49 @@ export const REGISTRY = {
     embed:   { branches: { table:'branches', fk:'branch_id', columns:['id','name'] },
                payers:   { table:'payers',   fk:'payer_id',  columns:['id','name'] } },
   },
-  // CALENDAR_BOOKING_V1 (миграция 099) — service_id и room_id. Обе колонки
-  // мастер визита УЖЕ клал в payload вставки (service-picker-modal.js), но их
-  // не было ни в таблице, ни здесь: компилятор молча выбрасывает ключи вне
-  // списка записи («Compat layer» в insertStatement), и значения уходили в
-  // никуда — вставка проходила, данные терялись. Теперь они доезжают: из
-  // service_id берётся длительность слота (services.duration_minutes), по
-  // room_id строится ось кабинетов в «Календаре записи».
+  // ═══ VISITS_ONE_DOOR_V1 (2026-09-05) — РАСПИСАНИЕ НЕ ПИШЕТСЯ ЧЕРЕЗ /api/db ═══
   //
-  // update открыт для обеих: перенос карточки в другой кабинет — это UPDATE
-  // одной колонки. Сам ЗАПРЕТ двойной записи при этом живёт не здесь, а в RPC
-  // calendar_book (services/rpc/calendar.js): /api/db не умеет и не должен
-  // уметь проверять пересечение интервалов, поэтому календарь переносит
-  // записи через RPC, а не через табличный UPDATE.
+  // Здесь раньше стояло: «сам ЗАПРЕТ двойной записи живёт не здесь, а в RPC
+  // calendar_book: /api/db не умеет и не должен уметь проверять пересечение
+  // интервалов». Первая половина была правдой, вторая — самообманом: реестр
+  // при этом ПРОДОЛЖАЛ раздавать insert/update на visit_date, doctor_id,
+  // duration_minutes и status. То есть правило жило в одной двери, а дверей
+  // было две, и вторая стояла открытой. Через неё писали четыре экрана
+  // (журнал визитов, кабинет врача, повторный визит, окно визита), и в базе
+  // владельца нашлись ДВА живых scheduled-визита одного врача на 10:00.
+  //
+  // Правило владельца — «один пациент на врача на слот, жёстко». Жёстко
+  // значит: время, врач, длительность и статус визита меняются ТОЛЬКО через
+  // calendar_book, который умеет проверить пересечение (и назвать занятое
+  // время), а таблица их вовсе не отдаёт. Проверку, которую можно обойти,
+  // послав тот же запрос curl'ом, запретом называть нельзя.
+  //
+  // insert: РОЛЕЙ НЕТ ВОВСЕ. Визит без visit_date/doctor_id/status — это не
+  // «визит без расписания», а строка, которую база не примет (visit_date NOT
+  // NULL, миграция 003). Законной вставки через /api/db не осталось ни одной:
+  // регистратура пишет мастером (ensure_visit → calendar_book), календарь и
+  // экраны — calendar_book. Пустой список ролей отвечает честным 403, а не
+  // невнятной ошибкой ограничения таблицы.
+  //
+  // update: остались ТОЛЬКО не-расписание — notes (причина экстренной записи,
+  // примечание регистратуры) и conclusion/conclusion_type (заключение врача,
+  // «Документы пациента» и кабинет врача пишут их и ничего больше).
+  //   • status — это тоже расписание: перевод отменённой записи обратно в
+  //     scheduled/confirmed/arrived ПЕРЕПРОДАЁТ слот, который она освободила.
+  //     Двухкликовый обход («записать отменённым поверх занятого, потом
+  //     переключить») ходил именно здесь. Переход НАРУЖУ (отмена, неявка)
+  //     проверки не требует, но и он идёт через calendar_book — одна дверь.
+  //     Кстати, in_progress/completed сюда никогда и не доезжали: их нет в
+  //     CHECK-ограничении visits.status (миграция 003), и «зеркало» статуса
+  //     из «Моих услуг» отвергала сама база, молча, в console.warn.
+  //   • duration_minutes — растянуть запись значит наехать на соседнюю; это
+  //     ровно тот же запрет и та же проверка, что и перенос.
+  //   • service_id/room_id — их ставит запись, и меняются они вместе с ней
+  //     (calendar_book принимает обе).
+  //
+  // Читаются все эти колонки по-прежнему: экран обязан ПОКАЗЫВАТЬ расписание.
+  // service_id/room_id — CALENDAR_BOOKING_V1 (миграция 099); sync_origin —
+  // BRANCH_ORIGIN_V1 (083), ставится только приёмом порции.
   visits: {
     read:  { roles: ALL_STAFF, columns: ['id','patient_id','doctor_id','branch_id','visit_date',
              'duration_minutes','visit_kind','visit_type','status','referral_source_id','notes',
@@ -129,11 +159,13 @@ export const REGISTRY = {
              'service_id','room_id',
              'sync_origin'] },   // service_id/room_id: CALENDAR_BOOKING_V1 (mig 099); sync_origin: BRANCH_ORIGIN_V1 (mig 083) — откуда строка; ставится только приёмом порции, поэтому не writable
     write: {
-      insert: { roles: ['admin','registrar','doctor'], columns: ['patient_id','doctor_id','branch_id','visit_date',
-                'duration_minutes','visit_kind','visit_type','status','referral_source_id','notes','created_by',
-                'service_id','room_id'] },   // CALENDAR_BOOKING_V1
-      update: { roles: ['admin','registrar','doctor'], columns: ['status','visit_date','duration_minutes','doctor_id','notes','conclusion','conclusion_type',
-                'service_id','room_id'] },   // CALENDAR_BOOKING_V1
+      // VISITS_ONE_DOOR_V1 — визит заводит только RPC (ensure_visit / calendar_book).
+      insert: { roles: [], columns: [] },
+      // visit_type/visit_kind — ЧТО ЭТО ЗА ПРИЁМ (амбулаторный/экстренный/
+      // стационарный; первичный/повторный), а не КОГДА и НЕ У КОГО. Раньше их
+      // не было ни в одном списке, и «Тип пациента» в окне визита молча не
+      // сохранялся: компилятор выбрасывает ключи вне списка без единого слова.
+      update: { roles: ['admin','registrar','doctor'], columns: ['notes','conclusion','conclusion_type','visit_type','visit_kind'] },   // VISITS_ONE_DOOR_V1 — расписания здесь нет
       delete: { roles: ['admin'] },
     },
     filters: ['id','patient_id','doctor_id','branch_id','status','visit_date','sync_origin','service_id','room_id'],   // sync_origin: BRANCH_ORIGIN_V1; service_id/room_id: CALENDAR_BOOKING_V1

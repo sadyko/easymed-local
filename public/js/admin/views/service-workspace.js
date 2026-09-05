@@ -12,6 +12,13 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, Avatar, Tag, StatusTag, clear, toast } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
+// WIZARD_ONE_ENGINE_V1 / VISITS_ONE_DOOR_V1 — «Повторный визит» держал ЧЕТВЁРТУЮ
+// реализацию расписания (loadBookedSlots: своя сетка 20 минут, свои 08:00–19:00,
+// свой обед 13:00–14:00 — ни графика врача, ни часов клиники) и записывал
+// пациента прямой вставкой в visits, мимо запрета двойной записи. Обе копии
+// удалены: свободное время называет calendar_slots, записывает calendar_book.
+import { loadSlotDay, freeStartMinutes, hhmmToMin } from './service-picker-modal.js?v=aug17e';
+import { bookVisit } from './visit-booking.js';
 import { openItemPickerModal } from './item-picker-modal.js?v=billoptin1';   // DISPENSE_ITEM_V1
 import { logPatientActivity } from './activity-log.js';
 import { canDelete as canDeleteRole, patientTabCanEdit } from '../permissions.js';
@@ -1267,7 +1274,11 @@ const RV_REASONS = ['Контроль после лечения', 'Оценка 
 const RV_MONTHS  = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 const RV_WEEK    = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
+// Шаг и длительность повторного визита. Это НЕ расчёт расписания: сервер
+// принимает их как аргументы и сам решает, что из этого свободно.
+const RV_SLOT_MIN = 20;
 function rvPad(n) { return String(n).padStart(2, '0'); }
+function minToHhmm(m) { return `${rvPad(Math.floor(m / 60))}:${rvPad(m % 60)}`; }
 function rvIso(y, m, d) { return `${y}-${rvPad(m + 1)}-${rvPad(d)}`; }   // m is 0-based
 
 // AURORA_WS_DOCTOR_RESOLVE_V1 — the acting doctor for revisit / hospitalization:
@@ -1437,6 +1448,11 @@ async function openRevisitModal(ctx) {
         calWrap.append(nav, quick, grid);
     }
 
+    // СВОБОДНОЕ ВРЕМЯ НАЗЫВАЕТ СЕРВЕР. Здесь не осталось ни графика, ни обеда,
+    // ни «прошло/не прошло», ни шага сетки: всё это считает один движок на весь
+    // продукт (slot-engine.js) и отдаёт calendar_slots. Экран рисует ровно два
+    // списка из ответа: свободные начала (нажимаются) и занятое (показывается
+    // серым, чтобы врач видел, ЧТО именно занято, а не пустоту).
     async function renderSlots() {
         clear(slotsWrap);
         if (!state.sel) {
@@ -1444,23 +1460,26 @@ async function openRevisitModal(ctx) {
             return;
         }
         slotsWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '6px 0' } }, 'Загрузка…'));
-        const booked = await loadBookedSlots(doctorId, state.sel.y, state.sel.m, state.sel.d);
+        const dayIso = rvIso(state.sel.y, state.sel.m, state.sel.d);
+        const day = await loadSlotDay(doctorId, dayIso, RV_SLOT_MIN, { stepMinutes: RV_SLOT_MIN, patientId });
         clear(slotsWrap);
-        // 20-min slots 08:00–19:00, lunch 13:00–14:00 disabled.
-        const slots = [];
-        for (let hh = 8; hh < 19; hh++) for (let mm = 0; mm < 60; mm += 20) {
-            const label = `${rvPad(hh)}:${rvPad(mm)}`;
-            const lunch = hh === 13;
-            const _past = (() => { const n = new Date(); return new Date(state.sel.y, state.sel.m, state.sel.d).toDateString() === n.toDateString() && (hh * 60 + mm) <= (n.getHours() * 60 + n.getMinutes()); })(); slots.push({ label, busy: lunch || _past || booked.has(label), lunch, past: _past });
+        if (!day || !day.window) {
+            slotsWrap.appendChild(h('div', { class: 'rv-pickhint muted' }, Icon('Calendar', { size: 16 }), ' ',
+                tr('В этот день врач не принимает — выберите другой.')));
+            return;
         }
-        const free = slots.filter(s => !s.busy).length;
-        slotsWrap.appendChild(h('div', { class: 'rv-slotcount', style: { color: free ? 'var(--ok-700)' : 'var(--crit-700)' } }, trf('Свободно: {n}', { n: free })));
+        const free = freeStartMinutes(day);
+        const slots = [
+            ...free.map(m => ({ label: minToHhmm(m), busy: false })),
+            ...(day.busy || []).map(b => ({ label: b.from, busy: true, who: b.patient_name || '' })),
+        ].sort((a, b) => hhmmToMin(a.label) - hhmmToMin(b.label));
+        slotsWrap.appendChild(h('div', { class: 'rv-slotcount', style: { color: free.length ? 'var(--ok-700)' : 'var(--crit-700)' } }, trf('Свободно: {n}', { n: free.length })));
         const grid = h('div', { class: 'rv-slots' });
-        slots.forEach(s => {
-            const cls = ['rv-slot', s.busy ? 'busy' : '', state.slot === s.label ? 'on' : ''].filter(Boolean).join(' ');
-            grid.appendChild(h('button', { class: cls, type: 'button', title: s.lunch ? 'Перерыв' : s.past ? 'Прошло' : s.busy ? 'Занято' : 'Свободно',
-                ...(s.busy ? { disabled: '' } : {}),
-                onclick: () => { state.slot = s.label; renderSlots(); refreshFootBtn(); } }, s.label));
+        slots.forEach(sl => {
+            const cls = ['rv-slot', sl.busy ? 'busy' : '', state.slot === sl.label ? 'on' : ''].filter(Boolean).join(' ');
+            grid.appendChild(h('button', { class: cls, type: 'button', title: sl.busy ? tr('Занято') : tr('Свободно'),
+                ...(sl.busy ? { disabled: '' } : {}),
+                onclick: () => { state.slot = sl.label; renderSlots(); refreshFootBtn(); } }, sl.label));
         });
         slotsWrap.appendChild(grid);
     }
@@ -1477,20 +1496,26 @@ async function openRevisitModal(ctx) {
             const ct = consultTypes.find(c => String(c.id) === String(ctId)) || null;
             const price = ct ? consultPrice(ct) : 0;
 
-            // visits insert — MIRRORS appointments.js createVisit (direct insert,
-            // no insertRow → no auto created_by/company_id). visit_kind 'repeat'.
-            const { data: visit, error } = await supabase.from('visits').insert({
+            // VISITS_ONE_DOOR_V1 — запись идёт тем же входом, что у календаря и
+            // мастеров: занятое время сервер называет словами, а поверх него
+            // можно записать только экстренно и только с причиной. null =
+            // врач передумал — не создано ни визита, ни строки услуги.
+            const booked = await bookVisit({
                 patient_id:       patientId,
                 doctor_id:        doctorId,
                 service_id:       null,            // consultation-primary → null (CONSULT_BOOKING_V1)
-                visit_date:       visitDate,
-                duration_minutes: 20,
-                visit_kind:       'repeat',
-                visit_type:       'outpatient',
+                start:            visitDate,
+                duration_minutes: RV_SLOT_MIN,
                 status:           'scheduled',
                 notes,
-            }).select().single();
-            if (error) throw error;
+            });
+            if (!booked) { bookBtn.removeAttribute('disabled'); return; }
+            const visit = booked.visit;
+            // Повторность — не расписание, и записью она не ставится: у
+            // calendar_book новый визит всегда 'first'. Пометка отдельная.
+            const { error: kindErr } = await supabase.from('visits')
+                .update({ visit_kind: 'repeat' }).eq('id', visit.id);
+            if (kindErr) console.warn('[revisit] visit_kind not saved:', kindErr.message);
 
             // visit_services consultation line — MIRRORS createVisit __consult branch.
             if (ctId) { const { error: vsErr } = await insertRow('visit_services', {
@@ -1576,34 +1601,12 @@ async function openRevisitModal(ctx) {
     renderCal(); renderSlots();
 }
 
-// REAL availability: booked slots for a doctor on a given day. Mirrors the
-// loadCalendarAppts query (visits by doctor + day range). Returns a Set of
-// 'HH:MM' labels covered by any scheduled visit's [start, start+duration).
-async function loadBookedSlots(doctorId, y, m, d) {
-    const set = new Set();
-    if (!doctorId) return set;
-    const start = new Date(y, m, d, 0, 0, 0);
-    const end   = new Date(y, m, d + 1, 0, 0, 0);
-    const { data, error } = await supabase.from('visits')
-        .select('visit_date, duration_minutes, status')
-        .eq('doctor_id', doctorId)
-        .gte('visit_date', start.toISOString())
-        .lt('visit_date', end.toISOString());
-    if (error) { console.warn('[revisit] booked-slots query failed:', error.message); return set; }
-    for (const v of (data || [])) {
-        if (v.status === 'cancelled' || v.status === 'no_show') continue;
-        const vd = new Date(v.visit_date);
-        const dur = Number(v.duration_minutes || 20);
-        let t = new Date(vd);
-        const stop = new Date(vd.getTime() + dur * 60000);
-        t.setMinutes(Math.floor(t.getMinutes() / 20) * 20, 0, 0);   // snap to 20-min grid
-        while (t < stop) {
-            set.add(`${rvPad(t.getHours())}:${rvPad(t.getMinutes())}`);
-            t = new Date(t.getTime() + 20 * 60000);
-        }
-    }
-    return set;
-}
+// ЧЕТВЁРТАЯ РЕАЛИЗАЦИЯ РАСПИСАНИЯ (loadBookedSlots) СТОЯЛА ЗДЕСЬ И УДАЛЕНА.
+// Она пережила объединение трёх остальных и расходилась с ними ровно так же:
+// своя сетка 20 минут, зашитое окно 08:00–19:00, зашитый обед 13:00–14:00,
+// график врача и часы клиники не читались вовсе, отменённое отсеивалось в
+// браузере. «Свободно» теперь на весь продукт одно — calendar_slots
+// (server/services/rpc/slot-engine.js), и спрашивает его renderSlots выше.
 
 // Flip the «Повторный визит» button to its booked state.
 function markRevisitBooked(ctx, when) {
@@ -3594,6 +3597,18 @@ async function handleSignFinalize(ctx) {
 // 'completed' once every non-cancelled service on it is completed; while any
 // service is still queued/in_progress the visit stays 'in_progress'. Returns
 // true if the visit ended up completed. Best-effort — failures are logged.
+//
+// VISITS_ONE_DOOR_V1 — ЗДЕСЬ СТОЯЛА ЗАПИСЬ visits.status, И ОНА НЕ ДОЕЗЖАЛА
+// НИКОГДА. 'in_progress' и 'completed' не входят в CHECK-ограничение
+// visits.status (миграция 003: scheduled/confirmed/arrived/cancelled/no_show),
+// поэтому база отвергала её сама, молча, в console.warn — а функция из-за
+// этого ВСЕГДА возвращала false, и врач после подписи документа всегда видел
+// «Услуга отмечена выполненной», даже закрыв последнюю услугу приёма.
+//
+// Мёртвая запись убрана, а не переписана на calendar_book: расширять словарь
+// статусов визита — это миграция, а миграции в этой задаче не трогаются.
+// Возвращается честный ответ по составу услуг — ровно то, ради чего функцию и
+// звали (её результат выбирает текст уведомления, и только его).
 async function syncVisitStatus(visitId) {
     if (!visitId) return false;
     const { data, error } = await supabase
@@ -3603,12 +3618,7 @@ async function syncVisitStatus(visitId) {
     if (error) { console.warn('[workspace] visit status sync read failed:', error.message); return false; }
     const services = data || [];
     const active = services.filter(s => s.status !== 'cancelled');
-    const allDone = active.length > 0 && active.every(s => s.status === 'completed');
-    const newStatus = allDone ? 'completed' : 'in_progress';
-    const { error: vErr } = await supabase.from('visits')
-        .update({ status: newStatus }).eq('id', visitId);
-    if (vErr) { console.warn('[workspace] visit status update failed:', vErr.message); return false; }
-    return allDone;
+    return active.length > 0 && active.every(s => s.status === 'completed');
 }
 
 // ---------------------------------------------------------------------------

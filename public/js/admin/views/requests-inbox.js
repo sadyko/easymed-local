@@ -8,6 +8,13 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+// VISITS_ONE_DOOR_V1 — «Подтвердить» ставило заявке status/doctor_id/room_id/
+// visit_date ОДНИМ НЕПРОВЕРЕННЫМ UPDATE. Это была самая тихая из дыр: пациент
+// отменяет 10:00 → слот продают заново → регистратор открывает ту же
+// отменённую заявку обратно, и на 10:00 стоят двое, причём ни один экран об
+// этом не говорит. Подтверждение — это запись, и идёт она туда же, куда
+// запись из календаря и мастеров.
+import { bookVisit, setVisitStatus } from './visit-booking.js';
 
 const RU_MO = ['янв.', 'фев.', 'мар.', 'апр.', 'мая', 'июн.', 'июл.', 'авг.', 'сен.', 'окт.', 'ноя.', 'дек.'];
 const pad = (n) => String(n).padStart(2, '0');
@@ -28,7 +35,6 @@ const OUTCOME = {
     no_show:     ['Не пришёл', 'var(--warn-700, #b45309)',    'var(--warn-50, #fffbeb)'],
 };
 const outcomeOf = (s) => OUTCOME[s] || [s || '—', 'var(--ink-500, #55636d)', 'var(--ink-50, #f3f5f7)'];
-const currentUserId = () => (window.easymed && window.easymed.state && window.easymed.state.user && window.easymed.state.user.id) || null;
 
 function fmtDateTime(iso) { const d = iso && new Date(iso); return (d && !isNaN(d)) ? `${d.getDate()} ${RU_MO[d.getMonth()]} ${d.getFullYear()}, ${pad(d.getHours())}:${pad(d.getMinutes())}` : ''; }
 function fmtRel(iso) { const d = iso && new Date(iso); return (d && !isNaN(d)) ? `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}` : ''; }
@@ -258,16 +264,31 @@ export async function renderRequestsInbox(container) {
             const d = new Date(dtInput.value);
             if (isNaN(d)) { toast('Некорректная дата и время.', 'fail'); return; }
             confirmBtn.disabled = rejectBtn.disabled = true;
-            const upd = { status: 'scheduled', doctor_id: docId, room_id: roomId, visit_date: d.toISOString() };
-            const { error } = await supabase.from('visits').update(upd).eq('id', v.id);
-            if (error) { toast(trf('Не удалось подтвердить: {msg}', { msg: error.message }), 'fail'); confirmBtn.disabled = rejectBtn.disabled = false; return; }
+            let res;
+            try {
+                res = await bookVisit({
+                    visit_id: v.id, status: 'scheduled',
+                    doctor_id: docId ? Number(docId) : null,
+                    room_id: roomId ? Number(roomId) : null,
+                    start: d.toISOString(),
+                });
+            } catch (e) {
+                toast(trf('Не удалось подтвердить: {msg}', { msg: (e && e.message) || e }), 'fail');
+                confirmBtn.disabled = rejectBtn.disabled = false; return;
+            }
+            // null — регистратор отказался записывать поверх занятого времени:
+            // заявка осталась заявкой, слот остался за тем, кто его занял.
+            if (!res) { confirmBtn.disabled = rejectBtn.disabled = false; return; }
             toast(docId ? 'Запись подтверждена и назначена врачу' : 'Запись подтверждена (кабинет)');
             load();
         };
         rejectBtn.onclick = () => openRejectDialog(patient, async (reason) => {
             confirmBtn.disabled = rejectBtn.disabled = true;
-            const { error } = await supabase.from('visits').update({ status: 'cancelled', cancel_reason: reason, cancelled_by: currentUserId(), cancelled_at: new Date().toISOString() }).eq('id', v.id);
-            if (error) { toast(trf('Не удалось отклонить: {msg}', { msg: error.message }), 'fail'); confirmBtn.disabled = rejectBtn.disabled = false; return false; }
+            // Отклонение слот ОСВОБОЖДАЕТ — сервер такой переход не проверяет,
+            // но дверь одна: разные двери на «записать» и «отменить» и есть то,
+            // как отмена превращалась в тихую перепродажу.
+            try { await setVisitStatus(v, 'cancelled'); }
+            catch (e) { toast(trf('Не удалось отклонить: {msg}', { msg: (e && e.message) || e }), 'fail'); confirmBtn.disabled = rejectBtn.disabled = false; return false; }
             toast('Заявка отклонена');
             load();
             return true;

@@ -258,7 +258,10 @@ test('service delete: unused service goes over /api/rpc; a used one is refused w
 
   // Give the second one history: a patient's visit line.
   const patient = (await db(base, cookie, { table: 'patients', op: 'insert', values: { full_name: 'Тестов Тест' }, returning: true, single: 'single' })).json.data;
-  const visit = (await db(base, cookie, { table: 'visits', op: 'insert', values: { patient_id: patient.id, visit_date: '2026-08-16' }, returning: true, single: 'single' })).json.data;
+  // VISITS_ONE_DOOR_V1 — визит через /api/db не вставляется больше ни одной
+  // ролью (расписание пишет только RPC), поэтому фикстура берётся оттуда же,
+  // откуда её берёт мастер записи.
+  const visit = (await rpc('ensure_visit', { patient_id: patient.id, date: '2026-08-16' })).json.data.visit;
   const line = await db(base, cookie, { table: 'visit_services', op: 'insert', values: { visit_id: visit.id, service_id: used.id, quantity: 1, unit_price: 250000, total: 250000 } });
   assert.equal(line.status, 200, JSON.stringify(line.json));
 

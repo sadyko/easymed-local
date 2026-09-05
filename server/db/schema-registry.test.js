@@ -28,16 +28,36 @@ test('readableColumns is an explicit allow-list; filters and embeds are gated', 
   assert.equal(embedEntry('patients', 'nonsense'), null);
 });
 
-test('visits registry: staff read, registrar can insert, embeds patients + doctor', () => {
+// VISITS_ONE_DOOR_V1 — раньше этот тест закреплял «регистратор может вставить
+// визит через /api/db». Именно этой возможностью и обходился запрет двойной
+// записи: время, врач и статус ставились без единой проверки пересечения.
+// Теперь визит заводит только RPC (ensure_visit / calendar_book), и тест
+// закрепляет обратное.
+test('visits registry: staff read, NOBODY inserts through /api/db, embeds patients + doctor', () => {
   assert.equal(tableEntry('visits').table, 'visits');
   assert.ok(canRead('visits', 'registrar'));
-  assert.ok(canWrite('visits', 'insert', 'registrar'));
-  assert.ok(canWrite('visits', 'insert', 'doctor'));     // doctors start walk-in consultations (Doctor's room)
-  assert.ok(!canWrite('visits', 'insert', 'lab'));       // lab can't book
+  for (const role of ['admin', 'registrar', 'doctor', 'lab', 'nurse']) {
+    assert.ok(!canWrite('visits', 'insert', role), role + ' must not insert a visit through /api/db');
+  }
   assert.ok(!canWrite('visits', 'delete', 'registrar')); // only admin deletes
   assert.equal(embedEntry('visits', 'patients').fk, 'patient_id');
   assert.equal(embedEntry('visits', 'doctor').fk, 'doctor_id');
   assert.equal(embedEntry('visits', 'doctor').table, 'users');
+});
+
+// ЗАПРЕТ ДВОЙНОЙ ЗАПИСИ ЖИВЁТ В calendar_book, И ВТОРОЙ ДВЕРИ К НЕМУ НЕТ.
+// Всё, что составляет расписание визита — когда, у кого, как долго и держит ли
+// запись слот вообще, — через табличный UPDATE не пишется: /api/db не умеет
+// проверять пересечение интервалов, поэтому он их и не отдаёт.
+test('visits registry: расписание визита через /api/db не пишется', () => {
+  const upd = writableColumns('visits', 'update');
+  for (const col of ['visit_date', 'doctor_id', 'status', 'duration_minutes', 'service_id', 'room_id']) {
+    assert.ok(!upd.includes(col), col + ' must not be update-writable — scheduling belongs to calendar_book');
+  }
+  // Не-расписание остаётся: примечание, заключение и вид приёма.
+  for (const col of ['notes', 'conclusion', 'conclusion_type', 'visit_type', 'visit_kind']) {
+    assert.ok(upd.includes(col), col + ' is not scheduling and must stay writable');
+  }
 });
 
 test('services registry: routing type column readable and admin-writable', () => {

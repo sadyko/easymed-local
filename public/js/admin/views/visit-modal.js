@@ -18,6 +18,11 @@ import { creditCashbackOnPaid } from './cashback.js?v=cb1';
 import { openCancelInvoiceDialog, logInvoiceAction as _logInvoiceAction } from './invoice-actions.js?v=ia3';
 import { logPatientActivity } from './activity-log.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // must match every other importer (one module instance)
+// VISITS_ONE_DOOR_V1 — окно визита правило двойной записи не знало вовсе:
+// «Сохранить» писало visit_date прямым UPDATE, а кнопки статуса — status.
+// Переезд на другой день и возврат отменённой записи в «записан» проходили
+// мимо проверки. Расписание визита меняет теперь только calendar_book.
+import { bookVisit, setVisitStatus as bookStatus } from './visit-booking.js';
 
 let active = null;
 
@@ -362,14 +367,12 @@ function buttonKindForStatus(s) {
 }
 
 async function setVisitStatus(state, newStatus) {
-    const { error } = await supabase.from('visits').update({ status: newStatus }).eq('id', state.visit.id);
-    if (error) {
-        // The 'confirmed' status requires migration 008. Give a clearer hint.
-        if (newStatus === 'confirmed' && /check constraint/i.test(error.message)) {
-            throw new Error('Apply migration 008_visit_statuses.sql in Supabase first — "confirmed" is not in the allowed list yet.');
-        }
-        throw error;
-    }
+    // Смена статуса — это расписание: возврат отменённой записи в занимающий
+    // статус перепродаёт слот, который она освободила, и сервер отказывает
+    // теми же словами, что и календарю. Отмена и неявка проверки не требуют —
+    // сервер пропускает их сам, но дверь одна на все переходы.
+    const row = await bookStatus(state.visit, newStatus);
+    if (row) Object.assign(state.visit, row);
     state.visit.status = newStatus;
     // Fast in-place block recolor on the calendar — runs synchronously, no
     // network. The block stays put, only the color (and data-status attr)
@@ -947,9 +950,11 @@ async function activateVisitIfPending(state) {
     const v = state.visit;
     if (!v?.id) return;
     if (!['scheduled', 'confirmed'].includes(v.status)) return;
-    const { error } = await supabase.from('visits').update({ status: 'arrived' }).eq('id', v.id);
-    if (error) { console.warn('[visit auto-arrive]', error.message); return; }
     const prev = v.status;
+    // scheduled/confirmed → arrived: слот тот же и остаётся за тем же
+    // пациентом, отказать здесь сервер не может — но дверь одна на все.
+    try { const row = await bookStatus(v, 'arrived'); if (row) Object.assign(v, row); }
+    catch (e) { console.warn('[visit auto-arrive]', (e && e.message) || e); return; }
     v.status = 'arrived';
     await logPatientActivity({
         patientId:   v.patient_id || state.patient?.id,
@@ -1662,6 +1667,7 @@ async function saveDetails(card, state) {
     const form = card.querySelector('.vd-form');
     if (!form) return false;
     const payload = {};
+    let movedTo = null;   // VISITS_ONE_DOOR_V1 — новый день визита; пишется calendar_book'ом, не этим UPDATE
     for (const inp of form.querySelectorAll('input[name], select[name], textarea[name]')) {
         const n = inp.getAttribute('name');
         if (!n || n.startsWith('__')) continue;
@@ -1673,11 +1679,11 @@ async function saveDetails(card, state) {
             // calendar block off-screen. Combine the picked date with the
             // existing time so only the day changes.
             const newDate = inp.value;
-            if (!newDate) { payload[n] = null; continue; }
+            if (!newDate) continue;
             const orig = state.visit?.visit_date ? new Date(state.visit.visit_date) : null;
             const hh = String(orig && !isNaN(orig.getTime()) ? orig.getHours()   : 10).padStart(2, '0');
             const mm = String(orig && !isNaN(orig.getTime()) ? orig.getMinutes() :  0).padStart(2, '0');
-            payload[n] = new Date(`${newDate}T${hh}:${mm}:00`).toISOString();
+            movedTo = new Date(`${newDate}T${hh}:${mm}:00`).toISOString();
             continue;
         }
         payload[n] = inp.value || null;
@@ -1685,6 +1691,22 @@ async function saveDetails(card, state) {
     for (const seg of form.querySelectorAll('.segmented[data-name]')) {
         payload[seg.dataset.name] = seg.dataset.value;
     }
+
+    // VISITS_ONE_DOOR_V1 — ПЕРЕНОС НА ДРУГОЙ ДЕНЬ ИДЁТ ПЕРВЫМ И ЧЕРЕЗ
+    // calendar_book. Отдельным полем формы он быть перестал: сменить день —
+    // это занять время у врача в другом дне, и если оно занято, сервер
+    // отказывает и НАЗЫВАЕТ занятое время. Отказ останавливает всё
+    // сохранение — иначе тип визита сохранился бы, а день нет, и оператор
+    // увидел бы «Сохранено» на половине правки.
+    if (movedTo && movedTo !== state.visit.visit_date) {
+        let moved;
+        try { moved = await bookVisit({ visit_id: state.visit.id, start: movedTo }); }
+        catch (e) { toast((e && e.message) || e, 'fail'); return false; }
+        if (!moved) return false;   // передумали записывать поверх занятого
+        Object.assign(state.visit, moved.visit || {});
+    }
+
+    if (Object.keys(payload).length === 0) { toast('Visit saved.'); return true; }
     const { error } = await supabase.from('visits').update(payload).eq('id', state.visit.id);
     if (error) { toast(error.message, 'fail'); return false; }
     // Mirror what we just saved into local state so subsequent reads (and the

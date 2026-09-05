@@ -1054,7 +1054,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     /** Прогреть у сервера дни врача для этой строки (по местным полуночам ms). */
     async function loadSlots(line, dayMsList) {
         if (!line.doctorId) return;
-        await primeSlotDays(line.doctorId, dayMsList.map(isoDay), lineDuration(line));
+        await primeSlotDays(line.doctorId, dayMsList.map(isoDay), lineDuration(line), { patientId: patient.id });
     }
 
     /** Прогреть горизонт автоподбора: 14 дней от сегодня. */
@@ -1114,7 +1114,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             const start = new Date(head.when);
             const dayIso = isoDay(start.getTime());
             const startMin = start.getHours() * 60 + start.getMinutes();
-            const data = await loadSlotDay(head.doctorId, dayIso, dur);
+            // patientId — собственный визит пациента в этот день не должен
+            // закрывать ему же время: сервер его вычитает (EXCLUDE_OWN_VISIT_V1),
+            // и ensure_visit ниже проверяет ровно так же. Без этого экран просил
+            // бы причину экстренной записи там, где сервер бы не отказал.
+            const data = await loadSlotDay(head.doctorId, dayIso, dur, { patientId: patient.id });
             if (!data) continue;   // сервер не ответил — решать ему же при записи
             if (freeStartMinutes(data).includes(startMin)) continue;
 
@@ -2137,43 +2141,60 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const timed = lines.filter(c => !c.dateOnly);
                 const earliest = (timed.length ? timed : lines).map(lineIso).sort()[0];
                 const dayDoc = (lines.find(c => c.doctorId) || {}).doctorId || wiz.doctorId || null;
-                const { data: ev, error: evErr } = await supabase.rpc('ensure_visit', {
+                // VISITS_ONE_DOOR_V1 — ЗАВЕСТИ ВИЗИТ ДНЯ И ЗАНЯТЬ СЛОТ — ОДИН
+                // ВЫЗОВ. Раньше это были два: ensure_visit (вставка без единой
+                // проверки) и только потом calendar_book. Отказ второго
+                // оставлял после себя созданный scheduled-визит — сироту:
+                // пациента никто не ждёт, а слот он держит. Теперь слот
+                // проверяется ДО первой записи в базу, ставится тем же
+                // calendar_book, а если тот всё-таки откажет (настоящая гонка
+                // с соседним оператором) — сервер удаляет только что созданную
+                // строку сам. После отказа не остаётся ничего.
+                //
+                // ЧТО ИМЕННО ПРОВЕРЯЕТСЯ И ЧТО НЕТ — три случая, и ни один
+                // больше не молчит:
+                //   • есть головная строка со временем → book, проверка,
+                //     запись. Работает и когда визит дня УЖЕ БЫЛ: время его не
+                //     двигает (это время первого прихода пациента), но
+                //     выбранное регистратором время сервер всё равно проверяет
+                //     — иначе стойка обещает приём, которого не будет;
+                //   • строка БЕЗ ВРЕМЕНИ (услуга «на дату», dateOnly) — слота
+                //     нет вовсе: она ложится в visit_services со своей датой и
+                //     времени врача в календаре не занимает. Проверять нечего;
+                //   • врач с ЖИВОЙ ОЧЕРЕДЬЮ (scheduling_mode='live_queue') —
+                //     слотов не держит по устройству: очередь решает на месте.
+                //     Проверять тоже нечего.
+                // Последние два отсекает headTimedLine — там же, где решается,
+                // что считать «временем визита».
+                const timedHead = headTimedLine(lines);
+                const emgReason = emergencyByDay.get(day) || null;
+                const evArgs = {
                     patient_id: patient.id, date: earliest,
                     doctor_id: dayDoc ? Number(dayDoc) : null,
                     visit_type: wiz.visitType,
                     referral_source_id: wiz.sourceId ? Number(wiz.sourceId) : null,
                     branch_id: branchId,
                     notes: wiz.notes.trim() || null,
-                });
-                if (evErr) throw new Error(trf('Визит на {day}: {msg}', { day, msg: evErr.message || 'ensure_visit failed' }));
-                const visit = ev.visit;
-
-                // WIZARD_ONE_ENGINE_V1 — визит дня, только что созданный, идёт
-                // через calendar_book: тот же вход, что у календаря, с тем же
-                // запретом двойной записи и той же записью причины экстренной
-                // записи в visits.notes. Заодно визит получает ДЛИТЕЛЬНОСТЬ и
-                // услугу — без них календарь рисовал запись мастера
-                // пятнадцатиминутным огрызком.
-                //
-                // Только для СВЕЖЕГО визита: у пациента, уже пришедшего сегодня,
-                // визит-контейнер дня существует, и двигать его время под
-                // вторую услугу нельзя — она ляжет своей строкой visit_services.
-                const timedHead = headTimedLine(lines);
-                if (ev.created && timedHead) {
-                    const emg = emergencyByDay.get(day) || null;
-                    const args = {
-                        visit_id: visit.id,
+                };
+                if (timedHead) {
+                    evArgs.book = {
                         doctor_id: Number(timedHead.doctorId),
                         service_id: timedHead.svc.id,
                         start: new Date(timedHead.when).toISOString(),
                         duration_minutes: lineDuration(timedHead),
                     };
-                    if (emg) { args.emergency = true; args.emergency_reason = emg; }
-                    const bk = await supabase.rpc('calendar_book', args);
-                    if (bk.error) throw new Error(bookErrorText(bk.error));
-                    forgetSlots();
-                    Object.assign(visit, bk.data.visit || {});
-                } else if (emergencyByDay.get(day)) {
+                    if (emgReason) { evArgs.book.emergency = true; evArgs.book.emergency_reason = emgReason; }
+                }
+                const { data: ev, error: evErr } = await supabase.rpc('ensure_visit', evArgs);
+                if (evErr) {
+                    // Отказ сервера показывается ЕГО словами (он называет врача
+                    // и занятое время), а не «ensure_visit failed».
+                    throw new Error(trf('Визит на {day}: {msg}', { day, msg: bookErrorText(evErr) }));
+                }
+                const visit = ev.visit;
+                if (ev.booked) forgetSlots();
+
+                if (!ev.booked && emgReason) {
                     // Визит дня уже был — экстренная причина всё равно обязана
                     // остаться В САМОЙ ЗАПИСИ (visits.notes уезжает филиалам).
                     // i18n-exempt: строка ПИШЕТСЯ В БАЗУ (причина в самой записи), а не рисуется

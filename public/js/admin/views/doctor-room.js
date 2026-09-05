@@ -4,11 +4,14 @@
 // Bill & Pay / the Cashier). Money is NOT computed here; ordering only creates
 // visit_services rows (priced authoritatively later by the billing RPC). A
 // doctor sees only their own visits (scoped by doctor_id); admins/registrars
-// see everyone. All writes go through the allow-list (/api/db): visits update
-// (status/conclusion) and visit_services insert are permitted for the doctor.
+// see everyone. Conclusions and ordered services go through the allow-list
+// (/api/db); ЗАПИСЬ И СТАТУС — через calendar_book (VISITS_ONE_DOOR_V1): и
+// «Начать приём», и «Пришёл» занимают время врача, а занятое время проверяет
+// сервер. Раньше оба писали в visits напрямую и ни у кого не спрашивали.
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, fmtDateTime, initials } from '../ui.js';
+import { bookVisit, setVisitStatus as bookStatus } from './visit-booking.js';
 
 const VISIT_STATUSES = { scheduled: 'Scheduled', confirmed: 'Confirmed', arrived: 'Arrived', cancelled: 'Cancelled', no_show: 'No-show' };
 const CONCLUSION_TYPES = [['consultation', 'Consultation'], ['diagnostic', 'Diagnostic']];
@@ -118,10 +121,16 @@ function consultationModal(visit, root) {
 
     // --- status controls ---
     const statusWrap = h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } });
+    // Переход В занимающий статус (Пришёл) сервер перепроверяет: отменённую
+    // запись нельзя вернуть на слот, который за это время продали заново.
+    // Переход наружу (Отменён, Не пришёл) слот освобождает и проверки не ждёт.
     const setStatus = async (status) => {
-        const { error } = await supabase.from('visits').update({ status }).eq('id', visit.id).select().single();
-        if (error) { toast(error.message || 'Failed to update status.', 'fail'); return; }
-        visit.status = status; toast('Status: ' + (VISIT_STATUSES[status] || status), 'ok');
+        try {
+            const row = await bookStatus(visit, status);
+            if (row) Object.assign(visit, row);
+            visit.status = status;
+        } catch (e) { toast((e && e.message) || 'Failed to update status.', 'fail'); return; }
+        toast('Status: ' + (VISIT_STATUSES[status] || status), 'ok');
         renderStatus(); dirty = true;
     };
     const renderStatus = () => {
@@ -299,17 +308,29 @@ function newConsultationModal(root) {
         if (!patientId) { toast('Choose a patient.', 'fail'); return; }
         const doctorId = admin ? (doctorSel.value ? Number(doctorSel.value) : null) : myId();
         startBtn.disabled = true; startBtn.textContent = 'Starting…';
-        const payload = {
-            patient_id: patientId, visit_date: new Date().toISOString(),
-            duration_minutes: 30, visit_type: 'outpatient', status: 'arrived',
+        const args = {
+            patient_id: patientId, start: new Date().toISOString(),
+            duration_minutes: 30, status: 'arrived',
         };
-        if (doctorId) payload.doctor_id = doctorId;
-        if (myId()) payload.created_by = myId();
-        const { data, error } = await supabase.from('visits').insert(payload).select('*, patients(mrn, full_name), doctor(full_name)').single();
-        if (error) { toast(error.message || 'Failed to start.', 'fail'); startBtn.disabled = false; startBtn.textContent = 'Start consultation'; return; }
+        if (doctorId) args.doctor_id = doctorId;
+        let res;
+        try {
+            // Врач, у которого на этот час уже стоит другой пациент, получает
+            // отказ словами сервера — и предложение записать экстренно с
+            // причиной. null = передумали: не создано ничего.
+            res = await bookVisit(args);
+        } catch (e) {
+            toast((e && e.message) || 'Failed to start.', 'fail');
+            startBtn.disabled = false; startBtn.textContent = 'Start consultation'; return;
+        }
+        if (!res) { startBtn.disabled = false; startBtn.textContent = 'Start consultation'; return; }
         toast('Consultation started', 'ok');
         close();
         await paint(root);
+        // Карточка приёма рисует пациента и врача — забираем строку со связями
+        // (calendar_book отдаёт саму запись, без них).
+        const { data } = await supabase.from('visits')
+            .select('*, patients(mrn, full_name), doctor(full_name)').eq('id', res.visit.id).single();
         if (data) consultationModal(data, root);
     });
 
