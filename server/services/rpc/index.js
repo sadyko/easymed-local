@@ -48,6 +48,7 @@ import {
   branchSyncBranches, branchSyncAddBranch, branchSyncBranchKey,   // BRANCH_IDENTITY_V1
   branchSyncReissueKey,   // BRANCH_REISSUE_V1
 } from './branch-sync.js';   // BRANCH_SYNC_V1
+import { proceduresList, procedureAssign, procedureComplete } from './procedures.js';   // PROC_PERFORMER_V1
 
 export const RPC = {
   get_clinic_by_slug:       (db, args, user) => getClinicBySlug(db, args, user),
@@ -248,6 +249,14 @@ export const RPC = {
   treatment_admin_mark:           (db, args, user) => treatmentAdminMark(db, args, user),
   treatment_admin_unmark:         (db, args, user) => treatmentAdminUnmark(db, args, user),
   treatment_tasks_due:            (db, args, user) => treatmentTasksDue(db, args, user),
+
+  // PROC_PERFORMER_V1 — очередь процедур: амбулаторные (процедурный кабинет) и
+  // палатные (стационар) в одном списке, у каждого своя строка-исполнитель.
+  // Исполнителем может быть врач ИЛИ медсестра, и правило «кому это видно»
+  // считает сервер, а не браузер. procedures_list — чтение (READ_ONLY_RPCS).
+  procedures_list:                (db, args, user) => proceduresList(db, args, user),
+  procedure_assign:               (db, args, user) => procedureAssign(db, args, user),
+  procedure_complete:             (db, args, user) => procedureComplete(db, args, user),
 
   // DIET_TABLES_V1 — лечебные столы (Задача 7 плана «Стационар»).
   // Стол меняют врач, главный врач, старшая медсестра и администратор, и в

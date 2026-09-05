@@ -3,6 +3,32 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // PROC_PERFORMER_V1 — очередь процедур: исполнителем может быть медсестра,
+  // процедура бывает кабинетная и палатная — added 2026-09-05
+  "Очередь процедур — процедурный кабинет и палаты": {"en":"Procedure worklist — procedure room and wards","ru":"Очередь процедур — процедурный кабинет и палаты","uz":"Muolajalar navbati — muolaja xonasi va palatalar"},
+  "Везде": {"en":"Everywhere","ru":"Везде","uz":"Hamma joyda"},
+  "Вам пока не назначено процедур": {"en":"No procedures are assigned to you yet","ru":"Вам пока не назначено процедур","uz":"Sizga hozircha muolaja tayinlanmagan"},
+  "Процедурный кабинет": {"en":"Procedure room","ru":"Процедурный кабинет","uz":"Muolaja xonasi"},
+  "Палатная процедура — пациент лежит в стационаре": {"en":"Ward procedure — the patient is an inpatient","ru":"Палатная процедура — пациент лежит в стационаре","uz":"Palatadagi muolaja — bemor statsionarda yotibdi"},
+  "Амбулаторная процедура — пациент приходит в процедурный кабинет": {"en":"Outpatient procedure — the patient comes to the procedure room","ru":"Амбулаторная процедура — пациент приходит в процедурный кабинет","uz":"Ambulator muolaja — bemor muolaja xonasiga keladi"},
+  "Процедура в палате": {"en":"Procedure in the ward","ru":"Процедура в палате","uz":"Palatadagi muolaja"},
+  "Процедура в кабинете": {"en":"Procedure in the room","ru":"Процедура в кабинете","uz":"Xonadagi muolaja"},
+  "Расходные материалы": {"en":"Consumables","ru":"Расходные материалы","uz":"Sarf materiallari"},
+  "Расходники палатного пациента списываются на койке — в карточке госпитализации.": {"en":"Consumables for an inpatient are dispensed at the bed — on the admission card.","ru":"Расходники палатного пациента списываются на койке — в карточке госпитализации.","uz":"Statsionar bemorning sarf materiallari koykada — yotqizish kartasida hisobdan chiqariladi."},
+  "в счёте": {"en":"on the invoice","ru":"в счёте","uz":"hisob-fakturada"},
+  // Сообщения rpc procedures_list / procedure_assign / procedure_complete —
+  // приходят с сервера и попадают в toast(), который переводит централизованно;
+  // ключи должны совпадать дословно.
+  "Исполнителем процедуры может быть врач или медсестра.": {"en":"Only a doctor or a nurse can perform a procedure.","ru":"Исполнителем процедуры может быть врач или медсестра.","uz":"Muolajani faqat shifokor yoki hamshira bajarishi mumkin."},
+  "Процедура уже назначена другому исполнителю — переназначить может администратор или регистратура.": {"en":"The procedure is already assigned to someone else — only an administrator or the front desk can reassign it.","ru":"Процедура уже назначена другому исполнителю — переназначить может администратор или регистратура.","uz":"Muolaja allaqachon boshqa bajaruvchiga tayinlangan — uni faqat administrator yoki qabulxona qayta tayinlay oladi."},
+  "Процедура не найдена.": {"en":"Procedure not found.","ru":"Процедура не найдена.","uz":"Muolaja topilmadi."},
+  "Неизвестный вид процедуры.": {"en":"Unknown procedure kind.","ru":"Неизвестный вид процедуры.","uz":"Muolaja turi noma'lum."},
+  "Сотрудник неактивен.": {"en":"The employee is inactive.","ru":"Сотрудник неактивен.","uz":"Xodim faol emas."},
+  "Не удалось определить исполнителя.": {"en":"Could not determine the performer.","ru":"Не удалось определить исполнителя.","uz":"Bajaruvchini aniqlab bo'lmadi."},
+  "Некорректная строка процедуры.": {"en":"Invalid procedure line.","ru":"Некорректная строка процедуры.","uz":"Muolaja qatori noto'g'ri."},
+  // PROC_PERFORMER_V1 — колонка исполнителей в подборе услуги (service-picker-modal.js)
+  "Для услуги не назначен исполнитель.": {"en":"No performer is assigned to this service.","ru":"Для услуги не назначен исполнитель.","uz":"Bu xizmatga bajaruvchi tayinlanmagan."},
+  "Исполнители не найдены.": {"en":"No performers found.","ru":"Исполнители не найдены.","uz":"Bajaruvchilar topilmadi."},
   // INPATIENT_REQUEST_NOTIF_V1 — заявка стационара в колоколе уведомлений и
   // честная пустая очередь размещения — added 2026-09-05
   "Заявки на госпитализацию": {"en":"Hospitalisation requests","ru":"Заявки на госпитализацию","uz":"Kasalxonaga yotqizish so'rovlari"},

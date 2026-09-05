@@ -37,6 +37,11 @@ import { tr, trf } from '../i18n.js';   // WIZ_TEMPLATES_V1 + I18N_COVERAGE_V1 �
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { resolveTypeId } from './service-group.js?v=aug17e';   // SERVICE_GROUPS_V1 — group filtering must survive a NULL type_id
 
+// PROC_PERFORMER_V1 — роли, которым можно поручить процедуру. Врач сюда
+// попадает НЕ отсюда, а по is_doctor (ADMIN_DOCTOR_LIST_V1) — см.
+// isProcedurePerformer ниже и его двойника на сервере, rpc/procedures.js.
+const PROC_ROLES = ['doctor', 'head_doctor', 'nurse', 'senior_nurse'];
+
 export function openServicePickerModal({
     visitDoctorId   = null,
     onPick,
@@ -111,6 +116,8 @@ export function openServicePickerModal({
         types:      [],
         services:   [],
         doctors:    [],
+        providers:  [],
+        procStaff:  [],   // PROC_PERFORMER_V1 — врачи И медсестры: кому можно поручить процедуру
         svcGroupMap: {},    // core_service_id -> group_id (when useGroups)
         useGroups:  false,  // column 1 = medcore groups
         deriveType: false,  // column 1 = distinct service.type fallback
@@ -206,7 +213,7 @@ export function openServicePickerModal({
     // schedule). Returns null when no service is picked.
     function buildPayload() {
         const svc = state.services.find(s => s.id === state.serviceId);
-        const doc = state.doctors.find(d => d.id === state.doctorId);
+        const doc = providerById(state.doctorId);   // PROC_PERFORMER_V1 — исполнителем может быть медсестра
         if (!svc) return null;
         const payload = { service: (svc.__consult && doc) ? { ...svc, price: consultPriceFor(doc.id, svc.__ct) } : svc, doctor: doc || null };
         if (showSchedule && state.schedDateIso && state.schedStartMin != null) {
@@ -308,6 +315,14 @@ export function openServicePickerModal({
         // SERVICE_NURSE_PROVIDER_V1 — performer pool incl. nurses (assigned via service_rates);
         // the cabinet fallback still uses state.doctors (doctors only).
         state.providers = doctors || [];   // SERVICE_PROVIDER_TOGGLE_V1 - any assigned staff via service_rates
+        // PROC_PERFORMER_V1 — КТО МОЖЕТ ДЕЛАТЬ ПРОЦЕДУРУ. Решение владельца:
+        // «procedures … either can be for doctors or nurses». Список строится
+        // ровно тем же правилом, что и на сервере (rpc/procedures.js,
+        // canPerformProcedures): врач узнаётся по is_doctor — ADMIN_DOCTOR_LIST_V1,
+        // потому что администратор клиники сплошь и рядом ведёт приём и у него
+        // ни role='doctor', ни специальности, — а медсестра по своей роли,
+        // основной или дополнительной (senior_nurse живёт только в extra_roles).
+        state.procStaff = (doctors || []).filter(isProcedurePerformer);
 
         // PICKER_GROUPS: the local service_types table is often empty; services carry
         // core_service_id, so column 1 lists the medcore GROUPS those services fall under
@@ -670,11 +685,14 @@ export function openServicePickerModal({
             const filtered = filterDoctors();
             if (!filtered.length) {
                 listEl.appendChild(state.serviceId
-                    ? emptyHint('Для услуги не назначен врач.', 'Назначьте в «Сотрудники → Услуги и тарифы».')
-                    : emptyHint('Врачи не найдены.', ''));
+                    ? emptyHint('Для услуги не назначен исполнитель.', 'Назначьте в «Сотрудники → Услуги и тарифы».')
+                    : emptyHint('Исполнители не найдены.', ''));
                 return;
             }
-            for (const d of filtered) listEl.appendChild(rowEl(d.full_name, d.specialty || '', state.doctorId === d.id, () => selectAt(2, d.id)));
+            // PROC_PERFORMER_V1 — у медсестры специальности нет, и вторая строка
+            // у неё была пустой: в колонке стояло голое имя, по которому не
+            // сказать, врач это или сестра. Подписываем ролью.
+            for (const d of filtered) listEl.appendChild(rowEl(d.full_name, d.specialty || performerRoleLabel(d), state.doctorId === d.id, () => selectAt(2, d.id)));
         }
     }
 
@@ -735,7 +753,7 @@ export function openServicePickerModal({
 
     function updateSummary() {
         const svc = state.services.find(s => s.id === state.serviceId);
-        const doc = state.doctors.find(d => d.id === state.doctorId);
+        const doc = providerById(state.doctorId);   // PROC_PERFORMER_V1
         const hasStaged = state.added.length > 0;
         if (svc) {
             const parts = [`${svc.name} · ${formatMoney(svc.price)}`, doc ? doc.full_name : 'врач не выбран'];
@@ -783,6 +801,36 @@ export function openServicePickerModal({
             return true;
         });
     }
+    // PROC_PERFORMER_V1 — врач ИЛИ медсестра. Тот же предикат, что на сервере;
+    // разойдясь молча, они оставили бы регистратуре «сохранилось», а в строке —
+    // пустого исполнителя.
+    function extraRolesOf(u) {
+        if (Array.isArray(u && u.extra_roles)) return u.extra_roles;
+        if (typeof (u && u.extra_roles) === 'string' && u.extra_roles.trim()) {
+            try { const parsed = JSON.parse(u.extra_roles); return Array.isArray(parsed) ? parsed : []; }
+            catch (e) { return []; }
+        }
+        return [];
+    }
+    function isProcedurePerformer(u) {
+        if (!u) return false;
+        if (u.is_doctor === true || u.is_doctor === 1) return true;   // ← флаг, а не роль
+        return [u.role, ...extraRolesOf(u)]
+            .some(r => PROC_ROLES.includes(String(r || '').toLowerCase()));
+    }
+    // PROC_PERFORMER_V1 — ЛЮБОЙ выбранный исполнитель, не только врач.
+    //
+    // Здесь стоял `state.doctors.find(...)` в трёх местах, и это был не стиль, а
+    // БАГ: медсестры в state.doctors нет (её отсеивает ADMIN_DOCTOR_LIST_V1), и
+    // выбранная медсестра превращалась в null — payload уходил без исполнителя,
+    // а selectAt(1) тут же сбрасывал выбор, потому что doctorPerforms({}) ложь.
+    // То есть выбрать медсестру было НЕЛЬЗЯ, даже когда она стояла в колонке.
+    function providerById(id) {
+        if (id == null) return null;
+        return (state.providers || []).find(d => d.id === id)
+            || (state.doctors || []).find(d => d.id === id)
+            || null;
+    }
     // A doctor "performs" a service when it's in their users.service_rates
     // (the "Services performed" list set on the employee). Stored as
     // [{ service_id, percentage }].
@@ -804,15 +852,34 @@ export function openServicePickerModal({
         const t = (svc && svc.type || '').trim();
         return t !== 'lab' && t !== 'procedure';
     }
+    // PROC_PERFORMER_V1 — процедура маршрутизируется в очередь процедур, а не в
+    // кабинет, поэтому isCabinetRouted() для неё ложь и запасного списка у неё
+    // НЕ БЫЛО: услуга, которой никому не назначили ставку, показывала пустую
+    // колонку, регистратура сохраняла строку без исполнителя, и процедура не
+    // приходила никому. Запасной список у неё теперь свой и правильный — врачи
+    // И медсестры (owner: «either can be for doctors or nurses»).
+    function isProcedureRouted(svc) {
+        return String((svc && svc.type) || '').trim() === 'procedure';
+    }
     // Candidate doctors for a non-consult service: its performers, or — when it
     // has none but is cabinet-routed — every active doctor, so the patient can
     // be assigned and land on that doctor's worklist.
     function candidatesFor(svc) {
         const perf = performersOf(svc.id);
-        if (perf.length === 0 && isCabinetRouted(svc)) return state.doctors;
+        if (perf.length) return perf;
+        if (isProcedureRouted(svc)) return state.procStaff || state.doctors;
+        if (isCabinetRouted(svc)) return state.doctors;
         return perf;
     }
 
+    // PROC_PERFORMER_V1 — подпись под именем, когда специальности нет.
+    function performerRoleLabel(d) {
+        const roles = [d && d.role, ...extraRolesOf(d)].map(r => String(r || '').toLowerCase());
+        if (roles.includes('senior_nurse')) return 'Старшая медсестра';
+        if (roles.includes('nurse')) return 'Медсестра';
+        if (d && (d.is_doctor === true || d.is_doctor === 1)) return 'Врач';
+        return '';
+    }
     function filterDoctors() {
         const t = state.docSearch.trim().toLowerCase();
         // Once a service is picked, show ONLY doctors assigned to it (their
@@ -827,7 +894,9 @@ export function openServicePickerModal({
                     : state.doctors.filter(d => consultAvailableFor(d.id, _selSvc.consultation_type_id)))
                 : (_selSvc ? candidatesFor(_selSvc) : performersOf(state.serviceId));   // DOCTOR_FALLBACK_V1
         return pool.filter(d => {
-            if (t && !((d.full_name || '').toLowerCase().includes(t) || (d.specialty || '').toLowerCase().includes(t))) return false;
+            if (t && !((d.full_name || '').toLowerCase().includes(t)
+                    || (d.specialty || '').toLowerCase().includes(t)
+                    || performerRoleLabel(d).toLowerCase().includes(t))) return false;   // PROC_PERFORMER_V1 — «медсестра» тоже ищется
             return true;
         });
     }
@@ -838,7 +907,7 @@ export function openServicePickerModal({
     // registrar click a free slot. The nearest free slot is auto-selected so a
     // walk-in patient who isn't already booked lands on the soonest opening.
     // -----------------------------------------------------------------------
-    function currentDoctor() { return state.doctors.find(d => d.id === state.doctorId) || null; }
+    function currentDoctor() { return providerById(state.doctorId); }   // PROC_PERFORMER_V1 — «выбранный исполнитель», не «выбранный врач»
     function serviceDurationMin() {
         const svc = state.services.find(s => s.id === state.serviceId);
         return Math.max(5, Number(svc?.duration_minutes || 30));

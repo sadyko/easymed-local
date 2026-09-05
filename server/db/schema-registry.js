@@ -601,17 +601,24 @@ export const REGISTRY = {
   // Inpatient line items — services, dispensed products, and accommodation
   // charges. beds.js, admission-modal.js, cashier.js, reports-export.js.
   // Nurses run the bed board; cashier touches these when billing the stay.
+  // PROC_PERFORMER_V1 — `performer_id` (миграция 102) это КТО ДЕЛАЕТ палатную
+  // процедуру: врач или медсестра. Это НЕ `doctor_id`, и путать их нельзя —
+  // doctor_id здесь лечащий врач, по нему billing.js берёт личную цену в счёт
+  // пациента (шапка 102). Колонка ЧИТАЕТСЯ экраном и НЕ ПИШЕТСЯ табличным
+  // путём: исполнителя назначает один RPC (procedure_assign), который
+  // проверяет, вправе ли этот человек вообще выполнять процедуры.
   admission_services: {
-    read:  { roles: ALL_STAFF, columns: ['id','admission_id','service_id','clinic_item_id','doctor_id','bed_id',
+    read:  { roles: ALL_STAFF, columns: ['id','admission_id','service_id','clinic_item_id','doctor_id','performer_id','bed_id',
              'ward_id','quantity','unit_price','total','status','notes','billable','performed_at','invoice_item_id','created_at'] },
     write: { insert: { roles: ['admin','registrar','doctor','nurse','cashier'], columns: ['admission_id','service_id',
                'clinic_item_id','doctor_id','bed_id','ward_id','quantity','unit_price','total','status','notes','billable','performed_at'] },
              update: { roles: ['admin','registrar','doctor','nurse','cashier'], columns: ['status','billable','notes','invoice_item_id'] },
              delete: { roles: ['admin','registrar','doctor','nurse'] } },   // unbilled lines are removed from the bed detail list
-    filters: ['id','admission_id','service_id','invoice_item_id','performed_at'],
+    filters: ['id','admission_id','service_id','invoice_item_id','performed_at','performer_id'],
     embed:   { services: { table:'services', fk:'service_id',     columns:['id','name','price'] },
                products: { table:'products', fk:'clinic_item_id', columns:['id','name','unit'] },
                users:    { table:'users',    fk:'doctor_id',      columns:['id','full_name'] },
+               performer_id: { table:'users', fk:'performer_id',  columns:['id','full_name','role','is_doctor'] },   // PROC_PERFORMER_V1
                beds:     { table:'beds',     fk:'bed_id',         columns:['id','code'] },
                wards:    { table:'wards',    fk:'ward_id',        columns:['id','name'] } },
   },

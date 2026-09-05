@@ -101,7 +101,7 @@ test('настройка читается из doc_settings и пишется т
 });
 
 test('пофилиальные экраны НЕ тронуты — решение владельца 2026-09-02 в силе', () => {
-  const untouched = ['doctor-room.js', 'visits.js', 'requests-inbox.js', 'procedures.js', 'consultation.js'];
+  const untouched = ['doctor-room.js', 'visits.js', 'requests-inbox.js', 'consultation.js'];
   for (const file of untouched) {
     const src = fs.readFileSync(path.join(HERE, file), 'utf8');
     assert.ok(/\.is\('sync_origin', null\)/.test(src),
@@ -109,6 +109,20 @@ test('пофилиальные экраны НЕ тронуты — решени
     assert.equal(src.includes('lab-scope.js'), false,
       file + ': настройка лаборатории не должна распространяться на этот экран');
   }
+  // PROC_PERFORMER_V1 — у процедур ПРАВИЛО ТО ЖЕ, но живёт оно теперь на
+  // сервере. Очередь склеивает две таблицы (кабинетную visit_services и
+  // палатную admission_services), а склеить их браузер не может, поэтому
+  // фильтр происхождения переехал вместе со всем запросом. Проверяем его там,
+  // где он стоит, а не там, где стоял.
+  const procSrc = fs.readFileSync(path.join(HERE, 'procedures.js'), 'utf8');
+  assert.ok(procSrc.includes("supabase.rpc('procedures_list'"),
+    'procedures.js: очередь приходит одним серверным запросом');
+  assert.equal(procSrc.includes('lab-scope.js'), false,
+    'procedures.js: настройка лаборатории не должна распространяться на этот экран');
+  const procRpc = fs.readFileSync(
+    path.join(HERE, '..', '..', '..', '..', 'server', 'services', 'rpc', 'procedures.js'), 'utf8');
+  assert.ok(/sync_origin IS NULL/.test(procRpc),
+    'rpc/procedures.js: очередь процедур остаётся своего здания');
 });
 
 test('каждая строка переключателя есть в словаре на трёх языках', () => {
