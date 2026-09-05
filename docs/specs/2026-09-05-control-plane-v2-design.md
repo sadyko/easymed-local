@@ -189,7 +189,12 @@ New:
   authenticates with the *parent's* install token, which the vendor does not hold.
 
 `GET /admin/clinics` gains `parent_clinic_id`, `filial_count`, `ring`, `pinned_version`,
-`retired_at`, `latest_stats`, `latest_stats_at`.
+`retired_at`, `latest_stats`, `latest_stats_at`, `versions_behind`.
+
+`versions_behind` is computed **server-side**, deliberately. Comparing versions numerically per
+segment ("2.10.0" sorts after "2.9.0") already exists twice in this repo and `rings.js` reuses
+one of them rather than writing a third. `panel-logic.js` runs in a browser and cannot import
+either, so the count crosses the wire as a number and the panel only decides how to draw it.
 
 That last pair needs care. `latestStats()` (`routes/admin.js`) iterates a clinic's check-ins
 newest-first until it finds one carrying stats — per clinic. Called in the list loop that is
