@@ -88,6 +88,8 @@ import { h, Icon, clear, initials, fmtDate } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { selfDoctorId } from '../permissions.js';   // ADMIN_DOCTOR_V2
 import { pastelFor } from '../pastel.js';   // PASTEL_IDENTITY_V1 — оттенок = личность, не тяжесть
+// HEAD_DOCTOR_WARD_VIEW_V1 — «в койке» одним списком на сервер и браузер.
+import { IN_BED_STATUSES } from '../../shared/admission-status.js';
 
 export const DOCTOR_DASH_BUILD = 'DOCTOR_DASHBOARD_V1';
 
@@ -100,6 +102,48 @@ export const DASH_WINDOW_DAYS = 14;
 // ---------------------------------------------------------------------------
 export function dashboardDoctorId() {
     return selfDoctorId();
+}
+
+// ---------------------------------------------------------------------------
+// HEAD_DOCTOR_WARD_VIEW_V1 (2026-09-05) — ПОЛОСА ГЛАВНОГО ВРАЧА.
+//
+// Деньги остаются личными. Расширяется КЛИНИЧЕСКАЯ работа, и только она: здесь
+// три СЧЁТА пациентов — сколько ждут первичного осмотра, сколько осмотрены без
+// лечащего врача и сколько лежит всего. Ни суммы, ни ставки, ни чужого
+// заработка в этой полосе нет и быть не может: запрос за ней читает из
+// `admissions` ровно `id, status` — колонок с деньгами в нём нет вовсе.
+//
+// ПРАВО НА ШИРОКИЙ ВЗГЛЯД НЕ ПЕРЕДАЁТСЯ АРГУМЕНТОМ. Полоса спрашивает сервер
+// сама (inpatient_capabilities → scope), как и вкладка «Стационар». Параметра
+// «покажи мне всё» у этого файла нет — по той же причине, по какой ни один его
+// загрузчик не принимает doctor_id: параметр и означал бы «покажи чужое».
+// ---------------------------------------------------------------------------
+const ward = { wide: false, loaded: false, exam: 0, attending: 0, inBed: 0 };
+
+/** Только для тестов и соседей: что полоса сейчас показывает. */
+export function wardHeadState() { return { ...ward }; }
+
+async function loadWardHead() {
+    ward.wide = false; ward.loaded = false;
+    ward.exam = 0; ward.attending = 0; ward.inBed = 0;
+    let scope = 'own';
+    try {
+        const { data } = await supabase.rpc('inpatient_capabilities', {});
+        scope = (data && data.scope) === 'all' ? 'all' : 'own';
+    } catch (e) { scope = 'own'; }
+    if (scope !== 'all') return;              // палатный врач полосы не видит
+    ward.wide = true;
+    // ТОЛЬКО КЛИНИЧЕСКИЕ КОЛОНКИ. `id, status` — всё, что нужно счётчикам.
+    const { data, error } = await supabase.from('admissions')
+        .select('id, status')
+        .in('status', IN_BED_STATUSES)
+        .limit(500);
+    if (error) { console.warn('[doctor-dash] ward:', error.message); return; }
+    const rows = data || [];
+    ward.inBed = rows.length;
+    ward.exam = rows.filter((r) => r.status === 'admitted').length;
+    ward.attending = rows.filter((r) => r.status === 'examined').length;
+    ward.loaded = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -368,6 +412,7 @@ const state = {
 };
 let hostRef = null;
 let openWorkRef = null;
+let openInpatientsRef = null;   // HEAD_DOCTOR_WARD_VIEW_V1
 
 const money = (n) => Math.round(Number(n) || 0).toLocaleString('ru-RU');
 
@@ -455,6 +500,11 @@ export async function loadDoctorDashboard() {
             }
         } catch (e) { console.warn('[doctor-dash] invoices:', e && e.message); }
     }
+
+    // Полоса главного врача — отдельным шагом и после денег: она не влияет ни
+    // на одно число выше и не имеет права задержать «мой день», если стационар
+    // ответит медленно.
+    await loadWardHead();
 
     state.services = svcRows.map((r) => ({
         id: r.id,
@@ -559,6 +609,16 @@ const DASH_CSS = `
 .dd-nowline { display: flex; align-items: center; gap: 8px; padding: 2px;
     font-size: 12.5px; font-weight: 600; color: var(--crit-700); }
 .dd-nowline i { display: block; flex: 1; height: 1px; background: var(--crit-500); }
+
+/* HEAD_DOCTOR_WARD_VIEW_V1 — head-doctor ward strip. No new colours. */
+.dd-ward { padding: 14px 18px; margin-bottom: 14px; display: flex; align-items: center;
+    gap: 18px; flex-wrap: wrap; }
+.dd-ward-t { font-size: 13.5px; font-weight: 700; color: var(--ink-900); }
+.dd-ward-s { font-size: 12.5px; color: var(--ink-500); margin-top: 2px; }
+.dd-ward-figs { display: flex; gap: 18px; flex-wrap: wrap; }
+.dd-ward-v { font-size: 24px; font-weight: 700; color: var(--ink-900); line-height: 1.2; }
+.dd-ward-v.is-wait { color: var(--crit-700); }
+.dd-ward-l { font-size: 12.5px; color: var(--ink-500); margin-top: 2px; }
 `;
 
 function ensureCss() {
@@ -578,9 +638,12 @@ function ensureCss() {
  * @param host       куда рисовать
  * @param onOpenWork колбэк «открыть рабочий список» (вкладка «Мои приёмы»)
  */
-export async function renderDoctorDashboard(host, { onOpenWork } = {}) {
+export async function renderDoctorDashboard(host, { onOpenWork, onOpenInpatients } = {}) {
     hostRef = host;
     openWorkRef = typeof onOpenWork === 'function' ? onOpenWork : null;
+    // HEAD_DOCTOR_WARD_VIEW_V1 — КУДА вести, а не ЧТО показывать: право на
+    // широкий взгляд по-прежнему выдаёт только сервер.
+    openInpatientsRef = typeof onOpenInpatients === 'function' ? onOpenInpatients : null;
     ensureCss();
     if (!state.loaded) {
         state.loading = true;
@@ -603,7 +666,8 @@ export function resetDoctorDashboard() {
     state.loaded = false; state.loading = false; state.failed = false;
     state.doctor = null; state.visits = []; state.services = [];
     state.metric = 'services'; state.now = null;
-    hostRef = null; openWorkRef = null;
+    ward.wide = false; ward.loaded = false; ward.exam = 0; ward.attending = 0; ward.inBed = 0;
+    hostRef = null; openWorkRef = null; openInpatientsRef = null;
 }
 
 function paint() {
@@ -630,6 +694,10 @@ function paint() {
     const stats = computeDoctorStats({ visits: state.visits, services: state.services, rateMap, now, perService });
     const day = buildDayColumn({ visits: state.visits, services: state.services, now });
 
+    // Работа главного врача идёт ПЕРВОЙ строкой: пациент, которого не осмотрели,
+    // лежит и не лечится, а суточное за койку уже идёт.
+    if (ward.wide) hostRef.appendChild(wardCard());
+
     hostRef.appendChild(h('div', { class: 'dd-grid' },
         heroCard(doc, stats, now, perService),
         statsRow(stats),
@@ -646,6 +714,29 @@ function paint() {
                 tr('Это сбой запроса, а не пустой день: цифры могут быть неполными. Нажмите «Обновить».')),
         ));
     }
+}
+
+// ---- Полоса главного врача (HEAD_DOCTOR_WARD_VIEW_V1) ----------------------
+// Три числа и одна кнопка. Ждущие подсвечены не оттенком строки, а цветом
+// самого числа: оттенок не читается на проекторе ординаторской.
+function wardCard() {
+    const fig = (value, label, waiting) => h('div', null,
+        h('div', { class: 'dd-ward-v' + (waiting && value ? ' is-wait' : '') }, String(value)),
+        h('div', { class: 'dd-ward-l' }, label));
+    return h('section', { class: 'card dd-ward' },
+        h('div', { style: { flex: '1', minWidth: '0' } },
+            h('div', { class: 'dd-ward-t' }, tr('Стационар отделения')),
+            h('div', { class: 'dd-ward-s' },
+                tr('Ваша работа главного врача: осмотреть поступивших и назначить лечащего врача.'))),
+        h('div', { class: 'dd-ward-figs' },
+            fig(ward.exam, tr('Ждут первичного осмотра'), true),
+            fig(ward.attending, tr('Ждут лечащего врача'), true),
+            fig(ward.inBed, tr('В койках'), false)),
+        h('button', {
+            class: 'btn btn-primary btn-sm', type: 'button',
+            onclick: () => { if (openInpatientsRef) openInpatientsRef(); },
+        }, Icon('Bed', { size: 13 }), ' ', tr('Открыть стационар')),
+    );
 }
 
 // ---- Обращение к врачу + три главных числа дня -----------------------------

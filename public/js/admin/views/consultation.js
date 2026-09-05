@@ -13,7 +13,7 @@
 //     completed    → static "Done" tag
 
 import { supabase } from '../../supabase.js';
-import { h, Icon, PageHead, toast, clear, avColor, initials, fmtDateTime } from '../ui.js';
+import { h, Icon, Tag, PageHead, toast, clear, avColor, initials, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { scopedDoctorId, selfDoctorId, scopedProviderId } from '../permissions.js';   // ADMIN_DOCTOR_V2 / SERVICE_SCOPE_V1
 import { renderDoctorProfile } from './doctor-profile.js?v=btnright1';
@@ -26,9 +26,11 @@ import {
     renderDoctorDashboard, resetDoctorDashboard,
     serviceRateMap, serviceShare, perServicePayApplies,
 } from './doctor-dashboard.js';
-import { openAdmissionCard } from './admission-modal.js?v=inp2';   // INPATIENT_TAB_V1 / ADMISSION_ORDER_V1
+// HEAD_DOCTOR_WARD_VIEW_V1 — главный врач делает свою работу ПРЯМО ИЗ КАБИНЕТА:
+// оба окна те же самые, что в разделе «Стационар», а не их копии.
+import { openAdmissionCard, openAdmissionReviewModal, openAdmissionAttendingModal } from './admission-modal.js?v=inp2';   // INPATIENT_TAB_V1 / ADMISSION_ORDER_V1
 import { loadPatientById } from '../data.js';   // NO_GREETING_V1 — currentUser() went with the greeting band
-import { IN_BED_STATUSES } from '../../shared/admission-status.js';   // INPATIENT_FLOW_V1
+import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';   // INPATIENT_FLOW_V1
 
 // ---------------------------------------------------------------------------
 // Aurora queue (AURORA_QUEUE_V1) — local RU helpers. These are intentionally
@@ -59,7 +61,11 @@ const state = {
     // INPATIENT_TAB_V1 — «Стационар»: this doctor's active admissions (admins see
     // all). Lazy-loaded on first open. Inpatients live in admissions/admission_*
     // tables, so they never appear in «Мои приёмы» (visit_services-based).
-    inpt: { loaded: false, loading: false, rows: [] },
+    // HEAD_DOCTOR_WARD_VIEW_V1 — `scope` и `can` приходят С СЕРВЕРА
+    // (inpatient_capabilities): 'own' — свои пациенты, 'all' — весь стационар
+    // (главный врач, администратор). Значение по умолчанию — САМОЕ УЗКОЕ: не
+    // ответил сервер — показываем только своих, а не всех.
+    inpt: { loaded: false, loading: false, rows: [], scope: 'own', can: {}, capsAsked: false },
     // Dashboard tab state — lazy-loaded on first open of the dashboard tab.
     dash: {
         doctors:   [],        // [{ id, full_name, … }]
@@ -98,6 +104,12 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
     // «мой день» протухает быстрее всего на экране.
     resetDoctorDashboard();
     queueLoaded = false;
+    // HEAD_DOCTOR_WARD_VIEW_V1 — стационар перечитывается при каждом входе в
+    // кабинет, и вместе со списком заново спрашивается ОБЛАСТЬ ВИДИМОСТИ.
+    // Оставленное состояние жило дольше сессии: список пациентов в койках
+    // протухает быстрее «моего дня», а надстройку «главный врач» администратор
+    // может снять — и кабинет продолжал бы показывать весь стационар.
+    state.inpt = { loaded: false, loading: false, rows: [], scope: 'own', can: {}, capsAsked: false };
     if (state.tab === 'appointments') { await loadQueueOnce(); }
     paint();
     // Адрес открывает ЛЮБУЮ вкладку, а не только ту, на которую нажали, —
@@ -294,6 +306,10 @@ function doctorDashboardView() {
         // Карточка приёма ведёт туда, где с ним работают, — в рабочий список.
         // Своего второго окна приёма дашборд не заводит.
         onOpenWork: () => setTab('appointments'),
+        // HEAD_DOCTOR_WARD_VIEW_V1 — полоса главного врача ведёт на СВОЮ вкладку
+        // кабинета, а не в раздел «Стационар»: работа делается там же, где он
+        // уже стоит.
+        onOpenInpatients: () => setTab('inpatients'),
     });
     return host;
 }
@@ -310,14 +326,43 @@ function profileView() {
 // appear in «Мои приёмы» (that queue is visit_services-based; inpatient care
 // lives in admissions/admission_services/admission_prescriptions).
 // ---------------------------------------------------------------------------
+// HEAD_DOCTOR_WARD_VIEW_V1 — КОГО ЭТОТ ЧЕЛОВЕК ВИДИТ, РЕШАЕТ СЕРВЕР.
+//
+// Владелец: «главный врач cannot see the admission of the patients of the
+// departments. in their cabinet». Вкладка сужала список на `attending_doctor_id
+// = я`, и для главного врача это ровно противоположность его работе: он
+// осматривает поступивших ДО того, как лечащий врач появится ('admitted'), и
+// назначает лечащего следом ('examined') — у обеих строк attending пуст, и
+// фильтр вычёркивал их все. Вкладка была пуста ВСЕГДА.
+//
+// Спрашиваем ОДИН раз на открытие кабинета и не считаем по роли сами: правило
+// живёт в rpc/inpatient-flow.js (inpatientScope), и вторая его копия здесь
+// разошлась бы с первой молча — экран показывал бы пациента, на котором сервер
+// откажет, или прятал бы того, за кого человек отвечает.
+async function loadInpatientCaps() {
+    if (state.inpt.capsAsked) return;
+    state.inpt.capsAsked = true;
+    try {
+        const { data } = await supabase.rpc('inpatient_capabilities', {});
+        state.inpt.scope = (data && data.scope) === 'all' ? 'all' : 'own';
+        state.inpt.can = (data && data.can) || {};
+    } catch (e) {
+        // Не ответил сервер — остаёмся на самом узком: свои пациенты.
+        state.inpt.scope = 'own';
+        state.inpt.can = {};
+    }
+}
+
 async function loadInpatients() {
+    await loadInpatientCaps();
     let q = supabase.from('admissions')
         .select(`
-            id, admission_no, status, admission_diagnosis, admitted_at,
+            id, admission_no, status, admission_diagnosis, admitted_at, department,
             patient_id, attending_doctor_id, ward_id, bed_id,
             patients(full_name, last_name, first_name, mrn, phone),
             wards(name),
-            beds(code)
+            beds(code),
+            attending:attending_doctor_id(full_name)
         `)
         // INPATIENT_FLOW_V1 — вкладка «Стационар» показывает пациентов В КОЙКЕ,
         // а не только тех, кто дошёл до 'active': врач обязан видеть своего
@@ -331,12 +376,91 @@ async function loadInpatients() {
     // `beds!admissions_bed_id_fkey(…)` строкой выше (его не принимает
     // query-compiler) это делало вкладку «Стационар» пустой ВСЕГДА. База
     // локальная и однопользовательская по клинике — область и так одна.
+    //
+    // HEAD_DOCTOR_WARD_VIEW_V1 — сужение на «своих» ставится ТОЛЬКО при scope
+    // 'own'. Здание сужать нечем и не нужно: `admissions` не ездит между
+    // филиалами (её нет в SHIPPED, branch-sync/journal.js), у неё нет ни
+    // sync_origin, ни uid — каждая база видит только свои госпитализации.
     const docId = scopedDoctorId();
-    if (docId) q = q.eq('attending_doctor_id', docId);
+    if (state.inpt.scope !== 'all' && docId) q = q.eq('attending_doctor_id', docId);
     const { data, error } = await q;
     if (error) { console.warn('[inpatients]', error.message); state.inpt.rows = []; }
-    else state.inpt.rows = data || [];
+    else state.inpt.rows = sortInpatients(data || []);
     state.inpt.loaded = true;
+}
+
+// ПОРЯДОК СПИСКА — ЭТО РАБОТА, А НЕ ДАТА. У главного врача сверху те, кого
+// ждут именно от него: непроведённый первичный осмотр, затем осмотренные без
+// лечащего врача. Остальные — как раньше, свежие первыми. У палатного врача
+// список однородный, и порядок для него не меняется.
+const INPT_URGENCY = { admitted: 0, examined: 1 };
+export function sortInpatients(rows) {
+    const rank = (r) => (INPT_URGENCY[r && r.status] !== undefined ? INPT_URGENCY[r.status] : 2);
+    return rows.slice().sort((a, b) => {
+        const d = rank(a) - rank(b);
+        if (d) return d;
+        return String(b.admitted_at || '').localeCompare(String(a.admitted_at || ''));
+    });
+}
+
+// Одна строка списка. Кнопка «открыть карточку» ВНУТРИ строки, а не сама
+// строка: рядом с ней живут действия главного врача, а кнопка внутри кнопки —
+// это неработающая клавиатура и неверно озвученная строка у скринридера.
+function inpatientRow(r, onChange) {
+    const p = r.patients || {};
+    const nm = (p.full_name || [p.last_name, p.first_name].filter(Boolean).join(' ') || '—').trim();
+    const place = [r.wards && r.wards.name, r.beds && r.beds.code ? trf('койка {code}', { code: r.beds.code }) : null]
+        .filter(Boolean).join(' · ');
+    const attending = r.attending && r.attending.full_name;
+    const meta = [
+        p.mrn || null,
+        place || tr('без койки'),
+        trf('поступил {date}', { date: String(r.admitted_at || '').slice(0, 10) }),
+        // Чей это пациент — вопрос главного врача, и без ответа список его
+        // работы не описывает: «осмотрен» и «лечится» выглядели бы одинаково.
+        state.inpt.scope === 'all'
+            ? (attending ? trf('лечащий: {name}', { name: attending }) : tr('без лечащего врача'))
+            : null,
+        r.admission_diagnosis || null,
+    ].filter(Boolean).join(' · ');
+
+    // ДЕЙСТВИЯ РИСУЮТСЯ ПО ОТВЕТУ СЕРВЕРА (can), а не по роли: спрятанная
+    // кнопка — украшение, и появиться она обязана ровно там, где сервер
+    // пропустит. Дальше первичного осмотра и назначения лечащего кабинет не
+    // идёт — остальное живёт в карточке госпитализации и в разделе «Стационар».
+    const right = [];
+    if (r.status === 'admitted') {
+        right.push(state.inpt.can.examine
+            ? h('button', { class: 'btn btn-primary btn-sm', type: 'button',
+                onclick: () => openAdmissionReviewModal({ admission: r, onDone: onChange }) },
+                Icon('Stethoscope', { size: 13 }), ' ', 'Провести первичный осмотр')
+            : Tag('Ждёт главного врача', { kind: 'warn', dot: true }));
+    } else if (r.status === 'examined') {
+        right.push(state.inpt.can.set_attending
+            ? h('button', { class: 'btn btn-primary btn-sm', type: 'button',
+                onclick: () => openAdmissionAttendingModal({ admission: r, onDone: onChange }) },
+                Icon('User', { size: 13 }), ' ', 'Назначить лечащего врача')
+            : Tag('Ждёт лечащего врача', { kind: 'warn', dot: true }));
+    } else {
+        right.push(Tag(admissionStatusLabel(r.status), { kind: 'ok' }));
+    }
+
+    return h('div', { style: { display: 'flex', gap: '14px', alignItems: 'center', width: '100%',
+                               padding: '14px 16px', background: 'var(--white)', border: '1px solid var(--ink-100)',
+                               borderRadius: '12px', flexWrap: 'wrap' } },
+        h('span', { class: 'av ' + avColor(r.patient_id || nm), style: { width: '38px', height: '38px', borderRadius: '50%', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: '13.5px', flex: 'none', background: 'var(--primary-50)', color: 'var(--primary-700)' } }, initials(nm)),
+        h('button', {
+            type: 'button',
+            title: tr('Открыть карточку госпитализации'),
+            style: { flex: 1, minWidth: '0', textAlign: 'left', background: 'transparent',
+                     border: '0', padding: '0', cursor: 'pointer', font: 'inherit' },
+            onclick: () => openAdmissionCard({ admissionId: r.id, onChange }),
+        },
+            h('div', { style: { fontWeight: 700, fontSize: '13.5px', color: 'var(--ink-900)' } }, nm),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, meta)),
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flex: 'none', flexWrap: 'wrap' } },
+            ...right.filter(Boolean)),
+    );
 }
 
 function inpatientsView() {
@@ -346,8 +470,11 @@ function inpatientsView() {
         return wrap;
     }
     const rows = state.inpt.rows || [];
+    const wide = state.inpt.scope === 'all';
+    const reload = () => { loadInpatients().then(paint); };
     wrap.appendChild(h('div', { class: 'row', style: { alignItems: 'center', gap: '10px' } },
-        h('div', { style: { fontWeight: 700, fontSize: '13.5px' } }, 'Пациенты в стационаре'),
+        h('div', { style: { fontWeight: 700, fontSize: '13.5px' } },
+            wide ? 'Стационар: все пациенты' : 'Пациенты в стационаре'),
         h('span', { class: 'muted', style: { fontSize: '12.5px' } }, trf('активные госпитализации: {n}', { n: rows.length })),
         h('span', { style: { flex: 1 } }),
         h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => {
@@ -355,38 +482,18 @@ function inpatientsView() {
             loadInpatients().then(() => { state.inpt.loading = false; paint(); });
         } }, Icon('Refresh', { size: 13 }), ' Обновить'),
     ));
+    // Почему главный врач видит чужих пациентов — сказано на экране словами, а
+    // не подразумевается: иначе широкий список выглядит ошибкой прав.
+    if (wide) {
+        wrap.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+            'Первичный осмотр и назначение лечащего врача — по всему стационару.'));
+    }
     if (!rows.length) {
         wrap.appendChild(h('div', { class: 'empty', style: { padding: '40px' } },
-            'Нет активных стационарных пациентов.'));
+            wide ? 'В стационаре сейчас никого нет.' : 'Нет активных стационарных пациентов.'));
         return wrap;
     }
-    for (const r of rows) {
-        const p = r.patients || {};
-        const nm = (p.full_name || [p.last_name, p.first_name].filter(Boolean).join(' ') || '—').trim();
-        const place = [r.wards && r.wards.name, r.beds && r.beds.code ? trf('койка {code}', { code: r.beds.code }) : null].filter(Boolean).join(' · ');
-        wrap.appendChild(h('button', {
-            type: 'button',
-            style: { display: 'flex', gap: '14px', alignItems: 'center', textAlign: 'left', width: '100%',
-                     padding: '14px 16px', background: 'var(--white)', border: '1px solid var(--ink-100)',
-                     borderRadius: '12px', cursor: 'pointer', fontFamily: 'inherit' },
-            onclick: () => openAdmissionCard({
-                admissionId: r.id,
-                onChange: () => { loadInpatients().then(paint); },
-            }),
-        },
-            h('span', { class: 'av ' + avColor(r.patient_id || nm), style: { width: '38px', height: '38px', borderRadius: '50%', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: '13.5px', flex: 'none', background: 'var(--primary-50)', color: 'var(--primary-700)' } }, initials(nm)),
-            h('div', { style: { flex: 1, minWidth: 0 } },
-                h('div', { style: { fontWeight: 700, fontSize: '13.5px' } }, nm,
-                    h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '12.5px', marginLeft: '8px' } }, p.mrn || '')),
-                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
-                    (place || 'без койки'),
-                    ' · ' + trf('поступил {date}', { date: String(r.admitted_at || '').slice(0, 10) }),
-                    r.admission_diagnosis ? ' · ' + r.admission_diagnosis : ''),
-            ),
-            h('span', { class: 'muted', style: { fontSize: '12.5px', flex: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px' } },
-                'Госпитализация ', Icon('ArrowRight', { size: 13 })),
-        ));
-    }
+    for (const r of rows) wrap.appendChild(inpatientRow(r, reload));
     return wrap;
 }
 
