@@ -428,7 +428,21 @@ export function adminRoutes(db) {
       return conflict(res, `This clinic has ${filials} filial${filials === 1 ? '' : 's'}. Delete or reassign them first.`);
     }
 
-    return res.json({ ok: true });   // Task 5 replaces this with the real work
+    // ONE TRANSACTION. A tombstone without a delete would lock an id that still
+    // has a live clinic on it; a delete without a tombstone is exactly the
+    // resurrection bug this feature exists to prevent. Neither may happen alone.
+    //
+    // clinic_modules, relay_tokens and relay_blobs all declare ON DELETE
+    // CASCADE and are cleared by the engine. checkins and module_requests carry
+    // no foreign key — deliberately, see 001_registry.sql — and survive as the
+    // record of what this clinic did.
+    db.transaction(() => {
+      db.prepare('INSERT INTO deleted_clinics (clinic_id, name, deleted_by) VALUES (?,?,?)')
+        .run(clinic.clinic_id, clinic.name, req.vendorUser.username);
+      db.prepare('DELETE FROM clinics WHERE clinic_id = ?').run(clinic.clinic_id);
+    })();
+
+    res.json({ ok: true, deleted: clinic.clinic_id });
   });
 
   r.post('/clinics/:id/unlock-code', (req, res) => {

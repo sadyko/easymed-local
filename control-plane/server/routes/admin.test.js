@@ -1034,3 +1034,75 @@ test('DELETE is in ADMIN_ROUTE_TABLE, so the anonymous-caller sweep covers it', 
     'a route missing from this table ships unprotected — see the table header',
   );
 });
+
+test('DELETE destroys the clinic and its credentials, keeps the evidence', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const token = enrol(db, 'c-000009', 'Last Test Clinic');
+
+  db.prepare("INSERT INTO clinic_modules (clinic_id, module_key) VALUES ('c-000009','crm')").run();
+  db.prepare("INSERT INTO module_requests (clinic_id, module_key, requested_at) VALUES ('c-000009','crm','2026-08-20T00:00:00Z')").run();
+  db.prepare('INSERT INTO relay_tokens (token, clinic_id, relay_id) VALUES (?,?,?)')
+    .run('tok-1', 'c-000009', 'b3'.repeat(16));
+  checkIn(db, { installToken: token, version: '0.8.0', fingerprint: 'fp-1' });
+  assert.ok(db.prepare('SELECT COUNT(*) n FROM checkins').get().n > 0, 'sanity: a check-in exists');
+
+  await req(server, 'POST', ADMIN_BASE + '/clinics/c-000009/retire', { cookie, body: {} });
+  const res = await req(server, 'DELETE', ADMIN_BASE + '/clinics/c-000009', { cookie });
+  assert.equal(res.status, 200);
+
+  // Gone.
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM clinics WHERE clinic_id = ?').get('c-000009').n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM clinic_modules WHERE clinic_id = ?').get('c-000009').n, 0,
+    'ON DELETE CASCADE (001_registry.sql)');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM relay_tokens WHERE clinic_id = ?').get('c-000009').n, 0,
+    'a credential must never outlive the identity it speaks for (006_relay_tokens.sql)');
+
+  // Kept.
+  assert.ok(db.prepare('SELECT COUNT(*) n FROM checkins WHERE clinic_id = ?').get('c-000009').n > 0,
+    'check-in history is evidence for a billing dispute — 001 keeps it uncascaded on purpose');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM module_requests WHERE clinic_id = ?').get('c-000009').n, 1,
+    'GET /requests already LEFT JOINs for exactly this case');
+
+  // Tombstoned, with the name and the vendor recorded.
+  const grave = db.prepare('SELECT * FROM deleted_clinics WHERE clinic_id = ?').get('c-000009');
+  assert.equal(grave.name, 'Last Test Clinic');
+  assert.equal(grave.deleted_by, 'vendor');
+});
+
+test('a deleted clinic cannot be resurrected under its old id', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  enrol(db, 'c-000009', 'Last Test Clinic');
+  await req(server, 'POST', ADMIN_BASE + '/clinics/c-000009/retire', { cookie, body: {} });
+  await req(server, 'DELETE', ADMIN_BASE + '/clinics/c-000009', { cookie });
+
+  // THE WHOLE POINT. The old clinic's signed licence names c-000009 and is
+  // still on its computer; if a new clinic could take that id, that licence
+  // would unlock it.
+  const res = await req(server, 'POST', ADMIN_BASE + '/clinics', {
+    cookie, body: { name: 'A Different Clinic' },
+  });
+  assert.equal(res.status, 201);
+  assert.equal((await res.json()).clinic_id, 'c-000010');
+
+  assert.throws(
+    () => db.prepare("INSERT INTO clinics (clinic_id, name, unlock_secret) VALUES ('c-000009','Forced','x')").run(),
+    /permanently deleted/i,
+    'even a direct INSERT must be refused — the trigger is the second line',
+  );
+});
+
+test('DELETE leaves nothing behind if any part of it fails', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  enrol(db, 'c-1', 'Clinic One');
+  await req(server, 'POST', ADMIN_BASE + '/clinics/c-1/retire', { cookie, body: {} });
+  // Pre-place the tombstone so the INSERT inside the transaction collides.
+  db.prepare('INSERT INTO deleted_clinics (clinic_id, name) VALUES (?,?)').run('c-1', 'Clinic One');
+
+  const res = await req(server, 'DELETE', ADMIN_BASE + '/clinics/c-1', { cookie });
+  assert.equal(res.status, 500);
+  assert.ok(db.prepare('SELECT 1 FROM clinics WHERE clinic_id = ?').get('c-1'),
+    'the clinic row must survive a failed delete — one transaction, all or nothing');
+});
