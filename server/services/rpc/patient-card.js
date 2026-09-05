@@ -32,6 +32,11 @@ import {
 } from '../roles.js';
 import { canRead, canWrite, readableColumns, writableColumns } from '../../db/schema-registry.js';
 import { RpcError } from './crm-config.js';
+// PATIENT_FILE_ATTACH_V1
+import fs from 'node:fs';
+import path from 'node:path';
+import { getDataDir } from '../control/config.js';
+import { patientFileRefusal, refusalText } from '../../../public/js/shared/patient-file-limits.js';
 
 const SECTION = 'patients';
 
@@ -94,6 +99,42 @@ const IDENTITY_COLUMNS = Object.freeze([
 ]);
 
 const inClause = (n) => Array(n).fill('?').join(',');
+
+// ---------------------------------------------------------------------------
+// PATIENT_FILE_ATTACH_V1 — ФАЙЛЫ ПАЦИЕНТА.
+//
+// ГДЕ ОНИ ЛЕЖАТ. <dataDir>/storage/clinic-docs/patients/<id>/docs/<ключ>, то
+// есть внутри той же папки данных, что и easymed.db, — на компьютере клиники и
+// нигде больше. Это оффлайн-продукт: облачного ведра нет и не будет.
+//
+// ИМЯ НА ДИСКЕ ОБЕЗЛИЧЕНО (<время>-<случайное>-<обеззараженное имя>): имя,
+// которое дал файлу человек, живёт в БАЗЕ (file_name) и показывается в карте,
+// а на диске стоит ключ, который нельзя угадать и который не столкнётся со
+// вторым файлом того же имени.
+//
+// ЧТО СЧИТАЕТСЯ ПУТЁМ ДОКУМЕНТА ЭТОГО ПАЦИЕНТА. Ровно `patients/<id>/docs/<имя>`
+// — та же форма, которую отдельно проверяет routes/storage.js. Проверяется
+// ЗДЕСЬ ТОЖЕ, потому что строка в базе — это то, по чему файл потом читают:
+// пустив в file_path чужой путь, можно было бы приделать к своему пациенту
+// чужой скан.
+const DOC_PREFIX = (patientId) => 'patients/' + patientId + '/docs/';
+
+const storageRoot = () => path.join(getDataDir(), 'storage', 'clinic-docs');
+
+/**
+ * Лежит ли файл на ЭТОМ компьютере. Пустой file_path (заключение из кабинета
+ * врача — оно в body, не в файле) считается «вопрос не про файл» и не
+ * помечается недоступным.
+ */
+function fileOnThisMachine(filePath) {
+  if (!filePath) return true;
+  const rel = String(filePath);
+  if (rel.includes('..') || rel.includes('\\') || rel.includes('\0')) return false;
+  const abs = path.resolve(storageRoot(), ...rel.split('/').filter(Boolean));
+  const root = path.resolve(storageRoot());
+  if (abs !== root && !abs.startsWith(root + path.sep)) return false;
+  try { return fs.statSync(abs).isFile(); } catch { return false; }
+}
 
 function parseJson(v) {
   if (v == null || typeof v !== 'string') return v ?? null;
@@ -225,9 +266,25 @@ export function patientCard(db, args, user) {
   }
 
   if (tabs.docs !== 'none' && canRead('visit_documents', roles)) {
-    out.docs = db.prepare('SELECT ' + cols('visit_documents', 'd') + ' FROM visit_documents d'
+    // PATIENT_FILE_ATTACH_V1 — к колонкам реестра добавлены свои:
+    //   • кто и когда отозвал документ (миграция 105) — карта показывает
+    //     отозванные серым, а не прячет: смысл отзыва в том, что запись
+    //     остаётся;
+    //   • имя того, кто приложил файл — иначе в колонке «Врач» у каждого
+    //     загруженного файла стоял бы «—», и спросить «кто это принёс» было
+    //     бы не у кого;
+    //   • file_available — ЛЕЖИТ ЛИ ФАЙЛ НА ЭТОМ КОМПЬЮТЕРЕ. Ответ считается
+    //     здесь, а не в браузере, и он не косметика: файлы не ездят между
+    //     зданиями и не попадали в резервную копию до этой работы. Без него
+    //     карта показывала бы обычную ссылку, которая молча открывает 404.
+    out.docs = db.prepare('SELECT ' + cols('visit_documents', 'd')
+      + ', d.voided_at, d.voided_by, d.void_reason'
+      + ', au.full_name AS created_by_name, vu.full_name AS voided_by_name'
+      + ' FROM visit_documents d'
+      + ' LEFT JOIN users au ON au.id = d.created_by'
+      + ' LEFT JOIN users vu ON vu.id = d.voided_by'
       + ' WHERE d.patient_id = ? ORDER BY d.created_at DESC LIMIT 300').all(id)
-      .map((r) => ({ ...r, body: parseJson(r.body) }));
+      .map((r) => ({ ...r, body: parseJson(r.body), file_available: fileOnThisMachine(r.file_path) }));
     // Подписанные заключения кабинета врача живут в visit_services.notes.
     out.doc_notes = vsRows
       .filter((r) => r.notes != null && r.notes !== '')
@@ -301,7 +358,24 @@ export function patientCardSavePatient(db, args, user) {
   return db.prepare('SELECT ' + cols('patients', 'p') + ' FROM patients p WHERE p.id = ?').get(id);
 }
 
-/** Загрузка документа в карту — вкладка «Документы». */
+/**
+ * Загрузка документа в карту — вкладка «Документы».
+ *
+ * PATIENT_FILE_ATTACH_V1 — сюда приходит строка ПОСЛЕ того, как байты уже
+ * легли в хранилище (POST /api/storage). Поэтому здесь три вещи, которых
+ * раньше не было, и каждая закрывает свой способ получить строку, которой
+ * нельзя верить:
+ *
+ *   1. АВТОРА СТАВИТ СЕРВЕР. `created_by` брался из тела запроса, то есть
+ *      подписаться под чужим именем можно было одним curl'ом. Кто приложил
+ *      файл — это то, ради чего запись вообще ведётся; такое не спрашивают у
+ *      клиента. Тот же довод, что у cashier_id в кассе.
+ *   2. ФАЙЛ ДОЛЖЕН БЫТЬ ЭТОГО ПАЦИЕНТА И ДОЛЖЕН СУЩЕСТВОВАТЬ. Иначе в карте
+ *      появлялась бы строка, которая либо открывает чужой скан, либо не
+ *      открывает ничего.
+ *   3. ПРЕДЕЛЫ ПРОВЕРЯЮТСЯ ЗАНОВО (размер и тип) — теми же правилами, по
+ *      которым отказывает браузер и маршрут хранилища.
+ */
 export function patientCardAddDocument(db, args, user) {
   const roles = requireCard(db, user);
   requireEdit(db, user, 'docs');
@@ -310,30 +384,78 @@ export function patientCardAddDocument(db, args, user) {
 
   const allowed = new Set(writableColumns('visit_documents', 'insert'));
   const row = (args && args.row && typeof args.row === 'object') ? args.row : {};
+
+  const filePath = row.file_path == null ? '' : String(row.file_path);
+  if (filePath) {
+    if (!filePath.startsWith(DOC_PREFIX(id)) || filePath.slice(DOC_PREFIX(id).length).includes('/')) {
+      throw new RpcError('Файл не относится к этому пациенту.', 400);
+    }
+    const bad = patientFileRefusal({ name: row.file_name || filePath, size: row.file_size });
+    if (bad) {
+      // Код обработчика важнее статусного: по нему экран узнаёт СВОЙ отказ
+      // (routes/rpc.js кладёт e.code в ответ как есть).
+      const err = new RpcError(refusalText(bad), bad.code === 'file_too_large' ? 413 : 415);
+      err.code = bad.code;
+      throw err;
+    }
+    if (!fileOnThisMachine(filePath)) {
+      throw new RpcError('Файл не загрузился — попробуйте ещё раз.', 400);
+    }
+  }
+
   const keys = ['patient_id'];
   const params = [id];
   for (const [k, v] of Object.entries(row)) {
-    if (!allowed.has(k) || k === 'patient_id') continue;
+    // created_by приходит от сервера (ниже), а не из тела запроса.
+    if (!allowed.has(k) || k === 'patient_id' || k === 'created_by') continue;
     keys.push(k);
     params.push(v === undefined ? null : (v !== null && typeof v === 'object' ? JSON.stringify(v) : v));
   }
+  const uid = user && user.id != null ? Number(user.id) : null;
+  keys.push('created_by');
+  params.push(Number.isInteger(uid) && uid > 0 ? uid : null);
+
   const sql = 'INSERT INTO visit_documents (' + keys.map((k) => '"' + k + '"').join(', ') + ')'
     + ' VALUES (' + keys.map(() => '?').join(', ') + ')';
   const info = db.prepare(sql).run(...params);
   return { id: info.lastInsertRowid };
 }
 
-/** Удаление документа — вкладка «Документы», уровень «Удаление». */
+/**
+ * ОТЗЫВ документа — вкладка «Документы», уровень «Удаление».
+ *
+ * PATIENT_FILE_ATTACH_V1 — РАНЬШЕ ЭТО БЫЛО НАСТОЯЩЕЕ УДАЛЕНИЕ: строка
+ * исчезала из visit_documents, а карта следом звала DELETE /api/storage и
+ * стирала файл. Клиническую запись в этом продукте не стирают нигде: отметку
+ * медсестры гасит voided_at (093), счёт аннулируется в 'void', результат
+ * анализа не удаляется вовсе. Скан направления — такая же запись, и вопрос
+ * «а куда делся документ, который вчера был» должен иметь ответ.
+ *
+ * Поэтому: строка остаётся, помечается voided_at/voided_by/void_reason и
+ * перестаёт открываться (routes/storage.js отвечает 410 на файл отозванного
+ * документа). Файл на диске НЕ трогаем — отзыв это решение клиники, а не
+ * команда уничтожить содержимое.
+ *
+ * Имя `patientCardDeleteDocument` сохранено: под ним RPC зарегистрирован и
+ * его зовут уже установленные у клиник сборки.
+ */
 export function patientCardDeleteDocument(db, args, user) {
   const roles = requireCard(db, user);
   requireDelete(db, user, 'docs');
   assertWrite('visit_documents', 'delete', roles);
   const docId = Number(args && args.document_id);
   if (!Number.isInteger(docId) || docId <= 0) throw new RpcError('Не указан документ.', 400);
-  const row = db.prepare('SELECT id, patient_id, file_path FROM visit_documents WHERE id = ?').get(docId);
+  const row = db.prepare('SELECT id, patient_id, file_path, voided_at FROM visit_documents WHERE id = ?').get(docId);
   if (!row) throw new RpcError('Документ не найден.', 404);
-  db.prepare('DELETE FROM visit_documents WHERE id = ?').run(docId);
-  return { id: docId, file_path: row.file_path || null };
+  if (row.voided_at) return { id: docId, voided_at: row.voided_at, already: true };
+
+  const reason = String((args && args.reason) || '').trim().slice(0, 500) || null;
+  const uid = user && user.id != null ? Number(user.id) : null;
+  db.prepare("UPDATE visit_documents SET voided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),"
+    + ' voided_by = ?, void_reason = ? WHERE id = ?')
+    .run(Number.isInteger(uid) && uid > 0 ? uid : null, reason, docId);
+  const after = db.prepare('SELECT voided_at FROM visit_documents WHERE id = ?').get(docId);
+  return { id: docId, voided_at: after.voided_at, file_path: row.file_path || null };
 }
 
 /** Смена врача в строке услуги — вкладка «Услуги». */

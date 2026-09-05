@@ -27,7 +27,14 @@ import { printInvoiceCheck } from './receipt-print.js?v=rp1';   // REPRINT_SERVI
 import { printableSheet as _printSheet } from './doc-settings.js?v=noqr1';   // VISIT_WIZARD_LOCAL_V1 — full-screen «Добавить услугу к визиту»
 import { openVisitBillModal } from './visit-bill.js';
 import { openAdmissionOrderModal } from './admission-modal.js?v=inp2';   // ADMISSION_ORDER_V1 — «Госпитализация» с карты пациента
-import { BRANCH_BUCKET, uploadFile, signedUrl, removeFile } from '../storage.js?v=aurora20b';   // PATIENT_DOCS_TAB_V1 — same URL as service-workspace (one instance)
+import { BRANCH_BUCKET, uploadFile, signedUrl } from '../storage.js?v=aurora20b';   // PATIENT_DOCS_TAB_V1 — same URL as service-workspace (one instance)
+// PATIENT_FILE_ATTACH_V1 — пределы и список допустимых форматов ОДНИ на
+// браузер и сервер (public/js/shared/). Здесь они нужны, чтобы отказ пришёл
+// СРАЗУ: 40-мегабайтную фотографию с телефона незачем сначала заливать по
+// клинической сети, чтобы потом узнать, что её не приняли. `removeFile` из
+// импорта убран намеренно — документ пациента теперь отзывается, а не
+// удаляется, и файл с диска не стирается (см. кнопку «Отозвать» ниже).
+import { patientFileRefusal } from '../../shared/patient-file-limits.js?v=pfa1';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // PATIENT_DOCS_CLINICAL_V1 — заключения/результаты открываются брендированным бланком
 // PATIENT_EDIT_REG_V1 — редактирование карты в стиле формы регистрации: те же
 // контролы (флаг-телефон, чипы пола, email с иконкой). Тот же ?v=, что в
@@ -1149,12 +1156,18 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
     // ---------------------------------------------------------------------
     function renderDocs() {
         const wrap = h('div', { class: 'card' });
-        const uid = (window.easymed && window.easymed.state && window.easymed.state.user && window.easymed.state.user.id) || null;
 
         const fileInp = h('input', { type: 'file', style: { display: 'none' } });
         fileInp.addEventListener('change', async () => {
             const f = fileInp.files && fileInp.files[0];
             if (!f) return;
+            // PATIENT_FILE_ATTACH_V1 — отказ ДО загрузки. Те же правила
+            // проверит сервер (routes/storage.js и rpc patient_card_doc_add);
+            // здесь они стоят только затем, чтобы человек узнал про предел
+            // сразу, а не после минуты ожидания. Шаблон переводится целиком,
+            // подстановка потом — I18N_COVERAGE_V1.
+            const bad = patientFileRefusal({ name: f.name, size: f.size });
+            if (bad) { toast(trf(bad.template, bad.params), 'fail'); fileInp.value = ''; return; }
             try {
                 const up = await uploadFile(BRANCH_BUCKET, f, 'patients/' + patient.id + '/docs/');
                 const row = {
@@ -1162,7 +1175,9 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     file_path: up.path, file_size: f.size,
                     content_type: f.type || 'application/octet-stream', doc_type: 'upload',
                 };
-                if (uid != null) row.created_by = uid;
+                // created_by СЮДА НЕ КЛАДЁТСЯ: автора ставит сервер по сессии.
+                // Кто приложил файл — это то, ради чего запись и ведётся, и
+                // спрашивать это у браузера нельзя.
                 // PATIENT_TAB_ACCESS_V1 — загрузка документа = «Изменение» вкладки
                 // «Документы»; проверяет сервер (rpc patient_card_doc_add).
                 const { error } = await supabase.rpc('patient_card_doc_add', { patient_id: patient.id, row });
@@ -1198,7 +1213,27 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         // старой обёрткой .sheet, которая не умеет делиться на страницы.
         const SHEET_TYPE = { protocol: 'conclusion', diag: 'diag', lab: 'lab' };
         async function openDoc(d) {
+            // PATIENT_FILE_ATTACH_V1 — отозванный документ не открывается, и
+            // экран говорит об этом ЗАРАНЕЕ, вместо того чтобы получить 410 в
+            // новой пустой вкладке.
+            if (d.voided_at) {
+                toast(d.voided_by_name
+                    ? trf('Документ отозван ({who}) и больше не открывается.', { who: d.voided_by_name })
+                    : 'Документ отозван и больше не открывается.', 'info');
+                return;
+            }
             if (d.file_path) {
+                // ФАЙЛ ЖИВЁТ НА ТОМ КОМПЬЮТЕРЕ, КУДА ЕГО ЗАГРУЗИЛИ. Файлы не
+                // ездят между зданиями (в журнале синхронизации их нет) и до
+                // недавнего времени не попадали в резервную копию. Ссылка,
+                // которая молча открывает пустую вкладку с «not found», —
+                // худший из возможных ответов: клиника решает, что документ
+                // потерян, хотя он есть, просто в другом месте.
+                if (d.file_available === false) {
+                    toast('Файл лежит на том компьютере, где его загрузили, — на этом его нет.'
+                        + ' Откройте карту в том здании или восстановите из резервной копии.', 'fail');
+                    return;
+                }
                 const url = await signedUrl(BRANCH_BUCKET, d.file_path);
                 if (url) window.open(url, '_blank'); else toast('Файл недоступен.', 'fail');
                 return;
@@ -1443,8 +1478,13 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
             const rowSvc = (d) => d.service
                 || (d.body && typeof d.body === 'object' && d.body.service)
                 || (d._lab ? 'Лаборатория' : '');
+            // PATIENT_FILE_ATTACH_V1 — у загруженного файла «врача» нет, есть
+            // ТОТ, КТО ЕГО ПРИЛОЖИЛ (created_by_name приезжает с картой).
+            // Раньше в этой колонке у каждого файла стоял «—», и вопрос «кто
+            // это принёс» упирался в пустоту.
             const rowDoc = (d) => d.doctorName
                 || (d.body && typeof d.body === 'object' && (d.body.doctorName || (d.body.meta && d.body.meta.signedBy)))
+                || d.created_by_name
                 || '';
             const openRow = (d) => d._lab ? printLabDay(d) : (d._ws ? printWsDoc(d) : openDoc(d));
             const tbody = h('tbody');
@@ -1458,7 +1498,16 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                             h('span', { class: 'muted', style: { fontSize: '12.5px' } }, DOC_TYPE_RU[d.doc_type] || d.doc_type || ''),
                             // LAB_DOC_PENDING_V1 — статус виден в списке: «Не
                             // готов» это ответ на вопрос пациента у стойки.
-                            d.st ? Tag(d.st.label, { kind: d.st.kind, dot: true }) : null)),
+                            d.st ? Tag(d.st.label, { kind: d.st.kind, dot: true }) : null,
+                            // PATIENT_FILE_ATTACH_V1 — состояние документа
+                            // видно НЕ ОТКРЫВАЯ его: отозван (запись осталась,
+                            // содержимое закрыто) и «файла нет на этом
+                            // компьютере» (он в другом здании или потерян при
+                            // восстановлении). Второе — прямой ответ на то,
+                            // почему ссылка не работает.
+                            d.voided_at ? Tag('Отозван', { kind: 'crit', dot: true }) : null,
+                            (!d.voided_at && d.file_path && d.file_available === false)
+                                ? Tag('Файла нет на этом компьютере', { kind: 'warn', dot: true }) : null)),
                     h('td', null, rowSvc(d) || '—'),
                     h('td', null, rowDoc(d) || '—'),
                     h('td', { class: 'num', style: { fontSize: '12.5px' } }, d.created_at ? fmtDateTime(d.created_at) : '—'),
@@ -1467,19 +1516,26 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                             class: 'btn btn-outline btn-sm', type: 'button', title: 'Печать',
                             onclick: () => openRow(d),
                         }, Icon('Print', { size: 13 }), ' Печать'),
-                        // PATIENT_TAB_ACCESS_V1 — удаление документа требует уровня
+                        // PATIENT_TAB_ACCESS_V1 — отзыв документа требует уровня
                         // «Удаление» на вкладке «Документы»; сервер проверяет то же
-                        // (rpc patient_card_doc_delete).
-                        (d._lab || d._ws || !tabDelete('docs')) ? null : h('button', {
-                            class: 'btn btn-outline btn-sm', type: 'button', title: 'Удалить',
+                        // (rpc patient_card_doc_void).
+                        //
+                        // PATIENT_FILE_ATTACH_V1 — кнопка ОТЗЫВАЕТ, а не удаляет:
+                        // строка остаётся в карте (серая, с именем того, кто
+                        // отозвал), файл остаётся на диске, документ перестаёт
+                        // открываться. Так этот продукт поступает со всеми
+                        // клиническими записями — отметку медсестры гасят,
+                        // счёт аннулируют, результат анализа не стирают вовсе.
+                        (d._lab || d._ws || d.voided_at || !tabDelete('docs')) ? null : h('button', {
+                            class: 'btn btn-outline btn-sm', type: 'button', title: 'Отозвать документ',
                             style: { marginLeft: '6px', color: 'var(--crit-600, #dc2626)' },
                             onclick: async () => {
-                                if (!confirm(trf('Удалить документ «{name}»?', { name: d.title || d.file_name || d.id }))) return;
-                                const { error: delErr } = await supabase.rpc('patient_card_doc_delete',
+                                if (!confirm(trf('Отозвать документ «{name}»? Он останется в карте, но перестанет открываться.',
+                                    { name: d.title || d.file_name || d.id }))) return;
+                                const { error: delErr } = await supabase.rpc('patient_card_doc_void',
                                     { patient_id: patient.id, document_id: d.id });
-                                if (delErr) { toast(trf('Не удалось удалить: {msg}', { msg: rpcMsg(delErr) }), 'fail'); return; }
-                                if (d.file_path) removeFile(BRANCH_BUCKET, d.file_path);   // best-effort
-                                toast('Документ удалён.');
+                                if (delErr) { toast(trf('Не удалось отозвать: {msg}', { msg: rpcMsg(delErr) }), 'fail'); return; }
+                                toast('Документ отозван.');
                                 await reload();
                             },
                         }, Icon('Trash', { size: 13 }))),

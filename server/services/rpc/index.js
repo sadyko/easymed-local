@@ -63,6 +63,11 @@ export const RPC = {
   patient_card_save:        (db, args, user) => patientCardSavePatient(db, args, user),
   patient_card_doc_add:     (db, args, user) => patientCardAddDocument(db, args, user),
   patient_card_doc_delete:  (db, args, user) => patientCardDeleteDocument(db, args, user),
+  // PATIENT_FILE_ATTACH_V1 — документ пациента ОТЗЫВАЕТСЯ, а не удаляется
+  // (миграция 105). Настоящее имя действия — void; _doc_delete строкой выше
+  // остаётся тем же обработчиком, потому что под этим именем его зовут уже
+  // установленные у клиник сборки, а переименование сделало бы им 501.
+  patient_card_doc_void:    (db, args, user) => patientCardDeleteDocument(db, args, user),
   patient_card_set_doctor:  (db, args, user) => patientCardSetServiceDoctor(db, args, user),
   get_clinic_by_slug:       (db, args, user) => getClinicBySlug(db, args, user),
   callcenter_report:        (db, args, user) => callcenterReport(db, args, user),

@@ -62,7 +62,11 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   app.use('/api/users', userRoutes(db));
   app.use('/api/db', requireAuth, dbRoutes(db));
   app.use('/api/rpc', requireAuth, rpcRoutes(db));
-  app.use('/api/storage', requireAuth, storageRoutes(path.join(dataDir, 'storage')));
+  // PATIENT_FILE_ATTACH_V1 — хранилище получает базу: файлы документов
+  // пациента (clinic-docs/patients/<id>/docs/...) отдаются и принимаются по
+  // тому же праву вкладки «Документы», которым закрыта сама карта. Без базы
+  // ссылка на файл обходила бы закрытую вкладку.
+  app.use('/api/storage', requireAuth, storageRoutes(path.join(dataDir, 'storage'), db));
 
   // Unknown /api paths answer JSON, not an HTML 404 page.
   app.use('/api', (req, res) => res.status(404).json({ error: { code: 'not_found', message: 'Unknown API endpoint.' } }));

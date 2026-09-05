@@ -209,15 +209,22 @@ test('«Изменение» без «Удаления» на «Документ
   const added = patientCardAddDocument(db, { patient_id: pid, row: { title: 'Скан', doc_type: 'upload' } }, DOCTOR);
   assert.ok(added.id, 'загрузка прошла');
   refuses(() => patientCardDeleteDocument(db, { patient_id: pid, document_id: doc }, DOCTOR), { tab: 'Документы', matches: /Удаление/ });
-  assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_documents').get().n, 2, 'ничего не удалено');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_documents WHERE voided_at IS NULL').get().n, 2, 'ничего не отозвано');
   db.close();
 });
 
-test('«Удаление» на «Документах» — удаляет; закрытая вкладка — нет', () => {
+// PATIENT_FILE_ATTACH_V1 — уровень «Удаление» на вкладке «Документы» теперь
+// ОТЗЫВАЕТ документ, а не стирает его: строка остаётся, помечается voided_*
+// и перестаёт открываться. Проверяется здесь, а не только в
+// patient-card-docs.test.js, потому что это ТО ЖЕ право и та же дверь.
+test('«Удаление» на «Документах» — отзывает (строка остаётся); закрытая вкладка — нет', () => {
   const { db, pid, doc } = seed();
   setTabs(db, 'doctor', { docs: 'delete' });
   patientCardDeleteDocument(db, { patient_id: pid, document_id: doc }, DOCTOR);
-  assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_documents').get().n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_documents').get().n, 1, 'клиническая запись не стирается');
+  const after = db.prepare('SELECT voided_at, voided_by FROM visit_documents WHERE id = ?').get(doc);
+  assert.ok(after.voided_at, 'документ помечен отозванным');
+  assert.equal(after.voided_by, DOCTOR.id, 'записано, КТО отозвал');
 
   const s2 = seed();
   setTabs(s2.db, 'doctor', { docs: 'none' });

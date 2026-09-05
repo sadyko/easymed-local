@@ -33,6 +33,100 @@ const KEEP_BY_KIND = { daily: 14, manual: 10, safety: 5, final: 5, pre: 3 };
 
 const MARKER_NAME = 'pending-action.json';
 
+// PATIENT_FILE_ATTACH_V1 — ФАЙЛЫ ТОЖЕ ЕСТЬ ДАННЫЕ КЛИНИКИ.
+//
+// До этой работы копия содержала ТОЛЬКО базу. Сканы, фотографии направлений и
+// вложения переписки лежат не в базе, а в <dataDir>/storage — то есть каждая
+// «резервная копия» обещала сохранность того, чего не сохраняла. Проверить это
+// клиника могла ровно одним способом: восстановиться и обнаружить, что в карте
+// каждого пациента остались строки документов, которые ничего не открывают.
+// (И это при том, что «Сброс к заводским настройкам» storage/ уже удалял —
+// продукт умел стирать файлы и не умел их спасать.)
+//
+// СНИМОК ДЕЛАЕТСЯ ЖЁСТКИМИ ССЫЛКАМИ, а не копированием. Файлы в storage
+// НЕИЗМЕНЯЕМЫ: имя на диске — уникальный ключ, второй раз в него никто не
+// пишет (upsert:false), а удаление документа заменено отзывом. Значит ссылка
+// на тот же inode — полноценный снимок момента, занимающий ноль места:
+// четырнадцать ежедневных копий хранилища на 5 ГБ не превращаются в 70 ГБ на
+// диске регистратуры. Там, где ссылку сделать нельзя (другой том, файловая
+// система без hardlink), молча копируем — дороже, но так же верно.
+const STORAGE_DIR = 'storage';
+const sidecarFor = (dbFileName) => dbFileName.replace(/\.db$/, '') + '.files';
+
+function copyTreeLinked(from, to) {
+  let entries;
+  try { entries = fs.readdirSync(from, { withFileTypes: true }); } catch { return 0; }
+  fs.mkdirSync(to, { recursive: true });
+  let n = 0;
+  for (const e of entries) {
+    const src = path.join(from, e.name);
+    const dst = path.join(to, e.name);
+    if (e.isDirectory()) { n += copyTreeLinked(src, dst); continue; }
+    if (!e.isFile()) continue;
+    try {
+      fs.linkSync(src, dst);
+      n++;
+    } catch (err) {
+      if (err.code === 'EEXIST') { n++; continue; }
+      // EXDEV (другой том), EPERM (файловая система без жёстких ссылок) —
+      // копия делает то же самое, просто дороже.
+      try { fs.copyFileSync(src, dst); n++; }
+      catch (e2) { console.warn('[backup] файл не попал в копию:', src, e2 && e2.message); }
+    }
+  }
+  return n;
+}
+
+// Восстановление СЛИВАЕТ файлы, а не заменяет их. Хранилище только растёт:
+// откат базы на вчера не делает сегодняшний скан ошибкой, а перезапись папки
+// целиком уничтожила бы всё, что появилось после снятой копии. Существующий
+// файл никогда не трогается — имена уникальны, и совпадение означает тот же
+// самый файл.
+function mergeTree(from, to) {
+  let entries;
+  try { entries = fs.readdirSync(from, { withFileTypes: true }); } catch { return 0; }
+  fs.mkdirSync(to, { recursive: true });
+  let n = 0;
+  for (const e of entries) {
+    const src = path.join(from, e.name);
+    const dst = path.join(to, e.name);
+    if (e.isDirectory()) { n += mergeTree(src, dst); continue; }
+    if (!e.isFile() || fs.existsSync(dst)) continue;
+    try { fs.copyFileSync(src, dst); n++; }
+    catch (err) { console.warn('[backup] файл не восстановился:', src, err && err.message); }
+  }
+  return n;
+}
+
+/**
+ * Снимок <dataDir>/storage рядом с копией базы: backups/<имя копии>.files/.
+ * Возвращает число файлов в снимке. Никогда не бросает — копия базы к этому
+ * моменту уже сделана, и потерять её из-за беды с файлами было бы хуже, чем
+ * предупредить в журнал.
+ *
+ * Имя папки не оканчивается на .db, поэтому listBackups её не видит и
+ * restore-RPC на неё указать не может — ровно то свойство «сайдкара», которое
+ * NAME_RE объявляет выше.
+ */
+export function snapshotStorage(dataDir, dbFileName) {
+  const from = path.join(dataDir, STORAGE_DIR);
+  if (!fs.existsSync(from)) return 0;
+  try {
+    return copyTreeLinked(from, path.join(dataDir, 'backups', sidecarFor(dbFileName)));
+  } catch (e) {
+    console.warn('[backup] снимок файлов не удался:', e && e.message);
+    return 0;
+  }
+}
+
+/** Вернуть файлы из снимка копии `dbFileName` в <dataDir>/storage. */
+export function restoreStorage(dataDir, dbFileName) {
+  const from = path.join(dataDir, 'backups', sidecarFor(dbFileName));
+  if (!fs.existsSync(from)) return 0;
+  try { return mergeTree(from, path.join(dataDir, STORAGE_DIR)); }
+  catch (e) { console.warn('[backup] файлы не восстановились:', e && e.message); return 0; }
+}
+
 const p2 = (n) => String(n).padStart(2, '0');
 // LOCAL time on purpose, matching what the clinic's own clock says: "the
 // backup from the 23rd" must mean the 23rd as the receptionist lived it, and
@@ -113,8 +207,12 @@ export async function createBackup(db, dataDir, kind, now = new Date()) {
   // backup — for requestRestore below, that would mean writing a restore
   // marker whose safety copy does not actually exist yet.
   await db.backup(out);
+  // PATIENT_FILE_ATTACH_V1 — файлы снимаются ПОСЛЕ базы. Порядок важен: строка
+  // документа без файла — «файл не открывается», файл без строки — просто
+  // лишние байты на диске. Из двух неполных копий правильно иметь вторую.
+  const files = snapshotStorage(dataDir, path.basename(out));
   const st = fs.statSync(out);
-  return { name: path.basename(out), kind, size: st.size, mtimeMs: st.mtimeMs };
+  return { name: path.basename(out), kind, size: st.size, mtimeMs: st.mtimeMs, files };
 }
 
 /**
@@ -141,6 +239,11 @@ export function pruneBackupsByKind(dir) {
     entries.sort((a, b) => b.t - a.t);
     for (const { f } of entries.slice(KEEP_BY_KIND[kind])) {
       try { fs.unlinkSync(path.join(dir, f)); } catch { /* a locked file is not worth failing over */ }
+      // PATIENT_FILE_ATTACH_V1 — снимок файлов уходит ВМЕСТЕ со своей копией
+      // базы. Оставшийся сайдкар держал бы жёсткие ссылки на файлы, удалённые
+      // из storage (сброс к заводским), то есть занимал бы место, о котором
+      // никто не знает и которое ничем не освободить.
+      try { fs.rmSync(path.join(dir, sidecarFor(f)), { recursive: true, force: true }); } catch { /* same */ }
     }
   }
 }
@@ -304,8 +407,14 @@ function applyRestore(dataDir, markerPath, m) {
     return quarantine(markerPath, `restore failed: ${e && e.message}`);
   }
 
+  // PATIENT_FILE_ATTACH_V1 — файлы возвращаются ПОСЛЕ базы и СЛИЯНИЕМ (см.
+  // mergeTree): восстановленная база снова знает про документы, снятые в тот
+  // момент, а всё, что появилось позже, остаётся на диске. Сбой здесь не
+  // отменяет восстановление базы — оно уже состоялось и оно главное.
+  const files = restoreStorage(dataDir, name);
+
   try { fs.unlinkSync(markerPath); } catch { /* next boot re-runs the same restore onto the same result */ }
-  return { action: 'restore', backup: name };
+  return { action: 'restore', backup: name, files };
 }
 
 function applyFactoryReset(dataDir, markerPath, m) {
