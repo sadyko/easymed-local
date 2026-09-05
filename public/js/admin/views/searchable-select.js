@@ -22,6 +22,10 @@ import { filterByLabel } from '../../shared/text-match.js?v=tm1';   // TEXT_MATC
 // фильтр, чтобы было видно, что выборка сужена. По умолчанию белый, как везде.
 export function searchableSelect(sel, { placeholder = 'Поиск…', background = 'var(--white, #fff)' } = {}) {
     sel.style.display = 'none';
+    // UI_ENHANCE_V1 — общий обход полей обязан пройти мимо: это поле уже одето,
+    // и вторая обёртка дала бы два видимых списка на одно значение.
+    sel.setAttribute('data-no-enhance', '');
+    if (sel.dataset) sel.dataset.noEnhance = '';
 
     const input = h('input', {
         type: 'text', placeholder, autocomplete: 'off',

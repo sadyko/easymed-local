@@ -20,7 +20,7 @@ import { h, Icon, fmtDate } from './ui.js';
 import { tr } from './i18n.js';
 import { monthName } from './i18n.js';
 import { monthGrid, parseIso, shiftMonth, todayIso, withinRange } from '../shared/month-grid.js?v=mg1';
-import { watchValue } from './ui-select.js?v=uisel1';
+import { watchValue, insideEditable } from './ui-select.js?v=uisel1';
 
 const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
@@ -31,6 +31,7 @@ export function enhanceDateField(input) {
     if ((input.getAttribute('type') || '').toLowerCase() !== 'date') return null;
     if (input.dataset.uiDate === 'on' || input.dataset.noEnhance != null) return null;
     if (input.closest && input.closest('[data-no-enhance]')) return null;
+    if (insideEditable(input)) return null;   // бланк приёма правится как текст
     input.dataset.uiDate = 'on';
 
     const valueEl = h('span', { class: 'uidate-val' });

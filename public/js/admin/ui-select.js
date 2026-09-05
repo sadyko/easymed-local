@@ -59,6 +59,28 @@ export function watchValue(el, onSet) {
 /** Все открытые списки: второй открывается — первый закрывается. */
 let openInstance = null;
 
+/**
+ * Поле внутри редактируемого текста трогать НЕЛЬЗЯ.
+ *
+ * Бланк приёма — это contenteditable: врач правит его как документ. Обёртка,
+ * вставленная внутрь, стала бы частью текста — её можно было бы выделить и
+ * стереть клавишей, а вместе с ней исчезло бы и само поле. Родное поле там
+ * ведёт себя предсказуемо, и это тот случай, где предсказуемость дороже вида.
+ *
+ * Проверяется подъёмом по родителям, а не селектором: contenteditable="false"
+ * ВНУТРИ редактируемого блока снова делает участок нередактируемым, и ближайшее
+ * значение — верное.
+ */
+export function insideEditable(el) {
+    let n = el;
+    while (n && n.getAttribute) {
+        const v = n.getAttribute('contenteditable');
+        if (v != null) return v !== 'false';
+        n = n.parentNode;
+    }
+    return false;
+}
+
 function readOptions(sel) {
     return [...sel.options].map((o) => ({
         value: o.value,
@@ -86,6 +108,7 @@ export function enhanceSelect(sel) {
     if (sel.multiple || (sel.size && sel.size > 1)) return null;
     if (sel.dataset.uiSelect === 'on' || sel.dataset.noEnhance != null) return null;
     if (sel.closest && sel.closest('[data-no-enhance]')) return null;
+    if (insideEditable(sel)) return null;
     sel.dataset.uiSelect = 'on';
 
     const valueEl = h('span', { class: 'uisel-val' });

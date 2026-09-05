@@ -42,4 +42,7 @@ licence-*.dat
 # ROOMS_SETUP_V1 — local run logs from a manual start, never committed
 server-out.log
 server-err.log
+# Прогон набора тестов пишется в файл, чтобы прочитать НАСТОЯЩИЙ код возврата
+# (через `| tail` он теряется). Такой файл однажды уже уехал в коммит.
+*.log
 .superpowers/
