@@ -75,6 +75,17 @@ import { loadPatientById } from '../data.js';
 import { pastelFor } from '../pastel.js?v=pastel1';
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';   // RESCAL_WIRE_V1 — same URL as other importers (one instance)
 import { registrarHeader } from './registrar-header.js?v=aurora5';   // NO_GREETING_V1 — same URL as patients.js (one instance)
+// RCAL_REFERENCE_LAYOUT_V1 — счётная часть новой раскладки (мини-месяц, сколько
+// дней помещается, загрузка колонки, рабочий набор оператора). Отдельным
+// файлом: этот в node не загружается, а те правила надо проверять числами.
+import {
+    STEP_CHOICES, rowPx, pxPerMin, showsSlotLabel,
+    MAX_DAYS, maxDaysFor, dayStepBlock,
+    monthKey, monthGrid, monthRange, countByDay,
+    groupByBranch, keepsWorkingFilter, columnLoad, buildColumns,
+    slotMode, MODE_LIVE_QUEUE,
+    readWorkingSet, writeWorkingSet, restoreSelection,
+} from './rcal-layout.js?v=rcal1';
 
 const WD_KEY = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const RU_WD_L = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
@@ -135,7 +146,21 @@ function localIso(dayIso, min) {
     d.setHours(Math.floor(min / 60), min % 60, 0, 0);
     return d.toISOString();
 }
-const pxPerMin = (step) => (step <= 10 ? 16 : step <= 15 ? 22 : 34) / step;
+// pxPerMin/rowPx приехали из rcal-layout.js: одну и ту же высоту строки считают
+// и сетка, и перетаскивание, и порог, за которым в клетке помещается подпись.
+// Шапка мини-месяца: тот же словарь коротких дней, но с понедельника — как в
+// референсе и как в любом бумажном календаре здесь.
+const MINI_WD = [1, 2, 3, 4, 5, 6, 0];
+
+/**
+ * localStorage, у которого в приватном режиме кидается САМ ДОСТУП к свойству —
+ * не чтение, а обращение к window.localStorage. Настройка вида не стоит того,
+ * чтобы уронить экран записи, поэтому обращение обёрнуто здесь один раз.
+ */
+function safeStorage() {
+    try { return typeof localStorage === 'undefined' ? null : localStorage; }
+    catch (e) { return null; }
+}
 
 /**
  * Минуты ожидания → «25 мин» / «3 ч 10 мин». СКОЛЬКО, а не «давно»: оператор
@@ -166,11 +191,27 @@ const FAR_NOTE_CSS = {
 };
 
 export async function renderRoomCalendar(container, { onNavigate, embedded = false } = {}) {
+    // РАБОЧИЙ НАБОР ОПЕРАТОРА ЧИТАЕТСЯ ДО ПЕРВОЙ ОТРИСОВКИ: врачи, число дней и
+    // шаг сетки переживают перезагрузку, потому что это устройство рабочего
+    // места, а не вопрос к одной картинке (разбор — в rcal-layout.js).
+    const stored = readWorkingSet(safeStorage());
     const state = {
-        resType: 'doctor', napr: '', q: '', step: 15, period: 1,
+        resType: stored.resType, napr: '', q: '', step: stored.step, period: stored.period,
         dayIso: todayIso(), showCancelled: false,
+        // «Работают сегодня» из референса: рейка и сетка оставляют только тех,
+        // у кого на открытый день ЕСТЬ рабочее окно (ответ сервера, не догадка).
+        onlyWorking: false,
+        // Поиск по записям верхней панели — по пациенту, услуге и телефону.
+        apptQ: '',
         doctors: [], rooms: [], servicesList: [], appts: [], windows: {},
         selected: new Set(), failed: [], loaded: false,
+        // Запомненные отметки по типам осей: переключение «Врачи ⇄ Кабинеты» не
+        // должно терять набор соседней оси.
+        storedSel: stored.selected,
+        // Мини-месяц: какой месяц открыт и его записи ОДНИМ ответом на месяц.
+        miniYear: isoToLocalDay(todayIso()).getFullYear(),
+        miniMonth: isoToLocalDay(todayIso()).getMonth(),
+        monthKeyLoaded: '', monthItems: [],
         // CROSS_BRANCH_CALENDAR_V1. branch — БУКВА выбранного здания ('' = все).
         // cross — то, что про эти записи знает только сервер (см. шапку).
         branch: '', cross: { self: '', buildings: [], visits: {} },
@@ -292,11 +333,29 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
     // ЗАПРОС УХОДИТ ДАЖЕ БЕЗ ВЫБРАННЫХ РЕСУРСОВ, и это не расточительство:
     // список зданий нужен переключателю филиалов ДО того, как в сетке
     // что-нибудь выбрано.
+    //
+    // ОКНА СПРАШИВАЮТСЯ НЕ ТОЛЬКО ЗА ВЫБРАННЫХ. «Работают сегодня» — фильтр
+    // РЕЙКИ, то есть ему нужно окно каждого, кто в рейке стоит, а не каждого,
+    // кто уже отмечен. Второй запрос завёл бы второй ответ на один вопрос,
+    // поэтому в тот же вызов уходит объединение «отмеченные + рейка», а
+    // сервер сам считает их пачкой (у него потолок 200 ресурсов — за ним
+    // остаются только отмеченные, и фильтр про остальных честно молчит:
+    // неизвестное окно НЕ ПРЯЧЕТ ресурс, см. keepsWorkingFilter).
+    const WINDOWS_LIMIT = 200;
     async function loadWindows() {
-        const sel = resources().filter(r => state.selected.has(r.id) && r.id !== UNASSIGNED_ID);
+        const pick = resources().filter(r => state.selected.has(r.id) && r.id !== UNASSIGNED_ID);
+        // Пул, а не отфильтрованная рейка: спрашивать окна через фильтр,
+        // который сам построен на окнах, значит закрепить первую ошибку.
+        const rail = railPool().filter(r => r.id !== UNASSIGNED_ID);
+        const ids = [];
+        const seen = new Set();
+        for (const r of [...pick, ...rail]) {
+            if (seen.has(r.id) || ids.length >= WINDOWS_LIMIT) continue;
+            seen.add(r.id); ids.push(r.id);
+        }
         const args = { date: state.dayIso, days: state.period };
-        if (state.resType === 'doctor') args.doctor_ids = sel.map(r => r.id);
-        else args.room_ids = sel.map(r => r.id);
+        if (state.resType === 'doctor') args.doctor_ids = ids;
+        else args.room_ids = ids;
         const { data, error } = await supabase.rpc('calendar_windows', args);
         state.windows = (!error && data && data.windows) ? data.windows : {};
         // Контекст НЕ обнуляется молча при отказе: пустой контекст означал бы
@@ -304,6 +363,39 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         // неправд на этом экране. Отказ виден в полосе «Не загрузилось».
         if (!error && data && data.cross) state.cross = data.cross;
         else if (error) state.failed = [...new Set([...state.failed, tr('филиалы')])];
+    }
+
+    /**
+     * ТОЧКИ МИНИ-МЕСЯЦА — ОДИН ЗАПРОС НА МЕСЯЦ, а не по запросу на день.
+     *
+     * Требование владельца — «точки на днях, где есть записи». Наивно это
+     * тридцать с лишним запросов на каждое перелистывание месяца, и ещё
+     * столько же на каждую галочку в рейке. Поэтому месяц (вместе с
+     * прилипшими к сетке днями соседних месяцев) приезжает ОДНИМ ответом и
+     * лежит в state.monthItems, а пересчёт под текущий набор ресурсов идёт
+     * в браузере — countByDay().
+     *
+     * Отказ НЕ ПРЯЧЕТСЯ в пустых точках: «записей нет» и «мы не смогли
+     * спросить» — разные новости, и вторая уходит в полосу «Не загрузилось».
+     */
+    async function loadMonth(force = false) {
+        const key = monthKey(state.miniYear, state.miniMonth);
+        if (!force && state.monthKeyLoaded === key) return;
+        const { from, to } = monthRange(state.miniYear, state.miniMonth);
+        const { data, error } = await supabase.from('visits')
+            .select('doctor_id, room_id, visit_date, status')
+            .gte('visit_date', from.toISOString()).lt('visit_date', to.toISOString());
+        if (error) {
+            state.monthItems = []; state.monthKeyLoaded = '';
+            state.failed = [...new Set([...state.failed, tr('записи')])];
+            return;
+        }
+        state.monthKeyLoaded = key;
+        state.monthItems = (data || []).map(v => ({
+            day: dateToIso(new Date(v.visit_date)),
+            doctorId: v.doctor_id || null, roomId: v.room_id || null,
+            status: normStatus(v.status),
+        }));
     }
 
     function windowFor(res, dayIso) {
@@ -330,9 +422,38 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         const ql = state.q.trim().toLowerCase();
         return resources().filter(r => (!state.napr || r.napr === state.napr)
             && railBranchOk(r)
+            // «Работают сегодня»: окно приехало пустым — врач в этот день не
+            // принимает. Про кого не спрашивали — тот остаётся (rcal-layout.js).
+            && (r.id === UNASSIGNED_ID
+                || keepsWorkingFilter(state.windows, state.resType, r.id, state.dayIso, state.onlyWorking))
             && (!ql || (r.name + ' ' + r.spec).toLowerCase().includes(ql)));
     };
-    function defaultSelect() { state.selected = new Set(filteredRail().slice(0, 6).map(r => r.id)); }
+    /** Рейка БЕЗ фильтра «работают сегодня» — из неё восстанавливается запомненный набор. */
+    const railPool = () => {
+        const ql = state.q.trim().toLowerCase();
+        return resources().filter(r => (!state.napr || r.napr === state.napr)
+            && railBranchOk(r)
+            && (!ql || (r.name + ' ' + r.spec).toLowerCase().includes(ql)));
+    };
+    function defaultSelect() { state.selected = new Set(railPool().slice(0, 6).map(r => r.id)); }
+    /**
+     * Отметки после загрузки справочника: сперва запомненные, и только если от
+     * них ничего не осталось — обычные «первые шесть» (rcal-layout.js).
+     */
+    function restoreSelect() {
+        // Пул ВМЕСТЕ с «Не назначено»: дорожка приехавших без врача записей —
+        // такая же отметка, как врач, и на первом открытии она обязана попасть
+        // в набор ровно так же, как попадала до появления памяти.
+        state.selected = new Set(restoreSelection(state.storedSel[state.resType] || [], railPool(), 6));
+    }
+    /** Запомнить рабочий набор. Зовётся из каждого места, где он меняется. */
+    function persist() {
+        state.storedSel = { ...state.storedSel, [state.resType]: [...state.selected] };
+        writeWorkingSet(safeStorage(), {
+            resType: state.resType, selected: state.storedSel,
+            period: state.period, step: state.step,
+        });
+    }
     const doctorName = (id) => (state.doctors.find(d => d.id === id) || {}).name || '';
     const roomName = (id) => (state.rooms.find(r => r.id === id) || {}).name || '';
 
@@ -835,6 +956,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
 
     // ---- render ---------------------------------------------------------
     let railListEl, gridWrapEl, countEl, naprSelEl, dayLabelEl, dateInputEl, statsEl, branchSelEl;
+    let miniEl, stepperEl, stepSelEl;
     // Полотно, посчитанное под то, что реально надо показать.
     let canvas = { from: CANVAS_FROM, to: CANVAS_TO };
 
@@ -857,23 +979,158 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         if (canvas.to <= canvas.from) canvas = { from: CANVAS_FROM, to: CANVAS_TO };
     }
 
+    /** Записей у ресурса в открытый день — число рядом с фамилией в рейке. */
+    function railCount(r) {
+        const key = state.resType === 'doctor' ? 'doctorId' : 'roomId';
+        return state.appts.filter(a => a.date === state.dayIso && a.status !== 'cancelled'
+            && (r.id === UNASSIGNED_ID ? !a[key] : a[key] === r.id)).length;
+    }
+
+    /**
+     * РЕЙКА ПО ЗДАНИЯМ — то, что владелец показал на референсе: «MEDION LABZAK ·
+     * ML 3/6». Заголовок группы несёт название здания, букву и сколько врачей
+     * этого здания отмечено из скольких — операторy это отвечает на «а у меня
+     * вообще выбраны врачи второго корпуса?» без пересчёта галочек глазами.
+     *
+     * Когда здание одно (обычная клиника), заголовков нет вовсе: одна группа с
+     * одинаковой подписью над всем списком — это не структура, а шум.
+     */
     function repaintRailList() {
         clear(railListEl);
         const list = filteredRail();
         if (countEl) countEl.textContent = String(state.selected.size);
-        if (!list.length) { railListEl.appendChild(h('div', { class: 'muted', style: { padding: '16px', fontSize: '12.5px' } }, 'Ничего не найдено')); return; }
-        for (const r of list) {
-            const on = state.selected.has(r.id);
-            railListEl.appendChild(h('label', { class: 'rcal-pick' + (on ? ' on' : '') },
-                h('input', {
-                    type: 'checkbox', checked: on ? true : null,
-                    onchange: () => { if (state.selected.has(r.id)) state.selected.delete(r.id); else state.selected.add(r.id); repaintRailList(); reloadWindowsAndRepaint(); },
-                }),
-                h('span', { class: 'rcal-av', style: { background: avColor(r.id || r.name) } }, initials(r.name)),
-                h('span', { class: 'rcal-pick-tx' },
-                    h('span', { class: 'rcal-pick-nm' }, r.name),
-                    h('span', { class: 'rcal-pick-sp' }, [r.spec, r.place].filter(Boolean).join(' · ')))));
+        if (!list.length) {
+            railListEl.appendChild(h('div', { class: 'muted', style: { padding: '16px', fontSize: '12.5px' } },
+                state.onlyWorking ? tr('Никто из них сегодня не принимает.') : tr('Ничего не найдено')));
+            return;
         }
+        const groups = groupByBranch(list, {
+            letterOf: (r) => (state.resType === 'doctor' ? letterOfBranchId(r.branchId) : myLetter()),
+            selected: state.selected,
+        });
+        const manyBuildings = buildings().length > 1;
+        for (const g of groups) {
+            if (manyBuildings) {
+                railListEl.appendChild(h('div', { class: 'rcal-grp' },
+                    h('span', { class: 'rcal-grp-nm' },
+                        g.letter ? buildingName(g.letter) : tr('Здание не указано'),
+                        g.letter ? h('span', { class: 'rcal-grp-l' }, g.letter) : null),
+                    h('span', { class: 'rcal-grp-n', title: tr('Отмечено из показанных') },
+                        `${g.selectedCount}/${g.items.length}`)));
+            }
+            for (const r of g.items) {
+                const on = state.selected.has(r.id);
+                const n = on ? railCount(r) : 0;
+                railListEl.appendChild(h('label', { class: 'rcal-pick' + (on ? ' on' : '') },
+                    h('input', {
+                        type: 'checkbox', checked: on ? true : null,
+                        onchange: () => {
+                            if (state.selected.has(r.id)) state.selected.delete(r.id); else state.selected.add(r.id);
+                            persist(); repaintRailList(); repaintMini(); reloadWindowsAndRepaint();
+                        },
+                    }),
+                    h('span', { class: 'rcal-av', style: { background: avColor(r.id || r.name) } }, initials(r.name)),
+                    h('span', { class: 'rcal-pick-tx' },
+                        h('span', { class: 'rcal-pick-nm' }, r.name),
+                        h('span', { class: 'rcal-pick-sp' }, [r.spec, r.place].filter(Boolean).join(' · '))),
+                    n ? h('span', { class: 'rcal-pick-cnt', title: tr('Записей в открытый день') }, String(n)) : null));
+            }
+        }
+    }
+
+    /**
+     * МИНИ-МЕСЯЦ. Точка под днём означает «в этот день у выбранных ресурсов
+     * есть записи»; выбранный день и весь показанный период подсвечены, чтобы
+     * «показываю три дня» было видно на календаре, а не только в счётчике.
+     *
+     * Точки считаются из ОДНОГО ответа на месяц (loadMonth) — пересчёт под
+     * новый набор врачей идёт здесь, без похода на сервер.
+     */
+    function repaintMini() {
+        if (!miniEl) return;
+        clear(miniEl);
+        const sel = [...state.selected].filter(id => id !== UNASSIGNED_ID);
+        const key = state.resType === 'doctor' ? 'doctorId' : 'roomId';
+        const marks = countByDay(state.monthItems.map(it => ({ day: it.day, resId: it[key], status: it.status })),
+            { ids: sel, showCancelled: state.showCancelled });
+        const { cells } = monthGrid(state.miniYear, state.miniMonth);
+        const selIso = state.dayIso, today = todayIso();
+        const range = new Set(colDays());
+
+        const nav = (delta, icon, label) => h('button', {
+            class: 'rcal-mini-nav', type: 'button', title: label, 'aria-label': label,
+            onclick: async () => {
+                const d = new Date(state.miniYear, state.miniMonth + delta, 1);
+                state.miniYear = d.getFullYear(); state.miniMonth = d.getMonth();
+                await loadMonth(); repaintMini(); repaintGrid();
+            },
+        }, Icon(icon, { size: 14 }));
+
+        miniEl.appendChild(h('div', { class: 'rcal-mini-h' },
+            h('b', null, `${monthName(state.miniMonth, { standalone: true })} ${state.miniYear}`),
+            h('span', { class: 'rcal-mini-navs' }, nav(-1, 'ChevronLeft', tr('Предыдущий месяц')), nav(1, 'ChevronRight', tr('Следующий месяц')))));
+        miniEl.appendChild(h('div', { class: 'rcal-mini-dow' },
+            ...MINI_WD.map(wd => h('span', null, tr(RU_WD_S[wd])))));
+
+        const daysBox = h('div', { class: 'rcal-mini-days' });
+        for (const c of cells) {
+            const n = marks[c.iso] || 0;
+            daysBox.appendChild(h('button', {
+                type: 'button',
+                class: 'rcal-mini-d' + (c.inMonth ? '' : ' out') + (c.iso === today ? ' today' : '')
+                    + (c.iso === selIso ? ' sel' : '') + (range.has(c.iso) ? ' inr' : '') + (n ? ' has' : ''),
+                title: n ? trf('Записей: {n}', { n }) : tr('Записей нет'),
+                onclick: () => {
+                    state.dayIso = c.iso;
+                    if (dateInputEl) dateInputEl.value = c.iso;
+                    if (dayLabelEl) dayLabelEl.textContent = mainLabel();
+                    repaintMini(); reloadAndRepaint();
+                },
+            }, String(c.day), h('span', { class: 'rcal-mini-dot' })));
+        }
+        miniEl.appendChild(daysBox);
+    }
+
+    /**
+     * ШАГ «— N дней +». Кнопка «+» гаснет не молча: рядом написано, ЧТО
+     * упёрлось — неделя или ширина сетки (rcal-layout.js dayStepBlock).
+     */
+    function repaintStepper() {
+        if (!stepperEl) return;
+        clear(stepperEl);
+        const selCount = resources().filter(r => state.selected.has(r.id)).length;
+        const block = dayStepBlock(state.period, selCount);
+        const setPeriod = (n) => {
+            state.period = n; persist();
+            if (dayLabelEl) dayLabelEl.textContent = mainLabel();
+            repaintStepper(); repaintMini(); reloadAndRepaint();
+        };
+        stepperEl.appendChild(h('button', {
+            class: 'rcal-step-b', type: 'button', title: tr('Меньше дней'), 'aria-label': tr('Меньше дней'),
+            disabled: state.period <= 1 ? true : null,
+            onclick: () => setPeriod(Math.max(1, state.period - 1)),
+        }, Icon('Minus', { size: 13 })));
+        stepperEl.appendChild(h('span', { class: 'rcal-step-n' },
+            h('b', null, String(state.period)), ' ', tr(daysWord(state.period))));
+        stepperEl.appendChild(h('button', {
+            class: 'rcal-step-b', type: 'button', 'aria-label': tr('Больше дней'),
+            disabled: block ? true : null,
+            title: block === 'week'
+                ? trf('Дальше недели сетку не растягиваем: {n} дней уже не прочитать целиком — выберите день в календаре.', { n: MAX_DAYS })
+                : (block === 'columns'
+                    ? trf('Больше не поместится: {n} колонок — предел читаемой сетки. Снимите отметки с врачей или уменьшите число дней.', { n: MAX_COLUMNS })
+                    : tr('Больше дней')),
+            onclick: () => setPeriod(Math.min(maxDaysFor(selCount), state.period + 1)),
+        }, Icon('Plus', { size: 13 })));
+    }
+
+    /** «1 день / 2 дня / 5 дней» — склеить нельзя, поэтому три отдельных ключа. */
+    function daysWord(n) {
+        const m = n % 10, h100 = n % 100;
+        if (h100 >= 11 && h100 <= 14) return 'дней';
+        if (m === 1) return 'день';
+        if (m >= 2 && m <= 4) return 'дня';
+        return 'дней';
     }
 
     /**
@@ -926,6 +1183,19 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         body.dataset.day = dayIso;
 
         const win = windowFor(res, dayIso);
+        // ПОДПИСЬ СЛОТА — «ML · по записи» / «MFH · живая очередь» из
+        // референса. Она отвечает на вопрос, из-за которого оператор ошибается
+        // чаще всего: у этого врача время продают или к нему просто приходят.
+        // Режим — настоящий scheduling_mode сотрудника (тот же, по которому
+        // мастер визита прячет выбор времени), а не украшение.
+        //
+        // БУКВА ЗДАНИЯ ПОЯВЛЯЕТСЯ, ТОЛЬКО КОГДА ЗДАНИЙ НЕСКОЛЬКО. В обычной
+        // клинике она была бы одинаковой во всех клетках всех колонок, то есть
+        // не информацией, а фоном — то же правило, что у карточки приёма.
+        const label = showsSlotLabel(state.step) && res.id !== UNASSIGNED_ID;
+        const letter = state.resType === 'doctor' ? (letterOfBranchId(res.branchId) || myLetter()) : myLetter();
+        const modeText = slotMode(res) === MODE_LIVE_QUEUE ? tr('живая очередь') : tr('по записи');
+        const showLetter = buildings().length > 1 && !!letter;
         for (let m = canvas.from; m < canvas.to; m += state.step) {
             const off = isOffHour(win, m);
             body.appendChild(h('div', {
@@ -937,7 +1207,12 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 'data-min': String(m),
                 style: { height: (state.step * ppm) + 'px' },
                 onclick: () => { if (off) { toast('Вне рабочих часов.', 'info'); return; } bookAt(res, dayIso, m); },
-            }));
+            }, label && !off
+                ? h('span', { class: 'rcal-slot-info' },
+                    showLetter ? h('b', null, letter) : null,
+                    showLetter ? ' · ' : null,
+                    modeText)
+                : null));
         }
         if (dayIso === todayIso()) {
             const nm = minutesOfLocal(new Date());
@@ -946,8 +1221,14 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
 
         const resKey = state.resType === 'doctor' ? 'doctorId' : 'roomId';
         const matchRes = (a) => res.id === UNASSIGNED_ID ? !a[resKey] : a[resKey] === res.id;
+        // ПОИСК ПО ЗАПИСЯМ (верхняя панель референса) сужает СЕТКУ, а не рейку:
+        // ищут «где сегодня Ахмедов», и ответ — карточка на своём месте в своей
+        // колонке, а не отдельный список, из которого не видно ни времени
+        // соседей, ни свободного окна рядом.
+        const aq = state.apptQ.trim().toLowerCase();
         const items = state.appts.filter(a => matchRes(a) && a.date === dayIso && inBranch(a)
-            && (state.showCancelled || a.status !== 'cancelled'));
+            && (state.showCancelled || a.status !== 'cancelled')
+            && (!aq || (a.patient + ' ' + a.service + ' ' + (a.phone || '')).toLowerCase().includes(aq)));
         for (const a of items) {
             const vs = Math.max(a.start, canvas.from), ve = Math.min(a.start + a.dur, canvas.to);
             if (ve <= vs) continue;
@@ -975,8 +1256,18 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                     clash ? { outline: '2px solid var(--crit-500, #ef4444)', outlineOffset: '-2px' } : {},
                 ),
             },
+                // ПЕРВАЯ СТРОКА — ВРЕМЯ И ВРАЧ, В ОДНУ СТРОКУ.
+                //
+                // Раньше это были две строки из четырёх (время, пациент, врач,
+                // услуга), и в карточку получасового приёма четыре строки
+                // ФИЗИЧЕСКИ НЕ ВЛЕЗАЛИ: нижняя обрезалась на полбуквы. Обрезанная
+                // строка — это не «мелкий шрифт», это неизвестно что: обрезаться
+                // могла и услуга, и фамилия. Врач переехал к времени (справа,
+                // многоточием), и карточка на 30 минут снова помещает всё, что
+                // на ней написано. Ни одно из четырёх знаний не потеряно —
+                // владелец назвал карточку «пациент + врач», и оба на месте.
                 h('div', { class: 'rcal-appt-t' },
-                    `${fmtHM(a.start)}–${fmtHM(a.start + a.dur)}`,
+                    h('span', null, `${fmtHM(a.start)}–${fmtHM(a.start + a.dur)}`),
                     // БУКВА ЗДАНИЯ — только у чужого. На своём она была бы
                     // одинаковой на всех карточках, то есть не информацией.
                     cx && cx.building && cx.building !== myLetter()
@@ -984,12 +1275,9 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                             class: 'rcal-appt-bld', title: buildingName(cx.building),
                             style: { marginLeft: '5px', padding: '0 4px', borderRadius: '4px', fontWeight: 700, fontSize: '12.5px', background: 'var(--ink-100, #eef2f7)', color: 'var(--ink-600, #475569)' },
                         }, cx.building)
-                        : null),
+                        : null,
+                    a.doctorId ? h('span', { class: 'rcal-appt-d', title: doctorName(a.doctorId) }, doctorName(a.doctorId)) : null),
                 h('div', { class: 'rcal-appt-p' }, a.patient),
-                // Карточка — «пациент + врач», как просил владелец. Врач подписан
-                // и на оси врачей: сетку читают наискось, и подпись под фамилией
-                // пациента дешевле, чем возврат глазами к шапке колонки.
-                a.doctorId ? h('div', { class: 'rcal-appt-d' }, doctorName(a.doctorId)) : null,
                 a.service ? h('div', { class: 'rcal-appt-s' }, a.service) : null,
                 // ВОЗРАСТ КАРТИНКИ — на самой карточке, а не в углу экрана: её
                 // читают по одной, и «час назад так было» должно стоять рядом с
@@ -1131,23 +1419,58 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         }
         const days = colDays();
         const ppm = pxPerMin(state.step), laneH = (canvas.to - canvas.from) * ppm;
-        const cols = [];
-        for (const dayIso of days) sel.forEach((res, ri) => cols.push({ res, dayIso, firstOfDay: ri === 0 && state.period > 1 }));
+        // Колонки строит rcal-layout.js: день снаружи, ресурс внутри, и
+        // «Работают сегодня» убирает колонку того, у кого в ЭТОТ день окна нет
+        // (в многодневном виде — только те дни, где он не принимает).
+        const cols = buildColumns({
+            days, resources: sel, resType: state.resType,
+            windows: state.windows, onlyWorking: state.onlyWorking,
+        });
+        if (!cols.length) {
+            gridWrapEl.appendChild(h('div', { class: 'empty', style: { padding: '60px 20px' } },
+                tr('Никто из выбранных в эти дни не принимает. Снимите «Работают сегодня» или выберите другой день.')));
+            return;
+        }
         const tmpl = `52px repeat(${cols.length}, minmax(150px, 1fr))`;
         const grid = h('div', { class: 'rcal-grid', style: { gridTemplateColumns: tmpl } });
         const head = h('div', { class: 'rcal-headrow', style: { gridTemplateColumns: tmpl } });
         head.appendChild(h('div', { class: 'rcal-corner' }));
+        const resKey = state.resType === 'doctor' ? 'doctorId' : 'roomId';
         for (const c of cols) {
-            const resKey = state.resType === 'doctor' ? 'doctorId' : 'roomId';
-            const n = state.appts.filter(a => (c.res.id === UNASSIGNED_ID ? !a[resKey] : a[resKey] === c.res.id) && a.date === c.dayIso && (state.showCancelled || a.status !== 'cancelled')).length;
+            // ЗАГРУЗКА КОЛОНКИ — «6/32» из референса: занятые клетки из
+            // рабочих. Считает rcal-layout.js, потому что «сколько это клеток»
+            // — правило, а не разметка (приём на 30 минут при шаге 15 занимает
+            // две, и «1 запись» на этом месте врала бы про свободный день).
+            const load = columnLoad({
+                appts: state.appts.filter(a => inBranch(a)), resKey, resId: c.res.id,
+                dayIso: c.dayIso, step: state.step, win: windowFor(c.res, c.dayIso),
+                canvas, unassignedId: UNASSIGNED_ID,
+            });
+            const full = load.workingSlots > 0 && load.busySlots >= load.workingSlots;
+            const bLetter = state.resType === 'doctor' ? letterOfBranchId(c.res.branchId) : '';
             head.appendChild(h('div', { class: 'rcal-colhead' + (c.firstOfDay ? ' rcal-dayfirst' : '') },
-                state.period > 1 ? h('div', { class: 'rcal-colday' }, `${RU_WD_S[isoToLocalDay(c.dayIso).getDay()]} ${c.dayIso.slice(8)}.${c.dayIso.slice(5, 7)}`) : null,
+                h('div', { class: 'rcal-colday-row' },
+                    h('span', { class: 'rcal-colday' }, state.period > 1
+                        ? `${tr(RU_WD_S[isoToLocalDay(c.dayIso).getDay()])} ${c.dayIso.slice(8)}.${c.dayIso.slice(5, 7)}`
+                        : ruDay(c.dayIso)),
+                    h('span', {
+                        class: 'rcal-colcnt' + (full ? ' full' : ''),
+                        title: trf('Занято слотов: {busy} из {all}. Записей: {n}.',
+                            { busy: load.busySlots, all: load.workingSlots, n: load.bookings }),
+                    // У синтетической дорожки «Не назначено» рабочих часов нет
+                    // и быть не может — дробь «0/0» там означала бы поломку,
+                    // поэтому она показывает просто число записей.
+                    }, c.res.id === UNASSIGNED_ID ? String(load.bookings) : `${load.busySlots}/${load.workingSlots}`)),
                 h('div', { class: 'rcal-colhead-in' },
                     h('span', { class: 'rcal-av', style: { background: avColor(c.res.id || c.res.name) } }, initials(c.res.name)),
                     h('div', { class: 'rcal-colhead-tx' },
                         h('div', { class: 'rcal-colnm' }, c.res.name),
-                        h('div', { class: 'rcal-colsp' }, [c.res.spec, c.res.place].filter(Boolean).join(' · '))),
-                    h('span', { class: 'rcal-colcnt', title: tr('Записей') }, String(n)))));
+                        h('div', { class: 'rcal-colsp' },
+                            [c.res.spec, c.res.place].filter(Boolean).join(' · '),
+                            // Буква здания у колонки — только когда зданий
+                            // несколько: иначе она одинакова у всех.
+                            bLetter && buildings().length > 1
+                                ? h('span', { class: 'rcal-colbr', title: buildingName(bLetter) }, bLetter) : null)))));
         }
         const bodyRow = h('div', { class: 'rcal-bodyrow', style: { gridTemplateColumns: tmpl } });
         const timeCol = h('div', { class: 'rcal-timecol', style: { height: laneH + 'px' } });
@@ -1158,59 +1481,171 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         gridWrapEl.appendChild(grid);
     }
 
-    async function reloadAndRepaint() { await loadAppts(); await loadWindows(); refreshBranchOptions(); repaintGrid(); }
-    async function reloadWindowsAndRepaint() { await loadWindows(); refreshBranchOptions(); repaintGrid(); }
+    /** Мини-месяц идёт за выбранным днём: ушли в соседний месяц — он листается сам. */
+    function syncMiniMonth() {
+        const d = isoToLocalDay(state.dayIso);
+        if (d.getFullYear() === state.miniYear && d.getMonth() === state.miniMonth) return false;
+        state.miniYear = d.getFullYear(); state.miniMonth = d.getMonth();
+        return true;
+    }
+    async function reloadAndRepaint() {
+        await loadAppts(); await loadWindows();
+        // Записи месяца перечитываются вместе с днём: только что созданная
+        // запись обязана зажечь точку, а не ждать перелистывания месяца.
+        syncMiniMonth();
+        await loadMonth(true);
+        // Рейка перерисовывается ВМЕСТЕ с сеткой: и число записей у врача, и
+        // фильтр «Работают сегодня» — свойства ОТКРЫТОГО ДНЯ, а не списка.
+        // Без этого рейка показывала счётчики предыдущего дня.
+        refreshBranchOptions(); repaintStepper(); repaintMini(); repaintRailList(); repaintGrid();
+    }
+    async function reloadWindowsAndRepaint() {
+        await loadWindows();
+        refreshBranchOptions(); repaintStepper(); repaintMini(); repaintRailList(); repaintGrid();
+    }
+
+    /**
+     * ПЕРВАЯ СВОБОДНАЯ КЛЕТКА У ПЕРВОГО ОТМЕЧЕННОГО — за кнопкой «Записать» из
+     * референса. Кнопка не заводит запись сама: она открывает мастер там же,
+     * куда попал бы клик по клетке, и дальше работает тот же bookAt со всеми
+     * его проверками (занятость, чужое здание, экстренная запись).
+     */
+    function quickBook() {
+        const sel = resources().filter(r => state.selected.has(r.id) && r.id !== UNASSIGNED_ID);
+        const res = sel[0];
+        if (!res) { toast(state.resType === 'doctor' ? 'Выберите врача слева.' : 'Выберите кабинет слева.', 'info'); return; }
+        const win = windowFor(res, state.dayIso);
+        const key = state.resType === 'doctor' ? 'doctorId' : 'roomId';
+        const busy = state.appts.filter(a => a[key] === res.id && a.date === state.dayIso && BUSY.includes(a.status));
+        const floor = state.dayIso === todayIso() ? minutesOfLocal(new Date()) : canvas.from;
+        for (let m = canvas.from; m < canvas.to; m += state.step) {
+            if (m < floor) continue;
+            if (isOffHour(win, m)) continue;
+            if (busy.some(a => m < a.start + a.dur && a.start < m + state.step)) continue;
+            bookAt(res, state.dayIso, m);
+            return;
+        }
+        toast(trf('У {res} на этот день свободных слотов нет.', { res: res.name }), 'info');
+    }
 
     function buildShell() {
         clear(root);
+        // ───── ЛЕВАЯ КОЛОНКА: месяц → сколько дней → шаг → поиск → ресурсы ─────
+        miniEl = h('div', { class: 'rcal-mini' });
+        stepperEl = h('span', { class: 'rcal-stepper' });
+        stepSelEl = h('select', {
+            class: 'rcal-stepsel', title: tr('Шаг сетки'),
+            onchange: (e) => {
+                // ШАГ МЕНЯЕТ ТОЛЬКО КАРТИНКУ. Длительность приёма приходит из
+                // услуги, занятость считает сервер — шаг решает, какой высоты
+                // клетка и с какой точностью ложится клик, и ничего больше.
+                state.step = Number(e.target.value); persist(); repaintGrid();
+            },
+        }, ...STEP_CHOICES.map(v => h('option', { value: v, selected: v === state.step ? true : null },
+            trf('{n} мин', { n: v }))));
+        const miniFoot = h('div', { class: 'rcal-mini-foot' }, stepperEl, stepSelEl);
+
+        const searchEl = h('input', {
+            class: 'rcal-search', type: 'search',
+            placeholder: state.resType === 'doctor' ? tr('Поиск врача…') : tr('Поиск кабинета…'),
+            oninput: (e) => { state.q = e.target.value; repaintRailList(); },
+        });
+        countEl = h('span', { class: 'rcal-cnt' }, '0');
+        const acts = h('div', { class: 'rcal-acts' },
+            h('button', {
+                class: 'rcal-link', type: 'button',
+                onclick: () => { for (const r of filteredRail()) state.selected.add(r.id); persist(); repaintRailList(); repaintStepper(); repaintMini(); reloadWindowsAndRepaint(); },
+            }, 'Выбрать все'),
+            h('button', {
+                class: 'rcal-link', type: 'button',
+                onclick: () => { state.selected.clear(); persist(); repaintRailList(); repaintStepper(); repaintMini(); repaintGrid(); },
+            }, 'Очистить'),
+            h('span', { class: 'rcal-selcnt' }, tr('выбрано'), ' ', countEl));
+        railListEl = h('div', { class: 'rcal-list' });
+        const rail = h('div', { class: 'rcal-rail' },
+            miniEl, miniFoot,
+            h('div', { class: 'rcal-search-w' }, Icon('Search', { size: 14 }), searchEl), acts, railListEl);
+
+        // ───── ВЕРХНЯЯ ПАНЕЛЬ ────────────────────────────────────────────────
         const setResType = (tp) => {
             if (state.resType === tp) return;
             state.resType = tp; state.napr = ''; state.q = '';
             segDocBtn.className = (tp === 'doctor' ? 'on' : '');
             segRoomBtn.className = (tp === 'room' ? 'on' : '');
             if (searchEl) { searchEl.value = ''; searchEl.placeholder = tp === 'doctor' ? tr('Поиск врача…') : tr('Поиск кабинета…'); }
-            defaultSelect(); refreshNaprOptions(); repaintRailList(); reloadWindowsAndRepaint();
+            // Отметки соседней оси не теряются: они запомнены по типу.
+            restoreSelect(); persist();
+            refreshNaprOptions(); repaintRailList(); repaintStepper(); repaintMini(); reloadWindowsAndRepaint();
         };
         const segDocBtn = h('button', { class: state.resType === 'doctor' ? 'on' : '', onclick: () => setResType('doctor') }, Icon('Stethoscope', { size: 14 }), ' ', tr('Врачи'));
         const segRoomBtn = h('button', { class: state.resType === 'room' ? 'on' : '', onclick: () => setResType('room') }, Icon('Grid', { size: 14 }), ' ', tr('Кабинеты'));
-        const seg = h('div', { class: 'segmented rcal-railseg' }, segDocBtn, segRoomBtn);
-        naprSelEl = h('select', { class: 'rcal-sel', onchange: (e) => { state.napr = e.target.value; repaintRailList(); } });
-        const searchEl = h('input', { class: 'rcal-search', type: 'search', placeholder: state.resType === 'doctor' ? tr('Поиск врача…') : tr('Поиск кабинета…'), oninput: (e) => { state.q = e.target.value; repaintRailList(); } });
-        countEl = h('span', { class: 'rcal-cnt' }, '0');
-        const acts = h('div', { class: 'rcal-acts' },
-            h('button', { class: 'rcal-link', type: 'button', onclick: () => { for (const r of filteredRail()) state.selected.add(r.id); repaintRailList(); reloadWindowsAndRepaint(); } }, 'Выбрать все'),
-            h('button', { class: 'rcal-link', type: 'button', onclick: () => { state.selected.clear(); repaintRailList(); repaintGrid(); } }, 'Очистить'),
-            countEl);
-        railListEl = h('div', { class: 'rcal-list' });
-        const rail = h('div', { class: 'rcal-rail' }, seg, naprSelEl, h('div', { class: 'rcal-search-w' }, Icon('Search', { size: 14 }), searchEl), acts, railListEl);
+        // «ОБОРУДОВАНИЕ» ЕСТЬ В РЕФЕРЕНСЕ И НЕТ В ЭТОЙ БАЗЕ.
+        //
+        // У референса аппараты — отдельный справочник ресурсов со своими часами
+        // и своей занятостью; здесь такой таблицы нет, и завести её росчерком
+        // означало бы выдумать миграцию, номенклатуру аппаратов и правило «чем
+        // занят томограф» — работу, которой владелец не заказывал. Молча
+        // показать две кнопки вместо трёх тоже нельзя: владелец видел третью и
+        // будет её искать.
+        //
+        // Поэтому кнопка стоит на месте, не работает и ОБЪЯСНЯЕТ ПОЧЕМУ. Как
+        // только появится справочник аппаратов, здесь снимется disabled — ось
+        // строится тем же кодом, что и кабинеты.
+        const segEquipBtn = h('button', {
+            class: 'off', disabled: true, type: 'button',
+            title: tr('Оборудования как отдельного ресурса в этой базе нет: аппарат записывается своим кабинетом. Появится справочник аппаратов — появится и ось.'),
+        }, Icon('Scan', { size: 14 }), ' ', tr('Оборудование'));
+        const seg = h('div', { class: 'segmented rcal-typeseg' }, segDocBtn, segRoomBtn, segEquipBtn);
 
-        dateInputEl = h('input', { type: 'date', class: 'rcal-date', value: state.dayIso, onchange: (e) => { if (e.target.value) { state.dayIso = e.target.value; dayLabelEl.textContent = mainLabel(); reloadAndRepaint(); } } });
-        dayLabelEl = h('span', { class: 'rcal-daylabel' }, mainLabel());
-        const periodSeg = h('div', { class: 'segmented rcal-period' }, ...[[1, 'День'], [2, '2 дня'], [3, '3 дня'], [7, 'Неделя']].map(([n, l]) =>
-            h('button', {
-                class: state.period === n ? 'on' : '',
-                onclick: (e) => { state.period = n; dayLabelEl.textContent = mainLabel(); for (const b of e.currentTarget.parentElement.children) b.classList.remove('on'); e.currentTarget.classList.add('on'); reloadAndRepaint(); },
-            }, tr(l))));
+        naprSelEl = h('select', {
+            class: 'rcal-sel rcal-napr',
+            // «НАПРАВЛЕНИЕ» — ЭТО СПЕЦИАЛЬНОСТЬ ВРАЧА (и тип кабинета), потому
+            // что больше в этих данных ничего нет: колонка departments у
+            // сотрудника наружу не отдаётся (schema-registry), то есть
+            // отделения регистратуре не видны вовсе. Список собирается из
+            // ТОГО, ЧТО ЕСТЬ в справочнике, — пустой пункт «Все направления»
+            // остаётся единственным, если специальности не заполнены, и это
+            // честнее выдуманного дерева отделений.
+            onchange: (e) => { state.napr = e.target.value; repaintRailList(); reloadWindowsAndRepaint(); },
+        });
         branchSelEl = h('select', {
-            class: 'rcal-sel', title: tr('Здание'),
+            class: 'rcal-sel', title: tr('Филиалы'),
             onchange: (e) => {
                 state.branch = e.target.value;
                 // Выбор здания меняет и рейку (врачи того здания), поэтому
                 // отметки набираются заново — держать выбранными врачей,
                 // которых больше не видно, значит рисовать пустые дорожки.
-                defaultSelect(); repaintRailList(); reloadWindowsAndRepaint();
+                defaultSelect(); persist(); repaintRailList(); repaintStepper(); repaintMini(); reloadWindowsAndRepaint();
             },
         });
-        const stepSel = h('select', { class: 'rcal-sel', onchange: (e) => { state.step = Number(e.target.value); repaintGrid(); } },
-            ...[[10, 'Шаг 10 мин'], [15, 'Шаг 15 мин'], [30, 'Шаг 30 мин']].map(([v, l]) => h('option', { value: v, selected: v === state.step ? true : null }, tr(l))));
-        const cancelChk = h('label', { class: 'rcal-chk' }, h('input', { type: 'checkbox', onchange: (e) => { state.showCancelled = e.target.checked; repaintGrid(); } }), ' ', tr('Отменённые'));
+        const apptSearchEl = h('input', {
+            class: 'rcal-search', type: 'search', placeholder: tr('Поиск пациента или записи…'),
+            oninput: (e) => { state.apptQ = e.target.value; repaintGrid(); },
+        });
+        // Переключатели остались НАСТОЯЩИМИ ГАЛОЧКАМИ под видом фишек: кнопка
+        // с состоянием «нажата» не читается ни клавиатурой, ни экранным
+        // диктором без лишних атрибутов, а checkbox читается сам.
+        const cancelChk = h('label', { class: 'rcal-chk rcal-tgl' },
+            h('input', { type: 'checkbox', onchange: (e) => { state.showCancelled = e.target.checked; repaintMini(); repaintGrid(); } }),
+            ' ', tr('Отменённые'));
+        const workingChk = h('label', { class: 'rcal-chk rcal-tgl', title: tr('Только те, у кого на этот день есть рабочее окно') },
+            h('input', {
+                type: 'checkbox',
+                onchange: (e) => { state.onlyWorking = e.target.checked; repaintRailList(); repaintGrid(); },
+            }), ' ', tr('Работают сегодня'));
+
+        dateInputEl = h('input', { type: 'date', class: 'rcal-date', value: state.dayIso, onchange: (e) => { if (e.target.value) { state.dayIso = e.target.value; dayLabelEl.textContent = mainLabel(); repaintMini(); reloadAndRepaint(); } } });
+        dayLabelEl = h('span', { class: 'rcal-daylabel' }, mainLabel());
         const toolbar = h('div', { class: 'rcal-toolbar' },
             h('div', { class: 'rcal-nav' },
-                h('button', { class: 'btn btn-outline btn-sm', title: tr('Назад'), onclick: () => shiftDay(-state.period) }, Icon('ChevronLeft', { size: 15 })),
-                h('button', { class: 'btn btn-outline btn-sm', onclick: () => { state.dayIso = todayIso(); dateInputEl.value = state.dayIso; dayLabelEl.textContent = mainLabel(); reloadAndRepaint(); } }, 'Сегодня'),
-                h('button', { class: 'btn btn-outline btn-sm', title: tr('Вперёд'), onclick: () => shiftDay(state.period) }, Icon('ChevronRight', { size: 15 })),
+                h('button', { class: 'btn btn-outline btn-sm', title: tr('Назад'), onclick: () => { shiftDay(-state.period); repaintMini(); } }, Icon('ChevronLeft', { size: 15 })),
+                h('button', { class: 'btn btn-outline btn-sm', onclick: () => { state.dayIso = todayIso(); dateInputEl.value = state.dayIso; dayLabelEl.textContent = mainLabel(); repaintMini(); reloadAndRepaint(); } }, 'Сегодня'),
+                h('button', { class: 'btn btn-outline btn-sm', title: tr('Вперёд'), onclick: () => { shiftDay(state.period); repaintMini(); } }, Icon('ChevronRight', { size: 15 })),
                 dateInputEl, dayLabelEl),
-            h('div', { class: 'rcal-tools' }, branchSelEl, periodSeg, stepSel, cancelChk));
+            h('div', { class: 'rcal-tools' },
+                h('div', { class: 'rcal-search-w rcal-tb-search' }, Icon('Search', { size: 14 }), apptSearchEl),
+                naprSelEl, branchSelEl, cancelChk, workingChk, seg,
+                h('button', { class: 'btn btn-primary btn-sm rcal-book', onclick: quickBook }, Icon('Plus', { size: 14 }), ' ', tr('Записать'))));
         const legend = h('div', { class: 'rcal-legend' },
             ...STATUS_ORDER.map(k => h('span', { class: 'rcal-leg' }, h('span', { class: 'rcal-dot', style: { background: STATUS_META[k].color } }), tr(STATUS_META[k].label))),
             h('span', { class: 'rcal-leg' }, h('span', { class: 'rcal-leg-off' }), tr('вне приёма')));
@@ -1221,15 +1656,18 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         root.appendChild(h('div', { class: 'rcal-page' }, rail, main));
         refreshBranchOptions();
         refreshNaprOptions();
+        repaintStepper();
+        repaintMini();
         repaintRailList();
         repaintGrid();
     }
 
     root.appendChild(h('div', { class: 'empty', style: { padding: '50px' } }, 'Загрузка…'));
     await loadResources();
-    defaultSelect();
+    restoreSelect();
     await loadAppts();
     await loadWindows();
+    await loadMonth();
     state.loaded = true;
     buildShell();
 }

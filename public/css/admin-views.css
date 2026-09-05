@@ -3136,6 +3136,119 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     padding: 9px 10px; border: 1px solid var(--ink-200); border-radius: 8px; color: var(--ink-900); resize: vertical; }
 .rcal-reason:focus { border-color: var(--primary-600); outline: none; }
 
+/* ===== RCAL_REFERENCE_LAYOUT_V1 (2026-09-05) — раскладка по референсу владельца =====
+   Левая колонка (мини-месяц → сколько дней → шаг сетки → поиск → ресурсы
+   группами по зданиям), верхняя панель фильтров, загрузка в шапке колонки и
+   подпись слота «филиал · режим приёма».
+   Размеры — только из шкалы 12.5/13.5/15/17/20/24/30/40 (type-scale.test.mjs),
+   длительности — токенами --dur-*/--ease-* (motion.test.mjs). */
+
+/* Мини-месяц */
+.rcal-mini { border: 1px solid var(--ink-100); border-radius: 10px; padding: 8px 9px 9px; background: var(--white); }
+.rcal-mini-h { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 6px; }
+.rcal-mini-h b { font-size: 13.5px; color: var(--ink-900); font-weight: 700; }
+.rcal-mini-navs { display: inline-flex; gap: 2px; }
+.rcal-mini-nav { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid transparent; border-radius: 7px; background: none; color: var(--ink-500); cursor: pointer;
+    transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.rcal-mini-nav:hover { background: var(--ink-25); color: var(--ink-900); }
+.rcal-mini-dow { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; margin-bottom: 3px; }
+.rcal-mini-dow span { text-align: center; font-size: 12.5px; font-weight: 700; color: var(--ink-400);
+    text-transform: uppercase; letter-spacing: 0.02em; }
+.rcal-mini-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.rcal-mini-d { position: relative; height: 27px; padding: 0 0 4px; border: 1px solid transparent; border-radius: 7px;
+    background: none; font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-700); cursor: pointer;
+    display: flex; align-items: center; justify-content: center; line-height: 1;
+    transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
+.rcal-mini-d:hover { background: var(--ink-25); }
+.rcal-mini-d.out { color: var(--ink-300); }
+.rcal-mini-d.today { border-color: var(--primary-500); }
+/* Показанный период — заливкой пастельной, выбранный день — сплошной: при N
+   днях видно и границы периода, и где его начало. */
+.rcal-mini-d.inr { background: var(--primary-50); color: var(--ink-900); }
+.rcal-mini-d.sel { background: var(--primary-600); color: #fff; border-color: var(--primary-600); }
+.rcal-mini-dot { position: absolute; left: 50%; bottom: 3px; transform: translateX(-50%);
+    width: 4px; height: 4px; border-radius: 999px; background: transparent; }
+.rcal-mini-d.has .rcal-mini-dot { background: var(--primary-600); }
+.rcal-mini-d.sel .rcal-mini-dot { background: #fff; }
+
+/* Шаг «— N дней +» и шаг сетки */
+.rcal-mini-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rcal-stepper { display: inline-flex; align-items: center; gap: 2px; border: 1px solid var(--ink-200);
+    border-radius: 999px; padding: 1px; }
+.rcal-step-b { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 999px; background: none; color: var(--ink-600); cursor: pointer;
+    transition: background var(--dur-1) var(--ease-out); }
+.rcal-step-b:hover:not(:disabled) { background: var(--ink-25); color: var(--ink-900); }
+.rcal-step-b:disabled { color: var(--ink-300); cursor: not-allowed; }
+.rcal-step-n { font-size: 12.5px; color: var(--ink-700); padding: 0 3px; white-space: nowrap; }
+.rcal-step-n b { font-weight: 700; color: var(--ink-900); }
+.rcal-stepsel { height: 26px; border: 1px solid var(--ink-200); border-radius: 999px; padding: 0 6px;
+    font-family: inherit; font-size: 12.5px; color: var(--ink-700); background: var(--white); cursor: pointer; }
+
+.rcal-selcnt { margin-left: auto; font-size: 12.5px; color: var(--ink-500);
+    display: inline-flex; align-items: center; gap: 5px; }
+/* .rcal-cnt переехал внутрь подписи «выбрано N» — и там он больше не распорка
+   строки, а её последнее слово. */
+.rcal-selcnt .rcal-cnt { margin-left: 0; }
+
+/* Группа рейки = ЗДАНИЕ */
+.rcal-grp { display: flex; align-items: center; gap: 6px; padding: 9px 8px 4px; position: sticky; top: 0;
+    background: var(--white); z-index: 1; }
+.rcal-grp-nm { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-size: 12.5px; font-weight: 700;
+    color: var(--ink-500); text-transform: uppercase; letter-spacing: 0.03em;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rcal-grp-l { padding: 0 5px; border-radius: 5px; background: var(--ink-100); color: var(--ink-600);
+    font-size: 12.5px; letter-spacing: 0; }
+.rcal-grp-n { margin-left: auto; font-size: 12.5px; font-weight: 700; color: var(--ink-400); }
+.rcal-pick-cnt { flex: 0 0 auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+    background: var(--ink-100); color: var(--ink-700); font-size: 12.5px; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center; }
+
+/* Переключатель типа ресурса и фишки-галочки верхней панели */
+.rcal-typeseg button { display: inline-flex; align-items: center; gap: 5px; }
+/* «Оборудование» видно и не работает: справочника аппаратов в этой базе нет,
+   и причина написана в title кнопки (room-calendar.js). */
+.rcal-typeseg button:disabled { color: var(--ink-300); cursor: not-allowed; }
+.rcal-tgl { border: 1px solid var(--ink-200); border-radius: 999px; padding: 4px 10px; background: var(--white);
+    transition: border-color var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out); }
+.rcal-tgl:hover { border-color: var(--ink-300); }
+.rcal-tgl:has(input:checked) { border-color: var(--primary-500); background: var(--primary-50); color: var(--ink-900); }
+.rcal-tb-search { flex: 1 1 210px; min-width: 160px; max-width: 320px; }
+/* .rcal-sel родом из левой колонки, где поле занимает всю её ширину. В верхней
+   панели та же ширина растягивала «Все здания» на всю строку и разгоняла
+   панель в три ряда — здесь поле ровно по себе. */
+.rcal-tools .rcal-sel { width: auto; min-width: 150px; max-width: 210px; }
+.rcal-book { flex: 0 0 auto; }
+
+/* Шапка колонки: день + ЗАГРУЗКА «6/32» */
+.rcal-colday-row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+.rcal-colday { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 0; }
+.rcal-colcnt.full { background: var(--warn-100, #fde68a); color: var(--warn-800, #8a4309); }
+.rcal-colbr { margin-left: 5px; padding: 0 4px; border-radius: 4px; background: var(--ink-100);
+    color: var(--ink-600); font-weight: 700; }
+
+/* ПОДПИСЬ СЛОТА — «ML · по записи». Спокойная: это фоновое знание о колонке, а
+   не событие. На наведении уступает место «+»: два знака в одной клетке
+   одновременно не читаются ни один. */
+.rcal-slot-info { position: absolute; left: 7px; top: 50%; transform: translateY(-50%);
+    font-size: 12.5px; color: var(--ink-400); pointer-events: none; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; max-width: calc(100% - 14px);
+    transition: opacity var(--dur-1) var(--ease-out); }
+.rcal-slot-info b { color: var(--ink-500); font-weight: 700; }
+.rcal-slot:hover .rcal-slot-info { opacity: 0; }
+
+/* КАРТОЧКА ПРИЁМА В ТРИ СТРОКИ, А НЕ В ЧЕТЫРЕ. Четвёртая не влезала в
+   получасовой приём и обрезалась на полбуквы — а обрезанной оказывалась то
+   услуга, то фамилия. Врач переехал в строку времени; плотность строк 1.25
+   добирает остаток. */
+.rcal-appt-t { display: flex; align-items: baseline; gap: 5px; }
+.rcal-appt-t > span:first-child { flex: 0 0 auto; }
+.rcal-appt-t .rcal-appt-d { margin-left: auto; min-width: 0; text-align: right; }
+.rcal-appt-t, .rcal-appt-p, .rcal-appt-s { line-height: 1.25; }
+
+@media (max-width: 920px) { .rcal-mini-foot { flex-wrap: wrap; } }
+
 /* ===== CATALOG_WIZARD_V1 — booking wizard step 1: catalog + смета ===== */
 .wzc-ctx { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .wzc-chip { display: inline-flex; align-items: center; gap: 8px; padding: 7px 13px; border-radius: 999px;
