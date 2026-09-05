@@ -367,28 +367,82 @@ export function canCreatePatient() {
 
 // PATIENT_TAB_PERMS_V1 — per-patient-card-tab gating. Default is VISIBLE: a role
 // only restricts tabs it explicitly lists (so existing roles see everything).
+//
+// PATIENT_TAB_ACCESS_V1 (2026-09-05, владелец: «we need to add a patients card
+// tabs to the view/edit/delete option») — этот список стал СПИСКОМ ВКЛАДОК
+// КАРТЫ, а не приблизительным его подобием, и у каждой вкладки записано, что на
+// ней вообще МОЖНО сделать.
+//
+//   • id совпадают с views/patient-card.js TABS. «Деталь» звалась здесь
+//     `overview`, а карта зовёт её `details` — то есть ограничение «Детали»
+//     карта не спрашивала НИКОГДА. Ключ переименован (миграция 103), старое имя
+//     читается псевдонимом ниже: кабинет врача (views/service-workspace.js)
+//     спрашивает `overview`, и ломать его ради красоты ключа незачем.
+//   • `rx`, `loyalty`, `chat` убраны: этих вкладок в местной карте нет
+//     («Production-only tabs … are not ported»), и ни одна строка кода их не
+//     спрашивала. Галочка, которая ничего не делает, — это та же болезнь, что
+//     чинила 055. Уже сохранённые значения не теряются: редактор ролей
+//     переносит нерисованные ключи как есть (ROLE_SAVE_PRESERVE_V1).
+//   • `recommended` остаётся — это живой гейт кнопки «Рекомендовать услугу» в
+//     кабинете врача.
+//
+// caps — ЧТО НА ВКЛАДКЕ СУЩЕСТВУЕТ. Право, которого нет, выдавать нельзя:
+// «Удаление» у «Счёта» обещало бы то, чего нет ни в карте, ни в реестре таблиц
+// (invoices/invoice_items/payments — delete roles: []), и читалось бы как
+// разрешение, которое почему-то не работает. Серверное зеркало —
+// server/services/roles.js PATIENT_TAB_CAPS.
 export const PATIENT_TABS = [
-    { id: 'overview',    label: 'Деталь' },
-    { id: 'visits',      label: 'Визиты' },
-    { id: 'services',    label: 'Услуги' },
-    { id: 'recommended', label: 'Рекомендации' },
-    { id: 'labs',        label: 'Лаборатория' },
-    { id: 'rx',          label: 'Назначения' },
-    { id: 'docs',        label: 'Документы' },
-    { id: 'billing',     label: 'Счёт' },
-    { id: 'loyalty',     label: 'Лояльность' },
-    { id: 'chat',        label: 'Чат' },
+    { id: 'services',    label: 'Услуги',        caps: { edit: true,  del: true  }, note: 'Смена врача в строке, замена и удаление НЕОПЛАЧЕННОЙ услуги' },
+    { id: 'labs',        label: 'Лаборатория',   caps: { edit: false, del: false }, note: 'Результаты вносит раздел «Лаборатория» — карта их только показывает' },
+    { id: 'docs',        label: 'Документы',     caps: { edit: true,  del: true  }, note: 'Загрузка файла и удаление документа' },
+    { id: 'billing',     label: 'Счёт',          caps: { edit: false, del: false }, note: 'Счета и оплаты пишет только касса; удаления счёта нет нигде' },
+    { id: 'visits',      label: 'Визиты',        caps: { edit: true,  del: false }, note: 'Запись визита; удаления визита в карте нет' },
+    { id: 'details',     label: 'Деталь',        caps: { edit: true,  del: false }, note: 'Правка анкеты и отметок; удаление пациента — «Настройки → Пациенты»' },
+    { id: 'recommended', label: 'Рекомендации',  caps: { edit: true,  del: false }, note: 'Кнопка «Рекомендовать услугу» в кабинете врача' },
 ];
+
+// Список вкладок САМОЙ карты (без ключей кабинета врача) — в порядке карты.
+export const PATIENT_CARD_TAB_IDS = ['services', 'labs', 'docs', 'billing', 'visits', 'details'];
+
+const PATIENT_TAB_ALIASES = { overview: 'details' };
+export function normalizePatientTab(tab) {
+    const t = String(tab == null ? '' : tab).trim();
+    return PATIENT_TAB_ALIASES[t] || t;
+}
+export function patientTabCaps(tab) {
+    const t = PATIENT_TABS.find((x) => x.id === normalizePatientTab(tab));
+    return (t && t.caps) || { edit: true, del: true };
+}
+
+const _PTAB_RANK  = { none: 0, view: 1, edit: 2, delete: 3 };
+const _PTAB_LEVEL = ['none', 'view', 'edit', 'delete'];
+
+/** Уровень доступа к вкладке: 'none' | 'view' | 'edit' | 'delete'. */
+export function patientTabLevel(tab) {
+    const key = normalizePatientTab(tab);
+    const caps = patientTabCaps(key);
+    const ceiling = caps.del ? 3 : (caps.edit ? 2 : 1);
+    if (_effective == null) return _PTAB_LEVEL[ceiling];   // super admin / clinic admin / no-role
+    let raw = _patientTabs[key];
+    if (raw == null) {
+        for (const [legacy, canon] of Object.entries(PATIENT_TAB_ALIASES)) {
+            if (canon === key && _patientTabs[legacy] != null) { raw = _patientTabs[legacy]; break; }
+        }
+    }
+    const rank = raw == null ? 3 : (_PTAB_RANK[raw] ?? 3);   // absent = fully permissive
+    return _PTAB_LEVEL[Math.min(rank, ceiling)];
+}
+
 export function canViewPatientTab(tab) {
-    if (_effective == null) return true;          // super admin / clinic admin / no-role
-    const l = _patientTabs[tab];
-    return l == null || l !== 'none';             // absent = visible
+    return patientTabLevel(tab) !== 'none';                 // absent = visible
 }
 export function patientTabCanEdit(tab, need) {
-    if (_effective == null) return true;
-    const l = _patientTabs[tab];
+    const l = patientTabLevel(tab);
     if (need === 'delete') return l === 'delete';
-    return l == null || l === 'edit' || l === 'delete';
+    return l === 'edit' || l === 'delete';
+}
+export function patientTabCanDelete(tab) {
+    return patientTabCaps(tab).del && patientTabLevel(tab) === 'delete';
 }
 
 // ---------------------------------------------------------------------------

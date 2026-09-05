@@ -3,6 +3,40 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  "Что открыто": {"en":"What is open","ru":"Что открыто","uz":"Nima ochiq"},
+  "По умолчанию открыты все вкладки. Снимите галочку, чтобы закрыть вкладку этой роли.": {"en":"All tabs are open by default. Clear a checkbox to close a tab for this role.","ru":"По умолчанию открыты все вкладки. Снимите галочку, чтобы закрыть вкладку этой роли.","uz":"Sukut bo'yicha barcha bo'limlar ochiq. Bu rol uchun bo'limni yopish uchun belgini oling."},
+  "Вкладка видна": {"en":"Tab is visible","ru":"Вкладка видна","uz":"Bo'lim ko'rinadi"},
+  "Изменение на вкладке": {"en":"Editing on the tab","ru":"Изменение на вкладке","uz":"Bo'limda o'zgartirish"},
+  "Удаление на вкладке": {"en":"Deletion on the tab","ru":"Удаление на вкладке","uz":"Bo'limda o'chirish"},
+  // PATIENT_TAB_ACCESS_V1 — вкладки карты пациента раздаются по отдельности
+  // (просмотр / изменение / удаление): подписи прав в редакторе ролей, отказ на
+  // самой карте и сообщения сервера (rpc/patient-card.js) — added 2026-09-05
+  "Смена врача в строке, замена и удаление НЕОПЛАЧЕННОЙ услуги": {"en":"Changing the doctor on a line, replacing and removing an UNPAID service","ru":"Смена врача в строке, замена и удаление НЕОПЛАЧЕННОЙ услуги","uz":"Qatordagi shifokorni almashtirish, TO'LANMAGAN xizmatni almashtirish va o'chirish"},
+  "Результаты вносит раздел «Лаборатория» — карта их только показывает": {"en":"Results are entered in the Laboratory section — the card only displays them","ru":"Результаты вносит раздел «Лаборатория» — карта их только показывает","uz":"Natijalarni «Laboratoriya» bo'limi kiritadi — karta ularni faqat ko'rsatadi"},
+  "Загрузка файла и удаление документа": {"en":"Uploading a file and deleting a document","ru":"Загрузка файла и удаление документа","uz":"Fayl yuklash va hujjatni o'chirish"},
+  "Счета и оплаты пишет только касса; удаления счёта нет нигде": {"en":"Only the cash desk writes invoices and payments; an invoice cannot be deleted anywhere","ru":"Счета и оплаты пишет только касса; удаления счёта нет нигде","uz":"Hisob-fakturalar va to'lovlarni faqat kassa yozadi; hisob-fakturani o'chirish hech qayerda yo'q"},
+  "Запись визита; удаления визита в карте нет": {"en":"Booking a visit; the card cannot delete a visit","ru":"Запись визита; удаления визита в карте нет","uz":"Tashrifga yozish; kartada tashrifni o'chirish yo'q"},
+  "Правка анкеты и отметок; удаление пациента — «Настройки → Пациенты»": {"en":"Editing the profile and flags; deleting a patient lives in Settings → Patients","ru":"Правка анкеты и отметок; удаление пациента — «Настройки → Пациенты»","uz":"Anketa va belgilarni tahrirlash; bemorni o'chirish — «Sozlamalar → Bemorlar»"},
+  "Кнопка «Рекомендовать услугу» в кабинете врача": {"en":"The “Recommend a service” button in the doctor's room","ru":"Кнопка «Рекомендовать услугу» в кабинете врача","uz":"Shifokor kabinetidagi «Xizmatni tavsiya qilish» tugmasi"},
+  "вкладка закрыта": {"en":"tab is closed","ru":"вкладка закрыта","uz":"bo'lim yopiq"},
+  "Вкладка закрыта для вашей роли": {"en":"This tab is closed for your role","ru":"Вкладка закрыта для вашей роли","uz":"Bu bo'lim sizning rolingiz uchun yopiq"},
+  "Вкладка «{tab}» закрыта": {"en":"The “{tab}” tab is closed","ru":"Вкладка «{tab}» закрыта","uz":"«{tab}» bo'limi yopiq"},
+  "Роли «{role}» эта вкладка карты пациента не выдана.": {"en":"The “{role}” role has not been granted this patient-card tab.","ru":"Роли «{role}» эта вкладка карты пациента не выдана.","uz":"«{role}» roliga bemor kartasining bu bo'limi berilmagan."},
+  "Эта вкладка карты пациента вашей роли не выдана.": {"en":"Your role has not been granted this patient-card tab.","ru":"Эта вкладка карты пациента вашей роли не выдана.","uz":"Sizning rolingizga bemor kartasining bu bo'limi berilmagan."},
+  "Доступ открывает администратор клиники: «Настройки» → «Роли» → «Карта пациента — вкладки».": {"en":"Access is granted by the clinic administrator: Settings → Roles → Patient card — tabs.","ru":"Доступ открывает администратор клиники: «Настройки» → «Роли» → «Карта пациента — вкладки».","uz":"Ruxsatni klinika administratori beradi: «Sozlamalar» → «Rollar» → «Bemor kartasi — bo'limlar»."},
+  "Изменять на этой вкладке нечего": {"en":"There is nothing to change on this tab","ru":"Изменять на этой вкладке нечего","uz":"Bu bo'limda o'zgartiradigan narsa yo'q"},
+  "Удаления на этой вкладке не существует": {"en":"Deletion does not exist on this tab","ru":"Удаления на этой вкладке не существует","uz":"Bu bo'limda o'chirish mavjud emas"},
+  "Вкладка «{tab}» закрыта для вашей роли. Доступ открывает администратор клиники: «Настройки» → «Роли» → «Карта пациента — вкладки».": {"en":"The “{tab}” tab is closed for your role. Access is granted by the clinic administrator: Settings → Roles → Patient card — tabs.","ru":"Вкладка «{tab}» закрыта для вашей роли. Доступ открывает администратор клиники: «Настройки» → «Роли» → «Карта пациента — вкладки».","uz":"«{tab}» bo'limi sizning rolingiz uchun yopiq. Ruxsatni klinika administratori beradi: «Sozlamalar» → «Rollar» → «Bemor kartasi — bo'limlar»."},
+  "У вас доступ «Только просмотр» на вкладке «{tab}». Изменение открывает администратор клиники в «Настройки» → «Роли».": {"en":"You have view-only access on the “{tab}” tab. Editing is granted by the clinic administrator in Settings → Roles.","ru":"У вас доступ «Только просмотр» на вкладке «{tab}». Изменение открывает администратор клиники в «Настройки» → «Роли».","uz":"«{tab}» bo'limida sizda faqat ko'rish huquqi bor. O'zgartirishni klinika administratori «Sozlamalar» → «Rollar» bo'limida beradi."},
+  "Удаление на вкладке «{tab}» вашей роли не выдано. Право «Удаление» открывает администратор клиники в «Настройки» → «Роли».": {"en":"Your role may not delete on the “{tab}” tab. The delete right is granted by the clinic administrator in Settings → Roles.","ru":"Удаление на вкладке «{tab}» вашей роли не выдано. Право «Удаление» открывает администратор клиники в «Настройки» → «Роли».","uz":"«{tab}» bo'limida o'chirish huquqi rolingizga berilmagan. «O'chirish» huquqini klinika administratori «Sozlamalar» → «Rollar» bo'limida beradi."},
+  "На вкладке «{tab}» удаление не предусмотрено.": {"en":"Deletion is not available on the “{tab}” tab.","ru":"На вкладке «{tab}» удаление не предусмотрено.","uz":"«{tab}» bo'limida o'chirish ko'zda tutilmagan."},
+  "Раздел «Пациенты» вашей роли не выдан.": {"en":"Your role has not been granted the Patients section.","ru":"Раздел «Пациенты» вашей роли не выдан.","uz":"«Bemorlar» bo'limi rolingizga berilmagan."},
+  "Не указан пациент.": {"en":"No patient was specified.","ru":"Не указан пациент.","uz":"Bemor ko'rsatilmagan."},
+  "Нечего сохранять.": {"en":"There is nothing to save.","ru":"Нечего сохранять.","uz":"Saqlaydigan narsa yo'q."},
+  "Недостаточно прав для этого действия.": {"en":"You do not have the rights for this action.","ru":"Недостаточно прав для этого действия.","uz":"Bu amal uchun huquqlar yetarli emas."},
+  "Не указана строка услуги.": {"en":"No service line was specified.","ru":"Не указана строка услуги.","uz":"Xizmat qatori ko'rsatilmagan."},
+  "Не указан документ.": {"en":"No document was specified.","ru":"Не указан документ.","uz":"Hujjat ko'rsatilmagan."},
+  "Документ не найден.": {"en":"Document not found.","ru":"Документ не найден.","uz":"Hujjat topilmadi."},
   // ATTENDING_PICKER_V1 — «Назначить лечащего врача»: список едет с сервера тем
   // же признаком, которым сервер потом проверяет выбранного, и пустота
   // называет СЕБЯ — added 2026-09-05

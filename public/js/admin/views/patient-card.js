@@ -34,6 +34,11 @@ import { printableSheet } from './doc-settings.js?v=noqr1';   // PATIENT_DOCS_CL
 // admin.js → один экземпляр модуля; цикл registration↔patient-card безопасен,
 // т.к. обе стороны используют только hoisted-функции во время выполнения.
 import { radioChips, phoneInput, mailInput } from './registration.js?v=aug17f';
+// PATIENT_TAB_ACCESS_V1 — вкладки карты выдаются по отдельности (просмотр /
+// изменение / удаление). ЗДЕСЬ ТОЛЬКО ОФОРМЛЕНИЕ отказа: настоящий отказ выдаёт
+// сервер (server/services/rpc/patient-card.js), и `tabAccess` ниже — это его
+// ответ, а не мнение браузера. Спрятанная вкладка защитой не является.
+import { currentRoleLabel } from '../permissions.js';
 
 // Compatibility stubs. Older modules still import these names FROM patient-card
 // (registration.js -> openCreateVisitModal, service-workspace.js -> openVitalsDialog).
@@ -119,6 +124,25 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
     let services = [];   // visit_services rows across this patient's visits
     let labs = [];
     let fetchToken = 0;
+    // PATIENT_TAB_ACCESS_V1 — уровни вкладок, как их вернул СЕРВЕР:
+    // 'none' | 'view' | 'edit' | 'delete'. До первого ответа — пусто, и это
+    // важнее, чем кажется: пока сервер не ответил, экран ничего не обещает.
+    let tabAccess = {};
+    let invoiceItems = [];   // строки счетов (с врачом) — приезжают вместе с картой
+    let payRows = [];        // оплаты по счетам пациента — для «Баланса счёта»
+    // I18N_COVERAGE_V1 — сервер шлёт ШАБЛОН и значения отдельно; переводим
+    // сначала шаблон, потом подставляем (и сами значения тоже переводим —
+    // название вкладки приезжает по-русски).
+    const rpcMsg = (error) => {
+        if (!error) return '';
+        const params = {};
+        for (const [k, v] of Object.entries(error.params || {})) params[k] = typeof v === 'string' ? tr(v) : v;
+        return trf(error.message || '', params);
+    };
+    const levelOf   = (tab) => tabAccess[tab] || 'view';
+    const tabOpen   = (tab) => levelOf(tab) !== 'none';
+    const tabEdit   = (tab) => levelOf(tab) === 'edit' || levelOf(tab) === 'delete';
+    const tabDelete = (tab) => levelOf(tab) === 'delete';
 
     const patientId = payload.id;
     const patientStub = () => ({ id: patient?.id, full_name: patient?.full_name, mrn: patient?.mrn, phone: patient?.phone });
@@ -142,40 +166,22 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         clear(bodyEl);
 
         try {
-            const { data: pRow, error: pErr } = await supabase.from('patients')
-                .select('*').eq('id', patientId).single();
+            // PATIENT_TAB_ACCESS_V1 — ОДИН запрос вместо пяти, и он же — граница
+            // доступа. Раньше карта сама ходила в /api/db за визитами, счетами,
+            // услугами, анализами и документами, и любая роль с ключом
+            // `patients` получала всё. Теперь спрашивает сервер, и он отдаёт
+            // ровно те вкладки, которые роли выданы (закрытая приходит как
+            // null), плюс их уровни — чтобы экран мог ОБЪЯСНИТЬ отказ.
+            const { data, error } = await supabase.rpc('patient_card', { patient_id: patientId });
             if (token !== fetchToken) return;
-            if (pErr || !pRow) {
+            if (error || !data) {
                 clear(headerEl);
-                headerEl.appendChild(h('div', { class: 'empty' }, 'Пациент не найден.'));
-                toast(trf('Не удалось загрузить пациента: {msg}', { msg: (pErr && pErr.message) || 'not found' }), 'fail');
+                const msg = rpcMsg(error) || tr('Пациент не найден.');
+                headerEl.appendChild(h('div', { class: 'card' }, h('div', { class: 'empty' }, msg)));
+                toast(trf('Не удалось загрузить пациента: {msg}', { msg }), 'fail');
                 return;
             }
-            patient = pRow;
-
-            const [visitsRes, invoicesRes, payerRes] = await Promise.all([
-                supabase.from('visits')
-                    .select('*, doctor(full_name), patients(full_name,mrn,phone)')
-                    .eq('patient_id', patient.id)
-                    .order('visit_date', { ascending: false })
-                    .limit(200),
-                supabase.from('invoices')
-                    .select('*')
-                    .eq('patient_id', patient.id)
-                    .order('created_at', { ascending: false })
-                    .limit(200),
-                patient.payer_id
-                    ? supabase.from('payers').select('name').eq('id', patient.payer_id).single()
-                    : Promise.resolve({ data: null }),
-            ]);
-            if (token !== fetchToken) return;
-            if (visitsRes.error)   toast(trf('Не удалось загрузить визиты: {msg}', { msg: visitsRes.error.message }), 'fail');
-            if (invoicesRes.error) toast(trf('Не удалось загрузить счета: {msg}', { msg: invoicesRes.error.message }), 'fail');
-            visits    = visitsRes.data || [];
-            invoices  = invoicesRes.data || [];
-            payerName = (payerRes && payerRes.data && payerRes.data.name) || null;
-
-            await loadServicesAndLabs();
+            applyCardPayload(data);
             if (token !== fetchToken) return;
 
             paintHeader();
@@ -189,28 +195,58 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         }
     }
 
-    // One visit_services fetch feeds BOTH the «Услуги» tab and the labs join.
-    async function loadServicesAndLabs() {
+    // PATIENT_TAB_ACCESS_V1 — раскладка ответа сервера по вкладкам.
+    //
+    // Закрытая вкладка приходит как null, и это НЕ то же самое, что пустая:
+    // пустой массив значит «данных нет», null — «вам не выдано». Поэтому
+    // уровень доступа хранится отдельно (tabAccess) и решает, что рисовать —
+    // «Визитов пока нет» или отказ с указанием, к кому идти.
+    let payloadServices = [];
+    let payloadLabOrders = [];
+    let payloadLabResults = [];
+    let payloadDocs = null;
+    let payloadDocNotes = [];
+    let lastVisitDate = null;
+
+    function applyCardPayload(data) {
+        tabAccess = (data && data.tabs) || {};
+        patient   = data.patient || null;
+        payerName = data.payer_name || null;
+        visits    = data.visits || [];
+        invoices  = data.invoices || [];
+        invoiceItems = data.invoice_items || [];
+        payRows      = data.payments || [];
+        payloadServices   = data.services || [];
+        payloadLabOrders  = data.lab_orders || [];
+        payloadLabResults = data.lab_results || [];
+        payloadDocs       = data.docs;
+        payloadDocNotes   = data.doc_notes || [];
+        // «Визиты» закрыты → шапка не знает даты последнего визита и честно
+        // ставит прочерк, а не «визитов не было».
+        lastVisitDate = tabOpen('visits') ? (data.last_visit_date || null) : null;
+        shapeServicesAndLabs();
+        // Активная вкладка могла быть закрыта у этой роли — уводим на первую
+        // открытую, иначе карта открылась бы на отказе без причины.
+        if (!tabOpen(state.tab)) {
+            const first = TABS.find(t => tabOpen(t.id));
+            if (first) state.tab = first.id;
+        }
+    }
+
+    // One visit_services payload feeds BOTH the «Услуги» tab and the labs join.
+    function shapeServicesAndLabs() {
         services = [];
         labs = [];
-        const visitIds = visits.map(v => v.id).filter(v => v != null);
-        if (visitIds.length === 0) return;
 
-        // SVC_ROW_ACTIONS_V1 — тянем id/врача/привязку к счёту/слот, чтобы
-        // строки услуг были управляемыми (удалить неоплаченную, сменить врача).
-        const { data: vsRows, error: vsErr } = await supabase.from('visit_services')
-            // LAB_DOC_PENDING_V1 — is_lab/type тянем, чтобы отличить лабораторный
-            // ЗАКАЗ от остальных услуг: документ «Результаты анализов» должен
-            // появляться с момента назначения, а не с первой введённой цифры.
-            // BRANCH_ORIGIN_V1 — sync_origin едет в выборке, чтобы подписать результат,
-            // сделанный в другом здании: карта пациента показывает всю историю и
-            // обязана сказать, где именно её сделали.
-            .select('id,visit_id,quantity,unit_price,total,status,invoice_item_id,doctor_id,service_id,scheduled_at,sync_origin,services(name,result_unit,ref_low,ref_high,is_lab,type),users:doctor_id(full_name)')
-            .in('visit_id', visitIds);
-        if (vsErr || !vsRows || vsRows.length === 0) return;
-
-        const visitById = new Map(visits.map(v => [v.id, v]));
-        services = vsRows.map(r => ({
+        // SVC_ROW_ACTIONS_V1 — id/врач/привязка к счёту/слот приезжают со строкой,
+        // чтобы она была управляемой (удалить неоплаченную, сменить врача).
+        // LAB_DOC_PENDING_V1 — is_lab/type отличают лабораторный ЗАКАЗ от прочих
+        // услуг: документ «Результаты анализов» появляется с момента назначения,
+        // а не с первой введённой цифры.
+        // BRANCH_ORIGIN_V1 — sync_origin подписывает результат, сделанный в другом
+        // здании: карта показывает всю историю и обязана сказать, где её сделали.
+        const vsRows = payloadServices;
+        if (vsRows.length) services = vsRows.map(r => ({
             id:            r.id,
             serviceId:     r.service_id,
             doctorId:      r.doctor_id,
@@ -224,16 +260,17 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             // что у lab-service.js: флаг is_lab ИЛИ тип услуги 'lab'.
             visitId: r.visit_id,
             isLab:  !!((r.services && r.services.is_lab) || (r.services && r.services.type === 'lab')),
-            date:   r.scheduled_at || (visitById.get(r.visit_id) || {}).visit_date || null,
+            // visit_date приезжает НА СТРОКЕ: дату услуги вкладка «Услуги» и
+            // показывала всегда, а вкладка «Визиты» может быть роли не выдана —
+            // и тогда списка визитов у экрана попросту нет.
+            date:   r.scheduled_at || r.visit_date || null,
         })).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
 
-        const vsIds = vsRows.map(r => r.id);
-        const { data: lrRows, error: lrErr } = await supabase.from('lab_results')
-            .select('*')
-            .in('visit_service_id', vsIds);
-        if (lrErr || !lrRows || lrRows.length === 0) return;
+        const lrRows = payloadLabResults;
+        const labOrders = payloadLabOrders;
+        if (!lrRows.length || !labOrders.length) return;
 
-        const vsById = new Map(vsRows.map(r => [r.id, r]));
+        const vsById = new Map(labOrders.map(r => [r.id, r]));
         // LAB_DOC_ALL_ANALYTES_V1 — панель пишет ПО СТРОКЕ lab_results НА КАЖДЫЙ
         // ПОКАЗАТЕЛЬ (laboratory.js: «Each analyte writes ONE lab_results row»).
         // Здесь оставалась одна, самая свежая строка НА УСЛУГУ — и от ОАК с 28
@@ -251,7 +288,6 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             const lr  = entry.row;
             const vs  = vsById.get(lr.visit_service_id);
             const svc = vs && vs.services;
-            const vst = vs ? visitById.get(vs.visit_id) : null;
             let reference = lr.reference_range || '';
             if (!reference && svc && (svc.ref_low != null || svc.ref_high != null)) {
                 reference = `${svc.ref_low ?? ''}–${svc.ref_high ?? ''}`;
@@ -277,7 +313,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 // BRANCH_ORIGIN_V1 — сам результат мог приехать строкой lab_results, а мог
                 // приехать вместе с заказом: берём ту метку, которая есть.
                 origin:    originTag(lr) || originTag(vs),
-                date:      (vst && vst.visit_date) || lr.entered_at || lr.created_at || null,
+                date:      (vs && vs.visit_date) || lr.entered_at || lr.created_at || null,
                 _id:       lr.id,
             });
         }
@@ -332,7 +368,9 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     color: '#fff', fontFamily: 'inherit', fontSize: '13.5px', fontWeight: 700,
                 },
             }, Icon('Bed', { size: 14 }), 'Госпитализация'),
-            h('button', {
+            // PATIENT_TAB_ACCESS_V1 — заведение услуг пациенту = «Изменение»
+            // вкладки «Услуги» (мастер пишет visit_services и счёт).
+            tabEdit('services') ? h('button', {
                 type: 'button',
                 onclick: () => openVisitWizard(reload, patientStub()),
                 style: {
@@ -342,7 +380,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     fontFamily: 'inherit', fontSize: '13.5px', fontWeight: 700,
                     boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
                 },
-            }, Icon('Plus', { size: 14 }), 'Добавить услуги'),   // DAY_VISIT_V1 — работаем услугами, визит (день) считается сам
+            }, Icon('Plus', { size: 14 }), 'Добавить услуги') : null,   // DAY_VISIT_V1 — работаем услугами, визит (день) считается сам
         );
 
         // -- name / demographics row --
@@ -384,10 +422,13 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 ),
                 demo,
             ),
-            h('button', {
+            // PATIENT_TAB_ACCESS_V1 — «Редактировать» и «Отметки» правят анкету
+            // пациента, то есть вкладку «Деталь». Без права на изменение кнопок
+            // нет: сервер отказал бы всё равно (rpc patient_card_save).
+            tabEdit('details') ? h('button', {
                 class: 'btn btn-outline btn-sm', type: 'button',
                 onclick: () => openEditModal(),
-            }, Icon('Edit', { size: 14 }), ' Редактировать'),
+            }, Icon('Edit', { size: 14 }), ' Редактировать') : null,
         );
 
         // -- Особые отметки strip --
@@ -422,13 +463,17 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
                         note || 'Заметок нет'),
                 ),
-                h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => openNotesModal() },
-                    Icon('Flag', { size: 13 }), ' Отметки'),
+                tabEdit('details') ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => openNotesModal() },
+                    Icon('Flag', { size: 13 }), ' Отметки') : null,
             ),
         );
 
         // -- stat row (5 cells, divided) --
-        const lastVisit = visits[0];
+        // PATIENT_TAB_ACCESS_V1 — клетки шапки — это ВЫЖИМКА вкладок, и они
+        // подчиняются тем же правам. Иначе закрытый «Счёт» всё равно называл бы
+        // сумму долга, а закрытые «Визиты» — дату последнего приёма: право,
+        // которое обходится взглядом на шапку, — не право.
+        const lastVisit = tabOpen('visits') ? visits[0] : null;
         let daysAgo = null;
         if (lastVisit) {
             daysAgo = Math.max(0, Math.floor((Date.now() - new Date(lastVisit.visit_date).getTime()) / 86400000));
@@ -472,8 +517,8 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             ),
         );
 
-        const gotoVisitsTab = () => {
-            state.tab = 'visits';
+        const gotoTab = (id) => {
+            state.tab = id;
             paintTabs();
             paintBody();
             tabbarEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -485,21 +530,28 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 margin: '0 -1px',
             },
         },
-            statCell('ID',       '#2563eb', 'Страховка', payerName || '—', null, null, () => openInsuranceModal()),
-            statCell('Clock',    '#2563eb', 'Последний визит',
+            statCell('ID',       '#2563eb', 'Страховка',
+                tabOpen('details') ? (payerName || '—') : '—',
+                tabOpen('details') ? null : 'вкладка закрыта',
+                null, () => { if (tabOpen('details')) openInsuranceModal(); else gotoTab('details'); }),
+            statCell(tabOpen('visits') ? 'Clock' : 'Lock', '#2563eb', 'Последний визит',
                 lastVisit ? (lastVisit.visit_date || '').slice(0, 10) : '—',
-                daysAgo != null ? (daysAgo === 0 ? 'today' : daysAgo + ' days ago') : 'визитов не было',
-                null, gotoVisitsTab),
+                !tabOpen('visits') ? 'вкладка закрыта'
+                    : (daysAgo != null ? (daysAgo === 0 ? 'today' : daysAgo + ' days ago') : 'визитов не было'),
+                null, () => gotoTab('visits')),
             statCell('Warning',  'var(--ok-600, #16a34a)', 'Аллергии',
                 allergiesText || 'Нет данных', null,
                 allergiesText ? 'var(--crit-600, #dc2626)' : 'var(--ok-700, #047857)',
-                () => openNotesModal()),
+                () => { if (tabEdit('details')) openNotesModal(); }),
             statCell('Coins',    '#2563eb', 'Кэшбэк', '0 сум', 'нет начислений', null, () => openCashbackModal()),
-            statCell('Wallet',   outstanding > 0 ? 'var(--crit-600, #dc2626)' : 'var(--ok-600, #16a34a)', 'Баланс счёта',
-                fmtPrice(outstanding) + ' ' + tr('сум'),
-                outstanding > 0 ? 'долг' : 'оплачено',
-                outstanding > 0 ? 'var(--crit-600, #dc2626)' : 'var(--ok-700, #047857)',
-                () => openBalanceModal()),
+            tabOpen('billing')
+                ? statCell('Wallet', outstanding > 0 ? 'var(--crit-600, #dc2626)' : 'var(--ok-600, #16a34a)', 'Баланс счёта',
+                    fmtPrice(outstanding) + ' ' + tr('сум'),
+                    outstanding > 0 ? 'долг' : 'оплачено',
+                    outstanding > 0 ? 'var(--crit-600, #dc2626)' : 'var(--ok-700, #047857)',
+                    () => openBalanceModal())
+                : statCell('Lock', 'var(--ink-500)', 'Баланс счёта', '—', 'вкладка закрыта',
+                    'var(--ink-500)', () => gotoTab('billing')),
         );
 
         headerEl.appendChild(h('div', { class: 'card', style: { overflow: 'hidden', marginBottom: '14px', padding: 0 } },
@@ -521,6 +573,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         });
         for (const t of TABS) {
             const active = state.tab === t.id;
+            const locked = !tabOpen(t.id);
             const badge = t.id === 'visits' && visits.length
                 ? h('span', {
                     style: {
@@ -532,6 +585,11 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 : null;
             bar.appendChild(h('button', {
                 type: 'button',
+                // PATIENT_TAB_ACCESS_V1 — закрытая вкладка ОСТАЁТСЯ НА МЕСТЕ, с
+                // замком. Исчезнувшая вкладка читается как поломка («вчера тут
+                // был Счёт»), и человек ищет её или зовёт мастера; замок
+                // отвечает на вопрос сразу и говорит, к кому идти за доступом.
+                title: locked ? 'Вкладка закрыта для вашей роли' : null,
                 onclick: () => {
                     if (state.tab === t.id) return;
                     state.tab = t.id;
@@ -543,16 +601,18 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     padding: '14px 12px', border: 'none', background: 'none', cursor: 'pointer',
                     fontFamily: 'inherit', fontSize: '13.5px',
                     fontWeight: active ? 700 : 500,
-                    color: active ? 'var(--primary-700)' : 'var(--ink-600)',
+                    color: locked ? 'var(--ink-400, #94a3b8)' : (active ? 'var(--primary-700)' : 'var(--ink-600)'),
                     borderBottom: '2px solid ' + (active ? 'var(--primary-600)' : 'transparent'),
                     marginBottom: '-1px',
                 },
-            }, Icon(t.icon, { size: 14 }), t.label, badge));
+            }, Icon(locked ? 'Lock' : t.icon, { size: 14 }), t.label, badge));
         }
         // ADD_SERVICES_IN_TABBAR_V1 — «Добавить услуги» живёт в строке вкладок
-        // (справа), видна с ЛЮБОЙ активной вкладки.
+        // (справа), видна с ЛЮБОЙ активной вкладки. PATIENT_TAB_ACCESS_V1 — но
+        // только у того, кому «Услуги» выданы на изменение: кнопка заводит
+        // услуги пациенту, а сервер откажет всё равно.
         bar.appendChild(h('span', { style: { flex: 1 } }));
-        bar.appendChild(h('button', {
+        if (tabEdit('services')) bar.appendChild(h('button', {
             class: 'btn btn-primary btn-sm', type: 'button',
             style: { alignSelf: 'center', margin: '8px 0' },
             onclick: () => openVisitWizard(reload, patientStub()),
@@ -560,9 +620,32 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         tabbarEl.appendChild(bar);
     }
 
+    // PATIENT_TAB_ACCESS_V1 — ОТКАЗ, КОТОРЫЙ ОБЪЯСНЯЕТ. Не пустая вкладка и не
+    // исчезнувшая: сказано, что закрыто, для какой роли и кто это открывает.
+    // Пустая вкладка — худший из ответов: она выглядит как «данных нет», и
+    // регистратура будет уверять пациента, что счетов у него не было.
+    function tabDeniedPanel(tabId) {
+        const label = (TABS.find(t => t.id === tabId) || {}).label || tabId;
+        const role = currentRoleLabel();
+        return h('div', { class: 'card' },
+            h('div', { class: 'error-state', style: { textAlign: 'center', padding: '40px 24px' } },
+                h('div', { style: { color: 'var(--ink-500)', display: 'flex', justifyContent: 'center', marginBottom: '10px' } },
+                    Icon('Lock', { size: 26 })),
+                h('div', { style: { fontSize: '15px', fontWeight: 700, color: 'var(--ink-900)' } },
+                    trf('Вкладка «{tab}» закрыта', { tab: tr(label) })),
+                h('div', { class: 'muted', style: { marginTop: '6px', fontSize: '13.5px' } },
+                    role
+                        ? trf('Роли «{role}» эта вкладка карты пациента не выдана.', { role })
+                        : tr('Эта вкладка карты пациента вашей роли не выдана.')),
+                h('div', { class: 'muted', style: { marginTop: '4px', fontSize: '12.5px' } },
+                    'Доступ открывает администратор клиники: «Настройки» → «Роли» → «Карта пациента — вкладки».'),
+            ));
+    }
+
     function paintBody() {
         clear(bodyEl);
         if (!patient) return;
+        if (!tabOpen(state.tab))           { bodyEl.appendChild(tabDeniedPanel(state.tab)); return; }
         if (state.tab === 'visits')        bodyEl.appendChild(renderVisits());
         else if (state.tab === 'services') bodyEl.appendChild(renderServices());
         else if (state.tab === 'billing')  bodyEl.appendChild(renderBilling());
@@ -665,9 +748,13 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         const tbody = h('tbody');
         for (const v of visits) {
             const doc = v.doctor;
+            // PATIENT_TAB_ACCESS_V1 — окно визита показывает ЕГО СЧЁТ, а это
+            // вкладка «Счёт», а не «Визиты»: иначе право «не видеть деньги»
+            // обходилось бы кликом по строке визита.
+            const billOpen = tabOpen('billing');
             tbody.appendChild(h('tr', {
-                class: 'row-click', style: { cursor: 'pointer' },
-                onclick: () => openVisitBillModal(v, reload),
+                class: billOpen ? 'row-click' : null, style: { cursor: billOpen ? 'pointer' : 'default' },
+                onclick: billOpen ? (() => openVisitBillModal(v, reload)) : null,
             },
                 // BRANCH_ORIGIN_V1 — карта пациента показывает ВСЮ историю, включая
                 // визиты в других зданиях (в этом и смысл общей карты), поэтому здесь
@@ -791,7 +878,12 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             const removable = editable;
 
             const docCell = h('td', null, s.doctorName || '—');
-            const editBtn = editable ? h('button', {
+            // PATIENT_TAB_ACCESS_V1 — «Сменить врача» и «Заменить услугу» — это
+            // ИЗМЕНЕНИЕ вкладки «Услуги», «Убрать» — УДАЛЕНИЕ. Кнопка, которая
+            // всегда кончается отказом сервера, читается как сломанная
+            // программа, поэтому её здесь просто нет; сервер отказывает вторым
+            // рубежом (rpc/index.js change_unpaid_service / remove_unpaid_service).
+            const editBtn = editable && tabEdit('services') ? h('button', {
                 class: 'btn btn-outline btn-sm', type: 'button', title: 'Сменить врача',
                 onclick: async (ev) => {
                     const btn = ev.currentTarget;
@@ -806,8 +898,9 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                         ...pool.map(d => h('option', { value: d.id, selected: String(d.id) === String(s.doctorId) }, d.full_name)));
                     const save = h('button', { class: 'btn btn-primary btn-sm', type: 'button' }, 'ОК');
                     save.addEventListener('click', async () => {
-                        const { error } = await supabase.from('visit_services').update({ doctor_id: Number(sel.value) }).eq('id', s.id);
-                        if (error) { toast(trf('Не сохранилось: {msg}', { msg: error.message }), 'fail'); return; }
+                        const { error } = await supabase.rpc('patient_card_set_doctor',
+                            { patient_id: patientId, visit_service_id: s.id, doctor_id: Number(sel.value) });
+                        if (error) { toast(trf('Не сохранилось: {msg}', { msg: rpcMsg(error) }), 'fail'); return; }
                         toast('Врач изменён.');
                         await reload();
                     });
@@ -818,7 +911,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
 
             // SVC_CHANGE_V1 — заменить услугу (пока не оказана и счёт не оплачен):
             // строка получает новую услугу/цену, неоплаченный счёт пересчитывается.
-            const swapBtn = editable ? h('button', {
+            const swapBtn = editable && tabEdit('services') ? h('button', {
                 class: 'btn btn-outline btn-sm', type: 'button', title: 'Заменить услугу (цена и счёт пересчитаются)',
                 onclick: async (ev) => {
                     const btn = ev.currentTarget;
@@ -844,7 +937,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 },
             }, Icon('Repeat', { size: 13 })) : null;
 
-            const delBtn = removable ? h('button', {
+            const delBtn = removable && tabDelete('services') ? h('button', {
                 class: 'btn btn-outline btn-sm', type: 'button',
                 title: s.invoiceItemId ? 'Убрать услугу вместе с неоплаченным счётом' : 'Убрать услугу',
                 style: { color: 'var(--crit-600, #dc2626)' },
@@ -867,7 +960,9 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             // Доступно, только когда услуга попала в счёт: чек — документ об
             // оплате, и без счёта печатать нечего. Номер очереди на чеке тот же
             // самый — issue_queue_numbers возвращает уже выданный, а не новый.
-            const printBtn = s.invoiceItemId ? h('button', {
+            // PATIENT_TAB_ACCESS_V1 — чек это ДОКУМЕНТ ОБ ОПЛАТЕ: печатает его тот,
+            // кому выдана вкладка «Счёт», а не тот, кто видит перечень услуг.
+            const printBtn = (s.invoiceItemId && tabOpen('billing')) ? h('button', {
                 class: 'btn btn-outline btn-sm', type: 'button', title: 'Перепечатать чек',
                 onclick: async (ev) => {
                     const btn = ev.currentTarget;
@@ -976,37 +1071,16 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         return wrap;
     }
 
-    async function fillBillingDetails(svcCells, docCells) {
-        const invIds = invoices.map(i => i.id);
-        if (!invIds.length) return;
+    // PATIENT_TAB_ACCESS_V1 — строки счетов и врач по строке приезжают ВМЕСТЕ с
+    // картой (rpc patient_card), а не тремя отдельными запросами в /api/db:
+    // содержимое вкладки «Счёт» должно проходить через ту же дверь, что и она
+    // сама, иначе право «не видеть счета» обходилось бы одним запросом.
+    function fillBillingDetails(svcCells, docCells) {
+        const items = invoiceItems;
+        if (!items.length) return;
 
-        let items = [];
-        try {
-            const { data } = await supabase.from('invoice_items')
-                .select('id, invoice_id, description, quantity, total, services(name)')
-                .in('invoice_id', invIds).limit(1000);
-            items = data || [];
-        } catch (e) { /* cells fall back to «—» below */ }
-
-        // The doctor lives on visit_services, linked by invoice_item_id.
         const docByItem = new Map();
-        const itemIds = items.map(i => i.id);
-        if (itemIds.length) {
-            try {
-                const { data: vsRows } = await supabase.from('visit_services')
-                    .select('invoice_item_id, doctor_id').in('invoice_item_id', itemIds).limit(1000);
-                const docIds = [...new Set((vsRows || []).map(r => r.doctor_id).filter(Boolean))];
-                const nameById = new Map();
-                if (docIds.length) {
-                    const { data: users } = await supabase.from('users')
-                        .select('id, full_name').in('id', docIds).limit(200);
-                    for (const u of (users || [])) nameById.set(u.id, u.full_name);
-                }
-                for (const r of (vsRows || [])) {
-                    if (r.doctor_id && nameById.has(r.doctor_id)) docByItem.set(r.invoice_item_id, nameById.get(r.doctor_id));
-                }
-            } catch (e) { /* doctors stay unknown */ }
-        }
+        for (const it of items) if (it.doctor_name) docByItem.set(it.id, it.doctor_name);
 
         const byInvoice = new Map();
         for (const it of items) {
@@ -1089,20 +1163,22 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     content_type: f.type || 'application/octet-stream', doc_type: 'upload',
                 };
                 if (uid != null) row.created_by = uid;
-                const { error } = await supabase.from('visit_documents').insert(row);
-                if (error) throw new Error(error.message);
+                // PATIENT_TAB_ACCESS_V1 — загрузка документа = «Изменение» вкладки
+                // «Документы»; проверяет сервер (rpc patient_card_doc_add).
+                const { error } = await supabase.rpc('patient_card_doc_add', { patient_id: patient.id, row });
+                if (error) throw new Error(rpcMsg(error));
                 toast('Документ загружен.');
-                paintList();
+                await reload();   // список документов приезжает с картой — перечитываем её
             } catch (e) { toast(trf('Не удалось загрузить: {msg}', { msg: (e && e.message) || e }), 'fail'); }
             fileInp.value = '';
         });
 
         wrap.appendChild(h('div', { class: 'card-header' },
             h('h3', null, Icon('Doc', { size: 15 }), ' Документы'),
-            h('button', {
+            tabEdit('docs') ? h('button', {
                 class: 'btn btn-primary btn-sm', type: 'button',
                 onclick: () => fileInp.click(),
-            }, Icon('Plus', { size: 14 }), ' Загрузить документ'),
+            }, Icon('Plus', { size: 14 }), ' Загрузить документ') : null,
         ));
         wrap.appendChild(fileInp);
 
@@ -1324,26 +1400,18 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
             /* i18n-exempt-end */
             printableSheet({ type: 'conclusion', title: d.title, bodyHtml });
         }
-        async function paintList() {
+        // PATIENT_TAB_ACCESS_V1 — список документов приезжает вместе с картой
+        // (rpc patient_card), через дверь вкладки «Документы»; отдельного
+        // запроса в /api/db у него больше нет.
+        function paintList() {
             clear(listEl);
-            listEl.appendChild(h('div', { class: 'muted', style: { padding: '12px 0' } }, 'Загрузка…'));
-            const { data, error } = await supabase.from('visit_documents')
-                .select('id, title, doc_type, file_name, file_path, body, created_at, visit_service_id')
-                .eq('patient_id', patient.id)
-                .order('created_at', { ascending: false })
-                .limit(300);
-            clear(listEl);
-            if (error) { listEl.appendChild(h('div', { class: 'empty' }, trf('Не удалось загрузить документы: {msg}', { msg: error.message }))); return; }
+            const data = payloadDocs || [];
 
             // подписанные документы из истории строк услуг (WS_DERIVED_DOCS_V1)
             const wsRows = [];
             try {
-                const visitIds = (visits || []).map(v => v.id).filter(Boolean);
-                if (visitIds.length) {
-                    const { data: vsNotes } = await supabase.from('visit_services')
-                        .select('id, notes, services(name), users:doctor_id(full_name)')
-                        .in('visit_id', visitIds)
-                        .not('notes', 'is', null);
+                {
+                    const vsNotes = payloadDocNotes;
                     const archived = new Set((data || []).map(x => x.visit_service_id).filter(Boolean));
                     for (const r of (vsNotes || [])) {
                         if (archived.has(r.id)) continue;
@@ -1399,16 +1467,20 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                             class: 'btn btn-outline btn-sm', type: 'button', title: 'Печать',
                             onclick: () => openRow(d),
                         }, Icon('Print', { size: 13 }), ' Печать'),
-                        (d._lab || d._ws) ? null : h('button', {
+                        // PATIENT_TAB_ACCESS_V1 — удаление документа требует уровня
+                        // «Удаление» на вкладке «Документы»; сервер проверяет то же
+                        // (rpc patient_card_doc_delete).
+                        (d._lab || d._ws || !tabDelete('docs')) ? null : h('button', {
                             class: 'btn btn-outline btn-sm', type: 'button', title: 'Удалить',
                             style: { marginLeft: '6px', color: 'var(--crit-600, #dc2626)' },
                             onclick: async () => {
                                 if (!confirm(trf('Удалить документ «{name}»?', { name: d.title || d.file_name || d.id }))) return;
-                                const { error: delErr } = await supabase.from('visit_documents').delete().eq('id', d.id);
-                                if (delErr) { toast(trf('Не удалось удалить: {msg}', { msg: delErr.message }), 'fail'); return; }
+                                const { error: delErr } = await supabase.rpc('patient_card_doc_delete',
+                                    { patient_id: patient.id, document_id: d.id });
+                                if (delErr) { toast(trf('Не удалось удалить: {msg}', { msg: rpcMsg(delErr) }), 'fail'); return; }
                                 if (d.file_path) removeFile(BRANCH_BUCKET, d.file_path);   // best-effort
                                 toast('Документ удалён.');
-                                paintList();
+                                await reload();
                             },
                         }, Icon('Trash', { size: 13 }))),
                 ));
@@ -1488,9 +1560,11 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
             saveBtn.disabled = true;
             saveBtn.textContent = tr('Сохраняем…');
             try {
-                const { error } = await supabase.from('patients')
-                    .update({ payer_id: sel.value ? Number(sel.value) : null }).eq('id', p.id).select().single();
-                if (error) { toast(error.message, 'fail'); saveBtn.disabled = false; saveBtn.textContent = tr('Сохранить'); return; }
+                // PATIENT_TAB_ACCESS_V1 — правка карточки = «Изменение» вкладки
+                // «Деталь»; проверяет сервер (rpc patient_card_save).
+                const { error } = await supabase.rpc('patient_card_save',
+                    { patient_id: p.id, values: { payer_id: sel.value ? Number(sel.value) : null } });
+                if (error) { toast(rpcMsg(error), 'fail'); saveBtn.disabled = false; saveBtn.textContent = tr('Сохранить'); return; }
                 toast('Сохранено');
                 m.close();
                 await reload();
@@ -1532,15 +1606,8 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
 
     // ---- Баланс счёта: the full invoice/payment ledger with running debt ----
     async function openBalanceModal() {
-        let payRows = [];
-        const invIds = invoices.map(i => i.id);
-        if (invIds.length) {
-            try {
-                const { data } = await supabase.from('payments')
-                    .select('invoice_id, amount, method, paid_at').in('invoice_id', invIds).limit(1000);
-                payRows = data || [];
-            } catch (e) { /* ledger shows invoices only */ }
-        }
+        // PATIENT_TAB_ACCESS_V1 — оплаты приезжают вместе с картой, через дверь
+        // вкладки «Счёт»; отдельного запроса в /api/db у ведомости больше нет.
         const numById = new Map(invoices.map(i => [i.id, i.invoice_number || ('#' + i.id)]));
         const METHOD_RU = { cash: 'наличные', card: 'карта', transfer: 'перевод', acquiring: 'эквайринг' };
 
@@ -1695,12 +1762,12 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
             saveBtn.disabled = true;
             saveBtn.textContent = tr('Сохраняем…');
             try {
-                const { error } = await supabase.from('patients').update({
+                const { error } = await supabase.rpc('patient_card_save', { patient_id: p.id, values: {
                     notes: notesInp.value.trim(),
                     allergies: allergiesInp.value.trim(),
                     chronic_conditions: chronicInp.value.trim(),
-                }).eq('id', p.id).select().single();
-                if (error) { toast(error.message, 'fail'); saveBtn.disabled = false; saveBtn.textContent = tr('Сохранить'); return; }
+                } });
+                if (error) { toast(rpcMsg(error), 'fail'); saveBtn.disabled = false; saveBtn.textContent = tr('Сохранить'); return; }
                 toast('Сохранено');
                 close();
                 await reload();
@@ -1809,9 +1876,9 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
             const prevLabel = saveBtn.textContent;
             saveBtn.textContent = tr('Сохранение…');
             try {
-                const { error } = await supabase.from('patients').update(values).eq('id', p.id).select().single();
+                const { error } = await supabase.rpc('patient_card_save', { patient_id: p.id, values });
                 if (error) {
-                    toast(error.message, 'fail');
+                    toast(rpcMsg(error), 'fail');
                     saveBtn.disabled = false;
                     saveBtn.textContent = prevLabel;
                     return;

@@ -102,6 +102,12 @@ const tagsOf = (root, tag) => walk(root).filter((n) => n.tagName === tag);
 const findButtonByText = (root, re) => tagsOf(root, 'BUTTON').find((b) => re.test(textOf(b)));
 const roleButton = (root, key) => tagsOf(root, 'BUTTON').find((b) => b.dataset.role === key);
 const checkboxes = (root) => tagsOf(root, 'INPUT').filter((n) => n.attrs.type === 'checkbox');
+// PATIENT_TAB_ACCESS_V1 — на экране теперь ДВА рода галочек: разделы меню
+// (у каждой свой список уровня) и вкладки карты пациента (у них три галочки
+// вместо списка). Считать их одним числом больше нельзя.
+const moduleBoxes = (root) => checkboxes(root).filter((n) => n.dataset.permKey);
+const tabBoxes = (root) => checkboxes(root).filter((n) => n.dataset.ptabKey);
+const tabBoxesFor = (root, tab) => tabBoxes(root).filter((n) => n.dataset.ptabKey === tab);
 const selects = (root) => tagsOf(root, 'SELECT');
 const byClass = (root, cls) => walk(root).filter((n) => n.classList.contains(cls));
 
@@ -204,7 +210,7 @@ test('уровень доступа подписан, а заблокирова�
   const root = await render();
 
   const all = selects(root);
-  assert.strictEqual(all.length, checkboxes(root).length, 'по списку уровня на каждый раздел');
+  assert.strictEqual(all.length, moduleBoxes(root).length, 'по списку уровня на каждый раздел');
   for (const s of all) {
     const label = s.getAttribute('aria-label') || '';
     assert.ok(label.startsWith('Уровень доступа: '), 'у списка нет подписи: ' + label);
@@ -365,4 +371,114 @@ test('сбой сохранения: сообщение называет сле�
   assert.ok(String(toastMsg).includes('Проверьте связь с сервером и повторите.'), toastMsg);
   assert.ok(String(toastMsg).includes('disk I/O error'), 'причина сервера не проглочена');
   assert.strictEqual(findButtonByText(root, /Сохранить роль/).disabled, false, 'кнопка разблокирована');
+});
+
+// ---------------------------------------------------------------------------
+// PATIENT_TAB_ACCESS_V1 — вкладки карты пациента в том же экране.
+//
+// Владелец: «we need to add a patients card tabs to the view/edit/delete
+// option. the informations about the patients are available for anyone who has
+// access to the patients section». Проверяется ровно то, чем это могло бы
+// навредить: что права появились там, где их настраивают; что первое же
+// сохранение НИЧЕГО не отнимает; что галочка не обещает права, которого нет; и
+// что сохранение роли не стирает настройку, сделанную не здесь.
+// ---------------------------------------------------------------------------
+
+test('вкладки карты пациента настраиваются здесь же — по одной строке на вкладку', async () => {
+  resetServer();
+  const root = await render();
+  const text = textOf(root);
+  assert.ok(text.includes('Карта пациента — вкладки'), 'группы вкладок на экране нет');
+  for (const tab of ['Услуги', 'Лаборатория', 'Документы', 'Счёт', 'Визиты', 'Деталь']) {
+    assert.ok(text.includes(tab), 'вкладку «' + tab + '» нельзя выдать роли');
+  }
+  assert.ok(tabBoxes(root).length > 0, 'у вкладок нет галочек');
+  for (const cb of tabBoxes(root)) {
+    const label = cb.getAttribute('aria-label') || '';
+    assert.ok(/^(Вкладка видна|Изменение на вкладке|Удаление на вкладке): /.test(label), 'у галочки нет подписи: ' + label);
+  }
+});
+
+test('удаление предлагается ТОЛЬКО там, где оно есть: «Счёт» и «Лаборатория» — просмотр', async () => {
+  resetServer();
+  const root = await render();
+  const kinds = (tab) => tabBoxesFor(root, tab).map((n) => (n.getAttribute('aria-label') || '').split(':')[0]);
+  assert.deepEqual(kinds('services'), ['Вкладка видна', 'Изменение на вкладке', 'Удаление на вкладке']);
+  assert.deepEqual(kinds('docs'),     ['Вкладка видна', 'Изменение на вкладке', 'Удаление на вкладке']);
+  assert.deepEqual(kinds('billing'),  ['Вкладка видна'], '«Счёт» не должен обещать правку и удаление');
+  assert.deepEqual(kinds('labs'),     ['Вкладка видна'], 'результаты вносит раздел «Лаборатория»');
+  assert.deepEqual(kinds('visits'),   ['Вкладка видна', 'Изменение на вкладке'], 'удаления визита в карте нет');
+  assert.deepEqual(kinds('details'),  ['Вкладка видна', 'Изменение на вкладке'], 'удаление пациента — в «Настройки → Пациенты»');
+});
+
+test('роль без настроенных вкладок: всё отмечено, и сохранение НИЧЕГО не отнимает', async () => {
+  resetServer();
+  const root = await render();
+  // registrar в SAVED не имеет patient_tabs вовсе — это «как в клинике сегодня»
+  for (const cb of tabBoxes(root)) {
+    assert.equal(cb.checked, true, 'ненастроенная вкладка нарисована ограниченной: ' + cb.getAttribute('aria-label'));
+  }
+  findButtonByText(root, /Сохранить роль/).click();
+  await tick();
+  const saved = JSON.parse(lastUpdate.values.permissions);
+  assert.deepEqual(saved.patient_tabs, {
+    services: 'delete', labs: 'view', docs: 'delete', billing: 'view',
+    visits: 'edit', details: 'edit', recommended: 'edit',
+  }, 'первое сохранение роли отняло право, которым клиника пользуется сегодня');
+});
+
+test('снятая галочка «Видна» закрывает вкладку и гасит остальные', async () => {
+  resetServer();
+  const root = await render();
+  const [view, edit, del] = tabBoxesFor(root, 'services');
+  view.checked = false;
+  view.dispatchEvent({ type: 'change', currentTarget: view, target: view });
+  assert.equal(edit.checked, false, 'закрытая вкладка не может остаться «редактируемой»');
+  assert.equal(del.checked, false);
+
+  findButtonByText(root, /Сохранить роль/).click();
+  await tick();
+  assert.equal(JSON.parse(lastUpdate.values.permissions).patient_tabs.services, 'none');
+});
+
+test('«Удаление» без «Редакт.» невозможно, «Редакт.» без «Видна» — тоже', async () => {
+  resetServer();
+  const root = await render();
+  const [view, edit, del] = tabBoxesFor(root, 'docs');
+  del.checked = false; edit.checked = false; view.checked = false;
+  del.checked = true;
+  del.dispatchEvent({ type: 'change', currentTarget: del, target: del });
+  assert.equal(edit.checked, true, '«Удаление» обязано включать «Редакт.»');
+  assert.equal(view.checked, true, 'и «Видна»');
+
+  edit.checked = false;
+  edit.dispatchEvent({ type: 'change', currentTarget: edit, target: edit });
+  assert.equal(del.checked, false, 'снятое «Редакт.» снимает «Удаление»');
+});
+
+test('сохранение роли НЕ стирает настройку вкладки, которой этот экран не рисует', async () => {
+  resetServer();
+  SAVED.registrar.patient_tabs = { billing: 'none', loyalty: 'none' };   // loyalty экран не рисует
+  try {
+    const root = await render();
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    const saved = JSON.parse(lastUpdate.values.permissions).patient_tabs;
+    assert.equal(saved.billing, 'none', 'закрытая вкладка осталась закрытой');
+    assert.equal(saved.loyalty, 'none', 'чужая настройка стёрта сохранением');
+  } finally {
+    delete SAVED.registrar.patient_tabs;
+  }
+});
+
+test('изменение галочки вкладки считается несохранённым — уход спрашивает', async () => {
+  resetServer();
+  const root = await render();
+  const [view] = tabBoxesFor(root, 'billing');
+  view.checked = false;
+  view.dispatchEvent({ type: 'change', currentTarget: view, target: view });
+  confirmAnswer = false;
+  roleButton(root, 'doctor').click();
+  await tick();
+  assert.equal(confirmCalls, 1, 'экран не заметил снятую галочку вкладки');
 });

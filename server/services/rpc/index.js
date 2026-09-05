@@ -49,8 +49,20 @@ import {
   branchSyncReissueKey,   // BRANCH_REISSUE_V1
 } from './branch-sync.js';   // BRANCH_SYNC_V1
 import { proceduresList, procedureAssign, procedureComplete } from './procedures.js';   // PROC_PERFORMER_V1
+import {
+  patientCard, patientCardSavePatient, patientCardAddDocument, patientCardDeleteDocument,
+  patientCardSetServiceDoctor, requireServicesEdit, requireServicesDelete,
+} from './patient-card.js';   // PATIENT_TAB_ACCESS_V1
 
 export const RPC = {
+  // PATIENT_TAB_ACCESS_V1 — карта пациента по вкладкам: одна дверь на чтение,
+  // четыре на запись. Права вкладок проверяет обработчик (rpc/patient-card.js),
+  // а не браузер: спрятанная вкладка защитой не является.
+  patient_card:             (db, args, user) => patientCard(db, args, user),
+  patient_card_save:        (db, args, user) => patientCardSavePatient(db, args, user),
+  patient_card_doc_add:     (db, args, user) => patientCardAddDocument(db, args, user),
+  patient_card_doc_delete:  (db, args, user) => patientCardDeleteDocument(db, args, user),
+  patient_card_set_doctor:  (db, args, user) => patientCardSetServiceDoctor(db, args, user),
   get_clinic_by_slug:       (db, args, user) => getClinicBySlug(db, args, user),
   callcenter_report:        (db, args, user) => callcenterReport(db, args, user),
   // CUSTDEV_V1 — обзвон пациентов после визита
@@ -68,7 +80,13 @@ export const RPC = {
   record_payment:           (db, args, user) => recordPayment(db, args, user),
   record_payment_split:     (db, args, user) => recordPaymentSplit(db, args, user),
   mark_invoice_debt:        (db, args, user) => markInvoiceDebt(db, args, user),   // DEBT_BTN_V1
-  change_unpaid_service:    (db, args, user) => changeUnpaidService(db, args, user),   // SVC_CHANGE_V1 — замена услуги + пересчёт счёта   // SPLIT_PAY_V1 — оплата двумя+ способами
+  // SVC_CHANGE_V1 — замена услуги + пересчёт счёта.
+  // PATIENT_TAB_ACCESS_V1 — обе «неоплаченные» операции зовёт РОВНО ОДИН экран,
+  // карта пациента, вкладка «Услуги» (grep по репозиторию), поэтому право
+  // вкладки проверяется здесь, перед обработчиком: замена строки — изменение,
+  // удаление строки — удаление. Сам обработчик остаётся про деньги, а не про
+  // роли, и его тесты (billing.test.js) не трогаются.
+  change_unpaid_service:    (db, args, user) => { requireServicesEdit(db, user); return changeUnpaidService(db, args, user); },   // SPLIT_PAY_V1 — оплата двумя+ способами
   refund_payment:           (db, args, user) => refundPayment(db, args, user),   // CASHIER_REFUND_V1 — возврат оплаты (отрицательный платёж)
   receive_stock:            (db, args, user) => receiveStock(db, args, user),
   dispense_item:            (db, args, user) => dispenseItem(db, args, user),
@@ -149,7 +167,7 @@ export const RPC = {
   documents_feed:            (db, args, user) => documentsFeed(db, args, user),
   // SVC_UNPAID_REMOVE_V1 — patient-card trash: drop a service line + repair
   // its UNPAID invoice (shrink or delete) in one transaction.
-  remove_unpaid_service:     (db, args, user) => removeUnpaidService(db, args, user),
+  remove_unpaid_service:     (db, args, user) => { requireServicesDelete(db, user); return removeUnpaidService(db, args, user); },   // PATIENT_TAB_ACCESS_V1 — «Услуги» → «Удаление»
 
   // DOCTOR_WORKSPACE_V1 — easymed's service-workspace RPC names (p_* args from
   // the original Postgres functions) mapped onto the local handlers above.

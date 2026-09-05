@@ -43,7 +43,8 @@ import { h, Icon, PageHead, clear, toast } from '../ui.js';
 // что собирается конкатенацией или ставится после отрисовки, зовёт tr() явно
 // (тот же приём, что в telephony-settings.js и locked-module.js).
 import { tr } from '../i18n.js';
-import { NAV_MODULES } from '../permissions.js';   // ROLE_KEYS_V2 — единый список выдаваемых модулей
+import { NAV_MODULES, PATIENT_TABS } from '../permissions.js';   // ROLE_KEYS_V2 — единый список выдаваемых модулей;
+                                                                  // PATIENT_TAB_ACCESS_V1 — вкладки карты пациента
 
 // ROLE_KEYS_V2 — матрица строится из permissions.js NAV_MODULES, того же
 // списка, который читают сами ворота бокового меню. Когда-то это была вторая
@@ -97,9 +98,22 @@ function askDiscard() {
 // снимком того же вида: у роли, сохранённой до появления уровней, уровня в
 // JSON нет, и наивное сравнение объявляло бы такую роль изменённой сразу
 // после загрузки — предупреждение, которое всегда врёт, перестают читать.
-function snapshot(sections, levels) {
+function snapshot(sections, levels, tabs) {
     const keys = [...sections].sort();
-    return JSON.stringify({ s: keys, l: keys.map(k => levels[k] || DEFAULT_LEVEL) });
+    const tkeys = Object.keys(tabs || {}).sort();
+    return JSON.stringify({
+        s: keys, l: keys.map(k => levels[k] || DEFAULT_LEVEL),
+        t: tkeys.map(k => k + '=' + tabs[k]),
+    });
+}
+
+// PATIENT_TAB_ACCESS_V1 — уровень вкладки из трёх галочек. Порядок важен:
+// «Удаление» подразумевает «Редакт.», «Редакт.» подразумевает «Видна».
+function tabLevelOf(st) {
+    if (!st.view) return 'none';
+    if (st.del) return 'delete';
+    if (st.edit) return 'edit';
+    return 'view';
 }
 
 export async function renderRolesEditor(container, { onBack } = {}) {
@@ -108,6 +122,8 @@ export async function renderRolesEditor(container, { onBack } = {}) {
     const state = {
         selected: ROLE_LIST[0].key,
         controls: {},     // moduleKey -> { chk, level }
+        tabControls: {},  // PATIENT_TAB_ACCESS_V1: tabId -> { view, edit, del }
+        otherTabs: {},    // настройки вкладок, которых этот экран НЕ рисует — переносим как есть
         baseline: null,   // снимок на момент загрузки; null = данных нет
         busy: false,      // идёт сохранение — форма и переключатель заперты
     };
@@ -163,12 +179,26 @@ export async function renderRolesEditor(container, { onBack } = {}) {
     }
 
     function current() {
+        const { sections, levels, patient_tabs } = collect();
+        return snapshot(sections, levels, patient_tabs);
+    }
+
+    // Одно место, где состояние экрана превращается в то, что уходит в базу —
+    // и «изменено ли», и «что сохранить» считаются по нему, иначе они разойдутся.
+    function collect() {
         const sections = [];
         const levels = {};
         for (const [key, ctl] of Object.entries(state.controls)) {
             if (ctl.chk.checked) { sections.push(key); levels[key] = ctl.level.value || DEFAULT_LEVEL; }
         }
-        return snapshot(sections, levels);
+        // ROLE_SAVE_PRESERVE_V1 — вкладки, которых этот экран не рисует,
+        // переносим как есть: иначе сохранение роли молча стирало бы настройку,
+        // сделанную где-то ещё.
+        const patient_tabs = { ...state.otherTabs };
+        for (const [tab, ctl] of Object.entries(state.tabControls)) {
+            patient_tabs[tab] = tabLevelOf({ view: ctl.view.checked, edit: !!(ctl.edit && ctl.edit.checked), del: !!(ctl.del && ctl.del.checked) });
+        }
+        return { sections, levels, patient_tabs };
     }
 
     function paintActive() {
@@ -184,6 +214,8 @@ export async function renderRolesEditor(container, { onBack } = {}) {
         state.selected = key;
         state.baseline = null;
         state.controls = {};
+        state.tabControls = {};
+        state.otherTabs = {};
         paintActive();
 
         clear(matrixWrap);
@@ -199,9 +231,10 @@ export async function renderRolesEditor(container, { onBack } = {}) {
             if (error) throw new Error(error.message || String(error));
             let p = data && data.permissions;
             if (typeof p === 'string') p = JSON.parse(p);
+            const tabs = (p && p.patient_tabs && typeof p.patient_tabs === 'object') ? p.patient_tabs : {};
             perms = (p && Array.isArray(p.sections))
-                ? { sections: p.sections, levels: p.levels || {}, configured: true }
-                : { sections: [], levels: {}, configured: false };
+                ? { sections: p.sections, levels: p.levels || {}, patient_tabs: tabs, configured: true }
+                : { sections: [], levels: {}, patient_tabs: tabs, configured: false };
         } catch (e) {
             failure = (e && e.message) || String(e);
         }
@@ -263,12 +296,78 @@ export async function renderRolesEditor(container, { onBack } = {}) {
             for (const it of grp.items) card.appendChild(moduleRow(it, granted, levels));
         }
 
+        // PATIENT_TAB_ACCESS_V1 — вкладки карты пациента. Владелец: «we need to
+        // add a patients card tabs to the view/edit/delete option». Отдельная
+        // группа В ТОМ ЖЕ экране и по тем же правилам, что разделы: ключ
+        // раздела `patients` открывает карту, а эти галочки решают, ЧТО в ней
+        // видно. Выключенная галочка — единственный способ что-то закрыть: по
+        // умолчанию открыто всё, поэтому обновление никого не отключает.
+        const tabs = perms.patient_tabs || {};
+        const rendered = new Set(PATIENT_TABS.map(t => t.id));
+        state.otherTabs = {};
+        for (const [k, v] of Object.entries(tabs)) if (!rendered.has(k)) state.otherTabs[k] = v;
+
+        card.appendChild(h('div', { class: 'roles-group' },
+            h('span', { class: 'roles-group-name' }, 'Карта пациента — вкладки'),
+            h('span', { class: 'roles-group-lvl' }, 'Что открыто'),
+        ));
+        card.appendChild(h('p', { class: 'roles-unset' },
+            'По умолчанию открыты все вкладки. Снимите галочку, чтобы закрыть вкладку этой роли.'));
+        for (const t of PATIENT_TABS) card.appendChild(tabRow(t, tabs));
+
         matrixWrap.appendChild(card);
         state.baseline = current();
     }
 
+    // Строка вкладки: «Видна» · «Редакт.» · «Удаление». Галочка рисуется
+    // ТОЛЬКО там, где право существует (permissions.js PATIENT_TABS caps):
+    // «Удаление» у «Счёта» обещало бы то, чего нет ни в карте, ни в реестре
+    // таблиц, и админ считал бы, что выдал доступ, который на деле не работает.
+    function tabRow(t, tabs) {
+        const caps = t.caps || { edit: true, del: true };
+        const lvl = tabs[t.id];
+        const box = (labelText, on, aria) => {
+            const cb = h('input', { type: 'checkbox', checked: on });
+            cb.dataset.ptabKey = t.id;
+            cb.setAttribute('aria-label', tr(aria) + ': ' + tr(t.label));
+            return { cb, el: h('label', { class: 'roles-tab-opt' }, cb, h('span', null, labelText)) };
+        };
+        // ОТСУТСТВИЕ НАСТРОЙКИ = ПОЛНЫЙ ДОСТУП, и галочки обязаны показывать
+        // именно это. Если бы «Удаление» у ненастроенной роли рисовалось
+        // снятым, ПЕРВОЕ же сохранение любой роли молча отняло бы право,
+        // которым клиника пользуется сегодня, — и никто бы не понял, почему
+        // после «просто сохранил» перестала убираться неоплаченная услуга.
+        const view = box('Видна',    lvl == null ? true : lvl !== 'none', 'Вкладка видна');
+        const edit = caps.edit ? box('Редакт.',  lvl == null ? true : (lvl === 'edit' || lvl === 'delete'), 'Изменение на вкладке') : null;
+        const del  = caps.del  ? box('Удаление', lvl == null ? true : lvl === 'delete', 'Удаление на вкладке') : null;
+
+        const sync = (src) => {
+            if (src === 'view' && !view.cb.checked) { if (edit) edit.cb.checked = false; if (del) del.cb.checked = false; }
+            if (src === 'edit') { if (edit.cb.checked) view.cb.checked = true; else if (del) del.cb.checked = false; }
+            if (src === 'del' && del.cb.checked) { if (edit) edit.cb.checked = true; view.cb.checked = true; }
+        };
+        view.cb.addEventListener('change', () => sync('view'));
+        if (edit) edit.cb.addEventListener('change', () => sync('edit'));
+        if (del)  del.cb.addEventListener('change', () => sync('del'));
+        state.tabControls[t.id] = { view: view.cb, edit: edit && edit.cb, del: del && del.cb };
+
+        const dash = (why) => h('span', { class: 'roles-why', title: why }, '—');
+        return h('div', { class: 'roles-row', dataset: { patientTab: t.id } },
+            h('span', { class: 'roles-pick-txt' },
+                h('span', { class: 'roles-mod' }, t.label),
+                t.note ? h('span', { class: 'roles-desc' }, t.note) : null,
+            ),
+            h('div', { class: 'roles-tab-opts' },
+                view.el,
+                edit ? edit.el : dash('Изменять на этой вкладке нечего'),
+                del  ? del.el  : dash('Удаления на этой вкладке не существует'),
+            ),
+        );
+    }
+
     function moduleRow(it, granted, levels) {
         const chk = h('input', { type: 'checkbox', checked: granted.has(it.key) });
+        chk.dataset.permKey = it.key;   // ROLE_KEYS_V2 — по нему тесты отличают раздел от вкладки карты
         const lvl = h('select', { class: 'roles-lvl' },
             ...ROLE_LEVELS.map(([v, l]) => h('option', { value: v, selected: (levels[it.key] || DEFAULT_LEVEL) === v }, l)));
         // Подпись у списка своя, с названием раздела: двадцать одинаковых
@@ -305,12 +404,8 @@ export async function renderRolesEditor(container, { onBack } = {}) {
 
     async function save(saveBtn) {
         if (state.busy) return;
-        const sections = [];
-        const levels = {};
-        for (const [key, ctl] of Object.entries(state.controls)) {
-            if (ctl.chk.checked) { sections.push(key); levels[key] = ctl.level.value || DEFAULT_LEVEL; }
-        }
-        const permissions = JSON.stringify({ sections, levels });
+        const { sections, levels, patient_tabs } = collect();
+        const permissions = JSON.stringify({ sections, levels, patient_tabs });
         const role = state.selected;
 
         // Кнопка остаётся активной ДО начала запроса и запирается на время
@@ -320,7 +415,7 @@ export async function renderRolesEditor(container, { onBack } = {}) {
             const { error } = await supabase.from('role_permissions')
                 .update({ permissions }).eq('role', role).select().single();
             if (error) throw new Error(error.message || String(error));
-            state.baseline = snapshot(sections, levels);
+            state.baseline = snapshot(sections, levels, patient_tabs);
             toast(tr('Права сохранены — сотрудники увидят их при следующем входе.') + ' · ' + tr(roleLabel(role)), 'ok');
         } catch (e) {
             // В сообщении есть следующий шаг, а не только беда.
@@ -346,6 +441,12 @@ export async function renderRolesEditor(container, { onBack } = {}) {
             ctl.chk.disabled = on;
             // Уровень запирается и по своему обычному правилу — «раздел не отмечен».
             ctl.level.disabled = on || !ctl.chk.checked;
+        }
+        // PATIENT_TAB_ACCESS_V1 — галочки вкладок по той же причине.
+        for (const ctl of Object.values(state.tabControls)) {
+            ctl.view.disabled = on;
+            if (ctl.edit) ctl.edit.disabled = on;
+            if (ctl.del)  ctl.del.disabled = on;
         }
         matrixWrap.setAttribute('aria-busy', on ? 'true' : 'false');
     }

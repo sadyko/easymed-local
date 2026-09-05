@@ -2023,7 +2023,7 @@ function sectionPicker(v) {
     const levelFor = (key) => allowed.has(key) ? (levels[key] || 'editor') : 'none';
 
     const groups = permissionGroups();
-    groups.push({ group: 'Карта пациента — вкладки', patientTabs: true, items: PATIENT_TABS.map(t => ({ key: t.id, label: t.label })) });
+    groups.push({ group: 'Карта пациента — вкладки', patientTabs: true, items: PATIENT_TABS.map(t => ({ key: t.id, label: t.label, caps: t.caps, note: t.note })) });
 
     const rail = h('div', { style: { flex: '0 0 252px', borderRight: '1px solid var(--ink-100)', overflowY: 'auto', maxHeight: 'min(64vh, 560px)', padding: '4px' } });
     const panesWrap = h('div', { style: { flex: 1, overflowY: 'auto', maxHeight: 'min(64vh, 560px)', padding: '8px 12px 12px 18px' } });
@@ -2055,21 +2055,36 @@ function sectionPicker(v) {
         return h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 96px 96px 104px', alignItems: 'center', gap: '8px', padding: '9px 6px', borderTop: '1px solid var(--ink-100)' } },
             labelEl, read.el, edit.el, del.el);
     }
+    // PATIENT_TAB_ACCESS_V1 — «Редакт.» и «Удаление» рисуются ТОЛЬКО там, где им
+    // есть что разрешать (permissions.js PATIENT_TABS caps). У «Счёта» удаления
+    // нет нигде — ни в карте, ни в реестре таблиц (invoices/payments: delete
+    // roles: []), и галочка обещала бы право, которого не существует: админ
+    // считал бы, что выдал доступ, а он бы не работал. Вместо галочки — прочерк
+    // с пояснением, чтобы отсутствие права читалось как решение, а не как сбой.
     function tabRow(it) {
+        const caps = it.caps || { edit: true, del: true };
         const lvl = ptabs[it.key];
         const read = chk('Видна', lvl == null ? true : lvl !== 'none', sync);
-        const edit = chk('Редакт.', lvl == null ? true : (lvl === 'edit' || lvl === 'delete'), sync);
-        const del  = chk('Удаление', lvl === 'delete', sync);
+        const edit = caps.edit ? chk('Редакт.', lvl == null ? true : (lvl === 'edit' || lvl === 'delete'), sync) : null;
+        // отсутствие настройки = полный доступ: снятая по умолчанию галочка
+        // «Удаление» отняла бы право первым же сохранением роли
+        const del  = caps.del  ? chk('Удаление', lvl == null ? true : lvl === 'delete', sync) : null;
         read.cb.dataset.ptabKey = it.key; read.cb.dataset.ptabLvl = 'view';
-        edit.cb.dataset.ptabKey = it.key; edit.cb.dataset.ptabLvl = 'edit';
-        del.cb.dataset.ptabKey  = it.key; del.cb.dataset.ptabLvl  = 'delete';
+        if (edit) { edit.cb.dataset.ptabKey = it.key; edit.cb.dataset.ptabLvl = 'edit'; }
+        if (del)  { del.cb.dataset.ptabKey  = it.key; del.cb.dataset.ptabLvl  = 'delete'; }
         function sync(src) {
-            if (src === read.cb && !read.cb.checked) { edit.cb.checked = false; del.cb.checked = false; }
-            if (src === edit.cb) { if (edit.cb.checked) read.cb.checked = true; else del.cb.checked = false; }
-            if (src === del.cb && del.cb.checked) { edit.cb.checked = true; read.cb.checked = true; }
+            if (src === read.cb && !read.cb.checked) { if (edit) edit.cb.checked = false; if (del) del.cb.checked = false; }
+            if (edit && src === edit.cb) { if (edit.cb.checked) read.cb.checked = true; else if (del) del.cb.checked = false; }
+            if (del && src === del.cb && del.cb.checked) { if (edit) edit.cb.checked = true; read.cb.checked = true; }
         }
+        const dash = (title) => h('span', { class: 'muted', title, style: { fontSize: '12.5px' } }, '—');
         return h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 96px 96px 104px', alignItems: 'center', gap: '8px', padding: '9px 6px', borderTop: '1px solid var(--ink-100)' } },
-            h('span', { style: { fontSize: '13.5px', color: 'var(--ink-800)' } }, it.label), read.el, edit.el, del.el);
+            h('span', null,
+                h('span', { style: { fontSize: '13.5px', color: 'var(--ink-800)' } }, it.label),
+                it.note ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, it.note) : null),
+            read.el,
+            edit ? edit.el : dash('Изменять на этой вкладке нечего'),
+            del  ? del.el  : dash('Удаления на этой вкладке не существует'));
     }
     function select(gi) {
         for (const b of rail.querySelectorAll('[data-rail-idx]')) b.classList.toggle('active', b.dataset.railIdx === String(gi));

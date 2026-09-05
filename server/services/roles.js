@@ -94,3 +94,115 @@ export function canEditSection(db, user, key) {
   const lvl = sectionLevel(db, user, key);
   return lvl === 'editor' || lvl === 'admin';
 }
+
+// ---------------------------------------------------------------------------
+// PATIENT_TAB_ACCESS_V1 — ВКЛАДКИ КАРТЫ ПАЦИЕНТА как отдельные права.
+//
+// Жалоба владельца дословно: «the informations about the patients are available
+// for anyone who has access to the patients section». Так и было: один ключ
+// `patients` открывал ВСЮ карту — услуги, анализы, документы, счета, визиты и
+// анкету. Регистратуре нужны визиты и услуги, лаборанту — анализы, и никому из
+// них не нужны деньги пациента.
+//
+// Хранится ТАМ ЖЕ, где остальные права роли, и в том же JSON:
+//   role_permissions.permissions = { sections:[…], levels:{…}, patient_tabs:{…} }
+// Значение вкладки — 'none' | 'view' | 'edit' | 'delete', то есть ровно
+// «просмотр / изменение / удаление» из просьбы владельца.
+//
+// ОТСУТСТВИЕ КЛЮЧА = ПОЛНЫЙ ДОСТУП. Это не небрежность, а условие обновления:
+// ни в одном сеяном role_permissions (миграции 013/059/091) нет patient_tabs,
+// поэтому в день установки каждая роль видит РОВНО то, что видела вчера, и
+// владелец ЗАКРЫВАЕТ вкладки осознанно, а не обнаруживает клинику без доступа.
+// Тот же выбор сделан на клиенте (permissions.js canViewPatientTab).
+//
+// НЕСКОЛЬКО РОЛЕЙ — САМАЯ ЩЕДРАЯ. Как и sectionLevel выше: «Дополнительные
+// роли» ДОБАВЛЯЮТ права, а не отнимают. Роль без строки в role_permissions
+// вкладок не ограничивает (её отказ — на уровне раздела `patients`, выше).
+// ---------------------------------------------------------------------------
+
+// Вкладки карты — ТОТ ЖЕ список и ТЕ ЖЕ id, что в views/patient-card.js TABS.
+// Держится синхронно тестом (server/db/migrations/103.test.js).
+export const PATIENT_CARD_TABS = Object.freeze(['services', 'labs', 'docs', 'billing', 'visits', 'details']);
+
+// ЧТО НА ВКЛАДКЕ ВООБЩЕ МОЖНО СДЕЛАТЬ. Право, которого не существует, выдавать
+// нельзя: галочка «Удаление» у «Счёта» обещала бы то, чего нет ни в карте, ни в
+// реестре таблиц (invoices/invoice_items/payments: delete roles: [] — счета
+// только аннулируются кассой), и читалась бы как разрешение, которое «почему-то
+// не работает».
+export const PATIENT_TAB_CAPS = Object.freeze({
+  // сменить врача в строке, заменить услугу; удалить — только НЕОПЛАЧЕННУЮ строку
+  services: Object.freeze({ edit: true,  del: true }),
+  // результаты вносит и правит раздел «Лаборатория» (lab_results: insert/update — admin+lab)
+  labs:     Object.freeze({ edit: false, del: false }),
+  // загрузить файл / удалить документ (visit_documents: insert+delete)
+  docs:     Object.freeze({ edit: true,  del: true }),
+  // деньги пишут ТОЛЬКО RPC кассы; удаления счёта не существует нигде
+  billing:  Object.freeze({ edit: false, del: false }),
+  // записать визит; УДАЛЕНИЯ визита в карте нет (оно живёт у администратора)
+  visits:   Object.freeze({ edit: true,  del: false }),
+  // правка анкеты и отметок; удаление пациента — «Настройки → Пациенты», не карта
+  details:  Object.freeze({ edit: true,  del: false }),
+});
+
+// PATIENT_TAB_PERMS_V1 звал вкладку «Деталь» ключом `overview`, а карта зовёт её
+// `details` (views/patient-card.js). Псевдоним читается и после переименования
+// (миграция 103), потому что кабинет врача спрашивает старое имя.
+const PATIENT_TAB_ALIASES = Object.freeze({ overview: 'details' });
+
+const TAB_RANK = { none: 0, view: 1, edit: 2, delete: 3 };
+const RANK_TAB = ['none', 'view', 'edit', 'delete'];
+
+export function normalizePatientTab(tab) {
+  const t = String(tab == null ? '' : tab).trim();
+  return PATIENT_TAB_ALIASES[t] || t;
+}
+
+// Потолок вкладки: ранг, выше которого право просто не существует.
+function tabCeiling(tab) {
+  const caps = PATIENT_TAB_CAPS[tab];
+  if (!caps) return 3;            // не вкладка карты (ключи кабинета врача) — не ограничиваем
+  if (caps.del) return 3;
+  return caps.edit ? 2 : 1;
+}
+
+/**
+ * Уровень доступа роли к вкладке карты пациента.
+ * @returns 'none' | 'view' | 'edit' | 'delete'
+ */
+export function patientTabLevel(db, user, tab) {
+  const key = normalizePatientTab(tab);
+  const roles = effectiveRoles(user);
+  if (!roles.length) return 'none';
+
+  const ceiling = tabCeiling(key);
+  let best = 0;
+  for (const role of roles) {
+    let row;
+    try { row = db.prepare('SELECT permissions FROM role_permissions WHERE role = ?').get(role); }
+    catch { row = null; }
+
+    let perms = null;
+    if (row && row.permissions) { try { perms = JSON.parse(row.permissions); } catch { perms = null; } }
+    const tabs = (perms && perms.patient_tabs && typeof perms.patient_tabs === 'object') ? perms.patient_tabs : {};
+
+    // Явное значение под новым именем, иначе под старым, иначе — не ограничено.
+    let raw = Object.prototype.hasOwnProperty.call(tabs, key) ? tabs[key] : undefined;
+    if (raw === undefined) {
+      for (const [legacy, canon] of Object.entries(PATIENT_TAB_ALIASES)) {
+        if (canon === key && Object.prototype.hasOwnProperty.call(tabs, legacy)) { raw = tabs[legacy]; break; }
+      }
+    }
+    // SERVICES_TAB_V1 — «Услуги» отделились от «Визитов»: настройка, сохранённая
+    // до разделения, наследует ограничение визитов (то же правило на клиенте).
+    if (raw === undefined && key === 'services' && tabs.visits === 'none') raw = 'none';
+
+    const rank = raw === undefined ? 3 : (TAB_RANK[raw] ?? 3);
+    if (rank > best) best = rank;
+    if (best >= ceiling) break;
+  }
+  return RANK_TAB[Math.min(best, ceiling)];
+}
+
+export function canViewPatientTab(db, user, tab)   { return patientTabLevel(db, user, tab) !== 'none'; }
+export function canEditPatientTab(db, user, tab)   { const l = patientTabLevel(db, user, tab); return l === 'edit' || l === 'delete'; }
+export function canDeletePatientTab(db, user, tab) { return patientTabLevel(db, user, tab) === 'delete'; }
