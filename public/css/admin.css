@@ -113,6 +113,15 @@
     --sidebar-w: 248px;
     --topbar-h: 56px;
 
+    /* SIDEBAR_SEAMLESS_V1 (2026-09-05) — отступ пункта меню от краёв колонки.
+       ОДНО число, потому что от него зависят три вещи, которые раньше жили
+       порознь и потому разъезжались: поля самой «таблетки» (.nav-item),
+       отступ заголовка раздела («КЛИНИКА») и поля свёрнутой рейки. Заголовок
+       считается как calc(--nav-gutter + 12px), где 12px — собственный
+       горизонтальный padding пункта: так надпись раздела встаёт ровно над
+       иконкой пунктов под ней, а не «примерно там же». */
+    --nav-gutter: 8px;
+
     /* MOTION_TOKENS_V1 (2026-09-05) — the app's motion vocabulary.
        Before this there were 79 hand-written `transition` values across the
        stylesheets, no two screens agreeing on how long anything takes; the
@@ -202,9 +211,21 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 .app { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); min-height: 100vh; }
 
 /* Sidebar */
+/* SIDEBAR_SEAMLESS_V1 (2026-09-05, owner: «make a blank left panel, but
+   seamless») — колонка меню перестала быть ОТДЕЛЬНОЙ ПОВЕРХНОСТЬЮ. Панелью её
+   делали ровно две строки, и обе убраны:
+     background: var(--white)               — своя подложка, светлее страницы;
+     border-right: 1px solid var(--ink-100) — шов между колонкой и содержимым.
+   (Тени у неё не было; внутренние линейки — .sidebar-brand border-bottom —
+   сняты там же.) Теперь колонка прозрачна и лежит на том же грунте
+   var(--ink-50), что и страница: единственное залитое пятно в меню — выбранный
+   пункт, как в образце.
+   Два региона всё равно читаются раздельно, но держит их теперь СОДЕРЖИМОЕ, а
+   не линия: у правой колонки своя белая шапка .appbar с нижней линейкой и
+   белые карточки .card с рамками, у левой — только текст. Вернуть границу —
+   значит вернуть шов. */
 .sidebar {
-    background: var(--white);
-    border-right: 1px solid var(--ink-100);
+    background: transparent;
     display: flex;
     flex-direction: column;
     position: sticky;
@@ -212,10 +233,11 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     height: 100vh;
     overflow: hidden;
 }
+/* Отступ 20px = --nav-gutter + 12px: знак бренда встаёт ровно над иконками
+   пунктов меню. Линейки снизу нет — см. SIDEBAR_SEAMLESS_V1 выше. */
 .sidebar-brand {
     display: flex; align-items: center; gap: 10px;
     padding: 18px 20px;
-    border-bottom: 1px solid var(--ink-100);
 }
 .brand-mark {
     width: 32px; height: 32px;
@@ -258,7 +280,10 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 .nav-section {
     width: 100%;
     display: flex; align-items: center; justify-content: space-between;
-    padding: 12px 14px 6px;
+    /* SIDEBAR_SEAMLESS_V1 — отступ ВЫВЕДЕН из отступа пункта, а не назначен
+       отдельно (было 14px против 12px у пункта — на глаз «почти», а после
+       вреза пунктов стало бы явно криво). */
+    padding: 14px calc(var(--nav-gutter) + 12px) 6px;
     margin: 0;
     background: transparent; border: 0;
     text-align: left;
@@ -285,6 +310,15 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 .nav-group.collapsed .nav-list { display: none; }
 
 .nav-list { padding: 2px 10px 6px; display: flex; flex-direction: column; gap: 1px; }
+
+/* SIDEBAR_SEAMLESS_V1 — живая разметка меню (renderSidebar) кладёт пункты в
+   .nav, у которого не было НИ padding, НИ gap: кнопки шли встык и от края до
+   края. Колонка-флекс с зазором даёт вертикальный воздух, а stretch —
+   единственный способ дать пункту горизонтальные поля и не получить
+   переполнение: width: 100% + margin вылезли бы за .sidebar-body, у которого
+   overflow-y: auto (значит и по горизонтали не visible) — и «таблетку» бы
+   подрезало. */
+.sidebar-body .nav { display: flex; flex-direction: column; gap: 4px; }
 
 /* ---- Two-level nav (Operations / Settings / Reports) ---- */
 .nav-parent { display: flex; flex-direction: column; }
@@ -373,6 +407,24 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
 }
 .nav-item:hover { background: var(--ink-50); color: var(--ink-900); }
+/* SIDEBAR_SEAMLESS_V1 — врез «таблетки» от краёв колонки. Только внутри
+   .sidebar: класс .nav-item носят ещё рейки в lab-panels.js и section-crud.js,
+   они стоят внутри карточек и полей не просят.
+   width: auto вместо 100% — обязательное дополнение к margin (см. .nav выше). */
+.sidebar .nav-item {
+    width: auto;
+    margin-left: var(--nav-gutter);
+    margin-right: var(--nav-gutter);
+}
+/* Подсветка наведения БЫЛА var(--ink-50) — ровно цвет нового грунта колонки,
+   то есть наведение перестало бы быть видно вовсе. Инвертируем как во всём
+   приложении: на сером грунте «поднятая» поверхность белая. Разница светлот та
+   же самая (1.06:1), что и у прежней пары ink-50-на-белом, — приём не стал
+   слабее, он перевернулся. Правило стоит ДО .nav-item.active, поэтому у
+   выбранного пункта заливка остаётся бирюзовой и при наведении. */
+.sidebar .nav-item:hover,
+.sidebar .nav-parent-head:hover,
+.sidebar .nav-subgroup-head:hover { background: var(--white); }
 .nav-icon {
     width: 18px; height: 18px; flex: 0 0 18px;
     color: var(--ink-400);
@@ -524,7 +576,9 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     transition: background var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out), color var(--dur-2) var(--ease-out);
 }
 .sidebar-toggle:hover {
-    background: var(--ink-100);
+    /* SIDEBAR_SEAMLESS_V1 — было ink-100 на белой колонке; на сером грунте
+       поднятая поверхность белая, как и у пунктов меню. */
+    background: var(--white);
     border-color: var(--ink-200);
     color: var(--ink-800);
 }
@@ -546,12 +600,20 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     gap: 0;
     padding-left: 0;
     padding-right: 0;
+    /* SIDEBAR_SEAMLESS_V1 — те же поля, что и в развёрнутом меню: залитая
+       кнопка, упирающаяся в оба края 68px рейки, читается как сбой вёрстки. */
+    margin-left: var(--nav-gutter);
+    margin-right: var(--nav-gutter);
 }
 .sidebar-collapsed .nav-item > span:not(.nav-icon) { display: none; }
 /* NAV_ACTIVE_FILLED_V1 — on the 68px rail the label is hidden, so the fill IS
    the only thing saying "you are here". Keep it, inset from the rail edges so
    it reads as a button rather than a full-width band. */
-.sidebar-collapsed .nav { padding-left: 10px; padding-right: 10px; }
+/* SIDEBAR_SEAMLESS_V1 — врез рейки задаёт теперь поле пункта (см.
+   .sidebar-collapsed .nav-item выше), а не padding контейнера: иначе 10px
+   контейнера сложились бы с 8px поля и на 68px рейке от «таблетки» осталось бы
+   32px — уже не кнопка, а полоска. */
+.sidebar-collapsed .nav { padding-left: 0; padding-right: 0; }
 .sidebar-collapsed .nav-item.active,
 .sidebar-collapsed .nav-item.active:hover {
     background: var(--primary-600);
@@ -2304,7 +2366,9 @@ textarea:focus-visible,
 }
 
 /* Sidebar top item (Dashboard) — slightly more emphasis */
-.nav-list-top { padding: 12px 10px 6px; }
+/* SIDEBAR_SEAMLESS_V1 — боковой padding убран: врез даёт поле самого пункта,
+   иначе второй скин встал бы на 18px от края против 8px у остальных. */
+.nav-list-top { padding: 12px 0 6px; }
 .nav-list-top .nav-item {
     padding: 11px 12px;
     font-size: 13.5px;

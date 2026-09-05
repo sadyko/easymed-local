@@ -15,6 +15,12 @@
 //   2. Штриховка «врач сейчас не принимает» (.rcal-slot.off): --ink-25 по
 //      --ink-50 = 1.04:1. На мониторе регистратуры нерабочего часа не видно
 //      вовсе, и узнают о нём кликом и отказом.
+//   3. SIDEBAR_SEAMLESS_V1 (2026-09-05) — колонка меню лишилась собственной
+//      подложки и стала прозрачной: теперь она лежит на грунте страницы
+//      var(--ink-50), а не на белом. Каждое число из пунктов 1-2 считалось
+//      «против белой колонки», и молча поехало бы вместе с грунтом, поэтому
+//      грунт здесь больше НЕ КОНСТАНТА — он читается из CSS (sidebarGround()
+//      ниже) и заодно доказывает, что подложки и шва действительно нет.
 //
 // Порог: 3:1 — WCAG 2.2, 1.4.11 «Non-text Contrast», нижняя граница для
 // элемента, который что-то сообщает не текстом. Для текста внутри таблетки —
@@ -31,7 +37,13 @@ const CSS_DIR = path.resolve(HERE, '..', '..', '..', 'css');
 // Переводы строк нормализуем: в репозитории core.autocrlf=true, а селекторы
 // ниже ищутся вместе с переносом внутри — на свежем клоне под Windows поиск по
 // '\n' иначе не нашёл бы ничего и тест «прошёл» бы, ничего не проверив.
-const readCss = (f) => fs.readFileSync(path.join(CSS_DIR, f), 'utf8').replace(/\r\n/g, '\n');
+// Комментарии вырезаем: rule() ниже режет тело правила по ';' и берёт всё до
+// первого ':' как имя свойства — комментарий ВНУТРИ блока (а их в этих файлах
+// много, объяснения живут рядом с правилом) приклеился бы к имени, и свойство
+// просто «пропало» бы, а тест «прошёл» бы, ничего не проверив.
+const readCss = (f) => fs.readFileSync(path.join(CSS_DIR, f), 'utf8')
+    .replace(/\r\n/g, '\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
 
 const MAIN = readCss('admin.css');
 const VIEWS = readCss('admin-views.css');
@@ -107,6 +119,45 @@ function rule(css, selector) {
     return out;
 }
 
+/** Числовое значение токена-длины из :root ('--nav-gutter' → 8). */
+function lengthToken(name) {
+    const root = MAIN.slice(MAIN.indexOf(':root'), MAIN.indexOf('}', MAIN.indexOf(':root')));
+    const m = root.match(new RegExp(name + '\\s*:\\s*(-?[0-9.]+)px\\s*;'));
+    assert.ok(m, 'токен ' + name + ' пропал из :root');
+    return parseFloat(m[1]);
+}
+
+/** Пиксели из значения: '8px', голый '0' или 'var(--nav-gutter)'. */
+function px(value) {
+    const v = String(value).trim();
+    const t = v.match(/^var\((--[a-z0-9-]+)\)$/);
+    if (t) return lengthToken(t[1]);
+    if (v === '0') return 0;
+    const m = v.match(/^(-?[0-9.]+)px$/);
+    assert.ok(m, 'не длина в px: ' + v);
+    return parseFloat(m[1]);
+}
+
+/**
+ * Грунт, на котором лежит колонка меню, — и заодно проверка, что колонка
+ * перестала быть панелью. Если кто-то вернёт ей фон или правую границу, тест
+ * упадёт ЗДЕСЬ, до всякой арифметики: дальше считать было бы уже не то.
+ */
+function sidebarGround() {
+    const side = rule(MAIN, '.sidebar');
+    const bg = side.background;
+    assert.ok(!bg || bg === 'transparent' || bg === 'none',
+        'у колонки меню снова своя подложка (' + bg + ') — это и есть панель, шов вернулся');
+    for (const k of Object.keys(side)) {
+        assert.ok(!/^border(-right)?$/.test(k) || /^(0|none)/.test(side[k]),
+            'у колонки меню снова граница (' + k + ': ' + side[k] + ') — это шов');
+        assert.ok(k !== 'box-shadow' || /^none/.test(side[k]),
+            'у колонки меню снова тень — она опять читается отдельной поверхностью');
+    }
+    // Прозрачная колонка показывает грунт страницы — его и возвращаем.
+    return rule(MAIN, 'body.admin').background;
+}
+
 test('санитарная проверка самого счётчика контраста', () => {
     assert.strictEqual(ratio('#000000', '#ffffff'), 21);
     assert.strictEqual(ratio('#ffffff', '#ffffff'), 1);
@@ -134,13 +185,30 @@ test('красный счётчик виден на ВЫБРАННОМ пунк�
     assert.ok(r > g + 60 && r > b + 60, `цвет тревоги ${red} перестал быть красным`);
 });
 
-test('красный счётчик виден и на НЕвыбранном пункте — там он на белой колонке', () => {
+test('красный счётчик виден и на НЕвыбранном пункте — там он прямо на грунте колонки', () => {
     const alert = rule(VIEWS, '.sidebar-body .nav-item .nav-badge.alert');
-    const sidebar = '#ffffff';
+    // Не '#ffffff': колонка прозрачна (SIDEBAR_SEAMLESS_V1), под ней грунт
+    // страницы. Читаем его из CSS, чтобы число не разошлось с экраном.
+    const sidebar = sidebarGround();
     const pill = ratio(alert.background, sidebar);
-    assert.ok(pill >= 3, `таблетка на белой колонке: ${pill}:1 при норме 3:1`);
+    assert.ok(pill >= 3, `таблетка на грунте колонки: ${pill}:1 при норме 3:1`);
     const digits = ratio(alert.color, alert.background);
     assert.ok(digits >= 4.5, `цифра в таблетке: ${digits}:1 при норме 4.5:1`);
+});
+
+test('обычный счётчик пережил смену грунта — и как форма, и как цифра', () => {
+    // Он был ink-100 на белой колонке; на грунте ink-50 та же таблетка дала бы
+    // 1.09:1, то есть перестала бы быть таблеткой. Цифру держит её
+    // собственный контраст, но чип обязан читаться чипом.
+    const chip = rule(VIEWS, '.sidebar-body .nav-item .nav-badge');
+    const ground = sidebarGround();
+    const digits = ratio(chip.color, chip.background);
+    assert.ok(digits >= 4.5, `цифра счётчика: ${digits}:1 при норме 4.5:1`);
+    // Цифра читается и без таблетки — на случай, если чип кто-то ослабит.
+    const digitsOnGround = ratio(chip.color, ground);
+    assert.ok(digitsOnGround >= 4.5, `цифра прямо на грунте: ${digitsOnGround}:1`);
+    const shape = ratio(chip.background, ground);
+    assert.ok(shape > 1.2, `таблетка счётчика на грунте: ${shape}:1 — формы не видно`);
 });
 
 test('на свёрнутой колонке точка тревоги видна — цифры там нет, точка и есть всё сообщение', () => {
@@ -163,12 +231,108 @@ test('на свёрнутой колонке точка тревоги видн�
     assert.ok(ringVsFilled >= 3, `кольцо на залитом пункте: ${ringVsFilled}:1 при норме 3:1`);
     const coreVsRing = ratio(alert.background, ringColor[1]);
     assert.ok(coreVsRing >= 3, `ядро точки на своём кольце: ${coreVsRing}:1 при норме 3:1`);
-    // На белой колонке кольцо не видно вовсе — там всё держит само ядро.
-    const coreVsWhite = ratio(alert.background, '#ffffff');
-    assert.ok(coreVsWhite >= 3, `ядро точки на белой колонке: ${coreVsWhite}:1 при норме 3:1`);
+    // На невыбранном пункте кольца не видно вовсе — там всё держит само ядро.
+    // Грунт читаем из CSS: он больше не белый (SIDEBAR_SEAMLESS_V1).
+    const coreVsGround = ratio(alert.background, sidebarGround());
+    assert.ok(coreVsGround >= 3, `ядро точки на грунте колонки: ${coreVsGround}:1 при норме 3:1`);
 
     // Кольцо съедает точку: 8px под 2px кольцом — это уже крапинка.
     assert.ok(parseFloat(alert.width) >= 10, `точка ${alert.width} под кольцом 2px слишком мелкая`);
+});
+
+// --- 3. колонка меню без шва ------------------------------------------------
+
+test('колонка меню больше не отдельная поверхность — ни подложки, ни границы, ни тени', () => {
+    // sidebarGround() и есть эта проверка; здесь она названа вслух, чтобы при
+    // падении было видно, ЧТО именно вернули.
+    const ground = sidebarGround();
+    assert.strictEqual(hex(ground), hex('var(--ink-50)'),
+        'грунт страницы сменился — все числа ниже считаются против него');
+    // Внутренние линейки — тоже часть «панели»: шапка колонки отделялась от
+    // меню чертой ровно того же цвета, что и правая граница.
+    const brand = rule(MAIN, '.sidebar-brand');
+    assert.ok(!brand['border-bottom'], 'под знаком бренда снова линейка — колонка опять с собственной шапкой');
+});
+
+test('выбранный пункт виден на новом грунте — и как кнопка, и как надпись', () => {
+    const fill = rule(MAIN, '.nav-item.active,\n.nav-item.active:hover');
+    const ground = sidebarGround();
+
+    // Заливка против грунта. Норма 3:1 — WCAG 1.4.11: «вы здесь» сообщается
+    // формой и цветом, а не текстом. Против белой колонки было 5.35:1.
+    const button = ratio(fill.background, ground);
+    assert.ok(button >= 3, `залитый пункт на грунте колонки: ${button}:1 при норме 3:1`);
+
+    // Надпись на заливке — обычный текст, 4.5:1.
+    const label = ratio(fill.color, fill.background);
+    assert.ok(label >= 4.5, `надпись выбранного пункта: ${label}:1 при норме 4.5:1`);
+
+    // Замок «модуль не куплен» на той же заливке: не текст, 3:1.
+    const lock = rule(MAIN, '.sidebar .nav-item.active .nav-lock-icon');
+    const lockRatio = ratio(lock.color, fill.background);
+    assert.ok(lockRatio >= 3, `замок на залитом пункте: ${lockRatio}:1 при норме 3:1`);
+
+    // Контур фокуса на заливке: белый по бирюзовому.
+    const focus = rule(MAIN, '.nav-item.active:focus-visible');
+    const ring = focus.outline.match(/#[0-9a-fA-F]{3,8}|var\(--[a-z0-9-]+\)/);
+    assert.ok(ring, `не разобрать контур фокуса: ${focus.outline}`);
+    const focusRatio = ratio(ring[0], fill.background);
+    assert.ok(focusRatio >= 3, `контур фокуса на заливке: ${focusRatio}:1 при норме 3:1`);
+});
+
+test('у пункта меню есть горизонтальные поля — и от них ничего не подрезает', () => {
+    const item = rule(MAIN, '.sidebar .nav-item');
+    const left = px(item['margin-left']);
+    const right = px(item['margin-right']);
+    assert.ok(left > 0 && right > 0,
+        `пункт меню снова от края до края (поля ${left}/${right}px) — заливка упирается в стенки колонки`);
+    assert.strictEqual(left, right, 'поля пункта несимметричны');
+
+    // Поля БЕЗ этой строки дают переполнение: width: 100% считается от ширины
+    // контейнера, а margin прибавляется сверху — «таблетку» подрезало бы
+    // (.sidebar-body: overflow-y: auto, значит по горизонтали тоже не visible).
+    assert.strictEqual(item.width, 'auto',
+        'у пункта с полями осталась width: 100% — длинное меню поедет горизонтально');
+    const nav = rule(MAIN, '.sidebar-body .nav');
+    assert.strictEqual(nav.display, 'flex', 'контейнер пунктов не флекс — stretch не сработает и width: auto сожмёт кнопку по тексту');
+    assert.ok(parseFloat(nav.gap) > 0, 'между пунктами нет вертикального зазора');
+});
+
+test('заголовок раздела и пункт меню выведены из одного числа', () => {
+    // Раньше 14px у заголовка против 12px у пункта — «почти». После вреза
+    // пунктов такое «почти» становится видно, поэтому отступ заголовка теперь
+    // ВЫЧИСЛЯЕТСЯ: врез + собственный padding пункта.
+    const gutter = lengthToken('--nav-gutter');
+    const item = rule(MAIN, '.nav-item');
+    const pad = parseFloat(item.padding.split(/\s+/)[1]);
+    const section = rule(MAIN, '.nav-section');
+    const m = section.padding.match(/calc\(var\(--nav-gutter\)\s*\+\s*([0-9.]+)px\)/);
+    assert.ok(m, `отступ заголовка раздела снова задан отдельно: ${section.padding}`);
+    assert.strictEqual(parseFloat(m[1]), pad,
+        'слагаемое в заголовке разошлось с padding пункта — надпись раздела съедет с иконок');
+    assert.ok(gutter > 0);
+});
+
+test('на свёрнутой рейке заливка тоже не упирается в края', () => {
+    const item = rule(MAIN, '.sidebar-collapsed .nav-item');
+    const left = px(item['margin-left']);
+    const right = px(item['margin-right']);
+    assert.ok(left > 0 && right > 0,
+        `на 68px рейке залитая кнопка снова во всю ширину (поля ${left}/${right}px) — читается как сбой вёрстки`);
+
+    // Врез задаёт ТОЛЬКО поле пункта. Если вернуть padding контейнеру, оба
+    // отступа сложатся и от кнопки на рейке останется полоска.
+    const nav = rule(MAIN, '.sidebar-collapsed .nav');
+    assert.strictEqual(px(nav['padding-left']), 0, 'padding рейки сложится с полем пункта — кнопка станет полоской');
+    assert.strictEqual(px(nav['padding-right']), 0, 'padding рейки сложится с полем пункта — кнопка станет полоской');
+
+    // Проверяем итог в пикселях, а не «правило есть»: 68px рейка минус два поля.
+    const rail = lengthToken('--sidebar-w');   // 248 в :root; ширину рейки берём из её собственного правила
+    const collapsed = rule(MAIN, '.sidebar-collapsed');
+    const railW = px(collapsed['--sidebar-w']);
+    const pill = railW - left - right;
+    assert.ok(pill >= 40, `кнопка на рейке ${pill}px при рейке ${railW}px — слишком узкая для иконки 18px с воздухом`);
+    assert.ok(rail > railW);
 });
 
 // --- 2. нерабочие часы -----------------------------------------------------

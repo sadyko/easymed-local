@@ -3301,7 +3301,11 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .sidebar-body .nav-item .nav-badge {
     margin-left: auto;
     flex: 0 0 auto;
-    background: var(--ink-100, #eef1f2);
+    /* SIDEBAR_SEAMLESS_V1 — грунт колонки стал var(--ink-50), и таблетка
+       ink-100 на нём давала 1.09:1, то есть исчезала как форма. Цифру держит
+       её собственный контраст (ink-600 на ink-200 — 7.4:1), но чип должен
+       читаться чипом: ink-200 даёт 1.30:1 к грунту. */
+    background: var(--ink-200, #d3d9de);
     color: var(--ink-600, #475569);
     font-size: 12.5px;
     font-weight: 700;
