@@ -37,6 +37,12 @@
 // Состояния и подписи берутся из ОДНОГО источника (shared/admission-status.js),
 // который пишет сервер: расходиться экрану и базе в том, что значит «лежит»,
 // нельзя (см. шапку того файла).
+//
+// ─── INPATIENT_ONE_SECTION_V1 (2026-09-05) — И ХОСТ РАЗДЕЛА ТОЖЕ ЗДЕСЬ ───────
+// Владелец: «the stationary requests: #admissions / #beds — i guess it should
+// be in one section». Ниже, после очередей, живёт renderInpatient() — полоса
+// вкладок раздела «Стационар» и три её лица. Почему именно три и почему хост
+// лежит в этом файле — в шапке над ним.
 
 import { supabase } from '../../supabase.js';
 import { IN_BED_STATUSES, OPEN_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
@@ -45,6 +51,13 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { isModuleAllowed } from '../permissions.js';
 import { openAdmissionOrderModal, openAdmissionBedPicker, openAdmissionCancelModal, openAdmissionCard,
          openAdmissionReviewModal, openAdmissionAttendingModal, goToMarSheet } from './admission-modal.js?v=inp5';
+// Те же адреса модулей, что у admin.js: одна строка импорта — один экземпляр
+// модуля (у ward-beds.js есть свой `state`, и второй экземпляр развёл бы
+// фильтры доски на две копии).
+import { renderWardBeds, admissionsHistoryCard } from './ward-beds.js?v=board4';
+// MOTION_REVEAL_V1 — переход между вкладками: панель проявляется, полоса
+// вкладок возвращается в поле зрения. Общий помощник, не свой на экран.
+import { animateIn, smoothScrollTo } from '../motion.js?v=mo1';
 
 // Раздел живёт под ключом `beds` («Стационар и палаты»): окно медсестры и доска
 // коек — две стороны одной работы, и раздавать их порознь значило бы выдать
@@ -68,6 +81,16 @@ function sinceLabel(iso) {
     return trf('{n} сут назад', { n: Math.floor(hours / 24) });
 }
 
+/**
+ * Очереди смены — первая вкладка раздела «Стационар».
+ *
+ * Своя шапка у неё ОСТАЁТСЯ, хотя раздел уже назван сверху: имя из неё снимает
+ * оболочка (ONE_NAME_PER_SCREEN_V1, dedupeSectionHeading в admin.js), а
+ * подзаголовок и две кнопки — «Обновить» и «Заявка на госпитализацию» — это
+ * работа, а не украшение заголовка. Снимать шапку здесь руками значило бы
+ * заводить второй механизм против дубля рядом с тем, который уже есть и уже
+ * проверен тестом.
+ */
 export async function renderAdmissions(container, ctx = {}) {
     clear(container);
     const root = h('div', { class: 'fade-in' });
@@ -369,4 +392,207 @@ function waitingAttendingCard(list, reload, can, onNavigate) {
     return listCard(tr('Ждут лечащего врача'), 'User', list.length,
         tr('Осмотр проведён. Пока лечащий врач не назначен, назначений и стола у пациента нет.'),
         els, tr('У всех есть лечащий врач.'));
+}
+
+// ===========================================================================
+// INPATIENT_ONE_SECTION_V1 — «Стационар» ОДНИМ РАЗДЕЛОМ
+// ===========================================================================
+// Владелец (2026-09-05): «the stationary requests: #admissions / #beds — i
+// guess it should be in one section».
+//
+// Так и было: два пункта меню, «Inpatient ward» и «Ward & beds», на ОДНОМ
+// ключе прав `beds` — то есть у кого есть один, у того всегда есть и второй.
+// Два входа в одну работу, между которыми весь день ходили пешком: медсестра
+// смотрела заявку в первом, свободную койку — во втором, и возвращалась.
+// Пункт меню — это вопрос, на который раздел отвечает; здесь вопрос был один.
+//
+// ─── ПОЧЕМУ ВКЛАДОК ТРИ, А НЕ ДВЕ ───────────────────────────────────────────
+// Очевидное деление — «заявки» и «койки». Но доска коек УЖЕ носила внутри себя
+// сегментный переключатель «Койки / Госпитализации», и полоса вкладок над ним
+// дала бы два переключателя на одном экране — ровно тот дубль, который
+// владелец и просил убрать, только этажом ниже. Поэтому третье лицо поднято
+// сюда, и вкладки отвечают на три РАЗНЫХ вопроса смены:
+//
+//   «Заявки»         — кого положить, кто лежит, кого не осмотрели, у кого нет
+//                      лечащего врача. Работа, которую делают ПРЯМО СЕЙЧАС;
+//                      здесь же оформляют новую заявку. Вкладка по умолчанию.
+//   «Койки»          — коечный ФОНД: палаты, занятость, состояние койки,
+//                      деньги и переводы по конкретной койке.
+//   «Госпитализации» — ЖУРНАЛ: все, включая выписанных и отменённых, которых
+//                      на доске нет по определению.
+//
+// ─── ПОЧЕМУ ХОСТ ЛЕЖИТ В ЭТОМ ФАЙЛЕ ─────────────────────────────────────────
+// Раздел и его первая вкладка — одна и та же работа и один и тот же маршрут
+// `admissions`; отдельный файл-хост здесь означал бы третий файл, который надо
+// открыть, чтобы понять, из чего состоит «Стационар». Две другие вкладки
+// остаются своими экранами в своих файлах — хост их только зовёт.
+//
+// ─── МАРШРУТ ────────────────────────────────────────────────────────────────
+// Раздел живёт по СТАРОМУ адресу `#admissions`, а не по новому: у него уже
+// есть пункт меню, крошка, ключ прав и перевод во всех трёх языках
+// («Стационар» / «Statsionar» / «Inpatient ward»), и заводить рядом четвёртое
+// имя значило бы переводить всё это заново ради того же слова. Вкладка живёт в
+// адресе как '#admissions/beds' (договор HASH_SUBROUTE_V1, копия laboratory.js
+// и patients-hub.js): payload.sub + history.replaceState +
+// window.easymedSetTabSub, потому что адресной строки мало — следующий
+// navigate() в раздел перепишет хеш из payload панели.
+//
+// Старый `#beds` цел: оболочка (LEGACY_ROUTES в admin.js) отвечает на него
+// этим разделом, открытым на вкладке «Койки». Закладка ведёт туда же, куда
+// вела, — просто теперь рядом видно и очередь.
+//
+// ─── ПРАВА ──────────────────────────────────────────────────────────────────
+// У вкладок своего гейта нет, и это решение: три вкладки — ОДИН раздел, и
+// открыть его вправе тот, кому выдан ключ `beds` (оболочка спрашивает
+// isRouteAllowed('admissions') до нас, а permissions.js признаёт 'admissions'
+// синонимом 'beds'). Отдельный ключ вкладке значил бы, что у КАЖДОЙ настроенной
+// сегодня роли раздел молча недосчитается двух третей.
+// ---------------------------------------------------------------------------
+
+const TABS = [
+    { id: 'orders',  label: 'Заявки',         icon: 'Clock' },
+    { id: 'beds',    label: 'Койки',          icon: 'Bed'   },
+    { id: 'history', label: 'Госпитализации', icon: 'Doc'   },
+];
+const DEFAULT_TAB = 'orders';
+
+/**
+ * Хост раздела «Стационар». `ctx` — то же, что оболочка даёт любому экрану:
+ * { onNavigate, payload, tabId }. `payload.sub` называет вкладку.
+ */
+export async function renderInpatient(container, ctx = {}) {
+    clear(container);
+    const tabId = ctx.tabId || null;
+    const sub = ctx.payload && ctx.payload.sub;
+
+    const root = h('div', { class: 'fade-in' });
+    container.appendChild(root);
+
+    // Полоса вкладок — те же .reg-tabs/.reg-tab, что у «Пациентов»: один язык
+    // выделения на всю оболочку, а не свой на каждую полосу.
+    const strip = h('div', { class: 'reg-tabs', role: 'tablist', 'aria-label': tr('Стационар') });
+    const buttons = {};
+    const hosts = {};
+    for (const t of TABS) {
+        hosts[t.id] = h('div', {
+            id: 'inp-panel-' + t.id, role: 'tabpanel',
+            'aria-labelledby': 'inp-tab-' + t.id, 'data-tab-panel': t.id,
+            style: { display: 'none' },
+        });
+        buttons[t.id] = h('button', {
+            class: 'reg-tab', type: 'button', role: 'tab',
+            id: 'inp-tab-' + t.id, 'aria-controls': 'inp-panel-' + t.id,
+            'aria-selected': 'false', tabindex: '-1', 'data-tab': t.id,
+            onclick: () => { select(t.id); },
+            onkeydown: (ev) => moveByKey(ev, t.id),
+        }, Icon(t.icon, { size: 14 }), h('span', null, tr(t.label)));
+        strip.appendChild(buttons[t.id]);
+    }
+    root.appendChild(strip);
+    for (const t of TABS) root.appendChild(hosts[t.id]);
+
+    let active = TABS.some((t) => t.id === sub) ? sub : DEFAULT_TAB;
+    // Два быстрых нажатия по разным вкладкам не должны дорисовать первую поверх
+    // второй: доска и очереди грузятся запросом, и опоздавший ответ рисовал бы
+    // в панель, которую уже переключили.
+    let mountSeq = 0;
+
+    // Полоса объявлена как tablist, а в tablist по стрелкам ходят: из порядка
+    // обхода Tab вынуты все кнопки, кроме активной, и без этого обработчика до
+    // двух вкладок из трёх нельзя было бы добраться с клавиатуры вовсе.
+    function moveByKey(ev, id) {
+        const key = ev && ev.key;
+        const step = key === 'ArrowRight' ? 1 : key === 'ArrowLeft' ? -1 : 0;
+        let next = null;
+        if (step) {
+            const i = TABS.findIndex((t) => t.id === id);
+            next = TABS[(i + step + TABS.length) % TABS.length];
+        } else if (key === 'Home') next = TABS[0];
+        else if (key === 'End') next = TABS[TABS.length - 1];
+        if (!next) return;
+        if (typeof ev.preventDefault === 'function') ev.preventDefault();
+        select(next.id);
+        buttons[next.id].focus();
+    }
+
+    function paintStrip({ animate = false } = {}) {
+        for (const t of TABS) {
+            const on = t.id === active;
+            const b = buttons[t.id];
+            b.className = 'reg-tab' + (on ? ' on' : '');
+            b.setAttribute('aria-selected', on ? 'true' : 'false');
+            b.setAttribute('tabindex', on ? '0' : '-1');
+            hosts[t.id].style.display = on ? '' : 'none';
+            if (on && animate) animateIn(hosts[t.id]);
+        }
+    }
+
+    // URL отражает состояние: вкладка лежит в адресе, поэтому F5 её сохраняет,
+    // а ссылку можно отдать коллеге. replaceState, а не pushState — переход
+    // между вкладками одного раздела не новое место в истории.
+    function syncSubUrl() {
+        try {
+            const nextSub = active === DEFAULT_TAB ? null : active;
+            if (typeof history !== 'undefined' && history.replaceState) {
+                history.replaceState({ view: 'admissions', payload: nextSub ? { sub: nextSub } : null },
+                    '', '#admissions' + (nextSub ? '/' + nextSub : ''));
+            }
+            // Оболочке — тоже: адресной строки мало, потому что navigate()
+            // перепишет хеш из payload ПАНЕЛИ, когда в раздел зайдут снова.
+            if (typeof window !== 'undefined' && typeof window.easymedSetTabSub === 'function') {
+                window.easymedSetTabSub(tabId, nextSub);
+            }
+        } catch (e) {
+            // Браузер в жёстком режиме может отказать в записи истории. Вкладки
+            // продолжают работать, просто перестают быть ссылками.
+        }
+    }
+
+    // ВКЛАДКА ПЕРЕЧИТЫВАЕТСЯ ПРИ КАЖДОМ ПОКАЗЕ, а не монтируется один раз, как
+    // у «Пациентов». Довод один и он несущий: положив пациента на койку на
+    // вкладке «Заявки», человек тут же переходит на «Койки» — и обязан увидеть
+    // там ЗАНЯТУЮ койку, а не ту, что была свободна минуту назад. Сохранять
+    // здесь нечего: ни у очередей, ни у журнала нет ни поиска, ни страницы, ни
+    // наполовину введённой формы.
+    async function mount(id) {
+        const seq = ++mountSeq;
+        const host = hosts[id];
+        try {
+            if (id === 'orders') {
+                await renderAdmissions(host, { onNavigate: ctx.onNavigate });
+            } else if (id === 'beds') {
+                await renderWardBeds(host, { onNavigate: ctx.onNavigate, embedded: true });
+            } else {
+                clear(host);
+                host.appendChild(await admissionsHistoryCard());
+            }
+        } catch (e) {
+            // Вкладка обязана СМОНТИРОВАТЬСЯ в любом случае и сказать словами,
+            // что именно недоступно: пустая вкладка без объяснения читается как
+            // сломанная программа, а исключение отсюда унесло бы весь раздел.
+            if (seq !== mountSeq) return;
+            clear(host);
+            host.appendChild(h('div', { class: 'card', style: { padding: '22px' } },
+                h('div', { style: { fontSize: '15px', fontWeight: 700, color: 'var(--ink-900)', marginBottom: '6px' } },
+                    tr('Список госпитализаций не загрузился')),
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                    trf('Причина: {msg}', { msg: (e && e.message) || String(e) }))));
+        }
+    }
+
+    async function select(id, { initial = false } = {}) {
+        if (!TABS.some((t) => t.id === id)) id = DEFAULT_TAB;
+        if (!initial && id === active) return;
+        active = id;
+        paintStrip({ animate: !initial });
+        // Вкладку переключили из середины длинного списка — полоса вкладок
+        // обязана снова оказаться на глазах.
+        if (!initial) smoothScrollTo(strip, { block: 'start' });
+        if (!initial) syncSubUrl();
+        await mount(id);
+    }
+
+    await select(active, { initial: true });
+
+    return { activeTab: () => active, select };
 }

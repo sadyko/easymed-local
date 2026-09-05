@@ -13,6 +13,39 @@
 // каждого из двух мест ниже.
 // Deferred vs easymed (flagged): transfers/home-bed, per-stay service/product
 // line-items, prescriptions, monthly continuable accrual, full-screen console.
+//
+// ─── BED_BOARD_SHARED_V1 (2026-09-05) — ДОСКА КОЕК СТАЛА ОБЩИМ ЯЗЫКОМ ────────
+// Владелец: «admission request are filled with dialogue window of the
+// stationary. selecting beds or rooms like in the ui of the beds».
+//
+// До этой правки выбор койки существовал ДВАЖДЫ и выглядел по-разному: здесь —
+// палатами и плитками с занятостью, а в окне «Положить на койку»
+// (admission-modal.js) — плоским списком строк. Один и тот же коечный фонд в
+// двух видах: медсестра, которая весь день читает доску, в момент размещения
+// получала незнакомый экран и шла сверяться обратно на доску.
+//
+// Поэтому доска отдаётся наружу ТРЕМЯ частями — loadBedFund (коечный фонд и
+// занятость), wardPillsEl (выбор палаты) и bedBoardEl (сама доска), — и окно
+// выбора зовёт ИХ ЖЕ, а не копию. Копия разошлась бы в первый же день, когда на
+// доску добавят состояние койки: список в окне о нём бы не узнал. Наружу отдана
+// ровно эта тройка: палата-карточка и койка-плитка остаются внутренними —
+// рисовать их поштучно снаружи некому.
+//
+// Что осталось ЗДЕСЬ и никуда не переехало: деньги (счёт, проживание, услуги и
+// товары госпитализации), переводы между койками и журнал движений. Это не
+// «как показать койку», а «что с ней делать», и второго места у этой работы
+// быть не должно.
+//
+// ─── INPATIENT_ONE_SECTION_V1 — ЭКРАН УМЕЕТ БЫТЬ ВКЛАДКОЙ ───────────────────
+// `ctx.embedded` снимает у экрана его СЕГМЕНТНЫЙ ПЕРЕКЛЮЧАТЕЛЬ «Койки /
+// Госпитализации» и кнопку «Ждут размещения»: внутри раздела «Стационар»
+// (views/admissions.js) эту работу делает полоса вкладок этажом выше, а полоса
+// вкладок над сегментным переключателем — два переключателя на одном экране,
+// ровно тот же дубль, который владелец просил убрать из меню.
+//
+// Шапка при этом ОСТАЁТСЯ: заголовок из неё снимает оболочка
+// (dedupeSectionHeading в admin.js) — механизм против дубля имён в приложении
+// один, и второй, свой, здесь заводить незачем.
 
 import { supabase } from '../../supabase.js';
 import { isAccommodationLine, isServiceLine, isGoodsLine, ACCOMMODATION_LABEL } from '../../shared/accommodation-line.js';
@@ -74,16 +107,26 @@ function estimateCharge(ward, bed, admittedAt, discountPct = 0) {
     return { mode, rate: rate || 0, units, gross, net, unitLabel: mode === 'daily' ? 'day' : 'hour' };
 }
 
-let state = { tab: 'board', wardFilter: 'all', statusFilter: 'all' };
+let state = { tab: 'board', wardFilter: 'all', statusFilter: 'all', embedded: false };
 // ADMISSION_ORDER_V1 — переход в окно медсестры. Доска коек показывает ФОНД
 // (кто где лежит), очередь размещения живёт в «Стационаре»; без ссылки между
 // ними администратор, увидевший свободную койку, не знает, кого на неё ждут.
+// INPATIENT_ONE_SECTION_V1 — внутри раздела ссылка не нужна и потому убрана:
+// очередь размещения теперь СОСЕДНЯЯ ВКЛАДКА, до неё один щелчок по полосе.
+// Кнопка остаётся у отдельного маршрута #beds, где соседней вкладки нет.
 let navigateTo = null;
 
-export async function renderWardBeds(container, ctx) {
+/**
+ * @param {HTMLElement} container
+ * @param {{onNavigate?:Function, embedded?:boolean}} ctx
+ *   `embedded` — экран рисуется вкладкой «Койки» раздела «Стационар»: журнал
+ *   госпитализаций там СВОЯ вкладка (admissionsHistoryCard), поэтому
+ *   собственный сегментный переключатель не показывается.
+ */
+export async function renderWardBeds(container, ctx = {}) {
     clear(container);
-    navigateTo = (ctx && ctx.onNavigate) || null;
-    state = { tab: 'board', wardFilter: 'all', statusFilter: 'all' };
+    navigateTo = ctx.onNavigate || null;
+    state = { tab: 'board', wardFilter: 'all', statusFilter: 'all', embedded: !!ctx.embedded };
     const root = h('div', { class: 'fade-in' });
     container.appendChild(root);
     await paint(root);
@@ -121,14 +164,29 @@ function bedStatus(bed, currentByBed) {
     return currentByBed.has(bed.id) ? 'occupied' : (bed.status === 'occupied' ? 'occupied' : bed.status);
 }
 
+// BED_BOARD_SHARED_V1 — ОДИН коечный фонд и ОДНО правило «занята ли койка» на
+// оба места. Окно выбора койки (admission-modal.js) считало занятость своим
+// запросом; расхождение здесь стоило бы двух пациентов на одной койке.
+export async function loadBedFund() { return loadData(); }
+
 async function paint(root) {
     clear(root);
+    // INPATIENT_ONE_SECTION_V1 — шапка ОСТАЁТСЯ и во вкладке: заголовок из неё
+    // снимает оболочка (dedupeSectionHeading в admin.js), а подзаголовок —
+    // подсказка «нажмите на койку, чтобы действовать» — нужен именно тут.
+    //
+    // А вот два ОРГАНА УПРАВЛЕНИЯ во вкладке лишние, и оба по одной причине:
+    // их работу делает полоса вкладок этажом выше. Сегментный переключатель
+    // «Койки / Госпитализации» стал двумя из трёх вкладок, а кнопка «Ждут
+    // размещения» вела бы на соседнюю вкладку — то есть на расстояние одного
+    // щелчка по полосе, которая и так на глазах. У отдельного маршрута #beds
+    // соседней вкладки нет, и там оба остаются.
     root.appendChild(h('div', { class: 'page-head' },
         h('div', null,
             h('h1', { class: 'page-title' }, tr('Стационар')),
             h('p', { class: 'page-subtitle' }, tr('Койки, госпитализации и выписки. Нажмите на койку, чтобы действовать.')),
         ),
-        h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
+        state.embedded ? null : h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
             navigateTo ? h('button', {
                 class: 'btn btn-sm', type: 'button', onclick: () => navigateTo('admissions'),
             }, Icon('Clock', { size: 13 }), ' ', tr('Ждут размещения')) : null,
@@ -156,25 +214,14 @@ async function paint(root) {
     // Ward filter pills
     root.appendChild(wardPills(data, root));
 
-    // Ward cards
-    const grid = h('div', { style: { display: 'grid', gap: '16px' } });
-    const wards = state.wardFilter === 'all' ? data.wards : data.wards.filter(w => String(w.id) === String(state.wardFilter));
-    let shownBeds = 0;
-    for (const w of wards) {
-        const wardBeds = data.beds.filter(b => b.ward_id === w.id
-            && (state.statusFilter === 'all' || bedStatus(b, data.currentByBed) === state.statusFilter));
-        if (!wardBeds.length) continue;
-        shownBeds += wardBeds.length;
-        grid.appendChild(wardCard(w, wardBeds, data, root));
-    }
-    // STATIONARY_ROOMS_V1 — операционные идут ПОСЛЕ палат: это не койки, и
-    // подниматься выше коечного фонда им незачем. Фильтр по статусу к ним не
-    // применяется — у кабинета нет статуса койки, и прятать его за «Свободно»
-    // значило бы терять его без объяснения.
-    if (data.opRooms.length && state.statusFilter === 'all') grid.appendChild(opRoomsCard(data));
-
-    if (!shownBeds) grid.appendChild(h('div', { class: 'card', style: { padding: '20px' } }, h('div', { class: 'empty' }, tr('Койки не найдены. Заведите палаты и койки в «Настройки → Помещения».'))));
-    root.appendChild(grid);
+    // Ward cards — та же функция, которой рисует себя окно выбора койки.
+    root.appendChild(bedBoardEl(data, {
+        mode: 'board',
+        wardFilter: state.wardFilter,
+        statusFilter: state.statusFilter,
+        showOpRooms: true,
+        onBed: (bed, ward, adm) => onBedClick(bed, ward, adm, root),
+    }));
 }
 
 // STATIONARY_ROOMS_V1 — карточка операционных. Плитки НЕ кликабельны: положить
@@ -230,10 +277,13 @@ function kpiStrip(counts, root) {
     );
 }
 
-function wardPills(data, root) {
+// BED_BOARD_SHARED_V1 — ПАЛАТЫ ПОЛОСОЙ. Это и есть «выбор палаты» в языке
+// доски: владелец назвал койки И палаты («selecting beds or rooms»), и палата
+// выбирается здесь, а койка — плиткой внутри неё.
+export function wardPillsEl(data, { value = 'all', onPick = null } = {}) {
     const pill = (id, label) => h('button', {
-        class: 'segmented-btn' + (String(state.wardFilter) === String(id) ? ' on' : ''),
-        type: 'button', onclick: () => { state.wardFilter = id; paint(root); },
+        class: 'segmented-btn' + (String(value) === String(id) ? ' on' : ''),
+        type: 'button', onclick: () => { if (onPick) onPick(id); },
     }, label);
     const wrap = h('div', { class: 'segmented', style: { flexWrap: 'wrap', marginBottom: '14px' } }, pill('all', trf('Все палаты · {n}', { n: data.beds.length })));
     for (const w of data.wards) {
@@ -243,9 +293,52 @@ function wardPills(data, root) {
     return wrap;
 }
 
-function wardCard(ward, beds, data, root) {
+function wardPills(data, root) {
+    return wardPillsEl(data, { value: state.wardFilter, onPick: (id) => { state.wardFilter = id; paint(root); } });
+}
+
+/**
+ * Доска коек целиком: палаты карточками, койки плитками.
+ *
+ * `mode: 'pick'` — тот же вид, но плитка становится ВЫБОРОМ: свободная койка
+ * нажимается и отмечается, занятая / на уборке / в ремонте видна, названа
+ * причиной и не нажимается. Прятать такую койку нельзя: медсестра ищет глазами
+ * конкретное место, и не найдя его вовсе, решает, что экран сломан.
+ *
+ * @param {{wards:Array, beds:Array, currentByBed:Map, opRooms:Array}} data
+ * @param {{mode?:'board'|'pick', wardFilter?:any, statusFilter?:string,
+ *          selectedBedId?:any, onBed?:Function, showOpRooms?:boolean,
+ *          emptyText?:string}} opts
+ */
+export function bedBoardEl(data, {
+    mode = 'board', wardFilter = 'all', statusFilter = 'all',
+    selectedBedId = null, onBed = null, showOpRooms = false, emptyText = null,
+} = {}) {
+    const grid = h('div', { style: { display: 'grid', gap: '16px' } });
+    const wards = String(wardFilter) === 'all' ? data.wards : data.wards.filter(w => String(w.id) === String(wardFilter));
+    let shownBeds = 0;
+    for (const w of wards) {
+        const wardBeds = data.beds.filter(b => b.ward_id === w.id
+            && (statusFilter === 'all' || bedStatus(b, data.currentByBed) === statusFilter));
+        if (!wardBeds.length) continue;
+        shownBeds += wardBeds.length;
+        grid.appendChild(wardCardEl(w, wardBeds, data, { mode, selectedBedId, onBed }));
+    }
+    // STATIONARY_ROOMS_V1 — операционные идут ПОСЛЕ палат: это не койки, и
+    // подниматься выше коечного фонда им незачем. Фильтр по статусу к ним не
+    // применяется — у кабинета нет статуса койки, и прятать его за «Свободно»
+    // значило бы терять его без объяснения. В окне выбора койки их нет вовсе:
+    // положить пациента в операционную нельзя.
+    if (showOpRooms && data.opRooms.length && statusFilter === 'all') grid.appendChild(opRoomsCard(data));
+
+    if (!shownBeds) grid.appendChild(h('div', { class: 'card', style: { padding: '20px' } },
+        h('div', { class: 'empty' }, emptyText || tr('Койки не найдены. Заведите палаты и койки в «Настройки → Помещения».'))));
+    return grid;
+}
+
+function wardCardEl(ward, beds, data, opts = {}) {
     const tiles = h('div', { class: 'wb-tiles' });
-    for (const bed of beds) tiles.appendChild(bedTile(bed, ward, data, root));
+    for (const bed of beds) tiles.appendChild(bedTileEl(bed, ward, data, opts));
 
     // WARD_BOARD_V2 — «6 beds» не отвечало на вопрос, ради которого на эту
     // доску и смотрят: сколько мест ещё есть. Считаем по ВСЕМ койкам палаты, а
@@ -271,16 +364,30 @@ function wardCard(ward, beds, data, root) {
     );
 }
 
-function bedTile(bed, ward, data, root) {
+function bedTileEl(bed, ward, data, { mode = 'board', selectedBedId = null, onBed = null } = {}) {
     const st = bedStatus(bed, data.currentByBed);
     const style = STATUS[st] || STATUS.free;
     const adm = data.currentByBed.get(bed.id);
-    const tile = h('div', {
+    // В режиме выбора нажимается ТОЛЬКО свободная койка. Остальные видны,
+    // подписаны причиной (Занята / Уборка / Ремонт) и отключены — те же три
+    // отказа, которыми ответит сервер (rpc/inpatient.js, admissionAdmit).
+    const pickable = mode !== 'pick' || st === 'free';
+    const chosen = mode === 'pick' && selectedBedId != null && String(selectedBedId) === String(bed.id);
+    // Плитка — КНОПКА, а не div с обработчиком: по ней щёлкают, значит до неё
+    // надо доходить с клавиатуры и объявлять её нажимаемой.
+    const tile = h('button', {
+        type: 'button',
+        disabled: !pickable,
+        'aria-pressed': mode === 'pick' ? (chosen ? 'true' : 'false') : null,
+        title: pickable ? null : tr(style.label),
         style: {
-            border: '1px solid ' + style.bd, background: style.bg, borderRadius: '10px', padding: '10px',
-            cursor: 'pointer', minHeight: '84px', display: 'flex', flexDirection: 'column', gap: '4px',
+            border: chosen ? '2px solid var(--primary-600, #1f7a72)' : '1px solid ' + style.bd,
+            background: style.bg, borderRadius: '10px', padding: chosen ? '9px' : '10px',
+            cursor: pickable ? 'pointer' : 'not-allowed', opacity: pickable ? '1' : '0.62',
+            minHeight: '84px', display: 'flex', flexDirection: 'column', gap: '4px',
+            font: 'inherit', textAlign: 'left', width: '100%',
         },
-        onclick: () => onBedClick(bed, ward, adm, root),
+        onclick: () => { if (pickable && onBed) onBed(bed, ward, adm, st); },
     },
         h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' } },
             h('strong', { style: { fontSize: '13.5px' } }, bed.code),
@@ -300,8 +407,12 @@ function bedTile(bed, ward, data, root) {
         ));
         if (adm.users && adm.users.full_name) tile.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', display: 'flex', alignItems: 'center', gap: '4px' } }, Icon('Stethoscope', { size: 11 }), adm.users.full_name));
     } else {
+        // Здесь стояло «Госпитализация — в разделе "Стационар"» — указатель на
+        // другой пункт меню. Пункта больше нет: заявки стали соседней вкладкой
+        // этого же раздела, и указывать некуда. Осталось то, что о койке
+        // действительно надо знать перед выбором, — её тип.
         tile.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: 'auto' } },
-            st === 'free' ? tr('Госпитализация — в разделе «Стационар»') : (bed.type && bed.type !== 'standard' ? tr(BED_TYPE_LABEL[bed.type] || bed.type) : '—')));
+            bed.type && bed.type !== 'standard' ? tr(BED_TYPE_LABEL[bed.type] || bed.type) : '—'));
     }
     return tile;
 }
@@ -940,6 +1051,12 @@ function housekeepingModal(bed, ward, root) {
 // ---------------------------------------------------------------------------
 // Admissions history tab
 // ---------------------------------------------------------------------------
+// INPATIENT_ONE_SECTION_V1 — журнал госпитализаций стал ТРЕТЬЕЙ ВКЛАДКОЙ
+// раздела «Стационар», поэтому таблица экспортируется. Это не подвопрос доски
+// коек («где кто лежит»), а свой вопрос — «что было»: там закрытые, отменённые
+// и выписанные, которых на доске нет по определению.
+export async function admissionsHistoryCard() { return admissionsTable(); }
+
 async function admissionsTable() {
     const tbody = h('tbody');
     const card = h('div', { class: 'card' },

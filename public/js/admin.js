@@ -65,8 +65,8 @@ import { renderCrm }          from './admin/views/crm.js?v=aug18d';   // CRM_V10
 import { renderDocsArchive }  from './admin/views/docs-archive.js?v=q3one';   // CLINICAL_DOCS_ARCHIVE_V1 — restored after concurrent clobber
 import { renderReports }      from './admin/views/reports.js?v=vatincl1';
 import { renderReportsHub }   from './admin/views/reports-hub.js?v=ru6';   // REPORTS_HUB_RU_V1 — «Отчёты» card grid + full-screen report builder
-import { renderWardBeds }     from './admin/views/ward-beds.js?v=board3';   // INPATIENT_LOCAL_V1 — fresh local ward/bed board (legacy beds.js was cloud-coupled)
-import { renderAdmissions }   from './admin/views/admissions.js?v=inp2';   // ADMISSION_ORDER_V1 — «Стационар»: окно медсестры (заявки, размещение, очередь осмотра)
+import { renderWardBeds }     from './admin/views/ward-beds.js?v=board4';   // INPATIENT_LOCAL_V1 — fresh local ward/bed board (legacy beds.js was cloud-coupled); BED_BOARD_SHARED_V1 — доска коек теперь ещё и окно выбора койки
+import { renderInpatient }    from './admin/views/admissions.js?v=inp3';   // INPATIENT_ONE_SECTION_V1 — «Стационар» одним разделом: заявки · койки · госпитализации
 import { renderMarSheet }    from './admin/views/mar-sheet.js?v=inp5';   // MAR_SHEET_V1 — лист назначений: сетка врача «назначение × час»
 import { renderMarNurse }    from './admin/views/mar-nurse.js?v=inp5';   // MAR_NURSE_V1 — задачи медсестры: пациент — якорь, «5 прав»
 import { renderKitchenSheet } from './admin/views/kitchen-sheet.js?v=diet1';   // KITCHEN_SHEET_V1 — порционник (Задача 7; экран был написан без маршрута)
@@ -127,11 +127,18 @@ const NAV = [
     { id: 'queue',    label: 'Очередь', icon: 'Clock', foldsInto: 'patients' },
     { id: 'labs',     label: 'Laboratory', icon: 'Flask' },   // LABS_UI_V1
     { id: 'procedures', label: 'Процедуры', icon: 'Pulse' },   // PROCEDURES_V1 — очередь процедур (медсестра)
-    // ADMISSION_ORDER_V1 — «Стационар» это РАБОТА (кого положить, кто лежит,
-    // кого не осмотрели), а «Койки и палаты» — коечный ФОНД. Разные вопросы и
-    // разные люди: первым живёт смена медсестры, вторым — администратор
-    // клиники. Один пункт меню на оба заставлял бы медсестру искать свою
-    // очередь внутри плана этажа. Права у них общие (ключ `beds`).
+    // INPATIENT_ONE_SECTION_V1 (2026-09-05) — «Стационар» ОДИН ПУНКТ, а не два.
+    //
+    // Здесь стояли два: «Inpatient ward» (заявки и очереди смены) и «Ward &
+    // beds» (коечный фонд) — с доводом «разные вопросы и разные люди». Довод не
+    // выдержал жизни: права у них ОДНИ (ключ `beds`), то есть у кого есть один
+    // пункт, у того всегда есть и второй, и весь день между ними ходили пешком
+    // — заявку смотрели в первом, свободную койку во втором, и возвращались.
+    // Владелец назвал это прямо: «i guess it should be in one section».
+    //
+    // Теперь это один раздел с полосой вкладок «Заявки · Койки ·
+    // Госпитализации» (views/admissions.js, renderInpatient). Маршрут #beds цел
+    // и ведёт в тот же раздел, открытый на вкладке «Койки» (LEGACY_ROUTES ниже).
     { id: 'admissions', label: 'Inpatient ward', icon: 'Bed' },
     // MAR_NURSE_V1 — задачи медсестры по листу назначений. Отдельный пункт, а не
     // вкладка внутри «Стационара»: это работа СМЕНЫ, к которой возвращаются
@@ -148,7 +155,11 @@ const NAV = [
     // выписку другой человек и через несколько часов — это его собственный
     // список работы на смену, а не часть окна госпитализации.
     { id: 'discharge', label: 'Discharges', icon: 'Check' },
-    { id: 'beds',     label: 'Ward & beds', icon: 'Bed' },   // INPATIENT_LOCAL_V1 — Стационар и палаты
+    // INPATIENT_ONE_SECTION_V1 — пункт «Ward & beds» снят: доска коек стала
+    // вкладкой «Койки» раздела «Стационар» выше. Крошка CRUMBS.beds, ключ прав
+    // `beds` и маршрут #beds остаются на месте — исчез только второй вход в ту
+    // же работу. Ветка `case 'beds'` в renderViewInner тоже цела: это пол под
+    // маршрутом, чтобы адрес никогда не проваливался в «неизвестный экран».
     { id: 'patient-documents', label: 'Documents', icon: 'Doc' },   // PATIENT_DOCUMENTS_V1
     { section: 'Operations' },
     // TELEGRAM_CHAT_V1 — переписка с пациентами это работа стойки, а не приём:
@@ -328,7 +339,15 @@ function firstAllowedView() {
 // bar). 'lab-settings' was Настройки → «Лаборатория и диагностика»; its editor
 // is now the «Панели» mode of Лаборатория — owner decision 2026-08-31: the
 // panels editor lives ONLY in the lab section, gated by lab-section access.
-const LEGACY_ROUTES = { 'lab-settings': { view: 'labs', sub: 'panels' } };
+// INPATIENT_ONE_SECTION_V1 — '#beds' это теперь ВКЛАДКА «Койки» раздела
+// «Стационар», а не отдельный экран. Закладка, глубокая ссылка и запомненный
+// маршрут (localStorage) ведут туда же, куда вели, — на доску коек, только уже
+// рядом с очередью размещения. Через LEGACY_ROUTES, а не отдельной панелью:
+// иначе один и тот же раздел жил бы в двух смонтированных копиях сразу.
+const LEGACY_ROUTES = {
+    'lab-settings': { view: 'labs', sub: 'panels' },
+    beds: { view: 'admissions', sub: 'beds' },
+};
 
 function navigate(view, payload, opts = {}) {
     if (!view) return;
@@ -903,11 +922,16 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'queue':         return void await renderQueue(viewRoot, ctx);
             case 'crm':           return void await renderCrm(viewRoot, ctx);   // CRM_V1
             case 'docs-archive':  return void await renderDocsArchive(viewRoot, ctx);   // CLINICAL_DOCS_ARCHIVE_V1
-            case 'admissions':    return void await renderAdmissions(viewRoot, ctx);   // ADMISSION_ORDER_V1
+            case 'admissions':    return void await renderInpatient(viewRoot, ctx);   // INPATIENT_ONE_SECTION_V1 — заявки · койки · госпитализации одним разделом
             case 'mar-sheet':     return void await renderMarSheet(viewRoot, ctx);   // MAR_SHEET_V1
             case 'mar-nurse':     return void await renderMarNurse(viewRoot, ctx);   // MAR_NURSE_V1
             case 'kitchen-sheet': return void await renderKitchenSheet(viewRoot, ctx);   // KITCHEN_SHEET_V1
             case 'discharge':     return void await renderDischarge(viewRoot, ctx);   // TWO_STEP_DISCHARGE_V1
+            // INPATIENT_ONE_SECTION_V1 — обычно сюда не доходят: LEGACY_ROUTES
+            // отвечает на '#beds' разделом «Стационар», открытым на вкладке
+            // «Койки». Ветка остаётся ПОЛОМ под маршрутом: сними её вместе с
+            // пунктом меню — и адрес, который люди носят в закладках, провалился
+            // бы в renderPlaceholder («Pick a section from the sidebar»).
             case 'beds':          return void await renderWardBeds(viewRoot, ctx);   // INPATIENT_LOCAL_V1
             case 'doctor-room':   return void await renderDoctorRoom(viewRoot, ctx);   // DOCTOR_ROOM_V1
             case 'pacs':          return void await renderComingSoon(viewRoot, ctx, renderPacs);          // COMING_SOON_V1

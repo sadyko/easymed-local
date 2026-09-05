@@ -19,8 +19,10 @@
 // ─── ЧТО ЗДЕСЬ ТЕПЕРЬ ───────────────────────────────────────────────────────
 //   openAdmissionOrderModal  — ЗАЯВКА на госпитализацию (регистратура). Её
 //                              зовут карта пациента и экран регистрации.
-//   openAdmissionBedPicker   — «Положить на койку»: выбор свободной койки
-//                              (медсестра, окно «Стационар»).
+//   openAdmissionBedPicker   — «Положить на койку»: выбор койки ДОСКОЙ КОЕК —
+//                              палаты карточками, койки плитками, теми же
+//                              функциями, что рисуют доску (медсестра, раздел
+//                              «Стационар»).
 //   openAdmissionCancelModal — отмена заявки с обязательной причиной.
 //   openAdmissionCard        — карточка маршрута: где пациент и что дальше.
 //   openAdmissionReviewModal — ПЕРВИЧНЫЙ ОСМОТР главного врача (Задача 3) и
@@ -48,6 +50,11 @@ import { supabase } from '../../supabase.js';
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
 import { h, Icon, Tag, toast, clear, field, fmtDate, fmtDateTime, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+// BED_BOARD_SHARED_V1 — окно выбора койки рисует ДОСКУ КОЕК, а не свой список.
+// Адрес модуля с тем же '?v=', что у admin.js и views/admissions.js: разошедшийся
+// суффикс — это ВТОРОЙ экземпляр ward-beds.js со своим `state`, то есть доска в
+// разделе и доска в окне жили бы каждая своей жизнью.
+import { loadBedFund, bedBoardEl, wardPillsEl } from './ward-beds.js?v=board4';
 // TWO_STEP_DISCHARGE_V1 — исход госпитализации спрашивают ЗДЕСЬ (врач подаёт
 // заявку) и показывают ТАМ (очередь оформления). Список и подписи берутся из
 // экрана очереди, а не заводятся вторые: разойдись они, один экран называл бы
@@ -257,73 +264,75 @@ export function openAdmissionOrderModal({ patientId = null, patientName = '', pa
 }
 
 // ---------------------------------------------------------------------------
-// 2. «Положить на койку» (медсестра)
+// 2. «Положить на койку» (медсестра) — ЭТО ДОСКА КОЕК, А НЕ СПИСОК
 // ---------------------------------------------------------------------------
+// Владелец: «selecting beds or rooms like in the ui of the beds».
+//
+// Здесь был плоский список строк «код · палата · Свободна». Он отвечал на
+// вопрос «какие койки есть», но не на тот, который медсестра держит в голове:
+// «куда в ЭТОЙ палате можно положить». Палату было не видно как палату,
+// занятость палаты — тем более, а главное: доску коек тот же человек читает
+// весь день, и в момент размещения ему показывали другой, незнакомый экран.
+//
+// Теперь окно рисует ТУ ЖЕ доску теми же функциями (views/ward-beds.js,
+// BED_BOARD_SHARED_V1): палаты карточками с занятостью и ценой, койки —
+// плитками с состоянием и лежащим пациентом. Копии здесь нет намеренно: копия
+// разошлась бы с доской в первый же день, когда на доску добавят состояние.
+//
 // Занятые койки и койки на уборке НЕ ПРЯЧУТСЯ. Медсестра ищет глазами
-// конкретную койку; не найдя её в списке вовсе, она решает, что экран сломан, и
-// идёт смотреть на доску. Койка видна, не нажимается и называет причину.
+// конкретную койку; не найдя её вовсе, она решает, что экран сломан, и идёт
+// смотреть на доску. Койка видна, не нажимается и называет причину — те же три
+// причины, которыми ответит сервер (rpc/inpatient.js, admissionAdmit).
+//
+// ПАЛАТА («room»). Если заявка её называет, переключателя палат тут НЕТ: сервер
+// откажет в койке из другой палаты («Койка из другой палаты: заявка оформлена
+// в …»), и предлагать выбор, который кончится отказом, — хуже, чем не
+// предлагать. Если палата в заявке не указана, полоса палат показывается, и
+// размещение начинается ровно с неё: сначала палата, потом койка в ней.
 export function openAdmissionBedPicker({ admission, onDone } = {}) {
     if (!admission || !admission.id) { toast(tr('Заявка не найдена.'), 'fail'); return; }
     const p = admission.patients || {};
-    const listBox = h('div', { style: { display: 'grid', gap: '8px', maxHeight: '340px', overflowY: 'auto' } });
-    let chosenBed = null;
-    let chosenRow = null;
-
     const wantWardId = admission.ward_id != null ? Number(admission.ward_id) : null;
 
-    async function load() {
-        clear(listBox);
-        listBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Загрузка…')));
-        const [bedsR, admR] = await Promise.all([
-            supabase.from('beds').select('id, code, status, ward_id, type, wards(name)').eq('active', 1).order('code'),
-            supabase.from('admissions').select('id, bed_id, status').in('status', IN_BED_STATUSES),
-        ]);
-        // Занятость считаем по ГОСПИТАЛИЗАЦИЯМ, как доска коек и как сервер:
-        // beds.status — housekeeping, и разойтись с правдой он может.
-        const taken = new Set((admR.data || []).map((a) => a.bed_id).filter((v) => v != null));
-        let beds = bedsR.data || [];
-        if (wantWardId != null) beds = beds.filter((b) => Number(b.ward_id) === wantWardId);
+    const pillsBox = h('div');
+    const boardBox = h('div', { style: { maxHeight: '46vh', overflowY: 'auto', paddingRight: '2px' } });
+    let data = null;
+    let chosenBed = null;
+    let wardFilter = wantWardId != null ? wantWardId : 'all';
 
-        clear(listBox);
-        if (!beds.length) {
-            listBox.appendChild(h('div', { class: 'empty', style: { padding: '18px' } },
-                tr('Коек в этой палате нет. Заведите койки или измените палату в заявке.')));
+    function repaint() {
+        if (!data) return;
+        clear(pillsBox);
+        clear(boardBox);
+        if (wantWardId == null) {
+            pillsBox.appendChild(wardPillsEl(data, {
+                value: wardFilter,
+                onPick: (id) => { wardFilter = id; chosenBed = null; repaint(); },
+            }));
+        }
+        boardBox.appendChild(bedBoardEl(data, {
+            mode: 'pick',
+            wardFilter,
+            selectedBedId: chosenBed ? chosenBed.id : null,
+            emptyText: tr('Коек в этой палате нет. Заведите койки или измените палату в заявке.'),
+            onBed: (bed) => { chosenBed = bed; repaint(); },
+        }));
+    }
+
+    async function load() {
+        clear(boardBox);
+        boardBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Загрузка…')));
+        try {
+            // Тот же запрос, что у доски: занятость считается по
+            // ГОСПИТАЛИЗАЦИЯМ, а не по beds.status (housekeeping умеет врать).
+            data = await loadBedFund();
+        } catch (e) {
+            clear(boardBox);
+            boardBox.appendChild(h('div', { class: 'card', style: { padding: '18px' } },
+                h('div', { class: 'empty' }, trf('Не удалось загрузить: {msg}', { msg: (e && e.message) || e }))));
             return;
         }
-        for (const b of beds) {
-            const busy = taken.has(b.id) || b.status === 'occupied';
-            const why = busy ? tr('Занята')
-                : b.status === 'cleaning' ? tr('Уборка')
-                : b.status === 'maintenance' ? tr('Ремонт') : null;
-            const free = !why;
-            const row = h('button', {
-                type: 'button',
-                disabled: !free,
-                style: {
-                    display: 'flex', alignItems: 'center', gap: '10px', width: '100%', textAlign: 'left',
-                    padding: '10px 12px', borderRadius: '10px', font: 'inherit',
-                    border: '1px solid var(--ink-100)',
-                    background: free ? 'var(--white, #fff)' : 'var(--ink-25, #f7f8fa)',
-                    cursor: free ? 'pointer' : 'not-allowed', opacity: free ? '1' : '0.65',
-                },
-                onclick: () => {
-                    if (chosenRow) {
-                        chosenRow.style.borderColor = 'var(--ink-100)';
-                        chosenRow.style.background = 'var(--white, #fff)';
-                    }
-                    chosenBed = b;
-                    chosenRow = row;
-                    row.style.borderColor = 'var(--primary-500, #2b968c)';
-                    row.style.background = 'var(--primary-25, #f2faf8)';
-                },
-            },
-                h('span', { style: { fontWeight: 700, fontSize: '13.5px' } }, b.code),
-                h('span', { class: 'muted', style: { fontSize: '12.5px' } }, (b.wards && b.wards.name) || '—'),
-                h('span', { style: { flex: 1 } }),
-                free ? Tag(tr('Свободна'), { kind: 'ok', dot: true }) : Tag(why, { dot: true }),
-            );
-            listBox.appendChild(row);
-        }
+        repaint();
     }
     load();
 
@@ -333,7 +342,8 @@ export function openAdmissionBedPicker({ admission, onDone } = {}) {
             ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 trf('Заявка оформлена в палату «{ward}» — показаны её койки.', { ward: (admission.wards && admission.wards.name) || '—' }))
             : h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Палата в заявке не указана — выберите любую свободную койку.')),
-        listBox,
+        pillsBox,
+        boardBox,
     ], tr('Положить'), async () => {
         if (!chosenBed) { toast(tr('Выберите койку.'), 'fail'); return false; }
         const { error } = await supabase.rpc('admission_admit', { admission_id: admission.id, bed_id: chosenBed.id });
@@ -341,7 +351,7 @@ export function openAdmissionBedPicker({ admission, onDone } = {}) {
         toast(tr('Пациент размещён на койке.'), 'ok');
         if (onDone) await onDone();
         return true;
-    }, { width: 560 });
+    }, { width: 820 });
 }
 
 // ---------------------------------------------------------------------------

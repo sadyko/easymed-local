@@ -47,6 +47,15 @@ const NON_NAV_GATES = {
   registration: /view === 'registration'\) return _effective\.has\('registration'\) && canEdit\('patients'\)/,
   // isModuleAllowed('cashier-shifts') accepts `cashier` as an alias of the NAV id.
   cashier: /navId === 'cashier-shifts'\) return _effective\.has\('cashier-shifts'\) \|\| _effective\.has\('cashier'\)/,
+  // INPATIENT_ONE_SECTION_V1 (2026-09-05) — «Стационар» стал ОДНИМ пунктом меню
+  // с id 'admissions' (заявки · койки · госпитализации — вкладками), поэтому
+  // `beds` перестал быть NAV id. Мёртвым он от этого не стал — наоборот, он
+  // единственный, которым раздел вообще открывается: `beds` роздан миграцией
+  // 092 медсестре, старшей, главному врачу и регистратуре, а ключ 'admissions'
+  // не роздан никому. Тот же приём и то же место проверки, что у `cashier`
+  // строкой выше; он же открывает #mar-sheet / #mar-nurse / #kitchen-sheet /
+  // #discharge и маршрут #beds.
+  beds: /navId === 'admissions'\) return _effective\.has\('admissions'\) \|\| _effective\.has\('beds'\)/,
   // CUSTDEV_V1 — the «Cust Dev» button inside the CRM screen. Its gate cannot
   // live in admin.js: the workplace is not a sidebar section, it is a button
   // next to «Канбан».
