@@ -119,6 +119,9 @@ globalThis.fetch = async (url, opts) => {
   return { ok: false, status: 404, json: async () => ({ error: { message: 'no route ' + u } }) };
 };
 
+const { becomeSecondary } = await import('../../../../server/services/branch-sync/identity.js');
+const { exportCatalogue, applyCatalogue } = await import('../../../../server/services/branch-sync/catalogue.js');
+
 const { renderRoomCalendar } = await import('../views/room-calendar.js');
 
 // ─── посев ──────────────────────────────────────────────────────────────────
@@ -133,13 +136,21 @@ function nextWeekday(offset = 1) {
 const WD = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const isoOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-function seed({ doctorOff = false, cross = false } = {}) {
+function seed({ doctorOff = false, cross = false, stale = false, nodoc = false } = {}) {
   const db = openDb(':memory:');
   migrate(db);
   const day = nextWeekday();
   const wh = {};
   for (const k of WD) wh[k] = { enabled: true, from: '09:00', to: '18:00' };
   if (doctorOff) wh[WD[day.getDay()]] = { enabled: false, from: '09:00', to: '18:00' };
+
+  // ЭТА УСТАНОВКА — ФИЛИАЛ B, и буква берётся ДО первого пациента: установке,
+  // уже выдавшей номера под своей буквой, becomeSecondary отказывает
+  // (миграция 080). Раньше здесь стоял главный филиал, и это прятало ошибку:
+  // у ГЛАВНОЙ клиники приписку врачей ставит местный администратор, поэтому у
+  // неё межфилиальный календарь работал и на сломанном справочнике. Ломалось
+  // у филиала — вот филиал и стоит.
+  if (cross) becomeSecondary(db, { letter: 'B', name: 'Второй корпус' });
 
   db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, specialty, working_hours) VALUES (1,'adm','x','Админ','admin',0,'','')").run();
   db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, specialty, working_hours) VALUES (7,'doc','x','Петров Пётр','doctor',1,'терапевт',?)").run(JSON.stringify(wh));
@@ -152,36 +163,75 @@ function seed({ doctorOff = false, cross = false } = {}) {
   db.prepare(`INSERT INTO visits (id, patient_id, doctor_id, room_id, service_id, visit_date, duration_minutes, status)
               VALUES (55, 3, 7, 11, 21, ?, 30, 'confirmed')`).run(start.toISOString());
 
-  // CROSS_BRANCH_CALENDAR_V1 — сеть из двух зданий и три случая, ради которых
-  // экран переписывался: чужая запись, наша неподтверждённая запись в чужое
-  // здание и настоящее столкновение внутри часа между обменами.
+  // CROSS_BRANCH_CALENDAR_V1 — сеть из двух зданий и случаи, ради которых экран
+  // переписывался: чужая запись, наша неподтверждённая запись в чужое здание,
+  // настоящее столкновение внутри часа между обменами, застоявшееся ожидание и
+  // приехавшая запись без врача.
+  //
+  // СЕТЬ СТРОИТСЯ НАСТОЯЩИМ СПРАВОЧНИКОМ. Раньше здесь стояло
+  // `INSERT INTO users (… branch_id) VALUES (9, …, 77)` — приписка ставилась
+  // рукой, а справочник её не вёз, и тест был зелёным на состоянии, которого в
+  // жизни не бывает: у настоящего филиала врач соседнего здания приезжал без
+  // приписки, и экран считал его своим. Теперь врач соседнего здания ПРИЕЗЖАЕТ
+  // — со зданием и графиком, — и если это сломается, тесты покраснеют сами.
   if (cross) {
-    db.prepare("UPDATE branches SET name = 'Главный корпус', letter = 'A' WHERE id = (SELECT MIN(id) FROM branches)").run();
-    db.prepare("INSERT INTO branches (id, name, letter, active) VALUES (77,'Второй корпус','B',0)").run();
-    db.prepare("UPDATE branch_identity SET letter = 'A', branch_id = (SELECT MIN(id) FROM branches) WHERE id = 1").run();
-    db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, specialty, working_hours, branch_id) VALUES (9,'karimov','x','Каримов Рустам','doctor',1,'хирург',?,77)")
-      .run(JSON.stringify(wh));
+    const main = openDb(':memory:');
+    migrate(main);
+    main.prepare("UPDATE branches SET name = 'Главный корпус' WHERE letter = 'A'").run();
+    main.prepare("INSERT INTO branches (name, letter) VALUES ('Второй корпус','B')").run();
+    const aId = main.prepare("SELECT id FROM branches WHERE letter = 'A'").get().id;
+    const bId = main.prepare("SELECT id FROM branches WHERE letter = 'B'").get().id;
+    main.prepare("INSERT INTO users (username, password_hash, full_name, role, is_doctor, specialty, working_hours, branch_id) VALUES ('doc','x','Петров Пётр','doctor',1,'терапевт',?,?)")
+      .run(JSON.stringify(wh), bId);
+    main.prepare("INSERT INTO users (username, password_hash, full_name, role, is_doctor, specialty, working_hours, branch_id) VALUES ('karimov','x','Каримов Рустам','doctor',1,'хирург',?,?)")
+      .run(JSON.stringify(wh), aId);
+    db.transaction(() => applyCatalogue(db, exportCatalogue(main)))();
+    main.close();
+
+    // Врача соседнего здания завёл СПРАВОЧНИК — его id выдала эта база.
+    const karimov = db.prepare("SELECT id FROM users WHERE username = 'karimov'").get().id;
+
     // Возраст картинки соседа — ровно то, что читает «данные на HH:MM».
     const asOf = new Date(day); asOf.setHours(8, 40, 0, 0);
-    db.prepare(`INSERT INTO control_state (key, value) VALUES ('branch_sync_peer_snapshot', ?)`)
-      .run(JSON.stringify({ B: { at: asOf.toISOString(), generated_at: asOf.toISOString() } }));
+    db.prepare("INSERT INTO control_state (key, value) VALUES ('branch_sync_peer_snapshot', ?)")
+      .run(JSON.stringify({ A: { at: asOf.toISOString(), generated_at: asOf.toISOString() } }));
 
     const far = new Date(day); far.setHours(11, 0, 0, 0);
     db.prepare(`INSERT INTO visits (id, uid, sync_origin, patient_id, doctor_id, service_id, visit_date, duration_minutes, status, booked_at)
-                VALUES (56, 'uid-far', 'B', 3, 9, 21, ?, 30, 'scheduled', '2026-09-01T08:00:00.000Z')`).run(far.toISOString());
+                VALUES (56, 'uid-far', 'A', 3, ?, 21, ?, 30, 'scheduled', '2026-09-01T08:00:00.000Z')`)
+      .run(karimov, far.toISOString());
     const wait = new Date(day); wait.setHours(13, 0, 0, 0);
+    // Наша запись в чужое здание. booked_at — начало ожидания: свежая или
+    // застоявшаяся, смотря что проверяем.
+    const booked = stale
+      ? new Date(Date.now() - 200 * 60000).toISOString()
+      : new Date(Date.now() - 12 * 60000).toISOString();
     db.prepare(`INSERT INTO visits (id, patient_id, doctor_id, service_id, visit_date, duration_minutes, status, cross_branch, cross_branch_seq, booked_at)
-                VALUES (57, 3, 9, 21, ?, 30, 'scheduled', 'B', 999999, '2026-09-01T09:00:00.000Z')`).run(wait.toISOString());
+                VALUES (57, 3, ?, 21, ?, 30, 'scheduled', 'A', 999999, ?)`)
+      .run(karimov, wait.toISOString(), booked);
     // Столкновение: то же время, что у чужой записи 56, но занято позже нами.
+    // booked_at у неё — то же ожидание, что у 57: она тоже наша и тоже ждёт
+    // квитанции. Спор с приехавшей 56 она всё равно проигрывает — та записана
+    // 1 сентября, то есть заведомо раньше.
     db.prepare(`INSERT INTO visits (id, patient_id, doctor_id, service_id, visit_date, duration_minutes, status, cross_branch, cross_branch_seq, booked_at)
-                VALUES (58, 3, 9, 21, ?, 30, 'scheduled', 'B', 999999, '2026-09-01T08:00:05.000Z')`).run(far.toISOString());
+                VALUES (58, 3, ?, 21, ?, 30, 'scheduled', 'A', 999999, ?)`)
+      .run(karimov, far.toISOString(), booked);
+    // ПРИЕХАВШАЯ ЗАПИСЬ БЕЗ ВРАЧА: логин её врача нам ещё не привезли
+    // (сотрудники едут своим тактом), поэтому doctor_id пуст — ровно так её и
+    // приземляет branch-sync/records.js.
+    if (nodoc) {
+      const nd = new Date(day); nd.setHours(15, 0, 0, 0);
+      db.prepare(`INSERT INTO visits (id, uid, sync_origin, patient_id, service_id, visit_date, duration_minutes, status, booked_at)
+                  VALUES (59, 'uid-nodoc', 'A', 3, 21, ?, 30, 'scheduled', '2026-09-01T07:00:00.000Z')`)
+        .run(nd.toISOString());
+    }
   }
   return { db, dayIso: isoOf(day) };
 }
 
 /** Отрисовать экран на нужный день. */
-async function render({ doctorOff = false, failTable = null, cross = false } = {}) {
-  const s = seed({ doctorOff, cross });
+async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false } = {}) {
+  const s = seed({ doctorOff, cross, stale, nodoc });
   if (DB) DB.close();
   DB = s.db;
   FAIL_TABLE = failTable;
@@ -290,7 +340,7 @@ test('чужая запись видна, попадает в колонку С�
   const head = byClass(box, 'rcal-colhead').map(textOf).join(' | ');
   assert.ok(/Каримов Рустам/.test(head), 'колонка врача соседнего здания не нарисована: ' + head);
 
-  const far = cards.find((c) => /11:00–11:30/.test(textOf(c)) && /Второй корпус|B/.test(textOf(c)));
+  const far = cards.find((c) => /11:00–11:30/.test(textOf(c)) && /Главный корпус|A/.test(textOf(c)));
   assert.ok(far, 'у чужой карточки нет буквы здания: ' + cards.map(textOf).join(' | '));
   assert.ok(/данные на 08:40/.test(textOf(far)),
     'у чужой карточки нет отметки возраста — час старая картинка неотличима от живой: ' + textOf(far));
@@ -329,14 +379,85 @@ test('переключатель зданий есть и фильтрует с�
   assert.equal(sel.length, 1, 'переключателя зданий нет — «видеть любой филиал» начинается с него');
 
   const opts = sel[0].children.map((o) => o._t || textOf(o)).join(' | ');
-  assert.ok(/Второй корпус/.test(opts), 'соседнее здание обязано быть в списке: ' + opts);
+  assert.ok(/Главный корпус/.test(opts), 'соседнее здание обязано быть в списке: ' + opts);
 
-  sel[0].value = 'B';
+  sel[0].value = 'A';
   sel[0].dispatchEvent({ type: 'change', target: sel[0] });
   await flush();
 
   const cards = byClass(box, 'rcal-appt').map(textOf);
   assert.ok(cards.length > 0, 'выбор здания не должен опустошать сетку');
   assert.ok(!cards.some((c) => /Петров Пётр/.test(c)),
-    'в здании B не должно быть приёмов врача здания A: ' + cards.join(' | '));
+    'в здании A не должно быть приёмов врача здания B: ' + cards.join(' | '));
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ЧЕГО ЭКРАНУ НЕ ХВАТАЛО: ВОЗРАСТ ОЖИДАНИЯ, ЗАПИСЬ БЕЗ ВРАЧА, ПРЕДУПРЕЖДЕНИЕ
+// ═══════════════════════════════════════════════════════════════════════════
+
+test('«подтверждается» НЕСЁТ ВОЗРАСТ: свежая и застоявшаяся читаются по-разному', async () => {
+  const fresh = await render({ cross: true });
+  const freshCard = byClass(fresh.box, 'rcal-appt').find((c) => /13:00–13:30/.test(textOf(c)));
+  assert.ok(/подтверждается/.test(textOf(freshCard)));
+  assert.ok(/\d+ мин/.test(textOf(freshCard)),
+    'без возраста запись пятиминутной давности неотличима от висящей вторые сутки: ' + textOf(freshCard));
+  assert.equal(byClass(fresh.box, 'rcal-appt-late').length, 0, 'свежую запись тревогой объявлять нечестно');
+
+  const old = await render({ cross: true, stale: true });
+  const oldCard = byClass(old.box, 'rcal-appt').find((c) => /13:00–13:30/.test(textOf(c)));
+  const txt = textOf(oldCard);
+  assert.ok(/не подтверждено/.test(txt),
+    'после порога слово обязано смениться: это уже не «идёт обмен», а повод звонить: ' + txt);
+  assert.ok(/3 ч/.test(txt), 'и возраст обязан быть назван: ' + txt);
+  // Наших неподтверждённых записей в посеве две, и стареют они вместе: порог
+  // — свойство ожидания, а не отдельной карточки.
+  assert.equal(byClass(old.box, 'rcal-appt-late').length, 2);
+
+  // И полоса над сеткой поднимает это как ТРЕВОГУ, с действием.
+  const alarm = byClass(old.box, 'rcal-far-alarm').map(textOf).join(' ');
+  assert.ok(/не подтверждены дольше/.test(alarm), 'полоса обязана назвать застоявшееся ожидание: ' + alarm);
+  assert.ok(/позвоните|Проверьте связь/i.test(alarm), 'и сказать, что делать: ' + alarm);
+});
+
+test('приехавшая запись БЕЗ ВРАЧА видна, названа и попадает в «Не назначено»', async () => {
+  const { box } = await render({ cross: true, nodoc: true });
+
+  const card = byClass(box, 'rcal-appt').find((c) => /15:00–15:30/.test(textOf(c)));
+  assert.ok(card, 'запись без врача обязана быть видна: пациент едет, а сетка молчала');
+  const txt = textOf(card);
+  assert.ok(/врач не определён/.test(txt), 'сказано, ЧЕГО про неё не знают: ' + txt);
+  assert.ok(/время не занято/.test(txt),
+    'и главное — что её время у нас не занято ни у кого: ' + txt);
+  assert.ok(/A|Главный корпус/.test(txt), 'здание берётся из автора строки: ' + txt);
+
+  const alarm = byClass(box, 'rcal-far-alarm').map(textOf).join(' ');
+  assert.ok(/без врача/.test(alarm), 'полоса обязана посчитать такие записи: ' + alarm);
+});
+
+test('ПЕРЕД записью в чужое здание на занятое там время оператора СПРАШИВАЮТ', async () => {
+  const { box } = await render({ cross: true, nodoc: true });
+  const karimov = DB.prepare("SELECT id FROM users WHERE username = 'karimov'").get().id;
+
+  // Клетка 15:00 в дорожке врача соседнего здания — ровно та, на которую уже
+  // едет приехавший пациент без врача.
+  const lane = walk(box).find((n) => String(n.className).split(/\s+/).includes('rcal-lane')
+    && String(n.dataset.res) === String(karimov));
+  assert.ok(lane, 'дорожка врача соседнего здания не нарисована');
+  const cell = lane.children.find((c) => c.attrs['data-min'] === String(15 * 60));
+  assert.ok(cell, 'клетки 15:00 в дорожке нет');
+  cell.click();
+  await flush();
+
+  const dlg = byClass(document.body, 'rcal-confirm')[0];
+  assert.ok(dlg, 'предупреждение обязано достаться ТОМУ, КТО ЕЩЁ НЕ ЗАПИСАЛ, а не тому, кто уже записал');
+  const txt = textOf(dlg);
+  assert.ok(/уже ждут пациента/.test(txt), 'сказано, что именно не так: ' + txt);
+  assert.ok(/врач у этой записи не определён/.test(txt), txt);
+  assert.ok(/Всё равно записать/.test(txt), 'и остаётся возможность записать: отказ терял бы пациента при свободном времени');
+
+  // Отмена закрывает и НЕ открывает мастер: спрашивают всерьёз.
+  const cancel = walk(dlg).find((n) => n.tagName === 'BUTTON' && /Отмена/.test(textOf(n)));
+  cancel.click();
+  await flush();
+  assert.equal(byClass(document.body, 'rcal-confirm').length, 0);
 });

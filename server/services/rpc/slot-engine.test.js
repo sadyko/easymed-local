@@ -91,6 +91,26 @@ test('часы клиники бьют по графику ресурса', () =
   assert.deepEqual(clampWindow(doctor, undefined), doctor);
 });
 
+test('ПУСТОЙ объект часов здания — «не задано», а не «закрыто семь дней в неделю»', () => {
+  // `branches.working_hours TEXT NOT NULL DEFAULT '{}'` (миграция 002), в
+  // отличие от users и rooms, где умолчание — пустая строка. Значит '{}' стоит
+  // у КАЖДОГО здания, которому распорядок ни разу не открывали, и прочитать
+  // его как «закрыто» значило бы погасить расписание целого корпуса за то, что
+  // его никто не настраивал.
+  //
+  // Ловушка срабатывает только у ресурса с ЗАПОЛНЕННЫМ филиалом. Пока приписка
+  // врача не ездила между зданиями, у приехавших она была пуста, сужать было
+  // нечем — и межфилиальный календарь наткнулся на неё первым же настоящим
+  // прогоном (CROSS_BRANCH_CALENDAR_V1).
+  const doctor = { from: hm('09:00'), to: hm('18:00'), breaks: [] };
+  assert.equal(clinicWindow({ is_24_7: 0, working_hours: '{}' }, MON), undefined);
+  assert.deepEqual(clampWindow(doctor, clinicWindow({ is_24_7: 0, working_hours: '{}' }, MON)), doctor);
+
+  // А заполненный распорядок, в котором этого дня нет, ЗАКРЫТ — это решение
+  // человека, а не пустая колонка.
+  assert.equal(clinicWindow({ is_24_7: 0, working_hours: { tue: { enabled: true, from: '09:00', to: '18:00' } } }, MON), null);
+});
+
 test('слоты: шаг считается ОТ НАЧАЛА ПРИЁМА, а не от полуночи', () => {
   const win = { from: hm('08:40'), to: hm('09:40'), breaks: [] };
   const starts = slotStarts({ segments: windowSegments(win), busy: [], durationMin: 15, stepMin: 15 });

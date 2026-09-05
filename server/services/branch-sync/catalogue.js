@@ -158,6 +158,26 @@ export const TABLES = [
       'phone', 'email', 'position', 'specialty', 'staff_type', 'scheduling_mode',
       'is_doctor', 'doctor_category', 'license_number', 'license_expiry_date',
       'hire_date', 'department_id',
+      // КОГДА ОН ПРИНИМАЕТ (CROSS_BRANCH_CALENDAR_V1). Раньше графика здесь не
+      // было, и объяснялось это тем, что расписание принадлежит зданию. Пока
+      // календарь показывал только своё здание, это было верно и бесплатно; с
+      // «видеть и записывать в любой филиал» это стало ошибкой с названной
+      // ценой: у приехавшего врача колонка пуста, а slot-engine.js на пустой
+      // колонке работает по СВОЕМУ умолчанию 09:00–18:00 — то есть сосед
+      // предлагает пациенту время, в которое врач не принимает.
+      //
+      // Заметьте, ЧТО чинит переезд колонки: не «мы теперь угадываем лучше», а
+      // «угадывания больше нет». Пустая колонка означает у соседа ровно то же,
+      // что у автора, — умолчание одного и того же движка (slot-engine.js
+      // DEFAULT_FROM_MIN/DEFAULT_TO_MIN, один файл на обе установки), поэтому
+      // оба здания считают окно одинаково и тогда, когда график не заполнен
+      // вовсе. Пока колонка не ездила, совпасть они могли только случайно.
+      //
+      // Один человек — одна строка — одно здание (branch_letter ниже), и график
+      // в ней описывает приём В ТОМ здании. Врача, принимающего в двух корпусах
+      // по разным дням, эта модель не описывает — но она не описывала его и до
+      // синхронизации: колонка в таблице одна.
+      'working_hours',
       // Чем ему разрешено пользоваться. role — основная роль, extra_roles —
       // «Дополнительные роли»; ACL авторизует по ОБЪЕДИНЕНИЮ (services/roles.js
       // effectiveRoles), поэтому одна без другой приехала бы половиной прав.
@@ -185,16 +205,48 @@ export const TABLES = [
     uniqueNatural: true,
     localFlag: 'is_local',
     deactivateMissing: 'is_active',
+    // ═══ ЗДАНИЕ СОТРУДНИКА ЕДЕТ БУКВОЙ (CROSS_BRANCH_CALENDAR_V1) ═══════════
+    //
+    // ПОЧЕМУ ВООБЩЕ ЕДЕТ, ХОТЯ ВЫШЕ НАПИСАНО «id ЗДАНИЯ БЕССМЫСЛЕН У СОСЕДА».
+    // Написано было верно — и именно поэтому не ехало ничего, а не поэтому,
+    // что здание врача соседу не нужно. Нужно, и без него весь межфилиальный
+    // календарь не работал НИ РАЗУ на настоящих данных: экран и сервер решают
+    // «это другое здание?» по users.branch_id, у приехавшего врача она пуста,
+    // значит запись в чужой корпус считалась своей — оператор слышал обычное
+    // зелёное «Визит создан», слот у соседа не держался, «подтверждается» не
+    // появлялось. Проверки это не ловили, потому что ставили branch_id рукой —
+    // состояние, которого настоящая синхронизация произвести не может.
+    //
+    // ПОЧЕМУ БУКВА, А НЕ id. Ровно та же причина, по которой сотрудник ездит
+    // логином, а услуга кодом: id у каждой установки свой, а БУКВА одинакова во
+    // всей сети (миграция 080, branches.letter, UNIQUE NOCASE) — это и есть
+    // естественный ключ здания. Строка со всеми буквами сети едет в этой же
+    // выгрузке (roster выше) и применяется ДО таблиц, поэтому к моменту приёма
+    // сотрудников строка его здания у получателя уже есть — даже если это
+    // третий филиал, о котором он раньше не знал.
+    //
+    // ПУСТАЯ ПРИПИСКА — ЭТО ЗДАНИЕ ОТПРАВИТЕЛЯ, а не «неизвестно». Строка
+    // сотрудника в базе главной клиники описывает человека, который работает В
+    // ГЛАВНОЙ КЛИНИКЕ, пока сама строка не сказала другого; клиники сплошь и
+    // рядом не заполняют «основной филиал», и прочитать это как «здание
+    // неизвестно» значило бы вернуть ровно ту ошибку, ради которой колонка и
+    // поехала. Подстановка делается ОТПРАВИТЕЛЕМ (exportCatalogue), потому что
+    // только он знает, кто он: получателю в JSON приезжает уже буква.
+    //
+    // НЕЗНАКОМАЯ БУКВА -> NULL. Выдумывать здание нельзя, а roster делает этот
+    // случай почти невозможным (он же и заводит неизвестные буквы).
+    branchLetter: { column: 'branch_id', field: 'branch_letter' },
     // ЧЕГО ЗДЕСЬ НЕТ, и почему:
     //
     //   id                       — приезжает как remote_id, свой выдаёт SQLite
     //                              (см. шапку файла и миграцию 079);
-    //   branch_id, room_id       — факты ЗДАНИЯ. «Кабинет 5» и «филиал 2»
-    //                              главной клиники во втором корпусе означают
-    //                              случайную местную комнату или ничего — та же
-    //                              причина, по которой не едет services.room_id;
-    //   working_hours            — расписание В ЭТОМ здании: врач принимает
-    //                              здесь по вторникам, а там по четвергам;
+    //   room_id                  — факт ЗДАНИЯ. «Кабинет 5» главной клиники во
+    //                              втором корпусе означает случайную местную
+    //                              комнату или ничего — та же причина, по
+    //                              которой не едет services.room_id. С
+    //                              branch_id это НЕ одно и то же: у здания есть
+    //                              буква, общая для всей сети, у кабинета нет
+    //                              ничего подобного;
     //   salary_type, salary_fixed, salary_percent, employment_type,
     //   service_rate_default, referral_rate_default,
     //   service_rates, referral_rates
@@ -314,9 +366,24 @@ export function exportCatalogue(db, { now = () => new Date() } = {}) {
   //
   // Только строки с буквой: без буквы это не узел сети, а адрес внутри одной
   // установки, и соседям он ни к чему.
+  //
+  // ЧАСЫ ЗДАНИЯ ЕДУТ ВМЕСТЕ С ИМЕНЕМ (CROSS_BRANCH_CALENDAR_V1). Окно приёма
+  // врача сужается часами ЕГО здания (rpc/calendar.js resourceWindow,
+  // WORKING_HOURS_CLINIC_BOUND_V1): врач, работающий до 20:00 в клинике,
+  // закрывающейся в 18:00, принимает до 18:00. Пока часы соседнего здания
+  // оставались у нас пустыми, это сужение у нас просто не срабатывало — и
+  // сосед предлагал на 19:00 время, на которое сам записать не даёт. График
+  // врача поехал (users.working_hours выше) ровно от той же болезни; половина
+  // правила без второй половины лечит её наполовину.
   out.roster = db.prepare(
-    "SELECT letter, name FROM branches WHERE letter IS NOT NULL AND letter <> '' ORDER BY letter"
-  ).all().map((r) => ({ letter: r.letter, name: r.name || '' }));
+    "SELECT letter, name, working_hours, is_24_7 FROM branches "
+    + "WHERE letter IS NOT NULL AND letter <> '' ORDER BY letter"
+  ).all().map((r) => ({
+    letter: r.letter,
+    name: r.name || '',
+    working_hours: r.working_hours || '',
+    is_24_7: r.is_24_7 ? 1 : 0,
+  }));
 
   // STAFF_SYNC_V1 — СОТРУДНИКОВ ОТДАЁТ ТОЛЬКО ГЛАВНАЯ КЛИНИКА.
   //
@@ -340,16 +407,55 @@ export function exportCatalogue(db, { now = () => new Date() } = {}) {
   const identity = db.prepare('SELECT role FROM branch_identity WHERE id = 1').get();
   const isMain = !identity || identity.role !== 'secondary';
 
+  // Буква ЭТОЙ установки и буквы её зданий — для branchLetter ниже. Читается
+  // один раз на всю выгрузку: зданий у клиники два-три, а строк сотрудников
+  // сотни.
+  const myLetter = letterOfIdentity(db);
+  const branchLetters = new Map(
+    db.prepare('SELECT id, letter FROM branches').all()
+      .map((r) => [r.id, String(r.letter || '').trim().toUpperCase()]),
+  );
+
   for (const spec of TABLES) {
     if (spec.mainOnly && !isMain) { out[spec.name] = []; continue; }
-    const cols = ['id', ...spec.columns].map((c) => `"${c}"`).join(', ');
+    // Колонка приписки к зданию ЧИТАЕТСЯ, но НЕ УЕЗЖАЕТ: наружу вместо неё
+    // идёт буква (см. branchLetter в спецификации таблицы). Так местный id
+    // здания физически не может оказаться в теле выгрузки — тот же приём, что
+    // с перечнем колонок вообще.
+    const extra = spec.branchLetter ? [spec.branchLetter.column] : [];
+    const cols = ['id', ...spec.columns, ...extra].map((c) => `"${c}"`).join(', ');
     // Имена таблиц и колонок — из константы выше, не из запроса, поэтому
     // интерполяция здесь не строит SQL из пользовательского ввода (тот же
     // инвариант, что и в db/query-compiler.js: идентификаторы только из
     // белого списка, значения — только параметрами).
-    out[spec.name] = db.prepare(`SELECT ${cols} FROM "${spec.name}" ORDER BY id`).all();
+    const rows = db.prepare(`SELECT ${cols} FROM "${spec.name}" ORDER BY id`).all();
+    if (spec.branchLetter) {
+      for (const row of rows) {
+        const local = row[spec.branchLetter.column];
+        // Пусто или здание без буквы (адрес внутри одной установки) — значит
+        // человек работает ЗДЕСЬ: см. разбор у branchLetter.
+        row[spec.branchLetter.field] = (local ? branchLetters.get(local) : '') || myLetter || '';
+        delete row[spec.branchLetter.column];
+      }
+    }
+    out[spec.name] = rows;
   }
   return out;
+}
+
+/**
+ * Буква ЭТОЙ установки. Пусто — установка ещё не знает, кто она.
+ *
+ * Читается из branch_identity, как и везде в этом коде: это единственная
+ * строка, которую не стирает отвязка (см. шапку identity.js). Своя маленькая
+ * функция, а не импорт readIdentity: тому нужна вся строка и он бросает на
+ * старой базе, а здесь вопрос один и ответ «не знаю» законен.
+ */
+function letterOfIdentity(db) {
+  try {
+    const row = db.prepare('SELECT letter FROM branch_identity WHERE id = 1').get();
+    return row && row.letter ? String(row.letter).trim().toUpperCase() : '';
+  } catch { return ''; }
 }
 
 // Форма буквы узла — та же, что у letters.js (LETTER_MAX_CHARS) и identity.js.
@@ -492,24 +598,64 @@ export function applyCatalogue(db, payload, { dryRun = false } = {}) {
     // снаружи, а UNIQUE-индекс по букве — NOCASE: кириллическая «С» или пустая
     // строка здесь стоила бы строки-призрака, которую нечем убрать.
     const adopt = db.prepare('INSERT INTO branches (name, letter, active) VALUES (?, ?, 0)');
+    // ЧАСЫ ЧУЖОГО ЗДАНИЯ — ТОЛЬКО ЧУЖОГО (CROSS_BRANCH_CALENDAR_V1). Своё
+    // здание работает столько, сколько решили ЗДЕСЬ: часы своей строки
+    // выставляет местный администратор, и приехавшее значение перекрыло бы его
+    // молча. Поэтому строка с НАШЕЙ буквой в этой ветке пропускается — так же,
+    // как имя своей строки не пропускается (имена — справочное, их правит
+    // главная; часы работы — распорядок здания, его правит здание).
+    const hours = db.prepare('UPDATE branches SET working_hours = ?, is_24_7 = ? WHERE letter = ? COLLATE NOCASE');
+    const mine = letterOfIdentity(db);
     for (const entry of payload.roster) {
       if (!entry || typeof entry.letter !== 'string' || typeof entry.name !== 'string') continue;
       const name = entry.name.trim().slice(0, 120);
       if (!name) continue;
-      const row = db.prepare('SELECT id, name FROM branches WHERE letter = ? COLLATE NOCASE').get(entry.letter);
+      const letter = entry.letter.trim().toUpperCase();
+      const row = db.prepare('SELECT id, name, working_hours, is_24_7 FROM branches WHERE letter = ? COLLATE NOCASE').get(entry.letter);
       if (!row) {
         if (!ROSTER_LETTER_RE.test(entry.letter)) continue;
         summary.roster = (summary.roster || 0) + 1;
         summary.changed += 1;
-        if (!dryRun) adopt.run(name, entry.letter);
+        if (!dryRun) {
+          adopt.run(name, entry.letter);
+          if ('working_hours' in entry) hours.run(entry.working_hours || '', entry.is_24_7 ? 1 : 0, entry.letter);
+        }
         continue;
       }
-      if (row.name === name) continue;
+      // Версионный перекос тот же, что везде: ключа нет — отправитель старый,
+      // местное значение остаётся.
+      const wantHours = ('working_hours' in entry) && letter && letter !== mine
+        && (!sameValue(entry.working_hours || '', row.working_hours || '')
+          || !sameValue(entry.is_24_7 ? 1 : 0, row.is_24_7 ? 1 : 0));
+      if (row.name === name && !wantHours) continue;
       summary.roster = (summary.roster || 0) + 1;
       summary.changed += 1;
-      if (!dryRun) rename.run(name, entry.letter);
+      if (!dryRun) {
+        if (row.name !== name) rename.run(name, entry.letter);
+        if (wantHours) hours.run(entry.working_hours || '', entry.is_24_7 ? 1 : 0, entry.letter);
+      }
     }
   }
+
+  // ЗДАНИЕ ПО БУКВЕ (CROSS_BRANCH_CALENDAR_V1) — то, чем branchLetter
+  // приземляется. Спрашивается ПОСЛЕ ростера намеренно: незнакомую букву
+  // заводит именно он, и до него ответ был бы «такого здания нет».
+  //
+  // Незнакомая буква -> null, а не «своё здание»: выдумать приписку хуже, чем
+  // не знать её. С ростером в той же выгрузке этот случай почти невозможен.
+  const branchIdMemo = new Map();
+  const branchIdOfLetter = (value) => {
+    const letter = String(value == null ? '' : value).trim().toUpperCase();
+    if (!letter) return null;
+    if (branchIdMemo.has(letter)) return branchIdMemo.get(letter);
+    let id = null;
+    try {
+      const row = db.prepare('SELECT id FROM branches WHERE letter = ? COLLATE NOCASE').get(letter);
+      id = row ? row.id : null;
+    } catch { id = null; }
+    branchIdMemo.set(letter, id);
+    return id;
+  };
 
   // ---- карта соответствий -------------------------------------------------
   // Читается целиком в память: справочник клиники — это тысячи строк, не
@@ -572,6 +718,16 @@ export function applyCatalogue(db, payload, { dryRun = false } = {}) {
       const values = {};
       for (const col of present) {
         values[col] = spec.refs[col] ? resolveRef(spec.refs[col], remote[col]) : (remote[col] ?? null);
+      }
+
+      // ПРИПИСКА К ЗДАНИЮ — из буквы в свой id (CROSS_BRANCH_CALENDAR_V1). Тот
+      // же версионный перекос: поля нет — отправитель старой версии, местное
+      // значение не трогаем. Колонка дописывается в present, а не лежит в
+      // spec.columns, потому что по сети она едет ПОД ДРУГИМ ИМЕНЕМ и с другим
+      // содержимым: наружу буква, внутрь id.
+      if (spec.branchLetter && spec.branchLetter.field in remote) {
+        present.push(spec.branchLetter.column);
+        values[spec.branchLetter.column] = branchIdOfLetter(remote[spec.branchLetter.field]);
       }
 
       let localId = mapped.get(`${spec.name}:${remote.id}`) ?? null;

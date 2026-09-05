@@ -134,6 +134,20 @@ function localIso(dayIso, min) {
 }
 const pxPerMin = (step) => (step <= 10 ? 16 : step <= 15 ? 22 : 34) / step;
 
+/**
+ * Минуты ожидания → «25 мин» / «3 ч 10 мин». СКОЛЬКО, а не «давно»: оператор
+ * решает по числу, звонить ли, и «давно» этого решения не поддерживает.
+ *
+ * Само число считает сервер (rpc/calendar.js confirming_minutes) — здесь только
+ * его написание словами, потому что склейка «3» + «ч» непереводима целиком.
+ */
+function ageText(minutes) {
+    const m = Math.max(0, Math.round(Number(minutes) || 0));
+    if (m < 60) return trf('{n} мин', { n: m });
+    const h = Math.floor(m / 60), rest = m % 60;
+    return rest ? trf('{h} ч {n} мин', { h, n: rest }) : trf('{h} ч', { h });
+}
+
 // CROSS_BRANCH_CALENDAR_V1 — вид межфилиальных подписей. Живёт здесь, а не в
 // admin.css: это свойства ОДНОГО экрана, а таблица стилей общая на все сто с
 // лишним. Размеры — нижняя ступень шкалы (12.5 px), ниже неё не опускаемся.
@@ -335,6 +349,12 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
      * Куда запишет клик по этой дорожке. Приписка врача сильнее выбранного
      * фильтра: врач здания B остаётся врачом здания B, даже когда в сетке
      * смотрят «все здания».
+     *
+     * ЭТА ФУНКЦИЯ ДОЛГО ОТВЕЧАЛА ВСЕГДА ОДНО И ТО ЖЕ — «своё здание», — и весь
+     * межфилиальный путь ниже (far, commitToBuilding) из-за этого не исполнялся
+     * ни разу на настоящих данных: приписка приезжающих врачей была пуста,
+     * потому что справочник её не вёз. Теперь везёт буквой здания
+     * (branch-sync/catalogue.js), и ответ здесь наконец зависит от врача.
      */
     const targetLetter = (r) => {
         if (state.resType !== 'doctor') return myLetter();
@@ -348,9 +368,12 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
      * Пускать ли ресурс в рейку при выбранном здании.
      *
      * Сотрудник БЕЗ приписки показывается в ЛЮБОМ филиале, и это честнее, чем
-     * спрятать его: справочник сотрудников не везёт branch_id (он бы означал
-     * чужое здание — см. catalogue.js), поэтому в филиале приписка пуста у всех
-     * приехавших врачей. Спрятав их, экран показал бы соседнее здание пустым.
+     * спрятать его: пустая приписка означает «здание неизвестно», а не «здание
+     * чужое». Раньше пустой она была У ВСЕХ приехавших врачей (справочник не
+     * вёз колонку), то есть это правило было единственным, что вообще держало
+     * рейку непустой; теперь приписка едет буквой (catalogue.js), пустой она
+     * остаётся у редких строк — и правило из подпорки стало тем, чем должно
+     * быть: обращением с неизвестным как с неизвестным.
      */
     const railBranchOk = (r) => {
         if (!state.branch || r.id === UNASSIGNED_ID) return true;
@@ -429,7 +452,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         }
         const letter = targetLetter(res);
         const far = !!(letter && myLetter() && letter !== myLetter());
-        openServicePickerModal({
+        const open = () => openServicePickerModal({
             calculator: true,
             roomId: state.resType === 'room' ? res.id : null,
             lockedDoctor: state.resType === 'doctor' ? { id: res.id, name: res.name, spec: res.spec } : null,   // CATALOG_WIZARD_V1
@@ -440,6 +463,101 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             // немедленно уезжает (commitToBuilding).
             onBooked: () => { if (far) commitToBuilding(res, dayIso, min, letter); else reloadAndRepaint(); },
         });
+        // ПРЕДУПРЕЖДЕНИЕ ДОСТАЁТСЯ ТОМУ, КТО ЕЩЁ НЕ ЗАПИСАЛ. Остаточный риск
+        // решения владельца — слот, занятый в том здании внутри последнего часа,
+        // — устранить нельзя: забирает сосед своим тактом. Значит единственное
+        // честное действие — назвать возраст картинки и приехавшую запись без
+        // врача ЗДЕСЬ, до открытия мастера, а не в ответе после сохранения.
+        // Полоса над сеткой говорила это тому, кто уже записал.
+        if (!far) { open(); return; }
+        farBookingWarning(letter, dayIso, min, open);
+    }
+
+    /**
+     * Что оператор слышит ПЕРЕД записью в чужое здание.
+     *
+     * Три случая, и порог между ними — не вкус:
+     *   • приехавшая запись без врача на это же время — спрашиваем подтверждение
+     *     кнопкой: там кого-то ждут, и кто именно врач, не знает никто;
+     *   • картинки того здания у нас нет вовсе или она старше порога — тоже
+     *     кнопкой: сетка, которую сейчас видит оператор, ничего не обещает;
+     *   • картинка свежая — обычное уведомление с её возрастом, без остановки:
+     *     останавливать на каждой записи в соседний корпус значило бы приучить
+     *     нажимать «продолжить» не читая.
+     */
+    function farBookingWarning(letter, dayIso, min, proceed) {
+        const b = buildingByLetter(letter);
+        const name = buildingName(letter);
+        // ПОРОГ — ОТВЕТ СЕРВЕРА, И ВТОРОЙ ЕГО КОПИИ ЗДЕСЬ НЕТ. Сервер старой
+        // сборки его не пришлёт; тогда экран НЕ ОБЪЯВЛЯЕТ картинку устаревшей
+        // сам (0 — «правила не знаю»), но отсутствие картинки вовсе остаётся
+        // поводом спросить: для этого правило не нужно.
+        const stale = Number(state.cross.stale_after_minutes) || 0;
+        const ageMin = b && b.as_of ? Math.floor((Date.now() - Date.parse(b.as_of)) / 60000) : null;
+        const blind = !(b && b.as_of) || !Number.isFinite(ageMin) || (stale > 0 && ageMin >= stale);
+        // Приехавшие записи без врача этого здания, попадающие на это время.
+        const nodoc = (state.appts || []).filter(a => !a.doctorId && a.date === dayIso
+            && BUSY.includes(a.status) && (apptCross(a) || {}).unassigned
+            && apptLetter(a) === letter
+            && min < a.start + a.dur && a.start < min + state.step);
+
+        if (!blind && !nodoc.length) {
+            toast(trf('Здание {b}: данные на {t}. Внутри этого часа слот могли занять и там.',
+                { b: name, t: hhmmOf(b.as_of) }), 'info');
+            proceed();
+            return;
+        }
+        const lines = [];
+        if (nodoc.length) {
+            lines.push(trf('В здании {b} на {from}–{to} уже ждут пациента, а врач у этой записи не определён: её время у нас не занято ни у кого.',
+                { b: name, from: fmtHM(nodoc[0].start), to: fmtHM(nodoc[0].start + nodoc[0].dur) }));
+        }
+        if (blind) {
+            lines.push(b && b.as_of
+                ? trf('Данные здания {b} — на {t}, это дольше обычного обмена. Что там сейчас занято, мы не знаем.', { b: name, t: hhmmOf(b.as_of) })
+                : trf('Данных из здания {b} ещё не было ни разу. Что там занято, мы не знаем.', { b: name }));
+        }
+        openConfirmDialog({
+            title: trf('Запись в здание {b}', { b: name }),
+            lines,
+            note: tr('Записать можно — время там, скорее всего, свободно. Но обещать его пациенту как подтверждённое нельзя: подтверждение придёт из того здания.'),
+            okLabel: tr('Всё равно записать'),
+            onConfirm: proceed,
+        });
+    }
+
+    /**
+     * Спросить и продолжить. Тот же костяк, что у диалога экстренной записи, но
+     * БЕЗ поля причины: там причина уходит в запись и остаётся с пациентом, а
+     * здесь спрашивают не «зачем», а «вы это прочитали». Поле, которое никуда
+     * не пишется, было бы бутафорией.
+     */
+    function openConfirmDialog({ title, lines, note, okLabel, onConfirm }) {
+        const overlay = h('div', { class: 'modal', style: { zIndex: '150' } });
+        const close = () => { overlay.remove(); document.removeEventListener('keydown', onEsc); };
+        const onEsc = (e) => { if (e.key === 'Escape') close(); };
+        overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
+        // Фокус — на «Отмене», а не на «Всё равно записать»: диалог открылся
+        // потому, что что-то не в порядке, и Enter по привычке не должен
+        // означать «продолжить».
+        const cancel = h('button', { class: 'btn btn-outline', onclick: close }, tr('Отмена'));
+        overlay.appendChild(h('div', { class: 'modal-card rcal-confirm', style: { width: '460px', maxWidth: 'calc(100vw - 32px)' } },
+            h('header', { class: 'modal-head' },
+                h('h2', null, Icon('Warning', { size: 16 }), ' ', title),
+                h('button', { class: 'modal-close', onclick: close }, '×')),
+            h('div', { class: 'modal-body' },
+                ...lines.map(t => h('div', { class: 'rcal-conflict', style: { marginBottom: '8px' } }, t)),
+                note ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, note) : null),
+            h('footer', { class: 'modal-foot' },
+                h('span', { class: 'grow' }),
+                cancel,
+                h('button', {
+                    class: 'btn btn-primary',
+                    onclick: () => { close(); onConfirm(); },
+                }, okLabel))));
+        document.body.appendChild(overlay);
+        document.addEventListener('keydown', onEsc);
+        cancel.focus();
     }
 
     /**
@@ -805,6 +923,11 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             const off = isOffHour(win, m);
             body.appendChild(h('div', {
                 class: 'rcal-slot' + (off ? ' off' : '') + (m % 60 === 0 ? ' hr' : ''),
+                // Минута клетки — на самой клетке. Дорожка уже подписана
+                // ресурсом и днём (dataset выше); без минуты «куда именно
+                // нажали» приходилось выводить из порядка клеток, а полотно
+                // сетки раздвигается под окна и записи.
+                'data-min': String(m),
                 style: { height: (state.step * ppm) + 'px' },
                 onclick: () => { if (off) { toast('Вне рабочих часов.', 'info'); return; } bookAt(res, dayIso, m); },
             }));
@@ -861,8 +984,29 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 cx && cx.foreign && cx.as_of
                     ? h('div', { class: 'rcal-appt-age', style: AGE_CSS }, trf('данные на {t}', { t: hhmmOf(cx.as_of) }))
                     : null,
+                // «ПОДТВЕРЖДАЕТСЯ» С ВОЗРАСТОМ. Без возраста запись пятиминутной
+                // давности и запись, висящая вторые сутки, выглядели одинаково —
+                // а это разные новости: первая нормальна, вторая означает, что
+                // там о пациенте не знают. Перешедшая порог читается ИНАЧЕ и
+                // красным: это уже не «идёт обмен», а повод звонить.
                 cx && cx.confirming
-                    ? h('div', { class: 'rcal-appt-age', style: Object.assign({}, AGE_CSS, { color: 'var(--warn-700, #b45309)' }) }, tr('подтверждается'))
+                    ? h('div', {
+                        class: 'rcal-appt-age' + (cx.confirming_stale ? ' rcal-appt-late' : ''),
+                        style: Object.assign({}, AGE_CSS, cx.confirming_stale
+                            ? { color: 'var(--crit-700, #b91c1c)', fontWeight: 700 }
+                            : { color: 'var(--warn-700, #b45309)' }),
+                    }, cx.confirming_stale
+                        ? trf('не подтверждено {age}', { age: ageText(cx.confirming_minutes) })
+                        : (cx.confirming_minutes == null
+                            ? tr('подтверждается')
+                            : trf('подтверждается · {age}', { age: ageText(cx.confirming_minutes) })))
+                    : null,
+                // ЧУЖАЯ ЗАПИСЬ БЕЗ ВРАЧА. Её время НЕ ЗАНЯТО ни у кого — сказать
+                // это на самой карточке дешевле, чем объяснять потом, почему
+                // сетка показывала свободное время, куда уже едет пациент.
+                cx && cx.unassigned
+                    ? h('div', { class: 'rcal-appt-age rcal-appt-nodoc', style: Object.assign({}, AGE_CSS, { color: 'var(--crit-700, #b91c1c)', fontWeight: 700 }) },
+                        tr('врач не определён — время не занято'))
                     : null,
                 clash
                     ? h('div', { class: 'rcal-appt-age', style: Object.assign({}, AGE_CSS, { color: 'var(--crit-700, #b91c1c)', fontWeight: 700 }) }, tr('двойная запись'))
@@ -904,9 +1048,14 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
     function farNote() {
         const mine = myLetter();
         const shown = (state.appts || []).filter(a => inBranch(a) && (state.showCancelled || a.status !== 'cancelled'));
-        const seen = shown.filter(a => (apptCross(a) || {}).foreign).map(a => apptLetter(a));
+        // Здание попадает в полосу не только когда его записи ВИДНЫ, но и когда
+        // мы чего-то от него ЖДЁМ: неподтверждённая запись в чужой корпус —
+        // наша карточка, чужих среди них может не быть ни одной, а сказать про
+        // неё надо ровно то же самое.
+        const seen = shown.filter(a => { const i = apptCross(a) || {}; return i.foreign || i.confirming; })
+            .map(a => apptLetter(a));
         const picked = state.branch && mine && state.branch !== mine ? [state.branch] : [];
-        const letters = [...new Set([...seen, ...picked])].filter(Boolean);
+        const letters = [...new Set([...seen, ...picked])].filter(Boolean).filter(l => l !== mine);
         if (!letters.length) return null;
         const stamps = letters.map((l) => {
             const b = buildingByLetter(l);
@@ -914,9 +1063,27 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 ? trf('{b} — данные на {t}', { b: buildingName(l), t: hhmmOf(b.as_of) })
                 : trf('{b} — данных оттуда ещё не было', { b: buildingName(l) });
         }).join(' · ');
+        // ДВЕ ТРЕВОГИ, КОТОРЫЕ ПОЛОСА ОБЯЗАНА ПОДНЯТЬ ОТДЕЛЬНО от возраста
+        // картинки: они требуют не осторожности, а ДЕЙСТВИЯ — позвонить.
+        const waiting = shown.filter(a => (apptCross(a) || {}).confirming_stale);
+        const nodoc = shown.filter(a => (apptCross(a) || {}).unassigned);
+        const alarms = [];
+        if (waiting.length) {
+            const oldest = waiting.reduce((m, a) => Math.max(m, apptCross(a).confirming_minutes || 0), 0);
+            alarms.push(trf('{n} записей в чужие здания не подтверждены дольше {age} — там о них, возможно, не знают. Проверьте связь в «Синхронизации» или позвоните туда.',
+                { n: waiting.length, age: ageText(oldest) }));
+        }
+        if (nodoc.length) {
+            alarms.push(trf('{n} приехавших записей без врача: пациента ждут, но время у нас не занято ни у кого. Уточните врача в том здании, прежде чем записывать туда.',
+                { n: nodoc.length }));
+        }
         return h('div', { class: 'rcal-far-note', style: FAR_NOTE_CSS },
             h('div', { class: 'row', style: { gap: '7px', alignItems: 'center', fontWeight: 600 } },
                 Icon('Building', { size: 14 }), h('span', null, stamps)),
+            ...alarms.map(t => h('div', {
+                class: 'rcal-far-alarm',
+                style: { fontSize: '12.5px', marginTop: '5px', fontWeight: 600, color: 'var(--crit-700, #b91c1c)' },
+            }, t)),
             h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
                 tr('Здания обмениваются раз в час: внутри этого часа тот же слот могут занять и там. Тогда первой считается более ранняя запись — видны обе, поздняя помечена «двойная запись», и звонить нужно её пациенту.')));
     }

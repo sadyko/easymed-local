@@ -152,6 +152,20 @@ export function clinicWindow(branch, weekday) {
   if (branch.is_24_7) return undefined;
   const hours = parseWorkingHours(branch.working_hours);
   if (!hours) return undefined;
+  // ПУСТОЙ ОБЪЕКТ — ЭТО «ЧАСЫ НЕ ЗАДАНЫ», А НЕ «ЗАКРЫТО ВСЕГДА», и разница
+  // здесь не теоретическая: `branches.working_hours` объявлена
+  // `TEXT NOT NULL DEFAULT '{}'` (миграция 002) — в отличие от users и rooms,
+  // где умолчание пустая строка. То есть '{}' стоит у КАЖДОГО здания, которому
+  // распорядок ни разу не открывали, и читать его как «клиника закрыта семь
+  // дней в неделю» значило бы гасить расписание целого корпуса за то, что его
+  // никто не настраивал. Клинику, работающую по особым дням, заводят явно —
+  // экран пишет все семь ключей.
+  //
+  // Найдено, когда приписка врача к зданию поехала между филиалами
+  // (CROSS_BRANCH_CALENDAR_V1): до этого у приехавших врачей branch_id был
+  // пуст, сужать было нечем, и ловушка не срабатывала. Она и раньше стояла —
+  // для местных врачей с заполненным филиалом.
+  if (!WEEKDAY_KEYS.some((k) => k in hours)) return undefined;
   const entry = hours[WEEKDAY_KEYS[((weekday % 7) + 7) % 7]];
   if (!entry || typeof entry !== 'object') return null;
   if (!dayIsOn(entry)) return null;

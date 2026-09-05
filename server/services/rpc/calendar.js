@@ -81,6 +81,47 @@
 // теряется: срез журнала накопительный и уедет следующим тактом (шапка
 // publishJournal).
 //
+// ── ЧТО ИЗ ЭТОГО НЕ РАБОТАЛО НА НАСТОЯЩИХ ДАННЫХ (исправлено) ───────────────
+//
+// Всё, что написано выше, было написано верно и не исполнялось. Разбор — по
+// местам, потому что причины разные:
+//
+//   1. ЗДАНИЕ ВРАЧА БЫЛО НЕИЗВЕСТНО. И экран, и bookingTarget спрашивают
+//      users.branch_id, а справочник её не вёз — у филиала все врачи главной
+//      клиники стояли без приписки. Значит запись в чужой корпус считалась
+//      своей: слот там не держался, «подтверждается» не появлялось, оператор
+//      слышал обычное «Визит создан». Проверки этого не видели, потому что
+//      ставили branch_id рукой — состояние, которого синхронизация произвести
+//      не могла. Теперь приписка едет БУКВОЙ здания (catalogue.js
+//      branchLetter), а проверка строит её настоящей синхронизацией.
+//
+//   2. ВЕРДИКТ СПОРА ЗАВИСЕЛ ОТ ПОРЯДКА СТРОК — при трёх пересечениях здания
+//      называли разных победителей. Разбор и лечение — у resolveCollisions.
+//
+//   3. ЧУЖАЯ ЗАПИСЬ БЕЗ ВРАЧА НЕ ЗАНИМАЛА НИЧЕГО И МОЛЧАЛА. Разбор и решение —
+//      у unassignedForeign: занять время она не может (неизвестно, у кого), но
+//      обязана быть названа — и названа ДО записи, а не после.
+//
+//   4. ГРАФИК ЧУЖОГО ВРАЧА БЫЛ НЕИЗВЕСТЕН, и движок брал своё умолчание
+//      09:00–18:00 — календарь предлагал время, в которое врач не принимает.
+//      Решение: график ЕДЕТ (users.working_hours), и часы самого здания тоже
+//      (roster). Отказывать в слотах не понадобилось: с приехавшей колонкой
+//      «пусто» означает у нас ровно то же, что у автора, — умолчание одного и
+//      того же slot-engine.js, — поэтому оба здания считают окно одинаково
+//      даже тогда, когда график не заполнен вовсе.
+//
+//   5. НЕПОДТВЕРЖДЁННАЯ ЗАПИСЬ НЕ СТАРЕЛА. Разбор и порог — у
+//      CONFIRMING_STALE_MIN.
+//
+// ── ЧЕГО ЭТО НЕ ЧИНИТ, И ЧТО СДЕЛАНО ВЗАМЕН ─────────────────────────────────
+// Слот, занятый нами минуту назад, у соседа выглядит свободным до его
+// ближайшего обмена. Внутри этой архитектуры это неустранимо: мы выкладываем
+// немедленно, но ЗАБИРАЕТ он своим тактом, и заставить его забрать мы не можем.
+// Значит остаётся предупреждать — и предупреждать ТОГО, КТО СОБИРАЕТСЯ
+// записать, а не того, кто уже записал. Поэтому возраст картинки каждого здания
+// и «время под вопросом» уезжают в calendar_windows.cross, а экран говорит их
+// вслух в момент клика по чужой дорожке (room-calendar.js bookAt).
+//
 // ── НАСТОЯЩЕЕ СТОЛКНОВЕНИЕ ВНУТРИ ОКНА ──────────────────────────────────────
 // Двое заняли один слот в разных зданиях в один и тот же час. Ни одна из
 // записей не пропадает и не перетирает другую: это две РАЗНЫЕ строки с разными
@@ -220,6 +261,67 @@ function loadBusy(db, { doctorId, roomId, fromMs, toMs, excludeVisitId }) {
   return out;
 }
 
+/**
+ * ═══ ЧУЖАЯ ЗАПИСЬ БЕЗ ВРАЧА (UNASSIGNED_FOREIGN) ═══════════════════════════
+ *
+ * Приехавшая запись, чей логин врача нам ещё не привезли, приземляется с
+ * doctor_id = NULL — и это ПРАВИЛЬНО (branch-sync/records.js: врача не
+ * выдумывают, справочник сотрудников едет своим тактом и обгон буднично
+ * нормален). Но дальше она проваливалась в дыру: занятость читается по
+ * doctor_id (loadBusy), спор за слот считается по doctor_id
+ * (resolveCollisions) — значит такая запись не занимала НИЧЕГО и ни с кем не
+ * спорила, а прежнее смягчение («отправитель поправит запись, и врач
+ * доедет») требует, чтобы у соседа кто-то эту запись открыл и тронул. Никто
+ * этого не делает. Пациент при этом едет.
+ *
+ * ЧТО ЗДЕСЬ РЕШЕНО, ПРЯМО И С ЦЕНОЙ.
+ *
+ *   ЗАНЯТЬ ВРЕМЯ ОНА НЕ МОЖЕТ. Не «мы решили не занимать» — мы не знаем, У
+ *   КОГО занимать. Занять у всех врачей того здания значило бы закрыть весь
+ *   корпус из-за одной строки; занять у случайного — соврать про конкретного
+ *   человека. Оба хуже, чем не занимать.
+ *
+ *   ЗНАЧИТ, ЕЁ НАДО НАЗВАТЬ. Она возвращается календарю как `at_risk`: время,
+ *   здание и «врач неизвестен». Экран показывает её в дорожке «Не назначено»
+ *   с буквой здания и предупреждает ПЕРЕД записью в это здание на это время —
+ *   то есть того, кто ещё только собирается занять слот, а не того, кто уже
+ *   занял. Отказать нельзя: в том здании это, скорее всего, ДРУГОЙ врач, и
+ *   отказ терял бы пациента при свободном времени.
+ *
+ * ЗДАНИЕ БЕРЁТСЯ ИЗ sync_origin, а не из приписки врача, — врача-то и нет.
+ * Строка, заведённая в здании B, описывает приём в B: другого её смысла не
+ * бывает, потому что записать В ТРЕТЬЕ здание из B можно только назвав врача
+ * того здания (bookingTarget), и тогда логин у записи есть.
+ */
+function unassignedForeign(db, { letter, fromMs, toMs }) {
+  if (!letter) return [];
+  const pad = 24 * 3600 * 1000;
+  let rows = [];
+  try {
+    rows = db.prepare(`
+      SELECT v.id, v.visit_date, v.duration_minutes, v.status
+        FROM visits v
+       WHERE v.doctor_id IS NULL
+         AND v.sync_origin = ? COLLATE NOCASE
+         AND v.status IN (${BUSY_STATUSES.map(() => '?').join(',')})
+         AND v.visit_date >= ? AND v.visit_date < ?
+       ORDER BY v.visit_date, v.id
+    `).all(letter, ...BUSY_STATUSES,
+      new Date(fromMs - pad).toISOString(), new Date(toMs + pad).toISOString());
+  } catch { return []; }
+
+  const out = [];
+  for (const r of rows) {
+    const startMs = Date.parse(r.visit_date);
+    if (Number.isNaN(startMs)) continue;
+    const dur = Math.max(1, Number(r.duration_minutes) || DEFAULT_DURATION_MIN);
+    const endMs = startMs + dur * 60000;
+    if (endMs <= fromMs || startMs >= toMs) continue;
+    out.push({ visit_id: r.id, startMs, endMs, durationMin: dur, building: letter });
+  }
+  return out;
+}
+
 /** Длительность записи: из услуги, иначе явная, иначе 15 (решение владельца). */
 function resolveDuration(db, { serviceId, explicit }) {
   if (explicit !== undefined && explicit !== null && explicit !== '') {
@@ -254,6 +356,26 @@ function resourceWindow(db, { doctor, room, dayIso }) {
 // CROSS_BRANCH_CALENDAR_V1 — здания, подтверждения, столкновения
 // ═══════════════════════════════════════════════════════════════════════════
 
+/**
+ * СКОЛЬКО «ПОДТВЕРЖДАЕТСЯ» ЕЩЁ НОРМАЛЬНО — в минутах.
+ *
+ * Двести с лишним строк выше сказано, что подтверждение приходит квитанцией.
+ * Не было сказано, СКОЛЬКО ЕЁ ЖДАТЬ, и без этого числа неподтверждённая запись
+ * старела молча: здание, выключенное на сутки, показывало ровно ту же серую
+ * надпись, что и запись пятиминутной давности, — оператор видел «идёт обмен»
+ * там, где надо было звонить.
+ *
+ * 120 минут — это полный круг обмена, а не круглое число. Наша выгрузка уходит
+ * немедленно (publishBookingNow), сосед забирает её своим часовым тактом (до
+ * 60 мин), выкладывает квитанцию, мы забираем её своим (ещё до 60). Значит два
+ * часа — верхняя граница ИСПРАВНОЙ работы, и всё, что дольше, исправной работой
+ * уже не объясняется.
+ *
+ * Число живёт здесь, а не на экране, и уезжает в ответе (stale_after_minutes):
+ * порог — часть правила «подтверждено ли», а правило считает сервер.
+ */
+export const CONFIRMING_STALE_MIN = 120;
+
 /** Буква ЭТОГО здания; null — установка ещё не знает, кто она (не связана). */
 function selfLetter(db) {
   try {
@@ -276,15 +398,21 @@ function letterOfBranch(db, branchId) {
  * В КАКОЕ ЗДАНИЕ ЗАПИСЫВАЕМ. null = в своё (обычный случай, ничего не меняется).
  *
  * ДВА ИСТОЧНИКА, И ПОРЯДОК МЕЖДУ НИМИ — РЕШЕНИЕ. Явный branch_id сильнее
- * приписки врача: оператор, выбравший здание в календаре, знает, что делает,
- * а users.branch_id — справочный факт, который у ПРИЕХАВШЕГО справочником
- * сотрудника вовсе пуст (catalogue.js не везёт branch_id: «филиал 2» главной
- * клиники во втором корпусе означал бы случайное здание). Поэтому:
+ * приписки врача: оператор, выбравший здание в календаре, знает, что делает.
  *   1) сказали branch_id — верим ему;
  *   2) не сказали — берём приписку врача;
- *   3) не знаем ничего — считаем, что записываем к себе. Это безопасный
- *      исход: слот держится здесь, ничего никуда не уезжает и никто ничего не
- *      обещает от имени соседа.
+ *   3) не знаем ничего — считаем, что записываем к себе. Безопасный исход:
+ *      слот держится здесь, ничего никуда не уезжает и никто ничего не обещает
+ *      от имени соседа.
+ *
+ * ПУНКТ 2 ДОЛГО БЫЛ МЁРТВЫМ, и здесь же было написано почему: «у приехавшего
+ * справочником сотрудника branch_id вовсе пуст». Написанное было правдой — и
+ * означало, что на настоящих данных весь этот файл ниже не исполнялся никогда.
+ * У филиала ВСЕ врачи главной клиники приезжали без приписки, значит любая
+ * запись в главный корпус считалась своей: ни удержания слота, ни метки
+ * «подтверждается», ни срочной выгрузки — обычное зелёное «Визит создан».
+ * Теперь приписка ЕДЕТ, буквой здания (catalogue.js branchLetter), и пункт 2
+ * работает у обеих сторон одинаково.
  */
 function bookingTarget(db, { branchId, doctorId, mine }) {
   let letter = letterOfBranch(db, branchId);
@@ -359,8 +487,18 @@ function confirmedBy(db, letter, seq) {
  * усложнением ключа: важно не «кто действительно был первым» (этого не знает
  * никто), а что оба здания назовут ОДНОГО И ТОГО ЖЕ — иначе каждое считает
  * победителем себя и оба ждут пациента.
+ *
+ * РАЗДЕЛИТЕЛЬ ПИШЕТСЯ ЭКРАНОМ '\0', А НЕ САМИМ БАЙТОМ. Раньше здесь стоял
+ * настоящий U+0000, вписанный в исходник: работало безупречно и стоило файлу
+ * поиска по нему. ripgrep на файл с нулевым байтом отвечает МОЛЧА — «совпадений
+ * нет», не «двоичный файл», вообще ничем, — а GNU grep «Binary file matches»:
+ * пятьсот с лишним строк ниже этой, то есть весь разбор столкновений,
+ * переставали находиться по имени. git diff при этом показывает всё, поэтому
+ * обзор по diff-у ничего и не замечал. В этом репозитории случай третий
+ * (rpc/diet.js, crm/config.js), и оба прежних чинились так же: экраном плюс
+ * проверкой самих байтов файла — она здесь тоже есть (calendar-bytes.test.js).
  */
-const collisionKey = (r) => [r.booked_at || '', r.home || '', r.uid || ''].join(' ');
+const collisionKey = (r) => [r.booked_at || '', r.home || '', r.uid || ''].join('\0');
 
 /**
  * Столкновения ВНУТРИ ОДНОГО ВРАЧА и МЕЖДУ РАЗНЫМИ ЗДАНИЯМИ.
@@ -370,9 +508,28 @@ const collisionKey = (r) => [r.booked_at || '', r.home || '', r.uid || ''].join(
  * времени сделана НАРОЧНО и с причиной, и метить её «столкновением» значило бы
  * пугать регистратуру собственным решением.
  *
+ * ═══ ПОРЯДОК СТРОК НЕ ДОЛЖЕН РЕШАТЬ НИЧЕГО ═════════════════════════════════
+ *
+ * Ключ — полный порядок, и попарное сравнение симметрично; этого хватало ровно
+ * до ТРЁХ пересекающихся записей. Дальше вердикт начинал зависеть от того, в
+ * каком порядке строки пришли из базы: охрана «проигравший уже назван, не
+ * переписываем» закрепляет ПЕРВОЕ найденное столкновение, а запрос за строками
+ * ORDER BY не имел вовсе. Порядок строк у двух зданий разный (свои id, свои
+ * времена приёма), поэтому здание A объявляло B1 победителем, а здание B —
+ * проигравшим: ровно та беда, ради предотвращения которой ключ и заводился —
+ * каждое здание ждёт своего пациента.
+ *
+ * Лечится не новой охраной, а тем, что список СОРТИРУЕТСЯ ПО ТОМУ ЖЕ КЛЮЧУ до
+ * цикла. После сортировки внешний цикл идёт от самой ранней записи к самой
+ * поздней, «первое найденное» столкновение у любой строки — это спор с самым
+ * ранним из её соперников, и он один и тот же у обеих сторон, потому что ключ
+ * у обеих сторон один и тот же. Результат зависит теперь только от МНОЖЕСТВА
+ * записей, а не от порядка их перечисления (тест кормит одно и то же множество
+ * в обоих порядках).
+ *
  * @returns {Map<number, {with:number, building:string, loses:boolean}>}
  */
-function resolveCollisions(rows) {
+export function resolveCollisions(rows) {
   const out = new Map();
   const byDoctor = new Map();
   for (const r of rows) {
@@ -381,16 +538,23 @@ function resolveCollisions(rows) {
     byDoctor.get(r.doctor_id).push(r);
   }
   for (const list of byDoctor.values()) {
+    // Сравнение строк, а не localeCompare: ключ — не текст на языке, а
+    // склеенные ISO-время, буква и uid, и порядок обязан быть одинаковым на
+    // любой машине с любой локалью.
+    list.sort((x, y) => { const a = collisionKey(x), b = collisionKey(y); return a < b ? -1 : a > b ? 1 : 0; });
     for (let i = 0; i < list.length; i++) {
       for (let j = i + 1; j < list.length; j++) {
         const a = list[i], b = list[j];
         if (a.home === b.home) continue;                       // своё двойное — не сюда
         if (a.endMs <= b.startMs || b.endMs <= a.startMs) continue;
+        // Список отсортирован, поэтому a ВСЕГДА первый; сравнение оставлено
+        // явным, чтобы правило читалось здесь, а не выводилось из сортировки.
         const aFirst = collisionKey(a) <= collisionKey(b);
         const loser = aFirst ? b : a;
         const winner = aFirst ? a : b;
         // Проигравший уже отмечен другим столкновением — не переписываем:
-        // первое названное и есть то, с кем он спорит.
+        // первое названное и есть то, с кем он спорит. После сортировки это
+        // «самый ранний из соперников», а не «кто попался первым в выборке».
         if (!out.has(loser.id)) out.set(loser.id, { with: winner.id, building: winner.building, loses: true });
         if (!out.has(winner.id)) out.set(winner.id, { with: loser.id, building: loser.building, loses: false });
       }
@@ -427,11 +591,19 @@ function crossContext(db, { fromMs, toMs }) {
   try {
     rows = db.prepare(`
       SELECT v.id, v.uid, v.doctor_id, v.visit_date, v.duration_minutes, v.status,
-             v.sync_origin, v.cross_branch, v.cross_branch_seq, v.booked_at,
+             v.sync_origin, v.cross_branch, v.cross_branch_seq, v.booked_at, v.created_at,
              u.branch_id AS doctor_branch_id
         FROM visits v
         LEFT JOIN users u ON u.id = v.doctor_id
        WHERE v.visit_date >= ? AND v.visit_date < ?
+       -- ORDER BY НЕ КОСМЕТИКА. Ниже по этим строкам считается вердикт спора
+       -- за слот, и он обязан зависеть только от МНОЖЕСТВА записей. Без явного
+       -- порядка SQLite вправе вернуть их как угодно — а у двух зданий «как
+       -- угодно» разное. resolveCollisions пересортирует список своим ключом,
+       -- этот порядок — второй замок на той же двери: одинаковый ответ базы на
+       -- одинаковый вопрос стоит дёшево и избавляет от «у меня не
+       -- воспроизводится».
+       ORDER BY v.visit_date, v.uid, v.id
     `).all(new Date(fromMs - pad).toISOString(), new Date(toMs + pad).toISOString());
   } catch (e) {
     // База без миграции 100 — сетка обязана рисоваться и без межфилиальных
@@ -469,6 +641,10 @@ function crossContext(db, { fromMs, toMs }) {
       id: r.id, uid: r.uid || '', doctor_id: r.doctor_id, startMs, endMs,
       status: r.status, home, building,
       booked_at: r.booked_at || '',
+      // Когда мы начали ждать квитанцию. booked_at — момент записи, и он же
+      // начало ожидания; у строк старше миграции 100 его нет, и тогда честнее
+      // всего created_at: строку завели тогда же.
+      since: r.booked_at || r.created_at || '',
       foreign: r.sync_origin != null,
       cross: r.cross_branch ? String(r.cross_branch).trim().toUpperCase() : null,
       cross_seq: Number(r.cross_branch_seq) || 0,
@@ -479,13 +655,27 @@ function crossContext(db, { fromMs, toMs }) {
   // трём, что и запрет двойной записи: отменённая запись ни с кем не спорит.
   const collisions = resolveCollisions(live.filter((r) => BUSY_STATUSES.includes(r.status)));
 
+  const nowMs = Date.now();
   const visits = {};
   for (const r of live) {
     const confirming = !!(r.cross && !confirmedBy(db, r.cross, r.cross_seq));
     const collision = collisions.get(r.id) || null;
+    // ЧУЖАЯ ЗАПИСЬ БЕЗ ВРАЧА — самостоятельный повод попасть в этот ответ.
+    // Разбор — у UNASSIGNED_FOREIGN ниже; коротко: она не занимает ничьего
+    // времени и поэтому обязана быть хотя бы НАЗВАНА.
+    const unassigned = !!(r.foreign && !r.doctor_id && BUSY_STATUSES.includes(r.status));
     // Карточка своего здания, никем не оспоренная и никого не ждущая, в этом
     // ответе не нужна: экран рисует её как рисовал.
     if (!r.foreign && !confirming && !collision && (!r.building || r.building === mine)) continue;
+    // ВОЗРАСТ ОЖИДАНИЯ. Без него «подтверждается» на записи часовой давности и
+    // на записи, висящей вторые сутки, выглядит одинаково — а это две разные
+    // новости: первая нормальна, вторая означает, что канал стоит и в том
+    // здании о пациенте не знают. Считает сервер, потому что это тот же ответ,
+    // что и само «подтверждается»: экран не должен уметь вычислить одно без
+    // другого и разойтись с ним.
+    const sinceMs = confirming && r.since ? Date.parse(r.since) : NaN;
+    const waitingMin = Number.isFinite(sinceMs) && sinceMs <= nowMs
+      ? Math.floor((nowMs - sinceMs) / 60000) : null;
     visits[r.id] = {
       building: r.building || null,
       home: r.home || null,
@@ -495,11 +685,17 @@ function crossContext(db, { fromMs, toMs }) {
       // подтверждена или нет.
       as_of: r.foreign ? (asOf.get(r.home) || null) : null,
       confirming,
+      confirming_minutes: waitingMin,
+      confirming_since: confirming ? (r.since || null) : null,
+      // Порог перешёл — это уже не «идёт обмен», а «что-то не так», и слово на
+      // экране меняется вместе с этим флагом.
+      confirming_stale: !!(confirming && waitingMin != null && waitingMin >= CONFIRMING_STALE_MIN),
+      unassigned,
       cross: r.cross,
       collision,
     };
   }
-  return { self: mine, buildings, visits };
+  return { self: mine, buildings, visits, stale_after_minutes: CONFIRMING_STALE_MIN };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -558,6 +754,15 @@ export function calendarSlots(db, args, user) {
   const segments = windowSegments(win);
   const starts = slotStarts({ segments, busy: busyMinutes, durationMin, stepMin, minStartMin });
 
+  // ВРЕМЯ ПОД ВОПРОСОМ (UNASSIGNED_FOREIGN). Слоты остаются свободными — в том
+  // здании это, скорее всего, другой врач, — но названы: спрашивающий обязан
+  // узнать о приехавшем пациенте без врача ДО того, как посадит туда своего.
+  const mine = selfLetter(db);
+  const far = doctor ? letterOfBranch(db, doctor.branch_id) : null;
+  const atRisk = far && mine && far !== mine
+    ? unassignedForeign(db, { letter: far, fromMs: dayStartMs, toMs: dayEndMs })
+    : [];
+
   return {
     date: dayIso,
     resource: doctor
@@ -579,6 +784,12 @@ export function calendarSlots(db, args, user) {
       status: b.status,
       patient_id: b.patient_id,
       patient_name: b.patient_name,
+    })),
+    at_risk: atRisk.map((b) => ({
+      visit_id: b.visit_id,
+      from: formatHhmm(minutesOfLocal(b.startMs)),
+      to: formatHhmm(minutesOfLocal(b.startMs) + b.durationMin),
+      building: b.building,
     })),
   };
 }
@@ -612,7 +823,15 @@ export function calendarWindows(db, args, user) {
   // Экран строит переключатель филиалов ДО того, как что-нибудь выбрано, и
   // отказ «выберите ресурсы» оставил бы его без переключателя навсегда.
   if (doctorIds.length + roomIds.length === 0) {
-    return { days: [], windows: {}, cross: { self: selfLetter(db), buildings: networkBuildings(db), visits: {} } };
+    return {
+      days: [], windows: {},
+      // Порог тот же и в пустом ответе: экран строит переключатель зданий до
+      // всякого выбора, и правило не должно приезжать половиной.
+      cross: {
+        self: selfLetter(db), buildings: networkBuildings(db), visits: {},
+        stale_after_minutes: CONFIRMING_STALE_MIN,
+      },
+    };
   }
   if (doctorIds.length + roomIds.length > 200) throw new RpcError('too many resources.', 400);
 
@@ -843,6 +1062,23 @@ export async function calendarBook(db, args, user, deps = {}) {
   out.emergency = !!(conflict && emergency);
   out.day = dayIso;
   if (!target) return out;
+
+  // ЧУЖАЯ ЗАПИСЬ БЕЗ ВРАЧА НА ЭТО ЖЕ ВРЕМЯ (UNASSIGNED_FOREIGN). Отказать
+  // нельзя — там почти наверняка другой врач, — но и промолчать нельзя:
+  // регистратура должна знать, что в том здании на этот час уже кого-то ждут.
+  // Экран предупреждает об этом ДО записи (room-calendar.js), этот ответ —
+  // второй, последний рубеж для всех прочих способов позвать calendar_book.
+  const risky = unassignedForeign(db, {
+    letter: target.letter, fromMs: startMs, toMs: startMs + durationMin * 60000,
+  });
+  if (risky.length) {
+    out.at_risk = risky.map((b) => ({
+      visit_id: b.visit_id,
+      from: formatHhmm(minutesOfLocal(b.startMs)),
+      to: formatHhmm(minutesOfLocal(b.startMs) + b.durationMin),
+      building: b.building,
+    }));
+  }
 
   // ─── СРОЧНАЯ ВЫГРУЗКА ───────────────────────────────────────────────────
   // Уже ПОСЛЕ транзакции: запись в базе, и что бы ни случилось с каналом, она

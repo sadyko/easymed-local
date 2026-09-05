@@ -78,7 +78,9 @@ function receiver() {
 const apply = (db, cat) => db.transaction(() => applyCatalogue(db, cat))();
 
 test('выгрузка отдаёт ровно перечисленные колонки — и ни одной лишней', () => {
-  const db = seedMain(fresh());
+  // seedStaff — чтобы в выгрузке БЫЛИ сотрудники: без единой строки цикл ниже
+  // не проверяет по этой таблице ничего (см. пояснение внутри).
+  const db = seedStaff(seedMain(fresh()));
   const cat = exportCatalogue(db);
 
   assert.deepEqual(Object.keys(cat.doc_settings).sort(), [...DOC_SETTINGS_COLUMNS].sort());
@@ -88,9 +90,21 @@ test('выгрузка отдаёт ровно перечисленные кол
   }
   for (const spec of TABLES) {
     assert.ok(Array.isArray(cat[spec.name]), spec.name + ' должен быть в выгрузке');
+    // ПРОВЕРКА НЕ ДОЛЖНА БЫТЬ ХОЛОСТОЙ. У пустой таблицы цикл не выполняется ни
+    // разу и «лишних колонок нет» становится правдой ни о чём — так users и
+    // проехали мимо неё, пока в посеве не появился ни один сотрудник.
+    assert.ok(cat[spec.name].length > 0, spec.name + ': посев обязан дать хоть одну строку, иначе проверка холостая');
     for (const row of cat[spec.name]) {
-      assert.deepEqual(Object.keys(row).sort(), ['id', ...spec.columns].sort(),
+      // Производное поле (branchLetter) — часть контракта выгрузки наравне с
+      // колонками, а вот САМА колонка приписки уезжать не должна: наружу едет
+      // буква здания, местный id остаётся дома.
+      const derived = spec.branchLetter ? [spec.branchLetter.field] : [];
+      assert.deepEqual(Object.keys(row).sort(), ['id', ...spec.columns, ...derived].sort(),
         spec.name + ': набор колонок задан в коде и не должен расходиться');
+      if (spec.branchLetter) {
+        assert.equal(spec.branchLetter.column in row, false,
+          spec.name + ': местный id здания не должен уезжать — у соседа он указывает в никуда');
+      }
     }
   }
 });
@@ -428,16 +442,43 @@ test('усыновление сквозь ё/е и NFD: «Прием карди�
 // «Main Branch». Имя знает только главная клиника; ключ с именем (0.6.9) чинит
 // лишь новые подключения. Список сети в справочнике чинит уже подключённые при
 // первой же синхронизации.
-test('справочник несёт список сети: буква -> имя, только строки с буквой', () => {
+test('справочник несёт список сети: буква -> имя и часы, только строки с буквой', () => {
   const db = fresh();
-  db.prepare("UPDATE branches SET name = 'Heal point' WHERE letter = 'A'").run();
+  const WH = JSON.stringify({ mon: { enabled: true, from: '08:00', to: '17:00' } });
+  db.prepare("UPDATE branches SET name = 'Heal point', working_hours = ? WHERE letter = 'A'").run(WH);
   db.prepare("INSERT INTO branches (name, letter) VALUES ('Клиника на Чиланзаре', 'C')").run();
   db.prepare("INSERT INTO branches (name) VALUES ('Кабинет без буквы')").run();
   const out = exportCatalogue(db);
+  // CROSS_BRANCH_CALENDAR_V1 — ЧАСЫ ЗДАНИЯ ЕДУТ ВМЕСТЕ С ИМЕНЕМ: окно приёма
+  // врача сужается часами ЕГО здания, и без них сосед предлагал бы время, на
+  // которое само здание записать не даёт.
   assert.deepEqual(out.roster, [
-    { letter: 'A', name: 'Heal point' },
-    { letter: 'C', name: 'Клиника на Чиланзаре' },
+    { letter: 'A', name: 'Heal point', working_hours: WH, is_24_7: 0 },
+    { letter: 'C', name: 'Клиника на Чиланзаре', working_hours: '{}', is_24_7: 0 },
   ], 'строка без буквы — не узел сети, соседям ни к чему');
+  db.close();
+});
+
+test('часы приезжают ЧУЖОМУ зданию и не трогают СВОЁ: распорядок здания правит здание', () => {
+  const db = fresh();
+  becomeSecondary(db, { letter: 'C', name: 'Чиланзар' });
+  const MY = JSON.stringify({ mon: { enabled: true, from: '07:00', to: '15:00' } });
+  db.prepare("UPDATE branches SET working_hours = ? WHERE letter = 'C'").run(MY);
+
+  const MAIN = JSON.stringify({ mon: { enabled: true, from: '08:00', to: '17:00' } });
+  applyCatalogue(db, { roster: [
+    { letter: 'A', name: 'Heal point', working_hours: MAIN, is_24_7: 0 },
+    // Главная клиника считает, что филиал C работает круглосуточно; про СВОЙ
+    // распорядок филиал ей не обязан верить — его выставляет местный
+    // администратор, и приехавшее значение перекрыло бы его молча.
+    { letter: 'C', name: 'Чиланзар', working_hours: '{}', is_24_7: 1 },
+  ] });
+
+  assert.equal(db.prepare("SELECT working_hours FROM branches WHERE letter = 'A'").get().working_hours, MAIN,
+    'часы соседнего здания обязаны доехать: без них его врачам считается не то окно');
+  const mine = db.prepare("SELECT working_hours, is_24_7 FROM branches WHERE letter = 'C'").get();
+  assert.equal(mine.working_hours, MY, 'свои часы правит только это здание');
+  assert.equal(mine.is_24_7, 0);
   db.close();
 });
 

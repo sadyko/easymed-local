@@ -23,6 +23,9 @@ import { migrate } from '../../db/migrate.js';
 import { calendarSlots, calendarWindows, calendarBook } from './calendar.js';
 // CROSS_BRANCH_CALENDAR_V1 — квитанция соседа приходит НАСТОЯЩИМ механизмом.
 import { markConfirmed } from '../branch-sync/journal.js';
+// СЕТЬ СТРОИТСЯ НАСТОЯЩИМ СПРАВОЧНИКОМ — см. crossDb ниже.
+import { exportCatalogue, applyCatalogue } from '../branch-sync/catalogue.js';
+import { becomeSecondary } from '../branch-sync/identity.js';
 
 const registrar = { id: 1, role: 'registrar', extra_roles: [] };
 const cashier = { id: 2, role: 'cashier', extra_roles: [] };
@@ -39,6 +42,10 @@ const WH_9_18 = JSON.stringify({
 function freshDb({ workingHours = WH_9_18 } = {}) {
   const db = openDb(':memory:');
   migrate(db);
+  return seedRows(db, workingHours);
+}
+
+function seedRows(db, workingHours = WH_9_18) {
   db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, working_hours) VALUES (1,'reg','x','Регистратор','registrar',0,'')").run();
   db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, working_hours) VALUES (7,'doc','x','Петров П.П.','doctor',1,?)").run(workingHours);
   db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, working_hours) VALUES (8,'doc2','x','Каримов Р.','doctor',1,?)").run(workingHours);
@@ -393,13 +400,53 @@ test('calendar_windows: пустой запрос — пустой ответ, �
 // говорят. Слот держится здесь, ответ называет вещи своими именами, и ничего
 // не теряется — порция ждёт в журнале следующего такта.
 
-/** Второе здание в сети: строка `branches` с буквой B и врач, приписанный к ней. */
-function withBranchB(db) {
-  db.prepare("UPDATE branches SET letter = 'A' WHERE id = (SELECT MIN(id) FROM branches)").run();
-  db.prepare("INSERT INTO branches (id, name, letter, active) VALUES (77,'Второй корпус','B',0)").run();
-  db.prepare('UPDATE branch_identity SET letter = ?, branch_id = (SELECT MIN(id) FROM branches) WHERE id = 1').run('A');
-  db.prepare('UPDATE users SET branch_id = 77 WHERE id = 8').run();   // Каримов принимает в B
-  return 77;
+// ═══ СЕТЬ СТРОИТСЯ НАСТОЯЩЕЙ СИНХРОНИЗАЦИЕЙ, А НЕ РУКАМИ ═══════════════════
+//
+// Здесь стояло `UPDATE users SET branch_id = 77` — и ровно из-за этой строки
+// весь раздел ниже был зелёным на состоянии, которого В ЖИЗНИ НЕ БЫВАЕТ.
+// Приписку врача ставит справочник, справочник её не вёз, и у настоящего
+// филиала все врачи главной клиники стояли без здания: запись в главный корпус
+// считалась своей, слот там не держался, «подтверждается» не появлялось —
+// а тест этого не видел, потому что сам дописывал колонку, которую
+// синхронизация записать не могла.
+//
+// Поэтому состояние теперь СОБИРАЕТСЯ ТЕМ ЖЕ КОДОМ, что и в клинике:
+// заводится вторая база — главная клиника со своими id и своим ростером, —
+// exportCatalogue отдаёт её справочник, applyCatalogue приземляет его сюда.
+// Если приписка перестанет ездить, эти тесты станут красными сами, без
+// напоминания.
+//
+// ЭТА УСТАНОВКА — ФИЛИАЛ B; соседнее для неё здание — главная клиника A.
+// Раньше было наоборот, и это тоже было мимо: у ГЛАВНОЙ приписку своих врачей
+// проставляет местный администратор, поэтому у неё межфилиальная запись
+// работала и на сломанном справочнике. Ломалось у филиала — вот он и стоит.
+const MINE = 'B';
+const FAR = 'A';
+
+/** Филиал B, получивший справочник главной клиники A настоящим приёмом. */
+function crossDb() {
+  const db = openDb(':memory:');
+  migrate(db);
+  // Буква — ДО первого пациента: установке, уже выдавшей номера под своей
+  // буквой, becomeSecondary отказывает (миграция 080), и это правильно.
+  becomeSecondary(db, { letter: MINE, name: 'Второй корпус' });
+  seedRows(db);
+
+  const main = openDb(':memory:');
+  migrate(main);
+  main.prepare("UPDATE branches SET name = 'Главный корпус' WHERE letter = 'A'").run();
+  main.prepare('INSERT INTO branches (name, letter) VALUES (?, ?)').run('Второй корпус', MINE);
+  const far = main.prepare("SELECT id FROM branches WHERE letter = 'A'").get().id;
+  const near = main.prepare('SELECT id FROM branches WHERE letter = ?').get(MINE).id;
+  // Петров принимает ЗДЕСЬ (в B), Каримов — в главном корпусе. Ни один id
+  // здания отсюда не уедет: наружу идёт буква.
+  main.prepare(`INSERT INTO users (username, password_hash, full_name, role, is_doctor, working_hours, branch_id)
+                VALUES ('doc','x','Петров П.П.','doctor',1,?,?)`).run(WH_9_18, near);
+  main.prepare(`INSERT INTO users (username, password_hash, full_name, role, is_doctor, working_hours, branch_id)
+                VALUES ('doc2','x','Каримов Р.','doctor',1,?,?)`).run(WH_9_18, far);
+  db.transaction(() => applyCatalogue(db, exportCatalogue(main)))();
+  main.close();
+  return db;
 }
 
 /** Шпион вместо срочной выгрузки: считает вызовы и отвечает, чем скажут. */
@@ -413,26 +460,24 @@ const journalRows = (db, uid) =>
   db.prepare("SELECT COUNT(*) n FROM sync_journal WHERE tbl='visits' AND uid = ?").get(uid).n;
 
 test('запись в чужое здание выкладывается НЕМЕДЛЕННО, а не в часовой такт', async () => {
-  const db = freshDb();
-  withBranchB(db);
+  const db = crossDb();
   const pub = spy({ ok: true, at: '2026-09-05T10:00:00Z' });
 
   const out = await calendarBook(db, { patient_id: 3, doctor_id: 8, start: at(10) }, registrar,
     { publishImpl: pub.impl, dataDir: '/tmp/none' });
 
   assert.equal(pub.calls.length, 1, 'выгрузка обязана случиться СРАЗУ: час ожидания — это второй человек на том же приёме');
-  assert.equal(out.cross_branch.letter, 'B');
+  assert.equal(out.cross_branch.letter, FAR);
   assert.equal(out.cross_branch.published, true);
   assert.equal(out.cross_branch.confirmed, false,
     'подтвердить в момент записи невозможно: сосед ещё даже не забирал блоб');
-  assert.equal(out.visit.cross_branch, 'B', 'на записи обязана стоять буква здания, которое её подтвердит');
+  assert.equal(out.visit.cross_branch, FAR, 'на записи обязана стоять буква здания, которое её подтвердит');
   assert.ok(out.visit.cross_branch_seq > 0, 'без номера в журнале подтверждать нечего');
   db.close();
 });
 
 test('запись в СВОЁ здание ничего никуда не выкладывает', async () => {
-  const db = freshDb();
-  withBranchB(db);
+  const db = crossDb();
   const pub = spy();
   const out = await calendarBook(db, { patient_id: 3, doctor_id: 7, start: at(10) }, registrar,
     { publishImpl: pub.impl, dataDir: '/tmp/none' });
@@ -443,8 +488,7 @@ test('запись в СВОЁ здание ничего никуда не вы�
 });
 
 test('связи нет: запись СОЗДАНА, ответ говорит «не подтверждено», и ничего не потеряно', async () => {
-  const db = freshDb();
-  withBranchB(db);
+  const db = crossDb();
   const pub = spy({ ok: false, reason: 'relay_offline' });
 
   const out = await calendarBook(db, { patient_id: 3, doctor_id: 8, start: at(10) }, registrar,
@@ -464,8 +508,7 @@ test('связи нет: запись СОЗДАНА, ответ говорит 
 });
 
 test('до квитанции: карточка «подтверждается», слот занят; после — подтверждена', async () => {
-  const db = freshDb();
-  withBranchB(db);
+  const db = crossDb();
   const pub = spy({ ok: true });
   const out = await calendarBook(db, { patient_id: 3, doctor_id: 8, start: at(10), duration_minutes: 30 }, registrar,
     { publishImpl: pub.impl, dataDir: '/tmp/none' });
@@ -474,7 +517,7 @@ test('до квитанции: карточка «подтверждается»
   const before = calendarWindows(db, { doctor_ids: [8], date: DAY, days: 1 }, registrar);
   assert.equal(before.cross.visits[out.visit.id].confirming, true,
     'квитанции нет — карточка обязана честно говорить «подтверждается»');
-  assert.equal(before.cross.visits[out.visit.id].building, 'B');
+  assert.equal(before.cross.visits[out.visit.id].building, FAR);
 
   // СЛОТ ЗАНЯТ И ЗДЕСЬ: неподтверждённая запись держит время так же, как любая.
   await assert.rejects(
@@ -485,8 +528,8 @@ test('до квитанции: карточка «подтверждается»
 
   // Квитанция приходит ТЕМ ЖЕ механизмом, что и всегда: sent_seq двигает только
   // markConfirmed, второго способа не заведено.
-  db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq) VALUES ('B', ?, 0)").run(seq);
-  markConfirmed(db, 'B', seq);
+  db.prepare('INSERT INTO sync_peers (node, pub_seq, sent_seq) VALUES (?, ?, 0)').run(FAR, seq);
+  markConfirmed(db, FAR, seq);
 
   const after = calendarWindows(db, { doctor_ids: [8], date: DAY, days: 1 }, registrar);
   const info = after.cross.visits[out.visit.id];
