@@ -156,3 +156,29 @@ app's own tests, using the root `package.json`'s test script
 The `test` script in `control-plane/package.json` is declared for when this
 directory is deployed and tested standalone — see the dependencies note
 above for what that requires first.
+
+## Retiring and deleting a clinic
+
+`migrations/001_registry.sql` points here for the policy, so here it is.
+
+**Retire** (`POST /cp/v1/admin/clinics/:id/retire`) sets `active = 0` and stamps
+`retired_at`. Check-in stops re-arming the licence, so the clinic keeps working on the
+licence it already holds — at most 14 more days — then locks. Reversible only by hand,
+on the server: there is deliberately no un-retire route.
+
+**Delete** (`DELETE /cp/v1/admin/clinics/:id`) is refused unless the clinic is already
+retired and has no filials. It removes the clinic row — `clinic_modules`, `relay_tokens`
+and `relay_blobs` cascade — closes any still-open `module_requests` as `declined`, and
+keeps `checkins` and the request rows as evidence for a billing dispute.
+
+**A deleted `clinic_id` is never reissued.** Every signed licence names a `clinic_id`, so
+if an id came back the old clinic's licence file — still on its old computer — would
+verify against a different clinic and grant it that clinic's entitlements. Deletion
+therefore writes the id into `deleted_clinics`, and two triggers on `clinics`
+(`clinics_no_resurrection`, `clinics_no_resurrection_rename`) abort any attempt to insert
+that id again or to rename another clinic onto it. Both id allocators —
+`nextClinicId` in `routes/admin.js` and `nextBranchId` in `routes/branch.js` — count the
+graveyard alongside the living, so neither ever proposes a number the triggers would refuse.
+
+The practical consequence: **a deleted clinic cannot be restored under its old identity**,
+not even from a database backup. That is the price of the guarantee above.

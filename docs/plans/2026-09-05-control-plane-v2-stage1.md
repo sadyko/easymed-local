@@ -2004,7 +2004,8 @@ At `http://localhost:8095/cp/`, sign in and confirm each of these:
 6. Delete it → the card disappears.
 7. Create a new clinic → its id is the **next** number, not the deleted one.
 8. Retire a clinic that has a filial, try to delete it → the dialog shows
-   "This clinic has 1 filial. Delete or reassign them first." and the clinic stays.
+   "This clinic has 1 filial — retire and delete it first, then delete this clinic."
+   and the clinic stays.
 9. **Compact** hides the stats and module rows; **Show retired** toggles the last band.
 
 - [ ] **Step 5: Commit**
@@ -2038,10 +2039,25 @@ db.backup(\"/root/registry-backup-\"+Date.now()+\".db\").then(()=>console.log(\"
 
 ```bash
 cd "control-plane"
+# 1. The migration FIRST, always. The new admin.js selects clinics.retired_at,
+#    which does not exist until 010 runs at boot — restart without it and the
+#    whole clinics list 500s.
 scp server/db/migrations/010_deleted_clinics.sql root@45.77.242.169:/opt/easymed-cp/control-plane/server/db/migrations/
-scp server/routes/admin.js root@45.77.242.169:/opt/easymed-cp/control-plane/server/routes/
-scp public/panel.css public/panel-logic.js public/panel-api.js public/panel-clinics-list.js public/panel-card-menu.js \
-    root@45.77.242.169:/opt/easymed-cp/control-plane/public/
+
+# 2. BOTH routes. branch.js is NOT optional: 010's trigger goes live at the
+#    restart, and the old branch.js still allocates filial ids from the count of
+#    LIVING children. The first time a filial is deleted — which is exactly what
+#    the delete route's own refusal message tells the owner to do — the next
+#    filial a CLINIC creates hits the trigger and gets a bare 500, with the real
+#    message swallowed by that route's catch. That route is authenticated by a
+#    clinic's install token, so the failure lands on a clinic, not on the panel.
+scp server/routes/admin.js server/routes/branch.js root@45.77.242.169:/opt/easymed-cp/control-plane/server/routes/
+
+# 3. Panel files. panel-card-menu.js is listed FIRST deliberately: panel.js
+#    statically imports panel-clinics-list.js, which statically imports this
+#    one. A 404 on it aborts the whole module graph and the panel sits on the
+#    boot spinner forever with no error on screen, because boot() never runs.
+scp public/panel-card-menu.js public/panel-clinics-list.js public/panel-logic.js     public/panel-api.js public/panel-clinic-detail.js public/panel.css     root@45.77.242.169:/opt/easymed-cp/control-plane/public/
 ```
 
 - [ ] **Step 3: Restart and probe**

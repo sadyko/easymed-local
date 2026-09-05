@@ -95,7 +95,7 @@ One transaction. Refuses, with a distinct message for each case:
 |---|---|
 | clinic not found | 404 |
 | `active = 1` | 409 — "Retire this clinic before deleting it." |
-| has filials (`parent_clinic_id = :id`) | 409 — "This clinic has N filials. Delete or reassign them first." |
+| has filials (`parent_clinic_id = :id`) | 409 — "This clinic has N filials — retire and delete them first, then delete this clinic." (the shipped wording states the whole procedure; retiring a parent does not retire its filials) |
 
 That third check is not optional politeness. `foreign_keys = ON`
 (`server/db/connection.js:17`) and `clinics.parent_clinic_id REFERENCES clinics(clinic_id)`
@@ -126,8 +126,12 @@ mockups (`.superpowers/brainstorm/`): a **card board**, not a table, with **rich
 ### Visual system
 
 Warm clinical, from the owner's reference: cream ground `#FAF6EF`, white cards, soft amber
-accent `#F2C14E`, ink `#2A2621`. Semantic states are muted, never alarm-red: `#5B8C6E` ok,
-`#D98E4A` warning, `#C4645A` danger. 13px card radius, generous padding. Inline SVG line
+accent `#F2C14E`, ink `#2A2621`. Semantic states are muted, never alarm-red. The three status
+inks were **corrected during implementation** after their WCAG ratios were computed rather than
+eyeballed: ok `#5B8C6E`→`#4A7159`, danger `#C4645A`→`#9F5149`, secondary ink `#8C8377`→`#736A5D`,
+all of which failed 4.5:1 as text on white; `#D98E4A` is kept for warning *backgrounds* only,
+with `#8D5C30` added for warning text. The live values and their ratios are recorded in
+`control-plane/public/panel.css`. 13px card radius, generous padding. Inline SVG line
 icons, matching the existing rail mark; **no emoji anywhere**. Panel stays in **English** —
 the owner chose not to translate it.
 
@@ -137,8 +141,10 @@ the owner chose not to translate it.
 
 Cards, three across on a wide screen, responsive down to one. Grouped into bands:
 
-1. **Needs attention** — quiet for >7 days, subscription ending within 30 days, or a reported
-   failure on its current release. Amber ring.
+1. **Needs attention** — never installed, gone quiet for >7 days, unpaid, subscription ending
+   within 30 days, or three-plus releases behind. Amber ring, and the card names the reason.
+   ("A reported failure on its current release" was specced here and NOT built — it needs the
+   release outcome counters, which arrive with the Updates screen in stage ②.)
 2. **Live**
 3. **Retired** — dimmed, behind the toggle.
 
@@ -189,7 +195,8 @@ New:
   authenticates with the *parent's* install token, which the vendor does not hold.
 
 `GET /admin/clinics` gains `parent_clinic_id`, `filial_count`, `ring`, `pinned_version`,
-`retired_at`, `latest_stats`, `latest_stats_at`, `versions_behind`.
+`retired_at`, `latest_stats`, `latest_stats_at`, `versions_behind`. `ring` and `pinned_version`
+ship in stage ① but nothing reads them until the Updates screen in stage ②.
 
 `versions_behind` is computed **server-side**, deliberately. Comparing versions numerically per
 segment ("2.10.0" sorts after "2.9.0") already exists twice in this repo and `rings.js` reuses
@@ -229,8 +236,9 @@ unlock-code tool moves to `panel-unlock.js` in the same pass.
 - **`panel-logic.js`** — band assignment, "N behind", stat formatting, retired-date fallback,
   as pure-function tests in the existing file.
 - Full suite green before any deploy: `node --test $(find control-plane -name "*.test.js" ...)`.
-  452 tests pass today (2026-09-05); the directory-argument form of `node --test` is broken on
-  Windows/Node 24, so the file list is explicit.
+  452 tests passed when this was written; stage ① ends at 487 (six dead tests for the removed
+  table were deleted along with the code they covered). The directory-argument form of
+  `node --test` is broken on Windows/Node 24, so the file list is explicit.
 
 ## 6 · Order of work
 
