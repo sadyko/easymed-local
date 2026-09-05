@@ -136,7 +136,7 @@ function nextWeekday(offset = 1) {
 const WD = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const isoOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-function seed({ doctorOff = false, cross = false, stale = false, nodoc = false } = {}) {
+function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, cancelled = false } = {}) {
   const db = openDb(':memory:');
   migrate(db);
   const day = nextWeekday();
@@ -162,6 +162,14 @@ function seed({ doctorOff = false, cross = false, stale = false, nodoc = false }
   const start = new Date(day); start.setHours(10, 0, 0, 0);
   db.prepare(`INSERT INTO visits (id, patient_id, doctor_id, room_id, service_id, visit_date, duration_minutes, status)
               VALUES (55, 3, 7, 11, 21, ?, 30, 'confirmed')`).run(start.toISOString());
+
+  // PASTEL_IDENTITY_V1 — отменённый приём ТОГО ЖЕ врача, что и действующий:
+  // только так проверяется, что отмена читается не цветом (цвет у них общий).
+  if (cancelled) {
+    const c = new Date(day); c.setHours(14, 0, 0, 0);
+    db.prepare(`INSERT INTO visits (id, patient_id, doctor_id, room_id, service_id, visit_date, duration_minutes, status)
+                VALUES (60, 3, 7, 11, 21, ?, 30, 'cancelled')`).run(c.toISOString());
+  }
 
   // CROSS_BRANCH_CALENDAR_V1 — сеть из двух зданий и случаи, ради которых экран
   // переписывался: чужая запись, наша неподтверждённая запись в чужое здание,
@@ -230,8 +238,8 @@ function seed({ doctorOff = false, cross = false, stale = false, nodoc = false }
 }
 
 /** Отрисовать экран на нужный день. */
-async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false } = {}) {
-  const s = seed({ doctorOff, cross, stale, nodoc });
+async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false, cancelled = false } = {}) {
+  const s = seed({ doctorOff, cross, stale, nodoc, cancelled });
   if (DB) DB.close();
   DB = s.db;
   FAIL_TABLE = failTable;
@@ -460,4 +468,87 @@ test('ПЕРЕД записью в чужое здание на занятое �
   cancel.click();
   await flush();
   assert.equal(byClass(document.body, 'rcal-confirm').length, 0);
+});
+
+// ═══ PASTEL_IDENTITY_V1 ═════════════════════════════════════════════════════
+// Владелец: «make cards of the … calendar bookings … colorful. using pastel
+// colors». Проверяем не «класс проставлен», а два свойства, ради которых
+// раскраска вообще заводится и без которых она вредна:
+//
+//   1. Цвет ПРИНАДЛЕЖИТ ВРАЧУ. Один и тот же врач одного цвета на всех своих
+//      карточках, разные врачи — разного. Иначе цвет ничему не учит: смотреть
+//      на него так же бесполезно, как на случайный узор.
+//   2. Отмена читается БЕЗ цвета. Заливка занята врачом, поэтому отменённый
+//      приём остаётся ТОГО ЖЕ цвета, что и действующий приём того же врача —
+//      и обязан отличаться другим, нецветовым признаком. Это ровно тот случай,
+//      который «покрасим отменённые в серый» ломает молча.
+
+const pastelOf = (el) => String(el.className).split(/\s+/).filter((c) => c.startsWith('pastel-'));
+const doctorOfCard = (el) => (/Каримов Рустам/.test(textOf(el)) ? 'Каримов' : (/Петров Пётр/.test(textOf(el)) ? 'Петров' : '?'));
+
+test('ЗАЛИВКА КАРТОЧКИ — ЭТО ВРАЧ: у одного врача она одна, у разных врачей разная', async () => {
+  const { box } = await render({ cross: true });
+  const cards = byClass(box, 'rcal-appt');
+  assert.ok(cards.length >= 3, 'для проверки нужны карточки обоих врачей: ' + cards.length);
+
+  const byDoctor = new Map();
+  for (const c of cards) {
+    const hues = pastelOf(c);
+    assert.equal(hues.length, 1, 'у карточки должен быть ровно один оттенок, а не ' + hues.length + ': ' + c.className);
+    const d = doctorOfCard(c);
+    assert.notEqual(d, '?', 'не удалось определить врача карточки: ' + textOf(c));
+    if (!byDoctor.has(d)) byDoctor.set(d, new Set());
+    byDoctor.get(d).add(hues[0]);
+  }
+
+  // Одна и та же фамилия — один и тот же оттенок на ВСЕХ её карточках.
+  for (const [d, hues] of byDoctor) {
+    assert.equal(hues.size, 1, 'врач ' + d + ' покрашен в ' + hues.size + ' разных цвета: ' + [...hues].join(', '));
+  }
+  // Разные фамилии — разные оттенки.
+  assert.ok(byDoctor.size >= 2, 'в стенде должно быть два врача: ' + [...byDoctor.keys()].join(', '));
+  const all = [...byDoctor.values()].map((s) => [...s][0]);
+  assert.equal(new Set(all).size, all.length, 'двум разным врачам достался один цвет: ' + all.join(', '));
+
+  // И это устойчиво: вторая отрисовка тех же данных даёт те же цвета. Хэш, а
+  // не счётчик и не порядок отрисовки, — иначе цвет врача менялся бы от того,
+  // кого сегодня успели записать первым.
+  const again = await render({ cross: true });
+  const map2 = new Map();
+  for (const c of byClass(again.box, 'rcal-appt')) map2.set(doctorOfCard(c), pastelOf(c)[0]);
+  for (const [d, hues] of byDoctor) {
+    assert.equal(map2.get(d), [...hues][0], 'цвет врача ' + d + ' изменился между отрисовками');
+  }
+});
+
+test('ОТМЕНЁННЫЙ ПРИЁМ ОТЛИЧИМ ОТ ДЕЙСТВУЮЩЕГО БЕЗ ОПОРЫ НА ПАСТЕЛЬ', async () => {
+  const { box } = await render({ cancelled: true });
+  // Отменённые по умолчанию скрыты — включаем галочкой, как это делает
+  // регистратура.
+  const chk = walk(box).find((n) => n.tagName === 'INPUT' && n.attrs.type === 'checkbox'
+    && n.parentElement && String(n.parentElement.className).includes('rcal-chk'));
+  assert.ok(chk, 'галочки «Отменённые» нет — без неё отменённый приём не показать');
+  chk.checked = true;
+  chk.dispatchEvent({ type: 'change', target: chk });
+  await flush();
+
+  const cards = byClass(box, 'rcal-appt');
+  assert.equal(cards.length, 2, 'ожидались действующий и отменённый приёмы одного врача: ' + cards.length);
+  const x = cards.filter((c) => String(c.className).includes('rcal-appt-x'));
+  assert.equal(x.length, 1, 'отменённый приём не помечен классом отмены');
+  const live = cards.find((c) => !String(c.className).includes('rcal-appt-x'));
+
+  // ГЛАВНОЕ: врач один, поэтому пастель ОДИНАКОВАЯ — и всё равно эти две
+  // карточки различимы. Если кто-то однажды решит «красить отменённые серым»,
+  // здесь станет видно, что признак отмены исчез вместе с цветом врача.
+  assert.deepEqual(pastelOf(x[0]), pastelOf(live),
+    'отменённый приём перекрашен — значит отмена сообщается ЦВЕТОМ, а цвет занят врачом');
+  assert.ok(pastelOf(live).length === 1, 'у действующего приёма пропал оттенок врача');
+
+  // И признак отмены — не цвет: класс .rcal-appt-x включает штриховку и
+  // зачёркнутую фамилию (правила проверяются числами в
+  // contrast-badge-hatch.test.mjs), а статус остаётся полоской слева.
+  assert.equal(x[0].attrs['data-status'], 'cancelled', 'у отменённой карточки потерялся статус');
+  assert.notEqual(String(live.style.borderLeft || ''), String(x[0].style.borderLeft || ''),
+    'полоска статуса у отменённого и действующего приёма одинакова — статус перестал читаться');
 });

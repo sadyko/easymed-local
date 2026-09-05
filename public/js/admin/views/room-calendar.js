@@ -69,6 +69,10 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, initials, avColor, Avatar } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { loadPatientById } from '../data.js';
+// PASTEL_IDENTITY_V1 — оттенок карточки приёма. Выбор оттенка живёт в одном
+// модуле на три доски (календарь, очередь, канбан), чтобы «мятный» везде
+// означал одно и то же.
+import { pastelFor } from '../pastel.js?v=pastel1';
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';   // RESCAL_WIRE_V1 — same URL as other importers (one instance)
 import { registrarHeader } from './registrar-header.js?v=aurora5';   // NO_GREETING_V1 — same URL as patients.js (one instance)
 
@@ -151,7 +155,11 @@ function ageText(minutes) {
 // CROSS_BRANCH_CALENDAR_V1 — вид межфилиальных подписей. Живёт здесь, а не в
 // admin.css: это свойства ОДНОГО экрана, а таблица стилей общая на все сто с
 // лишним. Размеры — нижняя ступень шкалы (12.5 px), ниже неё не опускаемся.
-const AGE_CSS = { fontSize: '12.5px', color: 'var(--ink-400, #94a3b8)', lineHeight: '1.25' };
+// PASTEL_IDENTITY_V1 — ink-400 давал 3.64:1 даже на белой карточке (норма
+// 4.5:1), а на пастельной заливке падал до 3.19:1. Ступень ink-500 — 6.40:1
+// на белом и 5.37:1 на самой светлой пастели. Приписка мелкая, её и так
+// читают в последнюю очередь.
+const AGE_CSS = { fontSize: '12.5px', color: 'var(--ink-500, #55636d)', lineHeight: '1.25' };
 const FAR_NOTE_CSS = {
     padding: '9px 12px', margin: '0 0 10px', borderRadius: '8px', fontSize: '13.5px',
     background: 'var(--warn-50, #fff7ed)', border: '1px solid var(--warn-200, #fed7aa)',
@@ -948,7 +956,13 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             const cx = apptCross(a);
             const clash = cx && cx.collision && cx.collision.loses;
             const block = h('div', {
+                // PASTEL_IDENTITY_V1 — заливка по ВРАЧУ, устойчиво: pastelFor()
+                // считает оттенок из doctor_id, поэтому один и тот же врач
+                // одного цвета и завтра, и на соседней машине. Без врача класса
+                // нет — карточка остаётся белой, личности у неё пока нет.
+                // Статус заливкой НЕ передаётся: он ниже, полоской слева.
                 class: 'rcal-appt' + (a.status === 'cancelled' ? ' rcal-appt-x' : '')
+                    + (a.doctorId ? ' ' + pastelFor(a.doctorId) : '')
                     + (cx && cx.foreign ? ' rcal-appt-far' : '')
                     + (cx && cx.confirming ? ' rcal-appt-wait' : '')
                     + (clash ? ' rcal-appt-clash' : ''),
@@ -994,7 +1008,9 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                         class: 'rcal-appt-age' + (cx.confirming_stale ? ' rcal-appt-late' : ''),
                         style: Object.assign({}, AGE_CSS, cx.confirming_stale
                             ? { color: 'var(--crit-700, #b91c1c)', fontWeight: 700 }
-                            : { color: 'var(--warn-700, #b45309)' }),
+                            // PASTEL_IDENTITY_V1 — на пастельной заливке warn-700
+                            // даёт 4.40:1; ступень warn-800 — 6.37:1, тот же янтарь.
+                            : { color: 'var(--warn-800, #8a4309)' }),
                     }, cx.confirming_stale
                         ? trf('не подтверждено {age}', { age: ageText(cx.confirming_minutes) })
                         : (cx.confirming_minutes == null

@@ -18,6 +18,9 @@ import { h, Icon, clear, PageHead } from '../ui.js';
 import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — счётчики очереди собираются вокруг чисел
 // MOTION_REVEAL_V1 — общий помощник появления (public/js/admin/motion.js).
 import { revealOn } from '../motion.js?v=mo1';
+// PASTEL_IDENTITY_V1 — оттенок карточки по виду назначения. Словарь один на
+// три доски, чтобы «мятный» в очереди и «мятный» на календаре не разъехались.
+import { pastelForQueueKind } from '../pastel.js?v=pastel1';
 
 // QUEUE_FILTERS_V1 — фильтры живут в состоянии модуля, а не в DOM: доска сама
 // перезагружается каждые 10 секунд, и фильтр, хранившийся в поле ввода,
@@ -359,11 +362,13 @@ function groupCard(g) {
         h('div', { style: { fontSize: '12.5px', textTransform: 'uppercase', letterSpacing: '.05em', marginTop: '3px', opacity: '0.9' } },
             'сейчас'));
 
-    const head = h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center', padding: '14px 16px' } },
+    // PASTEL_IDENTITY_V1 — раскладка и цвет шапки уехали в .q-head/.q-title
+    // (admin-views.css): цвет обязан приходить из одного места, иначе через
+    // месяц у очереди будет свой «синий», не совпадающий с календарным.
+    const head = h('div', { class: 'q-head' },
         nowBox,
         h('div', { style: { minWidth: '0', flex: '1' } },
-            h('div', { style: { fontSize: '15px', fontWeight: '700', color: 'var(--ink-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-                g.label),
+            h('div', { class: 'q-title' }, g.label),
             h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '3px' } },
                 trf('ждут: {n}', { n: g.waiting_count }) +
                 (g.unpaid_count ? ' · ' + trf('без оплаты: {n}', { n: g.unpaid_count }) : '') +
@@ -406,5 +411,7 @@ function groupCard(g) {
             } }, st.label)));
     }
 
-    return h('div', { class: 'card', 'data-reveal': '', style: { padding: '0', overflow: 'hidden' } }, head, list);
+    // Оттенок вешается на КАРТОЧКУ, а не на шапку: от него же берётся цвет
+    // рамки, и карточка читается своим видом назначения целиком.
+    return h('div', { class: ('card q-card ' + pastelForQueueKind(g.kind)).trim(), 'data-queue-kind': g.kind || 'other', 'data-reveal': '', style: { padding: '0', overflow: 'hidden' } }, head, list);
 }

@@ -13,6 +13,9 @@ import { filterServicePool, serviceGroupCounts } from './service-search.js';   /
 import { openCustDev } from './custdev.js';           // CUSTDEV_V1 — обзвон после визита
 import { canView } from '../permissions.js';          // CUSTDEV_V1 — право на кнопку «Cust Dev»
 import { boardConfig } from '../crm-settings-logic.js?v=crmcfg1';   // CRM_CONFIG_V1
+// PASTEL_IDENTITY_V1 — оттенок ступени воронки. Словарь один на три доски
+// (канбан, календарь, очередь), чтобы «мятный» везде значил одно и то же.
+import { pastelAt } from '../pastel.js?v=pastel1';
 
 // CRM_CONFIG_V1 — воронка перестала быть константой.
 //
@@ -391,7 +394,7 @@ async function paint() {
         // перестаёт быть огрызком рядом с длинным соседом. Доска
         // прокручивается страницей — статусы кончаются на одной линии.
         const board = h('div', { 'data-crm-board': '', style: { display: 'grid', gridTemplateColumns: 'repeat(' + STATUSES.length + ', minmax(215px, 1fr))', gap: '12px', overflowX: 'auto', paddingBottom: '6px' } });
-        for (const [key, label, kind] of STATUSES) {
+        for (const [colIndex, [key, label, kind]] of STATUSES.entries()) {
             const colRows = rows.filter(r => r.status === key);
             const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', minHeight: '60px', padding: '4px' } });
 
@@ -418,23 +421,30 @@ async function paint() {
             }
             showMore();
 
+            // PASTEL_IDENTITY_V1 — оттенок по позиции в воронке; заливка и цвет
+            // рамки теперь в .crm-col (admin-views.css), а не инлайном.
             const col = h('div', {
-                class: 'card', 'data-col': key,
-                style: { padding: '10px 12px', background: 'var(--ink-25, #f8fafa)' },
+                class: ('card crm-col ' + pastelAt(colIndex)).trim(), 'data-col': key,
+                style: { padding: '10px 12px' },
             },
                 h('div', { class: 'row', style: { gap: '8px', marginBottom: '8px' } },
                     Tag(label, { kind, dot: true }),
                     // Счётчик — ПОЛНОЕ число заявок в статусе, а не сколько
                     // отрисовано: это цифра воронки, и зависеть от того, сколько
                     // раз нажали «показать ещё», она не должна.
-                    h('span', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700 } }, String(colRows.length)),
+                    h('span', { class: 'crm-col-n' }, String(colRows.length)),
                     h('span', { class: 'grow' }),
                     key === stageKey('in_process') ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: 'Новая заявка', onclick: () => requestModal(null) }, '+') : null),
                 list,
                 shown < colRows.length ? more : null);
             board.appendChild(col);
         }
-        return board;
+        // WORKING_WINDOW_V1 — доска живёт ВНУТРИ белого рабочего окна, как в
+        // образце (панель с колонками, а не колонки прямо на странице). Это не
+        // только вид: пастельная колонка и серый грунт страницы обе светлые, и
+        // на грунте заливка колонки была бы неотличима (1.04:1). На белом нутре
+        // окна та же заливка даёт 1.20:1 — оттенок ступени наконец виден.
+        return h('div', { class: 'card card-pad-sm crm-board-window' }, board);
     }
 
     function kanbanCard(r) {

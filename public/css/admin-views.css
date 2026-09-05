@@ -2944,7 +2944,11 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .rcal-dot { width: 9px; height: 9px; border-radius: 999px; }
 .rcal-leg-off { width: 14px; height: 10px; border-radius: 3px; background: repeating-linear-gradient(45deg, var(--ink-100), var(--ink-100) 3px, transparent 3px, transparent 6px); }
 
-.rcal-gridwrap { border: 1px solid var(--ink-100); border-radius: 12px; overflow: auto; background: var(--white); box-shadow: var(--shadow-xs); }
+/* WORKING_WINDOW_V1 — сетка расписания и есть рабочее окно этого экрана:
+   .card здесь не используется, поэтому рамку и тень окна она получает
+   своим правилом. Рейка врачей и панель управления рядом — это органы
+   управления, а не окно: у них остаётся волосяная линия без тени. */
+.rcal-gridwrap { border: 1px solid var(--window-line); border-radius: 12px; overflow: auto; background: var(--white); box-shadow: var(--shadow-window); }
 .rcal-grid { display: block; min-width: max-content; }
 .rcal-headrow { display: grid; position: sticky; top: 0; z-index: 3; background: var(--ink-25); border-bottom: 1px solid var(--ink-100); }
 .rcal-bodyrow { display: grid; }
@@ -2962,7 +2966,18 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .rcal-off { position: absolute; left: 0; right: 0; pointer-events: none; background: repeating-linear-gradient(45deg, var(--ink-25), var(--ink-25) 6px, transparent 6px, transparent 12px); }
 .rcal-line { position: absolute; left: 0; right: 0; height: 1px; background: var(--ink-50); }
 .rcal-now { position: absolute; left: 0; right: 0; height: 2px; background: var(--crit-700); z-index: 2; }
-.rcal-appt { position: absolute; left: 3px; right: 3px; background: var(--white); border: 1px solid var(--ink-200); border-radius: 7px; padding: 3px 7px; overflow: hidden; cursor: pointer; box-shadow: var(--shadow-xs); z-index: 1; }
+/* PASTEL_IDENTITY_V1 — ЗАЛИВКА КАРТОЧКИ = ВРАЧ.
+   Оттенок приезжает классом .pastel-* (views/room-calendar.js → pastel.js)
+   и попадает сюда через --p-bg/--p-line. Врача, а не услугу и не статус:
+   ось сетки — врач, о расписании говорят фамилиями («что у Пулатова»), и
+   раскраска по услугам разложила бы одну колонку на пять цветов, то есть
+   убила бы колонку как единицу. На оси кабинетов та же заливка отвечает
+   на вопрос «кто сейчас в этом кабинете» без чтения подписи.
+   Без врача пастеля нет вовсе (--p-bg не объявлен) — карточка остаётся
+   белой, и это правда: личности у неё пока нет.
+   СТАТУС заливкой НЕ передаётся: он остался цветной полоской слева
+   (border-left, ставится в room-calendar.js из STATUS_META). */
+.rcal-appt { position: absolute; left: 3px; right: 3px; background: var(--p-bg, var(--white)); border: 1px solid var(--p-line, var(--ink-200)); border-radius: 7px; padding: 3px 7px; overflow: hidden; cursor: pointer; box-shadow: var(--shadow-xs); z-index: 1; }
 .rcal-appt:hover { box-shadow: var(--shadow-sm); z-index: 4; }
 .rcal-appt-t { font-size: 12.5px; font-weight: 700; color: var(--ink-600); }
 .rcal-appt-p { font-size: 12.5px; font-weight: 600; color: var(--ink-900); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -3027,7 +3042,24 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .rcal-dayfirst { border-left: 2px solid var(--ink-200) !important; }
 .rcal-appt { cursor: grab; }
 .rcal-appt.dragging { opacity: .9; cursor: grabbing; z-index: 9 !important; box-shadow: 0 8px 28px rgba(11, 20, 24, .18); }
+/* ОТМЕНА ЧИТАЕТСЯ БЕЗ ЦВЕТА. Заливка карточки занята врачом, поэтому
+   отменённый приём нельзя «покрасить в отменённый» — вышло бы «другой
+   врач». Отмену несут два НЕпастельных признака сразу: штриховка вместо
+   заливки (ink-100/ink-300, 1.75:1 между полосками — узор виден) и
+   зачёркнутая фамилия. Оба переживают и монохромный монитор, и
+   дальтонизм; ни один не зависит от того, чей это приём.
+   Специфичность 0,2,0 намеренно: правило обязано перебить пастель
+   независимо от того, в каком порядке эти два блока окажутся в файле. */
+.rcal-appt.rcal-appt-x {
+    background: repeating-linear-gradient(45deg, var(--ink-100) 0, var(--ink-100) 5px, var(--ink-300) 5px, var(--ink-300) 10px);
+    border-color: var(--ink-300);
+}
 .rcal-appt-x .rcal-appt-p { text-decoration: line-through; }
+/* Текст на штриховке — по белой подложке, иначе его съедает узор. */
+.rcal-appt-x .rcal-appt-t,
+.rcal-appt-x .rcal-appt-p,
+.rcal-appt-x .rcal-appt-d,
+.rcal-appt-x .rcal-appt-s { background: var(--white); border-radius: 3px; padding: 0 2px; }
 .rcal-appt-rs { position: absolute; left: 0; right: 0; bottom: 0; height: 7px; cursor: ns-resize; }
 .rcal-tip { position: fixed; z-index: 300; width: 260px; background: white; border: 1px solid var(--ink-100);
     border-radius: 10px; padding: 10px 12px; box-shadow: 0 8px 28px rgba(11, 20, 24, .14); pointer-events: none;
@@ -3634,11 +3666,49 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     font-size: 12.5px; color: var(--ink-600); cursor: pointer;
 }
 
+/* PASTEL_IDENTITY_V1 — ОЧЕРЕДЬ КРАСИТСЯ ПО НАЗНАЧЕНИЮ.
+   Доска и так сгруппирована по видам (врачи, кабинеты, процедуры,
+   лаборатория, диагностика), но группа читалась только по заголовку раздела —
+   а смотрят на доску издалека, с одного взгляда. Теперь вид назначения виден
+   заливкой шапки карточки: «песочные — лаборатория» выучивается за смену.
+   Набор видов ЗАКРЫТ, поэтому оттенок берётся таблицей, а не хэшем
+   (QUEUE_KIND_HUE в pastel.js).
+   Что осталось семантикой и НЕ покрашено: крупный номер «сейчас» (бирюзовая
+   заливка = приём идёт) и чипы состояния талона — принимают / ждёт / ожидает
+   оплату / принят. Это не личность, это положение дел, и живут они на
+   --primary / --warn / --ink, как везде в продукте. */
+.q-card { border-color: var(--p-line, var(--ink-200)); }
+.q-card .q-head {
+    display: flex; gap: 12px; align-items: center;
+    padding: 14px 16px;
+    background: var(--p-bg, var(--white));
+    border-bottom: 1px solid var(--p-line, var(--ink-100));
+}
+.q-card .q-title {
+    font-size: 15px; font-weight: 700;
+    color: var(--p-fg, var(--ink-900));
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 /* CRM_FILTERS_V1 — поиск по заявкам это главный инструмент экрана: регистратура
    ищет позвонившего по имени или номеру десятки раз за смену. Плейсхолдер
    читаемый, а не бледный намёк, иначе поле теряется на белом фоне. */
 .crm-search::placeholder { color: var(--ink-500, #55636d); opacity: 1; }
 .crm-search::-webkit-search-cancel-button { display: none; }
+
+/* PASTEL_IDENTITY_V1 — СТУПЕНЬ ВОРОНКИ = ОТТЕНОК КОЛОНКИ.
+   Колонки были одинаково серыми (ink-25), и различала их только подпись
+   сверху — а по доске возят карточки, глядя не на подписи, а на прямоугольники.
+   Оттенок берётся по ПОЗИЦИИ в воронке (pastelAt), а не хэшем ключа: воронка —
+   упорядоченный ряд, и позиция гарантирует, что две СОСЕДНИЕ колонки никогда
+   не совпадут по цвету. Хэш такой гарантии не даёт именно там, где различать
+   нужнее всего. Побочный и полезный эффект — цвет «едет» слева направо, и
+   доска читается как путь.
+   Карточка заявки остаётся БЕЛОЙ и несёт свои семантические метки (Tag
+   источника, «карта заведена», просрочка) — покрасить и её значило бы дважды
+   сказать одно и то же и потерять место для второго сообщения. */
+.crm-col { background: var(--p-bg, var(--ink-25)); border-color: var(--p-line, var(--ink-100)); }
+.crm-col .crm-col-n { font-size: 12.5px; font-weight: 700; color: var(--p-fg, var(--ink-500)); }
 
 /* CRM_PERIOD_CUSTOM_V2 — «Свой период» одной таблеткой, а не двумя голыми
    полями даты.

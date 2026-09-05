@@ -87,6 +87,11 @@
     --warn-50:  #fffbeb;
     --warn-500: #f59e0b;
     --warn-700: #b45309;
+    /* PASTEL_IDENTITY_V1 — тот же янтарь, но на шаг темнее: --warn-700 на
+       самой светлой пастельной заливке даёт 4.40:1, то есть чуть ниже нормы
+       для текста. Внутри цветной карточки приёма («подтверждается») берётся
+       эта ступень — 6.37:1. Смысл прежний, семантика не тронута. */
+    --warn-800: #8a4309;
     --crit-50:  #fef2f2;
     --crit-500: #ef4444;
     --crit-700: #b91c1c;
@@ -96,6 +101,56 @@
     --purple-50: #f5f3ff;
     --purple-500:#8b5cf6;
     --purple-700:#6d28d9;
+
+    /* ============================================================
+       PASTEL_IDENTITY_V1 (2026-09-05, владелец: «make cards of the kanban
+       and the calendar bookings and the queue colorful. using pastel colors»)
+
+       ВОСЕМЬ ОТТЕНКОВ ЛИЧНОСТИ — и это НЕ статусы.
+
+       Выше в этом же :root лежат четыре семантические пары (--ok-*, --warn-*,
+       --crit-*, --info-*). Они отвечают на вопрос «насколько всё плохо», и
+       трогать их нельзя: зелёный обязан значить «хорошо» на каждом экране
+       клиники. Пастель отвечает на другой вопрос — «ЧЬЁ ЭТО»: чей приём, к
+       какой двери талон, какая ступень воронки. Один и тот же врач всегда
+       одного цвета, и через неделю сотрудник узнаёт колонку, не читая имя.
+
+       Поэтому отменённый приём НЕ красится в другой пастель: цвет там уже
+       занят врачом. Отмена — это штриховка и зачёркнутая фамилия поверх
+       (.rcal-appt-x), то есть отдельный, НЕцветовой признак.
+
+       У каждого оттенка три значения, и все три посчитаны, а не подобраны на
+       глаз (__tests__/contrast-badge-hatch.test.mjs проходит ВСЮ шкалу
+       программно — девятый оттенок не сможет проскочить мимо проверки):
+         -bg    заливка карточки: 1.20:1 к белому листу и не ниже 1.09:1 к
+                серому грунту страницы, то есть карточка видна на обоих;
+         -fg    текст на этой заливке: не ниже 4.5:1 (WCAG 1.4.3);
+         -line  край чипа или полоска: не ниже 3:1 к своей заливке (WCAG 1.4.11).
+       ============================================================ */
+    --pastel-sky-bg:     #e0ecf2;
+    --pastel-sky-fg:     #336f89;
+    --pastel-sky-line:   #498dab;
+    --pastel-indigo-bg:  #e8e9f8;
+    --pastel-indigo-fg:  #3a409c;
+    --pastel-indigo-line: #757cdd;
+    --pastel-violet-bg:  #f0e5fa;
+    --pastel-violet-fg:  #6e3a9c;
+    --pastel-violet-line: #a569d9;
+    --pastel-lilac-bg:   #fae4f6;
+    --pastel-lilac-fg:   #9c3a8c;
+    --pastel-lilac-line: #cb5bb8;
+    --pastel-rose-bg:    #fae5ea;
+    --pastel-rose-fg:    #9c3a52;
+    --pastel-rose-line:  #d65d7b;
+    --pastel-sand-bg:    #f7e7e0;
+    --pastel-sand-fg:    #9a5639;
+    --pastel-sand-line:  #b77558;
+    --pastel-amber-bg:   #efeadb;
+    --pastel-amber-fg:   #79662d;
+    --pastel-amber-line: #998341;
+    --pastel-mint-bg:    #dbefe5;
+    --pastel-mint-fg:    #2b7550;
+    --pastel-mint-line:  #40956b;
 
     --r-xs: 6px;
     --r-sm: 8px;
@@ -109,6 +164,36 @@
     --shadow-sm: 0 1px 3px rgba(11, 20, 24, 0.06), 0 1px 2px rgba(11, 20, 24, 0.04);
     --shadow-md: 0 4px 12px rgba(11, 20, 24, 0.06), 0 2px 4px rgba(11, 20, 24, 0.04);
     --shadow-lg: 0 12px 32px rgba(11, 20, 24, 0.10), 0 4px 12px rgba(11, 20, 24, 0.06);
+
+    /* WORKING_WINDOW_V1 (2026-09-05, владелец: «remove the white background.
+       add a frame only to a working window», образец — недельный календарь и
+       доска задач: серое поле, на нём ОДНО белое окно с лёгкой рамкой).
+
+       Рамка окна БЫЛА, но её не было видно. .card рисовался ink-100 (#e7ebee)
+       по грунту ink-50 (#f3f5f7) — 1.06:1, то есть линии нет вовсе, — а тень
+       --shadow-xs даёт 4% чёрного на 2px, что на светлом фоне не читается
+       ничем. Белая карточка на почти белом грунте и есть та самая «white
+       background», на которую жалуется владелец: экран выглядит одним
+       сплошным листом, и границы рабочей области глазу не за что зацепить.
+
+       --window-line   ink-200: 1.30:1 к грунту и 1.42:1 к белому — линия
+                       видна с обеих сторон, но остаётся волосяной.
+       --shadow-window мягкая широкая тень (24px, 7%) плюс миллиметровая
+                       контактная: окно отрывается от поля, не обводя себя
+                       вторым контуром.
+       Оба закреплены __tests__/contrast-badge-hatch.test.mjs. */
+    /* --page-ground — ГРУНТ, на котором лежит всё: и колонка меню, и верхняя
+       панель, и страница. Раньше это был --ink-50 (#f3f5f7), и именно оттуда
+       росла жалоба: белая карточка на нём давала 1.09:1, то есть окна не было
+       видно вовсе. Отдельный токен, а не «покрасим ink-50 потемнее»: ink-50
+       работает ещё и лёгкой заливкой ВНУТРИ белых карточек (наведение на
+       строку, чипы, линейки сетки), и там он обязан остаться почти белым.
+       Число выбрано из двух ограничений сразу: белое окно на нём 1.17:1
+       (видно), а серый чип счётчика в меню — 1.21:1 (тоже видно). Шаг вниз
+       ломает второе, шаг вверх — первое; оба закреплены тестами. */
+    --page-ground: #eaedf1;
+    --window-line: var(--ink-300);
+    --shadow-window: 0 1px 2px rgba(11, 20, 24, 0.05), 0 8px 24px rgba(11, 20, 24, 0.07);
 
     --sidebar-w: 248px;
     --topbar-h: 56px;
@@ -187,7 +272,7 @@ html, body { margin: 0; padding: 0; }
 body.admin {
     font-family: var(--font-sans);
     color: var(--ink-800);
-    background: var(--ink-50);
+    background: var(--page-ground);
     font-size: 13.5px;
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
@@ -819,12 +904,18 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
    same hairline as the sidebar, and every colour is a token.
    ============================================================ */
 .main { display: flex; flex-direction: column; min-width: 0; }
+/* WORKING_WINDOW_V1 — верхняя панель это ХРОМ, а не поверхность.
+   Была белой полосой с линейкой снизу — тем же швом, что убрали слева у
+   колонки меню (SIDEBAR_SEAMLESS_V1), и вместе с белыми карточками она и
+   давала «сплошной белый лист». Теперь она лежит на грунте страницы.
+   Непрозрачной остаётся НАМЕРЕННО: панель липкая (sticky), и прозрачная
+   пропускала бы под собой уезжающие карточки прямо сквозь заголовок. */
 .appbar {
     min-height: var(--topbar-h);
     display: flex; align-items: center; gap: 16px;
     padding: 0 24px;
-    background: var(--white);
-    border-bottom: 1px solid var(--ink-100);
+    background: var(--page-ground);
+    border-bottom: 0;
     position: sticky; top: 0; z-index: 30;
 }
 .appbar-title {
@@ -955,12 +1046,43 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 .page-head-actions { display: flex; gap: 8px; align-items: center; }
 
 /* ---- Cards ---- */
+/* WORKING_WINDOW_V1 — .card И ЕСТЬ рабочее окно.
+   Белое достаётся только ему; поле вокруг остаётся серым (body.admin).
+   Меняются ровно две строки — рамка и тень, — и этого хватает на весь
+   продукт: почти каждый экран строит поверхность через .card, поэтому
+   вида «одно окно на сером поле» не пришлось добиваться по экрану за
+   экраном. Кто НЕ наследует — перечислено ниже, у правила вложенности. */
 .card {
     background: var(--white);
-    border: 1px solid var(--ink-100);
+    border: 1px solid var(--window-line);
     border-radius: var(--r-lg);
-    box-shadow: var(--shadow-xs);
+    box-shadow: var(--shadow-window);
 }
+/* ОДНО окно, а не окно в окне. Карточка внутри карточки (колонка канбана с
+   карточками заявок, список внутри панели) рисовала вторую рамку и вторую
+   тень — в образце внутренности разделены ЗАЛИВКОЙ, а не рамками. Вложенная
+   поверхность остаётся волосяной линией без тени. */
+.card .card,
+.card .list-container,
+.list-container .card {
+    box-shadow: none;
+    border-color: var(--ink-200);
+}
+
+/* PASTEL_IDENTITY_V1 — носители оттенка.
+   Класс не красит НИЧЕГО сам: он только объявляет три переменные, а правила
+   экранов (.rcal-appt, .q-card, .crm-col) читают --p-bg / --p-fg / --p-line.
+   Из-за этого девятый оттенок добавляется одной строкой здесь и одной в
+   :root — ни один экран трогать не нужно, и ни один не может «забыть» его. */
+.pastel-sky { --p-bg: var(--pastel-sky-bg);    --p-fg: var(--pastel-sky-fg);    --p-line: var(--pastel-sky-line); }
+.pastel-indigo { --p-bg: var(--pastel-indigo-bg); --p-fg: var(--pastel-indigo-fg); --p-line: var(--pastel-indigo-line); }
+.pastel-violet { --p-bg: var(--pastel-violet-bg); --p-fg: var(--pastel-violet-fg); --p-line: var(--pastel-violet-line); }
+.pastel-lilac { --p-bg: var(--pastel-lilac-bg);  --p-fg: var(--pastel-lilac-fg);  --p-line: var(--pastel-lilac-line); }
+.pastel-rose { --p-bg: var(--pastel-rose-bg);   --p-fg: var(--pastel-rose-fg);   --p-line: var(--pastel-rose-line); }
+.pastel-sand { --p-bg: var(--pastel-sand-bg);   --p-fg: var(--pastel-sand-fg);   --p-line: var(--pastel-sand-line); }
+.pastel-amber { --p-bg: var(--pastel-amber-bg);  --p-fg: var(--pastel-amber-fg);  --p-line: var(--pastel-amber-line); }
+.pastel-mint { --p-bg: var(--pastel-mint-bg);   --p-fg: var(--pastel-mint-fg);   --p-line: var(--pastel-mint-line); }
+
 .card-pad { padding: 20px 22px; }
 .card-pad-sm { padding: 14px 16px; }
 .card-header {
@@ -979,9 +1101,9 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 
 .list-container {
     background: var(--white);
-    border: 1px solid var(--ink-100);
+    border: 1px solid var(--window-line);
     border-radius: var(--r-lg);
-    box-shadow: var(--shadow-xs);
+    box-shadow: var(--shadow-window);
     overflow: hidden;
 }
 .empty, .error-state { padding: 56px 24px; text-align: center; color: var(--ink-500); }
@@ -1359,9 +1481,9 @@ html[lang="uz"] .modal-close::after { content: 'Yopish'; }
     grid-template-areas: "main sidebar" "history history";
     gap: 16px;
 }
-.reg-main    { grid-area: main;    background: var(--white); border: 1px solid var(--ink-100); border-radius: var(--r-lg); box-shadow: var(--shadow-xs); padding: 20px 22px; }
-.reg-sidebar { grid-area: sidebar; background: var(--white); border: 1px solid var(--ink-100); border-radius: var(--r-lg); box-shadow: var(--shadow-xs); padding: 18px; display: flex; flex-direction: column; gap: 14px; }
-.reg-history { grid-area: history; background: var(--white); border: 1px solid var(--ink-100); border-radius: var(--r-lg); box-shadow: var(--shadow-xs); padding: 16px 22px; }
+.reg-main    { grid-area: main;    background: var(--white); border: 1px solid var(--window-line); border-radius: var(--r-lg); box-shadow: var(--shadow-window); padding: 20px 22px; }
+.reg-sidebar { grid-area: sidebar; background: var(--white); border: 1px solid var(--window-line); border-radius: var(--r-lg); box-shadow: var(--shadow-window); padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+.reg-history { grid-area: history; background: var(--white); border: 1px solid var(--window-line); border-radius: var(--r-lg); box-shadow: var(--shadow-window); padding: 16px 22px; }
 .reg-history h3 { margin: 0 0 14px; font-size: 15px; color: var(--ink-900); font-weight: 600; }
 .reg-history .empty-row { text-align: center; color: var(--ink-500); padding: 24px; font-size: 13.5px; }
 
