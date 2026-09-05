@@ -6,6 +6,7 @@
 // bell until resolved. Replaces renderTrialBanner / renderVerificationBanner / renderSetupChecklist.
 import { supabase } from '../supabase.js';
 import { h, Icon } from './ui.js';
+import { tr, trf } from './i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { openUploadModal } from './verify-banner.js?v=vb2';
 
 let _styled = false;
@@ -63,17 +64,163 @@ async function loadState(clinic) {
             .select('id,name,phone,address').eq('id', clinic.id).limit(1);
         co = data && data[0];
     } catch (e) { /* нет строки — нет и напоминания */ }
-    return { co };
+    return { co, inpatient: await loadInpatient() };
+}
+
+// ===========================================================================
+// INPATIENT_REQUEST_NOTIF_V1 (2026-09-05) — ЗАЯВКА СТАЦИОНАРА ЗВОНИТ В КОЛОКОЛ
+// ===========================================================================
+// Владелец: «we cannot see the request admissions. also the request admission
+// should have come as notifications.»
+//
+// ЧТО ОКАЗАЛОСЬ ПРИЧИНОЙ. Не запрос, не право и не вкладка: раздел «Стационар»
+// поднимается и показывает заявку КАЖДОЙ роли, которой он положен (проверено
+// живьём против настоящего сервера — см. inpatient-notifications.test.mjs).
+// Сломано было не «увидеть», а «узнать»: заявку не объявлял НИКТО. У раздела
+// нет счётчика в боковой панели (navCounts в admin.js знает пациентов, чат и
+// кассу — стационара там нет), колокол считал ровно одно уведомление про
+// незаполненный профиль клиники, а единственное сообщение, которое заявка
+// вообще порождала, — тост в кабинете ВРАЧА, то есть у того, кто её и подал.
+// Пост медсестры узнавал о заявке, только если кто-то сам открывал «Стационар»
+// и смотрел. Это и есть обе половины жалобы одной строкой.
+//
+// ─── ПОЧЕМУ ЭТО СЧИТАЕТСЯ, А НЕ ХРАНИТСЯ ────────────────────────────────────
+// Механизм уведомлений здесь — ВЫЧИСЛЯЕМЫЙ (см. шапку файла): уведомление это
+// не строка в таблице с адресатом и отметкой «прочитано», а УСЛОВИЕ, которое
+// каждый браузер проверяет у себя. Заводить рядом вторую, хранимую машину
+// (очередь доставки, список получателей, отметки прочтения) значило бы держать
+// два разных ответа на вопрос «есть ли работа» — и однажды они разойдутся.
+//
+// ─── КАК РАЗРЕШЁН «МЕХАНИЗМ ПОФАМИЛЬНЫЙ, А РАБОТА ПОРОЛЕВАЯ» ────────────────
+// Никак не разрешён — вопрос снимается сам. Раз уведомление вычисляется в
+// сеансе смотрящего, получатель это не адрес, а ПРЕДИКАТ: «вправе ли ЭТОТ
+// человек сделать следующий шаг». Спрашиваем ровно там, где спрашивает сам
+// экран, — у сервера (`inpatient_capabilities`, матрица TRANSITION_ROLES в
+// rpc/inpatient-flow.js). Вторая копия списка ролей здесь разошлась бы с
+// первой в день правки матрицы: медсестре перестали бы звонить, а кассиру
+// начали. Фан-аута нет, дублей доставки нет, «кто прочитал» вести не нужно.
+//
+//   can.admit   — кто КЛАДЁТ на койку (медсестра, старшая, главный врач,
+//                 админ): им «Ждут размещения».
+//   can.examine — кто ПРОВОДИТ первичный осмотр (главный врач, админ): им
+//                 «Ждут первичного осмотра» — следующий шаг маршрута.
+//
+// ─── ЧТО ГАСИТ УВЕДОМЛЕНИЕ ──────────────────────────────────────────────────
+// СОСТОЯНИЕ ПАЦИЕНТА, и только оно. Уведомление утверждает «есть человек,
+// которого никто не положил»; положили — 'ordered' стал 'admitted', и строка
+// уходит из выборки сама. Осмотрели — 'admitted' стал 'examined', уходит
+// вторая. Отменили заявку — уходит тоже.
+//
+// НЕ «кто-то открыл» и НЕ «кто-то нажал крестик»: ни то, ни другое пациента не
+// размещает. Погасни оно от прочтения — напоминание исчезло бы у той смены,
+// которая на него посмотрела, и не вернулось бы; это ровно та беда, из-за
+// которой заявка и терялась. Крестик у баннера в этом файле и так гасит только
+// баннер, а в колоколе строка остаётся до выполнения — договор NOTIF_CENTER_V1,
+// и он здесь не нарушается: очереди смены баннера не получают вовсе (bellOnly
+// ниже) — полоса поперёк каждого экрана на всю смену это шум, а не сигнал.
+//
+// ─── ОДНА СТРОКА НА ОЧЕРЕДЬ, А НЕ НА ЗАЯВКУ ─────────────────────────────────
+// Отсюда «ничто не уведомляет дважды об одной заявке» — не проверкой на дубль,
+// а формой: у пункта постоянный id ('inpatient-orders' / 'inpatient-exam') и
+// ЧИСЛО в тексте. Десять заявок — одна строка «Ждут размещения: 10», десять
+// перерисовок — та же одна строка.
+//
+// ─── ЧУЖОЕ ЗДАНИЕ ───────────────────────────────────────────────────────────
+// Вопрос снимается схемой: `admissions` НЕ ЕЗДИТ между филиалами. Её нет в
+// SHIPPED (services/branch-sync/journal.js — там только patients, visits,
+// visit_services, lab_results, invoices, invoice_items, payments), у неё нет ни
+// uid, ни sync_origin, ни журнальных триггеров (шапка миграции 091 говорит это
+// дословно и на этом основывает безопасность пересборки таблицы). Заявка,
+// оформленная в другом здании, в эту базу не попадает вовсе — «чужих» заявок не
+// существует, и фильтровать по колонке, которой нет, нельзя. Если однажды
+// admissions начнут возить, тест `foreign` в inpatient-notifications.test.mjs
+// упадёт, и решение придётся принять осознанно, а не унаследовать молча.
+const OPEN_REQUEST_STATUSES = ['ordered', 'admitted'];
+
+async function loadInpatient() {
+    let can = null;
+    try {
+        const { data, error } = await supabase.rpc('inpatient_capabilities', {});
+        if (error) return null;
+        can = (data && data.can) || {};
+    } catch (e) { return null; }
+    // Ни класть, ни осматривать — значит это не его работа, и звонить ему не о
+    // чем. Заодно это единственный запрос, который здесь вообще делается: у
+    // кассы и склада колокол не ходит в стационар ни разу.
+    if (!can.admit && !can.examine) return null;
+    try {
+        const { data, error } = await supabase.from('admissions')
+            .select('id, status, admission_type, created_by, ordered_by')
+            .in('status', OPEN_REQUEST_STATUSES).limit(200);
+        if (error) return null;
+        return { can, rows: data || [] };
+    } catch (e) { return null; }
+}
+
+/** Кто сейчас смотрит. null — неизвестен, и тогда никого не исключаем. */
+function viewerId() {
+    const u = (typeof window !== 'undefined' && window.easymed && window.easymed.state && window.easymed.state.user) || null;
+    return u && u.id != null ? String(u.id) : null;
+}
+
+// АВТОР ЗАЯВКИ — по обеим колонкам, потому что входов два и пишут они разное:
+// заявка регистратуры (admission_order_create) ставит ordered_by И created_by,
+// направление врача из кабинета (request_admission) — только created_by.
+// Проверять одну ordered_by значило бы звонить врачу о его же направлении.
+function filedBy(row, me) {
+    if (me == null) return false;
+    return String(row.created_by) === me || String(row.ordered_by) === me;
 }
 
 function buildNotifs(clinic, st) {
-    const { co } = st;
+    const { co, inpatient } = st;
     const list = [];
     // NOTIF_POLICY_V2 (owner, 2026-07-21): напоминание срабатывает только по реально
     // ПРОЧИТАННОЙ и действительно неполной строке.
     if (co && !companyComplete(co)) list.push({ id: 'company', sev: 'info', icon: 'Building',
         title: 'Данные клиники', message: 'Заполните название, телефон и адрес клиники.',
         ctaLabel: 'Заполнить', onCta: () => nav('settings:companies') });
+
+    if (inpatient) {
+        const me = viewerId();
+        if (inpatient.can.admit) {
+            // СЕБЕ НЕ ЗВОНИМ: тот, кто минуту назад оформил заявку, уже знает о
+            // ней — ему про неё сказал тост в момент оформления. Колокол,
+            // повторяющий человеку его собственное действие, учит не смотреть
+            // на колокол.
+            const waiting = inpatient.rows.filter((r) => r.status === 'ordered' && !filedBy(r, me));
+            if (waiting.length) {
+                // Экстренная не должна тонуть среди плановых и в колоколе тоже:
+                // она красит строку и называет себя словом, а не оттенком.
+                const urgent = waiting.some((r) => r.admission_type === 'emergency');
+                list.push({
+                    id: 'inpatient-orders', sev: urgent ? 'danger' : 'warn', icon: 'Bed', bellOnly: true,
+                    title: tr('Заявки на госпитализацию'),
+                    message: urgent
+                        ? trf('Ждут размещения: {n}. Среди них экстренная.', { n: waiting.length })
+                        : trf('Ждут размещения: {n}.', { n: waiting.length }),
+                    ctaLabel: tr('Открыть стационар'),
+                    onCta: () => nav('admissions'),
+                });
+            }
+        }
+        if (inpatient.can.examine) {
+            // ЗДЕСЬ АВТОРА НЕ ИСКЛЮЧАЕМ, и это отдельное решение, а не забытая
+            // симметрия. Первичный осмотр проводит главный врач и только он;
+            // если он же и положил пациента, осмотр всё равно за ним, и убрать
+            // у него единственное напоминание значило бы спрятать ту самую
+            // очередь, ради которой она заведена: пациент лежит, койка занята,
+            // суточное идёт — а лечения нет.
+            const exam = inpatient.rows.filter((r) => r.status === 'admitted');
+            if (exam.length) list.push({
+                id: 'inpatient-exam', sev: 'warn', icon: 'Stethoscope', bellOnly: true,
+                title: tr('Ждут первичного осмотра'),
+                message: trf('Пациентов без первичного осмотра: {n}.', { n: exam.length }),
+                ctaLabel: tr('Открыть стационар'),
+                onCta: () => nav('admissions'),
+            });
+        }
+    }
     return list;
 }
 
@@ -92,8 +239,36 @@ function bindOutsideClose() {
     });
 }
 
-export async function renderNotifications(clinic) {
+// INPATIENT_REQUEST_NOTIF_V1 — КОЛОКОЛ ОБЯЗАН ОБНОВЛЯТЬСЯ САМ.
+//
+// До сих пор renderNotifications звали ОДИН раз, при входе (admin.js), и этого
+// хватало: единственное уведомление говорило о незаполненном профиле клиники —
+// условии, которое за смену не меняется. Заявка на госпитализацию меняется
+// каждый час, и колокол, который узнаёт о ней только после F5, для поста
+// медсестры бесполезен ровно так же, как его отсутствие.
+//
+// Свой таймер, а не чужой: счётчики боковой панели (loadNavCounts, каждые 20 с)
+// живут в admin.js, и вешать на них второй смысл значило бы связать два
+// механизма, которые чинят и ломают по отдельности. Минута — потому что это
+// напоминание, а не сигнал тревоги: у экрана «Стационар» есть своя кнопка
+// «Обновить», и тот, кто ждёт заявку прямо сейчас, стоит на нём.
+const POLL_MS = 60000;
+let _timer = null;
+
+/** Остановить самообновление (выход из сеанса, тесты). */
+export function stopNotificationsPolling() {
+    if (_timer) { clearInterval(_timer); _timer = null; }
+}
+
+export async function renderNotifications(clinic, opts = {}) {
+    const poll = opts.poll !== false;
     injectStyles(); bindOutsideClose();
+    // Перерисовка НЕ ВЫРЫВАЕТ ОТКРЫТЫЙ СПИСОК ИЗ-ПОД РУКИ: paintBell чистит
+    // mount, а выпадающий список лежит в нём же. ТИК ТАЙМЕРА, попавший на
+    // открытый список, пропускается — следующий придёт через минуту. Условие
+    // именно на `polled`, а не на «нас позвали без повтора»: явный вызов
+    // (вход в систему, тест) обязан перерисовать колокол всегда.
+    if (opts.polled && typeof document !== 'undefined' && document.getElementById('em-notif-dropdown')) return;
     document.getElementById('em-notif-banners')?.remove();
     if (!clinic || !clinic.id) { paintBell([], clinic); return; }
     const st = await loadState(clinic);
@@ -103,6 +278,12 @@ export async function renderNotifications(clinic) {
     setDismissed(clinic, dism);
     paintBell(notifs, clinic);
     paintBanners(notifs, clinic, dism);
+    if (poll && typeof setInterval === 'function') {
+        stopNotificationsPolling();
+        _timer = setInterval(() => {
+            renderNotifications(clinic, { poll: false, polled: true }).catch(() => { /* подсказка, не операция */ });
+        }, POLL_MS);
+    }
 }
 
 function paintBell(notifs, clinic) {
@@ -133,7 +314,13 @@ function openDropdown(notifs, clinic, mount) {
 }
 
 function paintBanners(notifs, clinic, dism) {
-    const visible = notifs.filter((n) => !dism.includes(n.id));
+    // bellOnly — очереди смены (INPATIENT_REQUEST_NOTIF_V1). Баннер это полоса
+    // поперёк КАЖДОГО экрана, и место ей там, где условие касается всей клиники
+    // и держится днями (незаполненный профиль, лицензия). Работа, которая
+    // появляется и уходит по нескольку раз за смену, в баннере превращается в
+    // мигающую ленту, которую перестают читать; ей место в колоколе, где её
+    // видно числом и открывают по нажатию.
+    const visible = notifs.filter((n) => !n.bellOnly && !dism.includes(n.id));
     if (!visible.length) return;
     const wrap = h('div', { id: 'em-notif-banners' }, ...visible.map((n) => {
         const row = h('div', { class: 'em-nbn ' + (n.sev || 'info') },

@@ -3,6 +3,14 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // INPATIENT_REQUEST_NOTIF_V1 — заявка стационара в колоколе уведомлений и
+  // честная пустая очередь размещения — added 2026-09-05
+  "Заявки на госпитализацию": {"en":"Hospitalisation requests","ru":"Заявки на госпитализацию","uz":"Kasalxonaga yotqizish so'rovlari"},
+  "Ждут размещения: {n}.": {"en":"Waiting for a bed: {n}.","ru":"Ждут размещения: {n}.","uz":"Joylashtirishni kutmoqda: {n}."},
+  "Ждут размещения: {n}. Среди них экстренная.": {"en":"Waiting for a bed: {n}. One of them is an emergency.","ru":"Ждут размещения: {n}. Среди них экстренная.","uz":"Joylashtirishni kutmoqda: {n}. Ular orasida shoshilinch bor."},
+  "Пациентов без первичного осмотра: {n}.": {"en":"Patients with no primary examination: {n}.","ru":"Пациентов без первичного осмотра: {n}.","uz":"Birlamchi ko'rikdan o'tmagan bemorlar: {n}."},
+  "Открыть стационар": {"en":"Open the inpatient ward","ru":"Открыть стационар","uz":"Statsionarni ochish"},
+  "Заявок нет — никого не ждут. Заявка появляется здесь, как только её оформит регистратура кнопкой «Заявка на госпитализацию» или врач из кабинета приёма.": {"en":"No orders — nobody is expected. An order appears here as soon as the front desk files one with the «Hospitalisation request» button, or a doctor sends the patient in from the consultation room.","ru":"Заявок нет — никого не ждут. Заявка появляется здесь, как только её оформит регистратура кнопкой «Заявка на госпитализацию» или врач из кабинета приёма.","uz":"Ariza yo'q — hech kim kutilmayapti. Ariza ro'yxatga olish bo'limi «Kasalxonaga yotqizish so'rovi» tugmasi bilan rasmiylashtirishi yoki shifokor qabul xonasidan yuborishi bilan shu yerda paydo bo'ladi."},
   // CRM_CARD_V2 — карточка заявки на канбане: имя, читаемый номер, метки-факты
   // и переезд между ступенями — added 2026-09-05
   "Без имени": {"en":"No name","ru":"Без имени","uz":"Ismi yo'q"},
