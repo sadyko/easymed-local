@@ -1843,11 +1843,39 @@ async function openEmrResultModal(row, groupId) {
     document.body.appendChild(overlay);
     document.addEventListener('keydown', onKey);
 
-    // Branch by group. Labs + diagnostics use the same lab_results table.
+    // DIAG_CONCLUSION_V1 (2026-09-05) — У ДИАГНОСТИКИ ОТВЕТ ЭТО ЗАКЛЮЧЕНИЕ.
+    //
+    // Владелец: «we need to add the conclusion section from the diagnostics».
+    //
+    // Здесь диагностика читалась из lab_results — той же таблицы, что анализы.
+    // У УЗИ и рентгена строк в ней нет и быть не должно: врач пишет описание и
+    // заключение в бланке исследования, и оно лежит в visit_services.notes.
+    // Поэтому вкладка «Диагностика» всегда отвечала «результаты ещё не
+    // внесены», а вставлять в приём было нечего — при том, что заключение
+    // было написано и подписано.
+    //
+    // Оба источника показываются вместе и в правильном порядке: сначала
+    // ЗАКЛЮЧЕНИЕ (это и есть ответ исследования), под ним измерения, если они
+    // были внесены. Обе функции сами очищают контейнер, поэтому каждая
+    // рисуется в свой, и только потом они складываются — иначе вторая стирала
+    // бы первую.
     try {
         let _res;
-        if (groupId === 'labs' || groupId === 'diagnostics') {
+        if (groupId === 'labs') {
             _res = await fillLabResults(body, row);
+        } else if (groupId === 'diagnostics') {
+            const concBox = h('div');
+            const labBox  = h('div');
+            const conc = await fillServiceConclusion(concBox, row);
+            const meas = await fillLabResults(labBox, row);
+            clear(body);
+            if (conc && conc.html) body.appendChild(concBox);
+            if (meas && meas.html) body.appendChild(labBox);
+            if (!(conc && conc.html) && !(meas && meas.html)) {
+                body.appendChild(h('div', { class: 'muted', style: { padding: '14px 0', fontSize: '12.5px' } },
+                    tr('По этому исследованию ещё нет ни заключения, ни измерений.')));
+            }
+            _res = { html: [conc && conc.html, meas && meas.html].filter(Boolean).join('') || null };
         } else {
             _res = await fillServiceConclusion(body, row);
         }
@@ -3001,13 +3029,18 @@ function openDiagnosisModal(ctx) {
         const my = ++_dxToken;
         clear(resultsEl);
         if (!query) {
-            // BROWSE_ICD_V1 — the FULL МКБ-10 catalogue (14 000+ codes) lives in the
-            // icd10 table; browse its start instead of the 12-code starter seed so
-            // it's obvious the whole base is searchable.
+            // BROWSE_ICD_V1 — the FULL МКБ-10 catalogue lives in the icd10 table
+            // (migration 106 — ICD10_CATALOGUE_V1); browse its start instead of the
+            // 12-code starter seed so it's obvious the whole base is searchable.
+            // Только рубрики и подрубрики: класс болезней и блок рубрик — это
+            // разделы классификации, а не диагнозы, и предлагать их врачу
+            // значило бы предлагать поставить «A00-A09».
             countEl.textContent = tr('Загрузка…');
             try {
                 const { data, error, count } = await supabase.from('icd10')
-                    .select('code,name', { count: 'exact' }).order('code').limit(50);
+                    .select('code,name', { count: 'exact' })
+                    .in('kind', ['category', 'sub']).eq('active', 1)
+                    .order('code').limit(50);
                 if (error) throw error;
                 if (my !== _dxToken) return;
                 clear(resultsEl);
@@ -3026,6 +3059,7 @@ function openDiagnosisModal(ctx) {
             const term = query.replace(/[,()%*]/g, ' ').trim();
             const { data, error } = await supabase.from('icd10')
                 .select('code,name')
+                .in('kind', ['category', 'sub']).eq('active', 1)
                 .or('code.ilike.' + term + '%,name.ilike.%' + term + '%')
                 .limit(50);
             if (error) throw error;

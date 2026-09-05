@@ -3,6 +3,8 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // DIAG_CONCLUSION_V1 — «Диагностика» в истории пациента
+  "По этому исследованию ещё нет ни заключения, ни измерений.": {"en":"This study has neither a conclusion nor measurements yet.","ru":"По этому исследованию ещё нет ни заключения, ни измерений.","uz":"Bu tekshiruv bo'yicha hali na xulosa, na o'lchovlar bor."},
   // DOCTOR_PAY_I18N_V1 (2026-09-05) — вкладка «Зарплата» в кабинете врача
   // была написана английскими литералами мимо tr(): на русском и узбекском
   // интерфейсе весь разбор начислений оставался английским. Русская строка

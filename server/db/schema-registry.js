@@ -1030,11 +1030,16 @@ export const REGISTRY = {
   },
   // ICD-10 diagnosis catalogue. service-workspace.js diagnosis picker (read-only in UI).
   icd10: {
-    read:  { roles: ALL_STAFF, columns: ['id','code','name','active','created_at'] },
-    write: { insert: { roles: ['admin'], columns: ['code','name','active'] },
-             update: { roles: ['admin'], columns: ['code','name','active'] },
+    // ICD10_CATALOGUE_V1 (миграция 106) — справочник МКБ-10 в комплекте.
+    // parent_code/kind несут ИЕРАРХИЮ: класс → блок → рубрика → подрубрика.
+    // Оба в фильтрах, потому что окно диагноза обязано спрашивать «только
+    // рубрики и подрубрики»: поставить пациенту блок «A00-A09» нельзя, такого
+    // диагноза не существует, а без фильтра он стоял бы в выдаче наравне.
+    read:  { roles: ALL_STAFF, columns: ['id','code','name','parent_code','kind','active','created_at'] },
+    write: { insert: { roles: ['admin'], columns: ['code','name','parent_code','kind','active'] },
+             update: { roles: ['admin'], columns: ['code','name','parent_code','kind','active'] },
              delete: { roles: ['admin'] } },
-    filters: ['id','active','code','name'],
+    filters: ['id','active','code','name','parent_code','kind'],
     embed:   {},
   },
   // Units of measure (unit-engine catalogue). procurement.js.
