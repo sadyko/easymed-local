@@ -4758,3 +4758,212 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
   font-size:12.5px; font-weight:700; line-height:1; vertical-align:1px;
 }
 .set-row-dot.is-busy{ background:var(--warn-600, #b98523); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   KITCHEN_SHEET_UI_V1 / DISCHARGE_QUEUE_UI_V1 (2026-09-05, владелец:
+   «#kitchen-sheet · #discharge — fields and frames are collapsed»)
+
+   ЧТО БЫЛО СХЛОПНУТО НА САМОМ ДЕЛЕ. Оба экрана написали ДО того, как у
+   продукта появился язык интерфейса, и оба ссылались на классы, которых в CSS
+   НЕТ НИ ОДНОГО — ни здесь, ни в admin.css:
+
+     .table       обе очереди рисовались голым <table>: ни отбивок в ячейках,
+                  ни шапки, ни линеек между строками. Общая таблица продукта
+                  зовётся `table.list`, и именно её они не подключили. Это и
+                  есть «схлопнутые рамки»;
+     .card-title  заголовки «Итого по столам», имя палаты и «Остаток по счёту»
+                  печатались тем же кеглем и весом, что данные под ними;
+     .field-label подпись поля висела <span>ом, тогда как правило admin.css
+                  метит `.field label` — ПОТОМКА-ЛЕЙБЛ, а обёрткой здесь был
+                  сам <label class="field">: подпись не получала ничего;
+     .input       поля выживали только тем, что их случайно накрывало
+                  `.field input`.
+
+   Плюс `.card` БЕЗ `.card-pad`: у карточки в этом продукте нет собственных
+   отступов (padding отдан отдельным классам), поэтому полоса фильтров и все
+   пустые состояния прижимались вплотную к рамке, а «оформлять некого» было
+   белой полоской в две строки высотой.
+
+   ЧТО СТАЛО. По одному рабочему окну на экран (WORKING_WINDOW_V1): рамка и
+   тень — у него одного, а внутренности разделены заливкой и волосяной линией,
+   а не собственными рамками. Все размеры со шкалы восьми ступеней.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Порционник (#kitchen-sheet) ─────────────────────────────────────────── */
+
+.ks-win{ overflow:hidden; }   /* скругление окна обязано резать таблицу палаты */
+/* Содержимое окна — колонка: полоса фильтров, шапка листа, палаты подряд. */
+.ks-body, .dq-body{ display:flex; flex-direction:column; }
+
+/* Полоса фильтров. Поля получают ШИРИНУ явно: `.field` — колонка flex, и
+   внутри строки-контейнера она ужималась до собственного содержимого, отчего
+   поле даты становилось уже своей же подписи. */
+.ks-bar{
+  display:flex; flex-wrap:wrap; align-items:flex-end; gap:12px;
+  padding:14px 18px; border-bottom:1px solid var(--ink-100);
+}
+.ks-bar .field{ flex:0 1 210px; min-width:160px; }
+.ks-bar .field input, .ks-bar .field select{ width:100%; }
+.ks-bar .grow{ flex:1 1 24px; }
+
+/* Шапка листа: на какое число, по какому отделению, сколько всего порций.
+   Число порций — самое крупное на экране: чаще всего его читают единственным. */
+.ks-head{
+  display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:space-between;
+  gap:12px 20px; padding:16px 18px 12px;
+}
+.ks-head-l{ min-width:0; }
+.ks-date{ font-size:20px; font-weight:700; color:var(--ink-900); line-height:1.2; }
+.ks-where{ font-size:13.5px; color:var(--ink-500); margin-top:3px; }
+.ks-count{
+  font-size:20px; font-weight:700; color:var(--ink-900);
+  font-variant-numeric:tabular-nums; white-space:nowrap;
+}
+
+/* Итог по столам. PASTEL_IDENTITY_V1 — оттенок означает, КАКОЙ стол (пятый
+   всегда одного цвета), а не тяжесть. Стол не назначен — оттенка нет, чип
+   остаётся серым: отсутствие личности не притворяется чьей-то. */
+.ks-chips{ display:flex; flex-wrap:wrap; gap:8px; padding:0 18px 16px; }
+.ks-chip{
+  display:inline-flex; align-items:center; min-height:26px; padding:3px 11px;
+  border-radius:999px; font-size:13.5px; font-weight:600; white-space:nowrap;
+  background:var(--p-bg, var(--ink-50)); color:var(--p-fg, var(--ink-700));
+  border:1px solid var(--p-line, var(--ink-100));
+}
+
+/* Палата — секция, а не вторая карточка: линия сверху вместо рамки и тени. */
+.ks-ward{ border-top:1px solid var(--ink-100); overflow-x:auto; }
+.ks-ward-head{
+  display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between;
+  gap:6px 12px; padding:14px 18px 8px;
+}
+.ks-ward-name{ margin:0; font-size:15px; font-weight:700; color:var(--ink-900); }
+.ks-ward-n{ font-size:12.5px; font-weight:600; color:var(--ink-500); white-space:nowrap; }
+
+/* Ширины колонок заданы: без них имя пациента переносилось по слогам, пока
+   «Разовость» держала пустую четверть строки. */
+.ks-tbl{ table-layout:fixed; min-width:560px; }
+.ks-tbl th:nth-child(1){ width:12%; }
+.ks-tbl th:nth-child(2){ width:32%; }
+.ks-tbl th:nth-child(3){ width:22%; }
+.ks-tbl th:nth-child(4){ width:14%; }
+.ks-tbl th:nth-child(5){ width:20%; }
+.ks-tbl thead th:first-child, .ks-tbl tbody td:first-child{ padding-left:18px; }
+.ks-tbl thead th:last-child,  .ks-tbl tbody td:last-child{ padding-right:18px; }
+.ks-bed{ font-weight:600; color:var(--ink-700); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.ks-pat{ font-weight:600; color:var(--ink-900); overflow-wrap:anywhere; }
+.ks-diet{ font-size:13.5px; font-weight:700; color:var(--ink-900); }
+/* «Стол не назначен» — СОСТОЯНИЕ (пропуск в назначениях), поэтому оно взято
+   семантическим --warn-*, а не девятым пастельным оттенком. */
+.ks-diet.is-none{ color:var(--warn-700); font-weight:600; }
+.ks-meals{ color:var(--ink-600); white-space:nowrap; }
+.ks-note-col{ color:var(--ink-500); overflow-wrap:anywhere; }
+
+/* Пусто / грузится / не загрузилось — блок настоящего размера внутри того же
+   окна, а не белая полоска с текстом впритык к рамке. */
+.ks-note,
+.dq-note{
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:10px; min-height:180px; padding:48px 24px; text-align:center; color:var(--ink-400);
+}
+.ks-note-t,
+.dq-note-t{ margin:0; font-size:15px; color:var(--ink-500); max-width:380px; }
+
+/* ─── Выписки к оформлению (#discharge) ───────────────────────────────────── */
+
+.dq-win{ overflow:hidden; }
+.dq-bar{
+  display:flex; flex-wrap:wrap; align-items:flex-end; gap:12px;
+  padding:14px 18px; border-bottom:1px solid var(--ink-100);
+}
+.dq-bar .field{ flex:0 1 230px; min-width:170px; }
+.dq-bar .field select{ width:100%; }
+.dq-bar .grow{ flex:1 1 24px; }
+
+/* Строка очереди отвечает на вопросы старшей медсестры в том порядке, в каком
+   она их задаёт: кто → откуда и от кого → с каким исходом → чем это кончается
+   для денег → что нажать. Восемь узких колонок прежней таблицы этот порядок
+   не держали, а красное предупреждение о проживании ложилось третьей строкой
+   в самую тесную ячейку. */
+.dq-row{
+  display:grid; gap:10px 18px; align-items:center;
+  grid-template-columns:minmax(220px,1fr) auto auto;
+  grid-template-areas:"main money act" "alert alert alert";
+  padding:14px 18px; border-top:1px solid var(--ink-100);
+}
+.dq-row:first-child{ border-top:none; }
+.dq-row:hover{ background:var(--ink-25); }
+.dq-main{ grid-area:main; min-width:0; }
+.dq-money{ grid-area:money; display:flex; justify-content:flex-end; }
+.dq-do{ grid-area:act; display:flex; justify-content:flex-end; }
+
+.dq-who{ display:flex; flex-wrap:wrap; align-items:baseline; gap:8px; }
+.dq-name{ font-size:17px; font-weight:700; color:var(--ink-900); line-height:1.2; overflow-wrap:anywhere; }
+.dq-no{
+  font-size:12.5px; font-weight:700; color:var(--ink-400);
+  font-family:var(--font-mono); letter-spacing:.3px; user-select:text;
+}
+.dq-facts{ display:flex; flex-wrap:wrap; align-items:baseline; gap:0 6px; margin-top:4px; }
+.dq-fact{ font-size:13.5px; font-weight:600; color:var(--ink-700); }
+.dq-fact-soft{ font-weight:500; color:var(--ink-500); }
+.dq-fact + .dq-fact::before{ content:"\00B7"; color:var(--ink-300); margin-right:6px; font-weight:600; }
+.dq-marks{ display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:8px; }
+.dq-dest{ font-size:12.5px; color:var(--ink-500); }
+
+.dq-debt{ font-size:15px; font-weight:700; white-space:nowrap; }
+.dq-debt.is-clear{ font-size:13.5px; font-weight:500; color:var(--ink-500); }
+.dq-nope{ font-size:12.5px; color:var(--ink-500); white-space:nowrap; text-align:right; }
+
+/* ACCOMMODATION_GAP_V1 — ТЕКСТ БЕЗОПАСНОСТИ. Полоса во всю ширину строки:
+   самый опасный случай — «Долга нет» при трёх невыставленных койко-днях, и
+   тогда об этих деньгах не говорит больше ничто. В РАЗМЕТКЕ она стоит первой,
+   до кнопки (диктор и клавиатура идут по порядку узлов); сетка кладёт её
+   вторым рядом — глазами это полоса под пациентом. Цвет семантический
+   (--crit-*), но смысл несёт и текст: полоса читается в чёрно-белом. */
+.dq-alert{
+  grid-area:alert; display:flex; align-items:flex-start; gap:8px; margin:0;
+  padding:9px 12px; border:1px solid #fecaca; border-radius:10px;
+  background:var(--crit-50); color:var(--crit-700);
+  font-size:13.5px; font-weight:600; line-height:1.35;
+}
+.dq-alert svg{ flex:none; margin-top:1px; }
+
+/* На узком экране строка складывается в столбик — деньги и кнопка не имеют
+   права уехать за край: именно на них смотрят перед нажатием. */
+@media (max-width: 900px){
+  .dq-row{ grid-template-columns:1fr; grid-template-areas:"main" "money" "act" "alert"; align-items:start; }
+  .dq-money, .dq-do{ justify-content:flex-start; }
+  .dq-nope{ text-align:left; }
+}
+
+/* ─── Окно оформления выписки ─────────────────────────────────────────────── */
+/* Панель, а не вложенная карточка: окно в окне рисовало вторую рамку и вторую
+   тень внутри модального. Отступов сверху нет — .modal-body это grid с gap. */
+.dq-panel{ padding:12px 14px; border:1px solid var(--ink-200); border-radius:12px; background:var(--ink-25); }
+.dq-panel.is-warn{ border-color:#fde9b6; background:var(--warn-50); }
+.dq-panel.is-crit{ border-color:#fecaca; background:var(--crit-50); }
+.dq-panel-t{
+  margin:0; font-size:15px; font-weight:700; color:var(--ink-900);
+  display:flex; align-items:center; gap:6px;
+}
+.dq-panel.is-crit .dq-panel-t{ color:var(--crit-700); }
+.dq-panel-p{ margin:8px 0 0; font-size:13.5px; font-weight:600; color:var(--ink-800); }
+.dq-panel.is-crit .dq-panel-p{ color:var(--crit-700); }
+.dq-panel .field.checkbox{ margin-top:10px; }
+
+/* Из чего сложился остаток: подпись слева, сумма справа — числа выстроены в
+   столбик, а не спрятаны в середину строки. */
+.dq-sums{ display:grid; grid-template-columns:1fr auto; gap:2px 14px; margin:8px 0 0; font-size:13.5px; }
+.dq-sums dt{ color:var(--ink-600); }
+.dq-sums dd{
+  margin:0; text-align:right; font-weight:700; color:var(--ink-900);
+  font-variant-numeric:tabular-nums; white-space:nowrap;
+}
+.dq-excl{ margin-top:10px; }
+.dq-excl-list{ margin:3px 0 0; padding-left:18px; font-size:12.5px; color:var(--ink-600); }
+.dq-excl-list li{ margin:2px 0; }
+
+.dq-quiet{ font-size:13.5px; color:var(--ink-500); }
+.dq-block > .dq-quiet{ margin-top:2px; }
+.dq-lab{ font-size:12.5px; font-weight:500; color:var(--ink-600); letter-spacing:.005em; }
+.dq-lab-sec{ text-transform:uppercase; letter-spacing:.06em; font-weight:700; color:var(--ink-500); }

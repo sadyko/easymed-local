@@ -15,6 +15,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 class F{constructor(t){this.tagName=String(t).toUpperCase();this.style={};this.children=[];this.attrs={};this.className='';this._t='';this._l={};this.dataset={};this.value='';}
  appendChild(c){this.children.push(c);return c;} removeChild(c){const i=this.children.indexOf(c);if(i>-1)this.children.splice(i,1);return c;}
@@ -40,12 +43,20 @@ globalThis.document={createElement:mk,createElementNS:(_n,t)=>mk(t),createTextNo
 // машине и по-английски на чистом раннере (тот же приём, что в
 // locked-module.test.mjs).
 globalThis.localStorage = { getItem: (k) => (k === 'admin.lang' ? 'ru' : null), setItem() {}, removeItem() {}, clear() {} };
-globalThis.window={location:{hostname:'localhost'},localStorage:globalThis.localStorage,addEventListener(){},open:()=>null};
+globalThis.window={location:{hostname:'localhost'},localStorage:globalThis.localStorage,addEventListener(){},dispatchEvent(){return true;},open:()=>null};
+globalThis.CustomEvent=class{constructor(t,o){this.type=t;Object.assign(this,o||{});}};
 globalThis.MutationObserver=class{observe(){}disconnect(){}};
 globalThis.requestAnimationFrame=(fn)=>fn();
 
 const walk = (e, o = []) => { o.push(e); for (const c of e.children || []) walk(c, o); return o; };
 const textOf = (el) => walk(el).map((n) => n._t || '').join(' ');
+const hasClass = (n, c) => String(n.className || '').split(/\s+/).includes(c);
+const byClass = (root, c) => walk(root).filter((n) => hasClass(n, c));
+const classesIn = (root) => {
+  const out = new Set();
+  for (const n of walk(root)) for (const c of String(n.className || '').split(/\s+/)) if (c) out.add(c);
+  return out;
+};
 
 // ─── Что отвечает сервер ────────────────────────────────────────────────────
 
@@ -68,22 +79,71 @@ const SHEET = {
   ],
 };
 
+// Лист, который отдаёт сервер, подменяем по тесту: экран обязан выглядеть
+// целым и в тот день, когда в отделении никого нет, и когда RPC не ответил.
+const EMPTY_SHEET = { date: '2026-09-04', ward_id: null, total_portions: 0, totals: [], rows: [] };
+let SHEET_REPLY = SHEET;      // что вернуть на kitchen_sheet
+let SHEET_FAILS = false;      // сервер молчит
+
 const rpcCalls = [];
 const dbCalls = [];
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   if (u.startsWith('/api/rpc/')) {
     rpcCalls.push({ name: u.slice('/api/rpc/'.length), args: JSON.parse((opts && opts.body) || '{}') });
-    return { ok: true, json: async () => ({ data: SHEET }) };
+    if (SHEET_FAILS) return { ok: false, status: 500, json: async () => ({ error: 'boom' }) };
+    return { ok: true, json: async () => ({ data: SHEET_REPLY }) };
   }
   dbCalls.push(u);
   return { ok: true, json: async () => ({ data: [{ id: 1, name: 'Терапия' }, { id: 2, name: 'Хирургия' }] }) };
 };
 
+// ─── Настоящий CSS ──────────────────────────────────────────────────────────
+//
+// «Схлопнутые поля и рамки» родились ровно из ОТСУТСТВИЯ правила: экран ставил
+// класс .table, .card-title, .field-label, .input — и ни одного из них в CSS
+// не было. Тесты ниже поэтому читают НАСТОЯЩИЕ таблицы стилей и проверяют, что
+// у каждого класса, который экран вешает на узел, правило есть, а у коробок
+// есть размер. Разбор тот же, что в lab-card.test.mjs.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const CSSDIR = path.resolve(HERE, '..', '..', '..', 'css');
+const CSS = ['admin.css', 'admin-views.css']
+  .map((f) => fs.readFileSync(path.join(CSSDIR, f), 'utf8'))
+  .join('\n').replace(/\r\n/g, '\n').replace(/\/\*[\s\S]*?\*\//g, '');
+const BLOCKS = (() => {
+  const out = [];
+  const re = /([^{}]+)\{([^{}]*)\}/g;
+  let m;
+  while ((m = re.exec(CSS))) {
+    const sels = m[1].split(',').map((s) => s.trim().replace(/\s+/g, ' ')).filter(Boolean);
+    const decls = {};
+    for (const part of m[2].split(';')) {
+      const j = part.indexOf(':');
+      if (j === -1) continue;
+      decls[part.slice(0, j).trim()] = part.slice(j + 1).trim();
+    }
+    out.push({ sels, decls });
+  }
+  return out;
+})();
+/** Объявления правила по точному селектору (все блоки слиты). */
+function rule(sel) {
+  const norm = sel.trim().replace(/\s+/g, ' ');
+  const hits = BLOCKS.filter((b) => b.sels.includes(norm));
+  assert.ok(hits.length, 'правило «' + sel + '» пропало из таблиц стилей');
+  return Object.assign({}, ...hits.map((b) => b.decls));
+}
+/** Есть ли ХОТЬ ОДНО правило, которое красит этот класс. */
+function classIsStyled(cls) {
+  const re = new RegExp('\\.' + cls.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w-])');
+  return BLOCKS.some((b) => b.sels.some((s) => re.test(s)));
+}
+
 const {
   renderKitchenSheet, kitchenSheetHtml, groupByWard, portionLine,
   wardTitle, dietTitle, mealsTitle, canSeeKitchenSheet, KITCHEN_SHEET_ROLES,
 } = await import('../views/kitchen-sheet.js');
+const { setLang } = await import('../i18n.js');
 
 // ─── 1. Группировка и подписи ───────────────────────────────────────────────
 
@@ -124,7 +184,10 @@ test('на печатном листе есть дата, итог по стол
     date: SHEET.date, wardName: null, totals: SHEET.totals,
     rows: SHEET.rows, totalPortions: SHEET.total_portions,
   });
-  assert.ok(html.includes('Порционник на 2026-09-04'), 'заголовок с датой');
+  // DATE_FMT_V1 — дата на бумаге написана словом: лист читает человек.
+  assert.ok(html.includes('Порционник на 4 сентября 2026'),
+    'дата на листе снова машинная: ' + html.slice(html.indexOf('<h1>'), html.indexOf('</h1>') + 5));
+  assert.ok(!html.includes('2026-09-04'), 'ISO-дата всё ещё печатается где-то на листе');
   assert.ok(html.includes('Стол №5 — 2 порц.'), 'итог кухни');
   assert.ok(html.includes('Всего порций: 4'));
   for (const r of SHEET.rows) assert.ok(html.includes(r.patient_name), r.patient_name);
@@ -214,4 +277,176 @@ test('касса, регистратура и обычный врач порци
   assert.equal(canSeeKitchenSheet({ role: 'registrar' }), false);
   assert.equal(canSeeKitchenSheet(null), false);
   assert.equal(canSeeKitchenSheet({}), false);
+});
+
+// ═══ 5. ЯЗЫК ИНТЕРФЕЙСА: НИ ОДНОЙ СХЛОПНУТОЙ КОРОБКИ ════════════════════════
+//
+// Владелец: «fields and frames are collapsed». Причина оказалась не в
+// оформлении: экран ставил четыре класса, которых в таблицах стилей НЕТ —
+// .table (таблица палаты рисовалась голым <table>), .card-title, .field-label
+// и .input, — а `.card` он брал без `.card-pad`, у которой и живут отступы.
+// Тесты ниже стерегут не «класс проставлен», а следствие: у каждого класса,
+// который экран вешает на узел, есть правило, и у каждой коробки есть размер.
+
+/** Монтирует экран в заданном состоянии сервера и отдаёт корень и окно. */
+async function screen({ reply = SHEET, fails = false } = {}) {
+  SHEET_REPLY = reply; SHEET_FAILS = fails;
+  const root = mk('div');
+  const view = await renderKitchenSheet(root, {});
+  await new Promise((r) => setTimeout(r, 0));
+  const wins = byClass(root, 'card');
+  assert.equal(wins.length, 1, 'рабочее окно должно быть ровно одно, а их ' + wins.length);
+  return { root, win: wins[0], view };
+}
+const STATES = {
+  sheet: () => screen({}),
+  empty: () => screen({ reply: EMPTY_SHEET }),
+  error: () => screen({ fails: true }),
+};
+
+// Классы без собственного правила — их ровно два, и оба это МЕТКИ экрана
+// (корень .ks и вход .fade-in красится анимацией по имени), а не оформление.
+const UNSTYLED_OK = new Set(['ks']);
+
+test('ни один класс экрана не остался без правила — именно этим и были «схлопнутые рамки»', async () => {
+  for (const [name, mount] of Object.entries(STATES)) {
+    const { root } = await mount();
+    for (const cls of classesIn(root)) {
+      if (UNSTYLED_OK.has(cls)) continue;
+      assert.ok(classIsStyled(cls),
+        name + ': класс «' + cls + '» экран вешает, а правила для него нет ни в одной таблице стилей');
+    }
+  }
+});
+
+test('в каждом состоянии есть коробка настоящего размера, а не полоска у рамки', async () => {
+  // Пусто / грузится / не загрузилось — блок с высотой и отступами.
+  for (const name of ['empty', 'error']) {
+    const { root } = await STATES[name]();
+    const notes = byClass(root, 'ks-note');
+    assert.equal(notes.length, 1, name + ': состояние нарисовано без блока-заглушки');
+    assert.ok(textOf(notes[0]).trim().length > 10, name + ': заглушка молчит о том, что случилось');
+  }
+  const note = rule('.ks-note');
+  assert.ok(parseFloat(note['min-height']) >= 120, 'заглушка снова схлопнулась по высоте: ' + note['min-height']);
+  assert.ok(/\d/.test(String(note.padding || '')), 'у заглушки нет отступов');
+
+  // Полоса фильтров: у `.field` внутри строки-контейнера ШИРИНА задана явно —
+  // без этого поле даты ужималось до собственного содержимого.
+  const f = rule('.ks-bar .field');
+  assert.ok(/\d/.test(String(f.flex || '')), 'поле фильтра снова без ширины: flex=' + f.flex);
+  assert.ok(parseFloat(f['min-width']) >= 120, 'поле фильтра может сжаться в ничто: ' + f['min-width']);
+  assert.ok(/\d/.test(String(rule('.ks-bar').padding || '')), 'полоса фильтров прижата к рамке окна');
+
+  // Таблица палаты — общая таблица продукта (table.list), у неё есть отбивки.
+  const td = rule('table.list tbody td');
+  assert.ok(parseFloat(td.padding) > 0, 'ячейка таблицы снова без отбивки');
+  assert.ok(parseFloat(rule('.ks-tbl')['min-width']) >= 400, 'таблица палаты может схлопнуться по ширине');
+  assert.equal(rule('.ks-ward')['overflow-x'], 'auto', 'узкая таблица режется вместо прокрутки');
+});
+
+test('таблица палаты — та самая table.list, а не несуществующий .table', async () => {
+  const { root } = await STATES.sheet();
+  const tables = walk(root).filter((n) => n.tagName === 'TABLE');
+  assert.equal(tables.length, 2, 'две палаты — две таблицы');
+  for (const t of tables) {
+    assert.ok(hasClass(t, 'list'), 'таблица снова без класса list: className=' + t.className);
+    assert.ok(!hasClass(t, 'table'), 'вернулся класс .table, которого в CSS нет');
+    assert.equal(walk(t).filter((n) => n.tagName === 'TH').length, 5, 'шапка таблицы потеряла колонки');
+  }
+});
+
+test('окно ОДНО: карточки в карточке нет ни в одном состоянии', async () => {
+  for (const [name, mount] of Object.entries(STATES)) {
+    const { win } = await mount();
+    assert.equal(byClass(win, 'card').length, 1,
+      name + ': внутри рабочего окна снова окно — вторая рамка и вторая тень');
+  }
+  // И у самого окна рамка с тенью — это оно и есть.
+  const card = rule('.card');
+  assert.ok(/window-line/.test(String(card.border || '')), 'рабочее окно потеряло свою линию');
+  assert.ok(/shadow-window/.test(String(card['box-shadow'] || '')), 'рабочее окно потеряло тень');
+});
+
+// ═══ 6. ОДНО ГЛАВНОЕ ДЕЙСТВИЕ НА СОСТОЯНИЕ ══════════════════════════════════
+
+test('главная кнопка на экране одна — «Печать», и она гаснет, когда печатать нечего', async () => {
+  const want = { sheet: false, empty: true, error: true };   // true = кнопка погашена
+  for (const [name, off] of Object.entries(want)) {
+    const { root, win } = await STATES[name]();
+    assert.equal(win.getAttribute('data-state'), name, name + ': окно считает себя в другом состоянии');
+    const primaries = byClass(root, 'btn-primary');
+    assert.equal(primaries.length, 1, name + ': главных кнопок ' + primaries.length + ', а должна быть одна');
+    assert.ok(textOf(primaries[0]).includes('Печать'), name + ': главная кнопка не «Печать»');
+    assert.equal(!!primaries[0].disabled, off,
+      name + (off ? ': кнопка печати предлагает напечатать пустой лист' : ': печатать есть что, а кнопка погашена'));
+  }
+});
+
+// ═══ 7. ДАТА — СЛОВОМ, И НА ТРЁХ ЯЗЫКАХ ═════════════════════════════════════
+
+test('дата листа написана словом на экране и на бумаге — во всех трёх языках', async () => {
+  const want = { ru: /сентября/, uz: /sentabr/, en: /September/ };
+  try {
+    for (const [lang, re] of Object.entries(want)) {
+      setLang(lang);
+      const { root } = await STATES.sheet();
+      const d = byClass(root, 'ks-date');
+      assert.equal(d.length, 1, lang + ': дата листа пропала с экрана');
+      assert.ok(re.test(textOf(d[0])), lang + ': месяц не написан словом — ' + textOf(d[0]));
+      assert.ok(!/^\s*\d{4}-\d{2}-\d{2}\s*$/.test(textOf(d[0])), lang + ': на экране снова ISO');
+
+      const html = kitchenSheetHtml({
+        date: SHEET.date, wardName: null, totals: SHEET.totals,
+        rows: SHEET.rows, totalPortions: SHEET.total_portions,
+      });
+      assert.ok(re.test(html), lang + ': на печатном листе дата снова машинная');
+      assert.ok(!html.includes('2026-09-04'), lang + ': ISO-дата всё ещё на листе');
+    }
+  } finally { setLang('ru'); }
+});
+
+// ═══ 8. БУМАГА — ГЛАВНОЕ. ЛИСТ ПЕЧАТАЕТСЯ ЦЕЛИКОМ ═══════════════════════════
+
+test('на листе A4 остались палата, дата, пациент, стол и итог по каждому столу', () => {
+  const html = kitchenSheetHtml({
+    date: SHEET.date, wardName: 'Терапия', totals: SHEET.totals,
+    rows: SHEET.rows, totalPortions: SHEET.total_portions,
+  });
+  assert.ok(html.includes('4 сентября 2026'), 'дата');
+  assert.ok(html.includes('>Терапия<') && html.includes('>Хирургия<'), 'палаты озаглавлены');
+  for (const r of SHEET.rows) assert.ok(html.includes(r.patient_name), 'пациент ' + r.patient_name);
+  assert.ok(html.includes('Стол №5') && html.includes('Стол №9') && html.includes('Стол не назначен'), 'столы');
+  // Итог ПО КАЖДОМУ столу, а не только общий: кухня варит по столам.
+  for (const t of SHEET.totals) assert.ok(html.includes(portionLine(t)), 'итог «' + portionLine(t) + '» пропал');
+  assert.ok(html.includes('Всего порций: 4'), 'общий итог');
+  assert.ok(html.includes('Старшая медсестра'), 'подпись, ради которой лист и печатают');
+  // A4 и то, от чего лист рвётся не в том месте.
+  assert.match(html, /@page\s*\{\s*size:\s*A4/, 'лист перестал быть A4');
+  assert.match(html, /tr\s*\{[^}]*page-break-inside:\s*avoid/, 'строка снова может разорваться между листами');
+  assert.match(html, /thead\s*\{[^}]*table-header-group/, 'шапка таблицы не повторяется на второй странице');
+  assert.match(html, /\.p-ward\s*\{[^}]*page-break-after:\s*avoid/, 'имя палаты может остаться внизу страницы одно');
+  assert.match(html, /table-layout:\s*fixed/, 'колонки листа снова пляшут по содержимому');
+});
+
+test('колонка «Палата» с листа убрана — палата стоит заголовком над своей таблицей', () => {
+  const html = kitchenSheetHtml({
+    date: SHEET.date, wardName: null, totals: [], rows: SHEET.rows, totalPortions: 4,
+  });
+  const head = html.slice(html.indexOf('<thead>'), html.indexOf('</thead>'));
+  assert.ok(!head.includes('Палата'), 'колонка «Палата» вернулась и снова ест пятую часть ширины A4');
+  assert.ok(html.includes('Койка') && html.includes('Пациент') && html.includes('Стол'), 'колонки на месте');
+  // Но сама палата на листе есть — заголовком.
+  assert.ok(html.includes('p-ward">Терапия'), 'палата пропала с листа совсем');
+});
+
+// ═══ 9. ШКАЛА ═══════════════════════════════════════════════════════════════
+
+test('все размеры экрана — со шкалы восьми ступеней (пол 12.5px)', () => {
+  const STEPS = new Set([12.5, 13.5, 15, 17, 20, 24, 30, 40]);
+  for (const sel of ['.ks-date', '.ks-where', '.ks-count', '.ks-chip', '.ks-ward-name',
+                     '.ks-ward-n', '.ks-diet', '.ks-note-t']) {
+    const v = parseFloat(rule(sel)['font-size']);
+    assert.ok(STEPS.has(v), sel + ': ' + v + 'px — не ступень шкалы');
+  }
 });

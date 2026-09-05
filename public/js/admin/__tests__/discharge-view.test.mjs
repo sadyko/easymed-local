@@ -18,6 +18,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 class F{constructor(t){this.tagName=String(t).toUpperCase();this.style={};this.children=[];this.attrs={};this.className='';this._t='';this._l={};this.dataset={};this.value='';this.checked=false;this.disabled=false;}
  appendChild(c){this.children.push(c);return c;} removeChild(c){const i=this.children.indexOf(c);if(i>-1)this.children.splice(i,1);return c;}
@@ -37,12 +40,61 @@ globalThis.Node=F; globalThis.Event=class{constructor(t,o){this.type=t;Object.as
 globalThis.document={createElement:mk,createElementNS:(_n,t)=>mk(t),createTextNode:t=>new TX(t),head:mk('head'),body:mk('body'),documentElement:mk('html'),addEventListener(){},removeEventListener(){},getElementById(){return null;}};
 // I18N_LOCALE_PIN_V1 — язык пришпилен к ru ДО импорта экрана.
 globalThis.localStorage = { getItem: (k) => (k === 'admin.lang' ? 'ru' : null), setItem() {}, removeItem() {}, clear() {} };
-globalThis.window={location:{hostname:'localhost'},localStorage:globalThis.localStorage,addEventListener(){},open:()=>null};
+globalThis.window={location:{hostname:'localhost'},localStorage:globalThis.localStorage,addEventListener(){},dispatchEvent(){return true;},open:()=>null};
+globalThis.CustomEvent=class{constructor(t,o){this.type=t;Object.assign(this,o||{});}};
 globalThis.MutationObserver=class{observe(){}disconnect(){}};
 globalThis.requestAnimationFrame=(fn)=>fn();
 
 const walk = (e, o = []) => { o.push(e); for (const c of e.children || []) walk(c, o); return o; };
 const textOf = (el) => walk(el).map((n) => n._t || '').join(' ');
+const hasClass = (n, c) => String(n.className || '').split(/\s+/).includes(c);
+const byClass = (root, c) => walk(root).filter((n) => hasClass(n, c));
+const classesIn = (root) => {
+  const out = new Set();
+  for (const n of walk(root)) for (const c of String(n.className || '').split(/\s+/)) if (c) out.add(c);
+  return out;
+};
+
+// ─── Настоящий CSS ──────────────────────────────────────────────────────────
+//
+// «Схлопнутые поля и рамки» родились из ОТСУТСТВИЯ правила: экран вешал классы
+// .table, .card-title, .field-label, .input — и ни одного из них в таблицах
+// стилей не было. Поэтому тесты ниже читают НАСТОЯЩИЙ CSS и проверяют, что у
+// каждого класса есть правило, а у коробки — размер. Разбор тот же, что в
+// lab-card.test.mjs.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const CSSDIR = path.resolve(HERE, '..', '..', '..', 'css');
+const CSS = ['admin.css', 'admin-views.css']
+  .map((f) => fs.readFileSync(path.join(CSSDIR, f), 'utf8'))
+  .join('\n').replace(/\r\n/g, '\n').replace(/\/\*[\s\S]*?\*\//g, '');
+const BLOCKS = (() => {
+  const out = [];
+  const re = /([^{}]+)\{([^{}]*)\}/g;
+  let m;
+  while ((m = re.exec(CSS))) {
+    const sels = m[1].split(',').map((x) => x.trim().replace(/\s+/g, ' ')).filter(Boolean);
+    const decls = {};
+    for (const part of m[2].split(';')) {
+      const j = part.indexOf(':');
+      if (j === -1) continue;
+      decls[part.slice(0, j).trim()] = part.slice(j + 1).trim();
+    }
+    out.push({ sels, decls });
+  }
+  return out;
+})();
+/** Объявления правила по точному селектору (все блоки слиты). */
+function rule(sel) {
+  const norm = sel.trim().replace(/\s+/g, ' ');
+  const hits = BLOCKS.filter((b) => b.sels.includes(norm));
+  assert.ok(hits.length, 'правило «' + sel + '» пропало из таблиц стилей');
+  return Object.assign({}, ...hits.map((b) => b.decls));
+}
+/** Есть ли ХОТЬ ОДНО правило, которое красит этот класс. */
+function classIsStyled(cls) {
+  const re = new RegExp('\\.' + cls.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w-])');
+  return BLOCKS.some((b) => b.sels.some((x) => re.test(x)));
+}
 
 // ─── Что отвечает сервер ────────────────────────────────────────────────────
 
@@ -81,6 +133,7 @@ let ACCOMMODATION = {
        billed: { id: 9, units: 1, rate: 200000, total: 200000, invoiced: false }, stale: false },
 };
 let CAN = { discharge: true };
+let QUEUE_FAILS = false;   // сервер молчит — экран обязан сказать это словами
 const rpcCalls = [];
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
@@ -88,7 +141,10 @@ globalThis.fetch = async (url, opts) => {
     const name = u.slice('/api/rpc/'.length);
     rpcCalls.push({ name, args: JSON.parse((opts && opts.body) || '{}') });
     if (name === 'inpatient_capabilities') return { ok: true, json: async () => ({ data: { roles: [], can: CAN } }) };
-    if (name === 'admission_discharge_queue') return { ok: true, json: async () => ({ data: QUEUE }) };
+    if (name === 'admission_discharge_queue') {
+      if (QUEUE_FAILS) return { ok: false, status: 500, json: async () => ({ error: 'boom' }) };
+      return { ok: true, json: async () => ({ data: QUEUE }) };
+    }
     // ACCOMMODATION_GAP_V1 — расчёт проживания по каждому, кого оформляют.
     if (name === 'accommodation_state') {
       const a = JSON.parse((opts && opts.body) || '{}').admission_id;
@@ -104,6 +160,7 @@ const {
   hasDebt, balanceLines, excludeNotes, placeTitle, canSubmit,
   nowLocalInput, localToUtcIso, accommodationGap, accommodationWarning,
 } = await import('../views/discharge.js');
+const { setLang } = await import('../i18n.js');
 
 // ─── 1. Подписи и чистые функции ────────────────────────────────────────────
 
@@ -334,4 +391,239 @@ test('экран держат те, кто вправе оформить: над
   assert.equal(canSeeDischarge({ role: 'doctor' }), false);
   assert.equal(canSeeDischarge({ role: 'cashier' }), false);
   assert.equal(canSeeDischarge(null), false);
+});
+
+// ═══ 5. ЯЗЫК ИНТЕРФЕЙСА: НИ ОДНОЙ СХЛОПНУТОЙ КОРОБКИ ════════════════════════
+//
+// Владелец: «fields and frames are collapsed». Причина была не в оформлении:
+// экран ставил четыре класса, которых в таблицах стилей НЕТ — .table (очередь
+// рисовалась голым <table>: ни отбивок, ни шапки, ни линеек), .card-title,
+// .field-label и .input, — а `.card` брал без `.card-pad`, у которой и живут
+// отступы. Тесты ниже стерегут следствие, а не «класс проставлен».
+
+/** Монтирует экран в заданном состоянии сервера и отдаёт корень и окно. */
+async function screen({ rows = [CLEAN, OWING], fails = false, can = { discharge: true } } = {}) {
+  QUEUE = { ward_id: null, outcomes: ['home', 'transfer', 'refuse', 'death'], rows };
+  QUEUE_FAILS = fails; CAN = can;
+  document.body.children.length = 0;
+  const root = mk('div');
+  const view = await renderDischarge(root, {});
+  await new Promise((r) => setTimeout(r, 0));
+  const wins = byClass(root, 'card');
+  assert.equal(wins.length, 1, 'рабочее окно должно быть ровно одно, а их ' + wins.length);
+  return { root, win: wins[0], view };
+}
+function resetServer() {
+  QUEUE = { ward_id: null, outcomes: ['home', 'transfer', 'refuse', 'death'], rows: [CLEAN, OWING] };
+  QUEUE_FAILS = false; CAN = { discharge: true };
+}
+const STATES = {
+  queue: () => screen({}),
+  empty: () => screen({ rows: [] }),
+  error: () => screen({ fails: true }),
+};
+
+// Классы без собственного правила — только МЕТКИ экрана (корень .dq), не
+// оформление.
+const UNSTYLED_OK = new Set(['dq']);
+
+test('ни один класс экрана не остался без правила — именно этим и были «схлопнутые рамки»', async () => {
+  try {
+    for (const [name, mount] of Object.entries(STATES)) {
+      const { root } = await mount();
+      for (const cls of classesIn(root)) {
+        if (UNSTYLED_OK.has(cls)) continue;
+        assert.ok(classIsStyled(cls),
+          name + ': класс «' + cls + '» экран вешает, а правила для него нет ни в одной таблице стилей');
+      }
+    }
+    // Окно оформления — тоже экран: его панели проверяются отдельно.
+    const { view } = await screen({});
+    view.openFinalize(OWING);
+    const modal = document.body.children[document.body.children.length - 1];
+    for (const cls of classesIn(modal)) {
+      if (UNSTYLED_OK.has(cls)) continue;
+      assert.ok(classIsStyled(cls), 'окно оформления: класс «' + cls + '» без правила');
+    }
+  } finally { resetServer(); }
+});
+
+test('в каждом состоянии есть коробка настоящего размера, а не полоска у рамки', async () => {
+  try {
+    for (const name of ['empty', 'error']) {
+      const { root } = await STATES[name]();
+      const notes = byClass(root, 'dq-note');
+      assert.equal(notes.length, 1, name + ': состояние нарисовано без блока-заглушки');
+      assert.ok(textOf(notes[0]).trim().length > 10, name + ': заглушка молчит о том, что случилось');
+    }
+    const note = rule('.dq-note');
+    assert.ok(parseFloat(note['min-height']) >= 120, 'заглушка снова схлопнулась по высоте: ' + note['min-height']);
+    assert.ok(/\d/.test(String(note.padding || '')), 'у заглушки нет отступов');
+
+    const f = rule('.dq-bar .field');
+    assert.ok(/\d/.test(String(f.flex || '')), 'выбор отделения снова без ширины: flex=' + f.flex);
+    assert.ok(parseFloat(f['min-width']) >= 120, 'выбор отделения может сжаться в ничто: ' + f['min-width']);
+    assert.ok(/\d/.test(String(rule('.dq-bar').padding || '')), 'полоса фильтра прижата к рамке окна');
+
+    // Строка очереди: сетка с именованными областями и собственными отступами.
+    const row = rule('.dq-row');
+    assert.equal(row.display, 'grid', 'строка очереди перестала быть сеткой');
+    assert.ok(/\d/.test(String(row.padding || '')), 'строка очереди прижата к рамке');
+    // Правило .dq-row объявлено дважды (обычная ширина и @media), поэтому
+    // сетку читаем из текста таблицы стилей, а не из слитых объявлений.
+    assert.ok(/"main money act"\s*"alert alert alert"/.test(CSS),
+      'полоса предупреждения перестала занимать всю ширину строки');
+    assert.ok(/grid-template-columns:\s*minmax/.test(CSS), 'колонки строки очереди пропали');
+    // И то же на узком экране — иначе деньги и кнопка уезжают за край.
+    assert.ok(/max-width:\s*900px/.test(CSS), 'узкий экран больше не обслуживается');
+  } finally { resetServer(); }
+});
+
+test('очередь — строки со своей рамкой-линией, а не голая <table class="table">', async () => {
+  try {
+    const { root, win } = await STATES.queue();
+    assert.equal(walk(root).filter((n) => n.tagName === 'TABLE').length, 0,
+      'вернулась таблица — а вместе с ней восемь узких колонок и .table без правила');
+    const rows = byClass(root, 'dq-row');
+    assert.equal(rows.length, 2, 'в очереди должно быть две строки');
+    assert.equal(win.getAttribute('data-state'), 'queue');
+    // Строки разделены линией, а не собственными рамками с тенью.
+    assert.ok(/ink-100/.test(String(rule('.dq-row')['border-top'] || '')), 'строки перестали разделяться линией');
+    assert.equal(byClass(win, 'card').length, 1, 'внутри окна снова окно');
+  } finally { resetServer(); }
+});
+
+// ═══ 6. ОДНО ГЛАВНОЕ ДЕЙСТВИЕ ══════════════════════════════════════════════
+
+test('главная кнопка — одна на строку, и ни одной там, где оформлять нечего или некому', async () => {
+  try {
+    const { root } = await STATES.queue();
+    for (const row of byClass(root, 'dq-row')) {
+      const primaries = byClass(row, 'btn-primary');
+      assert.equal(primaries.length, 1, 'на строке главных кнопок ' + primaries.length);
+      assert.ok(textOf(primaries[0]).includes('Оформить выписку'), 'главная кнопка строки — не оформление');
+    }
+    // Вне строк главных кнопок нет: «Обновить» — второстепенное действие.
+    assert.equal(byClass(root, 'btn-primary').length, 2, 'главная кнопка завелась вне строки очереди');
+
+    for (const name of ['empty', 'error']) {
+      const { root: r } = await STATES[name]();
+      assert.equal(byClass(r, 'btn-primary').length, 0, name + ': главная кнопка там, где нечего оформлять');
+    }
+    // Сервер откажет — кнопки нет вовсе, и сказано, кто это делает.
+    const { root: noRights } = await screen({ can: { discharge: false } });
+    assert.equal(byClass(noRights, 'btn-primary').length, 0, 'кнопка есть у того, кому сервер откажет');
+    assert.equal(byClass(noRights, 'dq-nope').length, 2, 'не сказано, кто оформляет');
+  } finally { resetServer(); }
+});
+
+test('в окне оформления главная кнопка ровно одна — «Оформить выписку»', async () => {
+  try {
+    const { view } = await screen({});
+    view.openFinalize(OWING);
+    const modal = document.body.children[document.body.children.length - 1];
+    const primaries = byClass(modal, 'btn-primary');
+    assert.equal(primaries.length, 1, 'в окне главных кнопок ' + primaries.length);
+    assert.ok(textOf(primaries[0]).includes('Оформить выписку'));
+    const cancel = walk(modal).find((n) => n.tagName === 'BUTTON' && /Отмена/.test(textOf(n)));
+    assert.ok(cancel && !hasClass(cancel, 'btn-primary'), '«Отмена» стала вторым равным призывом');
+  } finally { resetServer(); }
+});
+
+// ═══ 7. ТЕКСТ БЕЗОПАСНОСТИ ОСТАЁТСЯ ГРОМКИМ ═════════════════════════════════
+
+test('долг и невнесённое проживание видно в очереди — и оба взяты семантическим цветом', async () => {
+  try {
+    const { root } = await STATES.queue();
+    // Долг — тег состояния (--warn), а не пастель: пастель здесь означала бы
+    // «чей-то», а долг это не личность.
+    const debts = byClass(root, 'dq-debt');
+    assert.equal(debts.length, 2, 'остаток показан не у каждого');
+    const text = textOf(root);
+    assert.ok(text.includes(money(450000)), 'долг пропал из очереди');
+    assert.ok(text.includes('Долга нет'), 'и у кого его нет — тоже сказано');
+    assert.ok(byClass(root, 'tag-warn').length >= 1, 'долг перестал быть предупреждением');
+
+    // ACCOMMODATION_GAP_V1 — полоса во всю ширину строки, а не третья строка
+    // самой тесной ячейки. И она стоит у ЧИСТОГО пациента: «Долга нет» при
+    // трёх невыставленных койко-днях — самый опасный случай.
+    const alerts = byClass(root, 'dq-alert');
+    assert.equal(alerts.length, 1, 'предупреждение о проживании пропало из очереди');
+    const at = textOf(alerts[0]);
+    assert.ok(at.includes(money(450000)) && /сут/.test(at), 'предупреждение молчит о сумме или сроке: ' + at);
+    const clean = byClass(root, 'dq-row')[0];
+    assert.equal(byClass(clean, 'dq-alert').length, 1, 'предупреждение стоит не у того пациента');
+    // В РАЗМЕТКЕ полоса идёт ДО кнопки: диктор и клавиатура идут по порядку
+    // узлов, и текст безопасности обязан быть прочитан раньше действия.
+    const order = walk(clean).filter((n) => hasClass(n, 'dq-alert') || hasClass(n, 'btn-primary'));
+    assert.ok(hasClass(order[0], 'dq-alert'),
+      'кнопку оформления читают раньше предупреждения о непосчитанных койко-днях');
+
+    const css = rule('.dq-alert');
+    assert.ok(/crit-50/.test(String(css.background || '')), 'полоса перестала быть красной по смыслу');
+    assert.ok(/crit-700/.test(String(css.color || '')), 'текст полосы больше не критический');
+    assert.ok(!/--p-bg|pastel/.test(String(css.background || '')), 'состояние перекрасили в пастель');
+  } finally { resetServer(); }
+});
+
+test('в окне оформления и предупреждение о проживании, и подпись под долгом — панели, а не карточки в карточке', async () => {
+  try {
+    const { view } = await screen({});
+    // «Чистый» пациент: долга нет, а трёх койко-дней в счёте нет тоже.
+    view.openFinalize(CLEAN);
+    let modal = document.body.children[document.body.children.length - 1];
+    let panels = byClass(modal, 'dq-panel');
+    assert.equal(panels.length, 1, 'у пациента без долга пропала панель проживания');
+    assert.ok(hasClass(panels[0], 'is-crit'), 'пропажа проживания перестала быть критической');
+    assert.ok(textOf(panels[0]).includes('Проживание не внесено в счёт'));
+    assert.ok(textOf(panels[0]).includes(money(450000)), 'сумма пропажи не названа');
+    assert.ok(textOf(panels[0]).includes('карте госпитализации'), 'не сказано, где это чинят');
+    assert.equal(byClass(modal, 'card').length, 0,
+      'внутри модального окна снова .card — вторая рамка и вторая тень в окне');
+
+    // Должник: панель долга с подписью, и она предупреждает, а не запрещает.
+    view.openFinalize(OWING);
+    modal = document.body.children[document.body.children.length - 1];
+    panels = byClass(modal, 'dq-panel');
+    assert.ok(panels.some((p) => hasClass(p, 'is-warn')), 'панель долга пропала');
+    const debtPanel = panels.find((p) => hasClass(p, 'is-warn'));
+    const dt = textOf(debtPanel);
+    assert.ok(dt.includes('Долг выписке не мешает'), 'исчезло «предупреждает, а не запрещает»');
+    assert.ok(dt.includes('Долг согласован (гарантия / рассрочка)'), 'подпись под долгом пропала');
+    assert.ok(dt.includes('В сумму не входит:'), 'границы числа больше не показаны');
+    for (const l of balanceLines(OWING.balance)) {
+      assert.ok(dt.includes(l.label) && dt.includes(l.value), 'слагаемое «' + l.label + '» пропало');
+    }
+    // Цвета панелей — семантические токены, а не вписанная руками rgba.
+    assert.ok(/warn-50/.test(String(rule('.dq-panel.is-warn').background || '')));
+    assert.ok(/crit-50/.test(String(rule('.dq-panel.is-crit').background || '')));
+    assert.ok(!/rgba\(179,\s*38,\s*30/.test(CSS), 'вернулся жёстко вписанный красный вместо токена');
+  } finally { resetServer(); }
+});
+
+// ═══ 8. ДАТЫ — СЛОВОМ, НА ТРЁХ ЯЗЫКАХ ══════════════════════════════════════
+
+test('дата подачи заявки написана словом во всех трёх языках', async () => {
+  const want = { ru: /сентября/, uz: /sentabr/, en: /September/ };
+  try {
+    for (const [lang, re] of Object.entries(want)) {
+      setLang(lang);
+      const { root } = await STATES.queue();
+      const t = textOf(root);
+      assert.ok(re.test(t), lang + ': месяц не написан словом в очереди');
+      assert.ok(!/2026-09-04T/.test(t), lang + ': в очередь вернулась машинная дата');
+    }
+  } finally { setLang('ru'); resetServer(); }
+});
+
+// ═══ 9. ШКАЛА ═══════════════════════════════════════════════════════════════
+
+test('все размеры экрана — со шкалы восьми ступеней (пол 12.5px)', () => {
+  const STEPS = new Set([12.5, 13.5, 15, 17, 20, 24, 30, 40]);
+  for (const sel of ['.dq-name', '.dq-no', '.dq-fact', '.dq-dest', '.dq-debt', '.dq-debt.is-clear',
+                     '.dq-nope', '.dq-alert', '.dq-panel-t', '.dq-panel-p', '.dq-sums',
+                     '.dq-excl-list', '.dq-quiet', '.dq-lab', '.dq-note-t']) {
+    const v = parseFloat(rule(sel)['font-size']);
+    assert.ok(STEPS.has(v), sel + ': ' + v + 'px — не ступень шкалы');
+  }
 });

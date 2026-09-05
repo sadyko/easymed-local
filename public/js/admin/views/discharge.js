@@ -31,7 +31,7 @@
 // нужно добавить, перечислено в отчёте задачи.
 
 import { supabase } from '../../supabase.js';
-import { h, clear, toast, Icon, Tag, checkField, fmtDateTime } from '../ui.js';
+import { h, clear, toast, Icon, Tag, checkField, field, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — переводим ПЕРВЫМ, подставляем ВТОРЫМ
 // INPATIENT_ROLE_GATE_V1 — список ролей теперь ЧИТАЕТ и меню (permissions.js
 // isModuleAllowed): он лежит там, где стоит гейт, и сюда возвращается тем же
@@ -213,25 +213,40 @@ export function canSubmit(row, form) {
 export async function renderDischarge(root, ctx = {}) {
   // ACCOMMODATION_GAP_V1 — расчёт проживания по каждой строке очереди:
   // admission_id → ответ accommodation_state.
-  const state = { wardId: '', wards: [], rows: [], can: {}, loading: true, accommodation: new Map() };
+  const state = { wardId: '', wards: [], rows: [], can: {}, loading: true, status: 'loading', accommodation: new Map() };
 
-  const wrap = h('div', { class: 'fade-in' });
+  const wrap = h('div', { class: 'fade-in dq' });
   root.appendChild(wrap);
 
+  // Заголовок раздела снимает оболочка (ONE_NAME_PER_SCREEN_V1); подзаголовок
+  // остаётся — он объясняет, что оформление делает с койкой.
   wrap.appendChild(h('div', { class: 'page-head' },
     h('div', null,
       h('h1', { class: 'page-title' }, 'Выписки к оформлению'),
       h('p', { class: 'page-subtitle' },
         'Пациенты, по которым лечащий врач подал заявку на выписку. Оформление закрывает госпитализацию и отправляет койку на уборку.'))));
 
-  const wardSelect = h('select', { class: 'input' }, h('option', { value: '' }, 'Все отделения'));
+  const wardSelect = h('select', null, h('option', { value: '' }, 'Все отделения'));
   const reloadBtn = h('button', { class: 'btn' }, Icon('Refresh'), tr('Обновить'));
-  wrap.appendChild(h('div', { class: 'card', style: { display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: '14px' } },
-    h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Отделение'), wardSelect),
-    reloadBtn));
 
-  const body = h('div', null);
-  wrap.appendChild(body);
+  // ОДНО рабочее окно на весь экран: полоса фильтра и очередь внутри него,
+  // строки разделены волосяной линией. Прежде здесь было две карточки с двумя
+  // рамками и двумя тенями, и обе — без внутренних отступов.
+  const bar = h('div', { class: 'dq-bar' },
+    field('Отделение', wardSelect),
+    h('div', { class: 'grow' }),
+    reloadBtn);
+  const body = h('div', { class: 'dq-body' });
+  const win = h('div', { class: 'card dq-win' }, bar, body);
+  wrap.appendChild(win);
+
+  /** Состояние окна словом — по нему же его и проверяют (__tests__). */
+  function setStatus(next) { state.status = next; win.setAttribute('data-state', next); }
+
+  /** Пустое/загрузочное/ошибочное состояние — блок настоящего размера. */
+  function note(icon, text) {
+    return h('div', { class: 'dq-note' }, Icon(icon, { size: 22 }), h('p', { class: 'dq-note-t' }, text));
+  }
 
   async function loadWards() {
     const { data } = await supabase.from('wards').select('id,name');
@@ -265,14 +280,16 @@ export async function renderDischarge(root, ctx = {}) {
 
   async function load() {
     clear(body);
-    body.appendChild(h('div', { class: 'muted' }, 'Загрузка…'));
+    setStatus('loading');
+    body.appendChild(note('Clock', 'Загрузка…'));
     const args = {};
     if (state.wardId) args.ward_id = Number(state.wardId);
     const { data, error } = await supabase.rpc('admission_discharge_queue', args);
     clear(body);
     if (error || !data) {
       state.rows = [];
-      body.appendChild(h('div', { class: 'card muted' }, 'Не удалось загрузить очередь выписок.'));
+      setStatus('error');
+      body.appendChild(note('Warning', 'Не удалось загрузить очередь выписок.'));
       return;
     }
     state.rows = Array.isArray(data.rows) ? data.rows : [];
@@ -280,46 +297,72 @@ export async function renderDischarge(root, ctx = {}) {
     render();
   }
 
+  // ─── Очередь ──────────────────────────────────────────────────────────────
+  //
+  // ЧТО БЫЛО СЛОМАНО. Экран, как и порционник, ссылался на классы, которых в
+  // CSS нет: `.table` (таблица очереди рисовалась голым <table> — без отбивок,
+  // без шапки, без линеек), `.card-title`, `.field-label`, `.input`. Плюс
+  // восемь колонок при 13.5px: имя, палата, врач, исход, дата, деньги,
+  // назначения и кнопка — на любом ноутбуке это восемь узких столбиков, в
+  // которых красное предупреждение о непосчитанном проживании ложилось третьей
+  // строкой в самую тесную ячейку.
+  //
+  // Строка теперь отвечает на вопросы старшей медсестры В ПОРЯДКЕ, в каком она
+  // их задаёт: кто → откуда и от кого → с каким исходом → чем это кончается
+  // для денег → что нажать. Предупреждения (долг и невнесённое проживание) —
+  // не ячейка таблицы, а ПОЛОСА во всю ширину строки: это текст безопасности,
+  // и он обязан читаться раньше кнопки.
+  function queueRow(r) {
+    const debt = hasDebt(r.balance);
+    const gap = gapOf(r);
+    // Ровно ОДНО главное действие на строку — и ни одного, если сервер откажет.
+    const act = state.can.discharge
+      ? h('button', { class: 'btn btn-primary btn-sm', onclick: () => openFinalize(r) }, tr('Оформить выписку'))
+      : h('span', { class: 'dq-nope' }, tr('Оформляет старшая медсестра'));
+
+    const marks = h('div', { class: 'dq-marks' },
+      Tag(outcomeTitle(r.discharge_outcome), { kind: r.discharge_outcome === 'death' ? 'crit' : '' }),
+      r.discharge_destination ? h('span', { class: 'dq-dest' }, r.discharge_destination) : null,
+      r.active_orders
+        ? Tag(trf('идёт: {count}', { count: r.active_orders }), { kind: 'warn' })
+        : Tag(tr('закрыт'), { kind: 'ok' }));
+
+    const moneyLine = debt
+      ? h('div', { class: 'dq-debt' }, Tag(money(r.balance.balance), { kind: 'warn' }))
+      : h('div', { class: 'dq-debt is-clear' }, tr('Долга нет'));
+
+    return h('article', { class: 'dq-row', 'data-owing': debt ? '1' : '0' },
+      // ACCOMMODATION_GAP_V1 — пропажу видно В СТРОКЕ, а не только в окне
+      // оформления: именно на это число человек смотрит, решая, отпускать ли.
+      // В РАЗМЕТКЕ полоса стоит ПЕРВОЙ — до кнопки: экранный диктор и обход
+      // клавиатурой идут по порядку узлов, и текст безопасности обязан быть
+      // прочитан раньше действия. Глазами её видно полосой во всю ширину
+      // строки под пациентом (сетка кладёт её во второй ряд).
+      gap ? h('p', { class: 'dq-alert' }, Icon('Warning', { size: 15 }),
+        h('span', null, accommodationWarning(gap))) : null,
+      h('div', { class: 'dq-main' },
+        h('div', { class: 'dq-who' },
+          h('span', { class: 'dq-name' }, r.patient_name || '—'),
+          r.admission_no ? h('span', { class: 'dq-no' }, r.admission_no) : null),
+        h('div', { class: 'dq-facts' },
+          h('span', { class: 'dq-fact' }, placeTitle(r)),
+          h('span', { class: 'dq-fact dq-fact-soft' }, r.attending_name || '—'),
+          h('span', { class: 'dq-fact dq-fact-soft' },
+            r.discharge_requested_at ? fmtDateTime(r.discharge_requested_at) : '—')),
+        marks),
+      h('div', { class: 'dq-money' }, moneyLine),
+      h('div', { class: 'dq-do' }, act));
+  }
+
   function render() {
     clear(body);
     if (!state.rows.length) {
-      body.appendChild(h('div', { class: 'card muted' }, 'Заявок на выписку нет — оформлять некого.'));
+      setStatus('empty');
+      body.appendChild(note('Check', 'Заявок на выписку нет — оформлять некого.'));
       return;
     }
-    const rows = state.rows.map((r) => {
-      const debt = hasDebt(r.balance);
-      const gap = gapOf(r);
-      const act = state.can.discharge
-        ? h('button', { class: 'btn btn-primary btn-sm', onclick: () => openFinalize(r) }, tr('Оформить выписку'))
-        : h('span', { class: 'muted' }, tr('Оформляет старшая медсестра'));
-      return h('tr', null,
-        h('td', null, h('b', null, r.patient_name || '—'),
-          r.admission_no ? h('div', { class: 'muted' }, r.admission_no) : null),
-        h('td', null, placeTitle(r)),
-        h('td', null, r.attending_name || '—'),
-        h('td', null, outcomeTitle(r.discharge_outcome),
-          r.discharge_destination ? h('div', { class: 'muted' }, r.discharge_destination) : null),
-        h('td', null, r.discharge_requested_at ? fmtDateTime(r.discharge_requested_at) : '—',
-          r.requested_by_name ? h('div', { class: 'muted' }, r.requested_by_name) : null),
-        h('td', { class: 'num' }, debt
-          ? Tag(money(r.balance.balance), { kind: 'warn' })
-          : h('span', { class: 'muted' }, tr('Долга нет')),
-          // ACCOMMODATION_GAP_V1 — пропажу видно РЯДОМ С ОСТАТКОМ, а не в
-          // окне: именно на это число человек смотрит, решая, отпускать ли.
-          gap ? h('div', null, Tag(trf('проживание не внесено: {amount}', { amount: money(gap.amount) }), { kind: 'crit', dot: true })) : null),
-        h('td', { class: 'num' }, r.active_orders
-          ? trf('идёт: {count}', { count: r.active_orders })
-          : tr('закрыт')),
-        h('td', null, act));
-    });
-    body.appendChild(h('div', { class: 'card' },
-      h('table', { class: 'table' },
-        h('thead', null, h('tr', null,
-          h('th', null, 'Пациент'), h('th', null, 'Палата и койка'),
-          h('th', null, 'Лечащий врач'), h('th', null, 'Исход'),
-          h('th', null, 'Заявка подана'), h('th', null, 'Остаток по счёту'),
-          h('th', null, 'Лист назначений'), h('th', null, ''))),
-        h('tbody', null, ...rows))));
+    setStatus('queue');
+    for (const r of state.rows) body.appendChild(queueRow(r));
   }
 
   // ─── Окно оформления ──────────────────────────────────────────────────────
@@ -333,7 +376,7 @@ export async function renderDischarge(root, ctx = {}) {
     };
     const debt = hasDebt(row.balance);
 
-    const atInput = h('input', { type: 'datetime-local', class: 'input', value: form.at });
+    const atInput = h('input', { type: 'datetime-local', value: form.at });
     atInput.addEventListener('change', () => { form.at = atInput.value; });
 
     const closeOrders = h('input', { type: 'checkbox' });
@@ -345,7 +388,7 @@ export async function renderDischarge(root, ctx = {}) {
     const docsBox = h('input', { type: 'checkbox' });
     docsBox.addEventListener('change', () => { form.docs_given = !!docsBox.checked; });
 
-    const noteInput = h('input', { class: 'input', placeholder: tr('Например: перевозка забрала в 15:40') });
+    const noteInput = h('input', { placeholder: tr('Например: перевозка забрала в 15:40') });
     noteInput.addEventListener('input', () => { form.note = noteInput.value; });
 
     const ackBox = h('input', { type: 'checkbox' });
@@ -355,50 +398,53 @@ export async function renderDischarge(root, ctx = {}) {
 
     const orderLine = row.active_orders
       ? checkField(trf('Закрыть оставшиеся назначения ({count}) с причиной «Выписка»', { count: row.active_orders }), closeOrders)
-      : h('div', { class: 'muted' }, 'Лист назначений закрыт.');
+      : h('div', { class: 'dq-quiet' }, 'Лист назначений закрыт.');
 
     // ДЕНЬГИ ПРЕДУПРЕЖДАЮТ, А НЕ ЗАПРЕЩАЮТ. Блок с долгом объясняет сумму и
     // называет, чего в неё не вошло, — и просит подпись, а не оплату.
+    //
+    // Это ПАНЕЛЬ, а не вложенная карточка: окно в окне рисовало вторую рамку и
+    // вторую тень внутри модального окна. Цвет — семантический --warn-*, а не
+    // жёстко вписанная rgba, как было у блока проживания.
     const debtBlock = debt
-      ? h('div', { class: 'card', style: { marginTop: '10px' } },
-          h('div', { class: 'card-title' }, trf('Остаток по счёту: {amount}', { amount: money(row.balance.balance) })),
-          ...balanceLines(row.balance).map((l) => h('div', { class: 'muted' }, l.label + ': ' + l.value)),
-          h('div', { class: 'muted', style: { marginTop: '6px' } }, 'В сумму не входит:'),
-          ...excludeNotes(row.balance).map((n) => h('div', { class: 'muted' }, '— ' + n)),
-          h('div', { style: { marginTop: '8px' } }, 'Долг выписке не мешает — подтвердите, что он согласован.'),
+      ? h('section', { class: 'dq-panel is-warn' },
+          h('h3', { class: 'dq-panel-t' }, trf('Остаток по счёту: {amount}', { amount: money(row.balance.balance) })),
+          h('dl', { class: 'dq-sums' },
+            ...balanceLines(row.balance).flatMap((l) => [
+              h('dt', null, l.label), h('dd', null, l.value)])),
+          h('div', { class: 'dq-quiet dq-excl' }, 'В сумму не входит:'),
+          h('ul', { class: 'dq-excl-list' },
+            ...excludeNotes(row.balance).map((n) => h('li', null, n))),
+          h('p', { class: 'dq-panel-p' }, 'Долг выписке не мешает — подтвердите, что он согласован.'),
           checkField(tr('Долг согласован (гарантия / рассрочка)'), ackBox))
-      : h('div', { class: 'muted', style: { marginTop: '10px' } }, 'Долга по госпитализации нет.');
+      : h('div', { class: 'dq-quiet' }, 'Долга по госпитализации нет.');
 
     // ACCOMMODATION_GAP_V1 — пропажа стоит В ОКНЕ ТОЖЕ, и НЕ внутри блока долга:
     // самый опасный случай — «долга нет» при трёх невыставленных койко-днях,
     // и как раз тогда блока долга на экране нет вовсе.
     const gap = gapOf(row);
     const gapBlock = gap
-      ? h('div', {
-          class: 'card',
-          style: { marginTop: '10px', border: '1px solid rgba(179,38,30,.35)', background: 'rgba(179,38,30,.08)' },
-        },
-          h('div', { class: 'card-title' }, tr('Проживание не внесено в счёт')),
-          h('div', null, accommodationWarning(gap)),
-          h('div', { class: 'muted', style: { marginTop: '6px' } },
+      ? h('section', { class: 'dq-panel is-crit' },
+          h('h3', { class: 'dq-panel-t' }, Icon('Warning', { size: 15 }), ' ', tr('Проживание не внесено в счёт')),
+          h('p', { class: 'dq-panel-p' }, accommodationWarning(gap)),
+          h('p', { class: 'dq-quiet' },
             tr('Внесите проживание в карте госпитализации — иначе за эти сутки клиника не выставит ничего.')))
       : null;
 
     modal(tr('Оформление выписки') + ' — ' + (row.patient_name || ''), 'Check', [
-      h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Фактическое время выписки'), atInput),
-      h('div', { class: 'muted' }, outcomeTitle(row.discharge_outcome)
+      field('Фактическое время выписки', atInput),
+      h('div', { class: 'dq-quiet' }, outcomeTitle(row.discharge_outcome)
         + (row.discharge_destination ? ' · ' + row.discharge_destination : '')),
       row.discharge_recommendations
-        ? h('div', { style: { marginTop: '8px' } },
-            h('div', { class: 'field-label' }, 'Рекомендации'),
-            h('div', { class: 'muted' }, row.discharge_recommendations))
+        ? h('div', { class: 'dq-block' },
+            h('div', { class: 'dq-lab' }, 'Рекомендации'),
+            h('div', { class: 'dq-quiet' }, row.discharge_recommendations))
         : null,
-      h('div', { class: 'field-label', style: { marginTop: '10px' } }, 'Перед выпиской'),
+      h('div', { class: 'dq-lab dq-lab-sec' }, 'Перед выпиской'),
       orderLine,
       checkField(tr('Счёт закрыт'), billBox),
       checkField(tr('Документы выданы на руки'), docsBox),
-      h('label', { class: 'field', style: { marginTop: '10px' } },
-        h('span', { class: 'field-label' }, 'Примечание'), noteInput),
+      field('Примечание', noteInput),
       gapBlock,
       debtBlock,
     ], submitBtn, async () => {

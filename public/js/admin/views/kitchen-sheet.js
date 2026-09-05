@@ -23,7 +23,12 @@
 // (__tests__/kitchen-sheet.test.mjs) проверяет их без браузера.
 
 import { supabase } from '../../supabase.js';
-import { h, clear, toast, Icon } from '../ui.js';
+import { h, clear, toast, Icon, field, fmtDate } from '../ui.js';   // DATE_FMT_V1 — дата словом, а не ISO
+// PASTEL_IDENTITY_V1 — стол это ЛИЧНОСТЬ («пятый» всегда одного цвета), а не
+// состояние: пастель здесь законна тем же правом, что оттенок врача на
+// календаре. Состояние на этом экране одно — «стол не назначен», и оно взято
+// семантическим --warn-*, а не девятым оттенком.
+import { pastelFor } from '../pastel.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — переводим ПЕРВЫМ, подставляем ВТОРЫМ
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1
 // INPATIENT_ROLE_GATE_V1 — тот же список читает и меню (permissions.js
@@ -179,47 +184,67 @@ const esc = (s) => String(s == null ? '' : s)
 export function kitchenSheetHtml(sheet) {
   const s = sheet || {};
   const groups = groupByWard(s.rows);
-  const head = [tr('Палата'), tr('Койка'), tr('Пациент'), tr('Стол'), tr('Разовость'), tr('Примечание')];
+  // Столбца «Палата» на листе больше НЕТ: палата стоит заголовком над своей
+  // таблицей, и повторять её в каждой строке значило отдать пятую часть ширины
+  // A4 под слово, которое человек уже прочитал строкой выше. Ширину забрало
+  // имя пациента — единственная колонка, которая реально переносилась.
+  const head = [tr('Койка'), tr('Пациент'), tr('Стол'), tr('Разовость'), tr('Примечание')];
+  // DATE_FMT_V1 — «4 сентября 2026», а не «2026-09-04»: лист читает человек на
+  // пищеблоке, и читает он его как дату, а не как ключ сортировки.
+  const dateText = fmtDate(s.date);
 
+  // Печатная вёрстка ниже (внутри шаблона комментариев по-русски быть не может —
+  // I18N_COVERAGE_V1 запрещает русский статический текст в шаблоне с ${}):
+  //   • `tr { page-break-inside: avoid }` — строка не рвётся между листами:
+  //     половина фамилии на одной странице и стол на другой это порция, которую
+  //     на пищеблоке некому сопоставить;
+  //   • `thead { table-header-group }` — шапка повторяется на каждой странице;
+  //   • `.p-ward { page-break-after: avoid }` — имя палаты не остаётся внизу
+  //     страницы одно, без своей таблицы;
+  //   • `table-layout: fixed` + colgroup — колонки не пляшут от содержимого.
   const totalsHtml = (s.totals || [])
     .map((t) => `<span class="p-chip">${esc(portionLine(t))}</span>`).join('');
 
   const tables = groups.map((g) => `
+    <section class="p-sec">
     <h2 class="p-ward">${esc(wardTitle(g))}</h2>
     <table class="p-tbl">
+      <colgroup><col class="c-bed"><col class="c-name"><col class="c-diet"><col class="c-meals"><col class="c-note"></colgroup>
       <thead><tr>${head.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead>
       <tbody>${g.rows.map((r) => `<tr>
-        <td>${esc(g.ward_name || '')}</td>
         <td>${esc(r.bed_code || '')}</td>
         <td>${esc(r.patient_name || '')}</td>
         <td><b>${esc(dietTitle(r))}</b></td>
         <td>${esc(mealsTitle(r.meals_per_day))}</td>
         <td>${esc(r.diet_note || '')}</td>
       </tr>`).join('')}</tbody>
-    </table>`).join('');
+    </table></section>`).join('');
 
   const empty = `<p class="p-empty">${esc(tr('В отделении никто не лежит — порционник пуст.'))}</p>`;
 
   return `<!doctype html><html><head><meta charset="utf-8">
-<title>${esc(trf('Порционник на {date}', { date: s.date || '' }))}</title>
+<title>${esc(trf('Порционник на {date}', { date: dateText }))}</title>
 <style>
 ${PRINT_FONT_FACE_CSS}
 @page { size: A4; margin: 12mm; }
 body { font-family: 'Onest', -apple-system, 'Segoe UI', Roboto, sans-serif; color: #111; margin: 0; }
 h1 { font-size: 20px; margin: 0 0 2px; }
-.p-sub { font-size: 13.5px; color: #666; margin: 0 0 14px; }
-.p-totals { margin: 0 0 16px; }
-.p-chip { display: inline-block; border: 1px solid #ccc; border-radius: 6px; padding: 4px 9px; margin: 0 6px 6px 0; font-size: 13.5px; font-weight: 600; }
-.p-ward { font-size: 15px; margin: 16px 0 6px; }
-.p-tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.p-sub { font-size: 13.5px; color: #555; margin: 0 0 12px; }
+.p-totals { margin: 0 0 14px; padding: 8px 0; border-top: 1.5px solid #333; border-bottom: 1.5px solid #333; }
+.p-chip { display: inline-block; border: 1px solid #bbb; border-radius: 6px; padding: 3px 9px; margin: 3px 6px 3px 0; font-size: 13.5px; font-weight: 600; }
+.p-sec { page-break-inside: auto; }
+.p-ward { font-size: 15px; margin: 14px 0 5px; page-break-after: avoid; break-after: avoid; }
+.p-tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; table-layout: fixed; }
 .p-tbl th { text-align: left; border-bottom: 1.5px solid #333; padding: 5px 6px; font-weight: 700; }
-.p-tbl td { border-bottom: 1px solid #ddd; padding: 5px 6px; vertical-align: top; }
+.p-tbl td { border-bottom: 1px solid #ddd; padding: 5px 6px; vertical-align: top; overflow-wrap: break-word; }
+.p-tbl .c-bed { width: 11%; } .p-tbl .c-name { width: 36%; } .p-tbl .c-diet { width: 21%; }
+.p-tbl .c-meals { width: 14%; } .p-tbl .c-note { width: 18%; }
 .p-empty { font-size: 13.5px; color: #666; }
-.p-sign { margin-top: 26px; font-size: 13.5px; color: #333; }
-tr, table { page-break-inside: auto; }
+.p-sign { margin-top: 22px; font-size: 13.5px; color: #333; }
+tr { page-break-inside: avoid; break-inside: avoid; }
 thead { display: table-header-group; }
 </style></head><body>
-<h1>${esc(trf('Порционник на {date}', { date: s.date || '' }))}</h1>
+<h1>${esc(trf('Порционник на {date}', { date: dateText }))}</h1>
 <p class="p-sub">${esc(s.wardName ? s.wardName : tr('Все отделения'))} · ${esc(trf('Всего порций: {count}', { count: s.totalPortions || 0 }))}</p>
 <div class="p-totals">${totalsHtml}</div>
 ${groups.length ? tables : empty}
@@ -245,28 +270,59 @@ const todayLocal = () => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 };
 
+// ─── ОДНО РАБОЧЕЕ ОКНО (WORKING_WINDOW_V1) ──────────────────────────────────
+//
+// ЧТО БЫЛО СЛОМАНО. Экран написали до того, как у продукта появился язык, и
+// он ссылался на четыре класса, которых в CSS НЕТ НИ ОДНОГО:
+//   .table       — таблицы палат рисовались голым <table>: без отбивок, без
+//                  шапки, без линеек. Это и есть «схлопнутые рамки»;
+//   .card-title  — заголовки «Итого по столам» и имя палаты печатались тем же
+//                  кеглем и весом, что данные под ними;
+//   .field-label — подпись поля висела <span>ом, а .field label в admin.css
+//                  метит ПОТОМКА, тогда как обёрткой здесь был сам <label>;
+//   .input       — поля жили только тем, что .field input их случайно накрыл.
+// Плюс .card без .card-pad: у карточки в этом продукте НЕТ своих отступов,
+// поэтому фильтры и пустые состояния прижимались вплотную к рамке, а пустой
+// экран был белой полоской в две строки высотой.
+//
+// Окно теперь ОДНО на весь экран (правило «не окно в окне»): в нём полоса
+// фильтров, шапка листа с датой и итогом, и палаты — секциями, разделёнными
+// волосяной линией, а не пятью отдельными карточками с пятью тенями.
 export async function renderKitchenSheet(root, ctx = {}) {
-  const state = { date: todayLocal(), wardId: '', wards: [], sheet: null };
+  const state = { date: todayLocal(), wardId: '', wards: [], sheet: null, status: 'loading' };
 
-  const wrap = h('div', { class: 'fade-in' });
+  const wrap = h('div', { class: 'fade-in ks' });
   root.appendChild(wrap);
 
+  // Заголовок раздела снимает оболочка (ONE_NAME_PER_SCREEN_V1) — второго
+  // механизма здесь нет; подзаголовок остаётся, он объясняет документ.
   wrap.appendChild(h('div', { class: 'page-head' },
     h('div', null,
       h('h1', { class: 'page-title' }, 'Порционник'),
       h('p', { class: 'page-subtitle' }, 'Заказ на кухню: палата, койка, пациент и лечебный стол на выбранную дату.'))));
 
-  const dateInput = h('input', { type: 'date', class: 'input', value: state.date });
-  const wardSelect = h('select', { class: 'input' }, h('option', { value: '' }, 'Все отделения'));
+  const dateInput = h('input', { type: 'date', value: state.date });
+  const wardSelect = h('select', null, h('option', { value: '' }, 'Все отделения'));
+  // ЕДИНСТВЕННОЕ главное действие экрана: порционник существует ради бумаги.
   const printBtn = h('button', { class: 'btn btn-primary' }, Icon('Print'), tr('Печать'));
-  const bar = h('div', { class: 'card', style: { display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: '14px' } },
-    h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Дата'), dateInput),
-    h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Отделение'), wardSelect),
-    printBtn);
-  wrap.appendChild(bar);
 
-  const body = h('div', null);
-  wrap.appendChild(body);
+  const bar = h('div', { class: 'ks-bar' },
+    field('Дата', dateInput),
+    field('Отделение', wardSelect),
+    h('div', { class: 'grow' }),
+    printBtn);
+
+  const body = h('div', { class: 'ks-body' });
+  const win = h('div', { class: 'card ks-win' }, bar, body);
+  wrap.appendChild(win);
+
+  /** Состояние окна словом — по нему же его и проверяют (__tests__). */
+  function setStatus(next) {
+    state.status = next;
+    win.setAttribute('data-state', next);
+    // Печатать нечего — кнопка гаснет, а не печатает пустой лист молча.
+    printBtn.disabled = next !== 'sheet';
+  }
 
   async function loadWards() {
     const { data } = await supabase.from('wards').select('id,name');
@@ -274,50 +330,75 @@ export async function renderKitchenSheet(root, ctx = {}) {
     for (const w of state.wards) wardSelect.appendChild(h('option', { value: String(w.id) }, w.name || ''));
   }
 
+  /** Пустое/загрузочное/ошибочное состояние — блок настоящего размера, а не строчка у рамки. */
+  function note(icon, text) {
+    return h('div', { class: 'ks-note' }, Icon(icon, { size: 22 }), h('p', { class: 'ks-note-t' }, text));
+  }
+
   async function load() {
     clear(body);
-    body.appendChild(h('div', { class: 'muted' }, 'Загрузка…'));
+    setStatus('loading');
+    body.appendChild(note('Clock', 'Загрузка…'));
     const args = { date: state.date };
     if (state.wardId) args.ward_id = Number(state.wardId);
     const { data, error } = await supabase.rpc('kitchen_sheet', args);
     clear(body);
     if (error || !data) {
-      body.appendChild(h('div', { class: 'card muted' }, 'Не удалось загрузить порционник.'));
       state.sheet = null;
+      setStatus('error');
+      body.appendChild(note('Warning', 'Не удалось загрузить порционник.'));
       return;
     }
     state.sheet = data;
     render();
   }
 
+  function wardName() {
+    const w = state.wards.find((x) => String(x.id) === String(state.wardId));
+    return w ? (w.name || '') : '';
+  }
+
   function render() {
     clear(body);
     const s = state.sheet || { rows: [], totals: [], total_portions: 0 };
-
-    // Итог по столам — самое крупное на листе: кухня читает его первым и
-    // чаще всего единственным.
-    const chips = h('div', { class: 'card', style: { marginBottom: '14px' } },
-      h('div', { class: 'card-title' }, 'Итого по столам'),
-      h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '8px' } },
-        ...(s.totals || []).map((t) => h('span', { class: 'tag' }, portionLine(t))),
-        h('span', { class: 'tag' }, trf('Всего порций: {count}', { count: s.total_portions || 0 }))));
-    body.appendChild(chips);
-
     const groups = groupByWard(s.rows);
+    setStatus(groups.length ? 'sheet' : 'empty');
+
+    // ШАПКА ЛИСТА. Кухне нужны три вещи и в этом порядке: на какое число, по
+    // какому отделению и сколько всего порций. Число порций — самое крупное на
+    // экране: чаще всего его читают единственным.
+    body.appendChild(h('div', { class: 'ks-head' },
+      h('div', { class: 'ks-head-l' },
+        h('div', { class: 'ks-date' }, fmtDate(s.date || state.date)),
+        h('div', { class: 'ks-where' }, wardName() || tr('Все отделения'))),
+      h('div', { class: 'ks-count' }, trf('Всего порций: {count}', { count: s.total_portions || 0 }))));
+
+    if ((s.totals || []).length) {
+      body.appendChild(h('div', { class: 'ks-chips' },
+        ...(s.totals || []).map((t) => h('span',
+          { class: ('ks-chip ' + pastelFor(t.diet_code || '')).trim() }, portionLine(t)))));
+    }
+
     if (!groups.length) {
-      body.appendChild(h('div', { class: 'card muted' }, 'В отделении никто не лежит — порционник пуст.'));
+      body.appendChild(note('Bed', 'В отделении никто не лежит — порционник пуст.'));
       return;
     }
+
     for (const g of groups) {
       const rows = g.rows.map((r) => h('tr', null,
-        h('td', null, r.bed_code || '—'),
-        h('td', null, r.patient_name || '—'),
-        h('td', null, h('b', null, dietTitle(r))),
-        h('td', null, mealsTitle(r.meals_per_day)),
-        h('td', null, r.diet_note || '')));
-      body.appendChild(h('div', { class: 'card', style: { marginBottom: '14px' } },
-        h('div', { class: 'card-title' }, wardTitle(g)),
-        h('table', { class: 'table' },
+        h('td', { class: 'ks-bed' }, r.bed_code || '—'),
+        h('td', { class: 'ks-pat' }, r.patient_name || '—'),
+        // «Стол не назначен» — это СОСТОЯНИЕ (пропуск), поэтому оно взято
+        // семантическим --warn-*, а не оттенком: оттенки здесь означают, какой
+        // именно стол, и «никакой» не имеет права выглядеть ещё одним столом.
+        h('td', null, h('span', { class: 'ks-diet' + (r.diet_name ? '' : ' is-none') }, dietTitle(r))),
+        h('td', { class: 'ks-meals' }, mealsTitle(r.meals_per_day)),
+        h('td', { class: 'ks-note-col' }, r.diet_note || '')));
+      body.appendChild(h('section', { class: 'ks-ward' },
+        h('div', { class: 'ks-ward-head' },
+          h('h2', { class: 'ks-ward-name' }, wardTitle(g)),
+          h('span', { class: 'ks-ward-n' }, trf('Всего порций: {count}', { count: g.rows.length }))),
+        h('table', { class: 'list ks-tbl' },
           h('thead', null, h('tr', null,
             h('th', null, 'Койка'), h('th', null, 'Пациент'), h('th', null, 'Стол'),
             h('th', null, 'Разовость'), h('th', null, 'Примечание'))),
@@ -329,10 +410,9 @@ export async function renderKitchenSheet(root, ctx = {}) {
   wardSelect.addEventListener('change', () => { state.wardId = wardSelect.value; load(); });
   printBtn.addEventListener('click', () => {
     if (!state.sheet) return;
-    const ward = state.wards.find((w) => String(w.id) === String(state.wardId));
     printKitchenSheet({
       date: state.sheet.date,
-      wardName: ward ? ward.name : null,
+      wardName: wardName() || null,
       totals: state.sheet.totals,
       rows: state.sheet.rows,
       totalPortions: state.sheet.total_portions,
