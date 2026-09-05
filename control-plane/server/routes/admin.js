@@ -250,9 +250,21 @@ export function adminRoutes(db) {
 
   r.get('/clinics', (req, res) => {
     const rows = db.prepare(
-      `SELECT clinic_id, name, subscription, subscription_until, last_seen_at, last_version, active
+      `SELECT clinic_id, name, subscription, subscription_until, last_seen_at, last_version,
+              active, retired_at, parent_clinic_id, ring, pinned_version
        FROM clinics ORDER BY name COLLATE NOCASE`
     ).all();
+
+    // CONTROL_PLANE_V2 — one grouped query, not one per row. The board draws a
+    // "2 filials" line on every card, and a per-row COUNT here is the same
+    // quadratic shape this route's own header warns against.
+    const filialCounts = new Map(
+      db.prepare(
+        `SELECT parent_clinic_id AS parent, COUNT(*) AS n FROM clinics
+         WHERE parent_clinic_id IS NOT NULL GROUP BY parent_clinic_id`
+      ).all().map((r2) => [r2.parent, r2.n])
+    );
+
     const clinics = rows.map((c) => ({
       id: c.clinic_id,
       name: c.name,
@@ -264,6 +276,11 @@ export function adminRoutes(db) {
       fingerprint_changed: lastCheckinFlaggedChange(db, c.clinic_id),
       open_request_count: openRequestCount(db, c.clinic_id),
       active: !!c.active,
+      retired_at: c.retired_at,
+      parent_clinic_id: c.parent_clinic_id,
+      filial_count: filialCounts.get(c.clinic_id) || 0,
+      ring: c.ring,
+      pinned_version: c.pinned_version,
     }));
     res.json({ clinics });
   });

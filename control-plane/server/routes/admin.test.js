@@ -1197,3 +1197,44 @@ test('DELETE leaves nothing behind if the second statement fails — the tombsto
 
   db.exec('DROP TRIGGER IF EXISTS test_block_clinic_delete');
 });
+
+// --- CONTROL_PLANE_V2: the card board's widened GET /clinics ----------------
+
+test('GET /clinics carries the family, the ring, the pin and the retired date', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  enrol(db, 'c-1', 'Main Clinic');
+  enrol(db, 'c-1-b1', 'Filial One');
+  enrol(db, 'c-1-b2', 'Filial Two');
+  db.prepare("UPDATE clinics SET parent_clinic_id = 'c-1' WHERE clinic_id IN ('c-1-b1','c-1-b2')").run();
+  db.prepare("UPDATE clinics SET ring = 0, pinned_version = '0.6.8' WHERE clinic_id = 'c-1'").run();
+  db.prepare("UPDATE clinics SET active = 0, retired_at = '2026-08-31T07:49:45Z' WHERE clinic_id = 'c-1-b2'").run();
+
+  const res = await req(server, 'GET', ADMIN_BASE + '/clinics', { cookie });
+  const { clinics } = await res.json();
+  const by = Object.fromEntries(clinics.map((c) => [c.id, c]));
+
+  assert.equal(by['c-1'].filial_count, 2);
+  assert.equal(by['c-1'].parent_clinic_id, null);
+  assert.equal(by['c-1'].ring, 0);
+  assert.equal(by['c-1'].pinned_version, '0.6.8');
+
+  assert.equal(by['c-1-b1'].parent_clinic_id, 'c-1');
+  assert.equal(by['c-1-b1'].filial_count, 0);
+
+  assert.equal(by['c-1-b2'].retired_at, '2026-08-31T07:49:45Z');
+  assert.equal(by['c-1-b2'].active, false);
+});
+
+test('GET /clinics still leaks no credential', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const token = enrol(db, 'c-1', 'Clinic One');
+  const res = await req(server, 'GET', ADMIN_BASE + '/clinics', { cookie });
+  const raw = JSON.stringify(await res.json());
+  // The list grew several columns in this task. install_token and unlock_secret
+  // must not have come along with them.
+  assert.ok(!raw.includes(token), 'install_token must never reach the panel');
+  const secret = db.prepare('SELECT unlock_secret FROM clinics WHERE clinic_id = ?').get('c-1').unlock_secret;
+  assert.ok(!raw.includes(secret), 'unlock_secret must never reach the panel');
+});
