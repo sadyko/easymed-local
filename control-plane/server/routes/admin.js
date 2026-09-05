@@ -37,6 +37,17 @@ const OFFERABLE_MODULES = new Set([...SELLABLE_MODULES].filter((m) => m !== 'mar
 // the ONLY place a clinic's licence is ever renewed or re-read.
 const NEXT_CHECKIN_NOTE = "Takes effect at this clinic's next check-in — not instantly.";
 
+// DELETE is the one mutating route NEXT_CHECKIN_NOTE is wrong for: it would
+// claim the delete itself only takes effect at the next check-in, but the
+// registry row is gone the moment this call returns — there is no "next
+// check-in" for a row that no longer exists. What the owner actually needs
+// to hear is the opposite kind of warning: the licence already SIGNED and
+// sitting on that clinic's own computer (see services/control/unlock.js) is
+// a separate, offline artifact this route cannot reach or revoke. It keeps
+// working until it expires on its own — exactly like retiring — and
+// deleting only stops it from ever being renewed.
+const DELETE_NOTE = "The licence already installed on this clinic's computer keeps working until it expires — deleting only stops it from ever being renewed.";
+
 // ADMIN_ROUTE_TABLE — the single source of truth for "every route this
 // router exposes", consumed by admin.test.js's own adversarial test ("does
 // requireVendor actually protect every admin route?"). A route added here
@@ -422,10 +433,21 @@ export function adminRoutes(db) {
     // carries no ON DELETE clause, so deleting a parent with filials raises
     // SQLITE_CONSTRAINT_FOREIGNKEY. Checked here so the owner reads an
     // instruction instead of a database error string.
-    const filials = db.prepare('SELECT COUNT(*) n FROM clinics WHERE parent_clinic_id = ?')
-      .get(clinic.clinic_id).n;
+    //
+    // `<> ?` excludes the clinic's own row: parent_clinic_id = clinic_id is
+    // only reachable by a hand-edited row (no route in this file sets it),
+    // but without this a self-parented clinic counted as its own filial —
+    // forever undeletable, "This clinic has 1 filial" about itself.
+    const filials = db.prepare('SELECT COUNT(*) n FROM clinics WHERE parent_clinic_id = ? AND clinic_id <> ?')
+      .get(clinic.clinic_id, clinic.clinic_id).n;
     if (filials > 0) {
-      return conflict(res, `This clinic has ${filials} filial${filials === 1 ? '' : 's'}. Delete or reassign them first.`);
+      // Retiring a parent does NOT retire its filials (POST .../retire only
+      // ever touches the one row named in the URL) — so "delete or reassign
+      // them" was only half the procedure. The real one: retire each filial,
+      // delete each filial, THEN delete this one. Said as the one sentence
+      // the owner can act on, with the count still in it.
+      const pronoun = filials === 1 ? 'it' : 'them';
+      return conflict(res, `This clinic has ${filials} filial${filials === 1 ? '' : 's'} — retire and delete ${pronoun} first, then delete this clinic.`);
     }
 
     // ONE TRANSACTION. A tombstone without a delete would lock an id that still
@@ -440,9 +462,23 @@ export function adminRoutes(db) {
       db.prepare('INSERT INTO deleted_clinics (clinic_id, name, deleted_by) VALUES (?,?,?)')
         .run(clinic.clinic_id, clinic.name, req.vendorUser.username);
       db.prepare('DELETE FROM clinics WHERE clinic_id = ?').run(clinic.clinic_id);
+      // module_requests has no foreign key (001_registry.sql, deliberately —
+      // it survives as evidence, see the CASCADE comment above), so a
+      // deleted clinic's OPEN request would otherwise keep being listed by
+      // GET /requests forever (its own LEFT JOIN is what surfaces it with
+      // clinic_name: null) with a live Grant button that has nothing left to
+      // grant against — POST .../grant's INSERT OR IGNORE does NOT suppress
+      // a FOREIGN KEY violation, so clicking it 500s, every time the owner
+      // opens the screen. Close it here instead of deleting it: 'declined'
+      // is reused from 001_registry.sql's own open | granted | declined
+      // vocabulary rather than inventing a fourth value, and `notes` — which
+      // exists for exactly this — carries the real reason.
+      db.prepare(
+        "UPDATE module_requests SET status = 'declined', handled_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'), notes = 'clinic deleted' WHERE clinic_id = ? AND status = 'open'"
+      ).run(clinic.clinic_id);
     })();
 
-    res.json({ ok: true, deleted: clinic.clinic_id });
+    res.json({ ok: true, deleted: clinic.clinic_id, note: DELETE_NOTE });
   });
 
   r.post('/clinics/:id/unlock-code', (req, res) => {
@@ -528,6 +564,20 @@ export function adminRoutes(db) {
       // a harmless success, never a duplicate grant or an error.
       if (request.status === 'granted') {
         return { status: 200, body: { ok: true, already: true, note: NEXT_CHECKIN_NOTE } };
+      }
+
+      // BELT AND BRACES alongside the DELETE route closing a clinic's open
+      // requests (see the CONTROL_PLANE_V2 delete transaction's own
+      // comment): this catches anything that slipped through that —
+      // a request that arrived in the gap between a real delete and the
+      // next Requests refresh, or one left over from a registry deleted
+      // before that fix existed. Checked explicitly rather than relying on
+      // the FOREIGN KEY below, because INSERT OR IGNORE does NOT suppress a
+      // FOREIGN KEY violation (only a UNIQUE/PRIMARY KEY collision) — without
+      // this, granting such a request throws SQLITE_CONSTRAINT_FOREIGNKEY and
+      // 500s instead of telling the owner something true.
+      if (!db.prepare('SELECT 1 FROM clinics WHERE clinic_id = ?').get(request.clinic_id)) {
+        return { status: 409, body: { error: { code: 'conflict', message: 'This clinic has been deleted.' } } };
       }
 
       // Same MARKETING_NOT_OFFERABLE_V1 rule as POST /clinics/:id/modules —

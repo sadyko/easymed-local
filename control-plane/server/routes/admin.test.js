@@ -561,25 +561,6 @@ test('retiring a clinic stamps retired_at, and re-retiring does not move it', as
   assert.equal(second.retired_at, '2026-01-01T00:00:00Z');
 });
 
-// CONTROL_PLANE_V2 — this used to read "there is no DELETE route for a
-// clinic" and hit an unenrolled 'c-1', so it passed on a 404 from Express's
-// own fallthrough. A real DELETE route exists now (see the CONTROL_PLANE_V2
-// block below), so that phrasing and that setup would both quietly lie: the
-// route exists AND 'c-1' would exist too, so the original assertion no longer
-// tests what its name claims. The invariant it was actually guarding —
-// DELETE must never be a one-step way to remove a clinic still in use — is
-// still true and is what this rewrite asserts directly, against a real,
-// active, enrolled clinic.
-test('DELETE is never a one-step way to remove a clinic that is still active', async (t) => {
-  const { db, server } = await harness(t);
-  const cookie = await loggedInCookie(server);
-  enrol(db, 'c-1', 'Clinic One');
-
-  const res = await req(server, 'DELETE', ADMIN_BASE + '/clinics/c-1', { cookie });
-  assert.notEqual(res.status, 200, 'DELETE must not be a working way to remove a clinic in one step');
-  assert.ok(db.prepare('SELECT 1 FROM clinics WHERE clinic_id = ?').get('c-1'), 'the row must still exist');
-});
-
 // --- POST /clinics/:id/unlock-code --------------------------------------------
 
 test('POST /clinics/:id/unlock-code returns exactly expectedResponse() from services/control/unlock.js', async (t) => {
@@ -997,7 +978,11 @@ test('DELETE refuses an unknown clinic', async (t) => {
   assert.equal(res.status, 404);
 });
 
-test('DELETE refuses a clinic that is still active', async (t) => {
+// The invariant this guards — DELETE must never be a one-step way to remove
+// a clinic still in use — used to be split across two tests 400 lines apart
+// with identical setup, this one's assertions a strict superset of the
+// other's. Merged into one: this name, those assertions.
+test('DELETE is never a one-step way to remove a clinic that is still active', async (t) => {
   const { db, server } = await harness(t);
   const cookie = await loggedInCookie(server);
   enrol(db, 'c-1', 'Clinic One');
@@ -1025,7 +1010,29 @@ test('DELETE refuses a parent that still has filials, and names the count', asyn
   // ON DELETE clause, so without this check the owner sees a raw
   // SQLITE_CONSTRAINT_FOREIGNKEY string instead of an instruction.
   assert.match(body.error.message, /1 filial/i);
+  // Retiring the parent does not retire its filials (POST .../retire only
+  // ever touches the one row named in the URL) — so the message must state
+  // the WHOLE procedure (retire, then delete, the filial(s), then this
+  // clinic), not just "delete or reassign them", which used to be half of it.
+  assert.match(body.error.message, /retire/i, 'must say to retire the filial too, not only delete it');
+  assert.match(body.error.message, /delete/i, 'must say to delete the filial');
   assert.ok(db.prepare('SELECT 1 FROM clinics WHERE clinic_id = ?').get('c-1'));
+});
+
+// ATTACK: only reachable by a hand-edited row (parent_clinic_id = clinic_id
+// is not something any route in this file will set), but the filial COUNT
+// was `WHERE parent_clinic_id = :id` with no exclusion of the row itself —
+// a self-parented clinic counted as its own filial, forever, and the
+// message ("This clinic has 1 filial") lied about what was blocking it.
+test('DELETE does not count a clinic as its own filial', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  enrol(db, 'c-1', 'Clinic One');
+  db.prepare('UPDATE clinics SET parent_clinic_id = ?, active = 0 WHERE clinic_id = ?').run('c-1', 'c-1');
+
+  const res = await req(server, 'DELETE', ADMIN_BASE + '/clinics/c-1', { cookie });
+  assert.equal(res.status, 200, 'a self-parented clinic with no OTHER filials must still be deletable');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM clinics WHERE clinic_id = ?').get('c-1').n, 0);
 });
 
 test('DELETE is in ADMIN_ROUTE_TABLE, so the anonymous-caller sweep covers it', () => {
@@ -1050,6 +1057,15 @@ test('DELETE destroys the clinic and its credentials, keeps the evidence', async
   await req(server, 'POST', ADMIN_BASE + '/clinics/c-000009/retire', { cookie, body: {} });
   const res = await req(server, 'DELETE', ADMIN_BASE + '/clinics/c-000009', { cookie });
   assert.equal(res.status, 200);
+  const body = await res.json();
+  // Unlike every other mutating route here, delete has no "next check-in" —
+  // the row is gone immediately. But the SIGNED licence already sitting on
+  // that clinic's own computer is a separate, offline artifact this route
+  // cannot reach: it keeps working until it expires, exactly like retiring.
+  // NEXT_CHECKIN_NOTE says the wrong thing here (it implies THIS action
+  // takes effect later), so delete must return its own, honest note instead.
+  assert.match(body.note, /licen[cs]e/i, 'must say something about the licence already on the clinic\'s machine');
+  assert.match(body.note, /expir|renew/i, 'must say it keeps working until it expires / that only renewal stops');
 
   // Gone.
   assert.equal(db.prepare('SELECT COUNT(*) n FROM clinics WHERE clinic_id = ?').get('c-000009').n, 0);
@@ -1068,6 +1084,58 @@ test('DELETE destroys the clinic and its credentials, keeps the evidence', async
   const grave = db.prepare('SELECT * FROM deleted_clinics WHERE clinic_id = ?').get('c-000009');
   assert.equal(grave.name, 'Last Test Clinic');
   assert.equal(grave.deleted_by, 'vendor');
+});
+
+test("DELETE closes a deleted clinic's open module requests, so Requests can never try to grant one again", async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  enrol(db, 'c-000009', 'Last Test Clinic');
+  db.prepare("INSERT INTO module_requests (clinic_id, module_key, requested_at) VALUES ('c-000009','crm','2026-08-20T00:00:00Z')").run();
+  const id = db.prepare('SELECT id FROM module_requests').get().id;
+
+  await req(server, 'POST', ADMIN_BASE + '/clinics/c-000009/retire', { cookie, body: {} });
+  const res = await req(server, 'DELETE', ADMIN_BASE + '/clinics/c-000009', { cookie });
+  assert.equal(res.status, 200);
+
+  // Closed, not deleted — it survives as evidence (same row DELETE destroys
+  // the clinic and its credentials, keeps the evidence already asserts
+  // survives), but with a real, documented status so GET /requests stops
+  // listing it and POST .../grant can never be aimed at it again.
+  const request = db.prepare('SELECT status, notes, handled_at FROM module_requests WHERE id = ?').get(id);
+  assert.equal(request.status, 'declined', '001_registry.sql documents the vocabulary as open | granted | declined — reuse it, do not invent a fourth value');
+  assert.ok(request.handled_at, 'handled_at must be set, the same as a real grant or decline');
+  assert.match(request.notes, /deleted/i, 'notes should say why it was closed');
+
+  // GET /requests filters status = 'open', so the row must leave the
+  // actionable list the panel renders a Grant button from.
+  const listRes = await req(server, 'GET', ADMIN_BASE + '/requests', { cookie });
+  const { requests } = await listRes.json();
+  assert.ok(!requests.some((r) => r.id === id), 'a closed request must not still appear as an open, actionable row');
+});
+
+test('POST /requests/:id/grant refuses with 409 when the request\'s clinic no longer exists, instead of 500ing on the FK', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  enrol(db, 'c-1');
+  db.prepare("INSERT INTO module_requests (clinic_id, module_key, requested_at) VALUES ('c-1','crm','2026-08-20T00:00:00Z')").run();
+  const id = db.prepare('SELECT id FROM module_requests').get().id;
+
+  // Delete the clinic row DIRECTLY — not through DELETE /clinics/:id — so
+  // this test exercises the grant route's own guard, not finding 1(a)'s
+  // close-on-delete behaviour. module_requests carries no foreign key
+  // (001_registry.sql), so the request row survives, still 'open', exactly
+  // like a registry deleted before this fix shipped, or a request that
+  // arrives in the gap between a real delete and the next Requests refresh.
+  db.prepare('DELETE FROM clinics WHERE clinic_id = ?').run('c-1');
+
+  const res = await req(server, 'POST', `/cp/v1/admin/requests/${id}/grant`, { cookie, body: {} });
+  assert.equal(res.status, 409, 'INSERT OR IGNORE does not suppress a FOREIGN KEY violation, so without the guard this throws and 500s');
+  const body = await res.json();
+  assert.match(body.error.message, /deleted/i);
+  assert.equal(db.prepare('SELECT status FROM module_requests WHERE id=?').get(id).status, 'open',
+    'left exactly as it was — a human should still see it, not have it silently declined by this route');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM clinic_modules WHERE clinic_id='c-1'").get().n, 0,
+    'no entitlement must be created for a clinic that no longer exists');
 });
 
 test('a deleted clinic cannot be resurrected under its old id', async (t) => {
@@ -1093,16 +1161,39 @@ test('a deleted clinic cannot be resurrected under its old id', async (t) => {
   );
 });
 
-test('DELETE leaves nothing behind if any part of it fails', async (t) => {
+// This replaces an earlier version of this test that pre-placed the
+// tombstone so the transaction's FIRST statement (the INSERT into
+// deleted_clinics) threw. At that point nothing had happened yet, so the
+// clinic row survives whether or not db.transaction() is a real transaction
+// — verified directly: rewriting the route's db.transaction(() => {...})()
+// as a plain, un-transacted IIFE left that version passing along with all
+// the other admin tests. It proved nothing about atomicity.
+//
+// This version instead fails the SECOND statement (DELETE FROM clinics),
+// via a trigger, so the FIRST statement (the tombstone insert) has already
+// run before the failure. Only a real transaction rolls that back too.
+test('DELETE leaves nothing behind if the second statement fails — the tombstone insert really is undone', async (t) => {
   const { db, server } = await harness(t);
   const cookie = await loggedInCookie(server);
   enrol(db, 'c-1', 'Clinic One');
   await req(server, 'POST', ADMIN_BASE + '/clinics/c-1/retire', { cookie, body: {} });
-  // Pre-place the tombstone so the INSERT inside the transaction collides.
-  db.prepare('INSERT INTO deleted_clinics (clinic_id, name) VALUES (?,?)').run('c-1', 'Clinic One');
+
+  db.exec(`
+    CREATE TRIGGER test_block_clinic_delete BEFORE DELETE ON clinics
+    BEGIN
+      SELECT RAISE(ABORT, 'test: blocking clinic delete to prove the transaction rolls back');
+    END;
+  `);
+  // Explicit drop even though harness() gives every test its own fresh
+  // in-memory db — a thrown assertion below must not skip this and leak the
+  // trigger into a later reuse of the same db handle.
+  t.after(() => { try { db.exec('DROP TRIGGER IF EXISTS test_block_clinic_delete'); } catch { /* best-effort */ } });
 
   const res = await req(server, 'DELETE', ADMIN_BASE + '/clinics/c-1', { cookie });
   assert.equal(res.status, 500);
-  assert.ok(db.prepare('SELECT 1 FROM clinics WHERE clinic_id = ?').get('c-1'),
-    'the clinic row must survive a failed delete — one transaction, all or nothing');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM deleted_clinics').get().n, 0,
+    'without a real transaction this is 1 — an id locked forever with a live clinic still on it');
+  assert.ok(db.prepare('SELECT 1 FROM clinics WHERE clinic_id = ?').get('c-1'), 'the clinic row must survive too');
+
+  db.exec('DROP TRIGGER IF EXISTS test_block_clinic_delete');
 });
