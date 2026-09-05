@@ -561,13 +561,23 @@ test('retiring a clinic stamps retired_at, and re-retiring does not move it', as
   assert.equal(second.retired_at, '2026-01-01T00:00:00Z');
 });
 
-test('there is no DELETE route for a clinic', async (t) => {
-  const { server } = await harness(t);
+// CONTROL_PLANE_V2 — this used to read "there is no DELETE route for a
+// clinic" and hit an unenrolled 'c-1', so it passed on a 404 from Express's
+// own fallthrough. A real DELETE route exists now (see the CONTROL_PLANE_V2
+// block below), so that phrasing and that setup would both quietly lie: the
+// route exists AND 'c-1' would exist too, so the original assertion no longer
+// tests what its name claims. The invariant it was actually guarding —
+// DELETE must never be a one-step way to remove a clinic still in use — is
+// still true and is what this rewrite asserts directly, against a real,
+// active, enrolled clinic.
+test('DELETE is never a one-step way to remove a clinic that is still active', async (t) => {
+  const { db, server } = await harness(t);
   const cookie = await loggedInCookie(server);
-  const res = await fetch(`http://127.0.0.1:${server.address().port}/cp/v1/admin/clinics/c-1`, {
-    method: 'DELETE', headers: { Cookie: cookie },
-  });
-  assert.notEqual(res.status, 200, 'DELETE must not be a working way to remove a clinic');
+  enrol(db, 'c-1', 'Clinic One');
+
+  const res = await req(server, 'DELETE', ADMIN_BASE + '/clinics/c-1', { cookie });
+  assert.notEqual(res.status, 200, 'DELETE must not be a working way to remove a clinic in one step');
+  assert.ok(db.prepare('SELECT 1 FROM clinics WHERE clinic_id = ?').get('c-1'), 'the row must still exist');
 });
 
 // --- POST /clinics/:id/unlock-code --------------------------------------------
@@ -976,4 +986,51 @@ test('a tombstoned clinic id is never proposed again', async (t) => {
   const { clinic_id } = await res.json();
   assert.notEqual(clinic_id, 'c-000009', 'the graveyard must be counted, not just the living');
   assert.equal(clinic_id, 'c-000010');
+});
+
+// --- CONTROL_PLANE_V2: DELETE refuses more often than it accepts -------------
+
+test('DELETE refuses an unknown clinic', async (t) => {
+  const { server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const res = await req(server, 'DELETE', ADMIN_BASE + '/clinics/c-nope', { cookie });
+  assert.equal(res.status, 404);
+});
+
+test('DELETE refuses a clinic that is still active', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  enrol(db, 'c-1', 'Clinic One');
+
+  const res = await req(server, 'DELETE', ADMIN_BASE + '/clinics/c-1', { cookie });
+  assert.equal(res.status, 409);
+  const body = await res.json();
+  assert.match(body.error.message, /retire/i, 'the message must say what to do first');
+  assert.ok(db.prepare('SELECT 1 FROM clinics WHERE clinic_id = ?').get('c-1'), 'nothing deleted');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM deleted_clinics').get().n, 0, 'no tombstone either');
+});
+
+test('DELETE refuses a parent that still has filials, and names the count', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  enrol(db, 'c-1', 'Main Clinic');
+  enrol(db, 'c-1-b1', 'Filial One');
+  db.prepare('UPDATE clinics SET parent_clinic_id = ? WHERE clinic_id = ?').run('c-1', 'c-1-b1');
+  db.prepare('UPDATE clinics SET active = 0 WHERE clinic_id = ?').run('c-1');
+
+  const res = await req(server, 'DELETE', ADMIN_BASE + '/clinics/c-1', { cookie });
+  assert.equal(res.status, 409);
+  const body = await res.json();
+  // foreign_keys is ON (db/connection.js:17) and clinics.parent_clinic_id has no
+  // ON DELETE clause, so without this check the owner sees a raw
+  // SQLITE_CONSTRAINT_FOREIGNKEY string instead of an instruction.
+  assert.match(body.error.message, /1 filial/i);
+  assert.ok(db.prepare('SELECT 1 FROM clinics WHERE clinic_id = ?').get('c-1'));
+});
+
+test('DELETE is in ADMIN_ROUTE_TABLE, so the anonymous-caller sweep covers it', () => {
+  assert.ok(
+    ADMIN_ROUTE_TABLE.some((r) => r.method === 'DELETE' && r.path === '/clinics/:id'),
+    'a route missing from this table ships unprotected — see the table header',
+  );
 });

@@ -51,6 +51,7 @@ export const ADMIN_ROUTE_TABLE = [
   { method: 'POST', path: '/clinics/:id/modules' },
   { method: 'POST', path: '/clinics/:id/subscription' },
   { method: 'POST', path: '/clinics/:id/retire' },
+  { method: 'DELETE', path: '/clinics/:id' },
   { method: 'POST', path: '/clinics/:id/unlock-code' },
   { method: 'POST', path: '/clinics/:id/collect' },
   { method: 'GET',  path: '/counters' },
@@ -73,6 +74,14 @@ export const ADMIN_ROUTE_TABLE = [
 
 function bad(res, message) {
   return res.status(400).json({ error: { code: 'bad_request', message } });
+}
+
+// 409, not 400: the request is well-formed and the caller is allowed to make it
+// — the CURRENT STATE of the clinic is what refuses. The panel shows this
+// message verbatim, so every one of them is written as an instruction ("Retire
+// this clinic before deleting it"), never as a diagnosis.
+function conflict(res, message) {
+  return res.status(409).json({ error: { code: 'conflict', message } });
 }
 
 function notFound(res, message) {
@@ -366,21 +375,60 @@ export function adminRoutes(db) {
     const clinic = db.prepare('SELECT clinic_id FROM clinics WHERE clinic_id = ?').get(req.params.id);
     if (!clinic) return notFound(res, 'Clinic not found.');
 
-    // NO DELETE ROUTE, DELIBERATELY — a clinic_id can be reused after the row
-    // that held it is deleted (migrations/001.test.js pins this as today's
+    // RETIRE IS NOT DELETE — a clinic_id could always be reused after the row
+    // that held it is deleted (migrations/001.test.js pins this as the
     // literal, un-guarded schema behaviour), and an old SIGNED licence for the
     // deleted clinic would then verify successfully against the new row
     // sharing that id — silently granting the new clinic whatever the old,
     // deleted one was entitled to. `active = 0` keeps the row (and its id)
-    // dead forever instead, which is the only safe way to retire one.
-    // CONTROL_PLANE_V2 — COALESCE, so re-retiring an already-retired clinic
-    // never rewrites the date. retired_at is evidence of when it happened, and
-    // a second click must not quietly relabel a decision made in August as one
-    // made today.
+    // dead forever instead, which was the only safe way to retire one.
+    // CONTROL_PLANE_V2 — a real DELETE route exists below now, and is safe
+    // ONLY because migrations/010_deleted_clinics.sql makes id reuse
+    // impossible (a tombstone row plus two RAISE(ABORT) triggers refuse to
+    // reissue a deleted clinic_id) and both id allocators count the graveyard.
+    // Retiring is still the required FIRST step — see the delete route's own
+    // comment for why deletion still requires it.
+    // COALESCE, so re-retiring an already-retired clinic never rewrites the
+    // date. retired_at is evidence of when it happened, and a second click
+    // must not quietly relabel a decision made in August as one made today.
     db.prepare(
       "UPDATE clinics SET active = 0, retired_at = COALESCE(retired_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')) WHERE clinic_id = ?"
     ).run(clinic.clinic_id);
     res.json({ ok: true, note: NEXT_CHECKIN_NOTE });
+  });
+
+  // CONTROL_PLANE_V2 — the delete 001_registry.sql said the application must
+  // never do. It is safe now, and only now, because migrations/010 remembers
+  // every id ever deleted and two triggers refuse to reissue one.
+  r.delete('/clinics/:id', (req, res) => {
+    const clinic = db.prepare('SELECT clinic_id, name, active FROM clinics WHERE clinic_id = ?')
+      .get(req.params.id);
+    if (!clinic) return notFound(res, 'Clinic not found.');
+
+    // TWO STEPS, ALWAYS. Retire stops the licence renewing and is reversible by
+    // hand; delete is not reversible by anything. Requiring the first before the
+    // second means no single click can destroy a clinic that is still working.
+    if (clinic.active) return conflict(res, 'Retire this clinic before deleting it.');
+
+    // NOT MAPPED HERE, deliberately, and written down so the deferral is not
+    // lost: migration 010's triggers raise SQLITE_CONSTRAINT_TRIGGER when
+    // anything tries to reissue a deleted id, and nothing catches it — it
+    // surfaces as a bare 500 from POST /clinics. That is the correct outcome
+    // today: with both allocators fixed, the only way to reach it is a hand-run
+    // insert or a corrupted registry, which IS a server-side invariant
+    // violation and should look like one.
+
+    // foreign_keys is ON (db/connection.js:17) and clinics.parent_clinic_id
+    // carries no ON DELETE clause, so deleting a parent with filials raises
+    // SQLITE_CONSTRAINT_FOREIGNKEY. Checked here so the owner reads an
+    // instruction instead of a database error string.
+    const filials = db.prepare('SELECT COUNT(*) n FROM clinics WHERE parent_clinic_id = ?')
+      .get(clinic.clinic_id).n;
+    if (filials > 0) {
+      return conflict(res, `This clinic has ${filials} filial${filials === 1 ? '' : 's'}. Delete or reassign them first.`);
+    }
+
+    return res.json({ ok: true });   // Task 5 replaces this with the real work
   });
 
   r.post('/clinics/:id/unlock-code', (req, res) => {
