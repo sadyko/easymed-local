@@ -6515,4 +6515,13 @@ export const STRINGS = {
   "Список госпитализаций не загрузился": {"en":"The admissions list did not load","ru":"Список госпитализаций не загрузился","uz":"Gospitalizatsiyalar ro'yxati yuklanmadi"},
   "Это сбой запроса, а не пустой отдел: заявки и пациенты на койках могут быть на месте.": {"en":"This is a failed request, not an empty ward: the orders and the patients in beds may well be there.","ru":"Это сбой запроса, а не пустой отдел: заявки и пациенты на койках могут быть на месте.","uz":"Bu bo'sh bo'lim emas, so'rov xatosi: arizalar va koykadagi bemorlar joyida bo'lishi mumkin."},
   "Причина: {msg}": {"en":"Reason: {msg}","ru":"Причина: {msg}","uz":"Sabab: {msg}"},
+  // LAB_CARD_V3 (2026-09-05) — карточка лабораторной пробы: номер образца
+  // стал тихим и копируемым, а состояние карточки — отдельной подписью.
+  "Проба": {"en":"Sample","ru":"Проба","uz":"Namuna"},
+  "Скопировать номер пробы": {"en":"Copy the sample number","ru":"Скопировать номер пробы","uz":"Namuna raqamidan nusxa olish"},
+  "Номер пробы скопирован": {"en":"Sample number copied","ru":"Номер пробы скопирован","uz":"Namuna raqami nusxalandi"},
+  "{n} критич.": {"en":"{n} critical","ru":"{n} критич.","uz":"{n} ta kritik"},
+  "Внесены частично": {"en":"Partly entered","ru":"Внесены частично","uz":"Qisman kiritilgan"},
+  "Все результаты внесены": {"en":"All results entered","ru":"Все результаты внесены","uz":"Barcha natijalar kiritilgan"},
+  "Проверено и выдано": {"en":"Verified and released","ru":"Проверено и выдано","uz":"Tekshirilgan va berilgan"},
 };

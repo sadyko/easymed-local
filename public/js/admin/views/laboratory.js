@@ -38,7 +38,8 @@ import { canDelete, canEditLabPanels } from '../permissions.js';   // LAB_PANELS
 import { mountLabPanels, LAB_BUILD } from './lab-panels.js';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now
 // ?v= is required here, not decorative: this module gained selectOptionsFor, and a
 // browser holding the older cached copy would fail the named import and blank the view.
-import { pluralRu, groupLabRows, selectOptionsFor } from './lab-grouping.js?v=labbranch1';   // LAB_GROUP_V1 / LAB_SELECT_OPTIONS_V1 — pure helpers, unit-tested separately
+import { pluralRu, groupLabRows, selectOptionsFor,
+         labCardState, labPrimaryAction, RU_MONTH_GEN, ymd, isMachineDate } from './lab-grouping.js?v=labcard3';   // LAB_GROUP_V1 / LAB_SELECT_OPTIONS_V1 / LAB_CARD_V3 — pure helpers, unit-tested separately
 import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';
 // LAB_ONE_CLINIC_V1 — «лаборатория обслуживает всю клинику / только своё здание».
 import { scopeQuery, normalizeLabScope, LAB_SCOPE_CLINIC, LAB_SCOPE_BUILDING, LAB_SCOPE_DEFAULT } from './lab-scope.js';
@@ -752,117 +753,241 @@ function paintRows() {
     for (const g of groups) refs.list.appendChild(labGroupCard(g));
 }
 
-// Result summary cell — shared by the per-analysis card line (lqItem) below.
-function resultsCell(r) {
-    const results = state.resultsByVs[r.id] || [];
-    if (!results.length) return h('span', { class: 'muted' }, '—');
-    return h('span', { style: { fontSize: '12.5px' } },
-        results.length === 1
-            ? h('span', { class: 'num' }, (results[0].value != null ? String(results[0].value) : '—') + (results[0].unit ? ' ' + results[0].unit : ''))
-            : h('span', { class: 'muted' }, trf('{n} показателей', { n: results.length })),
-        ' ',
-        worstFlagTag(results));
+// -----------------------------------------------------------------------------
+// LAB_CARD_V3 (2026-09-05) — карточка пробы.
+//
+// Владелец: «make a little redesign of the cards of the laboratory». На снимке
+// лежали четыре вещи, которые чинятся не оформлением:
+//
+//   1. ГРОМЧЕ ВСЕГО НА КАРТОЧКЕ БЫЛ НОМЕР ОБРАЗЦА — чёрная плашка в правом
+//      верхнем углу, крупнее фамилии. Номер нужен ровно в один момент: когда
+//      сверяешь пробирку. Это ключ сверки, а не заголовок. Теперь он тихая
+//      моноширинная кнопка — и по нажатию копируется, чего раньше не умел.
+//   2. ДВЕ ЗАЛИТЫЕ КНОПКИ В ОДНОМ РЯДУ («Внести результаты» и «Подтвердить»),
+//      плюс третья тёмная на строке анализа. Три равных призыва — это ноль
+//      призывов. Теперь главная кнопка одна, её выбирает labPrimaryAction()
+//      (lab-grouping.js), остальные — обычные.
+//   3. ДАТА РОЖДЕНИЯ ПЕЧАТАЛАСЬ МАШИННО — «1994 M11 15». См. fmtBirth ниже.
+//   4. «Норма» и «Результаты внесены» стояли рядом двумя одинаковыми чипами.
+//      Это факты РАЗНОГО РОДА: первый — измерение, второй — ступень работы.
+//      Теперь они и выглядят по-разному: таблетка со стрелкой против
+//      прямоугольной дорожки ступеней, и различаются они без цвета.
+//
+// Порядок сверху вниз — это порядок вопросов лаборанта: чья это проба → что в
+// ней → в каком она состоянии → что делать дальше.
+// -----------------------------------------------------------------------------
+
+// «Худший» флаг вперёд: карточка показывает самое тревожное, а не первое.
+const FLAG_ORDER = ['critical', 'abnormal', 'high', 'low', 'normal'];
+// Значок направления. Флаг обязан читаться БЕЗ ЦВЕТА — по стрелке: дальтонизм
+// не редкость, а лабораторные экраны ещё и печатают в ч/б.
+const FLAG_ICON = { normal: 'Check', low: 'ArrowDown', high: 'ArrowUp', abnormal: 'Info', critical: 'Warning' };
+
+/** ФЛАГ РЕЗУЛЬТАТА — измерение: таблетка, семантический цвет, стрелка. */
+function flagPill(f) {
+    if (!f) return null;
+    return h('span', { class: 'lq-flag lq-flag--' + f },
+        Icon(FLAG_ICON[f] || 'Info', { size: 12 }),
+        FLAG_RU[f] || f);
+}
+function worstFlagPill(results) {
+    for (const f of FLAG_ORDER) if (results.some(x => x.flag === f)) return flagPill(f);
+    return null;
 }
 
-// LAB_QUEUE_V2 (local port) — one line per analysis inside a patient card.
-// Carries the SAME per-order action buttons the old flat table exposed
-// (Забор пробы / В работу / Результаты… / Изменить + Проверить и выдать /
-// Отчёт / этикетка) via the existing actionButtons() — the grouped card is a
-// new way to reach these, not a replacement for them.
+// РАБОЧЕЕ СОСТОЯНИЕ — ступень конвейера, а не измерение. Пять делений:
+// оплачен → проба взята → в работе → результаты → выдан. Дорожка монохромна
+// НАМЕРЕННО: состояние читается по числу закрашенных делений, то есть и в
+// ч/б, и дальтоником. Цвет на карточке остаётся за двумя вещами — флагом
+// результата и единственной главной кнопкой.
+const STAGE_OF = { added: 0, queued: 1, collected: 2, in_progress: 3, resulted: 4, completed: 5 };
+const STAGE_STEPS = 5;
+function stageTrack(n) {
+    const track = h('span', { class: 'lq-steps', 'aria-hidden': 'true' });
+    for (let i = 0; i < STAGE_STEPS; i++) track.appendChild(h('i', { class: i < n ? 'on' : null }));
+    return track;
+}
+function statePill(status) {
+    const st = ST[status] || { label: status || '—' };
+    const n = STAGE_OF[status] != null ? STAGE_OF[status] : 0;
+    return h('span', { class: 'lq-state', 'data-stage': String(n) }, stageTrack(n), st.label);
+}
+
+// Подпись состояния ВСЕЙ карточки (labCardState — чистая функция в
+// lab-grouping.js). Ступень берётся по САМОЙ ОТСТАЮЩЕЙ пробирке: карточка
+// продвинулась ровно настолько, насколько продвинулась её худшая строка.
+const CARD_STATE_LABEL = {
+    unpaid:   'Ожидает оплату',
+    fresh:    'Результаты не внесены',
+    partial:  'Внесены частично',
+    entered:  'Все результаты внесены',
+    released: 'Проверено и выдано',
+};
+function cardStatePill(key, stage) {
+    return h('span', { class: 'lq-state lq-state-card', 'data-stage': String(stage) },
+        stageTrack(stage), CARD_STATE_LABEL[key] || key);
+}
+
+// НОМЕР ПРОБЫ. Тихий, моноширинный — и копируемый: лаборант переносит его в
+// анализатор и в журнал руками, а раньше единственным способом было выделить
+// текст мышью на плашке, которая ещё и кричала на всю карточку.
+function copyAccession(value) {
+    const cb = (typeof navigator !== 'undefined' && navigator.clipboard) || null;
+    if (!cb || !value) { toast('Скопируйте вручную', 'info'); return; }
+    try {
+        Promise.resolve(cb.writeText(value))
+            .then(() => toast('Номер пробы скопирован', 'ok'))
+            .catch(() => toast('Скопируйте вручную', 'info'));
+    } catch (e) { toast('Скопируйте вручную', 'info'); }
+}
+function accessionButton(acc) {
+    const value = acc || '';
+    return h('button', {
+        class: 'lq-acc', type: 'button',
+        title: 'Скопировать номер пробы', 'aria-label': 'Скопировать номер пробы',
+        onclick: () => copyAccession(value),
+    },
+        h('span', { class: 'k' }, 'Проба'),
+        h('span', { class: 'v' }, value || '—'),
+        Icon('Copy', { size: 12 }));
+}
+
+// ДАТА РОЖДЕНИЯ. На снимке владельца в узбекском интерфейсе стояло
+// «1994 M11 15» — это не «сырая дата», это корневая локаль Intl: в сборке
+// браузера не оказалось данных для запрошенного языка. Источник остаётся
+// общий (fmtDate, DATE_FMT_V1 в ui.js — «15 ноября 1994»), но карточка обязана
+// быть читаемой и на такой машине, поэтому машинная форма пересобирается из
+// названий месяцев словаря (они там есть: «ноября» → uz «noyabr», en «November»).
+function fmtBirth(iso) {
+    const human = fmtDate(iso);
+    if (!isMachineDate(human)) return human;
+    const p = ymd(iso);
+    if (!p) return human;
+    return p.d + ' ' + tr(RU_MONTH_GEN[p.m]) + ' ' + p.y;
+}
+
+// Результат строки: значение (если показатель один) и худший флаг.
+function resultsCell(r) {
+    const results = state.resultsByVs[r.id] || [];
+    if (!results.length) return null;
+    const one = results.length === 1 ? results[0] : null;
+    return h('div', { class: 'lq-res' },
+        one ? h('span', { class: 'lq-val num' },
+            (one.value != null ? String(one.value) : '—') + (one.unit ? ' ' + one.unit : '')) : null,
+        worstFlagPill(results));
+}
+
+// Одна строка — один анализ. Действия те же, что были (LAB_QUEUE_V2): забор,
+// в работу, результаты, изменить, проверить и выдать, отчёт, этикетка — но ни
+// одно из них здесь больше не главное (см. actionButtons).
 function lqItem(r, patient) {
     const svc = r.services || {};
     const results = state.resultsByVs[r.id] || [];
-    const st = ST[r.status] || { label: r.status || '—', kind: '' };
-    return h('div', { class: 'lq-item' },
+    return h('div', { class: 'lq-item', 'data-status': r.status || '' },
         tubePill(svc.tube_color),
-        h('div', { style: { flex: 1, minWidth: 0 } },
+        h('div', { class: 'lq-item-main' },
             h('div', { class: 'lq-name' }, svc.name || '—'),
-            svc.specimen ? h('div', { class: 'lq-type' }, svc.specimen) : null,
+            h('div', { class: 'lq-type' },
+                svc.specimen ? h('span', null, svc.specimen) : null,
+                results.length ? h('span', null, trf('{n} показателей', { n: results.length })) : null,
+                r.sample_collected_at
+                    ? h('span', { class: 'lq-collected' }, trf('взято {when}', { when: fmtDateTime(r.sample_collected_at) }))
+                    : null,
+            ),
         ),
-        r.sample_collected_at ? h('span', { class: 'lq-collected' }, trf('взято {when}', { when: fmtDateTime(r.sample_collected_at) })) : null,
-        results.length ? resultsCell(r) : null,
-        Tag(st.label, { kind: st.kind, dot: true }),
-        h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } }, ...actionButtons(r, patient, results)),
+        resultsCell(r),
+        statePill(r.status),
+        h('div', { class: 'lq-item-do' }, ...actionButtons(r, patient, results)),
     );
 }
 
-// One card per patient-visit: header (patient + accession №), group actions
-// (bulk result entry / barcode / verify / report), and every analysis inside.
+// Одна карточка на пациента-визит.
 function labGroupCard(g) {
     const rows = g.rows;
     const total = rows.length;
-    const done = rows.filter(r => (state.resultsByVs[r.id] || []).length > 0).length;
+    const hasRes = (r) => (state.resultsByVs[r.id] || []).length > 0;
+    const done = rows.filter(hasRes).length;
     const awaiting = rows.filter(r => r.status === 'queued').length;
     const critCount = rows.filter(r => (state.resultsByVs[r.id] || []).some(x => x.flag === 'critical')).length;
-    const anyActive = rows.some(r => r.status !== 'added');   // 'added' = awaiting payment, mirrors server's 'unpaid'
-    const anyResulted = rows.some(r => (state.resultsByVs[r.id] || []).length > 0);
+    const anyActive = rows.some(r => r.status !== 'added');   // 'added' = ждём кассу
+    const anyResulted = rows.some(hasRes);
     const anyToVerify = rows.some(r => r.status === 'resulted');
     const pct = total ? Math.round(done / total * 100) : 0;
     const allDone = total > 0 && done === total;
+    const cardState = labCardState(rows, hasRes);
+    const primary = labPrimaryAction(cardState, { anyToVerify });
+    const stage = total ? Math.min(...rows.map(r => (STAGE_OF[r.status] != null ? STAGE_OF[r.status] : 0))) : 0;
     const info = state.patientMap[g.visitId] || {};
     const patient = info.patient || {};
 
     const sexTxt = g.patientSex === 'male' ? 'М' : g.patientSex === 'female' ? 'Ж' : '';
     const age = ageYears(g.patientDob);
-    const ageTxt = [age != null ? age + ' ' + pluralRu(age, 'год', 'года', 'лет') : '', g.patientDob ? fmtDate(g.patientDob) : '']
-        .filter(Boolean).join(' · ');
 
-    return h('div', { class: 'lq-card' },
+    // ОДНА главная кнопка на карточку. Красится primary-ом ровно та, чей ключ
+    // вернула labPrimaryAction; второй такой взяться неоткуда, потому что
+    // ключ у главного действия ровно один (и это проверяет тест).
+    const act = (key, label, icon, title, onclick) => h('button', {
+        class: 'btn btn-sm ' + (primary === key ? 'btn-primary' : 'btn-outline'),
+        type: 'button', title, onclick,
+    }, Icon(icon, { size: 13 }), ' ' + label);
+    const defs = [
+        anyActive ? ['worksheet', 'Внести результаты', 'Flask',
+            'Внести результаты всех анализов одним документом', () => openPatientWorksheet(g, patient)] : null,
+        anyToVerify ? ['verify', 'Подтвердить', 'Check',
+            'Подтвердить и выдать результаты', () => verifyGroup(g)] : null,
+        // LAB_BLANK_ALL_PANELS_V1 — печатаем ВЕСЬ образец, а не одну строку.
+        anyResulted ? ['report', 'Бланк', 'Print',
+            'Печать бланка: все анализы образца', () => printGroupReport(rows, patient)] : null,
+        anyActive ? ['barcode', 'Штрих-код', 'Scan',
+            'Печать штрих-кода образца', () => printLabel(rows[0], patient)] : null,
+    ].filter(Boolean);
+    // Главная — первой слева: порядок ряда и есть подсказка «начни отсюда».
+    const actions = defs.filter(d => d[0] === primary).concat(defs.filter(d => d[0] !== primary))
+        .map(d => act(d[0], d[1], d[2], d[3], d[4]));
+
+    return h('div', { class: 'lq-card', 'data-state': cardState },
+        // 1. ЧЬЯ ПРОБА.
         h('div', { class: 'lq-head' },
             h('div', { class: 'avatar ' + avColor(g.patientId || g.patientMrn || g.patientName) }, initials(g.patientName)),
-            h('div', { style: { flex: 1, minWidth: '160px' } },
+            h('div', { class: 'lq-who' },
                 h('div', { class: 'lq-title' }, g.patientName),
-                h('div', { class: 'lq-sub' },
-                    g.patientMrn ? h('span', { class: 'chip' }, 'ID · ' + g.patientMrn) : null,
-                    sexTxt ? h('span', { class: 'chip' }, sexTxt) : null,
-                    ageTxt ? h('span', { class: 'chip' }, ageTxt) : null,
-                    h('span', { class: 'chip' }, trf('{n} анализ(ов)', { n: total })),
-                    // LAB_ONE_CLINIC_V1 / BRANCH_ORIGIN_V1 — «Филиал X»: тот же
-                    // текст и та же буква (sync_origin), что у меток в карте
-                    // пациента и в списках. Своя работа не подписывается —
-                    // подпись на каждой карточке перестала бы что-либо значить.
-                    g.originLetter ? h('span', { class: 'chip' }, trf('Филиал {letter}', { letter: g.originLetter })) : null,
-                    critCount ? h('span', { class: 'chip', style: { background: 'var(--crit-50)', borderColor: '#fecaca', color: 'var(--crit-700)' } }, trf('⚠ {n} критич.', { n: critCount })) : null,
+                h('div', { class: 'lq-facts' },
+                    sexTxt ? h('span', { class: 'lq-fact' }, sexTxt) : null,
+                    // Возраст отдельными узлами: h() переводит КАЖДЫЙ текстовый
+                    // узел, а склеенная строка «31 год» словарю неизвестна и
+                    // осталась бы русской в узбекском интерфейсе.
+                    age != null ? h('span', { class: 'lq-fact' }, String(age), ' ', pluralRu(age, 'год', 'года', 'лет')) : null,
+                    g.patientDob ? h('span', { class: 'lq-fact lq-fact-soft' }, fmtBirth(g.patientDob)) : null,
+                    h('span', { class: 'lq-fact lq-fact-soft' }, trf('{n} анализ(ов)', { n: total })),
+                ),
+                h('div', { class: 'lq-marks' },
+                    g.patientMrn ? h('span', { class: 'lq-mrn' }, 'ID ' + g.patientMrn) : null,
+                    // LAB_ONE_CLINIC_V1 / BRANCH_ORIGIN_V1 — «Филиал X»: та же
+                    // буква (sync_origin), что в карте пациента и в списках.
+                    // Своя работа не подписывается — подпись на КАЖДОЙ карточке
+                    // перестала бы что-либо значить.
+                    g.originLetter ? h('span', { class: 'tag tag-info lq-branch' },
+                        Icon('Building', { size: 12 }), trf('Филиал {letter}', { letter: g.originLetter })) : null,
+                    critCount ? h('span', { class: 'tag tag-crit lq-crit' },
+                        Icon('Warning', { size: 12 }), trf('{n} критич.', { n: critCount })) : null,
                 ),
             ),
-            h('div', { class: 'lw-acc' }, h('div', { class: 'k' }, 'Образец №'), h('div', { class: 'v' }, g.accession || '—')),
+            accessionButton(g.accession),
         ),
-        h('div', { class: 'lq-actions' },
+        // 3. В КАКОМ СОСТОЯНИИ — и 4. ЧТО ДЕЛАТЬ ДАЛЬШЕ.
+        h('div', { class: 'lq-status' },
+            cardStatePill(cardState, stage),
             h('div', { class: 'lq-prog' },
-                h('div', { class: 'lq-bar' }, h('i', { style: { width: pct + '%', background: allDone ? 'var(--ok-500)' : 'var(--primary-500)' } })),
-                h('span', { class: 'lq-prog-txt' }, trf('{done} / {total} готово', { done, total }) + (awaiting ? ' · ' + trf('{n} к забору', { n: awaiting }) : '')),
+                h('div', { class: 'lq-bar' }, h('i', { style: { width: pct + '%', background: allDone ? 'var(--ok-500)' : 'var(--ink-400)' } })),
+                h('span', { class: 'lq-prog-txt' }, trf('{done} / {total} готово', { done, total })),
+                awaiting ? h('span', { class: 'lq-prog-txt lq-prog-wait' }, trf('{n} к забору', { n: awaiting })) : null,
             ),
-            h('span', { style: { flex: 1 } }),
-            anyActive ? h('button', {
-                class: 'btn btn-primary btn-sm', type: 'button', title: 'Внести результаты всех анализов одним документом',
-                onclick: () => openPatientWorksheet(g, patient),
-            }, Icon('Flask', { size: 13 }), ' Внести результаты') : null,
-            anyActive ? h('button', {
-                class: 'btn btn-outline btn-sm', type: 'button', title: 'Печать штрих-кода образца',
-                onclick: () => printLabel(rows[0], patient),
-            }, Icon('Scan', { size: 13 }), ' Штрих-код') : null,
-            anyToVerify ? h('button', {
-                class: 'btn btn-success btn-sm', type: 'button', title: 'Подтвердить и выдать результаты',
-                onclick: () => verifyGroup(g),
-            }, Icon('Check', { size: 13 }), ' Подтвердить') : null,
-            anyResulted ? h('button', {
-                class: 'btn btn-outline btn-sm', type: 'button', title: 'Печать бланка: все анализы образца',
-                // LAB_BLANK_ALL_PANELS_V1 — печатаем ВЕСЬ образец, а не одну строку.
-                // Прежний код брал `rows.find(есть результаты)` и печатал ТОЛЬКО её:
-                // из пяти анализов на бланк попадал один.
-                onclick: () => printGroupReport(rows, patient),
-            }, Icon('Print', { size: 13 }), ' Бланк') : null,
+            h('span', { class: 'lq-gap' }),
+            h('div', { class: 'lq-do' }, ...actions),
         ),
+        // 2. ЧТО В ПРОБЕ.
         h('div', { class: 'lq-list' }, ...rows.map(r => lqItem(r, patient))),
     );
-}
-
-function worstFlagTag(results) {
-    const order = ['critical', 'abnormal', 'high', 'low', 'normal'];
-    for (const f of order) {
-        if (results.some(x => x.flag === f)) return flagTag(f);
-    }
-    return null;
 }
 
 function iconBtn(icon, title, onclick) {
@@ -876,24 +1001,28 @@ function iconBtn(icon, title, onclick) {
     }, Icon(icon, { size: 13 }));
 }
 
+// LAB_CARD_V3 — на строке анализа главной кнопки БОЛЬШЕ НЕТ. Она была тут
+// заливкой (btn-primary), и на карточке из пяти анализов получалось пять
+// равнозначных призывов плюс два в шапке. Действия остались все до одного и
+// делают ровно то же — они просто перестали спорить с единственным главным
+// действием карточки за то, куда смотреть первым.
 function actionButtons(r, patient, results) {
     const btns = [];
-    const primary = (label, icon, onclick) => h('button', {
-        class: 'btn btn-primary btn-sm', type: 'button', onclick,
+    const step = (label, icon, onclick) => h('button', {
+        class: 'btn btn-outline btn-sm', type: 'button', onclick,
     }, Icon(icon, { size: 13 }), ' ' + label);
 
     if (r.status === 'queued') {
-        btns.push(primary('Забор пробы', 'Flask', () => collectDialog(r, patient)));
+        btns.push(step('Забор пробы', 'Flask', () => collectDialog(r, patient)));
     } else if (r.status === 'collected') {
-        btns.push(primary('В работу', 'Activity', () => advance(r, { status: 'in_progress' }, 'Проба в работе')));
+        btns.push(step('В работу', 'Activity', () => advance(r, { status: 'in_progress' }, 'Проба в работе')));
     } else if (r.status === 'in_progress') {
-        btns.push(primary('Результаты…', 'Edit', () => openResultsModal(r, patient)));
+        btns.push(step('Результаты…', 'Edit', () => openResultsModal(r, patient)));
     } else if (r.status === 'resulted') {
-        btns.push(primary('Проверить и выдать', 'Check', () => verifyDialog(r, patient, results)));
+        btns.push(step('Проверить и выдать', 'Check', () => verifyDialog(r, patient, results)));
         btns.push(iconBtn('Edit', 'Изменить результаты', () => openResultsModal(r, patient)));
     } else if (r.status === 'completed') {
-        btns.push(h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => printReport(r, patient, results) },
-            Icon('Print', { size: 13 }), ' Отчёт'));
+        btns.push(step('Отчёт', 'Print', () => printReport(r, patient, results)));
     }
     // label reprint once a sample exists (or is about to be taken)
     if (r.status !== 'added' && r.status !== 'queued') {
