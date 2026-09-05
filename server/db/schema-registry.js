@@ -107,7 +107,11 @@ export const REGISTRY = {
     // выставить, мог бы выдать чужую работу за свою.
     filters: ['id','mrn','phone','national_id','full_name','email','gender','date_of_birth','branch_id','primary_doctor_id','payer_id','payer_policy_id','active','created_at','registration_date','sync_origin'],
     embed:   { branches: { table:'branches', fk:'branch_id', columns:['id','name'] },
-               payers:   { table:'payers',   fk:'payer_id',  columns:['id','name'] } },
+               payers:   { table:'payers',   fk:'payer_id',  columns:['id','name'] },
+               // creator:created_by(full_name) — кто завёл карту. Имя сотрудника
+               // и так открыто всему персоналу; связь просто избавляет от
+               // второго запроса на каждую открытую карточку.
+               created_by: { table:'users', fk:'created_by', columns:['id','full_name'] } },
   },
   // ═══ VISITS_ONE_DOOR_V1 (2026-09-05) — РАСПИСАНИЕ НЕ ПИШЕТСЯ ЧЕРЕЗ /api/db ═══
   //
@@ -168,9 +172,17 @@ export const REGISTRY = {
       update: { roles: ['admin','registrar','doctor'], columns: ['notes','conclusion','conclusion_type','visit_type','visit_kind'] },   // VISITS_ONE_DOOR_V1 — расписания здесь нет
       delete: { roles: ['admin'] },
     },
-    filters: ['id','patient_id','doctor_id','branch_id','status','visit_date','sync_origin','service_id','room_id'],   // sync_origin: BRANCH_ORIGIN_V1; service_id/room_id: CALENDAR_BOOKING_V1
+    // notes: входящие заявки с сайта узнаются по метке в примечании
+    // (`.ilike('notes', …)` в requests-inbox) — иначе счётчики «Заявки» считались
+    // бы перебором всех визитов в браузере.
+    filters: ['id','patient_id','doctor_id','branch_id','status','visit_date','sync_origin','service_id','room_id','notes'],   // sync_origin: BRANCH_ORIGIN_V1; service_id/room_id: CALENDAR_BOOKING_V1
     embed:   { patients: { table:'patients', fk:'patient_id', columns:['id','mrn','full_name','first_name','last_name','middle_name','phone','date_of_birth','gender'] },
                doctor:   { table:'users',    fk:'doctor_id',  columns:['id','full_name'] },
+               // Тот же врач под ИМЕНЕМ ВНЕШНЕГО КЛЮЧА: архив документов пишет
+               // `users:doctor_id(full_name)`, и связь ищется по `doctor_id`, а не
+               // по `doctor`. Одна и та же таблица, одни и те же колонки —
+               // разница только в том, каким именем её зовёт вид.
+               doctor_id: { table:'users',   fk:'doctor_id',  columns:['id','full_name','specialty'] },
                // CALENDAR_BOOKING_V1 — карточка календаря это «пациент + врач +
                // услуга»: услуга и кабинет приезжают вместе с записью, а не
                // вторым запросом на каждую перерисовку сетки.
@@ -212,13 +224,16 @@ export const REGISTRY = {
     // УСЛОВНО: doc_settings.lab_scope решает, обслуживает она всю клинику (по
     // умолчанию) или только своё здание. Фильтр остаётся здесь ради второго
     // случая — см. views/lab-scope.js.
-    filters: ['id','visit_id','service_id','status','invoice_item_id','doctor_id','created_at','notes','sync_origin'],   // notes filter: WS_DERIVED_DOCS_V1 (.not('notes','is',null))
+    // created_by/clinic_item_id: аптека, процедуры и рабочий стол врача
+    // отбирают СВОИ строки и строки С ТОВАРОМ (`.not('clinic_item_id','is',null)`
+    // — это и есть «что списано со склада»). Обе колонки уже читаются.
+    filters: ['id','visit_id','service_id','status','invoice_item_id','doctor_id','created_at','notes','sync_origin','created_by','clinic_item_id'],   // notes filter: WS_DERIVED_DOCS_V1 (.not('notes','is',null))
     // DOCTOR_WORKSPACE_V1 — the My-services queue joins the whole clinical
     // context off one row: services (+nested type/department), the booked
     // consultation type, the provider (doctor_id -> users, easymed aliases it
     // `users:doctor_id(...)`), the visit (+nested patient), and the dispensed
     // product (easymed calls that relation clinic_items; the table is products).
-    embed:   { services: { table:'services', fk:'service_id', columns:['id','name','price','is_lab','result_unit','ref_low','ref_high','ref_text','specimen','type','duration_minutes','tax_rate','type_id','category_id','tube_color','department_id'] },   // department_id: PROCEDURES_V1
+    embed:   { services: { table:'services', fk:'service_id', columns:['id','name','code','price','is_lab','result_unit','ref_low','ref_high','ref_text','specimen','type','duration_minutes','tax_rate','type_id','category_id','tube_color','department_id'] },   // department_id: PROCEDURES_V1; code — шапка документа приёма
                products: { table:'products', fk:'clinic_item_id', columns:['id','name','unit'] },
                clinic_items: { table:'products', fk:'clinic_item_id', columns:['id','name','unit'] },
                consultation_types: { table:'consultation_types', fk:'consultation_type_id', columns:['id','name','name_ru','name_uz','price'] },
@@ -227,7 +242,11 @@ export const REGISTRY = {
                // врачам, у медсестры и лаборанта она пустая.
                doctor_id: { table:'users', fk:'doctor_id', columns:['id','full_name','specialty','role'] },
                verified_by: { table:'users', fk:'verified_by', columns:['id','full_name'] },   // performer:verified_by(...) в процедурах
-               visits: { table:'visits', fk:'visit_id', columns:['id','visit_date','patient_id','status','doctor_id'] } },
+               created_by: { table:'users', fk:'created_by', columns:['id','full_name'] },     // creator:created_by(...) — кто добавил строку в смету
+               // branch_id: отбор по корпусу (branch-filter: visit_services →
+               // visits.branch_id); referral_source_id — отчёт по источникам.
+               // Обе колонки visits и так отдаёт напрямую тем же ролям.
+               visits: { table:'visits', fk:'visit_id', columns:['id','visit_date','patient_id','status','doctor_id','branch_id','referral_source_id'] } },
   },
   lab_results: {
     read:  { roles: ALL_STAFF, columns: ['id','visit_service_id','parameter','value','numeric_value','unit','reference_range','flag','notes','entered_by','entered_at','verified_by','verified_at','created_at','ref_low','ref_high','sync_origin'] },   // ref_low/high: LAB_HANDLING_V1 (mig 041); sync_origin: BRANCH_ORIGIN_V1 (mig 083)
@@ -242,21 +261,37 @@ export const REGISTRY = {
     read:  { roles: ALL_STAFF, columns: ['id','invoice_number','visit_id','patient_id','branch_id','subtotal','discount_amount','total_amount','paid_amount','status','created_by','created_at','paid_at','admission_id','payer_id',
              'sync_origin'] },   // admission_id: BED_CONSOLE_V1 (mig 040); sync_origin: BUILDING_REPORTS_V1 — из какого ЗДАНИЯ счёт (мигр. 087); ставится только приёмом порции, поэтому не writable
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },  // invoices are created/updated ONLY via billing RPCs (server-computed money)
-    filters: ['id','visit_id','patient_id','branch_id','status','admission_id','payer_id','sync_origin'],
-    embed:   { patients: { table:'patients', fk:'patient_id', columns:['id','mrn','full_name'] },
-               payers:   { table:'payers',   fk:'payer_id',   columns:['id','name','kind'] } },
+    // created_at/created_by: REPORT_PERIOD_V1 — выручка и «мои счета» считаются
+    // ЗА ПЕРИОД и ПО КАССИРУ. Обе колонки и так читаются (см. read выше); без них
+    // в этом списке отбор по датам уезжал в браузер после limit, то есть отчёт
+    // молча считался по случайной части периода.
+    filters: ['id','visit_id','patient_id','branch_id','status','admission_id','payer_id','sync_origin','created_at','created_by'],
+    embed:   { patients: { table:'patients', fk:'patient_id', columns:['id','mrn','full_name','phone'] },   // phone — экспорт реестра счетов
+               payers:   { table:'payers',   fk:'payer_id',   columns:['id','name','kind'] },
+               branches: { table:'branches', fk:'branch_id',  columns:['id','name'] } },
   },
   invoice_items: {
     read:  { roles: ALL_STAFF, columns: ['id','invoice_id','service_id','description','quantity','unit_price','total','created_at'] },
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },  // written only by billing RPCs
     filters: ['id','invoice_id','service_id'],
-    embed:   { services: { table:'services', fk:'service_id', columns:['id','name'] } },
+    // INVOICE_PARENT_V1 — строка счёта тянет ШАПКУ счёта: без неё ни экспорт
+    // реестра услуг (нужны номер, дата, пациент), ни отбор по филиалу
+    // (branch-filter: invoice_items → invoices.branch_id) не собираются. Ролей
+    // это не расширяет: та же колонка тем же ALL_STAFF уже отдаётся напрямую из
+    // invoices — здесь она лишь становится доступна одним запросом вместо двух.
+    embed:   { services: { table:'services', fk:'service_id', columns:['id','name','type','tax_rate','default_doctor_percent','type_id','category_id'] },
+               invoices: { table:'invoices', fk:'invoice_id', columns:['id','invoice_number','visit_id','admission_id','patient_id','branch_id','payer_id',
+                            'subtotal','discount_amount','total_amount','paid_amount','status','created_by','created_at','paid_at','sync_origin'] } },
   },
   payments: {
     read:  { roles: ALL_STAFF, columns: ['id','invoice_id','amount','method','cashier_id','notes','paid_at','created_at','shift_id'] },
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },  // written only by the record_payment RPC
-    filters: ['id','invoice_id','method','shift_id'],
-    embed:   {},
+    // notes: возврат ищет свой платёж по пометке возврата (invoice-actions.js).
+    filters: ['id','invoice_id','method','shift_id','notes'],
+    // Платёж не носит branch_id — филиал у него только через счёт. Это ровно тот
+    // путь, что записан в branch-filter.js (payments → invoices.branch_id), и
+    // без этой связи отбор по корпусу для кассы не собирался вовсе.
+    embed:   { invoices: { table:'invoices', fk:'invoice_id', columns:['id','invoice_number','branch_id','patient_id','status'] } },
   },
   cash_shifts: {
     // Drawer figures (counted / over-short) are sensitive → cashier + admin only,
@@ -275,7 +310,10 @@ export const REGISTRY = {
     filters: ['id','shift_id','kind'],
     embed:   {},
   },
-  branches: { read:{roles:ALL_STAFF, columns:['id','name','phone','address','is_24_7','working_hours','active']},
+  // created_at: список филиалов и выгрузка справочника сортируются по дате
+  // заведения (порядок создания = порядок в настройках). Колонка есть в таблице
+  // с самого начала; её отсутствие здесь роняло ВЕСЬ запрос, а не только сортировку.
+  branches: { read:{roles:ALL_STAFF, columns:['id','name','phone','address','is_24_7','working_hours','active','created_at']},
               write:{ insert:{roles:['admin'],columns:['name','phone','address','license_number','is_24_7','working_hours']},
                       update:{roles:['admin'],columns:['name','phone','address','license_number','is_24_7','working_hours','active']},
                       delete:{roles:[]} },
@@ -311,7 +349,9 @@ export const REGISTRY = {
                 'service_rates','referral_rates','kpi_links','license_expiry_date','room_id','branch_id',
                 'working_hours','scheduling_mode']},   // SCHED_V1 — the wizard's slot engine; branch_id — CALENDAR_BOOKING_V1
                write:{insert:{roles:[]},update:{roles:[]},delete:{roles:[]}},
-               filters:['id','role','is_active','active','is_doctor'],
+               // room_id: настройки кабинетов спрашивают «кто закреплён за этим
+               // кабинетом» — колонка уже читается строкой выше.
+               filters:['id','role','is_active','active','is_doctor','room_id'],
                json:['service_rates','referral_rates','kpi_links'],
                embed:{ rooms: { table:'rooms', fk:'room_id', columns:['id','name'] } } },
   products: {
@@ -326,10 +366,16 @@ export const REGISTRY = {
     embed:   { suppliers: { table:'suppliers', fk:'supplier_id', columns:['id','name'] } },
   },
   stock_movements: {
-    read:  { roles: ALL_STAFF, columns: ['id','product_id','kind','qty','unit_cost','reference_type','reference_id','note','created_by','created_at','supplier_id','batch_no','expiry_date'] },   // RECEIVE_EASYMED_V1 (mig 037)
+    read:  { roles: ALL_STAFF, columns: ['id','product_id','kind','qty','unit_cost','reference_type','reference_id','note','created_by','created_at','supplier_id','batch_no','expiry_date','branch_id'] },   // RECEIVE_EASYMED_V1 (mig 037); branch_id — в каком здании движение
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },
-    filters: ['id','product_id','kind'],
-    embed:   { products: { table:'products', fk:'product_id', columns:['id','name','unit','base_unit'] } },
+    // Карточка товара и «Движения» — это ЖУРНАЛ ЗА ПЕРИОД: отбор по дате, виду
+    // документа и ненулевому количеству/цене считает SQL, иначе выборка
+    // обрезается limit'ом раньше, чем доходит до нужного месяца. unit_cost
+    // читается тем же ALL_STAFF и здесь не расширяет круг: закупочная цена и так
+    // видна в этом же списке (см. read), фильтр лишь позволяет её не грузить.
+    filters: ['id','product_id','kind','created_at','qty','unit_cost','reference_type','branch_id'],
+    embed:   { products: { table:'products', fk:'product_id', columns:['id','name','unit','base_unit'] },
+               created_by: { table:'users', fk:'created_by', columns:['id','full_name'] } },   // users:created_by(full_name) — кто провёл движение
   },
   // lab_scope: LAB_ONE_CLINIC_V1 (mig 085) — «лаборатория обслуживает всю
   // клинику / только своё здание». ЧИТАЮТ ВСЕ (лаборант должен знать, почему в
@@ -492,7 +538,9 @@ export const REGISTRY = {
              update: { roles: ['admin','registrar','doctor','nurse'], columns: ['status','closed_at','notes'] },
              delete: { roles: ['admin'] } },
     filters: ['id','patient_id','service_id','recommended_by','status','created_at'],
-    embed:   { services: { table:'services', fk:'service_id', columns:['id','name','price','duration_minutes'] },
+    // tax_rate/type_id/category_id — назначение врача превращается в смету:
+    // цену без НДС и раздел прайса берут отсюда же, одним запросом.
+    embed:   { services: { table:'services', fk:'service_id', columns:['id','name','price','duration_minutes','tax_rate','type_id','category_id'] },
                patients: { table:'patients', fk:'patient_id', columns:['id','full_name','first_name','last_name','mrn'] },
                recommended_by: { table:'users', fk:'recommended_by', columns:['id','full_name','specialty'] } },
   },
@@ -583,7 +631,10 @@ export const REGISTRY = {
              update: { roles: [] },     // audit trail is append-only
              delete: { roles: [] } },
     filters: ['id','invoice_id','visit_id','created_at'],
-    embed:   { actor_user_id: { table:'users', fk:'actor_user_id', columns:['id','full_name'] } },
+    // `role` — журнал правок счёта показывает, КЕМ был автор действия в момент
+    // записи (кассир/администратор). Роль уже читается напрямую из users тем же
+    // кругом ролей; здесь она лишь приезжает вместе со строкой журнала.
+    embed:   { actor_user_id: { table:'users', fk:'actor_user_id', columns:['id','full_name','role'] } },
   },
   // Queue numbers issued per service. cashier.js, service-picker-modal.js.
   service_queue_tickets: {
@@ -614,7 +665,9 @@ export const REGISTRY = {
                'clinic_item_id','doctor_id','bed_id','ward_id','quantity','unit_price','total','status','notes','billable','performed_at'] },
              update: { roles: ['admin','registrar','doctor','nurse','cashier'], columns: ['status','billable','notes','invoice_item_id'] },
              delete: { roles: ['admin','registrar','doctor','nurse'] } },   // unbilled lines are removed from the bed detail list
-    filters: ['id','admission_id','service_id','invoice_item_id','performed_at','performer_id'],
+    // clinic_item_id: отчёт «расход препаратов по стационару» отбирает строки
+    // С ТОВАРОМ (`.not('clinic_item_id','is',null)`).
+    filters: ['id','admission_id','service_id','invoice_item_id','performed_at','performer_id','clinic_item_id'],
     embed:   { services: { table:'services', fk:'service_id',     columns:['id','name','price'] },
                products: { table:'products', fk:'clinic_item_id', columns:['id','name','unit'] },
                users:    { table:'users',    fk:'doctor_id',      columns:['id','full_name'] },
@@ -1047,7 +1100,9 @@ export const REGISTRY = {
     write: { insert: { roles: ['admin','inventory'], columns: ['po_number','supplier_id','status','order_date','expected_date','total','notes','created_by'] },
              update: { roles: ['admin','inventory'], columns: ['supplier_id','status','order_date','expected_date','total','notes','received_at'] },
              delete: { roles: ['admin','inventory'] } },
-    filters: ['id','status','supplier_id'],
+    // created_at: закупки выгружаются ЗА ПЕРИОД (реестр строк заказа отбирает
+    // `purchase_orders.created_at` через связь ниже — см. EMBED_FILTER_V1).
+    filters: ['id','status','supplier_id','created_at'],
     embed:   { suppliers: { table:'suppliers', fk:'supplier_id', columns:['id','name'] },
                users:     { table:'users',     fk:'created_by',  columns:['id','full_name'] } },
   },
@@ -1057,7 +1112,11 @@ export const REGISTRY = {
              update: { roles: ['admin','inventory'], columns: ['qty_ordered','unit_cost','qty_received'] },
              delete: { roles: ['admin','inventory'] } },
     filters: ['id','po_id','product_id'],
-    embed:   { products: { table:'products', fk:'product_id', columns:['id','name','base_unit'] } },
+    // Строка заказа тянет ШАПКУ заказа (номер, дата, поставщик) — без неё
+    // реестр закупок за период не собрать. Те же колонки тем же ролям уже
+    // отдаёт purchase_orders напрямую.
+    embed:   { products: { table:'products', fk:'product_id', columns:['id','name','base_unit'] },
+               purchase_orders: { table:'purchase_orders', fk:'po_id', columns:['id','po_number','status','order_date','created_at','received_at','supplier_id'] } },
   },
   purchase_requisitions: {
     read:  { roles: ALL_STAFF, columns: ['id','req_number','status','department_id','notes','reject_reason','requested_by','converted_po_id','created_at'] },

@@ -90,11 +90,16 @@ function validateTable(name) {
 }
 
 function compileSelect(desc, table) {
-  const { projection, joins, embeds } = parseColumns(desc.columns, table);
+  const { projection, joins, embeds, joined } = parseColumns(desc.columns, table);
+  // EMBED_FILTER_V1 — фильтр по колонке присоединённой таблицы может ПОТРЕБОВАТЬ
+  // соединения, которого нет в проекции (см. compileTerm). Поэтому WHERE
+  // собирается ДО того, как строка SQL склеена: compileFilters дописывает
+  // недостающие JOIN'ы в `joins`, и только потом они попадают в текст запроса —
+  // между FROM и WHERE, как того требует синтаксис.
+  const { clause, params } = compileFilters(desc.filters, table, { qualify: true, joins, joined });
+
   let sql = `SELECT ${projection.join(', ')} FROM "${table}"`;
   for (const j of joins) sql += ` ${j}`;
-
-  const { clause, params } = compileFilters(desc.filters, table, { qualify: true });
   if (clause) sql += ` WHERE ${clause}`;
 
   if (desc.order !== undefined) {
@@ -156,7 +161,22 @@ function splitTopLevel(columns) {
 // the registry lookup is always by `relation` (embedEntry), but the JOIN
 // alias and the flat "name.col" projection prefix use the OUTPUT name, which
 // is the alias when present and otherwise the relation itself.
-const EMBED_TOKEN = /^(?:([A-Za-z_]\w*):)?([A-Za-z_]\w*)\((.+)\)$/;
+//
+// EMBED_INNER_V1 (2026-09-05) — `!inner` И `!left` ПОСЛЕ ИМЕНИ СВЯЗИ.
+// PostgREST-модификатор соединения: `visits!inner(visit_date)` — «строки без
+// родителя выбросить», `!left` — поведение по умолчанию, записанное явно.
+// Раньше регулярное выражение не пропускало `!`, токен переставал быть
+// embed'ом и падал в ветку обычной колонки — ответ «unknown column
+// "visits!inner(...)"», то есть 400 на ВЕСЬ запрос.
+//
+// ЦЕНА ЭТОГО ПРОБЕЛА БЫЛА НЕ ТОЛЬКО В ЗАПРОСАХ ИЗ BASELINE, А В branch-filter.js.
+// Там записано прямо: чтобы отобрать rooms/beds/payments/invoice_items/
+// visit_services по филиалу, вид ОБЯЗАН вклеить `${rel}!inner(${col})` — на этом
+// стоит вся видимость «своего корпуса». Компилятор не понимал ни `!inner`, ни
+// фильтра `visits.branch_id`, поэтому у сотрудника, ограниченного филиалом, эти
+// пять экранов отвечали 400 и рисовали пустой список. Такие запросы собираются
+// во время работы, поэтому в BASELINE их нет — их там и не могло быть.
+const EMBED_TOKEN = /^(?:([A-Za-z_]\w*):)?([A-Za-z_]\w*)(!inner|!left)?\((.+)\)$/;
 
 // NESTED_EMBED_V1 — compile one `[alias:]relation(subcols)` token, recursing
 // into sub-embeds. easymed's My-services queue nests up to three levels
@@ -172,7 +192,7 @@ const EMBED_TOKEN = /^(?:([A-Za-z_]\w*):)?([A-Za-z_]\w*)\((.+)\)$/;
 // behave exactly as the old single-level code: alias wins over relation, two
 // tokens with one path merge columns, two aliases of one table join twice.
 function compileEmbed(parentTable, parentQual, parentPath, token, out) {
-  const [, alias, relation, subcolsRaw] = token.match(EMBED_TOKEN);
+  const [, alias, relation, bang, subcolsRaw] = token.match(EMBED_TOKEN);
   const embed = embedEntry(parentTable, relation);
   if (!embed) throw new CompileError('unknown embed', 403);
   const outName = alias || relation;
@@ -182,7 +202,15 @@ function compileEmbed(parentTable, parentQual, parentPath, token, out) {
   if (!entry) {
     entry = { columns: [] };
     out.embedsMap.set(path, entry);
-    out.joins.push(`LEFT JOIN "${embed.table}" AS "${path}" ON "${parentQual}"."${embed.fk}" = "${path}"."id"`);
+    // EMBED_INNER_V1 — `!inner` делает соединение внутренним: строка без
+    // родителя выпадает из выборки. Это и есть смысл модификатора у PostgREST,
+    // и ровно на нём стоит фильтр по колонке родителя. Первый токен пути
+    // задаёт вид соединения: два токена одного пути сливаются по колонкам
+    // (см. комментарий выше), и пересобирать уже выданный JOIN значило бы
+    // менять смысл запроса задним числом.
+    out.joined.set(path, { table: embed.table, inner: bang === '!inner' });
+    out.joins.push(`${bang === '!inner' ? 'INNER' : 'LEFT'} JOIN "${embed.table}" AS "${path}"`
+      + ` ON "${parentQual}"."${embed.fk}" = "${path}"."id"`);
   }
   for (const sub of splitTopLevel(subcolsRaw)) {
     if (EMBED_TOKEN.test(sub)) { compileEmbed(embed.table, path, path, sub, out); continue; }
@@ -213,6 +241,7 @@ function parseColumns(columns, table) {
       projection: readableColumns(table).map((c) => `"${table}"."${c}" AS "${c}"`),
       joins: [],
       embeds: [],
+      joined: new Map(),
     };
   }
 
@@ -220,10 +249,11 @@ function parseColumns(columns, table) {
   const projection = [];
   const joins = [];
   const embedsMap = new Map(); // outName -> { embed, columns: [] }
+  const joined = new Map();    // path -> { table, inner } — что уже соединено (для фильтров)
 
   for (const token of tokens) {
     if (EMBED_TOKEN.test(token)) {
-      compileEmbed(table, table, '', token, { joins, projection, embedsMap });
+      compileEmbed(table, table, '', token, { joins, projection, embedsMap, joined });
       continue;
     }
 
@@ -237,7 +267,7 @@ function parseColumns(columns, table) {
   }
 
   const embeds = [...embedsMap.entries()].map(([name, entry]) => ({ name, columns: entry.columns }));
-  return { projection, joins, embeds };
+  return { projection, joins, embeds, joined };
 }
 
 // `qualify: true` prefixes every filter column with its base table
@@ -252,8 +282,58 @@ function parseColumns(columns, table) {
 // when the term targets a tenancy column the table doesn't allow-list (the
 // TENANCY_NOOP_V1 shim — see TENANCY_IGNORE) so the caller can drop it. Every
 // column is checked against the registry before it reaches the SQL string.
-function compileTerm(f, table, qualify) {
-  if (!filterAllowed(table, f.col)) {
+// EMBED_FILTER_V1 (2026-09-05) — ФИЛЬТР ПО КОЛОНКЕ ПРИСОЕДИНЁННОЙ ТАБЛИЦЫ
+// (`visits.branch_id`, `invoices.created_at`). PostgREST это умеет, наш
+// компилятор — нет: точка не проходила ни один allow-list, и запрос отвергался
+// как «unknown filter column». Из-за этого не работал ВЕСЬ branch-filter.js
+// (см. EMBED_INNER_V1) и экспорт отчётов за период.
+//
+// ДВЕ ДВЕРИ, А НЕ ОДНА. Право отфильтровать по `rel.col` требует ОБОИХ
+// разрешений сразу: колонка должна быть в списке `columns` ЭТОГО embed'а (то
+// есть эта связь её и так отдаёт на чтение) И в списке `filters` САМОЙ
+// присоединённой таблицы. Второе условие — не формальность: реестр намеренно
+// разделяет «видно» и «по чему можно искать» (patients.notes читается, но не
+// фильтруется — иначе фильтр становится оракулом для перебора текста заметки).
+// Без второй двери фильтрация через embed обходила бы это различие.
+//
+// ЧЕГО НЕТ ЛОКАЛЬНО — ТО МОЛЧА ОТБРАСЫВАЕТСЯ. `rooms` тянется к филиалу через
+// `floors.branch_id`, а `beds` — через `wards.branch_id`, но ни у floors, ни у
+// wards колонки branch_id в локальной схеме НЕТ (этажи и палаты здесь не
+// привязаны к зданию). Это тот же случай, что и TENANCY_NOOP_V1 у обычных
+// колонок, и ответ тот же: условие отбрасывается, список приходит целиком.
+// Бросить 400 значило бы показать сотруднику филиала пустой экран вместо
+// данных, которые ему и так все видны.
+function resolveEmbedFilter(f, table, env) {
+  const dot = f.col.indexOf('.');
+  if (dot < 0) return undefined;                    // не точечная колонка — обычный путь
+  const rel = f.col.slice(0, dot);
+  const leaf = f.col.slice(dot + 1);
+  const tenancy = TENANCY_IGNORE.has(leaf);
+  const embed = leaf.includes('.') ? null : embedEntry(table, rel);
+  // UPDATE/DELETE соединений не строят (env === null): точечный фильтр там
+  // выразить нечем, поэтому он либо отбрасывается как tenancy-условие, либо
+  // отвергается — форма их SQL остаётся прежней.
+  if (!embed || !env) return tenancy ? null : reject();
+  if (!embed.columns.includes(leaf) || !filterAllowed(embed.table, leaf)) {
+    return tenancy ? null : reject();
+  }
+  if (!env.joined.has(rel)) {
+    // Соединения в проекции нет — добавляем сами, и именно ВНУТРЕННИМ:
+    // условие на колонку родителя осмысленно только для строк, у которых
+    // родитель есть. Связь всегда «многие к одному» (внешний ключ лежит на
+    // базовой таблице и смотрит в первичный ключ родителя), поэтому строк
+    // после соединения не прибавляется.
+    env.joined.set(rel, { table: embed.table, inner: true });
+    env.joins.push(`INNER JOIN "${embed.table}" AS "${rel}" ON "${table}"."${embed.fk}" = "${rel}"."id"`);
+  }
+  return `"${rel}"."${leaf}"`;
+  function reject() { throw new CompileError('unknown filter column', 400); }
+}
+
+function compileTerm(f, table, qualify, env = null) {
+  const embedded = resolveEmbedFilter(f, table, env);
+  if (embedded === null) return null;               // отброшено (tenancy / нет колонки локально)
+  if (embedded === undefined && !filterAllowed(table, f.col)) {
     if (TENANCY_IGNORE.has(f.col)) return null;
     throw new CompileError('unknown filter column', 400);
   }
@@ -262,12 +342,14 @@ function compileTerm(f, table, qualify) {
   // inner term and negate it: NOT(x IS NULL) = IS NOT NULL, NOT(x IN (...))
   // = NOT IN, and so on for every operator uniformly.
   if (typeof f.op === 'string' && f.op.startsWith('not.')) {
-    const inner = compileTerm({ ...f, op: f.op.slice(4) }, table, qualify);
+    const inner = compileTerm({ ...f, op: f.op.slice(4) }, table, qualify, env);
     if (!inner) return null;
     return { sql: `NOT (${inner.sql})`, params: inner.params };
   }
 
-  const col = qualify ? `"${table}"."${f.col}"` : `"${f.col}"`;
+  // Точечная колонка уже разобрана в квалификатор присоединённой таблицы.
+  const col = embedded !== undefined ? embedded
+    : (qualify ? `"${table}"."${f.col}"` : `"${f.col}"`);
 
   if (f.op === 'in') {
     // .in() sends an array; .not(col,'in','("a","b")') sends PostgREST's raw
@@ -303,23 +385,27 @@ function compileTerm(f, table, qualify) {
 // OR groups are wrapped in parens and AND'd with the rest. A group whose every
 // term is tenancy-dropped contributes nothing (e.g. the local
 // `company_id.is.null,company_id.eq.<cid>` collapses to "no constraint").
-function compileFilters(filters, table, { qualify = false } = {}) {
+function compileFilters(filters, table, { qualify = false, joins = null, joined = null } = {}) {
   if (filters !== undefined && !Array.isArray(filters)) {
     throw new CompileError('filters must be an array', 400);
   }
+  // env существует только у SELECT: только он строит соединения (см.
+  // resolveEmbedFilter). У UPDATE/DELETE его нет, и точечный фильтр там не
+  // компилируется — форма их SQL не меняется.
+  const env = (joins && joined) ? { joins, joined } : null;
   const params = [];
   const clauses = [];
   for (const f of filters || []) {
     if (f && Array.isArray(f.or)) {
       const subs = [];
       for (const sub of f.or) {
-        const t = compileTerm(sub, table, qualify);
+        const t = compileTerm(sub, table, qualify, env);
         if (t) { subs.push(t.sql); params.push(...t.params); }
       }
       if (subs.length) clauses.push(`(${subs.join(' OR ')})`);
       continue;
     }
-    const t = compileTerm(f, table, qualify);
+    const t = compileTerm(f, table, qualify, env);
     if (t) { clauses.push(t.sql); params.push(...t.params); }
   }
   return { clause: clauses.join(' AND '), params };
