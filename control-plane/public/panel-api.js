@@ -63,6 +63,7 @@ export const cp = {
     request('POST', `/admin/clinics/${encodeURIComponent(id)}/modules`, { module_key: moduleKey, granted }),
   setSubscription: (id, payload) => request('POST', `/admin/clinics/${encodeURIComponent(id)}/subscription`, payload),
   retire: (id) => request('POST', `/admin/clinics/${encodeURIComponent(id)}/retire`, {}),
+  deleteClinic: (id) => request('DELETE', `/admin/clinics/${encodeURIComponent(id)}`),
   unlockCode: (id, challenge) => request('POST', `/admin/clinics/${encodeURIComponent(id)}/unlock-code`, { challenge }),
 
   // STATS_V1 (docs/plans/2026-08-22-statistics.md)

@@ -48,6 +48,16 @@
        warning copy needs its own darker ink instead. */
     --amber-ink: #8d5c30;
 
+    /* CONTROL_PLANE_V2 — the board's "needs a decision" highlight: a border
+       and a soft outer glow on attention cards (.cc.attention). Both are
+       decorative (border-color / box-shadow), never text, so the 4.5:1 rule
+       doesn't apply to them — but they still get their own tokens rather
+       than a raw hex, and rather than reusing --amber/--amber-ink, which are
+       calibrated for a solid background and for text-ink respectively, not
+       for a translucent-looking ring. */
+    --attention-line: #ebc9a6;
+    --attention-ring: #fbf0e2;
+
     /* Status pills and toasts sit on a tint, not plain white — reusing --red
        / --green there undershoots 4.5:1, so each gets its own soft/line/ink
        trio (badge, button and toast all share these). */
@@ -218,3 +228,78 @@ table.t td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--bg-2); border: 1px solid var(--line); padding: 10px 18px; border-radius: 10px; font-size: 13px; box-shadow: var(--shadow); z-index: 10000; }
 .toast.ok  { border-color: var(--ok-line); color: var(--ok-ink); }
 .toast.err { border-color: var(--danger-line); color: var(--danger-ink); }
+
+/* --- CONTROL_PLANE_V2: the clinic board ------------------------------------ */
+
+.board-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+/* The existing search styling is scoped to .filterbar, which the board replaced —
+   restated here rather than widening that selector, so the clinic page's own
+   filter bar keeps its current sizing. */
+.board-bar input.search { flex: 1; min-width: 220px; padding: 8px 12px; background: var(--bg-2);
+                          border: 1px solid var(--line); color: var(--ink); border-radius: 8px;
+                          font-size: 13px; outline: none; }
+.board-bar input.search:focus { border-color: var(--teal); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* Pressed state for the two toggles. .btn has no `on` variant yet — .nav-link
+   does, but that one is styled for the navbar. */
+.btn.on { background: var(--accent-soft); border-color: var(--teal); color: var(--on-accent); }
+
+.band { display: flex; align-items: center; gap: 10px; margin: 0 0 12px;
+        font-size: 11px; font-weight: 700; letter-spacing: .09em;
+        text-transform: uppercase; color: var(--ink-3); }
+.band .rule { flex: 1; height: 1px; background: var(--line); }
+.band .count { color: var(--ink-3); font-weight: 600; letter-spacing: 0; }
+
+.deck { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 12px; margin-bottom: 26px; }
+
+.cc { position: relative; background: var(--bg-2); border: 1px solid var(--line);
+      border-radius: 13px; padding: 14px; cursor: pointer;
+      transition: border-color .12s, box-shadow .12s; }
+.cc:hover { border-color: var(--line-2); box-shadow: var(--shadow); }
+.cc.attention { border-color: var(--attention-line); box-shadow: 0 0 0 3px var(--attention-ring); }
+.cc.retired { opacity: .62; }
+.cc.new { border-style: dashed; display: grid; place-items: center; min-height: 150px;
+          color: var(--ink-3); text-align: center; }
+
+.cc-head { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 10px; }
+.cc-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; flex: none; }
+.cc-dot.ok { background: var(--green); }
+.cc-dot.warn { background: var(--amber); }
+.cc-dot.bad { background: var(--red); }
+.cc-dot.mute { background: var(--ink-3); }
+.cc-name { font-weight: 650; font-size: 14px; line-height: 1.25; }
+.cc-sub { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+.cc-kebab { margin-left: auto; flex: none; background: none; border: 0; cursor: pointer;
+            color: var(--ink-3); padding: 2px 6px; border-radius: 6px; font-size: 15px;
+            line-height: 1; letter-spacing: 1px; }
+.cc-kebab:hover { background: var(--bg-3); color: var(--ink); }
+
+.cc-fact { display: flex; justify-content: space-between; gap: 10px;
+           font-size: 12px; color: var(--ink-3); line-height: 1.9; }
+.cc-fact b { color: var(--ink); font-weight: 600; }
+
+.cc-stats { display: flex; gap: 16px; margin-top: 11px; padding-top: 11px;
+            border-top: 1px solid var(--line); }
+.cc-stats div { font-size: 10px; color: var(--ink-3); }
+.cc-stats b { display: block; font-size: 15px; color: var(--ink); font-weight: 700; line-height: 1.3; }
+
+.cc-mods { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+.cc-mods .none { font-size: 10px; color: var(--ink-3); }
+
+.chip { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 20px;
+        background: var(--accent-soft); color: var(--on-accent); }
+/* Tone variants matching what versionChip() returns ('ok' | 'warn' | 'bad').
+   Built from the existing ok/danger/accent token trios rather than new hexes —
+   contrast on their own tint (not just on cream), since these render on the
+   chip's own soft background:
+     .chip.ok   ok-ink   #3a6350 on ok-soft   #e3ede4  -> 5.68:1
+     .chip.warn on-accent #493a12 on accent-soft #fdf0d0 -> 9.78:1
+     .chip.bad  danger-ink #9c4b42 on danger-soft #f8e4e1 -> 4.91:1
+   All clear the 4.5:1 body-text minimum (this is 10px text). */
+.chip.ok   { background: var(--ok-soft); color: var(--ok-ink); }
+.chip.warn { background: var(--accent-soft); color: var(--on-accent); }
+.chip.bad  { background: var(--danger-soft); color: var(--danger-ink); }
+
+/* Compact: the same board with the lower two thirds of each card hidden. */
+.deck.compact .cc-stats, .deck.compact .cc-mods { display: none; }
