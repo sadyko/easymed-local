@@ -123,8 +123,16 @@ export function isManifestShaped(manifest) {
 // migrations/001_registry.sql) so the non-technical owner never has to invent
 // or type one; createClinic() below still retries on an actual collision
 // rather than trusting this count alone.
+//
+// CONTROL_PLANE_V2 — the UNION is not optional. deleted_clinics holds ids that
+// no longer exist in `clinics` but may never be issued again (see
+// migrations/010_deleted_clinics.sql). Counting only the living would propose a
+// number the trigger then refuses, five times over, and turn an ordinary "New
+// clinic" click into a 500.
 function nextClinicId(db) {
-  const rows = db.prepare('SELECT clinic_id FROM clinics').all();
+  const rows = db.prepare(
+    'SELECT clinic_id FROM clinics UNION SELECT clinic_id FROM deleted_clinics'
+  ).all();
   let max = 0;
   for (const { clinic_id } of rows) {
     const m = /^c-(\d{6,})$/.exec(clinic_id);

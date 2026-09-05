@@ -938,3 +938,24 @@ test('acceptance: register, publish to ring 1, promote to ring 2, auto-halt on t
   const afterPin = await (await checkin(server, { install_token: thirdToken, version: '2.0.0' })).json();
   assert.equal(afterPin.update, null, 'result: a clinic pinned at 2.0.0 gets no offer of 2.4.0, despite otherwise being eligible');
 });
+
+// --- CONTROL_PLANE_V2: id allocation must step over the graveyard ------------
+
+test('a tombstoned clinic id is never proposed again', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+
+  // Highest id in the registry, then deleted — exactly the dangerous shape.
+  enrol(db, 'c-000009', 'Last Test Clinic');
+  db.prepare('DELETE FROM clinics WHERE clinic_id = ?').run('c-000009');
+  db.prepare('INSERT INTO deleted_clinics (clinic_id, name) VALUES (?,?)')
+    .run('c-000009', 'Last Test Clinic');
+
+  const res = await req(server, 'POST', ADMIN_BASE + '/clinics', {
+    cookie, body: { name: 'A Different Clinic' },
+  });
+  assert.equal(res.status, 201);
+  const { clinic_id } = await res.json();
+  assert.notEqual(clinic_id, 'c-000009', 'the graveyard must be counted, not just the living');
+  assert.equal(clinic_id, 'c-000010');
+});
