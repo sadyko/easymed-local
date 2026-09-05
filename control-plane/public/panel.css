@@ -1,23 +1,68 @@
-/* Easy-Med — Control Plane panel (settings.easymed.uz/cp/). Same dark,
-   dense, data-first palette as platform-console/css/setting.css so the two
-   consoles read as one product — tokens copied verbatim from there. */
+/* Easy-Med — Control Plane panel (settings.easymed.uz/cp/).
+
+   CONTROL_PLANE_V2 — warm clinical, replacing the dark palette this file was
+   born with. That palette was copied verbatim from platform-console's
+   css/setting.css so the two consoles would read as one product; this is a
+   deliberate divergence from it, on the owner's instruction and against a
+   design reference they supplied. The house rule it now follows instead: a
+   medical product is calm and clinical, never harsh dark or black-on-white,
+   and never uses an emoji where a line icon belongs.
+
+   Every colour in this file is a token — including the tint/ink pairs for
+   status pills and toasts, and the two neutral overlays (row hover, modal
+   scrim), which are alpha-based tokens tied to --ink rather than flat
+   black/white. Nothing below re-states a hex. */
 
 :root {
-    --bg:        #0b1219;
-    --bg-2:      #11202d;
-    --bg-3:      #18293a;
-    --line:      #233848;
-    --line-2:    #2d4256;
-    --ink:       #eaf1f5;
-    --ink-2:     #b9c6d1;
-    --ink-3:     #7d8e9c;
-    --teal:      #19b59c;
-    --teal-2:    #0e8c77;
-    --amber:     #d8a82a;
-    --red:       #d75050;
-    --green:     #1fb574;
-    --blue:      #4ea3e6;
-    --shadow:    0 8px 32px rgba(0,0,0,0.35);
+    --bg:        #faf6ef;   /* cream ground */
+    --bg-2:      #ffffff;   /* cards */
+    --bg-3:      #f4f0e8;   /* inset: inputs, wells, table headers */
+    --line:      #ede6da;
+    --line-2:    #ddd3c3;
+    --ink:       #2a2621;
+    --ink-2:     #6e6558;
+    --ink-3:     #736a5d;   /* corrected from the supplied #8c8377 — that was 3.73:1 on
+                               white (fails 4.5:1) and this token carries table-header /
+                               secondary-label text; this clears white/cream/inset at
+                               5.32 / 4.94 / 4.68:1 — see report for the full table */
+    --teal:      #f2c14e;   /* the accent — amber now, name kept so no rule below has to change */
+    --teal-2:    #d9a832;
+    --amber:     #d98e4a;   /* warning — kept exactly as supplied; it's used as a
+                               background (req-badge), where ink-on-amber is 5.67:1 */
+    --red:       #9f5149;   /* corrected from the supplied #c4645a — that was 3.95:1 on
+                               white (fails 4.5:1) and this token carries error text;
+                               this clears white/cream/inset at 5.60 / 5.20 / 4.93:1 */
+    --green:     #4a7159;   /* corrected from the supplied #5b8c6e — that was 3.87:1 on
+                               white (fails 4.5:1) and this token carries status text;
+                               this clears white/cream/inset at 5.53 / 5.13 / 4.87:1 */
+    --blue:      #5e7b93;
+    --shadow:    0 8px 28px rgba(42,38,33,0.10);
+
+    /* Accent-on-light needs a readable foreground of its own: white text on
+       #f2c14e fails contrast, which the dark palette never had to think about. */
+    --on-accent: #493a12;
+    --accent-soft: #fdf0d0;
+
+    /* --amber above stays exactly as supplied because darkening it for text
+       use would have wrecked its one background use (req-badge). Text-only
+       warning copy needs its own darker ink instead. */
+    --amber-ink: #8d5c30;
+
+    /* Status pills and toasts sit on a tint, not plain white — reusing --red
+       / --green there undershoots 4.5:1, so each gets its own soft/line/ink
+       trio (badge, button and toast all share these). */
+    --danger-soft: #f8e4e1;
+    --danger-soft-hover: #f5ddd9;
+    --danger-line: #e8c4bf;
+    --danger-ink: #9c4b42;
+    --ok-soft: #e3ede4;
+    --ok-line: #c3d6c8;
+    --ok-ink: #3a6350;
+
+    /* Neutral overlays, tied to --ink so they read warm rather than flat
+       black/white: a faint table-row hover tint, and the modal scrim. */
+    --row-hover: rgba(42,38,33,0.035);
+    --scrim: rgba(42,38,33,0.55);
 }
 
 * { box-sizing: border-box; }
@@ -28,7 +73,7 @@ button { font-family: inherit; }
 /* --- Boot / gate ----------------------------------------------------- */
 #panel-root.loading { display: grid; place-items: center; height: 100vh; }
 .boot-card { display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--ink-2); }
-.boot-logo { width: 60px; height: 60px; border-radius: 15px; background: linear-gradient(135deg, var(--teal), var(--teal-2)); display: grid; place-items: center; color: white; }
+.boot-logo { width: 60px; height: 60px; border-radius: 15px; background: linear-gradient(135deg, var(--teal), var(--teal-2)); display: grid; place-items: center; color: var(--on-accent); }
 .boot-title { font-size: 18px; font-weight: 800; color: var(--ink); }
 .boot-sub { font-size: 13px; color: var(--ink-3); }
 
@@ -39,19 +84,19 @@ button { font-family: inherit; }
 .gate-card p { color: var(--ink-3); margin: 0 0 22px; text-align: center; font-size: 13px; }
 .gate-card .gate-err { color: var(--red); font-size: 13px; min-height: 18px; text-align: center; margin-top: 8px; }
 .gate-input { width: 100%; padding: 11px 14px; background: var(--bg-3); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; font-size: 14px; font-family: inherit; outline: none; transition: border-color .12s, box-shadow .12s; margin-bottom: 10px; }
-.gate-input:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(25,181,156,0.18); }
-.gate-btn { width: 100%; padding: 12px 18px; border-radius: 10px; background: linear-gradient(180deg, var(--teal), var(--teal-2)); color: white; border: none; font-weight: 700; font-size: 14px; cursor: pointer; }
+.gate-input:focus { border-color: var(--teal); box-shadow: 0 0 0 3px var(--accent-soft); }
+.gate-btn { width: 100%; padding: 12px 18px; border-radius: 10px; background: linear-gradient(180deg, var(--teal), var(--teal-2)); color: var(--on-accent); border: none; font-weight: 700; font-size: 14px; cursor: pointer; }
 .gate-btn:disabled { opacity: .55; cursor: not-allowed; }
 
 /* --- Top nav ----------------------------------------------------------- */
 .navbar { display: flex; align-items: center; gap: 20px; padding: 12px 28px; border-bottom: 1px solid var(--line); background: var(--bg-2); position: sticky; top: 0; z-index: 5; }
 .navbar-brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 14.5px; letter-spacing: -0.01em; }
-.navbar-brand .brand-mark { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, var(--teal), var(--teal-2)); display: grid; place-items: center; color: white; flex-shrink: 0; }
+.navbar-brand .brand-mark { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, var(--teal), var(--teal-2)); display: grid; place-items: center; color: var(--on-accent); flex-shrink: 0; }
 .navbar-links { display: flex; gap: 4px; flex: 1; }
 .nav-link { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 8px; color: var(--ink-2); font-size: 13.5px; font-weight: 600; cursor: pointer; text-decoration: none; user-select: none; }
 .nav-link:hover { background: var(--bg-3); color: var(--ink); }
 .nav-link.on { background: var(--bg-3); color: var(--teal); }
-.nav-link .nav-badge { background: var(--teal); color: white; font-size: 11px; padding: 1px 7px; border-radius: 999px; font-weight: 700; }
+.nav-link .nav-badge { background: var(--teal); color: var(--on-accent); font-size: 11px; padding: 1px 7px; border-radius: 999px; font-weight: 700; }
 .navbar-user { display: flex; align-items: center; gap: 10px; color: var(--ink-2); font-size: 12.5px; }
 .navbar-user .who { font-weight: 600; color: var(--ink); }
 .signout { padding: 7px 12px; border-radius: 8px; background: transparent; border: 1px solid var(--line); color: var(--ink-2); font-size: 12.5px; cursor: pointer; }
@@ -75,30 +120,30 @@ table.t { width: 100%; border-collapse: collapse; min-width: 760px; }
 table.t th, table.t td { padding: 10px 14px; text-align: left; vertical-align: middle; }
 table.t thead th { background: var(--bg-3); color: var(--ink-3); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; border-bottom: 1px solid var(--line); position: sticky; top: 0; }
 table.t tbody tr { border-bottom: 1px solid var(--line); cursor: pointer; }
-table.t tbody tr:hover { background: rgba(255,255,255,0.02); }
+table.t tbody tr:hover { background: var(--row-hover); }
 table.t tbody tr:last-child { border-bottom: none; }
 table.t td.muted { color: var(--ink-3); }
 table.t td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.02em; white-space: nowrap; }
-.badge.ok      { background: rgba(31,181,116,0.18); color: var(--green); }
-.badge.danger  { background: rgba(215,80,80,0.18); color: #ff9b9b; }
+.badge.ok      { background: var(--ok-soft); color: var(--ok-ink); }
+.badge.danger  { background: var(--danger-soft); color: var(--danger-ink); }
 
-.mod-chip { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; margin: 1px 3px 1px 0; background: rgba(25,181,156,0.16); color: var(--teal); }
+.mod-chip { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; margin: 1px 3px 1px 0; background: var(--bg-3); color: var(--ink-2); }
 .mod-chips-empty { color: var(--ink-3); }
 
 .last-seen.stale { color: var(--red); font-weight: 700; }
 .last-seen.never { color: var(--ink-3); }
-.fp-flag { color: var(--amber); font-weight: 700; margin-left: 6px; }
+.fp-flag { color: var(--amber-ink); font-weight: 700; margin-left: 6px; }
 
-.req-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--amber); color: #241c02; font-size: 11px; font-weight: 800; }
+.req-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--amber); color: var(--ink); font-size: 11px; font-weight: 800; }
 
 /* --- Buttons ------------------------------------------------------- */
 .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg-3); color: var(--ink); font-size: 12.5px; cursor: pointer; font-weight: 600; }
 .btn:hover:not(:disabled) { border-color: var(--teal); }
-.btn.primary { background: linear-gradient(180deg, var(--teal), var(--teal-2)); border-color: transparent; color: white; }
-.btn.danger { background: rgba(215,80,80,0.16); border-color: rgba(215,80,80,0.5); color: #ffb4b4; }
-.btn.danger:hover:not(:disabled) { background: rgba(215,80,80,0.28); }
+.btn.primary { background: linear-gradient(180deg, var(--teal), var(--teal-2)); border-color: transparent; color: var(--on-accent); }
+.btn.danger { background: var(--danger-soft); border-color: var(--danger-line); color: var(--danger-ink); }
+.btn.danger:hover:not(:disabled) { background: var(--danger-soft-hover); }
 .btn.small { padding: 5px 10px; font-size: 12px; }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
@@ -121,10 +166,10 @@ table.t td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .switch .track { position: absolute; inset: 0; background: var(--line-2); border-radius: 999px; transition: background .12s; cursor: pointer; }
 .switch .track::before { content: ""; position: absolute; left: 3px; top: 3px; width: 16px; height: 16px; background: var(--ink); border-radius: 50%; transition: transform .12s; }
 .switch input:checked + .track { background: var(--teal); }
-.switch input:checked + .track::before { transform: translateX(18px); background: white; }
+.switch input:checked + .track::before { transform: translateX(18px); background: var(--on-accent); }
 .switch input:disabled + .track { opacity: .5; cursor: not-allowed; }
 .next-checkin-note { color: var(--ink-3); font-size: 12px; margin-top: 8px; line-height: 1.5; }
-.legacy-note { color: var(--amber); font-size: 12px; margin-top: 8px; line-height: 1.5; }
+.legacy-note { color: var(--amber-ink); font-size: 12px; margin-top: 8px; line-height: 1.5; }
 
 /* --- Subscription editor --------------------------------------------- */
 .form-row { margin-bottom: 12px; }
@@ -141,7 +186,7 @@ table.t td.num { text-align: right; font-variant-numeric: tabular-nums; }
 /* --- Code display: enrollment / unlock codes read aloud over a phone --- */
 .code-display { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 26px; font-weight: 700; letter-spacing: 0.12em; color: var(--teal); display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 6px 0; }
 .code-sep { color: var(--ink-3); font-weight: 400; letter-spacing: 0; }
-.once-note { color: var(--amber); font-size: 12.5px; font-weight: 600; margin-top: 4px; }
+.once-note { color: var(--amber-ink); font-size: 12.5px; font-weight: 600; margin-top: 4px; }
 
 /* --- Checkins table ---------------------------------------------------- */
 .checkins-table td, .checkins-table th { font-size: 12.5px; }
@@ -154,7 +199,7 @@ table.t td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .counter-row .counter-name { font-size: 13px; }
 
 /* --- Modal --------------------------------------------------------- */
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: grid; place-items: center; z-index: 9999; padding: 24px; backdrop-filter: blur(2px); }
+.modal-overlay { position: fixed; inset: 0; background: var(--scrim); display: grid; place-items: center; z-index: 9999; padding: 24px; backdrop-filter: blur(2px); }
 .modal { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px; width: 100%; max-width: 440px; box-shadow: var(--shadow); max-height: 90vh; overflow-y: auto; }
 .modal h3 { margin: 0 0 6px; font-size: 17px; font-weight: 700; }
 .modal .sub { color: var(--ink-3); font-size: 13px; margin: 0 0 18px; line-height: 1.5; }
@@ -171,5 +216,5 @@ table.t td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .row-loading { padding: 24px; text-align: center; color: var(--ink-3); display: flex; align-items: center; justify-content: center; gap: 10px; }
 
 .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--bg-2); border: 1px solid var(--line); padding: 10px 18px; border-radius: 10px; font-size: 13px; box-shadow: var(--shadow); z-index: 10000; }
-.toast.ok  { border-color: rgba(31,181,116,0.5); color: #b6f0d4; }
-.toast.err { border-color: rgba(215,80,80,0.5); color: #ffb4b4; }
+.toast.ok  { border-color: var(--ok-line); color: var(--ok-ink); }
+.toast.err { border-color: var(--danger-line); color: var(--danger-ink); }
