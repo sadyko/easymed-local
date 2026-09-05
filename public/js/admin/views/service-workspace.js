@@ -3363,9 +3363,14 @@ function openTemplateLibraryModal(ctx) {
             if (error) { toast('Не удалось сохранить', 'fail'); return; }
             toast('Шаблон обновлён', 'ok');
         } else {
-            // INSERT — ONLY name/scope/doc_type/body/author_name. DB fills company_id + author_id.
+            // TPL_AUTHOR_LOCAL_V1 — автора ставим САМИ. Комментарий «DB fills
+            // author_id» верен для облака (там колонку заполняет умолчание
+            // auth.uid()), а здесь умолчания нет: author_id оставался пустым,
+            // isMine() отвечал «нет» на СОБСТВЕННЫЙ шаблон врача, и сразу после
+            // сохранения у него пропадали и «Изменить», и «Удалить», и вкладка
+            // «Мои». Имя автора отсюда и так уходит строкой ниже — id к нему.
             const { data, error } = await supabase.from('consultation_templates')
-                .insert({ name: d.name.trim(), scope: d.scope, doc_type: d.doc_type, body, author_name: myName() })
+                .insert({ name: d.name.trim(), scope: d.scope, doc_type: d.doc_type, body, author_id: myId(), author_name: myName() })
                 .select('id').maybeSingle();
             if (error) { toast('Не удалось сохранить', 'fail'); return; }
             toast('Шаблон сохранён', 'ok');

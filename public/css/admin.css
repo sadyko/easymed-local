@@ -2828,29 +2828,37 @@ textarea:focus-visible,
 /* SIDEBAR_COLLAPSE_V1 — marker restored (feature present, comment stripped in refactor) */
 
 /* ============================================================
-   MODAL_FULLSCREEN_V1 — every dialog opens at the same near-full-screen
-   size as the booking wizard (calc(100vw-24px) × calc(100vh-24px)), per
-   owner request. Overrides each modal's inline width/height; only the SIZE
-   changes. The card stays a flex column, and the body flexes to fill so the
-   header pins top / footer pins bottom (otherwise a full-height card would
-   leave the footer floating mid-screen). Excludes .bedfs-card, which is
-   already full-screen via `inset`.
+   MODAL_FITS_CONTENT_V1 (2026-09-05) — ОКНО РАЗМЕРОМ С СОДЕРЖИМОЕ.
+
+   Владелец: «make dialogue windows fit content or wrap but not fill the
+   window if its not too big data».
+
+   Здесь стояло обратное правило (MODAL_FULLSCREEN_V1): КАЖДОЕ окно
+   растягивалось до calc(100vw-24px) × calc(100vh-24px) и делало это через
+   !important, то есть перебивало собственный размер окна. Форма из шести
+   полей открывалась во весь экран с пустотой на три четверти, и поля,
+   рассчитанные на две колонки по 510 px, разъезжались на пол-экрана каждое.
+
+   Правило снято целиком, а не «ещё одним исключением»: исключений уже
+   накопилось три десятка (.modal-compact дописывали по одному окну за раз,
+   каждый раз после жалобы), и это и есть признак того, что умолчание было
+   выбрано неверно. Размер окна теперь задаёт САМО окно — у каждого он в
+   разметке и был, — а окно, которому нужен весь экран, просит его прямо
+   (ward-beds.js: width/height calc(100vw-48px)).
+
+   .modal-compact сохранён как ЯВНОЕ «размером с содержимое» — теперь это
+   умолчание, поэтому класс ничего не меняет, но и не врёт: тридцать мест,
+   где он проставлен, продолжают означать ровно то, что означали.
    ============================================================ */
-/* MODAL_COMPACT_OPTOUT_V1 — dialogs tagged .modal-compact keep their own
-   designed size (cashier shift dialogs: cash in/out, reports, close-and-count
-   — owner asked for small convenient cards there). Everything else keeps the
-   near-fullscreen behaviour below. */
-.modal-card:not(.bedfs-card):not(.modal-compact) {
-    width: calc(100vw - 24px) !important;
-    max-width: calc(100vw - 24px) !important;
-    height: calc(100vh - 24px) !important;
-    max-height: calc(100vh - 24px) !important;
-}
+.modal-compact { /* размером с содержимое — теперь это умолчание */ }
 
 /* LICENCE_CORE_V1 — an unbought module: visible, reachable, plainly marked. */
 .sidebar .nav-locked { opacity: .62; }
 .sidebar .nav-lock-icon { margin-left: auto; opacity: .8; flex: 0 0 auto; }
-.modal-card:not(.bedfs-card):not(.modal-compact) > .modal-body { flex: 1 1 auto; min-height: 0; }
+/* MODAL_FITS_CONTENT_V1 — тело больше не растягивается на всю высоту (растить
+   было нечего: карточка высоту не занимает). Прокрутку внутри окна даёт
+   .modal-body{overflow-y:auto} вместе с max-height самой карточки. */
+.modal-card > .modal-body { min-height: 0; }
 
 /* ============================================================
    MOTION_REVEAL_V1 (2026-09-05) — содержимое появляется при прокрутке.

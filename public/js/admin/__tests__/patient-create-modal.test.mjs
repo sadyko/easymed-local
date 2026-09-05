@@ -183,13 +183,10 @@ test('первый экран влезает в 1366×768 без прокрут�
   assert.ok(/\.modal-head \{[^}]*padding: 16px 22px;/.test(ADMIN_CSS), '.modal-head потерял отступ 16px');
   assert.ok(/\.modal-foot \{[^}]*padding: 14px 22px;/.test(ADMIN_CSS), '.modal-foot потерял отступ 14px');
   assert.ok(/\.btn \{\s*height: 36px;/.test(ADMIN_CSS), '.btn больше не 36px — подвал считается неверно');
-  // Это правило ДЕЙСТВУЕТ только потому, что окно отказалось от растягивания:
-  // MODAL_FULLSCREEN_V1 иначе перебивает его `!important`-ом, и модель высоты
-  // считала бы то, чего на экране нет. Проверять высоту, не проверив отказ, —
-  // значит проверять недействующее правило (см. отдельный тест ниже).
+  // Это правило ДЕЙСТВУЕТ только пока ничто не перебивает его `!important`-ом
+  // снаружи (так было при MODAL_FULLSCREEN_V1). Проверять высоту, не проверив
+  // этого, — значит проверять недействующее правило (см. отдельный тест ниже).
   assert.ok(/max-height: calc\(100vh - 60px\)/.test(ADMIN_CSS), '.modal-card потерял max-height');
-  assert.ok(hasClass(modal.buildPatientCreateDialog({}).card, 'modal-compact'),
-    'окно не отказалось от растягивания — его max-height перебит MODAL_FULLSCREEN_V1');
   assert.equal(METRICS.headPadV, 16);
   assert.equal(METRICS.footPadV, 14);
   assert.equal(METRICS.footRowH, 36);
@@ -436,43 +433,46 @@ test('создание из шапки списка пациентов откр�
 });
 
 // ===========================================================================
-// MODAL_COMPACT_OPTOUT_V1 — окно не растягивается на весь монитор
+// MODAL_FITS_CONTENT_V1 — окно размером с содержимое, а не с монитор
 // ===========================================================================
-test('окно держит свои 1240 px: растягивающее правило его больше не выбирает', () => {
+test('ни одно правило не перебивает собственный размер окна', () => {
   reset();
   const dlg = modal.buildPatientCreateDialog({});
 
-  // 1. Правило, которое растягивало, — на месте и делает именно это.
-  const SEL = '.modal-card:not(.bedfs-card):not(.modal-compact)';
-  const at = ADMIN_CSS.indexOf(SEL + ' {');
-  assert.notEqual(at, -1, 'правило MODAL_FULLSCREEN_V1 переписали — тест смотрит не туда');
-  const rule = ADMIN_CSS.slice(at, ADMIN_CSS.indexOf('}', at));
-  assert.ok(/width: calc\(100vw - 24px\) !important/.test(rule), 'правило перестало задавать ширину');
-  assert.ok(/height: calc\(100vh - 24px\) !important/.test(rule), 'правило перестало задавать высоту');
+  // 1. КЛАСС ошибки, а не один его случай. Здесь стояло правило
+  //    (MODAL_FULLSCREEN_V1), которое растягивало КАЖДОЕ окно до размеров
+  //    экрана и делало это через !important — то есть перебивало размер,
+  //    заданный самим окном. Форма из шести полей открывалась во весь монитор
+  //    с пустотой на три четверти. Отказ дописывали по одному окну за раз
+  //    (.modal-compact в трёх десятках мест), и это накопление исключений и
+  //    было признаком неверного умолчания.
+  //
+  //    Проверяется не отсутствие ИМЕНИ правила, а отсутствие ПОВЕДЕНИЯ: ни
+  //    один селектор, начинающийся с .modal-card, не смеет задавать ширину
+  //    или высоту с !important. Иначе то же самое вернулось бы под другим
+  //    именем и снова молча — на экране это выглядит как «так и задумано».
+  const rules = [...ADMIN_CSS.matchAll(/(^|\})\s*(\.modal-card[^{}]*)\{([^}]*)\}/g)];
+  assert.ok(rules.length, 'правил .modal-card не нашлось — тест смотрит не туда');
+  for (const m of rules) {
+    const sel = m[2].trim(), body = m[3];
+    for (const prop of ['width', 'height']) {
+      const re = new RegExp('(?:^|;)\\s*(?:max-|min-)?' + prop + '\\s*:[^;]*!important');
+      assert.ok(!re.test(body),
+        'правило «' + sel + '» задаёт ' + prop + ' через !important и перебьёт размер самого окна');
+    }
+  }
 
-  // 2. И оно эту карточку НЕ выбирает: хотя бы один из :not(...) совпал.
-  //    Авторский !important бьёт встроенный стиль, поэтому width: 1240px без
-  //    этого отказа не значил ничего — на мониторе 1920 выверенная
-  //    двухколоночная вёрстка расползалась на 1896 px.
-  const excluded = [...SEL.matchAll(/:not\(\.([\w-]+)\)/g)].map((m) => m[1]);
-  const classes = String(dlg.card.className).split(/\s+/);
-  assert.ok(excluded.some((c) => classes.includes(c)),
-    'растягивающее правило по-прежнему выбирает окно заведения пациента: ' + dlg.card.className);
-  assert.ok(classes.includes('modal-compact'), 'отказ сделан не тем классом, каким пользуются остальные окна');
-
-  // 3. Значит действует собственный размер окна — тот, под который считалась
+  // 2. Значит действует собственный размер окна — тот, под который считалась
   //    модель высоты выше.
   assert.equal(dlg.card.style.width, modal.METRICS.cardWidth + 'px');
   assert.equal(dlg.card.style.maxHeight, 'calc(100vh - ' + modal.METRICS.viewportGap + 'px)');
   assert.ok(modal.METRICS.cardWidth < 1920 - 24,
-    'на мониторе 1920 окно снова во весь экран — тогда отказ от растягивания бессмыслен');
+    'на мониторе 1920 окно снова во весь экран');
 
-  // 4. Класс-отказ не выдуман для этого окна: им пользуются те же окна, что и
-  //    раньше (стоило бы завести второй способ — правило разошлось бы).
-  for (const rel of ['../views/admission-modal.js', '../views/cashier-desk.js', '../views/crm.js']) {
-    const src = fs.readFileSync(path.join(HERE, rel), 'utf8');
-    assert.ok(src.includes('modal-compact'), rel + ' больше не пользуется общим отказом от растягивания');
-  }
+  // 3. Умолчание тоже осталось умеренным: окно без своего размера получает
+  //    520 px, а не ширину монитора.
+  assert.ok(/\.modal-card \{[^}]*width: 520px;/.test(ADMIN_CSS),
+    'у .modal-card пропала ширина по умолчанию — окно без своего размера растечётся');
 });
 
 // ===========================================================================

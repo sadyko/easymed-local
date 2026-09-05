@@ -609,6 +609,13 @@ export const REGISTRY = {
              update: { roles: ['admin','doctor'], columns: ['name','doc_type','scope','body'] },
              delete: { roles: ['admin','doctor'] } },
     filters: ['id','author_id','scope','updated_at'],
+    // TPL_BODY_JSON_V1 (2026-09-05) — body это КАРТА РАЗДЕЛОВ документа
+    // ({chief_complaint: '…', therapy_text: '…'}), а колонка — TEXT. Без этой
+    // строки компилятор видел объект и отвечал 400 «unsupported value type»
+    // на КАЖДОЕ сохранение: ни создать шаблон, ни изменить его было нельзя, и
+    // окно говорило только «Не удалось сохранить». Механизм существовал и
+    // работал у пяти других таблиц — здесь его просто забыли объявить.
+    json:    ['body'],
     embed:   {},
   },
   // Per-doctor consultation prices (admin config). appointments.js, consultation-types.js, employee-editor.js.
