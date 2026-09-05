@@ -109,6 +109,9 @@ const settle = () => new Promise((r) => setTimeout(r, 30));
 
 // ─── правá берём у СЕРВЕРА, а не переписываем ──────────────────────────────
 const { TRANSITION_ROLES, inpatientCapabilities } = await import('../../../../server/services/rpc/inpatient-flow.js');
+// ATTENDING_PICKER_V1 — «кто врач» стенд НЕ ПЕРЕСКАЗЫВАЕТ: список кандидатов в
+// лечащие врачи собирается тем же предикатом, что и на сервере.
+const { isDoctorRow } = await import('../../../../server/services/rpc/inpatient-reviews.js');
 // DIET_TABLES_V1 — список ролей, которым можно менять стол, и правило «какие
 // приёмы входят в N-разовое питание» тоже берутся у сервера: переписанные
 // здесь, они перестали бы падать в тот день, когда их поправят там.
@@ -275,6 +278,14 @@ function rpcAnswer(name, a) {
             }
             return { ok: true, data: { review: rev, admission: row, published: !!a.publish } };
         }
+
+        case 'admission_attending_candidates':
+            return { ok: true, data: {
+                doctors: WORLD.users
+                    .filter((u) => isDoctorRow(u) && u.active !== false && u.active !== 0)
+                    .map((u) => ({ id: u.id, full_name: u.full_name, specialty: u.specialty || '' })),
+                dismissed: WORLD.users.filter((u) => isDoctorRow(u) && (u.active === false || u.active === 0)).length,
+            } };
 
         case 'admission_set_attending': {
             const row = adm();

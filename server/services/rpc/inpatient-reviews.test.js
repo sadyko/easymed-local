@@ -24,7 +24,7 @@ import { migrate } from '../../db/migrate.js';
 import { admissionOrderCreate, admissionAdmit, dischargePatient } from './inpatient.js';
 import {
   admissionReviewSave, admissionSetAttending, admissionChangeAttending,
-  admissionReviewsList, isDoctorRow,
+  admissionReviewsList, isDoctorRow, admissionAttendingCandidates,
 } from './inpatient-reviews.js';
 import { treatmentOrderCreate } from './treatment-orders.js';
 import { assertCanPrescribe, RpcError } from './inpatient-flow.js';
@@ -547,5 +547,103 @@ test('лечащего врача можно сменить и когда зая
   const res = admissionChangeAttending(ctx.db, { admission_id: adm.id, doctor_id: doctor2.id, reason: 'смена дежурного' }, headDoctor);
   assert.equal(res.admission.attending_doctor_id, doctor2.id);
   assert.equal(res.admission.status, 'discharging', 'смена врача не двигает маршрут');
+  ctx.db.close();
+});
+
+// ─── 10. КОГО МОЖНО НАЗНАЧИТЬ ЛЕЧАЩИМ — ОДИН СПИСОК НА ЭКРАН И НА СЕРВЕР ────
+//
+// Окно «Назначить лечащего врача» показывало пустой выпадающий список при
+// полной клинике врачей: оно спрашивало у таблицы users колонку, которой реестр
+// не отдаёт, и получало отказ ВСЕМУ запросу. Причина класса — в том, что список
+// строился ОТДЕЛЬНО от правила, которым сервер потом проверяет выбранного.
+// Здесь эти двое сведены в одну функцию, и тесты держат их вместе: список
+// сверяется не с переписанным от руки перечнем, а с САМИМ предикатом
+// isDoctorRow, которым назначение и отказывает.
+
+test('список кандидатов = ровно те, кого примет isDoctorRow (и админ-врач в нём есть)', () => {
+  const ctx = seed();
+  const { doctors } = admissionAttendingCandidates(ctx.db, {}, headDoctor);
+  const ids = doctors.map((d) => d.id).sort((a, b) => a - b);
+
+  // Ожидание считается ТЕМ ЖЕ предикатом по ТОЙ ЖЕ базе: разойтись экрану и
+  // серверу тут физически нечем — переписанный от руки список разошёлся бы.
+  const expected = ctx.db.prepare('SELECT * FROM users').all()
+    .filter((u) => isDoctorRow(u) && u.active !== 0)
+    .map((u) => u.id).sort((a, b) => a - b);
+  assert.deepEqual(ids, expected);
+
+  // …и по именам: врач с role='doctor' — есть; администратор-врач (role='admin',
+  // специальности нет, только is_doctor) — ЕСТЬ; касса, регистратура и
+  // медсестра — нет.
+  assert.ok(ids.includes(doctor.id), 'врача в списке нет');
+  assert.ok(ids.includes(headDoctor.id), 'главного врача в списке нет');
+  assert.ok(ids.includes(adminDoctor.id),
+    'ADMIN_DOCTOR_LIST_V1: администратор-врач обязан быть в списке — сервер его принимает');
+  for (const id of [cashier.id, registrar.id, nurse.id, admin.id]) {
+    assert.ok(!ids.includes(id), 'в списке врачей оказался не врач: ' + id);
+  }
+  ctx.db.close();
+});
+
+test('СПИСОК И ПРОВЕРКА НЕ РАСХОДЯТСЯ: каждого из списка сервер принимает, никого вне списка — нет', () => {
+  const ctx = seed();
+  const { doctors } = admissionAttendingCandidates(ctx.db, {}, headDoctor);
+  const offered = new Set(doctors.map((d) => d.id));
+
+  for (const u of ctx.db.prepare('SELECT id FROM users').all()) {
+    // Каждому кандидату — своя госпитализация, чтобы проверка была про ЧЕЛОВЕКА,
+    // а не про состояние одной строки.
+    const c = seed();
+    const adm = inBed(c);
+    admissionReviewSave(c.db, { admission_id: adm.id, kind: 'primary', ...EXAM, publish: true }, headDoctor);
+    if (offered.has(u.id)) {
+      const res = admissionSetAttending(c.db, { admission_id: adm.id, doctor_id: u.id }, headDoctor);
+      assert.equal(res.admission.status, 'active',
+        'экран предлагает ' + u.id + ', а сервер его не принимает');
+    } else {
+      assert.throws(() => admissionSetAttending(c.db, { admission_id: adm.id, doctor_id: u.id }, headDoctor),
+        (e) => e instanceof RpcError,
+        'сервер принимает ' + u.id + ', которого экран не показывает');
+    }
+    c.db.close();
+  }
+  ctx.db.close();
+});
+
+test('уволенный врач: из списка убран, посчитан отдельно, и сервер его тоже не принимает', () => {
+  const ctx = seed();
+  ctx.db.prepare('UPDATE users SET is_active = 0 WHERE id = ?').run(doctor2.id);
+
+  const res = admissionAttendingCandidates(ctx.db, {}, headDoctor);
+  assert.ok(!res.doctors.some((d) => d.id === doctor2.id), 'уволенный врач остался в списке');
+  assert.equal(res.dismissed, 1,
+    'уволенных надо СЧИТАТЬ: «врачей нет» и «все врачи уволены» — разные беды с разными починками');
+
+  const adm = inBed(ctx);
+  admissionReviewSave(ctx.db, { admission_id: adm.id, kind: 'primary', ...EXAM, publish: true }, headDoctor);
+  assert.throws(() => admissionSetAttending(ctx.db, { admission_id: adm.id, doctor_id: doctor2.id }, headDoctor),
+    (e) => e instanceof RpcError && /уволен/.test(e.message));
+  ctx.db.close();
+});
+
+test('клиника без врачей отвечает пустым списком и НУЛЁМ уволенных — это не то же, что «все уволены»', () => {
+  const ctx = seed();
+  ctx.db.prepare('DELETE FROM users WHERE id NOT IN (?, ?, ?)').run(admin.id, nurse.id, cashier.id);
+  ctx.db.prepare('UPDATE users SET is_doctor = 0, specialty = ?, license_number = ? WHERE id = ?').run('', '', admin.id);
+
+  const res = admissionAttendingCandidates(ctx.db, {}, headDoctor);
+  assert.equal(res.doctors.length, 0);
+  assert.equal(res.dismissed, 0, 'врачей нет вовсе — уволенных считать не из кого');
+  ctx.db.close();
+});
+
+test('список врачей спрашивают те же, кто вправе назначить: касса и медсестра получают отказ ролью', () => {
+  const ctx = seed();
+  assert.ok(admissionAttendingCandidates(ctx.db, {}, admin).doctors.length > 0);
+  for (const who of [nurse, cashier, registrar, doctor]) {
+    assert.throws(() => admissionAttendingCandidates(ctx.db, {}, who),
+      (e) => e instanceof RpcError && e.status === 403,
+      'список врачей шире права его применить: ' + who.role);
+  }
   ctx.db.close();
 });

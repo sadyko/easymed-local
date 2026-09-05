@@ -847,36 +847,82 @@ export function openAdmissionReviewModal({ admission, kind = 'primary', onDone }
 // ---------------------------------------------------------------------------
 // 6. Лечащий врач
 // ---------------------------------------------------------------------------
-// Список — ТОЛЬКО ВРАЧИ, и признак врача берётся не из текста роли:
-// ADMIN_DOCTOR_LIST_V1 (data.js) — администратор клиники может быть врачом, и у
-// такой учётной записи role='admin' и пустая специальность. Отфильтруй мы по
-// слову 'doctor' — его нельзя было бы назначить лечащим врачом собственного
-// пациента. Сервер проверяет тот же признак ещё раз (rpc/inpatient-reviews.js).
+// СПИСОК ВРАЧЕЙ ЭКРАН НЕ СОБИРАЕТ — ОН ЕГО СПРАШИВАЕТ.
+//
+// Так было не всегда, и цена прежнего устройства известна поимённо: главный
+// врач открыл «Назначить лечащего врача» на ADM-00005 и увидел выпадающий
+// список из одного «Выберите врача». Врачи в клинике были. Отказывал ЗАПРОС:
+// окно просило у таблицы users колонку `license_number`, которой реестр
+// (server/db/schema-registry.js) не отдаёт, а компилятор на неразрешённое поле
+// не «пропускает лишнее» — он отказывает ВСЕМУ запросу («unknown column», 400).
+// Ответ приходил пустым, ошибку никто не читал (`.then(({ data }) => …)`), и
+// пустой список выглядел как клиника без врачей. Тот же класс ошибки уже ронял
+// раздел «Стационар» (patients(phone)) и «Календарь записи» (пять колонок).
+//
+// Отсюда два решения, и оба здесь:
+//
+//   1. ПРАВИЛО ОДНО, И ЖИВЁТ ОНО НА СЕРВЕРЕ. Кто «врач» — решает isDoctorRow
+//      (rpc/inpatient-reviews.js), и тем же признаком admission_attending_
+//      candidates собирает список, которым это окно рисуется. Экран больше не
+//      повторяет признак у себя (ADMIN_DOCTOR_LIST_V1: администратор клиники
+//      бывает врачом, и по тексту роли врачом не выглядит) — повторённый, он
+//      расходится с сервером молча, и человек либо не видит того, кого сервер
+//      примет, либо видит того, кому сервер откажет.
+//   2. ПУСТОТА ОБЪЯСНЯЕТ СЕБЯ. «Врачей в клинике нет», «врачи есть, но все
+//      уволены» и «список не загрузился» — три разные беды с тремя разными
+//      починками, и пустой select говорит вместо них всех одно: «сломано».
+//      Здесь каждая называет себя словами, и кнопка «Назначить» отвечает тем
+//      же словом, а не общим «выберите врача».
 export function openAdmissionAttendingModal({ admission, onDone } = {}) {
     if (!admission || !admission.id) { toast(tr('Госпитализация не найдена.'), 'fail'); return; }
     const p = admission.patients || {};
     const sel = h('select', null, h('option', { value: '' }, tr('Выберите врача')));
-    supabase.from('users')
-        .select('id, full_name, specialty, role, is_doctor, license_number')
-        .eq('active', true).order('full_name')
-        .then(({ data }) => {
-            const doctors = (data || []).filter((u) =>
-                u.is_doctor === true || u.is_doctor === 1 ||
-                (u.role || '').toLowerCase() === 'doctor' ||
-                (u.specialty || '').length > 0 ||
-                (u.license_number || '').length > 0);
-            for (const d of doctors) {
-                sel.appendChild(h('option', { value: String(d.id) },
-                    d.full_name + (d.specialty ? '  ·  ' + d.specialty : '')));
-            }
-        });
+    // Пока список едет, выбирать нечего: открытый пустой select — это то самое
+    // «похоже на поломку», от которого и лечим.
+    sel.disabled = true;
+    const note = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Загружаем список врачей…'));
+    // Чем окно откажет нажатию, если выбрать некого. null — список пришёл и в
+    // нём есть врачи; строка — причина, по которой врача не выбрать.
+    let refusal = tr('Загружаем список врачей…');
+
+    supabase.rpc('admission_attending_candidates', {}).then(({ data, error }) => {
+        if (error) {
+            // СБОЙ НАЗЫВАЕТСЯ СБОЕМ и несёт причину: чинит его не тот, кто
+            // стоит у экрана, и «в клинике нет врачей» отправило бы главного
+            // врача заводить сотрудников, которые давно заведены.
+            refusal = trf('Список врачей не загрузился — это сбой запроса, а не пустая клиника. Причина: {reason}',
+                { reason: error.message || '—' });
+            note.textContent = refusal;
+            return;
+        }
+        const doctors = (data && data.doctors) || [];
+        const dismissed = (data && data.dismissed) || 0;
+        if (!doctors.length) {
+            refusal = dismissed
+                ? tr('Все врачи клиники уволены — лечащим врачом уволенного сотрудника назначить нельзя. Восстановите врача в разделе «Сотрудники» или заведите нового.')
+                : tr('В клинике нет ни одного врача — назначить лечащего некем. Заведите врача в разделе «Сотрудники».');
+            note.textContent = refusal;
+            return;
+        }
+        for (const d of doctors) {
+            sel.appendChild(h('option', { value: String(d.id) },
+                d.full_name + (d.specialty ? '  ·  ' + d.specialty : '')));
+        }
+        sel.disabled = false;
+        refusal = null;
+        note.textContent = dismissed
+            ? tr('Уволенные врачи в списке не показаны: лечащим врачом уволенного назначить нельзя.')
+            : '';
+    });
 
     modal(tr('Назначить лечащего врача'), 'User', [
         patientAnchor(p.full_name || '', [p.mrn, admission.admission_no].filter(Boolean).join(' · ')),
         field(tr('Лечащий врач'), sel, { required: true }),
+        note,
         h('div', { class: 'muted', style: { fontSize: '12.5px' } },
             tr('С этого момента идёт лечение: лечащий врач ведёт назначения, услуги и стол этого пациента.')),
     ], tr('Назначить'), async () => {
+        if (refusal) { toast(refusal, 'fail'); return false; }
         if (!sel.value) { toast(tr('Выберите врача.'), 'fail'); return false; }
         const { error } = await supabase.rpc('admission_set_attending', {
             admission_id: admission.id, doctor_id: Number(sel.value),

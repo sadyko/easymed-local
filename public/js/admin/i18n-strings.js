@@ -3,6 +3,14 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // ATTENDING_PICKER_V1 — «Назначить лечащего врача»: список едет с сервера тем
+  // же признаком, которым сервер потом проверяет выбранного, и пустота
+  // называет СЕБЯ — added 2026-09-05
+  "Загружаем список врачей…": {"en":"Loading the list of doctors…","ru":"Загружаем список врачей…","uz":"Shifokorlar ro'yxati yuklanmoqda…"},
+  "Список врачей не загрузился — это сбой запроса, а не пустая клиника. Причина: {reason}": {"en":"The list of doctors failed to load — this is a failed request, not an empty clinic. Reason: {reason}","ru":"Список врачей не загрузился — это сбой запроса, а не пустая клиника. Причина: {reason}","uz":"Shifokorlar ro'yxati yuklanmadi — bu so'rov xatosi, klinika bo'sh emas. Sababi: {reason}"},
+  "В клинике нет ни одного врача — назначить лечащего некем. Заведите врача в разделе «Сотрудники».": {"en":"The clinic has no doctors at all — there is nobody to put in charge. Add a doctor in the «Staff» section.","ru":"В клинике нет ни одного врача — назначить лечащего некем. Заведите врача в разделе «Сотрудники».","uz":"Klinikada birorta ham shifokor yo'q — davolovchi shifokor etib tayinlashga odam yo'q. «Xodimlar» bo'limida shifokor qo'shing."},
+  "Все врачи клиники уволены — лечащим врачом уволенного сотрудника назначить нельзя. Восстановите врача в разделе «Сотрудники» или заведите нового.": {"en":"Every doctor in the clinic is dismissed — a dismissed employee cannot be put in charge. Reinstate a doctor in the «Staff» section, or add a new one.","ru":"Все врачи клиники уволены — лечащим врачом уволенного сотрудника назначить нельзя. Восстановите врача в разделе «Сотрудники» или заведите нового.","uz":"Klinikadagi barcha shifokorlar ishdan bo'shatilgan — bo'shatilgan xodimni davolovchi shifokor etib tayinlab bo'lmaydi. «Xodimlar» bo'limida shifokorni tiklang yoki yangisini qo'shing."},
+  "Уволенные врачи в списке не показаны: лечащим врачом уволенного назначить нельзя.": {"en":"Dismissed doctors are not listed: a dismissed employee cannot be put in charge.","ru":"Уволенные врачи в списке не показаны: лечащим врачом уволенного назначить нельзя.","uz":"Ishdan bo'shatilgan shifokorlar ro'yxatda ko'rsatilmaydi: bo'shatilgan xodimni davolovchi shifokor etib tayinlab bo'lmaydi."},
   // PROC_PERFORMER_V1 — очередь процедур: исполнителем может быть медсестра,
   // процедура бывает кабинетная и палатная — added 2026-09-05
   "Очередь процедур — процедурный кабинет и палаты": {"en":"Procedure worklist — procedure room and wards","ru":"Очередь процедур — процедурный кабинет и палаты","uz":"Muolajalar navbati — muolaja xonasi va palatalar"},

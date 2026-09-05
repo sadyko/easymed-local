@@ -10,7 +10,7 @@ import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport,
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit,
   admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue } from './inpatient.js';   // ADMISSION_ORDER_V1 / TWO_STEP_DISCHARGE_V1
 import { admissionFlowState, inpatientCapabilities } from './inpatient-flow.js';   // INPATIENT_FLOW_V1
-import { admissionReviewSave, admissionSetAttending, admissionChangeAttending, admissionReviewsList } from './inpatient-reviews.js';   // INPATIENT_REVIEW_V1
+import { admissionReviewSave, admissionSetAttending, admissionChangeAttending, admissionReviewsList, admissionAttendingCandidates } from './inpatient-reviews.js';   // INPATIENT_REVIEW_V1
 import {
   treatmentOrderCreate, treatmentOrderCancel, treatmentOrdersList,
   treatmentAdminMark, treatmentAdminUnmark, treatmentTasksDue,
@@ -232,6 +232,13 @@ export const RPC = {
   // такие строки как есть, и назначения им отвечали 403 всем без исключения.
   admission_change_attending:     (db, args, user) => admissionChangeAttending(db, args, user),
   admission_reviews_list:         (db, args, user) => admissionReviewsList(db, args, user),
+  // КОГО МОЖНО НАЗНАЧИТЬ ЛЕЧАЩИМ. Чтение (READ_ONLY_RPCS в control/gate.js).
+  // Существует затем, чтобы список врачей на экране и проверка `isDoctorRow`
+  // при назначении были ОДНИМ правилом: собранный экраном отдельно, список
+  // расходился с сервером молча — и однажды разошёлся до пустоты (окно
+  // «Назначить лечащего врача» просило у users колонку, которой реестр не
+  // отдаёт, и получало отказ всему запросу).
+  admission_attending_candidates: (db, args, user) => admissionAttendingCandidates(db, args, user),
   // Что ЭТА роль вправе делать в стационаре вообще. Один ответ на экран-очередь
   // вместо запроса по каждой строке: право на шаг зависит от роли, а не от
   // пациента, но считать его в браузере нельзя — матрица живёт на сервере.

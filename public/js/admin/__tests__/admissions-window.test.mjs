@@ -150,6 +150,12 @@ globalThis.fetch = async (url, opts = {}) => {
                 published: !!body.publish,
             });
         }
+        // ATTENDING_PICKER_V1 — список лечащих врачей приходит С СЕРВЕРА тем же
+        // правилом, которым сервер потом проверяет выбранного (rpc/inpatient-
+        // reviews.js admissionAttendingCandidates): экран его не собирает.
+        if (name === 'admission_attending_candidates') {
+            return ok({ doctors: [{ id: 77, full_name: 'Юсупов А.', specialty: 'Терапия' }], dismissed: 0 });
+        }
         if (name === 'admission_set_attending') {
             return ok({ admission: { id: body.admission_id, status: 'active', attending_doctor_id: body.doctor_id } });
         }
