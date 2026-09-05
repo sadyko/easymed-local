@@ -50,6 +50,19 @@ const I18N = {
                 'mar-sheet':     'Treatment sheet',   // MAR_SHEET_V1
                 'kitchen-sheet': 'Kitchen sheet',   // KITCHEN_SHEET_V1
                 discharge:    'Discharges',   // TWO_STEP_DISCHARGE_V1
+                // SIDEBAR_NAV_KEYS_V1 (2026-09-05) — семь пунктов меню жили без
+                // ключа: t() отдавал их английскую подпись из NAV, и в русском
+                // и узбекском меню посреди списка стояли английские слова.
+                // Ключ ВСЕГДА равен id пункта — admin.js просит
+                // t('sidebar.nav.' + item.id), и camelCase здесь ничего не
+                // находит (та же ошибка, что INPATIENT_NAV_KEYS_V1 выше).
+                crm:                 'CRM · Requests',
+                queue:               'Queue',
+                'telegram-chat':     'Patient chat',
+                'patient-documents': 'Documents',
+                'cashier-head':      'Head cashier',
+                inventory:           'Procurement',
+                'reports-hub':       'Reports',
             },
             logout: 'Log out',
             viewAsRole: 'View as role',
@@ -136,6 +149,13 @@ const I18N = {
                 'mar-sheet':     'Лист назначений',   // MAR_SHEET_V1
                 'kitchen-sheet': 'Порционник',   // KITCHEN_SHEET_V1
                 discharge:    'Выписки',   // TWO_STEP_DISCHARGE_V1
+                crm:                 'CRM · Заявки',   // SIDEBAR_NAV_KEYS_V1
+                queue:               'Очередь',
+                'telegram-chat':     'Чат с пациентами',
+                'patient-documents': 'Документы',
+                'cashier-head':      'Старший кассир',
+                inventory:           'Закупки',
+                'reports-hub':       'Отчёты',
             },
             logout: 'Выйти',
             viewAsRole: 'Просмотр как роль',
@@ -223,6 +243,13 @@ const I18N = {
                 'mar-sheet':     'Tayinlovlar varaqasi',   // MAR_SHEET_V1
                 'kitchen-sheet': 'Porsiyalar varaqasi',   // KITCHEN_SHEET_V1
                 discharge:    'Chiqarishlar',   // TWO_STEP_DISCHARGE_V1
+                crm:                 'CRM · Arizalar',   // SIDEBAR_NAV_KEYS_V1
+                queue:               'Navbat',
+                'telegram-chat':     'Bemorlar bilan chat',
+                'patient-documents': 'Hujjatlar',
+                'cashier-head':      'Bosh kassir',
+                inventory:           'Xaridlar',
+                'reports-hub':       'Hisobotlar',
             },
             logout: 'Chiqish',
             viewAsRole: 'Rol sifatida koʻrish',
@@ -332,6 +359,19 @@ export function trf(template, params) {
         out = out.split('{' + key + '}').join(String(value));
     }
     return out;
+}
+
+// I18N_NAV_COVERAGE_V1 (2026-09-05) — «есть ли перевод», а не «что покажется».
+//
+// t() для пропущенного русского ключа молча отдаёт английский, а для вовсе
+// неизвестного — сам ключ. Первое на экране выглядит как работающий интерфейс
+// (именно так девять заголовков разделов и прожили редизайн), второе — как
+// строка кода в интерфейсе. Тесту нужен прямой ответ про КОНКРЕТНЫЙ язык, без
+// цепочки запасных вариантов, поэтому спрашивать его надо отдельной функцией.
+export function hasKey(key, lang) {
+    const path = String(key || '').split('.');
+    const v = path.reduce((o, k) => (o == null ? o : o[k]), I18N[lang]);
+    return typeof v === 'string' && v.trim() !== '';
 }
 
 export function getLang() { return currentLang; }

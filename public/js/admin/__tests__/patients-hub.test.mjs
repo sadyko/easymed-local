@@ -97,6 +97,13 @@ globalThis.window = {
 };
 globalThis.location = globalThis.window.location;
 globalThis.MutationObserver=class{observe(){}disconnect(){}};
+// MOTION_REVEAL_ONCE_V1 — без IntersectionObserver помощник появления вообще
+// не прячет содержимое (motion.js честно уходит в «видно сразу»), и мигание,
+// которое мы ловим, невозможно ВОСПРОИЗВЕСТИ. Поэтому наблюдатель здесь есть —
+// поддельный, но настоящий по счёту: revealOn заводит РОВНО ОДИН на вызов, так
+// что число заведённых наблюдателей и есть число проигранных появлений.
+let observersMade = 0;
+globalThis.IntersectionObserver = class { constructor() { observersMade++; } observe(){} unobserve(){} disconnect(){} };
 globalThis.requestAnimationFrame=(fn)=>fn();
 globalThis.cancelAnimationFrame=()=>{};
 
@@ -160,9 +167,10 @@ globalThis.fetch = async (url, opts = {}) => {
 const tick = (ms = 40) => new Promise((r) => setTimeout(r, ms));
 
 const { renderPatientsHub, mountCalendarInto } = await import('../views/patients-hub.js');
+const { openPatientCreateModal } = await import('../views/patient-create-modal.js?v=onewin1');
 const { renderQueue, stopQueuePolling } = await import('../views/queue.js?v=q7');
 const perms = await import('../permissions.js');
-const { setFullAccess, setEffectiveFromRole, isModuleAllowed, isRouteAllowed } = perms;
+const { setFullAccess, setEffectiveFromRole, isModuleAllowed, isRouteAllowed, canCreatePatient } = perms;
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -190,9 +198,14 @@ function ctxFor(payload = null, navigated = []) {
 
 function reset() {
   tabSubCalls = []; rpcCalls = []; lastHistoryUrl = null; pushes = 0; replaces = 0;
+  observersMade = 0;
+  // Окна живут в document.body и в этом поддельном дереве сами не уходят
+  // (F.remove() — заглушка), поэтому счёт окон обнуляется здесь.
+  document.body.children.length = 0;
   stopQueuePolling();
   setFullAccess('Admin');
 }
+const openDialogs = (name) => walk(document.body).filter((n) => n.attrs && n.attrs['data-dialog'] === name);
 
 // ===========================================================================
 test('каждая вкладка показывает СВОЁ: список пациентов, доска очереди, календарь', async () => {
@@ -444,6 +457,135 @@ test('завести пациента можно с первой вкладки,
     'подсказка всё ещё целится в призывную кнопку меню, которой больше нет');
   assert.ok(onb.includes('[data-onb="create-patient"]'), 'подсказка не нашла новую цель');
   assert.ok(onb.includes('Создать пациента</b>'), 'в подсказке осталось старое название кнопки');
+});
+
+// ===========================================================================
+// PATIENT_CREATE_GATE_V1 (2026-09-05) — заведение пациента снова под правом.
+//
+// Что здесь восстанавливается. До перекроя все три «Создать пациента» звали
+// onNavigate('registration'), и утверждение assert.deepEqual(navigated,
+// ['registration']) в ЭТОМ файле было единственным, что стерегло право:
+// маршрут гейтила оболочка. PATIENT_ONE_WINDOW_V1 заменил страницу окном,
+// утверждение заменили на «открылось окно» — верное про новое поведение и
+// НИЧЕГО не говорящее про право. Ключ `registration` выдан только регистратуре
+// (миграция 055), сервер подстраховать не может (canWrite() не получает
+// подключения к базе) — и медсестра, врач или своя роль с ключом `patients`
+// заводили карты беспрепятственно.
+//
+// Проверяется поведение с ОБЕИХ сторон: роли без ключа отказано с каждого
+// входа, роли с ключом — открыто.
+// ===========================================================================
+const NURSE = { name: 'nurse', permissions: {
+  sections: ['patients', 'procedures', 'beds'],
+  levels: { patients: 'editor', procedures: 'editor', beds: 'editor' },
+} };
+
+test('без права «Регистрация пациента» окно не открывается ни с одного входа списка', async () => {
+  reset();
+  setEffectiveFromRole(NURSE);
+  // Роль подобрана верно: раздел «Пациенты» ей открыт (иначе мы проверяли бы
+  // маршрутный гейт, а не гейт действия), а ключа регистрации нет.
+  assert.strictEqual(isRouteAllowed('patients'), true, 'медсестре закрыли саму картотеку — проверяем не то');
+  assert.strictEqual(isModuleAllowed('registration'), false, 'у медсестры оказался ключ регистрации');
+  assert.strictEqual(canCreatePatient(), false);
+
+  const box = mk('div');
+  const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
+
+  // Вход 1 — кнопка «Создать пациента» в шапке списка (views/patients.js).
+  const createBtn = walk(box).find((n) => n.attrs['data-onb'] === 'create-patient');
+  assert.ok(createBtn, 'на вкладке «Список» нет кнопки создания пациента');
+  createBtn.click();
+  assert.strictEqual(openDialogs('patient-create').length, 0, 'кнопка шапки открыла окно в обход права');
+  assert.strictEqual(openDialogs('access-denied').length, 1, 'кнопка шапки промолчала — это читается как поломка');
+
+  // Вход 2 — ссылка «Создать нового пациента?» в пустом состоянии списка.
+  document.body.children.length = 0;
+  const emptyLink = walk(box).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'link-btn'));
+  assert.ok(emptyLink, 'в пустом состоянии списка нет ссылки создания');
+  emptyLink.click();
+  assert.strictEqual(openDialogs('patient-create').length, 0, 'пустое состояние открыло окно в обход права');
+  assert.strictEqual(openDialogs('access-denied').length, 1, 'пустое состояние промолчало');
+
+  // Вход 3 — «Калькулятор услуг» отдаёт окну подбора обратный вызов
+  // onCreatePatient, и это ТА ЖЕ функция openCreatePatient, что у двух входов
+  // выше: в views/patients.js ровно ОДИН вызов openPatientCreateModal, через
+  // который проходят все входы экрана. Четвёртому пути взяться неоткуда — и
+  // это утверждение про «неоткуда».
+  const src = read('public/js/admin/views/patients.js');
+  assert.strictEqual((src.match(/openPatientCreateModal\(/g) || []).length, 1,
+    'в списке пациентов появился второй вызов окна — он пройдёт мимо гейта');
+  assert.strictEqual((src.match(/=> openCreatePatient\(\)/g) || []).length, 3,
+    'входов создания пациента стало не три — тест перечисляет не все');
+  assert.ok(/onCreatePatient: \(\) => openCreatePatient\(\)/.test(src),
+    'калькулятор услуг больше не ходит через общий вход');
+
+  // И сама дверь, куда ведут все трое, отвечает отказом.
+  document.body.children.length = 0;
+  assert.strictEqual(openPatientCreateModal({}), null, 'дверь пустила роль без права');
+  assert.strictEqual(openDialogs('access-denied').length, 1);
+
+  hub.destroy();
+  setFullAccess('Admin');
+});
+
+test('регистратуре тот же ключ окно ОТКРЫВАЕТ — гейт не превратился в запрет для всех', async () => {
+  reset();
+  setEffectiveFromRole(REGISTRAR);
+  assert.strictEqual(canCreatePatient(), true, 'регистратуре закрыли её собственную работу');
+
+  const box = mk('div');
+  const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
+  const createBtn = walk(box).find((n) => n.attrs['data-onb'] === 'create-patient');
+  createBtn.click();
+  assert.strictEqual(openDialogs('patient-create').length, 1, 'регистратуру не пустили в её собственное окно');
+  assert.strictEqual(openDialogs('access-denied').length, 0);
+  hub.destroy();
+  setFullAccess('Admin');
+});
+
+// ===========================================================================
+// MOTION_REVEAL_ONCE_V1 — список не мигает на каждую букву в поиске
+// ===========================================================================
+test('поиск по списку не проигрывает появление заново на каждую букву', async () => {
+  reset();
+  const box = mk('div');
+  const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
+
+  // Монтирование — появление сыграно ОДИН раз.
+  assert.strictEqual(observersMade, 1, 'список не появился при монтировании: ' + observersMade);
+
+  const search = walk(box).find((n) => n.tagName === 'INPUT' && n.attrs.type === 'search');
+  assert.ok(search, 'в шапке списка нет поля поиска');
+
+  // Три буквы — три перерисовки таблицы. Ждём ПОЛНОСТЬЮ: поле поиска ждёт
+  // дважды — общий дебаунс ui.js (500 мс) и собственный 250 мс списка, — и
+  // ожидание короче суммы означало бы, что перерисовки не было вовсе и тест
+  // ничего не проверил.
+  const typed = [];
+  for (const q of ['Э', 'Эр', 'Эрг']) {
+    search.value = q;
+    search.dispatchEvent({ type: 'input', currentTarget: search, target: search });
+    await tick(900);
+    typed.push(observersMade);
+  }
+  assert.deepEqual(typed, [1, 1, 1],
+    'появление проигрывается на каждую букву: ' + JSON.stringify(typed));
+  // Таблица действительно перерисовывалась — иначе тест не проверил бы ничего.
+  assert.ok(textOf(panelFor(box, 'list')).includes('Эргашев Жахонгир'),
+    'список после поиска пуст — перерисовки не было, проверять нечего');
+  assert.strictEqual(observersMade, 1,
+    'на каждую букву список прячется в opacity: 0 и проявляется заново (появлений: ' + observersMade +
+    ') — это мигание на самом «печатаемом» экране продукта');
+
+  // И смена фильтра — тоже не повод проигрывать появление снова.
+  const dupChip = walk(box).find((n) => n.tagName === 'BUTTON' && String(n.attrs.title || '').startsWith('Возможные дубликаты'));
+  assert.ok(dupChip, 'в шапке списка нет фильтра дубликатов');
+  dupChip.click();
+  await tick(80);
+  assert.strictEqual(observersMade, 1, 'смена фильтра проиграла появление заново');
+
+  hub.destroy();
 });
 
 test('глушим таймеры, чтобы прогон завершался', () => {

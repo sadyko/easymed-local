@@ -11,7 +11,17 @@
 // defineEmpty, restart, setHelpMode.
 
 import { iconHtml } from './icons.js';
-import { trf } from './i18n.js';   // I18N_COVERAGE_V1 — «Шаг N из M» собирается вокруг чисел
+// I18N_ONBOARDING_V1 (2026-09-05) — этот слой ПЕРЕВОДИТСЯ, а не делает вид.
+// До сих пор отсюда звался только trf() ради «Шаг N из M», а весь остальной
+// текст — приветствие, подписи кнопок, заголовки и тела подсказок — уходил в
+// свой собственный el() (он ничего про словарь не знает) как есть. Ловушка не
+// в том, что было не переведено, а в том, что ВЫГЛЯДЕЛО переведённым: строки
+// лежали в i18n-strings.js (их туда загоняет i18n-coverage.test.mjs, который
+// читает и этот файл), словарь был полон в трёх языках — и не читался никем.
+// Теперь всё видимое проходит через tr(); реестры подсказок ниже остаются
+// русскими ИСХОДНИКАМИ — ровно так же, как русские исходники в любом другом
+// экране, — и переводятся в момент показа.
+import { tr, trf } from './i18n.js';   // I18N_COVERAGE_V1 — «Шаг N из M» собирается вокруг чисел
 
 // ---------------------------------------------------------------------------
 // Progress store (localStorage, per user)
@@ -202,13 +212,13 @@ function startTour(steps, onDone) {
         const last = i === steps.length - 1;
         const pop = el('div', { class: 'em-onb-pop' },
             el('div', { class: 'em-onb-step' }, trf('Шаг {i} из {n}', { i: i + 1, n: steps.length })),
-            el('h4', null, step.title || ''),
-            el('p', { html: step.body || '' }),
+            el('h4', null, tr(step.title || '')),
+            el('p', { html: tr(step.body || '') }),
             el('div', { class: 'em-onb-foot' },
-                el('button', { class: 'em-onb-btn ghost', onclick: skip }, 'Пропустить'),
+                el('button', { class: 'em-onb-btn ghost', onclick: skip }, tr('Пропустить')),
                 el('span', { class: 'em-onb-grow' }),
-                i > 0 ? el('button', { class: 'em-onb-btn', onclick: () => { i--; render(); } }, 'Назад') : null,
-                el('button', { class: 'em-onb-btn primary', onclick: () => { if (last) finish(); else { i++; render(); } } }, last ? 'Готово' : 'Далее'),
+                i > 0 ? el('button', { class: 'em-onb-btn', onclick: () => { i--; render(); } }, tr('Назад')) : null,
+                el('button', { class: 'em-onb-btn primary', onclick: () => { if (last) finish(); else { i++; render(); } } }, tr(last ? 'Готово' : 'Далее')),
             ),
         );
         placePopover(pop, rect);
@@ -232,12 +242,12 @@ function showWelcome(onStart) {
     clearOverlay();
     renderSpotlight(null, true);
     const pop = el('div', { class: 'em-onb-pop em-onb-center' },
-        el('h4', null, 'Добро пожаловать в EasyMed HIS'),
-        el('p', null, 'Давайте за 2 минуты пройдёмся по системе.'),
+        el('h4', null, tr('Добро пожаловать в EasyMed HIS')),
+        el('p', null, tr('Давайте за 2 минуты пройдёмся по системе.')),
         el('div', { class: 'em-onb-foot', style: { justifyContent: 'center', marginTop: '18px' } },
-            el('button', { class: 'em-onb-btn ghost', onclick: () => { setNever(); clearOverlay(); } }, 'Больше не показывать'),
-            el('button', { class: 'em-onb-btn', onclick: () => { markWelcomeDone(); clearOverlay(); } }, 'Пропустить'),
-            el('button', { class: 'em-onb-btn primary', onclick: () => { markWelcomeDone(); clearOverlay(); onStart(); } }, 'Начать тур'),
+            el('button', { class: 'em-onb-btn ghost', onclick: () => { setNever(); clearOverlay(); } }, tr('Больше не показывать')),
+            el('button', { class: 'em-onb-btn', onclick: () => { markWelcomeDone(); clearOverlay(); } }, tr('Пропустить')),
+            el('button', { class: 'em-onb-btn primary', onclick: () => { markWelcomeDone(); clearOverlay(); onStart(); } }, tr('Начать тур')),
         ),
     );
     placePopover(pop, null);
@@ -313,11 +323,11 @@ function maybeShowTip(view) {
     if (tip.target && !target) return;   // skip if not resolvable
     const rect = target ? target.getBoundingClientRect() : null;
     const pop = el('div', { class: 'em-onb-pop' },
-        el('h4', null, tip.title || 'Совет'),
-        el('p', { html: tip.body || '' }),
+        el('h4', null, tr(tip.title || 'Совет')),
+        el('p', { html: tr(tip.body || '') }),
         el('div', { class: 'em-onb-foot' },
             el('span', { class: 'em-onb-grow' }),
-            el('button', { class: 'em-onb-btn primary', onclick: () => { markTip(tip.key); pop.remove(); } }, 'Понятно'),
+            el('button', { class: 'em-onb-btn primary', onclick: () => { markTip(tip.key); pop.remove(); } }, tr('Понятно')),
         ),
     );
     placePopover(pop, rect);
@@ -335,9 +345,9 @@ function checkEmptyState(view) {
     if (!content.querySelector('.empty')) return;
     const cta = hint.cta ? resolveTarget(hint.cta) : null;
     const box = el('div', { class: 'em-onb-pop help-pop em-onb-empty', style: { position: 'static', maxWidth: 'none', margin: '10px auto', boxShadow: 'none', border: '1px dashed #d3d9de' } },
-        el('h4', null, hint.title),
-        el('p', null, hint.body),
-        hint.cta ? el('div', { class: 'em-onb-foot' }, el('button', { class: 'em-onb-btn primary', onclick: () => { const t = resolveTarget(hint.cta); if (t) t.click(); } }, hint.ctaLabel || 'Создать')) : null,
+        el('h4', null, tr(hint.title)),
+        el('p', null, tr(hint.body)),
+        hint.cta ? el('div', { class: 'em-onb-foot' }, el('button', { class: 'em-onb-btn primary', onclick: () => { const t = resolveTarget(hint.cta); if (t) t.click(); } }, tr(hint.ctaLabel || 'Создать'))) : null,
     );
     const emptyEl = content.querySelector('.empty');
     if (emptyEl && emptyEl.parentNode) emptyEl.parentNode.insertBefore(box, emptyEl.nextSibling);
@@ -363,12 +373,12 @@ function renderHelpMarkers(view) {
         const target = resolveTarget(hint.target);
         if (!target) continue;
         const r = target.getBoundingClientRect();
-        const m = el('div', { class: 'em-onb-marker', title: hint.title, style: { left: (r.right - 8) + 'px', top: (r.top - 8) + 'px' },
+        const m = el('div', { class: 'em-onb-marker', title: tr(hint.title), style: { left: (r.right - 8) + 'px', top: (r.top - 8) + 'px' },
             onclick: () => {
                 clearOverlay();
                 const pop = el('div', { class: 'em-onb-pop help-pop' },
-                    el('h4', null, hint.title), el('p', { html: hint.body }),
-                    el('div', { class: 'em-onb-foot' }, el('span', { class: 'em-onb-grow' }), el('button', { class: 'em-onb-btn primary', onclick: () => pop.remove() }, 'Закрыть')));
+                    el('h4', null, tr(hint.title)), el('p', { html: tr(hint.body) }),
+                    el('div', { class: 'em-onb-foot' }, el('span', { class: 'em-onb-grow' }), el('button', { class: 'em-onb-btn primary', onclick: () => pop.remove() }, tr('Закрыть'))));
                 placePopover(pop, r);
             } }, 'i');
         document.body.appendChild(m);

@@ -38,6 +38,11 @@ import { savePatient, loadPatientById } from '../data.js';
 import { supabase } from '../../supabase.js';
 import { uploadFile } from '../storage.js';
 import { phoneInput, isCodeOnly } from '../phone-input.js?v=ph1';
+// PATIENT_CREATE_GATE_V1 — заведение пациента снова под правом. Ключ тот же,
+// что проверял маршрут #registration до PATIENT_ONE_WINDOW_V1; спрашивается он
+// в openPatientCreateModal() — единственной двери этого окна.
+import { canCreatePatient } from '../permissions.js';
+import { openAccessDeniedDialog } from '../access-denied.js';
 
 // AURORA_REG_FORM_V1 — публичный бакет фотографий: photo_url хранит постоянный
 // URL, который карточка пациента отдаёт прямо в <img src>.
@@ -115,6 +120,14 @@ export function fitsViewport(innerH) {
  * @param {Function} [opts.onSaved]   вызывается с сохранённым пациентом
  */
 export function openPatientCreateModal(opts = {}) {
+    // PATIENT_CREATE_GATE_V1 — ЕДИНСТВЕННАЯ проверка права на заведение
+    // пациента, и стоит она здесь, потому что здесь сходятся ВСЕ входы: пустой
+    // список, калькулятор услуг, кнопка шапки списка (views/patients.js) и сам
+    // маршрут #registration (views/registration.js). Три копии проверки на
+    // трёх кнопках разошлись бы при первой же новой кнопке — эта не разойдётся.
+    // Отказ — видимый, тем же оформлением, каким оболочка отказывает маршруту:
+    // кнопка, которая молча ничего не делает, читается как поломка.
+    if (!canCreatePatient()) { openAccessDeniedDialog(); return null; }
     const dlg = buildPatientCreateDialog(opts);
     document.body.appendChild(dlg.overlay);
     document.addEventListener('keydown', dlg.onKey);
@@ -150,8 +163,15 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
     const onKey = (e) => { if (e.key === 'Escape') close(); };
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
+    // MODAL_COMPACT_OPTOUT_V1 — .modal-compact ОБЯЗАТЕЛЕН, а не украшение:
+    // admin.css растягивает всякую .modal-card, кроме помеченной этим классом,
+    // до calc(100vw - 24px) × calc(100vh - 24px) с !important — а авторский
+    // !important бьёт встроенный стиль, поэтому width: 1240px ниже без этого
+    // класса не значил ничего. На мониторе 1920 выверенная двухколоночная
+    // вёрстка расползалась на 1896 px. Тем же классом пользуются десять других
+    // окон (admission-modal, cashier-desk, crm…).
     const card = h('div', {
-        class: 'modal-card modal-grouped has-groups mg-dense',
+        class: 'modal-card modal-grouped has-groups mg-dense modal-compact',
         'data-dialog': 'patient-create',
         style: {
             width: METRICS.cardWidth + 'px',

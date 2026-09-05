@@ -20,7 +20,10 @@ import {
     verifyLogin, actorFromUser,
     rehydrateUserFromSession, completeFirstLoginReset, signOutAndReload,
 } from './admin/auth.js?v=admdoc3';
-import { t, tr, getLang, setLang, onLangChange } from './admin/i18n.js?v=pathway1';   // TS_TAB_I18N_V1 — tr() for tab labels
+import { t, tr, trf, getLang, setLang, onLangChange } from './admin/i18n.js?v=pathway1';   // TS_TAB_I18N_V1 — tr() for tab labels; trf() — I18N_COVERAGE_V1 (перевод СНАЧАЛА, подстановка ПОТОМ)
+// ACCESS_DENIED_ONE_PLACE_V1 — отказ рисуется одним помощником на всё приложение
+// (его же зовёт окно заведения пациента, у которого своего маршрута нет).
+import { accessDeniedPanel } from './admin/access-denied.js';
 import { initClinicContext, ensureClinicContext } from './admin/clinic-context.js?v=localclinic2';   // CLINIC_AFTER_LOGIN_V1
 import { renderVerificationBanner } from './admin/verify-banner.js?v=vb2';   // MODEL_A_VERIFY_V1
 import { renderSetupChecklist } from './admin/setup-checklist.js?v=nolicense1';     // ONBOARDING_CHECKLIST_V1
@@ -108,7 +111,20 @@ const NAV = [
     // QUEUE_BOARD_V1 — доска номеров по назначениям. Стоит сразу под кабинетом
     // врача: отвечает на вопрос «кто ко мне ещё стоит», а номера для неё
     // выдаёт issue_queue_numbers при заведении услуги.
-    { id: 'queue',    label: 'Очередь', icon: 'Clock' },
+    // QUEUE_ONE_ENTRY_V1 (2026-09-05) — «Очередь» была в меню И вкладкой внутри
+    // «Пациентов» (PATIENTS_HUB_V1), то есть один экран под двумя входами. Хуже
+    // того, открытые оба держали ДВА десятисекундных опроса базы: доска
+    // опрашивает себя поэкземплярно (views/queue.js), а панели живут в кэше.
+    // План (docs/plans/2026-09-05-ui-redesign-and-calendar.md, задача 4) сделал
+    // очередь ВКЛАДКОЙ раздела «Пациенты» — значит там ей и место.
+    //
+    // Но пункт удалён НЕ насовсем: собственный ключ `queue` существует ради
+    // роли, у которой есть доска и НЕТ картотеки (permissions.js), и такой роли
+    // меню обязано её показать. Поэтому пункт прячется ровно у тех, кому он
+    // дублирует вкладку, — `foldsInto` называет раздел, который его уже несёт.
+    // Маршрут #queue при этом цел у всех: закладка и глубокая ссылка
+    // открываются как открывались (см. switch в renderViewInner).
+    { id: 'queue',    label: 'Очередь', icon: 'Clock', foldsInto: 'patients' },
     { id: 'labs',     label: 'Laboratory', icon: 'Flask' },   // LABS_UI_V1
     { id: 'procedures', label: 'Процедуры', icon: 'Pulse' },   // PROCEDURES_V1 — очередь процедур (медсестра)
     // ADMISSION_ORDER_V1 — «Стационар» это РАБОТА (кого положить, кто лежит,
@@ -145,7 +161,11 @@ const NAV = [
     { id: 'cashier-shifts', label: 'Cashier', icon: 'Wallet', badgeKind: 'alert' },   // CASHIER_LOCAL_V1 — Касса (module key 'cashier')
     { id: 'cashier-head', label: 'Head cashier', icon: 'Coins' },   // CASHIER_LOCAL_V1 — Старший кассир (key 'cashier-head')
     { id: 'inventory', label: 'Procurement', icon: 'Pill' },   // INVENTORY_UI_V1 — Закупки
-    { section: 'Analytics' },
+    // NAV_SECTION_KEY_V1 — раздел зовут 'Insights', а не 'Analytics': заголовок
+    // переводится через t('sidebar.sections.' + section), и словарь (i18n.js)
+    // знает Insights. С именем 'Analytics' третий заголовок меню выводил
+    // английское слово во всех трёх языках. То же имя стоит первым в CRUMBS.
+    { section: 'Insights' },
     { id: 'dashboard', label: 'Dashboard', icon: 'Dashboard' },
     { id: 'reports-hub', label: 'Reports', icon: 'Chart' },   // REPORTS_HUB_V1
     { id: 'settings', label: 'Settings', icon: 'Settings', badgeKind: 'alert' },   // SETTINGS_HUB_V1 + UPDATE_BADGE_V1
@@ -327,6 +347,7 @@ function navigate(view, payload, opts = {}) {
         if (view === 'patient-card' && (existing.payload?.id ?? null) !== (payload?.id ?? null)) {
             existing.payload = payload ?? null;
             existing.title   = sectionTitleFor(view, payload);
+            existing.titleOverride = false;   // имя пересобрано нами — экран назовёт себя сам, если захочет
             existing.scrollY = 0;
             clear(existing.root);
             activatePane(existing);
@@ -334,8 +355,36 @@ function navigate(view, payload, opts = {}) {
             if (!opts.skipHistory) pushHistory(view, payload);
             return;
         }
+        // HASH_TRUTH_V1 (2026-09-05) — адрес называет ТО, ЧТО НА ЭКРАНЕ.
+        //
+        // Здесь стояло pushHistory(view, payload) — payload ВЫЗЫВАЮЩЕГО, а при
+        // клике по пункту меню он пустой. Панель при этом показывается КАК
+        // БЫЛА, со своей вкладкой: уходишь из «Пациентов» с открытыми
+        // «Записями», возвращаешься — на экране «Записи», а в адресе
+        // «#patients». Дальше хуже: F5 по такому адресу открывал «Список», а
+        // скопированная коллеге ссылка вела не на ту вкладку.
+        //
+        // Если же вызывающий НАЗВАЛ другую вкладку (устаревший маршрут
+        // '#lab-settings' → labs/panels, глубокая ссылка, кнопка «Назад» с
+        // подмаршрутом в истории), то панель обязана на неё переключиться —
+        // иначе врал бы уже экран. Панель кэшируется и сама по себе не
+        // перерисовывается, поэтому переключение — это пересборка на месте,
+        // тем же приёмом, каким карта пациента меняет пациента выше.
+        const wantSub = payload && typeof payload.sub === 'string' ? payload.sub : null;
+        const haveSub = existing.payload && typeof existing.payload.sub === 'string' ? existing.payload.sub : null;
+        if (wantSub && wantSub !== haveSub) {
+            existing.payload = { ...(existing.payload || {}), ...payload };
+            existing.title   = sectionTitleFor(view, existing.payload);
+            existing.titleOverride = false;
+            existing.scrollY = 0;
+            clear(existing.root);
+            activatePane(existing);
+            renderViewInto(existing);
+            if (!opts.skipHistory) pushHistory(view, existing.payload);
+            return;
+        }
         activatePane(existing);
-        if (!opts.skipHistory) pushHistory(view, payload);
+        if (!opts.skipHistory) pushHistory(view, existing.payload);
         return;
     }
 
@@ -448,15 +497,31 @@ function sectionTitleFor(view, payload) {
     }
     if (view.startsWith('report:')) {
         const key = view.slice('report:'.length);
-        return 'Report · ' + ((SECTIONS?.[key]?.label) || key);
+        // I18N_COVERAGE_V1 — 'Report · ' + label собиралось в рантайме, а tr()
+        // ищет строку ЦЕЛИКОМ: такой заголовок не мог перевестись ни при каком
+        // словаре. Ключ — вся фраза с дыркой, значение подставляется ПОСЛЕ
+        // перевода.
+        return trf('Report · {name}', { name: (SECTIONS?.[key]?.label) || key });
     }
-    return view;
+    // Маршрут без записи в CRUMBS. Сырой идентификатор ('mar-nurse') — это
+    // слово разработчика, а не название раздела, и в единственном <h1> экрана
+    // ему не место: если у маршрута есть пункт меню — берём его подпись,
+    // иначе называем продукт (так же, как это делает заглушка экрана).
+    const navItem = NAV.find((n) => n.id === view);
+    return navItem ? navItem.label : 'Easy-Med';
 }
 
 function renderSectionTitle() {
     if (!titleEl) return;
     const pane = state.panes.find(p => p.key === state.activeKey);
-    const raw  = pane ? pane.title : sectionTitleFor(state.view, state.payload);
+    // Заголовок ПЕРЕСЧИТЫВАЕТСЯ на каждый показ, а не берётся из панели: он
+    // собирается на языке, который был в момент navigate(), и после
+    // переключения языка кэшированная строка осталась бы на прежнем (панели
+    // живут в кэше, см. VIEW_CACHE_MAX). Исключение — экран, назвавший себя
+    // сам через easymedSetTabLabel: его имя не наше, пересчитать его нечем.
+    const raw = pane
+        ? (pane.titleOverride ? pane.title : sectionTitleFor(pane.view, pane.payload))
+        : sectionTitleFor(state.view, state.payload);
     titleEl.textContent = tr(raw);
 }
 
@@ -487,6 +552,7 @@ window.easymedSetTabLabel = function setTabLabel(paneKey, label) {
     const pane = state.panes.find(p => p.key === paneKey);
     if (!pane || !label) return;
     pane.title = label;
+    pane.titleOverride = true;   // имя пришло от экрана — renderSectionTitle его не пересчитывает
     if (state.activeKey === paneKey) renderSectionTitle();
 };
 
@@ -767,17 +833,11 @@ async function renderViewInner(viewRoot, viewName, ctx) {
 }
 
 // Shown when the active role tries to reach a section it isn't allowed.
+// ACCESS_DENIED_ONE_PLACE_V1 — оформление отказа живёт в admin/access-denied.js:
+// его же показывает окно заведения пациента, у которого своего маршрута нет
+// (PATIENT_CREATE_GATE_V1). Один отказ, один текст, одна картинка.
 function accessDenied() {
-    const role = currentRoleLabel();
-    return h('div', { class: 'error-state', style: { textAlign: 'center', padding: '48px 24px' } },
-        h('div', { style: { color: 'var(--crit-700)', display: 'flex', justifyContent: 'center', marginBottom: '10px' } },
-            Icon('Warning', { size: 28 })),
-        h('div', { style: { fontSize: '17px', fontWeight: 700, color: 'var(--ink-900)' } }, 'No access'),
-        h('div', { class: 'muted', style: { marginTop: '4px', fontSize: '13.5px' } },
-            role ? `The “${role}” role doesn’t have access to this section.` : 'You don’t have access to this section.'),
-        h('button', { class: 'btn btn-outline', style: { marginTop: '16px' }, onclick: () => navigate(firstAllowedView()) },
-            'Go to my home page'),
-    );
+    return accessDeniedPanel({ onHome: () => navigate(firstAllowedView()) });
 }
 
 const PLACEHOLDER_META = {
@@ -858,6 +918,9 @@ function renderSidebar() {
         }
         // Hide modules the active role can't access (super admin = all).
         if (!isModuleAllowed(item.id)) continue;
+        // QUEUE_ONE_ENTRY_V1 — пункт, который для этой роли уже есть вкладкой
+        // внутри другого раздела, вторым входом не рисуется.
+        if (item.foldsInto && isModuleAllowed(item.foldsInto)) continue;
         if (currentNav && !currentNavHasItems) {
             if (currentHeaderEl) sidebarEl.appendChild(currentHeaderEl);
             sidebarEl.appendChild(currentNav);

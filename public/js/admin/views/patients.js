@@ -67,6 +67,7 @@ const refs = {
     filterButtons: {},
     sortButtons:   {},
     lastRows:  [],
+    revealed:  false,   // MOTION_REVEAL_ONCE_V1 — появление уже сыграно на этом монтировании
 };
 
 export async function renderPatients(container, { onNavigate, embedded = false }) {
@@ -127,6 +128,10 @@ function goPage() {
 
 function mount() {
     clear(refs.container);
+
+    // MOTION_REVEAL_ONCE_V1 — появление играется ОДИН РАЗ на монтирование, и
+    // флаг сбрасывается ровно здесь, вместе с новой таблицей.
+    refs.revealed = false;
 
     refs.tbody = h('tbody');
     refs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } },
@@ -441,11 +446,21 @@ function paintRows(rows) {
     }
     refs.emptyEl.style.display = 'none';
     for (const p of rows) refs.tbody.appendChild(patientRow(p));
-    // Один наблюдатель на ВСЮ таблицу, а не по одному на строку; повторный
-    // вызов (буква в поиске, смена страницы) снимает предыдущий сам.
+    // MOTION_REVEAL_ONCE_V1 — появление ОДИН РАЗ на монтирование, а не на
+    // каждую перерисовку. paintRows() зовётся на КАЖДУЮ букву в поиске (тот же
+    // ввод с задержкой 250 мс строкой выше), на смену страницы, фильтра и
+    // сортировки; безусловный revealOn прятал бы весь список в opacity: 0 и
+    // проявлял заново на каждое нажатие клавиши — на самом «печатаемом» экране
+    // продукта. Ровно этот довод уже записан в доске очереди (views/queue.js:
+    // «карточки мигали бы у сотрудника весь рабочий день»).
+    //
+    // Один наблюдатель на ВСЮ таблицу, а не по одному на строку.
     // lift: false — строку таблицы поднимать нельзя, transform на <tr>
     // дрожит на линейках; строке хватает прозрачности.
-    revealOn(refs.tbody, '[data-reveal]', { lift: false });
+    if (!refs.revealed) {
+        refs.revealed = true;
+        revealOn(refs.tbody, '[data-reveal]', { lift: false });
+    }
     syncHeadCb();
     paintMergeBar();
 }

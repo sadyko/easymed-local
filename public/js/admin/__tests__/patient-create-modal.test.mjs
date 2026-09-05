@@ -135,7 +135,7 @@ const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 const modal = await import('../views/patient-create-modal.js?v=onewin1');
 const { renderRegistration } = await import('../views/registration.js?v=onewin1');
 const { renderPatients } = await import('../views/patients.js');
-const { setFullAccess } = await import('../permissions.js');
+const { setFullAccess, setEffectiveFromRole, canCreatePatient } = await import('../permissions.js');
 
 // ---------------------------------------------------------------------------
 const walk = (e, o = []) => { o.push(e); for (const c of e.children || []) walk(c, o); return o; };
@@ -183,7 +183,13 @@ test('первый экран влезает в 1366×768 без прокрут�
   assert.ok(/\.modal-head \{[^}]*padding: 16px 22px;/.test(ADMIN_CSS), '.modal-head потерял отступ 16px');
   assert.ok(/\.modal-foot \{[^}]*padding: 14px 22px;/.test(ADMIN_CSS), '.modal-foot потерял отступ 14px');
   assert.ok(/\.btn \{\s*height: 36px;/.test(ADMIN_CSS), '.btn больше не 36px — подвал считается неверно');
+  // Это правило ДЕЙСТВУЕТ только потому, что окно отказалось от растягивания:
+  // MODAL_FULLSCREEN_V1 иначе перебивает его `!important`-ом, и модель высоты
+  // считала бы то, чего на экране нет. Проверять высоту, не проверив отказ, —
+  // значит проверять недействующее правило (см. отдельный тест ниже).
   assert.ok(/max-height: calc\(100vh - 60px\)/.test(ADMIN_CSS), '.modal-card потерял max-height');
+  assert.ok(hasClass(modal.buildPatientCreateDialog({}).card, 'modal-compact'),
+    'окно не отказалось от растягивания — его max-height перебит MODAL_FULLSCREEN_V1');
   assert.equal(METRICS.headPadV, 16);
   assert.equal(METRICS.footPadV, 14);
   assert.equal(METRICS.footRowH, 36);
@@ -427,4 +433,107 @@ test('создание из шапки списка пациентов откр�
   fillMinimum(dlg);
   await dlg.save({ openVisit: false });
   assert.equal(refetched, 1, 'onSaved не сработал — новая карта не появилась бы в списке');
+});
+
+// ===========================================================================
+// MODAL_COMPACT_OPTOUT_V1 — окно не растягивается на весь монитор
+// ===========================================================================
+test('окно держит свои 1240 px: растягивающее правило его больше не выбирает', () => {
+  reset();
+  const dlg = modal.buildPatientCreateDialog({});
+
+  // 1. Правило, которое растягивало, — на месте и делает именно это.
+  const SEL = '.modal-card:not(.bedfs-card):not(.modal-compact)';
+  const at = ADMIN_CSS.indexOf(SEL + ' {');
+  assert.notEqual(at, -1, 'правило MODAL_FULLSCREEN_V1 переписали — тест смотрит не туда');
+  const rule = ADMIN_CSS.slice(at, ADMIN_CSS.indexOf('}', at));
+  assert.ok(/width: calc\(100vw - 24px\) !important/.test(rule), 'правило перестало задавать ширину');
+  assert.ok(/height: calc\(100vh - 24px\) !important/.test(rule), 'правило перестало задавать высоту');
+
+  // 2. И оно эту карточку НЕ выбирает: хотя бы один из :not(...) совпал.
+  //    Авторский !important бьёт встроенный стиль, поэтому width: 1240px без
+  //    этого отказа не значил ничего — на мониторе 1920 выверенная
+  //    двухколоночная вёрстка расползалась на 1896 px.
+  const excluded = [...SEL.matchAll(/:not\(\.([\w-]+)\)/g)].map((m) => m[1]);
+  const classes = String(dlg.card.className).split(/\s+/);
+  assert.ok(excluded.some((c) => classes.includes(c)),
+    'растягивающее правило по-прежнему выбирает окно заведения пациента: ' + dlg.card.className);
+  assert.ok(classes.includes('modal-compact'), 'отказ сделан не тем классом, каким пользуются остальные окна');
+
+  // 3. Значит действует собственный размер окна — тот, под который считалась
+  //    модель высоты выше.
+  assert.equal(dlg.card.style.width, modal.METRICS.cardWidth + 'px');
+  assert.equal(dlg.card.style.maxHeight, 'calc(100vh - ' + modal.METRICS.viewportGap + 'px)');
+  assert.ok(modal.METRICS.cardWidth < 1920 - 24,
+    'на мониторе 1920 окно снова во весь экран — тогда отказ от растягивания бессмыслен');
+
+  // 4. Класс-отказ не выдуман для этого окна: им пользуются те же окна, что и
+  //    раньше (стоило бы завести второй способ — правило разошлось бы).
+  for (const rel of ['../views/admission-modal.js', '../views/cashier-desk.js', '../views/crm.js']) {
+    const src = fs.readFileSync(path.join(HERE, rel), 'utf8');
+    assert.ok(src.includes('modal-compact'), rel + ' больше не пользуется общим отказом от растягивания');
+  }
+});
+
+// ===========================================================================
+// PATIENT_CREATE_GATE_V1 — заведение пациента снова под правом
+// ===========================================================================
+// Роль, ради которой эта проверка и существует: картотека выдана (иначе она
+// вообще не увидела бы раздел), «Регистрация пациента» — нет. Ровно так
+// миграция 055 настраивает медсестру, и ровно она после PATIENT_ONE_WINDOW_V1
+// заводила карты беспрепятственно: страницу заменили окном, а вместе со
+// страницей ушёл и единственный гейт — маршрутный.
+const NURSE = { name: 'nurse', permissions: {
+  sections: ['patients', 'procedures', 'beds'],
+  levels: { patients: 'editor', procedures: 'editor', beds: 'editor' },
+} };
+const REGISTRAR = { name: 'registrar', permissions: {
+  sections: ['patients', 'registration', 'crm', 'cashier'],
+  levels: { patients: 'editor', registration: 'editor', crm: 'editor', cashier: 'editor' },
+} };
+
+test('дверь окна заведения пациента спрашивает право — и отказывает ВИДИМО', () => {
+  reset();
+  setEffectiveFromRole(NURSE);
+  // Роль подобрана верно: раздел ей открыт, ключ регистрации — нет.
+  assert.equal(canCreatePatient(), false, 'у медсестры оказалось право заведения — проверяем не ту роль');
+
+  const refused = modal.openPatientCreateModal({});
+  assert.equal(refused, null, 'дверь пустила роль без права');
+  assert.equal(dialogs('patient-create').length, 0, 'окно заведения пациента всё-таки открылось');
+  // Отказ — ВИДИМЫЙ. Кнопка, которая молча ничего не делает, читается как
+  // сломанная программа: человек жмёт её снова и снова и звонит в поддержку.
+  assert.equal(dialogs('access-denied').length, 1, 'отказ оказался тихим — на экране не изменилось ничего');
+  // Словарь у отказа общий с оболочкой — на русском интерфейсе он и звучит
+  // по-русски (i18n-strings.js: «No access» → «Нет доступа»).
+  assert.ok(textOf(document.body).includes('Нет доступа'), 'в отказе нет самого отказа');
+
+  // И тот же ключ пускает регистратуру.
+  reset();
+  setEffectiveFromRole(REGISTRAR);
+  assert.equal(canCreatePatient(), true, 'регистратуре закрыли её собственную работу');
+  const dlg = modal.openPatientCreateModal({});
+  assert.ok(dlg, 'регистратуру не пустили');
+  assert.equal(dialogs('patient-create').length, 1);
+  assert.equal(dialogs('access-denied').length, 0);
+  dlg.close();
+  setFullAccess('Admin');
+});
+
+test('маршрут #registration ходит в ту же дверь — своей проверки у него нет и не нужно', async () => {
+  reset();
+  setEffectiveFromRole(NURSE);
+  const box = mk('div');
+  renderRegistration(box, { onNavigate: () => {} });
+  await tick();
+  assert.equal(dialogs('patient-create').length, 0, 'страница маршрута открыла окно в обход права');
+  assert.equal(dialogs('access-denied').length, 1, 'маршрут промолчал вместо отказа');
+
+  // Оболочка отказала бы этой роли и раньше — маршрут гейтится
+  // isRouteAllowed('registration'); важно, что ОТВЕТ ОДИН И ТОТ ЖЕ ключ, а не
+  // два разных правила, которые однажды разойдутся.
+  const perms = await import('../permissions.js');
+  assert.equal(perms.isRouteAllowed('registration'), false);
+  assert.equal(perms.isModuleAllowed('registration'), false);
+  setFullAccess('Admin');
 });

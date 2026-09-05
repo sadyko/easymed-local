@@ -2374,6 +2374,7 @@ export const STRINGS = {
   "Текущая версия:": {"en":"Current version:","ru":"Текущая версия:","uz":"Joriy versiya:"},
   "Доступно обновление": {"en":"Update available","ru":"Доступно обновление","uz":"Yangilanish mavjud"},
   "Только администратор клиники может подтвердить установку.": {"en":"Only the clinic administrator can confirm installation.","ru":"Только администратор клиники может подтвердить установку.","uz":"Faqat klinika administratori o'rnatishni tasdiqlashi mumkin."},
+  "В этот день врач не принимает — выберите другой.": {"en":"The doctor does not see patients that day — pick another one.","ru":"В этот день врач не принимает — выберите другой.","uz":"Shifokor bu kuni qabul qilmaydi — boshqa kunni tanlang."},
   "В это время клиника обычно работает — сотрудники будут отключены на 1–2 минуты.": {"en":"The clinic is usually open at this time — staff will be disconnected for 1-2 minutes.","ru":"В это время клиника обычно работает — сотрудники будут отключены на 1–2 минуты.","uz":"Bu vaqtda klinika odatda ishlaydi — xodimlar 1-2 daqiqaga uzib qo'yiladi."},
   // UPDATE_CONFIRM_V1 — вопрос перед «Обновить сейчас» (views/updates.js).
   // Строка про рабочее время не дублируется: она уже есть выше и используется
@@ -6459,4 +6460,37 @@ export const STRINGS = {
   "Запись создана, но привязать её к зданию {b} не удалось — откройте карточку и повторите.": {"en":"The booking was created but could not be tied to building {b} — open the card and try again.","ru":"Запись создана, но привязать её к зданию {b} не удалось — откройте карточку и повторите.","uz":"Yozuv yaratildi, lekin uni {b} binosiga bog'lab bo'lmadi — kartani ochib qaytadan urinib ko'ring."},
   "Не подтверждено: связи со зданием {b} нет. Слот держим здесь, но там о записи ещё не знают — не обещайте пациенту это время.": {"en":"Not confirmed: there is no link to building {b}. The slot is held here, but they do not know about the booking yet — do not promise the patient this time.","ru":"Не подтверждено: связи со зданием {b} нет. Слот держим здесь, но там о записи ещё не знают — не обещайте пациенту это время.","uz":"Tasdiqlanmadi: {b} binosi bilan aloqa yo'q. Vaqtni shu yerda ushlab turibmiz, lekin u yerda yozuvdan hali xabari yo'q — bemorga bu vaqtni va'da qilmang."},
   "Запись отправлена в здание {b}. Пока оно не подтвердит, карточка помечена «подтверждается».": {"en":"The booking has been sent to building {b}. Until it confirms, the card is marked as being confirmed.","ru":"Запись отправлена в здание {b}. Пока оно не подтвердит, карточка помечена «подтверждается».","uz":"Yozuv {b} binosiga yuborildi. U tasdiqlamaguncha karta «tasdiqlanmoqda» deb belgilanadi."},
+  // CROSS_BRANCH_CALENDAR_V1 — возраст ожидания, чужая запись без врача и
+  // предупреждение ПЕРЕД записью в соседний корпус — added 2026-09-05
+  "{h} ч": {"en":"{h} h","ru":"{h} ч","uz":"{h} soat"},
+  "{h} ч {n} мин": {"en":"{h} h {n} min","ru":"{h} ч {n} мин","uz":"{h} soat {n} daqiqa"},
+  "подтверждается · {age}": {"en":"being confirmed · {age}","ru":"подтверждается · {age}","uz":"tasdiqlanmoqda · {age}"},
+  "не подтверждено {age}": {"en":"not confirmed for {age}","ru":"не подтверждено {age}","uz":"{age} davomida tasdiqlanmadi"},
+  "врач не определён — время не занято": {"en":"doctor unknown — the slot is not held","ru":"врач не определён — время не занято","uz":"shifokor aniqlanmagan — vaqt band emas"},
+  "Запись в здание {b}": {"en":"Booking into building {b}","ru":"Запись в здание {b}","uz":"{b} binosiga yozuv"},
+  "Всё равно записать": {"en":"Book anyway","ru":"Всё равно записать","uz":"Baribir yozish"},
+  "Здание {b}: данные на {t}. Внутри этого часа слот могли занять и там.": {"en":"Building {b}: data as of {t}. Within that hour the slot may have been taken there too.","ru":"Здание {b}: данные на {t}. Внутри этого часа слот могли занять и там.","uz":"{b} binosi: ma'lumot {t} holatiga. Shu soat ichida vaqtni u yerda ham band qilishgan bo'lishi mumkin."},
+  "В здании {b} на {from}–{to} уже ждут пациента, а врач у этой записи не определён: её время у нас не занято ни у кого.": {"en":"Building {b} already expects a patient at {from}–{to}, and that booking has no doctor: its slot is held against nobody here.","ru":"В здании {b} на {from}–{to} уже ждут пациента, а врач у этой записи не определён: её время у нас не занято ни у кого.","uz":"{b} binosida {from}–{to} vaqtida bemor kutilmoqda, lekin u yozuvning shifokori aniqlanmagan: uning vaqti bizda hech kimda band emas."},
+  "Данные здания {b} — на {t}, это дольше обычного обмена. Что там сейчас занято, мы не знаем.": {"en":"Building {b} data is as of {t}, longer ago than a normal exchange. We do not know what is taken there now.","ru":"Данные здания {b} — на {t}, это дольше обычного обмена. Что там сейчас занято, мы не знаем.","uz":"{b} binosi ma'lumoti {t} holatiga, bu odatdagi almashinuvdan uzoqroq. U yerda hozir nima band ekanini bilmaymiz."},
+  "Данных из здания {b} ещё не было ни разу. Что там занято, мы не знаем.": {"en":"No data has ever arrived from building {b}. We do not know what is taken there.","ru":"Данных из здания {b} ещё не было ни разу. Что там занято, мы не знаем.","uz":"{b} binosidan hali bironta ham ma'lumot kelmagan. U yerda nima band ekanini bilmaymiz."},
+  "Записать можно — время там, скорее всего, свободно. Но обещать его пациенту как подтверждённое нельзя: подтверждение придёт из того здания.": {"en":"You may book — the time there is most likely free. But do not promise it to the patient as confirmed: the confirmation comes from that building.","ru":"Записать можно — время там, скорее всего, свободно. Но обещать его пациенту как подтверждённое нельзя: подтверждение придёт из того здания.","uz":"Yozish mumkin — u yerdagi vaqt, ehtimol, bo'sh. Lekin uni bemorga tasdiqlangan deb va'da qilib bo'lmaydi: tasdiq o'sha binodan keladi."},
+  "{n} записей в чужие здания не подтверждены дольше {age} — там о них, возможно, не знают. Проверьте связь в «Синхронизации» или позвоните туда.": {"en":"{n} bookings into other buildings have been unconfirmed for over {age} — they may not know about them there. Check the link under Synchronisation or call them.","ru":"{n} записей в чужие здания не подтверждены дольше {age} — там о них, возможно, не знают. Проверьте связь в «Синхронизации» или позвоните туда.","uz":"Boshqa binolarga qilingan {n} ta yozuv {age} dan ortiq tasdiqlanmadi — u yerda ular haqida bilmasligi mumkin. «Sinxronizatsiya»da aloqani tekshiring yoki qo'ng'iroq qiling."},
+  "{n} приехавших записей без врача: пациента ждут, но время у нас не занято ни у кого. Уточните врача в том здании, прежде чем записывать туда.": {"en":"{n} arrived bookings have no doctor: a patient is expected, but the slot is held against nobody here. Check the doctor with that building before booking into it.","ru":"{n} приехавших записей без врача: пациента ждут, но время у нас не занято ни у кого. Уточните врача в том здании, прежде чем записывать туда.","uz":"{n} ta kelgan yozuvda shifokor yo'q: bemor kutilmoqda, lekin vaqt bizda hech kimda band emas. U binoga yozishdan oldin shifokorni aniqlang."},
+  // NO_TABS_APPBAR_V1 / I18N_COVERAGE_V1 (2026-09-05) — заголовки разделов.
+  // Перекрой оболочки поднял подпись вкладки в ЕДИНСТВЕННЫЙ <h1> экрана
+  // (admin.js: tr(sectionTitleFor(...))). tr() отдаёт незнакомую строку КАК
+  // ЕСТЬ, поэтому пропуск виден не пустотой, а чужим языком: девять экранов
+  // писали себе английское имя в русском интерфейсе. Ключи — листья CRUMBS.
+  "Doctor's room": {"en":"Doctor's room","ru":"Кабинет врача","uz":"Shifokor kabineti"},
+  "Visits": {"en":"Visits","ru":"Визиты","uz":"Tashriflar"},
+  "Patient workspace": {"en":"Patient workspace","ru":"Рабочая область пациента","uz":"Bemor ish maydoni"},
+  "New patient registration": {"en":"New patient registration","ru":"Новая регистрация пациента","uz":"Yangi bemorni ro'yxatga olish"},
+  "Treatment tasks": {"en":"Treatment tasks","ru":"Задачи медсестры","uz":"Hamshira vazifalari"},
+  "Treatment sheet": {"en":"Treatment sheet","ru":"Лист назначений","uz":"Tayinlovlar varaqasi"},
+  "Kitchen sheet": {"en":"Kitchen sheet","ru":"Порционник","uz":"Porsiyalar varaqasi"},
+  "Discharges": {"en":"Discharges","ru":"Выписки","uz":"Chiqarishlar"},
+  "Зарплата врачей": {"en":"Doctor payroll","ru":"Зарплата врачей","uz":"Shifokorlar maoshi"},
+  // Заголовок отчёта собирался как 'Report · ' + label — tr() ищет строку
+  // целиком, поэтому перевести его было НЕЧЕМ. Ключ — вся фраза с дыркой.
+  "Report · {name}": {"en":"Report · {name}","ru":"Отчёт · {name}","uz":"Hisobot · {name}"},
 };

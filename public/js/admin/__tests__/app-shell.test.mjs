@@ -269,6 +269,7 @@ const panes = () => descendants(VIEW_ROOT).filter((n) => String(n.className || '
 const navItems = () => descendants(SIDEBAR).filter((n) => String(n.className || '').split(/\s+/).includes('nav-item'));
 const navItemFor = (label) => navItems().find((n) => labelOf(n).includes(label));
 async function go(view, payload) { shell().navigate(view, payload ?? null); await settle(60); }
+async function perms_setFull() { (await import('../permissions.js')).setFullAccess('Admin'); }
 
 test('оболочка поднялась и навигация живая', () => {
     assert.ok(shell(), 'window.easymed не появился — boot() не дошёл до startApp()');
@@ -650,6 +651,149 @@ test('фильтр периода пережил баннер: рисуется 
     const onNow = after.children.filter((b) => b.className === 'on').map((b) => b.attrs['data-range']);
     assert.deepEqual(onNow, ['week'], 'нажатие на «Неделя» не переключило период');
     box.remove();
+});
+
+// ===========================================================================
+// 7. КАЖДЫЙ РАЗДЕЛ НАЗЫВАЕТ СЕБЯ НА ЯЗЫКЕ ПОЛЬЗОВАТЕЛЯ
+//
+// Перекрой поднял подпись вкладки в ЕДИНСТВЕННЫЙ <h1> экрана. Пропуск в
+// словаре при этом НЕ выглядит поломкой: tr() отдаёт незнакомую строку как
+// есть, поэтому русский интерфейс просто пишет заголовок по-английски, а
+// t() для пропущенного русского ключа подставляет английский — и оба промаха
+// читаются как работающая программа. Поэтому проверка идёт ЦИКЛОМ ПО САМИМ
+// ТАБЛИЦАМ: добавили маршрут или пункт меню без перевода — тест падает, а не
+// ждёт, пока кто-нибудь заметит английское слово в русском меню.
+// ===========================================================================
+const SHELL_SRC = read('public/js/admin.js');
+const NAV_SRC = SHELL_SRC.slice(SHELL_SRC.indexOf('const NAV = ['), SHELL_SRC.indexOf('// Live nav badges'));
+const NAV_IDS = [...NAV_SRC.matchAll(/\{\s*id:\s*'([^']+)',\s*label:\s*'([^']+)'/g)].map((m) => m[1]);
+const NAV_SECTIONS = [...NAV_SRC.matchAll(/\{\s*section:\s*'([^']+)'/g)].map((m) => m[1]);
+const CRUMBS_SRC = SHELL_SRC.slice(SHELL_SRC.indexOf('const CRUMBS = {'),
+    SHELL_SRC.indexOf('// SETTINGS_SPLIT_V1 — the routes that stay open'));
+const CRUMB_ROWS = [...CRUMBS_SRC.matchAll(/^\s*'?([\w:-]+)'?:\s*\[([^\]]+)\]/gm)]
+    .map((m) => [m[1], m[2].split(',').map((x) => x.trim().replace(/^['"]|['"]$/g, ''))]);
+const UI_LANGS = ['ru', 'uz', 'en'];
+
+test('таблицы разделов вообще разобраны (сломанный разбор не должен пройти за чистый)', () => {
+    assert.ok(NAV_IDS.length >= 15, 'из NAV разобрано пунктов: ' + NAV_IDS.length);
+    assert.ok(NAV_SECTIONS.length >= 3, 'из NAV разобрано секций: ' + NAV_SECTIONS.length);
+    assert.ok(CRUMB_ROWS.length >= 40, 'из CRUMBS разобрано маршрутов: ' + CRUMB_ROWS.length);
+});
+
+test('каждый лист CRUMBS переводится на все три языка — иначе <h1> будет на чужом', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    const bad = [];
+    for (const [view, chain] of CRUMB_ROWS) {
+        const leaf = chain[chain.length - 1];
+        const e = STRINGS[leaf] || STRINGS[String(leaf).trim()];
+        for (const lang of UI_LANGS) {
+            if (!e || typeof e[lang] !== 'string' || e[lang].trim() === '') {
+                bad.push('  ' + view + ' → ' + JSON.stringify(leaf) + ' — нет ' + lang);
+            }
+        }
+    }
+    assert.deepEqual(bad, [], 'заголовок раздела покажется на исходном языке:\n' + bad.join('\n'));
+});
+
+test('каждый пункт и каждая секция меню переводятся на все три языка', async () => {
+    // hasKey(), а не t(): t() для пропущенного русского ключа молча отдаёт
+    // английский, и пропуск выглядит как работающее меню.
+    const { hasKey } = await import('../i18n.js');
+    const bad = [];
+    for (const lang of UI_LANGS) {
+        for (const id of NAV_IDS) if (!hasKey('sidebar.nav.' + id, lang)) bad.push('  sidebar.nav.' + id + ' [' + lang + ']');
+        for (const sec of NAV_SECTIONS) if (!hasKey('sidebar.sections.' + sec, lang)) bad.push('  sidebar.sections.' + sec + ' [' + lang + ']');
+    }
+    assert.deepEqual(bad, [], 'меню покажет эти строки на исходном языке:\n' + bad.join('\n'));
+});
+
+test('заголовок отчёта собирается переводом, а не склейкой', async () => {
+    const { STRINGS } = await import('../i18n-strings.js');
+    // 'Report · ' + label невозможно было перевести НИКАКИМ словарём: tr()
+    // ищет строку целиком. Ключ — вся фраза с дыркой, подстановка — после.
+    // Комментарии снимаем: запись «здесь склеивали, вот чем это было плохо»
+    // обязана остаться в коде. Смотрим на то, что исполняется.
+    const exec = SHELL_SRC.split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join(' ');
+    assert.ok(!/'Report · ' \+/.test(exec), 'заголовок отчёта снова склеивается в рантайме');
+    assert.ok(/trf\('Report · \{name\}'/.test(SHELL_SRC), 'заголовок отчёта не собирается через trf');
+    const e = STRINGS['Report · {name}'];
+    assert.ok(e, 'ключа «Report · {name}» нет в словаре');
+    for (const lang of UI_LANGS) {
+        assert.ok(typeof e[lang] === 'string' && e[lang].includes('{name}'),
+            'в переводе [' + lang + '] потеряна дырка {name} — значение проглотится');
+    }
+});
+
+test('в заголовке экрана никогда не стоит сырой идентификатор маршрута', async () => {
+    await go('visits');
+    assert.equal(TITLE_EL.textContent, 'Визиты', 'журнал визитов остался с английским именем: ' + TITLE_EL.textContent);
+    await go('mar-nurse');
+    assert.equal(TITLE_EL.textContent, 'Задачи медсестры');
+    await go('discharge');
+    assert.equal(TITLE_EL.textContent, 'Выписки');
+    // Маршрут, которого нет в CRUMBS: раньше сюда попадал сам идентификатор —
+    // слово разработчика в единственном заголовке экрана.
+    shell().navigate('no-such-route');
+    await settle(60);
+    assert.notEqual(TITLE_EL.textContent, 'no-such-route', 'в <h1> написан идентификатор маршрута');
+    assert.ok(TITLE_EL.textContent.trim().length > 0, 'заголовок пуст');
+    await go('patients');
+});
+
+// ===========================================================================
+// 8. АДРЕС НАЗЫВАЕТ ТО, ЧТО НА ЭКРАНЕ
+// ===========================================================================
+test('вернулись в раздел — адрес показывает ОТКРЫТУЮ вкладку, а не вкладку по умолчанию', async () => {
+    await go('patients');
+    // Так о своей вкладке сообщает хост «Пациентов» (views/patients-hub.js).
+    globalThis.window.easymedSetTabSub('patients', 'calendar');
+    await go('labs');
+    await go('patients');   // клик по пункту меню: у вызывающего payload пуст
+    assert.equal(globalThis.history.url, '#patients/calendar',
+        'на экране «Записи», а в адресе «#patients» — F5 откроет «Список», а ссылка уведёт коллегу не туда');
+    assert.deepEqual(globalThis.history.state.payload, { sub: 'calendar' },
+        'в историю записан чужой payload — кнопка «Назад» вернёт не ту вкладку');
+
+    // И наоборот: если вкладку НАЗВАЛИ (глубокая ссылка, устаревший маршрут,
+    // кнопка «Назад»), панель обязана на неё переключиться — иначе врал бы
+    // уже экран, а не адрес.
+    shell().navigate('patients', { sub: 'queue' });
+    await settle(80);
+    assert.equal(globalThis.history.url, '#patients/queue');
+    assert.equal(shell().state.payload && shell().state.payload.sub, 'queue',
+        'панель осталась на прежней вкладке, хотя открыли другую');
+
+    globalThis.window.easymedSetTabSub('patients', null);
+    await go('patients');
+    assert.equal(globalThis.history.url, '#patients', 'сброс вкладки не очистил адрес');
+});
+
+// ===========================================================================
+// 9. «ОЧЕРЕДЬ» ОДНА
+// ===========================================================================
+test('«Очередь» — вкладка «Пациентов», а не второй пункт меню; адрес #queue цел', async () => {
+    await perms_setFull();
+    await go('patients');
+    assert.equal(navItemFor('Очередь'), undefined,
+        'в меню остался второй вход в тот же экран — открытые оба держат два опроса базы каждые 10 секунд');
+
+    // Маршрут не тронут: закладка и глубокая ссылка открывают доску.
+    assert.ok(/case 'queue':\s*return void await renderQueue\(/.test(SHELL_SRC), 'маршрут #queue пропал из оболочки');
+    await go('queue');
+    assert.equal(shell().state.view, 'queue');
+    assert.equal(globalThis.history.url, '#queue');
+
+    // А роль, у которой есть доска и НЕТ картотеки, свой единственный вход в
+    // меню сохраняет — ради неё отдельный ключ `queue` и существует.
+    const perms = await import('../permissions.js');
+    perms.setEffectiveFromRole({ name: 'Табло очереди', permissions: { sections: ['queue'], levels: { queue: 'viewer' } } });
+    await go('queue');
+    assert.ok(navItemFor('Очередь'), 'роль с одной только доской осталась без входа в неё');
+    assert.equal(navItemFor('Пациенты'), undefined, 'роль подобрана неверно — картотека ей открыта');
+
+    perms.setFullAccess('Admin');
+    await go('patients');
+    assert.equal(navItemFor('Очередь'), undefined, 'дубликат вернулся');
 });
 
 test('глушим таймеры экранов, чтобы прогон завершался', () => {

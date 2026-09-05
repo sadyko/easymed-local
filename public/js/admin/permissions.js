@@ -343,6 +343,28 @@ export function canProcurementRequisitions() {
     return _effective.has('procurement') || _effective.has('procurement:requisitions');
 }
 
+// PATIENT_CREATE_GATE_V1 (2026-09-05) — ОДИН ключ на заведение пациента, где бы
+// его ни начали.
+//
+// До перекроя оболочки все три «Создать пациента» звали onNavigate('registration'),
+// и право спрашивала оболочка: admin.js отказывал маршруту через
+// isRouteAllowed('registration') и показывал панель отказа. PATIENT_ONE_WINDOW_V1
+// убрал страницу — окно стало открываться на месте, — и вместе со страницей
+// пропала ЕДИНСТВЕННАЯ проверка: `registration` выдан только регистратуре
+// (миграция 055), но медсестра, врач или своя роль с ключом `patients` заводили
+// карту беспрепятственно. Сервер подстраховать не может: canWrite() не получает
+// подключения к базе и в role_permissions не заглядывает.
+//
+// Поэтому предикат живёт ЗДЕСЬ, рядом с маршрутным гейтом, а спрашивают его в
+// одной точке — openPatientCreateModal() (views/patient-create-modal.js), через
+// которую проходят все входы: пустой список, калькулятор услуг, кнопка шапки и
+// сам маршрут #registration. Ключ ТОТ ЖЕ, что проверял маршрут, поэтому путь
+// «room-calendar.js → onNavigate('registration') → оболочка → окно» отвечает
+// одинаково в обеих точках, а не отказывает дважды разными словами.
+export function canCreatePatient() {
+    return isModuleAllowed('registration');
+}
+
 // PATIENT_TAB_PERMS_V1 — per-patient-card-tab gating. Default is VISIBLE: a role
 // only restricts tabs it explicitly lists (so existing roles see everything).
 export const PATIENT_TABS = [
