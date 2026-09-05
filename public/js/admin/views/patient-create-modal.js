@@ -43,10 +43,23 @@ import { phoneInput, isCodeOnly } from '../phone-input.js?v=ph1';
 // в openPatientCreateModal() — единственной двери этого окна.
 import { canCreatePatient } from '../permissions.js';
 import { openAccessDeniedDialog } from '../access-denied.js';
+// PATIENT_PHOTO_V1 — правила фотографии ОДНИ на браузер и сервер
+// (public/js/shared/), как у вложений карты. Здесь они стоят, чтобы отказ
+// пришёл СРАЗУ и назвал причину, а не после отправки восьми мегабайт по
+// клинической сети; сервер проверяет то же самое ещё раз.
+import { photoRefusal, ALLOWED_PHOTO_EXT } from '../../shared/patient-file-limits.js?v=pph1';
+import { downscalePhoto } from '../../shared/photo-downscale.js?v=pph1';
 
-// AURORA_REG_FORM_V1 — публичный бакет фотографий: photo_url хранит постоянный
-// URL, который карточка пациента отдаёт прямо в <img src>.
+// AURORA_REG_FORM_V1 — корзина фотографий: photo_url хранит постоянный URL,
+// который карточка пациента отдаёт прямо в <img src>.
+//
+// PATIENT_PHOTO_V1 (2026-09-05) — эта корзина НЕ БЫЛА ОБЪЯВЛЕНА на сервере
+// (routes/storage.js BUCKETS), поэтому каждая загрузка отсюда — и съёмка с
+// веб-камеры, и выбор файла — отвечала 400 «Invalid storage path». Форма пути
+// («patients/<ключ>», ровно два сегмента) теперь ЧАСТЬ ДОГОВОРА: сервер
+// проверяет по ней право, и путь другой формы в эту корзину не примут.
 const PHOTO_BUCKET = 'patient-photos';
+const PHOTO_PREFIX = 'patients/';
 
 // ===========================================================================
 // Модель высоты. Числа — из admin.css (блок .mg-dense); тест сверяет их с CSS,
@@ -414,6 +427,8 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
         runSearch: search.run,
         collect, save,
         saveOnlyBtn, saveAndServiceBtn,
+        photo,   // PATIENT_PHOTO_V1 — { acceptPhoto, setPhoto, fileInp } для теста
+
     };
 }
 
@@ -690,22 +705,40 @@ function photoBlock(state) {
         if (!url) { img.style.display = 'none'; ph.style.display = ''; return; }
         img.src = url; img.style.display = ''; ph.style.display = 'none';
     };
+    // PATIENT_PHOTO_V1 — ОДНА ДВЕРЬ ДЛЯ ОБОИХ ИСТОЧНИКОВ. Файл с диска и кадр
+    // с веб-камеры раньше расходились по двум обработчикам, и правило,
+    // добавленное в один, обошло бы второй. Теперь и то и другое приходит
+    // сюда: уменьшить → проверить → показать.
+    //
+    // Порядок «сначала уменьшить, потом проверять» намеренный: 9-мегабайтный
+    // кадр после уменьшения весит четверть мегабайта, и отказывать по размеру
+    // ИСХОДНИКУ значило бы отказывать в том, что мы прекрасно умеем принять.
+    // Формат при этом проверяется по тому, что реально уйдёт на сервер.
+    async function acceptPhoto(fileOrBlob) {
+        if (!fileOrBlob) return null;
+        const named = asPhotoFile(fileOrBlob);
+        const small = await downscalePhoto(named);
+        const bad = photoRefusal({ name: small.name || named.name, size: small.size });
+        if (bad) { toast(trf(bad.template, bad.params), 'fail'); return null; }
+        state.photoFile = small; state.photoUrl = '';
+        setPhoto(URL.createObjectURL(small));
+        return small;
+    }
     const fileInp = h('input', {
-        type: 'file', accept: 'image/*', style: { display: 'none' },
-        onchange: (e) => {
+        // accept — ТОТ ЖЕ список, что отбивает отказ ниже: диалог выбора файла
+        // не должен предлагать то, что мы всё равно не примем.
+        type: 'file', accept: ALLOWED_PHOTO_EXT.join(','), style: { display: 'none' },
+        onchange: async (e) => {
             const f = e.target.files && e.target.files[0];
             if (!f) return;
-            state.photoFile = f; state.photoUrl = '';
-            setPhoto(URL.createObjectURL(f));
-            toast(trf('Фото загружено: {name}', { name: f.name || tr('файл') }));
+            const ok = await acceptPhoto(f);
+            if (ok) toast(trf('Фото загружено: {name}', { name: f.name || tr('файл') }));
         },
     });
     const acts = h('div', { class: 'cam-acts' },
         h('button', { class: 'cam-act', type: 'button', title: 'Сфотографировать с веб-камеры', 'aria-label': 'Сфотографировать',
-            onclick: () => openWebcamModal((blob) => {
-                state.photoFile = blob; state.photoUrl = '';
-                setPhoto(URL.createObjectURL(blob));
-                toast('Фото снято с камеры');
+            onclick: () => openWebcamModal(async (blob) => {
+                if (await acceptPhoto(blob)) toast('Фото снято с камеры');
             }) }, Icon('Camera', { size: 14 })),
         h('button', { class: 'cam-act', type: 'button', title: 'Загрузить файл с компьютера', 'aria-label': 'Загрузить с компьютера',
             onclick: () => fileInp.click() }, Icon('Download', { size: 14 })),
@@ -719,26 +752,38 @@ function photoBlock(state) {
                 }
             } }, Icon('Globe', { size: 14 })),
     );
-    return { el: h('div', { class: 'cam-wrap mg-cam-wrap' }, box, fileInp, acts), setPhoto };
+    return { el: h('div', { class: 'cam-wrap mg-cam-wrap' }, box, fileInp, acts), setPhoto, acceptPhoto, fileInp };
+}
+
+// Кадр с веб-камеры приходит безымянным Blob'ом, а имя решает и формат
+// (расширение → Content-Type на сервере), и отказ. Даём его один раз здесь.
+export function asPhotoFile(fileOrBlob) {
+    if (fileOrBlob instanceof File) return fileOrBlob;
+    const type = (fileOrBlob && fileOrBlob.type) || 'image/jpeg';
+    try { return new File([fileOrBlob], 'photo.jpg', { type }); }
+    catch (e) { try { fileOrBlob.name = 'photo.jpg'; } catch (e2) {} return fileOrBlob; }
 }
 
 async function uploadPendingPhoto(state) {
     if (state.photoUrl) return state.photoUrl;
     if (!state.photoFile) return '';
-    const file = state.photoFile instanceof File
-        ? state.photoFile
-        : new File([state.photoFile], 'photo.jpg', { type: state.photoFile.type || 'image/jpeg' });
+    const file = asPhotoFile(state.photoFile);
     try {
-        const { path } = await uploadFile(PHOTO_BUCKET, file, 'patients/');
+        const { path } = await uploadFile(PHOTO_BUCKET, file, PHOTO_PREFIX);
         const { data } = supabase.storage.from(PHOTO_BUCKET).getPublicUrl(path);
         return (data && data.publicUrl) || '';
     } catch (e) {
+        // PATIENT_PHOTO_V1 — сервер отвечает НАЗВАННЫМ отказом (формат, предел,
+        // право), и человек должен прочитать именно его, а не «ошибку
+        // загрузки»: только из него понятно, что делать дальше.
         toast(trf('Не удалось загрузить фото: {msg}', { msg: (e && e.message) || e }), 'fail');
         return '';
     }
 }
 
-function openWebcamModal(onCapture) {
+// Экспортировано ради теста: съёмка с камеры — путь, который до
+// PATIENT_PHOTO_V1 не проверялся ничем и молча падал на 400.
+export function openWebcamModal(onCapture) {
     const overlay = h('div', { class: 'modal', style: { zIndex: '170' } });
     let stream = null;
     const stop = () => { if (stream) { for (const t of stream.getTracks()) t.stop(); stream = null; } };

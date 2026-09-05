@@ -2,8 +2,8 @@ import { Router, raw } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
-import { canViewSection, canViewPatientTab, canEditPatientTab } from '../services/roles.js';   // PATIENT_FILE_ATTACH_V1
-import { MAX_PATIENT_FILE_BYTES, patientFileRefusal, refusalText } from '../../public/js/shared/patient-file-limits.js';   // PATIENT_FILE_ATTACH_V1
+import { canViewSection, canEditSection, canViewPatientTab, canEditPatientTab } from '../services/roles.js';   // PATIENT_FILE_ATTACH_V1 + PATIENT_PHOTO_V1
+import { MAX_PATIENT_FILE_BYTES, patientFileRefusal, photoRefusal, refusalText } from '../../public/js/shared/patient-file-limits.js';   // PATIENT_FILE_ATTACH_V1 + PATIENT_PHOTO_V1
 
 // Local file storage — the offline stand-in for Supabase Storage. Objects live
 // on disk under <storageDir>/<bucket>/<path>. Buckets are an allow-list; every
@@ -15,7 +15,20 @@ import { MAX_PATIENT_FILE_BYTES, patientFileRefusal, refusalText } from '../../p
 // туда уходит то, что видит пациент в боте (баннер рассылки), а не внутренние
 // документы клиники. Разные корзины — разная судьба при чистке и разный ответ
 // на вопрос «что здесь вообще лежит».
-const BUCKETS = new Set(['clinic-docs', 'telegram-media']);
+// PATIENT_PHOTO_V1 — `patient-photos` и `doctor-photos` СУЩЕСТВОВАЛИ в
+// приложении с самого переезда с Supabase (views/patient-create-modal.js,
+// views/doctor-profile.js грузят именно в них), но в этом списке их не было, и
+// поэтому КАЖДАЯ загрузка фотографии отвечала 400 «Invalid storage path»:
+// съёмка с веб-камеры, выбор файла в окне заведения пациента и фото врача в
+// «Моём профиле». Список — единственная дверь, и молчание о собственных
+// корзинах закрывало её наглухо.
+//
+// Корзины РАЗНЫЕ, а не одна «photos», по той же причине, по какой
+// telegram-media отделён от clinic-docs: у них разный ответ на вопрос «кто
+// вправе это менять» (фото пациента — тот, кто правит пациента; фото врача —
+// сам врач) и разная судьба (карточка врача уезжает на Symptex, фотография
+// пациента не покидает клинику).
+const BUCKETS = new Set(['clinic-docs', 'telegram-media', 'patient-photos', 'doctor-photos']);
 
 const CONTENT_TYPES = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
@@ -76,12 +89,54 @@ function patientDocId(bucket, rest) {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+// PATIENT_PHOTO_V1 — ФОТОГРАФИЯ УЗНАЁТСЯ ПО ПУТИ, ровно как документ выше, и
+// по той же причине: признак, живущий в теле запроса, выбирает вызывающий.
+//
+// Форма пути ЕДИНСТВЕННАЯ на корзину, и всё остальное в этих корзинах —
+// «неверный путь», а не «файл без правил». Это и есть разница между
+// «проверяем, если похоже» и «в корзине не может лежать ничего, кроме того,
+// что проверено»: перебрать глубину или переименовать сегмент, чтобы обойти
+// право, нельзя — такой путь просто не существует.
+//
+//   patient-photos/patients/<ключ>              — портрет пациента (2 сегмента)
+//   doctor-photos/doctors/<id врача>/<ключ>      — портрет врача   (3 сегмента)
+//
+// id врача попал В ПУТЬ намеренно: без него нельзя ответить на вопрос «чьё это
+// фото», а значит нельзя и выполнить правило «свою фотографию врач меняет
+// сам». Раньше путь был `doctors/<ключ>` — по нему любой сотрудник мог бы
+// положить файл, который карточка чужого врача покажет как его лицо.
+//
+// У пациента id в пути НЕТ, и это не забывчивость: фотографию снимают в окне
+// заведения пациента ДО того, как пациент появился, — карты, к которой можно
+// было бы привязать путь, в этот момент ещё не существует. Право поэтому
+// спрашивается о ПАЦИЕНТАХ ВООБЩЕ (см. patientPhotoDenial), а не об одном.
+export function photoTarget(bucket, rest) {
+  const s = segmentsOf(rest);
+  if (bucket === 'patient-photos') {
+    return (s.length === 2 && s[0] === 'patients' && s[1]) ? { kind: 'patient' } : null;
+  }
+  if (bucket === 'doctor-photos') {
+    if (s.length !== 3 || s[0] !== 'doctors' || !s[2]) return null;
+    const id = Number(s[1]);
+    return Number.isInteger(id) && id > 0 ? { kind: 'doctor', doctorId: id } : null;
+  }
+  return null;
+}
+const isPhotoBucket = (bucket) => bucket === 'patient-photos' || bucket === 'doctor-photos';
+
 // Отказ вкладки «Документы» тем же текстом, каким отказывает карта пациента
 // (rpc/patient-card.js DENIED_TEMPLATE) — человек читает одно и то же
 // объяснение, откуда бы он ни пришёл: со списка документов или по прямой
 // ссылке на файл.
 const DOCS_DENIED = 'Вкладка «Документы» закрыта для вашей роли.'
   + ' Доступ открывает администратор клиники: «Настройки» → «Роли» → «Карта пациента — вкладки».';
+
+// PATIENT_PHOTO_V1 — отказ называет ПРАВО, а не «нельзя»: фотография пациента
+// — часть его анкеты, и меняет её тот, кому анкету менять разрешено.
+const PATIENT_PHOTO_DENIED = 'Фотографию пациента меняет тот, кому разрешено изменять карту пациента.'
+  + ' Доступ открывает администратор клиники: «Настройки» → «Роли» → раздел «Пациенты» и вкладка «Детали».';
+const DOCTOR_PHOTO_DENIED = 'Своё фото врач меняет сам — в «Моём профиле».'
+  + ' Чужое может поставить только администратор клиники.';
 
 /**
  * @param {string} storageDir  <dataDir>/storage
@@ -108,6 +163,75 @@ export function storageRoutes(storageDir, db = null) {
     return ok ? null : DOCS_DENIED;
   }
 
+  // PATIENT_PHOTO_V1 — КТО ВПРАВЕ ПОСТАВИТЬ ПАЦИЕНТУ ЛИЦО.
+  //
+  // Ключ выбран ТОТ ЖЕ, которым карта пациента защищает анкету: раздел
+  // «Пациенты» на уровне изменения ПЛЮС вкладка «Детали» (7ff82a6,
+  // PATIENT_TAB_CAPS.details = { edit: true }). Фотография и есть анкета —
+  // она отвечает на вопрос «тот ли это человек», как отвечают на него ФИО,
+  // дата рождения и номер документа, и лежит в той же строке `patients`
+  // (колонка photo_url).
+  //
+  // Почему НЕ ключ «Регистрация» (`registration`), которым закрыто окно
+  // заведения пациента: фотографию ставят не только новому — её меняют и
+  // существующему. Право «может завести карту» ответило бы «нет» тому, кто
+  // карту ведёт, но не заводит, и «да» тому, кто заводит, но править чужую
+  // анкету не должен. Право «может изменить пациента» отвечает ровно на
+  // заданный вопрос.
+  //
+  // Просмотр — «Детали» на уровне просмотра. Отдельный уровень нужен потому,
+  // что вкладку можно закрыть, а ссылка на файл предсказуема (одна корзина,
+  // одна форма пути): закрытая вкладка, обходимая прямой ссылкой, — не
+  // закрытая вкладка. Это тот же довод, что у документов выше.
+  function patientPhotoDenial(req, { write }) {
+    if (!db) return 'Хранилище фотографий недоступно.';
+    const user = req.user;
+    if (!user) return 'Требуется вход.';
+    if (!canViewSection(db, user, 'patients')) return 'Раздел «Пациенты» вашей роли не выдан.';
+    if (!write) return canViewPatientTab(db, user, 'details') ? null : PATIENT_PHOTO_DENIED;
+    // Оба условия обязательны. Лаборант получает раздел «Пациенты» на уровне
+    // просмотра (миграция 013) и вкладками не ограничен — то есть одной
+    // проверки вкладки ему хватило бы, чтобы переписать чужое лицо.
+    if (!canEditSection(db, user, 'patients')) return PATIENT_PHOTO_DENIED;
+    return canEditPatientTab(db, user, 'details') ? null : PATIENT_PHOTO_DENIED;
+  }
+
+  // PATIENT_PHOTO_V1 — ФОТО ВРАЧА: СВОЁ — СВОЁ.
+  //
+  // «Мой профиль» (views/doctor-profile.js) — это публичная карточка врача,
+  // которая уезжает на Symptex и которую видят пациенты. Её ставит сам врач:
+  // сравнение с req.user.id — не украшение, а всё правило целиком, и работает
+  // оно только потому, что id врача стоит В ПУТИ, а не в теле запроса.
+  //
+  // Плюс администратор клиники. Не «на всякий случай»: карточки врачей
+  // заводит и дополняет тот же человек, который правит строку сотрудника в
+  // «Настройки → Сотрудники». Ключ `settings` на уровне изменения и есть
+  // право на этот раздел; шире круг не делаем.
+  //
+  // ЧТЕНИЕ НЕ ОГРАНИЧЕНО ВОВСЕ, и это решение, а не пропуск: фотография врача
+  // публична по назначению — она печатается на бланках, показывается в
+  // расписании и уходит на Symptex. Маршрут и так стоит за requireAuth.
+  function doctorPhotoDenial(req, doctorId, { write }) {
+    if (!write) return null;
+    const user = req.user;
+    if (!user) return 'Требуется вход.';
+    if (Number(user.id) === Number(doctorId)) return null;
+    if (!db) return 'Хранилище фотографий недоступно.';
+    return canEditSection(db, user, 'settings') ? null : DOCTOR_PHOTO_DENIED;
+  }
+
+  // Одна дверь для обеих фотокорзин: форма пути → право. Возвращает false
+  // (можно продолжать) либо уже отправленный ответ.
+  function photoGate(req, res, { write }) {
+    const target = photoTarget(req.params.bucket, req.params.rest);
+    if (!target) return badPath(res);
+    const denial = target.kind === 'patient'
+      ? patientPhotoDenial(req, { write })
+      : doctorPhotoDenial(req, target.doctorId, { write });
+    if (denial) return refuse(res, 403, 'forbidden', denial);
+    return false;
+  }
+
   // Upload: raw body (any content type) written verbatim to disk.
   r.post('/:bucket/*rest', raw({ type: () => true, limit: '20mb' }), (req, res) => {
     // LICENCE_CORE_V1 — this is the OTHER write path: patient photos, lab scans
@@ -124,6 +248,15 @@ export function storageRoutes(storageDir, db = null) {
     if (NEVER_STORE_EXT.has(path.extname(abs).toLowerCase())) {
       return refuse(res, 415, 'file_type_not_allowed',
         'Исполняемые файлы в клинику не загружаются.');
+    }
+    // PATIENT_PHOTO_V1 — фотография: право, формат и предел. Проверяется
+    // ЗДЕСЬ ещё раз, хотя браузер уменьшил и отсеял то же самое до отправки:
+    // браузер обойти можно, curl проверку не спрашивает.
+    if (isPhotoBucket(req.params.bucket)) {
+      const stop = photoGate(req, res, { write: true });
+      if (stop) return stop;
+      const bad = photoRefusal({ name: path.basename(abs), size: body.length });
+      if (bad) return refuse(res, bad.code === 'file_too_large' ? 413 : 415, bad.code, refusalText(bad));
     }
     const pid = patientDocId(req.params.bucket, req.params.rest);
     if (pid !== null) {
@@ -165,6 +298,10 @@ export function storageRoutes(storageDir, db = null) {
   r.get('/:bucket/*rest', (req, res) => {
     const abs = safeResolve(storageDir, req.params.bucket, req.params.rest);
     if (!abs) return badPath(res);
+    if (isPhotoBucket(req.params.bucket)) {
+      const stop = photoGate(req, res, { write: false });
+      if (stop) return stop;
+    }
     const pid = patientDocId(req.params.bucket, req.params.rest);
     if (pid !== null) {
       const denial = patientDocDenial(req, { write: false });
@@ -203,6 +340,32 @@ export function storageRoutes(storageDir, db = null) {
     if (patientDocId(req.params.bucket, req.params.rest) !== null) {
       return refuse(res, 403, 'forbidden',
         'Документ пациента не удаляется — его можно только отозвать в карте пациента.');
+    }
+    // PATIENT_PHOTO_V1 — НОВОЕ ФОТО ЗАМЕНЯЕТ СТАРОЕ, НО НЕ СТИРАЕТ ЕГО.
+    //
+    // Заменить фотографию — это переписать одну колонку (patients.photo_url,
+    // users.photo_url). Прежний файл после этого никем не показывается, и
+    // соблазн удалить его понятен. Не удаляем, по трём причинам подряд:
+    //
+    //  1. На него ЕЩЁ МОЖЕТ УКАЗЫВАТЬ база. Восстановление копии откатывает
+    //     строки на вчера, а файлы только СЛИВАЕТ (services/backup.js
+    //     mergeTree) — вчерашний photo_url обязан открыться. Удаляя файл
+    //     сегодня, мы готовим битый квадрат вместо лица на любом откате.
+    //  2. Место больше не довод. Раньше он был бы весомым — исходник с
+    //     телефона 5–12 МБ; после уменьшения портрет весит 100–250 КБ, и
+    //     «сэкономить», стерев предшественника, значит сэкономить четверть
+    //     мегабайта ценой пункта 1.
+    //  3. Так поступает весь остальной продукт: отметку медсестры гасят, счёт
+    //     аннулируют, документ пациента отзывают (см. отказ выше). Фотография
+    //     пациента — часть его анкеты, то есть запись о человеке; лицо,
+    //     стёртое без следа, — ровно то, чего это правило не допускает.
+    //
+    // Фото врача заодно: своё он МЕНЯЕТ (загрузив новое), а не удаляет, — в
+    // «Моём профиле» кнопки «убрать фото» нет, и пустая карточка на Symptex
+    // не лучше устаревшего снимка.
+    if (isPhotoBucket(req.params.bucket)) {
+      return refuse(res, 403, 'forbidden',
+        'Фотография не удаляется — новая загрузка заменяет прежнюю.');
     }
     try { fs.unlinkSync(abs); } catch { /* already gone */ }
     return res.json({ data: {} });

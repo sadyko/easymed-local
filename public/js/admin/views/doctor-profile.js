@@ -8,9 +8,21 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { supabase } from '../../supabase.js';
 import { gw } from '../gateway.js';
 import { uploadFile } from '../storage.js';
+// PATIENT_PHOTO_V1 — те же правила и то же уменьшение, что в окне заведения
+// пациента: один набор на оба виджета фото и на сервер.
+import { photoRefusal, ALLOWED_PHOTO_EXT } from '../../shared/patient-file-limits.js?v=pph1';
+import { downscalePhoto } from '../../shared/photo-downscale.js?v=pph1';
 
-const PHOTO_BUCKET = 'doctor-photos';   // public; getPublicUrl → photo_url (NOT base64)
-const PHOTO_PREFIX = 'doctors/';
+// PATIENT_PHOTO_V1 (2026-09-05) — корзина `doctor-photos` НЕ БЫЛА ОБЪЯВЛЕНА на
+// сервере (routes/storage.js BUCKETS), и «Моё фото» в профиле врача отвечало
+// 400 «Invalid storage path» — всегда, с самого переезда с Supabase.
+//
+// Путь стал `doctors/<id врача>/<ключ>`: id попал в него не для порядка, а
+// потому, что по пути сервер отвечает на вопрос «чьё это фото» и выполняет
+// правило «свою фотографию врач меняет сам». По прежнему `doctors/<ключ>` этот
+// вопрос ответа не имел.
+const PHOTO_BUCKET = 'doctor-photos';   // getPublicUrl → photo_url (NOT base64)
+const photoPrefix = (doctorId) => 'doctors/' + doctorId + '/';
 
 // Each base has _ru/_uz/_en. full_name & academic_title live in the IDENTITY card;
 // the 5 below are the long-text cards.
@@ -391,18 +403,31 @@ export async function renderDoctorProfile(container, doctorId) {
             if (!url) { img.style.display = 'none'; ph.style.display = ''; return; }
             img.src = url; img.style.display = ''; ph.style.display = 'none';
         };
-        const fileInp = h('input', { type: 'file', accept: 'image/*', style: { display: 'none' },
-            onchange: (e) => {
+        // PATIENT_PHOTO_V1 — одна дверь для файла и для кадра с камеры:
+        // уменьшить → проверить → показать. Правило, добавленное в один из
+        // двух обработчиков, обошло бы второй.
+        async function acceptPhoto(fileOrBlob) {
+            if (!fileOrBlob) return null;
+            const named = fileOrBlob instanceof File
+                ? fileOrBlob
+                : new File([fileOrBlob], 'photo.jpg', { type: (fileOrBlob && fileOrBlob.type) || 'image/jpeg' });
+            const small = await downscalePhoto(named);
+            const bad = photoRefusal({ name: small.name || named.name, size: small.size });
+            if (bad) { toast(trf(bad.template, bad.params), 'fail'); return null; }
+            st.photoFile = small; st.photoUrl = '';
+            setPhoto(URL.createObjectURL(small));
+            return small;
+        }
+        const fileInp = h('input', { type: 'file', accept: ALLOWED_PHOTO_EXT.join(','), style: { display: 'none' },
+            onchange: async (e) => {
                 const f = e.target.files && e.target.files[0];
                 if (!f) return;
-                st.photoFile = f; st.photoUrl = '';
-                setPhoto(URL.createObjectURL(f));
-                toast(trf('Фото загружено: {name}', { name: f.name || tr('файл') }));
+                if (await acceptPhoto(f)) toast(trf('Фото загружено: {name}', { name: f.name || tr('файл') }));
             },
         });
         const acts = h('div', { class: 'cam-acts' },
             h('button', { class: 'cam-act', type: 'button', title: 'Сфотографировать с веб-камеры', 'aria-label': 'Сфотографировать',
-                onclick: () => openWebcamModal((blob) => { st.photoFile = blob; st.photoUrl = ''; setPhoto(URL.createObjectURL(blob)); toast('Фото снято с камеры'); }) },
+                onclick: () => openWebcamModal(async (blob) => { if (await acceptPhoto(blob)) toast('Фото снято с камеры'); }) },
                 Icon('Camera', { size: 15 })),
             h('button', { class: 'cam-act', type: 'button', title: 'Загрузить файл с компьютера', 'aria-label': 'Загрузить с компьютера',
                 onclick: () => fileInp.click() },
@@ -424,7 +449,7 @@ export async function renderDoctorProfile(container, doctorId) {
             ? st.photoFile
             : new File([st.photoFile], 'photo.jpg', { type: st.photoFile.type || 'image/jpeg' });
         try {
-            const { path } = await uploadFile(PHOTO_BUCKET, file, PHOTO_PREFIX);
+            const { path } = await uploadFile(PHOTO_BUCKET, file, photoPrefix(doctorId));
             const { data } = supabase.storage.from(PHOTO_BUCKET).getPublicUrl(path);
             return (data && data.publicUrl) || '';
         } catch (e) {
