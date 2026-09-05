@@ -242,20 +242,31 @@ const PLACEHOLDERS = new Set([]);   // PHARMACY_V1 — pharmacy is now a real vi
 // ---------------------------------------------------------------------------
 // State + DOM
 // ---------------------------------------------------------------------------
+// NO_TABS_APPBAR_V1 — how many mounted view panes may exist at once. The tab
+// strip was, underneath the chrome, a view CACHE: each route kept its own
+// mounted DOM, so scroll position, filters, half-typed forms and computed
+// results survived a trip to another screen. That is worth keeping; the
+// unbounded part was not — every route ever visited stayed mounted for the
+// life of the session, and with the strip removed there would be no UI left
+// to close any of them. So the cache stays and gets a ceiling: the active
+// pane plus the two before it (MRU order), which covers the real pattern
+// (registratura bouncing Пациенты ↔ Касса ↔ Лаборатория) without hoarding.
+// The fourth-oldest pane is unmounted and re-renders from scratch next time.
+const VIEW_CACHE_MAX = 3;
+
 const state = {
     view:    'dashboard',
     payload: null,
     user:    { full_name: 'Super Admin', role: 'admin', is_super_admin: true },
-    // Browser-style multi-tab. Each entry mounts its own DOM node inside
-    // #view-root; switching tabs toggles visibility — the view is never
-    // re-rendered, so filters, scroll position, form input, computed
-    // results all survive.
-    //   { id, view, payload, label, root, scrollY }
-    tabs:        [],
-    activeTabId: null,
+    // Mounted view panes, MOST-RECENTLY-USED FIRST. Each entry owns its own
+    // DOM node inside #view-root; navigating toggles visibility, so a cached
+    // view is never re-rendered.
+    //   { key, view, payload, title, root, scrollY }
+    panes:     [],
+    activeKey: null,
 };
 const viewRoot  = document.getElementById('view-root');
-const tabStripEl = document.getElementById('ts-tabs-area');
+const titleEl   = document.getElementById('section-title');
 const sidebarEl = document.getElementById('sidebar-body');
 
 // SIDEBAR_COLLAPSE_V1 — restore the persisted collapsed state before first paint (no flash).
@@ -299,63 +310,63 @@ function navigate(view, payload, opts = {}) {
     // that replaced it, not by a blank unknown view.
     const legacy = LEGACY_ROUTES[view];
     if (legacy) { view = legacy.view; payload = { ...(payload || {}), sub: legacy.sub }; }
-    const tabId = tabIdFor(view, payload);
+    const key = viewKeyFor(view, payload);
 
-    // Tab already open? Just switch to it — never re-render.
-    const existing = state.tabs.find(t => t.id === tabId);
+    // Already mounted? Show it again — never re-render (that IS the cache).
+    const existing = state.panes.find(p => p.key === key);
     if (existing) {
-        // ONE_TAB_PER_SECTION_V1 — the shared patient-card tab re-renders in
-        // place when a DIFFERENT patient is opened into it.
+        // ONE_PANE_PER_SECTION_V1 (was ONE_TAB_PER_SECTION_V1) — the shared
+        // patient-card pane re-renders in place when a DIFFERENT patient is
+        // opened into it.
         if (view === 'patient-card' && (existing.payload?.id ?? null) !== (payload?.id ?? null)) {
             existing.payload = payload ?? null;
-            existing.label   = initialTabLabel(view, payload);
+            existing.title   = sectionTitleFor(view, payload);
             existing.scrollY = 0;
             clear(existing.root);
-            switchToTab(tabId);
-            paintTabStrip();
+            activatePane(existing);
             renderViewInto(existing);
             if (!opts.skipHistory) pushHistory(view, payload);
             return;
         }
-        switchToTab(tabId);
+        activatePane(existing);
         if (!opts.skipHistory) pushHistory(view, payload);
         return;
     }
 
     // First navigation since boot — drop the "Loading…" placeholder.
-    if (state.tabs.length === 0) clear(viewRoot);
+    if (state.panes.length === 0) clear(viewRoot);
 
-    // New tab — mount a fresh root for it inside #view-root, render the
-    // view into that root, append it to the strip.
-    const tabRoot = document.createElement('div');
-    tabRoot.className = 'view-tab-root';
-    tabRoot.dataset.tabId = tabId;
-    viewRoot.appendChild(tabRoot);
+    // New pane — mount a fresh root for it inside #view-root and render into it.
+    const paneRoot = document.createElement('div');
+    paneRoot.className = 'view-pane';
+    paneRoot.dataset.viewKey = key;
+    viewRoot.appendChild(paneRoot);
 
-    const tab = {
-        id:       tabId,
+    const pane = {
+        key,
         view,
         payload:  payload ?? null,
-        label:    initialTabLabel(view, payload),
-        root:     tabRoot,
+        title:    sectionTitleFor(view, payload),
+        root:     paneRoot,
         scrollY:  0,
     };
-    state.tabs.push(tab);
 
-    // Save current tab's scroll before swapping.
+    // Save the outgoing pane's scroll before swapping, then make this one the
+    // most-recently-used entry and trim the cache back to its ceiling.
     snapshotActiveScroll();
-
-    state.activeTabId = tabId;
-    state.view        = view;
-    state.payload     = payload ?? null;
+    state.panes.unshift(pane);
+    state.activeKey = key;
+    state.view      = view;
+    state.payload   = payload ?? null;
+    evictStalePanes();
 
     if (!opts.skipHistory) pushHistory(view, payload);
     saveRoute(view);
     renderSidebar();
+    renderSectionTitle();
     renderCrumbs();
-    paintTabStrip();
-    showOnlyActiveTab();
-    renderViewInto(tab);
+    showOnlyActivePane();
+    renderViewInto(pane);
     loadNavCounts();
 }
 
@@ -399,13 +410,14 @@ function parseHash() {
 }
 
 // ---------------------------------------------------------------------------
-// Tab identity, labels, switching, closing, reordering
+// Pane identity, section title, switching, eviction
 // ---------------------------------------------------------------------------
-function tabIdFor(view, payload) {
-    // Detail views need a unique tab per record so a second patient
-    // doesn't reuse the first patient's tab.
-    // ONE_TAB_PER_SECTION_V1 — patient-card is a SINGLE reusable tab (owner
-    // request: one tab per section); opening another patient re-renders it.
+// The cache key. Unchanged from the old tabIdFor(): detail views need one pane
+// per record so a second service workspace doesn't reuse the first one's DOM.
+// ONE_PANE_PER_SECTION_V1 — patient-card is deliberately a SINGLE reusable
+// pane (owner request: one pane per section); opening another patient
+// re-renders it in place (see navigate()).
+function viewKeyFor(view, payload) {
     if (view === 'service-workspace' && payload?.serviceId) return `service-workspace:${payload.serviceId}`;
     if (view === 'service-workspace' && payload?.visitId)   return `service-workspace:visit:${payload.visitId}`;
     if (view === 'consultation'      && payload?.visitId)   return `consultation:${payload.visitId}`;
@@ -414,8 +426,11 @@ function tabIdFor(view, payload) {
     return view;
 }
 
-function initialTabLabel(view, payload) {
-    // Use the last crumb as the label, or a hint if it's a record view.
+// NO_TABS_APPBAR_V1 — what the top bar says the user is looking at. This is
+// the old initialTabLabel(), unchanged in logic: the tab labels were the only
+// place a screen announced its own identity, and the app bar inherits that job
+// (CRUMBS stays the source, and stays load-bearing for isKnownView()).
+function sectionTitleFor(view, payload) {
     if (view === 'patient-card')      return payload?.label || 'Patient';
     if (view === 'service-workspace') return payload?.label || 'Workspace';
     if (view === 'consultation')      return payload?.label || 'Consultation';
@@ -432,376 +447,84 @@ function initialTabLabel(view, payload) {
     return view;
 }
 
-// HASH_SUBROUTE_V1 — a view that owns a sub-route reports it here, so the tab's
-// payload keeps telling the truth about what is on screen. Two things depend on
-// that: the next navigate() to this view writes the right hash (clicking the
-// sidebar entry for the section you are already in must not silently drop
-// '/panels' out of the URL), and a re-render of an open tab — the branch/lang
-// switches re-render every tab — reopens the mode the user was in rather than
-// resetting them to the view's default. Mirrors easymedSetTabLabel below.
-window.easymedSetTabSub = function setTabSub(tabId, sub) {
-    const tab = state.tabs.find(t => t.id === tabId);
-    if (!tab) return;
-    const payload = { ...(tab.payload || {}) };
+function renderSectionTitle() {
+    if (!titleEl) return;
+    const pane = state.panes.find(p => p.key === state.activeKey);
+    const raw  = pane ? pane.title : sectionTitleFor(state.view, state.payload);
+    titleEl.textContent = tr(raw);
+}
+
+// HASH_SUBROUTE_V1 — a view that owns a sub-route reports it here, so the
+// pane's payload keeps telling the truth about what is on screen. Two things
+// depend on that: the next navigate() to this view writes the right hash
+// (clicking the sidebar entry for the section you are already in must not
+// silently drop '/panels' out of the URL), and a re-render of a cached pane —
+// the branch/lang switches re-render every one — reopens the mode the user was
+// in rather than resetting them to the view's default.
+//
+// The NAME survives the tab strip on purpose: laboratory.js and every future
+// sub-route view call it, and the contract (a view names its own pane by the
+// `tabId` it was handed in ctx) did not change — only what is underneath.
+window.easymedSetTabSub = function setTabSub(paneKey, sub) {
+    const pane = state.panes.find(p => p.key === paneKey);
+    if (!pane) return;
+    const payload = { ...(pane.payload || {}) };
     if (sub) payload.sub = sub; else delete payload.sub;
-    tab.payload = Object.keys(payload).length ? payload : null;
-    if (state.activeTabId === tabId) state.payload = tab.payload;
+    pane.payload = Object.keys(payload).length ? payload : null;
+    if (state.activeKey === paneKey) state.payload = pane.payload;
 };
 
-// Called by views (or anyone) to update their tab's label once they
-// know the real one (e.g. patient name fetched async).
-window.easymedSetTabLabel = function setTabLabel(tabId, label) {
-    const t = state.tabs.find(t => t.id === tabId);
-    if (!t || !label) return;
-    t.label = label;
-    paintTabStrip();
+// Called by views (or anyone) once they know their real title (e.g. a patient
+// name fetched async). It used to relabel a tab; it now retitles the app bar,
+// which is where screen identity moved. views/updates.js is a live caller.
+window.easymedSetTabLabel = function setTabLabel(paneKey, label) {
+    const pane = state.panes.find(p => p.key === paneKey);
+    if (!pane || !label) return;
+    pane.title = label;
+    if (state.activeKey === paneKey) renderSectionTitle();
 };
 
 function snapshotActiveScroll() {
-    const cur = state.tabs.find(t => t.id === state.activeTabId);
+    const cur = state.panes.find(p => p.key === state.activeKey);
     if (cur) cur.scrollY = window.scrollY || document.documentElement.scrollTop || 0;
 }
 
-function switchToTab(tabId) {
-    if (state.activeTabId === tabId) return;
-    snapshotActiveScroll();
-    const tab = state.tabs.find(t => t.id === tabId);
-    if (!tab) return;
-    state.activeTabId = tabId;
-    state.view        = tab.view;
-    state.payload     = tab.payload;
-    saveRoute(tab.view);
+// Show an already-mounted pane and mark it most-recently-used.
+function activatePane(pane) {
+    // Clicking the sidebar entry for the section you are ALREADY in must not
+    // move the page: there is no outgoing pane to snapshot, so the stored
+    // scrollY is stale and restoring it would yank the reader back up.
+    const sameScreen = state.activeKey === pane.key;
+    if (!sameScreen) snapshotActiveScroll();
+    const i = state.panes.indexOf(pane);
+    if (i > 0) { state.panes.splice(i, 1); state.panes.unshift(pane); }
+    state.activeKey = pane.key;
+    state.view      = pane.view;
+    state.payload   = pane.payload;
+    saveRoute(pane.view);
     renderSidebar();
+    renderSectionTitle();
     renderCrumbs();
-    paintTabStrip();
-    showOnlyActiveTab();
-    requestAnimationFrame(() => window.scrollTo({ top: tab.scrollY || 0, behavior: 'instant' in window ? 'instant' : 'auto' }));
+    showOnlyActivePane();
+    if (!sameScreen) requestAnimationFrame(() => window.scrollTo({ top: pane.scrollY || 0, behavior: 'instant' in window ? 'instant' : 'auto' }));
 }
 
-function closeTab(tabId) {
-    const idx = state.tabs.findIndex(t => t.id === tabId);
-    if (idx < 0) return;
-    const wasActive = state.activeTabId === tabId;
-    const tab       = state.tabs[idx];
-    tab.root.remove();                 // free the DOM tree
-    state.tabs.splice(idx, 1);
-
-    if (state.tabs.length === 0) {
-        // No tabs left — open the user's landing page (firstAllowedView).
-        const fallback = firstAllowedView();
-        state.activeTabId = null;
-        navigate(fallback);
-        return;
-    }
-    if (wasActive) {
-        const neighbour = state.tabs[Math.min(idx, state.tabs.length - 1)];
-        switchToTab(neighbour.id);
-    } else {
-        paintTabStrip();
+// Unmount everything past the cache ceiling. The list is MRU-ordered, so the
+// tail is the least recently used; the ACTIVE pane can never be evicted (it is
+// always at index 0), which is what keeps this safe to call from navigate().
+function evictStalePanes() {
+    while (state.panes.length > VIEW_CACHE_MAX) {
+        const stale = state.panes.pop();
+        if (!stale || stale.key === state.activeKey) break;
+        try { stale.root.remove(); } catch (_) {}
     }
 }
 
-function showOnlyActiveTab() {
-    for (const t of state.tabs) {
-        t.root.style.display = (t.id === state.activeTabId) ? '' : 'none';
+function showOnlyActivePane() {
+    for (const p of state.panes) {
+        p.root.style.display = (p.key === state.activeKey) ? '' : 'none';
     }
 }
-
-function reorderTab(fromId, toId) {
-    if (fromId === toId) return;
-    const fromIdx = state.tabs.findIndex(t => t.id === fromId);
-    const toIdx   = state.tabs.findIndex(t => t.id === toId);
-    if (fromIdx < 0 || toIdx < 0) return;
-    const [moved] = state.tabs.splice(fromIdx, 1);
-    state.tabs.splice(toIdx, 0, moved);
-    // Re-append the DOM in the new order so display lines up with strip
-    for (const t of state.tabs) viewRoot.appendChild(t.root);
-    paintTabStrip();
-}
-
-// ---------------------------------------------------------------------------
-// Tab strip painter — runs whenever tabs are added/closed/reordered/relabelled
-// ---------------------------------------------------------------------------
-function paintTabStrip() {
-    if (!tabStripEl) return;
-    tabStripEl.innerHTML = state.tabs.map(t => `
-        <div class="ts-tab ${t.id === state.activeTabId ? 'active' : ''}"
-             data-tab-id="${escapeAttr(t.id)}"
-             draggable="true"
-             title="${escapeAttr(tr(t.label))}">
-            <span class="ts-tab-label">${escapeAttr(tr(t.label))}</span>
-            <button class="ts-tab-close" data-close-id="${escapeAttr(t.id)}" title="Close" aria-label="Close">×</button>
-        </div>
-    `).join('');
-
-    // Click → switch
-    tabStripEl.querySelectorAll('.ts-tab').forEach(el => {
-        el.addEventListener('click', (e) => {
-            if (e.target.closest('.ts-tab-close')) return;
-            switchToTab(el.dataset.tabId);
-        });
-        el.addEventListener('mousedown', (e) => {
-            if (e.button === 1) { e.preventDefault(); closeTab(el.dataset.tabId); }
-        });
-        el.addEventListener('dragstart', (e) => {
-            el.classList.add('dragging');
-            e.dataTransfer.effectAllowed = 'move';
-            e.dataTransfer.setData('text/plain', el.dataset.tabId);
-        });
-        el.addEventListener('dragend', () => el.classList.remove('dragging'));
-        el.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; el.classList.add('drag-over'); });
-        el.addEventListener('dragleave', () => el.classList.remove('drag-over'));
-        el.addEventListener('drop', (e) => {
-            e.preventDefault();
-            el.classList.remove('drag-over');
-            const fromId = e.dataTransfer.getData('text/plain');
-            reorderTab(fromId, el.dataset.tabId);
-        });
-    });
-    tabStripEl.querySelectorAll('.ts-tab-close').forEach(b => {
-        b.addEventListener('click', (e) => {
-            e.stopPropagation();
-            closeTab(b.dataset.closeId);
-        });
-    });
-
-    // Make sure the active tab is in view (auto-scroll horizontally).
-    const active = tabStripEl.querySelector('.ts-tab.active');
-    if (active) active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-}
-function escapeAttr(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-
-// ---------------------------------------------------------------------------
-// Tab strip styles — injected once on boot. Keeps the change contained to
-// admin.js; no need to touch admin.css.
-// ---------------------------------------------------------------------------
-(function injectTabStyles() {
-    if (document.getElementById('ts-tab-styles')) return;
-    const s = document.createElement('style');
-    s.id = 'ts-tab-styles';
-    s.textContent = `
-:root {
-    --ts-brand:       #0d8a8a;
-    --ts-brand-soft:  #e6f5f3;
-    --ts-brand-tint:  rgba(13, 138, 138, 0.08);
-    --ts-brand-glow:  rgba(13, 138, 138, 0.20);
-    --ts-strip-bg:    linear-gradient(180deg, #eaf2f1 0%, #dfeaea 100%);
-    --ts-strip-line:  rgba(13, 138, 138, 0.18);
-    --ts-ink:         #0b1d28;
-    --ts-ink-muted:   #5b6c75;
-}
-
-/* ---------- strip (now the only top bar — replaces the old topbar) ---------- */
-.tab-strip {
-    display: flex; align-items: stretch; gap: 0;
-    padding: 0;
-    background: var(--ts-strip-bg);
-    border-bottom: 1px solid var(--ts-strip-line);
-    position: sticky; top: 0; z-index: 30;
-    min-height: 48px;
-    box-shadow: inset 0 -1px 0 rgba(255,255,255,0.4);
-}
-.ts-tabs-area {
-    display: flex; align-items: flex-end; gap: 4px;
-    padding: 8px 12px 0 18px;
-    flex: 1; min-width: 0;
-    overflow-x: auto;
-    /* Hide the scrollbar — wheel/swipe still scroll, just no visual bar */
-    scrollbar-width: none; -ms-overflow-style: none;
-}
-.ts-tabs-area::-webkit-scrollbar { display: none; width: 0; height: 0; }
-.ts-tabs-area:empty::after { content: ''; height: 0; }
-
-/* ---------- right-side controls (search · language · status) ---------- */
-.ts-controls {
-    display: flex; align-items: center; gap: 12px;
-    padding: 0 18px 0 14px;
-    flex-shrink: 0;
-    border-left: 1px solid rgba(13,138,138,0.10);
-    background: linear-gradient(180deg, rgba(255,255,255,0.35), rgba(255,255,255,0.0));
-}
-/* Search box: keep the magnifying-glass on the left (provided by the
-   existing .topbar-search::before in admin.css) but make room for it
-   inside the input so the placeholder text starts AFTER the icon. */
-.ts-controls .topbar-search { position: relative; display: inline-flex; align-items: center; }
-.ts-controls .topbar-search input {
-    width: 260px; max-width: 32vw;
-    padding: 7px 12px 7px 34px;     /* 34px on the left so text starts after the 🔍 */
-    background: rgba(255,255,255,0.85);
-    border: 1px solid rgba(13,138,138,0.20);
-    border-radius: 8px;
-    font-size: 12.5px; color: var(--ts-ink);
-    outline: none;
-    transition: border-color .15s, box-shadow .15s, background .15s;
-}
-.ts-controls .topbar-search input::placeholder { color: rgba(91,108,117,0.7); }
-.ts-controls .topbar-search input:focus {
-    border-color: var(--ts-brand);
-    box-shadow: 0 0 0 3px var(--ts-brand-tint);
-    background: white;
-}
-.ts-controls .topbar-lang {
-    display: inline-flex; gap: 2px;
-    padding: 2px;
-    background: rgba(255,255,255,0.55);
-    border: 1px solid rgba(13,138,138,0.18);
-    border-radius: 8px;
-}
-.ts-controls .topbar-lang button {
-    border: none; background: transparent;
-    padding: 4px 10px;
-    font-family: inherit; font-size: 12.5px; font-weight: 700; letter-spacing: 0.02em;
-    color: var(--ts-ink-muted);
-    border-radius: 6px;
-    cursor: pointer;
-    transition: background .12s, color .12s;
-}
-.ts-controls .topbar-lang button:hover { color: var(--ts-ink); }
-.ts-controls .topbar-lang button.on {
-    background: var(--ts-brand); color: white;
-    box-shadow: 0 1px 4px var(--ts-brand-glow);
-}
-.ts-controls #supabase-status {
-    font-size: 12.5px; font-weight: 600; color: var(--ts-ink-muted);
-    display: inline-flex; align-items: center; gap: 6px;
-    white-space: nowrap;
-}
-.ts-controls #supabase-status .dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: #1fb574;
-    box-shadow: 0 0 6px rgba(31,181,116,0.55);
-    transition: background .2s, box-shadow .2s;
-    display: inline-block;
-}
-.ts-controls #supabase-status.is-off .dot {
-    background: var(--ts-ink-muted);
-    box-shadow: 0 0 4px rgba(91,108,117,0.35);
-}
-
-/* ---------- inactive tab ---------- */
-.ts-tab {
-    display: inline-flex; align-items: center; gap: 8px;
-    padding: 9px 10px 9px 16px;
-    background: rgba(255, 255, 255, 0.55);
-    color: var(--ts-ink-muted);
-    border: 1px solid transparent;
-    border-bottom: none;
-    border-radius: 10px 10px 0 0;
-    font-size: 13.5px; font-weight: 600; letter-spacing: -0.005em;
-    cursor: pointer; user-select: none;
-    max-width: 240px; min-width: 110px; flex-shrink: 0;
-    transition:
-        background .18s cubic-bezier(.2,.7,.3,1),
-        color .18s,
-        border-color .18s,
-        transform .12s,
-        box-shadow .18s;
-    margin-bottom: -1px;
-    position: relative;
-    backdrop-filter: blur(2px);
-}
-.ts-tab::after {
-    /* divider on the right edge of inactive tabs — disappears on hover/active */
-    content: '';
-    position: absolute; right: -2px; top: 30%; bottom: 30%;
-    width: 1px; background: var(--ts-strip-line);
-    opacity: 0.6; transition: opacity .15s;
-}
-.ts-tab:hover {
-    background: var(--ts-brand-soft);
-    color: var(--ts-ink);
-    transform: translateY(-1px);
-}
-.ts-tab:hover::after,
-.ts-tab.active::after,
-.ts-tab.active + .ts-tab::after { opacity: 0; }
-
-/* ---------- active tab — whole pill filled with brand teal ---------- */
-.ts-tab.active {
-    background: linear-gradient(180deg, var(--ts-brand) 0%, #0a7575 100%);
-    color: white;
-    border-color: var(--ts-brand);
-    border-bottom-color: var(--ts-brand);
-    z-index: 2; cursor: default;
-    box-shadow:
-        0 4px 14px -3px rgba(13, 138, 138, 0.38),
-        inset 0 1px 0 rgba(255,255,255,0.18);
-    /* No top accent bar — the whole tab IS the accent */
-}
-.ts-tab.active::before { display: none; }
-
-/* ---------- drag states ---------- */
-.ts-tab.dragging  { opacity: 0.4; transform: scale(0.96); }
-.ts-tab.drag-over {
-    background: var(--ts-brand-soft);
-    box-shadow: inset 0 0 0 2px var(--ts-brand);
-}
-
-/* ---------- label + close button ---------- */
-.ts-tab-label {
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    flex: 1; min-width: 0;
-}
-.ts-tab-close {
-    width: 20px; height: 20px; flex-shrink: 0;
-    border: none; background: transparent; color: inherit;
-    border-radius: 50%; line-height: 1;
-    font-size: 15px; font-weight: 400;
-    cursor: pointer; opacity: 0;
-    display: grid; place-items: center;
-    transition: opacity .15s, background .15s, color .15s, transform .12s;
-}
-.ts-tab:hover .ts-tab-close { opacity: 0.55; }
-.ts-tab.active .ts-tab-close { opacity: 0.85; color: white; }
-.ts-tab-close:hover {
-    background: var(--ts-brand);
-    color: white;
-    opacity: 1 !important;
-    transform: scale(1.05);
-}
-/* On the active (already-teal) tab, hovering the close should pop white */
-.ts-tab.active .ts-tab-close:hover {
-    background: rgba(255,255,255,0.22);
-    color: white;
-}
-
-/* ---------- subtle micro-animation on mount ---------- */
-.ts-tab {
-    animation: ts-tab-in .2s cubic-bezier(.2,.7,.3,1);
-}
-@keyframes ts-tab-in {
-    from { transform: translateY(6px); opacity: 0.0; }
-    to   { transform: translateY(0);   opacity: 1.0; }
-}
-
-.view-tab-root { /* Each tab's mounted view container. */ }
-
-/* ============================================================================
-   TS_TAB_PILL_V2 — pill tabs like the doctor page («Мои приёмы» chips), per
-   user 2026-06-10. Appended last so these override the folder-tab rules above.
-   ========================================================================= */
-.ts-tabs-area { align-items: center; padding: 7px 12px 7px 18px; gap: 8px; }
-/* TS_TAB_PILL_V3 (2026-07-21) — same FIXED size for every tab, softer 10px
-   rounding (like the shift-action buttons, not a full pill), label ellipsized
-   inside the fixed width. */
-.ts-tab, .ts-tab:hover, .ts-tab.active {
-    border-radius: 10px; margin-bottom: 0; transform: none; box-shadow: none;
-}
-.ts-tab {
-    background: white; border: 1px solid var(--ink-200, #d4dee0); border-bottom: 1px solid var(--ink-200, #d4dee0);
-    color: var(--ink-700, #33474f); padding: 8px 10px 8px 14px; font-weight: 500; backdrop-filter: none;
-    width: 128px; min-width: 128px; max-width: 128px;
-}
-.ts-tab::after { display: none; }
-.ts-tab:hover { background: var(--ts-brand-soft); border-color: var(--ts-brand); border-bottom-color: var(--ts-brand); color: var(--ts-ink); }
-.ts-tab.active {
-    background: var(--ts-brand-soft); border: 1px solid var(--ts-brand); color: var(--ts-brand); font-weight: 600;
-}
-.ts-tab.active .ts-tab-label, .ts-tab.active .ts-tab-close { color: var(--ts-brand); }
-.ts-tab.active .ts-tab-close:hover { background: rgba(13,138,138,0.14); color: var(--ts-brand); }
-`;
-    document.head.appendChild(s);
-})();
 
 // Browser back/forward — replay the navigation without pushing a new entry.
 window.addEventListener('popstate', (e) => {
@@ -809,62 +532,30 @@ window.addEventListener('popstate', (e) => {
     if (s && s.view) navigate(s.view, s.payload || null, { skipHistory: true });
 });
 
-// Browser-style keyboard shortcuts (Ctrl/Cmd + W / Tab / 1..9). Ignored
-// when the focus is in a text field — typing shouldn't trigger nav.
-window.addEventListener('keydown', (e) => {
-    const tag = (document.activeElement?.tagName || '').toLowerCase();
-    if (tag === 'input' || tag === 'textarea' || document.activeElement?.isContentEditable) return;
-    if (!(e.ctrlKey || e.metaKey)) return;
-
-    if (e.key === 'w' || e.key === 'W') {
-        e.preventDefault();
-        if (state.activeTabId) closeTab(state.activeTabId);
-        return;
-    }
-    if (e.key === 'Tab') {
-        e.preventDefault();
-        if (state.tabs.length < 2) return;
-        const i = state.tabs.findIndex(t => t.id === state.activeTabId);
-        const j = e.shiftKey
-            ? (i - 1 + state.tabs.length) % state.tabs.length
-            : (i + 1) % state.tabs.length;
-        switchToTab(state.tabs[j].id);
-        return;
-    }
-    if (e.key >= '1' && e.key <= '9') {
-        const n = parseInt(e.key, 10) - 1;
-        if (n < state.tabs.length) {
-            e.preventDefault();
-            switchToTab(state.tabs[n].id);
-        }
-    }
-});
-
-// New entry-point: each tab renders into its OWN root div. This is called
-// once per tab (when it's first opened). After that the DOM stays mounted
-// and we just toggle visibility on tab switch.
-async function renderViewInto(tab) {
-    const root = tab.root;
+// Each pane renders into its OWN root div. Called once when the pane is first
+// mounted; after that the DOM stays put and navigation only toggles visibility
+// (until the pane falls off the end of the cache and is unmounted).
+async function renderViewInto(pane) {
+    const root = pane.root;
     clear(root);
-    if (!isRouteAllowed(tab.view)) {
+    if (!isRouteAllowed(pane.view)) {
         root.appendChild(accessDenied());
         return;
     }
-    // Pass the tab id so views can call window.easymedSetTabLabel(tabId, name)
-    // once they've fetched their data.
-    const ctx = { onNavigate: navigate, payload: tab.payload, tabId: tab.id };
-    // Below: the existing switch was modified to use `root` instead of
-    // `viewRoot` and `tab.view` instead of `state.view` so it renders into
-    // the per-tab container.
-    return renderViewInner(root, tab.view, ctx);
+    // `tabId` keeps its NAME in ctx: ~100 view files read it and the two
+    // globals (easymedSetTabSub / easymedSetTabLabel) take it as their handle.
+    // It is the pane key now — the contract is unchanged, the mechanism
+    // underneath is not.
+    const ctx = { onNavigate: navigate, payload: pane.payload, tabId: pane.key };
+    return renderViewInner(root, pane.view, ctx);
 }
 
 // Legacy renderView shim — kept so any caller still pointing here ends up
-// rendering into the currently-active tab's root.
+// rendering into the currently-active pane's root.
 async function renderView() {
-    const tab = state.tabs.find(t => t.id === state.activeTabId);
-    if (!tab) return;
-    return renderViewInto(tab);
+    const pane = state.panes.find(p => p.key === state.activeKey);
+    if (!pane) return;
+    return renderViewInto(pane);
 }
 
 // COMING_SOON_V1 — render a parked module's real view (blurred, in the background)
@@ -1081,35 +772,29 @@ const PLACEHOLDER_META = {
 function renderSidebar() {
     clear(sidebarEl);
 
-    // Prominent "+ New patient" CTA at the very top — replaces the buried
-    // "Patient registration" nav item. Hidden for roles without access.
-    if (isModuleAllowed('registration')) {
-        const onReg = state.view === 'registration';
-        sidebarEl.appendChild(h('button', {
-            class: 'sidebar-cta' + (onReg ? ' active' : ''),
-            title: t('sidebar.newPatient', 'New patient'),   // SIDEBAR_RAIL_V1
-            onclick: () => navigate('registration'),
-        },
-            Icon('Plus', { size: 16 }),
-            h('span', null, t('sidebar.newPatient', 'New patient')),
-        ));
-    }
+    // NO_TABS_APPBAR_V1 — the «+ Новый пациент» CTA is gone (owner, 2026-09-05:
+    // "and create patient button"). Registering a patient is not a thing the
+    // sidebar has to shout on every screen; it is one click inside «Пациенты»,
+    // whose own header carries «Создать пациента» (views/patients.js), and the
+    // 'registration' route itself is untouched — bookmarks, deep links and
+    // every onNavigate('registration') caller still open it.
 
-    // PUBLIC_SITE_V1 — prominent Symptex public-profile button (clinic users only;
-    // hidden for the company-less platform super-admin).
+    // PUBLIC_SITE_V1 — the Symptex public-profile screen (clinic users only;
+    // hidden for the company-less platform super-admin). It used to be a second
+    // CTA styled inline with color-mix(); it is now an ordinary nav item, so it
+    // inherits the one active treatment instead of inventing a third look.
     if (isModuleAllowed('public-site') && window.easymed?.state?.user?.company_id) {
         const onPS = state.view === 'public-site';
-        sidebarEl.appendChild(h('button', {
-            class: 'sidebar-cta',
-            title: 'Публичный сайт — профиль клиники для Symptex',
-            style: onPS
-                ? { marginTop: '4px', background: 'var(--primary-600)', color: '#fff', border: '1px solid var(--primary-600)' }
-                : { marginTop: '4px', background: 'color-mix(in srgb, var(--primary-600) 8%, #fff)', color: 'var(--primary-700)', border: '1px solid color-mix(in srgb, var(--primary-600) 24%, transparent)' },
+        const navEl = h('div', { class: 'nav nav-list-top' });
+        navEl.appendChild(h('button', {
+            class: 'nav-item' + (onPS ? ' active' : ''),
+            title: t('sidebar.publicSite', 'Публичный сайт'),
             onclick: () => navigate('public-site'),
         },
-            Icon('Globe', { size: 16 }),
+            h('span', { class: 'nav-icon' }, Icon('Globe', { size: 18 })),
             h('span', null, t('sidebar.publicSite', 'Публичный сайт')),
         ));
+        sidebarEl.appendChild(navEl);
     }
 
     let currentHeaderEl = null;   // pending section header, appended lazily
@@ -2717,16 +2402,18 @@ function startApp() {
     onLangChange(() => {
         applyTopbarLang();
         renderSidebar();
+        renderSectionTitle();
         renderCrumbs();
         setStatus(_lastStatusKey, _lastStatusOk);
-        for (const tab of state.tabs) { try { renderViewInto(tab); } catch (e) { console.warn('[lang] re-render', e); } }   // LANG_RERENDER_V1 — navigate() no-ops on open tabs, so re-render them directly
+        for (const pane of state.panes) { try { renderViewInto(pane); } catch (e) { console.warn('[lang] re-render', e); } }   // LANG_RERENDER_V1 — navigate() no-ops on a cached pane, so re-render them directly
     });
     onBranchChange(() => {
-        // BRANCH_RERENDER_V1 — re-render every OPEN tab so the branch filter actually
-        // re-applies. navigate(state.view) no-ops on an already-open tab (see ~L171
-        // "Tab already open? Just switch — never re-render"), which left lists showing
-        // the previously-selected branch's data after the FILIAL picker changed.
-        for (const tab of state.tabs) { try { renderViewInto(tab); } catch (e) { console.warn('[branch] re-render', e); } }
+        // BRANCH_RERENDER_V1 — re-render every CACHED pane so the branch filter
+        // actually re-applies. navigate(state.view) no-ops on an already-mounted
+        // pane (see "Already mounted? Show it again — never re-render"), which
+        // left lists showing the previously-selected branch's data after the
+        // FILIAL picker changed.
+        for (const pane of state.panes) { try { renderViewInto(pane); } catch (e) { console.warn('[branch] re-render', e); } }
     });
 
     const last = loadRoute();
@@ -2737,9 +2424,8 @@ function startApp() {
 
     // HASH_SUBROUTE_V1 — a hash that names a SUB-route (#labs/panels) carries
     // state the remembered route cannot express, so it wins the boot. A bare
-    // '#view' does NOT: switchToTab saves the route without rewriting the URL,
-    // so a plain hash can be stale, and the remembered tab keeps the precedence
-    // it has always had.
+    // '#view' does NOT: a plain hash can be stale, and the remembered route
+    // keeps the precedence it has always had.
     const hash = parseHash();
     if (hash.sub && isKnownView(hash.view) && isRouteAllowed(hash.view)) target = hash.view;
     navigate(target, hash.sub && hash.view === target ? { sub: hash.sub } : null);

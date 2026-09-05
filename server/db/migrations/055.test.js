@@ -37,8 +37,14 @@ function grantableKeys() {
 // Keys that are real gates without being NAV ids, each with the line that reads
 // it. Anything NOT here and not a NAV id is a dead key.
 const NON_NAV_GATES = {
-  // renderSidebar(): the «+ Новый пациент» CTA.
-  registration: /isModuleAllowed\('registration'\)/,
+  // NO_TABS_APPBAR_V1 (2026-09-05) — the reader used to be renderSidebar()'s
+  // «+ Новый пациент» CTA, and that button is gone (owner: "and create patient
+  // button"). The key is NOT dead: it is checked where it always mattered
+  // more — on the ROUTE, in isRouteAllowed(), which is what actually refuses a
+  // role that reaches #registration by bookmark, by deep link, or from the
+  // «Создать пациента» button inside «Пациенты». The CTA gate only hid a
+  // button; this one closes the door.
+  registration: /view === 'registration'\) return _effective\.has\('registration'\) && canEdit\('patients'\)/,
   // isModuleAllowed('cashier-shifts') accepts `cashier` as an alias of the NAV id.
   cashier: /navId === 'cashier-shifts'\) return _effective\.has\('cashier-shifts'\) \|\| _effective\.has\('cashier'\)/,
   // CUSTDEV_V1 — the «Cust Dev» button inside the CRM screen. Its gate cannot

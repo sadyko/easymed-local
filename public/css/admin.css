@@ -111,7 +111,28 @@
     --shadow-lg: 0 12px 32px rgba(11, 20, 24, 0.10), 0 4px 12px rgba(11, 20, 24, 0.06);
 
     --sidebar-w: 248px;
-    --topbar-h: 64px;
+    --topbar-h: 56px;
+
+    /* MOTION_TOKENS_V1 (2026-09-05) — the app's motion vocabulary.
+       Before this there were 79 hand-written `transition` values across the
+       stylesheets, no two screens agreeing on how long anything takes; the
+       result reads as several products stitched together. Three lengths cover
+       every case in a clinical UI:
+         --dur-1  a state flip you should feel, not watch (hover, press)
+         --dur-2  something appearing, or moving a short distance
+         --dur-3  a panel/overlay crossing real distance
+       --ease-out decelerates (things arriving); --ease-in-out is symmetric
+       (things moving in place); --ease-spring overshoots slightly and is for
+       deliberate emphasis only — never on anything that also changes size, or
+       the layout visibly wobbles.
+       Everything built on these is switched off wholesale by the single
+       prefers-reduced-motion rule at the end of this file. */
+    --dur-1: 80ms;
+    --dur-2: 140ms;
+    --dur-3: 220ms;
+    --ease-out:    cubic-bezier(0.2, 0.7, 0.3, 1);
+    --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+    --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
 
     /* ONEST_TYPOGRAPHY_V1 — Onest leads; the rest of the stack is what a
        half-updated or font-blocked browser falls back to. 'Geist' was never
@@ -223,26 +244,14 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     padding: 8px 0 12px;
 }
 
-/* "+ New patient" CTA — replaces the buried Patient registration nav row.
- * Sits at the very top of the sidebar, styled as a primary action button. */
-.sidebar-cta {
-    display: flex; align-items: center; justify-content: center; gap: 8px;
-    margin: 10px 14px 14px;
-    padding: 10px 14px;
-    background: var(--primary-600); color: white;
-    border: 0; border-radius: 10px;
-    font-family: inherit; font-size: 13.5px; font-weight: 600;
-    cursor: pointer; width: calc(100% - 28px);
-    box-shadow: 0 1px 2px rgba(11,20,24,0.10);
-    transition: background 120ms ease, transform 80ms ease;
-}
-.sidebar-cta:hover { background: var(--primary-700); }
-.sidebar-cta:active { transform: translateY(1px); }
-.sidebar-cta.active {
-    background: var(--primary-700);
-    box-shadow: 0 0 0 3px var(--primary-50), 0 1px 2px rgba(11,20,24,0.12);
-}
-.sidebar-cta svg { color: white; }
+/* NO_TABS_APPBAR_V1 (2026-09-05) — `.sidebar-cta` is gone with the two buttons
+ * that used it: the «+ Новый пациент» call to action (owner: "and create
+ * patient button" — remove it; registering a patient stays one click away
+ * inside «Пациенты») and the inline-styled «Публичный сайт» button, which is
+ * now an ordinary `.nav-item`. Its filled treatment did not disappear, it was
+ * PROMOTED: `.nav-item.active` below is that treatment, so the selected menu
+ * entry is the one filled button in the sidebar instead of competing with two
+ * permanent ones. */
 
 /* Collapsible nav group */
 .nav-group { display: flex; flex-direction: column; }
@@ -260,7 +269,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     text-transform: uppercase;
     color: var(--ink-400);
     font-weight: 700;
-    transition: color 100ms ease;
+    transition: color var(--dur-1) var(--ease-out);
 }
 .nav-section:hover { color: var(--ink-700); }
 .nav-section:hover .nav-section-chev { color: var(--ink-600); }
@@ -269,7 +278,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     font-size: 12.5px;
     color: var(--ink-400);
     line-height: 1;
-    transition: transform 150ms ease;
+    transition: transform var(--dur-2) var(--ease-out);
     margin-left: 8px;
 }
 .nav-group.collapsed .nav-section-chev { transform: rotate(-90deg); }
@@ -290,7 +299,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     font-size: 13.5px;
     font-weight: 600;
     color: var(--ink-800);
-    transition: background 80ms ease, color 80ms ease;
+    transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
 .nav-parent-head:hover { background: var(--ink-50); color: var(--ink-900); }
 .nav-parent-head .nav-icon {
@@ -352,14 +361,16 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 .nav-item {
     display: flex; align-items: center; gap: 11px;
     padding: 9px 12px;
-    border-radius: 9px;
+    border-radius: 10px;
     color: var(--ink-600);
     font-weight: 500;
     font-size: 13.5px;
     border: 0; background: transparent; text-align: left;
     cursor: pointer;
     width: 100%;
-    transition: background 80ms ease, color 80ms ease;
+    /* Colour only — never size, position or padding: a nav row that grows on
+       hover shoves the rest of the menu down under the pointer. */
+    transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
 }
 .nav-item:hover { background: var(--ink-50); color: var(--ink-900); }
 .nav-icon {
@@ -369,12 +380,37 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     font-size: 13.5px;
 }
 .nav-item:hover .nav-icon { color: var(--ink-700); }
-.nav-item.active {
-    background: var(--primary-50);
-    color: var(--primary-700);
+
+/* NAV_ACTIVE_FILLED_V1 (2026-09-05, plan задача 1) — the selected section is a
+   FILLED BUTTON, not a pale tint. The treatment is lifted verbatim from the
+   `.sidebar-cta` this file used to carry (primary-600 ground, white label and
+   icon, 10px radius, a hairline shadow) — that button is gone, so there is
+   exactly one filled thing in the sidebar and it is the thing you are looking
+   at. The collapsed rail (`.sidebar-collapsed .nav-item.active`) and the
+   second skin (`.nav-list-top .nav-item.active`) are changed in the same
+   commit; leaving either behind is how the two skins drifted apart before. */
+.nav-item.active,
+.nav-item.active:hover {
+    background: var(--primary-600);
+    color: #fff;
     font-weight: 600;
+    box-shadow: var(--shadow-xs);
 }
-.nav-item.active .nav-icon { color: var(--primary-600); }
+.nav-item.active .nav-icon,
+.nav-item.active:hover .nav-icon { color: #fff; }
+/* On the filled ground the lock mark would sit at ~1.2:1 against white if it
+   kept its ink colour; inherit instead, and lift the dimming that made an
+   unlicensed row grey (it is now white-on-teal and legible either way). */
+.sidebar .nav-item.active.nav-locked { opacity: 1; }
+.sidebar .nav-item.active .nav-lock-icon { color: #fff; opacity: .92; }
+/* Keyboard focus must stay visible ON the filled ground too: the global
+   :focus-visible ring is primary-600, which is invisible against itself.
+   White ring, teal gap — 2px each, same geometry as everywhere else. */
+.nav-item.active:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: -4px;
+    box-shadow: 0 0 0 2px var(--primary-700);
+}
 
 .sidebar-foot {
     padding: 14px;
@@ -391,7 +427,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     font-family: inherit;
     text-align: left;
     color: inherit;
-    transition: background 80ms ease, border-color 80ms ease;
+    transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
 }
 .user-card:hover { background: var(--white); border-color: var(--primary-300); }
 .user-card-text { flex: 1; min-width: 0; }
@@ -406,22 +442,26 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 }
 .user-card:hover .user-card-chev { color: var(--primary-600); }
 
-/* ---- Topbar variant: compact pill in .ts-controls (replaces the old
-   "Connected" status indicator). Sits next to the language switcher. ---- */
+/* ---- App-bar variant: compact account pill in .appbar-controls, right of the
+   language switcher. NO_TABS_APPBAR_V1 also retired the --ts-* colour
+   variables it used to read: those were declared by the style block admin.js
+   injected for the tab strip, so with the strip gone every one of them fell
+   back to its hardcoded literal. Ink tokens now, and a solid ground — the
+   translucent white only ever worked over the strip's teal gradient. ---- */
 .user-card-wrap { position: relative; display: inline-flex; }
 .user-card.user-card--topbar {
     width: auto;
     padding: 4px 10px 4px 4px;
     gap: 8px;
-    background: rgba(255,255,255,0.55);
-    border-color: rgba(13, 138, 138, 0.18);
-    color: var(--ts-ink, #0b1d28);
+    background: var(--ink-25);
+    border-color: var(--ink-100);
+    color: var(--ink-900);
     min-width: 0;
     max-width: 240px;
 }
 .user-card.user-card--topbar:hover {
-    background: #fff;
-    border-color: rgba(13, 138, 138, 0.36);
+    background: var(--white);
+    border-color: var(--ink-200);
 }
 .user-card.user-card--topbar .avatar {
     width: 28px; height: 28px;
@@ -435,22 +475,22 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 }
 .user-card.user-card--topbar .user-name {
     font-size: 12.5px; font-weight: 600;
-    color: var(--ts-ink, #0b1d28);
+    color: var(--ink-900);
     max-width: 130px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .user-card.user-card--topbar .user-role {
     font-size: 12.5px; font-weight: 600;
-    color: var(--ts-ink-muted, #5b6c75);
+    color: var(--ink-500);
     text-transform: uppercase; letter-spacing: 0.05em;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     max-width: 130px;
 }
 .user-card.user-card--topbar .user-card-chev {
-    color: var(--ts-ink-muted, #5b6c75);
+    color: var(--ink-500);
     font-size: 12.5px;
 }
-.user-card.user-card--topbar:hover .user-card-chev { color: var(--ts-ink, #0b1d28); }
+.user-card.user-card--topbar:hover .user-card-chev { color: var(--ink-900); }
 
 /* Popover anchored beneath the topbar user card. Hosts the View-as-role
    switcher + Log out button (rendered by renderAccountControls). */
@@ -481,7 +521,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     cursor: pointer;
     padding: 0;
     font-family: inherit;
-    transition: background .12s ease, border-color .12s ease, color .12s ease;
+    transition: background var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out), color var(--dur-2) var(--ease-out);
 }
 .sidebar-toggle:hover {
     background: var(--ink-100);
@@ -508,59 +548,67 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     padding-right: 0;
 }
 .sidebar-collapsed .nav-item > span:not(.nav-icon) { display: none; }
-.sidebar-collapsed .sidebar-cta {
-    justify-content: center;
-    gap: 0;
-    padding-left: 0;
-    padding-right: 0;
+/* NAV_ACTIVE_FILLED_V1 — on the 68px rail the label is hidden, so the fill IS
+   the only thing saying "you are here". Keep it, inset from the rail edges so
+   it reads as a button rather than a full-width band. */
+.sidebar-collapsed .nav { padding-left: 10px; padding-right: 10px; }
+.sidebar-collapsed .nav-item.active,
+.sidebar-collapsed .nav-item.active:hover {
+    background: var(--primary-600);
+    color: #fff;
+    box-shadow: var(--shadow-xs);
 }
-.sidebar-collapsed .sidebar-cta > span { display: none; }
 /* counts shrink to a dot so the alert is still visible on the rail */
 .sidebar-collapsed .nav-badge {
     position: absolute; top: 5px; right: 12px;
     min-width: 8px; width: 8px; height: 8px; padding: 0;
     border-radius: 50%; font-size: 0; color: transparent; overflow: hidden;
 }
+/* On the filled row the neutral dot vanishes into the teal — make it white,
+   and leave the red alert dot red (an alert outranks the selection). */
+.sidebar-collapsed .nav-item.active .nav-badge { background: #fff; }
+.sidebar-collapsed .nav-item.active .nav-badge.alert { background: var(--crit-500); }
 
-/* ---- Topbar branch picker pill (matches .topbar-lang aesthetic) ---- */
+/* ---- Branch picker pill in the app bar (matches .topbar-lang) — same
+   --ts-* retirement as the account pill above. ---- */
 .branch-picker { position: relative; display: inline-flex; align-items: center; }
 .branch-picker-btn {
     display: inline-flex; align-items: center; gap: 6px;
     height: 28px;
     padding: 0 10px;
-    background: rgba(255,255,255,0.55);
-    border: 1px solid rgba(13, 138, 138, 0.18);
+    background: var(--ink-25);
+    border: 1px solid var(--ink-100);
     border-radius: 8px;
     font: inherit;
     font-size: 12.5px;
-    color: var(--ts-ink, #0b1d28);
+    color: var(--ink-900);
     cursor: pointer;
     white-space: nowrap;
-    transition: background .12s ease, border-color .12s ease;
+    transition: background var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out);
 }
 .branch-picker-btn:hover {
-    background: #fff;
-    border-color: rgba(13, 138, 138, 0.36);
+    background: var(--white);
+    border-color: var(--ink-200);
 }
 .branch-picker-btn .bp-label {
-    color: var(--ts-ink-muted, #5b6c75);
+    color: var(--ink-500);
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-size: 12.5px;
 }
-.branch-picker-btn .bp-summary { font-weight: 600; color: var(--ts-ink, #0b1d28); }
+.branch-picker-btn .bp-summary { font-weight: 600; color: var(--ink-900); }
 .branch-picker-btn .bp-caret {
-    color: var(--ts-ink-muted, #5b6c75);
+    color: var(--ink-500);
     font-size: 12.5px;
     margin-left: 2px;
 }
-.branch-picker-btn:hover .bp-caret { color: var(--ts-ink, #0b1d28); }
+.branch-picker-btn:hover .bp-caret { color: var(--ink-900); }
 .branch-picker-single {
     /* Single-branch label — keep the typography but consistent with topbar */
     font-size: 12.5px !important;
     font-weight: 600 !important;
-    color: var(--ts-ink, #0b1d28) !important;
+    color: var(--ink-900) !important;
 }
 
 .branch-picker-pop {
@@ -590,7 +638,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     font-weight: 600;
     color: var(--ink-700);
     cursor: pointer;
-    transition: background .12s, border-color .12s, color .12s;
+    transition: background var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out), color var(--dur-2) var(--ease-out);
 }
 .bp-actions button:hover {
     background: var(--white);
@@ -609,7 +657,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     cursor: pointer;
     font-size: 13.5px;
     color: var(--ink-800);
-    transition: background .1s;
+    transition: background var(--dur-1) var(--ease-out);
 }
 .bp-row:hover { background: var(--ink-50); }
 .bp-row input[type="checkbox"] {
@@ -637,7 +685,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     font-family: inherit;
     cursor: pointer;
     width: 100%;
-    transition: background 80ms ease;
+    transition: background var(--dur-1) var(--ease-out);
 }
 .user-picker-row:last-child { border-bottom: 0; }
 .user-picker-row:hover { background: var(--ink-25); }
@@ -682,18 +730,59 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 .user-name { font-weight: 600; font-size: 13.5px; color: var(--ink-900); line-height: 1.2;}
 .user-role { font-size: 12.5px; color: var(--ink-500); margin-top: 2px;}
 
-/* ---- Topbar ---- */
+/* ============================================================
+   NO_TABS_APPBAR_V1 (2026-09-05) — the app bar.
+   The tab strip is gone; what stayed is a bar of pure chrome. Two jobs:
+     LEFT   say what screen this is (the tab labels used to carry that, and
+            nothing else in the shell did — the breadcrumb element was removed
+            from the markup long ago and renderCrumbs() no-ops)
+     RIGHT  hold the five global controls that used to live in `.ts-controls`:
+            reload · notifications · branch · language · account.
+   No fake-3D gradients and no raw hexes this time: it is a white bar on the
+   same hairline as the sidebar, and every colour is a token.
+   ============================================================ */
 .main { display: flex; flex-direction: column; min-width: 0; }
-.topbar {
-    height: var(--topbar-h);
-    display: flex; align-items: center;
+.appbar {
+    min-height: var(--topbar-h);
+    display: flex; align-items: center; gap: 16px;
     padding: 0 24px;
     background: var(--white);
     border-bottom: 1px solid var(--ink-100);
-    position: sticky;
-    top: 0; z-index: 10;
-    gap: 16px;
+    position: sticky; top: 0; z-index: 30;
 }
+.appbar-title {
+    margin: 0;
+    flex: 1; min-width: 0;
+    font-size: 17px; font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--ink-900);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.appbar-controls {
+    display: flex; align-items: center; gap: 10px;
+    flex: 0 0 auto;
+}
+/* APP_RELOAD_BTN_V1 — was 38px of inline style carrying three raw hexes
+   (#fbcf4a / #fde68a / #7c5a00). Same amber intent, on the warn tokens. */
+.appbar-reload {
+    width: 32px; height: 32px;
+    flex: 0 0 auto;
+    display: grid; place-items: center;
+    border-radius: 9px;
+    border: 1px solid var(--warn-500);
+    background: var(--warn-50);
+    color: var(--warn-700);
+    cursor: pointer;
+    font-family: inherit;
+    transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.appbar-reload:hover { background: var(--warn-500); color: #fff; }
+.topbar-bell { position: relative; display: inline-flex; align-items: center; }
+
+/* Each mounted view pane (see VIEW_CACHE_MAX in admin.js). Cached-but-hidden
+   panes are display:none'd from script; nothing else here to say. */
+.view-pane { min-width: 0; }
+
 .crumbs {
     display: flex; align-items: center; gap: 8px;
     font-size: 13.5px; color: var(--ink-500);
@@ -701,75 +790,11 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 .crumbs .sep { color: var(--ink-300); }
 .crumbs .current { color: var(--ink-900); font-weight: 600; }
 
-/* ---- Tab bar in topbar ---- */
-.tab-bar {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    flex: 1;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding: 0;
-    min-width: 0;
-    scrollbar-width: thin;
-}
-.tab-bar::-webkit-scrollbar { height: 4px; }
+/* NO_TABS_APPBAR_V1 (2026-09-05) — the `.tab-bar` / `.tab-item` / `.tab-label`
+   / `.tab-close` rules that stood here styled the FIRST browser-style tab
+   strip, which the `.ts-tab` strip replaced; they had been
+   dead CSS ever since. Both are gone now: there are no tabs. */
 
-.tab-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 32px;
-    padding: 0 4px 0 12px;
-    border-radius: 8px;
-    background: var(--ink-50);
-    border: 1px solid transparent;
-    cursor: pointer;
-    font-family: inherit;
-    font-size: 13.5px;
-    color: var(--ink-700);
-    white-space: nowrap;
-    flex-shrink: 0;
-    max-width: 220px;
-    transition: background 80ms ease, color 80ms ease, border-color 80ms ease;
-}
-.tab-item:hover { background: var(--ink-100); color: var(--ink-900); }
-.tab-item.active {
-    background: var(--primary-50);
-    color: var(--primary-700);
-    border-color: var(--primary-200);
-    font-weight: 600;
-}
-
-.tab-label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-}
-
-.tab-close {
-    width: 20px;
-    height: 20px;
-    display: grid;
-    place-items: center;
-    border-radius: 6px;
-    color: var(--ink-400);
-    font-size: 17px;
-    line-height: 1;
-    cursor: pointer;
-    flex-shrink: 0;
-    transition: background 80ms ease, color 80ms ease;
-}
-.tab-close:hover {
-    background: var(--ink-200);
-    color: var(--ink-800);
-}
-.tab-item.active .tab-close { color: var(--primary-600); }
-.tab-item.active .tab-close:hover {
-    background: var(--primary-100);
-    color: var(--primary-800);
-}
 
 .topbar-search {
     flex: 1; max-width: 420px;
@@ -810,7 +835,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     padding: 0 12px 0 36px;
     color: var(--ink-800);
     outline: none;
-    transition: border-color 100ms ease, background 100ms ease;
+    transition: border-color var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out);
 }
 .topbar-search input:focus { background: var(--white); border-color: var(--primary-300); box-shadow: 0 0 0 4px var(--primary-50); }
 .topbar-search::before {
@@ -896,7 +921,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     font-size: 13.5px;
     display: inline-flex; align-items: center; gap: 7px;
     cursor: pointer;
-    transition: filter 90ms ease, transform 90ms ease, background 100ms ease, border-color 100ms ease;
+    transition: filter var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
     white-space: nowrap;
     background: var(--white);
     color: var(--ink-700);
@@ -988,7 +1013,7 @@ table.list tbody tr:last-child td { border-bottom: 0; }
     outline: none;
     font-family: inherit;
     font-size: 13.5px;
-    transition: border-color 100ms ease, box-shadow 100ms ease;
+    transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
 }
 .field textarea { padding: 10px 12px; height: auto; min-height: 80px; resize: vertical; }
 .field input::placeholder, .field textarea::placeholder { color: var(--ink-400); }
@@ -1480,7 +1505,7 @@ html[lang="uz"] .modal-close::after { content: 'Yopish'; }
 .cal-vert-slot {
     border-bottom: 1px dashed rgba(0, 0, 0, 0.04);
     cursor: pointer;
-    transition: background 80ms ease;
+    transition: background var(--dur-1) var(--ease-out);
 }
 .cal-vert-slot.is-hour {
     border-bottom: 1px solid var(--ink-100);
@@ -1502,7 +1527,7 @@ html[lang="uz"] .modal-close::after { content: 'Yopish'; }
     border-left: 3px solid var(--primary-600);
     background: var(--primary-50);
     box-shadow: var(--shadow-xs);
-    transition: transform 0.06s ease, box-shadow 0.1s ease;
+    transition: transform var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
     z-index: 2;
     font-family: inherit;
     display: flex; flex-direction: column;
@@ -1616,7 +1641,7 @@ html[lang="uz"] .modal-close::after { content: 'Yopish'; }
     gap: 12px;
     padding: 8px 14px;
     border-bottom: 1px solid var(--ink-100);
-    transition: background 0.1s ease;
+    transition: background var(--dur-1) var(--ease-out);
 }
 .wh-row:last-child { border-bottom: 0; }
 .wh-row.is-on { background: var(--primary-50); }
@@ -1681,7 +1706,7 @@ html[lang="uz"] .modal-close::after { content: 'Yopish'; }
     gap: 12px;
     padding: 9px 14px;
     border-bottom: 1px solid var(--ink-100);
-    transition: background 0.08s ease;
+    transition: background var(--dur-1) var(--ease-out);
 }
 .ds-row:last-child { border-bottom: 0; }
 .ds-row.is-on { background: var(--primary-50); }
@@ -1866,7 +1891,7 @@ table.list .clickable-row:hover td { background: var(--primary-50); }
     white-space: nowrap;
     position: relative;
     top: 1px;
-    transition: background 80ms ease, color 80ms ease;
+    transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
 .vd-tab:hover { color: var(--ink-900); background: rgba(0, 0, 0, 0.02); }
 .vd-tab.on {
@@ -2072,7 +2097,7 @@ table.list .clickable-row:hover td { background: var(--primary-50); }
     text-align: left;
     cursor: pointer;
     font-family: inherit;
-    transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+    transition: transform var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out);
 }
 .dash-kpi:hover {
     transform: translateY(-2px);
@@ -2115,7 +2140,7 @@ textarea:focus-visible,
     color: var(--ink-400);
     letter-spacing: 0.01em;
     opacity: 0;
-    transition: opacity 120ms ease, color 120ms ease;
+    transition: opacity var(--dur-2) var(--ease-out), color var(--dur-2) var(--ease-out);
 }
 .dash-kpi:hover .dash-kpi-go { opacity: 1; color: var(--primary-700); }
 .dash-kpi-label {
@@ -2143,7 +2168,7 @@ textarea:focus-visible,
     padding: 12px 20px;
     border-top: 1px solid var(--ink-100);
     cursor: pointer;
-    transition: background 80ms ease;
+    transition: background var(--dur-1) var(--ease-out);
 }
 .dash-visit-row:first-child { border-top: 0; }
 .dash-visit-row:hover { background: var(--ink-25); }
@@ -2195,12 +2220,19 @@ textarea:focus-visible,
     font-weight: 600;
     color: var(--ink-800);
 }
-.nav-list-top .nav-item.active {
-    background: var(--primary-50);
-    color: var(--primary-700);
+/* NAV_ACTIVE_FILLED_V1 — the second skin follows the first, in the same
+   commit. It used to keep the old pale-tint active state, which is exactly how
+   two sidebars that look identical when idle end up looking different the
+   moment you select something. */
+.nav-list-top .nav-item.active,
+.nav-list-top .nav-item.active:hover {
+    background: var(--primary-600);
+    color: #fff;
+    box-shadow: var(--shadow-xs);
 }
 .nav-list-top .nav-icon { color: var(--ink-500); }
-.nav-list-top .nav-item.active .nav-icon { color: var(--primary-600); }
+.nav-list-top .nav-item.active .nav-icon,
+.nav-list-top .nav-item.active:hover .nav-icon { color: #fff; }
 
 /* ============================================================
    Login screen
@@ -2305,7 +2337,7 @@ textarea:focus-visible,
     font-size: 13.5px;
     color: var(--ink-800);
     cursor: pointer;
-    transition: background 80ms ease;
+    transition: background var(--dur-1) var(--ease-out);
 }
 .sp-item:hover { background: var(--ink-25); }
 .sp-item input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
@@ -2367,3 +2399,27 @@ textarea:focus-visible,
 .sidebar .nav-locked { opacity: .62; }
 .sidebar .nav-lock-icon { margin-left: auto; opacity: .8; flex: 0 0 auto; }
 .modal-card:not(.bedfs-card):not(.modal-compact) > .modal-body { flex: 1 1 auto; min-height: 0; }
+
+/* ============================================================
+   MOTION_TOKENS_V1 (2026-09-05) — reduced motion, once, for the whole app.
+   Until now this preference was honoured in exactly two places (an install
+   button's pulse and one employee panel's fade), which means a user who set
+   it still got every other transition and keyframe in the product. Motion
+   sensitivity is a medical accessibility need, not a styling preference: a
+   vestibular disorder does not care which screen you are on.
+   Kept as one blanket rule on purpose — a per-component opt-in is a rule
+   somebody forgets to add. Durations are collapsed rather than removed so
+   `transitionend` listeners still fire and nothing hangs waiting for them.
+   Must stay LAST in this file: admin-views.css loads after it, but nothing
+   there raises specificity above `!important`.
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        transition-delay: 0ms !important;
+        animation-delay: 0ms !important;
+        scroll-behavior: auto !important;
+    }
+}

@@ -20,8 +20,8 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="EasyMed">
-    <link rel="stylesheet" href="css/admin.css?v=sbfold1">
-    <link rel="stylesheet" href="css/admin-views.css?v=updbadge1">
+    <link rel="stylesheet" href="css/admin.css?v=notabs1">
+    <link rel="stylesheet" href="css/admin-views.css?v=notabs1">
 </head>
 <body class="admin">
     <div class="app">
@@ -48,20 +48,22 @@
 
         <!-- ============ MAIN ============ -->
         <main class="main">
-            <!-- Browser-style multi-tab strip. The left half holds the
-                 tabs (paintTabStrip populates #ts-tabs-area). The right
-                 half hosts the global controls (search, language, status)
-                 — moved here from the old topbar to save vertical space. -->
-            <div id="tab-strip" class="tab-strip">
-                <div id="ts-tabs-area" class="ts-tabs-area"></div>
-                <div class="ts-controls">
+            <!-- NO_TABS_APPBAR_V1 (2026-09-05, owner: «remove this shitty tabs.
+                 completely») — the browser-style tab strip is gone. What is left
+                 is a bar of pure CHROME: the section title on the left (the tab
+                 labels were carrying screen identity until now) and the global
+                 controls on the right, which all kept their ids so their owners
+                 (notifications.js → #topbar-bell, branch-picker.js →
+                 #branch-picker, admin.js → the rest) are untouched. -->
+            <header id="topbar" class="appbar">
+                <h1 id="section-title" class="appbar-title">—</h1>
+                <div class="appbar-controls">
                     <!-- APP_RELOAD_BTN_V1 — reload the app (handy in standalone/app mode where the browser reload is hidden) -->
-                    <button id="topbar-reload" type="button" title="Обновить приложение" aria-label="Обновить приложение"
-                            style="width:38px;height:38px;border-radius:10px;border:1px solid #fbcf4a;background:#fde68a;color:#7c5a00;display:grid;place-items:center;cursor:pointer;font-family:inherit;flex:0 0 auto;">
+                    <button id="topbar-reload" class="appbar-reload" type="button" title="Обновить приложение" aria-label="Обновить приложение">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                     </button>
-                    <div class="topbar-bell" id="topbar-bell" style="position:relative"></div>
-        <div id="branch-picker" class="branch-picker"></div>
+                    <div class="topbar-bell" id="topbar-bell"></div>
+                    <div id="branch-picker" class="branch-picker"></div>
                     <div class="topbar-lang" id="topbar-lang" role="group" aria-label="Language">
                         <button type="button" data-lang="uz">UZ</button>
                         <button type="button" data-lang="ru">RU</button>
@@ -79,7 +81,7 @@
                         <div id="user-popover" class="user-popover" hidden></div>
                     </div>
                 </div>
-            </div>
+            </header>
 
             <!-- View root — every page renders here via renderView() -->
             <div id="view-root" style="padding: 20px 24px;">
@@ -88,7 +90,7 @@
         </main>
     </div>
 
-    <script type="module" src="js/admin.js?v=labshared1"></script>
+    <script type="module" src="js/admin.js?v=notabs1"></script>
     <!-- SUPPORT_FAB_REMOVED_V1 — плавающая кнопка поддержки убрана. Чат всё
          равно был нерабочим: он читает support_tickets / support_messages,
          которых в локальной сборке нет (ни таблиц, ни записей в реестре) —

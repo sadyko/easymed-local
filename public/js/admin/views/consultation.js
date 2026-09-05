@@ -18,7 +18,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { scopedDoctorId, selfDoctorId, scopedProviderId } from '../permissions.js';   // ADMIN_DOCTOR_V2 / SERVICE_SCOPE_V1
 import { renderDoctorProfile } from './doctor-profile.js?v=btnright1';
 import { openAdmissionCard } from './admission-modal.js?v=inp2';   // INPATIENT_TAB_V1 / ADMISSION_ORDER_V1
-import { currentUser, loadPatientById } from '../data.js';
+import { loadPatientById } from '../data.js';   // NO_GREETING_V1 — currentUser() went with the greeting band
 import { IN_BED_STATUSES } from '../../shared/admission-status.js';   // INPATIENT_FLOW_V1
 
 // ---------------------------------------------------------------------------
@@ -362,12 +362,18 @@ function topTab(id, label, icon) {
 }
 
 // ---------------------------------------------------------------------------
-// APPOINTMENTS VIEW — doctor "Очередь приёма" (greeting · KPIs · queue)
+// APPOINTMENTS VIEW — doctor "Очередь приёма" (KPIs · queue)
 // (AURORA_QUEUE_V1)
+//
+// NO_GREETING_V1 (2026-09-05) — the greeting band that opened this screen is
+// gone (owner: убрать приветственные баннеры). It carried a time-of-day
+// greeting, a warm paragraph and a live 1-second clock — none of which is a
+// control — plus ONE thing that is: the Сегодня/Неделя/Месяц/Период range
+// filter. That filter moved down into the queue card's header, beside the
+// search box and the status filter it has always worked with.
 // ---------------------------------------------------------------------------
 function appointmentsView() {
     return h('div', null,
-        greetBanner(),
         kpiSummary(),
         h('div', { class: 'card', id: 'svc-card' },
             h('div', { class: 'card-header' },
@@ -379,6 +385,7 @@ function appointmentsView() {
                         style: { height: '34px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', width: '360px', maxWidth: '100%' },
                     }),
                     statusFilterSelect(),
+                    rangeFilter(),   // NO_GREETING_V1 — relocated out of the band
                 ),
                 h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     'Показано ', h('b', { id: 'svc-count', style: { color: 'var(--ink-800)' } }, '0'),
@@ -389,80 +396,24 @@ function appointmentsView() {
     );
 }
 
-// ---- Greeting banner: time-of-day greeting + today's date + range filter ----
-function greetBanner() {
-    // Kill any previous interval so navigating between My services and
-    // other tabs (or rerendering this view) never stacks ticks.
-    if (_docClockTimer) { clearInterval(_docClockTimer); _docClockTimer = null; }
+// ---- Date-range filter: Сегодня / Неделя / Месяц / Период ----
+// The values are read by inDateRange() (see the date-range helpers below);
+// changing one repaints the whole view, which is what re-applies the filter.
+const RANGES = [
+    { id: 'today', label: 'Сегодня' },
+    { id: 'week',  label: 'Неделя' },
+    { id: 'month', label: 'Месяц' },
+    { id: 'all',   label: 'Период' },
+];
 
-    const u = currentUser();
-    const firstName = ((u && (u.full_name || u.username)) || '').trim().split(/\s+/)[0] || 'доктор';
-    const now = new Date();
-    const hh = now.getHours();
-    const greetPart = hh < 12 ? 'Доброе утро' : hh < 18 ? 'Добрый день' : 'Добрый вечер';
-    const greetLine = `${greetPart}, ${firstName}!`;
-
-    // Live clock element — same pattern as registrarHeader: a <b> we
-    // mutate textContent on every tick, self-destructing if it leaves the
-    // DOM (so view changes auto-clean it).
-    const timeB = h('b', { class: 'num' }, ruTimeLabel(now));
-    _docClockTimer = setInterval(() => {
-        if (!timeB.isConnected) { clearInterval(_docClockTimer); _docClockTimer = null; return; }
-        timeB.textContent = ruTimeLabel(new Date());
-    }, 1000);
-
-    const RANGES = [
-        { id: 'today', label: 'Сегодня' },
-        { id: 'week',  label: 'Неделя' },
-        { id: 'month', label: 'Месяц' },
-        { id: 'all',   label: 'Период' },
-    ];
-    const tabBtn = (r) => h('button', {
-        class: 'segmented-btn' + (state.dateRange === r.id ? ' on' : ''),
-        type: 'button',
-        onclick: () => { if (state.dateRange === r.id) return; state.dateRange = r.id; paint(); },
-    }, h('span', null, r.label));
-
-    return h('div', { class: 'reg-greet' },
-        // LEFT — role id + greeting + warm message (doctor-flavoured).
-        h('div', { class: 'reg-greet-main' },
-            h('div', { class: 'reg-greet-id' },
-                h('div', { class: 'reg-greet-title' }, 'Кабинет врача'),
-                h('div', { class: 'reg-greet-sub' }, 'Очередь приёма · приёмная'),
-            ),
-            h('div', { class: 'reg-greet-msg' },
-                h('div', { class: 'reg-greet-hello' }, greetLine),
-                h('div', { class: 'reg-greet-warm' },
-                    'Каждый пациент — это история, которую вы слушаете. Ваша внимательность, точный диагноз и спокойная манера лечат не меньше препаратов. Спасибо за то, что вы делаете каждый день.',
-                ),
-            ),
-        ),
-        // RIGHT — live clock + RU date, then the 4 range tabs.
-        h('div', { class: 'reg-greet-ctrl' },
-            h('div', { class: 'reg-now' },
-                h('span', { class: 'reg-now-date' }, Icon('Calendar', { size: 14 }), h('span', null, ruDateLabel(now))),
-                h('span', { class: 'reg-now-time' }, Icon('Clock', { size: 14 }), timeB),
-            ),
-            h('div', { class: 'segmented reg-viewtabs' }, ...RANGES.map(tabBtn)),
-        ),
-    );
-}
-
-// ---- Local RU date / time formatters (mirror registrar-header.js so the
-// greeting banner here renders identically to the registrar's). Kept inline
-// to avoid an import cycle between consultation.js and registrar-header.js.
-const _RU_WD = ['Воскресенье','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота'];
-const _RU_MO = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
-const _zz = (n) => String(n).padStart(2, '0');
-function ruDateLabel(d) { return `${_RU_WD[d.getDay()]}, ${d.getDate()} ${_RU_MO[d.getMonth()]} ${d.getFullYear()}`; }
-function ruTimeLabel(d) { return `${_zz(d.getHours())}:${_zz(d.getMinutes())}:${_zz(d.getSeconds())}`; }
-let _docClockTimer = null;
-
-function rangeBtn(id, label) {
-    return h('button', {
-        class: state.dateRange === id ? 'on' : '',
-        onclick: () => { if (state.dateRange === id) return; state.dateRange = id; paint(); },
-    }, label);
+function rangeFilter() {
+    return h('div', { class: 'segmented', id: 'svc-range' },
+        ...RANGES.map(r => h('button', {
+            class: state.dateRange === r.id ? 'on' : '',
+            type: 'button',
+            'data-range': r.id,
+            onclick: () => { if (state.dateRange === r.id) return; state.dateRange = r.id; paint(); },
+        }, r.label)));
 }
 
 // ---- KPI summary cards (4) — real counts from loaded rows + referrals ----

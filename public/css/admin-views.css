@@ -1708,23 +1708,15 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 /* ============================================================
    AURORA QUEUE — doctor "Очередь приёма" (consultation.js)
    Ported from the Aurora+ worklist, re-skinned in EasyMed tokens.
-   Scope: greeting banner (.ws-greet), KPI summary cards (.ws-kpi*),
-   and the queue calendar (.ws-cal*). All colours consume existing
-   tokens — no new hardcoded values. (AURORA_QUEUE_V1)
+   Scope: KPI summary cards (.ws-kpi*) and the queue calendar (.ws-cal*).
+   All colours consume existing tokens — no new hardcoded values.
+   (AURORA_QUEUE_V1; the greeting banner it also carried is gone —
+   NO_GREETING_V1 below.)
    ============================================================ */
 
-/* ---- Greeting banner ---- */
-.ws-greet {
-    display: flex; align-items: flex-end; justify-content: space-between;
-    gap: 16px; flex-wrap: wrap;
-    padding: 18px 20px; margin-bottom: 16px;
-    background: linear-gradient(135deg, var(--primary-50), var(--white) 60%);
-    border: 1px solid var(--ink-100);
-    border-radius: var(--r-lg);
-    box-shadow: var(--shadow-xs);
-}
-.ws-greet-title { font-size: 20px; font-weight: 700; color: var(--ink-900); letter-spacing: -0.015em; margin: 0; }
-.ws-greet-sub { font-size: 13.5px; color: var(--ink-500); font-weight: 500; margin-top: 3px; }
+/* NO_GREETING_V1 (2026-09-05) — the `.ws-greet*` rules that stood here were
+   already dead: consultation.js had switched its banner to `.reg-greet`, and
+   nothing rendered a `.ws-greet` node any more. Both banners are gone now. */
 
 /* ---- KPI summary cards ---- */
 .ws-kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 14px; } /* WS_KPI_ALL_V1 */
@@ -1837,8 +1829,6 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 }
 @media (max-width: 560px) {
     .ws-kpi { grid-template-columns: 1fr; }
-    .ws-greet { padding: 14px 16px; }
-    .ws-greet-title { font-size: 17px; }
 }
 
 
@@ -2243,49 +2233,44 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 }
 
 /* ============================================================
-   REGISTRAR SHELL (B1) — Aurora «Регистратура» in EasyMed skin
+   REGISTRAR VIEW TABS — «База пациентов · Календарь записи · Мой дашборд»
+   (views/registrar-header.js)
+
+   NO_GREETING_V1 (2026-09-05) — the whole `.reg-greet*` / `.reg-now*` /
+   `.reg-viewtabs` family described the Aurora greeting band: a teal gradient
+   panel with a greeting, a warm paragraph, a live clock and the RU date. The
+   band is gone (owner: убрать приветственные баннеры). What it was hiding is
+   what is left here — the three view tabs, which are real navigation and now
+   read as such: a plain strip above the content, on the same tokens as every
+   other control in the app.
    ============================================================ */
-.reg-greet {
-    display: flex; align-items: stretch; gap: 18px; flex-wrap: wrap; margin-bottom: 18px;
-    background: linear-gradient(120deg, #0c3a39 0%, #115d5a 50%, #167873 100%);
-    border-radius: var(--r-lg); padding: 18px 22px; color: #fff;
-    box-shadow: var(--shadow-sm); position: relative; overflow: hidden;
+.reg-tabs {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    margin-bottom: 16px;
 }
-.reg-greet-main { display: flex; align-items: flex-start; gap: 16px; flex: 1 1 380px; min-width: 280px; }
-.reg-greet-id { min-width: 180px; }
-.reg-greet-title { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
-.reg-greet-sub { font-size: 12.5px; font-weight: 500; color: rgba(255,255,255,.85); margin-top: 2px; }
-.reg-greet-msg { flex: 1; border-left: 1px solid rgba(255,255,255,.18); padding-left: 16px; }
-.reg-greet-hello { font-size: 15px; font-weight: 700; }
-.reg-greet-warm { font-size: 12.5px; line-height: 1.5; color: rgba(255,255,255,.82); margin-top: 4px; max-width: 560px; }
-
-.reg-greet-ctrl { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-.reg-now {
-    display: inline-flex; align-items: stretch; border-radius: 11px; overflow: hidden;
-    background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.18);
-    font-size: 13.5px; font-weight: 600;
+.reg-tab {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 8px 14px;
+    border: 1px solid var(--ink-200);
+    background: var(--white);
+    color: var(--ink-700);
+    border-radius: 10px;
+    font-family: inherit; font-size: 13.5px; font-weight: 500;
+    cursor: pointer; white-space: nowrap;
+    transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
 }
-.reg-now-date, .reg-now-time { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; }
-.reg-now-time { border-left: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.12); }
-.reg-now-time .num { font-family: var(--font-mono); letter-spacing: .02em; }
-
-.reg-viewtabs { background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.16); }
-.reg-viewtabs .segmented-btn {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 6px 12px; border: 0; background: transparent;
-    font-size: 12.5px; font-weight: 600; color: rgba(255,255,255,.85);
-    border-radius: 8px; cursor: pointer; font-family: inherit;
+.reg-tab:hover { background: var(--ink-25); border-color: var(--ink-300); color: var(--ink-900); }
+/* Same filled treatment as the active sidebar item — one selection language
+   across the shell, not one per strip. */
+.reg-tab.on, .reg-tab.on:hover {
+    background: var(--primary-600);
+    border-color: var(--primary-600);
+    color: #fff;
+    font-weight: 600;
+    box-shadow: var(--shadow-xs);
 }
-.reg-viewtabs .segmented-btn:hover { color: #fff; background: rgba(255,255,255,.10); }
-.reg-viewtabs .segmented-btn.on { background: #fff; color: var(--primary-700); }
-
-@media (max-width: 1000px) {
-    .reg-greet-ctrl { align-items: flex-start; width: 100%; }
-}
-@media (max-width: 760px) {
-    .reg-greet { padding: 16px; }
-    .reg-greet-msg { border-left: 0; padding-left: 0; }
-}
+.reg-tab.on svg { color: #fff; }
+.reg-tab.on:focus-visible { outline: 2px solid #fff; outline-offset: -4px; box-shadow: 0 0 0 2px var(--primary-700); }
 
 /* --- patient-base table cells --- */
 /* REG_TBL_FIT_V1 — twelve columns at the shared .tbl padding (14px each side,
@@ -2977,25 +2962,13 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .rcal-appt-s { font-size: 12.5px; color: var(--ink-500); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 920px) { .rcal-page { flex-direction: column; } .rcal-rail { width: 100%; flex: none; } }
 
-/* === Top-bar view tabs (.ts-tab) — professional EasyMed teal styling. TS_TABS_PRO === */
-.ts-tabs-area { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; padding: 4px 2px; scrollbar-width: thin; }
-.ts-tabs-area::-webkit-scrollbar { height: 4px; }
-.ts-tabs-area::-webkit-scrollbar-thumb { background: var(--ink-200); border-radius: 4px; }
-/* TS_TAB_PILL_V2 — matches the doctor page's pill tabs (white rounded-full,
-   active = primary-50 tint + primary border) per user 2026-06-10. */
-.ts-tab { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 8px 0 15px; border-radius: 999px;
-    background: white; border: 1px solid var(--ink-200); cursor: pointer; font-family: inherit; font-size: 13.5px; font-weight: 500;
-    color: var(--ink-700); white-space: nowrap; flex: 0 0 auto; max-width: 210px; user-select: none;
-    transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease, border-color 120ms ease; }
-.ts-tab:hover { background: var(--ink-25); border-color: var(--ink-300); color: var(--ink-900); }
-.ts-tab.active { background: var(--primary-50); color: var(--primary-700); border-color: var(--primary-500); font-weight: 600; box-shadow: none; }
-.ts-tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; letter-spacing: -0.005em; }
-.ts-tab-close { width: 19px; height: 19px; display: grid; place-items: center; border-radius: 6px; border: 0; background: transparent;
-    color: var(--ink-400); font-size: 15px; line-height: 1; cursor: pointer; flex: 0 0 auto; padding: 0;
-    transition: background 120ms ease, color 120ms ease; }
-.ts-tab-close:hover { background: var(--ink-200); color: var(--ink-900); }
-.ts-tab.active .ts-tab-close { color: var(--primary-600); }
-.ts-tab.active .ts-tab-close:hover { background: var(--primary-100, #cde9e7); color: var(--primary-700); }
+/* NO_TABS_APPBAR_V1 (2026-09-05) — the `.ts-tabs-area` / `.ts-tab*` rules that
+   stood here dressed the browser-style tab strip. The strip is gone (owner:
+   «remove this shitty tabs. completely»), and so is the JS that painted it,
+   the second copy of these rules that admin.js injected at boot, and the
+   `.tab-*` corpse of the strip before it (admin.css). Screen identity moved to
+   the app bar's `.appbar-title`; the strip's controls moved to
+   `.appbar-controls`. */
 
 /* ===== DETAIL_UX_V2 — Деталь tab responsive grids (review fix) ===== */
 .pc-detail-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; align-items: start; }
@@ -3300,13 +3273,13 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     border-radius: 999px;
     text-align: center;
 }
-/* NAV_BADGE_ACTIVE_V2 — активный пункт меню СВЕТЛЫЙ (.nav-item.active — это
-   --primary-50 с текстом --primary-700, см. admin.css). Прежнее правило красило
-   счётчик белым по полупрозрачному белому: на светлой плашке это 1.05:1 — текст
-   пропадал целиком, да и сама «таблетка» (1.01:1) была неотличима от фона.
-   Берём сплошной primary-600 с белым текстом — 5.29:1 (WCAG AA) и ровно тот
-   вид, что уже описан для .sidebar-v2 выше. */
-.sidebar-body .nav-item.active .nav-badge { background: var(--primary-600, #167873); color: #fff; }
+/* NAV_BADGE_ACTIVE_V3 (2026-09-05) — активный пункт меню стал ЗАЛИТОЙ КНОПКОЙ
+   (--primary-600, белый текст — NAV_ACTIVE_FILLED_V1 в admin.css), и правило
+   V2 вместе с ним сломалось наоборот: оно красило «таблетку» в тот же
+   primary-600, что и подложка — 1.00:1, счётчик исчезал целиком.
+   Инвертируем: белая таблетка, текст primary-700 — 7.5:1 на белом (WCAG AAA),
+   а сама таблетка — 5.4:1 к бирюзовой подложке, то есть отчётливо видна. */
+.sidebar-body .nav-item.active .nav-badge { background: #fff; color: var(--primary-700, #115d5a); }
 /* Красный счётчик остаётся красным и на выбранном пункте: тревога важнее
    подсветки выбора. Идёт последним, поэтому выигрывает у правила .active. */
 .sidebar-body .nav-item .nav-badge.alert,
