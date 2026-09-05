@@ -37,7 +37,10 @@ import { offerIsCurrent, formatRuHour } from './admin/updates-logic.js';   // UP
 
 import { renderDashboard }    from './admin/views/dashboard.js?v=owndash2';
 import { renderPublicSite }   from './admin/views/public-site.js?v=pub6';   // PUBLIC_SITE_V1
-import { renderPatients }     from './admin/views/patients.js?v=regfit2';
+// PATIENTS_HUB_V1 — маршрут «Пациенты» открывает ХОСТ раздела (список ·
+// очередь · записи). Сам список никуда не делся: хост монтирует его первой
+// вкладкой из того же views/patients.js.
+import { renderPatientsHub } from './admin/views/patients-hub.js?v=phub1';
 import { renderVisits }       from './admin/views/visits.js?v=visits1';   // VISITS_V1 — money-free scheduling
 import { renderServices }     from './admin/views/services.js?v=aug31a';   // SERVICES_CATALOG_V1 — + SERVICES_ONE_EDITOR_V1 (единый редактор + удаление в строке)
 import { renderRegistration } from './admin/views/registration.js?v=aug17f';
@@ -667,7 +670,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
         switch (state.view) {
             case 'dashboard':     return void await renderDashboard(viewRoot, ctx);
             case 'public-site':   return void await renderPublicSite(viewRoot, ctx);   // PUBLIC_SITE_V1
-            case 'patients':      return void await renderPatients(viewRoot, ctx);
+            case 'patients':      return void await renderPatientsHub(viewRoot, ctx);   // PATIENTS_HUB_V1 — список · очередь · записи
             case 'visits':        return void await renderVisits(viewRoot, ctx);   // VISITS_V1
             case 'services':      return void await renderServices(viewRoot, ctx);   // SERVICES_CATALOG_V1
             case 'requests':      return void await renderRequestsInbox(viewRoot, ctx);   // REQUESTS_INBOX_V1
@@ -682,7 +685,10 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'inventory':     return void await renderInventory(viewRoot, ctx);   // INVENTORY_UI_V1
             case 'patient-documents': return void await renderPatientDocuments(viewRoot, ctx);   // PATIENT_DOCUMENTS_V1
             case 'procedures':    return void await renderProcedures(viewRoot, ctx);
-            case 'queue':         return void await renderQueue(viewRoot, ctx);   // QUEUE_BOARD_V1
+            // QUEUE_BOARD_V1 — собственный маршрут доски цел: он и пункт меню
+            // «Очередь», и адрес для роли, которой выдана ТОЛЬКО доска, без
+            // картотеки. Внутри «Пациентов» та же доска живёт вкладкой.
+            case 'queue':         return void await renderQueue(viewRoot, ctx);
             case 'crm':           return void await renderCrm(viewRoot, ctx);   // CRM_V1
             case 'docs-archive':  return void await renderDocsArchive(viewRoot, ctx);   // CLINICAL_DOCS_ARCHIVE_V1
             case 'admissions':    return void await renderAdmissions(viewRoot, ctx);   // ADMISSION_ORDER_V1

@@ -455,6 +455,25 @@ export function isModuleAllowed(navId) {
         return (_effective.has('beds') || _effective.has('consultation'))
             && hasActorRole(INPATIENT_SCREEN_ROLES['mar-sheet']);
     }
+    // PATIENTS_HUB_V1 — «Календарь записи» это ЛИЦО раздела «Пациенты», а не
+    // отдельный раздел: с 2026-09-05 он третья вкладка внутри «Пациентов»
+    // (views/patients-hub.js), и попасть в него можно ещё и собственным
+    // маршрутом #appointments.
+    //
+    // Ключа `appointments` нет ни в одной настроенной роли и никогда не было —
+    // его нет в NAV_MODULES, значит редактор ролей его не предлагает, значит
+    // проверка `_effective.has('appointments')` не могла пройти НИ У КОГО:
+    // календарь был невидим для каждой роли, кроме полного доступа. Завести
+    // ему собственный грант — значит оставить его невидимым и дальше, пока
+    // администратор клиники не сходит в настройки ролей и не проставит галочку
+    // каждой роли поимённо; а регистратура, ради которой календарь и написан,
+    // должна видеть его сразу.
+    //
+    // Поэтому — не новый ключ, а следствие: у кого есть картотека, у того есть
+    // и календарь записи. Тот же приём и тот же довод, что у 'admissions' →
+    // 'beds' и 'cashier-shifts' → 'cashier' выше. Сервер отвечает второй раз и
+    // строже: запись пишется в visits с обычной проверкой прав.
+    if (navId === 'appointments') return _effective.has('appointments') || _effective.has('patients');
     // CASHIER_HEAD_KEY_V1 — Старший кассир is its OWN explicit grant (was derived
     // from Cashier: Admin, which made every delete-level cashier a head cashier).
     if (navId === 'cashier-head') return _effective.has('cashier-head');
@@ -536,6 +555,7 @@ export function isRouteAllowed(view) {
     // госпитализации ('#mar-sheet/13', payload.sub), и без него: без номера
     // экран показывает лежащих и просит выбрать. Право одно на оба случая.
     if (view === 'mar-sheet' || view === 'mar-nurse' || view === 'kitchen-sheet' || view === 'discharge') return isModuleAllowed(view);   // TWO_STEP_DISCHARGE_V1 добавил #discharge
+    if (view === 'appointments') return isModuleAllowed('appointments');   // PATIENTS_HUB_V1 — «Календарь записи» едет с ключом `patients`
     if (view === 'cashier-head') return isModuleAllowed('cashier-head');   // CASHIER_HEAD_NAV_V1
     if (view === 'registration') return _effective.has('registration') && canEdit('patients');   // ROLE_AUDIT_V1 (fix #2)
     if (view === 'procurement') return _effective.has('procurement') || _effective.has('procurement:requisitions');   // PROCUREMENT_REQ_GRANT_V1

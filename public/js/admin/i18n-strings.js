@@ -727,7 +727,6 @@ export const STRINGS = {
   "Снимите галочку — услуга уйдёт в новый счёт": {"en":"Uncheck — service will move to a new invoice","ru":"Снимите галочку — услуга уйдёт в новый счёт","uz":"Belgilashni olib tashlang — xizmat yangi hisob-fakturaga oʻtadi"},
   "Совет": {"en":"Tip","ru":"Совет","uz":"Maslahat"},
   "Сожалеем, что не удалось встретиться. Перенесём?": {"en":"Sorry we couldn't meet. Shall we reschedule?","ru":"Сожалеем, что не удалось встретиться. Перенесём?","uz":"Uchrasha olmaganimiz uchun kechirasiz. Qayta rejalashtiramizmi?"},
-  "Создайте первого пациента кнопкой <b>+ Новый пациент</b>.": {"en":"Create the first patient using the + New patient button.","ru":"Создайте первого пациента кнопкой + Новый пациент.","uz":"+ Yangi bemor tugmasi orqali birinchi bemorni yarating."},
   "Создание или редактирование карты пациента и запись на первый приём": {"en":"Create or edit a patient record and book the first appointment","ru":"Создание или редактирование карты пациента и запись на первый приём","uz":"Bemor kartasini yaratish yoki tahrirlash va birinchi qabulga yozish"},
   "Создать": {"en":"Create","ru":"Создать","uz":"Yaratish"},
   "Создать нового пациента?": {"en":"Create a new patient?","ru":"Создать нового пациента?","uz":"Yangi bemor yaratish?"},
@@ -6379,4 +6378,11 @@ export const STRINGS = {
   "Проживание не внесено: {units} {unit} на {amount} — эта сумма в остаток не вошла.": {"en":"Accommodation is not on the bill: {units} {unit} worth {amount} — that sum is not in the balance.","ru":"Проживание не внесено: {units} {unit} на {amount} — эта сумма в остаток не вошла.","uz":"Yashash kiritilmagan: {units} {unit}, {amount} — bu summa qoldiqqa kirmagan."},
   "проживание не внесено: {amount}": {"en":"accommodation not billed: {amount}","ru":"проживание не внесено: {amount}","uz":"yashash kiritilmagan: {amount}"},
   "Внесите проживание в карте госпитализации — иначе за эти сутки клиника не выставит ничего.": {"en":"Add the accommodation on the admission card — otherwise the clinic bills nothing for those days.","ru":"Внесите проживание в карте госпитализации — иначе за эти сутки клиника не выставит ничего.","uz":"Yashashni gospitalizatsiya kartasida kiriting — aks holda klinika bu kunlar uchun hech narsa qo'ymaydi."},
+  // PATIENTS_HUB_V1 / ONBOARDING_TARGET_V1 — «Пациенты» тремя вкладками
+  // (список · очередь · записи) и подсказка, показывающая на живую кнопку — added 2026-09-05
+  "Записи": {"en":"Appointments","ru":"Записи","uz":"Yozilishlar"},
+  "Разделы «Пациенты»": {"en":"Patients section tabs","ru":"Разделы «Пациенты»","uz":"«Bemorlar» bo'limlari"},
+  "Календарь записи готовится": {"en":"The booking calendar is on its way","ru":"Календарь записи готовится","uz":"Yozilish kalendari tayyorlanmoqda"},
+  "Экран записи сейчас обновляется. Список пациентов и очередь работают как обычно.": {"en":"The booking screen is being updated. The patient list and the queue work as usual.","ru":"Экран записи сейчас обновляется. Список пациентов и очередь работают как обычно.","uz":"Yozilish ekrani hozir yangilanmoqda. Bemorlar ro'yxati va navbat odatdagidek ishlaydi."},
+  "Заведите первого пациента кнопкой <b>Создать пациента</b> в шапке раздела.": {"en":"Create the first patient with the <b>Create patient</b> button in the section header.","ru":"Заведите первого пациента кнопкой <b>Создать пациента</b> в шапке раздела.","uz":"Bo'lim sarlavhasidagi <b>Bemor yaratish</b> tugmasi orqali birinchi bemorni yarating."},
 };

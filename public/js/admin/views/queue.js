@@ -20,9 +20,26 @@ import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — счётчики о�
 // QUEUE_FILTERS_V1 — фильтры живут в состоянии модуля, а не в DOM: доска сама
 // перезагружается каждые 10 секунд, и фильтр, хранившийся в поле ввода,
 // сбрасывался бы у сотрудника под руками.
+//
+// QUEUE_HOST_V1 (2026-09-05) — у доски теперь ДВА места: собственный маршрут
+// #queue (пункт меню) и вкладка «Очередь» внутри «Пациентов». Оба могут быть
+// смонтированы одновременно — оболочка держит до трёх панелей, — поэтому
+// `refs` и таймер больше не одиночки на модуль, а принадлежат КОНКРЕТНОМУ
+// монтированию. Раньше второе монтирование молча забирало `refs` себе: первая
+// доска оставалась на экране, но обновлять её было уже некому.
+//
+// `state` общим остался НАМЕРЕННО: день, поиск, вид и галочка «только с
+// очередью» — это настройки сотрудника, и, вернувшись на вкладку, он обязан
+// найти их такими же, какими оставил.
 const state = { day: '', board: null, error: '', query: '', kind: 'all', onlyWaiting: false };
-let refs = {};
-let poll = null;
+
+// Живые монтирования доски: { container, refs, poll }.
+const mounts = new Set();
+
+// Десять секунд — как в «Чате с пациентами». Очередь меняется в других
+// разделах (касса, кабинет врача), а не здесь, поэтому доска обновляет себя
+// сама.
+const POLL_MS = 10000;
 
 async function rpc(name, args = {}) {
     const { data, error } = await supabase.rpc(name, args);
@@ -69,47 +86,97 @@ const STATE_ORDER = { serving: 0, waiting: 1, unpaid: 2, done: 3 };
 const ROWS_VISIBLE = 10;
 const ROW_H = 52;
 
-export async function renderQueue(container) {
+/**
+ * Рисует доску в `container` и возвращает пульт ЭТОГО монтирования:
+ * `stop()` — снять опрос, `start()` — перечитать и завести его снова,
+ * `isPolling()` — идёт ли опрос, `destroy()` — забыть монтирование совсем.
+ * Маршрут #queue пульт не берёт: доска на своём экране живёт сама. Пультом
+ * пользуется вкладка «Очередь» в «Пациентах» (views/patients-hub.js) — она
+ * обязана глушить опрос, пока её не видно.
+ *
+ * `embedded` убирает ТОЛЬКО заголовок раздела: его уже несёт верхняя панель, и
+ * второй такой же под ней — шум. Выбор дня и «Обновить» остаются: без них
+ * доска перестаёт быть доской.
+ */
+export async function renderQueue(container, { embedded = false } = {}) {
     clear(container);
-    stopPolling();
+    // Тот же контейнер перерисовывают (смена филиала и языка перерисовывают
+    // панель целиком). Прошлое монтирование этого контейнера обязано уйти
+    // вместе со своим таймером, иначе оно продолжит опрашивать базу ради
+    // разметки, которую только что стёрли.
+    for (const m of [...mounts]) if (m.container === container) { stopPolling(m); mounts.delete(m); }
+
     state.day = state.day || todayLocal();
 
-    const root = h('div', { class: 'fade-in' });
+    const inst = { container, refs: {}, poll: null };
+    mounts.add(inst);
+
+    const root = h('div', { class: 'fade-in', 'data-queue-board': '' });
     container.appendChild(root);
 
     const dayInput = h('input', {
         type: 'date', value: state.day, style: { width: '160px' },
-        onchange: () => { state.day = dayInput.value || todayLocal(); load(); },
+        onchange: () => { state.day = dayInput.value || todayLocal(); load(inst); },
     });
     const refreshBtn = h('button', {
-        class: 'btn', type: 'button', title: 'Обновить сейчас', onclick: () => load(),
+        class: 'btn', type: 'button', title: 'Обновить сейчас', onclick: () => load(inst),
     }, Icon('Refresh', { size: 13 }), ' Обновить');
 
-    root.appendChild(PageHead({
-        title: 'Очередь',
-        subtitle: 'Номера талонов по назначениям за день. Раздел только показывает — вызов пациента остаётся в «Моих услугах».',
-        right: [dayInput, refreshBtn],
-    }));
+    root.appendChild(embedded
+        ? h('div', { class: 'row', style: { gap: '8px', justifyContent: 'flex-end', marginBottom: '14px' } },
+            dayInput, refreshBtn)
+        : PageHead({
+            title: 'Очередь',
+            subtitle: 'Номера талонов по назначениям за день. Раздел только показывает — вызов пациента остаётся в «Моих услугах».',
+            right: [dayInput, refreshBtn],
+        }));
 
-    refs.filters = h('div');
+    inst.refs.filters = h('div');
     // Панель принадлежит ЭТОМУ монтированию. При повторном входе в раздел
     // контейнер новый, а refs.bar ещё указывал бы на элемент прошлой страницы —
     // и panel никогда бы не построилась заново.
-    refs.bar = null;
-    root.appendChild(refs.filters);
-    refs.body = h('div');
-    root.appendChild(refs.body);
+    inst.refs.bar = null;
+    root.appendChild(inst.refs.filters);
+    inst.refs.body = h('div');
+    root.appendChild(inst.refs.body);
 
-    await load();
-    // Очередь меняется в других разделах (касса, кабинет врача), а не здесь,
-    // поэтому доска обновляет себя сама. 10 секунд — как в «Чате с пациентами».
-    poll = setInterval(() => { load({ quiet: true }).catch(() => {}); }, 10000);
+    await load(inst);
+    startPolling(inst);
+
+    return {
+        stop() { stopPolling(inst); },
+        async start() {
+            if (inst.poll) return;
+            // Сначала таймер, потом чтение: пульт обязан отвечать «опрос идёт»
+            // сразу, а не через сетевой запрос.
+            startPolling(inst);
+            await load(inst, { quiet: true });
+        },
+        isPolling() { return inst.poll != null; },
+        destroy() { stopPolling(inst); mounts.delete(inst); },
+    };
 }
 
-export function stopQueuePolling() { stopPolling(); }
-function stopPolling() { if (poll) { clearInterval(poll); poll = null; } }
+/** Снять опрос у ВСЕХ живых досок. */
+export function stopQueuePolling() { for (const inst of mounts) stopPolling(inst); }
 
-async function load({ quiet = false } = {}) {
+function startPolling(inst) {
+    stopPolling(inst);
+    inst.poll = setInterval(() => {
+        // Панель могли вытеснить из кэша экранов — её корень больше не в
+        // документе. Таймер снимает себя сам: иначе он пережил бы собственный
+        // экран и до конца сессии ходил бы в базу ради разметки, которой нет.
+        if (inst.container && inst.container.isConnected === false) {
+            stopPolling(inst); mounts.delete(inst); return;
+        }
+        load(inst, { quiet: true }).catch(() => {});
+    }, POLL_MS);
+}
+
+function stopPolling(inst) { if (inst && inst.poll) { clearInterval(inst.poll); inst.poll = null; } }
+
+async function load(inst, { quiet = false } = {}) {
+    const refs = inst.refs;
     if (!quiet) {
         clear(refs.body);
         refs.body.appendChild(h('div', { class: 'muted', style: { padding: '18px' } }, 'Загрузка…'));
@@ -123,8 +190,8 @@ async function load({ quiet = false } = {}) {
         // сотрудник продолжает видеть последнюю известную очередь.
         if (quiet) return;
     }
-    paintFilters();
-    paint();
+    paintFilters(inst);
+    paint(inst);
 }
 
 // ---------------------------------------------------------------------------
@@ -160,26 +227,28 @@ function visibleGroups() {
 // Доска сама обновляется каждые 10 секунд. Если пересоздавать поле поиска на
 // каждом обновлении, оно будет терять фокус и курсор прямо под руками у
 // сотрудника — искать в таком поле невозможно.
-function buildFilters() {
+function buildFilters(inst) {
+    const refs = inst.refs;
     refs.search = h('input', {
         value: state.query, placeholder: 'Врач, пациент, услуга',
-        oninput: (ev) => { state.query = ev.target.value.trim().toLowerCase(); paint(); },
+        oninput: (ev) => { state.query = ev.target.value.trim().toLowerCase(); paint(inst); },
     });
     const searchWrap = h('div', { class: 'q-search' }, h('span', null, Icon('Search', { size: 14 })), refs.search);
 
     refs.chips = h('div', { class: 'q-chips' });
 
     const waitCb = h('input', { type: 'checkbox', checked: state.onlyWaiting,
-        onchange: (ev) => { state.onlyWaiting = ev.target.checked; paint(); } });
+        onchange: (ev) => { state.onlyWaiting = ev.target.checked; paint(inst); } });
     const waitLbl = h('label', { class: 'q-wait' }, waitCb, 'Только где есть очередь');
 
     refs.bar = h('div', { class: 'q-filters' }, searchWrap, refs.chips, waitLbl);
     refs.filters.appendChild(refs.bar);
 }
 
-function paintFilters() {
+function paintFilters(inst) {
+    const refs = inst.refs;
     if (!refs.filters) return;
-    if (!refs.bar) buildFilters();
+    if (!refs.bar) buildFilters(inst);
 
     const all = (state.board && state.board.groups) || [];
     // Пустой день — панель прячем, а не удаляем: удаление снова сожгло бы
@@ -201,13 +270,14 @@ function paintFilters() {
         refs.chips.appendChild(h('button', {
             type: 'button',
             class: on ? 'on' : null,
-            onclick: () => { state.kind = k; paintFilters(); paint(); },
+            onclick: () => { state.kind = k; paintFilters(inst); paint(inst); },
         }, k === 'all' ? 'Все' : (KIND_TITLE[k] || k),
             h('span', { class: 'n' }, String(n))));
     }
 }
 
-function paint() {
+function paint(inst) {
+    const refs = inst.refs;
     clear(refs.body);
     if (state.error) {
         refs.body.appendChild(h('div', { class: 'empty', style: { padding: '30px' } }, state.error));
@@ -227,7 +297,7 @@ function paint() {
                     state.query = ''; state.kind = 'all'; state.onlyWaiting = false;
                     if (refs.search) refs.search.value = '';
                     refs.bar = null; clear(refs.filters);   // пересобрать: галочка и вкладки сброшены
-                    paintFilters(); paint();
+                    paintFilters(inst); paint(inst);
                 } },
                 'Сбросить фильтры')));
         return;

@@ -277,7 +277,13 @@ function tourSteps(role) {
 
 // Contextual tips: shown once when a view is first opened (role-filtered).
 const CONTEXT_TIPS = {
-    patients:        [{ key: 'patients.new', target: { selector: '.sidebar-cta' }, title: 'Совет', body: 'Создайте первого пациента кнопкой <b>+ Новый пациент</b>.' }],
+    // ONBOARDING_TARGET_V1 (2026-09-05) — цель была `.sidebar-cta`, призывная
+    // кнопка меню. Оболочку перестроили (NO_TABS_APPBAR_V1), кнопки не стало,
+    // resolveTarget стал возвращать null — и подсказка тихо пропускалась:
+    // ошибка без единого следа на экране. Теперь она показывает на ту кнопку,
+    // которая действительно заводит пациента, — «Создать пациента» в шапке
+    // раздела (views/patients.js, data-onb).
+    patients:        [{ key: 'patients.new', target: { selector: '[data-onb="create-patient"]' }, title: 'Совет', body: 'Заведите первого пациента кнопкой <b>Создать пациента</b> в шапке раздела.' }],
     cashier:         [{ key: 'cashier.open', target: { selector: '#sidebar-body .nav-item.active' }, title: 'Совет', body: 'Откройте кассовую смену перед приёмом платежей.' }],
     'cashier-shifts':[{ key: 'shift.open', target: { selector: '#sidebar-body .nav-item.active' }, title: 'Совет', body: 'Откройте смену, чтобы начать принимать платежи.' }],
     beds:            [{ key: 'beds.legend', target: { selector: '#sidebar-body .nav-item.active' }, title: 'Совет', body: 'Зелёные койки свободны; занятые показывают пациента.' }],

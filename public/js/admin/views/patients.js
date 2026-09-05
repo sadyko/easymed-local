@@ -171,7 +171,13 @@ function mount() {
     const calcBtn = h('button', { class: 'btn btn-amber btn-sm', title: 'Калькулятор услуг — расчёт без выбора пациента',
         onclick: () => openServicePickerModal({ calculator: true, title: 'Калькулятор услуг', titleIcon: 'Coins', onPick: () => {}, onCreatePatient: () => refs.onNavigate('registration') }) },
         Icon('Coins', { size: 14 }), ' Калькулятор');
-    const createBtn = h('button', { class: 'btn btn-primary btn-sm', onclick: () => refs.onNavigate('registration') },
+    // ONBOARDING_TARGET_V1 — за эту кнопку цепляется подсказка «заведите
+    // первого пациента» (admin/onboarding.js). Раньше она целилась в призывную
+    // кнопку меню, а меню её лишилось (NO_TABS_APPBAR_V1) — подсказка молча
+    // перестала показываться. Метка нужна именно как метка: класс у кнопки
+    // общий с десятками других, и селектор по нему нашёл бы не ту.
+    const createBtn = h('button', { class: 'btn btn-primary btn-sm', 'data-onb': 'create-patient',
+        onclick: () => refs.onNavigate('registration') },
         Icon('Plus', { size: 14 }), ' Создать пациента');
 
     // DUP_MERGE_V1 — «select all visible» header checkbox (only meaningful in the
