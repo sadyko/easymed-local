@@ -133,7 +133,7 @@ function nextWeekday(offset = 1) {
 const WD = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const isoOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-function seed({ doctorOff = false } = {}) {
+function seed({ doctorOff = false, cross = false } = {}) {
   const db = openDb(':memory:');
   migrate(db);
   const day = nextWeekday();
@@ -151,12 +151,37 @@ function seed({ doctorOff = false } = {}) {
   const start = new Date(day); start.setHours(10, 0, 0, 0);
   db.prepare(`INSERT INTO visits (id, patient_id, doctor_id, room_id, service_id, visit_date, duration_minutes, status)
               VALUES (55, 3, 7, 11, 21, ?, 30, 'confirmed')`).run(start.toISOString());
+
+  // CROSS_BRANCH_CALENDAR_V1 — сеть из двух зданий и три случая, ради которых
+  // экран переписывался: чужая запись, наша неподтверждённая запись в чужое
+  // здание и настоящее столкновение внутри часа между обменами.
+  if (cross) {
+    db.prepare("UPDATE branches SET name = 'Главный корпус', letter = 'A' WHERE id = (SELECT MIN(id) FROM branches)").run();
+    db.prepare("INSERT INTO branches (id, name, letter, active) VALUES (77,'Второй корпус','B',0)").run();
+    db.prepare("UPDATE branch_identity SET letter = 'A', branch_id = (SELECT MIN(id) FROM branches) WHERE id = 1").run();
+    db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, specialty, working_hours, branch_id) VALUES (9,'karimov','x','Каримов Рустам','doctor',1,'хирург',?,77)")
+      .run(JSON.stringify(wh));
+    // Возраст картинки соседа — ровно то, что читает «данные на HH:MM».
+    const asOf = new Date(day); asOf.setHours(8, 40, 0, 0);
+    db.prepare(`INSERT INTO control_state (key, value) VALUES ('branch_sync_peer_snapshot', ?)`)
+      .run(JSON.stringify({ B: { at: asOf.toISOString(), generated_at: asOf.toISOString() } }));
+
+    const far = new Date(day); far.setHours(11, 0, 0, 0);
+    db.prepare(`INSERT INTO visits (id, uid, sync_origin, patient_id, doctor_id, service_id, visit_date, duration_minutes, status, booked_at)
+                VALUES (56, 'uid-far', 'B', 3, 9, 21, ?, 30, 'scheduled', '2026-09-01T08:00:00.000Z')`).run(far.toISOString());
+    const wait = new Date(day); wait.setHours(13, 0, 0, 0);
+    db.prepare(`INSERT INTO visits (id, patient_id, doctor_id, service_id, visit_date, duration_minutes, status, cross_branch, cross_branch_seq, booked_at)
+                VALUES (57, 3, 9, 21, ?, 30, 'scheduled', 'B', 999999, '2026-09-01T09:00:00.000Z')`).run(wait.toISOString());
+    // Столкновение: то же время, что у чужой записи 56, но занято позже нами.
+    db.prepare(`INSERT INTO visits (id, patient_id, doctor_id, service_id, visit_date, duration_minutes, status, cross_branch, cross_branch_seq, booked_at)
+                VALUES (58, 3, 9, 21, ?, 30, 'scheduled', 'B', 999999, '2026-09-01T08:00:05.000Z')`).run(far.toISOString());
+  }
   return { db, dayIso: isoOf(day) };
 }
 
 /** Отрисовать экран на нужный день. */
-async function render({ doctorOff = false, failTable = null } = {}) {
-  const s = seed({ doctorOff });
+async function render({ doctorOff = false, failTable = null, cross = false } = {}) {
+  const s = seed({ doctorOff, cross });
   if (DB) DB.close();
   DB = s.db;
   FAIL_TABLE = failTable;
@@ -244,4 +269,74 @@ test('НЕ ЗАГРУЗИЛОСЬ — экран говорит об этом, �
   assert.equal(fail.length, 1, 'ошибка загрузки обязана быть показана: именно её молчание держало экран пустым');
   assert.ok(/кабинеты/.test(textOf(fail[0])), 'сообщение обязано назвать, ЧТО не загрузилось: ' + textOf(fail[0]));
   assert.equal(byClass(box, 'rcal-appt').length, 0);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CROSS_BRANCH_CALENDAR_V1 — «видеть и записывать в любой филиал»
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Экран обязан не просто ПОКАЗАТЬ чужие записи, а показать их так, чтобы
+// человек за стойкой не принял картинку часовой давности за живую. Здесь
+// проверяется именно это — подписи, а не наличие прямоугольников.
+
+test('чужая запись видна, попадает в колонку СВОЕГО врача и несёт букву здания', async () => {
+  const { box } = await render({ cross: true });
+
+  const cards = byClass(box, 'rcal-appt');
+  assert.ok(cards.length >= 3, 'чужие записи не нарисовались: ' + cards.length);
+
+  // Колонка врача Каримова — та, в которую приехала чужая запись. Раньше её не
+  // было бы вовсе: без врача запись падала в «Не назначено».
+  const head = byClass(box, 'rcal-colhead').map(textOf).join(' | ');
+  assert.ok(/Каримов Рустам/.test(head), 'колонка врача соседнего здания не нарисована: ' + head);
+
+  const far = cards.find((c) => /11:00–11:30/.test(textOf(c)) && /Второй корпус|B/.test(textOf(c)));
+  assert.ok(far, 'у чужой карточки нет буквы здания: ' + cards.map(textOf).join(' | '));
+  assert.ok(/данные на 08:40/.test(textOf(far)),
+    'у чужой карточки нет отметки возраста — час старая картинка неотличима от живой: ' + textOf(far));
+});
+
+test('наша запись в чужое здание помечена «подтверждается», пока квитанции нет', async () => {
+  const { box } = await render({ cross: true });
+  const card = byClass(box, 'rcal-appt').find((c) => /13:00–13:30/.test(textOf(c)));
+  assert.ok(card, 'запись в чужое здание не нарисована');
+  assert.ok(/подтверждается/.test(textOf(card)),
+    'без этой метки оператор считает, что соседнее здание уже знает о записи: ' + textOf(card));
+  assert.ok(String(card.className).includes('rcal-appt-wait'));
+});
+
+test('настоящее столкновение НЕ ПРЯЧЕТСЯ: обе записи видны, поздняя помечена', async () => {
+  const { box } = await render({ cross: true });
+  const eleven = byClass(box, 'rcal-appt').filter((c) => /11:00–11:30/.test(textOf(c)));
+  assert.equal(eleven.length, 2, 'обе спорящие записи обязаны остаться видимыми: ' + eleven.length);
+
+  const marked = eleven.filter((c) => /двойная запись/.test(textOf(c)));
+  assert.equal(marked.length, 1, 'помечена обязана быть ровно одна — более поздняя');
+  assert.ok(String(marked[0].className).includes('rcal-appt-clash'));
+
+  // И рядом сказано, что вообще происходит: возраст данных и правило спора.
+  const note = byClass(box, 'rcal-far-note');
+  assert.equal(note.length, 1, 'полоса про чужое здание обязана быть над сеткой');
+  const txt = textOf(note[0]);
+  assert.ok(/данные на 08:40/.test(txt), 'полоса обязана называть возраст картинки: ' + txt);
+  assert.ok(/раз в час/.test(txt), 'остаточный риск решения владельца обязан быть назван словами: ' + txt);
+});
+
+test('переключатель зданий есть и фильтрует сетку', async () => {
+  const { box } = await render({ cross: true });
+  const sel = walk(box).filter((n) => n.tagName === 'SELECT'
+    && (n.children || []).some((o) => /Все здания/.test(o._t || textOf(o))));
+  assert.equal(sel.length, 1, 'переключателя зданий нет — «видеть любой филиал» начинается с него');
+
+  const opts = sel[0].children.map((o) => o._t || textOf(o)).join(' | ');
+  assert.ok(/Второй корпус/.test(opts), 'соседнее здание обязано быть в списке: ' + opts);
+
+  sel[0].value = 'B';
+  sel[0].dispatchEvent({ type: 'change', target: sel[0] });
+  await flush();
+
+  const cards = byClass(box, 'rcal-appt').map(textOf);
+  assert.ok(cards.length > 0, 'выбор здания не должен опустошать сетку');
+  assert.ok(!cards.some((c) => /Петров Пётр/.test(c)),
+    'в здании B не должно быть приёмов врача здания A: ' + cards.join(' | '));
 });

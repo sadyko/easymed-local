@@ -29,6 +29,7 @@ import {
   // записи и в ОБЕ стороны: главная клиника здесь — узел, а не источник.
   publishJournal, fetchJournals, QUIET_JOURNAL_REASONS, LAST_JOURNAL_KEY,
   withExchangeLock, SEED_PROGRESS_KEY,
+  readPeerSnapshots,   // CROSS_BRANCH_CALENDAR_V1 — возраст копии каждого здания
   ensureOwnRelayToken,   // BRANCH_SELF_TOKEN_V1 — филиал берёт себе доступ сам
 } from '../branch-sync/relay.js';
 import { relayIdFor } from '../branch-sync/relay-crypto.js';
@@ -487,6 +488,13 @@ export function branchSyncStatus(db, args, user) {
     // номере» задаёт регистратура, а не администратор.
     ...identityFields(db),
 
+    // CROSS_BRANCH_CALENDAR_V1 — ЗДАНИЯ СЕТИ и возраст картинки каждого. Тот
+    // же список, что читает календарь (networkBuildings), а не второй его
+    // экземпляр: «данные на HH:MM» на карточке приёма и «последняя связь» в
+    // настройках обязаны быть одним числом, иначе владелец звонит в поддержку
+    // выяснять, какому из двух экранов верить.
+    buildings: networkBuildings(db),
+
     // ПЕРВИЧНАЯ ЗАГРУЗКА — на экране (Задача 7e, I-3). Засев большой клиники
     // идёт страницами и часами; «идёт синхронизация» без числа неотличимо от
     // «зависло», и владелец звонит в поддержку на второй час.
@@ -599,6 +607,67 @@ function identityFields(db) {
     console.warn('[branch-sync] could not read the branch identity of this install:', e && e.message);
     return { letter: null, identity_role: null, branch_id: null };
   }
+}
+
+/**
+ * CROSS_BRANCH_CALENDAR_V1 — ЗДАНИЯ СЕТИ И ВОЗРАСТ ИХ КАРТИНКИ.
+ *
+ * Одно место на всю систему, потому что читателей у этого списка стало два и
+ * разъехаться им нельзя: экран «Настройки → Филиалы» и КАЛЕНДАРЬ, где каждая
+ * чужая карточка обязана нести букву здания и «данные на HH:MM».
+ *
+ * ПОЧЕМУ НЕ `SELECT … FROM branches` НА ЭКРАНЕ. Во-первых, буквы нет в
+ * читаемых колонках реестра (schema-registry.js), и это правильно: буква —
+ * понятие сети, а не карточки филиала. Во-вторых, строки чужих зданий
+ * приезжают справочником ОТКЛЮЧЁННЫМИ (catalogue.js: INSERT … active = 0),
+ * потому что в СВОЁМ здании чужой филиал не работает и не должен появляться в
+ * выпадающих списках, — а календарь обязан их показать. Отличить «здание
+ * сети» от «отключённого филиала» может только тот, кто знает про буквы, то
+ * есть этот файл.
+ *
+ * `as_of` — время, которым СОСЕД подписал последний прочитанный нами блоб
+ * (relay.js readPeerSnapshots), а не наше время чтения: вопрос регистратуры —
+ * «насколько устарела картинка ТОГО здания». null = данных от него не было
+ * никогда, и календарь обязан сказать это словами, а не показать пустую сетку
+ * как «никто не записан».
+ *
+ * @returns {Array<{id:number|null, letter:string, name:string, self:boolean,
+ *   as_of:string|null, seen_at:string|null}>}
+ */
+export function networkBuildings(db) {
+  const me = identityFields(db);
+  const mine = me.letter ? String(me.letter).trim().toUpperCase() : null;
+  const snaps = readPeerSnapshots(db);
+  let rows = [];
+  try {
+    rows = db.prepare(
+      "SELECT id, name, letter FROM branches WHERE letter IS NOT NULL AND letter <> '' ORDER BY letter"
+    ).all();
+  } catch (e) {
+    // Старая база без колонки — не повод отказать экрану: сеть просто
+    // неизвестна, и календарь покажет одно своё здание.
+    console.warn('[branch-sync] could not list the buildings of the network:', e && e.message);
+    return [];
+  }
+  const out = [];
+  for (const row of rows) {
+    const letter = String(row.letter || '').trim().toUpperCase();
+    if (!letter || out.some((b) => b.letter === letter)) continue;
+    const self = mine != null && letter === mine;
+    const snap = snaps[letter] || null;
+    out.push({
+      id: row.id,
+      letter,
+      name: row.name || '',
+      self,
+      // У СВОЕГО здания возраста нет и быть не может: его данные — это сама
+      // база, они всегда «сейчас». Подписать своё здание временем последнего
+      // обмена значило бы объявить собственную регистратуру устаревшей.
+      as_of: self ? null : (snap && snap.generated_at) || null,
+      seen_at: self ? null : (snap && snap.at) || null,
+    });
+  }
+  return out;
 }
 
 /**

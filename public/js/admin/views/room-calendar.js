@@ -32,14 +32,39 @@
 // обойти, выключив JavaScript, запретом не является: перетаскивание карточки
 // уходит в тот же calendar_book, что и сохранение в диалоге.
 //
+// ─── ВСЕ ЗДАНИЯ (CROSS_BRANCH_CALENDAR_V1) ──────────────────────────────────
+//
+// Раньше здесь стояло `.is('sync_origin', null)` — «показываем только своё
+// здание», и шов был назван вслух: чужая запись приехала бы БЕЗ ВРАЧА, потому
+// что SHIPPED.visits не вёз doctor_id. Теперь везёт (ссылкой по логину,
+// branch-sync/journal.js), владелец выбрал «видеть и записывать в любой», и
+// фильтр снят.
+//
+// ЧТО ЭКРАН ОБЯЗАН ГОВОРИТЬ ВСЛУХ, И ПОЧЕМУ ИМЕННО ОН. Здания обмениваются раз
+// в час. Значит картинка чужого филиала — не живая, и человек, который об этом
+// не знает, продаст занятое время. Поэтому:
+//
+//   • у чужой карточки БУКВА ЗДАНИЯ и «данные на HH:MM» — возраст той копии,
+//     а не время последней синхронизации вообще;
+//   • наша запись в чужое здание помечена «подтверждается», пока оттуда не
+//     придёт квитанция, и слот всё это время занят у обеих сторон;
+//   • не уехало — оператор читает «не подтверждено», а не «записано»;
+//   • настоящее столкновение внутри часа НЕ ПРЯЧЕТСЯ: обе записи видны, поздняя
+//     помечена, и рядом написано, кто считается первым.
+//
+// НИ ОДНО ИЗ ЭТИХ ЧЕТЫРЁХ ЗНАНИЙ ЭКРАН НЕ СЧИТАЕТ САМ. «Подтверждено» живёт в
+// горизонте квитанций, «данные на» — в возрасте последнего блоба, «кто первый» —
+// это правило. Всё считает сервер и отдаёт одним ответом calendar_windows.cross
+// (services/rpc/calendar.js) — по той же причине, по которой окна рабочего дня
+// считает slot-engine.js: вторая реализация правила в браузере разошлась бы с
+// первой, и разошлась бы молча.
+//
 // ─── ЧЕГО ЗДЕСЬ ПОКА НЕТ ────────────────────────────────────────────────────
 //
-// ЧУЖИХ ФИЛИАЛОВ. Показываются записи СВОЕГО здания (`.is('sync_origin', null)`
-// — то же правило, что у кабинета врача, процедур и лаборатории). Календарь
-// «по всем филиалам» — следующая задача, и она начинается не с экрана, а с
-// синхронизации: SHIPPED.visits не везёт doctor_id (локальный id указывал бы в
-// пустоту), поэтому чужая запись приехала бы БЕЗ ВРАЧА — бесполезно, когда
-// колонки это врачи. Шов — ровно одна строка фильтра в loadAppts().
+// ОСИ КАБИНЕТОВ ПО ЧУЖОМУ ЗДАНИЮ. Правило владельца: кабинеты — принадлежность
+// здания, и room_id между зданиями не ездит намеренно (миграция 100). «Кабинет
+// 5» соседа в нашей базе означал бы случайную местную комнату, поэтому при
+// выбранном чужом филиале ось кабинетов честно говорит, что её нет.
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, initials, avColor, Avatar } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
@@ -109,12 +134,25 @@ function localIso(dayIso, min) {
 }
 const pxPerMin = (step) => (step <= 10 ? 16 : step <= 15 ? 22 : 34) / step;
 
+// CROSS_BRANCH_CALENDAR_V1 — вид межфилиальных подписей. Живёт здесь, а не в
+// admin.css: это свойства ОДНОГО экрана, а таблица стилей общая на все сто с
+// лишним. Размеры — нижняя ступень шкалы (12.5 px), ниже неё не опускаемся.
+const AGE_CSS = { fontSize: '12.5px', color: 'var(--ink-400, #94a3b8)', lineHeight: '1.25' };
+const FAR_NOTE_CSS = {
+    padding: '9px 12px', margin: '0 0 10px', borderRadius: '8px', fontSize: '13.5px',
+    background: 'var(--warn-50, #fff7ed)', border: '1px solid var(--warn-200, #fed7aa)',
+    color: 'var(--ink-700, #334155)',
+};
+
 export async function renderRoomCalendar(container, { onNavigate, embedded = false } = {}) {
     const state = {
         resType: 'doctor', napr: '', q: '', step: 15, period: 1,
         dayIso: todayIso(), showCancelled: false,
         doctors: [], rooms: [], servicesList: [], appts: [], windows: {},
         selected: new Set(), failed: [], loaded: false,
+        // CROSS_BRANCH_CALENDAR_V1. branch — БУКВА выбранного здания ('' = все).
+        // cross — то, что про эти записи знает только сервер (см. шапку).
+        branch: '', cross: { self: '', buildings: [], visits: {} },
     };
 
     clear(container);
@@ -175,6 +213,11 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 spec: u.specialty || '',
                 napr: u.specialty || '',
                 place: branchName[u.branch_id] || '',
+                // CROSS_BRANCH_CALENDAR_V1 — id здания сотрудника. Буква из него
+                // берётся ПРИ ОТРИСОВКЕ, а не здесь: справочник зданий приезжает
+                // тем же ответом, что и записи, и порядок загрузок не должен
+                // решать, окажется ли врач приписан к филиалу.
+                branchId: u.branch_id || null,
                 liveQueue: (u.scheduling_mode || '') === 'live_queue',
             }));
         state.servicesList = take(svcs, tr('услуги')).map(s => ({ id: s.id, name: s.name || '—', dur: s.duration_minutes }));
@@ -183,14 +226,13 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
     async function loadAppts() {
         const start = isoToLocalDay(state.dayIso);
         const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + state.period);
+        // ВСЕ ЗДАНИЯ. Фильтра «только своё» здесь больше нет: врач едет вместе с
+        // записью, поэтому чужая запись попадает в колонку своего врача, а не в
+        // «Не назначено». sync_origin читается, чтобы отличить приехавшую строку
+        // от своей — на приехавшую нельзя ссылаться как на «нашу работу».
         const { data, error } = await supabase.from('visits')
-            .select('id, patient_id, doctor_id, service_id, room_id, visit_date, duration_minutes, status')
+            .select('id, patient_id, doctor_id, service_id, room_id, branch_id, sync_origin, visit_date, duration_minutes, status')
             .gte('visit_date', start.toISOString()).lt('visit_date', end.toISOString())
-            // ШОВ МЕЖФИЛИАЛЬНОГО КАЛЕНДАРЯ. Своё здание = записи, заведённые
-            // здесь. Снять этот фильтр можно будет только вместе с решением
-            // повезти врача ссылкой по username (иначе чужая запись приедет без
-            // врача и попадёт в «Не назначено» у всех сразу).
-            .is('sync_origin', null)
             .order('visit_date', { ascending: true });
         if (error) { state.appts = []; state.failed = [tr('записи')]; return; }
         const visits = data || [];
@@ -211,6 +253,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             const dt = new Date(v.visit_date);
             return {
                 id: v.id, patientId: v.patient_id, doctorId: v.doctor_id, roomId: v.room_id,
+                branchId: v.branch_id || null, origin: v.sync_origin || null,
                 date: dateToIso(dt), start: minutesOfLocal(dt), dur: Number(v.duration_minutes) || 15,
                 patient: pm[v.patient_id] || '—', phone: ph[v.patient_id] || '',
                 serviceId: v.service_id, service: sm[v.service_id] || '',
@@ -219,16 +262,27 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         });
     }
 
-    // Рабочие окна — ОДНИМ запросом на всю видимую сетку. Экран не считает
-    // графики, обеды и часы клиники: их считает slot-engine.js на сервере.
+    // Рабочие окна и МЕЖФИЛИАЛЬНЫЙ КОНТЕКСТ — ОДНИМ запросом на всю видимую
+    // сетку. Экран не считает ни графики, обеды и часы клиники, ни «кто первый»,
+    // ни «подтверждено ли»: всё это считает сервер (slot-engine.js и
+    // rpc/calendar.js), потому что вторая реализация правила в браузере
+    // разошлась бы с первой молча.
+    //
+    // ЗАПРОС УХОДИТ ДАЖЕ БЕЗ ВЫБРАННЫХ РЕСУРСОВ, и это не расточительство:
+    // список зданий нужен переключателю филиалов ДО того, как в сетке
+    // что-нибудь выбрано.
     async function loadWindows() {
         const sel = resources().filter(r => state.selected.has(r.id) && r.id !== UNASSIGNED_ID);
-        if (!sel.length) { state.windows = {}; return; }
         const args = { date: state.dayIso, days: state.period };
         if (state.resType === 'doctor') args.doctor_ids = sel.map(r => r.id);
         else args.room_ids = sel.map(r => r.id);
         const { data, error } = await supabase.rpc('calendar_windows', args);
         state.windows = (!error && data && data.windows) ? data.windows : {};
+        // Контекст НЕ обнуляется молча при отказе: пустой контекст означал бы
+        // «чужих записей нет и всё подтверждено» — самая опасная из возможных
+        // неправд на этом экране. Отказ виден в полосе «Не загрузилось».
+        if (!error && data && data.cross) state.cross = data.cross;
+        else if (error) state.failed = [...new Set([...state.failed, tr('филиалы')])];
     }
 
     function windowFor(res, dayIso) {
@@ -253,11 +307,57 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
     const resources = () => [UNASSIGNED, ...(state.resType === 'doctor' ? state.doctors : state.rooms)];
     const filteredRail = () => {
         const ql = state.q.trim().toLowerCase();
-        return resources().filter(r => (!state.napr || r.napr === state.napr) && (!ql || (r.name + ' ' + r.spec).toLowerCase().includes(ql)));
+        return resources().filter(r => (!state.napr || r.napr === state.napr)
+            && railBranchOk(r)
+            && (!ql || (r.name + ' ' + r.spec).toLowerCase().includes(ql)));
     };
     function defaultSelect() { state.selected = new Set(filteredRail().slice(0, 6).map(r => r.id)); }
     const doctorName = (id) => (state.doctors.find(d => d.id === id) || {}).name || '';
     const roomName = (id) => (state.rooms.find(r => r.id === id) || {}).name || '';
+
+    // ---- здания (CROSS_BRANCH_CALENDAR_V1) ------------------------------
+    // Всё, что экран знает о зданиях, приезжает в calendar_windows.cross. Своих
+    // домыслов здесь нет ни одного: буква здания, возраст его картинки, «ждём
+    // подтверждения» и «кто первый в споре» — ответы сервера, а не вычисления.
+    const myLetter = () => state.cross.self || '';
+    const buildings = () => state.cross.buildings || [];
+    const letterOfBranchId = (id) => (buildings().find(b => b.id === id) || {}).letter || '';
+    const buildingByLetter = (l) => buildings().find(b => b.letter === l) || null;
+    const buildingName = (l) => { const b = buildingByLetter(l); return (b && b.name) || l || ''; };
+    const apptCross = (a) => (state.cross.visits || {})[a.id] || null;
+    /** Здание ПРИЁМА (не автора записи): ответ сервера, иначе приписка, иначе своё. */
+    const apptLetter = (a) => {
+        const i = apptCross(a);
+        return (i && i.building) || letterOfBranchId(a.branchId) || myLetter();
+    };
+    const inBranch = (a) => !state.branch || apptLetter(a) === state.branch;
+    /**
+     * Куда запишет клик по этой дорожке. Приписка врача сильнее выбранного
+     * фильтра: врач здания B остаётся врачом здания B, даже когда в сетке
+     * смотрят «все здания».
+     */
+    const targetLetter = (r) => {
+        if (state.resType !== 'doctor') return myLetter();
+        return letterOfBranchId(r.branchId) || state.branch || myLetter();
+    };
+    const hhmmOf = (iso) => {
+        const d = new Date(iso || '');
+        return Number.isNaN(d.getTime()) ? '' : fmtHM(minutesOfLocal(d));
+    };
+    /**
+     * Пускать ли ресурс в рейку при выбранном здании.
+     *
+     * Сотрудник БЕЗ приписки показывается в ЛЮБОМ филиале, и это честнее, чем
+     * спрятать его: справочник сотрудников не везёт branch_id (он бы означал
+     * чужое здание — см. catalogue.js), поэтому в филиале приписка пуста у всех
+     * приехавших врачей. Спрятав их, экран показал бы соседнее здание пустым.
+     */
+    const railBranchOk = (r) => {
+        if (!state.branch || r.id === UNASSIGNED_ID) return true;
+        if (state.resType === 'room') return state.branch === myLetter();
+        const l = letterOfBranchId(r.branchId);
+        return !l || l === state.branch;
+    };
 
     // ---- сервер решает, можно ли ---------------------------------------
     /** Единственный путь записи/переноса/растягивания. Возвращает true при успехе. */
@@ -327,14 +427,61 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 { doctor: res.name, from: fmtHM(clash.start), to: fmtHM(clash.start + clash.dur) }), 'fail');
             return;
         }
+        const letter = targetLetter(res);
+        const far = !!(letter && myLetter() && letter !== myLetter());
         openServicePickerModal({
             calculator: true,
             roomId: state.resType === 'room' ? res.id : null,
             lockedDoctor: state.resType === 'doctor' ? { id: res.id, name: res.name, spec: res.spec } : null,   // CATALOG_WIZARD_V1
             scheduledISO: localIso(dayIso, min),
             onCreatePatient: () => { if (onNavigate) onNavigate('registration'); },
-            onBooked: () => { reloadAndRepaint(); },   // BOOK_WIZARD_V1 — новая запись видна сразу
+            // BOOK_WIZARD_V1 — новая запись видна сразу. CROSS_BRANCH_CALENDAR_V1
+            // — а если она в чужое здание, то ещё и привязывается к нему и
+            // немедленно уезжает (commitToBuilding).
+            onBooked: () => { if (far) commitToBuilding(res, dayIso, min, letter); else reloadAndRepaint(); },
         });
+    }
+
+    /**
+     * ЗАПИСЬ В ЧУЖОЕ ЗДАНИЕ — вторым шагом и ТЕМ ЖЕ calendar_book.
+     *
+     * Мастер визита пишет визит сам (он же собирает услуги и деньги), и он общий
+     * для полудюжины экранов — трогать его ради филиалов нельзя. Поэтому
+     * календарь делает свою половину после него: привязывает только что
+     * созданную запись к зданию тем же вызовом, что и любой перенос. Проверка
+     * занятости, срочная выгрузка и пометка «подтверждается» приходят оттуда же,
+     * а не отсюда.
+     *
+     * Запись ищется по врачу, дню и минуте — ровно по тем трём, которые мастеру
+     * и назвали (lockedDoctor + scheduledISO). Не нашли (оператор поменял время
+     * внутри мастера) — говорим вслух: запись есть, к зданию не привязана.
+     * Промолчать здесь значило бы оставить в чужом здании невидимый приём.
+     */
+    async function commitToBuilding(res, dayIso, min, letter) {
+        await loadAppts();
+        const b = buildingByLetter(letter);
+        const fresh = state.appts
+            .filter(a => !a.origin && a.doctorId === res.id && a.date === dayIso && a.start === min)
+            .sort((x, y) => y.id - x.id)[0];
+        if (!fresh || !b || !b.id) {
+            toast(trf('Запись создана, но привязать её к зданию {b} не удалось — откройте карточку и повторите.',
+                { b: buildingName(letter) }), 'fail');
+            await reloadAndRepaint();
+            return;
+        }
+        const out = await commit({ visit_id: fresh.id, branch_id: b.id, start: localIso(dayIso, min) });
+        const cx = out && out.cross_branch;
+        // СЛОВА «ЗАПИСАНО» ЗДЕСЬ НЕТ НИ В ОДНОЙ ВЕТКЕ. Уехало — «отправлено,
+        // ждём подтверждения»; не уехало — «не подтверждено». Оператор стоит
+        // перед человеком, и обещать за соседнее здание он не должен.
+        if (cx && cx.published === false) {
+            toast(trf('Не подтверждено: связи со зданием {b} нет. Слот держим здесь, но там о записи ещё не знают — не обещайте пациенту это время.',
+                { b: buildingName(letter) }), 'fail');
+        } else if (cx) {
+            toast(trf('Запись отправлена в здание {b}. Пока оно не подтвердит, карточка помечена «подтверждается».',
+                { b: buildingName(letter) }), 'info');
+        }
+        await reloadAndRepaint();
     }
 
     async function openCard(a) {
@@ -460,6 +607,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         hideTip();
         if (_drag) return;
         const m = STATUS_META[a.status];
+        const cx = apptCross(a);
         const line = (icon, text) => h('div', { class: 'row', style: { gap: '7px', fontSize: '12.5px', alignItems: 'baseline' } },
             h('span', { style: { color: 'var(--ink-400)', flex: '0 0 14px' } }, Icon(icon, { size: 12 })), h('span', null, text));
         _tipEl = h('div', { class: 'rcal-tip' },
@@ -473,6 +621,19 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             a.roomId ? line('Grid', roomName(a.roomId)) : null,
             a.phone ? line('Phone', a.phone) : null,
             state.period > 1 ? line('Calendar', ruDay(a.date)) : null,
+            // Межфилиальное — в подсказке целиком и словами: на карточке для
+            // этого места нет, а решение «звонить или не звонить» принимают
+            // именно здесь.
+            cx && cx.building && cx.building !== myLetter()
+                ? line('Building', trf('Здание {b}', { b: buildingName(cx.building) })) : null,
+            cx && cx.foreign && cx.as_of
+                ? line('Clock', trf('данные на {t}', { t: hhmmOf(cx.as_of) })) : null,
+            cx && cx.confirming
+                ? line('Warning', trf('Ждём подтверждения здания {b}', { b: buildingName(cx.cross || cx.building) })) : null,
+            cx && cx.collision && cx.collision.loses
+                ? line('Warning', trf('Эта запись позже — время занято записью здания {b}. Позвоните пациенту.', { b: buildingName(cx.collision.building) })) : null,
+            cx && cx.collision && !cx.collision.loses
+                ? line('Warning', trf('Это же время заняли в здании {b}, но позже — приём остаётся за этим пациентом.', { b: buildingName(cx.collision.building) })) : null,
             h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } }, 'Клик — детали · тяни — перенести'));
         document.body.appendChild(_tipEl);
         const tw = 270;
@@ -548,7 +709,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
     }
 
     // ---- render ---------------------------------------------------------
-    let railListEl, gridWrapEl, countEl, naprSelEl, dayLabelEl, dateInputEl, statsEl;
+    let railListEl, gridWrapEl, countEl, naprSelEl, dayLabelEl, dateInputEl, statsEl, branchSelEl;
     // Полотно, посчитанное под то, что реально надо показать.
     let canvas = { from: CANVAS_FROM, to: CANVAS_TO };
 
@@ -588,6 +749,23 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                     h('span', { class: 'rcal-pick-nm' }, r.name),
                     h('span', { class: 'rcal-pick-sp' }, [r.spec, r.place].filter(Boolean).join(' · ')))));
         }
+    }
+
+    /**
+     * ПЕРЕКЛЮЧАТЕЛЬ ЗДАНИЙ. Прячется, когда зданий одно: выпадающий список с
+     * единственным пунктом — это не выбор, а лишний вопрос к оператору.
+     */
+    function refreshBranchOptions() {
+        if (!branchSelEl) return;
+        const list = buildings();
+        clear(branchSelEl);
+        branchSelEl.appendChild(h('option', { value: '' }, tr('Все здания')));
+        for (const b of list) {
+            branchSelEl.appendChild(h('option', {
+                value: b.letter, selected: b.letter === state.branch ? true : null,
+            }, b.name || b.letter));
+        }
+        branchSelEl.style.display = list.length > 1 ? '' : 'none';
     }
 
     function refreshNaprOptions() {
@@ -638,23 +816,57 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
 
         const resKey = state.resType === 'doctor' ? 'doctorId' : 'roomId';
         const matchRes = (a) => res.id === UNASSIGNED_ID ? !a[resKey] : a[resKey] === res.id;
-        const items = state.appts.filter(a => matchRes(a) && a.date === dayIso && (state.showCancelled || a.status !== 'cancelled'));
+        const items = state.appts.filter(a => matchRes(a) && a.date === dayIso && inBranch(a)
+            && (state.showCancelled || a.status !== 'cancelled'));
         for (const a of items) {
             const vs = Math.max(a.start, canvas.from), ve = Math.min(a.start + a.dur, canvas.to);
             if (ve <= vs) continue;
             const meta = STATUS_META[a.status];
+            const cx = apptCross(a);
+            const clash = cx && cx.collision && cx.collision.loses;
             const block = h('div', {
-                class: 'rcal-appt' + (a.status === 'cancelled' ? ' rcal-appt-x' : ''),
+                class: 'rcal-appt' + (a.status === 'cancelled' ? ' rcal-appt-x' : '')
+                    + (cx && cx.foreign ? ' rcal-appt-far' : '')
+                    + (cx && cx.confirming ? ' rcal-appt-wait' : '')
+                    + (clash ? ' rcal-appt-clash' : ''),
                 'data-status': a.status,
-                style: { top: ((vs - canvas.from) * ppm) + 'px', height: (Math.max((ve - vs) * ppm, 22) - 2) + 'px', borderLeft: `3px solid ${meta.color}` },
+                // Стили межфилиальных состояний ЗДЕСЬ, а не в admin.css: пунктир
+                // «ждём подтверждения» и рамка «двойная запись» — свойства
+                // ЭТОГО экрана и больше ничьи, а таблица стилей общая.
+                style: Object.assign(
+                    { top: ((vs - canvas.from) * ppm) + 'px', height: (Math.max((ve - vs) * ppm, 22) - 2) + 'px', borderLeft: `3px solid ${meta.color}` },
+                    cx && cx.confirming ? { outline: '1px dashed var(--warn-500, #f59e0b)', outlineOffset: '-1px' } : {},
+                    clash ? { outline: '2px solid var(--crit-500, #ef4444)', outlineOffset: '-2px' } : {},
+                ),
             },
-                h('div', { class: 'rcal-appt-t' }, `${fmtHM(a.start)}–${fmtHM(a.start + a.dur)}`),
+                h('div', { class: 'rcal-appt-t' },
+                    `${fmtHM(a.start)}–${fmtHM(a.start + a.dur)}`,
+                    // БУКВА ЗДАНИЯ — только у чужого. На своём она была бы
+                    // одинаковой на всех карточках, то есть не информацией.
+                    cx && cx.building && cx.building !== myLetter()
+                        ? h('span', {
+                            class: 'rcal-appt-bld', title: buildingName(cx.building),
+                            style: { marginLeft: '5px', padding: '0 4px', borderRadius: '4px', fontWeight: 700, fontSize: '12.5px', background: 'var(--ink-100, #eef2f7)', color: 'var(--ink-600, #475569)' },
+                        }, cx.building)
+                        : null),
                 h('div', { class: 'rcal-appt-p' }, a.patient),
                 // Карточка — «пациент + врач», как просил владелец. Врач подписан
                 // и на оси врачей: сетку читают наискось, и подпись под фамилией
                 // пациента дешевле, чем возврат глазами к шапке колонки.
                 a.doctorId ? h('div', { class: 'rcal-appt-d' }, doctorName(a.doctorId)) : null,
                 a.service ? h('div', { class: 'rcal-appt-s' }, a.service) : null,
+                // ВОЗРАСТ КАРТИНКИ — на самой карточке, а не в углу экрана: её
+                // читают по одной, и «час назад так было» должно стоять рядом с
+                // тем, о чём это сказано.
+                cx && cx.foreign && cx.as_of
+                    ? h('div', { class: 'rcal-appt-age', style: AGE_CSS }, trf('данные на {t}', { t: hhmmOf(cx.as_of) }))
+                    : null,
+                cx && cx.confirming
+                    ? h('div', { class: 'rcal-appt-age', style: Object.assign({}, AGE_CSS, { color: 'var(--warn-700, #b45309)' }) }, tr('подтверждается'))
+                    : null,
+                clash
+                    ? h('div', { class: 'rcal-appt-age', style: Object.assign({}, AGE_CSS, { color: 'var(--crit-700, #b91c1c)', fontWeight: 700 }) }, tr('двойная запись'))
+                    : null,
                 h('div', { class: 'rcal-appt-rs', onmousedown: (e) => startDrag(e, a, block, 'resize') }));
             block.addEventListener('mousedown', (e) => { if (e.target.classList.contains('rcal-appt-rs')) return; startDrag(e, a, block, 'move'); });
             block.addEventListener('mouseenter', () => showTip(a, block.getBoundingClientRect()));
@@ -680,6 +892,35 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         }
     }
 
+    /**
+     * ПОЛОСА ЧЕСТНОСТИ. Показывается ровно тогда, когда в сетке есть чужое
+     * здание — своё её не заслуживает и не получает.
+     *
+     * Говорит две вещи, и обе обязаны быть сказаны здесь, а не в справке:
+     * НАСКОЛЬКО СТАРА картинка каждого здания и ЧТО БУДЕТ, если внутри этого
+     * часа слот займут и там. Второе — остаточный риск решения владельца
+     * «видеть и записывать в любой»: он не устраняется, поэтому называется.
+     */
+    function farNote() {
+        const mine = myLetter();
+        const shown = (state.appts || []).filter(a => inBranch(a) && (state.showCancelled || a.status !== 'cancelled'));
+        const seen = shown.filter(a => (apptCross(a) || {}).foreign).map(a => apptLetter(a));
+        const picked = state.branch && mine && state.branch !== mine ? [state.branch] : [];
+        const letters = [...new Set([...seen, ...picked])].filter(Boolean);
+        if (!letters.length) return null;
+        const stamps = letters.map((l) => {
+            const b = buildingByLetter(l);
+            return b && b.as_of
+                ? trf('{b} — данные на {t}', { b: buildingName(l), t: hhmmOf(b.as_of) })
+                : trf('{b} — данных оттуда ещё не было', { b: buildingName(l) });
+        }).join(' · ');
+        return h('div', { class: 'rcal-far-note', style: FAR_NOTE_CSS },
+            h('div', { class: 'row', style: { gap: '7px', alignItems: 'center', fontWeight: 600 } },
+                Icon('Building', { size: 14 }), h('span', null, stamps)),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
+                tr('Здания обмениваются раз в час: внутри этого часа тот же слот могут занять и там. Тогда первой считается более ранняя запись — видны обе, поздняя помечена «двойная запись», и звонить нужно её пациенту.')));
+    }
+
     function repaintGrid() {
         recomputeCanvas();
         if (statsEl) repaintStats();
@@ -689,6 +930,15 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             gridWrapEl.appendChild(h('div', { class: 'rcal-fail' },
                 Icon('Warning', { size: 15 }), ' ',
                 trf('Не загрузилось: {what}. Обновите страницу — если не поможет, сообщите администратору.', { what: state.failed.join(', ') })));
+            return;
+        }
+        // ЧУЖОЕ ЗДАНИЕ — СНАЧАЛА СЛОВАМИ. Полоса стоит НАД сеткой, потому что
+        // читать сетку, не зная возраста её данных, опаснее, чем не читать вовсе.
+        const note = farNote();
+        if (note) gridWrapEl.appendChild(note);
+        if (state.resType === 'room' && state.branch && myLetter() && state.branch !== myLetter()) {
+            gridWrapEl.appendChild(h('div', { class: 'empty', style: { padding: '60px 20px' } },
+                tr('Кабинеты — только своего здания: кабинет соседнего филиала в этой базе ничего не значит. Переключитесь на врачей.')));
             return;
         }
         const sel = resources().filter(r => state.selected.has(r.id));
@@ -726,8 +976,8 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         gridWrapEl.appendChild(grid);
     }
 
-    async function reloadAndRepaint() { await loadAppts(); await loadWindows(); repaintGrid(); }
-    async function reloadWindowsAndRepaint() { await loadWindows(); repaintGrid(); }
+    async function reloadAndRepaint() { await loadAppts(); await loadWindows(); refreshBranchOptions(); repaintGrid(); }
+    async function reloadWindowsAndRepaint() { await loadWindows(); refreshBranchOptions(); repaintGrid(); }
 
     function buildShell() {
         clear(root);
@@ -759,6 +1009,16 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 class: state.period === n ? 'on' : '',
                 onclick: (e) => { state.period = n; dayLabelEl.textContent = mainLabel(); for (const b of e.currentTarget.parentElement.children) b.classList.remove('on'); e.currentTarget.classList.add('on'); reloadAndRepaint(); },
             }, tr(l))));
+        branchSelEl = h('select', {
+            class: 'rcal-sel', title: tr('Здание'),
+            onchange: (e) => {
+                state.branch = e.target.value;
+                // Выбор здания меняет и рейку (врачи того здания), поэтому
+                // отметки набираются заново — держать выбранными врачей,
+                // которых больше не видно, значит рисовать пустые дорожки.
+                defaultSelect(); repaintRailList(); reloadWindowsAndRepaint();
+            },
+        });
         const stepSel = h('select', { class: 'rcal-sel', onchange: (e) => { state.step = Number(e.target.value); repaintGrid(); } },
             ...[[10, 'Шаг 10 мин'], [15, 'Шаг 15 мин'], [30, 'Шаг 30 мин']].map(([v, l]) => h('option', { value: v, selected: v === state.step ? true : null }, tr(l))));
         const cancelChk = h('label', { class: 'rcal-chk' }, h('input', { type: 'checkbox', onchange: (e) => { state.showCancelled = e.target.checked; repaintGrid(); } }), ' ', tr('Отменённые'));
@@ -768,7 +1028,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 h('button', { class: 'btn btn-outline btn-sm', onclick: () => { state.dayIso = todayIso(); dateInputEl.value = state.dayIso; dayLabelEl.textContent = mainLabel(); reloadAndRepaint(); } }, 'Сегодня'),
                 h('button', { class: 'btn btn-outline btn-sm', title: tr('Вперёд'), onclick: () => shiftDay(state.period) }, Icon('ChevronRight', { size: 15 })),
                 dateInputEl, dayLabelEl),
-            h('div', { class: 'rcal-tools' }, periodSeg, stepSel, cancelChk));
+            h('div', { class: 'rcal-tools' }, branchSelEl, periodSeg, stepSel, cancelChk));
         const legend = h('div', { class: 'rcal-legend' },
             ...STATUS_ORDER.map(k => h('span', { class: 'rcal-leg' }, h('span', { class: 'rcal-dot', style: { background: STATUS_META[k].color } }), tr(STATUS_META[k].label))),
             h('span', { class: 'rcal-leg' }, h('span', { class: 'rcal-leg-off' }), tr('вне приёма')));
@@ -777,6 +1037,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         const main = h('div', { class: 'rcal-main' }, toolbar, statsEl, legend, gridWrapEl);
 
         root.appendChild(h('div', { class: 'rcal-page' }, rail, main));
+        refreshBranchOptions();
         refreshNaprOptions();
         repaintRailList();
         repaintGrid();

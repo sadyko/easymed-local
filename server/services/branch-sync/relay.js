@@ -661,6 +661,12 @@ export const QUIET_JOURNAL_REASONS = new Set([
 ]);
 
 export const LAST_JOURNAL_KEY = 'branch_sync_relay_journal';
+// CROSS_BRANCH_CALENDAR_V1 — «данные какого здания на какое время у нас есть».
+// letter → { at, generated_at }: `at` — когда МЫ прочитали блоб, generated_at —
+// когда СОСЕД его собрал. На карточке чужого филиала показывается второе:
+// вопрос регистратуры — «насколько устарела картинка того здания», а не
+// «когда у нас работала сеть».
+export const PEER_SNAPSHOT_KEY = 'branch_sync_peer_snapshot';
 // Докуда дошла первичная загрузка ЭТОГО узла — для экрана: {from, page, pages}.
 export const SEED_PROGRESS_KEY = 'branch_sync_seed_progress';
 
@@ -672,6 +678,38 @@ export function readLastJournal(db) {
     const v = JSON.parse(raw);
     return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
   } catch { return null; }
+}
+
+/**
+ * Что мы знаем о возрасте копии каждого здания: letter → {at, generated_at}.
+ * Пусто — ни одного блоба ещё не читали, и это ЧЕСТНОЕ «данных не было».
+ */
+export function readPeerSnapshots(db) {
+  const raw = getState(db, PEER_SNAPSHOT_KEY);
+  if (!raw) return {};
+  try {
+    const v = JSON.parse(raw);
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+  } catch { return {}; }
+}
+
+/**
+ * Запомнить возраст только что прочитанного блоба. НИКОГДА не бросает: не
+ * записанная отметка стоит устаревшей подписи на карточке, а брошенное
+ * исключение — сорванного обмена.
+ */
+function notePeerSnapshot(db, peer, generatedAt, now) {
+  const stamp = (now instanceof Date ? now : new Date()).toISOString();
+  try {
+    const all = readPeerSnapshots(db);
+    // Нет generated_at (блоб сборки, которая его не клала) — подписываемся
+    // своим временем чтения: оно не позже настоящего, то есть ошибается в
+    // безопасную сторону — картинка объявляется СВЕЖЕЕ, чем есть, никогда.
+    all[peer] = { at: stamp, generated_at: generatedAt || stamp };
+    putState(db, PEER_SNAPSHOT_KEY, JSON.stringify(all));
+  } catch (e) {
+    console.warn('[branch-sync] could not record how fresh the copy from', peer, 'is:', e && e.message);
+  }
 }
 
 /**
@@ -1113,6 +1151,12 @@ function journalSlice(payload, peer, self) {
   const ackUpto = Number(mine && typeof mine === 'object' ? mine.upto : mine);
   const ackPage = Number(mine && typeof mine === 'object' ? mine.seed_page : 0);
   const head = {
+    // CROSS_BRANCH_CALENDAR_V1 — ВОЗРАСТ КОПИИ, названный отправителем. Он и
+    // так ехал в блобе с самого начала («generated_at — как у справочника»), но
+    // читать его было некому. Межфилиальному календарю он нужен: карточка
+    // чужого здания обязана нести «данные на HH:MM», иначе картинку часовой
+    // давности принимают за живую и продают занятый слот.
+    generated_at: typeof payload.generated_at === 'string' ? payload.generated_at : null,
     upto: 0, seed: false, seedPage: 0, seedPages: 0,
     ack: Number.isFinite(ackUpto) && ackUpto > 0 ? Math.floor(ackUpto) : 0,
     ackPage: Number.isFinite(ackPage) && ackPage > 0 ? Math.floor(ackPage) : 0,
@@ -1245,6 +1289,14 @@ export async function fetchJournals(db, dataDir, {
   for (const peer of list) {
     const got = await downloadJournal(ctx, peer, { fetchImpl, timeoutMs, maxBlobBytes, env, auth, heal });
     if (!got.ok) { out[peer] = { reason: got.reason }; continue; }
+
+    // ДОКУДА МЫ ЗНАЕМ ЭТО ЗДАНИЕ. Пишется на КАЖДЫЙ удачно прочитанный блоб, в
+    // том числе пустой: блоб без среза — это не «нет данных», а «у соседа с
+    // прошлого раза ничего не изменилось», и для календаря это самая свежая
+    // возможная новость. Ошибка (сосед выключен, канала нет) отметку НЕ
+    // двигает — именно поэтому «данные на 09:40» на карточке в 15:00 честно
+    // кричит, что связи не было пять часов.
+    notePeerSnapshot(db, peer, got.generated_at, now());
 
     // КВИТАНЦИЯ — ПЕРВЫМ ДЕЛОМ (Задача 7b), до всякого применения и независимо
     // от того, есть ли для нас срез. Она про НАШ журнал, а не про его: сосед
@@ -1385,6 +1437,52 @@ export async function exchangeJournals(db, dataDir, opts = {}) {
     published: await publishJournal(db, dataDir, opts),
     fetched: await fetchJournals(db, dataDir, opts),
   };
+}
+
+// CROSS_BRANCH_CALENDAR_V1 — СРОЧНАЯ ВЫГРУЗКА, СТОЯ У СТОЙКИ.
+//
+// Обычный такт обмена — час (INTERVAL_MS), и для карт, анализов и денег этого
+// достаточно: они никого не ждут. Запись в ЧУЖОЕ здание ждёт: пока она не
+// уехала, второе здание про занятый слот не знает и продаст его второй раз.
+// Поэтому запись в чужой филиал выкладывается СРАЗУ — это единственное
+// действие в системе, у которого час задержки означает двух человек на одном
+// приёме.
+//
+// ТА ЖЕ МАШИНА, БЕЗ ВТОРОГО КАНАЛА. Внутри — тот же publishJournal и тот же
+// общий замок (withExchangeLock): срочная выгрузка обязана стоять в очередь с
+// часовой, иначе две выгрузки спорят за одну базу и за один блоб. Никакой
+// «отдельной посылки только этой записи» здесь нет и быть не может — блоб на
+// узел ОДИН, а срез накопительный (шапка publishJournal), поэтому уезжает и
+// эта запись, и всё, что не подтверждено с прошлого раза.
+//
+// ТАЙМАУТ КОРОТКИЙ, и это решение, а не экономия. Оператор стоит перед
+// человеком; шестьдесят секунд ожидания (UPLOAD_TIMEOUT_MS) он читает как
+// «программа зависла» и жмёт «Записать» второй раз. Не уложились — отвечаем
+// честно «не подтверждено», а сама выгрузка всё равно случится в часовой такт:
+// срез накопительный, ничего не теряется.
+const BOOKING_UPLOAD_TIMEOUT_MS = 12_000;
+
+/**
+ * Выложить журнал НЕМЕДЛЕННО — ради записи в чужое здание.
+ *
+ * НИКОГДА не бросает: неудача выгрузки не должна отменять уже созданную
+ * запись, она должна быть НАЗВАНА (вызывающий показывает её оператору).
+ *
+ * @returns {Promise<{ok:true, at?:string, skipped?:boolean}|{ok:false, reason:string}>}
+ *   те же reason, что у publishJournal.
+ */
+export async function publishBookingNow(db, dataDir, opts = {}) {
+  return withExchangeLock(async () => {
+    try {
+      return await publishJournal(db, dataDir, { timeoutMs: BOOKING_UPLOAD_TIMEOUT_MS, ...opts });
+    } catch (e) {
+      // publishJournal не бросает — но между ним и нами есть замок и чужая
+      // работа в очереди перед нами. Уроненная выгрузка не имеет права
+      // уронить запись на приём.
+      console.warn('[branch-sync] the immediate publish for a booking failed:', e && e.message);
+      return { ok: false, reason: 'relay_offline' };
+    }
+  });
 }
 
 

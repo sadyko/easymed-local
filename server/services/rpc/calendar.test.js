@@ -21,6 +21,8 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { calendarSlots, calendarWindows, calendarBook } from './calendar.js';
+// CROSS_BRANCH_CALENDAR_V1 — квитанция соседа приходит НАСТОЯЩИМ механизмом.
+import { markConfirmed } from '../branch-sync/journal.js';
 
 const registrar = { id: 1, role: 'registrar', extra_roles: [] };
 const cashier = { id: 2, role: 'cashier', extra_roles: [] };
@@ -53,18 +55,18 @@ const book = (db, args, user = registrar) => calendarBook(db, args, user);
 
 // ─── роли ───────────────────────────────────────────────────────────────────
 
-test('роль решает: кассир не записывает и не читает слоты', () => {
+test('роль решает: кассир не записывает и не читает слоты', async () => {
   const db = freshDb();
   assert.throws(() => calendarSlots(db, { doctor_id: 7, date: DAY }, cashier), /role is not allowed/);
-  assert.throws(() => book(db, { patient_id: 3, doctor_id: 7, start: at(10) }, cashier), /role is not allowed/);
+  await assert.rejects(() => book(db, { patient_id: 3, doctor_id: 7, start: at(10) }, cashier), /role is not allowed/);
   db.close();
 });
 
 // ─── создание ───────────────────────────────────────────────────────────────
 
-test('запись создаётся, длительность берётся ИЗ УСЛУГИ', () => {
+test('запись создаётся, длительность берётся ИЗ УСЛУГИ', async () => {
   const db = freshDb();
-  const out = book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });
+  const out = await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });
   assert.equal(out.created, true);
   assert.equal(out.visit.duration_minutes, 30, 'длительность обязана прийти из services.duration_minutes');
   assert.equal(out.visit.service_id, 21);
@@ -74,37 +76,37 @@ test('запись создаётся, длительность берётся �
 
   // Лабораторная — своя длительность, и это ровно то, ради чего service_id
   // вообще заводился: пятиминутный забор не должен занимать полчаса.
-  const lab = book(db, { patient_id: 4, doctor_id: 8, service_id: 22, start: at(10) });
+  const lab = await book(db, { patient_id: 4, doctor_id: 8, service_id: 22, start: at(10) });
   assert.equal(lab.visit.duration_minutes, 5);
 
   // Услуга без заполненной длительности — 15 минут (решение владельца), а не ноль.
-  const none = book(db, { patient_id: 4, doctor_id: 8, service_id: 23, start: at(12) });
+  const none = await book(db, { patient_id: 4, doctor_id: 8, service_id: 23, start: at(12) });
   assert.equal(none.visit.duration_minutes, 15);
 
   // Без услуги вовсе — тоже 15.
-  const bare = book(db, { patient_id: 3, doctor_id: 8, start: at(14) });
+  const bare = await book(db, { patient_id: 3, doctor_id: 8, start: at(14) });
   assert.equal(bare.visit.duration_minutes, 15);
   db.close();
 });
 
-test('запись без пациента и без времени не создаётся', () => {
+test('запись без пациента и без времени не создаётся', async () => {
   const db = freshDb();
-  assert.throws(() => book(db, { doctor_id: 7, start: at(10) }), /patient_id is required/);
-  assert.throws(() => book(db, { patient_id: 3, doctor_id: 7 }), /start is required/);
-  assert.throws(() => book(db, { patient_id: 3, doctor_id: 7, start: 'завтра' }), /ISO datetime/);
-  assert.throws(() => book(db, { patient_id: 3, doctor_id: 999, start: at(10) }), /doctor not found/);
-  assert.throws(() => book(db, { patient_id: 999, doctor_id: 7, start: at(10) }), /patient not found/);
+  await assert.rejects(() => book(db, { doctor_id: 7, start: at(10) }), /patient_id is required/);
+  await assert.rejects(() => book(db, { patient_id: 3, doctor_id: 7 }), /start is required/);
+  await assert.rejects(() => book(db, { patient_id: 3, doctor_id: 7, start: 'завтра' }), /ISO datetime/);
+  await assert.rejects(() => book(db, { patient_id: 3, doctor_id: 999, start: at(10) }), /doctor not found/);
+  await assert.rejects(() => book(db, { patient_id: 999, doctor_id: 7, start: at(10) }), /patient not found/);
   db.close();
 });
 
 // ─── ЗАПРЕТ ДВОЙНОЙ ЗАПИСИ ──────────────────────────────────────────────────
 
-test('второй пациент на то же время того же врача — ОТКАЗ, и отказ называет занятое время', () => {
+test('второй пациент на то же время того же врача — ОТКАЗ, и отказ называет занятое время', async () => {
   const db = freshDb();
-  book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(14, 30) });   // 14:30–15:00
+  await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(14, 30) });   // 14:30–15:00
 
   let err = null;
-  try { book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(14, 45) }); }
+  try { await book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(14, 45) }); }
   catch (e) { err = e; }
 
   assert.ok(err, 'пересекающаяся запись обязана быть отвергнута');
@@ -120,43 +122,43 @@ test('второй пациент на то же время того же вра
   db.close();
 });
 
-test('СТЫК разрешён: 14:30–15:00 и 15:00–15:30 — две нормальные записи подряд', () => {
+test('СТЫК разрешён: 14:30–15:00 и 15:00–15:30 — две нормальные записи подряд', async () => {
   const db = freshDb();
-  book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(14, 30) });
-  const next = book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(15, 0) });
+  await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(14, 30) });
+  const next = await book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(15, 0) });
   assert.equal(next.created, true);
   assert.equal(db.prepare('SELECT COUNT(*) c FROM visits').get().c, 2);
 
   // И за минуту до стыка — уже конфликт: граница проверяется, а не «примерно».
-  assert.throws(() => book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(14, 59) }), /занято/);
+  await assert.rejects(() => book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(14, 59) }), /занято/);
   db.close();
 });
 
-test('другой врач в то же время — не конфликт (запрет про ВРАЧА, а не про час)', () => {
+test('другой врач в то же время — не конфликт (запрет про ВРАЧА, а не про час)', async () => {
   const db = freshDb();
-  book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(11) });
-  const other = book(db, { patient_id: 4, doctor_id: 8, service_id: 21, start: at(11) });
+  await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(11) });
+  const other = await book(db, { patient_id: 4, doctor_id: 8, service_id: 21, start: at(11) });
   assert.equal(other.created, true);
   db.close();
 });
 
-test('отменённая и не пришедшая записи время НЕ держат', () => {
+test('отменённая и не пришедшая записи время НЕ держат', async () => {
   const db = freshDb();
-  const v = book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(11) });
+  const v = await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(11) });
   db.prepare("UPDATE visits SET status = 'cancelled' WHERE id = ?").run(v.visit.id);
-  const again = book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(11) });
+  const again = await book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(11) });
   assert.equal(again.created, true, 'отменённая запись держала бы слот навсегда');
 
   db.prepare("UPDATE visits SET status = 'no_show' WHERE id = ?").run(again.visit.id);
-  const third = book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(11) });
+  const third = await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(11) });
   assert.equal(third.created, true);
   db.close();
 });
 
-test('запись БЕЗ врача не проверяется, и двойная занятость КАБИНЕТА не запрещена', () => {
+test('запись БЕЗ врача не проверяется, и двойная занятость КАБИНЕТА не запрещена', async () => {
   const db = freshDb();
-  book(db, { patient_id: 3, room_id: 11, service_id: 21, start: at(11) });
-  const second = book(db, { patient_id: 4, room_id: 11, service_id: 21, start: at(11) });
+  await book(db, { patient_id: 3, room_id: 11, service_id: 21, start: at(11) });
+  const second = await book(db, { patient_id: 4, room_id: 11, service_id: 21, start: at(11) });
   assert.equal(second.created, true,
     'у кабинета есть вместимость, и запрет там запретил бы то, что клиника делает каждый день');
   db.close();
@@ -164,19 +166,19 @@ test('запись БЕЗ врача не проверяется, и двойн�
 
 // ─── ЭКСТРЕННАЯ ЗАПИСЬ ──────────────────────────────────────────────────────
 
-test('экстренная запись поверх занятого требует ПРИЧИНЫ и записывает её в саму запись', () => {
+test('экстренная запись поверх занятого требует ПРИЧИНЫ и записывает её в саму запись', async () => {
   const db = freshDb();
-  book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(14, 30) });
+  await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(14, 30) });
 
   // Флаг без причины — не «галочка, снимающая проверку».
   let err = null;
-  try { book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(14, 45), emergency: true }); }
+  try { await book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(14, 45), emergency: true }); }
   catch (e) { err = e; }
   assert.ok(err);
   assert.equal(err.code, 'emergency_reason_required');
   assert.equal(db.prepare('SELECT COUNT(*) c FROM visits').get().c, 1);
 
-  const out = book(db, {
+  const out = await book(db, {
     patient_id: 4, doctor_id: 7, service_id: 21, start: at(14, 45),
     emergency: true, emergency_reason: 'острая боль, направлен из приёмного',
   });
@@ -189,17 +191,17 @@ test('экстренная запись поверх занятого требу
 
 // ─── ПЕРЕНОС И РАСТЯГИВАНИЕ ─────────────────────────────────────────────────
 
-test('перенос идёт тем же обработчиком и той же проверкой', () => {
+test('перенос идёт тем же обработчиком и той же проверкой', async () => {
   const db = freshDb();
-  const a = book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });
-  const b = book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(12) });
+  const a = await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });
+  const b = await book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(12) });
 
   // На занятое время — отказ, и запись остаётся на старом месте.
-  assert.throws(() => book(db, { visit_id: b.visit.id, start: at(10, 15) }), /занято/);
+  await assert.rejects(() => book(db, { visit_id: b.visit.id, start: at(10, 15) }), /занято/);
   assert.equal(Date.parse(db.prepare('SELECT visit_date d FROM visits WHERE id=?').get(b.visit.id).d), Date.parse(at(12)));
 
   // На свободное — переносится.
-  const moved = book(db, { visit_id: b.visit.id, start: at(16) });
+  const moved = await book(db, { visit_id: b.visit.id, start: at(16) });
   assert.equal(moved.created, false);
   assert.equal(Date.parse(moved.visit.visit_date), Date.parse(at(16)));
   assert.equal(moved.visit.patient_id, 4, 'перенос не смеет менять пациента');
@@ -207,23 +209,23 @@ test('перенос идёт тем же обработчиком и той ж�
   assert.equal(moved.visit.service_id, 21, 'перенос без услуги сохраняет прежнюю');
 
   // Перенос «на то же место» не конфликтует сам с собой.
-  const same = book(db, { visit_id: a.visit.id, start: at(10) });
+  const same = await book(db, { visit_id: a.visit.id, start: at(10) });
   assert.equal(Date.parse(same.visit.visit_date), Date.parse(at(10)));
   db.close();
 });
 
-test('растягивание проверяется так же: удлинение НА чужой приём отвергается', () => {
+test('растягивание проверяется так же: удлинение НА чужой приём отвергается', async () => {
   const db = freshDb();
-  const a = book(db, { patient_id: 3, doctor_id: 7, service_id: 22, start: at(10) });        // 10:00–10:05
-  book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(10, 30) });              // 10:30–11:00
+  const a = await book(db, { patient_id: 3, doctor_id: 7, service_id: 22, start: at(10) });        // 10:00–10:05
+  await book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(10, 30) });              // 10:30–11:00
 
   // До 10:30 растянуть можно — стык.
-  const ok = book(db, { visit_id: a.visit.id, start: at(10), duration_minutes: 30 });
+  const ok = await book(db, { visit_id: a.visit.id, start: at(10), duration_minutes: 30 });
   assert.equal(ok.visit.duration_minutes, 30);
 
   // А до 10:45 — уже нет, и отказ называет чужое время.
   let err = null;
-  try { book(db, { visit_id: a.visit.id, start: at(10), duration_minutes: 45 }); }
+  try { await book(db, { visit_id: a.visit.id, start: at(10), duration_minutes: 45 }); }
   catch (e) { err = e; }
   assert.ok(err);
   assert.equal(err.code, 'slot_taken');
@@ -233,26 +235,26 @@ test('растягивание проверяется так же: удлине�
   db.close();
 });
 
-test('перенос на другого врача проверяет расписание НОВОГО врача', () => {
+test('перенос на другого врача проверяет расписание НОВОГО врача', async () => {
   const db = freshDb();
-  book(db, { patient_id: 3, doctor_id: 8, service_id: 21, start: at(13) });
-  const mine = book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(13) });
-  assert.throws(() => book(db, { visit_id: mine.visit.id, doctor_id: 8, start: at(13) }), /занято/);
+  await book(db, { patient_id: 3, doctor_id: 8, service_id: 21, start: at(13) });
+  const mine = await book(db, { patient_id: 4, doctor_id: 7, service_id: 21, start: at(13) });
+  await assert.rejects(() => book(db, { visit_id: mine.visit.id, doctor_id: 8, start: at(13) }), /занято/);
 
   // Перетаскивание на «Не назначено» — врача снимаем, проверять нечего.
-  const cleared = book(db, { visit_id: mine.visit.id, doctor_id: null, start: at(13) });
+  const cleared = await book(db, { visit_id: mine.visit.id, doctor_id: null, start: at(13) });
   assert.equal(cleared.visit.doctor_id, null);
   db.close();
 });
 
-test('перевод записи в «отменён» не борется за слот, который сам освобождает', () => {
+test('перевод записи в «отменён» не борется за слот, который сам освобождает', async () => {
   const db = freshDb();
-  const a = book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });
-  const b = book(db, {
+  const a = await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });
+  const b = await book(db, {
     patient_id: 4, doctor_id: 7, service_id: 21, start: at(10),
     emergency: true, emergency_reason: 'экстренно',
   });
-  const off = book(db, { visit_id: b.visit.id, start: at(10), status: 'cancelled' });
+  const off = await book(db, { visit_id: b.visit.id, start: at(10), status: 'cancelled' });
   assert.equal(off.visit.status, 'cancelled');
   assert.equal(a.visit.id !== b.visit.id, true);
   db.close();
@@ -260,9 +262,9 @@ test('перевод записи в «отменён» не борется за
 
 // ─── СВОБОДНЫЕ СЛОТЫ ────────────────────────────────────────────────────────
 
-test('calendar_slots отдаёт окно дня, свободные начала и занятое', () => {
+test('calendar_slots отдаёт окно дня, свободные начала и занятое', async () => {
   const db = freshDb();
-  book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });   // 10:00–10:30
+  await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });   // 10:00–10:30
 
   const out = calendarSlots(db, { doctor_id: 7, date: DAY, service_id: 21 }, registrar);
   assert.equal(out.date, DAY);
@@ -285,7 +287,7 @@ test('calendar_slots отдаёт окно дня, свободные начал
   db.close();
 });
 
-test('calendar_slots: выходной врача — окно null и ни одного слота', () => {
+test('calendar_slots: выходной врача — окно null и ни одного слота', async () => {
   const db = freshDb({ workingHours: JSON.stringify({ mon: { enabled: false, from: '09:00', to: '18:00' } }) });
   const out = calendarSlots(db, { doctor_id: 7, date: DAY }, registrar);
   assert.equal(out.window, null);
@@ -293,7 +295,7 @@ test('calendar_slots: выходной врача — окно null и ни од
   db.close();
 });
 
-test('calendar_slots: часы клиники сужают окно врача', () => {
+test('calendar_slots: часы клиники сужают окно врача', async () => {
   const db = freshDb({ workingHours: JSON.stringify({ mon: { enabled: true, from: '08:00', to: '20:00' } }) });
   db.prepare("INSERT INTO branches (id, name, is_24_7, working_hours) VALUES (5,'Юнусабад',0,?)")
     .run(JSON.stringify({ mon: { enabled: true, from: '09:00', to: '17:00' } }));
@@ -303,7 +305,7 @@ test('calendar_slots: часы клиники сужают окно врача',
   db.close();
 });
 
-test('calendar_slots: обед вырезан из свободного', () => {
+test('calendar_slots: обед вырезан из свободного', async () => {
   const db = freshDb({
     workingHours: JSON.stringify({
       mon: { enabled: true, from: '12:00', to: '15:00', lunchEnabled: true, lunchFrom: '13:00', lunchTo: '14:00' },
@@ -319,9 +321,9 @@ test('calendar_slots: обед вырезан из свободного', () => 
   db.close();
 });
 
-test('calendar_slots: exclude_visit_id — переносимая запись себе не мешает', () => {
+test('calendar_slots: exclude_visit_id — переносимая запись себе не мешает', async () => {
   const db = freshDb();
-  const a = book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });
+  const a = await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });
   const withIt = calendarSlots(db, { doctor_id: 7, date: DAY, service_id: 21 }, registrar);
   const without = calendarSlots(db, { doctor_id: 7, date: DAY, service_id: 21, exclude_visit_id: a.visit.id }, registrar);
   assert.ok(!withIt.slots.some((s) => s.start === '10:00'));
@@ -329,11 +331,11 @@ test('calendar_slots: exclude_visit_id — переносимая запись �
   db.close();
 });
 
-test('calendar_slots: кабинет — своя ось и свои часы', () => {
+test('calendar_slots: кабинет — своя ось и свои часы', async () => {
   const db = freshDb();
   db.prepare('UPDATE rooms SET working_hours = ? WHERE id = 11')
     .run(JSON.stringify({ mon: { enabled: true, from: '08:00', to: '11:00' } }));
-  book(db, { patient_id: 3, room_id: 11, service_id: 21, start: at(9) });
+  await book(db, { patient_id: 3, room_id: 11, service_id: 21, start: at(9) });
   const out = calendarSlots(db, { room_id: 11, date: DAY, service_id: 21 }, registrar);
   assert.equal(out.resource.kind, 'room');
   assert.deepEqual(out.window, { from: '08:00', to: '11:00', breaks: [] });
@@ -342,7 +344,7 @@ test('calendar_slots: кабинет — своя ось и свои часы', 
   db.close();
 });
 
-test('calendar_slots: без ресурса и с двумя сразу — отказ, а не догадка', () => {
+test('calendar_slots: без ресурса и с двумя сразу — отказ, а не догадка', async () => {
   const db = freshDb();
   assert.throws(() => calendarSlots(db, { date: DAY }, registrar), /doctor_id or room_id is required/);
   assert.throws(() => calendarSlots(db, { doctor_id: 7, room_id: 11, date: DAY }, registrar), /not both/);
@@ -352,7 +354,7 @@ test('calendar_slots: без ресурса и с двумя сразу — от
 
 // ─── ОКНА ПАЧКОЙ ────────────────────────────────────────────────────────────
 
-test('calendar_windows отдаёт окна «ресурс × день» одним ответом', () => {
+test('calendar_windows отдаёт окна «ресурс × день» одним ответом', async () => {
   const db = freshDb();
   db.prepare('UPDATE users SET working_hours = ? WHERE id = 8')
     .run(JSON.stringify({ mon: { enabled: false }, tue: { enabled: true, from: '10:00', to: '16:00' } }));
@@ -369,8 +371,125 @@ test('calendar_windows отдаёт окна «ресурс × день» одн
   db.close();
 });
 
-test('calendar_windows: пустой запрос — пустой ответ, а не отказ', () => {
+test('calendar_windows: пустой запрос — пустой ответ, а не отказ', async () => {
   const db = freshDb();
-  assert.deepEqual(calendarWindows(db, { date: DAY }, registrar), { days: [], windows: {} });
+  const out = calendarWindows(db, { date: DAY }, registrar);
+  assert.deepEqual(out.days, []);
+  assert.deepEqual(out.windows, {});
+  // CROSS_BRANCH_CALENDAR_V1 — список зданий приезжает даже на пустой запрос:
+  // переключатель филиалов строится ДО того, как что-нибудь выбрано, и отказ
+  // «выберите ресурсы» оставил бы экран без переключателя навсегда.
+  assert.ok(out.cross, 'межфилиальный контекст обязан быть и в пустом ответе');
+  assert.deepEqual(out.cross.visits, {});
+  db.close();
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CROSS_BRANCH_CALENDAR_V1 — запись в чужое здание
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Проверяется решение владельца целиком, включая ту его часть, которая стоила
+// спора: неподтверждённую запись НЕ ОТКАЗЫВАЮТ, но и «записано» про неё не
+// говорят. Слот держится здесь, ответ называет вещи своими именами, и ничего
+// не теряется — порция ждёт в журнале следующего такта.
+
+/** Второе здание в сети: строка `branches` с буквой B и врач, приписанный к ней. */
+function withBranchB(db) {
+  db.prepare("UPDATE branches SET letter = 'A' WHERE id = (SELECT MIN(id) FROM branches)").run();
+  db.prepare("INSERT INTO branches (id, name, letter, active) VALUES (77,'Второй корпус','B',0)").run();
+  db.prepare('UPDATE branch_identity SET letter = ?, branch_id = (SELECT MIN(id) FROM branches) WHERE id = 1').run('A');
+  db.prepare('UPDATE users SET branch_id = 77 WHERE id = 8').run();   // Каримов принимает в B
+  return 77;
+}
+
+/** Шпион вместо срочной выгрузки: считает вызовы и отвечает, чем скажут. */
+function spy(result = { ok: true }) {
+  const calls = [];
+  const impl = async (...args) => { calls.push(args); return result; };
+  return { impl, calls };
+}
+
+const journalRows = (db, uid) =>
+  db.prepare("SELECT COUNT(*) n FROM sync_journal WHERE tbl='visits' AND uid = ?").get(uid).n;
+
+test('запись в чужое здание выкладывается НЕМЕДЛЕННО, а не в часовой такт', async () => {
+  const db = freshDb();
+  withBranchB(db);
+  const pub = spy({ ok: true, at: '2026-09-05T10:00:00Z' });
+
+  const out = await calendarBook(db, { patient_id: 3, doctor_id: 8, start: at(10) }, registrar,
+    { publishImpl: pub.impl, dataDir: '/tmp/none' });
+
+  assert.equal(pub.calls.length, 1, 'выгрузка обязана случиться СРАЗУ: час ожидания — это второй человек на том же приёме');
+  assert.equal(out.cross_branch.letter, 'B');
+  assert.equal(out.cross_branch.published, true);
+  assert.equal(out.cross_branch.confirmed, false,
+    'подтвердить в момент записи невозможно: сосед ещё даже не забирал блоб');
+  assert.equal(out.visit.cross_branch, 'B', 'на записи обязана стоять буква здания, которое её подтвердит');
+  assert.ok(out.visit.cross_branch_seq > 0, 'без номера в журнале подтверждать нечего');
+  db.close();
+});
+
+test('запись в СВОЁ здание ничего никуда не выкладывает', async () => {
+  const db = freshDb();
+  withBranchB(db);
+  const pub = spy();
+  const out = await calendarBook(db, { patient_id: 3, doctor_id: 7, start: at(10) }, registrar,
+    { publishImpl: pub.impl, dataDir: '/tmp/none' });
+  assert.equal(pub.calls.length, 0, 'обычная запись не должна дёргать канал');
+  assert.equal(out.cross_branch, undefined);
+  assert.equal(out.visit.cross_branch, '');
+  db.close();
+});
+
+test('связи нет: запись СОЗДАНА, ответ говорит «не подтверждено», и ничего не потеряно', async () => {
+  const db = freshDb();
+  withBranchB(db);
+  const pub = spy({ ok: false, reason: 'relay_offline' });
+
+  const out = await calendarBook(db, { patient_id: 3, doctor_id: 8, start: at(10) }, registrar,
+    { publishImpl: pub.impl, dataDir: '/tmp/none' });
+
+  // ОТКАЗЫВАТЬ НЕЛЬЗЯ: слот в том здании действительно свободен, и отказ означал
+  // бы потерянного пациента при живом свободном времени.
+  assert.equal(out.created, true, 'запись обязана остаться: канал упал, а слот свободен');
+  assert.equal(out.cross_branch.published, false);
+  assert.equal(out.cross_branch.reason, 'relay_offline');
+  assert.equal(out.cross_branch.confirmed, false);
+  // И НЕ ПОТЕРЯНО: строка в журнале, значит уедет следующим тактом (срез
+  // накопительный, пока нет квитанции).
+  const uid = db.prepare('SELECT uid FROM visits WHERE id = ?').get(out.visit.id).uid;
+  assert.ok(journalRows(db, uid) > 0, 'невыложенная запись обязана остаться в журнале');
+  db.close();
+});
+
+test('до квитанции: карточка «подтверждается», слот занят; после — подтверждена', async () => {
+  const db = freshDb();
+  withBranchB(db);
+  const pub = spy({ ok: true });
+  const out = await calendarBook(db, { patient_id: 3, doctor_id: 8, start: at(10), duration_minutes: 30 }, registrar,
+    { publishImpl: pub.impl, dataDir: '/tmp/none' });
+  const seq = out.visit.cross_branch_seq;
+
+  const before = calendarWindows(db, { doctor_ids: [8], date: DAY, days: 1 }, registrar);
+  assert.equal(before.cross.visits[out.visit.id].confirming, true,
+    'квитанции нет — карточка обязана честно говорить «подтверждается»');
+  assert.equal(before.cross.visits[out.visit.id].building, 'B');
+
+  // СЛОТ ЗАНЯТ И ЗДЕСЬ: неподтверждённая запись держит время так же, как любая.
+  await assert.rejects(
+    () => calendarBook(db, { patient_id: 4, doctor_id: 8, start: at(10, 15) }, registrar,
+      { publishImpl: pub.impl, dataDir: '/tmp/none' }),
+    /занято/,
+  );
+
+  // Квитанция приходит ТЕМ ЖЕ механизмом, что и всегда: sent_seq двигает только
+  // markConfirmed, второго способа не заведено.
+  db.prepare("INSERT INTO sync_peers (node, pub_seq, sent_seq) VALUES ('B', ?, 0)").run(seq);
+  markConfirmed(db, 'B', seq);
+
+  const after = calendarWindows(db, { doctor_ids: [8], date: DAY, days: 1 }, registrar);
+  const info = after.cross.visits[out.visit.id];
+  assert.ok(!info || info.confirming === false, 'после квитанции метка обязана исчезнуть');
   db.close();
 });
