@@ -12,6 +12,16 @@
 // supabase, и обе зависимости передаются вызывающим. Так ticketsFor() можно
 // проверить тестом без DOM.
 
+// MONTH_WORDS_V1 (2026-09-05) — дата на бланке не зависит от компьютера.
+//
+// Здесь она собиралась через toLocaleDateString() БЕЗ локали, то есть по языку
+// операционной системы: один и тот же счёт печатался «05.09.2026» в одной
+// клинике и «05/09/2026» в другой, а на машине без данных для запрошенного
+// языка Intl отдаёт корневую форму («1994 M11 15» на снимке владельца).
+// dateNumeric — тот же вид, что раньше давал ru-RU, но одинаковый везде.
+// Размеры и вёрстка бланка не тронуты: меняется только источник строки.
+import { dateNumeric } from '../../shared/date-words.js';
+
 // Ответ issue_queue_numbers -> строки талонов для шаблона.
 //
 // Не схлопываем услуги с одинаковым номером: все анализы одного чека делят одно
@@ -63,7 +73,7 @@ function dobAge(iso) {
     // Возраст СЧИТАЕТСЯ при печати, а не хранится: иначе перепечатанный через
     // год чек называл бы неверный возраст.
     const age = Math.floor((Date.now() - d.getTime()) / 31557600000);
-    const date = d.toLocaleDateString('ru-RU');
+    const date = dateNumeric(d);
     return (age >= 0 && age < 130) ? `${date} · ${age} г.` : date;
 }
 
@@ -98,7 +108,7 @@ export async function printInvoiceCheck({ supabase, printableSheet, invoiceId, c
 
     printableSheet({ type: 'fiscal', idLine: inv.invoice_number || String(inv.id), data: {
         docNo: inv.invoice_number || String(inv.id),
-        date: new Date().toLocaleString('ru-RU').slice(0, 17),
+        date: dateNumeric(new Date(), { withTime: true }),
         patientName: (pat && pat.full_name) || '—',
         mrn: (pat && pat.mrn) || '',
         dob: dobAge(pat && pat.date_of_birth),

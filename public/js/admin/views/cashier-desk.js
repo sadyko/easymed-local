@@ -181,7 +181,6 @@ function moneyfy(inp) {
 function moneyVal(inp) { return moneyNumber(inp.value); }
 
 const RU_M_SHORT = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
-const RU_M_GEN = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
 
 function fmtPrice(n) {
     const v = Math.round(Number(n) || 0);

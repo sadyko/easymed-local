@@ -11,6 +11,15 @@
 // <style>; admin.css сюда не попадает, поэтому @font-face вставляется в каждый
 // шаблон из общего модуля. Печать получает только СЕМЕЙСТВО — размеры бланков
 // остаются их выверенными метриками (дизайн-док 2026-08-31, решение владельца).
+// MONTH_WORDS_V1 (2026-09-05) — дата на бланке не зависит от компьютера.
+//
+// Здесь она собиралась через toLocaleDateString() БЕЗ локали, то есть по языку
+// операционной системы: один и тот же счёт печатался «05.09.2026» в одной
+// клинике и «05/09/2026» в другой, а на машине без данных для запрошенного
+// языка Intl отдаёт корневую форму («1994 M11 15» на снимке владельца).
+// dateNumeric — тот же вид, что раньше давал ru-RU, но одинаковый везде.
+// Размеры и вёрстка бланка не тронуты: меняется только источник строки.
+import { dateNumeric } from '../../shared/date-words.js';
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';
 
 function esc(x) { return String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
@@ -204,7 +213,7 @@ function sampleInvoice() {
 function paras(t) { return String(t || '').split(/\n\n+|\n/).map(x => x.trim()).filter(Boolean); }
 function sampleImaging() {
     return {
-        docNo: 'MR-2024-005140', dateIn: '01.10.2024', dateOut: new Date().toLocaleDateString('ru-RU'),
+        docNo: 'MR-2024-005140', dateIn: '01.10.2024', dateOut: dateNumeric(new Date()),
         patientName: 'Рахимов Жасур Бахтиёрович', dob: '14.03.1989', sex: 'Мужской', mrn: '0024815',
         study: { kind: 'МРТ головного мозга', area: 'Головной мозг, без контраста', device: 'Siemens Magnetom · 1,5 Тл', protocol: 'T1, T2, FLAIR, DWI' },
         films: [{ caption: 'SAG · T1', sub: 'SE 01' }, { caption: 'AX · FLAIR', sub: 'SE 02' }, { caption: 'AX · DWI', sub: 'SE 03' }],
@@ -216,7 +225,7 @@ function sampleImaging() {
 
 function sampleLab() {
     return {
-        requestNo: '9932010003', dateIn: '01.10.2024', dateOut: new Date().toLocaleDateString('ru-RU'),
+        requestNo: '9932010003', dateIn: '01.10.2024', dateOut: dateNumeric(new Date()),
         patientName: 'Рахимов Жасур Бахтиёрович', dob: '14.03.1989', sex: 'Мужской', mrn: '0024815',
         conclusion: 'Дислипидемия (повышение общего холестерина, ЛПНП и триглицеридов) в сочетании с гипергликемией натощак и повышенным HbA1c. Рекомендована консультация эндокринолога и повторная липидограмма через 1 месяц.',
         labChief: 'Мустафаев Б. Р.', labChiefSpec: 'Врач клинической лабораторной диагностики',
@@ -330,7 +339,7 @@ ul.recs{ list-style:none; padding-left:11px; display:flex; flex-direction:column
   </div>
   <div class="rule"></div>
   <div class="title"><h1>Заключение врача</h1><div class="uz">Shifokor xulosasi</div>
-    <div class="meta">${d.docNo ? `<span class="chip">Документ <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Дата приёма <b>${esc(d.issueDate || new Date().toLocaleDateString('ru-RU'))}</b></span><span class="chip">Тип визита <b>${esc(d.visitType || 'Первичный приём')}</b></span></div>
+    <div class="meta">${d.docNo ? `<span class="chip">Документ <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Дата приёма <b>${esc(d.issueDate || dateNumeric(new Date()))}</b></span><span class="chip">Тип визита <b>${esc(d.visitType || 'Первичный приём')}</b></span></div>
   </div>
   <div class="cards">
     <div class="card"><div class="ct">Пациент <span class="uz">· Bemor</span></div><div class="fgrid">
@@ -435,7 +444,7 @@ ${ECONOMY_BW_CSS}
   </div>
   <div class="hr"></div>
   <div class="title"><h1>Заключение врача</h1><div class="uz">Shifokor xulosasi</div>
-    <div class="meta">${d.docNo ? `<span class="chip">№ <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Дата <b>${esc(d.issueDate || new Date().toLocaleDateString('ru-RU'))}</b></span><span class="chip"><b>${esc(d.visitType || 'Первичный')}</b></span></div>
+    <div class="meta">${d.docNo ? `<span class="chip">№ <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Дата <b>${esc(d.issueDate || dateNumeric(new Date()))}</b></span><span class="chip"><b>${esc(d.visitType || 'Первичный')}</b></span></div>
   </div>
   <div class="entwo">
     <div class="ent"><div class="cap">Пациент · Bemor</div>${fld('ФИО', 'F.I.Sh.', d.patientName)}${fld('Дата рожд.', 'Sana', d.dob)}${fld('Пол', 'Jinsi', d.sex)}${fld('ID', '', d.mrn)}${fld('Тел.', '', d.phone)}</div>
@@ -495,7 +504,7 @@ table.res{ width:100%; table-layout:fixed; border-collapse:collapse; font-size:1
 </style></head><body><section class="sheet ${toggleCls(s)}">
   ${clinicHeadHtml(s, 46)}<div class="rule"></div>
   <div class="title"><h1>Результаты лабораторных исследований</h1><div class="uz">Laboratoriya tekshiruvlari natijalari</div>
-    <div class="meta">${d.requestNo ? `<span class="chip">Заявка <b>${esc(d.requestNo)}</b></span>` : ''}${d.dateIn ? `<span class="chip">Приём <b>${esc(d.dateIn)}</b></span>` : ''}<span class="chip">Выдан <b>${esc(d.dateOut || new Date().toLocaleDateString('ru-RU'))}</b></span></div></div>
+    <div class="meta">${d.requestNo ? `<span class="chip">Заявка <b>${esc(d.requestNo)}</b></span>` : ''}${d.dateIn ? `<span class="chip">Приём <b>${esc(d.dateIn)}</b></span>` : ''}<span class="chip">Выдан <b>${esc(d.dateOut || dateNumeric(new Date()))}</b></span></div></div>
   <div class="pcard"><div class="pf"><div class="fl">ФИО <i>· F.I.Sh.</i></div><div class="fv">${esc(d.patientName || '—')}</div></div><div class="pf"><div class="fl">Дата рождения</div><div class="fv">${esc(d.dob || '—')}</div></div><div class="pf"><div class="fl">Пол</div><div class="fv">${esc(d.sex || '—')}</div></div><div class="pf"><div class="fl">ID пациента</div><div class="fv">${esc(d.mrn || '—')}</div></div></div>
   ${(d.groups || []).map(grp).join('')}
   <div class="legend"><span><i class="dh"></i> \u2303 выше нормы</span><span><i class="dl"></i> \u2304 ниже нормы</span><span><i class="dn"></i> · в норме</span></div>
@@ -537,7 +546,7 @@ ${ECONOMY_BW_CSS}
     <div class="clinic">${s.address ? `<div class="cl">${esc(s.address)}</div>` : ''}<div class="cl">${esc(s.phone || '')}${s.web ? ` · ${esc(s.web)}` : ''}</div></div></div>
   <div class="hr"></div>
   <div class="title"><h1>Результаты лабораторных исследований</h1><div class="uz">Laboratoriya natijalari</div>
-    <div class="meta">${d.requestNo ? `<span class="chip">Заявка <b>${esc(d.requestNo)}</b></span>` : ''}<span class="chip">Выдан <b>${esc(d.dateOut || new Date().toLocaleDateString('ru-RU'))}</b></span></div></div>
+    <div class="meta">${d.requestNo ? `<span class="chip">Заявка <b>${esc(d.requestNo)}</b></span>` : ''}<span class="chip">Выдан <b>${esc(d.dateOut || dateNumeric(new Date()))}</b></span></div></div>
   <div class="pstrip"><div><div class="fl">ФИО</div><div class="fv">${esc(d.patientName || '—')}</div></div><div><div class="fl">Дата рожд.</div><div class="fv">${esc(d.dob || '—')}</div></div><div><div class="fl">Пол</div><div class="fv">${esc(d.sex || '—')}</div></div><div><div class="fl">ID</div><div class="fv">${esc(d.mrn || '—')}</div></div></div>
   ${(d.groups || []).map(grp).join('')}
   ${d.conclusion ? `<div class="concl"><div class="ch">Заключение · Xulosa</div><p>${esc(d.conclusion)}</p></div>` : ''}
@@ -601,7 +610,7 @@ ${PRINT_FONT_FACE_CSS}
 </style></head><body><section class="sheet ${toggleCls(s)}">
   ${clinicHeadHtml(s, 46)}<div class="rule"></div>
   <div class="title"><h1>Результат диагностического исследования</h1><div class="uz">Diagnostika tekshiruvi natijasi</div>
-    <div class="meta">${d.docNo ? `<span class="chip">Документ <b>${esc(d.docNo)}</b></span>` : ''}${d.dateIn ? `<span class="chip">Исследование <b>${esc(d.dateIn)}</b></span>` : ''}<span class="chip">Выдан <b>${esc(d.dateOut || new Date().toLocaleDateString('ru-RU'))}</b></span></div></div>
+    <div class="meta">${d.docNo ? `<span class="chip">Документ <b>${esc(d.docNo)}</b></span>` : ''}${d.dateIn ? `<span class="chip">Исследование <b>${esc(d.dateIn)}</b></span>` : ''}<span class="chip">Выдан <b>${esc(d.dateOut || dateNumeric(new Date()))}</b></span></div></div>
   <div class="cards">
     <div class="card"><div class="ct">Пациент <span class="uz">· Bemor</span></div><div class="fgrid">${f('ФИО', 'F.I.Sh.', d.patientName)}${f('Дата рождения', '', d.dob)}${f('Пол', '', d.sex)}${f('ID пациента', '', d.mrn)}</div></div>
     <div class="card"><div class="ct">Исследование <span class="uz">· Tekshiruv</span></div><div class="fgrid">${f('Вид', 'Turi', st.kind)}${f('Область', 'Soha', st.area)}${f('Аппарат', 'Apparat', st.device)}${f('Протокол', 'Protokol', st.protocol)}</div></div>
@@ -645,7 +654,7 @@ ${ECONOMY_BW_CSS}
     <div class="clinic">${s.address ? `<div class="cl">${esc(s.address)}</div>` : ''}<div class="cl">${esc(s.phone || '')}${s.web ? ` · ${esc(s.web)}` : ''}</div></div></div>
   <div class="hr"></div>
   <div class="title"><h1>Результат диагностики</h1><div class="uz">Diagnostika natijasi</div>
-    <div class="meta">${d.docNo ? `<span class="chip">№ <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Выдан <b>${esc(d.dateOut || new Date().toLocaleDateString('ru-RU'))}</b></span></div></div>
+    <div class="meta">${d.docNo ? `<span class="chip">№ <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Выдан <b>${esc(d.dateOut || dateNumeric(new Date()))}</b></span></div></div>
   <div class="entwo">
     <div class="ent"><div class="cap">Пациент</div>${fld('ФИО', d.patientName)}${fld('Дата рожд.', d.dob)}${fld('Пол', d.sex)}${fld('ID', d.mrn)}</div>
     <div class="ent"><div class="cap">Исследование</div>${fld('Вид', st.kind)}${fld('Область', st.area)}${fld('Аппарат', st.device)}${fld('Протокол', st.protocol)}</div>
@@ -731,7 +740,7 @@ table.items{ width:100%; border-collapse:collapse; font-size:14px; } table.items
 </style></head><body><section class="sheet ${toggleCls(s)}">
   ${clinicHeadHtml(s, 46)}<div class="rule"></div>
   <div class="title"><h1>Счёт на оплату медицинских услуг</h1><div class="uz">Tibbiy xizmatlar uchun to‘lov hisobi</div>
-    <div class="meta">${d.docNo ? `<span class="chip">Счёт <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Дата <b>${esc(d.issueDate || new Date().toLocaleDateString('ru-RU'))}</b></span>${d.dueDate ? `<span class="chip">Оплатить до <b>${esc(d.dueDate)}</b></span>` : ''}</div></div>
+    <div class="meta">${d.docNo ? `<span class="chip">Счёт <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Дата <b>${esc(d.issueDate || dateNumeric(new Date()))}</b></span>${d.dueDate ? `<span class="chip">Оплатить до <b>${esc(d.dueDate)}</b></span>` : ''}</div></div>
   <div class="cards"><div class="card"><div class="ct">Пациент <span class="uz">· Bemor</span></div><div class="fgrid">${kvRows(d.patient)}</div></div>
     <div class="card"><div class="ct">Плательщик <span class="uz">· To‘lovchi</span></div><div class="fgrid">${kvRows(d.billing)}</div></div></div>
   <div class="sec-h"><span class="ru">Позиции</span><span class="uz">· Xizmatlar ro‘yxati</span></div>
@@ -774,7 +783,7 @@ ${ECONOMY_BW_CSS}
     <div class="clinic">${s.address ? `<div class="cl">${esc(s.address)}</div>` : ''}<div class="cl">${esc(s.phone || '')}${s.web ? ` · ${esc(s.web)}` : ''}</div></div></div>
   <div class="hr"></div>
   <div class="title"><h1>Счёт на оплату медицинских услуг</h1><div class="uz">To‘lov hisobi</div>
-    <div class="meta">${d.docNo ? `<span class="chip">№ <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Дата <b>${esc(d.issueDate || new Date().toLocaleDateString('ru-RU'))}</b></span></div></div>
+    <div class="meta">${d.docNo ? `<span class="chip">№ <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Дата <b>${esc(d.issueDate || dateNumeric(new Date()))}</b></span></div></div>
   <div class="entwo"><div class="ent"><div class="cap">Пациент · Bemor</div>${kvFld(d.patient)}</div><div class="ent"><div class="cap">Плательщик · To‘lovchi</div>${kvFld(d.billing)}</div></div>
   <div class="secbar"><span class="ru">Позиции</span><span class="uz">· Xizmatlar</span></div>
   <table class="items"><thead><tr><th class="num"></th><th>Услуга</th><th class="c">Кол-во</th><th class="r">Цена</th><th class="r">Сумма</th></tr></thead><tbody>${rows}</tbody></table>
@@ -874,7 +883,7 @@ ${s.address ? `<div class="f-sub">${esc(s.address)}</div>` : ''}${s.taxId ? `<di
 <div class="f-hr2"></div>
 <div class="f-title">Счёт на оплату</div>
 <div class="f-kv"><span>Счёт №</span><b>${esc(d.docNo || '—')}</b></div>
-<div class="f-kv"><span>Дата</span><b>${esc(d.issueDate || d.date || new Date().toLocaleDateString('ru-RU'))}</b></div>
+<div class="f-kv"><span>Дата</span><b>${esc(d.issueDate || d.date || dateNumeric(new Date()))}</b></div>
 ${pName ? `<div class="f-item-n" style="margin:1px 0">Пациент: ${esc(pName)}</div>` : ''}
 ${pMrn ? `<div class="f-kv"><span>ID</span><b>${esc(pMrn)}</b></div>` : ''}
 ${dobRow(d)}
@@ -936,7 +945,7 @@ ${s.address ? `<div class="f-sub">${esc(s.address)}</div>` : ''}${s.taxId ? `<di
 ${d.patientName ? `<div class="f-pat">${esc(d.patientName)}</div><div class="f-hr2"></div>` : ''}
 <div class="f-title">Кассовый чек</div>
 <div class="f-kv"><span>Чек №</span><b>${esc(d.docNo || '—')}</b></div>
-<div class="f-kv"><span>Дата</span><b>${esc(d.date || new Date().toLocaleString('ru-RU').slice(0, 16))}</b></div>
+<div class="f-kv"><span>Дата</span><b>${esc(d.date || dateNumeric(new Date(), { withTime: true }))}</b></div>
 ${d.cashier ? `<div class="f-kv"><span>Кассир</span><b>${esc(d.cashier)}</b></div>` : ''}
 ${d.mrn ? `<div class="f-kv"><span>Пациент ID</span><b>${esc(d.mrn)}</b></div>` : ''}
 ${dobRow(d)}
@@ -992,7 +1001,7 @@ ${s.address ? `<div class="f-sub">${esc(s.address)}</div>` : ''}${s.taxId ? `<di
 <div class="f-hr2"></div>
 <div class="f-title">Чек об оплате</div>
 <div class="f-kv"><span>Чек №</span><b>${esc(d.docNo || '—')}</b></div>
-<div class="f-kv"><span>Дата</span><b>${esc(d.date || new Date().toLocaleString('ru-RU').slice(0, 16))}</b></div>
+<div class="f-kv"><span>Дата</span><b>${esc(d.date || dateNumeric(new Date(), { withTime: true }))}</b></div>
 ${d.cashier ? `<div class="f-kv"><span>Кассир</span><b>${esc(d.cashier)}</b></div>` : ''}
 ${d.patientName ? `<div class="f-item-n" style="margin:1px 0">Пациент: ${esc(d.patientName)}</div>` : ''}
 ${d.mrn ? `<div class="f-kv"><span>ID</span><b>${esc(d.mrn)}</b></div>` : ''}

@@ -16,6 +16,15 @@
 import { renderDesignedVariant } from '../admin/views/doc-variants.js?v=noqr1';
 // ONEST_TYPOGRAPHY_V1 — печатное окно/PDF — отдельный документ, admin.css туда
 // не попадает; @font-face приезжает из общего модуля (см. его шапку).
+// MONTH_WORDS_V1 (2026-09-05) — дата на бланке не зависит от компьютера.
+//
+// Здесь она собиралась через toLocaleDateString() БЕЗ локали, то есть по языку
+// операционной системы: один и тот же счёт печатался «05.09.2026» в одной
+// клинике и «05/09/2026» в другой, а на машине без данных для запрошенного
+// языка Intl отдаёт корневую форму («1994 M11 15» на снимке владельца).
+// dateNumeric — тот же вид, что раньше давал ru-RU, но одинаковый везде.
+// Размеры и вёрстка бланка не тронуты: меняется только источник строки.
+import { dateNumeric } from './date-words.js';
 import { PRINT_FONT_FACE_CSS } from './print-fonts.js';
 export function esc(s) {
     return String(s ?? '').replace(/[&<>"']/g, ch => (
@@ -246,7 +255,7 @@ function renderCustomBody({ s, type, bodyHtml, idLine, title }) {
             <div style="flex:1">
                 <span class="pill-solid">${esc(title || titleFor(type))}</span>
                 <div class="h1" style="margin-top:8px;">${esc(title || titleFor(type))}</div>
-                ${idLine ? `<div style="font-size:12px;color:#55636d;margin-top:4px;">Document <span class="mono" style="color:${s.ink};font-weight:600;">${esc(idLine)}</span> · ${esc(new Date().toLocaleDateString())}</div>` : ''}
+                ${idLine ? `<div style="font-size:12px;color:#55636d;margin-top:4px;">Document <span class="mono" style="color:${s.ink};font-weight:600;">${esc(idLine)}</span> · ${esc(dateNumeric(new Date()))}</div>` : ''}
             </div>
         </div>
         ${bodyHtml}
@@ -486,7 +495,7 @@ function conclusionBody(s, d) {
             title:    d.title || 'Заключение приёма',
             idLabel:  'Документ',
             idValue:  d.docNo || '—',
-            dateStr:  d.issueDate || ('Дата: ' + new Date().toLocaleDateString('ru-RU')),
+            dateStr:  d.issueDate || ('Дата: ' + dateNumeric(new Date())),
             rightLabel: 'Тип визита',
             rightValue: d.visitType || 'Амбулаторный',
         })}
@@ -504,7 +513,7 @@ function conclusionBody(s, d) {
         ${sec('Рекомендации', d.recsText)}
         ${rxHtml}
         ${refHtml}
-        ${signoffHTML(s, { signerName: d.doctorName || '—', signerSpec: d.doctorSpec || '', signerLicense: d.signerLicense || ('Подписано ' + new Date().toLocaleString('ru-RU')) })}
+        ${signoffHTML(s, { signerName: d.doctorName || '—', signerSpec: d.doctorSpec || '', signerLicense: d.signerLicense || ('Подписано ' + dateNumeric(new Date(), { withTime: true })) })}
         ${footerHTML(s)}
     `;
 }
@@ -543,7 +552,7 @@ function diagBody(s, d) {
             title:    d.title || 'Echocardiography · transthoracic',
             idLabel:  'Study',
             idValue:  d.docNo || 'DX-2026-02744',
-            dateStr:  d.issueDate || `${new Date().toLocaleDateString()}, ${new Date().toLocaleTimeString(undefined, {hour:'2-digit', minute:'2-digit'})} · Cardiology suite`,
+            dateStr:  d.issueDate || `${dateNumeric(new Date(), { withTime: true })} · Cardiology suite`,
         })}
         <div style="text-align:right;font-size:11px;color:#55636d;line-height:1.6;margin-top:6px;">
             <div><b style="color:${s.ink};">${esc(d.patientName || 'Aliyev Bobur A.')}</b></div>
@@ -595,7 +604,7 @@ function invoiceBody(s, d) {
             title:    d.title || 'Outpatient services',
             idLabel:  'Invoice',
             idValue:  d.docNo || 'INV-2026-00014',
-            dateStr:  d.issueDate || `Issued ${new Date().toLocaleDateString()}`,
+            dateStr:  d.issueDate || `Issued ${dateNumeric(new Date())}`,
             rightLabel: 'Status',
             rightValue: (d.status || 'PAID').toUpperCase(),
         })}
@@ -606,7 +615,7 @@ function invoiceBody(s, d) {
                 ['Phone', '+998 89 555 55 55'],
             ])}
             ${infoBlock(s.accent, s.ink, 'Billing', d.billing || [
-                ['Issue date', new Date().toLocaleDateString()],
+                ['Issue date', dateNumeric(new Date())],
                 ['Due', 'On receipt'],
                 ['Payer', 'Self-pay'],
                 ['Cashier', 'Desk #1'],
@@ -629,7 +638,7 @@ function invoiceBody(s, d) {
         ${signoffHTML(s, {
             signerName:    d.cashierName  || 'Cashier · Desk #1',
             signerSpec:    '',
-            signerLicense: `Receipt fixed in fiscal memory · ${new Date().toLocaleString('ru-RU')}`,
+            signerLicense: `Receipt fixed in fiscal memory · ${dateNumeric(new Date(), { withTime: true })}`,
         })}
         ${footerHTML(s)}
     `;
@@ -663,7 +672,7 @@ function actBody(s, d) {
             title:      d.title || 'Акт оказанных медицинских услуг',
             idLabel:    'Акт',
             idValue:    d.docNo || '—',
-            dateStr:    d.issueDate || `Дата ${new Date().toLocaleDateString('ru-RU')}`,
+            dateStr:    d.issueDate || `Дата ${dateNumeric(new Date())}`,
             rightLabel: 'Оплата',
             rightValue: d.coverage || 'По договору',
         })}
@@ -717,7 +726,7 @@ function checkBody(s, d) {
             title:    d.title || 'Cardiology consultation',
             idLabel:  'Check',
             idValue:  d.docNo || 'CHK-2026-00872',
-            dateStr:  d.issueDate || new Date().toLocaleString('ru-RU'),
+            dateStr:  d.issueDate || dateNumeric(new Date(), { withTime: true }),
             rightLabel: 'Method',
             rightValue: (d.method || 'Cash').toString(),
         })}
@@ -734,7 +743,7 @@ function checkBody(s, d) {
         ${signoffHTML(s, {
             signerName:    d.cashierName  || 'Cashier · Desk #1',
             signerSpec:    '',
-            signerLicense: `Cash desk · ${new Date().toLocaleString('ru-RU')}`,
+            signerLicense: `Cash desk · ${dateNumeric(new Date(), { withTime: true })}`,
         })}
         ${footerHTML(s)}
     `;
@@ -758,7 +767,7 @@ function fiscalBody(s, d) {
         + `<div class="f-hr2"></div>`
         + `<div class="f-title">Чек об оплате</div>`
         + `<div class="f-kv"><span>Чек №</span><b>${esc(d.docNo || '—')}</b></div>`
-        + `<div class="f-kv"><span>Дата</span><b>${esc(new Date().toLocaleString('ru-RU').slice(0, 16))}</b></div>`
+        + `<div class="f-kv"><span>Дата</span><b>${esc(dateNumeric(new Date(), { withTime: true }))}</b></div>`
         // RECEIPT_PATIENT_ID_V1 — блок пациента. Чек служит талоном: с ним идут
         // в лабораторию и в кабинет, и там по нему сверяют человека. Раньше на
         // чеке не было НИ ОДНОГО признака пациента — только услуги и сумма.

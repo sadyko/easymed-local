@@ -3,6 +3,8 @@
 
 import { iconHtml } from './icons.js';
 import { getLang, tr } from './i18n.js';
+// MONTH_WORDS_V1 — сам формат даты общий с печатными бланками (модуль чистый).
+import { dateWords } from '../shared/date-words.js';
 
 // ---------------------------------------------------------------------------
 // h() — hyperscript. props.style accepts an object, on* keys are listeners,
@@ -267,31 +269,26 @@ export function avColor(seed) {
 
 // ---------------------------------------------------------------------------
 // DATE_FMT_V1 — one shared, locale-aware date/time formatter for the whole admin.
-// Renders human dates ("5 июня 2026") instead of raw ISO. Month names come from
-// Intl by the app language (getLang). fmtDate -> date; fmtDateTime -> date + HH:MM.
+// Renders human dates ("5 июня 2026") instead of raw ISO. fmtDate -> date;
+// fmtDateTime -> date + HH:MM.
 // NEVER feed these to <input type=date> values or query cutoffs — those need ISO.
+//
+// MONTH_WORDS_V1 (2026-09-05) — БЕЗ Intl.
+//
+// Раньше месяц брался у Intl по языку интерфейса. На машине, в сборке которой
+// нет данных для uz, Intl отвечает за КОРНЕВУЮ локаль, и дата рождения на
+// узбекском экране печаталась как «1994 M11 15» — ровно то, что владелец
+// прислал на снимке. Наличие данных ICU — свойство конкретного компьютера, а не
+// продукта, поэтому единственный способ получить ОДИН И ТОТ ЖЕ ответ во всех
+// клиниках — не спрашивать их вовсе.
+//
+// Сам формат (месяцы из словаря, порядок слов по CLDR) живёт в
+// shared/date-words.js: тот модуль ЧИСТЫЙ, и потому один и тот же код пишет
+// дату и на экране, и в печатном бланке, который собирает сервер для
+// Telegram-бота. Здесь остаётся ровно то, чего он не знает: язык интерфейса и
+// прочерк вместо пустоты.
 // ---------------------------------------------------------------------------
-const _DATE_LOCALE = { ru: 'ru-RU', uz: 'uz-UZ', en: 'en-GB' };
-function _toDate(value) {
-    if (value == null || value === '') return null;
-    if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
-    const s = String(value);
-    // date-only 'YYYY-MM-DD' -> local midnight (avoid a UTC day-shift)
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
-        const [y, m, d] = s.split('-').map(Number);
-        const dt = new Date(y, m - 1, d);
-        return isNaN(dt.getTime()) ? null : dt;
-    }
-    const dt = new Date(s);
-    return isNaN(dt.getTime()) ? null : dt;
-}
 export function fmtDate(value, { withTime = false } = {}) {
-    const dt = _toDate(value);
-    if (!dt) return '—';
-    const locale = _DATE_LOCALE[getLang()] || 'ru-RU';
-    const opts = { day: 'numeric', month: 'long', year: 'numeric' };
-    if (withTime) { opts.hour = '2-digit'; opts.minute = '2-digit'; }
-    try { return new Intl.DateTimeFormat(locale, opts).format(dt); }
-    catch (_) { return new Intl.DateTimeFormat('ru-RU', opts).format(dt); }
+    return dateWords(value, { lang: getLang(), withTime }) || '—';
 }
 export function fmtDateTime(value) { return fmtDate(value, { withTime: true }); }

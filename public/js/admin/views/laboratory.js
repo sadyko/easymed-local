@@ -39,7 +39,7 @@ import { mountLabPanels, LAB_BUILD } from './lab-panels.js';   // LAB_PANELS_BY_
 // ?v= is required here, not decorative: this module gained selectOptionsFor, and a
 // browser holding the older cached copy would fail the named import and blank the view.
 import { pluralRu, groupLabRows, selectOptionsFor,
-         labCardState, labPrimaryAction, RU_MONTH_GEN, ymd, isMachineDate } from './lab-grouping.js?v=labcard3';   // LAB_GROUP_V1 / LAB_SELECT_OPTIONS_V1 / LAB_CARD_V3 — pure helpers, unit-tested separately
+         labCardState, labPrimaryAction } from './lab-grouping.js?v=labcard3';   // LAB_GROUP_V1 / LAB_SELECT_OPTIONS_V1 / LAB_CARD_V3 — pure helpers, unit-tested separately
 import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';
 // LAB_ONE_CLINIC_V1 — «лаборатория обслуживает всю клинику / только своё здание».
 import { scopeQuery, normalizeLabScope, LAB_SCOPE_CLINIC, LAB_SCOPE_BUILDING, LAB_SCOPE_DEFAULT } from './lab-scope.js';
@@ -860,18 +860,10 @@ function accessionButton(acc) {
 }
 
 // ДАТА РОЖДЕНИЯ. На снимке владельца в узбекском интерфейсе стояло
-// «1994 M11 15» — это не «сырая дата», это корневая локаль Intl: в сборке
-// браузера не оказалось данных для запрошенного языка. Источник остаётся
-// общий (fmtDate, DATE_FMT_V1 в ui.js — «15 ноября 1994»), но карточка обязана
-// быть читаемой и на такой машине, поэтому машинная форма пересобирается из
-// названий месяцев словаря (они там есть: «ноября» → uz «noyabr», en «November»).
-function fmtBirth(iso) {
-    const human = fmtDate(iso);
-    if (!isMachineDate(human)) return human;
-    const p = ymd(iso);
-    if (!p) return human;
-    return p.d + ' ' + tr(RU_MONTH_GEN[p.m]) + ' ' + p.y;
-}
+// «1994 M11 15» — корневая локаль Intl на машине без данных для uz. Карточка чинила
+// это у себя (MONTH_WORDS_V1 убрал ту запасную сборку): теперь общий fmtDate
+// берёт месяцы из словаря и Intl не спрашивает — машинной формы больше нет.
+const fmtBirth = (iso) => fmtDate(iso);
 
 // Результат строки: значение (если показатель один) и худший флаг.
 function resultsCell(r) {

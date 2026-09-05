@@ -25,7 +25,7 @@
 import { supabase } from '../../supabase.js';
 import { CAT_ORDER, categoryOf } from '../../shared/service-categories.js';   // SERVICE_CATALOG_FILTER_V1
 import { h, Icon, clear, toast, Avatar, initials, avColor, field, fmtDate, fmtDateTime } from '../ui.js';
-import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1
 import { doctorPoolFor } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1
 // WIZARD_ONE_ENGINE_V1 — общий клиент слотов и записи. Один вопрос «когда врач
@@ -35,7 +35,6 @@ import { primeSlotDays, slotDayCached, freeStartMinutes, loadSlotDay, hhmmToMin,
          askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=aug17e';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // WIZ_INVOICE_PRINT_V1 — тот же брендированный бланк «Счёт» (Настройки → Документы); ?v как у всех импортёров
 
-const RU_M_GEN = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
 
 function fmtPrice(n) {
     const v = Math.round(Number(n) || 0);
@@ -893,7 +892,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const d0 = new Date(); d0.setHours(0, 0, 0, 0);
                 if (line.ui.calShift === undefined) line.ui.calShift = 0;   // 0 = текущий месяц, 1 = следующий
                 const selDate = new Date(line.ui.day);
-                const dayLabelBtn = (line.ui.day === d0.getTime() ? tr('Сегодня') : selDate.getDate() + ' ' + tr(RU_M_GEN[selDate.getMonth()]).slice(0, 3)) +
+                const dayLabelBtn = (line.ui.day === d0.getTime() ? tr('Сегодня') : selDate.getDate() + ' ' + monthName(selDate.getMonth()).slice(0, 3)) +
                     (line.doctorId ? ' · ' + trf('{n} окн.', { n: slotsForDay(line, line.ui.day).length }) : '');
                 const dayWrap = h('div', { style: { position: 'relative', flex: '0 0 auto' } });
                 const dayBtn = h('button', {
@@ -910,14 +909,14 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const paintCal = () => {
                     clear(calPop);
                     const base = new Date(d0.getFullYear(), d0.getMonth() + line.ui.calShift, 1);
-                    const monthName = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'][base.getMonth()];
+                    const monthLabel = monthName(base.getMonth(), { standalone: true });   // MONTH_WORDS_V1
                     const navBtn = (txt, dis, fn) => h('button', {
                         type: 'button', disabled: dis ? true : null, onclick: fn,
                         style: { width: '26px', height: '26px', borderRadius: '8px', border: '1px solid var(--ink-200)', background: 'var(--white, #fff)', cursor: dis ? 'default' : 'pointer', opacity: dis ? 0.4 : 1, fontWeight: 700 },
                     }, txt);
                     calPop.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' } },
                         navBtn('‹', line.ui.calShift === 0, () => { line.ui.calShift = 0; paintCal(); }),
-                        h('span', { style: { flex: 1, textAlign: 'center', fontSize: '13.5px', fontWeight: 800 } }, monthName + ' ' + base.getFullYear()),
+                        h('span', { style: { flex: 1, textAlign: 'center', fontSize: '13.5px', fontWeight: 800 } }, monthLabel + ' ' + base.getFullYear()),
                         navBtn('›', line.ui.calShift === 1, () => { line.ui.calShift = 1; paintCal(); }),
                     ));
                     calPop.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '2px', marginBottom: '4px' } },
@@ -1480,9 +1479,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             if (!c.when) return '';
             const d = new Date(c.when);
             // DATE_ONLY_V1 — у услуги без врача времени нет, показывать 00:00 нельзя
-            if (c.dateOnly) return days.length > 1 ? d.getDate() + ' ' + RU_M_GEN[d.getMonth()] : 'без времени';
+            if (c.dateOnly) return days.length > 1 ? d.getDate() + ' ' + monthName(d.getMonth()) : tr('без времени');
             const t = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-            return (days.length > 1 ? d.getDate() + ' ' + RU_M_GEN[d.getMonth()] + ', ' : '') + t;
+            return (days.length > 1 ? d.getDate() + ' ' + monthName(d.getMonth()) + ', ' : '') + t;
         };
 
         const kv = (l, v) => h('div', { class: 'row', style: { padding: '7px 0', borderBottom: '1px solid var(--ink-50)', fontSize: '13.5px', gap: '12px' } },

@@ -67,7 +67,7 @@
 // выбранном чужом филиале ось кабинетов честно говорит, что её нет.
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, initials, avColor, Avatar } from '../ui.js';
-import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { loadPatientById } from '../data.js';
 // PASTEL_IDENTITY_V1 — оттенок карточки приёма. Выбор оттенка живёт в одном
 // модуле на три доски (календарь, очередь, канбан), чтобы «мятный» везде
@@ -77,7 +77,6 @@ import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';   /
 import { registrarHeader } from './registrar-header.js?v=aurora5';   // NO_GREETING_V1 — same URL as patients.js (one instance)
 
 const WD_KEY = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-const RU_MO = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
 const RU_WD_L = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
 const RU_WD_S = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
@@ -129,7 +128,7 @@ function todayIso() { return dateToIso(new Date()); }
 function minutesOfLocal(dt) { return dt.getHours() * 60 + dt.getMinutes(); }
 function fmtHM(min) { return `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`; }
 function hhmmToMin(s) { const [hh, mm] = String(s || '').split(':').map(Number); return (hh || 0) * 60 + (mm || 0); }
-function ruDay(iso) { const d = isoToLocalDay(iso); return `${RU_WD_L[d.getDay()]}, ${d.getDate()} ${RU_MO[d.getMonth()]} ${d.getFullYear()}`; }
+function ruDay(iso) { const d = isoToLocalDay(iso); return `${RU_WD_L[d.getDay()]}, ${d.getDate()} ${monthName(d.getMonth())} ${d.getFullYear()}`; }
 /** Местное настенное время дня → ISO. Единственный перевод в сторону сервера. */
 function localIso(dayIso, min) {
     const d = isoToLocalDay(dayIso);
@@ -906,7 +905,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         const s = isoToLocalDay(state.dayIso);
         if (state.period === 1) return ruDay(state.dayIso);
         const e = new Date(s.getFullYear(), s.getMonth(), s.getDate() + state.period - 1);
-        return `${s.getDate()} ${RU_MO[s.getMonth()]} – ${e.getDate()} ${RU_MO[e.getMonth()]} ${e.getFullYear()}`;
+        return `${s.getDate()} ${monthName(s.getMonth())} – ${e.getDate()} ${monthName(e.getMonth())} ${e.getFullYear()}`;
     }
     function shiftDay(n) {
         const d = isoToLocalDay(state.dayIso); d.setDate(d.getDate() + n); state.dayIso = dateToIso(d);

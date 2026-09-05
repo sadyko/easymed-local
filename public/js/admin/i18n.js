@@ -15,6 +15,9 @@
 // English alongside whatever has been translated.
 
 import { STRINGS } from './i18n-strings.js?v=svceditor1';
+// MONTH_WORDS_V1 — сам формат даты живёт в общем ЧИСТОМ модуле: им пользуются
+// и печатные бланки, которые собирает сервер (там нет ни DOM, ни localStorage).
+import { monthWord, MONTH_KEYS_FORMAT, MONTH_KEYS_STANDALONE } from '../shared/date-words.js';
 
 const I18N = {
     en: {
@@ -341,6 +344,21 @@ export function tr(str) {
     }
     return str;
 }
+
+// MONTH_WORDS_V1 (2026-09-05) — месяц словом на языке интерфейса.
+//
+// Владелец на узбекском интерфейсе видел «1994 M11 15»: так Intl отвечает за
+// КОРНЕВУЮ локаль, когда в сборке браузера нет данных запрошенного языка.
+// Разбор, словарь и порядок слов — в shared/date-words.js. Здесь остаётся
+// только подстановка ТЕКУЩЕГО языка, чтобы экранам не приходилось спрашивать
+// его самим:
+//
+//   monthName(10)                        → «ноября» / «noyabr» / «November»
+//   monthName(10, { standalone: true })  → «Ноябрь» / «Noyabr» / «November»
+export function monthName(month, opts = {}) {
+    return monthWord(month, { lang: opts.lang || currentLang, standalone: !!opts.standalone });
+}
+export { MONTH_KEYS_FORMAT, MONTH_KEYS_STANDALONE };
 
 // I18N_COVERAGE_V1 (2026-08-31) — translate FIRST, substitute SECOND.
 //

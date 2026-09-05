@@ -10,7 +10,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, Avatar, Tag, StatusTag, clear, toast } from '../ui.js';
-import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
 // WIZARD_ONE_ENGINE_V1 / VISITS_ONE_DOOR_V1 — «Повторный визит» держал ЧЕТВЁРТУЮ
 // реализацию расписания (loadBookedSlots: своя сетка 20 минут, свои 08:00–19:00,
@@ -1271,7 +1271,6 @@ function aiSuggestion(kind, iconName, text) {
 // a direct visits insert + a visit_services consultation line.
 // ===========================================================================
 const RV_REASONS = ['Контроль после лечения', 'Оценка результатов анализов', 'Продолжение лечения', 'Повторный осмотр', 'Перевязка', 'Другое'];
-const RV_MONTHS  = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 const RV_WEEK    = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
 // Шаг и длительность повторного визита. Это НЕ расчёт расписания: сервер
@@ -1406,7 +1405,7 @@ async function openRevisitModal(ctx) {
     function refreshFootBtn() {
         clear(footSel);
         if (state.sel && state.slot) {
-            const dl = `${RV_WEEK[(new Date(state.sel.y, state.sel.m, state.sel.d).getDay() + 6) % 7]}, ${state.sel.d} ${RV_MONTHS[state.sel.m].toLowerCase()}`;
+            const dl = `${RV_WEEK[(new Date(state.sel.y, state.sel.m, state.sel.d).getDay() + 6) % 7]}, ${state.sel.d} ${monthName(state.sel.m)}`;
             footSel.className = 'rv-foot-sel';
             footSel.append(Icon('Check', { size: 13 }), document.createTextNode(` ${dl} · ${state.slot}`));
             bookBtn.removeAttribute('disabled');
@@ -1423,7 +1422,7 @@ async function openRevisitModal(ctx) {
         const nav = h('div', { class: 'rv-calnav' },
             h('button', { class: 'btn btn-ghost btn-sm', ...(atMinMonth ? { disabled: '' } : {}),
                 onclick: () => { if (atMinMonth) return; state.m--; if (state.m < 0) { state.m = 11; state.y--; } renderCal(); } }, Icon('ChevronLeft', { size: 14 })),
-            h('span', { style: { fontWeight: '600' } }, `${RV_MONTHS[state.m]} ${state.y}`),
+            h('span', { style: { fontWeight: '600' } }, `${monthName(state.m, { standalone: true })} ${state.y}`),
             h('button', { class: 'btn btn-ghost btn-sm', onclick: () => { state.m++; if (state.m > 11) { state.m = 0; state.y++; } renderCal(); } }, Icon('ChevronRight', { size: 14 })),
         );
         const quick = h('div', { class: 'rv-quick' },
@@ -1539,7 +1538,7 @@ async function openRevisitModal(ctx) {
                 });
             } catch (_) {}
 
-            const dl = `${RV_WEEK[(new Date(state.sel.y, state.sel.m, state.sel.d).getDay() + 6) % 7]}, ${state.sel.d} ${RV_MONTHS[state.sel.m].toLowerCase()}`;
+            const dl = `${RV_WEEK[(new Date(state.sel.y, state.sel.m, state.sel.d).getDay() + 6) % 7]}, ${state.sel.d} ${monthName(state.sel.m)}`;
             // RV_NO_CONFIRM_V1 — no confirmation screen: the toast + the note in
             // recommendations are enough; just close so the doctor keeps working.
             close();

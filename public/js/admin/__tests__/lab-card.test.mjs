@@ -147,9 +147,9 @@ globalThis.fetch = async (url, opts) => {
 };
 
 const { renderLaboratory } = await import('../views/laboratory.js');
-const { setLang } = await import('../i18n.js');
+const { setLang, monthName, MONTH_KEYS_FORMAT } = await import('../i18n.js');
 const { STRINGS } = await import('../i18n-strings.js');
-const { labCardState, labPrimaryAction, isMachineDate, ymd, RU_MONTH_GEN } = await import('../views/lab-grouping.js');
+const { labCardState, labPrimaryAction } = await import('../views/lab-grouping.js');
 const { setFullAccess } = await import('../permissions.js');
 setFullAccess(true);
 
@@ -458,20 +458,20 @@ test('дата рождения — словом, а не «1994 M11 15», и т
   } finally { setLang('ru'); }
 });
 
-test('машинная форма опознаётся, и запасная сборка берёт месяцы из словаря', () => {
-  assert.strictEqual(isMachineDate('1994 M11 15'), true, 'корневая форма Intl больше не опознаётся');
-  assert.strictEqual(isMachineDate('15 ноября 1994'), false);
-  assert.strictEqual(isMachineDate('15 November 1994'), false);
-  assert.deepStrictEqual(ymd('1994-11-15T00:00:00Z'), { y: 1994, m: 10, d: 15 });
-  assert.strictEqual(ymd('не дата'), null);
-  assert.strictEqual(RU_MONTH_GEN.length, 12);
-  // «2 may 2019» — тот вид, о котором просил владелец; он собирается из словаря.
-  for (const m of RU_MONTH_GEN) {
+// MONTH_WORDS_V1 — запасная сборка даты (isMachineDate / ymd / RU_MONTH_GEN)
+// из lab-grouping.js убрана: месяцы берёт общий форматтер, и Intl он не
+// спрашивает вовсе. Здесь остаётся то, на чём эта карточка держится, —
+// узбекские месяцы в словаре; полный разбор формата в uzbek-dates.test.mjs.
+test('узбекские месяцы лежат в словаре, а не в этом экране', () => {
+  assert.strictEqual(MONTH_KEYS_FORMAT.length, 12);
+  for (const m of MONTH_KEYS_FORMAT) {
     const e = STRINGS[m];
     assert.ok(e && e.uz && e.en, 'месяца «' + m + '» нет в словаре в трёх языках');
     assert.notStrictEqual(e.uz, e.ru, 'узбекский месяц «' + m + '» — побайтовая копия русского');
   }
-  assert.strictEqual(STRINGS[RU_MONTH_GEN[4]].uz, 'may');
+  // «2 may 2019» — тот вид, о котором просил владелец.
+  assert.strictEqual(monthName(4, { lang: 'uz' }), 'may');
+  assert.strictEqual(monthName(10, { lang: 'uz' }), 'noyabr');
 });
 
 // ═══ 6. ЧУЖОЙ ФИЛИАЛ ════════════════════════════════════════════════════════
