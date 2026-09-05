@@ -127,3 +127,27 @@ test('филиал не заводит филиалов', async (t) => {
   assert.equal(res.status, 409);
   assert.deepEqual(await res.json(), { error: 'branch_of_branch' });
 });
+
+// CONTROL_PLANE_V2 — удалённому филиалу нельзя выдавать его старый номер
+// заново: подписанная лицензия -b2 может всё ещё лежать на компьютере
+// филиала, и она называет именно этот clinic_id. Считаем детей по живым
+// строкам `clinics` — значит после удаления -b2 их снова две, n снова
+// стартует с 2, и без починки проба наткнётся на -b2, которого в `clinics`
+// уже нет, решит, что путь свободен, и упрётся в триггер
+// clinics_no_resurrection (см. migrations/010_deleted_clinics.sql).
+test('удалённый филиал не получает свой номер повторно', async (t) => {
+  const { db, base } = await harness(t);
+  const token = enrol(db);
+  const a = await (await makeBranch(base, { install_token: token })).json();
+  const b = await (await makeBranch(base, { install_token: token })).json();
+  assert.equal(a.clinic_id, 'c-main-b1');
+  assert.equal(b.clinic_id, 'c-main-b2');
+
+  // Имитируем то, что сделает будущая ручка DELETE: строка уходит из
+  // `clinics`, а её id навсегда остаётся в могильнике.
+  db.prepare('DELETE FROM clinics WHERE clinic_id = ?').run(b.clinic_id);
+  db.prepare('INSERT INTO deleted_clinics (clinic_id, name) VALUES (?, ?)').run(b.clinic_id, b.name);
+
+  const c = await (await makeBranch(base, { install_token: token })).json();
+  assert.equal(c.clinic_id, 'c-main-b3', 'номер -b2 из могильника не выдаётся снова');
+});

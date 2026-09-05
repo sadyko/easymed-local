@@ -180,7 +180,13 @@ function nextBranchId(db, parentId) {
   let n = (row ? row.n : 0) + 1;
   for (let attempt = 0; attempt < 50; attempt++, n++) {
     const id = `${parentId}-b${n}`;
-    const clash = db.prepare('SELECT 1 FROM clinics WHERE clinic_id = ?').get(id);
+    // Могильника в `clinics` уже нет — строка удалена, — но его id выдавать
+    // снова нельзя: старая подписанная лицензия филиала всё ещё называет
+    // именно его (см. migrations/010_deleted_clinics.sql). Проверяем обе
+    // таблицы одним запросом, чтобы проба не разошлась с триггером.
+    const clash = db.prepare(
+      'SELECT 1 FROM clinics WHERE clinic_id = ? UNION ALL SELECT 1 FROM deleted_clinics WHERE clinic_id = ?'
+    ).get(id, id);
     if (!clash) return id;
   }
   throw new Error('nextBranchId: could not find a free branch id');
