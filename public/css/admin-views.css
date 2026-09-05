@@ -3023,6 +3023,27 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .rcal-stbtn:hover { border-color: var(--ink-300); }
 .rcal-stbtn.on { border-color: var(--primary-500); box-shadow: 0 0 0 3px var(--primary-50); }
 
+/* CALENDAR_BOOKING_V1 — карточка «пациент + врач», счётчики дня, отказ загрузки
+   и диалог экстренной записи. Размеры — только из шкалы
+   (12.5/13.5/15/17/20/24/30/40); нижняя ступень 12.5 закреплена
+   __tests__/type-scale.test.mjs. */
+.rcal-appt-d { font-size: 12.5px; color: var(--ink-600); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rcal-stats { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
+.rcal-stat { padding: 9px 14px; border: 1px solid var(--ink-100); border-radius: 12px; background: var(--white); min-width: 76px; text-align: center; }
+.rcal-stat-n { font-size: 20px; font-weight: 700; line-height: 1.15; }
+.rcal-stat-l { font-size: 12.5px; color: var(--ink-400); margin-top: 1px; }
+/* НЕ ЗАГРУЗИЛОСЬ — И ОБ ЭТОМ ГОВОРЯТ ВСЛУХ. Именно молчание про ошибку держало
+   этот экран пустым: пустая сетка выглядит как «сегодня никого не записали». */
+.rcal-fail { display: flex; align-items: center; gap: 8px; padding: 18px 20px; font-size: 13.5px;
+    color: var(--crit-700); background: var(--crit-50, #fef2f2); border-radius: 12px; }
+.rcal-sechead { font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--ink-500); margin: 14px 0 8px; }
+.rcal-conflict { font-size: 13.5px; font-weight: 600; color: var(--crit-700);
+    background: var(--crit-50, #fef2f2); border-radius: 10px; padding: 11px 12px; }
+.rcal-reason { width: 100%; box-sizing: border-box; font-family: inherit; font-size: 13.5px;
+    padding: 9px 10px; border: 1px solid var(--ink-200); border-radius: 8px; color: var(--ink-900); resize: vertical; }
+.rcal-reason:focus { border-color: var(--primary-600); outline: none; }
+
 /* ===== CATALOG_WIZARD_V1 — booking wizard step 1: catalog + смета ===== */
 .wzc-ctx { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .wzc-chip { display: inline-flex; align-items: center; gap: 8px; padding: 7px 13px; border-radius: 999px;
@@ -3286,37 +3307,13 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .sidebar-body .nav-item.active .nav-badge.alert { background: var(--crit-500, #e5484d); color: #fff; }
 
 
-/* ── REG_FIT_V1 ─────────────────────────────────────────────────────────────
-   «Создать пациента» не помещалась на экран при 100% масштабе и уезжала в
-   горизонтальную прокрутку (правая колонка и кнопка «Добавить услугу» обрезаны).
-   Причина не в ширине страницы, а в её МИНИМУМЕ: вне .modal-grouped у .field
-   input нет width:100%, поэтому каждое поле держит собственную ширину ~200px
-   (браузерный size=20). Ряды repeat(3, 1fr) не могли сжаться, и форма требовала
-   ~1500px ещё до правой колонки в 380px. На ноутбуке с масштабом Windows 125/150%
-   доступно всего ~1280–1440 CSS-пикселей — отсюда и обрез.
-
-   Лечим причину: поля тянутся по своей ячейке, ячейкам разрешено сжиматься
-   (min-width:0 — иначе авто-минимум грид-элемента равен min-content поля). */
-.reg-page .field { min-width: 0; }
-.reg-page .field input:not([type="checkbox"]):not([type="radio"]),
-.reg-page .field select,
-.reg-page .field textarea {
-    width: 100%;
-    min-width: 0;
-    box-sizing: border-box;
-}
-/* Две колонки: minmax(0,1fr) вместо 1fr — левая колонка обязана сжиматься. */
-.reg-cols {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 380px;
-    gap: 16px;
-    align-items: start;
-}
-.reg-cols > * { min-width: 0; }
-/* Узкий экран (или масштаб ОС) — правая колонка уходит вниз, а не за край. */
-@media (max-width: 1180px) {
-    .reg-cols { grid-template-columns: minmax(0, 1fr); }
-}
+/* ── REG_FIT_V1 → PATIENT_ONE_WINDOW_V1 ─────────────────────────────────────
+   Здесь лежали .reg-page / .reg-cols — правила ширины СТРАНИЦЫ «Создать
+   пациента»: они лечили её горизонтальную прокрутку при масштабе Windows
+   125/150%. Страницы больше нет — карта заводится одним окном
+   (views/patient-create-modal.js, admin.css, блок .mg-dense), а внутри
+   .modal-grouped поля и так тянутся по ячейке. Правила без единого носителя
+   в разметке — мёртвый CSS, поэтому они удалены вместе со страницей. */
 
 /* ── PWA_INSTALL_FAB_V1 ─────────────────────────────────────────────────────
    Prominent, pulsating «install app» button. White halo keeps it visible on a

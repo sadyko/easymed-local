@@ -109,20 +109,41 @@ export const REGISTRY = {
     embed:   { branches: { table:'branches', fk:'branch_id', columns:['id','name'] },
                payers:   { table:'payers',   fk:'payer_id',  columns:['id','name'] } },
   },
+  // CALENDAR_BOOKING_V1 (миграция 099) — service_id и room_id. Обе колонки
+  // мастер визита УЖЕ клал в payload вставки (service-picker-modal.js), но их
+  // не было ни в таблице, ни здесь: компилятор молча выбрасывает ключи вне
+  // списка записи («Compat layer» в insertStatement), и значения уходили в
+  // никуда — вставка проходила, данные терялись. Теперь они доезжают: из
+  // service_id берётся длительность слота (services.duration_minutes), по
+  // room_id строится ось кабинетов в «Календаре записи».
+  //
+  // update открыт для обеих: перенос карточки в другой кабинет — это UPDATE
+  // одной колонки. Сам ЗАПРЕТ двойной записи при этом живёт не здесь, а в RPC
+  // calendar_book (services/rpc/calendar.js): /api/db не умеет и не должен
+  // уметь проверять пересечение интервалов, поэтому календарь переносит
+  // записи через RPC, а не через табличный UPDATE.
   visits: {
     read:  { roles: ALL_STAFF, columns: ['id','patient_id','doctor_id','branch_id','visit_date',
              'duration_minutes','visit_kind','visit_type','status','referral_source_id','notes',
              'conclusion','conclusion_type','created_by','created_at','updated_at',
-             'sync_origin'] },   // sync_origin: BRANCH_ORIGIN_V1 (mig 083) — откуда строка; ставится только приёмом порции, поэтому не writable
+             'service_id','room_id',
+             'sync_origin'] },   // service_id/room_id: CALENDAR_BOOKING_V1 (mig 099); sync_origin: BRANCH_ORIGIN_V1 (mig 083) — откуда строка; ставится только приёмом порции, поэтому не writable
     write: {
       insert: { roles: ['admin','registrar','doctor'], columns: ['patient_id','doctor_id','branch_id','visit_date',
-                'duration_minutes','visit_kind','visit_type','status','referral_source_id','notes','created_by'] },
-      update: { roles: ['admin','registrar','doctor'], columns: ['status','visit_date','duration_minutes','doctor_id','notes','conclusion','conclusion_type'] },
+                'duration_minutes','visit_kind','visit_type','status','referral_source_id','notes','created_by',
+                'service_id','room_id'] },   // CALENDAR_BOOKING_V1
+      update: { roles: ['admin','registrar','doctor'], columns: ['status','visit_date','duration_minutes','doctor_id','notes','conclusion','conclusion_type',
+                'service_id','room_id'] },   // CALENDAR_BOOKING_V1
       delete: { roles: ['admin'] },
     },
-    filters: ['id','patient_id','doctor_id','branch_id','status','visit_date','sync_origin'],   // sync_origin: BRANCH_ORIGIN_V1
+    filters: ['id','patient_id','doctor_id','branch_id','status','visit_date','sync_origin','service_id','room_id'],   // sync_origin: BRANCH_ORIGIN_V1; service_id/room_id: CALENDAR_BOOKING_V1
     embed:   { patients: { table:'patients', fk:'patient_id', columns:['id','mrn','full_name','first_name','last_name','middle_name','phone','date_of_birth','gender'] },
-               doctor:   { table:'users',    fk:'doctor_id',  columns:['id','full_name'] } },
+               doctor:   { table:'users',    fk:'doctor_id',  columns:['id','full_name'] },
+               // CALENDAR_BOOKING_V1 — карточка календаря это «пациент + врач +
+               // услуга»: услуга и кабинет приезжают вместе с записью, а не
+               // вторым запросом на каждую перерисовку сетки.
+               services: { table:'services', fk:'service_id', columns:['id','name','duration_minutes'] },
+               rooms:    { table:'rooms',    fk:'room_id',    columns:['id','name','code'] } },
   },
   services: {
     read:  { roles: ALL_STAFF, columns: ['id','name','code','price','tax_rate','duration_minutes','requires_doctor','active','created_at','updated_at',
@@ -246,10 +267,17 @@ export const REGISTRY = {
   // easymed's `.eq('active', true)` filters work unchanged; the rates/KPI
   // columns are JSON blobs. rooms embed = the doctor's cabinet
   // (users:doctor_id(rooms(name, floors(name))) in the queue).
+  // CALENDAR_BOOKING_V1 — branch_id ЧИТАЕТСЯ. Колонка существует с миграции
+  // 019, но реестр её не отдавал, и «Календарь записи» получал 400 на весь
+  // запрос врачей — то есть рисовал пустую рейку. Здание у врача — настоящие
+  // данные (сотрудники ездят по зданиям справочником, STAFF_SYNC_V1), и
+  // регистратуре надо видеть, чей это врач. Не writable: карточка сотрудника
+  // правится своими путями, а не общим табличным редактором (write у users
+  // пуст целиком и остаётся пустым).
   users:     { read:{roles:ALL_STAFF, columns:['id','username','full_name','role','is_active','active','extra_roles',
                 'phone','email','specialty','is_doctor','doctor_category','salary_type','salary_fixed','salary_percent',
-                'service_rates','referral_rates','kpi_links','license_expiry_date','room_id',
-                'working_hours','scheduling_mode']},   // SCHED_V1 — the wizard's slot engine
+                'service_rates','referral_rates','kpi_links','license_expiry_date','room_id','branch_id',
+                'working_hours','scheduling_mode']},   // SCHED_V1 — the wizard's slot engine; branch_id — CALENDAR_BOOKING_V1
                write:{insert:{roles:[]},update:{roles:[]},delete:{roles:[]}},
                filters:['id','role','is_active','active','is_doctor'],
                json:['service_rates','referral_rates','kpi_links'],
@@ -314,8 +342,14 @@ export const REGISTRY = {
     filters:['id','active'], embed:{} },
   // ROOMS_SETUP_V1 — code/room_type/capacity/queue_mode добавлены миграцией 082;
   // без них объединённый раздел «Помещения» мог создать строку, но не описать её.
-  rooms: { read:{roles:ALL_STAFF,columns:['id','name','code','room_type','capacity','queue_mode','floor_id','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','code','room_type','capacity','queue_mode','floor_id','active']},update:{roles:['admin'],columns:['name','code','room_type','capacity','queue_mode','floor_id','active']},delete:{roles:[]}},
+  // CALENDAR_BOOKING_V1 (миграция 099) — working_hours: у кабинета свой рабочий
+  // день (процедурная открывается позже регистратуры, забор крови закрывается
+  // в 11:00). Форма JSON — в точности users.working_hours: окно дня считает
+  // один общий движок (services/rpc/slot-engine.js), и две разные формы
+  // означали бы две разные правды о том, что свободно. Пустая строка =
+  // «часов не задано» → берутся часы клиники.
+  rooms: { read:{roles:ALL_STAFF,columns:['id','name','code','room_type','capacity','queue_mode','floor_id','active','created_at','working_hours']},
+    write:{insert:{roles:['admin'],columns:['name','code','room_type','capacity','queue_mode','floor_id','active','working_hours']},update:{roles:['admin'],columns:['name','code','room_type','capacity','queue_mode','floor_id','active','working_hours']},delete:{roles:[]}},
     filters:['id','active','floor_id','room_type','queue_mode'], embed:{ floors:{table:'floors',fk:'floor_id',columns:['id','name']} } },
   wards: { read:{roles:ALL_STAFF,columns:['id','name','code','floor_id','active','created_at','type','billing_mode','price_per_day','price_per_hour','color']},
     write:{insert:{roles:['admin'],columns:['name','code','floor_id','active','type','billing_mode','price_per_day','price_per_hour','color']},update:{roles:['admin'],columns:['name','code','floor_id','active','type','billing_mode','price_per_day','price_per_hour','color']},delete:{roles:[]}},

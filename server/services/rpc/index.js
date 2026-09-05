@@ -20,6 +20,7 @@ import {
   admissionMealMark, admissionMealsList, kitchenSheet,
 } from './diet.js';   // DIET_TABLES_V1
 import { ensureVisit } from './visits.js';
+import { calendarSlots, calendarWindows, calendarBook } from './calendar.js';   // CALENDAR_BOOKING_V1
 import { issueQueueNumbers, queueBoard } from './queue.js';
 import { createDeposit, acceptDeposit, cancelDeposit, refundDeposit, listDeposits, depositBalance } from './deposits.js';   // DEPOSIT_V1
 import { documentsFeed } from './documents.js';   // DOCS_FEED_V1
@@ -107,6 +108,25 @@ export const RPC = {
   // their date's visit. Find-or-create lives server-side so visit counts are
   // computed, never hand-managed.
   ensure_visit:              (db, args, user) => ensureVisit(db, args, user),
+  // CALENDAR_BOOKING_V1 — «Календарь записи».
+  //
+  // calendar_slots ЧИТАЕТ (стоит в READ_ONLY_RPCS, control/gate.js): свободные
+  // начала приёма у врача или в кабинете на день — график, обед, часы клиники
+  // и уже занятое считает один общий движок slot-engine.js. Клиника с
+  // просроченной лицензией обязана видеть своё расписание: пациенты уже
+  // записаны, и «читает» не должно означать «пустая сетка».
+  //
+  // calendar_book ПИШЕТ и потому в READ_ONLY_RPCS не входит. Один вход на три
+  // действия — записать, перенести, растянуть, — потому что проверка у всех
+  // трёх одна: ОДИН ПАЦИЕНТ НА ВРАЧА НА СЛОТ (решение владельца 2026-09-05).
+  // Отказ называет занятое время; экстренная запись поверх занятого —
+  // отдельное действие с обязательной причиной, а не тихий обход.
+  calendar_slots:            (db, args, user) => calendarSlots(db, args, user),
+  // calendar_windows — рабочие окна пачкой на «ресурс × день». Тоже чтение
+  // (READ_ONLY_RPCS): без него затенение нерабочих часов пришлось бы считать
+  // в браузере — четвёртой реализацией того же правила.
+  calendar_windows:          (db, args, user) => calendarWindows(db, args, user),
+  calendar_book:             (db, args, user) => calendarBook(db, args, user),
   // QUEUE_TICKET_V1 — easymed's queue-number allocator (Postgres mig 122):
   // per-doctor for consultations, one shared number for a patient's labs,
   // doctor-or-room for procedures, per-apparatus for imaging. Idempotent.

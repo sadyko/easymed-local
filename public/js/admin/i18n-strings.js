@@ -6385,4 +6385,24 @@ export const STRINGS = {
   "Календарь записи готовится": {"en":"The booking calendar is on its way","ru":"Календарь записи готовится","uz":"Yozilish kalendari tayyorlanmoqda"},
   "Экран записи сейчас обновляется. Список пациентов и очередь работают как обычно.": {"en":"The booking screen is being updated. The patient list and the queue work as usual.","ru":"Экран записи сейчас обновляется. Список пациентов и очередь работают как обычно.","uz":"Yozilish ekrani hozir yangilanmoqda. Bemorlar ro'yxati va navbat odatdagidek ishlaydi."},
   "Заведите первого пациента кнопкой <b>Создать пациента</b> в шапке раздела.": {"en":"Create the first patient with the <b>Create patient</b> button in the section header.","ru":"Заведите первого пациента кнопкой <b>Создать пациента</b> в шапке раздела.","uz":"Bo'lim sarlavhasidagi <b>Bemor yaratish</b> tugmasi orqali birinchi bemorni yarating."},
+  // CALENDAR_BOOKING_V1 — «Календарь записи»: запись заработала — added 2026-09-05
+  // Первые два ключа приходят С СЕРВЕРА (calendar_book шлёт {code, params}), и
+  // экран переводит ШАБЛОН, подставляя значения ПОСЛЕ перевода (trf), — поэтому
+  // дырки обязаны совпадать во всех трёх языках.
+  "Это время занято: у врача {doctor} уже есть приём {from}–{to}. Выберите другое время.": {"en":"This time is taken: {doctor} already has an appointment at {from}–{to}. Choose another time.","ru":"Это время занято: у врача {doctor} уже есть приём {from}–{to}. Выберите другое время.","uz":"Bu vaqt band: {doctor} shifokorda {from}–{to} da qabul bor. Boshqa vaqtni tanlang."},
+  "Экстренная запись поверх занятого времени требует причины — укажите её.": {"en":"An emergency booking over a taken slot needs a reason — state it.","ru":"Экстренная запись поверх занятого времени требует причины — укажите её.","uz":"Band vaqt ustiga shoshilinch yozuv sabab talab qiladi — uni ko'rsating."},
+  "Не удалось сохранить запись.": {"en":"Could not save the appointment.","ru":"Не удалось сохранить запись.","uz":"Yozuvni saqlab bo'lmadi."},
+  "Кто к кому и когда записан. Колонки — врачи или кабинеты, длительность — из услуги, перенос — перетаскиванием.": {"en":"Who is booked with whom and when. Columns are doctors or rooms, the duration comes from the service, move by dragging.","ru":"Кто к кому и когда записан. Колонки — врачи или кабинеты, длительность — из услуги, перенос — перетаскиванием.","uz":"Kim kimga va qachon yozilgan. Ustunlar — shifokorlar yoki kabinetlar, davomiylik xizmatdan olinadi, ko'chirish — sudrab."},
+  "филиалы": {"en":"branches","ru":"филиалы","uz":"filiallar"},
+  "этажи": {"en":"floors","ru":"этажи","uz":"qavatlar"},
+  "кабинеты": {"en":"rooms","ru":"кабинеты","uz":"kabinetlar"},
+  "записи": {"en":"appointments","ru":"записи","uz":"yozuvlar"},
+  "пациенты": {"en":"patients","ru":"пациенты","uz":"bemorlar"},
+  "Например: острая боль, направлен из приёмного отделения": {"en":"For example: acute pain, referred from the emergency department","ru":"Например: острая боль, направлен из приёмного отделения","uz":"Masalan: o'tkir og'riq, qabul bo'limidan yuborilgan"},
+  "Экстренная запись": {"en":"Emergency booking","ru":"Экстренная запись","uz":"Shoshilinch yozuv"},
+  "Запись поверх занятого времени сохраняется вместе с причиной — она останется в карточке приёма.": {"en":"A booking over a taken slot is saved together with its reason — it stays on the appointment card.","ru":"Запись поверх занятого времени сохраняется вместе с причиной — она останется в карточке приёма.","uz":"Band vaqt ustiga yozuv sababi bilan birga saqlanadi — u qabul kartasida qoladi."},
+  "Укажите причину экстренной записи.": {"en":"State the reason for the emergency booking.","ru":"Укажите причину экстренной записи.","uz":"Shoshilinch yozuv sababini ko'rsating."},
+  "Записать экстренно": {"en":"Book as emergency","ru":"Записать экстренно","uz":"Shoshilinch yozish"},
+  "Запись сохранена как экстренная": {"en":"Saved as an emergency booking","ru":"Запись сохранена как экстренная","uz":"Yozuv shoshilinch sifatida saqlandi"},
+  "Не загрузилось: {what}. Обновите страницу — если не поможет, сообщите администратору.": {"en":"Failed to load: {what}. Refresh the page — if that does not help, tell your administrator.","ru":"Не загрузилось: {what}. Обновите страницу — если не поможет, сообщите администратору.","uz":"Yuklanmadi: {what}. Sahifani yangilang — yordam bermasa, administratorga ayting."},
 };
