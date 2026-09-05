@@ -657,3 +657,69 @@ test('bundle: no symbolic links in the archive — a non-admin Windows user cann
     if (!linked) { /* nothing built */ }
   }
 });
+
+// ---------------------------------------------------------------------------
+// 10. COOLICONS_V1 — набор иконок обязан ехать в комплекте
+//
+// Владелец сформулировал требование так: иконки должны «сохраняться при
+// обновлении версии». Клиника обновляется заменой папки из релизного архива, и
+// иконки не устанавливаются отдельно ничем — значит если их нет в архиве, то
+// после обновления их нет вообще. Отдельного пункта в ALLOWLIST для них не
+// нужно (они лежат внутри public/), и именно поэтому это надо проверить: связь
+// «иконки едут» ↔ «public/ в списке» нигде не записана и рвётся молча.
+// ---------------------------------------------------------------------------
+
+test('релизный архив везёт вендоренный набор иконок и сгенерированные контуры', () => {
+  const src = mkTmp('em-bundle-icons-src-');
+  const out = mkTmp('em-bundle-icons-out-');
+  const dest = mkTmp('em-bundle-icons-dest-');
+  try {
+    buildSourceTree(src);
+    // Настоящие файлы из этого репозитория, а не выдуманные: проверяем, что
+    // именно они попадают в архив по своим настоящим путям.
+    fs.cpSync(
+      path.join(REPO_ROOT, 'public', 'assets', 'icons'),
+      path.join(src, 'public', 'assets', 'icons'),
+      { recursive: true },
+    );
+    fs.mkdirSync(path.join(src, 'public', 'js', 'admin'), { recursive: true });
+    for (const f of ['icons.js', 'icon-map.js', 'icon-paths.js']) {
+      fs.copyFileSync(path.join(REPO_ROOT, 'public', 'js', 'admin', f), path.join(src, 'public', 'js', 'admin', f));
+    }
+
+    const { tarPath } = buildBundle({
+      sourceDir: src, outDir: out, version: '2.4.0', minFrom: '2.0.0', keyPath: KEY_PATH,
+    });
+    // Пути внутри архива всегда с прямыми слэшами; .trim() — потому что
+    // Windows-tar заканчивает строки списка на \r\n, а tarList режет только по
+    // \n (остальным проверкам в этом файле хвостовой \r не мешает, они не
+    // якорят конец строки, а этой — мешает).
+    const listing = tarList(tarPath).map((l) => l.trim());
+
+    const svgs = listing.filter((l) => /^public\/assets\/icons\/coolicons\/.+\.svg$/.test(l));
+    assert.equal(svgs.length, 442, 'в архиве должны быть все 442 иконки набора');
+    for (const must of [
+      'public/assets/icons/coolicons/ATTRIBUTION.md',   // CC BY 4.0 — условие использования
+      'public/assets/icons/coolicons/Interface/Check.svg',
+      'public/js/admin/icon-paths.js',
+      'public/js/admin/icon-map.js',
+      'public/js/admin/icons.js',
+    ]) {
+      assert.ok(listing.includes(must), `в архиве нет ${must}`);
+    }
+
+    // И это настоящие файлы, а не пустые записи: распаковываем и читаем.
+    tarExtract(tarPath, dest);
+    const check = fs.readFileSync(path.join(dest, 'public', 'assets', 'icons', 'coolicons', 'Interface', 'Check.svg'), 'utf8');
+    assert.match(check, /<svg/);
+    const paths = fs.readFileSync(path.join(dest, 'public', 'js', 'admin', 'icon-paths.js'), 'utf8');
+    assert.match(paths, /export const ICON_BODIES/);
+  } finally {
+    rm(src); rm(out); rm(dest);
+  }
+});
+
+test('иконки едут потому, что public/ в ALLOWLIST — если это изменится, тест выше врёт', () => {
+  assert.ok(ALLOWLIST.includes('public'));
+  assert.ok(fs.existsSync(path.join(REPO_ROOT, 'public', 'assets', 'icons', 'coolicons', 'ATTRIBUTION.md')));
+});
