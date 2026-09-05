@@ -93,3 +93,32 @@ export const QUEUE_KIND_HUE = {
 export function pastelForQueueKind(kind) {
     return pastelClass(QUEUE_KIND_HUE[kind] || QUEUE_KIND_HUE.other);
 }
+
+/**
+ * DASH_TILE_HUE (2026-09-05, владелец: «make a doctors cabinet a little bit
+ * colorful, using gradient pastel tones in the cards»).
+ *
+ * Плитки дашборда — тоже ЗАКРЫТЫЙ набор, поэтому таблица, а не хэш: цвет здесь
+ * значит ЧТО ЭТО ЗА ЧИСЛО, и одинаковый смысл обязан краситься одинаково в
+ * обоих рядах. «Заработано сегодня» и «Заработано за 7 дней» — одни деньги в
+ * разных окнах, и разный оттенок сказал бы, что это разные вещи.
+ *
+ * Ключей ПЯТЬ, а плиток семь — именно поэтому: смысл повторяется, цвет
+ * повторяется вместе с ним.
+ */
+export const DASH_TILE_HUE = {
+    visits:   'sky',      // приёмы
+    money:    'mint',     // деньги — везде один оттенок
+    services: 'violet',   // услуги — тоже
+    patients: 'indigo',   // люди
+    waiting:  'amber',    // те, кто уже пришёл и ждёт
+};
+
+/**
+ * Класс оттенка для плитки дашборда. Неизвестный ключ оттенка НЕ получает:
+ * плитка останется белой, а не притворится другим числом. Молчаливая подмена
+ * смысла хуже отсутствия цвета.
+ */
+export function pastelForDashTile(key) {
+    return pastelClass(DASH_TILE_HUE[key] || '');
+}

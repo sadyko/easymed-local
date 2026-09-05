@@ -87,7 +87,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, initials, fmtDate } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { selfDoctorId } from '../permissions.js';   // ADMIN_DOCTOR_V2
-import { pastelFor } from '../pastel.js';   // PASTEL_IDENTITY_V1 — оттенок = личность, не тяжесть
+import { pastelFor, pastelForDashTile } from '../pastel.js';   // PASTEL_IDENTITY_V1 — оттенок = личность, не тяжесть
 // HEAD_DOCTOR_WARD_VIEW_V1 — «в койке» одним списком на сервер и браузер.
 import { IN_BED_STATUSES } from '../../shared/admission-status.js';
 
@@ -524,8 +524,22 @@ export async function loadDoctorDashboard() {
 // СТИЛИ. Своего файла CSS у вида нет, поэтому правила едут с ним — так же, как
 // их возят service-workspace.js, procedures.js и employee-editor.js. Ни одного
 // НОВОГО цвета: грунт, рамка окна и тень берутся из admin.css
-// (--page-ground / --window-line / --shadow-window через .card), оттенок
-// карточки пациента — из pastel.js. Размеры шрифта — только ступени шкалы.
+// (--page-ground / --window-line / --shadow-window через .card), оттенки —
+// из pastel.js, а сам градиент — общий класс .tint-wash в admin.css.
+// Размеры шрифта — только ступени шкалы.
+//
+// ВНУТРИ строки — только латиница. Страж i18n читает шаблонную строку как
+// подпись на экране и не умеет отличать её от таблицы стилей (и правильно не
+// умеет), поэтому объяснения живут здесь:
+//   • .dd-fig берёт background-COLOR, а не сокращение: сокращение сбрасывает
+//     background-image, и градиент .tint-wash молча исчез бы — правила вида
+//     едут в <style> ПОСЛЕ admin.css и перебивают его;
+//   • край плитки красится токеном её же оттенка, поэтому рамка не спорит с
+//     заливкой и не требует собственного цвета;
+//   • подпись плитки — цветом оттенка: это ИМЯ числа, по нему плитку и узнают.
+//     Пара «заливка + текст» одного оттенка проверена на 4.5:1 всей шкалой
+//     сразу (__tests__/contrast-badge-hatch.test.mjs). Само число остаётся
+//     --ink-900: чёрное на светлом читается при любом оттенке.
 // ---------------------------------------------------------------------------
 const DASH_CSS = `
 .dd-grid { display: grid; gap: 14px; align-items: start;
@@ -551,10 +565,13 @@ const DASH_CSS = `
 
 .dd-figs { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 18px; }
 @media (max-width: 700px) { .dd-figs { grid-template-columns: minmax(0, 1fr); } }
-.dd-fig { border: 1px solid var(--ink-100); border-radius: 14px; padding: 14px 16px; background: var(--ink-25); }
+.dd-fig { border: 1px solid var(--ink-100); border-radius: 14px; padding: 14px 16px;
+    background-color: var(--ink-25); }
+.dd-fig.tint-wash, .dd-stat.tint-wash { border-color: var(--p-line); }
 .dd-fig-v { font-size: 30px; font-weight: 700; color: var(--ink-900); line-height: 1.15; letter-spacing: -0.02em; }
 .dd-fig-v.is-none { font-size: 24px; color: var(--ink-400); }
 .dd-fig-l { font-size: 12.5px; color: var(--ink-500); margin-top: 4px; }
+.tint-wash > .dd-fig-l, .tint-wash > .dd-stat-l { color: var(--p-fg); font-weight: 600; }
 .dd-fig-s { font-size: 12.5px; color: var(--ink-600); margin-top: 4px; }
 
 .dd-progress { margin-top: 16px; }
@@ -767,17 +784,17 @@ function heroCard(doc, stats, now, perService) {
             }, Icon('Refresh', { size: 13 }), ' ', tr('Обновить')),
         ),
         h('div', { class: 'dd-figs' },
-            h('div', { class: 'dd-fig' },
+            h('div', { class: figClass('visits') },
                 h('div', { class: 'dd-fig-v' }, String(stats.todayVisits)),
                 h('div', { class: 'dd-fig-l' }, tr('Приёмов сегодня')),
                 h('div', { class: 'dd-fig-s' }, trf('пациентов: {n}', { n: stats.todayPatients })),
             ),
-            h('div', { class: 'dd-fig' },
+            h('div', { class: figClass('money') },
                 earnFig,
                 h('div', { class: 'dd-fig-l' }, tr('Заработано сегодня')),
                 h('div', { class: 'dd-fig-s' }, earnSub),
             ),
-            h('div', { class: 'dd-fig' },
+            h('div', { class: figClass('services') },
                 h('div', { class: 'dd-fig-v' }, String(stats.todayCompleted)),
                 h('div', { class: 'dd-fig-l' }, tr('Услуг завершено')),
                 h('div', { class: 'dd-fig-s' }, trf('всего за день: {n}', { n: stats.todayServices })),
@@ -796,15 +813,22 @@ function heroCard(doc, stats, now, perService) {
 // ---- Четыре маленькие плитки ----------------------------------------------
 function statsRow(stats) {
     return h('div', { class: 'dd-stats' },
-        statCard(tr('Пациентов сегодня'), String(stats.todayPatients)),
-        statCard(tr('Пришли, ждут приёма'), String(stats.todayArrived)),
-        statCard(tr('Услуг за 7 дней'), String(stats.week.services), deltaNode(stats.deltaServices, '')),
-        statCard(tr('Заработано за 7 дней'), money(stats.week.earned),
+        statCard('patients', tr('Пациентов сегодня'), String(stats.todayPatients)),
+        statCard('waiting',  tr('Пришли, ждут приёма'), String(stats.todayArrived)),
+        statCard('services', tr('Услуг за 7 дней'), String(stats.week.services), deltaNode(stats.deltaServices, '')),
+        statCard('money',    tr('Заработано за 7 дней'), money(stats.week.earned),
             stats.deltaEarnedPct == null ? null : deltaNode(stats.deltaEarnedPct, '%')),
     );
 }
-function statCard(label, value, extra) {
-    return h('div', { class: 'card dd-stat' },
+// Оттенок плитки — по СМЫСЛУ числа (pastel.js, DASH_TILE_HUE), поэтому деньги
+// в обоих рядах одного цвета, а услуги — другого, но тоже одного.
+function figClass(kind) {
+    const hue = pastelForDashTile(kind);
+    return 'dd-fig' + (hue ? ' tint-wash ' + hue : '');
+}
+function statCard(kind, label, value, extra) {
+    const hue = pastelForDashTile(kind);
+    return h('div', { class: 'card dd-stat' + (hue ? ' tint-wash ' + hue : '') },
         h('div', { class: 'dd-stat-l' }, label),
         h('div', { class: 'dd-stat-v' }, value, extra || null),
     );

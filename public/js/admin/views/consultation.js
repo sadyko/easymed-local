@@ -1527,7 +1527,7 @@ function computeReferralRewards() {
 // ---------------------------------------------------------------------------
 function dashboardView() {
     if (state.dash.loading) {
-        return h('div', { class: 'empty', style: { padding: '60px' } }, 'Loading dashboard…');
+        return h('div', { class: 'empty', style: { padding: '60px' } }, tr('Загружаем начисления…'));
     }
     const doc = state.dash.doctor;
     const docSelect = h('select', {
@@ -1556,45 +1556,53 @@ function dashboardView() {
 
     return h('div', null,
         PageHead({
-            // DOCTOR_DASHBOARD_V1 — вкладка теперь называется «Зарплата», и шапка
-            // обязана говорить то же самое: два разных имени у одного экрана —
-            // это два экрана в голове у врача. Ключ 'Salary' в словаре уже есть.
-            title: 'Salary',
+            // DOCTOR_DASHBOARD_V1 — вкладка называется «Зарплата», и шапка обязана
+            // говорить то же самое: два разных имени у одного экрана — это два
+            // экрана в голове у врача.
+            // DOCTOR_PAY_I18N_V1 — вся вкладка была написана английскими
+            // литералами мимо tr(), поэтому на русском и узбекском интерфейсе
+            // разбор начислений оставался английским. Исходная строка теперь
+            // русская: так экран попадает под общий страж i18n-coverage, который
+            // ищет ИМЕННО кириллицу и английского литерала не замечает.
+            title: tr('Зарплата'),
             subtitle: doc
-                ? `Salary, referral rewards and activity for ${doc.full_name}.`
-                : 'No doctor selected.',
+                ? trf('Зарплата, вознаграждения за направления и работа врача: {name}.', { name: doc.full_name })
+                : tr('Врач не выбран.'),
             right: [docSelect, periodSeg],
         }),
         // KPI tiles
         h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px', marginBottom: '16px' } },
             kpiTile({
-                label: 'Salary · ' + periodLabel(),
+                label: trf('Зарплата · {period}', { period: periodLabel() }),
                 value: salary.total.toLocaleString('ru-RU') + ' UZS',
                 sub:   salaryKindLabel(salary.kind) + (salary.kind === 'fix_plus_kpi'
-                    ? `  ·  fix ${Math.round(salary.fixed).toLocaleString('ru-RU')} + var ${Math.round(salary.variable).toLocaleString('ru-RU')}`
+                    ? '  ·  ' + trf('оклад {fix} + переменная {variable}', {
+                        fix:      Math.round(salary.fixed).toLocaleString('ru-RU'),
+                        variable: Math.round(salary.variable).toLocaleString('ru-RU'),
+                    })
                     : ''),
                 icon:  'Wallet', color: 'var(--ok-700)',
-                detailsLabel: 'Salary details',
+                detailsLabel: tr('Разбор зарплаты'),
                 onDetails: () => openSalaryDetails(),
             }),
             kpiTile({
-                label: 'Referral rewards · ' + periodLabel(),
+                label: trf('Вознаграждения за направления · {period}', { period: periodLabel() }),
                 value: rewards.total.toLocaleString('ru-RU') + ' UZS',
-                sub:   `${rewards.count} referral${rewards.count === 1 ? '' : 's'} sent`,
+                sub:   trf('отправлено направлений: {n}', { n: rewards.count }),
                 icon:  'ArrowRight', color: 'var(--info-700)',
-                detailsLabel: 'Referral details',
+                detailsLabel: tr('Разбор направлений'),
                 onDetails: () => openReferralDetails(),
             }),
             kpiTile({
-                label: 'Services completed',
+                label: tr('Услуг завершено'),
                 value: String(completedCount),
-                sub:   inProgressCount + ' currently in progress',
+                sub:   trf('сейчас в работе: {n}', { n: inProgressCount }),
                 icon:  'Check', color: 'var(--primary-700)',
             }),
             kpiTile({
-                label: 'Patients seen',
+                label: tr('Пациентов принято'),
                 value: String(uniquePatients),
-                sub:   'unique patients in period',
+                sub:   tr('разных пациентов за период'),
                 icon:  'Patients', color: 'var(--purple-700, var(--purple-500))',
             }),
         ),
@@ -1628,10 +1636,10 @@ function periodBtn(id, label) {
     }, label);
 }
 function periodLabel() {
-    return { week: 'last 7 days', month: 'last 30 days', year: 'last 12 months', all: 'all time' }[state.dash.period];
+    return tr({ week: 'за 7 дней', month: 'за 30 дней', year: 'за 12 месяцев', all: 'за всё время' }[state.dash.period]);
 }
 function salaryKindLabel(kind) {
-    return { fixed: 'Fixed monthly', percentage: 'Variable (%)', fix_plus_kpi: 'Fix + KPI', none: 'Not configured' }[kind] || kind;
+    return tr({ fixed: 'Оклад помесячно', percentage: 'Процент от услуг', fix_plus_kpi: 'Оклад + процент', none: 'Не настроено' }[kind]) || kind;
 }
 
 function kpiTile({ label, value, sub, icon, color, detailsLabel, onDetails }) {
@@ -1645,7 +1653,7 @@ function kpiTile({ label, value, sub, icon, color, detailsLabel, onDetails }) {
         onDetails && h('button', {
             class: 'btn btn-outline btn-sm', onclick: onDetails,
             style: { marginTop: 'auto', alignSelf: 'flex-start' },
-        }, Icon('ArrowRight', { size: 12 }), ' ', detailsLabel || 'Details'),
+        }, Icon('ArrowRight', { size: 12 }), ' ', detailsLabel || tr('Подробнее')),
     );
 }
 
@@ -1655,18 +1663,18 @@ function salaryConfigCard(salary) {
     return h('div', { class: 'card', style: { padding: '16px 18px' } },
         h('div', { class: 'row', style: { gap: '8px', marginBottom: '10px' } },
             Icon('Wallet', { size: 16 }),
-            h('span', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)', textTransform: 'uppercase', letterSpacing: '0.04em' } }, 'Salary setup'),
+            h('span', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)', textTransform: 'uppercase', letterSpacing: '0.04em' } }, tr('Как считается зарплата')),
         ),
-        kvRow('Plan',          salaryKindLabel(salary.kind)),
-        kvRow('Fixed amount',  Number(doc.salary_fixed || 0).toLocaleString('ru-RU') + ' UZS / month'),
-        kvRow('Per-service rates', (Array.isArray(doc.service_rates) ? doc.service_rates.filter(r => Number(r.value != null ? r.value : r.percentage) > 0).length : 0) + ' service(s) set'),
-        kvRow('Revenue (period)', Math.round(salary.revenue).toLocaleString('ru-RU') + ' UZS'),
-        kvRow('Earned (after tax)', Math.round(salary.variable).toLocaleString('ru-RU') + ' UZS'),
-        kvRow('KPI links',     (doc.kpi_links || []).length
+        kvRow(tr('Схема'),         salaryKindLabel(salary.kind)),
+        kvRow(tr('Оклад'),         trf('{sum} UZS в месяц', { sum: Number(doc.salary_fixed || 0).toLocaleString('ru-RU') })),
+        kvRow(tr('Ставки по услугам'), trf('услуг задано: {n}', { n: (Array.isArray(doc.service_rates) ? doc.service_rates.filter(r => Number(r.value != null ? r.value : r.percentage) > 0).length : 0) })),
+        kvRow(tr('Выручка за период'), Math.round(salary.revenue).toLocaleString('ru-RU') + ' UZS'),
+        kvRow(tr('Начислено (после налога)'), Math.round(salary.variable).toLocaleString('ru-RU') + ' UZS'),
+        kvRow(tr('Показатели KPI'), (doc.kpi_links || []).length
             ? (doc.kpi_links || []).join(', ')
             : '—'),
         h('div', { class: 'row', style: { gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--ink-100)' } },
-            h('span', { style: { fontSize: '12.5px', color: 'var(--ink-600)' } }, 'Total this period:'),
+            h('span', { style: { fontSize: '12.5px', color: 'var(--ink-600)' } }, tr('Итого за период:')),
             h('span', { class: 'grow' }),
             h('span', { class: 'num', style: { fontSize: '15px', fontWeight: 700, color: 'var(--ok-700)' } },
                 Math.round(salary.total).toLocaleString('ru-RU') + ' UZS'),
@@ -1679,13 +1687,22 @@ function salaryConfigCard(salary) {
 // Reward for doctor. "Arrived" = recommendations the registrar attached to
 // a visit (status='done'). Revenue uses the service catalog price; tax_rate
 // is read from `services` when available, defaulting to 12 %.
+// UNCATEGORISED_BUCKET_V1 — '(uncategorised)' — это КЛЮЧ группировки, а не
+// подпись: он собирается из данных и обязан остаться одинаковым во всех трёх
+// языках, иначе одна и та же корзина распалась бы на три при смене языка.
+// Переводится только то, что видит человек.
+const NO_SECTOR = '(uncategorised)';
+function sectorLabel(name) {
+    return name === NO_SECTOR ? tr('Без категории') : name;
+}
+
 function referralAnalyticsCard() {
     const rules = state.dash.bonusRules;
     // Group referrals by their service TYPE (falls back to category, then to
     // a single bucket).
     const buckets = {};
     for (const r of state.dash.referrals) {
-        const key = r.serviceType || r.serviceCat || '(uncategorised)';
+        const key = r.serviceType || r.serviceCat || NO_SECTOR;
         const slot = buckets[key] || (buckets[key] = {
             label:       key,
             referred:    0,
@@ -1721,29 +1738,29 @@ function referralAnalyticsCard() {
 
     return h('div', { class: 'card' },
         h('div', { class: 'card-header' },
-            h('h3', null, Icon('ArrowRight', { size: 16 }), ' Referral analytics'),
+            h('h3', null, Icon('ArrowRight', { size: 16 }), ' ', tr('Разбор направлений')),
             h('div', { class: 'row', style: { gap: '10px' } },
                 h('span', { class: 'muted', style: { fontSize: '12.5px' } }, periodLabel()),
                 h('button', {
                     class: 'btn btn-outline btn-sm',
                     onclick: () => openReferralDetails(),
-                }, 'Open full list ', Icon('ArrowRight', { size: 12 })),
+                }, tr('Открыть весь список'), ' ', Icon('ArrowRight', { size: 12 })),
             ),
         ),
         rows.length === 0
             ? h('div', { class: 'empty', style: { padding: '40px 20px', fontSize: '12.5px' } },
-                'No referrals in this period.')
+                tr('За этот период направлений нет.'))
             : h('table', { class: 'tbl' },
                 h('thead', null, h('tr', null,
-                    h('th', null, 'Service type'),
-                    h('th', { style: { textAlign: 'right' } }, '# Referred'),
-                    h('th', { style: { textAlign: 'right' } }, '# Arrived'),
-                    h('th', { style: { textAlign: 'right' } }, 'Revenue (after tax)'),
-                    h('th', { style: { textAlign: 'right' } }, 'Doctor reward'),
+                    h('th', null, tr('Вид услуги')),
+                    h('th', { style: { textAlign: 'right' } }, tr('Направлено')),
+                    h('th', { style: { textAlign: 'right' } }, tr('Дошли')),
+                    h('th', { style: { textAlign: 'right' } }, tr('Выручка (после налога)')),
+                    h('th', { style: { textAlign: 'right' } }, tr('Вознаграждение врача')),
                 )),
                 h('tbody', null,
                     ...rows.map(r => h('tr', null,
-                        h('td', { class: 'cell-strong' }, r.label),
+                        h('td', { class: 'cell-strong' }, sectorLabel(r.label)),
                         h('td', { class: 'num', style: { textAlign: 'right' } }, String(r.referred)),
                         h('td', { class: 'num', style: { textAlign: 'right' } },
                             String(r.arrived),
@@ -1759,7 +1776,7 @@ function referralAnalyticsCard() {
                     )),
                     // Totals
                     h('tr', { style: { background: 'var(--ink-25)', borderTop: '2px solid var(--ink-200)' } },
-                        h('td', { class: 'cell-strong' }, 'Total'),
+                        h('td', { class: 'cell-strong' }, tr('Итого')),
                         h('td', { class: 'num cell-strong', style: { textAlign: 'right' } }, String(total.referred)),
                         h('td', { class: 'num cell-strong', style: { textAlign: 'right' } }, String(total.arrived)),
                         h('td', { class: 'num cell-strong', style: { textAlign: 'right' } },
@@ -1779,15 +1796,15 @@ function referralBySectorCard(rewards) {
     return h('div', { class: 'card', style: { padding: '16px 18px' } },
         h('div', { class: 'row', style: { gap: '8px', marginBottom: '10px' } },
             Icon('ArrowRight', { size: 16 }),
-            h('span', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)', textTransform: 'uppercase', letterSpacing: '0.04em' } }, 'Rewards by sector'),
+            h('span', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)', textTransform: 'uppercase', letterSpacing: '0.04em' } }, tr('Вознаграждения по категориям услуг')),
         ),
         sectors.length === 0
-            ? h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '8px 0' } }, 'No referrals in this period.')
+            ? h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '8px 0' } }, tr('За этот период направлений нет.'))
             : h('div', null, ...sectors.map(([name, s]) =>
                 h('div', { class: 'row', style: { padding: '6px 0', borderBottom: '1px solid var(--ink-100)', gap: '10px' } },
-                    h('span', { style: { fontSize: '13.5px', color: 'var(--ink-900)' } }, name),
+                    h('span', { style: { fontSize: '13.5px', color: 'var(--ink-900)' } }, sectorLabel(name)),
                     h('span', { class: 'grow' }),
-                    h('span', { class: 'muted num', style: { fontSize: '12.5px' } }, s.count + ' ref'),
+                    h('span', { class: 'muted num', style: { fontSize: '12.5px' } }, trf('направлений: {n}', { n: s.count })),
                     h('span', { class: 'num cell-strong', style: { fontSize: '13.5px', color: 'var(--ok-700)', minWidth: '90px', textAlign: 'right' } },
                         s.commission.toLocaleString('ru-RU') + ' UZS'),
                 ),
@@ -1799,16 +1816,16 @@ function recentServicesCard() {
     const rows = state.dash.services.slice(0, 8);
     return h('div', { class: 'card' },
         h('div', { class: 'card-header' },
-            h('h3', null, Icon('Activity', { size: 16 }), ' Recent services'),
+            h('h3', null, Icon('Activity', { size: 16 }), ' ', tr('Последние услуги')),
             h('span', { class: 'muted', style: { fontSize: '12.5px' } }, periodLabel()),
         ),
         rows.length === 0
-            ? h('div', { class: 'empty', style: { padding: '30px 20px', fontSize: '12.5px' } }, 'No services in this period.')
+            ? h('div', { class: 'empty', style: { padding: '30px 20px', fontSize: '12.5px' } }, tr('За этот период услуг нет.'))
             : h('table', { class: 'tbl' },
                 h('thead', null, h('tr', null,
-                    h('th', null, 'When'), h('th', null, 'Service'),
-                    h('th', null, 'Patient'), h('th', null, 'Status'),
-                    h('th', { style: { textAlign: 'right' } }, 'Amount'),
+                    h('th', null, tr('Когда')), h('th', null, tr('Услуга')),
+                    h('th', null, tr('Пациент')), h('th', null, tr('Статус')),
+                    h('th', { style: { textAlign: 'right' } }, tr('Сумма')),
                 )),
                 h('tbody', null, ...rows.map(s => h('tr', null,
                     h('td', { class: 'num muted', style: { fontSize: '12.5px' } }, formatDateTime(s.createdAt)),
@@ -1826,22 +1843,30 @@ function recentReferralsCard() {
     const rows = state.dash.referrals.slice(0, 8);
     return h('div', { class: 'card' },
         h('div', { class: 'card-header' },
-            h('h3', null, Icon('ArrowRight', { size: 16 }), ' Recent referrals'),
+            h('h3', null, Icon('ArrowRight', { size: 16 }), ' ', tr('Последние направления')),
             h('span', { class: 'muted', style: { fontSize: '12.5px' } }, periodLabel()),
         ),
         rows.length === 0
-            ? h('div', { class: 'empty', style: { padding: '30px 20px', fontSize: '12.5px' } }, 'No referrals in this period.')
+            ? h('div', { class: 'empty', style: { padding: '30px 20px', fontSize: '12.5px' } }, tr('За этот период направлений нет.'))
             : h('div', null, ...rows.map(r => h('div', { class: 'row', style: { padding: '10px 16px', borderTop: '1px solid var(--ink-100)', gap: '10px' } },
                 h('div', { style: { flex: 1, minWidth: 0 } },
                     h('div', { class: 'cell-strong', style: { fontSize: '12.5px' } }, r.serviceName),
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, r.patientName + (r.serviceCat ? ' · ' + r.serviceCat : '')),
                 ),
-                tagEl(r.status === 'done' ? 'Done' : r.status === 'cancelled' ? 'Cancelled' : 'Pending',
+                tagEl(referralStatusLabel(r.status),
                       r.status === 'done' ? 'ok' : r.status === 'cancelled' ? 'crit' : 'warn', null),
                 h('span', { class: 'num cell-strong', style: { fontSize: '13.5px', minWidth: '80px', textAlign: 'right', color: 'var(--ok-700)' } },
                     commissionFor(r, state.dash.bonusRules).toLocaleString('ru-RU')),
             ))),
     );
+}
+
+// Состояние направления словами. Три значения — закрытый набор, поэтому
+// таблица, а не цепочка тернарных операторов, повторённая в двух местах.
+function referralStatusLabel(status) {
+    if (status === 'done')      return tr('Дошёл');
+    if (status === 'cancelled') return tr('Отменено');
+    return tr('Ожидает');
 }
 
 function kvRow(k, v) {
@@ -1873,27 +1898,27 @@ function openSalaryDetails() {
         body.append(
             h('div', { style: { padding: '12px 14px', background: 'var(--ink-25)', borderRadius: '10px', border: '1px solid var(--ink-100)' } },
                 h('div', { class: 'row', style: { gap: '12px' } },
-                    kvBlock('Plan',     salaryKindLabel(salary.kind)),
-                    kvBlock('Fixed',    Math.round(salary.fixed).toLocaleString('ru-RU') + ' UZS'),
-                    kvBlock('Variable (after-tax × per-service %)',
+                    kvBlock(tr('Схема'), salaryKindLabel(salary.kind)),
+                    kvBlock(tr('Оклад'), Math.round(salary.fixed).toLocaleString('ru-RU') + ' UZS'),
+                    kvBlock(tr('Переменная часть (после налога × процент по услуге)'),
                             Math.round(salary.variable).toLocaleString('ru-RU') + ' UZS'),
-                    kvBlock('Total',    Math.round(salary.total).toLocaleString('ru-RU') + ' UZS', 'var(--ok-700)'),
+                    kvBlock(tr('Итого'), Math.round(salary.total).toLocaleString('ru-RU') + ' UZS', 'var(--ok-700)'),
                 ),
             ),
             h('div', { class: 'row', style: { gap: '8px' } },
                 h('input', {
-                    placeholder: 'Filter by service / patient name…',
+                    placeholder: tr('Фильтр по услуге или пациенту…'),
                     value: filterText,
                     oninput: (e) => { filterText = e.target.value; repaintList(); },
                     style: { flex: 1, height: '34px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px' },
                 }),
                 h('div', { class: 'segmented' },
                     h('button', { class: statusFilter === 'all' ? 'on' : '',
-                        onclick: () => { statusFilter = 'all'; repaintList(); } }, 'All'),
+                        onclick: () => { statusFilter = 'all'; repaintList(); } }, tr('Все')),
                     h('button', { class: statusFilter === 'completed' ? 'on' : '',
-                        onclick: () => { statusFilter = 'completed'; repaintList(); } }, 'Completed'),
+                        onclick: () => { statusFilter = 'completed'; repaintList(); } }, tr('Завершённые')),
                     h('button', { class: statusFilter === 'in_progress' ? 'on' : '',
-                        onclick: () => { statusFilter = 'in_progress'; repaintList(); } }, 'In progress'),
+                        onclick: () => { statusFilter = 'in_progress'; repaintList(); } }, tr('В работе')),
                 ),
             ),
             h('div', { id: 'salary-list', style: { maxHeight: '50vh', overflow: 'auto' } }),
@@ -1912,17 +1937,17 @@ function openSalaryDetails() {
         });
         clear(list);
         if (rows.length === 0) {
-            list.appendChild(h('div', { class: 'empty', style: { padding: '30px', fontSize: '12.5px' } }, 'No matching services.'));
+            list.appendChild(h('div', { class: 'empty', style: { padding: '30px', fontSize: '12.5px' } }, tr('Подходящих услуг нет.')));
             return;
         }
         list.appendChild(h('table', { class: 'tbl' },
             h('thead', null, h('tr', null,
-                h('th', null, 'When'), h('th', null, 'Service'),
-                h('th', null, 'Patient'),
-                h('th', { style: { textAlign: 'right' } }, 'Revenue'),
-                h('th', { style: { textAlign: 'right' } }, 'After tax'),
-                h('th', { style: { textAlign: 'right' } }, 'Rule'),
-                h('th', { style: { textAlign: 'right' } }, 'My share'),
+                h('th', null, tr('Когда')), h('th', null, tr('Услуга')),
+                h('th', null, tr('Пациент')),
+                h('th', { style: { textAlign: 'right' } }, tr('Выручка')),
+                h('th', { style: { textAlign: 'right' } }, tr('После налога')),
+                h('th', { style: { textAlign: 'right' } }, tr('Правило')),
+                h('th', { style: { textAlign: 'right' } }, tr('Моя доля')),
             )),
             h('tbody', null, ...rows.map(s => {
                 const rate = rateMap.get(String(s.serviceId));
@@ -1948,13 +1973,14 @@ function openSalaryDetails() {
 
     const card = h('div', { class: 'modal-card', style: { width: '900px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 60px)', display: 'flex', flexDirection: 'column' } },
         h('header', { class: 'modal-head' },
-            h('h2', null, Icon('Wallet', { size: 16 }), ' Salary details · ', periodLabel()),
+            h('h2', null, Icon('Wallet', { size: 16 }), ' ',
+                trf('Разбор зарплаты · {period}', { period: periodLabel() })),
             h('button', { class: 'modal-close', onclick: close }, '×'),
         ),
         body,
         h('footer', { class: 'modal-foot' },
             h('span', { class: 'grow' }),
-            h('button', { class: 'btn', onclick: close }, 'Close'),
+            h('button', { class: 'btn', onclick: close }, tr('Закрыть')),
         ),
     );
     overlay.appendChild(card);
@@ -1979,7 +2005,7 @@ function openReferralDetails() {
 
     function sectors() {
         const set = new Set(['all']);
-        for (const r of state.dash.referrals) set.add(r.serviceCat || r.serviceType || '(uncategorised)');
+        for (const r of state.dash.referrals) set.add(r.serviceCat || r.serviceType || NO_SECTOR);
         return [...set];
     }
 
@@ -1989,15 +2015,15 @@ function openReferralDetails() {
         body.append(
             h('div', { style: { padding: '12px 14px', background: 'var(--ink-25)', borderRadius: '10px', border: '1px solid var(--ink-100)' } },
                 h('div', { class: 'row', style: { gap: '12px' } },
-                    kvBlock('Referrals sent', String(rewards.count)),
-                    kvBlock('Sectors',        String(Object.keys(rewards.bySector).length)),
-                    kvBlock('Total rewards',  rewards.total.toLocaleString('ru-RU') + ' UZS', 'var(--ok-700)'),
+                    kvBlock(tr('Отправлено направлений'), String(rewards.count)),
+                    kvBlock(tr('Категорий услуг'),        String(Object.keys(rewards.bySector).length)),
+                    kvBlock(tr('Всего вознаграждений'),   rewards.total.toLocaleString('ru-RU') + ' UZS', 'var(--ok-700)'),
                 ),
             ),
             // Filters
             h('div', { class: 'row', style: { gap: '8px', flexWrap: 'wrap' } },
                 h('input', {
-                    placeholder: 'Filter by service / patient name…',
+                    placeholder: tr('Фильтр по услуге или пациенту…'),
                     value: serviceFilter,
                     oninput: (e) => { serviceFilter = e.target.value; repaintList(); },
                     style: { flex: 1, minWidth: '200px', height: '34px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px' },
@@ -2007,7 +2033,8 @@ function openReferralDetails() {
                         style: { height: '34px', borderRadius: '8px', border: '1px solid var(--ink-200)', padding: '0 10px', fontSize: '13.5px' },
                         onchange: (e) => { sectorFilter = e.target.value; repaintList(); },
                     },
-                        ...sectors().map(s => h('option', { value: s, selected: sectorFilter === s }, s === 'all' ? 'All sectors' : s)),
+                        ...sectors().map(s => h('option', { value: s, selected: sectorFilter === s },
+                            s === 'all' ? tr('Все категории') : sectorLabel(s))),
                     );
                     return sel;
                 })(),
@@ -2021,34 +2048,34 @@ function openReferralDetails() {
         if (!list) return;
         const t = serviceFilter.trim().toLowerCase();
         const rows = state.dash.referrals.filter(r => {
-            const sec = r.serviceCat || r.serviceType || '(uncategorised)';
+            const sec = r.serviceCat || r.serviceType || NO_SECTOR;
             if (sectorFilter !== 'all' && sec !== sectorFilter) return false;
             if (t && !(r.serviceName.toLowerCase().includes(t) || r.patientName.toLowerCase().includes(t))) return false;
             return true;
         });
         clear(list);
         if (rows.length === 0) {
-            list.appendChild(h('div', { class: 'empty', style: { padding: '30px', fontSize: '12.5px' } }, 'No matching referrals.'));
+            list.appendChild(h('div', { class: 'empty', style: { padding: '30px', fontSize: '12.5px' } }, tr('Подходящих направлений нет.')));
             return;
         }
         list.appendChild(h('table', { class: 'tbl' },
             h('thead', null, h('tr', null,
-                h('th', null, 'When'),
-                h('th', null, 'Service'),
-                h('th', null, 'Sector'),
-                h('th', null, 'Patient'),
-                h('th', null, 'Status'),
-                h('th', { style: { textAlign: 'right' } }, 'Commission'),
+                h('th', null, tr('Когда')),
+                h('th', null, tr('Услуга')),
+                h('th', null, tr('Категория')),
+                h('th', null, tr('Пациент')),
+                h('th', null, tr('Статус')),
+                h('th', { style: { textAlign: 'right' } }, tr('Вознаграждение')),
             )),
             h('tbody', null, ...rows.map(r => {
                 const c = commissionFor(r, state.dash.bonusRules);
-                const sec = r.serviceCat || r.serviceType || '(uncategorised)';
+                const sec = r.serviceCat || r.serviceType || NO_SECTOR;
                 return h('tr', null,
                     h('td', { class: 'num muted', style: { fontSize: '12.5px' } }, formatDateTime(r.createdAt)),
                     h('td', { class: 'cell-strong' }, r.serviceName),
-                    h('td', { class: 'muted' }, sec),
+                    h('td', { class: 'muted' }, sectorLabel(sec)),
                     h('td', null, r.patientName),
-                    h('td', null, tagEl(r.status === 'done' ? 'Done' : r.status === 'cancelled' ? 'Cancelled' : 'Pending',
+                    h('td', null, tagEl(referralStatusLabel(r.status),
                                         r.status === 'done' ? 'ok' : r.status === 'cancelled' ? 'crit' : 'warn', null)),
                     h('td', { class: 'num cell-strong', style: { textAlign: 'right', color: 'var(--ok-700)' } }, c.toLocaleString('ru-RU')),
                 );
@@ -2058,13 +2085,14 @@ function openReferralDetails() {
 
     const card = h('div', { class: 'modal-card', style: { width: '900px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 60px)', display: 'flex', flexDirection: 'column' } },
         h('header', { class: 'modal-head' },
-            h('h2', null, Icon('ArrowRight', { size: 16 }), ' Referral rewards · ', periodLabel()),
+            h('h2', null, Icon('ArrowRight', { size: 16 }), ' ',
+                trf('Вознаграждения за направления · {period}', { period: periodLabel() })),
             h('button', { class: 'modal-close', onclick: close }, '×'),
         ),
         body,
         h('footer', { class: 'modal-foot' },
             h('span', { class: 'grow' }),
-            h('button', { class: 'btn', onclick: close }, 'Close'),
+            h('button', { class: 'btn', onclick: close }, tr('Закрыть')),
         ),
     );
     overlay.appendChild(card);

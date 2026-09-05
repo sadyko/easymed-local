@@ -1240,6 +1240,16 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 .pastel-amber { --p-bg: var(--pastel-amber-bg);  --p-fg: var(--pastel-amber-fg);  --p-line: var(--pastel-amber-line); }
 .pastel-mint { --p-bg: var(--pastel-mint-bg);   --p-fg: var(--pastel-mint-fg);   --p-line: var(--pastel-mint-line); }
 
+/* TINT_WASH_V1 (2026-09-05) — мягкая заливка карточки: оттенок в верхнем
+   углу, к нижнему уходит в белый. НИ ОДНОГО нового цвета: оба конца — уже
+   проверенные токены (--p-bg своего оттенка и белый), поэтому и контраст
+   текста на ней уже посчитан тестом всей шкалы сразу. Класс сам оттенка не
+   выбирает — его ставят рядом с .pastel-<оттенок>, и без него заливка честно
+   остаётся прежней светлой подложкой, а не «никаким» цветом.
+   Имя НЕ из семейства .pastel-*: там каждый класс обязан быть оттенком со
+   своими токенами, и модификатор в этом ряду читался бы как девятый оттенок. */
+.tint-wash { background-image: linear-gradient(152deg, var(--p-bg, var(--ink-25)) 0%, var(--white) 96%); }
+
 .card-pad { padding: 20px 22px; }
 .card-pad-sm { padding: 14px 16px; }
 .card-header {

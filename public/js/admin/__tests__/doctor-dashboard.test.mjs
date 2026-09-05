@@ -523,5 +523,46 @@ test('#consultation/work переживает перезагрузку: адре
   // Адрес обязан не только ОТКРЫТЬ вкладку, но и ЗАГРУЗИТЬ её: ленивая
   // подгрузка, висящая только на кнопке, дала бы пустой экран по ссылке.
   assert.ok(payText.includes('Каримова Азиза'), 'зарплата загрузилась по адресу: ' + payText.slice(0, 300));
-  assert.ok(/Salary details|Referral rewards|7 дней/.test(payText), 'разбор начислений на месте');
+  assert.ok(/Разбор зарплаты|Вознаграждения за направления|7 дней/.test(payText),
+    'разбор начислений на месте');
+  // DOCTOR_PAY_I18N_V1 — вкладка была написана английскими литералами мимо
+  // tr(). Русский интерфейс показывал английский разбор денег, и ни один
+  // страж этого не видел: i18n-coverage ищет кириллицу, а её здесь не было.
+  assert.ok(!/Salary details|Referral rewards|Patients seen|Rewards by sector|Recent services/.test(payText),
+    'английских подписей на вкладке зарплаты не осталось: ' + payText.slice(0, 400));
+});
+
+// DASH_TILE_HUE (2026-09-05, владелец: «make a doctors cabinet a little bit
+// colorful, using gradient pastel tones in the cards»).
+//
+// Цвет здесь ЗНАЧИТ, что это за число, поэтому проверяется не «покрашено», а
+// ОДИНАКОВО ЛИ покрашен один и тот же смысл в разных рядах: деньги дня и
+// деньги недели — одни деньги, и разный оттенок сказал бы, что это разные
+// вещи. Плитка без оттенка красится белой намеренно — молчаливая подмена
+// смысла хуже отсутствия цвета.
+test('плитки дашборда красятся по СМЫСЛУ числа: деньги — один оттенок в обоих рядах', async () => {
+  reset();
+  loginAs(DOCTOR_A);
+  const host = mk('div');
+  await dash.renderDoctorDashboard(host, {});
+
+  const hueOfNode = (n) => (String(n.className || '').split(/\s+/).find((c) => c.startsWith('pastel-')) || '');
+  const figs = byClass(host, 'dd-fig');
+  const tiles = byClass(host, 'dd-stat');
+  assert.strictEqual(figs.length, 3, 'три больших числа');
+  assert.strictEqual(tiles.length, 4, 'четыре маленькие плитки');
+
+  for (const n of [...figs, ...tiles]) {
+    assert.ok(hueOfNode(n), 'плитка без оттенка: ' + textOf(n).slice(0, 60));
+    assert.ok(hasClass(n, 'tint-wash'), 'оттенок без градиента не заливает ничего');
+  }
+
+  // Деньги: «Заработано сегодня» (второе большое число) и «Заработано за
+  // 7 дней» (четвёртая плитка) — один и тот же оттенок.
+  const money = [figs[1], tiles[3]].map(hueOfNode);
+  assert.strictEqual(money[0], money[1], 'деньги дня и деньги недели покрашены по-разному');
+  // Услуги — тоже пара, и она обязана отличаться от денег.
+  const services = [figs[2], tiles[2]].map(hueOfNode);
+  assert.strictEqual(services[0], services[1], 'услуги дня и услуги недели покрашены по-разному');
+  assert.notStrictEqual(services[0], money[0], 'услуги и деньги слились в один оттенок');
 });
