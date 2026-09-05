@@ -134,13 +134,79 @@ test('010: the tombstone holds no patient data and no credential', () => {
   assert.deepEqual(cols, ['clinic_id', 'deleted_at', 'deleted_by', 'name']);
 });
 
-test('010: retired_at exists and is null for clinics retired before this migration', () => {
-  const db = freshDb();
+test('010: retired_at exists and is null for clinics retired BEFORE this migration', () => {
+  // Rewind to what 009 alone would have left, the same way 008.test.js:43-53
+  // does. Creating the clinic AFTER migrate() would only ever observe the
+  // ADD COLUMN default — a version of this test written that way still passed
+  // when a backfill `UPDATE clinics SET retired_at = created_at` was added to
+  // the migration, i.e. it could not fail against the mistake it names.
+  const db = openDb(':memory:');
+  migrate(db);
+  db.prepare('DELETE FROM schema_migrations WHERE name = ?').run('010_deleted_clinics.sql');
+  db.exec('DROP TRIGGER clinics_no_resurrection_rename');
+  db.exec('DROP TRIGGER clinics_no_resurrection');
+  db.exec('DROP TABLE deleted_clinics');
+  // retired_at cannot be dropped without rebuilding the table; nulling it is
+  // the same starting condition and is what a pre-010 database would present.
+  db.prepare('UPDATE clinics SET retired_at = NULL').run();
+
   createEnrollmentCode(db, { clinicId: 'c-000008', name: 'test on laptop' });
   db.prepare('UPDATE clinics SET active = 0 WHERE clinic_id = ?').run('c-000008');
+
+  migrate(db);
+
   const row = db.prepare('SELECT retired_at FROM clinics WHERE clinic_id = ?').get('c-000008');
   assert.equal(row.retired_at, null,
     'no backfill: a date we do not know must read as unknown, never as today');
+});
+
+test('010: both triggers exist by name, and every insert path hits them', () => {
+  const db = freshDb();
+  db.prepare('INSERT INTO deleted_clinics (clinic_id, name) VALUES (?,?)').run('c-000009', 'Gone');
+
+  const triggers = db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='clinics'")
+    .all().map((r) => r.name).sort();
+  assert.deepEqual(triggers, ['clinics_no_resurrection', 'clinics_no_resurrection_rename']);
+
+  // The migration's own comment claims every insert path. OR IGNORE is the one
+  // that would plausibly swallow a RAISE — it does not, and that is pinned here
+  // rather than assumed.
+  for (const verb of ['INSERT', 'INSERT OR IGNORE', 'INSERT OR REPLACE']) {
+    assert.throws(
+      () => db.prepare(`${verb} INTO clinics (clinic_id, name, unlock_secret) VALUES (?,?,?)`)
+        .run('c-000009', 'Resurrected', 'x'),
+      /permanently deleted/i,
+      `${verb} must not resurrect a tombstoned id`,
+    );
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM clinics').get().n, 0);
+});
+
+test('010: a live clinic cannot be renamed onto a tombstoned id', () => {
+  const db = freshDb();
+  createEnrollmentCode(db, { clinicId: 'c-000001', name: 'Alive' });
+  db.prepare('INSERT INTO deleted_clinics (clinic_id, name) VALUES (?,?)').run('c-000009', 'Gone');
+  assert.throws(
+    () => db.prepare('UPDATE clinics SET clinic_id = ? WHERE clinic_id = ?').run('c-000009', 'c-000001'),
+    /permanently deleted/i,
+  );
+});
+
+test('010: the refusal arrives as SQLITE_CONSTRAINT_TRIGGER', () => {
+  // Task 4 maps exactly this code to a 409. routes/admin.js:82-92 records the
+  // day this project assumed a SQLite error code and was wrong (a TEXT PRIMARY
+  // KEY collision reports PRIMARYKEY, not UNIQUE), so the code is pinned, not
+  // inferred.
+  const db = freshDb();
+  db.prepare('INSERT INTO deleted_clinics (clinic_id, name) VALUES (?,?)').run('c-000009', 'Gone');
+  try {
+    db.prepare('INSERT INTO clinics (clinic_id, name, unlock_secret) VALUES (?,?,?)')
+      .run('c-000009', 'Resurrected', 'x');
+    assert.fail('the insert must not succeed');
+  } catch (e) {
+    assert.equal(e.code, 'SQLITE_CONSTRAINT_TRIGGER');
+    assert.match(e.message, /permanently deleted/i);
+  }
 });
 
 test('010: migrate() is idempotent — a second run is a no-op', () => {
@@ -180,6 +246,8 @@ Create `control-plane/server/db/migrations/010_deleted_clinics.sql`:
 -- clinic_id, so the deleted clinic's licence file — still sitting on its old
 -- computer, still signed, still inside its validity window — would verify
 -- against the new clinic and grant it whatever the old one was entitled to.
+-- (licence verification lives in the clinic half of this repo, at
+-- ../server/services/control/licence.js — not under control-plane/.)
 --
 -- The fix is a graveyard: an id that has been deleted is remembered forever, and
 -- may never be issued again to anything.
@@ -198,13 +266,31 @@ CREATE TABLE deleted_clinics (
 -- THE SECOND LINE, and the reason this is a trigger rather than an `if` in a
 -- route. routes/admin.js will consult this table, but the route is not the only
 -- thing that will ever insert into `clinics`: a future route, a support fix run
--- by hand at 2am, or an old backup replayed over this database. Every one of
--- those paths must hit the same wall, so the wall is in the schema.
+-- by hand at 2am, or an old dump replayed INTO this database. Every one of
+-- those paths must hit the same wall, so the wall is in the schema. (Restoring
+-- a whole SQLite FILE is not one of them — that brings the graveyard back too.)
 --
--- ABORT, not IGNORE: a caller trying to resurrect a deleted clinic has made a
--- mistake worth hearing about. routes/admin.js turns it into a 409.
+-- ABORT, not IGNORE and not ROLLBACK: ABORT undoes the offending statement and
+-- leaves any enclosing transaction alive (redeemEnrollmentCode runs inside one),
+-- and it overrides the statement's own conflict resolution — so INSERT OR IGNORE
+-- does NOT silently swallow it. Both verified against better-sqlite3 directly
+-- rather than assumed, and pinned by 010.test.js.
 CREATE TRIGGER clinics_no_resurrection
 BEFORE INSERT ON clinics
+WHEN EXISTS (SELECT 1 FROM deleted_clinics WHERE clinic_id = NEW.clinic_id)
+BEGIN
+  SELECT RAISE(ABORT, 'clinic_id was permanently deleted and can never be reissued');
+END;
+
+-- A RENAME IS THE SAME THREAT, and a BEFORE INSERT trigger cannot see one.
+-- `UPDATE clinics SET clinic_id = '<tombstoned>'` walks straight past the
+-- trigger above and leaves a live clinic wearing an id whose old signed licence
+-- is still on someone else's computer — exactly what the graveyard exists to
+-- prevent. Nothing in this codebase updates clinic_id today, which is precisely
+-- why it needs a schema guard: the path that would do it is the hand-run
+-- support fix, not a route anyone reviews.
+CREATE TRIGGER clinics_no_resurrection_rename
+BEFORE UPDATE OF clinic_id ON clinics
 WHEN EXISTS (SELECT 1 FROM deleted_clinics WHERE clinic_id = NEW.clinic_id)
 BEGIN
   SELECT RAISE(ABORT, 'clinic_id was permanently deleted and can never be reissued');
@@ -225,7 +311,7 @@ ALTER TABLE clinics ADD COLUMN retired_at TEXT;
 node --test control-plane/server/db/migrations/010.test.js
 ```
 
-Expected: PASS, 7 tests.
+Expected: PASS, 11 tests.
 
 - [ ] **Step 5: Run the whole suite — the trigger must not disturb anything**
 
@@ -233,7 +319,7 @@ Expected: PASS, 7 tests.
 node --test $(find control-plane -name "*.test.js" -not -path "*/node_modules/*" | tr '\n' ' ')
 ```
 
-Expected: 459 pass, 0 fail.
+Expected: 463 pass, 0 fail.
 
 - [ ] **Step 6: Commit**
 
@@ -291,7 +377,11 @@ test('a tombstoned clinic id is never proposed again', async (t) => {
 node --test control-plane/server/routes/admin.test.js
 ```
 
-Expected: FAIL — the request 500s, or returns `c-000009`.
+Expected: FAIL, with `actual 'c-000001'` — not the 500 you might predict. In this fixture the
+tombstoned clinic is the only one ever created, so `clinics` is empty at proposal time and the old
+`nextClinicId` computes max-of-nothing. The 500-from-exhausted-retries face of this bug appears
+only when living clinics already occupy the ids below the tombstoned one. Same root cause, same
+fix — just know which face you are looking at.
 
 - [ ] **Step 3: Change `nextClinicId`**
 
@@ -336,6 +426,38 @@ Expected: PASS.
 git add control-plane/server/routes/admin.js control-plane/server/routes/admin.test.js
 git commit -m "fix(control-plane): allocate clinic ids over living rows AND tombstones"
 ```
+
+---
+
+## Task 2b / 2c: the branch-id allocator (added during execution)
+
+Neither was in the plan as written. A code-quality reviewer found 2b while reviewing Task 2;
+2c came out of reviewing 2b. Both are the same class of bug as Task 2 and both had to land
+before delete ships, because `DELETE /clinics/:id` refuses to delete a *parent* with filials
+but will happily delete a filial.
+
+**2b (`1aeb1e3`)** — `nextBranchId` in `control-plane/server/routes/branch.js` probed only
+`clinics` for a clash. Delete `c-X-b2` and it proposes `c-X-b2` again, hits the resurrection
+trigger, and the branch-create route turns it into a bare 500. Probe now reads both tables.
+
+**2c (`ac6c97a`)** — the same function still *started* from `COUNT(*)` of living children while
+its sibling `nextClinicId` starts from `MAX` over history. Fifty or more tombstoned branches
+under one parent exhausted the 50-attempt probe and that clinic network could never create
+another branch again. Both allocators now reason the same way.
+
+### Follow-up NOT done here, deliberately
+
+`server/services/rpc/branch-sync.js` (the **clinic** half of the repo, not the control plane)
+reconstructs a branch's `clinic_id` positionally — `` `${parent}-b${i+1}` `` — and its own comment
+states the assumption it rests on: that branch rows at the vendor are never deleted, only marked
+`active = 0`, so numbering is gapless and strictly follows creation order. Hard-deleting a filial
+breaks that assumption, and this stage ships the button that does it.
+
+Left alone on purpose: it is outside `control-plane/`, another session is actively editing that
+directory, and the guess is already marked speculative (`branchClinicGuessKey`), reconciled
+against anchors where they exist, and re-verified against the vendor-returned name at reissue —
+so it degrades rather than misassigns. **It must be revisited before any branch-delete UI is
+offered to clinics**, which is not part of this stage.
 
 ---
 
@@ -516,6 +638,15 @@ In `control-plane/server/routes/admin.js`, immediately after the `/clinics/:id/r
     // hand; delete is not reversible by anything. Requiring the first before the
     // second means no single click can destroy a clinic that is still working.
     if (clinic.active) return conflict(res, 'Retire this clinic before deleting it.');
+
+    // NOT MAPPED HERE, deliberately, and written down so the deferral is not
+    // lost: migration 010's triggers raise SQLITE_CONSTRAINT_TRIGGER when
+    // anything tries to reissue a deleted id, and nothing catches it — it
+    // surfaces as a bare 500 from POST /clinics. That is the correct outcome
+    // today: with nextClinicId fixed (Task 2) the only way to reach it is a
+    // hand-run insert or a corrupted registry, which IS a server-side invariant
+    // violation and should look like one. Revisit only if a real caller ever
+    // hits it.
 
     // foreign_keys is ON (db/connection.js:17) and clinics.parent_clinic_id
     // carries no ON DELETE clause, so deleting a parent with filials raises
