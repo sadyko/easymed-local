@@ -638,7 +638,11 @@ test('фильтр периода пережил баннер: рисуется 
     const { renderConsultation } = await import('../views/consultation.js');
     const box = mkEl('div');
     BODY.appendChild(box);
-    await renderConsultation(box, { onNavigate() {} });
+    // DOCTOR_DASHBOARD_V1 (2026-09-05) — кабинет теперь ОТКРЫВАЕТСЯ дашбордом,
+    // а рабочий список живёт по адресу '#consultation/work'. Фильтр периода
+    // никуда не делся — он там же, в шапке очереди; чтобы его увидеть,
+    // надо открыть ту вкладку — ровно это и делает payload.sub у оболочки.
+    await renderConsultation(box, { onNavigate() {}, payload: { sub: 'work' } });
     await settle(60);
     const strip = descendants(box).find((n) => n.attrs.id === 'svc-range');
     assert.ok(strip, 'фильтр периода не отрисовался');

@@ -17,6 +17,15 @@ import { h, Icon, PageHead, toast, clear, avColor, initials, fmtDateTime } from 
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { scopedDoctorId, selfDoctorId, scopedProviderId } from '../permissions.js';   // ADMIN_DOCTOR_V2 / SERVICE_SCOPE_V1
 import { renderDoctorProfile } from './doctor-profile.js?v=btnright1';
+// DOCTOR_DASHBOARD_V1 — кабинет открывается дашбордом, и ДЕНЬГИ ЖИВУТ ТАМ.
+// serviceRateMap/serviceShare переехали в doctor-dashboard.js целиком: две
+// копии одной формулы доли врача — это две формулы, которые однажды разойдутся,
+// и разойдутся молча, потому что обе «работают». Импорт без ?v=: версия в
+// специфике делает ОТДЕЛЬНЫЙ экземпляр модуля, а у дашборда есть состояние.
+import {
+    renderDoctorDashboard, resetDoctorDashboard,
+    serviceRateMap, serviceShare, perServicePayApplies,
+} from './doctor-dashboard.js';
 import { openAdmissionCard } from './admission-modal.js?v=inp2';   // INPATIENT_TAB_V1 / ADMISSION_ORDER_V1
 import { loadPatientById } from '../data.js';   // NO_GREETING_V1 — currentUser() went with the greeting band
 import { IN_BED_STATUSES } from '../../shared/admission-status.js';   // INPATIENT_FLOW_V1
@@ -43,8 +52,10 @@ const state = {
     // Today's referrals THIS doctor made (for the KPI cards / RecsModal). Lazy
     // and tolerant — see loadTodayReferrals(). { loaded, rows: [...] }
     todayReferrals: { loaded: false, rows: [] },
-    // Page-level tabs: My appointments (the work queue) | My dashboard
-    tab:          'appointments',
+    // Page-level tabs. DOCTOR_DASHBOARD_V1 — кабинет ОТКРЫВАЕТСЯ дашбордом
+    // (владелец: «in the doctors cabinet make dashboard first»); рабочий список
+    // — соседняя вкладка в один щелчок и по своему адресу '#consultation/work'.
+    tab:          'dashboard',
     // INPATIENT_TAB_V1 — «Стационар»: this doctor's active admissions (admins see
     // all). Lazy-loaded on first open. Inpatients live in admissions/admission_*
     // tables, so they never appear in «Мои приёмы» (visit_services-based).
@@ -65,20 +76,47 @@ const state = {
 
 let containerRef = null;
 let onNavigateRef = null;
+let tabIdRef = null;          // HASH_SUBROUTE_V1 — чем отчитываться оболочке
+let queueLoaded = false;      // рабочий список грузится, когда его открыли
 
-export async function renderConsultation(container, { onNavigate } = {}) {
+// HASH_SUBROUTE_V1 — адрес ↔ вкладка. Пустой sub — дашборд: кабинет ОТКРЫВАЕТСЯ
+// им, поэтому у него бесхвостый '#consultation', а не '#consultation/dashboard'.
+const SUB_TO_TAB = { work: 'appointments', inpatients: 'inpatients', pay: 'pay', profile: 'profile' };
+const TAB_TO_SUB = { appointments: 'work', inpatients: 'inpatients', pay: 'pay', profile: 'profile' };
+
+export async function renderConsultation(container, { onNavigate, payload, tabId } = {}) {
     containerRef = container;
     onNavigateRef = onNavigate || null;
+    tabIdRef = tabId || null;
+    // Адрес решает, что открыто: '#consultation/work' переживает F5 и
+    // пересылку ссылки, а голый '#consultation' открывает дашборд.
+    const sub = payload && typeof payload.sub === 'string' ? payload.sub : null;
+    state.tab = SUB_TO_TAB[sub] || 'dashboard';
     clear(container);
-    container.appendChild(h('div', { class: 'empty', style: { padding: '40px' } }, 'Загрузка очереди…'));
-    await loadServices();
-    // Pre-load the doctor picker (cheap) so the Dashboard tab can render
-    // immediately when clicked.
-    if (state.dash.doctors.length === 0) await loadDoctorsForDash();
+    container.appendChild(h('div', { class: 'empty', style: { padding: '40px' } }, 'Загружаем кабинет…'));
+    // DOCTOR_DASHBOARD_V1 — дашборд перечитывается при каждом входе в раздел:
+    // «мой день» протухает быстрее всего на экране.
+    resetDoctorDashboard();
+    queueLoaded = false;
+    if (state.tab === 'appointments') { await loadQueueOnce(); }
     paint();
+    // Адрес открывает ЛЮБУЮ вкладку, а не только ту, на которую нажали, —
+    // значит и подгружать её данные обязан тот же код, что и щелчок. Без этой
+    // строки '#consultation/pay' из закладки открывался бы пустой зарплатой:
+    // ленивая загрузка висела бы только на кнопке.
+    ensureTabData(state.tab).then(() => paint());
     // Today's referrals feed the KPI cards (3) and (4). Loaded after the first
     // paint so the queue never waits on it; repaint once it lands.
     loadTodayReferrals().then(() => { if (state.tab === 'appointments') paint(); });
+}
+
+// Рабочий список — по требованию. До DOCTOR_DASHBOARD_V1 он грузился всегда,
+// потому что всегда и открывался; теперь кабинет открывается дашбордом, и
+// тянуть 300 строк очереди ради вкладки, на которую ещё не нажали, незачем.
+async function loadQueueOnce() {
+    if (queueLoaded) return;
+    await loadServices();
+    queueLoaded = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -225,17 +263,39 @@ function referralIsDone(status) {
 function paint() {
     clear(containerRef);
     containerRef.appendChild(h('div', { class: 'fade-in' },
-        h('div', { style: { display: 'flex', gap: '8px', marginBottom: '16px' } },
+        h('div', { style: { display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' } },
+            // DOCTOR_DASHBOARD_V1 — дашборд ПЕРВЫМ и открыт ПО УМОЛЧАНИЮ.
+            topTab('dashboard',    'Дашборд',      'Dashboard'),
             topTab('appointments', 'Мои приёмы',  'Activity'),
             topTab('inpatients',   'Стационар',    'Bed'),   // INPATIENT_TAB_V1
-            topTab('dashboard',    'Дашборд',      'Dashboard'),
+            // Старый «Дашборд» никуда не делся — он переехал сюда и назван тем,
+            // чем всегда был: глубокие периоды, ставки, вознаграждения за
+            // направления и разбор начислений.
+            topTab('pay',          'Зарплата',     'Wallet'),
             topTab('profile',      'Мой профиль',  'User'),
         ),
-        state.tab === 'profile' ? profileView() : state.tab === 'dashboard' ? dashboardView() : state.tab === 'inpatients' ? inpatientsView() : appointmentsView(),
+        state.tab === 'profile' ? profileView()
+            : state.tab === 'pay' ? dashboardView()
+            : state.tab === 'inpatients' ? inpatientsView()
+            : state.tab === 'appointments' ? appointmentsView()
+            : doctorDashboardView(),
     ));
     // The appointments table body is painted into a slot by id — only meaningful
     // when the appointments tab is the one being shown.
     if (state.tab === 'appointments') paintBody();
+}
+
+// DOCTOR_DASHBOARD_V1 — дашборд рисует себя сам в своё гнездо: у него своё
+// состояние и своя загрузка, и paint() здесь его не ждёт — вкладки
+// переключаются мгновенно, а числа приезжают, когда приедут.
+function doctorDashboardView() {
+    const host = h('div');
+    renderDoctorDashboard(host, {
+        // Карточка приёма ведёт туда, где с ним работают, — в рабочий список.
+        // Своего второго окна приёма дашборд не заводит.
+        onOpenWork: () => setTab('appointments'),
+    });
+    return host;
 }
 
 function profileView() {
@@ -330,25 +390,61 @@ function inpatientsView() {
     return wrap;
 }
 
+// ОДИН вход во все вкладки: и кнопка шапки, и карточка дашборда зовут его,
+// поэтому ленивая загрузка и адрес обновляются в одном месте.
+function setTab(id) {
+    if (state.tab === id) return;
+    state.tab = id;
+    syncSubUrl();
+    paint();
+    ensureTabData(id).then(() => paint());
+}
+
+// Что вкладка обязана дочитать, прежде чем показать себя честно. ОДНА функция
+// на два входа — щелчок и адрес: разъехавшись, они дали бы вкладку, которая
+// работает по кнопке и пуста по ссылке.
+function ensureTabData(id) {
+    if (id === 'appointments') return loadQueueOnce();
+    if (id === 'pay' && !state.dash.loaded) {
+        state.dash.loading = true;
+        return (state.dash.doctors.length ? Promise.resolve() : loadDoctorsForDash())
+            .then(() => loadDashboardData())
+            .then(() => { state.dash.loading = false; });
+    }
+    if (id === 'inpatients' && !state.inpt.loaded) {   // INPATIENT_TAB_V1
+        state.inpt.loading = true;
+        return loadInpatients().then(() => { state.inpt.loading = false; });
+    }
+    return Promise.resolve();
+}
+
+// HASH_SUBROUTE_V1 — адрес отражает состояние: вкладка живёт в строке адреса,
+// поэтому F5 её сохраняет, а ссылку можно отправить коллеге. replaceState, а не
+// pushState: переключение вкладки внутри одного экрана — не новое место, куда
+// должна возвращать кнопка «Назад».
+function syncSubUrl() {
+    try {
+        if (typeof history === 'undefined' || !history.replaceState) return;
+        const sub = TAB_TO_SUB[state.tab] || null;
+        history.replaceState({ view: 'consultation', payload: sub ? { sub } : null },
+            '', '#consultation' + (sub ? '/' + sub : ''));
+        // Адресной строки мало: navigate() перепишет хеш из payload ВКЛАДКИ
+        // оболочки при следующем заходе в кабинет — и ссылка протухнет.
+        if (typeof window !== 'undefined' && typeof window.easymedSetTabSub === 'function') {
+            window.easymedSetTabSub(tabIdRef, sub);
+        }
+    } catch (e) {
+        // Закрученный браузер может запретить запись в историю: вкладка
+        // продолжает работать, просто перестаёт быть ссылкой.
+    }
+}
+
 function topTab(id, label, icon) {
     const on = state.tab === id;
     return h('button', {
         type: 'button',
-        onclick: () => {
-            if (state.tab === id) return;
-            state.tab = id;
-            if (id === 'dashboard' && !state.dash.loaded) {
-                state.dash.loading = true;
-                paint();
-                loadDashboardData().then(() => { state.dash.loading = false; paint(); });
-            } else if (id === 'inpatients' && !state.inpt.loaded) {   // INPATIENT_TAB_V1
-                state.inpt.loading = true;
-                paint();
-                loadInpatients().then(() => { state.inpt.loading = false; paint(); });
-            } else {
-                paint();
-            }
-        },
+        'aria-pressed': on ? 'true' : 'false',
+        onclick: () => setTab(id),
         style: {
             display: 'inline-flex', alignItems: 'center', gap: '8px',
             padding: '10px 18px', borderRadius: '999px',
@@ -1266,48 +1362,18 @@ function commissionFor(referral, rules) {
     return fixed + Math.round(Number(referral.servicePrice || 0) * pct / 100);
 }
 
-// Map of service_id → the doctor's pay rule for it (from users.service_rates,
-// set in the "Services performed" list): { price, percentage }. Tolerates the
-// older {percentage} and {mode,value} shapes.
-function serviceRateMap() {
-    const m = new Map();
-    const rates = Array.isArray(state.dash.doctor?.service_rates) ? state.dash.doctor.service_rates : [];
-    for (const r of rates) if (r && r.service_id != null) {
-        let price      = Number(r.price) || 0;
-        // RATES_PCT_ALIAS_V1 — принимаем и `percentage` (employee-editor), и
-        // `pct` (быстрое назначение услуг в «Сотрудниках»): из-за расхождения
-        // ключей дашборд считал ставку 0% и зарплата с услуг не показывалась.
-        let percentage = Number(r.percentage != null ? r.percentage : r.pct) || 0;
-        if (!price && r.mode === 'fixed' && r.value != null)      price = Number(r.value) || 0;
-        if (!percentage && r.mode !== 'fixed' && r.value != null) percentage = Number(r.value) || 0;
-        m.set(String(r.service_id), { price, percentage });
-    }
-    return m;
-}
-
-// One service's contribution to the doctor's pay. DOCTOR_SHARE_AFTER_TAX_V1 —
-// тот же порядок, что в отчётах (reports.js ITEM_FEE_SQL):
-//   база = сумма строки − скидка;  налог = база × ставка;  доля = (база − налог) × %
-// Фиксированная ставка добавляется как есть — она за единицу и налогом не режется.
-//
-// Ставка налога — своя у услуги. Прежний фолбэк 12% брался с потолка: у клиники
-// налог 6%, и услуга без проставленной ставки занижала долю врача вдвое против
-// отчёта. Нет ставки — считаем 0 и не выдумываем налог, которого нет в данных.
-function serviceShare(s, rateMap) {
-    const rate = rateMap.get(String(s.serviceId));
-    if (!rate) return 0;
-    const base = Math.max(0, Number(s.total || 0) - Number(s.discount || 0));
-    const taxRate = s.taxRate != null ? Number(s.taxRate) : 0;
-    const net = base * (1 - taxRate / 100);
-    return (rate.price || 0) + net * (rate.percentage || 0) / 100;
-}
+// DOCTOR_DASHBOARD_V1 — serviceRateMap()/serviceShare() ЖИВУТ В
+// doctor-dashboard.js и импортируются сверху. Здесь были их копии: две
+// реализации доли врача на одном экране разошлись бы молча — дашборд
+// показывал бы одну сумму за день, вкладка «Зарплата» — другую за тот же
+// день, и обе выглядели бы рабочими.
 
 // Salary breakdown for the period. The variable component is the sum of each
 // completed/in-progress service's after-tax revenue times its per-service %.
 function computeSalary() {
     const doc = state.dash.doctor;
     if (!doc) return { fixed: 0, variable: 0, total: 0, kind: 'none', revenue: 0 };
-    const rateMap = serviceRateMap();
+    const rateMap = serviceRateMap(doc);
     const earning = state.dash.services.filter(s => s.status === 'completed' || s.status === 'in_progress');
     const revenue = earning.reduce((sum, s) => sum + Number(s.total || 0), 0);
     const variableComponent = earning.reduce((sum, s) => sum + serviceShare(s, rateMap), 0);
@@ -1323,9 +1389,10 @@ function computeSalary() {
     // DOCTOR_PAY_KPI_WIRE_V1 — for Fix+KPI the per-service variable only counts when a
     // service-revenue KPI is ticked (Consultations/Services/Revenue/Lab/Surgeries);
     // ticking only 'Patient referrals' → no service variable (referral reward is its own line).
-    const _kpis = new Set(Array.isArray(doc.kpi_links) ? doc.kpi_links : []);
-    const _svcKpi = ['consultations', 'services', 'revenue', 'lab_tests', 'surgeries'].some(k => _kpis.has(k));
-    const _varOut = (doc.salary_type === 'fix_plus_kpi' && !_svcKpi) ? 0 : variableComponent;
+    // Правило одно на кабинет (perServicePayApplies, doctor-dashboard.js):
+    // дашборд по нему решает, рисовать ли дневной заработок вообще.
+    const _varOut = perServicePayApplies(doc) || doc.salary_type !== 'fix_plus_kpi'
+        ? variableComponent : 0;
     let total = 0;
     if (doc.salary_type === 'fixed')                 total = fixedComponent;
     else if (doc.salary_type === 'fix_plus_kpi')     total = fixedComponent + _varOut;
@@ -1382,7 +1449,10 @@ function dashboardView() {
 
     return h('div', null,
         PageHead({
-            title: 'My dashboard',
+            // DOCTOR_DASHBOARD_V1 — вкладка теперь называется «Зарплата», и шапка
+            // обязана говорить то же самое: два разных имени у одного экрана —
+            // это два экрана в голове у врача. Ключ 'Salary' в словаре уже есть.
+            title: 'Salary',
             subtitle: doc
                 ? `Salary, referral rewards and activity for ${doc.full_name}.`
                 : 'No doctor selected.',
@@ -1726,7 +1796,7 @@ function openSalaryDetails() {
     function repaintList() {
         const list = body.querySelector('#salary-list');
         if (!list) return;
-        const rateMap = serviceRateMap();
+        const rateMap = serviceRateMap(state.dash.doctor);
         const t = filterText.trim().toLowerCase();
         const rows = state.dash.services.filter(s => {
             if (statusFilter !== 'all' && s.status !== statusFilter) return false;
