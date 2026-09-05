@@ -318,32 +318,85 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     height: 100vh;
     overflow: hidden;
 }
-/* Отступ 20px = --nav-gutter + 12px: знак бренда встаёт ровно над иконками
-   пунктов меню. Линейки снизу нет — см. SIDEBAR_SEAMLESS_V1 выше. */
+/* BRAND_PLATE_V1 (2026-09-05, владелец: «can we make something about this place
+   too? its not looking appealing») — шапка колонки меню.
+   Жалоба пришла сразу после SIDEBAR_SEAMLESS_V1, и это не совпадение: колонка
+   лишилась подложки и собственной линейки, и знак остался ТЯЖЁЛЫМ предметом на
+   голом поле. Разбираем по трём причинам, каждая со своим числом.
+
+   1. ЗНАК БЫЛ ГРОМЧЕ ВЫБРАННОГО ПУНКТА. Он нёс единственный в продукте
+      градиент (primary-500 → primary-700) и единственную ЦВЕТНУЮ тень
+      (rgba(22,120,115,.30) на 10px) — всё остальное давно переехало на плоские
+      токены и пастель. Тень цветом бренда под знаком бренда читается как
+      подсветка: глаз шёл к логотипу, а не к разделу, в котором работают.
+      Теперь заливка ПЛОСКАЯ и ровно та же, что у выбранного пункта меню
+      (--primary-600): в колонке остаётся ОДИН акцентный цвет, использованный
+      дважды, и знак больше не перекрикивает «вы здесь».
+      Числа против грунта --page-ground: заливка 4.50:1 (норма 3:1, WCAG
+      1.4.11), белый «+» на заливке 5.29:1.
+
+   2. ИМЯ КЛИНИКИ БЫЛО МЕЛКИМ СЕРЫМ НАБОРОМ ПРОПИСНЫМИ. В системе, которую
+      клиника ПОКУПАЕТ, её собственное имя не может стоять ниже имени
+      поставщика. Порядок перевёрнут: .brand-sub (сюда admin.js кладёт
+      clinic.name) — первая строка, 15px/600 по --ink-900; «Easy·Med» —
+      подпись под ней, 12.5px/600 по --ink-500.
+
+   3. И ЭТО ЖЕ БЫЛО ОШИБКОЙ КОНТРАСТА, А НЕ ТОЛЬКО ИЕРАРХИИ. --ink-400 на
+      белой колонке давал 4.65:1, но колонка стала прозрачной и легла на
+      --page-ground (#eaedf1) — те же буквы дают там 3.10:1 при норме 4.5:1
+      (WCAG 1.4.3). Имя клиники молча ушло под порог. Стало: 15.86:1 у имени
+      клиники и 5.27:1 у подписи, точка «·» — --primary-700 (6.53:1), а не
+      --primary-600 (4.50:1, впритык).
+
+   ДЛИННОЕ ИМЯ. Клиника называется как хочет, и обрезать её имя многоточием
+   нельзя: подсказки-title у этой строки нет и появиться она может только из
+   admin.js, который здесь не трогают. Поэтому строка ПЕРЕНОСИТСЯ, а не
+   обрезается (overflow-wrap: anywhere — иначе одно длинное слово вышло бы за
+   край), меню сдвигается вниз и продолжает скроллиться в .sidebar-body.
+
+   Отступ 20px = --nav-gutter + 12px: знак встаёт ровно над иконками пунктов
+   меню. Линейки снизу нет — см. SIDEBAR_SEAMLESS_V1 выше; шапку от меню
+   отделяет теперь ВОЗДУХ (24px снизу вместо 18px), и его должно быть заметно
+   больше, чем между самими пунктами, — иначе шапка читается первым пунктом. */
 .sidebar-brand {
-    display: flex; align-items: center; gap: 10px;
-    padding: 18px 20px;
+    display: flex; align-items: center; gap: 11px;
+    padding: 18px 20px 24px;
 }
 .brand-mark {
-    width: 32px; height: 32px;
+    width: 30px; height: 30px;
     border-radius: 9px;
-    background: linear-gradient(135deg, var(--primary-500), var(--primary-700));
+    background: var(--primary-600);
     display: grid; place-items: center;
-    color: white; font-weight: 700;
-    box-shadow: 0 4px 10px rgba(22, 120, 115, 0.30), inset 0 1px 0 rgba(255,255,255,0.2);
+    color: var(--white); font-weight: 700;
+    flex: 0 0 auto;
+    transition: background var(--dur-1) var(--ease-out);
 }
+.brand-mark:hover { background: var(--primary-700); }
 .brand-mark svg { width: 18px; height: 18px; }
-.brand-name {
-    font-weight: 700; font-size: 17px;
+/* Обёртка двух строк: min-width: 0 обязателен — без него флекс-элемент не
+   сжимается ниже своего содержимого, и длинное имя клиники распирало бы
+   шапку, унося стрелку сворачивания за край колонки. */
+.brand-text { flex: 1 1 auto; min-width: 0; }
+/* ПЕРВАЯ строка — имя клиники (admin.js: sub.textContent = clinic.name). */
+.brand-sub {
+    font-size: 15px; font-weight: 600;
     color: var(--ink-900);
     letter-spacing: -0.01em;
-    line-height: 1.1;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
 }
-.brand-name .dot { color: var(--primary-600); }
-.brand-sub {
-    font-size: 12.5px; color: var(--ink-400); margin-top: 2px;
-    letter-spacing: 0.06em; text-transform: uppercase; font-weight: 600;
+/* До того, как клиника определилась (и если она не определилась вовсе), строка
+   пуста: пустая строка не имеет права занимать место и дёргать вёрстку. */
+.brand-sub:empty { display: none; }
+/* ВТОРАЯ строка — поставщик. */
+.brand-name {
+    font-weight: 600; font-size: 12.5px;
+    color: var(--ink-500);
+    letter-spacing: 0.02em;
+    line-height: 1.3;
+    margin-top: 3px;
 }
+.brand-name .dot { color: var(--primary-700); }
 
 .sidebar-body {
     flex: 1;
@@ -677,6 +730,10 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
    label (SIDEBAR_RAIL_V1), and the logo toggles back open. */
 .sidebar-collapsed { --sidebar-w: 68px; }
 .sidebar-collapsed .sidebar-brand { justify-content: center; padding-left: 0; padding-right: 0; }
+/* BRAND_PLATE_V1 — на рейке 68px остаётся ОДИН знак, и он же единственный
+   способ раскрыть меню обратно (стрелку выше прячут). Селектор нарочно снимает
+   всё, что НЕ .brand-mark: под него сам собой попал и новый .brand-text, и
+   попадёт любая следующая строка — знак так не спрячешь по недосмотру. */
 .sidebar-collapsed .sidebar-brand > div:not(.brand-mark) { display: none; }
 .sidebar-collapsed .nav-section { display: none; }
 .sidebar-collapsed .nav-item {
@@ -2540,8 +2597,12 @@ textarea:focus-visible,
     display: flex; align-items: center; gap: 12px; margin-bottom: 28px;
 }
 .login-brand .brand-mark { width: 38px; height: 38px; font-size: 17px; }
-.login-brand .brand-name { font-size: 17px; }
-.login-brand .brand-sub  { font-size: 12.5px; }
+/* BRAND_PLATE_V1 — здесь были ещё два переопределения размера, .brand-name на
+   17px и .brand-sub на 12.5px. Они задавали СТАРУЮ иерархию (поставщик крупно,
+   клиника мелко) и, доживи блок входа до возвращения, наполовину откатили бы
+   новую прямо на экране логина. Разметки .login-brand в продукте сейчас нет
+   вовсе (её не находит ни один файл), так что удаление ничего не меняет
+   сегодня и не подставляет завтра. */
 .login-title {
     margin: 0 0 4px;
     font-size: 24px;

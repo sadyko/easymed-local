@@ -649,3 +649,214 @@ test('канбан: колонка красится оттенком, а кар�
     const n = rule(VIEWS, '.crm-col .crm-col-n');
     assert.match(n.color, /var\(--p-fg,/, 'счётчик колонки не берёт цвет своего оттенка');
 });
+
+// ═══ 7. ШАПКА КОЛОНКИ МЕНЮ ══════════════════════════════════════════════════
+// BRAND_PLATE_V1 (2026-09-05, владелец: «can we make something about this place
+// too? its not looking appealing»).
+//
+// Жалоба про «место», а не про правило, поэтому здесь закреплены ровно те
+// четыре вещи, из которых это место состояло, — и все четыре числами либо
+// разбором разметки, а не «правило есть»:
+//
+//   ЗНАК НЕ ГРОМЧЕ РАЗДЕЛА. Единственный в продукте градиент и единственная
+//   ЦВЕТНАЯ тень жили именно тут. Тень цветом бренда под знаком бренда — это
+//   подсветка: она уводила глаз с выбранного пункта на логотип. Теперь заливка
+//   плоская и та же, что у выбранного пункта: один акцент, использованный
+//   дважды. Проверяем ОТСУТСТВИЕ градиента и цветной тени — иначе они вернутся
+//   молча, ровно так же, как появились.
+//
+//   ОБЕ СТРОКИ ЧИТАЕМЫ НА ГРУНТЕ. Это не вкусовщина: --ink-400 на белой
+//   колонке давал 4.65:1, а на --page-ground даёт 3.10:1 — имя клиники ушло
+//   под порог WCAG 1.4.3 в тот день, когда колонка стала прозрачной, и никто
+//   этого не увидел. Считаем обе строки и точку «·» против грунта, читая его
+//   тем же sidebarGround(), что и всё выше.
+//
+//   ИМЯ КЛИНИКИ ВПЕРЕДИ. В системе, которую клиника покупает, её имя не может
+//   стоять ниже имени поставщика. Порядок проверяется по РАЗМЕТКЕ, вес — по
+//   размеру, начертанию и светлоте: «выше по коду» без веса ничего не значит.
+//
+//   ДЛИННОЕ ИМЯ НЕ ОБРЕЗАЕТСЯ. Обрезать можно только то, что можно прочитать
+//   иначе, — а подсказки-title у этой строки нет (её мог бы поставить только
+//   admin.js). Значит перенос, а не многоточие, и обёртка, которой разрешено
+//   сжиматься, иначе длинное имя вынесет стрелку сворачивания за край.
+
+const HTML = fs.readFileSync(path.join(path.resolve(CSS_DIR, '..'), 'admin.html'), 'utf8')
+    .replace(/\r\n/g, '\n');
+/** Разметка шапки — от .sidebar-brand до начала списка пунктов. */
+const BRAND_HTML = (() => {
+    const i = HTML.indexOf('class="sidebar-brand"');
+    assert.ok(i > -1, 'в admin.html пропала шапка колонки меню (.sidebar-brand)');
+    const j = HTML.indexOf('id="sidebar-body"', i);
+    return HTML.slice(i, j > -1 ? j : i + 3000);
+})();
+const TYPE_STEPS = [12.5, 13.5, 15, 17, 20, 24, 30, 40];
+
+test('знак бренда стал плоским: ни градиента, ни цветной тени — и он виден на грунте', () => {
+    const mark = rule(MAIN, '.brand-mark');
+    const ground = sidebarGround();
+
+    assert.ok(!/gradient/i.test(mark.background),
+        `у знака снова градиент (${mark.background}) — единственный в продукте, всё остальное плоское`);
+    assert.ok(!mark['box-shadow'] || /^none/.test(mark['box-shadow']),
+        `у знака снова тень (${mark['box-shadow']}) — она была ЦВЕТНОЙ и читалась подсветкой логотипа`);
+
+    // Заливка — токен, а не свой оттенок: знак обязан ездить вместе с палитрой.
+    assert.match(mark.background, /^var\(--[a-z0-9-]+\)$/,
+        `заливка знака задана мимо токена: ${mark.background}`);
+    // И ровно та же, что у выбранного пункта меню: в колонке ОДИН акцент.
+    const active = rule(MAIN, '.nav-item.active,\n.nav-item.active:hover');
+    assert.strictEqual(hex(mark.background), hex(active.background),
+        'знак красится не тем же акцентом, что выбранный пункт — в колонке снова два разных ярких пятна');
+
+    // Форму видно на грунте: 3:1 — WCAG 1.4.11, знак сообщает не текстом.
+    const shape = ratio(mark.background, ground);
+    assert.ok(shape >= 3, `знак на грунте колонки: ${shape}:1 при норме 3:1 (WCAG 1.4.11)`);
+    // «+» внутри знака — тоже не текст, порог тот же.
+    const glyph = ratio(mark.color, mark.background);
+    assert.ok(glyph >= 3, `«+» на заливке знака: ${glyph}:1 при норме 3:1`);
+    console.log(`  знак: заливка/грунт ${shape}:1 · «+»/заливка ${glyph}:1`);
+});
+
+test('обе строки шапки читаемы НА ГРУНТЕ — там, где имя клиники и ушло под порог', () => {
+    const ground = sidebarGround();
+    const clinic = rule(MAIN, '.brand-sub');     // имя клиники (admin.js кладёт clinic.name)
+    const vendor = rule(MAIN, '.brand-name');    // «Easy·Med»
+    const dot = rule(MAIN, '.brand-name .dot');
+
+    const cl = ratio(clinic.color, ground);
+    assert.ok(cl >= 4.5, `имя клиники на грунте: ${cl}:1 при норме 4.5:1 (WCAG 1.4.3)`);
+    const vd = ratio(vendor.color, ground);
+    assert.ok(vd >= 4.5, `подпись поставщика на грунте: ${vd}:1 при норме 4.5:1`);
+    // Точка «·» — часть слова, а не украшение: порог у неё тот же, текстовый.
+    const dt = ratio(dot.color, ground);
+    assert.ok(dt >= 4.5, `точка «·» в «Easy·Med» на грунте: ${dt}:1 при норме 4.5:1`);
+
+    // Именно тот цвет, на котором всё сломалось: --ink-400 здесь больше не
+    // проходит, и тест обязан это ЗНАТЬ, а не верить на слово.
+    assert.ok(ratio('var(--ink-400)', ground) < 4.5,
+        'ink-400 на грунте вдруг проходит 4.5:1 — грунт посветлел, и пороги выше считались зря');
+    console.log(`  строки: клиника ${cl}:1 · поставщик ${vd}:1 · точка ${dt}:1`);
+});
+
+test('имя КЛИНИКИ стоит первым и весит не меньше имени поставщика', () => {
+    // 1) Порядок — по разметке, а не по CSS: переставить строки местами
+    //    визуально (order / column-reverse) значило бы соврать читалке экрана.
+    const iClinic = BRAND_HTML.indexOf('class="brand-sub"');
+    const iVendor = BRAND_HTML.indexOf('class="brand-name"');
+    assert.ok(iClinic > -1 && iVendor > -1, 'в шапке пропала одна из двух строк');
+    assert.ok(iClinic < iVendor,
+        'имя поставщика снова стоит выше имени клиники — в системе, которую клиника покупает');
+    const wrap = rule(MAIN, '.brand-text');
+    assert.ok(!wrap.order && !/column-reverse/.test(String(wrap['flex-direction'])),
+        'порядок строк переставлен стилями — разметка и экран разошлись');
+
+    const clinic = rule(MAIN, '.brand-sub');
+    const vendor = rule(MAIN, '.brand-name');
+    const ground = sidebarGround();
+
+    // 2) Вес: размер, начертание и контраст — все три в пользу клиники.
+    assert.ok(parseFloat(clinic['font-size']) > parseFloat(vendor['font-size']),
+        `имя клиники ${clinic['font-size']} не крупнее «Easy·Med» ${vendor['font-size']}`);
+    assert.ok(parseInt(clinic['font-weight'], 10) >= parseInt(vendor['font-weight'], 10),
+        'имя клиники набрано тоньше имени поставщика');
+    assert.ok(ratio(clinic.color, ground) > ratio(vendor.color, ground),
+        'имя клиники не темнее имени поставщика — «равный вес» получился только на словах');
+
+    // 3) И оно больше не набрано ПРОПИСНЫМИ вразрядку: так набирают рубрику,
+    //    а имя клиники — не рубрика.
+    assert.ok(!clinic['text-transform'] || clinic['text-transform'] === 'none',
+        `имя клиники снова прописными (${clinic['text-transform']}) — это набор рубрики, а не имени`);
+
+    // 4) Оба размера — из шкалы (TYPE_SCALE_V1 стережёт весь репозиторий, но
+    //    здесь это часть самого решения, а не побочность).
+    for (const [what, decl] of [['имя клиники', clinic], ['«Easy·Med»', vendor]]) {
+        const size = parseFloat(decl['font-size']);
+        assert.ok(TYPE_STEPS.includes(size), `${what}: ${size}px мимо шкалы ${TYPE_STEPS.join('/')}`);
+    }
+});
+
+test('длинное имя клиники переносится, а не обрезается, и не выносит стрелку за край', () => {
+    const clinic = rule(MAIN, '.brand-sub');
+
+    // Обрезать нечем: подсказки-title у строки нет и появиться она может
+    // только из admin.js. Значит многоточия быть не должно.
+    const line = BRAND_HTML.slice(BRAND_HTML.indexOf('class="brand-sub"'),
+        BRAND_HTML.indexOf('class="brand-name"'));
+    assert.ok(!/title=/.test(line),
+        'у строки имени клиники появился title — тогда обрезать можно, и это правило пора переписать');
+    for (const prop of ['text-overflow', '-webkit-line-clamp', 'line-clamp']) {
+        assert.ok(!clinic[prop], `имя клиники обрезается (${prop}: ${clinic[prop]}) без подсказки-title`);
+    }
+    assert.ok(!clinic['white-space'] || !/nowrap/.test(clinic['white-space']),
+        'имени клиники запрещён перенос — длинное имя поедет за край колонки');
+    // Одно длинное слово без пробелов обязано переноситься внутри себя.
+    assert.match(String(clinic['overflow-wrap']), /anywhere|break-word/,
+        'длинное слово в имени клиники ничем не переносится — оно распирает колонку');
+
+    // Обёртке двух строк разрешено сжиматься: без min-width: 0 флекс-элемент
+    // не уходит ниже своего содержимого, и стрелку сворачивания вынесло бы.
+    const text = rule(MAIN, '.brand-text');
+    assert.strictEqual(px(text['min-width']), 0,
+        'у обёртки строк нет min-width: 0 — длинное имя вытолкнет стрелку за край колонки');
+
+    // Пустая строка (клиника ещё не определилась) не занимает места.
+    const empty = ruleIf(MAIN, '.brand-sub:empty');
+    assert.ok(empty && empty.display === 'none',
+        'пустая строка имени клиники держит место — до загрузки клиники в шапке зияет пустая полоса');
+});
+
+test('на свёрнутой рейке остаётся ЗНАК — и он в неё помещается', () => {
+    // Стрелку на рейке прячут, значит знак — единственный способ раскрыть
+    // меню обратно. Спрятать заодно и его — сложить колонку навсегда.
+    const hidden = rule(MAIN, '.sidebar-collapsed .sidebar-brand > div:not(.brand-mark)');
+    assert.strictEqual(hidden.display, 'none', 'на рейке снова видны строки шапки — 68px на них не хватит');
+    assert.strictEqual(rule(MAIN, '.sidebar-collapsed .sidebar-toggle').display, 'none',
+        'на рейке снова стрелка — она там не помещается, и её работу делает сам знак');
+
+    // Ни одно правило свёрнутой колонки не имеет права спрятать сам знак.
+    for (const m of MAIN.matchAll(/\.sidebar-collapsed[^{}]*\{([^}]*)\}/g)) {
+        if (!/\.brand-mark/.test(m[0])) continue;
+        if (/:not\(\.brand-mark\)/.test(m[0])) continue;
+        assert.ok(!/display\s*:\s*none/.test(m[1]),
+            'правило свёрнутой колонки прячет знак: ' + m[0].split('{')[0].trim());
+    }
+
+    const mark = rule(MAIN, '.brand-mark');
+    const railW = px(rule(MAIN, '.sidebar-collapsed')['--sidebar-w']);
+    const w = px(mark.width);
+    assert.ok(w > 0 && w <= railW - 16, `знак ${w}px на рейке ${railW}px — упирается в края`);
+    // И он не съёживается, когда рядом длинное имя.
+    assert.match(String(mark.flex), /^0 0 auto$/, 'знак сжимаем — длинное имя клиники его расплющит');
+});
+
+test('стрелка сворачивания осталась кнопкой и остаётся видимой с клавиатуры', () => {
+    // Это <button> в разметке, а не div с обработчиком: Tab и Enter приходят
+    // от браузера, а не от нашего кода.
+    assert.match(BRAND_HTML, /<button[^>]*id="sidebar-toggle"/,
+        'стрелка сворачивания перестала быть <button> — с клавиатуры до неё не добраться');
+    assert.match(BRAND_HTML, /id="sidebar-toggle"[^>]*aria-label="/,
+        'у стрелки нет подписи для читалки — иконка молчит');
+    // Знак тоже управляется с клавиатуры: на рейке он единственный орган
+    // управления, оставшийся в шапке.
+    assert.match(BRAND_HTML, /id="sidebar-logo"[^>]*tabindex="0"/,
+        'до знака не добраться с клавиатуры — на свёрнутой рейке меню было бы не раскрыть');
+
+    // Контур фокуса общий (:focus-visible ниже по файлу) и виден на грунте.
+    const focus = rule(MAIN, '.btn:focus-visible,\n.nav-item:focus-visible,\na:focus-visible,\nbutton:focus-visible,\ninput:focus-visible,\nselect:focus-visible,\ntextarea:focus-visible,\n[role="button"]:focus-visible');
+    const ring = focus.outline.match(/var\(--[a-z0-9-]+\)|#[0-9a-fA-F]{3,8}/);
+    assert.ok(ring, `не разобрать контур фокуса: ${focus.outline}`);
+    const r = ratio(ring[0], sidebarGround());
+    assert.ok(r >= 3, `контур фокуса на грунте колонки: ${r}:1 при норме 3:1`);
+});
+
+test('шапку от меню отделяет воздух, а не линейка — и его больше, чем между пунктами', () => {
+    const brand = rule(MAIN, '.sidebar-brand');
+    const pads = brand.padding.split(/\s+/).map(px);
+    const bottom = pads.length === 4 ? pads[2] : pads[0];
+    const gap = parseFloat(rule(MAIN, '.sidebar-body .nav').gap);
+    assert.ok(bottom >= gap * 4,
+        `под шапкой ${bottom}px при зазоре между пунктами ${gap}px — шапка читается первым пунктом меню`);
+    // Линейки по-прежнему нет (её проверяет и тест раздела 3 — здесь названо
+    // вслух, потому что воздух её ЗАМЕНЯЕТ, а не дополняет).
+    assert.ok(!brand['border-bottom'], 'под шапкой снова линейка — воздух её не заменил, а получил в довесок');
+});

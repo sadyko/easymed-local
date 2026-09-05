@@ -33,9 +33,16 @@
                         <path d="M12 3v18M3 12h18"/>
                     </svg>
                 </div>
-                <div>
+                <!-- BRAND_PLATE_V1 (2026-09-05) — порядок строк перевёрнут: имя
+                     КЛИНИКИ первым, имя поставщика подписью под ним (тот же
+                     маркер в admin.css объясняет почему). .brand-sub оставлена
+                     ПУСТОЙ: admin.js кладёт в неё clinic.name, когда определит
+                     клинику, а прежняя заглушка «HIS» до этого момента стояла
+                     бы на месте имени клиники — и осталась бы там навсегда,
+                     если бы клиника не определилась. -->
+                <div class="brand-text">
+                    <div class="brand-sub"></div>
                     <div class="brand-name">Easy<span class="dot">·</span>Med</div>
-                    <div class="brand-sub">HIS</div>
                 </div>
                 <button id="sidebar-toggle" class="sidebar-toggle" type="button" title="Свернуть меню" aria-label="Свернуть меню">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
