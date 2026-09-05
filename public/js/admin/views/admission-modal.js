@@ -64,6 +64,11 @@ import { DISCHARGE_OUTCOMES, outcomeTitle } from './discharge.js';
 // раз здесь: «Стол не назначен» в карте и «Стол не назначен» на кухне обязаны
 // быть одной строкой, иначе они разъедутся в переводе, а потом и по смыслу.
 import { dietTitle, mealsTitle, MEAL_FREQUENCIES } from './kitchen-sheet.js';
+// CASE_DOCS_V1 — ЧЕК-ЛИСТ ДОКУМЕНТОВ ИСТОРИИ БОЛЕЗНИ живёт отдельным модулем и
+// зовётся отсюда, а не наоборот: окна документов (осмотр, эпикриз, «прочий
+// документ») — здесь, список и сборка — там. Обратный импорт замкнул бы две
+// половины одного экрана в круг.
+import { caseDocsPanel, caseDocTitle, assembleCaseFile } from './case-docs.js?v=case1';
 
 const ADMISSION_TYPES = [['planned', 'Плановая'], ['emergency', 'Экстренная']];
 const STAY_MODES = [['round', 'Круглосуточно'], ['day', 'Дневной стационар']];
@@ -391,7 +396,7 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
     if (!admissionId) { toast(tr('Госпитализация не найдена.'), 'fail'); return; }
     const body = h('div', { style: { display: 'grid', gap: '12px' } },
         h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Загрузка…')));
-    const { close } = modal(tr('Госпитализация'), 'Bed', [body], null, null, { width: 560 });
+    const { close } = modal(tr('Госпитализация'), 'Bed', [body], null, null, { width: 640 });
 
     const kv = (k, v) => h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '4px 0', fontSize: '13.5px' } },
         h('span', { class: 'muted' }, k), h('span', { style: { fontWeight: 600, textAlign: 'right' } }, v || '—'));
@@ -481,6 +486,32 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
         // его не видит — READ_ROLES в rpc/diet.js). Отказ здесь не ломает
         // карточку и не кричит: блока просто нет.
         paintDiet((dietR && dietR.data) || null);
+
+        // CASE_DOCS_V1 — ЧЕК-ЛИСТ ДОКУМЕНТОВ ИСТОРИИ БОЛЕЗНИ стоит ЗДЕСЬ, между
+        // состоянием пациента и шагами маршрута, и это решение о месте.
+        // «Каких бумаг не хватает» — вопрос того же человека и того же взгляда,
+        // что «где пациент и кто его лечит»: врач открывает карточку своего
+        // пациента и должен увидеть комплект, не уходя никуда. Отдельный экран
+        // «Документы» означал бы, что чек-лист смотрят те, кто про него помнит,
+        // — то есть никто.
+        //
+        // Кнопки чек-лист открывает ПОВЕРХ карточки и карточку не закрывает
+        // (в отличие от шагов маршрута ниже): написав документ, врач возвращается
+        // к списку — там ещё десять строк, и закрытая карточка заставила бы
+        // открывать её заново после каждой бумаги.
+        let casePanel = null;
+        casePanel = caseDocsPanel({
+            admissionId,
+            onDoc: (kind, docMode, reviewId) => openAdmissionReviewModal({
+                admission: a, kind, mode: docMode, reviewId,
+                onDone: async () => {
+                    if (casePanel) await casePanel.reload();
+                    if (onChange) await onChange();
+                },
+            }),
+            onAssemble: () => assembleCaseFile(admissionId),
+        });
+        body.appendChild(casePanel.el);
 
         const actions = h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } });
         if (can.admitted) {
@@ -756,14 +787,44 @@ export function openAdmissionDietModal({ admission, current = null, onDone } = {
 // discharge), а окно знало два и подписывало выписной эпикриз «Записью
 // обхода» — то есть врач, посланный отказом писать эпикриз, открывал бы
 // документ с чужим названием и не понимал, туда ли он попал.
+//
+// CASE_DOCS_V1 — РОДОВ СТАЛО ДВЕНАДЦАТЬ (миграция 104), и подписывать их
+// тремя названиями значило бы повторить ту же ошибку в двенадцатикратном
+// размере: врач, открывший «Протокол операции», увидел бы «Запись обхода».
+// Поэтому заголовок берётся из ОДНОГО словаря названий (case-docs.js,
+// CASE_DOC_TITLE) — того же, которым подписан чек-лист и собранная история
+// болезни. Три знакомых названия сохранены дословно: «Первичный осмотр» и
+// «Запись обхода» стоят в этом окне с Задачи 3, и переименовывать их заодно
+// было бы правкой не по делу.
 const REVIEW_TITLE = { primary: 'Первичный осмотр', round: 'Запись обхода', discharge: 'Выписной эпикриз' };
 const REVIEW_SUBMIT = { primary: 'Опубликовать осмотр', round: 'Опубликовать запись', discharge: 'Опубликовать эпикриз' };
 
-export function openAdmissionReviewModal({ admission, kind = 'primary', onDone } = {}) {
+function reviewTitle(kind, mode) {
+    const name = REVIEW_TITLE[kind] ? tr(REVIEW_TITLE[kind]) : caseDocTitle(kind);
+    if (mode === 'correct') return trf('Исправление · {name}', { name });
+    if (mode === 'view') return name;
+    return name;
+}
+
+/**
+ * Окно документа истории болезни.
+ *
+ * @param {'edit'|'correct'|'view'} mode
+ *   'edit'    — писать или дописывать (черновик подхватывается);
+ *   'correct' — ИСПРАВЛЕНИЕ опубликованного: текст берётся из действующей
+ *               редакции, а публикация создаёт НОВУЮ запись и закрывает
+ *               прежнюю (`supersedes`). Опубликованное не переписывают —
+ *               сервер этого и не позволит (миграция 095);
+ *   'view'    — чтение конкретной редакции, включая уже исправленную: ради
+ *               неё список редакций и существует.
+ */
+export function openAdmissionReviewModal({ admission, kind = 'primary', mode = 'edit', reviewId = null, onDone } = {}) {
     if (!admission || !admission.id) { toast(tr('Госпитализация не найдена.'), 'fail'); return; }
     const p = admission.patients || {};
     const isPrimary = kind === 'primary';
     const isDischarge = kind === 'discharge';
+    const isCorrection = mode === 'correct';
+    const isView = mode === 'view';
 
     const complaints = h('textarea', { rows: '2', placeholder: tr('Что беспокоит пациента') });
     const objective  = h('textarea', { rows: '3', placeholder: tr('Состояние, осмотр по системам, витальные показатели') });
@@ -771,26 +832,50 @@ export function openAdmissionReviewModal({ admission, kind = 'primary', onDone }
     const plan       = h('textarea', { rows: '3', placeholder: tr('Обследование, лечение, режим, стол') });
     const body       = h('textarea', { rows: '2', placeholder: tr('Анамнез, сопутствующее, обоснование') });
 
-    // Незаконченный черновик этого же осмотра подхватывается, а не заводится
-    // заново: иначе у одной госпитализации накапливались бы обрывки, и никто не
-    // знал бы, какой из них дописывать.
-    let reviewId = null;
+    // ЧТО ПОКАЗАТЬ В ПОЛЯХ — зависит от того, зачем окно открыли.
+    //
+    //   'edit'    незаконченный черновик ЭТОГО рода подхватывается, а не
+    //             заводится заново: иначе у одной госпитализации накапливались
+    //             бы обрывки, и никто не знал бы, какой из них дописывать;
+    //   'correct' текст берётся из ДЕЙСТВУЮЩЕЙ редакции и публикуется НОВОЙ
+    //             записью (`supersedes`) — переписать опубликованное сервер не
+    //             даст, и это правило миграции 095, а не придирка окна;
+    //   'view'    показывается ровно та редакция, которую попросили, — в том
+    //             числе давно исправленная: ради неё список редакций и есть.
+    let draftId = mode === 'edit' ? reviewId : null;
+    let supersedes = null;
+    const fill = (r) => {
+        complaints.value = r.complaints || '';
+        objective.value = r.objective || '';
+        diagnosis.value = r.diagnosis || '';
+        plan.value = r.plan || '';
+        body.value = r.body || '';
+    };
     (async () => {
         const { data } = await supabase.rpc('admission_reviews_list', { admission_id: admission.id });
-        const drafts = ((data && data.reviews) || []).filter((r) => r.kind === kind && !r.published_at);
-        const draft = drafts.length ? drafts[drafts.length - 1] : null;
-        if (!draft) return;
-        reviewId = draft.id;
-        complaints.value = draft.complaints || '';
-        objective.value = draft.objective || '';
-        diagnosis.value = draft.diagnosis || '';
-        plan.value = draft.plan || '';
-        body.value = draft.body || '';
+        const all = (data && data.reviews) || [];
+        let src = null;
+        if (isCorrection || isView) {
+            src = (reviewId ? all.find((r) => r.id === reviewId) : null)
+                || all.filter((r) => r.kind === kind && r.published_at && !r.superseded_by).pop()
+                || null;
+            if (src && isCorrection) supersedes = src.id;
+        } else {
+            const drafts = all.filter((r) => r.kind === kind && !r.published_at);
+            src = (draftId ? all.find((r) => r.id === draftId) : null)
+                || (drafts.length ? drafts[drafts.length - 1] : null);
+            draftId = src ? src.id : null;
+        }
+        if (src) fill(src);
+        if (isView) for (const f of [complaints, objective, diagnosis, plan, body]) f.setAttribute('readonly', '');
     })();
 
     const payload = (publish) => ({
         admission_id: admission.id,
-        review_id: reviewId,
+        // Исправление НИКОГДА не правит прежнюю строку: review_id пуст, а
+        // прежняя запись называется в `supersedes` и закрывается ссылкой.
+        review_id: isCorrection ? null : draftId,
+        supersedes,
         kind,
         complaints: complaints.value.trim(),
         objective: objective.value.trim(),
@@ -800,7 +885,7 @@ export function openAdmissionReviewModal({ admission, kind = 'primary', onDone }
         publish,
     });
 
-    modal(tr(REVIEW_TITLE[kind] || REVIEW_TITLE.round), isDischarge ? 'Doc' : 'Stethoscope', [
+    modal(reviewTitle(kind, mode), isDischarge || !REVIEW_TITLE[kind] ? 'Doc' : 'Stethoscope', [
         patientAnchor(p.full_name || '', [p.mrn, admission.department, admission.admission_no].filter(Boolean).join(' · ')),
         field(tr('Жалобы'), complaints),
         field(tr('Объективно'), objective),
@@ -818,7 +903,15 @@ export function openAdmissionReviewModal({ admission, kind = 'primary', onDone }
             ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 tr('Заявку на выписку принимают только по ОПУБЛИКОВАННОМУ эпикризу: черновик — не документ.'))
             : null,
-    ], tr(REVIEW_SUBMIT[kind] || REVIEW_SUBMIT.round), async () => {
+        isCorrection
+            ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                tr('Исправление публикуется НОВОЙ записью: прежняя редакция остаётся в истории болезни целиком.'))
+            : null,
+        isView
+            ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                tr('Редакция открыта на чтение. Исправление вносят из чек-листа документов.'))
+            : null,
+    ], isView ? null : tr(REVIEW_SUBMIT[kind] || 'Опубликовать документ'), async () => {
         if (isPrimary && !diagnosis.value.trim()) { toast(tr('Укажите диагноз.'), 'fail'); return false; }
         const { data, error } = await supabase.rpc('admission_review_save', payload(true));
         if (error) { toast((error.message) || tr('Не удалось сохранить осмотр.'), 'fail'); return false; }
@@ -834,11 +927,13 @@ export function openAdmissionReviewModal({ admission, kind = 'primary', onDone }
         return true;
     }, {
         width: 600,
-        secondaryLabel: tr('Сохранить черновик'),
-        onSecondary: async () => {
+        // Черновика у исправления нет: пока прежняя редакция действует, а новая
+        // ещё не опубликована, у документа было бы два «настоящих» вида.
+        secondaryLabel: isView || isCorrection ? null : tr('Сохранить черновик'),
+        onSecondary: isView || isCorrection ? null : async () => {
             const { data, error } = await supabase.rpc('admission_review_save', payload(false));
             if (error) { toast((error.message) || tr('Не удалось сохранить черновик.'), 'fail'); return; }
-            if (data && data.review) reviewId = data.review.id;
+            if (data && data.review) draftId = data.review.id;
             toast(tr('Черновик осмотра сохранён.'), 'ok');
         },
     });

@@ -10,7 +10,8 @@ import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport,
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit,
   admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue } from './inpatient.js';   // ADMISSION_ORDER_V1 / TWO_STEP_DISCHARGE_V1
 import { admissionFlowState, inpatientCapabilities } from './inpatient-flow.js';   // INPATIENT_FLOW_V1
-import { admissionReviewSave, admissionSetAttending, admissionChangeAttending, admissionReviewsList, admissionAttendingCandidates } from './inpatient-reviews.js';   // INPATIENT_REVIEW_V1
+import { admissionReviewSave, admissionSetAttending, admissionChangeAttending, admissionReviewsList, admissionAttendingCandidates,
+  admissionCaseDocs, admissionCaseFile } from './inpatient-reviews.js';   // INPATIENT_REVIEW_V1 / CASE_DOCS_V1
 import {
   treatmentOrderCreate, treatmentOrderCancel, treatmentOrdersList,
   treatmentAdminMark, treatmentAdminUnmark, treatmentTasksDue,
@@ -257,6 +258,18 @@ export const RPC = {
   // «Назначить лечащего врача» просило у users колонку, которой реестр не
   // отдаёт, и получало отказ всему запросу).
   admission_attending_candidates: (db, args, user) => admissionAttendingCandidates(db, args, user),
+  // CASE_DOCS_V1 — ЧЕК-ЛИСТ ДОКУМЕНТОВ ИСТОРИИ БОЛЕЗНИ и СБОРКА истории в один
+  // файл (мокап владельца 040926/doc-checklist-mockup.html). Оба ТОЛЬКО ЧИТАЮТ
+  // и стоят в READ_ONLY_RPCS (control/gate.js): история болезни — документ, а
+  // не услуга, и клиника с просроченной лицензией обязана её видеть и собрать.
+  //
+  // Сроки документов ВЫЧИСЛЯЮТСЯ от размещения на койке, а не хранятся:
+  // хранимая копия срока разошлась бы с датой госпитализации в первый же раз,
+  // когда дату поправят (ADMISSION_DATE_EDIT_V1). Второй таблицы документов
+  // здесь нет и не будет: чек-лист читает `admission_reviews` (095 + 104) —
+  // ту же строку, которую пишет admission_review_save выше.
+  admission_case_docs:            (db, args, user) => admissionCaseDocs(db, args, user),
+  admission_case_file:            (db, args, user) => admissionCaseFile(db, args, user),
   // Что ЭТА роль вправе делать в стационаре вообще. Один ответ на экран-очередь
   // вместо запроса по каждой строке: право на шаг зависит от роли, а не от
   // пациента, но считать его в браузере нельзя — матрица живёт на сервере.
