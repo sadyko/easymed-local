@@ -425,14 +425,20 @@ async function paint() {
     // ---------------- КАНБАН ----------------
     function kanban() {
         const rows = filtered();
-        // CRM_KANBAN_PAGE_V1 — alignItems убран НАМЕРЕННО: значение grid по
-        // умолчанию (stretch) равняет колонки по самой высокой, и пустой статус
-        // перестаёт быть огрызком рядом с длинным соседом. Доска
-        // прокручивается страницей — статусы кончаются на одной линии.
-        const board = h('div', { 'data-crm-board': '', style: { display: 'grid', gridTemplateColumns: 'repeat(' + STATUSES.length + ', minmax(215px, 1fr))', gap: '12px', overflowX: 'auto', paddingBottom: '6px' } });
+        // CRM_BOARD_WIDTH_V1 — вся геометрия доски (вилка ширины колонки,
+        // зазор, прокрутка вбок, выравнивание колонок по высоте) живёт в
+        // .crm-board в admin-views.css, ВМЕСТЕ с расчётом, из которого взяты
+        // 258 и 336px: ширина колонки выведена из длины настоящих узбекских ФИО,
+        // и держать число в одном файле, а его обоснование в другом — значит
+        // однажды поменять первое, не прочитав второго.
+        // Числу колонок в разметке делать нечего: grid-auto-flow создаёт по
+        // треку на ступень, сколько бы их ни настроили в crm_stages.
+        const board = h('div', { 'data-crm-board': '', class: 'crm-board' });
         for (const [colIndex, [key, label, kind]] of STATUSES.entries()) {
             const colRows = rows.filter(r => r.status === key);
-            const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', minHeight: '60px', padding: '4px' } });
+            // Поля списка входят в обвязку, из которой считается внутренняя
+            // ширина карточки, — поэтому они в .crm-col-list рядом с расчётом.
+            const list = h('div', { class: 'crm-col-list' });
 
             // Показываем первые KANBAN_PAGE, остальные — по кнопке. Дело не
             // только в длине страницы: каждая карточка вешает свои обработчики
@@ -461,7 +467,6 @@ async function paint() {
             // рамки теперь в .crm-col (admin-views.css), а не инлайном.
             const col = h('div', {
                 class: ('card crm-col ' + pastelAt(colIndex)).trim(), 'data-col': key,
-                style: { padding: '10px 12px' },
             },
                 h('div', { class: 'row', style: { gap: '8px', marginBottom: '8px' } },
                     Tag(label, { kind, dot: true }),
