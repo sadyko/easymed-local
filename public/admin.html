@@ -24,9 +24,23 @@
     <link rel="stylesheet" href="css/admin-views.css?v=notabs1">
 </head>
 <body class="admin">
+    <!-- SHELL_REGIONS_V1 (2026-09-05, владелец: «can we make top section and
+         the left panel separate? with constant design across all the
+         modules») — ДВЕ ОБЛАСТИ, И ЭТО ВИДНО В РАЗМЕТКЕ.
+
+         data-region — не украшение: это единственное место, где «левая
+         колонка» и «область содержимого» названы вслух, и тест оболочки
+         проверяет по ним ИМЕННО СТРУКТУРУ (верхняя строка лежит внутри
+         области содержимого и НЕ внутри колонки), а не то, как это
+         выглядит. Пока верхняя строка была визуально прижата к знаку
+         клиники, спорить было не о чем: разметка и картинка расходились.
+
+         Геометрия обеих областей — в admin.css (SHELL_REGIONS_V1): зазор
+         грунта между ними, свой край и свой верхний левый угол у области
+         содержимого. -->
     <div class="app">
-        <!-- ============ SIDEBAR ============ -->
-        <aside class="sidebar">
+        <!-- ============ LEFT PANEL — одна колонка во всю высоту ============ -->
+        <aside class="sidebar" data-region="rail">
             <div class="sidebar-brand">
                 <div class="brand-mark" id="sidebar-logo" role="button" tabindex="0" title="Свернуть / открыть меню" aria-label="Свернуть / открыть меню">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -53,8 +67,8 @@
             <nav id="sidebar-body" class="sidebar-body"></nav>
         </aside>
 
-        <!-- ============ MAIN ============ -->
-        <main class="main">
+        <!-- ============ CONTENT REGION — своя верхняя строка + экран ============ -->
+        <main class="main" data-region="content">
             <!-- NO_TABS_APPBAR_V1 (2026-09-05, owner: «remove this shitty tabs.
                  completely») — the browser-style tab strip is gone. What is left
                  is a bar of pure CHROME: the section title on the left (the tab
@@ -62,7 +76,7 @@
                  controls on the right, which all kept their ids so their owners
                  (notifications.js → #topbar-bell, branch-picker.js →
                  #branch-picker, admin.js → the rest) are untouched. -->
-            <header id="topbar" class="appbar">
+            <header id="topbar" class="appbar" data-region-part="head">
                 <h1 id="section-title" class="appbar-title">—</h1>
                 <div class="appbar-controls">
                     <!-- APP_RELOAD_BTN_V1 — reload the app (handy in standalone/app mode where the browser reload is hidden) -->
@@ -91,7 +105,7 @@
             </header>
 
             <!-- View root — every page renders here via renderView() -->
-            <div id="view-root" style="padding: 20px 24px;">
+            <div id="view-root" class="view-root">
                 <div class="empty" style="padding: 60px;">Loading…</div>
             </div>
         </main>

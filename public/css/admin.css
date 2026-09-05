@@ -198,6 +198,32 @@
     --sidebar-w: 248px;
     --topbar-h: 56px;
 
+    /* SHELL_REGIONS_V1 (2026-09-05, владелец: «can we make top section and the
+       left panel separate? with constant design across all the modules»)
+
+       ДВЕ ОБЛАСТИ, А НЕ ОДНА ПОЛОСА. Слева — КОЛОНКА: знак клиники наверху,
+       меню под ним, во всю высоту окна. Справа — ОБЛАСТЬ СОДЕРЖИМОГО: она
+       начинается со своей верхней строки (имя раздела слева, органы
+       управления справа) и продолжается экраном под ней. До этого обе области
+       упирались друг в друга без единого признака границы, и весь верх
+       читался ОДНОЙ полосой, которая на середине меняет цвет.
+
+       --shell-gap    зазор грунта между колонкой и областью содержимого — и
+                      вокруг области с трёх сторон. Границу держит в первую
+                      очередь ВОЗДУХ, а не линия: линия здесь только
+                      подтверждает край, которому и без неё есть куда лечь.
+       --content-edge волосяной край области. ink-200, а НЕ --window-line
+                      (ink-300): это граница ОБЛАСТИ, и она обязана быть тише
+                      рамки рабочего окна внутри неё — иначе получается окно
+                      в окне, ровно то, что WORKING_WINDOW_V1 запрещает.
+       --content-pad  горизонтальное поле области: ОДНО число на верхнюю
+                      строку и на экран под ней, иначе имя раздела встанет не
+                      над первой карточкой, а «примерно там же», и каждый
+                      экран разъедется по-своему. */
+    --shell-gap: 12px;
+    --content-edge: var(--ink-200);
+    --content-pad: 24px;
+
     /* SIDEBAR_SEAMLESS_V1 (2026-09-05) — отступ пункта меню от краёв колонки.
        ОДНО число, потому что от него зависят три вещи, которые раньше жили
        порознь и потому разъезжались: поля самой «таблетки» (.nav-item),
@@ -293,7 +319,11 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
    каркас шире экрана — вместе с шапкой (карточка пользователя обрезалась) и
    горизонтальной прокруткой всей страницы. С minmax(0,…) колонка сжимается до
    экрана, а широкие блоки скроллятся внутри себя, как и задумано. */
-.app { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); min-height: 100vh; }
+/* SHELL_REGIONS_V1 — column-gap и есть та самая «separate»: между колонкой и
+   областью содержимого лежит полоса голого грунта, и она видна на любой
+   ширине окна и в любом состоянии рейки (свёрнутая колонка меняет только
+   --sidebar-w, зазор от этого не зависит). */
+.app { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); column-gap: var(--shell-gap); min-height: 100vh; }
 
 /* Sidebar */
 /* SIDEBAR_SEAMLESS_V1 (2026-09-05, owner: «make a blank left panel, but
@@ -358,9 +388,17 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
    меню. Линейки снизу нет — см. SIDEBAR_SEAMLESS_V1 выше; шапку от меню
    отделяет теперь ВОЗДУХ (24px снизу вместо 18px), и его должно быть заметно
    больше, чем между самими пунктами, — иначе шапка читается первым пунктом. */
+/* SHELL_REGIONS_V1 — верхнее поле 22px, а не 18px: знак клиники встаёт на ту
+   же высоту, что и имя раздела в верхней строке (12px зазора + 1px края +
+   половина полосы 56px = 41px от верха окна; здесь 22px + половина строки
+   имени = те же 41px). Выравнивание ЧЕРЕЗ видимую границу читается как
+   порядок; раньше те же две вещи стояли в одной полосе и потому читались
+   одним объектом. Нижнее поле не трогаем — им шапка отделена от меню
+   (contrast-badge-hatch: воздуха под шапкой вчетверо больше, чем между
+   пунктами). */
 .sidebar-brand {
     display: flex; align-items: center; gap: 11px;
-    padding: 18px 20px 24px;
+    padding: 22px 20px 24px;
 }
 .brand-mark {
     width: 30px; height: 30px;
@@ -960,7 +998,29 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
    No fake-3D gradients and no raw hexes this time: it is a white bar on the
    same hairline as the sidebar, and every colour is a token.
    ============================================================ */
-.main { display: flex; flex-direction: column; min-width: 0; }
+/* SHELL_REGIONS_V1 — ОБЛАСТЬ СОДЕРЖИМОГО как отдельный предмет.
+   Три вещи делают её отдельной, и ни одна не перекрашивает продукт:
+     margin       — зазор грунта слева (от колонки), сверху, справа и снизу;
+     border       — волосяной край --content-edge, чтобы у области был
+                    ВИДИМЫЙ левый край сверху донизу, а не только пустота;
+     radius       — верхний левый угол: именно он и есть то место, на которое
+                    жаловался владелец, и теперь у него есть форма.
+   Фон — ТОТ ЖЕ --page-ground, что и у страницы: белым эту область делать
+   нельзя (белое достаётся только рабочему окну .card, WORKING_WINDOW_V1), а
+   любой другой оттенок сдвинул бы все посчитанные контрасты карточек внутри.
+   Область отделена ГЕОМЕТРИЕЙ, а не краской.
+   Ни overflow, ни transform, ни filter здесь быть не должно: overflow сделал
+   бы область собственным контейнером прокрутки и липкая верхняя строка
+   перестала бы липнуть, а transform/filter сломали бы position: fixed у
+   модальных окон, которые рисуются внутри. */
+.main {
+    display: flex; flex-direction: column; min-width: 0;
+    margin: var(--shell-gap) var(--shell-gap) var(--shell-gap) 0;
+    min-height: calc(100vh - var(--shell-gap) * 2);
+    background: var(--page-ground);
+    border: 1px solid var(--content-edge);
+    border-radius: var(--r-lg);
+}
 /* WORKING_WINDOW_V1 — верхняя панель это ХРОМ, а не поверхность.
    Была белой полосой с линейкой снизу — тем же швом, что убрали слева у
    колонки меню (SIDEBAR_SEAMLESS_V1), и вместе с белыми карточками она и
@@ -1003,6 +1063,46 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 }
 .appbar-reload:hover { background: var(--warn-500); color: #fff; }
 .topbar-bell { position: relative; display: inline-flex; align-items: center; }
+
+/* SHELL_REGIONS_V1 — ТА ЖЕ верхняя строка, но правилом, которое нельзя
+   перебить снизу.
+
+   ПОЧЕМУ ОНА ВООБЩЕ ЕСТЬ. Правило .appbar выше проигрывало НА ЭКРАНЕ, хотя
+   в файле выглядело верным: admin-views.css подключается ПОСЛЕ admin.css и
+   держит собственный «.appbar» — белый фон, линейка снизу, жёсткая высота —
+   остаток верхнего меню другой оболочки (.app-topnav, которой в этом
+   приложении нет). Специфичность у обоих 0-1-0, значит выигрывал ПОЗДНИЙ, и
+   верхняя строка всё это время оставалась БЕЛОЙ ПОЛОСОЙ с линейкой: то самое
+   «сплошной лист», которое WORKING_WINDOW_V1 убрал в своём файле и не смог
+   убрать на экране, и та самая полоса со скриншота владельца, которая
+   начинается вплотную к знаку клиники и меняет цвет на середине.
+
+   ПОЧЕМУ ИМЕННО ТАК. Селектор с id даёт 1-3-0 — его не перебьёт ни один
+   класс ни из одного следующего файла, сколько бы их ни подключили. Правило
+   .appbar выше НЕ удалено: его читают тесты контраста, и оно остаётся
+   описанием того, чем строка должна быть; это правило — гарантия, что она
+   такой и станет.
+
+   ЛИПКОСТЬ. position: sticky + непрозрачный фон обязательны вместе:
+   прозрачная строка пропускала бы под собой уезжающие карточки прямо сквозь
+   имя раздела. top: 0, а не top: var(--shell-gap) — иначе в зазоре над
+   строкой была бы видна уезжающая полоска содержимого. */
+.app .main > #topbar.appbar {
+    min-height: var(--topbar-h);
+    height: auto;
+    display: flex; align-items: center; gap: 16px;
+    padding: 0 var(--content-pad);
+    background: var(--page-ground);
+    border: 0;
+    border-radius: calc(var(--r-lg) - 1px) calc(var(--r-lg) - 1px) 0 0;
+    position: sticky; top: 0; z-index: 30;
+}
+
+/* SHELL_REGIONS_V1 — экран живёт ПОД верхней строкой, в той же области и с
+   тем же горизонтальным полем. Было встроенным style= в admin.html: поле
+   экрана и поле верхней строки стояли в разных файлах и разъехались бы на
+   первой же правке. */
+.view-root { padding: 20px var(--content-pad) 28px; }
 
 /* Each mounted view pane (see VIEW_CACHE_MAX in admin.js). Cached-but-hidden
    panes are display:none'd from script; nothing else here to say. */
@@ -2704,6 +2804,10 @@ textarea:focus-visible,
 @media (max-width: 1024px) {
     .app { grid-template-columns: 1fr; }
     .sidebar { display: none; }
+    /* SHELL_REGIONS_V1 — колонки на узком экране нет, значит зазор слева
+       больше некому держать: область содержимого получает его сама, иначе
+       она упрётся в край окна одной стороной и отступит другой. */
+    .main { margin-left: var(--shell-gap); }
     .vd-summary { grid-template-columns: 1fr; }
 }
 
