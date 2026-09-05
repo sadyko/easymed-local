@@ -151,3 +151,65 @@ test('удалённый филиал не получает свой номер 
   const c = await (await makeBranch(base, { install_token: token })).json();
   assert.equal(c.clinic_id, 'c-main-b3', 'номер -b2 из могильника не выдаётся снова');
 });
+
+// Задача 2c — nextBranchId должен считать от ИСТОРИИ, а не от числа живых
+// детей. У сестринской функции nextClinicId (routes/admin.js) стартовая точка
+// уже берётся как MAX по `clinics UNION deleted_clinics`; nextBranchId же до
+// сих пор стартовал от COUNT(*) живых детей, и это два разных правила для
+// одной и той же задачи.
+//
+// Этот тест доказывает нужное поведение — номер продолжается от истории, а
+// не начинается заново, — но сам по себе он НЕ падает на старом коде: если
+// живых детей 0, счётчик стартует с n=1, проба находит -b1..-b3 в могильнике,
+// перебирает их (это дёшево — три попытки из пятидесяти) и всё равно
+// доходит до -b4. Он нужен как спецификация желаемого результата и как
+// регрессионный барьер, а не как доказательство бага.
+test('номер филиала продолжается от истории, даже если живых детей не осталось', async (t) => {
+  const { db, base } = await harness(t);
+  const token = enrol(db);
+  const a = await (await makeBranch(base, { install_token: token })).json();
+  const b = await (await makeBranch(base, { install_token: token })).json();
+  const c = await (await makeBranch(base, { install_token: token })).json();
+  assert.equal(a.clinic_id, 'c-main-b1');
+  assert.equal(b.clinic_id, 'c-main-b2');
+  assert.equal(c.clinic_id, 'c-main-b3');
+
+  // Удаляем ВСЕ три филиала: у c-main теперь ноль живых детей, но в истории —
+  // три занятых номера.
+  for (const branch of [a, b, c]) {
+    db.prepare('DELETE FROM clinics WHERE clinic_id = ?').run(branch.clinic_id);
+    db.prepare('INSERT INTO deleted_clinics (clinic_id, name) VALUES (?, ?)').run(branch.clinic_id, branch.name);
+  }
+  assert.equal(
+    db.prepare('SELECT COUNT(*) n FROM clinics WHERE parent_clinic_id = ?').get('c-main').n,
+    0,
+    'живых детей действительно не осталось'
+  );
+
+  const d = await (await makeBranch(base, { install_token: token })).json();
+  assert.equal(d.clinic_id, 'c-main-b4', 'нумерация продолжается от истории, а не начинается с -b1 заново');
+});
+
+// Вот доказательство настоящего бага, который правка выше устраняет. Живых
+// детей у родителя ноль, поэтому счёт-от-детей стартует с n=1 — а первые 55
+// номеров все похоронены в могильнике. Проба на 50 попыток проходит -b1..-b50,
+// каждый раз натыкается на могильник, и ни разу не находит свободного номера:
+// nextBranchId бросает исключение, Express превращает это в голый 500, и сеть
+// вообще не может завести новый филиал — притом что -b56 и выше свободны.
+// Это ровно тот случай из задачи: 50+ похороненных номеров под одним
+// родителем исчерпывают проверку. Тут достаточно вставить могильные записи
+// напрямую — заводить их через ручку было бы дорого и не нужно для сути теста.
+test('50+ похороненных номеров не исчерпывают проверку — нумерация стартует после истории', async (t) => {
+  const { db, base } = await harness(t);
+  const token = enrol(db);
+
+  const TOMBSTONES = 55;
+  for (let i = 1; i <= TOMBSTONES; i++) {
+    db.prepare('INSERT INTO deleted_clinics (clinic_id, name) VALUES (?, ?)').run(`c-main-b${i}`, 'похороненный филиал');
+  }
+
+  const res = await makeBranch(base, { install_token: token });
+  assert.equal(res.status, 200, 'ручка должна создать филиал, а не отдать 500 из-за исчерпанной пробы');
+  const body = await res.json();
+  assert.equal(body.clinic_id, `c-main-b${TOMBSTONES + 1}`, 'номер продолжается сразу после последнего похороненного');
+});

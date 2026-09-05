@@ -173,21 +173,51 @@ function callerByInstallToken(db, req) {
 }
 
 // c-000005-b1, -b2, … — читаемо в панели и сразу видно, чей это филиал.
-// Считаем от количества уже существующих детей, а не от глобального счётчика:
-// номер филиала — свойство сети, а не реестра.
+//
+// Задача 2c: номер филиала продолжается от ИСТОРИИ, а не от числа живых
+// детей. Раньше здесь считали COUNT(*) живых `clinics` — и это ломается,
+// стоит родителю потерять филиалы: их могильные номера всё ещё заняты
+// навсегда (см. migrations/010_deleted_clinics.sql — id вернуть нельзя, пока
+// на руках у филиала может быть старая подписанная лицензия с этим именем),
+// а счётчик живых детей об этом не знает и снова стартует с n=1. При 50+
+// похороненных номерах под одним родителем 50-попыточная проба ниже
+// исчерпывается, ни разу не дойдя до свободного номера, и ручка отвечает
+// голым 500 вместо того чтобы завести филиал.
+//
+// Сестринская функция nextClinicId (routes/admin.js) уже решает ровно эту
+// задачу для clinic_id: берёт MAX числового суффикса по `clinics UNION
+// deleted_clinics` и продолжает оттуда. Здесь — то же самое правило, только
+// суффикс не глобальный c-NNNNNN, а -bN под конкретным родителем, поэтому
+// регулярка привязана к префиксу родителя, а не ищет «-b» где попало
+// (parentId сам может содержать дефисы и цифры).
 function nextBranchId(db, parentId) {
-  const row = db.prepare('SELECT COUNT(*) n FROM clinics WHERE parent_clinic_id = ?').get(parentId);
-  let n = (row ? row.n : 0) + 1;
+  const suffix = new RegExp(`^${escapeRegExp(parentId)}-b(\\d+)$`);
+  const rows = db.prepare(
+    'SELECT clinic_id FROM clinics UNION SELECT clinic_id FROM deleted_clinics'
+  ).all();
+  let max = 0;
+  for (const { clinic_id } of rows) {
+    const m = suffix.exec(clinic_id);
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  let n = max + 1;
+
+  // Могильника в `clinics` уже нет — строка удалена, — но его id выдавать
+  // снова нельзя: старая подписанная лицензия филиала всё ещё называет
+  // именно его (см. migrations/010_deleted_clinics.sql). Проверяем обе
+  // таблицы одним запросом, чтобы проба не разошлась с триггером. Проба
+  // подготавливается один раз вне цикла — раньше db.prepare() пересобирался
+  // на каждой попытке впустую.
+  const clashStmt = db.prepare(
+    'SELECT 1 FROM clinics WHERE clinic_id = ? UNION ALL SELECT 1 FROM deleted_clinics WHERE clinic_id = ?'
+  );
   for (let attempt = 0; attempt < 50; attempt++, n++) {
     const id = `${parentId}-b${n}`;
-    // Могильника в `clinics` уже нет — строка удалена, — но его id выдавать
-    // снова нельзя: старая подписанная лицензия филиала всё ещё называет
-    // именно его (см. migrations/010_deleted_clinics.sql). Проверяем обе
-    // таблицы одним запросом, чтобы проба не разошлась с триггером.
-    const clash = db.prepare(
-      'SELECT 1 FROM clinics WHERE clinic_id = ? UNION ALL SELECT 1 FROM deleted_clinics WHERE clinic_id = ?'
-    ).get(id, id);
-    if (!clash) return id;
+    if (!clashStmt.get(id, id)) return id;
   }
   throw new Error('nextBranchId: could not find a free branch id');
+}
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
