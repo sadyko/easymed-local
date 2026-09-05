@@ -429,7 +429,13 @@ test('завести пациента можно с первой вкладки,
   const createBtn = walk(box).find((n) => n.attrs['data-onb'] === 'create-patient');
   assert.ok(createBtn, 'на вкладке «Список» нет кнопки создания пациента');
   createBtn.click();
-  assert.deepEqual(navigated, ['registration'], 'кнопка не ведёт на регистрацию');
+  // PATIENT_ONE_WINDOW_V1 (задача 7) — кнопка больше НЕ уводит на страницу
+  // регистрации: страницы нет, карта заводится окном ПОВЕРХ этого же списка
+  // (views/patient-create-modal.js). Уход с раздела здесь и был бы регрессией.
+  assert.deepEqual(navigated, [], 'кнопка увела с раздела вместо того, чтобы открыть окно');
+  const dlg = walk(document.body).find((n) => n.attrs && n.attrs['data-dialog'] === 'patient-create');
+  assert.ok(dlg, 'кнопка не открыла окно заведения пациента');
+  dlg.remove();
   hub.destroy();
 
   // Подсказка онбординга: цель — та самая кнопка, а не удалённая .sidebar-cta.

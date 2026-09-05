@@ -10,6 +10,10 @@ import { scopedDoctorId } from '../permissions.js';
 import { originTag } from '../record-origin.js';   // BRANCH_ORIGIN_V1 — откуда запись
 import { branchSyncButton } from './branch-sync-button.js';   // BRANCH_SYNC_HOURLY_V1
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
+// PATIENT_ONE_WINDOW_V1 — заведение пациента больше не отдельная страница:
+// «Создать пациента» открывает окно ПОВЕРХ списка, и сохранённая карта
+// появляется в этом же списке без перехода туда-обратно.
+import { openPatientCreateModal } from './patient-create-modal.js?v=onewin1';
 
 // DATA_TRANSFER_V1 — the Шаблон / Импорт / Экспорт trio used to sit in this
 // header too. It was removed: the same three actions live in Настройки →
@@ -98,13 +102,23 @@ export async function renderPatients(container, { onNavigate, embedded = false }
 // MOUNT — build the static page shell once. Search keystrokes / pager clicks
 // repaint just the tbody so the input keeps focus and the page doesn't blink.
 // -----------------------------------------------------------------------------
+// PATIENT_ONE_WINDOW_V1 — единственная точка открытия окна заведения пациента
+// на этом экране. onSaved перечитывает страницу: новая карта обязана появиться
+// в списке, из которого её завели, а не после ручного обновления.
+function openCreatePatient() {
+    return openPatientCreateModal({
+        onNavigate: refs.onNavigate,
+        onSaved: () => { state.page = 1; fetchAndPaint(); },
+    });
+}
+
 function mount() {
     clear(refs.container);
 
     refs.tbody = h('tbody');
     refs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } },
         'Пациент не найден. ',
-        h('button', { class: 'link-btn', type: 'button', onclick: () => refs.onNavigate('registration') }, 'Создать нового пациента?'),
+        h('button', { class: 'link-btn', type: 'button', onclick: () => openCreatePatient() }, 'Создать нового пациента?'),
     );
     refs.pagerLabel = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
     refs.totalEl = h('span', { class: 'cell-strong' }, '0');
@@ -169,15 +183,24 @@ function mount() {
         Icon('Warning', { size: 13 }), ' Дубликаты · ', dupCountSpan);
     refs.dupChip = dupChip;
     const calcBtn = h('button', { class: 'btn btn-amber btn-sm', title: 'Калькулятор услуг — расчёт без выбора пациента',
-        onclick: () => openServicePickerModal({ calculator: true, title: 'Калькулятор услуг', titleIcon: 'Coins', onPick: () => {}, onCreatePatient: () => refs.onNavigate('registration') }) },
+        onclick: () => openServicePickerModal({ calculator: true, title: 'Калькулятор услуг', titleIcon: 'Coins', onPick: () => {}, onCreatePatient: () => openCreatePatient() }) },
         Icon('Coins', { size: 14 }), ' Калькулятор');
+    // ADMISSION_ORDER_V1 — «Госпитализация» жила в шапке страницы заведения
+    // пациента; страницы больше нет (PATIENT_ONE_WINDOW_V1), а действие
+    // осталось — и переехало туда, где регистратор и стоит. Окно заявки само
+    // ищет пациента: на приёмном покое человека чаще находят по фамилии, чем
+    // открывают его карту.
+    const admitBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-act': 'admission',
+        title: 'Заявка на госпитализацию — пациент выбирается в окне заявки',
+        onclick: () => import('./admission-modal.js?v=inp2').then((m) => m.openAdmissionOrderModal({})) },
+        Icon('Bed', { size: 14 }), ' Госпитализация');
     // ONBOARDING_TARGET_V1 — за эту кнопку цепляется подсказка «заведите
     // первого пациента» (admin/onboarding.js). Раньше она целилась в призывную
     // кнопку меню, а меню её лишилось (NO_TABS_APPBAR_V1) — подсказка молча
     // перестала показываться. Метка нужна именно как метка: класс у кнопки
     // общий с десятками других, и селектор по нему нашёл бы не ту.
     const createBtn = h('button', { class: 'btn btn-primary btn-sm', 'data-onb': 'create-patient',
-        onclick: () => refs.onNavigate('registration') },
+        onclick: () => openCreatePatient() },
         Icon('Plus', { size: 14 }), ' Создать пациента');
 
     // DUP_MERGE_V1 — «select all visible» header checkbox (only meaningful in the
@@ -220,7 +243,7 @@ function mount() {
                 ),
                 h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
                     h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Всего ', refs.totalEl),
-                    dupChip, calcBtn,
+                    dupChip, calcBtn, admitBtn,
                     // BRANCH_SYNC_HOURLY_V1 — сама покажется, только если это
                     // подключённый филиал. onDone перечитывает список: карта,
                     // заведённая в соседнем здании, уже в базе, но на экране

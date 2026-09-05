@@ -1173,6 +1173,82 @@ html[lang="uz"] .modal-close::after { content: 'Yopish'; }
     .modal-card.modal-grouped.has-groups .mg-section { border-right: none; }
 }
 
+/* ── PATIENT_ONE_WINDOW_V1 ──────────────────────────────────────────────────
+   Плотный вариант сгруппированного окна: заведение пациента обязано целиком
+   помещаться на экран 1366×768. Плотность даёт НЕ мелкий шрифт (12.5 px —
+   пол шкалы, закреплённый type-scale.test.mjs), а короткое поле (32 px
+   вместо 38), узкие зазоры и широкое окно.
+
+   Каждое число здесь читает __tests__/patient-create-modal.test.mjs и
+   сверяет с METRICS в views/patient-create-modal.js: модель высоты и
+   вёрстка не могут разойтись молча. Строки заданы явными line-height,
+   чтобы «примерно 1.35 от кегля» не превратилось в расхождение на 5 px
+   на каждом ряду. */
+.modal-card.modal-grouped.mg-dense .mg-section { padding: 14px 22px; gap: 10px; }
+.modal-card.modal-grouped.mg-dense .mg-section h3 { margin: 0; line-height: 17px; }
+.modal-card.modal-grouped.mg-dense .mg-grid { gap: 10px; }
+.modal-card.modal-grouped.mg-dense .field { gap: 4px; }
+.modal-card.modal-grouped.mg-dense .field label { line-height: 17px; }
+.modal-card.modal-grouped.mg-dense .field input:not([type="checkbox"]):not([type="radio"]),
+.modal-card.modal-grouped.mg-dense .field select { height: 32px; }
+.modal-card.modal-grouped.mg-dense .field textarea { min-height: 54px; }
+.modal-card.modal-grouped.mg-dense .radio-chip { height: 32px; padding: 0 10px; }
+/* Полоса поиска уже несёт нижнюю границу — двойной линии под ней не надо. */
+.modal-card.modal-grouped.mg-dense .mg-section.span-full + .mg-section:not(.span-full) { border-top: 0; }
+/* has-groups схлопывает сетки внутри колонок в одну колонку; плотному окну
+   нужны именно ряды по 2 и по 3 поля, поэтому здесь класс перебивает. */
+.modal-card.modal-grouped.mg-dense.has-groups .mg-section:not(.span-full) .mg-grid.cols-2 { grid-template-columns: 1fr 1fr; }
+.modal-card.modal-grouped.mg-dense.has-groups .mg-section:not(.span-full) .mg-grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+.modal-card.modal-grouped.mg-dense .mg-grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
+.modal-card.modal-grouped.mg-dense .mg-grid > * { min-width: 0; }
+
+/* Поиск существующего пациента — одной строкой над колонками. */
+.mg-search .mg-search-box { position: relative; }
+.mg-search .mg-search-ic { position: absolute; left: 11px; top: 8px; color: var(--ink-400); pointer-events: none; }
+.mg-search .mg-search-input { width: 100%; box-sizing: border-box; padding-left: 34px; }
+.mg-search-results {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 5;
+    background: var(--white); border: 1px solid var(--ink-200); border-radius: 8px;
+    /* 200, а не 300: тело окна прокручиваемое (.modal-body overflow-y: auto),
+       и список длиннее упёрся бы в его нижний край. */
+    box-shadow: var(--shadow-lg); max-height: 200px; overflow-y: auto;
+}
+.mg-search-opt {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    text-align: left; padding: 9px 12px; background: var(--white);
+    border: 0; border-bottom: 1px solid var(--ink-100); cursor: pointer; font: inherit;
+}
+.mg-search-opt:hover { background: var(--ink-25); }
+.mg-search-empty { padding: 12px; font-size: 12.5px; text-align: center; color: var(--ink-500); }
+
+/* «Подробнее» — раскрытие второго экрана в том же окне. */
+.mg-more { display: flex; align-items: center; gap: 10px; }
+.mg-more-btn {
+    height: 38px; padding: 0 12px; border-radius: 9px;
+    border: 1px solid var(--primary-200); background: var(--primary-50);
+    color: var(--primary-700); font-family: inherit; font-size: 13.5px; font-weight: 600;
+    display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+    flex: 0 0 auto;
+    transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+.mg-more-btn:hover { border-color: var(--primary-300); }
+.mg-more-btn[aria-expanded="true"] svg { transform: rotate(180deg); }
+.mg-more-hint { font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Список стран у телефона в плотном окне открывается ВВЕРХ: ряд телефонов —
+   последний в своей колонке, и вниз список упёрся бы в нижний край
+   прокручиваемого тела окна (.modal-body { overflow-y: auto }). */
+.modal-card.modal-grouped.mg-dense .ph-menu { top: auto; bottom: calc(100% + 4px); max-height: 240px; }
+
+/* Фото в раскрытии — квадрат 96 px, а не 156: снимок нужен для узнавания,
+   а не для портрета, и лишние 60 px высоты стоят целого ряда полей. Два
+   класса в селекторе — не украшение: admin-views.css грузится ПОСЛЕ этого
+   файла, и одноклассовое правило проиграло бы там объявленному .cam-box. */
+.cam-box.mg-cam { width: 96px; height: 96px; }
+.cam-wrap.mg-cam-wrap { flex-direction: row; align-items: center; gap: 8px; }
+.cam-wrap.mg-cam-wrap .cam-acts { flex-direction: column; }
+.cam-wrap.mg-cam-wrap .cam-act { width: 34px; flex: 0 0 auto; }
+
 /* ---- Report placeholder ---- */
 .report-placeholder {
     padding: 64px 32px; text-align: center; color: var(--ink-500);

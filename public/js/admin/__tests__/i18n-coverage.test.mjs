@@ -84,8 +84,12 @@ const EXAMPLE_STRINGS = new Set([
   'Азиза', 'Каримова', 'Рустамовна',   // crm new-lead form placeholders
   'Акмалович', 'Араббек', 'Каюмов',    // employees form placeholders
   'Абдукаюмов Баходир', 'БА',          // pacs placeholder patient + initials
-  'Каримов Рустам Аброрович',          // registration search placeholder
-  'Юнусабад-3',                        // registration address placeholder
+  // 'Каримов Рустам Аброрович' стоял здесь как образец ФИО опекуна в форме
+  // регистрации. Раздел опекуна убран ещё OPEKUN_REMOVED_V1, а сама страница —
+  // PATIENT_ONE_WINDOW_V1 (2026-09-05); строки в коде больше нет, и держать её
+  // в списке нельзя: этот список сам себя проверяет — устаревшее имя спрятало
+  // бы будущую настоящую строку.
+  'Юнусабад-3',                        // образец адреса в окне заведения пациента
 ]);
 // (The topbar language switcher, for the record, is plain "UZ/RU/EN" markup
 // in admin.html — no Cyrillic switcher labels exist in the scoped JS, so no
