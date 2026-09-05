@@ -294,8 +294,13 @@ function mount() {
 
     // LAB_GROUP_V1 (local port) — one card per patient-visit (lq-card), not a
     // table: replaces the old flat one-row-per-order queue.
-    refs.list = h('div', { id: 'lab-list' });
-    refs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } },
+    // LAB_QUEUE_SPLIT_V1 — .lq-queue: очередь лежит на ГРУНТЕ, а не на белой
+    // панели. Пока панель была белой, зазор между карточками был белым по
+    // белому — граница между двумя людьми не рисовалась вовсе.
+    refs.list = h('div', { id: 'lab-list', class: 'lq-queue' });
+    // Пустое состояние остаётся белым листом: на грунте оно иначе висело бы
+    // строкой в воздухе.
+    refs.emptyEl = h('div', { class: 'empty card', style: { display: 'none' } },
         'Заявок нет. Лабораторная услуга попадает сюда, как только добавлена к визиту; после оплаты счёта она встаёт в очередь на забор.');
     refs.totalEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
     refs.filterWrap = h('div', { class: 'segmented' });
@@ -366,7 +371,9 @@ function mount() {
         pageHead(SUBTITLES[mode], ACTIONS[mode]),
         mode === 'panels' ? refs.panelsHost
             : mode === 'stats' ? refs.statsHost
-            : h('div', { class: 'card' },
+            // LAB_QUEUE_SPLIT_V1 — белой панели вокруг очереди больше нет: окном
+            // стала сама карточка пациента, а грунт между ними — разделителем.
+            : h('div', null,
                 refs.list,
                 refs.emptyEl,
             ),
