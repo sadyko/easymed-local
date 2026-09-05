@@ -1,9 +1,15 @@
 // COOLICONS_V1 — какое имя из кода какой файл набора рисует.
 //
 // Единственное место, где живёт это решение. Слева — имя, которым код зовёт
-// иконку (Icon('Clock')), справа — путь внутри public/assets/icons/coolicons/
-// БЕЗ расширения. Имена справа авторские и не переименовываются: так файл
-// можно сверить с сайтом набора глазами, не разбирая код.
+// иконку (Icon('Clock')), справа — путь внутри public/assets/icons/ БЕЗ
+// расширения. Имена справа авторские и не переименовываются: так файл можно
+// сверить с сайтом набора глазами, не разбирая код.
+//
+// ДВА НАБОРА. Путь ищется сначала в easymed/ (нарисовано здесь, ORIGIN.md),
+// потом в coolicons/ (вендоренный набор, CC BY 4.0). Строки ниже с папкой
+// Medical/ и имена Phone_In, Phone_Out, Phone_Missed, Megaphone, Coins, Key,
+// Target, Bot — свои: в coolicons таких файлов нет вовсе, так что «сначала
+// easymed» здесь не перехват, а единственное место, где рисунок есть.
 //
 // Почему таблица, а не «имя = имя файла»: код зовёт иконки по смыслу («Касса»,
 // «Стационар»), набор называет их по рисунку («Credit_Card_01», «Moving_Desk»).
@@ -14,10 +20,11 @@
 //
 // НЕТ ТОЧНОГО АНАЛОГА — помечено «~». coolicons это общий интерфейсный набор:
 // в нём ровно одна медицинская иконка (Environment/First_Aid) и ни одной
-// специальной — ни стетоскопа, ни колбы, ни койки, ни кардиограммы, ни
-// таблетки. Для таких мест здесь стоит ближайшее по смыслу, и каждое такое
-// место помечено, чтобы владелец мог посмотреть на экран и сказать «нет, вот
-// это другое» — а не искать потом, откуда взялся чемоданчик в аптеке.
+// специальной. Клинические места, где приближение было прямой ошибкой формы
+// (таблетка-чемоданчик, койка-стол, стетоскоп-крест, колба-цилиндр,
+// пульс-график, три одинаковых звонка), теперь нарисованы и живут в easymed/;
+// пометка «~» осталась только там, где приближение всё ещё приближение, чтобы
+// владелец мог посмотреть на экран и сказать «нет, вот это другое».
 
 export const ICON_MAP = Object.freeze({
     // --- навигация и стрелки ---
@@ -40,15 +47,13 @@ export const ICON_MAP = Object.freeze({
     Msg:          'Communication/Chat',
     Send:         'Communication/Paper_Plane',
     Phone:        'Communication/Phone',
-    // ~ В наборе одна телефонная трубка и ни одной со стрелкой направления.
-    //   Входящий / исходящий / пропущенный теперь рисуются одинаково; в таблице
-    //   звонков направление по-прежнему подписано словом рядом (см.
-    //   telephony-logic.js), но глазом три строки больше не различить.
-    PhoneIn:      'Communication/Phone',
-    PhoneOut:     'Communication/Phone',
-    PhoneMissed:  'Communication/Phone',
-    // ~ Мегафона нет. Рассылки и «Запросить публикацию» получают звонок-с-волнами.
-    Megaphone:    'Communication/Bell_Ring',
+    // Своя трубка с меткой направления в свободном верхнем углу: стрелка внутрь,
+    //   стрелка наружу, крестик. Строка журнала звонков читается формой, а не
+    //   подписью рядом (см. telephony-logic.js).
+    PhoneIn:      'Communication/Phone_In',
+    PhoneOut:     'Communication/Phone_Out',
+    PhoneMissed:  'Communication/Phone_Missed',
+    Megaphone:    'Communication/Megaphone',
 
     // --- правка ---
     Copy:         'Edit/Copy',
@@ -63,9 +68,6 @@ export const ICON_MAP = Object.freeze({
     // --- окружение ---
     Drop:         'Environment/Water_Drop',
     Droplet:      'Environment/Water_Drop',
-    // ~ Стетоскопа нет. Приём врача получает единственную медицинскую иконку
-    //   набора — медицинский крест.
-    Stethoscope:  'Environment/First_Aid',
     // ~ Лёгких нет (иконка в коде есть, ни один экран её не зовёт).
     Lungs:        'Environment/Leaf',
     // ~ Полукруга «контраст» нет (иконка в коде есть, ни один экран её не зовёт).
@@ -89,21 +91,23 @@ export const ICON_MAP = Object.freeze({
     Trend:        'Interface/Trending_Up',
     Wallet:       'Interface/Credit_Card_01',
     ZoomIn:       'Interface/Magnifying_Glass_Plus',
-    // ~ Кардиограммы нет. «Витальные» и графики активности получают линейный график.
+    Coins:        'Interface/Coins',
+    Key:          'Interface/Key',
+    Target:       'Interface/Target',
+    // Activity — это графики активности и журналы движений (см. вызовы), линейный
+    //   график им точен; кардиограмма живёт отдельно, под именем Pulse.
     Activity:     'Interface/Chart_Line',
-    Pulse:        'Interface/Chart_Line',
-    // ~ Монет и наличных нет — деньги во всём наборе это карта.
-    Coins:        'Interface/Credit_Card_02',
-    // ~ Ключа нет. Экран токенов API получает открытый замок.
-    Key:          'Interface/Lock_Open',
     // ~ Искр/«магии» нет. «Что нового» и автоматизации получают звезду.
     Sparkles:     'Interface/Star',
-    // ~ Мишени нет. «Причины звонков» получают точку в кольце.
-    Target:       'Interface/Radio_Fill',
-    // ~ Таблетки нет. Лекарства получают чемоданчик-аптечку.
-    Pill:         'Interface/Suitcase',
     // ~ Градусника нет (иконка в коде есть, ни один экран её не зовёт).
     Thermo:       'Interface/Slider_02',
+
+    // --- медицина (свой рисунок, public/assets/icons/easymed/) ---
+    Bed:          'Medical/Bed',
+    Flask:        'Medical/Flask',
+    Pill:         'Medical/Pill',
+    Pulse:        'Medical/Pulse',
+    Stethoscope:  'Medical/Stethoscope',
 
     // --- медиа ---
     Headset:      'Media/Headphones',
@@ -131,12 +135,7 @@ export const ICON_MAP = Object.freeze({
     Database:     'System/Data',     // SYSTEM_SETTINGS_V1 — карточка резервных копий
     Print:        'System/Printer',
     Scan:         'System/Qr_Code',  // кнопка «Штрих-код» в лаборатории
-    // ~ Колбы и пробирки нет. Лаборатория получает сосуд-цилиндр.
-    Flask:        'System/Cylinder',
-    // ~ Койки нет. Стационар получает стол-каталку — плоскость на ножках.
-    Bed:          'System/Moving_Desk',
-    // ~ Робота нет. Телеграм-бот получает угловые скобки кода.
-    Bot:          'System/Code',
+    Bot:          'System/Bot',
 
     // --- люди ---
     ID:           'User/User_Card_ID',
@@ -158,7 +157,5 @@ export const ICON_MAP = Object.freeze({
  * мест, где решение принято за владельца и он вправе его отменить.
  */
 export const NO_EXACT_MATCH = Object.freeze([
-    'Activity', 'Bed', 'Bot', 'Coins', 'Contrast', 'Flask', 'Key', 'Lungs',
-    'Megaphone', 'Mic', 'PhoneIn', 'PhoneMissed', 'PhoneOut', 'Pill', 'Pulse',
-    'Sparkles', 'Stethoscope', 'Target', 'Thermo',
+    'Contrast', 'Lungs', 'Mic', 'Sparkles', 'Thermo',
 ]);

@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { ICON_MAP, NO_EXACT_MATCH } from '../icon-map.js';
 import { ICON_BODIES } from '../icon-paths.js';
 import { iconHtml, hasIcon, ICON_NAMES, I } from '../icons.js';
-import { renderModule, extractBody, iconFile, ICONS_DIR, OUT_FILE } from '../../../../scripts/build-icon-paths.mjs';
+import { renderModule, extractBody, iconFile, iconSource, ICONS_DIR, LOCAL_ICONS_DIR, OUT_FILE } from '../../../../scripts/build-icon-paths.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..', '..', '..');
@@ -85,16 +85,18 @@ test('каждая строка карты указывает на сущест�
     assert.equal(ICON_NAMES.length, Object.keys(ICON_MAP).length);
 });
 
+function svgsUnder(dir) {
+    const out = [];
+    for (const it of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, it.name);
+        if (it.isDirectory()) out.push(...svgsUnder(full));
+        else if (it.name.endsWith('.svg')) out.push(full);
+    }
+    return out;
+}
+
 test('набор вендорится целиком и лежит там, откуда его берёт генератор', () => {
-    const svgs = [];
-    const walk = (d) => {
-        for (const it of fs.readdirSync(d, { withFileTypes: true })) {
-            const full = path.join(d, it.name);
-            if (it.isDirectory()) walk(full);
-            else if (it.name.endsWith('.svg')) svgs.push(full);
-        }
-    };
-    walk(ICONS_DIR);
+    const svgs = svgsUnder(ICONS_DIR);
     assert.equal(svgs.length, 442, 'в наборе coolicons v4.1 ровно 442 SVG');
 
     // Указание авторства обязано ехать вместе с иконками: CC BY 4.0 разрешает
@@ -176,10 +178,23 @@ test('прокси I рисует то же самое, что iconHtml', () => 
 });
 
 test('иконки, у которых один и тот же рисунок, действительно одинаковы', () => {
-    // Droplet и Drop — два имени одной капли; PhoneIn/PhoneOut/PhoneMissed
-    // делят единственную трубку набора (см. пометки в icon-map.js).
+    // Droplet и Drop — два имени одной капли, и это единственная такая пара.
     assert.equal(iconHtml('Drop'), iconHtml('Droplet'));
-    assert.equal(iconHtml('PhoneIn'), iconHtml('PhoneOut'));
+});
+
+test('входящий, исходящий и пропущенный звонок различаются рисунком', () => {
+    // Ради этого всё и рисовалось: до замены три имени указывали на одну трубку
+    // набора, и строки журнала звонков различались только подписью.
+    const [i, o, m] = ['PhoneIn', 'PhoneOut', 'PhoneMissed'].map((n) => iconHtml(n));
+    assert.notEqual(i, o);
+    assert.notEqual(o, m);
+    assert.notEqual(i, m);
+    // Но трубка у всех трёх одна и та же: иначе строка таблицы читалась бы как
+    // три разные иконки, а не как одна с меткой.
+    const handset = (svg) => svg.match(/<path d="(M3 .*?Z)/);
+    assert.ok(handset(i), 'первый контур — общая трубка');
+    assert.equal(handset(i)[1], handset(o)[1]);
+    assert.equal(handset(i)[1], handset(m)[1]);
 });
 
 // ---------------------------------------------------------------------------
@@ -235,6 +250,99 @@ test('NO_EXACT_MATCH совпадает с пометками «~» в само�
 });
 
 // ---------------------------------------------------------------------------
+// Свой набор: public/assets/icons/easymed/
+// ---------------------------------------------------------------------------
+//
+// coolicons — общий интерфейсный набор, медицинская иконка в нём одна. Клиника
+// ориентируется по форме значка, поэтому таблетка-чемоданчик и койка-стол были
+// не «примерно то», а неправильная подсказка. Эти иконки нарисованы здесь, и
+// тесты ниже стерегут ровно то, из-за чего дорисовка могла выглядеть вклеенной:
+// та же сетка, та же толщина, те же атрибуты — и отдельная лицензия.
+
+/** Имена, которые обязаны рисоваться нашим файлом, а не приближением набора. */
+const DRAWN_HERE = [
+    'Bed', 'Bot', 'Coins', 'Flask', 'Key', 'Megaphone', 'PhoneIn', 'PhoneMissed',
+    'PhoneOut', 'Pill', 'Pulse', 'Stethoscope', 'Target',
+];
+
+test('свои иконки нарисованы по правилам набора: 24x24, currentColor, без заливок и id', () => {
+    const files = svgsUnder(LOCAL_ICONS_DIR);
+    assert.ok(files.length >= DRAWN_HERE.length, `в easymed/ ${files.length} файлов на ${DRAWN_HERE.length} имён`);
+
+    const bad = [];
+    for (const f of files) {
+        const rel = path.relative(REPO_ROOT, f);
+        const text = fs.readFileSync(f, 'utf8');
+        const say = (why) => bad.push(`${rel}: ${why}`);
+
+        if (!/viewBox="0 0 24 24"/.test(text)) say('нет viewBox="0 0 24 24" — иконка не встанет в общую сетку');
+        if (!/width="24"/.test(text) || !/height="24"/.test(text)) say('не 24x24');
+        // Цвет обязан приходить снаружи: иначе иконка не почернеет вместе с темой.
+        if (!/stroke="currentColor"/.test(text)) say('нет stroke="currentColor"');
+        if (/stroke="(?!currentColor)/.test(text)) say('свой цвет контура');
+        // Заливок в наборе нет вообще — только контуры.
+        for (const m of text.matchAll(/fill="([^"]*)"/g)) if (m[1] !== 'none') say(`fill="${m[1]}" — набор рисует только контуром`);
+        // id="Vector" в авторских файлах — источник десятков одинаковых id в
+        // одном документе; у своих файлов его нет вовсе.
+        if (/\sid=/.test(text)) say('атрибут id — в одном документе иконок десятки');
+        if (!/stroke-width="2"/.test(text)) say('толщина не 2 — рисунок будет другого веса');
+        if (!/stroke-linecap="round"/.test(text) || !/stroke-linejoin="round"/.test(text)) say('скругления не round');
+
+        const els = [...text.matchAll(/<([a-zA-Z][a-zA-Z0-9]*)/g)].map((m) => m[1]);
+        for (const el of els) if (!['svg', 'g', 'path'].includes(el)) say(`элемент <${el}> — генератор умеет только svg/g/path`);
+    }
+    assert.deepEqual(bad, []);
+});
+
+test('свои иконки рисуются в тех же 24 клетках, что и иконки набора', () => {
+    // Оптический размер: если рисунок занимает заметно меньше или больше поля,
+    // чем соседи, он выглядит вклеенным даже при верной толщине. Считаем по
+    // опорным точкам контура — приближённо, но достаточно, чтобы поймать
+    // иконку, нарисованную «в половину клетки» или вылезшую за поле.
+    const off = [];
+    for (const f of svgsUnder(LOCAL_ICONS_DIR)) {
+        const nums = [...fs.readFileSync(f, 'utf8').matchAll(/ d="([^"]+)"/g)]
+            .flatMap((m) => m[1].match(/-?\d+(?:\.\d+)?/g).map(Number));
+        const xs = nums.filter((_, i) => i % 2 === 0), ys = nums.filter((_, i) => i % 2 === 1);
+        const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+        const rel = path.relative(LOCAL_ICONS_DIR, f);
+        if (Math.min(...nums) < 1.5 || Math.max(...nums) > 22.5) off.push(`${rel}: выходит за поле (${Math.min(...nums)}…${Math.max(...nums)})`);
+        if (span < 14) off.push(`${rel}: рисунок занимает ${span.toFixed(1)} клеток — мельче соседей по набору`);
+    }
+    assert.deepEqual(off, []);
+});
+
+test('имена, ради которых всё рисовалось, берутся из easymed, а не из coolicons', () => {
+    const wrong = DRAWN_HERE
+        .map((name) => [name, ICON_MAP[name]])
+        .filter(([, coolPath]) => !coolPath || iconSource(coolPath) !== 'easymed')
+        .map(([name, coolPath]) => `${name} → ${coolPath}`);
+    assert.deepEqual(wrong, [], 'должны рисоваться своим файлом: ' + wrong.join('; '));
+    // И ни одно из них больше не «приближение».
+    for (const name of DRAWN_HERE) assert.equal(NO_EXACT_MATCH.includes(name), false, `${name} нарисован, но всё ещё помечен «~»`);
+});
+
+test('в easymed нет файлов, которые никто не рисует', () => {
+    const used = new Set(Object.values(ICON_MAP));
+    const dead = svgsUnder(LOCAL_ICONS_DIR)
+        .map((f) => path.relative(LOCAL_ICONS_DIR, f).split(path.sep).join('/').replace(/\.svg$/, ''))
+        .filter((name) => !used.has(name));
+    assert.deepEqual(dead, [], 'нарисовано и забыто — либо подключить в icon-map.js, либо удалить');
+});
+
+test('лицензия своих иконок отделена от лицензии набора', () => {
+    // CC BY 4.0 требует указания авторства; ATTRIBUTION.md набора не должен
+    // выглядеть распространяющимся на наш рисунок, поэтому наборы лежат в
+    // разных папках, и у каждой свой файл о происхождении.
+    assert.notEqual(LOCAL_ICONS_DIR, ICONS_DIR);
+    assert.equal(fs.existsSync(path.join(LOCAL_ICONS_DIR, 'ATTRIBUTION.md')), false,
+        'указание авторства coolicons не должно лежать среди наших файлов');
+    const origin = fs.readFileSync(path.join(LOCAL_ICONS_DIR, 'ORIGIN.md'), 'utf8');
+    assert.match(origin, /не входят в набор coolicons/);
+    assert.match(origin, /ATTRIBUTION\.md/);
+});
+
+// ---------------------------------------------------------------------------
 // Домашнее правило: в интерфейсе нет эмодзи
 // ---------------------------------------------------------------------------
 
@@ -245,6 +353,7 @@ test('в конвейере иконок нет ни одного эмодзи',
         path.join(HERE, '..', 'icon-map.js'),
         path.join(HERE, '..', 'icon-paths.js'),
         path.join(ICONS_DIR, 'ATTRIBUTION.md'),
+        path.join(LOCAL_ICONS_DIR, 'ORIGIN.md'),
         path.join(REPO_ROOT, 'scripts', 'build-icon-paths.mjs'),
         fileURLToPath(import.meta.url),
     ];

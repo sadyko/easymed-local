@@ -4,8 +4,16 @@
 //   node scripts/build-icon-paths.mjs
 //
 // Читает public/js/admin/icon-map.js, берёт названные там файлы из
-// public/assets/icons/coolicons/ и выкладывает их контуры в один JS-модуль,
-// который грузится вместе с приложением.
+// public/assets/icons/ и выкладывает их контуры в один JS-модуль, который
+// грузится вместе с приложением.
+//
+// ДВЕ ПАПКИ, И ЛОКАЛЬНАЯ ВЫИГРЫВАЕТ. Иконки лежат в двух наборах:
+// easymed/ (нарисовано здесь, см. ORIGIN.md) и coolicons/ (вендоренный набор,
+// CC BY 4.0). Путь из карты ищется сначала в easymed/, потом в coolicons/ —
+// значит, чтобы заменить приближение набора собственным рисунком, достаточно
+// положить файл по тому же имени в easymed/. Папки разделены не ради удобства:
+// ATTRIBUTION.md набора не должен выглядеть распространяющимся на наш рисунок,
+// а наш ORIGIN.md — на их.
 //
 // ЗАЧЕМ ГЕНЕРАТОР, А НЕ ЧТЕНИЕ SVG В БРАУЗЕРЕ. Icon(name) синхронно возвращает
 // элемент — так его зовут все 88 экранов. fetch за файлом иконки синхронным не
@@ -40,7 +48,11 @@ import { fileURLToPath } from 'node:url';
 import { ICON_MAP } from '../public/js/admin/icon-map.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-export const ICONS_DIR = path.join(ROOT, 'public', 'assets', 'icons', 'coolicons');
+const ASSETS = path.join(ROOT, 'public', 'assets', 'icons');
+export const ICONS_DIR = path.join(ASSETS, 'coolicons');
+export const LOCAL_ICONS_DIR = path.join(ASSETS, 'easymed');
+/** Порядок поиска: свой рисунок перекрывает приближение набора. */
+export const ICON_DIRS = Object.freeze([LOCAL_ICONS_DIR, ICONS_DIR]);
 export const OUT_FILE = path.join(ROOT, 'public', 'js', 'admin', 'icon-paths.js');
 
 // Единственные рисующие элементы, которые встречаются в наборе (проверено по
@@ -64,9 +76,21 @@ export function extractBody(svgText, label) {
     return ds.map((d) => `<path d="${d}"/>`).join('');
 }
 
-/** Путь к файлу набора по его имени в карте ('Arrow/Chevron_Down'). */
-export function iconFile(coolPath, dir = ICONS_DIR) {
-    return path.join(dir, ...coolPath.split('/')) + '.svg';
+/**
+ * Путь к файлу иконки по её имени в карте ('Arrow/Chevron_Down'). Ищет по
+ * dirs по порядку и возвращает первый существующий файл; если нет нигде —
+ * возвращает путь в ПОСЛЕДНЕЙ папке, чтобы сообщение об ошибке называло
+ * основной набор, а не локальный.
+ */
+export function iconFile(coolPath, dirs = ICON_DIRS) {
+    const list = Array.isArray(dirs) ? dirs : [dirs];
+    const paths = list.map((dir) => path.join(dir, ...coolPath.split('/')) + '.svg');
+    return paths.find((f) => fs.existsSync(f)) || paths[paths.length - 1];
+}
+
+/** 'easymed' | 'coolicons' — из какого набора реально взят рисунок. */
+export function iconSource(coolPath, dirs = ICON_DIRS) {
+    return path.basename(path.dirname(path.dirname(iconFile(coolPath, dirs))));
 }
 
 /**
@@ -74,11 +98,11 @@ export function iconFile(coolPath, dir = ICONS_DIR) {
  * Тест свежести зовёт эту же функцию, поэтому «сгенерировано» и «проверено»
  * не могут разъехаться.
  */
-export function renderModule(map = ICON_MAP, dir = ICONS_DIR) {
+export function renderModule(map = ICON_MAP, dirs = ICON_DIRS) {
     const wanted = [...new Set(Object.values(map))].sort();
     const lines = [];
     for (const coolPath of wanted) {
-        const file = iconFile(coolPath, dir);
+        const file = iconFile(coolPath, dirs);
         let text;
         try {
             text = fs.readFileSync(file, 'utf8');
@@ -90,8 +114,10 @@ export function renderModule(map = ICON_MAP, dir = ICONS_DIR) {
     return [
         '// СГЕНЕРИРОВАННЫЙ ФАЙЛ — не править руками.',
         '//',
-        '// Источник: public/assets/icons/coolicons/ (набор coolicons v4.1, CC BY 4.0,',
-        '// см. ATTRIBUTION.md рядом с иконками) + public/js/admin/icon-map.js.',
+        '// Источник: public/assets/icons/easymed/ (наш рисунок, см. ORIGIN.md) и',
+        '// public/assets/icons/coolicons/ (набор coolicons v4.1, CC BY 4.0, см.',
+        '// ATTRIBUTION.md рядом с иконками) + public/js/admin/icon-map.js.',
+        '// Имя ищется сначала в easymed/, потом в coolicons/.',
         '// Пересобрать:  node scripts/build-icon-paths.mjs',
         '//',
         '// Ключ — авторское имя файла набора, значение — его контуры без атрибутов',
@@ -111,6 +137,7 @@ const isMain = process.argv[1]
 if (isMain) {
     const out = renderModule();
     fs.writeFileSync(OUT_FILE, out);
-    const n = new Set(Object.values(ICON_MAP)).size;
-    console.log(`icon-paths.js: ${n} иконок, ${(Buffer.byteLength(out) / 1024).toFixed(1)} КБ`);
+    const wanted = [...new Set(Object.values(ICON_MAP))];
+    const local = wanted.filter((p) => iconSource(p) === 'easymed').length;
+    console.log(`icon-paths.js: ${wanted.length} иконок (${local} свои, ${wanted.length - local} coolicons), ${(Buffer.byteLength(out) / 1024).toFixed(1)} КБ`);
 }
