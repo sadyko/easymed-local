@@ -2,11 +2,16 @@
 // search. The page never pulls the whole register into the browser; each
 // filter / sort / page / keystroke fires a fresh PostgREST query.
 
-import { h, Icon, Avatar, Tag, StatusTag, PageHead, toast, clear } from '../ui.js';
+import { h, Icon, Avatar, Tag, StatusTag, PageHead, toast, clear, fmtDate } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { registrarHeader } from './registrar-header.js?v=roleaud1';
 import { loadPatientsPaged, findAllDuplicatePatientIds, mergePatients } from '../data.js';   // DUP_MERGE_V1
-import { scopedDoctorId } from '../permissions.js';
+import { scopedDoctorId, canView } from '../permissions.js';
+// PATIENT_ROW_V2 — телефон в реестре читается так же, как на карточке CRM.
+import { formatPhone } from '../phone-format.js';
+// PATIENT_ROW_V2 — регистратор и отметка Telegram читаются напрямую:
+// см. resolveRegistrars() и ensureTelegramLinked() ниже.
+import { supabase } from '../../supabase.js';
 import { originTag } from '../record-origin.js';   // BRANCH_ORIGIN_V1 — откуда запись
 import { branchSyncButton } from './branch-sync-button.js';   // BRANCH_SYNC_HOURLY_V1
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
@@ -90,6 +95,10 @@ export async function renderPatients(container, { onNavigate, embedded = false }
     refs.sortButtons   = {};
 
     mount();
+    // PATIENT_ROW_V2 — отметки Telegram спрашиваются РАНЬШЕ первой отрисовки и
+    // ровно один раз за сессию (ensureTelegramLinked запоминает ответ): иначе
+    // значки проявлялись бы вторым кадром поверх уже прочитанной строки.
+    await ensureTelegramLinked();
     await fetchAndPaint();
 
     // Async: scan the whole register for shared phone / PINFL so the
@@ -289,17 +298,25 @@ function mount() {
             h('table', { class: 'tbl reg-base-tbl' },
                 h('thead', null, h('tr', null,
                     h('th', { style: { width: '34px', textAlign: 'center' }, 'data-dupcol': '' }, dupHeadCb),   // DUP_MERGE_V1
+                    // PATIENT_ROW_V2 — восемь колонок вместо десяти, и это НЕ
+                    // потеря данных: «Пол» переехал в личность (номер карты ·
+                    // пол · город — одна строка под именем), «Визитов» — под
+                    // дату последнего визита, к которой он и относится.
+                    // Девять равнозначных колонок не давали строке ведущего:
+                    // взгляд начинал с любой. Теперь ведёт имя, а всё, чем
+                    // человека опознают, стоит одним блоком рядом с ним.
                     h('th', null, 'Пациент'),
-                    h('th', null, 'Дата рожд. / возраст'),
-                    h('th', { style: { textAlign: 'center' } }, 'Пол'),
+                    h('th', null, 'Дата рождения'),
                     h('th', null, 'Телефон'),
                     // REG_TBL_FIT_V2 — «Телеграм» и «Есть ДМС?» убраны: обе
                     // колонки занимали ширину, но ничего не сообщали. Телеграм
-                    // показывал «Не подключён» у всех (интеграции в локальной
-                    // сборке нет), ДМС — «—», потому что страховая в постраничный
-                    // список не джойнится. Полис виден в карточке пациента.
+                    // показывал «Не подключён» у всех (колонки
+                    // patients.telegram_opt_in в схеме нет вовсе), ДМС — «—»,
+                    // потому что страховая в постраничный список не джойнится.
+                    // Полис виден в карточке пациента. Отметка Telegram
+                    // вернулась НЕ колонкой, а значком у имени, и берётся из
+                    // настоящей связки чата (см. ensureTelegramLinked).
                     h('th', null, 'Последний визит'),
-                    h('th', { style: { textAlign: 'center' } }, 'Визитов'),
                     h('th', { style: { textAlign: 'right' } }, 'Баланс'),
                     h('th', null, 'Регистратор'),
                     h('th', { style: { width: '104px' } }),
@@ -393,6 +410,97 @@ function paintSortChrome() {
 }
 
 // -----------------------------------------------------------------------------
+// PATIENT_ROW_V2 (2026-09-05) — КТО ЗАВЁЛ КАРТУ и ЕСТЬ ЛИ У ЧЕЛОВЕКА TELEGRAM.
+//
+// Владелец: «show the registrators name also add small telegram icon for the
+// patients with active telegram». Оба ответа лежали рядом с экраном, но экран
+// их не спрашивал, и колонка «Регистратор» показывала прочерк на КАЖДОЙ строке.
+//
+// ПОЧЕМУ ОНА БЫЛА ПУСТА. data.js после выборки страницы зовёт RPC
+// `patient_base_aggregates` (визиты, баланс, страховая, регистратор) — а такой
+// процедуры в этой сборке НЕТ ВОВСЕ: во всём репозитории её имя встречается
+// ровно один раз, в самом вызове (server/services/rpc/index.js её не
+// регистрирует). Вызов падает, catch пишет предупреждение в консоль, и все
+// четыре поля остаются пустыми — отсюда и «0» в визитах, и «0 сум» в балансе,
+// и прочерк в регистраторе. То есть колонка не «не выбрана» и не «пуста в
+// данных»: спрашивали не то.
+//
+// ЧЕМ ЧИНИМ ЗДЕСЬ. Кто завёл карту, записано в самой карте — patients.created_by
+// (миграция 002), и эта колонка уже читается реестром (schema-registry.js). Имя
+// сотрудника берём ОДНИМ запросом на страницу (30 строк → максимум 30 id, а
+// обычно 2–3 разных регистратора), и запомненные имена не спрашиваем повторно.
+// Если RPC когда-нибудь появится, его ответ имеет приоритет — p.registrar
+// проверяется первым.
+const registrarNames = new Map();   // user id → ФИО
+
+async function resolveRegistrars(rows) {
+    const want = [];
+    for (const p of rows) {
+        const id = p && p.createdBy;
+        if (id == null || id === '' || registrarNames.has(String(id))) continue;
+        if (!want.includes(id)) want.push(id);
+    }
+    if (!want.length) return;
+    try {
+        const { data, error } = await supabase.from('users').select('id, full_name').in('id', want);
+        if (error) throw new Error(error.message);
+        for (const u of (data || [])) registrarNames.set(String(u.id), u.full_name || '');
+        // Промах тоже запоминаем: сотрудника могли удалить, и спрашивать про
+        // него на каждой странице значит платить запросом за пустоту.
+        for (const id of want) if (!registrarNames.has(String(id))) registrarNames.set(String(id), '');
+    } catch (e) {
+        console.warn('[patients/registrar]', e.message);
+    }
+}
+
+function registrarOf(p) {
+    if (p && p.registrar) return p.registrar;
+    const id = p && p.createdBy;
+    if (id == null || id === '') return '';
+    return registrarNames.get(String(id)) || '';
+}
+
+// TELEGRAM — «активный телеграм» в этой сборке это НЕ поле в карте пациента.
+// Колонки patients.telegram_opt_in нет в схеме вовсе (её же и отбрасывает
+// query-compiler на записи), поэтому data.js со своим row.telegram_opt_in
+// всегда получает false — из-за этого прошлая колонка «Телеграм» показывала
+// «Не подключён» у всех и была удалена (REG_TBL_FIT_V2).
+//
+// Настоящая связь живёт в telegram_links: чат ↔ НОМЕР ТЕЛЕФОНА, и активна
+// она, пока revoked_at пуст. Сервер уже отдаёт готовый ответ — telegram_chats_list
+// перечисляет живые связки вместе с картами пациентов на том же номере. Спрашиваем
+// его ОДИН раз на монтирование и складываем id в множество.
+//
+// СПРАШИВАЕМ, ТОЛЬКО ЕСЛИ РАЗДЕЛ ЧАТА ВЫДАН: процедура закрыта правом
+// «telegram-chat» (server/services/rpc/telegram.js), и регистратору по
+// умолчанию его не выдают. Заведомо отказной запрос на каждый вход в реестр —
+// это трата, а не отметка; без права отметок просто нет, и ни одна строка не
+// притворяется, будто знает про Telegram.
+let telegramLinked = null;   // Set<patient id> | null, пока не спрошено
+
+async function ensureTelegramLinked() {
+    if (telegramLinked) return telegramLinked;
+    telegramLinked = new Set();
+    if (!canView('telegram-chat')) return telegramLinked;
+    try {
+        const { data, error } = await supabase.rpc('telegram_chats_list', {});
+        if (error) throw new Error(error.message);
+        for (const chat of (data || [])) {
+            for (const pt of (chat && chat.patients) || []) {
+                if (pt && pt.id != null) telegramLinked.add(String(pt.id));
+            }
+        }
+    } catch (e) {
+        console.warn('[patients/telegram]', e.message);
+    }
+    return telegramLinked;
+}
+
+function hasTelegram(p) {
+    return !!(telegramLinked && p && p.id != null && telegramLinked.has(String(p.id)));
+}
+
+// -----------------------------------------------------------------------------
 // FETCH + REPAINT
 // -----------------------------------------------------------------------------
 let lastFetchToken = 0;
@@ -422,6 +530,13 @@ async function fetchAndPaint() {
     // this stale response so it can't overwrite the newer rows.
     if (token !== lastFetchToken) return;
 
+    // PATIENT_ROW_V2 — имена регистраторов приезжают ДО отрисовки, а не после:
+    // иначе на каждой странице сначала мигал бы прочерк, а через мгновение —
+    // фамилия, и глаз ловил бы это движение на самом читаемом экране продукта.
+    // Один запрос на страницу, и только про неизвестные ещё id.
+    await resolveRegistrars(result.rows);
+    if (token !== lastFetchToken) return;
+
     state.total    = result.total;
     refs.lastRows  = result.rows;
     paintRows(result.rows);
@@ -432,8 +547,9 @@ function setLoadingRow() {
     if (!refs.tbody) return;
     clear(refs.tbody);
     refs.tbody.appendChild(h('tr', null,
-        // REG_TBL_FIT_V2 — 10 колонок после удаления «Телеграм» и «Есть ДМС?».
-        h('td', { colspan: '10', style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Загрузка…'),
+        // PATIENT_ROW_V2 — 8 колонок: число обязано совпадать с шапкой, иначе
+        // строка загрузки не растянется на таблицу.
+        h('td', { colspan: '8', style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Загрузка…'),
     ));
     refs.emptyEl.style.display = 'none';
 }
@@ -585,6 +701,33 @@ function branchTag(p) {
         trf('Филиал {letter}', { letter }));
 }
 
+// PATIENT_ROW_V2 — ДАТА ПО-ЧЕЛОВЕЧЕСКИ.
+//
+// Владелец: «date format is 2 may 2019». В реестре стояло сырое ISO
+// (1994-11-15) — машинная запись, которую человек читает по слогам.
+//
+// Форматтер НЕ пишется заново: в приложении уже есть один общий и
+// локале-зависимый — fmtDate (ui.js, DATE_FMT_V1), он же рисует даты в карточке
+// пациента, в кассе и в документах. Имена месяцев он берёт у Intl по языку
+// интерфейса, поэтому «2 мая 2019» по-русски, «2-may 2019» по-узбекски и
+// «2 May 2019» по-английски получаются сами, без словаря месяцев в этом файле.
+//
+// Здесь у его ответа снимается только хвост, лишний в плотной таблице: русское
+// « г.» и узбекская запятая перед годом. Тридцать строк на странице, и год —
+// это год; сокращение экономит ширину в каждой из них, а порядок «день, месяц,
+// год» и язык остаются те же, что во всём продукте.
+function fmtDay(value) {
+    const out = fmtDate(value);
+    if (!out || out === '—') return '';
+    return String(out).replace(/\s*г\.\s*$/, '').replace(/,\s*(\d{4})$/, ' $1');
+}
+
+// «Ничего не известно» пишется одинаково во всех ячейках строки: пустая ячейка
+// и прочерк отличаются в реестре только тем, что прочерк ХОТЯ БЫ видно.
+function noneCell(text) {
+    return h('span', { class: 'pt-none' }, text);
+}
+
 function patientRow(p) {
     // DUP_MERGE_V1 — leading checkbox; only interactive in the Duplicates filter.
     const isDup = state.filter === 'duplicates';
@@ -592,57 +735,84 @@ function patientRow(p) {
         style: { cursor: 'pointer' },
         onclick: (e) => { e.stopPropagation(); },
         onchange: (e) => { if (e.currentTarget.checked) selectedDup.add(p.id); else selectedDup.delete(p.id); paintMergeBar(); syncHeadCb(); } }) : null;
+
+    const fullName = `${p.lastName || ''} ${p.firstName || ''} ${p.middle || ''}`.trim();
+    const sex = p.gender === 'M' ? 'М' : p.gender === 'F' ? 'Ж' : '';
+    const phone = formatPhone(p.phone) || p.phone || '';
+    const dob = fmtDay(p.dob);
+    const last = fmtDay(p.lastVisit);
+    const visits = Number(p.visitCount || 0);
+    const registrar = registrarOf(p);
+
     // data-reveal — заявка на появление; ПРЯЧЕТ строку только motion.js и
     // только когда уже может показать (см. MOTION_REVEAL_V1). Атрибут в
     // разметке безвреден сам по себе: без JS он ничего не значит.
     return h('tr', { class: 'row-click', 'data-reveal': '', onclick: () => refs.onNavigate('patient-card', p), style: { cursor: 'pointer' } },
         h('td', { style: { textAlign: 'center' }, onclick: (e) => e.stopPropagation() }, cb || ''),
-        // 1 — Пациент: avatar + inline ID/MRN + ФИО
+        // 1 — ЛИЧНОСТЬ одним блоком: аватар, имя со своими метками, а под ним
+        // всё, чем человека опознают у стойки, — номер карты, пол, город.
         h('td', null,
-            h('div', { class: 'row', style: { gap: '11px' } },
+            h('div', { class: 'pt-ident' },
                 Avatar({ initials: p.initials, color: p.avColor }),
-                h('div', { style: { minWidth: 0 } },
-                    h('div', { class: 'cell-strong' },
-                        h('span', { class: 'num', style: { color: 'var(--ink-400)', marginRight: '6px' } }, p.mrn || '—'),
-                        `${p.lastName} ${p.firstName} ${p.middle || ''}`.trim(),
-                        duplicateIdSet.has(p.id) ? h('span', { class: 'tag tag-warn', style: { marginLeft: '8px', fontSize: '12.5px' }, title: 'Возможный дубликат — то же имя на том же телефоне (или общий ПИНФЛ). Откройте карточку для объединения.' }, 'Дубликат') : null,
+                h('div', { class: 'pt-ident-txt' },
+                    h('div', { class: 'pt-name' },
+                        // title — полное ФИО: длинная фамилия обрезается
+                        // многоточием, и обрезанное обязано быть прочитываемым.
+                        h('span', { class: 'pt-nm', title: fullName || undefined }, fullName || '—'),
+                        // TELEGRAM — маленький значок у имени, а не колонка: это
+                        // свойство ЧЕЛОВЕКА (с ним можно списаться), и стоять оно
+                        // должно при имени. Бумажный самолётик — тот же значок,
+                        // которым Telegram подписан в разделе чата с пациентами.
+                        hasTelegram(p)
+                            ? h('span', { class: 'pt-tg', title: 'Есть Telegram' }, Icon('Send', { size: 11 }))
+                            : null,
+                        duplicateIdSet.has(p.id) ? h('span', { class: 'tag tag-warn', style: { fontSize: '12.5px' }, title: 'Возможный дубликат — то же имя на том же телефоне (или общий ПИНФЛ). Откройте карточку для объединения.' }, 'Дубликат') : null,
                         // BRANCH_ORIGIN_V1 — регистр КЛИНИЧЕСКИЙ, а не пофилиальный: поиск
                         // обязан находить всех (PATIENTS_CLINIC_WIDE_V1), поэтому список не
                         // фильтруется — подписывается. Метка только на чужих: подпись на
                         // каждой строке перестала бы что-либо значить.
                         branchTag(p),
                     ),
-                    p.city
-                        ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '1px' } }, p.city)
-                        : null,
+                    h('div', { class: 'pt-meta' },
+                        h('span', { class: 'num pt-mrn' }, p.mrn || '—'),
+                        sex ? h('span', { class: 'pt-dot' }, '·') : null,
+                        sex ? h('span', null, sex) : null,
+                        p.city ? h('span', { class: 'pt-dot' }, '·') : null,
+                        p.city ? h('span', { class: 'pt-city' }, p.city) : null,
+                    ),
                 ),
             ),
         ),
-        // 2 — Дата рожд. / возраст
+        // 2 — Дата рождения «2 мая 2019», под ней возраст.
         h('td', null,
-            h('div', { class: 'num', style: { fontSize: '12.5px' } }, p.dob || '—'),
-            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, p.age != null ? trf('{n} лет', { n: p.age }) : '—'),
+            dob ? h('div', { class: 'pt-when-main' }, dob) : noneCell('—'),
+            p.age != null ? h('div', { class: 'pt-when-sub' }, trf('{n} лет', { n: p.age })) : null,
         ),
-        // 3 — Пол
-        h('td', { style: { textAlign: 'center' } },
-            h('span', { class: 'tag' }, p.gender === 'M' ? 'М' : p.gender === 'F' ? 'Ж' : (p.gender || '—')),
+        // 3 — Телефон: тот же вид, что на карточке CRM (formatPhone), и его
+        // можно ВЫДЕЛИТЬ мышью — номер из реестра диктуют и копируют. Клик по
+        // номеру поэтому не открывает карту: выделение заканчивается кликом, и
+        // строка увозила бы человека с экрана посреди копирования.
+        h('td', null,
+            phone
+                ? h('span', { class: 'num pt-phone', onclick: (e) => e.stopPropagation() }, phone)
+                : noneCell('—'),
         ),
-        // 4 — Телефон
-        h('td', { class: 'num', style: { fontSize: '12.5px' } }, p.phone || '—'),
-        // REG_TBL_FIT_V2 — «Телеграм» и «Есть ДМС?» удалены вместе с заголовками
-        // (см. комментарий в шапке таблицы). Порядок ячеек обязан совпадать с
-        // порядком <th>, поэтому обе строки убираются одной правкой.
-        // 5 — Последний визит
-        h('td', { class: 'num muted', style: { fontSize: '12.5px' } }, p.lastVisit || '—'),
-        // 6 — Визитов
-        h('td', { class: 'num', style: { textAlign: 'center', fontWeight: '700' } }, String(p.visitCount ?? 0)),
-        // 7 — Баланс  (real balance not joined → zero-state «0 сум», never a fake ±)
+        // 4 — Последний визит, под ним счёт визитов: число относится к этой же
+        // дате, и стоять им врозь незачем.
+        h('td', null,
+            last ? h('div', { class: 'pt-when-main' }, last) : noneCell('—'),
+            h('div', { class: 'pt-when-sub' }, visits > 0 ? trf('визитов: {n}', { n: visits }) : 'визитов не было'),
+        ),
+        // 5 — Баланс  (real balance not joined → zero-state «0 сум», never a fake ±)
         h('td', { style: { textAlign: 'right' } }, balanceCell(p.balance)),
-        // 8 — Регистратор
+        // 6 — Регистратор: настоящее имя того, кто завёл карту, а если его в
+        // карте нет — так и сказано словом, а не прочерком, который на каждой
+        // строке читается как «экран сломан».
         h('td', null,
-            h('span', { class: 'reg-by' }, Icon('User', { size: 13 }), p.registrar || '—'),
+            h('span', { class: 'reg-by' }, Icon('User', { size: 13 }),
+                registrar ? h('span', { class: 'pt-reg-nm', title: registrar }, registrar) : noneCell('Не указан')),
         ),
-        // 9 — action «Карточка»
+        // 7 — action «Карточка»
         h('td', { onclick: (e) => e.stopPropagation() },
             h('button', { class: 'start-btn done', type: 'button', onclick: () => refs.onNavigate('patient-card', p) },
                 Icon('ID', { size: 14 }), 'Карточка'),

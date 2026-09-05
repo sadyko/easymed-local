@@ -5266,6 +5266,10 @@ export const STRINGS = {
   "Не удалось отправить направление: {msg}": {"en":"Could not send the referral: {msg}","ru":"Не удалось отправить направление: {msg}","uz":"Yo'llanmani yuborib bo'lmadi: {msg}"},
   "Не удалось оформить заявку: {msg}": {"en":"Could not submit the request: {msg}","ru":"Не удалось оформить заявку: {msg}","uz":"Arizani rasmiylashtirib bo'lmadi: {msg}"},
   "Не указаны": {"en":"Not specified","ru":"Не указаны","uz":"Ko'rsatilmagan"},
+  // PATIENT_ROW_V2 (2026-09-05) — строка реестра пациентов: кто завёл карту,
+  // когда его в карте нет; и отметка «с этим человеком можно списаться».
+  "Не указан": {"en":"Not specified","ru":"Не указан","uz":"Ko'rsatilmagan"},
+  "Есть Telegram": {"en":"Has Telegram","ru":"Есть Telegram","uz":"Telegram bor"},
   "Необязательно — указания, предупреждения…": {"en":"Optional — instructions, warnings…","ru":"Необязательно — указания, предупреждения…","uz":"Ixtiyoriy — ko'rsatmalar, ogohlantirishlar…"},
   "Нет временно сохранённых форм.": {"en":"No temporarily saved forms.","ru":"Нет временно сохранённых форм.","uz":"Vaqtincha saqlangan formalar yo'q."},
   "Нет контекста пациента.": {"en":"No patient context.","ru":"Нет контекста пациента.","uz":"Bemor konteksti yo'q."},
