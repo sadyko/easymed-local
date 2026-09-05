@@ -28,6 +28,11 @@ import { h, Icon, clear, toast, Avatar, initials, avColor, field, fmtDate, fmtDa
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1
 import { doctorPoolFor } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1
+// WIZARD_ONE_ENGINE_V1 — общий клиент слотов и записи. Один вопрос «когда врач
+// свободен» на весь продукт: его задаёт серверу этот клиент, а считает
+// server/services/rpc/slot-engine.js. ?v как у остальных импортёров модуля.
+import { primeSlotDays, slotDayCached, freeStartMinutes, loadSlotDay, hhmmToMin,
+         askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=aug17e';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // WIZ_INVOICE_PRINT_V1 — тот же брендированный бланк «Счёт» (Настройки → Документы); ?v как у всех импортёров
 
 const RU_M_GEN = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
@@ -337,11 +342,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     let railEl = null;
     // TDZ_FIX_V2 — то же для расписания. Пока СМЕТА пуста, paint() до них не
     // добирается, но с предзаполненной услугой (CRM_PRESET_V1) paint() рисует
-    // планировщик строки → slotsForDay/dayLabel читают busyMap и RU_DOW. Эти
-    // const'ы объявлялись ниже по файлу, и обращение к ним из раннего paint()
-    // падало с ReferenceError, оставляя мастер пустым.
-    const busyMap = new Map();   // doctorId -> [{start,end}] за 8 дней (ms)
-    const WH_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+    // планировщик строки → freeSlotsFor/dayLabel читают RU_DOW. Эти const'ы
+    // объявлялись ниже по файлу, и обращение к ним из раннего paint() падало
+    // с ReferenceError, оставляя мастер пустым.
     const RU_DOW = ['ВС', 'ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ'];
 
     // SCROLL_KEEP_TDZ_V1 — declared HERE, before the first paint(), and not down
@@ -424,17 +427,18 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         console.error('[visit-wizard] catalog load threw:', e);
         toast(trf('Не удалось загрузить каталог: {msg}', { msg: wiz.loadError }), 'fail');
     }
-    // SCHED_V1 — график врача (users.working_hours / scheduling_mode) становится
-    // читаемым после перезапуска сервера (registry-обновление); до этого молча
-    // работаем с окном по умолчанию 09:00–18:00 каждый день.
+    // WIZARD_ONE_ENGINE_V1 — сюда же тянулся график врача, чтобы мастер сам
+    // считал по нему окно дня. Больше не нужен: окно, обед и занятость
+    // приходят с сервера (calendar_slots). Остаётся способ приёма — по нему
+    // решается, показывать ли слоты вообще (живая очередь их не выбирает).
     try {
-        const ext = await supabase.from('users').select('id, working_hours, scheduling_mode')
+        const ext = await supabase.from('users').select('id, scheduling_mode')
             .eq('role', 'doctor').eq('is_active', true);
         if (!ext.error && ext.data) {
             const m = new Map(ext.data.map(u => [u.id, u]));
             for (const d of wiz.doctors) Object.assign(d, m.get(d.id) || {});
         }
-    } catch (e) { /* фолбэк — окно по умолчанию */ }
+    } catch (e) { /* способ приёма неизвестен — врач считается записываемым */ }
     paint();
     // CRM_PRESET_V1 — предзаполнение сметы (например, «интересующая услуга» из CRM).
     const presetIds = Array.isArray(opts.presetServiceIds) ? opts.presetServiceIds : [];
@@ -531,7 +535,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     // выглядела бы как «ничего не подставилось».
                     if (ln.doctor_id && wiz.doctors.some(d => String(d.id) === String(ln.doctor_id))) {
                         line.doctorId = Number(ln.doctor_id);
-                        if (typeof autoPickSlot === 'function' && !line.when) { try { autoPickSlot(line); } catch (_) {} }
+                        if (!line.when) autoPickSlot(line).then(() => { repaintRail(); if (wiz.step === 1) paint(); }).catch(() => {});
                     }
                 }
                 names.push(svc.name);
@@ -840,7 +844,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 const pickDoc = (d) => {
                     line.doctorId = d.id; line.when = null;
                     if (d.scheduling_mode === 'live_queue') { repaintRail(); repaintCatalog(); return; }   // LIVE_QUEUE_V1
-                    loadBusy(d.id).then(() => { autoPickSlot(line); repaintRail(); repaintCatalog(); });
+                    autoPickSlot(line).then(() => { repaintRail(); repaintCatalog(); });
                 };
                 const paintDocList = () => {
                     clear(docList);
@@ -923,7 +927,18 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     const firstDow = (base.getDay() + 6) % 7;   // Пн = 0
                     for (let i = 0; i < firstDow; i++) grid.appendChild(h('div'));
                     const daysInMonth = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate();
-                    const horizon = d0.getTime() + 34 * 86400000;   // предел загруженной занятости
+                    const horizon = d0.getTime() + 34 * 86400000;   // предел, до которого записываем
+                    // Спрашиваем сервер про дни ЭТОГО месяца и перерисовываем
+                    // сетку, когда он ответит: свободное считает он, не мы.
+                    const monthDays = [];
+                    for (let dd = 1; dd <= daysInMonth; dd++) {
+                        const ms = new Date(base.getFullYear(), base.getMonth(), dd).getTime();
+                        if (ms >= d0.getTime() && ms <= horizon) monthDays.push(ms);
+                    }
+                    const unknown = monthDays.filter(ms => !slotDayCached(line.doctorId, isoDay(ms), lineDuration(line)));
+                    if (line.doctorId && unknown.length) {
+                        loadSlots(line, unknown).then(() => { if (calPop.style.display !== 'none') paintCal(); });
+                    }
                     for (let dd = 1; dd <= daysInMonth; dd++) {
                         const dayMs = new Date(base.getFullYear(), base.getMonth(), dd).getTime();
                         const past = dayMs < d0.getTime();
@@ -1014,62 +1029,111 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     }
 
     // ---------------------------------------------------------------------
-    // SCHED_V1 — слоты врача, как в easymed: окно дня из users.working_hours
-    // (Сотрудники → График), занятость из существующих визитов врача + строк
-    // этой же сметы. Пустой график → 09:00–18:00 каждый день. Шаг 30 минут.
+    // WIZARD_ONE_ENGINE_V1 — «когда врач свободен» СПРАШИВАЕТСЯ У СЕРВЕРА.
+    //
+    // Здесь стояла своя реализация: dayWindow разбирала users.working_hours,
+    // slotsForDay перебирала день шагом 30 минут, loadBusy тянула визиты на 35
+    // дней. Она расходилась с календарём в трёх местах сразу, и все три видел
+    // регистратор, а не разработчик:
+    //   • ФОРМА ГРАФИКА. Читалась только форма {on, from, to} (экран
+    //     «Сотрудники»). Карточка сотрудника пишет {enabled, from, to,
+    //     lunch…} — у врача, заведённого карточкой, мастер графика НЕ ВИДЕЛ и
+    //     предлагал 09:00–18:00 всем подряд, включая выходные.
+    //   • ОБЕД. Его вводят в карточке сотрудника, и мастер его не вычитал.
+    //   • ОКНО ПО УМОЛЧАНИЮ. Мастер — 09:00–18:00, календарь — 08:00–20:00.
+    //
+    // Реализация на весь продукт теперь одна: server/services/rpc/slot-engine.js,
+    // спрашивают её через calendar_slots. Клиент кэша и вызова — общий с
+    // подбором услуг (service-picker-modal.js), чтобы два мастера, открытые
+    // один поверх другого, видели одинаковое.
     // ---------------------------------------------------------------------
-    // busyMap / WH_KEYS / RU_DOW объявлены выше первого paint() — см. TDZ_FIX_V1.
+    // RU_DOW объявлен выше первого paint() — см. TDZ_FIX_V2.
 
-    async function loadBusy(docId) {
-        if (busyMap.has(docId)) return;
-        const from = new Date(); from.setHours(0, 0, 0, 0);
-        const to = new Date(from); to.setDate(to.getDate() + 35);   // SCHED_CAL_V1 — горизонт календаря
-        const { data, error } = await supabase.from('visits')
-            .select('visit_date, duration_minutes, status')
-            .eq('doctor_id', docId)
-            .gte('visit_date', from.toISOString())
-            .lte('visit_date', to.toISOString())
-            .in('status', ['scheduled', 'confirmed', 'arrived']);
-        if (error) { toast(trf('Занятость врача не загрузилась: {msg}', { msg: error.message }), 'fail'); busyMap.set(docId, []); return; }
-        busyMap.set(docId, (data || []).map(v => {
-            const s = new Date(v.visit_date).getTime();
-            return { start: s, end: s + (Number(v.duration_minutes) || 30) * 60000 };
-        }));
+    const lineDuration = (line) => Math.max(5, Number(line.svc.duration_minutes) || 30);
+
+    /** Прогреть у сервера дни врача для этой строки (по местным полуночам ms). */
+    async function loadSlots(line, dayMsList) {
+        if (!line.doctorId) return;
+        await primeSlotDays(line.doctorId, dayMsList.map(isoDay), lineDuration(line));
     }
 
-    function dayWindow(doc, date) {
-        let wh = null;
-        try { wh = doc && doc.working_hours ? (typeof doc.working_hours === 'string' ? JSON.parse(doc.working_hours) : doc.working_hours) : null; }
-        catch (e) { wh = null; }
-        const d = wh && wh[WH_KEYS[date.getDay()]];
-        if (d && d.on === false) return null;   // выходной по графику
-        const from = (d && d.on && d.from) || '09:00';
-        const to = (d && d.on && d.to) || '18:00';
-        return { from, to };
+    /** Прогреть горизонт автоподбора: 14 дней от сегодня. */
+    async function loadBusy(line) {
+        const d0 = new Date(); d0.setHours(0, 0, 0, 0);
+        await loadSlots(line, Array.from({ length: 14 }, (_, i) => d0.getTime() + i * 86400000));
     }
 
+    /**
+     * Свободные начала дня (ms) — список сервера, минус время, уже занятое
+     * ДРУГИМИ строками этой же сметы: их в базе ещё нет, поэтому знать о них
+     * сервер не может. Это вычитание уже разобранного, а не свой расчёт окна.
+     */
     function slotsForDay(line, dayStart) {
         if (!line.doctorId) return [];
-        const doc = wiz.doctors.find(x => x.id === line.doctorId);
-        const date = new Date(dayStart);
-        const win = dayWindow(doc, date);
-        if (!win) return [];
-        const step = 30 * 60000;
-        const dur = (Number(line.svc.duration_minutes) || 30) * 60000;
-        const [fh, fm] = win.from.split(':').map(Number);
-        const [th, tm] = win.to.split(':').map(Number);
-        const start = new Date(date); start.setHours(fh, fm, 0, 0);
-        const end = new Date(date); end.setHours(th, tm, 0, 0);
-        // занято: чужие визиты врача + другие строки этой сметы у того же врача
-        const bz = (busyMap.get(line.doctorId) || []).concat(
-            wiz.cart.filter(c => c !== line && c.doctorId === line.doctorId && c.when)
-                .map(c => { const s = new Date(c.when).getTime(); return { start: s, end: s + (Number(c.svc.duration_minutes) || 30) * 60000 }; }));
-        const now = Date.now();
-        const out = [];
-        for (let t = start.getTime(); t + dur <= end.getTime(); t += step) {
-            if (t < now) continue;
-            if (bz.some(b => t < b.end && b.start < t + dur)) continue;
-            out.push(t);
+        const dayIso = isoDay(dayStart);
+        const dur = lineDuration(line);
+        const day = slotDayCached(line.doctorId, dayIso, dur);
+        if (!day) return [];
+        const base = new Date(dayStart); base.setHours(0, 0, 0, 0);
+        const taken = wiz.cart
+            .filter(c => c !== line && c.doctorId === line.doctorId && c.when && !c.dateOnly)
+            .map(c => { const s = new Date(c.when).getTime(); return { s, e: s + (Number(c.svc.duration_minutes) || 30) * 60000 }; });
+        const durMs = dur * 60000;
+        return freeStartMinutes(day)
+            .map(m => base.getTime() + m * 60000)
+            .filter(t => !taken.some(b => t < b.e && b.s < t + durMs));
+    }
+
+    /** Строка дня, которая ЗАНИМАЕТ ВРЕМЯ ВРАЧА: с врачом, со слотом, не живая очередь. */
+    function headTimedLine(lines) {
+        return (lines || [])
+            .filter(c => c.doctorId && c.when && !c.dateOnly && !isLiveQueueDoc(c.doctorId))
+            .sort((a, b) => String(a.when).localeCompare(String(b.when)))[0] || null;
+    }
+
+    /**
+     * WIZARD_ONE_ENGINE_V1 — свободно ли выбранное время. Спрашивается У ТОГО ЖЕ
+     * СЕРВЕРА, что рисует календарь, и ДО первой записи в базу: отказ не должен
+     * оставлять ни визита, ни услуги, ни счёта.
+     *
+     * Проверяется ГОЛОВНАЯ строка дня — та, что становится временем визита.
+     * Остальные услуги дня ложатся строками visit_services со своим
+     * scheduled_at и времени врача в календаре не занимают: отказывать за них
+     * значило бы запрещать то, что система и не бронирует.
+     *
+     * Возвращает Map<'YYYY-MM-DD', причина|null> — или null, если регистратор
+     * отказался от экстренной записи (тогда не создаётся вообще ничего).
+     */
+    async function gateDaySlots(byDay) {
+        forgetSlots();   // пока заполняли смету, время могли занять
+        const out = new Map();
+        for (const [day, lines] of [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+            const head = headTimedLine(lines);
+            if (!head) continue;
+            const dur = lineDuration(head);
+            const start = new Date(head.when);
+            const dayIso = isoDay(start.getTime());
+            const startMin = start.getHours() * 60 + start.getMinutes();
+            const data = await loadSlotDay(head.doctorId, dayIso, dur);
+            if (!data) continue;   // сервер не ответил — решать ему же при записи
+            if (freeStartMinutes(data).includes(startMin)) continue;
+
+            const doc = wiz.doctors.find(x => x.id === head.doctorId) || {};
+            const docName = doc.full_name || doc.username || '—';
+            const clash = (data.busy || []).find(b => {
+                const from = hhmmToMin(b.from), to = hhmmToMin(b.to);
+                return startMin < to && from < startMin + dur;
+            });
+            if (!clash) {
+                // Не занято, а НЕРАБОЧЕЕ (график, обед, часы клиники). Экстренная
+                // запись такое не лечит: врача в это время в клинике нет.
+                toast(trf('{doctor} в это время не принимает — выберите время из списка.', { doctor: docName }), 'fail');
+                return null;
+            }
+            const text = bookErrorText({ code: 'slot_taken', params: { doctor: docName, from: clash.from, to: clash.to } });
+            const reason = await askEmergencyReason(text);
+            if (!reason) return null;
+            out.set(day, reason);
         }
         return out;
     }
@@ -1085,7 +1149,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         return wiz.cart.filter(c => !c.svc.requires_doctor || c.doctorId);
     }
 
-    function autoPickSlot(line) {
+    async function autoPickSlot(line) {
+        await loadBusy(line);   // прогреть у сервера 14 дней автоподбора
         const d0 = new Date(); d0.setHours(0, 0, 0, 0);
         for (let i = 0; i < 14; i++) {
             const day = d0.getTime() + i * 86400000;
@@ -1141,7 +1206,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         if (pool.length === 1) {
             line.doctorId = pool[0].id;
             if (isLiveQueueDoc(line.doctorId)) { line.when = null; repaintRail(); }
-            else loadBusy(line.doctorId).then(() => { autoPickSlot(line); repaintRail(); if (wiz.step === 1) paint(); });
+            else autoPickSlot(line).then(() => { repaintRail(); if (wiz.step === 1) paint(); });
         }
         repaintRail();
     }
@@ -1705,7 +1770,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         c.doctorId = Number(sel.value);
                         // Тот же путь, что и при выборе врача в каталоге: без
                         // слота врачебная услуга не уедет дальше шага 1.
-                        if (!c.when && !isLiveQueueDoc(c.doctorId)) { try { autoPickSlot(c); } catch (_) {} }
+                        if (!c.when && !isLiveQueueDoc(c.doctorId)) autoPickSlot(c).then(() => { repaintRail(); if (wiz.step === 1) paint(); }).catch(() => {});
                         repaintRail();
                         if (wiz.step === 1) paint();
                     });
@@ -2041,6 +2106,23 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 byDay.get(day).push(c);
             }
 
+            // WIZARD_ONE_ENGINE_V1 — СЛОТ ПРОВЕРЯЕТСЯ ДО ПЕРВОЙ ЗАПИСИ В БАЗУ.
+            //
+            // Мастер занимал время врача, ни у кого не спросив: двое
+            // регистраторов — один в календаре, другой здесь — брали одно и то
+            // же время, и ни один об этом не узнавал. Теперь «свободно ли» —
+            // это список сервера (calendar_slots), тот самый, который рисует
+            // календарь, а не второе мнение браузера.
+            //
+            // Проверка идёт ПЕРЕД циклом по дням: отказ не должен оставлять за
+            // собой ни визита, ни строки услуги, ни счёта.
+            const emergencyByDay = await gateDaySlots(byDay);
+            if (!emergencyByDay) {   // отказались от экстренной записи
+                toast(tr('Запись не сохранена — время занято.'), 'info');
+                wiz.creating = false; repaintRail();
+                return;
+            }
+
             let invoicesOk = 0, invoiceFail = '';
             const aktJobs = [];                            // AKT_DOC_V1 — акты по счетам контрагентов
             let firstInvoice = null;                       // WIZ_INVOICE_PRINT_V1 — печатаем первый счёт
@@ -2065,6 +2147,41 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 });
                 if (evErr) throw new Error(trf('Визит на {day}: {msg}', { day, msg: evErr.message || 'ensure_visit failed' }));
                 const visit = ev.visit;
+
+                // WIZARD_ONE_ENGINE_V1 — визит дня, только что созданный, идёт
+                // через calendar_book: тот же вход, что у календаря, с тем же
+                // запретом двойной записи и той же записью причины экстренной
+                // записи в visits.notes. Заодно визит получает ДЛИТЕЛЬНОСТЬ и
+                // услугу — без них календарь рисовал запись мастера
+                // пятнадцатиминутным огрызком.
+                //
+                // Только для СВЕЖЕГО визита: у пациента, уже пришедшего сегодня,
+                // визит-контейнер дня существует, и двигать его время под
+                // вторую услугу нельзя — она ляжет своей строкой visit_services.
+                const timedHead = headTimedLine(lines);
+                if (ev.created && timedHead) {
+                    const emg = emergencyByDay.get(day) || null;
+                    const args = {
+                        visit_id: visit.id,
+                        doctor_id: Number(timedHead.doctorId),
+                        service_id: timedHead.svc.id,
+                        start: new Date(timedHead.when).toISOString(),
+                        duration_minutes: lineDuration(timedHead),
+                    };
+                    if (emg) { args.emergency = true; args.emergency_reason = emg; }
+                    const bk = await supabase.rpc('calendar_book', args);
+                    if (bk.error) throw new Error(bookErrorText(bk.error));
+                    forgetSlots();
+                    Object.assign(visit, bk.data.visit || {});
+                } else if (emergencyByDay.get(day)) {
+                    // Визит дня уже был — экстренная причина всё равно обязана
+                    // остаться В САМОЙ ЗАПИСИ (visits.notes уезжает филиалам).
+                    // i18n-exempt: строка ПИШЕТСЯ В БАЗУ (причина в самой записи), а не рисуется
+                    const mark = trf('Экстренная запись поверх занятого времени: {reason}', { reason: emergencyByDay.get(day) });
+                    await supabase.from('visits')
+                        .update({ notes: (visit.notes ? visit.notes + '\n' : '') + mark })
+                        .eq('id', visit.id);
+                }
 
                 const vsIds = [];
                 const coveredVsIds = [];   // COVERAGE_SPLIT_V1 — строки за счёт контрагента

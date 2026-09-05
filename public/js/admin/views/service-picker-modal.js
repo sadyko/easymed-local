@@ -32,7 +32,6 @@ import { loadPatientsPaged, savePatient, loadPatientById, insertRow, currentUser
 import { logPatientActivity } from './activity-log.js';   // BOOK_WIZARD_V1
 import { gw } from '../gateway.js';
 import { clinicFlags } from '../clinic-flags.js';   // CUSTOM_CLINIC_V1
-import { loadClinicHours, clinicRangeForDay } from '../clinic-hours.js?v=ch1';   // WORKING_HOURS_CLINIC_BOUND_V1
 import { printableSheet } from './doc-settings.js?v=noqr1';   // insurance/B2B: print statistics act
 import { tr, trf } from '../i18n.js';   // WIZ_TEMPLATES_V1 + I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { phoneInput } from '../phone-input.js?v=ph1';
@@ -298,7 +297,8 @@ export function openServicePickerModal({
             safeSelect('services',      b => (window.CLINIC?.id ? b.eq('company_id', window.CLINIC.id) : b).eq('active', true).order('name')),       // TENANT_BOOKING_SCOPE_V1 — this clinic's services only (super-admin must not see other clinics')
             safeSelect('users',         b => (window.CLINIC?.id ? b.eq('company_id', window.CLINIC.id) : b).eq('active', true).order('full_name')),   // TENANT_BOOKING_SCOPE_V1 — this clinic's doctors only
         ]);
-        await loadClinicHours();   // WORKING_HOURS_CLINIC_BOUND_V1
+        // WORKING_HOURS_CLINIC_BOUND_V1 — часы клиники здесь больше не грузятся:
+        // ими зажимает график сам движок слотов на сервере (clinicWindow).
         state.types    = types || [];
         state.services = services || [];
         state.doctors  = (doctors || []).filter(u =>
@@ -720,10 +720,11 @@ export function openServicePickerModal({
                 if (showSchedule) { state.schedDateIso = null; state.schedStartMin = null; state.schedManual = false; }
             }
             updateColumn(2);
-            // Service duration drives slot length — re-pick the nearest slot
-            // unless the user already chose one by hand.
-            if (showSchedule && state.doctorId && !state.schedManual) autoPickSlot();
-            if (showSchedule) renderSchedule();
+            // Service duration drives slot length — re-ask the server for this
+            // duration's free starts, and re-pick the nearest one unless the
+            // user already chose a time by hand.
+            if (showSchedule && state.doctorId) refreshSchedule({ repick: !state.schedManual });
+            else if (showSchedule) renderSchedule();
         } else if (colIdx === 2) {
             state.doctorId = state.doctorId === id ? null : id;
             updateColumn(2);
@@ -867,54 +868,60 @@ export function openServicePickerModal({
         updateSummary();
     }
 
-    // Pull the doctor's visits for the next 2 weeks in one query and bucket
-    // them by local day so slot math is purely in-memory afterwards.
+    // Услуга сменилась — сменилась и ДЛИТЕЛЬНОСТЬ приёма, а свободные начала
+    // сервер считает под неё. Поэтому окно перезапрашивается: иначе полоса
+    // осталась бы со слотами прежней длины и «врач не работает» на пустом месте.
+    async function refreshSchedule({ repick = true } = {}) {
+        const doctor = currentDoctor();
+        if (!doctor) { renderSchedule(); updateSummary(); return; }
+        await loadDoctorVisitsWindow(doctor.id);
+        if (state.doctorId !== doctor.id) return;
+        if (repick) autoPickSlot();
+        renderSchedule();
+        updateSummary();
+    }
+
+    // WIZARD_ONE_ENGINE_V1 — окно дня, свободные начала и занятость приходят
+    // с сервера (calendar_slots), по одному вызову на день. Экран НЕ считает
+    // ни график, ни обед, ни часы клиники: раньше считал, и расходился с
+    // календарём (разбор — в шапке WIZARD_ONE_ENGINE_V1 внизу файла).
     async function loadDoctorVisitsWindow(doctorId) {
         state.schedLoadingFor = doctorId;
-        const startIso = schedTodayIso();
-        const endDate  = schedIsoToDate(schedAddDays(startIso, SCHED_WINDOW_DAYS));
-        endDate.setHours(23, 59, 59, 999);
-        const start = schedIsoToDate(startIso);
-        start.setHours(0, 0, 0, 0);
-        const { data, error } = await supabase.from('visits')
-            .select('id, visit_date, duration_minutes, status, patient_id, services(name)')
-            .eq('doctor_id', doctorId)
-            .gte('visit_date', start.toISOString())
-            .lte('visit_date', endDate.toISOString());
+        const dur = serviceDurationMin();
+        const days = [];
+        for (let i = 0; i <= SCHED_WINDOW_DAYS; i++) days.push(schedAddDays(schedTodayIso(), i));
+        await primeSlotDays(doctorId, days, dur, { stepMinutes: SCHED_SNAP, patientId });
         const map = {};
-        if (error) {
-            console.warn('[service-picker] schedule visits load failed:', error.message);
-        } else {
-            for (const v of (data || [])) {
-                if (['cancelled', 'no_show'].includes(v.status)) continue;
-                if (patientId && v.patient_id === patientId) continue;   // ignore the patient's own slot
-                const d = new Date(v.visit_date);
-                if (Number.isNaN(d.getTime())) continue;
-                const iso = schedDateToIso(d);
-                const startMin = d.getHours() * 60 + d.getMinutes();
-                const dur = Math.max(5, Number(v.duration_minutes || 30));
-                if (!map[iso]) map[iso] = [];
-                map[iso].push({ startMin, endMin: startMin + dur, label: v.services?.name || 'Booked' });
-            }
+        for (const iso of days) {
+            const day = slotDayCached(doctorId, iso, dur, { stepMinutes: SCHED_SNAP });
+            if (!day) continue;
+            map[iso] = (day.busy || []).map(b => ({
+                startMin: hhmmToMin(b.from), endMin: hhmmToMin(b.to),
+                label: b.patient_name || tr('Занято'),
+            }));
         }
         state.schedVisits = map;
         if (state.schedLoadingFor === doctorId) state.schedLoadingFor = null;
+    }
+
+    /** Свободные начала дня — список сервера, без пересчёта в браузере. */
+    function schedFreeStarts(iso) {
+        const doctor = currentDoctor();
+        if (!doctor) return [];
+        return freeStartMinutes(slotDayCached(doctor.id, iso, serviceDurationMin(), { stepMinutes: SCHED_SNAP }));
     }
 
     // Walk forward day-by-day from today to the first day that has a free slot.
     function autoPickSlot() {
         const doctor = currentDoctor();
         if (!doctor) return;
-        const dur = serviceDurationMin();
         for (let i = 0; i < SCHED_WINDOW_DAYS; i++) {
-            const iso   = schedAddDays(schedBaseIso(), i);
-            const range = workingRangeFor(doctor, iso);
-            if (!range) continue;
-            const slot = nearestSlotInDay(iso, range, dur);
-            if (slot != null) {
+            const iso  = schedAddDays(schedBaseIso(), i);
+            const free = schedFreeStarts(iso);
+            if (free.length) {
                 state.schedViewIso  = iso;
                 state.schedDateIso  = iso;
-                state.schedStartMin = slot;
+                state.schedStartMin = free[0];
                 return;
             }
         }
@@ -922,27 +929,26 @@ export function openServicePickerModal({
         state.schedStartMin = null;
     }
 
-    // Earliest snapped, non-overlapping slot of `dur` minutes inside `range`.
-    function nearestSlotInDay(iso, range, dur) {
-        const busy = state.schedVisits[iso] || [];
-        let earliest = range.fromMin;
-        if (iso === schedTodayIso()) {
-            const now = new Date();
-            const nowMin = now.getHours() * 60 + now.getMinutes();
-            earliest = Math.max(earliest, Math.ceil(nowMin / SCHED_SNAP) * SCHED_SNAP);
-        }
-        for (let s = range.fromMin; s + dur <= range.toMin; s += SCHED_SNAP) {
-            if (s < earliest) continue;
-            if (!overlapsBusy(s, s + dur, busy)) return s;
-        }
-        return null;
+    // Earliest free start the server offers for that day.
+    function nearestSlotInDay(iso) {
+        const free = schedFreeStarts(iso);
+        return free.length ? free[0] : null;
     }
 
-    function selectSchedDay(iso) {
+    async function selectSchedDay(iso) {
         state.schedViewIso = iso;
         const doctor = currentDoctor();
+        // Шагнули за пределы прогретого окна — спрашиваем сервер про этот день.
+        if (doctor && !slotDayCached(doctor.id, iso, serviceDurationMin(), { stepMinutes: SCHED_SNAP })) {
+            await loadSlotDay(doctor.id, iso, serviceDurationMin(), { stepMinutes: SCHED_SNAP, patientId });
+            if (state.doctorId !== doctor.id) return;
+            const day = slotDayCached(doctor.id, iso, serviceDurationMin(), { stepMinutes: SCHED_SNAP });
+            state.schedVisits[iso] = ((day && day.busy) || []).map(b => ({
+                startMin: hhmmToMin(b.from), endMin: hhmmToMin(b.to), label: b.patient_name || tr('Занято'),
+            }));
+        }
         const range  = doctor ? workingRangeFor(doctor, iso) : null;
-        const slot   = range ? nearestSlotInDay(iso, range, serviceDurationMin()) : null;
+        const slot   = range ? nearestSlotInDay(iso) : null;
         // Stepping to a day re-arms auto-pick: land on that day's first opening.
         state.schedManual   = false;
         state.schedDateIso  = slot != null ? iso : null;
@@ -1062,6 +1068,9 @@ export function openServicePickerModal({
         } else {
             if (range.fromMin > gridStartMin) track.appendChild(shade(gridStartMin, range.fromMin));
             if (range.toMin   < gridEndMin)   track.appendChild(shade(range.toMin, gridEndMin));
+            // ОБЕД. Его вводят в карточке сотрудника, и до общего движка слотов
+            // его не вычитал никто — полоса показывала обеденный час рабочим.
+            for (const b of (range.breaks || [])) track.appendChild(shade(b.fromMin, b.toMin));
         }
 
         // Hour gridlines
@@ -1103,19 +1112,16 @@ export function openServicePickerModal({
             track.addEventListener('click', (e) => {
                 const rect = track.getBoundingClientRect();
                 const x = e.clientX - rect.left;
-                let min = SCHED_GRID_START * 60 + (x / SCHED_HOUR_W) * 60;
-                min = Math.round(min / SCHED_SNAP) * SCHED_SNAP;
-                // Keep the whole slot inside working hours.
-                if (min < range.fromMin) min = range.fromMin;
-                if (min + dur > range.toMin) min = range.toMin - dur;
-                min = Math.round(min / SCHED_SNAP) * SCHED_SNAP;
-                if (min < range.fromMin) { toast('That time is before the doctor starts.', 'fail'); return; }
-                if (iso === schedTodayIso()) {
-                    const now = new Date();
-                    if (min < now.getHours() * 60 + now.getMinutes()) { toast('That time is already past.', 'fail'); return; }
-                }
-                if (overlapsBusy(min, min + dur, state.schedVisits[iso] || [])) { toast('That slot overlaps an existing booking.', 'fail'); return; }
-                selectSchedTime(min);
+                const min = SCHED_GRID_START * 60 + (x / SCHED_HOUR_W) * 60;
+                // Клик попадает В БЛИЖАЙШЕЕ СВОБОДНОЕ НАЧАЛО ИЗ СПИСКА СЕРВЕРА.
+                // Здесь браузер сам округлял, сам зажимал в рабочие часы и сам
+                // сверялся с занятостью — три куска логики слотов, четвёртая
+                // копия правила. Теперь список свободного один на весь продукт.
+                const free = schedFreeStarts(iso);
+                if (!free.length) { toast(tr('В этот день у врача нет свободного времени.'), 'fail'); return; }
+                let best = free[0];
+                for (const m of free) if (Math.abs(m - min) < Math.abs(best - min)) best = m;
+                selectSchedTime(best);
             });
         }
 
@@ -1124,21 +1130,18 @@ export function openServicePickerModal({
     }
 
     function xOf(min) { return ((min - SCHED_GRID_START * 60) / 60) * SCHED_HOUR_W; }
+    // Рабочее окно дня — то, которое назвал сервер (calendar_slots.window):
+    // график в обеих формах ({on…} и {enabled…}), минус обед, зажатый часами
+    // клиники. Здесь стояла собственная разборка users.working_hours — она
+    // понимала только {enabled}, обед не вычитала и по умолчанию открывала
+    // 08:00–18:00, а мастер визита в тот же момент открывал 09:00–18:00.
     function workingRangeFor(doctor, iso) {
-        let fromMin, toMin;
-        const wh = doctor?.working_hours || doctor?.workingHours;
-        if (!wh || typeof wh !== 'object') { fromMin = 8 * 60; toMin = 18 * 60; }
-        else {
-            const slot = wh[SCHED_WEEKDAY[schedIsoToDate(iso).getDay()]];
-            if (!slot || slot.enabled === false) return null;
-            fromMin = Math.round(schedParseHHMM(slot.from || '08:00') * 60);
-            toMin   = Math.round(schedParseHHMM(slot.to   || '18:00') * 60);
-            if (toMin <= fromMin) return null;
-        }
-        const cr = clinicRangeForDay(doctor && doctor.branch_id, iso);   // WORKING_HOURS_CLINIC_BOUND_V1
-        if (cr === null) return null;
-        if (cr) { fromMin = Math.max(fromMin, cr.fromMin); toMin = Math.min(toMin, cr.toMin); }
-        return toMin > fromMin ? { fromMin, toMin } : null;
+        if (!doctor) return null;
+        const day = slotDayCached(doctor.id, iso, serviceDurationMin(), { stepMinutes: SCHED_SNAP });
+        const w = day && day.window;
+        if (!w) return null;
+        const fromMin = hhmmToMin(w.from), toMin = hhmmToMin(w.to);
+        return toMin > fromMin ? { fromMin, toMin, breaks: (w.breaks || []).map(b => ({ fromMin: hhmmToMin(b.from), toMin: hhmmToMin(b.to) })) } : null;
     }
 
 
@@ -1313,7 +1316,6 @@ export function openServicePickerModal({
     // =======================================================================
     const CAT_PAGE = 60;
     const cat2 = { q: '', group: '', win: CAT_PAGE };
-    const slotCache = {};   // docId -> { byDay: { dayIso: [{s,e}] } }
     let catListEl = null, catRailEl = null, catCtxEl = null, catGroupsEl = null, catSearchEl = null;
 
     const CAT_MO = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
@@ -1370,66 +1372,28 @@ export function openServicePickerModal({
         });
     }
 
-    // ---- slot engine: one 7-day visits query per doctor, cached ----
-    async function ensureDocSlots(docId) {
-        if (slotCache[docId]) return slotCache[docId];
-        const byDay = {};
-        try {
-            const start = new Date(); start.setHours(0, 0, 0, 0);
-            const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7);
-            const { data } = await supabase.from('visits')
-                .select('visit_date, duration_minutes, status')
-                .eq('doctor_id', docId)
-                .gte('visit_date', start.toISOString()).lt('visit_date', end.toISOString());
-            for (const v of (data || [])) {
-                if (['cancelled', 'no_show'].includes((v.status || '').toLowerCase())) continue;
-                const dt = new Date(v.visit_date);
-                const iso = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-                const sMin = dt.getHours() * 60 + dt.getMinutes();
-                (byDay[iso] = byDay[iso] || []).push({ s: sMin, e: sMin + (Number(v.duration_minutes) || 30) });
-            }
-        } catch (e) { console.warn('[catalog] slots', e.message); }
-        slotCache[docId] = { byDay };
-        return slotCache[docId];
-    }
-    function catWorkRange(doc, dayIso) {
-        const hours = doc && (doc.working_hours || doc.workingHours);
-        const p = (x) => { const [hh, mm] = String(x || '').split(':').map(Number); return (hh || 0) * 60 + (mm || 0); };
-        let from, to;
-        if (!hours || typeof hours !== 'object') { from = 8 * 60; to = 18 * 60; }
-        else {
-            const d = new Date(dayIso + 'T00:00:00');
-            const slot = hours[['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][d.getDay()]];
-            if (!slot || slot.enabled === false) return null;
-            from = slot.from ? p(slot.from) : 8 * 60; to = slot.to ? p(slot.to) : 18 * 60;
-            if (to <= from) return null;
-        }
-        const cr = clinicRangeForDay(doc && doc.branch_id, dayIso);   // WORKING_HOURS_CLINIC_BOUND_V1
-        if (cr === null) return null;
-        if (cr) { from = Math.max(from, cr.fromMin); to = Math.min(to, cr.toMin); }
-        return to > from ? { from, to } : null;
+    // ---- WIZARD_ONE_ENGINE_V1 — свободное время СПРАШИВАЕТСЯ У СЕРВЕРА ----
+    // Была своя разборка users.working_hours (только форма {enabled}, обед не
+    // вычитался, окно по умолчанию 08:00–18:00) плюс свой перебор с шагом 30.
+    // Теперь окно, шаг, обед, часы клиники и занятость считает один движок —
+    // server/services/rpc/slot-engine.js, — и календарь берёт ответ оттуда же.
+    async function ensureDocSlots(docId, durationMin) {
+        await primeSlotDays(docId, catDays().map(d => d.iso), durationMin || 30);
     }
     function freeStarts(docId, dayIso, dur, exceptItem) {
-        const doc = state.doctors.find(d => d.id === docId);
-        const wr = catWorkRange(doc, dayIso);
-        if (!wr) return [];
-        const busy = [...((((slotCache[docId] || {}).byDay) || {})[dayIso] || [])];
-        // CATALOG_WIZARD_V2 — other cart items for this doctor+day block their slot too
+        const free = freeStartMinutes(slotDayCached(docId, dayIso, dur));
+        if (!free.length) return free;
+        // CATALOG_WIZARD_V2 — строки ЭТОЙ ЖЕ сметы, ещё не записанные, тоже
+        // держат своё время. Сервер о них знать не может: их пока нет в базе.
+        // Это вычитание уже занятого из списка сервера, а не свой расчёт окна.
+        const taken = [];
         for (const o of state.added) {
             if (o === exceptItem || !o.doctor || o.doctor.id !== docId || o.dateIso !== dayIso || !o.time) continue;
-            const sm = Number(o.time.slice(0, 2)) * 60 + Number(o.time.slice(3, 5));
-            busy.push({ s: sm, e: sm + (o.durationMinutes || 30) });
+            const sm = hhmmToMin(o.time);
+            taken.push({ s: sm, e: sm + (o.durationMinutes || 30) });
         }
-        const out = [];
-        const now = new Date();
-        const isToday = dayIso === catDays()[0].iso;
-        const nowMin = now.getHours() * 60 + now.getMinutes();
-        for (let m = wr.from; m + dur <= wr.to; m += 30) {
-            if (isToday && m < nowMin) continue;
-            if (busy.some(b => m < b.e && m + dur > b.s)) continue;
-            out.push(m);
-        }
-        return out;
+        if (!taken.length) return free;
+        return free.filter(m => !taken.some(b => m < b.e && m + dur > b.s));
     }
 
     function itemComplete(a) {
@@ -1576,7 +1540,7 @@ export function openServicePickerModal({
         item.startISO = null; item.time = null; item.dateIso = null;
         // SVC_LIVE_QUEUE_V1 — live-queue doctors are served without a time; no slot pick.
         if ((doc.scheduling_mode || 'schedulable') === 'live_queue') { paintCatalog(); return; }
-        await ensureDocSlots(doc.id);
+        await ensureDocSlots(doc.id, item.durationMinutes);
         if (item.doctor !== doc || !state.added.includes(item)) return;   // CATALOG_WIZARD_V2 — stale: switched/removed mid-fetch
         for (const d of catDays()) {
             const f = freeStarts(doc.id, d.iso, item.durationMinutes, item);
@@ -2473,40 +2437,41 @@ export function openServicePickerModal({
             const totalDur = lockedDoctor
                 ? state.added.reduce((s, a) => s + (a.durationMinutes || 30), 0)
                 : (head.durationMinutes || head.service.duration_minutes || 30);
-            // VISIT_OVERLAP_FIX_V1 — `visits_no_overlap` blocks a 2nd visit overlapping the SAME
-            // doctor's time; walk-ins default to a 09:00 slot so several to one doctor collided.
-            // Auto-assigned time -> nudge to the doctor's next free slot and retry; an explicitly
-            // chosen slot (or a fully-booked doctor) -> ask the registrar to pick another time.
-            const _vBase = {
-                patient_id:          p.id,
-                branch_id:           (p._raw && p._raw.branch_id) || p.branch_id || null,
-                doctor_id:           head.doctor?.id || null,
-                service_id:          head.service.__consult ? null : head.service.id,
-                duration_minutes:    totalDur,
-                visit_kind:          'first',
-                visit_type:          'outpatient',
-                status:              'scheduled',
-                room_id:             roomId || null,
-                coverage_type:       isPatient ? 'patient' : pm.coverage,
-                payer_id:            isPatient ? null : (pm.payerId || null),
-                payer_policy_id:     isPatient ? null : (pm.policyId || null),
-                discount_percentage: isPatient ? wizDiscountPct() : 0,
-                notes:               null,
-            };
+            // WIZARD_ONE_ENGINE_V1 — ЗАПИСЬ ИДЁТ ЧЕРЕЗ calendar_book, НЕ ЧЕРЕЗ /api/db.
+            //
+            // Здесь стояла прямая вставка строки в visits — то есть мимо запрета
+            // «один пациент на врача на слот», который сервер делает для календаря
+            // (server/services/rpc/calendar.js). Двое регистраторов, один в
+            // календаре и один в мастере, занимали одно и то же время, и ни один
+            // из них об этом не узнавал: проверка была только у календаря.
+            //
+            // Прежний цикл ловил ограничение БАЗЫ (`visits_no_overlap`), которого в
+            // локальной базе нет вовсе (миграция 099 намеренно его не заводит —
+            // разбор в её шапке), поэтому не срабатывал никогда. Сдвиг на ближайшее
+            // свободное сохранён, но теперь конец занятого приёма называет сервер
+            // в самом отказе, а не угадывает браузер шагом «плюс длительность».
+            //
+            // Явно выбранное время НЕ сдвигается: регистратор выбрал 14:30 не для
+            // того, чтобы молча получить 15:00. Ему показывается отказ сервера
+            // (он называет врача и занятое время) и предлагается экстренная
+            // запись с ОБЯЗАТЕЛЬНОЙ причиной — то же действие, что в календаре.
             const _explicit = !!(head.startISO || scheduledISO);
-            const _overlap = (er) => !!er && (er.code === '23P01' || /overlap|exclu|conflict|no_overlap/i.test(er.message || ''));
-            let visit, error, _try = new Date(visitDate);
-            for (let _a = 0; _a < 24; _a++) {
-                ({ data: visit, error } = await supabase.from('visits')
-                    .insert({ ..._vBase, visit_date: _try.toISOString() }).select().single());
-                if (!error) break;
-                if (_overlap(error) && !_explicit && _vBase.doctor_id) { _try = new Date(_try.getTime() + Math.max(15, totalDur || 30) * 60000); continue; }
-                break;
+            const booked = await calendarBookOrAsk({
+                patient_id:       p.id,
+                branch_id:        (p._raw && p._raw.branch_id) || p.branch_id || null,
+                doctor_id:        head.doctor?.id || null,
+                service_id:       head.service.__consult ? null : head.service.id,
+                room_id:          roomId || null,
+                start:            visitDate,
+                duration_minutes: totalDur,
+                status:           'scheduled',
+            }, { autoTime: !_explicit });
+            if (!booked) {   // отказались от экстренной записи — не создано НИЧЕГО
+                toast(tr('Запись не сохранена — время занято.'), 'info');
+                if (btn && btn.isConnected) btn.disabled = false;
+                return;
             }
-            if (error) {
-                if (_overlap(error)) throw new Error('Это время уже занято у выбранного врача — выберите другое время.');
-                throw error;
-            }
+            const visit = booked.visit;
 
             const vsRows = [];
             for (const a of state.added) {
@@ -2952,12 +2917,7 @@ const SCHED_GRID_END    = 20;    // visible window end hour
 const SCHED_HOUR_W      = 76;    // px per hour on the timeline
 const SCHED_SNAP        = 15;    // slot granularity, minutes
 const SCHED_WINDOW_DAYS = 14;    // how far ahead auto-pick / nav may reach
-const SCHED_WEEKDAY     = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
-function schedParseHHMM(s) {
-    const [hh, mm] = String(s || '00:00').split(':').map(Number);
-    return (hh || 0) + (mm || 0) / 60;
-}
 function fmtMin(min) {
     const hh = Math.floor(min / 60), mm = min % 60;
     return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
@@ -2980,9 +2940,185 @@ function schedDateLabel(iso) {
     if (iso === schedAddDays(schedTodayIso(), 1)) return 'Tomorrow · ' + schedIsoToDate(iso).toLocaleDateString(undefined, { day: '2-digit', month: 'short' });
     return schedIsoToDate(iso).toLocaleDateString(undefined, { weekday: 'short', day: '2-digit', month: 'short' });
 }
-function overlapsBusy(start, end, busy) {
-    return (busy || []).some(b => start < b.endMin && end > b.startMin);
+// ═══════════════════════════════════════════════════════════════════════════
+// WIZARD_ONE_ENGINE_V1 — «когда врач свободен» и «записать» спрашивают сервер
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Здесь стояли ДВЕ собственные реализации расписания — catWorkRange/freeStarts
+// для сметы и workingRangeFor/nearestSlotInDay для полосы времени, — а третья
+// жила в мастере визита (visit-wizard.js: dayWindow/slotsForDay/loadBusy).
+// Четвёртая была в календаре. Четыре ответа на один вопрос расходились не в
+// мелочах: форма графика ({on} против {enabled}) — мастер не видел графика
+// врача, заведённого карточкой сотрудника, и предлагал 09:00–18:00 всем
+// подряд; обед не вычитал никто; окно по умолчанию отличалось на два часа.
+//
+// Теперь реализация ОДНА и она на сервере (server/services/rpc/slot-engine.js):
+//   calendar_slots   — окно дня, свободные начала и занятость врача;
+//   calendar_windows — рабочие окна пачкой (их спрашивает календарь);
+//   calendar_book    — записать / перенести, с запретом двойной записи.
+// Экран не знает про графики, обед и часы клиники ничего — он спрашивает.
+//
+// Кэш держится на модуле, а не в состоянии экрана: мастер визита и подбор
+// услуг открываются один поверх другого и обязаны видеть одни и те же окна.
+
+export const SLOT_STEP_MIN = 30;          // шаг сетки мастеров (был таким же в обеих копиях)
+const _slotDays = new Map();              // 'doc|day|dur|step' -> ответ calendar_slots
+const _slotKey = (docId, dayIso, dur, step) => `${docId}|${dayIso}|${dur}|${step}`;
+
+export function hhmmToMin(s) {
+    const [hh, mm] = String(s || '00:00').split(':').map(Number);
+    return (hh || 0) * 60 + (mm || 0);
 }
+
+/** Спросить сервер про один день врача. Кэшируется; null = не ответил. */
+export async function loadSlotDay(doctorId, dayIso, durationMin, opts = {}) {
+    const step = opts.stepMinutes || SLOT_STEP_MIN;
+    const key = _slotKey(doctorId, dayIso, durationMin, step);
+    if (_slotDays.has(key)) return _slotDays.get(key);
+    const args = { doctor_id: doctorId, date: dayIso, duration_minutes: durationMin, step_minutes: step };
+    if (opts.excludeVisitId) args.exclude_visit_id = opts.excludeVisitId;
+    const first = await supabase.rpc('calendar_slots', args);
+    if (first.error) { _slotDays.set(key, null); return null; }
+    let data = first.data;
+    // EXCLUDE_OWN_VISIT_V1 — у пациента в этот день уже может быть свой приём;
+    // он не должен закрывать ему же время. Какой именно — говорит сам сервер
+    // (в занятости есть patient_id), и вторым вызовом он же его и вычитает.
+    if (opts.patientId && !opts.excludeVisitId) {
+        const own = (data.busy || []).find(b => b.patient_id === opts.patientId);
+        if (own) {
+            const second = await supabase.rpc('calendar_slots', { ...args, exclude_visit_id: own.visit_id });
+            if (!second.error) data = second.data;
+        }
+    }
+    _slotDays.set(key, data);
+    return data;
+}
+
+/** То же, но синхронно из кэша — для отрисовки. null = ещё не спрашивали. */
+export function slotDayCached(doctorId, dayIso, durationMin, opts = {}) {
+    return _slotDays.get(_slotKey(doctorId, dayIso, durationMin, opts.stepMinutes || SLOT_STEP_MIN)) || null;
+}
+
+/** Свободные начала дня в минутах от полуночи — ровно те, что назвал сервер. */
+export function freeStartMinutes(day) {
+    return ((day && day.slots) || []).map(s => hhmmToMin(s.start));
+}
+
+/** Прогреть пачку дней врача (параллельно, но не залпом на весь месяц). */
+export async function primeSlotDays(doctorId, dayIsos, durationMin, opts = {}) {
+    const list = [...new Set(dayIsos)];
+    for (let i = 0; i < list.length; i += 8) {
+        await Promise.all(list.slice(i, i + 8).map(d => loadSlotDay(doctorId, d, durationMin, opts)));
+    }
+}
+
+/** Записались/перенесли — занятость изменилась, кэш больше не правда. */
+export function forgetSlots() { _slotDays.clear(); }
+
+// ─── ОТКАЗЫ calendar_book ───────────────────────────────────────────────────
+// Склеенная фраза непереводима в принципе (tr() ищет строку целиком), поэтому
+// сервер шлёт {code, params}, а экран переводит ШАБЛОН и подставляет значения
+// ПОСЛЕ перевода. Те же два шаблона, что и у календаря (room-calendar.js).
+const BOOK_ERROR_TEMPLATES = {
+    slot_taken: 'Это время занято: у врача {doctor} уже есть приём {from}–{to}. Выберите другое время.',
+    emergency_reason_required: 'Экстренная запись поверх занятого времени требует причины — укажите её.',
+};
+export function bookErrorText(error) {
+    const tpl = error && error.code ? BOOK_ERROR_TEMPLATES[error.code] : null;
+    if (tpl) return trf(tpl, (error && error.params) || {});
+    return (error && error.message) ? tr(error.message) : tr('Не удалось сохранить запись.');
+}
+
+/**
+ * ЭКСТРЕННАЯ ЗАПИСЬ — ОТДЕЛЬНОЕ ДЕЙСТВИЕ С ПРИЧИНОЙ, а не галочка, снимающая
+ * проверку. Причина уходит в саму запись (visits.notes) и уезжает вместе с ней
+ * филиалам. Диалог тот же, что в календаре: отказ сервера дословно, поле
+ * причины, и кнопка, которая без причины не срабатывает.
+ * Возвращает Promise<string|null>: текст причины или null («передумали»).
+ */
+export function askEmergencyReason(conflictText) {
+    return new Promise((resolve) => {
+        const overlay = h('div', { class: 'modal', style: { zIndex: '190' } });
+        let done = false;
+        const finish = (v) => { if (done) return; done = true; overlay.remove(); document.removeEventListener('keydown', onEsc); resolve(v); };
+        const onEsc = (e) => { if (e.key === 'Escape') finish(null); };
+        overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: () => finish(null) }));
+        const reason = h('textarea', { class: 'rcal-reason', rows: '3',
+            placeholder: tr('Например: острая боль, направлен из приёмного отделения') });
+        overlay.appendChild(h('div', { class: 'modal-card', style: { width: '460px', maxWidth: 'calc(100vw - 32px)' } },
+            h('header', { class: 'modal-head' },
+                h('h2', null, Icon('Warning', { size: 16 }), ' ', tr('Экстренная запись')),
+                h('button', { class: 'modal-close', onclick: () => finish(null) }, '×')),
+            h('div', { class: 'modal-body' },
+                h('div', { class: 'rcal-conflict' }, conflictText),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '12px 0 6px' } },
+                    tr('Запись поверх занятого времени сохраняется вместе с причиной — она останется в карточке приёма.')),
+                reason),
+            h('footer', { class: 'modal-foot' },
+                h('span', { class: 'grow' }),
+                h('button', { class: 'btn btn-outline', onclick: () => finish(null) }, tr('Отмена')),
+                h('button', {
+                    class: 'btn btn-primary', onclick: () => {
+                        const text = (reason.value || '').trim();
+                        if (text.length < 3) { toast(tr('Укажите причину экстренной записи.'), 'fail'); return; }
+                        finish(text);
+                    },
+                }, tr('Записать экстренно')))));
+        document.body.appendChild(overlay);
+        document.addEventListener('keydown', onEsc);
+        reason.focus();
+    });
+}
+
+/**
+ * ЕДИНСТВЕННЫЙ ПУТЬ ЗАПИСИ МАСТЕРОВ. Раньше мастер вставлял строку в visits
+ * через /api/db — то есть мимо проверки «один пациент на врача на слот»,
+ * которую сервер делает для календаря. Двое регистраторов (один в календаре,
+ * другой в мастере) занимали одно время, и никто из них об этом не узнавал.
+ *
+ * opts.autoTime — время НЕ выбирал человек (запасное 09:00 у пациента без
+ * слота). Тогда отказ не показывается: сервер назвал конец занятого приёма,
+ * с него и продолжаем — ровно тот «сдвиг на ближайшее свободное», что делала
+ * прежняя вставка, только конец интервала теперь называет сервер, а не
+ * угадывает браузер.
+ *
+ * Возвращает { visit, created, emergency } либо null — «человек отказался от
+ * экстренной записи»; при null не создано НИЧЕГО. Бросает на прочих ошибках.
+ */
+export async function calendarBookOrAsk(args, opts = {}) {
+    const askReason = opts.askReason || askEmergencyReason;
+    let attempt = { ...args };
+
+    for (let i = 0; i < 24; i++) {
+        const { data, error } = await supabase.rpc('calendar_book', attempt);
+        if (!error) { forgetSlots(); return { ...data, emergency: !!data.emergency }; }
+        if (error.code !== 'slot_taken') throw new Error(bookErrorText(error));
+
+        if (opts.autoTime && error.params && error.params.to) {
+            const next = _startAtSameDay(attempt.start, error.params.to);
+            if (next) { attempt = { ...attempt, start: next }; continue; }
+        }
+        const reason = await askReason(bookErrorText(error));
+        if (!reason) return null;
+        const emg = await supabase.rpc('calendar_book', { ...attempt, emergency: true, emergency_reason: reason });
+        if (emg.error) throw new Error(bookErrorText(emg.error));
+        forgetSlots();
+        return { ...emg.data, emergency: true };
+    }
+    throw new Error(tr('У выбранного врача нет свободного времени в этот день — выберите другое время.'));
+}
+
+/** ISO начала + 'ЧЧ:ММ' конца занятого приёма → ISO того же дня в это время. */
+function _startAtSameDay(startIso, hhmm) {
+    const d = new Date(startIso);
+    if (Number.isNaN(d.getTime())) return null;
+    const [hh, mm] = String(hhmm).split(':').map(Number);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+    const next = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm, 0, 0);
+    if (next.getTime() <= d.getTime()) return null;   // назад не сдвигаемся
+    return next.toISOString();
+}
+
 async function safeSelect(table, q = b => b) {
     try {
         const { data, error } = await q(supabase.from(table).select('*'));
