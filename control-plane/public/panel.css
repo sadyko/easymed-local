@@ -28,7 +28,7 @@
     --teal:      #f2c14e;   /* the accent — amber now, name kept so no rule below has to change */
     --teal-2:    #d9a832;
     --amber:     #d98e4a;   /* warning — kept exactly as supplied; it's used as a
-                               background (req-badge), where ink-on-amber is 5.67:1 */
+                               background (the attention dot, .cc-dot.warn) */
     --red:       #9f5149;   /* corrected from the supplied #c4645a — that was 3.95:1 on
                                white (fails 4.5:1) and this token carries error text;
                                this clears white/cream/inset at 5.60 / 5.20 / 4.93:1 */
@@ -44,7 +44,7 @@
     --accent-soft: #fdf0d0;
 
     /* --amber above stays exactly as supplied because darkening it for text
-       use would have wrecked its one background use (req-badge). Text-only
+       use would have wrecked its background use (the attention dot). Text-only
        warning copy needs its own darker ink instead. */
     --amber-ink: #8d5c30;
 
@@ -115,10 +115,6 @@ button { font-family: inherit; }
 .content { padding: 24px 28px 80px; max-width: 1180px; margin: 0 auto; }
 
 /* --- Filter row / cards / tables (same shapes as platform-console) ---- */
-.filterbar { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
-.filterbar input.search { flex: 1; min-width: 220px; max-width: 340px; padding: 8px 12px; background: var(--bg-2); border: 1px solid var(--line); color: var(--ink); border-radius: 8px; font-size: 13px; outline: none; }
-.filterbar input.search:focus { border-color: var(--teal); }
-
 .card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 20px; }
 .card h2 { font-size: 14px; font-weight: 700; margin: 0 0 14px; letter-spacing: -0.01em; }
 .card .empty { color: var(--ink-3); font-size: 13px; padding: 22px; text-align: center; }
@@ -140,13 +136,8 @@ table.t td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .badge.danger  { background: var(--danger-soft); color: var(--danger-ink); }
 
 .mod-chip { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; margin: 1px 3px 1px 0; background: var(--bg-3); color: var(--ink-2); }
-.mod-chips-empty { color: var(--ink-3); }
 
-.last-seen.stale { color: var(--red); font-weight: 700; }
-.last-seen.never { color: var(--ink-3); }
 .fp-flag { color: var(--amber-ink); font-weight: 700; margin-left: 6px; }
-
-.req-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--amber); color: var(--ink); font-size: 11px; font-weight: 800; }
 
 /* --- Buttons ------------------------------------------------------- */
 .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg-3); color: var(--ink); font-size: 12.5px; cursor: pointer; font-weight: 600; }
@@ -232,9 +223,8 @@ table.t td.num { text-align: right; font-variant-numeric: tabular-nums; }
 /* --- CONTROL_PLANE_V2: the clinic board ------------------------------------ */
 
 .board-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
-/* The existing search styling is scoped to .filterbar, which the board replaced —
-   restated here rather than widening that selector, so the clinic page's own
-   filter bar keeps its current sizing. */
+/* Its own rule rather than reusing another screen's search-input styling,
+   so this board's sizing can move independently of any other filter bar's. */
 .board-bar input.search { flex: 1; min-width: 220px; padding: 8px 12px; background: var(--bg-2);
                           border: 1px solid var(--line); color: var(--ink); border-radius: 8px;
                           font-size: 13px; outline: none; }
@@ -270,6 +260,12 @@ table.t td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .cc-dot.mute { background: var(--ink-3); }
 .cc-name { font-weight: 650; font-size: 14px; line-height: 1.25; }
 .cc-sub { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+/* CONTROL_PLANE_V2 fix 3 — attentionReasons() "in the owner's words", shown
+   only on attention-band cards, under the existing sub-line. --amber-ink
+   already exists for exactly this ("text-only warning copy needs its own
+   darker ink" — see its definition above) rather than reusing --amber
+   (calibrated as a background) or inventing a new token. */
+.cc-reasons { font-size: 11px; color: var(--amber-ink); margin-top: 3px; line-height: 1.4; }
 .cc-kebab { margin-left: auto; flex: none; background: none; border: 0; cursor: pointer;
             color: var(--ink-3); padding: 2px 6px; border-radius: 6px; font-size: 15px;
             line-height: 1; letter-spacing: 1px; }
@@ -326,3 +322,14 @@ table.t td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .modal .keeps { background: var(--bg-3); border-radius: 10px; padding: 11px 13px;
                 font-size: 12px; color: var(--ink-2); line-height: 1.75; margin-bottom: 14px; }
 .modal .keeps b { color: var(--ink); }
+
+/* CONTROL_PLANE_V2 fix 5 — the name to type back, on its own selectable line
+   plus a copy button: the card itself fights a drag-select with its own
+   navigate-on-click handler, so this dialog gives the owner a source that
+   isn't the card. user-select:all makes one click grab the whole (up to
+   38-character, Cyrillic, parenthesised) name instead of a partial drag. */
+.modal .copy-row { display: flex; align-items: center; gap: 8px; }
+.modal .copy-value { flex: 1; display: block; background: var(--bg-3); border: 1px solid var(--line);
+                      border-radius: 8px; padding: 9px 12px; font-size: 13px; color: var(--ink);
+                      font-family: ui-monospace, Menlo, Consolas, monospace; user-select: all;
+                      overflow-wrap: break-word; }

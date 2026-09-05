@@ -2,9 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  STALE_THRESHOLD_MS,
   SELLABLE_MODULES,
-  lastSeenSeverity,
   formatLastSeen,
   moduleToggles,
   hasUnmanageableMarketingGrant,
@@ -16,46 +14,11 @@ import {
   statsRows,
   attentionReasons,
   clinicBand,
+  retireConfirmText,
   versionChip,
   formatStat,
   formatRetiredAt,
 } from './panel-logic.js';
-
-// --- lastSeenSeverity --------------------------------------------------------
-
-test('lastSeenSeverity: null/undefined last_seen_at is "never"', () => {
-  assert.equal(lastSeenSeverity(null, new Date()), 'never');
-  assert.equal(lastSeenSeverity(undefined, new Date()), 'never');
-  assert.equal(lastSeenSeverity('', new Date()), 'never');
-});
-
-test('lastSeenSeverity: an unparsable string is also "never", not a crash', () => {
-  assert.equal(lastSeenSeverity('not-a-date', new Date()), 'never');
-});
-
-test('lastSeenSeverity: within 3 days is "ok"', () => {
-  const now = new Date('2026-08-22T12:00:00Z');
-  const oneHourAgo = new Date(now.getTime() - 3600_000).toISOString();
-  assert.equal(lastSeenSeverity(oneHourAgo, now), 'ok');
-});
-
-test('lastSeenSeverity: exactly 3 days ago is still "ok" (boundary is exclusive)', () => {
-  const now = new Date('2026-08-22T12:00:00Z');
-  const exactly3d = new Date(now.getTime() - STALE_THRESHOLD_MS).toISOString();
-  assert.equal(lastSeenSeverity(exactly3d, now), 'ok');
-});
-
-test('lastSeenSeverity: one millisecond past 3 days is "stale"', () => {
-  const now = new Date('2026-08-22T12:00:00Z');
-  const justOver = new Date(now.getTime() - STALE_THRESHOLD_MS - 1).toISOString();
-  assert.equal(lastSeenSeverity(justOver, now), 'stale');
-});
-
-test('lastSeenSeverity: a week ago is "stale"', () => {
-  const now = new Date('2026-08-22T12:00:00Z');
-  const weekAgo = new Date(now.getTime() - 7 * 24 * 3600_000).toISOString();
-  assert.equal(lastSeenSeverity(weekAgo, now), 'stale');
-});
 
 // --- formatLastSeen -----------------------------------------------------------
 
@@ -314,6 +277,18 @@ test('clinicBand: retired wins over every other reason', () => {
   assert.equal(clinicBand(clinic({ active: false, last_seen_at: null, subscription: 'unpaid' }), NOW), 'retired');
   assert.equal(clinicBand(clinic(), NOW), 'live');
   assert.equal(clinicBand(clinic({ subscription: 'unpaid' }), NOW), 'attention');
+});
+
+test('retireConfirmText: a clinic that has checked in gets the licence-runs-out wording', () => {
+  const text = retireConfirmText(clinic({ name: 'Corelmed' }));
+  assert.match(text, /keeps working normally until its current licence runs out/);
+  assert.match(text, /^Retire "Corelmed"\?/);
+});
+
+test('retireConfirmText: a clinic that never checked in is told it takes effect immediately', () => {
+  const text = retireConfirmText(clinic({ name: 'Dilshods Dev Server', last_seen_at: null }));
+  assert.match(text, /was never installed, so retiring it takes effect immediately/);
+  assert.doesNotMatch(text, /licence runs out/);
 });
 
 test('versionChip: current, behind, far behind, unknown', () => {

@@ -4,14 +4,6 @@
 // decisions of their own beyond "call the right pure function and paint the
 // result" — see panel-logic.test.js for the behaviour this pins.
 
-// STALE_CLINIC_V1 — a clinic that hasn't checked in for 3+ days is quietly in
-// trouble (offline install, a dead cron, a clinic that gave up on paying) and
-// that is worth a red flag in the list rather than one more grey timestamp
-// nobody scans. "Older than 3 days" is exclusive of the boundary itself: a
-// clinic checking in once a day that happens to land at exactly 72h is still
-// behaving normally.
-export const STALE_THRESHOLD_MS = 3 * 24 * 60 * 60 * 1000;
-
 // Mirrors SELLABLE_MODULES in server/services/rpc/licence.js (the one real
 // vocabulary the clinic app and admin.js both key off). There is no admin
 // route today that publishes this list to the panel over HTTP, so this is a
@@ -39,14 +31,6 @@ function parseDate(iso) {
 
 function asMs(now) {
   return now instanceof Date ? now.getTime() : new Date(now).getTime();
-}
-
-/** 'ok' | 'stale' | 'never' — drives the clinics-list row highlight. */
-export function lastSeenSeverity(lastSeenIso, now = new Date()) {
-  const t = parseDate(lastSeenIso);
-  if (t === null) return 'never';
-  const diff = asMs(now) - t;
-  return diff > STALE_THRESHOLD_MS ? 'stale' : 'ok';
 }
 
 /** "2 h ago" / "5 days ago" / "never" — human-readable, never a raw ISO string. */
@@ -248,6 +232,24 @@ export function clinicBand(clinic, now = new Date()) {
   // the top of the board with clinics the owner has finished with.
   if (!clinic.active) return 'retired';
   return attentionReasons(clinic, now).length > 0 ? 'attention' : 'live';
+}
+
+// RETIRE_WORDING_V1 — one sentence for one concept, used by both
+// panel-card-menu.js's kebab-menu confirm() and panel-clinic-detail.js's own
+// "Retire clinic" button, so the two places that can retire a clinic never
+// say two different things about what retiring does. Branches on whether the
+// clinic has ever checked in: a clinic that never enrolled has no licence
+// sitting on any machine and will never have "another check-in" to speak
+// of — telling the owner it "keeps working until its licence runs out"
+// would read as a promise that hasn't happened yet, when in fact retiring
+// takes effect immediately. `now` is accepted only for symmetry with the
+// other clinic-shaped functions above; the wording itself does not depend
+// on it.
+export function retireConfirmText(clinic) {
+  if (!clinic.last_seen_at) {
+    return `Retire "${clinic.name}"? This clinic was never installed, so retiring it takes effect immediately. This cannot be undone from here.`;
+  }
+  return `Retire "${clinic.name}"? The clinic keeps working normally until its current licence runs out — this only stops it from renewing again. This cannot be undone from here.`;
 }
 
 /** The chip beside a clinic's version, or null when the distance is unknown. */

@@ -13,7 +13,7 @@ import { esc, toast, fmtDateTime, renderCodeGroups } from './panel-dom.js';
 import {
   SELLABLE_MODULES, moduleToggles, hasUnmanageableMarketingGrant,
   subscriptionBadge, subscriptionUntilPayload, codeGroups,
-  counterCheckedState, statsRows,
+  counterCheckedState, statsRows, retireConfirmText,
 } from './panel-logic.js';
 
 const FALLBACK_NOTE = "Changes apply at this clinic's next check-in — not instantly.";
@@ -310,9 +310,7 @@ export async function renderClinicDetail(root, clinicId) {
     let inFlight = false;
     btn.addEventListener('click', async () => {
       if (inFlight) return;
-      const confirmed = confirm(
-        `Retire "${clinic.name}"? The clinic keeps working normally until its current licence runs out — this only stops it from renewing again. This cannot be undone from here.`
-      );
+      const confirmed = confirm(retireConfirmText(clinic));
       if (!confirmed) return;
       inFlight = true;
       btn.disabled = true;

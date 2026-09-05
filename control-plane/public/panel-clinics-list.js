@@ -22,17 +22,28 @@ import {
   formatLastSeen, subscriptionBadge,
 } from './panel-logic.js';
 import { openNewClinicModal } from './panel-new-clinic.js';
-// panel-card-menu.js does not exist yet (a later task adds it) — importing it
-// now is deliberate: the kebab menu is this file's only way to act on a card,
-// and until that module lands the board simply won't load, which is the
-// correct, visible failure mode rather than a silently stubbed-out kebab.
-import { openCardMenu } from './panel-card-menu.js';
+// The kebab menu is this file's only way to act on a card; closeCardMenu()
+// is called at the top of renderBoard() so a repaint (search input, a
+// toggle) never leaves an open menu's document-level listeners dangling
+// past the DOM node they were wired to.
+import { openCardMenu, closeCardMenu } from './panel-card-menu.js';
 
 const BANDS = [
   { key: 'attention', label: 'Needs attention' },
   { key: 'live', label: 'Live' },
   { key: 'retired', label: 'Retired' },
 ];
+
+// CONTROL_PLANE_V2 fix 10 — module-level, so the search text and "Show
+// retired" survive a card's own click-to-navigate-and-back. The clinics
+// screen re-renders from scratch every time it's opened (including the
+// return trip from a card), and the ONLY route to "Delete permanently" is
+// via a retired card — losing "Show retired" on every detour would force
+// the owner to re-enable it after every single card they open. Deliberately
+// NOT localStorage (would outlive the tab/session, which nothing here asks
+// for) and NOT `compact`, which the task only calls out these two for.
+let persistedSearchText = '';
+let persistedShowRetired = false;
 
 // The four attentionReasons() strings serious enough to paint the dot red
 // instead of amber — kept here (not in panel-logic.js) because it is purely a
@@ -53,18 +64,26 @@ export async function renderClinicsList(root) {
   `;
 
   let rows = [];
-  let search = '';
+  let search = persistedSearchText.trim().toLowerCase();
   let compact = false;
-  let showRetired = false;
+  let showRetired = persistedShowRetired;
 
+  const searchInput = root.querySelector('#cl-search');
   const compactBtn = root.querySelector('#cl-compact');
   const retiredBtn = root.querySelector('#cl-retired');
+
+  // Restore what fix 10 persisted, so the controls reflect reality before
+  // the first render rather than lying about the state renderBoard() is
+  // about to filter with.
+  searchInput.value = persistedSearchText;
+  retiredBtn.classList.toggle('on', showRetired);
 
   root.querySelector('#cl-new').addEventListener('click', () => {
     openNewClinicModal({ onCreated: load });
   });
-  root.querySelector('#cl-search').addEventListener('input', (e) => {
-    search = e.target.value.trim().toLowerCase();
+  searchInput.addEventListener('input', (e) => {
+    persistedSearchText = e.target.value;
+    search = persistedSearchText.trim().toLowerCase();
     renderBoard();
   });
   compactBtn.addEventListener('click', () => {
@@ -74,6 +93,7 @@ export async function renderClinicsList(root) {
   });
   retiredBtn.addEventListener('click', () => {
     showRetired = !showRetired;
+    persistedShowRetired = showRetired;
     retiredBtn.classList.toggle('on', showRetired);
     renderBoard();
   });
@@ -143,6 +163,14 @@ export async function renderClinicsList(root) {
       : (c.filial_count > 0 ? `${c.filial_count} filial${c.filial_count === 1 ? '' : 's'}` : '');
     const subLine = family ? `${esc(c.id)} · ${esc(family)}` : esc(c.id);
 
+    // attentionReasons() already returns its strings "in the owner's words"
+    // (see its own docstring in panel-logic.js) — only ever rendered on the
+    // attention band itself, never on live/retired cards, where the reasons
+    // either don't apply or (retired) are no longer a decision to make.
+    const reasonsLine = band === 'attention'
+      ? `<div class="cc-reasons">${esc(attentionReasons(c).join(' · '))}</div>`
+      : '';
+
     return `
       <div class="${classes.join(' ')}" data-card data-id="${esc(c.id)}">
         <div class="cc-head">
@@ -150,6 +178,7 @@ export async function renderClinicsList(root) {
           <div>
             <div class="cc-name">${esc(c.name)}</div>
             <div class="cc-sub">${subLine}</div>
+            ${reasonsLine}
           </div>
           <button class="cc-kebab" type="button" data-kebab aria-label="Clinic actions">&bull;&bull;&bull;</button>
         </div>
@@ -188,6 +217,14 @@ export async function renderClinicsList(root) {
   }
 
   function renderBoard() {
+    // Fix 7 — a repaint (search keystroke, Compact/Show retired) is about to
+    // tear out whatever DOM node an open kebab menu is anchored to, while
+    // its document-level click/keydown listeners would otherwise survive
+    // the node they were meant to watch. Closing first means there is never
+    // a stray listener left over, even for the single tick between here and
+    // the innerHTML write below.
+    closeCardMenu();
+
     const boardEl = root.querySelector('#cl-board');
     if (!boardEl) return; // navigated away while a fetch was in flight
 
@@ -222,6 +259,19 @@ export async function renderClinicsList(root) {
         <div class="band"><span>${esc(band.label)}</span><span class="rule"></span><span class="count">${list.length}</span></div>
         <div class="deck${compact ? ' compact' : ''}">${cardsHtml}</div>
       `);
+    }
+
+    // Fix 1 — every visible clinic can still land here with nothing to draw:
+    // if they all sit in the retired band and "Show retired" is off, `grouped`
+    // has entries but `sections` doesn't. Without this branch the board
+    // writes an empty string and the owner sees a blank cream rectangle right
+    // after the exact action that caused it (search for a clinic, retire it).
+    if (sections.length === 0) {
+      const hidden = grouped.retired.length;
+      boardEl.innerHTML = `<div class="card"><div class="empty">Nothing to show.${
+        hidden ? ` ${hidden} retired clinic${hidden === 1 ? '' : 's'} hidden — turn on “Show retired”.` : ''
+      }</div></div>`;
+      return;
     }
 
     boardEl.innerHTML = sections.join('');

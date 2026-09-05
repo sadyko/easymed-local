@@ -10,31 +10,49 @@
 // apart if the owner likes, and nothing here collapses them into one click.
 //
 // Two flows live here:
-//   - Retire: a native confirm() using the exact sentence
-//     panel-clinic-detail.js already uses for the same action, so there is
-//     one wording for one concept rather than two dialogs disagreeing.
+//   - Retire: a native confirm() using retireConfirmText() from
+//     panel-logic.js — the same function panel-clinic-detail.js calls for
+//     its own "Retire clinic" button, so there is one wording for one
+//     concept rather than two dialogs disagreeing.
 //   - Delete: a modal that requires the clinic's name typed back exactly
 //     (case-sensitive) before the destructive button enables. Reading the
 //     name back character-by-character is the point of asking — this is
-//     irreversible and removes the clinic from the list for good.
+//     irreversible and removes the clinic from the list for good. A
+//     selectable copy of the name plus a "Copy name" button make that
+//     possible without relying on drag-select over the card (which the
+//     card's own navigate-on-click handler fights).
 
 import { cp, ApiError } from './panel-api.js';
-import { esc, toast } from './panel-dom.js';
-
-// The exact sentence panel-clinic-detail.js's own "Retire clinic" button
-// uses — copied, not re-paraphrased, so the two places that can retire a
-// clinic never say two different things about what retiring does.
-function retireConfirmText(name) {
-  return `Retire "${name}"? The clinic keeps working normally until its current licence runs out — this only stops it from renewing again. This cannot be undone from here.`;
-}
+import { esc, toast, copyText } from './panel-dom.js';
+import { retireConfirmText } from './panel-logic.js';
 
 // Only one card menu (and, separately, one delete dialog) open at a time.
 // Opening a second menu tears down whatever the first one was holding —
 // listeners included — rather than letting two stack.
 let closeOpenMenu = null;
+let openMenuAnchor = null;
+
+// CONTROL_PLANE_V2 fix 7 — the board's repaint (panel-clinics-list.js's
+// renderBoard) calls this before rebuilding the DOM. Typing in the search box
+// or flipping a toggle re-renders the board, which yanks the menu's host
+// node out from under it while its document-level click/keydown listeners
+// stay registered; it self-heals on the next outside click, but there is no
+// reason to leave a dangling listener around when the repaint already knows
+// it is about to happen.
+export function closeCardMenu() {
+  if (closeOpenMenu) closeOpenMenu();
+}
 
 export function openCardMenu({ anchor, clinic, onChanged }) {
-  if (closeOpenMenu) closeOpenMenu();
+  // Fix 8 — a second click on the SAME kebab must close the menu, not close
+  // then immediately reopen it (which looked like the kebab was stuck). Only
+  // a click on a *different* card's kebab (or the board's own repaint) should
+  // tear this menu down and open a new one.
+  if (closeOpenMenu) {
+    const wasSameAnchor = openMenuAnchor === anchor;
+    closeOpenMenu();
+    if (wasSameAnchor) return;
+  }
 
   // `anchor` is the kebab button, which cannot host block children (it's a
   // <button>) and isn't itself a positioning context — .cardmenu's
@@ -88,6 +106,7 @@ export function openCardMenu({ anchor, clinic, onChanged }) {
   menu.addEventListener('click', (e) => e.stopPropagation());
 
   host.appendChild(menu);
+  openMenuAnchor = anchor;
 
   function onDocClick(e) {
     if (!menu.contains(e.target)) close();
@@ -112,7 +131,7 @@ export function openCardMenu({ anchor, clinic, onChanged }) {
     document.removeEventListener('click', onDocClick);
     document.removeEventListener('keydown', onKeydown);
     menu.remove();
-    if (closeOpenMenu === close) closeOpenMenu = null;
+    if (closeOpenMenu === close) { closeOpenMenu = null; openMenuAnchor = null; }
   }
 
   closeOpenMenu = close;
@@ -121,7 +140,7 @@ export function openCardMenu({ anchor, clinic, onChanged }) {
 // --- retire --------------------------------------------------------------
 
 async function doRetire(clinic, onChanged) {
-  if (!confirm(retireConfirmText(clinic.name))) return;
+  if (!confirm(retireConfirmText(clinic))) return;
   try {
     const res = await cp.retire(clinic.id);
     toast(res.note || 'Clinic retired.', 'ok');
@@ -131,6 +150,10 @@ async function doRetire(clinic, onChanged) {
     // (login screen takes over) — nothing more to show here.
     if (e instanceof ApiError && e.status === 401) return;
     toast('Could not retire the clinic: ' + (e.message || 'unknown error'), 'err');
+    // Fix 6 — a 404 means another tab already retired/deleted this exact
+    // clinic. The error toast above still needs showing, but the board must
+    // also refresh so the now-phantom card doesn't linger on screen.
+    if (e instanceof ApiError && e.status === 404 && onChanged) onChanged();
   }
 }
 
@@ -161,6 +184,13 @@ function openDeleteDialog(clinic, onChanged) {
         <b>The id ${esc(clinic.id)}</b> — reserved forever, so no old licence can ever come back to life.
       </div>
       <div class="row">
+        <label>Clinic name</label>
+        <div class="copy-row">
+          <code class="copy-value" id="del-name-value">${esc(clinic.name)}</code>
+          <button type="button" class="btn small" id="del-copy-name">Copy name</button>
+        </div>
+      </div>
+      <div class="row">
         <label for="del-confirm-name">Type the clinic's name to confirm</label>
         <input id="del-confirm-name" autocomplete="off" spellcheck="false">
       </div>
@@ -175,6 +205,27 @@ function openDeleteDialog(clinic, onChanged) {
   const nameInput = overlay.querySelector('#del-confirm-name');
   const goBtn = overlay.querySelector('#del-go');
   const err = overlay.querySelector('#del-err');
+  const copyBtn = overlay.querySelector('#del-copy-name');
+
+  // Fix 5 — the name lives on its own selectable line (not just inside the
+  // heading, which line-wraps and mixes with punctuation) plus a one-click
+  // copy, because the obvious source — the card itself — has a
+  // navigate-on-click handler that a drag-select fires. This never fills the
+  // input for the owner: typing the name back is the safety gate, not
+  // copy-pasting past it.
+  if (copyBtn) {
+    copyBtn.addEventListener('click', async () => {
+      const ok = await copyText(clinic.name);
+      copyBtn.textContent = ok ? 'Copied' : 'Copy failed';
+      setTimeout(() => { if (overlay.isConnected) copyBtn.textContent = 'Copy name'; }, 1500);
+    });
+  }
+
+  // Exact-match gate, shared between the live `input` handler and the
+  // post-error re-check (fix 9) so the two can never drift apart.
+  function nameMatches() {
+    return nameInput.value.trim() === clinic.name;
+  }
 
   function close() {
     document.removeEventListener('keydown', onKeydown);
@@ -193,7 +244,7 @@ function openDeleteDialog(clinic, onChanged) {
   // typed value is trimmed (no penalising a stray leading/trailing space)
   // but never case-folded or otherwise normalized before the comparison.
   nameInput.addEventListener('input', () => {
-    goBtn.disabled = nameInput.value.trim() !== clinic.name;
+    goBtn.disabled = !nameMatches();
   });
 
   let inFlight = false;
@@ -203,8 +254,15 @@ function openDeleteDialog(clinic, onChanged) {
     goBtn.disabled = true;
     err.textContent = '';
     try {
-      await cp.deleteClinic(clinic.id);
+      const res = await cp.deleteClinic(clinic.id);
       close();
+      // Fix 2 — the server deliberately returns a delete-specific note (see
+      // DELETE_NOTE in server/routes/admin.js): the licence already on the
+      // clinic's own computer keeps working until it expires, and deleting
+      // only stops it from ever renewing. That is the single most important
+      // thing to say right after an irreversible action, so it must survive
+      // even if the server ever sent no note at all.
+      toast(res?.note || 'Clinic deleted. Any licence already on its computer keeps working until it expires.', 'ok');
       if (onChanged) onChanged();
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) { close(); return; } // login screen already took over
@@ -214,10 +272,16 @@ function openDeleteDialog(clinic, onChanged) {
       // verbatim: this file never rewrites the server's own instruction.
       err.textContent = e.message || 'Could not delete the clinic.';
       inFlight = false;
-      // Re-enabled unconditionally: the typed name in the box hasn't
-      // changed and still matches, so the exact-match gate has nothing left
-      // to say — the owner just needs to read the message and decide.
-      goBtn.disabled = false;
+      // Fix 9 — re-check the same exact-match gate rather than re-enabling
+      // unconditionally: if the box has been edited since the click (or a
+      // 404 is about to clear the input's meaning entirely), the gate must
+      // not just spring back open on its own.
+      goBtn.disabled = !nameMatches();
+      // Fix 6 — a 404 means another tab already deleted this exact clinic.
+      // The error message above still needs to be read, but the board
+      // behind this dialog must also refresh so the now-phantom card is
+      // gone by the time the owner closes it.
+      if (e instanceof ApiError && e.status === 404 && onChanged) onChanged();
     }
   });
 
