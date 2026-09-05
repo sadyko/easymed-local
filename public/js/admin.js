@@ -8,6 +8,10 @@ import { supabase, pingSupabase } from './supabase.js';
 import { SECTIONS } from './admin/sections.js?v=rolecmp1';
 import { h, Icon, clear, initials } from './admin/ui.js';
 import { phoneInput } from './admin/phone-input.js?v=ph1';
+// UI_ENHANCE_V1 — родные <select> и поля даты становятся полями программы.
+// Один наблюдатель на весь документ: списки живут и в видах, и в диалоговых
+// окнах, которые дорисовываются в <body> мимо корня вида.
+import { startUiEnhance } from './admin/ui-enhance.js?v=uien1';
 // MOTION_REVEAL_V1 — единственный словарь движения приложения; оболочке из
 // него нужна одна вещь: сворачивание колонки меню (см. wireSidebarCollapse).
 import { pulseFade } from './admin/motion.js?v=mo1';
@@ -2640,6 +2644,7 @@ function startApp() {
     // и нужен.
     window.easymed = { state, supabase, navigate, NAV, CRUMBS, sectionTitleFor, dedupeHeadings: dedupeSectionHeading };
     watchSectionHeadings();   // ONE_NAME_PER_SCREEN_V1
+    startUiEnhance();         // UI_ENHANCE_V1 — списки и календари в виде программы
     paintUserCard();
     wireSidebarCollapse();   // SIDEBAR_COLLAPSE_V1
     searchEl?.addEventListener('keydown', (e) => { if (e.key === 'Enter') navigate('patients'); });

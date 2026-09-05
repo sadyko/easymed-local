@@ -446,7 +446,7 @@ function paintList(container, onNavigate) {
             h('tr', null,
                 h('th', { style: { width: '36px' } }, headerBox),
                 ...def.columns.map(c => h('th', null, tr(c.label || c.key))),
-                h('th', { style: { width: '140px', textAlign: 'right' } }, 'Actions'),
+                h('th', { class: 'list-act-h', style: { width: '104px', textAlign: 'right' } }, tr('Действия')),
             ),
             // Per-column filter row — instant in-memory narrowing without
             // re-querying the DB.
@@ -513,13 +513,30 @@ function paintList(container, onNavigate) {
             return h('tr', null,
                 h('td', null, rowBox),
                 ...def.columns.map(c => h('td', null, renderCell(row, c))),
+                // LIST_ACTIONS_V1 (2026-09-05) — действия строки: значками и на
+                // языке интерфейса. Здесь стояли английские «Edit / Del» посреди
+                // русского и узбекского списка, а удаление было залитым красным
+                // прямоугольником — на экране из пятидесяти строк это пятьдесят
+                // красных пятен, и самая опасная кнопка выглядит самой заметной.
+                // Красный остаётся, но появляется при наведении: цвет обязан
+                // предупреждать в тот момент, когда до кнопки дотянулись.
                 h('td', { style: { textAlign: 'right' } },
-                    h('div', { class: 'row', style: { justifyContent: 'flex-end', gap: '6px', alignItems: 'center' } },
-                        (def.table === 'roles' && row.locked) ? h('span', { title: 'Built-in role - cannot be edited or deleted', style: { fontSize: '12.5px', color: 'var(--ink-500)', whiteSpace: 'nowrap' } }, 'Built-in') : null,
-                        h('button', { class: 'btn btn-outline btn-sm',
-                            onclick: () => openEditor(container, onNavigate, row) },
-                            mayEdit ? 'Edit' : 'View'),
-                        mayDelete && h('button', { class: 'btn btn-danger btn-sm', onclick: () => deleteRow(container, onNavigate, row) }, 'Del'),
+                    h('div', { class: 'list-act' },
+                        (def.table === 'roles' && row.locked)
+                            ? h('span', { class: 'list-act-note', title: 'Встроенная роль — её нельзя изменить или удалить' }, tr('Встроенная')) : null,
+                        h('button', {
+                            class: 'icon-btn sm', type: 'button',
+                            title: mayEdit ? 'Изменить' : 'Открыть',
+                            'aria-label': mayEdit ? 'Изменить' : 'Открыть',
+                            onclick: () => openEditor(container, onNavigate, row),
+                            // «Открыть» без права правки — карандаш врал бы:
+                            // документ, а не правка.
+                        }, Icon(mayEdit ? 'Edit' : 'Doc', { size: 14 })),
+                        mayDelete && h('button', {
+                            class: 'icon-btn sm danger', type: 'button',
+                            title: 'Удалить', 'aria-label': 'Удалить',
+                            onclick: () => deleteRow(container, onNavigate, row),
+                        }, Icon('Trash', { size: 14 })),
                     ),
                 ),
             );

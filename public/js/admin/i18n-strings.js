@@ -3,6 +3,14 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // LIST_ACTIONS_V1 — действия строки списка
+  "Действия": {"en":"Actions","ru":"Действия","uz":"Amallar"},
+  "Встроенная": {"en":"Built-in","ru":"Встроенная","uz":"O'rnatilgan"},
+  "Встроенная роль — её нельзя изменить или удалить": {"en":"A built-in role cannot be edited or deleted","ru":"Встроенная роль — её нельзя изменить или удалить","uz":"O'rnatilgan rolni o'zgartirib ham, o'chirib ham bo'lmaydi"},
+  // UI_SELECT_V1 / UI_DATEFIELD_V1 — свои список и календарь
+  "Не выбрано": {"en":"Not selected","ru":"Не выбрано","uz":"Tanlanmagan"},
+  "Список пуст": {"en":"The list is empty","ru":"Список пуст","uz":"Ro'yxat bo'sh"},
+  "Выберите дату": {"en":"Choose a date","ru":"Выберите дату","uz":"Sanani tanlang"},
   // DIAG_CONCLUSION_V1 — «Диагностика» в истории пациента
   "По этому исследованию ещё нет ни заключения, ни измерений.": {"en":"This study has neither a conclusion nor measurements yet.","ru":"По этому исследованию ещё нет ни заключения, ни измерений.","uz":"Bu tekshiruv bo'yicha hali na xulosa, na o'lchovlar bor."},
   // DOCTOR_PAY_I18N_V1 (2026-09-05) — вкладка «Зарплата» в кабинете врача

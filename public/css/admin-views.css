@@ -5120,3 +5120,17 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .dq-block > .dq-quiet{ margin-top:2px; }
 .dq-lab{ font-size:12.5px; font-weight:500; color:var(--ink-600); letter-spacing:.005em; }
 .dq-lab-sec{ text-transform:uppercase; letter-spacing:.06em; font-weight:700; color:var(--ink-500); }
+
+/* LIST_ACTIONS_V1 (2026-09-05) — действия строки списка.
+   Значки вместо надписей: колонка сжимается со 140 px до 104 и отдаёт место
+   данным, а два действия («изменить», «удалить») узнаются по форме быстрее,
+   чем читаются. Красный у удаления появляется на наведении — предупреждать
+   нужно у самой кнопки, а не пятьюдесятью красными пятнами по всему экрану. */
+.list-act { display: flex; justify-content: flex-end; align-items: center; gap: 4px; }
+.list-act-note { font-size: 12.5px; color: var(--ink-500); white-space: nowrap; margin-right: 4px; }
+.icon-btn.sm { width: 28px; height: 28px; padding: 0; display: grid; place-items: center;
+    border: 1px solid transparent; border-radius: 8px; background: transparent;
+    color: var(--ink-500); cursor: pointer; }
+.icon-btn.sm:hover { background: var(--ink-50); color: var(--ink-900); border-color: var(--ink-200); }
+.icon-btn.sm.danger:hover { background: var(--crit-50); color: var(--crit-700); border-color: var(--crit-200, #f3c9c9); }
+.icon-btn.sm:focus-visible { outline: 2px solid var(--primary-600); outline-offset: 1px; }

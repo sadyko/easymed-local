@@ -2935,6 +2935,109 @@ html { scroll-behavior: smooth; }
    Must stay LAST in this file: admin-views.css loads after it, but nothing
    there raises specificity above `!important`.
    ============================================================ */
+/* ============================================================
+   UI_SELECT_V1 / UI_DATEFIELD_V1 (2026-09-05) — выпадающий список и календарь
+   рисуются программой, а не операционной системой.
+
+   Родное поле остаётся в разметке источником правды и просто прячется
+   (.uisel-native / .uidate-native). Видимая часть — кнопка-поле и всплывающий
+   список; список лежит в <body> с position: fixed, потому что внутри диалога
+   его обрезал бы overflow карточки.
+
+   Метрики те же, что у остальных полей формы (высота 36 px, радиус 8 px,
+   рамка --ink-200, фокус --primary-500 с кольцом --primary-50): поле выбора
+   обязано стоять в строке ровно с полем ввода, иначе форма выглядит собранной
+   из двух разных программ.
+   ============================================================ */
+.uisel, .uidate { position: relative; display: block; width: 100%; }
+.uisel-native, .uidate-native {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip-path: inset(50%); border: 0; opacity: 0; pointer-events: none;
+}
+.uisel-field, .uidate-field {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    height: 36px; padding: 0 32px 0 12px; box-sizing: border-box;
+    font-family: inherit; font-size: 13.5px; color: var(--ink-900);
+    text-align: left; background: var(--white);
+    border: 1px solid var(--ink-200); border-radius: 8px; cursor: pointer;
+    transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
+}
+.uisel-field:hover, .uidate-field:hover { border-color: var(--ink-300); }
+.uisel-field:focus-visible, .uidate-field:focus-visible,
+.uisel-field[aria-expanded="true"], .uidate-field[aria-expanded="true"] {
+    outline: none; border-color: var(--primary-500); box-shadow: 0 0 0 3px var(--primary-50);
+}
+.uisel.is-disabled .uisel-field, .uidate.is-disabled .uidate-field {
+    background: var(--ink-25); color: var(--ink-400); cursor: not-allowed;
+}
+.uisel-val, .uidate-val { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Подсказка — серым: «не выбрано» не должно читаться как выбранное значение. */
+.uisel-val.is-empty, .uidate-val.is-empty { color: var(--ink-400); }
+.uisel-caret, .uidate-ic { position: absolute; display: flex; color: var(--ink-400); pointer-events: none; }
+.uisel-caret { right: 10px; top: 50%; transform: translateY(-50%); }
+.uidate-ic { position: static; transform: none; flex: 0 0 auto; }
+.uidate-clear {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    display: none; border: 0; background: transparent; cursor: pointer;
+    color: var(--ink-400); padding: 3px; border-radius: 6px; line-height: 0;
+}
+.uidate-clear:hover { background: var(--ink-50); color: var(--ink-700); }
+
+.uisel-pop, .uidate-pop {
+    position: fixed; z-index: 200;
+    background: var(--white); border: 1px solid var(--ink-200); border-radius: 10px;
+    box-shadow: var(--shadow-lg); overflow: hidden;
+    display: flex; flex-direction: column;
+}
+.uisel-pop { max-width: min(480px, calc(100vw - 16px)); }
+.uisel-searchbox {
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+    border-bottom: 1px solid var(--ink-100); color: var(--ink-400); flex: 0 0 auto;
+}
+.uisel-search {
+    flex: 1; min-width: 0; height: 28px; border: 0; outline: none;
+    font-family: inherit; font-size: 13.5px; color: var(--ink-900); background: transparent;
+}
+.uisel-rows { overflow-y: auto; padding: 4px; }
+.uisel-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; border-radius: 7px; cursor: pointer;
+    font-size: 13.5px; color: var(--ink-900);
+}
+.uisel-row-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uisel-row-c { color: var(--primary-600); display: flex; flex: 0 0 auto; }
+.uisel-row.is-active { background: var(--primary-50); }
+.uisel-row.is-on { font-weight: 600; }
+.uisel-row.is-clear { color: var(--ink-500); border-bottom: 1px solid var(--ink-100); border-radius: 0; margin-bottom: 4px; }
+.uisel-row.is-off { color: var(--ink-400); cursor: not-allowed; }
+.uisel-empty { padding: 14px 12px; font-size: 12.5px; color: var(--ink-500); text-align: center; }
+
+.uidate-pop { padding: 10px; width: 268px; }
+.uidate-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.uidate-title { flex: 1; text-align: center; font-size: 13.5px; color: var(--ink-800); }
+.uidate-title b { font-weight: 600; }
+.uidate-nav {
+    width: 28px; height: 28px; display: grid; place-items: center; flex: 0 0 auto;
+    border: 1px solid var(--ink-200); border-radius: 8px; background: var(--white);
+    color: var(--ink-600); cursor: pointer;
+}
+.uidate-nav:hover { border-color: var(--primary-400); color: var(--primary-700); }
+.uidate-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.uidate-wd { font-size: 12.5px; color: var(--ink-400); text-align: center; padding: 2px 0 4px; }
+.uidate-day {
+    height: 32px; border: 1px solid transparent; border-radius: 8px; background: transparent;
+    font-family: inherit; font-size: 13.5px; color: var(--ink-900); cursor: pointer;
+    font-variant-numeric: tabular-nums;
+}
+.uidate-day:hover:not(.is-off) { background: var(--ink-50); }
+/* Дни соседних месяцев видны, но приглушены: сетка обязана быть цельной,
+   иначе первая неделя месяца висит в пустоте и её трудно нащупать взглядом. */
+.uidate-day.is-out { color: var(--ink-300); }
+.uidate-day.is-today { border-color: var(--primary-300); font-weight: 600; }
+.uidate-day.is-on { background: var(--primary-600); color: var(--white); border-color: var(--primary-600); font-weight: 600; }
+.uidate-day.is-off { color: var(--ink-200); cursor: not-allowed; }
+.uidate-foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--ink-100); }
+
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
         animation-duration: 0.01ms !important;
