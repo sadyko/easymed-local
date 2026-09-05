@@ -1238,3 +1238,60 @@ test('GET /clinics still leaks no credential', async (t) => {
   const secret = db.prepare('SELECT unlock_secret FROM clinics WHERE clinic_id = ?').get('c-1').unlock_secret;
   assert.ok(!raw.includes(secret), 'unlock_secret must never reach the panel');
 });
+
+test('GET /clinics carries each clinic newest reported stats', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const a = enrol(db, 'c-1', 'Reports Stats');
+  enrol(db, 'c-2', 'Never Installed');
+
+  checkIn(db, { installToken: a, version: '0.8.0', stats: { patients_total: 1240, visits_today: 38 } });
+  checkIn(db, { installToken: a, version: '0.8.0' });   // newer, but carries none
+
+  const res = await req(server, 'GET', ADMIN_BASE + '/clinics', { cookie });
+  const by = Object.fromEntries((await res.json()).clinics.map((c) => [c.id, c]));
+
+  assert.deepEqual(by['c-1'].latest_stats, { patients_total: 1240, visits_today: 38 },
+    'the newest check-in that CARRIES stats wins, not simply the newest check-in');
+  assert.ok(by['c-1'].latest_stats_at);
+
+  assert.equal(by['c-2'].latest_stats, null,
+    'a clinic that never checked in reports null — the board draws it as an em dash, never as 0');
+});
+
+test('GET /clinics says how many releases behind each clinic is', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const a = enrol(db, 'c-1', 'Current');
+  const b = enrol(db, 'c-2', 'Behind');
+  enrol(db, 'c-3', 'Never Installed');
+
+  const rel = db.prepare('INSERT INTO releases (version, ring, halted) VALUES (?,?,?)');
+  rel.run('0.6.8', 2, 0);
+  rel.run('0.7.2', 2, 0);
+  rel.run('0.8.0', 2, 0);
+  rel.run('0.9.0', -1, 0);   // registered, never published — nobody is "behind" it
+  rel.run('0.8.5', 2, 1);    // halted — likewise
+
+  checkIn(db, { installToken: a, version: '0.8.0' });
+  checkIn(db, { installToken: b, version: '0.6.8' });
+
+  const res = await req(server, 'GET', ADMIN_BASE + '/clinics', { cookie });
+  const by = Object.fromEntries((await res.json()).clinics.map((c) => [c.id, c]));
+
+  assert.equal(by['c-1'].versions_behind, 0);
+  assert.equal(by['c-2'].versions_behind, 2, '0.7.2 and 0.8.0 — not the unpublished or halted ones');
+  assert.equal(by['c-3'].versions_behind, null, 'unknown version means unknown distance, not zero');
+});
+
+test('versions are compared numerically per segment, not as strings', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  const a = enrol(db, 'c-1', 'Nine');
+  db.prepare('INSERT INTO releases (version, ring, halted) VALUES (?,?,?)').run('0.10.0', 2, 0);
+  checkIn(db, { installToken: a, version: '0.9.0' });
+
+  const res = await req(server, 'GET', ADMIN_BASE + '/clinics', { cookie });
+  const by = Object.fromEntries((await res.json()).clinics.map((c) => [c.id, c]));
+  assert.equal(by['c-1'].versions_behind, 1, '0.10.0 is newer than 0.9.0 — a string compare gets this backwards');
+});

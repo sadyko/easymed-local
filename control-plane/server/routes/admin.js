@@ -7,6 +7,10 @@ import { SELLABLE_MODULES } from '../../../server/services/rpc/licence.js';
 // counter names AND their human descriptions, imported rather than
 // re-typed — same drift trap SELLABLE_MODULES above already guards against.
 import { COUNTERS, COUNTER_NAMES } from '../../../server/services/control/metrics.js';
+// Same module services/rings.js imports it from — never a third copy. Comparing
+// versions numerically per segment ("0.10.0" is newer than "0.9.0") is exactly
+// the kind of function that goes subtly wrong when re-typed.
+import { compareVersions } from '../../../scripts/build-bundle.mjs';
 
 // CONTROL_PLANE_V1 — the vendor's own admin API, behind vendor login. This is
 // the part of the control plane the owner actually touches: today they would
@@ -241,6 +245,54 @@ function latestStats(db, clinicId) {
   return null; // this clinic has never reported anything usable
 }
 
+// CONTROL_PLANE_V2 — the list's answer to latestStats(), for every clinic at
+// once. latestStats() walks one clinic's whole check-in history; calling it per
+// row turns a list render into N history scans.
+//
+// The window function bounds the work at RECENT_CHECKINS_SCANNED rows per
+// clinic. That is a deliberate, documented difference from latestStats(): a
+// clinic whose last ten check-ins all carried no stats reads as "—" on the
+// board, while GET /clinics/:id still finds the older figure. The board is a
+// glance; the clinic page is the record.
+const RECENT_CHECKINS_SCANNED = 10;
+
+function latestStatsForAll(db) {
+  const rows = db.prepare(
+    `SELECT clinic_id, at, payload FROM (
+       SELECT clinic_id, at, payload,
+              ROW_NUMBER() OVER (PARTITION BY clinic_id ORDER BY at DESC, id DESC) AS rn
+       FROM checkins
+     ) WHERE rn <= ?
+     ORDER BY clinic_id, rn`
+  ).all(RECENT_CHECKINS_SCANNED);
+
+  const out = new Map();
+  for (const row of rows) {
+    if (out.has(row.clinic_id)) continue;   // already found this clinic's newest with stats
+    let payload;
+    try { payload = JSON.parse(row.payload); } catch { continue; }
+    if (payload && payload.stats && typeof payload.stats === 'object' && Object.keys(payload.stats).length) {
+      out.set(row.clinic_id, { stats: payload.stats, at: row.at });
+    }
+  }
+  return out;
+}
+
+// Versions a clinic could actually be offered today: published to some ring and
+// not halted. A registered-but-unpublished release (ring -1) or a halted one is
+// something NOBODY is behind — saying otherwise would put an amber chip on a
+// clinic that is doing exactly what it was told.
+function offerableVersionsDesc(db) {
+  return db.prepare('SELECT version FROM releases WHERE ring >= 0 AND halted = 0').all()
+    .map((r2) => r2.version)
+    .sort((a, b) => compareVersions(b, a));
+}
+
+function versionsBehind(offerable, installed) {
+  if (!installed) return null;   // never checked in — unknown distance, not zero
+  return offerable.filter((v) => compareVersions(v, installed) > 0).length;
+}
+
 export function adminRoutes(db) {
   const r = Router();
   r.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
@@ -265,6 +317,9 @@ export function adminRoutes(db) {
       ).all().map((r2) => [r2.parent, r2.n])
     );
 
+    const statsByClinic = latestStatsForAll(db);
+    const offerable = offerableVersionsDesc(db);
+
     const clinics = rows.map((c) => ({
       id: c.clinic_id,
       name: c.name,
@@ -281,6 +336,9 @@ export function adminRoutes(db) {
       filial_count: filialCounts.get(c.clinic_id) || 0,
       ring: c.ring,
       pinned_version: c.pinned_version,
+      latest_stats: statsByClinic.get(c.clinic_id)?.stats ?? null,
+      latest_stats_at: statsByClinic.get(c.clinic_id)?.at ?? null,
+      versions_behind: versionsBehind(offerable, c.last_version),
     }));
     res.json({ clinics });
   });
