@@ -28,6 +28,11 @@
 // услугу).
 
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+// MOTION_DIALOG_V1 — окно ОТКРЫВАЕТСЯ чистым CSS (правило на .modal), а
+// закрывается через общий помощник: угасание и снятие из документа одной
+// строкой. Помощник обязан убрать окно в любом случае — нет анимации (старый
+// браузер, «меньше движения», фоновая вкладка) — убирает немедленно.
+import { fadeOutAndRemove } from '../motion.js?v=mo1';
 import { h, Icon, toast, clear, fmtDate } from '../ui.js';
 import { savePatient, loadPatientById } from '../data.js';
 import { supabase } from '../../supabase.js';
@@ -141,7 +146,7 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
     const regPhone = (name, el) => { phoneFields.add(name); return reg(name, el); };
 
     const overlay = h('div', { class: 'modal', style: { zIndex: '150' } });
-    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+    const close = () => { document.removeEventListener('keydown', onKey); fadeOutAndRemove(overlay); };
     const onKey = (e) => { if (e.key === 'Escape') close(); };
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
@@ -573,7 +578,7 @@ export function openDuplicatePatientDialog(err, { onOpenExisting, onForceCreate 
     const list = Array.isArray(err.existing) ? err.existing : (err.existing ? [err.existing] : []);
 
     const overlay = h('div', { class: 'modal', style: { zIndex: '160' } });
-    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+    const close = () => { document.removeEventListener('keydown', onKey); fadeOutAndRemove(overlay); };
     const onKey = (e) => { if (e.key === 'Escape') close(); };
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
@@ -717,7 +722,7 @@ function openWebcamModal(onCapture) {
     const overlay = h('div', { class: 'modal', style: { zIndex: '170' } });
     let stream = null;
     const stop = () => { if (stream) { for (const t of stream.getTracks()) t.stop(); stream = null; } };
-    const close = () => { stop(); overlay.remove(); document.removeEventListener('keydown', onKey); };
+    const close = () => { stop(); document.removeEventListener('keydown', onKey); fadeOutAndRemove(overlay); };
     const onKey = (e) => { if (e.key === 'Escape') close(); };
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 

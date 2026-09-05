@@ -8,6 +8,9 @@ import { supabase, pingSupabase } from './supabase.js';
 import { SECTIONS } from './admin/sections.js?v=rolecmp1';
 import { h, Icon, clear, initials } from './admin/ui.js';
 import { phoneInput } from './admin/phone-input.js?v=ph1';
+// MOTION_REVEAL_V1 — единственный словарь движения приложения; оболочке из
+// него нужна одна вещь: сворачивание колонки меню (см. wireSidebarCollapse).
+import { pulseFade } from './admin/motion.js?v=mo1';
 import {
     isModuleAllowed, isRouteAllowed,
     setFullAccess, setEffectiveFromRole, setEffectiveFromRoles, currentRoleLabel,
@@ -509,7 +512,19 @@ function activatePane(pane) {
     renderSectionTitle();
     renderCrumbs();
     showOnlyActivePane();
-    if (!sameScreen) requestAnimationFrame(() => window.scrollTo({ top: pane.scrollY || 0, behavior: 'instant' in window ? 'instant' : 'auto' }));
+    // MOTION_SCROLL_V1 — ВОЗВРАТ НА ЭКРАН ОБЯЗАН БЫТЬ МГНОВЕННЫМ, и с этого
+    // дня это надо говорить явно. Раньше здесь стояло `'instant' in window ?
+    // 'instant' : 'auto'` — проверка, которая всегда ложна ('instant' не имя
+    // свойства window), то есть просилось behavior: 'auto'. А 'auto' по
+    // стандарту означает «как сказано в CSS», и с появлением
+    // `html { scroll-behavior: smooth }` каждое возвращение на экран поехало
+    // бы прокруткой через всю страницу. Вернуться туда, где стоял, — не
+    // переход, а восстановление состояния.
+    if (!sameScreen) requestAnimationFrame(() => {
+        const top = pane.scrollY || 0;
+        try { window.scrollTo({ top, behavior: 'instant' }); }
+        catch (e) { window.scrollTo(0, top); }   // браузер без значения 'instant'
+    });
 }
 
 // Unmount everything past the cache ceiling. The list is MRU-ordered, so the
@@ -2376,6 +2391,13 @@ function wireSidebarCollapse() {
     app._sbCollapseWired = true;
     const setCollapsed = (on) => {
         app.classList.toggle('sidebar-collapsed', on);
+        // MOTION_REVEAL_V1 — ширину колонки НЕ анимируем: это грид-дорожка,
+        // и её анимация пересчитывает раскладку всей страницы на каждом
+        // кадре (на клиническом компьютере это видно). Вместо этого колонка
+        // коротко проявляется: щелчок читается как намеренный, а раскладка
+        // перещёлкивается ровно один раз. Просьбу «меньше движения» помощник
+        // спрашивает сам.
+        pulseFade(document.querySelector('.sidebar'));
         try { localStorage.setItem('easymed_sidebar_collapsed', on ? '1' : '0'); } catch (_) {}
     };
     const toggle = () => setCollapsed(!app.classList.contains('sidebar-collapsed'));

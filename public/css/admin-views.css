@@ -633,8 +633,12 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .field .hint { font-size: 12.5px; color: var(--ink-500); }
 
 /* ---- Animations ---- */
+/* MOTION_REVEAL_V1 — .fade-in это ВХОД ЭКРАНА (его просит корень почти каждого
+   представления). Длительность и кривая взяты из словаря admin.css: 200ms
+   «примерно как --dur-3» было последней ручной длительностью в этой паре
+   файлов, которая ни с чем не совпадала. */
 @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-.fade-in { animation: fadeIn 200ms ease-out both; }
+.fade-in { animation: fadeIn var(--dur-3) var(--ease-out) both; }
 @keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
 
 /* ---- Topbar tweaks (admin.css already has .topbar, .crumbs) ---- */
@@ -2327,6 +2331,9 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .reg-review { padding: 11px 13px; border: 1px solid var(--ink-100); border-radius: var(--r-md); background: var(--white); }
 .reg-review-text { font-size: 12.5px; color: var(--ink-700); margin-top: 6px; line-height: 1.45; }
 .reg-stars { color: var(--warn-500); font-size: 13.5px; letter-spacing: 1px; }
+/* MOTION_REVEAL_V1 — подсветка строки берётся ЦВЕТОМ и только цветом: ни
+   размера, ни отступа, иначе строка под курсором сдвигала бы соседние. */
+.reg-base-tbl tbody tr.row-click td { transition: background var(--dur-1) var(--ease-out); }
 .reg-base-tbl tbody tr.row-click:hover td { background: var(--ink-25); }
 @media (max-width: 920px) {
     .reg-detail-grid, .reg-kpi-grid, .reg-reviews-grid { grid-template-columns: 1fr; }
@@ -3572,6 +3579,8 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     padding: 7px 12px 7px 30px; font-size: 13.5px; font-family: inherit; outline: none;
 }
 .q-filters .q-search input:focus { background: var(--white, #fff); border-color: var(--primary-300); }
+/* MOTION_REVEAL_V1 — на токенах словаря, а не своей длительностью на экран. */
+.q-filters .q-search input { transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out); }
 
 /* Вкладки занимают середину. Если видов станет больше, чем помещается, полоса
    прокручивается — но панель не ломается на две строки. */
@@ -3585,7 +3594,9 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     padding: 5px 10px; border-radius: 99px; cursor: pointer;
     font-family: inherit; font-size: 12.5px; font-weight: 500; white-space: nowrap;
     border: 1px solid var(--ink-200); background: var(--white, #fff); color: var(--ink-600);
+    transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
+.q-filters .q-chips button:hover { border-color: var(--ink-300); background: var(--ink-25); }
 .q-filters .q-chips button .n { font-size: 12.5px; opacity: .75; }
 .q-filters .q-chips button.on {
     border-color: var(--primary-500); background: var(--primary-50);

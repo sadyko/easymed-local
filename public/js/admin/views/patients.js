@@ -14,6 +14,10 @@ import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
 // «Создать пациента» открывает окно ПОВЕРХ списка, и сохранённая карта
 // появляется в этом же списке без перехода туда-обратно.
 import { openPatientCreateModal } from './patient-create-modal.js?v=onewin1';
+// MOTION_REVEAL_V1 — строки появляются по мере прокрутки, и на страницу
+// приезжают плавно. Помощник ОДИН на приложение (public/js/admin/motion.js):
+// список пациентов, доска очереди и плитки сводки просят одно и то же.
+import { revealOn, smoothScrollTo } from '../motion.js?v=mo1';
 
 // DATA_TRANSFER_V1 — the Шаблон / Импорт / Экспорт trio used to sit in this
 // header too. It was removed: the same three actions live in Настройки →
@@ -52,6 +56,7 @@ const refs = {
     onNavigate: null,
     doctorId:  null,
     tbody:     null,
+    listCard:  null,   // MOTION_SCROLL_V1 — якорь прокрутки при листании
     searchInp: null,
     dobInp: null,   // PATIENT_SEARCH_DOB_V1
     emptyEl:   null,
@@ -112,6 +117,14 @@ function openCreatePatient() {
     });
 }
 
+// MOTION_SCROLL_V1 — смена страницы списка: сначала везём к началу карточки,
+// потом читаем. Прокрутка плавная в браузере и мгновенная, если пользователь
+// просил «меньше движения» (motion.js спрашивает эту настройку за нас).
+function goPage() {
+    smoothScrollTo(refs.listCard || refs.container, { block: 'start' });
+    return fetchAndPaint();
+}
+
 function mount() {
     clear(refs.container);
 
@@ -157,14 +170,17 @@ function mount() {
     refs.prevBtn = h('button', {
         class: 'icon-btn btn-sm',
         style: { width: '28px', height: '28px' },
-        onclick: () => { if (state.page > 1) { state.page--; fetchAndPaint(); } },
+        // Страница листается — список обязан начаться сначала. Без этого
+        // сотрудник, нажавший «дальше» внизу таблицы, оказывался посреди
+        // новой страницы и не понимал, что она уже другая.
+        onclick: () => { if (state.page > 1) { state.page--; goPage(); } },
     }, Icon('ChevronLeft', { size: 14 }));
     refs.nextBtn = h('button', {
         class: 'icon-btn btn-sm',
         style: { width: '28px', height: '28px' },
         onclick: () => {
             const maxPage = Math.max(1, Math.ceil(state.total / PAGE_SIZE));
-            if (state.page < maxPage) { state.page++; fetchAndPaint(); }
+            if (state.page < maxPage) { state.page++; goPage(); }
         },
     }, Icon('ChevronRight', { size: 14 }));
 
@@ -229,8 +245,9 @@ function mount() {
 
     refs.container.appendChild(h('div', { class: 'fade-in' },
         refs.embedded ? null : registrarHeader({ active: 'patients', onNavigate: refs.onNavigate }),
-        // List card
-        h('div', { class: 'card' },
+        // List card. Ссылка на карточку сохраняется: к её началу возвращает
+        // прокрутка при листании страниц (goPage).
+        refs.listCard = h('div', { class: 'card' },
             h('div', { class: 'card-header' },
                 h('div', { class: 'row', style: { gap: '10px', flex: '1' } },
                     h('div', { style: { position: 'relative', maxWidth: '380px', flex: '1' } },
@@ -424,6 +441,11 @@ function paintRows(rows) {
     }
     refs.emptyEl.style.display = 'none';
     for (const p of rows) refs.tbody.appendChild(patientRow(p));
+    // Один наблюдатель на ВСЮ таблицу, а не по одному на строку; повторный
+    // вызов (буква в поиске, смена страницы) снимает предыдущий сам.
+    // lift: false — строку таблицы поднимать нельзя, transform на <tr>
+    // дрожит на линейках; строке хватает прозрачности.
+    revealOn(refs.tbody, '[data-reveal]', { lift: false });
     syncHeadCb();
     paintMergeBar();
 }
@@ -555,7 +577,10 @@ function patientRow(p) {
         style: { cursor: 'pointer' },
         onclick: (e) => { e.stopPropagation(); },
         onchange: (e) => { if (e.currentTarget.checked) selectedDup.add(p.id); else selectedDup.delete(p.id); paintMergeBar(); syncHeadCb(); } }) : null;
-    return h('tr', { class: 'row-click', onclick: () => refs.onNavigate('patient-card', p), style: { cursor: 'pointer' } },
+    // data-reveal — заявка на появление; ПРЯЧЕТ строку только motion.js и
+    // только когда уже может показать (см. MOTION_REVEAL_V1). Атрибут в
+    // разметке безвреден сам по себе: без JS он ничего не значит.
+    return h('tr', { class: 'row-click', 'data-reveal': '', onclick: () => refs.onNavigate('patient-card', p), style: { cursor: 'pointer' } },
         h('td', { style: { textAlign: 'center' }, onclick: (e) => e.stopPropagation() }, cb || ''),
         // 1 — Пациент: avatar + inline ID/MRN + ФИО
         h('td', null,

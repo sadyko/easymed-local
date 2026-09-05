@@ -36,6 +36,9 @@ import { h, Icon, clear } from '../ui.js';
 // модуля. Разошедшийся ?v= развёл бы состояние экрана на две копии.
 import { renderPatients } from './patients.js?v=regfit2';
 import { renderQueue } from './queue.js?v=q7';
+// MOTION_REVEAL_V1 — переход между вкладками: панель проявляется, полоса
+// вкладок возвращается в поле зрения. Общий помощник, не свой на экран.
+import { animateIn, smoothScrollTo } from '../motion.js?v=mo1';
 
 const TABS = [
     { id: 'list',     sub: null,       label: 'Список',  icon: 'Patients' },
@@ -145,7 +148,7 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
         buttons[next.id].focus();
     }
 
-    function paintStrip() {
+    function paintStrip({ animate = false } = {}) {
         for (const t of TABS) {
             const on = t.id === active;
             const b = buttons[t.id];
@@ -153,6 +156,12 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
             b.setAttribute('aria-selected', on ? 'true' : 'false');
             b.setAttribute('tabindex', on ? '0' : '-1');
             hosts[t.id].style.display = on ? '' : 'none';
+            // Проявление, а не переезд: панели лежат друг на друге в одном
+            // месте, и любой сдвиг соседей на переключении вкладки читался бы
+            // как перерисовка всего раздела. Появление играется только по
+            // ДЕЙСТВИЮ пользователя — первое открытие раздела уже приезжает
+            // со своей .fade-in.
+            if (on && animate) animateIn(hosts[t.id]);
         }
     }
 
@@ -210,7 +219,11 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
         if (!initial && id === active) return;
         const prev = active;
         active = id;
-        paintStrip();
+        paintStrip({ animate: !initial });
+        // Вкладку переключили из середины длинного списка — полоса вкладок
+        // обязана снова оказаться на глазах, иначе новая вкладка открывается
+        // «где-то выше». Плавно, а при просьбе «меньше движения» — мгновенно.
+        if (!initial) smoothScrollTo(strip, { block: 'start' });
         // Опрос очереди живёт РОВНО столько, сколько её видно. Спрятанная доска,
         // которая продолжает каждые десять секунд ходить в базу, — это нагрузка
         // без единого читателя, и на смене таких вкладок накапливается.

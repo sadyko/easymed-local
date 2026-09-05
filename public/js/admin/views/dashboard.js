@@ -7,6 +7,9 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast } from '../ui.js';
+// MOTION_REVEAL_V1 — тот же помощник появления, что у списка пациентов и
+// доски очереди (public/js/admin/motion.js): один словарь движения на всё.
+import { revealOn } from '../motion.js?v=mo1';
 
 const refs = {
     container:  null,
@@ -163,12 +166,16 @@ function paintTiles(d) {
         split: splitLine(d, 'lab_pending_count', n),
         onClick: () => refs.onNavigate && refs.onNavigate('labs'),
     }));
+
+    // Плитки приподнимаются при входе в экран — их шесть, наблюдатель один.
+    revealOn(refs.grid, '[data-reveal]');
 }
 
 function kpi({ icon, accent, label, value, meta, split, valueWarn, onClick }) {
     const a = KPI_ACCENT[accent] || KPI_ACCENT.primary;
     return h('div', {
         class: 'dash-kpi',
+        'data-reveal': '',
         onclick: onClick || undefined,
     },
         h('div', { class: 'dash-kpi-top' },

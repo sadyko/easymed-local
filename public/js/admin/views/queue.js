@@ -16,6 +16,8 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, PageHead } from '../ui.js';
 import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — счётчики очереди собираются вокруг чисел
+// MOTION_REVEAL_V1 — общий помощник появления (public/js/admin/motion.js).
+import { revealOn } from '../motion.js?v=mo1';
 
 // QUEUE_FILTERS_V1 — фильтры живут в состоянии модуля, а не в DOM: доска сама
 // перезагружается каждые 10 секунд, и фильтр, хранившийся в поле ввода,
@@ -108,7 +110,10 @@ export async function renderQueue(container, { embedded = false } = {}) {
 
     state.day = state.day || todayLocal();
 
-    const inst = { container, refs: {}, poll: null };
+    // revealed — доска ПОЯВЛЯЕТСЯ один раз. Она перерисовывается каждые
+    // десять секунд опросом, и если проигрывать появление на каждой
+    // перерисовке, карточки мигали бы у сотрудника весь рабочий день.
+    const inst = { container, refs: {}, poll: null, revealed: false };
     mounts.add(inst);
 
     const root = h('div', { class: 'fade-in', 'data-queue-board': '' });
@@ -330,6 +335,13 @@ function paint(inst) {
         }
         grid.appendChild(groupCard(g));
     }
+
+    // Первая отрисовка после монтирования — с появлением; дальнейшие
+    // (опрос, фильтр, поиск) молча, см. inst.revealed выше.
+    if (!inst.revealed) {
+        inst.revealed = true;
+        revealOn(refs.body, '[data-reveal]');
+    }
 }
 
 function groupCard(g) {
@@ -394,5 +406,5 @@ function groupCard(g) {
             } }, st.label)));
     }
 
-    return h('div', { class: 'card', style: { padding: '0', overflow: 'hidden' } }, head, list);
+    return h('div', { class: 'card', 'data-reveal': '', style: { padding: '0', overflow: 'hidden' } }, head, list);
 }
