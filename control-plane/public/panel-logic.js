@@ -182,3 +182,100 @@ export function statsRows(latestStats, counters) {
     .sort()
     .map((name) => ({ name, describe: describeByName.get(name) || name, value: stats[name] }));
 }
+
+// --- CONTROL_PLANE_V2: the board's bands -------------------------------------
+//
+// Every rule the card board applies lives here, as a pure function with a test,
+// for the same reason the rest of this file does: a rule embedded in a render
+// function can only be checked by looking at a screen.
+
+export const QUIET_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+export const EXPIRING_WITHIN_DAYS = 30;
+export const FAR_BEHIND_RELEASES = 3;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Whole days from `now` to a YYYY-MM-DD, inclusive of the day itself — matching
+// subscriptionBadge() above and services/checkin.js's own parseDateOnly, which
+// is what actually decides whether a licence is re-armed. Null for anything
+// unparseable, so a malformed date never becomes a confident countdown.
+function daysUntilDateOnly(until, now) {
+  if (typeof until !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(until)) return null;
+  const end = Date.parse(until + 'T00:00:00Z');
+  if (Number.isNaN(end)) return null;
+  const today = Date.parse(now.toISOString().slice(0, 10) + 'T00:00:00Z');
+  return Math.round((end - today) / DAY_MS);
+}
+
+/**
+ * Why this clinic is in the "needs attention" band, in the owner's words.
+ * An empty array means nothing is wrong.
+ */
+export function attentionReasons(clinic, now = new Date()) {
+  const out = [];
+
+  if (!clinic.last_seen_at) {
+    // Distinct from "gone quiet": these never arrived at all. The live registry
+    // holds three — enrollment codes issued in August and never claimed.
+    out.push('never installed');
+  } else {
+    const seen = Date.parse(clinic.last_seen_at);
+    if (Number.isFinite(seen) && now.getTime() - seen > QUIET_AFTER_MS) out.push('gone quiet');
+  }
+
+  if (clinic.subscription !== 'active') {
+    out.push('unpaid');
+  } else {
+    const days = daysUntilDateOnly(clinic.subscription_until, now);
+    if (days !== null && days <= EXPIRING_WITHIN_DAYS) {
+      out.push(days < 0 ? 'subscription lapsed' : `subscription ends in ${days} days`);
+    }
+  }
+
+  // null means the clinic has never reported a version — unknown distance. An
+  // unknown is not an alarm.
+  if (typeof clinic.versions_behind === 'number' && clinic.versions_behind >= FAR_BEHIND_RELEASES) {
+    out.push('far behind on updates');
+  }
+
+  return out;
+}
+
+/** 'retired' | 'attention' | 'live' — which band this card is drawn in. */
+export function clinicBand(clinic, now = new Date()) {
+  // Retired first and unconditionally: a retired clinic is not a problem to
+  // solve, it is a decision already taken. Ranking it by its faults would fill
+  // the top of the board with clinics the owner has finished with.
+  if (!clinic.active) return 'retired';
+  return attentionReasons(clinic, now).length > 0 ? 'attention' : 'live';
+}
+
+/** The chip beside a clinic's version, or null when the distance is unknown. */
+export function versionChip(versionsBehind) {
+  if (typeof versionsBehind !== 'number' || !Number.isFinite(versionsBehind)) return null;
+  if (versionsBehind <= 0) return { label: 'current', tone: 'ok' };
+  if (versionsBehind >= FAR_BEHIND_RELEASES) return { label: 'far behind', tone: 'bad' };
+  return { label: `${versionsBehind} behind`, tone: 'warn' };
+}
+
+/**
+ * A counter for the card's stats strip. Absent reads as an em dash, NEVER as 0:
+ * "0 billed today" is a different and alarming claim from "this clinic does not
+ * report that figure" — and three clinics on the live registry report nothing
+ * at all.
+ */
+export function formatStat(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+  if (Math.abs(value) >= 1_000_000) {
+    return String(Number((value / 1_000_000).toFixed(1))) + 'M';
+  }
+  return String(Math.round(value)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+
+/** "31 Aug 2026", or "date unknown" — migration 010 deliberately backfills nothing. */
+export function formatRetiredAt(iso) {
+  if (!iso) return 'date unknown';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'date unknown';
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+}

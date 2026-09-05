@@ -14,6 +14,11 @@ import {
   subscriptionUntilPayload,
   counterCheckedState,
   statsRows,
+  attentionReasons,
+  clinicBand,
+  versionChip,
+  formatStat,
+  formatRetiredAt,
 } from './panel-logic.js';
 
 // --- lastSeenSeverity --------------------------------------------------------
@@ -261,4 +266,82 @@ test('statsRows: a reported name missing from the current catalogue (removed in 
 test('statsRows: a missing/malformed counters list never throws — every row falls back to its raw key', () => {
   assert.doesNotThrow(() => statsRows({ patients_total: 1 }, undefined));
   assert.deepEqual(statsRows({ patients_total: 1 }, undefined), [{ name: 'patients_total', describe: 'patients_total', value: 1 }]);
+});
+
+// --- CONTROL_PLANE_V2: which band a card belongs in --------------------------
+
+const NOW = new Date('2026-09-05T12:00:00Z');
+
+function clinic(over = {}) {
+  return {
+    active: true, subscription: 'active', subscription_until: null,
+    last_seen_at: '2026-09-05T11:32:00Z', versions_behind: 0, ...over,
+  };
+}
+
+test('attentionReasons: a healthy clinic needs nothing', () => {
+  assert.deepEqual(attentionReasons(clinic(), NOW), []);
+});
+
+test('attentionReasons: never installed is its own reason', () => {
+  // The live registry has three of these — codes issued in August, never
+  // claimed. They are not "quiet", they never arrived.
+  assert.deepEqual(attentionReasons(clinic({ last_seen_at: null }), NOW), ['never installed']);
+});
+
+test('attentionReasons: silence past a week', () => {
+  assert.deepEqual(attentionReasons(clinic({ last_seen_at: '2026-09-01T00:00:00Z' }), NOW), []);
+  assert.deepEqual(attentionReasons(clinic({ last_seen_at: '2026-08-20T00:00:00Z' }), NOW), ['gone quiet']);
+});
+
+test('attentionReasons: money', () => {
+  assert.deepEqual(attentionReasons(clinic({ subscription: 'unpaid' }), NOW), ['unpaid']);
+  assert.deepEqual(attentionReasons(clinic({ subscription_until: '2026-09-20' }), NOW),
+    ['subscription ends in 15 days']);
+  assert.deepEqual(attentionReasons(clinic({ subscription_until: '2026-08-01' }), NOW),
+    ['subscription lapsed']);
+  assert.deepEqual(attentionReasons(clinic({ subscription_until: '2027-08-24' }), NOW), []);
+});
+
+test('attentionReasons: three or more releases behind', () => {
+  assert.deepEqual(attentionReasons(clinic({ versions_behind: 2 }), NOW), []);
+  assert.deepEqual(attentionReasons(clinic({ versions_behind: 3 }), NOW), ['far behind on updates']);
+  assert.deepEqual(attentionReasons(clinic({ versions_behind: null }), NOW), [],
+    'unknown distance is not a reason to raise an alarm');
+});
+
+test('clinicBand: retired wins over every other reason', () => {
+  assert.equal(clinicBand(clinic({ active: false, last_seen_at: null, subscription: 'unpaid' }), NOW), 'retired');
+  assert.equal(clinicBand(clinic(), NOW), 'live');
+  assert.equal(clinicBand(clinic({ subscription: 'unpaid' }), NOW), 'attention');
+});
+
+test('versionChip: current, behind, far behind, unknown', () => {
+  assert.deepEqual(versionChip(0), { label: 'current', tone: 'ok' });
+  assert.deepEqual(versionChip(1), { label: '1 behind', tone: 'warn' });
+  assert.deepEqual(versionChip(2), { label: '2 behind', tone: 'warn' });
+  assert.deepEqual(versionChip(3), { label: 'far behind', tone: 'bad' });
+  assert.equal(versionChip(null), null);
+  assert.equal(versionChip(undefined), null);
+});
+
+test('formatStat: an em dash for absent, never a zero', () => {
+  // A 0 here reads as "this clinic billed nothing today", which is a different
+  // and alarming claim from "this clinic does not report that figure".
+  assert.equal(formatStat(null), '—');
+  assert.equal(formatStat(undefined), '—');
+  assert.equal(formatStat(NaN), '—');
+  assert.equal(formatStat(0), '0');
+  assert.equal(formatStat(96), '96');
+  assert.equal(formatStat(1240), '1 240');
+  assert.equal(formatStat(6400000), '6.4M');
+  assert.equal(formatStat(2000000), '2M');
+});
+
+test('formatRetiredAt: unknown stays unknown', () => {
+  // Migration 010 deliberately does not backfill. Printing today's date for a
+  // clinic retired in August would be a confident lie.
+  assert.equal(formatRetiredAt(null), 'date unknown');
+  assert.equal(formatRetiredAt('not-a-date'), 'date unknown');
+  assert.equal(formatRetiredAt('2026-08-31T07:49:45Z'), '31 Aug 2026');
 });
