@@ -452,3 +452,139 @@ test('«Ждут лечащего врача» — отдельная очере
     assert.ok(textOf(inWard).includes('лечащий врач не назначен'),
         'лежащий пациент без лечащего врача — недоделанная работа отделения, и видно её отсюда');
 });
+
+// ─── 7. ADMISSION_EMBED_FIX — РАЗДЕЛ ОТКРЫВАЕТСЯ, А НЕ ОТКАЗЫВАЕТ ───────────
+//
+// ЧТО БЫЛО. Владелец сообщил: «заявки стационара недоступны». Права были ни
+// при чём (тест 5 выше всегда проходил, и миграция 092 всегда раздавала ключ
+// `beds`). Отказывал ЗАПРОС: load() просил `patients(mrn, full_name, phone)`,
+// а реестр (server/db/schema-registry.js) разрешает у этого embed'а ровно
+// ['id','mrn','full_name']. Компилятор на неразрешённое поле не «пропускает
+// лишнее», а отказывает ВСЕМУ запросу — `unknown embed column`, 400
+// (server/db/query-compiler.js). load() бросал, экран рисовал одну серую
+// строку, и три очереди смены выглядели как пустой раздел.
+//
+// Мимо тестов это прошло потому, что фальшивый транспорт выше отвечает на
+// /api/db, НЕ РАЗБИРАЯ select: экран, ни разу не работавший на настоящем
+// сервере, проходил все проверки. Поэтому регрессия ниже берёт СТРОКУ ЗАПРОСА
+// ИЗ ИСХОДНИКА ЭКРАНА и прогоняет её через НАСТОЯЩИЙ компилятор с НАСТОЯЩИМ
+// реестром — единственный способ поймать этот класс ошибки не на проде.
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { compile } from '../../../../server/db/query-compiler.js';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const REPO = path.resolve(HERE, '..', '..', '..', '..');
+const ADMISSIONS_SRC = fs.readFileSync(path.join(REPO, 'public/js/admin/views/admissions.js'), 'utf8');
+
+// Достаём аргумент .select(...) из load() — вместе со склейкой строк.
+function selectFromSource(src) {
+    const at = src.indexOf('.select(');
+    assert.ok(at > -1, 'в admissions.js больше нет .select( — тест смотрит не туда');
+    let depth = 0, end = -1;
+    for (let i = at + '.select'.length; i < src.length; i++) {
+        if (src[i] === '(') depth++;
+        else if (src[i] === ')') { depth--; if (!depth) { end = i; break; } }
+    }
+    assert.ok(end > -1, 'скобки .select( не закрылись');
+    const arg = src.slice(at + '.select('.length, end);
+    // Аргумент — одна или несколько строк в кавычках, склеенных плюсом
+    // ('a, b' + 'c'). Берём СОДЕРЖИМОЕ кавычек и склеиваем: так разбор не
+    // зависит ни от переносов, ни от отступов, ни от комментариев рядом.
+    const parts = [...arg.matchAll(/'([^']*)'/g)].map((m) => m[1]);
+    assert.ok(parts.length, 'в .select( не нашлось ни одной строки');
+    return parts.join('');
+}
+
+
+const ADMISSION_SELECT = selectFromSource(ADMISSIONS_SRC);
+const compileAdmissions = (columns, user) => compile({
+    table: 'admissions', op: 'select', columns,
+    filters: [{ col: 'status', op: 'in', val: ['ordered', 'admitted', 'examined', 'active'] }],
+    order: [{ col: 'id', asc: false }], limit: 500,
+}, user);
+// Люди смены — так, как их видит сервер. «Главный врач» и «старшая медсестра» —
+// НАДСТРОЙКИ (миграция 091): их носят в extra_roles ПОВЕРХ основной профессии,
+// и сервер авторизует по объединению (roles.js effectiveRoles).
+const SHIFT_USERS = [
+    { role: 'nurse' },
+    { role: 'nurse',  extra_roles: ['senior_nurse'] },
+    { role: 'doctor', extra_roles: ['head_doctor'] },
+    { role: 'doctor' },
+    { role: 'registrar' },
+    { role: 'admin' },
+];
+const whoIs = (u) => [u.role, ...(u.extra_roles || [])].join('+');
+
+test('РЕГРЕССИЯ: запрос экрана «Стационар» принимается реестром — для каждой роли смены', () => {
+    assert.ok(ADMISSION_SELECT.includes('patients('), 'разобрали не ту строку: ' + ADMISSION_SELECT);
+    // Именно этих людей миграция 092 пускает в раздел ключом `beds`.
+    for (const user of SHIFT_USERS) {
+        assert.doesNotThrow(() => compileAdmissions(ADMISSION_SELECT, user),
+            'запрос экрана «Стационар» отвергнут сервером для ' + whoIs(user) + ': раздел не откроется НИ У КОГО');
+    }
+});
+
+test('РЕГРЕССИЯ: именно `phone` и ронял раздел — реестр отвергает его отказом всему запросу', () => {
+    // Отрицательный контроль: верните лишнее поле — и тест выше снова покраснеет.
+    const withPhone = ADMISSION_SELECT.replace('patients(mrn, full_name)', 'patients(mrn, full_name, phone)');
+    assert.notEqual(withPhone, ADMISSION_SELECT, 'форма запроса изменилась — проверьте контроль');
+    assert.throws(() => compileAdmissions(withPhone, { role: 'nurse' }), /unknown embed column/,
+        'реестр перестал отвергать лишнее поле — тогда и защищать больше нечего');
+    // …и в самом экране его нет. Комментарии снимаем: запись «здесь просили
+    // phone, вот чем это кончилось» обязана остаться в коде.
+    const exec = ADMISSIONS_SRC.split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    assert.ok(!/patients\([^)]*phone/.test(exec),
+        'в admissions.js вернулся `phone`: раздел «Стационар» снова не откроется');
+});
+
+test('РЕГРЕССИЯ: отказ загрузки виден КАК СБОЙ, а не как «пациентов нет»', async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts = {}) => {
+        const u = String(url);
+        if (u === '/api/db') return { ok: false, status: 400, json: async () => ({ error: { message: 'unknown embed column' } }), headers: { getSetCookie: () => [] } };
+        return realFetch(url, opts);
+    };
+    let root;
+    try { root = await renderScreen(); } finally { globalThis.fetch = realFetch; }
+    const txt = textOf(root);
+    assert.ok(txt.includes('Список госпитализаций не загрузился'), 'сбой обязан назваться сбоем');
+    assert.ok(txt.includes('это сбой запроса') || txt.includes('Это сбой запроса'),
+        'экран не отличает «отдел пуст» от «экран сломан» — владелец увидит пустоту и решит, что заявок нет');
+    assert.ok(txt.includes('unknown embed column'), 'причина отказа спрятана от того, кто чинит');
+    assert.ok(findBtn(root, 'Повторить'), 'после сбоя человеку нечем попробовать снова');
+});
+
+// ─── 8. ТРИ ОЧЕРЕДИ ВИДИТ КАЖДЫЙ, КОМУ РАЗДЕЛ ВЫДАН ────────────────────────
+
+const SHIFT_ROLES = {
+    'Медсестра':      ['patients', 'labs', 'dashboard', 'procedures', 'queue', 'beds'],
+    'Старшая медсестра': ['patients', 'dashboard', 'queue', 'beds', 'discharge'],
+    'Главный врач':   ['patients', 'dashboard', 'consultation', 'beds'],
+    'Регистратура':   ['patients', 'dashboard', 'appointments', 'beds'],
+};
+
+test('экран рисует свои очереди каждой роли, которой раздел выдан', async () => {
+    for (const [name, sections] of Object.entries(SHIFT_ROLES)) {
+        perms.setEffectiveFromRole({ name, permissions: { sections, levels: { beds: 'editor' } } });
+        assert.strictEqual(perms.isRouteAllowed('admissions'), true, name + ': маршрут #admissions отказал');
+        const root = await renderScreen();
+        const txt = textOf(root);
+        for (const queue of ['Ждут размещения', 'В отделении', 'Ждут первичного осмотра']) {
+            assert.ok(txt.includes(queue), name + ': очереди «' + queue + '» нет на экране');
+        }
+        assert.ok(!txt.includes('Список госпитализаций не загрузился'), name + ': экран открылся сбоем');
+        assert.ok(txt.includes('Иванов Иван Иванович'), name + ': заявка не видна');
+    }
+    perms.setFullAccess('Admin');
+});
+
+test('кассиру раздел отказывает чисто — маршрутом, а не пустым экраном', () => {
+    perms.setEffectiveFromRole({ name: 'Кассир', permissions: { sections: ['cashier', 'patients', 'dashboard', 'queue'], levels: { cashier: 'admin' } } });
+    assert.strictEqual(perms.isRouteAllowed('admissions'), false, 'кассира обязан останавливать МАРШРУТ');
+    assert.strictEqual(perms.isModuleAllowed('beds'), false, 'и доска коек тем же ключом');
+    assert.strictEqual(view.canOpenAdmissions(), false);
+    perms.setFullAccess('Admin');
+});

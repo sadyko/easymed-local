@@ -80,7 +80,23 @@ async function load() {
         // КТО ОСМОТРЕЛ и КТО ЛЕЧИТ — два разных JOIN'а на users в той же строке
         // (алиасные embed'ы реестра): очередь обязана называть лечащего врача,
         // иначе «в отделении» отвечает «где пациент» и молчит о том, к кому идти.
-        .select('*, patients(mrn, full_name, phone), wards(name), beds(code), users(full_name), '
+        //
+        // ADMISSION_EMBED_FIX (2026-09-05) — здесь стояло `patients(mrn,
+        // full_name, phone)`, и из-за одного лишнего слова раздел «Стационар»
+        // НЕ ОТКРЫВАЛСЯ НИ У КОГО с самого первого дня (a8bea2d). Реестр
+        // (server/db/schema-registry.js) разрешает у этого embed'а ровно
+        // ['id','mrn','full_name'], а компилятор на неразрешённое поле отвечает
+        // не «пропущу», а отказом всему запросу: `unknown embed column`, 400
+        // (query-compiler.js, «if (!embed.columns.includes(sub)) throw»).
+        // load() бросал, экран рисовал «Не удалось загрузить» — и три очереди
+        // смены выглядели как пустой, сломанный раздел.
+        //
+        // Телефон здесь НЕ НУЖЕН: на строке очереди его никто не показывает
+        // (см. patientRow ниже) — он был запрошен и ни разу не прочитан.
+        // Поэтому лишнее слово снято, а не разрешено в реестре: соседние
+        // экраны стационара (ward-beds.js, mar-sheet.js) спрашивают ровно
+        // `patients(mrn, full_name)` и работали всегда.
+        .select('*, patients(mrn, full_name), wards(name), beds(code), users(full_name), '
               + 'attending:attending_doctor_id(full_name), examined:examined_by(full_name)')
         .in('status', OPEN_STATUSES)
         .order('id', { ascending: false })
@@ -121,8 +137,20 @@ async function paint(root, onNavigate = null) {
     let rows;
     try { rows = await load(); }
     catch (e) {
-        root.appendChild(h('div', { class: 'card', style: { padding: '18px' } },
-            h('div', { class: 'empty' }, trf('Не удалось загрузить: {msg}', { msg: (e && e.message) || e }))));
+        // ОТКАЗ — ЭТО НЕ ПУСТОТА. Раздел, упавший на запросе, выглядел ровно
+        // как раздел без пациентов: одна серая строка. Владелец так и сообщил
+        // — «заявки стационара недоступны», — и по экрану нельзя было
+        // отличить «никого не ждут» от «экран сломан». Здесь сказано словами:
+        // это сбой, вот причина, вот кнопка повторить.
+        root.appendChild(h('div', { class: 'card', style: { padding: '22px' } },
+            h('div', { style: { fontSize: '15px', fontWeight: 700, color: 'var(--ink-900)', marginBottom: '6px' } },
+                tr('Список госпитализаций не загрузился')),
+            h('div', { class: 'muted', style: { fontSize: '13.5px', marginBottom: '14px' } },
+                tr('Это сбой запроса, а не пустой отдел: заявки и пациенты на койках могут быть на месте.')),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '14px' } },
+                trf('Причина: {msg}', { msg: (e && e.message) || String(e) })),
+            h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: reload },
+                Icon('Refresh', { size: 13 }), ' ', tr('Повторить загрузку'))));
         return;
     }
 

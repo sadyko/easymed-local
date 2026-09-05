@@ -489,6 +489,24 @@ function sectionTitleFor(view, payload) {
     if (view === 'patient-card')      return payload?.label || 'Patient';
     if (view === 'service-workspace') return payload?.label || 'Workspace';
     if (view === 'consultation')      return payload?.label || 'Consultation';
+    // ONE_NAME_PER_SCREEN_V1 — РАЗДЕЛ, У КОТОРОГО ЕСТЬ ПУНКТ МЕНЮ, НАЗЫВАЕТСЯ
+    // ТАК, КАК ЕГО НАЗЫВАЕТ МЕНЮ. Человек щёлкает «Стационар» и обязан попасть
+    // на экран, подписанный «Стационар»; до этой строки он попадал на
+    // «Стационарное отделение» (uz: щёлкнул «Statsionar» — получил «Statsionar
+    // bo'lim»), потому что панель брала последнюю крошку CRUMBS, а меню —
+    // словарь sidebar.nav.*, и эти два имени разошлись у дюжины разделов
+    // («Койки и палаты»/«Отделения и койки», «Закупки»/«Снабжение»,
+    // «Xaridlar»/«Ta'minot»…). Одно имя на раздел — значит одно на оба места.
+    //
+    // CRUMBS остаётся источником для ХЛЕБНЫХ КРОШЕК и для isKnownView(): у
+    // него другая работа — сказать, в какой ветке дерева стоит экран, — и
+    // отбирать её у него незачем.
+    const navItem = NAV.find((n) => n.id === view);
+    if (navItem) {
+        const key = 'sidebar.nav.' + view;
+        const menuName = t(key);
+        return (menuName && menuName !== key) ? menuName : navItem.label;
+    }
     const cr = CRUMBS[view];
     if (cr && cr.length) return cr[cr.length - 1];
     if (view.startsWith('settings:')) {
@@ -503,12 +521,11 @@ function sectionTitleFor(view, payload) {
         // перевода.
         return trf('Report · {name}', { name: (SECTIONS?.[key]?.label) || key });
     }
-    // Маршрут без записи в CRUMBS. Сырой идентификатор ('mar-nurse') — это
-    // слово разработчика, а не название раздела, и в единственном <h1> экрана
-    // ему не место: если у маршрута есть пункт меню — берём его подпись,
-    // иначе называем продукт (так же, как это делает заглушка экрана).
-    const navItem = NAV.find((n) => n.id === view);
-    return navItem ? navItem.label : 'Easy-Med';
+    // Маршрут без записи ни в NAV, ни в CRUMBS. Сырой идентификатор
+    // ('mar-nurse') — это слово разработчика, а не название раздела, и в
+    // единственном заголовке экрана ему не место: называем продукт (так же,
+    // как это делает заглушка экрана). Пункт меню здесь уже спрошен выше.
+    return 'Easy-Med';
 }
 
 function renderSectionTitle() {
@@ -523,6 +540,113 @@ function renderSectionTitle() {
         ? (pane.titleOverride ? pane.title : sectionTitleFor(pane.view, pane.payload))
         : sectionTitleFor(state.view, state.payload);
     titleEl.textContent = tr(raw);
+}
+
+// ---------------------------------------------------------------------------
+// ONE_NAME_PER_SCREEN_V1 (2026-09-05, владелец: «каждый экран называет себя
+// дважды»)
+// ---------------------------------------------------------------------------
+// f1ba56e убрал полосу вкладок и отдал имя экрана верхней панели (<h1
+// id="section-title">). Но имя экрана до этого рисовали и САМИ экраны — своим
+// `.page-head > h1.page-title` (ui.js PageHead и полсотни руками собранных
+// копий той же разметки). Ни один из ~50 экранов об этом не узнал, и продукт
+// целиком стал говорить своё название два раза подряд: «CRM · Murojaatlar» в
+// панели и «CRM · Murojaatlar» строкой ниже, «Statsionar bo'lim» над
+// «Statsionar».
+//
+// ПРАВИЛО, ОДНО НА ВЕСЬ ПРОДУКТ: имя экрана живёт В ВЕРХНЕЙ ПАНЕЛИ И ТОЛЬКО
+// ТАМ. Заголовок внутри экрана снимается оболочкой; ПОДЗАГОЛОВОК И КНОПКИ
+// ОСТАЮТСЯ НА МЕСТЕ — они не дубль, и переносить их некуда.
+//
+// ПОЧЕМУ ОБОЛОЧКА, А НЕ ПРАВКА В ПЯТИДЕСЯТИ ФАЙЛАХ. Во-первых, дубль надо
+// снять ОДИНАКОВО везде, иначе через месяц половина экранов снова разойдётся.
+// Во-вторых — и это главное — новый экран, написанный завтра по образцу
+// соседнего, принесёт `page-head` с заголовком обратно; правка «здесь и
+// сейчас» его не остановит, а правило оболочки останавливает.
+//
+// ИМЯ ПЕРЕЕЗЖАЕТ, А НЕ ПРОПАДАЕТ. Снятый заголовок ЗАБИРАЕТСЯ в верхнюю
+// панель: у некоторых экранов собственное имя точнее того, что стоит в CRUMBS
+// («Компания» вместо «Documents» — SETTINGS_SPLIT_V1 переименовал плитку
+// именно так; «Marketing · Patient notifications» вместо «Marketing»). Просто
+// удалить <h1> значило бы откатить эти решения молча. Забирает только АКТИВНАЯ
+// панель: фоновая перерисовка (опрос очереди в кэшированной панели) не вправе
+// переименовать экран, на который человек смотрит.
+const isEl   = (n) => !!n && n.nodeType !== 3 && typeof n.tagName === 'string' && n.tagName !== '#text';
+const kidsOf = (el) => Array.from((el && el.children) || []).filter(isEl);
+// tagName у SVG-элементов приходит строчными буквами, а className у них вовсе
+// не строка (SVGAnimatedString) — отсюда приведение в обоих помощниках.
+const tagOf  = (el) => String((el && el.tagName) || '').toUpperCase();
+const hasCls = (el, c) => String((el && typeof el.className === 'string' ? el.className : '')).split(/\s+/).includes(c);
+
+// Есть ли в коробке хоть что-нибудь ДЛЯ ЧЕЛОВЕКА: текст или управление.
+// Кнопка со значком текста не несёт, а пустой её называть нельзя.
+const CONTENTFUL = new Set(['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'A', 'IMG', 'SVG', 'LABEL', 'CANVAS', 'VIDEO']);
+function hasContent(el) {
+    if (String((el && el.textContent) || '').trim()) return true;
+    for (const c of kidsOf(el)) if (CONTENTFUL.has(tagOf(c)) || hasContent(c)) return true;
+    return false;
+}
+
+// Снимает все `h1.page-title` в поддереве и возвращает { name, removed }.
+//
+// ПУСТУЮ КОРОБКУ ОТ ЗАГОЛОВКА НЕ ТРОГАЕМ, И ЭТО НЕ НЕБРЕЖНОСТЬ. `.page-head`
+// разложен как `justify-content: space-between`: слева блок «заголовок +
+// подзаголовок», справа кнопки. Убери опустевший левый блок — и единственным
+// ребёнком останутся кнопки, а space-between с одним ребёнком прижмёт их
+// ВЛЕВО. Кнопки «Заявка на госпитализацию» и «Обновить» уехали бы через весь
+// экран, то есть починка заголовка сломала бы органы управления. Нулевой
+// ширины коробка держит их на месте.
+//
+// А вот шапку, в которой после снятия заголовка не осталось НИЧЕГО (ни
+// подзаголовка, ни кнопок, ни поиска), убираем целиком: иначе на экране
+// остаётся пустая полоса с отступом в 18 пикселей.
+function stripPageTitles(node, out, inHead) {
+    for (const c of kidsOf(node)) {
+        if (tagOf(c) === 'H1' && hasCls(c, 'page-title')) {
+            const text = String(c.textContent || '').trim();
+            if (text && !out.name) out.name = text;
+            node.removeChild(c);
+            out.removed += 1;
+            continue;
+        }
+        const isHead = hasCls(c, 'page-head');
+        stripPageTitles(c, out, inHead || isHead);
+        if (isHead && out.removed && !hasContent(c)) node.removeChild(c);
+    }
+    return out;
+}
+
+function dedupeSectionHeading(pane) {
+    const root = pane && pane.root;
+    if (!root) return;
+    // Быстрая проверка силами браузера: на экране со списком в 500 строк
+    // пеший обход поддерева на каждую мутацию стоил бы заметно.
+    try { if (root.querySelectorAll && !root.querySelectorAll('h1.page-title').length) return; }
+    catch (e) { /* не умеем спросить — пройдём пешком */ }
+    const out = stripPageTitles(root, { name: '', removed: 0 }, false);
+    if (!out.removed) return;
+    // ИМЯ ЗАБИРАЕТ ТОЛЬКО ЭКРАН, КОТОРОГО НЕТ В МЕНЮ. У раздела с пунктом меню
+    // имя уже есть, и оно старше: его человек читал, когда сюда шёл. А вот
+    // подстраница настроек, отчёт или подраздел в меню не значатся — их
+    // единственное имя написал сам экран («Компания» вместо «Documents» —
+    // SETTINGS_SPLIT_V1 переименовал плитку именно так), и удалить его молча
+    // значило бы откатить это решение.
+    if (out.name && !NAV.some((n) => n.id === pane.view)) { pane.title = out.name; pane.titleOverride = true; }
+    if (state.activeKey === pane.key) renderSectionTitle();
+}
+
+// Экраны перерисовывают себя сами — по кнопке «Обновить», по фильтру, по
+// приходу данных, — и приносят `page-head` заново. Один проход после первой
+// отрисовки поймал бы только первый дубль, поэтому за #view-root смотрит
+// наблюдатель. Он не зациклится: собственная правка не находит заголовков и
+// выходит на первой же строке dedupeSectionHeading().
+let _headingWatch = null;
+function watchSectionHeadings() {
+    if (_headingWatch || !viewRoot || typeof MutationObserver !== 'function') return;
+    try {
+        _headingWatch = new MutationObserver(() => { for (const p of state.panes) dedupeSectionHeading(p); });
+        _headingWatch.observe(viewRoot, { childList: true, subtree: true });
+    } catch (e) { _headingWatch = null; }
 }
 
 // HASH_SUBROUTE_V1 — a view that owns a sub-route reports it here, so the
@@ -631,7 +755,14 @@ async function renderViewInto(pane) {
     // It is the pane key now — the contract is unchanged, the mechanism
     // underneath is not.
     const ctx = { onNavigate: navigate, payload: pane.payload, tabId: pane.key };
-    return renderViewInner(root, pane.view, ctx);
+    // ONE_NAME_PER_SCREEN_V1 — экран назвал себя внутри себя; имя переезжает в
+    // верхнюю панель, а дубль снимается. `finally`, а не после await: экран,
+    // упавший на полпути, всё равно не должен оставить второе имя на месте.
+    try {
+        return await renderViewInner(root, pane.view, ctx);
+    } finally {
+        dedupeSectionHeading(pane);
+    }
 }
 
 // Legacy renderView shim — kept so any caller still pointing here ends up
@@ -2478,7 +2609,13 @@ function wireSidebarCollapse() {
 
 // Renders the app shell for the now-authenticated actor.
 function startApp() {
-    window.easymed = { state, supabase, navigate };
+    // NAV / CRUMBS — таблицы маршрутов; открыты наружу ради теста
+    // «ни один экран не называет себя дважды», который обязан пройти по
+    // НАСТОЯЩИМ таблицам, а не по своей копии: копия разошлась бы с ними в
+    // тот день, когда добавят новый экран, — то есть ровно тогда, когда тест
+    // и нужен.
+    window.easymed = { state, supabase, navigate, NAV, CRUMBS, sectionTitleFor, dedupeHeadings: dedupeSectionHeading };
+    watchSectionHeadings();   // ONE_NAME_PER_SCREEN_V1
     paintUserCard();
     wireSidebarCollapse();   // SIDEBAR_COLLAPSE_V1
     searchEl?.addEventListener('keydown', (e) => { if (e.key === 'Enter') navigate('patients'); });

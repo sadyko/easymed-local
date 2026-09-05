@@ -6493,4 +6493,10 @@ export const STRINGS = {
   // Заголовок отчёта собирался как 'Report · ' + label — tr() ищет строку
   // целиком, поэтому перевести его было НЕЧЕМ. Ключ — вся фраза с дыркой.
   "Report · {name}": {"en":"Report · {name}","ru":"Отчёт · {name}","uz":"Hisobot · {name}"},
+  // ADMISSION_EMBED_FIX (2026-09-05) — «Стационар» умел показать отказ запроса
+  // только серой строкой «Не удалось загрузить», неотличимой от «пациентов
+  // нет». Три строки ниже — это разница между «отдел пуст» и «экран сломан».
+  "Список госпитализаций не загрузился": {"en":"The admissions list did not load","ru":"Список госпитализаций не загрузился","uz":"Gospitalizatsiyalar ro'yxati yuklanmadi"},
+  "Это сбой запроса, а не пустой отдел: заявки и пациенты на койках могут быть на месте.": {"en":"This is a failed request, not an empty ward: the orders and the patients in beds may well be there.","ru":"Это сбой запроса, а не пустой отдел: заявки и пациенты на койках могут быть на месте.","uz":"Bu bo'sh bo'lim emas, so'rov xatosi: arizalar va koykadagi bemorlar joyida bo'lishi mumkin."},
+  "Причина: {msg}": {"en":"Reason: {msg}","ru":"Причина: {msg}","uz":"Sabab: {msg}"},
 };
