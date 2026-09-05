@@ -204,6 +204,15 @@ export async function renderUpdates(root, ctx = {}) {
     // siblings: it existed to separate four cards from one another, and one
     // section does not need a heading repeating the page it is on.
     wrap.appendChild(body);
+    // ICON_CREDIT_V1 (2026-09-05) — CC BY 4.0 grants the right to use the icon
+    // set on ONE condition: the attribution travels with the work. Until now
+    // it lived only in public/assets/icons/coolicons/ATTRIBUTION.md — a file
+    // inside the release archive that no screen has ever linked to, i.e. the
+    // condition was met for whoever unpacks the archive and for nobody who
+    // uses the program. One line, on the screen that already exists to say
+    // what this program IS (version, what's new), outside `body` so paint()'s
+    // clear() never takes it away.
+    wrap.appendChild(paintIconCredit());
     body.appendChild(h('div', { class: 'empty' }, tr('Загрузка…')));
 
     let status = null;
@@ -353,6 +362,23 @@ function watchForNewVersion(bootVersion, body) {
     // A timer must never hold the page open or outlive the view.
     if (_watchTimer && typeof _watchTimer.unref === 'function') _watchTimer.unref();
 }
+// ICON_CREDIT_V1 — the CC BY 4.0 notice itself: author, set, licence, and the
+// fact that the drawings were CHANGED (build-icon-paths.mjs strips ids and the
+// baked-in stroke/fill so the paths can take their colour and weight from the
+// theme — a modification in the licence's sense, and one the licence says must
+// be stated). Same four facts as ATTRIBUTION.md, which this links to in spirit
+// by naming the same sources; the links are a bonus for a clinic that is
+// online, the sentence itself is the attribution and it reads fine offline.
+function paintIconCredit() {
+    const link = (href, text) => h('a', { href, target: '_blank', rel: 'noopener noreferrer' }, text);
+    return h('p', { class: 'upd-credit' },
+        tr('Иконки интерфейса:'), ' ',
+        link('https://coolicons.cool/', 'coolicons'),
+        ' — Kryston Schwarze, ',
+        link('https://creativecommons.org/licenses/by/4.0/', 'CC BY 4.0'),
+        ', ', tr('с изменениями'), '.');
+}
+
 function paint(body, status) {
     clear(body);
     const admin = isAdminActor();
@@ -577,6 +603,39 @@ function buildScheduleControls(body, offer) {
         }
     }
 
+    // UPDATE_CONFIRM_V1 (2026-09-05) — «Обновить сейчас» is the ONE control on
+    // this screen with no undo and no delay: update_approve({now:true}) stamps
+    // scheduled_at = this instant (server/services/rpc/updates.js), the minute
+    // tick picks it up and updater.js exits within seconds. Nothing anywhere
+    // under public/ registers a beforeunload handler, so a half-typed patient
+    // card, consultation or invoice in any OTHER open window simply ceases to
+    // exist — with no message, on a click that until now took effect on the
+    // first press.
+    //
+    // Every other button on this screen schedules for 03:00 and asks nothing,
+    // correctly: nobody is mid-form at three in the morning. This one is
+    // pressed at 11:40, which is exactly why it gets the question.
+    //
+    // The working-hours sentence is the one already written for the custom
+    // hour picker below (warnEl) — the same event, the same consequence, so
+    // the same words rather than a second wording that could drift. It is
+    // added ONLY when the click really lands in working hours, so the dialog
+    // does not cry wolf at 22:00.
+    //
+    // window.confirm is guarded the way roles-editor.js and crm-settings.js
+    // guard theirs: the fake-DOM test harness has no dialogs, and a missing
+    // one must not turn the button into a no-op.
+    function confirmRestartNow() {
+        if (typeof window === 'undefined' || typeof window.confirm !== 'function') return true;
+        const at = new Date();   // NOT the `now` captured when the screen was drawn — it may have sat open for hours
+        const lines = [tr('Установить обновление сейчас?')];
+        if (resolveHour(at.getHours(), at).isWorking) {
+            lines.push(tr('В это время клиника обычно работает — сотрудники будут отключены на 1–2 минуты.'));
+        }
+        lines.push(tr('Программа перезапустится сразу. Всё незаписанное в открытых окнах — карта пациента, приём, счёт — пропадёт.'));
+        return window.confirm(lines.join('\n\n'));
+    }
+
     // «Обновить сейчас» — same one-action rule as approve(), different wire
     // shape ({now:true}, no hour): the server stamps scheduled_at = this
     // instant and the minute tick installs straight away. Owner-requested
@@ -584,6 +643,9 @@ function buildScheduleControls(body, offer) {
     // for the next full hour.
     async function approveNow() {
         if (busy) return;
+        // Asked BEFORE setBusy: «Отмена» must leave the screen exactly as it
+        // was, buttons live, nothing said in statusEl.
+        if (!confirmRestartNow()) return;
         setBusy(true);
         statusEl.textContent = '';
         try {

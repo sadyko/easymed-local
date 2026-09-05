@@ -2375,6 +2375,14 @@ export const STRINGS = {
   "Доступно обновление": {"en":"Update available","ru":"Доступно обновление","uz":"Yangilanish mavjud"},
   "Только администратор клиники может подтвердить установку.": {"en":"Only the clinic administrator can confirm installation.","ru":"Только администратор клиники может подтвердить установку.","uz":"Faqat klinika administratori o'rnatishni tasdiqlashi mumkin."},
   "В это время клиника обычно работает — сотрудники будут отключены на 1–2 минуты.": {"en":"The clinic is usually open at this time — staff will be disconnected for 1-2 minutes.","ru":"В это время клиника обычно работает — сотрудники будут отключены на 1–2 минуты.","uz":"Bu vaqtda klinika odatda ishlaydi — xodimlar 1-2 daqiqaga uzib qo'yiladi."},
+  // UPDATE_CONFIRM_V1 — вопрос перед «Обновить сейчас» (views/updates.js).
+  // Строка про рабочее время не дублируется: она уже есть выше и используется
+  // в диалоге как есть.
+  "Установить обновление сейчас?": {"en":"Install the update now?","ru":"Установить обновление сейчас?","uz":"Yangilanish hozir o'rnatilsinmi?"},
+  "Программа перезапустится сразу. Всё незаписанное в открытых окнах — карта пациента, приём, счёт — пропадёт.": {"en":"The program restarts immediately. Anything unsaved in open windows — a patient card, a consultation, an invoice — will be lost.","ru":"Программа перезапустится сразу. Всё незаписанное в открытых окнах — карта пациента, приём, счёт — пропадёт.","uz":"Dastur darhol qayta ishga tushadi. Ochiq oynalarda saqlanmagan hamma narsa — bemor kartasi, qabul, hisob-faktura — yo'qoladi."},
+  // ICON_CREDIT_V1 — указание авторства набора иконок внизу экрана «Система».
+  "Иконки интерфейса:": {"en":"Interface icons:","ru":"Иконки интерфейса:","uz":"Interfeys belgilari:"},
+  "с изменениями": {"en":"modified","ru":"с изменениями","uz":"o'zgartirishlar bilan"},
   "Другое время:": {"en":"Another time:","ru":"Другое время:","uz":"Boshqa vaqt:"},
   "Другое время — час (0-23)": {"en":"Another time — hour (0-23)","ru":"Другое время — час (0-23)","uz":"Boshqa vaqt — soat (0-23)"},
   "Обновить сегодня ночью": {"en":"Update tonight","ru":"Обновить сегодня ночью","uz":"Bugun tunda yangilash"},

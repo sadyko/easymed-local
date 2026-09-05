@@ -43,9 +43,32 @@ function jsFilesUnder(dir) {
 
 // Icon('X') из ui.js, icon('X') и iconHtml('X') из самого модуля. \b перед
 // icon не даёт этой же альтернативе поймать хвост слова Icon.
-const CALL_RE = /\b(?:Icon|iconHtml|icon)\(\s*'([A-Za-z0-9_]+)'/g;
+//
+// ICON_GUARD_V2 (2026-09-05) — КАВЫЧКИ ЛЮБЫЕ. Здесь стояла одна одинарная
+// кавычка, и проверка молча пропускала всё, что написано двойными. На 800
+// вызовов таких файлов оказалось мало — но среди них setup-checklist.js, то
+// есть шапка карточки «Настройка клиники»: Icon("Rocket") прошёл мимо теста и
+// рисовал перечёркнутый круг «иконки нет» на ПЕРВОМ экране новой клиники.
+// Проверка, которая зависит от того, какой кавычкой автор набрал строку, —
+// это не проверка.
+const CALL_RE = /\b(?:Icon|iconHtml|icon)\(\s*['"`]([A-Za-z0-9_]+)['"`]/g;
 
-/** [{ name, file, line }] — каждый вызов иконки по имени во всём public/js. */
+// ICON_GUARD_V2 — два способа назвать иконку, мимо которых проходит любая
+// регулярка по вызову, потому что имя стоит не в скобках Icon():
+//
+//   icon: 'Trend'          — описание карточки или пункта меню, которое кто-то
+//                            другой позже отдаёт в Icon(rep.icon). Так уехало
+//                            'TrendingUp' в reports-export.js — имя ФАЙЛА
+//                            набора вместо имени из карты, при том что
+//                            соседний reports-hub.js для той же карточки писал
+//                            'Trend'.
+//   Icon(n.icon || 'Info') — запасное имя. Тот единственный случай, когда
+//                            иконка обязана нарисоваться, потому что своей у
+//                            записи нет, — и именно он не рисовался.
+const PROP_RE = /\bicon\s*:\s*['"`]([A-Za-z0-9_]+)['"`]/g;
+const FALLBACK_RE = /\b(?:Icon|iconHtml)\([^)\n]*?\|\|\s*['"`]([A-Za-z0-9_]+)['"`]/g;
+
+/** [{ name, file, line }] — каждое имя иконки во всём public/js, как бы оно ни было записано. */
 function collectIconCalls() {
     const calls = [];
     for (const file of jsFilesUnder(PUBLIC_JS)) {
@@ -53,8 +76,10 @@ function collectIconCalls() {
         const text = fs.readFileSync(file, 'utf8');
         const lines = text.split(/\r?\n/);
         lines.forEach((line, i) => {
-            for (const m of line.matchAll(CALL_RE)) {
-                calls.push({ name: m[1], file: path.relative(REPO_ROOT, file), line: i + 1 });
+            for (const re of [CALL_RE, PROP_RE, FALLBACK_RE]) {
+                for (const m of line.matchAll(re)) {
+                    calls.push({ name: m[1], file: path.relative(REPO_ROOT, file), line: i + 1 });
+                }
             }
         });
     }
@@ -64,6 +89,14 @@ function collectIconCalls() {
 test('каждое имя иконки, которое зовёт приложение, доезжает до файла набора', () => {
     const calls = collectIconCalls();
     assert.ok(calls.length > 300, `ожидалось много вызовов иконок, найдено ${calls.length} — регулярка перестала ловить`);
+    // ICON_GUARD_V2 — три формы записи, и каждая обязана хоть что-то находить:
+    // если одна перестанет ловить, тест продолжит зеленеть на двух остальных, и
+    // целый способ назвать иконку снова окажется непроверенным.
+    const sample = ['admin/views/reports-export.js', 'admin/notifications.js', 'admin/setup-checklist.js']
+        .map((f) => fs.readFileSync(path.join(PUBLIC_JS, ...f.split('/')), 'utf8')).join('\n');
+    for (const [why, re] of [['Icon(…)', CALL_RE], ["icon: '…'", PROP_RE], ['Icon(x || …)', FALLBACK_RE]]) {
+        assert.ok([...sample.matchAll(re)].length > 0, `форма записи ${why} больше не ловится`);
+    }
 
     const broken = [];
     for (const c of calls) {
@@ -105,6 +138,48 @@ test('набор вендорится целиком и лежит там, от�
     assert.match(attribution, /CC BY 4\.0/);
     assert.match(attribution, /Kryston Schwarze/);
     assert.match(attribution, /coolicons\.cool/);
+});
+
+test('указание авторства говорит, что рисунки ИЗМЕНЕНЫ, и живёт не только в файле', () => {
+    // CC BY 4.0, п. 3(a)(1)(B): если работа изменена — об этом надо сказать.
+    // Она изменена, и делает это генератор: build-icon-paths.mjs срезает с
+    // контуров id и собственные stroke/fill, иначе иконка не взяла бы цвет из
+    // темы. Файл же об этом молчал.
+    const attribution = fs.readFileSync(path.join(ICONS_DIR, 'ATTRIBUTION.md'), 'utf8');
+    assert.match(attribution, /рисунки изменены/i, 'не сказано, что набор изменён');
+    assert.match(attribution, /id/, 'не сказано, ЧТО именно изменено');
+
+    // И второе условие той же лицензии: указание должно доезжать до человека,
+    // который программой ПОЛЬЗУЕТСЯ, а не только до того, кто распаковал архив.
+    // Строка внизу экрана «Система» — views/updates.js, paintIconCredit().
+    const view = fs.readFileSync(path.join(REPO_ROOT, 'public', 'js', 'admin', 'views', 'updates.js'), 'utf8');
+    assert.match(view, /function paintIconCredit\(\)/, 'указание авторства пропало с экрана');
+    assert.match(view, /coolicons\.cool/, 'на экране не назван источник набора');
+    assert.match(view, /creativecommons\.org\/licenses\/by\/4\.0/, 'на экране не названа лицензия');
+    assert.match(view, /Kryston Schwarze/, 'на экране не назван автор');
+    assert.match(view, /tr\('с изменениями'\)/, 'на экране не сказано, что рисунки изменены');
+    // Строка рисуется в wrap, а не в body: paint() чистит body на каждой
+    // перерисовке, и указание исчезло бы после первой же смены состояния.
+    assert.match(view, /wrap\.appendChild\(paintIconCredit\(\)\)/, 'указание попало в очищаемую часть экрана');
+});
+
+test('среди иконок не лежит служебного мусора файловой системы', () => {
+    // .DS_Store лежал в coolicons/ и уезжал в архив клиники вместе с папкой:
+    // scripts/build-bundle.mjs копирует public/ целиком и точечные файлы не
+    // отсеивает, а express.static потом честно отдаёт его по HTTP. 8 КБ чужой
+    // операционной системы, которые ничего не рисуют. .gitignore от этого не
+    // спасает: файл не попадает в коммит, но остаётся на диске у того, кто
+    // распаковал свежую поставку набора на macOS, — и уезжает в релиз.
+    const JUNK = /^(\.DS_Store|Thumbs\.db|desktop\.ini|\._.*)$/i;
+    const found = [];
+    const walk = (dir) => {
+        for (const it of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (it.isDirectory()) { walk(path.join(dir, it.name)); continue; }
+            if (JUNK.test(it.name)) found.push(path.relative(REPO_ROOT, path.join(dir, it.name)));
+        }
+    };
+    walk(path.join(REPO_ROOT, 'public', 'assets', 'icons'));
+    assert.deepEqual(found, [], 'удалите: иначе уедет в архив клиники и будет отдаваться по HTTP');
 });
 
 // ---------------------------------------------------------------------------
@@ -262,7 +337,7 @@ test('NO_EXACT_MATCH совпадает с пометками «~» в само�
 /** Имена, которые обязаны рисоваться нашим файлом, а не приближением набора. */
 const DRAWN_HERE = [
     'Bed', 'Bot', 'Coins', 'Flask', 'Key', 'Megaphone', 'PhoneIn', 'PhoneMissed',
-    'PhoneOut', 'Pill', 'Pulse', 'Stethoscope', 'Target',
+    'PhoneOut', 'Pill', 'Pulse', 'Rocket', 'Stethoscope', 'Target',
 ];
 
 test('свои иконки нарисованы по правилам набора: 24x24, currentColor, без заливок и id', () => {

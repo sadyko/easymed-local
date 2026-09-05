@@ -995,7 +995,7 @@ const REPORTS = [
     },
     {   // OWNER_REPORT_V1 — charts, no xlsx
         key:   'owner',
-        icon:  'TrendingUp',
+        icon:  'Trend',   // имя из icon-map.js; 'TrendingUp' — файл набора, а не имя иконки
         title: 'Отчёт владельца',
         desc:  'Графики: общая выручка, выручка по группам услуг, динамика по месяцам и поступления по плательщикам (пациент / ДМС / B2B / госпрограмма).',
         mode:  'charts',

@@ -511,8 +511,11 @@ test('счётчик и замок остаются читаемыми на за
     const rule = badge.slice(0, badge.indexOf('}'));
     assert.ok(/background:\s*#fff/.test(rule), 'счётчик остался primary-600 на primary-600 — 1:1, его не видно');
     assert.ok(/color:\s*var\(--primary-700/.test(rule));
-    // Тревожный счётчик остаётся красным даже на выбранном пункте.
-    assert.ok(/\.sidebar-body \.nav-item\.active \.nav-badge\.alert \{ background: var\(--crit-500/.test(views));
+    // NAV_BADGE_ALERT_V4 — тревожный счётчик остаётся красным и на выбранном
+    // пункте, но красным ТЕКСТОМ на белой таблетке: crit-500 на бирюзовой
+    // заливке давал 1.41:1 и пропадал. Числа считает
+    // __tests__/contrast-badge-hatch.test.mjs, здесь — только форма правила.
+    assert.ok(/\.sidebar-body \.nav-item\.active \.nav-badge\.alert \{ background: #fff; color: var\(--crit-700/.test(views));
     // Замок белеет вместе с текстом, и пункт перестаёт быть притушенным
     // (притушенный белый на бирюзовом — это уже не «серый», а нечитаемый).
     const main = read('public/css/admin.css');

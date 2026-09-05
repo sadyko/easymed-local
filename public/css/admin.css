@@ -564,10 +564,25 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     min-width: 8px; width: 8px; height: 8px; padding: 0;
     border-radius: 50%; font-size: 0; color: transparent; overflow: hidden;
 }
-/* On the filled row the neutral dot vanishes into the teal — make it white,
-   and leave the red alert dot red (an alert outranks the selection). */
+/* On the filled row the neutral dot vanishes into the teal — make it white. */
 .sidebar-collapsed .nav-item.active .nav-badge { background: #fff; }
-.sidebar-collapsed .nav-item.active .nav-badge.alert { background: var(--crit-500); }
+/* NAV_BADGE_ALERT_V4 (2026-09-05) — the alert dot used to stay --crit-500 on
+   the filled teal row: 1.41:1, i.e. an 8px dot nobody can see, at the one
+   moment it matters. On the rail the number is already gone (font-size: 0), so
+   the dot IS the whole message and it has nothing else to fall back on.
+   Fixed the way notification dots are normally fixed — a ring in the opposite
+   colour, so the dot never has to out-contrast whatever is behind it:
+     red --crit-700 core (6.47:1 against the white ring), white 2px ring
+     (5.29:1 against the teal row, 1.00:1 against the white sidebar where the
+     core's own 6.47:1 already carries it).
+   And 10px, not 8px: a 2px ring eats into an 8px dot until only a speck of
+   red is left. */
+.sidebar-collapsed .nav-badge.alert,
+.sidebar-collapsed .nav-item.active .nav-badge.alert {
+    min-width: 10px; width: 10px; height: 10px;
+    background: var(--crit-700);
+    box-shadow: 0 0 0 2px var(--white);
+}
 
 /* ---- Branch picker pill in the app bar (matches .topbar-lang) — same
    --ts-* retirement as the account pill above. ---- */

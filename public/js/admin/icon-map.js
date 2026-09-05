@@ -136,6 +136,12 @@ export const ICON_MAP = Object.freeze({
     Print:        'System/Printer',
     Scan:         'System/Qr_Code',  // кнопка «Штрих-код» в лаборатории
     Bot:          'System/Bot',
+    // Ракеты в наборе нет вовсе, а зовут её с ПЕРВОГО экрана новой клиники —
+    //   шапка карточки «Настройка клиники» (setup-checklist.js). Пока имени не
+    //   было в этой таблице, там рисовался перечёркнутый круг «иконка не
+    //   найдена»: первое, что видела клиника, выглядело как ошибка. Нарисована
+    //   здесь, см. easymed/System/Rocket.svg.
+    Rocket:       'System/Rocket',
 
     // --- люди ---
     ID:           'User/User_Card_ID',
@@ -147,6 +153,11 @@ export const ICON_MAP = Object.freeze({
     // --- предупреждения ---
     Help:         'Warning/Circle_Help',
     Warning:      'Warning/Triangle_Warning',
+    // Info — запасное имя центра уведомлений: notifications.js рисует
+    //   Icon(n.icon || 'Info'), то есть любое уведомление без своей иконки.
+    //   Имени в таблице не было, поэтому «запасной» вариант был как раз тем
+    //   единственным, который не рисовался.
+    Info:         'Warning/Info',
 });
 
 /**

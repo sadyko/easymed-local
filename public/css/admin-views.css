@@ -3010,7 +3010,17 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .rcal-slot { border-bottom: 1px solid var(--ink-50); cursor: pointer; position: relative; }
 .rcal-slot.hr { border-top: 1px solid var(--ink-100); }
 .rcal-slot:first-child.hr { border-top: none; }
-.rcal-slot.off { background: repeating-linear-gradient(45deg, var(--ink-25), var(--ink-25) 6px, var(--ink-50) 6px, var(--ink-50) 12px); cursor: default; }
+/* OFFHOURS_HATCH_V2 (2026-09-05) — «врач сейчас не работает» рисовалось
+   --ink-25 по --ink-50: 1.04:1 между полосками, 1.09:1 ко всему остальному
+   расписанию. На мониторе регистратуры штриховки не было видно вовсе, и
+   единственным способом узнать про нерабочий час был клик и отказ.
+   Порог, который держим: тёмная полоска — не ниже 3:1 к белому рабочему слоту
+   (WCAG 1.4.11, нетекстовый элемент) и не ниже 3:1 к своей же светлой полоске,
+   иначе «штриховка» снова превращается в ровную заливку. --ink-400 (#7a8892)
+   даёт 3.64:1 и 3.04:1. Тёмного 4px из 12px — сетка остаётся спокойной.
+   От занятого слота отличается по-прежнему не цветом: занятый — это белая
+   карточка .rcal-appt с рамкой, тенью и текстом ПОВЕРХ сетки, а не фон. */
+.rcal-slot.off { background: repeating-linear-gradient(45deg, var(--ink-100), var(--ink-100) 8px, var(--ink-400) 8px, var(--ink-400) 12px); cursor: default; }
 .rcal-slot:not(.off):hover { background: var(--primary-50); }
 .rcal-slot:not(.off):hover::after { content: '+'; position: absolute; inset: 0; display: grid; place-items: center;
     color: var(--primary-600); font-weight: 700; font-size: 13.5px; opacity: .65; pointer-events: none; }
@@ -3308,10 +3318,22 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
    Инвертируем: белая таблетка, текст primary-700 — 7.5:1 на белом (WCAG AAA),
    а сама таблетка — 5.4:1 к бирюзовой подложке, то есть отчётливо видна. */
 .sidebar-body .nav-item.active .nav-badge { background: #fff; color: var(--primary-700, #115d5a); }
-/* Красный счётчик остаётся красным и на выбранном пункте: тревога важнее
-   подсветки выбора. Идёт последним, поэтому выигрывает у правила .active. */
-.sidebar-body .nav-item .nav-badge.alert,
-.sidebar-body .nav-item.active .nav-badge.alert { background: var(--crit-500, #e5484d); color: #fff; }
+/* NAV_BADGE_ALERT_V4 (2026-09-05) — ровно та поправка, что V3 сделал для
+   обычного счётчика, но для ТРЕВОЖНОГО, про который тогда забыли. Он остался
+   красным (--crit-500 = #ef4444) на залитой бирюзе (--primary-600 = #167873) —
+   1.41:1 при норме 3:1 для нетекстового элемента. То есть красный счётчик
+   пропадал ровно на том пункте, который сейчас открыт, — а тревога чаще всего
+   и относится к открытому разделу.
+     не выбран: заливка --crit-700 (#b91c1c), белый текст — 6.47:1 сам текст и
+       6.47:1 таблетка к белой колонке (было white-on-crit-500 = 3.76:1, ниже
+       нормы 4.5:1 для текста);
+     выбран:    белая таблетка, текст --crit-700 — 6.47:1 текст, 5.29:1
+       таблетка к бирюзе. Приём V3 один в один, только красный вместо
+       бирюзового: на выбранном пункте «тревога» и «обычный счётчик» отличаются
+       цветом ЦИФР, а не наличием таблетки.
+   Оба идут ПОСЛЕ правила .active выше, поэтому выигрывают у него. */
+.sidebar-body .nav-item .nav-badge.alert { background: var(--crit-700, #b91c1c); color: #fff; }
+.sidebar-body .nav-item.active .nav-badge.alert { background: #fff; color: var(--crit-700, #b91c1c); }
 
 
 /* ── REG_FIT_V1 → PATIENT_ONE_WINDOW_V1 ─────────────────────────────────────
@@ -3733,6 +3755,12 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .upd-body { display: flex; flex-direction: column; gap: 14px; }
 .upd-card { display: flex; flex-direction: column; gap: 10px; padding: 18px 20px; }
 .upd-current { font-size: 13.5px; color: var(--ink-600); margin: 0; }
+/* ICON_CREDIT_V1 (2026-09-05) — указание авторства набора иконок. Стоит под
+   всем содержимым экрана и намеренно тихое: это обязательство лицензии, а не
+   сообщение клинике. */
+.upd-credit { font-size: 12.5px; color: var(--ink-400); margin: 22px 0 0; }
+.upd-credit a { color: inherit; text-decoration: underline; }
+.upd-credit a:hover { color: var(--primary-700); }
 .upd-offer-head, .upd-scheduled-head { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: var(--ink-900); }
 /* notes_ru is vendor-entered free text with no length limit on the wire — a
    clinic manager may want to read all of it, so this clamps with CSS
