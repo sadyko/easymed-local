@@ -9,10 +9,11 @@
 --
 -- THE DANGER, precisely: routes/admin.js:nextClinicId() allocates the next id as
 -- max(numeric suffix seen in `clinics`) + 1. Delete c-000009 and the next clinic
--- created is c-000009 again. services/control/licence.js verifies a licence by
--- clinic_id, so the deleted clinic's licence file — still sitting on its old
--- computer, still signed, still inside its validity window — would verify
--- against the new clinic and grant it whatever the old one was entitled to.
+-- created is c-000009 again. ../server/services/control/licence.js verifies a
+-- licence by clinic_id, so the deleted clinic's licence file — still sitting on
+-- its old computer, still signed, still inside its validity window — would
+-- verify against the new clinic and grant it whatever the old one was entitled
+-- to.
 --
 -- The fix is a graveyard: an id that has been deleted is remembered forever, and
 -- may never be issued again to anything.
@@ -31,13 +32,30 @@ CREATE TABLE deleted_clinics (
 -- THE SECOND LINE, and the reason this is a trigger rather than an `if` in a
 -- route. routes/admin.js will consult this table, but the route is not the only
 -- thing that will ever insert into `clinics`: a future route, a support fix run
--- by hand at 2am, or an old backup replayed over this database. Every one of
+-- by hand at 2am, or an old dump replayed into this database. Every one of
 -- those paths must hit the same wall, so the wall is in the schema.
 --
 -- ABORT, not IGNORE: a caller trying to resurrect a deleted clinic has made a
--- mistake worth hearing about. routes/admin.js turns it into a 409.
+-- mistake worth hearing about. Today that mistake surfaces as a bare 500 —
+-- nothing in routes/admin.js catches SQLITE_CONSTRAINT_TRIGGER yet. Mapping it
+-- to a 409 is CONTROL_PLANE_V2's delete task, not this one.
 CREATE TRIGGER clinics_no_resurrection
 BEFORE INSERT ON clinics
+WHEN EXISTS (SELECT 1 FROM deleted_clinics WHERE clinic_id = NEW.clinic_id)
+BEGIN
+  SELECT RAISE(ABORT, 'clinic_id was permanently deleted and can never be reissued');
+END;
+
+-- THE GAP THE INSERT TRIGGER LEAVES: it is BEFORE INSERT, so it is structurally
+-- blind to `UPDATE clinics SET clinic_id = ...`. A rename is the identical
+-- threat to a resurrection-by-insert — the row now carries an id whose old
+-- signed licence is still valid on someone else's computer — so it gets its own
+-- trigger rather than being left to "nothing renames clinic_id today". Nothing
+-- in this repo does, yet; a support fix run by hand at 2am is exactly the
+-- scenario the trigger above exists for, and a rename is one keystroke away
+-- from that same hand.
+CREATE TRIGGER clinics_no_resurrection_rename
+BEFORE UPDATE OF clinic_id ON clinics
 WHEN EXISTS (SELECT 1 FROM deleted_clinics WHERE clinic_id = NEW.clinic_id)
 BEGIN
   SELECT RAISE(ABORT, 'clinic_id was permanently deleted and can never be reissued');
