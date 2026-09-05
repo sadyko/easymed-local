@@ -3710,6 +3710,143 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .crm-col { background: var(--p-bg, var(--ink-25)); border-color: var(--p-line, var(--ink-100)); }
 .crm-col .crm-col-n { font-size: 12.5px; font-weight: 700; color: var(--p-fg, var(--ink-500)); }
 
+/* CRM_CARD_V2 (2026-09-05, владелец: «name phone number and other badges design
+   be more appealing?») — КАРТОЧКА ЗАЯВКИ.
+
+   Жалоба была про вид, но на снимке экрана лежали четыре настоящие поломки, и
+   правила ниже написаны против них, а не против «некрасиво»:
+
+   1. НОМЕР ПЕРЕНОСИЛСЯ ПОСРЕДИ ЦИФР. У карточки стоял overflow-wrap: anywhere
+      на каждой строке, и «998945669 / 203» на двух строках — это уже не номер,
+      а два обрывка, которые оператор диктует вслух и путает. Телефон здесь
+      единственный элемент карточки с white-space: nowrap, и обрезается он
+      многоточием (плюс title с полным номером), а НЕ переносом: обрезанный
+      номер видно, что он обрезан, перенесённый — нет.
+
+   2. РАЗМЕР НАБОРА ВМЕСТО МОНОШИРИННОГО. Общий класс .num печатает цифры
+      Geist Mono — на 15px это 17 знаков «+998 94 566 92 03» шириной больше,
+      чем внутренность колонки в её минимуме (215px). Поэтому у карточки свои
+      правила: тот же Onest, что и везде, с font-variant-numeric: tabular-nums —
+      цифры одной ширины (колонки номеров всё равно выстраиваются), а строка
+      короче моноширинной примерно на четверть и помещается.
+
+   3. НОМЕР ВЫДЕЛЯЕТСЯ МЫШЬЮ. У карточки user-select: none — иначе перетаскивание
+      выделяет текст вместо переноса. Но номер копируют, и на нём выделение
+      возвращается точечно.
+
+   4. ИЕРАРХИЯ. Сверху вниз: КТО (имя 15px/700) → КАК ДОЗВОНИТЬСЯ (номер
+      13.5px/600 с иконкой) → ФАКТЫ метками (откуда, есть ли карта, кто ведёт,
+      на какой день записан) → детали → подвал с датой обращения и переездом.
+      Дата обращения ушла ИЗ строки имени: там она была третьим значением подряд
+      без всякой связи с двумя первыми.
+
+   ЦВЕТ. Карточка остаётся белой (см. contrast-badge-hatch.test.mjs: пастель —
+   личность КОЛОНКИ, и перекрасить карточку значило бы сказать это дважды), но
+   рамка берётся из оттенка колонки (--p-line): та же переменная, которую
+   колонка уже выставила, гарантированно даёт 3:1 к её заливке — на белой
+   странице ink-100 бы хватило, на пастельной колонке нет. */
+.crm-card {
+    background: var(--white, #fff);
+    border: 1px solid var(--p-line, var(--ink-200));
+    border-radius: 12px;
+    padding: 11px 12px 9px;
+    box-shadow: var(--shadow-xs);
+    cursor: grab;
+    /* Перетаскивание на pointer-событиях: без этого браузер отдаёт жест
+       прокрутке страницы, и карточка не сдвинется ни на пиксель. */
+    touch-action: none;
+    user-select: none; -webkit-user-select: none; -webkit-user-drag: none;
+    transition: box-shadow var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+.crm-card:hover { box-shadow: var(--shadow-sm); }
+/* Конверсия («Пришёл») не таскается — курсор об этом и говорит. */
+.crm-card-done { cursor: pointer; }
+
+.crm-card-who { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+/* Появляется ТОЛЬКО когда имени нет: карточка с номером вместо имени должна
+   выглядеть решением, а не обрывком. */
+.crm-card-kicker {
+    font-size: 12.5px; font-weight: 600; letter-spacing: .02em;
+    color: var(--ink-500); line-height: 1.3;
+}
+.crm-card-name {
+    font-size: 15px; font-weight: 700; line-height: 1.3;
+    color: var(--ink-900);
+    overflow-wrap: anywhere;   /* длинное ФИО переносится, а не выносит колонку */
+}
+/* Имя-которое-на-самом-деле-номер: та же строка, но по правилам номера. */
+.crm-card-name-tel {
+    font-variant-numeric: tabular-nums; letter-spacing: .01em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    overflow-wrap: normal;
+    user-select: text; -webkit-user-select: text;
+}
+.crm-card-name-none { color: var(--ink-500); font-weight: 600; }
+
+.crm-card-tel { display: flex; align-items: center; gap: 6px; margin-top: 5px; min-width: 0; }
+.crm-card-tel-i { display: inline-flex; flex: none; color: var(--ink-400); }
+.crm-card-tel-n {
+    font-size: 13.5px; font-weight: 600; line-height: 1.3;
+    color: var(--ink-800);
+    font-variant-numeric: tabular-nums; letter-spacing: .01em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    user-select: text; -webkit-user-select: text;
+}
+/* «Телефона нет» — это факт, который оператору нужно увидеть сразу, а не
+   пустое место, по которому непонятно, потеряли номер или его не было. */
+.crm-card-tel-none .crm-card-tel-n { color: var(--ink-500); font-weight: 500; font-variant-numeric: normal; }
+
+.crm-card-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+/* Метка на карточке умеет ПЕРЕНОСИТЬСЯ. Обычная .tag — nowrap и ровно 22px
+   высотой; длинная подпись источника («Рекомендация партнёрской клиники»)
+   вылезала бы за колонку, а обрезать факт нечем — он и есть сообщение. */
+.crm-card-tags .tag {
+    max-width: 100%;
+    height: auto; min-height: 21px; padding: 2px 8px;
+    white-space: normal; overflow-wrap: anywhere; text-align: left; line-height: 1.35;
+}
+
+.crm-card-line { font-size: 12.5px; line-height: 1.45; margin-top: 7px; color: var(--ink-800); overflow-wrap: anywhere; }
+.crm-card-lbl { color: var(--ink-500); }
+/* Комментарий — деталь, а не заголовок: две строки на карточке, остальное в
+   окне заявки (и в title). */
+.crm-card-note {
+    font-size: 12.5px; line-height: 1.45; margin-top: 6px; color: var(--ink-500);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden; overflow-wrap: anywhere;
+}
+
+.crm-card-foot {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+    gap: 6px 8px; margin-top: 9px; padding-top: 8px;
+    border-top: 1px solid var(--ink-50);
+}
+.crm-card-when { font-size: 12.5px; color: var(--ink-500); white-space: nowrap; }
+
+/* ПЕРЕЕЗД. Родной <select> — единственный путь сменить ступень с клавиатуры
+   (перетаскивание это мышь и палец), поэтому элемент остаётся селектом, а не
+   становится кнопкой с самодельным меню. Формой он выглядеть перестал: в покое
+   ни рамки, ни заливки — только подпись действия; рамка и белый фон приходят
+   под курсором и по фокусу, то есть тогда, когда он и правда управление. */
+.crm-move { position: relative; display: inline-flex; align-items: center; flex: none; max-width: 100%; }
+.crm-move-sel {
+    appearance: none; -webkit-appearance: none;
+    font-family: inherit; font-size: 12.5px; font-weight: 600; line-height: 1.3;
+    color: var(--ink-500);
+    background: transparent;
+    border: 1px solid transparent; border-radius: 8px;
+    padding: 3px 24px 3px 8px;
+    max-width: 100%;
+    cursor: pointer;
+    transition: color var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+.crm-move-sel:hover, .crm-move-sel:focus { color: var(--ink-800); background: var(--white, #fff); border-color: var(--ink-200); }
+.crm-move-sel:focus-visible { outline: 2px solid var(--primary-500, #2d958f); outline-offset: 1px; }
+.crm-move-chev {
+    position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
+    display: inline-flex; color: var(--ink-400); pointer-events: none;
+}
+
 /* CRM_PERIOD_CUSTOM_V2 — «Свой период» одной таблеткой, а не двумя голыми
    полями даты.
    Штатный <input type=date> посреди строки чипов выглядит деталью из другой

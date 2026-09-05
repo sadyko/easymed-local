@@ -3,6 +3,18 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CRM_CARD_V2 — карточка заявки на канбане: имя, читаемый номер, метки-факты
+  // и переезд между ступенями — added 2026-09-05
+  "Без имени": {"en":"No name","ru":"Без имени","uz":"Ismi yo'q"},
+  "Телефон не указан": {"en":"No phone number","ru":"Телефон не указан","uz":"Telefon ko'rsatilmagan"},
+  "Источник не указан": {"en":"Source not set","ru":"Источник не указан","uz":"Manba ko'rsatilmagan"},
+  "Карта {mrn}": {"en":"Chart {mrn}","ru":"Карта {mrn}","uz":"Karta {mrn}"},
+  "Карта заведена": {"en":"Chart created","ru":"Карта заведена","uz":"Karta ochilgan"},
+  "Ведёт {name}": {"en":"Handled by {name}","ru":"Ведёт {name}","uz":"{name} yuritmoqda"},
+  "Запись на {d}": {"en":"Booked for {d}","ru":"Запись на {d}","uz":"{d} ga yozilgan"},
+  "Заявка от {d}": {"en":"Request of {d}","ru":"Заявка от {d}","uz":"{d} dagi so'rov"},
+  "Переместить…": {"en":"Move to…","ru":"Переместить…","uz":"Ko'chirish…"},
+  "Переместить заявку в другую колонку": {"en":"Move the request to another column","ru":"Переместить заявку в другую колонку","uz":"So'rovni boshqa ustunga ko'chirish"},
   // SERVICE_EDITOR_V1 — редактор услуги (service-editor-logic.js + views/service-editor.js) — added 2026-08-31
   "Рентген": {"en":"X-ray","ru":"Рентген","uz":"Rentgen"},
   "Новая услуга": {"en":"New service","ru":"Новая услуга","uz":"Yangi xizmat"},

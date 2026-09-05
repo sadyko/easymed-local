@@ -9,6 +9,10 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { openVisitWizard } from './visit-wizard.js?v=aug17e';   // CRM_V4 — конверсия сразу в реальный заказ услуги
 import { digitsOf, phoneLikePattern, filterPhoneMatches, uzLocalDigits, MIN_PHONE_DIGITS } from './crm-phone-match.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
+// CRM_CARD_V2 — номер на карточке группируется ТЕМ ЖЕ правилом, что и во всех
+// полях ввода телефона (PHONE_INPUT_V1). Второй способ печатать номер означал
+// бы, что один и тот же человек выглядит по-разному в заявке и в своей карте.
+import { formatPhone } from '../phone-format.js';
 import { filterServicePool, serviceGroupCounts } from './service-search.js';   // CRM_SERVICE_FILTER_V1
 import { openCustDev } from './custdev.js';           // CUSTDEV_V1 — обзвон после визита
 import { canView } from '../permissions.js';          // CUSTDEV_V1 — право на кнопку «Cust Dev»
@@ -183,6 +187,38 @@ async function load() {
         .order('id', { ascending: false }).limit(800);
     if (error) { toast(trf('Не удалось загрузить заявки: {msg}', { msg: error.message }), 'fail'); state.rows = []; return; }
     state.rows = data || [];
+}
+
+// CRM_CARD_V2 — КТО это и КАК до него дозвониться, одним ответом на две строки.
+//
+// Заявка приходит из трёх мест, и «имя» в ней значит разное. Оператор завёл её
+// руками — там ФИО. Позвонил известный пациент — там его ФИО из карты. Позвонил
+// НЕизвестный — и services/crm/lead-from-call.js кладёт в full_name сам номер,
+// потому что имени неоткуда взяться, а работать оператору с чем-то надо. Ровно
+// в этом третьем случае карточка и печатала номер дважды: заголовком и строкой
+// телефона под ним.
+//
+// Правило: одно значение — одно место. Если «имя» это тот же самый номер, оно
+// СТАНОВИТСЯ заголовком (в читаемой группировке), а строка телефона не
+// рисуется. Если это ДРУГОЙ номер — печатаем оба: два разных номера это два
+// разных факта, и выбрасывать один нельзя.
+//
+// Числовым «именем» считается строка, в которой нет ничего, кроме цифр и знаков
+// набора, и цифр в ней не меньше семи: «7» — это номер кабинета или возраст, а
+// не телефон, и превращать такую строку в заголовок-телефон было бы враньём.
+const NAME_AS_PHONE_DIGITS = 7;
+export function leadIdentity(r) {
+    const name = String((r && r.full_name) || '').trim();
+    const raw = String((r && r.phone) || '').trim();
+    const phone = raw ? (formatPhone(raw) || raw) : '';
+    const nameDigits = digitsOf(name);
+    const numeric = !!name && nameDigits.length >= NAME_AS_PHONE_DIGITS && !/[^\d\s+()-]/.test(name);
+
+    if (!name) return { title: phone, titleIsPhone: !!phone, phoneLine: '' };
+    if (numeric && (!raw || nameDigits === digitsOf(raw))) {
+        return { title: formatPhone(name) || phone || name, titleIsPhone: true, phoneLine: '' };
+    }
+    return { title: numeric ? (formatPhone(name) || name) : name, titleIsPhone: numeric, phoneLine: phone };
 }
 
 // CRM_NAME_PARTS_V1 — «Фамилия Имя Отчество» из одной строки заявки. Одно слово
@@ -448,25 +484,62 @@ async function paint() {
     }
 
     function kanbanCard(r) {
-        // CRM_CARD_LINES_V1 — каждая информация на своей строке; длинный текст
-        // переносится, а не обрезается.
-        const line = (...children) => h('div', { style: { fontSize: '12.5px', marginTop: '4px', overflowWrap: 'anywhere' } }, ...children);
+        // CRM_CARD_V2 (2026-09-05, владелец: «name phone number and other badges
+        // design be more appealing?») — карточка отвечает на четыре вопроса
+        // сверху вниз, ровно в том порядке, в каком их задаёт человек с трубкой
+        // в руке: КТО это → КАК дозвониться → ОТКУДА пришёл и что о нём уже
+        // известно → ЧТО с ним делать. Всё остальное — детали под фактами.
+        //
+        // Что здесь чинится, кроме красоты:
+        //   1. Номер больше не переносится посреди цифр («998945669» / «203» на
+        //      двух строках — это не номер, это две строки цифр) и печатается
+        //      группами, как его произносят: +998 94 566 92 03.
+        //   2. Номер не печатается дважды. Лид из АТС от неизвестного звонящего
+        //      кладёт номер в full_name (services/crm/lead-from-call.js), и он
+        //      выходил и заголовком, и строкой ниже. Теперь одно значение —
+        //      одно место: номер становится ЗАГОЛОВКОМ, а строка телефона
+        //      исчезает; подпись «Без имени» над ним говорит, что так и задумано.
+        //   3. Дата обращения ушла из строки имени вниз, к подписи «Заявка от
+        //      …»: рядом с именем она была третьим значением без объяснения.
         const fmtD = (iso) => (iso || '').slice(0, 10).split('-').reverse().join('.');
+        const id = leadIdentity(r);
         const acts = cardActions(r);
+
+        // МЕТКИ — только ФАКТЫ о лиде: откуда пришёл, есть ли уже карта, кто
+        // ведёт, на какой день записан. Состояние воронки меткой НЕ дублируется:
+        // его несёт колонка, в которой карточка лежит.
+        const tags = [];
+        tags.push(Tag(SOURCE_RU[r.source] || r.source || 'Источник не указан', { kind: '' }));
+        if (r.patients) tags.push(Tag(r.patients.mrn ? trf('Карта {mrn}', { mrn: r.patients.mrn }) : 'Карта заведена', { kind: 'ok' }));
+        if (r.users && r.users.full_name) tags.push(Tag(trf('Ведёт {name}', { name: r.users.full_name }), { kind: 'teal' }));
+        if (r.scheduled_date) tags.push(Tag(trf('Запись на {d}', { d: fmtD(r.scheduled_date) }), { kind: 'purple' }));
+
         const card = h('div', {
-            style: { background: 'var(--white, #fff)', border: '1px solid var(--ink-100)', borderRadius: '10px', padding: '10px 12px', cursor: r.status !== CONVERT_STATUS ? 'grab' : 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.05)', touchAction: 'none', userSelect: 'none', webkitUserDrag: 'none' },
-            onclick: (ev) => { if (ev.target.closest('button, select')) return; requestModal(r); },
+            class: 'crm-card' + (r.status === CONVERT_STATUS ? ' crm-card-done' : ''),
+            onclick: (ev) => { if (ev.target.closest('button, select, .crm-move')) return; requestModal(r); },
         },
-            h('div', { class: 'row', style: { gap: '6px', alignItems: 'baseline' } },
-                h('span', { style: { flex: 1, minWidth: 0, fontWeight: 700, fontSize: '13.5px', overflowWrap: 'anywhere' } }, r.full_name || '—'),
-                h('span', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, fmtD(r.created_at))),
-            line(h('span', { class: 'num' }, r.phone || '—')),
-            line(Tag(SOURCE_RU[r.source] || r.source, { kind: '' })),
-            r.services ? line(h('span', { class: 'muted' }, 'Услуга: '), r.services.name) : null,
-            r.scheduled_date ? line(h('span', { class: 'muted' }, 'Записан на: '), h('b', { style: { color: '#6d28d9' } }, fmtD(r.scheduled_date))) : null,
-            r.patients ? line(Tag(r.patients.mrn || 'карта', { kind: 'ok' })) : null,
-            r.note ? line(h('span', { class: 'muted' }, r.note)) : null,
-            acts.length ? h('div', { class: 'row', style: { gap: '6px', marginTop: '8px', flexWrap: 'wrap' } }, ...acts) : null,
+            h('div', { class: 'crm-card-who' },
+                // Подпись появляется ТОЛЬКО когда имени нет: у карточки с именем
+                // ей нечего сказать, а «пустая» карточка перестаёт выглядеть
+                // сломанной — видно, что номер стоит вместо имени намеренно.
+                id.titleIsPhone ? h('div', { class: 'crm-card-kicker' }, 'Без имени') : null,
+                h('div', {
+                    class: 'crm-card-name' + (id.titleIsPhone ? ' crm-card-name-tel' : (id.title ? '' : ' crm-card-name-none')),
+                    title: id.title || null,
+                }, id.title || 'Без имени')),
+            // Строки телефона нет ровно в одном случае: когда телефон И ЕСТЬ
+            // заголовок, то есть печатать её значило бы напечатать одно значение
+            // дважды. Во всех остальных — есть, включая «телефона нет»: пустое
+            // место не отличить от потерянного номера.
+            (id.titleIsPhone && !id.phoneLine) ? null : h('div', { class: 'crm-card-tel' + (id.phoneLine ? '' : ' crm-card-tel-none') },
+                h('span', { class: 'crm-card-tel-i' }, Icon('Phone', { size: 13 })),
+                h('span', { class: 'crm-card-tel-n', title: id.phoneLine || null }, id.phoneLine || 'Телефон не указан')),
+            tags.length ? h('div', { class: 'crm-card-tags' }, ...tags) : null,
+            r.services ? h('div', { class: 'crm-card-line' }, h('span', { class: 'crm-card-lbl' }, 'Услуга: '), r.services.name) : null,
+            r.note ? h('div', { class: 'crm-card-note', title: r.note }, r.note) : null,
+            h('div', { class: 'crm-card-foot' },
+                h('span', { class: 'crm-card-when' }, trf('Заявка от {d}', { d: fmtD(r.created_at) })),
+                ...acts),
         );
         // CRM_DRAG_V2 — перетаскивание на pointer-событиях вместо HTML5 DnD
         // (тот часто вовсе не стартует). Держите карточку и ведите: клон летит
@@ -476,7 +549,7 @@ async function paint() {
         card.addEventListener('pointerdown', (ev) => {
             if (r.status === CONVERT_STATUS) return;
             if (ev.button !== 0 && ev.pointerType === 'mouse') return;
-            if (ev.target.closest('button, select, input, a')) return;
+            if (ev.target.closest('button, select, input, a, .crm-move')) return;
             // Захват указателя: события идут карточке даже если курсор ушёл
             // с неё (они всплывают до document, где висят наши слушатели).
             try { card.setPointerCapture(ev.pointerId); } catch (e) { /* не критично */ }
@@ -548,16 +621,37 @@ async function paint() {
 
     function cardActions(r) {
         if (r.status === CONVERT_STATUS) return [];
-        // Компактный переключатель статуса. «Пришёл» в нём нет: конверсия
-        // происходит АВТОМАТИЧЕСКИ при создании визита (CRM_AUTO_CAME_V1);
-        // вручную — перетаскиванием в колонку «Пришёл» или из окна заявки.
-        const sel = h('select', { title: 'Сменить статус', style: { padding: '4px 6px', fontSize: '12.5px', borderRadius: '8px', border: '1px solid var(--ink-200)', fontFamily: 'inherit', maxWidth: '150px', background: 'var(--white, #fff)', cursor: 'pointer' } },
-            ...STATUSES.filter(([k]) => k !== CONVERT_STATUS)
-                .map(([k, l]) => h('option', { value: k, selected: r.status === k }, l)));
+        // CRM_CARD_V2 — ПЕРЕЕЗД, а не «текущий статус».
+        //
+        // Здесь стоял обычный <select> со всеми ступенями воронки, и выбранной
+        // в нём была та, в колонке которой карточка и лежит: самый тяжёлый
+        // элемент карточки повторял то, что уже сказано положением карточки.
+        // Теперь список — это СПИСОК НАПРАВЛЕНИЙ: своей ступени в нём нет,
+        // видимая подпись — действие («Переместить…»), и ни одно значение на
+        // карточке не встречается дважды.
+        //
+        // Почему остался именно <select>, а не кнопка с меню: перетаскивание —
+        // мышь и палец, и другого пути сменить ступень с клавиатуры на доске
+        // нет. Родной select — фокусируемый, озвучиваемый и работает стрелками
+        // из коробки; вид ему даёт .crm-move в admin-views.css (рамка
+        // появляется под курсором и по фокусу, а не постоянно), поэтому в
+        // спокойном состоянии он читается частью карточки, а не формой.
+        const sel = h('select', {
+            class: 'crm-move-sel',
+            'aria-label': 'Переместить заявку в другую колонку',
+            title: 'Переместить заявку в другую колонку',
+        },
+            h('option', { value: '', selected: true }, 'Переместить…'),
+            ...STATUSES.filter(([k]) => k !== CONVERT_STATUS && k !== r.status)
+                .map(([k, l]) => h('option', { value: k }, l)));
         sel.addEventListener('change', async () => {
-            if (await setStatus(r, sel.value)) { toast(trf('Статус: {status}', { status: tr((STATUS_RU[sel.value] || [sel.value])[0]) })); await paint(); }
+            const key = sel.value;
+            // Пустое значение — это подпись действия, а не ступень.
+            if (!key || key === r.status) return;
+            if (await setStatus(r, key)) { toast(trf('Статус: {status}', { status: tr((STATUS_RU[key] || [key])[0]) })); await paint(); }
         });
-        return [sel];
+        return [h('div', { class: 'crm-move' }, sel,
+            h('span', { class: 'crm-move-chev', 'aria-hidden': 'true' }, Icon('ChevronDown', { size: 12 })))];
     }
 
     // ---------------- СПИСОК ----------------
@@ -570,10 +664,13 @@ async function paint() {
         const tbody = h('tbody');
         for (const r of rows) {
             const [stLabel, stKind] = STATUS_RU[r.status] || [r.status, ''];
-            tbody.appendChild(h('tr', { class: 'row-click', style: { cursor: 'pointer' }, onclick: (ev) => { if (ev.target.closest('button, select')) return; requestModal(r); } },
+            tbody.appendChild(h('tr', { class: 'row-click', style: { cursor: 'pointer' }, onclick: (ev) => { if (ev.target.closest('button, select, .crm-move')) return; requestModal(r); } },
                 h('td', { class: 'cell-strong' }, r.full_name || '—',
                     r.patients ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, r.patients.mrn || '') : null),
-                h('td', { class: 'num' }, r.phone || '—'),
+                // CRM_CARD_V2 — тот же читаемый номер, что и на карточке:
+                // список и доска показывают ОДНО И ТО ЖЕ поле, и разная запись
+                // в них читалась бы как разные номера.
+                h('td', { class: 'num' }, formatPhone(r.phone) || r.phone || '—'),
                 h('td', null, SOURCE_RU[r.source] || r.source || '—'),
                 h('td', null, r.services ? r.services.name : h('span', { class: 'muted' }, '—')),
                 h('td', { class: 'muted', style: { maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, r.note || '—'),
