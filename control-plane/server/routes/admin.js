@@ -373,7 +373,13 @@ export function adminRoutes(db) {
     // sharing that id — silently granting the new clinic whatever the old,
     // deleted one was entitled to. `active = 0` keeps the row (and its id)
     // dead forever instead, which is the only safe way to retire one.
-    db.prepare('UPDATE clinics SET active = 0 WHERE clinic_id = ?').run(clinic.clinic_id);
+    // CONTROL_PLANE_V2 — COALESCE, so re-retiring an already-retired clinic
+    // never rewrites the date. retired_at is evidence of when it happened, and
+    // a second click must not quietly relabel a decision made in August as one
+    // made today.
+    db.prepare(
+      "UPDATE clinics SET active = 0, retired_at = COALESCE(retired_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')) WHERE clinic_id = ?"
+    ).run(clinic.clinic_id);
     res.json({ ok: true, note: NEXT_CHECKIN_NOTE });
   });
 

@@ -543,6 +543,24 @@ test('POST /clinics/:id/retire sets active=0; the row and clinic_id survive', as
   assert.ok(row, 'the row itself must still exist — retire is not delete');
 });
 
+test('retiring a clinic stamps retired_at, and re-retiring does not move it', async (t) => {
+  const { db, server } = await harness(t);
+  const cookie = await loggedInCookie(server);
+  enrol(db, 'c-1', 'Clinic One');
+
+  await req(server, 'POST', ADMIN_BASE + '/clinics/c-1/retire', { cookie, body: {} });
+  const first = db.prepare('SELECT active, retired_at FROM clinics WHERE clinic_id = ?').get('c-1');
+  assert.equal(first.active, 0);
+  assert.match(first.retired_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+
+  // Idempotent: clicking Retire on an already-retired clinic must not rewrite
+  // the date to today. The date is evidence of when it happened.
+  db.prepare("UPDATE clinics SET retired_at = '2026-01-01T00:00:00Z' WHERE clinic_id = 'c-1'").run();
+  await req(server, 'POST', ADMIN_BASE + '/clinics/c-1/retire', { cookie, body: {} });
+  const second = db.prepare('SELECT retired_at FROM clinics WHERE clinic_id = ?').get('c-1');
+  assert.equal(second.retired_at, '2026-01-01T00:00:00Z');
+});
+
 test('there is no DELETE route for a clinic', async (t) => {
   const { server } = await harness(t);
   const cookie = await loggedInCookie(server);
