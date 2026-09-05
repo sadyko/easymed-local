@@ -303,3 +303,26 @@ table.t td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* Compact: the same board with the lower two thirds of each card hidden. */
 .deck.compact .cc-stats, .deck.compact .cc-mods { display: none; }
+
+/* --- CONTROL_PLANE_V2: card ••• menu + the delete confirmation --------- */
+
+/* Appended into the card (.cc, already position:relative — see above), not
+   the kebab button itself: a <button> cannot host block children, and the
+   top/right offsets below are measured from the card's own padding box. */
+.cardmenu { position: absolute; top: 38px; right: 10px; z-index: 20; width: 172px;
+            background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px;
+            box-shadow: var(--shadow); padding: 5px; }
+.cardmenu button { display: block; width: 100%; text-align: left; background: none;
+                   border: 0; cursor: pointer; font: inherit; font-size: 12.5px;
+                   color: var(--ink); padding: 7px 10px; border-radius: 7px; }
+.cardmenu button:hover { background: var(--bg-3); }
+.cardmenu button.danger { color: var(--red); }
+.cardmenu hr { border: 0; border-top: 1px solid var(--line); margin: 5px 0; }
+
+/* The delete dialog reuses .modal-overlay/.modal/.modal .row/.modal-err/
+   .modal-actions (see panel-new-clinic.js) rather than a near-identical
+   .modal-back/.confirm pair — .keeps is the one piece of it those don't
+   already cover: the "what survives" box. */
+.modal .keeps { background: var(--bg-3); border-radius: 10px; padding: 11px 13px;
+                font-size: 12px; color: var(--ink-2); line-height: 1.75; margin-bottom: 14px; }
+.modal .keeps b { color: var(--ink); }
