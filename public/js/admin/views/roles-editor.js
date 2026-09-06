@@ -48,6 +48,10 @@ import { NAV_MODULES, PATIENT_TABS } from '../permissions.js';   // ROLE_KEYS_V2
 // ROLE_REACH_V1 — «что роль видит, словами». Ответы спрашиваются у настоящих
 // ворот доступа, а не выводятся здесь заново (см. шапку role-reach.js).
 import { roleReach, reachSentences } from '../role-reach.js?v=reach1';
+// ROLE_ACTIONS_V1 — права названы ДЕЙСТВИЯМИ, и предлагаются только те, что
+// программа действительно проверяет (см. шапку role-actions.js).
+import { levelsFor, openAction, actionFor, levelFromActions, actionsFromLevel }
+    from '../role-actions.js?v=acts1';
 
 // ROLE_KEYS_V2 — матрица строится из permissions.js NAV_MODULES, того же
 // списка, который читают сами ворота бокового меню. Когда-то это была вторая
@@ -327,7 +331,7 @@ export async function renderRolesEditor(container, { onBack } = {}) {
             // подпись на группу вместо двадцати повторов над каждым списком.
             card.appendChild(h('div', { class: 'roles-group' },
                 h('span', { class: 'roles-group-name' }, grp.group),
-                h('span', { class: 'roles-group-lvl' }, 'Что можно делать'),
+                h('span', { class: 'roles-group-lvl' }, 'Отметьте, что сотрудник может делать'),
             ));
             for (const it of grp.items) card.appendChild(moduleRow(it, granted, levels));
         }
@@ -402,40 +406,68 @@ export async function renderRolesEditor(container, { onBack } = {}) {
         );
     }
 
+    // ROLE_ACTIONS_V1 — СТРОКА РАЗДЕЛА ГОВОРИТ ДЕЙСТВИЯМИ.
+    //
+    // Здесь у каждого раздела стоял выпадающий список из трёх уровней. Уровень
+    // при этом читают ПЯТЬ ключей во всей программе: у остальных четырнадцати
+    // разделов он не значил ничего, и «Только просмотр» у кассы оставляло кассу
+    // ровно такой же — с теми же кнопками приёма денег. Право, которого нет,
+    // показанное галочкой, опаснее отсутствия галочки: первое даёт ложную
+    // уверенность, второе заставляет спросить.
+    //
+    // Теперь раздел — это выключатель («открыт»), а под ним отмечаются
+    // ДОБАВОЧНЫЕ действия, и только те, которые программа проверяет на самом
+    // деле. Список действий и его согласие с кодом держит role-actions.js и
+    // тест __tests__/role-actions.test.mjs — сверять такое глазами по 105
+    // файлам видов невозможно.
     function moduleRow(it, granted, levels) {
         const chk = h('input', { type: 'checkbox', checked: granted.has(it.key) });
         chk.dataset.permKey = it.key;   // ROLE_KEYS_V2 — по нему тесты отличают раздел от вкладки карты
-        const lvl = h('select', { class: 'roles-lvl' },
-            ...ROLE_LEVELS.map(([v, l]) => h('option', { value: v, selected: (levels[it.key] || DEFAULT_LEVEL) === v }, l)));
-        // Подпись у списка своя, с названием раздела: двадцать одинаковых
-        // «Уровень доступа» подряд в скринридере неразличимы. Собирается
-        // конкатенацией, поэтому tr() зовём сами.
-        lvl.setAttribute('aria-label', tr('Уровень доступа') + ': ' + tr(it.label));
 
-        const whyId = 'roles-why-' + it.key;
-        const why = h('span', { class: 'roles-why', id: whyId }, 'Сначала отметьте раздел');
-        lvl.setAttribute('aria-describedby', whyId);
+        const wantLevels = levelsFor(it.key);
+        const saved = actionsFromLevel(levels[it.key] || DEFAULT_LEVEL);
+        const acts = {};
+        const actEls = [];
+        for (const lvl of wantLevels) {
+            const box = h('input', { type: 'checkbox', checked: !!saved[lvl] });
+            box.dataset.permAction = it.key + ':' + lvl;
+            acts[lvl] = box;
+            actEls.push(h('label', { class: 'roles-act' }, box,
+                h('span', null, tr(actionFor(it.key, lvl)))));
+        }
 
-        const sync = () => {
-            lvl.disabled = !chk.checked;
-            // Причина блокировки видима, а не только «клик не работает».
-            why.className = chk.checked ? 'roles-why is-hidden' : 'roles-why';
-        };
+        // «Удаление» без «изменения» бессмысленно — accessLevelFor() всё равно
+        // прочтёт его как более старшее право. Отмечаем зависимость сразу, а не
+        // молча исправляем при сохранении.
+        if (acts.admin && acts.editor) {
+            acts.admin.addEventListener('change', () => { if (acts.admin.checked) acts.editor.checked = true; });
+            acts.editor.addEventListener('change', () => { if (!acts.editor.checked) acts.admin.checked = false; });
+        }
+
+        // Список действий существует только у отмеченного раздела: у закрытого
+        // он не «серый», а отсутствует — обсуждать нечего.
+        const actBox = h('div', { class: 'roles-acts' }, ...actEls);
+        const sync = () => { actBox.className = chk.checked ? 'roles-acts' : 'roles-acts is-hidden'; };
         sync();
         chk.addEventListener('change', sync);
-        state.controls[it.key] = { chk, level: lvl };
 
+        // level — не орган управления, а вычисляемое значение: collect() читает
+        // .value, как читал у списка, поэтому сохранение не менялось вовсе.
+        state.controls[it.key] = {
+            chk,
+            level: { get value() { return levelFromActions({ editor: !!(acts.editor && acts.editor.checked), admin: !!(acts.admin && acts.admin.checked) }); } },
+        };
+
+        const open = openAction(it.key);
         return h('div', { class: 'roles-row' },
-            // Галочка и её подпись — одна общая мишень: попасть можно и по
-            // названию раздела, и по описанию.
             h('label', { class: 'roles-pick' },
                 chk,
                 h('span', { class: 'roles-pick-txt' },
                     h('span', { class: 'roles-mod' }, it.label),
-                    it.desc ? h('span', { class: 'roles-desc' }, it.desc) : null,
+                    open ? h('span', { class: 'roles-desc' }, tr(open)) : null,
                 ),
             ),
-            h('div', { class: 'roles-lvl-cell' }, lvl, why),
+            actEls.length ? actBox : null,
         );
     }
 

@@ -184,7 +184,7 @@ test('экран говорит по-русски: заголовок, пояс�
     'Назад в настройки',
     'Разделы и уровень доступа',
     'Сохранить роль',
-    'Что можно делать',
+    'Отметьте, что сотрудник может делать',
     'Регистратор',
   ]) assert.ok(text.includes(s), 'нет русской строки: ' + s);
 
@@ -193,10 +193,16 @@ test('экран говорит по-русски: заголовок, пояс�
   assert.ok(text.includes('Обзор'), 'группа Overview переведена');
   assert.ok(!text.includes('Overview'), 'английская группа не осталась: ' + text.slice(0, 200));
 
-  // Уровни названы действием, а не системной ролью View/Edit/Full.
-  // Текст у h() лежит в дочернем текстовом узле, а не в самом элементе.
-  const opts = tagsOf(selects(root)[0], 'OPTION').map((o) => textOf(o));
-  assert.deepStrictEqual(opts, ['Только просмотр', 'Просмотр и изменение', 'Изменение и удаление']);
+  // ROLE_ACTIONS_V1 — уровни больше не выпадающий список «просмотр /
+  // изменение / удаление» у каждого раздела: он был у всех семнадцати, а
+  // значил что-то у пяти. Теперь на экране названы ДЕЙСТВИЯ, и только те,
+  // которые программа проверяет.
+  assert.strictEqual(selects(root).length, 0,
+    'выпадающий список уровня вернулся — он снова обещает право у разделов, где его нет');
+  assert.ok(text.includes('Удаляет визит, неоплаченную услугу из сметы и рекомендацию'),
+    'действие уровня «удаление» у Пациентов не названо словами');
+  assert.ok(text.includes('Видит картотеку и карты пациентов'),
+    'не сказано, что даёт сам доступ к разделу');
 
   // Английские строки V1 не должны выжить нигде на экране.
   for (const gone of ['Roles & permissions', 'Save role', 'Back to settings', 'module access',
@@ -205,44 +211,40 @@ test('экран говорит по-русски: заголовок, пояс�
   }
 });
 
-test('уровень доступа подписан, а заблокированный говорит причину', async () => {
+test('действия предлагаются только там, где программа их проверяет', async () => {
   resetServer();
   const root = await render();
 
-  const all = selects(root);
-  assert.strictEqual(all.length, moduleBoxes(root).length, 'по списку уровня на каждый раздел');
-  for (const s of all) {
-    const label = s.getAttribute('aria-label') || '';
-    assert.ok(label.startsWith('Уровень доступа: '), 'у списка нет подписи: ' + label);
-    assert.ok(label.length > 'Уровень доступа: '.length, 'подпись называет раздел: ' + label);
-    assert.ok(s.getAttribute('aria-describedby'), 'список ссылается на строку-причину');
-  }
-
-  // Отмеченный раздел — список доступен и причина скрыта; неотмеченный —
-  // наоборот, и причина названа словами, а не молчанием.
+  // ROLE_ACTIONS_V1. Здесь стоял тест про выпадающий список уровня у КАЖДОГО
+  // раздела и про подпись «Сначала отметьте раздел» у заблокированного списка.
+  // Он проверял аккуратность органа управления, которого не должно было быть:
+  // уровень читают пять ключей во всей программе, а список висел у всех
+  // семнадцати — и «Только просмотр» у кассы оставляло кассу ровно такой же.
+  //
+  // Новый договор: у раздела, где уровень ничего не значит, выбора нет вовсе;
+  // у остальных — названные действия, и они появляются только когда раздел
+  // отмечен. Согласие этого списка с кодом держит __tests__/role-actions.test.mjs.
   const rows = byClass(root, 'roles-row');
-  const rowOf = (key) => rows.find((r) => walk(r).some((n) => n.attrs.id === 'roles-why-' + key));
-  const pick = (key) => ({
-    chk: checkboxes(rowOf(key))[0], sel: selects(rowOf(key))[0],
-    why: walk(rowOf(key)).find((n) => n.attrs.id === 'roles-why-' + key),
-  });
+  const rowOf = (key) => rows.find((r) => walk(r).some((n) => n.attrs && n.attrs['data-perm-key'] === key
+      || (n.dataset && n.dataset.permKey === key)));
+  const actionsIn = (row) => walk(row).filter((n) => n.dataset && n.dataset.permAction);
 
-  const patients = pick('patients');           // выдан регистратору
-  assert.strictEqual(patients.chk.checked, true);
-  assert.strictEqual(patients.sel.disabled, false);
-  assert.ok(patients.why.classList.contains('is-hidden'), 'причина спрятана, пока раздел отмечен');
+  // Касса: уровень ей ничего не даёт — значит и предлагать нечего.
+  assert.deepStrictEqual(actionsIn(rowOf('cashier')).map((n) => n.dataset.permAction), [],
+    'у кассы снова появился выбор права, которого программа не проверяет');
+  assert.deepStrictEqual(actionsIn(rowOf('queue')).map((n) => n.dataset.permAction), []);
 
-  const labs = pick('labs');                   // не выдан
-  assert.strictEqual(labs.chk.checked, false);
-  assert.strictEqual(labs.sel.disabled, true);
-  assert.strictEqual(textOf(labs.why), 'Сначала отметьте раздел');
-  assert.ok(!labs.why.classList.contains('is-hidden'), 'причина видна рядом с заблокированным списком');
+  // Пациенты: два настоящих добавочных права.
+  const patientActs = actionsIn(rowOf('patients')).map((n) => n.dataset.permAction);
+  assert.deepStrictEqual(patientActs, ['patients:editor', 'patients:admin']);
 
-  // И причина исчезает ровно тогда, когда раздел отмечают.
-  labs.chk.checked = true;
-  labs.chk.dispatchEvent({ type: 'change' });
-  assert.strictEqual(labs.sel.disabled, false);
-  assert.ok(labs.why.classList.contains('is-hidden'));
+  // «Удаление» без «изменения» бессмысленно — отметка тянет за собой вторую.
+  const [edit, del] = actionsIn(rowOf('patients'));
+  edit.checked = false; del.checked = false;
+  del.checked = true; del.dispatchEvent({ type: 'change' });
+  assert.strictEqual(edit.checked, true, 'отмеченное удаление не включило изменение');
+  edit.checked = false; edit.dispatchEvent({ type: 'change' });
+  assert.strictEqual(del.checked, false, 'снятое изменение оставило удаление отмеченным');
 });
 
 test('ошибка загрузки: видимая ошибка с повтором, а НЕ пустая матрица', async () => {

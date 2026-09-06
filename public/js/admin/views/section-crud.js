@@ -6,6 +6,9 @@
 import { supabase } from '../../supabase.js';
 import { SECTIONS, FK_LABEL_COLUMN, FK_EXTRA_COLUMNS } from '../sections.js?v=rolecmp1';
 import { permissionGroups, allPermissionKeys, canEdit, canDelete, PATIENT_TABS } from '../permissions.js';
+// ROLE_ACTIONS_V1 — «Редакт.» и «Удаление» рисуются только там, где программа
+// их РАЗЛИЧАЕТ, и подписаны действием (см. шапку role-actions.js).
+import { levelsFor, openAction, actionFor } from '../role-actions.js?v=acts1';
 import { hashPassword } from '../auth.js?v=admdoc3';
 import { BRANCH_BUCKET, uploadFile, signedUrl, removeFile } from '../storage.js?v=aurora20b';
 import { h, Icon, Tag, PageHead, toast, clear } from '../ui.js';
@@ -2051,26 +2054,51 @@ function sectionPicker(v) {
         cb.addEventListener('change', () => onChange(cb));
         return { cb, el: h('label', { class: 'row', style: { gap: '6px', alignItems: 'center', fontSize: '12.5px', cursor: 'pointer', userSelect: 'none' } }, cb, label) };
     }
+    // ROLE_ACTIONS_V1 — ТОТ ЖЕ ПРИЁМ, ЧТО У ВКЛАДОК КАРТЫ НИЖЕ, ТЕПЕРЬ И У
+    // РАЗДЕЛОВ: галочка рисуется там, где ей есть что разрешать, а на месте
+    // несуществующего права стоит прочерк с объяснением.
+    //
+    // «Редакт.» и «Удаление» стояли у КАЖДОГО раздела. Уровень при этом читают
+    // пять ключей во всей программе: у остальных он не значит ничего, и снятая
+    // галочка «Редакт.» у кассы оставляла кассу ровно такой же — с теми же
+    // кнопками приёма денег. Галочка, которая ничего не меняет, хуже её
+    // отсутствия: она даёт уверенность, что право отняли.
+    //
+    // Строка раздела заодно говорит, ЧТО человек в нём делает: выдавать доступ
+    // по одному названию — гадание.
     function moduleRow(it) {
         const lvl = levelFor(it.key);
+        const has = levelsFor(it.key);
         const read = chk('Чтение', lvl !== 'none', sync);
-        const edit = chk('Редакт.', lvl === 'editor' || lvl === 'admin', sync);
-        const del  = chk('Удаление', lvl === 'admin', sync);
+        const edit = has.includes('editor') ? chk('Редакт.', lvl === 'editor' || lvl === 'admin', sync) : null;
+        const del  = has.includes('admin')  ? chk('Удаление', lvl === 'admin', sync) : null;
         read.cb.dataset.permKey = it.key; read.cb.dataset.permLvl = 'read';
-        edit.cb.dataset.permKey = it.key; edit.cb.dataset.permLvl = 'edit';
-        del.cb.dataset.permKey  = it.key; del.cb.dataset.permLvl  = 'delete';
+        if (edit) { edit.cb.dataset.permKey = it.key; edit.cb.dataset.permLvl = 'edit'; }
+        if (del)  { del.cb.dataset.permKey  = it.key; del.cb.dataset.permLvl  = 'delete'; }
         function sync(src) {
-            if (src === read.cb && !read.cb.checked) { edit.cb.checked = false; del.cb.checked = false; }
-            if (src === edit.cb) { if (edit.cb.checked) read.cb.checked = true; else del.cb.checked = false; }
-            if (src === del.cb && del.cb.checked) { edit.cb.checked = true; read.cb.checked = true; }
+            if (src === read.cb && !read.cb.checked) { if (edit) edit.cb.checked = false; if (del) del.cb.checked = false; }
+            if (edit && src === edit.cb) { if (edit.cb.checked) read.cb.checked = true; else if (del) del.cb.checked = false; }
+            if (del && src === del.cb && del.cb.checked) { if (edit) edit.cb.checked = true; read.cb.checked = true; }
             recount();
         }
-        const labelEl = it.soon
-            ? h('span', { style: { fontSize: '13.5px', color: 'var(--ink-500)', display: 'inline-flex', alignItems: 'center', gap: '6px' } }, it.label,
-                h('span', { style: { fontSize: '12.5px', fontWeight: '700', color: 'var(--ink-500)', background: 'var(--ink-100)', borderRadius: '4px', padding: '1px 6px', letterSpacing: '.04em', textTransform: 'uppercase' } }, 'Скоро'))   // ROLE_EDITOR_AVAIL_V1
-            : h('span', { style: { fontSize: '13.5px', color: 'var(--ink-800)' } }, it.label);
+        const dash = (title) => h('span', { class: 'muted', title, style: { fontSize: '12.5px' } }, '—');
+        const NO_LEVEL = 'В этом разделе такого права нет: он либо открыт, либо закрыт';
+        const what = openAction(it.key);
+        const labelEl = h('span', null,
+            it.soon
+                ? h('span', { style: { fontSize: '13.5px', color: 'var(--ink-500)', display: 'inline-flex', alignItems: 'center', gap: '6px' } }, it.label,
+                    h('span', { style: { fontSize: '12.5px', fontWeight: '700', color: 'var(--ink-500)', background: 'var(--ink-100)', borderRadius: '4px', padding: '1px 6px', letterSpacing: '.04em', textTransform: 'uppercase' } }, 'Скоро'))   // ROLE_EDITOR_AVAIL_V1
+                : h('span', { style: { fontSize: '13.5px', color: 'var(--ink-800)' } }, it.label),
+            what ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, tr(what)) : null,
+        );
+        // Подписи галочек называют действие: «Редакт.» у лаборатории и у
+        // справочника — разные вещи, и подсказка говорит какие.
+        if (edit) edit.cb.setAttribute('title', tr(actionFor(it.key, 'editor')));
+        if (del)  del.cb.setAttribute('title', tr(actionFor(it.key, 'admin')));
         return h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 96px 96px 104px', alignItems: 'center', gap: '8px', padding: '9px 6px', borderTop: '1px solid var(--ink-100)' } },
-            labelEl, read.el, edit.el, del.el);
+            labelEl, read.el,
+            edit ? edit.el : dash(NO_LEVEL),
+            del  ? del.el  : dash(NO_LEVEL));
     }
     // PATIENT_TAB_ACCESS_V1 — «Редакт.» и «Удаление» рисуются ТОЛЬКО там, где им
     // есть что разрешать (permissions.js PATIENT_TABS caps). У «Счёта» удаления

@@ -4630,6 +4630,17 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .roles-reach-line.is-crit { color: var(--crit-700); font-weight: 600; }
 .roles-reach-line.is-crit::before { background: var(--crit-500); }
 
+/* ROLE_ACTIONS_V1 (2026-09-06) — действия под разделом.
+   Отступ слева выравнивает их по подписи раздела: действие принадлежит
+   разделу, а не стоит рядом с ним. У закрытого раздела список не «серый», а
+   отсутствует — обсуждать нечего, и место не занято. */
+.roles-acts { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 2px 30px; }
+.roles-acts.is-hidden { display: none; }
+.roles-act { display: flex; align-items: flex-start; gap: 8px; font-size: 13.5px;
+    line-height: 1.45; color: var(--ink-700); cursor: pointer; }
+.roles-act input { margin-top: 2px; flex: 0 0 auto; }
+.roles-act:hover { color: var(--ink-900); }
+
 .roles-group { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
     padding: 14px 16px 3px; font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em;
     color: var(--ink-400); }

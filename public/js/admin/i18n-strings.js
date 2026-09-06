@@ -3,6 +3,35 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // ROLE_ACTIONS_V1 — прочерк на месте несуществующего права
+  "В этом разделе такого права нет: он либо открыт, либо закрыт": {"en":"There is no such right in this section: it is either open or closed","ru":"В этом разделе такого права нет: он либо открыт, либо закрыт","uz":"Bu bo'limda bunday huquq yo'q: u yo ochiq, yo yopiq"},
+  // ROLE_ACTIONS_V1 (2026-09-06) — права, названные действиями, на экране ролей
+  "Отметьте, что сотрудник может делать": {"en":"Tick what this employee may do","ru":"Отметьте, что сотрудник может делать","uz":"Xodim nima qila olishini belgilang"},
+  "Видит картотеку и карты пациентов": {"en":"Sees the patient register and patient cards","ru":"Видит картотеку и карты пациентов","uz":"Bemorlar ro'yxati va kartalarini ko'radi"},
+  "Может заводить новых пациентов (вместе с разделом «Регистрация пациента»)": {"en":"May create new patients (together with the “Patient registration” section)","ru":"Может заводить новых пациентов (вместе с разделом «Регистрация пациента»)","uz":"Yangi bemor qo'sha oladi («Bemorni ro'yxatga olish» bo'limi bilan birga)"},
+  "Удаляет визит, неоплаченную услугу из сметы и рекомендацию": {"en":"Deletes a visit, an unpaid service line and a recommendation","ru":"Удаляет визит, неоплаченную услугу из сметы и рекомендацию","uz":"Tashrifni, to'lanmagan xizmat qatorini va tavsiyani o'chiradi"},
+  "Ведёт рабочий список лаборатории и вносит результаты": {"en":"Runs the laboratory worklist and enters results","ru":"Ведёт рабочий список лаборатории и вносит результаты","uz":"Laboratoriya ish ro'yxatini yuritadi va natijalarni kiritadi"},
+  "Удаляет отдельный показатель из бланка результата": {"en":"Deletes a single analyte from a result sheet","ru":"Удаляет отдельный показатель из бланка результата","uz":"Natija blankasidan alohida ko'rsatkichni o'chiradi"},
+  "Читает переписку с пациентами": {"en":"Reads the correspondence with patients","ru":"Читает переписку с пациентами","uz":"Bemorlar bilan yozishmalarni o'qiydi"},
+  "Отвечает пациенту от имени клиники": {"en":"Replies to the patient on behalf of the clinic","ru":"Отвечает пациенту от имени клиники","uz":"Klinika nomidan bemorga javob beradi"},
+  "Видит доску обзвона и отчёт": {"en":"Sees the call-round board and its report","ru":"Видит доску обзвона и отчёт","uz":"Obzvon doskasi va hisobotini ko'radi"},
+  "Ставит оценки по обзвону": {"en":"Records call-round assessments","ru":"Ставит оценки по обзвону","uz":"Obzvon bo'yicha baho qo'yadi"},
+  "Видит сводку по клинике за день": {"en":"Sees the clinic's summary for the day","ru":"Видит сводку по клинике за день","uz":"Klinikaning kunlik xulosasini ko'radi"},
+  "Смотрит отчёты за период и выгружает их в Excel": {"en":"Views reports for a period and exports them to Excel","ru":"Смотрит отчёты за период и выгружает их в Excel","uz":"Davr hisobotlarini ko'radi va Excelga chiqaradi"},
+  "Заводит новых пациентов (нужен ещё уровень «заводить пациентов» в разделе «Пациенты»)": {"en":"Creates new patients (also needs the “may create patients” right in the Patients section)","ru":"Заводит новых пациентов (нужен ещё уровень «заводить пациентов» в разделе «Пациенты»)","uz":"Yangi bemor qo'shadi («Bemorlar» bo'limida «bemor qo'shish» huquqi ham kerak)"},
+  "Ведёт обращения и заявки, превращает их в пациентов": {"en":"Handles enquiries and leads, turning them into patients","ru":"Ведёт обращения и заявки, превращает их в пациентов","uz":"Murojaat va arizalarni yuritadi, ularni bemorga aylantiradi"},
+  "Свой кабинет: очередь, приёмы, заключения и назначения": {"en":"Their own room: the queue, appointments, conclusions and prescriptions","ru":"Свой кабинет: очередь, приёмы, заключения и назначения","uz":"O'z kabineti: navbat, qabullar, xulosalar va tayinlovlar"},
+  "Смотрит доску номеров: кто у какого врача и в лаборатории": {"en":"Views the queue board: who is with which doctor and in the laboratory","ru":"Смотрит доску номеров: кто у какого врача и в лаборатории","uz":"Raqamlar doskasini ko'radi: kim qaysi shifokorda va laboratoriyada"},
+  "Ведёт очередь процедур и отмечает выполнение": {"en":"Runs the procedure queue and marks procedures done","ru":"Ведёт очередь процедур и отмечает выполнение","uz":"Muolajalar navbatini yuritadi va bajarilishini belgilaydi"},
+  "Стационар: заявки, размещение на койку и коечный фонд": {"en":"Inpatient ward: orders, placing a patient in a bed and the bed stock","ru":"Стационар: заявки, размещение на койку и коечный фонд","uz":"Statsionar: arizalar, koykaga joylashtirish va koyka fondi"},
+  "Печатает документы по пациентам": {"en":"Prints patient documents","ru":"Печатает документы по пациентам","uz":"Bemorlar bo'yicha hujjatlarni chop etadi"},
+  "Работает в кассе: смена, приём оплат и возвраты": {"en":"Works the cash desk: the shift, taking payments and refunds","ru":"Работает в кассе: смена, приём оплат и возвраты","uz":"Kassada ishlaydi: smena, to'lovlarni qabul qilish va qaytarish"},
+  "Видит смены всех кассиров и сверку": {"en":"Sees every cashier's shift and the reconciliation","ru":"Видит смены всех кассиров и сверку","uz":"Barcha kassirlarning smenalari va solishtiruvni ko'radi"},
+  "Ведёт склад: товары, остатки и поступления": {"en":"Runs the warehouse: goods, stock and receipts","ru":"Ведёт склад: товары, остатки и поступления","uz":"Omborni yuritadi: tovarlar, qoldiqlar va kirimlar"},
+  "Открывает настройки клиники (какие именно — отмечается ниже)": {"en":"Opens the clinic settings (exactly which ones is ticked below)","ru":"Открывает настройки клиники (какие именно — отмечается ниже)","uz":"Klinika sozlamalarini ochadi (qaysilari — quyida belgilanadi)"},
+  "Видит этот раздел настроек": {"en":"Sees this settings section","ru":"Видит этот раздел настроек","uz":"Sozlamalarning ushbu bo'limini ko'radi"},
+  "Добавляет и изменяет строки справочника": {"en":"Adds and edits rows in this catalogue","ru":"Добавляет и изменяет строки справочника","uz":"Ma'lumotnoma qatorlarini qo'shadi va o'zgartiradi"},
+  "Удаляет строки справочника": {"en":"Deletes rows from this catalogue","ru":"Удаляет строки справочника","uz":"Ma'lumotnoma qatorlarini o'chiradi"},
   // ROLE_REACH_V1 (2026-09-06) — «что роль видит, словами» на экране ролей
   "Что увидит сотрудник с этой ролью": {"en":"What this role can reach","ru":"Что увидит сотрудник с этой ролью","uz":"Bu rol nimani ko'radi"},
   "Роль не открывает ни одного раздела — сотрудник не сможет работать.": {"en":"This role opens no section at all — the employee will not be able to work.","ru":"Роль не открывает ни одного раздела — сотрудник не сможет работать.","uz":"Bu rol birorta bo'limni ochmaydi — xodim ishlay olmaydi."},
