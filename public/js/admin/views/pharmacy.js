@@ -1,6 +1,6 @@
 // PHARMACY_V1 — drug-focused inventory + dispensing lens over the products module.
-// Items come from clinic_items WHERE is_drug=true (the «Препарат» flag set in
-// #settings:clinic_items); stock from item_stock (kept by stock_movements);
+// Items come from products WHERE is_drug=true (the «Препарат» flag set in
+// #settings:clinic_items); stock is products.on_hand (kept by the stock RPCs);
 // dispenses from med_administrations (stationary) + visit_services.clinic_item_id
 // (выдача during a visit). Read/operational — purchasing lives in #procurement.
 import { h, Icon, PageHead, toast, clear, fmtDateTime } from '../ui.js';
@@ -33,24 +33,29 @@ export async function renderPharmacy(container, { onNavigate } = {}) {
     // ── Остатки ──
     async function loadStock() {
         if (!cid) return;
+        // WAREHOUSE_NAMES_V1 — офлайн товары лежат в `products`, цена в
+        // `sale_price`, а остаток и порог заказа — прямо в строке товара
+        // (`on_hand`, `reorder_level`). Отдельной таблицы остатков по зданиям
+        // (`item_stock`) здесь нет: склад ОДИН на клинику. Пока стояли облачные
+        // имена, оба запроса отвергались целиком и «Аптека» показывала пустой
+        // список препаратов.
         const [{ data: branches }, { data: items }] = await Promise.all([
-            supabase.from('branches').select('id, name').eq('company_id', cid).eq('active', true).order('name'),
-            supabase.from('clinic_items').select('id, name, code, unit, form, strength, price, active').eq('company_id', cid).eq('is_drug', true).order('name'),
+            supabase.from('branches').select('id, name').eq('active', true).order('name'),
+            supabase.from('products').select('id, name, code, unit, sale_price, on_hand, reorder_level, active')
+                .eq('is_drug', true).order('name'),
         ]);
-        state.branches = branches || []; state.items = items || [];
-        const ids = state.items.map(i => i.id);
-        let stock = [];
-        if (ids.length) {
-            const { data } = await supabase.from('item_stock').select('item_id, branch_id, qty_on_hand, reorder_level').in('item_id', ids);
-            stock = data || [];
-        }
-        state.stock = stock;
+        state.branches = branches || [];
+        state.items = (items || []).map(it => ({ ...it, price: it.sale_price }));
+        state.stock = state.items.map(it => ({
+            item_id: it.id, qty_on_hand: it.on_hand, reorder_level: it.reorder_level,
+        }));
     }
 
     function onHandFor(itemId) {
-        const rows = state.stock.filter(s => s.item_id === itemId && (!state.branchId || s.branch_id === state.branchId));
-        const qty = rows.reduce((a, s) => a + Number(s.qty_on_hand || 0), 0);
-        const reorder = rows.reduce((a, s) => Math.max(a, Number(s.reorder_level || 0)), 0);
+        // Склад один, поэтому выбор здания на остаток не влияет — строка на товар.
+        const row = state.stock.find(s => s.item_id === itemId);
+        const qty = Number((row && row.qty_on_hand) || 0);
+        const reorder = Number((row && row.reorder_level) || 0);
         return { qty, reorder, low: reorder > 0 && qty <= reorder };
     }
 

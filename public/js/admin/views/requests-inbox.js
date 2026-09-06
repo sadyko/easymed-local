@@ -19,8 +19,18 @@ import { bookVisit, setVisitStatus } from './visit-booking.js';
 const RU_MO = ['янв.', 'фев.', 'мар.', 'апр.', 'мая', 'июн.', 'июл.', 'авг.', 'сен.', 'окт.', 'ноя.', 'дек.'];
 const pad = (n) => String(n).padStart(2, '0');
 const SYMPTEX_LIKE = '%Symptex%';
-const ACTIVE_SEL = 'id, patient_id, doctor_id, service_id, branch_id, room_id, visit_date, duration_minutes, notes, visit_no, created_at, status';
-const HIST_SEL = ACTIVE_SEL + ', cancel_reason, cancelled_by, cancelled_at';
+// CLOUD_LEFTOVER_COLUMNS_V1 — четыре колонки из облака, которых офлайн нет:
+// `visit_no` (её здесь никто и не читал — просто висела в списке), а также
+// `cancel_reason` / `cancelled_by` / `cancelled_at`. Из-за первой не грузилась
+// вкладка «Активные», из-за остальных трёх — «История»; то есть экран заявок
+// не показывал НИЧЕГО, и это выглядело как «заявок нет».
+//
+// Причину отказа офлайн записать некуда: отмена идёт через calendar_book,
+// который принимает только статус. Разметка ниже это уже переживает
+// (`v.cancel_reason || '—'`), поэтому колонки просто не запрашиваем — мёртвые
+// поля в базе были бы хуже: они обещают то, чего никто не пишет.
+const ACTIVE_SEL = 'id, patient_id, doctor_id, service_id, branch_id, room_id, visit_date, duration_minutes, notes, created_at, status';
+const HIST_SEL = ACTIVE_SEL;
 
 const OUTCOME = {
     scheduled:   ['Записан',   'var(--primary-700, #115d5a)', 'var(--primary-50, #effaf8)'],

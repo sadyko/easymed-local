@@ -92,18 +92,26 @@ export async function renderDoctorProfile(container, doctorId) {
     try { window.__specLookup = Object.fromEntries(st.specCatalog.map((s) => [s.slug, s])); } catch (e) {}
 
     try {
+        // CLOUD_LEFTOVER_COLUMNS_V1 (2026-09-06) — СПРАШИВАЕМ ТОЛЬКО ТО, ЧТО
+        // В ЭТОЙ БАЗЕ ЕСТЬ.
+        //
+        // Здесь перечислялись 36 колонок, из которых 29 в offline-схеме не
+        // существует вовсе: многоязычные биографии, звания, образование,
+        // Instagram и Telegram — это поля ПУБЛИЧНОГО профиля врача из облачной
+        // версии. Компилятор отвергает запрос ЦЕЛИКОМ из-за любой неизвестной
+        // колонки, поэтому не «не хватало биографии», а не приходило НИЧЕГО:
+        // `st.user` оставался пустым, и экран профиля врача был пуст всегда,
+        // с самого начала.
+        //
+        // Это тот самый класс, из-за которого владелец видит «запрос к базе
+        // отклонён»: одна лишняя колонка гасит целый экран.
         const { data } = await supabase.from('users')
-            .select('id, full_name, phone, specialty, license_number, doctor_category, room_id, ' +
-                'photo_url, instagram_url, telegram_url, experience_years, ' +
-                'full_name_ru, full_name_uz, full_name_en, academic_title_ru, academic_title_uz, academic_title_en, ' +
-                'bio_ru, bio_uz, bio_en, education_ru, education_uz, education_en, ' +
-                'experience_ru, experience_uz, experience_en, ' +
-                'certifications_ru, certifications_uz, certifications_en, ' +
-                'prof_dev_ru, prof_dev_uz, prof_dev_en, ' +
-                'education_entries, experience_entries, certifications_entries, prof_dev_entries')
+            .select('id, full_name, phone, specialty, license_number, doctor_category, room_id')
             .eq('id', doctorId).single();
         st.user = data || {};
     } catch (e) { st.user = {}; }
+    // CLOUD_LEFTOVER_COLUMNS_V1 — колонки `photo_url` у сотрудника офлайн нет:
+    // здесь всегда пусто, и фото задаётся ссылкой («по ссылке») ниже.
     st.photoUrl = st.user.photo_url || '';
 
     try {

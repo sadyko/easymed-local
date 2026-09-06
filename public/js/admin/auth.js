@@ -164,7 +164,12 @@ export async function fetchUserById(id) {
     if (!id) return null;
     const { data, error } = await supabase
         .from('users')
-        .select('id, full_name, username, role, role_id, is_doctor, specialty, license_number, active')   // ADMIN_DOCTOR_V3
+        // CLOUD_LEFTOVER_COLUMNS_V1 — `role_id` здесь БЫЛА ЛИШНЕЙ: в облаке роль
+        // хранится ссылкой на справочник ролей, а офлайн роль лежит прямо в
+        // `users.role`. Колонки нет → компилятор отвергал ВЕСЬ запрос → функция
+        // уходила в `return null`, то есть «такого сотрудника нет». Ниже по коду
+        // `role_id` не читается ни разу.
+        .select('id, full_name, username, role, is_doctor, specialty, license_number, active')   // ADMIN_DOCTOR_V3
         .eq('id', id).limit(1);
     if (error) { console.warn('[auth] fetchUserById failed:', error.message); return null; }
     const u = (data || [])[0];

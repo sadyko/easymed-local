@@ -19,7 +19,7 @@ import { currentClinicId } from '../tenant-tables.js';
 
 const PAGE = 20;
 
-function typeName(t) { return t.name_ru || t.name_uz || t.name_en || '—'; }
+function typeName(t) { return t.name_ru || t.name_uz || t.name || '—'; }
 function num(v) { return (v === '' || v == null) ? null : Number(v); }
 function key(doctorId, typeId) { return doctorId + '|' + typeId; }
 
@@ -46,27 +46,29 @@ export async function renderConsultationTypes(container, ctx = {}) {
     // --- Load everything scoped to the current clinic -----------------------
     let types = [], doctors = [], priceMap = {}, branches = [], branchOf = {};
     try {
+        // CLOUD_LEFTOVER_COLUMNS_V1 — спрашиваем то, что в этой базе есть.
+        // Ни `company_id`, ни `name_en`, ни `duration_minutes` офлайн не
+        // существует; цена вида консультации лежит в `price`, а у филиала одно
+        // название — `name`.
         const [tRes, dRes, pRes, bRes, ubRes] = await Promise.all([
-            supabase.from('consultation_types').select('id, name_ru, name_uz, name_en, default_price, duration_minutes, sort_order, active')
-                .eq('company_id', cid).order('sort_order', { ascending: true }),
-            supabase.from('users').select('id, full_name, specialty, branch_id, company_id, role, is_doctor, license_number')
+            supabase.from('consultation_types').select('id, name, name_ru, name_uz, price, sort_order, active')
+                .order('sort_order', { ascending: true }),
+            supabase.from('users').select('id, full_name, specialty, branch_id, role, is_doctor, license_number')
                 .eq('active', true).order('full_name', { ascending: true }),
-            supabase.from('doctor_consultation_prices').select('doctor_id, consultation_type_id, price, available, is_free, name_ru, name_uz, name_en')
-                .eq('company_id', cid),
-            supabase.from('branches').select('id, name_ru, name')
-                .eq('company_id', cid).order('name_ru', { ascending: true }),
-            supabase.from('user_branches').select('user_id, branch_id')
-                .eq('company_id', cid),
+            supabase.from('doctor_consultation_prices').select('doctor_id, consultation_type_id, price, available, is_free, name_ru, name_uz, name_en'),
+            supabase.from('branches').select('id, name').order('name', { ascending: true }),
+            supabase.from('user_branches').select('user_id, branch_id'),
         ]);
         if (tRes.error) throw tRes.error;
         types = tRes.data || [];
         if (dRes.error) console.warn('[consultation-types] doctors:', dRes.error.message);
         // Mirror loadDoctors(): RLS scopes to the clinic; detect doctors by role/flag/specialty/license,
         // then keep only the current company (defensive — handles super-admins who see all companies).
+        // Отсев по company_id снят вместе с колонкой: база офлайн — это ОДНА
+        // клиника, второго юрлица в ней быть не может.
         else doctors = (dRes.data || [])
             .filter(u => (u.role || '').toLowerCase() === 'doctor' || u.is_doctor === true
-                || (u.specialty || '').length > 0 || (u.license_number || '').length > 0)
-            .filter(u => !cid || !u.company_id || u.company_id === cid);
+                || (u.specialty || '').length > 0 || (u.license_number || '').length > 0);
         if (pRes.error) console.warn('[consultation-types] prices:', pRes.error.message);
         else for (const r of (pRes.data || [])) {
             priceMap[key(r.doctor_id, r.consultation_type_id)] = { price: r.price, available: r.available, is_free: r.is_free, name_ru: r.name_ru, name_uz: r.name_uz, name_en: r.name_en };
@@ -86,7 +88,7 @@ export async function renderConsultationTypes(container, ctx = {}) {
     status.remove();
 
     const branchName = {};
-    for (const b of branches) branchName[b.id] = b.name_ru || b.name || '—';
+    for (const b of branches) branchName[b.id] = b.name || '—';
 
     // ===== Doctors (branch filter + search + edit dialog) ===================
     root.appendChild(renderDoctors(types, doctors, priceMap, cid, branches, branchOf, branchName));
@@ -135,23 +137,23 @@ function renderDefaults(types, cid) {
     const tb = h('tbody');
     for (const t of types) {
         // CONSULT_NAMES_TRI_V1 — names editable in all three languages.
-        edits[t.id] = { name_ru: t.name_ru || '', name_uz: t.name_uz || '', name_en: t.name_en || '', default_price: t.default_price, duration_minutes: (t.duration_minutes != null ? t.duration_minutes : 30), active: t.active !== false };
+        // CLOUD_LEFTOVER_COLUMNS_V1 — на месте английского названия и
+        // длительности теперь ЦЕНА: колонка `price` в базе есть, а те две — нет,
+        // и всё, что в них вводили, компилятор молча выбрасывал при сохранении.
+        edits[t.id] = { name_ru: t.name_ru || '', name_uz: t.name_uz || '', price: (t.price != null ? t.price : ''), active: t.active !== false };
         const nameI = h('input', { type: 'text', value: t.name_ru || '', style: { ...inpStyle, width: '100%' },
             oninput: (e) => { edits[t.id].name_ru = e.currentTarget.value; } });
         const nameUzI = h('input', { type: 'text', value: t.name_uz || '', style: { ...inpStyle, width: '100%' },
             oninput: (e) => { edits[t.id].name_uz = e.currentTarget.value; } });
-        const nameEnI = h('input', { type: 'text', value: t.name_en || '', style: { ...inpStyle, width: '100%' },
-            oninput: (e) => { edits[t.id].name_en = e.currentTarget.value; } });
-        const durI = h('input', { type: 'number', min: '5', step: '5', value: (t.duration_minutes != null ? t.duration_minutes : 30), style: { ...inpStyle, width: '90px' },
-            oninput: (e) => { edits[t.id].duration_minutes = e.currentTarget.value; } });
+        const priceI = h('input', { type: 'number', min: '0', step: '1000', value: (t.price != null ? t.price : ''), style: { ...inpStyle, width: '120px' },
+            oninput: (e) => { edits[t.id].price = e.currentTarget.value; } });
         const activeI = h('input', { type: 'checkbox', checked: t.active !== false,
             onchange: (e) => { edits[t.id].active = e.currentTarget.checked; } });
         tb.appendChild(h('tr', null,
             h('td', { class: 'muted', style: { fontSize: '12.5px', width: '40px' } }, String(t.sort_order ?? '')),
             h('td', null, nameI),
             h('td', null, nameUzI),
-            h('td', null, nameEnI),
-            h('td', { style: { width: '110px' } }, durI),
+            h('td', { style: { width: '140px' } }, priceI),
             h('td', { style: { width: '70px', textAlign: 'center' } }, activeI),
         ));
     }
@@ -160,8 +162,7 @@ function renderDefaults(types, cid) {
             h('th', { style: { width: '40px' } }, '#'),
             h('th', null, 'Name (RU)'),
             h('th', null, 'Name (UZ)'),
-            h('th', null, 'Name (EN)'),
-            h('th', null, 'Длительность (мин)'),
+            h('th', null, 'Цена'),
             h('th', { style: { textAlign: 'center' } }, 'Active'),
         )),
         tb));
@@ -172,11 +173,14 @@ function renderDefaults(types, cid) {
         try {
             for (const t of types) {
                 const e = edits[t.id];
+                // `.eq('company_id', …)` тут тоже валило сохранение целиком:
+                // среди разрешённых отборов consultation_types его нет.
+                const price = (String(e.price).trim() === '' ? null : Number(e.price));
                 const { error } = await supabase.from('consultation_types')
-                    .update({ name_ru: e.name_ru.trim() || null, name_uz: e.name_uz.trim() || null, name_en: e.name_en.trim() || null, duration_minutes: parseInt(e.duration_minutes, 10) || 30, active: !!e.active })
-                    .eq('id', t.id).eq('company_id', cid);
+                    .update({ name_ru: e.name_ru.trim() || null, name_uz: e.name_uz.trim() || null, price, active: !!e.active })
+                    .eq('id', t.id);
                 if (error) throw error;
-                t.name_ru = e.name_ru.trim(); t.name_uz = e.name_uz.trim(); t.name_en = e.name_en.trim(); t.duration_minutes = parseInt(e.duration_minutes, 10) || 30; t.active = !!e.active;
+                t.name_ru = e.name_ru.trim(); t.name_uz = e.name_uz.trim(); t.price = price; t.active = !!e.active;
             }
             toast('Consultation types saved', 'info');
         } catch (err) {

@@ -14,7 +14,10 @@
 //      ни одной записи.
 //   3. views/admission-modal.js просил `users.license_number` — колонка в
 //      таблице есть, но через /api/db не читается → список лечащих врачей
-//      был пустым выпадающим списком.
+//      был пустым выпадающим списком. (Сам номер лицензии с 2026-09-06
+//      разрешён — он печатается на бланках; образцом в тесте ниже стоит
+//      `password_hash`: колонка, которую читать нельзя НИКОГДА, поэтому
+//      образец не «починится» разрешением и правило останется под охраной.)
 //
 // Причина каждый раз одна: ОШИБКА ПРЕВРАЩАЛАСЬ В ПУСТОТУ. db-client вернёт
 // `{ data: null, error }`, вид напишет `.then(({ data }) => …)` и `(data || [])`
@@ -502,10 +505,37 @@ export function scanTree() {
 // ───────────────────────────────────────────────────────────────────────────
 // 4. BASELINE — уже сломанные запросы, найденные при заведении этой проверки.
 //
-// Их 102 (160 строк: у одного запроса бывает несколько виноватых токенов), они
-// живут в чужих файлах и чинятся отдельно — здесь они ЗАМОРОЖЕНЫ ПОИМЁННО,
+// Их было 102 (160 строк: у одного запроса бывает несколько виноватых токенов),
+// они живут в чужих файлах и чинятся отдельно — здесь они ЗАМОРОЖЕНЫ ПОИМЁННО,
 // чтобы тест мог падать на НОВЫХ. Ключ — «файл | таблица | что», без номера
 // строки: строка сдвигается от любой соседней правки, а сам дефект — нет.
+//
+// ── ЧТО ОСТАЛОСЬ ПОСЛЕ ЗАЧИСТКИ 2026-09-06 (CLOUD_LEFTOVER_COLUMNS_V1) ──────
+// Владелец сообщил: «too many of these errors». Разобрано 62 записи из 121 —
+// все, что стояли на ЖИВЫХ экранах: профиль врача, карточка госпитализации,
+// заявки, консультации, мастер услуг, окно визита, аптека, выбор товара в
+// приёме, склад (Заявки/Заказы/Инвентаризация), кэшбэк, вход в систему и
+// «моя выручка за день».
+//
+// Оставшиеся — НЕ на пути сотрудника, и это проверено файл за файлом:
+//   • views/procurement.js (21) — облачный предшественник склада: много мест
+//     хранения, остатки по зданиям, партии. Офлайн склад ОДИН, и раздел
+//     переписан заново (views/inventory.js). Маршрут #procurement уводит на
+//     него, файл оставлен до переноса многоскладской модели.
+//   • views/reports-export.js (14) — выгрузки по облачным полям (комиссии
+//     партнёров, страховое покрытие, закупки). Каждая выгрузка падает мягко,
+//     сама по себе, и соседние не трогает.
+//   • setup-checklist.js (7) — renderSetupChecklist() не вызывается ниоткуда,
+//     его заменил notifications.js (см. шапку views/settings-hub.js).
+//   • section-import-export.js (4) / items-ledger.js (3) — складская часть тех
+//     же облачных имён; открывается только из облачного раздела выше.
+//   • views/marketing.js (3), support-widget.js (2) — модулей офлайн нет вовсе:
+//     маркетинг закрыт заглушкой «Скоро», виджет поддержки не подключён.
+//   • views/employee-editor.js (2) — это НАМЕРЕННАЯ проба: код спрашивает
+//     колонку, чтобы узнать, есть ли она, и спрятать возможность, если нет.
+//     Отказ здесь — правильный ответ, а не дефект.
+//   • cashier-settings.js / referral-settings.js / section-crud.js (по 1) —
+//     облачные настройки, плитки которых из «Настроек» уже убраны.
 //
 // ЭТОТ СПИСОК МОЖЕТ ТОЛЬКО СОКРАЩАТЬСЯ. Починили запрос — уберите строку.
 // Устаревшие записи тест печатает, но падать на них не заставляет: четыре
@@ -513,10 +543,6 @@ export function scanTree() {
 // чужую сборку.
 // ───────────────────────────────────────────────────────────────────────────
 const BASELINE = new Set([
-"public/js/admin/auth.js | users | column \"license_number\"",
-  "public/js/admin/auth.js | users | column \"role_id\"",
-  "public/js/admin/data.js | invoices | column \"total\"",
-  "public/js/admin/data.js | patient_allergies | table",
   "public/js/admin/setup-checklist.js | branches | column \"district\"",
   "public/js/admin/setup-checklist.js | branches | column \"name_en\"",
   "public/js/admin/setup-checklist.js | branches | column \"name_ru\"",
@@ -526,61 +552,15 @@ const BASELINE = new Set([
   "public/js/admin/setup-checklist.js | companies | column \"verification_status\"",
   "public/js/admin/support-widget.js | support_messages | table",
   "public/js/admin/support-widget.js | support_tickets | table",
-  "public/js/admin/views/cashback.js | invoices | column \"tax_amount\"",
   "public/js/admin/views/cashier-settings.js | companies | column \"cashier_shift_mode\"",
-  "public/js/admin/views/consultation-types.js | branches | column \"name_ru\"",
-  "public/js/admin/views/consultation-types.js | branches | order \"name_ru\"",
-  "public/js/admin/views/consultation-types.js | consultation_types | column \"default_price\"",
-  "public/js/admin/views/consultation-types.js | consultation_types | column \"duration_minutes\"",
-  "public/js/admin/views/consultation-types.js | consultation_types | column \"name_en\"",
-  "public/js/admin/views/consultation-types.js | users | column \"company_id\"",
-  "public/js/admin/views/consultation-types.js | users | column \"license_number\"",
-  "public/js/admin/views/consultation.js | admissions | column \"patients(full_name, last_name, first_name, mrn, phone)\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"academic_title_en\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"academic_title_ru\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"academic_title_uz\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"bio_en\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"bio_ru\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"bio_uz\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"certifications_en\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"certifications_entries\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"certifications_ru\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"certifications_uz\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"education_en\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"education_entries\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"education_ru\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"education_uz\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"experience_en\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"experience_entries\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"experience_ru\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"experience_uz\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"experience_years\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"full_name_en\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"full_name_ru\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"full_name_uz\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"instagram_url\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"license_number\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"photo_url\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"prof_dev_en\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"prof_dev_entries\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"prof_dev_ru\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"prof_dev_uz\"",
-  "public/js/admin/views/doctor-profile.js | users | column \"telegram_url\"",
   "public/js/admin/views/employee-editor.js | users | column \"core_doctor_id\"",
   "public/js/admin/views/employee-editor.js | users | column \"extra_role_ids\"",
-  "public/js/admin/views/inventory-docs.js | purchase_orders | column \"purchase_order_items(id)\"",
-  "public/js/admin/views/inventory-docs.js | purchase_requisitions | column \"purchase_requisition_items(id)\"",
-  "public/js/admin/views/inventory-docs.js | stock_counts | column \"stock_count_items(id)\"",
-  "public/js/admin/views/item-picker-modal.js | clinic_items | table",
-  "public/js/admin/views/item-picker-modal.js | item_stock | table",
   "public/js/admin/views/items-ledger.js | clinic_items | table",
   "public/js/admin/views/items-ledger.js | item_stock | table",
   "public/js/admin/views/items-ledger.js | stock_movements | column \"item_id\"",
   "public/js/admin/views/marketing.js | marketing_tasks | table",
   "public/js/admin/views/marketing.js | notification_messages | table",
   "public/js/admin/views/marketing.js | notification_templates | table",
-  "public/js/admin/views/pharmacy.js | clinic_items | table",
-  "public/js/admin/views/pharmacy.js | item_stock | table",
   "public/js/admin/views/procurement.js | batch_stock | table",
   "public/js/admin/views/procurement.js | clinic_items | table",
   "public/js/admin/views/procurement.js | item_stock | table",
@@ -617,23 +597,11 @@ const BASELINE = new Set([
   "public/js/admin/views/reports-export.js | visit_services | column \"referral_source_id\"",
   "public/js/admin/views/reports-export.js | visit_services | column \"visits!inner ( id, visit_date, branch_id, company_id, status, referral_source_id )\"",
   "public/js/admin/views/reports-export.js | visit_services | column \"visits!inner ( visit_date, branch_id, company_id, status, coverage_type )\"",
-  "public/js/admin/views/requests-inbox.js | visits | column \"cancel_reason\"",
-  "public/js/admin/views/requests-inbox.js | visits | column \"cancelled_at\"",
-  "public/js/admin/views/requests-inbox.js | visits | column \"cancelled_by\"",
-  "public/js/admin/views/requests-inbox.js | visits | column \"visit_no\"",
   "public/js/admin/views/section-crud.js | services | column \"core_service_id\"",
   "public/js/admin/views/section-import-export.js | clinic_items | table",
   "public/js/admin/views/section-import-export.js | item_suppliers | filter \"item_id\"",
   "public/js/admin/views/section-import-export.js | stock_movements | column \"item_id\"",
   "public/js/admin/views/section-import-export.js | stock_movements | filter \"item_id\"",
-  "public/js/admin/views/service-picker-modal.js | consultation_types | column \"default_price\"",
-  "public/js/admin/views/service-picker-modal.js | consultation_types | column \"duration_minutes\"",
-  "public/js/admin/views/service-picker-modal.js | consultation_types | column \"name_en\"",
-  "public/js/admin/views/service-picker-modal.js | patient_discounts | filter \"code\"",
-  "public/js/admin/views/service-picker-modal.js | payer_policies | filter \"policy_code\"",
-  "public/js/admin/views/service-picker-modal.js | referral_sources | column \"category_id\"",
-  "public/js/admin/views/visit-modal.js | patients | column \"behavior_note\"",
-  "public/js/admin/views/visit-modal.js | referral_sources | column \"category_id\"",
 ]);
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -714,10 +682,10 @@ test('извлекатель разбирает .or() тем же парсеро
 });
 
 // ─── ТРИ ИСТОРИЧЕСКИХ БАГА: восстановленный исходник должен ловиться ────────
-test('исторический баг №1: admissions.js — patients(mrn, full_name, phone)', () => {
+test('исторический баг №1: admissions.js — колонка связи вне списка', () => {
   const src = [
     "const { data, error } = await supabase.from('admissions')",
-    "    .select('*, patients(mrn, full_name, phone), wards(name), beds(code), users(full_name), '",
+    "    .select('*, patients(mrn, full_name, allergies), wards(name), beds(code), users(full_name), '",
     "          + 'attending:attending_doctor_id(full_name), examined:examined_by(full_name)')",
     "    .in('status', OPEN_STATUSES)",
     "    .order('id', { ascending: false })",
@@ -728,9 +696,17 @@ test('исторический баг №1: admissions.js — patients(mrn, full
   const bad = checkQuery(queries[0]);
   assert.equal(bad.length, 1);
   assert.equal(bad[0].msg, 'unknown embed column');
-  assert.ok(bad[0].what.includes('phone'), bad[0].what);
-  // и без phone тот же запрос обязан быть чистым — иначе тест ловил бы не то
-  const fixed = { ...queries[0], columns: queries[0].columns.replace(', phone', '') };
+  assert.ok(bad[0].what.includes('allergies'), bad[0].what);
+  // EMBED_NAME_PARTS_V1 (2026-09-06) — ОБРАЗЕЦ ЗАМЕНЁН, И ВОТ ПОЧЕМУ.
+  // Здесь стоял настоящий исторический баг: телефона не было в списке колонок
+  // связи, и весь запрос отклонялся целиком, оставляя доску коек пустой.
+  // Телефон и части имени теперь разрешены законно: кабинет врача просит их
+  // для вкладки «Стационар», и те же колонки та же роль и так читает прямым
+  // запросом к patients — доступ не расширился. Но проверка обязана
+  // продолжать ловить ЭТОТ КЛАСС, поэтому образцом взята колонка, которой в
+  // связи нет и быть не должно: аллергии читают из карты пациента, а не
+  // через присоединение к койке.
+  const fixed = { ...queries[0], columns: queries[0].columns.replace(', allergies', '') };
   assert.deepEqual(checkQuery(fixed), []);
 });
 
@@ -783,13 +759,16 @@ test('исторический баг №2: room-calendar.js — пять нес
     'users.branch_id', 'visits.room_id', 'visits.service_id']);
 });
 
-test('исторический баг №3: admission-modal.js — users.license_number', () => {
-  const src = "supabase.from('users').select('id, full_name, specialty, license_number').eq('is_doctor', 1);";
+test('исторический баг №3: колонка есть в таблице, но читать её нельзя', () => {
+  // Механизм тот же, что был с `license_number`: колонка в таблице ЕСТЬ,
+  // поэтому глазами по схеме дефект не виден, — а компилятор отвергает запрос
+  // ЦЕЛИКОМ, и выпадающий список врачей остаётся пустым.
+  const src = "supabase.from('users').select('id, full_name, specialty, password_hash').eq('is_doctor', 1);";
   const { queries } = extractQueries(src, 'views/admission-modal.js');
   const bad = checkQuery(queries[0]);
   assert.equal(bad.length, 1);
   assert.equal(bad[0].msg, 'unknown column');
-  assert.equal(bad[0].what, 'column "license_number"');
+  assert.equal(bad[0].what, 'column "password_hash"');
 });
 
 // ─── СТОРОЖ САМОГО СТОРОЖА ──────────────────────────────────────────────────

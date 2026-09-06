@@ -190,16 +190,16 @@ export function openVisitModal({ visit, patient, doctor, service, onChange, onSt
 async function loadPatientMeta(state) {
     const pid = state.patient?.id;
     if (!pid) return;
-    let { data, error } = await supabase
-        .from('patients').select('behavior_note, creator:created_by(full_name)').eq('id', pid).maybeSingle();
-    if (error && /behavior_note|created_by|creator/i.test(error.message || '')) {
-        // Older schema — skip the unknown columns.
-        ({ data, error } = await supabase.from('patients').select('id').eq('id', pid).maybeSingle());
-        data = data ? {} : null;
-    }
+    // CLOUD_LEFTOVER_COLUMNS_V1 — `behavior_note` (поведенческая пометка о
+    // пациенте) офлайн нет вовсе, и запасной путь ниже её не спасал: он ловил
+    // ошибку по СЛОВУ «behavior_note» в тексте, а компилятор отвечает сухо
+    // «unknown column». Из-за этого отвергался весь запрос, и вместе с пометкой
+    // пропадало «Зарегистрировал: …» — единственное, что здесь работало.
+    const { data, error } = await supabase
+        .from('patients').select('creator:created_by(full_name)').eq('id', pid).maybeSingle();
     if (error) { console.warn('[patient meta]', error.message); return; }
     state.patientCreatedByName = data?.creator?.full_name || '';
-    state.patientBehaviorNote  = data?.behavior_note || '';
+    state.patientBehaviorNote  = '';   // офлайн не хранится — см. выше
 }
 
 export function closeActive() {
@@ -473,14 +473,17 @@ export function referralPickerPair(v) {
     (async () => {
         const [{ data: cats }, { data: srcs }] = await Promise.all([
             supabase.from('referral_source_categories').select('id, name').eq('active', true).order('name'),
-            supabase.from('referral_sources').select('id, name, category_id').eq('active', true).order('name'),
+            // CLOUD_LEFTOVER_COLUMNS_V1 — категория партнёра офлайн текстом в
+            // `category`; из-за `category_id` отвергался ВЕСЬ запрос, и список
+            // источников направления был пуст.
+            supabase.from('referral_sources').select('id, name, category').eq('active', true).order('name'),
         ]);
         categories = cats || [];
         sources    = srcs || [];
 
-        // Derive starting category from the existing source's category_id.
+        // Стартовая категория — из категории уже выбранного источника.
         const initialSource = sources.find(s => s.id === v.referral_source_id);
-        currentCatId = initialSource?.category_id || '';
+        currentCatId = initialSource?.category || '';
 
         clear(categorySelect);
         categorySelect.appendChild(h('option', { value: '' }, 'All categories'));

@@ -347,7 +347,18 @@ export const REGISTRY = {
   users:     { read:{roles:ALL_STAFF, columns:['id','username','full_name','role','is_active','active','extra_roles',
                 'phone','email','specialty','is_doctor','doctor_category','salary_type','salary_fixed','salary_percent',
                 'service_rates','referral_rates','kpi_links','license_expiry_date','room_id','branch_id',
-                'working_hours','scheduling_mode']},   // SCHED_V1 — the wizard's slot engine; branch_id — CALENDAR_BOOKING_V1
+                'working_hours','scheduling_mode',
+                // CLOUD_LEFTOVER_COLUMNS_V1 (2026-09-06) — `license_number` в
+                // таблице ЕСТЬ с миграции 002, но читать её было нельзя, и экран
+                // профиля врача просил её вместе с двумя десятками облачных
+                // полей. Компилятор отвергает запрос целиком из-за любой
+                // неизвестной колонки — профиль был пуст всегда. Номер лицензии
+                // видит весь персонал: он и так печатается на бланках приёма.
+                //
+                // `photo_url` СЮДА НЕ ДОБАВЛЯТЬ: этой колонки у сотрудника в
+                // офлайн-схеме нет вовсе (проверка соответствия реестра схеме
+                // поймала её здесь же). Фото врача офлайн не хранится.
+                'license_number']},   // SCHED_V1 — the wizard's slot engine; branch_id — CALENDAR_BOOKING_V1
                write:{insert:{roles:[]},update:{roles:[]},delete:{roles:[]}},
                // room_id: настройки кабинетов спрашивают «кто закреплён за этим
                // кабинетом» — колонка уже читается строкой выше.
@@ -479,7 +490,14 @@ export const REGISTRY = {
       // именно это (TWO_STEP_DISCHARGE_V1).
       'discharge_outcome'],
     embed: {
-      patients: { table:'patients', fk:'patient_id', columns:['id','mrn','full_name'] },
+      // EMBED_NAME_PARTS_V1 (2026-09-06) — имя пациента ЧАСТЯМИ и телефон.
+      // Кабинет врача (вкладка «Стационар») просит
+      // patients(full_name, last_name, first_name, mrn, phone), а список
+      // разрешал только три колонки — и весь запрос отклонялся целиком с
+      // «admissions — unknown embed column», то есть вкладка оказывалась пустой.
+      // Никакого расширения доступа здесь нет: те же колонки та же роль читает
+      // прямым запросом к patients; список embed'а просто отстал от экранов.
+      patients: { table:'patients', fk:'patient_id', columns:['id','mrn','full_name','first_name','last_name','middle_name','phone','date_of_birth','gender'] },
       beds:     { table:'beds',     fk:'bed_id',     columns:['id','code'] },
       wards:    { table:'wards',    fk:'ward_id',    columns:['id','name'] },
       users:    { table:'users',    fk:'doctor_id',  columns:['id','full_name'] },

@@ -25,7 +25,7 @@ export async function creditCashbackOnPaid(invoiceId) {
         if (!invoiceId) return 0;
 
         const { data: inv, error } = await supabase.from('invoices')
-            .select('id, invoice_number, patient_id, branch_id, payer_id, subtotal, tax_amount, total_amount, status')
+            .select('id, invoice_number, patient_id, branch_id, payer_id, subtotal, total_amount, status')
             .eq('id', invoiceId).maybeSingle();
         if (error || !inv || inv.status !== 'paid' || !inv.patient_id) return 0;
 
@@ -43,11 +43,11 @@ export async function creditCashbackOnPaid(invoiceId) {
         }
         if (!rules || !rules.length) return 0;
 
-        // Base = after-tax (net) amount. Prefer the stored subtotal; otherwise
-        // total minus tax.
+        // База начисления — сумма счёта. Отдельного НДС офлайн нет (он уже в
+        // цене услуги), поэтому вычитать нечего: берём subtotal, а если его не
+        // проставили — итог счёта.
         const total = Number(inv.total_amount || 0);
-        const tax   = Number(inv.tax_amount || 0);
-        let base  = inv.subtotal != null ? Number(inv.subtotal) : Math.max(0, total - tax);
+        let base  = inv.subtotal != null ? Number(inv.subtotal) : total;
         // CATALOG_WIZARD_V2 — the balance-paid portion earns no cashback (and a
         // fully-balance-paid invoice earns none): no cashback-on-cashback.
         try {

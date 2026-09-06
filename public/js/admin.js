@@ -92,7 +92,6 @@ import { renderCrmSettings } from './admin/views/crm-settings.js?v=crmcfg2';   /
 import { renderTelegramChat } from './admin/views/telegram-chat.js?v=tgc4';   // TELEGRAM_CHAT_V1
 import { renderConsultationTypes } from './admin/views/consultation-types.js?v=ct5';   // CONSULTATION_TYPES_RESTORE
 import { renderPharmacy }    from './admin/views/pharmacy.js?v=ph2';   // PHARMACY_V1
-import { renderProcurement }  from './admin/views/procurement.js?v=vendorxlsx2';   // PROCUREMENT_IMPORT_V2
 import { renderRequestsInbox } from './admin/views/requests-inbox.js?v=btnright1';
 import { renderPacs }         from './admin/views/pacs.js';
 import { renderInventory }    from './admin/views/inventory.js?v=inv4';   // INVENTORY_UI_V1 — Suppliers/PO/Requisitions/Counts tabs live
@@ -1016,7 +1015,23 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'doctor-room':   return void await renderDoctorRoom(viewRoot, ctx);   // DOCTOR_ROOM_V1
             case 'pacs':          return void await renderComingSoon(viewRoot, ctx, renderPacs);          // COMING_SOON_V1
             case 'pharmacy':      return void await renderComingSoon(viewRoot, ctx, renderPharmacy);      // COMING_SOON_V1 / PHARMACY_V1
-            case 'procurement':   return void await renderProcurement(viewRoot, ctx);   // PROCUREMENT_LIVE_V1 — unparked from Soon
+            // WAREHOUSE_NAMES_V1 — «Закупки» офлайн живут в #inventory
+            // (PROCUREMENT_REDESIGN_V1, спека 2026-08-05): Склад, Заявки,
+            // Заказы, Товары, Поставщики — всё на таблице `products`.
+            //
+            // Экран #procurement — облачный предшественник этого раздела. Он
+            // рассчитан на ДРУГОЙ склад: много складских мест (stock_locations),
+            // остатки по зданиям (item_stock), партии (batch_stock), товары под
+            // именем clinic_items. Офлайн склад ОДИН на клинику, и ни одной из
+            // этих таблиц нет — поэтому там отвергался каждый запрос, и экран
+            // встречал сотрудника стеной «запрос к базе отклонён».
+            //
+            // В меню его нет; попасть туда можно было только по ссылке из аптеки
+            // или набрав адрес. Уводим на настоящий раздел. Сам файл оставлен:
+            // он понадобится, когда склад с несколькими местами хранения будут
+            // переносить в офлайн, и это решение владельца, а не побочный эффект
+            // правки ошибок.
+            case 'procurement':   return void navigate('inventory');
             case 'marketing':     return void await renderComingSoon(viewRoot, ctx, renderMarketing);     // COMING_SOON_V1
             case 'callcenter':    return void await renderComingSoon(viewRoot, ctx, renderCallCenter);    // COMING_SOON_V1
             case 'reports':       return void await renderReports(viewRoot, ctx);

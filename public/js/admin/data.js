@@ -948,15 +948,11 @@ export async function loadPatientConditions(pid) {
     const rank = { active: 0, resolved: 1 };               // active before resolved (explicit, not lexical)
     return (data || []).sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9));
 }
-export async function loadPatientAllergies(pid) {
-    if (!pid) return [];
-    const { data, error } = await supabase.from('patient_allergies')
-        .select('id,allergen,reaction,severity,note,created_at')
-        .eq('patient_id', pid).order('created_at', { ascending: false });
-    if (error) { console.warn('[loadPatientAllergies]', error.message); return []; }
-    const rank = { severe: 0, moderate: 1, mild: 2 };       // severe-first
-    return (data || []).sort((a, b) => (rank[a.severity] ?? 9) - (rank[b.severity] ?? 9));
-}
+// CLOUD_LEFTOVER_COLUMNS_V1 — здесь была loadPatientAllergies(), читавшая
+// таблицу `patient_allergies`. Такой таблицы в офлайн-базе нет: аллергии лежат
+// текстом в `patients.allergies` и оттуда их берёт карточка пациента. Функцию
+// не вызывал НИКТО — она только ждала первого вызова, чтобы молча вернуть
+// пустой список и выглядеть как «аллергий у пациента нет».
 // Re-derive the free-text cache so shapePatient arrays + header/Сводка counts stay correct.
 // Conditions: mirror ACTIVE only (Сводка «Состояний» counts active). Allergies: mirror all.
 // NOTE: chronic_conditions is therefore active-only and NOT a full-history backup — the
@@ -1070,11 +1066,14 @@ export async function loadMyDayStats(userId) {
     // Revenue + KPI need row data, not just counts.
     let revenueToday = 0;
     try {
+        // CLOUD_LEFTOVER_COLUMNS_V1 — колонки `total` у счёта нет (сумма лежит в
+        // `total_amount`). Запрос отвергался целиком, `data` приходила пустой —
+        // и «моя выручка за сегодня» у каждого сотрудника всегда была 0.
         const { data, error } = await supabase.from('invoices')
-            .select('total_amount, total')
+            .select('total_amount')
             .eq('created_by', userId).gte('created_at', todayIso);
         if (error) console.warn('[myday] invoices:', error.message);
-        revenueToday = (data || []).reduce((s, r) => s + Number(r.total_amount || r.total || 0), 0);
+        revenueToday = (data || []).reduce((s, r) => s + Number(r.total_amount || 0), 0);
     } catch (e) { console.warn('[myday] invoices threw:', e.message); }
 
     // KPI: of the services I added today, how many are completed/billed?

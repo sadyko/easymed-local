@@ -128,20 +128,36 @@ export function renderPurchaseOrdersTab(container) {
     fetchPOsAndPaint();
 }
 
+// CLOUD_LEFTOVER_COLUMNS_V1 — сколько строк в каждом документе. Отдельный
+// запрос вместо вложенной связи: см. пояснение в шапке файла.
+async function countLines(table, parentKey) {
+    const { data, error } = await supabase.from(table).select(parentKey).limit(20000);
+    const by = new Map();
+    if (error) return by;   // счётчик — украшение колонки, из-за него список не пропадает
+    for (const r of (data || [])) {
+        const k = r[parentKey];
+        if (k != null) by.set(k, (by.get(k) || 0) + 1);
+    }
+    return by;
+}
+
 async function fetchPOsAndPaint() {
     const token = ++lastFetchToken;
     loadingRowInto(poRefs.tbody, 6); poRefs.emptyEl.style.display = 'none';
     try {
-        const { data, error } = await supabase.from('purchase_orders')
-            .select('id,po_number,status,total,created_at, suppliers(id,name), purchase_order_items(id)')
-            .order('id', { ascending: false }).limit(200);
+        const [{ data, error }, lineCount] = await Promise.all([
+            supabase.from('purchase_orders')
+                .select('id,po_number,status,total,created_at, suppliers(id,name)')
+                .order('id', { ascending: false }).limit(200),
+            countLines('purchase_order_items', 'po_id'),
+        ]);
         if (token !== lastFetchToken) return;
         if (error) throw error;
         const rows = data || [];
         clear(poRefs.tbody);
         if (!rows.length) { poRefs.emptyEl.style.display = ''; }
         else for (const po of rows) {
-            const nLines = (po.purchase_order_items || []).length;
+            const nLines = lineCount.get(po.id) || 0;
             poRefs.tbody.appendChild(h('tr', { class: 'row-click', style: { cursor: 'pointer' }, onclick: () => openPODetail(po, fetchPOsAndPaint) },
                 h('td', { class: 'cell-strong' }, po.po_number || '—'),
                 h('td', null, (po.suppliers && po.suppliers.name) || h('span', { class: 'muted' }, '—')),
@@ -280,16 +296,19 @@ async function fetchReqsAndPaint() {
     const token = ++lastFetchToken;
     loadingRowInto(reqRefs.tbody, 5); reqRefs.emptyEl.style.display = 'none';
     try {
-        const { data, error } = await supabase.from('purchase_requisitions')
-            .select('id,req_number,status,created_at, departments(id,name), purchase_requisition_items(id)')
-            .order('id', { ascending: false }).limit(200);
+        const [{ data, error }, lineCount] = await Promise.all([
+            supabase.from('purchase_requisitions')
+                .select('id,req_number,status,created_at, departments(id,name)')
+                .order('id', { ascending: false }).limit(200),
+            countLines('purchase_requisition_items', 'req_id'),
+        ]);
         if (token !== lastFetchToken) return;
         if (error) throw error;
         const rows = data || [];
         clear(reqRefs.tbody);
         if (!rows.length) { reqRefs.emptyEl.style.display = ''; }
         else for (const rq of rows) {
-            const nLines = (rq.purchase_requisition_items || []).length;
+            const nLines = lineCount.get(rq.id) || 0;
             reqRefs.tbody.appendChild(h('tr', { class: 'row-click', style: { cursor: 'pointer' }, onclick: () => openReqDetail(rq, fetchReqsAndPaint) },
                 h('td', { class: 'cell-strong' }, rq.req_number || '—'),
                 h('td', null, (rq.departments && rq.departments.name) || h('span', { class: 'muted' }, '—')),
@@ -504,9 +523,12 @@ async function fetchCountsAndPaint() {
     const token = ++lastFetchToken;
     loadingRowInto(countRefs.tbody, 5); countRefs.emptyEl.style.display = 'none';
     try {
-        const { data, error } = await supabase.from('stock_counts')
-            .select('id,count_number,status,posted_at,created_at, stock_count_items(id)')
-            .order('id', { ascending: false }).limit(200);
+        const [{ data, error }, lineCount] = await Promise.all([
+            supabase.from('stock_counts')
+                .select('id,count_number,status,posted_at,created_at')
+                .order('id', { ascending: false }).limit(200),
+            countLines('stock_count_items', 'count_id'),
+        ]);
         if (token !== lastFetchToken) return;
         if (error) throw error;
         const rows = data || [];
@@ -516,7 +538,7 @@ async function fetchCountsAndPaint() {
             countRefs.tbody.appendChild(h('tr', { class: 'row-click', style: { cursor: 'pointer' }, onclick: () => openCountDetail(c, fetchCountsAndPaint) },
                 h('td', { class: 'cell-strong' }, c.count_number || '—'),
                 h('td', null, countStatusTag(c.status)),
-                h('td', { class: 'num' }, String((c.stock_count_items || []).length)),
+                h('td', { class: 'num' }, String(lineCount.get(c.id) || 0)),
                 h('td', null, c.posted_at ? fmtDateTime(c.posted_at) : h('span', { class: 'muted' }, '—')),
                 h('td', null, fmtDateTime(c.created_at))));
         }

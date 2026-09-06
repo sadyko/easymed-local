@@ -1,6 +1,6 @@
 // Item picker modal — "Dispense clinic item(s)" surface. DISPENSE_ITEM_V1
 //
-// Lists the clinic's `clinic_items` (active products: medications,
+// Lists the clinic's `products` (active products: medications,
 // consumables, etc.) with a search box, the current branch on-hand (when a
 // single branch is resolvable, otherwise the sum across branches), price, and
 // unit/form/strength meta.
@@ -25,7 +25,6 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { currentClinicId } from '../tenant-tables.js';
-import { gw } from '../gateway.js';   // ITEM_UNIT_V1 — persist a corrected catalog unit
 
 // ITEM_UNIT_V1 — dispensing counts in the item's unit and price is per unit, so
 // the unit must be explicit to avoid miscounts. Standard units; the item's own
@@ -50,7 +49,7 @@ export function openItemPickerModal({
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: () => close() }));
 
     const state = {
-        items:    [],     // [{ id, name, unit, form, strength, price, active, _onHand }]
+        items:    [],     // [{ id, name, unit, price, active, is_drug, _onHand }]
         search:   initialSearch || '',
         lines:    [],     // DISPENSE_MULTI_V1 — cart: [{ item, qty, unit }]
         loading:  true,
@@ -112,15 +111,23 @@ export function openItemPickerModal({
             return;
         }
         try {
+            // WAREHOUSE_NAMES_V1 — таблица товаров офлайн называется `products`,
+            // цена лежит в `sale_price`, а остаток — прямо в строке товара
+            // (`on_hand`): склад тут ОДИН на клинику, отдельной таблицы остатков
+            // по зданиям нет. `form` и `strength` офлайн не хранятся — ниже они
+            // используются только в поиске и в подписи, где отсеиваются как
+            // пустые.
             const { data: items, error } = await supabase
-                .from('clinic_items')
-                .select('id, name, unit, form, strength, price, active, is_drug')
-                .eq('company_id', cid)
+                .from('products')
+                .select('id, name, unit, sale_price, on_hand, active, is_drug')
                 .eq('active', true)
                 .order('is_drug', { ascending: false }).order('name');
             if (error) throw error;
-            state.items = (items || []).map(it => ({ ...it, _onHand: null }));
-            await loadOnHand(cid);
+            state.items = (items || []).map(it => ({
+                ...it,
+                price:   it.sale_price,
+                _onHand: (it.on_hand == null ? null : Number(it.on_hand)),
+            }));
         } catch (err) {
             toast(err?.message || String(err), 'fail');
             state.items = [];
@@ -130,30 +137,9 @@ export function openItemPickerModal({
         }
     })();
 
-    async function loadOnHand(cid) {
-        try {
-            if (!state.branchId) {
-                const { data: brs } = await supabase
-                    .from('branches').select('id').eq('company_id', cid);
-                if (Array.isArray(brs) && brs.length === 1) state.branchId = brs[0].id;
-            }
-            let q = supabase.from('item_stock')
-                .select('item_id, branch_id, qty_on_hand')
-                .eq('company_id', cid);
-            if (state.branchId) q = q.eq('branch_id', state.branchId);
-            const { data: stock, error } = await q;
-            if (error) throw error;
-            const byItem = {};
-            for (const s of (stock || [])) {
-                byItem[s.item_id] = (byItem[s.item_id] || 0) + Number(s.qty_on_hand || 0);
-            }
-            for (const it of state.items) {
-                if (it.id in byItem) it._onHand = byItem[it.id];
-            }
-        } catch (err) {
-            console.warn('[item-picker] on-hand load failed:', err?.message || err);
-        }
-    }
+    // WAREHOUSE_NAMES_V1 — здесь была loadOnHand(): она искала остатки в
+    // `item_stock` по зданию. Офлайн склад один, остаток приезжает вместе с
+    // товаром (products.on_hand), поэтому второго запроса больше нет.
 
     function filtered() {
         const t = state.search.trim().toLowerCase();
@@ -244,8 +230,11 @@ export function openItemPickerModal({
                 l.unit = unitSel.value;
                 if (l.unit && l.unit !== (l.item.unit || '')) {
                     l.item.unit = l.unit;
-                    gw('/crud/clinic_items/' + l.item.id, { method: 'PATCH', body: { unit: l.unit } })
-                        .catch(err => console.warn('[item-picker] unit save:', err?.message || err));
+                    // WAREHOUSE_NAMES_V1 — правка единицы шла на облачный шлюз
+                    // (/api/v1/crud/...), которого офлайн нет вовсе: исправление
+                    // никогда не сохранялось. Пишем в свою базу.
+                    supabase.from('products').update({ unit: l.unit }).eq('id', l.item.id)
+                        .then(({ error }) => { if (error) console.warn('[item-picker] unit save:', error.message); });
                 }
                 updateSummary();
             });

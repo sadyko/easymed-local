@@ -361,9 +361,12 @@ test('РЕГРЕССИЯ: старый запрос окна реестр отв
         filters: [{ col: 'active', op: 'eq', val: true }], order: [{ col: 'full_name', asc: true }],
     }, HEAD_DOCTOR);
 
-    // Ровно та строка, что стояла в окне до этой правки.
-    assert.throws(() => asUsers('id, full_name, specialty, role, is_doctor, license_number'), /unknown column/,
-        'реестр перестал отвергать license_number — тогда и защищать больше нечего');
+    // Образцом стоял `license_number` — та самая колонка, что роняла список.
+    // С 2026-09-06 она разрешена (её печатают на бланках), поэтому контроль
+    // целится в `password_hash`: эту читать нельзя НИКОГДА, и протухнуть, как
+    // предыдущий образец, он уже не может.
+    assert.throws(() => asUsers('id, full_name, specialty, role, is_doctor, password_hash'), /unknown column/,
+        'реестр перестал отвергать нечитаемую колонку — тогда и защищать больше нечего');
     // …и отличается она от разрешённой ровно этим полем: список ронял НЕ запрос
     // вообще, а одна лишняя колонка.
     assert.doesNotThrow(() => asUsers('id, full_name, specialty, role, is_doctor'));

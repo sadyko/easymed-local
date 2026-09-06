@@ -363,7 +363,9 @@ export function openServicePickerModal({
         // RLS scopes both to the clinic; fail-soft so a missing migration never blocks services.
         try {
             const [_ct, _dc] = await Promise.all([
-                supabase.from('consultation_types').select('id, name_ru, name_uz, name_en, default_price, duration_minutes, sort_order, active').eq('active', true).order('sort_order', { ascending: true }),
+                // CLOUD_LEFTOVER_COLUMNS_V1 — офлайн у вида консультации нет ни
+                // английского названия, ни длительности; цена лежит в `price`.
+                supabase.from('consultation_types').select('id, name, name_ru, name_uz, price, sort_order, active').eq('active', true).order('sort_order', { ascending: true }),
                 supabase.from('doctor_consultation_prices').select('doctor_id, consultation_type_id, price, available, is_free, name_ru, name_uz, name_en'),
             ]);
             state.consultationTypes = (_ct && !_ct.error) ? (_ct.data || []) : [];
@@ -385,7 +387,7 @@ export function openServicePickerModal({
                     id: 'c|' + _did + '|' + _tid,
                     name: consultNameFor(_did, _ct2),
                     price: _dc2.is_free ? 0 : (_dc2.price != null ? Number(_dc2.price) : 0),
-                    duration_minutes: _ct2.duration_minutes || 30,
+                    duration_minutes: 30,   // длительности у вида консультации офлайн нет — приём по умолчанию
                     __consult: true, consultation_type_id: _ct2.id, __ct: _ct2, core_service_id: null,
                     __consultDoctorId: _did, __consultDocName: _doc.full_name || _doc.name || '',
                 });
@@ -2178,10 +2180,16 @@ export function openServicePickerModal({
         return Math.round(base * Math.min(100, Math.max(0, Number(pr.percent || 0))) / 100);
     }
     async function wizApplyCode(code) {
+        // CLOUD_LEFTOVER_COLUMNS_V1 — колонки `code` у скидки офлайн нет: скидки
+        // здесь ИМЕНОВАННЫЕ («Пенсионер», «Сотрудник»). Отбор по несуществующей
+        // колонке отвергал запрос целиком, и на любое слово в поле выпадало
+        // «Скидки недоступны». Ищем по названию, без учёта регистра; список
+        // скидок — десятки строк, отбирать его на стороне базы незачем.
         const { data, error } = await supabase.from('patient_discounts')
-            .select('*').eq('code', code.toUpperCase()).limit(1);
+            .select('*').eq('active', true);
         if (error) { toast(trf('Скидки недоступны: {msg}', { msg: error.message }), 'fail'); return; }
-        const row = (data || [])[0];
+        const want = code.trim().toLowerCase();
+        const row = (data || []).find(d => String(d.name || '').trim().toLowerCase() === want);
         if (!row) { toast('Код не найден.', 'fail'); return; }
         if (!row.active) { toast('Код деактивирован.', 'fail'); return; }
         const today = new Date().toISOString().slice(0, 10);
@@ -2256,7 +2264,9 @@ export function openServicePickerModal({
         try {
             const [c, s] = await Promise.all([
                 supabase.from('referral_source_categories').select('id, name').eq('active', true).order('name'),
-                supabase.from('referral_sources').select('id, name, category_id').eq('active', true).order('name'),
+                // CLOUD_LEFTOVER_COLUMNS_V1 — категория партнёра офлайн хранится
+                // ТЕКСТОМ в `category`, ссылки на справочник нет.
+                supabase.from('referral_sources').select('id, name, category').eq('active', true).order('name'),
             ]);
             wiz.referral.cats = c.data || [];
             wiz.referral.sources = s.data || [];
@@ -2272,10 +2282,10 @@ export function openServicePickerModal({
         const R = wiz.referral;
         const catOpts = (sel) => [
             h('option', { value: '', selected: !sel }, 'Сам пациент'),
-            ...R.cats.map(c => h('option', { value: c.id, selected: sel === c.id }, c.name)),
+            ...R.cats.map(c => h('option', { value: c.name, selected: sel === c.name }, c.name)),
         ];
         const srcOpts = (catId, sel) => {
-            const list = R.sources.filter(s => s.category_id === catId);
+            const list = R.sources.filter(s => (s.category || '') === catId);
             return [h('option', { value: '', selected: !sel }, list.length ? 'Выберите партнёра…' : 'Нет партнёров в категории'),
                     ...list.map(s => h('option', { value: s.id, selected: sel === s.id }, s.name))];
         };
@@ -2482,11 +2492,16 @@ export function openServicePickerModal({
             if (!isPatient && pm.payerId && (pm.policyNumber || '').trim()) {
                 const num = pm.policyNumber.trim();
                 try {
+                    // CLOUD_LEFTOVER_COLUMNS_V1 — офлайн у полиса нет отдельной
+                    // колонки `policy_code`: номер и есть его название (`name`).
+                    // Отбор по ней отвергался, а при вставке молча выбрасывался,
+                    // поэтому на каждый ввод полиса заводилась НОВАЯ строка.
                     const { data: ex } = await supabase.from('payer_policies')
-                        .select('id').eq('payer_id', pm.payerId).eq('policy_code', num).limit(1);
-                    if (ex && ex.length) pm.policyId = ex[0].id;
+                        .select('id').eq('payer_id', pm.payerId).eq('active', true);
+                    const hit = (ex || []).find(r => String(r.name || '').trim() === num);
+                    if (hit) pm.policyId = hit.id;
                     else {
-                        const ins = { payer_id: pm.payerId, policy_code: num, name: num, active: true };
+                        const ins = { payer_id: pm.payerId, name: num, active: true };
                         if (window.CLINIC && window.CLINIC.id) ins.company_id = window.CLINIC.id;
                         const { data: crt, error: cErr } = await supabase.from('payer_policies').insert(ins).select('id').single();
                         if (cErr) console.warn('[wizard] policy create:', cErr.message);

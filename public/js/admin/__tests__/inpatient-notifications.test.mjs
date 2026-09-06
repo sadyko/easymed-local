@@ -257,8 +257,10 @@ test('запрос очередей компилируется у каждой �
 });
 
 test('поле вне реестра валит ВЕСЬ запрос — механизм, а не догадка', () => {
+    // `allergies`, а не `phone`: телефон карточке госпитализации с 2026-09-06
+    // разрешён, а аллергии в этом embed'е не нужны никому.
     const desc = { table: 'admissions', op: 'select',
-        columns: '*, patients(mrn, full_name, phone)', filters: [], order: [] };
+        columns: '*, patients(mrn, full_name, allergies)', filters: [], order: [] };
     assert.throws(() => compile(desc, { id: 6, role: 'nurse', extra_roles: [] }), CompileError,
         'одно лишнее поле в embed обязано отвергать весь запрос — на этом и держится тест выше');
 });

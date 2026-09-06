@@ -555,9 +555,14 @@ test('РЕГРЕССИЯ: запрос экрана «Стационар» пр�
     }
 });
 
-test('РЕГРЕССИЯ: именно `phone` и ронял раздел — реестр отвергает его отказом всему запросу', () => {
+test('РЕГРЕССИЯ: лишнее поле в embed реестр отвергает отказом всему запросу', () => {
     // Отрицательный контроль: верните лишнее поле — и тест выше снова покраснеет.
-    const withPhone = ADMISSION_SELECT.replace('patients(mrn, full_name)', 'patients(mrn, full_name, phone)');
+    //
+    // Образцом здесь стоял `phone` — то самое поле, что роняло раздел. С
+    // 2026-09-06 карточке госпитализации он разрешён (ей нужен телефон
+    // пациента), поэтому контроль целится в `allergies`: аллергии в списке
+    // палат не показывают, и разрешать их в этом embed'е незачем никогда.
+    const withPhone = ADMISSION_SELECT.replace('patients(mrn, full_name)', 'patients(mrn, full_name, allergies)');
     assert.notEqual(withPhone, ADMISSION_SELECT, 'форма запроса изменилась — проверьте контроль');
     assert.throws(() => compileAdmissions(withPhone, { role: 'nurse' }), /unknown embed column/,
         'реестр перестал отвергать лишнее поле — тогда и защищать больше нечего');
