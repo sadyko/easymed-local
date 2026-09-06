@@ -1059,6 +1059,63 @@ export function admissionCaseDocs(db, args, user) {
  *    хватает, — тот же самый, что показывает чек-лист. Выписку по-прежнему
  *    держит гейт эпикриза, а не эта кнопка.
  */
+/**
+ * CASE_FILE_SAVE_V1 (2026-09-06) — СОБРАННАЯ ИСТОРИЯ БОЛЕЗНИ ЛОЖИТСЯ В
+ * ДОКУМЕНТЫ ПАЦИЕНТА, А НЕ ТОЛЬКО В ОКНО ПЕЧАТИ.
+ *
+ * Владелец: «when the pressed the collect history, its will be saved in the
+ * documents section of the patient».
+ *
+ * До сих пор «Собрать историю» открывала окно печати и на этом заканчивалась:
+ * закрыл вкладку — и собранного документа нет нигде. Между тем это и есть та
+ * бумага, которую спрашивают через год: при разборе, при запросе пациента, при
+ * проверке. Она обязана лежать в карте.
+ *
+ * ЧТО СОХРАНЯЕТСЯ. Снимок (`body`) — тот же самый, что уходит в печать: те же
+ * опубликованные редакции, тот же регламентный порядок, та же обложка. Это
+ * ВАЖНО: документ в карте и документ на бумаге должны быть одним и тем же, а
+ * не двумя сборками, которые однажды разойдутся.
+ *
+ * ЧЕРНОВИКИ НЕ ПОПАДАЮТ — их не берёт и сама сборка. Незаконченная запись врача
+ * не имеет права оказаться в подшитой истории болезни, поэтому число
+ * пропущенных черновиков едет рядом (`drafts_excluded`), чтобы собравший видел,
+ * что осталось за бортом.
+ *
+ * НЕПОЛНУЮ ИСТОРИЮ СОБРАТЬ МОЖНО. Пока не хватает документов, `complete` равен
+ * false и список недостающих лежит в `gaps` — но собрать всё равно дают: врачу
+ * бывает нужна выписка «как есть» до того, как оформлены все бумаги. Запрет
+ * здесь означал бы, что до последней подписи история недоступна никому.
+ */
+export function admissionCaseFileSave(db, args, user) {
+  const file = admissionCaseFile(db, args, user);
+  const adm = loadAdmission(db, args && args.admission_id);
+  if (!adm.patient_id) {
+    throw new RpcError('У госпитализации нет пациента — историю болезни некуда подшить.', 400);
+  }
+
+  const cover = file.cover || {};
+  const no = cover.admission_no ? ' № ' + cover.admission_no : '';
+  const title = 'История болезни' + no;
+
+  const row = db.prepare(`
+    INSERT INTO visit_documents (title, doc_type, patient_id, body, created_by)
+    VALUES (?, 'case_file', ?, ?, ?)
+  `).run(title, adm.patient_id, JSON.stringify(file), user && user.id ? user.id : null);
+
+  return {
+    document_id: Number(row.lastInsertRowid),
+    title,
+    patient_id: adm.patient_id,
+    // Тот же снимок, что записан в карту: печать берёт ЕГО, а не собирает
+    // второй раз — две сборки однажды разойдутся, и бумага перестанет
+    // соответствовать подшитому документу.
+    file,
+    complete: file.complete,
+    gaps: file.gaps,
+    drafts_excluded: file.drafts_excluded,
+  };
+}
+
 export function admissionCaseFile(db, args, user) {
   requireRole(user, READ_ROLES, 'История болезни');
   const state = admissionCaseDocs(db, args, user);

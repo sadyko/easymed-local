@@ -513,6 +513,12 @@ export function isModuleAllowed(navId) {
     // тот класс ошибки, который чинила 055. Приём тот же, что у
     // 'cashier-shifts' → 'cashier' строкой выше.
     if (navId === 'admissions') return _effective.has('admissions') || _effective.has('beds');
+    // CASE_WORKSPACE_V1 — история болезни это ЭКРАН раздела «Стационар», а не
+    // отдельный раздел: ключ у них один, по тому же доводу, что у листа
+    // назначений ниже. Лечащий врач ведёт её из кабинета, поэтому
+    // `consultation` открывает её тоже — иначе единственный, кто вправе писать
+    // документы, не дошёл бы до экрана, на котором их пишут.
+    if (navId === 'case-file') return _effective.has('admissions') || _effective.has('beds') || _effective.has('consultation');
     // MAR_SHEET_V1 / MAR_NURSE_V1 / KITCHEN_SHEET_V1 — ещё три экрана ОДНОГО
     // раздела «Стационар и палаты», и ключ у них тот же `beds`, по тому же
     // доводу, что строкой выше: клиника, которой стационар уже выдан, обязана
@@ -661,6 +667,7 @@ export function isRouteAllowed(view) {
     // госпитализации ('#mar-sheet/13', payload.sub), и без него: без номера
     // экран показывает лежащих и просит выбрать. Право одно на оба случая.
     if (view === 'mar-sheet' || view === 'mar-nurse' || view === 'kitchen-sheet' || view === 'discharge') return isModuleAllowed(view);   // TWO_STEP_DISCHARGE_V1 добавил #discharge
+    if (view === 'case-file') return isModuleAllowed('case-file');   // CASE_WORKSPACE_V1
     if (view === 'appointments') return isModuleAllowed('appointments');   // PATIENTS_HUB_V1 — «Календарь записи» едет с ключом `patients`
     if (view === 'cashier-head') return isModuleAllowed('cashier-head');   // CASHIER_HEAD_NAV_V1
     if (view === 'registration') return _effective.has('registration') && canEdit('patients');   // ROLE_AUDIT_V1 (fix #2)

@@ -513,6 +513,20 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
         });
         body.appendChild(casePanel.el);
 
+        // CASE_WORKSPACE_V1 — оформление истории болезни это работа на полчаса
+        // с десятком бумаг, и делают её на рабочем экране, а не в окне поверх
+        // окна. Карточка остаётся местом, откуда туда заходят.
+        body.appendChild(h('button', {
+            class: 'btn btn-outline btn-sm', type: 'button', style: { marginTop: '10px' },
+            onclick: () => {
+                close();
+                // Тот же приём, что у goToMarSheet выше: карточку открывают из
+                // разных мест, и не каждое передаёт навигацию аргументом.
+                const nav = onNavigate || (typeof window !== 'undefined' && window.easymed && window.easymed.navigate);
+                if (nav) nav('case-file', { admissionId: a.id });
+            },
+        }, Icon('Doc', { size: 13 }), ' ', tr('Открыть историю болезни')));
+
         const actions = h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } });
         if (can.admitted) {
             actions.appendChild(h('button', {
@@ -818,8 +832,30 @@ function reviewTitle(kind, mode) {
  *   'view'    — чтение конкретной редакции, включая уже исправленную: ради
  *               неё список редакций и существует.
  */
-export function openAdmissionReviewModal({ admission, kind = 'primary', mode = 'edit', reviewId = null, onDone } = {}) {
-    if (!admission || !admission.id) { toast(tr('Госпитализация не найдена.'), 'fail'); return; }
+/**
+ * CASE_WORKSPACE_V1 (2026-09-06) — ОДИН РЕДАКТОР ДОКУМЕНТА, ДВА МЕСТА, ГДЕ ОН
+ * ЖИВЁТ.
+ *
+ * Владелец: «can we make this, as a doctors cabinet type document editing? in
+ * the left panel step by step documents».
+ *
+ * Раньше документ истории болезни открывался ОКНОМ ПОВЕРХ карточки
+ * госпитализации — окно в окне: чтобы написать десять бумаг, врач десять раз
+ * открывал и закрывал одно поверх другого. Теперь тот же самый редактор
+ * встаёт в правую половину рабочего экрана (views/case-workspace.js), а слева
+ * стоит чек-лист по шагам.
+ *
+ * Поля, загрузка черновика, правила публикации и исправления остались ОДНИ.
+ * Скопировать их во второй экран значило бы завести вторую редакцию правил про
+ * то, что можно исправлять и что считается опубликованным, — и однажды они
+ * разошлись бы. Поэтому здесь строитель, а окно и рабочий экран — два его
+ * потребителя.
+ *
+ * Возвращает {title, icon, fields, submitLabel, submit, secondaryLabel,
+ * secondary} — ровно то, из чего собирается и окно, и правая половина экрана.
+ */
+export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', reviewId = null, onDone } = {}) {
+    if (!admission || !admission.id) { toast(tr('Госпитализация не найдена.'), 'fail'); return null; }
     const p = admission.patients || {};
     const isPrimary = kind === 'primary';
     const isDischarge = kind === 'discharge';
@@ -885,7 +921,7 @@ export function openAdmissionReviewModal({ admission, kind = 'primary', mode = '
         publish,
     });
 
-    modal(reviewTitle(kind, mode), isDischarge || !REVIEW_TITLE[kind] ? 'Doc' : 'Stethoscope', [
+    const editorFields = [
         patientAnchor(p.full_name || '', [p.mrn, admission.department, admission.admission_no].filter(Boolean).join(' · ')),
         field(tr('Жалобы'), complaints),
         field(tr('Объективно'), objective),
@@ -911,7 +947,9 @@ export function openAdmissionReviewModal({ admission, kind = 'primary', mode = '
             ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 tr('Редакция открыта на чтение. Исправление вносят из чек-листа документов.'))
             : null,
-    ], isView ? null : tr(REVIEW_SUBMIT[kind] || 'Опубликовать документ'), async () => {
+    ];
+
+    const submit = async () => {
         if (isPrimary && !diagnosis.value.trim()) { toast(tr('Укажите диагноз.'), 'fail'); return false; }
         const { data, error } = await supabase.rpc('admission_review_save', payload(true));
         if (error) { toast((error.message) || tr('Не удалось сохранить осмотр.'), 'fail'); return false; }
@@ -925,17 +963,36 @@ export function openAdmissionReviewModal({ admission, kind = 'primary', mode = '
             openAdmissionAttendingModal({ admission: Object.assign({}, admission, adm, { patients: p }), onDone });
         }
         return true;
-    }, {
+    };
+
+    // Черновика у исправления нет: пока прежняя редакция действует, а новая ещё
+    // не опубликована, у документа было бы два «настоящих» вида.
+    const secondary = (isView || isCorrection) ? null : async () => {
+        const { data, error } = await supabase.rpc('admission_review_save', payload(false));
+        if (error) { toast((error.message) || tr('Не удалось сохранить черновик.'), 'fail'); return; }
+        if (data && data.review) draftId = data.review.id;
+        toast(tr('Черновик осмотра сохранён.'), 'ok');
+    };
+
+    return {
+        title: reviewTitle(kind, mode),
+        icon: isDischarge || !REVIEW_TITLE[kind] ? 'Doc' : 'Stethoscope',
+        fields: editorFields,
+        submitLabel: isView ? null : tr(REVIEW_SUBMIT[kind] || 'Опубликовать документ'),
+        submit,
+        secondaryLabel: secondary ? tr('Сохранить черновик') : null,
+        secondary,
+    };
+}
+
+/** Тот же редактор — окном поверх карточки (как открывали до сих пор). */
+export function openAdmissionReviewModal(opts = {}) {
+    const ed = buildReviewEditor(opts);
+    if (!ed) return;
+    modal(ed.title, ed.icon, ed.fields, ed.submitLabel, ed.submit, {
         width: 600,
-        // Черновика у исправления нет: пока прежняя редакция действует, а новая
-        // ещё не опубликована, у документа было бы два «настоящих» вида.
-        secondaryLabel: isView || isCorrection ? null : tr('Сохранить черновик'),
-        onSecondary: isView || isCorrection ? null : async () => {
-            const { data, error } = await supabase.rpc('admission_review_save', payload(false));
-            if (error) { toast((error.message) || tr('Не удалось сохранить черновик.'), 'fail'); return; }
-            if (data && data.review) draftId = data.review.id;
-            toast(tr('Черновик осмотра сохранён.'), 'ok');
-        },
+        secondaryLabel: ed.secondaryLabel,
+        onSecondary: ed.secondary,
     });
 }
 

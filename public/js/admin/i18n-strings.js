@@ -3,6 +3,21 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CASE_WORKSPACE_V1 / CASE_FILE_SAVE_V1 (2026-09-06) — история болезни
+  "Выберите документ слева": {"en":"Choose a document on the left","ru":"Выберите документ слева","uz":"Chapdagi hujjatni tanlang"},
+  "Госпитализация не выбрана": {"en":"No admission selected","ru":"Госпитализация не выбрана","uz":"Gospitalizatsiya tanlanmagan"},
+  "Документ сохранён; для печати разрешите всплывающие окна.": {"en":"The document is saved; allow pop-ups to print it.","ru":"Документ сохранён; для печати разрешите всплывающие окна.","uz":"Hujjat saqlandi; chop etish uchun qalqib chiquvchi oynalarga ruxsat bering."},
+  "Её ведут врачи и медсёстры отделения. Доступ открывает администратор клиники.": {"en":"It is kept by the ward's doctors and nurses. Access is granted by the clinic administrator.","ru":"Её ведут врачи и медсёстры отделения. Доступ открывает администратор клиники.","uz":"Uni bo'lim shifokorlari va hamshiralari yuritadi. Ruxsatni klinika administratori beradi."},
+  "Историю болезни открывают из карточки госпитализации в разделе «Стационар».": {"en":"The case file is opened from the admission card in the Inpatient section.","ru":"Историю болезни открывают из карточки госпитализации в разделе «Стационар».","uz":"Kasallik tarixi «Statsionar» bo'limidagi gospitalizatsiya kartasidan ochiladi."},
+  "История болезни закрыта для вашей роли": {"en":"The case file is closed for your role","ru":"История болезни закрыта для вашей роли","uz":"Kasallik tarixi sizning rolingiz uchun yopiq"},
+  "История болезни не загрузилась": {"en":"The case file did not load","ru":"История болезни не загрузилась","uz":"Kasallik tarixi yuklanmadi"},
+  "История болезни подшита в документы пациента": {"en":"The case file is filed into the patient's documents","ru":"История болезни подшита в документы пациента","uz":"Kasallik tarixi bemor hujjatlariga tikildi"},
+  "История болезни подшита в документы пациента. Черновиков не вошло: {n}": {"en":"The case file is filed into the patient's documents. Drafts left out: {n}","ru":"История болезни подшита в документы пациента. Черновиков не вошло: {n}","uz":"Kasallik tarixi bemor hujjatlariga tikildi. Kirmagan qoralamalar: {n}"},
+  "Открыть историю болезни": {"en":"Open the case file","ru":"Открыть историю болезни","uz":"Kasallik tarixini ochish"},
+  "Повторить": {"en":"Try again","ru":"Повторить","uz":"Qayta urinish"},
+  "Собрать историю": {"en":"Assemble the case file","ru":"Собрать историю","uz":"Tarixni yig'ish"},
+  "Список идёт по регламенту: сверху то, что просрочено, ниже — что оформляют дальше.": {"en":"The list follows the regulations: overdue first, then what comes next.","ru":"Список идёт по регламенту: сверху то, что просрочено, ниже — что оформляют дальше.","uz":"Ro'yxat reglament bo'yicha: yuqorida muddati o'tganlar, quyida — keyingisi."},
+  "Это сбой запроса, а не пустая история: {msg}": {"en":"This is a failed request, not an empty case file: {msg}","ru":"Это сбой запроса, а не пустая история: {msg}","uz":"Bu so'rov xatosi, bo'sh tarix emas: {msg}"},
   // CATEGORY_DISCOUNT_V1 / PATIENT_MARKS_V2 (2026-09-06) — карта пациента
   "{n} дн. назад": {"en":"{n} days ago","ru":"{n} дн. назад","uz":"{n} kun oldin"},
   "Категория снята с учёта — скидка по ней больше не действует": {"en":"This category is retired — its discount no longer applies","ru":"Категория снята с учёта — скидка по ней больше не действует","uz":"Bu kategoriya hisobdan chiqarilgan — uning chegirmasi endi amal qilmaydi"},

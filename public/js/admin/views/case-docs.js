@@ -255,8 +255,13 @@ function revisionsBlock(item, onDoc) {
     return { toggle, list };
 }
 
-function itemRow(item, state, onDoc) {
+function itemRow(item, state, onDoc, activeKind = null) {
     const isNext = item.state === 'next';
+    // CASE_WORKSPACE_V1 — на рабочем экране документ открыт СПРАВА, и слева
+    // обязано быть видно, какой именно: иначе после третьей бумаги врач не
+    // помнит, что он сейчас правит. В окне (activeKind не передан) подсветки
+    // нет — там открытый документ и так закрывает собой всё.
+    const isOpen = !!activeKind && item.kind === activeKind;
     const meta = item.state === 'published' ? caseDoneText(item) : caseDueText(item, state);
 
     const open = h('button', {
@@ -299,7 +304,10 @@ function itemRow(item, state, onDoc) {
         style: {
             display: 'flex', alignItems: 'flex-start', gap: '10px',
             padding: '9px 8px 9px 12px', borderRadius: '10px', position: 'relative',
-            background: isNext ? 'var(--primary-50)' : 'transparent',
+            // Открытый сейчас документ важнее «следующего по регламенту»: это
+            // то, что человек делает прямо сейчас.
+            background: isOpen ? 'var(--primary-100, #d6efe9)' : (isNext ? 'var(--primary-50)' : 'transparent'),
+            boxShadow: isOpen ? 'inset 0 0 0 1px var(--primary-300)' : 'none',
         },
     },
     h('span', {
@@ -333,7 +341,7 @@ function itemRow(item, state, onDoc) {
  *        admission-modal.js, и импортировать его отсюда значило бы завести
  *        круговую зависимость между двумя половинами одного экрана.
  */
-export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, onAssemble = null } = {}) {
+export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, onAssemble = null, activeKind = null } = {}) {
     const box = h('div', { style: { display: 'grid', gap: '0' } });
     {
         // Умолчания, а не доверие: панель рисуется в чужой карточке
@@ -383,7 +391,7 @@ export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, on
         box.appendChild(groupLabel(tr('Обязательные · по регламенту')));
         if (required.length) {
             box.appendChild(h('ul', { style: { listStyle: 'none', margin: '0', padding: '0' } },
-                ...required.map((it) => itemRow(it, state, onDoc))));
+                ...required.map((it) => itemRow(it, state, onDoc, activeKind))));
         } else {
             box.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '8px 2px' } },
                 filter === 'overdue' ? tr('Просроченных документов нет.') : tr('Всё оформлено.')));
@@ -393,7 +401,7 @@ export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, on
         box.appendChild(groupLabel(tr('Прочие документы')));
         if (other.length) {
             box.appendChild(h('ul', { style: { listStyle: 'none', margin: '0', padding: '0' } },
-                ...other.map((it) => itemRow(it, state, onDoc))));
+                ...other.map((it) => itemRow(it, state, onDoc, activeKind))));
         } else {
             box.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '6px 2px' } },
                 tr('Ничего не подшито.')));
@@ -428,10 +436,15 @@ export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, on
             foot.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', lineHeight: '1.45' } },
                 trf('Не оформлено из обязательного набора: {list}', { list: caseMissingTitles(state).join(', ') })));
         }
-        foot.appendChild(h('button', {
-            class: 'btn btn-sm', type: 'button', style: { justifySelf: 'start' },
-            onclick: () => onAssemble && onAssemble(),
-        }, Icon('Print', { size: 13 }), ' ', tr('Собрать историю болезни')));
+        // На рабочем экране сборка стоит в шапке (onAssemble не передан):
+        // вторая такая же кнопка в подвале списка шагов означала бы, что их две
+        // разные — а она одна.
+        if (onAssemble) {
+            foot.appendChild(h('button', {
+                class: 'btn btn-sm', type: 'button', style: { justifySelf: 'start' },
+                onclick: () => onAssemble(),
+            }, Icon('Print', { size: 13 }), ' ', tr('Собрать историю болезни')));
+        }
         box.appendChild(foot);
     }
     return box;
@@ -611,15 +624,41 @@ ${body || `<p class="note">${esc(tr('Опубликованных докумен
 }
 /* type-scale-exempt-end */
 
-/** Спросить сборку у сервера и открыть её печатным окном. */
+/**
+ * CASE_FILE_SAVE_V1 (2026-09-06) — СОБРАТЬ = ПОДШИТЬ В КАРТУ, а печать уже
+ * потом.
+ *
+ * Владелец: «when the pressed the collect history, its will be saved in the
+ * documents section of the patient».
+ *
+ * Раньше сборка только открывала окно печати: закрыл вкладку — и собранного
+ * документа нет нигде, хотя это ровно та бумага, которую спрашивают через год.
+ *
+ * ПОРЯДОК ВАЖЕН: сначала сохранение на сервере, и только потом печать. Обратный
+ * порядок в день, когда сохранение откажет, дал бы напечатанную историю,
+ * которой нет в карте, — а человек с бумагой в руках уверен, что она сохранена.
+ *
+ * Печатается ТО ЖЕ САМОЕ, что подшито: сервер возвращает снимок, который сам же
+ * и записал, поэтому бумага и карта не могут разойтись.
+ */
 export async function assembleCaseFile(admissionId) {
-    const { data, error } = await supabase.rpc('admission_case_file', { admission_id: admissionId });
+    const { data, error } = await supabase.rpc('admission_case_file_save', { admission_id: admissionId });
     if (error) { toast(error.message || tr('Не удалось собрать историю болезни.'), 'fail'); return null; }
+
+    const saved = data || {};
+    // Сколько черновиков осталось за бортом — говорим сразу: собравший обязан
+    // знать, что не всё написанное попало в подшитую историю.
+    toast(saved.drafts_excluded
+        ? trf('История болезни подшита в документы пациента. Черновиков не вошло: {n}', { n: saved.drafts_excluded })
+        : tr('История болезни подшита в документы пациента'), 'ok');
+
+    const file = saved.file || saved.body || null;
+    if (!file) return saved;
     const { PRINT_FONT_FACE_CSS } = await import('../../shared/print-fonts.js');
-    const html = caseFilePrintHtml(data, { fontFaceCss: PRINT_FONT_FACE_CSS });
+    const html = caseFilePrintHtml(file, { fontFaceCss: PRINT_FONT_FACE_CSS });
     const w = window.open('', '_blank');
-    if (!w) { toast(tr('Разрешите всплывающие окна для печати.'), 'fail'); return null; }
+    if (!w) { toast(tr('Документ сохранён; для печати разрешите всплывающие окна.'), 'warn'); return saved; }
     w.document.write(html);
     w.document.close();
-    return data;
+    return saved;
 }

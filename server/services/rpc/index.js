@@ -11,7 +11,7 @@ import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transfe
   admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue } from './inpatient.js';   // ADMISSION_ORDER_V1 / TWO_STEP_DISCHARGE_V1
 import { admissionFlowState, inpatientCapabilities } from './inpatient-flow.js';   // INPATIENT_FLOW_V1
 import { admissionReviewSave, admissionSetAttending, admissionChangeAttending, admissionReviewsList, admissionAttendingCandidates,
-  admissionCaseDocs, admissionCaseFile } from './inpatient-reviews.js';   // INPATIENT_REVIEW_V1 / CASE_DOCS_V1
+  admissionCaseDocs, admissionCaseFile, admissionCaseFileSave } from './inpatient-reviews.js';   // INPATIENT_REVIEW_V1 / CASE_DOCS_V1
 import {
   treatmentOrderCreate, treatmentOrderCancel, treatmentOrdersList,
   treatmentAdminMark, treatmentAdminUnmark, treatmentTasksDue,
@@ -275,6 +275,8 @@ export const RPC = {
   // ту же строку, которую пишет admission_review_save выше.
   admission_case_docs:            (db, args, user) => admissionCaseDocs(db, args, user),
   admission_case_file:            (db, args, user) => admissionCaseFile(db, args, user),
+  // CASE_FILE_SAVE_V1 — та же сборка, но подшитая в документы пациента.
+  admission_case_file_save:       (db, args, user) => admissionCaseFileSave(db, args, user),
   // Что ЭТА роль вправе делать в стационаре вообще. Один ответ на экран-очередь
   // вместо запроса по каждой строке: право на шаг зависит от роли, а не от
   // пациента, но считать его в браузере нельзя — матрица живёт на сервере.
