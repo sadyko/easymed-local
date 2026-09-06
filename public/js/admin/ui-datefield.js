@@ -50,9 +50,18 @@ export function enhanceDateField(input) {
     wrap.appendChild(input);
     input.classList.add('uidate-native');
 
+    // Пустое поле обязано говорить, ЧТО оно фильтрует. «Выберите дату» ничего
+    // не объясняет: владелец, увидев такое поле в строке поиска пациентов,
+    // спросил «что это за календарь?» — и был прав. Подпись берётся у самого
+    // поля: сначала placeholder, затем title (у фильтра даты рождения он есть
+    // и звучит как «Поиск по дате рождения»), и только потом общая строка.
+    const emptyLabel = () => input.getAttribute('placeholder')
+        || input.getAttribute('title')
+        || tr('Выберите дату');
+
     function paintField() {
         const iso = input.value;
-        valueEl.textContent = iso ? fmtDate(iso) : (input.getAttribute('placeholder') || tr('Выберите дату'));
+        valueEl.textContent = iso ? fmtDate(iso) : emptyLabel();
         valueEl.classList.toggle('is-empty', !iso);
         field.disabled = !!input.disabled;
         wrap.classList.toggle('is-disabled', !!input.disabled);

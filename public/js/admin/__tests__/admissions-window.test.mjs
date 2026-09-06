@@ -242,12 +242,34 @@ test('имя пациента — САМОЕ КРУПНОЕ на строке (�
     const nameEl = walk(root).find((e) => e.tagName === 'DIV' && e.textContent === 'Иванов Иван Иванович');
     assert.ok(nameEl, 'имя пациента не нарисовано отдельным узлом');
     const nameSize = parseFloat(nameEl.style.fontSize);
-    assert.ok(nameSize >= 16, `имя пациента должно быть крупным, а не ${nameEl.style.fontSize}`);
+
+    // ADM_ROW_CALM_V1 (2026-09-06) — проверяется СТАРШИНСТВО, а не абсолютный
+    // размер. Здесь стоял порог «не меньше 16 px»: он был написан как способ
+    // сказать «имя главное на строке», но говорил не то. Владелец: «the name
+    // and other parts of the admission card is too big» — и был прав: 17 px
+    // восьмисотым начертанием на списке из десяти лежащих превращали отделение
+    // в десять заголовков.
+    //
+    // Защита от «не того пациента» держится на том, что имя КРУПНЕЕ И ЖИРНЕЕ
+    // всего остального на строке, а не на конкретном числе пикселей. Порог
+    // остаётся, но честный: имя обязано стоять ступенью выше основного текста
+    // (12.5/13.5 px), иначе оно сливается с подписью под ним.
+    assert.ok(nameSize >= 15, `имя пациента должно быть крупнее основного текста, а не ${nameEl.style.fontSize}`);
+    assert.ok(Number(nameEl.style.fontWeight) >= 700,
+        `имя пациента должно быть жирным, а не ${nameEl.style.fontWeight || '—'}`);
 
     // Ничто на экране очереди не может быть крупнее имени пациента.
     const bigger = walk(root).filter((e) => e !== nameEl && e.style && e.style.fontSize && parseFloat(e.style.fontSize) > nameSize);
     assert.deepStrictEqual(bigger.map((e) => e.textContent || e.tagName), [],
         'ничто на строке не должно быть крупнее имени пациента');
+
+    // …и подпись под именем обязана остаться ЯВНО мельче: если она подтянется
+    // к имени, взгляд перестанет цепляться за фамилию первой.
+    const metaEl = walk(root).find((e) => e.style && /P-26|койка/.test(e.textContent || ''));
+    if (metaEl && metaEl.style.fontSize) {
+        assert.ok(parseFloat(metaEl.style.fontSize) <= nameSize - 2,
+            'подпись под именем подобралась к нему вплотную: ' + metaEl.style.fontSize);
+    }
 });
 
 // ─── 4. Койка занимается отсюда ─────────────────────────────────────────────

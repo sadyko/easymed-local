@@ -58,6 +58,7 @@ import { renderWardBeds, admissionsHistoryCard } from './ward-beds.js?v=board4';
 // MOTION_REVEAL_V1 — переход между вкладками: панель проявляется, полоса
 // вкладок возвращается в поле зрения. Общий помощник, не свой на экран.
 import { animateIn, smoothScrollTo } from '../motion.js?v=mo1';
+import { pastelFor } from '../pastel.js';   // PASTEL_IDENTITY_V1 — один человек, один оттенок
 
 // Раздел живёт под ключом `beds` («Стационар и палаты»): окно медсестры и доска
 // коек — две стороны одной работы, и раздавать их порознь значило бы выдать
@@ -201,15 +202,23 @@ function patientRow(adm, meta, right, onOpen) {
     const name = (p.full_name || '').trim() || tr('без имени');
     return h('div', {
         style: {
-            display: 'flex', alignItems: 'center', gap: '14px',
-            padding: '14px 16px', borderBottom: '1px solid var(--ink-100)',
+            display: 'flex', alignItems: 'center', gap: '12px',
+            padding: '10px 16px', borderBottom: '1px solid var(--ink-100)',
         },
     },
+        // ADM_ROW_CALM_V1 (2026-09-06) — строка отделения по языку остальной
+        // программы. Здесь кружок был 44 px и залит брендовым цветом, а имя —
+        // 17 px восьмисотым начертанием: на списке из десяти лежащих это десять
+        // тёмных пятен и десять заголовков, и отделение выглядело кричащим.
+        // Оттенок берётся из pastel.js — тот же, что у этого пациента в колонке
+        // дня врача и на карточке приёма: один человек — один цвет во всей
+        // программе, а не «ещё один зелёный кружок».
         h('span', {
+            class: ('adm-av ' + pastelFor(p.id || adm.patient_id || name)).trim(),
             style: {
-                width: '44px', height: '44px', borderRadius: '999px', flex: '0 0 44px',
-                background: 'var(--primary-600, #1f7a72)', color: '#fff',
-                display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: '15px',
+                width: '34px', height: '34px', borderRadius: '999px', flex: '0 0 34px',
+                background: 'var(--p-bg, var(--primary-50))', color: 'var(--p-fg, var(--primary-700))',
+                display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: '12.5px',
             },
         }, initials(name)),
         h('button', {
@@ -221,10 +230,13 @@ function patientRow(adm, meta, right, onOpen) {
                 border: '0', padding: '0', cursor: 'pointer', font: 'inherit',
             },
         },
-            // ИМЯ — САМОЕ КРУПНОЕ НА СТРОКЕ. См. шапку файла: это защита от
-            // «не того пациента», а не типографика.
-            h('div', { style: { fontSize: '17px', fontWeight: 800, color: 'var(--ink-900)', lineHeight: 1.25 } }, name),
-            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '3px' } }, meta)),
+            // ИМЯ ОСТАЁТСЯ САМЫМ КРУПНЫМ И САМЫМ ЖИРНЫМ НА СТРОКЕ — см. шапку
+            // файла: это защита от «не того пациента». Уменьшена ВЕЛИЧИНА, а не
+            // старшинство: 15 px против 12.5 px у подписи, вес 700 против 400.
+            h('div', { style: { fontSize: '15px', fontWeight: 700, color: 'var(--ink-900)', lineHeight: 1.3,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, name),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, meta)),
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flex: 'none', flexWrap: 'wrap' } }, ...right.filter(Boolean)),
     );
 }

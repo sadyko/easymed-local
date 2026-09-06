@@ -18,6 +18,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 // --- крохотный DOM: ровно то, чего касаются эти два модуля ------------------
 class El {
@@ -227,6 +232,32 @@ function dateInput(value, attrs = {}) {
     host.appendChild(el);
     return { el, host };
 }
+
+test('поле не растягивается во всю строку — это ломало каждый фильтр-дату', () => {
+    // Здесь стояло width: 100%, и поиск по дате рождения занял ВСЮ строку
+    // списка пациентов, вытеснив поиск по фамилии; в отчётах так же расползались
+    // «с» и «по». Родное поле шириной со своё содержимое, и обёртка обязана
+    // вести себя так же. Проверяется САМО ПРАВИЛО: раскладку в этом крохотном
+    // DOM воспроизвести нечем, а правило — ровно то место, где ошибка и была.
+    const css = fs.readFileSync(path.join(HERE, '..', '..', '..', 'css', 'admin.css'), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '');
+    const at = css.indexOf('.uisel, .uidate {');
+    assert.notEqual(at, -1, 'правило обёртки переписали — тест смотрит не туда');
+    const rule = css.slice(at, css.indexOf('}', at));
+    // Именно `width`, а не `max-width`: потолок в 100 % как раз нужен, чтобы
+    // длинная подпись не выталкивала поле за край строки.
+    assert.ok(!/(^|[^-])width:\s*100%/.test(rule), 'обёртка снова тянется во всю строку: ' + rule.trim());
+    assert.ok(/width:\s*auto/.test(rule), 'ширина обёртки задана не по содержимому');
+    assert.ok(/\.uidate\s*\{[^}]*min-width/.test(css), 'у поля даты нет минимальной ширины');
+});
+
+test('пустое поле говорит, ЧТО оно фильтрует, а не «выберите дату»', () => {
+    document.body.replaceChildren();
+    const { el } = dateInput('', { title: 'Поиск по дате рождения' });
+    const wrap = enhanceDateField(el);
+    assert.equal(text(wrap.querySelector('.uidate-val')).trim(), 'Поиск по дате рождения',
+        'подпись не объясняет, что это за календарь — именно об этом владелец и спросил');
+});
 
 test('человек видит дату словами, а в поле лежит ГГГГ-ММ-ДД', () => {
     const { el } = dateInput('2019-05-02');
