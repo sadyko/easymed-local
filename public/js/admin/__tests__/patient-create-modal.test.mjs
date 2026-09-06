@@ -110,6 +110,9 @@ try { Object.defineProperty(globalThis, 'navigator', { value: { mediaDevices: nu
 // нет и сохранение проходит; строка — страж находит совпадение.
 let patientRows = [];
 let inserted = [];
+// CATEGORY_DISCOUNT_V1 — справочник категорий клиники. Пустой по умолчанию:
+// экран не имеет права выдумывать категории, которых у клиники нет.
+let categoryRows = [];
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
@@ -124,7 +127,8 @@ globalThis.fetch = async (url, opts = {}) => {
       const row = { id: 'p-new', mrn: 'MRN-NEW', ...body.values };
       return ok({ data: body.single ? row : [row] });
     }
-    const rows = table === 'patients' ? patientRows : [];
+    const rows = table === 'patients' ? patientRows
+      : table === 'patient_categories' ? categoryRows : [];
     return ok({ data: body && body.single ? (rows[0] || null) : JSON.parse(JSON.stringify(rows)), count: rows.length });
   }
   return ok({ data: null });
@@ -319,7 +323,7 @@ test('голый «+998» сохраняется пустым — и в набр
   assert.equal(dlg.collect().phone_secondary, '', 'второй телефон приехал непустым');
 });
 
-test('возраст считается из даты рождения, категория подставляется по возрасту', () => {
+test('возраст считается из даты рождения', () => {
   reset();
   const dlg = modal.buildPatientCreateDialog({});
   const ageEl = walk(dlg.card).find((n) => n.attrs.name === '__age');
@@ -329,16 +333,57 @@ test('возраст считается из даты рождения, кате
   dlg.fields.date_of_birth.value = (y - 30) + '-01-01';
   dlg.fields.date_of_birth.fireInput();
   assert.equal(ageEl.value, '30', 'возраст не посчитался');
-  assert.equal(dlg.fields.patient_category.value, 'Взрослый', 'категория не подставилась');
-
-  const d2 = modal.buildPatientCreateDialog({});
-  d2.fields.date_of_birth.value = (y - 7) + '-01-01';
-  d2.fields.date_of_birth.fireInput();
-  assert.equal(d2.fields.patient_category.value, 'Ребёнок');
 
   // Чистая функция — та же, что раньше жила в registration.js.
   assert.equal(modal.categoryFromAge(0), 'Новорождённый');
+  assert.equal(modal.categoryFromAge(7), 'Ребёнок');
   assert.equal(modal.computeAge(''), null);
+});
+
+// CATEGORY_DISCOUNT_V1 (2026-09-06) — категория приезжает из справочника и
+// СОХРАНЯЕТСЯ.
+//
+// Здесь стоял список из трёх значений, зашитых в код, и поле называлось
+// `patient_category`. Колонки с таким именем в таблице нет, а компилятор
+// молча выбрасывает неизвестные ключи — то есть выбранная категория не
+// сохранялась никогда. Тест это не ловил, потому что проверял значение поля
+// на экране, а не то, что уходит в базу.
+test('категория берётся из справочника клиники и уходит в сохранение', async () => {
+  reset();
+  categoryRows = [
+    { id: 4, name: 'Взрослый', discount_percent: 0 },
+    { id: 5, name: 'VIP', discount_percent: 15 },
+  ];
+  const dlg = modal.buildPatientCreateDialog({});
+  await tick();
+
+  const sel = dlg.fields.category_id;
+  assert.ok(sel, 'поле категории обязано называть колонку category_id — иначе оно никуда не сохранится');
+  const labels = (sel.children || []).map((o) => textOf(o).trim());
+  assert.ok(labels.includes('—'));
+  assert.ok(labels.some((l) => /VIP/.test(l) && /15/.test(l)),
+    'в списке нет категории клиники со скидкой: ' + labels.join(' | '));
+  assert.ok(!labels.includes('Новорождённый'),
+    'экран показал категорию, которой у клиники нет — список зашит в код, а не взят из справочника');
+
+  // Подстановка по возрасту выбирает СУЩЕСТВУЮЩУЮ строку справочника.
+  const y = new Date().getFullYear();
+  dlg.fields.date_of_birth.value = (y - 30) + '-01-01';
+  dlg.fields.date_of_birth.fireInput();
+  assert.equal(sel.value, '4', 'по возрасту не выбралась категория «Взрослый» из справочника');
+});
+
+test('у клиники со своими категориями возрастная подстановка ничего не выдумывает', async () => {
+  reset();
+  categoryRows = [{ id: 9, name: 'Льготник', discount_percent: 50 }];
+  const dlg = modal.buildPatientCreateDialog({});
+  await tick();
+
+  const y = new Date().getFullYear();
+  dlg.fields.date_of_birth.value = (y - 30) + '-01-01';
+  dlg.fields.date_of_birth.fireInput();
+  assert.equal(dlg.fields.category_id.value, '',
+    'подставилась категория, которой в справочнике нет — она бы не сохранилась');
 });
 
 test('дубликат открывает диалог выбора, а «Создать принудительно» доводит вставку', async () => {

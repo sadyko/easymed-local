@@ -163,11 +163,23 @@ export function patientCard(db, args, user) {
     patient: seeDetails ? full : pick(full, IDENTITY_COLUMNS),
     patient_limited: !seeDetails,
     payer_name: null,
+    // CATEGORY_DISCOUNT_V1 — категория и её скидка приезжают ВМЕСТЕ с картой:
+    // иначе экран спрашивал бы справочник отдельным запросом, мимо той двери,
+    // которая решает, видно ли этому сотруднику саму карту.
+    category: null,
     visits: null, services: null, lab_orders: null, lab_results: null,
     invoices: null, invoice_items: null, payments: null,
     docs: null, doc_notes: null,
     visit_count: null, last_visit_date: null,
   };
+
+  if (seeDetails && full.category_id != null) {
+    const c = db.prepare('SELECT id, name, discount_percent, active FROM patient_categories WHERE id = ?')
+      .get(full.category_id);
+    // Снятая с учёта категория показывается, но помечена: пациент в ней
+    // числится, а скидки уже не получает — и это надо видеть, а не гадать.
+    if (c) out.category = { id: c.id, name: c.name, discount_percent: Number(c.discount_percent) || 0, active: !!c.active };
+  }
 
   if (seeDetails && full.payer_id != null && canRead('payers', roles)) {
     const row = db.prepare('SELECT name FROM payers WHERE id = ?').get(full.payer_id);

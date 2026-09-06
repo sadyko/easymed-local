@@ -3,6 +3,12 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CATEGORY_DISCOUNT_V1 / PATIENT_MARKS_V2 (2026-09-06) — карта пациента
+  "{n} дн. назад": {"en":"{n} days ago","ru":"{n} дн. назад","uz":"{n} kun oldin"},
+  "Категория снята с учёта — скидка по ней больше не действует": {"en":"This category is retired — its discount no longer applies","ru":"Категория снята с учёта — скидка по ней больше не действует","uz":"Bu kategoriya hisobdan chiqarilgan — uning chegirmasi endi amal qilmaydi"},
+  "Скидка группы, % — применяется к счетам пациентов этой категории": {"en":"Group discount, % — applied to the invoices of patients in this category","ru":"Скидка группы, % — применяется к счетам пациентов этой категории","uz":"Guruh chegirmasi, % — bu toifadagi bemorlar hisoblariga qo'llanadi"},
+  "Скидка этой группы применяется к счетам автоматически": {"en":"This group's discount is applied to invoices automatically","ru":"Скидка этой группы применяется к счетам автоматически","uz":"Bu guruh chegirmasi hisoblarga avtomatik qo'llanadi"},
+  "У этой группы нет скидки": {"en":"This group has no discount","ru":"У этой группы нет скидки","uz":"Bu guruhda chegirma yo'q"},
   // APPBAR_BACK_V1 — путь назад в верхней панели
   "К плиткам настроек": {"en":"Back to the settings tiles","ru":"К плиткам настроек","uz":"Sozlamalar plitkalariga"},
   "Вернуться": {"en":"Back","ru":"Вернуться","uz":"Orqaga"},

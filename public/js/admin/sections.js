@@ -1000,12 +1000,16 @@ export const SECTIONS = {
         searchColumns: ['name'],
         columns: [
             { key: 'name',        label: 'Name' },
-            { key: 'description', label: 'Description' },
+            // CATEGORY_DISCOUNT_V1 — скидка видна прямо в списке: ради неё
+            // категорию и заводят, и проверять её через открытие каждой строки
+            // значит не проверять вовсе.
+            { key: 'discount_percent', label: 'Скидка, %' },
             { key: 'active',      label: 'Status', type: 'bool' },
         ],
         fields: [
             { key: 'name',        label: 'Category name (e.g. VIP, Pediatric, Regular)', type: 'text', required: true },
-            { key: 'description', label: 'Description', type: 'textarea' },
+            { key: 'discount_percent', label: 'Скидка группы, % — применяется к счетам пациентов этой категории',
+              type: 'number', step: '0.01', default: 0 },
             { key: 'active',      label: 'Active', type: 'bool', default: true },
         ],
     },

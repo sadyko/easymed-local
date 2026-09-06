@@ -4614,6 +4614,30 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
    Стоит ВЫШЕ галочек намеренно: это ответ, а галочки — вопрос, и человек
    читает сверху вниз. Заливка мягкая, без рамки: сводка объясняет карточку, а
    не спорит с ней за внимание. */
+
+/* PATIENT_MARKS_V2 (2026-09-06) — особые отметки пациента.
+   Владелец: «special marks should be more prominent, you can add a pulsating
+   widget».
+   Своей вёрстки полоса НЕ получает: у карточки пациента уже есть готовый набор
+   (.pc-marks / .pc-marks-ic / .pc-marks-tags / .ptag) — он и был системным
+   видом этой панели, просто экран рисовал её встроенными стилями мимо него.
+   Здесь добавлено ровно то, чего в наборе не было: подписи групп и пульс. */
+.pc-marks-group { min-width: 0; }
+.pc-marks-group + .pc-marks-group { margin-top: 7px; }
+.pc-marks-glabel { font-size: 12.5px; color: var(--ink-500); }
+.pc-marks.alert .pc-marks-glabel { color: var(--crit-700); opacity: .85; }
+
+/* Пульс — у ОДНОЙ вещи на экране: два пульсирующих пятна отменяют друг друга.
+   Движение мягкое (тень, не размер): дёргающийся элемент рядом с текстом мешает
+   читать сам текст. Общий выключатель движения гасит его целиком — правило
+   @media (prefers-reduced-motion) в admin.css. */
+@keyframes pc-pulse {
+    0%   { box-shadow: 0 2px 6px rgba(220,38,38,0.40), 0 0 0 0 rgba(220, 38, 38, 0.45); }
+    70%  { box-shadow: 0 2px 6px rgba(220,38,38,0.40), 0 0 0 9px rgba(220, 38, 38, 0); }
+    100% { box-shadow: 0 2px 6px rgba(220,38,38,0.40), 0 0 0 0 rgba(220, 38, 38, 0); }
+}
+.pulse-soft { animation: pc-pulse 2s ease-out infinite; }
+
 .roles-reach { margin: 0 16px 12px; padding: 10px 12px; border-radius: 10px;
     background: var(--ink-25); border: 1px solid var(--ink-100); }
 .roles-reach-h { font-size: 12.5px; font-weight: 700; color: var(--ink-700);

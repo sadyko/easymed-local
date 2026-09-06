@@ -68,7 +68,7 @@ export const REGISTRY = {
     // Пациенты section (full form + Excel import) round-trips every field.
     read:   { roles: ALL_STAFF, columns: ['id','mrn','full_name','first_name','last_name','middle_name',
               'date_of_birth','gender','blood_type','phone','email','national_id','address','nationality',
-              'occupation','emergency_contact_name','emergency_contact_phone','allergies','chronic_conditions',
+              'occupation','emergency_contact_name','emergency_contact_phone','allergies','chronic_conditions','category_id',
               'branch_id','primary_doctor_id','payer_id','referral_source_id','notes','photo_url','active',
               'registration_date','created_by','created_at','updated_at',
               'marital_status','emergency_contact_relation','payer_policy_id','insurance_policy_number','insurance_expiry_date',
@@ -79,13 +79,13 @@ export const REGISTRY = {
       // person it is talking to, it does not edit the existing register.
       insert: { roles: ['admin','registrar','callcenter'], columns: ['mrn','full_name','first_name','last_name','middle_name',
                 'date_of_birth','gender','blood_type','phone','email','national_id','address','nationality',
-                'occupation','emergency_contact_name','emergency_contact_phone','allergies','chronic_conditions',
+                'occupation','emergency_contact_name','emergency_contact_phone','allergies','chronic_conditions','category_id',
                 'branch_id','primary_doctor_id','payer_id','referral_source_id','notes','photo_url','created_by',
                 'active','registration_date',
                 'marital_status','emergency_contact_relation','payer_policy_id','insurance_policy_number','insurance_expiry_date'] },
       update: { roles: ['admin','registrar'], columns: ['mrn','full_name','first_name','last_name','middle_name',
                 'date_of_birth','gender','blood_type','phone','email','national_id','address','nationality',
-                'occupation','emergency_contact_name','emergency_contact_phone','allergies','chronic_conditions',
+                'occupation','emergency_contact_name','emergency_contact_phone','allergies','chronic_conditions','category_id',
                 'branch_id','primary_doctor_id','payer_id','referral_source_id','notes','photo_url','created_by',
                 'active','registration_date',
                 'marital_status','emergency_contact_relation','payer_policy_id','insurance_policy_number','insurance_expiry_date'] },
@@ -412,9 +412,12 @@ export const REGISTRY = {
   consultation_types: { read:{roles:ALL_STAFF,columns:['id','name','name_ru','name_uz','sort_order','price','active','created_at']},
     write:{insert:{roles:['admin'],columns:['name','name_ru','name_uz','sort_order','price','active']},update:{roles:['admin'],columns:['name','name_ru','name_uz','sort_order','price','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
-  patient_categories: { read:{roles:ALL_STAFF,columns:['id','name','tier','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','tier','active']},update:{roles:['admin'],columns:['name','tier','active']},delete:{roles:[]}},
-    filters:['id','active'], embed:{} },
+  // CATEGORY_DISCOUNT_V1 (миграция 107) — discount_percent: скидка группы.
+  // Читают все (карта пациента показывает её рядом с категорией), пишет только
+  // администратор — это деньги клиники, а не оформление.
+  patient_categories: { read:{roles:ALL_STAFF,columns:['id','name','tier','discount_percent','active','created_at']},
+    write:{insert:{roles:['admin'],columns:['name','tier','discount_percent','active']},update:{roles:['admin'],columns:['name','tier','discount_percent','active']},delete:{roles:[]}},
+    filters:['id','active','name'], embed:{} },
   floors: { read:{roles:ALL_STAFF,columns:['id','name','level','active','created_at']},
     write:{insert:{roles:['admin'],columns:['name','level','active']},update:{roles:['admin'],columns:['name','level','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },

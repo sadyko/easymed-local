@@ -114,6 +114,33 @@ export function assertOwnBuilding(db, row, what) {
     `${what} из филиала ${branchName(db, row.sync_origin)} — изменить его можно только там.`, 403);
 }
 
+/**
+ * CATEGORY_DISCOUNT_V1 — процент скидки, закреплённый за категорией пациента.
+ *
+ * Связь по КЛЮЧУ (`patients.category_id`, миграция 107): переименование
+ * категории не рассыпает связь, и сравнивать строки не приходится.
+ *
+ * Только ДЕЙСТВУЮЩИЕ категории: снятая с учёта категория перестаёт давать
+ * скидку — иначе «выключить» её было бы нечем, кроме удаления.
+ *
+ * Возвращает 0 при любой неопределённости: нет пациента, категория не выбрана,
+ * строка справочника удалена, испорченное число. Скидка, взятая из ничего, —
+ * это молча потерянные деньги клиники.
+ */
+export function patientCategoryDiscount(db, patientId) {
+  if (!isPositiveInt(patientId)) return 0;
+  const cat = db.prepare(
+    'SELECT c.discount_percent FROM patients p'
+    + ' JOIN patient_categories c ON c.id = p.category_id AND c.active = 1'
+    + ' WHERE p.id = ?'
+  ).get(patientId);
+  const pct = cat ? Number(cat.discount_percent) : 0;
+  if (!Number.isFinite(pct) || pct <= 0) return 0;
+  // Скидка больше ста процентов — это не подарок, а испорченная строка
+  // справочника; счёт от неё не должен уходить в минус.
+  return Math.min(pct, 100);
+}
+
 export function createInvoiceForVisit(db, args, user) {
   requireRole(user, CREATE_INVOICE_ROLES);
 
@@ -199,7 +226,23 @@ export function createInvoiceForVisit(db, args, user) {
     if (!(typeof discountRaw === 'number' && Number.isFinite(discountRaw) && discountRaw >= 0)) {
       throw new RpcError('discount_amount must be a non-negative number.', 400);
     }
-    const discount = round2(Math.min(discountRaw, subtotal));
+    // CATEGORY_DISCOUNT_V1 (2026-09-06) — СКИДКА ГРУППЫ СЧИТАЕТСЯ ЗДЕСЬ, НА
+    // СЕРВЕРЕ, А НЕ ПРИСЫЛАЕТСЯ БРАУЗЕРОМ.
+    //
+    // Владелец: «when patient selected with the category discount should be
+    // applied». «Применяется сама» и «её присылает экран» — разные вещи: во
+    // втором случае скидка зависит от того, какая страница открыта у кассира и
+    // не устарела ли она, а деньги от этого зависеть не должны. Присланная
+    // скидка остаётся (ручная скидка и промокод — работа кассира), но пол
+    // задаёт категория.
+    //
+    // ПОЛ, А НЕ ЗАМЕНА. Пациент своей группы не лишается никогда: если кассир
+    // дал больше — действует большая скидка, если не дал ничего — действует
+    // скидка группы. Взять меньшую значило бы молча отнять у VIP его условия,
+    // а сложить — дать скидку дважды за одно и то же.
+    const categoryPercent = patientCategoryDiscount(db, visit.patient_id);
+    const categoryDiscount = round2(subtotal * categoryPercent / 100);
+    const discount = round2(Math.min(Math.max(discountRaw, categoryDiscount), subtotal));
     const total = round2(subtotal - discount);
     const invoiceNumber = nextInvoiceNumber(db);
     // A zero-balance invoice (all-free services or 100% discount) has nothing

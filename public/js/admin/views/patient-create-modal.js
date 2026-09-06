@@ -209,11 +209,12 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
     // ---- Левая колонка: личные данные --------------------------------------
     const dobInput = reg('date_of_birth', h('input', { name: 'date_of_birth', type: 'date' }));
     const ageInput = h('input', { name: '__age', readOnly: true, placeholder: '—' });
-    const categorySel = reg('patient_category', categorySelect());
+    const categorySel = reg('category_id', categorySelect());   // CATEGORY_DISCOUNT_V1 — имя поля = имя колонки, иначе collect() соберёт ключ, который сервер молча выбросит
     dobInput.addEventListener('input', () => {
         const age = computeAge(dobInput.value);
         ageInput.value = (age == null || age < 0 || age > 130) ? '' : String(age);
-        if (!categorySel.value) categorySel.value = categoryFromAge(age);
+        // Подставляем ТОЛЬКО если такая категория есть в справочнике клиники.
+        if (!categorySel.value) categorySel.value = categoryOptionByName(categorySel, categoryFromAge(age));
     });
 
     const sexChips = radioChips('gender',
@@ -489,17 +490,64 @@ export function computeAge(iso) {
     return age;
 }
 
+// CATEGORY_DISCOUNT_V1 (2026-09-06) — КАТЕГОРИЯ ИЗ СПРАВОЧНИКА, И ОНА
+// НАКОНЕЦ СОХРАНЯЕТСЯ.
+//
+// Владелец: «the category of the patient should come from the patient category
+// settings».
+//
+// Здесь стоял список из трёх значений, зашитых в код (Взрослый / Ребёнок /
+// Новорождённый). Хуже того: колонки для него в таблице `patients` не
+// существовало вовсе, а компилятор запросов молча выбрасывает ключи, которых
+// нет в списке разрешённых колонок, — то есть выбранная категория не
+// сохранялась НИКОГДА. Регистратор её выбирал, и она исчезала.
+//
+// Теперь поле называет `category_id` (миграция 107 завела и колонку, и ссылку),
+// а варианты приезжают из справочника «Категории пациентов» — того самого, где
+// администратор задаёт скидку группы.
 function categorySelect() {
-    const sel = h('select', { name: 'patient_category' });
+    const sel = h('select', { name: 'category_id' });
     sel.appendChild(h('option', { value: '' }, '—'));
-    for (const opt of ['Взрослый', 'Ребёнок', 'Новорождённый']) sel.appendChild(h('option', { value: opt }, opt));
+    // Список дозагружается: окно обязано открыться сразу, а не ждать сеть.
+    // Пустой справочник — это пустой список, а не выдуманные значения.
+    supabase.from('patient_categories').select('id, name, discount_percent')
+        .eq('active', true).order('name')
+        .then(({ data, error }) => {
+            if (error || !Array.isArray(data)) return;
+            for (const c of data) {
+                const pct = Number(c.discount_percent) || 0;
+                // Имя лежит на самом варианте: подстановка по возрасту ищет
+                // категорию ПО ИМЕНИ, и разбирать ради этого готовую подпись
+                // «VIP (−15%)» значило бы ломаться от смены формата подписи.
+                sel.appendChild(h('option', { value: String(c.id), 'data-name': c.name },
+                    pct > 0 ? c.name + '  (−' + pct + '%)' : c.name));
+            }
+        })
+        .catch(() => { /* нет справочника — поле просто останется с прочерком */ });
     return sel;
 }
+
+// Возрастная подсказка осталась, но теперь она ИЩЕТ категорию с таким именем в
+// справочнике, а не назначает её. Клиника, назвавшая категории по-своему (VIP,
+// сотрудники, льготники), не получит подставленного «Взрослый», которого у неё
+// нет; клиника, оставившая три возрастные — получит, как и раньше.
 export function categoryFromAge(age) {
     if (age == null) return '';
     if (age < 1)  return 'Новорождённый';
     if (age < 18) return 'Ребёнок';
     return 'Взрослый';
+}
+
+/** id категории с таким именем среди вариантов уже загруженного списка. */
+export function categoryOptionByName(sel, name) {
+    if (!sel || !name) return '';
+    const want = String(name).trim().toLowerCase();
+    for (const o of (sel.children || [])) {
+        if (String(o.tagName || '').toUpperCase() !== 'OPTION') continue;
+        const name = o.getAttribute ? o.getAttribute('data-name') : null;
+        if (name && String(name).trim().toLowerCase() === want) return o.value;
+    }
+    return '';
 }
 
 export function radioChips(name, options, getter, setter, { nowrap = false } = {}) {

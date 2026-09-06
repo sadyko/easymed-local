@@ -126,6 +126,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
     // inherit a stale header/rows from whoever was open before). ----
     let patient = null;
     let payerName = null;
+    let category = null;   // CATEGORY_DISCOUNT_V1 — {id, name, discount_percent, active}
     let visits = [];
     let invoices = [];
     let services = [];   // visit_services rows across this patient's visits
@@ -219,6 +220,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         tabAccess = (data && data.tabs) || {};
         patient   = data.patient || null;
         payerName = data.payer_name || null;
+        category  = data.category || null;
         visits    = data.visits || [];
         invoices  = data.invoices || [];
         invoiceItems = data.invoice_items || [];
@@ -426,6 +428,23 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 h('div', { class: 'row', style: { gap: '12px', alignItems: 'center', flexWrap: 'wrap' } },
                     h('h1', { style: { margin: 0, fontSize: '24px', fontWeight: 800, letterSpacing: '-0.01em', color: 'var(--ink-900)' } }, p.full_name || '—'),
                     activePill,
+                    // CATEGORY_DISCOUNT_V1 — категория стоит рядом с именем и
+                    // сразу называет скидку: она влияет на КАЖДЫЙ счёт этого
+                    // пациента, и узнавать о ней в момент оплаты поздно. Без
+                    // скидки — просто ярлык группы, без цифры, которой нет.
+                    category ? h('span', {
+                        class: 'pc-cat' + (category.discount_percent > 0 ? ' has-discount' : '')
+                            + (category.active ? '' : ' is-off'),
+                        title: category.active
+                            ? (category.discount_percent > 0
+                                ? tr('Скидка этой группы применяется к счетам автоматически')
+                                : tr('У этой группы нет скидки'))
+                            : tr('Категория снята с учёта — скидка по ней больше не действует'),
+                    },
+                        Icon('ID', { size: 11 }), ' ', category.name,
+                        category.discount_percent > 0 && category.active
+                            ? h('b', { class: 'pc-cat-pct' }, ' −' + category.discount_percent + '%')
+                            : null) : null,
                 ),
                 demo,
             ),
@@ -439,40 +458,52 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         );
 
         // -- Особые отметки strip --
-        const marks = [(p.allergies || '').trim(), (p.chronic_conditions || '').trim()].filter(Boolean);
+        //
+        // PATIENT_MARKS_V2 (2026-09-06) — владелец: «special marks of the
+        // patient should be more prominent, you can add a pulsating widget».
+        //
+        // ЧТО ЗДЕСЬ ВАЖНЕЕ ЗАМЕТНОСТИ. Аллергия и хроническое заболевание —
+        // РАЗНЫЕ вещи, а лежали в одной куче одинаковыми красными таблетками:
+        // «арахис» и «гипертоническая болезнь» рядом, без подписи, кто из них
+        // кто. Аллергия — это то, от чего пациент может умереть сегодня;
+        // хроническое — то, с чем он живёт годами. Теперь это две группы со
+        // своими подписями и своим цветом, и пульсирует ТОЛЬКО аллергия.
+        //
+        // Пульс — у одной вещи на экране, иначе он перестаёт что-либо значить.
+        // Он же выключается системной настройкой «меньше движения» (правило
+        // .pulse-soft в admin.css) — для того, кому движение мешает читать.
+        const allergyList = splitMarks(p.allergies);
+        const chronicList = splitMarks(p.chronic_conditions);
         const note = (p.notes || '').trim();
-        const flagsStrip = h('div', { style: { padding: '0 20px 16px' } },
-            h('div', {
-                style: {
-                    border: '1px solid var(--primary-200, #b6e2d6)', borderRadius: '12px',
-                    background: 'var(--primary-25, #f4fbf9)', padding: '12px 16px',
-                    display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap',
-                },
-            },
-                h('div', {
-                    style: {
-                        width: '36px', height: '36px', borderRadius: '10px', flex: '0 0 auto',
-                        background: 'var(--primary-700, #0e6e5e)', color: '#fff',
-                        display: 'grid', placeItems: 'center',
-                    },
-                }, Icon('Flag', { size: 16 })),
-                h('div', { style: { minWidth: 0, flex: 1 } },
-                    h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase' } }, 'Особые отметки'),
-                    marks.length
-                        ? h('div', { style: { marginTop: '4px', display: 'flex', gap: '6px', flexWrap: 'wrap' } },
-                            ...marks.map(m => h('span', {
-                                style: { background: 'var(--crit-50, #fef2f2)', color: 'var(--crit-700, #b91c1c)', borderRadius: '999px', padding: '2px 10px', fontSize: '12.5px', fontWeight: 600 },
-                            }, m)))
-                        : h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } }, 'Нет отметок'),
-                ),
-                h('div', { style: { textAlign: 'right', minWidth: '160px', maxWidth: '340px' } },
-                    h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase' } }, 'Последняя заметка'),
-                    h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-                        note || 'Заметок нет'),
-                ),
-                tabEdit('details') ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => openNotesModal() },
-                    Icon('Flag', { size: 13 }), ' Отметки') : null,
+        const markChip = (text, tone, icon) => h('span', { class: 'ptag ' + tone },
+            Icon(icon, { size: 11 }), ' ', text);
+        const markGroup = (label, list, tone, icon) => list.length
+            ? h('div', { class: 'pc-marks-group' },
+                h('span', { class: 'pc-marks-glabel' }, tr(label)),
+                h('div', { class: 'pc-marks-tags' }, ...list.map((m) => markChip(m, tone, icon))))
+            : null;
+        const hasAllergy = allergyList.length > 0;
+        const flagsStrip = h('div', { class: 'pc-marks' + (hasAllergy ? ' alert' : '') },
+            h('div', { class: 'pc-marks-ic' + (hasAllergy ? ' pulse-soft' : '') },
+                Icon(hasAllergy ? 'Warning' : 'Flag', { size: 16 })),
+            h('div', { class: 'pc-marks-body' },
+                h('div', { class: 'pc-marks-title' }, 'Особые отметки'),
+                (allergyList.length || chronicList.length)
+                    ? h('div', null,
+                        markGroup('Аллергии', allergyList, 'crit', 'Warning'),
+                        markGroup('Хронические заболевания', chronicList, 'warn', 'Activity'))
+                    : h('span', { class: 'pc-marks-empty' }, 'Нет отметок'),
             ),
+            // Разделитель и заметка — из того же набора: правая колонка панели
+            // отделена линией, а не пустотой, как и было задумано в стилях.
+            h('div', { class: 'pc-marks-div' }),
+            h('div', { class: 'pc-marks-note' },
+                h('div', { class: 'pc-marks-title' }, 'Последняя заметка'),
+                h('div', { class: 'pc-marks-note-text' }, note || 'Заметок нет'),
+            ),
+            tabEdit('details') ? h('div', { class: 'pc-marks-acts' },
+                h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => openNotesModal() },
+                    Icon('Flag', { size: 13 }), ' Отметки')) : null,
         );
 
         // -- stat row (5 cells, divided) --
@@ -541,10 +572,16 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 tabOpen('details') ? (payerName || '—') : '—',
                 tabOpen('details') ? null : 'вкладка закрыта',
                 null, () => { if (tabOpen('details')) openInsuranceModal(); else gotoTab('details'); }),
+            // Дата словами, а не «2026-08-28»: владелец — «last visit date format
+            // should be like 8 october 2026». Формат берётся общий (fmtDate →
+            // shared/date-words.js), поэтому он одинаков с печатными бланками и
+            // говорит на языке интерфейса, а не на языке системы.
             statCell(tabOpen('visits') ? 'Clock' : 'Lock', '#2563eb', 'Последний визит',
-                lastVisit ? (lastVisit.visit_date || '').slice(0, 10) : '—',
+                lastVisit ? fmtDate(lastVisit.visit_date) : '—',
                 !tabOpen('visits') ? 'вкладка закрыта'
-                    : (daysAgo != null ? (daysAgo === 0 ? 'today' : daysAgo + ' days ago') : 'визитов не было'),
+                    : (daysAgo != null
+                        ? (daysAgo === 0 ? tr('сегодня') : trf('{n} дн. назад', { n: daysAgo }))
+                        : 'визитов не было'),
                 null, () => gotoTab('visits')),
             statCell('Warning',  'var(--ok-600, #16a34a)', 'Аллергии',
                 allergiesText || 'Нет данных', null,
@@ -1021,6 +1058,16 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
     // line with qty and sum) and WHO the doctor was (visit_services rows linked
     // by invoice_item_id). Rows paint immediately; details fill in from three
     // bounded reads (invoice_items → visit_services → users).
+    // Отметки вводят одной строкой через запятую или точку с запятой — так их
+    // и показываем: по одной таблетке на отметку, а не одной длинной строкой,
+    // в которой глаз не находит нужное.
+    function splitMarks(raw) {
+        return String(raw == null ? '' : raw)
+            .split(/[,;\n]+/)
+            .map((x) => x.trim())
+            .filter(Boolean);
+    }
+
     function renderBilling() {
         const wrap = h('div', { class: 'card' });
         wrap.appendChild(h('div', { class: 'card-header' }, h('h3', null, Icon('Receipt', { size: 15 }), ' Счёт')));
@@ -1084,7 +1131,15 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
     // сама, иначе право «не видеть счета» обходилось бы одним запросом.
     function fillBillingDetails(svcCells, docCells) {
         const items = invoiceItems;
-        if (!items.length) return;
+        // Нет строк — это ОТВЕТ, а не ожидание. Ранний возврат оставлял
+        // «Загрузка…» навсегда и там, где загружать больше нечего.
+        if (!items.length) {
+            for (const td of [...svcCells.values(), ...docCells.values()]) {
+                clear(td);
+                td.appendChild(h('span', { class: 'muted' }, '—'));
+            }
+            return;
+        }
 
         const docByItem = new Map();
         for (const it of items) if (it.doctor_name) docByItem.set(it.id, it.doctor_name);
@@ -1096,8 +1151,16 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             byInvoice.set(it.invoice_id, list);
         }
 
+        // BILLING_CELLS_FILLED_V1 (2026-09-06) — ПРОВЕРКА isConnected УБРАНА, И
+        // ЭТО БЫЛ НАСТОЯЩИЙ ДЕФЕКТ, ВИДНЫЙ НА КАЖДОМ ПАЦИЕНТЕ СО СЧЕТАМИ.
+        //
+        // Ячейки создаются здесь же, в renderBilling(), и заполняются ДО того,
+        // как таблица вставлена в документ, — то есть isConnected у них всегда
+        // false, и обе петли не делали ничего. В счетах навсегда оставалось
+        // «Загрузка…» вместо услуг и «…» вместо врача, хотя строки счёта уже
+        // лежали в руках. Защита писалась для асинхронной дозагрузки, которой
+        // здесь давно нет: данные приезжают вместе с картой (rpc patient_card).
         for (const [invId, td] of svcCells) {
-            if (!td.isConnected) continue;   // the tab was switched away
             clear(td);
             const list = byInvoice.get(invId) || [];
             if (!list.length) { td.appendChild(h('span', { class: 'muted' }, '—')); continue; }
@@ -1110,7 +1173,6 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             }
         }
         for (const [invId, td] of docCells) {
-            if (!td.isConnected) continue;
             clear(td);
             const docs = [...new Set((byInvoice.get(invId) || []).map(it => docByItem.get(it.id)).filter(Boolean))];
             td.appendChild(docs.length
