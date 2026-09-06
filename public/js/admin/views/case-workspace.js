@@ -70,9 +70,17 @@ export async function renderCaseWorkspace(container, { payload, onNavigate } = {
 }
 
 async function load() {
+    // Госпитализация читается ТЕМ ЖЕ запросом, что и в карточке
+    // (admission-modal.js): пациент, палата, койка и лечащий врач приезжают
+    // связями. Отдельного RPC для карточки не существует — я сперва позвал
+    // несуществующий `admission_card`, и шапка молча осталась бы без имени
+    // пациента, а редактор — без его данных.
     const [{ data: docs, error: docsErr }, { data: adm }] = await Promise.all([
         supabase.rpc('admission_case_docs', { admission_id: state.admissionId }),
-        supabase.rpc('admission_card', { admission_id: state.admissionId }).catch(() => ({ data: null })),
+        supabase.from('admissions')
+            .select('*, patients(mrn, full_name), wards(name), beds(code), '
+                  + 'attending:attending_doctor_id(full_name, specialty)')
+            .eq('id', state.admissionId).single(),
     ]);
     // Отказ по праву и сбой — РАЗНЫЕ вещи, и экран обязан их различать: пустой
     // список читается как «документов нет», а это ложь в обе стороны.
@@ -80,7 +88,7 @@ async function load() {
     if (!docs || !Array.isArray(docs.items)) { state.failed = 'error'; return; }
     state.failed = null;
     state.docs = docs;
-    state.admission = (adm && (adm.admission || adm)) || state.admission;
+    state.admission = adm || state.admission;
 }
 
 function paint(root, onNavigate) {
