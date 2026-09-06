@@ -99,7 +99,7 @@ const byClass = (root, c) => walk(root).filter((n) => hasClass(n, c));
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------------------
-// ПОСЕВ. «Сегодня» в фикстуре — 5 сентября 2026, 11:00 местного времени.
+// ПОСЕВ. «Сегодня» в фикстуре — ДЕНЬ ПРОГОНА, 11:00 местного времени.
 //
 // Врач A — процент за услугу: приём терапевта (s-1, налог 6%) 40 %,
 //          УЗИ (s-2, налог 0 %) 50 %.
@@ -113,12 +113,57 @@ const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 //   sv3  s-1 · 100 000, счёт inv-2 без скидки, не оплачен
 //        база 100 000; налог 6 % → 94 000; доля 94 000 × 0,40 = 37 600
 //   sv5  s-2 · 300 000, счёта нет → скидки нет, налог 0
-//        доля 300 000 × 0,50 = 150 000            (вчера, 4 сентября)
+//        доля 300 000 × 0,50 = 150 000                          (вчера)
 //   sv6  s-1 · 100 000, счёта нет → 100 000 × 0,94 × 0,40 = 37 600
-//                                                (27 августа — прошлая неделя)
+//                                    (девять дней назад — прошлая неделя)
 // ---------------------------------------------------------------------------
-const NOW = new Date(2026, 8, 5, 11, 0, 0);          // 5 сентября 2026, 11:00
-const at = (y, m, d, hh, mm) => new Date(y, m - 1, d, hh, mm, 0).toISOString();
+// ВРЕМЯ ПОСЕВА — ОТНОСИТЕЛЬНОЕ, А НЕ КАЛЕНДАРНОЕ (2026-09-06).
+//
+// Здесь стояла жёсткая дата — 5 сентября 2026. Тесты, идущие через ЖИВУЮ
+// загрузку, при этом сверяются с настоящими часами: loadDoctorDashboard()
+// ставит state.now = new Date(), и «приёмы сегодня» считаются от НАСТОЯЩЕГО
+// дня. Пока прогон шёл пятого числа, всё сходилось; в полночь посев остался
+// вчерашним, «сегодня» опустело, и два теста упали — не потому, что код
+// изменился, а потому, что наступило шестое.
+//
+// Поэтому день посева — это ВСЕГДА день прогона, а даты выражены смещением:
+// сегодня, вчера, девять дней назад. Все проверяемые числа зависят от ЭТИХ
+// отношений (сегодня / последние 7 дней / предыдущие 7 дней), а не от того,
+// какое сегодня число, — значит и посев обязан говорить отношениями.
+//
+// 11:00 сохранено намеренно: между приёмом 09:30 и приёмом 14:00, чтобы черта
+// «сейчас» вставала в колонке дня ровно там, где её проверяет тест.
+const NOW = (() => { const d = new Date(); d.setHours(11, 0, 0, 0); return d; })();
+/** ISO-время в `off` днях от сегодняшнего дня: at(0, 9, 30) — сегодня 09:30. */
+const at = (off, hh, mm) => {
+    const d = new Date(NOW);
+    d.setDate(d.getDate() + off);
+    d.setHours(hh, mm, 0, 0);
+    return d.toISOString();
+};
+
+/**
+ * Дата рождения по ВОЗРАСТУ и близости дня рождения — по той же причине, что и
+ * даты приёмов: «24 года» при жёсткой дате рождения превращается в 25 в день
+ * её годовщины, и тест начинает падать по календарю, а не по коду.
+ *
+ * `inDays > 0` — день рождения ещё впереди (сегодня человеку ровно `age`),
+ * `inDays <= 0` — уже прошёл. Ради этой границы фикстура и держит пациентку,
+ * у которой день рождения завтра: проверяется, что возраст считается по
+ * СОСТОЯВШЕМУСЯ дню рождения, а не вычитанием годов.
+ *
+ * 29 февраля исключается намеренно: вычитание лет от него в невисокосный год
+ * даёт 1 марта, и граница возраста уехала бы на сутки — раз в четыре года,
+ * то есть тогда, когда причину уже никто не вспомнит.
+ */
+const dob = (age, inDays) => {
+    const d = new Date(NOW);
+    d.setDate(d.getDate() + inDays);
+    d.setFullYear(d.getFullYear() - (inDays > 0 ? age + 1 : age));
+    if (d.getMonth() === 1 && d.getDate() === 29) d.setDate(28);
+    const p2 = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate());
+};
 
 const DOCTOR_A = {
   id: 'u-doc-a', full_name: 'Каримова Азиза', specialty: 'Терапевт', is_doctor: true, active: true, role: 'doctor',
@@ -137,24 +182,24 @@ const DOCTOR_FIX = {
   kpi_links: [], rooms: null,
 };
 
-const P1 = { id: 'p-1', mrn: 'MRN-001', full_name: 'Иванов Пётр', last_name: 'Иванов', first_name: 'Пётр', phone: '+998901112233', date_of_birth: '1990-03-10' };
-const P2 = { id: 'p-2', mrn: 'MRN-002', full_name: 'Саидова Нилуфар', last_name: 'Саидова', first_name: 'Нилуфар', phone: '', date_of_birth: '2001-09-06' };
+const P1 = { id: 'p-1', mrn: 'MRN-001', full_name: 'Иванов Пётр', last_name: 'Иванов', first_name: 'Пётр', phone: '+998901112233', date_of_birth: dob(36, -179) };
+const P2 = { id: 'p-2', mrn: 'MRN-002', full_name: 'Саидова Нилуфар', last_name: 'Саидова', first_name: 'Нилуфар', phone: '', date_of_birth: dob(24, 1) };
 const P3 = { id: 'p-3', mrn: 'MRN-003', full_name: 'Тошев Жасур', last_name: 'Тошев', first_name: 'Жасур', phone: '', date_of_birth: null };
-const P4 = { id: 'p-4', mrn: 'MRN-004', full_name: 'Рахимов Азиз', last_name: 'Рахимов', first_name: 'Азиз', phone: '', date_of_birth: '1975-01-20' };
+const P4 = { id: 'p-4', mrn: 'MRN-004', full_name: 'Рахимов Азиз', last_name: 'Рахимов', first_name: 'Азиз', phone: '', date_of_birth: dob(51, -228) };
 
 const SVC_1 = { id: 's-1', name: 'Приём терапевта', tax_rate: 6, duration_minutes: 30 };
 const SVC_2 = { id: 's-2', name: 'УЗИ брюшной полости', tax_rate: 0, duration_minutes: 20 };
 const ROOM = { id: 'r-1', name: '204', code: '204' };
 
 const VISIT_ROWS = [
-  { id: 'v-4', doctor_id: 'u-doc-a', visit_date: at(2026, 9, 5, 8, 15), duration_minutes: 15, status: 'no_show',   patient_id: 'p-3', service_id: 's-1', room_id: 'r-1', sync_origin: null, patients: P3, services: SVC_1, rooms: ROOM },
-  { id: 'v-1', doctor_id: 'u-doc-a', visit_date: at(2026, 9, 5, 9, 0),  duration_minutes: 30, status: 'arrived',   patient_id: 'p-1', service_id: 's-1', room_id: 'r-1', sync_origin: null, patients: P1, services: SVC_1, rooms: ROOM },
-  { id: 'v-2', doctor_id: 'u-doc-a', visit_date: at(2026, 9, 5, 9, 30), duration_minutes: 30, status: 'scheduled', patient_id: 'p-2', service_id: 's-1', room_id: 'r-1', sync_origin: null, patients: P2, services: SVC_1, rooms: ROOM },
-  { id: 'v-3', doctor_id: 'u-doc-a', visit_date: at(2026, 9, 5, 14, 0), duration_minutes: 20, status: 'confirmed', patient_id: 'p-1', service_id: 's-2', room_id: 'r-1', sync_origin: null, patients: P1, services: SVC_2, rooms: ROOM },
-  { id: 'v-5', doctor_id: 'u-doc-a', visit_date: at(2026, 9, 4, 10, 0), duration_minutes: 20, status: 'arrived',   patient_id: 'p-4', service_id: 's-2', room_id: 'r-1', sync_origin: null, patients: P4, services: SVC_2, rooms: ROOM },
-  { id: 'v-6', doctor_id: 'u-doc-a', visit_date: at(2026, 8, 27, 10, 0), duration_minutes: 30, status: 'arrived',  patient_id: 'p-4', service_id: 's-1', room_id: 'r-1', sync_origin: null, patients: P4, services: SVC_1, rooms: ROOM },
+  { id: 'v-4', doctor_id: 'u-doc-a', visit_date: at(0, 8, 15), duration_minutes: 15, status: 'no_show',   patient_id: 'p-3', service_id: 's-1', room_id: 'r-1', sync_origin: null, patients: P3, services: SVC_1, rooms: ROOM },
+  { id: 'v-1', doctor_id: 'u-doc-a', visit_date: at(0, 9, 0),  duration_minutes: 30, status: 'arrived',   patient_id: 'p-1', service_id: 's-1', room_id: 'r-1', sync_origin: null, patients: P1, services: SVC_1, rooms: ROOM },
+  { id: 'v-2', doctor_id: 'u-doc-a', visit_date: at(0, 9, 30), duration_minutes: 30, status: 'scheduled', patient_id: 'p-2', service_id: 's-1', room_id: 'r-1', sync_origin: null, patients: P2, services: SVC_1, rooms: ROOM },
+  { id: 'v-3', doctor_id: 'u-doc-a', visit_date: at(0, 14, 0), duration_minutes: 20, status: 'confirmed', patient_id: 'p-1', service_id: 's-2', room_id: 'r-1', sync_origin: null, patients: P1, services: SVC_2, rooms: ROOM },
+  { id: 'v-5', doctor_id: 'u-doc-a', visit_date: at(-1, 10, 0), duration_minutes: 20, status: 'arrived',   patient_id: 'p-4', service_id: 's-2', room_id: 'r-1', sync_origin: null, patients: P4, services: SVC_2, rooms: ROOM },
+  { id: 'v-6', doctor_id: 'u-doc-a', visit_date: at(-9, 10, 0), duration_minutes: 30, status: 'arrived',  patient_id: 'p-4', service_id: 's-1', room_id: 'r-1', sync_origin: null, patients: P4, services: SVC_1, rooms: ROOM },
   // Приём ВРАЧА B — в кабинете A его быть не должно ни при каких условиях.
-  { id: 'v-b1', doctor_id: 'u-doc-b', visit_date: at(2026, 9, 5, 10, 0), duration_minutes: 30, status: 'arrived',  patient_id: 'p-2', service_id: 's-1', room_id: null, sync_origin: null, patients: P2, services: SVC_1, rooms: null },
+  { id: 'v-b1', doctor_id: 'u-doc-b', visit_date: at(0, 10, 0), duration_minutes: 30, status: 'arrived',  patient_id: 'p-2', service_id: 's-1', room_id: null, sync_origin: null, patients: P2, services: SVC_1, rooms: null },
 ];
 
 const VS_ROWS = [
@@ -306,15 +351,25 @@ test('каждая цифра дашборда сходится с ручным 
   assert.strictEqual(stats.deltaEarnedPct, 579);
 
   assert.strictEqual(stats.series.length, 14, 'окно ровно 14 дней');
-  assert.strictEqual(stats.series[13].day, '2026-09-05');
+  const todayKey = (() => {
+      const p2 = (n) => String(n).padStart(2, '0');
+      return NOW.getFullYear() + '-' + p2(NOW.getMonth() + 1) + '-' + p2(NOW.getDate());
+  })();
+  assert.strictEqual(stats.series[13].day, todayKey, 'последний столбец графика — сегодняшний день');
   assert.strictEqual(stats.series[13].isToday, true);
   assert.deepStrictEqual(
     { s: stats.series[13].services, e: stats.series[13].earned }, { s: 2, e: 105280 }, 'сегодня');
   assert.deepStrictEqual(
     { s: stats.series[12].services, e: stats.series[12].earned }, { s: 1, e: 150000 }, 'вчера');
-  assert.strictEqual(stats.series[4].day, '2026-08-27');
+  // Девятый день назад — пятый столбец окна из четырнадцати (13 − 9 = 4).
+  const dayKey = (off) => {
+      const d = new Date(NOW); d.setDate(d.getDate() + off);
+      const p2 = (n) => String(n).padStart(2, '0');
+      return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate());
+  };
+  assert.strictEqual(stats.series[4].day, dayKey(-9));
   assert.deepStrictEqual(
-    { s: stats.series[4].services, e: stats.series[4].earned }, { s: 1, e: 37600 }, '27 августа');
+    { s: stats.series[4].services, e: stats.series[4].earned }, { s: 1, e: 37600 }, 'девять дней назад');
   const quiet = stats.series.filter((d) => d.services === 0).length;
   assert.strictEqual(quiet, 11, 'одиннадцать дней без завершённых услуг — и они честные нули');
 
@@ -350,7 +405,7 @@ test('колонка дня — сегодняшние приёмы по вре�
   assert.deepStrictEqual(day.rows.map((r) => r.patientName),
     ['Тошев Жасур', 'Иванов Пётр', 'Саидова Нилуфар', 'Иванов Пётр']);
   assert.deepStrictEqual(day.rows.map((r) => r.age), [null, 36, 24, 36],
-    'возраст на 5 сентября; у Саидовой день рождения 6-го — ещё 24, а не 25');
+    'возраст на сегодня; у Саидовой день рождения ЗАВТРА — значит ещё 24, а не 25');
   assert.deepStrictEqual(day.rows.map((r) => r.arrived), [false, true, false, false]);
   assert.deepStrictEqual(day.rows.map((r) => r.past), [true, true, true, false]);
   assert.strictEqual(day.nowAt, 3, 'черта «сейчас» стоит перед приёмом на 14:00');

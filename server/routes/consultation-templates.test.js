@@ -22,6 +22,7 @@ import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { hashPassword } from '../services/auth.js';
 import { createApp } from '../app.js';
+import { licensedDataDir } from '../services/control/licensed-fixture.js';   // LICENCE_FIXTURE_V1
 import { listen } from '../../control-plane/server/test-helpers/listen.js';
 
 const BODY = {
@@ -35,7 +36,11 @@ async function startServer() {
   migrate(db);
   db.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)')
     .run('doc', hashPassword('password1'), 'Каримова Азиза', 'doctor');
-  const server = await listen(createApp(db));
+// LICENCE_FIXTURE_V1 — каталог данных задаётся ЯВНО. createApp(db) без него
+// берёт настоящую папку ./data проекта: на машине разработчика она активирована,
+// а на сборочной — нет, и тест «работает у меня» падает в сборке (так и вышло
+// с v0.9.0). Права лицензии этот файл не проверяет, поэтому берёт готовую.
+  const server = await listen(createApp(db, { dataDir: licensedDataDir() }));
   return { db, server, base: `http://127.0.0.1:${server.address().port}` };
 }
 async function login(base) {
