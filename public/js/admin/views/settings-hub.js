@@ -730,8 +730,11 @@ async function renderEditor(container, key) {
     const syncSlot = key === 'branches' ? h('div') : null;
 
     container.appendChild(h('div', { class: 'fade-in' },
+        // APPBAR_BACK_V1 — это возврат ВНУТРИ раздела (из справочника к плиткам),
+        // а не к другому экрану, поэтому кнопка остаётся здесь. Была
+        // по-английски посреди русского экрана — теперь на языке интерфейса.
         h('button', { class: 'btn btn-outline btn-sm', type: 'button', style: { marginBottom: '14px' }, onclick: backToHub },
-            Icon('ChevronLeft', { size: 14 }), ' Back to settings'),
+            Icon('ChevronLeft', { size: 14 }), ' ', tr('К плиткам настроек')),
         h('div', { class: 'page-head' },
             h('div', null, h('h1', { class: 'page-title' }, cfg.title)),
         ),

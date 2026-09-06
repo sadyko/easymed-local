@@ -222,7 +222,10 @@ test('ничего не потеряло вход: Компания → document
   assert.ok(dbTables.includes('branches'), 'читается именно таблица branches: ' + dbTables.join(', '));
   const text = textOf(root);
   assert.ok(text.includes('Main Branch'), 'строка филиала на экране');
-  assert.ok(text.includes('Back to settings'), 'кнопка возврата в хаб');
+  // APPBAR_BACK_V1 — возврат ВНУТРИ раздела (из справочника к плиткам)
+  // остался здесь, но перестал быть по-английски посреди русского экрана.
+  assert.ok(text.includes('К плиткам настроек'), 'кнопка возврата в хаб');
+  assert.ok(!text.includes('Back to settings'), 'английская надпись вернулась');
 });
 
 test('группа «Системные настройки» не тронута', async () => {

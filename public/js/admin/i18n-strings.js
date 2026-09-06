@@ -3,6 +3,9 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // APPBAR_BACK_V1 — путь назад в верхней панели
+  "К плиткам настроек": {"en":"Back to the settings tiles","ru":"К плиткам настроек","uz":"Sozlamalar plitkalariga"},
+  "Вернуться": {"en":"Back","ru":"Вернуться","uz":"Orqaga"},
   // ROLE_ACTIONS_V1 — прочерк на месте несуществующего права
   "В этом разделе такого права нет: он либо открыт, либо закрыт": {"en":"There is no such right in this section: it is either open or closed","ru":"В этом разделе такого права нет: он либо открыт, либо закрыт","uz":"Bu bo'limda bunday huquq yo'q: u yo ochiq, yo yopiq"},
   // ROLE_ACTIONS_V1 (2026-09-06) — права, названные действиями, на экране ролей

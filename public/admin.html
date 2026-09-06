@@ -77,6 +77,11 @@
                  (notifications.js → #topbar-bell, branch-picker.js →
                  #branch-picker, admin.js → the rest) are untouched. -->
             <header id="topbar" class="appbar" data-region-part="head">
+                <!-- APPBAR_BACK_V1 — один способ вернуться, в одном месте.
+                     Кнопка живёт в ОБОЛОЧКЕ, а не в экранах: экран очищает свой
+                     контейнер при каждой перерисовке и унёс бы её с собой, и
+                     тридцать экранов рисовали бы тридцать разных «назад». -->
+                <button id="section-back" class="appbar-back" type="button" hidden=""></button>
                 <h1 id="section-title" class="appbar-title">—</h1>
                 <div class="appbar-controls">
                     <!-- APP_RELOAD_BTN_V1 — reload the app (handy in standalone/app mode where the browser reload is hidden) -->

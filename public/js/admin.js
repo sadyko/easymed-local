@@ -308,6 +308,7 @@ const state = {
 };
 const viewRoot  = document.getElementById('view-root');
 const titleEl   = document.getElementById('section-title');
+const backEl    = document.getElementById('section-back');   // APPBAR_BACK_V1
 const sidebarEl = document.getElementById('sidebar-body');
 
 // SIDEBAR_COLLAPSE_V1 — restore the persisted collapsed state before first paint (no flash).
@@ -551,6 +552,77 @@ function sectionTitleFor(view, payload) {
     return 'Easy-Med';
 }
 
+// ---------------------------------------------------------------------------
+// APPBAR_BACK_V1 (2026-09-06) — У КАЖДОГО ПОДЭКРАНА ЕСТЬ ПУТЬ НАЗАД.
+// ---------------------------------------------------------------------------
+// Владелец: «in some places there is back to settings buttons but in some
+// places there is no. please add to everywhere a navigation buttons».
+//
+// Разбор: маршрутов 52, из них 18 — пункты меню, а 34 — подэкраны, на которые
+// из меню не попасть. Кнопку «назад» рисовали ЧЕТЫРЕ из них, каждый свою и
+// по-своему («Настройки», «Назад в настройки», «Back to settings» —
+// по-английски посреди русского экрана, «Пациенты», «Мои услуги»). С остальных
+// тридцати вернуться можно было только через боковое меню — то есть заново
+// искать, откуда ты пришёл.
+//
+// ПОЧЕМУ КНОПКА В ОБОЛОЧКЕ, А НЕ В ЭКРАНАХ. Экран очищает свой контейнер на
+// каждой перерисовке (clear(container) стоит почти в каждом виде) и унёс бы
+// кнопку с собой. К тому же тридцать экранов — это тридцать поводов нарисовать
+// её чуть иначе, и именно так появились четыре разных «назад». В верхней
+// панели она одна, всегда на одном месте, и ни один экран до неё не достаёт.
+//
+// РОДИТЕЛЬ — НЕ ИСТОРИЯ БРАУЗЕРА. «Назад» ведёт туда, ЧАСТЬЮ ЧЕГО экран
+// является, а не туда, откуда пришли: возврат в случайный прошлый экран
+// (например, в карту другого пациента) — это не навигация, а лотерея. Поэтому
+// таблица, и поэтому тест требует запись для каждого подэкрана: новый экран не
+// может появиться без пути назад.
+const PARENT_OF = {
+    // Настройки и всё, что открывается с их плиток
+    'employees': 'settings', 'documents': 'settings', 'documents-settings': 'settings',
+    'services': 'settings', 'consultation-types': 'settings', 'discounts-settings': 'settings',
+    'api-settings': 'settings', 'telegram-settings': 'settings', 'telephony-settings': 'settings',
+    'crm-settings': 'settings', 'doctor-pay': 'settings', 'referral-settings': 'settings',
+    'cashier-settings': 'settings', 'rooms-setup': 'settings', 'updates': 'settings',
+    'subscription': 'settings', 'clinic-data': 'settings', 'public-site': 'settings',
+    // Пациенты
+    'patient-card': 'patients', 'visits': 'patients', 'appointments': 'patients',
+    'registration': 'patients', 'docs-archive': 'patients',
+    // Кабинет врача
+    'service-workspace': 'consultation', 'doctor-room': 'consultation',
+    // Стационар
+    'mar-sheet': 'admissions', 'beds': 'admissions',
+    // Прочее
+    'requests': 'crm', 'reports': 'reports-hub',
+    // Модули «Скоро»: попасть на них можно только по прямой ссылке, и уйти с
+    // них тоже нужно куда-то определённое.
+    'pacs': 'dashboard', 'pharmacy': 'dashboard', 'marketing': 'dashboard',
+    'callcenter': 'dashboard', 'procurement': 'inventory',
+};
+
+/** Куда ведёт «назад» с этого экрана: id пункта меню или null. */
+export function parentViewOf(view) {
+    return PARENT_OF[view] || (String(view).startsWith('settings:') ? 'settings' : null);
+}
+
+function renderBackControl() {
+    if (!backEl) return;
+    const pane = state.panes.find((p) => p.key === state.activeKey);
+    const view = pane ? pane.view : state.view;
+    const parent = parentViewOf(view);
+    // Кнопка не просто прячется — она ОТКЛЮЧАЕТСЯ: спрятанная, но нажимаемая
+    // кнопка ловит клавиатуру и уводит с экрана без предупреждения.
+    backEl.hidden = !parent;
+    backEl.disabled = !parent;
+    if (!parent) { backEl.replaceChildren(); return; }
+    backEl.replaceChildren();
+    backEl.appendChild(Icon('ChevronLeft', { size: 14 }));
+    const name = t('sidebar.nav.' + parent, sectionTitleFor(parent, null));
+    backEl.appendChild(document.createTextNode(' ' + tr(name)));
+    backEl.setAttribute('title', tr('Вернуться') + ': ' + tr(name));
+    backEl.setAttribute('aria-label', tr('Вернуться') + ': ' + tr(name));
+    backEl.onclick = () => navigate(parent);
+}
+
 function renderSectionTitle() {
     if (!titleEl) return;
     const pane = state.panes.find(p => p.key === state.activeKey);
@@ -563,6 +635,7 @@ function renderSectionTitle() {
         ? (pane.titleOverride ? pane.title : sectionTitleFor(pane.view, pane.payload))
         : sectionTitleFor(state.view, state.payload);
     titleEl.textContent = tr(raw);
+    renderBackControl();   // APPBAR_BACK_V1 — путь назад пересчитывается вместе с именем
 }
 
 // ---------------------------------------------------------------------------

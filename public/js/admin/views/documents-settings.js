@@ -60,10 +60,9 @@ export async function renderDocumentsSettings(container, { onNavigate } = {}) {
 function mount(onNavigate) {
     clear(refs.container);
 
-    const backBtn = h('button', {
-        class: 'btn btn-outline btn-sm', type: 'button', style: { marginBottom: '14px' },
-        onclick: () => onNavigate && onNavigate('settings'),
-    }, Icon('ChevronLeft', { size: 14 }), ' ', 'Настройки');
+    // APPBAR_BACK_V1 — своя кнопка «назад» убрана: путь назад теперь один и
+    // живёт в верхней панели оболочки (admin.js PARENT_OF). Четыре экрана
+    // рисовали её каждый по-своему, а тридцать не рисовали вовсе.
 
     refs.saveBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: save },
         Icon('Check', { size: 14 }), ' ', 'Сохранить');
@@ -77,7 +76,6 @@ function mount(onNavigate) {
         h('div', { style: { padding: '18px' } }, refs.previewEl));
 
     refs.container.appendChild(h('div', { class: 'fade-in' },
-        backBtn,
         h('div', { class: 'page-head' },
             h('div', null,
                 // SETTINGS_SPLIT_V1 — заголовок наконец совпал с плиткой, из

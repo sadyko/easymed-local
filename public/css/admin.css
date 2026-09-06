@@ -3051,6 +3051,26 @@ html { scroll-behavior: smooth; }
 .uidate-day.is-off { color: var(--ink-200); cursor: not-allowed; }
 .uidate-foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--ink-100); }
 
+
+/* APPBAR_BACK_V1 (2026-09-06) — путь назад в верхней панели.
+   Один вид на все тридцать четыре подэкрана: раньше кнопку рисовали четыре
+   экрана, каждый свою — и одна из них была по-английски посреди русского
+   интерфейса. Стоит слева от названия экрана, потому что читают слева направо
+   и «откуда я вернусь» — вопрос, который задают ДО того, как прочли, где
+   находятся. Скрытая кнопка ещё и disabled: спрятанная, но нажимаемая ловит
+   клавиатуру и уводит с экрана без предупреждения. */
+.appbar-back {
+    display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto;
+    height: 30px; padding: 0 11px 0 8px; margin-right: 10px;
+    border: 1px solid var(--ink-200); border-radius: 8px; background: var(--white);
+    font-family: inherit; font-size: 13.5px; color: var(--ink-700); cursor: pointer;
+    transition: border-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out),
+                background var(--dur-1) var(--ease-out);
+}
+.appbar-back:hover { border-color: var(--primary-400); color: var(--primary-700); background: var(--primary-50); }
+.appbar-back:focus-visible { outline: 2px solid var(--primary-600); outline-offset: 2px; }
+.appbar-back[hidden] { display: none; }
+
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
         animation-duration: 0.01ms !important;
