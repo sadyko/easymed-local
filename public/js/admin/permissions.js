@@ -287,6 +287,36 @@ export function setEffectiveFromRoles(roleRows) {
 
 export function getEffectiveSet() { return _effective; }
 
+/**
+ * ROLE_REACH_V1 (2026-09-06) — ПОСМОТРЕТЬ НА ПРОГРАММУ ГЛАЗАМИ РОЛИ.
+ *
+ * Роли настраивают галочками, но галочка — это ключ, а вопрос у человека
+ * другой: «что сотрудник в итоге увидит и куда попадёт, когда войдёт?».
+ * Ответить можно двумя способами, и один из них неверный: описать права
+ * СЛОВАМИ ОТДЕЛЬНО от того, как их проверяет сам интерфейс. Такое описание
+ * разойдётся с действительностью в первой же правке ворот — и это худший вид
+ * ошибки на экране прав, потому что читается он как обещание.
+ *
+ * Поэтому описание не пишется, а СПРАШИВАЕТСЯ у настоящих ворот: состояние
+ * подменяется правами роли, вопросы задаются теми же isModuleAllowed() и
+ * patientTabLevel(), которыми пользуется всё приложение, и состояние
+ * возвращается на место. try/finally обязателен: исключение внутри fn иначе
+ * оставило бы вошедшего сотрудника с правами ЧУЖОЙ роли до перезагрузки.
+ *
+ * Только СИНХРОННО: подмена глобальна, и await внутри fn означал бы, что чужие
+ * права действуют, пока мы ждём.
+ */
+export function previewRole(roleRow, fn) {
+    const saved = { eff: _effective, levels: _levels, tabs: _patientTabs, label: _roleLabel, roles: _actorRoles };
+    try {
+        setEffectiveFromRole(roleRow);
+        return fn();
+    } finally {
+        _effective = saved.eff; _levels = saved.levels; _patientTabs = saved.tabs;
+        _roleLabel = saved.label; _actorRoles = saved.roles;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Access level for a permission key — drives who can edit vs. delete.
 // 'none' = no access; otherwise 'viewer' | 'editor' | 'admin'. Full-access

@@ -3,6 +3,29 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // ROLE_REACH_V1 (2026-09-06) — «что роль видит, словами» на экране ролей
+  "Что увидит сотрудник с этой ролью": {"en":"What this role can reach","ru":"Что увидит сотрудник с этой ролью","uz":"Bu rol nimani ko'radi"},
+  "Роль не открывает ни одного раздела — сотрудник не сможет работать.": {"en":"This role opens no section at all — the employee will not be able to work.","ru":"Роль не открывает ни одного раздела — сотрудник не сможет работать.","uz":"Bu rol birorta bo'limni ochmaydi — xodim ishlay olmaydi."},
+  "После входа открывается: {screen}.": {"en":"After signing in, this opens: {screen}.","ru":"После входа открывается: {screen}.","uz":"Kirgandan so'ng ochiladi: {screen}."},
+  "Открывать после входа нечего — сотрудник упрётся в пустой экран.": {"en":"There is nothing to open after signing in — the employee hits an empty screen.","ru":"Открывать после входа нечего — сотрудник упрётся в пустой экран.","uz":"Kirgandan so'ng ochadigan narsa yo'q — xodim bo'sh ekranga duch keladi."},
+  "Открыто разделов: {n} — {list}.": {"en":"Sections open: {n} — {list}.","ru":"Открыто разделов: {n} — {list}.","uz":"Ochiq bo'limlar: {n} — {list}."},
+  "{screen} откроется только сотруднику с ролью: {roles}.": {"en":"{screen} opens only for an employee with the role: {roles}.","ru":"{screen} откроется только сотруднику с ролью: {roles}.","uz":"{screen} faqat quyidagi roldagi xodimga ochiladi: {roles}."},
+  "Закрыто разделов: {n} — {list}.": {"en":"Sections closed: {n} — {list}.","ru":"Закрыто разделов: {n} — {list}.","uz":"Yopiq bo'limlar: {n} — {list}."},
+  "Карта пациента, вкладка «{tab}»: {level}.": {"en":"Patient card, the “{tab}” tab: {level}.","ru":"Карта пациента, вкладка «{tab}»: {level}.","uz":"Bemor kartasi, «{tab}» bo'limi: {level}."},
+  "Заводить новых пациентов эта роль не может.": {"en":"This role cannot create new patients.","ru":"Заводить новых пациентов эта роль не может.","uz":"Bu rol yangi bemor qo'sha olmaydi."},
+  "только просмотр": {"en":"view only","ru":"только просмотр","uz":"faqat ko'rish"},
+  "просмотр и изменение": {"en":"view and edit","ru":"просмотр и изменение","uz":"ko'rish va o'zgartirish"},
+  "изменение и удаление": {"en":"edit and delete","ru":"изменение и удаление","uz":"o'zgartirish va o'chirish"},
+  "закрыта": {"en":"closed","ru":"закрыта","uz":"yopiq"},
+  "администратор": {"en":"administrator","ru":"администратор","uz":"administrator"},
+  "регистратор": {"en":"receptionist","ru":"регистратор","uz":"qabulxona xodimi"},
+  "медсестра": {"en":"nurse","ru":"медсестра","uz":"hamshira"},
+  "кассир": {"en":"cashier","ru":"кассир","uz":"kassir"},
+  "лаборант": {"en":"lab technician","ru":"лаборант","uz":"laborant"},
+  "склад": {"en":"warehouse","ru":"склад","uz":"ombor"},
+  "колл-центр": {"en":"call centre","ru":"колл-центр","uz":"call-markaz"},
+  "главный врач": {"en":"head doctor","ru":"главный врач","uz":"bosh shifokor"},
+  "старшая медсестра": {"en":"senior nurse","ru":"старшая медсестра","uz":"katta hamshira"},
   // LIST_ACTIONS_V1 — действия строки списка
   "Действия": {"en":"Actions","ru":"Действия","uz":"Amallar"},
   "Встроенная": {"en":"Built-in","ru":"Встроенная","uz":"O'rnatilgan"},

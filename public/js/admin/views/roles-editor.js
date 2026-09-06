@@ -42,9 +42,12 @@ import { h, Icon, PageHead, clear, toast } from '../ui.js';
 // h() прогоняет текстовые дети и placeholder/aria-label через tr() сам; всё,
 // что собирается конкатенацией или ставится после отрисовки, зовёт tr() явно
 // (тот же приём, что в telephony-settings.js и locked-module.js).
-import { tr } from '../i18n.js';
+import { tr, trf, t } from '../i18n.js';
 import { NAV_MODULES, PATIENT_TABS } from '../permissions.js';   // ROLE_KEYS_V2 — единый список выдаваемых модулей;
                                                                   // PATIENT_TAB_ACCESS_V1 — вкладки карты пациента
+// ROLE_REACH_V1 — «что роль видит, словами». Ответы спрашиваются у настоящих
+// ворот доступа, а не выводятся здесь заново (см. шапку role-reach.js).
+import { roleReach, reachSentences } from '../role-reach.js?v=reach1';
 
 // ROLE_KEYS_V2 — матрица строится из permissions.js NAV_MODULES, того же
 // списка, который читают сами ворота бокового меню. Когда-то это была вторая
@@ -286,6 +289,39 @@ export async function renderRolesEditor(container, { onBack } = {}) {
                 'У этой роли ещё нет сохранённых настроек. Отметьте разделы и сохраните.'));
         }
 
+        // ROLE_REACH_V1 — ИТОГ ГАЛОЧЕК, СЛОВАМИ, И ПРЯМО ЗДЕСЬ.
+        //
+        // Тридцать галочек не отвечают на вопрос, ради которого их и ставят:
+        // куда сотрудник попадёт, войдя, и чего не увидит. Сводка отвечает — и
+        // пересчитывается на КАЖДОЕ изменение, ещё до сохранения: увидеть
+        // последствие галочки нужно тогда, когда её ставят, а не после того,
+        // как роль уже выдана живому человеку.
+        const reachBox = h('div', { class: 'roles-reach' });
+        card.appendChild(reachBox);
+        function paintReach() {
+            clear(reachBox);
+            // NAV лежит в оболочке (admin.js открывает его наружу). Нет
+            // оболочки — сводки нет: соврать про доступ хуже, чем промолчать.
+            const nav = (typeof window !== 'undefined' && window.easymed && window.easymed.NAV) || null;
+            if (!nav) return;
+            const ids = nav.filter((it) => !it.section).map((it) => it.id);
+            const reach = roleReach(
+                { name: roleLabel(state.selected), permissions: collect() },
+                ids,
+                (id) => t('sidebar.nav.' + id, id),
+                tr,   // перевод СНАЧАЛА: слова уровня и ролей едут в {дырках}
+            );
+            reachBox.appendChild(h('div', { class: 'roles-reach-h' },
+                Icon('Doc', { size: 13 }), ' ', tr('Что увидит сотрудник с этой ролью')));
+            for (const line of reachSentences(reach, tr)) {
+                reachBox.appendChild(h('div', { class: 'roles-reach-line is-' + line.tone },
+                    line.params ? trf(line.template, line.params) : tr(line.template)));
+            }
+        }
+        // Одно делегированное событие на карточку вместо обработчика на каждую
+        // из трёх десятков галочек и списков.
+        card.addEventListener('change', paintReach);
+
         for (const grp of ROLE_MODULES) {
             // Заголовок группы несёт подпись колонки уровня: одна видимая
             // подпись на группу вместо двадцати повторов над каждым списком.
@@ -316,6 +352,7 @@ export async function renderRolesEditor(container, { onBack } = {}) {
         for (const t of PATIENT_TABS) card.appendChild(tabRow(t, tabs));
 
         matrixWrap.appendChild(card);
+        paintReach();   // ROLE_REACH_V1 — сводка есть сразу, а не после первой галочки
         state.baseline = current();
     }
 

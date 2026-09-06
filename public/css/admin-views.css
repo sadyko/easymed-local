@@ -4610,6 +4610,26 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 
 /* Заголовок группы несёт подпись колонки уровня: одна видимая подпись на
    группу вместо двадцати повторов над каждым выпадающим списком. */
+/* ROLE_REACH_V1 (2026-09-06) — итог галочек словами, над самой матрицей.
+   Стоит ВЫШЕ галочек намеренно: это ответ, а галочки — вопрос, и человек
+   читает сверху вниз. Заливка мягкая, без рамки: сводка объясняет карточку, а
+   не спорит с ней за внимание. */
+.roles-reach { margin: 0 16px 12px; padding: 10px 12px; border-radius: 10px;
+    background: var(--ink-25); border: 1px solid var(--ink-100); }
+.roles-reach-h { font-size: 12.5px; font-weight: 700; color: var(--ink-700);
+    text-transform: uppercase; letter-spacing: 0.04em; display: flex; align-items: center; gap: 6px;
+    margin-bottom: 6px; }
+.roles-reach-line { font-size: 13.5px; line-height: 1.5; color: var(--ink-800); padding: 2px 0 2px 12px;
+    position: relative; }
+.roles-reach-line::before { content: ""; position: absolute; left: 2px; top: 9px;
+    width: 5px; height: 5px; border-radius: 50%; background: var(--ink-300); }
+.roles-reach-line.is-ok::before   { background: var(--ok-500, #2f9e6f); }
+.roles-reach-line.is-warn::before { background: var(--warn-500); }
+/* Красным — только то, из-за чего сотрудник не сможет работать: роль без
+   единого раздела или без экрана после входа. */
+.roles-reach-line.is-crit { color: var(--crit-700); font-weight: 600; }
+.roles-reach-line.is-crit::before { background: var(--crit-500); }
+
 .roles-group { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
     padding: 14px 16px 3px; font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em;
     color: var(--ink-400); }
