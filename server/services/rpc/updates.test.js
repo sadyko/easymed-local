@@ -7,6 +7,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { setDataDir, setAppVersion } from '../control/config.js';
 import { updateStatus, updateApprove, updateCancel, updateCheckNow, RpcError } from './updates.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const admin = { id: 1, role: 'admin' };
 const registrar = { id: 2, role: 'registrar' };
@@ -34,7 +35,7 @@ function storeOffer(db, offer) { put(db, 'update_offer', JSON.stringify(offer));
 const OFFER = { version: '2.4.0', notes_ru: 'Тест', url: '/x.tar.gz', sha256: 'abc', manifest: { payload: {}, sig: 's' } };
 
 test.beforeEach(() => {
-  setDataDir(fs.mkdtempSync(path.join(os.tmpdir(), 'em-updates-rpc-')));
+  setDataDir(tmpDir('em-updates-rpc-'));
   // UPDATE_DELIVERY_V1 (Task 6) — a fixed test version, independent of this
   // checkout's real package.json, same DI-via-config.js seam setDataDir uses.
   setAppVersion('2.3.0');
@@ -97,7 +98,7 @@ test('update_status: consent for a version the offer has moved past reads as NOT
 
 test('update_status: last_result reads the not-yet-sent file first', () => {
   const db = freshDb();
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-updates-lr-'));
+  const dataDir = tmpDir('em-updates-lr-');
   setDataDir(dataDir);
   fs.writeFileSync(path.join(dataDir, 'update-result.json'), JSON.stringify({ version: '2.4.0', ok: true }));
   fs.writeFileSync(path.join(dataDir, 'update-result.json.sent'), JSON.stringify({ version: '2.3.0', ok: false }));
@@ -107,7 +108,7 @@ test('update_status: last_result reads the not-yet-sent file first', () => {
 
 test('update_status: last_result falls back to the .sent file once the live one is gone', () => {
   const db = freshDb();
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-updates-lr2-'));
+  const dataDir = tmpDir('em-updates-lr2-');
   setDataDir(dataDir);
   fs.writeFileSync(path.join(dataDir, 'update-result.json.sent'), JSON.stringify({ version: '2.4.0', ok: false }));
   const s = updateStatus(db, {}, admin);

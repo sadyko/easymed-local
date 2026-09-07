@@ -4,6 +4,7 @@ import path from 'node:path';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { canonical } from './canonical.js';
 import { __setPublicKeyForTests } from './state.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 // LICENCE_CORE_V1 — a data directory for tests that predate licensing and are
 // not testing it.
@@ -32,7 +33,7 @@ export function licensedDataDir({ modules = [] } = {}) {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
   __setPublicKeyForTests(publicKey);
 
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-licensed-'));
+  const dir = tmpDir('em-licensed-');
   fs.writeFileSync(path.join(dir, 'control.json'), JSON.stringify({
     clinic_id: 'test-clinic', unlock_secret: 'test-secret', subscription: 'active',
   }));

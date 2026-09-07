@@ -30,9 +30,25 @@ import { becomeSecondary } from '../branch-sync/identity.js';
 const registrar = { id: 1, role: 'registrar', extra_roles: [] };
 const cashier = { id: 2, role: 'cashier', extra_roles: [] };
 
-// Понедельник 7 сентября 2026 — рабочий день во всех графиках ниже.
-const DAY = '2026-09-07';
-const at = (hh, mm = 0) => new Date(2026, 8, 7, hh, mm, 0, 0).toISOString();
+// CALENDAR_FIXTURE_DAY_V1 — ближайший БУДУЩИЙ понедельник, а не вбитая дата.
+//
+// Здесь стояло `DAY = '2026-09-07'`. В сам этот понедельник фикстура совпала с
+// сегодняшним днём, и тесты слотов начали падать с 10:00 до полуночи: движок
+// не предлагает время, которое уже прошло (calendar.js, minStartMin), и был
+// совершенно прав. День обязан быть В БУДУЩЕМ, иначе тест меряет не расписание,
+// а часы на стене. Понедельник — потому что графики ниже описаны для mon.
+function nextMonday() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  do { d.setDate(d.getDate() + 1); } while (d.getDay() !== 1);   // строго ЗАВТРА или позже
+  return d;
+}
+const MON = nextMonday();
+const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const DAY = iso(MON);
+const at = (hh, mm = 0) => new Date(MON.getFullYear(), MON.getMonth(), MON.getDate(), hh, mm, 0, 0).toISOString();
+// Вторник за ним — сетка окон читает два дня подряд.
+const DAY2 = iso(new Date(MON.getFullYear(), MON.getMonth(), MON.getDate() + 1));
 
 const WH_9_18 = JSON.stringify({
   mon: { enabled: true, from: '09:00', to: '18:00' },
@@ -369,12 +385,12 @@ test('calendar_windows отдаёт окна «ресурс × день» одн
     .run(JSON.stringify({ mon: { enabled: true, from: '08:00', to: '11:00' } }));
 
   const out = calendarWindows(db, { doctor_ids: [7, 8], room_ids: [11], date: DAY, days: 2 }, registrar);
-  assert.deepEqual(out.days, ['2026-09-07', '2026-09-08']);
-  assert.deepEqual(out.windows['doctor:7']['2026-09-07'], { from: '09:00', to: '18:00', breaks: [] });
-  assert.equal(out.windows['doctor:8']['2026-09-07'], null, 'выходной обязан приехать как null, а не как окно');
-  assert.deepEqual(out.windows['doctor:8']['2026-09-08'], { from: '10:00', to: '16:00', breaks: [] });
-  assert.deepEqual(out.windows['room:11']['2026-09-07'], { from: '08:00', to: '11:00', breaks: [] });
-  assert.equal(out.windows['room:11']['2026-09-08'], null);
+  assert.deepEqual(out.days, [DAY, DAY2]);
+  assert.deepEqual(out.windows['doctor:7'][DAY], { from: '09:00', to: '18:00', breaks: [] });
+  assert.equal(out.windows['doctor:8'][DAY], null, 'выходной обязан приехать как null, а не как окно');
+  assert.deepEqual(out.windows['doctor:8'][DAY2], { from: '10:00', to: '16:00', breaks: [] });
+  assert.deepEqual(out.windows['room:11'][DAY], { from: '08:00', to: '11:00', breaks: [] });
+  assert.equal(out.windows['room:11'][DAY2], null);
   db.close();
 });
 

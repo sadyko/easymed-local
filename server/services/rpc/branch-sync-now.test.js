@@ -24,10 +24,11 @@ import { setDataDir } from '../control/config.js';
 import { writePairing } from '../branch-sync/pairing.js';
 import { withExchangeLock, publishCatalogue, maybePublish } from '../branch-sync/relay.js';
 import { branchSyncNow, runBranchSync } from './branch-sync.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const dirs = [];
 function harness() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bsync-now-'));
+  const dir = tmpDir('bsync-now-');
   dirs.push(dir);
   setDataDir(dir);
   const db = openDb(':memory:');

@@ -17,11 +17,12 @@ import { encryptToken, loadOrCreateKey } from './crypto.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 // Токен в настройках должен быть НАСТОЯЩИМ шифротекстом: иначе проверки
 // падают на расшифровке и тест перестаёт проверять то, ради чего написан.
 process.env.EASYMED_TELEGRAM_KEY_PATH =
-  path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'em-tg-chat-')), '.telegram-key');
+  path.join(tmpDir('em-tg-chat-'), '.telegram-key');
 const ENC_TOKEN = encryptToken('1000000001:TESTONLYtestonlyTESTONLYtestonly123', loadOrCreateKey());
 
 const viewerUser = { id: 5, role: 'lab' };

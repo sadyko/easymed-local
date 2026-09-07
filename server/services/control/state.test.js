@@ -8,12 +8,13 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { canonical } from './canonical.js';
 import { controlState, __setPublicKeyForTests } from './state.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const { publicKey, privateKey } = generateKeyPairSync('ed25519');
 __setPublicKeyForTests(publicKey);
 
 function workspace({ licence, identity } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-ctl-'));
+  const dir = tmpDir('em-ctl-');
   if (identity !== null) {
     fs.writeFileSync(path.join(dir, 'control.json'), JSON.stringify(identity ?? {
       clinic_id: 'c-000047', unlock_secret: 's3cret', subscription: 'active',
@@ -107,7 +108,7 @@ test('an unreadable data directory does not throw', () => {
 // call in try/catch and reports 'clock_unavailable'; this test would fail with
 // an uncaught exception (not an assertion failure) if that guard were removed.
 test('a database with no control_state table (unmigrated) locks instead of crashing', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-ctl-'));
+  const dir = tmpDir('em-ctl-');
   fs.writeFileSync(path.join(dir, 'control.json'), JSON.stringify({ clinic_id: 'c-000047' }));
   fs.writeFileSync(path.join(dir, 'licence.dat'), issue());
   const db = openDb(':memory:'); // deliberately NOT migrated
@@ -124,7 +125,7 @@ test('a database with no control_state table (unmigrated) locks instead of crash
 test('control.json parsing to null/array/string/non-string-clinic_id locks as not_enrolled', () => {
   const variants = ['null', '[]', '"just a string"', JSON.stringify({ clinic_id: 123 })];
   for (const raw of variants) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-ctl-'));
+    const dir = tmpDir('em-ctl-');
     fs.writeFileSync(path.join(dir, 'control.json'), raw);
     const db = openDb(':memory:'); migrate(db);
     const s = controlState(db, dir, new Date('2026-08-25T00:00:00Z'));

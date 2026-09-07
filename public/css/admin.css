@@ -1486,8 +1486,96 @@ html[lang="uz"] .modal-close::after { content: 'Yopish'; }
 .mg-section h3 {
     margin: 0 0 14px;
     font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.08em;
-    color: var(--ink-500); font-weight: 700;
+    color: var(--ink-600); font-weight: 700;
+    /* PATIENT_FORM_FLOW_V1 — засечка слева. Мелкая серая строчка капителью
+       читалась как подпись к полю, а не как заголовок блока, и окно выглядело
+       сплошной лентой полей. Засечка нарисована ::before в абсолютных
+       координатах, а отступ — только слева: ВЫСОТА строки не меняется, а на
+       ней стоит модель высоты окна (METRICS.sectionTitleH в
+       patient-create-modal.js, тест сверяет её с этим файлом). */
+    position: relative; padding-left: 11px;
 }
+.mg-section h3::before {
+    content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+    width: 3px; height: 12px; border-radius: 2px; background: var(--primary-400);
+}
+.mg-section.mg-search h3::before { display: none; }
+/* PATIENT_FORM_SECTIONS_V1 — у раздела со значком засечки нет: значок и есть
+   опора для глаза, а два маркера подряд спорят друг с другом. Высота строки не
+   меняется (значок 13 px в строке 17 px) — на ней держится модель высоты. */
+.mg-section h3.has-ic { padding-left: 0; display: flex; align-items: center; gap: 7px; }
+.mg-section h3.has-ic::before { display: none; }
+.mg-section h3.has-ic svg { flex: 0 0 auto; color: var(--primary-500); }
+
+/* ── PATIENT_FORM_REWRITE_V1 — окно заведения пациента по образцу ─────────
+   Разделы пронумерованы и идут во всю ширину. Номер — кружок 22 px внутри
+   строки заголовка: он НЕ увеличивает её высоту (строка 17 px + отрицательные
+   поля), а на этой высоте держится модель окна в patient-create-modal.js. */
+.mg-section h3.has-step {
+    padding-left: 0; display: flex; align-items: center; gap: 9px;
+    font-size: 13.5px; text-transform: none; letter-spacing: 0;
+    color: var(--ink-900); font-weight: 600;
+}
+.mg-section h3.has-step::before { display: none; }
+.mg-step {
+    flex: 0 0 auto; width: 22px; height: 22px; margin: -3px 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 50%; background: var(--primary-50); color: var(--primary-700);
+    font-size: 12.5px; font-weight: 700; line-height: 1;
+}
+
+/* Разделы окна разделены линией, а не рамкой: карточка внутри карточки на
+   образце не рисуется. */
+.pc-form .mg-section { border-bottom: 1px solid var(--ink-100); }
+.pc-form .mg-section:last-child { border-bottom: 0; }
+
+/* Первый раздел: слева плитка фото, справа — три ряда полей. Плитка держит
+   ровно высоту этих рядов, поэтому раздел не становится выше из-за неё. */
+/* Ритм у окна один и задан плотным вариантом: 10 px между рядами, 14 px по
+   краям раздела (.mg-dense). Плитка фото стояла на своих 16 px и выпадала из
+   него — соседний зазор всегда чуть шире остальных, и глаз это ловит, даже не
+   понимая, что именно не так. Ширина 168 px вместо 190: плитка на три ряда
+   полей и так заметна, а лишние 22 px она отбирала у фамилии и отчества. */
+.pc-id { display: flex; align-items: stretch; gap: 14px; }
+.pc-id-photo { flex: 0 0 168px; display: flex; }
+.pc-id-fields { flex: 1 1 auto; min-width: 0; display: grid; gap: 10px; align-content: start; }
+/* PATIENT_PHOTO_TILE_V1 — плитка фото держит высоту трёх рядов полей рядом.
+   Селекторы НАРОЧНО в два класса и глубже (.cam-box.mg-cam): ниже по файлу
+   объявлено `.cam-box.mg-cam { width: 96px; height: 96px }` — при равном весе
+   побеждает то, что объявлено позже, и плитка осталась бы квадратиком. */
+.pc-id-photo .cam-wrap.mg-cam-wrap {
+    flex: 1 1 auto; flex-direction: column; align-items: stretch; justify-content: space-between;
+    gap: 8px; padding: 10px; border-radius: 12px;
+    background: linear-gradient(160deg, var(--primary-600), var(--primary-700));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+.pc-id-photo .cam-box.mg-cam {
+    width: 100%; height: auto; flex: 1 1 auto; min-height: 104px;
+    display: grid; place-items: center;
+    background: rgba(255, 255, 255, 0.10); border: 1px dashed rgba(255, 255, 255, 0.35);
+    border-radius: 10px; color: rgba(255, 255, 255, 0.92); overflow: hidden;
+}
+.pc-id-photo .cam-box.mg-cam img { width: 100%; height: 100%; object-fit: cover; border-radius: 9px; }
+.pc-id-photo .cam-ph { display: grid; justify-items: center; gap: 6px; color: inherit; }
+.pc-id-photo .cam-ph-ic {
+    width: 54px; height: 54px; display: grid; place-items: center; border-radius: 50%;
+    background: rgba(255, 255, 255, 0.16);
+}
+.pc-id-photo .cam-ph-t { font-size: 12.5px; opacity: 0.85; }
+/* Ряд, а не столбик. Вес селектора НАРОЧНО больше, чем у
+   `.cam-wrap.mg-cam-wrap .cam-acts { flex-direction: column }` ниже по файлу:
+   при равном весе побеждает объявленное позже, и три кнопки выстраивались
+   столбиком под плиткой — ровно то, что владелец и увидел. */
+.pc-id-photo .cam-wrap.mg-cam-wrap .cam-acts { flex-direction: row; gap: 6px; }
+.pc-id-photo .cam-act.cam-act {
+    flex: 1 1 0; width: auto; height: 32px; border-radius: 9px;
+    background: rgba(255, 255, 255, 0.94); border: 0; color: var(--primary-700);
+}
+.pc-id-photo .cam-act.cam-act:hover { background: var(--white); }
+
+/* Приглашение в бот стоит в шапке — там нет места ни подписи, ни заметке. */
+.modal-head .tg-wrap { flex: 0 0 auto; }
+.modal-head .tg-wrap .tg-chip, .modal-head .tg-wrap .muted { display: none; }
 .mg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .mg-grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
 .mg-grid.cols-1 { grid-template-columns: 1fr; }
@@ -1551,6 +1639,13 @@ html[lang="uz"] .modal-close::after { content: 'Yopish'; }
    чтобы «примерно 1.35 от кегля» не превратилось в расхождение на 5 px
    на каждом ряду. */
 .modal-card.modal-grouped.mg-dense .mg-section { padding: 14px 22px; gap: 10px; }
+/* SECTION_HEAD_AIR_V1 — под заголовком раздела 14 px, а не 10.
+   Зазор раздела разделяет ВСЕ его строки поровну, поэтому шапка стояла от
+   первого ряда полей ровно так же, как ряды стоят друг от друга, — и читалась
+   как ещё одна строка формы, а не как заголовок. Добавка висит на самом
+   заголовке: ряды сохраняют свои 10 px, окно не растёт целиком.
+   Меняешь здесь — меняй METRICS.sectionTitleGap. */
+.modal-card.modal-grouped.mg-dense .mg-section > h3 { margin-bottom: 4px; }
 .modal-card.modal-grouped.mg-dense .mg-section h3 { margin: 0; line-height: 17px; }
 .modal-card.modal-grouped.mg-dense .mg-grid { gap: 10px; }
 .modal-card.modal-grouped.mg-dense .field { gap: 4px; }
@@ -1566,6 +1661,11 @@ html[lang="uz"] .modal-close::after { content: 'Yopish'; }
 .modal-card.modal-grouped.mg-dense.has-groups .mg-section:not(.span-full) .mg-grid.cols-2 { grid-template-columns: 1fr 1fr; }
 .modal-card.modal-grouped.mg-dense.has-groups .mg-section:not(.span-full) .mg-grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
 .modal-card.modal-grouped.mg-dense .mg-grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
+/* PATIENT_FORM_SECTIONS_V1 — адрес целиком одним рядом: страна → регион →
+   район → махалля → улица. При ширине окна 1240 px на поле приходится ~229 px,
+   этого хватает и названию области, и номеру дома. Второй ряд здесь стоил бы
+   63 px, а их в бюджете высоты нет (расчёт — в шапке patient-create-modal.js). */
+.modal-card.modal-grouped.mg-dense .mg-grid.cols-5 { grid-template-columns: repeat(5, 1fr); }
 .modal-card.modal-grouped.mg-dense .mg-grid > * { min-width: 0; }
 
 /* Поиск существующего пациента — одной строкой над колонками. */
@@ -1588,7 +1688,14 @@ html[lang="uz"] .modal-close::after { content: 'Yopish'; }
 .mg-search-empty { padding: 12px; font-size: 12.5px; text-align: center; color: var(--ink-500); }
 
 /* «Подробнее» — раскрытие второго экрана в том же окне. */
+/* PATIENT_FORM_SECTIONS_V1 — «Подробнее» живёт в подвале окна, а не строкой
+   внутри раздела: собственный ряд стоил 48 px, и с ним три видимых раздела
+   перестали влезать в окно Chrome на экране 768 (расчёт — в шапке
+   patient-create-modal.js). Класс оставлен для окон, которые ещё носят
+   раскрытие внутри раздела. */
 .mg-more { display: flex; align-items: center; gap: 10px; }
+.modal-foot .mg-more-btn { height: 32px; margin-right: 2px; }
+.modal-foot .mg-more-hint { max-width: 320px; }
 .mg-more-btn {
     height: 38px; padding: 0 12px; border-radius: 9px;
     border: 1px solid var(--primary-200); background: var(--primary-50);
@@ -1600,6 +1707,19 @@ html[lang="uz"] .modal-close::after { content: 'Yopish'; }
 .mg-more-btn:hover { border-color: var(--primary-300); }
 .mg-more-btn[aria-expanded="true"] svg { transform: rotate(180deg); }
 .mg-more-hint { font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mg-more-btn:hover { background: var(--primary-100); }
+
+/* Горячая клавиша в подвале: подпись обязана быть видна, иначе её нет. */
+.mg-hint {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12.5px; color: var(--ink-500);
+}
+.mg-hint kbd {
+    font-family: inherit; font-size: 12.5px; font-weight: 600; line-height: 1;
+    padding: 4px 7px; border-radius: 6px; color: var(--ink-700);
+    background: var(--white); border: 1px solid var(--ink-200);
+    box-shadow: 0 1px 0 var(--ink-200);
+}
 
 /* Список стран у телефона в плотном окне открывается ВВЕРХ: ряд телефонов —
    последний в своей колонке, и вниз список упёрся бы в нижний край
@@ -2975,6 +3095,36 @@ html { scroll-behavior: smooth; }
     border: 1px solid var(--ink-200); border-radius: 8px; cursor: pointer;
     transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
 }
+/* DATE_TYPING_V1 — в поле даты ПИШУТ: курсор текстовый, слева место под значок.
+
+   ВЕС СЕЛЕКТОРА ЗДЕСЬ НАМЕРЕННО ДВОЙНОЙ. Обычное `.field input` — это класс И
+   элемент, то есть вес больше, чем у одиночного `.uidate-field`, и его
+   `padding: 0 12px` побеждал. Отступ слева схлопывался с 38 px до 12, текст
+   уезжал под значок календаря, и владелец видел «🗓5.11.1994» вместо
+   «15.11.1994». Снаружи `.field` поле выглядело правильно — потому и не
+   попадалось на глаза.
+   Упростишь до одного класса — наложение вернётся. */
+.uidate .uidate-field { cursor: text; padding-left: 38px; }
+
+/* Ошибка — рядом с полем и словами. Молчащее поле человек объяснить себе не
+   может: он видит лишь, что возраст рядом не посчитался.
+
+   Сообщение выводится ПОВЕРХ потока (absolute): ряд полей в этом окне посчитан
+   по высоте до пикселя, и растущая подпись сдвигала бы всё, что ниже, ровно в
+   тот момент, когда человек ошибся. */
+.uidate-err {
+    display: none; position: absolute; top: 100%; left: 0; z-index: 2;
+    margin-top: 3px; padding: 4px 8px; border-radius: 7px;
+    font-size: 12.5px; line-height: 16px; white-space: nowrap;
+    color: var(--crit-700, #b91c1c);
+    background: var(--crit-50, #fef2f2); border: 1px solid var(--crit-200, #fecaca);
+}
+.uidate.is-bad .uidate-err { display: block; }
+.uidate.is-bad .uidate-field { border-color: var(--crit-400, #f87171); }
+.uidate.is-bad .uidate-field:focus-visible {
+    border-color: var(--crit-500, #ef4444); box-shadow: 0 0 0 3px var(--crit-50, #fef2f2);
+}
+.uidate-field::placeholder { color: var(--ink-400); }
 .uisel-field:hover, .uidate-field:hover { border-color: var(--ink-300); }
 .uisel-field:focus-visible, .uidate-field:focus-visible,
 .uisel-field[aria-expanded="true"], .uidate-field[aria-expanded="true"] {
@@ -2986,9 +3136,19 @@ html { scroll-behavior: smooth; }
 .uisel-val, .uidate-val { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Подсказка — серым: «не выбрано» не должно читаться как выбранное значение. */
 .uisel-val.is-empty, .uidate-val.is-empty { color: var(--ink-400); }
-.uisel-caret, .uidate-ic { position: absolute; display: flex; color: var(--ink-400); pointer-events: none; }
-.uisel-caret { right: 10px; top: 50%; transform: translateY(-50%); }
-.uidate-ic { position: static; transform: none; flex: 0 0 auto; }
+.uisel-caret { position: absolute; display: flex; color: var(--ink-400); pointer-events: none;
+    right: 10px; top: 50%; transform: translateY(-50%); }
+/* DATE_TYPING_V1 — значок календаря стал КНОПКОЙ: он открывает календарь, а
+   само поле теперь принимает набор с клавиатуры. Пока он был украшением с
+   pointer-events: none, открыть календарь можно было только щелчком по полю —
+   а щелчок по полю нужен, чтобы поставить курсор. */
+.uidate-ic {
+    position: absolute; left: 1px; top: 1px; bottom: 1px; width: 34px;
+    display: flex; align-items: center; justify-content: center;
+    border: 0; background: transparent; color: var(--ink-400);
+    cursor: pointer; border-radius: 7px 0 0 7px; padding: 0;
+}
+.uidate-ic:hover { color: var(--primary-600); background: var(--primary-50); }
 .uidate-clear {
     position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
     display: none; border: 0; background: transparent; cursor: pointer;
@@ -3027,8 +3187,17 @@ html { scroll-behavior: smooth; }
 
 .uidate-pop { padding: 10px; width: 268px; }
 .uidate-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
-.uidate-title { flex: 1; text-align: center; font-size: 13.5px; color: var(--ink-800); }
+.uidate-title { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; }
 .uidate-title b { font-weight: 600; }
+/* DATE_TYPING_V1 — выбор месяца и года прямо в шапке: до года рождения
+   пациента стрелками «месяц назад» идти пришлось бы сотнями нажатий. */
+.uidate-pick {
+    height: 28px; padding: 0 6px; font-family: inherit; font-size: 13.5px;
+    color: var(--ink-800); font-weight: 600; background: var(--white);
+    border: 1px solid var(--ink-200); border-radius: 8px; cursor: pointer;
+}
+.uidate-pick:hover { border-color: var(--primary-400); }
+.uidate-pick:focus-visible { outline: none; border-color: var(--primary-500); box-shadow: 0 0 0 3px var(--primary-50); }
 .uidate-nav {
     width: 28px; height: 28px; display: grid; place-items: center; flex: 0 0 auto;
     border: 1px solid var(--ink-200); border-radius: 8px; background: var(--white);

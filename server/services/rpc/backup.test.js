@@ -11,6 +11,7 @@ import { createBackup, listBackups } from '../backup.js';
 import { backupList, backupCreate, backupRestore, factoryReset, __setExitForTests } from './backup.js';
 import { getRpc } from './index.js';
 import { isAlwaysAllowedRpc } from '../control/gate.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 // SYSTEM_SETTINGS_V1 — what belongs HERE is the RPC adapter: the admin gate,
 // the password re-check, the confirm word, and the exit-75 seam. The backup
@@ -25,7 +26,7 @@ function fresh() {
   const db = openDb(':memory:');
   migrate(db);
   db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (1,'admin',?,'Admin','admin')").run(HASH);
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-bkrpc-'));
+  const dir = tmpDir('em-bkrpc-');
   setDataDir(dir);
   return { db, dir };
 }

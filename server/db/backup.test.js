@@ -6,9 +6,10 @@ import path from 'node:path';
 import { openDb } from './connection.js';
 import { migrate } from './migrate.js';
 import { backupBeforeMigrate, pruneBackups } from './backup.js';
+import { tmpDir } from '../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 function workspace() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-bk-'));
+  const dir = tmpDir('em-bk-');
   const dbPath = path.join(dir, 'easymed.db');
   const db = openDb(dbPath);
   migrate(db);
@@ -102,7 +103,7 @@ test('a failure to back up is reported, not swallowed', async () => {
   // created it there — the test passed on POSIX and silently created real
   // directories on C:\ here. Routing the path through an existing FILE forces
   // ENOTDIR on every platform without touching anything outside the temp dir.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-bk-blocker-'));
+  const dir = tmpDir('em-bk-blocker-');
   const blocker = path.join(dir, 'not-a-directory.txt');
   fs.writeFileSync(blocker, 'x');
   await assert.rejects(() => backupBeforeMigrate(db, path.join(blocker, 'nested', 'easymed.db'), '2.4.0'));

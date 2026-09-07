@@ -152,6 +152,27 @@ test('родной <select> остаётся в разметке и хранит
     assert.equal(host.children[0], wrap);
 });
 
+test('спрятанное родное поле выпадает из обхода Tab — иначе он «через раз»', () => {
+    // KEYBOARD_FLOW_V1. Родное поле спрятано clip-path'ом и opacity: 0 — но из
+    // порядка обхода ТАК не выпадают: браузер убирает из него только
+    // display:none и visibility:hidden. Пока этого не было, на каждый список
+    // приходилось ДВА нажатия Tab, и первое уводило фокус на невидимое поле —
+    // на экране не двигалось ничего, и владелец сообщил это как «Tab не
+    // работает».
+    const { sel } = selectWith([['', '—'], ['1', 'Иванов']]);
+    enhanceSelect(sel);
+    assert.equal(sel.tabIndex, -1, 'родной <select> остался остановкой Tab');
+
+    const { el: inp } = dateInput();
+    enhanceDateField(inp);
+    assert.equal(inp.tabIndex, -1, 'родное поле даты осталось остановкой Tab');
+
+    // …а видимая часть обхода не теряет: это обычная <button>.
+    const css = fs.readFileSync(path.join(HERE, '..', '..', '..', 'css', 'admin.css'), 'utf8');
+    assert.ok(/\.uisel-native,\s*\.uidate-native \{[^}]*opacity:\s*0/.test(css),
+        'родное поле перестали прятать — тогда и tabindex не нужен, проверьте оба места');
+});
+
 test('выбор мышью ставит значение и посылает change — на этом держатся формы', () => {
     const { sel } = selectWith([['', '—'], ['1', 'Иванов'], ['2', 'Петров']]);
     const wrap = enhanceSelect(sel);
@@ -255,7 +276,9 @@ test('пустое поле говорит, ЧТО оно фильтрует, а
     document.body.replaceChildren();
     const { el } = dateInput('', { title: 'Поиск по дате рождения' });
     const wrap = enhanceDateField(el);
-    assert.equal(text(wrap.querySelector('.uidate-val')).trim(), 'Поиск по дате рождения',
+    // DATE_TYPING_V1 — поле стало полем ввода, и подпись пустого поля живёт
+    // в placeholder, а не в отдельной строке.
+    assert.equal(wrap.querySelector('.uidate-field').placeholder, 'Поиск по дате рождения',
         'подпись не объясняет, что это за календарь — именно об этом владелец и спросил');
 });
 
@@ -264,7 +287,7 @@ test('человек видит дату словами, а в поле лежи
     const wrap = enhanceDateField(el);
     assert.ok(wrap, 'поле даты не обёрнуто');
     assert.equal(el.value, '2019-05-02', 'значение обязано остаться машинным');
-    const shown = text(wrap.querySelector('.uidate-val')).trim();
+    const shown = String(wrap.querySelector('.uidate-field').value).trim();
     assert.match(shown, /2/, 'подпись пустая: ' + JSON.stringify(shown));
     assert.match(shown, /2019/);
     assert.ok(!/^\d{4}-\d{2}-\d{2}$/.test(shown), 'подпись осталась машинной датой: ' + shown);
@@ -277,7 +300,7 @@ test('выбор дня пишет ГГГГ-ММ-ДД и посылает change
     const seen = [];
     el.addEventListener('change', () => seen.push(el.value));
 
-    wrap.querySelector('.uidate-field').click();
+    wrap.querySelector('.uidate-ic').click();
     const pop = lastPop('uidate-pop');
     assert.ok(pop, 'календарь не открылся');
     const days = pop.querySelectorAll('.uidate-day');
@@ -294,7 +317,7 @@ test('ограничения поля закрывают дни, а обязат
     document.body.replaceChildren();
     const { el } = dateInput('2026-02-10', { min: '2026-02-05', max: '2026-02-20', required: '' });
     const wrap = enhanceDateField(el);
-    wrap.querySelector('.uidate-field').click();
+    wrap.querySelector('.uidate-ic').click();
     const pop = lastPop('uidate-pop');
 
     const inMonth = pop.querySelectorAll('.uidate-day').filter((d) => !d.classList.contains('is-out'));
@@ -307,4 +330,149 @@ test('ограничения поля закрывают дни, а обязат
     assert.ok(!/Очистить/.test(labels),
         'у обязательного поля «очистить» — предложение сделать форму неверной');
     document.body.replaceChildren();
+});
+test('дату НАБИРАЮТ: 12.04.1978 доходит до поля, а 31 февраля — нет', () => {
+    // DATE_TYPING_V1. Поле было кнопкой: набрать дату было нельзя вовсе, только
+    // листать календарь по месяцу. От сентября 2026 до апреля 1978 — 581
+    // нажатие стрелки, и это на КАЖДОГО пациента. Владелец: «holy shit, this is
+    // terrible UX».
+    document.body.replaceChildren();
+    const { el } = dateInput('');
+    const wrap = enhanceDateField(el);
+    const seen = [];
+    el.addEventListener('change', () => seen.push(el.value));
+    const f = wrap.querySelector('.uidate-field');
+
+    for (const typed of ['12.04.1978', '12/04/1978', '12041978', '12 04 1978']) {
+        el.value = ''; seen.length = 0;
+        f.value = typed;
+        f.dispatchEvent({ type: 'input', target: f, currentTarget: f });
+        assert.equal(el.value, '1978-04-12', 'не разобрано: ' + typed);
+    }
+
+    // Несуществующий день до базы доходить не должен: её ограничение поймает
+    // его позже и грубее — отказом сохранения на полностью заполненной форме.
+    el.value = '';
+    f.value = '31.02.1978';
+    f.dispatchEvent({ type: 'input', target: f, currentTarget: f });
+    assert.equal(el.value, '', '31 февраля принято как дата');
+
+    // Двузначный год не достраиваем: «78» — это и 1978, и 2078.
+    el.value = '';
+    f.value = '12.04.78';
+    f.dispatchEvent({ type: 'input', target: f, currentTarget: f });
+    assert.equal(el.value, '', 'год из двух цифр достроен догадкой');
+    document.body.replaceChildren();
+});
+
+test('в календаре год и месяц ВЫБИРАЮТ, а не долистывают', () => {
+    document.body.replaceChildren();
+    const { el } = dateInput('2026-09-11');
+    const wrap = enhanceDateField(el);
+    wrap.querySelector('.uidate-ic').click();
+    const pop = lastPop('uidate-pop');
+
+    const picks = pop.querySelectorAll('.uidate-pick');
+    assert.equal(picks.length, 2, 'в шапке календаря нет выбора месяца и года');
+    const years = picks[1].children.map((o) => Number(text(o).trim()));
+    assert.ok(years.length >= 100,
+        'список лет короче века — до года рождения пациента им не добраться: ' + years.length);
+    assert.ok(years.includes(1978), 'в списке лет нет 1978');
+    assert.ok(years[0] > years[years.length - 1], 'ближние годы обязаны быть сверху');
+    document.body.replaceChildren();
+});
+
+// ===========================================================================
+// DATE_NUMERIC_V1 — дата рождения цифрами, календарь на месте
+// ===========================================================================
+
+test('дата с data-date-numeric показывается цифрами, а не словами', () => {
+    // Дату рождения СВЕРЯЮТ с паспортом, где она цифрами. Сличать «ноября»
+    // с «11» — лишняя работа глазами, и делать её приходится на каждом пациенте.
+    document.body.replaceChildren();
+    const { el } = dateInput('1994-11-15', { 'data-date-numeric': '' });
+    const wrap = enhanceDateField(el);
+    assert.equal(wrap.querySelector('.uidate-field').value, '15.11.1994');
+    document.body.replaceChildren();
+});
+
+test('без пометки дата по-прежнему словами — её читают, а не сверяют', () => {
+    document.body.replaceChildren();
+    const { el } = dateInput('1994-11-15');
+    const wrap = enhanceDateField(el);
+    const shown = wrap.querySelector('.uidate-field').value;
+    assert.ok(/ноябр/i.test(shown), 'ожидалась словесная запись, получено: ' + shown);
+    document.body.replaceChildren();
+});
+
+test('у даты рождения есть календарь и он открывается', () => {
+    // Владелец показал снимок этого поля с календарём: «can you make this type».
+    // Набор руками остаётся быстрее, но поправить день, когда месяц и год уже
+    // стоят, проще щелчком.
+    document.body.replaceChildren();
+    const { el } = dateInput('1994-11-15', { 'data-date-numeric': '' });
+    const wrap = enhanceDateField(el);
+    const btn = wrap.querySelector('.uidate-ic');
+    assert.ok(btn, 'значка календаря нет');
+    assert.equal(btn.tagName, 'BUTTON', 'календарь перестал быть кнопкой');
+    btn.dispatchEvent({ type: 'click', target: btn, currentTarget: btn,
+        preventDefault() {}, stopPropagation() {} });
+    assert.ok(lastPop('uidate-pop'), 'календарь не открылся');
+    document.body.replaceChildren();
+});
+
+test('точки в дате расставляются сами', () => {
+    document.body.replaceChildren();
+    const { el } = dateInput('', { 'data-date-numeric': '' });
+    const wrap = enhanceDateField(el);
+    const f = wrap.querySelector('.uidate-field');
+    for (const [typed, shown] of [['1', '1'], ['15', '15'], ['151', '15.1'],
+                                  ['1511', '15.11'], ['15111994', '15.11.1994']]) {
+        f.value = typed;
+        f.dispatchEvent({ type: 'input', target: f, currentTarget: f });
+        assert.equal(f.value, shown, 'набрали «' + typed + '»');
+    }
+    assert.equal(el.value, '1994-11-15');
+    document.body.replaceChildren();
+});
+
+test('поле ГОВОРИТ, что не так с датой, а не молчит', () => {
+    document.body.replaceChildren();
+    const { el } = dateInput('', { 'data-date-numeric': '' });
+    const wrap = enhanceDateField(el);
+    const f = wrap.querySelector('.uidate-field');
+    const err = wrap.querySelector('.uidate-err');
+    assert.ok(err, 'месту под ошибку неоткуда взяться');
+    assert.equal(err.getAttribute('aria-live'), 'polite', 'ошибку не прочитают вслух');
+
+    const say = (typed) => {
+        f.value = typed;
+        f.dispatchEvent({ type: 'input', target: f, currentTarget: f });
+        return String(err._t || '');
+    };
+    assert.match(say('15.13.1994'), /месяц/i, 'о несуществующем месяце молчит');
+    assert.match(say('45.11.1994'), /день/i, 'о несуществующем дне молчит');
+    assert.match(say('31.02.1994'), /не существует/i, 'о 31 февраля молчит');
+    assert.match(say('15.11.2999'), /будущ/i, 'дата рождения в будущем принята молча');
+    assert.ok(wrap.classList.contains('is-bad'), 'поле не помечено как ошибочное');
+    assert.equal(say('15.1'), '', 'ругается на недонабранную дату');
+    assert.equal(say('15.11.1994'), '');
+    assert.equal(el.value, '1994-11-15');
+    document.body.replaceChildren();
+});
+
+test('место под значок календаря не отбирается правилом .field input', () => {
+    // Живой промах. `.uidate-field { padding-left: 38px }` — один класс, а
+    // `.field input { padding: 0 12px }` — класс И элемент, то есть вес больше.
+    // Внутри формы побеждал второй, отступ схлопывался до 12 px, и текст
+    // заезжал под значок: владелец увидел «🗓5.11.1994» вместо «15.11.1994».
+    // Снаружи `.field` поле выглядело правильно — потому и не попадалось.
+    //
+    // Проверяем не пиксели (их тут посчитать нечем), а ВЕС селектора: правило
+    // обязано быть записано двумя классами.
+    const css = fs.readFileSync(path.join(HERE, '..', '..', '..', 'css', 'admin.css'), 'utf8');
+    const rule = /\.uidate \.uidate-field \{[^}]*padding-left: 38px/.test(css);
+    assert.ok(rule, 'правило отступа снова записано одним классом — текст заедет под значок');
+    assert.ok(!/^\.uidate-field \{[^}]*padding-left/m.test(css),
+        'вернулась одноклассовая запись, которую перебивает .field input');
 });

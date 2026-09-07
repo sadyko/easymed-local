@@ -17,6 +17,7 @@
 // порядок действий, права доступа и то, какой фразой каждый отказ доезжает до
 // владельца.
 
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -38,7 +39,7 @@ const nurse = { id: 2, role: 'nurse' };
 
 // Каталог данных в этом процессе один (control/config.js объясняет почему).
 function inDir(tag) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-reissue-rpc-' + tag + '-'));
+  const dir = tmpDir('em-reissue-rpc-' + tag + '-');
   setDataDir(dir);
   return dir;
 }

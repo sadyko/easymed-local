@@ -19,8 +19,9 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { REGISTRY } from '../../db/schema-registry.js';
 import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection,
-         telegramLinksList, telegramLinkRevoke } from './telegram.js';
+         telegramLinksList, telegramLinkRevoke, telegramPatientStatus } from './telegram.js';
 import { getDecryptedToken } from '../telegram/settings.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const TOKEN = '1000000001:TESTONLYtestonlyTESTONLYtestonly123';
 const OTHER = '1000000002:TESTONLYtestonlyTESTONLYtestonly456';
@@ -31,7 +32,7 @@ const nurse     = { id: 3, role: 'nurse', extra_roles: ['lab'] };
 
 // Ключ шифрования — во временный каталог: тесты не трогают рабочий data/.
 process.env.EASYMED_TELEGRAM_KEY_PATH =
-  path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'em-tg-rpc-')), '.telegram-key');
+  path.join(tmpDir('em-tg-rpc-'), '.telegram-key');
 
 function freshDb() {
   const db = openDb(':memory:');
@@ -248,4 +249,87 @@ test('таблицы бота недостижимы через /api/db', () => 
   for (const t of ['telegram_settings', 'telegram_links', 'telegram_deliveries', 'telegram_state']) {
     assert.equal(REGISTRY[t], undefined, t);
   }
+});
+
+// ===========================================================================
+// TELEGRAM_PATIENT_BADGE_V1 — состояние Telegram у одного пациента
+// ===========================================================================
+function withPatient(db, phone, id = 900) {
+  db.prepare('INSERT INTO patients (id, full_name, phone, active) VALUES (?,?,?,1)')
+    .run(id, 'Тест Тестов', phone);
+  return id;
+}
+const linkRow = (db, phone, extra = {}) => db.prepare(
+  `INSERT INTO telegram_links (chat_id, phone, tg_user_id, tg_username, tg_name, linked_at, revoked_at, blocked_at)
+   VALUES (?,?,?,?,?,?,?,?)`).run(
+  extra.chat_id || '111', phone, '222', extra.username || 'patient_tg', 'Тест',
+  '2026-01-01T00:00:00Z', extra.revoked_at || null, extra.blocked_at || null);
+
+test('бейдж: бот не настроен — так и сказано, а не «не подключён»', async () => {
+  // Пока бот не настроен, связок нет НИ У КОГО. Надпись «не подключён» свалила
+  // бы на пациента то, чего не сделала клиника, — регистратура пошла бы
+  // выяснять у человека, почему он не подключился.
+  const db = freshDb();
+  const id = withPatient(db, '+998 90 961 00 04');
+  const r = telegramPatientStatus(db, { patient_id: id }, admin);
+  assert.equal(r.state, 'bot_off');
+  assert.equal(r.bot_ready, false);
+});
+
+test('бейдж: номер найден среди связок, как бы он ни был записан', async () => {
+  // В карточке телефон лежит форматированным («+998 90 961 00 04»), а Telegram
+  // присылает «998909610004». Сравнивать их как строки — значит не найти
+  // никого и показать «не подключён» подключённому.
+  const db = freshDb();
+  await saveToken(db);
+  const id = withPatient(db, '+998 90 961 00 04');
+  linkRow(db, '998909610004');
+  const r = telegramPatientStatus(db, { patient_id: id }, nurse);
+  assert.equal(r.state, 'linked');
+  assert.equal(r.username, 'patient_tg');
+});
+
+test('бейдж: заблокировавший бота отличается от неподключённого', async () => {
+  // Разница существенная: «не подключён» — с человеком не договорились, а
+  // «заблокировал» — клиника считает результат отправленным, а он не дойдёт.
+  const db = freshDb();
+  await saveToken(db);
+  const id = withPatient(db, '998909610004');
+  linkRow(db, '998909610004', { blocked_at: '2026-02-02T00:00:00Z' });
+  assert.equal(telegramPatientStatus(db, { patient_id: id }, admin).state, 'blocked');
+});
+
+test('бейдж: отвязанная связка не выдаётся за подключённую', async () => {
+  const db = freshDb();
+  await saveToken(db);
+  const id = withPatient(db, '998909610004');
+  linkRow(db, '998909610004', { revoked_at: '2026-02-02T00:00:00Z' });
+  assert.equal(telegramPatientStatus(db, { patient_id: id }, admin).state, 'revoked');
+});
+
+test('бейдж: без телефона искать нечего, и это отдельное состояние', async () => {
+  const db = freshDb();
+  await saveToken(db);
+  const id = withPatient(db, '');
+  assert.equal(telegramPatientStatus(db, { patient_id: id }, admin).state, 'no_phone');
+});
+
+test('бейдж доступен НЕ только администратору — карточку открывают врач и медсестра', async () => {
+  // telegram_links_list закрыт администратором намеренно: там вся картотека
+  // подключений. Здесь — одна строка про одного пациента, которого сотрудник
+  // и так открыл.
+  const db = freshDb();
+  await saveToken(db);
+  const id = withPatient(db, '998909610004');
+  linkRow(db, '998909610004');
+  for (const who of [nurse, registrar]) {
+    assert.equal(telegramPatientStatus(db, { patient_id: id }, who).state, 'linked');
+  }
+  assert.throws(() => telegramLinksList(db, {}, nurse), /администратор/i,
+    'общий список подключений открылся не администратору');
+});
+
+test('бейдж: без входа в систему не отдаётся', async () => {
+  const db = freshDb();
+  assert.throws(() => telegramPatientStatus(db, { patient_id: 1 }, null), /вход/i);
 });

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { compile, CompileError } from '../db/query-compiler.js';
+import { setLiveColumns, compile, CompileError } from '../db/query-compiler.js';
 import { readableColumns, MAIN_CLINIC_TABLES } from '../db/schema-registry.js';
 // STAFF_SYNC_V1 — «филиал я или сама по себе клиника» решается по базе, а не по
 // сборке: одна и та же установка сегодня одиночная, завтра филиал.
@@ -10,7 +10,26 @@ import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
 // Nothing here ever builds SQL text from the request body directly.
+// STAR_MEETS_SCHEMA_V1 — настоящие колонки таблиц, спрошенные у самой базы.
+// Читаются лениво и запоминаются: PRAGMA на каждый запрос — это лишний поход в
+// базу там, где схема не меняется между перезапусками (миграции идут ДО того,
+// как поднимутся маршруты).
+function liveColumnsReader(db) {
+    const cache = new Map();
+    return (table) => {
+        if (cache.has(table)) return cache.get(table);
+        let set = null;
+        try {
+            const rows = db.prepare(`PRAGMA table_info("${String(table).replace(/"/g, '')}")`).all();
+            if (rows && rows.length) set = new Set(rows.map((r) => r.name));
+        } catch { set = null; }
+        cache.set(table, set);
+        return set;
+    };
+}
+
 export function dbRoutes(db) {
+    setLiveColumns(liveColumnsReader(db));
   const r = Router();
 
   r.post('/', (req, res) => {

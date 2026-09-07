@@ -19,11 +19,12 @@ import { hashPassword } from '../services/auth.js';
 import { createApp } from '../app.js';
 import { licensedDataDir } from '../services/control/licensed-fixture.js';   // LICENCE_CORE_V1
 import { listen } from '../../control-plane/server/test-helpers/listen.js';
+import { tmpDir } from '../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const TOKEN = '1000000001:TESTONLYtestonlyTESTONLYtestonly123';
 
 process.env.EASYMED_TELEGRAM_KEY_PATH =
-  path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'em-tg-http-')), '.telegram-key');
+  path.join(tmpDir('em-tg-http-'), '.telegram-key');
 
 async function startServer() {
   const db = openDb(':memory:');

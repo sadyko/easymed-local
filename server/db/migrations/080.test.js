@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const MIGRATIONS_DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -280,7 +281,7 @@ test('an existing clinic with 70 000 legacy P- MRNs upgrades without error and w
   // the way a clinic that has been running for years is filled, THEN apply 080.
   // Every existing MRN is printed on a card the patient carries, so the one
   // outcome this migration may never produce is a renumbered patient.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-080-'));
+  const dir = tmpDir('em-080-');
   try {
     // Filter on the migration NUMBER, not on the string '080'. The day 081 is
     // written, a name-prefix filter would copy it in, migrate would apply it
@@ -334,7 +335,7 @@ test('an existing clinic with 70 000 legacy P- MRNs upgrades without error and w
 
 /** A database at exactly 079, plus the temp dir migrate() reads from. */
 function at079() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-080-del-'));
+  const dir = tmpDir('em-080-del-');
   fs.cpSync(MIGRATIONS_DIR, dir, { recursive: true, filter: (src) => {
     if (fs.statSync(src).isDirectory()) return true;
     const m = /^(\d{3,})_.*\.sql$/.exec(path.basename(src));

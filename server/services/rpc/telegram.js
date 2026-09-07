@@ -13,7 +13,8 @@ import { publicSettings, saveSettings, clearToken, getDecryptedToken, recordChec
 import { getMe, TelegramError } from '../telegram/api.js';
 import { setupBot } from '../telegram/setup.js';   // TELEGRAM_BOT_SETUP_V1
 import { wakeTelegramBot } from '../telegram/index.js';
-import { findPatientsByPhone } from '../telegram/documents.js';
+import { findPatientsByPhone, digitsOf } from '../telegram/documents.js';
+import { uzLocalDigits, MIN_PHONE_DIGITS } from '../../../public/js/admin/views/crm-phone-match.js';   // TELEGRAM_PATIENT_BADGE_V1
 import { botStats, previewAudience, startBroadcast, broadcastStatus, broadcastHistory } from '../telegram/broadcast.js';
 
 export class RpcError extends Error {
@@ -383,4 +384,61 @@ export async function telegramTestConnection(db, args, user, deps = {}) {
     }
     throw e;
   }
+}
+
+// TELEGRAM_PATIENT_BADGE_V1 — состояние Telegram у ОДНОГО пациента.
+//
+// Владелец: «instead of the active badge show connected telegram account
+// status». Бейдж «Активен» рядом с именем не говорил ничего: он повторял
+// администраторскую отметку, которую и так видно по самой карточке, и почти
+// всегда стоял в одном положении. На его месте полезнее знать, дойдёт ли до
+// человека результат анализа — то есть подключён ли у него бот.
+//
+// Отдельный RPC, а не telegram_links_list, по двум причинам:
+//   • тот список ТОЛЬКО для администратора, а карточку открывают врач и
+//     медсестра — им бейдж нужен ровно так же;
+//   • тот тянет 200 связок со всеми пациентами каждой; здесь нужна одна.
+//
+// Про «выключен» отдельно: связка ищется ПО НОМЕРУ, и если бот не настроен,
+// связок нет ни у кого. Показать в этом случае «не подключён» значило бы
+// свалить на пациента то, чего не сделала клиника, — поэтому состояние бота
+// возвращается отдельным полем.
+export function telegramPatientStatus(db, args, user) {
+  if (!user || !user.id) throw new RpcError('Нужен вход в систему.', 401);
+  const patientId = Number(args && args.patient_id);
+  if (!Number.isInteger(patientId) || patientId <= 0) throw new RpcError('Не указан пациент.', 400);
+
+  const st = db.prepare(
+    'SELECT enabled, bot_username, bot_token_enc FROM telegram_settings WHERE id = 1').get();
+  const botReady = !!(st && st.enabled && st.bot_token_enc);
+  if (!botReady) return { bot_ready: false, state: 'bot_off', username: null };
+
+  const p = db.prepare('SELECT phone FROM patients WHERE id = ?').get(patientId);
+  if (!p) throw new RpcError('Пациент не найден.', 404);
+
+  const want = digitsOf(p.phone);
+  if (want.length < MIN_PHONE_DIGITS) return { bot_ready: true, state: 'no_phone', username: null };
+  const wantLocal = uzLocalDigits(want);
+
+  // Связок в клинике — десятки, не тысячи: сверяем в JS теми же цифрами, что и
+  // поиск пациента по номеру, иначе «+998 90 961 00 04» и «998909610004»
+  // считались бы разными людьми.
+  const rows = db.prepare(
+    'SELECT tg_username, tg_name, linked_at, last_seen_at, revoked_at, blocked_at, phone'
+    + ' FROM telegram_links ORDER BY revoked_at IS NOT NULL, linked_at DESC').all();
+  const hit = rows.find((r) => {
+    const d = digitsOf(r.phone);
+    return d === want || uzLocalDigits(d) === wantLocal;
+  });
+
+  if (!hit) return { bot_ready: true, state: 'none', username: null };
+  if (hit.revoked_at) return { bot_ready: true, state: 'revoked', username: hit.tg_username || null };
+  // Заблокировал бота сам: сообщения уходить не будут, и знать это важнее
+  // всего — иначе клиника считает, что результат «отправлен».
+  if (hit.blocked_at) return { bot_ready: true, state: 'blocked', username: hit.tg_username || null };
+  return {
+    bot_ready: true, state: 'linked',
+    username: hit.tg_username || null, name: hit.tg_name || null,
+    linked_at: hit.linked_at || null, last_seen_at: hit.last_seen_at || null,
+  };
 }

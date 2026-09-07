@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { openDb } from './connection.js';
 import { migrate, pendingMigrations } from './migrate.js';
+import { tmpDir } from '../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 test('migrate creates tables and is idempotent', () => {
   const db = openDb(':memory:');
@@ -17,7 +18,7 @@ test('migrate creates tables and is idempotent', () => {
 });
 
 test('a failing migration rolls back and is not marked applied', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mig-'));
+  const dir = tmpDir('mig-');
   fs.writeFileSync(path.join(dir, '001_bad.sql'), 'CREATE TABLE x (id INTEGER); SELECT not_valid_sql;');
   const db = openDb(':memory:');
   assert.throws(() => migrate(db, dir));
@@ -26,14 +27,14 @@ test('a failing migration rolls back and is not marked applied', () => {
 });
 
 test('badly named migration file is rejected', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mig-'));
+  const dir = tmpDir('mig-');
   fs.writeFileSync(path.join(dir, '1_unpadded.sql'), 'CREATE TABLE y (id INTEGER);');
   const db = openDb(':memory:');
   assert.throws(() => migrate(db, dir), /Bad migration filename/);
 });
 
 test('refuses to run when two migrations share a number prefix', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-mig-'));
+  const dir = tmpDir('em-mig-');
   fs.writeFileSync(path.join(dir, '001_a.sql'), 'CREATE TABLE a (id INTEGER);');
   fs.writeFileSync(path.join(dir, '001_b.sql'), 'CREATE TABLE b (id INTEGER);');
   const db = openDb(':memory:');
@@ -55,7 +56,7 @@ test('a NEW file under a grandfathered number is still refused', () => {
   // The exemption forgives five specific files, not the numbers 058 and 071.
   // Without this test the guard silently stops guarding at exactly the two
   // numbers most likely to be reused by accident.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-mig-'));
+  const dir = tmpDir('em-mig-');
   fs.writeFileSync(path.join(dir, '058_crm_line_doctor.sql'), 'CREATE TABLE a (id INTEGER);');
   fs.writeFileSync(path.join(dir, '058_referral_source_person.sql'), 'CREATE TABLE b (id INTEGER);');
   fs.writeFileSync(path.join(dir, '058_brand_new_mistake.sql'), 'CREATE TABLE c (id INTEGER);');
@@ -64,7 +65,7 @@ test('a NEW file under a grandfathered number is still refused', () => {
 });
 
 test('the same number padded differently is still one number', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-mig-'));
+  const dir = tmpDir('em-mig-');
   fs.writeFileSync(path.join(dir, '001_a.sql'), 'CREATE TABLE a (id INTEGER);');
   fs.writeFileSync(path.join(dir, '0001_b.sql'), 'CREATE TABLE b (id INTEGER);');
   const db = openDb(':memory:');
@@ -81,7 +82,7 @@ test('pendingMigrations: all pending on a database that was never migrated', () 
   // No schema_migrations table exists yet — pendingMigrations must treat that
   // as "nothing applied", not throw, since this is exactly the state the boot
   // sequence calls it in to decide whether a backup is worth taking.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-mig-'));
+  const dir = tmpDir('em-mig-');
   fs.writeFileSync(path.join(dir, '001_a.sql'), 'CREATE TABLE a (id INTEGER);');
   fs.writeFileSync(path.join(dir, '002_b.sql'), 'CREATE TABLE b (id INTEGER);');
   const db = openDb(':memory:');
@@ -89,7 +90,7 @@ test('pendingMigrations: all pending on a database that was never migrated', () 
 });
 
 test('pendingMigrations does not itself apply anything', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-mig-'));
+  const dir = tmpDir('em-mig-');
   fs.writeFileSync(path.join(dir, '001_a.sql'), 'CREATE TABLE a (id INTEGER);');
   const db = openDb(':memory:');
 

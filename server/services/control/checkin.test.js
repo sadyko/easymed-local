@@ -1,3 +1,4 @@
+import { tmpDir as makeTmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -47,7 +48,7 @@ __setPublicKeyForTests(publicKey); // checkin.js's own verifier seam, mirrors st
 
 const tmpDirs = [];
 function tmpDir(prefix) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dir = makeTmpDir(prefix);
   tmpDirs.push(dir);
   return dir;
 }
@@ -1033,7 +1034,7 @@ test('acceptance: vendor sets a collect subset, two check-ins later the numbers 
 // of its own last update, so the reader can never stop stripping it.
 
 test('readJsonFile: parses a file written WITH a UTF-8 BOM — what the retired PowerShell apply left on clinic disks', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-bom-'));
+  const dir = makeTmpDir('em-bom-');
   const file = path.join(dir, 'update-result.json');
   // ﻿ prefix = exactly what PowerShell 5.1's Out-File wrote by default.
   fs.writeFileSync(file, '﻿' + JSON.stringify({ version: '1.2.3', ok: true }), 'utf8');
@@ -1046,7 +1047,7 @@ test('readJsonFile: parses a file written WITH a UTF-8 BOM — what the retired 
 });
 
 test('readJsonFile: plain JSON with no BOM still works', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-bom-'));
+  const dir = makeTmpDir('em-bom-');
   const file = path.join(dir, 'x.json');
   fs.writeFileSync(file, JSON.stringify({ a: 1 }), 'utf8');
   assert.deepEqual(readJsonFile(file), { a: 1 });
@@ -1054,7 +1055,7 @@ test('readJsonFile: plain JSON with no BOM still works', () => {
 });
 
 test('readJsonFile: missing, corrupt, or non-object content is null — never a throw on a status path', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-bom-'));
+  const dir = makeTmpDir('em-bom-');
   assert.equal(readJsonFile(path.join(dir, 'nope.json')), null);
   const bad = path.join(dir, 'bad.json');
   fs.writeFileSync(bad, '{ not json');

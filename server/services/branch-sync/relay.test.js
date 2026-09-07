@@ -10,6 +10,7 @@ import { b64url, writePairing, readPairing, GROUP_KEY_BYTES } from './pairing.js
 import { relayIdFor, openPayload } from './relay-crypto.js';
 import { publishCatalogue, fetchCatalogue, maybePublish, mintRelayToken, relayMintable, relayUrl, relayTokenUrl, readLastPublish, scheduleRelayPublish, publishJournal, withExchangeLock, seedPagesEstimate, MAX_SCOPE } from './relay.js';
 import { SHIPPED } from './journal.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 // BRANCH_SYNC_RELAY_V1 — транспорт Маршрута Б на подставном fetch.
 //
@@ -21,7 +22,7 @@ import { SHIPPED } from './journal.js';
 // сервере многомесячный прайс — без единой ошибки на экране.
 
 const KEY = b64url(randomBytes(GROUP_KEY_BYTES));
-const tmp = (tag) => fs.mkdtempSync(path.join(os.tmpdir(), 'em-relay-' + tag + '-'));
+const tmp = (tag) => tmpDir('em-relay-' + tag + '-');
 
 function clinic(tag, { role = 'main', relay = true, key = KEY, token = 'tok-AAAA', relayToken = null } = {}) {
   const dir = tmp(tag);

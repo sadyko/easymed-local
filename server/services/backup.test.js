@@ -1,3 +1,4 @@
+import { tmpDir } from '../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 import { test } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs';
@@ -14,7 +15,7 @@ import {
 // mirroring db/backup.test.js: this suite must never look at the real data/
 // folder, where a dev server may be holding easymed.db open right now.
 function workspace() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-sysbk-'));
+  const dir = tmpDir('em-sysbk-');
   const dbPath = path.join(dir, 'easymed.db');
   const db = openDb(dbPath);
   migrate(db);
@@ -90,14 +91,14 @@ test('listBackups ignores non-backups: bad names, sidecars, directories, unknown
 });
 
 test('listBackups on a data dir with no backups folder is empty, not a crash', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-sysbk-empty-'));
+  const dir = tmpDir('em-sysbk-empty-');
   assert.deepEqual(listBackups(dir), []);
 });
 
 // --- pruneBackupsByKind -----------------------------------------------------
 
 test('pruning is per kind: daily backups can never evict update-rollback points', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-sysbk-prune-'));
+  const dir = tmpDir('em-sysbk-prune-');
   // Plain files with hand-set mtimes: pruning reads names and dates, never content.
   let t = Date.now() - 1e6;
   const put = (name) => {
@@ -158,7 +159,7 @@ test('scheduleDailyBackups arms real timers and the first tick takes a backup', 
 });
 
 test('a failing tick is contained: the schedule never throws out of a timer', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-sysbk-fail-'));
+  const dir = tmpDir('em-sysbk-fail-');
   const broken = { backup: () => Promise.reject(new Error('boom')) };
   const handles = scheduleDailyBackups(broken, dir, { initialDelayMs: 5, intervalMs: 60_000 });
   await new Promise((r) => setTimeout(r, 60));
@@ -303,7 +304,7 @@ test('wipe_backups takes the backups tree too — the clean-disk path', async ()
 });
 
 test('a factory reset re-run after a crash is safe on an already-empty dir', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-sysbk-reset2-'));
+  const dir = tmpDir('em-sysbk-reset2-');
   fs.writeFileSync(marker(dir), JSON.stringify({ action: 'factory_reset', wipe_backups: true }));
   const r = processPendingAction(dir);
   assert.equal(r.action, 'factory_reset');
@@ -324,13 +325,13 @@ test('a malformed marker is renamed .bad and boot continues', () => {
 });
 
 test('an unknown action is quarantined the same way', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-sysbk-unk-'));
+  const dir = tmpDir('em-sysbk-unk-');
   fs.writeFileSync(marker(dir), JSON.stringify({ action: 'defrag' }));
   assert.equal(processPendingAction(dir).action, null);
   assert.ok(fs.existsSync(marker(dir) + '.bad'));
 });
 
 test('no marker at all is the common case and does nothing', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-sysbk-none-'));
+  const dir = tmpDir('em-sysbk-none-');
   assert.equal(processPendingAction(dir).action, null);
 });

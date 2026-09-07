@@ -42,12 +42,13 @@ import { migrate as migrateCp } from '../../../control-plane/server/db/migrate.j
 import { createApp as createCpApp } from '../../../control-plane/server/app.js';
 import { createEnrollmentCode, redeemEnrollmentCode } from '../../../control-plane/server/services/enrollment.js';
 import { listen as listenOnFreePort } from '../../../control-plane/server/test-helpers/listen.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const KEY = b64url(randomBytes(GROUP_KEY_BYTES));
 const CATALOGUE = relayIdFor(KEY);
 const KEY_TOKEN = 'key-CATALOGUE-ONLY';       // учётка старого выпуска: один адрес
 const INSTALL = 'tok-B2';                     // install_token САМОГО филиала
-const tmp = (tag) => fs.mkdtempSync(path.join(os.tmpdir(), 'em-own-' + tag + '-'));
+const tmp = (tag) => tmpDir('em-own-' + tag + '-');
 
 /**
  * Установка филиала: своя база, свой каталог данных, учётка из ключа и —

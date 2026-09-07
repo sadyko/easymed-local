@@ -8,6 +8,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { applyUpdate } from './updater.js';
 import { readJsonFile } from './checkin.js';
+import { tmpDir as makeTmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 // NODE_NATIVE_UPDATES_V1 — THE TEST THE OLD DESIGN COULD NOT HAVE.
 //
@@ -32,7 +33,7 @@ import { readJsonFile } from './checkin.js';
 
 const tmpDirs = [];
 function tmpDir(prefix) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dir = makeTmpDir(prefix);
   tmpDirs.push(dir);
   return dir;
 }

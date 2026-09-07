@@ -35,6 +35,7 @@ import {
 } from '../services/branch-sync/pairing.js';
 import { ACCEPT_HEADER, SEALED_FORM } from '../services/branch-sync/catalogue.js';
 import { listen as listenOnFreePort } from '../../control-plane/server/test-helpers/listen.js';
+import { tmpDir } from '../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const GROUP = 'BR-AAAABBBBCCCC';
 const SECRET = 'общий-секрет-пары';
@@ -65,7 +66,7 @@ function mainDb() {
 
 /** Каталог данных главной клиники: пара role=main, с ключом группы или без. */
 function mainDir({ groupKey = newKey() } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-seal-main-'));
+  const dir = tmpDir('em-seal-main-');
   const record = { role: 'main', group_id: GROUP, secret: SECRET, main_url: 'http://127.0.0.1:1' };
   if (groupKey) record.group_key = groupKey;
   writePairing(dir, record);
@@ -74,7 +75,7 @@ function mainDir({ groupKey = newKey() } = {}) {
 
 /** Каталог данных филиала: пара role=secondary, смотрящая на поднятый порт. */
 function branchDir(base, { groupKey } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-seal-branch-'));
+  const dir = tmpDir('em-seal-branch-');
   const record = { role: 'secondary', group_id: GROUP, secret: SECRET, main_url: base };
   if (groupKey) record.group_key = groupKey;
   writePairing(dir, record);

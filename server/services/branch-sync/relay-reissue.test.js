@@ -21,12 +21,13 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { reissueBranchOnControlPlane } from './relay.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const ENV = { EASYMED_CONTROL_URL: 'http://127.0.0.1:8099' };
 
 /** Каталог данных активированной ГЛАВНОЙ клиники: install_token — вся её аутентификация. */
 function mainDir({ token = 'tok-MAIN' } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-reissue-'));
+  const dir = tmpDir('em-reissue-');
   if (token) {
     fs.writeFileSync(path.join(dir, 'control.json'),
       JSON.stringify({ clinic_id: 'c-000005', install_token: token }));

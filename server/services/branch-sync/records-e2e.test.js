@@ -54,6 +54,7 @@ import { migrate as migrateCp } from '../../../control-plane/server/db/migrate.j
 import { createApp as createCpApp } from '../../../control-plane/server/app.js';
 import { createEnrollmentCode, redeemEnrollmentCode } from '../../../control-plane/server/services/enrollment.js';
 import { listen as listenOnFreePort } from '../../../control-plane/server/test-helpers/listen.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 // Порт, на котором заведомо никто не слушает: прямой путь обязан отказать
 // быстро (ECONNREFUSED), а не ждать таймаута.
@@ -85,7 +86,7 @@ function shutdown(server) {
 
 /** Каталог данных + база одной установки. */
 function install(tag) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-rec-' + tag + '-'));
+  const dir = tmpDir('em-rec-' + tag + '-');
   const db = openDb(path.join(dir, tag + '.db'));
   migrate(db);
   return { dir, db, tag };

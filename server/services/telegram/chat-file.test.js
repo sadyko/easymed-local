@@ -16,9 +16,10 @@ import { migrate } from '../../db/migrate.js';
 import { sendChatFile } from './chat.js';
 import { telegramChatSendFile } from '../rpc/telegram.js';
 import { encryptToken, loadOrCreateKey } from './crypto.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 process.env.EASYMED_TELEGRAM_KEY_PATH =
-  path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'em-tg-file-')), '.telegram-key');
+  path.join(tmpDir('em-tg-file-'), '.telegram-key');
 const ENC_TOKEN = encryptToken('1000000001:TESTONLYtestonlyTESTONLYtestonly123', loadOrCreateKey());
 
 const editorUser = { id: 6, role: 'callcenter', full_name: 'Оператор Оксана' };

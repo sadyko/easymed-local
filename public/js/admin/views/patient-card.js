@@ -101,6 +101,51 @@ function genderLabel(g) {
     return g.charAt(0).toUpperCase() + g.slice(1);
 }
 
+// TELEGRAM_PATIENT_BADGE_V1 — что написать в бейдже и каким цветом.
+//
+// Пять состояний, и «бот выключен» среди них ОТДЕЛЬНО: пока бот не настроен,
+// связок нет ни у кого, и надпись «не подключён» свалила бы на пациента то,
+// чего не сделала клиника.
+//
+// Ошибку запроса не показываем красным: бейдж — справка, а не действие, и
+// пугать регистратуру плашкой из-за недоступного справочника нечем. Молча
+// остаётся нейтральным.
+const TG_WORDS = {
+    linked:   'Telegram подключён',
+    blocked:  'Telegram: бот заблокирован',
+    revoked:  'Telegram отвязан',
+    none:     'Telegram не подключён',
+    no_phone: 'Нет телефона для Telegram',
+    bot_off:  'Telegram-бот выключен',
+};
+const TG_LOOK = {
+    linked:  { bg: 'var(--ok-50, #ecfdf5)', fg: 'var(--ok-700, #047857)', dot: 'var(--ok-500, #10b981)' },
+    blocked: { bg: 'var(--crit-50, #fef2f2)', fg: 'var(--crit-700, #b91c1c)', dot: 'var(--crit-500, #ef4444)' },
+    revoked: { bg: 'var(--ink-50)', fg: 'var(--ink-600)', dot: 'var(--ink-400)' },
+    none:    { bg: 'var(--ink-50)', fg: 'var(--ink-600)', dot: 'var(--ink-400)' },
+    no_phone:{ bg: 'var(--ink-50)', fg: 'var(--ink-600)', dot: 'var(--ink-400)' },
+    bot_off: { bg: 'var(--ink-50)', fg: 'var(--ink-600)', dot: 'var(--ink-400)' },
+};
+
+export function telegramPillLook(state) { return TG_LOOK[state] || null; }
+export function telegramPillText(st) {
+    if (!st || !TG_WORDS[st.state]) return null;
+    // У подключённого показываем @имя: по нему видно, ЧЕЙ это Telegram — номер
+    // мог перейти другому человеку, и это единственное место, где так заметно.
+    return st.state === 'linked' && st.username ? '@' + st.username : tr(TG_WORDS[st.state]);
+}
+
+function paintTelegramPill(st, pill, dot, text) {
+    const look = telegramPillLook(st && st.state);
+    const label = telegramPillText(st);
+    if (!look || !label) return;
+    pill.style.background = look.bg;
+    pill.style.color = look.fg;
+    dot.style.background = look.dot;
+    text.textContent = label;
+    pill.title = tr(TG_WORDS[st.state]);
+}
+
 export function renderPatientCard(container, { onNavigate, payload } = {}) {
     clear(container);
 
@@ -127,6 +172,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
     let patient = null;
     let payerName = null;
     let category = null;   // CATEGORY_DISCOUNT_V1 — {id, name, discount_percent, active}
+    let telegram = null;   // TELEGRAM_PATIENT_BADGE_V1 — {bot_ready, state, username}
     let visits = [];
     let invoices = [];
     let services = [];   // visit_services rows across this patient's visits
@@ -221,6 +267,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         patient   = data.patient || null;
         payerName = data.payer_name || null;
         category  = data.category || null;
+        telegram  = data.telegram || null;   // TELEGRAM_PATIENT_BADGE_V1
         visits    = data.visits || [];
         invoices  = data.invoices || [];
         invoiceItems = data.invoice_items || [];
@@ -412,16 +459,25 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         }
         for (const b of demoBits) { demo.appendChild(sep()); demo.appendChild(b); }
 
+        // TELEGRAM_PATIENT_BADGE_V1 — на месте «Активен» состояние Telegram.
+        //
+        // Владелец: «instead of the active badge show connected telegram account
+        // status». Прежний бейдж повторял административную отметку, которую и
+        // так видно по самой карточке, и почти всегда стоял в одном положении —
+        // места рядом с именем он не окупал. На его месте полезно знать, дойдёт
+        // ли до человека результат анализа: подключён ли у него бот.
+        const tgDot = h('span', { style: { width: '6px', height: '6px', borderRadius: '999px', background: 'var(--ink-300)' } });
+        const tgText = h('span', {}, tr('Telegram'));
         const activePill = h('span', {
             style: {
                 display: 'inline-flex', alignItems: 'center', gap: '6px',
                 padding: '3px 12px', borderRadius: '999px', fontSize: '12.5px', fontWeight: 600,
-                background: p.active === 0 ? 'var(--ink-50)' : 'var(--ok-50, #ecfdf5)',
-                color: p.active === 0 ? 'var(--ink-600)' : 'var(--ok-700, #047857)',
+                background: 'var(--ink-50)', color: 'var(--ink-600)',
             },
-        },
-            h('span', { style: { width: '6px', height: '6px', borderRadius: '999px', background: p.active === 0 ? 'var(--ink-400)' : 'var(--ok-500, #10b981)' } }),
-            p.active === 0 ? 'Неактивен' : 'Активен');
+        }, tgDot, tgText);
+        // Состояние приезжает отдельным запросом: карточка не должна ЖДАТЬ его,
+        // чтобы показать имя и визиты. До ответа бейдж нейтрален.
+        paintTelegramPill(telegram, activePill, tgDot, tgText);
 
         const nameRow = h('div', { style: { padding: '16px 20px 14px', display: 'flex', alignItems: 'flex-start', gap: '16px', flexWrap: 'wrap' } },
             h('div', { style: { minWidth: 0, flex: 1 } },

@@ -32,6 +32,7 @@ import { licensedDataDir } from '../control/licensed-fixture.js';
 import { readPairing, writePairing, signRequest, CATALOGUE_PATH } from './pairing.js';
 import { isReadOnlyRpc, isAlwaysAllowedRpc } from '../control/gate.js';
 import { listen as listenOnFreePort } from '../../../control-plane/server/test-helpers/listen.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const MARKER = 'ZZPATIENTMARKER';
 
@@ -128,7 +129,7 @@ test('два филиала: связывание, перенос справоч
   // каталог получается копированием файлов первого, а не вторым вызовом —
   // иначе лицензия первой установки перестала бы проверяться.
   const secDir = licensedDataDir();
-  const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-branch-main-'));
+  const mainDir = tmpDir('em-branch-main-');
   for (const f of ['control.json', 'licence.dat']) fs.copyFileSync(path.join(secDir, f), path.join(mainDir, f));
 
   const dbMain = install(mainDir, 'main');

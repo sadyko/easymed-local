@@ -1,3 +1,4 @@
+import { tmpDir as makeTmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -30,7 +31,7 @@ __setReleasePublicKeyForTests(publicKey);
 
 const tmpDirs = [];
 function tmpDir(prefix) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dir = makeTmpDir(prefix);
   tmpDirs.push(dir);
   return dir;
 }

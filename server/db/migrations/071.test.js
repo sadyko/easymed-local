@@ -11,6 +11,7 @@ import { migrate } from '../migrate.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const SQL = fs.readFileSync(path.join(DIR, '071_queue_local_day_backfill.sql'), 'utf8');
@@ -19,7 +20,7 @@ const SQL = fs.readFileSync(path.join(DIR, '071_queue_local_day_backfill.sql'), 
 // талоны, а потом прогнать саму миграцию и увидеть, что она делает.
 function dbBefore071() {
   const db = openDb(':memory:');
-  const tmp = fs.mkdtempSync(path.join(process.env.TEMP || '/tmp', 'mig071-'));
+  const tmp = tmpDir('mig071-');
   for (const f of fs.readdirSync(DIR).filter((x) => x.endsWith('.sql') && !x.startsWith('071'))) {
     fs.copyFileSync(path.join(DIR, f), path.join(tmp, f));
   }

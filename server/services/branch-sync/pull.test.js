@@ -17,11 +17,12 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { pullCatalogue } from './pull.js';
 import { writePairing, b64url, GROUP_KEY_BYTES } from './pairing.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const GOOD = { role: 'secondary', group_id: 'BR-AAAABBBBCCCC', secret: 'общий-секрет', main_url: 'http://10.0.0.5:8000' };
 
 function dir(record = GOOD) {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'em-branch-pull-'));
+  const d = tmpDir('em-branch-pull-');
   if (record) writePairing(d, record);
   return d;
 }

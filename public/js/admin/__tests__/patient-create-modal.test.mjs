@@ -54,6 +54,8 @@ class F{constructor(t){this.tagName=String(t).toUpperCase();this.style={};this.c
  fireInput(){this.dispatchEvent({type:'input',currentTarget:this,target:this});}
  focus(){} blur(){} scrollTo(){} scrollIntoView(){} remove(){ if(this.parentNode) this.parentNode.removeChild(this); } select(){}
  querySelector(){return null;} querySelectorAll(){return [];}
+ closest(sel){const c=String(sel).replace(/^\./,'');let n=this;
+   while(n){if(String(n.className||'').split(/\s+/).includes(c))return n;n=n.parentNode;}return null;}
  getBoundingClientRect(){return {top:0,left:0,width:0,height:0,bottom:0,right:0};}
  get textContent(){return this._t;} set textContent(v){this._t=String(v);this.children.length=0;}
  get classList(){const s=this;return{contains:c=>String(s.className||'').split(/\s+/).includes(c),add(c){s.className=(s.className?s.className+' ':'')+c;},remove(){},toggle(){}};}
@@ -113,6 +115,9 @@ let inserted = [];
 // CATEGORY_DISCOUNT_V1 — справочник категорий клиники. Пустой по умолчанию:
 // экран не имеет права выдумывать категории, которых у клиники нет.
 let categoryRows = [];
+// CATEGORY_LIST_RESILIENT_V1 — установка, где миграция 107 ещё не применилась:
+// колонки `discount_percent` в базе нет, и запрос с ней отвергается ЦЕЛИКОМ.
+let categoryDiscountMissing = false;
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
@@ -126,6 +131,10 @@ globalThis.fetch = async (url, opts = {}) => {
       inserted.push({ table, values: body.values });
       const row = { id: 'p-new', mrn: 'MRN-NEW', ...body.values };
       return ok({ data: body.single ? row : [row] });
+    }
+    if (table === 'patient_categories' && categoryDiscountMissing
+        && String((body && body.columns) || '').includes('discount_percent')) {
+      return { ok: false, status: 400, json: async () => ({ error: { message: 'unknown column' } }) };
     }
     const rows = table === 'patients' ? patientRows
       : table === 'patient_categories' ? categoryRows : [];
@@ -150,7 +159,7 @@ const overlays = () => (document.body.children || []).filter((n) => hasClass(n, 
 const dialogs = (name) => walk(document.body).filter((n) => n.attrs['data-dialog'] === name);
 
 function reset() {
-  patientRows = []; inserted = []; toasts.length = 0;
+  patientRows = []; inserted = []; toasts.length = 0; categoryDiscountMissing = false;
   document.body.children.length = 0;
   setFullAccess('Admin');
 }
@@ -164,7 +173,7 @@ function fillMinimum(dlg, over = {}) {
 }
 
 // ===========================================================================
-test('первый экран влезает в 1366×768 без прокрутки — и модель высоты сверена с CSS', () => {
+test('высота окна посчитана честно, сверена с CSS, и окно прокручивается, а не обрезается', () => {
   const { METRICS } = modal;
 
   // 1. Модель не выдумана: каждое её число объявлено в admin.css.
@@ -172,6 +181,9 @@ test('первый экран влезает в 1366×768 без прокрут�
   assert.ok(dense.length > 400, 'блок .mg-dense не найден в admin.css');
   const declared = [
     ['.mg-section padding',        /\.mg-dense \.mg-section \{ padding: 14px 22px; gap: 10px; \}/, [METRICS.sectionPadV, METRICS.rowGap], [14, 10]],
+    // SECTION_HEAD_AIR_V1 — зазор под шапкой складывается из двух чисел:
+    // зазора раздела (10) и поля самого заголовка (4). Модель обязана знать сумму.
+    ['h3 margin-bottom',           /\.mg-dense \.mg-section > h3 \{ margin-bottom: 4px; \}/, [METRICS.sectionTitleGap], [METRICS.rowGap + 4]],
     ['h3 line-height',             /\.mg-dense \.mg-section h3 \{ margin: 0; line-height: 17px; \}/, [METRICS.sectionTitleH], [17]],
     ['.mg-grid gap',               /\.mg-dense \.mg-grid \{ gap: 10px; \}/, [METRICS.rowGap], [10]],
     ['.field gap',                 /\.mg-dense \.field \{ gap: 4px; \}/, [METRICS.labelGap], [4]],
@@ -199,9 +211,22 @@ test('первый экран влезает в 1366×768 без прокрут�
   // 2. Считаем и сравниваем с доступной высотой.
   const H = modal.firstScreenHeight();
   assert.ok(H > 0, 'высота не посчиталась');
-  assert.ok(modal.fitsViewport(768), 'не влезает на киоске 1366×768: ' + H + ' > ' + (768 - 60));
-  // То же железо, но окно Chrome: вкладки + адресная строка + панель задач.
-  assert.ok(modal.fitsViewport(648), 'не влезает в окне Chrome на 768-м экране: ' + H + ' > ' + (648 - 60));
+
+  // PATIENT_FORM_REWRITE_V1 — ПОРОГ ИЗМЕНИЛСЯ, И ВОТ ПОЧЕМУ.
+  //
+  // Раньше здесь требовалось, чтобы окно влезало в 1366×768 без прокрутки, и
+  // ради этого половина полей жила за раскрытием «Подробнее». Владелец прислал
+  // образец, в котором прятать нечего: три раздела, всё видно сразу. Такое
+  // окно выше 768-го экрана — это следствие решения показывать всё, а не
+  // недосмотр, и врать про него тестом нельзя.
+  //
+  // Что проверяется теперь:
+  //   • на экране 1080p (обычный монитор регистратуры) окно видно целиком;
+  //   • на ноутбуке 1366×768 оно ПРОКРУЧИВАЕТСЯ, а не обрезается, — за это
+  //     отвечают max-height у карточки и overflow-y у тела, оба ниже.
+  assert.ok(modal.fitsViewport(950), 'не влезает даже на 1080p: ' + H + ' > ' + (950 - 60));
+  assert.ok(/\.modal-body \{[^}]*overflow-y: auto/.test(ADMIN_CSS),
+    'тело окна перестало прокручиваться — на 768-м экране форму обрежет');
   // 3. И по ширине: 1366 минус поля окна.
   assert.ok(METRICS.cardWidth <= 1366 - 32, 'окно шире экрана 1366');
   assert.ok(METRICS.cardWidth > 1120, 'окно не стало шире стандартного сгруппированного — поля останутся длинными');
@@ -216,56 +241,66 @@ test('плотность сделана размером полей, а не к�
   assert.ok(!/font-size:\s*1[01](\.\d+)?px/.test(dense), 'в плотном окне появился шрифт мельче 12.5px');
 });
 
-test('на первом экране — двенадцать полей из плана; фото, Telegram, адрес и поведение за «Подробнее»', () => {
+test('окно — три пронумерованных раздела, и ВСЁ видно сразу', () => {
+  // PATIENT_FORM_REWRITE_V1. Окно перебрано по образцу владельца: разделов
+  // три, они идут во всю ширину и пронумерованы, раскрытия «Подробнее» больше
+  // нет вовсе — всё, что оно прятало, разошлось по разделам.
   reset();
   const dlg = modal.buildPatientCreateDialog({});
 
-  // Первый экран = всё окно минус скрытая секция «Подробнее».
-  assert.equal(dlg.moreSection.style.display, 'none', 'раскрытие открыто с самого начала');
-  const walkExcept = (e, skip, o = []) => { if (e === skip) return o; o.push(e); for (const c of e.children || []) walkExcept(c, skip, o); return o; };
-  const first = walkExcept(dlg.card, dlg.moreSection);
-  const firstLabels = first.filter((n) => n.tagName === 'LABEL').map((n) => textOf(n).replace(/\s+/g, ' ').trim());
+  const all = [];
+  (function walk(n) { all.push(n); for (const c of n.children || []) walk(c); })(dlg.card);
+  const labels = all.filter((n) => n.tagName === 'LABEL').map((n) => textOf(n).replace(/\s+/g, ' ').trim());
 
   for (const want of ['Фамилия *', 'Имя *', 'Отчество', 'Дата рождения *', 'Возраст', 'Пол *',
-                      'Номер телефона', 'Доп. номер телефона', 'Предпочитаемый язык',
-                      'ПИНФЛ (ЖШШИР)', 'Паспорт / документ №', 'Категория пациента']) {
-    assert.ok(firstLabels.some((l) => l === want), 'на первом экране нет поля «' + want + '»: ' + firstLabels.join(' | '));
-  }
-  // Поиск существующего пациента — одной строкой сверху, как и был.
-  assert.ok(firstLabels.some((l) => l.startsWith('Найти существующего пациента')), 'строка поиска пропала с первого экрана');
-
-  // За «Подробнее» — ровно то, что план туда отправил.
-  const moreLabels = labelsOf(dlg.moreSection);
-  for (const want of ['Фото пациента', 'Улица, дом, квартира', 'Махалля', 'Страна', 'Регион', 'Район',
-                      'Резидентство', 'Гражданство / национальность', 'Telegram-бот', 'Поведение / предупреждение']) {
-    assert.ok(moreLabels.includes(want), 'за «Подробнее» нет «' + want + '»: ' + moreLabels.join(' | '));
-  }
-  for (const nope of ['Фото пациента', 'Telegram-бот', 'Поведение / предупреждение', 'Махалля']) {
-    assert.ok(!firstLabels.includes(nope), '«' + nope + '» осталось на первом экране');
+                      'Номер телефона', 'Доп. номер телефона', 'Email',
+                      'Резидентство', 'Предпочитаемый язык',
+                      'ПИНФЛ (ЖШШИР)', 'Паспорт / документ №', 'Гражданство / национальность',
+                      'Категория пациента', 'Поведение / предупреждение',
+                      'Страна', 'Регион', 'Район', 'Махалля', 'Улица, дом, квартира']) {
+    assert.ok(labels.includes(want), 'в окне нет поля «' + want + '»: ' + labels.join(' | '));
   }
 
-  // Окно — двухколоночное сгруппированное, плотный вариант.
-  for (const c of ['modal-card', 'modal-grouped', 'has-groups', 'mg-dense']) {
+  // Фото — плиткой в первом разделе, подписи над ней нет: на образце её нет,
+  // плитка говорит за себя значком и кнопкой «Фото».
+  assert.ok(all.some((n) => String(n.className || '').split(/\s+/).includes('pc-id-photo')),
+    'плитка фото пропала из первого раздела');
+
+  // Поиск дубликата остался: он и есть защита от второй карты на того же
+  // человека, и на образце его нет только потому, что образец — картинка.
+  assert.ok(labels.some((l) => l.startsWith('Найти существующего пациента')), 'строка поиска пропала');
+
+  // Значок раздела рисуется встроенным <svg>, а номер — кружком: и то и другое
+  // попадает в textContent этого крошечного DOM, поэтому отрезаем разметку и
+  // ведущую цифру.
+  const titles = all.filter((n) => n.tagName === 'H3')
+    .map((n) => textOf(n).replace(/<svg[\s\S]*?<\/svg>/g, '').replace(/\s+/g, ' ').trim())
+    .map((t) => t.replace(/^[123]\s*/, ''));
+  assert.deepEqual(titles, ['Личные данные', 'Документы и резидентство', 'Контакты и адрес'],
+    'разделы окна: ' + titles.join(' | '));
+
+  // Окно больше НЕ двухколоночное: разделы идут один под другим.
+  assert.ok(!hasClass(dlg.card, 'has-groups'),
+    'на окне остался has-groups — разделы снова встанут в две колонки');
+  for (const c of ['modal-card', 'modal-grouped', 'mg-dense']) {
     assert.ok(hasClass(dlg.card, c), 'на окне нет класса ' + c);
   }
 });
 
-test('«Подробнее» раскрывает остальное В ТОМ ЖЕ окне, а не открывает второе', () => {
+test('раскрытия «Подробнее» больше нет — прятать стало нечего', () => {
+  // Раньше здесь проверялось, что «Подробнее» раскрывается В ТОМ ЖЕ окне, а не
+  // открывает второе. Теперь проверяется, что прятать нечего вовсе: если
+  // раскрытие вернётся, вернётся и вопрос «где половина полей».
   reset();
   const dlg = modal.openPatientCreateModal({});
   assert.equal(overlays().length, 1, 'окон не одно');
-
-  dlg.moreBtn.click();
-  assert.equal(dlg.isMoreOpen(), true);
-  assert.equal(dlg.moreSection.style.display, '', 'раскрытие не показалось');
-  assert.equal(dlg.moreBtn.getAttribute('aria-expanded'), 'true');
-  assert.equal(dlg.moreLabel.textContent, 'Свернуть подробности');
-  assert.equal(overlays().length, 1, '«Подробнее» открыло ВТОРОЕ окно вместо раскрытия');
-
-  dlg.moreBtn.click();
   assert.equal(dlg.isMoreOpen(), false);
-  assert.equal(dlg.moreSection.style.display, 'none');
-  assert.equal(dlg.moreLabel.textContent, 'Подробнее');
+
+  const all = [];
+  (function walk(n) { all.push(n); for (const c of n.children || []) walk(c); })(dlg.card);
+  const hidden = all.filter((n) => n.style && n.style.display === 'none'
+    && String(n.className || '').split(/\s+/).includes('mg-section'));
+  assert.deepEqual(hidden, [], 'в окне снова есть спрятанный раздел');
   dlg.close();
 });
 
@@ -581,4 +616,141 @@ test('маршрут #registration ходит в ту же дверь — сво
   assert.equal(perms.isRouteAllowed('registration'), false);
   assert.equal(perms.isModuleAllowed('registration'), false);
   setFullAccess('Admin');
+});
+
+// ===========================================================================
+// PATIENT_FORM_FLOW_V1 — клавиатура: Tab ходит по полям, Enter сохраняет
+// ===========================================================================
+
+// Нажатие приходит НА КАРТОЧКУ (обработчик висит там), а `target` — то поле,
+// в котором стоял курсор: фальшивый DOM события не всплывает, поэтому цель
+// задаём явно, как её увидел бы браузер.
+function pressEnter(dlg, target, extra = {}) {
+  let prevented = false;
+  dlg.card.dispatchEvent(Object.assign({
+    type: 'keydown', key: 'Enter', target,
+    preventDefault() { prevented = true; }, stopPropagation() {},
+  }, extra));
+  return prevented;
+}
+
+test('Enter в обычном поле сохраняет пациента', async () => {
+  reset();
+  const dlg = modal.openPatientCreateModal({});
+  fillMinimum(dlg);
+
+  pressEnter(dlg, dlg.fields.last_name);
+  await new Promise((r) => setTimeout(r, 0));
+
+  assert.equal(inserted.length, 1, 'Enter не сохранил пациента');
+  assert.equal(inserted[0].table, 'patients');
+  assert.equal(inserted[0].values.last_name, 'Каримова');
+});
+
+test('Enter НЕ сохраняет там, где он уже занят другим делом', async () => {
+  // Каждый из четырёх случаев — не придирка, а место, где сохранение по Enter
+  // сделало бы не то, чего ждёт человек. Разбор — в onEnter().
+  const cases = [
+    ['перенос строки в «Поведение»',        (d) => d.fields.behavior_note],
+    ['поиск дубликатов сохранять не должен', (d) => d.searchInput],
+    ['кнопка в фокусе нажимает себя',        (d) => d.saveAndServiceBtn],
+  ];
+  for (const [why, pick] of cases) {
+    reset();
+    const dlg = modal.openPatientCreateModal({});
+    fillMinimum(dlg);
+    pressEnter(dlg, pick(dlg));
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(inserted.length, 0, 'Enter сохранил, хотя не должен был: ' + why);
+  }
+
+  // Shift+Enter — тоже перенос строки, а не сохранение.
+  reset();
+  const dlg = modal.openPatientCreateModal({});
+  fillMinimum(dlg);
+  pressEnter(dlg, dlg.fields.last_name, { shiftKey: true });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(inserted.length, 0, 'Shift+Enter сохранил пациента');
+});
+
+test('переключатель «Пол» — ОДНА остановка Tab, выбор стрелками', () => {
+  reset();
+  const dlg = modal.buildPatientCreateDialog({});
+  // Группу берём через настоящую разметку окна: все .radio-chip с data-name=gender.
+  const all = [];
+  (function walk(n) { all.push(n); for (const c of n.children || []) walk(c); })(dlg.card);
+  const genderChips = all.filter((n) => n.dataset && n.dataset.name === 'gender');
+  assert.equal(genderChips.length, 2, 'плашек пола не две: ' + genderChips.length);
+
+  const tabbable = genderChips.filter((c) => c.getAttribute('tabindex') === '0');
+  assert.equal(tabbable.length, 1,
+    'группа обязана быть ОДНОЙ остановкой Tab, а не по остановке на плашку');
+
+  // Стрелка выбирает соседа и сразу его отмечает.
+  const group = genderChips[0].parentNode;
+  group.dispatchEvent({ type: 'keydown', key: 'ArrowRight', preventDefault() {}, target: genderChips[0] });
+  assert.equal(dlg.state.gender, 'F', 'стрелка не переключила пол');
+});
+
+test('каждый ряд набирает ровно столько колонок, сколько объявила его сетка', () => {
+  // PATIENT_FORM_FLOW_V1. Лишнее поле в ряду не ломается и не ругается — оно
+  // МОЛЧА уезжает на новую строку и стоит там одно, посреди пустоты. Именно так
+  // и вышло, когда «Категория пациента» переехала в «Подробнее»: ряд стал
+  // впятером при четырёх колонках, и «Махалля» осталась на отдельной строке.
+  // Глазами это ловится только на собранном окне, поэтому ловим счётом.
+  reset();
+  const dlg = modal.buildPatientCreateDialog({});
+  dlg.setMore(true);
+
+  const grids = [];
+  (function walk(n) {
+    if (String(n.className || '').split(/\s+/).includes('mg-grid')) grids.push(n);
+    for (const c of n.children || []) walk(c);
+  })(dlg.card);
+  assert.ok(grids.length >= 6, 'сетки формы не нашлись: ' + grids.length);
+
+  for (const g of grids) {
+    const m = String(g.className).match(/cols-(\d+)/);
+    assert.ok(m, 'у сетки нет класса cols-N: ' + g.className);
+    const cols = Number(m[1]);
+    const used = g.children.reduce((sum, ch) => {
+      const sp = String((ch.style && ch.style.gridColumn) || '').match(/span\s+(\d+)/);
+      return sum + (sp ? Number(sp[1]) : 1);
+    }, 0);
+    assert.equal(used, cols,
+      'ряд занимает ' + used + ' колонок из ' + cols + ' — поле уедет на свою строку одно');
+  }
+});
+
+test('категории показываются даже там, где скидку ещё негде хранить', async () => {
+  // CATEGORY_LIST_RESILIENT_V1. Владелец завёл три категории и увидел в окне
+  // «Список пуст». Поле спрашивало `discount_percent` — колонку, которую
+  // заводит миграция 107; на его установке база стояла на 106, и запрос
+  // отвергался ЦЕЛИКОМ. Не «скидка неизвестна», а «категорий нет вовсе».
+  //
+  // Так будет у КАЖДОЙ клиники, которая обновит программу раньше, чем у неё
+  // применится миграция. Список категорий важнее подписи со скидкой рядом.
+  reset();
+  categoryDiscountMissing = true;
+  categoryRows = [
+    { id: 1, name: 'sotrudnik' }, { id: 2, name: 'vip' }, { id: 3, name: 'qarindosh' },
+  ];
+  const dlg = modal.buildPatientCreateDialog({});
+  await tick();
+
+  const names = dlg.fields.category_id.children
+    .map((o) => String(o.getAttribute('data-name') || '')).filter(Boolean);
+  assert.deepEqual(names, ['sotrudnik', 'vip', 'qarindosh'],
+    'при отказе по скидке список категорий обязан приехать без неё: ' + names.join('|'));
+});
+
+test('когда скидка есть, она стоит рядом с названием', async () => {
+  reset();
+  categoryRows = [{ id: 9, name: 'vip', discount_percent: 15 }];
+  const dlg = modal.buildPatientCreateDialog({});
+  await tick();
+
+  const opt = dlg.fields.category_id.children.find((o) => o.getAttribute('data-name') === 'vip');
+  assert.ok(opt, 'категория не приехала');
+  assert.match(textOf(opt), /15/, 'скидка группы не показана рядом с названием');
 });

@@ -21,9 +21,10 @@ import path from 'node:path';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { createBackup, listBackups, pruneBackupsByKind, requestRestore, processPendingAction } from './backup.js';
+import { tmpDir } from '../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 function fixture() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-backup-files-'));
+  const dir = tmpDir('em-backup-files-');
   const db = openDb(path.join(dir, 'easymed.db'));
   migrate(db);
   const pid = db.prepare("INSERT INTO patients (full_name, mrn, branch_id) VALUES ('Пациент','MRN-1',1)").run().lastInsertRowid;

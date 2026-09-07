@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { storageRoutes } from './storage.js';
 import { listen } from '../../control-plane/server/test-helpers/listen.js';
+import { tmpDir } from '../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 async function start(storageDir) {
   const app = express();
@@ -15,7 +16,7 @@ async function start(storageDir) {
 }
 
 test('storage: upload -> serve -> delete round-trip, with bucket + traversal + empty guards', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'emstore-'));
+  const dir = tmpDir('emstore-');
   const { srv, port } = await start(dir);
   const base = `http://127.0.0.1:${port}/api/storage`;
   try {

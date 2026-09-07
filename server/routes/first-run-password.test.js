@@ -8,6 +8,7 @@ import { migrate } from '../db/migrate.js';
 import { bootstrapAdmin, FIRST_RUN_PASSWORD } from '../services/auth.js';
 import { createApp } from '../app.js';
 import { listen } from '../../control-plane/server/test-helpers/listen.js';
+import { tmpDir } from '../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 // FIRST_RUN_PASSWORD_V1 — the whole point of the fixed default password is the
 // gate that comes with it: until the first-run admin sets their own password,
@@ -16,7 +17,7 @@ import { listen } from '../../control-plane/server/test-helpers/listen.js';
 // app.js mounting order, and only a real request stack tests mounting order.
 
 function makeApp() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-frp-'));
+  const dir = tmpDir('em-frp-');
   const db = openDb(':memory:');
   migrate(db);
   bootstrapAdmin(db);   // deliberately NOT clearing the flag — the flag is the subject here

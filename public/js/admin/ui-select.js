@@ -123,6 +123,12 @@ export function enhanceSelect(sel) {
     if (sel.parentNode) sel.parentNode.insertBefore(wrap, sel);
     wrap.appendChild(sel);
     sel.classList.add('uisel-native');
+    // KEYBOARD_FLOW_V1 — родной список спрятан, но из порядка обхода его
+    // убирает только это: clip-path и opacity: 0 фокус не отнимают. Без
+    // строки Tab останавливался на невидимом поле, и следующее нажатие
+    // выглядело как «Tab через раз». Видимую часть — кнопку .uisel-field —
+    // обход по-прежнему находит: она обычная <button>.
+    sel.tabIndex = -1;
 
     const placeholder = () => {
         const blank = readOptions(sel).find((o) => o.blank);

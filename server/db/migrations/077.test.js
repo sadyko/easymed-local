@@ -16,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb } from '../connection.js';
 import { migrate } from '../migrate.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const SQL = fs.readFileSync(path.join(DIR, '077_crm_config.sql'), 'utf8');
@@ -26,7 +27,7 @@ const fresh = () => { const db = openDb(':memory:'); migrate(db); return db; };
 // каталог, чтобы завести данные СТАРОЙ схемой и только потом прогнать 077.
 function dbBefore077() {
   const db = openDb(':memory:');
-  const tmp = fs.mkdtempSync(path.join(process.env.TEMP || '/tmp', 'mig077-'));
+  const tmp = tmpDir('mig077-');
   for (const f of fs.readdirSync(DIR).filter((x) => x.endsWith('.sql') && !x.startsWith('077'))) {
     fs.copyFileSync(path.join(DIR, f), path.join(tmp, f));
   }

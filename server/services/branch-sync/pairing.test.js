@@ -22,8 +22,9 @@ import {
 import { readIdentity } from './identity.js';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
-const tmp = (tag) => fs.mkdtempSync(path.join(os.tmpdir(), 'em-branch-' + tag + '-'));
+const tmp = (tag) => tmpDir('em-branch-' + tag + '-');
 
 test('главный филиал выпускает ключ, вторичный его принимает', () => {
   const mainDir = tmp('main');

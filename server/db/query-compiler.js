@@ -54,6 +54,22 @@ function bindWrite(table, col, v) {
 // first — nothing from the request body is ever quoted without that check.
 // All values (filter/order/limit values excepted, which are validated types)
 // are bound as `?` params, never interpolated.
+// STAR_MEETS_SCHEMA_V1 — чем «звёздочке» сверяться с настоящей схемой.
+// Ставится один раз при запуске (server/routes/db.js). Пока не поставлено,
+// поведение прежнее: разворачиваем по реестру.
+let liveColumnsOf = null;
+export function setLiveColumns(fn) { liveColumnsOf = typeof fn === 'function' ? fn : null; }
+
+// Колонки таблицы, которые И разрешены реестром, И существуют в базе.
+function starColumns(table) {
+  const declared = readableColumns(table);
+  if (!liveColumnsOf) return declared;
+  const live = liveColumnsOf(table);
+  if (!live || !live.size) return declared;   // таблицы не видно — не выдумываем
+  const kept = declared.filter((c) => live.has(c));
+  return kept.length ? kept : declared;
+}
+
 export function compile(desc, user) {
   const table = validateTable(desc.table);
   const op = desc.op;
@@ -238,7 +254,7 @@ function parseColumns(columns, table) {
   columns = String(columns == null ? '' : columns).replace(/\s+/g, '');
   if (columns === '*') {
     return {
-      projection: readableColumns(table).map((c) => `"${table}"."${c}" AS "${c}"`),
+      projection: starColumns(table).map((c) => `"${table}"."${c}" AS "${c}"`),
       joins: [],
       embeds: [],
       joined: new Map(),
@@ -258,7 +274,7 @@ function parseColumns(columns, table) {
     }
 
     if (token === '*') {
-      for (const c of readableColumns(table)) projection.push(`"${table}"."${c}" AS "${c}"`);
+      for (const c of starColumns(table)) projection.push(`"${table}"."${c}" AS "${c}"`);
       continue;
     }
 

@@ -74,7 +74,7 @@ export const METRICS = Object.freeze({
     footRowH:        36,     // .btn { height: 36px }
     sectionPadV:     14,     // .mg-dense .mg-section { padding: 14px 22px }
     sectionTitleH:   17,     // .mg-dense .mg-section h3 { line-height: 17px }
-    sectionTitleGap: 10,     // .mg-dense .mg-section { gap: 10px }
+    sectionTitleGap: 14,     // 10 (зазор раздела) + 4 (h3 margin-bottom) — SECTION_HEAD_AIR_V1
     labelH:          17,     // .mg-dense .field label { line-height: 17px }
     labelGap:        4,      // .mg-dense .field { gap: 4px }
     fieldH:          32,     // .mg-dense .field input/select { height: 32px }
@@ -87,10 +87,13 @@ export const METRICS = Object.freeze({
 export const LAYOUT = Object.freeze({
     // Строка поиска существующего пациента — во всю ширину, над колонками.
     search: Object.freeze({ labelled: true, rows: 1 }),
-    left:  Object.freeze(['last/first/middle', 'dob/age/sex', 'phone/phone2/lang']),
-    right: Object.freeze(['pinfl/document', 'category/blank']),
-    // «Подробнее» — последняя строка правой колонки.
-    rightHasMoreRow: true,
+    // PATIENT_FORM_REWRITE_V1 — три раздела ОДИН ПОД ДРУГИМ во всю ширину.
+    // Колонок больше нет, поэтому высоты складываются, а не берутся по
+    // максимуму. Фото стоит СБОКУ от рядов первого раздела и его высоты не
+    // добавляет — плитка растянута ровно по ним (.pc-id-photo в admin.css).
+    s1: Object.freeze(['last/first/middle', 'dob/age/sex', 'phone/phone2/email']),
+    s2: Object.freeze(['residency/lang', 'pinfl/document/citizenship', 'category/behaviour']),
+    s3: Object.freeze(['country/region/district', 'mahalla/street']),
 });
 
 function fieldRowH() { return METRICS.labelH + METRICS.labelGap + METRICS.fieldH; }
@@ -106,18 +109,15 @@ function sectionH(rows, { titled = true, extraRows = [] } = {}) {
 export function headHeight() { return METRICS.headPadV * 2 + METRICS.headRowH + METRICS.border; }
 export function footHeight() { return METRICS.footPadV * 2 + METRICS.footRowH + METRICS.border; }
 
-/** Высота содержимого окна на ПЕРВОМ экране (раскрытие «Подробнее» закрыто). */
+/** Высота всего содержимого окна: прятать в нём больше нечего. */
 export function firstScreenHeight() {
-    const search  = sectionH(LAYOUT.search.rows, { titled: false });
-    const left    = sectionH(LAYOUT.left.length);
-    const right   = sectionH(LAYOUT.right.length, {
-        extraRows: LAYOUT.rightHasMoreRow ? [METRICS.moreRowH] : [],
-    });
-    // Две колонки — один ряд грида: его высота равна более высокой колонке.
-    return headHeight() + search + Math.max(left, right) + footHeight();
+    const search = sectionH(LAYOUT.search.rows, { titled: false });
+    return headHeight() + search
+        + sectionH(LAYOUT.s1.length) + sectionH(LAYOUT.s2.length) + sectionH(LAYOUT.s3.length)
+        + footHeight();
 }
 
-/** Влезает ли первый экран в окно высотой innerH без прокрутки. */
+/** Влезает ли окно в высоту innerH без прокрутки. */
 export function fitsViewport(innerH) {
     return firstScreenHeight() <= innerH - METRICS.viewportGap;
 }
@@ -184,7 +184,11 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
     // вёрстка расползалась на 1896 px. Тем же классом пользуются десять других
     // окон (admission-modal, cashier-desk, crm…).
     const card = h('div', {
-        class: 'modal-card modal-grouped has-groups mg-dense modal-compact',
+        // PATIENT_FORM_REWRITE_V1 — `has-groups` убран: разделы идут ОДИН ПОД
+        // ДРУГИМ во всю ширину, как на образце. Двухколоночная раскладка
+        // экономила высоту, но разрывала порядок: «Документы» читались справа
+        // от «Личных данных», а не после них.
+        class: 'modal-card modal-grouped mg-dense modal-compact pc-form',
         'data-dialog': 'patient-create',
         style: {
             width: METRICS.cardWidth + 'px',
@@ -194,8 +198,15 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
     });
     overlay.appendChild(card);
 
+    // PATIENT_FORM_REWRITE_V1 — приглашение в Telegram переехало в ШАПКУ.
+    // Это не поле карты, а действие над пациентом: раньше оно стояло полем в
+    // ряду с адресом и гражданством, и его искали глазами среди того, что
+    // заполняют. Номер берётся у поля телефона этого же окна.
+    const tg = telegramBlock(state, () => fields.phone && fields.phone.value);
     card.appendChild(h('header', { class: 'modal-head' },
         h('h2', null, Icon('Patients', { size: 16 }), ' ', tr('Создать пациента')),
+        h('span', { class: 'grow' }),
+        tg,
         h('button', { class: 'modal-close', onclick: close }, '×'),
     ));
 
@@ -207,7 +218,15 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
     body.appendChild(search.el);
 
     // ---- Левая колонка: личные данные --------------------------------------
-    const dobInput = reg('date_of_birth', h('input', { name: 'date_of_birth', type: 'date' }));
+    // DATE_NUMERIC_V1 — дата рождения показана цифрами: её сверяют с паспортом.
+    // Подпись пустого поля — сама дата примером: «15.11.1994» объясняет порядок
+    // чисел лучше, чем «ДД.ММ.ГГГГ», и не требует расшифровки.
+    // `autocomplete="bday"` — браузер знает это поле в лицо и подставляет
+    // сохранённую дату рождения; `off` здесь просто отказывался от помощи.
+    const dobInput = reg('date_of_birth', h('input', {
+        name: 'date_of_birth', type: 'date', placeholder: '15.11.1994',
+        'data-date-numeric': '', autocomplete: 'bday',
+    }));
     const ageInput = h('input', { name: '__age', readOnly: true, placeholder: '—' });
     const categorySel = reg('category_id', categorySelect());   // CATEGORY_DISCOUNT_V1 — имя поля = имя колонки, иначе collect() соберёт ключ, который сервер молча выбросит
     dobInput.addEventListener('input', () => {
@@ -223,105 +242,141 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
         (v) => { state.gender = v; },
         { nowrap: true });
 
-    body.appendChild(mgSection('Личные данные', [
-        mgGrid(3,
-            field(['Фамилия ', req()], reg('last_name',   nameInput('last_name',   'Каримова'))),
-            field(['Имя ',     req()], reg('first_name',  nameInput('first_name',  'Азиза'))),
-            field('Отчество',          reg('middle_name', nameInput('middle_name', 'Рустамовна'))),
-        ),
-        mgGrid(3,
-            field(['Дата рождения ', req()], dobInput),
-            field('Возраст', ageInput),
-            field(['Пол ', req()], sexChips),
-        ),
-        mgGrid(3,
-            // REQUIRED_HONEST_V1 — у телефона звёздочки НЕТ: правило «голый
-            // +998 сохраняется пустым» означает, что карта без номера — штатный
-            // случай (сопровождающий, ребёнок, экстренный приём).
-            field('Номер телефона',      regPhone('phone',           phoneInput('phone', '+998 90 961 00 04'))),
-            field('Доп. номер телефона', regPhone('phone_secondary', phoneInput('phone_secondary', '+998 90 000 00 00'))),
-            field('Предпочитаемый язык', reg('language', select('language', ['Узбекский', 'Русский', 'Английский', 'Каракалпакский']))),
-        ),
-    ]));
-
-    // ---- Правая колонка: документы и учёт ----------------------------------
-    const moreLabel = h('span', { class: 'mg-more-t' }, tr('Подробнее'));
-    const moreBtn = h('button', {
-        type: 'button', class: 'mg-more-btn', 'data-more-toggle': '1',
-        'aria-expanded': 'false',
-        onclick: () => setMore(!state.moreOpen),
-    }, Icon('ChevronDown', { size: 14 }), ' ', moreLabel);
-
-    body.appendChild(mgSection('Документы и учёт', [
-        mgGrid(2,
-            field('ПИНФЛ (ЖШШИР)',        reg('national_id',     h('input', { name: 'national_id', placeholder: '14 цифр', maxLength: '14' }))),
-            field('Паспорт / документ №', reg('passport_number', h('input', { name: 'passport_number', placeholder: 'AB1234567' }))),
-        ),
-        mgGrid(2,
-            field('Категория пациента', categorySel),
-            h('div'),
-        ),
-        h('div', { class: 'mg-more' }, moreBtn,
-            h('span', { class: 'mg-more-hint muted' }, tr('Фото, Telegram, адрес, гражданство, поведение'))),
-    ]));
-
-    // ---- «Подробнее» — то же окно, второй экран -----------------------------
+    // ── Раздел 1: личные данные ────────────────────────────────────────────
+    // Фото стоит ПЛИТКОЙ слева и держит три ряда полей: карта пациента узнаётся
+    // в лицо, и прятать снимок за раскрытием было неправильно. Email здесь же,
+    // рядом с телефонами: это способ связи, а не документ.
     const photo = photoBlock(state);
     const geo   = geoCascade();
     reg('country',  geo.countrySel);
     reg('region',   geo.regionSel);
     reg('district', geo.districtSel);
 
-    const moreSection = mgSection('Подробнее о пациенте', [
-        mgGrid(4,
-            h('div', { class: 'field' }, h('label', null, tr('Фото пациента')), photo.el),
-            field('Улица, дом, квартира', reg('address', h('input', { name: 'address', placeholder: 'ул. Амира Темура 12, кв. 47' })), 2),
-            field('Махалля', reg('mahalla', h('input', { name: 'mahalla', placeholder: 'Юнусабад-3' }))),
+    body.appendChild(mgSection('Личные данные', [
+        h('div', { class: 'pc-id' },
+            h('div', { class: 'pc-id-photo' }, photo.el),
+            h('div', { class: 'pc-id-fields' },
+                mgGrid(3,
+                    field(['Фамилия ', req()], reg('last_name',   nameInput('last_name',   'Каримова'))),
+                    field(['Имя ',     req()], reg('first_name',  nameInput('first_name',  'Азиза'))),
+                    field('Отчество',          reg('middle_name', nameInput('middle_name', 'Рустамовна'))),
+                ),
+                mgGrid(3,
+                    field(['Дата рождения ', req()], dobInput),
+                    field('Возраст', ageInput),
+                    field(['Пол ', req()], sexChips),
+                ),
+                mgGrid(3,
+                    // REQUIRED_HONEST_V1 — у телефона звёздочки НЕТ: правило «голый
+                    // +998 сохраняется пустым» означает, что карта без номера — штатный
+                    // случай (сопровождающий, ребёнок, экстренный приём).
+                    field('Номер телефона',      regPhone('phone',           phoneInput('phone', '+998 90 961 00 04'))),
+                    field('Доп. номер телефона', regPhone('phone_secondary', phoneInput('phone_secondary', '+998 90 000 00 00'))),
+                    field('Email', reg('email', h('input', { name: 'email', placeholder: 'name@example.com' }))),
+                ),
+            ),
         ),
-        mgGrid(4,
-            field('Страна', geo.countrySel),
-            field('Регион', geo.regionSel),
-            field('Район',  geo.districtSel),
-            field('Email',  reg('email', h('input', { name: 'email', placeholder: 'name@example.com' }))),
-        ),
-        mgGrid(4,
+    ], { step: 1 }));
+
+    // ── Раздел 2: документы и резидентство ─────────────────────────────────
+    // Резидентство и язык — сверху: от них зависит, какие документы вообще
+    // спрашивать и на каком языке разговаривать с пациентом.
+    body.appendChild(mgSection('Документы и резидентство', [
+        mgGrid(3,
             field('Резидентство', radioChips('__residency',
                 [['resident', 'Резидент РУз'], ['nonresident', 'Нерезидент']],
                 () => state.residency,
                 (v) => { state.residency = v; }), 2),
-            field('Гражданство / национальность', reg('nationality', h('input', { name: 'nationality', placeholder: 'Узбек' }))),
-            field('Telegram-бот', telegramBlock(state, () => fields.phone && fields.phone.value)),
+            field('Предпочитаемый язык', reg('language', select('language', ['Узбекский', 'Русский', 'Английский', 'Каракалпакский']))),
         ),
-        mgGrid(1,
+        mgGrid(3,
+            field('ПИНФЛ (ЖШШИР)',        reg('national_id',     h('input', { name: 'national_id', placeholder: '14 цифр', maxLength: '14' }))),
+            field('Паспорт / документ №', reg('passport_number', h('input', { name: 'passport_number', placeholder: 'AB1234567' }))),
+            field('Гражданство / национальность', reg('nationality', h('input', { name: 'nationality', placeholder: 'Узбек' }))),
+        ),
+        // Категория несёт скидку группы (CATEGORY_DISCOUNT_V1), поведение —
+        // предупреждение для регистратуры. Ни того, ни другого на образце нет,
+        // но обе возможности живые: категория считает деньги, а предупреждение
+        // читают перед приёмом. Место им здесь — это тоже «учёт пациента».
+        mgGrid(3,
+            field('Категория пациента', categorySel),
             field('Поведение / предупреждение',
                 reg('behavior_note', h('textarea', {
-                    name: 'behavior_note', rows: '2',
-                    placeholder: 'напр. Грубил регистратуре; приходил в нетрезвом виде; отказывается ждать — будьте внимательны.',
-                }))),
+                    name: 'behavior_note', rows: '1',
+                    placeholder: 'напр. Грубил регистратуре; приходил в нетрезвом виде.',
+                })), 2),
         ),
-    ], { spanFull: true });
-    moreSection.style.display = 'none';
-    body.appendChild(moreSection);
+    ], { step: 2 }));
 
-    function setMore(open) {
-        state.moreOpen = !!open;
-        moreSection.style.display = state.moreOpen ? '' : 'none';
-        moreBtn.setAttribute('aria-expanded', state.moreOpen ? 'true' : 'false');
-        moreLabel.textContent = state.moreOpen ? tr('Свернуть подробности') : tr('Подробнее');
-    }
+    // ── Раздел 3: контакты и адрес ─────────────────────────────────────────
+    body.appendChild(mgSection('Контакты и адрес', [
+        mgGrid(3,
+            field('Страна', geo.countrySel),
+            field('Регион', geo.regionSel),
+            field('Район',  geo.districtSel),
+        ),
+        mgGrid(3,
+            field('Махалля', reg('mahalla', h('input', { name: 'mahalla', placeholder: 'Юнусабад-3' }))),
+            field('Улица, дом, квартира', reg('address', h('input', { name: 'address', placeholder: 'ул. Амира Темура 12, кв. 47' })), 2),
+        ),
+    ], { step: 3 }));
+
+    // PATIENT_FORM_REWRITE_V1 — раскрытия «Подробнее» больше нет: всё, что оно
+    // прятало, разошлось по трём разделам выше. setMore/isMoreOpen оставлены
+    // заглушками — их зовут снаружи (возврат из мастера услуг открывал окно
+    // сразу раскрытым), и падать на несуществующей функции они не должны.
+    function setMore() { state.moreOpen = false; }
 
     // ---- Подвал -------------------------------------------------------------
-    const saveOnlyBtn = h('button', { class: 'btn btn-outline', type: 'button',
-        onclick: (ev) => guarded(ev, () => save({ openVisit: false })) },
-        Icon('Check', { size: 14 }), ' ', tr('Сохранить пациента'));
-    const saveAndServiceBtn = h('button', { class: 'btn btn-primary', type: 'button',
+    // PATIENT_FORM_REWRITE_V1 — подвал по образцу: «Отмена» и «Создать
+    // пациента». «Добавить услугу» ОСТАВЛЕНА третьей кнопкой: на образце её
+    // нет, но это дневной путь регистратуры — завести карту и сразу выписать
+    // услугу; убрать её значило бы заставить искать пациента заново сразу
+    // после того, как его завели.
+    const cancelBtn = h('button', { class: 'btn btn-outline', type: 'button', onclick: close },
+        tr('Отмена'));
+    const saveAndServiceBtn = h('button', { class: 'btn btn-outline', type: 'button',
         onclick: (ev) => guarded(ev, () => save({ openVisit: true })) },
         Icon('Plus', { size: 14 }), ' ', tr('Добавить услугу'));
+    const saveOnlyBtn = h('button', { class: 'btn btn-primary', type: 'button',
+        onclick: (ev) => guarded(ev, () => save({ openVisit: false })) },
+        Icon('Check', { size: 14 }), ' ', tr('Создать пациента'));
+    // Горячая клавиша, о которой нигде не написано, не существует: подпись в
+    // подвале — часть самой возможности, а не украшение.
     card.appendChild(h('footer', { class: 'modal-foot' },
+        h('span', { class: 'mg-hint' }, h('kbd', null, 'Enter'), ' ', tr('— сохранить пациента')),
         h('span', { class: 'grow' }),
-        saveOnlyBtn,
+        cancelBtn,
         saveAndServiceBtn,
+        saveOnlyBtn,
     ));
+
+    // PATIENT_FORM_FLOW_V1 — Enter сохраняет пациента.
+    //
+    // Нажатие пропускается там, где Enter уже занят и значит другое:
+    //   • <textarea> «Поведение» — там это перенос строки;
+    //   • кнопка или ссылка в фокусе — Enter обязан нажать ИХ, иначе «Добавить
+    //     услугу» с клавиатуры срабатывала бы как «Сохранить»;
+    //   • открытый список (.uisel-pop) или календарь (.uidate-pop) — Enter
+    //     выбирает строку в нём;
+    //   • строка поиска существующего пациента — она ищет ДУБЛИКАТЫ, и
+    //     сохранять по Enter оттуда значило бы заводить второго такого же
+    //     ровно в тот миг, когда регистратор проверяет, нет ли первого;
+    //   • ввод с подсказкой (isComposing) — там Enter подтверждает подсказку.
+    function onEnter(e) {
+        if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+        if (e.isComposing || e.keyCode === 229) return;
+        const t = e.target;
+        const tag = ((t && t.tagName) || '').toLowerCase();
+        if (tag === 'textarea' || tag === 'button' || tag === 'a') return;
+        if (t && t.closest && t.closest('.mg-search')) return;
+        if (typeof document !== 'undefined' && document.querySelector
+            && document.querySelector('.uisel-pop, .uidate-pop')) return;
+        e.preventDefault();
+        if (saveOnlyBtn.disabled) return;
+        saveOnlyBtn.click();
+    }
+    card.addEventListener('keydown', onEnter);
 
     function guarded(ev, fn) {
         const b = ev && ev.currentTarget;
@@ -421,13 +476,14 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
 
     return {
         overlay, card, body, fields, state, onKey, close,
-        moreSection, moreBtn, moreLabel, setMore,
-        isMoreOpen: () => state.moreOpen,
+        setMore,                       // заглушка: раскрытия больше нет
+        isMoreOpen: () => false,
+        tg,                            // приглашение в бот живёт в шапке
         setGender: (v) => { state.gender = v; sexChips.setValue(v); },
         searchInput: search.input,
         runSearch: search.run,
         collect, save,
-        saveOnlyBtn, saveAndServiceBtn,
+        saveOnlyBtn, saveAndServiceBtn, cancelBtn,
         photo,   // PATIENT_PHOTO_V1 — { acceptPhoto, setPhoto, fileInp } для теста
 
     };
@@ -436,9 +492,17 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
 // ===========================================================================
 // Строительные блоки окна
 // ===========================================================================
-function mgSection(title, children, { spanFull = false } = {}) {
+function mgSection(title, children, { spanFull = false, icon = null, step = null } = {}) {
+    // PATIENT_FORM_REWRITE_V1 — у раздела НОМЕР. Заведение пациента — это
+    // последовательность («сначала кто, потом документы, потом где живёт»), и
+    // номер говорит об этом прямо, а значок только украшал. Кружок нарисован
+    // в 22 px внутри строки заголовка и высоты ей не добавляет: на этой высоте
+    // держится модель окна.
     return h('div', { class: 'mg-section' + (spanFull ? ' span-full' : '') },
-        title ? h('h3', null, tr(title)) : null,
+        title ? h('h3', { class: step != null ? 'has-step' : (icon ? 'has-ic' : null) },
+            step != null ? h('span', { class: 'mg-step' }, String(step))
+                         : (icon ? Icon(icon, { size: 13 }) : null),
+            tr(title)) : null,
         ...children,
     );
 }
@@ -508,20 +572,40 @@ export function computeAge(iso) {
 function categorySelect() {
     const sel = h('select', { name: 'category_id' });
     sel.appendChild(h('option', { value: '' }, '—'));
-    // Список дозагружается: окно обязано открыться сразу, а не ждать сеть.
+    const fill = (rows) => {
+        for (const c of rows) {
+            const pct = Number(c.discount_percent) || 0;
+            // Имя лежит на самом варианте: подстановка по возрасту ищет
+            // категорию ПО ИМЕНИ, и разбирать ради этого готовую подпись
+            // «VIP (−15%)» значило бы ломаться от смены формата подписи.
+            sel.appendChild(h('option', { value: String(c.id), 'data-name': c.name },
+                pct > 0 ? c.name + '  (−' + pct + '%)' : c.name));
+        }
+    };
+
+    // CATEGORY_LIST_RESILIENT_V1 — СНАЧАЛА СПИСОК, ПОТОМ СКИДКА.
+    //
+    // Колонку `discount_percent` заводит миграция 107. На установке, где она
+    // ещё не применилась, запрос с этой колонкой отвергается ЦЕЛИКОМ — и
+    // регистратор видит «Список пуст» при полном справочнике категорий.
+    // Поэтому отказ здесь не молчаливый выход, а вторая попытка: без скидки.
+    // Категорию можно выбрать и без подписи «−15 %»; выбрать её из пустого
+    // списка нельзя никак.
+    //
+    // Список дозагружается: окно обязано открыться сразу, а не ждать базу.
     // Пустой справочник — это пустой список, а не выдуманные значения.
     supabase.from('patient_categories').select('id, name, discount_percent')
         .eq('active', true).order('name')
         .then(({ data, error }) => {
-            if (error || !Array.isArray(data)) return;
-            for (const c of data) {
-                const pct = Number(c.discount_percent) || 0;
-                // Имя лежит на самом варианте: подстановка по возрасту ищет
-                // категорию ПО ИМЕНИ, и разбирать ради этого готовую подпись
-                // «VIP (−15%)» значило бы ломаться от смены формата подписи.
-                sel.appendChild(h('option', { value: String(c.id), 'data-name': c.name },
-                    pct > 0 ? c.name + '  (−' + pct + '%)' : c.name));
-            }
+            if (!error && Array.isArray(data)) { fill(data); return null; }
+            console.warn('[patient-categories] со скидкой не вышло, читаем без неё:',
+                (error && error.message) || error);
+            return supabase.from('patient_categories').select('id, name')
+                .eq('active', true).order('name')
+                .then(({ data: plain, error: e2 }) => {
+                    if (e2 || !Array.isArray(plain)) return;
+                    fill(plain);
+                });
         })
         .catch(() => { /* нет справочника — поле просто останется с прочерком */ });
     return sel;
@@ -551,20 +635,49 @@ export function categoryOptionByName(sel, name) {
 }
 
 export function radioChips(name, options, getter, setter, { nowrap = false } = {}) {
-    const wrap = h('div', { class: 'radio-chips', style: nowrap ? { flexWrap: 'nowrap' } : {} });
-    function repaint() {
+    const wrap = h('div', { class: 'radio-chips', role: 'radiogroup', 'aria-label': tr(name),
+        style: nowrap ? { flexWrap: 'nowrap' } : {} });
+    // KEYBOARD_FLOW_V1 — ГРУППА как ОДНА остановка Tab.
+    //
+    // Раньше каждая плашка была обычной <button>, то есть «Пол» стоил два
+    // нажатия Tab, «Резидентство» — ещё два, и по форме приходилось идти
+    // вдвое дольше, чем в ней полей. Так ведут себя переключатели везде:
+    // Tab входит в группу и выходит из неё, а выбор внутри — стрелками.
+    // Поэтому фокус держит ТОЛЬКО выбранная плашка (а если не выбрано ничего
+    // — первая), остальные из обхода убраны.
+    function focusIndex() {
+        const i = options.findIndex(([v]) => getter() === v);
+        return i >= 0 ? i : 0;
+    }
+    function repaint({ moveFocus = false } = {}) {
         clear(wrap);
-        for (const [val, lbl] of options) {
+        const fi = focusIndex();
+        options.forEach(([val, lbl], i) => {
+            const on = getter() === val;
             wrap.appendChild(h('button', {
                 type: 'button',
-                class: 'radio-chip' + (getter() === val ? ' on' : ''),
+                class: 'radio-chip' + (on ? ' on' : ''),
+                role: 'radio', 'aria-checked': on ? 'true' : 'false',
+                tabindex: i === fi ? 0 : -1,   // имя атрибута, а не свойства: h() кладёт всё неизвестное через setAttribute
                 style: nowrap ? { flex: '1', justifyContent: 'center', padding: '0 8px', whiteSpace: 'nowrap' }
                               : { flex: '1', justifyContent: 'center' },
                 onclick: () => { setter(val); repaint(); },
                 dataset: { name, value: val },
             }, h('span', { class: 'rc-dot' }), ' ', tr(lbl)));
-        }
+        });
+        if (moveFocus && wrap.children[fi] && wrap.children[fi].focus) wrap.children[fi].focus();
     }
+    // Стрелки выбирают соседа и СРАЗУ его отмечают — так же, как родные
+    // radio-кнопки: у группы из двух значений отдельное «подтвердить» лишнее.
+    wrap.addEventListener('keydown', (e) => {
+        const step = (e.key === 'ArrowRight' || e.key === 'ArrowDown') ? 1
+                   : (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')   ? -1 : 0;
+        if (!step) return;
+        e.preventDefault();
+        const next = (focusIndex() + step + options.length) % options.length;
+        setter(options[next][0]);
+        repaint({ moveFocus: true });
+    });
     repaint();
     wrap.setValue = (v) => { setter(v); repaint(); };
     return wrap;
@@ -747,7 +860,12 @@ export function openDuplicatePatientDialog(err, { onOpenExisting, onForceCreate 
 // ---------------------------------------------------------------------------
 function photoBlock(state) {
     const img = h('img', { alt: 'Фото пациента', style: { display: 'none', width: '96px', height: '96px', objectFit: 'cover', borderRadius: '10px' } });
-    const ph  = h('div', { class: 'cam-ph' }, Icon('Image', { size: 22 }));
+    // PATIENT_PHOTO_TILE_V1 — в пустой плитке силуэт пациента и подпись, а не
+    // значок «картинка»: карточку узнают в лицо, и место под лицо должно быть
+    // видно ещё до того, как фото появилось.
+    const ph  = h('div', { class: 'cam-ph' },
+        h('span', { class: 'cam-ph-ic' }, Icon('Patients', { size: 30 })),
+        h('span', { class: 'cam-ph-t' }, tr('Фото пациента')));
     const box = h('div', { class: 'cam-box mg-cam' }, ph, img);
     const setPhoto = (url) => {
         if (!url) { img.style.display = 'none'; ph.style.display = ''; return; }

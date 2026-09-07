@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const MIGRATIONS_DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -53,7 +54,7 @@ test('083: uid уникален — две записи под одним uid о
 // реально пройдут работающие клиники — база, заполненная НИЖЕ 083, на которую
 // потом накатывается 083 (тот же приём, что и «70 000 legacy MRN» в 080.test.js).
 test('083: засев проставляет uid всем УЖЕ существующим строкам — единственный путь, который пройдут живые клиники', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-083-'));
+  const dir = tmpDir('em-083-');
   try {
     fs.cpSync(MIGRATIONS_DIR, dir, { recursive: true, filter: (src) => {
       if (fs.statSync(src).isDirectory()) return true;

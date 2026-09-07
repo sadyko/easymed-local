@@ -41,6 +41,7 @@ import { createEnrollmentCode, redeemEnrollmentCode } from '../../../control-pla
 import { listen as listenOnFreePort } from '../../../control-plane/server/test-helpers/listen.js';
 import { relayPathFor } from '../../../control-plane/server/routes/relay.js';
 import { RELAY_TOKEN_MOUNT, MAX_SCOPE as MAX_SCOPE_CP } from '../../../control-plane/server/routes/relay-token.js';   // BRANCH_IDENTITY_V1
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const MARKER = 'ZZPATIENTMARKER';
 
@@ -146,7 +147,7 @@ test('маршрут Б: копия через сервер поставщика
   // Оба каталога лицензированы ОДНИМ ключом: licensedDataDir() выдаёт новый на
   // каждый вызов, поэтому второй каталог получается копированием файлов первого.
   const secDir = licensedDataDir();
-  const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-relay-main-'));
+  const mainDir = tmpDir('em-relay-main-');
   for (const f of ['control.json', 'licence.dat']) fs.copyFileSync(path.join(secDir, f), path.join(mainDir, f));
   withInstallToken(mainDir, tokenMain);
   withInstallToken(secDir, tokenSec);
@@ -458,7 +459,7 @@ test('филиал, не активированный у поставщика: �
   // вызов, поэтому второй каталог получается копированием файлов первого).
   // install_token дописывается ТОЛЬКО главному — у филиала его нет и не будет.
   const secDir = licensedDataDir();
-  const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-relay-branch-'));
+  const mainDir = tmpDir('em-relay-branch-');
   for (const f of ['control.json', 'licence.dat']) fs.copyFileSync(path.join(secDir, f), path.join(mainDir, f));
   withInstallToken(mainDir, tokenMain);
 
@@ -594,7 +595,7 @@ test('Задача 7a: вторичный филиал пишет по СВОЕ�
   }).install_token;
 
   // Каталог данных ГЛАВНОЙ клиники: пара с ключом группы и учётка у поставщика.
-  const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-relay-7a-'));
+  const mainDir = tmpDir('em-relay-7a-');
   const groupKey = b64url(randomBytes(GROUP_KEY_BYTES));
   fs.writeFileSync(path.join(mainDir, 'control.json'),
     JSON.stringify({ clinic_id: 'cp-group', install_token: installToken }));
@@ -705,7 +706,7 @@ test('Задача 7a: токен, выписанный ДО появления 
     code: createEnrollmentCode(cpDb, { clinicId: 'cp-later', name: 'Сеть' }),
   }).install_token;
 
-  const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-relay-7a-later-'));
+  const mainDir = tmpDir('em-relay-7a-later-');
   const groupKey = b64url(randomBytes(GROUP_KEY_BYTES));
   fs.writeFileSync(path.join(mainDir, 'control.json'),
     JSON.stringify({ clinic_id: 'cp-later', install_token: installToken }));

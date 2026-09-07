@@ -6,11 +6,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadOrCreateKey, encryptToken, decryptToken, looksLikeBotToken, tokenHint } from './crypto.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const TOKEN = '1000000001:TESTONLYtestonlyTESTONLYtestonly123';
 
 function tmpKeyPath() {
-  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'em-tg-')), '.telegram-key');
+  return path.join(tmpDir('em-tg-'), '.telegram-key');
 }
 
 test('токен переживает круг шифрование → расшифровка', () => {

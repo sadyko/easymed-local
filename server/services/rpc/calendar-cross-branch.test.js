@@ -45,9 +45,23 @@ import { applyBatch } from '../branch-sync/records.js';
 
 const registrar = { id: 1, role: 'registrar', extra_roles: [] };
 
-// Понедельник 7 сентября 2026 — рабочий день во всех графиках ниже.
-const DAY = '2026-09-07';
-const at = (hh, mm = 0) => new Date(2026, 8, 7, hh, mm, 0, 0).toISOString();
+// CALENDAR_FIXTURE_DAY_V1 — ближайший БУДУЩИЙ понедельник, а не вбитая дата.
+//
+// Здесь стояло `DAY = '2026-09-07'`. В сам этот понедельник фикстура совпала с
+// сегодняшним днём, и тесты слотов начали падать с 10:00 до полуночи: движок
+// не предлагает время, которое уже прошло (calendar.js, minStartMin), и был
+// совершенно прав. День обязан быть В БУДУЩЕМ, иначе тест меряет не расписание,
+// а часы на стене. Понедельник — потому что графики ниже описаны для mon.
+function nextMonday() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  do { d.setDate(d.getDate() + 1); } while (d.getDay() !== 1);   // строго ЗАВТРА или позже
+  return d;
+}
+const MON = nextMonday();
+const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const DAY = iso(MON);
+const at = (hh, mm = 0) => new Date(MON.getFullYear(), MON.getMonth(), MON.getDate(), hh, mm, 0, 0).toISOString();
 
 const MINE = 'B';   // эта установка — филиал
 const FAR = 'A';    // соседнее здание — главная клиника

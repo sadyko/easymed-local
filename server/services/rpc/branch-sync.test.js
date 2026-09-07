@@ -10,6 +10,7 @@
 //      чинится по-разному (взять другой ключ / выпустить заново / позвать
 //      поддержку), стоит владельцу вечера и звонка.
 
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -33,7 +34,7 @@ const admin = { id: 1, role: 'admin' };
 // Каталог данных в этом процессе один (control/config.js объясняет почему), и
 // экранные вызовы читают его сами. Поэтому каждый тест ставит свой.
 function inDir(tag) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-rpc-branch-' + tag + '-'));
+  const dir = tmpDir('em-rpc-branch-' + tag + '-');
   setDataDir(dir);
   return dir;
 }

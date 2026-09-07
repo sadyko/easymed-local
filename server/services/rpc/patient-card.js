@@ -32,6 +32,7 @@ import {
 } from '../roles.js';
 import { canRead, canWrite, readableColumns, writableColumns } from '../../db/schema-registry.js';
 import { RpcError } from './crm-config.js';
+import { telegramPatientStatus } from './telegram.js';   // TELEGRAM_PATIENT_BADGE_V1
 // PATIENT_FILE_ATTACH_V1
 import fs from 'node:fs';
 import path from 'node:path';
@@ -167,11 +168,19 @@ export function patientCard(db, args, user) {
     // иначе экран спрашивал бы справочник отдельным запросом, мимо той двери,
     // которая решает, видно ли этому сотруднику саму карту.
     category: null,
+    // TELEGRAM_PATIENT_BADGE_V1 — состояние Telegram у пациента едет ВМЕСТЕ с
+    // картой, как и категория: отдельный запрос был бы вторым местом, где
+    // решается «вправе ли этот сотрудник видеть этого пациента».
+    telegram: null,
     visits: null, services: null, lab_orders: null, lab_results: null,
     invoices: null, invoice_items: null, payments: null,
     docs: null, doc_notes: null,
     visit_count: null, last_visit_date: null,
   };
+  // Дойдёт ли до человека результат — видно рядом с именем. Ошибку справочника
+  // глушим: бейдж это справка, и из-за него карта открываться не перестанет.
+  try { out.telegram = telegramPatientStatus(db, { patient_id: id }, user); }
+  catch { out.telegram = null; }
 
   if (seeDetails && full.category_id != null) {
     const c = db.prepare('SELECT id, name, discount_percent, active FROM patient_categories WHERE id = ?')

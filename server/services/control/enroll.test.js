@@ -9,6 +9,7 @@ import { migrate } from '../../db/migrate.js';
 import { canonical } from './canonical.js';
 import { controlState, __setPublicKeyForTests as __setStateKey } from './state.js';
 import { enrollUrl, enrollWithCode, __setPublicKeyForTests } from './enroll.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 // ENROLLMENT_SCREEN_V1 — the clinic's half of first-run enrollment: the admin
 // types an EM- code, this module posts it to the control plane and writes the
@@ -35,7 +36,7 @@ const signLic = (payload) => ({
 });
 
 const fresh = () => { const db = openDb(':memory:'); migrate(db); return db; };
-const freshDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'em-enroll-'));
+const freshDir = () => tmpDir('em-enroll-');
 
 const goodBody = (over = {}) => ({
   clinic_id: 'c-000051',

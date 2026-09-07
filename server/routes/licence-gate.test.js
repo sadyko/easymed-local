@@ -12,12 +12,13 @@ import { __setPublicKeyForTests } from '../services/control/state.js';
 import { expectedResponse } from '../services/control/unlock.js';
 import { createApp } from '../app.js';
 import { listen } from '../../control-plane/server/test-helpers/listen.js';
+import { tmpDir } from '../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const { publicKey, privateKey } = generateKeyPairSync('ed25519');
 __setPublicKeyForTests(publicKey);
 
 function harness({ validUntil }) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-gate-'));
+  const dir = tmpDir('em-gate-');
   fs.writeFileSync(path.join(dir, 'control.json'), JSON.stringify({
     clinic_id: 'c-1', unlock_secret: 's', subscription: 'active',
   }));
@@ -143,7 +144,7 @@ test('/api/auth/logout still works when locked', async (t) => {
 });
 
 test('the app boots and serves with no licence file at all', async (t) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-nolic-'));
+  const dir = tmpDir('em-nolic-');
   const db = openDb(':memory:'); migrate(db); bootstrapAdmin(db);
   const server = await listen(createApp(db, { dataDir: dir }));
   t.after(() => server.close());
@@ -353,7 +354,7 @@ test('clicking «Подключить модуль» twice through the real rout
 // (always created by migrate()), never control.json, so a challenge is
 // generated even with no clinic identity on disk at all.
 test('licence_status renders a real activation code even with no control.json at all', async (t) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-unenrolled-'));
+  const dir = tmpDir('em-unenrolled-');
   const db = openDb(':memory:'); migrate(db);
   const password = bootstrapAdmin(db);
   db.prepare('UPDATE users SET must_change_password = 0').run();   // FIRST_RUN_PASSWORD_V1 — see makeApp
@@ -462,7 +463,7 @@ test('a user without the admin role anywhere is refused update_approve, not sile
 });
 
 test('a clinic that stopped paying IS told about the subscription', async (t) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'em-unpaid-'));
+  const dir = tmpDir('em-unpaid-');
   fs.writeFileSync(path.join(dir, 'control.json'), JSON.stringify({
     clinic_id: 'c-1', unlock_secret: 's', subscription: 'unpaid',
   }));

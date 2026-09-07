@@ -42,11 +42,12 @@ import { createEnrollmentCode, redeemEnrollmentCode } from '../../../control-pla
 import { checkIn as cpCheckIn } from '../../../control-plane/server/services/checkin.js';
 import { signLicence } from '../../../control-plane/server/services/signing.js';
 import { generateKeyPairSync } from 'node:crypto';
+import { tmpDir as makeTmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const DAY = 24 * 60 * 60 * 1000;
 const tmp = [];
 function tmpDir() {
-    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'em-lockout-'));
+    const d = makeTmpDir('em-lockout-');
     tmp.push(d);
     return d;
 }

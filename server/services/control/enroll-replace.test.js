@@ -24,6 +24,7 @@ import { generateKeyPairSync, sign } from 'node:crypto';
 
 import { canonical } from './canonical.js';
 import { enrollWithCode, __setPublicKeyForTests } from './enroll.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const { publicKey, privateKey } = generateKeyPairSync('ed25519');
 __setPublicKeyForTests(publicKey);
@@ -33,7 +34,7 @@ const signLic = (payload) => ({
   sig: sign(null, Buffer.from(canonical(payload), 'utf8'), privateKey).toString('base64'),
 });
 
-const freshDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'em-enroll-replace-'));
+const freshDir = () => tmpDir('em-enroll-replace-');
 
 /** The identity of an install that was activated as a STANDALONE clinic by mistake. */
 const STANDALONE = {

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { resolveDataDir } from './index.js';
+import { tmpDir } from './test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 test('with no environment variable, the data directory is <root>/data', () => {
   const root = '/srv/easymed';
@@ -43,7 +44,7 @@ test('a relative value resolves against the application root, not the cwd', () =
 });
 
 test('the directory is created when asked', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'em-dd-'));
+  const root = tmpDir('em-dd-');
   const target = path.join(root, 'nested', 'data');
   resolveDataDir({ EASYMED_DATA_DIR: target }, root, { mkdir: true });
   assert.ok(fs.existsSync(target));
@@ -58,7 +59,7 @@ test('the directory is created when asked', () => {
 // only reaches a log file. The message must say which setting is at fault, not
 // just repeat the path back.
 test('a path that collides with an existing file fails with a message naming the setting', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'em-dd-collide-'));
+  const root = tmpDir('em-dd-collide-');
   const filePath = path.join(root, 'not-a-directory');
   fs.writeFileSync(filePath, 'x');
   assert.throws(
