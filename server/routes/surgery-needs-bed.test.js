@@ -21,7 +21,7 @@ async function startServer() {
   migrate(db);
   db.prepare('INSERT INTO users (id, username, password_hash, full_name, role) VALUES (1,?,?,?,?)')
     .run('boss', hashPassword('password1'), 'Администратор', 'admin');
-  db.prepare("INSERT INTO services (id, name, price, type) VALUES (10,'Аппендэктомия',3000000,'surgery')").run();
+  db.prepare("INSERT INTO services (id, name, price, type) VALUES (10,'Аппендэктомия',3000000,'other')").run();
   db.prepare("INSERT INTO services (id, name, price, type) VALUES (11,'Перевязка',50000,'procedure')").run();
   db.prepare("INSERT INTO patients (id, full_name) VALUES (77,'Пациент Тест')").run();
   db.prepare("INSERT INTO visits (id, patient_id, visit_date) VALUES (500,77,'2026-09-07T09:00:00Z')").run();

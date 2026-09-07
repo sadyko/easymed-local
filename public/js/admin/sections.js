@@ -59,7 +59,7 @@ export const SECTIONS = {
               // настоящие операции. Теперь подпись и значение совпадают, а два
               // редактора этого поля (здесь и service-editor.js) предлагают
               // один список — расхождение и породило подмену.
-              options: [['consultation','Консультация (кабинет врача)'], ['lab','Лаборатория (лаб. модуль)'], ['procedure','Процедуры (процедурный лист)'], ['imaging','Диагностика (кабинет врача)'], ['surgery','Хирургия (на госпитализацию)']] },
+              options: [['consultation','Консультация (кабинет врача)'], ['lab','Лаборатория (лаб. модуль)'], ['procedure','Процедуры (процедурный лист)'], ['imaging','Диагностика (кабинет врача)'], ['other','Хирургия (на госпитализацию)']] },
             { key: 'code',             label: 'Internal code (auto)', type: 'text', readOnly: true },
             { key: 'type_id',          label: 'Type (каталог)', type: 'fk', source: 'service_types', readOnly: true },
             { key: 'category_id',      label: 'Category (каталог)', type: 'fk', source: 'service_categories', readOnly: true },

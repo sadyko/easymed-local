@@ -55,7 +55,7 @@ test('no service is left without a group', () => {
       ('ОАК',               80, 'lab',          1),
       ('УЗИ почек',        120, 'imaging',      0),
       ('В/в инъекция',      30, 'procedure',    0),
-      ('Лапароскопия',    1000, 'surgery',      0);
+      ('Лапароскопия',    1000, 'other',        0);
   `);
   const before = db.prepare('SELECT COUNT(*) n FROM services WHERE type_id IS NULL').get().n;
   assert.ok(before > 0, 'the test must actually start from the broken shape');

@@ -1,4 +1,5 @@
-// 023 расширяла services.type на 'radiology', 109 его убрала.
+// 023 расширяла services.type на 'radiology'. 109 убрала «Рентген» из
+// ИНТЕРФЕЙСА, но не из CHECK — сужать его значило бы пересобирать таблицу.
 //
 // Файл переписан, а не удалён: вторая половина проверки — что таблица services
 // после ПЕРЕСБОРКИ остаётся ссылочно целой — стоит ровно столько же, сколько
@@ -14,18 +15,19 @@ import assert from 'node:assert/strict';
 import { openDb } from '../connection.js';
 import { migrate } from '../migrate.js';
 
-test('после пересборки services тип ограничен пятёркой, а ссылки целы', () => {
+test('services принимает типы, которыми пишет код, и ссылки целы', () => {
   const db = openDb(':memory:'); migrate(db);
 
-  // Пять разрешённых — и ни одного лишнего.
-  for (const t of ['consultation', 'lab', 'procedure', 'imaging', 'surgery']) {
+  // CHECK в базе ШИРЕ, чем список разделов в интерфейсе, и это осознанно:
+  // сузить его значило бы пересобрать таблицу, а пересборка при включённых
+  // внешних ключах роняет запуск программы у клиники с данными (миграция 109).
+  // Пятёрку держит код; здесь проверяется, что база принимает то, что код пишет.
+  for (const t of ['consultation', 'lab', 'procedure', 'imaging', 'other']) {
     const id = db.prepare('INSERT INTO services (name, type) VALUES (?,?)').run('svc-' + t, t).lastInsertRowid;
     assert.equal(db.prepare('SELECT type FROM services WHERE id=?').get(id).type, t);
   }
-  for (const dead of ['radiology', 'other', 'bogus']) {
-    assert.throws(() => db.prepare('INSERT INTO services (name, type) VALUES (?,?)').run('X', dead),
-      /CHECK|constraint/i, 'тип «' + dead + '» всё ещё принимается');
-  }
+  assert.throws(() => db.prepare('INSERT INTO services (name, type) VALUES (?,?)').run('X', 'bogus'),
+    /CHECK|constraint/i, 'выдуманный тип принимается базой');
 
   // Пересборка не порвала внешние ключи: на услугу ссылается строка визита.
   const s = db.prepare("INSERT INTO services (name, price) VALUES ('Consult', 50000)").run().lastInsertRowid;

@@ -257,8 +257,8 @@ test('queue: битая дата даёт ключ no-date, а не падени
 // линию — и вообще никуда.
 function withSurgery(db) {
   db.prepare("INSERT INTO service_types (id, name) VALUES (10,'Хирургия'),(11,'Консультации')").run();
-  db.prepare("INSERT INTO services (id, name, price, type, type_id, requires_doctor) VALUES (20,'Аденоидэктомия',900000,'surgery',10,1)").run();
-  db.prepare("INSERT INTO services (id, name, price, type, type_id, requires_doctor) VALUES (21,'Конизация шейки матки',700000,'surgery',10,1)").run();
+  db.prepare("INSERT INTO services (id, name, price, type, type_id, requires_doctor) VALUES (20,'Аденоидэктомия',900000,'other',10,1)").run();
+  db.prepare("INSERT INTO services (id, name, price, type, type_id, requires_doctor) VALUES (21,'Конизация шейки матки',700000,'other',10,1)").run();
   db.prepare("INSERT INTO services (id, name, price, type, type_id, requires_doctor) VALUES (22,'Приём хирурга',60000,'consultation',11,1)").run();
   return db;
 }

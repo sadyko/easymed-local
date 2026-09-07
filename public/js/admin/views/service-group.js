@@ -33,7 +33,7 @@ export const TYPE_TO_GROUP_NAME = {
     lab:          'Лаборатория',
     procedure:    'Процедуры',
     imaging:      'Диагностика',
-    surgery:      'Хирургия',
+    other:        'Хирургия',   // 'other' и есть хирургия — см. миграцию 109
 };
 
 // Fallback when a service has neither a usable type_id nor a known `type`.

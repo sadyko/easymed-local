@@ -48,7 +48,9 @@ function refuseSurgeryWithoutBed(db, meta, body) {
 
   let isSurgeryService, openAdmission;
   try {
-    isSurgeryService = db.prepare("SELECT 1 FROM services WHERE id = ? AND type = 'surgery'");
+    // 'other' — это и есть хирургия: отдельного значения в services.type нет
+    // (миграция 109 объясняет почему), а подписан этот тип «Хирургия».
+    isSurgeryService = db.prepare("SELECT 1 FROM services WHERE id = ? AND type = 'other'");
     // «Лежит» — это НЕ просто «есть незакрытая запись». Из семи состояний
     // койку занимают четыре: положен, осмотрен, лечится, выписывается.
     // 'ordered' — заявка в стационар, пациент ещё дома; 'cancelled' —

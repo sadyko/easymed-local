@@ -21,46 +21,47 @@ const fresh = () => { const db = openDb(':memory:'); migrate(db); return db; };
 
 test('разделов ровно пять, и это те пять, что назвал владелец', () => {
     assert.deepEqual(SERVICE_SECTIONS.map((s) => s.type),
-        ['consultation', 'lab', 'procedure', 'imaging', 'surgery']);
+        ['consultation', 'lab', 'procedure', 'imaging', 'other']);
 });
 
-test('«Другое» и «Рентген» больше не принимаются базой', () => {
-    // Рентген не значил ничего: своей ветки в маршрутизаторе у него не было,
-    // он падал в тот же else, что и «Другое». Услуг с этим типом не было ни в
-    // одной базе — удаление никого не задело.
+test('«Рентген» переводится в диагностику, а выдуманный тип база не принимает', () => {
+    // Сузить CHECK нельзя: пересборка таблицы роняет запуск у клиники с
+    // данными (см. шапку миграции 109). Поэтому 'radiology' база всё ещё
+    // примет — но записывать его больше некому: в списке разделов его нет.
     const db = fresh();
     try {
-        for (const dead of ['other', 'radiology']) {
-            assert.throws(() => db.prepare('INSERT INTO services (name, type) VALUES (?,?)').run('X', dead),
-                /CHECK|constraint/i, 'тип «' + dead + '» всё ещё принимается');
-        }
-        db.prepare("INSERT INTO services (name, type) VALUES ('Аппендэктомия','surgery')").run();
-        assert.equal(db.prepare("SELECT type FROM services WHERE name='Аппендэктомия'").get().type, 'surgery');
+        db.prepare("INSERT INTO services (name, type) VALUES ('Аппендэктомия','other')").run();
+        assert.equal(db.prepare("SELECT type FROM services WHERE name='Аппендэктомия'").get().type, 'other',
+            'хирургия хранится под other');
+        assert.throws(() => db.prepare("INSERT INTO services (name, type) VALUES ('X','bogus')").run(),
+            /CHECK|constraint/i);
     } finally { db.close(); }
 });
 
-test('услуги, лежавшие под «Другим», стали процедурами, а не пропали', () => {
-    // 183 услуги из 545 в рабочем наборе — вторая по величине группа. Молча
-    // потерять их значило бы вынуть из прейскуранта пятую часть клиники.
+test('миграция проходит на базе, где НА УСЛУГИ ССЫЛАЮТСЯ', () => {
+    // Тот самый случай, которого не было в первых проверках и который уронил
+    // клинику: строка визита ссылается на услугу. DROP TABLE при включённых
+    // внешних ключах делает неявное удаление и падает. Теперь пересборки нет
+    // вовсе, и эта проверка стоит сторожем: вернётся пересборка — упадёт здесь,
+    // а не у клиники при запуске.
     const db = openDb(':memory:');
-    // Состояние ДО этой миграции: каталог со всеми файлами, кроме 109.
-    // migrate() принимает каталог, а не «до какого номера», поэтому копия.
     const stage = tmpDir('em-mig109-');
     for (const f of fs.readdirSync(MIGRATIONS)) {
-        if (f.startsWith('109_')) continue;
-        if (!f.endsWith('.sql')) continue;
+        if (f.startsWith('109_') || !f.endsWith('.sql')) continue;
         fs.copyFileSync(path.join(MIGRATIONS, f), path.join(stage, f));
     }
     migrate(db, stage);
-    db.prepare("INSERT INTO services (id, name, type) VALUES (900,'Лапароскопическая нефрэктомия','other')").run();
-    migrate(db);   // теперь полный набор — 109 доедет и переведёт строку
-    const row = db.prepare('SELECT name, type FROM services WHERE id = 900').get();
-    assert.ok(row, 'услуга «Другое» пропала при пересборке таблицы');
-    // В procedure их переводить БЫЛО БЫ ОШИБКОЙ: в настройках услуг тип
-    // 'other' подписан «Хирургия», и все 183 такие услуги в рабочем наборе —
-    // настоящие операции. Процедура не требует койки, и правило
-    // SURGERY_NEEDS_BED_V1 обошло бы их стороной.
-    assert.equal(row.type, 'surgery', 'услуга, записанная как «Хирургия», не стала операцией');
+    db.prepare("INSERT INTO services (id,name,price,type) VALUES (900,'Лапароскопия',900000,'other')").run();
+    db.prepare("INSERT INTO patients (id,full_name) VALUES (1,'П')").run();
+    db.prepare("INSERT INTO visits (id,patient_id,visit_date) VALUES (1,1,'2026-09-07T09:00:00Z')").run();
+    db.prepare('INSERT INTO visit_services (visit_id,service_id,quantity,unit_price,total) VALUES (1,900,1,1,1)').run();
+
+    migrate(db);   // 109 поверх базы со ссылками
+
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services').get().n, 1, 'строка визита пропала');
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0, 'миграция порвала ссылки');
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='trigger' AND tbl_name='services'").get().n, 3,
+        'триггеры 048 не пережили миграцию');
     db.close();
 });
 
@@ -68,7 +69,7 @@ test('операцию узнают ПО ТИПУ, а не только по н�
     // Раньше единственным признаком было имя типа услуги (/хирург|surg|операц/).
     // «Аппендэктомия» под типом «Общая хирургия» угадывалась, а под типом
     // «Стационар» — нет. Теперь тип отвечает прямо.
-    assert.equal(isSurgery({ svc_type: 'surgery', svc_type_name: 'Стационар' }), true,
+    assert.equal(isSurgery({ svc_type: 'other', svc_type_name: 'Стационар' }), true,
         'тип surgery не распознан');
     assert.equal(isSurgery({ svc_type: 'procedure', svc_type_name: 'Малые операции' }), true,
         'запасной путь по названию пропал — старые услуги перестанут узнаваться');

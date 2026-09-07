@@ -40,14 +40,14 @@ test('Раздел маппится на СУЩЕСТВУЮЩИЙ enum services.
       // него не было, он падал в тот же else, что и «Другое». А «Другое» и было
       // хирургией — в настройках услуг этот тип так и подписан, и все 183 такие
       // услуги в рабочем наборе оказались операциями.
-      ['Хирургия', 'surgery'],
+      ['Хирургия', 'other'],   // хранится как 'other' — см. миграцию 109
     ],
   );
 });
 
 test('лабораторный блок виден ТОЛЬКО при разделе «лаборатория»', () => {
   assert.equal(labBlockVisible('lab'), true);
-  for (const t of ['consultation', 'procedure', 'imaging', 'surgery', '', undefined]) {
+  for (const t of ['consultation', 'procedure', 'imaging', 'other', '', undefined]) {
     assert.equal(labBlockVisible(t), false, String(t));
   }
 });

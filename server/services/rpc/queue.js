@@ -42,7 +42,7 @@ export function isSurgery(row) {
   // Имя типа осталось запасным путём: услуги, заведённые до этого выпуска,
   // лежат под «Процедурой» или «Диагностикой», и до перетипизации их узнаёт
   // только название. Убрать запасной путь можно, когда таких не останется.
-  if (row && row.svc_type === 'surgery') return true;
+  if (row && row.svc_type === 'other') return true;   // 'other' И ЕСТЬ хирургия, см. миграцию 109
   return SURGERY_NAME_RE.test(String((row && row.svc_type_name) || ''));
 }
 
