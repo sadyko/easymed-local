@@ -647,6 +647,15 @@ function invoiceBody(s, d) {
 // Медицинский акт оказанных услуг — печатается для непациентских плательщиков
 // (ДМС / B2B / госпрограмма) вместо счёта. Пациент подписывает после оказания
 // услуг; акт используется для сверки и выставления счёта плательщику.
+// ACT_PROTOCOL_SIGN_V1 — мест подписи ДВА: Пациент и Врач.
+//
+// Третьим печаталось «Представитель страховой» — на КАЖДОМ акте, включая
+// договорной, где страховой в сделке нет и подписывать было некому: пустая
+// линия на документе, который подшивают. Убрано решением владельца 2026-09-07.
+//
+// Пояснение живёт ЗДЕСЬ, а не HTML-комментарием внутри шаблона: тот попал бы
+// в разметку каждого напечатанного акта. Проверено собственным тестом этого
+// файла — он на этом и поймал.
 function actBody(s, d) {
     d = d || {};
     const items = (d.items || []).map(it => {
@@ -700,7 +709,6 @@ function actBody(s, d) {
             <div style="display:flex;gap:28px;">
                 <div style="flex:1;border-top:1px solid ${s.ink};padding-top:6px;">Пациент<br><span style="font-size:10px;color:#8a96a0;">подпись / Ф.И.О.</span></div>
                 <div style="flex:1;border-top:1px solid ${s.ink};padding-top:6px;">Врач<br><span style="font-size:10px;color:#8a96a0;">подпись / Ф.И.О.</span></div>
-                <div style="flex:1;border-top:1px solid ${s.ink};padding-top:6px;">Представитель страховой<br><span style="font-size:10px;color:#8a96a0;">подпись / Ф.И.О.</span></div>
             </div>
             <div style="display:flex;gap:28px;margin-top:28px;align-items:flex-end;">
                 <div style="flex:1;border-top:1px solid ${s.ink};padding-top:6px;">Дата</div>
