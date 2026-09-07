@@ -112,6 +112,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // Для b2b и dms включается шаг «Кто платит» (выбор контрагента).
         payerId: 'self',
         payersExpanded: false,   // PAYER_COMPANY_IN_ESTIMATE_V1 — раскрыт ли «Ещё N»
+        payerPickerOpen: false,   // PAYER_COMPANY_IN_ESTIMATE_V1 — раскрыта ли сетка на шаге «Кто платит»
         payMethod: 'self',   // 'self' | 'b2b' | 'dms'
         // PAYER_TYPE_THEN_COMPANY_V1 — выбранный ТИП: 'self' либо ключ из
         // kindKey() (insurance / corporate / government). Компании показываются
@@ -269,6 +270,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         wiz.payerId = String(p.id);
         wiz.payKind = kindKey(p);
         wiz.payMethod = isDmsPayer(p) ? 'dms' : 'b2b';
+        wiz.payerPickerOpen = false;   // выбрали — сетка сворачивается обратно в карточку
         // COVERAGE_SPLIT_V1 — с шага 3 больше не сбрасываем: там теперь делят
         // услуги между плательщиком и пациентом, и это нужно любому контрагенту.
         paint();
@@ -1383,6 +1385,36 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             ));
         }
 
+        // PAYER_COMPANY_IN_ESTIMATE_V1 — компанию выбрали в смете, и этот шаг
+        // её ПОДТВЕРЖДАЕТ. Спрашивать второй раз значит делать вид, что первый
+        // выбор не считался; «Сменить» раскрывает прежнюю сетку на месте, без
+        // возврата на шаг назад.
+        const chosen = wiz.payers.find(p => String(p.id) === String(wiz.payerId));
+        const picker = (chosen && !wiz.payerPickerOpen)
+            ? h('div', {
+                style: {
+                    display: 'flex', alignItems: 'center', gap: '12px', maxWidth: '520px',
+                    padding: '14px 16px', borderRadius: '12px',
+                    border: '1px solid var(--primary-500)', background: 'var(--primary-50, #f2faf8)',
+                },
+            },
+                h('span', { style: { color: 'var(--primary-700)', display: 'flex' } }, Icon('Check', { size: 16 })),
+                h('div', { style: { flex: 1, minWidth: 0 } },
+                    h('div', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } }, chosen.name),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '3px' } },
+                        trf('{kind} · выбран в смете', { kind: payerKindRu(chosen.kind) }))),
+                h('button', {
+                    type: 'button',
+                    onclick: () => { wiz.payerPickerOpen = true; paint(); },
+                    style: {
+                        padding: '8px 14px', borderRadius: '9px', cursor: 'pointer',
+                        fontFamily: 'inherit', fontSize: '12.5px', fontWeight: 700,
+                        background: 'var(--white, #fff)', border: '1px solid var(--ink-200)',
+                        color: 'var(--ink-700)',
+                    },
+                }, tr('Сменить')))
+            : grid;
+
         const polInp = h('input', {
             type: 'text', placeholder: 'Номер полиса (с карты пациента)', value: wiz.policyNo,
             style: { width: '100%', maxWidth: '360px', padding: '11px 12px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13.5px' },
@@ -1395,7 +1427,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '14px' } }, b2b
                 ? 'Счёт пойдёт на организацию по договору, а не пациенту.'
                 : 'Укажите номер полиса. Счёт пойдёт на страховую; кассир оформит покрытие при приёме. Страховую можно сменить здесь же.'),
-            list.length ? grid : h('div', {
+            list.length ? picker : h('div', {
                 style: { background: 'var(--ink-25, #f8fafa)', borderRadius: '10px', padding: '20px 14px', textAlign: 'center', color: 'var(--ink-500)', fontSize: '13.5px' },
             }, 'Плательщики не заведены — добавьте их в Настройки → Компании-плательщики.'),
             // Полис — только у ДМС: у договора с организацией его нет.
