@@ -142,3 +142,55 @@ test('один пациент на номере — сразу список до
   assert.doesNotMatch(sent.at(-1).params.text, /несколько человек/);
   db.close();
 });
+
+// TELEGRAM_TYPED_PHONE_V1 — НАБРАННЫЙ номер номером не считается.
+//
+// Владелец: «accept phone number only by share by number, not by sending just
+// number».
+//
+// Разница не косметическая. Номер, присланный кнопкой «Поделиться», подтверждает
+// САМ Telegram: он берёт его из учётной записи отправителя, подделать нельзя.
+// Номер, НАБРАННЫЙ в поле сообщения, — это просто текст, и набрать в нём можно
+// чей угодно. Если бы бот принимал такой текст, медкарта любого пациента
+// открывалась бы всякому, кто знает его телефон, — а телефон знает регистратура,
+// таксист и сосед.
+//
+// Проверяем не «есть ли где-то нужная строчка», а поведение: после набранного
+// номера связки нет, документов нет, и бот снова просит нажать кнопку.
+test('НАБРАННЫЙ в сообщении номер не связывает чат и не открывает документы', async () => {
+  const { db } = seed();
+  const { sent, deps } = harness();
+
+  // Тот же номер, что у настоящего пациента, в самых разных написаниях.
+  for (const typed of [PHONE_A, '998901112233', '+998901112233', '90 111 22 33']) {
+    await handleUpdate(db, TOKEN, {
+      message: { chat: { id: 900 }, from: { id: 900, first_name: 'Чужой' }, text: typed },
+    }, deps);
+    assert.equal(activeLink(db, 900), undefined,
+      'набранный номер «' + typed + '» создал связку — медкарта открылась по одному тексту');
+  }
+
+  // И бот на каждый такой текст просит именно КНОПКУ, а не повтор ввода.
+  const last = sent.at(-1).params;
+  assert.ok(last.reply_markup && last.reply_markup.keyboard
+    && last.reply_markup.keyboard[0][0].request_contact,
+    'бот не предложил кнопку «Поделиться номером»');
+  db.close();
+});
+
+test('единственная дверь к связке — msg.contact, и она проверяет владельца', async () => {
+  // Сводим воедино три случая, чтобы правило было видно целиком:
+  // чужая карточка, карточка без владельца и свой подтверждённый номер.
+  const { db } = seed();
+  const { deps } = harness();
+
+  await handleUpdate(db, TOKEN, contactMsg(901, 901, 902, PHONE_A), deps);   // чужая карточка
+  assert.equal(activeLink(db, 901), undefined, 'переслал чужой контакт — и связался');
+
+  await handleUpdate(db, TOKEN, contactMsg(901, 901, undefined, PHONE_A), deps);   // без владельца
+  assert.equal(activeLink(db, 901), undefined, 'контакт без user_id связался');
+
+  await handleUpdate(db, TOKEN, contactMsg(901, 901, 901, PHONE_A), deps);   // свой
+  assert.ok(activeLink(db, 901), 'свой подтверждённый номер не связался');
+  db.close();
+});
