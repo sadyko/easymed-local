@@ -13,7 +13,7 @@
 // Единственная правка при переносе: buildSheetHtml больше не подставляет
 // loadDocSettings() сам (это localStorage) — настройки передаёт вызывающий.
 
-import { renderDesignedVariant } from '../admin/views/doc-variants.js?v=noqr1';
+import { renderDesignedVariant, queueBlockHtml, QUEUE_CSS } from '../admin/views/doc-variants.js?v=noqr1';
 // ONEST_TYPOGRAPHY_V1 — печатное окно/PDF — отдельный документ, admin.css туда
 // не попадает; @font-face приезжает из общего модуля (см. его шапку).
 // MONTH_WORDS_V1 (2026-09-05) — дата на бланке не зависит от компьютера.
@@ -675,6 +675,7 @@ function actBody(s, d) {
     const discountTotal = (d.items || []).reduce((a, it) => { const g = Number(it.qty || 1) * Number(it.price || 0); return a + Math.round(g * (Number(it.disc || 0) / 100)); }, 0);
     const total         = subtotal - discountTotal;
     return `
+        <style>${QUEUE_CSS}</style>
         ${headerHTML(s)}
         ${titleBlock(s, {
             pillText:   'Акт услуг',
@@ -705,6 +706,9 @@ function actBody(s, d) {
             <div class="line"><span>Скидка</span><span>−${discountTotal.toLocaleString('ru-RU')} UZS</span></div>
             <div class="line grand"><span>Итого:</span><span>${total.toLocaleString('ru-RU')} UZS</span></div>
         </div>
+        <!-- ACT_SHEET_V1 — очередь ВЫШЕ подписей: ради неё документ несут
+             дальше, в лабораторию или кабинет. -->
+        ${queueBlockHtml(d)}
         <div style="margin-top:40px;font-size:11.5px;color:#55636d;"><!-- ACT_PROTOCOL_SIGN_V1 -->
             <div style="display:flex;gap:28px;">
                 <div style="flex:1;border-top:1px solid ${s.ink};padding-top:6px;">Пациент<br><span style="font-size:10px;color:#8a96a0;">подпись / Ф.И.О.</span></div>

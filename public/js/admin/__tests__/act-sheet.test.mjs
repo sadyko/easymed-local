@@ -40,3 +40,39 @@ test('место печати и дата остались', () => {
   assert.match(html, /М\.П\./);
   assert.match(html, /Дата/);
 });
+
+// Акт служит и талоном: с ним идут в лабораторию. Номер очереди на нём —
+// то же, что на чеке, и по той же причине (RECEIPT_QUEUE_V1).
+test('акт печатает номер очереди', () => {
+  const html = act({ queue: [{ service: 'CA 15-3 (Онкомаркер)', label: 'Лаборатория', number: 28 }] });
+  assert.match(html, /Номер очереди/, 'блок подписан');
+  assert.match(html, /Лаборатория/, 'куда идти — без этого номер бессмыслен');
+  assert.match(html, />28</, 'сам номер');
+});
+
+test('несколько талонов печатаются все', () => {
+  const html = act({ queue: [
+    { service: 'CA 15-3 (Онкомаркер)', label: 'Лаборатория', number: 28 },
+    { service: 'Консультация ЛОРа', label: 'Набиев Ойбек', number: 7 },
+  ] });
+  assert.match(html, /Лаборатория/);
+  assert.match(html, /Набиев Ойбек/);
+  assert.match(html, />28</);
+  assert.match(html, />7</);
+});
+
+test('без талонов пустой блок не печатается', () => {
+  for (const empty of [undefined, null, []]) {
+    assert.doesNotMatch(act({ queue: empty }), /Номер очереди/, JSON.stringify(empty));
+  }
+});
+
+test('талон без номера пропускается', () => {
+  assert.doesNotMatch(act({ queue: [{ service: 'X', label: 'Y', number: null }] }), /Номер очереди/);
+});
+
+test('данные талона экранируются', () => {
+  const html = act({ queue: [{ service: 'S', label: '<img src=x onerror=alert(1)>', number: 3 }] });
+  assert.doesNotMatch(html, /<img src=x/);
+  assert.match(html, /&lt;img/);
+});
