@@ -3462,7 +3462,11 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
        залитая цветом зазора, перестала бы быть карточкой. */
 .lq-queue{ background:var(--page-ground); border-radius:var(--r-lg); }
 .lq-card{
-  background:#fff; border:1px solid var(--ink-200); border-radius:14px;
+  /* WHITE_GROUND_GLOW_V1 — общий контур рабочего окна, а не свой ink-200.
+     Раньше полосу между карточками рисовал серый грунт под ними; на белом
+     грунте её нет, и соседние карточки разделяет ТОЛЬКО собственная рамка.
+     Значит она обязана меняться вместе со всеми окнами, а не отдельно. */
+  background:#fff; border:1px solid var(--window-line); border-radius:14px;
   box-shadow:var(--shadow-xs); padding:14px 16px 10px; margin-bottom:16px;
   transition:box-shadow .15s, border-color .15s;
 }

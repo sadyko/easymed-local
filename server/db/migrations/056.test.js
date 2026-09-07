@@ -15,13 +15,19 @@ import { migrate } from '../migrate.js';
 // The mapping migration 056 applies, mirrored from TYPE_TO_GROUP_NAME in
 // public/js/admin/views/service-group.js. If the two ever disagree, a
 // backfilled service and a freshly-imported one land in different groups.
+// SERVICE_TYPES_FIVE_V1 — здесь ЧЕТЫРЕ типа, а не пять, и это не упущение.
+// Файл проверяет миграцию 056 — историческую раскладку по группам. «Хирургия»
+// при ней называлась 'other', а тип 'surgery' появился только в 109, то есть
+// на годы позже: положить сюда surgery значило бы требовать от 056 знания о
+// том, чего при ней не существовало.
+//
+// Что операции попадают в группу «Хирургия», проверяет 109.test.js — там же,
+// где проверяется сам перевод 'other' → 'surgery'.
 const EXPECTED = {
   consultation: 'Консультации',
   lab:          'Лаборатория',
   procedure:    'Процедуры',
   imaging:      'Диагностика',
-  radiology:    'Лучевая диагностика',
-  other:        'Хирургия',
 };
 
 function seeded() {
@@ -30,7 +36,7 @@ function seeded() {
   return db;
 }
 
-test('the six routing types all exist as service_types rows', () => {
+test('the historical routing types all exist as service_types rows', () => {
   const db = seeded();
   for (const name of Object.values(EXPECTED)) {
     const row = db.prepare('SELECT id FROM service_types WHERE name = ?').get(name);
@@ -49,7 +55,7 @@ test('no service is left without a group', () => {
       ('ОАК',               80, 'lab',          1),
       ('УЗИ почек',        120, 'imaging',      0),
       ('В/в инъекция',      30, 'procedure',    0),
-      ('Лапароскопия',    1000, 'other',        0);
+      ('Лапароскопия',    1000, 'surgery',      0);
   `);
   const before = db.prepare('SELECT COUNT(*) n FROM services WHERE type_id IS NULL').get().n;
   assert.ok(before > 0, 'the test must actually start from the broken shape');
@@ -111,11 +117,15 @@ test('grouping produces more than one bucket — the symptom that started this',
   db.exec(`
     INSERT INTO services (name, price, type, is_lab) VALUES
       ('a', 1, 'consultation', 0), ('b', 1, 'lab', 1), ('c', 1, 'imaging', 0),
-      ('d', 1, 'procedure', 0),    ('e', 1, 'other', 0);
+      ('d', 1, 'procedure', 0);
   `);
   db.exec(read056());
+  // SERVICE_TYPES_FIVE_V1 — четыре, а не пять: пятым был 'surgery', которого
+  // при 056 не существовало (он назывался 'other'). Смысл проверки от этого не
+  // страдает — она о том, что услуги НЕ сваливаются в одну кучу, с чего всё и
+  // началось. Группу операций проверяет 109.test.js.
   const buckets = db.prepare('SELECT COUNT(DISTINCT type_id) n FROM services').get().n;
-  assert.ok(buckets >= 5, `expected at least 5 distinct groups, got ${buckets}`);
+  assert.ok(buckets >= 4, `expected at least 4 distinct groups, got ${buckets}`);
   db.close();
 });
 

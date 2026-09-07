@@ -6672,6 +6672,8 @@ export const STRINGS = {
   "Telegram не подключён": {"en":"Telegram not connected","ru":"Telegram не подключён","uz":"Telegram ulanmagan"},
   "Нет телефона для Telegram": {"en":"No phone for Telegram","ru":"Нет телефона для Telegram","uz":"Telegram uchun telefon yo‘q"},
   "Telegram-бот выключен": {"en":"Telegram bot is off","ru":"Telegram-бот выключен","uz":"Telegram bot o‘chirilgan"},
+  "Диагностика (кабинет врача)": {"en":"Diagnostics (doctor’s room)","ru":"Диагностика (кабинет врача)","uz":"Diagnostika (shifokor xonasi)"},
+  "Хирургия (на госпитализацию)": {"en":"Surgery (billed to the admission)","ru":"Хирургия (на госпитализацию)","uz":"Jarrohlik (gospitalizatsiyaga)"},
   "География": {"en":"Geography","ru":"География","uz":"Geografiya"},
   "Фото, Email, Telegram, поведение": {"en":"Photo, email, Telegram, behaviour","ru":"Фото, Email, Telegram, поведение","uz":"Foto, Email, Telegram, xulq"},
   "Фото, категория, Telegram, адрес, гражданство, поведение": {"en":"Photo, category, Telegram, address, citizenship, behaviour","ru":"Фото, категория, Telegram, адрес, гражданство, поведение","uz":"Foto, toifa, Telegram, manzil, fuqarolik, xulq"},

@@ -38,6 +38,11 @@ const ISSUE_ROLES = ['admin', 'registrar', 'doctor', 'nurse', 'cashier'];
 export const SURGERY_NAME_RE = /хирург|surger|jarroh|операц|operatsi/i;
 
 export function isSurgery(row) {
+  // SERVICE_TYPES_FIVE_V1 — у операции ТЕПЕРЬ ЕСТЬ свой тип, и он главный.
+  // Имя типа осталось запасным путём: услуги, заведённые до этого выпуска,
+  // лежат под «Процедурой» или «Диагностикой», и до перетипизации их узнаёт
+  // только название. Убрать запасной путь можно, когда таких не останется.
+  if (row && row.svc_type === 'surgery') return true;
   return SURGERY_NAME_RE.test(String((row && row.svc_type_name) || ''));
 }
 
@@ -154,12 +159,17 @@ export function issueQueueNumbers(db, args, user) {
       }
       else if (isLab)                        key = `lab:${day}`;
       else if (row.doctor_id)                key = `doc:${row.doctor_id}:${day}`;
-      else if (type === 'consultation')      key = `doc:0:${day}`;
+      // SERVICE_TYPES_FIVE_V1 — диагностика идёт В КАБИНЕТ ВРАЧА, как и приём
+      // (владелец: «diagnostics too goes to the doctors cabinet»). Строка с
+      // назначенным врачом ушла в его линию выше; без врача обе попадают в
+      // общую врачебную линию дня. Прежняя очередь на аппарат (img:) исчезла
+      // вместе с «Рентгеном»: очередь к машине была нужна ему, а диагностику
+      // ведёт человек.
+      else if (type === 'consultation' || type === 'imaging') key = `doc:0:${day}`;
       else if (type === 'procedure')         key = `proc:room:${day}`;
-      // QUEUE_IMG_DOCTOR_V1 — диагностику ведёт ВРАЧ, а не аппарат: строка с
-      // врачом ушла в его линию выше. Аппарат без врача (рентген) остаётся сам
-      // себе очередью — там очередь действительно к машине.
-      else if (type === 'imaging')           key = `img:${row.service_id}:${day}`;
+      // Хирургия сюда не доходит — она отсеяна выше (талона у неё нет).
+      // Остаток: услуга без узнаваемого типа. Своя линия по услуге — самое
+      // безобидное, что можно сделать, не выдумывая ей маршрут.
       else key = `oth:${row.service_id}:${day}`;
 
       // One number per patient per destination+day (they queue there once)…

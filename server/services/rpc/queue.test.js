@@ -102,12 +102,16 @@ test('queue: два исследования одному пациенту у о
   assert.equal(t[1].number, 1, 'в одну дверь человек стоит один раз');
 });
 
-test('queue: аппарат без врача (рентген) остаётся очередью аппарата', () => {
+test('queue: диагностика без врача идёт в общую врачебную линию, а не к аппарату', () => {
+  // SERVICE_TYPES_FIVE_V1 — правило СМЕНИЛ ВЛАДЕЛЕЦ: «diagnostics too goes to
+  // the doctors cabinet». Раньше аппарат без врача был сам себе очередью
+  // (img:<услуга>) — это имело смысл, пока рядом жил «Рентген», где очередь
+  // действительно к машине. Рентген удалён (он ничего не значил: своей ветки в
+  // маршрутизаторе у него не было), а диагностику ведёт человек.
   const db = freshDb();
   const xr = addLine(db, { svc: 5 });
   const t = issueQueueNumbers(db, { p_ids: [xr] }, REG);
-  assert.match(t[0].queue_key, /^img:5:/, 'без врача ключ по услуге, как раньше');
-  assert.equal(t[0].label, 'Рентген');
+  assert.match(t[0].queue_key, /^doc:0:/, 'диагностика без врача снова встала в очередь к аппарату');
 });
 
 test('queue: подпись диагностики с врачом — имя врача, а не название аппарата', () => {
@@ -244,13 +248,17 @@ test('queue: битая дата даёт ключ no-date, а не падени
 // ---------------------------------------------------------------------------
 // QUEUE_SURGERY_NO_TICKET_V1 — операция не занимает очередь
 // ---------------------------------------------------------------------------
-// В каталоге хирургия — это ТИП услуги, а services.type у неё 'other', и врач
-// проставлен. Значит проверять надо ровно то, что раньше ломалось: строка с
-// врачом больше не встаёт в его приёмную линию — и вообще никуда.
+// SERVICE_TYPES_FIVE_V1 — раньше здесь стояло services.type = 'other', и этот
+// комментарий сам же объяснял почему: «в каталоге хирургия — это ТИП услуги, а
+// services.type у неё 'other'». Ровно эта подмена и была дефектом — в
+// настройках 'other' подписан «Хирургия», и сотрудник, выбиравший операцию,
+// записывал «Другое». Теперь у операции свой тип, и фикстура говорит правду.
+// Проверяем то же, что и раньше: строка с врачом не встаёт в его приёмную
+// линию — и вообще никуда.
 function withSurgery(db) {
   db.prepare("INSERT INTO service_types (id, name) VALUES (10,'Хирургия'),(11,'Консультации')").run();
-  db.prepare("INSERT INTO services (id, name, price, type, type_id, requires_doctor) VALUES (20,'Аденоидэктомия',900000,'other',10,1)").run();
-  db.prepare("INSERT INTO services (id, name, price, type, type_id, requires_doctor) VALUES (21,'Конизация шейки матки',700000,'other',10,1)").run();
+  db.prepare("INSERT INTO services (id, name, price, type, type_id, requires_doctor) VALUES (20,'Аденоидэктомия',900000,'surgery',10,1)").run();
+  db.prepare("INSERT INTO services (id, name, price, type, type_id, requires_doctor) VALUES (21,'Конизация шейки матки',700000,'surgery',10,1)").run();
   db.prepare("INSERT INTO services (id, name, price, type, type_id, requires_doctor) VALUES (22,'Приём хирурга',60000,'consultation',11,1)").run();
   return db;
 }

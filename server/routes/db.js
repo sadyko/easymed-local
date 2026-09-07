@@ -28,6 +28,57 @@ function liveColumnsReader(db) {
     };
 }
 
+
+// SURGERY_NEEDS_BED_V1 — вернуть текст отказа или null, если всё в порядке.
+//
+// Считается по ЛЮБОЙ строке запроса: одним вызовом можно добавить несколько
+// услуг, и достаточно одной хирургической без койки, чтобы отказать целиком —
+// иначе половина списка молча осела бы в базе.
+//
+// Госпитализация ищется по ПАЦИЕНТУ визита, а не по самому визиту: операцию
+// заводят и на визит-осмотр, оформленный отдельно от лежания, и он к
+// admissions не привязан. Открытой считается запись без даты выписки.
+function refuseSurgeryWithoutBed(db, meta, body) {
+  if (!meta || meta.table !== 'visit_services') return null;
+  if (meta.op !== 'insert' && meta.op !== 'upsert' && meta.op !== 'update') return null;
+
+  const rows = Array.isArray(body && body.values) ? body.values
+    : (body && body.values ? [body.values] : []);
+  if (!rows.length) return null;
+
+  let isSurgeryService, openAdmission;
+  try {
+    isSurgeryService = db.prepare("SELECT 1 FROM services WHERE id = ? AND type = 'surgery'");
+    // «Лежит» — это НЕ просто «есть незакрытая запись». Из семи состояний
+    // койку занимают четыре: положен, осмотрен, лечится, выписывается.
+    // 'ordered' — заявка в стационар, пациент ещё дома; 'cancelled' —
+    // отменённая заявка; 'discharged' — уже ушёл. Считать их лежащими значило
+    // бы разрешить операцию тому, у кого койки нет.
+    openAdmission = db.prepare(`SELECT 1 FROM admissions a
+       JOIN visits v ON v.patient_id = a.patient_id
+      WHERE v.id = ?
+        AND a.discharged_at IS NULL
+        AND a.status IN ('admitted','examined','active','discharging')
+      LIMIT 1`);
+  } catch { return null; }   // справочника нет — не наше дело отказывать
+
+  for (const row of rows) {
+    const serviceId = row && (row.service_id ?? row.serviceId);
+    const visitId = row && (row.visit_id ?? row.visitId);
+    if (!serviceId || !visitId) continue;
+    let surgery = false;
+    try { surgery = !!isSurgeryService.get(serviceId); } catch { surgery = false; }
+    if (!surgery) continue;
+    let admitted = false;
+    try { admitted = !!openAdmission.get(visitId); } catch { admitted = false; }
+    if (!admitted) {
+      return 'Хирургия оформляется на госпитализацию: сначала положите пациента на койку, '
+        + 'иначе счёт за операцию окажется вне истории лечения.';
+    }
+  }
+  return null;
+}
+
 export function dbRoutes(db) {
     setLiveColumns(liveColumnsReader(db));
   const r = Router();
@@ -71,6 +122,21 @@ export function dbRoutes(db) {
       // правильный, и права у администратора есть — не даёт устройство самой
       // клиники.
       return res.status(409).json({ error: { code: 'conflict', message: managed } });
+    }
+
+    // SURGERY_NEEDS_BED_V1 — операция оформляется НА ГОСПИТАЛИЗАЦИЮ.
+    //
+    // Владелец: «the surgery is bundled so it goes with the hospitalization —
+    // which means only in bed located patients service bill created».
+    //
+    // Стоит ЗДЕСЬ, в единственной двери /api/db, а не в окне добавления
+    // услуги: строку visit_services заводят ЧЕТЫРЕ разных экрана (кабинет
+    // врача, счёт визита, окно визита в двух местах). Проверка в одном из них
+    // означала бы правило, которое соблюдают три экрана из четырёх, — а
+    // необходимость правила как раз денежная.
+    const surgeryRefusal = refuseSurgeryWithoutBed(db, compiled.meta, req.body);
+    if (surgeryRefusal) {
+      return res.status(409).json({ error: { code: 'conflict', message: surgeryRefusal } });
     }
 
     try {

@@ -23,13 +23,17 @@
 // The canonical routing values and the service_types name each maps to. This
 // mirrors migration 056 — if the two disagree, a backfilled service and a
 // freshly-imported one land in different groups.
+// SERVICE_TYPES_FIVE_V1 — пять разделов. «Хирургия» была подписью типа
+// 'other', и это же имя стояло здесь: то есть система звала операции
+// «Другим» на всех трёх уровнях — в редакторе, в группировке и в базе.
+// Теперь у неё свой тип. «Лучевая диагностика» ушла вместе с 'radiology':
+// услуг с этим типом не было ни в одной базе.
 export const TYPE_TO_GROUP_NAME = {
     consultation: 'Консультации',
     lab:          'Лаборатория',
     procedure:    'Процедуры',
     imaging:      'Диагностика',
-    radiology:    'Лучевая диагностика',
-    other:        'Хирургия',
+    surgery:      'Хирургия',
 };
 
 // Fallback when a service has neither a usable type_id nor a known `type`.
