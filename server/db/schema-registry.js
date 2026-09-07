@@ -440,12 +440,18 @@ export const REGISTRY = {
   // один общий движок (services/rpc/slot-engine.js), и две разные формы
   // означали бы две разные правды о том, что свободно. Пустая строка =
   // «часов не задано» → берутся часы клиники.
-  rooms: { read:{roles:ALL_STAFF,columns:['id','name','code','room_type','capacity','queue_mode','floor_id','active','created_at','working_hours']},
-    write:{insert:{roles:['admin'],columns:['name','code','room_type','capacity','queue_mode','floor_id','active','working_hours']},update:{roles:['admin'],columns:['name','code','room_type','capacity','queue_mode','floor_id','active','working_hours']},delete:{roles:[]}},
-    filters:['id','active','floor_id','room_type','queue_mode'], embed:{ floors:{table:'floors',fk:'floor_id',columns:['id','name']} } },
-  wards: { read:{roles:ALL_STAFF,columns:['id','name','code','floor_id','active','created_at','type','billing_mode','price_per_day','price_per_hour','color']},
-    write:{insert:{roles:['admin'],columns:['name','code','floor_id','active','type','billing_mode','price_per_day','price_per_hour','color']},update:{roles:['admin'],columns:['name','code','floor_id','active','type','billing_mode','price_per_day','price_per_hour','color']},delete:{roles:[]}},
-    filters:['id','active','floor_id'], embed:{ floors:{table:'floors',fk:'floor_id',columns:['id','name']} } },
+  // ROOMS_WARDS_DEPT_V1 — `department_id` и `notes`: разметка настроек их уже
+  // показывала, а разрешения на них не было, и выбранный отдел молча пропадал.
+  rooms: { read:{roles:ALL_STAFF,columns:['id','name','code','room_type','capacity','queue_mode','floor_id','department_id','notes','active','created_at','working_hours']},
+    write:{insert:{roles:['admin'],columns:['name','code','room_type','capacity','queue_mode','floor_id','department_id','notes','active','working_hours']},update:{roles:['admin'],columns:['name','code','room_type','capacity','queue_mode','floor_id','department_id','notes','active','working_hours']},delete:{roles:[]}},
+    filters:['id','active','floor_id','department_id','room_type','queue_mode'],
+    embed:{ floors:{table:'floors',fk:'floor_id',columns:['id','name']},
+            departments:{table:'departments',fk:'department_id',columns:['id','name','kind']} } },
+  wards: { read:{roles:ALL_STAFF,columns:['id','name','code','floor_id','department_id','active','created_at','type','billing_mode','price_per_day','price_per_hour','color']},
+    write:{insert:{roles:['admin'],columns:['name','code','floor_id','department_id','active','type','billing_mode','price_per_day','price_per_hour','color']},update:{roles:['admin'],columns:['name','code','floor_id','department_id','active','type','billing_mode','price_per_day','price_per_hour','color']},delete:{roles:[]}},
+    filters:['id','active','floor_id','department_id'],
+    embed:{ floors:{table:'floors',fk:'floor_id',columns:['id','name']},
+            departments:{table:'departments',fk:'department_id',columns:['id','name','kind']} } },
   // `status` is intentionally NOT writable via /api/db — bed occupancy/housekeeping
   // is changed only by the inpatient RPCs (admit → occupied, discharge → cleaning,
   // set_bed_status → free/cleaning/maintenance), so a config edit can never desync a

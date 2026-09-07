@@ -790,14 +790,21 @@ export const SECTIONS = {
             { key: 'name',     label: 'Name' },
             { key: 'code',     label: 'Door #' },
             { key: 'department_id', label: 'Department', lookup: 'departments' },
-            { key: 'floor_id', label: 'Floor (от отдела)', lookup: 'floors' },
+            { key: 'floor_id', label: 'Этаж', lookup: 'floors' },
             { key: 'room_type',label: 'Type' },
             { key: 'active',   label: 'Status', type: 'bool' },
         ],
         fields: [
             { key: 'name',      label: 'Room name (e.g. Room 201, Cardiology cabinet)', type: 'text', required: true },
             { key: 'code',      label: 'Door number / short code', type: 'text' },
-            { key: 'department_id', label: 'Отдел (этаж определяется отделом)', type: 'fk', source: 'departments' },   // ROOMS_DEPT_FLOOR_V1 — room.floor_id derived from the department via trigger
+            // ROOMS_WARDS_DEPT_V1 — отдел кабинета. Поле стояло здесь и раньше,
+            // но колонки rooms.department_id не существовало: выбранный отдел
+            // сохранить было некуда, и в списке он всегда был пуст.
+            { key: 'department_id', label: 'Отдел', type: 'fk', source: 'departments' },
+            // Этаж выбирается ОТДЕЛЬНО. Прежняя подпись обещала, что он
+            // «определяется отделом», но у отдела этажа нет и вывода этого
+            // нигде не написано — этаж кабинету было нечем поставить.
+            { key: 'floor_id',  label: 'Этаж', type: 'fk', source: 'floors' },
             { key: 'room_type', label: 'Type', type: 'select',
               options: [['consultation','Consultation'], ['procedure','Procedure'],
                         ['diagnostics','Diagnostics'], ['lab','Laboratory'],
@@ -816,12 +823,12 @@ export const SECTIONS = {
         branchScoped: true,   // BRANCH_ISOLATION_V2 — wards.branch_id
         orderBy: { column: 'name', ascending: true },
         searchColumns: ['name', 'code', 'floor'],
-        fkLookups: ['branches', 'floors'],
+        fkLookups: ['floors', 'departments'],
         columns: [
             { key: 'name',      label: 'Name' },
             { key: 'code',      label: 'Code' },
             { key: 'type',      label: 'Type' },
-            { key: 'branch_id', label: 'Branch', lookup: 'branches' },
+            { key: 'department_id', label: 'Отдел', lookup: 'departments' },
             { key: 'floor_id',  label: 'Этаж', lookup: 'floors' },
             { key: 'active',    label: 'Status', type: 'bool' },
         ],
@@ -832,7 +839,10 @@ export const SECTIONS = {
               options: [['general','General'], ['icu','ICU'], ['maternity','Maternity'],
                         ['pediatrics','Pediatrics'], ['surgery','Surgery'],
                         ['oncology','Oncology'], ['isolation','Isolation'], ['other','Other']] },
-            { key: 'branch_id',      label: 'Branch', type: 'fk', source: 'branches' },
+            // ROOMS_WARDS_DEPT_V1 — отдел палаты. Филиал отсюда убран: колонки
+            // wards.branch_id не существует, поле ничего не сохраняло, а филиал
+            // у палаты и так определяется этажом (floors.branch_id).
+            { key: 'department_id',  label: 'Отдел', type: 'fk', source: 'departments' },
             { key: 'floor_id',       label: 'Этаж (выберите этаж клиники)', type: 'fk', source: 'floors' },
             { key: 'price_per_hour', label: 'Price per hour (UZS)', type: 'number', default: 0,
               hint: 'Default accommodation rate for beds in this ward. Beds with their own rate override this. Leave 0 to disable accommodation billing.' },
