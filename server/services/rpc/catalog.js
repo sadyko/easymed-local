@@ -53,9 +53,16 @@ export function deleteService(db, args, user) {
     throw new RpcError('Удалять услуги может только администратор.', 403);
   }
 
+  // SEED_ID_DELETE_V1 — id может быть ОТРИЦАТЕЛЬНЫМ, и это не мусор. Миграция
+  // 041 нарочно заводит образцовую услугу «Общий анализ крови» под id = -41:
+  // отрицательный номер не столкнётся с настоящими строками и не сдвинет
+  // счётчик AUTOINCREMENT. Прежняя проверка «> 0» такую услугу отвергала на
+  // входе с «p_service_id must be a positive integer» — до разбора истории
+  // дело не доходило, и владелец видел бессмысленный отказ вместо честного
+  // «услуга используется в визитах — отключите её». Запрещены только 0 и не-число.
   const id = Number(args && (args.p_service_id ?? args.service_id));
-  if (!Number.isInteger(id) || id <= 0) {
-    throw new RpcError('p_service_id must be a positive integer.', 400);
+  if (!Number.isInteger(id) || id === 0) {
+    throw new RpcError('p_service_id must be a non-zero integer.', 400);
   }
 
   const svc = db.prepare('SELECT id, name FROM services WHERE id = ?').get(id);
@@ -98,9 +105,16 @@ export function serviceDeleteCheck(db, args, user) {
   if (!user || user.role !== 'admin') {
     throw new RpcError('Удалять услуги может только администратор.', 403);
   }
+  // SEED_ID_DELETE_V1 — id может быть ОТРИЦАТЕЛЬНЫМ, и это не мусор. Миграция
+  // 041 нарочно заводит образцовую услугу «Общий анализ крови» под id = -41:
+  // отрицательный номер не столкнётся с настоящими строками и не сдвинет
+  // счётчик AUTOINCREMENT. Прежняя проверка «> 0» такую услугу отвергала на
+  // входе с «p_service_id must be a positive integer» — до разбора истории
+  // дело не доходило, и владелец видел бессмысленный отказ вместо честного
+  // «услуга используется в визитах — отключите её». Запрещены только 0 и не-число.
   const id = Number(args && (args.p_service_id ?? args.service_id));
-  if (!Number.isInteger(id) || id <= 0) {
-    throw new RpcError('p_service_id must be a positive integer.', 400);
+  if (!Number.isInteger(id) || id === 0) {
+    throw new RpcError('p_service_id must be a non-zero integer.', 400);
   }
   const svc = db.prepare('SELECT id, name FROM services WHERE id = ?').get(id);
   if (!svc) throw new RpcError('Услуга не найдена.', 404);

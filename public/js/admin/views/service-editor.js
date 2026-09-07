@@ -116,21 +116,27 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
     // Лабораторный блок — существующие колонки services, видим ТОЛЬКО при
     // разделе «лаборатория» (labBlockVisible). Скрытый блок сервер не пишет,
     // поэтому спрятанные значения не затираются.
+    // LAB_REFS_IN_PANELS_V1 — здесь остаётся только то, что относится к
+    // ЗАБОРУ: материал и пробирка. Единицы и нормы отсюда убраны (владелец:
+    // «this type of settings should be handled in labs/panels»), и правильно:
+    // у услуги ОДНА единица и ОДИН диапазон, а у анализа их столько, сколько
+    // показателей — у общего анализа крови около двадцати, у каждого своя
+    // единица, свой диапазон и свои нормы для мужчин и женщин. Всё это живёт
+    // в панели (Лаборатория → Панели), и бланк печатается по ней
+    // (LAB_PANEL_IS_TRUTH_V1). Поле «одна норма на услугу» лишь путало: его
+    // заполняли, а на бланк оно не попадало.
+    //
+    // Колонки services.result_unit/ref_* НЕ удалены и НЕ затираются: у услуги
+    // без панели ввод результата всё ещё падает на них (laboratory.js), поэтому
+    // при сохранении отправляем то, что уже лежит в строке, — без изменений.
     const specimenInp = h('input', { type: 'text', value: (row && row.specimen) || '' });
-    const unitInp     = h('input', { type: 'text', value: (row && row.result_unit) || '' });
-    const refLowInp   = h('input', { type: 'number', step: 'any', value: row && row.ref_low != null ? row.ref_low : '' });
-    const refHighInp  = h('input', { type: 'number', step: 'any', value: row && row.ref_high != null ? row.ref_high : '' });
-    const refTextInp  = h('input', { type: 'text', value: (row && row.ref_text) || '' });
     const tubeSel = h('select', null,
         ...TUBE_OPTIONS.map(([v, l]) => h('option', { value: v, selected: !!(row && (row.tube_color || '') === v) }, l)));
     const labBlock = h('div', null,
         field('Материал (кровь, моча…)', specimenInp),
-        field('Единица результата', unitInp),
-        h('div', { class: 'mg-grid' },
-            field('Референс: от', refLowInp),
-            field('Референс: до', refHighInp)),
-        field('Референс (текст)', refTextInp),
-        field('Цвет пробирки', tubeSel));
+        field('Цвет пробирки', tubeSel),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px', lineHeight: 1.5 } },
+            'Показатели, единицы и нормы задаются в панели анализа: Лаборатория → Панели.'));
 
     const syncLab = () => { labBlock.style.display = labBlockVisible(typeSel.value) ? '' : 'none'; };
     typeSel.addEventListener('change', syncLab);
@@ -200,7 +206,7 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
     // ---- сборка ------------------------------------------------------------
     if (readOnly) {
         for (const el of [nameInp, typeSel, typeCombo.input, catCombo.input, depCombo.input, roomSel,
-            specimenInp, unitInp, refLowInp, refHighInp, refTextInp, tubeSel,
+            specimenInp, tubeSel,   // LAB_REFS_IN_PANELS_V1 — единицы и нормы живут в панели
             priceInp, vatInp, durInp, reqDoc, pctInp, docChk, codeInp, activeChk]) el.disabled = true;
     }
 
@@ -241,11 +247,12 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
         if (labBlockVisible(typeSel.value)) {
             args.lab = {
                 specimen: specimenInp.value.trim() || null,
-                result_unit: unitInp.value.trim() || null,
-                ref_low: numOrNull(refLowInp.value),
-                ref_high: numOrNull(refHighInp.value),
-                ref_text: refTextInp.value.trim() || null,
                 tube_color: tubeSel.value || null,
+                // Прежние значения — как есть: их правят в панели, а не здесь.
+                result_unit: (row && row.result_unit) || null,
+                ref_low: row && row.ref_low != null ? row.ref_low : null,
+                ref_high: row && row.ref_high != null ? row.ref_high : null,
+                ref_text: (row && row.ref_text) || null,
             };
         }
 

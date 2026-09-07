@@ -6674,6 +6674,7 @@ export const STRINGS = {
   "Telegram-бот выключен": {"en":"Telegram bot is off","ru":"Telegram-бот выключен","uz":"Telegram bot o‘chirilgan"},
   "Диагностика (кабинет врача)": {"en":"Diagnostics (doctor’s room)","ru":"Диагностика (кабинет врача)","uz":"Diagnostika (shifokor xonasi)"},
   "Хирургия (на госпитализацию)": {"en":"Surgery (billed to the admission)","ru":"Хирургия (на госпитализацию)","uz":"Jarrohlik (gospitalizatsiyaga)"},
+  "Показатели, единицы и нормы задаются в панели анализа: Лаборатория → Панели.": {"en":"Analytes, units and reference ranges are set in the test panel: Laboratory → Panels.","ru":"Показатели, единицы и нормы задаются в панели анализа: Лаборатория → Панели.","uz":"Ko‘rsatkichlar, birliklar va me’yorlar tahlil panelida belgilanadi: Laboratoriya → Panellar."},
   "География": {"en":"Geography","ru":"География","uz":"Geografiya"},
   "Фото, Email, Telegram, поведение": {"en":"Photo, email, Telegram, behaviour","ru":"Фото, Email, Telegram, поведение","uz":"Foto, Email, Telegram, xulq"},
   "Фото, категория, Telegram, адрес, гражданство, поведение": {"en":"Photo, category, Telegram, address, citizenship, behaviour","ru":"Фото, категория, Telegram, адрес, гражданство, поведение","uz":"Foto, toifa, Telegram, manzil, fuqarolik, xulq"},
