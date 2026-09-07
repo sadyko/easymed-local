@@ -1314,7 +1314,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // же брендированном бланке (Настройки → Документы), но это НЕ счёт пациенту:
     // документ адресован организации, содержит только покрытые ею услуги и место
     // для подписей обеих сторон — им закрывают расчёт по договору.
-    function printAkt({ invoice, payerId, lines, visitDate }) {
+    function printAkt({ invoice, payerId, lines, visitDate, queue }) {
         const payer = wiz.payers.find(p => String(p.id) === String(payerId));
         const no = invoice.invoice_number || String(invoice.id);
         const docName = (c) => {
@@ -1349,6 +1349,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     const dn = docName(c);
                     return { name: c.svc.name + (dn ? ' · ' + dn : ''), qty: c.qty, price: cartLinePrice(c), _alt: i % 2 === 1 };
                 }),
+                // ACT_SHEET_V1 — очередь по услугам АКТА. Готовый queueRows
+                // счёта здесь не годится: он собран для услуг ПАЦИЕНТА, то есть
+                // ровно для тех, которых в акте нет (COVERAGE_SPLIT_V1).
+                queue: queue || [],
             },
         });
         /* i18n-exempt-end */
@@ -2471,7 +2475,12 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // в кассу такой счёт не попадает (наличных по нему не берут), и
             // закрывающим документом для страховой/организации служит акт.
             for (const job of aktJobs) {
-                try { printAkt(job); } catch (e) { console.warn('[wizard] akt print:', e); }
+                // ACT_SHEET_V1 — талон связан с услугой полем service, и берём
+                // мы только строки ЭТОГО акта: у второго плательщика свой акт и
+                // свои номера, чужие на нём — прямая дезинформация регистратуры.
+                const names = new Set((job.lines || []).map(c => c.svc.name));
+                const aktQueue = queueRows.filter(q => names.has(q.service));
+                try { printAkt({ ...job, queue: aktQueue }); } catch (e) { console.warn('[wizard] akt print:', e); }
             }
 
             const dayWord = byDay.size > 1 ? ' ' + trf('(дней: {n})', { n: byDay.size }) : '';
