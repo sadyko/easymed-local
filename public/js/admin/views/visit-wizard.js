@@ -28,6 +28,7 @@ import { h, Icon, clear, toast, Avatar, initials, avColor, field, fmtDate, fmtDa
 import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1
 import { doctorPoolFor } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1
+import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // PAYER_COMPANY_IN_ESTIMATE_V1
 // WIZARD_ONE_ENGINE_V1 — общий клиент слотов и записи. Один вопрос «когда врач
 // свободен» на весь продукт: его задаёт серверу этот клиент, а считает
 // server/services/rpc/slot-engine.js. ?v как у остальных импортёров модуля.
@@ -110,6 +111,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // а не регистратуры — он подтверждается в момент приёма денег.
         // Для b2b и dms включается шаг «Кто платит» (выбор контрагента).
         payerId: 'self',
+        payersExpanded: false,   // PAYER_COMPANY_IN_ESTIMATE_V1 — раскрыт ли «Ещё N»
         payMethod: 'self',   // 'self' | 'b2b' | 'dms'
         // PAYER_TYPE_THEN_COMPANY_V1 — выбранный ТИП: 'self' либо ключ из
         // kindKey() (insurance / corporate / government). Компании показываются
@@ -241,6 +243,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // счёт не должен уйти на организацию из прежнего типа.
     // Единственную компанию в типе выбираем сразу: выбирать там не из чего.
     function setPayKind(kindId) {
+        wiz.payersExpanded = false;   // у другого типа свой список — раскрытие не переносится
         wiz.payKind = kindId;
         if (kindId === 'self') {
             wiz.payerId = 'self';
@@ -271,9 +274,27 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         paint();
     }
 
-    // PAYER_COMPANY_ON_STEP2_V1 - ряд компаний и всплывающий список «Ещё N»
-    // удалены вместе с выбором компании в СМЕТЕ: компанию выбирают на шаге
-    // «Кто платит», где рядом видно и что она покрывает.
+    // PAYER_COMPANY_IN_ESTIMATE_V1 (2026-09-07) — ряд компаний и «Ещё N»
+    // ВЕРНУЛИСЬ в смету, отменяя PAYER_COMPANY_ON_STEP2_V1.
+    //
+    // Тот довод был: «держать один выбор в двух местах — два источника правды».
+    // Довод про ДАННЫЕ, и к делу он не относился: источник один и остаётся один
+    // — wiz.payerId. Смета и шаг «Кто платит» два ВИДА на одно поле, оба зовут
+    // setPayer(); разойтись в том, кто выбран, они не могут по построению.
+    // Прежняя формулировка спутала «выбор в двух местах» с «двумя состояниями».
+    //
+    // А платила она тем, что регистратор не мог узнать ИЗ СМЕТЫ, заведена ли у
+    // клиники нужная страховая: вместо списка стояла надпись «выберете на
+    // следующем шаге», то есть просьба поверить на слово и идти дальше.
+
+    // Снятие отметки. НЕ через setPayer('self'): тот зовёт setPayKind('self') и
+    // сбросил бы ТИП плательщика — ряд компаний схлопнулся бы целиком, хотя
+    // регистратор всего лишь передумал насчёт конкретной компании. Тип
+    // остаётся, «Далее» не пропустит (nextBlockReason).
+    function clearPayer() {
+        wiz.payerId = 'self';
+        paint();
+    }
 
     function defaultWhen() {
         const d = new Date();
@@ -1851,24 +1872,71 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const payRow = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(118px, 1fr))', gap: '6px' } },
             ...payTypeChoices().map(t => payBtn(t, wiz.payKind === t.id, () => setPayKind(t.id))));
 
-        // PAYER_COMPANY_ON_STEP2_V1 — ряд компаний из СМЕТЫ убран: конкретную
-        // компанию (и то, какие услуги она покрывает) выбирают на шаге «Кто
-        // платит». Держать тот же выбор в двух местах — это два источника правды
-        // и лишний шум в смете; здесь остаётся ТИП плательщика и строка-итог
-        // ниже, показывающая, на кого в итоге пойдёт счёт.
+        // PAYER_COMPANY_IN_ESTIMATE_V1 — сам ряд. Компанию видно и выбирают
+        // здесь; шаг «Кто платит» её подтверждает и делит услуги.
         const _payer = wiz.payers.find(p => String(p.id) === String(wiz.payerId));
-        const dmsHint = wiz.payKind === 'self'
+        const companyRow = (() => {
+            if (wiz.payKind === 'self') return null;
+            const list = payersOfKind(wiz.payKind);
+            if (!list.length) return null;
+            const { shown, hiddenCount } = wiz.payersExpanded
+                ? { shown: list, hiddenCount: 0 }
+                : splitCompanies(list, wiz.payerId);
+            const chip = (p) => {
+                const on = String(wiz.payerId) === String(p.id);
+                return h('button', {
+                    type: 'button', title: p.name,
+                    onclick: () => {
+                        const next = toggleCompanyId(wiz.payerId, p.id);
+                        if (next === 'self') clearPayer(); else setPayer(next);
+                    },
+                    style: {
+                        padding: '7px 9px', borderRadius: '9px', cursor: 'pointer',
+                        fontFamily: 'inherit', fontSize: '12px', fontWeight: 700,
+                        display: 'flex', alignItems: 'center', gap: '6px',
+                        minWidth: 0, boxSizing: 'border-box', minHeight: '34px',
+                        overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
+                        textAlign: 'left',
+                        background: on ? 'var(--primary-50, #f2faf8)' : 'var(--white, #fff)',
+                        border: '1px solid ' + (on ? 'var(--primary-500)' : 'var(--ink-200)'),
+                        boxShadow: on ? 'inset 0 0 0 1px var(--primary-500)' : 'none',
+                        color: on ? 'var(--primary-700)' : 'var(--ink-700)',
+                    },
+                },
+                    h('span', {
+                        style: {
+                            flex: '0 0 auto', width: '14px', height: '14px', borderRadius: '4px',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            background: on ? 'var(--primary-500)' : 'var(--white, #fff)',
+                            border: '1px solid ' + (on ? 'var(--primary-500)' : 'var(--ink-300, #c7d0d6)'),
+                            color: 'var(--white, #fff)',
+                        },
+                    }, on ? Icon('Check', { size: 10 }) : null),
+                    h('span', { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }, p.name));
+            };
+            const row = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '6px' } },
+                ...shown.map(chip));
+            if (hiddenCount) {
+                row.appendChild(h('button', {
+                    type: 'button',
+                    onclick: () => { wiz.payersExpanded = true; paint(); },
+                    style: {
+                        padding: '7px 9px', borderRadius: '9px', cursor: 'pointer', minHeight: '34px',
+                        fontFamily: 'inherit', fontSize: '12px', fontWeight: 700,
+                        background: 'var(--white, #fff)', border: '1px dashed var(--ink-200)',
+                        color: 'var(--ink-700)',
+                    },
+                }, trf('Ещё {n}', { n: hiddenCount })));
+            }
+            return row;
+        })();
+
+        // COVERAGE_SPLIT_V1 — итог: на кого пойдёт счёт и сколько из сметы он
+        // берёт на себя. Остаётся под рядом, как и было.
+        const dmsHint = (wiz.payKind === 'self' || !_payer)
             ? null
-            : !_payer
-                // Компания ещё не выбрана — её выбирают на шаге «Кто платит»,
-                // и «Далее» без неё не пропустит (nextBlockReason).
-                ? h('div', { style: { fontSize: '12.5px', color: 'var(--warn-700, #a16207)' } },
-                    'компанию выберете на шаге «Кто платит»')
-                // COVERAGE_SPLIT_V1 — итог: кто платит и сколько из сметы берёт
-                // на себя. Смета обязана показывать, на кого пойдёт счёт, даже
-                // когда сам выбор переехал на следующий шаг.
-                : h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                    trf('{name} · покрывает {covered} из {total} сум', { name: _payer.name, covered: fmtPrice(coveredTotal()), total: fmtPrice(cartTotal()) }));
+            : h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                trf('{name} · покрывает {covered} из {total} сум', { name: _payer.name, covered: fmtPrice(coveredTotal()), total: fmtPrice(cartTotal()) }));
         // Единственная кнопка «Пациент» без объяснения выглядит как поломка —
         // но сказать «не заведены», когда список просто не загрузился, ХУЖЕ: это
         // отправляет заводить то, что уже заведено. PAYER_LOAD_V2.
@@ -1987,6 +2055,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         railEl.appendChild(h('div', { style: { borderTop: '1px solid var(--ink-100)', paddingTop: '12px', display: 'flex', flexDirection: 'column', gap: '10px' } },
             h('div', { style: { fontSize: '13.5px', fontWeight: 800, color: 'var(--ink-900)' } }, 'Кто платит'),
             payRow,
+            companyRow,
             noPayersHint,
             dmsHint,
             h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
