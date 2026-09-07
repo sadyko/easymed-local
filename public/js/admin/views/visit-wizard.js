@@ -1928,7 +1928,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     },
                     style: {
                         padding: '7px 9px', borderRadius: '9px', cursor: 'pointer',
-                        fontFamily: 'inherit', fontSize: '12px', fontWeight: 700,
+                        fontFamily: 'inherit', fontSize: '12.5px', fontWeight: 700,
                         display: 'flex', alignItems: 'center', gap: '6px',
                         minWidth: 0, boxSizing: 'border-box', minHeight: '34px',
                         overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
@@ -1958,7 +1958,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     onclick: () => { wiz.payersExpanded = true; paint(); },
                     style: {
                         padding: '7px 9px', borderRadius: '9px', cursor: 'pointer', minHeight: '34px',
-                        fontFamily: 'inherit', fontSize: '12px', fontWeight: 700,
+                        fontFamily: 'inherit', fontSize: '12.5px', fontWeight: 700,
                         background: 'var(--white, #fff)', border: '1px dashed var(--ink-200)',
                         color: 'var(--ink-700)',
                     },
