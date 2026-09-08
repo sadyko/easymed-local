@@ -23,7 +23,9 @@ const SQL = fs.readFileSync(path.join(DIR, '109_referral_category_rates.sql'), '
 function dbBefore109() {
   const db = openDb(':memory:');
   const tmp = tmpDir('mig109-');
-  for (const f of fs.readdirSync(DIR).filter((x) => x.endsWith('.sql') && !x.startsWith('109'))) {
+  // Миграции ДО 109, а не «все, кроме 109»: более поздние опираются
+  // на то, что заводит эта, и без неё падают прямо в подготовке теста.
+  for (const f of fs.readdirSync(DIR).filter((x) => x.endsWith('.sql') && parseInt(x, 10) < 109)) {
     fs.copyFileSync(path.join(DIR, f), path.join(tmp, f));
   }
   migrate(db, tmp);

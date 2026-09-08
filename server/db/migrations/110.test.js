@@ -22,7 +22,9 @@ const SQL = fs.readFileSync(path.join(DIR, '110_referral_source_code.sql'), 'utf
 function dbBefore110() {
   const db = openDb(':memory:');
   const tmp = tmpDir('mig110-');
-  for (const f of fs.readdirSync(DIR).filter((x) => x.endsWith('.sql') && !x.startsWith('110'))) {
+  // Миграции ДО 110, а не «все, кроме 110»: более поздние опираются
+  // на то, что заводит эта, и без неё падают прямо в подготовке теста.
+  for (const f of fs.readdirSync(DIR).filter((x) => x.endsWith('.sql') && parseInt(x, 10) < 110)) {
     fs.copyFileSync(path.join(DIR, f), path.join(tmp, f));
   }
   migrate(db, tmp);

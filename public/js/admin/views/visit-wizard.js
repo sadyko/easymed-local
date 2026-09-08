@@ -1224,7 +1224,12 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     }
 
     // ---------------------------------------------------------------------
-    // Step 2 — Направление (источник → кто направил, врач, заметка)
+    // Step 2 — Направление (источник → кто направил, врач)
+    //
+    // VISIT_NOTE_FIELD_DROPPED_V1 — поля «Заметка» здесь больше нет: на этом
+    // шаге его заполняли редко, а место оно занимало на каждом визите. Само
+    // поле визита никуда не делось — wiz.notes держит '', и в ensure_visit
+    // уходит notes: null, как и раньше уходило у незаполненной заметки.
     // ---------------------------------------------------------------------
     function paintStep2(root) {
         const needsDoctor = wiz.cart.some(c => c.svc.requires_doctor);
@@ -1278,10 +1283,6 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             ...inCat.map(s => h('option', { value: s.id, selected: String(wiz.sourceId) === String(s.id) }, referralSourceLabel(s))));
         srcSel.addEventListener('change', () => { wiz.sourceId = srcSel.value; });
 
-        const notesInp = h('textarea', { rows: '2', placeholder: 'Заметка (необязательно)' });
-        notesInp.value = wiz.notes;
-        notesInp.addEventListener('input', () => { wiz.notes = notesInp.value; });
-
         root.appendChild(h('div', { class: 'card', style: { padding: '18px 20px', maxWidth: '640px' } },
             h('h3', { style: { margin: '0 0 14px', fontSize: '13.5px' } }, Icon('Send', { size: 15 }), ' Направление'),
             h('div', { class: 'field-row', style: { gridTemplateColumns: '1fr 1fr' } },
@@ -1292,7 +1293,6 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             h('div', { class: 'field-row', style: { gridTemplateColumns: '1fr 1fr' } },
                 field(needsDoctor ? 'Врач (обязательно — есть врачебные услуги)' : 'Врач', docSel, { required: needsDoctor }),
             ),
-            field('Заметка', notesInp),
         ));
     }
 

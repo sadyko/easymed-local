@@ -630,6 +630,8 @@ const LOOKUP_CONFIG = {
         addTitle: 'Новый источник направления', editTitle: 'Источник направления',
         modalWidth: '920px', modalCols: '1fr 1fr',
         embed: 'referral_source_categories(name)',
+        filterRow: true,   // LOOKUP_COLUMN_FILTERS_V1 — с мигр. 111 здесь ещё и все врачи клиники
+
         columns: [
             { key: 'code', label: 'Номер' },
             { key: 'name', label: 'ФИО' },
@@ -823,6 +825,65 @@ async function renderEditor(container, key) {
     const emptyEl = h('div', { class: 'empty', style: { display: 'none' } },
         `No ${cfg.title.toLowerCase()} yet — add the first one.`);
 
+    // LOOKUP_COLUMN_FILTERS_V1 — строка отбора под шапкой, по полю на колонку.
+    //
+    // Появилась, когда в списке источников направления стало 23 строки: с
+    // мигр. 111 каждый врач клиники — тоже источник, и найти среди них одного
+    // внешнего партнёра глазами уже нельзя.
+    //
+    // Отбор КЛИЕНТСКИЙ, по уже загруженным строкам: список и так приезжает
+    // целиком (limit 500), и ходить на сервер за каждой набранной буквой значило
+    // бы 500 запросов там, где хватает одного. Если справочник когда-нибудь
+    // упрётся в этот предел, отбор придётся унести на сервер — и тогда об этом
+    // скажет сам предел, а не тихо неполный список.
+    //
+    // Включается конфигурацией (`filterRow: true`), а не всем подряд: в
+    // справочнике из трёх строк строка отбора — лишний шум.
+    const filterInputs = new Map();   // column key (или '__active') -> control
+    let allRows = [];
+
+    // Текст, по которому колонка ищется. ВАЖНО: это то же самое, что видно в
+    // ячейке (подпись перечисления, название по ссылке) — иначе отбор шёл бы по
+    // тому, чего на экране нет, и «ничего не нашлось» выглядело бы поломкой.
+    function cellText(row, c) {
+        const v = c.embed ? (row[c.key] ? row[c.key][c.embedLabel || 'name'] : null)
+                          : enumLabel(cfg, c.key, row[c.key]);
+        return v === 0 ? '0' : (v == null ? '' : String(v));
+    }
+
+    // toLowerCase(), а не встроенный в базу lower(): здесь JS, и он складывает
+    // регистр кириллицы (то же соображение, что у lower_uni в db/connection.js).
+    const norm = (s) => String(s == null ? '' : s).toLowerCase().trim();
+
+    function visibleRows() {
+        const active = filterInputs.get('__active');
+        const wantActive = active ? active.value : '';
+        return allRows.filter((row) => {
+            if (wantActive === 'yes' && !row.active) return false;
+            if (wantActive === 'no' && row.active) return false;
+            for (const c of cfg.columns) {
+                const q = norm(filterInputs.get(c.key)?.value);
+                if (q && !norm(cellText(row, c)).includes(q)) return false;
+            }
+            return true;
+        });
+    }
+
+    function filterRowEl() {
+        const onInput = () => paintRows(visibleRows());
+        const cell = (key, control) => { filterInputs.set(key, control); return h('td', { class: 'tbl-filter' }, control); };
+        return h('tr', { class: 'tbl-filter-row' },
+            ...cfg.columns.map(c => cell(c.key,
+                h('input', { type: 'text', placeholder: tr('Отбор…'), oninput: onInput }))),
+            cell('__active', h('select', { onchange: onInput },
+                h('option', { value: '' }, tr('Все')),
+                h('option', { value: 'yes' }, tr('Только активные')),
+                h('option', { value: 'no' }, tr('Только неактивные')))),
+        );
+    }
+
+    const anyFilterSet = () => [...filterInputs.values()].some(el => (el.value || '') !== '');
+
     const addBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openRowModal(null) },
         Icon('Plus', { size: 14 }), ' Add');
 
@@ -847,10 +908,13 @@ async function renderEditor(container, key) {
                 addBtn,
             ),
             h('table', { class: 'tbl' },
-                h('thead', null, h('tr', null,
-                    ...cfg.columns.map(c => h('th', null, c.label)),
-                    h('th', null, 'Active'),
-                )),
+                h('thead', null,
+                    h('tr', null,
+                        ...cfg.columns.map(c => h('th', null, c.label)),
+                        h('th', null, 'Active'),
+                    ),
+                    cfg.filterRow ? filterRowEl() : null,
+                ),
                 tbody,
             ),
             emptyEl,
@@ -863,6 +927,7 @@ async function renderEditor(container, key) {
         renderBranchSyncCard(syncSlot).catch((e) => console.warn('[branch-sync] card failed:', e && e.message));
     }
 
+
     await load();
 
     async function load() {
@@ -873,17 +938,33 @@ async function renderEditor(container, key) {
         try {
             const cols = cfg.embed ? '*, ' + cfg.embed : '*';
             const { data, error } = await supabase.from(cfg.table).select(cols).order(cfg.orderBy || 'name').limit(500);
-            if (error) { toast(`Failed to load ${cfg.title.toLowerCase()}: ` + (error.message || error), 'fail'); paintRows([]); return; }
-            paintRows(data || []);
+            if (error) { toast(`Failed to load ${cfg.title.toLowerCase()}: ` + (error.message || error), 'fail'); allRows = []; paintRows([]); return; }
+            allRows = data || [];
+            paintRows(visibleRows());
         } catch (e) {
             toast(`Failed to load ${cfg.title.toLowerCase()}: ` + (e && e.message || e), 'fail');
+            allRows = [];
             paintRows([]);
         }
     }
 
     function paintRows(rows) {
         clear(tbody);
-        if (!rows || rows.length === 0) { emptyEl.style.display = ''; return; }
+        if (!rows || rows.length === 0) {
+            // LOOKUP_COLUMN_FILTERS_V1 — «отбор ничего не нашёл» и «ничего не
+            // заведено» это РАЗНЫЕ факты, и одна фраза на оба отправила бы
+            // заводить запись, которая уже есть и просто отфильтрована.
+            if (anyFilterSet()) {
+                emptyEl.style.display = 'none';
+                tbody.appendChild(h('tr', null, h('td', {
+                    colspan: String(cfg.columns.length + 1),
+                    style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' },
+                }, trf('Под отбор не попала ни одна строка из {n}.', { n: allRows.length }))));
+            } else {
+                emptyEl.style.display = '';
+            }
+            return;
+        }
         emptyEl.style.display = 'none';
         for (const row of rows) tbody.appendChild(rowEl(row));
     }
