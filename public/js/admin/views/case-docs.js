@@ -282,19 +282,16 @@ function itemRow(item, state, onDoc, activeKind = null) {
             color: item.state === 'pending' ? 'var(--ink-500)' : 'var(--ink-800)',
         },
     }, caseDocTitle(item.kind)),
-    h('span', {
-        style: { display: 'block', fontSize: '12.5px', marginTop: '2px', color: 'var(--ink-400)', lineHeight: '1.3' },
-    },
-    h('b', { style: { color: STATE_COLOR[item.state], fontWeight: '600' } }, caseDocStateWord(item.state)),
-    meta ? ' · ' : null, meta || null),
-    // CASE_DOC_A4_V1 — владелец: «do not fill the card of the document with
-    // text, it should be similar across the all». У КАЖДОЙ карточки ровно две
-    // строки: название и состояние со сроком. Подписанные бумаги титульного
-    // листа переехали внутрь самого листа, адресат осмотра — в ту же строку
-    // срока.
-    item.kind === 'intake' && item.state !== 'published' && item.assignee_name
-        ? h('span', { class: 'cd-row-who' }, ' · ' + trf('приёмный врач: {name}', { name: item.assignee_name }))
-        : null);
+    );
+
+    // CASE_ROW_NAME_ONLY_V1 — владелец: «we dont need information in the card
+    // only name and button». В карточке остаётся название и действие; состояние
+    // по-прежнему названо цветом рельса, кружком-иконкой и — для читалки и
+    // подсказки мыши — словами в aria-label и title строки.
+    const stateLine = [caseDocStateWord(item.state), meta].filter(Boolean).join(' · ');
+    open.setAttribute('title', caseDocTitle(item.kind) + (stateLine ? ' — ' + stateLine : ''));
+    open.setAttribute('aria-label', caseDocTitle(item.kind) + (stateLine ? ': ' + stateLine : ''));
+
 
     const actions = h('div', { style: { display: 'flex', gap: '6px', flexShrink: '0', alignItems: 'center' } });
     // РОВНО ОДНА заметная кнопка на весь список — у пункта, который сервер

@@ -7246,4 +7246,6 @@ export const STRINGS = {
   "при направлении": {"en":"on referral","ru":"при направлении","uz":"yoʻllanmada"},
   "рентген, УЗИ, КТ, МРТ": {"en":"X-ray, ultrasound, CT, MRI","ru":"рентген, УЗИ, КТ, МРТ","uz":"rentgen, UTT, KT, MRT"},
   "— выберите документ —": {"en":"— choose a document —","ru":"— выберите документ —","uz":"— hujjatni tanlang —"},
+  "Код МКБ-10 или свой диагноз": {"en":"ICD-10 code or your own diagnosis","ru":"Код МКБ-10 или свой диагноз","uz":"ICD-10 kodi yoki oʻz tashxisingiz"},
+  "Начните печатать — подскажем коды МКБ-10. Свой диагноз тоже можно.": {"en":"Start typing — we suggest ICD-10 codes. Your own wording works too.","ru":"Начните печатать — подскажем коды МКБ-10. Свой диагноз тоже можно.","uz":"Yozishni boshlang — ICD-10 kodlarini taklif qilamiz. Oʻz tashxisingiz ham boʻladi."},
 };

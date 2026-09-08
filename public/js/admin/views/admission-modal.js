@@ -47,7 +47,7 @@
 // дорогой вид дубля.
 
 import { supabase } from '../../supabase.js';
-import { sectionsFor, richSection, plainSection, richToolbar, readRich, applyRich, RICH_KEYS, insertBlock } from './case-doc-a4.js';   // CASE_DOC_A4_V1
+import { sectionsFor, richSection, richToolbar, readRich, applyRich, RICH_KEYS, insertBlock, icdSuggest } from './case-doc-a4.js';   // CASE_DOC_A4_V1 / CASE_DX_PICK_V1
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
 import { h, Icon, Tag, toast, clear, field, fmtDate, fmtDateTime } from '../ui.js';
 import { inpatientModal, patientAnchor } from './inpatient-modal.js';   // TITLE_SHEET_V1 — вынесено, чтобы не было кольца
@@ -825,8 +825,9 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     const rich = {};
     const loaded = { complaints: '', objective: '', diagnosis: '', plan: '', body: '' };
     const diagnosis = h('input', { type: 'text', class: 'cd-dx', placeholder: tr('Диагноз при поступлении') });
-    const sectionEls = secKeys.map((key) => {
-        if (key === 'diagnosis') return plainSection(kind, key, diagnosis);
+    // CASE_DX_PICK_V1 — диагноз ушёл с листа в карточку слева: там его выбирают
+    // из МКБ-10 или пишут своими словами, и там же он виден, пока пишут документ.
+    const sectionEls = secKeys.filter((key) => key !== 'diagnosis').map((key) => {
         const made = richSection(kind, key);
         rich[key] = made.input;
         return made.sec;
@@ -946,6 +947,10 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         // «Вставить в документ» кладёт блок туда, где стоит курсор.
         toolbar: toolbar.bar,
         insert: (html) => insertBlock(toolbar, html),
+        // CASE_DX_PICK_V1 — поле диагноза отдаётся налево: карточка «Диагноз»
+        // рисует его сама, а редактор остаётся владельцем значения.
+        diagnosisInput: secKeys.includes('diagnosis') ? diagnosis : null,
+        diagnosisRequired: isPrimary,
         title: reviewTitle(kind, mode),
         icon: isDischarge || !REVIEW_TITLE[kind] ? 'Doc' : 'Stethoscope',
         fields: editorFields,
@@ -961,7 +966,13 @@ export function openAdmissionReviewModal(opts = {}) {
     const ed = buildReviewEditor(opts);
     if (!ed) return;
     // CASE_DOC_A4_V1 — панель форматирования над листом и в окне тоже.
-    modal(ed.title, ed.icon, [ed.toolbar, ...ed.fields], ed.submitLabel, ed.submit, {
+    // CASE_DX_PICK_V1 — на рабочем экране диагноз живёт в карточке слева, а в
+    // ОКНЕ левой карточки нет: поле возвращается сюда, с теми же подсказками
+    // МКБ-10. Иначе окно осмотра осталось бы без диагноза вовсе.
+    const dxField = ed.diagnosisInput
+        ? field(tr('Диагноз'), h('div', { class: 'cw-dx-field' }, ed.diagnosisInput, icdSuggest(ed.diagnosisInput, supabase)), { required: ed.diagnosisRequired })
+        : null;
+    modal(ed.title, ed.icon, [ed.toolbar, dxField, ...ed.fields].filter(Boolean), ed.submitLabel, ed.submit, {
         width: 720,
         secondaryLabel: ed.secondaryLabel,
         onSecondary: ed.secondary,

@@ -16,7 +16,7 @@
 // вставленного результата). Диагноз — простой текст: он показывается в обзоре,
 // в журнале и в списках, где разметка была бы мусором (то же решение на
 // сервере, rpc/inpatient-reviews.js).
-import { h } from '../ui.js';
+import { h, clear } from '../ui.js';
 import { tr } from '../i18n.js';
 import { sanitizeStoredHtml } from '../../shared/rich-text.js';
 
@@ -46,6 +46,9 @@ export const KIND_SECTIONS = Object.freeze({
     consent:     ['body'],
     other:       ['body'],
 });
+
+/** Есть ли у документа диагноз (карточка слева спрашивает это). */
+export function hasDiagnosis(kind) { return sectionsFor(kind).includes('diagnosis'); }
 
 const LABEL = {
     complaints: 'Жалобы',
@@ -163,4 +166,72 @@ export function insertBlock(toolbar, html) {
     try { ok = document.execCommand('insertHTML', false, safe); } catch (e) { ok = false; }
     if (!ok) el.innerHTML = (el.innerHTML || '') + safe;
     return true;
+}
+
+
+// ---------------------------------------------------------------------------
+// CASE_DX_PICK_V1 — ДИАГНОЗ: СВОИМИ СЛОВАМИ ИЛИ КОДОМ ИЗ СПРАВОЧНИКА.
+//
+// Владелец (2026-09-08): «here we have list of icd codes in the system … also
+// user should be able write his own diagnosis».
+//
+// Поэтому это ОДНО поле, а не выбор из списка: врач печатает, и пока он
+// печатает, снизу предлагаются коды МКБ-10 из справочника клиники (таблица
+// icd10, миграция 106 — те же 14 000 кодов, что и в кабинете врача). Выбрал
+// подсказку — в поле встало «K35.8 — Острый аппендицит»; не выбрал — осталось
+// написанное им. Ни один диагноз не теряется из-за того, что его нет в
+// справочнике: так пишут «состояние после…», «обострение…» и всё, чему кода
+// не существует.
+// ---------------------------------------------------------------------------
+const ICD_KINDS = ['category', 'sub'];   // класс и блок — разделы классификации, а не диагнозы
+
+/** Похоже ли на код: буква и цифра в начале («K35», «I21.0»). */
+const looksLikeCode = (q) => /^[A-Za-zА-Яа-я]\s?\d/.test(q.trim());
+
+export function icdSuggest(input, supabase) {
+    const list = h('div', { class: 'cd-icd-list', role: 'listbox' });
+    list.hidden = true;
+    const hide = () => { list.hidden = true; clear(list); };
+    let token = 0;
+    const run = async () => {
+        const q = String(input.value || '').trim();
+        if (q.length < 2) { hide(); return; }
+        const my = ++token;
+        let rows = [];
+        try {
+            const base = () => supabase.from('icd10').select('code,name').in('kind', ICD_KINDS).eq('active', 1);
+            const [byCode, byName] = await Promise.all([
+                looksLikeCode(q) ? base().ilike('code', q.replace(/\s+/g, '') + '%').order('code').limit(10) : Promise.resolve({ data: [] }),
+                base().ilike('name', '%' + q + '%').order('code').limit(10),
+            ]);
+            const seen = new Set();
+            for (const r of [...((byCode && byCode.data) || []), ...((byName && byName.data) || [])]) {
+                if (!r || seen.has(r.code)) continue;
+                seen.add(r.code);
+                rows.push(r);
+            }
+        } catch (e) { rows = []; }
+        if (my !== token) return;
+        clear(list);
+        if (!rows.length) { hide(); return; }
+        for (const r of rows.slice(0, 10)) {
+            const btn = h('button', { class: 'cd-icd-row', type: 'button', role: 'option' },
+                h('span', { class: 'cd-icd-code' }, r.code),
+                h('span', { class: 'cd-icd-name' }, r.name));
+            // mousedown, а не click: click приходит ПОСЛЕ blur, и к этому моменту
+            // список уже скрыт — подсказка не срабатывала бы вовсе.
+            btn.addEventListener('mousedown', (e) => {
+                if (e.preventDefault) e.preventDefault();
+                input.value = r.code + ' — ' + r.name;
+                hide();
+                input.dispatchEvent(new Event('input'));
+            });
+            list.appendChild(btn);
+        }
+        list.hidden = false;
+    };
+    input.addEventListener('input', run);
+    input.addEventListener('focus', run);
+    input.addEventListener('blur', () => setTimeout(hide, 120));
+    return list;
 }

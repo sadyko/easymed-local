@@ -33,6 +33,7 @@ import { buildTitleSheetEditor, TITLE_SHEET_KIND } from './title-sheet.js';   //
 import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V1
 import { caseHead } from './case-overview.js?v=co1';   // CASE_OVERVIEW_V1 — одна шапка на «Обзор» и «Документы»
 import { caseInsertPanel } from './case-doc-insert.js';   // CASE_DOC_A4_V1 — правая панель «Вставить в документ»
+import { icdSuggest } from './case-doc-a4.js';   // CASE_DX_PICK_V1 — подсказки МКБ-10
 import { caseDocTitle } from './case-docs.js?v=cw1';
 
 const state = {
@@ -159,8 +160,10 @@ function paint(root, onNavigate) {
     const aside = h('div', { class: 'cw-aside' });
     root.appendChild(h('div', { class: 'cw-grid' }, rail, pane, aside));
 
-    paintRail(rail, root, onNavigate);
+    // Лист рисуется ПЕРВЫМ: карточка «Диагноз» слева показывает поле открытого
+    // документа, а его создаёт редактор.
     paintPane(pane, root, onNavigate);
+    paintRail(rail, root, onNavigate);
     paintAside(aside);
 }
 
@@ -177,15 +180,37 @@ function paintAside(aside) {
 }
 
 // Левая колонка: диагноз госпитализации, выбор документа и шаги по регламенту.
+// CASE_DX_PICK_V1 — диагноз ОТКРЫТОГО документа пишется здесь: своими словами
+// или кодом из справочника МКБ-10 (подсказки — icdSuggest). Ниже, мелким —
+// диагнозы самой госпитализации: клинический и при направлении, чтобы не
+// вспоминать их по памяти, переходя между документами.
 function diagnosisCard() {
     const dg = (state.overview && state.overview.diagnosis) || {};
-    const line = (label, value, tone) => h('div', { class: 'cw-dx-row' },
-        h('div', { class: 'cw-dx-l' }, tr(label)),
-        h('div', { class: 'cw-dx-v' + (tone ? ' ' + tone : '') }, value || tr('не установлен')));
-    return h('section', { class: 'card cw-dx', 'aria-label': tr('Диагноз') },
-        h('div', { class: 'cw-dx-h' }, Icon('Stethoscope', { size: 14 }), ' ', tr('Диагноз')),
-        line('Клинический', dg.clinical, dg.clinical ? '' : 'cw-dx-none'),
-        line('При направлении', dg.referral, ''));
+    const ed = state.editor;
+    const card = h('section', { class: 'card cw-dx', 'aria-label': tr('Диагноз') },
+        h('div', { class: 'cw-dx-h' }, Icon('Stethoscope', { size: 14 }), ' ', tr('Диагноз')));
+
+    if (ed && ed.diagnosisInput) {
+        const input = ed.diagnosisInput;
+        input.className = 'cw-dx-input';
+        input.setAttribute('placeholder', tr('Код МКБ-10 или свой диагноз'));
+        card.appendChild(h('div', { class: 'cw-dx-field' }, input, icdSuggest(input, supabase)));
+        card.appendChild(h('div', { class: 'cw-dx-hint' },
+            tr('Начните печатать — подскажем коды МКБ-10. Свой диагноз тоже можно.')));
+    }
+
+    const refs = [
+        dg.clinical ? ['Клинический', dg.clinical] : null,
+        dg.referral ? ['При направлении', dg.referral] : null,
+    ].filter(Boolean);
+    if (refs.length) {
+        card.appendChild(h('div', { class: 'cw-dx-refs' }, ...refs.map(([label, value]) => h('div', { class: 'cw-dx-ref' },
+            h('span', { class: 'cw-dx-ref-l' }, tr(label)),
+            h('span', { class: 'cw-dx-ref-v' }, value)))));
+    } else if (!(ed && ed.diagnosisInput)) {
+        card.appendChild(h('div', { class: 'cw-dx-empty' }, tr('Диагноз ещё не установлен — его пишут в первичном осмотре.')));
+    }
+    return card;
 }
 
 function docSelect(rail, root, onNavigate) {
@@ -197,8 +222,8 @@ function docSelect(rail, root, onNavigate) {
         if (!sel.value) return;
         const item = items.find((i) => i.kind === sel.value);
         state.open = { kind: sel.value, mode: item && item.state === 'published' ? 'view' : 'edit', reviewId: null };
-        paintRail(rail, root, onNavigate);
         paintPane(rail.parentNode.querySelector('.cw-pane'), root, onNavigate);
+        paintRail(rail, root, onNavigate);
     });
     return h('section', { class: 'card cw-doc-pick' },
         h('div', { class: 'cw-pick-l' }, tr('Документ')),
@@ -219,8 +244,8 @@ function paintRail(rail, root, onNavigate) {
         // задача. Выбранный шаг остаётся виден в списке слева.
         onDoc: (kind, mode, reviewId) => {
             state.open = { kind, mode: mode || 'edit', reviewId: reviewId || null };
-            paintRail(rail, root, onNavigate);
             paintPane(rail.parentNode.querySelector('.cw-pane'), root, onNavigate);
+            paintRail(rail, root, onNavigate);
         },
         // Сборка живёт в шапке экрана: в списке шагов ей не место — она не шаг.
         onAssemble: null,
