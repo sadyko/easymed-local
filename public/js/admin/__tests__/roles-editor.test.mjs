@@ -424,7 +424,7 @@ test('роль без настроенных вкладок: всё отмече
   await tick();
   const saved = JSON.parse(lastUpdate.values.permissions);
   assert.deepEqual(saved.patient_tabs, {
-    services: 'delete', labs: 'view', docs: 'delete', billing: 'view',
+    services: 'delete', labs: 'view', docs: 'delete', history: 'view', billing: 'view',   // PATIENT_HISTORY_TAB_V1 — «История» только смотреть
     visits: 'edit', details: 'edit', recommended: 'edit',
   }, 'первое сохранение роли отняло право, которым клиника пользуется сегодня');
 });
