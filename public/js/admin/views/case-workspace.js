@@ -208,9 +208,13 @@ function paintPane(pane, root, onNavigate) {
     // кабинетом врача (service-workspace.js). Кнопки действий на лист не
     // кладутся — это не часть документа, они стоят под ним.
     const card = h('div', { class: 'cw-doc a4-scroll' },
-        a4Sheet({ title: ed.title, children: [
-            h('div', { class: 'cw-doc-body' }, ...ed.fields.filter(Boolean)),
-        ] }),
+        ed.noLetterhead
+            // FORM_003_V1 — у бланка 003 своя шапка (министерство, учреждение, приказ).
+            ? h('div', { class: 'a4-paper f3-paper' }, h('div', { class: 'a4-band-top' }),
+                h('div', { class: 'cw-doc-body f3' }, ...ed.fields.filter(Boolean)), h('div', { class: 'a4-band-bottom' }))
+            : a4Sheet({ title: ed.title, children: [
+                h('div', { class: 'cw-doc-body' }, ...ed.fields.filter(Boolean)),
+            ] }),
     );
 
     const foot = h('div', { class: 'cw-doc-foot' });

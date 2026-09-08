@@ -180,3 +180,17 @@ test('галочки о бумагах: время ставится один р�
     const empty = titleSheetCaseItem(ctx.db, ctx.db.prepare('SELECT * FROM admissions WHERE id = ?').get(adm.id + 999) || { id: -1 }, null, Date.now());
     assert.deepEqual(empty.papers, { contract_signed_at: null, consent_signed_at: null, memo_given_at: null });
 });
+
+// ─── FORM_003_V1 — строки 6 и 8 бланка и данные для строк 1–10 ─────────────
+test('бланк 003: как доставляют, транспорт, время от начала болезни — сохраняются; чужое значение отвергается; дни и диагноз приёмного покоя приезжают', () => {
+    const ctx = seed();
+    const adm = inBed(ctx);
+    const v = admissionTitleSheetSave(ctx.db, { admission_id: adm.id, sheet: { mobility: 'stretcher', delivered_by: 'скорая', since_onset: '2 суток' } }, nurse);
+    assert.equal(v.sheet.mobility, 'stretcher');
+    assert.equal(v.sheet.delivered_by, 'скорая');
+    assert.equal(v.sheet.since_onset, '2 суток');
+    assert.throws(() => admissionTitleSheetSave(ctx.db, { admission_id: adm.id, sheet: { mobility: 'car' } }, nurse), /Как доставляют/);
+    assert.equal(v.admission.days, 1, 'первые сутки на койке — день 1');
+    assert.equal(v.admission.clinical_diagnosis, '', 'осмотра ещё нет');
+    assert.match(v.admission.admission_no, /^\d{4}\/\d{5}$/, 'номер истории — ГГГГ/NNNNN');
+});

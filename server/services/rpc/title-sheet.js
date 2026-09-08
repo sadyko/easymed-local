@@ -27,6 +27,7 @@ import {
   MEASURES, MEASURE_KEYS, PEDICULOSIS, SANITATION, PATIENT_FIELDS,
   numOrNull, bmiOf, sheetCompleteness,
 } from '../../../public/js/shared/title-sheet-rules.js';
+import { MOBILITY_CODES } from '../../../public/js/shared/form-003.js';   // FORM_003_V1
 
 export const SHEET_READ_ROLES  = ['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse'];
 export const SHEET_WRITE_ROLES = ['nurse', 'senior_nurse', 'admin'];
@@ -96,6 +97,7 @@ export function sheetView(db, adm) {
   const admission = db.prepare(`
     SELECT a.id, a.admission_no, a.status, a.department, a.admitted_at, a.admitted_by, a.discharged_at,
            a.admission_type, a.stay_mode, a.admission_diagnosis, a.chief_complaint,
+           a.discharge_destination, a.discharge_outcome, a.created_at,
            w.name AS ward_name, b.code AS bed_code, doc.full_name AS attending_name
       FROM admissions a
       LEFT JOIN wards w ON w.id = a.ward_id
@@ -108,12 +110,22 @@ export function sheetView(db, adm) {
       FROM patients WHERE id = ?`).get(adm.patient_id) || null;
   const sheet = loadSheet(db, adm.id);
   const { complete, missing } = sheetCompleteness(sheet);
+  // FORM_003_V1 — строка 10 бланка («Қабулхонада қўйилган ташҳис») — диагноз
+  // опубликованного первичного осмотра; «кун ётиб даволанган» — дни на койке.
+  const primary = db.prepare(`
+    SELECT diagnosis FROM admission_reviews
+     WHERE admission_id = ? AND kind = 'primary' AND published_at IS NOT NULL AND superseded_by IS NULL
+     ORDER BY id DESC LIMIT 1`).get(adm.id);
+  const placedForDays = !['ordered', 'cancelled'].includes(adm.status) && adm.admitted_at && Number.isFinite(Date.parse(adm.admitted_at));
+  const endMs = adm.discharged_at && Number.isFinite(Date.parse(adm.discharged_at)) ? Date.parse(adm.discharged_at) : Date.now();
+  const days = placedForDays ? Math.max(1, Math.floor((endMs - Date.parse(adm.admitted_at)) / 86400000) + 1) : null;
   // Точка отсчёта — размещение, и спрашивается она у состояния, не у колонки
   // (admitted_at заполнена и у заявки — см. admissionCaseDocs).
   const placed = !['ordered', 'cancelled'].includes(adm.status);
   const base = placed && adm.admitted_at ? Date.parse(adm.admitted_at) : NaN;
   return {
-    admission, patient, sheet,
+    admission: Object.assign({}, admission, { clinical_diagnosis: primary ? (primary.diagnosis || '') : '', days }),
+    patient, sheet,
     bmi: sheet ? bmiOf(sheet.height_cm, sheet.weight_kg) : null,
     complete, missing,
     due_at: isoOf(Number.isFinite(base) ? base + SHEET_DUE_HOURS * MS_HOUR : null),
@@ -135,6 +147,7 @@ export function saveTitleSheet(db, adm, input, user) {
     referred_from: '', height_cm: null, weight_kg: null, temp_c: null, bp_sys: null, bp_dia: null, pulse_bpm: null,
     pediculosis: '', sanitation: '', note: '',
     contract_signed_at: null, consent_signed_at: null, memo_given_at: null,
+    mobility: '', delivered_by: '', since_onset: '',   // FORM_003_V1
   }, existing || {});
 
   for (const key of MEASURE_KEYS) if (src[key] !== undefined) next[key] = parseMeasure(key, src[key]);
@@ -150,6 +163,14 @@ export function saveTitleSheet(db, adm, input, user) {
   }
   if (src.referred_from !== undefined) next.referred_from = str(src.referred_from, 300);
   if (src.note !== undefined) next.note = str(src.note, 2000);
+  // FORM_003_V1 — строки 6 и 8 бланка.
+  if (src.mobility !== undefined) {
+    const v = str(src.mobility, 12);
+    if (!MOBILITY_CODES.includes(v)) throw new RpcError('Как доставляют: выберите «на коляске», «на носилках» или «ходит сам».', 400);
+    next.mobility = v;
+  }
+  if (src.delivered_by !== undefined) next.delivered_by = str(src.delivered_by, 200);
+  if (src.since_onset !== undefined) next.since_onset = str(src.since_onset, 200);
   if (next.bp_sys !== null && next.bp_dia !== null && next.bp_dia >= next.bp_sys) {
     throw new RpcError('АД: нижнее давление должно быть меньше верхнего.', 400);
   }
@@ -172,21 +193,25 @@ export function saveTitleSheet(db, adm, input, user) {
          SET referred_from = ?, height_cm = ?, weight_kg = ?, temp_c = ?, bp_sys = ?, bp_dia = ?, pulse_bpm = ?,
              pediculosis = ?, sanitation = ?, note = ?,
              contract_signed_at = ?, consent_signed_at = ?, memo_given_at = ?,
+             mobility = ?, delivered_by = ?, since_onset = ?,
              filled_by = ?, filled_at = ?, updated_at = ?
        WHERE id = ?`).run(
       next.referred_from, next.height_cm, next.weight_kg, next.temp_c, next.bp_sys, next.bp_dia, next.pulse_bpm,
       next.pediculosis, next.sanitation, next.note,
       next.contract_signed_at, next.consent_signed_at, next.memo_given_at,
+      next.mobility, next.delivered_by, next.since_onset,
       filledBy, filledAt, now, existing.id);
   } else {
     db.prepare(`
       INSERT INTO admission_title_sheets
         (admission_id, referred_from, height_cm, weight_kg, temp_c, bp_sys, bp_dia, pulse_bpm,
          pediculosis, sanitation, note, contract_signed_at, consent_signed_at, memo_given_at,
+         mobility, delivered_by, since_onset,
          filled_by, filled_at, created_at, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       adm.id, next.referred_from, next.height_cm, next.weight_kg, next.temp_c, next.bp_sys, next.bp_dia, next.pulse_bpm,
       next.pediculosis, next.sanitation, next.note, next.contract_signed_at, next.consent_signed_at, next.memo_given_at,
+      next.mobility, next.delivered_by, next.since_onset,
       filledBy, filledAt, now, now);
   }
 

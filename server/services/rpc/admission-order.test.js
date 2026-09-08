@@ -101,7 +101,7 @@ test('заявка регистратуры появляется в окне м�
   assert.equal(admission.chief_complaint, 'Боли в животе');
   assert.equal(admission.ordered_by, registrar.id);
   assert.ok(admission.ordered_at, 'шаг подписан временем');
-  assert.match(admission.admission_no, /^ADM-\d{5}$/);
+  assert.match(admission.admission_no, /^\d{4}\/\d{5}$/);   // ADMISSION_NUMBER_V2 — «2026/00051»
 
   const win = nurseWindow(db);
   assert.equal(win.waitingBed.length, 1, 'заявка видна медсестре');

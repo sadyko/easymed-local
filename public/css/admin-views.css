@@ -5425,3 +5425,33 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .ph-file-t{font-size:13.5px;font-weight:600;color:var(--ink-900)}
 .ph-file-m{font-size:12.5px}
 .ph-none{font-size:12.5px;padding:0 16px 12px}
+
+/* ── FORM_003_V1 — титульный лист по бланку 003 (на экране) ─────────────── */
+.f3-paper{padding:26px 34px 30px}
+.f3{font-size:13.5px;line-height:1.5;color:var(--ink-900)}
+.f3-head{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;font-size:12.5px;line-height:1.35}
+.f3-head-l{flex:1;text-align:center;font-weight:700}
+.f3-ministry{white-space:pre-line}
+.f3-org{margin-top:6px;font-weight:700;border-bottom:1px solid var(--ink-900);padding-bottom:2px}
+.f3-org-l{font-weight:400;color:var(--ink-500);font-size:12.5px}
+.f3-head-r{flex:1;text-align:right;font-weight:700}
+.f3-title{text-align:center;font-size:17px;font-weight:800;letter-spacing:.04em;margin:14px 0 2px}
+.f3-no{display:inline-block;min-width:110px;border-bottom:1px solid var(--ink-900);padding:0 6px;font-variant-numeric:tabular-nums}
+.f3-sub{text-align:center;font-size:12.5px;color:var(--ink-500);margin-bottom:12px}
+.f3-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 8px;padding:4px 0}
+.f3-uz{font-weight:600;color:var(--ink-900)}
+.f3-ru{font-size:12.5px;color:var(--ink-400)}
+.f3-ctl{flex:1 1 160px;min-width:0}
+.f3-ctl.f3-short{flex:0 1 96px}
+.f3-ctl.f3-wide{flex:1 1 100%}
+.f3-ctl input,.f3-ctl textarea,.f3-ctl select{width:100%;border:0;border-bottom:1px solid var(--ink-700);border-radius:0;background:transparent;padding:2px 6px;font:inherit;font-weight:600;color:var(--ink-900);outline:none}
+.f3-ctl input:focus,.f3-ctl textarea:focus,.f3-ctl select:focus{border-bottom-color:var(--primary-600);box-shadow:0 1px 0 var(--primary-600)}
+.f3-ctl input[readonly]{color:var(--ink-700);background:var(--ink-25)}
+.f3-val{display:inline-block;min-width:120px;border-bottom:1px solid var(--ink-700);padding:2px 6px;font-weight:600}
+.f3-val.f3-empty{color:transparent}
+.f3-hint{font-size:12.5px;color:var(--ink-400);text-align:center;margin:-2px 0 2px}
+.f3-block-t{margin:14px 0 4px;padding-top:8px;border-top:1px dashed var(--ink-300);font-weight:700;display:flex;gap:8px;align-items:baseline}
+.f3-radios label .f3-uz{font-weight:600}
+.f3 .ts-radios{padding:0}
+.f3 .ts-papers{margin-top:4px}
+@media (max-width:720px){.f3-head{flex-direction:column;gap:8px}.f3-head-r{text-align:left}}

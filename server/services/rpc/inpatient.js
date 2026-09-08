@@ -4,6 +4,7 @@
 // money or bed/admission state runs inside db.transaction(...)() for atomicity.
 
 import { nextInvoiceNumber } from './billing.js';
+import { nextAdmissionNo } from '../domain/admission-number.js';   // ADMISSION_NUMBER_V2
 import { generateAdmissionBill } from './admission-bill.js';   // CASE_OVERVIEW_V1 — выписка со счётом
 import { assertTransition } from '../domain/lifecycle.js';
 import { hasAnyRole } from '../roles.js';
@@ -212,7 +213,7 @@ export function requestAdmission(db, args, user) {
       VALUES (?, ?, ?, ?, ?, 'ordered', ?)
     `).run(patientId, doctorId, pathway, chiefComplaint, admissionDiagnosis, user.id);
     const admissionId = info.lastInsertRowid;
-    db.prepare("UPDATE admissions SET admission_no = 'ADM-' || substr('00000'||id,-5,5) WHERE id=?").run(admissionId);
+    db.prepare('UPDATE admissions SET admission_no = ? WHERE id = ?').run(nextAdmissionNo(db, nowIso(db)), admissionId);   // ADMISSION_NUMBER_V2 — «2026/00051»
 
     return { admission: db.prepare('SELECT * FROM admissions WHERE id = ?').get(admissionId) };
   });
@@ -405,7 +406,7 @@ export function admitPatient(db, args, user) {
            chiefComplaint, chiefComplaint, admissionDiagnosis, admissionDiagnosis, pending.id);
     const admissionId = pending.id;
 
-    db.prepare("UPDATE admissions SET admission_no = 'ADM-' || substr('00000'||id,-5,5) WHERE id=?").run(admissionId);
+    db.prepare('UPDATE admissions SET admission_no = ? WHERE id = ?').run(nextAdmissionNo(db, nowIso(db)), admissionId);   // ADMISSION_NUMBER_V2 — «2026/00051»
     db.prepare("UPDATE beds SET status='occupied' WHERE id=?").run(bedId);
     // BED_CONSOLE_V1 — «Поступил» в журнале движений пациента.
     db.prepare(`
@@ -781,7 +782,7 @@ export function admissionOrderCreate(db, args, user) {
     `).run(patientId, wardId, doctorId, department, admissionType, stayMode,
            plannedAt, note, at, user.id, user.id);
     const admissionId = info.lastInsertRowid;
-    db.prepare("UPDATE admissions SET admission_no = 'ADM-' || substr('00000'||id,-5,5) WHERE id=?").run(admissionId);
+    db.prepare('UPDATE admissions SET admission_no = ? WHERE id = ?').run(nextAdmissionNo(db, nowIso(db)), admissionId);   // ADMISSION_NUMBER_V2 — «2026/00051»
     // Журнал движений: заявка — тоже событие с пациентом, и «когда это
     // началось» должно читаться из одного места вместе с поступлением и
     // переводами (BED_CONSOLE_V1).
