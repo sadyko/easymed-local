@@ -210,16 +210,17 @@ test('DEBT_FLOW_V1: неоплаченный счёт лежащего — «К 
 });
 
 // ─── CASE_HEAD_TIDY_V1 / CASE_ROUTE_SUB_V1 ──────────────────────────────────
-test('CASE_HEAD_TIDY_V1: «Выписка» — главная пульсирующая кнопка в шапке, подвала с одинокой кнопкой нет', async () => {
+test('CASE_HEAD_TIDY_V1 / CASE_FAB_V1: «Выписка» — главная пульсирующая кнопка в правом нижнем углу, подвала с одинокой кнопкой нет', async () => {
     const root = await render(() => {});
     const btn = allBtns(root, 'Выписка').find((b) => b.className.includes('btn'));
     assert.ok(btn, 'кнопки «Выписка» нет');
     assert.ok(btn.className.includes('btn-primary'), 'выписка должна быть первичной кнопкой: ' + btn.className);
     assert.ok(btn.className.includes('btn-pulse'), 'выписка должна пульсировать (btn-pulse): ' + btn.className);
-    // Кнопка живёт в шапке, справа (co-head-side), а не в отдельной полосе.
-    let p = btn._parent; let inSide = false;
-    while (p) { if (String(p.className || '').includes('co-head-side')) inSide = true; p = p._parent; }
-    assert.ok(inSide, 'кнопка выписки не в правом столбце шапки');
+    // CASE_FAB_V1 — кнопка живёт плавающей в правом нижнем углу (co-fab), не в шапке.
+    let p = btn._parent; let inFab = false;
+    while (p) { if (String(p.className || '').includes('co-fab')) inFab = true; p = p._parent; }
+    assert.ok(inFab, 'кнопка выписки не в плавающем углу (co-fab)');
+    assert.equal(walk(root).filter((e) => String(e.className || '').includes('co-head-side') && walk(e).includes(btn)).length, 0, 'кнопка не должна остаться в шапке');
     assert.equal(walk(root).filter((e) => String(e.className || '').includes('co-bar')).length, 0, 'полоса-подвал шапки должна исчезнуть');
 });
 

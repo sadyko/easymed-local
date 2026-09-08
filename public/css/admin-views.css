@@ -5499,3 +5499,9 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 /* ADMITTING_DOCTOR_V1 — «Приёмный врач» над листом в окне размещения */
 .ts-admitting{margin:0 0 12px}
 .ts-admitting .ts-doc-sel{width:100%;max-width:480px}
+
+/* CASE_FAB_V1 — выписка плавающей кнопкой в правом нижнем углу обзора */
+.co-fab{position:fixed;right:24px;bottom:24px;z-index:40}
+.co-fab .btn{box-shadow:var(--shadow-md);padding:12px 20px;font-size:15px;border-radius:var(--r-pill)}
+@media (max-width:720px){.co-fab{right:12px;bottom:12px}}
+@media print{.co-fab{display:none}}

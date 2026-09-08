@@ -258,7 +258,10 @@ function paint(root, onNavigate) {
     const dischargeBtn = canRequest
         ? h('button', { class: 'btn btn-primary btn-pulse', type: 'button', onclick: openDischarge, title: tr('Подать заявку на выписку и выставить счёт') }, ic('Check', 14), ' ', tr('Выписка'))
         : null;
-    root.appendChild(caseHead(ov, { active: 'overview', onNavigate, onReload: reload, actions: [dischargeBtn] }));
+    // CASE_FAB_V1 — владелец: «transfer this button to the right bottom»:
+    // выписка живёт плавающей кнопкой в правом нижнем углу экрана, а не в
+    // шапке — она видна с любого места длинного обзора.
+    root.appendChild(caseHead(ov, { active: 'overview', onNavigate, onReload: reload, actions: [] }));
 
     // ── 1. Пациент сейчас ───────────────────────────────────────────────────
     const dg = ov.diagnosis || {};
@@ -403,6 +406,7 @@ function paint(root, onNavigate) {
     ] });
 
     root.appendChild(h('div', { class: 'co-z' }, nowPanel, billPanel, tiles, opPanel, listsPanel, nextPanel));
+    if (dischargeBtn) root.appendChild(h('div', { class: 'co-fab' }, dischargeBtn));   // CASE_FAB_V1
 }
 
 export { goToCaseOverview };
