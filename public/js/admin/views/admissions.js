@@ -48,7 +48,7 @@ import { supabase } from '../../supabase.js';
 import { IN_BED_STATUSES, OPEN_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
 import { h, Icon, Tag, clear, PageHead, fmtDateTime, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { isModuleAllowed } from '../permissions.js';
+import { isModuleAllowed, hasActorRole } from '../permissions.js';
 import { openAdmissionOrderModal, openAdmissionBedPicker, openAdmissionCancelModal, openAdmissionCard,
          openAdmissionReviewModal, openAdmissionAttendingModal, goToMarSheet, goToCaseFile } from './admission-modal.js?v=inp5';
 // Те же адреса модулей, что у admin.js: одна строка импорта — один экземпляр
@@ -96,7 +96,7 @@ export async function renderAdmissions(container, ctx = {}) {
     clear(container);
     const root = h('div', { class: 'fade-in' });
     container.appendChild(root);
-    await paint(root, ctx.onNavigate || null);
+    await paint(root, ctx.onNavigate || null, { only: ctx.only || null });
 }
 
 async function load() {
@@ -129,9 +129,16 @@ async function load() {
     return data || [];
 }
 
-async function paint(root, onNavigate = null) {
+async function paint(root, onNavigate = null, { only = null } = {}) {
     clear(root);
-    const reload = () => paint(root, onNavigate);
+    const reload = () => paint(root, onNavigate, { only });
+    // INPATIENT_QUEUES_SPLIT_V1 — только === 'patients': вкладка «Пациенты».
+    // Владелец: «remove these 3 sections from the requests, it should be only
+    // in the list for the doctor». Три списка — лежащие, ждущие первичного
+    // осмотра, ждущие лечащего врача — это работа ВРАЧА (осмотр проводит и
+    // лечащего назначает он), и живут они на его вкладке. «Заявки» остаются
+    // работой поста: кого положить. Кнопки заявки у врача нет.
+    const wardOnly = only === 'patients' || only === 'inWard';
 
     // ЧТО ЭТОТ ЧЕЛОВЕК ВПРАВЕ ДЕЛАТЬ — спрашиваем СЕРВЕР, один раз на экран.
     // Матрица прав живёт в rpc/inpatient-flow.js, и вторая её копия здесь
@@ -148,14 +155,16 @@ async function paint(root, onNavigate = null) {
 
     root.appendChild(PageHead({
         title: 'Стационар',
-        subtitle: 'Заявки на госпитализацию, размещение на койках и очередь первичного осмотра',
+        subtitle: wardOnly
+            ? 'Кто лежит, кто ждёт первичного осмотра и кому не назначен лечащий врач'
+            : 'Заявки на госпитализацию и размещение на койках',
         right: [
             h('button', { class: 'btn btn-sm', type: 'button', onclick: reload }, Icon('Refresh', { size: 13 }), ' ', tr('Обновить')),
-            h('button', {
+            wardOnly ? null : h('button', {
                 class: 'btn btn-primary btn-sm', type: 'button',
                 onclick: () => openAdmissionOrderModal({ onDone: reload }),
             }, Icon('Plus', { size: 13 }), ' ', tr('Заявка на госпитализацию')),
-        ],
+        ].filter(Boolean),
     }));
 
     let rows;
@@ -184,10 +193,13 @@ async function paint(root, onNavigate = null) {
     const waitingDoc  = rows.filter((r) => r.status === 'examined');
 
     const grid = h('div', { style: { display: 'grid', gap: '16px' } });
-    grid.appendChild(waitingBedCard(waitingBed, reload, onNavigate));
-    grid.appendChild(inWardCard(inWard, reload, onNavigate));
-    grid.appendChild(waitingExamCard(waitingExam, reload, can, onNavigate));
-    grid.appendChild(waitingAttendingCard(waitingDoc, reload, can, onNavigate));
+    if (wardOnly) {
+        grid.appendChild(inWardCard(inWard, reload, onNavigate));
+        grid.appendChild(waitingExamCard(waitingExam, reload, can, onNavigate));
+        grid.appendChild(waitingAttendingCard(waitingDoc, reload, can, onNavigate));
+    } else {
+        grid.appendChild(waitingBedCard(waitingBed, reload, onNavigate));
+    }
     root.appendChild(grid);
 }
 
@@ -475,12 +487,35 @@ function waitingAttendingCard(list, reload, can, onNavigate) {
 // сегодня роли раздел молча недосчитается двух третей.
 // ---------------------------------------------------------------------------
 
+// INPATIENT_FOUR_TABS_V1 — владелец: «in the stationary should be 4 tabs. add
+// one with the list of the admitted patients for the doctors. requests are
+// only for the nurses».
+//
+//   Заявки         — кого положить: очередь размещения и кнопка заявки. Это
+//                    работа поста, поэтому вкладка видна медсестре (и
+//                    администратору). Врачу здесь делать нечего.
+//   Пациенты       — кто лежит (по палатам), кто ждёт первичного осмотра, кому
+//                    не назначен лечащий врач. Осмотр проводит и лечащего
+//                    назначает врач — это его три списка. Клик по лежащему
+//                    ведёт в историю болезни. Открыта всем, у кого есть
+//                    раздел; у врача она же — вкладка по умолчанию.
+//   Койки, Госпитализации — как были.
+//
+// Отбор вкладок по роли — ЗДЕСЬ, а не отдельным ключом прав: раздел один и
+// открывается ключом `beds` (см. ПРАВА выше); отдельный ключ на вкладку
+// оставил бы каждую настроенную роль без неё молча.
 const TABS = [
-    { id: 'orders',  label: 'Заявки',         icon: 'Clock' },
-    { id: 'beds',    label: 'Койки',          icon: 'Bed'   },
-    { id: 'history', label: 'Госпитализации', icon: 'Doc'   },
+    { id: 'orders',   label: 'Заявки',         icon: 'Clock',       roles: ['nurse', 'senior_nurse', 'admin'] },
+    { id: 'patients', label: 'Пациенты',       icon: 'Stethoscope' },
+    { id: 'beds',     label: 'Койки',          icon: 'Bed'   },
+    { id: 'history',  label: 'Госпитализации', icon: 'Doc'   },
 ];
-const DEFAULT_TAB = 'orders';
+export function visibleTabs() {
+    return TABS.filter((t) => !t.roles || hasActorRole(t.roles));
+}
+function defaultTab(tabs) {
+    return tabs.some((t) => t.id === 'orders') ? 'orders' : 'patients';
+}
 
 /**
  * Хост раздела «Стационар». `ctx` — то же, что оболочка даёт любому экрану:
@@ -499,7 +534,9 @@ export async function renderInpatient(container, ctx = {}) {
     const strip = h('div', { class: 'reg-tabs', role: 'tablist', 'aria-label': tr('Стационар') });
     const buttons = {};
     const hosts = {};
-    for (const t of TABS) {
+    const tabs = visibleTabs();
+    const DEFAULT_TAB = defaultTab(tabs);
+    for (const t of tabs) {
         hosts[t.id] = h('div', {
             id: 'inp-panel-' + t.id, role: 'tabpanel',
             'aria-labelledby': 'inp-tab-' + t.id, 'data-tab-panel': t.id,
@@ -515,9 +552,9 @@ export async function renderInpatient(container, ctx = {}) {
         strip.appendChild(buttons[t.id]);
     }
     root.appendChild(strip);
-    for (const t of TABS) root.appendChild(hosts[t.id]);
+    for (const t of tabs) root.appendChild(hosts[t.id]);
 
-    let active = TABS.some((t) => t.id === sub) ? sub : DEFAULT_TAB;
+    let active = tabs.some((t) => t.id === sub) ? sub : DEFAULT_TAB;
     // Два быстрых нажатия по разным вкладкам не должны дорисовать первую поверх
     // второй: доска и очереди грузятся запросом, и опоздавший ответ рисовал бы
     // в панель, которую уже переключили.
@@ -531,10 +568,13 @@ export async function renderInpatient(container, ctx = {}) {
         const step = key === 'ArrowRight' ? 1 : key === 'ArrowLeft' ? -1 : 0;
         let next = null;
         if (step) {
-            const i = TABS.findIndex((t) => t.id === id);
-            next = TABS[(i + step + TABS.length) % TABS.length];
-        } else if (key === 'Home') next = TABS[0];
-        else if (key === 'End') next = TABS[TABS.length - 1];
+            // INPATIENT_FOUR_TABS_V1 — ходим по ВИДИМЫМ вкладкам: у врача нет
+            // «Заявок», и шаг по полному списку упирался бы в кнопку, которой
+            // на экране нет.
+            const i = tabs.findIndex((t) => t.id === id);
+            next = tabs[(i + step + tabs.length) % tabs.length];
+        } else if (key === 'Home') next = tabs[0];
+        else if (key === 'End') next = tabs[tabs.length - 1];
         if (!next) return;
         if (typeof ev.preventDefault === 'function') ev.preventDefault();
         select(next.id);
@@ -542,7 +582,7 @@ export async function renderInpatient(container, ctx = {}) {
     }
 
     function paintStrip({ animate = false } = {}) {
-        for (const t of TABS) {
+        for (const t of tabs) {   // INPATIENT_FOUR_TABS_V1 — только видимые: у врача нет кнопки «Заявки»
             const on = t.id === active;
             const b = buttons[t.id];
             b.className = 'reg-tab' + (on ? ' on' : '');
@@ -586,6 +626,8 @@ export async function renderInpatient(container, ctx = {}) {
         try {
             if (id === 'orders') {
                 await renderAdmissions(host, { onNavigate: ctx.onNavigate });
+            } else if (id === 'patients') {
+                await renderAdmissions(host, { onNavigate: ctx.onNavigate, only: 'patients' });
             } else if (id === 'beds') {
                 await renderWardBeds(host, { onNavigate: ctx.onNavigate, embedded: true });
             } else {
@@ -607,7 +649,7 @@ export async function renderInpatient(container, ctx = {}) {
     }
 
     async function select(id, { initial = false } = {}) {
-        if (!TABS.some((t) => t.id === id)) id = DEFAULT_TAB;
+        if (!tabs.some((t) => t.id === id)) id = DEFAULT_TAB;
         if (!initial && id === active) return;
         active = id;
         paintStrip({ animate: !initial });

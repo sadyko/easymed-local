@@ -175,11 +175,11 @@ globalThis.fetch = async (url, opts = {}) => {
 const view = await import('../views/admissions.js');
 const perms = await import('../permissions.js');
 
-async function renderScreen() {
+async function renderScreen({ only = null } = {}) {
     BODY.children.length = 0;
     rpcCalls = [];
     const container = mkEl('div');
-    await view.renderAdmissions(container);
+    await view.renderAdmissions(container, { only });   // INPATIENT_QUEUES_SPLIT_V1 — null: заявки; 'patients': вкладка врача
     await settle();
     return container;
 }
@@ -202,7 +202,7 @@ test('заявка регистратуры и направление врача
 });
 
 test('лежащий пациент — в «В отделении» и в «Ждут первичного осмотра», сгруппирован по палате', async () => {
-    const root = await renderScreen();
+    const root = await renderScreen({ only: 'patients' });
     const inWard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('В отделении'));
     assert.ok(inWard, 'списка «В отделении» нет');
     assert.ok(textOf(inWard).includes('Сидоров Сидор'), 'пациент на койке не показан');
@@ -230,7 +230,7 @@ test('РЕГРЕССИЯ: заявка подписана «Ждёт разме�
     assert.strictEqual(admissionStatusLabel('cancelled'), 'Отменена');
 
     // …и подпись лежащего пациента берётся из той же карты.
-    const inWard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('В отделении'));
+    const inWard = walk(await renderScreen({ only: 'patients' })).find((e) => e.className === 'card' && textOf(e).includes('В отделении'));
     assert.ok(textOf(inWard).includes(admissionStatusLabel('admitted')),
         'состояние лежащего пациента должно называться словами из общей карты');
 });
@@ -383,14 +383,14 @@ const EXAMINED = {
 
 test('главный врач видит «Провести первичный осмотр», обычный врач — нет', async () => {
     capsAnswer = { examine: true, set_attending: true, admit: true };
-    let root = await renderScreen();
+    let root = await renderScreen({ only: 'patients' });
     const exam = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Ждут первичного осмотра'));
     assert.ok(findBtn(exam, 'Провести первичный осмотр'), 'главному врачу кнопка обязана быть видна');
 
     // Обычный врач: сервер на этот шаг ответит отказом, и экран не предлагает
     // его вовсе — вместо кнопки подпись, кого ждут.
     capsAnswer = { examine: false, set_attending: false, admit: false };
-    root = await renderScreen();
+    root = await renderScreen({ only: 'patients' });
     const exam2 = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Ждут первичного осмотра'));
     assert.equal(findBtn(exam2, 'Провести первичный осмотр'), undefined, 'кнопка, которая ответит отказом, — тупик');
     assert.ok(textOf(exam2).includes('Ждёт главного врача'), 'экран обязан сказать, кого ждут');
@@ -398,7 +398,7 @@ test('главный врач видит «Провести первичный �
 
 test('осмотр публикуется одним запросом, а черновик — другим', async () => {
     capsAnswer = { examine: true, set_attending: true };
-    const root = await renderScreen();
+    const root = await renderScreen({ only: 'patients' });
     findBtn(root, 'Провести первичный осмотр').click();
     await settle();
 
@@ -435,7 +435,7 @@ test('осмотр публикуется одним запросом, а чер
 
 test('после публикации осмотра экран сразу спрашивает лечащего врача', async () => {
     capsAnswer = { examine: true, set_attending: true };
-    const root = await renderScreen();
+    const root = await renderScreen({ only: 'patients' });
     findBtn(root, 'Провести первичный осмотр').click();
     await settle();
 
@@ -466,7 +466,7 @@ test('после публикации осмотра экран сразу сп�
 test('«Ждут лечащего врача» — отдельная очередь, и на строке видно, кто осмотрел', async () => {
     capsAnswer = { examine: true, set_attending: true };
     admissionsRows = [ORDER_REG, ORDER_DOC, IN_BED, EXAMINED];
-    const root = await renderScreen();
+    const root = await renderScreen({ only: 'patients' });
     admissionsRows = [ORDER_REG, ORDER_DOC, IN_BED];
 
     const card = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Ждут лечащего врача'));
@@ -603,13 +603,16 @@ test('экран рисует свои очереди каждой роли, к�
     for (const [name, sections] of Object.entries(SHIFT_ROLES)) {
         perms.setEffectiveFromRole({ name, permissions: { sections, levels: { beds: 'editor' } } });
         assert.strictEqual(perms.isRouteAllowed('admissions'), true, name + ': маршрут #admissions отказал');
-        const root = await renderScreen();
-        const txt = textOf(root);
-        for (const queue of ['Ждут размещения', 'В отделении', 'Ждут первичного осмотра']) {
-            assert.ok(txt.includes(queue), name + ': очереди «' + queue + '» нет на экране');
+        // INPATIENT_QUEUES_SPLIT_V1 — очереди разошлись по двум вкладкам:
+        // пост видит размещение, врач — лежащих и осмотр. Проверяем обе.
+        const orders = textOf(await renderScreen());
+        assert.ok(orders.includes('Ждут размещения'), name + ': очереди «Ждут размещения» нет на экране');
+        assert.ok(!orders.includes('Список госпитализаций не загрузился'), name + ': экран открылся сбоем');
+        assert.ok(orders.includes('Иванов Иван Иванович'), name + ': заявка не видна');
+        const doctor = textOf(await renderScreen({ only: 'patients' }));
+        for (const queue of ['В отделении', 'Ждут первичного осмотра']) {
+            assert.ok(doctor.includes(queue), name + ': очереди «' + queue + '» нет на вкладке врача');
         }
-        assert.ok(!txt.includes('Список госпитализаций не загрузился'), name + ': экран открылся сбоем');
-        assert.ok(txt.includes('Иванов Иван Иванович'), name + ': заявка не видна');
     }
     perms.setFullAccess('Admin');
 });
@@ -629,7 +632,7 @@ test('кассиру раздел отказывает чисто — маршр
 // Оформление истории — работа на полчаса с десятком бумаг, и делают её на
 // рабочем экране; окно карточки было лишней дверью перед ним.
 test('клик по лежащему в «В отделении» открывает историю болезни на весь экран, а не окно', async () => {
-    const root = await renderScreen();
+    const root = await renderScreen({ only: 'patients' });
     const inWard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('В отделении'));
     assert.ok(inWard, 'списка «В отделении» нет');
 

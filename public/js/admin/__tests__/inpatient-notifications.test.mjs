@@ -268,19 +268,27 @@ test('поле вне реестра валит ВЕСЬ запрос — мех
 // ===========================================================================
 // 2. ОЧЕРЕДИ РИСУЮТСЯ, И ПУСТО ≠ СЛОМАНО
 // ===========================================================================
-test('три очереди смены рисуются, и заявка в них видна', async () => {
+test('очереди рисуются на своих вкладках, и заявка в них видна', async () => {
     resetWorld();
     CAPS = { admit: true };
     ROWS = [ORDER(), ORDER({ id: 12, patient_id: 102, status: 'admitted', bed_id: 5 })];
-    const host = mk('div');
-    await renderAdmissions(host, {});
+    // INPATIENT_QUEUES_SPLIT_V1 — очереди на двух вкладках: «Заявки» — только
+    // размещение (пост), «Пациенты» — лежащие и осмотр (врач). Заявка видна
+    // посту, лежащая — врачу; врачебный список в «Заявках» не всплывает.
+    const orders = mk('div');
+    await renderAdmissions(orders, {});
     await settle();
-    const t = textOf(host);
-    assert.match(t, /Ждут размещения/);
-    assert.match(t, /В отделении/);
-    assert.match(t, /Ждут первичного осмотра/);
-    assert.match(t, /Иванов Иван Иванович/);
-    assert.match(t, /Петрова Мария/);
+    const o = textOf(orders);
+    assert.match(o, /Ждут размещения/);
+    assert.match(o, /Иванов Иван Иванович/);
+    assert.doesNotMatch(o, /В отделении/, 'врачебный список всплыл в «Заявках»');
+    const doctor = mk('div');
+    await renderAdmissions(doctor, { only: 'patients' });
+    await settle();
+    const d = textOf(doctor);
+    assert.match(d, /В отделении/);
+    assert.match(d, /Ждут первичного осмотра/);
+    assert.match(d, /Петрова Мария/);
 });
 
 test('раздел закрыт тому, кому он не положен, — и закрыт правилом, а не пустотой', () => {

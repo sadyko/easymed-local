@@ -685,7 +685,8 @@ test('маршрут стационара проходится целиком: �
     await t.test('первичный осмотр проводит главный врач — и тут же назначает лечащего', async () => {
         beActor('head_doctor');
         BODY.children.length = 0; rpcCalls = [];
-        const root = await screen(admissionsView.renderAdmissions);
+        // INPATIENT_QUEUES_SPLIT_V1 — осмотр живёт на вкладке врача «Пациенты», не в «Заявках».
+        const root = await screen(admissionsView.renderAdmissions, { only: 'patients' });
         assert.ok(textOf(root).includes('Ждут первичного осмотра'));
 
         findBtn(root, 'Провести первичный осмотр').click();

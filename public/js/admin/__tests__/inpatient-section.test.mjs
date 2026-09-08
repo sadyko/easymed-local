@@ -318,19 +318,25 @@ test('окно выбора койки рисует ДОСКУ, а не свой
 // 2. ТРИ ВКЛАДКИ
 // ===========================================================================
 
-test('раздел монтируется тремя вкладками, и открыт на «Заявках»', async () => {
+test('раздел монтируется четырьмя вкладками, и у поста открыт на «Заявках»', async () => {
+    // INPATIENT_FOUR_TABS_V1 — владелец: «in the stationary should be 4 tabs».
+    // Обвязка монтирует как администратор с пользователем-медсестрой, поэтому
+    // «Заявки» видны и открыты по умолчанию; у врача иначе — см. тест ниже.
     resetWorld();
     const { container, api } = await mountSection();
     assert.deepEqual(tabButtons(container).map(tabLabel),
-        ['Заявки', 'Койки', 'Госпитализации'], 'состав вкладок раздела изменился');
+        ['Заявки', 'Пациенты', 'Койки', 'Госпитализации'], 'состав вкладок раздела изменился');
     assert.equal(api.activeTab(), 'orders');
     assert.deepEqual(visiblePanels(container).map((p) => p.attrs['data-tab-panel']), ['orders'],
         'видно не ровно одну вкладку');
 
-    // «Заявки» — это очереди смены со всеми четырьмя списками и заявкой.
+    // INPATIENT_QUEUES_SPLIT_V1 — «Заявки» — ТОЛЬКО размещение и кнопка заявки.
+    // Лежащие, ждущие осмотра и ждущие лечащего врача ушли на «Пациентов»:
+    // осмотр проводит и лечащего назначает врач, посту эти списки не нужны.
     const orders = textOf(panelFor(container, 'orders'));
-    for (const list of ['Ждут размещения', 'В отделении', 'Ждут первичного осмотра', 'Ждут лечащего врача']) {
-        assert.ok(orders.includes(list), 'из очередей пропал список «' + list + '»');
+    assert.ok(orders.includes('Ждут размещения'), 'из «Заявок» пропала очередь размещения');
+    for (const list of ['В отделении', 'Ждут первичного осмотра', 'Ждут лечащего врача']) {
+        assert.ok(!orders.includes(list), 'в «Заявках» остался врачебный список «' + list + '»');
     }
     assert.ok(orders.includes('Иванов Иван Иванович'), 'заявка не видна на своей вкладке');
     assert.ok(btns(panelFor(container, 'orders'), 'Заявка на госпитализацию').length,
@@ -533,22 +539,22 @@ test('заявка без палаты: сначала выбирают ПАЛА
 test('полоса вкладок доступна с клавиатуры: стрелки, Home и End', async () => {
     resetWorld();
     const { container, api } = await mountSection();
-    const [orders, beds, history] = tabButtons(container);
+    const [orders, patients, beds, history] = tabButtons(container);
 
     // В tablist из порядка обхода Tab вынуты все кнопки, кроме активной.
-    assert.deepEqual([orders, beds, history].map((b) => b.getAttribute('tabindex')), ['0', '-1', '-1']);
+    assert.deepEqual([orders, patients, beds, history].map((b) => b.getAttribute('tabindex')), ['0', '-1', '-1', '-1']);
 
     const key = (btn, k) => btn.dispatchEvent({ type: 'keydown', key: k, currentTarget: btn, preventDefault() {}, stopPropagation() {} });
     key(orders, 'ArrowRight');
     await settle(60);
-    assert.equal(api.activeTab(), 'beds');
-    key(beds, 'End');
+    assert.equal(api.activeTab(), 'patients');   // INPATIENT_FOUR_TABS_V1 — вторая вкладка теперь «Пациенты»
+    key(patients, 'End');
     await settle(60);
     assert.equal(api.activeTab(), 'history');
     key(history, 'Home');
     await settle(60);
     assert.equal(api.activeTab(), 'orders');
-    assert.deepEqual(tabButtons(container).map((b) => b.getAttribute('aria-selected')), ['true', 'false', 'false']);
+    assert.deepEqual(tabButtons(container).map((b) => b.getAttribute('aria-selected')), ['true', 'false', 'false', 'false']);
 });
 
 test('отказ сервера доходит словами, окно не закрывается, койку можно выбрать другую', async () => {
@@ -640,4 +646,45 @@ test('очереди смены рисуются и сами по себе — �
     assert.ok(head, 'у экрана очередей пропала шапка');
     assert.ok(textOf(head).includes('Стационар'), 'шапка перестала называть раздел');
     assert.ok(textOf(box).includes('Ждут размещения'));
+});
+
+// ===========================================================================
+// INPATIENT_FOUR_TABS_V1 — врач видит лежащих, а не очереди поста
+// ===========================================================================
+// Владелец: «add one with the list of the admitted patients for the doctors.
+// requests are only for the nurses». Отбор вкладок идёт по ролям действующего
+// лица (permissions.actorRoleCodes): у врача «Заявок» нет, раздел открывается
+// на «Пациентах», и это ОДИН список лежащих — без очередей и без кнопки заявки.
+test('врач: вкладки без «Заявок», раздел открыт на «Пациентах», и там только лежащие', async () => {
+    resetWorld();
+    BODY.children.length = 0;
+    tabSubCalls = []; rpcCalls = []; historyUrl = null; pushes = 0; replaces = 0;
+    const user = globalThis.window.easymed.state.user;
+    const savedRole = user.role;
+    perms.setFullAccess('Doctor');
+    perms.setActorRoles(['doctor']);   // setFullAccess ставит admin — врач им не является
+    user.role = 'doctor';
+    try {
+        const container = mk('div');
+        BODY.appendChild(container);
+        const api = await renderInpatient(container, { onNavigate: () => {}, payload: null, tabId: 'admissions' });
+        await settle(60);
+
+        assert.deepEqual(tabButtons(container).map(tabLabel),
+            ['Пациенты', 'Койки', 'Госпитализации'], 'врачу показали не те вкладки');
+        assert.equal(api.activeTab(), 'patients', 'врачу открыли не «Пациентов»');
+
+        const panel = textOf(panelFor(container, 'patients'));
+        // Три врачебных списка — здесь; очереди размещения — нет.
+        for (const list of ['В отделении', 'Ждут первичного осмотра', 'Ждут лечащего врача']) {
+            assert.ok(panel.includes(list), 'у врача нет списка «' + list + '»');
+        }
+        assert.ok(panel.includes('Сидоров Сидор'), 'лежащий пациент не показан');
+        assert.ok(!panel.includes('Ждут размещения'), 'у врача всплыла очередь размещения — это работа поста');
+        assert.equal(btns(panelFor(container, 'patients'), 'Заявка на госпитализацию').length, 0,
+            'врачу предложили оформлять заявку — это работа поста');
+    } finally {
+        user.role = savedRole;
+        perms.setFullAccess('Admin');
+    }
 });
