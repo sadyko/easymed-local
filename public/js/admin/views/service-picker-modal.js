@@ -27,6 +27,8 @@
 //                      nothing matches the column stays visible as fallback.
 
 import { supabase } from '../../supabase.js';
+// REFERRAL_SOURCE_CODE_V1 — подпись партнёра одна на все экраны регистратора.
+import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';
 import { h, Icon, clear, toast, Avatar, initials, avColor } from '../ui.js';
 import { loadPatientsPaged, savePatient, loadPatientById, insertRow, currentUser } from '../data.js';
 import { logPatientActivity } from './activity-log.js';   // BOOK_WIZARD_V1
@@ -2268,7 +2270,7 @@ export function openServicePickerModal({
                 // появилась, и категория берётся ПО НЕЙ. Прежний комментарий
                 // (CLOUD_LEFTOVER_COLUMNS_V1) верно описывал состояние до 109:
                 // категория хранилась текстом, потому что ссылки не было.
-                supabase.from('referral_sources').select('id, name, category_id').eq('active', true).order('name'),
+                supabase.from('referral_sources').select('id, name, code, category_id').eq('active', true).order('name'),
             ]);
             wiz.referral.cats = c.data || [];
             wiz.referral.sources = s.data || [];
@@ -2291,7 +2293,7 @@ export function openServicePickerModal({
             // источнике лежит число, поэтому сравниваем приведёнными к строке.
             const list = R.sources.filter(s => String(s.category_id ?? '') === String(catId ?? ''));
             return [h('option', { value: '', selected: !sel }, list.length ? 'Выберите партнёра…' : 'Нет партнёров в категории'),
-                    ...list.map(s => h('option', { value: s.id, selected: sel === s.id }, s.name))];
+                    ...list.map(s => h('option', { value: s.id, selected: sel === s.id }, referralSourceLabel(s)))];
         };
         // Одно место: категория направления сразу для всех услуг
         const globalSel = h('select', { class: 'tp-input', style: { maxWidth: '340px' },

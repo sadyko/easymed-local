@@ -380,6 +380,7 @@ function itemRowsQuery(db, args, ctx) {
            -- позиции внутри одной корзины. Название категории приходит из
            -- справочника, а не из бывшей текстовой колонки rs.category.
            rs.id                              AS referral_source_id,
+           rs.code                            AS referral_code,
            rc.name                            AS referral_category,
            s.type_id                          AS service_type_id,
            i.visit_id                         AS visit_id
@@ -616,7 +617,7 @@ function referralsReport(db, args, ctx) {
     const who = r.referral_source_id != null ? 'id:' + r.referral_source_id : 'nm:' + r.referral;
     const key = ctx.keyOf(r.origin) + '\u0000' + who;
     const b = buckets.get(key) || {
-      origin: r.origin, source: r.referral,
+      origin: r.origin, source: r.referral, code: r.referral_code || '',
       category: (cat && cat.name) || r.referral_category || '',
       mode: src && src.reward_mode === 'own' ? 'Своя' : 'По категории',
       count: 0, amount: 0, reward: 0,
@@ -635,11 +636,11 @@ function referralsReport(db, args, ctx) {
     // суммы за услугу. Доля от суммы услуг верна всегда и остаётся тем числом,
     // которое в этом отчёте ищут глазами.
     const eff = b.amount ? b.reward / b.amount * 100 : 0;
-    return [ctx.label(b.origin), b.source, b.category, b.mode, b.count, round2(b.amount),
+    return [ctx.label(b.origin), b.code, b.source, b.category, b.mode, b.count, round2(b.amount),
             round2(eff), round2(b.reward)];
   });
   return {
-    columns: [BUILDING_COL, 'Источник', 'Категория', 'Режим ставок', 'Услуг', 'Сумма услуг',
+    columns: [BUILDING_COL, 'Номер', 'Источник', 'Категория', 'Режим ставок', 'Услуг', 'Сумма услуг',
               'Эфф. %', 'Вознаграждение'],
     rows,
     by_building: summariseByBuilding(ctx, list, { total: (b) => b.amount }),

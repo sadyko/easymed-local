@@ -385,6 +385,7 @@ async function downloadRevenueXlsx(rows, filenameBase = 'total-revenue') {
 // сумма — visit_services.total.
 // ---------------------------------------------------------------------------
 export const REFERRAL_COLUMNS = [
+    { key: 'source_code',     label: 'Номер' },
     { key: 'source_name',     label: 'Источник' },
     { key: 'source_category', label: 'Категория' },
     { key: 'mode',            label: 'Режим ставок' },
@@ -424,7 +425,7 @@ export async function buildReferralReport({ period, branchId, branchIds, clinicI
     const srcIds = [...new Set(rows.map(r => r.referral_source_id || r.visits.referral_source_id))];
     const [srcRes, catRes] = await Promise.all([
         supabase.from('referral_sources')
-            .select('id, name, category_id, reward_mode, own_percent, own_rates').in('id', srcIds),
+            .select('id, name, code, category_id, reward_mode, own_percent, own_rates').in('id', srcIds),
         supabase.from('referral_source_categories').select('id, name, standard_percent, rates'),
     ]);
     if (srcRes.error) throw new Error('referral_sources load: ' + srcRes.error.message);
@@ -443,6 +444,7 @@ export async function buildReferralReport({ period, branchId, branchIds, clinicI
         let a = agg.get(sid);
         if (!a) {
             a = {
+                source_code: (src && src.code) || '—',
                 source_name: src ? src.name : '(источник удалён)',
                 source_category: cat ? cat.name : '—',
                 mode: src && src.reward_mode === 'own' ? 'Своя' : 'По категории',

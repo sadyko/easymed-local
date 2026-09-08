@@ -331,7 +331,10 @@ export const REGISTRY = {
   // / own_rates hold this source's OWN rates when it does not follow its
   // category's. own_rates is JSON — the compiler serialises it, the route parses
   // it back (see `json` below).
-  referral_sources: { read:{roles:ALL_STAFF,columns:['id','name','category','category_id','last_name','first_name','middle_name',
+  // REFERRAL_SOURCE_CODE_V1 (mig 110) — `code` is readable everywhere and
+  // writable NOWHERE: a trigger assigns it. Letting a form send it back would
+  // put two partners on one number in a payout sheet already circulating.
+  referral_sources: { read:{roles:ALL_STAFF,columns:['id','name','code','category','category_id','last_name','first_name','middle_name',
                  'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','active']},
                write:{insert:{roles:['admin','registrar'],columns:['name','category','category_id','last_name','first_name','middle_name',
                  'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates']},

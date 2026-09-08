@@ -23,6 +23,8 @@
 // услуги» went without templates while the Калькулятор had them.
 
 import { supabase } from '../../supabase.js';
+// REFERRAL_SOURCE_CODE_V1 — подпись партнёра одна на все экраны регистратора.
+import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';
 import { CAT_ORDER, categoryOf } from '../../shared/service-categories.js';   // SERVICE_CATALOG_FILTER_V1
 import { h, Icon, clear, toast, Avatar, initials, avColor, field, fmtDate, fmtDateTime } from '../ui.js';
 import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
@@ -377,7 +379,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const [svcRes, docRes, srcRes, payerRes] = await Promise.all([
             supabase.from('services').select('id, name, price, duration_minutes, requires_doctor, is_lab, type').eq('active', true).order('name').limit(1000),
             supabase.from('users').select('id, full_name, username, role, is_active, service_rates').eq('role', 'doctor').eq('is_active', true).order('full_name'),   // SVC_DOCTORS_V1 — назначения услуг
-            supabase.from('referral_sources').select('id, name, category_id, referral_source_categories(name)').eq('active', true).order('name'),
+            supabase.from('referral_sources').select('id, name, code, category_id, referral_source_categories(name)').eq('active', true).order('name'),
             // PAYER_LOAD_V2 — читаем ВЕСЬ справочник и отсеиваем неактивных здесь.
             // Раньше стоял .eq('active', true): если серверный реестр не разрешает
             // фильтр по этой колонке, запрос падает целиком и список плательщиков
@@ -1273,7 +1275,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const inCat = wiz.sourceCat ? refSourcesIn(wiz.sources, wiz.sourceCat) : [];
         const srcSel = h('select', null,
             h('option', { value: '' }, inCat.length ? '— Выберите, кто направил —' : 'В этой категории пока никого нет'),
-            ...inCat.map(s => h('option', { value: s.id, selected: String(wiz.sourceId) === String(s.id) }, s.name)));
+            ...inCat.map(s => h('option', { value: s.id, selected: String(wiz.sourceId) === String(s.id) }, referralSourceLabel(s))));
         srcSel.addEventListener('change', () => { wiz.sourceId = srcSel.value; });
 
         const notesInp = h('textarea', { rows: '2', placeholder: 'Заметка (необязательно)' });

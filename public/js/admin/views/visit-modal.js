@@ -8,6 +8,8 @@
 // so the caller (e.g. the calendar) can refresh.
 
 import { supabase } from '../../supabase.js';
+// REFERRAL_SOURCE_CODE_V1 — подпись партнёра одна на все экраны регистратора.
+import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';
 import { tr } from '../i18n.js';   // I18N_COVERAGE_V1 — sink-обёртки: textContent/confirm не проходят через h()
 import { currentUser } from '../data.js';
 import { h, Icon, Tag, StatusTag, statusLabel, toast, clear } from '../ui.js';
@@ -466,7 +468,7 @@ export function referralPickerPair(v) {
         const filterCat = currentCatId;
         for (const s of sources) {
             if (filterCat && String(s.category_id ?? '') !== String(filterCat)) continue;
-            sourceSelect.appendChild(h('option', { value: s.id, selected: v.referral_source_id === s.id }, s.name || s.id));
+            sourceSelect.appendChild(h('option', { value: s.id, selected: v.referral_source_id === s.id }, referralSourceLabel(s) || String(s.id)));
         }
     }
 
@@ -478,7 +480,7 @@ export function referralPickerPair(v) {
             // описывал полусломанное состояние: запрос просили без category_id,
             // а отбор ниже сравнивал именно его — то есть при выбранной
             // категории список источников всегда оказывался пуст.
-            supabase.from('referral_sources').select('id, name, category_id').eq('active', true).order('name'),
+            supabase.from('referral_sources').select('id, name, code, category_id').eq('active', true).order('name'),
         ]);
         categories = cats || [];
         sources    = srcs || [];

@@ -631,6 +631,7 @@ const LOOKUP_CONFIG = {
         modalWidth: '920px', modalCols: '1fr 1fr',
         embed: 'referral_source_categories(name)',
         columns: [
+            { key: 'code', label: 'Номер' },
             { key: 'name', label: 'ФИО' },
             { key: 'phone', label: 'Телефон' },
             { key: 'workplace', label: 'Место работы' },
@@ -638,6 +639,7 @@ const LOOKUP_CONFIG = {
             { key: 'referral_source_categories', label: 'Категория', embed: true },
         ],
         fields: [
+            { key: 'code',        label: 'Номер', type: 'readonly', placeholder: 'присвоится при сохранении' },
             { key: 'last_name',   label: 'Фамилия', type: 'text' },
             { key: 'first_name',  label: 'Имя', type: 'text', required: true },
             { key: 'middle_name', label: 'Отчество', type: 'text' },
@@ -951,6 +953,13 @@ async function renderEditor(container, key) {
                 const inner = control.firstChild;
                 Object.defineProperty(control, 'value', { get: () => inner.value, set: (v) => { inner.value = v; } });
                 suggestFields.push({ f, dl });
+            } else if (f.type === 'readonly') {
+                // REFERRAL_SOURCE_CODE_V1 — системное значение: показываем, но
+                // обратно не отправляем (save() его пропускает). У новой записи
+                // его ещё нет — номер присвоит триггер при вставке.
+                control = h('input', { type: 'text', disabled: '',
+                    value: row ? (row[f.key] || '') : '',
+                    placeholder: row ? '' : (f.placeholder || '') });
             } else if (f.type === 'checkbox') {
                 // REFERRAL_CATEGORY_RATES_V1 — галочка, хранящая одно из ДВУХ
                 // значений перечисления, а не 0/1: «по категории» / «своя».
@@ -1035,6 +1044,7 @@ async function renderEditor(container, key) {
         async function save() {
             const payload = {};
             for (const f of cfg.fields) {
+                if (f.type === 'readonly') continue;   // REFERRAL_SOURCE_CODE_V1 — присваивает база, не форма
                 if (f.type === 'checkbox') { payload[f.key] = readControl(f); continue; }
                 // Массив ставок уходит как есть: колонка объявлена JSON в
                 // реестре, компилятор сериализует её сам. Пустой массив — это

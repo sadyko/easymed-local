@@ -120,8 +120,9 @@ test('referrals: ставка берётся у категории, а не у �
   const r = runReport(db, { kind:'referrals', from:FROM, to:TO }, user);
   assert.equal(r.rows.length, 1);
   // BUILDING_REPORTS_V1 — первая колонка теперь «Здание».
-  const [building, source, category, mode, count, amount, pct, reward] = r.rows[0];
+  const [building, code, source, category, mode, count, amount, pct, reward] = r.rows[0];
   assert.equal(building, 'Main Branch');    // своё здание подписано своим именем
+  assert.equal(code, '0001', 'номер источника не попал в отчёт');   // REFERRAL_SOURCE_CODE_V1
   assert.equal(source, 'Клиника Х');
   assert.equal(category, 'Партнёры');       // название из справочника, не из текста
   assert.equal(mode, 'По категории');
@@ -148,7 +149,7 @@ test('referrals: процент и фиксированная сумма в од
     JSON.stringify([{ type_id: tCons, unit: 'fix', value: 30000 },
                     { type_id: tSurg, unit: 'pct', value: 20 }]));
 
-  const [, , , mode, , amount, pct, reward] = runReport(db, { kind:'referrals', from:FROM, to:TO }, user).rows[0];
+  const [, , , , mode, , amount, pct, reward] = runReport(db, { kind:'referrals', from:FROM, to:TO }, user).rows[0];
   assert.equal(mode, 'По категории');
   assert.equal(amount, 1090000);
   // Консультаций ДВЕ по 30 000 фикса = 60 000 (фикс идёт за каждую услугу, а не
@@ -165,7 +166,7 @@ test('referrals: своя ставка источника перекрывает
     JSON.stringify([{ type_id: tCons, unit: 'pct', value: 50 }]));
   db.prepare("UPDATE referral_sources SET reward_mode = 'own', own_percent = 5 WHERE name = 'Клиника Х'").run();
 
-  const [, , , mode, , amount, , reward] = runReport(db, { kind:'referrals', from:FROM, to:TO }, user).rows[0];
+  const [, , , , mode, , amount, , reward] = runReport(db, { kind:'referrals', from:FROM, to:TO }, user).rows[0];
   assert.equal(mode, 'Своя');
   assert.equal(amount, 1090000);
   // 5% со всего. Ставка категории на консультации (50%) не подглядывается —

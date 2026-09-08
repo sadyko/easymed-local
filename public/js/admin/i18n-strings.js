@@ -2471,6 +2471,7 @@ export const STRINGS = {
   "Вознаграждение по категории (общая ставка)": {"en": "Reward from the category (shared rate)", "ru": "Вознаграждение по категории (общая ставка)", "uz": "Toifa bo'yicha mukofot (umumiy stavka)"},
   "Пусто — действует стандартный процент сверху. Заполненная строка его перекрывает: % — доля от стоимости услуги, сум — фиксированная сумма за услугу.": {"en": "Empty — the standard percent above applies. A filled row overrides it: % is a share of the service price, sum is a fixed amount per service.", "ru": "Пусто — действует стандартный процент сверху. Заполненная строка его перекрывает: % — доля от стоимости услуги, сум — фиксированная сумма за услугу.", "uz": "Bo'sh — yuqoridagi standart foiz amal qiladi. To'ldirilgan qator uni bekor qiladi: % — xizmat narxidan ulush, so'm — har bir xizmat uchun belgilangan summa."},
   "Группа услуг": {"en": "Service group", "ru": "Группа услуг", "uz": "Xizmat guruhi"},
+  "присвоится при сохранении": {"en": "assigned on save", "ru": "присвоится при сохранении", "uz": "saqlashda beriladi"},
   "Эфф. %": {"en": "Eff. %", "ru": "Эфф. %", "uz": "Sam. %"},
   "По категории": {"en": "From category", "ru": "По категории", "uz": "Toifa bo'yicha"},
   "Своя": {"en": "Own", "ru": "Своя", "uz": "O'z stavkasi"},
