@@ -47,7 +47,8 @@
 // дорогой вид дубля.
 
 import { supabase } from '../../supabase.js';
-import { sectionsFor, richSection, richToolbar, readRich, applyRich, RICH_KEYS, insertBlock, icdSuggest } from './case-doc-a4.js';   // CASE_DOC_A4_V1 / CASE_DX_PICK_V1
+import { sectionsFor, richSection, richToolbar, readRich, applyRich, RICH_KEYS, insertBlock, fireInput } from './case-doc-a4.js';   // CASE_DOC_A4_V1 / CASE_DX_PICK_V1
+import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — список диагнозов с ролями
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
 import { h, Icon, Tag, toast, clear, field, fmtDate, fmtDateTime } from '../ui.js';
 import { inpatientModal, patientAnchor } from './inpatient-modal.js';   // TITLE_SHEET_V1 — вынесено, чтобы не было кольца
@@ -851,6 +852,7 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         for (const k of ['complaints', 'objective', 'diagnosis', 'plan', 'body']) loaded[k] = r[k] || '';
         for (const k of RICH_KEYS) if (rich[k]) applyRich(rich[k], r[k] || '');
         diagnosis.value = r.diagnosis || '';
+        fireInput(diagnosis);   // CASE_DX_LIST_V1 — карточка диагнозов перерисует список
     };
     (async () => {
         const { data } = await supabase.rpc('admission_reviews_list', { admission_id: admission.id });
@@ -874,7 +876,11 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         }
     })();
 
-    const payload = (publish) => ({
+    const payload = (publish) => {
+        // CASE_DX_LIST_V1 — написанное в поле диагноза и не добавленное кнопкой
+        // добавляется здесь: иначе текст пропал бы при публикации.
+        if (diagnosis && typeof diagnosis.dxCommit === 'function') diagnosis.dxCommit();
+        return {
         admission_id: admission.id,
         // Исправление НИКОГДА не правит прежнюю строку: review_id пуст, а
         // прежняя запись называется в `supersedes` и закрывается ссылкой.
@@ -890,7 +896,8 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         plan: rich.plan ? readRich(rich.plan) : (loaded.plan || ''),
         body: rich.body ? readRich(rich.body) : (loaded.body || ''),
         publish,
-    });
+        };
+    };
 
     const editorFields = [
         patientAnchor(p.full_name || '', [p.mrn, admission.department, admission.admission_no].filter(Boolean).join(' · ')),
@@ -917,6 +924,10 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     ];
 
     const submit = async () => {
+        // CASE_DX_LIST_V1 — сперва забираем написанное в поле диагноза, и только
+        // потом спрашиваем, есть ли диагноз: иначе осмотр отклонялся бы у врача,
+        // который диагноз написал, но не нажал «Добавить свой».
+        if (diagnosis && typeof diagnosis.dxCommit === 'function') diagnosis.dxCommit();
         if (isPrimary && !diagnosis.value.trim()) { toast(tr('Укажите диагноз.'), 'fail'); return false; }
         const { data, error } = await supabase.rpc('admission_review_save', payload(true));
         if (error) { toast((error.message) || tr('Не удалось сохранить осмотр.'), 'fail'); return false; }
@@ -970,7 +981,7 @@ export function openAdmissionReviewModal(opts = {}) {
     // ОКНЕ левой карточки нет: поле возвращается сюда, с теми же подсказками
     // МКБ-10. Иначе окно осмотра осталось бы без диагноза вовсе.
     const dxField = ed.diagnosisInput
-        ? field(tr('Диагноз'), h('div', { class: 'cw-dx-field' }, ed.diagnosisInput, icdSuggest(ed.diagnosisInput, supabase)), { required: ed.diagnosisRequired })
+        ? field(tr('Диагноз'), dxEditor({ carrier: ed.diagnosisInput, required: ed.diagnosisRequired }), { required: ed.diagnosisRequired })
         : null;
     modal(ed.title, ed.icon, [ed.toolbar, dxField, ...ed.fields].filter(Boolean), ed.submitLabel, ed.submit, {
         width: 720,

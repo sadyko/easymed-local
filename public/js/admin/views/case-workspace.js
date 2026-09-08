@@ -33,7 +33,8 @@ import { buildTitleSheetEditor, TITLE_SHEET_KIND } from './title-sheet.js';   //
 import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V1
 import { caseHead } from './case-overview.js?v=co1';   // CASE_OVERVIEW_V1 — одна шапка на «Обзор» и «Документы»
 import { caseInsertPanel } from './case-doc-insert.js';   // CASE_DOC_A4_V1 — правая панель «Вставить в документ»
-import { icdSuggest } from './case-doc-a4.js';   // CASE_DX_PICK_V1 — подсказки МКБ-10
+import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — диагнозы списком
+import { setupA4Pagination } from './a4-paginate.js';   // A4_PAGINATE_V1 — разрывы страниц в редакторе
 import { caseDocTitle } from './case-docs.js?v=cw1';
 
 const state = {
@@ -43,6 +44,7 @@ const state = {
     filter: 'all',
     open: null,        // {kind, mode, reviewId} — что открыто в центре
     editor: null,      // CASE_DOC_A4_V1 — открытый редактор: правая панель вставляет в него
+    disposePagination: null,   // A4_PAGINATE_V1 — отмена слежения за разрывами
     failed: null,
     overview: null,    // CASE_OVERVIEW_V1 — ответ admission_overview для шапки
 };
@@ -191,12 +193,9 @@ function diagnosisCard() {
         h('div', { class: 'cw-dx-h' }, Icon('Stethoscope', { size: 14 }), ' ', tr('Диагноз')));
 
     if (ed && ed.diagnosisInput) {
-        const input = ed.diagnosisInput;
-        input.className = 'cw-dx-input';
-        input.setAttribute('placeholder', tr('Код МКБ-10 или свой диагноз'));
-        card.appendChild(h('div', { class: 'cw-dx-field' }, input, icdSuggest(input, supabase)));
-        card.appendChild(h('div', { class: 'cw-dx-hint' },
-            tr('Начните печатать — подскажем коды МКБ-10. Свой диагноз тоже можно.')));
+        // CASE_DX_LIST_V1 — поле редактора хранит строку, карточка показывает
+        // список: чипы с ролью, справочник МКБ-10 и «свой диагноз».
+        card.appendChild(dxEditor({ carrier: ed.diagnosisInput, required: ed.diagnosisRequired }));
     }
 
     const refs = [
@@ -319,6 +318,12 @@ function paintPane(pane, root, onNavigate) {
     }
     if (foot.children.length) card.appendChild(foot);
     pane.appendChild(card);
+
+    // A4_PAGINATE_V1 — владелец: «treat every document as a a4 list, with real
+    // ui breaks in the window of user». Разрывы считаются по высоте блоков и
+    // пересчитываются, пока врач пишет.
+    if (state.disposePagination) { try { state.disposePagination(); } catch (e) { /* нечего отменять */ } }
+    state.disposePagination = setupA4Pagination(card, { label: (pg) => trf('Страница {n}', { n: pg }) });
 }
 
 export function resetCaseWorkspace() { reset(null); }

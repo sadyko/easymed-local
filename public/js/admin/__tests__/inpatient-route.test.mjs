@@ -708,7 +708,9 @@ test('маршрут стационара проходится целиком: �
         findBtn(root, 'Провести первичный осмотр').click();
         await settle();
         const review = topOverlay();
-        walk(review).find((e) => e.tagName === 'INPUT' && (e.attrs.placeholder || '').includes('Диагноз при поступлении')).value = 'J18.9';
+        // CASE_DX_LIST_V1 — диагноз пишут в поле карточки диагнозов: код МКБ-10
+        // или свой текст. Ненажатая кнопка «Добавить свой» текст не теряет.
+        walk(review).find((e) => e.tagName === 'INPUT' && (e.attrs.placeholder || '').includes('Код МКБ-10')).value = 'J18.9';
         findBtn(review, 'Опубликовать осмотр').click();
         await settle();
 

@@ -168,3 +168,62 @@ test('CASE_DOC_A4_V1: правая панель показывает четыр�
     ecg.click();
     assert.equal(inserted.length, 3, 'выключенная кнопка ничего не вставила');
 });
+
+// ─── CASE_DX_LIST_V1 — диагнозы списком, с ролями ───────────────────────────
+const dx = await import('../views/case-dx.js');
+
+test('CASE_DX_LIST_V1: строка диагнозов разбирается и собирается обратно, старая запись читается как основной', () => {
+    assert.deepEqual(dx.parseDx('K35.8 — Острый аппендицит (осн.); I10 — Гипертензия (соп.)'), [
+        { text: 'K35.8 — Острый аппендицит', type: 'main' },
+        { text: 'I10 — Гипертензия', type: 'concomitant' },
+    ]);
+    // Документ, написанный до этого правила, обязан открываться.
+    assert.deepEqual(dx.parseDx('Пневмония'), [{ text: 'Пневмония', type: 'main' }]);
+    assert.deepEqual(dx.parseDx(''), []);
+    assert.deepEqual(dx.parseDx('   '), []);
+    // Скобка, которая не роль, остаётся частью названия.
+    assert.deepEqual(dx.parseDx('Пневмония (нижнедолевая)'), [{ text: 'Пневмония (нижнедолевая)', type: 'main' }]);
+    assert.equal(dx.formatDx([{ text: 'K35.8', type: 'main' }, { text: 'E11', type: 'background' }]), 'K35.8 (осн.); E11 (фон.)');
+    assert.equal(dx.formatDx([]), '');
+    // Круг замкнут: разобрали — собрали — то же самое.
+    const s = 'K35.8 — Аппендицит (осн.); I10 — Гипертензия (соп.); E11 — Диабет (фон.)';
+    assert.equal(dx.formatDx(dx.parseDx(s)), s);
+});
+
+test('CASE_DX_LIST_V1: две кнопки — справочник и свой текст; список хранится в поле документа', () => {
+    const carrier = document.createElement('input');
+    const box = dx.dxEditor({ carrier, required: true });
+    assert.ok(textOf(box).includes('Для первичного осмотра диагноз обязателен.'), 'пусто — и об этом сказано');
+    const btns = walk(box).filter((e) => e.tagName === 'BUTTON');
+    const icdBtn = btns.find((b) => textOf(b).includes('Из МКБ-10'));
+    const ownBtn = btns.find((b) => textOf(b).includes('Добавить свой'));
+    assert.ok(icdBtn && icdBtn.className.includes('btn-primary'), 'справочник — главное действие');
+    assert.ok(ownBtn && ownBtn.className.includes('btn-ghost'), 'свой диагноз — призрачная кнопка');
+
+    const field = walk(box).find((e) => e.tagName === 'INPUT');
+    field.value = 'Пневмония нижней доли';
+    ownBtn.click();
+    assert.equal(carrier.value, 'Пневмония нижней доли (осн.)', 'первый диагноз — основной');
+    assert.equal(field.value, '', 'поле очищено под следующий');
+    assert.ok(textOf(box).includes('Пневмония нижней доли'), 'диагноз виден строкой');
+
+    field.value = 'Гипертензия';
+    ownBtn.click();
+    assert.equal(carrier.value, 'Пневмония нижней доли (осн.); Гипертензия (соп.)', 'второй — сопутствующий');
+
+    // Повтор не добавляется дважды.
+    field.value = 'гипертензия';
+    ownBtn.click();
+    assert.equal(carrier.value, 'Пневмония нижней доли (осн.); Гипертензия (соп.)');
+
+    // Написанное, но не добавленное, забирается при сохранении.
+    field.value = 'Анемия';
+    carrier.dxCommit();
+    assert.ok(carrier.value.includes('Анемия (соп.)'), 'текст из поля не теряется: ' + carrier.value);
+
+    // Убрать диагноз можно крестиком.
+    const x = walk(box).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('dx-chip-x'));
+    assert.equal(x.length, 3);
+    x[0].click();
+    assert.ok(!carrier.value.includes('Пневмония'), 'убранный диагноз ушёл: ' + carrier.value);
+});

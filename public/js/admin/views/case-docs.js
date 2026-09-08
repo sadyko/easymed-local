@@ -362,13 +362,15 @@ export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, on
             h('b', { style: { fontSize: '13.5px' } }, tr('Документы истории болезни')),
         ));
 
-        box.appendChild(h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '7px', margin: '10px 0 0' } },
+        // CASE_ROW_NAME_ONLY_V1 — в узкой колонке строка ПЕРЕНОСИТСЯ, а не
+        // вылезает за карточку (владелец показал обрезанный «просрочено»).
+        box.appendChild(h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '7px', margin: '10px 0 0', flexWrap: 'wrap' } },
             h('span', { style: { fontSize: '17px', fontWeight: '700' } }, trf('{done}/{total}', { done: p.done, total: p.total })),
             h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('оформлено')),
             p.overdue > 0
                 ? h('span', {
                     style: {
-                        marginLeft: 'auto', fontSize: '12.5px', fontWeight: '600', color: 'var(--crit-700)',
+                        marginLeft: 'auto', maxWidth: '100%', fontSize: '12.5px', fontWeight: '600', color: 'var(--crit-700)',
                         background: 'var(--crit-50)', borderRadius: '20px', padding: '2px 9px',
                     },
                 }, trf('просрочено: {n}', { n: p.overdue }))
@@ -380,7 +382,7 @@ export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, on
         // чтение с экрана называет, какой из них выбран.
         const seg = h('div', {
             role: 'group', 'aria-label': tr('Фильтр документов'),
-            style: { display: 'flex', gap: '4px', margin: '12px 0 4px' },
+            style: { display: 'flex', gap: '4px', margin: '12px 0 4px', flexWrap: 'wrap' },
         }, ...CASE_FILTERS.map(([key, label]) => h('button', {
             class: 'btn btn-sm' + (filter === key ? ' btn-primary' : ''),
             type: 'button', 'aria-pressed': filter === key ? 'true' : 'false',

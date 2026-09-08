@@ -235,3 +235,14 @@ export function icdSuggest(input, supabase) {
     input.addEventListener('blur', () => setTimeout(hide, 120));
     return list;
 }
+
+/**
+ * Сообщить полю, что значение изменили КОДОМ. Карточка диагнозов слушает своё
+ * поле-носитель: черновик приезжает с сервера позже, чем рисуется карточка, и
+ * без этого события список остался бы пустым у заполненного документа.
+ */
+export function fireInput(el) {
+    if (!el || !el.dispatchEvent) return;
+    try { el.dispatchEvent(typeof Event === 'function' ? new Event('input') : { type: 'input' }); }
+    catch (e) { try { el.dispatchEvent({ type: 'input' }); } catch (e2) { /* среда без событий */ } }
+}
