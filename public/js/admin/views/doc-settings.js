@@ -19,7 +19,7 @@ import { trf } from '../i18n.js';   // I18N_COVERAGE_V1
 // чтобы его мог импортировать и сервер (Node) для сборки PDF боту.
 // Здесь остаётся то, что без браузера не живёт: загрузка/сохранение настроек
 // и открытие окна печати. Реэкспорт ниже сохраняет прежний публичный API.
-import { buildSheetHtml, esc } from '../../shared/doc-render.js';
+import { buildSheetHtml, esc, INPATIENT_DOC_DEFAULT_TEXT } from '../../shared/doc-render.js';   // INPATIENT_DOCS_V1
 
 const KEY = 'easymed:doc-settings:v1';
 let _cache = null;   // DB/localStorage-hydrated branding (clinic-global)
@@ -65,6 +65,10 @@ export const DEFAULT_DOC_SETTINGS = {
     legalNote:   'This document is generated electronically and is valid without a manual signature when sealed with a digital signature.',
 
 
+    // INPATIENT_DOCS_V1 — тексты трёх бумаг при поступлении; по умолчанию —
+    // формулировки образцов Aurora, клиника правит их в «Документах».
+    ...INPATIENT_DOC_DEFAULT_TEXT,
+
     // Per-type selected print variant: { conclusion:'classic', lab:'classic', ... }
     variant: {},
 };
@@ -78,6 +82,9 @@ export const DOC_VARIANTS = {
     invoice:    [{ key: 'classic', label: 'Классический' }, { key: 'compact', label: 'Компактный · эконом' }, { key: 'thermal', label: 'Термочек (ширина в настройках)' }],
     check:      [{ key: 'classic', label: 'Классический' }],
     fiscal:     [{ key: 'classic', label: 'Термо-чек' }],
+    inpatient_contract: [{ key: 'classic', label: 'Классический' }],   // INPATIENT_DOCS_V1
+    inpatient_consent:  [{ key: 'classic', label: 'Классический' }],
+    inpatient_memo:     [{ key: 'classic', label: 'Классический' }],
 };
 
 export function loadDocSettings() {

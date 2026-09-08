@@ -16,7 +16,7 @@ import { startUiEnhance } from './admin/ui-enhance.js?v=uien1';
 // него нужна одна вещь: сворачивание колонки меню (см. wireSidebarCollapse).
 import { pulseFade } from './admin/motion.js?v=mo1';
 import {
-    isModuleAllowed, isRouteAllowed,
+    isModuleAllowed, isRouteAllowed, actorRoleCodes,   // actorRoleCodes — ROLE_HOME_V1
     setFullAccess, setEffectiveFromRole, setEffectiveFromRoles, currentRoleLabel,
     scopedProviderId,
 } from './admin/permissions.js';
@@ -51,7 +51,6 @@ import { renderPublicSite }   from './admin/views/public-site.js?v=pub6';   // P
 // очередь · записи). Сам список никуда не делся: хост монтирует его первой
 // вкладкой из того же views/patients.js.
 import { renderPatientsHub } from './admin/views/patients-hub.js?v=phub1';
-import { renderVisits }       from './admin/views/visits.js?v=visits1';   // VISITS_V1 — money-free scheduling
 import { renderServices }     from './admin/views/services.js?v=aug31a';   // SERVICES_CATALOG_V1 — + SERVICES_ONE_EDITOR_V1 (единый редактор + удаление в строке)
 import { renderRegistration } from './admin/views/registration.js?v=aug17f';
 import { renderRoomCalendar } from './admin/views/room-calendar.js?v=aug17e';   // RESCAL_WIRE_V1 — «Календарь записи» (legacy Scheduling retired)
@@ -99,6 +98,7 @@ import { renderPatientDocuments } from './admin/views/patient-documents.js?v=doc
 import { renderDocumentsSettings } from './admin/views/documents-settings.js?v=doc2';   // DOCUMENTS_SETTINGS_V1
 // CASE_WORKSPACE_V1 — история болезни как рабочий экран: слева шаги, справа документ.
 import { renderCaseWorkspace } from './admin/views/case-workspace.js?v=cw1';
+import { renderCaseOverview } from './admin/views/case-overview.js?v=co1';   // CASE_OVERVIEW_V1 — обзор госпитализации (экран врача)
 
 // ---------------------------------------------------------------------------
 // Nav definition — mirrors design-sample/src/app.jsx exactly + Settings group
@@ -208,7 +208,6 @@ const CRUMBS = {
     'doctor-room': ['Clinical', "Doctor's room"],   // DOCTOR_ROOM_V1
     crm:           ['Clinical', 'CRM · Заявки'],   // CRM_V1
     employees:     ['Настройки', 'Сотрудники'],   // EMPLOYEE_EDITOR_V1
-    visits:        ['Clinical', 'Visits'],   // VISITS_V1
     services:      ['Clinical', 'Services'],   // SERVICES_CATALOG_V1
     requests:      ['Clinical', 'Заявки'],
     'patient-card':['Clinical', 'Patients', 'Patient'],
@@ -224,6 +223,7 @@ const CRUMBS = {
     admissions:    ['Clinical', 'Inpatient ward'],   // ADMISSION_ORDER_V1
     'mar-nurse':   ['Clinical', 'Treatment tasks'],   // MAR_NURSE_V1
     'mar-sheet':   ['Clinical', 'Inpatient ward', 'Treatment sheet'],   // MAR_SHEET_V1
+    'case-overview': ['Clinical', 'Inpatient ward', 'Case overview'],   // CASE_OVERVIEW_V1
     'kitchen-sheet': ['Clinical', 'Kitchen sheet'],   // KITCHEN_SHEET_V1
     discharge:     ['Clinical', 'Discharges'],   // TWO_STEP_DISCHARGE_V1
     beds:          ['Clinical', 'Ward & beds'],
@@ -323,13 +323,21 @@ const searchEl  = document.getElementById('topbar-search');
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
-// First sidebar module the active role can reach — used as the landing page
-// and the fallback when a route is denied (since Dashboard is now role-gated
-// and may not be available).
+// ROLE_HOME_V1 — ДОМАШНИЙ ЭКРАН РОЛИ: куда человек попадает, войдя, и куда его
+// возвращают с закрытого маршрута.
+//
+// Владелец (2026-09-08): «remove the visits page completely so when admin
+// enters it goes straight to #dashboard, but other roles — the first open
+// module by role». Журнал «Визиты» (LANDING_VISITS_V1) удалён вместе с
+// маршрутом: администратор входит в «Дашборд», остальные — в первый доступный
+// им пункт меню в его порядке (картотека, CRM, кабинет врача, …).
+//
+// «Администратор» здесь — роль admin у самого человека (actorRoleCodes), а не
+// «кому выдан дашборд»: главный врач с открытым дашбордом всё равно начинает с
+// первого пункта меню — так сказал владелец, и это же правило повторяет сводка
+// прав (role-reach.js landingScreen, прикрыто тестом, читающим этот файл).
 function firstAllowedView() {
-    // LANDING_VISITS_V1 — фиксированная стартовая страница: журнал «Визиты»
-    // (для всех ролей с модулем «Пациенты»); иначе — первый доступный пункт меню.
-    if (isRouteAllowed('visits')) return 'visits';
+    if (actorRoleCodes().includes('admin') && isModuleAllowed('dashboard')) return 'dashboard';
     for (const item of NAV) {
         if (item.section) continue;
         if (isModuleAllowed(item.id)) return item.id;
@@ -352,6 +360,9 @@ function firstAllowedView() {
 const LEGACY_ROUTES = {
     'lab-settings': { view: 'labs', sub: 'panels' },
     beds: { view: 'admissions', sub: 'beds' },
+    // ROLE_HOME_V1 — журнал «Визиты» удалён; старая закладка «#visits» ведёт в
+    // картотеку, откуда визит и открывают (карта пациента → «Визиты»).
+    visits: { view: 'patients' },
 };
 
 function navigate(view, payload, opts = {}) {
@@ -359,7 +370,18 @@ function navigate(view, payload, opts = {}) {
     // Old links must not break: a retired route id is answered by the screen
     // that replaced it, not by a blank unknown view.
     const legacy = LEGACY_ROUTES[view];
-    if (legacy) { view = legacy.view; payload = { ...(payload || {}), sub: legacy.sub }; }
+    if (legacy) { view = legacy.view; if (legacy.sub) payload = { ...(payload || {}), sub: legacy.sub }; }
+    // CASE_ROUTE_SUB_V1 — экраны госпитализации (обзор, документы) носят её
+    // номер В АДРЕСЕ: '#case-overview/123'. Две вещи разом: (1) перезагрузка
+    // возвращает того же пациента, а не «Госпитализация не выбрана»
+    // (владелец: «sometimes this error occurs»); (2) стрелки «‹ ›» по соседям
+    // и ссылки из списков ведут на ДРУГУЮ госпитализацию в уже смонтированную
+    // панель — а панель перерисовывается только когда подмаршрут ИЗМЕНИЛСЯ
+    // (HASH_TRUTH_V1 ниже). Без sub соседняя госпитализация показывала бы
+    // прежнего пациента.
+    if ((view === 'case-overview' || view === 'case-file') && payload && payload.admissionId != null && typeof payload.sub !== 'string') {
+        payload = { ...payload, sub: String(payload.admissionId) };
+    }
     const key = viewKeyFor(view, payload);
 
     // Already mounted? Show it again — never re-render (that IS the cache).
@@ -585,12 +607,12 @@ const PARENT_OF = {
     'cashier-settings': 'settings', 'rooms-setup': 'settings', 'updates': 'settings',
     'subscription': 'settings', 'clinic-data': 'settings', 'public-site': 'settings',
     // Пациенты
-    'patient-card': 'patients', 'visits': 'patients', 'appointments': 'patients',
+    'patient-card': 'patients', 'appointments': 'patients',
     'registration': 'patients', 'docs-archive': 'patients',
     // Кабинет врача
     'service-workspace': 'consultation', 'doctor-room': 'consultation',
     // Стационар
-    'mar-sheet': 'admissions', 'beds': 'admissions', 'case-file': 'admissions',
+    'mar-sheet': 'admissions', 'beds': 'admissions', 'case-file': 'admissions', 'case-overview': 'admissions',   // CASE_OVERVIEW_V1
     // Прочее
     'requests': 'crm', 'reports': 'reports-hub',
     // Модули «Скоро»: попасть на них можно только по прямой ссылке, и уйти с
@@ -979,7 +1001,6 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'dashboard':     return void await renderDashboard(viewRoot, ctx);
             case 'public-site':   return void await renderPublicSite(viewRoot, ctx);   // PUBLIC_SITE_V1
             case 'patients':      return void await renderPatientsHub(viewRoot, ctx);   // PATIENTS_HUB_V1 — список · очередь · записи
-            case 'visits':        return void await renderVisits(viewRoot, ctx);   // VISITS_V1
             case 'services':      return void await renderServices(viewRoot, ctx);   // SERVICES_CATALOG_V1
             case 'requests':      return void await renderRequestsInbox(viewRoot, ctx);   // REQUESTS_INBOX_V1
             case 'patient-card':  return void renderPatientCard(viewRoot, ctx);
@@ -1001,6 +1022,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'docs-archive':  return void await renderDocsArchive(viewRoot, ctx);   // CLINICAL_DOCS_ARCHIVE_V1
             case 'admissions':    return void await renderInpatient(viewRoot, ctx);   // INPATIENT_ONE_SECTION_V1 — заявки · койки · госпитализации одним разделом
             case 'case-file':     return void await renderCaseWorkspace(viewRoot, ctx);   // CASE_WORKSPACE_V1
+            case 'case-overview': return void await renderCaseOverview(viewRoot, ctx);   // CASE_OVERVIEW_V1
             case 'mar-sheet':     return void await renderMarSheet(viewRoot, ctx);   // MAR_SHEET_V1
             case 'mar-nurse':     return void await renderMarNurse(viewRoot, ctx);   // MAR_NURSE_V1
             case 'kitchen-sheet': return void await renderKitchenSheet(viewRoot, ctx);   // KITCHEN_SHEET_V1
@@ -1762,7 +1784,6 @@ function setStatus(key, ok) {
 // ---------------------------------------------------------------------------
 const ROUTE_KEY = 'easymed:route';
 function saveRoute(v) { try { localStorage.setItem(ROUTE_KEY, v); } catch {} }
-function loadRoute()  { try { return localStorage.getItem(ROUTE_KEY); } catch { return null; } }
 
 // ---------------------------------------------------------------------------
 // User card
@@ -2040,7 +2061,7 @@ function showLogin() {
                 showFirstLoginReset(res.user);
                 return;
             }
-            await onAuthed(res.user);
+            await onAuthed(res.user, { fresh: true });   // ROLE_HOME_V1 — вход → домашний экран роли
         } catch (e) {
             console.error('[login]', e);
             errEl.textContent = 'Login failed — ' + (e.message || e);
@@ -2446,7 +2467,7 @@ function showFirstLoginReset(user) {
             if (res.error) { errEl.textContent = res.error; return; }
             const overlay = document.getElementById('login-overlay');
             if (overlay) overlay.remove();
-            await onAuthed(user);
+            await onAuthed(user, { fresh: true });   // ROLE_HOME_V1
         } catch (e) {
             console.error('[first-login reset]', e);
             errEl.textContent = 'Reset failed — ' + (e.message || e);
@@ -2559,7 +2580,10 @@ async function signOutAndShowPendingReview(clinic) {
 // resolves their permissions, then starts the app shell. Supabase Auth
 // persists its own session under the storageKey set in js/supabase.js;
 // nothing for us to save here.
-async function onAuthed(userRow) {
+// ROLE_HOME_V1 — fresh: человек только что ВОШЁЛ (форма входа / первый вход),
+// а не перезагрузил страницу с живой сессией. Разница решает, откуда начинать:
+// после входа — домашний экран роли, после перезагрузки — тот же экран.
+async function onAuthed(userRow, { fresh = false } = {}) {
     window.CURRENT_USER = userRow;
     // CLINIC_AFTER_LOGIN_V1 — boot() resolves the clinic BEFORE the session
     // exists, and /api/rpc is behind requireAuth, so on a fresh login that call
@@ -2574,7 +2598,7 @@ async function onAuthed(userRow) {
     await initBranchContext(supabase, userRow);
     state.user = actorFromUser(userRow);
     await applyActorPermissions(state.user);
-    startApp();
+    startApp({ fresh });
     renderLicenceBanner();   // LICENCE_CORE_V1 — after the shell exists, so `.app` is there to mount above
     // UPDATE_DELIVERY_V1 — fire-and-forget, same posture as boot()'s own
     // renderNotifications() call: a check that cannot run (offline, RPC
@@ -2717,7 +2741,7 @@ function wireSidebarCollapse() {
 }
 
 // Renders the app shell for the now-authenticated actor.
-function startApp() {
+function startApp({ fresh = false } = {}) {
     // NAV / CRUMBS — таблицы маршрутов; открыты наружу ради теста
     // «ни один экран не называет себя дважды», который обязан пройти по
     // НАСТОЯЩИМ таблицам, а не по своей копии: копия разошлась бы с ними в
@@ -2738,12 +2762,23 @@ function startApp() {
     wireUserPopover();
     renderBranchPicker(document.getElementById('branch-picker'));
     onLangChange(() => {
-        applyTopbarLang();
-        renderSidebar();
-        renderSectionTitle();
-        renderCrumbs();
-        setStatus(_lastStatusKey, _lastStatusOk);
-        for (const pane of state.panes) { try { renderViewInto(pane); } catch (e) { console.warn('[lang] re-render', e); } }   // LANG_RERENDER_V1 — navigate() no-ops on a cached pane, so re-render them directly
+        // LANG_INSTANT_V1 — владелец: «make instant language changing when
+        // changed». Каждый шаг перерисовки — сам по себе: упавший заголовок или
+        // статус НЕ должен оставить экраны на прежнем языке (раньше исключение
+        // в любом из первых шагов обрывало весь обработчик до перерисовки
+        // панелей, и человек видел старый язык до перезагрузки). Панели
+        // асинхронные — их отказ ловится отдельно.
+        const step = (name, fn) => { try { fn(); } catch (e) { console.warn('[lang] ' + name, e); } };
+        step('topbar', applyTopbarLang);
+        step('sidebar', renderSidebar);
+        step('title', renderSectionTitle);
+        step('crumbs', renderCrumbs);
+        step('status', () => setStatus(_lastStatusKey, _lastStatusOk));
+        step('branch', () => renderBranchPicker(document.getElementById('branch-picker')));
+        step('account', () => renderAccountControls());
+        for (const pane of state.panes) {   // LANG_RERENDER_V1 — navigate() no-ops on a cached pane, so re-render them directly
+            step('pane ' + pane.key, () => { const r = renderViewInto(pane); if (r && typeof r.catch === 'function') r.catch((e) => console.warn('[lang] pane ' + pane.key, e)); });
+        }
     });
     onBranchChange(() => {
         // BRANCH_RERENDER_V1 — re-render every CACHED pane so the branch filter
@@ -2754,17 +2789,20 @@ function startApp() {
         for (const pane of state.panes) { try { renderViewInto(pane); } catch (e) { console.warn('[branch] re-render', e); } }
     });
 
-    const last = loadRoute();
     const isKnownView = (v) => !!v && (CRUMBS[v] || PLACEHOLDERS.has(v) || v.startsWith('settings') || v.startsWith('report'));
-    const valid = last && isKnownView(last);
-    let target = valid ? last : firstAllowedView();
-    if (!isRouteAllowed(target)) target = firstAllowedView();
+    // ROLE_HOME_V1 — ВХОД открывается домашним экраном роли (firstAllowedView),
+    // а не последним посещённым маршрутом из localStorage: «when admin enters
+    // it goes straight to #dashboard». Запомненный маршрут (saveRoute) остаётся
+    // для истории окна, но старт по нему больше не решается.
+    let target = firstAllowedView();
 
     // HASH_SUBROUTE_V1 — a hash that names a SUB-route (#labs/panels) carries
-    // state the remembered route cannot express, so it wins the boot. A bare
-    // '#view' does NOT: a plain hash can be stale, and the remembered route
-    // keeps the precedence it has always had.
+    // state the home screen cannot express, so it wins the boot. A bare
+    // '#view' wins too — but только при ПЕРЕЗАГРУЗКЕ страницы (F5 посреди
+    // работы не должен уводить кассира с его экрана); после ВХОДА (fresh) адрес
+    // — след прошлой сессии, и он уступает домашнему экрану роли.
     const hash = parseHash();
+    if (!fresh && isKnownView(hash.view) && isRouteAllowed(hash.view)) target = hash.view;
     if (hash.sub && isKnownView(hash.view) && isRouteAllowed(hash.view)) target = hash.view;
     navigate(target, hash.sub && hash.view === target ? { sub: hash.sub } : null);
 

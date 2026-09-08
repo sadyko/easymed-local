@@ -64,7 +64,11 @@ test('name, price and a known раздел are required', () => {
   assert.throws(() => serviceSave(db, baseArgs({ name: '   ' }), admin), (e) => e.status === 400);
   assert.throws(() => serviceSave(db, baseArgs({ price: undefined }), admin), (e) => e.status === 400);
   assert.throws(() => serviceSave(db, baseArgs({ price: -1 }), admin), (e) => e.status === 400);
-  assert.throws(() => serviceSave(db, baseArgs({ type: 'surgery' }), admin), (e) => e.status === 400);
+  // SERVICE_TYPES_FIVE_V1 — раньше здесь стояло 'surgery' как пример
+  // НЕИЗВЕСТНОГО раздела. Теперь это настоящий тип, и пример перестал быть
+  // примером. Берём 'radiology': он, наоборот, только что удалён, и проверка
+  // заодно подтверждает, что удаление дошло до сохранения услуги.
+  assert.throws(() => serviceSave(db, baseArgs({ type: 'radiology' }), admin), (e) => e.status === 400);
 });
 
 test('performer gating: «оказывает специалист» with zero performers is refused', () => {

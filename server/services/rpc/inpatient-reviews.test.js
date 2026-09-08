@@ -637,10 +637,14 @@ test('клиника без врачей отвечает пустым спис�
   ctx.db.close();
 });
 
-test('список врачей спрашивают те же, кто вправе назначить: касса и медсестра получают отказ ролью', () => {
+test('список врачей открыт тем, кто называет врача по имени: медсестра (приёмный) и врач (лечащий); касса и регистратура — отказ ролью', () => {
   const ctx = seed();
   assert.ok(admissionAttendingCandidates(ctx.db, {}, admin).doctors.length > 0);
-  for (const who of [nurse, cashier, registrar, doctor]) {
+  // ADMITTING_DOCTOR_V1 — медсестра называет приёмного врача при размещении,
+  // приёмный врач назначает лечащего: обоим нужен этот список.
+  assert.ok(admissionAttendingCandidates(ctx.db, {}, nurse).doctors.length > 0);
+  assert.ok(admissionAttendingCandidates(ctx.db, {}, doctor).doctors.length > 0);
+  for (const who of [cashier, registrar]) {
     assert.throws(() => admissionAttendingCandidates(ctx.db, {}, who),
       (e) => e instanceof RpcError && e.status === 403,
       'список врачей шире права его применить: ' + who.role);

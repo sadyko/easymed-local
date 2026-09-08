@@ -1424,19 +1424,78 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .pc-cat.has-discount { background: var(--ok-50, #ecfdf5); color: var(--ok-700, #047857); }
 .pc-cat.is-off { opacity: .6; text-decoration: line-through; }
 .pc-cat-pct { font-weight: 800; }
+/* DEBT_FLOW_V1 — долг у имени пациента: красная пилюля того же роста, что
+   категория; ссылкой становится только когда вкладка «Счёт» открыта роли. */
+.pc-debt { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px;
+    padding: 3px 11px; font-size: 12.5px; font-weight: 700;
+    background: var(--crit-50, #fef2f2); color: var(--crit-700, #b91c1c); border: 1px solid var(--crit-200, #fecaca); }
+.pc-debt.is-link { cursor: pointer; }
+.pc-debt.is-link:hover, .pc-debt.is-link:focus-visible { background: var(--crit-100, #fee2e2); outline: none; box-shadow: 0 0 0 3px rgba(185, 28, 28, .18); }
+.pt-debt { gap: 4px; font-size: 12.5px; }
+.ar-debt { margin-left: 6px; }
+/* Окно отмены счёта на кассе — «пациент ещё на койке» */
+.cd-inbed { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: var(--warn-50, #fffbeb); border: 1px solid var(--warn-200, #fde68a); color: var(--warn-700, #b45309); font-size: 12.5px; line-height: 1.5; }
+.cd-inbed-t { display: flex; align-items: center; font-weight: 700; font-size: 13.5px; }
+.cd-inbed-p { margin: 6px 0 8px; }
+.cd-inbed-ack { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--ink-800); cursor: pointer; }
 
 /* CASE_WORKSPACE_V1 (2026-09-06) — история болезни как рабочий экран.
    Слева шаги по регламенту, справа документ — та же расстановка, что в кабинете
    врача, и по той же причине: список нужен ВО ВРЕМЯ письма, а не до него.
    Колонка шагов липкая и прокручивается сама: в ней семь-десять пунктов, и
    уезжать вместе с длинным документом она не должна. */
-.cw-grid { display: grid; gap: 14px; align-items: start;
-    grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); }
-.cw-rail { padding: 12px 14px; position: sticky; top: 14px; max-height: calc(100vh - 120px); overflow-y: auto; }
+/* CASE_DOC_A4_V1 — три зоны: шаги слева, лист в центре, вставка справа.
+   На узком экране правая колонка уходит вниз, а не сжимает лист. */
+.cw-grid { display: grid; gap: 12px; align-items: start; margin-top: 10px;
+    grid-template-columns: minmax(260px, 320px) minmax(0, 1fr) minmax(240px, 280px); }
+@media (max-width: 1400px) { .cw-grid { grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); }
+    .cw-aside { grid-column: 1 / -1; } }
+@media (max-width: 900px) { .cw-grid { grid-template-columns: minmax(0, 1fr); } }
+.cw-rail { position: sticky; top: 12px; max-height: calc(100vh - 110px); overflow-y: auto;
+    display: flex; flex-direction: column; gap: 10px; }
+.cw-aside { position: sticky; top: 12px; max-height: calc(100vh - 110px); overflow-y: auto; }
+.cw-steps { padding: 10px 12px; }
+/* Диагноз госпитализации — только чтение: пишут его в первичном осмотре. */
+.cw-dx { padding: 10px 12px; }
+.cw-dx-h { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 700;
+    letter-spacing: .04em; text-transform: uppercase; color: var(--ink-600); margin-bottom: 6px; }
+/* CASE_DX_PICK_V1 — поле диагноза с подсказками МКБ-10 и справочные строки */
+.cw-dx-field { position: relative; }
+.cw-dx-input { width: 100%; min-height: 36px; }
+.cw-dx-hint { font-size: 12.5px; color: var(--ink-500); margin-top: 4px; line-height: 1.35; }
+.cw-dx-empty { font-size: 12.5px; color: var(--ink-500); line-height: 1.4; }
+.cw-dx-refs { margin-top: 8px; padding-top: 6px; border-top: 1px dotted var(--ink-100);
+    display: flex; flex-direction: column; gap: 3px; }
+.cw-dx-ref { display: flex; gap: 6px; align-items: baseline; font-size: 12.5px; min-width: 0; }
+.cw-dx-ref-l { color: var(--ink-500); flex: 0 0 auto; }
+.cw-dx-ref-v { color: var(--ink-800); font-weight: 600; min-width: 0; overflow-wrap: break-word; }
+.cd-icd-list { position: absolute; left: 0; right: 0; top: calc(100% + 2px); z-index: 30;
+    max-height: 260px; overflow-y: auto; background: var(--white);
+    border: 1px solid var(--ink-200); border-radius: var(--r-md); box-shadow: var(--shadow-md); }
+.cd-icd-row { display: flex; gap: 8px; align-items: baseline; width: 100%; padding: 6px 10px;
+    border: 0; background: none; font: inherit; text-align: left; cursor: pointer; }
+.cd-icd-row:hover { background: var(--primary-50); }
+.cd-icd-code { flex: 0 0 auto; font-size: 12.5px; font-weight: 700; color: var(--primary-700);
+    font-variant-numeric: tabular-nums; }
+.cd-icd-name { font-size: 12.5px; color: var(--ink-800); min-width: 0; }
+.cw-doc-pick { padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.cw-pick-l { font-size: 12.5px; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--ink-600); }
+.cw-doc-sel { width: 100%; min-height: 36px; }
+/* Карточки шагов одинаковые: название и одна строка состояния (CASE_DOC_A4_V1). */
+.cd-row-who { color: var(--ink-500); }
 .cw-pane { min-width: 0; }
 .cw-doc-body { padding: 16px 18px; display: grid; gap: 12px; }
 .cw-doc-foot { display: flex; justify-content: flex-end; gap: 8px;
     padding: 12px 18px; border-top: 1px solid var(--ink-100); background: var(--ink-25); }
+/* A4_LETTERHEAD_V1 — документ истории болезни рисуется на листе (.a4-paper),
+   а не в карточке. Внутри листа у тела свои 48 px полей, и прежние 16/18 px
+   тела удваивали бы отступ. Подвал с кнопками стоит ПОД листом: линия сверху
+   и серая подложка карточного подвала тут читались бы как чужая полоса, а
+   ширина подгоняется под лист, чтобы кнопки стояли под его правым краем. */
+.a4-paper .cw-doc-body { padding: 0; }
+.cw-doc.a4-scroll .cw-doc-foot { max-width: 794px; margin: 12px auto 0; padding: 0;
+    border-top: 0; background: transparent; }
 .cw-empty { padding: 48px 24px; text-align: center; color: var(--ink-400); }
 .cw-empty-t { font-size: 15px; font-weight: 600; color: var(--ink-700); margin-top: 8px; }
 .cw-empty-s { font-size: 12.5px; margin-top: 4px; line-height: 1.5; }
@@ -3486,7 +3545,11 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
        залитая цветом зазора, перестала бы быть карточкой. */
 .lq-queue{ background:var(--page-ground); border-radius:var(--r-lg); }
 .lq-card{
-  background:#fff; border:1px solid var(--ink-200); border-radius:14px;
+  /* WHITE_GROUND_GLOW_V1 — общий контур рабочего окна, а не свой ink-200.
+     Раньше полосу между карточками рисовал серый грунт под ними; на белом
+     грунте её нет, и соседние карточки разделяет ТОЛЬКО собственная рамка.
+     Значит она обязана меняться вместе со всеми окнами, а не отдельно. */
+  background:#fff; border:1px solid var(--window-line); border-radius:14px;
   box-shadow:var(--shadow-xs); padding:14px 16px 10px; margin-bottom:16px;
   transition:box-shadow .15s, border-color .15s;
 }
@@ -5244,3 +5307,554 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .icon-btn.sm:hover { background: var(--ink-50); color: var(--ink-900); border-color: var(--ink-200); }
 .icon-btn.sm.danger:hover { background: var(--crit-50); color: var(--crit-700); border-color: var(--crit-200, #f3c9c9); }
 .icon-btn.sm:focus-visible { outline: 2px solid var(--primary-600); outline-offset: 1px; }
+
+/* ── TITLE_SHEET_V1 — титульный лист ─────────────────────────────────────── */
+.ts-block{margin-top:14px}
+.ts-block-t{font-size:12.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-500);margin:0 0 8px;padding-bottom:4px;border-bottom:1px solid var(--line-200,#e3e8ec)}
+.ts-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px}
+.ts-grid .field{margin:0}
+.ts-kv{display:flex;gap:8px;padding:6px 0;border-bottom:1px dotted var(--line-200,#d3d9de);font-size:13.5px;align-items:baseline}
+.ts-kv .ts-k{color:var(--ink-500);flex:0 0 150px}
+.ts-kv .ts-v{font-weight:600;min-width:0}
+.ts-radios{display:flex;gap:14px;flex-wrap:wrap;padding:6px 0}
+.ts-radios label{display:inline-flex;gap:6px;align-items:center;font-size:13.5px;cursor:pointer}
+.ts-bp{display:flex;gap:6px;align-items:center}
+.ts-bp input{width:86px}
+.ts-bmi{font-weight:700;background:var(--surface-50,#f6f8f9)}
+.ts-hint{font-size:12.5px;margin-top:6px}
+.ts-modal{max-height:66vh;overflow:auto}
+.ts-modal .a4-paper{margin:0 auto}
+@media (max-width:720px){.ts-grid{grid-template-columns:1fr}}
+
+/* INPATIENT_DOCS_V1 — бумаги при поступлении на титульном листе */
+.ts-papers{display:grid;gap:4px}
+.ts-paper{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px dotted var(--line-200,#d3d9de)}
+.ts-paper-name{flex:1;min-width:0;font-size:13.5px;font-weight:600}
+.ts-paper-tick{display:inline-flex;align-items:center;gap:6px;font-size:13.5px;cursor:pointer;white-space:nowrap}
+
+/* ── CASE_OVERVIEW_V1 — обзор госпитализации (Z-схема владельца) ─────────── */
+.co{display:flex;flex-direction:column;gap:14px}
+/* шапка */
+.co-head{padding:8px 12px 0}   /* CASE_COMPACT_V2 */
+.co-head-row{display:flex;align-items:flex-start;gap:12px}
+.co-av{width:40px;height:40px;border-radius:var(--r-md);border:0;color:#fff;font-weight:700;font-size:15px;display:grid;place-items:center;cursor:pointer;flex:0 0 40px;transition:box-shadow 120ms ease,transform 120ms ease}
+.co-av:hover{box-shadow:var(--shadow-md);transform:translateY(-1px)}
+.co-pat{flex:1;min-width:0}
+.co-name-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.co-name{background:none;border:0;padding:0;font:inherit;font-size:15px;font-weight:800;color:var(--ink-900);cursor:pointer;text-align:left;min-width:0;overflow-wrap:anywhere}
+.co-name:hover{color:var(--primary-700);text-decoration:underline}
+.co-day{font-size:12.5px;font-weight:600;color:var(--ink-500)}
+.co-sub{font-size:12.5px;margin-top:1px}
+.co-allergy{display:inline-flex;align-items:center;gap:6px;margin-top:6px;padding:4px 10px;border-radius:var(--r-sm);background:var(--crit-50);color:var(--crit-700);font-size:12.5px;font-weight:600}
+.co-nav{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.co-nav-count{font-size:12.5px;color:var(--ink-500);white-space:nowrap;font-variant-numeric:tabular-nums}
+/* CASE_HEAD_TIDY_V1 — действия живут в шапке (столбик справа: стрелки сверху,
+   главная кнопка под ними); полоса фактов — компактная строка с делителями. */
+.co-head-side{display:flex;flex-direction:column;align-items:flex-end;gap:10px;flex:0 0 auto}
+.co-fields{display:flex;flex-wrap:wrap;align-items:flex-end;gap:2px 0;margin-top:6px;padding:6px 0 0;border-top:1px solid var(--ink-100)}
+.co-fields>.co-hf{padding:0 14px 6px 0;margin-right:14px;border-right:1px solid var(--ink-100)}
+.co-fields>.co-hf:last-of-type{border-right:0;margin-right:0;padding-right:0}
+/* CASE_HEAD_ACTION_V2 — главное действие в правом нижнем углу шапки */
+.co-fields-act{margin-left:auto;padding:0 0 6px 12px;align-self:flex-end}
+/* Пульс главного действия: кольцо цвета кнопки расходится и гаснет. */
+.btn-pulse{animation:em-btn-pulse 1.9s ease-out infinite}
+@keyframes em-btn-pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--primary-600) 55%,transparent)}70%{box-shadow:0 0 0 11px color-mix(in srgb,var(--primary-600) 0%,transparent)}100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--primary-600) 0%,transparent)}}
+@media (prefers-reduced-motion:reduce){.btn-pulse{animation:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--primary-600) 30%,transparent)}}
+.co-hf{min-width:0}
+.co-hf-l{font-size:12.5px;color:var(--ink-500);text-transform:uppercase;letter-spacing:.04em;font-weight:700}
+.co-hf-v{font-size:12.5px;font-weight:600;color:var(--ink-900);margin-top:1px;overflow-wrap:anywhere}
+.co-hf-s{font-size:12.5px;color:var(--ink-500)}
+.co-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:12px}   /* CASE_HEAD_TIDY_V1 — шапка её больше не рисует; правило оставлено для чужих экранов */
+.co-tabs{margin:0}
+.co-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+/* Z-сетка: 1 now · 2 bill / 3 tiles · 4 op / 5 lists · 6 next */
+.co-z{display:grid;grid-template-columns:minmax(0,2fr) minmax(280px,1fr);grid-template-areas:"now bill" "tiles op" "lists next";gap:8px;align-items:stretch}
+/* CASE_COMPACT_V2 — на широком экране шесть блоков в две строки: обзор целиком без прокрутки */
+@media (min-width:1400px){.co-z{grid-template-columns:minmax(0,1.5fr) minmax(260px,1fr) minmax(260px,1fr);grid-template-areas:"now bill next" "tiles op lists"}}
+.co-panel{padding:8px 10px;min-width:0;display:flex;flex-direction:column}
+.co-panel.co-warn{box-shadow:var(--shadow-window),inset 0 0 0 1px var(--warn-500)}
+.co-panel.co-crit{box-shadow:var(--shadow-window),inset 0 0 0 1px var(--crit-500)}
+.co-panel-h{display:flex;align-items:center;gap:6px;margin:0 0 4px}
+.co-panel-ic{color:var(--primary-600);display:inline-flex}
+.co-panel-t{margin:0;font-size:12.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-700);text-wrap:balance}
+.co-panel-b{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0}
+.co-link{background:none;border:0;padding:2px 0;font:inherit;font-size:12.5px;font-weight:600;color:var(--primary-700);cursor:pointer;display:inline-flex;align-items:center;gap:3px;white-space:nowrap}
+.co-link:hover{color:var(--primary-800);text-decoration:underline}
+.co-muted{font-size:12.5px;color:var(--ink-500)}
+.co-note{margin:0;font-size:12.5px;color:var(--ink-500);line-height:1.4}
+.co-note.co-warn{color:var(--warn-700)}
+.co-warn{color:var(--warn-700);font-weight:600}
+.co-ok{color:var(--ok-700);font-weight:600}
+.co-crit{color:var(--crit-700);font-weight:600}
+.co-kv{display:flex;gap:8px;align-items:baseline;font-size:12.5px;padding:2px 0;border-bottom:1px dotted var(--ink-100)}
+.co-kv .co-k{color:var(--ink-500);flex:0 0 130px}
+.co-kv .co-v{font-weight:600;min-width:0;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.co-kv-warn .co-v{color:var(--warn-700)}
+/* 1 — пациент сейчас */
+.co-status-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.co-dx{padding:10px 12px;border-radius:var(--r-md);background:var(--primary-50)}
+.co-dx-l{font-size:12.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--primary-700)}
+.co-dx-v{font-size:13.5px;font-weight:700;color:var(--ink-900);margin-top:1px;line-height:1.3;text-wrap:balance}
+.co-dx-v.co-warn{font-size:12.5px}
+.co-dx-s{font-size:13.5px;color:var(--ink-500);margin-top:3px}
+.co-vitals{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px}
+.co-vital{padding:8px 10px;border-radius:var(--r-sm);background:var(--ink-25);min-width:0}
+.co-vital-l{font-size:12.5px;color:var(--ink-500)}
+.co-vital-v{font-size:15px;font-weight:700;color:var(--ink-900);font-variant-numeric:tabular-nums;margin-top:1px;overflow-wrap:anywhere}
+/* 2 — выписка и счёт */
+.co-big{padding:6px 10px;border-radius:var(--r-md);background:var(--ink-25)}
+.co-big.co-crit{background:var(--crit-50)}
+.co-big.co-warn{background:var(--warn-50)}   /* DEBT_FLOW_V1 — «К оплате» */
+.co-big.co-ok{background:var(--ok-50)}
+.co-big-v{font-size:17px;margin-top:1px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.co-big.co-crit .co-big-v{color:var(--crit-700)}
+.co-big.co-ok .co-big-v{color:var(--ok-700)}
+.co-wide{width:100%;justify-content:center;margin-top:auto}
+/* 3 — плитки */
+.co-tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;align-items:stretch}
+.co-tile{display:flex;flex-direction:column;gap:2px;padding:8px 10px;background:var(--white);border:1px solid var(--window-line);border-radius:var(--r-lg);box-shadow:var(--shadow-window);min-width:0;text-align:left;font:inherit;color:inherit}
+.co-tile-btn{cursor:pointer;transition:box-shadow 120ms ease,border-color 120ms ease,transform 120ms ease}
+.co-tile-btn:hover{border-color:var(--primary-300);box-shadow:var(--shadow-md);transform:translateY(-1px)}
+.co-tile-v{font-size:17px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;line-height:1.1}
+.co-tile-v-text{font-size:13.5px;line-height:1.25}
+.co-tile-m{font-size:12.5px;color:var(--ink-500);line-height:1.35;overflow-wrap:anywhere}
+.co-tile-m.co-warn{color:var(--warn-700);font-weight:600}
+.co-tile-m.co-ok{color:var(--ok-700);font-weight:600}
+/* 4 — операция */
+.co-op{font-size:17px;font-weight:700;color:var(--ink-900)}
+.co-chips{display:flex;gap:6px;flex-wrap:wrap}
+/* 5 — назначения и услуги */
+.co-cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.co-col{min-width:0;display:flex;flex-direction:column;gap:6px}
+.co-col-h{display:flex;align-items:center;gap:8px}
+.co-col-t{margin:0;font-size:13.5px;font-weight:700;color:var(--ink-800)}
+.co-col-s{font-size:12.5px;color:var(--ink-500)}
+.co-rows{display:flex;flex-direction:column}
+.co-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:6px 0;border-bottom:1px dotted var(--ink-100);min-width:0}
+/* CASE_ROWS_TIDY_V1 — название занимает всю ширину, сумма и метка уходят под него;
+   перенос по словам, а не по буквам (anywhere в узкой колонке рвал слово в столбик). */
+.co-row-main{flex:1 1 100%;min-width:0}
+.co-row-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:4px 8px;margin-left:auto;max-width:100%}   /* ROW_BADGE_WRAP_V1 — метка переносится на свою строку, а не вылезает за карточку */
+.co-row-foot .tag{max-width:100%;white-space:normal;text-align:center;line-height:1.3}
+.co-row-t{font-size:12.5px;font-weight:600;color:var(--ink-900);overflow-wrap:break-word;display:flex;align-items:center;gap:4px}
+.co-row-m{font-size:12.5px;color:var(--ink-500)}
+.co-row-sum{font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+/* 6 — следующий шаг */
+.co-next-doc{font-size:17px;font-weight:700;color:var(--ink-900);line-height:1.3;text-wrap:balance}
+.co-progress{height:6px;border-radius:var(--r-pill);background:var(--ink-100);overflow:hidden}
+.co-progress-fill{display:block;height:100%;background:var(--primary-500);border-radius:var(--r-pill)}
+/* фокус — видимый у всего, что нажимается */
+.co-av:focus-visible,.co-name:focus-visible,.co-link:focus-visible,.co-tile-btn:focus-visible{outline:2px solid var(--primary-500);outline-offset:2px}
+.co-av,.co-name,.co-link,.co-tile-btn{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+@media (prefers-reduced-motion:reduce){.co-av,.co-tile-btn{transition:none}.co-av:hover,.co-tile-btn:hover{transform:none}}
+@media (max-width:980px){.co-z{grid-template-columns:minmax(0,1fr);grid-template-areas:"now" "bill" "tiles" "op" "lists" "next"}.co-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:720px){.co-head-row{flex-wrap:wrap}.co-cols{grid-template-columns:minmax(0,1fr)}.co-kv .co-k{flex-basis:110px}}
+
+/* ── ADMISSIONS_REGISTER_V1 — журнал госпитализаций ──────────────────────── */
+.ar-card{overflow:hidden}
+.ar-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid var(--ink-100)}
+.ar-title{margin:0;font-size:13.5px;font-weight:700;color:var(--ink-800);display:inline-flex;align-items:center;gap:6px}
+.ar-count{font-size:12.5px;color:var(--ink-500);font-variant-numeric:tabular-nums}
+.ar-scroll{overflow-x:auto;overscroll-behavior-x:contain}
+.ar-table{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px;min-width:1180px}
+.ar-table thead th{position:sticky;top:0;z-index:1;text-align:left;font-size:12.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-500);font-weight:700;padding:9px 10px 4px;background:var(--ink-25);white-space:nowrap}
+.ar-table thead .ar-filters th{padding:0 8px 8px;border-bottom:1px solid var(--ink-100)}
+.ar-filter{width:100%;min-width:64px;height:26px;padding:0 8px;border:1px solid var(--ink-200);border-radius:var(--r-xs);background:var(--white);font:inherit;font-size:12.5px;color:var(--ink-800);text-transform:none;letter-spacing:0}
+.ar-filter::placeholder{color:var(--ink-300)}
+.ar-filter:hover{border-color:var(--ink-300)}
+.ar-filter:focus{outline:none;border-color:var(--primary-500);box-shadow:0 0 0 3px var(--primary-100)}
+.ar-table tbody td{padding:7px 10px;border-bottom:1px solid var(--ink-100);vertical-align:middle;color:var(--ink-800);font-size:12.5px;line-height:1.35}
+.ar-table tbody tr:last-child td{border-bottom:0}
+.ar-row{cursor:pointer;transition:background-color 100ms ease}
+.ar-row:hover td{background:var(--primary-50)}
+.ar-row:focus-visible{outline:2px solid var(--primary-500);outline-offset:-2px}
+.ar-pat{display:flex;align-items:center;gap:8px;min-width:0}
+.ar-av{width:28px;height:28px;border-radius:999px;display:inline-grid;place-items:center;font-size:12.5px;font-weight:700;flex:0 0 28px;background:var(--primary-100);color:var(--primary-800)}
+.ar-id{font-weight:700;color:var(--ink-900);white-space:nowrap;font-variant-numeric:tabular-nums}
+.ar-name{color:var(--ink-800);overflow-wrap:anywhere}
+.ar-nowrap{white-space:nowrap}
+.ar-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.ar-neg{color:var(--crit-700);font-weight:700}
+.ar-msg{text-align:center;padding:20px;color:var(--ink-500)}
+.ar-msg.ar-crit{color:var(--crit-700)}
+@media (prefers-reduced-motion:reduce){.ar-row{transition:none}}
+
+/* ── WARD_TABLE_V1 — «Пациенты»: плитки очередей + таблица ──────────────── */
+.wt-tiles-wrap{padding:12px 12px 0}
+.wt-tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.ar-sub{font-size:12.5px;color:var(--ink-500);margin-top:1px}
+/* WARD_TILES_FILL_V1 — плитки групп залиты цветом, текст белый (владелец:
+   «make this cards more prominent, using a fill of color but making the text
+   white»). У каждой группы свой цвет палитры EasyMed: в отделении — бирюза
+   (основной), ждут осмотра — янтарь, ждут лечащего — индиго, к выписке —
+   зелень. Выбранная — с кольцом и тенью; невыбранные чуть приглушены, но
+   остаются залитыми — ряд читается как четыре кнопки. */
+.wt-tile{display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--wt-fill,var(--primary-600));border:1px solid transparent;border-radius:var(--r-md);cursor:pointer;font:inherit;color:#fff;text-align:left;min-width:0;opacity:.84;transition:box-shadow 120ms ease,opacity 120ms ease,transform 120ms ease;touch-action:manipulation}
+.wt-tile-all{--wt-fill:var(--primary-600)}
+.wt-tile-exam{--wt-fill:#b45309}
+.wt-tile-attending{--wt-fill:#4d5b8c}
+.wt-tile-discharge{--wt-fill:#1f7a4d}
+.wt-tile:hover{opacity:1;box-shadow:var(--shadow-md);transform:translateY(-1px)}
+.wt-tile.on{opacity:1;box-shadow:0 0 0 3px color-mix(in srgb,var(--wt-fill,var(--primary-600)) 30%,transparent),var(--shadow-md)}
+.wt-tile:focus-visible{outline:2px solid var(--ink-900);outline-offset:2px}
+.wt-tile-ic{color:#fff;display:inline-flex;flex:0 0 auto;opacity:.9}
+.wt-tile-l{flex:1;min-width:0;font-size:12.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:#fff;line-height:1.25}
+.wt-tile-v{font-size:24px;font-weight:800;color:#fff;font-variant-numeric:tabular-nums;line-height:1}
+.wt-table{min-width:960px}
+.wt-name{background:none;border:0;padding:0;font:inherit;color:inherit;text-align:left;cursor:pointer;display:flex;align-items:center;gap:8px;min-width:0;touch-action:manipulation}
+.wt-name:hover .ar-name{color:var(--primary-700);text-decoration:underline}
+.wt-name:focus-visible{outline:2px solid var(--primary-500);outline-offset:2px;border-radius:var(--r-xs)}
+.wt-warn-text{color:var(--warn-700);font-weight:600}
+.wt-action{white-space:nowrap}
+@media (prefers-reduced-motion:reduce){.wt-tile{transition:none}}
+@media (max-width:900px){.wt-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* ── PATIENT_HISTORY_TAB_V1 — «История» в карте пациента ─────────────────── */
+.ph-adm{border-top:1px solid var(--ink-100)}
+.ph-adm-h{display:flex;align-items:flex-start;gap:12px;padding:12px 16px}
+.ph-adm-main{flex:1;min-width:0}
+.ph-adm-t{font-size:13.5px;color:var(--ink-900);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ph-adm-m{font-size:12.5px;margin-top:3px;overflow-wrap:anywhere}
+.ph-adm-acts{display:flex;gap:6px;flex:0 0 auto}
+.ph-files{padding:0 16px 12px}
+.ph-file{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:var(--r-md);background:var(--ink-25)}
+.ph-file+.ph-file{margin-top:6px}
+.ph-file-ic{color:var(--primary-600);display:inline-flex;flex:0 0 auto}
+.ph-file-main{flex:1;min-width:0}
+.ph-file-t{font-size:13.5px;font-weight:600;color:var(--ink-900)}
+.ph-file-m{font-size:12.5px}
+.ph-none{font-size:12.5px;padding:0 16px 12px}
+
+/* ── FORM_003_V1 — титульный лист по бланку 003 (на экране) ─────────────── */
+/* FORM_003_A4_V1 — на экране лист тоже целой страницы A4 (794×1123 при 96dpi):
+   бланк читается как бумага, а не как короткая карточка. */
+.f3-paper{padding:30px 38px 34px;min-height:1123px;box-sizing:border-box;display:flex;flex-direction:column}
+.f3-paper>.f3{flex:1;display:flex;flex-direction:column}
+.f3-paper .ts-status{margin-top:auto}
+.f3{font-size:13.5px;line-height:1.5;color:var(--ink-900)}
+.f3-head{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;font-size:12.5px;line-height:1.35}
+.f3-head-l{flex:1;text-align:center;font-weight:700}
+.f3-ministry{white-space:pre-line}
+.f3-org{margin-top:6px;font-weight:700;border-bottom:1px solid var(--ink-900);padding-bottom:2px}
+.f3-org-l{font-weight:400;color:var(--ink-500);font-size:12.5px}
+.f3-head-r{flex:1;text-align:right;font-weight:700}
+.f3-title{text-align:center;font-size:17px;font-weight:800;letter-spacing:.04em;margin:14px 0 2px}
+.f3-no{display:inline-block;min-width:110px;border-bottom:1px solid var(--ink-900);padding:0 6px;font-variant-numeric:tabular-nums}
+.f3-sub{text-align:center;font-size:12.5px;color:var(--ink-500);margin-bottom:12px}
+.f3-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 8px;padding:4px 0}
+.f3-uz{font-weight:600;color:var(--ink-900)}
+.f3-ru{font-size:12.5px;color:var(--ink-400)}
+.f3-ctl{flex:1 1 160px;min-width:0}
+.f3-ctl.f3-short{flex:0 1 96px}
+.f3-ctl.f3-wide{flex:1 1 100%}
+.f3-ctl input,.f3-ctl textarea,.f3-ctl select{width:100%;border:0;border-bottom:1px solid var(--ink-700);border-radius:0;background:transparent;padding:2px 6px;font:inherit;font-weight:600;color:var(--ink-900);outline:none}
+.f3-ctl input:focus,.f3-ctl textarea:focus,.f3-ctl select:focus{border-bottom-color:var(--primary-600);box-shadow:0 1px 0 var(--primary-600)}
+.f3-ctl input[readonly]{color:var(--ink-700);background:var(--ink-25)}
+.f3-val{display:inline-block;min-width:120px;border-bottom:1px solid var(--ink-700);padding:2px 6px;font-weight:600}
+.f3-val.f3-empty{color:transparent}
+.f3-hint{font-size:12.5px;color:var(--ink-400);text-align:center;margin:-2px 0 2px}
+.f3-block-t{margin:14px 0 4px;padding-top:8px;border-top:1px dashed var(--ink-300);font-weight:700;display:flex;gap:8px;align-items:baseline}
+.f3-radios label .f3-uz{font-weight:600}
+.f3 .ts-radios{padding:0}
+.f3 .ts-papers{margin-top:4px}
+@media (max-width:720px){.f3-head{flex-direction:column;gap:8px}.f3-head-r{text-align:left}}
+
+/* ── DOCS_HISTORY_SECTION_V1 — «История болезни» в разделе «Документы» ─────── */
+.dh-row{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--ink-50,#f1f4f5)}
+.dh-row:last-child{border-bottom:0}
+.dh-date{width:74px;flex:0 0 auto;font-size:12.5px;color:var(--ink-600);font-variant-numeric:tabular-nums}
+.dh-pat{flex:1 1 30%;min-width:0}
+.dh-name{font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dh-main{flex:1 1 44%;min-width:0}
+.dh-t{font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:6px;color:var(--ink-900)}
+.dh-sub{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dh-tag{flex:0 0 auto}
+@media (max-width:720px){.dh-row{flex-wrap:wrap}.dh-pat,.dh-main{flex-basis:100%}}
+
+/* ADMITTING_DOCTOR_V1 — «Приёмный врач» над листом в окне размещения */
+.ts-admitting{margin:0 0 12px}
+.ts-admitting .ts-doc-sel{width:100%;max-width:480px}
+
+
+/* ── VITALS_NEWS_V1 — панель «Показатели» на обзоре ───────────────────────── */
+.vt-card{margin-bottom:8px;padding:8px 12px 10px}
+.vt-head{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+.vt-title{font-size:12.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-600)}
+.vt-title-m{font-weight:600;text-transform:none;letter-spacing:0;color:var(--ink-500)}
+.vt-none{padding:18px 4px 6px}
+.vt-none-t{font-size:15px;font-weight:700;color:var(--ink-900);margin-bottom:4px}
+.vt-banner{display:flex;align-items:center;gap:12px;padding:6px 12px;border-radius:var(--r-lg);border:1px solid var(--ink-100);background:var(--ink-50);margin-bottom:6px}
+.vt-banner.vt-band-none{background:var(--ok-50);border-color:#c6efd9}
+.vt-banner.vt-band-low{background:var(--warn-50);border-color:#fde9b6}
+.vt-banner.vt-band-low_medium,.vt-banner.vt-band-medium{background:var(--warn-50);border-color:var(--warn-500)}
+.vt-banner.vt-band-high{background:var(--crit-50);border-color:var(--crit-500)}
+/* VITALS_COMPACT_V1 — балл словами в строке уровня, кружка нет */
+.vt-news{font-variant-numeric:tabular-nums;color:var(--ink-700)}
+.vt-band-high .vt-news{color:var(--crit-700)}
+.vt-band{flex:1;min-width:0}
+.vt-band-t{font-size:13.5px;font-weight:800;color:var(--ink-900)}
+.vt-partial{font-size:12.5px;font-weight:600;color:var(--ink-500)}
+.vt-band-a{font-size:12.5px;color:var(--ink-700);margin-top:1px}
+.vt-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.vt-chip{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:12.5px;font-weight:600;background:var(--white);border:1px solid var(--ink-200);color:var(--ink-700);font-variant-numeric:tabular-nums}
+.vt-chip.vt-warn{background:var(--warn-50);border-color:#fde9b6;color:var(--warn-700)}
+.vt-chip.vt-warn2{background:#ffedd5;border-color:#fdba74;color:#c2410c}
+.vt-chip.vt-crit{background:var(--crit-50);border-color:#fecaca;color:var(--crit-700)}
+.vt-trend{flex:0 0 150px;text-align:right}
+.vt-trend-l{font-size:12.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-500)}
+.vt-trend-v{font-size:12.5px;font-weight:700;color:var(--ink-600)}
+.vt-trend-v.vt-worse{color:var(--crit-700)}
+.vt-trend-v.vt-better{color:var(--ok-700)}
+.vt-trend .vt-spark{width:120px;height:22px;color:var(--primary-600)}
+.vt-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px}
+/* VITALS_DYNAMICS_V1 — плитка-кнопка; цвет показателя — свой, пастельный, в
+   тонах EasyMed: температура — роза, АД — индиго, пульс — коралл, ЧДД —
+   бирюза (основной цвет продукта), SpO₂ — небо. Фон — пастель показателя при
+   отклонении (очки > 0), белый — когда всё в норме. */
+.vt-tile{position:relative;padding:6px 10px;border-radius:var(--r-lg);border:1px solid var(--ink-100);background:var(--white);text-align:left;font:inherit;color:inherit;cursor:pointer;transition:box-shadow 120ms ease,transform 120ms ease,border-color 120ms ease;--vt-line:var(--primary-600);--vt-tint:var(--primary-50)}
+.vt-tile:hover{box-shadow:var(--shadow-md);transform:translateY(-1px);border-color:var(--vt-line)}
+.vt-tile:focus-visible{outline:2px solid var(--primary-500);outline-offset:2px}
+/* VITALS_TILES_FILL_V1 — цвета показателей затемнены до контраста 4.5:1 с
+   белым текстом (AA): плитка залита, подписи и цифры белые. */
+.vt-tile[data-metric="temp_c"]{--vt-line:#b04f6d}
+.vt-tile[data-metric="bp"]{--vt-line:#445080}
+.vt-tile[data-metric="pulse_bpm"]{--vt-line:#b3563f}
+.vt-tile[data-metric="resp_rate"]{--vt-line:#21776f}
+.vt-tile[data-metric="spo2"]{--vt-line:#3f7ab0}
+.vt-tile.vt-fill{background:var(--vt-line);border-color:transparent;color:#fff}
+.vt-tile.vt-fill .vt-val,.vt-tile.vt-fill .vt-lab{color:#fff}
+.vt-tile.vt-fill .vt-norm{color:rgba(255,255,255,.78)}
+.vt-tile.vt-fill .vt-tile-ic{background:rgba(255,255,255,.18);color:#fff}
+.vt-tile.vt-fill .vt-spark{color:#fff}
+.vt-tile.vt-fill .vt-pts{background:rgba(255,255,255,.92);border-color:transparent;color:var(--vt-line)}
+/* Отклонение — кольцо и яркая метка очков, а не другой фон: цвет плитки
+   остаётся цветом ПОКАЗАТЕЛЯ, тревога читается формой. */
+.vt-tile.vt-fill.vt-abn{box-shadow:0 0 0 3px color-mix(in srgb,var(--warn-500) 55%,transparent)}
+.vt-tile.vt-fill.vt-warn2 .vt-pts,.vt-tile.vt-fill.vt-warn .vt-pts{background:#fbbf24;color:#3d2c00}
+.vt-tile.vt-fill.vt-crit{box-shadow:0 0 0 3px color-mix(in srgb,var(--crit-500) 60%,transparent)}
+.vt-tile.vt-fill.vt-crit .vt-pts{background:#fff;color:var(--crit-700)}
+.vt-spark-fill{fill:currentColor;opacity:.2}
+.vt-tile.vt-none{opacity:.75}
+.vt-tile-top{display:flex;align-items:center;justify-content:space-between}
+.vt-tile-ic{width:22px;height:22px;border-radius:7px;display:grid;place-items:center;background:var(--ink-50);color:var(--ink-600)}
+.vt-pts{font-size:12.5px;font-weight:700;padding:1px 8px;border-radius:999px;background:var(--white);border:1px solid var(--ink-200);color:var(--ink-600);font-variant-numeric:tabular-nums}
+.vt-tile.vt-warn .vt-pts{color:var(--warn-700);border-color:#fde9b6}
+.vt-tile.vt-warn2 .vt-pts{color:#c2410c;border-color:#fdba74}
+.vt-tile.vt-crit .vt-pts{color:var(--crit-700);border-color:#fecaca}
+.vt-val{font-size:17px;font-weight:800;color:var(--ink-900);margin-top:2px;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.vt-lab{font-size:12.5px;color:var(--ink-500);margin-top:2px}
+.vt-tile .vt-spark{width:100%;height:18px;margin-top:2px;color:var(--ink-600)}
+.vt-spark path{stroke:currentColor}
+.vt-spark circle{fill:currentColor}
+.vt-norm{font-size:12.5px;color:var(--ink-400);margin-top:2px}
+.vt-form-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px 14px}
+.vt-check{display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;color:var(--ink-800);margin-top:26px;cursor:pointer}
+.vt-preview{margin-top:10px;padding:10px 12px;border-radius:var(--r-sm);font-size:13.5px;font-weight:700;background:var(--ink-50);color:var(--ink-700)}
+.vt-preview.vt-band-none{background:var(--ok-50);color:var(--ok-700)}
+.vt-preview.vt-band-low{background:var(--warn-50);color:var(--warn-700)}
+.vt-preview.vt-band-low_medium,.vt-preview.vt-band-medium{background:#ffedd5;color:#c2410c}
+.vt-preview.vt-band-high{background:var(--crit-50);color:var(--crit-700)}
+@media (max-width:860px){.vt-banner{flex-wrap:wrap}.vt-trend{flex-basis:100%;text-align:left}}
+
+/* ── VITALS_DYNAMICS_V1 — окно «Динамика показателей» ─────────────────────── */
+.vd{display:flex;flex-direction:column;gap:10px}
+.vd-tabs{display:flex;flex-wrap:wrap;gap:6px}
+.vd-tab{display:inline-flex;align-items:center;gap:4px;padding:5px 12px;border-radius:999px;border:1px solid var(--ink-200);background:var(--white);font:inherit;font-size:12.5px;font-weight:600;color:var(--ink-700);cursor:pointer}
+.vd-tab.on{background:var(--primary-600);border-color:var(--primary-600);color:#fff}
+.vd-tab:focus-visible{outline:2px solid var(--primary-500);outline-offset:2px}
+.vd-chart-wrap{--vt-line:var(--primary-600);--vt-tint:var(--primary-50);border:1px solid var(--ink-100);border-radius:var(--r-lg);padding:8px;background:var(--white)}
+.vd-chart-wrap[data-metric="temp_c"]{--vt-line:#c4607e;--vt-tint:#fbeef2}
+.vd-chart-wrap[data-metric="bp"]{--vt-line:#4d5b8c;--vt-tint:#eef0f8}
+.vd-chart-wrap[data-metric="pulse_bpm"]{--vt-line:#d0715c;--vt-tint:#fdf0ea}
+.vd-chart-wrap[data-metric="resp_rate"]{--vt-line:#2d958f;--vt-tint:#e6f4f2}
+.vd-chart-wrap[data-metric="spo2"]{--vt-line:#4f8cc4;--vt-tint:#e9f1f9}
+.vd-chart{width:100%;height:auto;display:block;color:var(--vt-line)}
+.vd-norm{fill:var(--ok-50);stroke:none}
+.vd-grid{stroke:var(--ink-100);stroke-width:1}
+.vd-tick{font-size:12.5px;fill:var(--ink-500)}
+.vd-fill{fill:var(--vt-line);opacity:.12}
+.vd-line{stroke:var(--vt-line)}
+.vd-dot{fill:var(--white);stroke:var(--vt-line);stroke-width:2.5}
+.vd-val{font-size:12.5px;font-weight:700;fill:var(--ink-800)}
+.vd-norm-l{font-size:12.5px;color:var(--ink-500)}
+.vd-tbl th,.vd-tbl td{font-size:12.5px;padding:6px 8px}
+.vd-empty{padding:26px;text-align:center;color:var(--ink-500);font-size:13.5px}
+
+/* DASHBOARD_ONEST_V1 — владелец: «keep onest but adapt the dashboard»: на обзоре
+   госпитализации цифры набраны тем же Onest с табличными цифрами, а не
+   моноширинным стеком — иначе на одном экране жили два шрифта. */
+.co .num,.co-head .num,.vt-card .num,.vd .num,.co-nav-count,.co-hf-v,.co-big-v,.co-tile-v,.vt-val,.vt-chip,.vd-tbl .num{font-family:var(--font-sans);font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+
+/* VITALS_TABLET_V1 — окно «Добавить измерение» на планшете: крупные поля под
+   палец, цифровая клавиатура (inputmode), кнопка во всю ширину; на широком
+   планшете окно занимает почти весь экран, поля — в две колонки. */
+.vt-in,.vt-form-row select,.vt-form-row input[type="datetime-local"],.vt-form-row input:not([type="checkbox"]){min-height:44px;font-size:17px;font-variant-numeric:tabular-nums}
+.vt-form-row{gap:12px 16px}
+.vt-check{min-height:44px;margin-top:22px}
+.vt-preview{font-size:15px;padding:12px 14px}
+@media (pointer:coarse){
+  .vt-in,.vt-form-row select,.vt-form-row input:not([type="checkbox"]){min-height:52px;font-size:20px}
+  .vt-form-row{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .modal-card:has(.vt-preview){width:min(96vw,900px)!important;max-width:96vw}
+  .modal-card:has(.vt-preview) .modal-foot .btn{min-height:52px;font-size:17px;padding:0 24px}
+  .vt-tile{min-height:104px}
+}
+@media (max-width:1100px){
+  .modal-card:has(.vt-preview){width:min(96vw,900px)!important;max-width:96vw}
+}
+
+/* VITALS_ONE_WINDOW_V1 — пять карточек динамики в одном окне, одна таблица */
+.vd-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.vd-card{border:1px solid var(--ink-100);border-radius:var(--r-lg);padding:8px 10px;background:var(--white);min-width:0}
+.vd-card.vd-focus{box-shadow:0 0 0 2px var(--primary-300)}
+.vd-card-h{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:var(--ink-800);margin-bottom:4px}
+.vd-card-ic{display:inline-flex;color:var(--vt-line,var(--primary-600))}
+.vd-card[data-metric="temp_c"]{--vt-line:#c4607e}
+.vd-card[data-metric="bp"]{--vt-line:#4d5b8c}
+.vd-card[data-metric="pulse_bpm"]{--vt-line:#d0715c}
+.vd-card[data-metric="resp_rate"]{--vt-line:#2d958f}
+.vd-card[data-metric="spo2"]{--vt-line:#4f8cc4}
+.vd-card-v{font-size:13.5px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--ink-900)}
+.vd-card .vd-chart-wrap{border:0;padding:0}
+.vd-card .vd-norm-l{margin-top:2px}
+.vd-tbl-wrap{overflow-x:auto}
+.vd-tbl{min-width:760px}
+.vd-tbl td.num{white-space:nowrap}
+@media (max-width:720px){.vd-grid{grid-template-columns:1fr}}
+
+/* CASE_ACTIONS_GHOST_V1 — призрачные действия карточек: подвал справа */
+.co-panel-f{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:2px 6px;margin-top:auto;padding-top:6px}
+.co-act{display:inline-flex;align-items:center;gap:2px;min-height:28px;padding:4px 4px 4px 8px;border:0;border-radius:var(--r-sm);background:none;font:inherit;font-size:12.5px;font-weight:600;color:var(--primary-700);cursor:pointer;white-space:nowrap;transition:background-color 120ms ease,color 120ms ease}
+.co-act:hover{background:var(--primary-50);color:var(--primary-700)}
+.co-act:active{background:var(--primary-100)}
+.co-act:focus-visible{outline:2px solid var(--primary-500);outline-offset:2px}
+.co-act svg{opacity:.8}
+/* VITALS_WINDOW_FIT_V1 — окно динамики вмещает содержимое: ни сетка карточек,
+   ни таблица не растягивают тело окна; таблица при нужде листается сама. */
+.vd{min-width:0;max-width:100%}
+.vd-grid{min-width:0}
+.vd-card{overflow:hidden}
+.vd-chart{max-width:100%}
+.vd-tbl-wrap{min-width:0;max-width:100%}
+.vd-tbl{min-width:0;width:100%}
+.vd-tbl th,.vd-tbl td{padding:5px 6px}
+.vd-tbl td{white-space:nowrap}
+
+/* VITALS_STEPPER_V1 — поле-шагомер: «−» слева, число посередине, «+» справа */
+.vt-step{display:flex;align-items:stretch;gap:0;border:1px solid var(--ink-200);border-radius:var(--r-md);background:var(--white);overflow:hidden}
+.vt-step:focus-within{border-color:var(--primary-500);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary-500) 18%,transparent)}
+.vt-step .vt-in{flex:1;min-width:0;border:0;border-radius:0;text-align:center;font-weight:700;background:none;-moz-appearance:textfield;appearance:textfield}
+.vt-step .vt-in:focus{outline:none}
+.vt-step .vt-in::-webkit-outer-spin-button,.vt-step .vt-in::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.vt-step-b{flex:0 0 44px;display:grid;place-items:center;border:0;background:var(--ink-25);color:var(--ink-700);cursor:pointer;font:inherit;touch-action:manipulation;transition:background-color 120ms ease,color 120ms ease}
+.vt-step-b:hover{background:var(--primary-50);color:var(--primary-700)}
+.vt-step-b:active{background:var(--primary-100)}
+.vt-step-b:focus-visible{outline:2px solid var(--primary-500);outline-offset:-2px}
+.vt-hint{margin:0 0 4px;font-size:12.5px;color:var(--ink-500)}
+@media (pointer:coarse){.vt-step-b{flex-basis:56px}}
+
+/* ── CASE_DOC_A4_V1 — лист документа истории болезни ───────────────────────── */
+.cd-sheet { display: flex; flex-direction: column; gap: 10px; }
+.cd-sec { padding: 10px 12px; margin: 0; }
+.cd-sec .a4-input { min-height: 46px; line-height: 1.55; }
+.cd-sec-plain .cd-dx { width: 100%; margin-top: 4px; }
+.cd-sec .a4-input table.a4-restbl { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 12.5px; }
+.cd-sec .a4-input table.a4-restbl th, .cd-sec .a4-input table.a4-restbl td {
+    border: 1px solid var(--ink-200); padding: 4px 6px; text-align: left; }
+.cd-sec .a4-input table.a4-restbl th { background: var(--primary-50); color: var(--primary-700); font-weight: 700; }
+/* Панель форматирования — НАД листом, липкая: врач правит длинный документ. */
+.a4-tools { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 4px;
+    flex-wrap: wrap; max-width: 794px; margin: 0 auto 10px; padding: 6px 8px;
+    background: var(--white); border: 1px solid var(--ink-100); border-radius: var(--r-md);
+    box-shadow: var(--shadow-sm); }
+.a4-tool { min-width: 32px; height: 30px; padding: 0 8px; border: 0; border-radius: var(--r-sm);
+    background: none; color: var(--ink-700); font: inherit; font-size: 13.5px; cursor: pointer; }
+.a4-tool:hover { background: var(--ink-50); color: var(--ink-900); }
+.a4-tool:active { background: var(--primary-50); color: var(--primary-700); }
+.a4-tool:focus-visible { outline: 2px solid var(--primary-500); outline-offset: -2px; }
+.a4-tool-sep { width: 1px; height: 18px; background: var(--ink-100); margin: 0 2px; }
+/* ── Правая панель «Вставить в документ» ───────────────────────────────────── */
+.ci-card { padding: 0; overflow: hidden; }
+.ci-head { display: flex; align-items: center; gap: 6px; padding: 10px 12px;
+    border-bottom: 1px solid var(--ink-100); font-size: 12.5px; font-weight: 700;
+    letter-spacing: .04em; text-transform: uppercase; color: var(--ink-600); }
+.ci-body { display: flex; flex-direction: column; }
+.ci-block { border-bottom: 1px solid var(--ink-50); }
+.ci-block:last-child { border-bottom: 0; }
+.ci-sum { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer;
+    list-style: none; user-select: none; }
+.ci-sum::-webkit-details-marker { display: none; }
+.ci-sum:hover { background: var(--ink-25); }
+.ci-sum-ic { display: inline-flex; width: 26px; height: 26px; border-radius: 8px; flex: 0 0 auto;
+    align-items: center; justify-content: center; background: var(--primary-50); color: var(--primary-700); }
+.ci-sum-main { min-width: 0; display: flex; flex-direction: column; }
+.ci-sum-t { font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
+.ci-sum-m { font-size: 12.5px; color: var(--ink-500); }
+.ci-list { display: flex; flex-direction: column; padding: 0 8px 8px; }
+.ci-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px;
+    border: 0; border-radius: var(--r-sm); background: none; font: inherit; color: inherit;
+    text-align: left; cursor: pointer; }
+.ci-item:hover:not([disabled]) { background: var(--primary-50); }
+.ci-item:focus-visible { outline: 2px solid var(--primary-500); outline-offset: -2px; }
+.ci-item[disabled] { opacity: .55; cursor: default; }
+.ci-item-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ci-item-t { font-size: 12.5px; font-weight: 600; color: var(--ink-800); overflow-wrap: break-word; }
+.ci-item-m { font-size: 12.5px; color: var(--ink-500); }
+.ci-note { padding: 8px 12px 12px; font-size: 12.5px; color: var(--ink-500); }
+.ci-note.ci-fail { color: var(--crit-700); }
+
+/* CASE_DOC_A4_V1 — воздух между шапкой и рабочей областью документов */
+.cw .co-head { margin-bottom: 4px; }
+.cw-doc.a4-scroll { padding: 14px 16px 20px; border-radius: var(--r-lg); }
+.cw-steps .card-header { padding-top: 10px; }
+
+/* ── CASE_DX_LIST_V1 — диагнозы документа: чипы, поле, две кнопки ─────────── */
+.dx-ed { display: flex; flex-direction: column; gap: 8px; }
+.dx-chips { display: flex; flex-direction: column; gap: 5px; }
+.dx-empty { font-size: 12.5px; color: var(--ink-500); }
+.dx-empty.dx-need { color: var(--warn-700); font-weight: 600; }
+.dx-chip { display: flex; align-items: flex-start; gap: 6px; padding: 5px 6px 5px 9px;
+    border-radius: var(--r-sm); background: var(--ink-25); border: 1px solid var(--ink-100); min-width: 0; }
+.dx-chip.dx-main { background: var(--primary-50); border-color: var(--primary-200); }
+.dx-chip-t { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600; color: var(--ink-900); overflow-wrap: break-word; }
+.dx-chip-k { flex: 0 0 auto; font-size: 12.5px; font-weight: 700; color: var(--ink-500); }
+.dx-chip.dx-main .dx-chip-k { color: var(--primary-700); }
+.dx-chip-x { flex: 0 0 auto; width: 20px; height: 20px; border: 0; border-radius: var(--r-sm);
+    background: none; color: var(--ink-400); font-size: 15px; line-height: 1; cursor: pointer; }
+.dx-chip-x:hover { background: var(--crit-50); color: var(--crit-700); }
+.dx-chip-x:focus-visible { outline: 2px solid var(--primary-500); outline-offset: 1px; }
+.dx-field { position: relative; }
+.dx-type-in { width: 100%; min-height: 36px; }
+.dx-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.dx-acts .btn { flex: 1 1 auto; justify-content: center; }
+.dx-own { color: var(--ink-700); }
+/* Окно выбора по МКБ-10 */
+.dxp { display: flex; flex-direction: column; gap: 8px; }
+.dxp-types { display: flex; gap: 4px; flex-wrap: wrap; }
+.dxp-type { padding: 5px 12px; border-radius: var(--r-pill); border: 1px solid var(--ink-200);
+    background: var(--white); font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-700); cursor: pointer; }
+.dxp-type.on { background: var(--primary-600); border-color: var(--primary-600); color: #fff; }
+.dxp-type:focus-visible { outline: 2px solid var(--primary-500); outline-offset: 2px; }
+.dxp-search { width: 100%; min-height: 40px; }
+.dxp-note { font-size: 12.5px; color: var(--ink-500); }
+.dxp-list { max-height: 46vh; overflow-y: auto; display: flex; flex-direction: column; }
+.dxp-row { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 7px 8px;
+    border: 0; border-bottom: 1px solid var(--ink-50); background: none; font: inherit;
+    text-align: left; cursor: pointer; }
+.dxp-row:hover { background: var(--primary-50); }
+.dxp-code { flex: 0 0 auto; font-size: 12.5px; font-weight: 700; color: var(--primary-700); font-variant-numeric: tabular-nums; }
+.dxp-name { flex: 1; min-width: 0; font-size: 12.5px; color: var(--ink-800); }
+
+/* ── CASE_DOC_A4_V1 — раздел листа выглядит документом, а не полем формы ──── */
+.cd-sec { background: transparent; border: 0; padding: 0 0 4px; margin: 0; }
+.cd-sec .a4-sec-tag { display: inline-flex; margin: 0 0 4px; background: transparent;
+    border: 0; padding: 0; height: auto; color: var(--primary-700); }
+.cd-sec .a4-input { border: 1px solid transparent; border-radius: var(--r-sm); min-height: 44px; padding: 6px 8px; }
+.cd-sec .a4-input:hover { background: var(--ink-25); border-color: var(--ink-100); }
+.cd-sec .a4-input:focus { background: var(--white); border-color: var(--primary-400); box-shadow: 0 0 0 3px var(--primary-50); }
+
+/* ── Экран помещается: прокручивается только лист (владелец: «make everything
+      except a4 fit the screen so user wont scroll down to write») ─────────── */
+.cw-doc.a4-scroll { max-height: calc(100vh - 168px); overflow: auto; }
+.cw-rail, .cw-aside { max-height: calc(100vh - 168px); }
+@media (max-width: 1400px) { .cw-aside { max-height: none; position: static; } }

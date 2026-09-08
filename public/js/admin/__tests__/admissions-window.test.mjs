@@ -82,6 +82,8 @@ globalThis.requestAnimationFrame = (fn) => fn();
 
 const walk = (e, out = []) => { if (!e || typeof e !== 'object') return out; out.push(e); for (const c of e.children || []) walk(c, out); return out; };
 const textOf = (e) => walk(e).map((x) => x._text || '').join(' ');
+// WARD_TABLE_V1 — карточки бывают с двумя классами ('card ar-card'); ищем по слову.
+const isCard = (e) => String(e.className || '').split(/\s+/).includes('card');
 const findBtn = (root, label) => walk(root).find((e) => e.tagName === 'BUTTON' && textOf(e).includes(label));
 const allBtns = (root, label) => walk(root).filter((e) => e.tagName === 'BUTTON' && textOf(e).includes(label));
 const lastToast = () => {
@@ -141,6 +143,10 @@ globalThis.fetch = async (url, opts = {}) => {
             const a = admitAnswer();
             return a.ok ? ok(a.data) : fail(a.message);
         }
+        if (name === 'admission_title_sheet_get') {   // TITLE_SHEET_V1
+            return ok({ admission: { id: body.admission_id, status: 'ordered', department: 'Терапия', admission_type: 'planned' },
+                patient: { id: 101, full_name: 'Иванов Иван Иванович', mrn: 'ID-1', gender: 'male' }, sheet: null, bmi: null, complete: false, missing: [], due_at: null });
+        }
         if (name === 'inpatient_capabilities') return ok({ roles: [], can: capsAnswer });
         if (name === 'admission_reviews_list') return ok({ admission_id: body.admission_id, reviews: [] });
         if (name === 'admission_review_save') {
@@ -175,11 +181,11 @@ globalThis.fetch = async (url, opts = {}) => {
 const view = await import('../views/admissions.js');
 const perms = await import('../permissions.js');
 
-async function renderScreen() {
+async function renderScreen({ only = null } = {}) {
     BODY.children.length = 0;
     rpcCalls = [];
     const container = mkEl('div');
-    await view.renderAdmissions(container);
+    await view.renderAdmissions(container, { only });   // INPATIENT_QUEUES_SPLIT_V1 — null: заявки; 'patients': вкладка врача
     await settle();
     return container;
 }
@@ -194,7 +200,7 @@ test('заявка регистратуры и направление врача
     assert.ok(txt.includes('Иванов Иван Иванович'), 'заявка регистратуры не видна');
     assert.ok(txt.includes('Петрова Мария'), 'направление врача (request_admission) не видно');
     // Оба — в одном списке, а не в двух разных очередях.
-    const card = walk(root).find((e) => textOf(e).includes('Ждут размещения') && e.className === 'card');
+    const card = walk(root).find((e) => textOf(e).includes('Ждут размещения') && isCard(e));
     assert.ok(card, 'карточка списка не найдена');
     assert.ok(textOf(card).includes('Иванов Иван Иванович') && textOf(card).includes('Петрова Мария'),
         'заявка регистратуры и направление врача должны стоять в одной очереди');
@@ -202,16 +208,16 @@ test('заявка регистратуры и направление врача
 });
 
 test('лежащий пациент — в «В отделении» и в «Ждут первичного осмотра», сгруппирован по палате', async () => {
-    const root = await renderScreen();
-    const inWard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('В отделении'));
+    const root = await renderScreen({ only: 'patients' });
+    const inWard = walk(root).find((e) => isCard(e) && textOf(e).includes('В отделении'));
     assert.ok(inWard, 'списка «В отделении» нет');
     assert.ok(textOf(inWard).includes('Сидоров Сидор'), 'пациент на койке не показан');
     assert.ok(textOf(inWard).includes('Терапия'), 'группировка по палате пропала');
-    assert.ok(textOf(inWard).includes('койка T-1'), 'номер койки не показан');
+    assert.ok(textOf(inWard).includes('T-1'), 'номер койки не показан');   // WARD_TABLE_V1 — колонка «Койка»: «Терапия / T-1»
     // Заявки в этот список не просачиваются: у них койки нет.
     assert.ok(!textOf(inWard).includes('Иванов Иван Иванович'), 'заявка не должна считаться лежащей');
 
-    const exam = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Ждут первичного осмотра'));
+    const exam = walk(root).find((e) => isCard(e) && textOf(e).includes('Ждут первичного осмотра'));
     assert.ok(exam, 'очереди первичного осмотра нет');
     assert.ok(textOf(exam).includes('Сидоров Сидор'), 'размещённый пациент обязан ждать осмотра главного врача');
 });
@@ -230,7 +236,7 @@ test('РЕГРЕССИЯ: заявка подписана «Ждёт разме�
     assert.strictEqual(admissionStatusLabel('cancelled'), 'Отменена');
 
     // …и подпись лежащего пациента берётся из той же карты.
-    const inWard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('В отделении'));
+    const inWard = walk(await renderScreen({ only: 'patients' })).find((e) => isCard(e) && textOf(e).includes('В отделении'));
     assert.ok(textOf(inWard).includes(admissionStatusLabel('admitted')),
         'состояние лежащего пациента должно называться словами из общей карты');
 });
@@ -295,12 +301,23 @@ test('«Положить на койку» → выбор койки → admissi
 
     const bedBtn = allBtns(overlay, 'T-2')[0];
     bedBtn.click();
-    findBtn(overlay, 'Положить').click();
+    findBtn(overlay, 'Далее').click();   // TITLE_SHEET_V1 — койка выбрана, дальше лист
+    await settle();
+    const sheet = BODY.children[BODY.children.length - 1];
+    assert.notEqual(sheet, overlay, 'после «Далее» должно открыться окно листа');
+    assert.ok(textOf(sheet).includes('Титульный лист'));
+    assert.ok(textOf(sheet).includes('T-2'), 'лист называет выбранную койку');
+    findBtn(sheet, 'Положить').click();
     await settle();
 
     const call = rpcCalls.find((c) => c.name === 'admission_admit');
     assert.ok(call, 'admission_admit не вызван');
-    assert.deepStrictEqual(call.args, { admission_id: 11, bed_id: 6 });
+    assert.equal(call.args.admission_id, 11);
+    assert.equal(call.args.bed_id, 6);
+    assert.ok(call.args.title_sheet && call.args.title_sheet.sheet, 'лист должен уйти вместе с койкой');
+    // ADMITTING_DOCTOR_V1 — единственный врач клиники выбран приёмным сам, и он уходит с койкой.
+    assert.equal(call.args.admitting_doctor_id, 77, 'приёмный врач должен уйти в admission_admit');
+    assert.ok(textOf(sheet).includes('Приёмный врач'), 'в окне листа нет поля «Приёмный врач»');
 });
 
 test('отказ сервера доходит до человека словами и окно не закрывается', async () => {
@@ -311,12 +328,15 @@ test('отказ сервера доходит до человека слова�
     await settle();
     const overlay = BODY.children[BODY.children.length - 1];
     allBtns(overlay, 'T-2')[0].click();
-    findBtn(overlay, 'Положить').click();
+    findBtn(overlay, 'Далее').click();   // TITLE_SHEET_V1
+    await settle();
+    const sheet = BODY.children[BODY.children.length - 1];
+    findBtn(sheet, 'Положить').click();
     await settle();
 
     assert.match(lastToast(), /Койка на уборке/);
-    // Кнопка снова активна: человек может выбрать другую койку, а не начинать заново.
-    const submit = findBtn(overlay, 'Положить');
+    // Кнопка снова активна: человек может поправить лист или вернуться к койкам, а не начинать заново.
+    const submit = findBtn(sheet, 'Положить');
     assert.ok(!submit.hasAttribute('disabled'), 'после отказа кнопку надо вернуть в работу');
 });
 
@@ -383,22 +403,22 @@ const EXAMINED = {
 
 test('главный врач видит «Провести первичный осмотр», обычный врач — нет', async () => {
     capsAnswer = { examine: true, set_attending: true, admit: true };
-    let root = await renderScreen();
-    const exam = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Ждут первичного осмотра'));
+    let root = await renderScreen({ only: 'patients' });
+    const exam = walk(root).find((e) => isCard(e) && textOf(e).includes('Ждут первичного осмотра'));
     assert.ok(findBtn(exam, 'Провести первичный осмотр'), 'главному врачу кнопка обязана быть видна');
 
     // Обычный врач: сервер на этот шаг ответит отказом, и экран не предлагает
     // его вовсе — вместо кнопки подпись, кого ждут.
     capsAnswer = { examine: false, set_attending: false, admit: false };
-    root = await renderScreen();
-    const exam2 = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Ждут первичного осмотра'));
+    root = await renderScreen({ only: 'patients' });
+    const exam2 = walk(root).find((e) => isCard(e) && textOf(e).includes('Ждут первичного осмотра'));
     assert.equal(findBtn(exam2, 'Провести первичный осмотр'), undefined, 'кнопка, которая ответит отказом, — тупик');
     assert.ok(textOf(exam2).includes('Ждёт главного врача'), 'экран обязан сказать, кого ждут');
 });
 
 test('осмотр публикуется одним запросом, а черновик — другим', async () => {
     capsAnswer = { examine: true, set_attending: true };
-    const root = await renderScreen();
+    const root = await renderScreen({ only: 'patients' });
     findBtn(root, 'Провести первичный осмотр').click();
     await settle();
 
@@ -435,7 +455,7 @@ test('осмотр публикуется одним запросом, а чер
 
 test('после публикации осмотра экран сразу спрашивает лечащего врача', async () => {
     capsAnswer = { examine: true, set_attending: true };
-    const root = await renderScreen();
+    const root = await renderScreen({ only: 'patients' });
     findBtn(root, 'Провести первичный осмотр').click();
     await settle();
 
@@ -466,18 +486,18 @@ test('после публикации осмотра экран сразу сп�
 test('«Ждут лечащего врача» — отдельная очередь, и на строке видно, кто осмотрел', async () => {
     capsAnswer = { examine: true, set_attending: true };
     admissionsRows = [ORDER_REG, ORDER_DOC, IN_BED, EXAMINED];
-    const root = await renderScreen();
+    const root = await renderScreen({ only: 'patients' });
     admissionsRows = [ORDER_REG, ORDER_DOC, IN_BED];
 
-    const card = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Ждут лечащего врача'));
+    const card = walk(root).find((e) => isCard(e) && textOf(e).includes('Ждут лечащего врача'));
     assert.ok(card, 'осмотренный пациент без лечащего врача обязан быть виден отдельно');
     assert.ok(textOf(card).includes('Каримова Дилноза'));
     assert.ok(textOf(card).includes('Главный врач'), 'на строке видно, кто осмотрел');
     assert.ok(findBtn(card, 'Назначить лечащего врача'), 'кнопка назначения — здесь');
     // Осмотренный лежит: он и в «В отделении», и подписан «лечащий врач не назначен».
-    const inWard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('В отделении'));
+    const inWard = walk(root).find((e) => isCard(e) && textOf(e).includes('В отделении'));
     assert.ok(textOf(inWard).includes('Каримова Дилноза'));
-    assert.ok(textOf(inWard).includes('лечащий врач не назначен'),
+    assert.ok(textOf(inWard).includes('не назначен'),   // WARD_TABLE_V1 — в колонке «Лечащий врач», жёлтым
         'лежащий пациент без лечащего врача — недоделанная работа отделения, и видно её отсюда');
 });
 
@@ -603,13 +623,16 @@ test('экран рисует свои очереди каждой роли, к�
     for (const [name, sections] of Object.entries(SHIFT_ROLES)) {
         perms.setEffectiveFromRole({ name, permissions: { sections, levels: { beds: 'editor' } } });
         assert.strictEqual(perms.isRouteAllowed('admissions'), true, name + ': маршрут #admissions отказал');
-        const root = await renderScreen();
-        const txt = textOf(root);
-        for (const queue of ['Ждут размещения', 'В отделении', 'Ждут первичного осмотра']) {
-            assert.ok(txt.includes(queue), name + ': очереди «' + queue + '» нет на экране');
+        // INPATIENT_QUEUES_SPLIT_V1 — очереди разошлись по двум вкладкам:
+        // пост видит размещение, врач — лежащих и осмотр. Проверяем обе.
+        const orders = textOf(await renderScreen());
+        assert.ok(orders.includes('Ждут размещения'), name + ': очереди «Ждут размещения» нет на экране');
+        assert.ok(!orders.includes('Список госпитализаций не загрузился'), name + ': экран открылся сбоем');
+        assert.ok(orders.includes('Иванов Иван Иванович'), name + ': заявка не видна');
+        const doctor = textOf(await renderScreen({ only: 'patients' }));
+        for (const queue of ['В отделении', 'Ждут первичного осмотра']) {
+            assert.ok(doctor.includes(queue), name + ': очереди «' + queue + '» нет на вкладке врача');
         }
-        assert.ok(!txt.includes('Список госпитализаций не загрузился'), name + ': экран открылся сбоем');
-        assert.ok(txt.includes('Иванов Иван Иванович'), name + ': заявка не видна');
     }
     perms.setFullAccess('Admin');
 });
@@ -620,4 +643,118 @@ test('кассиру раздел отказывает чисто — маршр
     assert.strictEqual(perms.isModuleAllowed('beds'), false, 'и доска коек тем же ключом');
     assert.strictEqual(view.canOpenAdmissions(), false);
     perms.setFullAccess('Admin');
+});
+
+// ─── WARD_ROW_TO_CASE_FILE_V1 — клик по лежащему ведёт в историю болезни ────
+//
+// Владелец: «when pressed to the card, we should transfer into the patient's
+// document cabinet, full screen — we don't need there a dialogue window».
+// Оформление истории — работа на полчаса с десятком бумаг, и делают её на
+// рабочем экране; окно карточки было лишней дверью перед ним.
+test('клик по лежащему в «В отделении» открывает историю болезни на весь экран, а не окно', async () => {
+    const root = await renderScreen({ only: 'patients' });
+    const inWard = walk(root).find((e) => isCard(e) && textOf(e).includes('В отделении'));
+    assert.ok(inWard, 'списка «В отделении» нет');
+
+    // Имя пациента в строке — кнопка (patientRow): именно по ней и жмут.
+    const nameBtn = walk(inWard).find((e) =>
+        String(e.tagName).toUpperCase() === 'BUTTON' && textOf(e).includes('Сидоров Сидор'));
+    assert.ok(nameBtn, 'кнопка с именем лежащего не найдена');
+
+    // Экран отрисован без onNavigate — переход идёт через window.easymed.navigate,
+    // как и goToMarSheet. Подменяем и считаем.
+    const calls = [];
+    const overlaysBefore = BODY.children.length;
+    globalThis.window.easymed = { navigate: (...a) => calls.push(a) };
+    try {
+        nameBtn.click();
+        await settle();
+    } finally {
+        delete globalThis.window.easymed;
+    }
+
+    assert.equal(calls.length, 1, 'переход не произошёл: ' + JSON.stringify(calls));
+    assert.equal(calls[0][0], 'case-overview', 'ушли не на обзор госпитализации, а на ' + calls[0][0]);   // CASE_OVERVIEW_V1
+    assert.ok(Number.isInteger(calls[0][1] && calls[0][1].admissionId) && calls[0][1].admissionId > 0,
+        'история открыта без номера госпитализации: ' + JSON.stringify(calls[0][1]));
+    // И НИКАКОГО окна поверх: раньше здесь открывалась карточка госпитализации.
+    assert.equal(BODY.children.length, overlaysBefore, 'клик открыл окно вместо перехода на экран');
+});
+
+// ─── A4_LETTERHEAD_V1 — документ истории болезни лежит на листе с шапкой ───
+//
+// Владелец: «treat this section as an A4 list with the header of the clinic
+// from the documents section». Шапка берётся из window.CLINIC — оттуда же её
+// берут печатные бланки, поэтому экран и бумага показывают одну клинику.
+test('шапка листа собирается из реквизитов клиники, а лист — из шапки и содержимого', async () => {
+    const { a4Letterhead, a4Sheet, clinicLetterheadData } = await import('../views/a4-letterhead.js');
+
+    const clinic = { name_ru: 'Клиника «Здоровье»', legal_name: 'ООО «Здоровье»',
+        address: 'ул. Тестовая, 1', phone: '+998 71 000 00 00', logo_url: 'data:image/png;base64,AAA' };
+
+    const d = clinicLetterheadData(clinic);
+    assert.equal(d.name, 'Клиника «Здоровье»');
+    assert.equal(d.logo, 'data:image/png;base64,AAA');
+
+    const head = a4Letterhead({ title: 'Осмотр приёмного врача', date: '08.09.2026', clinic });
+    assert.equal(head.className, 'a4-head', 'это не шапка листа');
+    const t = textOf(head);
+    for (const must of ['Клиника «Здоровье»', 'ООО «Здоровье»', 'ул. Тестовая, 1', '+998 71 000 00 00', 'Осмотр приёмного врача', '08.09.2026']) {
+        assert.ok(t.includes(must), 'в шапке нет: ' + must);
+    }
+    assert.ok(walk(head).some((e) => e.className === 'a4-logo'), 'логотип клиники не попал в шапку');
+
+    // Без реквизитов шапка не падает и не печатает «undefined».
+    const bare = textOf(a4Letterhead({ title: 'Документ', date: '01.01.2026', clinic: {} }));
+    assert.ok(!/undefined|null/.test(bare), 'пустые реквизиты протекли текстом: ' + bare);
+
+    // Лист: полоса сверху, шапка, содержимое, полоса снизу — в этом порядке.
+    const sheet = a4Sheet({ title: 'Документ', date: '01.01.2026', clinic, children: [mkEl('div')] });
+    assert.equal(sheet.className, 'a4-paper');
+    const kids = sheet.children.map((c) => c.className);
+    assert.deepEqual(kids, ['a4-band-top', 'a4-head', '', 'a4-band-bottom']);
+});
+
+test('панель документа истории болезни рисует ЛИСТ, а не карточку с заголовком', async () => {
+    // Статически: экран не поднять в этой обвязке без RPC истории, а правило
+    // простое — документ строится через a4Sheet, и карточного заголовка нет.
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'views', 'case-workspace.js'), 'utf8');
+    assert.ok(/a4Sheet\(\{\s*title:\s*ed\.title/.test(src), 'документ больше не рисуется листом через a4Sheet');
+    assert.ok(!/class:\s*'card cw-doc'/.test(src), 'вернулась карточка вместо листа');
+    assert.ok(!/card-header'\s*\},\s*h\('h3'/.test(src.slice(src.indexOf('buildReviewEditor({'))), 'вернулся карточный заголовок документа');
+});
+
+
+// ─── ADMITTING_DOCTOR_V1 — приёмный врач видит СВОЮ кнопку ───────────────────
+test('ADMITTING_DOCTOR_V1: приёмный врач видит «Осмотр приёмного врача» и уходит в документы на этот осмотр; чужой врач — подпись, кого ждут', async () => {
+    const savedRows = admissionsRows;
+    const savedCaps = capsAnswer;
+    const calls = [];
+    globalThis.window.easymed = { navigate: (...a) => calls.push(a), state: { user: { id: 77, role: 'doctor', full_name: 'Юсупов А.' } } };
+    try {
+        capsAnswer = { examine: false, set_attending: false, admit: false };
+        admissionsRows = [{ ...IN_BED, admitting_doctor_id: 77, admitting: { full_name: 'Юсупов А.' } }];
+        let root = await renderScreen({ only: 'patients' });
+        const mine = findBtn(root, 'Осмотр приёмного врача');
+        assert.ok(mine, 'приёмному врачу нужна кнопка своего осмотра');
+        assert.equal(findBtn(root, 'Провести первичный осмотр'), undefined, 'осмотр главного врача — не его кнопка');
+        mine.click();
+        await settle();
+        const nav = calls.find((a) => a[0] === 'case-file');
+        assert.ok(nav, 'кнопка обязана вести в документы госпитализации');
+        assert.deepEqual(nav[1], { admissionId: 13, kind: 'intake' }, 'и открывать именно осмотр приёмного врача');
+
+        // Чужой врач: кнопки нет, а подпись называет, кого ждут.
+        globalThis.window.easymed.state.user = { id: 78, role: 'doctor', full_name: 'Другой врач' };
+        root = await renderScreen({ only: 'patients' });
+        assert.equal(findBtn(root, 'Осмотр приёмного врача'), undefined);
+        assert.ok(textOf(root).includes('Ждёт приёмного врача: Юсупов А.'), 'экран обязан сказать, кого ждут: ' + textOf(root).slice(0, 400));
+    } finally {
+        admissionsRows = savedRows;
+        capsAnswer = savedCaps;
+        delete globalThis.window.easymed;
+    }
 });

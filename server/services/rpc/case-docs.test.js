@@ -30,6 +30,7 @@ import {
   CASE_DOC_SET, SURGICAL_KINDS, OTHER_KIND,
 } from './inpatient-reviews.js';
 import { RpcError } from './inpatient-flow.js';
+import { admissionTitleSheetSave } from './title-sheet.js';   // TITLE_SHEET_V1
 
 const admin      = { id: 1, role: 'admin' };
 const registrar  = { id: 2, role: 'registrar' };
@@ -76,7 +77,8 @@ function seed() {
  */
 function inBed(ctx, hoursAgo = 30) {
   const { admission } = admissionOrderCreate(ctx.db, { patient_id: ctx.patientId, department: 'Хирургия' }, registrar);
-  const res = admissionAdmit(ctx.db, { admission_id: admission.id, bed_id: ctx.bedId }, nurse);
+  // ADMITTING_DOCTOR_V1 — медсестра называет приёмного врача: doctor (5) пишет осмотр при поступлении.
+  const res = admissionAdmit(ctx.db, { admission_id: admission.id, bed_id: ctx.bedId, admitting_doctor_id: doctor.id }, nurse);
   ctx.db.prepare('UPDATE admissions SET admitted_at = ? WHERE id = ?').run(at(-hoursAgo), res.admission.id);
   return ctx.db.prepare('SELECT * FROM admissions WHERE id = ?').get(res.admission.id);
 }
@@ -107,7 +109,7 @@ test('срок каждого документа ВЫЧИСЛЕН от разм�
   assert.equal(st.base_source, 'admitted');
 
   const base = NOW - 30 * H;
-  const expect = { consent: 2, intake: 2, head_review: 72, primary: 24, rationale: 72 };
+  const expect = { intake: 2, head_review: 72, primary: 24, rationale: 72 };   // CONSENT_OUT_V1 — согласия в наборе нет
   for (const [kind, hours] of Object.entries(expect)) {
     assert.equal(itemOf(st, kind).due_at, iso(base + hours * H), `срок «${kind}»`);
   }
@@ -146,15 +148,15 @@ test('пока пациент не на койке, часы не идут и ч
 
 test('ОДИН И ТОТ ЖЕ документ «ждёт» до срока и «просрочен» после — разница только в часах', () => {
   const ctx = seed();
-  const adm = inBed(ctx, 1);   // размещён час назад: срок согласия — 2 ч
+  const adm = inBed(ctx, 1);   // размещён час назад: срок осмотра приёмного врача — 2 ч
 
-  const early = itemOf(docs(ctx, adm, 0), 'consent');
+  const early = itemOf(docs(ctx, adm, 0), 'intake');
   assert.ok(['pending', 'next'].includes(early.state), `до срока: ${early.state}`);
 
-  const late = itemOf(docs(ctx, adm, 2), 'consent');
+  const late = itemOf(docs(ctx, adm, 2), 'intake');
   assert.equal(late.state, 'overdue', 'через два часа тот же пункт просрочен');
   // Данные не менялись — менялся только вопрос «который час».
-  assert.equal(ctx.db.prepare("SELECT COUNT(*) n FROM admission_reviews WHERE kind='consent'").get().n, 0);
+  assert.equal(ctx.db.prepare("SELECT COUNT(*) n FROM admission_reviews WHERE kind='intake'").get().n, 0);
   ctx.db.close();
 });
 
@@ -162,13 +164,14 @@ test('опубликованный документ — зелёный, черн
   const ctx = seed();
   const adm = inBed(ctx, 1);
 
-  admissionReviewSave(ctx.db, { admission_id: adm.id, kind: 'consent', body: 'Согласие подписано', publish: true }, doctor);
+  // CONSENT_OUT_V1 — согласия в наборе нет; опубликованный документ здесь — осмотр заведующего.
+  admissionReviewSave(ctx.db, { admission_id: adm.id, kind: 'head_review', body: 'Осмотр заведующего', publish: true }, doctor);
   admissionReviewSave(ctx.db, { admission_id: adm.id, kind: 'intake', body: 'Осмотр приёмного врача', publish: false }, doctor);
 
   const st = docs(ctx, adm, 0);
-  assert.equal(itemOf(st, 'consent').state, 'published');
-  assert.ok(itemOf(st, 'consent').published_at, 'у опубликованного есть время публикации');
-  assert.equal(itemOf(st, 'consent').author_name, 'Сотрудник doc1');
+  assert.equal(itemOf(st, 'head_review').state, 'published');
+  assert.ok(itemOf(st, 'head_review').published_at, 'у опубликованного есть время публикации');
+  assert.equal(itemOf(st, 'head_review').author_name, 'Сотрудник doc1');
   const intake = itemOf(st, 'intake');
   assert.ok(['draft', 'next'].includes(intake.state), `черновик: ${intake.state}`);
   assert.equal(intake.has_draft, true);
@@ -215,7 +218,9 @@ test('ХИРУРГИЧЕСКИЙ БЛОК включается ДАННЫМИ, �
     assert.equal(itemOf(st0, kind).applies, false, `${kind} у терапевтического пациента не спрашивают`);
     assert.equal(itemOf(st0, kind).required, false);
   }
-  assert.equal(st0.progress.total, 7, 'обязательных без хирургии и без этапного эпикриза — семь');
+  // TITLE_SHEET_V1 — плюс титульный лист медсестры: шесть врачебных + один
+  // (CONSENT_OUT_V1 — согласие из набора ушло на титульный лист).
+  assert.equal(st0.progress.total, 7, 'обязательных без хирургии и без этапного эпикриза — шесть врачебных и титульный лист');
 
   // Анестезиолог написал свой осмотр — значит оперируют.
   admissionReviewSave(ctx.db, { admission_id: adm.id, kind: 'anesthesia', body: 'Осмотр анестезиолога', publish: true }, anesth);
@@ -223,7 +228,7 @@ test('ХИРУРГИЧЕСКИЙ БЛОК включается ДАННЫМИ, �
   assert.equal(st1.surgical, true);
   assert.equal(itemOf(st1, 'operation').applies, true, 'протокол операции стал обязательным');
   assert.equal(itemOf(st1, 'preop').required, true);
-  assert.equal(st1.progress.total, 10, 'три хирургические бумаги добавились к семи');
+  assert.equal(st1.progress.total, 10, 'три хирургические бумаги добавились к шести врачебным и титульному листу (CONSENT_OUT_V1)');
   assert.ok(st1.surgical_from, 'у блока есть своя точка отсчёта');
   assert.equal(itemOf(st1, 'operation').due_at, iso(Date.parse(st1.surgical_from) + 24 * H));
   ctx.db.close();
@@ -267,7 +272,8 @@ test('когда остался только эпикриз — он и стан
   ctx.db.prepare(`INSERT INTO admission_reviews (admission_id, kind, body, author_id, author_role, published_at)
                   VALUES (?, 'round', 'Обход', 5, 'doctor', ?)`).run(treated.id, at(0));
   const st = docs(ctx, treated, 0);
-  assert.deepEqual(st.discharge_gate.incomplete, ['discharge'], 'кроме эпикриза не осталось ничего');
+  // TITLE_SHEET_V1 — титульный лист медсестры не заполнен, но «следующий шаг» врача он не занимает.
+  assert.deepEqual(st.discharge_gate.incomplete, ['title', 'discharge'], 'кроме эпикриза и листа медсестры не осталось ничего');
   assert.equal(st.next_kind, 'discharge');
   ctx.db.close();
 });
@@ -445,7 +451,7 @@ test('чек-лист и сборку читают те, кто ведёт па�
   const ctx = seed();
   const adm = inBed(ctx, 1);
   for (const u of [admin, headDoctor, doctor, nurse]) {
-    assert.ok(admissionCaseDocs(ctx.db, { admission_id: adm.id }, u).items.length === CASE_DOC_SET.length, `роль ${u.role}`);
+    assert.ok(admissionCaseDocs(ctx.db, { admission_id: adm.id }, u).items.length === CASE_DOC_SET.length + 1, `роль ${u.role}`);   // + титульный лист (TITLE_SHEET_V1)
   }
   assert.throws(() => admissionCaseDocs(ctx.db, { admission_id: adm.id }, cashier),
     (e) => e instanceof RpcError && e.status === 403);
@@ -486,7 +492,50 @@ test('набор — один на все госпитализации, и пр�
   const a1 = inBed(ctx, 1);
   ctx.db.prepare("UPDATE admissions SET department='Терапия' WHERE id=?").run(a1.id);
   const st = docs(ctx, a1, 0);
-  assert.deepEqual(st.items.map((i) => i.kind), CASE_DOC_SET.map((d) => d.kind));
-  assert.equal(st.progress.total, 7, 'общий набор без хирургического блока');
+  assert.deepEqual(st.items.map((i) => i.kind), ['title', ...CASE_DOC_SET.map((d) => d.kind)]);   // TITLE_SHEET_V1 — лист первым
+  assert.equal(st.progress.total, 7, 'общий набор без хирургического блока, плюс титульный лист (CONSENT_OUT_V1)');
   ctx.db.close();
+});
+
+// ─── TITLE_SHEET_V1 — титульный лист медсестры в чек-листе и в сборке ───────
+const SHEET_FULL = { height_cm: 172, weight_kg: 80, temp_c: 36.6, bp_sys: 120, bp_dia: 80, pulse_bpm: 72, pediculosis: 'none', sanitation: 'full' };
+
+test('TITLE_SHEET_V1: титульный лист — первая строка чек-листа, в прогрессе, но не «следующий шаг» врача', () => {
+  const ctx = seed();
+  const adm = inBed(ctx, 1);
+  const state = docs(ctx, adm, 0);
+  assert.equal(state.items[0].kind, 'title');
+  assert.equal(state.items[0].state, 'pending');
+  assert.equal(state.items[0].order, -1);
+  assert.notEqual(state.next_kind, 'title', '«следующий шаг» — врачебный, лист — дело медсестры');
+  const requiredDoctorDocs = state.items.slice(1).filter((it) => it.required).length;
+  assert.equal(state.progress.total, requiredDoctorDocs + 1, 'лист должен считаться в обязательном наборе');
+  assert.ok(state.discharge_gate.incomplete.includes('title'));
+
+  assert.equal(docs(ctx, adm, 2).items[0].state, 'overdue', 'через три часа без листа — просрочен');
+
+  admissionTitleSheetSave(ctx.db, { admission_id: adm.id, sheet: SHEET_FULL }, nurse);
+  const done = docs(ctx, adm, 2);
+  assert.equal(done.items[0].state, 'published');
+  assert.ok(!done.discharge_gate.incomplete.includes('title'));
+  assert.equal(done.progress.done, 1);
+});
+
+test('TITLE_SHEET_V1: врачебная запись рода title не принимается — это не документ врача', () => {
+  const ctx = seed();
+  const adm = inBed(ctx, 1);
+  assert.throws(() => admissionReviewSave(ctx.db, { admission_id: adm.id, kind: 'title', body: 'x', publish: true }, headDoctor),
+    (e) => e instanceof RpcError && /Неизвестный род/.test(e.message));
+});
+
+test('TITLE_SHEET_V1: собранная история несёт титульный лист — тот же снимок идёт на бумагу', () => {
+  const ctx = seed();
+  const adm = inBed(ctx, 1);
+  admissionTitleSheetSave(ctx.db, { admission_id: adm.id, sheet: { height_cm: 172, weight_kg: 80 } }, nurse);
+  const file = admissionCaseFile(ctx.db, { admission_id: adm.id }, doctor);
+  assert.ok(file.title_sheet, 'в снимке нет титульного листа');
+  assert.equal(file.title_sheet.sheet.height_cm, 172);
+  assert.equal(file.title_sheet.bmi, 27.0);
+  assert.equal(file.title_sheet.patient.full_name, 'Салимбоев Шухрат');
+  assert.equal(file.title_sheet.complete, false);
 });

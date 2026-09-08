@@ -1,0 +1,16 @@
+-- 113_admitting_doctor.sql — ADMITTING_DOCTOR_V1: приёмный врач госпитализации.
+--
+-- Владелец (2026-09-08): «the nurse should select the admitting doctor, and
+-- admitting doctor should fill the blank [осмотр приёмного врача], then head
+-- doctor or selected doctor should fill the treating doctor».
+--
+-- До этого у госпитализации было два врача: направивший (doctor_id) и лечащий
+-- (attending_doctor_id). Третьего — того, кто ОСМАТРИВАЕТ при поступлении, —
+-- не было: «Осмотр приёмного врача» писал кто угодно из врачей, а в кабинете
+-- ждать пациента было некому. Теперь медсестра при размещении называет его
+-- по имени; ему открыт этот осмотр и назначение лечащего.
+--
+-- NULL — «не назначен» (старые госпитализации и вызовы без поля): осмотр и
+-- назначение тогда, как раньше, за главным врачом. Только ADD COLUMN —
+-- пересборки нет (урок 1.1.0).
+ALTER TABLE admissions ADD COLUMN admitting_doctor_id INTEGER REFERENCES users(id);

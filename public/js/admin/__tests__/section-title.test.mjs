@@ -356,7 +356,7 @@ test('снят ЗАГОЛОВОК, а не шапка: подзаголовок 
     const text = descendants(pane).map((n) => n._text || '').join(' ');
     assert.equal(TITLE_EL.textContent, 'Стационар', 'верхняя панель обязана называть раздел так же, как меню');
     assert.deepEqual(titlesIn(pane).map((n) => n.textContent), [], '«Стационар» напечатан второй раз внутри экрана');
-    assert.ok(text.includes('Заявки на госпитализацию, размещение на койках'), 'вместе с заголовком исчез подзаголовок');
+    assert.ok(text.includes('Заявки на госпитализацию и размещение на койках'), 'вместе с заголовком исчез подзаголовок');   // INPATIENT_QUEUES_SPLIT_V1
     const btns = descendants(pane).filter((n) => n.tagName === 'BUTTON').map((n) => labelOf(n));
     assert.ok(btns.some((b) => b.includes('Заявка на госпитализацию')), 'кнопка действия уехала вместе с заголовком');
     assert.ok(btns.some((b) => b.includes('Обновить')), 'кнопка «Обновить» уехала вместе с заголовком');

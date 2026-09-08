@@ -47,9 +47,14 @@
 // дорогой вид дубля.
 
 import { supabase } from '../../supabase.js';
+import { sectionsFor, richSection, richToolbar, readRich, applyRich, RICH_KEYS, insertBlock, fireInput } from './case-doc-a4.js';   // CASE_DOC_A4_V1 / CASE_DX_PICK_V1
+import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — список диагнозов с ролями
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
-import { h, Icon, Tag, toast, clear, field, fmtDate, fmtDateTime, initials } from '../ui.js';
+import { h, Icon, Tag, toast, clear, field, fmtDate, fmtDateTime } from '../ui.js';
+import { inpatientModal, patientAnchor } from './inpatient-modal.js';   // TITLE_SHEET_V1 — вынесено, чтобы не было кольца
+import { openAdmissionTitleSheetModal } from './title-sheet.js';   // TITLE_SHEET_V1 — шаг 2 размещения
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { moneyDisplay } from '../../shared/money-input.js';   // CASE_OVERVIEW_V1 — сумма счёта в подтверждении выписки
 // BED_BOARD_SHARED_V1 — окно выбора койки рисует ДОСКУ КОЕК, а не свой список.
 // Адрес модуля с тем же '?v=', что у admin.js и views/admissions.js: разошедшийся
 // суффикс — это ВТОРОЙ экземпляр ward-beds.js со своим `state`, то есть доска в
@@ -73,65 +78,10 @@ import { caseDocsPanel, caseDocTitle, assembleCaseFile } from './case-docs.js?v=
 const ADMISSION_TYPES = [['planned', 'Плановая'], ['emergency', 'Экстренная']];
 const STAY_MODES = [['round', 'Круглосуточно'], ['day', 'Дневной стационар']];
 
-// Одна и та же оболочка окна для всех четырёх диалогов: два окна госпитализации
-// с разной рамкой читаются как два разных продукта.
-//
-// `secondaryLabel` — ВТОРОЕ действие того же окна, и заведено оно ровно под
-// одно: «Сохранить черновик» рядом с «Опубликовать осмотр». Осмотр набирают по
-// частям, между двумя другими делами, и одна кнопка заставляла бы врача либо
-// писать документ целиком с первого раза, либо терять начатое (см. шапку
-// rpc/inpatient-reviews.js). Второе действие НЕ закрывает окно: черновик
-// сохраняют, чтобы продолжить.
-// MAR_SHEET_V1 — оболочка ЭКСПОРТИРУЕТСЯ (Задача 5). Лист назначений и рабочее
-// место медсестры открывают свои диалоги — «+ Назначение», «Отменить
-// назначение», подтверждение «5 прав», «Не введено» — и это те же окна того же
-// раздела. Второй shell рядом означал бы два вида окна госпитализации: одна
-// рамка у заявки, другая у дозы, которую по этой заявке вводят.
-export function inpatientModal(title, icon, bodyEls, submitLabel, onSubmit, { width = 520, secondaryLabel = null, onSecondary = null } = {}) {
-    const overlay = h('div', { class: 'modal' });
-    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
-    const onKey = (ev) => { if (ev.key === 'Escape') close(); };
-    document.addEventListener('keydown', onKey);
-    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
-
-    const foot = [h('button', { class: 'btn', type: 'button', onclick: close }, tr('Закрыть')), h('span', { class: 'grow' })];
-    if (secondaryLabel && onSecondary) {
-        const secBtn = h('button', { class: 'btn', type: 'button' }, secondaryLabel);
-        secBtn.addEventListener('click', async () => {
-            secBtn.disabled = true;
-            const prev = secBtn.textContent;
-            secBtn.textContent = tr('Выполняем…');
-            try { await onSecondary(); } catch (e) { toast((e && e.message) || tr('Не удалось.'), 'fail'); }
-            secBtn.disabled = false;
-            secBtn.textContent = prev;
-        });
-        foot.push(secBtn);
-    }
-    if (submitLabel) {
-        const submitBtn = h('button', { class: 'btn btn-primary', type: 'button' }, submitLabel);
-        submitBtn.addEventListener('click', async () => {
-            submitBtn.disabled = true;
-            const prev = submitBtn.textContent;
-            submitBtn.textContent = tr('Выполняем…');
-            let ok = false;
-            try { ok = await onSubmit(); } catch (e) { toast((e && e.message) || tr('Не удалось.'), 'fail'); }
-            if (ok) { close(); return; }
-            submitBtn.disabled = false;
-            submitBtn.textContent = prev;
-        });
-        foot.push(submitBtn);
-    }
-
-    overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: width + 'px', maxWidth: 'calc(100vw - 32px)' } },
-        h('header', { class: 'modal-head' },
-            h('h2', null, Icon(icon, { size: 16 }), ' ', title),
-            h('button', { class: 'modal-close', onclick: close }, '×')),
-        h('div', { class: 'modal-body', style: { alignContent: 'start' } }, ...bodyEls.filter(Boolean)),
-        h('footer', { class: 'modal-foot' }, ...foot),
-    ));
-    document.body.appendChild(overlay);
-    return { close, overlay };
-}
+// Оболочка окна (inpatientModal) и якорь пациента (patientAnchor) живут в
+// inpatient-modal.js — см. шапку там. Здесь они РЕЭКСПОРТИРУЮТСЯ, чтобы лист
+// назначений, рабочее место медсестры и тесты открывали их по прежнему адресу.
+export { inpatientModal, patientAnchor };
 
 const modal = inpatientModal;
 
@@ -150,26 +100,28 @@ export function goToMarSheet(admissionId, onNavigate) {
     return true;
 }
 
-export function patientAnchor(name, sub) {
-    return h('div', {
-        style: {
-            display: 'flex', alignItems: 'center', gap: '11px', padding: '11px 13px',
-            background: 'var(--primary-25, #f2faf8)', border: '1px solid var(--primary-100, #d7efe9)',
-            borderRadius: '11px',
-        },
-    },
-        h('span', {
-            style: {
-                width: '38px', height: '38px', borderRadius: '999px', flex: '0 0 38px',
-                background: 'var(--primary-600, #1f7a72)', color: '#fff',
-                display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: '15px',
-            },
-        }, initials(name || '?')),
-        h('div', { style: { minWidth: 0 } },
-            h('div', { style: { fontSize: '17px', fontWeight: 800, color: 'var(--ink-900)', lineHeight: 1.2 } }, name || '—'),
-            sub ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, sub) : null),
-    );
+// WARD_ROW_TO_CASE_FILE_V1 — переход в историю болезни, тем же приёмом. Раньше
+// он был вписан прямо в кнопку карточки; теперь туда же ведёт и строка
+// лежащего пациента в «В отделении» (владелец: «when pressed to the card, we
+// should transfer into the patient's document cabinet, full screen — we don't
+// need there a dialogue window»). Один переход на оба места, чтобы они не
+// разошлись.
+export function goToCaseFile(admissionId, onNavigate) {
+    const nav = onNavigate || (typeof window !== 'undefined' && window.easymed && window.easymed.navigate);
+    if (!nav) return false;
+    nav('case-file', { admissionId });
+    return true;
 }
+
+// CASE_OVERVIEW_V1 — обзор госпитализации (экран врача): туда ведёт строка
+// лежащего в «Пациентах» и строка в «Госпитализациях». Документы — из шапки.
+export function goToCaseOverview(admissionId, onNavigate) {
+    const nav = onNavigate || (typeof window !== 'undefined' && window.easymed && window.easymed.navigate);
+    if (!nav) return false;
+    nav('case-overview', { admissionId });
+    return true;
+}
+
 
 // ---------------------------------------------------------------------------
 // 1. Заявка на госпитализацию (регистратура)
@@ -349,12 +301,21 @@ export function openAdmissionBedPicker({ admission, onDone } = {}) {
             : h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Палата в заявке не указана — выберите любую свободную койку.')),
         pillsBox,
         boardBox,
-    ], tr('Положить'), async () => {
+    ], tr('Далее'), async () => {
         if (!chosenBed) { toast(tr('Выберите койку.'), 'fail'); return false; }
-        const { error } = await supabase.rpc('admission_admit', { admission_id: admission.id, bed_id: chosenBed.id });
-        if (error) { toast((error.message) || tr('Не удалось положить на койку.'), 'fail'); return false; }
-        toast(tr('Пациент размещён на койке.'), 'ok');
-        if (onDone) await onDone();
+        // TITLE_SHEET_V1 — койка выбрана; размещение делает окно титульного
+        // листа ОДНИМ вызовом admission_admit с листом (владелец: «nurse should
+        // collect the title list» — в том же шаге, что и койка). «Назад»
+        // возвращает сюда же.
+        const ward = (chosenBed.wards && chosenBed.wards.name)
+            ? chosenBed.wards
+            : (data && Array.isArray(data.wards) ? data.wards.find((w) => w.id === chosenBed.ward_id) : null);
+        openAdmissionTitleSheetModal({
+            admission,
+            bed: { id: chosenBed.id, code: chosenBed.code, ward_name: ward ? ward.name : '' },
+            onDone,
+            onBack: () => openAdmissionBedPicker({ admission, onDone }),
+        });
         return true;
     }, { width: 820 });
 }
@@ -518,13 +479,7 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
         // окна. Карточка остаётся местом, откуда туда заходят.
         body.appendChild(h('button', {
             class: 'btn btn-outline btn-sm', type: 'button', style: { marginTop: '10px' },
-            onclick: () => {
-                close();
-                // Тот же приём, что у goToMarSheet выше: карточку открывают из
-                // разных мест, и не каждое передаёт навигацию аргументом.
-                const nav = onNavigate || (typeof window !== 'undefined' && window.easymed && window.easymed.navigate);
-                if (nav) nav('case-file', { admissionId: a.id });
-            },
+            onclick: () => { close(); goToCaseFile(a.id, onNavigate); },
         }, Icon('Doc', { size: 13 }), ' ', tr('Открыть историю болезни')));
 
         const actions = h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } });
@@ -862,11 +817,24 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     const isCorrection = mode === 'correct';
     const isView = mode === 'view';
 
-    const complaints = h('textarea', { rows: '2', placeholder: tr('Что беспокоит пациента') });
-    const objective  = h('textarea', { rows: '3', placeholder: tr('Состояние, осмотр по системам, витальные показатели') });
-    const diagnosis  = h('input', { type: 'text', placeholder: tr('Диагноз при поступлении') });
-    const plan       = h('textarea', { rows: '3', placeholder: tr('Обследование, лечение, режим, стол') });
-    const body       = h('textarea', { rows: '2', placeholder: tr('Анамнез, сопутствующее, обоснование') });
+    // CASE_DOC_A4_V1 — документ пишется РАЗДЕЛАМИ ЛИСТА, а не полями формы:
+    // те же классы и та же панель форматирования, что в кабинете врача. Набор
+    // разделов зависит от рода документа (протокол операции — один сплошной
+    // текст, дневник — жалобы, объективно, план), а диагноз остаётся одной
+    // строкой простого текста: он едет в обзор, в журнал и в списки.
+    const secKeys = sectionsFor(kind);
+    const rich = {};
+    const loaded = { complaints: '', objective: '', diagnosis: '', plan: '', body: '' };
+    const diagnosis = h('input', { type: 'text', class: 'cd-dx', placeholder: tr('Диагноз при поступлении') });
+    // CASE_DX_PICK_V1 — диагноз ушёл с листа в карточку слева: там его выбирают
+    // из МКБ-10 или пишут своими словами, и там же он виден, пока пишут документ.
+    const sectionEls = secKeys.filter((key) => key !== 'diagnosis').map((key) => {
+        const made = richSection(kind, key);
+        rich[key] = made.input;
+        return made.sec;
+    });
+    const sheet = h('div', { class: 'cd-sheet' }, ...sectionEls);
+    const toolbar = richToolbar(sheet);
 
     // ЧТО ПОКАЗАТЬ В ПОЛЯХ — зависит от того, зачем окно открыли.
     //
@@ -881,11 +849,10 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     let draftId = mode === 'edit' ? reviewId : null;
     let supersedes = null;
     const fill = (r) => {
-        complaints.value = r.complaints || '';
-        objective.value = r.objective || '';
+        for (const k of ['complaints', 'objective', 'diagnosis', 'plan', 'body']) loaded[k] = r[k] || '';
+        for (const k of RICH_KEYS) if (rich[k]) applyRich(rich[k], r[k] || '');
         diagnosis.value = r.diagnosis || '';
-        plan.value = r.plan || '';
-        body.value = r.body || '';
+        fireInput(diagnosis);   // CASE_DX_LIST_V1 — карточка диагнозов перерисует список
     };
     (async () => {
         const { data } = await supabase.rpc('admission_reviews_list', { admission_id: admission.id });
@@ -903,31 +870,38 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
             draftId = src ? src.id : null;
         }
         if (src) fill(src);
-        if (isView) for (const f of [complaints, objective, diagnosis, plan, body]) f.setAttribute('readonly', '');
+        if (isView) {
+            for (const k of RICH_KEYS) if (rich[k]) rich[k].contentEditable = 'false';
+            diagnosis.setAttribute('readonly', '');
+        }
     })();
 
-    const payload = (publish) => ({
+    const payload = (publish) => {
+        // CASE_DX_LIST_V1 — написанное в поле диагноза и не добавленное кнопкой
+        // добавляется здесь: иначе текст пропал бы при публикации.
+        if (diagnosis && typeof diagnosis.dxCommit === 'function') diagnosis.dxCommit();
+        return {
         admission_id: admission.id,
         // Исправление НИКОГДА не правит прежнюю строку: review_id пуст, а
         // прежняя запись называется в `supersedes` и закрывается ссылкой.
         review_id: isCorrection ? null : draftId,
         supersedes,
         kind,
-        complaints: complaints.value.trim(),
-        objective: objective.value.trim(),
-        diagnosis: diagnosis.value.trim(),
-        plan: plan.value.trim(),
-        body: body.value.trim(),
+        // Раздел, которого у ЭТОГО документа нет, не стирается: его прежнее
+        // значение уходит обратно как было. Иначе смена рода документа молча
+        // вычищала бы то, что писали в другом.
+        complaints: rich.complaints ? readRich(rich.complaints) : (loaded.complaints || ''),
+        objective: rich.objective ? readRich(rich.objective) : (loaded.objective || ''),
+        diagnosis: secKeys.includes('diagnosis') ? diagnosis.value.trim() : (loaded.diagnosis || ''),
+        plan: rich.plan ? readRich(rich.plan) : (loaded.plan || ''),
+        body: rich.body ? readRich(rich.body) : (loaded.body || ''),
         publish,
-    });
+        };
+    };
 
     const editorFields = [
         patientAnchor(p.full_name || '', [p.mrn, admission.department, admission.admission_no].filter(Boolean).join(' · ')),
-        field(tr('Жалобы'), complaints),
-        field(tr('Объективно'), objective),
-        field(tr('Диагноз'), diagnosis, { required: isPrimary }),
-        field(tr('План обследования и лечения'), plan),
-        field(tr('Дополнительно'), body),
+        sheet,
         isPrimary
             ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 tr('После публикации осмотра нужно назначить лечащего врача — без него назначений не будет.'))
@@ -950,6 +924,10 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     ];
 
     const submit = async () => {
+        // CASE_DX_LIST_V1 — сперва забираем написанное в поле диагноза, и только
+        // потом спрашиваем, есть ли диагноз: иначе осмотр отклонялся бы у врача,
+        // который диагноз написал, но не нажал «Добавить свой».
+        if (diagnosis && typeof diagnosis.dxCommit === 'function') diagnosis.dxCommit();
         if (isPrimary && !diagnosis.value.trim()) { toast(tr('Укажите диагноз.'), 'fail'); return false; }
         const { data, error } = await supabase.rpc('admission_review_save', payload(true));
         if (error) { toast((error.message) || tr('Не удалось сохранить осмотр.'), 'fail'); return false; }
@@ -975,6 +953,15 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     };
 
     return {
+        // CASE_DOC_A4_V1 — панель форматирования и вставка блока отдаются
+        // НАРУЖУ: рабочий экран ставит панель НАД листом, а правая панель
+        // «Вставить в документ» кладёт блок туда, где стоит курсор.
+        toolbar: toolbar.bar,
+        insert: (html) => insertBlock(toolbar, html),
+        // CASE_DX_PICK_V1 — поле диагноза отдаётся налево: карточка «Диагноз»
+        // рисует его сама, а редактор остаётся владельцем значения.
+        diagnosisInput: secKeys.includes('diagnosis') ? diagnosis : null,
+        diagnosisRequired: isPrimary,
         title: reviewTitle(kind, mode),
         icon: isDischarge || !REVIEW_TITLE[kind] ? 'Doc' : 'Stethoscope',
         fields: editorFields,
@@ -989,8 +976,15 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
 export function openAdmissionReviewModal(opts = {}) {
     const ed = buildReviewEditor(opts);
     if (!ed) return;
-    modal(ed.title, ed.icon, ed.fields, ed.submitLabel, ed.submit, {
-        width: 600,
+    // CASE_DOC_A4_V1 — панель форматирования над листом и в окне тоже.
+    // CASE_DX_PICK_V1 — на рабочем экране диагноз живёт в карточке слева, а в
+    // ОКНЕ левой карточки нет: поле возвращается сюда, с теми же подсказками
+    // МКБ-10. Иначе окно осмотра осталось бы без диагноза вовсе.
+    const dxField = ed.diagnosisInput
+        ? field(tr('Диагноз'), dxEditor({ carrier: ed.diagnosisInput, required: ed.diagnosisRequired }), { required: ed.diagnosisRequired })
+        : null;
+    modal(ed.title, ed.icon, [ed.toolbar, dxField, ...ed.fields].filter(Boolean), ed.submitLabel, ed.submit, {
+        width: 720,
         secondaryLabel: ed.secondaryLabel,
         onSecondary: ed.secondary,
     });
@@ -1112,7 +1106,7 @@ export function needsEpicrisis(message) {
     return EPICRISIS_REFUSALS.includes(String(message == null ? '' : message).trim());
 }
 
-export function openAdmissionDischargeRequestModal({ admission, onDone } = {}) {
+export function openAdmissionDischargeRequestModal({ admission, onDone, generateBill = false } = {}) {
     if (!admission || !admission.id) { toast(tr('Госпитализация не найдена.'), 'fail'); return; }
     const p = admission.patients || {};
 
@@ -1145,13 +1139,17 @@ export function openAdmissionDischargeRequestModal({ admission, onDone } = {}) {
         field(tr('Планируемая дата и время выписки'), whenInp),
         h('div', { class: 'muted', style: { fontSize: '12.5px' } },
             tr('Койка остаётся за пациентом. Выписку оформит старшая медсестра: фактическое время, счёт, документы.')),
+        // CASE_OVERVIEW_V1 — «discharge button with generating the payments».
+        generateBill ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+            tr('Счёт будет сформирован сразу: проживание по сегодняшний день и все невыставленные услуги — и передан в кассу.')) : null,
     ], tr('Подать заявку'), async () => {
         if (outcomeSel.value === 'transfer' && !destInp.value.trim()) {
             toast(tr('Укажите, в какое учреждение переведён пациент.'), 'fail');
             return false;
         }
-        const { error } = await supabase.rpc('admission_discharge_request', {
+        const { data, error } = await supabase.rpc('admission_discharge_request', {
             admission_id: admission.id,
+            generate_bill: generateBill,   // CASE_OVERVIEW_V1
             outcome: outcomeSel.value,
             destination: destInp.value.trim(),
             recommendations: recInp.value.trim(),
@@ -1169,7 +1167,10 @@ export function openAdmissionDischargeRequestModal({ admission, onDone } = {}) {
             if (needsEpicrisis(msg)) openAdmissionReviewModal({ admission, kind: 'discharge', onDone });
             return false;
         }
-        toast(tr('Заявка на выписку подана. Оформит старшая медсестра.'), 'ok');
+        const bill = data && data.bill;
+        toast(bill
+            ? trf('Заявка на выписку подана. Счёт {no} на {sum} сум передан в кассу.', { no: bill.invoice_number, sum: moneyDisplay(String(Math.round(Number(bill.total_amount) || 0))) || '0' })
+            : tr('Заявка на выписку подана. Оформит старшая медсестра.'), 'ok');
         if (onDone) await onDone();
         return true;
     }, { width: 560 });

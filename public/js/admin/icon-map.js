@@ -100,7 +100,7 @@ export const ICON_MAP = Object.freeze({
     // ~ Искр/«магии» нет. «Что нового» и автоматизации получают звезду.
     Sparkles:     'Interface/Star',
     // ~ Градусника нет (иконка в коде есть, ни один экран её не зовёт).
-    Thermo:       'Interface/Slider_02',
+    Thermo:       'Medical/Thermometer',
 
     // --- медицина (свой рисунок, public/assets/icons/easymed/) ---
     Bed:          'Medical/Bed',

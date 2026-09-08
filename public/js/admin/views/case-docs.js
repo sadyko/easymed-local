@@ -38,8 +38,10 @@
 // вёрстка.
 
 import { supabase } from '../../supabase.js';
+import { sanitizeStoredHtml } from '../../shared/rich-text.js';   // CASE_DOC_A4_V1 — печать разметки документа
 import { h, Icon, clear, toast, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { titleSheetPrintSection, titleSheetPrintCss, papersSummary } from './title-sheet-print.js';   // TITLE_SHEET_V1 / INPATIENT_DOCS_V1
 
 // ---------------------------------------------------------------------------
 // Словарь названий
@@ -48,6 +50,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 // покрыт тестом на полноту (__tests__/case-docs.test.mjs): род документа,
 // приехавший с сервера без имени, нарисовался бы пустой строкой.
 export const CASE_DOC_TITLE = {
+    title:       'Титульный лист',   // TITLE_SHEET_V1 — документ медсестры, первой строкой
     consent:     'Согласие на госпитализацию и вмешательство',
     intake:      'Осмотр приёмного врача',
     anesthesia:  'Осмотр анестезиолога и согласие на анестезию',
@@ -279,11 +282,16 @@ function itemRow(item, state, onDoc, activeKind = null) {
             color: item.state === 'pending' ? 'var(--ink-500)' : 'var(--ink-800)',
         },
     }, caseDocTitle(item.kind)),
-    h('span', {
-        style: { display: 'block', fontSize: '12.5px', marginTop: '2px', color: 'var(--ink-400)', lineHeight: '1.3' },
-    },
-    h('b', { style: { color: STATE_COLOR[item.state], fontWeight: '600' } }, caseDocStateWord(item.state)),
-    meta ? ' · ' : null, meta || null));
+    );
+
+    // CASE_ROW_NAME_ONLY_V1 — владелец: «we dont need information in the card
+    // only name and button». В карточке остаётся название и действие; состояние
+    // по-прежнему названо цветом рельса, кружком-иконкой и — для читалки и
+    // подсказки мыши — словами в aria-label и title строки.
+    const stateLine = [caseDocStateWord(item.state), meta].filter(Boolean).join(' · ');
+    open.setAttribute('title', caseDocTitle(item.kind) + (stateLine ? ' — ' + stateLine : ''));
+    open.setAttribute('aria-label', caseDocTitle(item.kind) + (stateLine ? ': ' + stateLine : ''));
+
 
     const actions = h('div', { style: { display: 'flex', gap: '6px', flexShrink: '0', alignItems: 'center' } });
     // РОВНО ОДНА заметная кнопка на весь список — у пункта, который сервер
@@ -354,13 +362,15 @@ export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, on
             h('b', { style: { fontSize: '13.5px' } }, tr('Документы истории болезни')),
         ));
 
-        box.appendChild(h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '7px', margin: '10px 0 0' } },
+        // CASE_ROW_NAME_ONLY_V1 — в узкой колонке строка ПЕРЕНОСИТСЯ, а не
+        // вылезает за карточку (владелец показал обрезанный «просрочено»).
+        box.appendChild(h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '7px', margin: '10px 0 0', flexWrap: 'wrap' } },
             h('span', { style: { fontSize: '17px', fontWeight: '700' } }, trf('{done}/{total}', { done: p.done, total: p.total })),
             h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('оформлено')),
             p.overdue > 0
                 ? h('span', {
                     style: {
-                        marginLeft: 'auto', fontSize: '12.5px', fontWeight: '600', color: 'var(--crit-700)',
+                        marginLeft: 'auto', maxWidth: '100%', fontSize: '12.5px', fontWeight: '600', color: 'var(--crit-700)',
                         background: 'var(--crit-50)', borderRadius: '20px', padding: '2px 9px',
                     },
                 }, trf('просрочено: {n}', { n: p.overdue }))
@@ -372,7 +382,7 @@ export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, on
         // чтение с экрана называет, какой из них выбран.
         const seg = h('div', {
             role: 'group', 'aria-label': tr('Фильтр документов'),
-            style: { display: 'flex', gap: '4px', margin: '12px 0 4px' },
+            style: { display: 'flex', gap: '4px', margin: '12px 0 4px', flexWrap: 'wrap' },
         }, ...CASE_FILTERS.map(([key, label]) => h('button', {
             class: 'btn btn-sm' + (filter === key ? ' btn-primary' : ''),
             type: 'button', 'aria-pressed': filter === key ? 'true' : 'false',
@@ -547,12 +557,23 @@ const PART_TITLES = [
 export function caseFilePrintHtml(file, { fontFaceCss = '' } = {}) {
     const c = (file && file.cover) || {};
     const documents = (file && file.documents) || [];
-    const gaps = (file && file.gaps) || [];
 
     const kv = (k, v) => `<div class="kv"><span class="k">${esc(k)}</span><span class="v">${esc(v || '—')}</span></div>`;
     const dt = (iso) => (iso ? fmtDateTime(iso) : '');
 
-    const cover = `
+    // CASE_FILE_COVER_V2 — списка «В комплекте не хватает» на обложке больше
+    // нет (владелец: «remove this from the list»). Пробелы комплекта — рабочая
+    // подсказка экрана документов (caseGateText / caseMissingTitles), а не
+    // содержание подшитой истории: на бумаге перечень того, чего НЕТ, читался
+    // как часть документа и пугал того, кому историю выдают на руки.
+    const draftsHtml = file && file.drafts_excluded
+        ? `<p class="note">${esc(trf('Черновиков не включено: {n}. Черновик — не документ и в историю болезни не подшивается.', { n: file.drafts_excluded }))}</p>`
+        : '';
+    const assembledHtml = `<p class="note">${esc(tr('Собрал'))}: ${esc([c.assembled_by, dt(c.assembled_at)].filter(Boolean).join(' · ') || '—')}</p>`;
+
+    // Прежняя обложка — для снимков, собранных ДО титульного листа: у них
+    // title_sheet нет, и печататься они должны как печатались.
+    const legacyCover = `
 <section class="cover">
   <h1>${esc(tr('История болезни'))}</h1>
   <p class="lead">${esc(c.patient_name || '')}${c.patient_mrn ? ' · ' + esc(c.patient_mrn) : ''}</p>
@@ -566,18 +587,26 @@ export function caseFilePrintHtml(file, { fontFaceCss = '' } = {}) {
     ${kv(tr('Лечащий врач'), [c.attending_name, c.attending_specialty].filter(Boolean).join(' · '))}
     ${kv(tr('Собрал'), [c.assembled_by, dt(c.assembled_at)].filter(Boolean).join(' · '))}
   </div>
-  ${gaps.length ? `<div class="gaps"><b>${esc(tr('В комплекте не хватает:'))}</b><ul>${
-      gaps.map((k) => `<li>${esc(caseDocTitle(k))}</li>`).join('')
-  }</ul></div>` : `<p class="ok">${esc(tr('Обязательный комплект документов полный.'))}</p>`}
-  ${file && file.drafts_excluded
-      ? `<p class="note">${esc(trf('Черновиков не включено: {n}. Черновик — не документ и в историю болезни не подшивается.', { n: file.drafts_excluded }))}</p>`
-      : ''}
+  ${draftsHtml}
 </section>`;
 
+    // TITLE_SHEET_V1 — первая страница собранной истории — титульный лист по
+    // бланку 003, ЦЕЛЫМ листом A4 (FORM_003_A4_V1: .ts занимает страницу, подпись
+    // прижата к низу); документы начинаются со следующей страницы.
+    const cover = file && file.title_sheet
+        ? titleSheetPrintSection(file.title_sheet, { extra: draftsHtml + assembledHtml })
+        : legacyCover;
+
     const body = documents.map((d, i) => {
+        // CASE_DOC_A4_V1 — разделы документа написаны форматируемым текстом, и
+        // на бумагу они идут РАЗМЕТКОЙ: экранированный HTML печатался бы
+        // тегами вместо жирного и списков. Диагноз — простой текст, он и
+        // экранируется. Санитария та же, что на сервере при сохранении.
         const parts = PART_TITLES
             .filter(([key]) => String(d[key] || '').trim())
-            .map(([key, label]) => `<div class="part"><div class="pl">${esc(tr(label))}</div><div class="pv">${esc(d[key])}</div></div>`)
+            .map(([key, label]) => `<div class="part"><div class="pl">${esc(tr(label))}</div><div class="pv">${
+                key === 'diagnosis' ? esc(d[key]) : sanitizeStoredHtml(d[key])
+            }</div></div>`)
             .join('');
         const sign = [d.author_name, d.published_at ? fmtDateTime(d.published_at) : ''].filter(Boolean).join(' · ');
         return `
@@ -616,6 +645,7 @@ h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.01em; }
 .part .pv { flex: 1; white-space: pre-wrap; }
 .part .pv.empty { color: #7a8892; font-style: italic; }
 .sign { margin-top: 6px; font-size: 12px; color: #55636d; text-align: right; }
+${titleSheetPrintCss()}
 </style></head><body>
 ${cover}
 ${body || `<p class="note">${esc(tr('Опубликованных документов пока нет.'))}</p>`}

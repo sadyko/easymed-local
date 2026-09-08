@@ -278,8 +278,12 @@ test('сервер сказал «нельзя» — на месте кнопк�
 test('палатный врач по-прежнему видит только своих — и запрос сужен на него', async () => {
   const host = await openWard(WARD, WARD_CAPS);
 
-  const call = admissionsCall();
-  const own = (call.filters || []).some((f) => f.col === 'attending_doctor_id' && f.op === 'eq' && f.val === 'u-ward');
+  // ADMITTING_DOCTOR_V1 — «мои» у палатного врача — два запроса (лечу / жду с
+  // осмотром), и КАЖДЫЙ обязан быть сужен на него; хотя бы один — по лечащему.
+  const calls = dbCalls.filter((c) => c.table === 'admissions');
+  const narrowed = (c, col) => (c.filters || []).some((f) => f.col === col && f.op === 'eq' && f.val === 'u-ward');
+  const call = calls[calls.length - 1];
+  const own = calls.length > 0 && calls.every((c) => narrowed(c, 'attending_doctor_id') || narrowed(c, 'admitting_doctor_id')) && calls.some((c) => narrowed(c, 'attending_doctor_id'));
   assert.ok(own, 'запрос палатного врача обязан сузиться на него: ' + JSON.stringify(call.filters));
 
   const txt = textOf(host);
@@ -293,8 +297,12 @@ test('палатный врач по-прежнему видит только с
 
 test('сервер не ответил — остаёмся на самом узком, а не показываем всех', async () => {
   const host = await openWard(WARD, null);   // data: null — как при сбое RPC
-  const call = admissionsCall();
-  const own = (call.filters || []).some((f) => f.col === 'attending_doctor_id' && f.op === 'eq' && f.val === 'u-ward');
+  // ADMITTING_DOCTOR_V1 — «мои» у палатного врача — два запроса (лечу / жду с
+  // осмотром), и КАЖДЫЙ обязан быть сужен на него; хотя бы один — по лечащему.
+  const calls = dbCalls.filter((c) => c.table === 'admissions');
+  const narrowed = (c, col) => (c.filters || []).some((f) => f.col === col && f.op === 'eq' && f.val === 'u-ward');
+  const call = calls[calls.length - 1];
+  const own = calls.length > 0 && calls.every((c) => narrowed(c, 'attending_doctor_id') || narrowed(c, 'admitting_doctor_id')) && calls.some((c) => narrowed(c, 'attending_doctor_id'));
   assert.ok(own, 'без ответа сервера область обязана остаться узкой: ' + JSON.stringify(call.filters));
   assert.ok(!textOf(host).includes('Иванов Пётр'), 'чужих не показываем по умолчанию');
 });

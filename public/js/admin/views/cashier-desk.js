@@ -20,6 +20,7 @@ import { h, Icon, clear, toast, Tag, StatusTag, Avatar, field, fmtDateTime, init
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { printableSheet } from './doc-settings.js?v=noqr1';
 import { moneyDisplay, moneyNumber } from '../../shared/money-input.js?v=mi2';   // MONEY_INPUT_V2
+import { IN_BED_STATUSES } from '../../shared/admission-status.js';   // DEBT_FLOW_V1 — «пациент ещё на койке» в окне отмены
 import { loadInvoiceLines, performersByItem } from './receipt-print.js?v=rp1';   // INVOICE_QUEUE_V1 — тот же сбор талонов, что у чека   // CASH_CHECK_PRINT_V1 — бланк «Кассовый чек» из Настройки → Документы
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
 
@@ -1384,14 +1385,27 @@ function payModal(root, inv, balance) {
 }
 
 function voidModal(root, inv) {
+    // DEBT_FLOW_V1 — счёт стационара, пациент ещё на койке: отмена его НЕ
+    // выписывает. Окно говорит это словами и просит явное подтверждение —
+    // сервер без него откажет (void_invoice, in_bed_ack).
+    const inBed = !!inv.admission_id && IN_BED_STATUSES.includes(inv.admission_status);
+    const ackBox = h('input', { type: 'checkbox' });
+    const inBedBlock = inBed
+        ? h('div', { class: 'cd-inbed' },
+            h('div', { class: 'cd-inbed-t' }, Icon('Bed', { size: 14 }), ' ', tr('Пациент ещё в стационаре')),
+            h('p', { class: 'cd-inbed-p' }, 'Отмена счёта не выписывает пациента: услуги вернутся в невыставленные и попадут в новый счёт при выписке. Если пациент уходит не заплатив — не отменяйте счёт: пусть отделение оформит выписку, и счёт станет долгом.'),
+            h('label', { class: 'cd-inbed-ack' }, ackBox, ' ', tr('Счёт ошибочный — отменить, пациент остаётся на койке')))
+        : null;
     modal(trf('Отменить счёт · {no}', { no: inv.invoice_number || ('#' + inv.id) }), 'X',
         [h('div', { style: { fontSize: '13.5px', lineHeight: 1.55 } },
             'Счёт пациента ', h('strong', null, inv.patient_name || '—'), ' на ',
             h('strong', null, fmtPrice(inv.total_amount)), ' сум будет отменён. ',
-            h('span', { class: 'muted' }, 'Неначатые услуги счёта снова станут доступны для выставления.'))],
+            h('span', { class: 'muted' }, 'Неначатые услуги счёта снова станут доступны для выставления.')),
+         inBedBlock],
         'Отменить счёт',
         async () => {
-            const { error } = await supabase.rpc('void_invoice', { invoice_id: inv.id });
+            if (inBed && !ackBox.checked) { toast(tr('Подтвердите, что счёт отменяется как ошибочный, а пациент остаётся на койке.'), 'fail'); return false; }
+            const { error } = await supabase.rpc('void_invoice', { invoice_id: inv.id, in_bed_ack: inBed && !!ackBox.checked });
             if (error) { toast((error.message) || 'Не удалось отменить счёт.', 'fail'); return false; }
             toast('Счёт отменён', 'ok');
             await paint(root);

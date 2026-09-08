@@ -416,6 +416,8 @@ export async function renderDischarge(root, ctx = {}) {
           h('ul', { class: 'dq-excl-list' },
             ...excludeNotes(row.balance).map((n) => h('li', null, n))),
           h('p', { class: 'dq-panel-p' }, 'Долг выписке не мешает — подтвердите, что он согласован.'),
+          // DEBT_FLOW_V1 — что произойдёт с деньгами, сказано ДО подписи.
+          h('p', { class: 'dq-quiet' }, 'Невыставленное соберётся в счёт, и все неоплаченные счета госпитализации станут долгом — касса увидит их в списке «Долг», карта пациента — красной меткой.'),
           checkField(tr('Долг согласован (гарантия / рассрочка)'), ackBox))
       : h('div', { class: 'dq-quiet' }, 'Долга по госпитализации нет.');
 
@@ -461,7 +463,12 @@ export async function renderDischarge(root, ctx = {}) {
         toast((error && error.message) || tr('Не удалось оформить выписку.'), 'fail');
         return false;
       }
-      toast(tr('Выписка оформлена. Койка отправлена на уборку.'), 'ok');
+      // DEBT_FLOW_V1 — какие счета стали долгом, названо по номерам.
+      const debts = Array.isArray(data.debt_invoices) ? data.debt_invoices : [];
+      toast(debts.length
+        ? trf('Выписка оформлена. Долгом отмечено: {list}. Койка отправлена на уборку.',
+            { list: debts.map((i) => (i.invoice_number || ('#' + i.id)) + ' — ' + money(i.balance)).join(', ') })
+        : tr('Выписка оформлена. Койка отправлена на уборку.'), 'ok');
       await load();
       return true;
     });

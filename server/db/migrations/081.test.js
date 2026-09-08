@@ -98,7 +98,9 @@ test('a room_id smuggled into a payload is ignored — the local value stays loc
   // Same name → the importer ADOPTS the local row; the payload names a room id
   // that means nothing here (and happens to exist — the dangerous case).
   applyCatalogue(db, {
-    services: [remoteService({ id: 700, name: 'Рентген кисти', price: 95000, type: 'radiology', default_doctor_percent: 0, room_id: 12345 })],
+    // SERVICE_TYPES_FIVE_V1 — было type: 'radiology'. Тип удалён: своей ветки
+    // в маршрутизаторе очереди у него не было. Рентген — это диагностика.
+    services: [remoteService({ id: 700, name: 'Рентген кисти', price: 95000, type: 'imaging', default_doctor_percent: 0, room_id: 12345 })],
   });
   const after = db.prepare('SELECT price, room_id FROM services WHERE id = ?').get(local);
   assert.equal(after.price, 95000, 'the price update itself must land — that is what sync is for');

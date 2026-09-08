@@ -10,6 +10,11 @@ import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport,
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit,
   admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue } from './inpatient.js';   // ADMISSION_ORDER_V1 / TWO_STEP_DISCHARGE_V1
 import { admissionFlowState, inpatientCapabilities } from './inpatient-flow.js';   // INPATIENT_FLOW_V1
+import { admissionTitleSheetGet, admissionTitleSheetSave } from './title-sheet.js';   // TITLE_SHEET_V1
+import { admissionOverview } from './case-overview.js';   // CASE_OVERVIEW_V1
+import { admissionVitalsAdd, admissionVitalsList } from './vitals.js';   // VITALS_NEWS_V1
+import { admissionDocSources } from './case-doc-sources.js';   // CASE_DOC_A4_V1
+import { admissionsRegister } from './admissions-register.js';   // ADMISSIONS_REGISTER_V1
 import { admissionReviewSave, admissionSetAttending, admissionChangeAttending, admissionReviewsList, admissionAttendingCandidates,
   admissionCaseDocs, admissionCaseFile, admissionCaseFileSave } from './inpatient-reviews.js';   // INPATIENT_REVIEW_V1 / CASE_DOCS_V1
 import {
@@ -209,6 +214,13 @@ export const RPC = {
   admission_order_create:         (db, args, user) => admissionOrderCreate(db, args, user),
   admission_order_cancel:         (db, args, user) => admissionOrderCancel(db, args, user),
   admission_admit:                (db, args, user) => admissionAdmit(db, args, user),
+  admission_title_sheet_get:      (db, args, user) => admissionTitleSheetGet(db, args, user),    // TITLE_SHEET_V1
+  admission_title_sheet_save:     (db, args, user) => admissionTitleSheetSave(db, args, user),
+  admission_overview:             (db, args, user) => admissionOverview(db, args, user),   // CASE_OVERVIEW_V1
+  admission_vitals_add:           (db, args, user) => admissionVitalsAdd(db, args, user),   // VITALS_NEWS_V1
+  admission_vitals_list:          (db, args, user) => admissionVitalsList(db, args, user),  // VITALS_NEWS_V1
+  admission_doc_sources:          (db, args, user) => admissionDocSources(db, args, user),  // CASE_DOC_A4_V1
+  admissions_register:            (db, args, user) => admissionsRegister(db, args, user),   // ADMISSIONS_REGISTER_V1
 
   // TWO_STEP_DISCHARGE_V1 (Задача 8) — ВЫПИСКА В ДВА ШАГА. Клиническая
   // готовность и административная выписка — разные события разных людей:

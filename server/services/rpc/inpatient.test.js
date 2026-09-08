@@ -88,7 +88,7 @@ test('admit_patient occupies the bed, creates an active admission with admission
   assert.equal(res.admission.bed_id, bed1);
   assert.equal(res.admission.ward_id, wardId);
   assert.ok(res.admission.admission_no);
-  assert.match(res.admission.admission_no, /^ADM-\d{5}$/);
+  assert.match(res.admission.admission_no, /^\d{4}\/\d{5}$/);   // ADMISSION_NUMBER_V2 — «2026/00051»
 
   const bed = db.prepare('SELECT status FROM beds WHERE id=?').get(bed1);
   assert.equal(bed.status, 'occupied');

@@ -172,15 +172,27 @@ export function patientCard(db, args, user) {
     // картой, как и категория: отдельный запрос был бы вторым местом, где
     // решается «вправе ли этот сотрудник видеть этого пациента».
     telegram: null,
+    // DEBT_FLOW_V1 — долг пациента (счета со статусом 'debt': «Оставить как
+    // долг» на кассе или выписка из стационара с долгом) едет с картой, чтобы
+    // красный бейдж стоял у имени ДО того, как кто-то откроет вкладку «Счёт».
+    debt: null,
     visits: null, services: null, lab_orders: null, lab_results: null,
     invoices: null, invoice_items: null, payments: null,
     docs: null, doc_notes: null,
+    history: null,   // PATIENT_HISTORY_TAB_V1 — { admissions, case_files }
     visit_count: null, last_visit_date: null,
   };
   // Дойдёт ли до человека результат — видно рядом с именем. Ошибку справочника
   // глушим: бейдж это справка, и из-за него карта открываться не перестанет.
   try { out.telegram = telegramPatientStatus(db, { patient_id: id }, user); }
   catch { out.telegram = null; }
+
+  if (canRead('invoices', roles)) {
+    const d = db.prepare(`
+      SELECT COUNT(*) AS n, COALESCE(SUM(total_amount - paid_amount), 0) AS amount
+        FROM invoices WHERE patient_id = ? AND status = 'debt'`).get(id);
+    out.debt = { amount: Math.round((Number(d.amount) || 0) * 100) / 100, invoices: d.n || 0 };
+  }
 
   if (seeDetails && full.category_id != null) {
     const c = db.prepare('SELECT id, name, discount_percent, active FROM patient_categories WHERE id = ?')
@@ -314,6 +326,40 @@ export function patientCard(db, args, user) {
         services: { name: r._s_name },
         users: { full_name: r._d_name },
       }));
+  }
+
+  // PATIENT_HISTORY_TAB_V1 — «История»: госпитализации пациента и подшитые
+  // истории болезни (visit_documents.doc_type = 'case_file', снимок целиком —
+  // печать берёт ЕГО, а не собирает заново; см. admissionCaseFileSave).
+  if (tabs.history !== 'none') {
+    const admissions = db.prepare(`
+      SELECT a.id, a.admission_no, a.status, a.admitted_at, a.discharged_at, a.department, a.discharge_outcome,
+             w.name AS ward_name, b.code AS bed_code, doc.full_name AS attending_name
+        FROM admissions a
+        LEFT JOIN wards w ON w.id = a.ward_id
+        LEFT JOIN beds b ON b.id = a.bed_id
+        LEFT JOIN users doc ON doc.id = a.attending_doctor_id
+       WHERE a.patient_id = ?
+       ORDER BY COALESCE(a.admitted_at, a.created_at) DESC, a.id DESC
+       LIMIT 100`).all(id);
+    const caseFiles = db.prepare(`
+      SELECT d.id, d.title, d.body, d.created_at, u.full_name AS created_by_name
+        FROM visit_documents d
+        LEFT JOIN users u ON u.id = d.created_by
+       WHERE d.patient_id = ? AND d.doc_type = 'case_file' AND d.voided_at IS NULL
+       ORDER BY d.created_at DESC
+       LIMIT 100`).all(id).map((r) => {
+      const body = parseJson(r.body);
+      const cover = (body && body.cover) || {};
+      return {
+        id: r.id, title: r.title, created_at: r.created_at, created_by_name: r.created_by_name,
+        admission_id: cover.id || null, admission_no: cover.admission_no || null,
+        complete: body ? !!body.complete : null,
+        gaps: body && Array.isArray(body.gaps) ? body.gaps.length : 0,
+        body,
+      };
+    });
+    out.history = { admissions, case_files: caseFiles };
   }
 
   return out;

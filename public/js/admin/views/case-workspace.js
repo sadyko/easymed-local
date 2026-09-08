@@ -29,14 +29,24 @@ import { h, Icon, clear, toast, PageHead } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { caseDocsView, assembleCaseFile } from './case-docs.js?v=cw1';
 import { buildReviewEditor } from './admission-modal.js?v=inp2';
+import { buildTitleSheetEditor, TITLE_SHEET_KIND } from './title-sheet.js';   // TITLE_SHEET_V1
+import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V1
+import { caseHead } from './case-overview.js?v=co1';   // CASE_OVERVIEW_V1 — одна шапка на «Обзор» и «Документы»
+import { caseInsertPanel } from './case-doc-insert.js';   // CASE_DOC_A4_V1 — правая панель «Вставить в документ»
+import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — диагнозы списком
+import { setupA4Pagination } from './a4-paginate.js';   // A4_PAGINATE_V1 — разрывы страниц в редакторе
+import { caseDocTitle } from './case-docs.js?v=cw1';
 
 const state = {
     admissionId: null,
     admission: null,
     docs: null,        // ответ admission_case_docs
     filter: 'all',
-    open: null,        // {kind, mode, reviewId} — что открыто справа
+    open: null,        // {kind, mode, reviewId} — что открыто в центре
+    editor: null,      // CASE_DOC_A4_V1 — открытый редактор: правая панель вставляет в него
+    disposePagination: null,   // A4_PAGINATE_V1 — отмена слежения за разрывами
     failed: null,
+    overview: null,    // CASE_OVERVIEW_V1 — ответ admission_overview для шапки
 };
 
 function reset(admissionId) {
@@ -45,12 +55,19 @@ function reset(admissionId) {
     state.docs = null;
     state.filter = 'all';
     state.open = null;
+    state.editor = null;
     state.failed = null;
+    state.overview = null;
 }
 
 export async function renderCaseWorkspace(container, { payload, onNavigate } = {}) {
-    const admissionId = Number(payload && (payload.admissionId || payload.admission_id || payload.id)) || null;
+    // CASE_ROUTE_SUB_V1 — номер госпитализации едет и в адресе (#case-file/123,
+    // payload.sub): перезагрузка страницы возвращает те же документы, а не
+    // «Госпитализация не выбрана».
+    const admissionId = Number(payload && (payload.admissionId || payload.admission_id || payload.id || payload.sub)) || null;
     if (state.admissionId !== admissionId) reset(admissionId);
+    // CASE_OVERVIEW_V1 — главное действие обзора открывает документы НА НУЖНОМ ШАГЕ.
+    if (payload && payload.kind) state.open = { kind: String(payload.kind), mode: 'edit', reviewId: null };
 
     clear(container);
     const root = h('div', { class: 'fade-in cw' });
@@ -75,13 +92,15 @@ async function load() {
     // связями. Отдельного RPC для карточки не существует — я сперва позвал
     // несуществующий `admission_card`, и шапка молча осталась бы без имени
     // пациента, а редактор — без его данных.
-    const [{ data: docs, error: docsErr }, { data: adm }] = await Promise.all([
+    const [{ data: docs, error: docsErr }, { data: adm }, { data: ov }] = await Promise.all([
         supabase.rpc('admission_case_docs', { admission_id: state.admissionId }),
         supabase.from('admissions')
             .select('*, patients(mrn, full_name), wards(name), beds(code), '
                   + 'attending:attending_doctor_id(full_name, specialty)')
             .eq('id', state.admissionId).single(),
+        supabase.rpc('admission_overview', { admission_id: state.admissionId }),   // CASE_OVERVIEW_V1 — для шапки
     ]);
+    state.overview = ov || null;
     // Отказ по праву и сбой — РАЗНЫЕ вещи, и экран обязан их различать: пустой
     // список читается как «документов нет», а это ложь в обе стороны.
     if (docsErr) { state.failed = docsErr.code === 'forbidden' ? 'forbidden' : (docsErr.message || 'error'); return; }
@@ -115,32 +134,108 @@ function paint(root, onNavigate) {
     const p = a.patients || {};
     const who = [p.mrn, a.department, a.admission_no].filter(Boolean).join(' · ');
 
-    root.appendChild(PageHead({
-        title: p.full_name || tr('История болезни'),
-        subtitle: who || null,
-        right: [
-            h('button', {
-                class: 'btn btn-primary btn-sm', type: 'button',
-                onclick: async () => {
-                    const saved = await assembleCaseFile(state.admissionId);
-                    // Подшили — значит список «сколько оформлено» мог измениться.
-                    if (saved) { await load(); paint(root, onNavigate); }
-                },
-            }, Icon('Doc', { size: 14 }), ' ', tr('Собрать историю')),
-        ],
-    }));
+    const assembleBtn = h('button', {
+        class: 'btn btn-sm btn-outline', type: 'button',
+        onclick: async () => {
+            const saved = await assembleCaseFile(state.admissionId);
+            // Подшили — значит список «сколько оформлено» мог измениться.
+            if (saved) { await load(); paint(root, onNavigate); }
+        },
+    }, Icon('Doc', { size: 14 }), ' ', tr('Собрать историю'));
+    // CASE_OVERVIEW_V1 — та же шапка, что у «Обзора»: пациент, стрелки по
+    // соседям, вкладки, главное действие. Без обзора (старый ответ, отказ) —
+    // прежняя подпись экрана, чтобы документы открывались в любом случае.
+    if (state.overview) {
+        root.appendChild(caseHead(state.overview, {
+            active: 'documents', onNavigate,
+            onReload: async () => { await load(); paint(root, onNavigate); },
+            actions: [assembleBtn],
+        }));
+    } else {
+        root.appendChild(PageHead({ title: p.full_name || tr('История болезни'), subtitle: who || null, right: [assembleBtn] }));
+    }
 
-    const rail = h('div', { class: 'cw-rail card' });
+    // CASE_DOC_A4_V1 — владелец: «documents of the history left panel right
+    // panel». Слева шаги и диагноз, в центре лист, справа — что вставить.
+    const rail = h('div', { class: 'cw-rail' });
     const pane = h('div', { class: 'cw-pane' });
-    root.appendChild(h('div', { class: 'cw-grid' }, rail, pane));
+    const aside = h('div', { class: 'cw-aside' });
+    root.appendChild(h('div', { class: 'cw-grid' }, rail, pane, aside));
 
-    paintRail(rail, root, onNavigate);
+    // Лист рисуется ПЕРВЫМ: карточка «Диагноз» слева показывает поле открытого
+    // документа, а его создаёт редактор.
     paintPane(pane, root, onNavigate);
+    paintRail(rail, root, onNavigate);
+    paintAside(aside);
+}
+
+// Правая панель живёт ОТДЕЛЬНО от листа: она читает свои источники один раз и
+// не перерисовывается при каждом переключении документа — вставка идёт в тот
+// редактор, который открыт сейчас (state.editor).
+function paintAside(aside) {
+    if (!aside) return;
+    clear(aside);
+    aside.appendChild(caseInsertPanel({
+        admissionId: state.admissionId,
+        onInsert: (html) => !!(state.editor && state.editor.insert && state.editor.insert(html)),
+    }));
+}
+
+// Левая колонка: диагноз госпитализации, выбор документа и шаги по регламенту.
+// CASE_DX_PICK_V1 — диагноз ОТКРЫТОГО документа пишется здесь: своими словами
+// или кодом из справочника МКБ-10 (подсказки — icdSuggest). Ниже, мелким —
+// диагнозы самой госпитализации: клинический и при направлении, чтобы не
+// вспоминать их по памяти, переходя между документами.
+function diagnosisCard() {
+    const dg = (state.overview && state.overview.diagnosis) || {};
+    const ed = state.editor;
+    const card = h('section', { class: 'card cw-dx', 'aria-label': tr('Диагноз') },
+        h('div', { class: 'cw-dx-h' }, Icon('Stethoscope', { size: 14 }), ' ', tr('Диагноз')));
+
+    if (ed && ed.diagnosisInput) {
+        // CASE_DX_LIST_V1 — поле редактора хранит строку, карточка показывает
+        // список: чипы с ролью, справочник МКБ-10 и «свой диагноз».
+        card.appendChild(dxEditor({ carrier: ed.diagnosisInput, required: ed.diagnosisRequired }));
+    }
+
+    const refs = [
+        dg.clinical ? ['Клинический', dg.clinical] : null,
+        dg.referral ? ['При направлении', dg.referral] : null,
+    ].filter(Boolean);
+    if (refs.length) {
+        card.appendChild(h('div', { class: 'cw-dx-refs' }, ...refs.map(([label, value]) => h('div', { class: 'cw-dx-ref' },
+            h('span', { class: 'cw-dx-ref-l' }, tr(label)),
+            h('span', { class: 'cw-dx-ref-v' }, value)))));
+    } else if (!(ed && ed.diagnosisInput)) {
+        card.appendChild(h('div', { class: 'cw-dx-empty' }, tr('Диагноз ещё не установлен — его пишут в первичном осмотре.')));
+    }
+    return card;
+}
+
+function docSelect(rail, root, onNavigate) {
+    const items = ((state.docs && state.docs.items) || []).filter((i) => i.applies !== false);
+    const sel = h('select', { class: 'cw-doc-sel', 'aria-label': tr('Документ') },
+        h('option', { value: '' }, tr('— выберите документ —')),
+        ...items.map((i) => h('option', { value: i.kind, selected: state.open && state.open.kind === i.kind ? '' : null }, caseDocTitle(i.kind))));
+    sel.addEventListener('change', () => {
+        if (!sel.value) return;
+        const item = items.find((i) => i.kind === sel.value);
+        state.open = { kind: sel.value, mode: item && item.state === 'published' ? 'view' : 'edit', reviewId: null };
+        paintPane(rail.parentNode.querySelector('.cw-pane'), root, onNavigate);
+        paintRail(rail, root, onNavigate);
+    });
+    return h('section', { class: 'card cw-doc-pick' },
+        h('div', { class: 'cw-pick-l' }, tr('Документ')),
+        sel);
 }
 
 function paintRail(rail, root, onNavigate) {
     clear(rail);
-    rail.appendChild(caseDocsView({
+    rail.appendChild(diagnosisCard());
+    rail.appendChild(docSelect(rail, root, onNavigate));
+    const list = h('div', { class: 'card cw-steps' });
+    rail.appendChild(list);
+    list.appendChild(caseDocsView({
         state: state.docs,
         filter: state.filter,
         onFilter: (key) => { state.filter = key; paintRail(rail, root, onNavigate); },
@@ -148,8 +243,8 @@ function paintRail(rail, root, onNavigate) {
         // задача. Выбранный шаг остаётся виден в списке слева.
         onDoc: (kind, mode, reviewId) => {
             state.open = { kind, mode: mode || 'edit', reviewId: reviewId || null };
-            paintRail(rail, root, onNavigate);
             paintPane(rail.parentNode.querySelector('.cw-pane'), root, onNavigate);
+            paintRail(rail, root, onNavigate);
         },
         // Сборка живёт в шапке экрана: в списке шагов ей не место — она не шаг.
         onAssemble: null,
@@ -169,21 +264,41 @@ function paintPane(pane, root, onNavigate) {
         return;
     }
 
-    const ed = buildReviewEditor({
-        admission: Object.assign({}, state.admission, { id: state.admissionId }),
-        kind: state.open.kind,
-        mode: state.open.mode,
-        reviewId: state.open.reviewId,
-        onDone: async () => {
-            await load();
-            paint(root, onNavigate);
-        },
-    });
+    const onDone = async () => {
+        await load();
+        paint(root, onNavigate);
+    };
+    // TITLE_SHEET_V1 — титульный лист медсестры: своя форма, тот же лист A4.
+    const ed = state.open.kind === TITLE_SHEET_KIND
+        ? buildTitleSheetEditor({ admission: Object.assign({}, state.admission, { id: state.admissionId }), onDone })
+        : buildReviewEditor({
+            admission: Object.assign({}, state.admission, { id: state.admissionId }),
+            kind: state.open.kind,
+            mode: state.open.mode,
+            reviewId: state.open.reviewId,
+            onDone,
+        });
     if (!ed) return;
+    state.editor = ed;   // CASE_DOC_A4_V1 — правая панель вставляет в него
 
-    const card = h('div', { class: 'card cw-doc' },
-        h('div', { class: 'card-header' }, h('h3', null, Icon(ed.icon, { size: 15 }), ' ', ed.title)),
-        h('div', { class: 'cw-doc-body' }, ...ed.fields.filter(Boolean)),
+    // A4_LETTERHEAD_V1 — документ на ЛИСТЕ, а не в карточке (владелец: «treat
+    // this section as an A4 list with the header of the clinic from the
+    // documents section»). Это документ истории болезни: его потом печатают, и
+    // на экране он должен выглядеть как тот же лист — с шапкой клиники из
+    // window.CLINIC, откуда её берут и печатные бланки. Классы .a4-* общие с
+    // кабинетом врача (service-workspace.js). Кнопки действий на лист не
+    // кладутся — это не часть документа, они стоят под ним.
+    const card = h('div', { class: 'cw-doc a4-scroll' },
+        // CASE_DOC_A4_V1 — панель форматирования НАД листом: она инструмент, а
+        // не часть документа, и на печать не идёт.
+        ed.toolbar || null,
+        ed.noLetterhead
+            // FORM_003_V1 — у бланка 003 своя шапка (министерство, учреждение, приказ).
+            ? h('div', { class: 'a4-paper f3-paper' }, h('div', { class: 'a4-band-top' }),
+                h('div', { class: 'cw-doc-body f3' }, ...ed.fields.filter(Boolean)), h('div', { class: 'a4-band-bottom' }))
+            : a4Sheet({ title: ed.title, children: [
+                h('div', { class: 'cw-doc-body' }, ...ed.fields.filter(Boolean)),
+            ] }),
     );
 
     const foot = h('div', { class: 'cw-doc-foot' });
@@ -203,6 +318,12 @@ function paintPane(pane, root, onNavigate) {
     }
     if (foot.children.length) card.appendChild(foot);
     pane.appendChild(card);
+
+    // A4_PAGINATE_V1 — владелец: «treat every document as a a4 list, with real
+    // ui breaks in the window of user». Разрывы считаются по высоте блоков и
+    // пересчитываются, пока врач пишет.
+    if (state.disposePagination) { try { state.disposePagination(); } catch (e) { /* нечего отменять */ } }
+    state.disposePagination = setupA4Pagination(card, { label: (pg) => trf('Страница {n}', { n: pg }) });
 }
 
 export function resetCaseWorkspace() { reset(null); }

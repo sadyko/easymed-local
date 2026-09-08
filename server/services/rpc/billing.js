@@ -743,6 +743,14 @@ export function createInvoiceForAdmission(db, args, user) {
   }
   if (new Set(ids).size !== ids.length) throw new RpcError('admission_service_ids contains duplicates.', 400);
 
+  return buildAdmissionInvoice(db, admissionId, ids, user);
+}
+
+// CASE_OVERVIEW_V1 — та же сборка счёта БЕЗ проверки роли кассы: её зовёт и
+// касса (createInvoiceForAdmission выше, с ролью), и выписка врача
+// (admission-bill.js — право там уже проверено заявкой на выписку).
+// Строки проверены вызывающим: свои, не выставлены, «В счёт».
+export function buildAdmissionInvoice(db, admissionId, ids, user) {
   const run = db.transaction(() => {
     const adm = db.prepare('SELECT * FROM admissions WHERE id = ?').get(admissionId);
     if (!adm) throw new RpcError('admission not found.', 400);

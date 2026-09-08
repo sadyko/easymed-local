@@ -571,3 +571,46 @@ test('прямая выписка тоже отпускает койку в уб
   assert.equal(db.prepare('SELECT status FROM beds WHERE id=1').get().status, 'cleaning');
   db.close();
 });
+
+// ─── DEBT_FLOW_V1 — долг при выписке становится долгом счёта ────────────────
+
+test('DEBT_FLOW_V1: подписанный долг становится долгом СЧЁТА — невыставленное собирается в счёт, счета помечаются «debt»', () => {
+  const db = seed();
+  const id = requested(db);
+  chargeLine(db, id, 450000);                                  // начислено, не выставлено
+  db.prepare(`INSERT INTO invoices (id, invoice_number, admission_id, patient_id, subtotal, total_amount, paid_amount, status)
+              VALUES (20,'INV-20',?,1,300000,300000,120000,'partial')`).run(id);   // выставлено, оплачено частично
+  db.prepare(`INSERT INTO invoices (id, invoice_number, admission_id, patient_id, subtotal, total_amount, paid_amount, status)
+              VALUES (21,'INV-21',?,1,700000,700000,0,'void')`).run(id);           // отменён — не долг
+
+  const res = admissionDischargeFinalize(db, { admission_id: id, debt_ack: true }, SENIOR);
+  assert.equal(res.admission.status, 'discharged');
+
+  // 1. Невыставленная строка попала в новый счёт, и он — долг.
+  const line = db.prepare('SELECT invoice_item_id FROM admission_services WHERE admission_id = ? AND total = 450000').get(id);
+  assert.ok(line.invoice_item_id, 'строка выставлена при выписке');
+  const fresh = db.prepare('SELECT i.* FROM invoices i JOIN invoice_items it ON it.invoice_id = i.id WHERE it.id = ?').get(line.invoice_item_id);
+  assert.equal(fresh.status, 'debt');
+  assert.equal(fresh.total_amount, 450000);
+
+  // 2. Частично оплаченный счёт стал долгом, отменённый не тронут.
+  assert.equal(db.prepare('SELECT status FROM invoices WHERE id = 20').get().status, 'debt');
+  assert.equal(db.prepare('SELECT status FROM invoices WHERE id = 21').get().status, 'void');
+
+  // 3. Ответ называет счета-долги с остатком — окно покажет номера.
+  assert.deepEqual(res.debt_invoices.map((i) => [i.invoice_number, i.balance]).sort(),
+    [['INV-20', 180000], [fresh.invoice_number, 450000]].sort());
+  assert.equal(res.admission.discharge_debt_amount, 630000, 'число под подписью — то же, что видел человек');
+  db.close();
+});
+
+test('DEBT_FLOW_V1: без долга ни один счёт не трогают, и без подписи тоже', () => {
+  const db = seed();
+  const id = requested(db);
+  db.prepare(`INSERT INTO invoices (id, invoice_number, admission_id, patient_id, subtotal, total_amount, paid_amount, status)
+              VALUES (30,'INV-30',?,1,300000,300000,300000,'paid')`).run(id);
+  const res = admissionDischargeFinalize(db, { admission_id: id }, SENIOR);
+  assert.deepEqual(res.debt_invoices, []);
+  assert.equal(db.prepare('SELECT status FROM invoices WHERE id = 30').get().status, 'paid');
+  db.close();
+});

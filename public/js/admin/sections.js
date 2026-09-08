@@ -53,7 +53,13 @@ export const SECTIONS = {
         fields: [
             { key: 'name',             label: 'Service name (из каталога)', type: 'text', required: true, readOnly: true },
             { key: 'type',             label: 'Раздел — куда попадает услуга (маршрутизация)', type: 'select', default: 'consultation',
-              options: [['consultation','Консультация (кабинет врача)'], ['lab','Лаборатория (лаб. модуль)'], ['procedure','Процедуры (процедурный лист)'], ['imaging','Диагностика'], ['other','Хирургия']] },
+              // SERVICE_TYPES_FIVE_V1 — «Хирургия» получила СВОЙ тип. Здесь она
+              // была подписью для 'other', и сотрудник, выбиравший «Хирургия»,
+              // записывал «Другое»: все 183 такие услуги в рабочем наборе —
+              // настоящие операции. Теперь подпись и значение совпадают, а два
+              // редактора этого поля (здесь и service-editor.js) предлагают
+              // один список — расхождение и породило подмену.
+              options: [['consultation','Консультация (кабинет врача)'], ['lab','Лаборатория (лаб. модуль)'], ['procedure','Процедуры (процедурный лист)'], ['imaging','Диагностика (кабинет врача)'], ['other','Хирургия (на госпитализацию)']] },
             { key: 'code',             label: 'Internal code (auto)', type: 'text', readOnly: true },
             { key: 'type_id',          label: 'Type (каталог)', type: 'fk', source: 'service_types', readOnly: true },
             { key: 'category_id',      label: 'Category (каталог)', type: 'fk', source: 'service_categories', readOnly: true },

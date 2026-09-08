@@ -30,13 +30,16 @@ test('a NULL type_id is derived from the routing type — the whole bug in one l
     assert.equal(resolveTypeId({ type: 'consultation', type_id: null }, TYPES), '1');
     assert.equal(resolveTypeId({ type: 'imaging', type_id: null }, TYPES), '2');
     assert.equal(resolveTypeId({ type: 'procedure', type_id: null }, TYPES), '4');
+    // SERVICE_TYPES_FIVE_V1 — было 'other'. Тип назывался «Другое», а подписан
+    // в настройках был «Хирургия», и все услуги под ним оказались операциями.
     assert.equal(resolveTypeId({ type: 'other', type_id: null }, TYPES), '5');
 });
 
 test('every routing value in the CHECK set maps to a group name', () => {
-    // Mirrors migration 023's CHECK — a value with no mapping would fall into a
-    // bucket the UI cannot show, which is exactly what happened before.
-    for (const t of ['consultation', 'lab', 'procedure', 'imaging', 'radiology', 'other']) {
+    // Зеркало CHECK из миграции 109 (было 023): значение без группы попадает в
+    // корзину, которую интерфейс показать не может, — ровно то, что уже было.
+    // 'radiology' и 'other' исчезли, 'surgery' появился.
+    for (const t of ['consultation', 'lab', 'procedure', 'imaging', 'other']) {
         assert.ok(TYPE_TO_GROUP_NAME[t], `no group name for type=${t}`);
     }
 });

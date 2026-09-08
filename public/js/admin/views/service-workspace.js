@@ -9,6 +9,7 @@
 // Falls back gracefully when fields are missing.
 
 import { supabase } from '../../supabase.js';
+import { setupA4Pagination } from './a4-paginate.js';   // A4_PAGINATE_V1
 import { h, Icon, Avatar, Tag, StatusTag, clear, toast } from '../ui.js';
 import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
@@ -35,44 +36,10 @@ import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TY
 
 // AURORA_A4_PAGINATE_V1 — show «разрыв страницы» guides in the A4 sheet when the document
 // is taller than one A4 page, breaking BETWEEN sections (never mid-section).
-const A4_PAGE_H = 1000;            // ~A4 content height @96dpi (leaves room for page margins)
-let _a4Sig = '';
-function _a4NaturalSig(paper) {
-    return Array.from(paper.children)
-        .filter(el => !el.classList.contains('a4-pbreak'))
-        .map(el => Math.round(el.offsetHeight)).join(',');
-}
-function makeA4Break(pg, fill) {
-    return h('div', { class: 'a4-pbreak', contenteditable: 'false', style: { height: Math.round(fill) + 'px' } },
-        h('span', { class: 'a4-pbreak-tag' }, 'Разрыв страницы · Sahifa ' + pg));   // i18n-exempt: метка листа ДОКУМЕНТА — двуязычная (ru+uz) по замыслу бланка
-}
-function paginateA4(paper) {
-    if (!paper || !paper.isConnected) return;
-    const sig = _a4NaturalSig(paper);
-    if (sig === _a4Sig) return;     // real content unchanged — ignore our own break-induced resizes
-    _a4Sig = sig;
-    paper.querySelectorAll('.a4-pbreak').forEach(el => el.remove());
-    let used = 0, pg = 1; const ops = [];
-    for (const el of Array.from(paper.children)) {
-        const cs = getComputedStyle(el);
-        const h0 = el.offsetHeight + (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0);
-        if (used > 0 && used + h0 > A4_PAGE_H) { pg++; ops.push({ before: el, fill: Math.max(A4_PAGE_H - used, 28), pg }); used = h0; }
-        else { used += h0; }
-    }
-    for (const op of ops) paper.insertBefore(makeA4Break(op.pg, op.fill), op.before);
-}
-let _a4Obs = null, _a4Timer = null;
-function setupA4Pagination(root) {
-    const paper = root.querySelector('.a4-paper');
-    if (!paper) return;
-    const sched = () => { clearTimeout(_a4Timer); _a4Timer = setTimeout(() => paginateA4(paper), 200); };
-    if (_a4Obs) { try { _a4Obs.disconnect(); } catch (e) {} _a4Obs = null; }
-    if (typeof ResizeObserver !== 'undefined') { _a4Obs = new ResizeObserver(sched); _a4Obs.observe(paper); }
-    paper.addEventListener('input', sched);
-    setTimeout(() => paginateA4(paper), 350);   // catch async hydrate
-    setTimeout(() => paginateA4(paper), 1200);  // catch EMR fill
-}
-
+// A4_PAGINATE_V1 — расчёт разрывов страниц переехал в общий модуль
+// (views/a4-paginate.js): его же использует история болезни, а состояние там
+// СВОЁ у каждого листа — экраны продукта кэшируются панелями и бывают
+// смонтированы одновременно.
 
 // WS_RESPONSIVE_V1 — collapsible side panels + responsive grid for small monitors.
 function wsLayoutState() {

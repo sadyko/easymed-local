@@ -77,6 +77,7 @@ const nameOf = (b) => (b.getAttribute('aria-label') || b.textContent || '').trim
 
 const view = await import('../views/case-docs.js');
 const server = await import('../../../../server/services/rpc/inpatient-reviews.js');
+const { TITLE_KIND } = await import('../../../../server/services/rpc/title-sheet.js');   // TITLE_SHEET_V1
 
 const {
     CASE_DOC_TITLE, caseDocTitle, caseDocStateWord, caseDueText, caseDoneText,
@@ -135,7 +136,10 @@ test('у каждого рода документа, который умеет �
     }
     assert.ok(CASE_DOC_TITLE[server.OTHER_KIND], 'у «прочего документа» тоже должно быть имя');
     // И обратно: лишнее имя — это род, который сервер прислать не может.
-    const known = new Set([...server.CASE_DOC_SET.map((d) => d.kind), server.OTHER_KIND]);
+    assert.ok(CASE_DOC_TITLE[TITLE_KIND], 'у титульного листа медсестры должно быть имя');   // TITLE_SHEET_V1
+    // CONSENT_OUT_V1 — согласие из набора ушло, но старые записи этого рода сервер
+    // по-прежнему присылает в собранной истории (LEGACY_KINDS) — имя им нужно.
+    const known = new Set([...server.CASE_DOC_SET.map((d) => d.kind), ...(server.LEGACY_KINDS || []), server.OTHER_KIND, TITLE_KIND]);
     for (const kind of Object.keys(CASE_DOC_TITLE)) {
         assert.ok(known.has(kind), `имя «${kind}» не соответствует ни одному роду сервера`);
     }
@@ -320,16 +324,18 @@ test('печатный файл — обложка, регламентный п�
     assert.ok(html.includes('Живот напряжён'));
     assert.match(html, /редакция 2/);
 
-    // Пробелы названы поимённо, а не числом.
-    for (const kind of FILE.gaps) assert.ok(html.includes(caseDocTitle(kind)), `пробел ${kind} не назван`);
+    // CASE_FILE_COVER_V2 — списка «чего не хватает» на бумаге больше нет: он
+    // подсказка экрана, а не содержание истории (владелец: «remove this from the list»).
+    assert.ok(!/не хватает/i.test(html), 'на обложке снова список пробелов');
+    for (const kind of FILE.gaps) assert.ok(!html.includes(caseDocTitle(kind)), `пробел ${kind} назван на бумаге`);
     // И черновики не просто выброшены — сказано, сколько их.
     assert.match(html, /Черновиков не включено: 2/);
     assert.ok(html.includes('@page'), 'это печатный документ, а не экран');
 });
 
-test('полный комплект говорит об этом, и пустая сборка не притворяется полной', () => {
+test('обложка не судит о полноте комплекта, и пустая сборка не притворяется полной', () => {
     const full = caseFilePrintHtml(Object.assign({}, FILE, { gaps: [], complete: true, drafts_excluded: 0 }));
-    assert.match(full, /комплект документов полный/i);
+    assert.ok(!/комплект документов полный/i.test(full), 'CASE_FILE_COVER_V2 — оценка полноты на бумаге не печатается');
     assert.ok(!/не хватает/i.test(full));
 
     const empty = caseFilePrintHtml(Object.assign({}, FILE, { documents: [] }));

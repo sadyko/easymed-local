@@ -26,6 +26,54 @@ import { renderDesignedVariant, queueBlockHtml, QUEUE_CSS } from '../admin/views
 // Размеры и вёрстка бланка не тронуты: меняется только источник строки.
 import { dateNumeric } from './date-words.js';
 import { PRINT_FONT_FACE_CSS } from './print-fonts.js';
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INPATIENT_DOCS_V1 — ТРИ БУМАГИ ПРИ ПОСТУПЛЕНИИ: договор, согласие, памятка
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Владелец: «in the dialogue window of the editing patients information we
+// need to add a 3 types of the documents … also we need to add a documents
+// content into a documents section». Образцы — три листа прототипа Aurora:
+// шапка клиники, заголовок капителью с узбекским подзаголовком и датой,
+// строка Пациент / Отделение / Палата · койка / Лечащий врач, абзацы, две
+// подписи.
+//
+// ТЕКСТ — ИЗ НАСТРОЕК ДИЗАЙНЕРА (doc_branding.settings, ключи textKey ниже),
+// а по умолчанию — формулировки образцов: клиника, ни разу не открывавшая
+// «Документы», всё равно печатает полный договор. Пустая строка в настройках
+// значит «по умолчанию», а не «пусто»: пустой договор — не документ.
+export const INPATIENT_DOC_TYPES = Object.freeze(['inpatient_contract', 'inpatient_consent', 'inpatient_memo']);
+export const INPATIENT_DOC_META = Object.freeze({
+    inpatient_contract: { titleRu: 'ДОГОВОР НА ОКАЗАНИЕ СТАЦИОНАРНЫХ МЕДИЦИНСКИХ УСЛУГ', titleUz: 'Statsionar tibbiy xizmatlar shartnomasi', textKey: 'inpatientContractText' },
+    inpatient_consent:  { titleRu: 'ИНФОРМИРОВАННОЕ ДОБРОВОЛЬНОЕ СОГЛАСИЕ НА МЕДИЦИНСКОЕ ВМЕШАТЕЛЬСТВО', titleUz: 'Tibbiy aralashuvga ixtiyoriy rozilik', textKey: 'inpatientConsentText' },
+    inpatient_memo:     { titleRu: 'ПАМЯТКА ПАЦИЕНТА СТАЦИОНАРА', titleUz: 'Statsionar bemori uchun eslatma', textKey: 'inpatientMemoText' },
+});
+export const INPATIENT_DOC_DEFAULT_TEXT = Object.freeze({
+    inpatientContractText: [
+        '1. Предмет договора. Клиника обязуется оказать Пациенту стационарную медицинскую помощь в объёме, определённом лечащим врачом, а Пациент — оплатить оказанные услуги согласно действующему прайс-листу.',
+        '2. Стоимость и порядок оплаты. Койко-день тарифицируется по выбранному тарифу; медикаменты, исследования, операции и процедуры оплачиваются дополнительно по факту оказания. Возможен депозитный порядок расчётов.',
+        '3. Права и обязанности сторон определяются законодательством Республики Узбекистан и внутренними правилами клиники.',
+        '4. Срок действия — с даты поступления до выписки пациента и полного расчёта.',
+    ].join('\n\n'),
+    inpatientConsentText: [
+        'Я, нижеподписавшийся(аяся), даю согласие на госпитализацию и проведение необходимых диагностических и лечебных мероприятий в условиях стационара.',
+        'Мне в доступной форме разъяснены характер заболевания, цели и методы лечения, возможные риски и осложнения, альтернативные варианты, а также вероятные последствия отказа от вмешательства.',
+        'Я подтверждаю, что сообщил(а) врачу все известные сведения о состоянии здоровья, аллергических реакциях и принимаемых препаратах.',
+        'Согласие дано добровольно, я имею право отозвать его в любой момент в письменной форме.',
+    ].join('\n\n'),
+    inpatientMemoText: [
+        'Режим отделения: обход врача — ежедневно утром; тихий час 14:00–16:00; посещения по графику отделения.',
+        'Права пациента: уважительное отношение, информация о диагнозе и лечении, конфиденциальность, второе мнение, отказ от вмешательства.',
+        'Обязанности пациента: соблюдать назначения и режим, бережно относиться к имуществу клиники, не покидать отделение без уведомления персонала.',
+        'Безопасность: при ухудшении самочувствия немедленно вызывайте медсестру кнопкой вызова. Самостоятельный приём непрописанных препаратов запрещён.',
+    ].join('\n\n'),
+});
+/** Текст бумаги: из настроек клиники, а пустой/отсутствующий — по умолчанию. */
+export function inpatientDocText(s, type) {
+    const key = INPATIENT_DOC_META[type].textKey;
+    const own = s && typeof s[key] === 'string' ? s[key].trim() : '';
+    return own || INPATIENT_DOC_DEFAULT_TEXT[key];
+}
 export function esc(s) {
     return String(s ?? '').replace(/[&<>"']/g, ch => (
         { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
@@ -278,8 +326,69 @@ function renderBuiltinBody({ s, type, data }) {
         case 'act':        return actBody(s, data);
         case 'check':      return checkBody(s, data);
         case 'fiscal':     return fiscalBody(s, data);
+        // INPATIENT_DOCS_V1 — три бумаги при поступлении, один макет.
+        case 'inpatient_contract':
+        case 'inpatient_consent':
+        case 'inpatient_memo': return inpatientDocBody(s, data, type);
     }
     return '<div style="padding:24px;color:#999;">No template for this document type yet.</div>';
+}
+
+// INPATIENT_DOCS_V1 — образец для предпросмотра в дизайнере.
+function sampleInpatientDoc() {
+    return { patientName: 'Алиев Бобур Акмалович', department: 'Хирургия', ward: '01-04', bed: '01-04/2', doctorName: 'О. Юсупов', date: dateNumeric(new Date()) };
+}
+
+/**
+ * Бумага при поступлении — макет образцов Aurora: шапка клиники, заголовок
+ * капителью с узбекским подзаголовком и датой, четыре поля (пустое — линия
+ * для заполнения от руки: лечащий врач при размещении обычно ещё не
+ * назначен), абзацы текста, две подписи.
+ * @param {object} s настройки дизайнера
+ * @param {{patientName?:string, department?:string, ward?:string, bed?:string, doctorName?:string, date?:string}|null} d
+ * @param {'inpatient_contract'|'inpatient_consent'|'inpatient_memo'} type
+ */
+function inpatientDocBody(s, d, type) {
+    d = d || sampleInpatientDoc();
+    const meta = INPATIENT_DOC_META[type];
+    const paras = inpatientDocText(s, type).split(/\n\s*\n/).map((t) => t.trim()).filter(Boolean);
+    const line = '<span style="display:inline-block;min-width:180px;border-bottom:1px solid #16232b;">&nbsp;</span>';
+    const kv = (k, v) => `<div style="min-width:0;"><div class="lbl">${esc(k)}</div><div style="font-size:15px;font-weight:600;color:${s.ink};margin-top:2px;">${v ? esc(v) : line}</div></div>`;
+    return `
+        ${headerHTML(s)}
+        <div class="row" style="margin-top:18px;align-items:flex-start;gap:18px;">
+            <div style="flex:1;">
+                <div style="font-size:20px;font-weight:800;line-height:1.25;letter-spacing:0.02em;color:${s.accent};text-transform:uppercase;">${esc(meta.titleRu)}</div>
+                <div style="font-size:13px;font-style:italic;color:#55636d;margin-top:4px;">${esc(meta.titleUz)}</div>
+            </div>
+            <div style="text-align:right;">
+                <div class="lbl">Дата</div>
+                <div style="font-size:14px;font-weight:700;color:${s.ink};margin-top:2px;">${esc(d.date || dateNumeric(new Date()))}</div>
+            </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:16px;padding-top:12px;border-top:2px solid ${s.accent};">
+            ${kv('Пациент / Bemor', d.patientName)}
+            ${kv('Отделение', d.department)}
+            ${kv('Палата / Койка', [d.ward, d.bed].filter(Boolean).join(' / '))}
+            ${kv('Лечащий врач', d.doctorName)}
+        </div>
+        <div class="body" style="margin-top:16px;border-top:1px solid #e7ebee;padding-top:12px;">
+            ${paras.map((t) => `<p style="margin:0 0 10px;">${esc(t)}</p>`).join('')}
+        </div>
+        <div style="display:flex;justify-content:space-between;gap:24px;margin-top:40px;">
+            <div style="flex:1;">
+                <div class="lbl">Пациент / Bemor</div>
+                <div style="border-bottom:1px solid #16232b;height:28px;"></div>
+                <div style="font-size:11px;color:#7a8892;margin-top:3px;">подпись</div>
+            </div>
+            <div style="flex:1;">
+                <div class="lbl">Врач / Shifokor</div>
+                <div style="font-size:14px;font-weight:600;color:${s.ink};height:28px;border-bottom:1px solid #16232b;display:flex;align-items:flex-end;">${esc(d.doctorName || '')}</div>
+                <div style="font-size:11px;color:#7a8892;margin-top:3px;">подпись</div>
+            </div>
+        </div>
+        ${footerHTML(s)}
+    `;
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +412,9 @@ function titleFor(type) {
         act:        'Акт оказанных услуг',
         check:      'Service receipt',
         fiscal:     'Fiscal receipt',
+        inpatient_contract: 'Договор на госпитализацию',   // INPATIENT_DOCS_V1
+        inpatient_consent:  'Информированное согласие',
+        inpatient_memo:     'Памятка стационара',
     })[type] || 'Document';
 }
 function logoSVG(accent) {

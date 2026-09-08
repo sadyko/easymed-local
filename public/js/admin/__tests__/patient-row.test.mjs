@@ -413,3 +413,39 @@ test('всё, что умел экран, цело: поиск, дата рож�
   card.click();
   assert.equal(navigated.at(-1)[0], 'patient-card', 'кнопка «Карточка» больше не открывает карту');
 });
+
+// ===========================================================================
+// DEBT_FLOW_V1 — «yes mark as a debt»: долг стоит у имени в реестре.
+// ===========================================================================
+test('DEBT_FLOW_V1: у должника красная метка «Долг» с суммой, у остальных её нет; долг спрашивается одним запросом на страницу', async () => {
+  const prevFetch = globalThis.fetch;
+  let invoiceQueries = 0;
+  globalThis.fetch = async (url, opts = {}) => {
+    const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    if (String(url).startsWith('/api/db') && body && body.table === 'invoices') {
+      invoiceQueries++;
+      const st = (body.filters || []).find((x) => x.col === 'status' || x.column === 'status' || x.field === 'status');
+      assert.ok(!st || String(st.val ?? st.value) === 'debt', 'спрашивать надо только счета-долги: ' + JSON.stringify(body.filters));
+      return { ok: true, status: 200, json: async () => ({ data: [
+        { patient_id: 1, total_amount: 400000, paid_amount: 100000 },
+        { patient_id: 1, total_amount: 50000,  paid_amount: 0 },
+      ], count: 2 }) };
+    }
+    return prevFetch(url, opts);
+  };
+  try {
+    const { box } = await paint({ lang: 'ru' });
+    const rows = rowsOf(box);
+    const debtor = rows.find((r) => textOf(r).includes('Каримова'));
+    assert.ok(debtor, 'строка должницы не найдена');
+    const tag = byClass(debtor, 'pt-debt')[0];
+    assert.ok(tag, 'у должницы нет метки «Долг»');
+    assert.ok(hasClass(tag, 'tag-crit'), 'метка долга обязана быть красной (tag-crit), а не жёлтой');
+    assert.ok(textOf(tag).includes('Долг'), 'метка без слова «Долг»: ' + textOf(tag));
+    assert.ok(textOf(tag).replace(/\s/g, '').includes('350000'), 'сумма долга = остаток по счетам (350 000): ' + textOf(tag));
+    for (const r of rows) if (r !== debtor) assert.equal(byClass(r, 'pt-debt').length, 0, 'метка долга у того, кто не должен: ' + textOf(r).slice(0, 60));
+    assert.equal(invoiceQueries, 1, 'долги спрашиваются одним запросом на страницу, а не по строке');
+  } finally {
+    globalThis.fetch = prevFetch;
+  }
+});

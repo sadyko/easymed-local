@@ -56,8 +56,11 @@
 import {
   RpcError, loadAdmission, assertAdmissionAtLeast, assertCanPrescribe,
   assertMayTransition, admissionTransition, CLOSED_STATUSES,
+  isAdmittingDoctor,   // ADMITTING_DOCTOR_V1
 } from './inpatient-flow.js';
 import { hasAnyRole, effectiveRoles } from '../roles.js';
+import { titleSheetCaseItem, sheetView } from './title-sheet.js';   // TITLE_SHEET_V1
+import { sanitizeStoredHtml, htmlToText } from '../../../public/js/shared/rich-text.js';   // CASE_DOC_A4_V1
 
 export { RpcError };
 
@@ -101,8 +104,14 @@ export { RpcError };
 //
 // Следующий шаг назван вслух и здесь не сделан: DEPARTMENT_PROFILE_V2 —
 // справочник отделений с профилем и составом набора на профиль.
+// CONSENT_OUT_V1 (2026-09-08) — «Согласие на госпитализацию и вмешательство»
+// из набора УБРАНО (владелец: «the consent shouldn't be there»). Согласие —
+// бумага, которую пациент подписывает при поступлении, и её отметка живёт на
+// титульном листе (INPATIENT_DOCS_V1: договор / согласие / памятка); врачебной
+// записью она не является и в чек-листе врача только занимала «следующий
+// шаг». Уже написанные записи рода 'consent' остаются читаемыми и печатаются
+// в собранной истории первыми (LEGACY_KINDS ниже).
 export const CASE_DOC_SET = Object.freeze([
-  { kind: 'consent',     due: 'clock',        hours: 2 },
   { kind: 'intake',      due: 'clock',        hours: 2 },
   { kind: 'anesthesia',  due: 'surgical',     hours: 24, block: 'surgical' },
   { kind: 'preop',       due: 'surgical',     hours: 24, block: 'surgical' },
@@ -124,7 +133,10 @@ export const OTHER_KIND = 'other';
 const REQUIRED_KINDS = CASE_DOC_SET.map((d) => d.kind);
 const CASE_DOC_BY_KIND = new Map(CASE_DOC_SET.map((d) => [d.kind, d]));
 
-const KINDS = [...REQUIRED_KINDS, OTHER_KIND];
+/** Роды, которых в наборе больше нет, но записи которых у клиник уже есть (CONSENT_OUT_V1). */
+export const LEGACY_KINDS = Object.freeze(['consent']);
+
+const KINDS = [...REQUIRED_KINDS, ...LEGACY_KINDS, OTHER_KIND];
 
 // ДОКУМЕНТ, КОТОРЫЙ ВЕДЁТ ЛЕЧАЩИЙ ВРАЧ. У этих публикация спрашивает
 // assertCanPrescribe — «лечение начато и это свой пациент»: дневник, этапный и
@@ -169,7 +181,10 @@ const CHANGE_ATTENDING_ROLES = ['head_doctor', 'admin'];
 // CHANGE_ATTENDING_ROLES — один и тот же круг. Список шире права был бы
 // справочником сотрудников для всех, кто открыл стационар, а он здесь не за
 // этим.
-const ATTENDING_ROLES = CHANGE_ATTENDING_ROLES;
+// ADMITTING_DOCTOR_V1 — список стал шире: приёмный врач назначает лечащего
+// (ему нужен список), а медсестра при размещении называет приёмного врача
+// (ей — тот же список). Это имена действующих врачей, не более.
+const ATTENDING_ROLES = ['head_doctor', 'admin', 'doctor', 'nurse', 'senior_nurse'];
 
 // ГДЕ лечащего врача МЕНЯЮТ. До 'active' его НАЗНАЧАЮТ (первичный осмотр
 // главного врача, admission_set_attending) — там менять ещё нечего;
@@ -182,6 +197,20 @@ const CHANGE_ATTENDING_STATUSES = ['active', 'discharging'];
 function str(v, max, fallback = '') {
   if (v === null || v === undefined) return fallback;
   return String(v).trim().slice(0, max);
+}
+
+/**
+ * CASE_DOC_A4_V1 — раздел документа: разметка, очищенная до оформления.
+ *
+ * Обрезка идёт ПО ТЕКСТУ, а не по разметке: срезать HTML посередине значит
+ * сохранить документ с недописанным тегом, который потом сломает вёрстку у
+ * читающего. Слишком длинный раздел падает до простого текста — он остаётся
+ * читаемым, теряя только оформление.
+ */
+function rich(v, max) {
+  const html = sanitizeStoredHtml(v);
+  if (html.length <= max) return html;
+  return htmlToText(html).slice(0, max);
 }
 
 function posIntOrNull(v) {
@@ -263,12 +292,21 @@ export function admissionReviewSave(db, args, user) {
   requireRole(user, WRITE_ROLES, 'Врачебная запись');
 
   const publish = a.publish === true || a.publish === 1 || a.publish === 'true';
+  // CASE_DOC_A4_V1 — разделы документа пишутся форматируемым текстом (лист A4,
+  // как в кабинете врача), то есть приходят разметкой. Чистит её СЕРВЕР, а не
+  // только экран: /api/rpc открыт с любого компьютера клиники, и «наш экран уже
+  // почистил» — не проверка. Пределы удвоены: разметка занимает место, а текста
+  // столько же.
+  //
+  // ДИАГНОЗ ОСТАЁТСЯ ПРОСТЫМ ТЕКСТОМ. Он показывается в обзоре, в журнале
+  // госпитализаций и в списках — там разметка была бы мусором, а не
+  // оформлением.
   const fields = {
-    complaints: str(a.complaints, 2000),
-    objective:  str(a.objective, 4000),
-    diagnosis:  str(a.diagnosis, 500),
-    plan:       str(a.plan, 4000),
-    body:       str(a.body, 8000),
+    complaints: rich(a.complaints, 4000),
+    objective:  rich(a.objective, 8000),
+    diagnosis:  str(htmlToText(a.diagnosis), 500),
+    plan:       rich(a.plan, 8000),
+    body:       rich(a.body, 16000),
   };
 
   const run = db.transaction(() => {
@@ -304,6 +342,25 @@ export function admissionReviewSave(db, args, user) {
           throw new RpcError(primaryStateRefusal(db, adm), 400);
         }
         authorRole = usedRole(user, ['head_doctor', 'admin']);
+      } else if (kind === 'intake') {
+        // ADMITTING_DOCTOR_V1 — «Осмотр приёмного врача» пишет ПРИЁМНЫЙ ВРАЧ:
+        // тот, кого медсестра назвала при размещении. Главный врач и
+        // администратор — как и прежде (они закрывают любой пробел). Чужому
+        // врачу отказ называет, кого ждут.
+        if (CLOSED_STATUSES.includes(adm.status)) {
+          throw new RpcError('Госпитализация закрыта — документы в неё больше не подшивают.', 400);
+        }
+        if (!hasAnyRole(user, ['head_doctor', 'admin']) && !isAdmittingDoctor(adm, user)) {
+          const who = adm.admitting_doctor_id
+            ? (db.prepare('SELECT full_name FROM users WHERE id = ?').get(adm.admitting_doctor_id) || {}).full_name
+            : '';
+          throw new RpcError(who
+            ? `Осмотр приёмного врача пишет приёмный врач этого пациента — ${who} (или главный врач).`
+            : 'Осмотр приёмного врача пишет приёмный врач, которого медсестра называет при размещении, или главный врач. Приёмный врач у этой госпитализации не назначен.', 403);
+        }
+        authorRole = isAdmittingDoctor(adm, user)
+          ? usedRole(user, ['doctor', 'head_doctor', 'admin'])
+          : usedRole(user, ['head_doctor', 'admin', 'doctor']);
       } else if (ATTENDING_DOC_KINDS.includes(kind)) {
         // Обход и эпикриз ведёт тот, кто лечит: лечащий врач СВОЕГО пациента,
         // главный врач, администратор — и только по начатому лечению. Это тот
@@ -374,6 +431,12 @@ export function admissionReviewSave(db, args, user) {
           admissionTransition(db, { admission_id: adm.id, to: 'examined', at }, user);
         }
       }
+      // ADMITTING_DOCTOR_V1 — осмотр приёмного врача ТОЖЕ закрывает шаг
+      // «осмотрен»: после него лечащего врача назначают (главный или сам
+      // приёмный). Подпись шага — того, кто опубликовал осмотр.
+      if (kind === 'intake' && adm.status === 'admitted') {
+        admissionTransition(db, { admission_id: adm.id, to: 'examined', at }, user, { admittingDoctorOk: true });
+      }
     }
 
     return {
@@ -416,8 +479,11 @@ export function admissionSetAttending(db, args, user) {
     const adm = loadAdmission(db, a.admission_id);
 
     // 1. Роль. «Назначение лечащего врача — недоступно вашей роли. Это делает:
-    //    главный врач, администратор.»
-    assertMayTransition('examined', 'active', user);
+    //    главный врач, администратор.» ADMITTING_DOCTOR_V1 — и приёмный врач
+    //    ЭТОГО пациента: владелец — «head doctor or selected doctor should
+    //    fill the treating doctor».
+    const asAdmitting = isAdmittingDoctor(adm, user);
+    if (!asAdmitting) assertMayTransition('examined', 'active', user);
 
     // 2. Состояние: назначать лечащего можно только ОСМОТРЕННОМУ. До осмотра
     //    отказ называет недостающий шаг сам (assertAdmissionAtLeast).
@@ -455,7 +521,7 @@ export function admissionSetAttending(db, args, user) {
     db.prepare(
       'UPDATE admissions SET attending_doctor_id = ?, doctor_id = COALESCE(doctor_id, ?) WHERE id = ?',
     ).run(doctorId, doctorId, adm.id);
-    const res = admissionTransition(db, { admission_id: adm.id, to: 'active' }, user);
+    const res = admissionTransition(db, { admission_id: adm.id, to: 'active' }, user, { admittingDoctorOk: asAdmitting });
 
     return { admission: res.admission, attending: { id: u.id, full_name: u.full_name, specialty: u.specialty || '' } };
   });
@@ -869,6 +935,12 @@ export function admissionCaseDocs(db, args, user) {
   const rows = loadCaseRows(db, adm.id);
   const byKind = groupRowsByKind(rows);
 
+  // ADMITTING_DOCTOR_V1 — кого ждут с осмотром при поступлении: экран называет
+  // приёмного врача рядом с пунктом, пока осмотр не написан.
+  const admittingName = adm.admitting_doctor_id
+    ? ((db.prepare('SELECT full_name FROM users WHERE id = ?').get(adm.admitting_doctor_id) || {}).full_name || '')
+    : '';
+
   // Хирургический блок — по данным (см. CASE_DOC_SET): появился хоть один из
   // трёх документов операции, значит оперируют.
   const surgicalRows = SURGICAL_KINDS.flatMap((k) => byKind.get(k) || []);
@@ -936,12 +1008,19 @@ export function admissionCaseDocs(db, args, user) {
       review_id: tail ? tail.id : null,
       published_at: tail ? tail.published_at : null,
       author_name: tail ? (tail.author_name || '') : '',
+      // ADMITTING_DOCTOR_V1 — у «Осмотра приёмного врача» есть адресат.
+      assignee_name: def.kind === 'intake' ? admittingName : '',
       revisions: chain ? revisionsOf(chain) : [],
       revision_count: chain ? chain.length : 0,
       draft_id: draft ? draft.id : null,
       has_draft: !!draft,
     };
   });
+
+  // TITLE_SHEET_V1 — титульный лист медсестры: ПЕРВОЙ строкой, в прогрессе и в
+  // списке «не оформлено», но НЕ в «следующем шаге»: «следующий» — одно
+  // заметное действие ВРАЧА, а лист — дело поста.
+  const titleItem = titleSheetCaseItem(db, adm, base, now);
 
   // «Прочие документы» — второй раздел мокапа. Каждая цепочка здесь отдельный
   // документ: это открытый род, и второй такой же — не исправление первого.
@@ -992,11 +1071,12 @@ export function admissionCaseDocs(db, args, user) {
   const nextKind = next ? next.kind : null;
   if (next) next.state = 'next';
 
+  const allItems = [titleItem, ...items];
   const progress = {
-    done: items.filter((it) => it.required && it.state === 'published').length,
-    total: items.filter((it) => it.required).length,
-    overdue: items.filter((it) => it.state === 'overdue').length,
-    draft: items.filter((it) => it.state === 'draft' || it.state === 'next').length,
+    done: allItems.filter((it) => it.required && it.state === 'published').length,
+    total: allItems.filter((it) => it.required).length,
+    overdue: allItems.filter((it) => it.state === 'overdue').length,
+    draft: allItems.filter((it) => it.state === 'draft' || it.state === 'next').length,
   };
 
   // ─── ГЕЙТ ВЫПИСКИ, КОТОРЫЙ УЖЕ СУЩЕСТВУЕТ ────────────────────────────────
@@ -1016,7 +1096,7 @@ export function admissionCaseDocs(db, args, user) {
   const blocking = epicrisis && epicrisis.state !== 'published'
     ? [{ kind: 'discharge', reason: epicrisis.has_draft ? 'draft' : 'absent' }]
     : [];
-  const incomplete = items.filter((it) => it.required && it.state !== 'published').map((it) => it.kind);
+  const incomplete = allItems.filter((it) => it.required && it.state !== 'published').map((it) => it.kind);
 
   return {
     admission_id: adm.id,
@@ -1026,7 +1106,7 @@ export function admissionCaseDocs(db, args, user) {
     base_source: baseSource,
     surgical,
     surgical_from: isoOf(surgBase),
-    items,
+    items: allItems,
     other,
     progress,
     next_kind: nextKind,
@@ -1162,6 +1242,12 @@ export function admissionCaseFile(db, args, user) {
   // сверху вниз как документ, и дневник, вклинившийся между согласием и
   // осмотром приёмного врача только потому, что его написали раньше, делает её
   // нечитаемой.
+  // CONSENT_OUT_V1 — старые записи согласия (род больше не в наборе) идут в
+  // истории первыми, как и шли: бумага о согласии открывает историю болезни.
+  LEGACY_KINDS.forEach((kind, i) => {
+    const chain = currentChain(chainsOf((byKind.get(kind) || []).filter((r) => r.published_at)));
+    if (chain) push(kind, chain, -LEGACY_KINDS.length + i);
+  });
   CASE_DOC_SET.forEach((def, i) => {
     const chains = chainsOf((byKind.get(def.kind) || []).filter((r) => r.published_at));
     if (def.due === 'period') {
@@ -1190,6 +1276,7 @@ export function admissionCaseFile(db, args, user) {
     gaps: state.discharge_gate.incomplete,
     complete: state.discharge_gate.incomplete.length === 0,
     drafts_excluded: rows.filter((r) => !r.published_at).length,
+    title_sheet: sheetView(db, adm),   // TITLE_SHEET_V1 — первая страница собранной истории
     progress: state.progress,
   };
 }

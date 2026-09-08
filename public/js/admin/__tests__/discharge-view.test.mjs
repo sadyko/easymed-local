@@ -627,3 +627,15 @@ test('все размеры экрана — со шкалы восьми сту
     assert.ok(STEPS.has(v), sel + ': ' + v + 'px — не ступень шкалы');
   }
 });
+
+// ─── DEBT_FLOW_V1 — что станет с деньгами, сказано до подписи ───────────────
+test('DEBT_FLOW_V1: окно оформления с долгом говорит, что счета станут долгом, и называет их номера после оформления', async () => {
+  rpcCalls.length = 0;
+  const root = mk('div');
+  const view = await renderDischarge(root, {});
+  view.openFinalize(OWING);
+  const modal = document.body.children[document.body.children.length - 1];
+  const text = textOf(modal);
+  assert.ok(text.includes('станут долгом'), 'в окне не сказано, что счета станут долгом: ' + text.slice(0, 600));
+  assert.ok(text.includes('списке «Долг»'), 'не названо, где касса увидит долг');
+});

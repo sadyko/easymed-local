@@ -35,15 +35,19 @@ test('Раздел маппится на СУЩЕСТВУЮЩИЙ enum services.
       ['Лаборатория', 'lab'],
       ['Процедура', 'procedure'],
       ['Диагностика', 'imaging'],
-      ['Рентген', 'radiology'],
-      ['Другое', 'other'],
+      // SERVICE_TYPES_FIVE_V1 — «Рентген» и «Другое» убраны, добавлена
+      // «Хирургия». Рентген не значил ничего: своей ветки в маршрутизаторе у
+      // него не было, он падал в тот же else, что и «Другое». А «Другое» и было
+      // хирургией — в настройках услуг этот тип так и подписан, и все 183 такие
+      // услуги в рабочем наборе оказались операциями.
+      ['Хирургия', 'other'],   // хранится как 'other' — см. миграцию 109
     ],
   );
 });
 
 test('лабораторный блок виден ТОЛЬКО при разделе «лаборатория»', () => {
   assert.equal(labBlockVisible('lab'), true);
-  for (const t of ['consultation', 'procedure', 'imaging', 'radiology', 'other', '', undefined]) {
+  for (const t of ['consultation', 'procedure', 'imaging', 'other', '', undefined]) {
     assert.equal(labBlockVisible(t), false, String(t));
   }
 });

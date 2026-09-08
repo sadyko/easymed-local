@@ -149,7 +149,7 @@ test('032 RPC alias: request_admission creates a bed-less requested admission, o
   const { admission } = RPC.request_admission(db, { p_patient_id: 1, p_doctor_id: 2, p_pathway: 'therapy', p_chief_complaint: 'Боли', p_diagnosis: 'J06.9' }, DOCTOR);
   assert.equal(admission.status, 'ordered');   // INPATIENT_FLOW_V1 — прежнее 'requested'
   assert.equal(admission.bed_id, null);
-  assert.match(admission.admission_no, /^ADM-\d{5}$/);
+  assert.match(admission.admission_no, /^\d{4}\/\d{5}$/);   // ADMISSION_NUMBER_V2 — «2026/00001»
   assert.equal(admission.admission_diagnosis, 'J06.9');
   assert.throws(() => RPC.request_admission(db, { p_patient_id: 1, p_pathway: 'therapy' }, DOCTOR), /pending admission request/);
 });

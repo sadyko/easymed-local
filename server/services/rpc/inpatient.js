@@ -3,8 +3,11 @@
 // client-supplied amounts are never trusted. Every handler that touches
 // money or bed/admission state runs inside db.transaction(...)() for atomicity.
 
-import { nextInvoiceNumber } from './billing.js';
+import { nextInvoiceNumber, buildAdmissionInvoice } from './billing.js';   // DEBT_FLOW_V1 — долг при выписке собирается в счёт
+import { nextAdmissionNo } from '../domain/admission-number.js';   // ADMISSION_NUMBER_V2
+import { generateAdmissionBill } from './admission-bill.js';   // CASE_OVERVIEW_V1 — выписка со счётом
 import { assertTransition } from '../domain/lifecycle.js';
+import { outstandingWhere } from '../domain/money.js';   // DEBT_FLOW_V1 — «ещё должен» одним списком на весь продукт
 import { hasAnyRole } from '../roles.js';
 // INPATIENT_FLOW_V1 (миграция 091) — «в койке» это ЧЕТЫРЕ состояния, а не одно.
 // Каждый запрос ниже, который раньше спрашивал status='active', спрашивает этот
@@ -21,6 +24,7 @@ import {
 // Старый путь поступления обязан спросить его тем же вопросом, что и новый, —
 // иначе «лечащий врач» на карточке и «лечащий врач» в назначениях разъедутся.
 import { isDoctorRow } from './inpatient-reviews.js';
+import { saveTitleSheet } from './title-sheet.js';   // TITLE_SHEET_V1 — лист в той же транзакции, что и койка
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -210,7 +214,7 @@ export function requestAdmission(db, args, user) {
       VALUES (?, ?, ?, ?, ?, 'ordered', ?)
     `).run(patientId, doctorId, pathway, chiefComplaint, admissionDiagnosis, user.id);
     const admissionId = info.lastInsertRowid;
-    db.prepare("UPDATE admissions SET admission_no = 'ADM-' || substr('00000'||id,-5,5) WHERE id=?").run(admissionId);
+    db.prepare('UPDATE admissions SET admission_no = ? WHERE id = ?').run(nextAdmissionNo(db, nowIso(db)), admissionId);   // ADMISSION_NUMBER_V2 — «2026/00051»
 
     return { admission: db.prepare('SELECT * FROM admissions WHERE id = ?').get(admissionId) };
   });
@@ -403,7 +407,7 @@ export function admitPatient(db, args, user) {
            chiefComplaint, chiefComplaint, admissionDiagnosis, admissionDiagnosis, pending.id);
     const admissionId = pending.id;
 
-    db.prepare("UPDATE admissions SET admission_no = 'ADM-' || substr('00000'||id,-5,5) WHERE id=?").run(admissionId);
+    db.prepare('UPDATE admissions SET admission_no = ? WHERE id = ?').run(nextAdmissionNo(db, nowIso(db)), admissionId);   // ADMISSION_NUMBER_V2 — «2026/00051»
     db.prepare("UPDATE beds SET status='occupied' WHERE id=?").run(bedId);
     // BED_CONSOLE_V1 — «Поступил» в журнале движений пациента.
     db.prepare(`
@@ -779,7 +783,7 @@ export function admissionOrderCreate(db, args, user) {
     `).run(patientId, wardId, doctorId, department, admissionType, stayMode,
            plannedAt, note, at, user.id, user.id);
     const admissionId = info.lastInsertRowid;
-    db.prepare("UPDATE admissions SET admission_no = 'ADM-' || substr('00000'||id,-5,5) WHERE id=?").run(admissionId);
+    db.prepare('UPDATE admissions SET admission_no = ? WHERE id = ?').run(nextAdmissionNo(db, nowIso(db)), admissionId);   // ADMISSION_NUMBER_V2 — «2026/00051»
     // Журнал движений: заявка — тоже событие с пациентом, и «когда это
     // началось» должно читаться из одного места вместе с поступлением и
     // переводами (BED_CONSOLE_V1).
@@ -852,9 +856,22 @@ export function admissionAdmit(db, args, user) {
   const bedId = args && args.bed_id;
   if (!isPositiveInt(bedId)) throw new RpcError('bed_id must be a positive integer.', 400);
   const at = typeof (args && args.at) === 'string' && args.at ? args.at : null;
+  // ADMITTING_DOCTOR_V1 — приёмный врач, которого медсестра называет при
+  // размещении (миграция 113). Необязателен для сервера (старые вызовы), но
+  // экран без него не кладёт: осмотр при поступлении должен быть кому писать.
+  const rawAdmitting = args && args.admitting_doctor_id;
+  const admittingId = rawAdmitting === undefined || rawAdmitting === null || rawAdmitting === '' ? null : rawAdmitting;
+  if (admittingId !== null && !isPositiveInt(admittingId)) throw new RpcError('admitting_doctor_id must be a positive integer.', 400);
 
   const run = db.transaction(() => {
     const adm = loadAdmission(db, admissionId);
+
+    if (admittingId !== null) {
+      const u = db.prepare('SELECT id, role, is_doctor, specialty, license_number, active FROM users WHERE id = ?').get(admittingId);
+      if (!u) throw new RpcError('Приёмный врач не найден.', 400);
+      if (!isDoctorRow(u)) throw new RpcError('Приёмным врачом можно назначить только врача: у выбранного сотрудника нет признака врача.', 400);
+      if (u.active === 0) throw new RpcError('Сотрудник уволен — приёмным врачом его назначить нельзя.', 400);
+    }
 
     // 1. Заявка ли это ещё.
     if (adm.status !== 'ordered') {
@@ -896,7 +913,8 @@ export function admissionAdmit(db, args, user) {
 
     // Койка и палата — дело этого обработчика; состояние и подпись шага
     // (admitted_by / admitted_at) — дело машины маршрута.
-    db.prepare('UPDATE admissions SET bed_id = ?, ward_id = ? WHERE id = ?').run(bedId, bed.ward_id, adm.id);
+    db.prepare('UPDATE admissions SET bed_id = ?, ward_id = ?, admitting_doctor_id = COALESCE(?, admitting_doctor_id) WHERE id = ?')
+      .run(bedId, bed.ward_id, admittingId, adm.id);
     const res = admissionTransition(db, { admission_id: adm.id, to: 'admitted', at }, user);
     db.prepare("UPDATE beds SET status='occupied' WHERE id=?").run(bedId);
     db.prepare(`
@@ -904,7 +922,15 @@ export function admissionAdmit(db, args, user) {
       VALUES (?, ?, ?, 'admit', ?, ?)
     `).run(adm.id, bedId, bed.ward_id, res.admission.admitted_at, user.id);
 
-    return { admission: res.admission, bed: db.prepare('SELECT * FROM beds WHERE id = ?').get(bedId) };
+    // TITLE_SHEET_V1 — титульный лист медсестры В ТОЙ ЖЕ транзакции: плохое
+    // значение в листе откатывает и койку, чтобы пациент не оказался размещён
+    // без листа «наполовину». Без листа (старый вызов) — как раньше.
+    let titleSheet = null;
+    if (args.title_sheet && typeof args.title_sheet === 'object') {
+      titleSheet = saveTitleSheet(db, res.admission, args.title_sheet, user);
+    }
+
+    return { admission: res.admission, bed: db.prepare('SELECT * FROM beds WHERE id = ?').get(bedId), title_sheet: titleSheet };
   });
 
   return run();
@@ -1027,6 +1053,43 @@ export function admissionBalance(db, admissionId) {
   };
 }
 
+/**
+ * DEBT_FLOW_V1 — долг при выписке становится ДОЛГОМ СЧЁТА.
+ *
+ * Владелец: «where should the patient go from the stationary if cashier
+ * cancels the invoice… can we make some debt?» — «yes mark as a debt».
+ *
+ * До этого долг жил ТОЛЬКО в строке госпитализации (discharge_debt_amount):
+ * касса его не видела, список «Долг» на кассе оставался пуст, и через месяц
+ * никто не помнил, кто сколько остался должен. Теперь при выписке с подписью
+ * «Долг согласован»:
+ *   1. невыставленные строки (начислено, но не в счёте) собираются в ОДИН счёт
+ *      госпитализации — теми же правилами, что «Выписать и выставить счёт»;
+ *      проживание здесь НЕ доначисляется: пропажа койко-дней остаётся
+ *      предупреждением окна (ACCOMMODATION_GAP_V1), а не молчаливой суммой,
+ *      которой не было в числе под подписью;
+ *   2. каждый неоплаченный счёт госпитализации получает статус 'debt' — тот же,
+ *      что ставит кассир кнопкой «Оставить как долг» (DEBT_BTN_V1), и потому
+ *      попадает в тот же список «Долг» и в тот же красный бейдж карты.
+ *
+ * Возвращает счета-долги с остатком: экран называет их номера в подтверждении.
+ */
+function markAdmissionDebt(db, admissionId, user) {
+  const ids = db.prepare(`
+    SELECT id FROM admission_services
+     WHERE admission_id = ? AND invoice_item_id IS NULL AND billable = 1
+     ORDER BY id`).all(admissionId).map((r) => r.id);
+  if (ids.length) buildAdmissionInvoice(db, admissionId, ids, user);
+  // Список «ещё должен» — из domain/money.js (no-drift): 'debt' в нём тоже
+  // есть, и повторная выписка с долгом ничего не портит — долг остаётся долгом.
+  db.prepare(`UPDATE invoices SET status = 'debt' WHERE admission_id = ? AND ${outstandingWhere('status')}`)
+    .run(admissionId);
+  return db.prepare(`
+    SELECT id, invoice_number, total_amount, paid_amount FROM invoices
+     WHERE admission_id = ? AND status = 'debt' ORDER BY id`).all(admissionId)
+    .map((i) => ({ id: i.id, invoice_number: i.invoice_number, balance: round2(i.total_amount - i.paid_amount) }));
+}
+
 /** Сколько назначений ещё идёт: то, что чек-лист выписки называет «лист назначений». */
 function activeOrderCount(db, admissionId) {
   const row = db.prepare("SELECT COUNT(*) AS n FROM treatment_orders WHERE admission_id = ? AND status = 'active'")
@@ -1064,6 +1127,9 @@ export function admissionDischargeRequest(db, args, user) {
   const recommendations = textArg(args && args.recommendations, 4000);
   const plannedAt = textArg(args && args.planned_discharge_at, 40) || null;
   const at = textArg(args && args.at, 40) || null;
+  // CASE_OVERVIEW_V1 — «discharge button with generating the payments»: обзор
+  // врача шлёт generate_bill, старые вызовы — нет, и для них ничего не меняется.
+  const generateBill = !!(args && (args.generate_bill === true || args.generate_bill === 1 || args.generate_bill === 'true'));
 
   const run = db.transaction(() => {
     const adm = loadAdmission(db, admissionId);
@@ -1117,9 +1183,13 @@ export function admissionDischargeRequest(db, args, user) {
     db.prepare('UPDATE admissions SET discharge_requested_by = ?, discharge_requested_at = ? WHERE id = ?')
       .run((user && user.id) || null, stamp, admissionId);
 
+    // CASE_OVERVIEW_V1 — счёт в ТОЙ ЖЕ транзакции: заявка без счёта или счёт
+    // без заявки одинаково сбили бы кассу с толку.
+    const bill = generateBill ? generateAdmissionBill(db, admissionId, user) : null;
     return {
       admission: db.prepare('SELECT * FROM admissions WHERE id = ?').get(admissionId),
       epicrisis_id: epicrisis.id,
+      bill,   // CASE_OVERVIEW_V1
       // Чтобы врач видел, что оставляет старшей медсестре.
       active_orders: activeOrderCount(db, admissionId),
       balance: admissionBalance(db, admissionId),
@@ -1304,6 +1374,10 @@ export function admissionDischargeFinalize(db, args, user) {
       owes && debtAck ? dischargedAt : null,
       admissionId);
 
+    // 5b. DEBT_FLOW_V1 — подписанный долг становится долгом СЧЁТА (см.
+    //     markAdmissionDebt): касса видит его в списке «Долг», карта — бейджем.
+    const debtInvoices = owes && debtAck ? markAdmissionDebt(db, admissionId, user) : [];
+
     // 6. Койка: 'cleaning', НЕ 'free'.
     if (adm.bed_id) {
       db.prepare("UPDATE beds SET status = 'cleaning' WHERE id = ?").run(adm.bed_id);
@@ -1320,6 +1394,7 @@ export function admissionDischargeFinalize(db, args, user) {
       orders_left: remaining,
       balance,
       debt_acknowledged: owes && debtAck,
+      debt_invoices: debtInvoices,   // DEBT_FLOW_V1 — какие счета стали долгом
     };
   });
 
