@@ -465,7 +465,7 @@ export function referralPickerPair(v) {
         sourceSelect.appendChild(h('option', { value: '' }, '—'));
         const filterCat = currentCatId;
         for (const s of sources) {
-            if (filterCat && s.category_id !== filterCat) continue;
+            if (filterCat && String(s.category_id ?? '') !== String(filterCat)) continue;
             sourceSelect.appendChild(h('option', { value: s.id, selected: v.referral_source_id === s.id }, s.name || s.id));
         }
     }
@@ -473,22 +473,24 @@ export function referralPickerPair(v) {
     (async () => {
         const [{ data: cats }, { data: srcs }] = await Promise.all([
             supabase.from('referral_source_categories').select('id, name').eq('active', true).order('name'),
-            // CLOUD_LEFTOVER_COLUMNS_V1 — категория партнёра офлайн текстом в
-            // `category`; из-за `category_id` отвергался ВЕСЬ запрос, и список
-            // источников направления был пуст.
-            supabase.from('referral_sources').select('id, name, category').eq('active', true).order('name'),
+            // REFERRAL_CATEGORY_RATES_V1 (мигр. 109) — колонка category_id
+            // наконец существует. Прежний комментарий (CLOUD_LEFTOVER_COLUMNS_V1)
+            // описывал полусломанное состояние: запрос просили без category_id,
+            // а отбор ниже сравнивал именно его — то есть при выбранной
+            // категории список источников всегда оказывался пуст.
+            supabase.from('referral_sources').select('id, name, category_id').eq('active', true).order('name'),
         ]);
         categories = cats || [];
         sources    = srcs || [];
 
         // Стартовая категория — из категории уже выбранного источника.
         const initialSource = sources.find(s => s.id === v.referral_source_id);
-        currentCatId = initialSource?.category || '';
+        currentCatId = initialSource?.category_id != null ? String(initialSource.category_id) : '';
 
         clear(categorySelect);
         categorySelect.appendChild(h('option', { value: '' }, 'All categories'));
         for (const c of categories) {
-            categorySelect.appendChild(h('option', { value: c.id, selected: c.id === currentCatId }, c.name || c.id));
+            categorySelect.appendChild(h('option', { value: String(c.id), selected: String(c.id) === currentCatId }, c.name || c.id));
         }
         paintSources();
     })();
@@ -496,7 +498,8 @@ export function referralPickerPair(v) {
     categorySelect.addEventListener('change', () => {
         currentCatId = categorySelect.value;
         // If the previously-selected source isn't in the new category, clear it.
-        const stillValid = sources.find(s => s.id === sourceSelect.value && (!currentCatId || s.category_id === currentCatId));
+        const stillValid = sources.find(s => String(s.id) === String(sourceSelect.value)
+            && (!currentCatId || String(s.category_id ?? '') === currentCatId));
         paintSources();
         if (!stillValid) sourceSelect.value = '';
     });

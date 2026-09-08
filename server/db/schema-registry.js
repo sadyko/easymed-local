@@ -325,13 +325,20 @@ export const REGISTRY = {
   // pays a commission to: ФИО in parts, contact, workplace, district, and the
   // payout details. `name` stays the display label every consumer reads and is
   // composed from the name parts by the editor.
-  referral_sources: { read:{roles:ALL_STAFF,columns:['id','name','category','last_name','first_name','middle_name',
-                 'phone','workplace','district','payment_type','card_number','active']},
-               write:{insert:{roles:['admin','registrar'],columns:['name','category','last_name','first_name','middle_name',
-                 'phone','workplace','district','payment_type','card_number']},
-                 update:{roles:['admin'],columns:['name','category','last_name','first_name','middle_name',
-                 'phone','workplace','district','payment_type','card_number','active']},delete:{roles:[]}},
-               filters:['id','active'], embed:{} },
+  // REFERRAL_CATEGORY_RATES_V1 (mig 109) — `category_id` is the real link that
+  // replaced the free-text `category`; the text column stays readable only so a
+  // row the migration could not link is still visible. reward_mode / own_percent
+  // / own_rates hold this source's OWN rates when it does not follow its
+  // category's. own_rates is JSON — the compiler serialises it, the route parses
+  // it back (see `json` below).
+  referral_sources: { read:{roles:ALL_STAFF,columns:['id','name','category','category_id','last_name','first_name','middle_name',
+                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','active']},
+               write:{insert:{roles:['admin','registrar'],columns:['name','category','category_id','last_name','first_name','middle_name',
+                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates']},
+                 update:{roles:['admin'],columns:['name','category','category_id','last_name','first_name','middle_name',
+                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','active']},delete:{roles:[]}},
+               filters:['id','active','category_id'], json:['own_rates'],
+               embed:{ referral_source_categories:{table:'referral_source_categories',fk:'category_id',columns:['id','name']} } },
   // DOCTOR_WORKSPACE_V1 — columns the My-services doctor dashboard and the
   // workspace read. `active` is a generated mirror of is_active (mig 032) so
   // easymed's `.eq('active', true)` filters work unchanged; the rates/KPI
@@ -528,12 +535,16 @@ export const REGISTRY = {
   cashback_rules: { read:{roles:ALL_STAFF,columns:['id','name','percent','active','created_at']},
     write:{insert:{roles:['admin'],columns:['name','percent','active']},update:{roles:['admin'],columns:['name','percent','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
-  referral_source_categories: { read:{roles:ALL_STAFF,columns:['id','name','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','active']},update:{roles:['admin'],columns:['name','active']},delete:{roles:[]}},
-    filters:['id','active'], embed:{} },
-  referral_rewards: { read:{roles:ALL_STAFF,columns:['id','name','percent','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','percent','active']},update:{roles:['admin'],columns:['name','percent','active']},delete:{roles:[]}},
-    filters:['id','active'], embed:{} },
+  // REFERRAL_CATEGORY_RATES_V1 (mig 109) — the category carries the STANDARD
+  // reward: a percent for everything, plus per-service-group rows in `rates`
+  // (JSON) that override it. This is what `referral_rewards` used to do by
+  // NAME MATCHING, which is why that table no longer has a registry entry: the
+  // migration moved every active rule onto the category or the source it was
+  // named after, and nothing reads it now.
+  referral_source_categories: { read:{roles:ALL_STAFF,columns:['id','name','standard_percent','rates','active','created_at']},
+    write:{insert:{roles:['admin'],columns:['name','standard_percent','rates','active']},
+      update:{roles:['admin'],columns:['name','standard_percent','rates','active']},delete:{roles:[]}},
+    filters:['id','active'], json:['rates'], embed:{} },
   patient_discounts: { read:{roles:ALL_STAFF,columns:['id','name','kind','percent','amount','active','created_at']},
     write:{insert:{roles:['admin'],columns:['name','kind','percent','amount','active']},update:{roles:['admin'],columns:['name','kind','percent','amount','active']},delete:{roles:[]}},
     filters:['id','active','kind'], embed:{} },

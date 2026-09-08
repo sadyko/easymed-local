@@ -905,7 +905,6 @@ export const SECTIONS = {
             { key: 'type',                  label: 'Type' },
             { key: 'contact_person',        label: 'Contact' },
             { key: 'phone',                 label: 'Phone' },
-            { key: 'commission_mode',       label: 'Reward' },   // REFERRAL_REWARDS_V1
             { key: 'active',                label: 'Status', type: 'bool' },
         ],
         fields: [
@@ -916,14 +915,11 @@ export const SECTIONS = {
                         ['walk_in','Walk-in'], ['advertisement','Advertisement'], ['other','Other']] },
             { key: 'contact_person',        label: 'Contact person', type: 'text' },
             { key: 'phone',                 label: 'Phone', type: 'phone' },
-            // REFERRAL_REWARDS_V1 — reward is per product group: «Общий» uses the
-            // clinic-wide table (Settings → Реферальное вознаграждение), «Вручную»
-            // carries its own per-group map (commission_rates jsonb). The legacy
-            // flat commission_percentage column stays in the DB, unused.
-            { key: 'commission_mode',       label: 'Вознаграждение', type: 'select', default: 'general',
-              options: [['general', 'Общий (ставки из настроек)'], ['manual', 'Вручную (свои ставки)']] },
-            { key: 'commission_rates',      label: 'Ставки по группам, %', type: 'referral_rates',
-              visibleWhen: (v) => v.commission_mode === 'manual' },
+            // REFERRAL_CATEGORY_RATES_V1 (мигр. 109) — вознаграждение задаётся в
+            // «Настройках → Направления»: стандартная ставка на КАТЕГОРИИ, своя —
+            // в карточке источника. Здесь его нет намеренно: прежние поля
+            // commission_mode / commission_rates писали в колонки, которых в этой
+            // базе никогда не было, то есть выбор в них просто пропадал.
             { key: 'notes',                 label: 'Notes', type: 'textarea' },
             { key: 'active',                label: 'Active', type: 'bool', default: true },
         ],

@@ -9,6 +9,9 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, toast, clear } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { formatMethods } from '../../shared/payment-methods.js?v=pm1';   // INVOICE_METHOD_COLUMN_V1 — общий словарь с сервером
+// REFERRAL_CATEGORY_RATES_V1 — правило «какая ставка применяется» общее с
+// сервером: этот же отчёт считается и там (rpc/reports.js).
+import { resolveReferralRate, rewardForLine } from '../../shared/referral-reward.js?v=rr1';
 import { reportTotals } from './report-totals.js?v=rt1';   // REPORT_TOTALS_V1
 // BUILDING_REPORTS_V1 — «Здание» в выгрузках. Это НЕ «Branch»: Branch — филиал
 // внутри этой базы (invoices.branch_id), а здание — отдельная установка со
@@ -367,12 +370,19 @@ async function downloadRevenueXlsx(rows, filenameBase = 'total-revenue') {
 
 
 // ---------------------------------------------------------------------------
-// REFERRAL_REWARDS_V1 — «Рефералы»: reward per referral source, % by product
-// group. Basis: visit_services rows carrying a referral (per-service
-// referral_source_id from the booking wizard, falling back to the visit-level
-// one), non-cancelled, amount = visit_services.total. Rate per service =
-// source manual → source.commission_rates[type_id] ?? 0, else the clinic-wide
-// companies.referral_reward_rates[type_id] ?? 0 (unset group = 0%).
+// REFERRAL_CATEGORY_RATES_V1 (мигр. 109) — «Рефералы»: вознаграждение по
+// источникам. Ставка берётся из КАРТОЧКИ источника и его категории; правило
+// решает один общий с сервером модуль (shared/referral-reward.js), потому что
+// этот же отчёт считается ещё и там — две копии правила означали бы две разные
+// суммы к выплате.
+//
+// Прежняя версия читала колонки commission_mode / commission_rates, которых в
+// этой базе никогда не было (наследство облачной версии), и падала с советом
+// «примените миграцию 103». То есть выгрузка была сломана.
+//
+// Основа: строки visit_services с направлением (пер-услуговый
+// referral_source_id из мастера записи, иначе визитный), кроме отменённых;
+// сумма — visit_services.total.
 // ---------------------------------------------------------------------------
 export const REFERRAL_COLUMNS = [
     { key: 'source_name',     label: 'Источник' },
@@ -380,6 +390,7 @@ export const REFERRAL_COLUMNS = [
     { key: 'mode',            label: 'Режим ставок' },
     { key: 'services_count',  label: 'Услуг' },
     { key: 'amount_sum',      label: 'Сумма услуг' },
+    { key: 'eff_percent',     label: 'Эфф. %' },
     { key: 'reward_sum',      label: 'Вознаграждение' },
 ];
 
@@ -389,7 +400,7 @@ export async function buildReferralReport({ period, branchId, branchIds, clinicI
     }
     let q = supabase.from('visit_services')
         .select(`
-            id, total, status, referral_source_id, service_id,
+            id, total, quantity, status, referral_source_id, service_id,
             services ( id, name, type_id ),
             visits!inner ( id, visit_date, branch_id, company_id, status, referral_source_id )
         `)
@@ -411,44 +422,50 @@ export async function buildReferralReport({ period, branchId, branchIds, clinicI
     if (rows.length === 0) return [];
 
     const srcIds = [...new Set(rows.map(r => r.referral_source_id || r.visits.referral_source_id))];
-    const [srcRes, catRes, coRes] = await Promise.all([
-        supabase.from('referral_sources').select('id, name, category_id, commission_mode, commission_rates').in('id', srcIds),
-        supabase.from('referral_source_categories').select('id, name'),
-        clinicId ? supabase.from('companies').select('referral_reward_rates').eq('id', clinicId).single() : Promise.resolve({ data: null }),
+    const [srcRes, catRes] = await Promise.all([
+        supabase.from('referral_sources')
+            .select('id, name, category_id, reward_mode, own_percent, own_rates').in('id', srcIds),
+        supabase.from('referral_source_categories').select('id, name, standard_percent, rates'),
     ]);
-    if (srcRes.error && /commission_mode/.test(srcRes.error.message || '')) {
-        throw new Error('Примените миграцию 103 (referral_rewards) в Supabase SQL editor.');
-    }
+    if (srcRes.error) throw new Error('referral_sources load: ' + srcRes.error.message);
     const srcById = new Map((srcRes.data || []).map(s => [s.id, s]));
-    const catById = new Map((catRes.data || []).map(c => [c.id, c.name]));
-    const generalRates = (coRes.data && coRes.data.referral_reward_rates) || {};
+    const catById = new Map((catRes.data || []).map(c => [c.id, c]));
 
-    // Aggregate per source.
-    const agg = new Map();   // id -> { source_name, ..., services_count, amount_sum, reward_sum }
+    // Аггрегация ПО ПОЗИЦИЯМ: у источника может быть своя ставка на каждую
+    // группу услуг, и умножить итог корзины на один процент больше нельзя.
+    const agg = new Map();
     for (const r of rows) {
         const sid = r.referral_source_id || r.visits.referral_source_id;
-        const src = srcById.get(sid);
+        const src = srcById.get(sid) || null;
+        const cat = src && src.category_id != null ? (catById.get(src.category_id) || null) : null;
         const amount = Number(r.total || 0);
         const typeId = r.services ? r.services.type_id : null;
-        const manual = src && src.commission_mode === 'manual';
-        const rateMap = manual ? (src.commission_rates || {}) : generalRates;
-        const pct = typeId != null && rateMap[typeId] != null ? Number(rateMap[typeId]) : 0;
         let a = agg.get(sid);
         if (!a) {
             a = {
                 source_name: src ? src.name : '(источник удалён)',
-                source_category: src ? (catById.get(src.category_id) || '—') : '—',
-                mode: manual ? 'Вручную' : 'Общий',
+                source_category: cat ? cat.name : '—',
+                mode: src && src.reward_mode === 'own' ? 'Своя' : 'По категории',
                 services_count: 0, amount_sum: 0, reward_sum: 0,
             };
             agg.set(sid, a);
         }
         a.services_count += 1;
         a.amount_sum += amount;
-        a.reward_sum += amount * pct / 100;
+        a.reward_sum += rewardForLine(
+            resolveReferralRate({ source: src, category: cat, serviceTypeId: typeId }),
+            { amount, discount: 0, qty: Number(r.quantity || 1) });
     }
     return [...agg.values()]
-        .map(a => ({ ...a, amount_sum: Math.round(a.amount_sum), reward_sum: Math.round(a.reward_sum) }))
+        .map(a => ({
+            ...a,
+            amount_sum: Math.round(a.amount_sum),
+            reward_sum: Math.round(a.reward_sum),
+            // Одного процента у корзины больше нет — в ней могут смешаться
+            // разные ставки и фиксированные суммы. Доля от суммы услуг верна
+            // всегда и остаётся тем числом, которое в отчёте ищут глазами.
+            eff_percent: a.amount_sum ? Math.round(a.reward_sum / a.amount_sum * 10000) / 100 : 0,
+        }))
         .sort((x, y) => y.reward_sum - x.reward_sum);
 }
 
@@ -957,11 +974,11 @@ const REPORTS = [
         build: (opts) => buildRevenueReport(opts),
         download: (rows) => downloadRevenueXlsx(rows, 'total-revenue'),
     },
-    {   // REFERRAL_REWARDS_V1
+    {   // REFERRAL_CATEGORY_RATES_V1
         key:   'referrals',
         icon:  'Coins',
         title: 'Рефералы',
-        desc:  'Вознаграждение по источникам направлений: услуги, суммы и расчёт % по группам (режим «Общий» или «Вручную»).',
+        desc:  'Вознаграждение по источникам направлений: услуги, суммы и ставки по группам (по категории или свои).',
         columns: REFERRAL_COLUMNS,
         build: (opts) => buildReferralReport(opts),
         download: (rows) => downloadReferralsXlsx(rows, 'referrals'),

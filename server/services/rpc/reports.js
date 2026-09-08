@@ -17,6 +17,11 @@ import {
 // модуль чистый (без DOM и без node-встроенных), поэтому грузится в обоих.
 import { formatMethods } from '../../../public/js/shared/payment-methods.js';
 import { INFLOW_SQL } from '../../../public/js/shared/payment-methods.js';   // DEPOSIT_REVENUE_V1
+// REFERRAL_CATEGORY_RATES_V1 — выбор ставки живёт в ОДНОМ модуле, общем с
+// браузером: тот же приём, что у payment-methods.js выше. Отчёт «Рефералы»
+// существует дважды — здесь и выгрузкой в reports-export.js, — и две копии
+// правила «какая ставка применяется» означали бы две разные суммы к выплате.
+import { resolveReferralRate, rewardForLine } from '../../../public/js/shared/referral-reward.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -370,7 +375,13 @@ function itemRowsQuery(db, args, ctx) {
            b.name                             AS branch,
            reg.full_name                      AS registrar,
            rs.name                            AS referral,
-           rs.category                        AS referral_category,
+           -- REFERRAL_CATEGORY_RATES_V1 — id источника и ГРУППА услуги: ставка
+           -- теперь своя у каждой группы, поэтому отчёт обязан различать
+           -- позиции внутри одной корзины. Название категории приходит из
+           -- справочника, а не из бывшей текстовой колонки rs.category.
+           rs.id                              AS referral_source_id,
+           rc.name                            AS referral_category,
+           s.type_id                          AS service_type_id,
            i.visit_id                         AS visit_id
       FROM invoice_items ii
       JOIN invoices i  ON i.id = ii.invoice_id
@@ -380,6 +391,7 @@ function itemRowsQuery(db, args, ctx) {
       LEFT JOIN users reg   ON reg.id = i.created_by
       LEFT JOIN visits v    ON v.id = i.visit_id
       LEFT JOIN referral_sources rs ON rs.id = COALESCE(v.referral_source_id, pt.referral_source_id)
+    LEFT JOIN referral_source_categories rc ON rc.id = rs.category_id
       ${ITEM_DOCTOR_JOIN}
      WHERE ${inLocalRange('i.created_at')}
        AND i.status <> 'void'${bf.clause}${gf.clause}
@@ -573,37 +585,62 @@ function totalRevenueReport(db, args, ctx) {
   };
 }
 
+// REFERRAL_CATEGORY_RATES_V1 (мигр. 109) — ставка берётся из КАРТОЧКИ источника
+// и его категории, а не из правила вознаграждения, названного так же, как они.
+// Прежний способ искал ставку сравнением строк, и опечатка в названии молча
+// означала 0%: ошибки никто не показывал, партнёру просто не платили.
+//
+// Считается ПО ПОЗИЦИЯМ, а не по итогу корзины: у одного источника теперь может
+// быть своя ставка на каждую группу услуг, и умножить общую сумму на один
+// процент больше нельзя.
 function referralsReport(db, args, ctx) {
-  const rewards = db.prepare('SELECT name, percent FROM referral_rewards WHERE active = 1').all();
-  const rewardByName = new Map(rewards.map((r) => [r.name.trim().toLowerCase(), r.percent]));
+  const sources = new Map(db.prepare(
+    'SELECT id, name, category_id, reward_mode, own_percent, own_rates FROM referral_sources').all()
+    .map((r) => [r.id, r]));
+  const categories = new Map(db.prepare(
+    'SELECT id, name, standard_percent, rates FROM referral_source_categories').all()
+    .map((r) => [r.id, r]));
+
   // Ключ корзины — ЗДАНИЕ и источник. Один и тот же партнёр может приводить
   // пациентов в оба здания, и складывать их в одну строку значило бы стереть
   // ровно то, что этот отчёт теперь обязан показывать.
+  //
+  // Источник в ключе — ПО ID, а не по имени: ставка принадлежит карточке, и два
+  // однофамильца с разными ставками больше не имеют права сложиться в одну
+  // строку. Для позиций, чей источник удалён из базы, ключом остаётся имя.
   const buckets = new Map();
   for (const r of itemRowsQuery(db, args, ctx)) {
     if (!r.referral) continue;
-    const key = ctx.keyOf(r.origin) + '\u0000' + r.referral;
+    const src = r.referral_source_id != null ? sources.get(r.referral_source_id) : null;
+    const cat = src && src.category_id != null ? categories.get(src.category_id) : null;
+    const who = r.referral_source_id != null ? 'id:' + r.referral_source_id : 'nm:' + r.referral;
+    const key = ctx.keyOf(r.origin) + '\u0000' + who;
     const b = buckets.get(key) || {
-      origin: r.origin, source: r.referral, category: r.referral_category || '', count: 0, amount: 0,
+      origin: r.origin, source: r.referral,
+      category: (cat && cat.name) || r.referral_category || '',
+      mode: src && src.reward_mode === 'own' ? 'Своя' : 'По категории',
+      count: 0, amount: 0, reward: 0,
     };
     b.count += 1;
     b.amount += r.amount - r.discount;
+    b.reward += rewardForLine(
+      resolveReferralRate({ source: src, category: cat, serviceTypeId: r.service_type_id }),
+      { amount: r.amount, discount: r.discount, qty: r.qty });
     buckets.set(key, b);
   }
   const list = [...buckets.values()].sort((a, b) => b.amount - a.amount);
   const rows = list.map((b) => {
-    // «Вручную» — a reward rate named exactly like the source; «Общий» — a
-    // rate named like the source's category; otherwise 0%.
-    const own = rewardByName.get(b.source.trim().toLowerCase());
-    const cat = rewardByName.get((b.category || '').trim().toLowerCase());
-    const pct = own != null ? own : (cat != null ? cat : 0);
-    const mode = own != null ? 'Вручную' : 'Общий';
-    return [ctx.label(b.origin), b.source, b.category, mode, b.count, round2(b.amount), pct,
-            round2(b.amount * pct / 100)];
+    // «Эфф. %» вместо прежнего «% вознаграждения»: одного процента у корзины
+    // больше нет — в ней могут смешаться шесть разных ставок и фиксированные
+    // суммы за услугу. Доля от суммы услуг верна всегда и остаётся тем числом,
+    // которое в этом отчёте ищут глазами.
+    const eff = b.amount ? b.reward / b.amount * 100 : 0;
+    return [ctx.label(b.origin), b.source, b.category, b.mode, b.count, round2(b.amount),
+            round2(eff), round2(b.reward)];
   });
   return {
     columns: [BUILDING_COL, 'Источник', 'Категория', 'Режим ставок', 'Услуг', 'Сумма услуг',
-              '% вознаграждения', 'Вознаграждение'],
+              'Эфф. %', 'Вознаграждение'],
     rows,
     by_building: summariseByBuilding(ctx, list, { total: (b) => b.amount }),
     total_label: 'Сумма услуг',

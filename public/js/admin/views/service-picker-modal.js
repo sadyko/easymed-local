@@ -2264,9 +2264,11 @@ export function openServicePickerModal({
         try {
             const [c, s] = await Promise.all([
                 supabase.from('referral_source_categories').select('id, name').eq('active', true).order('name'),
-                // CLOUD_LEFTOVER_COLUMNS_V1 — категория партнёра офлайн хранится
-                // ТЕКСТОМ в `category`, ссылки на справочник нет.
-                supabase.from('referral_sources').select('id, name, category').eq('active', true).order('name'),
+                // REFERRAL_CATEGORY_RATES_V1 (мигр. 109) — ссылка на справочник
+                // появилась, и категория берётся ПО НЕЙ. Прежний комментарий
+                // (CLOUD_LEFTOVER_COLUMNS_V1) верно описывал состояние до 109:
+                // категория хранилась текстом, потому что ссылки не было.
+                supabase.from('referral_sources').select('id, name, category_id').eq('active', true).order('name'),
             ]);
             wiz.referral.cats = c.data || [];
             wiz.referral.sources = s.data || [];
@@ -2282,10 +2284,12 @@ export function openServicePickerModal({
         const R = wiz.referral;
         const catOpts = (sel) => [
             h('option', { value: '', selected: !sel }, 'Сам пациент'),
-            ...R.cats.map(c => h('option', { value: c.name, selected: sel === c.name }, c.name)),
+            ...R.cats.map(c => h('option', { value: String(c.id), selected: String(sel) === String(c.id) }, c.name)),
         ];
         const srcOpts = (catId, sel) => {
-            const list = R.sources.filter(s => (s.category || '') === catId);
+            // Отбор ПО ССЫЛКЕ: значение <option> — id категории (строкой), а в
+            // источнике лежит число, поэтому сравниваем приведёнными к строке.
+            const list = R.sources.filter(s => String(s.category_id ?? '') === String(catId ?? ''));
             return [h('option', { value: '', selected: !sel }, list.length ? 'Выберите партнёра…' : 'Нет партнёров в категории'),
                     ...list.map(s => h('option', { value: s.id, selected: sel === s.id }, s.name))];
         };

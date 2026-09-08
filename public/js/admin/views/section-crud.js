@@ -1381,7 +1381,11 @@ function searchableSelect({ name, value, options, placeholder = 'Search…', onC
 
 // Wide editors that need the full row inside a 2-col grouped modal grid,
 // otherwise they'd be squeezed into a single column (~half the modal width).
-const FULL_WIDTH_FIELD_TYPES = new Set(['section_picker', 'weekly_hours', 'doctor_services', 'service_doctors', 'multi_select', 'image', 'file_list', 'referral_rates']);   // REFERRAL_REWARDS_V1
+// REFERRAL_CATEGORY_RATES_V1 — 'referral_rates' отсюда убран вместе с самим
+// типом поля: он писал в referral_sources.commission_rates, колонки с таким
+// именем в этой базе никогда не было. Ставки теперь живут на категории и на
+// источнике и редактируются в «Настройках» (settings-hub.js, тип group_rates).
+const FULL_WIDTH_FIELD_TYPES = new Set(['section_picker', 'weekly_hours', 'doctor_services', 'service_doctors', 'multi_select', 'image', 'file_list']);
 
 function renderField(f, values) {
     const v = values[f.key];
@@ -1391,37 +1395,6 @@ function renderField(f, values) {
     let input;
     switch (f.type) {
         case 'textarea': input = h('textarea', { name: f.key }, v != null ? v : ''); break;
-        case 'referral_rates': {
-            // REFERRAL_REWARDS_V1 — per-product-group % map, stored as jsonb
-            // { service_type_id: percent }. Blank input = 0% for that group
-            // (manual mode does NOT fall back to the general table).
-            const cur = (v && typeof v === 'object') ? v : {};
-            input = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
-                h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Загрузка групп услуг…'));
-            (async () => {
-                try {
-                    const cid = currentClinicId();
-                    let q = supabase.from('service_types').select('id, name').eq('active', true).order('name');
-                    if (cid) q = q.eq('company_id', cid);
-                    const { data, error } = await q;
-                    if (error) { console.warn('[referral_rates]', error.message); return; }
-                    clear(input);
-                    if (!data || !data.length) { input.appendChild(h('div', { class: 'muted' }, 'Нет групп услуг.')); return; }
-                    for (const t of data) {
-                        input.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' } },
-                            h('span', { style: { fontSize: '13.5px', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }, t.name),
-                            h('span', { style: { flex: 'none' } },
-                                h('input', { type: 'number', min: '0', max: '100', step: '0.1', 'data-rr-type': t.id,
-                                    value: cur[t.id] != null ? String(cur[t.id]) : '', placeholder: '0',
-                                    style: { width: '86px', textAlign: 'right' } }),
-                                h('span', { class: 'muted', style: { marginLeft: '6px' } }, '%'))));
-                    }
-                    input.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                        'Пусто = 0% для группы. Общие ставки в ручном режиме не подставляются.'));
-                } catch (e) { console.warn('[referral_rates]', e.message); }
-            })();
-            break;
-        }
         case 'number':   input = h('input', { type: 'number', name: f.key, step: f.step || '1', value: v != null ? v : (f.default != null ? f.default : '') }); break;
         case 'date':     input = h('input', { type: 'date', name: f.key, value: v ? String(v).slice(0, 10) : '' }); break;
         case 'email':    input = h('input', { type: 'email', name: f.key, value: v != null ? v : '' }); break;
@@ -2262,19 +2235,6 @@ async function saveRow(card, def, original) {
                 rawPasswordSet = val;
             }
             continue;   // never write a `password` column (doesn't exist)
-        }
-
-        if (type === 'referral_rates') {
-            // REFERRAL_REWARDS_V1 — collect { service_type_id: percent }; blank
-            // or non-numeric rows are dropped (→ 0% at calculation time).
-            const obj = {};
-            for (const inp of wrap.querySelectorAll('input[data-rr-type]')) {
-                const raw = inp.value.trim();
-                if (raw === '' || Number.isNaN(Number(raw))) continue;
-                obj[inp.dataset.rrType] = Number(raw);
-            }
-            payload[key] = obj;
-            continue;
         }
 
         if (type === 'doctor_services') {

@@ -83,7 +83,6 @@ import { renderDocuments }    from './admin/views/documents.js?v=noqr1';
 import { renderDiscountsSettings } from './admin/views/discounts-settings.js?v=btnright1';   // PATIENT_DISCOUNTS_V1
 import { renderApiSettings } from './admin/views/api-settings.js?v=api4';   // CLINIC_API_V1
 import { renderDoctorPay } from './admin/views/doctor-pay.js?v=dp1';   // DOCTOR_PAY_BULK_V1
-import { renderReferralSettings } from './admin/views/referral-settings.js?v=rr1';   // REFERRAL_REWARDS_V1
 import { renderCashierSettings } from './admin/views/cashier-settings.js?v=shiftmode1';   // CASHIER_SHIFT_MODE_V1
 import { renderRoomsSetup } from './admin/views/rooms-setup.js?v=rooms7';   // ROOMS_SETUP_V1 — кабинеты и палаты одним разделом
 import { renderTelegramSettings } from './admin/views/telegram-settings.js?v=tg3';   // TELEGRAM_BOT_V1
@@ -582,7 +581,7 @@ const PARENT_OF = {
     'employees': 'settings', 'documents': 'settings', 'documents-settings': 'settings',
     'services': 'settings', 'consultation-types': 'settings', 'discounts-settings': 'settings',
     'api-settings': 'settings', 'telegram-settings': 'settings', 'telephony-settings': 'settings',
-    'crm-settings': 'settings', 'doctor-pay': 'settings', 'referral-settings': 'settings',
+    'crm-settings': 'settings', 'doctor-pay': 'settings',
     'cashier-settings': 'settings', 'rooms-setup': 'settings', 'updates': 'settings',
     'subscription': 'settings', 'clinic-data': 'settings', 'public-site': 'settings',
     // Пациенты
@@ -1045,7 +1044,6 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'crm-settings': return void await renderCrmSettings(viewRoot, ctx);   // CRM_CONFIG_V1
             case 'telegram-chat': return void await renderTelegramChat(viewRoot, ctx);   // TELEGRAM_CHAT_V1
             case 'doctor-pay': return void await renderDoctorPay(viewRoot, ctx);   // DOCTOR_PAY_BULK_V1
-            case 'referral-settings': return void await renderReferralSettings(viewRoot);   // REFERRAL_REWARDS_V1
             case 'cashier-settings':  return void await renderCashierSettings(viewRoot);    // CASHIER_SHIFT_MODE_V1
             case 'rooms-setup':       return void await renderRoomsSetup(viewRoot);       // ROOMS_SETUP_V1
             case 'settings':      return void await renderSettingsHub(viewRoot, ctx);   // SETTINGS_HUB_V1
@@ -1498,13 +1496,14 @@ function renderSettingsIndex(container) {
     ];
     const consultExtras = isRouteAllowed('consultation-types') ? [consultRow()] : [];   // CONSULTATION_TYPES_RESTORE
     const doctorPayExtras = isRouteAllowed('doctor-pay') ? [doctorPayRow()] : [];   // DOCTOR_PAY_BULK_V1
-    const referralExtras = isRouteAllowed('referral-settings') ? [referralRewardRow()] : [];   // REFERRAL_REWARDS_V1
     const cashierSetExtras = isRouteAllowed('cashier-settings') ? [cashierSettingsRow()] : [];   // CASHIER_SHIFT_MODE_V1
     const roomsSetupExtras = isRouteAllowed('rooms-setup') ? [roomsSetupRow()] : [];   // ROOMS_SETUP_V1
     // SETTINGS_ORDER_V1 — explicit card order; any unlisted group is appended after.
     const _cardByName = new Map();
     if (top.length || generalExtras.length) _cardByName.set('General', groupCard('General', top, generalExtras));
-    for (const [name, items] of buckets) _cardByName.set(name, groupCard(name, items, name === 'Service settings' ? consultExtras : name === 'Referrals' ? referralExtras : name === 'User & staff management' ? cashierSetExtras : name === 'Rooms & floors' ? roomsSetupExtras : []));   // REFERRAL_REWARDS_V1 + CASHIER_SHIFT_MODE_V1
+    // REFERRAL_CATEGORY_RATES_V1 — «Реферальное вознаграждение» отсюда ушло:
+    // общеклинических ставок больше нет, ставка живёт на категории источника.
+    for (const [name, items] of buckets) _cardByName.set(name, groupCard(name, items, name === 'Service settings' ? consultExtras : name === 'User & staff management' ? cashierSetExtras : name === 'Rooms & floors' ? roomsSetupExtras : []));   // CASHIER_SHIFT_MODE_V1
     // LAB_ROLE_SETTINGS_V2 — the non-table extras (consultation types,
     // referrals, doctor pay) attach to their group card above ONLY when a
     // table-backed section already created it. A role granted just the extra
@@ -1639,15 +1638,6 @@ function renderSettingsIndex(container) {
             label:    'Смены кассы',
             desc:     'Вручную или автоматическое закрытие/открытие смены в 00:00',
             onClick:  () => navigate('cashier-settings'),
-        });
-    }
-    function referralRewardRow() {   // REFERRAL_REWARDS_V1
-        return settingsRow({
-            key:      'referral-settings',
-            iconName: 'Coins',
-            label:    'Реферальное вознаграждение',
-            desc:     'Общие ставки % по группам услуг — для источников с режимом «Общий»',
-            onClick:  () => navigate('referral-settings'),
         });
     }
     function doctorPayRow() {   // DOCTOR_PAY_BULK_V1

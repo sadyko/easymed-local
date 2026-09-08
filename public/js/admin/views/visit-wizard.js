@@ -58,7 +58,14 @@ const PAGE_SIZE = 50;
 // без него выбрать их было бы негде. Значение служит ключом «корзины», а не
 // категорией — в базу оно не попадает.
 const REF_UNCAT = '—  без категории';
-const refCatOf = (s) => ((s && s.category) || '').trim();
+// REFERRAL_CATEGORY_RATES_V1 (мигр. 109) — категория приходит из СПРАВОЧНИКА
+// по ссылке category_id, а не из свободного текста в `category`. Текст
+// выбирали потому, что мастер группирует источники по этой строке и список
+// подсказок казался достаточным; с тех пор на категории появилась ставка
+// вознаграждения, и три написания одного названия стали значить не три группы
+// в списке, а деньги, которых партнёр не получил. Ключом «корзины» здесь
+// по-прежнему служит НАЗВАНИЕ — так его и показывают в списке.
+const refCatOf = (s) => ((s && s.referral_source_categories && s.referral_source_categories.name) || '').trim();
 const refSourcesIn = (sources, cat) => (sources || []).filter(s => (cat === REF_UNCAT ? !refCatOf(s) : refCatOf(s) === cat));
 
 function currentUserId() {
@@ -370,7 +377,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const [svcRes, docRes, srcRes, payerRes] = await Promise.all([
             supabase.from('services').select('id, name, price, duration_minutes, requires_doctor, is_lab, type').eq('active', true).order('name').limit(1000),
             supabase.from('users').select('id, full_name, username, role, is_active, service_rates').eq('role', 'doctor').eq('is_active', true).order('full_name'),   // SVC_DOCTORS_V1 — назначения услуг
-            supabase.from('referral_sources').select('id, name, category').eq('active', true).order('name'),
+            supabase.from('referral_sources').select('id, name, category_id, referral_source_categories(name)').eq('active', true).order('name'),
             // PAYER_LOAD_V2 — читаем ВЕСЬ справочник и отсеиваем неактивных здесь.
             // Раньше стоял .eq('active', true): если серверный реестр не разрешает
             // фильтр по этой колонке, запрос падает целиком и список плательщиков
