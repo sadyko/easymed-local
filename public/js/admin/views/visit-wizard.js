@@ -1324,7 +1324,13 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const srcSel = h('select', null,
             h('option', { value: '' }, inCat.length ? '— Выберите, кто направил —' : 'В этой категории пока никого нет'),
             ...inCat.map(s => h('option', { value: s.id, selected: String(wiz.sourceId) === String(s.id) }, referralSourceLabel(s))));
-        srcSel.addEventListener('change', () => { wiz.sourceId = srcSel.value; });
+        // repaintRail() ОБЯЗАТЕЛЕН: кнопка «Далее» и причина её блокировки
+        // рисуются в смете (nextBlockReason внутри repaintRail), а не здесь.
+        // Без него регистратор выбирал, кто направил, и кнопка продолжала
+        // держать прежний отказ «выберите, кто направил пациента» — выбор
+        // сделан, на экране он виден, а мастер его как будто не заметил.
+        // Соседний catSel звал paint() с самого начала, этот — нет.
+        srcSel.addEventListener('change', () => { wiz.sourceId = srcSel.value; repaintRail(); });
 
         root.appendChild(h('div', { class: 'card', style: { padding: '18px 20px', maxWidth: '640px' } },
             h('h3', { style: { margin: '0 0 14px', fontSize: '13.5px' } }, Icon('Send', { size: 15 }), ' Направление'),
