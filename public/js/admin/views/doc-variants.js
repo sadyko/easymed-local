@@ -128,7 +128,7 @@ function refCellHtml(ref) {
 // Defined once so the two can never drift apart. The number is the biggest type
 // on the page — the patient reads it off a door or a board from a few metres.
 // No letter prefix: the destination line above already names the queue.
-const QUEUE_CSS = `
+export const QUEUE_CSS = `
 .f-q{ margin-top:4px; }
 .f-q-h{ text-align:center; font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; }
 .f-q-item{ text-align:center; margin:7px 0 3px; }
@@ -151,7 +151,7 @@ const QUEUE_CSS = `
 //
 // Grouped by `key` (the queue_key the DB counted against) when the caller
 // supplies it, falling back to the printed label so older callers still merge.
-function queueBlockHtml(d) {
+export function queueBlockHtml(d) {
     const rows = Array.isArray(d && d.queue) ? d.queue.filter(q => q && q.number) : [];
     if (!rows.length) return '';
     const groups = [];
