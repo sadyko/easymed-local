@@ -235,7 +235,13 @@ test('собранная история начинается титульным 
         documents: [], gaps: ['consent'], title_sheet: VIEW });
     assert.ok(!html.includes('В комплекте не хватает'), 'CASE_FILE_COVER_V2 — списка пробелов на обложке нет');
     assert.match(html, /\.ts \{[^}]*min-height: 266mm/, 'FORM_003_A4_V1 — лист занимает целую страницу A4');
-    assert.match(html, /\.ts \{[^}]*page-break-after: always/, 'документы начинаются со следующей страницы');
+    // FORM_003_FILL_PAGE_V1 — разрыв стоит ПЕРЕД документами, а не после листа:
+    // после листа он срабатывал всегда и рождал пустую вторую страницу там,
+    // где документов ещё нет.
+    assert.ok(!/\.ts \{[^}]*page-break-after: always/.test(html),
+        'лист снова заканчивает страницу сам и рождает пустую вторую');
+    assert.match(html, /\.after-cover \{ page-break-before: always/,
+        'документы начинаются не с новой страницы');
     assert.ok(html.includes('Клиника Тест'));
     assert.ok(!html.includes('Согласие на госпитализацию'), 'пробел комплекта попал на бумагу');
     // TITLE_SHEET_CLEAN_V1 — ни «заполнила», ни «Собрал» на подшитой бумаге:
@@ -390,7 +396,14 @@ test('FORM_003_ONE_PAGE_V1: содержимое бланка укладывае
     // Сколько блоков лист рисует на самом деле.
     const { titleSheetForm } = await import('../views/title-sheet.js');
     const form = titleSheetForm();
-    const count = (cls) => form.fields.filter((f) => String(f.className || '').split(/\s+/).includes(cls)).length;
+    // FORM_003_FILL_PAGE_V1 — строки лежат в обёртке .f3-grid, а шапка листа
+    // осталась снаружи: считаем и там, и там.
+    const flat = [];
+    for (const f of form.fields) {
+        flat.push(f);
+        for (const c of (f && f.children) || []) flat.push(c);
+    }
+    const count = (cls) => flat.filter((f) => String(f.className || '').split(/\s+/).includes(cls)).length;
     const rows = count('f3-row');
     const hints = count('f3-hint');
     const blocks = count('f3-block-t');

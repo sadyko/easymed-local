@@ -172,6 +172,11 @@ export function titleSheetForm({ bed = null, onPrint = printInpatientDoc } = {})
             h('div', { class: 'f3-head-r' }, FORM_003.approval)),
         h('div', { class: 'f3-title' }, FORM_003.title, ' № ', infoEl('no', 'f3-no')),
         h('div', { class: 'f3-sub' }, tr('Титульный лист истории болезни')),
+        // FORM_003_FILL_PAGE_V1 — строки бланка живут в своей обёртке, как и в
+        // печати: она забирает свободную высоту листа и делит её между
+        // строками. Без обёртки строки жались к верху, а низ листа пустовал —
+        // владелец: «its still not in the full a4».
+        h('div', { class: 'f3-grid' },
         row(uz(F.admitted), ru('дата поступления'), ctl(infoEl('admitted')), uz(F.time), ru('время'), ctl(infoEl('admitted_time'), 'f3-short')),
         row(uz(F.discharged), ru('дата выписки'), ctl(infoEl('discharged')), uz(F.time), ru('время'), ctl(infoEl('discharged_time'), 'f3-short')),
         row(uz(F.dept), ru('отделение'), ctl(infoEl('department')), uz(F.deptSuffix), ru('палата · койка'), ctl(infoEl('place'))),
@@ -200,6 +205,7 @@ export function titleSheetForm({ bed = null, onPrint = printInpatientDoc } = {})
         row(ru('Осмотр на педикулёз и чесотку'), pedRadios),
         row(ru('Санитарная обработка'), sanRadios),
         row(ru('Примечание'), ctl(note, 'f3-wide')),
+        ),
     ];
 
     const timeOf = (iso) => {

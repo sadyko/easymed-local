@@ -575,6 +575,10 @@ const PART_TITLES = [
  * __tests__/case-docs.test.mjs без браузера.
  */
 /* type-scale-exempt-start: печатный документ A4 — метрики бумаги, а не экрана (то же исключение, что у mar-sheet.js и doc-variants.js) */
+// FORM_003_FILL_PAGE_V1 — .after-cover несёт page-break-before: документы
+// начинаются с новой страницы, а титульный лист её НЕ ЗАКАНЧИВАЕТ. Разрыв
+// после листа срабатывал всегда и рождал пустую вторую страницу там, где
+// документов ещё нет.
 export function caseFilePrintHtml(file, { fontFaceCss = '' } = {}) {
     const c = (file && file.cover) || {};
     const documents = (file && file.documents) || [];
@@ -663,6 +667,7 @@ h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.01em; }
 .ok { margin-top: 14px; font-size: 13px; color: #047857; }
 .note { margin-top: 8px; font-size: 12px; color: #55636d; }
 .doc { page-break-inside: avoid; margin-bottom: 18px; }
+.after-cover { page-break-before: always; }
 .doc h2 { font-size: 15px; margin: 0 0 8px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #d3d9de; padding-bottom: 5px; }
 .doc h2 .no { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #16232b; color: #fff; font-size: 11px; }
 .doc h2 .rev { margin-left: auto; font-size: 11px; font-weight: 600; color: #b45309; }
@@ -674,7 +679,9 @@ h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.01em; }
 ${titleSheetPrintCss()}
 </style></head><body>
 ${cover}
-${body || `<p class="note">${esc(tr('Опубликованных документов пока нет.'))}</p>`}
+${body
+    ? '<div class="after-cover">' + body + '</div>'
+    : `<p class="note">${esc(tr('Опубликованных документов пока нет.'))}</p>`}
 <script>window.onload=function(){(document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve()).then(function(){try{window.focus();window.print();}catch(e){}});};</scr` + `ipt>
 </body></html>`;
 }

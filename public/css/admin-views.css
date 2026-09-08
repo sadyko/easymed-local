@@ -5335,12 +5335,15 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .co-name:hover{color:var(--primary-700);text-decoration:underline}
 .co-day{font-size:12.5px;font-weight:600;color:var(--ink-500)}
 .co-sub{font-size:12.5px;margin-top:1px}
-.co-allergy{display:inline-flex;align-items:center;gap:6px;margin-top:6px;padding:4px 10px;border-radius:var(--r-sm);background:var(--crit-50);color:var(--crit-700);font-size:12.5px;font-weight:600}
+/* CASE_HEAD_BADGE_V1 — аллергия стоит СПРАВА значком, а не строкой под именем:
+   строка под именем растягивала шапку ради трёх слов. Длинный список аллергий
+   обрезается многоточием, целиком он в подсказке. */
+.co-allergy{display:inline-flex;align-items:center;gap:5px;max-width:280px;padding:4px 10px;border-radius:var(--r-pill);background:var(--crit-50);border:1px solid #fecaca;color:var(--crit-700);font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .co-nav{display:flex;align-items:center;gap:8px;flex:0 0 auto}
 .co-nav-count{font-size:12.5px;color:var(--ink-500);white-space:nowrap;font-variant-numeric:tabular-nums}
 /* CASE_HEAD_TIDY_V1 — действия живут в шапке (столбик справа: стрелки сверху,
    главная кнопка под ними); полоса фактов — компактная строка с делителями. */
-.co-head-side{display:flex;flex-direction:column;align-items:flex-end;gap:10px;flex:0 0 auto}
+.co-head-side{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap;flex:0 0 auto}
 .co-fields{display:flex;flex-wrap:wrap;align-items:flex-end;gap:2px 0;margin-top:6px;padding:6px 0 0;border-top:1px solid var(--ink-100)}
 .co-fields>.co-hf{padding:0 14px 6px 0;margin-right:14px;border-right:1px solid var(--ink-100)}
 .co-fields>.co-hf:last-of-type{border-right:0;margin-right:0;padding-right:0}
@@ -5530,6 +5533,10 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
    __tests__/title-sheet.test.mjs считает по ним ту же смету. */
 .f3-paper{padding:26px 34px 28px;min-height:1123px;box-sizing:border-box;display:flex;flex-direction:column}
 .f3-paper>.f3{flex:1;display:flex;flex-direction:column}
+/* FORM_003_FILL_PAGE_V1 — свободную высоту листа забирают СТРОКИ и делят её
+   между собой: так разлинован бумажный бланк. Растягивать одну коробку мало —
+   содержимое от этого к низу не опускается. */
+.f3-grid{flex:1 1 auto;display:flex;flex-direction:column;justify-content:space-between;gap:2px}
 .f3-paper .ts-status{margin-top:auto}
 .f3{font-size:13.5px;line-height:1.3;color:var(--ink-900)}
 .f3-head{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;font-size:12.5px;line-height:1.25}

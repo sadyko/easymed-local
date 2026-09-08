@@ -86,8 +86,14 @@ export function caseHead(ov, { active = 'overview', onNavigate = null, onReload 
     const age = ageOf(p.date_of_birth, ov.now);
     const who = [genderWord(p.gender), age !== null ? trf('{n} лет', { n: age }) : null, p.mrn].filter(Boolean).join(' · ');
 
+    // CASE_HEAD_BADGE_V1 (2026-09-08) — владелец: «remove the davolanmoqda».
+    // «Лечение» — состояние, в котором пациент находится почти всю
+    // госпитализацию, то есть значок горел всегда и не сообщал ничего. Значок
+    // остаётся там, где состояние ДЕЙСТВИТЕЛЬНО новость: ждёт койку,
+    // оформляется выписка, выписан, отменена. Само состояние никуда не делось —
+    // его целиком показывает панель «Пациент сейчас».
     const tone = a.status === 'discharging' ? 'warn' : (inBed ? 'ok' : '');
-    const chip = Tag(admissionStatusLabel(a.status), { kind: tone, dot: true });
+    const chip = a.status === 'active' ? null : Tag(admissionStatusLabel(a.status), { kind: tone, dot: true });
     const dayTag = a.days ? h('span', { class: 'co-day' }, trf('{n}-й день', { n: a.days })) : null;
 
     // Пациент — ЯКОРЬ и дверь в документы: «when patient pressed it should open a cabinet like documents section».
@@ -111,8 +117,14 @@ export function caseHead(ov, { active = 'overview', onNavigate = null, onReload 
             'aria-label': next ? trf('Следующий пациент: {name}', { name: next.full_name }) : tr('Следующего пациента нет'),
             onclick: () => { if (next) nav('case-overview', { admissionId: next.id }); } }, ic('ChevronRight')));
 
+    // CASE_HEAD_BADGE_V1 — владелец: «transfer allergiya to the right side as a
+    // badge». Аллергия занимала СВОЮ СТРОКУ под именем и растягивала шапку на
+    // всю ширину ради трёх слов. Справа она стоит рядом со стрелками — там же,
+    // куда смотрят, переходя от пациента к пациенту, — и шапка становится ниже
+    // ровно на строку.
     const allergy = p.allergies
-        ? h('div', { class: 'co-allergy', role: 'note' }, ic('Warning'), ' ', trf('Аллергия: {what}', { what: p.allergies }))
+        ? h('div', { class: 'co-allergy', role: 'note', title: trf('Аллергия: {what}', { what: p.allergies }) },
+            ic('Warning', 13), ' ', trf('Аллергия: {what}', { what: p.allergies }))
         : null;
 
     const hf = (label, value, sub) => h('div', { class: 'co-hf' },
@@ -138,9 +150,8 @@ export function caseHead(ov, { active = 'overview', onNavigate = null, onReload 
             avatar,
             h('div', { class: 'co-pat' },
                 h('div', { class: 'co-name-row' }, nameBtn, chip, dayTag),
-                h('div', { class: 'co-sub muted' }, who || '—'),
-                allergy),
-            h('div', { class: 'co-head-side' }, navBox)),
+                h('div', { class: 'co-sub muted' }, who || '—')),
+            h('div', { class: 'co-head-side' }, allergy, navBox)),
         h('div', { class: 'co-fields' },
             hf('№ истории', a.admission_no),
             hf('Поступление', a.admitted_at && inBed ? dt(a.admitted_at) : (a.admitted_at && a.status === 'discharged' ? dt(a.admitted_at) : '—')),

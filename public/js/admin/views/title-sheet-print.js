@@ -136,20 +136,24 @@ export function titleSheetPrintSection(view, { extra = '' } = {}) {
             fld(F.temp, 'температура, °C', s ? num(s.temp_c) : '', 1),
             cell(lab(tr('ИМТ')) + rul(num(view && view.bmi)), 1)),
         row(fld(F.address, 'постоянный адрес', p.address, 4)),
-        row(cell(lab(tr('телефон')) + rul(p.phone), 1),
-            cell(lab(tr('паспорт / ID')) + rul(p.national_id), 1),
-            cell(lab(tr('близкий родственник'))
-                + rul([p.emergency_contact_name, p.emergency_contact_phone].filter(Boolean).join(' · ')), 2)),
+        // Телефон в четверть ширины не помещался и переносился цифрами на
+        // вторую строку; родственник с телефоном — тем более.
+        row(cell(lab(tr('телефон')) + rul(p.phone), 2),
+            cell(lab(tr('паспорт / ID')) + rul(p.national_id), 2)),
+        row(cell(lab(tr('близкий родственник'))
+            + rul([p.emergency_contact_name, p.emergency_contact_phone].filter(Boolean).join(' · ')), 4)),
         noteRow(F.addressHint),
         row(fld(F.work, 'место работы, профессия, должность', p.occupation, 4)),
         row(fld(F.referred, 'кем направлен', s ? s.referred_from : '', 4)),
         noteRow(F.referredHint),
+        // «ҳа, йўқ» рядом с длинной подписью ломалось пополам: подпись длинная,
+        // а ячейка половинная. Строка теперь своя.
         row(cell(lab(F.emergency, emergency ? 'Экстренная' : 'Плановая')
             + opts(emergency
                 ? '<b class="f3p-pick">' + esc(F.yes) + '</b>, ' + esc(F.no)
-                : esc(F.yes) + ', <b class="f3p-pick">' + esc(F.no) + '</b>'), 2),
-            fld(F.transport, 'каким транспортом', s ? s.delivered_by : '', 2)),
-        row(fld(F.sinceOnset, 'сколько прошло от начала болезни', s ? s.since_onset : '', 4)),
+                : esc(F.yes) + ', <b class="f3p-pick">' + esc(F.no) + '</b>'), 4)),
+        row(fld(F.transport, 'каким транспортом', s ? s.delivered_by : '', 2),
+            fld(F.sinceOnset, 'сколько прошло от начала болезни', s ? s.since_onset : '', 2)),
         row(fld(F.refDx, 'диагноз при направлении', a.admission_diagnosis, 4)),
         row(fld(F.admDx, 'диагноз приёмного покоя', a.clinical_diagnosis, 4)),
     ];
@@ -201,9 +205,20 @@ export function titleSheetPrintSection(view, { extra = '' } = {}) {
 // каждой строки: подписи выстраиваются по одной вертикали, линии кончаются по
 // другой. Ширину линии задаёт ЯЧЕЙКА, а не длина значения, — из-за обратного
 // лист и выглядел «terribly wrong».
+//
+// FORM_003_FILL_PAGE_V1 (2026-09-08) — владелец: «its still not in the full a4».
+// Причин было ДВЕ, и обе выглядели как одна:
+//   1. .ts несла page-break-after: always. Разрыв срабатывал ВСЕГДА, в том
+//      числе когда за листом ничего нет, — и печать честно выдавала вторую,
+//      пустую страницу («1/2» в предпросмотре). Разрыв переехал туда, где ему
+//      место: ПЕРЕД документами, которые за листом следуют.
+//   2. Строки жались к верху, а низ листа пустовал: min-height растягивала
+//      КОРОБКУ, но не содержимое. Теперь свободную высоту забирает сетка и
+//      делит между строками (justify-content: space-between) — ровно так
+//      разлинован бумажный бланк.
 export function titleSheetPrintCss() {
     return `
-.ts { page-break-after: always; box-sizing: border-box; min-height: 266mm; display: flex; flex-direction: column; }
+.ts { box-sizing: border-box; min-height: 266mm; display: flex; flex-direction: column; }
 .f3p { font-size: 12px; line-height: 1.3; color: #16232b; }
 .f3p-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; font-size: 10px; line-height: 1.25; }
 .f3p-hl { flex: 0 0 46%; text-align: center; font-weight: 700; }
@@ -213,7 +228,7 @@ export function titleSheetPrintCss() {
 .f3p-title { text-align: center; font-size: 14.5px; font-weight: 800; letter-spacing: 0.03em; margin: 11px 0 1px; }
 .f3p-no { display: inline-block; min-width: 110px; border-bottom: 1px solid #16232b; padding: 0 6px; }
 .f3p-sub { text-align: center; font-size: 10px; color: #55636d; margin-bottom: 9px; }
-.f3p-grid { display: flex; flex-direction: column; gap: 3px; }
+.f3p-grid { flex: 1 1 auto; display: flex; flex-direction: column; justify-content: space-between; gap: 4px; }
 .f3p-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 12px; align-items: end; page-break-inside: avoid; }
 .f3p-c { grid-column: span 1; display: flex; align-items: baseline; gap: 5px; min-width: 0; }
 .f3p-c2 { grid-column: span 2; }
@@ -243,7 +258,6 @@ ${fontFaceCss}
 @page { size: A4; margin: 14mm; }
 body { font-family: 'Onest', -apple-system, 'Segoe UI', Roboto, sans-serif; color: #16232b; margin: 0; }
 ${titleSheetPrintCss()}
-.ts { page-break-after: auto; }
 </style></head><body>
 ${titleSheetPrintSection(view)}
 <script>window.onload=function(){(document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve()).then(function(){try{window.focus();window.print();}catch(e){}});};</scr` + `ipt>

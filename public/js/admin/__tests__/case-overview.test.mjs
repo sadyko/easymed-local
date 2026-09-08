@@ -502,3 +502,36 @@ test('CASE_DIARY_ACT_V1: «Дневник наблюдения» — замет�
         OV.admission = { ...OV.admission, status: saved };
     }
 });
+
+// ─── CASE_HEAD_BADGE_V1 — аллергия справа, обычное состояние без значка ─────
+//
+// Владелец (2026-09-08): «can you transfer allergiya, to the right side as a
+// badge and remove the davolanmoqda ... and will be space and everighin will
+// fil into a view port». Обе правки экономят шапке по строке.
+test('CASE_HEAD_BADGE_V1: аллергия — значок справа, «Лечение» в шапке не показывается, а «Оформляется выписка» показывается', async () => {
+    const root = await render(() => {});
+    const allergy = walk(root).find((e) => String(e.className || '').split(/\s+/).includes('co-allergy'));
+    assert.ok(allergy, 'значка аллергии нет');
+    assert.ok(textOf(allergy).includes('пенициллин'), 'значок не называет аллерген');
+    // Стоит СПРАВА — в том же блоке, что стрелки по соседям.
+    let p = allergy._parent; let side = false;
+    while (p) { if (String(p.className || '').includes('co-head-side')) { side = true; break; } p = p._parent; }
+    assert.ok(side, 'аллергия осталась строкой под именем, а не значком справа');
+
+    // Обычное состояние «Лечение» в шапке не горит: оно горело бы всегда.
+    const nameRow = walk(root).find((e) => String(e.className || '').includes('co-name-row'));
+    assert.ok(nameRow && !textOf(nameRow).includes('Лечение'),
+        'обычное состояние вернулось в шапку: ' + (nameRow ? textOf(nameRow) : ''));
+
+    // А состояние, которое НОВОСТЬ, показывается.
+    const saved = OV.admission.status;
+    try {
+        OV.admission = { ...OV.admission, status: 'discharging' };
+        const out = await render(() => {});
+        const row2 = walk(out).find((e) => String(e.className || '').includes('co-name-row'));
+        assert.ok(row2 && textOf(row2).includes('Оформляется выписка'),
+            'состояние-новость перестало показываться: ' + (row2 ? textOf(row2) : ''));
+    } finally {
+        OV.admission = { ...OV.admission, status: saved };
+    }
+});
