@@ -77,6 +77,7 @@ const nameOf = (b) => (b.getAttribute('aria-label') || b.textContent || '').trim
 
 const view = await import('../views/case-docs.js');
 const server = await import('../../../../server/services/rpc/inpatient-reviews.js');
+const { TITLE_KIND } = await import('../../../../server/services/rpc/title-sheet.js');   // TITLE_SHEET_V1
 
 const {
     CASE_DOC_TITLE, caseDocTitle, caseDocStateWord, caseDueText, caseDoneText,
@@ -135,7 +136,8 @@ test('у каждого рода документа, который умеет �
     }
     assert.ok(CASE_DOC_TITLE[server.OTHER_KIND], 'у «прочего документа» тоже должно быть имя');
     // И обратно: лишнее имя — это род, который сервер прислать не может.
-    const known = new Set([...server.CASE_DOC_SET.map((d) => d.kind), server.OTHER_KIND]);
+    assert.ok(CASE_DOC_TITLE[TITLE_KIND], 'у титульного листа медсестры должно быть имя');   // TITLE_SHEET_V1
+    const known = new Set([...server.CASE_DOC_SET.map((d) => d.kind), server.OTHER_KIND, TITLE_KIND]);
     for (const kind of Object.keys(CASE_DOC_TITLE)) {
         assert.ok(known.has(kind), `имя «${kind}» не соответствует ни одному роду сервера`);
     }

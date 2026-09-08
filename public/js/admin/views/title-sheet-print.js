@@ -97,7 +97,7 @@ export function titleSheetPrintSection(view, { extra = '' } = {}) {
 </section>`;
 }
 
-/* type-scale-exempt-start */
+/* type-scale-exempt-start: печатный документ A4 — метрики бумаги, а не экрана (то же исключение, что у case-docs.js) */
 export function titleSheetPrintCss() {
     return `
 .ts { page-break-after: always; }
