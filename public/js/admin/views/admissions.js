@@ -50,7 +50,7 @@ import { h, Icon, Tag, clear, PageHead, fmtDateTime, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { isModuleAllowed } from '../permissions.js';
 import { openAdmissionOrderModal, openAdmissionBedPicker, openAdmissionCancelModal, openAdmissionCard,
-         openAdmissionReviewModal, openAdmissionAttendingModal, goToMarSheet } from './admission-modal.js?v=inp5';
+         openAdmissionReviewModal, openAdmissionAttendingModal, goToMarSheet, goToCaseFile } from './admission-modal.js?v=inp5';
 // Те же адреса модулей, что у admin.js: одна строка импорта — один экземпляр
 // модуля (у ward-beds.js есть свой `state`, и второй экземпляр развёл бы
 // фильтры доски на две копии).
@@ -345,7 +345,14 @@ function inWardCard(list, reload, onNavigate) {
                         onclick: (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); goToMarSheet(a.id, onNavigate); },
                     }, Icon('Pill', { size: 13 }), ' ', tr('Лист назначений'))
                     : null,
-            ], () => openAdmissionCard({ admissionId: a.id, onChange: reload, onNavigate })));
+            // WARD_ROW_TO_CASE_FILE_V1 — у лежащего пациента клик по строке ведёт
+            // СРАЗУ в историю болезни, на рабочий экран, а не в окно поверх
+            // окна. Владелец: «when pressed to the card, we should transfer into
+            // the patient's document cabinet, full screen — we don't need there a
+            // dialogue window». Оформление истории — работа на полчаса с десятком
+            // бумаг; окно карточки было лишней дверью перед ней. Само окно
+            // остаётся у заявок и ожидающих осмотра — у них истории ещё нет.
+            ], () => goToCaseFile(a.id, onNavigate)));
         }
     }
     return listCard(tr('В отделении'), 'Bed', list.length,

@@ -150,6 +150,19 @@ export function goToMarSheet(admissionId, onNavigate) {
     return true;
 }
 
+// WARD_ROW_TO_CASE_FILE_V1 — переход в историю болезни, тем же приёмом. Раньше
+// он был вписан прямо в кнопку карточки; теперь туда же ведёт и строка
+// лежащего пациента в «В отделении» (владелец: «when pressed to the card, we
+// should transfer into the patient's document cabinet, full screen — we don't
+// need there a dialogue window»). Один переход на оба места, чтобы они не
+// разошлись.
+export function goToCaseFile(admissionId, onNavigate) {
+    const nav = onNavigate || (typeof window !== 'undefined' && window.easymed && window.easymed.navigate);
+    if (!nav) return false;
+    nav('case-file', { admissionId });
+    return true;
+}
+
 export function patientAnchor(name, sub) {
     return h('div', {
         style: {
@@ -518,13 +531,7 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
         // окна. Карточка остаётся местом, откуда туда заходят.
         body.appendChild(h('button', {
             class: 'btn btn-outline btn-sm', type: 'button', style: { marginTop: '10px' },
-            onclick: () => {
-                close();
-                // Тот же приём, что у goToMarSheet выше: карточку открывают из
-                // разных мест, и не каждое передаёт навигацию аргументом.
-                const nav = onNavigate || (typeof window !== 'undefined' && window.easymed && window.easymed.navigate);
-                if (nav) nav('case-file', { admissionId: a.id });
-            },
+            onclick: () => { close(); goToCaseFile(a.id, onNavigate); },
         }, Icon('Doc', { size: 13 }), ' ', tr('Открыть историю болезни')));
 
         const actions = h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } });

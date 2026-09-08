@@ -621,3 +621,39 @@ test('кассиру раздел отказывает чисто — маршр
     assert.strictEqual(view.canOpenAdmissions(), false);
     perms.setFullAccess('Admin');
 });
+
+// ─── WARD_ROW_TO_CASE_FILE_V1 — клик по лежащему ведёт в историю болезни ────
+//
+// Владелец: «when pressed to the card, we should transfer into the patient's
+// document cabinet, full screen — we don't need there a dialogue window».
+// Оформление истории — работа на полчаса с десятком бумаг, и делают её на
+// рабочем экране; окно карточки было лишней дверью перед ним.
+test('клик по лежащему в «В отделении» открывает историю болезни на весь экран, а не окно', async () => {
+    const root = await renderScreen();
+    const inWard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('В отделении'));
+    assert.ok(inWard, 'списка «В отделении» нет');
+
+    // Имя пациента в строке — кнопка (patientRow): именно по ней и жмут.
+    const nameBtn = walk(inWard).find((e) =>
+        String(e.tagName).toUpperCase() === 'BUTTON' && textOf(e).includes('Сидоров Сидор'));
+    assert.ok(nameBtn, 'кнопка с именем лежащего не найдена');
+
+    // Экран отрисован без onNavigate — переход идёт через window.easymed.navigate,
+    // как и goToMarSheet. Подменяем и считаем.
+    const calls = [];
+    const overlaysBefore = BODY.children.length;
+    globalThis.window.easymed = { navigate: (...a) => calls.push(a) };
+    try {
+        nameBtn.click();
+        await settle();
+    } finally {
+        delete globalThis.window.easymed;
+    }
+
+    assert.equal(calls.length, 1, 'переход не произошёл: ' + JSON.stringify(calls));
+    assert.equal(calls[0][0], 'case-file', 'ушли не на историю болезни, а на ' + calls[0][0]);
+    assert.ok(Number.isInteger(calls[0][1] && calls[0][1].admissionId) && calls[0][1].admissionId > 0,
+        'история открыта без номера госпитализации: ' + JSON.stringify(calls[0][1]));
+    // И НИКАКОГО окна поверх: раньше здесь открывалась карточка госпитализации.
+    assert.equal(BODY.children.length, overlaysBefore, 'клик открыл окно вместо перехода на экран');
+});
