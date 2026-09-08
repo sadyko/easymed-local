@@ -25,6 +25,7 @@
 import { supabase } from '../../supabase.js';
 // REFERRAL_SOURCE_CODE_V1 — подпись партнёра одна на все экраны регистратора.
 import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';
+import { searchableSelect } from './searchable-select.js?v=ss2';   // SEARCHABLE_SELECT_V1
 import { CAT_ORDER, categoryOf } from '../../shared/service-categories.js';   // SERVICE_CATALOG_FILTER_V1
 import { h, Icon, clear, toast, Avatar, initials, avColor, field, fmtDate, fmtDateTime } from '../ui.js';
 import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
@@ -1330,7 +1331,14 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             h('div', { class: 'field-row', style: { gridTemplateColumns: '1fr 1fr' } },
                 field('Источник направления', catSel),
                 // Второе поле показываем ТОЛЬКО после выбора источника.
-                wiz.sourceCat ? field('Кто направил', srcSel) : null,
+                // SEARCHABLE_SELECT_V1 — партнёров в категории «Внутренние врачи»
+                // столько же, сколько врачей в клинике: обычным списком нужного
+                // ищут глазами сверху вниз. Ищется и по НОМЕРУ, и по имени —
+                // номер стоит первым в подписи, а правило поиска (text-match.js)
+                // требует найти каждое слово запроса где угодно в строке.
+                wiz.sourceCat ? field('Кто направил', searchableSelect(srcSel, {
+                    placeholder: 'Номер или имя…',
+                })) : null,
             ),
         ));
     }
