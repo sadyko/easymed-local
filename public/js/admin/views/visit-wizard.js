@@ -68,7 +68,10 @@ const REF_UNCAT = '—  без категории';
 // вознаграждения, и три написания одного названия стали значить не три группы
 // в списке, а деньги, которых партнёр не получил. Ключом «корзины» здесь
 // по-прежнему служит НАЗВАНИЕ — так его и показывают в списке.
-const refCatOf = (s) => ((s && s.referral_source_categories && s.referral_source_categories.name) || '').trim();
+// Ключ «корзины» — ID категории, а не её название: два справочника с одним
+// написанием слились бы в одну группу, а переименование категории потеряло бы
+// уже выбранное направление. Пустая строка означает «без категории».
+const refCatOf = (s) => (s && s.category_id != null ? String(s.category_id) : '');
 const refSourcesIn = (sources, cat) => (sources || []).filter(s => (cat === REF_UNCAT ? !refCatOf(s) : refCatOf(s) === cat));
 
 function currentUserId() {
@@ -90,6 +93,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         loadError: null,
         doctors: [],
         sources: [],
+        refCats: [],   // REFERRAL_CAT_FROM_BOOK_V1 — справочник категорий, как он заведён в настройках
         payers: [],
         payersError: null,   // PAYER_LOAD_V2 — «не загрузились» ≠ «не заведены»
         cart: [],            // [{ svc, qty }]
@@ -399,10 +403,17 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
     // ---- data ----
     try {
-        const [svcRes, docRes, srcRes, payerRes] = await Promise.all([
+        const [svcRes, docRes, srcRes, refCatRes, payerRes] = await Promise.all([
             supabase.from('services').select('id, name, price, duration_minutes, requires_doctor, is_lab, type').eq('active', true).order('name').limit(1000),
             supabase.from('users').select('id, full_name, username, role, is_active, service_rates').eq('role', 'doctor').eq('is_active', true).order('full_name'),   // SVC_DOCTORS_V1 — назначения услуг
-            supabase.from('referral_sources').select('id, name, code, category_id, referral_source_categories(name)').eq('active', true).order('name'),
+            supabase.from('referral_sources').select('id, name, code, category_id').eq('active', true).order('name'),
+            // REFERRAL_CAT_FROM_BOOK_V1 — список категорий берётся из СПРАВОЧНИКА,
+            // а не собирается из загруженных источников. Собранный из источников
+            // он показывал только те категории, в которых уже кто-то есть: заведи
+            // клиника «Внешные врачи» и не привяжи к ней ни одного партнёра — в
+            // мастере её нет вовсе, и регистратор не понимает, куда делась
+            // категория, которую он только что видел в настройках.
+            supabase.from('referral_source_categories').select('id, name').eq('active', true).order('name'),
             // PAYER_LOAD_V2 — читаем ВЕСЬ справочник и отсеиваем неактивных здесь.
             // Раньше стоял .eq('active', true): если серверный реестр не разрешает
             // фильтр по этой колонке, запрос падает целиком и список плательщиков
@@ -413,6 +424,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         wiz.services = svcRes.data || [];
         wiz.doctors  = docRes.data || [];
         wiz.sources  = srcRes.data || [];
+        wiz.refCats  = refCatRes.data || [];
         // PAYER_LOAD_V2 — ошибка загрузки и «не заведены» — РАЗНЫЕ факты (тот же
         // урок, что CATALOG_DIAG_V4 ниже): раньше ошибка превращалась в пустой
         // массив, и мастер уверенно сообщал «Плательщики не заведены», когда они
@@ -1247,7 +1259,20 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     }
 
     // ---------------------------------------------------------------------
-    // Step 2 — Направление (источник → кто направил, врач)
+    // Step 2 — Направление (источник → кто направил)
+    //
+    // DOCTOR_FIELD_DROPPED_V1 — поля «Врач» здесь больше нет, и оно было
+    // запасным, а не основным. Врача каждая врачебная услуга получает
+    // СВОЕГО на шаге 1 (подбор в каталоге либо жёлтая плашка
+    // «Выберите врача — N услуг(и) ждут»), а услуга без врача в смету вообще
+    // не попадает (visibleCart). То есть это поле могло только назначить
+    // ОДНОГО врача сразу всем неназначенным строкам мимо того выбора,
+    // который регистратор уже сделал послужебно.
+    //
+    // Само wiz.doctorId остаётся пустым и никуда не делась — тот же приём,
+    // что у DATE_FIELD_DROPPED_V1 и VISIT_TYPE_FIELD_DROPPED_V1 выше: выражения
+    // вида `c.doctorId || (c.svc.requires_doctor ? wiz.doctorId : null)` продолжают
+    // работать и просто всегда берут врача самой строки.
     //
     // VISIT_NOTE_FIELD_DROPPED_V1 — поля «Заметка» здесь больше нет: на этом
     // шаге его заполняли редко, а место оно занимало на каждом визите. Само
@@ -1255,7 +1280,6 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // уходит notes: null, как и раньше уходило у незаполненной заметки.
     // ---------------------------------------------------------------------
     function paintStep2(root) {
-        const needsDoctor = wiz.cart.some(c => c.svc.requires_doctor);
 
         // DATE_FIELD_DROPPED_V1 — поля «Дата и время» здесь больше нет: дату и
         // время каждая услуга получает СВОЮ на шаге 1 (планировщик врача или
@@ -1263,11 +1287,6 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // (`c.when || wiz.when` в submit). Это поле было запасным значением для
         // строк без своей даты — оно и осталось, просто невидимым: wiz.when
         // держит defaultWhen(), так что запасной вариант никуда не делся.
-
-        const docSel = h('select', null,
-            h('option', { value: '' }, needsDoctor ? '— Выберите врача —' : '— Без врача —'),
-            ...wiz.doctors.map(d => h('option', { value: d.id, selected: String(wiz.doctorId) === String(d.id) }, d.full_name || d.username)));
-        docSel.addEventListener('change', () => { wiz.doctorId = docSel.value; });
 
         // VISIT_TYPE_FIELD_DROPPED_V1 — селектора «Тип визита» здесь нет:
         // регистратура заводит амбулаторный приём, и выбор из трёх значений был
@@ -1281,7 +1300,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // направил. Одним плоским списком всех партнёров пользоваться было
         // нельзя: на реальной базе это сотни строк вида «Имя · категория».
         // В визит по-прежнему уходит wiz.sourceId — схема не менялась.
-        const cats = [...new Set(wiz.sources.map(refCatOf).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru'));
+        const cats = (wiz.refCats || []).map(c => ({ id: String(c.id), name: c.name }));
         const hasUncat = wiz.sources.some(s => !refCatOf(s));
 
         // Правка существующего направления: категорию восстанавливаем из источника.
@@ -1292,7 +1311,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
         const catSel = h('select', null,
             h('option', { value: '' }, '— Без направления —'),
-            ...cats.map(c => h('option', { value: c, selected: wiz.sourceCat === c }, c)),
+            ...cats.map(c => h('option', { value: c.id, selected: wiz.sourceCat === c.id }, c.name)),
             ...(hasUncat ? [h('option', { value: REF_UNCAT, selected: wiz.sourceCat === REF_UNCAT }, REF_UNCAT)] : []));
         catSel.addEventListener('change', () => {
             wiz.sourceCat = catSel.value;
@@ -1312,9 +1331,6 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 field('Источник направления', catSel),
                 // Второе поле показываем ТОЛЬКО после выбора источника.
                 wiz.sourceCat ? field('Кто направил', srcSel) : null,
-            ),
-            h('div', { class: 'field-row', style: { gridTemplateColumns: '1fr 1fr' } },
-                field(needsDoctor ? 'Врач (обязательно — есть врачебные услуги)' : 'Врач', docSel, { required: needsDoctor }),
             ),
         ));
     }
