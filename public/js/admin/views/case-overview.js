@@ -457,6 +457,26 @@ const CONSCIOUSNESS_RU = { alert: 'ясное', confused: 'спутанное', 
 const isNumV = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
 
 /**
+ * SVG_NS_V1 — элемент SVG в его пространстве имён. h() делает HTML-элементы, и
+ * <svg> с <path> внутри, созданные через createElement, браузер не рисует (а
+ * <text> показывает как обычный текст рядом). В тестах createElementNS —
+ * та же фабрика, что createElement, поэтому проверки по tagName не меняются.
+ */
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function sv(tag, attrs, ...children) {
+    const el = typeof document.createElementNS === 'function' ? document.createElementNS(SVG_NS, tag) : document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+        if (v === null || v === undefined || v === false) continue;
+        el.setAttribute(k, String(v));
+    }
+    for (const c of children.flat()) {
+        if (c === null || c === undefined || c === false) continue;
+        el.appendChild(typeof c === 'string' || typeof c === 'number' ? document.createTextNode(String(c)) : c);
+    }
+    return el;
+}
+
+/**
  * VITALS_DYNAMICS_V1 — ГЛАДКАЯ кривая через точки (Катмулл-Ром → кубические
  * Безье): владелец — «copy the graphs too, but use smooth pastel tones».
  * Ломаная из отрезков читалась как «зигзаг прибора»; гладкая — как ход
@@ -478,7 +498,7 @@ function smoothPath(xy) {
 /** Искорка: гладкая кривая по значениям (последние точки) с мягкой заливкой под ней. Одна точка — кружок. */
 function sparkline(values, { w = 120, hgt = 34 } = {}) {
     const pts = values.filter(isNumV).map(Number);
-    if (!pts.length) return h('svg', { class: 'vt-spark', viewBox: '0 0 ' + w + ' ' + hgt, 'aria-hidden': 'true' });
+    if (!pts.length) return sv('svg', { class: 'vt-spark', viewBox: '0 0 ' + w + ' ' + hgt, 'aria-hidden': 'true' });
     const min = Math.min(...pts), max = Math.max(...pts);
     const span = max - min || 1;
     const x = (i) => (pts.length === 1 ? w / 2 : 4 + (i * (w - 8)) / (pts.length - 1));
@@ -486,10 +506,10 @@ function sparkline(values, { w = 120, hgt = 34 } = {}) {
     const xy = pts.map((v, i) => [x(i), y(v)]);
     const d = smoothPath(xy);
     const lastX = x(pts.length - 1), lastY = y(pts[pts.length - 1]);
-    return h('svg', { class: 'vt-spark', viewBox: '0 0 ' + w + ' ' + hgt, 'aria-hidden': 'true' },
-        pts.length > 1 ? h('path', { class: 'vt-spark-fill', d: d + ' L' + lastX.toFixed(1) + ' ' + hgt + ' L' + xy[0][0].toFixed(1) + ' ' + hgt + ' Z', stroke: 'none' }) : null,
-        pts.length > 1 ? h('path', { d, fill: 'none', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }) : null,
-        h('circle', { cx: lastX.toFixed(1), cy: lastY.toFixed(1), r: '3' }));
+    return sv('svg', { class: 'vt-spark', viewBox: '0 0 ' + w + ' ' + hgt, 'aria-hidden': 'true' },
+        pts.length > 1 ? sv('path', { class: 'vt-spark-fill', d: d + ' L' + lastX.toFixed(1) + ' ' + hgt + ' L' + xy[0][0].toFixed(1) + ' ' + hgt + ' Z', stroke: 'none' }) : null,
+        pts.length > 1 ? sv('path', { d, fill: 'none', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }) : null,
+        sv('circle', { cx: lastX.toFixed(1), cy: lastY.toFixed(1), r: '3' }));
 }
 
 const pointsTone = (p) => (p === null || p === undefined ? '' : p >= 3 ? 'crit' : p === 2 ? 'warn2' : p === 1 ? 'warn' : 'ok');
@@ -676,18 +696,18 @@ function bigChart(rows, t, { w = 640, hgt = 200 } = {}) {
     const fmtV = (v) => (t.key === 'temp_c' ? String(v).replace('.', ',') : String(v));
     const dateLbl = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
     const gridVals = [min + pad, (min + max) / 2, max - pad];
-    return h('svg', { class: 'vd-chart', viewBox: '0 0 ' + w + ' ' + hgt, role: 'img', 'aria-label': tr(t.label) + ' — ' + tr('динамика') },
-        norm ? h('rect', { class: 'vd-norm', x: padL, y: y(norm[1]).toFixed(1), width: w - padL - padR, height: Math.max(0, y(norm[0]) - y(norm[1])).toFixed(1), rx: 4 }) : null,
-        ...gridVals.map((g) => h('g', null,
-            h('line', { class: 'vd-grid', x1: padL, x2: w - padR, y1: y(g).toFixed(1), y2: y(g).toFixed(1) }),
-            h('text', { class: 'vd-tick', x: padL - 6, y: (y(g) + 4).toFixed(1), 'text-anchor': 'end' }, fmtV(Math.round(g * 10) / 10)))),
-        pts.length > 1 ? h('path', { class: 'vd-fill', d: smoothPath(xy) + ' L' + xy[xy.length - 1][0].toFixed(1) + ' ' + (hgt - padB) + ' L' + xy[0][0].toFixed(1) + ' ' + (hgt - padB) + ' Z' }) : null,
-        pts.length > 1 ? h('path', { class: 'vd-line', d: smoothPath(xy), fill: 'none', 'stroke-width': '2.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }) : null,
-        ...xy.map(([cx, cy], i) => h('g', null,
-            h('circle', { class: 'vd-dot', cx: cx.toFixed(1), cy: cy.toFixed(1), r: '4' }),
-            h('text', { class: 'vd-val', x: cx.toFixed(1), y: (cy - 9).toFixed(1), 'text-anchor': 'middle' }, fmtV(pts[i].v)))),
+    return sv('svg', { class: 'vd-chart', viewBox: '0 0 ' + w + ' ' + hgt, role: 'img', 'aria-label': tr(t.label) + ' — ' + tr('динамика') },
+        norm ? sv('rect', { class: 'vd-norm', x: padL, y: y(norm[1]).toFixed(1), width: w - padL - padR, height: Math.max(0, y(norm[0]) - y(norm[1])).toFixed(1), rx: 4 }) : null,
+        ...gridVals.map((g) => sv('g', null,
+            sv('line', { class: 'vd-grid', x1: padL, x2: w - padR, y1: y(g).toFixed(1), y2: y(g).toFixed(1) }),
+            sv('text', { class: 'vd-tick', x: padL - 6, y: (y(g) + 4).toFixed(1), 'text-anchor': 'end' }, fmtV(Math.round(g * 10) / 10)))),
+        pts.length > 1 ? sv('path', { class: 'vd-fill', d: smoothPath(xy) + ' L' + xy[xy.length - 1][0].toFixed(1) + ' ' + (hgt - padB) + ' L' + xy[0][0].toFixed(1) + ' ' + (hgt - padB) + ' Z' }) : null,
+        pts.length > 1 ? sv('path', { class: 'vd-line', d: smoothPath(xy), fill: 'none', 'stroke-width': '2.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }) : null,
+        ...xy.map(([cx, cy], i) => sv('g', null,
+            sv('circle', { class: 'vd-dot', cx: cx.toFixed(1), cy: cy.toFixed(1), r: '4' }),
+            sv('text', { class: 'vd-val', x: cx.toFixed(1), y: (cy - 9).toFixed(1), 'text-anchor': 'middle' }, fmtV(pts[i].v)))),
         ...xy.map(([cx], i) => (pts.length <= 8 || i === 0 || i === pts.length - 1 || i % Math.ceil(pts.length / 6) === 0)
-            ? h('text', { class: 'vd-tick', x: cx.toFixed(1), y: hgt - 8, 'text-anchor': 'middle' }, dateLbl(pts[i].at)) : null));
+            ? sv('text', { class: 'vd-tick', x: cx.toFixed(1), y: hgt - 8, 'text-anchor': 'middle' }, dateLbl(pts[i].at)) : null));
 }
 
 export async function openVitalsDynamics({ admission, metric = 'temp_c', series = [] } = {}) {

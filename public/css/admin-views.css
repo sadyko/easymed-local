@@ -5421,18 +5421,24 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .wt-tiles-wrap{padding:12px 12px 0}
 .wt-tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
 .ar-sub{font-size:12.5px;color:var(--ink-500);margin-top:1px}
-.wt-tile{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--ink-25);border:1px solid var(--ink-100);border-radius:var(--r-md);cursor:pointer;font:inherit;color:inherit;text-align:left;min-width:0;transition:box-shadow 120ms ease,border-color 120ms ease,background-color 120ms ease;touch-action:manipulation}
-.wt-tile:hover{border-color:var(--primary-300);box-shadow:var(--shadow-md)}
-.wt-tile.on{border-color:var(--primary-500);background:var(--primary-50)}
-.wt-tile:focus-visible{outline:2px solid var(--primary-500);outline-offset:2px}
-.wt-tile-ic{color:var(--primary-600);display:inline-flex;flex:0 0 auto}
-.wt-tile-l{flex:1;min-width:0;font-size:12.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-600);line-height:1.25}
-.wt-tile-v{font-size:24px;font-weight:700;color:var(--ink-900);font-variant-numeric:tabular-nums;line-height:1}
-.wt-tile.wt-warn .wt-tile-v{color:var(--warn-700)}
-.wt-tile.wt-warn .wt-tile-ic{color:var(--warn-700)}
+/* WARD_TILES_FILL_V1 — плитки групп залиты цветом, текст белый (владелец:
+   «make this cards more prominent, using a fill of color but making the text
+   white»). У каждой группы свой цвет палитры EasyMed: в отделении — бирюза
+   (основной), ждут осмотра — янтарь, ждут лечащего — индиго, к выписке —
+   зелень. Выбранная — с кольцом и тенью; невыбранные чуть приглушены, но
+   остаются залитыми — ряд читается как четыре кнопки. */
+.wt-tile{display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--wt-fill,var(--primary-600));border:1px solid transparent;border-radius:var(--r-md);cursor:pointer;font:inherit;color:#fff;text-align:left;min-width:0;opacity:.84;transition:box-shadow 120ms ease,opacity 120ms ease,transform 120ms ease;touch-action:manipulation}
+.wt-tile-all{--wt-fill:var(--primary-600)}
+.wt-tile-exam{--wt-fill:#b45309}
+.wt-tile-attending{--wt-fill:#4d5b8c}
+.wt-tile-discharge{--wt-fill:#1f7a4d}
+.wt-tile:hover{opacity:1;box-shadow:var(--shadow-md);transform:translateY(-1px)}
+.wt-tile.on{opacity:1;box-shadow:0 0 0 3px color-mix(in srgb,var(--wt-fill,var(--primary-600)) 30%,transparent),var(--shadow-md)}
+.wt-tile:focus-visible{outline:2px solid var(--ink-900);outline-offset:2px}
+.wt-tile-ic{color:#fff;display:inline-flex;flex:0 0 auto;opacity:.9}
+.wt-tile-l{flex:1;min-width:0;font-size:12.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:#fff;line-height:1.25}
+.wt-tile-v{font-size:24px;font-weight:800;color:#fff;font-variant-numeric:tabular-nums;line-height:1}
 .wt-table{min-width:960px}
-.wt-band td{background:var(--ink-25);font-size:12.5px;color:var(--ink-600);padding:6px 10px;border-bottom:1px solid var(--ink-100)}
-.wt-band td b{color:var(--ink-800)}
 .wt-name{background:none;border:0;padding:0;font:inherit;color:inherit;text-align:left;cursor:pointer;display:flex;align-items:center;gap:8px;min-width:0;touch-action:manipulation}
 .wt-name:hover .ar-name{color:var(--primary-700);text-decoration:underline}
 .wt-name:focus-visible{outline:2px solid var(--primary-500);outline-offset:2px;border-radius:var(--r-xs)}
@@ -5608,3 +5614,21 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
    госпитализации цифры набраны тем же Onest с табличными цифрами, а не
    моноширинным стеком — иначе на одном экране жили два шрифта. */
 .co .num,.co-head .num,.vt-card .num,.vd .num,.co-nav-count,.co-hf-v,.co-big-v,.co-tile-v,.vt-val,.vt-chip,.vd-tbl .num{font-family:var(--font-sans);font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+
+/* VITALS_TABLET_V1 — окно «Добавить измерение» на планшете: крупные поля под
+   палец, цифровая клавиатура (inputmode), кнопка во всю ширину; на широком
+   планшете окно занимает почти весь экран, поля — в две колонки. */
+.vt-in,.vt-form-row select,.vt-form-row input[type="datetime-local"],.vt-form-row input:not([type="checkbox"]){min-height:44px;font-size:17px;font-variant-numeric:tabular-nums}
+.vt-form-row{gap:12px 16px}
+.vt-check{min-height:44px;margin-top:22px}
+.vt-preview{font-size:15px;padding:12px 14px}
+@media (pointer:coarse){
+  .vt-in,.vt-form-row select,.vt-form-row input:not([type="checkbox"]){min-height:52px;font-size:20px}
+  .vt-form-row{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .modal-card:has(.vt-preview){width:min(96vw,900px)!important;max-width:96vw}
+  .modal-card:has(.vt-preview) .modal-foot .btn{min-height:52px;font-size:17px;padding:0 24px}
+  .vt-tile{min-height:104px}
+}
+@media (max-width:1100px){
+  .modal-card:has(.vt-preview){width:min(96vw,900px)!important;max-width:96vw}
+}

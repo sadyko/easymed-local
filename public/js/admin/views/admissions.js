@@ -343,11 +343,11 @@ function stayText(r) {
 }
 const WARD_COLS = [
     { key: 'patient', label: 'Пациент',                 text: (r) => [(r.patients || {}).mrn, (r.patients || {}).full_name].filter(Boolean).join(' ') },
-    // WARD_BED_COLUMN_OUT_V1 — колонки «Койка» больше нет (владелец: «the bed is
-    // duplicating, remove from the list»): палата уже стоит полосой-разделом над
-    // строками, а номер койки — подписью в ячейке «На койке» (и по нему
-    // фильтруется та же ячейка).
-    { key: 'stay',    label: 'На койке',                text: (r) => [stayText(r), (r.beds || {}).code].filter(Boolean).join(' · ') },
+    { key: 'stay',    label: 'На койке',                text: (r) => stayText(r) },
+    // WARD_BANDS_OUT_V1 — владелец: «the bed is duplicating … leave in the
+    // filter, but remove from the list»: колонка «Койка» (с фильтром) остаётся,
+    // а полосы-разделы палат над строками убраны — палата и так в колонке.
+    { key: 'bed',     label: 'Койка',                   text: (r) => [(r.wards || {}).name, (r.beds || {}).code].filter(Boolean).join(' / ') },
     { key: 'dx',      label: 'Диагноз при направлении', text: (r) => r.admission_diagnosis || '' },
     { key: 'doctor',  label: 'Лечащий врач',            text: (r) => (r.attending && r.attending.full_name) || tr('не назначен') },
     { key: 'status',  label: 'Статус',                  text: (r) => admissionStatusLabel(r.status) },
@@ -388,8 +388,11 @@ function wardTable({ rows, can, reload, onNavigate }) {
         for (const g of WARD_GROUPS) {
             const n = inWard.filter(g.pick).length;
             const on = state.group === g.key;
+            // WARD_TILES_FILL_V1 — плитки залиты цветом группы, текст белый
+            // (владелец: «make this cards more prominent, using a fill of color
+            // but making the text white»); выбранная — темнее и с кольцом.
             tilesEl.appendChild(h('button', {
-                class: 'wt-tile' + (on ? ' on' : '') + (g.warn && n > 0 ? ' wt-warn' : ''), type: 'button',
+                class: 'wt-tile wt-tile-' + g.key + (on ? ' on' : '') + (g.warn && n > 0 ? ' wt-warn' : ''), type: 'button',
                 'aria-pressed': on ? 'true' : 'false',
                 onclick: () => { state.group = g.key; paintTiles(); paintRows(); },
             },
@@ -448,9 +451,8 @@ function wardTable({ rows, can, reload, onNavigate }) {
                 h('span', { class: ('ar-av ' + pastelFor(p.id || a.patient_id || name)).trim(), 'aria-hidden': 'true' }, initials(name)),
                 h('span', { class: 'ar-id' }, p.mrn || ''),
                 h('span', { class: 'ar-name' }, name))),
-            h('td', { class: 'ar-nowrap' }, stayText(a) || '—',
-                // WARD_BED_COLUMN_OUT_V1 — номер койки подписью, палата — в полосе-разделе.
-                a.beds && a.beds.code ? h('div', { class: 'ar-sub' }, trf('койка {code}', { code: a.beds.code })) : null),
+            h('td', { class: 'ar-nowrap' }, stayText(a) || '—'),
+            h('td', { class: 'ar-nowrap' }, WARD_COLS[2].text(a) || '—'),
             h('td', null, a.admission_diagnosis || '—'),
             h('td', null, attending
                 ? attending
@@ -471,17 +473,12 @@ function wardTable({ rows, can, reload, onNavigate }) {
         const shown = inWard.filter(group.pick).filter((r) => WARD_COLS.every((c) => c.nofilter || !state.text[c.key] || c.text(r).toLowerCase().includes(state.text[c.key])));
         clear(tbody);
         if (!shown.length) msg(tr('По фильтру ничего не найдено.'));
-        const byWard = new Map();
-        for (const a of shown) {
-            const key = (a.wards && a.wards.name) || tr('Без палаты');
-            if (!byWard.has(key)) byWard.set(key, []);
-            byWard.get(key).push(a);
-        }
-        for (const [wardName, wardRows] of [...byWard.entries()].sort((x, y) => String(x[0]).localeCompare(String(y[0])))) {
-            tbody.appendChild(h('tr', { class: 'wt-band' }, h('td', { colspan: String(WARD_COLS.length) },
-                h('b', null, wardName), ' · ', trf('занято: {n}', { n: wardRows.length }))));
-            for (const a of wardRows) tbody.appendChild(rowEl(a));
-        }
+        // WARD_BANDS_OUT_V1 — без полос-разделов по палатам: порядок тот же
+        // (палата → койка), палата видна в колонке «Койка».
+        const wardOf = (a) => String((a.wards && a.wards.name) || '');
+        const bedOf = (a) => String((a.beds && a.beds.code) || '');
+        const ordered = shown.slice().sort((x, y) => wardOf(x).localeCompare(wardOf(y)) || bedOf(x).localeCompare(bedOf(y), undefined, { numeric: true }));
+        for (const a of ordered) tbody.appendChild(rowEl(a));
         count.textContent = trf('Показано {n} из {total}', { n: shown.length, total: inWard.length });
     }
 
