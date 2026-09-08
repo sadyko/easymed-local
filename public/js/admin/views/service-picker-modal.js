@@ -2266,7 +2266,7 @@ export function openServicePickerModal({
         try {
             const [c, s] = await Promise.all([
                 supabase.from('referral_source_categories').select('id, name').eq('active', true).order('name'),
-                // REFERRAL_CATEGORY_RATES_V1 (мигр. 109) — ссылка на справочник
+                // REFERRAL_CATEGORY_RATES_V1 (мигр. 115) — ссылка на справочник
                 // появилась, и категория берётся ПО НЕЙ. Прежний комментарий
                 // (CLOUD_LEFTOVER_COLUMNS_V1) верно описывал состояние до 109:
                 // категория хранилась текстом, потому что ссылки не было.

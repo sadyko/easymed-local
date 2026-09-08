@@ -915,7 +915,7 @@ export const SECTIONS = {
                         ['walk_in','Walk-in'], ['advertisement','Advertisement'], ['other','Other']] },
             { key: 'contact_person',        label: 'Contact person', type: 'text' },
             { key: 'phone',                 label: 'Phone', type: 'phone' },
-            // REFERRAL_CATEGORY_RATES_V1 (мигр. 109) — вознаграждение задаётся в
+            // REFERRAL_CATEGORY_RATES_V1 (мигр. 115) — вознаграждение задаётся в
             // «Настройках → Направления»: стандартная ставка на КАТЕГОРИИ, своя —
             // в карточке источника. Здесь его нет намеренно: прежние поля
             // commission_mode / commission_rates писали в колонки, которых в этой

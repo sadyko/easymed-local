@@ -29,7 +29,7 @@ ALTER TABLE referral_sources ADD COLUMN doctor_id INTEGER REFERENCES users(id) O
 CREATE UNIQUE INDEX idx_referral_sources_doctor ON referral_sources(doctor_id) WHERE doctor_id IS NOT NULL;
 
 -- Категория «внутренняя» ФЛАГОМ, а не названием. Тот же довод, по которому
--- ставки вознаграждения перестали искаться по имени (мигр. 109): клиника
+-- ставки вознаграждения перестали искаться по имени (мигр. 115): клиника
 -- вправе переименовать категорию, и переименование не должно менять поведение.
 ALTER TABLE referral_source_categories ADD COLUMN is_internal INTEGER NOT NULL DEFAULT 0;
 

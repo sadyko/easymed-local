@@ -475,7 +475,7 @@ export function referralPickerPair(v) {
     (async () => {
         const [{ data: cats }, { data: srcs }] = await Promise.all([
             supabase.from('referral_source_categories').select('id, name').eq('active', true).order('name'),
-            // REFERRAL_CATEGORY_RATES_V1 (мигр. 109) — колонка category_id
+            // REFERRAL_CATEGORY_RATES_V1 (мигр. 115) — колонка category_id
             // наконец существует. Прежний комментарий (CLOUD_LEFTOVER_COLUMNS_V1)
             // описывал полусломанное состояние: запрос просили без category_id,
             // а отбор ниже сравнивал именно его — то есть при выбранной

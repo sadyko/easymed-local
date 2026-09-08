@@ -61,7 +61,7 @@ export function resolveReferralRate({ source, category, serviceTypeId }) {
     return rateForType(source.own_rates, serviceTypeId) || pct(source.own_percent);
   }
   // Всё, что не 'own', — это 'category': незнакомый режим не должен молча
-  // включать чужие ставки (см. отсутствие CHECK в мигр. 109).
+  // включать чужие ставки (см. отсутствие CHECK в мигр. 115).
   if (!category) return pct(0);
   return rateForType(category.rates, serviceTypeId) || pct(category.standard_percent);
 }

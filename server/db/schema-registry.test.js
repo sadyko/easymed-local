@@ -151,7 +151,7 @@ test('settings-match tables: admin config, FK embeds, api_tokens admin-read-only
   assert.equal(embedEntry('doctor_rates','services').fk, 'service_id');
 });
 
-// REFERRAL_CATEGORY_RATES_V1 (mig 109) — reward rates are money, so the columns
+// REFERRAL_CATEGORY_RATES_V1 (mig 115) — reward rates are money, so the columns
 // that carry them have to be readable by the report and writable by the admin
 // editor, and `referral_rewards` — which set rates by NAME MATCHING — has to be
 // gone from the registry, not merely unused by a screen.

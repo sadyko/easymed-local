@@ -123,7 +123,7 @@ const goto = (url) => () => { window.location.href = url; };
 //     таких колонок нет ни в таблице, ни в schema-registry.js, эти вызовы и так
 //     отвечают 4xx (CLAUDE.md, «Cloud leftovers in an offline app»).
 //     Из этого списка ушли двое: referral-settings.js удалён вместе с
-//     companies.referral_reward_rates (REFERRAL_CATEGORY_RATES_V1, мигр. 109),
+//     companies.referral_reward_rates (REFERRAL_CATEGORY_RATES_V1, мигр. 115),
 //     а выгрузка «Рефералы» в reports-export.js переписана на настоящие
 //     колонки — она читала несуществующие commission_mode / commission_rates;
 //   • у локальной `branches` НЕТ колонки company_id — внешнего ключа на
@@ -630,7 +630,7 @@ const LOOKUP_CONFIG = {
         addTitle: 'Новый источник направления', editTitle: 'Источник направления',
         modalWidth: '920px', modalCols: '1fr 1fr',
         embed: 'referral_source_categories(name)',
-        filterRow: true,   // LOOKUP_COLUMN_FILTERS_V1 — с мигр. 111 здесь ещё и все врачи клиники
+        filterRow: true,   // LOOKUP_COLUMN_FILTERS_V1 — с мигр. 117 здесь ещё и все врачи клиники
 
         columns: [
             { key: 'code', label: 'Номер' },
@@ -651,7 +651,7 @@ const LOOKUP_CONFIG = {
             { key: 'payment_type', label: 'Тип оплаты', type: 'select',
               options: [['cash', 'Наличные'], ['card', 'На карту'], ['transfer', 'Перечислением']] },
             { key: 'card_number', label: 'Номер карты', type: 'text' },
-            // REFERRAL_CATEGORY_RATES_V1 (мигр. 109) — НАСТОЯЩАЯ ссылка вместо
+            // REFERRAL_CATEGORY_RATES_V1 (мигр. 115) — НАСТОЯЩАЯ ссылка вместо
             // свободного текста. Текст выбирали потому, что визит-мастер
             // группирует источники по категории, и список подсказок казался
             // достаточным. Достаточным он не был: на категории теперь висит
@@ -679,7 +679,7 @@ const LOOKUP_CONFIG = {
             payload.name = full;
         },
     },
-    // REFERRAL_CATEGORY_RATES_V1 (мигр. 109) — категория несёт СТАНДАРТНУЮ
+    // REFERRAL_CATEGORY_RATES_V1 (мигр. 115) — категория несёт СТАНДАРТНУЮ
     // ставку: процент со всего плюс строки по группам услуг, которые его
     // перекрывают. Раньше это делала отдельная плитка «Реферальное
     // вознаграждение»: правило вознаграждения, названное точно так же, как
@@ -828,7 +828,7 @@ async function renderEditor(container, key) {
     // LOOKUP_COLUMN_FILTERS_V1 — строка отбора под шапкой, по полю на колонку.
     //
     // Появилась, когда в списке источников направления стало 23 строки: с
-    // мигр. 111 каждый врач клиники — тоже источник, и найти среди них одного
+    // мигр. 117 каждый врач клиники — тоже источник, и найти среди них одного
     // внешнего партнёра глазами уже нельзя.
     //
     // Отбор КЛИЕНТСКИЙ, по уже загруженным строкам: список и так приезжает

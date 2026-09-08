@@ -123,7 +123,7 @@ test('referrals: ставка берётся у категории, а не у �
   const [building, code, source, category, mode, count, amount, pct, reward] = r.rows[0];
   assert.equal(building, 'Main Branch');    // своё здание подписано своим именем
   // REFERRAL_SOURCE_CODE_V1 — номер сверяем с тем, что в базе, а не с
-  // константой: с мигр. 111 каждый врач клиники тоже источник, и кто именно
+  // константой: с мигр. 117 каждый врач клиники тоже источник, и кто именно
   // получит 0001, зависит от порядка посева, а не от смысла этого теста.
   const expectedCode = db.prepare("SELECT code FROM referral_sources WHERE name = 'Клиника Х'").get().code;
   assert.match(expectedCode, /^\d{4,}$/, 'источник остался без номера');

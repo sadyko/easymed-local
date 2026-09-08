@@ -1029,7 +1029,7 @@ const SECTION_RENDERERS = {
 // rewards", parameterised by `cfg` (which emp array, labels, icon). Uses
 // markDirty (not set) so its own row re-render isn't clobbered by a full panel
 // rebuild, which would also reset the local search/filter.
-// INTERNAL_REFERRAL_V1 (мигр. 111) — вознаграждение врача за НАПРАВЛЕНИЕ.
+// INTERNAL_REFERRAL_V1 (мигр. 117) — вознаграждение врача за НАПРАВЛЕНИЕ.
 //
 // Редактируется здесь, а хранится НЕ в карточке сотрудника, а на его источнике
 // направления — той же строке, которую читают отчёт «Рефералы» и кабинет врача.
@@ -1350,7 +1350,7 @@ export async function saveEmployee(emp, row) {
         branches: Array.isArray(s.branches) ? s.branches : [],
     }));
     // INTERNAL_REFERRAL_V1 — вознаграждения за направление больше НЕТ в карточке
-    // сотрудника: оно живёт на его ИСТОЧНИКЕ направления (мигр. 111),
+    // сотрудника: оно живёт на его ИСТОЧНИКЕ направления (мигр. 117),
     // откуда его читают и отчёт «Рефералы», и кабинет врача. Прежний
     // users.referral_rates был вторым механизмом для того же вознаграждения
     // и расходился с отчётом молча. Колонку не роняем — в ней лежит то,
