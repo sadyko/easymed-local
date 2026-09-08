@@ -21,6 +21,7 @@ import {
 // Старый путь поступления обязан спросить его тем же вопросом, что и новый, —
 // иначе «лечащий врач» на карточке и «лечащий врач» в назначениях разъедутся.
 import { isDoctorRow } from './inpatient-reviews.js';
+import { saveTitleSheet } from './title-sheet.js';   // TITLE_SHEET_V1 — лист в той же транзакции, что и койка
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -904,7 +905,15 @@ export function admissionAdmit(db, args, user) {
       VALUES (?, ?, ?, 'admit', ?, ?)
     `).run(adm.id, bedId, bed.ward_id, res.admission.admitted_at, user.id);
 
-    return { admission: res.admission, bed: db.prepare('SELECT * FROM beds WHERE id = ?').get(bedId) };
+    // TITLE_SHEET_V1 — титульный лист медсестры В ТОЙ ЖЕ транзакции: плохое
+    // значение в листе откатывает и койку, чтобы пациент не оказался размещён
+    // без листа «наполовину». Без листа (старый вызов) — как раньше.
+    let titleSheet = null;
+    if (args.title_sheet && typeof args.title_sheet === 'object') {
+      titleSheet = saveTitleSheet(db, res.admission, args.title_sheet, user);
+    }
+
+    return { admission: res.admission, bed: db.prepare('SELECT * FROM beds WHERE id = ?').get(bedId), title_sheet: titleSheet };
   });
 
   return run();
