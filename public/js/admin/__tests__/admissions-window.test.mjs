@@ -657,3 +657,49 @@ test('клик по лежащему в «В отделении» открыва
     // И НИКАКОГО окна поверх: раньше здесь открывалась карточка госпитализации.
     assert.equal(BODY.children.length, overlaysBefore, 'клик открыл окно вместо перехода на экран');
 });
+
+// ─── A4_LETTERHEAD_V1 — документ истории болезни лежит на листе с шапкой ───
+//
+// Владелец: «treat this section as an A4 list with the header of the clinic
+// from the documents section». Шапка берётся из window.CLINIC — оттуда же её
+// берут печатные бланки, поэтому экран и бумага показывают одну клинику.
+test('шапка листа собирается из реквизитов клиники, а лист — из шапки и содержимого', async () => {
+    const { a4Letterhead, a4Sheet, clinicLetterheadData } = await import('../views/a4-letterhead.js');
+
+    const clinic = { name_ru: 'Клиника «Здоровье»', legal_name: 'ООО «Здоровье»',
+        address: 'ул. Тестовая, 1', phone: '+998 71 000 00 00', logo_url: 'data:image/png;base64,AAA' };
+
+    const d = clinicLetterheadData(clinic);
+    assert.equal(d.name, 'Клиника «Здоровье»');
+    assert.equal(d.logo, 'data:image/png;base64,AAA');
+
+    const head = a4Letterhead({ title: 'Осмотр приёмного врача', date: '08.09.2026', clinic });
+    assert.equal(head.className, 'a4-head', 'это не шапка листа');
+    const t = textOf(head);
+    for (const must of ['Клиника «Здоровье»', 'ООО «Здоровье»', 'ул. Тестовая, 1', '+998 71 000 00 00', 'Осмотр приёмного врача', '08.09.2026']) {
+        assert.ok(t.includes(must), 'в шапке нет: ' + must);
+    }
+    assert.ok(walk(head).some((e) => e.className === 'a4-logo'), 'логотип клиники не попал в шапку');
+
+    // Без реквизитов шапка не падает и не печатает «undefined».
+    const bare = textOf(a4Letterhead({ title: 'Документ', date: '01.01.2026', clinic: {} }));
+    assert.ok(!/undefined|null/.test(bare), 'пустые реквизиты протекли текстом: ' + bare);
+
+    // Лист: полоса сверху, шапка, содержимое, полоса снизу — в этом порядке.
+    const sheet = a4Sheet({ title: 'Документ', date: '01.01.2026', clinic, children: [mkEl('div')] });
+    assert.equal(sheet.className, 'a4-paper');
+    const kids = sheet.children.map((c) => c.className);
+    assert.deepEqual(kids, ['a4-band-top', 'a4-head', '', 'a4-band-bottom']);
+});
+
+test('панель документа истории болезни рисует ЛИСТ, а не карточку с заголовком', async () => {
+    // Статически: экран не поднять в этой обвязке без RPC истории, а правило
+    // простое — документ строится через a4Sheet, и карточного заголовка нет.
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'views', 'case-workspace.js'), 'utf8');
+    assert.ok(/a4Sheet\(\{\s*title:\s*ed\.title/.test(src), 'документ больше не рисуется листом через a4Sheet');
+    assert.ok(!/class:\s*'card cw-doc'/.test(src), 'вернулась карточка вместо листа');
+    assert.ok(!/card-header'\s*\},\s*h\('h3'/.test(src.slice(src.indexOf('buildReviewEditor({'))), 'вернулся карточный заголовок документа');
+});

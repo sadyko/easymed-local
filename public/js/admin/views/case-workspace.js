@@ -29,6 +29,7 @@ import { h, Icon, clear, toast, PageHead } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { caseDocsView, assembleCaseFile } from './case-docs.js?v=cw1';
 import { buildReviewEditor } from './admission-modal.js?v=inp2';
+import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V1
 
 const state = {
     admissionId: null,
@@ -181,9 +182,17 @@ function paintPane(pane, root, onNavigate) {
     });
     if (!ed) return;
 
-    const card = h('div', { class: 'card cw-doc' },
-        h('div', { class: 'card-header' }, h('h3', null, Icon(ed.icon, { size: 15 }), ' ', ed.title)),
-        h('div', { class: 'cw-doc-body' }, ...ed.fields.filter(Boolean)),
+    // A4_LETTERHEAD_V1 — документ на ЛИСТЕ, а не в карточке (владелец: «treat
+    // this section as an A4 list with the header of the clinic from the
+    // documents section»). Это документ истории болезни: его потом печатают, и
+    // на экране он должен выглядеть как тот же лист — с шапкой клиники из
+    // window.CLINIC, откуда её берут и печатные бланки. Классы .a4-* общие с
+    // кабинетом врача (service-workspace.js). Кнопки действий на лист не
+    // кладутся — это не часть документа, они стоят под ним.
+    const card = h('div', { class: 'cw-doc a4-scroll' },
+        a4Sheet({ title: ed.title, children: [
+            h('div', { class: 'cw-doc-body' }, ...ed.fields.filter(Boolean)),
+        ] }),
     );
 
     const foot = h('div', { class: 'cw-doc-foot' });

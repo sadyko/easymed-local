@@ -1413,6 +1413,14 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .cw-doc-body { padding: 16px 18px; display: grid; gap: 12px; }
 .cw-doc-foot { display: flex; justify-content: flex-end; gap: 8px;
     padding: 12px 18px; border-top: 1px solid var(--ink-100); background: var(--ink-25); }
+/* A4_LETTERHEAD_V1 — документ истории болезни рисуется на листе (.a4-paper),
+   а не в карточке. Внутри листа у тела свои 48 px полей, и прежние 16/18 px
+   тела удваивали бы отступ. Подвал с кнопками стоит ПОД листом: линия сверху
+   и серая подложка карточного подвала тут читались бы как чужая полоса, а
+   ширина подгоняется под лист, чтобы кнопки стояли под его правым краем. */
+.a4-paper .cw-doc-body { padding: 0; }
+.cw-doc.a4-scroll .cw-doc-foot { max-width: 794px; margin: 12px auto 0; padding: 0;
+    border-top: 0; background: transparent; }
 .cw-empty { padding: 48px 24px; text-align: center; color: var(--ink-400); }
 .cw-empty-t { font-size: 15px; font-weight: 600; color: var(--ink-700); margin-top: 8px; }
 .cw-empty-s { font-size: 12.5px; margin-top: 4px; line-height: 1.5; }
