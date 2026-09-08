@@ -58,6 +58,7 @@ import {
   assertMayTransition, admissionTransition, CLOSED_STATUSES,
 } from './inpatient-flow.js';
 import { hasAnyRole, effectiveRoles } from '../roles.js';
+import { titleSheetCaseItem, sheetView } from './title-sheet.js';   // TITLE_SHEET_V1
 
 export { RpcError };
 
@@ -943,6 +944,11 @@ export function admissionCaseDocs(db, args, user) {
     };
   });
 
+  // TITLE_SHEET_V1 — титульный лист медсестры: ПЕРВОЙ строкой, в прогрессе и в
+  // списке «не оформлено», но НЕ в «следующем шаге»: «следующий» — одно
+  // заметное действие ВРАЧА, а лист — дело поста.
+  const titleItem = titleSheetCaseItem(db, adm, base, now);
+
   // «Прочие документы» — второй раздел мокапа. Каждая цепочка здесь отдельный
   // документ: это открытый род, и второй такой же — не исправление первого.
   const otherRows = byKind.get(OTHER_KIND) || [];
@@ -992,11 +998,12 @@ export function admissionCaseDocs(db, args, user) {
   const nextKind = next ? next.kind : null;
   if (next) next.state = 'next';
 
+  const allItems = [titleItem, ...items];
   const progress = {
-    done: items.filter((it) => it.required && it.state === 'published').length,
-    total: items.filter((it) => it.required).length,
-    overdue: items.filter((it) => it.state === 'overdue').length,
-    draft: items.filter((it) => it.state === 'draft' || it.state === 'next').length,
+    done: allItems.filter((it) => it.required && it.state === 'published').length,
+    total: allItems.filter((it) => it.required).length,
+    overdue: allItems.filter((it) => it.state === 'overdue').length,
+    draft: allItems.filter((it) => it.state === 'draft' || it.state === 'next').length,
   };
 
   // ─── ГЕЙТ ВЫПИСКИ, КОТОРЫЙ УЖЕ СУЩЕСТВУЕТ ────────────────────────────────
@@ -1016,7 +1023,7 @@ export function admissionCaseDocs(db, args, user) {
   const blocking = epicrisis && epicrisis.state !== 'published'
     ? [{ kind: 'discharge', reason: epicrisis.has_draft ? 'draft' : 'absent' }]
     : [];
-  const incomplete = items.filter((it) => it.required && it.state !== 'published').map((it) => it.kind);
+  const incomplete = allItems.filter((it) => it.required && it.state !== 'published').map((it) => it.kind);
 
   return {
     admission_id: adm.id,
@@ -1026,7 +1033,7 @@ export function admissionCaseDocs(db, args, user) {
     base_source: baseSource,
     surgical,
     surgical_from: isoOf(surgBase),
-    items,
+    items: allItems,
     other,
     progress,
     next_kind: nextKind,
@@ -1190,6 +1197,7 @@ export function admissionCaseFile(db, args, user) {
     gaps: state.discharge_gate.incomplete,
     complete: state.discharge_gate.incomplete.length === 0,
     drafts_excluded: rows.filter((r) => !r.published_at).length,
+    title_sheet: sheetView(db, adm),   // TITLE_SHEET_V1 — первая страница собранной истории
     progress: state.progress,
   };
 }

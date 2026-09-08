@@ -30,6 +30,7 @@ import {
   CASE_DOC_SET, SURGICAL_KINDS, OTHER_KIND,
 } from './inpatient-reviews.js';
 import { RpcError } from './inpatient-flow.js';
+import { admissionTitleSheetSave } from './title-sheet.js';   // TITLE_SHEET_V1
 
 const admin      = { id: 1, role: 'admin' };
 const registrar  = { id: 2, role: 'registrar' };
@@ -215,7 +216,8 @@ test('ХИРУРГИЧЕСКИЙ БЛОК включается ДАННЫМИ, �
     assert.equal(itemOf(st0, kind).applies, false, `${kind} у терапевтического пациента не спрашивают`);
     assert.equal(itemOf(st0, kind).required, false);
   }
-  assert.equal(st0.progress.total, 7, 'обязательных без хирургии и без этапного эпикриза — семь');
+  // TITLE_SHEET_V1 — плюс титульный лист медсестры: семь врачебных + один.
+  assert.equal(st0.progress.total, 8, 'обязательных без хирургии и без этапного эпикриза — семь врачебных и титульный лист');
 
   // Анестезиолог написал свой осмотр — значит оперируют.
   admissionReviewSave(ctx.db, { admission_id: adm.id, kind: 'anesthesia', body: 'Осмотр анестезиолога', publish: true }, anesth);
@@ -223,7 +225,7 @@ test('ХИРУРГИЧЕСКИЙ БЛОК включается ДАННЫМИ, �
   assert.equal(st1.surgical, true);
   assert.equal(itemOf(st1, 'operation').applies, true, 'протокол операции стал обязательным');
   assert.equal(itemOf(st1, 'preop').required, true);
-  assert.equal(st1.progress.total, 10, 'три хирургические бумаги добавились к семи');
+  assert.equal(st1.progress.total, 11, 'три хирургические бумаги добавились к семи врачебным и титульному листу');
   assert.ok(st1.surgical_from, 'у блока есть своя точка отсчёта');
   assert.equal(itemOf(st1, 'operation').due_at, iso(Date.parse(st1.surgical_from) + 24 * H));
   ctx.db.close();
@@ -267,7 +269,8 @@ test('когда остался только эпикриз — он и стан
   ctx.db.prepare(`INSERT INTO admission_reviews (admission_id, kind, body, author_id, author_role, published_at)
                   VALUES (?, 'round', 'Обход', 5, 'doctor', ?)`).run(treated.id, at(0));
   const st = docs(ctx, treated, 0);
-  assert.deepEqual(st.discharge_gate.incomplete, ['discharge'], 'кроме эпикриза не осталось ничего');
+  // TITLE_SHEET_V1 — титульный лист медсестры не заполнен, но «следующий шаг» врача он не занимает.
+  assert.deepEqual(st.discharge_gate.incomplete, ['title', 'discharge'], 'кроме эпикриза и листа медсестры не осталось ничего');
   assert.equal(st.next_kind, 'discharge');
   ctx.db.close();
 });
@@ -445,7 +448,7 @@ test('чек-лист и сборку читают те, кто ведёт па�
   const ctx = seed();
   const adm = inBed(ctx, 1);
   for (const u of [admin, headDoctor, doctor, nurse]) {
-    assert.ok(admissionCaseDocs(ctx.db, { admission_id: adm.id }, u).items.length === CASE_DOC_SET.length, `роль ${u.role}`);
+    assert.ok(admissionCaseDocs(ctx.db, { admission_id: adm.id }, u).items.length === CASE_DOC_SET.length + 1, `роль ${u.role}`);   // + титульный лист (TITLE_SHEET_V1)
   }
   assert.throws(() => admissionCaseDocs(ctx.db, { admission_id: adm.id }, cashier),
     (e) => e instanceof RpcError && e.status === 403);
@@ -486,7 +489,50 @@ test('набор — один на все госпитализации, и пр�
   const a1 = inBed(ctx, 1);
   ctx.db.prepare("UPDATE admissions SET department='Терапия' WHERE id=?").run(a1.id);
   const st = docs(ctx, a1, 0);
-  assert.deepEqual(st.items.map((i) => i.kind), CASE_DOC_SET.map((d) => d.kind));
-  assert.equal(st.progress.total, 7, 'общий набор без хирургического блока');
+  assert.deepEqual(st.items.map((i) => i.kind), ['title', ...CASE_DOC_SET.map((d) => d.kind)]);   // TITLE_SHEET_V1 — лист первым
+  assert.equal(st.progress.total, 8, 'общий набор без хирургического блока, плюс титульный лист');
   ctx.db.close();
+});
+
+// ─── TITLE_SHEET_V1 — титульный лист медсестры в чек-листе и в сборке ───────
+const SHEET_FULL = { height_cm: 172, weight_kg: 80, temp_c: 36.6, bp_sys: 120, bp_dia: 80, pulse_bpm: 72, pediculosis: 'none', sanitation: 'full' };
+
+test('TITLE_SHEET_V1: титульный лист — первая строка чек-листа, в прогрессе, но не «следующий шаг» врача', () => {
+  const ctx = seed();
+  const adm = inBed(ctx, 1);
+  const state = docs(ctx, adm, 0);
+  assert.equal(state.items[0].kind, 'title');
+  assert.equal(state.items[0].state, 'pending');
+  assert.equal(state.items[0].order, -1);
+  assert.notEqual(state.next_kind, 'title', '«следующий шаг» — врачебный, лист — дело медсестры');
+  const requiredDoctorDocs = state.items.slice(1).filter((it) => it.required).length;
+  assert.equal(state.progress.total, requiredDoctorDocs + 1, 'лист должен считаться в обязательном наборе');
+  assert.ok(state.discharge_gate.incomplete.includes('title'));
+
+  assert.equal(docs(ctx, adm, 2).items[0].state, 'overdue', 'через три часа без листа — просрочен');
+
+  admissionTitleSheetSave(ctx.db, { admission_id: adm.id, sheet: SHEET_FULL }, nurse);
+  const done = docs(ctx, adm, 2);
+  assert.equal(done.items[0].state, 'published');
+  assert.ok(!done.discharge_gate.incomplete.includes('title'));
+  assert.equal(done.progress.done, 1);
+});
+
+test('TITLE_SHEET_V1: врачебная запись рода title не принимается — это не документ врача', () => {
+  const ctx = seed();
+  const adm = inBed(ctx, 1);
+  assert.throws(() => admissionReviewSave(ctx.db, { admission_id: adm.id, kind: 'title', body: 'x', publish: true }, headDoctor),
+    (e) => e instanceof RpcError && /Неизвестный род/.test(e.message));
+});
+
+test('TITLE_SHEET_V1: собранная история несёт титульный лист — тот же снимок идёт на бумагу', () => {
+  const ctx = seed();
+  const adm = inBed(ctx, 1);
+  admissionTitleSheetSave(ctx.db, { admission_id: adm.id, sheet: { height_cm: 172, weight_kg: 80 } }, nurse);
+  const file = admissionCaseFile(ctx.db, { admission_id: adm.id }, doctor);
+  assert.ok(file.title_sheet, 'в снимке нет титульного листа');
+  assert.equal(file.title_sheet.sheet.height_cm, 172);
+  assert.equal(file.title_sheet.bmi, 27.0);
+  assert.equal(file.title_sheet.patient.full_name, 'Салимбоев Шухрат');
+  assert.equal(file.title_sheet.complete, false);
 });
