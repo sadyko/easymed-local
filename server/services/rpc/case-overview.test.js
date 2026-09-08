@@ -181,3 +181,20 @@ test('выписка со счётом: нечего выставлять — с
     const left = ctx.db.prepare('SELECT COUNT(*) n FROM admission_services WHERE admission_id = ? AND invoice_item_id IS NULL AND billable = 1').get(adm.id).n;
     assert.equal(left, 0);
 });
+
+
+test('CASE_ROWS_TIDY_V1: строка проживания в списке услуг помечена родом accommodation и несёт ставку', () => {
+    const ctx = seed();
+    const adm = inTreatment(ctx, inBed(ctx, ctx.p1, ctx.bed1));
+    addService(ctx, adm.id, 900, 900000);
+    ctx.db.prepare("INSERT INTO admission_services (admission_id, quantity, unit_price, total, billable, notes) VALUES (?, 3, 250000, 750000, 1, 'ACCOMMODATION · Хирургия · койка X-1 · 3 сут. × 250000')").run(adm.id);
+    const ov = admissionOverview(ctx.db, { admission_id: adm.id }, doctor);
+    const acc = ov.services.list.find((r) => r.kind === 'accommodation');
+    assert.ok(acc, 'проживание не помечено родом');
+    assert.equal(acc.name, '', 'техническая пометка не едет как имя');
+    assert.equal(acc.quantity, 3);
+    assert.equal(acc.unit_price, 250000);
+    assert.equal(acc.total, 750000);
+    const svc = ov.services.list.find((r) => r.kind === 'service');
+    assert.equal(svc.name, 'Аппендэктомия');
+});

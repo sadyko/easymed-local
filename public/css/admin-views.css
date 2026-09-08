@@ -5369,11 +5369,14 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .co-col-t{margin:0;font-size:13.5px;font-weight:700;color:var(--ink-800)}
 .co-col-s{font-size:12.5px;color:var(--ink-500)}
 .co-rows{display:flex;flex-direction:column}
-.co-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px dotted var(--ink-100);min-width:0}
-.co-row-main{flex:1;min-width:0}
-.co-row-t{font-size:13.5px;font-weight:600;color:var(--ink-900);overflow-wrap:anywhere}
+.co-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:6px 0;border-bottom:1px dotted var(--ink-100);min-width:0}
+/* CASE_ROWS_TIDY_V1 — название занимает всю ширину, сумма и метка уходят под него;
+   перенос по словам, а не по буквам (anywhere в узкой колонке рвал слово в столбик). */
+.co-row-main{flex:1 1 100%;min-width:0}
+.co-row-foot{display:flex;align-items:center;gap:8px;margin-left:auto}
+.co-row-t{font-size:12.5px;font-weight:600;color:var(--ink-900);overflow-wrap:break-word;display:flex;align-items:center;gap:4px}
 .co-row-m{font-size:12.5px;color:var(--ink-500)}
-.co-row-sum{font-size:13.5px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.co-row-sum{font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
 /* 6 — следующий шаг */
 .co-next-doc{font-size:17px;font-weight:700;color:var(--ink-900);line-height:1.3;text-wrap:balance}
 .co-progress{height:6px;border-radius:var(--r-pill);background:var(--ink-100);overflow:hidden}
@@ -5534,31 +5537,37 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .vt-trend-v{font-size:12.5px;font-weight:700;color:var(--ink-600)}
 .vt-trend-v.vt-worse{color:var(--crit-700)}
 .vt-trend-v.vt-better{color:var(--ok-700)}
-.vt-trend .vt-spark{width:120px;height:22px;color:var(--ink-500)}
+.vt-trend .vt-spark{width:120px;height:22px;color:var(--primary-600)}
 .vt-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px}
-.vt-tile{position:relative;padding:6px 10px;border-radius:var(--r-lg);border:1px solid var(--ink-100);background:var(--white)}
-.vt-tile.vt-warn{background:var(--warn-50);border-color:#fde9b6}
-.vt-tile.vt-warn2{background:#fff4e6;border-color:#fdba74}
-.vt-tile.vt-crit{background:var(--crit-50);border-color:#fecaca}
+/* VITALS_DYNAMICS_V1 — плитка-кнопка; цвет показателя — свой, пастельный, в
+   тонах EasyMed: температура — роза, АД — индиго, пульс — коралл, ЧДД —
+   бирюза (основной цвет продукта), SpO₂ — небо. Фон — пастель показателя при
+   отклонении (очки > 0), белый — когда всё в норме. */
+.vt-tile{position:relative;padding:6px 10px;border-radius:var(--r-lg);border:1px solid var(--ink-100);background:var(--white);text-align:left;font:inherit;color:inherit;cursor:pointer;transition:box-shadow 120ms ease,transform 120ms ease,border-color 120ms ease;--vt-line:var(--primary-600);--vt-tint:var(--primary-50)}
+.vt-tile:hover{box-shadow:var(--shadow-md);transform:translateY(-1px);border-color:var(--vt-line)}
+.vt-tile:focus-visible{outline:2px solid var(--primary-500);outline-offset:2px}
+.vt-tile[data-metric="temp_c"]{--vt-line:#c4607e;--vt-tint:#fbeef2}
+.vt-tile[data-metric="bp"]{--vt-line:#4d5b8c;--vt-tint:#eef0f8}
+.vt-tile[data-metric="pulse_bpm"]{--vt-line:#d0715c;--vt-tint:#fdf0ea}
+.vt-tile[data-metric="resp_rate"]{--vt-line:#2d958f;--vt-tint:#e6f4f2}
+.vt-tile[data-metric="spo2"]{--vt-line:#4f8cc4;--vt-tint:#e9f1f9}
+.vt-tile.vt-abn{background:var(--vt-tint);border-color:color-mix(in srgb,var(--vt-line) 35%,transparent)}
+.vt-tile.vt-crit{border-color:var(--crit-500)}
+.vt-tile .vt-tile-ic{background:var(--vt-tint);color:var(--vt-line)}
+.vt-tile.vt-abn .vt-tile-ic{background:var(--white)}
+.vt-tile.vt-abn .vt-val{color:var(--vt-line)}
+.vt-tile .vt-spark{color:var(--vt-line)}
+.vt-spark-fill{fill:currentColor;opacity:.12}
 .vt-tile.vt-none{opacity:.7}
 .vt-tile-top{display:flex;align-items:center;justify-content:space-between}
 .vt-tile-ic{width:22px;height:22px;border-radius:7px;display:grid;place-items:center;background:var(--ink-50);color:var(--ink-600)}
-.vt-tile.vt-warn .vt-tile-ic{background:#fde9b6;color:var(--warn-700)}
-.vt-tile.vt-warn2 .vt-tile-ic{background:#fed7aa;color:#c2410c}
-.vt-tile.vt-crit .vt-tile-ic{background:#fecaca;color:var(--crit-700)}
 .vt-pts{font-size:12.5px;font-weight:700;padding:1px 8px;border-radius:999px;background:var(--white);border:1px solid var(--ink-200);color:var(--ink-600);font-variant-numeric:tabular-nums}
 .vt-tile.vt-warn .vt-pts{color:var(--warn-700);border-color:#fde9b6}
 .vt-tile.vt-warn2 .vt-pts{color:#c2410c;border-color:#fdba74}
 .vt-tile.vt-crit .vt-pts{color:var(--crit-700);border-color:#fecaca}
 .vt-val{font-size:17px;font-weight:800;color:var(--ink-900);margin-top:2px;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
-.vt-tile.vt-warn .vt-val{color:var(--warn-700)}
-.vt-tile.vt-warn2 .vt-val{color:#c2410c}
-.vt-tile.vt-crit .vt-val{color:var(--crit-700)}
 .vt-lab{font-size:12.5px;color:var(--ink-500);margin-top:2px}
 .vt-tile .vt-spark{width:100%;height:18px;margin-top:2px;color:var(--ink-600)}
-.vt-tile.vt-warn .vt-spark{color:var(--warn-700)}
-.vt-tile.vt-warn2 .vt-spark{color:#c2410c}
-.vt-tile.vt-crit .vt-spark{color:var(--crit-700)}
 .vt-spark path{stroke:currentColor}
 .vt-spark circle{fill:currentColor}
 .vt-norm{font-size:12.5px;color:var(--ink-400);margin-top:2px}
@@ -5570,3 +5579,27 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .vt-preview.vt-band-low_medium,.vt-preview.vt-band-medium{background:#ffedd5;color:#c2410c}
 .vt-preview.vt-band-high{background:var(--crit-50);color:var(--crit-700)}
 @media (max-width:860px){.vt-banner{flex-wrap:wrap}.vt-trend{flex-basis:100%;text-align:left}}
+
+/* ── VITALS_DYNAMICS_V1 — окно «Динамика показателей» ─────────────────────── */
+.vd{display:flex;flex-direction:column;gap:10px}
+.vd-tabs{display:flex;flex-wrap:wrap;gap:6px}
+.vd-tab{display:inline-flex;align-items:center;gap:4px;padding:5px 12px;border-radius:999px;border:1px solid var(--ink-200);background:var(--white);font:inherit;font-size:12.5px;font-weight:600;color:var(--ink-700);cursor:pointer}
+.vd-tab.on{background:var(--primary-600);border-color:var(--primary-600);color:#fff}
+.vd-tab:focus-visible{outline:2px solid var(--primary-500);outline-offset:2px}
+.vd-chart-wrap{--vt-line:var(--primary-600);--vt-tint:var(--primary-50);border:1px solid var(--ink-100);border-radius:var(--r-lg);padding:8px;background:var(--white)}
+.vd-chart-wrap[data-metric="temp_c"]{--vt-line:#c4607e;--vt-tint:#fbeef2}
+.vd-chart-wrap[data-metric="bp"]{--vt-line:#4d5b8c;--vt-tint:#eef0f8}
+.vd-chart-wrap[data-metric="pulse_bpm"]{--vt-line:#d0715c;--vt-tint:#fdf0ea}
+.vd-chart-wrap[data-metric="resp_rate"]{--vt-line:#2d958f;--vt-tint:#e6f4f2}
+.vd-chart-wrap[data-metric="spo2"]{--vt-line:#4f8cc4;--vt-tint:#e9f1f9}
+.vd-chart{width:100%;height:auto;display:block;color:var(--vt-line)}
+.vd-norm{fill:var(--ok-50);stroke:none}
+.vd-grid{stroke:var(--ink-100);stroke-width:1}
+.vd-tick{font-size:12.5px;fill:var(--ink-500)}
+.vd-fill{fill:var(--vt-line);opacity:.12}
+.vd-line{stroke:var(--vt-line)}
+.vd-dot{fill:var(--white);stroke:var(--vt-line);stroke-width:2.5}
+.vd-val{font-size:12.5px;font-weight:700;fill:var(--ink-800)}
+.vd-norm-l{font-size:12.5px;color:var(--ink-500)}
+.vd-tbl th,.vd-tbl td{font-size:12.5px;padding:6px 8px}
+.vd-empty{padding:26px;text-align:center;color:var(--ink-500);font-size:13.5px}

@@ -138,7 +138,7 @@ export function admissionOverview(db, args, user) {
 
   // ── услуги ──────────────────────────────────────────────────────────────
   const svcRows = db.prepare(`
-    SELECT s.id, s.quantity, s.total, s.status, s.billable, s.performed_at, s.invoice_item_id, s.notes, s.service_id,
+    SELECT s.id, s.quantity, s.unit_price, s.total, s.status, s.billable, s.performed_at, s.invoice_item_id, s.notes, s.service_id,
            sv.name AS service_name, sv.type AS service_type, p.name AS product_name
       FROM admission_services s
       LEFT JOIN services sv ON sv.id = s.service_id
@@ -152,10 +152,19 @@ export function admissionOverview(db, args, user) {
     unbilled: unbilledRows.length,
     sum_total: round2(svcRows.reduce((s, r) => s + (Number(r.total) || 0), 0)),
     sum_unbilled: round2(unbilledRows.reduce((s, r) => s + (Number(r.total) || 0), 0)),
-    list: svcRows.slice(0, 6).map((r) => ({
-      id: r.id, name: r.service_name || r.product_name || (r.notes || ''), quantity: r.quantity, total: r.total,
-      invoiced: r.invoice_item_id !== null, performed_at: r.performed_at, status: r.status,
-    })),
+    // CASE_ROWS_TIDY_V1 — проживание (ACCOMMODATION_AS_SERVICE_V1 пишет его
+    // строкой с технической пометкой в notes) отдаётся РОДОМ, а не текстом
+    // пометки: экран подписывает «Проживание · 16 сут. × 250 000», а не
+    // «ACCOMMODATION · 201 · койка 1 · …» (владелец: «this looks terrible»).
+    list: svcRows.slice(0, 6).map((r) => {
+      const accommodation = /^ACCOMMODATION/.test(String(r.notes || ''));
+      return {
+        id: r.id, kind: accommodation ? 'accommodation' : 'service',
+        name: accommodation ? '' : (r.service_name || r.product_name || (r.notes || '')),
+        quantity: r.quantity, unit_price: r.unit_price, total: r.total,
+        invoiced: r.invoice_item_id !== null, performed_at: r.performed_at, status: r.status,
+      };
+    }),
   };
 
   // ── операция: по документам и услугам, модуля оперблока нет ─────────────

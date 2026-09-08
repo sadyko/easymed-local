@@ -24,7 +24,7 @@ import { admissionStatusLabel, IN_BED_STATUSES } from '../../shared/admission-st
 import { dateNumeric } from '../../shared/date-words.js';
 import { moneyDisplay } from '../../shared/money-input.js';
 import { caseDocTitle } from './case-docs.js?v=cw1';
-import { openAdmissionDischargeRequestModal, openAdmissionAttendingModal, openAdmissionDietModal, goToMarSheet, goToCaseOverview } from './admission-modal.js?v=inp2';
+import { openAdmissionDischargeRequestModal, openAdmissionAttendingModal, openAdmissionDietModal, goToMarSheet, goToCaseOverview, openAdmissionCard } from './admission-modal.js?v=inp2';
 import { outcomeTitle } from './discharge.js';
 import { genderWord } from './title-sheet-print.js';
 import { news2Score, NEWS_BANDS, VITAL_NORMS, CONSCIOUSNESS, vitalError } from '../../shared/news2.js';   // VITALS_NEWS_V1
@@ -268,6 +268,7 @@ function paint(root, onNavigate) {
     // ── 0. Показатели и NEWS (VITALS_NEWS_V1) — во всю ширину над сеткой ────
     root.appendChild(vitalsPanel(ov, {
         onAdd: () => openVitalsModal({ admission: admissionForModals(ov), onDone: reload }),
+        onDynamics: (metric) => openVitalsDynamics({ admission: admissionForModals(ov), metric, series: (ov.vitals && ov.vitals.series) || [] }),
     }));
 
     // ── 1. Пациент сейчас ───────────────────────────────────────────────────
@@ -309,13 +310,21 @@ function paint(root, onNavigate) {
     const sv = ov.services || { count: 0, list: [] };
     // DEBT_FLOW_V1 — «Долг» только когда он ОФОРМЛЕН (счёт со статусом debt);
     // пока пациент лежит, неоплаченный счёт — «К оплате», и это не тревога.
+    // CASE_PANELS_TIDY_V1 — владелец: «tidy up this section so it be logical…
+    // consistent design». Пока счетов нет, крупная цифра — то, что НАКОПИЛОСЬ
+    // к оплате (невыставленные услуги + проживание по сегодняшний день), а не
+    // прочерк: «Счетов пока нет — —» отвечало не на тот вопрос. Кнопка выписки
+    // здесь убрана: она одна на экране, в шапке (главное действие).
+    const pending = (Number(sv.sum_unbilled) || 0) + ((acc && acc.current && Number(acc.current.net)) || 0);
     const big = b.total > 0
         ? (b.debt_marked > 0
             ? { label: 'Долг', value: sum(b.debt_marked), tone: 'crit' }
             : b.debt > 0
                 ? { label: 'К оплате', value: sum(b.debt), tone: 'warn' }
                 : { label: 'Оплачено полностью', value: sum(b.paid), tone: 'ok' })
-        : { label: 'Счетов пока нет', value: sv.sum_unbilled > 0 ? sum(sv.sum_unbilled) : '—', tone: '' , sub: sv.sum_unbilled > 0 ? tr('не выставлено') : '' };
+        : pending > 0
+            ? { label: 'Накоплено к оплате', value: sum(pending), tone: '', sub: tr('счёт ещё не выставлен — соберётся при выписке') }
+            : { label: 'Счетов пока нет', value: '—', tone: '', sub: tr('услуг и проживания к оплате нет') };
     const billPanel = panel('Выписка и счёт', { icon: 'Wallet', area: 'bill', tone: b.debt_marked > 0 ? 'crit' : (b.debt > 0 ? 'warn' : ''),
         children: [
             h('div', { class: 'co-big' + (big.tone ? ' co-' + big.tone : '') },
@@ -328,10 +337,7 @@ function paint(root, onNavigate) {
             d.planned_at ? kv(tr('Плановая выписка'), dt(d.planned_at)) : null,
             d.status === 'discharging' ? kv(tr('Заявка подана'), [dt(d.requested_at), d.outcome ? outcomeTitle(d.outcome) : ''].filter(Boolean).join(' · ')) : null,
             d.status === 'discharged' ? kv(tr('Выписан'), [dt(d.discharged_at), d.outcome ? outcomeTitle(d.outcome) : ''].filter(Boolean).join(' · ')) : null,
-            canRequest
-                ? h('button', { class: 'btn btn-primary co-wide', type: 'button', onclick: openDischarge }, ic('Check'), ' ', tr('Выписать и выставить счёт'))
-                : null,
-            canRequest ? note(tr('Заявка уйдёт старшей медсестре, счёт — в кассу: проживание по сегодняшний день и все услуги.')) : null,
+            canRequest ? note(tr('«Выписка» в шапке подаёт заявку старшей медсестре и собирает счёт в кассу: проживание по сегодняшний день и все услуги.')) : null,
         ] });
 
     // ── 3. Плитки ───────────────────────────────────────────────────────────
@@ -372,12 +378,24 @@ function paint(root, onNavigate) {
         h('div', { class: 'co-row-main' },
             h('div', { class: 'co-row-t' }, r.name),
             h('div', { class: 'co-row-m' }, [r.dose, r.route, r.prn ? tr('по требованию') : r.freq_code].filter(Boolean).join(' · '))));
-    const serviceRow = (r) => h('div', { class: 'co-row' },
-        h('div', { class: 'co-row-main' },
-            h('div', { class: 'co-row-t' }, r.name),
-            h('div', { class: 'co-row-m' }, [r.quantity && r.quantity !== 1 ? '× ' + r.quantity : null, r.performed_at ? dt(r.performed_at) : null].filter(Boolean).join(' · '))),
-        h('div', { class: 'co-row-sum' }, sum(r.total)),
-        Tag(r.invoiced ? tr('в счёте') : tr('не выставлено'), { kind: r.invoiced ? 'ok' : 'warn' }));
+    // CASE_ROWS_TIDY_V1 — строка услуги в ДВЕ строки: название и подпись, под
+    // ними сумма и метка. В узкой колонке (три колонки на широком экране) всё
+    // в одну строку не помещалось, и название рассыпалось по букве в строке.
+    // Проживание подписано словом, а не технической пометкой.
+    const serviceRow = (r) => {
+        const accommodation = r.kind === 'accommodation';
+        const title = accommodation ? tr('Проживание (койко-дни)') : (r.name || '—');
+        const meta = accommodation
+            ? [r.quantity ? trf('{n} сут.', { n: r.quantity }) : null, isNumV(r.unit_price) ? '× ' + sum(r.unit_price) : null].filter(Boolean).join(' ')
+            : [r.quantity && r.quantity !== 1 ? '× ' + r.quantity : null, r.performed_at ? dt(r.performed_at) : null].filter(Boolean).join(' · ');
+        return h('div', { class: 'co-row co-row-svc' },
+            h('div', { class: 'co-row-main' },
+                h('div', { class: 'co-row-t' }, accommodation ? ic('Bed', 13) : null, accommodation ? ' ' : null, title),
+                meta ? h('div', { class: 'co-row-m' }, meta) : null),
+            h('div', { class: 'co-row-foot' },
+                h('span', { class: 'co-row-sum' }, sum(r.total)),
+                Tag(r.invoiced ? tr('в счёте') : tr('не выставлено'), { kind: r.invoiced ? 'ok' : 'warn' })));
+    };
     const col = (title, count, sub, rows, empty, foot) => h('div', { class: 'co-col' },
         h('div', { class: 'co-col-h' }, h('h3', { class: 'co-col-t' }, tr(title)), Tag(String(count), { kind: 'teal' })),
         sub ? h('div', { class: 'co-col-s' }, sub) : null,
@@ -388,10 +406,12 @@ function paint(root, onNavigate) {
             col('Назначения', o.active || 0,
                 trf('Сегодня введено {given} из {due} · пропущено {missed} · отказ {refused}', { given: t.given || 0, due: t.due || 0, missed: t.missed || 0, refused: t.refused || 0 }),
                 (o.list || []).map(orderRow), 'Назначений нет',
-                h('button', { class: 'co-link', type: 'button', onclick: () => goToMarSheet(a.id, onNavigate) }, tr('Открыть лист назначений'), ic('ArrowRight', 12))),
+                // CASE_PANELS_TIDY_V1 — действия панелей одного вида: контурная кнопка во всю ширину, у нижнего края.
+                h('button', { class: 'btn btn-outline btn-sm co-wide', type: 'button', onclick: () => goToMarSheet(a.id, onNavigate) }, ic('Pill', 13), ' ', tr('Открыть лист назначений'), ' ', ic('ArrowRight', 12))),
             col('Услуги', sv.count || 0,
                 trf('В счёте {billed} · не выставлено {unbilled} на {sum}', { billed: sv.billed || 0, unbilled: sv.unbilled || 0, sum: sum(sv.sum_unbilled) }),
-                (sv.list || []).map(serviceRow), 'Услуг пока нет', null)),
+                (sv.list || []).map(serviceRow), 'Услуг пока нет',
+                h('button', { class: 'btn btn-outline btn-sm co-wide', type: 'button', onclick: () => openAdmissionCard({ admissionId: a.id, onChange: reload }) }, ic('Wallet', 13), ' ', tr('Услуги госпитализации'), ' ', ic('ArrowRight', 12)))),
     ] });
 
     // ── 6. Следующий шаг → ──────────────────────────────────────────────────
@@ -406,8 +426,10 @@ function paint(root, onNavigate) {
         h('div', { class: 'co-tile-m' + (pr.overdue ? ' co-warn' : '') },
             trf('Оформлено {done} из {total}', { done: pr.done || 0, total: pr.total || 0 }),
             pr.overdue ? ' · ' + trf('просрочено {n}', { n: pr.overdue }) : ''),
-        h('button', { class: 'btn btn-primary co-wide', type: 'button', onclick: () => toDocs(docs.next_kind || null) },
-            docs.next_kind ? tr('Заполнить документ') : tr('Открыть документы'), ' ', ic('ArrowRight')),
+        // CASE_PANELS_TIDY_V1 — одна первичная кнопка на экране (выписка в шапке);
+        // действия панелей — контурные, одного размера, у нижнего края.
+        h('button', { class: 'btn btn-outline btn-sm co-wide', type: 'button', onclick: () => toDocs(docs.next_kind || null) },
+            ic('Doc', 13), ' ', docs.next_kind ? tr('Заполнить документ') : tr('Открыть документы'), ' ', ic('ArrowRight', 12)),
     ] });
 
     root.appendChild(h('div', { class: 'co-z' }, nowPanel, billPanel, tiles, opPanel, listsPanel, nextPanel));
@@ -434,7 +456,26 @@ const VT_TILES = [
 const CONSCIOUSNESS_RU = { alert: 'ясное', confused: 'спутанное', voice: 'реагирует на голос', pain: 'реагирует на боль', unresponsive: 'без сознания' };
 const isNumV = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
 
-/** Искорка: SVG-ломаная по значениям (последние точки). Одна точка — кружок. */
+/**
+ * VITALS_DYNAMICS_V1 — ГЛАДКАЯ кривая через точки (Катмулл-Ром → кубические
+ * Безье): владелец — «copy the graphs too, but use smooth pastel tones».
+ * Ломаная из отрезков читалась как «зигзаг прибора»; гладкая — как ход
+ * показателя. Через все точки, без выбросов за пределы соседних значений.
+ */
+function smoothPath(xy) {
+    if (xy.length < 2) return '';
+    if (xy.length === 2) return 'M' + xy[0][0].toFixed(1) + ' ' + xy[0][1].toFixed(1) + ' L' + xy[1][0].toFixed(1) + ' ' + xy[1][1].toFixed(1);
+    let d = 'M' + xy[0][0].toFixed(1) + ' ' + xy[0][1].toFixed(1);
+    for (let i = 0; i < xy.length - 1; i++) {
+        const p0 = xy[i - 1] || xy[i], p1 = xy[i], p2 = xy[i + 1], p3 = xy[i + 2] || p2;
+        const c1x = p1[0] + (p2[0] - p0[0]) / 6, c1y = p1[1] + (p2[1] - p0[1]) / 6;
+        const c2x = p2[0] - (p3[0] - p1[0]) / 6, c2y = p2[1] - (p3[1] - p1[1]) / 6;
+        d += ' C' + c1x.toFixed(1) + ' ' + c1y.toFixed(1) + ' ' + c2x.toFixed(1) + ' ' + c2y.toFixed(1) + ' ' + p2[0].toFixed(1) + ' ' + p2[1].toFixed(1);
+    }
+    return d;
+}
+
+/** Искорка: гладкая кривая по значениям (последние точки) с мягкой заливкой под ней. Одна точка — кружок. */
 function sparkline(values, { w = 120, hgt = 34 } = {}) {
     const pts = values.filter(isNumV).map(Number);
     if (!pts.length) return h('svg', { class: 'vt-spark', viewBox: '0 0 ' + w + ' ' + hgt, 'aria-hidden': 'true' });
@@ -442,9 +483,11 @@ function sparkline(values, { w = 120, hgt = 34 } = {}) {
     const span = max - min || 1;
     const x = (i) => (pts.length === 1 ? w / 2 : 4 + (i * (w - 8)) / (pts.length - 1));
     const y = (v) => hgt - 4 - ((v - min) / span) * (hgt - 8);
-    const d = pts.map((v, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(v).toFixed(1)).join(' ');
+    const xy = pts.map((v, i) => [x(i), y(v)]);
+    const d = smoothPath(xy);
     const lastX = x(pts.length - 1), lastY = y(pts[pts.length - 1]);
     return h('svg', { class: 'vt-spark', viewBox: '0 0 ' + w + ' ' + hgt, 'aria-hidden': 'true' },
+        pts.length > 1 ? h('path', { class: 'vt-spark-fill', d: d + ' L' + lastX.toFixed(1) + ' ' + hgt + ' L' + xy[0][0].toFixed(1) + ' ' + hgt + ' Z', stroke: 'none' }) : null,
         pts.length > 1 ? h('path', { d, fill: 'none', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }) : null,
         h('circle', { cx: lastX.toFixed(1), cy: lastY.toFixed(1), r: '3' }));
 }
@@ -452,7 +495,7 @@ function sparkline(values, { w = 120, hgt = 34 } = {}) {
 const pointsTone = (p) => (p === null || p === undefined ? '' : p >= 3 ? 'crit' : p === 2 ? 'warn2' : p === 1 ? 'warn' : 'ok');
 const trendText = (t) => (t > 0 ? '▲ ' + trf('ухудшение +{n} за период', { n: t }) : t < 0 ? '▼ ' + trf('улучшение {n} за период', { n: t }) : tr('без изменений за период'));
 
-export function vitalsPanel(ov, { onAdd } = {}) {
+export function vitalsPanel(ov, { onAdd, onDynamics = null } = {}) {
     const v = ov.vitals || { series: [], last: null, prev: null, news: news2Score({}), trend: 0, can_add: false, count: 0 };
     const last = v.last;
     const news = (last && last.news) || v.news || news2Score({});
@@ -504,13 +547,23 @@ export function vitalsPanel(ov, { onAdd } = {}) {
             sparkline(totals, { w: 120, hgt: 30 }),
             h('div', { class: 'vt-trend-v ' + (v.trend > 0 ? 'vt-worse' : v.trend < 0 ? 'vt-better' : '') }, trendText(v.trend || 0))));
 
+    // VITALS_DYNAMICS_V1 — «make pressable and show in the dynamic»: плитка —
+    // кнопка, нажатие открывает динамику этого показателя (график + таблица
+    // всех измерений). Цвет — свой у каждого показателя (data-metric → CSS),
+    // тон фона — по очкам NEWS: спокойный белый, при отклонении — пастель.
     const tiles = h('div', { class: 'vt-tiles' }, ...VT_TILES.map((t) => {
         const getVal = t.key === 'bp' ? (r) => (isNumV(r.bp_sys) && isNumV(r.bp_dia) ? r.bp_sys : null) : (r) => r[t.key];
         const pts = t.points ? t.points(news) : p[t.key];
         const cur = getVal(last);
         const has = isNumV(cur);
         const series = (v.series || []).map(t.series || getVal);
-        return h('div', { class: 'vt-tile' + (has ? ' vt-' + pointsTone(pts) : ' vt-none') },
+        const abnormal = has && pts !== null && pts !== undefined && pts > 0;
+        return h('button', {
+            class: 'vt-tile' + (has ? ' vt-' + pointsTone(pts) : ' vt-none') + (abnormal ? ' vt-abn' : ''),
+            type: 'button', 'data-metric': t.key,
+            title: tr('Открыть динамику'), 'aria-label': tr(t.label) + ': ' + tr('Открыть динамику'),
+            onclick: () => { if (onDynamics) onDynamics(t.key); },
+        },
             h('div', { class: 'vt-tile-top' },
                 h('span', { class: 'vt-tile-ic' }, ic(t.icon, 15)),
                 h('span', { class: 'vt-pts' }, has && pts !== null && pts !== undefined ? (pts > 0 ? '+' + pts : '0') : '—')),
@@ -596,4 +649,92 @@ export function openVitalsModal({ admission, onDone } = {}) {
         if (onDone) await onDone();
         return true;
     }, { width: 640 });
+}
+
+
+// ── Окно «Динамика» показателя (VITALS_DYNAMICS_V1) ────────────────────────
+//
+// Нажатие на плитку. Внутри — переключатель показателей (те же пять), большой
+// гладкий график по ВСЕМ измерениям госпитализации (admission_vitals_list, а
+// не двенадцать последних из обзора), полоса нормы под кривой и таблица
+// измерений: время, значение, очки NEWS этого параметра, кто измерил, примечание.
+const NORM_BANDS = { temp_c: [36.0, 37.2], bp: [90, 140], pulse_bpm: [60, 90], resp_rate: [12, 20], spo2: [95, 100] };
+
+function bigChart(rows, t, { w = 640, hgt = 200 } = {}) {
+    const getVal = t.key === 'bp' ? (r) => (isNumV(r.bp_sys) ? Number(r.bp_sys) : null) : (r) => (isNumV(r[t.key]) ? Number(r[t.key]) : null);
+    const pts = rows.map((r) => ({ v: getVal(r), at: r.measured_at })).filter((q) => q.v !== null);
+    const padL = 44, padR = 14, padT = 12, padB = 26;
+    const norm = NORM_BANDS[t.key] || null;
+    if (!pts.length) return h('div', { class: 'vd-empty' }, tr('По этому показателю измерений нет.'));
+    const vals = pts.map((q) => q.v);
+    let min = Math.min(...vals, norm ? norm[0] : Infinity), max = Math.max(...vals, norm ? norm[1] : -Infinity);
+    if (max - min < 1) { min -= 1; max += 1; }
+    const pad = (max - min) * 0.1; min -= pad; max += pad;
+    const x = (i) => (pts.length === 1 ? (padL + w - padR) / 2 : padL + (i * (w - padL - padR)) / (pts.length - 1));
+    const y = (v) => padT + (hgt - padT - padB) - ((v - min) / (max - min)) * (hgt - padT - padB);
+    const xy = pts.map((q, i) => [x(i), y(q.v)]);
+    const fmtV = (v) => (t.key === 'temp_c' ? String(v).replace('.', ',') : String(v));
+    const dateLbl = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+    const gridVals = [min + pad, (min + max) / 2, max - pad];
+    return h('svg', { class: 'vd-chart', viewBox: '0 0 ' + w + ' ' + hgt, role: 'img', 'aria-label': tr(t.label) + ' — ' + tr('динамика') },
+        norm ? h('rect', { class: 'vd-norm', x: padL, y: y(norm[1]).toFixed(1), width: w - padL - padR, height: Math.max(0, y(norm[0]) - y(norm[1])).toFixed(1), rx: 4 }) : null,
+        ...gridVals.map((g) => h('g', null,
+            h('line', { class: 'vd-grid', x1: padL, x2: w - padR, y1: y(g).toFixed(1), y2: y(g).toFixed(1) }),
+            h('text', { class: 'vd-tick', x: padL - 6, y: (y(g) + 4).toFixed(1), 'text-anchor': 'end' }, fmtV(Math.round(g * 10) / 10)))),
+        pts.length > 1 ? h('path', { class: 'vd-fill', d: smoothPath(xy) + ' L' + xy[xy.length - 1][0].toFixed(1) + ' ' + (hgt - padB) + ' L' + xy[0][0].toFixed(1) + ' ' + (hgt - padB) + ' Z' }) : null,
+        pts.length > 1 ? h('path', { class: 'vd-line', d: smoothPath(xy), fill: 'none', 'stroke-width': '2.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }) : null,
+        ...xy.map(([cx, cy], i) => h('g', null,
+            h('circle', { class: 'vd-dot', cx: cx.toFixed(1), cy: cy.toFixed(1), r: '4' }),
+            h('text', { class: 'vd-val', x: cx.toFixed(1), y: (cy - 9).toFixed(1), 'text-anchor': 'middle' }, fmtV(pts[i].v)))),
+        ...xy.map(([cx], i) => (pts.length <= 8 || i === 0 || i === pts.length - 1 || i % Math.ceil(pts.length / 6) === 0)
+            ? h('text', { class: 'vd-tick', x: cx.toFixed(1), y: hgt - 8, 'text-anchor': 'middle' }, dateLbl(pts[i].at)) : null));
+}
+
+export async function openVitalsDynamics({ admission, metric = 'temp_c', series = [] } = {}) {
+    if (!admission || !admission.id) { toast(tr('Госпитализация не выбрана.'), 'fail'); return null; }
+    const p = admission.patients || {};
+    let rows = series.slice();
+    // Полная история — с сервера; пока едет, рисуем то, что уже есть в обзоре.
+    const body = h('div', { class: 'vd' });
+    let current = VT_TILES.some((t) => t.key === metric) ? metric : 'temp_c';
+    const paintBody = () => {
+        clear(body);
+        const t = VT_TILES.find((x) => x.key === current);
+        body.appendChild(h('div', { class: 'vd-tabs', role: 'tablist' }, ...VT_TILES.map((x) => h('button', {
+            class: 'vd-tab' + (x.key === current ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': x.key === current ? 'true' : 'false',
+            'data-metric': x.key, onclick: () => { current = x.key; paintBody(); },
+        }, ic(x.icon, 13), ' ', tr(x.label)))));
+        body.appendChild(h('div', { class: 'vd-chart-wrap', 'data-metric': current }, bigChart(rows, t)));
+        body.appendChild(h('div', { class: 'vd-norm-l' }, tr('норма') + ' ' + t.norm + ' · ' + tr('полоса на графике')));
+        const getVal = t.key === 'bp' ? (r) => (isNumV(r.bp_sys) && isNumV(r.bp_dia) ? r.bp_sys + '/' + r.bp_dia : '') : (r) => (isNumV(r[t.key]) ? t.fmt(r[t.key], r) : '');
+        const ptsOf = (r) => { const n = r.news || news2Score(r); return t.points ? t.points(n) : (n.parts || {})[t.key]; };
+        const listed = rows.slice().reverse();
+        body.appendChild(h('table', { class: 'tbl vd-tbl' },
+            h('thead', null, h('tr', null,
+                h('th', null, tr('Время')), h('th', null, tr(t.label)), h('th', null, tr('Очки')), h('th', null, tr('Кто измерил')), h('th', null, tr('Примечание')))),
+            h('tbody', null, ...listed.map((r) => {
+                const pts = ptsOf(r);
+                return h('tr', null,
+                    h('td', { class: 'ar-nowrap' }, r.measured_at ? fmtDateTime(r.measured_at) : '—'),
+                    h('td', { class: 'num' }, getVal(r) || '—'),
+                    h('td', null, isNumV(getVal(r)) || getVal(r) ? h('span', { class: 'vt-pts vt-' + pointsTone(pts) }, pts > 0 ? '+' + pts : '0') : '—'),
+                    h('td', null, r.source === 'title' ? tr('при поступлении (титульный лист)') : (r.measured_by_name || '—')),
+                    h('td', null, r.note || ''));
+            }))));
+    };
+    paintBody();
+    const m = inpatientModal(tr('Динамика показателей'), 'Activity', [
+        patientAnchor(p.full_name || '', [p.mrn, admission.admission_no].filter(Boolean).join(' · ')),
+        body,
+    ], tr('Закрыть'), async () => true, { width: 760 });
+    try {
+        const { data } = await supabase.rpc('admission_vitals_list', { admission_id: admission.id });
+        if (data && Array.isArray(data.rows)) {
+            const fresh = data.rows.slice().reverse().map((r) => Object.assign({ source: 'vital' }, r));
+            const base = series.find((r) => r.source === 'title');
+            rows = base ? [base, ...fresh] : fresh;
+            paintBody();
+        }
+    } catch (e) { /* остаёмся на ряде обзора */ }
+    return m;
 }

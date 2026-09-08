@@ -78,7 +78,11 @@ const OV = {
     diagnosis: { referral: 'K35.8', clinical: 'Острый аппендицит', clinical_at: '2026-09-06T10:00:00Z', outcome: null },
     diet: { current: { diet_code: '1', name: 'Стол №1 (щадящий)', since: '2026-09-06T11:00:00Z' }, meals_today: { eaten: 2, refused: 1 } },
     orders: { active: 2, by_kind: { med: 2 }, today: { due: 4, given: 2, refused: 0, missed: 1, held: 0 }, list: [{ id: 1, kind: 'med', name: 'Цефтриаксон', dose: '1 г', route: 'в/м', freq_code: '2x', prn: false }] },
-    services: { count: 2, billed: 0, unbilled: 2, sum_total: 950000, sum_unbilled: 950000, list: [{ id: 1, name: 'Аппендэктомия', quantity: 1, total: 900000, invoiced: false }] },
+    services: { count: 2, billed: 0, unbilled: 2, sum_total: 950000, sum_unbilled: 950000, list: [
+        { id: 1, kind: 'service', name: 'Аппендэктомия', quantity: 1, total: 900000, invoiced: false },
+        // CASE_ROWS_TIDY_V1 — проживание едет родом, а не текстом технической пометки
+        { id: 2, kind: 'accommodation', name: '', quantity: 16, unit_price: 250000, total: 4000000, invoiced: false },
+    ] },
     operation: { state: 'planned', at: null, has_surgery_service: true, docs: ['preop'] },
     bill: { accommodation: { stay_units: 3, invoiced: { units: 0, total: 0 }, current: { units: 3, rate: 100000, gross: 300000, net: 300000, mode: 'daily' } }, invoices: [], total: 0, paid: 0, debt: 0 },
     docs: { progress: { done: 3, total: 9, overdue: 1, draft: 1 }, next_kind: 'rationale', overdue: 1, incomplete: ['title', 'rationale'] },
@@ -109,6 +113,7 @@ globalThis.fetch = async (url, opts = {}) => {
     rpcCalls.push({ name, args: body });
     if (name === 'admission_overview') return ok(OV);
     if (name === 'admission_vitals_add') return ok({ vital: { id: 3, news: { total: 1, band: 'low', complete: false, parts: {} } }, summary: OV.vitals });
+    if (name === 'admission_vitals_list') return ok({ rows: OV.vitals.series.filter((r) => r.source !== 'title').slice().reverse() });
     if (name === 'admission_discharge_request') return ok({ admission: { id: 11, status: 'discharging' }, bill: { invoice_number: 'INV-7', total_amount: 1250000, items: 3 } });
     return ok({});
 };
@@ -169,7 +174,7 @@ test('блоки: статус, диагноз, состояние, стол, н
     for (const piece of ['Пациент сейчас', 'K35.8', 'Острый аппендицит', 'Стол №1', 'съедено 2', 'отказ 1',
         'Цефтриаксон', 'введено 2 из 4', 'пропущено 1', 'Аппендэктомия', '900 000', 'не выставлено',
         'Запланирована', 'Койко-дней', '300 000', 'Оформлено 3 из 9', 'просрочено 1', 'Обоснование клинического диагноза',
-        'Выписать и выставить счёт', 'Заполнить документ', 'День в отделении', 'Дозы сегодня']) {
+        'Заполнить документ', 'День в отделении', 'Дозы сегодня']) {
         assert.ok(t.includes(piece), 'в блоках нет: ' + piece);
     }
     // Порядок чтения — как на схеме владельца: 1 → 2 → 3 → 4 → 5 → 6.
@@ -329,4 +334,89 @@ test('VITALS_NEWS_V1: без измерений панель говорит об
     } finally {
         OV.vitals = saved;
     }
+});
+
+
+// ─── VITALS_DYNAMICS_V1 — плитка нажимается и открывает динамику ─────────────
+test('VITALS_DYNAMICS_V1: плитки — кнопки с цветом показателя и гладкой кривой; нажатие открывает динамику с графиком и таблицей', async () => {
+    rpcCalls.length = 0;
+    const root = await render(() => {});
+    const tiles = walk(root).filter((e) => String(e.className || '').split(/\s+/).includes('vt-tile'));
+    assert.equal(tiles.length, 5);
+    for (const tile of tiles) {
+        assert.equal(tile.tagName, 'BUTTON', 'плитка обязана быть кнопкой');
+        assert.ok(tile.attrs['data-metric'], 'у плитки нет data-metric — цвет показателя не назначится');
+    }
+    const temp = tiles.find((x) => x.attrs['data-metric'] === 'temp_c');
+    assert.ok(temp.className.includes('vt-abn'), 'температура +1 — с пастельным фоном показателя: ' + temp.className);
+    const bp = tiles.find((x) => x.attrs['data-metric'] === 'bp');
+    assert.ok(!bp.className.includes('vt-abn'), 'АД 0 — белая плитка');
+    const curve = walk(temp).find((e) => e.tagName === 'PATH' && e.attrs.fill === 'none');
+    assert.ok(curve && /C/.test(curve.attrs.d), 'кривая обязана быть гладкой (Безье), а не ломаной: ' + (curve && curve.attrs.d));
+
+    temp.click();
+    await settle();
+    const modal = BODY.children[BODY.children.length - 1];
+    const mt = textOf(modal);
+    assert.ok(mt.includes('Динамика показателей') && mt.includes('Иванов Иван Иванович'), mt.slice(0, 300));
+    assert.ok(rpcCalls.some((c) => c.name === 'admission_vitals_list' && c.args.admission_id === 11), 'полная история спрашивается с сервера');
+    const tabs = walk(modal).filter((e) => String(e.className || '').split(/\s+/).includes('vd-tab'));
+    assert.equal(tabs.length, 5, 'переключатель по пяти показателям');
+    const tempTab = tabs.find((x) => x.attrs['data-metric'] === 'temp_c');
+    assert.ok(tempTab, 'вкладки температуры нет: ' + JSON.stringify(tabs.map((x) => [x.tagName, x.className, x.attrs])));
+    assert.ok(tempTab.className.includes('on'), 'открыт тот показатель, что нажали');
+    const chart = walk(modal).find((e) => String(e.className || '').includes('vd-chart-wrap'));
+    assert.equal(chart.attrs['data-metric'], 'temp_c');
+    assert.ok(walk(chart).some((e) => e.tagName === 'RECT'), 'полоса нормы на графике');
+    assert.ok(walk(chart).filter((e) => e.tagName === 'CIRCLE').length >= 3, 'точки измерений на графике');
+    // Таблица: три строки (титульный лист + два измерения), новые сверху, с очками и автором.
+    const rowsEl = walk(modal).filter((e) => e.tagName === 'TR').slice(1);
+    assert.equal(rowsEl.length, 3, 'строк таблицы: ' + rowsEl.length);
+    assert.ok(textOf(rowsEl[0]).includes('38,1 °C') && textOf(rowsEl[0]).includes('+1') && textOf(rowsEl[0]).includes('Медсестра Петрова'), textOf(rowsEl[0]));
+    assert.ok(textOf(rowsEl[2]).includes('при поступлении'), 'точка титульного листа подписана');
+    // Переключение на пульс перерисовывает график и таблицу.
+    tabs.find((x) => x.attrs['data-metric'] === 'pulse_bpm').click();
+    await settle();
+    const chart2 = walk(modal).find((e) => String(e.className || '').includes('vd-chart-wrap'));
+    assert.equal(chart2.attrs['data-metric'], 'pulse_bpm');
+    assert.ok(textOf(modal).includes('104 уд'));
+});
+
+
+// ─── CASE_PANELS_TIDY_V1 — одна первичная кнопка, панели одного вида ─────────
+test('CASE_PANELS_TIDY_V1: единственная первичная кнопка — «Выписка» в шапке; действия панелей контурные; без счетов крупная цифра — накопленное к оплате', async () => {
+    const root = await render(() => {});
+    const primaries = walk(root).filter((e) => e.tagName === 'BUTTON' && String(e.className || '').includes('btn-primary'));
+    // textOf несёт и разметку значка — сравниваем по вхождению слова.
+    const labels = primaries.map((b) => textOf(b));
+    const rest = labels.filter((l) => !l.includes('Добавить измерение'));
+    assert.equal(rest.length, 1, 'первичной должна быть только выписка: ' + rest.length);
+    assert.ok(rest[0].includes('Выписка'), 'первичная кнопка — не выписка');
+    for (const label of ['Заполнить документ', 'Открыть лист назначений', 'Услуги госпитализации']) {
+        const b = allBtns(root, label)[0];
+        assert.ok(b, 'нет кнопки ' + label);
+        assert.ok(b.className.includes('btn-outline') && b.className.includes('co-wide'), label + ' — не контурная во всю ширину: ' + b.className);
+    }
+    const t = textOf(root);
+    assert.ok(!t.includes('Выписать и выставить счёт'), 'дубль кнопки выписки в панели счёта');
+    // Счетов нет, но есть 950 000 услуг и 300 000 проживания → 1 250 000 накоплено.
+    assert.ok(t.includes('Накоплено к оплате'), 'без счетов панель обязана назвать накопленное');
+    assert.ok(t.replace(/\u00a0/g, ' ').includes('1 250 000'), 'сумма = услуги + проживание: ' + t.slice(t.indexOf('Накоплено'), t.indexOf('Накоплено') + 80));
+});
+
+
+// ─── CASE_ROWS_TIDY_V1 — строка услуги в две строки, проживание словом ────────
+test('CASE_ROWS_TIDY_V1: проживание подписано «Проживание (койко-дни) · 16 сут. × 250 000», а не ACCOMMODATION-пометкой; сумма и метка — отдельной строкой', async () => {
+    const root = await render(() => {});
+    const rows = walk(root).filter((e) => String(e.className || '').split(/\s+/).includes('co-row-svc'));
+    assert.equal(rows.length, 2, 'две строки услуг');
+    const acc = rows.find((r) => textOf(r).includes('Проживание'));
+    assert.ok(acc, 'строки проживания нет: ' + rows.map(textOf).join(' | '));
+    const t = textOf(acc).replace(/\u00a0/g, ' ');
+    assert.ok(t.includes('Проживание (койко-дни)'), t);
+    assert.ok(t.includes('16 сут.') && t.includes('× 250 000'), 'подпись сут. × ставка: ' + t);
+    assert.ok(!/ACCOMMODATION/.test(t), 'техническая пометка на экране');
+    assert.ok(t.includes('4 000 000'), 'сумма строки');
+    const foot = walk(acc).find((e) => String(e.className || '').includes('co-row-foot'));
+    assert.ok(foot && textOf(foot).includes('4 000 000') && textOf(foot).includes('не выставлено'), 'сумма и метка — в подвале строки');
 });

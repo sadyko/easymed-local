@@ -343,8 +343,11 @@ function stayText(r) {
 }
 const WARD_COLS = [
     { key: 'patient', label: 'Пациент',                 text: (r) => [(r.patients || {}).mrn, (r.patients || {}).full_name].filter(Boolean).join(' ') },
-    { key: 'stay',    label: 'На койке',                text: (r) => stayText(r) },
-    { key: 'bed',     label: 'Койка',                   text: (r) => [(r.wards || {}).name, (r.beds || {}).code].filter(Boolean).join(' / ') },
+    // WARD_BED_COLUMN_OUT_V1 — колонки «Койка» больше нет (владелец: «the bed is
+    // duplicating, remove from the list»): палата уже стоит полосой-разделом над
+    // строками, а номер койки — подписью в ячейке «На койке» (и по нему
+    // фильтруется та же ячейка).
+    { key: 'stay',    label: 'На койке',                text: (r) => [stayText(r), (r.beds || {}).code].filter(Boolean).join(' · ') },
     { key: 'dx',      label: 'Диагноз при направлении', text: (r) => r.admission_diagnosis || '' },
     { key: 'doctor',  label: 'Лечащий врач',            text: (r) => (r.attending && r.attending.full_name) || tr('не назначен') },
     { key: 'status',  label: 'Статус',                  text: (r) => admissionStatusLabel(r.status) },
@@ -445,8 +448,9 @@ function wardTable({ rows, can, reload, onNavigate }) {
                 h('span', { class: ('ar-av ' + pastelFor(p.id || a.patient_id || name)).trim(), 'aria-hidden': 'true' }, initials(name)),
                 h('span', { class: 'ar-id' }, p.mrn || ''),
                 h('span', { class: 'ar-name' }, name))),
-            h('td', { class: 'ar-nowrap' }, stayText(a) || '—'),
-            h('td', { class: 'ar-nowrap' }, WARD_COLS[2].text(a) || '—'),
+            h('td', { class: 'ar-nowrap' }, stayText(a) || '—',
+                // WARD_BED_COLUMN_OUT_V1 — номер койки подписью, палата — в полосе-разделе.
+                a.beds && a.beds.code ? h('div', { class: 'ar-sub' }, trf('койка {code}', { code: a.beds.code })) : null),
             h('td', null, a.admission_diagnosis || '—'),
             h('td', null, attending
                 ? attending
