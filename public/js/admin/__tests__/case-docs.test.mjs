@@ -353,3 +353,40 @@ test('в печатный файл не попадает ничего, кром�
     // почему их в файле нет, а не в теле документа.
     assert.equal((html.match(/[Чч]ерновик/g) || []).length, 2, 'черновик упомянут только объяснением на обложке');
 });
+
+// ─── CASE_RAIL_FIT_V1 — три зоны: шапка, прокручиваемый список, подвал ──────
+//
+// Владелец (2026-09-08): «this section should fit in to a left panel. and user
+// should not scroll. only scroll in the list. and be able to create a a list».
+// Панель была одной стопкой, и «Собрать историю» оказывалась за краем экрана.
+test('CASE_RAIL_FIT_V1: чек-лист разложен на шапку, прокручиваемый список и подвал — прокручивается только список', () => {
+    const el = render();
+    const zone = (cls) => walk(el).find((e) => String(e.className || '').split(/\s+/).includes(cls));
+    const head = zone('cd-head');
+    const list = zone('cd-list');
+    const foot = zone('cd-foot');
+    assert.ok(head && list && foot, 'зон должно быть три: шапка, список, подвал');
+
+    // Порядок сверху вниз — тот же, что на экране.
+    const box = walk(el).find((e) => String(e.className || '').includes('cd-box')) || el;
+    const order = box.children.map((c) => c.className);
+    assert.deepEqual(order, ['cd-head', 'cd-list', 'cd-foot'], 'зоны переставлены: ' + order.join(', '));
+
+    // Что где: цифры и фильтры в шапке, документы и «Подшить» в списке.
+    const t = (n) => walk(n).map((x) => x._text || '').join(' ');
+    assert.ok(t(head).includes('оформлено'), 'счётчик уехал из шапки');
+    assert.ok(t(head).includes('Просрочено'), 'фильтры уехали из шапки');
+    assert.ok(t(list).includes('Первичный осмотр и план лечения'), 'документы уехали из списка');
+    assert.ok(buttons(list).some((b) => nameOf(b).includes('Подшить документ')),
+        'пополнять список нечем — «Подшить документ» вне списка');
+
+    // Подвал НЕ прокручивается вместе со списком: правило выписки читают
+    // тогда же, когда смотрят на список, а не после него.
+    assert.ok(t(foot).includes('выписк') || t(foot).includes('эпикриз'), 'правило выписки уехало из подвала');
+    assert.ok(!t(list).includes('Не оформлено из обязательного набора'), 'перечень недооформленного попал в прокрутку');
+
+    // Ни одна строка документа не осталась вне списка.
+    const rows = walk(el).filter((e) => e.tagName === 'LI');
+    const inList = walk(list).filter((e) => e.tagName === 'LI');
+    assert.equal(rows.length, inList.length, 'часть строк документов рисуется вне прокручиваемого списка');
+});

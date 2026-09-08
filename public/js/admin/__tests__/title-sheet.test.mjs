@@ -336,3 +336,65 @@ test('дизайнер «Документы» знает три бумаги: в
     assert.equal(DEFAULT_DOC_SETTINGS.inpatientMemoText, INPATIENT_DOC_DEFAULT_TEXT.inpatientMemoText);
     assert.equal(DEFAULT_DOC_SETTINGS.inpatientContractText, INPATIENT_DOC_DEFAULT_TEXT.inpatientContractText);
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 7. БЛАНК 003 НА ОДНОЙ СТРАНИЦЕ (FORM_003_ONE_PAGE_V1)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Владелец (2026-09-08): «make title list content fin in to one a4». Бумажный
+// 003 — один лист, и тридцать его строк на нём умещаются; на экране они
+// занимали полторы страницы.
+//
+// Померить вёрстку без браузера нельзя, поэтому здесь СМЕТА, а не замер:
+// числа берутся из того же CSS, что рисует лист, а количество строк — из той
+// же формы, что их создаёт. Смета ловит ровно те две поломки, которые и
+// случаются: кто-то добавил строк или вернул прежний воздух. Точность
+// приблизительная, и запас в смете это учитывает.
+test('FORM_003_ONE_PAGE_V1: содержимое бланка укладывается в одну страницу A4 по смете из его же CSS', async () => {
+    const fsx = await import('node:fs');
+    const pathx = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = pathx.dirname(fileURLToPath(import.meta.url));
+    const css = fsx.readFileSync(pathx.join(dir, '..', '..', '..', 'css', 'admin-views.css'), 'utf8');
+
+    const paper = css.match(/\.f3-paper\{padding:(\d+)px (\d+)px (\d+)px;min-height:(\d+)px/);
+    assert.ok(paper, 'у листа 003 больше нет ни полей, ни высоты страницы');
+    const [, padTop, , padBottom, pageH] = paper.map(Number);
+    const budget = pageH - padTop - padBottom;
+
+    const base = css.match(/\n\.f3\{font-size:([\d.]+)px;line-height:([\d.]+)/);
+    assert.ok(base, 'у листа 003 больше нет своего кегля и интерлиньяжа');
+    const lineH = Number(base[1]) * Number(base[2]);
+
+    const rowPad = Number((css.match(/\.f3-row\{[^}]*padding:(\d+)px 0\}/) || [])[1]);
+    assert.ok(Number.isFinite(rowPad), 'у строки бланка больше нет вертикальных полей');
+
+    // Широкое поле не должно занимать строку под собой: перенос под подпись
+    // удваивает высоту каждой второй строки, и лист сразу уходит на вторую
+    // страницу.
+    assert.ok(!/\.f3-ctl\.f3-wide\{flex:1 1 100%\}/.test(css),
+        'широкое поле снова переносится под свою подпись — это и есть вторая страница');
+
+    // Сколько блоков лист рисует на самом деле.
+    const { titleSheetForm } = await import('../views/title-sheet.js');
+    const form = titleSheetForm();
+    const count = (cls) => form.fields.filter((f) => String(f.className || '').split(/\s+/).includes(cls)).length;
+    const rows = count('f3-row');
+    const hints = count('f3-hint');
+    const blocks = count('f3-block-t');
+    assert.ok(rows > 15, 'строк бланка стало подозрительно мало: ' + rows);
+
+    // Шапка (четыре строки), заголовок, подзаголовок — измеренные однажды
+    // и записанные здесь, потому что у них свои кегли, а не общий.
+    const HEAD = 62;
+    const TITLE = 32;
+    const SUB = 22;
+    const BLOCK = lineH + 15;   // отступ сверху + пунктирная линия
+    const est = HEAD + TITLE + SUB
+        + rows * (lineH + rowPad * 2)
+        + hints * lineH
+        + blocks * BLOCK;
+
+    assert.ok(est <= budget, 'бланк 003 не умещается на страницу: смета ' + Math.round(est)
+        + ' px при бюджете ' + budget + ' px (строк ' + rows + ', подсказок ' + hints + ')');
+});

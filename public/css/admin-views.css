@@ -1432,8 +1432,7 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 @media (max-width: 1400px) { .cw-grid { grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); }
     .cw-aside { grid-column: 1 / -1; } }
 @media (max-width: 900px) { .cw-grid { grid-template-columns: minmax(0, 1fr); } }
-.cw-rail { position: sticky; top: 12px; max-height: calc(100vh - 110px); overflow-y: auto;
-    display: flex; flex-direction: column; gap: 10px; }
+.cw-rail { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 10px; }
 .cw-aside { position: sticky; top: 12px; max-height: calc(100vh - 110px); overflow-y: auto; }
 .cw-steps { padding: 10px 12px; }
 /* Диагноз госпитализации — только чтение: пишут его в первичном осмотре. */
@@ -5519,32 +5518,45 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 /* ── FORM_003_V1 — титульный лист по бланку 003 (на экране) ─────────────── */
 /* FORM_003_A4_V1 — на экране лист тоже целой страницы A4 (794×1123 при 96dpi):
    бланк читается как бумага, а не как короткая карточка. */
-.f3-paper{padding:30px 38px 34px;min-height:1123px;box-sizing:border-box;display:flex;flex-direction:column}
+/* FORM_003_ONE_PAGE_V1 (2026-09-08) — БЛАНК ПОМЕЩАЕТСЯ НА ОДНУ СТРАНИЦУ.
+   Владелец: «make title list content fin in to one a4». Бумажный 003 —
+   ОДИН лист, и его тридцать строк на нём умещаются; на экране они занимали
+   полторы страницы, потому что каждая строка шла с воздухом карточки, а
+   широкие поля (.f3-wide) переносились под свою подпись отдельной строкой.
+   Бюджет: 1123 − 26 − 28 = 1069 px содержимого. Тридцать строк по 22 px
+   (13.5 px × 1.3 + 2 px полей) = 660, шапка ≈ 60, заголовок с подзаголовком
+   ≈ 52, разделитель блока ≈ 24, подсказки ≈ 48 — около 850 px, и запас
+   остаётся на перенос длинного адреса. Менять эти числа врозь нельзя:
+   __tests__/title-sheet.test.mjs считает по ним ту же смету. */
+.f3-paper{padding:26px 34px 28px;min-height:1123px;box-sizing:border-box;display:flex;flex-direction:column}
 .f3-paper>.f3{flex:1;display:flex;flex-direction:column}
 .f3-paper .ts-status{margin-top:auto}
-.f3{font-size:13.5px;line-height:1.5;color:var(--ink-900)}
-.f3-head{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;font-size:12.5px;line-height:1.35}
+.f3{font-size:13.5px;line-height:1.3;color:var(--ink-900)}
+.f3-head{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;font-size:12.5px;line-height:1.25}
 .f3-head-l{flex:1;text-align:center;font-weight:700}
 .f3-ministry{white-space:pre-line}
-.f3-org{margin-top:6px;font-weight:700;border-bottom:1px solid var(--ink-900);padding-bottom:2px}
+.f3-org{margin-top:4px;font-weight:700;border-bottom:1px solid var(--ink-900);padding-bottom:1px}
 .f3-org-l{font-weight:400;color:var(--ink-500);font-size:12.5px}
 .f3-head-r{flex:1;text-align:right;font-weight:700}
-.f3-title{text-align:center;font-size:17px;font-weight:800;letter-spacing:.04em;margin:14px 0 2px}
+.f3-title{text-align:center;font-size:17px;font-weight:800;letter-spacing:.04em;margin:8px 0 1px}
 .f3-no{display:inline-block;min-width:110px;border-bottom:1px solid var(--ink-900);padding:0 6px;font-variant-numeric:tabular-nums}
-.f3-sub{text-align:center;font-size:12.5px;color:var(--ink-500);margin-bottom:12px}
-.f3-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 8px;padding:4px 0}
+.f3-sub{text-align:center;font-size:12.5px;color:var(--ink-500);margin-bottom:6px}
+.f3-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px;padding:2px 0}
 .f3-uz{font-weight:600;color:var(--ink-900)}
 .f3-ru{font-size:12.5px;color:var(--ink-400)}
-.f3-ctl{flex:1 1 160px;min-width:0}
-.f3-ctl.f3-short{flex:0 1 96px}
-.f3-ctl.f3-wide{flex:1 1 100%}
-.f3-ctl input,.f3-ctl textarea,.f3-ctl select{width:100%;border:0;border-bottom:1px solid var(--ink-700);border-radius:0;background:transparent;padding:2px 6px;font:inherit;font-weight:600;color:var(--ink-900);outline:none}
+.f3-ctl{flex:1 1 140px;min-width:0}
+.f3-ctl.f3-short{flex:0 1 88px}
+/* Широкое поле ТЯНЕТСЯ, но строку под себя не занимает: перенос под подпись
+   удваивал высоту каждой второй строки бланка. */
+.f3-ctl.f3-wide{flex:1 1 200px}
+.f3-ctl input,.f3-ctl textarea,.f3-ctl select{width:100%;border:0;border-bottom:1px solid var(--ink-700);border-radius:0;background:transparent;padding:1px 6px;font:inherit;font-weight:600;color:var(--ink-900);outline:none}
 .f3-ctl input:focus,.f3-ctl textarea:focus,.f3-ctl select:focus{border-bottom-color:var(--primary-600);box-shadow:0 1px 0 var(--primary-600)}
 .f3-ctl input[readonly]{color:var(--ink-700);background:var(--ink-25)}
-.f3-val{display:inline-block;min-width:120px;border-bottom:1px solid var(--ink-700);padding:2px 6px;font-weight:600}
+.f3-ctl textarea{min-height:0;resize:vertical}
+.f3-val{display:inline-block;min-width:110px;border-bottom:1px solid var(--ink-700);padding:1px 6px;font-weight:600}
 .f3-val.f3-empty{color:transparent}
-.f3-hint{font-size:12.5px;color:var(--ink-400);text-align:center;margin:-2px 0 2px}
-.f3-block-t{margin:14px 0 4px;padding-top:8px;border-top:1px dashed var(--ink-300);font-weight:700;display:flex;gap:8px;align-items:baseline}
+.f3-hint{font-size:12.5px;color:var(--ink-400);text-align:center;margin:0 0 1px}
+.f3-block-t{margin:8px 0 2px;padding-top:5px;border-top:1px dashed var(--ink-300);font-weight:700;display:flex;gap:8px;align-items:baseline}
 .f3-radios label .f3-uz{font-weight:600}
 .f3 .ts-radios{padding:0}
 @media (max-width:720px){.f3-head{flex-direction:column;gap:8px}.f3-head-r{text-align:left}}
@@ -5872,11 +5884,26 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 /* ── Экран помещается: прокручивается только лист (владелец: «make everything
       except a4 fit the screen so user wont scroll down to write») ─────────── */
 .cw-doc.a4-scroll { max-height: calc(100vh - 150px); overflow-y: auto; overflow-x: hidden; }
-/* CASE_RAIL_ASSEMBLE_V1 — левая колонка своей полосы прокрутки не имеет:
-   владелец «we dont need in the left panel scrolling options». Полоса внутри
-   панели прячет её нижние строки и кнопку сборки под ними; список шагов
-   короткий и должен быть виден целиком. */
-.cw-rail { position: static; max-height: none; overflow: visible; }
+/* CASE_RAIL_FIT_V1 — ЛЕВАЯ КОЛОНКА ПОМЕЩАЕТСЯ В ЭКРАН ЦЕЛИКОМ.
+   Владелец: «this section should fit in to a left panel. and user should not
+   scroll. only scroll in the list. and be able to create a a list».
+   Колонка — столбец фиксированной высоты: карточка диагноза и кнопка сборки
+   держат свою, а всю оставшуюся забирает панель документов. Прокрутка ровно
+   одна и ровно там, где длина: в списке документов. Кнопка «Собрать историю»
+   стоит последней и видна всегда — за ней сюда и приходят. */
+.cw-rail { position: sticky; top: 12px; height: calc(100vh - 150px); }
+.cw-rail > .cw-dx { flex: 0 0 auto; }
+.cw-rail > .cw-steps { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.cw-rail > .cw-steps > .cd-box { flex: 1 1 auto; min-height: 0; }
+.cw-rail .cd-head, .cw-rail .cd-foot { flex: 0 0 auto; }
+.cw-rail .cd-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
+    scrollbar-gutter: stable; }
 .cw-aside { max-height: calc(100vh - 168px); }
-.cw-assemble { width: 100%; justify-content: center; }
+.cw-assemble { flex: 0 0 auto; width: 100%; justify-content: center; }
+@media (max-width: 1100px) {
+  /* Узкий экран: колонки идут одна под другой, и запирать список в свою высоту
+     здесь не за чем — страница и так прокручивается. */
+  .cw-rail { height: auto; position: static; }
+  .cw-rail .cd-list { overflow: visible; }
+}
 @media (max-width: 1400px) { .cw-aside { max-height: none; position: static; } }

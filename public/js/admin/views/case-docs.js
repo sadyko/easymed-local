@@ -350,21 +350,41 @@ function itemRow(item, state, onDoc, activeKind = null) {
  *        круговую зависимость между двумя половинами одного экрана.
  */
 export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, onAssemble = null, activeKind = null } = {}) {
-    const box = h('div', { style: { display: 'grid', gap: '0' } });
+    // CASE_RAIL_FIT_V1 (2026-09-08) — ТРИ ЗОНЫ, А НЕ ОДНА СТОПКА.
+    //
+    // Владелец: «this section should fit in to a left panel. and user should
+    // not scroll. only scroll in the list».
+    //
+    // Панель была одной стопкой в двадцать блоков: цифры, полоса, фильтры,
+    // одиннадцать документов, «подшить», правило выписки, перечень
+    // недооформленного — и «Собрать историю» под всем этим, то есть за краем
+    // экрана. Чтобы нажать кнопку, ради которой список и заполняли, врач
+    // уезжал страницей вниз и терял из виду сам список.
+    //
+    // Теперь зон три: шапка (сколько оформлено и фильтры) и подвал (правило
+    // выписки) стоят на месте, а прокручивается ТОЛЬКО список документов.
+    // Высоту зонам задаёт колонка (admin-views.css, .cw-rail): здесь только
+    // разметка, потому что эта же панель рисуется и в карточке
+    // госпитализации, где никакой высоты ей никто не навязывает и список
+    // просто идёт во всю длину.
+    const box = h('div', { class: 'cd-box', style: { display: 'flex', flexDirection: 'column' } });
+    const head = h('div', { class: 'cd-head' });
+    const list = h('div', { class: 'cd-list' });
+    const foot = h('div', { class: 'cd-foot' });
     {
         // Умолчания, а не доверие: панель рисуется в чужой карточке
         // (admission-modal.js), и ответ без прогресса или без списка обязан
         // дать пустой чек-лист, а не уронить всю карточку госпитализации.
         const p = Object.assign({ done: 0, total: 0, overdue: 0, draft: 0 }, state.progress || {});
 
-        box.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+        head.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
             Icon('Doc', { size: 16 }),
             h('b', { style: { fontSize: '13.5px' } }, tr('Документы истории болезни')),
         ));
 
         // CASE_ROW_NAME_ONLY_V1 — в узкой колонке строка ПЕРЕНОСИТСЯ, а не
         // вылезает за карточку (владелец показал обрезанный «просрочено»).
-        box.appendChild(h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '7px', margin: '10px 0 0', flexWrap: 'wrap' } },
+        head.appendChild(h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '7px', margin: '10px 0 0', flexWrap: 'wrap' } },
             h('span', { style: { fontSize: '17px', fontWeight: '700' } }, trf('{done}/{total}', { done: p.done, total: p.total })),
             h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('оформлено')),
             p.overdue > 0
@@ -376,7 +396,7 @@ export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, on
                 }, trf('просрочено: {n}', { n: p.overdue }))
                 : null,
         ));
-        box.appendChild(progressBar(p));
+        head.appendChild(progressBar(p));
 
         // Фильтры — сегменты с aria-pressed: до каждого можно дойти табом, и
         // чтение с экрана называет, какой из них выбран.
@@ -388,7 +408,7 @@ export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, on
             type: 'button', 'aria-pressed': filter === key ? 'true' : 'false',
             onclick: () => onFilter && onFilter(key),
         }, tr(label), key === 'overdue' && p.overdue ? ' · ' + p.overdue : null)));
-        box.appendChild(seg);
+        head.appendChild(seg);
 
         const groupLabel = (text) => h('div', {
             style: {
@@ -398,25 +418,26 @@ export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, on
         }, text);
 
         const required = caseVisibleItems(state, filter);
-        box.appendChild(groupLabel(tr('Обязательные · по регламенту')));
+        list.appendChild(groupLabel(tr('Обязательные · по регламенту')));
         if (required.length) {
-            box.appendChild(h('ul', { style: { listStyle: 'none', margin: '0', padding: '0' } },
+            list.appendChild(h('ul', { style: { listStyle: 'none', margin: '0', padding: '0' } },
                 ...required.map((it) => itemRow(it, state, onDoc, activeKind))));
         } else {
-            box.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '8px 2px' } },
+            list.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '8px 2px' } },
                 filter === 'overdue' ? tr('Просроченных документов нет.') : tr('Всё оформлено.')));
         }
 
         const other = (state.other || []).filter((i) => caseFilterMatch(filter, i));
-        box.appendChild(groupLabel(tr('Прочие документы')));
+        list.appendChild(groupLabel(tr('Прочие документы')));
         if (other.length) {
-            box.appendChild(h('ul', { style: { listStyle: 'none', margin: '0', padding: '0' } },
+            list.appendChild(h('ul', { style: { listStyle: 'none', margin: '0', padding: '0' } },
                 ...other.map((it) => itemRow(it, state, onDoc, activeKind))));
         } else {
-            box.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '6px 2px' } },
+            list.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '6px 2px' } },
                 tr('Ничего не подшито.')));
         }
-        box.appendChild(h('button', {
+        // «Подшить документ» — часть списка: им список и пополняют.
+        list.appendChild(h('button', {
             class: 'btn btn-sm', type: 'button', style: { marginTop: '6px' },
             onclick: () => onDoc('other', 'edit', null),
         }, Icon('Plus', { size: 13 }), ' ', tr('Подшить документ')));
@@ -424,17 +445,15 @@ export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, on
         // Хирургический блок молчит, пока не появился первый документ операции.
         // Сказать об этом один раз честнее, чем держать три вечно серых пункта.
         if (!state.surgical) {
-            box.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '10px', lineHeight: '1.45' } },
+            list.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '10px', lineHeight: '1.45' } },
                 tr('Осмотр анестезиолога, предоперационный эпикриз и протокол операции появятся в списке, как только будет написан первый из них.')));
         }
 
         // ─── Подвал: правило выписки и сборка ────────────────────────────────
         const gate = state.discharge_gate || { blocking: [], incomplete: [] };
-        const foot = h('div', {
-            style: {
-                marginTop: '12px', borderTop: '1px solid var(--ink-100)', paddingTop: '10px',
-                display: 'grid', gap: '8px',
-            },
+        Object.assign(foot.style, {
+            marginTop: '12px', borderTop: '1px solid var(--ink-100)', paddingTop: '10px',
+            display: 'grid', gap: '8px',
         });
         foot.appendChild(h('div', {
             style: {
@@ -455,6 +474,8 @@ export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, on
                 onclick: () => onAssemble(),
             }, Icon('Print', { size: 13 }), ' ', tr('Собрать историю болезни')));
         }
+        box.appendChild(head);
+        box.appendChild(list);
         box.appendChild(foot);
     }
     return box;
