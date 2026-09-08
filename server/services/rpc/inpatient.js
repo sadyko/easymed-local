@@ -4,6 +4,7 @@
 // money or bed/admission state runs inside db.transaction(...)() for atomicity.
 
 import { nextInvoiceNumber } from './billing.js';
+import { generateAdmissionBill } from './admission-bill.js';   // CASE_OVERVIEW_V1 — выписка со счётом
 import { assertTransition } from '../domain/lifecycle.js';
 import { hasAnyRole } from '../roles.js';
 // INPATIENT_FLOW_V1 (миграция 091) — «в койке» это ЧЕТЫРЕ состояния, а не одно.
@@ -1073,6 +1074,9 @@ export function admissionDischargeRequest(db, args, user) {
   const recommendations = textArg(args && args.recommendations, 4000);
   const plannedAt = textArg(args && args.planned_discharge_at, 40) || null;
   const at = textArg(args && args.at, 40) || null;
+  // CASE_OVERVIEW_V1 — «discharge button with generating the payments»: обзор
+  // врача шлёт generate_bill, старые вызовы — нет, и для них ничего не меняется.
+  const generateBill = !!(args && (args.generate_bill === true || args.generate_bill === 1 || args.generate_bill === 'true'));
 
   const run = db.transaction(() => {
     const adm = loadAdmission(db, admissionId);
@@ -1126,9 +1130,13 @@ export function admissionDischargeRequest(db, args, user) {
     db.prepare('UPDATE admissions SET discharge_requested_by = ?, discharge_requested_at = ? WHERE id = ?')
       .run((user && user.id) || null, stamp, admissionId);
 
+    // CASE_OVERVIEW_V1 — счёт в ТОЙ ЖЕ транзакции: заявка без счёта или счёт
+    // без заявки одинаково сбили бы кассу с толку.
+    const bill = generateBill ? generateAdmissionBill(db, admissionId, user) : null;
     return {
       admission: db.prepare('SELECT * FROM admissions WHERE id = ?').get(admissionId),
       epicrisis_id: epicrisis.id,
+      bill,   // CASE_OVERVIEW_V1
       // Чтобы врач видел, что оставляет старшей медсестре.
       active_orders: activeOrderCount(db, admissionId),
       balance: admissionBalance(db, admissionId),

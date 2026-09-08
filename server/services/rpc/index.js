@@ -11,6 +11,7 @@ import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transfe
   admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue } from './inpatient.js';   // ADMISSION_ORDER_V1 / TWO_STEP_DISCHARGE_V1
 import { admissionFlowState, inpatientCapabilities } from './inpatient-flow.js';   // INPATIENT_FLOW_V1
 import { admissionTitleSheetGet, admissionTitleSheetSave } from './title-sheet.js';   // TITLE_SHEET_V1
+import { admissionOverview } from './case-overview.js';   // CASE_OVERVIEW_V1
 import { admissionReviewSave, admissionSetAttending, admissionChangeAttending, admissionReviewsList, admissionAttendingCandidates,
   admissionCaseDocs, admissionCaseFile, admissionCaseFileSave } from './inpatient-reviews.js';   // INPATIENT_REVIEW_V1 / CASE_DOCS_V1
 import {
@@ -212,6 +213,7 @@ export const RPC = {
   admission_admit:                (db, args, user) => admissionAdmit(db, args, user),
   admission_title_sheet_get:      (db, args, user) => admissionTitleSheetGet(db, args, user),    // TITLE_SHEET_V1
   admission_title_sheet_save:     (db, args, user) => admissionTitleSheetSave(db, args, user),
+  admission_overview:             (db, args, user) => admissionOverview(db, args, user),   // CASE_OVERVIEW_V1
 
   // TWO_STEP_DISCHARGE_V1 (Задача 8) — ВЫПИСКА В ДВА ШАГА. Клиническая
   // готовность и административная выписка — разные события разных людей:
