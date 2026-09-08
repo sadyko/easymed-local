@@ -84,6 +84,19 @@ const OV = {
     docs: { progress: { done: 3, total: 9, overdue: 1, draft: 1 }, next_kind: 'rationale', overdue: 1, incomplete: ['title', 'rationale'] },
     discharge: { status: 'active', requested_at: null, planned_at: null, outcome: null, discharged_at: null },
     neighbours: { index: 1, total: 3, mine: false, prev: { id: 10, full_name: 'Алиев А.' }, next: { id: 12, full_name: 'Каримов К.' } },
+    // VITALS_NEWS_V1 — ряд по возрастанию; news считает сервер той же шкалой (shared/news2.js).
+    vitals: (() => {
+        const mk = (o) => Object.assign({ id: null, source: 'vital', consciousness: 'alert', on_oxygen: 0, measured_by_name: 'Медсестра Петрова' }, o);
+        const s0 = mk({ source: 'title', measured_at: '2026-09-06T09:00:00Z', temp_c: 36.6, bp_sys: 120, bp_dia: 80, pulse_bpm: 72, resp_rate: null, spo2: null, consciousness: null, measured_by_name: '' });
+        const s1 = mk({ id: 1, measured_at: '2026-09-07T08:00:00Z', temp_c: 37.4, bp_sys: 128, bp_dia: 82, pulse_bpm: 92, resp_rate: 18, spo2: 96 });
+        const s2 = mk({ id: 2, measured_at: '2026-06-08T08:00:00Z', temp_c: 38.1, bp_sys: 138, bp_dia: 88, pulse_bpm: 104, resp_rate: 21, spo2: 94 });
+        const score = (r) => ({ total: r === s2 ? 5 : r === s1 ? 1 : 0, band: r === s2 ? 'medium' : r === s1 ? 'low' : 'none', complete: r !== s0, red: false, measured: r === s0 ? 3 : 6,
+            parts: r === s2 ? { resp_rate: 2, spo2: 1, on_oxygen: 0, bp_sys: 0, pulse_bpm: 1, consciousness: 0, temp_c: 1 }
+                 : r === s1 ? { resp_rate: 0, spo2: 0, on_oxygen: 0, bp_sys: 0, pulse_bpm: 1, consciousness: 0, temp_c: 0 }
+                 : { resp_rate: null, spo2: null, on_oxygen: 0, bp_sys: 0, pulse_bpm: 0, consciousness: null, temp_c: 0 } });
+        const series = [s0, s1, s2].map((r) => Object.assign({}, r, { news: score(r) }));
+        return { count: 2, series, last: series[2], prev: series[1], news: series[2].news, trend: 5, can_add: true };
+    })(),
 };
 const rpcCalls = [];
 globalThis.fetch = async (url, opts = {}) => {
@@ -95,6 +108,7 @@ globalThis.fetch = async (url, opts = {}) => {
     const name = u.slice('/api/rpc/'.length);
     rpcCalls.push({ name, args: body });
     if (name === 'admission_overview') return ok(OV);
+    if (name === 'admission_vitals_add') return ok({ vital: { id: 3, news: { total: 1, band: 'low', complete: false, parts: {} } }, summary: OV.vitals });
     if (name === 'admission_discharge_request') return ok({ admission: { id: 11, status: 'discharging' }, bill: { invoice_number: 'INV-7', total_amount: 1250000, items: 3 } });
     return ok({});
 };
@@ -152,7 +166,7 @@ test('блоки: статус, диагноз, состояние, стол, н
     const root = await render(() => {});
     const t = textOf(root);
     // Z-схема: 1 пациент сейчас · 2 выписка и счёт · 3 плитки · 4 операция · 5 списки · 6 следующий шаг.
-    for (const piece of ['Пациент сейчас', 'K35.8', 'Острый аппендицит', '36.6', '120/80', 'Стол №1', 'съедено 2', 'отказ 1',
+    for (const piece of ['Пациент сейчас', 'K35.8', 'Острый аппендицит', 'Стол №1', 'съедено 2', 'отказ 1',
         'Цефтриаксон', 'введено 2 из 4', 'пропущено 1', 'Аппендэктомия', '900 000', 'не выставлено',
         'Запланирована', 'Койко-дней', '300 000', 'Оформлено 3 из 9', 'просрочено 1', 'Обоснование клинического диагноза',
         'Выписать и выставить счёт', 'Заполнить документ', 'День в отделении', 'Дозы сегодня']) {
@@ -210,17 +224,17 @@ test('DEBT_FLOW_V1: неоплаченный счёт лежащего — «К 
 });
 
 // ─── CASE_HEAD_TIDY_V1 / CASE_ROUTE_SUB_V1 ──────────────────────────────────
-test('CASE_HEAD_TIDY_V1 / CASE_FAB_V1: «Выписка» — главная пульсирующая кнопка в правом нижнем углу, подвала с одинокой кнопкой нет', async () => {
+test('CASE_HEAD_ACTION_V2: «Выписка» — главная пульсирующая кнопка в правом нижнем углу шапки', async () => {
     const root = await render(() => {});
     const btn = allBtns(root, 'Выписка').find((b) => b.className.includes('btn'));
     assert.ok(btn, 'кнопки «Выписка» нет');
     assert.ok(btn.className.includes('btn-primary'), 'выписка должна быть первичной кнопкой: ' + btn.className);
     assert.ok(btn.className.includes('btn-pulse'), 'выписка должна пульсировать (btn-pulse): ' + btn.className);
-    // CASE_FAB_V1 — кнопка живёт плавающей в правом нижнем углу (co-fab), не в шапке.
-    let p = btn._parent; let inFab = false;
-    while (p) { if (String(p.className || '').includes('co-fab')) inFab = true; p = p._parent; }
-    assert.ok(inFab, 'кнопка выписки не в плавающем углу (co-fab)');
-    assert.equal(walk(root).filter((e) => String(e.className || '').includes('co-head-side') && walk(e).includes(btn)).length, 0, 'кнопка не должна остаться в шапке');
+    // CASE_HEAD_ACTION_V2 — кнопка в правом нижнем углу ШАПКИ: последняя ячейка строки фактов (co-fields-act).
+    let p = btn._parent; let inAct = false; let inHead = false;
+    while (p) { const c = String(p.className || ''); if (c.includes('co-fields-act')) inAct = true; if (c.includes('co-head')) inHead = true; p = p._parent; }
+    assert.ok(inAct && inHead, 'кнопка выписки не в правом нижнем углу шапки');
+    assert.equal(walk(root).filter((e) => String(e.className || '').includes('co-fab')).length, 0, 'плавающей кнопки быть не должно');
     assert.equal(walk(root).filter((e) => String(e.className || '').includes('co-bar')).length, 0, 'полоса-подвал шапки должна исчезнуть');
 });
 
@@ -237,4 +251,82 @@ test('CASE_ROUTE_SUB_V1: номер госпитализации читаетс�
     await settle();
     assert.ok(textOf(c2).includes('К списку пациентов'), 'без номера нет кнопки к списку');
     assert.deepEqual(navs[0], { v: 'admissions', p: { sub: 'patients' } }, 'без номера обзор обязан увести в список пациентов стационара');
+});
+
+
+// ─── VITALS_NEWS_V1 — панель «Показатели» ───────────────────────────────────
+test('VITALS_NEWS_V1: панель показателей — балл NEWS, уровень с рекомендацией, чипы с очками, плитки с нормой и динамика', async () => {
+    const root = await render(() => {});
+    const card = walk(root).find((e) => String(e.className || '').includes('vt-card'));
+    assert.ok(card, 'панели показателей нет');
+    const t = textOf(card);
+    for (const piece of ['Показатели', 'последнее измерение', '5', 'NEWS', 'Средний риск', 'в течение 1 часа',
+        'ЧДД 21 (+2)', 'SpO₂ 94 (+1)', 'Темп 38,1 (+1)', 'АД 138 (0)', 'Пульс 104 (+1)', 'Сознание ясное (0)', 'O₂ нет (0)',
+        'Динамика NEWS', 'ухудшение +5', '38,1 °C', '138/88', '104 уд', '21 /мин', '94 %',
+        'норма 36,0–37,2 °C', 'норма < 140/90', 'норма 60–90 уд/мин', 'норма 12–20 /мин', 'норма ≥ 95 %']) {
+        assert.ok(t.includes(piece), 'в панели нет: ' + piece + ' — ' + t.slice(0, 500));
+    }
+    // Тон плиток — по очкам: ЧДД (+2) и температура (+1) подсвечены, АД (0) — нет.
+    const tiles = walk(card).filter((e) => String(e.className || '').split(/\s+/).includes('vt-tile'));
+    assert.equal(tiles.length, 5, 'пять плиток');
+    const byLabel = (l) => tiles.find((x) => textOf(x).includes(l));
+    assert.ok(byLabel('ЧДД').className.includes('vt-warn2'), 'ЧДД +2 — оранжевая: ' + byLabel('ЧДД').className);
+    assert.ok(byLabel('Температура').className.includes('vt-warn'), 'температура +1 — жёлтая');
+    assert.ok(byLabel('АД').className.includes('vt-ok'), 'АД 0 — спокойная: ' + byLabel('АД').className);
+    // Искорки нарисованы по ряду: у температуры три точки → ломаная.
+    const sparks = walk(byLabel('Температура')).filter((e) => e.tagName === 'PATH');
+    assert.ok(sparks.length >= 1, 'у плитки нет искорки');
+    // Баннер — тон уровня.
+    const banner = walk(card).find((e) => String(e.className || '').includes('vt-banner'));
+    assert.ok(banner.className.includes('vt-band-medium'), banner.className);
+});
+
+test('VITALS_NEWS_V1: «Добавить измерение» открывает окно, считает балл на лету и шлёт admission_vitals_add с полями', async () => {
+    rpcCalls.length = 0;
+    const root = await render(() => {});
+    const add = allBtns(root, 'Добавить измерение')[0];
+    assert.ok(add, 'кнопки «Добавить измерение» нет');
+    add.click();
+    await settle();
+    const modal = BODY.children[BODY.children.length - 1];
+    const mt = textOf(modal);
+    assert.ok(mt.includes('Добавить измерение') && mt.includes('Иванов Иван Иванович'), mt.slice(0, 300));
+    assert.ok(mt.includes('Внесите хотя бы один показатель'), 'до ввода подсказка вместо балла');
+    const inputs = walk(modal).filter((e) => e.tagName === 'INPUT' && e.attrs['data-key']);
+    const byKey = (k) => inputs.find((e) => e.attrs['data-key'] === k);
+    byKey('temp_c').value = '39,2'; byKey('temp_c').dispatchEvent({ type: 'input' });
+    byKey('pulse_bpm').value = '118'; byKey('pulse_bpm').dispatchEvent({ type: 'input' });
+    byKey('resp_rate').value = '26'; byKey('resp_rate').dispatchEvent({ type: 'input' });
+    const preview = walk(modal).find((e) => String(e.className || '').includes('vt-preview'));
+    assert.ok(textOf(preview).includes('NEWS 7') && textOf(preview).includes('Высокий риск'), 'балл на лету: ' + textOf(preview));
+    assert.ok(textOf(preview).includes('измерение неполное'), 'без SpO₂ и АД измерение неполное');
+
+    const submit = walk(modal).find((e) => e.tagName === 'BUTTON' && /Записать/.test(textOf(e)));
+    submit.click();
+    await settle();
+    const call = rpcCalls.find((c) => c.name === 'admission_vitals_add');
+    assert.ok(call, 'admission_vitals_add не вызван');
+    assert.equal(call.args.admission_id, 11);
+    assert.equal(call.args.temp_c, '39,2');
+    assert.equal(call.args.pulse_bpm, '118');
+    assert.equal(call.args.resp_rate, '26');
+    assert.equal(call.args.consciousness, 'alert');
+    assert.equal(call.args.on_oxygen, false);
+    assert.ok(call.args.measured_at, 'время измерения уходит явно');
+    // И обзор перечитан.
+    assert.ok(rpcCalls.filter((c) => c.name === 'admission_overview').length >= 2);
+});
+
+test('VITALS_NEWS_V1: без измерений панель говорит об этом и зовёт внести первое', async () => {
+    const saved = OV.vitals;
+    try {
+        OV.vitals = { count: 0, series: [], last: null, prev: null, news: { total: 0, band: 'none', parts: {}, complete: false, measured: 0 }, trend: 0, can_add: true };
+        const root = await render(() => {});
+        const card = walk(root).find((e) => String(e.className || '').includes('vt-card'));
+        assert.ok(textOf(card).includes('Измерений ещё нет'), textOf(card).slice(0, 300));
+        assert.ok(allBtns(root, 'Добавить измерение')[0], 'кнопка внести первое измерение');
+        assert.equal(walk(card).filter((e) => String(e.className || '').includes('vt-tile')).length, 0, 'плиток без данных нет');
+    } finally {
+        OV.vitals = saved;
+    }
 });

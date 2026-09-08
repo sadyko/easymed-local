@@ -24,6 +24,7 @@ import { admissionCaseDocs } from './inpatient-reviews.js';
 import { accommodationState } from './accommodation.js';
 import { isSurgery } from './queue.js';
 import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
+import { vitalsSummary } from './vitals.js';   // VITALS_NEWS_V1
 
 export const OVERVIEW_ROLES = ['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse'];
 const IN_BED_SQL = IN_BED_STATUSES.map((s) => `'${s}'`).join(',');
@@ -215,5 +216,6 @@ export function admissionOverview(db, args, user) {
     docs: { progress: docs.progress, next_kind: docs.next_kind, overdue: docs.progress.overdue, incomplete: docs.discharge_gate.incomplete },
     discharge,
     neighbours: wardNeighbours(db, adm, user),
+    vitals: vitalsSummary(db, adm),   // VITALS_NEWS_V1 — показатели, NEWS и динамика
   };
 }

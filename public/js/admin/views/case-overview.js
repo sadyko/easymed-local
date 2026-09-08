@@ -27,6 +27,9 @@ import { caseDocTitle } from './case-docs.js?v=cw1';
 import { openAdmissionDischargeRequestModal, openAdmissionAttendingModal, openAdmissionDietModal, goToMarSheet, goToCaseOverview } from './admission-modal.js?v=inp2';
 import { outcomeTitle } from './discharge.js';
 import { genderWord } from './title-sheet-print.js';
+import { news2Score, NEWS_BANDS, VITAL_NORMS, CONSCIOUSNESS, vitalError } from '../../shared/news2.js';   // VITALS_NEWS_V1
+import { inpatientModal, patientAnchor } from './inpatient-modal.js';   // VITALS_NEWS_V1 — окно «Добавить измерение»
+import { field } from '../ui.js';
 
 const state = { admissionId: null, ov: null, failed: null };
 
@@ -124,10 +127,11 @@ export function caseHead(ov, { active = 'overview', onNavigate = null, onReload 
                 onclick: () => openAdmissionAttendingModal({ admission: admissionForModals(ov), onDone: async () => { if (onReload) await onReload(); } }),
             }, tr('Назначить')));
 
-    // CASE_HEAD_TIDY_V1 — владелец: «tidy up this section and make discharge
-    // main button in the header». Главное действие стоит В ШАПКЕ, справа от
-    // стрелок по соседям, а не одинокой кнопкой в пустой полосе под фактами;
-    // сама полоса фактов стала компактной строкой без отдельного «подвала».
+    // CASE_HEAD_TIDY_V1 / CASE_HEAD_ACTION_V2 — владелец: «tidy up this section
+    // and make discharge main button in the header» → «discharge should be in
+    // the header's right bottom». Главное действие стоит в ПРАВОМ НИЖНЕМ углу
+    // шапки — в конце строки фактов, прижатое вправо; стрелки по соседям —
+    // справа вверху. Полоса фактов — компактная строка без отдельного «подвала».
     const acts = actions.filter(Boolean);
     return h('div', { class: 'co-head card' },
         h('div', { class: 'co-head-row' },
@@ -136,9 +140,7 @@ export function caseHead(ov, { active = 'overview', onNavigate = null, onReload 
                 h('div', { class: 'co-name-row' }, nameBtn, chip, dayTag),
                 h('div', { class: 'co-sub muted' }, who || '—'),
                 allergy),
-            h('div', { class: 'co-head-side' },
-                navBox,
-                acts.length ? h('div', { class: 'co-actions' }, ...acts) : null)),
+            h('div', { class: 'co-head-side' }, navBox)),
         h('div', { class: 'co-fields' },
             hf('№ истории', a.admission_no),
             hf('Поступление', a.admitted_at && inBed ? dt(a.admitted_at) : (a.admitted_at && a.status === 'discharged' ? dt(a.admitted_at) : '—')),
@@ -147,7 +149,8 @@ export function caseHead(ov, { active = 'overview', onNavigate = null, onReload 
             // лечащего нет, именно его ждут с осмотром при поступлении.
             a.admitting_name ? hf('Приёмный врач', a.admitting_name) : null,
             attending,
-            hf('Плановая выписка', a.planned_discharge_at ? dt(a.planned_discharge_at) : (a.discharged_at ? tr('выписан') + ' ' + dt(a.discharged_at) : '—'))));
+            hf('Плановая выписка', a.planned_discharge_at ? dt(a.planned_discharge_at) : (a.discharged_at ? tr('выписан') + ' ' + dt(a.discharged_at) : '—')),
+            acts.length ? h('div', { class: 'co-fields-act co-actions' }, ...acts) : null));
 }
 
 // ---------------------------------------------------------------------------
@@ -258,10 +261,14 @@ function paint(root, onNavigate) {
     const dischargeBtn = canRequest
         ? h('button', { class: 'btn btn-primary btn-pulse', type: 'button', onclick: openDischarge, title: tr('Подать заявку на выписку и выставить счёт') }, ic('Check', 14), ' ', tr('Выписка'))
         : null;
-    // CASE_FAB_V1 — владелец: «transfer this button to the right bottom»:
-    // выписка живёт плавающей кнопкой в правом нижнем углу экрана, а не в
-    // шапке — она видна с любого места длинного обзора.
-    root.appendChild(caseHead(ov, { active: 'overview', onNavigate, onReload: reload, actions: [] }));
+    // CASE_HEAD_ACTION_V2 — «discharge should be in the header's right bottom»:
+    // кнопка выписки — в правом нижнем углу шапки (конец строки фактов).
+    root.appendChild(caseHead(ov, { active: 'overview', onNavigate, onReload: reload, actions: [dischargeBtn] }));
+
+    // ── 0. Показатели и NEWS (VITALS_NEWS_V1) — во всю ширину над сеткой ────
+    root.appendChild(vitalsPanel(ov, {
+        onAdd: () => openVitalsModal({ admission: admissionForModals(ov), onDone: reload }),
+    }));
 
     // ── 1. Пациент сейчас ───────────────────────────────────────────────────
     const dg = ov.diagnosis || {};
@@ -270,7 +277,8 @@ function paint(root, onNavigate) {
     const vital = (label, value) => h('div', { class: 'co-vital' },
         h('div', { class: 'co-vital-l' }, tr(label)),
         h('div', { class: 'co-vital-v' }, value || '—'));
-    const bp = sh && num(sh.bp_sys) && num(sh.bp_dia) ? sh.bp_sys + '/' + sh.bp_dia : '';
+    // VITALS_NEWS_V1 — температура, АД и пульс переехали в панель показателей
+    // (там они в динамике); здесь остаётся антропометрия и группа крови.
     const hw = sh ? [num(sh.height_cm), num(sh.weight_kg)].filter(Boolean).join(' · ') : '';
     const nowPanel = panel('Пациент сейчас', { icon: 'Activity', area: 'now', tone: dg.clinical ? '' : 'warn',
         link: { label: tr('История болезни'), onclick: () => toDocs(null) },
@@ -289,9 +297,6 @@ function paint(root, onNavigate) {
                 dg.referral ? h('div', { class: 'co-dx-s' }, trf('При направлении: {dx}', { dx: dg.referral })) : null,
                 dg.outcome ? h('div', { class: 'co-dx-s' }, trf('Исход: {outcome}', { outcome: outcomeTitle(dg.outcome) })) : null),
             sh ? h('div', { class: 'co-vitals' },
-                vital('Температура', num(sh.temp_c) ? sh.temp_c + ' °C' : ''),
-                vital('АД', bp),
-                vital('Пульс', num(sh.pulse_bpm)),
                 vital('ИМТ', ts.bmi !== null && ts.bmi !== undefined ? String(ts.bmi) : ''),
                 vital('Рост · вес', hw),
                 vital('Группа крови', pt.blood_type && pt.blood_type !== 'unknown' ? pt.blood_type : ''))
@@ -406,7 +411,187 @@ function paint(root, onNavigate) {
     ] });
 
     root.appendChild(h('div', { class: 'co-z' }, nowPanel, billPanel, tiles, opPanel, listsPanel, nextPanel));
-    if (dischargeBtn) root.appendChild(h('div', { class: 'co-fab' }, dischargeBtn));   // CASE_FAB_V1
 }
 
 export { goToCaseOverview };
+
+// ---------------------------------------------------------------------------
+// VITALS_NEWS_V1 — панель «Показатели»: балл NEWS2, динамика, плитки.
+//
+// Владелец (2026-09-08): «dashboard like this» — скриншот: баннер риска с
+// баллом, рекомендацией и чипами по параметрам; справа динамика NEWS; ниже
+// пять плиток (температура, АД, пульс, ЧДД, SpO₂) с искоркой и нормой;
+// кнопка «Добавить измерение». Шкала и нормы — shared/news2.js: та же, что
+// считает сервер, так что цифра на экране совпадает с цифрой в ответе RPC.
+// ---------------------------------------------------------------------------
+const VT_TILES = [
+    { key: 'temp_c',    label: 'Температура', icon: 'Thermo',   norm: VITAL_NORMS.temp_c,    fmt: (v) => String(v).replace('.', ',') + ' °C' },
+    { key: 'bp',        label: 'АД',          icon: 'Activity', norm: VITAL_NORMS.bp,        fmt: (v, r) => r.bp_sys + '/' + r.bp_dia, series: (r) => r.bp_sys, points: (n) => n.parts.bp_sys },
+    { key: 'pulse_bpm', label: 'Пульс',       icon: 'Heart',    norm: VITAL_NORMS.pulse_bpm, fmt: (v) => v + ' ' + tr('уд') },
+    { key: 'resp_rate', label: 'ЧДД',         icon: 'Pulse',    norm: VITAL_NORMS.resp_rate, fmt: (v) => v + ' /' + tr('мин') },
+    { key: 'spo2',      label: 'SpO₂',        icon: 'Flask',    norm: VITAL_NORMS.spo2,      fmt: (v) => v + ' %' },
+];
+const CONSCIOUSNESS_RU = { alert: 'ясное', confused: 'спутанное', voice: 'реагирует на голос', pain: 'реагирует на боль', unresponsive: 'без сознания' };
+const isNumV = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
+
+/** Искорка: SVG-ломаная по значениям (последние точки). Одна точка — кружок. */
+function sparkline(values, { w = 120, hgt = 34 } = {}) {
+    const pts = values.filter(isNumV).map(Number);
+    if (!pts.length) return h('svg', { class: 'vt-spark', viewBox: '0 0 ' + w + ' ' + hgt, 'aria-hidden': 'true' });
+    const min = Math.min(...pts), max = Math.max(...pts);
+    const span = max - min || 1;
+    const x = (i) => (pts.length === 1 ? w / 2 : 4 + (i * (w - 8)) / (pts.length - 1));
+    const y = (v) => hgt - 4 - ((v - min) / span) * (hgt - 8);
+    const d = pts.map((v, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(v).toFixed(1)).join(' ');
+    const lastX = x(pts.length - 1), lastY = y(pts[pts.length - 1]);
+    return h('svg', { class: 'vt-spark', viewBox: '0 0 ' + w + ' ' + hgt, 'aria-hidden': 'true' },
+        pts.length > 1 ? h('path', { d, fill: 'none', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }) : null,
+        h('circle', { cx: lastX.toFixed(1), cy: lastY.toFixed(1), r: '3' }));
+}
+
+const pointsTone = (p) => (p === null || p === undefined ? '' : p >= 3 ? 'crit' : p === 2 ? 'warn2' : p === 1 ? 'warn' : 'ok');
+const trendText = (t) => (t > 0 ? '▲ ' + trf('ухудшение +{n} за период', { n: t }) : t < 0 ? '▼ ' + trf('улучшение {n} за период', { n: t }) : tr('без изменений за период'));
+
+export function vitalsPanel(ov, { onAdd } = {}) {
+    const v = ov.vitals || { series: [], last: null, prev: null, news: news2Score({}), trend: 0, can_add: false, count: 0 };
+    const last = v.last;
+    const news = (last && last.news) || v.news || news2Score({});
+    const band = NEWS_BANDS[news.band] || NEWS_BANDS.none;
+    const addBtn = v.can_add
+        ? h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: onAdd }, ic('Plus', 13), ' ', tr('Добавить измерение'))
+        : null;
+    const when = last && last.measured_at ? fmtDateTime(last.measured_at) : '';
+    const who = last && last.source === 'title' ? tr('при поступлении (титульный лист)') : (last && last.measured_by_name) || '';
+    const head = h('div', { class: 'vt-head' },
+        h('div', { class: 'vt-title' }, tr('Показатели'),
+            when ? h('span', { class: 'vt-title-m' }, ' · ' + tr('последнее измерение') + ' ' + when + (who ? ' · ' + who : '')) : null),
+        h('span', { class: 'grow' }),
+        addBtn);
+
+    if (!last) {
+        return h('section', { class: 'card vt-card vt-empty', 'aria-label': tr('Показатели') }, head,
+            h('div', { class: 'vt-none' },
+                h('div', { class: 'vt-none-t' }, tr('Измерений ещё нет')),
+                h('div', { class: 'co-muted' }, v.can_add
+                    ? tr('Первое измерение открывает динамику: температура, АД, пульс, ЧДД и SpO₂ — и балл NEWS по ним.')
+                    : tr('Измерения вносят, пока пациент на койке.'))));
+    }
+
+    // Чипы по параметрам: значение и очки. Порядок — как на скриншоте.
+    const chip = (label, value, pts) => h('span', { class: 'vt-chip' + (pts ? ' vt-' + pointsTone(pts) : ''), title: label },
+        label + ' ' + value + ' (' + (pts > 0 ? '+' + pts : '0') + ')');
+    const p = news.parts || {};
+    const chips = [
+        isNumV(last.resp_rate) ? chip(tr('ЧДД'), last.resp_rate, p.resp_rate) : null,
+        isNumV(last.spo2) ? chip('SpO₂', last.spo2, p.spo2) : null,
+        isNumV(last.temp_c) ? chip(tr('Темп'), String(last.temp_c).replace('.', ','), p.temp_c) : null,
+        isNumV(last.bp_sys) ? chip(tr('АД'), last.bp_sys, p.bp_sys) : null,
+        isNumV(last.pulse_bpm) ? chip(tr('Пульс'), last.pulse_bpm, p.pulse_bpm) : null,
+        last.consciousness ? chip(tr('Сознание'), tr(CONSCIOUSNESS_RU[last.consciousness] || last.consciousness), p.consciousness) : null,
+        h('span', { class: 'vt-chip' + (p.on_oxygen ? ' vt-warn2' : '') }, 'O₂ ' + (last.on_oxygen ? tr('да') : tr('нет')) + ' (' + (p.on_oxygen ? '+2' : '0') + ')'),
+    ].filter(Boolean);
+    const totals = (v.series || []).map((r) => (r.news ? r.news.total : null));
+    const banner = h('div', { class: 'vt-banner vt-band-' + news.band },
+        h('div', { class: 'vt-score' }, h('b', null, String(news.total)), h('small', null, 'NEWS')),
+        h('div', { class: 'vt-band' },
+            h('div', { class: 'vt-band-t' }, tr(band.label), news.complete ? null : h('span', { class: 'vt-partial' }, ' · ' + tr('измерение неполное'))),
+            h('div', { class: 'vt-band-a' }, tr(band.advice)),
+            h('div', { class: 'vt-chips' }, ...chips)),
+        h('div', { class: 'vt-trend' },
+            h('div', { class: 'vt-trend-l' }, tr('Динамика NEWS')),
+            sparkline(totals, { w: 120, hgt: 30 }),
+            h('div', { class: 'vt-trend-v ' + (v.trend > 0 ? 'vt-worse' : v.trend < 0 ? 'vt-better' : '') }, trendText(v.trend || 0))));
+
+    const tiles = h('div', { class: 'vt-tiles' }, ...VT_TILES.map((t) => {
+        const getVal = t.key === 'bp' ? (r) => (isNumV(r.bp_sys) && isNumV(r.bp_dia) ? r.bp_sys : null) : (r) => r[t.key];
+        const pts = t.points ? t.points(news) : p[t.key];
+        const cur = getVal(last);
+        const has = isNumV(cur);
+        const series = (v.series || []).map(t.series || getVal);
+        return h('div', { class: 'vt-tile' + (has ? ' vt-' + pointsTone(pts) : ' vt-none') },
+            h('div', { class: 'vt-tile-top' },
+                h('span', { class: 'vt-tile-ic' }, ic(t.icon, 15)),
+                h('span', { class: 'vt-pts' }, has && pts !== null && pts !== undefined ? (pts > 0 ? '+' + pts : '0') : '—')),
+            h('div', { class: 'vt-val' }, has ? t.fmt(cur, last) : '—'),
+            h('div', { class: 'vt-lab' }, tr(t.label)),
+            sparkline(series),
+            h('div', { class: 'vt-norm' }, tr('норма') + ' ' + t.norm));
+    }));
+
+    return h('section', { class: 'card vt-card', 'aria-label': tr('Показатели') }, head, banner, tiles);
+}
+
+// ── Окно «Добавить измерение» ─────────────────────────────────────────────
+function nowLocalInput() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+function localToIso(value) {
+    if (!value) return null;
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 19) + 'Z';
+}
+
+export function openVitalsModal({ admission, onDone } = {}) {
+    if (!admission || !admission.id) { toast(tr('Госпитализация не выбрана.'), 'fail'); return null; }
+    const p = admission.patients || {};
+    const numInput = (key, ph, step = '1') => h('input', { type: 'number', step, inputmode: 'decimal', placeholder: ph, class: 'vt-in', 'data-key': key });
+    const temp = numInput('temp_c', '36,6', '0.1');
+    const sys = numInput('bp_sys', '120');
+    const dia = numInput('bp_dia', '80');
+    const pulse = numInput('pulse_bpm', '72');
+    const resp = numInput('resp_rate', '16');
+    const spo2 = numInput('spo2', '98');
+    const oxygen = h('input', { type: 'checkbox' });
+    const consc = h('select', null, ...CONSCIOUSNESS.map((c) => h('option', { value: c }, tr(CONSCIOUSNESS_RU[c]))));
+    const at = h('input', { type: 'datetime-local', value: nowLocalInput() });
+    const noteInput = h('input', { placeholder: tr('Например: после капельницы') });
+    const preview = h('div', { class: 'vt-preview' }, '');
+
+    const read = () => ({
+        temp_c: temp.value, bp_sys: sys.value, bp_dia: dia.value, pulse_bpm: pulse.value,
+        resp_rate: resp.value, spo2: spo2.value, on_oxygen: !!oxygen.checked, consciousness: consc.value || 'alert',
+    });
+    const repaint = () => {
+        const vals = read();
+        const s = news2Score(vals);
+        const band = NEWS_BANDS[s.band] || NEWS_BANDS.none;
+        // Сознание выбрано всегда — балл показываем, только когда есть хоть одно число.
+        const any = ['temp_c', 'bp_sys', 'pulse_bpm', 'resp_rate', 'spo2'].some((k) => isNumV(vals[k]));
+        preview.textContent = any
+            ? 'NEWS ' + s.total + ' · ' + tr(band.label) + (s.complete ? '' : ' · ' + tr('измерение неполное'))
+            : tr('Внесите хотя бы один показатель — балл посчитается сразу.');
+        preview.className = 'vt-preview vt-band-' + s.band;
+    };
+    for (const el of [temp, sys, dia, pulse, resp, spo2, oxygen, consc]) el.addEventListener('input', repaint);
+    for (const el of [oxygen, consc]) el.addEventListener('change', repaint);
+    repaint();
+
+    const row = (...els) => h('div', { class: 'vt-form-row' }, ...els);
+    return inpatientModal(tr('Добавить измерение'), 'Activity', [
+        patientAnchor(p.full_name || '', [p.mrn, admission.admission_no].filter(Boolean).join(' · ')),
+        row(field(tr('Температура, °C'), temp), field(tr('Пульс, уд/мин'), pulse), field(tr('ЧДД, /мин'), resp)),
+        row(field(tr('АД систолическое'), sys), field(tr('АД диастолическое'), dia), field('SpO₂, %', spo2)),
+        row(field(tr('Сознание'), consc), h('label', { class: 'vt-check' }, oxygen, ' ', tr('Дополнительный кислород'))),
+        row(field(tr('Время измерения'), at), field(tr('Примечание'), noteInput)),
+        preview,
+    ], tr('Записать'), async () => {
+        const vals = read();
+        for (const key of ['temp_c', 'bp_sys', 'bp_dia', 'pulse_bpm', 'resp_rate', 'spo2']) {
+            const err = vitalError(key, vals[key]);
+            if (err) { toast(tr('Проверьте значение') + ': ' + err, 'fail'); return false; }
+        }
+        // Время — из поля; пустое или испорченное поле означает «сейчас» (как и на сервере).
+        const measuredAt = localToIso(at.value) || new Date().toISOString().slice(0, 19) + 'Z';
+        const { data, error } = await supabase.rpc('admission_vitals_add', Object.assign({}, vals, {
+            admission_id: admission.id, measured_at: measuredAt, note: noteInput.value || '',
+        }));
+        if (error || !data) { toast((error && error.message) || tr('Не удалось записать измерение.'), 'fail'); return false; }
+        const s = (data.vital && data.vital.news) || news2Score(vals);
+        const band = NEWS_BANDS[s.band] || NEWS_BANDS.none;
+        toast(trf('Измерение записано. NEWS {n} — {band}.', { n: s.total, band: tr(band.label) }), s.band === 'high' || s.band === 'medium' ? 'warn' : 'ok');
+        if (onDone) await onDone();
+        return true;
+    }, { width: 640 });
+}
