@@ -25,6 +25,7 @@ import { accommodationState } from './accommodation.js';
 import { isSurgery } from './queue.js';
 import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 import { vitalsSummary } from './vitals.js';   // VITALS_NEWS_V1
+import { today as clinicToday } from '../domain/day.js';   // CLINIC_DAY_V1
 
 export const OVERVIEW_ROLES = ['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse'];
 const IN_BED_SQL = IN_BED_STATUSES.map((s) => `'${s}'`).join(',');
@@ -79,7 +80,14 @@ export function admissionOverview(db, args, user) {
   requireRead(user);
   const adm = loadAdmission(db, args && args.admission_id);
   const now = nowUtc(db);
-  const today = now.slice(0, 10);
+  // CLINIC_DAY_V1 — «сегодня» у клиники МЕСТНОЕ, а не по Гринвичу. Обзор резал
+  // дату из UTC-метки, а лист назначений считает день местным (domain/day.js),
+  // и в Ташкенте (UTC+5) с семи вечера до полуночи это были РАЗНЫЕ дни: только
+  // что назначенный курс показывался в обзоре неначатым, а дозы и отметки
+  // питания читались за вчера. Ровно тот случай, о котором предупреждает шапка
+  // domain/day.js: свой date('now') в модуле — это расхождение, которое видно
+  // только вечером.
+  const today = clinicToday(db);
   const view = sheetView(db, adm);
   const docs = admissionCaseDocs(db, { admission_id: adm.id, now }, user);
 

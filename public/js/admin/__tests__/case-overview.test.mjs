@@ -551,3 +551,35 @@ test('CASE_HEAD_BADGE_V1: аллергия — значок справа, «Ле
         OV.admission = { ...OV.admission, status: saved };
     }
 });
+
+// ─── CASE_DASH_FIT_V1 — обзор помещается в экран ────────────────────────────
+//
+// Владелец (2026-09-09): «now only need to fix height». Панели кончались на
+// разной высоте, а нижние уезжали за край: сетка росла по содержимому, а не
+// по экрану.
+test('CASE_DASH_FIT_V1: сетка обзора получает измеренную высоту, ряды делят её поровну, прокрутка — внутри панели', async () => {
+    const root = await render(() => {});
+    const zone = walk(root).find((e) => String(e.className || '').split(/\s+/).includes('co-z'));
+    assert.ok(zone, 'сетки обзора нет');
+    // Высоту МЕРЯЕТ скрипт: у обвязки без вёрстки мерить нечего, поэтому
+    // проверяется проводка — что сетка передана замерщику и что замерщик
+    // считает от настоящего верха, а не от постоянного числа.
+    const src = (await import('node:fs')).readFileSync(
+        (await import('node:path')).join((await import('node:path')).dirname(
+            (await import('node:url')).fileURLToPath(import.meta.url)), '..', 'views', 'case-overview.js'), 'utf8');
+    assert.ok(src.includes('state.disposeFit = fitZone(zone);'), 'сетка не передана замерщику высоты');
+    assert.ok(src.includes('zone.getBoundingClientRect().top'), 'высота считается не от настоящего верха сетки');
+    assert.ok(src.includes("zone.style.setProperty('--co-fit'"), 'измеренная высота не доезжает до стилей');
+
+    const fs2 = await import('node:fs');
+    const path2 = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = path2.dirname(fileURLToPath(import.meta.url));
+    const css = fs2.readFileSync(path2.join(dir, '..', '..', '..', 'css', 'admin-views.css'), 'utf8');
+    assert.ok(/\.co-z\{[^}]*height:var\(--co-fit,auto\)/.test(css), 'сетка снова растёт по содержимому');
+    assert.ok(/\.co-z\{[^}]*grid-auto-rows:minmax\(0,1fr\)/.test(css), 'ряды перестали делить высоту поровну');
+    assert.ok(/\.co-z\{[^}]*align-items:stretch/.test(css), 'панели снова кончаются на разной высоте');
+    assert.ok(/\.co-panel-b\{[^}]*overflow-y:auto/.test(css), 'длинный список снова утащит за собой всю страницу');
+    // Подвал панели с действием остаётся ВНЕ прокрутки: ради действия панель и читают.
+    assert.ok(!/\.co-panel-f\{[^}]*overflow/.test(css), 'подвал панели попал в прокрутку');
+});

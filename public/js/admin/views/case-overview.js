@@ -30,7 +30,12 @@ import { news2Score, NEWS_BANDS, VITAL_NORMS, VITAL_RANGES, CONSCIOUSNESS, vital
 import { inpatientModal, patientAnchor } from './inpatient-modal.js';   // VITALS_NEWS_V1 — окно «Добавить измерение»
 import { field } from '../ui.js';
 
-const state = { admissionId: null, ov: null, failed: null };
+const state = {
+    admissionId: null,
+    ov: null,
+    failed: null,
+    disposeFit: null,   // CASE_DASH_FIT_V1 — отмена слежения за высотой сетки
+};
 
 const sum = (n) => trf('{sum} сум', { sum: moneyDisplay(String(Math.round(Number(n) || 0))) || '0' });
 const dt = (iso) => (iso ? fmtDateTime(iso) : '');
@@ -243,6 +248,33 @@ function panel(title, { icon, area, tone = '', link = null, actions = [], childr
 const kv = (k, v, cls = '') => h('div', { class: 'co-kv' + (cls ? ' ' + cls : '') }, h('span', { class: 'co-k' }, k), h('span', { class: 'co-v' }, v || '—'));
 const note = (text, tone = '') => h('p', { class: 'co-note' + (tone ? ' co-' + tone : '') }, text);
 const num = (v) => (v === null || v === undefined || v === '' ? null : String(v));
+
+/**
+ * Отдать сетке ровно ту высоту, что осталась от экрана под ней.
+ *
+ * Панели после этого делят её поровну и заканчиваются на одной линии, а
+ * длинный список прокручивается ВНУТРИ своей панели — не утаскивая за собой
+ * весь экран.
+ *
+ * @returns {() => void} отменить слежение
+ */
+function fitZone(zone) {
+    if (!zone || !zone.getBoundingClientRect) return () => {};
+    const apply = () => {
+        if (zone.isConnected === false) return;
+        const top = zone.getBoundingClientRect().top;
+        const vh = (typeof window !== 'undefined' && window.innerHeight) || 0;
+        if (!vh) return;
+        zone.style.setProperty('--co-fit', Math.max(380, Math.round(vh - top - 20)) + 'px');
+    };
+    apply();
+    const timers = [setTimeout(apply, 120), setTimeout(apply, 600)];
+    if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('resize', apply);
+    return () => {
+        for (const t of timers) clearTimeout(t);
+        if (typeof window !== 'undefined' && window.removeEventListener) window.removeEventListener('resize', apply);
+    };
+}
 
 function paint(root, onNavigate) {
     clear(root);
@@ -466,7 +498,14 @@ function paint(root, onNavigate) {
     ] });
 
     dietSlot.appendChild(dietTile);
-    root.appendChild(h('div', { class: 'co-z' }, nowPanel, billPanel, opPanel, listsPanel, nextPanel));
+    const zone = h('div', { class: 'co-z' }, nowPanel, billPanel, opPanel, listsPanel, nextPanel);
+    root.appendChild(zone);
+    // CASE_DASH_FIT_V1 — высота сетки МЕРЯЕТСЯ от её настоящего верха: над ней
+    // шапка и панель показателей, и обе меняют высоту от пациента к пациенту
+    // (длинное имя, аллергия, число измерений). Постоянное число здесь всегда
+    // ошибается ровно на эту разницу.
+    if (state.disposeFit) { try { state.disposeFit(); } catch (e) { /* нечего отменять */ } }
+    state.disposeFit = fitZone(zone);
 }
 
 export { goToCaseOverview };

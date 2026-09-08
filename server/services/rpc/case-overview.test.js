@@ -198,3 +198,27 @@ test('CASE_ROWS_TIDY_V1: строка проживания в списке ус�
     const svc = ov.services.list.find((r) => r.kind === 'service');
     assert.equal(svc.name, 'Аппендэктомия');
 });
+
+// CLINIC_DAY_V1 — «сегодня» в обзоре местное, а не по Гринвичу.
+//
+// Обзор резал дату из UTC-метки, а лист назначений считает день местным. В
+// Ташкенте (UTC+5) с семи вечера до полуночи это разные дни: назначенный
+// вечером курс показывался неначатым, а дозы и питание читались за вчера.
+// Тест ловит расхождение самих ИСТОЧНИКОВ дня, а не результат в конкретный час.
+test('CLINIC_DAY_V1: обзор и лист назначений считают «сегодня» одним и тем же способом', async () => {
+  const fs2 = await import('node:fs');
+  const path2 = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const dir = path2.dirname(fileURLToPath(import.meta.url));
+  const src = fs2.readFileSync(path2.join(dir, 'case-overview.js'), 'utf8');
+  assert.ok(src.includes("import { today as clinicToday } from '../domain/day.js'"),
+    'обзор перестал спрашивать день у общего модуля');
+  assert.ok(src.includes('const today = clinicToday(db);'), 'обзор снова считает день сам');
+  assert.ok(!/const today = now.slice/.test(src), 'обзор снова режет день из UTC-метки');
+
+  // И тот же день, что у листа назначений, — по одному и тому же запросу.
+  const ctx = seed();
+  const { today } = await import('../domain/day.js');
+  assert.equal(today(ctx.db), ctx.db.prepare("SELECT date('now','localtime') d").get().d);
+  ctx.db.close();
+});
