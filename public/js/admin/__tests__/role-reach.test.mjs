@@ -96,9 +96,15 @@ test('роль без единого раздела названа нерабо�
 });
 
 test('сказано, куда сотрудник попадёт после входа', () => {
+    // ROLE_HOME_V1 — журнал «Визиты» удалён: роль с картотекой входит в картотеку,
+    // администратор с дашбордом — в «Дашборд», как в оболочке.
     const withPatients = roleReach(role(['patients']), NAV, LABEL);
-    assert.equal(withPatients.landing.kind, 'visits',
-        'у роли с картотекой вход открывается журналом визитов — как в оболочке');
+    assert.equal(withPatients.landing.id, 'patients', 'у роли с картотекой вход открывается картотекой');
+    assert.equal(withPatients.landing.kind, 'nav');
+    const admin = roleReach({ name: 'admin', permissions: { sections: ['patients', 'dashboard'], levels: {}, patient_tabs: {} } }, ['patients', 'dashboard'], LABEL);
+    assert.equal(admin.landing.id, 'dashboard', 'администратор входит в «Дашборд», хотя картотека стоит в меню раньше');
+    const headDoc = roleReach({ name: 'head_doctor', permissions: { sections: ['patients', 'dashboard'], levels: {}, patient_tabs: {} } }, ['patients', 'dashboard'], LABEL);
+    assert.equal(headDoc.landing.id, 'patients', 'дашборд открыт, но правило «сразу в дашборд» — только для admin');
 
     const labOnly = roleReach(role(['labs']), NAV, LABEL);
     assert.equal(labOnly.landing.id, 'labs', 'иначе — первый доступный пункт меню');
@@ -132,6 +138,7 @@ test('правило «куда попадёт» не разошлось с об
     const at = src.indexOf('function firstAllowedView()');
     assert.notEqual(at, -1, 'в оболочке больше нет firstAllowedView — правило искать негде');
     const body = src.slice(at, src.indexOf('\n}', at));
-    assert.match(body, /isRouteAllowed\('visits'\)/,
-        'оболочка больше не открывает вход журналом визитов, а сводка обещает именно его');
+    assert.match(body, /actorRoleCodes\(\)\.includes\('admin'\)/, 'оболочка больше не отправляет администратора в дашборд, а сводка обещает именно это');
+    assert.match(body, /isModuleAllowed\('dashboard'\)/);
+    assert.ok(!/isRouteAllowed\('visits'\)/.test(body), 'журнал визитов удалён — оболочка не должна его обещать');
 });

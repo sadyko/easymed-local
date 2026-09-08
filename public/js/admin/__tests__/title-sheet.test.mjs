@@ -226,14 +226,16 @@ test('редактор в истории болезни: «Сохранить» 
 // ═══════════════════════════════════════════════════════════════════════════
 // 5. СОБРАННАЯ ИСТОРИЯ
 // ═══════════════════════════════════════════════════════════════════════════
-test('собранная история начинается титульным листом, а список пробелов остаётся', async () => {
+test('собранная история начинается титульным листом на целую страницу A4, без списка пробелов', async () => {
     const { caseFilePrintHtml } = await import('../views/case-docs.js');
     const html = caseFilePrintHtml({ cover: { admission_no: 'H-7', assembled_by: 'Врач', assembled_at: '2026-09-08T12:00:00Z' },
         documents: [], gaps: ['consent'], title_sheet: VIEW });
-    assert.ok(html.indexOf('Титульный лист') < html.indexOf('В комплекте не хватает'), 'лист должен идти первым');
+    assert.ok(!html.includes('В комплекте не хватает'), 'CASE_FILE_COVER_V2 — списка пробелов на обложке нет');
+    assert.match(html, /\.ts \{[^}]*min-height: 266mm/, 'FORM_003_A4_V1 — лист занимает целую страницу A4');
+    assert.match(html, /\.ts \{[^}]*page-break-after: always/, 'документы начинаются со следующей страницы');
     assert.ok(html.includes('Клиника Тест'));
     assert.ok(html.includes('Медсестра Петрова'));
-    assert.ok(html.includes('Согласие на госпитализацию'), 'пробелы комплекта пропали');
+    assert.ok(!html.includes('Согласие на госпитализацию'), 'пробел комплекта попал на бумагу');
     // Старый снимок без листа печатается прежней обложкой — без падения.
     const old = caseFilePrintHtml({ cover: { admission_no: 'H-1' }, documents: [], gaps: [] });
     assert.ok(old.includes('H-1'));

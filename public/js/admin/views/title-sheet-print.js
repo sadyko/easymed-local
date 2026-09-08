@@ -126,30 +126,33 @@ export function titleSheetPrintSection(view, { extra = '' } = {}) {
 }
 
 /* type-scale-exempt-start: печатный документ A4 — метрики бумаги, а не экрана (то же исключение, что у case-docs.js) */
+// FORM_003_A4_V1 — лист занимает ЦЕЛУЮ страницу A4 (владелец: «make title list
+// full a4»): min-height = 297mm − поля 2×14mm, колонка flex, подпись прижата
+// к низу. Кегль и интервалы — как у бланка, а не как у экрана.
 export function titleSheetPrintCss() {
     return `
-.ts { page-break-after: always; }
-.f3p { font-size: 12px; line-height: 1.55; color: #16232b; }
-.f3p-head { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; font-size: 10.5px; line-height: 1.35; margin-bottom: 10px; }
+.ts { page-break-after: always; box-sizing: border-box; min-height: 266mm; display: flex; flex-direction: column; }
+.f3p { font-size: 13px; line-height: 1.7; color: #16232b; }
+.f3p-head { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; font-size: 11px; line-height: 1.4; margin-bottom: 14px; }
 .f3p-l { flex: 1; text-align: center; font-weight: 700; }
-.f3p-org { margin-top: 6px; font-weight: 700; border-bottom: 1px solid #16232b; padding-bottom: 2px; }
-.f3p-orgl { font-weight: 400; font-size: 9.5px; color: #55636d; }
+.f3p-org { margin-top: 8px; font-weight: 700; border-bottom: 1px solid #16232b; padding-bottom: 3px; }
+.f3p-orgl { font-weight: 400; font-size: 10px; color: #55636d; }
 .f3p-r { flex: 1; text-align: right; font-weight: 700; }
-.f3p-title { text-align: center; font-size: 15px; font-weight: 800; letter-spacing: 0.04em; margin: 12px 0 2px; }
-.f3p-sub { text-align: center; font-size: 10.5px; color: #55636d; margin-bottom: 10px; }
-.f3p-line { margin: 3px 0; }
+.f3p-title { text-align: center; font-size: 17px; font-weight: 800; letter-spacing: 0.04em; margin: 16px 0 4px; }
+.f3p-sub { text-align: center; font-size: 11px; color: #55636d; margin-bottom: 14px; }
+.f3p-line { margin: 7px 0; }
 .f3p-uz { font-weight: 600; }
-.f3p-ru { font-size: 9.5px; color: #7a8892; }
-.f3p-note { font-size: 9.5px; color: #7a8892; }
-.f3p-v { display: inline-block; min-width: 120px; border-bottom: 1px solid #16232b; padding: 0 6px; font-weight: 600; vertical-align: baseline; }
-.f3p-v.s { min-width: 56px; }
+.f3p-ru { font-size: 10px; color: #7a8892; }
+.f3p-note { font-size: 10px; color: #7a8892; }
+.f3p-v { display: inline-block; min-width: 130px; border-bottom: 1px solid #16232b; padding: 0 6px; font-weight: 600; vertical-align: baseline; }
+.f3p-v.s { min-width: 60px; }
 .f3p-v.wide { min-width: 60%; }
-.f3p-v.no { min-width: 110px; }
+.f3p-v.no { min-width: 120px; }
 .f3p-pick { text-decoration: underline; text-underline-offset: 2px; }
-.f3p-hint { font-size: 9px; color: #7a8892; text-align: center; margin: -2px 0 4px; }
-.f3p-block { margin-top: 10px; padding-top: 8px; border-top: 1px dashed #aab4bc; }
-.f3p-block-t { font-weight: 700; font-size: 11.5px; margin: 6px 0 2px; }
-.f3p-sign { margin-top: 14px; text-align: right; font-size: 11px; color: #55636d; }
+.f3p-hint { font-size: 9.5px; color: #7a8892; text-align: center; margin: -2px 0 6px; }
+.f3p-block { margin-top: 16px; padding-top: 12px; border-top: 1px dashed #aab4bc; }
+.f3p-block-t { font-weight: 700; font-size: 12.5px; margin: 8px 0 3px; }
+.f3p-sign { margin-top: auto; padding-top: 18px; text-align: right; font-size: 11.5px; color: #55636d; }
 .f3p-sign.warn { color: #b45309; font-weight: 600; }
 `;
 }

@@ -322,16 +322,18 @@ test('печатный файл — обложка, регламентный п�
     assert.ok(html.includes('Живот напряжён'));
     assert.match(html, /редакция 2/);
 
-    // Пробелы названы поимённо, а не числом.
-    for (const kind of FILE.gaps) assert.ok(html.includes(caseDocTitle(kind)), `пробел ${kind} не назван`);
+    // CASE_FILE_COVER_V2 — списка «чего не хватает» на бумаге больше нет: он
+    // подсказка экрана, а не содержание истории (владелец: «remove this from the list»).
+    assert.ok(!/не хватает/i.test(html), 'на обложке снова список пробелов');
+    for (const kind of FILE.gaps) assert.ok(!html.includes(caseDocTitle(kind)), `пробел ${kind} назван на бумаге`);
     // И черновики не просто выброшены — сказано, сколько их.
     assert.match(html, /Черновиков не включено: 2/);
     assert.ok(html.includes('@page'), 'это печатный документ, а не экран');
 });
 
-test('полный комплект говорит об этом, и пустая сборка не притворяется полной', () => {
+test('обложка не судит о полноте комплекта, и пустая сборка не притворяется полной', () => {
     const full = caseFilePrintHtml(Object.assign({}, FILE, { gaps: [], complete: true, drafts_excluded: 0 }));
-    assert.match(full, /комплект документов полный/i);
+    assert.ok(!/комплект документов полный/i.test(full), 'CASE_FILE_COVER_V2 — оценка полноты на бумаге не печатается');
     assert.ok(!/не хватает/i.test(full));
 
     const empty = caseFilePrintHtml(Object.assign({}, FILE, { documents: [] }));

@@ -554,14 +554,15 @@ const PART_TITLES = [
 export function caseFilePrintHtml(file, { fontFaceCss = '' } = {}) {
     const c = (file && file.cover) || {};
     const documents = (file && file.documents) || [];
-    const gaps = (file && file.gaps) || [];
 
     const kv = (k, v) => `<div class="kv"><span class="k">${esc(k)}</span><span class="v">${esc(v || '—')}</span></div>`;
     const dt = (iso) => (iso ? fmtDateTime(iso) : '');
 
-    const gapsHtml = gaps.length ? `<div class="gaps"><b>${esc(tr('В комплекте не хватает:'))}</b><ul>${
-        gaps.map((k) => `<li>${esc(caseDocTitle(k))}</li>`).join('')
-    }</ul></div>` : `<p class="ok">${esc(tr('Обязательный комплект документов полный.'))}</p>`;
+    // CASE_FILE_COVER_V2 — списка «В комплекте не хватает» на обложке больше
+    // нет (владелец: «remove this from the list»). Пробелы комплекта — рабочая
+    // подсказка экрана документов (caseGateText / caseMissingTitles), а не
+    // содержание подшитой истории: на бумаге перечень того, чего НЕТ, читался
+    // как часть документа и пугал того, кому историю выдают на руки.
     const draftsHtml = file && file.drafts_excluded
         ? `<p class="note">${esc(trf('Черновиков не включено: {n}. Черновик — не документ и в историю болезни не подшивается.', { n: file.drafts_excluded }))}</p>`
         : '';
@@ -583,14 +584,14 @@ export function caseFilePrintHtml(file, { fontFaceCss = '' } = {}) {
     ${kv(tr('Лечащий врач'), [c.attending_name, c.attending_specialty].filter(Boolean).join(' · '))}
     ${kv(tr('Собрал'), [c.assembled_by, dt(c.assembled_at)].filter(Boolean).join(' · '))}
   </div>
-  ${gapsHtml}
   ${draftsHtml}
 </section>`;
 
-    // TITLE_SHEET_V1 — первая страница собранной истории — титульный лист
-    // медсестры с шапкой клиники; список пробелов комплекта остаётся под ним.
+    // TITLE_SHEET_V1 — первая страница собранной истории — титульный лист по
+    // бланку 003, ЦЕЛЫМ листом A4 (FORM_003_A4_V1: .ts занимает страницу, подпись
+    // прижата к низу); документы начинаются со следующей страницы.
     const cover = file && file.title_sheet
-        ? titleSheetPrintSection(file.title_sheet, { extra: gapsHtml + draftsHtml + assembledHtml })
+        ? titleSheetPrintSection(file.title_sheet, { extra: draftsHtml + assembledHtml })
         : legacyCover;
 
     const body = documents.map((d, i) => {

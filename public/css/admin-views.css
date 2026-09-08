@@ -5442,7 +5442,11 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .ph-none{font-size:12.5px;padding:0 16px 12px}
 
 /* ── FORM_003_V1 — титульный лист по бланку 003 (на экране) ─────────────── */
-.f3-paper{padding:26px 34px 30px}
+/* FORM_003_A4_V1 — на экране лист тоже целой страницы A4 (794×1123 при 96dpi):
+   бланк читается как бумага, а не как короткая карточка. */
+.f3-paper{padding:30px 38px 34px;min-height:1123px;box-sizing:border-box;display:flex;flex-direction:column}
+.f3-paper>.f3{flex:1;display:flex;flex-direction:column}
+.f3-paper .ts-status{margin-top:auto}
 .f3{font-size:13.5px;line-height:1.5;color:var(--ink-900)}
 .f3-head{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;font-size:12.5px;line-height:1.35}
 .f3-head-l{flex:1;text-align:center;font-weight:700}

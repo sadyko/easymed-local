@@ -610,7 +610,6 @@ export function isRouteAllowed(view) {
     if (ALWAYS_ALLOWED.has(view)) return true;
 
     if (view === 'patient-card')      return isModuleAllowed('patients');
-    if (view === 'visits')            return isModuleAllowed('patients');   // LANDING_VISITS_V1 — журнал визитов идёт в комплекте с модулем «Пациенты»
     if (view === 'service-workspace') return isModuleAllowed('consultation');
     if (view === 'settings')          return isModuleAllowed('settings');
     // ROLE_AUDIT_V1 (fix #4) — each Settings sub-section must be granted

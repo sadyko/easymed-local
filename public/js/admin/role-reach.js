@@ -21,7 +21,7 @@
 // обратное на экране прав нельзя.
 
 import {
-    previewRole, isModuleAllowed, isRouteAllowed, accessLevelFor,
+    previewRole, isModuleAllowed, accessLevelFor, actorRoleCodes,
     patientTabLevel, patientTabCaps, canCreatePatient,
     PATIENT_CARD_TAB_IDS, PATIENT_TABS, INPATIENT_SCREEN_ROLES,
 } from './permissions.js';
@@ -65,14 +65,16 @@ const ROLE_WORD = {
 /**
  * Куда попадёт сотрудник, войдя в программу.
  *
- * Правило повторяет admin.js firstAllowedView(): сначала журнал визитов, потом
- * первый доступный пункт меню. Оно продублировано ЗДЕСЬ намеренно и прикрыто
- * тестом, который читает admin.js: вынести его в общий модуль значило бы
- * тянуть оболочку в вид настроек (круговая зависимость), а молча разойтись с
- * ней — обещать не тот экран.
+ * Правило повторяет admin.js firstAllowedView() (ROLE_HOME_V1): роль admin с
+ * открытым дашбордом входит в «Дашборд», остальные — в первый доступный пункт
+ * меню. Оно продублировано ЗДЕСЬ намеренно и прикрыто тестом, который читает
+ * admin.js: вынести его в общий модуль значило бы тянуть оболочку в вид
+ * настроек (круговая зависимость), а молча разойтись с ней — обещать не тот
+ * экран. actorRoleCodes() внутри previewRole() отвечает именем ПРЕДПРОСМОТРЕННОЙ
+ * роли (rememberRoles), так что «admin» здесь — та роль, что на экране.
  */
 export function landingScreen(navIds) {
-    if (isRouteAllowed('visits')) return { id: 'visits', kind: 'visits' };
+    if (actorRoleCodes().includes('admin') && isModuleAllowed('dashboard')) return { id: 'dashboard', kind: 'nav' };
     for (const id of navIds) if (isModuleAllowed(id)) return { id, kind: 'nav' };
     return null;
 }
@@ -123,7 +125,7 @@ export function roleReach(roleRow, navIds, labelOf, translate) {
             closed,
             tabs,
             canCreatePatient: canCreatePatient(),
-            landing: landing ? { ...landing, label: landing.kind === 'visits' ? 'Визиты' : label(landing.id) } : null,
+            landing: landing ? { ...landing, label: label(landing.id) } : null,
         };
     });
 }

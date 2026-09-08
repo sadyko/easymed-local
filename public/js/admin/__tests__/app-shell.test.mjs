@@ -316,7 +316,7 @@ test('полосы вкладок нет ни в разметке, ни в ко�
 // ограничить, потому что закрывать вкладки больше нечем.
 // ===========================================================================
 test('кэш экранов ограничен: четыре маршрута — не больше трёх смонтированных', async () => {
-    await go('patients'); await go('visits'); await go('queue'); await go('labs');
+    await go('patients'); await go('discharge'); await go('queue'); await go('labs');
     assert.ok(panes().length <= 3, 'смонтировано панелей: ' + panes().length + ' — кэш не ограничен, это утечка');
     // И ровно три, а не одна: ограничение не должно выродиться в «кэша нет».
     assert.equal(panes().length, 3);
@@ -325,7 +325,7 @@ test('кэш экранов ограничен: четыре маршрута �
 });
 
 test('возврат на недавний экран НЕ перерисовывает его — состояние переживает уход', async () => {
-    await go('patients'); await go('visits'); await go('queue');
+    await go('patients'); await go('discharge'); await go('queue');
     const patientsPane = panes().find((p) => p.dataset.viewKey === 'patients');
     assert.ok(patientsPane, 'панель «Пациенты» выпала из кэша раньше времени');
     // Метка, которую переживёт только НЕ перерисованный узел.
@@ -338,7 +338,7 @@ test('возврат на недавний экран НЕ перерисовы�
 });
 
 test('вытесненная панель размонтируется, а не прячется', async () => {
-    await go('patients'); await go('visits'); await go('queue');
+    await go('patients'); await go('discharge'); await go('queue');
     const first = panes().find((p) => p.dataset.viewKey === 'patients');
     await go('labs');   // четвёртый — «Пациенты» самые старые
     assert.ok(!panes().includes(first), '«Пациенты» всё ещё в #view-root');
@@ -360,7 +360,7 @@ test('повторный клик по своему же разделу не д�
     globalThis.window.scrollY = 900;
     await go('patients');            // тот же раздел
     assert.deepEqual(jumps, [], 'страницу дёрнули при клике по уже открытому разделу');
-    await go('visits');
+    await go('discharge');
     await go('patients');            // настоящий возврат — прокрутку помним
     assert.deepEqual(jumps, [900], 'при настоящем возврате прокрутка не восстановилась: ' + JSON.stringify(jumps));
     globalThis.window.scrollTo = realScrollTo;
@@ -398,7 +398,7 @@ test('оба моста для экранов живы — и laboratory.js, и 
     await go('patients');
     globalThis.window.easymedSetTabLabel('patients', 'Проверка заголовка');
     assert.equal(TITLE_EL.textContent, 'Проверка заголовка');
-    await go('visits');
+    await go('discharge');
     // Чужой ключ не трогает активный заголовок.
     const before = TITLE_EL.textContent;
     globalThis.window.easymedSetTabLabel('patients', 'Не должно появиться');
@@ -729,8 +729,6 @@ test('заголовок отчёта собирается переводом, �
 });
 
 test('в заголовке экрана никогда не стоит сырой идентификатор маршрута', async () => {
-    await go('visits');
-    assert.equal(TITLE_EL.textContent, 'Визиты', 'журнал визитов остался с английским именем: ' + TITLE_EL.textContent);
     await go('mar-nurse');
     assert.equal(TITLE_EL.textContent, 'Задачи медсестры');
     await go('discharge');

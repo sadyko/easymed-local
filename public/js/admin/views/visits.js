@@ -1,4 +1,7 @@
-// Visits — VISITS_V1 — money-free scheduling view + "Book visit" modal.
+// Visits — VISITS_V1 — «Book visit» modal.
+// ROLE_HOME_V1 (2026-09-08): страница-журнал «Визиты» удалена (владелец: «remove the
+// visits page completely»); маршрут #visits ведёт в картотеку. Здесь осталось
+// только окно записи, которым пользуются тесты бронирования.
 // Local mode has no services catalog / billing yet, so this view only tracks
 // WHO is coming WHEN: patient, doctor (optional), date & time, visit type,
 // status. Mirrors public/js/admin/views/patients.js for structure (mount /
@@ -11,8 +14,7 @@
 // has no `.or()`, so each field gets its own `.ilike()` call, deduped by id).
 
 import { supabase } from '../../supabase.js';
-import { h, Icon, clear, toast, StatusTag, fmtDateTime, field } from '../ui.js';
-import { openVisitBillModal } from './visit-bill.js';
+import { h, Icon, clear, toast, field } from '../ui.js';
 // VISITS_ONE_DOOR_V1 — журнал визитов записывал пациента ПРЯМОЙ вставкой в
 // visits через /api/db, то есть мимо запрета двойной записи: свободное время
 // он не спрашивал вовсе (обычный datetime-local), и два регистратора спокойно
@@ -20,135 +22,8 @@ import { openVisitBillModal } from './visit-bill.js';
 // календаря и мастеров.
 import { bookVisit } from './visit-booking.js';
 
-const refs = {
-    container: null,
-    onNavigate: null,
-    tbody:      null,
-    emptyEl:    null,
-    totalEl:    null,
-};
-
 // Resolved once per page session (first active branch) — see resolveBranchId().
 let _cachedBranchId; // undefined = not resolved yet; null = none found
-
-export async function renderVisits(container, { onNavigate } = {}) {
-    refs.container  = container;
-    refs.onNavigate = onNavigate;
-    mount();
-    await fetchAndPaint();
-}
-
-// -----------------------------------------------------------------------------
-// MOUNT — static shell; fetchAndPaint() repaints just the tbody.
-// -----------------------------------------------------------------------------
-function mount() {
-    clear(refs.container);
-
-    refs.tbody = h('tbody');
-    refs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } },
-        'No visits yet — book the first one.');
-    refs.totalEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
-
-    const bookBtn = h('button', {
-        class: 'btn btn-primary btn-sm', type: 'button',
-        onclick: () => openBookVisitModal(fetchAndPaint),
-    }, Icon('Plus', { size: 14 }), ' Book visit');
-
-    refs.container.appendChild(h('div', { class: 'fade-in' },
-        h('div', { class: 'page-head' },
-            h('div', null,
-                h('h1', { class: 'page-title' }, 'Visits'),
-                refs.totalEl,
-            ),
-            h('div', { class: 'page-head-actions' }, bookBtn),
-        ),
-        h('div', { class: 'card' },
-            h('table', { class: 'tbl' },
-                h('thead', null, h('tr', null,
-                    h('th', null, 'Date/Time'),
-                    h('th', null, 'Patient'),
-                    h('th', null, 'Doctor'),
-                    h('th', null, 'Type'),
-                    h('th', null, 'Status'),
-                )),
-                refs.tbody,
-            ),
-            refs.emptyEl,
-        ),
-    ));
-}
-
-// -----------------------------------------------------------------------------
-// FETCH + REPAINT
-// -----------------------------------------------------------------------------
-let lastFetchToken = 0;
-
-async function fetchAndPaint() {
-    const token = ++lastFetchToken;
-    setLoadingRow();
-    try {
-        const { data, error, count } = await supabase.from('visits')
-            .select('*, patients(full_name,mrn,phone), doctor(full_name)', { count: 'exact' })
-            // BRANCH_ORIGIN_V1 — решение владельца 2026-09-02: рабочие списки — своего
-            // здания. Дата, статус и тип визита уезжают соседу, а пациент к ним
-            // резолвится, поэтому чужой визит выглядел бы здесь настоящей записью на
-            // приём — и стойка ждала бы пациента, который придёт в другой филиал.
-            // История видна там, где она и нужна: в карте пациента.
-            .is('sync_origin', null)
-            .order('visit_date', { ascending: true })
-            .limit(200);
-        if (token !== lastFetchToken) return;   // a newer fetch already landed
-        if (error) {
-            toast('Failed to load visits: ' + (error.message || error), 'fail');
-            paintRows([]);
-            return;
-        }
-        paintRows(data || []);
-        if (refs.totalEl) refs.totalEl.textContent = count != null ? `${count} visit${count === 1 ? '' : 's'}` : '';
-    } catch (e) {
-        if (token !== lastFetchToken) return;
-        toast('Failed to load visits: ' + (e && e.message || e), 'fail');
-        paintRows([]);
-    }
-}
-
-function setLoadingRow() {
-    if (!refs.tbody) return;
-    clear(refs.tbody);
-    refs.tbody.appendChild(h('tr', null,
-        h('td', { colspan: '5', style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Loading…'),
-    ));
-    refs.emptyEl.style.display = 'none';
-}
-
-function paintRows(rows) {
-    clear(refs.tbody);
-    if (!rows || rows.length === 0) {
-        refs.emptyEl.style.display = '';
-        return;
-    }
-    refs.emptyEl.style.display = 'none';
-    for (const v of rows) refs.tbody.appendChild(visitRow(v));
-}
-
-function visitRow(v) {
-    const p = v.patients;
-    const doc = v.doctor;
-    return h('tr', {
-        class: 'row-click',
-        style: { cursor: 'pointer' },
-        onclick: () => openVisitBillModal(v, fetchAndPaint),
-    },
-        h('td', { class: 'num', style: { fontSize: '12.5px' } }, fmtDateTime(v.visit_date)),
-        h('td', null,
-            h('div', { class: 'cell-strong' }, p ? (p.full_name || '—') : '—'),
-            p && p.mrn ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, p.mrn) : null,
-        ),
-        h('td', null, doc ? (doc.full_name || '—') : '—'),
-        h('td', null, v.visit_type || '—'),
-        h('td', null, StatusTag(v.status)),
-    );
-}
 
 // -----------------------------------------------------------------------------
 // BOOK VISIT MODAL
