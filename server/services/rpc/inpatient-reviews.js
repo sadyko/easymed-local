@@ -1068,8 +1068,26 @@ export function admissionCaseDocs(db, args, user) {
     return true;
   };
   const next = items.find(eligible) || null;
-  const nextKind = next ? next.kind : null;
   if (next) next.state = 'next';
+
+  // NEXT_STEP_OVERDUE_V1 (2026-09-08) — «СЛЕДУЮЩИЙ ШАГ» НЕ БЫВАЕТ ПУСТЫМ, ПОКА
+  // ЕСТЬ ЧТО ОФОРМЛЯТЬ.
+  //
+  // В СПИСКЕ просроченный пункт «следующим» не становится намеренно: «что
+  // делать» и «что провалено» — разные вопросы, и заметная кнопка чек-листа
+  // остаётся ровно одна. Но у госпитализации, где просрочено ВСЁ открытое,
+  // выполнимых пунктов не остаётся: next_kind оказывался пустым, и обзор писал
+  // «Все документы оформлены» прямо над строкой «оформлено 0 из 8, просрочено
+  // 7». Владелец сфотографировал ровно это.
+  //
+  // Указатель и состояние — разные вещи. Сюда идёт самый ранний просроченный,
+  // а его state остаётся 'overdue': счётчик «просрочено» не меняется, красная
+  // отметка в списке не пропадает, заметная кнопка не раздваивается. Выписной
+  // эпикриз в указатель не попадает по тому же правилу, что и выше, — пока
+  // пациента не выписывают, это указание не туда.
+  const overdueNext = next ? null : (items.find((it) => it.required && it.state === 'overdue'
+    && (it.due_rule !== 'at_discharge' || adm.status === 'discharging')) || null);
+  const nextKind = next ? next.kind : (overdueNext ? overdueNext.kind : null);
 
   const allItems = [titleItem, ...items];
   const progress = {

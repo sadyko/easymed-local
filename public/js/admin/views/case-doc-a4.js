@@ -18,7 +18,7 @@
 // сервере, rpc/inpatient-reviews.js).
 import { h, clear } from '../ui.js';
 import { tr } from '../i18n.js';
-import { sanitizeStoredHtml } from '../../shared/rich-text.js';
+import { sanitizeStoredHtml, richIsEmpty } from '../../shared/rich-text.js';
 
 /** Разделы, которые пишутся разметкой. `diagnosis` сюда не входит намеренно. */
 export const RICH_KEYS = Object.freeze(['complaints', 'objective', 'plan', 'body']);
@@ -46,6 +46,59 @@ export const KIND_SECTIONS = Object.freeze({
     consent:     ['body'],
     other:       ['body'],
 });
+
+// ---------------------------------------------------------------------------
+// CASE_DOC_BLANK_V1 — БЛАНК ДОКУМЕНТА: ЗАГОТОВКА КЛИНИКИ, А НЕ ПУСТОЙ ЛИСТ.
+//
+// Владелец (2026-09-08): «we should be able to edit document in the #documents
+// section».
+//
+// «Объективно: состояние удовлетворительное, кожные покровы обычной окраски,
+// дыхание везикулярное…» — это не творчество врача, это формулировка клиники,
+// которую он перепечатывает по десять раз в день. Здесь она пишется ОДИН раз
+// в «Документах», и новый документ открывается уже с ней; врач правит её под
+// пациента, а не набирает заново.
+//
+// ЧТО ЭТО НЕ ДЕЛАЕТ. Бланк подставляется ТОЛЬКО в новый документ, у которого
+// ещё нет черновика: иначе заготовка затирала бы написанное. И только в пустые
+// разделы — раздел с текстом остаётся как есть.
+//
+// ГДЕ ЛЕЖИТ. В тех же настройках документов (doc_branding.settings), что и
+// текст договора и памятки: это настройка клиники, одна на всех, и заводить
+// ради неё таблицу значило бы менять базу под одно текстовое поле.
+export const CASE_BLANK_KEY = 'caseDocBlanks';
+
+/** Виды документов, у которых бланк бывает. Согласие из набора убрано (CONSENT_OUT_V1). */
+export const CASE_BLANK_KINDS = Object.freeze(Object.keys(KIND_SECTIONS).filter((k) => k !== 'consent'));
+
+/** Бланк вида документа: {раздел: разметка}. Всегда объект, даже когда пусто. */
+export function caseDocBlank(settings, kind) {
+    const all = settings && settings[CASE_BLANK_KEY];
+    const one = all && typeof all === 'object' ? all[kind] : null;
+    const out = {};
+    if (!one || typeof one !== 'object') return out;
+    for (const key of RICH_KEYS) {
+        const v = sanitizeStoredHtml(one[key] || '');
+        if (v) out[key] = v;
+    }
+    return out;
+}
+
+/**
+ * Все бланки с ОДНИМ изменённым разделом. Настройки не правятся на месте:
+ * их сравнивают по ссылке, чтобы понять, есть ли несохранённые изменения.
+ */
+export function withCaseDocBlank(settings, kind, section, html) {
+    const all = Object.assign({}, (settings && settings[CASE_BLANK_KEY]) || {});
+    const one = Object.assign({}, all[kind] || {});
+    // Пустой раздел УБИРАЕТ запись, а не сохраняет пустоту: <p><br></p> из
+    // редактора — это не текст бланка, и «заполнено разделов» посчитало бы его.
+    const html2 = sanitizeStoredHtml(html || '');
+    const clean = richIsEmpty(html2) ? '' : html2;
+    if (clean) one[section] = clean; else delete one[section];
+    if (Object.keys(one).length) all[kind] = one; else delete all[kind];
+    return all;
+}
 
 /** Есть ли у документа диагноз (карточка слева спрашивает это). */
 export function hasDiagnosis(kind) { return sectionsFor(kind).includes('diagnosis'); }

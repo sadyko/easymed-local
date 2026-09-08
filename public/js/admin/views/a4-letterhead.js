@@ -52,14 +52,17 @@ export function a4Letterhead({ title, date = new Date(), clinic } = {}) {
 }
 
 /**
- * Лист целиком: полоса, шапка, содержимое. Действия (кнопки) на лист не
- * кладутся — это не часть документа; вызывающий ставит их под листом.
+ * Лист целиком: шапка и содержимое. Действия (кнопки) на лист не кладутся —
+ * это не часть документа; вызывающий ставит их под листом.
+ *
+ * A4_REAL_V1 (2026-09-08) — владелец: «remove the thin line above and use
+ * document type ui. real a4». Бирюзовые полосы сверху и снизу были украшением
+ * интерфейса на документе: на бумаге их нет, и на экране они превращали лист
+ * в карточку продукта. Лист — это бумага: шапка клиники, текст, поля.
  */
 export function a4Sheet({ title, date, clinic, children = [] } = {}) {
     return h('div', { class: 'a4-paper' },
-        h('div', { class: 'a4-band-top' }),
         a4Letterhead({ title, date, clinic }),
         ...children.filter(Boolean),
-        h('div', { class: 'a4-band-bottom' }),
     );
 }

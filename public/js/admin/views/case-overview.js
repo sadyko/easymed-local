@@ -213,6 +213,13 @@ async function load() {
 // а «призрачность» — только вид. Область нажатия ≥ 28px, ховер — светлая
 // подложка, фокус — кольцо.
 const act = (label, onclick) => h('button', { class: 'co-act', type: 'button', onclick }, tr(label), ic('ChevronRight', 14));
+// CASE_DIARY_ACT_V1 — заметное действие панели. Владелец: «add to here the main
+// style button of kundalik». Остальные действия обзора — переходы, их место
+// призрачной ссылки; дневник наблюдения ПИШУТ, и пишут каждый день, пока
+// пациент лежит. Повторяющаяся работа не прячется под ссылку рядом с шестью
+// другими: у неё кнопка, и значок «плюс», а не стрелка — она создаёт запись.
+const actMain = (label, onclick) => h('button', { class: 'co-act co-act-main', type: 'button', onclick },
+    ic('Plus', 13), ' ', tr(label));
 
 function panel(title, { icon, area, tone = '', link = null, actions = [], children = [] }) {
     const acts = [link ? act(link.label, link.onclick) : null, ...actions].filter(Boolean);
@@ -426,16 +433,28 @@ function paint(root, onNavigate) {
     // ── 6. Следующий шаг → ──────────────────────────────────────────────────
     const pct = pr.total ? Math.round(((pr.done || 0) / pr.total) * 100) : 0;
     const nextPanel = panel('Следующий шаг', { icon: 'Doc', area: 'next', tone: pr.overdue ? 'warn' : '', children: [
+        // NEXT_STEP_OVERDUE_V1 — «оформлены» говорится только когда оформлены.
+        // Пустой «следующий шаг» сам по себе этого не значит, и заголовок,
+        // который спорит со строкой под ним, врач перестаёт читать вовсе.
         docs.next_kind
             ? h('div', { class: 'co-next-doc' }, caseDocTitle(docs.next_kind))
-            : h('div', { class: 'co-next-doc co-ok' }, tr('Все документы оформлены')),
+            : (pr.total && (pr.done || 0) >= pr.total)
+                ? h('div', { class: 'co-next-doc co-ok' }, tr('Все документы оформлены'))
+                : h('div', { class: 'co-next-doc co-warn' },
+                    trf('Осталось оформить: {n}', { n: Math.max((pr.total || 0) - (pr.done || 0), 0) })),
         h('div', { class: 'co-progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(pr.total || 0), 'aria-valuenow': String(pr.done || 0),
             'aria-label': tr('Оформлено документов') },
             h('span', { class: 'co-progress-fill', style: { width: pct + '%' } })),
         h('div', { class: 'co-tile-m' + (pr.overdue ? ' co-warn' : '') },
             trf('Оформлено {done} из {total}', { done: pr.done || 0, total: pr.total || 0 }),
             pr.overdue ? ' · ' + trf('просрочено {n}', { n: pr.overdue }) : ''),
-    ], actions: [act(docs.next_kind ? 'Заполнить документ' : 'Открыть документы', () => toDocs(docs.next_kind || null))] });
+    ], actions: [
+        act(docs.next_kind ? 'Заполнить документ' : 'Открыть документы', () => toDocs(docs.next_kind || null)),
+        // Пациента выписали — дневник больше не ведут, и кнопка исчезает:
+        // предлагать запись о наблюдении за тем, кого нет в койке, значит
+        // предлагать работу, которую сервер не примет.
+        inBed ? actMain('Дневник наблюдения', () => toDocs('round')) : null,
+    ] });
 
     root.appendChild(h('div', { class: 'co-z' }, nowPanel, billPanel, tiles, opPanel, listsPanel, nextPanel));
 }

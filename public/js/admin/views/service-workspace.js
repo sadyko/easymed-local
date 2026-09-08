@@ -957,7 +957,6 @@ function soapForm(ctx) {
         // A4 sheet
         h('div', { class: 'a4-scroll' },
             h('div', { class: 'a4-paper' },
-                h('div', { class: 'a4-band-top' }),
                 // Clinic header
                 h('div', { class: 'a4-head' },
                     h('div', { class: 'a4-clinic-wrap' },
@@ -1030,7 +1029,6 @@ function soapForm(ctx) {
                     h('div', { style: { textAlign: 'right' } }, h('b', null, 'КОНТАКТ'),
                         h('div', null, 'medion.uz')),
                 ),
-                h('div', { class: 'a4-band-bottom' }),
             ),
         ),
         // WS_PAPER_TOOLS_V1 removed — «Услуги приёма», «Рецепт», «Рекомендации» card stack deleted from

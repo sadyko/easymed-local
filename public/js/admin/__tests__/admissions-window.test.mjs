@@ -708,11 +708,12 @@ test('шапка листа собирается из реквизитов кл�
     const bare = textOf(a4Letterhead({ title: 'Документ', date: '01.01.2026', clinic: {} }));
     assert.ok(!/undefined|null/.test(bare), 'пустые реквизиты протекли текстом: ' + bare);
 
-    // Лист: полоса сверху, шапка, содержимое, полоса снизу — в этом порядке.
+    // A4_REAL_V1 — лист это шапка и содержимое. Декоративной полосы на бумаге
+    // нет, значит её нет и на экране: владелец просил «real a4».
     const sheet = a4Sheet({ title: 'Документ', date: '01.01.2026', clinic, children: [mkEl('div')] });
     assert.equal(sheet.className, 'a4-paper');
     const kids = sheet.children.map((c) => c.className);
-    assert.deepEqual(kids, ['a4-band-top', 'a4-head', '', 'a4-band-bottom']);
+    assert.deepEqual(kids, ['a4-head', '']);
 });
 
 test('панель документа истории болезни рисует ЛИСТ, а не карточку с заголовком', async () => {
@@ -725,6 +726,33 @@ test('панель документа истории болезни рисует
     assert.ok(/a4Sheet\(\{\s*title:\s*ed\.title/.test(src), 'документ больше не рисуется листом через a4Sheet');
     assert.ok(!/class:\s*'card cw-doc'/.test(src), 'вернулась карточка вместо листа');
     assert.ok(!/card-header'\s*\},\s*h\('h3'/.test(src.slice(src.indexOf('buildReviewEditor({'))), 'вернулся карточный заголовок документа');
+});
+
+// CASE_RAIL_ASSEMBLE_V1 — левая колонка: список шагов и главная кнопка сборки.
+//
+// Владелец (2026-09-08): «we dont need in the left panel scrolling options add
+// main button, collect history based off a documents». Выпадающий список
+// повторял чек-лист и заставлял колонку прокручиваться; сборка стояла в шапке,
+// хотя делается она ИЗ ЭТИХ документов.
+test('CASE_RAIL_ASSEMBLE_V1: в левой колонке нет списка-дубля, а «Собрать историю» — главная кнопка под шагами', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = path.dirname(fileURLToPath(import.meta.url));
+    const src = fs.readFileSync(path.join(dir, '..', 'views', 'case-workspace.js'), 'utf8');
+
+    assert.ok(!src.includes('cw-doc-sel'), 'выпадающий список документов вернулся в колонку');
+    assert.ok(!src.includes('function docSelect'), 'дубль выбора документа вернулся');
+    assert.ok(src.includes("class: 'btn btn-primary cw-assemble'"), 'сборка перестала быть главной кнопкой');
+    assert.ok(src.includes('rail.appendChild(assembleFor(root, onNavigate));'),
+        'кнопка сборки не в левой колонке');
+    // В шапке экрана её больше нет: одна кнопка на экран, а не две одинаковых.
+    const head = src.slice(src.indexOf('caseHead(state.overview'), src.indexOf('const rail ='));
+    assert.ok(!head.includes('assemble'), 'сборка осталась и в шапке: ' + head.slice(0, 200));
+
+    const css = fs.readFileSync(path.join(dir, '..', '..', '..', 'css', 'admin-views.css'), 'utf8');
+    assert.ok(/\.cw-rail \{ position: static; max-height: none; overflow: visible; \}/.test(css),
+        'левая колонка снова прокручивается сама');
 });
 
 

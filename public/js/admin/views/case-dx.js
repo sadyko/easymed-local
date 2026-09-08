@@ -145,8 +145,15 @@ export function openIcdPicker({ onPick } = {}) {
 export function dxEditor({ carrier, required = false } = {}) {
     const box = h('div', { class: 'dx-ed' });
     const chips = h('div', { class: 'dx-chips' });
-    const typeIn = h('input', { type: 'text', class: 'dx-type-in', placeholder: tr('Код МКБ-10 или свой диагноз') });
-    const field = h('div', { class: 'dx-field' }, typeIn, icdSuggest(typeIn, supabase));
+    // A4_REAL_V1 — поле выглядит тем, что оно есть: строкой поиска по
+    // справочнику. Голая рамка без подписи и значка читалась как заготовка
+    // вёрстки — владелец возвращался к ней трижды.
+    const typeIn = h('input', { type: 'text', class: 'dx-type-in',
+        placeholder: tr('Код МКБ-10 или свой диагноз'), 'aria-label': tr('Диагноз') });
+    const field = h('div', { class: 'dx-field' },
+        h('span', { class: 'dx-field-ic' }, Icon('Search', { size: 14 })),
+        typeIn,
+        icdSuggest(typeIn, supabase));
 
     const read = () => parseDx(carrier ? carrier.value : '');
     const write = (list) => {

@@ -46,6 +46,19 @@ const START = '2026-09-04';
 // считает расписание, чтобы тест не зависел от пояса машины.
 const localTs = (date, hour, min = 0) => new Date(dueAtMs(date, hour) + min * 60000).toISOString();
 
+// MAR_CANCEL_TEST_CLOCK_V1 (2026-09-08) — ДЕНЬ ОТНОСИТЕЛЬНО НАСТОЯЩИХ ЧАСОВ.
+//
+// Отмена курса режет расписание по МОМЕНТУ ОТМЕНЫ — то есть по системным
+// часам. Тест на это был написан на прибитых датах 04–08 сентября 2026, и жил
+// ровно до 8 сентября: в этот день весь курс оказался в прошлом, резать стало
+// нечего, и проверка «будущие точки не планируются» упала сама по себе, без
+// единой правки кода. Даты, которые сравнивают с «сейчас», обязаны считаться
+// от «сейчас».
+const dayOf = (offset) => {
+  const d = new Date(Date.now() + offset * 86400000);
+  return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-');
+};
+
 function seed() {
   const db = openDb(':memory:');
   migrate(db);
@@ -195,13 +208,18 @@ test('отмена требует причины, не удаляет ни на�
 test('отменённый курс перестаёт рождать плановые точки, но уже сделанные отметки при нём', () => {
   const db = seed();
   const id = admission(db);
-  const o = order(db, id);
-  treatmentAdminMark(db, { order_id: o.id, date: START, slot: 6, status: 'given' }, ACTOR.nurse);
+  // Курс идёт со вчерашнего дня и ЗАХОДИТ В БУДУЩЕЕ: только тогда отмене есть
+  // что отрезать. На прибитых датах проверка держалась до конца курса и в
+  // последний его день падала на ровном месте.
+  const from = dayOf(-1);
+  const to = dayOf(3);
+  const o = order(db, id, { starts_on: from, days: 5 });
+  treatmentAdminMark(db, { order_id: o.id, date: from, slot: 6, status: 'given' }, ACTOR.nurse);
   // Отмена «сейчас»: всё, что позже этой минуты, больше не планируется.
   treatmentOrderCancel(db, { order_id: o.id, reason: 'смена схемы' }, ACTOR.doctor);
 
   const lst = treatmentOrdersList(db, {
-    admission_id: id, from: START, to: '2026-09-08', include_cancelled: true,
+    admission_id: id, from, to, include_cancelled: true,
   }, ACTOR.doctor);
   const shown = lst.orders.find((x) => x.id === o.id);
   assert.equal(shown.marks.length, 1, 'отметка на месте');

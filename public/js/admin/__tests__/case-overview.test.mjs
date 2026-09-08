@@ -464,3 +464,41 @@ test('VITALS_STEPPER_V1: у каждого поля кнопки слева и �
     for (let i = 0; i < 5; i++) up.click();
     assert.equal(val('spo2'), '100', 'выше физического предела шагомер не уходит');
 });
+
+// ─── CASE_DIARY_ACT_V1 — дневник наблюдения заметной кнопкой ─────────────────
+//
+// Владелец (2026-09-08): «add to here the main style button of kundalik».
+// Дневник — единственная запись обзора, которую делают КАЖДЫЙ ДЕНЬ, пока
+// пациент лежит; остальные действия панели — переходы. Поэтому у него залитая
+// кнопка, и она исчезает после выписки: дневник выписанного никто не ведёт.
+test('CASE_DIARY_ACT_V1: «Дневник наблюдения» — заметная кнопка в «Следующем шаге», ведёт в документы на дневник и пропадает после выписки', async () => {
+    const navs = [];
+    const root = await render((view, payload) => navs.push({ view, payload }));
+    const b = allBtns(root, 'Дневник наблюдения')[0];
+    assert.ok(b, 'кнопки дневника нет в обзоре');
+    assert.ok(String(b.className).includes('co-act-main'), 'дневник должен быть заметным действием: ' + b.className);
+    assert.ok(!String(b.className).includes('btn-primary'), 'это действие панели, а не кнопка формы: ' + b.className);
+
+    // Стоит в подвале панели «Следующий шаг», рядом с призрачным переходом.
+    let p = b._parent; let foot = null;
+    while (p) { if (String(p.className || '').includes('co-panel-f')) { foot = p; break; } p = p._parent; }
+    assert.ok(foot, 'дневник не в подвале карточки');
+    assert.ok(textOf(foot).includes('Открыть документы') || textOf(foot).includes('Заполнить документ'),
+        'дневник встал не в «Следующий шаг»: ' + textOf(foot));
+    // Заметная кнопка на панели ровно одна — иначе главной не будет ни одной.
+    const filled = walk(foot).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('co-act-main'));
+    assert.equal(filled.length, 1, 'на панели больше одной залитой кнопки: ' + filled.length);
+
+    b.click();
+    assert.deepEqual(navs.pop(), { view: 'case-file', payload: { admissionId: 11, kind: 'round' } },
+        'дневник должен открывать документы на дневнике наблюдения');
+
+    const saved = OV.admission.status;
+    try {
+        OV.admission = { ...OV.admission, status: 'discharged' };
+        const out = await render(() => {});
+        assert.equal(allBtns(out, 'Дневник наблюдения').length, 0, 'выписанному предлагают вести дневник');
+    } finally {
+        OV.admission = { ...OV.admission, status: saved };
+    }
+});

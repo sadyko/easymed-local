@@ -1422,8 +1422,13 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
    уезжать вместе с длинным документом она не должна. */
 /* CASE_DOC_A4_V1 — три зоны: шаги слева, лист в центре, вставка справа.
    На узком экране правая колонка уходит вниз, а не сжимает лист. */
+/* A4_REAL_V1 — владелец: «the documents section should be width of the
+   viewport not scroll view. scroll view is only a4». Средняя колонка ровно под
+   лист (794 px + воздух под тень), боковые забирают ВСЮ остальную ширину: сетка
+   заполняет экран, а бумага не растягивается — бумага не тянется. */
 .cw-grid { display: grid; gap: 12px; align-items: start; margin-top: 10px;
-    grid-template-columns: minmax(260px, 320px) minmax(0, 1fr) minmax(240px, 280px); }
+    justify-content: center;
+    grid-template-columns: minmax(260px, 420px) minmax(0, 820px) minmax(240px, 380px); }
 @media (max-width: 1400px) { .cw-grid { grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); }
     .cw-aside { grid-column: 1 / -1; } }
 @media (max-width: 900px) { .cw-grid { grid-template-columns: minmax(0, 1fr); } }
@@ -1454,10 +1459,6 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .cd-icd-code { flex: 0 0 auto; font-size: 12.5px; font-weight: 700; color: var(--primary-700);
     font-variant-numeric: tabular-nums; }
 .cd-icd-name { font-size: 12.5px; color: var(--ink-800); min-width: 0; }
-.cw-doc-pick { padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
-.cw-pick-l { font-size: 12.5px; font-weight: 700; letter-spacing: .04em;
-    text-transform: uppercase; color: var(--ink-600); }
-.cw-doc-sel { width: 100%; min-height: 36px; }
 /* Карточки шагов одинаковые: название и одна строка состояния (CASE_DOC_A4_V1). */
 .cd-row-who { color: var(--ink-500); }
 .cw-pane { min-width: 0; }
@@ -1943,17 +1944,20 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
   background:var(--white); border-bottom:1px dashed var(--ink-200); }
 .a4-scroll{ padding:20px; background:var(--ink-50); overflow:auto; }
 
-.a4-paper{ max-width:794px; margin:0 auto; padding:48px;
-  background:var(--white); border:1px solid var(--ink-100);
-  border-radius:var(--r-lg); box-shadow:var(--shadow-md); }
-
-.a4-band-top, .a4-band-bottom{ height:6px; border-radius:var(--r-pill);
-  background:var(--primary-600); margin:0 0 18px; }
-.a4-band-bottom{ margin:22px 0 0; }
+/* A4_REAL_V1 — НАСТОЯЩИЙ ЛИСТ, А НЕ КАРТОЧКА С ТЕКСТОМ.
+   794x1123 px — это A4 при 96 dpi, ровно та бумага, на которую документ уйдёт
+   с принтера. min-height держит пустой лист листом: без него новый документ
+   выглядел полоской в три строки, и врач не видел, сколько у него места.
+   Скруглений и толстой рамки у бумаги нет — есть тень листа над столом.
+   Поле 48 px повторено в .a4-pbreak (отрицательные margin), менять только
+   вместе. */
+.a4-paper{ width:794px; max-width:100%; min-height:1123px; margin:0 auto; padding:48px;
+  background:var(--white); border:1px solid var(--ink-200); border-radius:2px;
+  box-shadow:0 1px 2px rgba(11,20,24,.05), 0 10px 28px rgba(11,20,24,.10); }
 
 .a4-head{ display:flex; align-items:flex-start; justify-content:space-between;
   gap:20px; padding-bottom:18px; margin-bottom:18px;
-  border-bottom:2px solid var(--primary-600); }
+  border-bottom:1px solid var(--ink-400); }
 .a4-clinic{ font-size:17px; font-weight:700; color:var(--ink-900); letter-spacing:-0.01em; }
 .a4-clinic small{ display:block; font-size:12.5px; font-weight:500; color:var(--ink-500); margin-top:2px; }
 .a4-doctitle{ text-align:right; font-size:13.5px; font-weight:600; color:var(--ink-800); }
@@ -2084,7 +2088,7 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .cn-dx-row .cn-dx-name{ flex:1; font-size:13.5px; color:var(--ink-800); }
 
 @media (max-width:640px){
-  .a4-paper{ padding:20px; }
+  .a4-paper{ width:auto; min-height:0; padding:20px; }
   .a4-pbreak{ margin:0 -20px; }
   .a4-pgrid{ grid-template-columns:1fr 1fr; }
   .a4-head{ flex-direction:column; }
@@ -5705,6 +5709,14 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .co-act:active{background:var(--primary-100)}
 .co-act:focus-visible{outline:2px solid var(--primary-500);outline-offset:2px}
 .co-act svg{opacity:.8}
+/* CASE_DIARY_ACT_V1 — одно заметное действие на панель, остальные призрачные:
+   две залитые кнопки рядом спорили бы за внимание, и ни одна не была бы
+   главной. */
+.co-act.co-act-main{padding:5px 11px;background:var(--primary-600);color:var(--white);
+  box-shadow:0 1px 2px rgba(11,20,24,.12)}
+.co-act.co-act-main:hover{background:var(--primary-700);color:var(--white)}
+.co-act.co-act-main:active{background:var(--primary-700)}
+.co-act.co-act-main svg{opacity:1}
 /* VITALS_WINDOW_FIT_V1 — окно динамики вмещает содержимое: ни сетка карточек,
    ни таблица не растягивают тело окна; таблица при нужде листается сама. */
 .vd{min-width:0;max-width:100%}
@@ -5781,8 +5793,19 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 
 /* CASE_DOC_A4_V1 — воздух между шапкой и рабочей областью документов */
 .cw .co-head { margin-bottom: 4px; }
-.cw-doc.a4-scroll { padding: 14px 16px 20px; border-radius: var(--r-lg); }
+/* A4_REAL_V1 — экран истории болезни занимает всю ширину области содержимого:
+   поле .view-root отменяется, остаётся узкий зазор до края. */
+.cw { margin-left: calc(8px - var(--content-pad)); margin-right: calc(8px - var(--content-pad)); }
+/* Серой коробки вокруг листа больше нет: лист лежит на грунте страницы, как
+   бумага на столе. Коробка читалась «областью прокрутки», а не документом. */
+.cw-doc.a4-scroll { padding: 0 10px 24px; background: transparent;
+    border: 0; border-radius: 0; }
 .cw-steps .card-header { padding-top: 10px; }
+
+/* CASE_DOC_BLANK_V1 — бланк документа истории болезни в «Документах»: тот же
+   лист, что у постели пациента, без серой коробки вокруг бумаги. */
+.doc-blank-scroll { padding: 14px 10px 20px; background: transparent;
+    max-height: calc(100vh - 240px); overflow-y: auto; overflow-x: hidden; }
 
 /* ── CASE_DX_LIST_V1 — диагнозы документа: чипы, поле, две кнопки ─────────── */
 .dx-ed { display: flex; flex-direction: column; gap: 8px; }
@@ -5799,8 +5822,15 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
     background: none; color: var(--ink-400); font-size: 15px; line-height: 1; cursor: pointer; }
 .dx-chip-x:hover { background: var(--crit-50); color: var(--crit-700); }
 .dx-chip-x:focus-visible { outline: 2px solid var(--primary-500); outline-offset: 1px; }
-.dx-field { position: relative; }
-.dx-type-in { width: 100%; min-height: 36px; }
+.dx-field { position: relative; display: flex; align-items: center; gap: 7px;
+    padding: 0 10px; min-height: 40px; background: var(--white);
+    border: 1px solid var(--ink-200); border-radius: var(--r-md); }
+.dx-field:focus-within { border-color: var(--primary-500); box-shadow: 0 0 0 3px var(--primary-50); }
+.dx-field-ic { flex: 0 0 auto; display: inline-flex; color: var(--ink-400); }
+.dx-field:focus-within .dx-field-ic { color: var(--primary-600); }
+.dx-type-in { flex: 1; min-width: 0; min-height: 38px; padding: 0;
+    border: 0; background: none; outline: none; font: inherit; font-size: 13.5px; color: var(--ink-900); }
+.dx-type-in::placeholder { color: var(--ink-400); }
 .dx-acts { display: flex; gap: 6px; flex-wrap: wrap; }
 .dx-acts .btn { flex: 1 1 auto; justify-content: center; }
 .dx-own { color: var(--ink-700); }
@@ -5831,6 +5861,12 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 
 /* ── Экран помещается: прокручивается только лист (владелец: «make everything
       except a4 fit the screen so user wont scroll down to write») ─────────── */
-.cw-doc.a4-scroll { max-height: calc(100vh - 168px); overflow: auto; }
-.cw-rail, .cw-aside { max-height: calc(100vh - 168px); }
+.cw-doc.a4-scroll { max-height: calc(100vh - 150px); overflow-y: auto; overflow-x: hidden; }
+/* CASE_RAIL_ASSEMBLE_V1 — левая колонка своей полосы прокрутки не имеет:
+   владелец «we dont need in the left panel scrolling options». Полоса внутри
+   панели прячет её нижние строки и кнопку сборки под ними; список шагов
+   короткий и должен быть виден целиком. */
+.cw-rail { position: static; max-height: none; overflow: visible; }
+.cw-aside { max-height: calc(100vh - 168px); }
+.cw-assemble { width: 100%; justify-content: center; }
 @media (max-width: 1400px) { .cw-aside { max-height: none; position: static; } }

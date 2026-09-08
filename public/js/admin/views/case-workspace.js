@@ -35,7 +35,6 @@ import { caseHead } from './case-overview.js?v=co1';   // CASE_OVERVIEW_V1 — �
 import { caseInsertPanel } from './case-doc-insert.js';   // CASE_DOC_A4_V1 — правая панель «Вставить в документ»
 import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — диагнозы списком
 import { setupA4Pagination } from './a4-paginate.js';   // A4_PAGINATE_V1 — разрывы страниц в редакторе
-import { caseDocTitle } from './case-docs.js?v=cw1';
 
 const state = {
     admissionId: null,
@@ -134,14 +133,6 @@ function paint(root, onNavigate) {
     const p = a.patients || {};
     const who = [p.mrn, a.department, a.admission_no].filter(Boolean).join(' · ');
 
-    const assembleBtn = h('button', {
-        class: 'btn btn-sm btn-outline', type: 'button',
-        onclick: async () => {
-            const saved = await assembleCaseFile(state.admissionId);
-            // Подшили — значит список «сколько оформлено» мог измениться.
-            if (saved) { await load(); paint(root, onNavigate); }
-        },
-    }, Icon('Doc', { size: 14 }), ' ', tr('Собрать историю'));
     // CASE_OVERVIEW_V1 — та же шапка, что у «Обзора»: пациент, стрелки по
     // соседям, вкладки, главное действие. Без обзора (старый ответ, отказ) —
     // прежняя подпись экрана, чтобы документы открывались в любом случае.
@@ -149,10 +140,9 @@ function paint(root, onNavigate) {
         root.appendChild(caseHead(state.overview, {
             active: 'documents', onNavigate,
             onReload: async () => { await load(); paint(root, onNavigate); },
-            actions: [assembleBtn],
         }));
     } else {
-        root.appendChild(PageHead({ title: p.full_name || tr('История болезни'), subtitle: who || null, right: [assembleBtn] }));
+        root.appendChild(PageHead({ title: p.full_name || tr('История болезни'), subtitle: who || null }));
     }
 
     // CASE_DOC_A4_V1 — владелец: «documents of the history left panel right
@@ -212,27 +202,27 @@ function diagnosisCard() {
     return card;
 }
 
-function docSelect(rail, root, onNavigate) {
-    const items = ((state.docs && state.docs.items) || []).filter((i) => i.applies !== false);
-    const sel = h('select', { class: 'cw-doc-sel', 'aria-label': tr('Документ') },
-        h('option', { value: '' }, tr('— выберите документ —')),
-        ...items.map((i) => h('option', { value: i.kind, selected: state.open && state.open.kind === i.kind ? '' : null }, caseDocTitle(i.kind))));
-    sel.addEventListener('change', () => {
-        if (!sel.value) return;
-        const item = items.find((i) => i.kind === sel.value);
-        state.open = { kind: sel.value, mode: item && item.state === 'published' ? 'view' : 'edit', reviewId: null };
-        paintPane(rail.parentNode.querySelector('.cw-pane'), root, onNavigate);
-        paintRail(rail, root, onNavigate);
-    });
-    return h('section', { class: 'card cw-doc-pick' },
-        h('div', { class: 'cw-pick-l' }, tr('Документ')),
-        sel);
+// CASE_RAIL_ASSEMBLE_V1 — выпадающего списка документов здесь больше нет.
+// Он перечислял РОВНО ТО ЖЕ, что чек-лист строкой ниже, только без сроков и
+// состояний: два способа выбрать одно и то же занимали половину колонки и
+// заставляли её прокручиваться. Владелец: «we dont need in the left panel
+// scrolling options».
+
+// Сборка истории — из списка документов, поэтому и кнопка под ним.
+function assembleFor(root, onNavigate) {
+    return h('button', {
+        class: 'btn btn-primary cw-assemble', type: 'button',
+        onclick: async () => {
+            const saved = await assembleCaseFile(state.admissionId);
+            // Подшили — значит список «сколько оформлено» мог измениться.
+            if (saved) { await load(); paint(root, onNavigate); }
+        },
+    }, Icon('Doc', { size: 14 }), ' ', tr('Собрать историю'));
 }
 
 function paintRail(rail, root, onNavigate) {
     clear(rail);
     rail.appendChild(diagnosisCard());
-    rail.appendChild(docSelect(rail, root, onNavigate));
     const list = h('div', { class: 'card cw-steps' });
     rail.appendChild(list);
     list.appendChild(caseDocsView({
@@ -246,10 +236,12 @@ function paintRail(rail, root, onNavigate) {
             paintPane(rail.parentNode.querySelector('.cw-pane'), root, onNavigate);
             paintRail(rail, root, onNavigate);
         },
-        // Сборка живёт в шапке экрана: в списке шагов ей не место — она не шаг.
+        // Сборка — не шаг регламента, поэтому и не строка списка: она стоит
+        // отдельной кнопкой ПОД списком (assembleFor).
         onAssemble: null,
         activeKind: state.open ? state.open.kind : null,
     }));
+    rail.appendChild(assembleFor(root, onNavigate));
 }
 
 function paintPane(pane, root, onNavigate) {
@@ -294,8 +286,8 @@ function paintPane(pane, root, onNavigate) {
         ed.toolbar || null,
         ed.noLetterhead
             // FORM_003_V1 — у бланка 003 своя шапка (министерство, учреждение, приказ).
-            ? h('div', { class: 'a4-paper f3-paper' }, h('div', { class: 'a4-band-top' }),
-                h('div', { class: 'cw-doc-body f3' }, ...ed.fields.filter(Boolean)), h('div', { class: 'a4-band-bottom' }))
+            ? h('div', { class: 'a4-paper f3-paper' },
+                h('div', { class: 'cw-doc-body f3' }, ...ed.fields.filter(Boolean)))
             : a4Sheet({ title: ed.title, children: [
                 h('div', { class: 'cw-doc-body' }, ...ed.fields.filter(Boolean)),
             ] }),

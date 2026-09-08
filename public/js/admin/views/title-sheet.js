@@ -258,9 +258,7 @@ function sheetOnPaper(form) {
     // общая шапка клиники здесь не рисуется.
     return h('div', { class: 'a4-scroll ts-modal' },
         h('div', { class: 'a4-paper f3-paper' },
-            h('div', { class: 'a4-band-top' }),
-            h('div', { class: 'ts-body f3' }, ...form.fields),
-            h('div', { class: 'a4-band-bottom' })));
+            h('div', { class: 'ts-body f3' }, ...form.fields)));
 }
 
 /**

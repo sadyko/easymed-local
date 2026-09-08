@@ -24,6 +24,13 @@ import {
     applyCompanyBranding,
 } from './doc-settings.js?v=noqr1';   // ONE shared instance — ?v=db9 must match in EVERY importer (incl. admin.js + visit-modal)
 import { INPATIENT_DOC_TYPES, INPATIENT_DOC_META } from '../../shared/doc-render.js';   // INPATIENT_DOCS_V1
+// CASE_DOC_BLANK_V1 — бланк документа истории болезни правится ЭТИМ ЖЕ листом,
+// которым его потом пишут: те же разделы, та же панель форматирования, та же
+// бумага. Второй редактор для той же бумаги разошёлся бы с первым.
+import { CASE_BLANK_KEY, CASE_BLANK_KINDS, caseDocBlank, withCaseDocBlank,
+         sectionsFor, richSection, richToolbar, readRich, applyRich } from './case-doc-a4.js';
+import { caseDocTitle } from './case-docs.js?v=cw1';
+import { a4Sheet } from './a4-letterhead.js';
 
 const DOC_TYPES = [
     { id: 'conclusion', label: 'Заключение врача', icon: 'Stethoscope', sub: 'Клинический отчёт',    paper: 'A4' },
@@ -36,7 +43,12 @@ const DOC_TYPES = [
     { id: 'inpatient_contract', label: 'Договор на госпитализацию', icon: 'Doc', sub: 'Стационар · подпись пациента', paper: 'A4' },
     { id: 'inpatient_consent',  label: 'Информированное согласие', icon: 'Doc', sub: 'Стационар · подпись пациента', paper: 'A4' },
     { id: 'inpatient_memo',     label: 'Памятка стационара',       icon: 'Doc', sub: 'Стационар · выдаётся пациенту', paper: 'A4' },
+    // CASE_DOC_BLANK_V1 — владелец: «we should be able to edit document in the
+    // #documents section». Одиннадцать документов истории болезни — одна
+    // вкладка с выбором вида: одиннадцать вкладок сделали бы ряд нечитаемым.
+    { id: 'case_doc', label: 'Документы истории болезни', icon: 'Stethoscope', sub: 'Стационар · бланк врача', paper: 'A4' },
 ];
+export const CASE_DOC_TYPE = 'case_doc';
 
 const BRAND_SWATCHES = [
     ['#167873', '#effaf8', 'Teal'],
@@ -53,6 +65,7 @@ const state = {
     active: 'conclusion',       // currently previewed doc type
     s:      loadDocSettings(),  // working copy of branding settings
     dirty:  false,              // has the user changed anything since last save?
+    caseKind: 'intake',         // CASE_DOC_BLANK_V1 — какой бланк истории болезни открыт
 };
 let containerRef = null;
 
@@ -77,7 +90,9 @@ function paint() {
             title: 'Document templates',
             subtitle: 'Branding & layout for every printed artefact — conclusions, results, invoices, receipts, referrals. Every "Print" button in the app uses these settings.',
             right: [
-                h('button', {
+                // Бланк истории болезни не печатают отсюда: печатается документ
+                // ПАЦИЕНТА, а здесь лежит заготовка без пациента.
+                state.active === CASE_DOC_TYPE ? null : h('button', {
                     class: 'btn btn-outline',
                     onclick: () => printableSheet({
                         type:     state.active,
@@ -147,6 +162,13 @@ function paint() {
 // ---------------------------------------------------------------------------
 function settingsPanel() {
     const fromCompany = state.s.useCompanyIdentity !== false;
+    // CASE_DOC_BLANK_V1 — у бланка истории болезни своя левая панель: логотип,
+    // акцент и размер бумаги к нему отношения не имеют, их задаёт та же клиника
+    // на соседних вкладках.
+    if (state.active === CASE_DOC_TYPE) {
+        return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px', position: 'sticky', top: '88px' } },
+            caseBlankCard());
+    }
     return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px', position: 'sticky', top: '88px' } },
         variantCard(),
         inpatientTextCard(),   // INPATIENT_DOCS_V1
@@ -233,6 +255,62 @@ function inpatientTextCard() {
             oninput: (e) => set({ [key]: e.target.value }, { skipRepaint: true }),
         }),
     ]);
+}
+
+// CASE_DOC_BLANK_V1 — выбор вида документа и очистка бланка.
+function caseBlankCard() {
+    const sel = h('select', { style: { ...fieldStyle(false), minHeight: '36px' }, 'aria-label': tr('Вид документа') },
+        ...CASE_BLANK_KINDS.map((k) => h('option', {
+            value: k, selected: state.caseKind === k ? true : null,
+        }, caseDocTitle(k))));
+    sel.addEventListener('change', () => { state.caseKind = sel.value || 'intake'; paint(); });
+    const filled = Object.keys(caseDocBlank(state.s, state.caseKind)).length;
+    return editorCard('Бланк документа', 'Stethoscope', [
+        h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', lineHeight: '1.45' } },
+            tr('Текст, который клиника пишет в каждом таком документе. Он подставится в новый документ, а врач поправит его под пациента.')),
+        mini('Вид документа'),
+        sel,
+        h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)' } },
+            filled ? trf('Заполнено разделов: {n}', { n: filled }) : tr('Бланк пуст — документ откроется чистым.')),
+        h('button', {
+            class: 'btn btn-ghost btn-sm', type: 'button', disabled: filled ? null : true,
+            style: { alignSelf: 'flex-start' },
+            onclick: () => {
+                const all = Object.assign({}, state.s[CASE_BLANK_KEY] || {});
+                delete all[state.caseKind];
+                set({ [CASE_BLANK_KEY]: all });
+                toast(tr('Бланк очищен — не забудьте сохранить.'), 'ok');
+            },
+        }, Icon('Trash', { size: 13 }), ' ', tr('Очистить бланк')),
+    ]);
+}
+
+// Лист бланка — ТОТ ЖЕ, которым документ пишут у постели: a4Sheet, разделы
+// этого вида документа, общая панель форматирования. Диагноз в бланк не
+// входит: он всегда про конкретного пациента.
+function caseBlankSheet() {
+    const kind = state.caseKind;
+    const blank = caseDocBlank(state.s, kind);
+    const keys = sectionsFor(kind).filter((k) => k !== 'diagnosis');
+    const secs = keys.map((key) => {
+        const made = richSection(kind, key);
+        applyRich(made.input, blank[key] || '');
+        made.input.addEventListener('input', () => {
+            set({ [CASE_BLANK_KEY]: withCaseDocBlank(state.s, kind, key, readRich(made.input)) }, { skipRepaint: true });
+        });
+        return made.sec;
+    });
+    const sheet = h('div', { class: 'cd-sheet' }, ...secs);
+    return h('div', { class: 'card', style: { padding: '14px' } },
+        h('div', { class: 'row', style: { gap: '8px', marginBottom: '10px', alignItems: 'center' } },
+            h('span', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-700)', textTransform: 'uppercase', letterSpacing: '0.06em' } },
+                tr('Бланк документа')),
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, caseDocTitle(kind)),
+            h('span', { class: 'grow' }),
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Правится так же, как у постели пациента'))),
+        richToolbar(sheet),
+        h('div', { class: 'a4-scroll doc-blank-scroll' },
+            a4Sheet({ title: caseDocTitle(kind), children: [sheet] })));
 }
 
 function editorCard(title, iconName, children) {
@@ -549,6 +627,7 @@ function patchPreview() {
 // Preview panel
 // ---------------------------------------------------------------------------
 function previewPanel() {
+    if (state.active === CASE_DOC_TYPE) return caseBlankSheet();
     return h('div', { class: 'card', style: { padding: '14px', background: 'var(--ink-25, #f5f7f8)' } },
         h('div', { class: 'row', style: { gap: '8px', marginBottom: '10px', alignItems: 'center' } },
             h('span', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-700)', textTransform: 'uppercase', letterSpacing: '0.06em' } },

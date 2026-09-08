@@ -47,7 +47,8 @@
 // дорогой вид дубля.
 
 import { supabase } from '../../supabase.js';
-import { sectionsFor, richSection, richToolbar, readRich, applyRich, RICH_KEYS, insertBlock, fireInput } from './case-doc-a4.js';   // CASE_DOC_A4_V1 / CASE_DX_PICK_V1
+import { sectionsFor, richSection, richToolbar, readRich, applyRich, RICH_KEYS, insertBlock, fireInput, caseDocBlank } from './case-doc-a4.js';   // CASE_DOC_A4_V1 / CASE_DX_PICK_V1 / CASE_DOC_BLANK_V1
+import { loadDocSettings } from './doc-settings.js?v=noqr1';   // CASE_DOC_BLANK_V1 — бланк клиники из «Документов»
 import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — список диагнозов с ролями
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
 import { h, Icon, Tag, toast, clear, field, fmtDate, fmtDateTime } from '../ui.js';
@@ -870,6 +871,15 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
             draftId = src ? src.id : null;
         }
         if (src) fill(src);
+        // CASE_DOC_BLANK_V1 — нового документа ещё нет: подставляем бланк
+        // клиники из «Документов». Черновик всегда сильнее бланка — иначе
+        // заготовка затирала бы то, что врач уже написал и не дописал.
+        else if (!isView && !isCorrection) {
+            const blank = caseDocBlank(loadDocSettings(), kind);
+            for (const k of RICH_KEYS) {
+                if (rich[k] && blank[k] && !readRich(rich[k])) applyRich(rich[k], blank[k]);
+            }
+        }
         if (isView) {
             for (const k of RICH_KEYS) if (rich[k]) rich[k].contentEditable = 'false';
             diagnosis.setAttribute('readonly', '');

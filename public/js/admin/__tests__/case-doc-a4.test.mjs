@@ -227,3 +227,60 @@ test('CASE_DX_LIST_V1: две кнопки — справочник и свой 
     x[0].click();
     assert.ok(!carrier.value.includes('Пневмония'), 'убранный диагноз ушёл: ' + carrier.value);
 });
+
+// ===========================================================================
+// CASE_DOC_BLANK_V1 — бланк документа: заготовка клиники, а не пустой лист.
+//
+// Владелец (2026-09-08): «we should be able to edit document in the #documents
+// section». Проверяется то, что легко сломать молча: бланк хранится разметкой
+// и чистится на обоих концах; согласия среди видов нет (его убрали из набора);
+// и — главное — бланк НЕ затирает написанное: он подставляется только в новый
+// документ и только в пустой раздел.
+test('CASE_DOC_BLANK_V1: бланк хранится разметкой, чистится и не заводит пустых записей', () => {
+    assert.ok(a4.CASE_BLANK_KINDS.includes('intake'), 'осмотра приёмного врача нет среди бланков');
+    assert.ok(!a4.CASE_BLANK_KINDS.includes('consent'), 'согласие убрано из набора — бланка у него быть не должно');
+
+    let all = a4.withCaseDocBlank({}, 'primary', 'objective', '<p>Состояние <b>удовлетворительное</b></p><script>x()</script>');
+    assert.deepEqual(Object.keys(all), ['primary']);
+    assert.equal(all.primary.objective, '<p>Состояние <b>удовлетворительное</b></p>', 'скрипт не доезжает до бланка');
+
+    const settings = { caseDocBlanks: all };
+    assert.deepEqual(a4.caseDocBlank(settings, 'primary'), { objective: '<p>Состояние <b>удовлетворительное</b></p>' });
+    assert.deepEqual(a4.caseDocBlank(settings, 'round'), {}, 'чужой вид документа не получает чужой бланк');
+    assert.deepEqual(a4.caseDocBlank(null, 'primary'), {}, 'без настроек бланка нет, а не падение');
+
+    // Пустой раздел УБИРАЕТ запись, а не сохраняет пустоту: иначе «Заполнено
+    // разделов» считало бы пустые строки, и бланк нельзя было бы очистить.
+    all = a4.withCaseDocBlank(settings, 'primary', 'objective', '<p><br></p>');
+    assert.deepEqual(all, {}, 'опустевший бланк исчезает целиком');
+
+    // Настройки не правятся на месте: их сравнивают по ссылке, чтобы понять,
+    // есть ли несохранённые изменения.
+    assert.equal(settings.caseDocBlanks.primary.objective, '<p>Состояние <b>удовлетворительное</b></p>');
+});
+
+test('CASE_DOC_BLANK_V1: бланк подставляется в НОВЫЙ документ и только в пустой раздел', async () => {
+    const fsx = await import('node:fs');
+    const pathx = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = pathx.dirname(fileURLToPath(import.meta.url));
+    const src = fsx.readFileSync(pathx.join(dir, '..', 'views', 'admission-modal.js'), 'utf8');
+
+    const i = src.indexOf('if (src) fill(src);');
+    assert.ok(i > 0, 'редактор больше не заполняет форму найденной записью');
+    const tail = src.slice(i, i + 900);
+    assert.ok(tail.includes('else if (!isView && !isCorrection)'),
+        'бланк подставляется в просмотр или исправление — он затрёт опубликованный текст');
+    assert.ok(tail.includes('!readRich(rich[k])'),
+        'бланк подставляется поверх непустого раздела — так теряется написанное');
+    assert.ok(tail.includes('caseDocBlank(loadDocSettings(), kind)'),
+        'бланк берётся не из настроек документов клиники');
+
+    // #documents правит бланк ТЕМ ЖЕ листом, а не второй формой.
+    const docs = fsx.readFileSync(pathx.join(dir, '..', 'views', 'documents.js'), 'utf8');
+    assert.ok(docs.includes("id: 'case_doc'"), 'в «Документах» нет вкладки документов истории болезни');
+    assert.ok(docs.includes('a4Sheet({ title: caseDocTitle(kind)'), 'бланк правится не листом A4');
+    assert.ok(docs.includes('richToolbar(sheet)'), 'у бланка нет той же панели форматирования');
+    assert.ok(docs.includes('withCaseDocBlank(state.s, kind, key, readRich(made.input))'),
+        'правка бланка не попадает в настройки клиники');
+});
