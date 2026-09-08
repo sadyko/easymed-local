@@ -151,9 +151,16 @@ export const QUEUE_CSS = `
 //
 // Grouped by `key` (the queue_key the DB counted against) when the caller
 // supplies it, falling back to the printed label so older callers still merge.
-export function queueBlockHtml(d) {
+// QUEUE_GROUPS_SHARED_V1 — СБОРКА талонов отдельно от их ВЁРСТКИ.
+//
+// Чек (58 мм) и акт (A4) показывают одно и то же разными способами: у чека всё
+// по центру и номер в 40px во всю ленту, у акта — компактная плашка слева.
+// Раньше акт брал вёрстку чека целиком и печатался ею на A4; правило же
+// «номер принадлежит НАПРАВЛЕНИЮ, а не услуге» (QUEUE_ONE_PER_VISIT_V1) —
+// общее, и второй его копии быть не должно. Поэтому делится ДАННЫМИ, а
+// разметку каждый бланк строит свою.
+export function queueGroups(d) {
     const rows = Array.isArray(d && d.queue) ? d.queue.filter(q => q && q.number) : [];
-    if (!rows.length) return '';
     const groups = [];
     const byKey = new Map();
     rows.forEach(q => {
@@ -162,6 +169,12 @@ export function queueBlockHtml(d) {
         if (!g) { g = { label: q.label || '', number: q.number, services: [] }; byKey.set(gk, g); groups.push(g); }
         if (q.service && g.services.indexOf(q.service) === -1) g.services.push(q.service);
     });
+    return groups;
+}
+
+export function queueBlockHtml(d) {
+    const groups = queueGroups(d);
+    if (!groups.length) return '';
     return `<div class="f-hr2"></div><div class="f-q">
 <div class="f-q-h">${groups.length > 1 ? 'Номера очереди' : 'Номер очереди'}</div>
 ${groups.map(g => `<div class="f-q-item">${g.label ? `<div class="f-q-d">${esc(g.label)}</div>` : ''}${g.services.map(sv => `<div class="f-q-s">${esc(sv)}</div>`).join('')}<div class="f-q-n">${esc(String(g.number))}</div></div>`).join('')}

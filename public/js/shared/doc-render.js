@@ -13,7 +13,7 @@
 // Единственная правка при переносе: buildSheetHtml больше не подставляет
 // loadDocSettings() сам (это localStorage) — настройки передаёт вызывающий.
 
-import { renderDesignedVariant, queueBlockHtml, QUEUE_CSS } from '../admin/views/doc-variants.js?v=noqr1';
+import { renderDesignedVariant, queueGroups } from '../admin/views/doc-variants.js?v=noqr1';
 // ONEST_TYPOGRAPHY_V1 — печатное окно/PDF — отдельный документ, admin.css туда
 // не попадает; @font-face приезжает из общего модуля (см. его шапку).
 // MONTH_WORDS_V1 (2026-09-05) — дата на бланке не зависит от компьютера.
@@ -759,6 +759,30 @@ function invoiceBody(s, d) {
 // Медицинский акт оказанных услуг — печатается для непациентских плательщиков
 // (ДМС / B2B / госпрограмма) вместо счёта. Пациент подписывает после оказания
 // услуг; акт используется для сверки и выставления счёта плательщику.
+// ACT_QUEUE_BOX_V1 — плашка очереди для A4.
+//
+// Чековая вёрстка (QUEUE_CSS) сюда не годится: она рассчитана на 58-мм
+// ленту — всё по центру, номер в 40px, — и на листе А4 растягивалась во всю
+// ширину. Здесь компактная плашка со скруглением, прижатая влево: направление
+// и услуги под ним мелким, номер крупным справа. Данные берутся общей
+// queueGroups(), поэтому правило «номер принадлежит направлению, а не
+// услуге» остаётся в одном месте на оба бланка.
+function actQueueHtml(d) {
+    const groups = queueGroups(d);
+    if (!groups.length) return '';
+    const box = (g) => `<div style="display:inline-flex;align-items:center;gap:16px;border:1px solid #d5dee3;border-radius:10px;padding:8px 14px;">
+        <div>
+            ${g.label ? `<div style="font-size:11px;font-weight:700;color:#25313a;line-height:1.3;">${esc(g.label)}</div>` : ''}
+            ${g.services.map(sv => `<div style="font-size:9.5px;color:#8a96a0;line-height:1.3;">${esc(sv)}</div>`).join('')}
+        </div>
+        <div style="font-size:22px;font-weight:800;color:#25313a;line-height:1;">${esc(String(g.number))}</div>
+    </div>`;
+    return `<div style="margin-top:22px;">
+        <div style="font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#8a96a0;margin-bottom:6px;">${groups.length > 1 ? 'Номера очереди' : 'Номер очереди'}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;">${groups.map(box).join('')}</div>
+    </div>`;
+}
+
 // ACT_SHEET_V1 — номер очереди печатается ВНИЗУ бланка, под местами подписи
 // и печатью: так в образце владельца (2026-09-08). Сначала блок стоял выше —
 // «ради очереди документ несут дальше» — но это был мой довод, а не его, и
@@ -779,20 +803,19 @@ function actBody(s, d) {
         const gross = Number(it.qty || 1) * Number(it.price || 0);
         const disc  = Number(it.disc || 0);
         const net   = Math.round(gross * (1 - disc / 100));
-        return `<div class="row ${it._alt ? 'alt' : ''}" style="grid-template-columns: 2fr 0.7fr 1.1fr 0.8fr 1.1fr 0.5fr;">
+        return `<div class="row ${it._alt ? 'alt' : ''}" style="grid-template-columns: 2fr 0.6fr 1fr 0.7fr 1fr 1.3fr;">
             <span class="name">${esc(it.name)}</span>
             <span class="val" style="font-weight:500;color:#55636d;">${esc(String(it.qty || 1))}</span>
             <span class="val">${Number(it.price || 0).toLocaleString('ru-RU')} <span class="u">UZS</span></span>
             <span class="val">${disc ? disc + ' %' : '—'}</span>
             <span class="val">${net.toLocaleString('ru-RU')} <span class="u">UZS</span></span>
-            <span class="val" style="text-align:center;font-size:14px;line-height:1;">☐</span>
+            <span class="val" style="border-bottom:1px solid #c8d2d8;min-height:14px;"></span>
         </div>`;
     }).join('');
     const subtotal      = (d.items || []).reduce((a, it) => a + Number(it.qty || 1) * Number(it.price || 0), 0);
     const discountTotal = (d.items || []).reduce((a, it) => { const g = Number(it.qty || 1) * Number(it.price || 0); return a + Math.round(g * (Number(it.disc || 0) / 100)); }, 0);
     const total         = subtotal - discountTotal;
     return `
-        <style>${QUEUE_CSS}</style>
         ${headerHTML(s)}
         ${titleBlock(s, {
             pillText:   'Акт услуг',
@@ -813,8 +836,8 @@ function actBody(s, d) {
         </div>
         ${sectionBar('Оказанные услуги', s.accent)}
         <div class="lab">
-            <div class="hd" style="grid-template-columns: 2fr 0.7fr 1.1fr 0.8fr 1.1fr 0.5fr;">
-                <span>Услуга</span><span class="r">Кол-во</span><span class="r">Цена</span><span class="r">Скидка</span><span class="r">Сумма</span><span class="r" style="text-align:center;">✓</span>
+            <div class="hd" style="grid-template-columns: 2fr 0.6fr 1fr 0.7fr 1fr 1.3fr;">
+                <span>Услуга</span><span class="r">Кол-во</span><span class="r">Цена</span><span class="r">Скидка</span><span class="r">Сумма</span><span class="r">Подпись</span>
             </div>
             ${items || '<div class="row"><span style="color:#999;">Нет услуг.</span></div>'}
         </div>
@@ -829,12 +852,12 @@ function actBody(s, d) {
                 <div style="flex:1;border-top:1px solid ${s.ink};padding-top:6px;">Врач<br><span style="font-size:10px;color:#8a96a0;">подпись / Ф.И.О.</span></div>
             </div>
             <div style="display:flex;gap:28px;margin-top:28px;align-items:flex-end;">
-                <div style="flex:1;border-top:1px solid ${s.ink};padding-top:6px;">Дата</div>
+                <div style="flex:1;"></div>
                 <div style="flex:1;text-align:center;">М.П.<br><span style="font-size:10px;color:#8a96a0;">место печати</span></div>
                 <div style="flex:1;"></div>
             </div>
         </div>
-        ${queueBlockHtml(d)}
+        ${actQueueHtml(d)}
         ${footerHTML(s)}
     `;
 }
