@@ -5327,6 +5327,7 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .co-tile-btn{cursor:pointer;transition:box-shadow 120ms ease,border-color 120ms ease,transform 120ms ease}
 .co-tile-btn:hover{border-color:var(--primary-300);box-shadow:var(--shadow-md);transform:translateY(-1px)}
 .co-tile-v{font-size:24px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;line-height:1.1}
+.co-tile-v-text{font-size:17px;line-height:1.25}
 .co-tile-m{font-size:12.5px;color:var(--ink-500);line-height:1.35;overflow-wrap:anywhere}
 .co-tile-m.co-warn{color:var(--warn-700);font-weight:600}
 .co-tile-m.co-ok{color:var(--ok-700);font-weight:600}

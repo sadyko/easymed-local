@@ -209,10 +209,11 @@ const note = (text, tone = '') => h('p', { class: 'co-note' + (tone ? ' co-' + t
 const num = (v) => (v === null || v === undefined || v === '' ? null : String(v));
 
 /** Плитка полосы 3: цифра крупно, подпись сверху, строка под ней. Кнопка — если есть куда идти. */
-function tile({ label, value, unit = '', meta = '', tone = '', onclick = null }) {
+function tile({ label, value, unit = '', meta = '', tone = '', onclick = null, text = false }) {
     const inner = [
         h('div', { class: 'stat-label' }, tr(label)),
-        h('div', { class: 'stat-value co-tile-v' }, value, unit ? h('span', { class: 'unit' }, unit) : null),
+        // Слово в плитке — не цифра: 24px для «Стол №1 (щадящий)» кричал бы, 17px читается.
+        h('div', { class: 'stat-value co-tile-v' + (text ? ' co-tile-v-text' : '') }, value, unit ? h('span', { class: 'unit' }, unit) : null),
         meta ? h('div', { class: 'co-tile-m' + (tone ? ' co-' + tone : '') }, meta) : null,
     ];
     return onclick
@@ -327,7 +328,8 @@ function paint(root, onNavigate) {
         tile({ label: 'Документы', value: String(pr.done || 0), unit: trf('из {n}', { n: pr.total || 0 }),
             meta: pr.overdue ? trf('просрочено {n}', { n: pr.overdue }) : tr('в срок'), tone: pr.overdue ? 'warn' : 'ok',
             onclick: () => toDocs(docs.next_kind || null) }),
-        tile({ label: 'Стол', value: cur ? (cur.name || cur.diet_code) : tr('не назначен'), meta: cur ? mealsText : tr('Назначить стол'), tone: cur ? '' : 'warn',
+        tile({ label: 'Стол', value: cur ? (cur.name || cur.diet_code) : tr('не назначен'), text: true,
+            meta: cur ? mealsText : (inBed ? tr('Назначить стол') : ''), tone: cur ? '' : 'warn',
             onclick: inBed ? () => openAdmissionDietModal({ admission: admissionForModals(ov), current: cur, onDone: reload }) : null }));
 
     // ── 4. Операция ─────────────────────────────────────────────────────────
