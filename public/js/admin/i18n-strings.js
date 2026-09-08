@@ -7083,4 +7083,12 @@ export const STRINGS = {
   "просрочено {n}": {"en":"overdue {n}","ru":"просрочено {n}","uz":"muddati o'tgan {n}"},
   "с {when}": {"en":"since {when}","ru":"с {when}","uz":"{when} dan"},
   "Открыть историю болезни: {name}": {"en":"Open the case history: {name}","ru":"Открыть историю болезни: {name}","uz":"Kasallik tarixini ochish: {name}"},
+  "Выставлено": {"en":"Invoiced","ru":"Выставлено","uz":"Hisobga qo'yilgan"},
+  "Госпит.": {"en":"Admitted","ru":"Госпит.","uz":"Yotqizilgan"},
+  "Госпитализаций пока нет.": {"en":"No hospitalisations yet.","ru":"Госпитализаций пока нет.","uz":"Gospitalizatsiyalar hali yo'q."},
+  "По фильтру ничего не найдено.": {"en":"Nothing matches the filter.","ru":"По фильтру ничего не найдено.","uz":"Filtr bo'yicha hech narsa topilmadi."},
+  "Покрытие": {"en":"Coverage","ru":"Покрытие","uz":"Qoplama"},
+  "Сумма акта": {"en":"Act total","ru":"Сумма акта","uz":"Dalolatnoma summasi"},
+  "Фильтр: {col}": {"en":"Filter: {col}","ru":"Фильтр: {col}","uz":"Filtr: {col}"},
+  "фильтр…": {"en":"filter…","ru":"фильтр…","uz":"filtr…"},
 };

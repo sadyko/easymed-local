@@ -53,6 +53,8 @@ import { isAccommodationLine, isServiceLine, isGoodsLine, ACCOMMODATION_LABEL } 
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
 import { CAT_ORDER, categoryOf, filterCatalog, categoryCounts } from '../../shared/service-categories.js';   // SERVICE_CATALOG_FILTER_V1   // ACCOMMODATION_AS_SERVICE_V1
 import { h, Icon, clear, toast, Tag, field, fmtDateTime, initials } from '../ui.js';
+import { pastelFor } from '../pastel.js';   // ADMISSIONS_REGISTER_V1 — аватар пациента
+import { dateNumeric } from '../../shared/date-words.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — tr() matches WHOLE strings, so assembled sentences go through trf(): translate first, substitute second
 import { searchableSelect } from './searchable-select.js?v=ss2';   // SEARCHABLE_SELECT_V1
 
@@ -1064,55 +1066,111 @@ function openCaseOverview(admissionId) {
 }
 export async function admissionsHistoryCard() { return admissionsTable(); }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ADMISSIONS_REGISTER_V1 — ЖУРНАЛ ГОСПИТАЛИЗАЦИЙ КАК У ОБРАЗЦА ВЛАДЕЛЬЦА
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Владелец: «please make a list like this … we have too big texts and make the
+// list more appealing». Образец (Aurora): компактная таблица — пациент с
+// аватаром и номером, дата рождения с возрастом, № истории, статус-чип,
+// госпитализация, выписка, отделение, койка, врач, покрытие, три денежные
+// колонки справа (баланс с минусом — красный) и поле «фильтр» под каждой
+// колонкой. Данные — один вызов admissions_register (rpc/admissions-register.js),
+// фильтры — на экране, по тексту ячейки. Клик и Enter по строке — в обзор.
+const REGISTER_COLS = [
+    { key: 'patient',    label: 'Пациент',    text: (r) => [r.mrn, r.full_name].filter(Boolean).join(' ') },
+    { key: 'dob',        label: 'Дата рожд.', text: (r) => dobText(r) },
+    { key: 'no',         label: '№ истории',  text: (r) => r.admission_no || ('#' + r.id) },
+    { key: 'status',     label: 'Статус',     text: (r) => admissionStatusLabel(r.status) },
+    { key: 'admitted',   label: 'Госпит.',    text: (r) => (r.admitted_at && r.status !== 'ordered' ? fmtDateTime(r.admitted_at) : '') },
+    { key: 'discharged', label: 'Выписка',    text: (r) => (r.discharged_at ? fmtDateTime(r.discharged_at) : '') },
+    { key: 'dept',       label: 'Отделение',  text: (r) => r.department || '' },
+    { key: 'bed',        label: 'Койка',      text: (r) => [r.ward_name, r.bed_code].filter(Boolean).join(' / ') },
+    { key: 'doctor',     label: 'Врач',       text: (r) => r.attending_name || '' },
+    { key: 'payer',      label: 'Покрытие',   text: (r) => r.payer_name || tr('Пациент') },
+    { key: 'act',        label: 'Сумма акта', num: true, text: (r) => fmtPrice(r.act_total) },
+    { key: 'invoiced',   label: 'Выставлено', num: true, text: (r) => fmtPrice(r.invoiced_total) },
+    { key: 'balance',    label: 'Баланс',     num: true, text: (r) => fmtPrice(r.balance) },
+];
+function ageYears(dob) {
+    const b = new Date(dob); const n = new Date();
+    if (Number.isNaN(b.getTime())) return null;
+    let age = n.getFullYear() - b.getFullYear();
+    const m = n.getMonth() - b.getMonth();
+    if (m < 0 || (m === 0 && n.getDate() < b.getDate())) age -= 1;
+    return age >= 0 ? age : null;
+}
+function dobText(r) {
+    if (!r.date_of_birth) return '';
+    const age = ageYears(r.date_of_birth);
+    return dateNumeric(r.date_of_birth) + (age !== null ? ' (' + age + ')' : '');
+}
 async function admissionsTable() {
+    const filters = {};
     const tbody = h('tbody');
-    const card = h('div', { class: 'card' },
-        h('div', { class: 'card-header' }, h('h3', null, Icon('Doc', { size: 16 }), ' Admissions')),
-        h('table', { class: 'tbl' },
-            h('thead', null, h('tr', null,
-                h('th', null, 'Adm #'), h('th', null, 'Patient'), h('th', null, 'Ward / Bed'), h('th', null, 'Attending'),
-                h('th', null, 'Admitted'), h('th', null, 'Discharged'),
-                h('th', { style: { textAlign: 'right' } }, 'Charge'), h('th', null, 'Status'),
-            )),
-            tbody,
-        ),
-    );
-    tbody.appendChild(h('tr', null, h('td', { colspan: '8', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } }, 'Loading…')));
+    const count = h('div', { class: 'ar-count' });
+    const filterCells = REGISTER_COLS.map((c) => h('th', { class: 'ar-filter-cell' + (c.num ? ' ar-num' : '') },
+        h('input', {
+            class: 'ar-filter', type: 'search', placeholder: 'фильтр…', autocomplete: 'off', spellcheck: 'false',
+            'aria-label': trf('Фильтр: {col}', { col: tr(c.label) }),
+            oninput: (e) => { filters[c.key] = String((e.target || e.currentTarget).value || '').trim().toLowerCase(); paintRows(); },
+        })));
+    const table = h('table', { class: 'ar-table' },
+        h('thead', null,
+            h('tr', null, ...REGISTER_COLS.map((c) => h('th', { class: c.num ? 'ar-num' : '', scope: 'col' }, tr(c.label)))),
+            h('tr', { class: 'ar-filters' }, ...filterCells)),
+        tbody);
+    const card = h('div', { class: 'card ar-card' },
+        h('div', { class: 'ar-head' },
+            h('h3', { class: 'ar-title' }, Icon('Doc', { size: 15 }), ' ', tr('Госпитализации')),
+            count),
+        h('div', { class: 'ar-scroll' }, table));
+
     let rows = [];
-    try {
-        const { data, error } = await supabase.from('admissions')
-            .select('*, patients(mrn, full_name), beds(code), wards(name), users(full_name)')
-            .order('id', { ascending: false }).limit(200);
-        if (error) throw error;
-        rows = data || [];
-    } catch (e) {
-        clear(tbody); tbody.appendChild(h('tr', null, h('td', { colspan: '8', style: { textAlign: 'center', padding: '18px', color: 'var(--crit-600)' } }, 'Failed: ' + ((e && e.message) || e)))); return card;
+    const msg = (text, tone = '') => {
+        clear(tbody);
+        tbody.appendChild(h('tr', null, h('td', { colspan: String(REGISTER_COLS.length), class: 'ar-msg' + (tone ? ' ar-' + tone : '') }, text)));
+    };
+    msg(tr('Загрузка…'));
+    const { data, error } = await supabase.rpc('admissions_register', { limit: 500 });
+    if (error) { msg(trf('Не удалось загрузить: {msg}', { msg: (error && error.message) || '' }), 'crit'); return card; }
+    rows = (data && data.rows) || [];
+
+    function rowEl(r) {
+        const active = IN_BED_STATUSES.includes(r.status);
+        const tone = active ? (r.status === 'discharging' ? 'warn' : 'ok') : (r.status === 'ordered' ? 'warn' : '');
+        const neg = Number(r.balance) < 0;
+        const open = () => openCaseOverview(r.id);
+        return h('tr', {
+            class: 'ar-row', tabindex: '0', onclick: open,
+            onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { if (e.preventDefault) e.preventDefault(); open(); } },
+        },
+            h('td', null, h('div', { class: 'ar-pat' },
+                h('span', { class: 'ar-av ' + pastelFor(r.patient_id || r.full_name || ''), 'aria-hidden': 'true' }, initials(r.full_name || '?')),
+                h('span', { class: 'ar-id' }, r.mrn || ''),
+                h('span', { class: 'ar-name' }, r.full_name || '—'))),
+            h('td', { class: 'ar-nowrap' }, dobText(r) || '—'),
+            h('td', { class: 'ar-nowrap' }, r.admission_no || ('#' + r.id)),
+            h('td', null, Tag(admissionStatusLabel(r.status), { kind: tone, dot: true })),
+            h('td', { class: 'ar-nowrap' }, REGISTER_COLS[4].text(r) || '—'),
+            h('td', { class: 'ar-nowrap' }, REGISTER_COLS[5].text(r) || '—'),
+            h('td', null, r.department || '—'),
+            h('td', { class: 'ar-nowrap' }, REGISTER_COLS[7].text(r) || '—'),
+            h('td', null, r.attending_name || '—'),
+            h('td', null, r.payer_name || tr('Пациент')),
+            h('td', { class: 'ar-num' }, fmtPrice(r.act_total)),
+            h('td', { class: 'ar-num' }, fmtPrice(r.invoiced_total)),
+            h('td', { class: 'ar-num' + (neg ? ' ar-neg' : '') }, fmtPrice(r.balance)));
     }
-    clear(tbody);
-    if (!rows.length) { tbody.appendChild(h('tr', null, h('td', { colspan: '8', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } }, 'No admissions yet.'))); return card; }
-    for (const a of rows) {
-        // Строка «Госпитализации» показывает ВСЕ, включая закрытые: зелёной
-        // отметкой выделяем тех, кто лежит сейчас.
-        const active = IN_BED_STATUSES.includes(a.status);
-        tbody.appendChild(h('tr', { class: 'wb-row-link', style: { cursor: 'pointer' }, onclick: () => openCaseOverview(a.id) },   // CASE_OVERVIEW_V1
-            h('td', null, a.admission_no || ('#' + a.id)),
-            h('td', null, (a.patients && a.patients.full_name) || '—'),
-            h('td', null, ((a.wards && a.wards.name) || '—') + ' / ' + ((a.beds && a.beds.code) || '—')),
-            h('td', null, (a.users && a.users.full_name) || '—'),
-            h('td', null, fmtDateTime(a.admitted_at)),
-            h('td', null, a.discharged_at ? fmtDateTime(a.discharged_at) : '—'),
-            h('td', { style: { textAlign: 'right' } }, a.charge_amount != null ? fmtPrice(a.charge_amount) : '—'),
-            // ADMISSION_ORDER_V1 — ПОДПИСЬ БЕРЁТСЯ ИЗ ОБЩЕЙ КАРТЫ и ниоткуда
-            // больше. Раньше она собиралась здесь на месте и знала не все
-            // состояния: заявка ('ordered') подписывалась «Отменено» — то есть
-            // экран сообщал, что госпитализации не будет, ровно про того
-            // пациента, которого ждут в отделении. Оттенок тоже разведён на
-            // три: ждёт размещения (жёлтый), лежит (зелёный), закрыта (серый).
-            h('td', null, Tag(admissionStatusLabel(a.status), {
-                kind: active ? 'ok' : (a.status === 'ordered' ? 'warn' : ''), dot: true,
-            })),
-        ));
+    function paintRows() {
+        if (!rows.length) { msg(tr('Госпитализаций пока нет.')); count.textContent = ''; return; }
+        const shown = rows.filter((r) => REGISTER_COLS.every((c) => !filters[c.key] || c.text(r).toLowerCase().includes(filters[c.key])));
+        clear(tbody);
+        if (!shown.length) msg(tr('По фильтру ничего не найдено.'));
+        for (const r of shown) tbody.appendChild(rowEl(r));
+        count.textContent = trf('Показано {n} из {total}', { n: shown.length, total: rows.length });
     }
+    paintRows();
     return card;
 }
 

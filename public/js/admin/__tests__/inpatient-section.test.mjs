@@ -214,6 +214,18 @@ globalThis.fetch = async (url, opts = {}) => {
         if (name === 'inpatient_capabilities') {
             return ok({ roles: ['nurse'], can: { admit: true, cancel_order: true, examine: false, set_attending: false } });
         }
+        if (name === 'admissions_register') {   // ADMISSIONS_REGISTER_V1 — журнал одним вызовом
+            const rows = WORLD.admissions.map((a) => {
+                const p = WORLD.patients.find((x) => x.id === a.patient_id) || {};
+                const w = WORLD.wards.find((x) => x.id === a.ward_id) || {};
+                const b = WORLD.beds.find((x) => x.id === a.bed_id) || {};
+                return { id: a.id, admission_no: a.admission_no, status: a.status, admitted_at: a.admitted_at, discharged_at: a.discharged_at,
+                    department: a.department, patient_id: p.id, mrn: p.mrn, full_name: p.full_name, date_of_birth: p.date_of_birth || null,
+                    ward_name: w.name || null, bed_code: b.code || null, attending_name: null, payer_name: null,
+                    act_total: 0, invoiced_total: 0, paid_total: 0, balance: 0 };
+            });
+            return ok({ rows, total: rows.length });
+        }
         if (name === 'admission_title_sheet_get') {   // TITLE_SHEET_V1 — шаг 2 окна койки
             const a = WORLD.admissions.find((x) => x.id === body.admission_id) || {};
             return ok({ admission: a, patient: a.patients || {}, sheet: null, bmi: null, complete: false, missing: [], due_at: null });
