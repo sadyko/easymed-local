@@ -5371,15 +5371,24 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
    прокрутку страницы, чем показать пять полосок вместо панелей. */
 .co-z{display:grid;grid-template-columns:minmax(0,2fr) minmax(280px,1fr);grid-template-areas:"now bill" "now next" "op lists";gap:8px;align-items:stretch;
   height:var(--co-fit,auto);min-height:380px;grid-auto-rows:minmax(0,1fr)}
+/* Пациента не оперируют — панели операции нет, и её место забирает список
+   назначений: пустое место на экране обзора стоит дороже симметрии. */
+.co-z-noop{grid-template-areas:"now bill" "now next" "lists lists"}
 .co-z>*{min-height:0}
 /* CASE_COMPACT_V2 — на широком экране шесть блоков в две строки: обзор целиком без прокрутки */
-@media (min-width:1400px){.co-z{grid-template-columns:minmax(0,1.5fr) minmax(260px,1fr) minmax(260px,1fr);grid-template-areas:"now bill next" "now op lists"}}
+@media (min-width:1400px){
+  .co-z{grid-template-columns:minmax(0,1.5fr) minmax(260px,1fr) minmax(260px,1fr);grid-template-areas:"now bill next" "now op lists"}
+  .co-z-noop{grid-template-areas:"now bill next" "now lists lists"}
+}
 .co-panel{padding:8px 10px;min-width:0;display:flex;flex-direction:column}
 .co-panel.co-warn{box-shadow:var(--shadow-window),inset 0 0 0 1px var(--warn-500)}
 .co-panel.co-crit{box-shadow:var(--shadow-window),inset 0 0 0 1px var(--crit-500)}
 .co-panel-h{display:flex;align-items:center;gap:6px;margin:0 0 4px}
 .co-panel-ic{color:var(--primary-600);display:inline-flex}
-.co-panel-t{margin:0;font-size:12.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-700);text-wrap:balance}
+/* CASE_DASH_QUIET_V1 — прописные с разрядкой на ПЯТИ заголовках сразу дают не
+   иерархию, а фактуру: глазу не за что зацепиться, потому что выделено всё.
+   Заголовок теперь обычный, а старшинство даёт место на экране. */
+.co-panel-t{margin:0;font-size:13.5px;font-weight:700;color:var(--ink-800);text-wrap:balance}
 /* Прокрутка живёт в теле панели: подвал с действием обязан остаться виден —
    ради него панель и читают. */
 .co-panel-b{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden}
@@ -5397,7 +5406,12 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .co-kv-warn .co-v{color:var(--warn-700)}
 /* 1 — пациент сейчас */
 .co-status-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.co-dx{padding:10px 12px;border-radius:var(--r-md);background:var(--primary-50)}
+/* CASE_DASH_QUIET_V1 — ОДИН вид карточки факта. Их было три на одну панель:
+   зелёная у диагноза, голая у измерений, жёлтая у стола. Три оформления на три
+   факта одного рода — это не иерархия, а рябь. Цветом отмечается только то,
+   что НЕ В ПОРЯДКЕ: диагноза нет, стол не назначен. */
+.co-dx{padding:8px 10px;border-radius:var(--r-md);background:var(--ink-25);border:1px solid var(--ink-100)}
+.co-panel.co-warn .co-dx{background:var(--warn-50,#fffbeb);border-color:#fde68a}
 .co-dx-l{font-size:12.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--primary-700)}
 .co-dx-v{font-size:13.5px;font-weight:700;color:var(--ink-900);margin-top:1px;line-height:1.3;text-wrap:balance}
 .co-dx-v.co-warn{font-size:12.5px}
@@ -5419,8 +5433,13 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 /* CASE_DASH_TIDY_V1 — стол переехал из полосы плиток в «Пациент сейчас»:
    режим питания — это состояние пациента сейчас, а не отдельная витрина. */
 .co-diet-slot{margin-top:2px}
-.co-diet{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;padding:7px 9px;border-radius:var(--r-md);background:var(--ink-25);border:1px solid var(--ink-100)}
-.co-diet-off{background:var(--warn-50,#fffbeb);border-color:#fde68a}
+.co-diet{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;padding:8px 10px;border-radius:var(--r-md);background:var(--ink-25);border:1px solid var(--ink-100)}
+/* Не назначен — это не тревога, а незакрытое дело: словом, а не заливкой. */
+.co-diet-off .co-diet-v{color:var(--warn-700)}
+/* CASE_DASH_QUIET_V1 — строка об операции у пациента, которого не оперируют:
+   вместо целой панели про отсутствие события. */
+.co-op-slot{margin-top:2px}
+.co-op-none{font-size:12.5px}
 .co-diet-l{font-size:12.5px;color:var(--ink-500);flex:0 0 auto}
 .co-diet-v{font-size:13.5px;font-weight:600;color:var(--ink-900);min-width:0;overflow-wrap:anywhere}
 .co-diet-m{flex:1 1 100%;font-size:12.5px;color:var(--ink-500);line-height:1.35}
@@ -5448,6 +5467,11 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .co-row-sum{font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
 /* 6 — следующий шаг */
 .co-next-doc{font-size:17px;font-weight:700;color:var(--ink-900);line-height:1.3;text-wrap:balance}
+/* CASE_DASH_QUIET_V1 — имя документа САМО ведёт к нему: отдельная ссылка
+   «Заполнить документ» в подвале была вторым способом сделать то же. */
+.co-next-go{display:flex;align-items:center;gap:6px;width:100%;padding:0;border:0;background:none;font:inherit;text-align:left;color:inherit;cursor:pointer}
+.co-next-go:hover{color:var(--primary-700)}
+.co-next-go:focus-visible{outline:2px solid var(--primary-500);outline-offset:2px}
 .co-progress{height:6px;border-radius:var(--r-pill);background:var(--ink-100);overflow:hidden}
 .co-progress-fill{display:block;height:100%;background:var(--primary-500);border-radius:var(--r-pill)}
 /* фокус — видимый у всего, что нажимается */
@@ -5460,7 +5484,10 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
   .co-z{height:auto;grid-auto-rows:auto;align-items:start}
   .co-panel-b{overflow:visible}
 }
-@media (max-width:980px){.co-z{grid-template-columns:minmax(0,1fr);grid-template-areas:"now" "bill" "next" "op" "lists"}}
+@media (max-width:980px){
+  .co-z{grid-template-columns:minmax(0,1fr);grid-template-areas:"now" "bill" "next" "op" "lists"}
+  .co-z-noop{grid-template-areas:"now" "bill" "next" "lists"}
+}
 @media (max-width:720px){.co-head-row{flex-wrap:wrap}.co-cols{grid-template-columns:minmax(0,1fr)}.co-kv .co-k{flex-basis:110px}}
 
 /* ── ADMISSIONS_REGISTER_V1 — журнал госпитализаций ──────────────────────── */
@@ -5843,8 +5870,12 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 /* CASE_DOC_A4_V1 — воздух между шапкой и рабочей областью документов */
 .cw .co-head { margin-bottom: 4px; }
 /* A4_REAL_V1 — экран истории болезни занимает всю ширину области содержимого:
-   поле .view-root отменяется, остаётся узкий зазор до края. */
-.cw { margin-left: calc(8px - var(--content-pad)); margin-right: calc(8px - var(--content-pad)); }
+   поле .view-root отменяется, остаётся узкий зазор до края.
+   CASE_DASH_QUIET_V1 — и обзор тоже: владелец «in the document window and in
+   the dashboard the header are different width». Шапка у них ОДНА функция и
+   один компонент, и разной ширины у неё быть не может — иначе переход между
+   вкладками читается как переход в другую программу. */
+.cw, .co { margin-left: calc(8px - var(--content-pad)); margin-right: calc(8px - var(--content-pad)); }
 /* Серой коробки вокруг листа больше нет: лист лежит на грунте страницы, как
    бумага на столе. Коробка читалась «областью прокрутки», а не документом. */
 .cw-doc.a4-scroll { padding: 0 10px 24px; background: transparent;

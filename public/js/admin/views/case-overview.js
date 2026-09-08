@@ -110,16 +110,24 @@ export function caseHead(ov, { active = 'overview', onNavigate = null, onReload 
 
     // Стрелки по соседям — «navigation between the patients for the doctors».
     const prev = n.prev; const next = n.next;
+    // CASE_NAV_TAB_V1 (2026-09-09) — СТРЕЛКИ ОСТАВЛЯЮТ ВАС ТАМ, ГДЕ ВЫ БЫЛИ.
+    //
+    // Владелец: «when navigation in the documents its not opening the list but
+    // throws to the stationary menu». Стрелки всегда вели на ОБЗОР соседа — и
+    // врач, писавший документы подряд по палате, на каждом переходе вылетал из
+    // документов. Обход по пациентам — это одна и та же работа над разными
+    // пациентами, а не смена работы.
+    const neighbourView = active === 'documents' ? 'case-file' : 'case-overview';
     const navBox = h('div', { class: 'co-nav' },
         h('button', { class: 'btn btn-sm', type: 'button', disabled: prev ? null : '', title: prev ? prev.full_name : '',
             'aria-label': prev ? trf('Предыдущий пациент: {name}', { name: prev.full_name }) : tr('Предыдущего пациента нет'),
-            onclick: () => { if (prev) nav('case-overview', { admissionId: prev.id }); } }, ic('ChevronLeft')),
+            onclick: () => { if (prev) nav(neighbourView, { admissionId: prev.id }); } }, ic('ChevronLeft')),
         h('span', { class: 'co-nav-count' },
             n.total ? trf('{i} из {n}', { i: (n.index >= 0 ? n.index + 1 : 0), n: n.total }) : '',
             n.mine ? h('small', null, ' · ' + tr('мои пациенты')) : null),
         h('button', { class: 'btn btn-sm', type: 'button', disabled: next ? null : '', title: next ? next.full_name : '',
             'aria-label': next ? trf('Следующий пациент: {name}', { name: next.full_name }) : tr('Следующего пациента нет'),
-            onclick: () => { if (next) nav('case-overview', { admissionId: next.id }); } }, ic('ChevronRight')));
+            onclick: () => { if (next) nav(neighbourView, { admissionId: next.id }); } }, ic('ChevronRight')));
 
     // CASE_HEAD_BADGE_V1 — владелец: «transfer allergiya to the right side as a
     // badge». Аллергия занимала СВОЮ СТРОКУ под именем и растягивала шапку на
@@ -236,12 +244,12 @@ const act = (label, onclick) => h('button', { class: 'co-act', type: 'button', o
 const actMain = (label, onclick) => h('button', { class: 'co-act co-act-main', type: 'button', onclick },
     ic('Plus', 13), ' ', tr(label));
 
-function panel(title, { icon, area, tone = '', link = null, actions = [], children = [] }) {
+function panel(title, { area, tone = '', link = null, actions = [], children = [] }) {
     const acts = [link ? act(link.label, link.onclick) : null, ...actions].filter(Boolean);
     return h('section', { class: 'card co-panel' + (tone ? ' co-' + tone : ''), style: { gridArea: area }, 'aria-label': tr(title) },
-        h('header', { class: 'co-panel-h' },
-            h('span', { class: 'co-panel-ic' }, ic(icon)),
-            h('h2', { class: 'co-panel-t' }, tr(title))),
+        // CASE_DASH_QUIET_V1 — бирюзовый значок стоял у КАЖДОГО заголовка, то
+        // есть не отмечал ничего. Заголовок теперь просто заголовок.
+        h('header', { class: 'co-panel-h' }, h('h2', { class: 'co-panel-t' }, tr(title))),
         h('div', { class: 'co-panel-b' }, ...children.filter(Boolean)),
         acts.length ? h('div', { class: 'co-panel-f' }, ...acts) : null);
 }
@@ -329,7 +337,16 @@ function paint(root, onNavigate) {
     // CASE_DASH_TIDY_V1 — плитка стола строится ниже (ей нужны данные о питании),
     // а место под неё в панели «Пациент сейчас» занимается здесь.
     const dietSlot = h('div', { class: 'co-diet-slot' });
-    const nowPanel = panel('Пациент сейчас', { icon: 'Activity', area: 'now', tone: dg.clinical ? '' : 'warn',
+    // CASE_DASH_QUIET_V1 — место под строку «операция не планируется»: сама
+    // строка строится ниже, вместе с панелью операции.
+    const opSlot = h('div', { class: 'co-op-slot' });
+    // CASE_DASH_QUIET_V1 — ТРЕВОЖНАЯ РАМКА ОДНА НА ЭКРАН. Их было две: у
+    // пациента без диагноза и у просроченных документов. Два «смотри сюда»
+    // одновременно — это ни одного: глаз выбирает сам, и обычно не то.
+    // Старшинство: нет клинического диагноза — значит лечение не назначено, и
+    // это важнее просроченной бумаги.
+    const ringNow = !dg.clinical;
+    const nowPanel = panel('Пациент сейчас', { area: 'now', tone: ringNow ? 'warn' : '',
         link: { label: 'История болезни', onclick: () => toDocs(null) },
         children: [
             h('div', { class: 'co-status-row' },
@@ -352,6 +369,7 @@ function paint(root, onNavigate) {
                 : note(tr('Титульный лист не заполнен — измерений при поступлении нет.'), 'warn'),
             sh && !ts.complete ? note(tr('Титульный лист заполнен не до конца.'), 'warn') : null,
             dietSlot,
+            opSlot,
         ] });
 
     // ── 2. Выписка и счёт ───────────────────────────────────────────────────
@@ -374,14 +392,18 @@ function paint(root, onNavigate) {
         : pending > 0
             ? { label: 'Накоплено к оплате', value: sum(pending), tone: '', sub: tr('счёт ещё не выставлен — соберётся при выписке') }
             : { label: 'Счетов пока нет', value: '—', tone: '', sub: tr('услуг и проживания к оплате нет') };
-    const billPanel = panel('Выписка и счёт', { icon: 'Wallet', area: 'bill', tone: b.debt_marked > 0 ? 'crit' : (b.debt > 0 ? 'warn' : ''),
+    const billPanel = panel('Выписка и счёт', { area: 'bill', tone: b.debt_marked > 0 ? 'crit' : (b.debt > 0 ? 'warn' : ''),
         children: [
             h('div', { class: 'co-big' + (big.tone ? ' co-' + big.tone : '') },
                 h('div', { class: 'stat-label' }, tr(big.label)),
                 h('div', { class: 'stat-value co-big-v' }, big.value),
                 big.sub ? h('div', { class: 'co-tile-m' }, big.sub) : null),
             b.total > 0 ? kv(tr('Счета'), trf('всего {total} · оплачено {paid}', { total: sum(b.total), paid: sum(b.paid) })) : null,
-            acc ? kv(tr('Койко-дней'), acc.current && acc.current.net ? trf('{n} · к оплате {sum}', { n: acc.stay_units || 0, sum: sum(acc.current.net) }) : String(acc.stay_units || 0)) : null,
+            // CASE_DASH_QUIET_V1 — койко-дни назывались ДВАЖДЫ и разными числами:
+            // здесь — начисление по сегодняшний день, а строкой услуги — то, что
+            // уже поставлено в счёт. Оба числа верные, и именно поэтому рядом
+            // они читаются как ошибка. Проживание осталось за списком услуг, где
+            // у него есть и ставка, и число суток, и пометка «в счёте».
             sv.unbilled ? kv(tr('Не выставлено'), trf('{n} на {sum}', { n: sv.unbilled, sum: sum(sv.sum_unbilled) }), 'co-kv-warn') : null,
             d.planned_at ? kv(tr('Плановая выписка'), dt(d.planned_at)) : null,
             d.status === 'discharging' ? kv(tr('Заявка подана'), [dt(d.requested_at), d.outcome ? outcomeTitle(d.outcome) : ''].filter(Boolean).join(' · ')) : null,
@@ -420,14 +442,21 @@ function paint(root, onNavigate) {
     // ── 4. Операция ─────────────────────────────────────────────────────────
     const op = ov.operation || { state: 'none' };
     const opWord = op.state === 'done' ? tr('Проведена') : op.state === 'planned' ? tr('Запланирована') : tr('Не планируется');
-    const opPanel = panel('Операция', { icon: 'Pulse', area: 'op',
-        link: op.state !== 'none' ? { label: 'Протокол операции', onclick: () => toDocs('operation') } : null,
+    // CASE_DASH_QUIET_V1 — ПАНЕЛЬ ПОЯВЛЯЕТСЯ, КОГДА ЕСТЬ ОПЕРАЦИЯ.
+    //
+    // Целая панель уходила на то, чтобы сказать «не планируется» и объяснить
+    // двумя строками, когда она появится. У пациента, которого не оперируют, —
+    // а это большинство, — четверть экрана была занята отсутствием события.
+    // Теперь у такого пациента панели нет вовсе, а строчка «операция не
+    // планируется» стоит у него в «Пациенте сейчас», где и остальные факты о
+    // нём сейчас.
+    const opPanel = op.state === 'none' ? null : panel('Операция', { area: 'op',
+        link: { label: 'Протокол операции', onclick: () => toDocs('operation') },
         children: [
-            h('div', { class: 'co-op' + (op.state === 'done' ? ' co-ok' : op.state === 'planned' ? ' co-warn' : '') }, opWord),
+            h('div', { class: 'co-op' + (op.state === 'done' ? ' co-ok' : ' co-warn') }, opWord),
             op.at ? kv(tr('Когда'), dt(op.at)) : null,
             op.docs && op.docs.length ? h('div', { class: 'co-chips' }, ...op.docs.map((k) => Tag(caseDocTitle(k), { kind: 'teal' }))) : null,
             op.has_surgery_service ? note(tr('Операция есть в услугах госпитализации.')) : null,
-            op.state === 'none' ? note(tr('Появится, когда будет осмотр анестезиолога, предоперационный эпикриз или операция в услугах.')) : null,
         ] });
 
     // ── 5. Назначения и услуги ──────────────────────────────────────────────
@@ -453,12 +482,15 @@ function paint(root, onNavigate) {
                 h('span', { class: 'co-row-sum' }, sum(r.total)),
                 Tag(r.invoiced ? tr('в счёте') : tr('не выставлено'), { kind: r.invoiced ? 'ok' : 'warn' })));
     };
+    // CASE_DASH_QUIET_V1 — «0» рядом со словами «назначений нет» говорит то же
+    // самое второй раз. Счётчик показывается, когда есть что считать.
     const col = (title, count, sub, rows, empty, foot) => h('div', { class: 'co-col' },
-        h('div', { class: 'co-col-h' }, h('h3', { class: 'co-col-t' }, tr(title)), Tag(String(count), { kind: 'teal' })),
+        h('div', { class: 'co-col-h' }, h('h3', { class: 'co-col-t' }, tr(title)),
+            count ? Tag(String(count), { kind: 'teal' }) : null),
         sub ? h('div', { class: 'co-col-s' }, sub) : null,
         rows.length ? h('div', { class: 'co-rows' }, ...rows) : note(tr(empty)),
         foot);
-    const listsPanel = panel('Назначения и услуги', { icon: 'Pill', area: 'lists', children: [
+    const listsPanel = panel('Назначения и услуги', { area: 'lists', children: [
         h('div', { class: 'co-cols' },
             col('Назначения', o.active || 0,
                 trf('Сегодня введено {given} из {due} · пропущено {missed} · отказ {refused}', { given: t.given || 0, due: t.due || 0, missed: t.missed || 0, refused: t.refused || 0 }),
@@ -466,19 +498,23 @@ function paint(root, onNavigate) {
             col('Услуги', sv.count || 0,
                 trf('В счёте {billed} · не выставлено {unbilled} на {sum}', { billed: sv.billed || 0, unbilled: sv.unbilled || 0, sum: sum(sv.sum_unbilled) }),
                 (sv.list || []).map(serviceRow), 'Услуг пока нет', null)),
-    ], actions: [
-        act('Лист назначений', () => goToMarSheet(a.id, onNavigate)),
-        act('Услуги госпитализации', () => openAdmissionCard({ admissionId: a.id, onChange: reload })),
-    ] });
+    // CASE_DASH_QUIET_V1 — одно действие на панель. «Услуги госпитализации»
+    // открывали карточку, до которой есть дорога и из списка стационара; лист
+    // назначений — то, ради чего эту панель и открывают.
+    ], actions: [act('Лист назначений', () => goToMarSheet(a.id, onNavigate))] });
 
     // ── 6. Следующий шаг → ──────────────────────────────────────────────────
     const pct = pr.total ? Math.round(((pr.done || 0) / pr.total) * 100) : 0;
-    const nextPanel = panel('Следующий шаг', { icon: 'Doc', area: 'next', tone: pr.overdue ? 'warn' : '', children: [
+    const nextPanel = panel('Следующий шаг', { area: 'next', tone: (!ringNow && pr.overdue) ? 'warn' : '', children: [
         // NEXT_STEP_OVERDUE_V1 — «оформлены» говорится только когда оформлены.
         // Пустой «следующий шаг» сам по себе этого не значит, и заголовок,
         // который спорит со строкой под ним, врач перестаёт читать вовсе.
+        // Имя документа САМО ведёт к нему: отдельная ссылка «Заполнить документ»
+        // в подвале была вторым способом сделать то же самое.
         docs.next_kind
-            ? h('div', { class: 'co-next-doc' }, caseDocTitle(docs.next_kind, docs.next_title))
+            ? h('button', { class: 'co-next-doc co-next-go', type: 'button',
+                onclick: () => toDocs(docs.next_kind) },
+                caseDocTitle(docs.next_kind, docs.next_title), ic('ArrowRight', 13))
             : (pr.total && (pr.done || 0) >= pr.total)
                 ? h('div', { class: 'co-next-doc co-ok' }, tr('Все документы оформлены'))
                 : h('div', { class: 'co-next-doc co-warn' },
@@ -490,7 +526,7 @@ function paint(root, onNavigate) {
             trf('Оформлено {done} из {total}', { done: pr.done || 0, total: pr.total || 0 }),
             pr.overdue ? ' · ' + trf('просрочено {n}', { n: pr.overdue }) : ''),
     ], actions: [
-        act(docs.next_kind ? 'Заполнить документ' : 'Открыть документы', () => toDocs(docs.next_kind || null)),
+        docs.next_kind ? null : act('Открыть документы', () => toDocs(null)),
         // Пациента выписали — дневник больше не ведут, и кнопка исчезает:
         // предлагать запись о наблюдении за тем, кого нет в койке, значит
         // предлагать работу, которую сервер не примет.
@@ -498,7 +534,9 @@ function paint(root, onNavigate) {
     ] });
 
     dietSlot.appendChild(dietTile);
-    const zone = h('div', { class: 'co-z' }, nowPanel, billPanel, opPanel, listsPanel, nextPanel);
+    if (!opPanel) opSlot.appendChild(h('div', { class: 'co-muted co-op-none' }, tr('Операция не планируется')));
+    const zone = h('div', { class: 'co-z' + (opPanel ? '' : ' co-z-noop') },
+        ...[nowPanel, billPanel, opPanel, listsPanel, nextPanel].filter(Boolean));
     root.appendChild(zone);
     // CASE_DASH_FIT_V1 — высота сетки МЕРЯЕТСЯ от её настоящего верха: над ней
     // шапка и панель показателей, и обе меняют высоту от пациента к пациенту
@@ -645,8 +683,12 @@ export function vitalsPanel(ov, { onAdd, onDynamics = null } = {}) {
             h('div', { class: 'vt-band-a' }, tr(band.advice)),
             h('div', { class: 'vt-chips' }, ...chips)),
         h('div', { class: 'vt-trend' },
-            h('div', { class: 'vt-trend-l' }, tr('Динамика NEWS')),
-            sparkline(totals, { w: 120, hgt: 30 }),
+            // CASE_DASH_QUIET_V1 — владелец: «remove graph in the screenshot».
+            // График на 120 px по последним измерениям не отвечал ни на один
+            // вопрос, который задают у постели: без шкалы и подписей он
+            // повторял то, что уже сказано баллом и словом уровня. Ход
+            // показателя смотрят в окне «Динамика» — там есть и шкала, и
+            // таблица, и числа.
             h('div', { class: 'vt-trend-v ' + (v.trend > 0 ? 'vt-worse' : v.trend < 0 ? 'vt-better' : '') }, trendText(v.trend || 0))));
 
     // VITALS_DYNAMICS_V1 — «make pressable and show in the dynamic»: плитка —

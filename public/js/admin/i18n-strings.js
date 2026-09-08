@@ -7323,4 +7323,5 @@ export const STRINGS = {
   "Убрано из набора: {n}. Написанные ими записи остались в историях болезни.": {"en":"Removed from the set: {n}. Records written with them stay in the case files.","ru":"Убрано из набора: {n}. Написанные ими записи остались в историях болезни.","uz":"Toʻplamdan olib tashlandi: {n}. Ular bilan yozilgan yozuvlar kasallik tarixlarida qoladi."},
   "При выписке": {"en":"At discharge","ru":"При выписке","uz":"Chiqarishda"},
   "Изменить стол": {"en":"Change the diet","ru":"Изменить стол","uz":"Parhezni oʻzgartirish"},
+  "Операция не планируется": {"en":"No surgery planned","ru":"Операция не планируется","uz":"Operatsiya rejalashtirilmagan"},
 };

@@ -159,8 +159,12 @@ test('шапка документов: пациент ведёт обратно 
 test('«Следующий шаг» открывает документы НА СЛЕДУЮЩЕМ ШАГЕ; «Лист назначений» — на лист', async () => {
     const navs = [];
     const root = await render((view, payload) => navs.push({ view, payload }));
-    const next = findBtn(root, 'Заполнить документ');
-    assert.ok(next, 'кнопки «Заполнить документ» нет');
+    // CASE_DASH_QUIET_V1 — отдельной ссылки «Заполнить документ» больше нет:
+    // к документу ведёт его собственное имя, и это на одно действие в подвале
+    // меньше при том же числе способов туда попасть.
+    const next = walk(root).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('co-next-go'))[0];
+    assert.ok(next, 'имя следующего документа не ведёт к нему');
+    assert.ok(textOf(next).includes('Обоснование клинического диагноза'), 'кнопка названа не именем документа: ' + textOf(next));
     next.click();
     assert.deepEqual(navs.pop(), { view: 'case-file', payload: { admissionId: 11, kind: 'rationale' } });
     findBtn(root, 'Лист назначений').click();
@@ -175,14 +179,19 @@ test('блоки: статус, диагноз, состояние, стол, н
     // теперь и живут.
     for (const piece of ['Пациент сейчас', 'K35.8', 'Острый аппендицит', 'Стол №1', 'съедено 2', 'отказ 1',
         'Цефтриаксон', 'введено 2 из 4', 'пропущено 1', 'Аппендэктомия', '900 000', 'не выставлено',
-        'Запланирована', 'Койко-дней', '300 000', 'Оформлено 3 из 9', 'просрочено 1', 'Обоснование клинического диагноза',
-        'Заполнить документ']) {
+        'Запланирована', 'Оформлено 3 из 9', 'просрочено 1', 'Обоснование клинического диагноза']) {
         assert.ok(t.includes(piece), 'в блоках нет: ' + piece);
     }
     // Порядок чтения — как на схеме владельца.
     const order = ['Пациент сейчас', 'Выписка и счёт', 'Операция', 'Назначения и услуги', 'Следующий шаг']
         .map((s) => t.indexOf(s));
     assert.ok(order.every((i, k) => i >= 0 && (k === 0 || i > order[k - 1])), 'блоки идут не в порядке схемы: ' + order.join(','));
+
+    // CASE_DASH_QUIET_V1 — койко-дни назывались дважды и разными числами:
+    // начисление на сегодня в «Счёте» и строка услуги в «Услугах». Осталась
+    // строка услуги — у неё есть и ставка, и число суток, и пометка «в счёте».
+    assert.ok(!t.includes('Койко-дней'), 'койко-дни снова названы дважды');
+    assert.ok(t.includes('Проживание (койко-дни)'), 'проживание пропало из услуг');
 
     // Полоса плиток убрана целиком.
     assert.equal(walk(root).filter((e) => String(e.className || '').split(/\s+/).includes('co-tile')).length, 0,
@@ -283,10 +292,20 @@ test('VITALS_NEWS_V1: панель показателей — балл NEWS, у�
     const t = textOf(card);
     for (const piece of ['Показатели', 'последнее измерение', '5', 'NEWS', 'Средний риск', 'в течение 1 часа',
         'ЧДД 21 (+2)', 'SpO₂ 94 (+1)', 'Темп 38,1 (+1)', 'АД 138 (0)', 'Пульс 104 (+1)', 'Сознание ясное (0)', 'O₂ нет (0)',
-        'Динамика NEWS', 'ухудшение +5', '38,1 °C', '138/88', '104 уд', '21 /мин', '94 %',
+        'ухудшение +5', '38,1 °C', '138/88', '104 уд', '21 /мин', '94 %',
         'норма 36,0–37,2 °C', 'норма < 140/90', 'норма 60–90 уд/мин', 'норма 12–20 /мин', 'норма ≥ 95 %']) {
         assert.ok(t.includes(piece), 'в панели нет: ' + piece + ' — ' + t.slice(0, 500));
     }
+    // CASE_DASH_QUIET_V1 — графика NEWS в баннере больше нет: без шкалы и
+    // подписей он повторял балл и слово уровня. Искорки остались у плиток
+    // показателей — там они читаются вместе со значением и нормой.
+    // Искорка рисуется через createElementNS и несёт класс АТРИБУТОМ, а не
+    // свойством: искать её по className — значит не найти никогда.
+    const cls = (e) => String(e.className || (e.getAttribute && e.getAttribute('class')) || '');
+    assert.ok(!walk(card).some((e) => cls(e).split(/\s+/).includes('vt-trend-l')),
+        'график динамики NEWS вернулся в баннер');
+    assert.ok(walk(card).some((e) => cls(e).includes('vt-spark')),
+        'искорки пропали и у плиток показателей');
     // Тон плиток — по очкам: ЧДД (+2) и температура (+1) подсвечены, АД (0) — нет.
     const tiles = walk(card).filter((e) => String(e.className || '').split(/\s+/).includes('vt-tile'));
     assert.equal(tiles.length, 5, 'пять плиток');
@@ -412,7 +431,10 @@ test('CASE_PANELS_TIDY_V1: единственная первичная кноп�
     assert.equal(rest.length, 1, 'первичной должна быть только выписка: ' + rest.length);
     assert.ok(rest[0].includes('Выписка'), 'первичная кнопка — не выписка');
     // CASE_ACTIONS_GHOST_V1 — действия карточек: призрачные, с шевроном, в подвале справа.
-    for (const label of ['Заполнить документ', 'Лист назначений', 'Услуги госпитализации', 'История болезни', 'Протокол операции']) {
+    // CASE_DASH_QUIET_V1 — одно действие на панель: «Услуги госпитализации»
+    // убраны (карточка открывается из списка стационара), «Заполнить документ»
+    // заменено именем документа, панель операции у неоперируемого не рисуется.
+    for (const label of ['Лист назначений', 'История болезни']) {
         const b = allBtns(root, label)[0];
         assert.ok(b, 'нет действия ' + label);
         assert.ok(b.className.includes('co-act') && !b.className.includes('btn'), label + ' — должно быть призрачным действием: ' + b.className);
@@ -499,8 +521,12 @@ test('CASE_DIARY_ACT_V1: «Дневник наблюдения» — замет�
     let p = b._parent; let foot = null;
     while (p) { if (String(p.className || '').includes('co-panel-f')) { foot = p; break; } p = p._parent; }
     assert.ok(foot, 'дневник не в подвале карточки');
-    assert.ok(textOf(foot).includes('Открыть документы') || textOf(foot).includes('Заполнить документ'),
-        'дневник встал не в «Следующий шаг»: ' + textOf(foot));
+    // Подвал «Следующего шага» теперь несёт ровно дневник: переход к документу
+    // ушёл на его имя.
+    let panelEl2 = foot._parent;
+    while (panelEl2 && !String(panelEl2.className || '').includes('co-panel')) panelEl2 = panelEl2._parent;
+    assert.ok(panelEl2 && (panelEl2.getAttribute('aria-label') || '') === 'Следующий шаг',
+        'дневник встал не в «Следующий шаг»: ' + (panelEl2 ? panelEl2.getAttribute('aria-label') : ''));
     // Заметная кнопка на панели ровно одна — иначе главной не будет ни одной.
     const filled = walk(foot).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('co-act-main'));
     assert.equal(filled.length, 1, 'на панели больше одной залитой кнопки: ' + filled.length);
@@ -582,4 +608,30 @@ test('CASE_DASH_FIT_V1: сетка обзора получает измерен�
     assert.ok(/\.co-panel-b\{[^}]*overflow-y:auto/.test(css), 'длинный список снова утащит за собой всю страницу');
     // Подвал панели с действием остаётся ВНЕ прокрутки: ради действия панель и читают.
     assert.ok(!/\.co-panel-f\{[^}]*overflow/.test(css), 'подвал панели попал в прокрутку');
+});
+
+// ─── CASE_NAV_TAB_V1 — стрелки оставляют вас на той же вкладке ──────────────
+//
+// Владелец (2026-09-09): «when navigation in the documents its not opening the
+// list but throws to the stationary menu». Стрелки всегда вели на ОБЗОР, и
+// врач, писавший документы подряд по палате, вылетал из документов на каждом
+// переходе.
+test('CASE_NAV_TAB_V1: из документов стрелки ведут в документы соседа, из обзора — в обзор', async () => {
+    const { caseHead } = await import('../views/case-overview.js');
+    const navs = [];
+    const nav = (view, payload) => navs.push({ view, payload });
+
+    const fromDocs = caseHead(OV, { active: 'documents', onNavigate: nav });
+    const arrows = (root) => walk(root).filter((e) => e.tagName === 'BUTTON' && e._parent && String(e._parent.className) === 'co-nav');
+    assert.equal(arrows(fromDocs).length, 2, 'стрелок по соседям должно быть две');
+    arrows(fromDocs)[0].click();
+    assert.deepEqual(navs.pop(), { view: 'case-file', payload: { admissionId: 10 } },
+        'из документов «‹» уводит из документов');
+    arrows(fromDocs)[1].click();
+    assert.equal(navs.pop().view, 'case-file', 'из документов «›» уводит из документов');
+
+    const fromOv = caseHead(OV, { active: 'overview', onNavigate: nav });
+    arrows(fromOv)[0].click();
+    assert.deepEqual(navs.pop(), { view: 'case-overview', payload: { admissionId: 10 } },
+        'из обзора стрелка ведёт не в обзор');
 });
