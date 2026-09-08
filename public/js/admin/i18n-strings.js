@@ -7091,4 +7091,8 @@ export const STRINGS = {
   "Сумма акта": {"en":"Act total","ru":"Сумма акта","uz":"Dalolatnoma summasi"},
   "Фильтр: {col}": {"en":"Filter: {col}","ru":"Фильтр: {col}","uz":"Filtr: {col}"},
   "фильтр…": {"en":"filter…","ru":"фильтр…","uz":"filtr…"},
+  "К выписке": {"en":"Awaiting discharge","ru":"К выписке","uz":"Chiqarishga"},
+  "Открыть обзор госпитализации": {"en":"Open the case overview","ru":"Открыть обзор госпитализации","uz":"Gospitalizatsiya sharhini ochish"},
+  "Очереди отделения": {"en":"Ward queues","ru":"Очереди отделения","uz":"Bo'lim navbatlari"},
+  "занято: {n}": {"en":"occupied: {n}","ru":"занято: {n}","uz":"band: {n}"},
 };

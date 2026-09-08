@@ -82,6 +82,8 @@ globalThis.requestAnimationFrame = (fn) => fn();
 
 const walk = (e, out = []) => { if (!e || typeof e !== 'object') return out; out.push(e); for (const c of e.children || []) walk(c, out); return out; };
 const textOf = (e) => walk(e).map((x) => x._text || '').join(' ');
+// WARD_TABLE_V1 — карточки бывают с двумя классами ('card ar-card'); ищем по слову.
+const isCard = (e) => String(e.className || '').split(/\s+/).includes('card');
 const findBtn = (root, label) => walk(root).find((e) => e.tagName === 'BUTTON' && textOf(e).includes(label));
 const allBtns = (root, label) => walk(root).filter((e) => e.tagName === 'BUTTON' && textOf(e).includes(label));
 const lastToast = () => {
@@ -198,7 +200,7 @@ test('заявка регистратуры и направление врача
     assert.ok(txt.includes('Иванов Иван Иванович'), 'заявка регистратуры не видна');
     assert.ok(txt.includes('Петрова Мария'), 'направление врача (request_admission) не видно');
     // Оба — в одном списке, а не в двух разных очередях.
-    const card = walk(root).find((e) => textOf(e).includes('Ждут размещения') && e.className === 'card');
+    const card = walk(root).find((e) => textOf(e).includes('Ждут размещения') && isCard(e));
     assert.ok(card, 'карточка списка не найдена');
     assert.ok(textOf(card).includes('Иванов Иван Иванович') && textOf(card).includes('Петрова Мария'),
         'заявка регистратуры и направление врача должны стоять в одной очереди');
@@ -207,15 +209,15 @@ test('заявка регистратуры и направление врача
 
 test('лежащий пациент — в «В отделении» и в «Ждут первичного осмотра», сгруппирован по палате', async () => {
     const root = await renderScreen({ only: 'patients' });
-    const inWard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('В отделении'));
+    const inWard = walk(root).find((e) => isCard(e) && textOf(e).includes('В отделении'));
     assert.ok(inWard, 'списка «В отделении» нет');
     assert.ok(textOf(inWard).includes('Сидоров Сидор'), 'пациент на койке не показан');
     assert.ok(textOf(inWard).includes('Терапия'), 'группировка по палате пропала');
-    assert.ok(textOf(inWard).includes('койка T-1'), 'номер койки не показан');
+    assert.ok(textOf(inWard).includes('T-1'), 'номер койки не показан');   // WARD_TABLE_V1 — колонка «Койка»: «Терапия / T-1»
     // Заявки в этот список не просачиваются: у них койки нет.
     assert.ok(!textOf(inWard).includes('Иванов Иван Иванович'), 'заявка не должна считаться лежащей');
 
-    const exam = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Ждут первичного осмотра'));
+    const exam = walk(root).find((e) => isCard(e) && textOf(e).includes('Ждут первичного осмотра'));
     assert.ok(exam, 'очереди первичного осмотра нет');
     assert.ok(textOf(exam).includes('Сидоров Сидор'), 'размещённый пациент обязан ждать осмотра главного врача');
 });
@@ -234,7 +236,7 @@ test('РЕГРЕССИЯ: заявка подписана «Ждёт разме�
     assert.strictEqual(admissionStatusLabel('cancelled'), 'Отменена');
 
     // …и подпись лежащего пациента берётся из той же карты.
-    const inWard = walk(await renderScreen({ only: 'patients' })).find((e) => e.className === 'card' && textOf(e).includes('В отделении'));
+    const inWard = walk(await renderScreen({ only: 'patients' })).find((e) => isCard(e) && textOf(e).includes('В отделении'));
     assert.ok(textOf(inWard).includes(admissionStatusLabel('admitted')),
         'состояние лежащего пациента должно называться словами из общей карты');
 });
@@ -399,14 +401,14 @@ const EXAMINED = {
 test('главный врач видит «Провести первичный осмотр», обычный врач — нет', async () => {
     capsAnswer = { examine: true, set_attending: true, admit: true };
     let root = await renderScreen({ only: 'patients' });
-    const exam = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Ждут первичного осмотра'));
+    const exam = walk(root).find((e) => isCard(e) && textOf(e).includes('Ждут первичного осмотра'));
     assert.ok(findBtn(exam, 'Провести первичный осмотр'), 'главному врачу кнопка обязана быть видна');
 
     // Обычный врач: сервер на этот шаг ответит отказом, и экран не предлагает
     // его вовсе — вместо кнопки подпись, кого ждут.
     capsAnswer = { examine: false, set_attending: false, admit: false };
     root = await renderScreen({ only: 'patients' });
-    const exam2 = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Ждут первичного осмотра'));
+    const exam2 = walk(root).find((e) => isCard(e) && textOf(e).includes('Ждут первичного осмотра'));
     assert.equal(findBtn(exam2, 'Провести первичный осмотр'), undefined, 'кнопка, которая ответит отказом, — тупик');
     assert.ok(textOf(exam2).includes('Ждёт главного врача'), 'экран обязан сказать, кого ждут');
 });
@@ -484,15 +486,15 @@ test('«Ждут лечащего врача» — отдельная очере
     const root = await renderScreen({ only: 'patients' });
     admissionsRows = [ORDER_REG, ORDER_DOC, IN_BED];
 
-    const card = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Ждут лечащего врача'));
+    const card = walk(root).find((e) => isCard(e) && textOf(e).includes('Ждут лечащего врача'));
     assert.ok(card, 'осмотренный пациент без лечащего врача обязан быть виден отдельно');
     assert.ok(textOf(card).includes('Каримова Дилноза'));
     assert.ok(textOf(card).includes('Главный врач'), 'на строке видно, кто осмотрел');
     assert.ok(findBtn(card, 'Назначить лечащего врача'), 'кнопка назначения — здесь');
     // Осмотренный лежит: он и в «В отделении», и подписан «лечащий врач не назначен».
-    const inWard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('В отделении'));
+    const inWard = walk(root).find((e) => isCard(e) && textOf(e).includes('В отделении'));
     assert.ok(textOf(inWard).includes('Каримова Дилноза'));
-    assert.ok(textOf(inWard).includes('лечащий врач не назначен'),
+    assert.ok(textOf(inWard).includes('не назначен'),   // WARD_TABLE_V1 — в колонке «Лечащий врач», жёлтым
         'лежащий пациент без лечащего врача — недоделанная работа отделения, и видно её отсюда');
 });
 
@@ -648,7 +650,7 @@ test('кассиру раздел отказывает чисто — маршр
 // рабочем экране; окно карточки было лишней дверью перед ним.
 test('клик по лежащему в «В отделении» открывает историю болезни на весь экран, а не окно', async () => {
     const root = await renderScreen({ only: 'patients' });
-    const inWard = walk(root).find((e) => e.className === 'card' && textOf(e).includes('В отделении'));
+    const inWard = walk(root).find((e) => isCard(e) && textOf(e).includes('В отделении'));
     assert.ok(inWard, 'списка «В отделении» нет');
 
     // Имя пациента в строке — кнопка (patientRow): именно по ней и жмут.

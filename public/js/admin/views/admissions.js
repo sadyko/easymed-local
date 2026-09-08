@@ -48,6 +48,7 @@ import { supabase } from '../../supabase.js';
 import { IN_BED_STATUSES, OPEN_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
 import { h, Icon, Tag, clear, PageHead, fmtDateTime, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { dateNumeric } from '../../shared/date-words.js';   // WARD_TABLE_V1 — «с 06.09»
 import { isModuleAllowed, hasActorRole } from '../permissions.js';
 import { openAdmissionOrderModal, openAdmissionBedPicker, openAdmissionCancelModal, openAdmissionCard,
          openAdmissionReviewModal, openAdmissionAttendingModal, goToMarSheet, goToCaseOverview } from './admission-modal.js?v=inp5';
@@ -189,14 +190,12 @@ async function paint(root, onNavigate = null, { only = null } = {}) {
 
     const waitingBed  = rows.filter((r) => r.status === 'ordered');
     const inWard      = rows.filter((r) => IN_BED_STATUSES.includes(r.status));
-    const waitingExam = rows.filter((r) => r.status === 'admitted');
-    const waitingDoc  = rows.filter((r) => r.status === 'examined');
 
     const grid = h('div', { style: { display: 'grid', gap: '16px' } });
     if (wardOnly) {
-        grid.appendChild(inWardCard(inWard, reload, onNavigate));
-        grid.appendChild(waitingExamCard(waitingExam, reload, can, onNavigate));
-        grid.appendChild(waitingAttendingCard(waitingDoc, reload, can, onNavigate));
+        // WARD_TABLE_V1 — плитки очередей + одна таблица; waitingExam/waitingDoc
+        // считаются внутри по тем же статусам.
+        grid.appendChild(wardTable({ rows: inWard, can, reload, onNavigate }));
     } else {
         grid.appendChild(waitingBedCard(waitingBed, reload, onNavigate));
     }
@@ -311,128 +310,157 @@ function waitingBedCard(list, reload, onNavigate) {
         els, tr('Заявок нет — никого не ждут. Заявка появляется здесь, как только её оформит регистратура кнопкой «Заявка на госпитализацию» или врач из кабинета приёма.'));
 }
 
-// ---------------------------------------------------------------------------
-// 2. «В отделении» — кто лежит, по палатам
-// ---------------------------------------------------------------------------
-function inWardCard(list, reload, onNavigate) {
-    const byWard = new Map();
-    for (const a of list) {
-        const key = (a.wards && a.wards.name) || tr('Без палаты');
-        if (!byWard.has(key)) byWard.set(key, []);
-        byWard.get(key).push(a);
-    }
-    const els = [];
-    for (const [wardName, wardRows] of [...byWard.entries()].sort((x, y) => String(x[0]).localeCompare(String(y[0])))) {
-        els.push(h('div', {
-            style: {
-                padding: '9px 16px', background: 'var(--ink-25, #f7f8fa)',
-                borderBottom: '1px solid var(--ink-100)', fontSize: '12.5px', fontWeight: 700,
-                color: 'var(--ink-700)', display: 'flex', gap: '8px', alignItems: 'center',
+// ═══════════════════════════════════════════════════════════════════════════
+// WARD_TABLE_V1 — «ПАЦИЕНТЫ»: ПЛИТКИ ОЧЕРЕДЕЙ + ОДНА ТАБЛИЦА ПО ПАЛАТАМ
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Владелец: «can we adapt this type of the list? not copy fully but adapt and
+// rewrite so it's looking more appealing». Было три карточки друг под другом
+// («В отделении», «Ждут первичного осмотра», «Ждут лечащего врача») с длинными
+// подсказками и именами по 15px. Стало: четыре плитки-счётчика — те же очереди
+// числом, ждущие подсвечены жёлтым, нажатие фильтрует, — и одна компактная
+// таблица в языке журнала «Госпитализаций» (ADMISSIONS_REGISTER_V1): фильтр
+// под каждой колонкой, полосы палат, у строки ОДНО действие, которое сейчас
+// нужно: осмотр — главному врачу, лечащий — тому, кто назначает, остальным —
+// лист назначений. Клик и Enter по строке — в обзор госпитализации.
+const WARD_GROUPS = [
+    { key: 'all',       label: 'В отделении',             icon: 'Bed',         pick: (r) => IN_BED_STATUSES.includes(r.status) },
+    { key: 'exam',      label: 'Ждут первичного осмотра', icon: 'Stethoscope', pick: (r) => r.status === 'admitted',    warn: true },
+    { key: 'attending', label: 'Ждут лечащего врача',     icon: 'User',        pick: (r) => r.status === 'examined',    warn: true },
+    { key: 'discharge', label: 'К выписке',               icon: 'Check',       pick: (r) => r.status === 'discharging' },
+];
+function dayInWard(iso) {
+    const ms = Date.now() - Date.parse(iso);
+    if (!Number.isFinite(ms) || ms < 0) return null;
+    return Math.floor(ms / 86400000) + 1;
+}
+function stayText(r) {
+    if (!r.admitted_at) return '';
+    const d = dayInWard(r.admitted_at);
+    return [d ? trf('{n}-й день', { n: d }) : '', trf('с {when}', { when: dateNumeric(r.admitted_at) })].filter(Boolean).join(' · ');
+}
+const WARD_COLS = [
+    { key: 'patient', label: 'Пациент',                 text: (r) => [(r.patients || {}).mrn, (r.patients || {}).full_name].filter(Boolean).join(' ') },
+    { key: 'stay',    label: 'На койке',                text: (r) => stayText(r) },
+    { key: 'bed',     label: 'Койка',                   text: (r) => [(r.wards || {}).name, (r.beds || {}).code].filter(Boolean).join(' / ') },
+    { key: 'dx',      label: 'Диагноз при направлении', text: (r) => r.admission_diagnosis || '' },
+    { key: 'doctor',  label: 'Лечащий врач',            text: (r) => (r.attending && r.attending.full_name) || tr('не назначен') },
+    { key: 'status',  label: 'Статус',                  text: (r) => admissionStatusLabel(r.status) },
+    { key: 'action',  label: 'Действие',                text: () => '', nofilter: true },
+];
+
+function wardTable({ rows, can, reload, onNavigate }) {
+    const state = { group: 'all', text: {} };
+    const inWard = rows.filter(WARD_GROUPS[0].pick);
+    const tilesEl = h('div', { class: 'wt-tiles', role: 'group', 'aria-label': tr('Очереди отделения') });
+    const tbody = h('tbody');
+    const count = h('div', { class: 'ar-count' });
+    const filterCells = WARD_COLS.map((c) => h('th', { class: 'ar-filter-cell' }, c.nofilter ? null : h('input', {
+        class: 'ar-filter', type: 'search', placeholder: 'фильтр…', autocomplete: 'off', spellcheck: 'false',
+        'aria-label': trf('Фильтр: {col}', { col: tr(c.label) }),
+        oninput: (e) => { state.text[c.key] = String((e.target || e.currentTarget).value || '').trim().toLowerCase(); paintRows(); },
+    })));
+    const table = h('table', { class: 'ar-table wt-table' },
+        h('thead', null,
+            h('tr', null, ...WARD_COLS.map((c) => h('th', { scope: 'col' }, tr(c.label)))),
+            h('tr', { class: 'ar-filters' }, ...filterCells)),
+        tbody);
+    const card = h('div', { class: 'card ar-card wt-card' },
+        h('div', { class: 'wt-tiles-wrap' }, tilesEl),
+        h('div', { class: 'ar-head' },
+            h('h3', { class: 'ar-title' }, Icon('Bed', { size: 15 }), ' ', tr('В отделении')),
+            count),
+        h('div', { class: 'ar-scroll' }, table));
+
+    const stop = (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); };
+    const msg = (text) => {
+        clear(tbody);
+        tbody.appendChild(h('tr', null, h('td', { colspan: String(WARD_COLS.length), class: 'ar-msg' }, text)));
+    };
+
+    function paintTiles() {
+        clear(tilesEl);
+        for (const g of WARD_GROUPS) {
+            const n = inWard.filter(g.pick).length;
+            const on = state.group === g.key;
+            tilesEl.appendChild(h('button', {
+                class: 'wt-tile' + (on ? ' on' : '') + (g.warn && n > 0 ? ' wt-warn' : ''), type: 'button',
+                'aria-pressed': on ? 'true' : 'false',
+                onclick: () => { state.group = g.key; paintTiles(); paintRows(); },
             },
-        }, wardName, h('span', { class: 'muted', style: { fontWeight: 400 } }, trf('· коек занято: {n}', { n: wardRows.length }))));
-        for (const a of wardRows) {
-            const p = a.patients || {};
-            const meta = [
-                p.mrn || null,
-                a.beds && a.beds.code ? trf('койка {code}', { code: a.beds.code }) : tr('койка не указана'),
-                a.admitted_at ? sinceLabel(a.admitted_at) : null,
-                // КТО ЛЕЧИТ — на строке, а не только в карточке. «Лечащий врач
-                // не назначен» у лежащего пациента это не пустое поле, а
-                // недоделанная работа отделения, и видно её должно быть отсюда.
-                a.attending && a.attending.full_name
-                    ? trf('лечащий: {name}', { name: a.attending.full_name })
-                    : tr('лечащий врач не назначен'),
-            ].filter(Boolean).join(' · ');
-            els.push(patientRow(a, meta, [
-                // Подпись состояния — из общей карты (shared/admission-status.js).
-                // Именно её отсутствие и делало заявку «Отменено» на прежнем
-                // экране: подпись собиралась на месте и знала не все состояния.
-                Tag(tr(admissionStatusLabel(a.status)), { kind: 'ok', dot: true }),
-                // MAR_SHEET_V1 — лист назначений СО СТРОКИ, а не только из
-                // карточки: во время обхода к нему возвращаются чаще, чем ко
-                // всему остальному в окне госпитализации.
-                (a.status === 'active' || a.status === 'discharging')
-                    ? h('button', {
-                        class: 'btn btn-sm', type: 'button',
-                        onclick: (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); goToMarSheet(a.id, onNavigate); },
-                    }, Icon('Pill', { size: 13 }), ' ', tr('Лист назначений'))
-                    : null,
-            // WARD_ROW_TO_CASE_FILE_V1 — у лежащего пациента клик по строке ведёт
-            // СРАЗУ в историю болезни, на рабочий экран, а не в окно поверх
-            // окна. Владелец: «when pressed to the card, we should transfer into
-            // the patient's document cabinet, full screen — we don't need there a
-            // dialogue window». Оформление истории — работа на полчаса с десятком
-            // бумаг; окно карточки было лишней дверью перед ней. Само окно
-            // остаётся у заявок и ожидающих осмотра — у них истории ещё нет.
-            // CASE_OVERVIEW_V1 — теперь СНАЧАЛА обзор (экран врача), а документы —
-            // из его шапки: «pressed opens a patients dashboard and main action →
-            // opens the documents to fill for the doctor».
-            ], () => goToCaseOverview(a.id, onNavigate)));
+                h('span', { class: 'wt-tile-ic' }, Icon(g.icon, { size: 14 })),
+                h('span', { class: 'wt-tile-l' }, tr(g.label)),
+                h('span', { class: 'wt-tile-v' }, String(n))));
         }
     }
-    return listCard(tr('В отделении'), 'Bed', list.length,
-        tr('Пациенты на койках: за них идёт суточное начисление.'),
-        els, tr('В отделении никого нет.'));
-}
 
-// ---------------------------------------------------------------------------
-// 3. «Ждут первичного осмотра»
-// ---------------------------------------------------------------------------
-// Кнопка осмотра видна ТОЛЬКО тому, кто вправе её нажать (can.examine — ответ
-// сервера, см. paint). Обычный врач её не видит, и это не косметика: первичный
-// осмотр проводит главный врач, а кнопка, которая ответит отказом, отправляет
-// человека в тупик вместо того, чтобы сказать, кого звать.
-function waitingExamCard(list, reload, can, onNavigate) {
-    const els = list.map((a) => {
-        const p = a.patients || {};
-        const meta = [
-            p.mrn || null,
-            (a.wards && a.wards.name) || null,
-            a.beds && a.beds.code ? trf('койка {code}', { code: a.beds.code }) : null,
-            a.admitted_at ? trf('на койке {since}', { since: sinceLabel(a.admitted_at) || '—' }) : null,
-        ].filter(Boolean).join(' · ');
-        return patientRow(a, meta, [
-            can.examine
-                ? h('button', {
-                    class: 'btn btn-primary btn-sm', type: 'button',
-                    onclick: () => openAdmissionReviewModal({ admission: a, onDone: reload }),
-                }, Icon('Stethoscope', { size: 13 }), ' ', tr('Провести первичный осмотр'))
-                : Tag(tr('Ждёт главного врача'), { kind: 'warn', dot: true }),
-        ], () => openAdmissionCard({ admissionId: a.id, onChange: reload, onNavigate }));
-    });
-    return listCard(tr('Ждут первичного осмотра'), 'Stethoscope', list.length,
-        tr('Осмотр проводит главный врач: до него лечащего врача и назначений нет.'),
-        els, tr('Все осмотрены.'));
-}
+    function actionCell(a) {
+        if (a.status === 'admitted') {
+            return can.examine
+                ? h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: (ev) => { stop(ev); openAdmissionReviewModal({ admission: a, onDone: reload }); } },
+                    Icon('Stethoscope', { size: 13 }), ' ', tr('Провести первичный осмотр'))
+                : Tag(tr('Ждёт главного врача'), { kind: 'warn', dot: true });
+        }
+        if (a.status === 'examined') {
+            return can.set_attending
+                ? h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: (ev) => { stop(ev); openAdmissionAttendingModal({ admission: a, onDone: reload }); } },
+                    Icon('User', { size: 13 }), ' ', tr('Назначить лечащего врача'))
+                : Tag(tr('Ждёт лечащего врача'), { kind: 'warn', dot: true });
+        }
+        return h('button', { class: 'btn btn-sm', type: 'button', onclick: (ev) => { stop(ev); goToMarSheet(a.id, onNavigate); } },
+            Icon('Pill', { size: 13 }), ' ', tr('Лист назначений'));
+    }
 
-// ---------------------------------------------------------------------------
-// 4. «Ждут лечащего врача»
-// ---------------------------------------------------------------------------
-// Самое дорогое состояние маршрута: пациент осмотрен, койка занята, суточное
-// начисление идёт — а лечения нет, потому что не назначен тот, кто его ведёт.
-// Список существует затем, чтобы это не длилось сутки.
-function waitingAttendingCard(list, reload, can, onNavigate) {
-    const els = list.map((a) => {
+    function rowEl(a) {
         const p = a.patients || {};
-        const meta = [
-            p.mrn || null,
-            (a.wards && a.wards.name) || null,
-            a.beds && a.beds.code ? trf('койка {code}', { code: a.beds.code }) : null,
-            a.examined && a.examined.full_name ? trf('осмотрел: {name}', { name: a.examined.full_name }) : null,
-            a.examined_at ? trf('осмотрен {since}', { since: sinceLabel(a.examined_at) || '—' }) : null,
-        ].filter(Boolean).join(' · ');
-        return patientRow(a, meta, [
-            can.set_attending
-                ? h('button', {
-                    class: 'btn btn-primary btn-sm', type: 'button',
-                    onclick: () => openAdmissionAttendingModal({ admission: a, onDone: reload }),
-                }, Icon('User', { size: 13 }), ' ', tr('Назначить лечащего врача'))
-                : Tag(tr('Ждёт лечащего врача'), { kind: 'warn', dot: true }),
-        ], () => openAdmissionCard({ admissionId: a.id, onChange: reload, onNavigate }));
-    });
-    return listCard(tr('Ждут лечащего врача'), 'User', list.length,
-        tr('Осмотр проведён. Пока лечащий врач не назначен, назначений и стола у пациента нет.'),
-        els, tr('У всех есть лечащий врач.'));
+        const name = (p.full_name || '').trim() || tr('без имени');
+        const open = () => goToCaseOverview(a.id, onNavigate);
+        const tone = a.status === 'active' ? 'ok' : a.status === 'discharging' ? 'info' : 'warn';
+        const attending = a.attending && a.attending.full_name;
+        return h('tr', {
+            class: 'ar-row', tabindex: '0', onclick: open,
+            onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { if (e.preventDefault) e.preventDefault(); open(); } },
+        },
+            h('td', null, h('button', { class: 'wt-name', type: 'button', title: tr('Открыть обзор госпитализации'), onclick: (ev) => { stop(ev); open(); } },
+                h('span', { class: ('ar-av ' + pastelFor(p.id || a.patient_id || name)).trim(), 'aria-hidden': 'true' }, initials(name)),
+                h('span', { class: 'ar-id' }, p.mrn || ''),
+                h('span', { class: 'ar-name' }, name))),
+            h('td', { class: 'ar-nowrap' }, stayText(a) || '—'),
+            h('td', { class: 'ar-nowrap' }, WARD_COLS[2].text(a) || '—'),
+            h('td', null, a.admission_diagnosis || '—'),
+            h('td', null, attending
+                ? attending
+                : h('div', null,
+                    h('span', { class: 'wt-warn-text' }, tr('не назначен')),
+                    // Осмотренному видно, КТО осмотрел: лечащего назначают после осмотра.
+                    a.examined && a.examined.full_name ? h('div', { class: 'ar-sub' }, trf('осмотрел: {name}', { name: a.examined.full_name })) : null)),
+            h('td', null, Tag(admissionStatusLabel(a.status), { kind: tone, dot: true })),
+            h('td', { class: 'wt-action' }, actionCell(a)));
+    }
+
+    function paintRows() {
+        if (!inWard.length) { msg(tr('В отделении никого нет.')); count.textContent = ''; return; }
+        const group = WARD_GROUPS.find((g) => g.key === state.group) || WARD_GROUPS[0];
+        const shown = inWard.filter(group.pick).filter((r) => WARD_COLS.every((c) => c.nofilter || !state.text[c.key] || c.text(r).toLowerCase().includes(state.text[c.key])));
+        clear(tbody);
+        if (!shown.length) msg(tr('По фильтру ничего не найдено.'));
+        const byWard = new Map();
+        for (const a of shown) {
+            const key = (a.wards && a.wards.name) || tr('Без палаты');
+            if (!byWard.has(key)) byWard.set(key, []);
+            byWard.get(key).push(a);
+        }
+        for (const [wardName, wardRows] of [...byWard.entries()].sort((x, y) => String(x[0]).localeCompare(String(y[0])))) {
+            tbody.appendChild(h('tr', { class: 'wt-band' }, h('td', { colspan: String(WARD_COLS.length) },
+                h('b', null, wardName), ' · ', trf('занято: {n}', { n: wardRows.length }))));
+            for (const a of wardRows) tbody.appendChild(rowEl(a));
+        }
+        count.textContent = trf('Показано {n} из {total}', { n: shown.length, total: inWard.length });
+    }
+
+    paintTiles();
+    paintRows();
+    return card;
 }
 
 // ===========================================================================
