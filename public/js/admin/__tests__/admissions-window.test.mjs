@@ -669,7 +669,7 @@ test('клик по лежащему в «В отделении» открыва
     }
 
     assert.equal(calls.length, 1, 'переход не произошёл: ' + JSON.stringify(calls));
-    assert.equal(calls[0][0], 'case-file', 'ушли не на историю болезни, а на ' + calls[0][0]);
+    assert.equal(calls[0][0], 'case-overview', 'ушли не на обзор госпитализации, а на ' + calls[0][0]);   // CASE_OVERVIEW_V1
     assert.ok(Number.isInteger(calls[0][1] && calls[0][1].admissionId) && calls[0][1].admissionId > 0,
         'история открыта без номера госпитализации: ' + JSON.stringify(calls[0][1]));
     // И НИКАКОГО окна поверх: раньше здесь открывалась карточка госпитализации.

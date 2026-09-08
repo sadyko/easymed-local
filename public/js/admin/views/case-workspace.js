@@ -31,6 +31,7 @@ import { caseDocsView, assembleCaseFile } from './case-docs.js?v=cw1';
 import { buildReviewEditor } from './admission-modal.js?v=inp2';
 import { buildTitleSheetEditor, TITLE_SHEET_KIND } from './title-sheet.js';   // TITLE_SHEET_V1
 import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V1
+import { caseHead } from './case-overview.js?v=co1';   // CASE_OVERVIEW_V1 — одна шапка на «Обзор» и «Документы»
 
 const state = {
     admissionId: null,
@@ -39,6 +40,7 @@ const state = {
     filter: 'all',
     open: null,        // {kind, mode, reviewId} — что открыто справа
     failed: null,
+    overview: null,    // CASE_OVERVIEW_V1 — ответ admission_overview для шапки
 };
 
 function reset(admissionId) {
@@ -48,11 +50,14 @@ function reset(admissionId) {
     state.filter = 'all';
     state.open = null;
     state.failed = null;
+    state.overview = null;
 }
 
 export async function renderCaseWorkspace(container, { payload, onNavigate } = {}) {
     const admissionId = Number(payload && (payload.admissionId || payload.admission_id || payload.id)) || null;
     if (state.admissionId !== admissionId) reset(admissionId);
+    // CASE_OVERVIEW_V1 — главное действие обзора открывает документы НА НУЖНОМ ШАГЕ.
+    if (payload && payload.kind) state.open = { kind: String(payload.kind), mode: 'edit', reviewId: null };
 
     clear(container);
     const root = h('div', { class: 'fade-in cw' });
@@ -77,13 +82,15 @@ async function load() {
     // связями. Отдельного RPC для карточки не существует — я сперва позвал
     // несуществующий `admission_card`, и шапка молча осталась бы без имени
     // пациента, а редактор — без его данных.
-    const [{ data: docs, error: docsErr }, { data: adm }] = await Promise.all([
+    const [{ data: docs, error: docsErr }, { data: adm }, { data: ov }] = await Promise.all([
         supabase.rpc('admission_case_docs', { admission_id: state.admissionId }),
         supabase.from('admissions')
             .select('*, patients(mrn, full_name), wards(name), beds(code), '
                   + 'attending:attending_doctor_id(full_name, specialty)')
             .eq('id', state.admissionId).single(),
+        supabase.rpc('admission_overview', { admission_id: state.admissionId }),   // CASE_OVERVIEW_V1 — для шапки
     ]);
+    state.overview = ov || null;
     // Отказ по праву и сбой — РАЗНЫЕ вещи, и экран обязан их различать: пустой
     // список читается как «документов нет», а это ложь в обе стороны.
     if (docsErr) { state.failed = docsErr.code === 'forbidden' ? 'forbidden' : (docsErr.message || 'error'); return; }
@@ -117,20 +124,26 @@ function paint(root, onNavigate) {
     const p = a.patients || {};
     const who = [p.mrn, a.department, a.admission_no].filter(Boolean).join(' · ');
 
-    root.appendChild(PageHead({
-        title: p.full_name || tr('История болезни'),
-        subtitle: who || null,
-        right: [
-            h('button', {
-                class: 'btn btn-primary btn-sm', type: 'button',
-                onclick: async () => {
-                    const saved = await assembleCaseFile(state.admissionId);
-                    // Подшили — значит список «сколько оформлено» мог измениться.
-                    if (saved) { await load(); paint(root, onNavigate); }
-                },
-            }, Icon('Doc', { size: 14 }), ' ', tr('Собрать историю')),
-        ],
-    }));
+    const assembleBtn = h('button', {
+        class: 'btn btn-sm btn-outline', type: 'button',
+        onclick: async () => {
+            const saved = await assembleCaseFile(state.admissionId);
+            // Подшили — значит список «сколько оформлено» мог измениться.
+            if (saved) { await load(); paint(root, onNavigate); }
+        },
+    }, Icon('Doc', { size: 14 }), ' ', tr('Собрать историю'));
+    // CASE_OVERVIEW_V1 — та же шапка, что у «Обзора»: пациент, стрелки по
+    // соседям, вкладки, главное действие. Без обзора (старый ответ, отказ) —
+    // прежняя подпись экрана, чтобы документы открывались в любом случае.
+    if (state.overview) {
+        root.appendChild(caseHead(state.overview, {
+            active: 'documents', onNavigate,
+            onReload: async () => { await load(); paint(root, onNavigate); },
+            actions: [assembleBtn],
+        }));
+    } else {
+        root.appendChild(PageHead({ title: p.full_name || tr('История болезни'), subtitle: who || null, right: [assembleBtn] }));
+    }
 
     const rail = h('div', { class: 'cw-rail card' });
     const pane = h('div', { class: 'cw-pane' });

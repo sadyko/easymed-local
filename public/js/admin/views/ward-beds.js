@@ -1055,6 +1055,13 @@ function housekeepingModal(bed, ward, root) {
 // раздела «Стационар», поэтому таблица экспортируется. Это не подвопрос доски
 // коек («где кто лежит»), а свой вопрос — «что было»: там закрытые, отменённые
 // и выписанные, которых на доске нет по определению.
+// CASE_OVERVIEW_V1 — строка госпитализации ведёт в обзор (экран врача).
+// Через window.easymed.navigate, а не импортом из admission-modal.js: тот
+// модуль импортирует ЭТОТ (доска коек), и обратный импорт был бы кольцом.
+function openCaseOverview(admissionId) {
+    const nav = typeof window !== 'undefined' && window.easymed && window.easymed.navigate;
+    if (nav) nav('case-overview', { admissionId });
+}
 export async function admissionsHistoryCard() { return admissionsTable(); }
 
 async function admissionsTable() {
@@ -1087,7 +1094,7 @@ async function admissionsTable() {
         // Строка «Госпитализации» показывает ВСЕ, включая закрытые: зелёной
         // отметкой выделяем тех, кто лежит сейчас.
         const active = IN_BED_STATUSES.includes(a.status);
-        tbody.appendChild(h('tr', null,
+        tbody.appendChild(h('tr', { class: 'wb-row-link', style: { cursor: 'pointer' }, onclick: () => openCaseOverview(a.id) },   // CASE_OVERVIEW_V1
             h('td', null, a.admission_no || ('#' + a.id)),
             h('td', null, (a.patients && a.patients.full_name) || '—'),
             h('td', null, ((a.wards && a.wards.name) || '—') + ' / ' + ((a.beds && a.beds.code) || '—')),

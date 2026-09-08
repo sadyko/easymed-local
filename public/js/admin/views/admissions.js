@@ -50,7 +50,7 @@ import { h, Icon, Tag, clear, PageHead, fmtDateTime, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { isModuleAllowed, hasActorRole } from '../permissions.js';
 import { openAdmissionOrderModal, openAdmissionBedPicker, openAdmissionCancelModal, openAdmissionCard,
-         openAdmissionReviewModal, openAdmissionAttendingModal, goToMarSheet, goToCaseFile } from './admission-modal.js?v=inp5';
+         openAdmissionReviewModal, openAdmissionAttendingModal, goToMarSheet, goToCaseOverview } from './admission-modal.js?v=inp5';
 // Те же адреса модулей, что у admin.js: одна строка импорта — один экземпляр
 // модуля (у ward-beds.js есть свой `state`, и второй экземпляр развёл бы
 // фильтры доски на две копии).
@@ -364,7 +364,10 @@ function inWardCard(list, reload, onNavigate) {
             // dialogue window». Оформление истории — работа на полчаса с десятком
             // бумаг; окно карточки было лишней дверью перед ней. Само окно
             // остаётся у заявок и ожидающих осмотра — у них истории ещё нет.
-            ], () => goToCaseFile(a.id, onNavigate)));
+            // CASE_OVERVIEW_V1 — теперь СНАЧАЛА обзор (экран врача), а документы —
+            // из его шапки: «pressed opens a patients dashboard and main action →
+            // opens the documents to fill for the doctor».
+            ], () => goToCaseOverview(a.id, onNavigate)));
         }
     }
     return listCard(tr('В отделении'), 'Bed', list.length,

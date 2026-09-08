@@ -52,6 +52,7 @@ import { h, Icon, Tag, toast, clear, field, fmtDate, fmtDateTime } from '../ui.j
 import { inpatientModal, patientAnchor } from './inpatient-modal.js';   // TITLE_SHEET_V1 — вынесено, чтобы не было кольца
 import { openAdmissionTitleSheetModal } from './title-sheet.js';   // TITLE_SHEET_V1 — шаг 2 размещения
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { moneyDisplay } from '../../shared/money-input.js';   // CASE_OVERVIEW_V1 — сумма счёта в подтверждении выписки
 // BED_BOARD_SHARED_V1 — окно выбора койки рисует ДОСКУ КОЕК, а не свой список.
 // Адрес модуля с тем же '?v=', что у admin.js и views/admissions.js: разошедшийся
 // суффикс — это ВТОРОЙ экземпляр ward-beds.js со своим `state`, то есть доска в
@@ -107,6 +108,15 @@ export function goToCaseFile(admissionId, onNavigate) {
     const nav = onNavigate || (typeof window !== 'undefined' && window.easymed && window.easymed.navigate);
     if (!nav) return false;
     nav('case-file', { admissionId });
+    return true;
+}
+
+// CASE_OVERVIEW_V1 — обзор госпитализации (экран врача): туда ведёт строка
+// лежащего в «Пациентах» и строка в «Госпитализациях». Документы — из шапки.
+export function goToCaseOverview(admissionId, onNavigate) {
+    const nav = onNavigate || (typeof window !== 'undefined' && window.easymed && window.easymed.navigate);
+    if (!nav) return false;
+    nav('case-overview', { admissionId });
     return true;
 }
 
@@ -1055,7 +1065,7 @@ export function needsEpicrisis(message) {
     return EPICRISIS_REFUSALS.includes(String(message == null ? '' : message).trim());
 }
 
-export function openAdmissionDischargeRequestModal({ admission, onDone } = {}) {
+export function openAdmissionDischargeRequestModal({ admission, onDone, generateBill = false } = {}) {
     if (!admission || !admission.id) { toast(tr('Госпитализация не найдена.'), 'fail'); return; }
     const p = admission.patients || {};
 
@@ -1088,13 +1098,17 @@ export function openAdmissionDischargeRequestModal({ admission, onDone } = {}) {
         field(tr('Планируемая дата и время выписки'), whenInp),
         h('div', { class: 'muted', style: { fontSize: '12.5px' } },
             tr('Койка остаётся за пациентом. Выписку оформит старшая медсестра: фактическое время, счёт, документы.')),
+        // CASE_OVERVIEW_V1 — «discharge button with generating the payments».
+        generateBill ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+            tr('Счёт будет сформирован сразу: проживание по сегодняшний день и все невыставленные услуги — и передан в кассу.')) : null,
     ], tr('Подать заявку'), async () => {
         if (outcomeSel.value === 'transfer' && !destInp.value.trim()) {
             toast(tr('Укажите, в какое учреждение переведён пациент.'), 'fail');
             return false;
         }
-        const { error } = await supabase.rpc('admission_discharge_request', {
+        const { data, error } = await supabase.rpc('admission_discharge_request', {
             admission_id: admission.id,
+            generate_bill: generateBill,   // CASE_OVERVIEW_V1
             outcome: outcomeSel.value,
             destination: destInp.value.trim(),
             recommendations: recInp.value.trim(),
@@ -1112,7 +1126,10 @@ export function openAdmissionDischargeRequestModal({ admission, onDone } = {}) {
             if (needsEpicrisis(msg)) openAdmissionReviewModal({ admission, kind: 'discharge', onDone });
             return false;
         }
-        toast(tr('Заявка на выписку подана. Оформит старшая медсестра.'), 'ok');
+        const bill = data && data.bill;
+        toast(bill
+            ? trf('Заявка на выписку подана. Счёт {no} на {sum} сум передан в кассу.', { no: bill.invoice_number, sum: moneyDisplay(String(Math.round(Number(bill.total_amount) || 0))) || '0' })
+            : tr('Заявка на выписку подана. Оформит старшая медсестра.'), 'ok');
         if (onDone) await onDone();
         return true;
     }, { width: 560 });

@@ -100,6 +100,7 @@ import { renderPatientDocuments } from './admin/views/patient-documents.js?v=doc
 import { renderDocumentsSettings } from './admin/views/documents-settings.js?v=doc2';   // DOCUMENTS_SETTINGS_V1
 // CASE_WORKSPACE_V1 — история болезни как рабочий экран: слева шаги, справа документ.
 import { renderCaseWorkspace } from './admin/views/case-workspace.js?v=cw1';
+import { renderCaseOverview } from './admin/views/case-overview.js?v=co1';   // CASE_OVERVIEW_V1 — обзор госпитализации (экран врача)
 
 // ---------------------------------------------------------------------------
 // Nav definition — mirrors design-sample/src/app.jsx exactly + Settings group
@@ -225,6 +226,7 @@ const CRUMBS = {
     admissions:    ['Clinical', 'Inpatient ward'],   // ADMISSION_ORDER_V1
     'mar-nurse':   ['Clinical', 'Treatment tasks'],   // MAR_NURSE_V1
     'mar-sheet':   ['Clinical', 'Inpatient ward', 'Treatment sheet'],   // MAR_SHEET_V1
+    'case-overview': ['Clinical', 'Inpatient ward', 'Case overview'],   // CASE_OVERVIEW_V1
     'kitchen-sheet': ['Clinical', 'Kitchen sheet'],   // KITCHEN_SHEET_V1
     discharge:     ['Clinical', 'Discharges'],   // TWO_STEP_DISCHARGE_V1
     beds:          ['Clinical', 'Ward & beds'],
@@ -591,7 +593,7 @@ const PARENT_OF = {
     // Кабинет врача
     'service-workspace': 'consultation', 'doctor-room': 'consultation',
     // Стационар
-    'mar-sheet': 'admissions', 'beds': 'admissions', 'case-file': 'admissions',
+    'mar-sheet': 'admissions', 'beds': 'admissions', 'case-file': 'admissions', 'case-overview': 'admissions',   // CASE_OVERVIEW_V1
     // Прочее
     'requests': 'crm', 'reports': 'reports-hub',
     // Модули «Скоро»: попасть на них можно только по прямой ссылке, и уйти с
@@ -1002,6 +1004,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'docs-archive':  return void await renderDocsArchive(viewRoot, ctx);   // CLINICAL_DOCS_ARCHIVE_V1
             case 'admissions':    return void await renderInpatient(viewRoot, ctx);   // INPATIENT_ONE_SECTION_V1 — заявки · койки · госпитализации одним разделом
             case 'case-file':     return void await renderCaseWorkspace(viewRoot, ctx);   // CASE_WORKSPACE_V1
+            case 'case-overview': return void await renderCaseOverview(viewRoot, ctx);   // CASE_OVERVIEW_V1
             case 'mar-sheet':     return void await renderMarSheet(viewRoot, ctx);   // MAR_SHEET_V1
             case 'mar-nurse':     return void await renderMarNurse(viewRoot, ctx);   // MAR_NURSE_V1
             case 'kitchen-sheet': return void await renderKitchenSheet(viewRoot, ctx);   // KITCHEN_SHEET_V1
