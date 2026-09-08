@@ -5603,3 +5603,8 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .vd-norm-l{font-size:12.5px;color:var(--ink-500)}
 .vd-tbl th,.vd-tbl td{font-size:12.5px;padding:6px 8px}
 .vd-empty{padding:26px;text-align:center;color:var(--ink-500);font-size:13.5px}
+
+/* DASHBOARD_ONEST_V1 — владелец: «keep onest but adapt the dashboard»: на обзоре
+   госпитализации цифры набраны тем же Onest с табличными цифрами, а не
+   моноширинным стеком — иначе на одном экране жили два шрифта. */
+.co .num,.co-head .num,.vt-card .num,.vd .num,.co-nav-count,.co-hf-v,.co-big-v,.co-tile-v,.vt-val,.vt-chip,.vd-tbl .num{font-family:var(--font-sans);font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}

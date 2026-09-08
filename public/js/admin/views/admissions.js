@@ -59,7 +59,7 @@ import { openAdmissionOrderModal, openAdmissionBedPicker, openAdmissionCancelMod
 import { renderWardBeds, admissionsHistoryCard } from './ward-beds.js?v=board4';
 // MOTION_REVEAL_V1 — переход между вкладками: панель проявляется, полоса
 // вкладок возвращается в поле зрения. Общий помощник, не свой на экран.
-import { animateIn, smoothScrollTo } from '../motion.js?v=mo1';
+import { animateIn } from '../motion.js?v=mo1';   // TAB_NO_SCROLL_V1 — прокрутки к вкладкам больше нет
 import { pastelFor } from '../pastel.js';   // PASTEL_IDENTITY_V1 — один человек, один оттенок
 
 // Раздел живёт под ключом `beds` («Стационар и палаты»): окно медсестры и доска
@@ -711,9 +711,9 @@ export async function renderInpatient(container, ctx = {}) {
         if (!initial && id === active) return;
         active = id;
         paintStrip({ animate: !initial });
-        // Вкладку переключили из середины длинного списка — полоса вкладок
-        // обязана снова оказаться на глазах.
-        if (!initial) smoothScrollTo(strip, { block: 'start' });
+        // TAB_NO_SCROLL_V1 — владелец: «when pressed the tab it transfers to the
+        // bottom, please do not transfer». Прокрутки к полосе вкладок при
+        // переключении больше нет: страница остаётся там, где её оставили.
         if (!initial) syncSubUrl();
         await mount(id);
     }

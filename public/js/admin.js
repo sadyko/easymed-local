@@ -2772,12 +2772,23 @@ function startApp({ fresh = false } = {}) {
     wireUserPopover();
     renderBranchPicker(document.getElementById('branch-picker'));
     onLangChange(() => {
-        applyTopbarLang();
-        renderSidebar();
-        renderSectionTitle();
-        renderCrumbs();
-        setStatus(_lastStatusKey, _lastStatusOk);
-        for (const pane of state.panes) { try { renderViewInto(pane); } catch (e) { console.warn('[lang] re-render', e); } }   // LANG_RERENDER_V1 — navigate() no-ops on a cached pane, so re-render them directly
+        // LANG_INSTANT_V1 — владелец: «make instant language changing when
+        // changed». Каждый шаг перерисовки — сам по себе: упавший заголовок или
+        // статус НЕ должен оставить экраны на прежнем языке (раньше исключение
+        // в любом из первых шагов обрывало весь обработчик до перерисовки
+        // панелей, и человек видел старый язык до перезагрузки). Панели
+        // асинхронные — их отказ ловится отдельно.
+        const step = (name, fn) => { try { fn(); } catch (e) { console.warn('[lang] ' + name, e); } };
+        step('topbar', applyTopbarLang);
+        step('sidebar', renderSidebar);
+        step('title', renderSectionTitle);
+        step('crumbs', renderCrumbs);
+        step('status', () => setStatus(_lastStatusKey, _lastStatusOk));
+        step('branch', () => renderBranchPicker(document.getElementById('branch-picker')));
+        step('account', () => renderAccountControls());
+        for (const pane of state.panes) {   // LANG_RERENDER_V1 — navigate() no-ops on a cached pane, so re-render them directly
+            step('pane ' + pane.key, () => { const r = renderViewInto(pane); if (r && typeof r.catch === 'function') r.catch((e) => console.warn('[lang] pane ' + pane.key, e)); });
+        }
     });
     onBranchChange(() => {
         // BRANCH_RERENDER_V1 — re-render every CACHED pane so the branch filter
