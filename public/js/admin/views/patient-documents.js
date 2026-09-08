@@ -28,7 +28,11 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, StatusTag, fmtDateTime, field } from '../ui.js';
-import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+// DOCS_HISTORY_SECTION_V1 — подшитые истории болезни печатаются тем же бланком,
+// что карта пациента (PATIENT_HISTORY_TAB_V1) и документы госпитализации.
+import { caseFilePrintHtml } from './case-docs.js?v=cw1';
+import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';
 // LAB_BLANK_ONE_TEMPLATE_V1 — печатаем шаблоном из «Настройки → Документы»,
 // тем же, что лаборатория, карта пациента и Telegram-бот.
 import { printableSheet } from './doc-settings.js?v=noqr1';
@@ -87,13 +91,118 @@ function repaintBody() {
         if (!feed.from && !feed.to) { feed.from = weekStart(); feed.to = ymdLocal(new Date()); }
         refs.bodyEl.appendChild(searchCard());
         refs.bodyEl.appendChild(feedCard());
+        // DOCS_HISTORY_SECTION_V1 — владелец: «add section of history of
+        // diseases too». Подшитые истории болезни — отдельный раздел под
+        // лентой: они не привязаны к услуге визита, и лента их не видит.
+        refs.bodyEl.appendChild(historyCard(null));
         loadFeed({ reset: true });
         return;
     }
     refs.bodyEl.appendChild(selectedHeader());
     refs.docsWrap = h('div', { style: { marginTop: '16px' } });
     refs.bodyEl.appendChild(refs.docsWrap);
+    refs.bodyEl.appendChild(historyCard(state.patient.id));   // DOCS_HISTORY_SECTION_V1 — истории этого пациента
     loadAndPaintDocs();
+}
+
+// -----------------------------------------------------------------------------
+// DOCS_HISTORY_SECTION_V1 — «История болезни»: подшитые истории (visit_documents,
+// doc_type 'case_file'). Снимок хранит обложку (пациент, № истории, отделение,
+// даты) прямо в body, поэтому список собирается ОДНИМ запросом, без соединения
+// с пациентами. patientId = null — последние истории по всей клинике (лента),
+// число — истории одного пациента (его архив).
+// -----------------------------------------------------------------------------
+const HISTORY_LIMIT = 60;
+
+function parseCaseFile(row) {
+    let body = null;
+    try { body = typeof row.body === 'string' ? JSON.parse(row.body) : (row.body || null); } catch (e) { body = null; }
+    const cover = (body && body.cover) || {};
+    return {
+        id: row.id, patient_id: row.patient_id, created_at: row.created_at, title: row.title || '',
+        body,
+        admission_no: cover.admission_no || '',
+        patient_name: cover.patient_name || '',
+        patient_mrn: cover.patient_mrn || '',
+        department: cover.department || '',
+        admitted_at: cover.admitted_at || null,
+        discharged_at: cover.discharged_at || null,
+        assembled_by: cover.assembled_by || '',
+        complete: !!(body && body.complete),
+    };
+}
+
+async function fetchCaseFiles(patientId) {
+    let q = supabase.from('visit_documents')
+        .select('id, patient_id, title, body, created_at')
+        .eq('doc_type', 'case_file');
+    if (patientId != null) q = q.eq('patient_id', patientId);
+    const { data, error } = await q.order('created_at', { ascending: false }).limit(HISTORY_LIMIT);
+    if (error) throw new Error(error.message || 'visit_documents');
+    return (data || []).map(parseCaseFile);
+}
+
+async function openCaseFile(f) {
+    if (!f || !f.body) { toast(tr('У этой записи нет содержимого.'), 'fail'); return; }
+    const html = caseFilePrintHtml(f.body, { fontFaceCss: PRINT_FONT_FACE_CSS });
+    const w = window.open('', '_blank');
+    if (!w) { toast(tr('Для печати разрешите всплывающие окна.'), 'warn'); return; }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+}
+
+function historyRow(f, { withPatient }) {
+    const date = String(f.created_at || '').slice(0, 10).split('-').reverse().join('.');
+    const stay = [
+        f.admitted_at ? trf('поступил {when}', { when: fmtDateTime(f.admitted_at) }) : null,
+        f.discharged_at ? trf('выписан {when}', { when: fmtDateTime(f.discharged_at) }) : null,
+        f.department || null,
+    ].filter(Boolean).join(' · ');
+    return h('div', { class: 'dh-row' },
+        h('div', { class: 'dh-date' }, date),
+        withPatient ? h('div', { class: 'dh-pat' },
+            h('div', { class: 'dh-name' }, f.patient_name || '—'),
+            h('div', { class: 'muted dh-sub' }, f.patient_mrn || '')) : null,
+        h('div', { class: 'dh-main' },
+            h('div', { class: 'dh-t' }, Icon('Bed', { size: 13 }), ' ', trf('История болезни № {no}', { no: f.admission_no || '—' })),
+            h('div', { class: 'muted dh-sub' }, [stay, f.assembled_by ? trf('собрал {name}', { name: f.assembled_by }) : null].filter(Boolean).join(' · '))),
+        h('span', { class: 'dh-tag' }, Tag(f.complete ? tr('комплект полный') : tr('не полный'), { kind: f.complete ? 'ok' : 'warn', dot: true })),
+        h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => openCaseFile(f) },
+            Icon('Print', { size: 13 }), ' ', tr('Открыть')),
+        withPatient ? h('button', {
+            class: 'btn btn-sm', type: 'button', title: tr('Все документы пациента'),
+            onclick: () => selectPatient({ id: f.patient_id, full_name: f.patient_name, mrn: f.patient_mrn }),
+        }, Icon('ChevronRight', { size: 14 })) : null);
+}
+
+function historyCard(patientId) {
+    const list = h('div', { class: 'dh-list' });
+    const count = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
+    const card = h('div', { class: 'card dh-card', style: { marginTop: '16px', padding: '0' } },
+        h('div', { class: 'card-header' },
+            h('h3', null, Icon('Bed', { size: 16 }), ' ', tr('История болезни')),
+            h('span', { class: 'grow', style: { flex: '1' } }),
+            count),
+        list);
+    list.appendChild(h('div', { class: 'empty', style: { padding: '18px' } }, tr('Загружаем…')));
+    fetchCaseFiles(patientId).then((files) => {
+        clear(list);
+        count.textContent = files.length ? trf('подшито: {n}', { n: files.length }) : '';
+        if (!files.length) {
+            list.appendChild(h('div', { class: 'empty', style: { padding: '26px', textAlign: 'center' } },
+                h('div', { style: { fontWeight: '600' } }, tr('Подшитых историй болезни пока нет')),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
+                    tr('История появляется после кнопки «Собрать историю» в документах госпитализации.'))));
+            return;
+        }
+        for (const f of files) list.appendChild(historyRow(f, { withPatient: patientId == null }));
+    }).catch((e) => {
+        clear(list);
+        list.appendChild(h('div', { class: 'empty', style: { padding: '18px' } },
+            trf('Не удалось загрузить истории болезни: {msg}', { msg: (e && e.message) || e })));
+    });
+    return card;
 }
 
 function selectPatient(p) {

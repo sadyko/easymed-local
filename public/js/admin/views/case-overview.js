@@ -124,6 +124,11 @@ export function caseHead(ov, { active = 'overview', onNavigate = null, onReload 
                 onclick: () => openAdmissionAttendingModal({ admission: admissionForModals(ov), onDone: async () => { if (onReload) await onReload(); } }),
             }, tr('Назначить')));
 
+    // CASE_HEAD_TIDY_V1 — владелец: «tidy up this section and make discharge
+    // main button in the header». Главное действие стоит В ШАПКЕ, справа от
+    // стрелок по соседям, а не одинокой кнопкой в пустой полосе под фактами;
+    // сама полоса фактов стала компактной строкой без отдельного «подвала».
+    const acts = actions.filter(Boolean);
     return h('div', { class: 'co-head card' },
         h('div', { class: 'co-head-row' },
             avatar,
@@ -131,31 +136,40 @@ export function caseHead(ov, { active = 'overview', onNavigate = null, onReload 
                 h('div', { class: 'co-name-row' }, nameBtn, chip, dayTag),
                 h('div', { class: 'co-sub muted' }, who || '—'),
                 allergy),
-            navBox),
+            h('div', { class: 'co-head-side' },
+                navBox,
+                acts.length ? h('div', { class: 'co-actions' }, ...acts) : null)),
         h('div', { class: 'co-fields' },
             hf('№ истории', a.admission_no),
             hf('Поступление', a.admitted_at && inBed ? dt(a.admitted_at) : (a.admitted_at && a.status === 'discharged' ? dt(a.admitted_at) : '—')),
             hf('Отделение · койка', place),
             attending,
-            hf('Плановая выписка', a.planned_discharge_at ? dt(a.planned_discharge_at) : (a.discharged_at ? tr('выписан') + ' ' + dt(a.discharged_at) : '—'))),
-        actions.filter(Boolean).length
-            ? h('div', { class: 'co-bar' }, h('span', { class: 'grow' }), h('div', { class: 'co-actions' }, ...actions.filter(Boolean)))
-            : h('div', { class: 'co-bar co-bar-empty' }));
+            hf('Плановая выписка', a.planned_discharge_at ? dt(a.planned_discharge_at) : (a.discharged_at ? tr('выписан') + ' ' + dt(a.discharged_at) : '—'))));
 }
 
 // ---------------------------------------------------------------------------
 // Экран «Обзор»
 // ---------------------------------------------------------------------------
 export async function renderCaseOverview(container, { payload, onNavigate } = {}) {
-    const admissionId = Number(payload && (payload.admissionId || payload.admission_id || payload.id)) || null;
+    // CASE_ROUTE_SUB_V1 — номер госпитализации едет и в адресе (#case-overview/123,
+    // payload.sub). Владелец: «sometimes this error occurs» — «Госпитализация
+    // не выбрана» появлялась после перезагрузки страницы: адрес помнил экран,
+    // но не пациента. Теперь адрес помнит обоих, а без номера обзор не
+    // рисует тупик, а уводит в список пациентов стационара.
+    const admissionId = Number(payload && (payload.admissionId || payload.admission_id || payload.id || payload.sub)) || null;
     clear(container);
     const root = h('div', { class: 'fade-in co' });
     container.appendChild(root);
     if (!admissionId) {
+        const fn = onNavigate || (typeof window !== 'undefined' && window.easymed && window.easymed.navigate);
         root.appendChild(h('div', { class: 'card', style: { padding: '22px' } },
             h('div', { style: { fontSize: '15px', fontWeight: '600', color: 'var(--ink-900)' } }, tr('Госпитализация не выбрана')),
             h('div', { class: 'muted', style: { fontSize: '13.5px', marginTop: '6px' } },
-                tr('Обзор открывают из списка пациентов в разделе «Стационар».'))));
+                tr('Обзор открывают из списка пациентов в разделе «Стационар».')),
+            h('button', { class: 'btn btn-primary', type: 'button', style: { marginTop: '12px' },
+                onclick: () => { if (fn) fn('admissions', { sub: 'patients' }); } },
+                ic('Bed', 14), ' ', tr('К списку пациентов'))));
+        if (fn) setTimeout(() => fn('admissions', { sub: 'patients' }), 0);
         return;
     }
     state.admissionId = admissionId;
@@ -235,8 +249,11 @@ function paint(root, onNavigate) {
     const canRequest = ['admitted', 'examined', 'active'].includes(a.status);
     const openDischarge = () => openAdmissionDischargeRequestModal({ admission: admissionForModals(ov), onDone: reload, generateBill: true });
 
+    // CASE_HEAD_TIDY_V1 — «make discharge main button … with pulsating»: выписка
+    // — главное действие обзора, поэтому она первичная и «дышит» (btn-pulse:
+    // мягкое кольцо; при «меньше движения» — просто обводка, без анимации).
     const dischargeBtn = canRequest
-        ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: openDischarge }, ic('Check', 13), ' ', tr('Выписка'))
+        ? h('button', { class: 'btn btn-primary btn-pulse', type: 'button', onclick: openDischarge, title: tr('Подать заявку на выписку и выставить счёт') }, ic('Check', 14), ' ', tr('Выписка'))
         : null;
     root.appendChild(caseHead(ov, { active: 'overview', onNavigate, onReload: reload, actions: [dischargeBtn] }));
 

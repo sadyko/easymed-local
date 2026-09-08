@@ -54,7 +54,10 @@ function reset(admissionId) {
 }
 
 export async function renderCaseWorkspace(container, { payload, onNavigate } = {}) {
-    const admissionId = Number(payload && (payload.admissionId || payload.admission_id || payload.id)) || null;
+    // CASE_ROUTE_SUB_V1 — номер госпитализации едет и в адресе (#case-file/123,
+    // payload.sub): перезагрузка страницы возвращает те же документы, а не
+    // «Госпитализация не выбрана».
+    const admissionId = Number(payload && (payload.admissionId || payload.admission_id || payload.id || payload.sub)) || null;
     if (state.admissionId !== admissionId) reset(admissionId);
     // CASE_OVERVIEW_V1 — главное действие обзора открывает документы НА НУЖНОМ ШАГЕ.
     if (payload && payload.kind) state.open = { kind: String(payload.kind), mode: 'edit', reviewId: null };

@@ -7154,4 +7154,12 @@ export const STRINGS = {
   "Долг по счетам ({n}) — нажмите, чтобы открыть счета": {"en":"Debt on invoices ({n}) — click to open the invoices","ru":"Долг по счетам ({n}) — нажмите, чтобы открыть счета","uz":"Hisoblar boʻyicha qarz ({n}) — hisoblarni ochish uchun bosing"},
   "Есть неоплаченный долг по счетам — откройте карточку, вкладку «Счёт»": {"en":"There is an unpaid debt on invoices — open the card, the «Invoice» tab","ru":"Есть неоплаченный долг по счетам — откройте карточку, вкладку «Счёт»","uz":"Hisoblar boʻyicha toʻlanmagan qarz bor — kartani, «Hisob» boʻlimini oching"},
   "Оформлен долг: {sum}": {"en":"Debt recorded: {sum}","ru":"Оформлен долг: {sum}","uz":"Qarz rasmiylashtirilgan: {sum}"},
+  "Подать заявку на выписку и выставить счёт": {"en":"Request discharge and issue the invoice","ru":"Подать заявку на выписку и выставить счёт","uz":"Chiqarishga soʻrov berish va hisob chiqarish"},
+  "собрал {name}": {"en":"assembled by {name}","ru":"собрал {name}","uz":"yigʻdi: {name}"},
+  "не полный": {"en":"incomplete","ru":"не полный","uz":"toʻliq emas"},
+  "Все документы пациента": {"en":"All documents of the patient","ru":"Все документы пациента","uz":"Bemorning barcha hujjatlari"},
+  "подшито: {n}": {"en":"filed: {n}","ru":"подшито: {n}","uz":"tikilgan: {n}"},
+  "Подшитых историй болезни пока нет": {"en":"No filed case histories yet","ru":"Подшитых историй болезни пока нет","uz":"Tikilgan kasallik tarixlari hali yoʻq"},
+  "История появляется после кнопки «Собрать историю» в документах госпитализации.": {"en":"A history appears after «Assemble the history» in the admission documents.","ru":"История появляется после кнопки «Собрать историю» в документах госпитализации.","uz":"Tarix yotqizish hujjatlaridagi «Tarixni yigʻish» tugmasidan keyin paydo boʻladi."},
+  "Не удалось загрузить истории болезни: {msg}": {"en":"Could not load the case histories: {msg}","ru":"Не удалось загрузить истории болезни: {msg}","uz":"Kasallik tarixlarini yuklab boʻlmadi: {msg}"},
 };

@@ -372,6 +372,17 @@ function navigate(view, payload, opts = {}) {
     // that replaced it, not by a blank unknown view.
     const legacy = LEGACY_ROUTES[view];
     if (legacy) { view = legacy.view; if (legacy.sub) payload = { ...(payload || {}), sub: legacy.sub }; }
+    // CASE_ROUTE_SUB_V1 — экраны госпитализации (обзор, документы) носят её
+    // номер В АДРЕСЕ: '#case-overview/123'. Две вещи разом: (1) перезагрузка
+    // возвращает того же пациента, а не «Госпитализация не выбрана»
+    // (владелец: «sometimes this error occurs»); (2) стрелки «‹ ›» по соседям
+    // и ссылки из списков ведут на ДРУГУЮ госпитализацию в уже смонтированную
+    // панель — а панель перерисовывается только когда подмаршрут ИЗМЕНИЛСЯ
+    // (HASH_TRUTH_V1 ниже). Без sub соседняя госпитализация показывала бы
+    // прежнего пациента.
+    if ((view === 'case-overview' || view === 'case-file') && payload && payload.admissionId != null && typeof payload.sub !== 'string') {
+        payload = { ...payload, sub: String(payload.admissionId) };
+    }
     const key = viewKeyFor(view, payload);
 
     // Already mounted? Show it again — never re-render (that IS the cache).
