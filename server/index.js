@@ -15,6 +15,7 @@ import { createApp } from './app.js';
 import { setDataDir, setAppVersion } from './services/control/config.js';   // SUPERVISED_INSTALL_V1 / UPDATE_DELIVERY_V1
 import { scheduleCheckin } from './services/control/checkin.js';   // LICENCE_CORE_V1
 import { scheduleUpdater } from './services/control/updater.js';   // UPDATE_DELIVERY_V1
+import { pruneVersionsAtBoot } from './services/control/prune-versions.js';   // PRUNE_VERSIONS_V1
 import { scheduleRelayPublish } from './services/branch-sync/relay.js';   // BRANCH_SYNC_RELAY_V1
 import { scheduleBranchPull } from './services/branch-sync/schedule-pull.js';   // BRANCH_SYNC_HOURLY_V1
 import { readPairing } from './services/branch-sync/pairing.js';
@@ -172,6 +173,16 @@ if (isMain) {
   }
 
   migrate(db);
+
+  // PRUNE_VERSIONS_V1 — старые версии программы убираются ИМЕННО ЗДЕСЬ: после
+  // того, как миграции прошли. Это первый момент, когда известно, что
+  // запущенная версия работает. Чистить раньше — во время обновления — нельзя:
+  // 07.09.2026 версия 1.1.0 встала на миграции, и спасла клинику ровно
+  // предыдущая папка, которую тогда никто не удалил. Хранятся запущенная и две
+  // предыдущие; из исходников (нет versions/) вызов тихо ничего не делает.
+  // Ошибка уборки — предупреждение в журнал и только: запуску она не помеха.
+  pruneVersionsAtBoot(ROOT);
+
   const firstRunPassword = bootstrapAdmin(db);
 
   // Expired sessions: prune at startup, then hourly. unref() so the timer
