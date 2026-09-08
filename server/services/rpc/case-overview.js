@@ -222,7 +222,9 @@ export function admissionOverview(db, args, user) {
     services,
     operation,
     bill,
-    docs: { progress: docs.progress, next_kind: docs.next_kind, overdue: docs.progress.overdue, incomplete: docs.discharge_gate.incomplete },
+    docs: { progress: docs.progress, next_kind: docs.next_kind,
+      // CASE_DOC_SET_V2 — у своего рода имя приходит отсюда: словарь его не знает.
+      next_title: ((docs.items || []).find((i) => i.kind === docs.next_kind) || {}).title || '', overdue: docs.progress.overdue, incomplete: docs.discharge_gate.incomplete },
     discharge,
     neighbours: wardNeighbours(db, adm, user),
     vitals: vitalsSummary(db, adm),   // VITALS_NEWS_V1 — показатели, NEWS и динамика

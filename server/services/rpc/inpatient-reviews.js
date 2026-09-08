@@ -124,19 +124,70 @@ export const CASE_DOC_SET = Object.freeze([
   { kind: 'discharge',   due: 'at_discharge', hours: null },
 ].map(Object.freeze));
 
-/** Три документа, само наличие которых означает «этого пациента оперируют». */
-export const SURGICAL_KINDS = Object.freeze(['anesthesia', 'preop', 'operation']);
-
 /** Второй раздел мокапа: всё, что клиника подшивает сверх набора. */
 export const OTHER_KIND = 'other';
-
-const REQUIRED_KINDS = CASE_DOC_SET.map((d) => d.kind);
-const CASE_DOC_BY_KIND = new Map(CASE_DOC_SET.map((d) => [d.kind, d]));
 
 /** Роды, которых в наборе больше нет, но записи которых у клиник уже есть (CONSENT_OUT_V1). */
 export const LEGACY_KINDS = Object.freeze(['consent']);
 
-const KINDS = [...REQUIRED_KINDS, ...LEGACY_KINDS, OTHER_KIND];
+// ---------------------------------------------------------------------------
+// CASE_DOC_SET_V2 (2026-09-08) — НАБОР ЗАДАЁТ КЛИНИКА, А НЕ КОД.
+//
+// Владелец: «this list is hardcoded and the system asks for filling them, we
+// need to make not hardcoded, and able to add a title document. its maybe
+// before operation it can be anesthesist list etc etc. but we shoud give basic
+// templates list + option».
+//
+// Набор выше остаётся — но уже как ЗАСЕВАЕМЫЙ ОБРАЗЕЦ (миграция 115 кладёт
+// ровно эти десять строк) и как запасной вариант для базы, до этой миграции не
+// дошедшей. Читает же чек-лист таблицу case_doc_types.
+//
+// ЧТО ОСТАЁТСЯ КОДОМ. Правила срока: их четыре с половиной, и каждое — своя
+// арифметика (от койки, периодом, от начала хирургического блока, при выписке,
+// без срока). Клиника выбирает правило и часы; изобрести пятое правило она не
+// может, потому что новое правило — это новый код, а не строка справочника.
+//
+// ЧИТАЕТСЯ ПРИ КАЖДОМ ЗАПРОСЕ И НЕ КЭШИРУЕТСЯ. Набор правят редко, а сервер
+// живёт неделями: кэш означал бы, что клиника меняет состав и не видит
+// изменений до перезапуска. Запрос — десять строк по индексу.
+const DOC_SET_SQL = 'SELECT kind, title, due_rule, due_hours, block FROM case_doc_types WHERE active = 1 ORDER BY sort_order, id';
+
+export function loadCaseDocSet(db) {
+  let rows = null;
+  try { rows = db.prepare(DOC_SET_SQL).all(); }
+  catch (e) { rows = null; }   // база старше миграции 115
+  if (!rows || !rows.length) return CASE_DOC_SET;
+  return rows.map((r) => Object.freeze({
+    kind: r.kind,
+    title: r.title || '',
+    due: r.due_rule,
+    hours: r.due_hours === null || r.due_hours === undefined ? null : Number(r.due_hours),
+    block: r.block || undefined,
+  }));
+}
+
+/** Документы, само наличие которых означает «этого пациента оперируют». */
+export function surgicalKinds(docSet) {
+  return docSet.filter((d) => d.block === 'surgical').map((d) => d.kind);
+}
+
+/**
+ * РАЗОВЫЕ документы: второй опубликованный ЗАКРЫВАЕТ прежний (superseded_by) —
+ * это и есть «исправление не стирает исходник». Повторяющиеся (дневник,
+ * этапный эпикриз) так не закрывают: там второй документ — следующая запись, а
+ * не исправление предыдущей, и закрыть её значило бы стереть вчерашний день.
+ */
+export function singleKinds(docSet) {
+  return docSet.filter((d) => d.due !== 'period').map((d) => d.kind);
+}
+
+/** Всё, что вообще принимается как род записи: набор + прежние роды + «прочее». */
+export function knownKinds(db) {
+  return [...loadCaseDocSet(db).map((d) => d.kind), ...LEGACY_KINDS, OTHER_KIND];
+}
+
+/** Три документа операции — для тех мест, где набор ещё не загружен. */
+export const SURGICAL_KINDS = Object.freeze(['anesthesia', 'preop', 'operation']);
 
 // ДОКУМЕНТ, КОТОРЫЙ ВЕДЁТ ЛЕЧАЩИЙ ВРАЧ. У этих публикация спрашивает
 // assertCanPrescribe — «лечение начато и это свой пациент»: дневник, этапный и
@@ -150,13 +201,6 @@ const KINDS = [...REQUIRED_KINDS, ...LEGACY_KINDS, OTHER_KIND];
 // приёмному врачу — свой: осмотр приёмного врача пишется в час поступления,
 // когда лечащего врача ещё нет вовсе.
 const ATTENDING_DOC_KINDS = ['round', 'interim', 'discharge', 'rationale'];
-
-// РАЗОВЫЕ документы: второй опубликованный ЗАКРЫВАЕТ прежний (superseded_by) —
-// это и есть «исправление не стирает исходник». Повторяющиеся (дневник,
-// этапный эпикриз) и «прочие» так не закрывают: там второй документ — следующая
-// запись, а не исправление предыдущей, и закрыть её значило бы стереть
-// вчерашний день из истории болезни.
-const SINGLE_KINDS = REQUIRED_KINDS.filter((k) => CASE_DOC_BY_KIND.get(k).due !== 'period');
 
 // Кто вообще ПИШЕТ врачебную запись. Медсестры здесь нет: осмотр — врачебный
 // документ, а сестринская запись в этой базе — отметка в листе назначений
@@ -258,12 +302,30 @@ export function isDoctorRow(u) {
   return false;
 }
 
+// CASE_DOC_SET_V2 — ДЕЙСТВУЮЩИЙ РОД СТРОКИ.
+//
+// Свой род клиники хранится родом 'other' (он в CHECK колонки есть) плюс
+// настоящим родом в type_kind: снять CHECK можно только пересборкой таблицы, а
+// пересборок мы не делаем (урок 1.1.0, миграция 116). Читатели про это не
+// знают: они спрашивают род, и получают тот, который есть на самом деле.
+const effKind = (r) => (r && r.type_kind ? r.type_kind : (r && r.kind));
+const withKind = (r) => (r && r.type_kind ? Object.assign({}, r, { kind: r.type_kind }) : r);
+
+/** Как род ложится в базу: встроенный — как есть, свой — в type_kind. */
+function storedKind(db, kind) {
+  const own = loadCaseDocSet(db).some((d) => d.kind === kind) && !BUILTIN_KINDS.includes(kind);
+  return own ? { kind: OTHER_KIND, type_kind: kind } : { kind, type_kind: null };
+}
+
+/** Роды, которые колонка admission_reviews.kind принимает как есть (CHECK миграции 095). */
+const BUILTIN_KINDS = Object.freeze([...CASE_DOC_SET.map((d) => d.kind), ...LEGACY_KINDS, OTHER_KIND]);
+
 function loadReview(db, reviewId) {
   const id = posIntOrNull(reviewId);
   if (id === null) throw new RpcError('review_id must be a positive integer.', 400);
   const row = db.prepare('SELECT * FROM admission_reviews WHERE id = ?').get(id);
   if (!row) throw new RpcError('Запись осмотра не найдена.', 400);
-  return row;
+  return withKind(row);
 }
 
 // ─── 1. Сохранить / опубликовать осмотр ─────────────────────────────────────
@@ -287,7 +349,9 @@ function loadReview(db, reviewId) {
 export function admissionReviewSave(db, args, user) {
   const a = args || {};
   const kind = str(a.kind, 20, 'primary') || 'primary';
-  if (!KINDS.includes(kind)) throw new RpcError(`Неизвестный род записи: ${kind}.`, 400);
+  // CASE_DOC_SET_V2 — род проверяется по НАБОРУ КЛИНИКИ: свой род, заведённый в
+  // «Документах», обязан приниматься так же, как встроенный.
+  if (!knownKinds(db).includes(kind)) throw new RpcError(`Неизвестный род записи: ${kind}.`, 400);
 
   requireRole(user, WRITE_ROLES, 'Врачебная запись');
 
@@ -385,20 +449,24 @@ export function admissionReviewSave(db, args, user) {
     const publishedAt = publish ? at : null;
 
     let reviewId;
+    // CASE_DOC_SET_V2 — свой род клиники ложится в type_kind, а колонка kind
+    // получает 'other': её CHECK написан до настраиваемого набора и снимается
+    // только пересборкой таблицы, которой мы не делаем.
+    const st = storedKind(db, kind);
     if (existing) {
       db.prepare(`UPDATE admission_reviews
-                     SET kind = ?, complaints = ?, objective = ?, diagnosis = ?, plan = ?, body = ?,
+                     SET kind = ?, type_kind = ?, complaints = ?, objective = ?, diagnosis = ?, plan = ?, body = ?,
                          author_role = ?, updated_at = ?, published_at = ?
                    WHERE id = ?`)
-        .run(kind, fields.complaints, fields.objective, fields.diagnosis, fields.plan, fields.body,
+        .run(st.kind, st.type_kind, fields.complaints, fields.objective, fields.diagnosis, fields.plan, fields.body,
              authorRole, at, publishedAt, existing.id);
       reviewId = existing.id;
     } else {
       reviewId = db.prepare(`INSERT INTO admission_reviews
-          (admission_id, kind, complaints, objective, diagnosis, plan, body,
+          (admission_id, kind, type_kind, complaints, objective, diagnosis, plan, body,
            author_id, author_role, published_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?)`)
-        .run(adm.id, kind, fields.complaints, fields.objective, fields.diagnosis, fields.plan,
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(adm.id, st.kind, st.type_kind, fields.complaints, fields.objective, fields.diagnosis, fields.plan,
              fields.body, (user && user.id) || null, authorRole, publishedAt).lastInsertRowid;
     }
 
@@ -417,10 +485,12 @@ export function admissionReviewSave(db, args, user) {
       // который никто не сможет ответить. CASE_DOCS_V1 распространил правило с
       // первичного осмотра на весь разовый набор (SINGLE_KINDS) — оно там ровно
       // такое же, и именно оно делает счётчик редакций в чек-листе настоящим.
-      if (SINGLE_KINDS.includes(kind)) {
+      if (singleKinds(loadCaseDocSet(db)).includes(kind)) {
+        // Ищется по ДЕЙСТВУЮЩЕМУ роду: у своего рода он в type_kind, и сравнение
+        // по одной колонке kind закрыло бы все «прочие документы» разом.
         db.prepare(`UPDATE admission_reviews
                        SET superseded_by = ?
-                     WHERE admission_id = ? AND kind = ? AND id <> ?
+                     WHERE admission_id = ? AND COALESCE(type_kind, kind) = ? AND id <> ?
                        AND published_at IS NOT NULL AND superseded_by IS NULL`)
           .run(reviewId, adm.id, kind, reviewId);
       }
@@ -750,7 +820,7 @@ export function admissionReviewsList(db, args, user) {
       LEFT JOIN users u ON u.id = r.author_id
      WHERE r.admission_id = ?
      ORDER BY r.id
-  `).all(adm.id);
+  `).all(adm.id).map(withKind);
 
   const seesDrafts = hasAnyRole(user, ['admin', 'head_doctor']);
   const uid = (user && user.id) || null;
@@ -881,7 +951,7 @@ function loadCaseRows(db, admissionId) {
       LEFT JOIN users u ON u.id = r.author_id
      WHERE r.admission_id = ?
      ORDER BY r.id
-  `).all(admissionId);
+  `).all(admissionId).map(withKind);
 }
 
 function groupRowsByKind(rows) {
@@ -941,14 +1011,17 @@ export function admissionCaseDocs(db, args, user) {
     ? ((db.prepare('SELECT full_name FROM users WHERE id = ?').get(adm.admitting_doctor_id) || {}).full_name || '')
     : '';
 
-  // Хирургический блок — по данным (см. CASE_DOC_SET): появился хоть один из
-  // трёх документов операции, значит оперируют.
-  const surgicalRows = SURGICAL_KINDS.flatMap((k) => byKind.get(k) || []);
+  // CASE_DOC_SET_V2 — состав чек-листа берётся у клиники.
+  const docSet = loadCaseDocSet(db);
+
+  // Хирургический блок — по данным: появился хоть один документ, помеченный
+  // блоком, значит оперируют. Какие это документы, решает набор клиники.
+  const surgicalRows = surgicalKinds(docSet).flatMap((k) => byKind.get(k) || []);
   const surgical = surgicalRows.length > 0;
   const surgStamps = surgicalRows.map((r) => msOf(r.created_at)).filter((t) => t !== null).sort((a, b) => a - b);
   const surgBase = surgStamps.length ? surgStamps[0] : null;
 
-  const items = CASE_DOC_SET.map((def, i) => {
+  const items = docSet.map((def, i) => {
     const kindRows = byKind.get(def.kind) || [];
     const published = kindRows.filter((r) => r.published_at);
     const drafts = kindRows.filter((r) => !r.published_at);
@@ -962,14 +1035,18 @@ export function admissionCaseDocs(db, args, user) {
     let state;
     let periodsMissing = 0;
 
+    // CASE_DOC_SET_V2 — часы приходят из набора и могут быть пустыми: у правил
+    // «при выписке» и «без срока» их не бывает, а у остальных пустое число
+    // значит «срок не задан», а не «просрочено немедленно».
+    const hours = Number.isFinite(Number(def.hours)) ? Number(def.hours) : null;
     if (def.due === 'clock') {
-      dueAt = base === null ? null : base + def.hours * MS_HOUR;
+      dueAt = (base === null || hours === null) ? null : base + hours * MS_HOUR;
     } else if (def.due === 'surgical') {
       applies = surgical;
       required = surgical;
-      dueAt = surgBase === null ? null : surgBase + def.hours * MS_HOUR;
-    } else if (def.due === 'period') {
-      const p = periodState(base, now, def.hours * MS_HOUR, published);
+      dueAt = (surgBase === null || hours === null) ? null : surgBase + hours * MS_HOUR;
+    } else if (def.due === 'period' && hours !== null) {
+      const p = periodState(base, now, hours * MS_HOUR, published);
       dueAt = p.dueAt;
       periodsMissing = p.missing.length;
       // Этапный эпикриз становится обязательным, только когда первый его период
@@ -989,7 +1066,9 @@ export function admissionCaseDocs(db, args, user) {
       else state = 'pending';
     }
     // «При выписке» — событие, а не час: просроченным этот документ не бывает.
-    if (def.due === 'at_discharge' && state === 'overdue') state = 'pending';
+    // «Без срока» — тем более: клиника завела документ в набор, но часов ему
+    // не назначила, и выдумывать их за неё нельзя.
+    if ((def.due === 'at_discharge' || def.due === 'none') && state === 'overdue') state = 'pending';
 
     const tail = chain ? chain[chain.length - 1] : null;
     return {
@@ -999,9 +1078,13 @@ export function admissionCaseDocs(db, args, user) {
       applies,
       required: applies && required,
       state,
+      // CASE_DOC_SET_V2 — имя СВОЕГО рода клиника пишет сама, и переводить его
+      // некому: экран показывает его как есть. У встроенных пусто — их имена
+      // живут в словаре и переводятся на три языка.
+      title: def.title || '',
       due_rule: def.due,
       due_at: isoOf(dueAt),
-      period_hours: def.due === 'period' ? def.hours : null,
+      period_hours: def.due === 'period' ? hours : null,
       periods_missing: periodsMissing,
       entries: chains.length,
       block: def.block || null,
@@ -1236,10 +1319,14 @@ export function admissionCaseFile(db, args, user) {
   const byKind = groupRowsByKind(rows);
 
   const documents = [];
+  // CASE_DOC_SET_V2 — имя своего рода едет вместе с документом: на бумаге его
+  // взять больше неоткуда, словарь знает только встроенные.
+  const titleOf = (k) => (loadCaseDocSet(db).find((d) => d.kind === k) || {}).title || '';
   const push = (kind, chain, order) => {
     const cur = chain[chain.length - 1];
     documents.push({
       kind,
+      title: titleOf(kind),
       order,
       review_id: cur.id,
       published_at: cur.published_at,
@@ -1266,7 +1353,8 @@ export function admissionCaseFile(db, args, user) {
     const chain = currentChain(chainsOf((byKind.get(kind) || []).filter((r) => r.published_at)));
     if (chain) push(kind, chain, -LEGACY_KINDS.length + i);
   });
-  CASE_DOC_SET.forEach((def, i) => {
+  const docSet = loadCaseDocSet(db);
+  docSet.forEach((def, i) => {
     const chains = chainsOf((byKind.get(def.kind) || []).filter((r) => r.published_at));
     if (def.due === 'period') {
       // Повторяющийся документ идёт ВЕСЬ, по датам: дневник наблюдения — это и
@@ -1280,7 +1368,7 @@ export function admissionCaseFile(db, args, user) {
   });
   const otherChains = chainsOf((byKind.get(OTHER_KIND) || []).filter((r) => r.published_at));
   otherChains.forEach((chain) => {
-    if (!chain[chain.length - 1].superseded_by) push(OTHER_KIND, chain, CASE_DOC_SET.length);
+    if (!chain[chain.length - 1].superseded_by) push(OTHER_KIND, chain, docSet.length);
   });
 
   const assembledBy = user && user.id

@@ -21,7 +21,6 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, Tag, clear, toast, initials, avColor, fmtDate, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { admissionStatusLabel, IN_BED_STATUSES } from '../../shared/admission-status.js';
-import { dateNumeric } from '../../shared/date-words.js';
 import { moneyDisplay } from '../../shared/money-input.js';
 import { caseDocTitle } from './case-docs.js?v=cw1';
 import { openAdmissionDischargeRequestModal, openAdmissionAttendingModal, openAdmissionDietModal, goToMarSheet, goToCaseOverview, openAdmissionCard } from './admission-modal.js?v=inp2';
@@ -245,19 +244,6 @@ const kv = (k, v, cls = '') => h('div', { class: 'co-kv' + (cls ? ' ' + cls : ''
 const note = (text, tone = '') => h('p', { class: 'co-note' + (tone ? ' co-' + tone : '') }, text);
 const num = (v) => (v === null || v === undefined || v === '' ? null : String(v));
 
-/** Плитка полосы 3: цифра крупно, подпись сверху, строка под ней. Кнопка — если есть куда идти. */
-function tile({ label, value, unit = '', meta = '', tone = '', onclick = null, text = false }) {
-    const inner = [
-        h('div', { class: 'stat-label' }, tr(label)),
-        // Слово в плитке — не цифра: 24px для «Стол №1 (щадящий)» кричал бы, 17px читается.
-        h('div', { class: 'stat-value co-tile-v' + (text ? ' co-tile-v-text' : '') }, value, unit ? h('span', { class: 'unit' }, unit) : null),
-        meta ? h('div', { class: 'co-tile-m' + (tone ? ' co-' + tone : '') }, meta) : null,
-    ];
-    return onclick
-        ? h('button', { class: 'co-tile co-tile-btn', type: 'button', onclick }, ...inner)
-        : h('div', { class: 'co-tile' }, ...inner);
-}
-
 function paint(root, onNavigate) {
     clear(root);
     if (state.failed) {
@@ -308,6 +294,9 @@ function paint(root, onNavigate) {
     // VITALS_NEWS_V1 — температура, АД и пульс переехали в панель показателей
     // (там они в динамике); здесь остаётся антропометрия и группа крови.
     const hw = sh ? [num(sh.height_cm), num(sh.weight_kg)].filter(Boolean).join(' · ') : '';
+    // CASE_DASH_TIDY_V1 — плитка стола строится ниже (ей нужны данные о питании),
+    // а место под неё в панели «Пациент сейчас» занимается здесь.
+    const dietSlot = h('div', { class: 'co-diet-slot' });
     const nowPanel = panel('Пациент сейчас', { icon: 'Activity', area: 'now', tone: dg.clinical ? '' : 'warn',
         link: { label: 'История болезни', onclick: () => toDocs(null) },
         children: [
@@ -330,6 +319,7 @@ function paint(root, onNavigate) {
                 vital('Группа крови', pt.blood_type && pt.blood_type !== 'unknown' ? pt.blood_type : ''))
                 : note(tr('Титульный лист не заполнен — измерений при поступлении нет.'), 'warn'),
             sh && !ts.complete ? note(tr('Титульный лист заполнен не до конца.'), 'warn') : null,
+            dietSlot,
         ] });
 
     // ── 2. Выписка и счёт ───────────────────────────────────────────────────
@@ -375,17 +365,25 @@ function paint(root, onNavigate) {
         ? [['eaten', 'съедено'], ['partial', 'частично'], ['refused', 'отказ'], ['served', 'подано'], ['npo', 'НПО'], ['missed', 'пропущено'], ['waiting', 'ожидает']]
             .filter(([k]) => meals[k]).map(([k, w]) => tr(w) + ' ' + meals[k]).join(' · ')
         : tr('отметок нет');
-    const tiles = h('div', { class: 'co-tiles', style: { gridArea: 'tiles' } },
-        tile({ label: 'День в отделении', value: a.days ? String(a.days) : '—', meta: a.admitted_at && inBed ? trf('с {when}', { when: dateNumeric(a.admitted_at) }) : '' }),
-        tile({ label: 'Дозы сегодня', value: String(t.given || 0), unit: trf('из {n}', { n: t.due || 0 }),
-            meta: t.missed ? trf('пропущено {n}', { n: t.missed }) : trf('назначений: {n}', { n: o.active || 0 }), tone: t.missed ? 'warn' : '',
-            onclick: () => goToMarSheet(a.id, onNavigate) }),
-        tile({ label: 'Документы', value: String(pr.done || 0), unit: trf('из {n}', { n: pr.total || 0 }),
-            meta: pr.overdue ? trf('просрочено {n}', { n: pr.overdue }) : tr('в срок'), tone: pr.overdue ? 'warn' : 'ok',
-            onclick: () => toDocs(docs.next_kind || null) }),
-        tile({ label: 'Стол', value: cur ? (cur.name || cur.diet_code) : tr('не назначен'), text: true,
-            meta: cur ? mealsText : (inBed ? tr('Назначить стол') : ''), tone: cur ? '' : 'warn',
-            onclick: inBed ? () => openAdmissionDietModal({ admission: admissionForModals(ov), current: cur, onDone: reload }) : null }));
+    // CASE_DASH_TIDY_V1 (2026-09-08) — ПОЛОСЫ ПЛИТОК БОЛЬШЕ НЕТ.
+    //
+    // Владелец: «too much visual noise in the dashboard ... content dont fit
+    // fully into a viewport», затем «do something about this cards spacing and
+    // tidy up a dashboard so content fits to the viewport».
+    //
+    // Четыре плитки не добавляли НИ ОДНОГО нового числа: день в отделении уже
+    // стоял в шапке и в «Пациенте сейчас», дозы — в «Назначениях и услугах»,
+    // документы — в «Следующем шаге». Одно и то же, сказанное трижды, читается
+    // не втрое лучше, а втрое дольше, и занимало целую полосу экрана. Стол
+    // повторов не имел, и он переехал туда, где ему место: состояние пациента
+    // сейчас — это и есть его режим питания.
+    const dietTile = h('div', { class: 'co-diet' + (cur ? '' : ' co-diet-off') },
+        h('div', { class: 'co-diet-l' }, tr('Стол')),
+        h('div', { class: 'co-diet-v' }, cur ? (cur.name || cur.diet_code) : tr('не назначен')),
+        h('div', { class: 'co-diet-m' }, cur ? mealsText : ''),
+        inBed ? h('button', { class: 'co-link', type: 'button',
+            onclick: () => openAdmissionDietModal({ admission: admissionForModals(ov), current: cur, onDone: reload }) },
+            cur ? tr('Изменить стол') : tr('Назначить стол'), ic('ArrowRight', 12)) : null);
 
     // ── 4. Операция ─────────────────────────────────────────────────────────
     const op = ov.operation || { state: 'none' };
@@ -448,7 +446,7 @@ function paint(root, onNavigate) {
         // Пустой «следующий шаг» сам по себе этого не значит, и заголовок,
         // который спорит со строкой под ним, врач перестаёт читать вовсе.
         docs.next_kind
-            ? h('div', { class: 'co-next-doc' }, caseDocTitle(docs.next_kind))
+            ? h('div', { class: 'co-next-doc' }, caseDocTitle(docs.next_kind, docs.next_title))
             : (pr.total && (pr.done || 0) >= pr.total)
                 ? h('div', { class: 'co-next-doc co-ok' }, tr('Все документы оформлены'))
                 : h('div', { class: 'co-next-doc co-warn' },
@@ -467,7 +465,8 @@ function paint(root, onNavigate) {
         inBed ? actMain('Дневник наблюдения', () => toDocs('round')) : null,
     ] });
 
-    root.appendChild(h('div', { class: 'co-z' }, nowPanel, billPanel, tiles, opPanel, listsPanel, nextPanel));
+    dietSlot.appendChild(dietTile);
+    root.appendChild(h('div', { class: 'co-z' }, nowPanel, billPanel, opPanel, listsPanel, nextPanel));
 }
 
 export { goToCaseOverview };

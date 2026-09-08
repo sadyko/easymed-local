@@ -31,6 +31,7 @@ import { CASE_BLANK_KEY, CASE_BLANK_KINDS, caseDocBlank, withCaseDocBlank,
          sectionsFor, richSection, richToolbar, readRich, applyRich } from './case-doc-a4.js';
 import { caseDocTitle } from './case-docs.js?v=cw1';
 import { a4Sheet } from './a4-letterhead.js';
+import { caseDocSetPanel } from './case-doc-set.js';   // CASE_DOC_SET_V2 — состав истории болезни
 
 const DOC_TYPES = [
     { id: 'conclusion', label: 'Заключение врача', icon: 'Stethoscope', sub: 'Клинический отчёт',    paper: 'A4' },
@@ -166,7 +167,11 @@ function settingsPanel() {
     // акцент и размер бумаги к нему отношения не имеют, их задаёт та же клиника
     // на соседних вкладках.
     if (state.active === CASE_DOC_TYPE) {
-        return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px', position: 'sticky', top: '88px' } },
+        // CASE_DOC_SET_V2 — сперва СОСТАВ («какие документы бывают»), под ним
+        // бланк («что в документе написано»). Порядок не случайный: бланк
+        // правят у документа, который в наборе уже есть.
+        return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } },
+            caseDocSetPanel(),
             caseBlankCard());
     }
     return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px', position: 'sticky', top: '88px' } },
@@ -263,6 +268,14 @@ function caseBlankCard() {
         ...CASE_BLANK_KINDS.map((k) => h('option', {
             value: k, selected: state.caseKind === k ? true : null,
         }, caseDocTitle(k))));
+    // CASE_DOC_SET_V2 — свои роды клиники приезжают отдельным запросом: бланк
+    // им нужен ровно так же, а разделы у них общие (сокращённый набор).
+    supabase.rpc('case_doc_types_list', {}).then(({ data }) => {
+        for (const t of ((data && data.types) || [])) {
+            if (!t || !t.title || CASE_BLANK_KINDS.includes(t.kind) || !t.active) continue;
+            sel.appendChild(h('option', { value: t.kind, selected: state.caseKind === t.kind ? true : null }, t.title));
+        }
+    }).catch(() => { /* состав не загрузился — бланк правится у встроенных */ });
     sel.addEventListener('change', () => { state.caseKind = sel.value || 'intake'; paint(); });
     const filled = Object.keys(caseDocBlank(state.s, state.caseKind)).length;
     return editorCard('Бланк документа', 'Stethoscope', [

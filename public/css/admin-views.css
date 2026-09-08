@@ -5361,9 +5361,12 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .co-tabs{margin:0}
 .co-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 /* Z-сетка: 1 now · 2 bill / 3 tiles · 4 op / 5 lists · 6 next */
-.co-z{display:grid;grid-template-columns:minmax(0,2fr) minmax(280px,1fr);grid-template-areas:"now bill" "tiles op" "lists next";gap:8px;align-items:stretch}
+/* CASE_DASH_TIDY_V1 — пять панелей вместо шести полос: полосу плиток убрали,
+   она не несла ни одного числа, которого нет в панелях. «Пациент сейчас» —
+   самая длинная, поэтому занимает два ряда, а не растягивает соседей. */
+.co-z{display:grid;grid-template-columns:minmax(0,2fr) minmax(280px,1fr);grid-template-areas:"now bill" "now next" "op lists";gap:8px;align-items:start}
 /* CASE_COMPACT_V2 — на широком экране шесть блоков в две строки: обзор целиком без прокрутки */
-@media (min-width:1400px){.co-z{grid-template-columns:minmax(0,1.5fr) minmax(260px,1fr) minmax(260px,1fr);grid-template-areas:"now bill next" "tiles op lists"}}
+@media (min-width:1400px){.co-z{grid-template-columns:minmax(0,1.5fr) minmax(260px,1fr) minmax(260px,1fr);grid-template-areas:"now bill next" "now op lists"}}
 .co-panel{padding:8px 10px;min-width:0;display:flex;flex-direction:column}
 .co-panel.co-warn{box-shadow:var(--shadow-window),inset 0 0 0 1px var(--warn-500)}
 .co-panel.co-crit{box-shadow:var(--shadow-window),inset 0 0 0 1px var(--crit-500)}
@@ -5404,12 +5407,14 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .co-big.co-ok .co-big-v{color:var(--ok-700)}
 .co-wide{width:100%;justify-content:center;margin-top:auto}
 /* 3 — плитки */
-.co-tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;align-items:stretch}
-.co-tile{display:flex;flex-direction:column;gap:2px;padding:8px 10px;background:var(--white);border:1px solid var(--window-line);border-radius:var(--r-lg);box-shadow:var(--shadow-window);min-width:0;text-align:left;font:inherit;color:inherit}
-.co-tile-btn{cursor:pointer;transition:box-shadow 120ms ease,border-color 120ms ease,transform 120ms ease}
-.co-tile-btn:hover{border-color:var(--primary-300);box-shadow:var(--shadow-md);transform:translateY(-1px)}
-.co-tile-v{font-size:17px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;line-height:1.1}
-.co-tile-v-text{font-size:13.5px;line-height:1.25}
+/* CASE_DASH_TIDY_V1 — стол переехал из полосы плиток в «Пациент сейчас»:
+   режим питания — это состояние пациента сейчас, а не отдельная витрина. */
+.co-diet-slot{margin-top:2px}
+.co-diet{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;padding:7px 9px;border-radius:var(--r-md);background:var(--ink-25);border:1px solid var(--ink-100)}
+.co-diet-off{background:var(--warn-50,#fffbeb);border-color:#fde68a}
+.co-diet-l{font-size:12.5px;color:var(--ink-500);flex:0 0 auto}
+.co-diet-v{font-size:13.5px;font-weight:600;color:var(--ink-900);min-width:0;overflow-wrap:anywhere}
+.co-diet-m{flex:1 1 100%;font-size:12.5px;color:var(--ink-500);line-height:1.35}
 .co-tile-m{font-size:12.5px;color:var(--ink-500);line-height:1.35;overflow-wrap:anywhere}
 .co-tile-m.co-warn{color:var(--warn-700);font-weight:600}
 .co-tile-m.co-ok{color:var(--ok-700);font-weight:600}
@@ -5437,10 +5442,10 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .co-progress{height:6px;border-radius:var(--r-pill);background:var(--ink-100);overflow:hidden}
 .co-progress-fill{display:block;height:100%;background:var(--primary-500);border-radius:var(--r-pill)}
 /* фокус — видимый у всего, что нажимается */
-.co-av:focus-visible,.co-name:focus-visible,.co-link:focus-visible,.co-tile-btn:focus-visible{outline:2px solid var(--primary-500);outline-offset:2px}
+.co-av:focus-visible,.co-name:focus-visible,.co-link:focus-visible{outline:2px solid var(--primary-500);outline-offset:2px}
 .co-av,.co-name,.co-link,.co-tile-btn{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
 @media (prefers-reduced-motion:reduce){.co-av,.co-tile-btn{transition:none}.co-av:hover,.co-tile-btn:hover{transform:none}}
-@media (max-width:980px){.co-z{grid-template-columns:minmax(0,1fr);grid-template-areas:"now" "bill" "tiles" "op" "lists" "next"}.co-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:980px){.co-z{grid-template-columns:minmax(0,1fr);grid-template-areas:"now" "bill" "next" "op" "lists"}}
 @media (max-width:720px){.co-head-row{flex-wrap:wrap}.co-cols{grid-template-columns:minmax(0,1fr)}.co-kv .co-k{flex-basis:110px}}
 
 /* ── ADMISSIONS_REGISTER_V1 — журнал госпитализаций ──────────────────────── */
@@ -5830,6 +5835,32 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .cw-doc.a4-scroll { padding: 0 10px 24px; background: transparent;
     border: 0; border-radius: 0; }
 .cw-steps .card-header { padding-top: 10px; }
+
+/* ── CASE_DOC_SET_V2 — состав истории болезни настраивает клиника ─────────── */
+.cds { padding: 12px 14px 14px; }
+.cds-h { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.cds-h-ic { display: inline-flex; color: var(--primary-600); }
+.cds-h-t { margin: 0; font-size: 12.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-700); }
+.cds-note { font-size: 12.5px; color: var(--ink-500); line-height: 1.45; margin: 4px 0 8px; }
+.cds-note.cds-fail { color: var(--crit-700); }
+.cds-list { display: flex; flex-direction: column; border: 1px solid var(--ink-100); border-radius: var(--r-md); overflow: hidden; }
+.cds-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-bottom: 1px solid var(--ink-50); }
+.cds-row:last-child { border-bottom: 0; }
+/* Убранный из набора виден бледным: вернуть его иначе было бы нечем. */
+.cds-off { opacity: .5; }
+.cds-ord { display: flex; flex-direction: column; gap: 1px; flex: 0 0 auto; }
+.cds-move { width: 22px; height: 16px; display: grid; place-items: center; padding: 0;
+    border: 1px solid var(--ink-200); border-radius: var(--r-sm); background: var(--white);
+    color: var(--ink-600); cursor: pointer; }
+.cds-move[disabled] { opacity: .35; cursor: default; }
+.cds-move:not([disabled]):hover { background: var(--primary-50); color: var(--primary-700); }
+.cds-main { flex: 1; min-width: 0; }
+.cds-name { font-size: 13.5px; font-weight: 600; color: var(--ink-900); display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.cds-tag { font-size: 12.5px; font-weight: 500; color: var(--ink-400); }
+.cds-when { font-size: 12.5px; color: var(--ink-500); display: flex; gap: 8px; flex-wrap: wrap; }
+.cds-used { color: var(--ink-400); }
+.cds-acts { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.cds-lock { display: inline-flex; padding: 6px; color: var(--ink-300); }
 
 /* CASE_DOC_BLANK_V1 — бланк документа истории болезни в «Документах»: тот же
    лист, что у постели пациента, без серой коробки вокруг бумаги. */

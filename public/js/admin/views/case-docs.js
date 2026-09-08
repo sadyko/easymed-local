@@ -65,7 +65,20 @@ export const CASE_DOC_TITLE = {
     other:       'Прочий документ',
 };
 
-export function caseDocTitle(kind) {
+/**
+ * Имя документа.
+ *
+ * CASE_DOC_SET_V2 — у СВОЕГО рода клиники имя приходит с сервера, и переводить
+ * его некому: клиника назвала документ своими словами, и подменять их словарём
+ * значило бы показать ей чужое название. У встроенного рода имя живёт в
+ * словаре и переводится на три языка.
+ *
+ * @param {string} kind род записи
+ * @param {string} [title] имя, пришедшее с сервера (у встроенных пусто)
+ */
+export function caseDocTitle(kind, title) {
+    const own = String(title === null || title === undefined ? '' : title).trim();
+    if (own) return own;
     return tr(CASE_DOC_TITLE[kind] || CASE_DOC_TITLE.other);
 }
 
@@ -158,7 +171,13 @@ export function caseGateText(state) {
 
 /** Названия недооформленных документов — тот же список, что у сервера. */
 export function caseMissingTitles(state) {
-    return ((state && state.discharge_gate && state.discharge_gate.incomplete) || []).map(caseDocTitle);
+    // CASE_DOC_SET_V2 — имя берётся у самого пункта: у своего рода клиники его
+    // больше взять неоткуда. И НЕ .map(caseDocTitle) — второй аргумент map это
+    // индекс, и он приезжал бы вместо имени.
+    const items = [...((state && state.items) || []), ...((state && state.other) || [])];
+    const titleOf = (kind) => (items.find((i) => i && i.kind === kind) || {}).title || '';
+    return ((state && state.discharge_gate && state.discharge_gate.incomplete) || [])
+        .map((kind) => caseDocTitle(kind, titleOf(kind)));
 }
 
 // ---------------------------------------------------------------------------
@@ -281,7 +300,7 @@ function itemRow(item, state, onDoc, activeKind = null) {
             fontWeight: item.state === 'pending' ? '500' : '600',
             color: item.state === 'pending' ? 'var(--ink-500)' : 'var(--ink-800)',
         },
-    }, caseDocTitle(item.kind)),
+    }, caseDocTitle(item.kind, item.title)),
     );
 
     // CASE_ROW_NAME_ONLY_V1 — владелец: «we dont need information in the card
@@ -289,8 +308,8 @@ function itemRow(item, state, onDoc, activeKind = null) {
     // по-прежнему названо цветом рельса, кружком-иконкой и — для читалки и
     // подсказки мыши — словами в aria-label и title строки.
     const stateLine = [caseDocStateWord(item.state), meta].filter(Boolean).join(' · ');
-    open.setAttribute('title', caseDocTitle(item.kind) + (stateLine ? ' — ' + stateLine : ''));
-    open.setAttribute('aria-label', caseDocTitle(item.kind) + (stateLine ? ': ' + stateLine : ''));
+    open.setAttribute('title', caseDocTitle(item.kind, item.title) + (stateLine ? ' — ' + stateLine : ''));
+    open.setAttribute('aria-label', caseDocTitle(item.kind, item.title) + (stateLine ? ': ' + stateLine : ''));
 
 
     const actions = h('div', { style: { display: 'flex', gap: '6px', flexShrink: '0', alignItems: 'center' } });
@@ -641,7 +660,7 @@ export function caseFilePrintHtml(file, { fontFaceCss = '' } = {}) {
         const sign = [d.author_name, d.published_at ? fmtDateTime(d.published_at) : ''].filter(Boolean).join(' · ');
         return `
 <section class="doc">
-  <h2><span class="no">${i + 1}</span>${esc(caseDocTitle(d.kind))}${
+  <h2><span class="no">${i + 1}</span>${esc(caseDocTitle(d.kind, d.title))}${
       d.revision_count > 1 ? `<span class="rev">${esc(trf('редакция {n}', { n: d.revision_count }))}</span>` : ''
   }</h2>
   ${parts || `<div class="part"><div class="pv empty">${esc(tr('Текст документа не заполнен.'))}</div></div>`}
