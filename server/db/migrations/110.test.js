@@ -40,7 +40,9 @@ test('миграция проходит на базе, где уже лежат 
     const db = openDb(':memory:');
     const stage = tmpDir('em-mig110-');
     for (const f of fs.readdirSync(MIGRATIONS)) {
-        if (f.startsWith('110_') || !f.endsWith('.sql')) continue;
+        // Всё с 110 и новее — за бортом сцены: 111 меняет ту же таблицу и без
+        // 110 упала бы сама, а не проверила бы 110.
+        if (parseInt(f, 10) >= 110 || !f.endsWith('.sql')) continue;
         fs.copyFileSync(path.join(MIGRATIONS, f), path.join(stage, f));
     }
     migrate(db, stage);
@@ -50,7 +52,7 @@ test('миграция проходит на базе, где уже лежат 
     db.prepare("INSERT INTO beds (id, code, ward_id, status) VALUES (1,'T-1',1,'occupied')").run();
     db.prepare('UPDATE admissions SET bed_id=1, ward_id=1 WHERE id=10').run();
 
-    migrate(db);   // 110 поверх базы со ссылками
+    migrate(db);   // 110 (и всё новее) поверх базы со ссылками
 
     assert.equal(db.prepare('SELECT COUNT(*) n FROM admission_reviews').get().n, 1);
     assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0, 'миграция порвала ссылки');

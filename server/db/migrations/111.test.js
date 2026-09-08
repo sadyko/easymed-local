@@ -28,7 +28,7 @@ test('миграция проходит на базе, где титульные
     const db = openDb(':memory:');
     const stage = tmpDir('em-mig111-');
     for (const f of fs.readdirSync(MIGRATIONS)) {
-        if (f.startsWith('111_') || !f.endsWith('.sql')) continue;
+        if (parseInt(f, 10) >= 111 || !f.endsWith('.sql')) continue;   // 111 и новее — за бортом сцены
         fs.copyFileSync(path.join(MIGRATIONS, f), path.join(stage, f));
     }
     migrate(db, stage);
