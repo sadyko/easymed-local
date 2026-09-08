@@ -7277,4 +7277,5 @@ export const STRINGS = {
   "Очистить бланк": {"en":"Clear the blank","ru":"Очистить бланк","uz":"Blankani tozalash"},
   "Правится так же, как у постели пациента": {"en":"Edited the same way as at the bedside","ru":"Правится так же, как у постели пациента","uz":"Bemor yonidagidek tahrirlanadi"},
   "Осталось оформить: {n}": {"en":"Still to complete: {n}","ru":"Осталось оформить: {n}","uz":"Rasmiylashtirish qoldi: {n}"},
+  "Печатаются на своих бланках. Отметка значит, что пациент подписал (памятку — получил); размещение она не задерживает.": {"en":"Each prints on its own blank. The tick means the patient signed it (or received the memo); it never holds up placement.","ru":"Печатаются на своих бланках. Отметка значит, что пациент подписал (памятку — получил); размещение она не задерживает.","uz":"Har biri oʻz blankasida chop etiladi. Belgi bemor imzolaganini (eslatmani olganini) bildiradi; joylashtirishni ushlab turmaydi."},
 };

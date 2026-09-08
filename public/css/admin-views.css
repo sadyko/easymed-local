@@ -5302,11 +5302,22 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .ts-bp input{width:86px}
 .ts-bmi{font-weight:700;background:var(--surface-50,#f6f8f9)}
 .ts-hint{font-size:12.5px;margin-top:6px}
-.ts-modal{max-height:66vh;overflow:auto}
+/* TITLE_SHEET_PAPERS_OUT_V1 — в окне размещения лист показывается НАСТОЯЩЕЙ
+   шириной A4 (794 px), поэтому своих боковых полей у прокрутки здесь нет:
+   вместе с полями окна они сжимали бы бумагу. Прокручивается только лист. */
+.ts-modal{max-height:62vh;overflow-y:auto;overflow-x:hidden;padding:0 0 4px;background:transparent}
 .ts-modal .a4-paper{margin:0 auto}
 @media (max-width:720px){.ts-grid{grid-template-columns:1fr}}
 
 /* INPATIENT_DOCS_V1 — бумаги при поступлении на титульном листе */
+/* TITLE_SHEET_PAPERS_OUT_V1 — панель отдельных бумаг: она стоит ПОД листом
+   и выглядит панелью, а не продолжением бланка. */
+.ts-papers-card{padding:12px 14px 10px}
+.ts-papers-h{display:flex;align-items:center;gap:7px;margin-bottom:6px}
+.ts-papers-ic{display:inline-flex;color:var(--primary-600)}
+.ts-papers-t{font-size:12.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-600)}
+.ts-papers-uz{font-size:12.5px;color:var(--ink-400)}
+.ts-papers-n{margin-top:8px;font-size:12.5px;color:var(--ink-500);line-height:1.45}
 .ts-papers{display:grid;gap:4px}
 .ts-paper{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px dotted var(--line-200,#d3d9de)}
 .ts-paper-name{flex:1;min-width:0;font-size:13.5px;font-weight:600}
@@ -5536,7 +5547,6 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .f3-block-t{margin:14px 0 4px;padding-top:8px;border-top:1px dashed var(--ink-300);font-weight:700;display:flex;gap:8px;align-items:baseline}
 .f3-radios label .f3-uz{font-weight:600}
 .f3 .ts-radios{padding:0}
-.f3 .ts-papers{margin-top:4px}
 @media (max-width:720px){.f3-head{flex-direction:column;gap:8px}.f3-head-r{text-align:left}}
 
 /* ── DOCS_HISTORY_SECTION_V1 — «История болезни» в разделе «Документы» ─────── */

@@ -291,6 +291,10 @@ function paintPane(pane, root, onNavigate) {
             : a4Sheet({ title: ed.title, children: [
                 h('div', { class: 'cw-doc-body' }, ...ed.fields.filter(Boolean)),
             ] }),
+        // TITLE_SHEET_PAPERS_OUT_V1 — то, что относится к документу, но им не
+        // является: отдельные бумаги, пульты, отметки. Стоит ПОД листом, как и
+        // кнопки действий, и в расчёт разрывов страниц не попадает.
+        ...((ed.belowSheet || []).filter(Boolean)),
     );
 
     const foot = h('div', { class: 'cw-doc-foot' });

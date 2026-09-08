@@ -249,8 +249,17 @@ test('документы при поступлении: три кнопки пе
     const printed = [];
     const form = titleSheetForm({ bed: { id: 6, code: 'T-2', ward_name: 'Терапия' }, onPrint: (type, data) => printed.push({ type, data }) });
     form.fill(Object.assign({}, VIEW, { sheet: null, bmi: null }));
-    const root = mkEl('div');
-    for (const f of form.fields) root.appendChild(f);
+    // TITLE_SHEET_PAPERS_OUT_V1 — бумаги ушли С ЛИСТА в отдельную панель:
+    // на бланке 003 их нет, а кнопки печати и галочки — пульт, а не документ.
+    const sheet = mkEl('div');
+    for (const f of form.fields) sheet.appendChild(f);
+    assert.ok(!textOf(sheet).includes('Документы при поступлении'),
+        'пульт бумаг вернулся на лист 003');
+    assert.equal(walk(sheet).filter((e) => e.tagName === 'BUTTON' && textOf(e).includes('Печать')).length, 0,
+        'кнопки печати вернулись на лист');
+
+    assert.ok(form.papersBlock, 'отдельной панели бумаг нет');
+    const root = form.papersBlock;
     assert.ok(textOf(root).includes('Документы при поступлении'));
     const prints = walk(root).filter((e) => e.tagName === 'BUTTON' && textOf(e).includes('Печать'));
     assert.equal(prints.length, 3, 'кнопок печати должно быть три');
@@ -276,6 +285,35 @@ test('документы при поступлении: три кнопки пе
     form.fill(Object.assign({}, VIEW, { sheet: Object.assign({}, VIEW.sheet, { memo_given_at: '2026-09-08T09:30:00Z' }) }));
     assert.equal(form.read().sheet.memo_given, true);
     assert.equal(form.read().sheet.contract_signed, false);
+});
+
+// TITLE_SHEET_PAPERS_OUT_V1 — «make them separate» касается обоих мест, где
+// лист заполняют: окна размещения (из заявки) и истории болезни.
+test('TITLE_SHEET_PAPERS_OUT_V1: панель бумаг рисуется под листом и в окне размещения, и в истории болезни', async () => {
+    const fsx = await import('node:fs');
+    const pathx = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = pathx.dirname(fileURLToPath(import.meta.url));
+    const src = fsx.readFileSync(pathx.join(dir, '..', 'views', 'title-sheet.js'), 'utf8');
+
+    // Окно размещения: панель стоит ПОСЛЕ листа, а не внутри него.
+    const i = src.indexOf('sheetOnPaper(form),');
+    assert.ok(i > 0, 'окно размещения больше не рисует лист');
+    assert.ok(src.slice(i, i + 240).includes('form.papersBlock'),
+        'в окне размещения панель бумаг не встала под лист');
+    // История болезни: отдельный ключ, который рабочий экран рисует под листом.
+    assert.ok(src.includes('belowSheet: [form.papersBlock]'),
+        'в истории болезни панель бумаг не отделена от листа');
+
+    const ws = fsx.readFileSync(pathx.join(dir, '..', 'views', 'case-workspace.js'), 'utf8');
+    assert.ok(ws.includes('...((ed.belowSheet || []).filter(Boolean))'),
+        'рабочий экран не рисует то, что идёт под листом');
+
+    // Лист остаётся настоящим A4: окно шире бумаги, бумага не сжимается.
+    assert.ok(/width: 880,/.test(src), 'окно размещения снова уже листа A4');
+    const css = fsx.readFileSync(pathx.join(dir, '..', '..', '..', 'css', 'admin-views.css'), 'utf8');
+    assert.ok(/\.ts-modal\{[^}]*padding:0 0 4px/.test(css),
+        'у прокрутки окна вернулись боковые поля — они сжимают лист');
 });
 
 test('печать титульного листа и строка чек-листа называют, какие бумаги подписаны', async () => {

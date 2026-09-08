@@ -133,9 +133,33 @@ export function titleSheetForm({ bed = null, onPrint = printInpatientDoc } = {})
         paperChecks[flag] = cb;
         return h('div', { class: 'ts-paper' },
             h('span', { class: 'ts-paper-name' }, tr(label)),
-            h('button', { class: 'btn btn-sm', type: 'button', onclick: () => onPrint(type, docData()) }, Icon('Print', { size: 13 }), ' ', tr('Печать')),
+            h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => onPrint(type, docData()) },
+                Icon('Print', { size: 13 }), ' ', tr('Печать')),
             h('label', { class: 'ts-paper-tick' }, cb, ' ', tr(tick)));
     };
+
+    // TITLE_SHEET_PAPERS_OUT_V1 (2026-09-08) — ТРИ БУМАГИ ЖИВУТ НЕ НА ЛИСТЕ.
+    //
+    // Владелец: «why title list is only one who is not have a4 format, i guess
+    // beacuse it has 3 documents for printing. make them separate». Догадка
+    // верная. Договор, согласие и памятка — ОТДЕЛЬНЫЕ документы: их печатают
+    // на своих бланках, подписывает пациент, и на бланке 003 их нет — там
+    // стоит одна строка «что подписано», и печать титульного листа рисует
+    // именно её (title-sheet-print.js, papersSummary).
+    //
+    // На экране же в конце листа стояли кнопки печати и галочки — то есть
+    // ПУЛЬТ, а не бумага. Он ломал единственное, ради чего лист рисуют листом:
+    // документ перестал быть документом. То же правило уже действует для
+    // остальных документов истории болезни — кнопки стоят под листом, а не на
+    // нём (a4-letterhead.js). Здесь оно наконец действует и для 003.
+    const papersBlock = h('section', { class: 'card ts-papers-card', 'aria-label': tr('Документы при поступлении') },
+        h('header', { class: 'ts-papers-h' },
+            h('span', { class: 'ts-papers-ic' }, Icon('Doc', { size: 14 })),
+            h('span', { class: 'ts-papers-t' }, tr('Документы при поступлении')),
+            h('small', { class: 'ts-papers-uz' }, F.papers)),
+        h('div', { class: 'ts-papers' }, ...ADMISSION_PAPERS.map(paperRow)),
+        h('div', { class: 'ts-papers-n' },
+            tr('Печатаются на своих бланках. Отметка значит, что пациент подписал (памятку — получил); размещение она не задерживает.')));
 
     const clinic = clinicLetterheadData();
     const fields = [
@@ -175,8 +199,6 @@ export function titleSheetForm({ bed = null, onPrint = printInpatientDoc } = {})
         row(ru('Осмотр на педикулёз и чесотку'), pedRadios),
         row(ru('Санитарная обработка'), sanRadios),
         row(ru('Примечание'), ctl(note, 'f3-wide')),
-        blockT(F.papers, 'Документы при поступлении'),
-        h('div', { class: 'ts-papers' }, ...ADMISSION_PAPERS.map(paperRow)),
     ];
 
     const timeOf = (iso) => {
@@ -250,7 +272,7 @@ export function titleSheetForm({ bed = null, onPrint = printInpatientDoc } = {})
         };
     }
 
-    return { fields, fill, read, inputs: { height, weight, bmi, temp, bpSys, bpDia, pulse, phone, referred, delivered, sinceOnset } };
+    return { fields, papersBlock, fill, read, inputs: { height, weight, bmi, temp, bpSys, bpDia, pulse, phone, referred, delivered, sinceOnset } };
 }
 
 function sheetOnPaper(form) {
@@ -302,6 +324,8 @@ export function openAdmissionTitleSheetModal({ admission, bed, onDone, onBack } 
         patientAnchor(p.full_name || '', [p.mrn, admission.department, bed.code ? trf('койка {code}', { code: bed.code }) : null].filter(Boolean).join(' · ')),
         admittingField,
         sheetOnPaper(form),
+        // TITLE_SHEET_PAPERS_OUT_V1 — бумаги ПОД листом, а не в его конце.
+        form.papersBlock,
     ], tr('Положить'), async () => {
         if (doctors.length && !docSel.value) { toast(tr('Выберите приёмного врача — кто осмотрит пациента при поступлении.'), 'fail'); docSel.focus(); return false; }
         const admittingId = docSel.value ? Number(docSel.value) : null;
@@ -318,7 +342,10 @@ export function openAdmissionTitleSheetModal({ admission, bed, onDone, onBack } 
         if (onDone) await onDone();
         return true;
     }, {
-        width: 860,
+        // A4 при 96 dpi — 794 px. Окно шире ровно настолько, чтобы лист влез
+        // НЕ СЖИМАЯСЬ: сжатый лист перестаёт быть листом, а по нему сверяют
+        // поля с бумажным бланком 003.
+        width: 880,
         secondaryLabel: tr('Назад'),
         onSecondary: async () => { if (m) m.close(); if (onBack) onBack(); },
     });
@@ -363,6 +390,9 @@ export function buildTitleSheetEditor({ admission, onDone } = {}) {
         icon: 'Doc',
         noLetterhead: true,   // FORM_003_V1 — у бланка 003 своя шапка
         fields: [status, ...form.fields],
+        // TITLE_SHEET_PAPERS_OUT_V1 — рисуется ПОД листом, как кнопки: это не
+        // часть документа, а работа с отдельными бумагами.
+        belowSheet: [form.papersBlock],
         submitLabel: tr('Сохранить'),
         submit: async () => {
             const { data, error } = await supabase.rpc('admission_title_sheet_save', Object.assign({ admission_id: admission.id }, form.read()));
