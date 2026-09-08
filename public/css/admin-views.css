@@ -1420,9 +1420,32 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
    врача, и по той же причине: список нужен ВО ВРЕМЯ письма, а не до него.
    Колонка шагов липкая и прокручивается сама: в ней семь-десять пунктов, и
    уезжать вместе с длинным документом она не должна. */
-.cw-grid { display: grid; gap: 14px; align-items: start;
-    grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); }
-.cw-rail { padding: 12px 14px; position: sticky; top: 14px; max-height: calc(100vh - 120px); overflow-y: auto; }
+/* CASE_DOC_A4_V1 — три зоны: шаги слева, лист в центре, вставка справа.
+   На узком экране правая колонка уходит вниз, а не сжимает лист. */
+.cw-grid { display: grid; gap: 12px; align-items: start; margin-top: 10px;
+    grid-template-columns: minmax(260px, 320px) minmax(0, 1fr) minmax(240px, 280px); }
+@media (max-width: 1400px) { .cw-grid { grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); }
+    .cw-aside { grid-column: 1 / -1; } }
+@media (max-width: 900px) { .cw-grid { grid-template-columns: minmax(0, 1fr); } }
+.cw-rail { position: sticky; top: 12px; max-height: calc(100vh - 110px); overflow-y: auto;
+    display: flex; flex-direction: column; gap: 10px; }
+.cw-aside { position: sticky; top: 12px; max-height: calc(100vh - 110px); overflow-y: auto; }
+.cw-steps { padding: 10px 12px; }
+/* Диагноз госпитализации — только чтение: пишут его в первичном осмотре. */
+.cw-dx { padding: 10px 12px; }
+.cw-dx-h { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 700;
+    letter-spacing: .04em; text-transform: uppercase; color: var(--ink-600); margin-bottom: 6px; }
+.cw-dx-row { padding: 4px 0; border-top: 1px dotted var(--ink-100); }
+.cw-dx-row:first-of-type { border-top: 0; }
+.cw-dx-l { font-size: 12.5px; color: var(--ink-500); }
+.cw-dx-v { font-size: 13.5px; font-weight: 600; color: var(--ink-900); overflow-wrap: break-word; }
+.cw-dx-v.cw-dx-none { font-weight: 500; color: var(--ink-400); }
+.cw-doc-pick { padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.cw-pick-l { font-size: 12.5px; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--ink-600); }
+.cw-doc-sel { width: 100%; min-height: 36px; }
+/* Карточки шагов одинаковые: название и одна строка состояния (CASE_DOC_A4_V1). */
+.cd-row-who { color: var(--ink-500); }
 .cw-pane { min-width: 0; }
 .cw-doc-body { padding: 16px 18px; display: grid; gap: 12px; }
 .cw-doc-foot { display: flex; justify-content: flex-end; gap: 8px;
@@ -5691,3 +5714,58 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .vt-step-b:focus-visible{outline:2px solid var(--primary-500);outline-offset:-2px}
 .vt-hint{margin:0 0 4px;font-size:12.5px;color:var(--ink-500)}
 @media (pointer:coarse){.vt-step-b{flex-basis:56px}}
+
+/* ── CASE_DOC_A4_V1 — лист документа истории болезни ───────────────────────── */
+.cd-sheet { display: flex; flex-direction: column; gap: 10px; }
+.cd-sec { padding: 10px 12px; margin: 0; }
+.cd-sec .a4-input { min-height: 46px; line-height: 1.55; }
+.cd-sec-plain .cd-dx { width: 100%; margin-top: 4px; }
+.cd-sec .a4-input table.a4-restbl { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 12.5px; }
+.cd-sec .a4-input table.a4-restbl th, .cd-sec .a4-input table.a4-restbl td {
+    border: 1px solid var(--ink-200); padding: 4px 6px; text-align: left; }
+.cd-sec .a4-input table.a4-restbl th { background: var(--primary-50); color: var(--primary-700); font-weight: 700; }
+/* Панель форматирования — НАД листом, липкая: врач правит длинный документ. */
+.a4-tools { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 4px;
+    flex-wrap: wrap; max-width: 794px; margin: 0 auto 10px; padding: 6px 8px;
+    background: var(--white); border: 1px solid var(--ink-100); border-radius: var(--r-md);
+    box-shadow: var(--shadow-sm); }
+.a4-tool { min-width: 32px; height: 30px; padding: 0 8px; border: 0; border-radius: var(--r-sm);
+    background: none; color: var(--ink-700); font: inherit; font-size: 13.5px; cursor: pointer; }
+.a4-tool:hover { background: var(--ink-50); color: var(--ink-900); }
+.a4-tool:active { background: var(--primary-50); color: var(--primary-700); }
+.a4-tool:focus-visible { outline: 2px solid var(--primary-500); outline-offset: -2px; }
+.a4-tool-sep { width: 1px; height: 18px; background: var(--ink-100); margin: 0 2px; }
+/* ── Правая панель «Вставить в документ» ───────────────────────────────────── */
+.ci-card { padding: 0; overflow: hidden; }
+.ci-head { display: flex; align-items: center; gap: 6px; padding: 10px 12px;
+    border-bottom: 1px solid var(--ink-100); font-size: 12.5px; font-weight: 700;
+    letter-spacing: .04em; text-transform: uppercase; color: var(--ink-600); }
+.ci-body { display: flex; flex-direction: column; }
+.ci-block { border-bottom: 1px solid var(--ink-50); }
+.ci-block:last-child { border-bottom: 0; }
+.ci-sum { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer;
+    list-style: none; user-select: none; }
+.ci-sum::-webkit-details-marker { display: none; }
+.ci-sum:hover { background: var(--ink-25); }
+.ci-sum-ic { display: inline-flex; width: 26px; height: 26px; border-radius: 8px; flex: 0 0 auto;
+    align-items: center; justify-content: center; background: var(--primary-50); color: var(--primary-700); }
+.ci-sum-main { min-width: 0; display: flex; flex-direction: column; }
+.ci-sum-t { font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
+.ci-sum-m { font-size: 12.5px; color: var(--ink-500); }
+.ci-list { display: flex; flex-direction: column; padding: 0 8px 8px; }
+.ci-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px;
+    border: 0; border-radius: var(--r-sm); background: none; font: inherit; color: inherit;
+    text-align: left; cursor: pointer; }
+.ci-item:hover:not([disabled]) { background: var(--primary-50); }
+.ci-item:focus-visible { outline: 2px solid var(--primary-500); outline-offset: -2px; }
+.ci-item[disabled] { opacity: .55; cursor: default; }
+.ci-item-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ci-item-t { font-size: 12.5px; font-weight: 600; color: var(--ink-800); overflow-wrap: break-word; }
+.ci-item-m { font-size: 12.5px; color: var(--ink-500); }
+.ci-note { padding: 8px 12px 12px; font-size: 12.5px; color: var(--ink-500); }
+.ci-note.ci-fail { color: var(--crit-700); }
+
+/* CASE_DOC_A4_V1 — воздух между шапкой и рабочей областью документов */
+.cw .co-head { margin-bottom: 4px; }
+.cw-doc.a4-scroll { padding: 14px 16px 20px; border-radius: var(--r-lg); }
+.cw-steps .card-header { padding-top: 10px; }

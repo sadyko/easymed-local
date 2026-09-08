@@ -47,6 +47,7 @@
 // дорогой вид дубля.
 
 import { supabase } from '../../supabase.js';
+import { sectionsFor, richSection, plainSection, richToolbar, readRich, applyRich, RICH_KEYS, insertBlock } from './case-doc-a4.js';   // CASE_DOC_A4_V1
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
 import { h, Icon, Tag, toast, clear, field, fmtDate, fmtDateTime } from '../ui.js';
 import { inpatientModal, patientAnchor } from './inpatient-modal.js';   // TITLE_SHEET_V1 — вынесено, чтобы не было кольца
@@ -815,11 +816,23 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     const isCorrection = mode === 'correct';
     const isView = mode === 'view';
 
-    const complaints = h('textarea', { rows: '2', placeholder: tr('Что беспокоит пациента') });
-    const objective  = h('textarea', { rows: '3', placeholder: tr('Состояние, осмотр по системам, витальные показатели') });
-    const diagnosis  = h('input', { type: 'text', placeholder: tr('Диагноз при поступлении') });
-    const plan       = h('textarea', { rows: '3', placeholder: tr('Обследование, лечение, режим, стол') });
-    const body       = h('textarea', { rows: '2', placeholder: tr('Анамнез, сопутствующее, обоснование') });
+    // CASE_DOC_A4_V1 — документ пишется РАЗДЕЛАМИ ЛИСТА, а не полями формы:
+    // те же классы и та же панель форматирования, что в кабинете врача. Набор
+    // разделов зависит от рода документа (протокол операции — один сплошной
+    // текст, дневник — жалобы, объективно, план), а диагноз остаётся одной
+    // строкой простого текста: он едет в обзор, в журнал и в списки.
+    const secKeys = sectionsFor(kind);
+    const rich = {};
+    const loaded = { complaints: '', objective: '', diagnosis: '', plan: '', body: '' };
+    const diagnosis = h('input', { type: 'text', class: 'cd-dx', placeholder: tr('Диагноз при поступлении') });
+    const sectionEls = secKeys.map((key) => {
+        if (key === 'diagnosis') return plainSection(kind, key, diagnosis);
+        const made = richSection(kind, key);
+        rich[key] = made.input;
+        return made.sec;
+    });
+    const sheet = h('div', { class: 'cd-sheet' }, ...sectionEls);
+    const toolbar = richToolbar(sheet);
 
     // ЧТО ПОКАЗАТЬ В ПОЛЯХ — зависит от того, зачем окно открыли.
     //
@@ -834,11 +847,9 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     let draftId = mode === 'edit' ? reviewId : null;
     let supersedes = null;
     const fill = (r) => {
-        complaints.value = r.complaints || '';
-        objective.value = r.objective || '';
+        for (const k of ['complaints', 'objective', 'diagnosis', 'plan', 'body']) loaded[k] = r[k] || '';
+        for (const k of RICH_KEYS) if (rich[k]) applyRich(rich[k], r[k] || '');
         diagnosis.value = r.diagnosis || '';
-        plan.value = r.plan || '';
-        body.value = r.body || '';
     };
     (async () => {
         const { data } = await supabase.rpc('admission_reviews_list', { admission_id: admission.id });
@@ -856,7 +867,10 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
             draftId = src ? src.id : null;
         }
         if (src) fill(src);
-        if (isView) for (const f of [complaints, objective, diagnosis, plan, body]) f.setAttribute('readonly', '');
+        if (isView) {
+            for (const k of RICH_KEYS) if (rich[k]) rich[k].contentEditable = 'false';
+            diagnosis.setAttribute('readonly', '');
+        }
     })();
 
     const payload = (publish) => ({
@@ -866,21 +880,20 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         review_id: isCorrection ? null : draftId,
         supersedes,
         kind,
-        complaints: complaints.value.trim(),
-        objective: objective.value.trim(),
-        diagnosis: diagnosis.value.trim(),
-        plan: plan.value.trim(),
-        body: body.value.trim(),
+        // Раздел, которого у ЭТОГО документа нет, не стирается: его прежнее
+        // значение уходит обратно как было. Иначе смена рода документа молча
+        // вычищала бы то, что писали в другом.
+        complaints: rich.complaints ? readRich(rich.complaints) : (loaded.complaints || ''),
+        objective: rich.objective ? readRich(rich.objective) : (loaded.objective || ''),
+        diagnosis: secKeys.includes('diagnosis') ? diagnosis.value.trim() : (loaded.diagnosis || ''),
+        plan: rich.plan ? readRich(rich.plan) : (loaded.plan || ''),
+        body: rich.body ? readRich(rich.body) : (loaded.body || ''),
         publish,
     });
 
     const editorFields = [
         patientAnchor(p.full_name || '', [p.mrn, admission.department, admission.admission_no].filter(Boolean).join(' · ')),
-        field(tr('Жалобы'), complaints),
-        field(tr('Объективно'), objective),
-        field(tr('Диагноз'), diagnosis, { required: isPrimary }),
-        field(tr('План обследования и лечения'), plan),
-        field(tr('Дополнительно'), body),
+        sheet,
         isPrimary
             ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 tr('После публикации осмотра нужно назначить лечащего врача — без него назначений не будет.'))
@@ -928,6 +941,11 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     };
 
     return {
+        // CASE_DOC_A4_V1 — панель форматирования и вставка блока отдаются
+        // НАРУЖУ: рабочий экран ставит панель НАД листом, а правая панель
+        // «Вставить в документ» кладёт блок туда, где стоит курсор.
+        toolbar: toolbar.bar,
+        insert: (html) => insertBlock(toolbar, html),
         title: reviewTitle(kind, mode),
         icon: isDischarge || !REVIEW_TITLE[kind] ? 'Doc' : 'Stethoscope',
         fields: editorFields,
@@ -942,8 +960,9 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
 export function openAdmissionReviewModal(opts = {}) {
     const ed = buildReviewEditor(opts);
     if (!ed) return;
-    modal(ed.title, ed.icon, ed.fields, ed.submitLabel, ed.submit, {
-        width: 600,
+    // CASE_DOC_A4_V1 — панель форматирования над листом и в окне тоже.
+    modal(ed.title, ed.icon, [ed.toolbar, ...ed.fields], ed.submitLabel, ed.submit, {
+        width: 720,
         secondaryLabel: ed.secondaryLabel,
         onSecondary: ed.secondary,
     });

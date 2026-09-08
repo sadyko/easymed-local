@@ -60,6 +60,7 @@ import {
 } from './inpatient-flow.js';
 import { hasAnyRole, effectiveRoles } from '../roles.js';
 import { titleSheetCaseItem, sheetView } from './title-sheet.js';   // TITLE_SHEET_V1
+import { sanitizeStoredHtml, htmlToText } from '../../../public/js/shared/rich-text.js';   // CASE_DOC_A4_V1
 
 export { RpcError };
 
@@ -198,6 +199,20 @@ function str(v, max, fallback = '') {
   return String(v).trim().slice(0, max);
 }
 
+/**
+ * CASE_DOC_A4_V1 — раздел документа: разметка, очищенная до оформления.
+ *
+ * Обрезка идёт ПО ТЕКСТУ, а не по разметке: срезать HTML посередине значит
+ * сохранить документ с недописанным тегом, который потом сломает вёрстку у
+ * читающего. Слишком длинный раздел падает до простого текста — он остаётся
+ * читаемым, теряя только оформление.
+ */
+function rich(v, max) {
+  const html = sanitizeStoredHtml(v);
+  if (html.length <= max) return html;
+  return htmlToText(html).slice(0, max);
+}
+
 function posIntOrNull(v) {
   if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
@@ -277,12 +292,21 @@ export function admissionReviewSave(db, args, user) {
   requireRole(user, WRITE_ROLES, 'Врачебная запись');
 
   const publish = a.publish === true || a.publish === 1 || a.publish === 'true';
+  // CASE_DOC_A4_V1 — разделы документа пишутся форматируемым текстом (лист A4,
+  // как в кабинете врача), то есть приходят разметкой. Чистит её СЕРВЕР, а не
+  // только экран: /api/rpc открыт с любого компьютера клиники, и «наш экран уже
+  // почистил» — не проверка. Пределы удвоены: разметка занимает место, а текста
+  // столько же.
+  //
+  // ДИАГНОЗ ОСТАЁТСЯ ПРОСТЫМ ТЕКСТОМ. Он показывается в обзоре, в журнале
+  // госпитализаций и в списках — там разметка была бы мусором, а не
+  // оформлением.
   const fields = {
-    complaints: str(a.complaints, 2000),
-    objective:  str(a.objective, 4000),
-    diagnosis:  str(a.diagnosis, 500),
-    plan:       str(a.plan, 4000),
-    body:       str(a.body, 8000),
+    complaints: rich(a.complaints, 4000),
+    objective:  rich(a.objective, 8000),
+    diagnosis:  str(htmlToText(a.diagnosis), 500),
+    plan:       rich(a.plan, 8000),
+    body:       rich(a.body, 16000),
   };
 
   const run = db.transaction(() => {

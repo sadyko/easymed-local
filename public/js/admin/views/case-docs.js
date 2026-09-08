@@ -38,6 +38,7 @@
 // вёрстка.
 
 import { supabase } from '../../supabase.js';
+import { sanitizeStoredHtml } from '../../shared/rich-text.js';   // CASE_DOC_A4_V1 — печать разметки документа
 import { h, Icon, clear, toast, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { titleSheetPrintSection, titleSheetPrintCss, papersSummary } from './title-sheet-print.js';   // TITLE_SHEET_V1 / INPATIENT_DOCS_V1
@@ -286,16 +287,13 @@ function itemRow(item, state, onDoc, activeKind = null) {
     },
     h('b', { style: { color: STATE_COLOR[item.state], fontWeight: '600' } }, caseDocStateWord(item.state)),
     meta ? ' · ' : null, meta || null),
-    // INPATIENT_DOCS_V1 — у титульного листа вторая строка: какие бумаги подписаны.
-    item.kind === 'title' && item.papers
-        ? h('span', { style: { display: 'block', fontSize: '12.5px', marginTop: '2px', color: 'var(--ink-500)', lineHeight: '1.3' } },
-            papersSummary(item.papers, { withDates: false }))
-        : null,
-    // ADMITTING_DOCTOR_V1 — у осмотра при поступлении есть адресат: пока он
-    // не написан, список называет приёмного врача, которого ждут.
+    // CASE_DOC_A4_V1 — владелец: «do not fill the card of the document with
+    // text, it should be similar across the all». У КАЖДОЙ карточки ровно две
+    // строки: название и состояние со сроком. Подписанные бумаги титульного
+    // листа переехали внутрь самого листа, адресат осмотра — в ту же строку
+    // срока.
     item.kind === 'intake' && item.state !== 'published' && item.assignee_name
-        ? h('span', { style: { display: 'block', fontSize: '12.5px', marginTop: '2px', color: 'var(--ink-500)', lineHeight: '1.3' } },
-            trf('приёмный врач: {name}', { name: item.assignee_name }))
+        ? h('span', { class: 'cd-row-who' }, ' · ' + trf('приёмный врач: {name}', { name: item.assignee_name }))
         : null);
 
     const actions = h('div', { style: { display: 'flex', gap: '6px', flexShrink: '0', alignItems: 'center' } });
@@ -601,9 +599,15 @@ export function caseFilePrintHtml(file, { fontFaceCss = '' } = {}) {
         : legacyCover;
 
     const body = documents.map((d, i) => {
+        // CASE_DOC_A4_V1 — разделы документа написаны форматируемым текстом, и
+        // на бумагу они идут РАЗМЕТКОЙ: экранированный HTML печатался бы
+        // тегами вместо жирного и списков. Диагноз — простой текст, он и
+        // экранируется. Санитария та же, что на сервере при сохранении.
         const parts = PART_TITLES
             .filter(([key]) => String(d[key] || '').trim())
-            .map(([key, label]) => `<div class="part"><div class="pl">${esc(tr(label))}</div><div class="pv">${esc(d[key])}</div></div>`)
+            .map(([key, label]) => `<div class="part"><div class="pl">${esc(tr(label))}</div><div class="pv">${
+                key === 'diagnosis' ? esc(d[key]) : sanitizeStoredHtml(d[key])
+            }</div></div>`)
             .join('');
         const sign = [d.author_name, d.published_at ? fmtDateTime(d.published_at) : ''].filter(Boolean).join(' · ');
         return `
