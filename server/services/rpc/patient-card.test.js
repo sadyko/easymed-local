@@ -306,3 +306,20 @@ test('сломанный справочник Telegram не мешает отк�
   assert.equal(out.telegram, null, 'ожидалось «не знаем», а не падение');
   assert.ok(out.patient, 'карта не открылась из-за бейджа');
 });
+
+// ─── DEBT_FLOW_V1 — долг пациента едет с картой ─────────────────────────────
+
+test('DEBT_FLOW_V1: карта отдаёт долг пациента — только счета со статусом «debt», остаток без оплаченного', () => {
+  const { db, pid } = seed();
+  let out = patientCard(db, { patient_id: pid }, REGISTRAR);
+  assert.deepEqual(out.debt, { amount: 0, invoices: 0 }, 'неоплаченный счёт визита — ещё не долг');
+
+  db.prepare("INSERT INTO invoices (patient_id, branch_id, invoice_number, subtotal, total_amount, paid_amount, status, created_by) VALUES (?,1,'INV-D-1',400000,400000,100000,'debt',7)").run(pid);
+  db.prepare("INSERT INTO invoices (patient_id, branch_id, invoice_number, subtotal, total_amount, paid_amount, status, created_by) VALUES (?,1,'INV-D-2',50000,50000,0,'debt',7)").run(pid);
+  db.prepare("INSERT INTO invoices (patient_id, branch_id, invoice_number, subtotal, total_amount, paid_amount, status, created_by) VALUES (?,1,'INV-V-9',90000,90000,0,'void',7)").run(pid);
+  out = patientCard(db, { patient_id: pid }, REGISTRAR);
+  assert.deepEqual(out.debt, { amount: 350000, invoices: 2 });
+  // Врач и лаборант тоже видят бейдж: долг — свойство пациента, а не вкладки «Счёт».
+  assert.deepEqual(patientCard(db, { patient_id: pid }, DOCTOR).debt, { amount: 350000, invoices: 2 });
+  db.close();
+});

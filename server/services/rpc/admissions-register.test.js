@@ -40,10 +40,13 @@ test('строка журнала: пациент, возраст, врач, п�
     ctx.db.prepare('INSERT INTO admission_services (admission_id, service_id, quantity, unit_price, total, billable) VALUES (?, 900, 1, 900000, 900000, 1)').run(a.id);
     ctx.db.prepare('INSERT INTO admission_services (admission_id, service_id, quantity, unit_price, total, billable) VALUES (?, 900, 1, 250000, 250000, 1)').run(a.id);
     ctx.db.prepare("INSERT INTO invoices (invoice_number, admission_id, patient_id, subtotal, total_amount, paid_amount, status) VALUES ('INV-1', ?, ?, 900000, 900000, 400000, 'partial')").run(a.id, ctx.p1);
+    // DEBT_FLOW_V1 — отменённый счёт в «выставлено» не входит: минус после отмены был бы долгом, которого нет.
+    ctx.db.prepare("INSERT INTO invoices (invoice_number, admission_id, patient_id, subtotal, total_amount, paid_amount, status) VALUES ('INV-2', ?, ?, 777000, 777000, 0, 'void')").run(a.id, ctx.p1);
 
     const { rows } = admissionsRegister(ctx.db, {}, nurse);
     assert.equal(rows.length, 1);
     const r = rows[0];
+    assert.equal(r.debt_total, 0, 'частичная оплата — ещё не оформленный долг');
     assert.equal(r.full_name, 'Каримов Темур');
     assert.equal(r.mrn, '31002');
     assert.equal(r.date_of_birth, '1971-07-03');
@@ -76,4 +79,15 @@ test('limit ограничен, роли: стационар, регистрат
     assert.equal(admissionsRegister(ctx.db, { limit: 1 }, registrar).rows.length, 1);
     assert.equal(admissionsRegister(ctx.db, { limit: 'x' }, registrar).rows.length, 2, 'мусор в limit — значение по умолчанию');
     assert.throws(() => admissionsRegister(ctx.db, {}, marketing), (e) => e instanceof RpcError && e.status === 403);
+});
+
+test('DEBT_FLOW_V1: журнал знает оформленный долг — сумму остатков по счетам со статусом «debt»', () => {
+    const ctx = seed();
+    const a = inBed(ctx, ctx.p1, ctx.bed1, '2026-06-06T22:10:00Z');
+    ctx.db.prepare("INSERT INTO invoices (invoice_number, admission_id, patient_id, subtotal, total_amount, paid_amount, status) VALUES ('INV-D', ?, ?, 500000, 500000, 120000, 'debt')").run(a.id, ctx.p1);
+    ctx.db.prepare("INSERT INTO invoices (invoice_number, admission_id, patient_id, subtotal, total_amount, paid_amount, status) VALUES ('INV-P', ?, ?, 100000, 100000, 100000, 'paid')").run(a.id, ctx.p1);
+    const r = admissionsRegister(ctx.db, {}, nurse).rows[0];
+    assert.equal(r.debt_total, 380000);
+    assert.equal(r.invoiced_total, 600000);
+    assert.equal(r.balance, -380000);
 });

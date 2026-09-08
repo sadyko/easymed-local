@@ -298,7 +298,12 @@ test('voiding an admission invoice releases its admission lines so they can be r
   const { invoice } = createInvoiceForAdmission(db, { admission_id: adm.id, admission_service_ids: [line] }, registrar);
   assert.ok(db.prepare('SELECT invoice_item_id FROM admission_services WHERE id=?').get(line).invoice_item_id);
 
-  voidInvoice(db, { invoice_id: invoice.id }, cashier);
+  // DEBT_FLOW_V1 — пациент лежит: без подтверждения отмена отказывает и
+  // объясняет, что она НЕ выписка; с подтверждением — прежний путь.
+  assert.throws(() => voidInvoice(db, { invoice_id: invoice.id }, cashier),
+    /Пациент ещё в стационаре \(W · B1\)[\s\S]*счёт станет долгом/);
+  assert.equal(db.prepare('SELECT status FROM invoices WHERE id=?').get(invoice.id).status, 'unpaid', 'без подтверждения счёт цел');
+  voidInvoice(db, { invoice_id: invoice.id, in_bed_ack: true }, cashier);
 
   const after = db.prepare('SELECT invoice_item_id, status FROM admission_services WHERE id=?').get(line);
   assert.equal(after.invoice_item_id, null, 'the line must be released, not stranded');
@@ -394,4 +399,28 @@ test('своя работа не задета: свой счёт отменяе�
   const out = deleteInvoice(db, { invoice_id: invoice.id }, admin);
   assert.equal(out.deleted, true);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM invoices WHERE id = ?').get(invoice.id).n, 0);
+});
+
+// ─── DEBT_FLOW_V1 — отмена счёта стационара ──────────────────────────────────
+
+test('DEBT_FLOW_V1: выписанному пациенту счёт отменяется без подтверждения, а касса знает, лежит ли пациент', () => {
+  const { db, pid } = seed();
+  const ward = db.prepare("INSERT INTO wards (name) VALUES ('W')").run().lastInsertRowid;
+  const bed = db.prepare("INSERT INTO beds (code, ward_id, status) VALUES ('B1',?,'free')").run(ward).lastInsertRowid;
+  db.prepare("INSERT INTO admissions (patient_id, doctor_id, status, created_at) VALUES (?,3,'ordered','2000-01-01T00:00:00Z')").run(pid);
+  const adm = admitPatient(db, { patient_id: pid, bed_id: bed, doctor_id: 3 }, { id: 1, role: 'admin' }).admission;
+  const svc = db.prepare("INSERT INTO services (name, price) VALUES ('Дренаж', 40000)").run().lastInsertRowid;
+  const line = db.prepare("INSERT INTO admission_services (admission_id, service_id, quantity, unit_price, total, status, billable) VALUES (?,?,1,40000,40000,'added',1)").run(adm.id, svc).lastInsertRowid;
+  const { invoice } = createInvoiceForAdmission(db, { admission_id: adm.id, admission_service_ids: [line] }, registrar);
+
+  // Список кассы называет госпитализацию и её состояние — окно отмены решает по ним.
+  const row = cashierInvoices(db, {}, cashier).rows.find((r) => r.id === invoice.id);
+  assert.equal(row.admission_id, adm.id);
+  assert.ok(['admitted', 'examined', 'active', 'discharging'].includes(row.admission_status), row.admission_status);
+
+  // Пациент выписан — отмена как у любого счёта.
+  db.prepare("UPDATE admissions SET status = 'discharged', discharged_at = '2026-09-08T10:00:00Z' WHERE id = ?").run(adm.id);
+  assert.equal(cashierInvoices(db, {}, cashier).rows.find((r) => r.id === invoice.id).admission_status, 'discharged');
+  voidInvoice(db, { invoice_id: invoice.id }, cashier);
+  assert.equal(db.prepare('SELECT status FROM invoices WHERE id=?').get(invoice.id).status, 'void');
 });

@@ -172,6 +172,10 @@ export function patientCard(db, args, user) {
     // картой, как и категория: отдельный запрос был бы вторым местом, где
     // решается «вправе ли этот сотрудник видеть этого пациента».
     telegram: null,
+    // DEBT_FLOW_V1 — долг пациента (счета со статусом 'debt': «Оставить как
+    // долг» на кассе или выписка из стационара с долгом) едет с картой, чтобы
+    // красный бейдж стоял у имени ДО того, как кто-то откроет вкладку «Счёт».
+    debt: null,
     visits: null, services: null, lab_orders: null, lab_results: null,
     invoices: null, invoice_items: null, payments: null,
     docs: null, doc_notes: null,
@@ -182,6 +186,13 @@ export function patientCard(db, args, user) {
   // глушим: бейдж это справка, и из-за него карта открываться не перестанет.
   try { out.telegram = telegramPatientStatus(db, { patient_id: id }, user); }
   catch { out.telegram = null; }
+
+  if (canRead('invoices', roles)) {
+    const d = db.prepare(`
+      SELECT COUNT(*) AS n, COALESCE(SUM(total_amount - paid_amount), 0) AS amount
+        FROM invoices WHERE patient_id = ? AND status = 'debt'`).get(id);
+    out.debt = { amount: Math.round((Number(d.amount) || 0) * 100) / 100, invoices: d.n || 0 };
+  }
 
   if (seeDetails && full.category_id != null) {
     const c = db.prepare('SELECT id, name, discount_percent, active FROM patient_categories WHERE id = ?')

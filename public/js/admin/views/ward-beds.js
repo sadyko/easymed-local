@@ -1081,7 +1081,7 @@ const REGISTER_COLS = [
     { key: 'patient',    label: 'Пациент',    text: (r) => [r.mrn, r.full_name].filter(Boolean).join(' ') },
     { key: 'dob',        label: 'Дата рожд.', text: (r) => dobText(r) },
     { key: 'no',         label: '№ истории',  text: (r) => r.admission_no || ('#' + r.id) },
-    { key: 'status',     label: 'Статус',     text: (r) => admissionStatusLabel(r.status) },
+    { key: 'status',     label: 'Статус',     text: (r) => admissionStatusLabel(r.status) + (Number(r.debt_total) > 0 ? ' ' + tr('Долг') : '') },   // DEBT_FLOW_V1 — фильтр по слову «долг»
     { key: 'admitted',   label: 'Госпит.',    text: (r) => (r.admitted_at && r.status !== 'ordered' ? fmtDateTime(r.admitted_at) : '') },
     { key: 'discharged', label: 'Выписка',    text: (r) => (r.discharged_at ? fmtDateTime(r.discharged_at) : '') },
     { key: 'dept',       label: 'Отделение',  text: (r) => r.department || '' },
@@ -1151,7 +1151,11 @@ async function admissionsTable() {
                 h('span', { class: 'ar-name' }, r.full_name || '—'))),
             h('td', { class: 'ar-nowrap' }, dobText(r) || '—'),
             h('td', { class: 'ar-nowrap' }, r.admission_no || ('#' + r.id)),
-            h('td', null, Tag(admissionStatusLabel(r.status), { kind: tone, dot: true })),
+            h('td', null, Tag(admissionStatusLabel(r.status), { kind: tone, dot: true }),
+                // DEBT_FLOW_V1 — оформленный долг стоит красной меткой при статусе.
+                Number(r.debt_total) > 0
+                    ? h('span', { class: 'tag tag-crit ar-debt', title: trf('Оформлен долг: {sum}', { sum: fmtPrice(r.debt_total) }) }, tr('Долг'))
+                    : null),
             h('td', { class: 'ar-nowrap' }, REGISTER_COLS[4].text(r) || '—'),
             h('td', { class: 'ar-nowrap' }, REGISTER_COLS[5].text(r) || '—'),
             h('td', null, r.department || '—'),

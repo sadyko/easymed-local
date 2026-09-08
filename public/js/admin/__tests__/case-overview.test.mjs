@@ -187,3 +187,24 @@ test('«Выписка» подаёт заявку с generate_bill и гово�
     assert.ok(lastToast().includes('INV-7'), 'подтверждение должно называть счёт: ' + lastToast());
     assert.ok(lastToast().includes('1 250 000'), 'и сумму');
 });
+
+// ─── DEBT_FLOW_V1 — «Долг» только когда он оформлен ─────────────────────────
+test('DEBT_FLOW_V1: неоплаченный счёт лежащего — «К оплате» (жёлтый), оформленный долг — «Долг» (красный)', async () => {
+    const saved = OV.bill;
+    try {
+        OV.bill = { accommodation: null, invoices: [{ id: 1, status: 'unpaid' }], total: 500000, paid: 0, debt: 500000, debt_marked: 0 };
+        let root = await render(() => {});
+        let big = walk(root).find((e) => String(e.className).includes('co-big'));
+        assert.ok(textOf(big).includes('К оплате'), 'неоплаченный счёт лежащего назван долгом: ' + textOf(big));
+        assert.ok(String(big.className).includes('co-warn') && !String(big.className).includes('co-crit'), 'тон должен быть warn, а не crit: ' + big.className);
+
+        OV.bill = { accommodation: null, invoices: [{ id: 1, status: 'debt' }], total: 500000, paid: 120000, debt: 380000, debt_marked: 380000 };
+        root = await render(() => {});
+        big = walk(root).find((e) => String(e.className).includes('co-big'));
+        assert.ok(textOf(big).includes('Долг'), 'оформленный долг не назван долгом: ' + textOf(big));
+        assert.ok(String(big.className).includes('co-crit'), 'долг обязан быть красным: ' + big.className);
+        assert.ok(textOf(big).replace(/\s/g, '').includes('380000'), 'сумма долга — остаток по счёту-долгу: ' + textOf(big));
+    } finally {
+        OV.bill = saved;
+    }
+});

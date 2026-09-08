@@ -29,6 +29,7 @@ import { openVisitBillModal } from './visit-bill.js';
 import { openAdmissionOrderModal } from './admission-modal.js?v=inp2';   // ADMISSION_ORDER_V1 — «Госпитализация» с карты пациента
 import { caseFilePrintHtml } from './case-docs.js?v=cw1';   // PATIENT_HISTORY_TAB_V1 — печать подшитой истории тем же бланком
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';   // PATIENT_HISTORY_TAB_V1
+import { moneyDisplay } from '../../shared/money-input.js?v=mi2';   // DEBT_FLOW_V1 — сумма долга у имени
 import { outcomeTitle } from './discharge.js';   // PATIENT_HISTORY_TAB_V1 — исход словами
 import { BRANCH_BUCKET, uploadFile, signedUrl } from '../storage.js?v=aurora20b';   // PATIENT_DOCS_TAB_V1 — same URL as service-workspace (one instance)
 // PATIENT_FILE_ATTACH_V1 — пределы и список допустимых форматов ОДНИ на
@@ -266,6 +267,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
     let payloadDocNotes = [];
     let payloadHistory = null;   // PATIENT_HISTORY_TAB_V1 — { admissions, case_files }
     let lastVisitDate = null;
+    let debt = null;   // DEBT_FLOW_V1 — { amount, invoices } по счетам со статусом «debt»
 
     function applyCardPayload(data) {
         tabAccess = (data && data.tabs) || {};
@@ -273,6 +275,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         payerName = data.payer_name || null;
         category  = data.category || null;
         telegram  = data.telegram || null;   // TELEGRAM_PATIENT_BADGE_V1
+        debt      = data.debt || null;       // DEBT_FLOW_V1
         visits    = data.visits || [];
         invoices  = data.invoices || [];
         invoiceItems = data.invoice_items || [];
@@ -490,6 +493,17 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 h('div', { class: 'row', style: { gap: '12px', alignItems: 'center', flexWrap: 'wrap' } },
                     h('h1', { style: { margin: 0, fontSize: '24px', fontWeight: 800, letterSpacing: '-0.01em', color: 'var(--ink-900)' } }, p.full_name || '—'),
                     activePill,
+                    // DEBT_FLOW_V1 — долг стоит у имени, красным: его должен
+                    // увидеть регистратор у стойки и врач в кабинете, а не только
+                    // кассир, открывший вкладку «Счёт». Клик уводит к счетам.
+                    debt && debt.amount > 0 ? h('span', {
+                        class: 'pc-debt' + (tabOpen('billing') ? ' is-link' : ''),
+                        title: trf('Долг по счетам ({n}) — нажмите, чтобы открыть счета', { n: debt.invoices }),
+                        role: tabOpen('billing') ? 'button' : null,
+                        tabindex: tabOpen('billing') ? '0' : null,
+                        onclick: () => { if (tabOpen('billing')) gotoTab('billing'); },
+                        onkeydown: (e) => { if ((e.key === 'Enter' || e.key === ' ') && tabOpen('billing')) { e.preventDefault(); gotoTab('billing'); } },
+                    }, Icon('Wallet', { size: 11 }), ' ', tr('Долг'), ' · ', h('b', { class: 'num' }, moneyDisplay(debt.amount))) : null,
                     // CATEGORY_DISCOUNT_V1 — категория стоит рядом с именем и
                     // сразу называет скидку: она влияет на КАЖДЫЙ счёт этого
                     // пациента, и узнавать о ней в момент оплаты поздно. Без

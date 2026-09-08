@@ -9,6 +9,7 @@ import { loadPatientsPaged, findAllDuplicatePatientIds, mergePatients } from '..
 import { scopedDoctorId, canView } from '../permissions.js';
 // PATIENT_ROW_V2 — телефон в реестре читается так же, как на карточке CRM.
 import { formatPhone } from '../phone-format.js';
+import { moneyDisplay } from '../../shared/money-input.js?v=mi2';   // DEBT_FLOW_V1 — сумма долга у имени
 // PATIENT_ROW_V2 — регистратор и отметка Telegram читаются напрямую:
 // см. resolveRegistrars() и ensureTelegramLinked() ниже.
 import { supabase } from '../../supabase.js';
@@ -460,6 +461,37 @@ function registrarOf(p) {
     return registrarNames.get(String(id)) || '';
 }
 
+// DEBT_FLOW_V1 — долг пациента в реестре: красная метка у имени.
+//
+// Владелец: «yes mark as a debt». Долг — это счета со статусом 'debt' («Оставить
+// как долг» на кассе или выписка из стационара с долгом); неоплаченный счёт
+// сегодняшнего визита долгом не считается. Спрашивается ОДНИМ запросом на
+// страницу, как имена регистраторов, и НЕ запоминается между страницами:
+// долг гасят, и метка обязана исчезнуть при следующей отрисовке.
+const debtByPatient = new Map();   // patient id → остаток
+
+async function resolveDebts(rows) {
+    debtByPatient.clear();
+    const ids = rows.map((p) => p && p.id).filter((id) => id != null && id !== '');
+    if (!ids.length) return;
+    try {
+        const { data, error } = await supabase.from('invoices')
+            .select('patient_id, total_amount, paid_amount').eq('status', 'debt').in('patient_id', ids);
+        if (error) throw new Error(error.message);
+        for (const inv of (data || [])) {
+            const key = String(inv.patient_id);
+            const due = Math.max(0, (Number(inv.total_amount) || 0) - (Number(inv.paid_amount) || 0));
+            debtByPatient.set(key, (debtByPatient.get(key) || 0) + due);
+        }
+    } catch (e) {
+        console.warn('[patients/debt]', e.message);
+    }
+}
+
+function debtOf(p) {
+    return (p && debtByPatient.get(String(p.id))) || 0;
+}
+
 // TELEGRAM — «активный телеграм» в этой сборке это НЕ поле в карте пациента.
 // Колонки patients.telegram_opt_in нет в схеме вовсе (её же и отбрасывает
 // query-compiler на записи), поэтому data.js со своим row.telegram_opt_in
@@ -535,6 +567,8 @@ async function fetchAndPaint() {
     // фамилия, и глаз ловил бы это движение на самом читаемом экране продукта.
     // Один запрос на страницу, и только про неизвестные ещё id.
     await resolveRegistrars(result.rows);
+    if (token !== lastFetchToken) return;
+    await resolveDebts(result.rows);   // DEBT_FLOW_V1 — метка «Долг» приезжает ДО отрисовки
     if (token !== lastFetchToken) return;
 
     state.total    = result.total;
@@ -767,6 +801,12 @@ function patientRow(p) {
                             ? h('span', { class: 'pt-tg', title: 'Есть Telegram' }, Icon('Send', { size: 11 }))
                             : null,
                         duplicateIdSet.has(p.id) ? h('span', { class: 'tag tag-warn', style: { fontSize: '12.5px' }, title: 'Возможный дубликат — то же имя на том же телефоне (или общий ПИНФЛ). Откройте карточку для объединения.' }, 'Дубликат') : null,
+                        // DEBT_FLOW_V1 — долг у имени, с суммой: у стойки это
+                        // видят ДО того, как человек дойдёт до кассы.
+                        debtOf(p) > 0
+                            ? h('span', { class: 'tag tag-crit pt-debt', title: 'Есть неоплаченный долг по счетам — откройте карточку, вкладку «Счёт»' },
+                                Icon('Wallet', { size: 11 }), ' ', tr('Долг'), ' ', h('b', { class: 'num' }, moneyDisplay(debtOf(p))))
+                            : null,
                         // BRANCH_ORIGIN_V1 — регистр КЛИНИЧЕСКИЙ, а не пофилиальный: поиск
                         // обязан находить всех (PATIENTS_CLINIC_WIDE_V1), поэтому список не
                         // фильтруется — подписывается. Метка только на чужих: подпись на

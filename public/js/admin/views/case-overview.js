@@ -279,12 +279,16 @@ function paint(root, onNavigate) {
     // ── 2. Выписка и счёт ───────────────────────────────────────────────────
     const b = ov.bill || { invoices: [] }; const acc = b.accommodation;
     const sv = ov.services || { count: 0, list: [] };
+    // DEBT_FLOW_V1 — «Долг» только когда он ОФОРМЛЕН (счёт со статусом debt);
+    // пока пациент лежит, неоплаченный счёт — «К оплате», и это не тревога.
     const big = b.total > 0
-        ? (b.debt > 0
-            ? { label: 'Долг', value: sum(b.debt), tone: 'crit' }
-            : { label: 'Оплачено полностью', value: sum(b.paid), tone: 'ok' })
+        ? (b.debt_marked > 0
+            ? { label: 'Долг', value: sum(b.debt_marked), tone: 'crit' }
+            : b.debt > 0
+                ? { label: 'К оплате', value: sum(b.debt), tone: 'warn' }
+                : { label: 'Оплачено полностью', value: sum(b.paid), tone: 'ok' })
         : { label: 'Счетов пока нет', value: sv.sum_unbilled > 0 ? sum(sv.sum_unbilled) : '—', tone: '' , sub: sv.sum_unbilled > 0 ? tr('не выставлено') : '' };
-    const billPanel = panel('Выписка и счёт', { icon: 'Wallet', area: 'bill', tone: b.debt > 0 ? 'crit' : '',
+    const billPanel = panel('Выписка и счёт', { icon: 'Wallet', area: 'bill', tone: b.debt_marked > 0 ? 'crit' : (b.debt > 0 ? 'warn' : ''),
         children: [
             h('div', { class: 'co-big' + (big.tone ? ' co-' + big.tone : '') },
                 h('div', { class: 'stat-label' }, tr(big.label)),

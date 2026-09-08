@@ -8,6 +8,7 @@ import { outstandingWhere } from '../domain/money.js';
 import { assertTransition } from '../domain/lifecycle.js';
 import { hasAnyRole } from '../roles.js';
 import { countsAsInflow } from '../../../public/js/shared/payment-methods.js';   // DEPOSIT_REVENUE_V1
+import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';   // DEBT_FLOW_V1 — «пациент ещё на койке»
 // BRANCH_MONEY_GUARD_V1 — тот же запрет и та же формулировка, что в billing.js:
 // чужие деньги отсюда только для чтения. Импорт, а не своя копия проверки:
 // правило одно, и звучать оно обязано одинаково, с какого бы экрана в счёт ни
@@ -336,6 +337,10 @@ export function cashierInvoices(db, args, user) {
     SELECT i.id, i.invoice_number, i.status, i.subtotal, i.discount_amount,
            i.total_amount, i.paid_amount, i.created_at, i.paid_at,
            pt.full_name AS patient_name, pt.mrn AS mrn, pt.phone AS phone,
+           -- DEBT_FLOW_V1 — счёт стационара: окно отмены обязано знать, лежит
+           -- ли пациент ещё на койке (тогда отмена его не выписывает).
+           i.admission_id AS admission_id,
+           (SELECT a.status FROM admissions a WHERE a.id = i.admission_id) AS admission_status,
            -- RECEIPT_PATIENT_ID_V1 — чек предъявляют в лаборатории как талон:
            -- по нему сверяют, ТОТ ли это пациент (ФИО + дата рождения + пол +
            -- номер карты). Без этих полей чек не отличает однофамильцев.
@@ -499,6 +504,37 @@ export function voidInvoice(db, args, user) {
     }
     if (invoice.paid_amount > 0) {
       throw new RpcError('По счёту уже приняты деньги — сначала оформите возврат.', 400);
+    }
+
+    // DEBT_FLOW_V1 — ПАЦИЕНТ ЕЩЁ НА КОЙКЕ: отмена счёта его НЕ выписывает.
+    //
+    // Владелец: «when we have cancelled the invoice the patient is still in
+    // the stationary». Кассир отменял счёт как способ «закрыть вопрос» с
+    // неплательщиком — а получал пациента в койке и пустой счёт: строки
+    // возвращались в невыставленные (ADM_LINE_RELEASE_V1 ниже), долг исчезал
+    // из всех цифр, и человек лежал «бесплатно». Правильный путь для ухода без
+    // оплаты — выписка с подписью «Долг согласован»: счёт становится долгом.
+    //
+    // Это ПРЕДУПРЕЖДЕНИЕ, а не запрет (правило стационара: деньги
+    // предупреждают, не блокируют): ошибочный счёт лежащему пациенту по-прежнему
+    // можно отменить и выставить заново — с явным подтверждением in_bed_ack,
+    // которое окно отмены показывает вместе с этим текстом.
+    if (invoice.admission_id) {
+      const adm = db.prepare(`
+        SELECT a.status, w.name AS ward_name, b.code AS bed_code
+          FROM admissions a
+          LEFT JOIN wards w ON w.id = a.ward_id
+          LEFT JOIN beds b ON b.id = a.bed_id
+         WHERE a.id = ?`).get(invoice.admission_id);
+      const inBedAck = args.in_bed_ack === true || args.in_bed_ack === 1;
+      if (adm && IN_BED_STATUSES.includes(adm.status) && !inBedAck) {
+        const place = [adm.ward_name, adm.bed_code].filter(Boolean).join(' · ');
+        throw new RpcError(
+          'Пациент ещё в стационаре' + (place ? ' (' + place + ')' : '') + '. Отмена счёта его не выписывает: '
+          + 'услуги вернутся в невыставленные и попадут в новый счёт при выписке. '
+          + 'Если пациент уходит не заплатив — оформите выписку, и счёт станет долгом. '
+          + 'Чтобы всё же отменить счёт, подтвердите это в окне отмены.', 400);
+      }
     }
 
     assertTransition('invoice', invoice.status, 'void');

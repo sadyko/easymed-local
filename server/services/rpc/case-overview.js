@@ -173,13 +173,21 @@ export function admissionOverview(db, args, user) {
   let accommodation = null;
   try { accommodation = accommodationState(db, { admission_id: adm.id }, user); } catch (e) { accommodation = null; }
   const invoices = db.prepare('SELECT id, invoice_number, total_amount, paid_amount, status, created_at FROM invoices WHERE admission_id = ? ORDER BY id').all(adm.id);
-  const total = round2(invoices.reduce((s, i) => s + (Number(i.total_amount) || 0), 0));
-  const paid = round2(invoices.reduce((s, i) => s + (Number(i.paid_amount) || 0), 0));
+  // DEBT_FLOW_V1 — отменённые и возвращённые счета в сумму не входят: по ним
+  // денег не ждут, и «Долг» на обзоре после отмены счёта кассиром был бы
+  // долгом, которого нет (владелец увидел ровно это).
+  const live = invoices.filter((i) => i.status !== 'void' && i.status !== 'refunded');
+  const total = round2(live.reduce((s, i) => s + (Number(i.total_amount) || 0), 0));
+  const paid = round2(live.reduce((s, i) => s + (Number(i.paid_amount) || 0), 0));
+  // «Долг» на обзоре — это ОФОРМЛЕННЫЙ долг (статус 'debt'), а не любой
+  // неоплаченный остаток: пока пациент лежит, счёт просто «к оплате».
+  const debtMarked = round2(live.filter((i) => i.status === 'debt')
+    .reduce((s, i) => s + Math.max(0, (Number(i.total_amount) || 0) - (Number(i.paid_amount) || 0)), 0));
   const bill = {
     accommodation: accommodation ? {
       stay_units: accommodation.stay_units, invoiced: accommodation.invoiced, current: accommodation.current,
     } : null,
-    invoices, total, paid, debt: round2(Math.max(0, total - paid)),
+    invoices, total, paid, debt: round2(Math.max(0, total - paid)), debt_marked: debtMarked,
   };
 
   // ── выписка ─────────────────────────────────────────────────────────────

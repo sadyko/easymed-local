@@ -32,8 +32,14 @@ export function admissionsRegister(db, args, user) {
            doc.full_name AS attending_name,
            py.name AS payer_name,
            (SELECT COALESCE(SUM(s.total), 0) FROM admission_services s WHERE s.admission_id = a.id) AS act_total,
-           (SELECT COALESCE(SUM(i.total_amount), 0) FROM invoices i WHERE i.admission_id = a.id) AS invoiced_total,
-           (SELECT COALESCE(SUM(i.paid_amount), 0) FROM invoices i WHERE i.admission_id = a.id) AS paid_total
+           -- DEBT_FLOW_V1 — отменённые и возвращённые счета в «выставлено» не
+           -- входят: по ним денег не ждут, и минус в балансе после отмены
+           -- счёта был бы долгом, которого нет.
+           (SELECT COALESCE(SUM(i.total_amount), 0) FROM invoices i WHERE i.admission_id = a.id AND i.status NOT IN ('void', 'refunded')) AS invoiced_total,
+           (SELECT COALESCE(SUM(i.paid_amount), 0) FROM invoices i WHERE i.admission_id = a.id AND i.status NOT IN ('void', 'refunded')) AS paid_total,
+           -- DEBT_FLOW_V1 — сколько по этой госпитализации ОФОРМЛЕНО долгом
+           -- (счета со статусом 'debt'): журнал ставит красную метку «Долг».
+           (SELECT COALESCE(SUM(i.total_amount - i.paid_amount), 0) FROM invoices i WHERE i.admission_id = a.id AND i.status = 'debt') AS debt_total
       FROM admissions a
       LEFT JOIN patients p ON p.id = a.patient_id
       LEFT JOIN wards w ON w.id = a.ward_id
@@ -49,6 +55,7 @@ export function admissionsRegister(db, args, user) {
       invoiced_total: round2(r.invoiced_total),
       paid_total: round2(r.paid_total),
       balance: round2(r.paid_total - r.invoiced_total),
+      debt_total: round2(r.debt_total),   // DEBT_FLOW_V1
     })),
     total: rows.length,
   };

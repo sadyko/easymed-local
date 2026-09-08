@@ -1400,6 +1400,20 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .pc-cat.has-discount { background: var(--ok-50, #ecfdf5); color: var(--ok-700, #047857); }
 .pc-cat.is-off { opacity: .6; text-decoration: line-through; }
 .pc-cat-pct { font-weight: 800; }
+/* DEBT_FLOW_V1 — долг у имени пациента: красная пилюля того же роста, что
+   категория; ссылкой становится только когда вкладка «Счёт» открыта роли. */
+.pc-debt { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px;
+    padding: 3px 11px; font-size: 12.5px; font-weight: 700;
+    background: var(--crit-50, #fef2f2); color: var(--crit-700, #b91c1c); border: 1px solid var(--crit-200, #fecaca); }
+.pc-debt.is-link { cursor: pointer; }
+.pc-debt.is-link:hover, .pc-debt.is-link:focus-visible { background: var(--crit-100, #fee2e2); outline: none; box-shadow: 0 0 0 3px rgba(185, 28, 28, .18); }
+.pt-debt { gap: 4px; font-size: 12.5px; }
+.ar-debt { margin-left: 6px; }
+/* Окно отмены счёта на кассе — «пациент ещё на койке» */
+.cd-inbed { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: var(--warn-50, #fffbeb); border: 1px solid var(--warn-200, #fde68a); color: var(--warn-700, #b45309); font-size: 12.5px; line-height: 1.5; }
+.cd-inbed-t { display: flex; align-items: center; font-weight: 700; font-size: 13.5px; }
+.cd-inbed-p { margin: 6px 0 8px; }
+.cd-inbed-ack { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--ink-800); cursor: pointer; }
 
 /* CASE_WORKSPACE_V1 (2026-09-06) — история болезни как рабочий экран.
    Слева шаги по регламенту, справа документ — та же расстановка, что в кабинете
@@ -5316,6 +5330,7 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 /* 2 — выписка и счёт */
 .co-big{padding:10px 12px;border-radius:var(--r-md);background:var(--ink-25)}
 .co-big.co-crit{background:var(--crit-50)}
+.co-big.co-warn{background:var(--warn-50)}   /* DEBT_FLOW_V1 — «К оплате» */
 .co-big.co-ok{background:var(--ok-50)}
 .co-big-v{font-size:24px;margin-top:4px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .co-big.co-crit .co-big-v{color:var(--crit-700)}

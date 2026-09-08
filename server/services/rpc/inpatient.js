@@ -3,7 +3,7 @@
 // client-supplied amounts are never trusted. Every handler that touches
 // money or bed/admission state runs inside db.transaction(...)() for atomicity.
 
-import { nextInvoiceNumber } from './billing.js';
+import { nextInvoiceNumber, buildAdmissionInvoice } from './billing.js';   // DEBT_FLOW_V1 — долг при выписке собирается в счёт
 import { nextAdmissionNo } from '../domain/admission-number.js';   // ADMISSION_NUMBER_V2
 import { generateAdmissionBill } from './admission-bill.js';   // CASE_OVERVIEW_V1 — выписка со счётом
 import { assertTransition } from '../domain/lifecycle.js';
@@ -1038,6 +1038,41 @@ export function admissionBalance(db, admissionId) {
   };
 }
 
+/**
+ * DEBT_FLOW_V1 — долг при выписке становится ДОЛГОМ СЧЁТА.
+ *
+ * Владелец: «where should the patient go from the stationary if cashier
+ * cancels the invoice… can we make some debt?» — «yes mark as a debt».
+ *
+ * До этого долг жил ТОЛЬКО в строке госпитализации (discharge_debt_amount):
+ * касса его не видела, список «Долг» на кассе оставался пуст, и через месяц
+ * никто не помнил, кто сколько остался должен. Теперь при выписке с подписью
+ * «Долг согласован»:
+ *   1. невыставленные строки (начислено, но не в счёте) собираются в ОДИН счёт
+ *      госпитализации — теми же правилами, что «Выписать и выставить счёт»;
+ *      проживание здесь НЕ доначисляется: пропажа койко-дней остаётся
+ *      предупреждением окна (ACCOMMODATION_GAP_V1), а не молчаливой суммой,
+ *      которой не было в числе под подписью;
+ *   2. каждый неоплаченный счёт госпитализации получает статус 'debt' — тот же,
+ *      что ставит кассир кнопкой «Оставить как долг» (DEBT_BTN_V1), и потому
+ *      попадает в тот же список «Долг» и в тот же красный бейдж карты.
+ *
+ * Возвращает счета-долги с остатком: экран называет их номера в подтверждении.
+ */
+function markAdmissionDebt(db, admissionId, user) {
+  const ids = db.prepare(`
+    SELECT id FROM admission_services
+     WHERE admission_id = ? AND invoice_item_id IS NULL AND billable = 1
+     ORDER BY id`).all(admissionId).map((r) => r.id);
+  if (ids.length) buildAdmissionInvoice(db, admissionId, ids, user);
+  db.prepare("UPDATE invoices SET status = 'debt' WHERE admission_id = ? AND status IN ('unpaid', 'partial')")
+    .run(admissionId);
+  return db.prepare(`
+    SELECT id, invoice_number, total_amount, paid_amount FROM invoices
+     WHERE admission_id = ? AND status = 'debt' ORDER BY id`).all(admissionId)
+    .map((i) => ({ id: i.id, invoice_number: i.invoice_number, balance: round2(i.total_amount - i.paid_amount) }));
+}
+
 /** Сколько назначений ещё идёт: то, что чек-лист выписки называет «лист назначений». */
 function activeOrderCount(db, admissionId) {
   const row = db.prepare("SELECT COUNT(*) AS n FROM treatment_orders WHERE admission_id = ? AND status = 'active'")
@@ -1322,6 +1357,10 @@ export function admissionDischargeFinalize(db, args, user) {
       owes && debtAck ? dischargedAt : null,
       admissionId);
 
+    // 5b. DEBT_FLOW_V1 — подписанный долг становится долгом СЧЁТА (см.
+    //     markAdmissionDebt): касса видит его в списке «Долг», карта — бейджем.
+    const debtInvoices = owes && debtAck ? markAdmissionDebt(db, admissionId, user) : [];
+
     // 6. Койка: 'cleaning', НЕ 'free'.
     if (adm.bed_id) {
       db.prepare("UPDATE beds SET status = 'cleaning' WHERE id = ?").run(adm.bed_id);
@@ -1338,6 +1377,7 @@ export function admissionDischargeFinalize(db, args, user) {
       orders_left: remaining,
       balance,
       debt_acknowledged: owes && debtAck,
+      debt_invoices: debtInvoices,   // DEBT_FLOW_V1 — какие счета стали долгом
     };
   });
 

@@ -146,6 +146,15 @@ test('выписка со счётом: заявка принята и все н
     const ov = admissionOverview(ctx.db, { admission_id: adm.id }, doctor);
     assert.equal(ov.bill.invoices.length, 1);
     assert.equal(ov.bill.debt, ov.bill.total, 'ничего ещё не оплачено');
+    assert.equal(ov.bill.debt_marked, 0, 'DEBT_FLOW_V1 — неоплаченный ещё не оформленный долг');
+    // DEBT_FLOW_V1 — отменённый счёт кассиром в сумму не входит: «Долг» на обзоре
+    // после отмены был бы долгом, которого нет; оформленный долг — считается.
+    ctx.db.prepare("INSERT INTO invoices (invoice_number, admission_id, patient_id, subtotal, total_amount, paid_amount, status) VALUES ('INV-V', ?, ?, 999000, 999000, 0, 'void')").run(adm.id, ctx.p1);
+    ctx.db.prepare("INSERT INTO invoices (invoice_number, admission_id, patient_id, subtotal, total_amount, paid_amount, status) VALUES ('INV-D', ?, ?, 200000, 200000, 50000, 'debt')").run(adm.id, ctx.p1);
+    const ov2 = admissionOverview(ctx.db, { admission_id: adm.id }, doctor);
+    assert.equal(ov2.bill.total, res.bill.total_amount + 200000, 'void не в сумме');
+    assert.equal(ov2.bill.debt_marked, 150000);
+    assert.equal(ov2.bill.invoices.length, 3, 'список счетов полный — отменённый виден строкой');
     assert.equal(ov.discharge.status, 'discharging');
     assert.ok(ov.discharge.requested_at);
 
