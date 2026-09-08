@@ -27,6 +27,9 @@ import { printInvoiceCheck } from './receipt-print.js?v=rp1';   // REPRINT_SERVI
 import { printableSheet as _printSheet } from './doc-settings.js?v=noqr1';   // VISIT_WIZARD_LOCAL_V1 — full-screen «Добавить услугу к визиту»
 import { openVisitBillModal } from './visit-bill.js';
 import { openAdmissionOrderModal } from './admission-modal.js?v=inp2';   // ADMISSION_ORDER_V1 — «Госпитализация» с карты пациента
+import { caseFilePrintHtml } from './case-docs.js?v=cw1';   // PATIENT_HISTORY_TAB_V1 — печать подшитой истории тем же бланком
+import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';   // PATIENT_HISTORY_TAB_V1
+import { outcomeTitle } from './discharge.js';   // PATIENT_HISTORY_TAB_V1 — исход словами
 import { BRANCH_BUCKET, uploadFile, signedUrl } from '../storage.js?v=aurora20b';   // PATIENT_DOCS_TAB_V1 — same URL as service-workspace (one instance)
 // PATIENT_FILE_ATTACH_V1 — пределы и список допустимых форматов ОДНИ на
 // браузер и сервер (public/js/shared/). Здесь они нужны, чтобы отказ пришёл
@@ -63,6 +66,7 @@ const TABS = [
     { id: 'services', label: 'Услуги',      icon: 'Stethoscope' },
     { id: 'labs',     label: 'Лаборатория', icon: 'Flask' },
     { id: 'docs',     label: 'Документы',   icon: 'Doc' },      // PATIENT_DOCS_TAB_V1 — файлы/документы пациента
+    { id: 'history',  label: 'История',     icon: 'Bed' },      // PATIENT_HISTORY_TAB_V1 — госпитализации и подшитые истории болезни
     { id: 'billing',  label: 'Счёт',        icon: 'Receipt' },
     { id: 'visits',   label: 'Визиты',      icon: 'Calendar' },
     { id: 'details',  label: 'Деталь',      icon: 'User' },
@@ -260,6 +264,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
     let payloadLabResults = [];
     let payloadDocs = null;
     let payloadDocNotes = [];
+    let payloadHistory = null;   // PATIENT_HISTORY_TAB_V1 — { admissions, case_files }
     let lastVisitDate = null;
 
     function applyCardPayload(data) {
@@ -277,6 +282,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         payloadLabResults = data.lab_results || [];
         payloadDocs       = data.docs;
         payloadDocNotes   = data.doc_notes || [];
+        payloadHistory    = data.history || null;   // PATIENT_HISTORY_TAB_V1
         // «Визиты» закрыты → шапка не знает даты последнего визита и честно
         // ставит прочерк, а не «визитов не было».
         lastVisitDate = tabOpen('visits') ? (data.last_visit_date || null) : null;
@@ -751,6 +757,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         else if (state.tab === 'billing')  bodyEl.appendChild(renderBilling());
         else if (state.tab === 'labs')     bodyEl.appendChild(renderLabs());
         else if (state.tab === 'docs')     bodyEl.appendChild(renderDocs());   // PATIENT_DOCS_TAB_V1
+        else if (state.tab === 'history')  bodyEl.appendChild(renderHistory());   // PATIENT_HISTORY_TAB_V1
         else                               bodyEl.appendChild(renderDetails());
     }
 
@@ -1267,6 +1274,81 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
     }
 
     // ---------------------------------------------------------------------
+    // PATIENT_HISTORY_TAB_V1 — «История»: госпитализации пациента и подшитые
+    // истории болезни. Владелец: «we need to add a tab called history (for
+    // which the document from the history will be saved)». Данные приезжают
+    // с картой (patient_card → history); печать — тем же бланком, что
+    // «Собрать историю» (caseFilePrintHtml), из сохранённого снимка.
+    function renderHistory() {
+        const wrap = h('div', { class: 'card' });
+        const hist = payloadHistory || { admissions: [], case_files: [] };
+        const admissions = hist.admissions || [];
+        const files = hist.case_files || [];
+        wrap.appendChild(h('div', { class: 'card-header' },
+            h('h3', null, Icon('Bed', { size: 15 }), ' ', tr('История болезни')),
+            h('span', { class: 'grow', style: { flex: 1 } }),
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, trf('госпитализаций: {n}', { n: admissions.length }))));
+        if (!admissions.length) {
+            wrap.appendChild(h('div', { class: 'empty', style: { padding: '26px' } },
+                tr('Госпитализаций не было. История болезни появится после размещения на койке.')));
+            return wrap;
+        }
+        const byAdm = new Map();
+        for (const f of files) {
+            const k = f.admission_id || 0;
+            if (!byAdm.has(k)) byAdm.set(k, []);
+            byAdm.get(k).push(f);
+        }
+        for (const a of admissions) {
+            const active = IN_BED_STATUSES.includes(a.status);
+            const own = byAdm.get(a.id) || [];
+            const meta = [
+                a.admitted_at ? trf('поступил {when}', { when: fmtDateTime(a.admitted_at) }) : null,
+                a.discharged_at ? trf('выписан {when}', { when: fmtDateTime(a.discharged_at) }) : null,
+                a.department || null,
+                [a.ward_name, a.bed_code].filter(Boolean).join(' · ') || null,
+                a.attending_name ? trf('лечащий: {name}', { name: a.attending_name }) : null,
+                a.discharge_outcome ? outcomeTitle(a.discharge_outcome) : null,
+            ].filter(Boolean).join(' · ');
+            wrap.appendChild(h('div', { class: 'ph-adm' },
+                h('div', { class: 'ph-adm-h' },
+                    h('div', { class: 'ph-adm-main' },
+                        h('div', { class: 'ph-adm-t' }, h('b', null, a.admission_no || ('#' + a.id)), ' ',
+                            Tag(admissionStatusLabel(a.status), { kind: active ? 'ok' : (a.status === 'ordered' ? 'warn' : ''), dot: true })),
+                        h('div', { class: 'muted ph-adm-m' }, meta)),
+                    h('div', { class: 'ph-adm-acts' },
+                        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => onNavigate && onNavigate('case-overview', { admissionId: a.id }) },
+                            Icon('Activity', { size: 13 }), ' ', tr('Обзор')),
+                        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => onNavigate && onNavigate('case-file', { admissionId: a.id }) },
+                            Icon('Doc', { size: 13 }), ' ', tr('Документы')))),
+                own.length
+                    ? h('div', { class: 'ph-files' }, ...own.map((f) => h('div', { class: 'ph-file' },
+                        h('span', { class: 'ph-file-ic' }, Icon('Doc', { size: 14 })),
+                        h('div', { class: 'ph-file-main' },
+                            h('div', { class: 'ph-file-t' }, f.title || tr('История болезни')),
+                            h('div', { class: 'muted ph-file-m' }, [
+                                f.created_at ? trf('подшита {when}', { when: fmtDateTime(f.created_at) }) : null,
+                                f.created_by_name || null,
+                                f.complete ? tr('комплект полный') : (f.gaps ? trf('не хватает документов: {n}', { n: f.gaps }) : null),
+                            ].filter(Boolean).join(' · '))),
+                        h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => printCaseFile(f) },
+                            Icon('Print', { size: 13 }), ' ', tr('Открыть')))))
+                    : h('div', { class: 'muted ph-none' },
+                        tr('История болезни ещё не подшита — её собирают кнопкой «Собрать историю» в документах госпитализации.'))));
+        }
+        return wrap;
+    }
+    async function printCaseFile(f) {
+        if (!f || !f.body) { toast(tr('У этой записи нет содержимого.'), 'fail'); return; }
+        const { PRINT_FONT_FACE_CSS } = await import('../../shared/print-fonts.js');
+        const html = caseFilePrintHtml(f.body, { fontFaceCss: PRINT_FONT_FACE_CSS });
+        const w = window.open('', '_blank');
+        if (!w) { toast(tr('Для печати разрешите всплывающие окна.'), 'warn'); return; }
+        w.document.open();
+        w.document.write(html);
+        w.document.close();
+    }
+
     // PATIENT_DOCS_TAB_V1 — «Документы»: файлы пациента (visit_documents).
     // Загрузка в локальное хранилище (BRANCH_BUCKET) + строка в
     // visit_documents (patient_id); открытие по signedUrl. Сюда же попадают

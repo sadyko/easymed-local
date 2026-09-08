@@ -89,8 +89,8 @@ const INVOICE = { id: 41, patient_id: 1, invoice_number: 'INV-A-26-00001', total
 // Полный ответ сервера: все вкладки открыты.
 function fullPayload() {
   return {
-    tabs: { services: 'delete', labs: 'view', docs: 'delete', billing: 'view', visits: 'edit', details: 'edit' },
-    caps: { services: { edit: true, del: true }, labs: { edit: false, del: false }, docs: { edit: true, del: true },
+    tabs: { services: 'delete', labs: 'view', docs: 'delete', history: 'view', billing: 'view', visits: 'edit', details: 'edit' },
+    caps: { services: { edit: true, del: true }, labs: { edit: false, del: false }, docs: { edit: true, del: true }, history: { edit: false, del: false },
             billing: { edit: false, del: false }, visits: { edit: true, del: false }, details: { edit: true, del: false } },
     patient: { ...PATIENT }, patient_limited: false, payer_name: 'Наличные',
     visits: [VISIT], visit_count: 1, last_visit_date: VISIT.visit_date,
@@ -108,7 +108,7 @@ function fullPayload() {
 // ни анализов, ни документов, ни анкеты.
 function visitsAndServicesOnly() {
   const p = fullPayload();
-  p.tabs = { services: 'edit', labs: 'none', docs: 'none', billing: 'none', visits: 'edit', details: 'none' };
+  p.tabs = { services: 'edit', labs: 'none', docs: 'none', history: 'none', billing: 'none', visits: 'edit', details: 'none' };
   p.patient = { id: 1, mrn: 'MRN-1', full_name: PATIENT.full_name, gender: 'male', date_of_birth: '1990-04-01', active: 1 };
   p.patient_limited = true;
   p.payer_name = null;
@@ -148,7 +148,7 @@ const buttons = (root) => walk(root).filter((n) => n.tagName === 'BUTTON');
 const titles = (root) => buttons(root).map((b) => b.attrs.title || '').filter(Boolean);
 
 // Полоса вкладок — первая карточка с шестью подписями вкладок.
-const TAB_LABELS = ['Услуги', 'Лаборатория', 'Документы', 'Счёт', 'Визиты', 'Деталь'];
+const TAB_LABELS = ['Услуги', 'Лаборатория', 'Документы', 'История', 'Счёт', 'Визиты', 'Деталь'];   // PATIENT_HISTORY_TAB_V1
 const labelOfTab = (b) => walk(b).map((n) => (n._t || '').trim()).find((t) => TAB_LABELS.includes(t)) || null;
 function tabBar(root) {
   return buttons(root).filter((b) => labelOfTab(b) !== null);
@@ -175,7 +175,7 @@ test('карта ходит в ОДНУ дверь: всё содержимое 
   assert.ok(t.includes('ОАК'), 'услуг не видно');
 });
 
-test('по умолчанию открыты все шесть вкладок и ни одна не под замком', async () => {
+test('по умолчанию открыты все семь вкладок и ни одна не под замком', async () => {
   const box = await render(fullPayload());
   assert.deepEqual(tabBar(box).map(labelOfTab), TAB_LABELS);
   assert.equal(titles(box).filter((x) => x.includes('закрыта')).length, 0, 'при полном доступе замков быть не должно');
@@ -189,7 +189,7 @@ test('закрытая вкладка ОСТАЁТСЯ на месте под з
   assert.deepEqual(tabBar(box).map(labelOfTab), TAB_LABELS,
     'вкладки пропали из полосы — исчезнувшая вкладка читается как поломка');
   const locked = tabBar(box).filter((b) => (b.attrs.title || '').includes('закрыта')).map(labelOfTab);
-  assert.deepEqual(locked.sort(), ['Деталь', 'Документы', 'Лаборатория', 'Счёт'], 'под замком не те вкладки');
+  assert.deepEqual(locked.sort(), ['Деталь', 'Документы', 'История', 'Лаборатория', 'Счёт'], 'под замком не те вкладки');
 });
 
 test('закрытая вкладка ОБЪЯСНЯЕТ отказ и называет, кто открывает доступ', async () => {

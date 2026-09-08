@@ -122,7 +122,7 @@ export function canEditSection(db, user, key) {
 
 // Вкладки карты — ТОТ ЖЕ список и ТЕ ЖЕ id, что в views/patient-card.js TABS.
 // Держится синхронно тестом (server/db/migrations/103.test.js).
-export const PATIENT_CARD_TABS = Object.freeze(['services', 'labs', 'docs', 'billing', 'visits', 'details']);
+export const PATIENT_CARD_TABS = Object.freeze(['services', 'labs', 'docs', 'history', 'billing', 'visits', 'details']);   // PATIENT_HISTORY_TAB_V1 — «История»
 
 // ЧТО НА ВКЛАДКЕ ВООБЩЕ МОЖНО СДЕЛАТЬ. Право, которого не существует, выдавать
 // нельзя: галочка «Удаление» у «Счёта» обещала бы то, чего нет ни в карте, ни в
@@ -136,6 +136,9 @@ export const PATIENT_TAB_CAPS = Object.freeze({
   labs:     Object.freeze({ edit: false, del: false }),
   // загрузить файл / удалить документ (visit_documents: insert+delete)
   docs:     Object.freeze({ edit: true,  del: true }),
+  // PATIENT_HISTORY_TAB_V1 — госпитализации и подшитые истории болезни: только
+  // смотреть и печатать; собирают историю в стационаре (admission_case_file_save)
+  history:  Object.freeze({ edit: false, del: false }),
   // деньги пишут ТОЛЬКО RPC кассы; удаления счёта не существует нигде
   billing:  Object.freeze({ edit: false, del: false }),
   // записать визит; УДАЛЕНИЯ визита в карте нет (оно живёт у администратора)

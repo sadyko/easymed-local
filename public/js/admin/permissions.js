@@ -425,6 +425,7 @@ export const PATIENT_TABS = [
     { id: 'services',    label: 'Услуги',        caps: { edit: true,  del: true  }, note: 'Смена врача в строке, замена и удаление НЕОПЛАЧЕННОЙ услуги' },
     { id: 'labs',        label: 'Лаборатория',   caps: { edit: false, del: false }, note: 'Результаты вносит раздел «Лаборатория» — карта их только показывает' },
     { id: 'docs',        label: 'Документы',     caps: { edit: true,  del: true  }, note: 'Загрузка файла и удаление документа' },
+    { id: 'history',     label: 'История',       caps: { edit: false, del: false }, note: 'Госпитализации и подшитые истории болезни — карта их только показывает и печатает' },   // PATIENT_HISTORY_TAB_V1
     { id: 'billing',     label: 'Счёт',          caps: { edit: false, del: false }, note: 'Счета и оплаты пишет только касса; удаления счёта нет нигде' },
     { id: 'visits',      label: 'Визиты',        caps: { edit: true,  del: false }, note: 'Запись визита; удаления визита в карте нет' },
     { id: 'details',     label: 'Деталь',        caps: { edit: true,  del: false }, note: 'Правка анкеты и отметок; удаление пациента — «Настройки → Пациенты»' },
@@ -432,7 +433,7 @@ export const PATIENT_TABS = [
 ];
 
 // Список вкладок САМОЙ карты (без ключей кабинета врача) — в порядке карты.
-export const PATIENT_CARD_TAB_IDS = ['services', 'labs', 'docs', 'billing', 'visits', 'details'];
+export const PATIENT_CARD_TAB_IDS = ['services', 'labs', 'docs', 'history', 'billing', 'visits', 'details'];   // PATIENT_HISTORY_TAB_V1
 
 const PATIENT_TAB_ALIASES = { overview: 'details' };
 export function normalizePatientTab(tab) {
