@@ -40,7 +40,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { titleSheetPrintSection, titleSheetPrintCss } from './title-sheet-print.js';   // TITLE_SHEET_V1
+import { titleSheetPrintSection, titleSheetPrintCss, papersSummary } from './title-sheet-print.js';   // TITLE_SHEET_V1 / INPATIENT_DOCS_V1
 
 // ---------------------------------------------------------------------------
 // Словарь названий
@@ -285,7 +285,12 @@ function itemRow(item, state, onDoc, activeKind = null) {
         style: { display: 'block', fontSize: '12.5px', marginTop: '2px', color: 'var(--ink-400)', lineHeight: '1.3' },
     },
     h('b', { style: { color: STATE_COLOR[item.state], fontWeight: '600' } }, caseDocStateWord(item.state)),
-    meta ? ' · ' : null, meta || null));
+    meta ? ' · ' : null, meta || null),
+    // INPATIENT_DOCS_V1 — у титульного листа вторая строка: какие бумаги подписаны.
+    item.kind === 'title' && item.papers
+        ? h('span', { style: { display: 'block', fontSize: '12.5px', marginTop: '2px', color: 'var(--ink-500)', lineHeight: '1.3' } },
+            papersSummary(item.papers, { withDates: false }))
+        : null);
 
     const actions = h('div', { style: { display: 'flex', gap: '6px', flexShrink: '0', alignItems: 'center' } });
     // РОВНО ОДНА заметная кнопка на весь список — у пункта, который сервер

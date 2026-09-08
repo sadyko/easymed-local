@@ -23,6 +23,7 @@ import {
     loadDocBrandingAsync,
     applyCompanyBranding,
 } from './doc-settings.js?v=noqr1';   // ONE shared instance — ?v=db9 must match in EVERY importer (incl. admin.js + visit-modal)
+import { INPATIENT_DOC_TYPES, INPATIENT_DOC_META } from '../../shared/doc-render.js';   // INPATIENT_DOCS_V1
 
 const DOC_TYPES = [
     { id: 'conclusion', label: 'Заключение врача', icon: 'Stethoscope', sub: 'Клинический отчёт',    paper: 'A4' },
@@ -31,6 +32,10 @@ const DOC_TYPES = [
     { id: 'invoice',    label: 'Счёт',             icon: 'Doc',         sub: 'До оплаты', paper: 'A4' },
     { id: 'check',      label: 'Чек клиники',        icon: 'Wallet',      sub: 'Чек за услугу',    paper: 'A5' },
     { id: 'fiscal',     label: 'Кассовый чек',      icon: 'Wallet',      sub: 'ОФД / термо',      paper: 'thermal' },
+    // INPATIENT_DOCS_V1 — три бумаги при поступлении: текст правится здесь, печатаются из стационара.
+    { id: 'inpatient_contract', label: 'Договор на госпитализацию', icon: 'Doc', sub: 'Стационар · подпись пациента', paper: 'A4' },
+    { id: 'inpatient_consent',  label: 'Информированное согласие', icon: 'Doc', sub: 'Стационар · подпись пациента', paper: 'A4' },
+    { id: 'inpatient_memo',     label: 'Памятка стационара',       icon: 'Doc', sub: 'Стационар · выдаётся пациенту', paper: 'A4' },
 ];
 
 const BRAND_SWATCHES = [
@@ -144,6 +149,7 @@ function settingsPanel() {
     const fromCompany = state.s.useCompanyIdentity !== false;
     return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px', position: 'sticky', top: '88px' } },
         variantCard(),
+        inpatientTextCard(),   // INPATIENT_DOCS_V1
         editorCard('Clinic identity', 'Building', [
             companyIdentityToggle(fromCompany),
             h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', lineHeight: '1.45', marginBottom: '2px' } },
@@ -210,6 +216,23 @@ function settingsPanel() {
             field('Legal disclaimer','legalNote',  { multi: true }),
         ]),
     );
+}
+
+// INPATIENT_DOCS_V1 — текст бумаги при поступлении редактируется здесь же:
+// абзацы через пустую строку, шапка/реквизиты/подписи подставляются сами.
+function inpatientTextCard() {
+    if (!INPATIENT_DOC_TYPES.includes(state.active)) return null;
+    const key = INPATIENT_DOC_META[state.active].textKey;
+    return editorCard('Текст документа', 'Doc', [
+        h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', lineHeight: '1.45' } },
+            tr('Абзацы разделяются пустой строкой. Шапка клиники, данные пациента и подписи подставляются сами.')),
+        h('textarea', {
+            value: state.s[key] || '',
+            rows: '16',
+            style: { ...fieldStyle(true), minHeight: '260px' },
+            oninput: (e) => set({ [key]: e.target.value }, { skipRepaint: true }),
+        }),
+    ]);
 }
 
 function editorCard(title, iconName, children) {

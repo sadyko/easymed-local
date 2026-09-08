@@ -236,3 +236,61 @@ test('собранная история начинается титульным 
     const old = caseFilePrintHtml({ cover: { admission_no: 'H-1' }, documents: [], gaps: [] });
     assert.ok(old.includes('H-1'));
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 6. ДОКУМЕНТЫ ПРИ ПОСТУПЛЕНИИ (INPATIENT_DOCS_V1)
+// ═══════════════════════════════════════════════════════════════════════════
+test('документы при поступлении: три кнопки печати шлют род бумаги и данные пациента; галочки уходят с листом', async () => {
+    const { titleSheetForm } = await import('../views/title-sheet.js');
+    const printed = [];
+    const form = titleSheetForm({ bed: { id: 6, code: 'T-2', ward_name: 'Терапия' }, onPrint: (type, data) => printed.push({ type, data }) });
+    form.fill(Object.assign({}, VIEW, { sheet: null, bmi: null }));
+    const root = mkEl('div');
+    for (const f of form.fields) root.appendChild(f);
+    assert.ok(textOf(root).includes('Документы при поступлении'));
+    const prints = walk(root).filter((e) => e.tagName === 'BUTTON' && textOf(e).includes('Печать'));
+    assert.equal(prints.length, 3, 'кнопок печати должно быть три');
+    prints[0].click();
+    assert.equal(printed[0].type, 'inpatient_contract');
+    assert.equal(printed[0].data.patientName, 'Иванов Иван Иванович');
+    assert.equal(printed[0].data.department, 'Терапия');
+    assert.equal(printed[0].data.bed, 'T-2');
+    assert.equal(printed[0].data.doctorName, '', 'лечащий врач ещё не назначен — на бумаге линия');
+    prints[2].click();
+    assert.equal(printed[1].type, 'inpatient_memo');
+
+    const ticks = walk(root).filter((e) => e.tagName === 'INPUT' && e.attrs.type === 'checkbox');
+    assert.equal(ticks.length, 3);
+    ticks[0].checked = true;
+    ticks[0].dispatchEvent({ type: 'change' });
+    const out = form.read();
+    assert.equal(out.sheet.contract_signed, true);
+    assert.equal(out.sheet.consent_signed, false);
+    assert.equal(out.sheet.memo_given, false);
+
+    // Сохранённые отметки подставляются обратно — и только они.
+    form.fill(Object.assign({}, VIEW, { sheet: Object.assign({}, VIEW.sheet, { memo_given_at: '2026-09-08T09:30:00Z' }) }));
+    assert.equal(form.read().sheet.memo_given, true);
+    assert.equal(form.read().sheet.contract_signed, false);
+});
+
+test('печать титульного листа и строка чек-листа называют, какие бумаги подписаны', async () => {
+    const { titleSheetPrintSection, papersSummary } = await import('../views/title-sheet-print.js');
+    const sheet = Object.assign({}, VIEW.sheet, { contract_signed_at: '2026-09-08T12:10:00Z', consent_signed_at: null, memo_given_at: '2026-09-08T12:11:00Z' });
+    const s = titleSheetPrintSection(Object.assign({}, VIEW, { sheet }));
+    assert.ok(s.includes('Документы при поступлении'));
+    assert.ok(s.includes('Договор — подписан'));
+    assert.ok(s.includes('Согласие — не подписано'));
+    assert.ok(s.includes('Памятка — выдана'));
+    assert.equal(papersSummary(sheet, { withDates: false }), 'Договор — подписан · Согласие — не подписано · Памятка — выдана');
+});
+
+test('дизайнер «Документы» знает три бумаги: варианты и тексты по умолчанию', async () => {
+    const { DOC_VARIANTS, DEFAULT_DOC_SETTINGS } = await import('../views/doc-settings.js?v=noqr1');
+    const { INPATIENT_DOC_DEFAULT_TEXT } = await import('../../shared/doc-render.js');
+    for (const t of ['inpatient_contract', 'inpatient_consent', 'inpatient_memo']) {
+        assert.ok(Array.isArray(DOC_VARIANTS[t]) && DOC_VARIANTS[t].length === 1, 'нет варианта для ' + t);
+    }
+    assert.equal(DEFAULT_DOC_SETTINGS.inpatientMemoText, INPATIENT_DOC_DEFAULT_TEXT.inpatientMemoText);
+    assert.equal(DEFAULT_DOC_SETTINGS.inpatientContractText, INPATIENT_DOC_DEFAULT_TEXT.inpatientContractText);
+});

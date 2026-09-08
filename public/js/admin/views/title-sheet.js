@@ -17,15 +17,30 @@
 // Числа проверяет СЕРВЕР (rpc/title-sheet.js) и отвечает словами, называющими
 // поле; экран лишь считает ИМТ по мере ввода (shared/title-sheet-rules.js).
 import { supabase } from '../../supabase.js';
-import { h, toast, field, fmtDateTime } from '../ui.js';
+import { h, Icon, toast, field, fmtDateTime } from '../ui.js';
 import { dateNumeric } from '../../shared/date-words.js';
 import { tr, trf } from '../i18n.js';
 import { inpatientModal, patientAnchor } from './inpatient-modal.js';
 import { a4Sheet } from './a4-letterhead.js';
 import { bmiOf, sheetCompleteness } from '../../shared/title-sheet-rules.js';
-import { titleSheetPrintHtml } from './title-sheet-print.js';
+import { titleSheetPrintHtml, papersSummary } from './title-sheet-print.js';
+import { printableSheet } from './doc-settings.js?v=noqr1';   // INPATIENT_DOCS_V1 — та же печать, что у всех бланков (ONE shared instance: ?v= как у остальных)
 
 export const TITLE_SHEET_KIND = 'title';
+
+// INPATIENT_DOCS_V1 — три бумаги при поступлении (владелец: «hospitalization
+// agreement, informed consent, stationary pamyatka»). Печатаются тем же
+// путём, что и все бланки (дизайнер «Документы» → printableSheet), текст —
+// из настроек дизайнера. Галочка — отметка медсестры, что пациент подписал
+// (памятку — получил); хранится на титульном листе, размещение не блокирует.
+export const ADMISSION_PAPERS = Object.freeze([
+    { type: 'inpatient_contract', flag: 'contract_signed', col: 'contract_signed_at', label: 'Договор на госпитализацию', tick: 'подписан' },
+    { type: 'inpatient_consent',  flag: 'consent_signed',  col: 'consent_signed_at',  label: 'Информированное согласие', tick: 'подписано' },
+    { type: 'inpatient_memo',     flag: 'memo_given',      col: 'memo_given_at',      label: 'Памятка стационара',       tick: 'выдана' },
+]);
+export function printInpatientDoc(type, data) {
+    printableSheet({ type, data });
+}
 
 const val = (el) => String(el.value === null || el.value === undefined ? '' : el.value).trim();
 
@@ -33,7 +48,7 @@ const val = (el) => String(el.value === null || el.value === undefined ? '' : el
  * Форма листа. Возвращает поля для листа A4, fill(view) и read() → {sheet, patient}.
  * @param {{bed?: {id:number, code:string, ward_name?:string}|null}} opts — койка, выбранная в окне размещения.
  */
-export function titleSheetForm({ bed = null } = {}) {
+export function titleSheetForm({ bed = null, onPrint = printInpatientDoc } = {}) {
     const inp = (attrs = {}) => h('input', Object.assign({ type: 'text' }, attrs));
     const fullName = inp({ readonly: '' });
     const dob      = inp({ readonly: '' });
@@ -61,6 +76,9 @@ export function titleSheetForm({ bed = null } = {}) {
     // спрашиваем DOM: проверка «checked» по группе радио на разных браузерах
     // и в тестовой обвязке ведёт себя по-разному, а замыкание — одинаково.
     const picked = { pediculosis: '', sanitation: '' };
+    const papers = { contract_signed: false, consent_signed: false, memo_given: false };
+    const paperChecks = {};
+    let current = { patient: {}, admission: {} };   // что сейчас на листе — для печати бумаг
     const uid = Math.random().toString(36).slice(2, 8);
     const radioEls = [];
     const radios = (key, options) => h('div', { class: 'ts-radios' }, ...options.map(([v, label]) => {
@@ -84,6 +102,25 @@ export function titleSheetForm({ bed = null } = {}) {
     const block = (title, ...kids) => h('div', { class: 'ts-block' },
         h('div', { class: 'ts-block-t' }, tr(title)),
         h('div', { class: 'ts-grid' }, ...kids));
+
+    // INPATIENT_DOCS_V1 — данные для бумаги: пациент, отделение, палата · койка,
+    // лечащий врач (при размещении обычно ещё не назначен — на бумаге линия).
+    const docData = () => ({
+        patientName: current.patient.full_name || '',
+        department: current.admission.department || '',
+        ward: (bed && bed.ward_name) || current.admission.ward_name || '',
+        bed: (bed && bed.code) || current.admission.bed_code || '',
+        doctorName: current.admission.attending_name || '',
+        date: dateNumeric(new Date()),
+    });
+    const paperRow = ({ type, flag, label, tick }) => {
+        const cb = h('input', { type: 'checkbox', onchange: (e) => { papers[flag] = !!((e.currentTarget || e.target) || {}).checked; } });
+        paperChecks[flag] = cb;
+        return h('div', { class: 'ts-paper' },
+            h('span', { class: 'ts-paper-name' }, tr(label)),
+            h('button', { class: 'btn btn-sm', type: 'button', onclick: () => onPrint(type, docData()) }, Icon('Print', { size: 13 }), ' ', tr('Печать')),
+            h('label', { class: 'ts-paper-tick' }, cb, ' ', tr(tick)));
+    };
 
     const fields = [
         block('Пациент',
@@ -117,12 +154,16 @@ export function titleSheetForm({ bed = null } = {}) {
             field(tr('Осмотр на педикулёз и чесотку'), pedRadios),
             field(tr('Санитарная обработка'), sanRadios),
             field(tr('Примечание'), note)),
+        h('div', { class: 'ts-block' },
+            h('div', { class: 'ts-block-t' }, tr('Документы при поступлении')),
+            h('div', { class: 'ts-papers' }, ...ADMISSION_PAPERS.map(paperRow))),
     ];
 
     function fill(view) {
         const p = (view && view.patient) || {};
         const a = (view && view.admission) || {};
         const s = (view && view.sheet) || {};
+        current = { patient: p, admission: a };
         fullName.value = p.full_name || '';
         dob.value = p.date_of_birth ? dateNumeric(p.date_of_birth) : '';
         gender.value = ['male', 'female', 'other'].includes(p.gender) ? p.gender : 'other';
@@ -143,6 +184,7 @@ export function titleSheetForm({ bed = null } = {}) {
         picked.sanitation = s.sanitation || '';
         for (const r of radioEls) r.checked = picked[r._tsKey] === r._tsValue;
         note.value = s.note || '';
+        for (const { flag, col } of ADMISSION_PAPERS) { papers[flag] = !!s[col]; paperChecks[flag].checked = papers[flag]; }
 
         const placed = a.admitted_at && !['ordered', 'cancelled'].includes(a.status);
         info.admitted_at.textContent = placed ? fmtDateTime(a.admitted_at) : tr('при размещении');
@@ -164,6 +206,7 @@ export function titleSheetForm({ bed = null } = {}) {
                 bp_sys: val(bpSys), bp_dia: val(bpDia), pulse_bpm: val(pulse),
                 pediculosis: picked.pediculosis, sanitation: picked.sanitation,
                 note: val(note),
+                contract_signed: papers.contract_signed, consent_signed: papers.consent_signed, memo_given: papers.memo_given,
             },
             patient: {
                 gender: val(gender) || 'other',
@@ -238,9 +281,10 @@ export function buildTitleSheetEditor({ admission, onDone } = {}) {
     let view = null;
     const showStatus = () => {
         if (!view) { status.textContent = ''; return; }
-        status.textContent = view.complete && view.sheet
+        const head = view.complete && view.sheet
             ? trf('Заполнен: {who} · {when}', { who: view.sheet.filled_by_name || '', when: view.sheet.filled_at ? fmtDateTime(view.sheet.filled_at) : '' })
             : tr('Лист заполнен не до конца — пустые поля можно дописать и сохранить.');
+        status.textContent = view.sheet ? head + ' · ' + papersSummary(view.sheet, { withDates: false }) : head;
     };
     const load = async () => {
         const { data, error } = await supabase.rpc('admission_title_sheet_get', { admission_id: admission.id });

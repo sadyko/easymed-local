@@ -48,6 +48,9 @@ const PATIENT_MAX = {
 };
 const GENDERS = ['male', 'female', 'other'];
 const MS_HOUR = 3600 * 1000;
+// INPATIENT_DOCS_V1 — галочки о бумагах при поступлении → время отметки (миграция 111).
+const PAPERS = [['contract_signed', 'contract_signed_at'], ['consent_signed', 'consent_signed_at'], ['memo_given', 'memo_given_at']];
+const truthy = (v) => v === true || v === 1 || v === '1' || v === 'true';
 
 function nowUtc(db) {
   return db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now') t").get().t;
@@ -131,6 +134,7 @@ export function saveTitleSheet(db, adm, input, user) {
   const next = Object.assign({
     referred_from: '', height_cm: null, weight_kg: null, temp_c: null, bp_sys: null, bp_dia: null, pulse_bpm: null,
     pediculosis: '', sanitation: '', note: '',
+    contract_signed_at: null, consent_signed_at: null, memo_given_at: null,
   }, existing || {});
 
   for (const key of MEASURE_KEYS) if (src[key] !== undefined) next[key] = parseMeasure(key, src[key]);
@@ -151,6 +155,12 @@ export function saveTitleSheet(db, adm, input, user) {
   }
 
   const now = nowUtc(db);
+  // INPATIENT_DOCS_V1 — отметка ставит время ОДИН раз, снятие стирает; поле,
+  // которого нет во входе, не трогается. На полноту листа бумаги не влияют.
+  for (const [flag, col] of PAPERS) {
+    if (src[flag] === undefined) continue;
+    next[col] = truthy(src[flag]) ? (next[col] || now) : null;
+  }
   const { complete } = sheetCompleteness(next);
   // Подпись — кто ВПЕРВЫЕ заполнил лист целиком; дальше не переписывается.
   const filledBy = existing && existing.filled_at ? existing.filled_by : (complete ? ((user && user.id) || null) : null);
@@ -160,18 +170,24 @@ export function saveTitleSheet(db, adm, input, user) {
     db.prepare(`
       UPDATE admission_title_sheets
          SET referred_from = ?, height_cm = ?, weight_kg = ?, temp_c = ?, bp_sys = ?, bp_dia = ?, pulse_bpm = ?,
-             pediculosis = ?, sanitation = ?, note = ?, filled_by = ?, filled_at = ?, updated_at = ?
+             pediculosis = ?, sanitation = ?, note = ?,
+             contract_signed_at = ?, consent_signed_at = ?, memo_given_at = ?,
+             filled_by = ?, filled_at = ?, updated_at = ?
        WHERE id = ?`).run(
       next.referred_from, next.height_cm, next.weight_kg, next.temp_c, next.bp_sys, next.bp_dia, next.pulse_bpm,
-      next.pediculosis, next.sanitation, next.note, filledBy, filledAt, now, existing.id);
+      next.pediculosis, next.sanitation, next.note,
+      next.contract_signed_at, next.consent_signed_at, next.memo_given_at,
+      filledBy, filledAt, now, existing.id);
   } else {
     db.prepare(`
       INSERT INTO admission_title_sheets
         (admission_id, referred_from, height_cm, weight_kg, temp_c, bp_sys, bp_dia, pulse_bpm,
-         pediculosis, sanitation, note, filled_by, filled_at, created_at, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+         pediculosis, sanitation, note, contract_signed_at, consent_signed_at, memo_given_at,
+         filled_by, filled_at, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       adm.id, next.referred_from, next.height_cm, next.weight_kg, next.temp_c, next.bp_sys, next.bp_dia, next.pulse_bpm,
-      next.pediculosis, next.sanitation, next.note, filledBy, filledAt, now, now);
+      next.pediculosis, next.sanitation, next.note, next.contract_signed_at, next.consent_signed_at, next.memo_given_at,
+      filledBy, filledAt, now, now);
   }
 
   // Исправления личных данных — В КАРТОЧКУ, и только разрешённые поля.
@@ -234,5 +250,11 @@ export function titleSheetCaseItem(db, adm, baseMs, nowMs) {
     revisions: [], revision_count: 0,
     draft_id: null, has_draft: !!row && !complete,
     missing,
+    // INPATIENT_DOCS_V1 — какие бумаги подписаны: строка чек-листа называет их словами.
+    papers: {
+      contract_signed_at: row ? row.contract_signed_at : null,
+      consent_signed_at:  row ? row.consent_signed_at : null,
+      memo_given_at:      row ? row.memo_given_at : null,
+    },
   };
 }

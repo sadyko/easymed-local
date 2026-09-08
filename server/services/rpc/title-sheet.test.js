@@ -160,3 +160,23 @@ test('строка чек-листа: pending → overdue по часам, draft
     assert.ok(done.published_at);
     assert.equal(done.author_name, 'Сотрудник nurse1');
 });
+
+// ─── INPATIENT_DOCS_V1 — бумаги при поступлении ─────────────────────────────
+test('галочки о бумагах: время ставится один раз, снятие стирает, «true»/«1» — отметка, полнота не меняется', () => {
+    const ctx = seed();
+    const adm = inBed(ctx);
+    const v1 = admissionTitleSheetSave(ctx.db, { admission_id: adm.id, sheet: { contract_signed: true, consent_signed: '1', memo_given: 'true' } }, nurse);
+    assert.ok(v1.sheet.contract_signed_at && v1.sheet.consent_signed_at && v1.sheet.memo_given_at, 'отметки не легли');
+    const t = v1.sheet.contract_signed_at;
+    const v2 = admissionTitleSheetSave(ctx.db, { admission_id: adm.id, sheet: { note: 'x' } }, nurse);
+    assert.equal(v2.sheet.contract_signed_at, t, 'сохранение без галочки не должно её трогать');
+    const v3 = admissionTitleSheetSave(ctx.db, { admission_id: adm.id, sheet: { contract_signed: true, memo_given: false } }, nurse);
+    assert.equal(v3.sheet.contract_signed_at, t, 'повторная отметка не переписывает время');
+    assert.equal(v3.sheet.memo_given_at, null, 'снятая галочка должна стереть время');
+    assert.equal(v3.complete, false, 'бумаги не делают лист полным — полнота про измерения');
+    const item = titleSheetCaseItem(ctx.db, ctx.db.prepare('SELECT * FROM admissions WHERE id = ?').get(adm.id), Date.parse(adm.admitted_at), Date.now());
+    assert.equal(item.papers.contract_signed_at, t);
+    assert.equal(item.papers.memo_given_at, null);
+    const empty = titleSheetCaseItem(ctx.db, ctx.db.prepare('SELECT * FROM admissions WHERE id = ?').get(adm.id + 999) || { id: -1 }, null, Date.now());
+    assert.deepEqual(empty.papers, { contract_signed_at: null, consent_signed_at: null, memo_given_at: null });
+});

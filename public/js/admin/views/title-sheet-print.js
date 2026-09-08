@@ -24,6 +24,22 @@ export function pediculosisWord(v) { return PEDICULOSIS_WORD[v] ? tr(PEDICULOSIS
 export function sanitationWord(v) { return SANITATION_WORD[v] ? tr(SANITATION_WORD[v]) : ''; }
 
 const kv = (k, v) => `<div class="kv"><span class="k">${esc(k)}</span><span class="v">${esc(v || '—')}</span></div>`;
+
+// INPATIENT_DOCS_V1 — три бумаги при поступлении и их отметки на листе.
+export const PAPERS_UI = Object.freeze([
+    { flag: 'contract_signed', col: 'contract_signed_at', doc: 'Договор',  yes: 'подписан',  no: 'не подписан' },
+    { flag: 'consent_signed',  col: 'consent_signed_at',  doc: 'Согласие', yes: 'подписано', no: 'не подписано' },
+    { flag: 'memo_given',      col: 'memo_given_at',      doc: 'Памятка',  yes: 'выдана',    no: 'не выдана' },
+]);
+/** «Договор — подписан 08.09.2026 12:10 · Согласие — не подписано · Памятка — выдана …» */
+export function papersSummary(papers, { withDates = true } = {}) {
+    const p = papers || {};
+    return PAPERS_UI.map(({ col, doc, yes, no }) => {
+        const when = p[col];
+        const state = when ? (withDates ? tr(yes) + ' ' + fmtDateTime(when) : tr(yes)) : tr(no);
+        return trf('{doc} — {state}', { doc: tr(doc), state });
+    }).join(' · ');
+}
 const num = (v) => (v === null || v === undefined || v === '' ? '' : String(v));
 
 /**
@@ -92,6 +108,7 @@ export function titleSheetPrintSection(view, { extra = '' } = {}) {
     ${kv(tr('Санитарная обработка'), s ? sanitationWord(s.sanitation) : '')}
     ${kv(tr('Примечание'), s ? s.note : '')}
   </div>
+  ${s ? kv(tr('Документы при поступлении'), papersSummary(s)) : ''}
   ${sign}
   ${extra}
 </section>`;

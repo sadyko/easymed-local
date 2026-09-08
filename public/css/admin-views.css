@@ -5250,3 +5250,9 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .ts-modal{max-height:66vh;overflow:auto}
 .ts-modal .a4-paper{margin:0 auto}
 @media (max-width:720px){.ts-grid{grid-template-columns:1fr}}
+
+/* INPATIENT_DOCS_V1 — бумаги при поступлении на титульном листе */
+.ts-papers{display:grid;gap:4px}
+.ts-paper{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px dotted var(--line-200,#d3d9de)}
+.ts-paper-name{flex:1;min-width:0;font-size:13.5px;font-weight:600}
+.ts-paper-tick{display:inline-flex;align-items:center;gap:6px;font-size:13.5px;cursor:pointer;white-space:nowrap}
