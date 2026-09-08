@@ -7,6 +7,7 @@ import { nextInvoiceNumber, buildAdmissionInvoice } from './billing.js';   // DE
 import { nextAdmissionNo } from '../domain/admission-number.js';   // ADMISSION_NUMBER_V2
 import { generateAdmissionBill } from './admission-bill.js';   // CASE_OVERVIEW_V1 — выписка со счётом
 import { assertTransition } from '../domain/lifecycle.js';
+import { outstandingWhere } from '../domain/money.js';   // DEBT_FLOW_V1 — «ещё должен» одним списком на весь продукт
 import { hasAnyRole } from '../roles.js';
 // INPATIENT_FLOW_V1 (миграция 091) — «в койке» это ЧЕТЫРЕ состояния, а не одно.
 // Каждый запрос ниже, который раньше спрашивал status='active', спрашивает этот
@@ -1065,7 +1066,9 @@ function markAdmissionDebt(db, admissionId, user) {
      WHERE admission_id = ? AND invoice_item_id IS NULL AND billable = 1
      ORDER BY id`).all(admissionId).map((r) => r.id);
   if (ids.length) buildAdmissionInvoice(db, admissionId, ids, user);
-  db.prepare("UPDATE invoices SET status = 'debt' WHERE admission_id = ? AND status IN ('unpaid', 'partial')")
+  // Список «ещё должен» — из domain/money.js (no-drift): 'debt' в нём тоже
+  // есть, и повторная выписка с долгом ничего не портит — долг остаётся долгом.
+  db.prepare(`UPDATE invoices SET status = 'debt' WHERE admission_id = ? AND ${outstandingWhere('status')}`)
     .run(admissionId);
   return db.prepare(`
     SELECT id, invoice_number, total_amount, paid_amount FROM invoices

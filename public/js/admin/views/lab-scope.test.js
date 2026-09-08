@@ -101,7 +101,10 @@ test('настройка читается из doc_settings и пишется т
 });
 
 test('пофилиальные экраны НЕ тронуты — решение владельца 2026-09-02 в силе', () => {
-  const untouched = ['doctor-room.js', 'visits.js', 'requests-inbox.js', 'consultation.js'];
+  // ROLE_HOME_V1 (2026-09-08) — журнал «Визиты» удалён; в visits.js осталось
+  // только окно записи (без списка — нечего сужать зданием), поэтому файла в
+  // этом списке больше нет.
+  const untouched = ['doctor-room.js', 'requests-inbox.js', 'consultation.js'];
   for (const file of untouched) {
     const src = fs.readFileSync(path.join(HERE, file), 'utf8');
     assert.ok(/\.is\('sync_origin', null\)/.test(src),
