@@ -647,6 +647,11 @@ function invoiceBody(s, d) {
 // Медицинский акт оказанных услуг — печатается для непациентских плательщиков
 // (ДМС / B2B / госпрограмма) вместо счёта. Пациент подписывает после оказания
 // услуг; акт используется для сверки и выставления счёта плательщику.
+// ACT_SHEET_V1 — номер очереди печатается ВНИЗУ бланка, под местами подписи
+// и печатью: так в образце владельца (2026-09-08). Сначала блок стоял выше —
+// «ради очереди документ несут дальше» — но это был мой довод, а не его, и
+// порядок в бланке задаёт владелец. Порядок закреплён тестом, а не глазами.
+//
 // ACT_PROTOCOL_SIGN_V1 — мест подписи ДВА: Пациент и Врач.
 //
 // Третьим печаталось «Представитель страховой» — на КАЖДОМ акте, включая
@@ -706,9 +711,6 @@ function actBody(s, d) {
             <div class="line"><span>Скидка</span><span>−${discountTotal.toLocaleString('ru-RU')} UZS</span></div>
             <div class="line grand"><span>Итого:</span><span>${total.toLocaleString('ru-RU')} UZS</span></div>
         </div>
-        <!-- ACT_SHEET_V1 — очередь ВЫШЕ подписей: ради неё документ несут
-             дальше, в лабораторию или кабинет. -->
-        ${queueBlockHtml(d)}
         <div style="margin-top:40px;font-size:11.5px;color:#55636d;"><!-- ACT_PROTOCOL_SIGN_V1 -->
             <div style="display:flex;gap:28px;">
                 <div style="flex:1;border-top:1px solid ${s.ink};padding-top:6px;">Пациент<br><span style="font-size:10px;color:#8a96a0;">подпись / Ф.И.О.</span></div>
@@ -720,6 +722,7 @@ function actBody(s, d) {
                 <div style="flex:1;"></div>
             </div>
         </div>
+        ${queueBlockHtml(d)}
         ${footerHTML(s)}
     `;
 }
