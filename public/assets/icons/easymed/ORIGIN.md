@@ -45,6 +45,7 @@ coolicons — общий интерфейсный набор. Медицинск
 | `Medical/Stethoscope` | `Environment/First_Aid` (медицинский крест) |
 | `Medical/Flask` | `System/Cylinder` (цилиндр) |
 | `Medical/Pulse` | `Interface/Chart_Line` (линейный график) |
+| `Medical/Thermometer` | `Interface/Slider_02` (ползунок) |
 | `Communication/Phone_In` | `Communication/Phone` (трубка без направления) |
 | `Communication/Phone_Out` | `Communication/Phone` |
 | `Communication/Phone_Missed` | `Communication/Phone` |

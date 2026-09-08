@@ -27,7 +27,7 @@ import { caseDocTitle } from './case-docs.js?v=cw1';
 import { openAdmissionDischargeRequestModal, openAdmissionAttendingModal, openAdmissionDietModal, goToMarSheet, goToCaseOverview, openAdmissionCard } from './admission-modal.js?v=inp2';
 import { outcomeTitle } from './discharge.js';
 import { genderWord } from './title-sheet-print.js';
-import { news2Score, NEWS_BANDS, VITAL_NORMS, CONSCIOUSNESS, vitalError } from '../../shared/news2.js';   // VITALS_NEWS_V1
+import { news2Score, NEWS_BANDS, VITAL_NORMS, VITAL_RANGES, CONSCIOUSNESS, vitalError } from '../../shared/news2.js';   // VITALS_NEWS_V1 / VITALS_STEPPER_V1
 import { inpatientModal, patientAnchor } from './inpatient-modal.js';   // VITALS_NEWS_V1 — окно «Добавить измерение»
 import { field } from '../ui.js';
 
@@ -205,14 +205,23 @@ async function load() {
 // Взгляд идёт большим блоком слева → маленьким справа → полосой плиток →
 // большим блоком → маленьким со стрелкой действия. На узком экране блоки
 // складываются в том же порядке 1…6 (grid-template-areas в admin-views.css).
-function panel(title, { icon, area, tone = '', link = null, children = [] }) {
+// CASE_ACTIONS_GHOST_V1 — владелец: «add the actions of the cards to the right
+// bottom of the cards with chevron using icons in the system. do not make
+// buttons, make a ghost like button». Действия карточки — призрачные ссылки
+// (без рамки и заливки, с шевроном системы) в подвале, прижатые вправо.
+// Кнопка настоящая (<button>): клавиатура и читалка получают её как действие,
+// а «призрачность» — только вид. Область нажатия ≥ 28px, ховер — светлая
+// подложка, фокус — кольцо.
+const act = (label, onclick) => h('button', { class: 'co-act', type: 'button', onclick }, tr(label), ic('ChevronRight', 14));
+
+function panel(title, { icon, area, tone = '', link = null, actions = [], children = [] }) {
+    const acts = [link ? act(link.label, link.onclick) : null, ...actions].filter(Boolean);
     return h('section', { class: 'card co-panel' + (tone ? ' co-' + tone : ''), style: { gridArea: area }, 'aria-label': tr(title) },
         h('header', { class: 'co-panel-h' },
             h('span', { class: 'co-panel-ic' }, ic(icon)),
-            h('h2', { class: 'co-panel-t' }, tr(title)),
-            h('span', { class: 'grow' }),
-            link ? h('button', { class: 'co-link', type: 'button', onclick: link.onclick }, link.label, ic('ArrowRight', 12)) : null),
-        h('div', { class: 'co-panel-b' }, ...children.filter(Boolean)));
+            h('h2', { class: 'co-panel-t' }, tr(title))),
+        h('div', { class: 'co-panel-b' }, ...children.filter(Boolean)),
+        acts.length ? h('div', { class: 'co-panel-f' }, ...acts) : null);
 }
 const kv = (k, v, cls = '') => h('div', { class: 'co-kv' + (cls ? ' ' + cls : '') }, h('span', { class: 'co-k' }, k), h('span', { class: 'co-v' }, v || '—'));
 const note = (text, tone = '') => h('p', { class: 'co-note' + (tone ? ' co-' + tone : '') }, text);
@@ -282,7 +291,7 @@ function paint(root, onNavigate) {
     // (там они в динамике); здесь остаётся антропометрия и группа крови.
     const hw = sh ? [num(sh.height_cm), num(sh.weight_kg)].filter(Boolean).join(' · ') : '';
     const nowPanel = panel('Пациент сейчас', { icon: 'Activity', area: 'now', tone: dg.clinical ? '' : 'warn',
-        link: { label: tr('История болезни'), onclick: () => toDocs(null) },
+        link: { label: 'История болезни', onclick: () => toDocs(null) },
         children: [
             h('div', { class: 'co-status-row' },
                 Tag(admissionStatusLabel(a.status), { kind: d.status === 'discharging' ? 'warn' : (inBed ? 'ok' : ''), dot: true }),
@@ -364,7 +373,7 @@ function paint(root, onNavigate) {
     const op = ov.operation || { state: 'none' };
     const opWord = op.state === 'done' ? tr('Проведена') : op.state === 'planned' ? tr('Запланирована') : tr('Не планируется');
     const opPanel = panel('Операция', { icon: 'Pulse', area: 'op',
-        link: op.state !== 'none' ? { label: tr('Протокол'), onclick: () => toDocs('operation') } : null,
+        link: op.state !== 'none' ? { label: 'Протокол операции', onclick: () => toDocs('operation') } : null,
         children: [
             h('div', { class: 'co-op' + (op.state === 'done' ? ' co-ok' : op.state === 'planned' ? ' co-warn' : '') }, opWord),
             op.at ? kv(tr('Когда'), dt(op.at)) : null,
@@ -405,13 +414,13 @@ function paint(root, onNavigate) {
         h('div', { class: 'co-cols' },
             col('Назначения', o.active || 0,
                 trf('Сегодня введено {given} из {due} · пропущено {missed} · отказ {refused}', { given: t.given || 0, due: t.due || 0, missed: t.missed || 0, refused: t.refused || 0 }),
-                (o.list || []).map(orderRow), 'Назначений нет',
-                // CASE_PANELS_TIDY_V1 — действия панелей одного вида: контурная кнопка во всю ширину, у нижнего края.
-                h('button', { class: 'btn btn-outline btn-sm co-wide', type: 'button', onclick: () => goToMarSheet(a.id, onNavigate) }, ic('Pill', 13), ' ', tr('Открыть лист назначений'), ' ', ic('ArrowRight', 12))),
+                (o.list || []).map(orderRow), 'Назначений нет', null),
             col('Услуги', sv.count || 0,
                 trf('В счёте {billed} · не выставлено {unbilled} на {sum}', { billed: sv.billed || 0, unbilled: sv.unbilled || 0, sum: sum(sv.sum_unbilled) }),
-                (sv.list || []).map(serviceRow), 'Услуг пока нет',
-                h('button', { class: 'btn btn-outline btn-sm co-wide', type: 'button', onclick: () => openAdmissionCard({ admissionId: a.id, onChange: reload }) }, ic('Wallet', 13), ' ', tr('Услуги госпитализации'), ' ', ic('ArrowRight', 12)))),
+                (sv.list || []).map(serviceRow), 'Услуг пока нет', null)),
+    ], actions: [
+        act('Лист назначений', () => goToMarSheet(a.id, onNavigate)),
+        act('Услуги госпитализации', () => openAdmissionCard({ admissionId: a.id, onChange: reload })),
     ] });
 
     // ── 6. Следующий шаг → ──────────────────────────────────────────────────
@@ -426,11 +435,7 @@ function paint(root, onNavigate) {
         h('div', { class: 'co-tile-m' + (pr.overdue ? ' co-warn' : '') },
             trf('Оформлено {done} из {total}', { done: pr.done || 0, total: pr.total || 0 }),
             pr.overdue ? ' · ' + trf('просрочено {n}', { n: pr.overdue }) : ''),
-        // CASE_PANELS_TIDY_V1 — одна первичная кнопка на экране (выписка в шапке);
-        // действия панелей — контурные, одного размера, у нижнего края.
-        h('button', { class: 'btn btn-outline btn-sm co-wide', type: 'button', onclick: () => toDocs(docs.next_kind || null) },
-            ic('Doc', 13), ' ', docs.next_kind ? tr('Заполнить документ') : tr('Открыть документы'), ' ', ic('ArrowRight', 12)),
-    ] });
+    ], actions: [act(docs.next_kind ? 'Заполнить документ' : 'Открыть документы', () => toDocs(docs.next_kind || null))] });
 
     root.appendChild(h('div', { class: 'co-z' }, nowPanel, billPanel, tiles, opPanel, listsPanel, nextPanel));
 }
@@ -446,13 +451,22 @@ export { goToCaseOverview };
 // кнопка «Добавить измерение». Шкала и нормы — shared/news2.js: та же, что
 // считает сервер, так что цифра на экране совпадает с цифрой в ответе RPC.
 // ---------------------------------------------------------------------------
+// VITALS_TILES_FILL_V1 — у каждого показателя своя иконка ПО ФОРМЕ: термометр
+// (нарисован для EasyMed — прежний «Thermo» был ползунком набора), сердце у
+// давления, медицинский пульс, линия дыхания, капля у насыщения. Персонал
+// ориентируется по форме значка, а не по подписи.
 const VT_TILES = [
-    { key: 'temp_c',    label: 'Температура', icon: 'Thermo',   norm: VITAL_NORMS.temp_c,    fmt: (v) => String(v).replace('.', ',') + ' °C' },
-    { key: 'bp',        label: 'АД',          icon: 'Activity', norm: VITAL_NORMS.bp,        fmt: (v, r) => r.bp_sys + '/' + r.bp_dia, series: (r) => r.bp_sys, points: (n) => n.parts.bp_sys },
-    { key: 'pulse_bpm', label: 'Пульс',       icon: 'Heart',    norm: VITAL_NORMS.pulse_bpm, fmt: (v) => v + ' ' + tr('уд') },
-    { key: 'resp_rate', label: 'ЧДД',         icon: 'Pulse',    norm: VITAL_NORMS.resp_rate, fmt: (v) => v + ' /' + tr('мин') },
-    { key: 'spo2',      label: 'SpO₂',        icon: 'Flask',    norm: VITAL_NORMS.spo2,      fmt: (v) => v + ' %' },
+    { key: 'temp_c',    label: 'Температура', icon: 'Thermo',   norm: VITAL_NORMS.temp_c,    step: 0.1, decimals: 1, fmt: (v) => String(v).replace('.', ',') + ' °C' },
+    { key: 'bp',        label: 'АД',          icon: 'Heart',    norm: VITAL_NORMS.bp,        fmt: (v, r) => r.bp_sys + '/' + r.bp_dia, series: (r) => r.bp_sys, points: (n) => n.parts.bp_sys },
+    { key: 'pulse_bpm', label: 'Пульс',       icon: 'Pulse',    norm: VITAL_NORMS.pulse_bpm, fmt: (v) => v + ' ' + tr('уд') },
+    { key: 'resp_rate', label: 'ЧДД',         icon: 'Activity', norm: VITAL_NORMS.resp_rate, fmt: (v) => v + ' /' + tr('мин') },
+    { key: 'spo2',      label: 'SpO₂',        icon: 'Droplet',  norm: VITAL_NORMS.spo2,      fmt: (v) => v + ' %' },
 ];
+
+// VITALS_STEPPER_V1 — норма, с которой поле начинается. Владелец: «make number
+// prefilled with normal ranges». Медсестра не набирает число с нуля: значение
+// уже стоит, а «−» и «+» доводят его до измеренного.
+const VT_DEFAULTS = Object.freeze({ temp_c: '36.6', bp_sys: '120', bp_dia: '80', pulse_bpm: '72', resp_rate: '16', spo2: '98' });
 const CONSCIOUSNESS_RU = { alert: 'ясное', confused: 'спутанное', voice: 'реагирует на голос', pain: 'реагирует на боль', unresponsive: 'без сознания' };
 const isNumV = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
 
@@ -578,8 +592,11 @@ export function vitalsPanel(ov, { onAdd, onDynamics = null } = {}) {
         const has = isNumV(cur);
         const series = (v.series || []).map(t.series || getVal);
         const abnormal = has && pts !== null && pts !== undefined && pts > 0;
+        // VITALS_TILES_FILL_V1 — владелец: «make this cards filled too»: плитка
+        // всегда залита цветом показателя, текст белый; отклонение — кольцо и
+        // яркая метка очков, а не смена фона.
         return h('button', {
-            class: 'vt-tile' + (has ? ' vt-' + pointsTone(pts) : ' vt-none') + (abnormal ? ' vt-abn' : ''),
+            class: 'vt-tile vt-fill' + (has ? ' vt-' + pointsTone(pts) : ' vt-none') + (abnormal ? ' vt-abn' : ''),
             type: 'button', 'data-metric': t.key,
             title: tr('Открыть динамику'), 'aria-label': tr(t.label) + ': ' + tr('Открыть динамику'),
             onclick: () => { if (onDynamics) onDynamics(t.key); },
@@ -611,13 +628,49 @@ function localToIso(value) {
 export function openVitalsModal({ admission, onDone } = {}) {
     if (!admission || !admission.id) { toast(tr('Госпитализация не выбрана.'), 'fail'); return null; }
     const p = admission.patients || {};
-    const numInput = (key, ph, step = '1') => h('input', { type: 'number', step, inputmode: 'decimal', placeholder: ph, class: 'vt-in', 'data-key': key });
-    const temp = numInput('temp_c', '36,6', '0.1');
-    const sys = numInput('bp_sys', '120');
-    const dia = numInput('bp_dia', '80');
-    const pulse = numInput('pulse_bpm', '72');
-    const resp = numInput('resp_rate', '16');
-    const spo2 = numInput('spo2', '98');
+    // VITALS_STEPPER_V1 — поле-шагомер: «−» слева, число посередине, «+» справа.
+    // Владелец: «add 2 buttons to the left and the right so user unconsciously
+    // understands what to press». Значение стоит нормой (VT_DEFAULTS), шаг —
+    // 0,1 у температуры и 1 у остального, границы — те же, что проверяет
+    // сервер (VITAL_RANGES). Долгое нажатие повторяет шаг: на планшете довести
+    // пульс с 72 до 118 отдельными нажатиями невозможно.
+    let onFieldChange = () => {};
+    const stepper = (key, { step = 1, decimals = 0 } = {}) => {
+        const input = h('input', { type: 'number', step: String(step), inputmode: 'decimal', class: 'vt-in', 'data-key': key, value: VT_DEFAULTS[key] || '' });
+        input.value = VT_DEFAULTS[key] || '';
+        input.addEventListener('input', () => onFieldChange());
+        const bump = (dir) => {
+            const r = VITAL_RANGES[key] || { min: -Infinity, max: Infinity };
+            const cur = Number(String(input.value).replace(',', '.'));
+            const base = Number.isFinite(cur) ? cur : Number(VT_DEFAULTS[key] || 0);
+            const next = Math.min(r.max, Math.max(r.min, base + dir * step));
+            input.value = decimals ? next.toFixed(decimals) : String(Math.round(next));
+            onFieldChange();
+        };
+        const btn = (dir, label, icon) => {
+            let timer = null; let repeated = false;
+            const stop = () => { if (timer) { clearInterval(timer); clearTimeout(timer); timer = null; } };
+            const el = h('button', {
+                class: 'vt-step-b', type: 'button', 'aria-label': tr(label), title: tr(label),
+                onclick: () => { if (repeated) { repeated = false; return; } bump(dir); },
+                onpointerdown: () => {
+                    stop();
+                    timer = setTimeout(() => { timer = setInterval(() => { repeated = true; bump(dir); }, 110); }, 450);
+                },
+                onpointerup: stop, onpointerleave: stop, onpointercancel: stop, onblur: stop,
+            }, ic(icon, 15));
+            return el;
+        };
+        const wrap = h('div', { class: 'vt-step' }, btn(-1, 'Меньше', 'Minus'), input, btn(1, 'Больше', 'Plus'));
+        return { wrap, input };
+    };
+    const tempF = stepper('temp_c', { step: 0.1, decimals: 1 });
+    const sysF = stepper('bp_sys');
+    const diaF = stepper('bp_dia');
+    const pulseF = stepper('pulse_bpm');
+    const respF = stepper('resp_rate');
+    const spo2F = stepper('spo2');
+    const temp = tempF.input, sys = sysF.input, dia = diaF.input, pulse = pulseF.input, resp = respF.input, spo2 = spo2F.input;
     const oxygen = h('input', { type: 'checkbox' });
     const consc = h('select', null, ...CONSCIOUSNESS.map((c) => h('option', { value: c }, tr(CONSCIOUSNESS_RU[c]))));
     const at = h('input', { type: 'datetime-local', value: nowLocalInput() });
@@ -639,15 +692,16 @@ export function openVitalsModal({ admission, onDone } = {}) {
             : tr('Внесите хотя бы один показатель — балл посчитается сразу.');
         preview.className = 'vt-preview vt-band-' + s.band;
     };
-    for (const el of [temp, sys, dia, pulse, resp, spo2, oxygen, consc]) el.addEventListener('input', repaint);
+    onFieldChange = repaint;   // VITALS_STEPPER_V1 — шаг кнопкой пересчитывает балл сразу
     for (const el of [oxygen, consc]) el.addEventListener('change', repaint);
     repaint();
 
     const row = (...els) => h('div', { class: 'vt-form-row' }, ...els);
     return inpatientModal(tr('Добавить измерение'), 'Activity', [
         patientAnchor(p.full_name || '', [p.mrn, admission.admission_no].filter(Boolean).join(' · ')),
-        row(field(tr('Температура, °C'), temp), field(tr('Пульс, уд/мин'), pulse), field(tr('ЧДД, /мин'), resp)),
-        row(field(tr('АД систолическое'), sys), field(tr('АД диастолическое'), dia), field('SpO₂, %', spo2)),
+        h('p', { class: 'vt-hint' }, tr('Значения заполнены нормой — поправьте их кнопками «−» и «+» или введите своё.')),
+        row(field(tr('Температура, °C'), tempF.wrap), field(tr('Пульс, уд/мин'), pulseF.wrap), field(tr('ЧДД, /мин'), respF.wrap)),
+        row(field(tr('АД систолическое'), sysF.wrap), field(tr('АД диастолическое'), diaF.wrap), field('SpO₂, %', spo2F.wrap)),
         row(field(tr('Сознание'), consc), h('label', { class: 'vt-check' }, oxygen, ' ', tr('Дополнительный кислород'))),
         row(field(tr('Время измерения'), at), field(tr('Примечание'), noteInput)),
         preview,
@@ -683,7 +737,7 @@ const NORM_BANDS = { temp_c: [36.0, 37.2], bp: [90, 140], pulse_bpm: [60, 90], r
 function bigChart(rows, t, { w = 640, hgt = 200 } = {}) {
     const getVal = t.key === 'bp' ? (r) => (isNumV(r.bp_sys) ? Number(r.bp_sys) : null) : (r) => (isNumV(r[t.key]) ? Number(r[t.key]) : null);
     const pts = rows.map((r) => ({ v: getVal(r), at: r.measured_at })).filter((q) => q.v !== null);
-    const padL = 44, padR = 14, padT = 12, padB = 26;
+    const padL = 44, padR = 22, padT = 14, padB = 26;
     const norm = NORM_BANDS[t.key] || null;
     if (!pts.length) return h('div', { class: 'vd-empty' }, tr('По этому показателю измерений нет.'));
     const vals = pts.map((q) => q.v);
@@ -707,7 +761,7 @@ function bigChart(rows, t, { w = 640, hgt = 200 } = {}) {
             sv('circle', { class: 'vd-dot', cx: cx.toFixed(1), cy: cy.toFixed(1), r: '4' }),
             sv('text', { class: 'vd-val', x: cx.toFixed(1), y: (cy - 9).toFixed(1), 'text-anchor': 'middle' }, fmtV(pts[i].v)))),
         ...xy.map(([cx], i) => (pts.length <= 8 || i === 0 || i === pts.length - 1 || i % Math.ceil(pts.length / 6) === 0)
-            ? sv('text', { class: 'vd-tick', x: cx.toFixed(1), y: hgt - 8, 'text-anchor': 'middle' }, dateLbl(pts[i].at)) : null));
+            ? sv('text', { class: 'vd-tick', x: cx.toFixed(1), y: hgt - 8, 'text-anchor': i === 0 ? 'start' : i === pts.length - 1 ? 'end' : 'middle' }, dateLbl(pts[i].at)) : null));
 }
 
 export async function openVitalsDynamics({ admission, metric = 'temp_c', series = [] } = {}) {

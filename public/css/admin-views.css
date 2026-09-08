@@ -5373,7 +5373,8 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 /* CASE_ROWS_TIDY_V1 — название занимает всю ширину, сумма и метка уходят под него;
    перенос по словам, а не по буквам (anywhere в узкой колонке рвал слово в столбик). */
 .co-row-main{flex:1 1 100%;min-width:0}
-.co-row-foot{display:flex;align-items:center;gap:8px;margin-left:auto}
+.co-row-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:4px 8px;margin-left:auto;max-width:100%}   /* ROW_BADGE_WRAP_V1 — метка переносится на свою строку, а не вылезает за карточку */
+.co-row-foot .tag{max-width:100%;white-space:normal;text-align:center;line-height:1.3}
 .co-row-t{font-size:12.5px;font-weight:600;color:var(--ink-900);overflow-wrap:break-word;display:flex;align-items:center;gap:4px}
 .co-row-m{font-size:12.5px;color:var(--ink-500)}
 .co-row-sum{font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -5552,19 +5553,27 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .vt-tile{position:relative;padding:6px 10px;border-radius:var(--r-lg);border:1px solid var(--ink-100);background:var(--white);text-align:left;font:inherit;color:inherit;cursor:pointer;transition:box-shadow 120ms ease,transform 120ms ease,border-color 120ms ease;--vt-line:var(--primary-600);--vt-tint:var(--primary-50)}
 .vt-tile:hover{box-shadow:var(--shadow-md);transform:translateY(-1px);border-color:var(--vt-line)}
 .vt-tile:focus-visible{outline:2px solid var(--primary-500);outline-offset:2px}
-.vt-tile[data-metric="temp_c"]{--vt-line:#c4607e;--vt-tint:#fbeef2}
-.vt-tile[data-metric="bp"]{--vt-line:#4d5b8c;--vt-tint:#eef0f8}
-.vt-tile[data-metric="pulse_bpm"]{--vt-line:#d0715c;--vt-tint:#fdf0ea}
-.vt-tile[data-metric="resp_rate"]{--vt-line:#2d958f;--vt-tint:#e6f4f2}
-.vt-tile[data-metric="spo2"]{--vt-line:#4f8cc4;--vt-tint:#e9f1f9}
-.vt-tile.vt-abn{background:var(--vt-tint);border-color:color-mix(in srgb,var(--vt-line) 35%,transparent)}
-.vt-tile.vt-crit{border-color:var(--crit-500)}
-.vt-tile .vt-tile-ic{background:var(--vt-tint);color:var(--vt-line)}
-.vt-tile.vt-abn .vt-tile-ic{background:var(--white)}
-.vt-tile.vt-abn .vt-val{color:var(--vt-line)}
-.vt-tile .vt-spark{color:var(--vt-line)}
-.vt-spark-fill{fill:currentColor;opacity:.12}
-.vt-tile.vt-none{opacity:.7}
+/* VITALS_TILES_FILL_V1 — цвета показателей затемнены до контраста 4.5:1 с
+   белым текстом (AA): плитка залита, подписи и цифры белые. */
+.vt-tile[data-metric="temp_c"]{--vt-line:#b04f6d}
+.vt-tile[data-metric="bp"]{--vt-line:#445080}
+.vt-tile[data-metric="pulse_bpm"]{--vt-line:#b3563f}
+.vt-tile[data-metric="resp_rate"]{--vt-line:#21776f}
+.vt-tile[data-metric="spo2"]{--vt-line:#3f7ab0}
+.vt-tile.vt-fill{background:var(--vt-line);border-color:transparent;color:#fff}
+.vt-tile.vt-fill .vt-val,.vt-tile.vt-fill .vt-lab{color:#fff}
+.vt-tile.vt-fill .vt-norm{color:rgba(255,255,255,.78)}
+.vt-tile.vt-fill .vt-tile-ic{background:rgba(255,255,255,.18);color:#fff}
+.vt-tile.vt-fill .vt-spark{color:#fff}
+.vt-tile.vt-fill .vt-pts{background:rgba(255,255,255,.92);border-color:transparent;color:var(--vt-line)}
+/* Отклонение — кольцо и яркая метка очков, а не другой фон: цвет плитки
+   остаётся цветом ПОКАЗАТЕЛЯ, тревога читается формой. */
+.vt-tile.vt-fill.vt-abn{box-shadow:0 0 0 3px color-mix(in srgb,var(--warn-500) 55%,transparent)}
+.vt-tile.vt-fill.vt-warn2 .vt-pts,.vt-tile.vt-fill.vt-warn .vt-pts{background:#fbbf24;color:#3d2c00}
+.vt-tile.vt-fill.vt-crit{box-shadow:0 0 0 3px color-mix(in srgb,var(--crit-500) 60%,transparent)}
+.vt-tile.vt-fill.vt-crit .vt-pts{background:#fff;color:var(--crit-700)}
+.vt-spark-fill{fill:currentColor;opacity:.2}
+.vt-tile.vt-none{opacity:.75}
 .vt-tile-top{display:flex;align-items:center;justify-content:space-between}
 .vt-tile-ic{width:22px;height:22px;border-radius:7px;display:grid;place-items:center;background:var(--ink-50);color:var(--ink-600)}
 .vt-pts{font-size:12.5px;font-weight:700;padding:1px 8px;border-radius:999px;background:var(--white);border:1px solid var(--ink-200);color:var(--ink-600);font-variant-numeric:tabular-nums}
@@ -5651,3 +5660,34 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .vd-tbl{min-width:760px}
 .vd-tbl td.num{white-space:nowrap}
 @media (max-width:720px){.vd-grid{grid-template-columns:1fr}}
+
+/* CASE_ACTIONS_GHOST_V1 — призрачные действия карточек: подвал справа */
+.co-panel-f{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:2px 6px;margin-top:auto;padding-top:6px}
+.co-act{display:inline-flex;align-items:center;gap:2px;min-height:28px;padding:4px 4px 4px 8px;border:0;border-radius:var(--r-sm);background:none;font:inherit;font-size:12.5px;font-weight:600;color:var(--primary-700);cursor:pointer;white-space:nowrap;transition:background-color 120ms ease,color 120ms ease}
+.co-act:hover{background:var(--primary-50);color:var(--primary-700)}
+.co-act:active{background:var(--primary-100)}
+.co-act:focus-visible{outline:2px solid var(--primary-500);outline-offset:2px}
+.co-act svg{opacity:.8}
+/* VITALS_WINDOW_FIT_V1 — окно динамики вмещает содержимое: ни сетка карточек,
+   ни таблица не растягивают тело окна; таблица при нужде листается сама. */
+.vd{min-width:0;max-width:100%}
+.vd-grid{min-width:0}
+.vd-card{overflow:hidden}
+.vd-chart{max-width:100%}
+.vd-tbl-wrap{min-width:0;max-width:100%}
+.vd-tbl{min-width:0;width:100%}
+.vd-tbl th,.vd-tbl td{padding:5px 6px}
+.vd-tbl td{white-space:nowrap}
+
+/* VITALS_STEPPER_V1 — поле-шагомер: «−» слева, число посередине, «+» справа */
+.vt-step{display:flex;align-items:stretch;gap:0;border:1px solid var(--ink-200);border-radius:var(--r-md);background:var(--white);overflow:hidden}
+.vt-step:focus-within{border-color:var(--primary-500);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary-500) 18%,transparent)}
+.vt-step .vt-in{flex:1;min-width:0;border:0;border-radius:0;text-align:center;font-weight:700;background:none;-moz-appearance:textfield;appearance:textfield}
+.vt-step .vt-in:focus{outline:none}
+.vt-step .vt-in::-webkit-outer-spin-button,.vt-step .vt-in::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.vt-step-b{flex:0 0 44px;display:grid;place-items:center;border:0;background:var(--ink-25);color:var(--ink-700);cursor:pointer;font:inherit;touch-action:manipulation;transition:background-color 120ms ease,color 120ms ease}
+.vt-step-b:hover{background:var(--primary-50);color:var(--primary-700)}
+.vt-step-b:active{background:var(--primary-100)}
+.vt-step-b:focus-visible{outline:2px solid var(--primary-500);outline-offset:-2px}
+.vt-hint{margin:0 0 4px;font-size:12.5px;color:var(--ink-500)}
+@media (pointer:coarse){.vt-step-b{flex-basis:56px}}

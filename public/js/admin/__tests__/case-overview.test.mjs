@@ -156,14 +156,14 @@ test('шапка документов: пациент ведёт обратно 
     assert.deepEqual(navs.pop(), { view: 'case-overview', payload: { admissionId: 11 } });
 });
 
-test('«Следующий шаг» открывает документы НА СЛЕДУЮЩЕМ ШАГЕ; «Открыть лист назначений» — на лист', async () => {
+test('«Следующий шаг» открывает документы НА СЛЕДУЮЩЕМ ШАГЕ; «Лист назначений» — на лист', async () => {
     const navs = [];
     const root = await render((view, payload) => navs.push({ view, payload }));
     const next = findBtn(root, 'Заполнить документ');
     assert.ok(next, 'кнопки «Заполнить документ» нет');
     next.click();
     assert.deepEqual(navs.pop(), { view: 'case-file', payload: { admissionId: 11, kind: 'rationale' } });
-    findBtn(root, 'Открыть лист назначений').click();
+    findBtn(root, 'Лист назначений').click();
     assert.equal(navs.pop().view, 'mar-sheet');
 });
 
@@ -296,15 +296,16 @@ test('VITALS_NEWS_V1: «Добавить измерение» открывает
     const modal = BODY.children[BODY.children.length - 1];
     const mt = textOf(modal);
     assert.ok(mt.includes('Добавить измерение') && mt.includes('Иванов Иван Иванович'), mt.slice(0, 300));
-    assert.ok(mt.includes('Внесите хотя бы один показатель'), 'до ввода подсказка вместо балла');
     const inputs = walk(modal).filter((e) => e.tagName === 'INPUT' && e.attrs['data-key']);
     const byKey = (k) => inputs.find((e) => e.attrs['data-key'] === k);
+    // VITALS_STEPPER_V1 — поля начинаются нормой, и балл сразу посчитан.
+    assert.deepEqual(['temp_c', 'bp_sys', 'bp_dia', 'pulse_bpm', 'resp_rate', 'spo2'].map((k) => byKey(k).value), ['36.6', '120', '80', '72', '16', '98']);
     byKey('temp_c').value = '39,2'; byKey('temp_c').dispatchEvent({ type: 'input' });
     byKey('pulse_bpm').value = '118'; byKey('pulse_bpm').dispatchEvent({ type: 'input' });
     byKey('resp_rate').value = '26'; byKey('resp_rate').dispatchEvent({ type: 'input' });
     const preview = walk(modal).find((e) => String(e.className || '').includes('vt-preview'));
     assert.ok(textOf(preview).includes('NEWS 7') && textOf(preview).includes('Высокий риск'), 'балл на лету: ' + textOf(preview));
-    assert.ok(textOf(preview).includes('измерение неполное'), 'без SpO₂ и АД измерение неполное');
+    assert.ok(textOf(preview).includes('измерение полное') || !textOf(preview).includes('неполное'), 'все поля заполнены нормой — измерение полное: ' + textOf(preview));
 
     const submit = walk(modal).find((e) => e.tagName === 'BUTTON' && /Записать/.test(textOf(e)));
     submit.click();
@@ -315,6 +316,7 @@ test('VITALS_NEWS_V1: «Добавить измерение» открывает
     assert.equal(call.args.temp_c, '39,2');
     assert.equal(call.args.pulse_bpm, '118');
     assert.equal(call.args.resp_rate, '26');
+    assert.equal(call.args.spo2, '98', 'нетронутое поле уходит нормой');
     assert.equal(call.args.consciousness, 'alert');
     assert.equal(call.args.on_oxygen, false);
     assert.ok(call.args.measured_at, 'время измерения уходит явно');
@@ -347,10 +349,12 @@ test('VITALS_DYNAMICS_V1: плитки — кнопки с цветом пока
         assert.equal(tile.tagName, 'BUTTON', 'плитка обязана быть кнопкой');
         assert.ok(tile.attrs['data-metric'], 'у плитки нет data-metric — цвет показателя не назначится');
     }
+    // VITALS_TILES_FILL_V1 — плитка залита цветом показателя ВСЕГДА; отклонение — кольцо.
+    for (const x of tiles) assert.ok(x.className.includes('vt-fill'), 'плитка не залита: ' + x.attrs['data-metric']);
     const temp = tiles.find((x) => x.attrs['data-metric'] === 'temp_c');
-    assert.ok(temp.className.includes('vt-abn'), 'температура +1 — с пастельным фоном показателя: ' + temp.className);
+    assert.ok(temp.className.includes('vt-abn'), 'температура +1 — с кольцом отклонения: ' + temp.className);
     const bp = tiles.find((x) => x.attrs['data-metric'] === 'bp');
-    assert.ok(!bp.className.includes('vt-abn'), 'АД 0 — белая плитка');
+    assert.ok(!bp.className.includes('vt-abn'), 'АД 0 — без кольца');
     const curve = walk(temp).find((e) => e.tagName === 'PATH' && e.attrs.fill === 'none');
     assert.ok(curve && /C/.test(curve.attrs.d), 'кривая обязана быть гладкой (Безье), а не ломаной: ' + (curve && curve.attrs.d));
 
@@ -391,10 +395,15 @@ test('CASE_PANELS_TIDY_V1: единственная первичная кноп�
     const rest = labels.filter((l) => !l.includes('Добавить измерение'));
     assert.equal(rest.length, 1, 'первичной должна быть только выписка: ' + rest.length);
     assert.ok(rest[0].includes('Выписка'), 'первичная кнопка — не выписка');
-    for (const label of ['Заполнить документ', 'Открыть лист назначений', 'Услуги госпитализации']) {
+    // CASE_ACTIONS_GHOST_V1 — действия карточек: призрачные, с шевроном, в подвале справа.
+    for (const label of ['Заполнить документ', 'Лист назначений', 'Услуги госпитализации', 'История болезни', 'Протокол операции']) {
         const b = allBtns(root, label)[0];
-        assert.ok(b, 'нет кнопки ' + label);
-        assert.ok(b.className.includes('btn-outline') && b.className.includes('co-wide'), label + ' — не контурная во всю ширину: ' + b.className);
+        assert.ok(b, 'нет действия ' + label);
+        assert.ok(b.className.includes('co-act') && !b.className.includes('btn'), label + ' — должно быть призрачным действием: ' + b.className);
+        assert.ok(walk(b).some((e) => e.tagName === 'SVG' || String(e._t || '').includes('<svg')), label + ' — без шеврона');
+        let p = b._parent; let inFoot = false;
+        while (p) { if (String(p.className || '').includes('co-panel-f')) inFoot = true; p = p._parent; }
+        assert.ok(inFoot, label + ' — не в подвале карточки');
     }
     const t = textOf(root);
     assert.ok(!t.includes('Выписать и выставить счёт'), 'дубль кнопки выписки в панели счёта');
@@ -418,4 +427,40 @@ test('CASE_ROWS_TIDY_V1: проживание подписано «Прожив�
     assert.ok(t.includes('4 000 000'), 'сумма строки');
     const foot = walk(acc).find((e) => String(e.className || '').includes('co-row-foot'));
     assert.ok(foot && textOf(foot).includes('4 000 000') && textOf(foot).includes('не выставлено'), 'сумма и метка — в подвале строки');
+});
+
+
+// ─── VITALS_STEPPER_V1 — кнопки «−» и «+» ───────────────────────────────────
+test('VITALS_STEPPER_V1: у каждого поля кнопки слева и справа; шаг 0,1 у температуры и 1 у остальных, границы не переступает', async () => {
+    const root = await render(() => {});
+    allBtns(root, 'Добавить измерение')[0].click();
+    await settle();
+    const modal = BODY.children[BODY.children.length - 1];
+    const steps = walk(modal).filter((e) => String(e.className || '').split(/\s+/).includes('vt-step'));
+    assert.equal(steps.length, 6, 'шесть полей-шагомеров');
+    for (const st of steps) {
+        const kids = (st.children || []).filter((c) => c.tagName === 'BUTTON' || c.tagName === 'INPUT');
+        assert.deepEqual(kids.map((c) => c.tagName), ['BUTTON', 'INPUT', 'BUTTON'], 'кнопка — число — кнопка');
+        assert.equal(kids[0].attrs['aria-label'], 'Меньше');
+        assert.equal(kids[2].attrs['aria-label'], 'Больше');
+    }
+    const inputs = walk(modal).filter((e) => e.tagName === 'INPUT' && e.attrs['data-key']);
+    const stepOf = (k) => steps.find((st) => (st.children || []).some((c) => c.attrs && c.attrs['data-key'] === k));
+    const btnsOf = (k) => (stepOf(k).children || []).filter((c) => c.tagName === 'BUTTON');
+    const val = (k) => inputs.find((e) => e.attrs['data-key'] === k).value;
+
+    // Температура: шаг 0,1.
+    btnsOf('temp_c')[1].click();
+    assert.equal(val('temp_c'), '36.7');
+    btnsOf('temp_c')[0].click(); btnsOf('temp_c')[0].click();
+    assert.equal(val('temp_c'), '36.5');
+    // Пульс: шаг 1, и балл пересчитывается сразу.
+    btnsOf('pulse_bpm')[1].click();
+    assert.equal(val('pulse_bpm'), '73');
+    const preview = walk(modal).find((e) => String(e.className || '').includes('vt-preview'));
+    assert.ok(textOf(preview).includes('NEWS'), 'после шага балл пересчитан: ' + textOf(preview));
+    // Граница: SpO₂ не поднимается выше 100.
+    const up = btnsOf('spo2')[1];
+    for (let i = 0; i < 5; i++) up.click();
+    assert.equal(val('spo2'), '100', 'выше физического предела шагомер не уходит');
 });

@@ -7222,4 +7222,7 @@ export const STRINGS = {
   "Услуги госпитализации": {"en":"Admission services","ru":"Услуги госпитализации","uz":"Yotqizish xizmatlari"},
   "Проживание (койко-дни)": {"en":"Stay (bed-days)","ru":"Проживание (койко-дни)","uz":"Yotoq (koyka-kunlar)"},
   "{n} сут.": {"en":"{n} d.","ru":"{n} сут.","uz":"{n} kun"},
+  "Меньше": {"en":"Decrease","ru":"Меньше","uz":"Kamaytirish"},
+  "Больше": {"en":"Increase","ru":"Больше","uz":"Oshirish"},
+  "Значения заполнены нормой — поправьте их кнопками «−» и «+» или введите своё.": {"en":"The fields start at normal values — adjust them with «−» and «+» or type your own.","ru":"Значения заполнены нормой — поправьте их кнопками «−» и «+» или введите своё.","uz":"Maydonlar meʼyor qiymatlari bilan toʻldirilgan — «−» va «+» tugmalari bilan toʻgʻrilang yoki oʻzingiznikini kiriting."},
 };
