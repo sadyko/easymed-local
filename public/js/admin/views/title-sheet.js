@@ -24,6 +24,7 @@ import { inpatientModal, patientAnchor } from './inpatient-modal.js';
 import { bmiOf, sheetCompleteness } from '../../shared/title-sheet-rules.js';
 import { FORM_003, MOBILITY } from '../../shared/form-003.js';   // FORM_003_V1 — официальный текст бланка
 import { clinicLetterheadData } from './a4-letterhead.js';
+import { setupA4Fit } from './a4-paginate.js';   // FORM_003_ONE_PAGE_V1 — бланк держится одной страницы
 // Русские подсказки к строке 6 бланка — словарные ключи (i18n).
 const MOBILITY_RU = { wheelchair: 'на коляске', stretcher: 'на носилках', walks: 'ходит сам' };
 import { titleSheetPrintHtml, papersSummary } from './title-sheet-print.js';
@@ -349,6 +350,13 @@ export function openAdmissionTitleSheetModal({ admission, bed, onDone, onBack } 
         secondaryLabel: tr('Назад'),
         onSecondary: async () => { if (m) m.close(); if (onBack) onBack(); },
     });
+    // FORM_003_ONE_PAGE_V1 — лист держится одной страницы и здесь: медсестра
+    // сверяет его с бумажным бланком, а бумажный бланк — один лист.
+    if (m && m.overlay) {
+        const stop = setupA4Fit(m.overlay);
+        const closeWas = m.close;
+        m.close = () => { try { stop(); } catch (e) { /* нечего отменять */ } closeWas(); };
+    }
     return m;
 }
 
@@ -389,10 +397,14 @@ export function buildTitleSheetEditor({ admission, onDone } = {}) {
         title: tr('Титульный лист'),
         icon: 'Doc',
         noLetterhead: true,   // FORM_003_V1 — у бланка 003 своя шапка
-        fields: [status, ...form.fields],
+        onePage: true,        // FORM_003_ONE_PAGE_V1 — утверждённый бланк — один лист
+        fields: form.fields,
         // TITLE_SHEET_PAPERS_OUT_V1 — рисуется ПОД листом, как кнопки: это не
-        // часть документа, а работа с отдельными бумагами.
-        belowSheet: [form.papersBlock],
+        // часть документа, а работа с отдельными бумагами. Служебная строка
+        // «кто заполнил и когда» — туда же: на документе это след системы, а
+        // не содержание бланка (владелец: «we should remove from the bottom of
+        // the document this informations»).
+        belowSheet: [status, form.papersBlock],
         submitLabel: tr('Сохранить'),
         submit: async () => {
             const { data, error } = await supabase.rpc('admission_title_sheet_save', Object.assign({ admission_id: admission.id }, form.read()));

@@ -590,7 +590,12 @@ export function caseFilePrintHtml(file, { fontFaceCss = '' } = {}) {
     const draftsHtml = file && file.drafts_excluded
         ? `<p class="note">${esc(trf('Черновиков не включено: {n}. Черновик — не документ и в историю болезни не подшивается.', { n: file.drafts_excluded }))}</p>`
         : '';
-    const assembledHtml = `<p class="note">${esc(tr('Собрал'))}: ${esc([c.assembled_by, dt(c.assembled_at)].filter(Boolean).join(' · ') || '—')}</p>`;
+    // TITLE_SHEET_CLEAN_V1 — «Собрал: такой-то, тогда-то» на бумаге не
+    // печатается (владелец: «we should remove from the bottom of the document
+    // this informations»). Кто нажал кнопку сборки — служебный след, а не
+    // содержание истории болезни; он остаётся в базе и на экране документов.
+    // На старой обложке (снимки без титульного листа) строка сохранена: те
+    // истории уже подшиты именно такими, и менять их задним числом нечестно.
 
     // Прежняя обложка — для снимков, собранных ДО титульного листа: у них
     // title_sheet нет, и печататься они должны как печатались.
@@ -615,7 +620,7 @@ export function caseFilePrintHtml(file, { fontFaceCss = '' } = {}) {
     // бланку 003, ЦЕЛЫМ листом A4 (FORM_003_A4_V1: .ts занимает страницу, подпись
     // прижата к низу); документы начинаются со следующей страницы.
     const cover = file && file.title_sheet
-        ? titleSheetPrintSection(file.title_sheet, { extra: draftsHtml + assembledHtml })
+        ? titleSheetPrintSection(file.title_sheet, { extra: draftsHtml })
         : legacyCover;
 
     const body = documents.map((d, i) => {

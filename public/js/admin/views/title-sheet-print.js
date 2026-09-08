@@ -65,8 +65,18 @@ export function titleSheetPrintSection(view, { extra = '' } = {}) {
     const pick = (options, chosen) => options.map((o) => (o.code === chosen ? `<b class="f3p-pick">${esc(o.uz)}</b>` : esc(o.uz))).join(', ');
     const bp = s && s.bp_sys !== null && s.bp_sys !== undefined && s.bp_dia !== null && s.bp_dia !== undefined ? `${s.bp_sys}/${s.bp_dia}` : '';
     const emergency = a.admission_type === 'emergency';
+    // TITLE_SHEET_CLEAN_V1 (2026-09-08) — владелец: «we should remove from the
+    // bottom of the document this informations». Кто заполнил лист и в какую
+    // минуту — служебный след системы, а не содержание бланка 003: на бумаге,
+    // которую подшивают в историю и выдают на руки, этой строки нет. На экране
+    // она осталась, под листом.
+    //
+    // Предупреждение о НЕзаполненном листе — другое дело: оно про сам документ,
+    // и оно остаётся. Печатать пустой бланк, ничего об этом не сказав, значит
+    // выдать бумагу, по которой нельзя понять, забыли её заполнить или так и
+    // задумано.
     const sign = s && view.complete
-        ? '<div class="f3p-sign">' + esc(F.filledBy) + ' ' + esc(tr('(заполнила)')) + ': <b>' + esc(s.filled_by_name || '') + '</b> · ' + esc(s.filled_at ? fmtDateTime(s.filled_at) : '') + '</div>'
+        ? ''
         : `<div class="f3p-sign warn">${esc(tr('Титульный лист не заполнен'))}</div>`;
 
     // Строки бланка собираются здесь, а не внутри шаблона: сторож i18n
@@ -129,30 +139,40 @@ export function titleSheetPrintSection(view, { extra = '' } = {}) {
 // FORM_003_A4_V1 — лист занимает ЦЕЛУЮ страницу A4 (владелец: «make title list
 // full a4»): min-height = 297mm − поля 2×14mm, колонка flex, подпись прижата
 // к низу. Кегль и интервалы — как у бланка, а не как у экрана.
+//
+// FORM_003_ONE_PAGE_V1 — и НЕ БОЛЬШЕ одной страницы (владелец прислал печать,
+// где бланк занял две). Съедали страницу три вещи: интерлиньяж 1.7 на каждой
+// из двадцати строк, поля 7 px сверху и снизу у каждой из них и широкое
+// значение в 60 % ширины, из-за которого каждая вторая строка переносилась.
+// Бюджет страницы — 269 мм за вычетом полей; строка теперь около 6 мм,
+// двадцать три строки укладываются с запасом на перенос длинного адреса.
+//
+// .f3p-v.wide держит 40 %, а не 60 %: широкое значение обязано ТЯНУТЬСЯ, но не
+// занимать строку под собой — из-за этого переносилась каждая вторая строка.
 export function titleSheetPrintCss() {
     return `
 .ts { page-break-after: always; box-sizing: border-box; min-height: 266mm; display: flex; flex-direction: column; }
-.f3p { font-size: 13px; line-height: 1.7; color: #16232b; }
-.f3p-head { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; font-size: 11px; line-height: 1.4; margin-bottom: 14px; }
+.f3p { font-size: 12.5px; line-height: 1.35; color: #16232b; }
+.f3p-head { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; font-size: 10.5px; line-height: 1.25; margin-bottom: 8px; }
 .f3p-l { flex: 1; text-align: center; font-weight: 700; }
-.f3p-org { margin-top: 8px; font-weight: 700; border-bottom: 1px solid #16232b; padding-bottom: 3px; }
-.f3p-orgl { font-weight: 400; font-size: 10px; color: #55636d; }
+.f3p-org { margin-top: 5px; font-weight: 700; border-bottom: 1px solid #16232b; padding-bottom: 2px; }
+.f3p-orgl { font-weight: 400; font-size: 9.5px; color: #55636d; }
 .f3p-r { flex: 1; text-align: right; font-weight: 700; }
-.f3p-title { text-align: center; font-size: 17px; font-weight: 800; letter-spacing: 0.04em; margin: 16px 0 4px; }
-.f3p-sub { text-align: center; font-size: 11px; color: #55636d; margin-bottom: 14px; }
-.f3p-line { margin: 7px 0; }
+.f3p-title { text-align: center; font-size: 15px; font-weight: 800; letter-spacing: 0.04em; margin: 8px 0 2px; }
+.f3p-sub { text-align: center; font-size: 10.5px; color: #55636d; margin-bottom: 7px; }
+.f3p-line { margin: 3px 0; }
 .f3p-uz { font-weight: 600; }
-.f3p-ru { font-size: 10px; color: #7a8892; }
-.f3p-note { font-size: 10px; color: #7a8892; }
-.f3p-v { display: inline-block; min-width: 130px; border-bottom: 1px solid #16232b; padding: 0 6px; font-weight: 600; vertical-align: baseline; }
-.f3p-v.s { min-width: 60px; }
-.f3p-v.wide { min-width: 60%; }
-.f3p-v.no { min-width: 120px; }
+.f3p-ru { font-size: 9.5px; color: #7a8892; }
+.f3p-note { font-size: 9.5px; color: #7a8892; }
+.f3p-v { display: inline-block; min-width: 110px; border-bottom: 1px solid #16232b; padding: 0 5px; font-weight: 600; vertical-align: baseline; }
+.f3p-v.s { min-width: 52px; }
+.f3p-v.wide { min-width: 40%; }
+.f3p-v.no { min-width: 110px; }
 .f3p-pick { text-decoration: underline; text-underline-offset: 2px; }
-.f3p-hint { font-size: 9.5px; color: #7a8892; text-align: center; margin: -2px 0 6px; }
-.f3p-block { margin-top: 16px; padding-top: 12px; border-top: 1px dashed #aab4bc; }
-.f3p-block-t { font-weight: 700; font-size: 12.5px; margin: 8px 0 3px; }
-.f3p-sign { margin-top: auto; padding-top: 18px; text-align: right; font-size: 11.5px; color: #55636d; }
+.f3p-hint { font-size: 9px; color: #7a8892; text-align: center; margin: 0 0 2px; }
+.f3p-block { margin-top: 8px; padding-top: 6px; border-top: 1px dashed #aab4bc; }
+.f3p-block-t { font-weight: 700; font-size: 11.5px; margin: 5px 0 2px; }
+.f3p-sign { margin-top: auto; padding-top: 10px; text-align: right; font-size: 11px; color: #55636d; }
 .f3p-sign.warn { color: #b45309; font-weight: 600; }
 `;
 }

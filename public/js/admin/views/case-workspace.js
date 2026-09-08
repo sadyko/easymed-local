@@ -34,7 +34,7 @@ import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V1
 import { caseHead } from './case-overview.js?v=co1';   // CASE_OVERVIEW_V1 — одна шапка на «Обзор» и «Документы»
 import { caseInsertPanel } from './case-doc-insert.js';   // CASE_DOC_A4_V1 — правая панель «Вставить в документ»
 import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — диагнозы списком
-import { setupA4Pagination } from './a4-paginate.js';   // A4_PAGINATE_V1 — разрывы страниц в редакторе
+import { setupA4Pagination, setupA4Fit } from './a4-paginate.js';   // A4_PAGINATE_V1 / FORM_003_ONE_PAGE_V1
 
 const state = {
     admissionId: null,
@@ -44,6 +44,7 @@ const state = {
     open: null,        // {kind, mode, reviewId} — что открыто в центре
     editor: null,      // CASE_DOC_A4_V1 — открытый редактор: правая панель вставляет в него
     disposePagination: null,   // A4_PAGINATE_V1 — отмена слежения за разрывами
+    disposeFit: null,          // CASE_FIT_EXACT_V1 — отмена слежения за высотой колонок
     failed: null,
     overview: null,    // CASE_OVERVIEW_V1 — ответ admission_overview для шапки
 };
@@ -55,6 +56,7 @@ function reset(admissionId) {
     state.filter = 'all';
     state.open = null;
     state.editor = null;
+    if (state.disposeFit) { try { state.disposeFit(); } catch (e) { /* нечего отменять */ } state.disposeFit = null; }
     state.failed = null;
     state.overview = null;
 }
@@ -150,13 +152,43 @@ function paint(root, onNavigate) {
     const rail = h('div', { class: 'cw-rail' });
     const pane = h('div', { class: 'cw-pane' });
     const aside = h('div', { class: 'cw-aside' });
-    root.appendChild(h('div', { class: 'cw-grid' }, rail, pane, aside));
+    const grid = h('div', { class: 'cw-grid' }, rail, pane, aside);
+    root.appendChild(grid);
+    // CASE_FIT_EXACT_V1 — высота колонок МЕРЯЕТСЯ, а не угадывается. Прежнее
+    // calc(100vh − 150px) считало шапку экрана постоянной, а она не постоянная:
+    // имя пациента переносится, полоса реквизитов растёт, и колонка вылезала за
+    // экран ровно на разницу — владелец: «its still too big».
+    state.disposeFit = fitColumns(grid);
 
     // Лист рисуется ПЕРВЫМ: карточка «Диагноз» слева показывает поле открытого
     // документа, а его создаёт редактор.
     paintPane(pane, root, onNavigate);
     paintRail(rail, root, onNavigate);
     paintAside(aside);
+}
+
+/**
+ * Задать колонкам ровно ту высоту, что осталась от экрана под ними.
+ * @returns {() => void} отменить слежение
+ */
+function fitColumns(grid) {
+    if (!grid || !grid.getBoundingClientRect) return () => {};
+    const apply = () => {
+        if (grid.isConnected === false) return;
+        const top = grid.getBoundingClientRect().top;
+        const vh = (typeof window !== 'undefined' && window.innerHeight) || 0;
+        if (!vh) return;
+        // Нижнее поле экрана — то же, что у области содержимого.
+        const h2 = Math.max(320, Math.round(vh - top - 24));
+        grid.style.setProperty('--cw-fit', h2 + 'px');
+    };
+    apply();
+    const timers = [setTimeout(apply, 120), setTimeout(apply, 600)];
+    if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('resize', apply);
+    return () => {
+        for (const t of timers) clearTimeout(t);
+        if (typeof window !== 'undefined' && window.removeEventListener) window.removeEventListener('resize', apply);
+    };
 }
 
 // Правая панель живёт ОТДЕЛЬНО от листа: она читает свои источники один раз и
@@ -319,7 +351,12 @@ function paintPane(pane, root, onNavigate) {
     // ui breaks in the window of user». Разрывы считаются по высоте блоков и
     // пересчитываются, пока врач пишет.
     if (state.disposePagination) { try { state.disposePagination(); } catch (e) { /* нечего отменять */ } }
-    state.disposePagination = setupA4Pagination(card, { label: (pg) => trf('Страница {n}', { n: pg }) });
+    // FORM_003_ONE_PAGE_V1 — у бланка утверждённой формы страниц не бывает
+    // больше одной: он не растёт, он подгоняется. У остальных документов
+    // наоборот — сколько написали, столько страниц.
+    state.disposePagination = ed.onePage
+        ? setupA4Fit(card)
+        : setupA4Pagination(card, { label: (pg) => trf('Страница {n}', { n: pg }) });
 }
 
 export function resetCaseWorkspace() { reset(null); }

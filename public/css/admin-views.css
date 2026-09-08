@@ -5883,7 +5883,7 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 
 /* ── Экран помещается: прокручивается только лист (владелец: «make everything
       except a4 fit the screen so user wont scroll down to write») ─────────── */
-.cw-doc.a4-scroll { max-height: calc(100vh - 150px); overflow-y: auto; overflow-x: hidden; }
+.cw-doc.a4-scroll { max-height: var(--cw-fit, calc(100vh - 150px)); overflow-y: auto; overflow-x: hidden; }
 /* CASE_RAIL_FIT_V1 — ЛЕВАЯ КОЛОНКА ПОМЕЩАЕТСЯ В ЭКРАН ЦЕЛИКОМ.
    Владелец: «this section should fit in to a left panel. and user should not
    scroll. only scroll in the list. and be able to create a a list».
@@ -5891,14 +5891,14 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
    держат свою, а всю оставшуюся забирает панель документов. Прокрутка ровно
    одна и ровно там, где длина: в списке документов. Кнопка «Собрать историю»
    стоит последней и видна всегда — за ней сюда и приходят. */
-.cw-rail { position: sticky; top: 12px; height: calc(100vh - 150px); }
+.cw-rail { position: sticky; top: 12px; height: var(--cw-fit, calc(100vh - 150px)); }
 .cw-rail > .cw-dx { flex: 0 0 auto; }
 .cw-rail > .cw-steps { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .cw-rail > .cw-steps > .cd-box { flex: 1 1 auto; min-height: 0; }
 .cw-rail .cd-head, .cw-rail .cd-foot { flex: 0 0 auto; }
 .cw-rail .cd-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
     scrollbar-gutter: stable; }
-.cw-aside { max-height: calc(100vh - 168px); }
+.cw-aside { max-height: var(--cw-fit, calc(100vh - 168px)); }
 .cw-assemble { flex: 0 0 auto; width: 100%; justify-content: center; }
 @media (max-width: 1100px) {
   /* Узкий экран: колонки идут одна под другой, и запирать список в свою высоту

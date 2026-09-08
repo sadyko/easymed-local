@@ -108,10 +108,13 @@ test('печать: шапка клиники, номер истории, три
         'Касалхонага ётқизилган кун', 'Қабулхонада қўйилган ташҳис', 'аравачада',
         'Иванов Иван Иванович', '15.11.1994', 'Мужской', 'AA1234567', 'O(I) Rh+', 'пенициллин',
         'Экстренная', 'J18.9', 'Поликлиника №3', 'T-2',
-        '172', '80', '27', '36.6', '120/80', '72', 'не выявлено', 'полная',
-        'Медсестра Петрова']) {
+        '172', '80', '27', '36.6', '120/80', '72', 'не выявлено', 'полная']) {
         assert.ok(s.includes(piece), 'в печати нет: ' + piece);
     }
+    // TITLE_SHEET_CLEAN_V1 — кто заполнил лист и в какую минуту, на бумаге не
+    // печатается: это служебный след системы, а не содержание бланка 003.
+    assert.ok(!s.includes('Медсестра Петрова'), 'служебная подпись вернулась на бумагу');
+    assert.ok(!s.includes('Тўлдирди'), 'служебная подпись вернулась на бумагу');
     const html = titleSheetPrintHtml(VIEW, { fontFaceCss: '/*font*/' });
     assert.ok(html.startsWith('<!doctype html>'));
     assert.ok(html.includes('/*font*/'));
@@ -234,8 +237,12 @@ test('собранная история начинается титульным 
     assert.match(html, /\.ts \{[^}]*min-height: 266mm/, 'FORM_003_A4_V1 — лист занимает целую страницу A4');
     assert.match(html, /\.ts \{[^}]*page-break-after: always/, 'документы начинаются со следующей страницы');
     assert.ok(html.includes('Клиника Тест'));
-    assert.ok(html.includes('Медсестра Петрова'));
     assert.ok(!html.includes('Согласие на госпитализацию'), 'пробел комплекта попал на бумагу');
+    // TITLE_SHEET_CLEAN_V1 — ни «заполнила», ни «Собрал» на подшитой бумаге:
+    // владелец «we should remove from the bottom of the document this
+    // informations». Кто нажал кнопку — след в базе, а не строка документа.
+    assert.ok(!html.includes('Медсестра Петрова'), 'служебная подпись вернулась на бумагу');
+    assert.ok(!html.includes('Собрал'), '«Собрал: …» вернулось на подшитую историю');
     // Старый снимок без листа печатается прежней обложкой — без падения.
     const old = caseFilePrintHtml({ cover: { admission_no: 'H-1' }, documents: [], gaps: [] });
     assert.ok(old.includes('H-1'));
@@ -302,8 +309,13 @@ test('TITLE_SHEET_PAPERS_OUT_V1: панель бумаг рисуется под
     assert.ok(src.slice(i, i + 240).includes('form.papersBlock'),
         'в окне размещения панель бумаг не встала под лист');
     // История болезни: отдельный ключ, который рабочий экран рисует под листом.
-    assert.ok(src.includes('belowSheet: [form.papersBlock]'),
+    assert.ok(/belowSheet: \[status, form\.papersBlock\]/.test(src),
         'в истории болезни панель бумаг не отделена от листа');
+    // TITLE_SHEET_CLEAN_V1 — служебная строка «кто заполнил» тоже под листом,
+    // а не на нём: на документе это след системы, а не содержание бланка.
+    assert.ok(!/fields: \[status,/.test(src), 'служебная строка вернулась на лист');
+    // FORM_003_ONE_PAGE_V1 — бланк утверждённой формы держится одной страницы.
+    assert.ok(src.includes('onePage: true'), 'бланк снова может расползтись на две страницы');
 
     const ws = fsx.readFileSync(pathx.join(dir, '..', 'views', 'case-workspace.js'), 'utf8');
     assert.ok(ws.includes('...((ed.belowSheet || []).filter(Boolean))'),
@@ -397,4 +409,52 @@ test('FORM_003_ONE_PAGE_V1: содержимое бланка укладывае
 
     assert.ok(est <= budget, 'бланк 003 не умещается на страницу: смета ' + Math.round(est)
         + ' px при бюджете ' + budget + ' px (строк ' + rows + ', подсказок ' + hints + ')');
+});
+
+// Печать — то место, где владелец и увидел вторую страницу: он прислал
+// предпросмотр, где бланк занял два листа. Смета та же по смыслу, что и
+// экранная, но числа берутся из ПЕЧАТНОГО CSS и из готовой разметки: сколько
+// строк бланк напечатал на самом деле, столько и считаем.
+test('FORM_003_ONE_PAGE_V1: печатный бланк тоже укладывается в одну страницу A4', async () => {
+    const { titleSheetPrintSection, titleSheetPrintCss } = await import('../views/title-sheet-print.js');
+    const css = titleSheetPrintCss();
+    const html = titleSheetPrintSection(VIEW);
+
+    const px = (mm) => mm * 3.7795;
+    // Страница A4 минус поля @page (14 мм с каждой стороны).
+    const budget = px(297 - 28);
+
+    const numOf = (re, what) => {
+        const m = css.match(re);
+        assert.ok(m, 'в печатном CSS бланка больше нет: ' + what);
+        return Number(m[1]);
+    };
+    const fontSize = numOf(/\.f3p \{ font-size: ([\d.]+)px/, 'кегля');
+    const lineH = numOf(/\.f3p \{[^}]*line-height: ([\d.]+)/, 'интерлиньяжа');
+    const lineMargin = numOf(/\.f3p-line \{ margin: ([\d.]+)px 0/, 'полей строки');
+
+    const count = (cls) => (html.match(new RegExp('class="' + cls, 'g')) || []).length;
+    const lines = count('f3p-line');
+    const hints = count('f3p-hint');
+    const blocks = count('f3p-block-t');
+    assert.ok(lines > 15, 'строк на печатном бланке подозрительно мало: ' + lines);
+
+    // Шапка, заголовок, подзаголовок и рамка блока — их высоты заданы своими
+    // правилами, поэтому берутся отдельными слагаемыми.
+    const HEAD = 46;
+    const TITLE = 28;
+    const SUB = 20;
+    const BLOCK_FRAME = 14;
+    const est = HEAD + TITLE + SUB + BLOCK_FRAME
+        + lines * (fontSize * lineH + lineMargin * 2)
+        + hints * 13
+        + blocks * 21;
+
+    assert.ok(est <= budget, 'печатный бланк не умещается на страницу: смета ' + Math.round(est)
+        + ' px при бюджете ' + Math.round(budget) + ' px (строк ' + lines + ')');
+
+    // Широкое значение не должно занимать строку под собой — из-за этого
+    // каждая вторая строка бланка переносилась.
+    const wide = numOf(/\.f3p-v\.wide \{ min-width: ([\d.]+)%/, 'ширины широкого значения');
+    assert.ok(wide <= 45, 'широкое значение снова занимает почти всю строку: ' + wide + '%');
 });

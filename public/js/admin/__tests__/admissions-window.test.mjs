@@ -753,7 +753,7 @@ test('CASE_RAIL_ASSEMBLE_V1: в левой колонке нет списка-д
     const css = fs.readFileSync(path.join(dir, '..', '..', '..', 'css', 'admin-views.css'), 'utf8');
     // CASE_RAIL_FIT_V1 — прокрутка в колонке ровно одна и ровно в списке:
     // сама колонка — столбец фиксированной высоты, кнопка сборки не сжимается.
-    assert.ok(css.includes('.cw-rail { position: sticky; top: 12px; height: calc(100vh - 150px); }'),
+    assert.ok(css.includes('.cw-rail { position: sticky; top: 12px; height: var(--cw-fit, calc(100vh - 150px)); }'),
         'колонка перестала быть столбцом фиксированной высоты — кнопка сборки снова уедет за экран');
     assert.ok(/\.cw-rail \.cd-list \{[^}]*overflow-y: auto/.test(css),
         'список документов перестал прокручиваться сам');
