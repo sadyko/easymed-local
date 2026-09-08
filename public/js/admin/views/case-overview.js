@@ -491,10 +491,12 @@ export function vitalsPanel(ov, { onAdd } = {}) {
         h('span', { class: 'vt-chip' + (p.on_oxygen ? ' vt-warn2' : '') }, 'O₂ ' + (last.on_oxygen ? tr('да') : tr('нет')) + ' (' + (p.on_oxygen ? '+2' : '0') + ')'),
     ].filter(Boolean);
     const totals = (v.series || []).map((r) => (r.news ? r.news.total : null));
+    // VITALS_COMPACT_V1 — владелец: «remove this circle»: балл идёт словами в
+    // строке уровня («NEWS 5 · Средний риск»), кружка нет.
     const banner = h('div', { class: 'vt-banner vt-band-' + news.band },
-        h('div', { class: 'vt-score' }, h('b', null, String(news.total)), h('small', null, 'NEWS')),
         h('div', { class: 'vt-band' },
-            h('div', { class: 'vt-band-t' }, tr(band.label), news.complete ? null : h('span', { class: 'vt-partial' }, ' · ' + tr('измерение неполное'))),
+            h('div', { class: 'vt-band-t' }, h('span', { class: 'vt-news' }, 'NEWS ' + news.total), ' · ', tr(band.label),
+                news.complete ? null : h('span', { class: 'vt-partial' }, ' · ' + tr('измерение неполное'))),
             h('div', { class: 'vt-band-a' }, tr(band.advice)),
             h('div', { class: 'vt-chips' }, ...chips)),
         h('div', { class: 'vt-trend' },
