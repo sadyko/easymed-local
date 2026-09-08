@@ -5232,3 +5232,21 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .icon-btn.sm:hover { background: var(--ink-50); color: var(--ink-900); border-color: var(--ink-200); }
 .icon-btn.sm.danger:hover { background: var(--crit-50); color: var(--crit-700); border-color: var(--crit-200, #f3c9c9); }
 .icon-btn.sm:focus-visible { outline: 2px solid var(--primary-600); outline-offset: 1px; }
+
+/* ── TITLE_SHEET_V1 — титульный лист ─────────────────────────────────────── */
+.ts-block{margin-top:14px}
+.ts-block-t{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-500);margin:0 0 8px;padding-bottom:4px;border-bottom:1px solid var(--line-200,#e3e8ec)}
+.ts-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px}
+.ts-grid .field{margin:0}
+.ts-kv{display:flex;gap:8px;padding:6px 0;border-bottom:1px dotted var(--line-200,#d3d9de);font-size:13px;align-items:baseline}
+.ts-kv .ts-k{color:var(--ink-500);flex:0 0 150px}
+.ts-kv .ts-v{font-weight:600;min-width:0}
+.ts-radios{display:flex;gap:14px;flex-wrap:wrap;padding:6px 0}
+.ts-radios label{display:inline-flex;gap:6px;align-items:center;font-size:13px;cursor:pointer}
+.ts-bp{display:flex;gap:6px;align-items:center}
+.ts-bp input{width:86px}
+.ts-bmi{font-weight:700;background:var(--surface-50,#f6f8f9)}
+.ts-hint{font-size:12.5px;margin-top:6px}
+.ts-modal{max-height:66vh;overflow:auto}
+.ts-modal .a4-paper{margin:0 auto}
+@media (max-width:720px){.ts-grid{grid-template-columns:1fr}}
