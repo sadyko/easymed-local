@@ -50,6 +50,7 @@ import { supabase } from '../../supabase.js';
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
 import { h, Icon, Tag, toast, clear, field, fmtDate, fmtDateTime } from '../ui.js';
 import { inpatientModal, patientAnchor } from './inpatient-modal.js';   // TITLE_SHEET_V1 — вынесено, чтобы не было кольца
+import { openAdmissionTitleSheetModal } from './title-sheet.js';   // TITLE_SHEET_V1 — шаг 2 размещения
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 // BED_BOARD_SHARED_V1 — окно выбора койки рисует ДОСКУ КОЕК, а не свой список.
 // Адрес модуля с тем же '?v=', что у admin.js и views/admissions.js: разошедшийся
@@ -288,12 +289,21 @@ export function openAdmissionBedPicker({ admission, onDone } = {}) {
             : h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Палата в заявке не указана — выберите любую свободную койку.')),
         pillsBox,
         boardBox,
-    ], tr('Положить'), async () => {
+    ], tr('Далее'), async () => {
         if (!chosenBed) { toast(tr('Выберите койку.'), 'fail'); return false; }
-        const { error } = await supabase.rpc('admission_admit', { admission_id: admission.id, bed_id: chosenBed.id });
-        if (error) { toast((error.message) || tr('Не удалось положить на койку.'), 'fail'); return false; }
-        toast(tr('Пациент размещён на койке.'), 'ok');
-        if (onDone) await onDone();
+        // TITLE_SHEET_V1 — койка выбрана; размещение делает окно титульного
+        // листа ОДНИМ вызовом admission_admit с листом (владелец: «nurse should
+        // collect the title list» — в том же шаге, что и койка). «Назад»
+        // возвращает сюда же.
+        const ward = (chosenBed.wards && chosenBed.wards.name)
+            ? chosenBed.wards
+            : (data && Array.isArray(data.wards) ? data.wards.find((w) => w.id === chosenBed.ward_id) : null);
+        openAdmissionTitleSheetModal({
+            admission,
+            bed: { id: chosenBed.id, code: chosenBed.code, ward_name: ward ? ward.name : '' },
+            onDone,
+            onBack: () => openAdmissionBedPicker({ admission, onDone }),
+        });
         return true;
     }, { width: 820 });
 }

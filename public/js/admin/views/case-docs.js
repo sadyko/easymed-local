@@ -40,6 +40,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { titleSheetPrintSection, titleSheetPrintCss } from './title-sheet-print.js';   // TITLE_SHEET_V1
 
 // ---------------------------------------------------------------------------
 // Словарь названий
@@ -48,6 +49,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 // покрыт тестом на полноту (__tests__/case-docs.test.mjs): род документа,
 // приехавший с сервера без имени, нарисовался бы пустой строкой.
 export const CASE_DOC_TITLE = {
+    title:       'Титульный лист',   // TITLE_SHEET_V1 — документ медсестры, первой строкой
     consent:     'Согласие на госпитализацию и вмешательство',
     intake:      'Осмотр приёмного врача',
     anesthesia:  'Осмотр анестезиолога и согласие на анестезию',
@@ -552,7 +554,17 @@ export function caseFilePrintHtml(file, { fontFaceCss = '' } = {}) {
     const kv = (k, v) => `<div class="kv"><span class="k">${esc(k)}</span><span class="v">${esc(v || '—')}</span></div>`;
     const dt = (iso) => (iso ? fmtDateTime(iso) : '');
 
-    const cover = `
+    const gapsHtml = gaps.length ? `<div class="gaps"><b>${esc(tr('В комплекте не хватает:'))}</b><ul>${
+        gaps.map((k) => `<li>${esc(caseDocTitle(k))}</li>`).join('')
+    }</ul></div>` : `<p class="ok">${esc(tr('Обязательный комплект документов полный.'))}</p>`;
+    const draftsHtml = file && file.drafts_excluded
+        ? `<p class="note">${esc(trf('Черновиков не включено: {n}. Черновик — не документ и в историю болезни не подшивается.', { n: file.drafts_excluded }))}</p>`
+        : '';
+    const assembledHtml = `<p class="note">${esc(tr('Собрал'))}: ${esc([c.assembled_by, dt(c.assembled_at)].filter(Boolean).join(' · ') || '—')}</p>`;
+
+    // Прежняя обложка — для снимков, собранных ДО титульного листа: у них
+    // title_sheet нет, и печататься они должны как печатались.
+    const legacyCover = `
 <section class="cover">
   <h1>${esc(tr('История болезни'))}</h1>
   <p class="lead">${esc(c.patient_name || '')}${c.patient_mrn ? ' · ' + esc(c.patient_mrn) : ''}</p>
@@ -566,13 +578,15 @@ export function caseFilePrintHtml(file, { fontFaceCss = '' } = {}) {
     ${kv(tr('Лечащий врач'), [c.attending_name, c.attending_specialty].filter(Boolean).join(' · '))}
     ${kv(tr('Собрал'), [c.assembled_by, dt(c.assembled_at)].filter(Boolean).join(' · '))}
   </div>
-  ${gaps.length ? `<div class="gaps"><b>${esc(tr('В комплекте не хватает:'))}</b><ul>${
-      gaps.map((k) => `<li>${esc(caseDocTitle(k))}</li>`).join('')
-  }</ul></div>` : `<p class="ok">${esc(tr('Обязательный комплект документов полный.'))}</p>`}
-  ${file && file.drafts_excluded
-      ? `<p class="note">${esc(trf('Черновиков не включено: {n}. Черновик — не документ и в историю болезни не подшивается.', { n: file.drafts_excluded }))}</p>`
-      : ''}
+  ${gapsHtml}
+  ${draftsHtml}
 </section>`;
+
+    // TITLE_SHEET_V1 — первая страница собранной истории — титульный лист
+    // медсестры с шапкой клиники; список пробелов комплекта остаётся под ним.
+    const cover = file && file.title_sheet
+        ? titleSheetPrintSection(file.title_sheet, { extra: gapsHtml + draftsHtml + assembledHtml })
+        : legacyCover;
 
     const body = documents.map((d, i) => {
         const parts = PART_TITLES
@@ -616,6 +630,7 @@ h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.01em; }
 .part .pv { flex: 1; white-space: pre-wrap; }
 .part .pv.empty { color: #7a8892; font-style: italic; }
 .sign { margin-top: 6px; font-size: 12px; color: #55636d; text-align: right; }
+${titleSheetPrintCss()}
 </style></head><body>
 ${cover}
 ${body || `<p class="note">${esc(tr('Опубликованных документов пока нет.'))}</p>`}

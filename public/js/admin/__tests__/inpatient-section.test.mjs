@@ -214,6 +214,10 @@ globalThis.fetch = async (url, opts = {}) => {
         if (name === 'inpatient_capabilities') {
             return ok({ roles: ['nurse'], can: { admit: true, cancel_order: true, examine: false, set_attending: false } });
         }
+        if (name === 'admission_title_sheet_get') {   // TITLE_SHEET_V1 — шаг 2 окна койки
+            const a = WORLD.admissions.find((x) => x.id === body.admission_id) || {};
+            return ok({ admission: a, patient: a.patients || {}, sheet: null, bmi: null, complete: false, missing: [], due_at: null });
+        }
         if (name === 'admission_admit') {
             if (admitRefusal) return fail(admitRefusal);
             const a = WORLD.admissions.find((x) => x.id === body.admission_id);
@@ -468,7 +472,7 @@ test('окно «Положить на койку» — палаты карто�
     // койка не выбрана, вместо того чтобы отправить чужую.
     t1.click();
     await settle();
-    btns(picker, 'Положить').filter((b) => textOf(b).trim() === 'Положить')[0].click();
+    btns(picker, 'Далее').filter((b) => textOf(b).trim() === 'Далее')[0].click();   // TITLE_SHEET_V1 — сначала «Далее»
     await settle(60);
     assert.match(lastToast(), /Выберите койку/);
     assert.equal(rpcCalls.filter((c) => c.name === 'admission_admit').length, 0,
@@ -489,12 +493,18 @@ test('выбранная койка отмечается, и «Положить�
     assert.equal(marked.length, 1, 'выбор койки не виден (или отмечено несколько)');
     assert.ok(textOf(marked[0]).includes('T-2'));
 
+    // TITLE_SHEET_V1 — койка выбрана → «Далее» → титульный лист → «Положить».
+    btns(topOverlay(), 'Далее').filter((b) => textOf(b).trim() === 'Далее')[0].click();
+    await settle(80);
+    assert.ok(textOf(topOverlay()).includes('Титульный лист'), 'после «Далее» должен открыться титульный лист');
     btns(topOverlay(), 'Положить').filter((b) => textOf(b).trim() === 'Положить')[0].click();
     await settle(80);
 
     const call = rpcCalls.find((c) => c.name === 'admission_admit');
     assert.ok(call, 'размещение не ушло на сервер');
-    assert.deepEqual(call.args, { admission_id: 11, bed_id: 6 });
+    assert.equal(call.args.admission_id, 11);
+    assert.equal(call.args.bed_id, 6);
+    assert.ok(call.args.title_sheet && call.args.title_sheet.sheet, 'лист должен уйти вместе с койкой');
 });
 
 test('заявка без палаты: сначала выбирают ПАЛАТУ полосой доски, потом койку в ней', async () => {
@@ -529,11 +539,14 @@ test('заявка без палаты: сначала выбирают ПАЛА
 
     btns(picker, 'S-1')[0].click();
     await settle();
+    btns(topOverlay(), 'Далее').filter((b) => textOf(b).trim() === 'Далее')[0].click();   // TITLE_SHEET_V1
+    await settle(80);
     btns(topOverlay(), 'Положить').filter((b) => textOf(b).trim() === 'Положить')[0].click();
     await settle(80);
     const call = rpcCalls.find((c) => c.name === 'admission_admit');
     assert.ok(call, 'размещение не ушло на сервер');
-    assert.deepEqual(call.args, { admission_id: 12, bed_id: 8 });
+    assert.equal(call.args.admission_id, 12);
+    assert.equal(call.args.bed_id, 8);
 });
 
 test('полоса вкладок доступна с клавиатуры: стрелки, Home и End', async () => {
@@ -566,6 +579,8 @@ test('отказ сервера доходит словами, окно не з�
         await settle(60);
         btns(topOverlay(), 'T-2')[0].click();
         await settle();
+        btns(topOverlay(), 'Далее').filter((b) => textOf(b).trim() === 'Далее')[0].click();   // TITLE_SHEET_V1
+        await settle(80);
         btns(topOverlay(), 'Положить').filter((b) => textOf(b).trim() === 'Положить')[0].click();
         await settle(80);
 
@@ -595,6 +610,8 @@ test('размещение, сделанное в окне, тут же видн
     await settle(60);
     btns(topOverlay(), 'T-2')[0].click();
     await settle();
+    btns(topOverlay(), 'Далее').filter((b) => textOf(b).trim() === 'Далее')[0].click();   // TITLE_SHEET_V1
+    await settle(80);
     btns(topOverlay(), 'Положить').filter((b) => textOf(b).trim() === 'Положить')[0].click();
     await settle(90);
 

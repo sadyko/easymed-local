@@ -220,3 +220,19 @@ test('редактор в истории болезни: «Сохранить» 
     assert.equal(call.args.sheet.height_cm, '170');
     assert.equal(done, 1);
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 5. СОБРАННАЯ ИСТОРИЯ
+// ═══════════════════════════════════════════════════════════════════════════
+test('собранная история начинается титульным листом, а список пробелов остаётся', async () => {
+    const { caseFilePrintHtml } = await import('../views/case-docs.js');
+    const html = caseFilePrintHtml({ cover: { admission_no: 'H-7', assembled_by: 'Врач', assembled_at: '2026-09-08T12:00:00Z' },
+        documents: [], gaps: ['consent'], title_sheet: VIEW });
+    assert.ok(html.indexOf('Титульный лист') < html.indexOf('В комплекте не хватает'), 'лист должен идти первым');
+    assert.ok(html.includes('Клиника Тест'));
+    assert.ok(html.includes('Медсестра Петрова'));
+    assert.ok(html.includes('Согласие на госпитализацию'), 'пробелы комплекта пропали');
+    // Старый снимок без листа печатается прежней обложкой — без падения.
+    const old = caseFilePrintHtml({ cover: { admission_no: 'H-1' }, documents: [], gaps: [] });
+    assert.ok(old.includes('H-1'));
+});

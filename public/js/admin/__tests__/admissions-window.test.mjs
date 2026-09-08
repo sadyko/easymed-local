@@ -141,6 +141,10 @@ globalThis.fetch = async (url, opts = {}) => {
             const a = admitAnswer();
             return a.ok ? ok(a.data) : fail(a.message);
         }
+        if (name === 'admission_title_sheet_get') {   // TITLE_SHEET_V1
+            return ok({ admission: { id: body.admission_id, status: 'ordered', department: 'Терапия', admission_type: 'planned' },
+                patient: { id: 101, full_name: 'Иванов Иван Иванович', mrn: 'ID-1', gender: 'male' }, sheet: null, bmi: null, complete: false, missing: [], due_at: null });
+        }
         if (name === 'inpatient_capabilities') return ok({ roles: [], can: capsAnswer });
         if (name === 'admission_reviews_list') return ok({ admission_id: body.admission_id, reviews: [] });
         if (name === 'admission_review_save') {
@@ -295,12 +299,20 @@ test('«Положить на койку» → выбор койки → admissi
 
     const bedBtn = allBtns(overlay, 'T-2')[0];
     bedBtn.click();
-    findBtn(overlay, 'Положить').click();
+    findBtn(overlay, 'Далее').click();   // TITLE_SHEET_V1 — койка выбрана, дальше лист
+    await settle();
+    const sheet = BODY.children[BODY.children.length - 1];
+    assert.notEqual(sheet, overlay, 'после «Далее» должно открыться окно листа');
+    assert.ok(textOf(sheet).includes('Титульный лист'));
+    assert.ok(textOf(sheet).includes('T-2'), 'лист называет выбранную койку');
+    findBtn(sheet, 'Положить').click();
     await settle();
 
     const call = rpcCalls.find((c) => c.name === 'admission_admit');
     assert.ok(call, 'admission_admit не вызван');
-    assert.deepStrictEqual(call.args, { admission_id: 11, bed_id: 6 });
+    assert.equal(call.args.admission_id, 11);
+    assert.equal(call.args.bed_id, 6);
+    assert.ok(call.args.title_sheet && call.args.title_sheet.sheet, 'лист должен уйти вместе с койкой');
 });
 
 test('отказ сервера доходит до человека словами и окно не закрывается', async () => {
@@ -311,12 +323,15 @@ test('отказ сервера доходит до человека слова�
     await settle();
     const overlay = BODY.children[BODY.children.length - 1];
     allBtns(overlay, 'T-2')[0].click();
-    findBtn(overlay, 'Положить').click();
+    findBtn(overlay, 'Далее').click();   // TITLE_SHEET_V1
+    await settle();
+    const sheet = BODY.children[BODY.children.length - 1];
+    findBtn(sheet, 'Положить').click();
     await settle();
 
     assert.match(lastToast(), /Койка на уборке/);
-    // Кнопка снова активна: человек может выбрать другую койку, а не начинать заново.
-    const submit = findBtn(overlay, 'Положить');
+    // Кнопка снова активна: человек может поправить лист или вернуться к койкам, а не начинать заново.
+    const submit = findBtn(sheet, 'Положить');
     assert.ok(!submit.hasAttribute('disabled'), 'после отказа кнопку надо вернуть в работу');
 });
 

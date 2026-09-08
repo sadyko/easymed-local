@@ -29,6 +29,7 @@ import { h, Icon, clear, toast, PageHead } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { caseDocsView, assembleCaseFile } from './case-docs.js?v=cw1';
 import { buildReviewEditor } from './admission-modal.js?v=inp2';
+import { buildTitleSheetEditor, TITLE_SHEET_KIND } from './title-sheet.js';   // TITLE_SHEET_V1
 import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V1
 
 const state = {
@@ -170,16 +171,20 @@ function paintPane(pane, root, onNavigate) {
         return;
     }
 
-    const ed = buildReviewEditor({
-        admission: Object.assign({}, state.admission, { id: state.admissionId }),
-        kind: state.open.kind,
-        mode: state.open.mode,
-        reviewId: state.open.reviewId,
-        onDone: async () => {
-            await load();
-            paint(root, onNavigate);
-        },
-    });
+    const onDone = async () => {
+        await load();
+        paint(root, onNavigate);
+    };
+    // TITLE_SHEET_V1 — титульный лист медсестры: своя форма, тот же лист A4.
+    const ed = state.open.kind === TITLE_SHEET_KIND
+        ? buildTitleSheetEditor({ admission: Object.assign({}, state.admission, { id: state.admissionId }), onDone })
+        : buildReviewEditor({
+            admission: Object.assign({}, state.admission, { id: state.admissionId }),
+            kind: state.open.kind,
+            mode: state.open.mode,
+            reviewId: state.open.reviewId,
+            onDone,
+        });
     if (!ed) return;
 
     // A4_LETTERHEAD_V1 — документ на ЛИСТЕ, а не в карточке (владелец: «treat

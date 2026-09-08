@@ -159,6 +159,7 @@ const WORLD = {
     ],
     admissions: [],
     reviews: [],
+    titleSheet: null,   // TITLE_SHEET_V1
     orders: [],
     marks: [],
     diets: [],
@@ -253,10 +254,17 @@ function rpcAnswer(name, a) {
             return { ok: true, data: { admission: row } };
         }
 
+        case 'admission_title_sheet_get': {   // TITLE_SHEET_V1
+            const row = adm();
+            return { ok: true, data: { admission: row, patient: WORLD.patients.find((p) => p.id === row.patient_id) || {},
+                sheet: WORLD.titleSheet || null, bmi: null, complete: false, missing: [], due_at: null } };
+        }
+
         case 'admission_admit': {
             const row = adm();
             row.status = 'admitted'; row.bed_id = a.bed_id; row.admitted_at = `${TODAY}T09:00:00Z`;
             row.admitted_by = actor.id;
+            if (a.title_sheet) WORLD.titleSheet = Object.assign({ admission_id: row.id }, a.title_sheet.sheet);   // TITLE_SHEET_V1
             const bed = WORLD.beds.find((b) => b.id === a.bed_id);
             if (bed) bed.status = 'occupied';
             row.ward_id = bed ? bed.ward_id : row.ward_id;
@@ -673,12 +681,20 @@ test('маршрут стационара проходится целиком: �
         const bedBtn = walk(picker).find((e) => e.tagName === 'BUTTON' && textOf(e).includes('T-2'));
         assert.ok(bedBtn, 'свободной койки в выборе нет');
         bedBtn.click();
-        findBtn(picker, 'Положить').click();
+        findBtn(picker, 'Далее').click();
+        await settle();
+        // TITLE_SHEET_V1 — второй шаг: титульный лист; медсестра вписывает рост и вес.
+        const sheet = topOverlay();
+        assert.ok(textOf(sheet).includes('Титульный лист'), 'после койки должен открыться титульный лист');
+        walk(sheet).find((e) => e.tagName === 'INPUT' && (e.attrs.placeholder || '') === 'см').value = '172';
+        walk(sheet).find((e) => e.tagName === 'INPUT' && (e.attrs.placeholder || '') === 'кг').value = '80';
+        findBtn(sheet, 'Положить').click();
         await settle();
 
         const call = rpcCalls.find((c) => c.name === 'admission_admit');
         assert.ok(call, 'размещение не ушло на сервер');
         assert.equal(call.args.bed_id, 6);
+        assert.equal(call.args.title_sheet.sheet.height_cm, '172');
         assert.equal(adm().status, 'admitted');
     });
 
