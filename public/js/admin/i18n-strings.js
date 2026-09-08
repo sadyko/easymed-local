@@ -7162,4 +7162,10 @@ export const STRINGS = {
   "Подшитых историй болезни пока нет": {"en":"No filed case histories yet","ru":"Подшитых историй болезни пока нет","uz":"Tikilgan kasallik tarixlari hali yoʻq"},
   "История появляется после кнопки «Собрать историю» в документах госпитализации.": {"en":"A history appears after «Assemble the history» in the admission documents.","ru":"История появляется после кнопки «Собрать историю» в документах госпитализации.","uz":"Tarix yotqizish hujjatlaridagi «Tarixni yigʻish» tugmasidan keyin paydo boʻladi."},
   "Не удалось загрузить истории болезни: {msg}": {"en":"Could not load the case histories: {msg}","ru":"Не удалось загрузить истории болезни: {msg}","uz":"Kasallik tarixlarini yuklab boʻlmadi: {msg}"},
+  "Ждёт приёмного врача: {name}": {"en":"Waiting for the admitting doctor: {name}","ru":"Ждёт приёмного врача: {name}","uz":"Qabul qiluvchi shifokorni kutmoqda: {name}"},
+  "приёмный врач: {name}": {"en":"admitting doctor: {name}","ru":"приёмный врач: {name}","uz":"qabul qiluvchi shifokor: {name}"},
+  "Приёмный врач": {"en":"Admitting doctor","ru":"Приёмный врач","uz":"Qabul qiluvchi shifokor"},
+  "Врач, который осмотрит пациента при поступлении и назначит лечащего.": {"en":"The doctor who examines the patient on admission and assigns the attending doctor.","ru":"Врач, который осмотрит пациента при поступлении и назначит лечащего.","uz":"Bemorni qabulda koʻrikdan oʻtkazadigan va davolovchi shifokorni tayinlaydigan shifokor."},
+  "Список врачей не загрузился — осмотр при поступлении проведёт главный врач.": {"en":"The list of doctors did not load — the head doctor will do the admission examination.","ru":"Список врачей не загрузился — осмотр при поступлении проведёт главный врач.","uz":"Shifokorlar roʻyxati yuklanmadi — qabuldagi koʻrikni bosh shifokor oʻtkazadi."},
+  "Выберите приёмного врача — кто осмотрит пациента при поступлении.": {"en":"Choose the admitting doctor — who examines the patient on admission.","ru":"Выберите приёмного врача — кто осмотрит пациента при поступлении.","uz":"Qabul qiluvchi shifokorni tanlang — bemorni qabulda kim koʻrikdan oʻtkazadi."},
 };

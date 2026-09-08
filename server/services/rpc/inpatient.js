@@ -856,9 +856,22 @@ export function admissionAdmit(db, args, user) {
   const bedId = args && args.bed_id;
   if (!isPositiveInt(bedId)) throw new RpcError('bed_id must be a positive integer.', 400);
   const at = typeof (args && args.at) === 'string' && args.at ? args.at : null;
+  // ADMITTING_DOCTOR_V1 — приёмный врач, которого медсестра называет при
+  // размещении (миграция 113). Необязателен для сервера (старые вызовы), но
+  // экран без него не кладёт: осмотр при поступлении должен быть кому писать.
+  const rawAdmitting = args && args.admitting_doctor_id;
+  const admittingId = rawAdmitting === undefined || rawAdmitting === null || rawAdmitting === '' ? null : rawAdmitting;
+  if (admittingId !== null && !isPositiveInt(admittingId)) throw new RpcError('admitting_doctor_id must be a positive integer.', 400);
 
   const run = db.transaction(() => {
     const adm = loadAdmission(db, admissionId);
+
+    if (admittingId !== null) {
+      const u = db.prepare('SELECT id, role, is_doctor, specialty, license_number, active FROM users WHERE id = ?').get(admittingId);
+      if (!u) throw new RpcError('Приёмный врач не найден.', 400);
+      if (!isDoctorRow(u)) throw new RpcError('Приёмным врачом можно назначить только врача: у выбранного сотрудника нет признака врача.', 400);
+      if (u.active === 0) throw new RpcError('Сотрудник уволен — приёмным врачом его назначить нельзя.', 400);
+    }
 
     // 1. Заявка ли это ещё.
     if (adm.status !== 'ordered') {
@@ -900,7 +913,8 @@ export function admissionAdmit(db, args, user) {
 
     // Койка и палата — дело этого обработчика; состояние и подпись шага
     // (admitted_by / admitted_at) — дело машины маршрута.
-    db.prepare('UPDATE admissions SET bed_id = ?, ward_id = ? WHERE id = ?').run(bedId, bed.ward_id, adm.id);
+    db.prepare('UPDATE admissions SET bed_id = ?, ward_id = ?, admitting_doctor_id = COALESCE(?, admitting_doctor_id) WHERE id = ?')
+      .run(bedId, bed.ward_id, admittingId, adm.id);
     const res = admissionTransition(db, { admission_id: adm.id, to: 'admitted', at }, user);
     db.prepare("UPDATE beds SET status='occupied' WHERE id=?").run(bedId);
     db.prepare(`

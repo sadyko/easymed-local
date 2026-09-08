@@ -98,11 +98,14 @@ export function sheetView(db, adm) {
     SELECT a.id, a.admission_no, a.status, a.department, a.admitted_at, a.admitted_by, a.discharged_at,
            a.admission_type, a.stay_mode, a.admission_diagnosis, a.chief_complaint,
            a.discharge_destination, a.discharge_outcome, a.created_at,
-           w.name AS ward_name, b.code AS bed_code, doc.full_name AS attending_name
+           a.attending_doctor_id, a.admitting_doctor_id,
+           w.name AS ward_name, b.code AS bed_code, doc.full_name AS attending_name,
+           adoc.full_name AS admitting_name   -- ADMITTING_DOCTOR_V1
       FROM admissions a
       LEFT JOIN wards w ON w.id = a.ward_id
       LEFT JOIN beds b ON b.id = a.bed_id
       LEFT JOIN users doc ON doc.id = a.attending_doctor_id
+      LEFT JOIN users adoc ON adoc.id = a.admitting_doctor_id
      WHERE a.id = ?`).get(adm.id);
   const patient = db.prepare(`
     SELECT id, full_name, mrn, date_of_birth, gender, phone, address, national_id, occupation,

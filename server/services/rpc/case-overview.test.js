@@ -69,7 +69,7 @@ test('свежеразмещённый пациент: статус, первы�
     assert.equal(ov.services.count, 0);
     assert.equal(ov.operation.state, 'none');
     assert.equal(ov.bill.total, 0);
-    assert.equal(ov.docs.next_kind, 'consent', 'первый документ по регламенту — согласие');
+    assert.equal(ov.docs.next_kind, 'intake', 'CONSENT_OUT_V1 — первый документ по регламенту — осмотр приёмного врача');
     assert.deepEqual([ov.neighbours.index, ov.neighbours.total, ov.neighbours.prev, ov.neighbours.next], [0, 1, null, null]);
     assert.equal(ov.title_sheet.complete, false);
 });

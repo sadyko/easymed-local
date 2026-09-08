@@ -474,6 +474,10 @@ export const REGISTRY = {
              'chief_complaint','admission_diagnosis','admitted_at','discharged_at','status',
              'accommodation_discount_percent','charge_amount','invoice_id','created_by','created_at',
              'ordered_at','ordered_by','admitted_by','examined_at','examined_by','attending_doctor_id',
+             // ADMITTING_DOCTOR_V1 (миграция 113) — приёмный врач, которого
+             // медсестра назвала при размещении: списки стационара и кабинет
+             // врача показывают, кого ждут с осмотром.
+             'admitting_doctor_id',
              'admission_type','stay_mode','planned_discharge_at','cancel_reason',
              // ADMISSION_ORDER_V1 (миграция 092) — отделение словами и дата, на
              // которую госпитализация запланирована: окно медсестры сортирует
@@ -491,7 +495,7 @@ export const REGISTRY = {
              'discharge_note','discharge_debt_ack','discharge_debt_ack_by',
              'discharge_debt_ack_at','discharge_debt_amount'] },
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },  // admissions are created/updated ONLY via inpatient RPCs (server-computed money)
-    filters: ['id','patient_id','bed_id','ward_id','status','doctor_id','attending_doctor_id','admission_type','stay_mode','department',
+    filters: ['id','patient_id','bed_id','ward_id','status','doctor_id','attending_doctor_id','admitting_doctor_id','admission_type','stay_mode','department',
       // «Покажи выписанных с таким исходом» — отчёт по исходам спрашивает
       // именно это (TWO_STEP_DISCHARGE_V1).
       'discharge_outcome'],
@@ -517,6 +521,8 @@ export const REGISTRY = {
       // врача» называют его по имени: «осмотрен» без имени осмотревшего — это
       // дата без документа.
       examined_by: { table:'users', fk:'examined_by', columns:['id','full_name'] },
+      // ADMITTING_DOCTOR_V1 — приёмный врач: `admitting:admitting_doctor_id(full_name)`.
+      admitting_doctor_id: { table:'users', fk:'admitting_doctor_id', columns:['id','full_name','specialty'] },
     },
   },
   payer_policies: { read:{roles:ALL_STAFF,columns:['id','name','payer_id','coverage_percent','active','created_at']},

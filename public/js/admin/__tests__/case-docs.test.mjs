@@ -137,7 +137,9 @@ test('у каждого рода документа, который умеет �
     assert.ok(CASE_DOC_TITLE[server.OTHER_KIND], 'у «прочего документа» тоже должно быть имя');
     // И обратно: лишнее имя — это род, который сервер прислать не может.
     assert.ok(CASE_DOC_TITLE[TITLE_KIND], 'у титульного листа медсестры должно быть имя');   // TITLE_SHEET_V1
-    const known = new Set([...server.CASE_DOC_SET.map((d) => d.kind), server.OTHER_KIND, TITLE_KIND]);
+    // CONSENT_OUT_V1 — согласие из набора ушло, но старые записи этого рода сервер
+    // по-прежнему присылает в собранной истории (LEGACY_KINDS) — имя им нужно.
+    const known = new Set([...server.CASE_DOC_SET.map((d) => d.kind), ...(server.LEGACY_KINDS || []), server.OTHER_KIND, TITLE_KIND]);
     for (const kind of Object.keys(CASE_DOC_TITLE)) {
         assert.ok(known.has(kind), `имя «${kind}» не соответствует ни одному роду сервера`);
     }

@@ -143,6 +143,9 @@ export function caseHead(ov, { active = 'overview', onNavigate = null, onReload 
             hf('№ истории', a.admission_no),
             hf('Поступление', a.admitted_at && inBed ? dt(a.admitted_at) : (a.admitted_at && a.status === 'discharged' ? dt(a.admitted_at) : '—')),
             hf('Отделение · койка', place),
+            // ADMITTING_DOCTOR_V1 — приёмный врач стоит рядом с лечащим: пока
+            // лечащего нет, именно его ждут с осмотром при поступлении.
+            a.admitting_name ? hf('Приёмный врач', a.admitting_name) : null,
             attending,
             hf('Плановая выписка', a.planned_discharge_at ? dt(a.planned_discharge_at) : (a.discharged_at ? tr('выписан') + ' ' + dt(a.discharged_at) : '—'))));
 }

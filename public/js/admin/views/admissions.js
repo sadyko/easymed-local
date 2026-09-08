@@ -50,6 +50,7 @@ import { h, Icon, Tag, clear, PageHead, fmtDateTime, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { dateNumeric } from '../../shared/date-words.js';   // WARD_TABLE_V1 — «с 06.09»
 import { isModuleAllowed, hasActorRole } from '../permissions.js';
+import { currentUser } from '../data.js';   // ADMITTING_DOCTOR_V1 — «это мой пациент на осмотр?»
 import { openAdmissionOrderModal, openAdmissionBedPicker, openAdmissionCancelModal, openAdmissionCard,
          openAdmissionReviewModal, openAdmissionAttendingModal, goToMarSheet, goToCaseOverview } from './admission-modal.js?v=inp5';
 // Те же адреса модулей, что у admin.js: одна строка импорта — один экземпляр
@@ -122,7 +123,8 @@ async function load() {
         // экраны стационара (ward-beds.js, mar-sheet.js) спрашивают ровно
         // `patients(mrn, full_name)` и работали всегда.
         .select('*, patients(mrn, full_name), wards(name), beds(code), users(full_name), '
-              + 'attending:attending_doctor_id(full_name), examined:examined_by(full_name)')
+              + 'attending:attending_doctor_id(full_name), examined:examined_by(full_name), '
+              + 'admitting:admitting_doctor_id(full_name)')   // ADMITTING_DOCTOR_V1 — кого ждут с осмотром при поступлении
         .in('status', OPEN_STATUSES)
         .order('id', { ascending: false })
         .limit(500);
@@ -394,15 +396,33 @@ function wardTable({ rows, can, reload, onNavigate }) {
         }
     }
 
+    // ADMITTING_DOCTOR_V1 — приёмный врач ЭТОГО пациента (кого медсестра
+    // назвала при размещении) пишет осмотр при поступлении и назначает
+    // лечащего — сервер пускает его по имени, а не по роли (isAdmittingDoctor),
+    // поэтому и кнопка здесь решается по строке, а не по `can`.
+    const me = currentUser();
+    const isAdmitting = (a) => me && me.id != null && a.admitting_doctor_id != null && String(a.admitting_doctor_id) === String(me.id);
+    const goToIntake = (a) => {
+        const fn = onNavigate || (typeof window !== 'undefined' && window.easymed && window.easymed.navigate);
+        if (fn) fn('case-file', { admissionId: a.id, kind: 'intake' });
+    };
+
     function actionCell(a) {
         if (a.status === 'admitted') {
-            return can.examine
-                ? h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: (ev) => { stop(ev); openAdmissionReviewModal({ admission: a, onDone: reload }); } },
-                    Icon('Stethoscope', { size: 13 }), ' ', tr('Провести первичный осмотр'))
+            if (isAdmitting(a)) {
+                return h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: (ev) => { stop(ev); goToIntake(a); } },
+                    Icon('Stethoscope', { size: 13 }), ' ', tr('Осмотр приёмного врача'));
+            }
+            if (can.examine) {
+                return h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: (ev) => { stop(ev); openAdmissionReviewModal({ admission: a, onDone: reload }); } },
+                    Icon('Stethoscope', { size: 13 }), ' ', tr('Провести первичный осмотр'));
+            }
+            return a.admitting && a.admitting.full_name
+                ? Tag(trf('Ждёт приёмного врача: {name}', { name: a.admitting.full_name }), { kind: 'warn', dot: true })
                 : Tag(tr('Ждёт главного врача'), { kind: 'warn', dot: true });
         }
         if (a.status === 'examined') {
-            return can.set_attending
+            return (can.set_attending || isAdmitting(a))
                 ? h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: (ev) => { stop(ev); openAdmissionAttendingModal({ admission: a, onDone: reload }); } },
                     Icon('User', { size: 13 }), ' ', tr('Назначить лечащего врача'))
                 : Tag(tr('Ждёт лечащего врача'), { kind: 'warn', dot: true });
@@ -433,7 +453,10 @@ function wardTable({ rows, can, reload, onNavigate }) {
                 : h('div', null,
                     h('span', { class: 'wt-warn-text' }, tr('не назначен')),
                     // Осмотренному видно, КТО осмотрел: лечащего назначают после осмотра.
-                    a.examined && a.examined.full_name ? h('div', { class: 'ar-sub' }, trf('осмотрел: {name}', { name: a.examined.full_name })) : null)),
+                    a.examined && a.examined.full_name ? h('div', { class: 'ar-sub' }, trf('осмотрел: {name}', { name: a.examined.full_name })) : null,
+                    // ADMITTING_DOCTOR_V1 — до осмотра видно, КОГО ждут.
+                    !(a.examined && a.examined.full_name) && a.admitting && a.admitting.full_name
+                        ? h('div', { class: 'ar-sub' }, trf('приёмный врач: {name}', { name: a.admitting.full_name })) : null)),
             h('td', null, Tag(admissionStatusLabel(a.status), { kind: tone, dot: true })),
             h('td', { class: 'wt-action' }, actionCell(a)));
     }

@@ -51,7 +51,7 @@ export function wardNeighbours(db, adm, user) {
   const roles = effectiveRoles(user);
   const plainDoctor = roles.includes('doctor') && !roles.includes('head_doctor') && !roles.includes('admin');
   let list = db.prepare(`
-    SELECT a.id, a.attending_doctor_id, p.full_name, w.name AS ward_name, b.code AS bed_code
+    SELECT a.id, a.attending_doctor_id, a.admitting_doctor_id, p.full_name, w.name AS ward_name, b.code AS bed_code
       FROM admissions a
       LEFT JOIN patients p ON p.id = a.patient_id
       LEFT JOIN wards w ON w.id = a.ward_id
@@ -60,7 +60,9 @@ export function wardNeighbours(db, adm, user) {
      ORDER BY w.name, b.code, a.id`).all();
   let mine = false;
   if (plainDoctor) {
-    const own = list.filter((r) => r.attending_doctor_id === user.id);
+    // ADMITTING_DOCTOR_V1 — «мои» у рядового врача: кого лечит И кого ждут с
+    // осмотром при поступлении (приёмный врач).
+    const own = list.filter((r) => r.attending_doctor_id === user.id || r.admitting_doctor_id === user.id);
     if (own.length) { list = own; mine = true; }
   }
   const index = list.findIndex((r) => r.id === adm.id);

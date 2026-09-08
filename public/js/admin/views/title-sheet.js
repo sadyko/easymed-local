@@ -278,12 +278,39 @@ export function openAdmissionTitleSheetModal({ admission, bed, onDone, onBack } 
         if (data) form.fill(Object.assign({}, data, { admission: Object.assign({}, data.admission, { status: admission.status }) }));
     })();
 
+    // ADMITTING_DOCTOR_V1 — медсестра называет ПРИЁМНОГО ВРАЧА: того, кто
+    // напишет «Осмотр приёмного врача» и назначит лечащего (владелец: «the
+    // nurse should select the admitting doctor»). Список — действующие врачи
+    // (admission_attending_candidates); один врач в клинике выбирается сам,
+    // несколько — выбор обязателен. Список не пришёл — кладём без него: осмотр
+    // тогда, как раньше, за главным врачом.
+    const docSel = h('select', { class: 'ts-doc-sel' }, h('option', { value: '' }, tr('— выберите врача —')));
+    const docNote = h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } }, tr('Врач, который осмотрит пациента при поступлении и назначит лечащего.'));
+    let doctors = [];
+    docSel.disabled = true;
+    supabase.rpc('admission_attending_candidates', {}).then(({ data, error }) => {
+        doctors = (!error && data && Array.isArray(data.doctors)) ? data.doctors : [];
+        for (const d of doctors) docSel.appendChild(h('option', { value: String(d.id) }, d.full_name + (d.specialty ? '  ·  ' + d.specialty : '')));
+        docSel.disabled = false;
+        if (doctors.length === 1) docSel.value = String(doctors[0].id);
+        if (!doctors.length) docNote.textContent = tr('Список врачей не загрузился — осмотр при поступлении проведёт главный врач.');
+    }).catch(() => { docSel.disabled = false; });
+    const admittingField = h('div', { class: 'ts-admitting' },
+        field(tr('Приёмный врач'), docSel, { required: true }),
+        docNote);
+
     let m = null;
     m = inpatientModal(tr('Титульный лист'), 'Doc', [
         patientAnchor(p.full_name || '', [p.mrn, admission.department, bed.code ? trf('койка {code}', { code: bed.code }) : null].filter(Boolean).join(' · ')),
+        admittingField,
         sheetOnPaper(form),
     ], tr('Положить'), async () => {
-        const { data, error } = await supabase.rpc('admission_admit', { admission_id: admission.id, bed_id: bed.id, title_sheet: form.read() });
+        if (doctors.length && !docSel.value) { toast(tr('Выберите приёмного врача — кто осмотрит пациента при поступлении.'), 'fail'); docSel.focus(); return false; }
+        const admittingId = docSel.value ? Number(docSel.value) : null;
+        const { data, error } = await supabase.rpc('admission_admit', {
+            admission_id: admission.id, bed_id: bed.id, title_sheet: form.read(),
+            admitting_doctor_id: admittingId,
+        });
         if (error) { toast(error.message || tr('Не удалось положить на койку.'), 'fail'); return false; }
         const complete = !!(data && data.title_sheet && sheetCompleteness(data.title_sheet).complete);
         toast(complete

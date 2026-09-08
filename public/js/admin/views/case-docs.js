@@ -290,6 +290,12 @@ function itemRow(item, state, onDoc, activeKind = null) {
     item.kind === 'title' && item.papers
         ? h('span', { style: { display: 'block', fontSize: '12.5px', marginTop: '2px', color: 'var(--ink-500)', lineHeight: '1.3' } },
             papersSummary(item.papers, { withDates: false }))
+        : null,
+    // ADMITTING_DOCTOR_V1 — у осмотра при поступлении есть адресат: пока он
+    // не написан, список называет приёмного врача, которого ждут.
+    item.kind === 'intake' && item.state !== 'published' && item.assignee_name
+        ? h('span', { style: { display: 'block', fontSize: '12.5px', marginTop: '2px', color: 'var(--ink-500)', lineHeight: '1.3' } },
+            trf('приёмный врач: {name}', { name: item.assignee_name }))
         : null);
 
     const actions = h('div', { style: { display: 'flex', gap: '6px', flexShrink: '0', alignItems: 'center' } });

@@ -315,6 +315,9 @@ test('«Положить на койку» → выбор койки → admissi
     assert.equal(call.args.admission_id, 11);
     assert.equal(call.args.bed_id, 6);
     assert.ok(call.args.title_sheet && call.args.title_sheet.sheet, 'лист должен уйти вместе с койкой');
+    // ADMITTING_DOCTOR_V1 — единственный врач клиники выбран приёмным сам, и он уходит с койкой.
+    assert.equal(call.args.admitting_doctor_id, 77, 'приёмный врач должен уйти в admission_admit');
+    assert.ok(textOf(sheet).includes('Приёмный врач'), 'в окне листа нет поля «Приёмный врач»');
 });
 
 test('отказ сервера доходит до человека словами и окно не закрывается', async () => {
@@ -722,4 +725,36 @@ test('панель документа истории болезни рисует
     assert.ok(/a4Sheet\(\{\s*title:\s*ed\.title/.test(src), 'документ больше не рисуется листом через a4Sheet');
     assert.ok(!/class:\s*'card cw-doc'/.test(src), 'вернулась карточка вместо листа');
     assert.ok(!/card-header'\s*\},\s*h\('h3'/.test(src.slice(src.indexOf('buildReviewEditor({'))), 'вернулся карточный заголовок документа');
+});
+
+
+// ─── ADMITTING_DOCTOR_V1 — приёмный врач видит СВОЮ кнопку ───────────────────
+test('ADMITTING_DOCTOR_V1: приёмный врач видит «Осмотр приёмного врача» и уходит в документы на этот осмотр; чужой врач — подпись, кого ждут', async () => {
+    const savedRows = admissionsRows;
+    const savedCaps = capsAnswer;
+    const calls = [];
+    globalThis.window.easymed = { navigate: (...a) => calls.push(a), state: { user: { id: 77, role: 'doctor', full_name: 'Юсупов А.' } } };
+    try {
+        capsAnswer = { examine: false, set_attending: false, admit: false };
+        admissionsRows = [{ ...IN_BED, admitting_doctor_id: 77, admitting: { full_name: 'Юсупов А.' } }];
+        let root = await renderScreen({ only: 'patients' });
+        const mine = findBtn(root, 'Осмотр приёмного врача');
+        assert.ok(mine, 'приёмному врачу нужна кнопка своего осмотра');
+        assert.equal(findBtn(root, 'Провести первичный осмотр'), undefined, 'осмотр главного врача — не его кнопка');
+        mine.click();
+        await settle();
+        const nav = calls.find((a) => a[0] === 'case-file');
+        assert.ok(nav, 'кнопка обязана вести в документы госпитализации');
+        assert.deepEqual(nav[1], { admissionId: 13, kind: 'intake' }, 'и открывать именно осмотр приёмного врача');
+
+        // Чужой врач: кнопки нет, а подпись называет, кого ждут.
+        globalThis.window.easymed.state.user = { id: 78, role: 'doctor', full_name: 'Другой врач' };
+        root = await renderScreen({ only: 'patients' });
+        assert.equal(findBtn(root, 'Осмотр приёмного врача'), undefined);
+        assert.ok(textOf(root).includes('Ждёт приёмного врача: Юсупов А.'), 'экран обязан сказать, кого ждут: ' + textOf(root).slice(0, 400));
+    } finally {
+        admissionsRows = savedRows;
+        capsAnswer = savedCaps;
+        delete globalThis.window.easymed;
+    }
 });

@@ -331,6 +331,16 @@ export function assertCanPrescribe(db, admissionId, user) {
  * @param {{role:string, extra_roles?:string[]}} user
  * @throws {RpcError} 403 с названием действия и списком тех, кто его делает
  */
+/**
+ * ADMITTING_DOCTOR_V1 — этот ли человек назван приёмным врачом госпитализации.
+ * Рядовой врач (роль doctor); главному врачу и администратору этот вопрос не
+ * задают — им открыто и так.
+ */
+export function isAdmittingDoctor(adm, user) {
+  const uid = user && user.id;
+  return !!(uid && adm && adm.admitting_doctor_id === uid && hasAnyRole(user, ['doctor']));
+}
+
 export function assertMayTransition(from, to, user) {
   const allowed = TRANSITION_ROLES[`${from}→${to}`];
   if (!allowed) throw new RpcError(explainRefusal(from, to), 400);
@@ -359,7 +369,7 @@ export function assertMayTransition(from, to, user) {
  * @param {{id:number, role:string, extra_roles?:string[]}} user
  * @returns {{admission: object, from: string, to: string}}
  */
-export function admissionTransition(db, args, user) {
+export function admissionTransition(db, args, user, opts = {}) {
   const to = args && args.to;
   if (typeof to !== 'string' || !to) throw new RpcError('to must be a state name.', 400);
 
@@ -376,7 +386,18 @@ export function admissionTransition(db, args, user) {
   if (from === to) return { admission: adm, from, to };   // идемпотентный повтор
 
   // 2. Вправе ли этот человек.
-  assertMayTransition(from, to, user);
+  //
+  // ADMITTING_DOCTOR_V1 — ПРИЁМНЫЙ ВРАЧ этой госпитализации (тот, кого
+  // медсестра назвала при размещении) проводит осмотр при поступлении и
+  // назначает лечащего наравне с главным врачом — но ТОЛЬКО у своего пациента
+  // и только на этих двух шагах. Разрешение приходит не из матрицы ролей
+  // (там оно открыло бы шаг ЛЮБОМУ врачу через admission_transition), а от
+  // вызывающего RPC, который уже проверил, что публикует осмотр или назначает
+  // врача именно он: opts.admittingDoctorOk. Клиентский RPC admission_transition
+  // opts не передаёт — для него матрица как была.
+  const asAdmitting = !!(opts && opts.admittingDoctorOk)
+    && isAdmittingDoctor(adm, user) && (to === 'examined' || to === 'active');
+  if (!asAdmitting) assertMayTransition(from, to, user);
 
   const at = typeof (args && args.at) === 'string' && args.at
     ? args.at

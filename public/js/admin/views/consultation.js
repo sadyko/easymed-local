@@ -355,14 +355,15 @@ async function loadInpatientCaps() {
 
 async function loadInpatients() {
     await loadInpatientCaps();
-    let q = supabase.from('admissions')
+    const base = () => supabase.from('admissions')
         .select(`
             id, admission_no, status, admission_diagnosis, admitted_at, department,
-            patient_id, attending_doctor_id, ward_id, bed_id,
+            patient_id, attending_doctor_id, admitting_doctor_id, ward_id, bed_id,
             patients(full_name, last_name, first_name, mrn, phone),
             wards(name),
             beds(code),
-            attending:attending_doctor_id(full_name)
+            attending:attending_doctor_id(full_name),
+            admitting:admitting_doctor_id(full_name)
         `)
         // INPATIENT_FLOW_V1 — вкладка «Стационар» показывает пациентов В КОЙКЕ,
         // а не только тех, кто дошёл до 'active': врач обязан видеть своего
@@ -370,6 +371,7 @@ async function loadInpatients() {
         .in('status', IN_BED_STATUSES)
         .order('admitted_at', { ascending: false })
         .limit(200);
+    let q = base();
     // ADMISSION_ORDER_V1 — фильтра по company_id здесь БЫТЬ НЕ МОЖЕТ: в
     // schema-registry.js у admissions такой колонки нет ни в чтении, ни в
     // фильтрах, и /api/db отвечал на этот запрос отказом. Вместе с embed'ом
@@ -382,8 +384,18 @@ async function loadInpatients() {
     // филиалами (её нет в SHIPPED, branch-sync/journal.js), у неё нет ни
     // sync_origin, ни uid — каждая база видит только свои госпитализации.
     const docId = scopedDoctorId();
-    if (state.inpt.scope !== 'all' && docId) q = q.eq('attending_doctor_id', docId);
-    const { data, error } = await q;
+    let data = null; let error = null;
+    if (state.inpt.scope !== 'all' && docId) {
+        // ADMITTING_DOCTOR_V1 — «мои» у палатного врача: кого лечу И кого жду с
+        // осмотром при поступлении (медсестра назвала меня приёмным врачом).
+        // Два запроса, потому что у локального клиента нет .or(); склейка по id.
+        const [own, adm] = await Promise.all([q.eq('attending_doctor_id', docId), base().eq('admitting_doctor_id', docId)]);
+        error = own.error || adm.error || null;
+        const seen = new Set(); data = [];
+        for (const r of [...(own.data || []), ...(adm.data || [])]) { if (r && !seen.has(r.id)) { seen.add(r.id); data.push(r); } }
+    } else {
+        ({ data, error } = await q);
+    }
     if (error) { console.warn('[inpatients]', error.message); state.inpt.rows = []; }
     else state.inpt.rows = sortInpatients(data || []);
     state.inpt.loaded = true;
@@ -429,14 +441,27 @@ function inpatientRow(r, onChange) {
     // пропустит. Дальше первичного осмотра и назначения лечащего кабинет не
     // идёт — остальное живёт в карточке госпитализации и в разделе «Стационар».
     const right = [];
+    // ADMITTING_DOCTOR_V1 — я ли приёмный врач этого пациента: тогда осмотр при
+    // поступлении и назначение лечащего — мои, и сервер пустит меня по имени.
+    const meDoc = scopedDoctorId();
+    const mine = meDoc != null && r.admitting_doctor_id != null && String(r.admitting_doctor_id) === String(meDoc);
+    const toIntake = () => {
+        const fn = typeof window !== 'undefined' && window.easymed && window.easymed.navigate;
+        if (fn) fn('case-file', { admissionId: r.id, kind: 'intake' });
+    };
     if (r.status === 'admitted') {
-        right.push(state.inpt.can.examine
-            ? h('button', { class: 'btn btn-primary btn-sm', type: 'button',
-                onclick: () => openAdmissionReviewModal({ admission: r, onDone: onChange }) },
-                Icon('Stethoscope', { size: 13 }), ' ', 'Провести первичный осмотр')
-            : Tag('Ждёт главного врача', { kind: 'warn', dot: true }));
+        right.push(mine
+            ? h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: toIntake },
+                Icon('Stethoscope', { size: 13 }), ' ', tr('Осмотр приёмного врача'))
+            : state.inpt.can.examine
+                ? h('button', { class: 'btn btn-primary btn-sm', type: 'button',
+                    onclick: () => openAdmissionReviewModal({ admission: r, onDone: onChange }) },
+                    Icon('Stethoscope', { size: 13 }), ' ', 'Провести первичный осмотр')
+                : (r.admitting && r.admitting.full_name
+                    ? Tag(trf('Ждёт приёмного врача: {name}', { name: r.admitting.full_name }), { kind: 'warn', dot: true })
+                    : Tag('Ждёт главного врача', { kind: 'warn', dot: true })));
     } else if (r.status === 'examined') {
-        right.push(state.inpt.can.set_attending
+        right.push((state.inpt.can.set_attending || mine)
             ? h('button', { class: 'btn btn-primary btn-sm', type: 'button',
                 onclick: () => openAdmissionAttendingModal({ admission: r, onDone: onChange }) },
                 Icon('User', { size: 13 }), ' ', 'Назначить лечащего врача')
