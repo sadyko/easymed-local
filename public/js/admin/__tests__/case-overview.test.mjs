@@ -360,26 +360,25 @@ test('VITALS_DYNAMICS_V1: плитки — кнопки с цветом пока
     const mt = textOf(modal);
     assert.ok(mt.includes('Динамика показателей') && mt.includes('Иванов Иван Иванович'), mt.slice(0, 300));
     assert.ok(rpcCalls.some((c) => c.name === 'admission_vitals_list' && c.args.admission_id === 11), 'полная история спрашивается с сервера');
-    const tabs = walk(modal).filter((e) => String(e.className || '').split(/\s+/).includes('vd-tab'));
-    assert.equal(tabs.length, 5, 'переключатель по пяти показателям');
-    const tempTab = tabs.find((x) => x.attrs['data-metric'] === 'temp_c');
-    assert.ok(tempTab, 'вкладки температуры нет: ' + JSON.stringify(tabs.map((x) => [x.tagName, x.className, x.attrs])));
-    assert.ok(tempTab.className.includes('on'), 'открыт тот показатель, что нажали');
-    const chart = walk(modal).find((e) => String(e.className || '').includes('vd-chart-wrap'));
-    assert.equal(chart.attrs['data-metric'], 'temp_c');
-    assert.ok(walk(chart).some((e) => e.tagName === 'RECT'), 'полоса нормы на графике');
-    assert.ok(walk(chart).filter((e) => e.tagName === 'CIRCLE').length >= 3, 'точки измерений на графике');
-    // Таблица: три строки (титульный лист + два измерения), новые сверху, с очками и автором.
+    // VITALS_ONE_WINDOW_V1 — без вкладок: пять карточек с графиком, нажатая — подсвечена.
+    assert.equal(walk(modal).filter((e) => String(e.className || '').split(/\s+/).includes('vd-tab')).length, 0, 'вкладок быть не должно');
+    const cards = walk(modal).filter((e) => String(e.className || '').split(/\s+/).includes('vd-card'));
+    assert.equal(cards.length, 5, 'пять карточек показателей');
+    assert.deepEqual(cards.map((c) => c.attrs['data-metric']), ['temp_c', 'bp', 'pulse_bpm', 'resp_rate', 'spo2']);
+    assert.ok(cards[0].className.includes('vd-focus'), 'нажатая плитка (температура) подсвечена');
+    for (const c of cards) {
+        assert.ok(walk(c).some((e) => e.tagName === 'RECT'), 'полоса нормы на графике ' + c.attrs['data-metric']);
+        assert.ok(walk(c).filter((e) => e.tagName === 'CIRCLE').length >= 1, 'точки измерений ' + c.attrs['data-metric']);
+    }
+    assert.ok(textOf(cards[0]).includes('38,1 °C') && textOf(cards[4]).includes('94 %'), 'в шапке карточки — последнее значение');
+    // Одна таблица со всеми колонками: три строки, новые сверху.
+    const ths = walk(modal).filter((e) => e.tagName === 'TH').map(textOf);
+    for (const col of ['Время', 'Температура', 'АД', 'Пульс', 'ЧДД', 'SpO₂', 'NEWS', 'Кто измерил']) assert.ok(ths.some((x) => x.includes(col)), 'нет колонки ' + col);
     const rowsEl = walk(modal).filter((e) => e.tagName === 'TR').slice(1);
     assert.equal(rowsEl.length, 3, 'строк таблицы: ' + rowsEl.length);
-    assert.ok(textOf(rowsEl[0]).includes('38,1 °C') && textOf(rowsEl[0]).includes('+1') && textOf(rowsEl[0]).includes('Медсестра Петрова'), textOf(rowsEl[0]));
+    const first = textOf(rowsEl[0]);
+    for (const piece of ['38,1 °C', '138/88', '104 уд', '21 /мин', '94 %', 'Медсестра Петрова']) assert.ok(first.includes(piece), 'в первой строке нет: ' + piece + ' — ' + first);
     assert.ok(textOf(rowsEl[2]).includes('при поступлении'), 'точка титульного листа подписана');
-    // Переключение на пульс перерисовывает график и таблицу.
-    tabs.find((x) => x.attrs['data-metric'] === 'pulse_bpm').click();
-    await settle();
-    const chart2 = walk(modal).find((e) => String(e.className || '').includes('vd-chart-wrap'));
-    assert.equal(chart2.attrs['data-metric'], 'pulse_bpm');
-    assert.ok(textOf(modal).includes('104 уд'));
 });
 
 

@@ -714,39 +714,56 @@ export async function openVitalsDynamics({ admission, metric = 'temp_c', series 
     if (!admission || !admission.id) { toast(tr('Госпитализация не выбрана.'), 'fail'); return null; }
     const p = admission.patients || {};
     let rows = series.slice();
-    // Полная история — с сервера; пока едет, рисуем то, что уже есть в обзоре.
+    // VITALS_ONE_WINDOW_V1 — владелец: «make this in one window without tabs»:
+    // все пять показателей — карточками с графиком в одном окне, под ними одна
+    // таблица со всеми колонками. Нажатая плитка лишь подсвечивает свою карточку.
+    const focus = VT_TILES.some((t) => t.key === metric) ? metric : null;
     const body = h('div', { class: 'vd' });
-    let current = VT_TILES.some((t) => t.key === metric) ? metric : 'temp_c';
+    const valOf = (t, r) => (t.key === 'bp'
+        ? (isNumV(r.bp_sys) && isNumV(r.bp_dia) ? r.bp_sys + '/' + r.bp_dia : '')
+        : (isNumV(r[t.key]) ? t.fmt(r[t.key], r) : ''));
+    const ptsOf = (t, r) => { const n = r.news || news2Score(r); return t.points ? t.points(n) : (n.parts || {})[t.key]; };
     const paintBody = () => {
         clear(body);
-        const t = VT_TILES.find((x) => x.key === current);
-        body.appendChild(h('div', { class: 'vd-tabs', role: 'tablist' }, ...VT_TILES.map((x) => h('button', {
-            class: 'vd-tab' + (x.key === current ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': x.key === current ? 'true' : 'false',
-            'data-metric': x.key, onclick: () => { current = x.key; paintBody(); },
-        }, ic(x.icon, 13), ' ', tr(x.label)))));
-        body.appendChild(h('div', { class: 'vd-chart-wrap', 'data-metric': current }, bigChart(rows, t)));
-        body.appendChild(h('div', { class: 'vd-norm-l' }, tr('норма') + ' ' + t.norm + ' · ' + tr('полоса на графике')));
-        const getVal = t.key === 'bp' ? (r) => (isNumV(r.bp_sys) && isNumV(r.bp_dia) ? r.bp_sys + '/' + r.bp_dia : '') : (r) => (isNumV(r[t.key]) ? t.fmt(r[t.key], r) : '');
-        const ptsOf = (r) => { const n = r.news || news2Score(r); return t.points ? t.points(n) : (n.parts || {})[t.key]; };
+        const last = rows.length ? rows[rows.length - 1] : null;
+        body.appendChild(h('div', { class: 'vd-grid' }, ...VT_TILES.map((t) => h('section', {
+            class: 'vd-card' + (t.key === focus ? ' vd-focus' : ''), 'data-metric': t.key, 'aria-label': tr(t.label),
+        },
+            h('div', { class: 'vd-card-h' },
+                h('span', { class: 'vd-card-ic' }, ic(t.icon, 13)),
+                h('span', { class: 'vd-card-t' }, tr(t.label)),
+                h('span', { class: 'grow' }),
+                h('span', { class: 'vd-card-v' }, last ? (valOf(t, last) || '—') : '—')),
+            h('div', { class: 'vd-chart-wrap', 'data-metric': t.key }, bigChart(rows, t, { w: 420, hgt: 150 })),
+            h('div', { class: 'vd-norm-l' }, tr('норма') + ' ' + t.norm)))));
         const listed = rows.slice().reverse();
-        body.appendChild(h('table', { class: 'tbl vd-tbl' },
+        body.appendChild(h('div', { class: 'vd-tbl-wrap' }, h('table', { class: 'tbl vd-tbl' },
             h('thead', null, h('tr', null,
-                h('th', null, tr('Время')), h('th', null, tr(t.label)), h('th', null, tr('Очки')), h('th', null, tr('Кто измерил')), h('th', null, tr('Примечание')))),
+                h('th', null, tr('Время')),
+                ...VT_TILES.map((t) => h('th', null, tr(t.label))),
+                h('th', null, 'NEWS'),
+                h('th', null, tr('Кто измерил')),
+                h('th', null, tr('Примечание')))),
             h('tbody', null, ...listed.map((r) => {
-                const pts = ptsOf(r);
+                const n = r.news || news2Score(r);
                 return h('tr', null,
                     h('td', { class: 'ar-nowrap' }, r.measured_at ? fmtDateTime(r.measured_at) : '—'),
-                    h('td', { class: 'num' }, getVal(r) || '—'),
-                    h('td', null, isNumV(getVal(r)) || getVal(r) ? h('span', { class: 'vt-pts vt-' + pointsTone(pts) }, pts > 0 ? '+' + pts : '0') : '—'),
+                    ...VT_TILES.map((t) => {
+                        const v = valOf(t, r); const pts = ptsOf(t, r);
+                        return h('td', { class: 'num' }, v
+                            ? [v, ' ', h('span', { class: 'vt-pts vt-' + pointsTone(pts) }, pts > 0 ? '+' + pts : '0')]
+                            : '—');
+                    }),
+                    h('td', null, n.measured ? h('span', { class: 'vt-pts vt-' + (n.band === 'high' ? 'crit' : n.band === 'medium' || n.band === 'low_medium' ? 'warn2' : n.band === 'low' ? 'warn' : 'ok') }, String(n.total)) : '—'),
                     h('td', null, r.source === 'title' ? tr('при поступлении (титульный лист)') : (r.measured_by_name || '—')),
                     h('td', null, r.note || ''));
-            }))));
+            })))));
     };
     paintBody();
     const m = inpatientModal(tr('Динамика показателей'), 'Activity', [
         patientAnchor(p.full_name || '', [p.mrn, admission.admission_no].filter(Boolean).join(' · ')),
         body,
-    ], tr('Закрыть'), async () => true, { width: 760 });
+    ], tr('Закрыть'), async () => true, { width: 920 });
     try {
         const { data } = await supabase.rpc('admission_vitals_list', { admission_id: admission.id });
         if (data && Array.isArray(data.rows)) {

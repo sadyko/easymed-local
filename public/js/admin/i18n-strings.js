@@ -6988,7 +6988,7 @@ export const STRINGS = {
   "выдана": {"en":"handed","ru":"выдана","uz":"berildi"},
   "не выдана": {"en":"not handed","ru":"не выдана","uz":"berilmagan"},
   "{done} из {total}": {"en":"{done} of {total}","ru":"{done} из {total}","uz":"{total} dan {done}"},
-  "{i} из {n}": {"en":"{i} of {n}","ru":"{i} из {n}","uz":"{n} dan {i}"},
+  "{i} из {n}": {"en":"{i} of {n}","ru":"{i} из {n}","uz":"{i} / {n}"},   // NEIGHBOUR_COUNT_V1 — владелец: «not 5 to 1 but 1 to five»
   "{n} на {sum}": {"en":"{n} for {sum}","ru":"{n} на {sum}","uz":"{n} ta, {sum}"},
   "{n}-й день": {"en":"day {n}","ru":"{n}-й день","uz":"{n}-kun"},
   "{sum} сум": {"en":"{sum} UZS","ru":"{sum} сум","uz":"{sum} so'm"},

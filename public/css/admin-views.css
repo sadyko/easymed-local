@@ -5632,3 +5632,22 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 @media (max-width:1100px){
   .modal-card:has(.vt-preview){width:min(96vw,900px)!important;max-width:96vw}
 }
+
+/* VITALS_ONE_WINDOW_V1 — пять карточек динамики в одном окне, одна таблица */
+.vd-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.vd-card{border:1px solid var(--ink-100);border-radius:var(--r-lg);padding:8px 10px;background:var(--white);min-width:0}
+.vd-card.vd-focus{box-shadow:0 0 0 2px var(--primary-300)}
+.vd-card-h{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:var(--ink-800);margin-bottom:4px}
+.vd-card-ic{display:inline-flex;color:var(--vt-line,var(--primary-600))}
+.vd-card[data-metric="temp_c"]{--vt-line:#c4607e}
+.vd-card[data-metric="bp"]{--vt-line:#4d5b8c}
+.vd-card[data-metric="pulse_bpm"]{--vt-line:#d0715c}
+.vd-card[data-metric="resp_rate"]{--vt-line:#2d958f}
+.vd-card[data-metric="spo2"]{--vt-line:#4f8cc4}
+.vd-card-v{font-size:13.5px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--ink-900)}
+.vd-card .vd-chart-wrap{border:0;padding:0}
+.vd-card .vd-norm-l{margin-top:2px}
+.vd-tbl-wrap{overflow-x:auto}
+.vd-tbl{min-width:760px}
+.vd-tbl td.num{white-space:nowrap}
+@media (max-width:720px){.vd-grid{grid-template-columns:1fr}}
