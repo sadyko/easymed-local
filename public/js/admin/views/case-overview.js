@@ -74,6 +74,11 @@ export function caseHead(ov, { active = 'overview', onNavigate = null, onReload 
     };
     const toDocs = (kind) => nav('case-file', kind ? { admissionId: a.id, kind } : { admissionId: a.id });
     const toOverview = () => nav('case-overview', { admissionId: a.id });
+    // CASE_HEAD_TRIM_V1 — пациент ведёт на другой экран пары: с обзора — в
+    // документы, из документов — обратно в обзор. Вкладок в шапке больше нет
+    // (владелец: «remove this 2 buttons»), это единственная дверь между ними.
+    const toOther = () => (active === 'documents' ? toOverview() : toDocs(null));
+    const otherTitle = active === 'documents' ? tr('Открыть обзор госпитализации') : tr('Открыть историю болезни');
     const inBed = IN_BED_STATUSES.includes(a.status);
     const age = ageOf(p.date_of_birth, ov.now);
     const who = [genderWord(p.gender), age !== null ? trf('{n} лет', { n: age }) : null, p.mrn].filter(Boolean).join(' · ');
@@ -84,11 +89,11 @@ export function caseHead(ov, { active = 'overview', onNavigate = null, onReload 
 
     // Пациент — ЯКОРЬ и дверь в документы: «when patient pressed it should open a cabinet like documents section».
     const avatar = h('button', {
-        class: 'co-av', type: 'button', title: tr('Открыть историю болезни'),
-        'aria-label': trf('Открыть историю болезни: {name}', { name: p.full_name || '' }),   // инициалы читалке ничего не говорят
-        style: { background: avColor(p.full_name || '?') }, onclick: () => toDocs(null),
+        class: 'co-av', type: 'button', title: otherTitle,
+        'aria-label': otherTitle + ': ' + (p.full_name || ''),   // инициалы читалке ничего не говорят
+        style: { background: avColor(p.full_name || '?') }, onclick: toOther,
     }, initials(p.full_name || '?'));
-    const nameBtn = h('button', { class: 'co-name', type: 'button', onclick: () => toDocs(null) }, p.full_name || '—');
+    const nameBtn = h('button', { class: 'co-name', type: 'button', title: otherTitle, onclick: toOther }, p.full_name || '—');
 
     // Стрелки по соседям — «navigation between the patients for the doctors».
     const prev = n.prev; const next = n.next;
@@ -119,17 +124,6 @@ export function caseHead(ov, { active = 'overview', onNavigate = null, onReload 
                 onclick: () => openAdmissionAttendingModal({ admission: admissionForModals(ov), onDone: async () => { if (onReload) await onReload(); } }),
             }, tr('Назначить')));
 
-    // Главное действие — «main action → opens the documents to fill for the doctor».
-    const nextKind = ov.docs && ov.docs.next_kind;
-    const mainLabel = nextKind ? trf('Заполнить: {doc}', { doc: caseDocTitle(nextKind) }) : tr('Заполнить историю болезни');
-    const primary = h('button', { class: 'btn btn-primary btn-sm co-main', type: 'button', onclick: () => toDocs(nextKind || null) },
-        ic('Edit'), ' ', mainLabel);
-
-    const tab = (id, label, icon, onclick) => h('button', {
-        class: 'reg-tab' + (active === id ? ' on' : ''), type: 'button', role: 'tab',
-        'aria-selected': active === id ? 'true' : 'false', onclick,
-    }, ic(icon), ' ', tr(label));
-
     return h('div', { class: 'co-head card' },
         h('div', { class: 'co-head-row' },
             avatar,
@@ -144,13 +138,9 @@ export function caseHead(ov, { active = 'overview', onNavigate = null, onReload 
             hf('Отделение · койка', place),
             attending,
             hf('Плановая выписка', a.planned_discharge_at ? dt(a.planned_discharge_at) : (a.discharged_at ? tr('выписан') + ' ' + dt(a.discharged_at) : '—'))),
-        h('div', { class: 'co-bar' },
-            h('div', { class: 'reg-tabs co-tabs', role: 'tablist', 'aria-label': tr('История болезни') },
-                tab('overview', 'Обзор', 'Activity', toOverview),
-                tab('documents', 'Документы', 'Doc', () => toDocs(null))),
-            h('div', { class: 'co-actions' }, primary,
-                h('button', { class: 'btn btn-sm', type: 'button', onclick: () => goToMarSheet(a.id, onNavigate) }, ic('Pill', 13), ' ', tr('Лист назначений')),
-                ...actions.filter(Boolean))));
+        actions.filter(Boolean).length
+            ? h('div', { class: 'co-bar' }, h('span', { class: 'grow' }), h('div', { class: 'co-actions' }, ...actions.filter(Boolean)))
+            : h('div', { class: 'co-bar co-bar-empty' }));
 }
 
 // ---------------------------------------------------------------------------

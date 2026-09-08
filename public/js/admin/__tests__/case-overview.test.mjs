@@ -124,19 +124,27 @@ test('шапка: пациент, день, койка, лечащий врач,
 
     walk(root).find((e) => e.className === 'co-av').click();
     assert.deepEqual(navs.pop(), { view: 'case-file', payload: { admissionId: 11 } }, 'пациент ведёт в документы');
-    findBtn(root, 'Документы').click();
-    assert.deepEqual(navs.pop(), { view: 'case-file', payload: { admissionId: 11 } }, 'вкладка «Документы» ведёт в документы');
+    // CASE_HEAD_TRIM_V1 — вкладок «Обзор / Документы» и главного действия в шапке нет.
+    assert.equal(walk(root).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('reg-tab')).length, 0, 'вкладки в шапке убраны');
+    assert.equal(walk(root).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('co-main')).length, 0, 'главное действие в шапке убрано');
 });
 
-test('главное действие открывает документы НА СЛЕДУЮЩЕМ ШАГЕ; «Лист назначений» — на лист', async () => {
+test('шапка документов: пациент ведёт обратно в обзор', async () => {
+    const { caseHead } = await import('../views/case-overview.js');
+    const navs = [];
+    const head = caseHead(OV, { active: 'documents', onNavigate: (view, payload) => navs.push({ view, payload }) });
+    walk(head).find((e) => e.className === 'co-name').click();
+    assert.deepEqual(navs.pop(), { view: 'case-overview', payload: { admissionId: 11 } });
+});
+
+test('«Следующий шаг» открывает документы НА СЛЕДУЮЩЕМ ШАГЕ; «Открыть лист назначений» — на лист', async () => {
     const navs = [];
     const root = await render((view, payload) => navs.push({ view, payload }));
-    const main = walk(root).find((e) => e.tagName === 'BUTTON' && e.className.includes('co-main'));
-    assert.ok(main, 'главного действия нет');
-    assert.ok(textOf(main).includes('Обоснование клинического диагноза'), 'кнопка должна называть следующий документ');
-    main.click();
+    const next = findBtn(root, 'Заполнить документ');
+    assert.ok(next, 'кнопки «Заполнить документ» нет');
+    next.click();
     assert.deepEqual(navs.pop(), { view: 'case-file', payload: { admissionId: 11, kind: 'rationale' } });
-    findBtn(root, 'Лист назначений').click();
+    findBtn(root, 'Открыть лист назначений').click();
     assert.equal(navs.pop().view, 'mar-sheet');
 });
 
