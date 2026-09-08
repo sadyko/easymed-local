@@ -7278,4 +7278,10 @@ export const STRINGS = {
   "Правится так же, как у постели пациента": {"en":"Edited the same way as at the bedside","ru":"Правится так же, как у постели пациента","uz":"Bemor yonidagidek tahrirlanadi"},
   "Осталось оформить: {n}": {"en":"Still to complete: {n}","ru":"Осталось оформить: {n}","uz":"Rasmiylashtirish qoldi: {n}"},
   "Печатаются на своих бланках. Отметка значит, что пациент подписал (памятку — получил); размещение она не задерживает.": {"en":"Each prints on its own blank. The tick means the patient signed it (or received the memo); it never holds up placement.","ru":"Печатаются на своих бланках. Отметка значит, что пациент подписал (памятку — получил); размещение она не задерживает.","uz":"Har biri oʻz blankasida chop etiladi. Belgi bemor imzolaganini (eslatmani olganini) bildiradi; joylashtirishni ushlab turmaydi."},
+  "Предыдущая страница": {"en":"Previous page","ru":"Предыдущая страница","uz":"Oldingi sahifa"},
+  "Следующая страница": {"en":"Next page","ru":"Следующая страница","uz":"Keyingi sahifa"},
+  "Выберите строку — диагноз добавится с выбранной ролью.": {"en":"Pick a row and the diagnosis is added with the selected role.","ru":"Выберите строку — диагноз добавится с выбранной ролью.","uz":"Qatorni tanlang — tashxis tanlangan rol bilan qoʻshiladi."},
+  "Справочник не загрузился — можно записать диагноз своими словами.": {"en":"The catalogue did not load — you can write the diagnosis in your own words.","ru":"Справочник не загрузился — можно записать диагноз своими словами.","uz":"Maʼlumotnoma yuklanmadi — tashxisni oʻz soʻzlaringiz bilan yozishingiz mumkin."},
+  "Педикулёз": {"en":"Pediculosis","ru":"Педикулёз","uz":"Pedikulyoz"},
+  "Санобработка": {"en":"Sanitation","ru":"Санобработка","uz":"Sanitar ishlov"},
 };

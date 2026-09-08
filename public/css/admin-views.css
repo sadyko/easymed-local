@@ -5856,22 +5856,34 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .dx-acts { display: flex; gap: 6px; flex-wrap: wrap; }
 .dx-acts .btn { flex: 1 1 auto; justify-content: center; }
 .dx-own { color: var(--ink-700); }
-/* Окно выбора по МКБ-10 */
-.dxp { display: flex; flex-direction: column; gap: 8px; }
-.dxp-types { display: flex; gap: 4px; flex-wrap: wrap; }
-.dxp-type { padding: 5px 12px; border-radius: var(--r-pill); border: 1px solid var(--ink-200);
-    background: var(--white); font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-700); cursor: pointer; }
-.dxp-type.on { background: var(--primary-600); border-color: var(--primary-600); color: #fff; }
+/* Окно выбора по МКБ-10.
+   ICD_PICKER_PAGES_V1 — список открыт сразу, листается страницами и НЕ
+   прокручивается: на планшете прокрутка внутри окна уводит палец мимо строки.
+   Строка и кнопки листания — не меньше 44 px, это размер пальца. */
+.dxp { display: flex; flex-direction: column; gap: 10px; }
+.dxp-types { display: flex; gap: 6px; flex-wrap: wrap; }
+.dxp-type { min-height: 40px; padding: 8px 16px; border-radius: var(--r-pill); border: 1px solid var(--ink-200);
+    background: var(--white); font: inherit; font-size: 13.5px; font-weight: 600; color: var(--ink-700); cursor: pointer; }
+.dxp-type.on { background: var(--primary-600); border-color: var(--primary-600); color: var(--white); }
 .dxp-type:focus-visible { outline: 2px solid var(--primary-500); outline-offset: 2px; }
-.dxp-search { width: 100%; min-height: 40px; }
-.dxp-note { font-size: 12.5px; color: var(--ink-500); }
-.dxp-list { max-height: 46vh; overflow-y: auto; display: flex; flex-direction: column; }
-.dxp-row { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 7px 8px;
+.dxp-search { width: 100%; min-height: 44px; font-size: 15px; }
+.dxp-note { flex: 1; min-width: 0; font-size: 12.5px; color: var(--ink-500); line-height: 1.4; }
+.dxp-list { display: flex; flex-direction: column; overflow: hidden;
+    border: 1px solid var(--ink-100); border-radius: var(--r-md); }
+.dxp-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 12px;
     border: 0; border-bottom: 1px solid var(--ink-50); background: none; font: inherit;
     text-align: left; cursor: pointer; }
+.dxp-row:last-child { border-bottom: 0; }
 .dxp-row:hover { background: var(--primary-50); }
-.dxp-code { flex: 0 0 auto; font-size: 12.5px; font-weight: 700; color: var(--primary-700); font-variant-numeric: tabular-nums; }
-.dxp-name { flex: 1; min-width: 0; font-size: 12.5px; color: var(--ink-800); }
+.dxp-row:focus-visible { outline: 2px solid var(--primary-500); outline-offset: -2px; }
+/* Пустые места держат высоту окна между страницами — иначе оно прыгает. */
+.dxp-row-empty { cursor: default; pointer-events: none; }
+.dxp-code { flex: 0 0 auto; min-width: 62px; font-size: 13.5px; font-weight: 700; color: var(--primary-700); font-variant-numeric: tabular-nums; }
+.dxp-name { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink-800); }
+.dxp-foot { display: flex; align-items: center; gap: 12px; }
+.dxp-pager { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
+.dxp-page-btn { min-width: 44px; min-height: 44px; padding: 0; justify-content: center; }
+.dxp-page-n { font-size: 13.5px; font-weight: 600; color: var(--ink-700); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* ── CASE_DOC_A4_V1 — раздел листа выглядит документом, а не полем формы ──── */
 .cd-sec { background: transparent; border: 0; padding: 0 0 4px; margin: 0; }

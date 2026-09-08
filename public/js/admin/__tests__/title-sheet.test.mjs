@@ -411,19 +411,34 @@ test('FORM_003_ONE_PAGE_V1: содержимое бланка укладывае
         + ' px при бюджете ' + budget + ' px (строк ' + rows + ', подсказок ' + hints + ')');
 });
 
-// Печать — то место, где владелец и увидел вторую страницу: он прислал
-// предпросмотр, где бланк занял два листа. Смета та же по смыслу, что и
-// экранная, но числа берутся из ПЕЧАТНОГО CSS и из готовой разметки: сколько
-// строк бланк напечатал на самом деле, столько и считаем.
-test('FORM_003_ONE_PAGE_V1: печатный бланк тоже укладывается в одну страницу A4', async () => {
+// Печать — то место, где владелец увидел сперва вторую страницу, а потом и
+// то, что лист «looks terribly wrong». Оба раза причина была в вёрстке, и
+// оба раза её нельзя увидеть без браузера — поэтому здесь проверяются
+// СТРУКТУРНЫЕ свойства бланка и смета его высоты по числам из того же CSS.
+test('FORM_003_FORM_GRID_V1: печатный бланк — сетка из четырёх колонок и укладывается в одну страницу A4', async () => {
     const { titleSheetPrintSection, titleSheetPrintCss } = await import('../views/title-sheet-print.js');
     const css = titleSheetPrintCss();
     const html = titleSheetPrintSection(VIEW);
 
-    const px = (mm) => mm * 3.7795;
-    // Страница A4 минус поля @page (14 мм с каждой стороны).
-    const budget = px(297 - 28);
+    // ── Форма, а не абзац ────────────────────────────────────────────────
+    // Одна и та же сетка на каждой строке — из-за этого подписи стоят на
+    // одной вертикали, а линии кончаются на другой.
+    assert.ok(/\.f3p-row \{[^}]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/.test(css),
+        'строка бланка перестала быть сеткой из четырёх колонок');
+    // Линия занимает ВСЁ, что осталось от ячейки: именно её зависимость от
+    // длины значения и делала лист рваным.
+    assert.ok(/\.f3p-v \{[^}]*flex: 1 1 auto/.test(css), 'линия значения снова меряется содержимым');
+    assert.ok(!/\.f3p-v[^{]*\{[^}]*min-width: \d+%/.test(css), 'линия значения снова задана процентом ширины');
 
+    const rows = (html.match(/class="f3p-row"/g) || []).length;
+    assert.ok(rows > 15, 'строк на печатном бланке подозрительно мало: ' + rows);
+    // Пара «подпись + значение» не разрывается: она внутри одной ячейки.
+    assert.ok(html.includes('<div class="f3p-c f3p-c3"><span class="f3p-lab">'),
+        'подпись и значение снова разъехались по разным ячейкам');
+
+    // ── Смета высоты ────────────────────────────────────────────────────
+    const px = (mm) => mm * 3.7795;
+    const budget = px(297 - 28);   // A4 минус поля @page по 14 мм
     const numOf = (re, what) => {
         const m = css.match(re);
         assert.ok(m, 'в печатном CSS бланка больше нет: ' + what);
@@ -431,30 +446,15 @@ test('FORM_003_ONE_PAGE_V1: печатный бланк тоже укладыв�
     };
     const fontSize = numOf(/\.f3p \{ font-size: ([\d.]+)px/, 'кегля');
     const lineH = numOf(/\.f3p \{[^}]*line-height: ([\d.]+)/, 'интерлиньяжа');
-    const lineMargin = numOf(/\.f3p-line \{ margin: ([\d.]+)px 0/, 'полей строки');
+    const rowGap = numOf(/\.f3p-grid \{[^}]*gap: ([\d.]+)px/, 'зазора между строками');
 
-    const count = (cls) => (html.match(new RegExp('class="' + cls, 'g')) || []).length;
-    const lines = count('f3p-line');
-    const hints = count('f3p-hint');
-    const blocks = count('f3p-block-t');
-    assert.ok(lines > 15, 'строк на печатном бланке подозрительно мало: ' + lines);
-
-    // Шапка, заголовок, подзаголовок и рамка блока — их высоты заданы своими
-    // правилами, поэтому берутся отдельными слагаемыми.
+    // Шапка, заголовок, подзаголовок и рамка нижнего блока — свои кегли,
+    // поэтому отдельными слагаемыми; замерены однажды и записаны здесь.
     const HEAD = 46;
-    const TITLE = 28;
-    const SUB = 20;
-    const BLOCK_FRAME = 14;
-    const est = HEAD + TITLE + SUB + BLOCK_FRAME
-        + lines * (fontSize * lineH + lineMargin * 2)
-        + hints * 13
-        + blocks * 21;
-
+    const TITLE = 30;
+    const SUB = 22;
+    const BLOCK = 70;
+    const est = HEAD + TITLE + SUB + BLOCK + rows * (fontSize * lineH + rowGap);
     assert.ok(est <= budget, 'печатный бланк не умещается на страницу: смета ' + Math.round(est)
-        + ' px при бюджете ' + Math.round(budget) + ' px (строк ' + lines + ')');
-
-    // Широкое значение не должно занимать строку под собой — из-за этого
-    // каждая вторая строка бланка переносилась.
-    const wide = numOf(/\.f3p-v\.wide \{ min-width: ([\d.]+)%/, 'ширины широкого значения');
-    assert.ok(wide <= 45, 'широкое значение снова занимает почти всю строку: ' + wide + '%');
+        + ' px при бюджете ' + Math.round(budget) + ' px (строк ' + rows + ')');
 });

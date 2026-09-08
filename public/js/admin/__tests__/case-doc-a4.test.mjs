@@ -96,8 +96,25 @@ globalThis.fetch = async (url, opts = {}) => {
         if (name === 'admission_doc_sources') return ok(SOURCES);
         return ok(null);
     }
+    // ICD_PICKER_PAGES_V1 — справочник МКБ-10 приезжает через /api/db: окно
+    // выбора листает его страницами, и тест обязан видеть ТЕ ЖЕ запросы.
+    if (u === '/api/db') {
+        dbCalls.push(body);
+        if (body && body.table === 'icd10') {
+            const offset = Number(body.offset) || 0;
+            const limit = Number(body.limit) || 9;
+            const rows = [];
+            for (let i = offset; i < offset + limit && i < ICD_TOTAL; i += 1) {
+                rows.push({ code: 'A' + String(i).padStart(2, '0'), name: 'Болезнь номер ' + i });
+            }
+            return ok(rows);
+        }
+        return ok([]);
+    }
     return ok(null);
 };
+const ICD_TOTAL = 20;
+let dbCalls = [];
 
 const a4 = await import('../views/case-doc-a4.js');
 const { caseInsertPanel } = await import('../views/case-doc-insert.js');
@@ -283,4 +300,79 @@ test('CASE_DOC_BLANK_V1: бланк подставляется в НОВЫЙ д�
     assert.ok(docs.includes('richToolbar(sheet)'), 'у бланка нет той же панели форматирования');
     assert.ok(docs.includes('withCaseDocBlank(state.s, kind, key, readRich(made.input))'),
         'правка бланка не попадает в настройки клиники');
+});
+
+// ===========================================================================
+// ICD_PICKER_PAGES_V1 — справочник открыт сразу и листается страницами.
+//
+// Владелец (2026-09-08): «in the list show actual list with paginations without
+// scroll adapted to the tablet». Окно открывалось пустым и просило ввести две
+// буквы — врач видел пустоту там, где лежит весь справочник.
+test('ICD_PICKER_PAGES_V1: окно открывается со списком, листается страницами и не прокручивается', async () => {
+    dbCalls = [];
+    const picked = [];
+    dx.openIcdPicker({ onPick: (d) => picked.push(d) });
+    await settle();
+
+    const modal = BODY.children.filter((c) => String(c.className || '').includes('modal')).pop();
+    assert.ok(modal, 'окно выбора не открылось');
+    const rowsOf = () => walk(modal).filter((e) => String(e.className || '').split(/\s+/).includes('dxp-row'));
+    const real = () => rowsOf().filter((e) => !String(e.className).includes('dxp-row-empty'));
+
+    // Список ЕСТЬ сразу, без единого нажатия и без ввода.
+    assert.equal(real().length, 8, 'первая страница показывает не восемь строк: ' + real().length);
+    assert.ok(textOf(modal).includes('A00'), 'первая строка справочника не показана');
+    assert.ok(textOf(modal).includes('Страница 1'), 'номер страницы не показан');
+    // Запрошено на строку больше, чем показано: так узнают, есть ли следующая.
+    const first = dbCalls.filter((c) => c.table === 'icd10').pop();
+    assert.equal(first.offset, 0);
+    assert.equal(first.limit, 9, 'страница читается без запроса «сколько всего»');
+
+    // Листание вперёд и назад.
+    const pageBtns = walk(modal).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('dxp-page-btn'));
+    assert.equal(pageBtns.length, 2, 'кнопок листания должно быть две');
+    assert.equal(pageBtns[0].disabled, true, 'на первой странице «назад» неактивна');
+    pageBtns[1].click();
+    await settle();
+    assert.ok(textOf(modal).includes('Страница 2'), 'вперёд не листается');
+    assert.ok(textOf(modal).includes('A08'), 'вторая страница показывает не те строки');
+    assert.equal(dbCalls.filter((c) => c.table === 'icd10').pop().offset, 8, 'смещение второй страницы неверное');
+
+    // Последняя страница: строк меньше восьми, «вперёд» гаснет, а высота окна
+    // держится пустыми местами — на планшете прыгающее окно уводит палец.
+    pageBtns[1].click();
+    await settle();
+    assert.ok(textOf(modal).includes('Страница 3'));
+    assert.equal(real().length, 4, 'на последней странице должно остаться четыре строки');
+    assert.equal(rowsOf().length, 8, 'высота списка не держится: ' + rowsOf().length);
+    const nextNow = walk(modal).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('dxp-page-btn'))[1];
+    assert.equal(nextNow.disabled, true, '«вперёд» не погасла на последней странице');
+
+    // Выбор строки отдаёт код и название с выбранной ролью.
+    real()[0].click();
+    assert.equal(picked.length, 1);
+    assert.ok(picked[0].text.startsWith('A16'), 'выбрана не та строка: ' + picked[0].text);
+    assert.equal(picked[0].type, 'main', 'по умолчанию диагноз основной');
+});
+
+test('ICD_PICKER_PAGES_V1: поиск СУЖАЕТ список и возвращает его на первую страницу', async () => {
+    dbCalls = [];
+    dx.openIcdPicker({ onPick: () => {} });
+    await settle();
+    const modal = BODY.children.filter((c) => String(c.className || '').includes('modal')).pop();
+    const pageBtns = walk(modal).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('dxp-page-btn'));
+    pageBtns[1].click();
+    await settle();
+    assert.ok(textOf(modal).includes('Страница 2'));
+
+    const search = walk(modal).find((e) => e.tagName === 'INPUT' && String(e.className).includes('dxp-search'));
+    assert.ok(search, 'поля поиска нет');
+    search.value = 'пневмония';
+    search.dispatchEvent({ type: 'input' });
+    await settle();
+    assert.ok(textOf(modal).includes('Страница 1'), 'поиск не вернул список на первую страницу');
+    const last = dbCalls.filter((c) => c.table === 'icd10').pop();
+    assert.equal(last.offset, 0, 'поиск читается не с начала');
+    const ors = JSON.stringify(last.filters || []);
+    assert.ok(ors.includes('пневмония'), 'запрос ушёл без искомого слова: ' + ors);
 });

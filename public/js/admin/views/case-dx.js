@@ -63,11 +63,35 @@ export function formatDx(list) {
 // ---------------------------------------------------------------------------
 const ICD_KINDS = ['category', 'sub'];
 
+// ICD_PICKER_PAGES_V1 (2026-09-08) — СПРАВОЧНИК ПОКАЗЫВАЕТСЯ, А НЕ УГАДЫВАЕТСЯ.
+//
+// Владелец: «in the list show actual list with paginations without scroll
+// adapted to the tablet».
+//
+// Окно открывалось пустым и просило ввести две буквы. Это разумно для того, кто
+// код помнит, и бесполезно для того, кто его ищет: врач видел пустоту там, где
+// лежат тридцать тысяч строк справочника. Теперь список открыт сразу с первой
+// страницы, поиск его СУЖАЕТ, а не наполняет.
+//
+// СТРАНИЦЫ, А НЕ ПРОКРУТКА. На планшете список внутри окна прокручивается
+// пальцем вместе с самим окном, и попасть в нужную строку тем труднее, чем
+// длиннее список. Восемь строк на страницу помещаются целиком, а «дальше» —
+// кнопка размером с палец.
+//
+// Сколько всего страниц, не спрашиваем: это второй запрос по тридцати тысячам
+// строк на каждое нажатие. Берём на одну строку больше, чем показываем, — и
+// этого ровно достаточно, чтобы знать, есть ли следующая.
+const ICD_PAGE = 8;
+
 export function openIcdPicker({ onPick } = {}) {
     let type = 'main';
+    let page = 0;
+    let hasNext = false;
+    let token = 0;
+
     const search = h('input', { type: 'text', class: 'dxp-search', placeholder: tr('Код или название по МКБ-10') });
     const results = h('div', { class: 'dxp-list' });
-    const note = h('div', { class: 'dxp-note' }, tr('Введите две буквы кода или часть названия.'));
+    const note = h('div', { class: 'dxp-note' });
 
     const typeRow = h('div', { class: 'dxp-types', role: 'group', 'aria-label': tr('Роль диагноза') },
         ...DX_TYPES.map((t) => {
@@ -86,31 +110,45 @@ export function openIcdPicker({ onPick } = {}) {
             return b;
         }));
 
-    let token = 0;
-    const run = async () => {
+    const prevBtn = h('button', { class: 'btn btn-outline dxp-page-btn', type: 'button',
+        'aria-label': tr('Предыдущая страница'), onclick: () => { if (page > 0) { page -= 1; run(); } } },
+        Icon('ChevronLeft', { size: 15 }));
+    const nextBtn = h('button', { class: 'btn btn-outline dxp-page-btn', type: 'button',
+        'aria-label': tr('Следующая страница'), onclick: () => { if (hasNext) { page += 1; run(); } } },
+        Icon('ChevronRight', { size: 15 }));
+    const pageLabel = h('span', { class: 'dxp-page-n' });
+    const pager = h('div', { class: 'dxp-pager' }, prevBtn, pageLabel, nextBtn);
+
+    const paintPager = () => {
+        pageLabel.textContent = trf('Страница {n}', { n: page + 1 });
+        prevBtn.disabled = page === 0;
+        nextBtn.disabled = !hasNext;
+    };
+
+    async function run() {
         const q = String(search.value || '').trim();
-        clear(results);
-        if (q.length < 2) { note.textContent = tr('Введите две буквы кода или часть названия.'); return; }
         const my = ++token;
         note.textContent = tr('Ищем…');
         let rows = [];
+        let failed = false;
         try {
-            const base = () => supabase.from('icd10').select('code,name').in('kind', ICD_KINDS).eq('active', 1);
-            const [byCode, byName] = await Promise.all([
-                base().ilike('code', q.replace(/\s+/g, '') + '%').order('code').limit(20),
-                base().ilike('name', '%' + q + '%').order('code').limit(20),
-            ]);
-            const seen = new Set();
-            for (const r of [...((byCode && byCode.data) || []), ...((byName && byName.data) || [])]) {
-                if (!r || seen.has(r.code)) continue;
-                seen.add(r.code);
-                rows.push(r);
+            let qb = supabase.from('icd10').select('code,name').in('kind', ICD_KINDS).eq('active', 1);
+            if (q) {
+                // Код ищется с начала строки, название — по вхождению: «J18»
+                // должен находить J18.9, а «пневмония» — все пневмонии.
+                qb = qb.or('code.ilike.' + q.replace(/\s+/g, '') + '%,name.ilike.%' + q + '%');
             }
-        } catch (e) { rows = []; }
+            const from = page * ICD_PAGE;
+            const { data, error } = await qb.order('code').range(from, from + ICD_PAGE);
+            if (error) failed = true;
+            rows = (!error && Array.isArray(data)) ? data : [];
+        } catch (e) { failed = true; rows = []; }
         if (my !== token) return;
+
+        hasNext = rows.length > ICD_PAGE;
+        const shown = rows.slice(0, ICD_PAGE);
         clear(results);
-        note.textContent = rows.length ? trf('Найдено: {n}', { n: rows.length }) : tr('Ничего не найдено — можно записать диагноз своими словами.');
-        for (const r of rows.slice(0, 30)) {
+        for (const r of shown) {
             results.appendChild(h('button', {
                 class: 'dxp-row', type: 'button',
                 onclick: () => {
@@ -120,14 +158,28 @@ export function openIcdPicker({ onPick } = {}) {
             },
                 h('span', { class: 'dxp-code' }, r.code),
                 h('span', { class: 'dxp-name' }, r.name),
-                Icon('Plus', { size: 13 })));
+                Icon('Plus', { size: 15 })));
         }
-    };
-    search.addEventListener('input', run);
+        // Пустые места добиваются, чтобы окно не прыгало между страницами:
+        // прыгающее окно на планшете уводит палец мимо строки.
+        for (let i = shown.length; i < ICD_PAGE; i += 1) results.appendChild(h('div', { class: 'dxp-row dxp-row-empty' }));
+
+        note.textContent = failed
+            ? tr('Справочник не загрузился — можно записать диагноз своими словами.')
+            : (shown.length
+                ? tr('Выберите строку — диагноз добавится с выбранной ролью.')
+                : tr('Ничего не найдено — можно записать диагноз своими словами.'));
+        paintPager();
+    }
+
+    // Поиск начинает список заново: остаться на седьмой странице прежней
+    // выдачи значило бы показать пустоту и заставить листать назад.
+    search.addEventListener('input', () => { page = 0; run(); });
 
     const m = inpatientModal(tr('Диагноз по МКБ-10'), 'Stethoscope', [
-        h('div', { class: 'dxp' }, typeRow, search, note, results),
-    ], tr('Готово'), async () => true, { width: 640 });
+        h('div', { class: 'dxp' }, typeRow, search, results, h('div', { class: 'dxp-foot' }, note, pager)),
+    ], tr('Готово'), async () => true, { width: 720 });
+    run();
     setTimeout(() => search.focus && search.focus(), 0);
     return m;
 }
