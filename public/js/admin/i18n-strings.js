@@ -7324,4 +7324,7 @@ export const STRINGS = {
   "При выписке": {"en":"At discharge","ru":"При выписке","uz":"Chiqarishda"},
   "Изменить стол": {"en":"Change the diet","ru":"Изменить стол","uz":"Parhezni oʻzgartirish"},
   "Операция не планируется": {"en":"No surgery planned","ru":"Операция не планируется","uz":"Operatsiya rejalashtirilmagan"},
+  "от": {"en":"of","ru":"от","uz":"sana"},
+  "({n} лет)": {"en":"({n} y.o.)","ru":"({n} лет)","uz":"({n} yosh)"},
+  "№ приёма": {"en":"Visit no.","ru":"№ приёма","uz":"Qabul №"},
 };

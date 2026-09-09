@@ -1958,6 +1958,50 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
   background:var(--white); border:1px solid var(--ink-200); border-radius:2px;
   box-shadow:0 1px 2px rgba(11,20,24,.05), 0 10px 28px rgba(11,20,24,.10); }
 
+/* A4_LETTERHEAD_V2 — одна шапка на кабинет врача, историю болезни и бланк
+   «Документов». Два яруса: знак клиники │ название с датой │ номера справа;
+   под ними полоса реквизитов в ЧЕТЫРЕ РАВНЫЕ колонки.
+   Равные колонки — не про красоту: ячейки по содержимому разъезжались на
+   вторую строку от одной длинной фамилии (владелец: «i don't want any fields
+   to go into a next paragraph»). */
+.a4-lh{ margin-bottom:16px; }
+.a4-lh-top{ display:flex; align-items:center; gap:16px; }
+.a4-lh-brand{ display:flex; align-items:center; gap:10px; flex:0 1 auto; min-width:0; max-width:30%; }
+/* Логотип НЕ квадрат: высота своя, ширина по рисунку. Квадрат сплющил бы
+   широкий словесный знак и обрезал высокий герб. */
+.a4-lh-logo{ height:30px; width:auto; max-width:132px; object-fit:contain; object-position:left center; flex:0 0 auto; }
+.a4-lh-name{ font-size:17px; font-weight:800; letter-spacing:-0.01em; color:var(--ink-900);
+  min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+/* Линейка ровняет строку вместо самого знака: у клиники без логотипа название
+   документа начинается на той же вертикали. */
+.a4-lh-rule{ flex:0 0 2px; align-self:stretch; min-height:38px; background:var(--ink-300); border-radius:var(--r-pill); }
+.a4-lh-doc{ flex:1; min-width:0; }
+.a4-lh-title{ font-size:17px; font-weight:800; color:var(--ink-900); letter-spacing:-0.01em; text-wrap:balance; }
+.a4-lh-date{ font-size:12.5px; color:var(--ink-500); margin-top:2px; }
+/* Номера — своей колонкой справа: название бывает в две строки, и в его строке
+   номера уезжали бы вместе с ним. */
+.a4-lh-ids{ flex:0 0 auto; display:grid; gap:2px; justify-items:end; text-align:right; }
+.a4-lh-id{ display:flex; align-items:baseline; gap:8px; }
+.a4-lh-id-l{ font-size:12.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-500); }
+.a4-lh-id-v{ font-size:13.5px; font-weight:700; font-variant-numeric:tabular-nums; white-space:nowrap; color:var(--ink-900); }
+.a4-lh-fields{ display:grid; grid-template-columns:repeat(4, minmax(0, 1fr));
+  margin-top:13px; padding:8px 12px; background:var(--ink-25);
+  border:1px solid var(--ink-100); border-radius:var(--r-md); }
+.a4-lh-f{ min-width:0; padding-right:14px; margin-right:14px; border-right:1px solid var(--ink-100); }
+.a4-lh-f:last-child{ border-right:0; margin-right:0; padding-right:0; }
+.a4-lh-f-l{ font-size:12.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-500); }
+/* Значение шире колонки обрезается многоточием — целиком оно в подсказке. */
+.a4-lh-f-v{ font-size:13.5px; font-weight:700; color:var(--ink-900);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.a4-lh-f-x{ font-weight:500; color:var(--ink-400); }
+.a4-lh-f-uz{ font-size:12.5px; color:var(--primary-700); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+@media (max-width:860px){
+  .a4-lh-top{ flex-wrap:wrap; }
+  .a4-lh-rule{ display:none; }
+  .a4-lh-ids{ justify-items:start; text-align:left; }
+  .a4-lh-fields{ grid-template-columns:repeat(2, minmax(0, 1fr)); row-gap:6px; }
+}
+
 .a4-head{ display:flex; align-items:flex-start; justify-content:space-between;
   gap:20px; padding-bottom:18px; margin-bottom:18px;
   border-bottom:1px solid var(--ink-400); }

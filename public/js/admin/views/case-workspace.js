@@ -30,7 +30,9 @@ import { tr, trf } from '../i18n.js';
 import { caseDocsView, assembleCaseFile } from './case-docs.js?v=cw1';
 import { buildReviewEditor } from './admission-modal.js?v=inp2';
 import { buildTitleSheetEditor, TITLE_SHEET_KIND } from './title-sheet.js';   // TITLE_SHEET_V1
-import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V1
+import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V2
+import { dateNumeric } from '../../shared/date-words.js';   // A4_LETTERHEAD_V2 — дата рождения числом
+import { shortName, placeLine } from '../../shared/person-name.js';   // PERSON_NAME_SHORT_V1
 import { caseHead } from './case-overview.js?v=co1';   // CASE_OVERVIEW_V1 — одна шапка на «Обзор» и «Документы»
 import { caseInsertPanel } from './case-doc-insert.js';   // CASE_DOC_A4_V1 — правая панель «Вставить в документ»
 import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — диагнозы списком
@@ -96,7 +98,9 @@ async function load() {
     const [{ data: docs, error: docsErr }, { data: adm }, { data: ov }] = await Promise.all([
         supabase.rpc('admission_case_docs', { admission_id: state.admissionId }),
         supabase.from('admissions')
-            .select('*, patients(mrn, full_name), wards(name), beds(code), '
+            // A4_LETTERHEAD_V2 — шапка называет дату рождения: без неё бумагу в
+            // стопке не отличить от однофамильца.
+            .select('*, patients(mrn, full_name, date_of_birth), wards(name), beds(code), '
                   + 'attending:attending_doctor_id(full_name, specialty)')
             .eq('id', state.admissionId).single(),
         supabase.rpc('admission_overview', { admission_id: state.admissionId }),   // CASE_OVERVIEW_V1 — для шапки
@@ -276,6 +280,59 @@ function paintRail(rail, root, onNavigate) {
     rail.appendChild(assembleFor(root, onNavigate));
 }
 
+/** Полных лет на сегодня — или null, если даты рождения нет. */
+function ageYears(dob) {
+    if (!dob) return null;
+    const d = new Date(dob);
+    if (Number.isNaN(d.getTime())) return null;
+    const now = new Date();
+    let n = now.getFullYear() - d.getFullYear();
+    const before = now.getMonth() < d.getMonth()
+        || (now.getMonth() === d.getMonth() && now.getDate() < d.getDate());
+    if (before) n -= 1;
+    return n >= 0 && n < 130 ? n : null;
+}
+
+/**
+ * Номера справа от названия документа: ID пациента и номер, под которым бумага
+ * лежит в архиве. Их спрашивают по телефону и ищут в стопке.
+ */
+function docIds() {
+    const a = state.admission || {};
+    return [
+        { label: 'ID', value: (a.patients || {}).mrn || '' },
+        { label: '№ истории', value: a.admission_no || '' },
+    ];
+}
+
+/**
+ * Реквизиты в полосе под шапкой.
+ *
+ * A4_LETTERHEAD_V2 — владелец: «add necessary fields». К пациенту и дате
+ * рождения добавлены те, без которых стационарная бумага не опознаётся:
+ * отделение с койкой и лечащий врач. Их спрашивают у постели чаще, чем номер
+ * истории.
+ *
+ * Имя — ФАМИЛИЯ С ИНИЦИАЛАМИ (PERSON_NAME_SHORT_V1): полное не помещалось в
+ * четверть листа и уводило соседнюю ячейку на вторую строку. Целиком оно
+ * остаётся в подсказке и в теле документа.
+ */
+function docFields() {
+    const a = state.admission || {};
+    const p = a.patients || {};
+    const age = ageYears(p.date_of_birth);
+    return [
+        { label: 'Пациент', uz: 'Bemor', value: shortName(p.full_name), full: p.full_name || '' },
+        { label: 'Дата рождения', uz: 'Tugʻilgan sana',
+          value: p.date_of_birth ? dateNumeric(p.date_of_birth) : '',
+          extra: age === null ? '' : trf('({n} лет)', { n: age }) },
+        { label: 'Отделение · койка', uz: 'Boʻlim · koyka',
+          value: placeLine(a.department, a.wards && a.wards.name, a.beds && a.beds.code) },
+        { label: 'Лечащий врач', uz: 'Davolovchi shifokor',
+          value: shortName((a.attending && a.attending.full_name) || '') },
+    ];
+}
+
 function paintPane(pane, root, onNavigate) {
     if (!pane) return;
     clear(pane);
@@ -321,7 +378,7 @@ function paintPane(pane, root, onNavigate) {
             // FORM_003_V1 — у бланка 003 своя шапка (министерство, учреждение, приказ).
             ? h('div', { class: 'a4-paper f3-paper' },
                 h('div', { class: 'cw-doc-body f3' }, ...ed.fields.filter(Boolean)))
-            : a4Sheet({ title: ed.title, children: [
+            : a4Sheet({ title: ed.title, ids: docIds(), fields: docFields(), children: [
                 h('div', { class: 'cw-doc-body' }, ...ed.fields.filter(Boolean)),
             ] }),
         // TITLE_SHEET_PAPERS_OUT_V1 — то, что относится к документу, но им не

@@ -301,6 +301,18 @@ function caseBlankCard() {
 // Лист бланка — ТОТ ЖЕ, которым документ пишут у постели: a4Sheet, разделы
 // этого вида документа, общая панель форматирования. Диагноз в бланк не
 // входит: он всегда про конкретного пациента.
+// A4_LETTERHEAD_V2 — шапка бланка: подписи те же, значения пустые.
+const BLANK_IDS = Object.freeze([
+    { label: 'ID', value: '' },
+    { label: '№ истории', value: '' },
+]);
+const BLANK_FIELDS = Object.freeze([
+    { label: 'Пациент', uz: 'Bemor', value: '' },
+    { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: '' },
+    { label: 'Отделение · койка', uz: 'Boʻlim · koyka', value: '' },
+    { label: 'Лечащий врач', uz: 'Davolovchi shifokor', value: '' },
+]);
+
 function caseBlankSheet() {
     const kind = state.caseKind;
     const blank = caseDocBlank(state.s, kind);
@@ -325,7 +337,10 @@ function caseBlankSheet() {
         // кабинета врача: бланк правится там же и так же, где документ пишут.
         h('div', { class: 'a4-toolbar-slot' }, richToolbar(sheet)),
         h('div', { class: 'a4-scroll doc-blank-scroll' },
-            a4Sheet({ title: caseDocTitle(kind), children: [sheet] })));
+            // A4_LETTERHEAD_V2 — у бланка пациента нет, и все значения пустые. Но
+            // клиника обязана видеть ТОТ ЖЕ лист, который получит врач: ради
+            // этого текст и правят здесь, а не в простом текстовом поле.
+            a4Sheet({ title: caseDocTitle(kind), ids: BLANK_IDS, fields: BLANK_FIELDS, children: [sheet] })));
 }
 
 function editorCard(title, iconName, children) {

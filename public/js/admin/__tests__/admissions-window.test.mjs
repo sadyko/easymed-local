@@ -696,14 +696,35 @@ test('шапка листа собирается из реквизитов кл�
     assert.equal(d.name, 'Клиника «Здоровье»');
     assert.equal(d.logo, 'data:image/png;base64,AAA');
 
-    const head = a4Letterhead({ title: 'Осмотр приёмного врача', date: '08.09.2026', clinic });
-    assert.equal(head.className, 'a4-head', 'это не шапка листа');
+    // A4_LETTERHEAD_V2 — шапка из двух ярусов: знак клиники │ название с
+    // датой │ номера справа, под ними полоса реквизитов в четыре равные
+    // колонки. Равные — потому что ячейки по содержимому разъезжались на
+    // вторую строку от одной длинной фамилии.
+    const head = a4Letterhead({
+        title: 'Осмотр приёмного врача', date: '08.09.2026', clinic,
+        ids: [{ label: 'ID', value: 'P-26-1' }, { label: '№ истории', value: 'ADM-00003' }],
+        fields: [
+            { label: 'Пациент', uz: 'Bemor', value: 'Иванов И. И.', full: 'Иванов Иван Иванович' },
+            { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: '03.07.1971' },
+            { label: 'Отделение · койка', uz: 'Boʻlim · koyka', value: 'Хирургия, 201/1' },
+            { label: 'Лечащий врач', uz: 'Davolovchi shifokor', value: 'Юсупов А.' },
+        ],
+    });
+    assert.equal(head.className, 'a4-lh', 'это не шапка листа');
     const t = textOf(head);
-    for (const must of ['Клиника «Здоровье»', 'ООО «Здоровье»', 'ул. Тестовая, 1', '+998 71 000 00 00', 'Осмотр приёмного врача', '08.09.2026']) {
-        assert.ok(t.includes(must), 'в шапке нет: ' + must);
+    for (const piece of ['Клиника «Здоровье»', 'Осмотр приёмного врача', '08.09.2026',
+        'P-26-1', 'ADM-00003', 'Иванов И. И.', 'Хирургия, 201/1', 'Bemor']) {
+        assert.ok(t.includes(piece), 'в шапке нет: ' + piece);
     }
-    assert.ok(walk(head).some((e) => e.className === 'a4-logo'), 'логотип клиники не попал в шапку');
+    assert.ok(walk(head).some((e) => e.className === 'a4-lh-logo'), 'логотип клиники не попал в шапку');
 
+    // Полное имя остаётся в подсказке: обрезанная фамилия без способа её
+    // прочесть хуже, чем перенос, ради устранения которого её и сократили.
+    const nameCell = walk(head).find((e) => String(e.className) === 'a4-lh-f-v');
+    assert.equal(nameCell.getAttribute('title'), 'Иванов Иван Иванович');
+
+    // Точки между числами быть не должно (владелец: «not use • between numbers»).
+    assert.ok(!/\d\s*·\s*\d/.test(t), 'точка между числами вернулась: ' + t);
     // Без реквизитов шапка не падает и не печатает «undefined».
     const bare = textOf(a4Letterhead({ title: 'Документ', date: '01.01.2026', clinic: {} }));
     assert.ok(!/undefined|null/.test(bare), 'пустые реквизиты протекли текстом: ' + bare);
@@ -713,7 +734,7 @@ test('шапка листа собирается из реквизитов кл�
     const sheet = a4Sheet({ title: 'Документ', date: '01.01.2026', clinic, children: [mkEl('div')] });
     assert.equal(sheet.className, 'a4-paper');
     const kids = sheet.children.map((c) => c.className);
-    assert.deepEqual(kids, ['a4-head', '']);
+    assert.deepEqual(kids, ['a4-lh', '']);
 });
 
 test('панель документа истории болезни рисует ЛИСТ, а не карточку с заголовком', async () => {

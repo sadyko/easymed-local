@@ -10,6 +10,8 @@
 
 import { supabase } from '../../supabase.js';
 import { setupA4Pagination } from './a4-paginate.js';   // A4_PAGINATE_V1
+import { a4Letterhead } from './a4-letterhead.js';   // A4_LETTERHEAD_V2 — общая шапка документа
+import { shortName } from '../../shared/person-name.js';   // PERSON_NAME_SHORT_V1
 import { h, Icon, Avatar, Tag, StatusTag, clear, toast } from '../ui.js';
 import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
@@ -967,30 +969,27 @@ function soapForm(ctx) {
         // A4 sheet
         h('div', { class: 'a4-scroll' },
             h('div', { class: 'a4-paper' },
-                // Clinic header
-                h('div', { class: 'a4-head' },
-                    h('div', { class: 'a4-clinic-wrap' },
-                        clinicLogo ? h('img', { class: 'a4-logo', src: clinicLogo, alt: '' }) : null,
-                        h('div', { class: 'a4-clinic' }, clinicName,
-                            clinicLegal ? h('small', null, clinicLegal) : null,
-                            clinicAddr ? h('small', null, clinicAddr) : null,
-                        ),
-                    ),
-                    h('div', { class: 'a4-doctitle' }, 'Приём (осмотр, консультация)',
-                        h('small', null, 'Qabul (ko\'rik, konsultatsiya)'),
-                        h('div', { class: 'a4-datebox' }, 'ДАТА · SANA: ' + today),   // i18n-exempt: шапка ДОКУМЕНТА — двуязычная (ru+uz) по замыслу бланка
-                    ),
-                ),
-                // PAPER_PATIENT_LINE_V1 — patient details on a single long line
-                h('div', { class: 'a4-pline' },
-                    h('span', null, h('b', null, 'ФИО / Bemor: '), patientName),
-                    h('span', { class: 'a4-pline-sep' }, '·'),
-                    h('span', null, h('b', null, 'ID: '), String(p.mrn || p.id || '—')),
-                    h('span', { class: 'a4-pline-sep' }, '·'),
-                    h('span', null, h('b', null, 'Дата рожд. / Tug\'ilgan: '), p.dob || p.birthDate || '—'),
-                    h('span', { class: 'a4-pline-sep' }, '·'),
-                    h('span', null, h('b', null, 'Тел. / Telefon: '), p.phone || '—'),
-                ),
+                // A4_LETTERHEAD_V2 — ТА ЖЕ шапка, что у истории болезни и у бланка в
+                // «Документах». Своя разметка кабинета убрана: реквизиты клиники
+                // она брала из window.CLINIC, а печать — из настроек
+                // «Документов», и на экране клиника видела не свой бланк.
+                //
+                // Строка пациента одной длинной строкой (PAPER_PATIENT_LINE_V1)
+                // тоже уходит: при длинной фамилии она переносилась, и лист
+                // начинался с двух строк служебных данных.
+                a4Letterhead({
+                    title: 'Приём (осмотр, консультация)',
+                    ids: [
+                        { label: 'ID', value: String(p.mrn || p.id || '') },
+                        { label: '№ приёма', value: String(ctx.visitServiceId || '') },
+                    ],
+                    fields: [
+                        { label: 'Пациент', uz: 'Bemor', value: shortName(patientName), full: patientName },
+                        { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: p.dob || p.birthDate || '' },
+                        { label: 'Телефон', uz: 'Telefon', value: p.phone || '' },
+                        { label: 'Врач', uz: 'Shifokor', value: shortName(svc.doctorName || (me() && me().full_name) || '') },
+                    ],
+                }),
                 // Sections 1-5
                 a4Section(ctx, { sec: 'complaints',   ru: 'ЖАЛОБЫ',           uz: 'SHIKOYATLAR',   field: 'chief_complaint',    ph: 'Опишите жалобы пациента…' }),
                 a4Section(ctx, { sec: 'anamnesis',    ru: 'АНАМНЕЗ',          uz: 'ANAMNEZ',       field: 'hpi',                ph: 'Анамнез заболевания…' }),
