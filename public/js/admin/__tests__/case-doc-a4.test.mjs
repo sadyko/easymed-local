@@ -149,6 +149,55 @@ test('CASE_DOC_A4_V1: раздел — редактируемая область
     assert.equal(a4.readRich(made.input), '<div>текст</div>', 'обработчик вырезан перед отправкой');
 });
 
+// CASE_DOC_FREE_SEC_V1 — владелец: «only rename and add option to create
+// "free field without/with name" editable».
+test('CASE_DOC_FREE_SEC_V1: подпись раздела переименовывается на месте, Esc отменяет', () => {
+    const renamed = [];
+    const made = a4.richSection('primary', 'objective', { onRename: (k, title) => renamed.push([k, title]) });
+    const tag = made.sec.children[0];
+    assert.equal(tag.tagName, 'BUTTON', 'подпись должна нажиматься, иначе переименовать её нечем');
+    assert.match(textOf(tag), /Объективно/);
+
+    tag.click();
+    const field = made.sec.children.find((c) => c.tagName === 'INPUT');
+    assert.ok(field, 'поле правки подписи не появилось');
+    assert.equal(field.value, 'Объективно', 'поле не подставило нынешнюю подпись');
+    field.value = 'Состояние по системам';
+    field.dispatchEvent({ type: 'keydown', key: 'Enter' });
+    assert.deepEqual(renamed, [['objective', 'Состояние по системам']]);
+    assert.match(textOf(made.sec.children[0]), /Состояние по системам/, 'подпись на листе не сменилась');
+
+    // Esc возвращает подпись как была и НИЧЕГО не сохраняет.
+    made.sec.children[0].click();
+    const field2 = made.sec.children.find((c) => c.tagName === 'INPUT');
+    field2.value = 'Передумал';
+    field2.dispatchEvent({ type: 'keydown', key: 'Escape' });
+    field2.dispatchEvent({ type: 'blur' });
+    assert.equal(renamed.length, 1, 'отменённая правка всё равно сохранилась');
+
+    // Без обработчика подпись — обычный текст листа: бланк и чтение не правят.
+    assert.equal(a4.richSection('primary', 'objective').sec.children[0].tagName, 'SPAN');
+});
+
+test('CASE_DOC_FREE_SEC_V1: свой раздел бывает и без имени, и убирается крестиком', () => {
+    const removed = [];
+    const made = a4.freeSection({ title: 'Осмотр стопы', html: '<p>Пульсация</p>', onRemove: (box) => removed.push(box) });
+    assert.equal(made.name.tagName, 'INPUT', 'имя раздела правится полем, как в кабинете врача');
+    assert.equal(made.name.value, 'Осмотр стопы');
+    assert.equal(made.input.attrs.contentEditable, 'true');
+    assert.equal(a4.readRich(made.input), '<p>Пульсация</p>', 'текст своего раздела не восстановился');
+
+    // Имя НЕОБЯЗАТЕЛЬНО: раздел без имени — законный случай.
+    const bare = a4.freeSection({});
+    assert.equal(bare.name.value, '');
+    assert.ok(String(bare.name.attrs.placeholder || '').length > 0, 'у поля имени нет подсказки');
+
+    const x = made.sec.children.find((c) => c.tagName === 'BUTTON');
+    assert.ok(x, 'убрать свой раздел нечем');
+    x.click();
+    assert.deepEqual(removed, [made.sec]);
+});
+
 test('CASE_DOC_A4_V1: правая панель показывает четыре источника и вставляет анализ таблицей с отклонением', async () => {
     rpcCalls = [];
     const inserted = [];

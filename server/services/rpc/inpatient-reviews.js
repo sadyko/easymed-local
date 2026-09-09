@@ -360,6 +360,62 @@ function loadReview(db, reviewId) {
  *          diagnosis?:string, plan?:string, body?:string,
  *          publish?:boolean, supersedes?:number}} args
  */
+/**
+ * СВОИ РАЗДЕЛЫ ДОКУМЕНТА — то, чего в пяти колонках нет.
+ *
+ * CASE_DOC_FREE_SEC_V1 (2026-09-09) — владелец: «add option to create "free
+ * field without/with name" editable». Раздел без имени — законный случай:
+ * врач дописывает абзац, которому имя не нужно, и требовать его значило бы
+ * требовать всегда.
+ *
+ * Чистится ЗДЕСЬ, а не только на экране: /api/rpc открыт с любого компьютера
+ * клиники. Пределы те же, что у обычных разделов, и число разделов ограничено
+ * — иначе один документ мог бы вырасти в базу данных.
+ */
+const MAX_EXTRA_SECS = 20;
+/** Разделы, у которых есть своя колонка: только их подписи и переименовывают. */
+const SECTION_KEYS = Object.freeze(['complaints', 'objective', 'diagnosis', 'plan', 'body']);
+
+function parseSections(a) {
+  const src = a && a.sections;
+  if (!src || typeof src !== 'object') return null;
+
+  const titles = {};
+  const t = src.titles && typeof src.titles === 'object' ? src.titles : {};
+  for (const key of SECTION_KEYS) {
+    const v = str(htmlToText(t[key]), 80);
+    if (v) titles[key] = v;
+  }
+
+  const extra = [];
+  const list = Array.isArray(src.extra) ? src.extra.slice(0, MAX_EXTRA_SECS) : [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const title = str(htmlToText(item.title), 80);
+    const html = rich(item.html, 8000);
+    // Пустой раздел не сохраняется вовсе: строка без имени и без текста — это
+    // не раздел, а забытое нажатие «добавить».
+    if (!title && !html) continue;
+    extra.push({ title, html });
+  }
+
+  if (!Object.keys(titles).length && !extra.length) return null;
+  return JSON.stringify({ titles, extra });
+}
+
+/** Свои разделы записи — всегда объект, даже когда колонка пуста или испорчена. */
+export function reviewSections(row) {
+  const raw = row && row.sections_json;
+  if (!raw) return { titles: {}, extra: [] };
+  try {
+    const v = JSON.parse(raw);
+    return {
+      titles: v && typeof v.titles === 'object' && v.titles ? v.titles : {},
+      extra: Array.isArray(v && v.extra) ? v.extra : [],
+    };
+  } catch (e) { return { titles: {}, extra: [] }; }
+}
+
 export function admissionReviewSave(db, args, user) {
   const a = args || {};
   const kind = str(a.kind, 20, 'primary') || 'primary';
@@ -379,6 +435,7 @@ export function admissionReviewSave(db, args, user) {
   // ДИАГНОЗ ОСТАЁТСЯ ПРОСТЫМ ТЕКСТОМ. Он показывается в обзоре, в журнале
   // госпитализаций и в списках — там разметка была бы мусором, а не
   // оформлением.
+  const sectionsJson = parseSections(a);
   const fields = {
     complaints: rich(a.complaints, 4000),
     objective:  rich(a.objective, 8000),
@@ -470,18 +527,18 @@ export function admissionReviewSave(db, args, user) {
     if (existing) {
       db.prepare(`UPDATE admission_reviews
                      SET kind = ?, type_kind = ?, complaints = ?, objective = ?, diagnosis = ?, plan = ?, body = ?,
-                         author_role = ?, updated_at = ?, published_at = ?
+                         sections_json = ?, author_role = ?, updated_at = ?, published_at = ?
                    WHERE id = ?`)
         .run(st.kind, st.type_kind, fields.complaints, fields.objective, fields.diagnosis, fields.plan, fields.body,
-             authorRole, at, publishedAt, existing.id);
+             sectionsJson, authorRole, at, publishedAt, existing.id);
       reviewId = existing.id;
     } else {
       reviewId = db.prepare(`INSERT INTO admission_reviews
           (admission_id, kind, type_kind, complaints, objective, diagnosis, plan, body,
-           author_id, author_role, published_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+           sections_json, author_id, author_role, published_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
         .run(adm.id, st.kind, st.type_kind, fields.complaints, fields.objective, fields.diagnosis, fields.plan,
-             fields.body, (user && user.id) || null, authorRole, publishedAt).lastInsertRowid;
+             fields.body, sectionsJson, (user && user.id) || null, authorRole, publishedAt).lastInsertRowid;
     }
 
     // ── Что публикация МЕНЯЕТ вокруг себя ──────────────────────────────────
@@ -1393,6 +1450,9 @@ export function admissionCaseFile(db, args, user) {
       diagnosis: cur.diagnosis || '',
       plan: cur.plan || '',
       body: cur.body || '',
+      // CASE_DOC_FREE_SEC_V1 — свои разделы и переименованные подписи едут на
+      // бумагу вместе с документом: они часть ЭТОГО документа, а не набора.
+      sections: reviewSections(cur),
       revision_no: chain.length,
       revision_count: chain.length,
     });

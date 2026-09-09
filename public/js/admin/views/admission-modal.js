@@ -47,7 +47,7 @@
 // дорогой вид дубля.
 
 import { supabase } from '../../supabase.js';
-import { sectionsFor, richSection, richToolbar, readRich, applyRich, RICH_KEYS, insertBlock, fireInput, caseDocBlank } from './case-doc-a4.js';   // CASE_DOC_A4_V1 / CASE_DX_PICK_V1 / CASE_DOC_BLANK_V1
+import { sectionsFor, richSection, freeSection, richToolbar, readRich, applyRich, RICH_KEYS, insertBlock, fireInput, caseDocBlank } from './case-doc-a4.js';   // CASE_DOC_A4_V1 / CASE_DX_PICK_V1 / CASE_DOC_BLANK_V1
 import { loadDocSettings } from './doc-settings.js?v=noqr1';   // CASE_DOC_BLANK_V1 — бланк клиники из «Документов»
 import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — список диагнозов с ролями
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
@@ -835,12 +835,50 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     const diagnosis = h('input', { type: 'text', class: 'cd-dx', placeholder: tr('Диагноз при поступлении') });
     // CASE_DX_PICK_V1 — диагноз ушёл с листа в карточку слева: там его выбирают
     // из МКБ-10 или пишут своими словами, и там же он виден, пока пишут документ.
+    // CASE_DOC_FREE_SEC_V1 (2026-09-09) — владелец: «make them similar fields
+    // like in the #service-workspace … only rename and add option to create
+    // "free field without/with name" editable».
+    //
+    // Разделы документа — те же пять колонок, что и были: по ним ищут, считают
+    // сроки и собирают историю. Сверх них у ЭТОГО документа могут быть свои —
+    // с именем или без, — и подпись любого раздела правится на месте. И то и
+    // другое уезжает В ЗАПИСЬ (sections_json), а не в справочник: документ
+    // печатают через год, и он обязан читаться так, как его писали.
+    const secTitles = {};
+    const freeSecs = [];   // [{ box, input, name }]
+    const readOnly = isView;
+
     const sectionEls = secKeys.filter((key) => key !== 'diagnosis').map((key) => {
-        const made = richSection(kind, key);
+        const made = richSection(kind, key, {
+            onRename: readOnly ? null : (k, title) => {
+                if (title) secTitles[k] = title; else delete secTitles[k];
+            },
+        });
         rich[key] = made.input;
         return made.sec;
     });
-    const sheet = h('div', { class: 'cd-sheet' }, ...sectionEls);
+
+    const freeHost = h('div', { class: 'cd-free' });
+    const addFree = (title, html) => {
+        const made = freeSection({
+            title, html,
+            onRemove: readOnly ? null : (box) => {
+                const i = freeSecs.findIndex((f) => f.box === box);
+                if (i > -1) freeSecs.splice(i, 1);
+                box.remove();
+            },
+        });
+        freeSecs.push({ box: made.sec, input: made.input, name: made.name });
+        freeHost.appendChild(made.sec);
+        return made;
+    };
+    const addBtn = readOnly ? null : h('div', { class: 'a4-actions no-print' },
+        h('button', {
+            class: 'btn btn-outline btn-sm', type: 'button',
+            onclick: () => { const made = addFree('', ''); if (made.name.focus) made.name.focus(); },
+        }, Icon('Plus', { size: 13 }), ' ', tr('Свой раздел')));
+
+    const sheet = h('div', { class: 'cd-sheet' }, ...sectionEls, freeHost, addBtn);
     const toolbar = richToolbar(sheet);
 
     // ЧТО ПОКАЗАТЬ В ПОЛЯХ — зависит от того, зачем окно открыли.
@@ -858,6 +896,25 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     const fill = (r) => {
         for (const k of ['complaints', 'objective', 'diagnosis', 'plan', 'body']) loaded[k] = r[k] || '';
         for (const k of RICH_KEYS) if (rich[k]) applyRich(rich[k], r[k] || '');
+        // Свои разделы и переименованные подписи приезжают вместе с записью.
+        try {
+            const layout = r.sections_json ? JSON.parse(r.sections_json) : null;
+            const titles = (layout && layout.titles) || {};
+            for (const k of Object.keys(titles)) {
+                if (titles[k]) secTitles[k] = String(titles[k]);
+            }
+            // Подписи проставляются заново: раздел уже нарисован своим именем.
+            if (Object.keys(secTitles).length) {
+                for (const sec of sectionEls) {
+                    const key = sec.getAttribute && sec.getAttribute('data-sec');
+                    const tag = key && secTitles[key] && sec.children && sec.children[0];
+                    if (tag) tag.textContent = secTitles[key];
+                }
+            }
+            for (const item of (layout && layout.extra) || []) {
+                addFree((item && item.title) || '', (item && item.html) || '');
+            }
+        } catch (e) { /* испорченный JSON — документ откроется без своих разделов */ }
         diagnosis.value = r.diagnosis || '';
         fireInput(diagnosis);   // CASE_DX_LIST_V1 — карточка диагнозов перерисует список
     };
@@ -887,6 +944,10 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
             }
         }
         if (isView) {
+            for (const f of freeSecs) {
+                f.input.contentEditable = 'false';
+                f.name.setAttribute('readonly', '');
+            }
             for (const k of RICH_KEYS) if (rich[k]) rich[k].contentEditable = 'false';
             diagnosis.setAttribute('readonly', '');
         }
@@ -896,8 +957,14 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         // CASE_DX_LIST_V1 — написанное в поле диагноза и не добавленное кнопкой
         // добавляется здесь: иначе текст пропал бы при публикации.
         if (diagnosis && typeof diagnosis.dxCommit === 'function') diagnosis.dxCommit();
+        // CASE_DOC_FREE_SEC_V1 — пустой свой раздел не уезжает вовсе: строка
+        // без имени и без текста это забытое нажатие «добавить», а не раздел.
+        const extra = freeSecs
+            .map((f) => ({ title: String(f.name.value || '').trim(), html: readRich(f.input) }))
+            .filter((x) => x.title || x.html);
         return {
         admission_id: admission.id,
+        sections: { titles: secTitles, extra },
         // Исправление НИКОГДА не правит прежнюю строку: review_id пуст, а
         // прежняя запись называется в `supersedes` и закрывается ссылкой.
         review_id: isCorrection ? null : draftId,

@@ -533,8 +533,12 @@ test('кабинет ОТКРЫВАЕТСЯ дашбордом, рабочий �
   const dashTab = buttonByText(root, /Дашборд/);
   const workTab = buttonByText(root, /Мои приёмы/);
   assert.ok(dashTab && workTab, 'обе вкладки в шапке');
-  assert.strictEqual(dashTab.attrs['aria-pressed'], 'true', 'по умолчанию открыт дашборд');
-  assert.strictEqual(workTab.attrs['aria-pressed'], 'false');
+  // CABINET_TABS_SYSTEM_V1 — это вкладки (.tab, role=tab), а не переключатели:
+  // открытую называет aria-selected, как и во всех остальных разделах.
+  assert.strictEqual(dashTab.attrs['aria-selected'], 'true', 'по умолчанию открыт дашборд');
+  assert.strictEqual(workTab.attrs['aria-selected'], 'false');
+  assert.ok(hasClass(dashTab, 'tab') && hasClass(dashTab, 'on'),
+    'открытая вкладка не помечена системными классами .tab.on');
   assert.ok(textOf(root).includes('Мой день'), 'дашборд действительно нарисован');
 
   workTab.click();
@@ -565,14 +569,14 @@ test('#consultation/work переживает перезагрузку: адре
   const txt = textOf(root);
   assert.ok(txt.includes('Показано'), 'открыт рабочий список, а не дашборд');
   assert.ok(!txt.includes('Мой день'), 'дашборд не подменяет адрес');
-  assert.strictEqual(buttonByText(root, /Мои приёмы/).attrs['aria-pressed'], 'true');
+  assert.strictEqual(buttonByText(root, /Мои приёмы/).attrs['aria-selected'], 'true');
 
   // …и «Зарплата» — старый дашборд кабинета — тоже на месте и адресуема.
   reset();
   const root2 = mk('div');
   await renderConsultation(root2, { tabId: 'consultation', payload: { sub: 'pay' } });
   await tick(60);
-  assert.strictEqual(buttonByText(root2, /Зарплата/).attrs['aria-pressed'], 'true',
+  assert.strictEqual(buttonByText(root2, /Зарплата/).attrs['aria-selected'], 'true',
     'ни одна прежняя возможность кабинета не потеряна');
   const payText = textOf(root2);
   // Адрес обязан не только ОТКРЫТЬ вкладку, но и ЗАГРУЗИТЬ её: ленивая

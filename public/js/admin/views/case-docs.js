@@ -950,11 +950,23 @@ export function caseFilePrintHtml(file, { fontFaceCss = '' } = {}) {
         // на бумагу они идут РАЗМЕТКОЙ: экранированный HTML печатался бы
         // тегами вместо жирного и списков. Диагноз — простой текст, он и
         // экранируется. Санитария та же, что на сервере при сохранении.
+        // CASE_DOC_FREE_SEC_V1 — подпись раздела берётся ИЗ ДОКУМЕНТА, если он
+        // её переименовал: бумага обязана читаться так, как её писали, а не так,
+        // как разделы называются сегодня.
+        const secTitles = (d.sections && d.sections.titles) || {};
         const parts = PART_TITLES
             .filter(([key]) => String(d[key] || '').trim())
-            .map(([key, label]) => `<div class="part"><div class="pl">${esc(tr(label))}</div><div class="pv">${
+            .map(([key, label]) => `<div class="part"><div class="pl">${esc(secTitles[key] || tr(label))}</div><div class="pv">${
                 key === 'diagnosis' ? esc(d[key]) : sanitizeStoredHtml(d[key])
             }</div></div>`)
+            .join('');
+        // Свои разделы идут следом за колоночными, в том порядке, в каком их
+        // писали. Раздел без имени печатается без подписи — так его и завели.
+        const extra = ((d.sections && d.sections.extra) || [])
+            .filter((x) => x && (String(x.title || '').trim() || String(x.html || '').trim()))
+            .map((x) => `<div class="part">${
+                String(x.title || '').trim() ? `<div class="pl">${esc(x.title)}</div>` : ''
+            }<div class="pv">${sanitizeStoredHtml(x.html || '')}</div></div>`)
             .join('');
         const sign = [d.author_name, d.published_at ? fmtDateTime(d.published_at) : ''].filter(Boolean).join(' · ');
         return `
@@ -962,7 +974,7 @@ export function caseFilePrintHtml(file, { fontFaceCss = '' } = {}) {
   <h2><span class="no">${i + 1}</span>${esc(caseDocTitle(d.kind, d.title))}${
       d.revision_count > 1 ? `<span class="rev">${esc(trf('редакция {n}', { n: d.revision_count }))}</span>` : ''
   }</h2>
-  ${parts || `<div class="part"><div class="pv empty">${esc(tr('Текст документа не заполнен.'))}</div></div>`}
+  ${parts + extra || `<div class="part"><div class="pv empty">${esc(tr('Текст документа не заполнен.'))}</div></div>`}
   <div class="sign">${esc(sign)}</div>
 </section>`;
     }).join('');

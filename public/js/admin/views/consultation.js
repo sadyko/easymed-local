@@ -285,7 +285,13 @@ function referralIsDone(status) {
 function paint() {
     clear(containerRef);
     containerRef.appendChild(h('div', { class: 'fade-in' },
-        h('div', { style: { display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' } },
+        // CABINET_TABS_SYSTEM_V1 (2026-09-09) — владелец: «this buttons dont
+        // look like aligned with system design». Вкладки кабинета были нарисованы
+        // отдельно — таблетки со своим радиусом, своими отступами и своей рамкой,
+        // каких в системе нет больше нигде. Теперь это .tabs/.tab — тот же
+        // подчёркнутый ряд, каким разделы переключаются во всём остальном
+        // приложении.
+        h('div', { class: 'tabs', role: 'tablist', style: { marginBottom: '16px', flexWrap: 'wrap' } },
             // DOCTOR_DASHBOARD_V1 — дашборд ПЕРВЫМ и открыт ПО УМОЛЧАНИЮ.
             topTab('dashboard',    'Дашборд',      'Dashboard'),
             topTab('appointments', 'Мои приёмы',  'Activity'),
@@ -651,19 +657,14 @@ function syncSubUrl() {
 
 function topTab(id, label, icon, badge) {
     const on = state.tab === id;
+    // CABINET_TABS_SYSTEM_V1 — системная вкладка: подчёркивание, а не таблетка.
+    // Свои размеры и цвета здесь не задаются вовсе — их задаёт .tab, и вкладка
+    // кабинета меняется вместе со всеми остальными вкладками приложения.
     return h('button', {
-        type: 'button',
-        'aria-pressed': on ? 'true' : 'false',
+        class: 'tab' + (on ? ' on' : ''),
+        type: 'button', role: 'tab',
+        'aria-selected': on ? 'true' : 'false',
         onclick: () => setTab(id),
-        style: {
-            display: 'inline-flex', alignItems: 'center', gap: '8px',
-            padding: '10px 18px', borderRadius: '999px',
-            border: '1px solid ' + (on ? 'var(--primary-500)' : 'var(--ink-200)'),
-            background: on ? 'var(--primary-50)' : 'white',
-            color: on ? 'var(--primary-700)' : 'var(--ink-700)',
-            fontWeight: on ? 600 : 500, fontSize: '13.5px',
-            cursor: 'pointer', fontFamily: 'inherit',
-        },
     }, Icon(icon, { size: 15 }), label,
         // ADMITTING_DOCTOR_CABINET_V1 — счётчик виден с ЛЮБОЙ вкладки: он и
         // существует ради того, чтобы врач узнал о работе, не заходя за ней.

@@ -98,6 +98,85 @@ const itemOf = (state, kind) => state.items.find((i) => i.kind === kind);
 const docs = (ctx, adm, hours = 0, user = headDoctor) =>
   admissionCaseDocs(ctx.db, { admission_id: adm.id, now: at(hours) }, user);
 
+// ─── 0. Свои разделы документа ──────────────────────────────────────────────
+//
+// CASE_DOC_FREE_SEC_V1 (2026-09-09) — владелец: «make them similar fields like
+// in the #service-workspace … only rename and add option to create "free field
+// without/with name" editable».
+//
+// Пять колонок документа остались колонками: по ним ищут, считают сроки и
+// собирают историю. Сверх них у ЭТОГО документа бывают свои разделы и свои
+// подписи — и хранятся они С ЗАПИСЬЮ, потому что документ печатают через год.
+
+test('свой раздел с именем и без имени сохраняется, читается назад и печатается', () => {
+  const ctx = seed();
+  try {
+    const adm = inBed(ctx);
+    const { review } = admissionReviewSave(ctx.db, {
+      admission_id: adm.id, kind: 'primary',
+      complaints: '<p>Болит</p>', objective: '<p>Осмотрен</p>', diagnosis: 'J06', plan: '<p>Лечение</p>',
+      sections: {
+        titles: { complaints: 'Жалобы при поступлении' },
+        extra: [
+          { title: 'Осмотр стопы', html: '<p>Пульсация сохранена</p>' },
+          { title: '', html: '<p>Абзац без имени</p>' },
+        ],
+      },
+      publish: true,
+    }, headDoctor);
+
+    const row = ctx.db.prepare('SELECT sections_json FROM admission_reviews WHERE id = ?').get(review.id);
+    const back = JSON.parse(row.sections_json);
+    assert.equal(back.titles.complaints, 'Жалобы при поступлении', 'переименованная подпись не сохранилась');
+    assert.equal(back.extra.length, 2, 'раздел без имени потерян — а он законный');
+    assert.equal(back.extra[1].title, '', 'разделу без имени выдумали имя');
+    assert.match(back.extra[1].html, /Абзац без имени/);
+
+    // На бумагу едет то же самое, вместе с документом.
+    const file = admissionCaseFile(ctx.db, { admission_id: adm.id }, headDoctor);
+    const doc = file.documents.find((d) => d.kind === 'primary');
+    assert.equal(doc.sections.titles.complaints, 'Жалобы при поступлении');
+    assert.equal(doc.sections.extra.length, 2);
+  } finally { ctx.db.close(); }
+});
+
+test('пустой свой раздел не сохраняется, а разметка чистится сервером', () => {
+  const ctx = seed();
+  try {
+    const adm = inBed(ctx);
+    const { review } = admissionReviewSave(ctx.db, {
+      admission_id: adm.id, kind: 'round',
+      complaints: '<p>Жалоб нет</p>',
+      sections: {
+        titles: {},
+        // Ни имени, ни текста — это забытое нажатие «добавить», а не раздел.
+        extra: [{ title: '   ', html: '' }, { title: 'Заметка', html: '<p onclick="alert(1)">Текст</p><script>bad()</script>' }],
+      },
+    }, headDoctor);
+
+    const back = JSON.parse(ctx.db.prepare('SELECT sections_json FROM admission_reviews WHERE id = ?').get(review.id).sections_json);
+    assert.equal(back.extra.length, 1, 'пустой раздел уехал в базу');
+    assert.equal(back.extra[0].title, 'Заметка');
+    assert.ok(!/script|onclick/i.test(back.extra[0].html), 'разметка своего раздела не почищена сервером');
+  } finally { ctx.db.close(); }
+});
+
+test('документ без своих разделов ничем не отличается от прежних', () => {
+  const ctx = seed();
+  try {
+    const adm = inBed(ctx);
+    const { review } = admissionReviewSave(ctx.db, {
+      admission_id: adm.id, kind: 'head_review', objective: '<p>Без изменений</p>', publish: true,
+    }, headDoctor);
+    assert.equal(ctx.db.prepare('SELECT sections_json FROM admission_reviews WHERE id = ?').get(review.id).sections_json, null,
+      'у документа без своих разделов колонка обязана остаться пустой');
+
+    const file = admissionCaseFile(ctx.db, { admission_id: adm.id }, headDoctor);
+    const doc = file.documents.find((d) => d.kind === 'head_review');
+    assert.deepEqual(doc.sections, { titles: {}, extra: [] }, 'пустые разделы должны приезжать пустым объектом, а не null');
+  } finally { ctx.db.close(); }
+});
+
 // ─── 1. Сроки — арифметика от даты госпитализации ───────────────────────────
 
 test('срок каждого документа ВЫЧИСЛЕН от размещения на койке, а не написан буквами', () => {

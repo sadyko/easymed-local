@@ -17,7 +17,7 @@
 // в журнале и в списках, где разметка была бы мусором (то же решение на
 // сервере, rpc/inpatient-reviews.js).
 import { h, clear } from '../ui.js';
-import { tr } from '../i18n.js';
+import { tr, trf } from '../i18n.js';
 import { sanitizeStoredHtml, richIsEmpty } from '../../shared/rich-text.js';
 
 /** Разделы, которые пишутся разметкой. `diagnosis` сюда не входит намеренно. */
@@ -127,16 +127,90 @@ export function sectionLabel(kind, key) {
 }
 export function sectionPlaceholder(key) { return PH[key] || ''; }
 
-/** Раздел листа: подпись и редактируемая область. */
-export function richSection(kind, key) {
+/**
+ * Раздел листа: подпись и редактируемая область.
+ *
+ * CASE_DOC_FREE_SEC_V1 (2026-09-09) — ПОДПИСЬ ПЕРЕИМЕНОВЫВАЕТСЯ. Владелец:
+ * «only rename and add option to create free field». Подпись остаётся текстом
+ * листа — не поле ввода в каждой строке, а кнопка, которая подменяется полем
+ * по нажатию: документ не должен выглядеть анкетой, пока его просто читают.
+ *
+ * Имя, которым назвали раздел, уезжает В ЗАПИСЬ, а не в справочник: документ
+ * печатают через год, и он обязан читаться так, как его писали.
+ *
+ * @param {(key:string, title:string) => void} [onRename] без него подпись не
+ *        правится вовсе (бланк, чтение опубликованного).
+ */
+export function richSection(kind, key, { title = '', onRename = null } = {}) {
     const input = h('div', {
         class: 'a4-input', 'data-field': key, contentEditable: 'true',
         'data-ph': tr(sectionPlaceholder(key)),
     });
-    const sec = h('div', { class: 'a4-sec cd-sec', 'data-sec': key },
-        h('span', { class: 'a4-sec-tag' }, tr(sectionLabel(kind, key))),
-        input);
+    const shown = () => (String(title || '').trim() || tr(sectionLabel(kind, key)));
+    const tag = onRename
+        ? h('button', {
+            class: 'a4-sec-tag a4-sec-tag-b', type: 'button',
+            title: tr('Переименовать раздел'),
+            'aria-label': trf('Переименовать раздел: {name}', { name: shown() }),
+        }, shown())
+        : h('span', { class: 'a4-sec-tag' }, shown());
+    const sec = h('div', { class: 'a4-sec cd-sec', 'data-sec': key }, tag, input);
+
+    if (onRename) {
+        tag.addEventListener('click', () => {
+            const field = h('input', { type: 'text', class: 'a4-sec-name', placeholder: tr('Название раздела') });
+            field.value = shown();
+            let closed = false;
+            const stop = () => { if (closed) return; closed = true; clear(sec); sec.appendChild(tag); sec.appendChild(input); };
+            const save = () => {
+                if (closed) return;
+                closed = true;
+                const value = String(field.value || '').trim();
+                title = value === tr(sectionLabel(kind, key)) ? '' : value;
+                tag.textContent = shown();
+                tag.setAttribute('aria-label', trf('Переименовать раздел: {name}', { name: shown() }));
+                clear(sec); sec.appendChild(tag); sec.appendChild(input);
+                onRename(key, title);
+            };
+            field.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); save(); }
+                if (e.key === 'Escape') { e.preventDefault(); stop(); }
+            });
+            field.addEventListener('blur', save);
+            clear(sec);
+            sec.appendChild(field);
+            sec.appendChild(input);
+            field.focus();
+        });
+    }
     return { sec, input };
+}
+
+/**
+ * СВОЙ РАЗДЕЛ — тот же, что в кабинете врача (service-workspace.js): имя
+ * полем, крестик, текст. Имя МОЖНО НЕ ЗАПОЛНЯТЬ: врач дописывает абзац,
+ * которому имя не нужно, и требовать его значило бы требовать всегда.
+ *
+ * @returns {{sec:HTMLElement, input:HTMLElement, name:HTMLElement}}
+ */
+export function freeSection({ title = '', html = '', onRemove = null, onEdit = null } = {}) {
+    const name = h('input', {
+        type: 'text', class: 'a4-sec-name', placeholder: tr('Название раздела — можно не заполнять'),
+        'aria-label': tr('Название раздела'),
+    });
+    name.value = title || '';
+    if (onEdit) name.addEventListener('input', onEdit);
+    const input = h('div', { class: 'a4-input', contentEditable: 'true', 'data-ph': tr('Текст раздела…') });
+    if (html) applyRich(input, html);
+    if (onEdit) input.addEventListener('input', onEdit);
+    const sec = h('div', { class: 'a4-sec cd-sec cd-sec-free', style: { position: 'relative' } },
+        name,
+        onRemove
+            ? h('button', { class: 'a4-sec-x no-print', type: 'button', title: tr('Убрать раздел'),
+                'aria-label': tr('Убрать раздел'), onclick: () => onRemove(sec) }, '×')
+            : null,
+        input);
+    return { sec, input, name };
 }
 
 /** Раздел «Диагноз» — та же рамка листа, но одна строка простого текста. */
