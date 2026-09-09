@@ -65,7 +65,12 @@ const state = {
     // (inpatient_capabilities): 'own' — свои пациенты, 'all' — весь стационар
     // (главный врач, администратор). Значение по умолчанию — САМОЕ УЗКОЕ: не
     // ответил сервер — показываем только своих, а не всех.
-    inpt: { loaded: false, loading: false, rows: [], scope: 'own', can: {}, capsAsked: false },
+    inpt: {
+        // ADMITTING_DOCTOR_CABINET_V1 — сколько пациентов ждут МЕНЯ: число для
+        // счётчика на вкладке, читается своим маленьким запросом при входе.
+        waiting: 0,
+        loaded: false, loading: false, rows: [], scope: 'own', can: {}, capsAsked: false,
+    },
     // Dashboard tab state — lazy-loaded on first open of the dashboard tab.
     dash: {
         doctors:   [],        // [{ id, full_name, … }]
@@ -117,6 +122,11 @@ export async function renderConsultation(container, { onNavigate, payload, tabId
     // строки '#consultation/pay' из закладки открывался бы пустой зарплатой:
     // ленивая загрузка висела бы только на кнопке.
     ensureTabData(state.tab).then(() => paint());
+    // ADMITTING_DOCTOR_CABINET_V1 — при ОТКРЫТИИ кабинета читается только
+    // счётчик ждущих, а не весь список: список тяжёлый (пациенты, палаты,
+    // койки, два врача связями), а нужно из него одно число. Полный список
+    // по-прежнему грузит своя вкладка, когда её открывают.
+    loadInpatientWaiting().then(() => paint()).catch(() => {});
     // Today's referrals feed the KPI cards (3) and (4). Loaded after the first
     // paint so the queue never waits on it; repaint once it lands.
     loadTodayReferrals().then(() => { if (state.tab === 'appointments') paint(); });
@@ -279,7 +289,7 @@ function paint() {
             // DOCTOR_DASHBOARD_V1 — дашборд ПЕРВЫМ и открыт ПО УМОЛЧАНИЮ.
             topTab('dashboard',    'Дашборд',      'Dashboard'),
             topTab('appointments', 'Мои приёмы',  'Activity'),
-            topTab('inpatients',   'Стационар',    'Bed'),   // INPATIENT_TAB_V1
+            topTab('inpatients',   'Стационар',    'Bed', inpatientWaiting()),   // INPATIENT_TAB_V1 / ADMITTING_DOCTOR_CABINET_V1
             // Старый «Дашборд» никуда не делся — он переехал сюда и назван тем,
             // чем всегда был: глубокие периоды, ставки, вознаграждения за
             // направления и разбор начислений.
@@ -488,6 +498,74 @@ function inpatientRow(r, onChange) {
     );
 }
 
+/**
+ * ADMITTING_DOCTOR_CABINET_V1 (2026-09-09) — СКОЛЬКО ПАЦИЕНТОВ ЖДУТ МЕНЯ.
+ *
+ * Владелец: «the admitting doctor cannot access to the patient consultation
+ * when selected doctor is entered to the cabinet».
+ *
+ * Доступ у приёмного врача был: медсестра называет его при размещении, и
+ * сервер пускает его в осмотр по имени. Не было ДОРОГИ. Кабинет открывается
+ * дашбордом, работа идёт на «Моих приёмах» — а поступивший пациент лежит на
+ * вкладке «Стационар», в которую незачем заходить, если не знаешь, что там
+ * кто-то есть. Врач честно смотрел на пустую очередь приёмов и решал, что
+ * пациента ему не дали.
+ *
+ * Счётчик считает РОВНО ТО, ЧТО ЖДЁТ ЕГО РУК: осмотр при поступлении (он
+ * назван приёмным врачом или имеет право осматривать) и назначение лечащего
+ * врача. Пациенты, которые просто лежат, не считаются: это не работа, это
+ * состояние, и цифра, которая никогда не гаснет, перестаёт читаться.
+ */
+export function waitingOf(rows) {
+    const meDoc = scopedDoctorId();
+    const can = state.inpt.can || {};
+    return (rows || []).filter((r) => {
+        const mine = meDoc != null && r.admitting_doctor_id != null && String(r.admitting_doctor_id) === String(meDoc);
+        if (r.status === 'admitted') return mine || !!can.examine;
+        if (r.status === 'examined') return mine || !!can.set_attending;
+        return false;
+    }).length;
+}
+
+/** Число на вкладке: из уже прочитанного списка, а пока его нет — из счётчика. */
+export function inpatientWaiting() {
+    return (state.inpt.rows && state.inpt.rows.length)
+        ? waitingOf(state.inpt.rows)
+        : (state.inpt.waiting || 0);
+}
+
+/**
+ * Отдельное МАЛЕНЬКОЕ чтение под счётчик: четыре колонки и ни одной денежной.
+ * Полный список вкладки тянет пациентов, палаты, койки и двух врачей связями —
+ * платить этим за одно число на кнопке нельзя.
+ */
+async function loadInpatientWaiting() {
+    await loadInpatientCaps();
+    const meDoc = scopedDoctorId();
+    const base = () => supabase.from('admissions')
+        .select('id, status, attending_doctor_id, admitting_doctor_id')
+        .in('status', ['admitted', 'examined'])
+        .limit(200);
+    let rows = [];
+    try {
+        if (state.inpt.scope === 'all') {
+            const { data } = await base();
+            rows = data || [];
+        } else if (meDoc) {
+            // У локального клиента нет .or() — два запроса и склейка по id.
+            const [own, adm] = await Promise.all([
+                base().eq('attending_doctor_id', meDoc),
+                base().eq('admitting_doctor_id', meDoc),
+            ]);
+            const seen = new Set();
+            for (const r of [...((own && own.data) || []), ...((adm && adm.data) || [])]) {
+                if (r && !seen.has(r.id)) { seen.add(r.id); rows.push(r); }
+            }
+        }
+    } catch (e) { rows = []; }
+    state.inpt.waiting = waitingOf(rows);
+}
+
 function inpatientsView() {
     const wrap = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '12px' } });
     if (state.inpt.loading) {
@@ -571,7 +649,7 @@ function syncSubUrl() {
     }
 }
 
-function topTab(id, label, icon) {
+function topTab(id, label, icon, badge) {
     const on = state.tab === id;
     return h('button', {
         type: 'button',
@@ -586,7 +664,10 @@ function topTab(id, label, icon) {
             fontWeight: on ? 600 : 500, fontSize: '13.5px',
             cursor: 'pointer', fontFamily: 'inherit',
         },
-    }, Icon(icon, { size: 15 }), label);
+    }, Icon(icon, { size: 15 }), label,
+        // ADMITTING_DOCTOR_CABINET_V1 — счётчик виден с ЛЮБОЙ вкладки: он и
+        // существует ради того, чтобы врач узнал о работе, не заходя за ней.
+        badge ? h('span', { class: 'ct-badge' }, String(badge)) : null);
 }
 
 // ---------------------------------------------------------------------------

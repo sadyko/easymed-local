@@ -340,10 +340,18 @@ test('широкий взгляд на стационар не расширяе�
     'и второго тоже');
 
   // Полоса стационара читает ТОЛЬКО клинические колонки: денег в ней нет вовсе.
-  const strip = dbCalls.find((c) => c.table === 'admissions');
-  assert.ok(strip, 'полоса главного врача обязана спросить стационар');
-  assert.strictEqual(String(strip.columns).replace(/\s+/g, ''), 'id,status',
-    'в полосе не может быть ни одной денежной колонки: ' + strip.columns);
+  // ADMITTING_DOCTOR_CABINET_V1 — запросов к admissions теперь два: полоса и
+  // счётчик ждущих на вкладке. Полоса ищется по СВОИМ колонкам, а правило «без
+  // денег» проверяется у ОБОИХ — оно про таблицу, а не про один запрос.
+  const admCalls = dbCalls.filter((c) => c.table === 'admissions');
+  assert.ok(admCalls.length, 'полоса главного врача обязана спросить стационар');
+  const strip = admCalls.find((c) => String(c.columns).replace(/\s+/g, '') === 'id,status');
+  assert.ok(strip, 'полоса читает не те колонки: ' + admCalls.map((c) => c.columns).join(' | '));
+  const MONEY = /price|total|sum|amount|rate|net|gross|salary|paid|debt/i;
+  for (const c of admCalls) {
+    assert.ok(!MONEY.test(String(c.columns)),
+      'в запросе к стационару появилась денежная колонка: ' + c.columns);
+  }
 
   const txt = textOf(host);
   assert.ok(txt.includes('Стационар отделения'), 'полоса на месте: ' + txt.slice(0, 300));
@@ -362,6 +370,18 @@ test('у палатного врача полосы главного врача 
   await tick(80);
   const txt = textOf(host);
   assert.ok(!txt.includes('Стационар отделения'), 'полоса — только у того, кому сервер сказал «all»');
-  assert.strictEqual(dbCalls.some((c) => c.table === 'admissions'), false,
-    'и лишнего запроса за ней тоже нет');
+  // ADMITTING_DOCTOR_CABINET_V1 — полосы у него нет, а СЧЁТЧИК ждущих есть: он
+  // и нужен именно палатному врачу, которого медсестра назвала приёмным.
+  // Запрос под счётчик обязан быть узким и сужённым на него самого — широкого
+  // чтения чужого стационара здесь по-прежнему быть не может.
+  const admCalls = dbCalls.filter((c) => c.table === 'admissions');
+  assert.ok(!admCalls.some((c) => String(c.columns).replace(/\s+/g, '') === 'id,status'),
+    'полоса главного врача всё-таки спросила стационар');
+  for (const c of admCalls) {
+    assert.ok(!/price|total|sum|amount|rate|net|gross|salary|paid|debt/i.test(String(c.columns)),
+      'в запросе к стационару появилась денежная колонка: ' + c.columns);
+    const own = (c.filters || []).some((f) => (f.col === 'attending_doctor_id' || f.col === 'admitting_doctor_id')
+      && f.op === 'eq' && f.val === 'u-ward');
+    assert.ok(own, 'счётчик палатного врача не сужен на него самого: ' + JSON.stringify(c.filters));
+  }
 });

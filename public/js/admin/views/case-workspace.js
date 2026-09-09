@@ -312,10 +312,11 @@ function paintPane(pane, root, onNavigate) {
     // window.CLINIC, откуда её берут и печатные бланки. Классы .a4-* общие с
     // кабинетом врача (service-workspace.js). Кнопки действий на лист не
     // кладутся — это не часть документа, они стоят под ним.
+    // A4_ONE_TEMPLATE_V1 — панель форматирования стоит СВОЕЙ ПОЛОСОЙ над листом,
+    // тем же слотом, что в кабинете врача (.a4-toolbar-slot): один инструмент —
+    // одно место, где его ищут.
     const card = h('div', { class: 'cw-doc a4-scroll' },
-        // CASE_DOC_A4_V1 — панель форматирования НАД листом: она инструмент, а
-        // не часть документа, и на печать не идёт.
-        ed.toolbar || null,
+        ed.toolbar ? h('div', { class: 'a4-toolbar-slot' }, ed.toolbar) : null,
         ed.noLetterhead
             // FORM_003_V1 — у бланка 003 своя шапка (министерство, учреждение, приказ).
             ? h('div', { class: 'a4-paper f3-paper' },

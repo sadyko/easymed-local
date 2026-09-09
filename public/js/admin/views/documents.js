@@ -321,7 +321,9 @@ function caseBlankSheet() {
             h('span', { class: 'muted', style: { fontSize: '12.5px' } }, caseDocTitle(kind)),
             h('span', { class: 'grow' }),
             h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Правится так же, как у постели пациента'))),
-        richToolbar(sheet),
+        // A4_ONE_TEMPLATE_V1 — тот же слот панели, что у истории болезни и у
+        // кабинета врача: бланк правится там же и так же, где документ пишут.
+        h('div', { class: 'a4-toolbar-slot' }, richToolbar(sheet)),
         h('div', { class: 'a4-scroll doc-blank-scroll' },
             a4Sheet({ title: caseDocTitle(kind), children: [sheet] })));
 }

@@ -376,3 +376,40 @@ test('ICD_PICKER_PAGES_V1: поиск СУЖАЕТ список и возвра�
     const ors = JSON.stringify(last.filters || []);
     assert.ok(ors.includes('пневмония'), 'запрос ушёл без искомого слова: ' + ors);
 });
+
+// ─── A4_ONE_TEMPLATE_V1 — один бланк на три экрана ──────────────────────────
+//
+// Владелец (2026-09-09): «make them similar design repeating the a4 template of
+// the documents settings, and make them similar like in the doctors cabinet
+// workplace». Экранный лист брал реквизиты из window.CLINIC, а печатный — из
+// настроек «Документов»: клиника настраивала логотип и название, а на экране
+// видела другую шапку.
+test('A4_ONE_TEMPLATE_V1: шапка листа берёт реквизиты и акцент из настроек «Документов», а явная клиника всё равно главнее', async () => {
+    const { clinicLetterheadData } = await import('../views/a4-letterhead.js');
+    const { saveDocSettings, loadDocSettings } = await import('../views/doc-settings.js?v=noqr1');
+
+    const before = loadDocSettings();
+    saveDocSettings(Object.assign({}, before, { clinicName: 'Клиника «Настройки»', address: 'ул. Настроек, 1', phone: '+998 71 111 11 11', accent: '#b45309' }));
+    const fromSettings = clinicLetterheadData();
+    assert.equal(fromSettings.name, 'Клиника «Настройки»', 'шапка не спросила настройки документов');
+    assert.equal(fromSettings.addr, 'ул. Настроек, 1');
+    assert.equal(fromSettings.accent, '#b45309', 'акцент бланка не доехал до экрана');
+
+    // Явно переданная клиника главнее: печать снимка обязана показать те
+    // реквизиты, что были на момент снимка, а не сегодняшние.
+    const snap = clinicLetterheadData({ name_ru: 'Клиника «Снимок»', address: 'ул. Снимка, 2' });
+    assert.equal(snap.name, 'Клиника «Снимок»', 'снимок перебит сегодняшними настройками');
+    assert.equal(snap.addr, 'ул. Снимка, 2');
+
+    // Панель форматирования стоит своей полосой над листом — на всех трёх экранах.
+    const fs2 = await import('node:fs');
+    const path2 = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = path2.dirname(fileURLToPath(import.meta.url));
+    const ws = fs2.readFileSync(path2.join(dir, '..', 'views', 'case-workspace.js'), 'utf8');
+    const docs = fs2.readFileSync(path2.join(dir, '..', 'views', 'documents.js'), 'utf8');
+    const cab = fs2.readFileSync(path2.join(dir, '..', 'views', 'service-workspace.js'), 'utf8');
+    for (const [name, src] of [['история болезни', ws], ['бланк «Документов»', docs], ['кабинет врача', cab]]) {
+        assert.ok(src.includes("class: 'a4-toolbar-slot'"), 'панель инструментов не в общей полосе: ' + name);
+    }
+});

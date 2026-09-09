@@ -1938,9 +1938,13 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .doc-bar .grow{ flex:1; }
 .doc-bar .btn{ padding:5px 10px; font-size:12.5px; min-height:32px; }
 .doc-bar .btn svg{ width:13px; height:13px; }
-.a4-toolbar-slot{ display:flex; align-items:center; gap:8px;
+/* A4_ONE_TEMPLATE_V1 — полоса инструментов НАД листом: одна и та же в кабинете
+   врача, в истории болезни и в бланке «Документов». Пунктир снизу отделяет
+   инструмент от бумаги: на бумаге его нет. */
+.a4-toolbar-slot{ display:flex; align-items:center; gap:8px; flex-wrap:wrap;
   padding:8px 20px; min-height:40px;
   background:var(--white); border-bottom:1px dashed var(--ink-200); }
+.cw-doc .a4-toolbar-slot, .doc-blank .a4-toolbar-slot{ padding:6px 10px; border-radius:var(--r-md) var(--r-md) 0 0; }
 .a4-scroll{ padding:20px; background:var(--ink-50); overflow:auto; }
 
 /* A4_REAL_V1 — НАСТОЯЩИЙ ЛИСТ, А НЕ КАРТОЧКА С ТЕКСТОМ.
@@ -5881,6 +5885,9 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .cw-doc.a4-scroll { padding: 0 10px 24px; background: transparent;
     border: 0; border-radius: 0; }
 .cw-steps .card-header { padding-top: 10px; }
+
+/* ADMITTING_DOCTOR_CABINET_V1 — счётчик ждущих на вкладке кабинета. */
+.ct-badge{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:var(--r-pill);background:var(--crit-600,#dc2626);color:var(--white);font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums}
 
 /* ── CASE_DOC_SET_V2 — состав истории болезни настраивает клиника ─────────── */
 .cds { padding: 12px 14px 14px; }
