@@ -47,7 +47,7 @@
 // дорогой вид дубля.
 
 import { supabase } from '../../supabase.js';
-import { sectionsFor, richSection, freeSection, richToolbar, readRich, applyRich, RICH_KEYS, insertBlock, fireInput, caseDocBlank } from './case-doc-a4.js';   // CASE_DOC_A4_V1 / CASE_DX_PICK_V1 / CASE_DOC_BLANK_V1
+import { sectionsFor, sectionLabel, richSection, freeSection, richToolbar, readRich, applyRich, RICH_KEYS, insertBlock, fireInput, caseDocBlank } from './case-doc-a4.js';   // CASE_DOC_A4_V1 / CASE_DX_PICK_V1 / CASE_DOC_BLANK_V1
 import { loadDocSettings } from './doc-settings.js?v=noqr1';   // CASE_DOC_BLANK_V1 — бланк клиники из «Документов»
 import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — список диагнозов с ролями
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
@@ -848,15 +848,70 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     const freeSecs = [];   // [{ box, input, name }]
     const readOnly = isView;
 
-    const sectionEls = secKeys.filter((key) => key !== 'diagnosis').map((key) => {
+    // CASE_DOC_SEC_MANAGER_V1 (2026-09-09) — РАЗДЕЛЫ УБИРАЮТСЯ И ДОБАВЛЯЮТСЯ,
+    // КАК В КАБИНЕТЕ ВРАЧА. Владелец: «we have fields that cannot be deleted
+    // and cannot be changed. please make exactly like in the cabinet».
+    //
+    // Строятся ВСЕ разделы листа, а не только положенные этому роду: лишние
+    // просто спрятаны (a4-sec-off), как в кабинете. Поэтому раздел, которого у
+    // документа «не бывает», добавляется одним нажатием и ничего не
+    // перерисовывает, а написанное в убранном разделе не теряется — оно
+    // остаётся в своей колонке и возвращает раздел на экран при следующем
+    // открытии (то же правило, что у приёма).
+    const ALL_SECS = RICH_KEYS.slice();                 // complaints, objective, plan, body
+    const secOn = new Set(secKeys.filter((k) => k !== 'diagnosis'));
+    const madeSecs = {};
+
+    const sectionEls = ALL_SECS.map((key) => {
         const made = richSection(kind, key, {
             onRename: readOnly ? null : (k, title) => {
                 if (title) secTitles[k] = title; else delete secTitles[k];
             },
         });
         rich[key] = made.input;
+        madeSecs[key] = made.sec;
         return made.sec;
     });
+
+    // Полоса «Разделы» — та же, что над листом приёма: что включено, то стоит
+    // чипом с крестиком; что выключено — в списке «добавить».
+    const secBar = readOnly ? null : h('div', { class: 'cd-secbar no-print' });
+    const syncSecs = () => {
+        for (const key of ALL_SECS) {
+            const el = madeSecs[key];
+            if (!el) continue;
+            // Класс ставится СТРОКОЙ, а не classList.toggle: он же читается
+            // тестом, и «спрятан ли раздел» должно быть видно в разметке.
+            const cls = String(el.className || '').split(/\s+/).filter((c) => c && c !== 'a4-sec-off');
+            if (!secOn.has(key)) cls.push('a4-sec-off');
+            el.className = cls.join(' ');
+        }
+        if (!secBar) return;
+        clear(secBar);
+        secBar.appendChild(h('span', { class: 'cd-secbar-l' }, tr('Разделы')));
+        for (const key of ALL_SECS) {
+            if (!secOn.has(key)) continue;
+            const name = secTitles[key] || tr(sectionLabel(kind, key));
+            secBar.appendChild(h('span', { class: 'cd-secchip' }, name,
+                h('button', {
+                    type: 'button', class: 'cd-secchip-x',
+                    title: tr('Убрать раздел'), 'aria-label': trf('Убрать раздел: {name}', { name }),
+                    onclick: () => { secOn.delete(key); syncSecs(); },
+                }, '×')));
+        }
+        const off = ALL_SECS.filter((k) => !secOn.has(k));
+        if (off.length) {
+            secBar.appendChild(h('select', {
+                class: 'cd-secadd',
+                'aria-label': tr('Добавить раздел'),
+                onchange: (e) => {
+                    const v = e.target && e.target.value;
+                    if (v) { secOn.add(v); syncSecs(); }
+                },
+            }, h('option', { value: '' }, '+ ' + tr('Добавить раздел')),
+                ...off.map((k) => h('option', { value: k }, secTitles[k] || tr(sectionLabel(kind, k))))));
+        }
+    };
 
     const freeHost = h('div', { class: 'cd-free' });
     const addFree = (title, html) => {
@@ -878,7 +933,8 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
             onclick: () => { const made = addFree('', ''); if (made.name.focus) made.name.focus(); },
         }, Icon('Plus', { size: 13 }), ' ', tr('Свой раздел')));
 
-    const sheet = h('div', { class: 'cd-sheet' }, ...sectionEls, freeHost, addBtn);
+    const sheet = h('div', { class: 'cd-sheet' }, secBar, ...sectionEls, freeHost, addBtn);
+    syncSecs();
     const toolbar = richToolbar(sheet);
 
     // ЧТО ПОКАЗАТЬ В ПОЛЯХ — зависит от того, зачем окно открыли.
@@ -911,6 +967,14 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
                     if (tag) tag.textContent = secTitles[key];
                 }
             }
+            // Состав разделов — как его оставил автор. Список пуст (старый
+            // документ) — остаются положенные роду.
+            const secs = Array.isArray(layout && layout.secs) ? layout.secs.filter((k) => ALL_SECS.includes(k)) : null;
+            if (secs) { secOn.clear(); for (const k of secs) secOn.add(k); }
+            // Написанное ВОЗВРАЩАЕТ раздел на экран, даже если его убрали: текст
+            // в невидимом разделе — потерянный текст.
+            for (const k of ALL_SECS) if (String(r[k] || '').trim()) secOn.add(k);
+            syncSecs();
             for (const item of (layout && layout.extra) || []) {
                 addFree((item && item.title) || '', (item && item.html) || '');
             }
@@ -964,7 +1028,7 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
             .filter((x) => x.title || x.html);
         return {
         admission_id: admission.id,
-        sections: { titles: secTitles, extra },
+        sections: { titles: secTitles, extra, secs: ALL_SECS.filter((k) => secOn.has(k)) },
         // Исправление НИКОГДА не правит прежнюю строку: review_id пуст, а
         // прежняя запись называется в `supersedes` и закрывается ссылкой.
         review_id: isCorrection ? null : draftId,

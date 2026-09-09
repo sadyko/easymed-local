@@ -140,6 +140,29 @@ test('свой раздел с именем и без имени сохраня�
   } finally { ctx.db.close(); }
 });
 
+// CASE_DOC_SEC_MANAGER_V1 — владелец: «we have fields that cannot be deleted
+// and cannot be changed. please make exactly like in the cabinet». Состав
+// разделов у документа свой, как у приёма: врач убирает ненужные и добавляет
+// нужные, и это решение хранится с записью.
+test('состав разделов документа сохраняется с записью и возвращается назад', () => {
+  const ctx = seed();
+  try {
+    const adm = inBed(ctx);
+    const { review } = admissionReviewSave(ctx.db, {
+      admission_id: adm.id, kind: 'head_review', objective: '<p>Осмотрен</p>', publish: true,
+      // Врач убрал план и добавил «дополнительно», которого у этого рода нет.
+      sections: { titles: {}, extra: [], secs: ['objective', 'body', 'выдуманный раздел'] },
+    }, headDoctor);
+
+    const back = JSON.parse(ctx.db.prepare('SELECT sections_json FROM admission_reviews WHERE id = ?').get(review.id).sections_json);
+    assert.deepEqual(back.secs, ['objective', 'body'], 'выдуманный раздел не должен доезжать до базы');
+
+    const file = admissionCaseFile(ctx.db, { admission_id: adm.id }, headDoctor);
+    const doc = file.documents.find((d) => d.kind === 'head_review');
+    assert.deepEqual(doc.sections.secs, ['objective', 'body'], 'состав разделов не доехал до бумаги');
+  } finally { ctx.db.close(); }
+});
+
 test('пустой свой раздел не сохраняется, а разметка чистится сервером', () => {
   const ctx = seed();
   try {

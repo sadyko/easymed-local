@@ -399,8 +399,16 @@ function parseSections(a) {
     extra.push({ title, html });
   }
 
-  if (!Object.keys(titles).length && !extra.length) return null;
-  return JSON.stringify({ titles, extra });
+  // CASE_DOC_SEC_MANAGER_V1 — СОСТАВ РАЗДЕЛОВ этого документа: врач убрал
+  // ненужные и добавил нужные, как в кабинете. Пустой список не значит
+  // «разделов нет» — он значит «экран о них не сказал», и тогда состав
+  // берётся из рода документа, как и раньше.
+  const secs = Array.isArray(src.secs)
+    ? src.secs.map((k) => str(k, 20)).filter((k) => SECTION_KEYS.includes(k))
+    : null;
+
+  if (!Object.keys(titles).length && !extra.length && !secs) return null;
+  return JSON.stringify(secs ? { titles, extra, secs } : { titles, extra });
 }
 
 /** Свои разделы записи — всегда объект, даже когда колонка пуста или испорчена. */
@@ -412,6 +420,7 @@ export function reviewSections(row) {
     return {
       titles: v && typeof v.titles === 'object' && v.titles ? v.titles : {},
       extra: Array.isArray(v && v.extra) ? v.extra : [],
+      secs: Array.isArray(v && v.secs) ? v.secs : null,
     };
   } catch (e) { return { titles: {}, extra: [] }; }
 }

@@ -6069,6 +6069,25 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
     background: none; color: var(--ink-400); font-size: 17px; line-height: 1; cursor: pointer; }
 .a4-sec-x:hover { background: var(--crit-50); color: var(--crit-700); }
 .cd-free { display: flex; flex-direction: column; }
+/* CASE_DOC_SEC_MANAGER_V1 — полоса «Разделы» над листом: что включено, то
+   чипом с крестиком; что выключено — в списке «добавить». Тот же приём, что
+   над листом приёма в кабинете врача. */
+.cd-secbar { display: flex; flex-wrap: wrap; align-items: center; gap: 7px;
+    margin: 0 0 12px; padding: 10px 12px; background: var(--ink-25);
+    border: 1px solid var(--ink-100); border-radius: var(--r-md); }
+.cd-secbar-l { font-size: 12.5px; font-weight: 700; color: var(--ink-500);
+    text-transform: uppercase; letter-spacing: .04em; margin-right: 2px; }
+.cd-secchip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 5px 3px 10px;
+    background: var(--primary-50); border: 1px solid var(--primary-100);
+    border-radius: var(--r-pill); font-size: 12.5px; font-weight: 600; color: var(--ink-800); }
+.cd-secchip-x { border: 0; background: transparent; cursor: pointer; color: var(--ink-500);
+    font-size: 15px; line-height: 1; padding: 0 2px; }
+.cd-secchip-x:hover { color: var(--crit-700); }
+.cd-secadd { height: 30px; padding: 0 8px; border: 1px dashed var(--ink-300);
+    border-radius: var(--r-pill); font-size: 12.5px; color: var(--primary-700);
+    background: var(--white); cursor: pointer; }
+/* Спрятанный раздел не занимает места и не печатается. */
+.cd-sheet .a4-sec-off { display: none; }
 .cd-sec-free { padding-right: 32px; }
 
 /* ── Экран помещается: прокручивается только лист (владелец: «make everything

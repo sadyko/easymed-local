@@ -7349,6 +7349,8 @@ export const STRINGS = {
   "Добавить свой раздел": {"en":"Add your own section","ru":"Добавить свой раздел","uz":"Oʻz boʻlimingizni qoʻshish"},
   "Название раздела": {"en":"Section name","ru":"Название раздела","uz":"Boʻlim nomi"},
   "Переименовать раздел": {"en":"Rename the section","ru":"Переименовать раздел","uz":"Boʻlim nomini oʻzgartirish"},
+  "Убрать раздел: {name}": {"en":"Remove the section: {name}","ru":"Убрать раздел: {name}","uz":"Boʻlimni olib tashlash: {name}"},
+  "Добавить раздел": {"en":"Add a section","ru":"Добавить раздел","uz":"Boʻlim qoʻshish"},
   "Переименовать раздел: {name}": {"en":"Rename the section: {name}","ru":"Переименовать раздел: {name}","uz":"Boʻlim nomini oʻzgartirish: {name}"},
   "Название раздела — можно не заполнять": {"en":"Section name — may be left empty","ru":"Название раздела — можно не заполнять","uz":"Boʻlim nomi — boʻsh qoldirsa ham boʻladi"},
   "Свой раздел": {"en":"Own section","ru":"Свой раздел","uz":"Oʻz boʻlimi"},
