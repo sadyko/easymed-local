@@ -136,6 +136,7 @@ export function renderServiceWorkspace(container, { onNavigate, payload }) {
     wsState.payload = null;
     wsState.saved = false;
     wsState.docSections = new Set(DOC_SECTIONS_DEFAULT);   // WS_FLEX_DOC_V1
+    wsState.freeSeq = 0;   // WS_EXAM_AND_FREE_V1 — нумерация своих разделов у каждого приёма своя
     wsState.sectionOrder = DOC_SECTIONS.map(sd => sd.field);   // WS_REORDER_V1 — default order per consultation
     wsState.ctx = ctx;                 // WS_PASTE_V1 — target for pasting results from the popup
     wsState.docPhone = true;           // DOC_PHONE_DEFAULT_V1 — doctor phone ON by default (toggle can remove it)
@@ -993,6 +994,9 @@ function soapForm(ctx) {
                 // Sections 1-5
                 a4Section(ctx, { sec: 'complaints',   ru: 'ЖАЛОБЫ',           uz: 'SHIKOYATLAR',   field: 'chief_complaint',    ph: 'Опишите жалобы пациента…' }),
                 a4Section(ctx, { sec: 'anamnesis',    ru: 'АНАМНЕЗ',          uz: 'ANAMNEZ',       field: 'hpi',                ph: 'Анамнез заболевания…' }),
+                // WS_EXAM_AND_FREE_V1 — осмотр стоит ПОСЛЕ анамнеза и ДО диагноза:
+                // так его и пишут, и так он читается в готовом заключении.
+                a4Section(ctx, { sec: 'exam', ru: 'ОСМОТР', uz: 'KO\'RIK', field: 'physical_exam', ph: 'Объективный осмотр по системам…' }),
                 // Diagnosis band
                 // DX_PLAIN_SECTION_V1 — Диагноз looks like every other box (standard
                 // a4-sec band, not the dark a4-dx banner); the single МКБ-10 button below
@@ -1017,6 +1021,21 @@ function soapForm(ctx) {
                 // Sections 7-8
                 a4Section(ctx, { sec: 'therapy',         ru: 'ТЕРАПИЯ',      uz: 'DAVOLASH',   field: 'therapy_text',         ph: 'Назначенная терапия…' }),
                 a4Section(ctx, { sec: 'recommendations', ru: 'РЕКОМЕНДАЦИИ', uz: 'TAVSIYALAR', field: 'recommendations_text', ph: 'Рекомендации пациенту…' }),
+                // WS_EXAM_AND_FREE_V1 — СВОИ РАЗДЕЛЫ, сколько угодно, с именем от врача.
+                //
+                // Владелец: «option for adding free fields (one or more with naming
+                // the section)». Готовых семи разделов не хватает на всё: осмотр
+                // глазного дна, заключение консультанта, динамика за сутки. Раньше
+                // это писали в «Рекомендации», и заключение читалось хуже с каждой
+                // такой припиской.
+                //
+                // Хранить их отдельно НЕ НАДО: приём сохраняется как JSON всех
+                // полей [data-field] (collectFields), поэтому свой раздел — это
+                // просто пара ключей, имя и текст. Ни миграции, ни новой таблицы.
+                h('div', { 'data-free-secs': '' }),
+                h('div', { class: 'a4-actions no-print' },
+                    h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => wsAddFreeSection(ctx) },
+                        Icon('Plus', { size: 13 }), ' ', tr('Добавить свой раздел'))),
                 // RX_IN_FORM_V1 — read-only prescription table on the editable sheet (mirrors the Бланк rx table)
                 h('div', { 'data-rx-doc': '', class: 'a4-sec a4-sec-off', 'data-sec': 'rx', style: { position: 'relative' } }),
                 // PAPER_ACTIONS_V1 — «Повторный визит» + «Заявка на госпитализацию» on the sheet, under Рекомендации (screen-only)
@@ -2181,6 +2200,9 @@ function collectFields(ctx) {
 function applyFields(ctx, fields) {
     try { setTimeout(() => renderBlank(ctx), 0); } catch (e) {}   // WYSIWYG_BLANK_V1
     if (!fields) return;
+    // WS_EXAM_AND_FREE_V1 — свои разделы создаются ДО подстановки значений:
+    // подставлять текст в коробку, которой ещё нет, некуда.
+    try { wsRestoreFreeSections(ctx, fields); } catch (e2) { /* приём откроется без них */ }
     const root = ctx.container;
     for (const el of root.querySelectorAll('[data-field]')) {
         const k = el.getAttribute('data-field');
@@ -2755,6 +2777,13 @@ const REQUIRED_SECS = [];
 const DOC_SECTIONS = [
     { sec: 'complaints',      label: 'Жалобы',           field: 'chief_complaint' },
     { sec: 'anamnesis',       label: 'Анамнез',          field: 'hpi' },
+    // WS_EXAM_AND_FREE_V1 (2026-09-09) — владелец: «add here осмотр». Раздел
+    // «Осмотр» в коде БЫЛ везде, кроме самого списка: onA4Edit считает его
+    // обязательным, вставка результатов кладёт текст в physical_exam, шаблоны
+    // и снимок приёма его печатают. Не было только строки здесь и коробки на
+    // листе, поэтому врач не мог его открыть — и обход по системам писали в
+    // «Анамнез».
+    { sec: 'exam',            label: 'Осмотр',           field: 'physical_exam' },
     { sec: 'diagnosis',       label: 'Диагноз',          field: 'primary_diagnosis' },
     { sec: 'therapy',         label: 'Терапия',          field: 'therapy_text' },
     { sec: 'recommendations', label: 'Рекомендации',     field: 'recommendations_text' },
@@ -2764,6 +2793,77 @@ function ensureDocSections() { if (!wsState.docSections) wsState.docSections = n
 function wsSectionOn(sec) { return wsState.docSections ? wsState.docSections.has(sec) : DOC_SECTIONS_DEFAULT.includes(sec); }
 function wsAddSection(ctx, sec) { ensureDocSections(); wsState.docSections.add(sec); syncSections(ctx); }
 function wsRemoveSection(ctx, sec) { ensureDocSections(); wsState.docSections.delete(sec); syncSections(ctx); }
+// WS_EXAM_AND_FREE_V1 — СВОЙ РАЗДЕЛ ПРИЁМА.
+//
+// Ключи пары: free_N__title (имя, которое дал врач) и free_N (текст). Оба —
+// обычные [data-field], поэтому сохраняются и восстанавливаются тем же кодом,
+// что и встроенные разделы, и попадают в шаблон и в печать без единой правки
+// на той стороне.
+//
+// Номер НЕ переиспользуется после удаления: иначе текст удалённого раздела
+// всплыл бы в следующем под чужим именем.
+const FREE_RE = /^free_(\d+)__title$/;
+
+function freeSecBox(ctx, id, title) {
+    const key = 'free_' + id;
+    return h('div', { class: 'a4-sec', 'data-sec': key, style: { position: 'relative' } },
+        // Имя раздела — тоже поле: врач правит его прямо на листе, как и текст.
+        h('input', {
+            class: 'a4-sec-name', type: 'text', 'data-field': key + '__title', value: title || '',
+            placeholder: tr('Название раздела'), oninput: () => { wsState.saved = false; try { resetSaveBtn(ctx); } catch (e) { /* кнопка нарисуется позже */ } },
+        }),
+        h('button', { class: 'a4-sec-x', type: 'button', title: tr('Убрать раздел'),
+            onclick: () => wsRemoveFreeSection(ctx, id) }, '×'),
+        h('div', {
+            class: 'a4-input', 'data-field': key, contentEditable: 'true',
+            'data-ph': tr('Текст раздела…'), oninput: () => onA4Edit(ctx, key),
+        }));
+}
+
+function wsAddFreeSection(ctx, title, id) {
+    const host = ctx.container && ctx.container.querySelector('[data-free-secs]');
+    if (!host) return null;
+    const next = id != null ? Number(id) : (wsState.freeSeq = (wsState.freeSeq || 0) + 1);
+    if (id != null && next > (wsState.freeSeq || 0)) wsState.freeSeq = next;
+    const box = freeSecBox(ctx, next, title);
+    host.appendChild(box);
+    if (id == null) {
+        wsState.saved = false;
+        try { resetSaveBtn(ctx); } catch (e) { /* кнопка нарисуется позже */ }
+        const input = box.querySelector('.a4-sec-name');
+        if (input && input.focus) input.focus();
+    }
+    return box;
+}
+
+function wsRemoveFreeSection(ctx, id) {
+    const host = ctx.container && ctx.container.querySelector('[data-free-secs]');
+    const box = host && host.querySelector('[data-sec="free_' + id + '"]');
+    if (!box) return;
+    box.remove();
+    wsState.saved = false;
+    try { resetSaveBtn(ctx); } catch (e) { /* кнопка нарисуется позже */ }
+    if (wsState.blank) { try { renderBlank(ctx); } catch (e) { /* бланк перерисуется позже */ } }
+}
+
+/**
+ * Восстановить свои разделы из сохранённого приёма.
+ *
+ * Список разделов нигде не хранится ОТДЕЛЬНО — он выводится из самих ключей:
+ * есть free_3__title, значит был раздел номер три. Отдельный список пришлось
+ * бы держать в согласии с ключами, а рассогласовать их проще простого.
+ */
+function wsRestoreFreeSections(ctx, fields) {
+    const host = ctx.container && ctx.container.querySelector('[data-free-secs]');
+    if (!host || !fields) return;
+    clear(host);
+    const ids = Object.keys(fields)
+        .map((k) => { const m = FREE_RE.exec(k); return m ? Number(m[1]) : null; })
+        .filter((n) => n !== null)
+        .sort((x, y) => x - y);
+    for (const id of ids) wsAddFreeSection(ctx, fields['free_' + id + '__title'] || '', id);
+}
+
 function wsMoveSection(ctx, field, dir) {   // WS_REORDER_V1
     if (!wsState.sectionOrder) wsState.sectionOrder = DOC_SECTIONS.map(sd => sd.field);
     const arr = wsState.sectionOrder;

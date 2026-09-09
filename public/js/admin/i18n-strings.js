@@ -7327,4 +7327,12 @@ export const STRINGS = {
   "от": {"en":"of","ru":"от","uz":"sana"},
   "({n} лет)": {"en":"({n} y.o.)","ru":"({n} лет)","uz":"({n} yosh)"},
   "№ приёма": {"en":"Visit no.","ru":"№ приёма","uz":"Qabul №"},
+  "Название нового документа": {"en":"Name of the new document","ru":"Название нового документа","uz":"Yangi hujjat nomi"},
+  "Убрать из набора": {"en":"Remove from the set","ru":"Убрать из набора","uz":"Toʻplamdan olib tashlash"},
+  "Вернуть в набор": {"en":"Return to the set","ru":"Вернуть в набор","uz":"Toʻplamga qaytarish"},
+  "Добавить свой раздел": {"en":"Add your own section","ru":"Добавить свой раздел","uz":"Oʻz boʻlimingizni qoʻshish"},
+  "Название раздела": {"en":"Section name","ru":"Название раздела","uz":"Boʻlim nomi"},
+  "Текст раздела…": {"en":"Section text…","ru":"Текст раздела…","uz":"Boʻlim matni…"},
+  "ОСМОТР": {"en":"EXAMINATION","ru":"ОСМОТР","uz":"KOʻRIK"},
+  "Объективный осмотр по системам…": {"en":"Objective examination by systems…","ru":"Объективный осмотр по системам…","uz":"Tizimlar boʻyicha obyektiv koʻrik…"},
 };

@@ -16,10 +16,9 @@
 // ссылаются написанные записи), выписной эпикриз не убирается (на нём стоит
 // гейт выписки).
 import { supabase } from '../../supabase.js';
-import { h, Icon, clear, toast, field } from '../ui.js';
+import { h, Icon, clear, toast } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { caseDocTitle } from './case-docs.js?v=cw1';
-import { inpatientModal } from './inpatient-modal.js';
 
 /** Правила срока словами: клиника выбирает, КАК считается срок, а не выдумывает его. */
 export const DUE_RULE_LABEL = {
@@ -41,55 +40,10 @@ export function dueWords(t) {
     return tr('Без срока');
 }
 
-// ---------------------------------------------------------------------------
-// Окно правки одного документа
-// ---------------------------------------------------------------------------
-function openTypeModal({ type = null, onDone } = {}) {
-    const isNew = !type;
-    const titleIn = h('input', { type: 'text', value: type ? type.title : '', placeholder: tr('Например: Лист анестезиолога') });
-    const ruleSel = h('select', null, ...Object.keys(DUE_RULE_LABEL).map((k) => h('option', {
-        value: k, selected: type && type.due_rule === k ? true : null,
-    }, tr(DUE_RULE_LABEL[k]))));
-    const hoursIn = h('input', { type: 'number', min: '1', step: '1',
-        value: type && type.due_hours !== null && type.due_hours !== undefined ? String(type.due_hours) : '' });
-    const blockIn = h('input', { type: 'checkbox', checked: type && type.block === 'surgical' ? true : null });
-
-    const hoursField = field(tr('Срок, часов'), hoursIn);
-    const syncHours = () => { hoursField.style.display = RULES_WITH_HOURS.includes(ruleSel.value) ? '' : 'none'; };
-    ruleSel.addEventListener('change', syncHours);
-    syncHours();
-
-    // Встроенное имя переводится на три языка; своё — нет. Сказать об этом
-    // честнее, чем дать переименовать и молча потерять переводы.
-    const nameNote = type && type.builtin
-        ? h('div', { class: 'muted', style: { fontSize: '12.5px', lineHeight: '1.45' } },
-            tr('У встроенного документа имя переводится на три языка. Своё имя заменит перевод и останется на одном языке — оставьте поле пустым, чтобы вернуть перевод.'))
-        : null;
-
-    return inpatientModal(isNew ? tr('Новый документ истории болезни') : tr('Документ истории болезни'), 'Doc', [
-        field(tr('Название'), titleIn, { required: !type || !type.builtin }),
-        nameNote,
-        field(tr('Когда его ждут'), ruleSel),
-        hoursField,
-        h('label', { class: 'row', style: { gap: '8px', alignItems: 'center', fontSize: '13.5px', cursor: 'pointer' } },
-            blockIn, h('span', null, tr('Только у оперируемых пациентов'))),
-        h('div', { class: 'muted', style: { fontSize: '12.5px', lineHeight: '1.45' } },
-            tr('Документ с этой отметкой появляется в списке, только когда у пациента написан хоть один документ операции.')),
-    ], isNew ? tr('Добавить') : tr('Сохранить'), async () => {
-        const args = {
-            title: titleIn.value.trim(),
-            due_rule: ruleSel.value,
-            due_hours: RULES_WITH_HOURS.includes(ruleSel.value) ? Number(hoursIn.value) : null,
-            block: blockIn.checked ? 'surgical' : '',
-        };
-        if (type) args.kind = type.kind;
-        const { error } = await supabase.rpc('case_doc_type_save', args);
-        if (error) { toast(error.message || tr('Не удалось сохранить документ.'), 'fail'); return false; }
-        toast(isNew ? tr('Документ добавлен в набор.') : tr('Документ сохранён.'), 'ok');
-        if (onDone) await onDone();
-        return true;
-    }, { width: 560 });
-}
+// CASE_DOC_SET_SIMPLE_V1 — окна правки здесь больше нет: заведение документа
+// стало одной строкой, а срок и блок правятся тем же серверным вызовом, когда
+// они действительно понадобятся. Держать ради этого окно на четыре решения
+// значило бы платить им за каждое добавление.
 
 // ---------------------------------------------------------------------------
 // Список состава
@@ -112,12 +66,9 @@ export function caseDocSetPanel({ onChange = null } = {}) {
         if (changed && onChange) { try { await onChange(); } catch (e) { /* экран сам перерисуется */ } }
     };
 
-    const reorder = async (kinds) => {
-        const { error } = await supabase.rpc('case_doc_types_reorder', { kinds });
-        if (error) { toast(error.message || tr('Не удалось изменить порядок.'), 'fail'); return; }
-        await load(true);
-    };
-
+    // CASE_DOC_SET_SIMPLE_V1 — стрелок порядка в панели больше нет: строка это
+    // имя и одна кнопка. Порядок остаётся за сервером (case_doc_types_reorder),
+    // и вернуть его сюда можно, не трогая ничего другого.
     const setActive = async (t, active) => {
         const { error } = await supabase.rpc('case_doc_type_set_active', { kind: t.kind, active });
         if (error) { toast(error.message || tr('Не удалось изменить набор.'), 'fail'); return; }
@@ -125,39 +76,52 @@ export function caseDocSetPanel({ onChange = null } = {}) {
         await load(true);
     };
 
-    function row(t, i) {
+    // CASE_DOC_SET_SIMPLE_V1 (2026-09-09) — владелец: «i cannot add, because its
+    // asking something with dialogue window … make just name of the document +
+    // button and remove buttons and at the bottom a create document field».
+    //
+    // Окно спрашивало имя, правило срока, часы и «только у оперируемых» — четыре
+    // решения там, где у врача одно: такого документа у нас нет, заведите. Срок
+    // и блок нужны редко, а требовать их при заведении значит требовать всегда.
+    // Свой документ создаётся БЕЗ СРОКА: он в наборе, спрашивается, но
+    // просроченным не висит. Понадобится срок — его правят на сервере тем же
+    // вызовом, что и раньше.
+    function row(t) {
         const name = caseDocTitle(t.kind, t.title);
-        const move = (delta) => {
-            const order = types.map((x) => x.kind);
-            const j = i + delta;
-            if (j < 0 || j >= order.length) return;
-            const tmp = order[i]; order[i] = order[j]; order[j] = tmp;
-            reorder(order);
-        };
         return h('div', { class: 'cds-row' + (t.active ? '' : ' cds-off') },
-            h('div', { class: 'cds-ord' },
-                h('button', { class: 'cds-move', type: 'button', disabled: i === 0 ? true : null,
-                    'aria-label': trf('Выше: {name}', { name }), onclick: () => move(-1) }, Icon('ArrowUp', { size: 13 })),
-                h('button', { class: 'cds-move', type: 'button', disabled: i === types.length - 1 ? true : null,
-                    'aria-label': trf('Ниже: {name}', { name }), onclick: () => move(1) }, Icon('ArrowDown', { size: 13 }))),
-            h('div', { class: 'cds-main' },
-                h('div', { class: 'cds-name' }, name,
-                    t.builtin ? h('span', { class: 'cds-tag' }, tr('встроенный')) : null,
-                    t.block === 'surgical' ? h('span', { class: 'cds-tag' }, tr('операция')) : null),
-                h('div', { class: 'cds-when' }, dueWords(t),
-                    t.used ? h('span', { class: 'cds-used' }, trf('записей: {n}', { n: t.used })) : null)),
-            h('div', { class: 'cds-acts' },
-                h('button', { class: 'btn btn-sm btn-ghost', type: 'button',
-                    'aria-label': trf('Изменить: {name}', { name }),
-                    onclick: () => openTypeModal({ type: t, onDone: () => load(true) }) }, Icon('Edit', { size: 13 })),
-                t.locked
-                    ? h('span', { class: 'cds-lock', title: tr('Выписной эпикриз убрать нельзя: на нём стоит гейт выписки.') },
-                        Icon('Lock', { size: 13 }))
-                    : h('button', {
-                        class: 'btn btn-sm btn-ghost', type: 'button',
-                        'aria-label': t.active ? trf('Убрать из набора: {name}', { name }) : trf('Вернуть в набор: {name}', { name }),
-                        onclick: () => setActive(t, !t.active),
-                    }, Icon(t.active ? 'Minus' : 'Plus', { size: 13 }))));
+            h('div', { class: 'cds-name' }, name),
+            t.locked
+                // Выписной эпикриз убрать нечем: на нём стоит гейт выписки, и
+                // кнопка, которая всегда откажет, — обещание, а не действие.
+                ? h('span', { class: 'cds-lock', title: tr('Выписной эпикриз убрать нельзя: на нём стоит гейт выписки.') },
+                    Icon('Lock', { size: 13 }))
+                : h('button', {
+                    class: 'btn btn-sm btn-ghost', type: 'button',
+                    'aria-label': t.active ? trf('Убрать из набора: {name}', { name }) : trf('Вернуть в набор: {name}', { name }),
+                    title: t.active ? tr('Убрать из набора') : tr('Вернуть в набор'),
+                    onclick: () => setActive(t, !t.active),
+                }, Icon(t.active ? 'Minus' : 'Plus', { size: 13 })));
+    }
+
+    // Поле создания: имя — и всё. Enter работает так же, как кнопка: это одна
+    // строка, и тянуться к мыши ради неё не за что.
+    function addRow() {
+        const input = h('input', { type: 'text', class: 'cds-new-in', placeholder: tr('Название нового документа') });
+        const submit = async () => {
+            const title = String(input.value || '').trim();
+            if (!title) { input.focus && input.focus(); return; }
+            const { error } = await supabase.rpc('case_doc_type_save', { title, due_rule: 'none', due_hours: null, block: '' });
+            if (error) { toast(error.message || tr('Не удалось сохранить документ.'), 'fail'); return; }
+            input.value = '';
+            toast(tr('Документ добавлен в набор.'), 'ok');
+            await load(true);
+        };
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { if (e.preventDefault) e.preventDefault(); submit(); }
+        });
+        return h('div', { class: 'cds-new' }, input,
+            h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: submit },
+                Icon('Plus', { size: 13 })));
     }
 
     function paint() {
@@ -170,24 +134,14 @@ export function caseDocSetPanel({ onChange = null } = {}) {
             box.appendChild(h('div', { class: 'cds-note cds-fail' }, tr('Состав не загрузился. Обновите страницу.')));
             return;
         }
-        box.appendChild(h('div', { class: 'cds-note' },
-            tr('Эти документы система спрашивает у врача по каждой госпитализации. Порядок здесь — порядок чек-листа и собранной истории.')));
-        if (!types.length) {
+        if (types.length) {
+            const list = h('div', { class: 'cds-list' });
+            types.forEach((t) => list.appendChild(row(t)));
+            box.appendChild(list);
+        } else {
             box.appendChild(h('div', { class: 'cds-note' }, tr('Набор пуст.')));
-            return;
         }
-        const list = h('div', { class: 'cds-list' });
-        types.forEach((t, i) => list.appendChild(row(t, i)));
-        box.appendChild(list);
-        // CASE_DOC_SET_IN_RAIL_V1 — владелец: «in the left panel we have add
-        // remove buttons and one create button in the bottom». У строк — правка
-        // и «убрать»; создание одно и стоит под списком, где кончается перечень
-        // и начинается мысль «а такого документа у нас нет».
-        box.appendChild(h('button', {
-            class: 'btn btn-primary btn-sm cds-add', type: 'button',
-            onclick: () => openTypeModal({ onDone: () => load(true) }),
-        }, Icon('Plus', { size: 13 }), ' ', tr('Добавить документ')));
-
+        box.appendChild(addRow());
         const off = types.filter((t) => !t.active).length;
         if (off) {
             box.appendChild(h('div', { class: 'cds-note' },

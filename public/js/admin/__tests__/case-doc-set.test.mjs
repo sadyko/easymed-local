@@ -114,52 +114,76 @@ const btns = (root) => walk(root).filter((e) => e.tagName === 'BUTTON');
 const named = (root, label) => btns(root).filter((b) => (b.getAttribute('aria-label') || textOf(b) || '').includes(label));
 
 // ===========================================================================
-test('CASE_DOC_SET_V2: базовый список виден сразу, встроенные помечены, срок сказан словами', async () => {
+// ===========================================================================
+// CASE_DOC_SET_SIMPLE_V1 — владелец: «i cannot add, because its asking
+// something with dialogue window … make just name of the document + button and
+// remove buttons and at the bottom a create document field».
+//
+// Окно спрашивало имя, правило срока, часы и «только у оперируемых» — четыре
+// решения там, где у врача одно: такого документа нет, заведите. Проверяется
+// то, что осталось: имя и одна кнопка в строке, строка создания внизу, и
+// заведение БЕЗ единого окна.
+test('CASE_DOC_SET_SIMPLE_V1: строка — это имя и одна кнопка, без срока, счётчиков и стрелок', async () => {
     RESET(); calls = [];
     const panel = mod.caseDocSetPanel();
     await settle();
     const t = textOf(panel);
-    assert.ok(t.includes('Состав истории болезни'), 'у панели нет имени');
-    assert.ok(t.includes('Осмотр приёмного врача'), 'встроенный документ не назван словарём: ' + t.slice(0, 200));
-    assert.ok(t.includes('встроенный'), 'встроенные не помечены');
-    assert.ok(t.includes('2 ч от поступления'), 'срок не сказан словами');
-    assert.ok(t.includes('При выписке'), 'правило «при выписке» не сказано словами');
-    assert.ok(t.includes('записей: 3'), 'не сказано, сколько записей уже написано этим родом');
-    assert.ok(calls.some((c) => c.name === 'case_doc_types_list'), 'состав не запрошен у сервера');
+    assert.ok(t.includes('Осмотр приёмного врача'), 'встроенный документ не назван словарём');
+    // Ничего, кроме имени: ни срока, ни «встроенный», ни числа записей.
+    for (const noise of ['2 ч от поступления', 'При выписке', 'встроенный', 'записей: 3']) {
+        assert.ok(!t.includes(noise), 'в строке осталось лишнее: ' + noise);
+    }
+    // По одной кнопке на строку — «убрать». Стрелок и карандаша нет.
+    assert.equal(named(panel, 'Выше:').length, 0, 'стрелки порядка вернулись');
+    assert.equal(named(panel, 'Изменить:').length, 0, 'правка строки вернулась');
+    assert.equal(named(panel, 'Убрать из набора:').length, 2,
+        'кнопка «убрать» должна быть у каждой строки, кроме запертой');
 });
 
-test('CASE_DOC_SET_V2: «+» заводит свой документ — имя, правило срока и часы уходят на сервер', async () => {
+test('CASE_DOC_SET_SIMPLE_V1: документ заводится строкой снизу, без окна и без срока', async () => {
     RESET(); calls = [];
+    const before = BODY.children.length;
     const panel = mod.caseDocSetPanel();
     await settle();
-    const add = named(panel, 'Добавить документ')[0];
-    assert.ok(add && String(add.className).includes('btn-primary'), '«добавить» — главное действие панели');
-    add.click();
+
+    const input = walk(panel).find((e) => e.tagName === 'INPUT' && String(e.className).includes('cds-new-in'));
+    assert.ok(input, 'поля создания внизу нет');
+    // Поле стоит ПОД списком: список кончился — и вот строка «а такого нет».
+    const order = panel.children.map((c) => String(c.className || ''));
+    assert.ok(order.findIndex((c) => c.includes('cds-list')) < order.findIndex((c) => c.includes('cds-new')),
+        'строка создания оказалась выше списка: ' + order.join(', '));
+
+    input.value = 'Лист анестезиолога';
+    const add = walk(panel).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('btn-primary'));
+    assert.equal(add.length, 1, 'кнопка создания должна быть одна');
+    add[0].click();
     await settle();
 
-    const modal = BODY.children.filter((c) => String(c.className || '').includes('modal')).pop();
-    assert.ok(modal, 'окно нового документа не открылось');
-    const title = walk(modal).find((e) => e.tagName === 'INPUT' && e.attrs.type === 'text');
-    const rule = walk(modal).find((e) => e.tagName === 'SELECT');
-    const hours = walk(modal).find((e) => e.tagName === 'INPUT' && e.attrs.type === 'number');
-    assert.ok(title && rule && hours, 'в окне нет имени, правила или часов');
-    title.value = 'Лист анестезиолога';
-    rule.value = 'surgical';
-    rule.dispatchEvent({ type: 'change' });
-    hours.value = '12';
-    const save = btns(modal).find((b) => textOf(b).includes('Добавить'));
-    save.click();
-    await settle();
-
+    // Ни одного окна не открылось.
+    assert.equal(BODY.children.filter((c) => String(c.className || '').includes('modal')).length, 0,
+        'заведение документа снова спрашивает окном');
     const sent = calls.filter((c) => c.name === 'case_doc_type_save').pop();
     assert.ok(sent, 'документ не ушёл на сервер');
     assert.equal(sent.args.title, 'Лист анестезиолога');
-    assert.equal(sent.args.due_rule, 'surgical');
-    assert.equal(sent.args.due_hours, 12);
-    assert.ok(!sent.args.kind, 'у нового документа рода быть не может — его выдаёт сервер');
+    // Свой документ заводится БЕЗ СРОКА: он в наборе, но просроченным не висит.
+    assert.equal(sent.args.due_rule, 'none');
+    assert.equal(sent.args.due_hours, null);
+    assert.ok(!sent.args.kind, 'род выдаёт сервер, а не экран');
+    assert.equal(input.value, '', 'поле не очистилось под следующий документ');
     assert.ok(textOf(panel).includes('Лист анестезиолога'), 'новый документ не появился в списке');
 });
 
+test('CASE_DOC_SET_SIMPLE_V1: пустое имя ничего не заводит', async () => {
+    RESET(); calls = [];
+    const panel = mod.caseDocSetPanel();
+    await settle();
+    const input = walk(panel).find((e) => e.tagName === 'INPUT' && String(e.className).includes('cds-new-in'));
+    input.value = '   ';
+    walk(panel).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('btn-primary'))[0].click();
+    await settle();
+    assert.equal(calls.filter((c) => c.name === 'case_doc_type_save').length, 0,
+        'пустое имя ушло на сервер');
+});
 test('CASE_DOC_SET_V2: документ убирается из набора и возвращается; выписной эпикриз заперт', async () => {
     RESET(); calls = [];
     const panel = mod.caseDocSetPanel();
@@ -181,27 +205,9 @@ test('CASE_DOC_SET_V2: документ убирается из набора и 
     assert.ok(walk(panel).some((e) => String(e.className || '').includes('cds-lock')), 'замка у запертого документа нет');
 });
 
-test('CASE_DOC_SET_V2: порядок меняется стрелками и уходит на сервер целиком', async () => {
-    RESET(); calls = [];
-    const panel = mod.caseDocSetPanel();
-    await settle();
-    named(panel, 'Ниже: Осмотр приёмного врача')[0].click();
-    await settle();
-    const sent = calls.filter((c) => c.name === 'case_doc_types_reorder').pop();
-    assert.ok(sent, 'порядок не ушёл на сервер');
-    assert.deepEqual(sent.args.kinds, ['primary', 'intake', 'discharge'], 'порядок ушёл не целиком или не тот');
+// CASE_DOC_SET_SIMPLE_V1 — стрелок порядка в панели больше нет; серверный
+// case_doc_types_reorder жив и проверен в server/services/rpc/case-doc-types.test.js.
 
-    // У первой строки «выше» неактивна, у последней — «ниже».
-    const up = named(panel, 'Выше: Первичный осмотр и план лечения')[0];
-    assert.ok(up.hasAttribute('disabled'), 'первую строку некуда поднимать');
-});
-
-// ─── CASE_DOC_SET_IN_RAIL_V1 — панель живёт в истории болезни ───────────────
-//
-// Владелец (2026-09-09): «this documents shouldn't be here, but in the
-// stationary cabinet in the case file … in the left panel we have add remove
-// buttons and one create button in the bottom». Состав правят, ГЛЯДЯ НА
-// чек-лист, а не в настройках печати.
 test('CASE_DOC_SET_IN_RAIL_V1: панель стоит в левой колонке истории болезни, а создание — одно и под списком', async () => {
     const fsx = await import('node:fs');
     const pathx = await import('node:path');
@@ -216,12 +222,11 @@ test('CASE_DOC_SET_IN_RAIL_V1: панель стоит в левой колон�
     RESET(); calls = [];
     const panel = mod.caseDocSetPanel();
     await settle();
-    const add = named(panel, 'Добавить документ');
+    const add = walk(panel).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('btn-primary'));
     assert.equal(add.length, 1, 'кнопок создания должно быть ровно одна: ' + add.length);
-    assert.ok(String(add[0].className).includes('cds-add'), 'кнопка создания не под списком');
     const list = walk(panel).find((e) => String(e.className || '').includes('cds-list'));
     assert.ok(list, 'списка нет');
     const order = panel.children.map((c) => String(c.className || ''));
-    assert.ok(order.findIndex((c) => c.includes('cds-list')) < order.findIndex((c) => c.includes('cds-add')),
-        'кнопка создания оказалась выше списка: ' + order.join(', '));
+    assert.ok(order.findIndex((c) => c.includes('cds-list')) < order.findIndex((c) => c.includes('cds-new')),
+        'строка создания оказалась выше списка: ' + order.join(', '));
 });
