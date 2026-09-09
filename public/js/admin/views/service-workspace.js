@@ -152,8 +152,18 @@ export function renderServiceWorkspace(container, { onNavigate, payload }) {
     ));
     setTimeout(() => { try { loadVitals(ctx); } catch (e) {} }, 0);
 
-    _a4Sig = '';
-    setupA4Pagination(container);
+    // A4_PAGINATE_V1 (регрессия, 2026-09-09) — здесь стояло :
+    // остаток от общей переменной модуля, которая жила рядом с расчётом
+    // разрывов. Расчёт переехал в views/a4-paginate.js и держит своё
+    // состояние ВНУТРИ каждого вызова, а строка осталась — и в модуле
+    // (strict mode) присваивание необъявленной переменной бросает
+    // ReferenceError. Падал он при открытии приёма, то есть кабинет врача не
+    // открывался вовсе: «_a4Sig is not defined».
+    //
+    // Наблюдатель теперь и ОТМЕНЯЕТСЯ: без этого каждый открытый приём
+    // оставлял за собой свой ResizeObserver на листе.
+    if (wsState.disposeA4) { try { wsState.disposeA4(); } catch (e) { /* нечего отменять */ } }
+    wsState.disposeA4 = setupA4Pagination(container);
     wsState.docType = 'conclusion';   // DOCTYPE_FROM_DOCUMENTS_V1 — reset per consultation
     wsState.diagImages = [];          // DIAG_IMAGES_V1 — uploaded imaging photos (data URLs), reset per consultation
     // WS_TEMPLATE_SECTIONS_V1 — open in the clinic's #documents template with inline +/- section pills.
