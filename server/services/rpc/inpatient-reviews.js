@@ -152,6 +152,20 @@ export const LEGACY_KINDS = Object.freeze(['consent']);
 // изменений до перезапуска. Запрос — десять строк по индексу.
 const DOC_SET_SQL = 'SELECT kind, title, due_rule, due_hours, block FROM case_doc_types WHERE active = 1 ORDER BY sort_order, id';
 
+/**
+ * Имена ВСЕХ родов, включая убранные из набора.
+ *
+ * CASE_DOC_KEEP_WRITTEN_V1 — убранный род пропадает из набора, но написанные
+ * им документы остаются документами, и на бумаге у них должно быть имя. Набор
+ * (loadCaseDocSet) их имён уже не знает: он отдаёт только действующие.
+ */
+export function loadCaseDocTitles(db) {
+  try {
+    const rows = db.prepare('SELECT kind, title FROM case_doc_types').all();
+    return new Map(rows.map((r) => [r.kind, r.title || '']));
+  } catch (e) { return new Map(); }   // база старше миграции 115
+}
+
 export function loadCaseDocSet(db) {
   let rows = null;
   try { rows = db.prepare(DOC_SET_SQL).all(); }
@@ -1172,6 +1186,43 @@ export function admissionCaseDocs(db, args, user) {
     && (it.due_rule !== 'at_discharge' || adm.status === 'discharging')) || null);
   const nextKind = next ? next.kind : (overdueNext ? overdueNext.kind : null);
 
+  // CASE_DOC_KEEP_WRITTEN_V1 (2026-09-09) — ВОПРОС ВЛАДЕЛЬЦА: «what about the
+  // saved documents?». Ответ до этой правки был плохой: документ, написанный
+  // родом, который клиника потом убрала из набора, ИСЧЕЗАЛ с экрана. Строка
+  // оставалась в базе, но в чек-лист не попадала (набор её больше не называет)
+  // и в «прочие» тоже (там только род 'other'). История болезни выписанного
+  // пациента молча теряла документ из-за настройки, сделанной месяцем позже.
+  //
+  // Теперь такие документы стоят среди «прочих»: из обязательного списка род
+  // ушёл — спрашивать его больше не с кого, — а написанное осталось видимым,
+  // открывается и печатается.
+  const setKinds = new Set(docSet.map((d) => d.kind));
+  const goneTitles = loadCaseDocTitles(db);
+  const goneDocs = [];
+  for (const kind of byKind.keys()) {
+    if (kind === OTHER_KIND || setKinds.has(kind)) continue;
+    const chains = chainsOf((byKind.get(kind) || []).filter((r) => r.published_at));
+    chains.forEach((chain) => {
+      const cur = chain[chain.length - 1];
+      if (cur.superseded_by) return;
+      goneDocs.push(Object.assign({}, blankOther, {
+        kind,
+        title: goneTitles.get(kind) || '',
+        order: CASE_DOC_SET.length + other.length + goneDocs.length,
+        state: 'published',
+        entries: 1,
+        review_id: cur.id,
+        published_at: cur.published_at,
+        author_name: cur.author_name || '',
+        revisions: revisionsOf(chain),
+        revision_count: chain.length,
+        draft_id: null,
+        has_draft: false,
+      }));
+    });
+  }
+  if (goneDocs.length) other.push(...goneDocs);
+
   const allItems = [titleItem, ...items];
   const progress = {
     done: allItems.filter((it) => it.required && it.state === 'published').length,
@@ -1321,7 +1372,11 @@ export function admissionCaseFile(db, args, user) {
   const documents = [];
   // CASE_DOC_SET_V2 — имя своего рода едет вместе с документом: на бумаге его
   // взять больше неоткуда, словарь знает только встроенные.
-  const titleOf = (k) => (loadCaseDocSet(db).find((d) => d.kind === k) || {}).title || '';
+  // Имя берётся из справочника ЦЕЛИКОМ, а не из действующего набора: убранный
+  // род иначе печатался бы без имени. Один запрос на всю сборку, а не по
+  // запросу на документ.
+  const allTitles = loadCaseDocTitles(db);
+  const titleOf = (k) => allTitles.get(k) || '';
   const push = (kind, chain, order) => {
     const cur = chain[chain.length - 1];
     documents.push({
@@ -1366,9 +1421,20 @@ export function admissionCaseFile(db, args, user) {
       if (chain) push(def.kind, chain, i);
     }
   });
+  // CASE_DOC_KEEP_WRITTEN_V1 — документы, написанные родом, который клиника
+  // потом убрала из набора. На бумаге они идут за регламентными: из набора род
+  // ушёл, а документ был написан и остаётся частью истории болезни.
+  const setKinds = new Set(docSet.map((d) => d.kind));
+  for (const kind of byKind.keys()) {
+    if (kind === OTHER_KIND || setKinds.has(kind) || LEGACY_KINDS.includes(kind)) continue;
+    chainsOf((byKind.get(kind) || []).filter((r) => r.published_at)).forEach((chain) => {
+      if (!chain[chain.length - 1].superseded_by) push(kind, chain, docSet.length);
+    });
+  }
+
   const otherChains = chainsOf((byKind.get(OTHER_KIND) || []).filter((r) => r.published_at));
   otherChains.forEach((chain) => {
-    if (!chain[chain.length - 1].superseded_by) push(OTHER_KIND, chain, docSet.length);
+    if (!chain[chain.length - 1].superseded_by) push(OTHER_KIND, chain, docSet.length + 1);
   });
 
   const assembledBy = user && user.id

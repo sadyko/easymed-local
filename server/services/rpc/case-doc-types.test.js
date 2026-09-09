@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { admissionOrderCreate, admissionAdmit, admissionDischargeRequest } from './inpatient.js';
-import { admissionCaseDocs, admissionReviewSave } from './inpatient-reviews.js';
+import { admissionCaseDocs, admissionReviewSave, admissionCaseFile } from './inpatient-reviews.js';
 import { caseDocTypesList, caseDocTypeSave, caseDocTypeSetActive, caseDocTypeDelete, caseDocTypesReorder } from './case-doc-types.js';
 
 const admin = { id: 1, role: 'admin' };
@@ -137,6 +137,46 @@ test('убранный документ уходит из чек-листа, а 
 // ИМЕНИ. Отпереть замок можно было только вместе с этой зависимостью: иначе
 // клиника убрала бы документ из набора и получила бы отказ в выписке, не видя
 // в чек-листе, чего от неё ждут.
+// CASE_DOC_KEEP_WRITTEN_V1 (2026-09-09) — вопрос владельца: «if we deleting on
+// one, its deleted is everyone elses too yes? and what about the saved
+// documents?».
+//
+// Ответ должен быть один: набор общий на клинику, а НАПИСАННОЕ не пропадает.
+// До этой правки пропадало: документ, написанный убранным родом, исчезал и из
+// чек-листа (род больше не в наборе), и из собранной истории (сборка идёт по
+// набору). Строка оставалась в базе — то есть история болезни выписанного
+// пациента молча теряла документ из-за настройки, сделанной месяцем позже.
+test('написанное убранным родом остаётся видимым и попадает в собранную историю', () => {
+  const db = seed();
+  try {
+    const id = inBed(db);
+    admissionReviewSave(db, { admission_id: id, kind: 'head_review', objective: '<p>Осмотрен заведующим</p>', publish: true }, headDoctor);
+    // И свой документ клиники — он ложится в базу иначе (type_kind).
+    const { type } = caseDocTypeSave(db, { title: 'Лист анестезиолога', due_rule: 'none' }, headDoctor);
+    admissionReviewSave(db, { admission_id: id, kind: type.kind, body: '<p>Свой документ</p>', publish: true }, headDoctor);
+
+    caseDocTypeSetActive(db, { kind: 'head_review', active: false }, headDoctor);
+    caseDocTypeSetActive(db, { kind: type.kind, active: false }, headDoctor);
+
+    const st = admissionCaseDocs(db, { admission_id: id }, headDoctor);
+    assert.ok(!kindsOf(st).includes('head_review'), 'убранный род остался в обязательном списке');
+    // Но написанное им — на экране, среди прочих документов, и с именем.
+    const gone = (st.other || []).map((i) => i.kind);
+    assert.ok(gone.includes('head_review'), 'написанный документ исчез с экрана вместе с родом');
+    assert.ok(gone.includes(type.kind), 'свой написанный документ исчез с экрана');
+    assert.equal((st.other || []).find((i) => i.kind === type.kind).title, 'Лист анестезиолога',
+      'у своего документа пропало имя — на экране он был бы безымянным');
+
+    // И на бумаге: собранная история болезни содержит оба документа.
+    const file = admissionCaseFile(db, { admission_id: id }, headDoctor);
+    const kinds = file.documents.map((d) => d.kind);
+    assert.ok(kinds.includes('head_review'), 'документ убранного рода не попал в собранную историю');
+    assert.ok(kinds.includes(type.kind), 'свой документ не попал в собранную историю');
+    assert.equal(file.documents.find((d) => d.kind === type.kind).title, 'Лист анестезиолога',
+      'на бумаге документ остался без имени');
+  } finally { db.close(); }
+});
+
 test('выписной эпикриз убирается из набора, и выписка перестаёт его требовать', () => {
   const db = seed();
   try {
