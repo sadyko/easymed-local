@@ -81,8 +81,8 @@ const { TITLE_KIND } = await import('../../../../server/services/rpc/title-sheet
 
 const {
     CASE_DOC_TITLE, caseDocTitle, caseDocStateWord, caseDueText, caseDoneText,
-    caseGateText, caseMissingTitles, caseFilterMatch, caseVisibleItems,
-    caseDocsView, caseFilePrintHtml, CASE_FILTERS,
+    caseGateText, caseMissingTitles, caseVisibleItems,
+    caseDocsView, caseFilePrintHtml,
 } = view;
 
 // ─── ответ сервера, снятый с настоящего admission_case_docs ─────────────────
@@ -123,8 +123,7 @@ const STATE = {
 };
 
 const render = (over = {}) => caseDocsView({
-    state: Object.assign({}, STATE, over), filter: over.filter || 'all',
-    onFilter() {}, onDoc() {}, onAssemble() {},
+    state: Object.assign({}, STATE, over), onDoc() {}, onAssemble() {},
 });
 
 // ─── 1. Названия ────────────────────────────────────────────────────────────
@@ -178,24 +177,111 @@ test('оформленный документ подписан временем 
     assert.ok(line.length > 'Мудунов А.М.'.length, 'и когда');
 });
 
-// ─── 3. Фильтры ─────────────────────────────────────────────────────────────
+// ─── 3. Состав набора правится в самом списке ───────────────────────────────
 
-test('фильтры отбирают то, что обещают', () => {
-    assert.deepEqual(CASE_FILTERS.map(([k]) => k), ['all', 'todo', 'overdue']);
-    const overdue = caseVisibleItems(STATE, 'overdue');
-    assert.deepEqual(overdue.map((i) => i.kind), ['rationale']);
-    const todo = caseVisibleItems(STATE, 'todo');
-    assert.ok(!todo.some((i) => i.state === 'published'), '«к заполнению» не показывает оформленное');
-    assert.equal(caseVisibleItems(STATE, 'all').length, STATE.items.length);
-    assert.equal(caseFilterMatch('overdue', { state: 'draft' }), false);
+// CASE_DOC_SET_INLINE_V1 — владелец: «remove this shit completely, and add to
+// the kasallik tarixi hujjatlari a buttons near the documents cards. and in the
+// bottom a card with free fields. and remove options».
+//
+// Отдельная панель состава перечисляла ТЕ ЖЕ документы, что и чек-лист строкой
+// выше: один список в колонке дважды. Проверяется то, что заняло её место, —
+// и то, что фильтры действительно ушли: спрятанный пункт чек-листа это пункт,
+// о котором забыли.
+test('CASE_DOC_SET_INLINE_V1: фильтров нет — список показывает ВСЁ', () => {
+    const el = render();
+    assert.equal(buttons(el).filter((b) => b.hasAttribute('aria-pressed')).length, 0,
+        'сегменты фильтра вернулись в чек-лист');
+    assert.equal(caseVisibleItems(STATE).length, STATE.items.length);
+    // Оформленный документ виден наравне с просроченным: чек-лист затем и есть.
+    assert.match(el.textContent, new RegExp(caseDocTitle('intake')));
+    assert.match(el.textContent, new RegExp(caseDocTitle('rationale')));
 });
 
+test('CASE_DOC_SET_INLINE_V1: «убрать из набора» стоит у строки и называет документ', () => {
+    // Без обработчика кнопок нет вовсе: состав правят главный врач и
+    // администратор, остальным кнопка только отказала бы.
+    assert.equal(buttons(render()).filter((b) => /Убрать из набора/.test(nameOf(b))).length, 0,
+        'кнопка правки состава появилась у того, кому её не давали');
+
+    const dropped = [];
+    const el = caseDocsView({
+        state: STATE, onDoc() {}, onAssemble() {},
+        onDrop: (kind, name) => dropped.push([kind, name]), onAdd() {},
+    });
+    const drops = buttons(el).filter((b) => /Убрать из набора/.test(nameOf(b)));
+    // У каждого пункта набора — и НИ ОДНОГО у титульного листа и у прочих
+    // документов: их в справочнике набора нет, убрать оттуда нечего.
+    assert.equal(drops.length, STATE.items.filter((i) => i.kind !== TITLE_KIND).length,
+        'кнопка «убрать» должна быть у каждого пункта набора: ' + drops.length);
+    assert.ok(!drops.some((b) => new RegExp(caseDocTitle(TITLE_KIND)).test(nameOf(b))),
+        'титульный лист не пункт набора — убирать его нечем');
+
+    drops.find((b) => new RegExp(caseDocTitle('round')).test(nameOf(b))).click();
+    assert.deepEqual(dropped, [['round', caseDocTitle('round')]],
+        'кнопка обязана сказать, КАКОЙ документ убирают');
+});
+
+// CASE_DOC_SET_BACK_V1 — владелец: «when i am deleting the documents we gave
+// should disappear but go inactive and added when necessary». Убранный
+// документ не исчезает бесследно: он стоит бледной строкой в конце списка, и
+// «+» возвращает его на место.
+test('CASE_DOC_SET_BACK_V1: убранный документ виден бледной строкой и возвращается нажатием', () => {
+    const gone = [{ kind: 'head_review', name: caseDocTitle('head_review') }];
+
+    // Без права правки состава убранных не показываем вовсе: вернуть их
+    // палатный врач всё равно не может.
+    const plain = caseDocsView({ state: STATE, onDoc() {}, onAssemble() {}, dropped: gone });
+    assert.ok(!plain.textContent.includes('Убраны из набора'), 'убранные показаны тому, кто не правит состав');
+
+    const back = [];
+    const el = caseDocsView({
+        state: STATE, onDoc() {}, onAssemble() {}, onDrop() {}, onAdd() {},
+        dropped: gone, onRestore: (kind, name) => back.push([kind, name]),
+    });
+    assert.ok(el.textContent.includes('Убраны из набора'), 'раздела убранных нет');
+    assert.ok(el.textContent.includes(caseDocTitle('head_review')), 'убранный документ не назван');
+
+    const plus = buttons(el).find((b) => /Вернуть в набор/.test(nameOf(b)));
+    assert.ok(plus, 'вернуть документ нечем');
+    plus.click();
+    assert.deepEqual(back, [['head_review', caseDocTitle('head_review')]]);
+});
+
+test('CASE_DOC_SET_INLINE_V1: карточка со свободным полем стоит в самом низу', () => {
+    const added = [];
+    const el = caseDocsView({
+        state: STATE, onDoc() {}, onAssemble() {}, onDrop() {}, onAdd: (t) => added.push(t),
+    });
+    const input = walk(el).find((e) => e.tagName === 'INPUT' && String(e.className).includes('cd-add-in'));
+    assert.ok(input, 'поля создания внизу нет');
+
+    // Ниже списка, В ПОДВАЛЕ: список прокручивается, а карточка создания
+    // остаётся на виду — за ней и тянутся, когда нужного документа в списке нет.
+    const box = el.children.map((c) => String(c.className || ''));
+    assert.ok(box.findIndex((c) => c.includes('cd-list')) < box.findIndex((c) => c.includes('cd-foot')),
+        'карточка создания оказалась выше списка: ' + box.join(', '));
+    const foot = walk(el).find((e) => String(e.className || '').split(/s+/).includes('cd-foot'));
+    assert.ok(walk(foot).includes(input), 'карточка создания уехала в прокручиваемый список');
+
+    const go = buttons(el).find((b) => /Добавить документ в набор/.test(nameOf(b)));
+    assert.ok(go, 'кнопки создания нет');
+    // Пустое имя ничего не заводит: пустой документ в наборе — вечный пункт
+    // без названия, который никто не сможет ни написать, ни убрать.
+    input.value = '   ';
+    go.click();
+    assert.deepEqual(added, []);
+
+    input.value = 'Лист анестезиолога';
+    go.click();
+    assert.deepEqual(added, ['Лист анестезиолога']);
+    assert.equal(input.value, '', 'поле не очистилось под следующий документ');
+});
 test('неприменимый хирургический блок не занимает места', () => {
     const therapeutic = Object.assign({}, STATE, {
         surgical: false,
         items: STATE.items.map((i) => (i.due_rule === 'surgical' ? Object.assign({}, i, { applies: false, required: false }) : i)),
     });
-    const kinds = caseVisibleItems(therapeutic, 'all').map((i) => i.kind);
+    const kinds = caseVisibleItems(therapeutic).map((i) => i.kind);
     assert.ok(!kinds.includes('operation'), 'протокол операции у терапевтического пациента не показывают');
     assert.ok(kinds.includes('primary'));
 });
@@ -223,8 +309,7 @@ test('КАЖДОЕ действие — кнопка с именем, и ни о
 
 test('заметная кнопка ровно одна — у пункта, который следующим назвал СЕРВЕР', () => {
     const el = render();
-    const primary = buttons(el).filter((b) => String(b.className).includes('btn-primary')
-        && !b.hasAttribute('aria-pressed'));   // сегменты фильтра — не действие над документом
+    const primary = buttons(el).filter((b) => String(b.className).includes('btn-primary'));
     assert.equal(primary.length, 1, 'две заметные кнопки перестают быть указанием, что делать дальше');
     assert.match(nameOf(primary[0]), /Продолжить/);
 
@@ -234,15 +319,8 @@ test('заметная кнопка ровно одна — у пункта, к�
         items: STATE.items.map((i) => (i.kind === 'primary' ? Object.assign({}, i, { state: 'pending' })
             : i.kind === 'round' ? Object.assign({}, i, { state: 'next' }) : i)),
     });
-    const movedPrimary = buttons(moved).filter((b) => String(b.className).includes('btn-primary') && !b.hasAttribute('aria-pressed'));
+    const movedPrimary = buttons(moved).filter((b) => String(b.className).includes('btn-primary'));
     assert.equal(movedPrimary.length, 1);
-});
-
-test('фильтры — переключатели с aria-pressed, а не картинки', () => {
-    const el = caseDocsView({ state: STATE, filter: 'overdue', onFilter() {}, onDoc() {}, onAssemble() {} });
-    const segs = buttons(el).filter((b) => b.hasAttribute('aria-pressed'));
-    assert.equal(segs.length, CASE_FILTERS.length);
-    assert.equal(segs.filter((b) => b.getAttribute('aria-pressed') === 'true').length, 1);
 });
 
 test('список редакций раскрывается кнопкой с aria-expanded и показывает НАСТОЯЩИЕ редакции', () => {
@@ -260,11 +338,24 @@ test('список редакций раскрывается кнопкой с a
     assert.ok(buttons(el).filter((b) => /Открыть/.test(nameOf(b))).length >= 2);
 });
 
-test('обязательные и прочие документы разделены, и «подшить документ» есть всегда', () => {
+// CASE_DOC_LIST_QUIET_V1 — владелец показал на пустой блок «Прочие документы»
+// со строкой «Ничего не подшито», кнопкой «Подшить» и абзацем про хирургию:
+// «remove this please». Три элемента из четырёх говорили о том, чего НЕТ.
+// Подшитое никуда не делось — оно возвращает и заголовок, и строки.
+test('CASE_DOC_LIST_QUIET_V1: пустые «прочие документы» молчат, а подшитые видны', () => {
     const el = render();
     assert.match(el.textContent, /Обязательные/);
-    assert.match(el.textContent, /Прочие документы/);
-    assert.ok(buttons(el).some((b) => /Подшить документ/.test(nameOf(b))));
+    assert.ok(el.textContent.includes('Прочие документы'), 'подшитый документ есть, а заголовка нет');
+
+    const empty = render({ other: [] });
+    assert.ok(!empty.textContent.includes('Прочие документы'), 'пустой раздел вернулся');
+    assert.ok(!empty.textContent.includes('Ничего не подшито'), 'строка про пустоту вернулась');
+    assert.equal(buttons(empty).filter((b) => /Подшить документ/.test(nameOf(b))).length, 0,
+        'кнопка «Подшить документ» вернулась');
+
+    // И абзац про хирургический блок — тоже: его убрали вместе с остальным.
+    const therapeutic = render({ surgical: false, other: [] });
+    assert.ok(!therapeutic.textContent.includes('появятся в списке'), 'абзац про хирургический блок вернулся');
 });
 
 // ─── 5. Гейт выписки объяснён словами ───────────────────────────────────────
@@ -383,10 +474,14 @@ test('CASE_RAIL_FIT_V1: чек-лист разложен на шапку, про
     // Что где: цифры и фильтры в шапке, документы и «Подшить» в списке.
     const t = (n) => walk(n).map((x) => x._text || '').join(' ');
     assert.ok(t(head).includes('оформлено'), 'счётчик уехал из шапки');
-    assert.ok(t(head).includes('Просрочено'), 'фильтры уехали из шапки');
+    // CASE_DOC_SET_INLINE_V1 — фильтров в шапке больше нет; карточка создания
+    // стоит в подвале, то есть под прокручиваемым списком, а не в нём.
+    assert.ok(!walk(head).some((e) => e.hasAttribute && e.hasAttribute('aria-pressed')), 'фильтры вернулись в шапку');
     assert.ok(t(list).includes('Первичный осмотр и план лечения'), 'документы уехали из списка');
-    assert.ok(buttons(list).some((b) => nameOf(b).includes('Подшить документ')),
-        'пополнять список нечем — «Подшить документ» вне списка');
+    // CASE_DOC_LIST_QUIET_V1 — пополняют список полем в подвале, а не кнопкой
+    // внутри него: в списке остались только документы.
+    assert.equal(buttons(list).filter((x) => nameOf(x).includes('Подшить документ')).length, 0,
+        'кнопка «Подшить документ» вернулась в список');
 
     // Подвал НЕ прокручивается вместе со списком: правило выписки читают
     // тогда же, когда смотрят на список, а не после него.

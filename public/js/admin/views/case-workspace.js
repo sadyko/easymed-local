@@ -27,7 +27,8 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, PageHead } from '../ui.js';
 import { tr, trf } from '../i18n.js';
-import { caseDocsView, assembleCaseFile } from './case-docs.js?v=cw1';
+import { caseDocsView, assembleCaseFile, canEditDocSet, caseDocSetDrop, caseDocSetAdd,
+    caseDocSetRestore, loadDroppedDocTypes } from './case-docs.js?v=cw1';
 import { buildReviewEditor } from './admission-modal.js?v=inp2';
 import { buildTitleSheetEditor, TITLE_SHEET_KIND } from './title-sheet.js';   // TITLE_SHEET_V1
 import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V2
@@ -36,14 +37,12 @@ import { shortName, placeLine } from '../../shared/person-name.js';   // PERSON_
 import { caseHead } from './case-overview.js?v=co1';   // CASE_OVERVIEW_V1 — одна шапка на «Обзор» и «Документы»
 import { caseInsertPanel } from './case-doc-insert.js';   // CASE_DOC_A4_V1 — правая панель «Вставить в документ»
 import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — диагнозы списком
-import { caseDocSetPanel } from './case-doc-set.js';   // CASE_DOC_SET_IN_RAIL_V1 — состав набора
 import { setupA4Pagination, setupA4Fit } from './a4-paginate.js';   // A4_PAGINATE_V1 / FORM_003_ONE_PAGE_V1
 
 const state = {
     admissionId: null,
     admission: null,
     docs: null,        // ответ admission_case_docs
-    filter: 'all',
     open: null,        // {kind, mode, reviewId} — что открыто в центре
     editor: null,      // CASE_DOC_A4_V1 — открытый редактор: правая панель вставляет в него
     disposePagination: null,   // A4_PAGINATE_V1 — отмена слежения за разрывами
@@ -56,7 +55,6 @@ function reset(admissionId) {
     state.admissionId = admissionId;
     state.admission = null;
     state.docs = null;
-    state.filter = 'all';
     state.open = null;
     state.editor = null;
     if (state.disposeFit) { try { state.disposeFit(); } catch (e) { /* нечего отменять */ } state.disposeFit = null; }
@@ -114,6 +112,9 @@ async function load() {
     state.failed = null;
     state.docs = docs;
     state.admission = adm || state.admission;
+    // CASE_DOC_SET_BACK_V1 — убранные документы едут вместе с чек-листом: они
+    // стоят в его конце бледной строкой, и вернуть их можно нажатием.
+    state.dropped = canEditDocSet() ? await loadDroppedDocTypes() : [];
 }
 
 function paint(root, onNavigate) {
@@ -262,10 +263,14 @@ function paintRail(rail, root, onNavigate) {
     rail.appendChild(diagnosisCard());
     const list = h('div', { class: 'card cw-steps' });
     rail.appendChild(list);
+    // CASE_DOC_SET_INLINE_V1 — состав набора правится В САМОМ СПИСКЕ: «−» у
+    // строки убирает документ, поле внизу заводит новый. Отдельная панель под
+    // списком перечисляла те же документы теми же словами — один список в
+    // колонке дважды (владелец: «there is duplication of the cards»).
+    const mayEditSet = canEditDocSet();
+    const reloadAll = async () => { await load(); paint(root, onNavigate); };
     list.appendChild(caseDocsView({
         state: state.docs,
-        filter: state.filter,
-        onFilter: (key) => { state.filter = key; paintRail(rail, root, onNavigate); },
         // Документ ОТКРЫВАЕТСЯ СПРАВА, а не окном поверх: в этом и была вся
         // задача. Выбранный шаг остаётся виден в списке слева.
         onDoc: (kind, mode, reviewId) => {
@@ -277,11 +282,11 @@ function paintRail(rail, root, onNavigate) {
         // отдельной кнопкой ПОД списком (assembleFor).
         onAssemble: null,
         activeKind: state.open ? state.open.kind : null,
+        onDrop: mayEditSet ? async (kind, name) => { if (await caseDocSetDrop(kind, name)) await reloadAll(); } : null,
+        onAdd: mayEditSet ? async (title) => { if (await caseDocSetAdd(title)) await reloadAll(); } : null,
+        dropped: state.dropped || [],
+        onRestore: mayEditSet ? async (kind, name) => { if (await caseDocSetRestore(kind, name)) await reloadAll(); } : null,
     }));
-    // CASE_DOC_SET_IN_RAIL_V1 — состав набора под самим списком: правят его,
-    // глядя на чек-лист, а не в настройках печати. Панель сама перечитывает
-    // себя, поэтому перерисовку чек-листа она получает следующей загрузкой.
-    rail.appendChild(caseDocSetPanel({ onChange: async () => { await load(); paint(root, onNavigate); } }));
     rail.appendChild(assembleFor(root, onNavigate));
 }
 

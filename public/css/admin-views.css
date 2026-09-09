@@ -5933,39 +5933,24 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 /* ADMITTING_DOCTOR_CABINET_V1 — счётчик ждущих на вкладке кабинета. */
 .ct-badge{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:var(--r-pill);background:var(--crit-600,#dc2626);color:var(--white);font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums}
 
-/* ── CASE_DOC_SET_V2 — состав истории болезни настраивает клиника ─────────── */
-.cds { padding: 12px 14px 14px; }
-/* CASE_DOC_SET_OPEN_V1 — шапка это КНОПКА: панель свёрнута, пока её не
-   открыли, иначе она делит высоту колонки с чек-листом и тот сжимается в ноль. */
-.cds-h { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px;
-    padding: 0; border: 0; background: none; font: inherit; text-align: left; cursor: pointer; }
-.cds-h:focus-visible { outline: 2px solid var(--primary-500); outline-offset: 2px; }
-.cds-h-n { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px;
-    border-radius: var(--r-pill); background: var(--ink-100); color: var(--ink-700);
-    font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.cds-h-ic { display: inline-flex; color: var(--primary-600); }
-.cds-h-t { margin: 0; font-size: 12.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-700); }
-.cds-note { font-size: 12.5px; color: var(--ink-500); line-height: 1.45; margin: 4px 0 8px; }
-.cds-note.cds-fail { color: var(--crit-700); }
-.cds-list { display: flex; flex-direction: column; border: 1px solid var(--ink-100); border-radius: var(--r-md); overflow: hidden; }
-.cds-row { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 4px 10px; border-bottom: 1px solid var(--ink-50); }
-.cds-row:last-child { border-bottom: 0; }
-/* Убранный из набора виден бледным: вернуть его иначе было бы нечем. */
-.cds-off { opacity: .5; }
-.cds-main { flex: 1; min-width: 0; }
-.cds-name { font-size: 13.5px; font-weight: 600; color: var(--ink-900); display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
-.cds-tag { font-size: 12.5px; font-weight: 500; color: var(--ink-400); }
-/* CASE_DOC_SET_SIMPLE_V1 — строка это имя и одна кнопка; заведение — поле
-   под списком, без окна. */
-.cds-name { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--ink-900); overflow-wrap: anywhere; }
-/* Размер пальца, а не курсора: владелец «make that big button like adding
-   parameters so user can add in the tablet» — те же 44 px, что у «−» и «+» в
-   измерениях (.vt-step). */
-.cds-new { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
-.cds-new-in { flex: 1; min-width: 0; min-height: 44px; font-size: 13.5px; }
-.cds-new .btn { flex: 0 0 auto; min-width: 44px; min-height: 44px; justify-content: center; }
-.cds-row .btn { min-width: 40px; min-height: 40px; justify-content: center; }
-
+/* ── CASE_DOC_SET_INLINE_V1 — состав набора правится в самом чек-листе ────── */
+/* Владелец: «add to the kasallik tarixi hujjatlari a buttons near the documents
+   cards. and in the bottom a card with free fields». Отдельная панель состава
+   (.cds-*) удалена целиком: она повторяла список документов слово в слово. */
+.cd-drop { min-width: 36px; min-height: 36px; justify-content: center; color: var(--ink-400); }
+.cd-drop:hover { color: var(--crit-700); background: var(--crit-50); }
+/* Размер пальца, а не курсора: те же 44 px, что у «−» и «+» в измерениях
+   (.vt-step), — владелец правит состав с планшета у поста. */
+.cd-add { display: flex; gap: 8px; align-items: center; padding: 10px; border-radius: var(--r-md);
+    border: 1px solid var(--ink-100); background: var(--ink-25, #fafbfb); }
+.cd-add-in { flex: 1; min-width: 0; min-height: 44px; font-size: 13.5px; }
+.cd-add-go { flex: 0 0 auto; min-width: 44px; min-height: 44px; justify-content: center; }
+.cd-add-note { font-size: 12.5px; line-height: 1.45; margin-top: -2px; }
+/* CASE_DOC_SET_BACK_V1 — убранный документ стоит бледной строкой: он есть, но
+   в наборе его нет. «+» возвращает его на место. */
+.cd-gone { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 2px 8px 2px 12px; opacity: .55; }
+.cd-gone-n { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink-700); overflow-wrap: anywhere; }
+.cd-back { min-width: 36px; min-height: 36px; justify-content: center; }
 /* CASE_DOC_BLANK_V1 — бланк документа истории болезни в «Документах»: тот же
    лист, что у постели пациента, без серой коробки вокруг бумаги. */
 .doc-blank-scroll { padding: 14px 10px 20px; background: transparent;

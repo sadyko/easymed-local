@@ -65,6 +65,11 @@ export const CASE_DOC_TITLE = {
     other:       'Прочий документ',
 };
 
+// Титульный лист приезжает в чек-листе первой строкой, но в справочнике
+// набора (case_doc_types) его нет: он часть самой госпитализации, а не
+// документ, который клиника вольна не вести. Убрать его из набора нечем.
+const TITLE_KIND = 'title';
+
 /**
  * Имя документа.
  *
@@ -189,24 +194,122 @@ export function caseMissingTitles(state) {
 }
 
 // ---------------------------------------------------------------------------
-// Фильтры
+// Состав набора — из самого чек-листа
 // ---------------------------------------------------------------------------
-export const CASE_FILTERS = [
-    ['all', 'Все'],
-    ['todo', 'К заполнению'],
-    ['overdue', 'Просрочено'],
-];
+// CASE_DOC_SET_INLINE_V1 (2026-09-09) — владелец: «remove this shit completely,
+// and add to the kasallik tarixi hujjatlari a buttons near the documents cards.
+// and in the bottom a card with free fields».
+//
+// Отдельная панель «Состав истории болезни» ушла целиком: она стояла в той же
+// колонке под чек-листом и перечисляла ТЕ ЖЕ документы теми же словами. Здесь
+// остались только два действия, которые она делала, — и вызываются они из
+// строк самого списка.
 
-export function caseFilterMatch(filter, item) {
-    if (filter === 'overdue') return item.state === 'overdue';
-    if (filter === 'todo') return item.state !== 'published';
+/** Состав правят те же, кто назначает лечащего врача (DOC_TYPE_WRITE_ROLES). */
+export function canEditDocSet() {
+    const u = (typeof window !== 'undefined' && window.easymed
+        && window.easymed.state && window.easymed.state.user) || null;
+    if (!u) return false;
+    const role = String(u.role || '').toLowerCase();
+    return !!u.is_admin || u.is_super_admin === true || role === 'admin' || role === 'head_doctor';
+}
+
+/**
+ * Убрать документ из набора клиники.
+ *
+ * Убрать — НЕ удалить: написанные этим родом записи остаются в историях болезни
+ * и печатаются, из чек-листа уходит только пункт. Об обратной дороге сказано
+ * здесь же, в момент, когда она понадобится: другого списка убранного на экране
+ * больше нет.
+ *
+ * @returns {Promise<boolean>} правда, если состав изменился
+ */
+export async function caseDocSetDrop(kind, name) {
+    const { error } = await supabase.rpc('case_doc_type_set_active', { kind, active: false });
+    if (error) { toast(error.message || tr('Не удалось изменить состав набора.'), 'fail'); return false; }
+    toast(trf('«{name}» убран из набора. Чтобы вернуть — впишите это название внизу списка.', { name }), 'ok');
     return true;
 }
 
+/**
+ * Документы, УБРАННЫЕ из набора.
+ *
+ * Владелец: «when i am deleting the documents we gave should disappear but go
+ * inactive and added when necessary». Убранный документ не исчезает бесследно:
+ * он стоит в конце списка бледной строкой, и вернуть его — одно нажатие, а не
+ * память о том, как он назывался.
+ *
+ * Чек-лист их не присылает (admission_case_docs — про ЭТУ госпитализацию и
+ * только про действующий набор), поэтому убранные спрашиваются справочником.
+ * Отказ по праву — не беда: тогда и кнопок правки состава нет.
+ */
+export async function loadDroppedDocTypes() {
+    const { data, error } = await supabase.rpc('case_doc_types_list', {});
+    if (error || !data || !Array.isArray(data.types)) return [];
+    return data.types
+        .filter((t) => !t.active)
+        .map((t) => ({ kind: t.kind, name: caseDocTitle(t.kind, t.title) }));
+}
+
+/** Вернуть убранный документ в набор — той же кнопкой, что и убрали. */
+export async function caseDocSetRestore(kind, name) {
+    const { error } = await supabase.rpc('case_doc_type_set_active', { kind, active: true });
+    if (error) { toast(error.message || tr('Не удалось изменить состав набора.'), 'fail'); return false; }
+    toast(trf('«{name}» возвращён в набор.', { name }), 'ok');
+    return true;
+}
+
+/**
+ * Завести документ по имени — ИЛИ ВЕРНУТЬ убранный, если имя совпало.
+ *
+ * Возврата иначе не было бы вовсе: убранный документ уходит из чек-листа, а
+ * список убранного экран больше не показывает. Совпадение ищется по тому
+ * имени, которое человек видел в списке, — у встроенного рода это перевод, у
+ * своего собственное имя.
+ *
+ * @returns {Promise<boolean>} правда, если состав изменился
+ */
+export async function caseDocSetAdd(title) {
+    const name = String(title || '').trim();
+    if (!name) return false;
+    const norm = (v) => String(v || '').trim().toLowerCase();
+
+    const { data, error } = await supabase.rpc('case_doc_types_list', {});
+    if (error) { toast(error.message || tr('Не удалось изменить состав набора.'), 'fail'); return false; }
+    const gone = ((data && data.types) || [])
+        .filter((t) => !t.active)
+        .find((t) => norm(caseDocTitle(t.kind, t.title)) === norm(name));
+
+    if (gone) {
+        const back = await supabase.rpc('case_doc_type_set_active', { kind: gone.kind, active: true });
+        if (back.error) { toast(back.error.message || tr('Не удалось изменить состав набора.'), 'fail'); return false; }
+        toast(trf('«{name}» возвращён в набор.', { name: caseDocTitle(gone.kind, gone.title) }), 'ok');
+        return true;
+    }
+
+    // Свой документ заводится БЕЗ СРОКА: он в наборе и спрашивается, но
+    // просроченным не висит. Срок — отдельное решение, и спрашивать его в тот
+    // момент, когда человек просто заводит бумагу, значит спрашивать всегда.
+    const { error: saveErr } = await supabase.rpc('case_doc_type_save', {
+        title: name, due_rule: 'none', due_hours: null, block: '',
+    });
+    if (saveErr) { toast(saveErr.message || tr('Не удалось изменить состав набора.'), 'fail'); return false; }
+    toast(trf('«{name}» добавлен в набор.', { name }), 'ok');
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Что показывается
+// ---------------------------------------------------------------------------
+// CASE_DOC_SET_INLINE_V1 (2026-09-09) — ФИЛЬТРОВ БОЛЬШЕ НЕТ. Владелец: «remove
+// options». Три сегмента («все», «к заполнению», «просрочено») прятали часть
+// списка ради списка в десять строк, который виден целиком и так. А спрятанный
+// пункт чек-листа — это пункт, о котором забыли: чек-лист затем и существует,
+// чтобы показывать ВСЁ, чего от истории болезни ждут.
+
 /** Пункты, которые вообще показываются: неприменимый блок не место занимает. */
-export function caseVisibleItems(state, filter) {
-    const items = ((state && state.items) || []).filter((i) => i.applies);
-    return items.filter((i) => caseFilterMatch(filter, i));
+export function caseVisibleItems(state) {
+    return ((state && state.items) || []).filter((i) => i.applies);
 }
 
 // ---------------------------------------------------------------------------
@@ -285,7 +388,7 @@ function revisionsBlock(item, onDoc) {
     return { toggle, list };
 }
 
-function itemRow(item, state, onDoc, activeKind = null) {
+function itemRow(item, state, onDoc, activeKind = null, onDrop = null) {
     const isNext = item.state === 'next';
     // CASE_WORKSPACE_V1 — на рабочем экране документ открыт СПРАВА, и слева
     // обязано быть видно, какой именно: иначе после третьей бумаги врач не
@@ -353,6 +456,26 @@ function itemRow(item, state, onDoc, activeKind = null) {
     }),
     stateDot(item), open, actions)];
 
+    // CASE_DOC_SET_INLINE_V1 — СОСТАВ НАБОРА ПРАВИТСЯ ЗДЕСЬ ЖЕ, У СТРОКИ.
+    //
+    // Владелец: «add to the kasallik tarixi hujjatlari a buttons near the
+    // documents cards». Отдельная панель «Состав истории болезни» стояла в той
+    // же колонке и перечисляла ТЕ ЖЕ документы слово в слово — один список
+    // дважды, и владелец видел его как дублирование. Кнопка стоит там, где на
+    // документ и смотрят.
+    //
+    // «Убрать» — не «удалить»: написанные этим родом записи остаются в истории
+    // болезни и печатаются, из чек-листа уходит только пункт.
+    if (onDrop) {
+        const name = caseDocTitle(item.kind, item.title);
+        actions.appendChild(h('button', {
+            class: 'btn btn-sm btn-ghost cd-drop', type: 'button',
+            'aria-label': trf('Убрать из набора: {name}', { name }),
+            title: tr('Убрать из набора'),
+            onclick: () => onDrop(item.kind, name),
+        }, Icon('Minus', { size: 13 })));
+    }
+
     if (item.revision_count > 1) {
         const { toggle, list } = revisionsBlock(item, onDoc);
         actions.appendChild(toggle);
@@ -369,14 +492,19 @@ function itemRow(item, state, onDoc, activeKind = null) {
  * названия, порядок на экране и КНОПКИ, до которых можно дойти пальцем и
  * табом.
  *
- * @param {{state:object, filter:string, onFilter:function,
- *          onDoc:function, onAssemble:function}} opts
+ * @param {{state:object, onDoc:function, onAssemble:function, activeKind:string,
+ *          onDrop:function, onAdd:function}} opts
  *        onDoc(kind, mode, reviewId) — открыть/написать/исправить документ.
+ *        onDrop(kind, name) — убрать документ из набора клиники (может не быть:
+ *        состав правят главный врач и администратор).
+ *        onAdd(title) — завести документ в набор по имени.
+ *        dropped[] — убранные из набора, onRestore(kind, name) — вернуть их.
  *        Вид не открывает окна сам: окна документов живут в
  *        admission-modal.js, и импортировать его отсюда значило бы завести
  *        круговую зависимость между двумя половинами одного экрана.
  */
-export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, onAssemble = null, activeKind = null } = {}) {
+export function caseDocsView({ state, onDoc, onAssemble = null, activeKind = null,
+    onDrop = null, onAdd = null, dropped = [], onRestore = null } = {}) {
     // CASE_RAIL_FIT_V1 (2026-09-08) — ТРИ ЗОНЫ, А НЕ ОДНА СТОПКА.
     //
     // Владелец: «this section should fit in to a left panel. and user should
@@ -425,18 +553,6 @@ export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, on
         ));
         head.appendChild(progressBar(p));
 
-        // Фильтры — сегменты с aria-pressed: до каждого можно дойти табом, и
-        // чтение с экрана называет, какой из них выбран.
-        const seg = h('div', {
-            role: 'group', 'aria-label': tr('Фильтр документов'),
-            style: { display: 'flex', gap: '4px', margin: '12px 0 4px', flexWrap: 'wrap' },
-        }, ...CASE_FILTERS.map(([key, label]) => h('button', {
-            class: 'btn btn-sm' + (filter === key ? ' btn-primary' : ''),
-            type: 'button', 'aria-pressed': filter === key ? 'true' : 'false',
-            onclick: () => onFilter && onFilter(key),
-        }, tr(label), key === 'overdue' && p.overdue ? ' · ' + p.overdue : null)));
-        head.appendChild(seg);
-
         const groupLabel = (text) => h('div', {
             style: {
                 fontSize: '12.5px', fontWeight: '600', letterSpacing: '.4px', textTransform: 'uppercase',
@@ -444,36 +560,54 @@ export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, on
             },
         }, text);
 
-        const required = caseVisibleItems(state, filter);
+        // Убрать из набора можно ТОЛЬКО пункт набора: титульный лист заводится
+        // не справочником (он часть госпитализации), а «прочие документы» — уже
+        // написанные бумаги этого пациента, и в наборе их нет вовсе.
+        const dropOf = (it) => (onDrop && it.kind !== TITLE_KIND ? onDrop : null);
+
+        const required = caseVisibleItems(state);
         list.appendChild(groupLabel(tr('Обязательные · по регламенту')));
         if (required.length) {
             list.appendChild(h('ul', { style: { listStyle: 'none', margin: '0', padding: '0' } },
-                ...required.map((it) => itemRow(it, state, onDoc, activeKind))));
+                ...required.map((it) => itemRow(it, state, onDoc, activeKind, dropOf(it)))));
         } else {
             list.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '8px 2px' } },
-                filter === 'overdue' ? tr('Просроченных документов нет.') : tr('Всё оформлено.')));
+                tr('Всё оформлено.')));
         }
 
-        const other = (state.other || []).filter((i) => caseFilterMatch(filter, i));
-        list.appendChild(groupLabel(tr('Прочие документы')));
+        // CASE_DOC_LIST_QUIET_V1 (2026-09-09) — владелец показал на этот кусок:
+        // «remove this please». Под списком стояли заголовок «Прочие
+        // документы», строка «Ничего не подшито», кнопка «Подшить документ» и
+        // абзац про хирургический блок — четыре элемента, из которых три
+        // говорили о том, чего НЕТ. В колонке высотой в экран они отнимали
+        // место у списка, ради которого её и открывают.
+        //
+        // Подшитые бумаги никуда не делись: как только они появляются, свой
+        // заголовок и строки возвращаются. Молчит только пустота.
+        // CASE_DOC_SET_BACK_V1 — УБРАННЫЙ ДОКУМЕНТ НЕ ИСЧЕЗАЕТ БЕССЛЕДНО.
+        //
+        // Владелец: «when i am deleting the documents we gave should disappear
+        // but go inactive and added when necessary». Убранные стоят тут же, в
+        // конце списка, бледной строкой с «+»: набор виден целиком — и что в
+        // нём есть, и что из него убрали, — а вернуть документ можно нажатием.
+        if (onRestore && dropped.length) {
+            list.appendChild(groupLabel(tr('Убраны из набора')));
+            list.appendChild(h('ul', { style: { listStyle: 'none', margin: '0', padding: '0' } },
+                ...dropped.map((t) => h('li', { class: 'cd-gone' },
+                    h('span', { class: 'cd-gone-n' }, t.name),
+                    h('button', {
+                        class: 'btn btn-sm btn-ghost cd-back', type: 'button',
+                        'aria-label': trf('Вернуть в набор: {name}', { name: t.name }),
+                        title: tr('Вернуть в набор'),
+                        onclick: () => onRestore(t.kind, t.name),
+                    }, Icon('Plus', { size: 13 }))))));
+        }
+
+        const other = state.other || [];
         if (other.length) {
+            list.appendChild(groupLabel(tr('Прочие документы')));
             list.appendChild(h('ul', { style: { listStyle: 'none', margin: '0', padding: '0' } },
                 ...other.map((it) => itemRow(it, state, onDoc, activeKind))));
-        } else {
-            list.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '6px 2px' } },
-                tr('Ничего не подшито.')));
-        }
-        // «Подшить документ» — часть списка: им список и пополняют.
-        list.appendChild(h('button', {
-            class: 'btn btn-sm', type: 'button', style: { marginTop: '6px' },
-            onclick: () => onDoc('other', 'edit', null),
-        }, Icon('Plus', { size: 13 }), ' ', tr('Подшить документ')));
-
-        // Хирургический блок молчит, пока не появился первый документ операции.
-        // Сказать об этом один раз честнее, чем держать три вечно серых пункта.
-        if (!state.surgical) {
-            list.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '10px', lineHeight: '1.45' } },
-                tr('Осмотр анестезиолога, предоперационный эпикриз и протокол операции появятся в списке, как только будет написан первый из них.')));
         }
 
         // ─── Подвал: правило выписки и сборка ────────────────────────────────
@@ -492,6 +626,38 @@ export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, on
             foot.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', lineHeight: '1.45' } },
                 trf('Не оформлено из обязательного набора: {list}', { list: caseMissingTitles(state).join(', ') })));
         }
+        // CASE_DOC_SET_INLINE_V1 — КАРТОЧКА СО СВОБОДНЫМ ПОЛЕМ В САМОМ НИЗУ.
+        //
+        // Владелец: «in the bottom a card with free fields». Имя — и всё:
+        // окно, спрашивавшее имя, правило срока, часы и «только у оперируемых»,
+        // задавало четыре вопроса там, где у врача одно решение — такого
+        // документа у нас нет, заведите. Свой документ заводится БЕЗ СРОКА: он
+        // в наборе и спрашивается, но просроченным не висит.
+        if (onAdd) {
+            const input = h('input', {
+                type: 'text', class: 'cd-add-in',
+                placeholder: tr('Название нового документа'),
+                'aria-label': tr('Название нового документа'),
+            });
+            const go = () => {
+                const value = String(input.value || '').trim();
+                if (!value) return;
+                input.value = '';
+                onAdd(value);
+            };
+            // Enter работает так же, как кнопка: строка одна, и тянуться к мыши
+            // ради неё не за что.
+            input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+            foot.appendChild(h('div', { class: 'cd-add' }, input,
+                h('button', {
+                    class: 'btn btn-primary cd-add-go', type: 'button',
+                    'aria-label': tr('Добавить документ в набор'), title: tr('Добавить документ в набор'),
+                    onclick: go,
+                }, Icon('Plus', { size: 16 }))));
+            foot.appendChild(h('div', { class: 'muted cd-add-note' },
+                tr('Документ встанет в набор всех историй болезни.')));
+        }
+
         // На рабочем экране сборка стоит в шапке (onAssemble не передан):
         // вторая такая же кнопка в подвале списка шагов означала бы, что их две
         // разные — а она одна.
@@ -524,8 +690,8 @@ export function caseDocsView({ state, filter = 'all', onFilter = null, onDoc, on
  */
 export function caseDocsPanel({ admissionId, onDoc, onAssemble = null } = {}) {
     const box = h('div', { class: 'card', style: { padding: '12px 14px' } });
-    let filter = 'all';
     let state = null;
+    let dropped = [];
 
     const paint = () => {
         clear(box);
@@ -533,12 +699,18 @@ export function caseDocsPanel({ admissionId, onDoc, onAssemble = null } = {}) {
             box.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Загрузка…')));
             return;
         }
+        // CASE_DOC_SET_INLINE_V1 — состав правят те же, кто назначает лечащего
+        // врача (DOC_TYPE_WRITE_ROLES на сервере). Палатному врачу кнопок не
+        // показываем: кнопка, которая всегда откажет, — обещание, а не действие.
+        const mayEdit = canEditDocSet();
         box.appendChild(caseDocsView({
             state,
-            filter,
-            onFilter: (key) => { filter = key; paint(); },
             onDoc,
             onAssemble: onAssemble || (() => assembleCaseFile(admissionId)),
+            onDrop: mayEdit ? async (kind, name) => { if (await caseDocSetDrop(kind, name)) await reload(); } : null,
+            onAdd: mayEdit ? async (title) => { if (await caseDocSetAdd(title)) await reload(); } : null,
+            dropped,
+            onRestore: mayEdit ? async (kind, name) => { if (await caseDocSetRestore(kind, name)) await reload(); } : null,
         }));
     };
 
@@ -567,6 +739,9 @@ export function caseDocsPanel({ admissionId, onDoc, onAssemble = null } = {}) {
         // спокойном виде: цифрами.
         if (!data || !Array.isArray(data.items)) { box.style.display = 'none'; return; }
         state = data;
+        // Убранные — вторым запросом и ТОЛЬКО тем, кто правит состав: остальным
+        // они на экране не нужны, а лишний запрос у постели стоит времени.
+        dropped = canEditDocSet() ? await loadDroppedDocTypes() : [];
         paint();
     };
     reload();

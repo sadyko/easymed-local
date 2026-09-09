@@ -909,8 +909,19 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         };
     };
 
+    // CASE_DOC_PATIENT_ONCE_V1 (2026-09-09) — владелец: «there is duplication of
+    // the cards in the documents». Карточка пациента стояла ПЕРВЫМ полем
+    // документа — и на рабочем экране попадала внутрь листа, прямо под шапку
+    // бланка, которая пациента уже называет (A4_LETTERHEAD_V2: «Пациент», дата
+    // рождения, отделение с койкой). Один человек назывался дважды подряд.
+    //
+    // В ОКНЕ листа нет — там карточка единственное, что говорит, чей это
+    // документ, и её нельзя убрать вместе с дублем. Поэтому она уезжает из
+    // полей ОТДЕЛЬНЫМ свойством, а ставит её тот, у кого шапки нет.
+    const patientCard = patientAnchor(p.full_name || '',
+        [p.mrn, admission.department, admission.admission_no].filter(Boolean).join(' · '));
+
     const editorFields = [
-        patientAnchor(p.full_name || '', [p.mrn, admission.department, admission.admission_no].filter(Boolean).join(' · ')),
         sheet,
         isPrimary
             ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
@@ -974,6 +985,9 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         diagnosisRequired: isPrimary,
         title: reviewTitle(kind, mode),
         icon: isDischarge || !REVIEW_TITLE[kind] ? 'Doc' : 'Stethoscope',
+        // CASE_DOC_PATIENT_ONCE_V1 — карточку ставит тот, у кого нет шапки
+        // бланка: окно ставит, рабочий экран нет.
+        patientCard,
         fields: editorFields,
         submitLabel: isView ? null : tr(REVIEW_SUBMIT[kind] || 'Опубликовать документ'),
         submit,
@@ -993,7 +1007,7 @@ export function openAdmissionReviewModal(opts = {}) {
     const dxField = ed.diagnosisInput
         ? field(tr('Диагноз'), dxEditor({ carrier: ed.diagnosisInput, required: ed.diagnosisRequired }), { required: ed.diagnosisRequired })
         : null;
-    modal(ed.title, ed.icon, [ed.toolbar, dxField, ...ed.fields].filter(Boolean), ed.submitLabel, ed.submit, {
+    modal(ed.title, ed.icon, [ed.patientCard, ed.toolbar, dxField, ...ed.fields].filter(Boolean), ed.submitLabel, ed.submit, {
         width: 720,
         secondaryLabel: ed.secondaryLabel,
         onSecondary: ed.secondary,
