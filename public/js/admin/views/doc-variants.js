@@ -19,6 +19,9 @@
 // языка Intl отдаёт корневую форму («1994 M11 15» на снимке владельца).
 // dateNumeric — тот же вид, что раньше давал ru-RU, но одинаковый везде.
 // Размеры и вёрстка бланка не тронуты: меняется только источник строки.
+// PERSON_NAME_SHORT_V1 — фамилия с инициалами и место без точки между
+// числами: бумага и экран называют человека одинаково.
+import { shortName, placeLine } from '../../shared/person-name.js';
 import { dateNumeric } from '../../shared/date-words.js';
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';
 
@@ -166,6 +169,66 @@ function queueBlockHtml(d) {
 <div class="f-q-h">${groups.length > 1 ? 'Номера очереди' : 'Номер очереди'}</div>
 ${groups.map(g => `<div class="f-q-item">${g.label ? `<div class="f-q-d">${esc(g.label)}</div>` : ''}${g.services.map(sv => `<div class="f-q-s">${esc(sv)}</div>`).join('')}<div class="f-q-n">${esc(String(g.number))}</div></div>`).join('')}
 </div>`;
+}
+
+// A4_LETTERHEAD_V2 (2026-09-09) — ОДИН ЗАГОЛОВОК НА ВСЕ ДОКУМЕНТЫ.
+//
+// Владелец: «so everywhere we have similar header of the documents», затем «fix
+// the headers of other documents too» со снимками шести бумаг — заключение,
+// анализы, диагностика, договор, согласие, памятка. У каждой была своя шапка:
+// где-то контакты справа, где-то чипы под названием, где-то две карточки
+// «Пациент» и «Врач» в две колонки. Одна клиника — шесть разных бланков.
+//
+// Ярусов два, как согласовано на предпросмотре:
+//   1. знак клиники │ название документа с датой │ НОМЕРА справа;
+//   2. полоса реквизитов в равные колонки: подпись, под ней значение, под ним
+//      подпись по-узбекски.
+//
+// Разметка на встроенных стилях, а не на классах: у каждого варианта свой блок
+// CSS, и заводить в шести местах одинаковые правила значило бы завести шесть
+// мест, где они разойдутся.
+//
+// PERSON_NAME_SHORT_V1 — имя сокращается до фамилии с инициалами, а между
+// числами не ставится точка: «Хирургия, 201/1», не «Хирургия · 201 · 1».
+function vHeadIds(s, ids) {
+    const rows = (ids || []).filter((f) => f && f.label && f.value);
+    if (!rows.length) return '';
+    return '<div style="text-align:right;flex:0 0 auto;">'
+        + rows.map((f) => `<div style="display:flex;align-items:baseline;gap:8px;justify-content:flex-end;line-height:1.5;">
+            <span style="font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#6b7a85;">${esc(f.label)}</span>
+            <span style="font-size:12px;font-weight:700;color:${s.ink};white-space:nowrap;">${esc(f.value)}</span>
+        </div>`).join('')
+        + '</div>';
+}
+
+function vHeadFields(s, fields) {
+    const cells = (fields || []).filter((f) => f && f.label);
+    if (!cells.length) return '';
+    const w = (100 / cells.length).toFixed(4);
+    return '<div style="display:flex;margin-top:12px;padding:8px 12px;background:#f6f8f9;border:1px solid #e2e7ea;border-radius:8px;">'
+        + cells.map((f, i) => `<div style="width:${w}%;min-width:0;${i === cells.length - 1 ? '' : 'padding-right:14px;margin-right:14px;border-right:1px solid #e2e7ea;'}">
+            <div style="font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#6b7a85;">${esc(f.label)}</div>
+            <div style="font-size:12px;font-weight:700;color:${s.ink};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(f.value || '—')}${f.extra ? ` <span style="font-weight:500;color:#8a97a0;">${esc(f.extra)}</span>` : ''}</div>
+            ${f.uz ? `<div style="font-size:9.5px;color:${s.accent};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(f.uz)}</div>` : ''}
+        </div>`).join('')
+        + '</div>';
+}
+
+export function vHead(s, { title, uz, date, ids, fields } = {}) {
+    return `<div style="border-bottom:2px solid ${s.accent};padding-bottom:14px;">
+        <div style="display:flex;align-items:center;gap:14px;">
+            ${logoTag(s, 30)}
+            <div style="flex:0 1 auto;min-width:0;font-size:15px;font-weight:800;letter-spacing:-0.01em;color:${s.ink};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:28%;">${esc(s.clinicName || '')}</div>
+            <div style="flex:0 0 2px;align-self:stretch;min-height:34px;background:${s.accent};border-radius:999px;"></div>
+            <div style="flex:1;min-width:0;">
+                <div style="font-size:16px;font-weight:800;letter-spacing:-0.01em;color:${s.ink};line-height:1.25;">${esc(title || '')}</div>
+                ${uz ? `<div style="font-size:11px;font-style:italic;color:#55636d;margin-top:1px;">${esc(uz)}</div>` : ''}
+                ${date ? `<div style="font-size:11px;color:#55636d;margin-top:2px;">от ${esc(date)}</div>` : ''}
+            </div>
+            ${vHeadIds(s, ids)}
+        </div>
+        ${vHeadFields(s, fields)}
+    </div>`;
 }
 
 export function renderDesignedVariant(type, variant, s, d) {
@@ -438,18 +501,17 @@ table.rx{ width:100%; border-collapse:collapse; font-size:12px; } table.rx thead
 ${ECONOMY_BW_CSS}
 </style></head><body>
 <section class="sheet ${toggleCls(s)}">
-  <div class="head">
-    <div class="brand">${logoTag(s, 32)}<div><div class="wm">${esc(s.clinicName || 'Клиника')}</div>${s.tagline ? `<div class="tg">${esc(s.tagline)}</div>` : ''}</div></div>
-    <div class="clinic">${s.address ? `<div class="cl">${esc(s.address)}</div>` : ''}<div class="cl">${s.phone ? esc(s.phone) : ''}${s.web ? ` · ${esc(s.web)}` : ''}</div></div>
-  </div>
-  <div class="hr"></div>
-  <div class="title"><h1>Заключение врача</h1><div class="uz">Shifokor xulosasi</div>
-    <div class="meta">${d.docNo ? `<span class="chip">№ <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Дата <b>${esc(d.issueDate || dateNumeric(new Date()))}</b></span><span class="chip"><b>${esc(d.visitType || 'Первичный')}</b></span></div>
-  </div>
-  <div class="entwo">
-    <div class="ent"><div class="cap">Пациент · Bemor</div>${fld('ФИО', 'F.I.Sh.', d.patientName)}${fld('Дата рожд.', 'Sana', d.dob)}${fld('Пол', 'Jinsi', d.sex)}${fld('ID', '', d.mrn)}${fld('Тел.', '', d.phone)}</div>
-    ${d.showDoctor === false ? '' : `<div class="ent"><div class="cap">Лечащий врач · Shifokor</div>${fld('Врач', 'Shifokor', d.doctorName)}${fld('Спец.', 'Mutaxassis', d.doctorSpec)}${fld('Услуга', 'Xizmat', d.service)}${fld('Тел.', '', d.doctorPhone || '')}</div>`}
-  </div>
+  ${vHead(s, {
+    title: 'Заключение врача', uz: 'Shifokor xulosasi',
+    date: d.issueDate || dateNumeric(new Date()),
+    ids: [{ label: 'ID', value: d.mrn }, { label: 'Документ', value: d.docNo }],
+    fields: [
+      { label: 'Пациент', uz: 'Bemor', value: shortName(d.patientName) },
+      { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: d.dob },
+      { label: 'Услуга', uz: 'Xizmat', value: d.service },
+      { label: 'Врач', uz: 'Shifokor', value: shortName(d.doctorName) },
+    ],
+  })}
   ${_bodyHtml}
   ${rxHtml}
   ${refsHtml}
@@ -502,10 +564,17 @@ table.res{ width:100%; table-layout:fixed; border-collapse:collapse; font-size:1
 .foot{ margin-top:auto; padding-top:10px; border-top:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; } .foot .fl{ font-size:13px; color:var(--ink); } .foot .fl b{ font-weight:700; } .foot .fr{ font-size:13px; font-weight:700; color:var(--ink); }
 @media print{ @page{ size:A4; margin:13mm 14mm; } html,body{ background:#fff; padding:0; } body{ display:block; } /* DOC_A4_PRINT_V1 */ :root{ --ink:#000; --ink-2:#0f131b; --muted:#20242e; --faint:#333a45; } .sheet{ box-shadow:none; width:auto; min-height:268mm; padding:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
 </style></head><body><section class="sheet ${toggleCls(s)}">
-  ${clinicHeadHtml(s, 46)}<div class="rule"></div>
-  <div class="title"><h1>Результаты лабораторных исследований</h1><div class="uz">Laboratoriya tekshiruvlari natijalari</div>
-    <div class="meta">${d.requestNo ? `<span class="chip">Заявка <b>${esc(d.requestNo)}</b></span>` : ''}${d.dateIn ? `<span class="chip">Приём <b>${esc(d.dateIn)}</b></span>` : ''}<span class="chip">Выдан <b>${esc(d.dateOut || dateNumeric(new Date()))}</b></span></div></div>
-  <div class="pcard"><div class="pf"><div class="fl">ФИО <i>· F.I.Sh.</i></div><div class="fv">${esc(d.patientName || '—')}</div></div><div class="pf"><div class="fl">Дата рождения</div><div class="fv">${esc(d.dob || '—')}</div></div><div class="pf"><div class="fl">Пол</div><div class="fv">${esc(d.sex || '—')}</div></div><div class="pf"><div class="fl">ID пациента</div><div class="fv">${esc(d.mrn || '—')}</div></div></div>
+  ${vHead(s, {
+    title: 'Результаты лабораторных исследований', uz: 'Laboratoriya tekshiruvlari natijalari',
+    date: d.dateOut || dateNumeric(new Date()),
+    ids: [{ label: 'ID', value: d.mrn }, { label: '№ анализа', value: d.requestNo }],
+    fields: [
+      { label: 'Пациент', uz: 'Bemor', value: shortName(d.patientName) },
+      { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: d.dob },
+      { label: 'Пол', uz: 'Jinsi', value: d.sex },
+      { label: 'Забор', uz: 'Namuna olindi', value: d.dateIn },
+    ],
+  })}
   ${(d.groups || []).map(grp).join('')}
   <div class="legend"><span><i class="dh"></i> \u2303 выше нормы</span><span><i class="dl"></i> \u2304 ниже нормы</span><span><i class="dn"></i> · в норме</span></div>
   ${d.conclusion ? `<div class="concl"><div class="ch">Заключение <span class="uz">· Xulosa</span></div><p>${esc(d.conclusion)}</p></div>` : ''}
@@ -542,12 +611,17 @@ table.res{ width:100%; table-layout:fixed; border-collapse:collapse; font-size:1
 @media print{ @page{ size:A4; margin:12mm 13mm; } html,body{ background:#fff; padding:0; } body{ display:block; } /* DOC_A4_PRINT_V1 */ :root{ --ink:#000; --ink-2:#0f131b; --muted:#20242e; --faint:#333a45; } .sheet{ box-shadow:none; width:auto; min-height:268mm; padding:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
 ${ECONOMY_BW_CSS}
 </style></head><body><section class="sheet ${toggleCls(s)}">
-  <div class="head"><div class="brand">${logoTag(s, 32)}<div><div class="wm">${esc(s.clinicName || 'Клиника')}</div>${s.tagline ? `<div class="tg">${esc(s.tagline)}</div>` : ''}</div></div>
-    <div class="clinic">${s.address ? `<div class="cl">${esc(s.address)}</div>` : ''}<div class="cl">${esc(s.phone || '')}${s.web ? ` · ${esc(s.web)}` : ''}</div></div></div>
-  <div class="hr"></div>
-  <div class="title"><h1>Результаты лабораторных исследований</h1><div class="uz">Laboratoriya natijalari</div>
-    <div class="meta">${d.requestNo ? `<span class="chip">Заявка <b>${esc(d.requestNo)}</b></span>` : ''}<span class="chip">Выдан <b>${esc(d.dateOut || dateNumeric(new Date()))}</b></span></div></div>
-  <div class="pstrip"><div><div class="fl">ФИО</div><div class="fv">${esc(d.patientName || '—')}</div></div><div><div class="fl">Дата рожд.</div><div class="fv">${esc(d.dob || '—')}</div></div><div><div class="fl">Пол</div><div class="fv">${esc(d.sex || '—')}</div></div><div><div class="fl">ID</div><div class="fv">${esc(d.mrn || '—')}</div></div></div>
+  ${vHead(s, {
+    title: 'Результаты лабораторных исследований', uz: 'Laboratoriya natijalari',
+    date: d.dateOut || dateNumeric(new Date()),
+    ids: [{ label: 'ID', value: d.mrn }, { label: '№ анализа', value: d.requestNo }],
+    fields: [
+      { label: 'Пациент', uz: 'Bemor', value: shortName(d.patientName) },
+      { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: d.dob },
+      { label: 'Пол', uz: 'Jinsi', value: d.sex },
+      { label: 'Выдан', uz: 'Berildi', value: d.dateOut || dateNumeric(new Date()) },
+    ],
+  })}
   ${(d.groups || []).map(grp).join('')}
   ${d.conclusion ? `<div class="concl"><div class="ch">Заключение · Xulosa</div><p>${esc(d.conclusion)}</p></div>` : ''}
   <div class="signoff"><div class="sig"><div class="role">Заведующий лабораторией</div><div class="name">${esc(d.labChief || '—')}</div><div class="spec">${esc(d.labChiefSpec || '')} · подпись</div></div>
@@ -608,12 +682,19 @@ ${PRINT_FONT_FACE_CSS}
 .legal{ font-size:11px; color:var(--faint); text-align:center; margin-top:13px; padding:0 8mm; line-height:1.5; } .foot{ margin-top:auto; padding-top:10px; border-top:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; } .foot .fl{ font-size:13px; color:var(--ink); } .foot .fl b{ font-weight:700; } .foot .fr{ font-size:13px; font-weight:700; color:var(--ink); }
 @media print{ @page{ size:A4; margin:13mm 14mm; } html,body{ background:#fff; padding:0; } body{ display:block; } /* DOC_A4_PRINT_V1 */ :root{ --ink:#000; --ink-2:#0f131b; --muted:#20242e; --faint:#333a45; } .sheet{ box-shadow:none; width:auto; min-height:268mm; padding:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
 </style></head><body><section class="sheet ${toggleCls(s)}">
-  ${clinicHeadHtml(s, 46)}<div class="rule"></div>
-  <div class="title"><h1>Результат диагностического исследования</h1><div class="uz">Diagnostika tekshiruvi natijasi</div>
-    <div class="meta">${d.docNo ? `<span class="chip">Документ <b>${esc(d.docNo)}</b></span>` : ''}${d.dateIn ? `<span class="chip">Исследование <b>${esc(d.dateIn)}</b></span>` : ''}<span class="chip">Выдан <b>${esc(d.dateOut || dateNumeric(new Date()))}</b></span></div></div>
+  ${vHead(s, {
+    title: 'Результат диагностического исследования', uz: 'Diagnostika tekshiruvi natijasi',
+    date: d.dateOut || dateNumeric(new Date()),
+    ids: [{ label: 'ID', value: d.mrn }, { label: 'Документ', value: d.docNo }],
+    fields: [
+      { label: 'Пациент', uz: 'Bemor', value: shortName(d.patientName) },
+      { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: d.dob },
+      { label: 'Исследование', uz: 'Tekshiruv', value: st.kind },
+      { label: 'Область', uz: 'Soha', value: st.area },
+    ],
+  })}
   <div class="cards">
-    <div class="card"><div class="ct">Пациент <span class="uz">· Bemor</span></div><div class="fgrid">${f('ФИО', 'F.I.Sh.', d.patientName)}${f('Дата рождения', '', d.dob)}${f('Пол', '', d.sex)}${f('ID пациента', '', d.mrn)}</div></div>
-    <div class="card"><div class="ct">Исследование <span class="uz">· Tekshiruv</span></div><div class="fgrid">${f('Вид', 'Turi', st.kind)}${f('Область', 'Soha', st.area)}${f('Аппарат', 'Apparat', st.device)}${f('Протокол', 'Protokol', st.protocol)}</div></div>
+    <div class="card"><div class="ct">Исследование <span class="uz">· Tekshiruv</span></div><div class="fgrid">${f('Аппарат', 'Apparat', st.device)}${f('Протокол', 'Protokol', st.protocol)}</div></div>
   </div>
   ${films.length ? `<div class="films">${films.map(fl => `<div class="film"><div class="lab">${FILM_SVG}<div class="t">Место для снимка</div></div><div class="cap">${esc(fl.caption || '')}</div><div class="cap2">${esc(fl.sub || '')}</div></div>`).join('')}</div>` : ''}
   <div class="sec"><div class="sec-h"><span class="ru">Описание</span><span class="uz">· Tavsif</span></div><div class="sec-b" data-field="instrumental_text">${paras(d.description).map(p => `<p>${esc(p)}</p>`).join('') || (d.__editor ? '' : '<p>—</p>')}</div></div>

@@ -195,3 +195,33 @@ test('CASE_DOC_SET_V2: порядок меняется стрелками и у�
     const up = named(panel, 'Выше: Первичный осмотр и план лечения')[0];
     assert.ok(up.hasAttribute('disabled'), 'первую строку некуда поднимать');
 });
+
+// ─── CASE_DOC_SET_IN_RAIL_V1 — панель живёт в истории болезни ───────────────
+//
+// Владелец (2026-09-09): «this documents shouldn't be here, but in the
+// stationary cabinet in the case file … in the left panel we have add remove
+// buttons and one create button in the bottom». Состав правят, ГЛЯДЯ НА
+// чек-лист, а не в настройках печати.
+test('CASE_DOC_SET_IN_RAIL_V1: панель стоит в левой колонке истории болезни, а создание — одно и под списком', async () => {
+    const fsx = await import('node:fs');
+    const pathx = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = pathx.dirname(fileURLToPath(import.meta.url));
+    const ws = fsx.readFileSync(pathx.join(dir, '..', 'views', 'case-workspace.js'), 'utf8');
+    const docs = fsx.readFileSync(pathx.join(dir, '..', 'views', 'documents.js'), 'utf8');
+    assert.ok(ws.includes('caseDocSetPanel('), 'состав не появился в истории болезни');
+    assert.ok(!docs.includes('caseDocSetPanel'), 'состав остался и в «Документах» — два места на один список');
+
+    // Создание одно и стоит ПОД списком.
+    RESET(); calls = [];
+    const panel = mod.caseDocSetPanel();
+    await settle();
+    const add = named(panel, 'Добавить документ');
+    assert.equal(add.length, 1, 'кнопок создания должно быть ровно одна: ' + add.length);
+    assert.ok(String(add[0].className).includes('cds-add'), 'кнопка создания не под списком');
+    const list = walk(panel).find((e) => String(e.className || '').includes('cds-list'));
+    assert.ok(list, 'списка нет');
+    const order = panel.children.map((c) => String(c.className || ''));
+    assert.ok(order.findIndex((c) => c.includes('cds-list')) < order.findIndex((c) => c.includes('cds-add')),
+        'кнопка создания оказалась выше списка: ' + order.join(', '));
+});

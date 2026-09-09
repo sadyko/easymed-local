@@ -21,7 +21,12 @@ test('три бумаги: заголовок, узбекский подзаго
     for (const type of INPATIENT_DOC_TYPES) {
         const html = buildSheetHtml({ type, s: S, data: D });
         const m = INPATIENT_DOC_META[type];
-        for (const piece of [m.titleRu, m.titleUz, 'Иванов Иван Иванович', 'Терапия', 'Т-1 / T-2', 'Пациент / Bemor', 'Врач / Shifokor', 'Клиника Тест', '08.09.2026']) {
+        // A4_LETTERHEAD_V2 — в шапке имя сокращено (там четверть листа), а НАД
+        // СТРОКОЙ ПОДПИСИ стоит полное: договор и согласие подписывает человек,
+        // и выдать их без его имени целиком нельзя.
+        // PERSON_NAME_SHORT_V1 — между числами косая черта, а не точка с пробелами.
+        for (const piece of [m.titleRu, m.titleUz, 'Иванов Иван Иванович', 'Иванов И. И.', 'Терапия, Т-1/T-2',
+            'Пациент / Bemor', 'Врач / Shifokor', 'Клиника Тест', '08.09.2026']) {
             assert.ok(html.includes(piece), type + ': нет ' + piece);
         }
         const firstPara = INPATIENT_DOC_DEFAULT_TEXT[m.textKey].split(/\n\s*\n/)[0].slice(0, 40);

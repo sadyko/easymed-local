@@ -74,6 +74,9 @@ export function inpatientDocText(s, type) {
     const own = s && typeof s[key] === 'string' ? s[key].trim() : '';
     return own || INPATIENT_DOC_DEFAULT_TEXT[key];
 }
+// PERSON_NAME_SHORT_V1 — те же правила имени и места, что на экране.
+import { shortName, placeLine } from './person-name.js';
+
 export function esc(s) {
     return String(s ?? '').replace(/[&<>"']/g, ch => (
         { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
@@ -355,30 +358,28 @@ function inpatientDocBody(s, d, type) {
     const line = '<span style="display:inline-block;min-width:180px;border-bottom:1px solid #16232b;">&nbsp;</span>';
     const kv = (k, v) => `<div style="min-width:0;"><div class="lbl">${esc(k)}</div><div style="font-size:15px;font-weight:600;color:${s.ink};margin-top:2px;">${v ? esc(v) : line}</div></div>`;
     return `
-        ${headerHTML(s)}
-        <div class="row" style="margin-top:18px;align-items:flex-start;gap:18px;">
-            <div style="flex:1;">
-                <div style="font-size:20px;font-weight:800;line-height:1.25;letter-spacing:0.02em;color:${s.accent};text-transform:uppercase;">${esc(meta.titleRu)}</div>
-                <div style="font-size:13px;font-style:italic;color:#55636d;margin-top:4px;">${esc(meta.titleUz)}</div>
-            </div>
-            <div style="text-align:right;">
-                <div class="lbl">Дата</div>
-                <div style="font-size:14px;font-weight:700;color:${s.ink};margin-top:2px;">${esc(d.date || dateNumeric(new Date()))}</div>
-            </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:16px;padding-top:12px;border-top:2px solid ${s.accent};">
-            ${kv('Пациент / Bemor', d.patientName)}
-            ${kv('Отделение', d.department)}
-            ${kv('Палата / Койка', [d.ward, d.bed].filter(Boolean).join(' / '))}
-            ${kv('Лечащий врач', d.doctorName)}
-        </div>
+        ${docHeadHTML(s, {
+            title: meta.titleRu, uz: meta.titleUz,
+            date: d.date || dateNumeric(new Date()),
+            ids: [{ label: 'ID', value: d.mrn }, { label: '№ истории', value: d.admissionNo }],
+            fields: [
+                { label: 'Пациент', uz: 'Bemor', value: shortName(d.patientName) },
+                { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: d.dob },
+                { label: 'Отделение · койка', uz: 'Boʻlim · koyka', value: placeLine(d.department, d.ward, d.bed) },
+                { label: 'Лечащий врач', uz: 'Davolovchi shifokor', value: shortName(d.doctorName) },
+            ],
+        })}
         <div class="body" style="margin-top:16px;border-top:1px solid #e7ebee;padding-top:12px;">
             ${paras.map((t) => `<p style="margin:0 0 10px;">${esc(t)}</p>`).join('')}
         </div>
         <div style="display:flex;justify-content:space-between;gap:24px;margin-top:40px;">
             <div style="flex:1;">
                 <div class="lbl">Пациент / Bemor</div>
-                <div style="border-bottom:1px solid #16232b;height:28px;"></div>
+                <!-- A4_LETTERHEAD_V2 — ПОЛНОЕ имя стоит НАД строкой подписи. В шапке
+                     оно сокращено до фамилии с инициалами (там четверть листа), но
+                     бумагу, которую подписывает пациент, нельзя выдать без его имени
+                     целиком: это договор и согласие, а не рабочая запись. -->
+                <div style="font-size:14px;font-weight:600;color:#16232b;height:28px;border-bottom:1px solid #16232b;display:flex;align-items:flex-end;">${esc(d.patientName || '')}</div>
                 <div style="font-size:11px;color:#7a8892;margin-top:3px;">подпись</div>
             </div>
             <div style="flex:1;">
@@ -449,6 +450,46 @@ function logoMark(s) {
     }
     return logoSVG(s.accent);
 }
+// A4_LETTERHEAD_V2 — тот же двухъярусный заголовок, что у designed-вариантов
+// (views/doc-variants.js, vHead). Здесь он нужен бумагам при поступлении:
+// договор, согласие, памятка рисуются этим модулем, а не вариантами.
+function docHeadIds(s, ids) {
+    const rows = (ids || []).filter((f) => f && f.label && f.value);
+    if (!rows.length) return '';
+    return '<div style="text-align:right;flex:0 0 auto;">'
+        + rows.map((f) => `<div style="display:flex;align-items:baseline;gap:8px;justify-content:flex-end;line-height:1.5;">
+            <span style="font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#6b7a85;">${esc(f.label)}</span>
+            <span style="font-size:12px;font-weight:700;color:${s.ink};white-space:nowrap;">${esc(f.value)}</span>
+        </div>`).join('') + '</div>';
+}
+function docHeadFields(s, fields) {
+    const cells = (fields || []).filter((f) => f && f.label);
+    if (!cells.length) return '';
+    const w = (100 / cells.length).toFixed(4);
+    return '<div style="display:flex;margin-top:12px;padding:8px 12px;background:#f6f8f9;border:1px solid #e2e7ea;border-radius:8px;">'
+        + cells.map((f, i) => `<div style="width:${w}%;min-width:0;${i === cells.length - 1 ? '' : 'padding-right:14px;margin-right:14px;border-right:1px solid #e2e7ea;'}">
+            <div style="font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#6b7a85;">${esc(f.label)}</div>
+            <div style="font-size:12px;font-weight:700;color:${s.ink};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(f.value || '—')}</div>
+            ${f.uz ? `<div style="font-size:9.5px;color:${s.accent};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(f.uz)}</div>` : ''}
+        </div>`).join('') + '</div>';
+}
+function docHeadHTML(s, doc) {
+    return `<div style="border-bottom:2px solid ${s.accent};padding-bottom:14px;">
+        <div style="display:flex;align-items:center;gap:14px;">
+            ${logoMark(s)}
+            ${hasLogo(s) ? '' : `<div style="font-size:15px;font-weight:800;letter-spacing:-0.01em;color:${s.ink};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:28%;">${esc(s.clinicName)}</div>`}
+            <div style="flex:0 0 2px;align-self:stretch;min-height:34px;background:${s.accent};border-radius:999px;"></div>
+            <div style="flex:1;min-width:0;">
+                <div style="font-size:16px;font-weight:800;letter-spacing:-0.01em;color:${s.ink};line-height:1.25;">${esc(doc.title || '')}</div>
+                ${doc.uz ? `<div style="font-size:11px;font-style:italic;color:#55636d;margin-top:1px;">${esc(doc.uz)}</div>` : ''}
+                ${doc.date ? `<div style="font-size:11px;color:#55636d;margin-top:2px;">от ${esc(doc.date)}</div>` : ''}
+            </div>
+            ${docHeadIds(s, doc.ids)}
+        </div>
+        ${docHeadFields(s, doc.fields)}
+    </div>`;
+}
+
 function headerHTML(s) {
     return `<div style="display:flex;align-items:center;gap:14px;padding-bottom:18px;border-bottom:2px solid ${s.accent};">
         ${logoMark(s)}

@@ -5958,6 +5958,8 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .cds-used { color: var(--ink-400); }
 .cds-acts { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
 .cds-lock { display: inline-flex; padding: 6px; color: var(--ink-300); }
+/* CASE_DOC_SET_IN_RAIL_V1 — одно создание, и оно под списком. */
+.cds-add { width: 100%; justify-content: center; margin-top: 10px; }
 
 /* CASE_DOC_BLANK_V1 — бланк документа истории болезни в «Документах»: тот же
    лист, что у постели пациента, без серой коробки вокруг бумаги. */

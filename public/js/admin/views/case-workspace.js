@@ -36,6 +36,7 @@ import { shortName, placeLine } from '../../shared/person-name.js';   // PERSON_
 import { caseHead } from './case-overview.js?v=co1';   // CASE_OVERVIEW_V1 — одна шапка на «Обзор» и «Документы»
 import { caseInsertPanel } from './case-doc-insert.js';   // CASE_DOC_A4_V1 — правая панель «Вставить в документ»
 import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — диагнозы списком
+import { caseDocSetPanel } from './case-doc-set.js';   // CASE_DOC_SET_IN_RAIL_V1 — состав набора
 import { setupA4Pagination, setupA4Fit } from './a4-paginate.js';   // A4_PAGINATE_V1 / FORM_003_ONE_PAGE_V1
 
 const state = {
@@ -277,6 +278,10 @@ function paintRail(rail, root, onNavigate) {
         onAssemble: null,
         activeKind: state.open ? state.open.kind : null,
     }));
+    // CASE_DOC_SET_IN_RAIL_V1 — состав набора под самим списком: правят его,
+    // глядя на чек-лист, а не в настройках печати. Панель сама перечитывает
+    // себя, поэтому перерисовку чек-листа она получает следующей загрузкой.
+    rail.appendChild(caseDocSetPanel({ onChange: async () => { await load(); paint(root, onNavigate); } }));
     rail.appendChild(assembleFor(root, onNavigate));
 }
 

@@ -31,7 +31,6 @@ import { CASE_BLANK_KEY, CASE_BLANK_KINDS, caseDocBlank, withCaseDocBlank,
          sectionsFor, richSection, richToolbar, readRich, applyRich } from './case-doc-a4.js';
 import { caseDocTitle } from './case-docs.js?v=cw1';
 import { a4Sheet } from './a4-letterhead.js';
-import { caseDocSetPanel } from './case-doc-set.js';   // CASE_DOC_SET_V2 — состав истории болезни
 
 const DOC_TYPES = [
     { id: 'conclusion', label: 'Заключение врача', icon: 'Stethoscope', sub: 'Клинический отчёт',    paper: 'A4' },
@@ -167,11 +166,13 @@ function settingsPanel() {
     // акцент и размер бумаги к нему отношения не имеют, их задаёт та же клиника
     // на соседних вкладках.
     if (state.active === CASE_DOC_TYPE) {
-        // CASE_DOC_SET_V2 — сперва СОСТАВ («какие документы бывают»), под ним
-        // бланк («что в документе написано»). Порядок не случайный: бланк
-        // правят у документа, который в наборе уже есть.
+        // CASE_DOC_SET_IN_RAIL_V1 (2026-09-09) — владелец: «this documents
+        // shouldn't be here, but in the stationary cabinet in the case file».
+        // Состав набора правят, ГЛЯДЯ НА ЧЕК-ЛИСТ: «этот документ нам не нужен»
+        // и «а этого не хватает» — мысли у постели пациента, а не в настройках
+        // печати. Панель переехала в левую колонку истории болезни, где список
+        // и живёт. Здесь остаётся бланк — то, ЧТО в документе написано.
         return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } },
-            caseDocSetPanel(),
             caseBlankCard());
     }
     return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px', position: 'sticky', top: '88px' } },

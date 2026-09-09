@@ -98,28 +98,31 @@ function openTypeModal({ type = null, onDone } = {}) {
  * Панель «Состав истории болезни».
  * @returns {Node} карточка, которая сама грузится и сама перерисовывается
  */
-export function caseDocSetPanel() {
+export function caseDocSetPanel({ onChange = null } = {}) {
     const box = h('section', { class: 'card cds', 'aria-label': tr('Состав истории болезни') });
     let types = [];
 
-    const load = async () => {
+    const load = async (changed) => {
         const { data, error } = await supabase.rpc('case_doc_types_list', {});
         if (error) { types = null; paint(); return; }
         types = (data && data.types) || [];
         paint();
+        // Состав изменился — чек-лист рядом обязан показать это сразу, иначе
+        // врач видит документ в наборе и не видит его в списке.
+        if (changed && onChange) { try { await onChange(); } catch (e) { /* экран сам перерисуется */ } }
     };
 
     const reorder = async (kinds) => {
         const { error } = await supabase.rpc('case_doc_types_reorder', { kinds });
         if (error) { toast(error.message || tr('Не удалось изменить порядок.'), 'fail'); return; }
-        await load();
+        await load(true);
     };
 
     const setActive = async (t, active) => {
         const { error } = await supabase.rpc('case_doc_type_set_active', { kind: t.kind, active });
         if (error) { toast(error.message || tr('Не удалось изменить набор.'), 'fail'); return; }
         toast(active ? tr('Документ вернулся в набор.') : tr('Документ убран из набора.'), 'ok');
-        await load();
+        await load(true);
     };
 
     function row(t, i) {
@@ -146,7 +149,7 @@ export function caseDocSetPanel() {
             h('div', { class: 'cds-acts' },
                 h('button', { class: 'btn btn-sm btn-ghost', type: 'button',
                     'aria-label': trf('Изменить: {name}', { name }),
-                    onclick: () => openTypeModal({ type: t, onDone: load }) }, Icon('Edit', { size: 13 })),
+                    onclick: () => openTypeModal({ type: t, onDone: () => load(true) }) }, Icon('Edit', { size: 13 })),
                 t.locked
                     ? h('span', { class: 'cds-lock', title: tr('Выписной эпикриз убрать нельзя: на нём стоит гейт выписки.') },
                         Icon('Lock', { size: 13 }))
@@ -161,11 +164,7 @@ export function caseDocSetPanel() {
         clear(box);
         box.appendChild(h('header', { class: 'cds-h' },
             h('span', { class: 'cds-h-ic' }, Icon('Doc', { size: 14 })),
-            h('h3', { class: 'cds-h-t' }, tr('Состав истории болезни')),
-            h('span', { class: 'grow' }),
-            h('button', { class: 'btn btn-primary btn-sm', type: 'button',
-                onclick: () => openTypeModal({ onDone: load }) },
-                Icon('Plus', { size: 13 }), ' ', tr('Добавить документ'))));
+            h('h3', { class: 'cds-h-t' }, tr('Состав истории болезни'))));
 
         if (types === null) {
             box.appendChild(h('div', { class: 'cds-note cds-fail' }, tr('Состав не загрузился. Обновите страницу.')));
@@ -180,6 +179,15 @@ export function caseDocSetPanel() {
         const list = h('div', { class: 'cds-list' });
         types.forEach((t, i) => list.appendChild(row(t, i)));
         box.appendChild(list);
+        // CASE_DOC_SET_IN_RAIL_V1 — владелец: «in the left panel we have add
+        // remove buttons and one create button in the bottom». У строк — правка
+        // и «убрать»; создание одно и стоит под списком, где кончается перечень
+        // и начинается мысль «а такого документа у нас нет».
+        box.appendChild(h('button', {
+            class: 'btn btn-primary btn-sm cds-add', type: 'button',
+            onclick: () => openTypeModal({ onDone: () => load(true) }),
+        }, Icon('Plus', { size: 13 }), ' ', tr('Добавить документ')));
+
         const off = types.filter((t) => !t.active).length;
         if (off) {
             box.appendChild(h('div', { class: 'cds-note' },
