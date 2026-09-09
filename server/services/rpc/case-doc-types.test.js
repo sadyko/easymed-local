@@ -17,7 +17,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { admissionOrderCreate, admissionAdmit } from './inpatient.js';
+import { admissionOrderCreate, admissionAdmit, admissionDischargeRequest } from './inpatient.js';
 import { admissionCaseDocs, admissionReviewSave } from './inpatient-reviews.js';
 import { caseDocTypesList, caseDocTypeSave, caseDocTypeSetActive, caseDocTypesReorder } from './case-doc-types.js';
 
@@ -51,7 +51,7 @@ function inBed(db) {
 
 const kindsOf = (st) => st.items.filter((i) => i.kind !== 'title').map((i) => i.kind);
 
-test('встроенный набор виден как встроенный, порядок прежний, выписной эпикриз заперт', () => {
+test('встроенный набор виден как встроенный, порядок прежний, запертых родов нет', () => {
   const db = seed();
   try {
     const { types, due_rules } = caseDocTypesList(db, {}, headDoctor);
@@ -60,8 +60,9 @@ test('встроенный набор виден как встроенный, п
     assert.ok(types.every((t) => t.builtin && t.active));
     assert.ok(types.every((t) => t.title === ''), 'имя встроенного рода переводится на экране');
     assert.ok(due_rules.includes('none'), 'правило «без срока» должно предлагаться');
-    assert.equal(types.find((t) => t.kind === 'discharge').locked, true);
-    assert.equal(types.find((t) => t.kind === 'intake').locked, false);
+    // CASE_DOC_SET_OPEN_V1 — запертых родов больше нет: замок стоял ради гейта
+    // выписки, а гейт теперь сам смотрит, есть ли эпикриз в наборе.
+    assert.ok(types.every((t) => t.locked === false), 'в наборе снова появился запертый род');
   } finally { db.close(); }
 });
 
@@ -129,11 +130,39 @@ test('убранный документ уходит из чек-листа, а 
   } finally { db.close(); }
 });
 
-test('выписной эпикриз убрать нельзя: на нём стоит гейт выписки', () => {
+// CASE_DOC_SET_OPEN_V1 — владелец: «why is epicrisis is locked, open it, and we
+// can form the full history».
+//
+// Замок стоял не ради эпикриза, а ради гейта выписки, который спрашивал его ПО
+// ИМЕНИ. Отпереть замок можно было только вместе с этой зависимостью: иначе
+// клиника убрала бы документ из набора и получила бы отказ в выписке, не видя
+// в чек-листе, чего от неё ждут.
+test('выписной эпикриз убирается из набора, и выписка перестаёт его требовать', () => {
   const db = seed();
   try {
-    assert.throws(() => caseDocTypeSetActive(db, { kind: 'discharge', active: false }, headDoctor),
-      /эпикриз/i, 'без эпикриза заявка на выписку встанет молча');
+    // Пациента доводим до лечения ПРЯМО: у заявки на выписку есть и другие
+    // условия (свой лечащий врач, начатое лечение), и тест не про них — он
+    // про то, спрашивают ли эпикриз.
+    const id = inBed(db);
+    db.prepare('UPDATE admissions SET status = ?, attending_doctor_id = ? WHERE id = ?').run('active', headDoctor.id, id);
+    // Пока эпикриз в наборе — без него заявку не принимают. Это не изменилось.
+    assert.throws(() => admissionDischargeRequest(db, { admission_id: id, outcome: 'home' }, headDoctor),
+      /эпикриз/i, 'клиника держит эпикриз — значит он и спрашивается');
+
+    caseDocTypeSetActive(db, { kind: 'discharge', active: false }, headDoctor);
+    assert.ok(!kindsOf(admissionCaseDocs(db, { admission_id: id }, headDoctor)).includes('discharge'),
+      'убранный эпикриз остался в чек-листе');
+
+    // Убрали из набора — заявка проходит: спрашивать документ, которого в
+    // чек-листе нет, значит отказывать молча.
+    const res = admissionDischargeRequest(db, { admission_id: id, outcome: 'home' }, headDoctor);
+    assert.ok(res && res.admission, 'выписка всё ещё требует убранный из набора эпикриз');
+
+    // Вернули в набор — документ снова в чек-листе, а значит снова
+    // спрашивается: первое утверждение этого теста уже это показало.
+    caseDocTypeSetActive(db, { kind: 'discharge', active: true }, headDoctor);
+    assert.ok(kindsOf(admissionCaseDocs(db, { admission_id: id }, headDoctor)).includes('discharge'),
+      'вернуть эпикриз в набор оказалось нечем');
   } finally { db.close(); }
 });
 

@@ -5935,29 +5935,36 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 
 /* ── CASE_DOC_SET_V2 — состав истории болезни настраивает клиника ─────────── */
 .cds { padding: 12px 14px 14px; }
-.cds-h { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+/* CASE_DOC_SET_OPEN_V1 — шапка это КНОПКА: панель свёрнута, пока её не
+   открыли, иначе она делит высоту колонки с чек-листом и тот сжимается в ноль. */
+.cds-h { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px;
+    padding: 0; border: 0; background: none; font: inherit; text-align: left; cursor: pointer; }
+.cds-h:focus-visible { outline: 2px solid var(--primary-500); outline-offset: 2px; }
+.cds-h-n { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px;
+    border-radius: var(--r-pill); background: var(--ink-100); color: var(--ink-700);
+    font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .cds-h-ic { display: inline-flex; color: var(--primary-600); }
 .cds-h-t { margin: 0; font-size: 12.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-700); }
 .cds-note { font-size: 12.5px; color: var(--ink-500); line-height: 1.45; margin: 4px 0 8px; }
 .cds-note.cds-fail { color: var(--crit-700); }
 .cds-list { display: flex; flex-direction: column; border: 1px solid var(--ink-100); border-radius: var(--r-md); overflow: hidden; }
-.cds-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-bottom: 1px solid var(--ink-50); }
+.cds-row { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 4px 10px; border-bottom: 1px solid var(--ink-50); }
 .cds-row:last-child { border-bottom: 0; }
 /* Убранный из набора виден бледным: вернуть его иначе было бы нечем. */
 .cds-off { opacity: .5; }
 .cds-main { flex: 1; min-width: 0; }
 .cds-name { font-size: 13.5px; font-weight: 600; color: var(--ink-900); display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
 .cds-tag { font-size: 12.5px; font-weight: 500; color: var(--ink-400); }
-.cds-when { font-size: 12.5px; color: var(--ink-500); display: flex; gap: 8px; flex-wrap: wrap; }
-.cds-used { color: var(--ink-400); }
-.cds-acts { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
-.cds-lock { display: inline-flex; padding: 6px; color: var(--ink-300); }
 /* CASE_DOC_SET_SIMPLE_V1 — строка это имя и одна кнопка; заведение — поле
    под списком, без окна. */
 .cds-name { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--ink-900); overflow-wrap: anywhere; }
-.cds-new { display: flex; gap: 6px; align-items: center; margin-top: 10px; }
-.cds-new-in { flex: 1; min-width: 0; min-height: 34px; }
-.cds-new .btn { flex: 0 0 auto; min-width: 34px; justify-content: center; }
+/* Размер пальца, а не курсора: владелец «make that big button like adding
+   parameters so user can add in the tablet» — те же 44 px, что у «−» и «+» в
+   измерениях (.vt-step). */
+.cds-new { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.cds-new-in { flex: 1; min-width: 0; min-height: 44px; font-size: 13.5px; }
+.cds-new .btn { flex: 0 0 auto; min-width: 44px; min-height: 44px; justify-content: center; }
+.cds-row .btn { min-width: 40px; min-height: 40px; justify-content: center; }
 
 /* CASE_DOC_BLANK_V1 — бланк документа истории болезни в «Документах»: тот же
    лист, что у постели пациента, без серой коробки вокруг бумаги. */

@@ -1153,7 +1153,15 @@ export function admissionDischargeRequest(db, args, user) {
     // 4. Выписной эпикриз — опубликованный и действующий (не заменённый
     //    исправлением, superseded_by IS NULL: заменённый эпикриз — это история,
     //    а не текущий документ).
-    const epicrisis = db.prepare(`
+    //
+    // CASE_DOC_SET_OPEN_V1 — спрашивается он, ТОЛЬКО ЕСЛИ КЛИНИКА ЕГО ДЕРЖИТ.
+    // Состав истории болезни настраивается (case_doc_types), и клиника вправе
+    // вести выписку иначе. Требовать документ, которого она у себя убрала, —
+    // значит отказывать в выписке, не показывая, чего ждём: в чек-листе такого
+    // пункта уже нет.
+    const wantsEpicrisis = db.prepare(
+      "SELECT 1 FROM case_doc_types WHERE kind = 'discharge' AND active = 1").get();
+    const epicrisis = !wantsEpicrisis ? { id: null } : db.prepare(`
       SELECT id, published_at FROM admission_reviews
        WHERE admission_id = ? AND kind = 'discharge'
          AND published_at IS NOT NULL AND superseded_by IS NULL

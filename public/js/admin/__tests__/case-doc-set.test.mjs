@@ -6,7 +6,7 @@
 //
 // Проверяется то, ради чего экран и сделан: базовый список виден, «+» заводит
 // свой документ, порядок меняется, документ убирается из набора и возвращается,
-// а выписной эпикриз убрать нечем.
+// а убирается любой документ, включая выписной эпикриз.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -76,7 +76,7 @@ const RESET = () => {
     TYPES = [
         { kind: 'intake', title: '', due_rule: 'clock', due_hours: 2, block: '', sort_order: 10, builtin: true, active: true, locked: false, used: 0 },
         { kind: 'primary', title: '', due_rule: 'clock', due_hours: 24, block: '', sort_order: 20, builtin: true, active: true, locked: false, used: 3 },
-        { kind: 'discharge', title: '', due_rule: 'at_discharge', due_hours: null, block: '', sort_order: 30, builtin: true, active: true, locked: true, used: 0 },
+        { kind: 'discharge', title: '', due_rule: 'at_discharge', due_hours: null, block: '', sort_order: 30, builtin: true, active: true, locked: false, used: 0 },
     ];
 };
 let calls = [];
@@ -113,6 +113,17 @@ const mod = await import('../views/case-doc-set.js');
 const btns = (root) => walk(root).filter((e) => e.tagName === 'BUTTON');
 const named = (root, label) => btns(root).filter((b) => (b.getAttribute('aria-label') || textOf(b) || '').includes(label));
 
+// CASE_DOC_SET_OPEN_V1 — панель свёрнута, пока её не открыли: развёрнутая, она
+// делила высоту колонки с чек-листом и тот сжимался в ноль. Тесты открывают её
+// тем же щелчком по шапке, каким её открывает человек.
+const openPanel = async (panel) => {
+    const head = walk(panel).find((e) => e.tagName === 'BUTTON' && String(e.className).split(/\s+/).includes('cds-h'));
+    assert.ok(head, 'шапка панели не кнопка — открыть её нечем');
+    head.click();
+    await settle();
+    return panel;
+};
+
 // ===========================================================================
 // ===========================================================================
 // CASE_DOC_SET_SIMPLE_V1 — владелец: «i cannot add, because its asking
@@ -127,6 +138,7 @@ test('CASE_DOC_SET_SIMPLE_V1: строка — это имя и одна кно�
     RESET(); calls = [];
     const panel = mod.caseDocSetPanel();
     await settle();
+    await openPanel(panel);
     const t = textOf(panel);
     assert.ok(t.includes('Осмотр приёмного врача'), 'встроенный документ не назван словарём');
     // Ничего, кроме имени: ни срока, ни «встроенный», ни числа записей.
@@ -136,8 +148,8 @@ test('CASE_DOC_SET_SIMPLE_V1: строка — это имя и одна кно�
     // По одной кнопке на строку — «убрать». Стрелок и карандаша нет.
     assert.equal(named(panel, 'Выше:').length, 0, 'стрелки порядка вернулись');
     assert.equal(named(panel, 'Изменить:').length, 0, 'правка строки вернулась');
-    assert.equal(named(panel, 'Убрать из набора:').length, 2,
-        'кнопка «убрать» должна быть у каждой строки, кроме запертой');
+    assert.equal(named(panel, 'Убрать из набора:').length, 3,
+        'кнопка «убрать» должна быть у КАЖДОЙ строки: запертых родов больше нет');
 });
 
 test('CASE_DOC_SET_SIMPLE_V1: документ заводится строкой снизу, без окна и без срока', async () => {
@@ -145,6 +157,7 @@ test('CASE_DOC_SET_SIMPLE_V1: документ заводится строкой
     const before = BODY.children.length;
     const panel = mod.caseDocSetPanel();
     await settle();
+    await openPanel(panel);
 
     const input = walk(panel).find((e) => e.tagName === 'INPUT' && String(e.className).includes('cds-new-in'));
     assert.ok(input, 'поля создания внизу нет');
@@ -177,6 +190,7 @@ test('CASE_DOC_SET_SIMPLE_V1: пустое имя ничего не заводи
     RESET(); calls = [];
     const panel = mod.caseDocSetPanel();
     await settle();
+    await openPanel(panel);
     const input = walk(panel).find((e) => e.tagName === 'INPUT' && String(e.className).includes('cds-new-in'));
     input.value = '   ';
     walk(panel).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('btn-primary'))[0].click();
@@ -184,10 +198,11 @@ test('CASE_DOC_SET_SIMPLE_V1: пустое имя ничего не заводи
     assert.equal(calls.filter((c) => c.name === 'case_doc_type_save').length, 0,
         'пустое имя ушло на сервер');
 });
-test('CASE_DOC_SET_V2: документ убирается из набора и возвращается; выписной эпикриз заперт', async () => {
+test('CASE_DOC_SET_V2: документ убирается из набора и возвращается', async () => {
     RESET(); calls = [];
     const panel = mod.caseDocSetPanel();
     await settle();
+    await openPanel(panel);
 
     named(panel, 'Убрать из набора: Первичный осмотр и план лечения')[0].click();
     await settle();
@@ -199,10 +214,11 @@ test('CASE_DOC_SET_V2: документ убирается из набора и 
     await settle();
     assert.equal(calls.filter((c) => c.name === 'case_doc_type_set_active').pop().args.active, true);
 
-    // Выписной эпикриз убрать нечем: у него замок вместо кнопки.
-    assert.equal(named(panel, 'Убрать из набора: Выписной эпикриз').length, 0,
-        'у выписного эпикриза появилась кнопка «убрать» — гейт выписки сломается молча');
-    assert.ok(walk(panel).some((e) => String(e.className || '').includes('cds-lock')), 'замка у запертого документа нет');
+    // CASE_DOC_SET_OPEN_V1 — замка больше нет: эпикриз убирается, как любой
+    // другой документ, а гейт выписки сам смотрит, есть ли он в наборе.
+    assert.equal(named(panel, 'Убрать из набора: Выписной эпикриз').length, 1,
+        'выписной эпикриз снова нельзя убрать');
+    assert.ok(!walk(panel).some((e) => String(e.className || '').includes('cds-lock')), 'замок вернулся');
 });
 
 // CASE_DOC_SET_SIMPLE_V1 — стрелок порядка в панели больше нет; серверный
@@ -222,6 +238,7 @@ test('CASE_DOC_SET_IN_RAIL_V1: панель стоит в левой колон�
     RESET(); calls = [];
     const panel = mod.caseDocSetPanel();
     await settle();
+    await openPanel(panel);
     const add = walk(panel).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('btn-primary'));
     assert.equal(add.length, 1, 'кнопок создания должно быть ровно одна: ' + add.length);
     const list = walk(panel).find((e) => String(e.className || '').includes('cds-list'));

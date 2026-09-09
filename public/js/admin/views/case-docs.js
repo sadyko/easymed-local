@@ -163,7 +163,15 @@ export function caseDoneText(item) {
 export function caseGateText(state) {
     const gate = (state && state.discharge_gate) || { blocking: [], incomplete: [] };
     const blocked = (gate.blocking || [])[0] || null;
-    if (!blocked) return tr('Выписной эпикриз оформлен — заявку на выписку примут.');
+    // CASE_DOC_SET_OPEN_V1 — эпикриз отпёрли, и клиника вправе убрать его из
+    // набора. Тогда выписку не держит НИЧЕГО, и говорить «эпикриз оформлен»
+    // значит отчитываться о документе, которого у клиники нет.
+    if (!blocked) {
+        const kept = ((state && state.items) || []).some((it) => it && it.kind === 'discharge');
+        return kept
+            ? tr('Выписной эпикриз оформлен — заявку на выписку примут.')
+            : tr('Выписной эпикриз убран из набора — заявку на выписку примут.');
+    }
     return blocked.reason === 'draft'
         ? tr('Заявку на выписку не примут: выписной эпикриз сохранён черновиком — его нужно опубликовать.')
         : tr('Заявку на выписку не примут: выписной эпикриз ещё не написан.');

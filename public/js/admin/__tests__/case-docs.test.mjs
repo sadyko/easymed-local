@@ -278,6 +278,14 @@ test('чек-лист объясняет отказ выписки тем же �
     const open = Object.assign({}, STATE, { discharge_gate: { blocked: false, blocking: [], incomplete: [] } });
     assert.match(caseGateText(open), /примут/i);
 
+    // CASE_DOC_SET_OPEN_V1 — эпикриз отпёрли, и клиника вправе убрать его из
+    // набора. Тогда её не отчитывают об оформленном документе, которого у неё
+    // нет: выписку не держит ничего, и так и сказано.
+    assert.match(caseGateText(open), /эпикриз оформлен/i, 'клиника держит эпикриз — про него и сказано');
+    const noEpi = Object.assign({}, open, { items: (open.items || []).filter((it) => it.kind !== 'discharge') });
+    assert.match(caseGateText(noEpi), /убран из набора/i,
+        'убранный из набора эпикриз всё ещё числится оформленным');
+
     // Недооформленное названо ПОИМЁННО, а не числом.
     const missing = caseMissingTitles(STATE);
     assert.equal(missing.length, STATE.discharge_gate.incomplete.length);

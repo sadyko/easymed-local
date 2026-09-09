@@ -5,16 +5,17 @@
 // document. its maybe before operation it can be anesthesist list etc etc. but
 // we shoud give basic templates list + option».
 //
-// Экран живёт в «Документах» рядом с бланком документа: там же клиника пишет,
-// ЧТО в документе, — логично, что рядом она решает, КАКИЕ документы вообще
-// бывают. Отдельный раздел настроек для одного списка был бы ещё одним местом,
-// куда надо помнить дорогу.
+// Панель живёт в левой колонке истории болезни, под чек-листом: состав правят
+// там же, где по нему работают. И СВЁРНУТА, пока её не открыли — колонка
+// фиксированной высоты, а развёрнутая панель отбирала её у чек-листа.
 //
-// ЧТО ЗДЕСЬ МОЖНО. Завести свой документ, поправить срок и имя, переставить
-// местами, убрать из набора и вернуть обратно. Чего нельзя — тому есть причина,
-// и она сказана вслух прямо в списке: встроенный род не удаляется (на него
-// ссылаются написанные записи), выписной эпикриз не убирается (на нём стоит
-// гейт выписки).
+// ЧТО ЗДЕСЬ МОЖНО. Завести свой документ одной строкой снизу, убрать любой из
+// набора и вернуть обратно. Убрать — не удалить: написанные этим родом записи
+// остаются в историях болезни, поэтому род и не стирается совсем.
+//
+// CASE_DOC_SET_OPEN_V1 — убирается и выписной эпикриз: замок на нём стоял ради
+// гейта выписки, а гейт теперь спрашивает документ, только если клиника его
+// держит (server/services/rpc/inpatient.js).
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast } from '../ui.js';
 import { tr, trf } from '../i18n.js';
@@ -55,6 +56,12 @@ export function dueWords(t) {
 export function caseDocSetPanel({ onChange = null } = {}) {
     const box = h('section', { class: 'card cds', 'aria-label': tr('Состав истории болезни') });
     let types = [];
+    // CASE_DOC_SET_OPEN_V1 — панель СВЁРНУТА, пока её не открыли. Развёрнутая,
+    // она делила высоту колонки с чек-листом, и чек-лист сжимался в ноль:
+    // владелец увидел пустую карточку «Документы истории болезни» и не смог
+    // ничего ни добавить, ни открыть. Состав правят изредка, список читают
+    // всегда — значит по умолчанию видно список.
+    let open = false;
 
     const load = async (changed) => {
         const { data, error } = await supabase.rpc('case_doc_types_list', {});
@@ -90,17 +97,15 @@ export function caseDocSetPanel({ onChange = null } = {}) {
         const name = caseDocTitle(t.kind, t.title);
         return h('div', { class: 'cds-row' + (t.active ? '' : ' cds-off') },
             h('div', { class: 'cds-name' }, name),
-            t.locked
-                // Выписной эпикриз убрать нечем: на нём стоит гейт выписки, и
-                // кнопка, которая всегда откажет, — обещание, а не действие.
-                ? h('span', { class: 'cds-lock', title: tr('Выписной эпикриз убрать нельзя: на нём стоит гейт выписки.') },
-                    Icon('Lock', { size: 13 }))
-                : h('button', {
-                    class: 'btn btn-sm btn-ghost', type: 'button',
-                    'aria-label': t.active ? trf('Убрать из набора: {name}', { name }) : trf('Вернуть в набор: {name}', { name }),
-                    title: t.active ? tr('Убрать из набора') : tr('Вернуть в набор'),
-                    onclick: () => setActive(t, !t.active),
-                }, Icon(t.active ? 'Minus' : 'Plus', { size: 13 })));
+            // CASE_DOC_SET_OPEN_V1 — убирается ЛЮБАЯ строка, включая выписной
+            // эпикриз: замок стоял ради гейта выписки, а гейт теперь сам
+            // смотрит, держит ли клиника этот документ в наборе.
+            h('button', {
+                class: 'btn btn-sm btn-ghost', type: 'button',
+                'aria-label': t.active ? trf('Убрать из набора: {name}', { name }) : trf('Вернуть в набор: {name}', { name }),
+                title: t.active ? tr('Убрать из набора') : tr('Вернуть в набор'),
+                onclick: () => setActive(t, !t.active),
+            }, Icon(t.active ? 'Minus' : 'Plus', { size: 13 })));
     }
 
     // Поле создания: имя — и всё. Enter работает так же, как кнопка: это одна
@@ -126,14 +131,24 @@ export function caseDocSetPanel({ onChange = null } = {}) {
 
     function paint() {
         clear(box);
-        box.appendChild(h('header', { class: 'cds-h' },
+        const count = types === null ? 0 : types.filter((t) => t.active).length;
+        box.appendChild(h('button', {
+            class: 'cds-h', type: 'button', 'aria-expanded': open ? 'true' : 'false',
+            onclick: () => { open = !open; paint(); },
+        },
             h('span', { class: 'cds-h-ic' }, Icon('Doc', { size: 14 })),
-            h('h3', { class: 'cds-h-t' }, tr('Состав истории болезни'))));
-
+            h('span', { class: 'cds-h-t' }, tr('Состав истории болезни')),
+            count ? h('span', { class: 'cds-h-n' }, String(count)) : null,
+            h('span', { class: 'grow' }),
+            Icon(open ? 'ChevronDown' : 'ChevronRight', { size: 14 })));
+        // Незагрузившийся состав виден и у свёрнутой панели: свёрнутая она
+        // выглядела бы как пустой набор, а это разные вещи.
         if (types === null) {
             box.appendChild(h('div', { class: 'cds-note cds-fail' }, tr('Состав не загрузился. Обновите страницу.')));
             return;
         }
+        if (!open) return;
+
         if (types.length) {
             const list = h('div', { class: 'cds-list' });
             types.forEach((t) => list.appendChild(row(t)));
