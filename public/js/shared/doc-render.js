@@ -468,7 +468,7 @@ function docHeadFields(s, fields) {
     const w = (100 / cells.length).toFixed(4);
     return '<div style="display:flex;margin-top:12px;padding:8px 12px;background:#f6f8f9;border:1px solid #e2e7ea;border-radius:8px;">'
         + cells.map((f, i) => `<div style="width:${w}%;min-width:0;${i === cells.length - 1 ? '' : 'padding-right:14px;margin-right:14px;border-right:1px solid #e2e7ea;'}">
-            <div style="font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#6b7a85;">${esc(f.label)}</div>
+            <div style="font-size:9.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:#6b7a85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(f.label)}</div>
             <div style="font-size:12px;font-weight:700;color:${s.ink};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(f.value || '—')}</div>
             ${f.uz ? `<div style="font-size:9.5px;color:${s.accent};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(f.uz)}</div>` : ''}
         </div>`).join('') + '</div>';

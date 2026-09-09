@@ -74,7 +74,10 @@ function fieldCell(f, accent) {
     if (!f || !f.label) return null;
     const value = f.value || '—';
     return h('div', { class: 'a4-lh-f' },
-        h('div', { class: 'a4-lh-f-l' }, tr(f.label)),
+        // A4_LH_NOWRAP_V1 — подпись не переносится (владелец: «make not transfer
+        // text into a next paragraph»); если колонка узка, целиком она в
+        // подсказке мыши.
+        h('div', { class: 'a4-lh-f-l', title: tr(f.label) }, tr(f.label)),
         // Подсказка несёт значение ЦЕЛИКОМ: в колонке оно может не поместиться,
         // и обрезанная фамилия без способа её прочесть — хуже, чем перенос.
         h('div', { class: 'a4-lh-f-v', title: f.full || value }, value,

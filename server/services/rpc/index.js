@@ -13,7 +13,7 @@ import { admissionFlowState, inpatientCapabilities } from './inpatient-flow.js';
 import { admissionTitleSheetGet, admissionTitleSheetSave } from './title-sheet.js';   // TITLE_SHEET_V1
 import { admissionOverview } from './case-overview.js';   // CASE_OVERVIEW_V1
 import { admissionVitalsAdd, admissionVitalsList } from './vitals.js';   // VITALS_NEWS_V1
-import { caseDocTypesList, caseDocTypeSave, caseDocTypeSetActive, caseDocTypesReorder } from './case-doc-types.js';   // CASE_DOC_SET_V2
+import { caseDocTypesList, caseDocTypeSave, caseDocTypeSetActive, caseDocTypeDelete, caseDocTypesReorder } from './case-doc-types.js';   // CASE_DOC_SET_V2
 import { admissionDocSources } from './case-doc-sources.js';   // CASE_DOC_A4_V1
 import { admissionsRegister } from './admissions-register.js';   // ADMISSIONS_REGISTER_V1
 import { admissionReviewSave, admissionSetAttending, admissionChangeAttending, admissionReviewsList, admissionAttendingCandidates,
@@ -291,6 +291,7 @@ export const RPC = {
   case_doc_types_list:            (db, args, user) => caseDocTypesList(db, args, user),
   case_doc_type_save:             (db, args, user) => caseDocTypeSave(db, args, user),
   case_doc_type_set_active:       (db, args, user) => caseDocTypeSetActive(db, args, user),
+  case_doc_type_delete:           (db, args, user) => caseDocTypeDelete(db, args, user),
   case_doc_types_reorder:         (db, args, user) => caseDocTypesReorder(db, args, user),
   admission_case_file:            (db, args, user) => admissionCaseFile(db, args, user),
   // CASE_FILE_SAVE_V1 — та же сборка, но подшитая в документы пациента.

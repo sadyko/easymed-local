@@ -221,22 +221,61 @@ test('CASE_DOC_SET_INLINE_V1: «убрать из набора» стоит у �
         'кнопка обязана сказать, КАКОЙ документ убирают');
 });
 
+// CASE_DOC_OWN_NAME_V1 — владелец: «added document not called as it should be».
+// Свой документ клиники называется тем именем, которым его завели: лист
+// подписывался «Прочий документ», потому что имя не доезжало до редактора —
+// в словаре встроенных названий рода own_N нет и быть не может.
+test('CASE_DOC_OWN_NAME_V1: имя своего документа едет в редактор при каждом открытии', () => {
+    const opened = [];
+    const own = D('own_5', { title: 'Лист анестезиолога', state: 'overdue', due_at: '2026-06-08T10:00:00Z' });
+    const el = caseDocsView({
+        state: Object.assign({}, STATE, { items: STATE.items.concat([own]) }),
+        onDoc: (kind, mode, id, name) => opened.push([kind, name]),
+        onAssemble() {},
+    });
+
+    // Имя в списке — своё, а не «Прочий документ».
+    assert.ok(el.textContent.includes('Лист анестезиолога'), 'свой документ назван чужим именем в списке');
+
+    // И в редактор едет ОНО ЖЕ: и по строке, и по кнопке действия.
+    const row = buttons(el).find((b) => /Лист анестезиолога/.test(nameOf(b)));
+    assert.ok(row, 'строки своего документа нет');
+    row.click();
+    const act = buttons(el).filter((b) => /Оформить/.test(nameOf(b)));
+    act[act.length - 1].click();
+    assert.deepEqual(opened, [['own_5', 'Лист анестезиолога'], ['own_5', 'Лист анестезиолога']],
+        'редактор получил род без имени — лист подпишется «Прочим документом»');
+});
+
+test('CASE_DOC_OWN_NAME_V1: редактор подписывает лист присланным именем, а не словарём', async () => {
+    const fsx = await import('node:fs');
+    const pathx = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = pathx.dirname(fileURLToPath(import.meta.url));
+    const src = fsx.readFileSync(pathx.join(dir, '..', 'views', 'admission-modal.js'), 'utf8');
+    // Половина пути, которую щелчком не проверить: имя обязано дойти от
+    // параметра редактора до заголовка листа.
+    assert.ok(src.includes("docTitle = '', onDone }"), 'редактор перестал принимать имя документа');
+    assert.ok(src.includes('title: reviewTitle(kind, mode, docTitle)'), 'заголовок листа снова не смотрит на присланное имя');
+    assert.ok(src.includes("function reviewTitle(kind, mode, docTitle = '')"), 'reviewTitle снова считает имя только по словарю');
+});
+
 // CASE_DOC_SET_BACK_V1 — владелец: «when i am deleting the documents we gave
 // should disappear but go inactive and added when necessary». Убранный
 // документ не исчезает бесследно: он стоит бледной строкой в конце списка, и
 // «+» возвращает его на место.
 test('CASE_DOC_SET_BACK_V1: убранный документ виден бледной строкой и возвращается нажатием', () => {
-    const gone = [{ kind: 'head_review', name: caseDocTitle('head_review') }];
+    const gone = [{ kind: 'head_review', name: caseDocTitle('head_review'), active: false, own: false, used: 2 }];
 
     // Без права правки состава убранных не показываем вовсе: вернуть их
     // палатный врач всё равно не может.
-    const plain = caseDocsView({ state: STATE, onDoc() {}, onAssemble() {}, dropped: gone });
+    const plain = caseDocsView({ state: STATE, onDoc() {}, onAssemble() {}, types: gone });
     assert.ok(!plain.textContent.includes('Убраны из набора'), 'убранные показаны тому, кто не правит состав');
 
     const back = [];
     const el = caseDocsView({
         state: STATE, onDoc() {}, onAssemble() {}, onDrop() {}, onAdd() {},
-        dropped: gone, onRestore: (kind, name) => back.push([kind, name]),
+        types: gone, onRestore: (kind, name) => back.push([kind, name]),
     });
     assert.ok(el.textContent.includes('Убраны из набора'), 'раздела убранных нет');
     assert.ok(el.textContent.includes(caseDocTitle('head_review')), 'убранный документ не назван');
@@ -247,21 +286,100 @@ test('CASE_DOC_SET_BACK_V1: убранный документ виден бле�
     assert.deepEqual(back, [['head_review', caseDocTitle('head_review')]]);
 });
 
-test('CASE_DOC_SET_INLINE_V1: карточка со свободным полем стоит в самом низу', () => {
+// CASE_DOC_RENAME_V1 — владелец: «why i cant delete or edit added documents?
+// add an option». Заведённый документ можно переименовать прямо в строке и
+// удалить насовсем, пока им ничего не написано.
+test('CASE_DOC_RENAME_V1: карандаш только у своего документа, и правит имя на месте', () => {
+    const renamed = [];
+    const own = D('own_5', { title: 'Лист анестезиолога', state: 'overdue' });
+    const el = caseDocsView({
+        state: Object.assign({}, STATE, { items: STATE.items.concat([own]) }),
+        onDoc() {}, onAssemble() {}, onDrop() {},
+        types: [{ kind: 'own_5', name: 'Лист анестезиолога', active: true, own: true, used: 0 },
+                { kind: 'intake', name: caseDocTitle('intake'), active: true, own: false, used: 3 }],
+        onRename: (kind, title) => renamed.push([kind, title]),
+    });
+
+    // Встроенный не переименовывается: его имя переводится на три языка.
+    const pencils = buttons(el).filter((b) => /Переименовать/.test(nameOf(b)));
+    assert.equal(pencils.length, 1, 'карандаш должен быть ровно у своего документа');
+    assert.match(nameOf(pencils[0]), /Лист анестезиолога/);
+
+    // Правка НА МЕСТЕ: кнопка-имя подменяется полем, окна не открывается.
+    pencils[0].click();
+    const input = walk(el).find((e) => e.tagName === 'INPUT' && String(e.className).includes('cd-ren'));
+    assert.ok(input, 'поле правки имени не появилось');
+    assert.equal(input.value, 'Лист анестезиолога', 'поле не подставило нынешнее имя');
+    input.value = 'Лист анестезиолога №1';
+    input.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {}, stopPropagation() {} });
+    assert.deepEqual(renamed, [['own_5', 'Лист анестезиолога №1']]);
+
+    // Перерисовка списка уводит фокус с поля, и blur не должен слать имя
+    // второй раз: два запроса и два сообщения на одно нажатие.
+    input.dispatchEvent({ type: 'blur' });
+    assert.equal(renamed.length, 1, 'имя ушло на сервер дважды');
+});
+
+test('CASE_DOC_RENAME_V1: Esc отменяет правку имени, а не сохраняет её', () => {
+    const renamed = [];
+    const own = D('own_5', { title: 'Лист анестезиолога', state: 'overdue' });
+    const el = caseDocsView({
+        state: Object.assign({}, STATE, { items: STATE.items.concat([own]) }),
+        onDoc() {}, onAssemble() {}, onDrop() {},
+        types: [{ kind: 'own_5', name: 'Лист анестезиолога', active: true, own: true, used: 0 }],
+        onRename: (kind, title) => renamed.push([kind, title]),
+    });
+    buttons(el).find((b) => /Переименовать/.test(nameOf(b))).click();
+    const input = walk(el).find((e) => e.tagName === 'INPUT' && String(e.className).includes('cd-ren'));
+    input.value = 'Передумал';
+    input.dispatchEvent({ type: 'keydown', key: 'Escape', preventDefault() {}, stopPropagation() {} });
+    input.dispatchEvent({ type: 'blur' });   // фокус уходит сразу за Esc
+    assert.deepEqual(renamed, [], 'отменённое имя всё равно сохранилось');
+});
+
+test('CASE_DOC_RENAME_V1: корзина только у своего убранного документа, которым не писали', () => {
+    const deleted = [];
+    const el = caseDocsView({
+        state: STATE, onDoc() {}, onAssemble() {}, onDrop() {}, onRestore() {},
+        types: [
+            { kind: 'own_7', name: 'Заведён по ошибке', active: false, own: true, used: 0 },
+            { kind: 'own_8', name: 'Свой, но написанный', active: false, own: true, used: 4 },
+            { kind: 'head_review', name: caseDocTitle('head_review'), active: false, own: false, used: 0 },
+        ],
+        onDelete: (kind, name) => deleted.push([kind, name]),
+    });
+
+    const bins = buttons(el).filter((b) => /Удалить насовсем/.test(nameOf(b)));
+    assert.equal(bins.length, 1, 'корзина должна быть только у своего и ненаписанного: ' + bins.length);
+    assert.match(nameOf(bins[0]), /Заведён по ошибке/);
+    // Вернуть можно ЛЮБОЙ убранный — и написанный, и встроенный.
+    assert.equal(buttons(el).filter((b) => /Вернуть в набор/.test(nameOf(b))).length, 3);
+
+    bins[0].click();
+    assert.deepEqual(deleted, [['own_7', 'Заведён по ошибке']]);
+});
+
+test('CASE_DOC_ADD_IN_LIST_V1: строка создания — последняя строка СПИСКА', () => {
     const added = [];
     const el = caseDocsView({
         state: STATE, onDoc() {}, onAssemble() {}, onDrop() {}, onAdd: (t) => added.push(t),
     });
     const input = walk(el).find((e) => e.tagName === 'INPUT' && String(e.className).includes('cd-add-in'));
-    assert.ok(input, 'поля создания внизу нет');
+    assert.ok(input, 'поля создания нет');
 
-    // Ниже списка, В ПОДВАЛЕ: список прокручивается, а карточка создания
-    // остаётся на виду — за ней и тянутся, когда нужного документа в списке нет.
-    const box = el.children.map((c) => String(c.className || ''));
-    assert.ok(box.findIndex((c) => c.includes('cd-list')) < box.findIndex((c) => c.includes('cd-foot')),
-        'карточка создания оказалась выше списка: ' + box.join(', '));
-    const foot = walk(el).find((e) => String(e.className || '').split(/s+/).includes('cd-foot'));
-    assert.ok(walk(foot).includes(input), 'карточка создания уехала в прокручиваемый список');
+    // В СПИСКЕ, а не в подвале: владелец «please transfer this in to a list».
+    // В подвале строка стояла под правилом выписки и перечнем неоформленного —
+    // за двумя абзацами от списка, к которому относится.
+    const zone = (cls) => walk(el).find((e) => String(e.className || '').split(/\s+/).includes(cls));
+    const list = zone('cd-list');
+    const foot = zone('cd-foot');
+    assert.ok(walk(list).includes(input), 'строка создания не в списке');
+    assert.ok(!walk(foot).includes(input), 'строка создания осталась и в подвале');
+
+    // И последней: сперва документы, потом «а такого нет — заведите».
+    const rows = list.children.map((c) => String(c.className || ''));
+    assert.ok(rows[rows.length - 1].includes('cd-add-note') || rows[rows.length - 1].includes('cd-add'),
+        'строка создания оказалась не в конце списка: ' + rows.join(', '));
 
     const go = buttons(el).find((b) => /Добавить документ в набор/.test(nameOf(b)));
     assert.ok(go, 'кнопки создания нет');

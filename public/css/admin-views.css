@@ -1989,7 +1989,12 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
   border:1px solid var(--ink-100); border-radius:var(--r-md); }
 .a4-lh-f{ min-width:0; padding-right:14px; margin-right:14px; border-right:1px solid var(--ink-100); }
 .a4-lh-f:last-child{ border-right:0; margin-right:0; padding-right:0; }
-.a4-lh-f-l{ font-size:12.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-500); }
+/* A4_LH_NOWRAP_V1 — подпись реквизита В ОДНУ СТРОКУ. «ОТДЕЛЕНИЕ · КОЙКА»
+   переносилось на вторую и роняло ячейку ниже соседних (владелец: «make not
+   transfer text into a next paragraph»). Разрядка ужата: она и съедала ту
+   ширину, которой подписи не хватало. */
+.a4-lh-f-l{ font-size:12.5px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:var(--ink-500);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 /* Значение шире колонки обрезается многоточием — целиком оно в подсказке. */
 .a4-lh-f-v{ font-size:13.5px; font-weight:700; color:var(--ink-900);
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -5937,20 +5942,44 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 /* Владелец: «add to the kasallik tarixi hujjatlari a buttons near the documents
    cards. and in the bottom a card with free fields». Отдельная панель состава
    (.cds-*) удалена целиком: она повторяла список документов слово в слово. */
-.cd-drop { min-width: 36px; min-height: 36px; justify-content: center; color: var(--ink-400); }
-.cd-drop:hover { color: var(--crit-700); background: var(--crit-50); }
+/* CASE_DOC_STEP_LOOK_V1 — «−» и «+» ВЫГЛЯДЯТ КАК ШАГ В ИЗМЕРЕНИЯХ (.vt-step):
+   владелец показал ту кнопку и сказал «make colorful like this button». Тот же
+   короб с рамкой, та же заливка, тот же палец в 44 px — призрачная иконка на
+   пустом месте не читалась ни как кнопка, ни как что-то нажимаемое.
+   Цвет приходит по касанию: «убрать» краснеет, «вернуть» зеленеет — цвет
+   называет ПОСЛЕДСТВИЕ, а не украшает строку. */
+.btn.cd-step { min-width: 44px; min-height: 44px; padding: 0; justify-content: center;
+    border: 1px solid var(--ink-200); border-radius: var(--r-md);
+    background: var(--ink-25); color: var(--ink-700); box-shadow: none;
+    touch-action: manipulation; transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease; }
+.btn.cd-step:focus-visible { outline: 2px solid var(--primary-500); outline-offset: 2px; }
+.btn.cd-drop:hover { background: var(--crit-50); border-color: var(--crit-200, #f3c7c7); color: var(--crit-700); }
+.btn.cd-drop:active { background: var(--crit-100, #fadddd); }
+/* «Вернуть» — действие добавления, и оно окрашено сразу: убранный документ
+   стоит бледной строкой, и зелёный «+» — единственное, что в ней светится. */
+.btn.cd-back { background: var(--primary-50); border-color: var(--primary-200, #bfe3dc); color: var(--primary-700); }
+/* CASE_DOC_RENAME_V1 — карандаш и корзина: правка имени и удаление своего
+   документа. Корзина краснеет по касанию — как и «убрать». */
+.btn.cd-del:hover { background: var(--crit-50); border-color: var(--crit-200, #f3c7c7); color: var(--crit-700); }
+.cd-slot { flex: 1; min-width: 0; display: flex; }
+.cd-ren { width: 100%; min-width: 0; min-height: 40px; font-size: 13.5px; font-weight: 600; }
+.btn.cd-back:hover { background: var(--primary-100); }
+@media (pointer: coarse) { .btn.cd-step { min-width: 56px; min-height: 56px; } }
 /* Размер пальца, а не курсора: те же 44 px, что у «−» и «+» в измерениях
    (.vt-step), — владелец правит состав с планшета у поста. */
-.cd-add { display: flex; gap: 8px; align-items: center; padding: 10px; border-radius: var(--r-md);
+/* CASE_DOC_ADD_IN_LIST_V1 — строка создания стоит В СПИСКЕ, последней; в
+   подвале своё поле ей давала сетка, здесь отступ нужен свой. */
+.cd-add { display: flex; gap: 8px; align-items: center; margin-top: 10px; padding: 10px; border-radius: var(--r-md);
     border: 1px solid var(--ink-100); background: var(--ink-25, #fafbfb); }
 .cd-add-in { flex: 1; min-width: 0; min-height: 44px; font-size: 13.5px; }
 .cd-add-go { flex: 0 0 auto; min-width: 44px; min-height: 44px; justify-content: center; }
-.cd-add-note { font-size: 12.5px; line-height: 1.45; margin-top: -2px; }
+.cd-add-note { font-size: 12.5px; line-height: 1.45; margin-top: 6px; }
 /* CASE_DOC_SET_BACK_V1 — убранный документ стоит бледной строкой: он есть, но
    в наборе его нет. «+» возвращает его на место. */
-.cd-gone { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 2px 8px 2px 12px; opacity: .55; }
-.cd-gone-n { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink-700); overflow-wrap: anywhere; }
-.cd-back { min-width: 36px; min-height: 36px; justify-content: center; }
+/* Бледнеет ИМЯ, а не кнопки: выцветший «+» читался как отключённый. */
+.cd-gone { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 2px 8px 2px 12px; }
+.cd-gone-n { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink-500); overflow-wrap: anywhere; }
+
 /* CASE_DOC_BLANK_V1 — бланк документа истории болезни в «Документах»: тот же
    лист, что у постели пациента, без серой коробки вокруг бумаги. */
 .doc-blank-scroll { padding: 14px 10px 20px; background: transparent;

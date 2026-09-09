@@ -19,7 +19,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { admissionOrderCreate, admissionAdmit, admissionDischargeRequest } from './inpatient.js';
 import { admissionCaseDocs, admissionReviewSave } from './inpatient-reviews.js';
-import { caseDocTypesList, caseDocTypeSave, caseDocTypeSetActive, caseDocTypesReorder } from './case-doc-types.js';
+import { caseDocTypesList, caseDocTypeSave, caseDocTypeSetActive, caseDocTypeDelete, caseDocTypesReorder } from './case-doc-types.js';
 
 const admin = { id: 1, role: 'admin' };
 const registrar = { id: 2, role: 'registrar' };
@@ -163,6 +163,67 @@ test('выписной эпикриз убирается из набора, и �
     caseDocTypeSetActive(db, { kind: 'discharge', active: true }, headDoctor);
     assert.ok(kindsOf(admissionCaseDocs(db, { admission_id: id }, headDoctor)).includes('discharge'),
       'вернуть эпикриз в набор оказалось нечем');
+  } finally { db.close(); }
+});
+
+// CASE_DOC_RENAME_V1 (2026-09-09) — владелец: «why i cant delete or edit added
+// documents? add an option».
+//
+// Заведённый по ошибке документ иначе оставался бы в клинике навсегда: убрать
+// из набора можно, удалить — нечем. И переименовать нечем тоже, а имя своего
+// документа — единственное, что о нём известно.
+test('свой документ переименовывается, и срок при этом НЕ сбрасывается', () => {
+  const db = seed();
+  try {
+    const { type } = caseDocTypeSave(db, { title: 'Лист анестезиолога', due_rule: 'clock', due_hours: 6 }, headDoctor);
+
+    // Экран правки имени шлёт ИМЯ. Всё остальное он не спрашивал и не знает.
+    const { type: renamed } = caseDocTypeSave(db, { kind: type.kind, title: 'Лист анестезиолога №1' }, headDoctor);
+    assert.equal(renamed.title, 'Лист анестезиолога №1');
+    assert.equal(renamed.due_rule, 'clock', 'правило срока сбросилось на умолчание');
+    assert.equal(renamed.due_hours, 6, 'часы срока потерялись при переименовании');
+    assert.equal(renamed.active, true, 'документ ушёл из набора при переименовании');
+
+    // И в чек-листе он под новым именем — переименовать значит переименовать
+    // везде, а не только в справочнике.
+    const id = inBed(db);
+    const st = admissionCaseDocs(db, { admission_id: id }, headDoctor);
+    assert.equal(st.items.find((i) => i.kind === type.kind).title, 'Лист анестезиолога №1');
+  } finally { db.close(); }
+});
+
+test('свой ненаписанный документ удаляется насовсем; написанный и встроенный — нет', () => {
+  const db = seed();
+  try {
+    const { type } = caseDocTypeSave(db, { title: 'Заведён по ошибке', due_rule: 'none' }, headDoctor);
+    caseDocTypeDelete(db, { kind: type.kind }, headDoctor);
+    assert.ok(!caseDocTypesList(db, {}, headDoctor).types.some((t) => t.kind === type.kind),
+      'удалённый документ остался в справочнике');
+
+    // Встроенный не удаляется НИКОГДА: на него ссылаются написанные записи во
+    // всех историях болезни.
+    assert.throws(() => caseDocTypeDelete(db, { kind: 'intake' }, headDoctor), /встроенн/i);
+    assert.ok(caseDocTypesList(db, {}, headDoctor).types.some((t) => t.kind === 'intake'));
+
+    // Свой, которым уже написали, — тоже: иначе написанное осталось бы без
+    // имени. Для него есть «убрать из набора».
+    const { type: used } = caseDocTypeSave(db, { title: 'Лист наблюдения', due_rule: 'none' }, headDoctor);
+    const id = inBed(db);
+    admissionReviewSave(db, { admission_id: id, kind: used.kind, body: 'написано', publish: true }, headDoctor);
+    assert.throws(() => caseDocTypeDelete(db, { kind: used.kind }, headDoctor), /записи/i);
+    caseDocTypeSetActive(db, { kind: used.kind, active: false }, headDoctor);
+    assert.ok(caseDocTypesList(db, {}, headDoctor).types.some((t) => t.kind === used.kind && !t.active),
+      'убрать из набора должно остаться возможным');
+  } finally { db.close(); }
+});
+
+test('удалять и переименовывать состав может только тот, кто им заведует', () => {
+  const db = seed();
+  try {
+    const { type } = caseDocTypeSave(db, { title: 'Свой документ', due_rule: 'none' }, headDoctor);
+    const nurse = { id: 9, role: 'nurse' };
+    assert.throws(() => caseDocTypeDelete(db, { kind: type.kind }, nurse), /роли|главный врач|администратор/i);
+    assert.throws(() => caseDocTypeSave(db, { kind: type.kind, title: 'Переименовано' }, nurse), /роли|главный врач|администратор/i);
   } finally { db.close(); }
 });
 

@@ -464,8 +464,8 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
         let casePanel = null;
         casePanel = caseDocsPanel({
             admissionId,
-            onDoc: (kind, docMode, reviewId) => openAdmissionReviewModal({
-                admission: a, kind, mode: docMode, reviewId,
+            onDoc: (kind, docMode, reviewId, docTitle) => openAdmissionReviewModal({
+                admission: a, kind, mode: docMode, reviewId, docTitle,
                 onDone: async () => {
                     if (casePanel) await casePanel.reload();
                     if (onChange) await onChange();
@@ -769,8 +769,14 @@ export function openAdmissionDietModal({ admission, current = null, onDone } = {
 const REVIEW_TITLE = { primary: 'Первичный осмотр', round: 'Запись обхода', discharge: 'Выписной эпикриз' };
 const REVIEW_SUBMIT = { primary: 'Опубликовать осмотр', round: 'Опубликовать запись', discharge: 'Опубликовать эпикриз' };
 
-function reviewTitle(kind, mode) {
-    const name = REVIEW_TITLE[kind] ? tr(REVIEW_TITLE[kind]) : caseDocTitle(kind);
+// CASE_DOC_OWN_NAME_V1 (2026-09-09) — владелец: «added document not called as it
+// should be». Свой документ клиники (род own_N) называется ТЕМ ИМЕНЕМ, которым
+// его завели, — а лист показывал «Прочий документ»: заголовок спрашивал словарь
+// встроенных названий, а имени своего рода в словаре нет и быть не может.
+// Имя приезжает вместе с родом из чек-листа, который его и показывает.
+function reviewTitle(kind, mode, docTitle = '') {
+    const own = String(docTitle || '').trim();
+    const name = own || (REVIEW_TITLE[kind] ? tr(REVIEW_TITLE[kind]) : caseDocTitle(kind));
     if (mode === 'correct') return trf('Исправление · {name}', { name });
     if (mode === 'view') return name;
     return name;
@@ -810,7 +816,7 @@ function reviewTitle(kind, mode) {
  * Возвращает {title, icon, fields, submitLabel, submit, secondaryLabel,
  * secondary} — ровно то, из чего собирается и окно, и правая половина экрана.
  */
-export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', reviewId = null, onDone } = {}) {
+export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', reviewId = null, docTitle = '', onDone } = {}) {
     if (!admission || !admission.id) { toast(tr('Госпитализация не найдена.'), 'fail'); return null; }
     const p = admission.patients || {};
     const isPrimary = kind === 'primary';
@@ -983,7 +989,7 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         // рисует его сама, а редактор остаётся владельцем значения.
         diagnosisInput: secKeys.includes('diagnosis') ? diagnosis : null,
         diagnosisRequired: isPrimary,
-        title: reviewTitle(kind, mode),
+        title: reviewTitle(kind, mode, docTitle),
         icon: isDischarge || !REVIEW_TITLE[kind] ? 'Doc' : 'Stethoscope',
         // CASE_DOC_PATIENT_ONCE_V1 — карточку ставит тот, у кого нет шапки
         // бланка: окно ставит, рабочий экран нет.

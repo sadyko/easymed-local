@@ -69,10 +69,22 @@ function rowOf(db, kind) {
   return db.prepare('SELECT * FROM case_doc_types WHERE kind = ?').get(kind) || null;
 }
 
-/** Сколько записей уже написано этим родом — экран предупреждает перед выключением. */
+/**
+ * Сколько записей уже написано этим родом.
+ *
+ * СЧИТАЕТ COALESCE(type_kind, kind), А НЕ kind. Свой род клиники ложится в
+ * базу как kind='other' + type_kind='own_N' (миграция 116: снять CHECK с
+ * колонки kind можно было только пересборкой таблицы, которой мы не делаем).
+ * Счёт по одному kind давал у СВОИХ документов вечный ноль — то есть «этим
+ * никто ничего не писал» ровно там, где чаще всего и написано.
+ */
 function usedCount(db, kind) {
-  try { return db.prepare('SELECT COUNT(*) n FROM admission_reviews WHERE kind = ?').get(kind).n; }
-  catch (e) { return 0; }
+  try { return db.prepare('SELECT COUNT(*) n FROM admission_reviews WHERE COALESCE(type_kind, kind) = ?').get(kind).n; }
+  catch (e) {
+    // База старше миграции 116: колонки type_kind ещё нет.
+    try { return db.prepare('SELECT COUNT(*) n FROM admission_reviews WHERE kind = ?').get(kind).n; }
+    catch (e2) { return 0; }
+  }
 }
 
 /**
@@ -108,24 +120,40 @@ function nextKind(db) {
   return 'own_' + n;
 }
 
-function parse(a, { isNew, builtin }) {
+// CASE_DOC_RENAME_V1 (2026-09-09) — ЧТО НЕ ПРИСЛАЛИ, ТО НЕ МЕНЯЕТСЯ.
+//
+// Владелец: «why i cant delete or edit added documents?». Переименование —
+// это одно поле, и просить вместе с ним правило срока, часы и блок значило бы
+// заставлять экран пересылать то, чего он не спрашивал. Хуже: экран, который
+// шлёт только имя, МОЛЧА сбрасывал бы срок документа на «часы от поступления»
+// — умолчание parse(). Поэтому у существующего документа отсутствующее поле
+// берётся из него самого, а не из умолчания.
+const given = (v) => v !== undefined && v !== null && String(v).trim() !== '';
+
+function parse(a, { isNew, existing }) {
+  const builtin = existing ? !!existing.builtin : false;
   const title = str(a.title, 80);
   if (isNew && !title) throw new RpcError('Назовите документ — под этим именем он встанет в список.', 400);
   if (!builtin && !isNew && !title) throw new RpcError('Назовите документ — под этим именем он встанет в список.', 400);
 
-  const due_rule = str(a.due_rule, 20) || 'clock';
+  const due_rule = given(a.due_rule) ? str(a.due_rule, 20) : (existing ? existing.due_rule : 'clock');
   if (!DUE_RULES.includes(due_rule)) throw new RpcError('Неизвестное правило срока.', 400);
 
   let due_hours = null;
   if (RULES_WITH_HOURS.includes(due_rule)) {
-    const n = Number(a.due_hours);
+    // Часы можно не присылать, только если правило осталось прежним: у нового
+    // правила прежнее число часов означало бы уже не то, что означало.
+    const keep = !given(a.due_hours) && existing && existing.due_rule === due_rule;
+    const n = keep ? Number(existing.due_hours) : Number(a.due_hours);
     if (!Number.isFinite(n) || Math.floor(n) !== n || n < 1 || n > MAX_HOURS) {
       throw new RpcError('Срок — целое число часов от 1 до 8760.', 400);
     }
     due_hours = n;
   }
 
-  const block = str(a.block, 20);
+  const block = a.block === undefined || a.block === null
+    ? (existing ? str(existing.block, 20) : '')
+    : str(a.block, 20);
   if (!BLOCKS.includes(block)) throw new RpcError('Неизвестный блок документа.', 400);
 
   return { title, due_rule, due_hours, block: block || null };
@@ -146,7 +174,7 @@ export function caseDocTypeSave(db, args, user) {
   if (kind && !existing) throw new RpcError('Такого документа в наборе нет.', 404);
 
   const isNew = !existing;
-  const fields = parse(a, { isNew, builtin: existing ? !!existing.builtin : false });
+  const fields = parse(a, { isNew, existing });
 
   if (isNew) {
     const own = nextKind(db);
@@ -184,6 +212,35 @@ export function caseDocTypeSetActive(db, args, user) {
   }
   db.prepare('UPDATE case_doc_types SET active = ? WHERE kind = ?').run(active, kind);
   return { type: caseDocTypesList(db, {}, user).types.find((t) => t.kind === kind) || null };
+}
+
+/**
+ * УДАЛИТЬ свой документ — насовсем, а не убрать из набора.
+ *
+ * Владелец: «why i cant delete or edit added documents? add an option».
+ * Заведённый по ошибке документ иначе оставался бы в списке убранных навсегда.
+ *
+ * Удаляется РОВНО ТО, что удалить безопасно: свой род клиники, которым ещё
+ * ничего не написано. Встроенный род и род с записями не удаляются никогда —
+ * на них ссылаются написанные документы (admission_reviews.kind), и стереть
+ * род значило бы осиротить их. Для таких есть «убрать из набора»: документ
+ * уходит из чек-листа, а написанное остаётся читаемым и печатается.
+ */
+export function caseDocTypeDelete(db, args, user) {
+  requireWrite(user);
+  const kind = str((args || {}).kind, 60);
+  const row = rowOf(db, kind);
+  if (!row) throw new RpcError('Такого документа в наборе нет.', 404);
+  if (row.builtin) {
+    throw new RpcError('Встроенный документ удалить нельзя — его можно убрать из набора.', 400);
+  }
+  const used = usedCount(db, kind);
+  if (used) {
+    throw new RpcError('Этим документом уже написаны записи — его можно только убрать из набора, '
+      + 'иначе написанное осталось бы без имени.', 400);
+  }
+  db.prepare('DELETE FROM case_doc_types WHERE kind = ?').run(kind);
+  return { deleted: kind };
 }
 
 /**

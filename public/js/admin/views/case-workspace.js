@@ -28,7 +28,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, PageHead } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { caseDocsView, assembleCaseFile, canEditDocSet, caseDocSetDrop, caseDocSetAdd,
-    caseDocSetRestore, loadDroppedDocTypes } from './case-docs.js?v=cw1';
+    caseDocSetRestore, caseDocSetRename, caseDocSetDelete, loadDocTypeSet } from './case-docs.js?v=cw1';
 import { buildReviewEditor } from './admission-modal.js?v=inp2';
 import { buildTitleSheetEditor, TITLE_SHEET_KIND } from './title-sheet.js';   // TITLE_SHEET_V1
 import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V2
@@ -114,7 +114,7 @@ async function load() {
     state.admission = adm || state.admission;
     // CASE_DOC_SET_BACK_V1 — убранные документы едут вместе с чек-листом: они
     // стоят в его конце бледной строкой, и вернуть их можно нажатием.
-    state.dropped = canEditDocSet() ? await loadDroppedDocTypes() : [];
+    state.types = canEditDocSet() ? await loadDocTypeSet() : [];
 }
 
 function paint(root, onNavigate) {
@@ -273,8 +273,8 @@ function paintRail(rail, root, onNavigate) {
         state: state.docs,
         // Документ ОТКРЫВАЕТСЯ СПРАВА, а не окном поверх: в этом и была вся
         // задача. Выбранный шаг остаётся виден в списке слева.
-        onDoc: (kind, mode, reviewId) => {
-            state.open = { kind, mode: mode || 'edit', reviewId: reviewId || null };
+        onDoc: (kind, mode, reviewId, docTitle) => {
+            state.open = { kind, mode: mode || 'edit', reviewId: reviewId || null, title: docTitle || '' };
             paintPane(rail.parentNode.querySelector('.cw-pane'), root, onNavigate);
             paintRail(rail, root, onNavigate);
         },
@@ -284,8 +284,10 @@ function paintRail(rail, root, onNavigate) {
         activeKind: state.open ? state.open.kind : null,
         onDrop: mayEditSet ? async (kind, name) => { if (await caseDocSetDrop(kind, name)) await reloadAll(); } : null,
         onAdd: mayEditSet ? async (title) => { if (await caseDocSetAdd(title)) await reloadAll(); } : null,
-        dropped: state.dropped || [],
+        types: state.types || [],
         onRestore: mayEditSet ? async (kind, name) => { if (await caseDocSetRestore(kind, name)) await reloadAll(); } : null,
+        onRename: mayEditSet ? async (kind, title) => { if (await caseDocSetRename(kind, title)) await reloadAll(); } : null,
+        onDelete: mayEditSet ? async (kind, name) => { if (await caseDocSetDelete(kind, name)) await reloadAll(); } : null,
     }));
     rail.appendChild(assembleFor(root, onNavigate));
 }
@@ -367,6 +369,8 @@ function paintPane(pane, root, onNavigate) {
             kind: state.open.kind,
             mode: state.open.mode,
             reviewId: state.open.reviewId,
+            // CASE_DOC_OWN_NAME_V1 — имя своего документа знает только чек-лист.
+            docTitle: state.open.title || '',
             onDone,
         });
     if (!ed) return;
