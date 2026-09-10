@@ -31,7 +31,7 @@ import { caseDocsView, assembleCaseFile, canEditDocSet, caseDocSetDrop, caseDocS
     caseDocSetRestore, caseDocSetRename, caseDocSetDelete, loadDocTypeSet } from './case-docs.js?v=cw1';
 import { buildReviewEditor } from './admission-modal.js?v=inp2';
 import { docActionsBar, docHeadIds, docHeadFields } from './case-doc-a4.js';   // CASE_DOC_ACTIONS_V1 / A4_LETTERHEAD_V2
-import { caseTabsBar, caseOrdersPanel, caseExamsPanel, caseSurgeryPanel, caseActPanel,
+import { CASE_TABS, caseTabsBar, caseExamsPanel, caseSurgeryPanel, caseActPanel,
     actPrintBody, caseMealsPanel, caseInvoicesPanel } from './case-file-tabs.js';   // CASE_FILE_TABS_V1 / ACT_OF_WORKS_V1
 import { buildTitleSheetEditor, TITLE_SHEET_KIND } from './title-sheet.js';   // TITLE_SHEET_V1
 import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V2
@@ -75,6 +75,9 @@ export async function renderCaseWorkspace(container, { payload, onNavigate } = {
     if (state.admissionId !== admissionId) reset(admissionId);
     // CASE_OVERVIEW_V1 — главное действие обзора открывает документы НА НУЖНОМ ШАГЕ.
     if (payload && payload.kind) state.open = { kind: String(payload.kind), mode: 'edit', reviewId: null };
+    // MAR_IN_CABINET_V1 — адрес умеет открывать нужную вкладку: этим живут
+    // переходы «в лист назначений» из карточки госпитализации и от медсестры.
+    if (payload && payload.tab && CASE_TABS.some((t) => t.id === payload.tab)) state.tab = String(payload.tab);
 
     clear(container);
     const root = h('div', { class: 'fade-in cw' });
@@ -265,21 +268,30 @@ function paintTab(root, onNavigate) {
         return;
     }
     if (tab === 'orders') {
-        box.appendChild(caseOrdersPanel(state.overview, {
-            onOpenSheet: () => { if (nav) nav('mar-sheet', { admissionId: state.admissionId }); },
-            // ТО ЖЕ окно, что и в листе назначений: одно назначение — одна форма.
-            onAdd: async () => {
-                const { openOrderForm } = await import('./mar-sheet.js?v=inp5');
-                const a = state.admission || {};
-                const p = a.patients || {};
-                openOrderForm({
-                    admissionId: state.admissionId,
-                    patientName: p.full_name || '',
-                    patientSub: [p.mrn, (a.wards && a.wards.name) || null, (a.beds && a.beds.code) || null].filter(Boolean).join(' · '),
-                    onDone: async () => { await load(); paint(root, onNavigate); },
-                });
-            },
-        }));
+        // MAR_IN_CABINET_V1 — владелец: «#mar-sheet we actually dont need that.
+        // only in the cabinet. the graph». Здесь стоит САМ ЛИСТ — та же сетка
+        // «назначение × час», а не её пересказ списком: два вида одного лечения
+        // расходятся, и лечить начинают по тому, который врёт. Поздний импорт —
+        // потому что лист тянет карточку госпитализации, а та тянет этот экран.
+        const host = h('div');
+        box.appendChild(host);
+        import('./mar-sheet.js?v=inp5').then(({ renderMarSheet, canOpenMarSheet }) => {
+            // ПРАВО ТО ЖЕ, что и у отдельного адреса. Историю болезни открывает
+            // более широкий круг (регистратура тоже), и показать ей сетку с
+            // кнопками «назначить» и «отметить дозу» значило бы расширить доступ
+            // молча — сервер-то откажет, но узнается это после нажатия.
+            if (!canOpenMarSheet()) {
+                host.appendChild(h('section', { class: 'card cf-pane' },
+                    h('div', { class: 'cf-row-m' },
+                        tr('Лист назначений ведут врачи и медсёстры отделения.'))));
+                return;
+            }
+            renderMarSheet(host, {
+                payload: { admissionId: state.admissionId },
+                embedded: true,
+                onNavigate,
+            });
+        });
         return;
     }
     if (tab === 'exams') {

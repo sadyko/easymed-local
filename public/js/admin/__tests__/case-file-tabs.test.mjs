@@ -90,7 +90,7 @@ globalThis.fetch = async (url, opts = {}) => {
 
 const rpc = [];
 let SOURCES = { lab: [], imaging: [], functional: [] };
-const { caseExamsPanel, caseSurgeryPanel, caseOrdersPanel, caseActPanel,
+const { caseExamsPanel, caseSurgeryPanel, caseActPanel,
     caseInvoicesPanel } = await import('../views/case-file-tabs.js');
 
 /** Акт, каким его присылает сервер: у строки есть раздел справочника. */
@@ -162,15 +162,6 @@ test('во вкладке «Операция» видна назначенная
     const t = textOf(box);
     assert.ok(t.includes('Аппендэктомия'), 'назначенная операция не показана');
     assert.ok(!t.includes('Общий анализ крови'), 'анализ попал во вкладку операции');
-});
-
-test('во вкладке «Назначения» кнопка открывает ту же форму, что и лист назначений', () => {
-    let called = 0;
-    const box = caseOrdersPanel({ orders: [] }, { onOpenSheet: () => {}, onAdd: () => { called += 1; } });
-    const btn = findBtn(box, 'Назначение');
-    assert.ok(btn, 'кнопки «Назначение» нет');
-    btn.click();
-    assert.equal(called, 1, 'кнопка не открыла форму назначения');
 });
 
 /** Акт целиком: услуга, расходник и койко-день — как их присылает сервер. */

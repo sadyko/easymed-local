@@ -704,14 +704,32 @@ async function loadPeople() {
     return map;
 }
 
+/**
+ * ЛИСТ НАЗНАЧЕНИЙ.
+ *
+ * MAR_IN_CABINET_V1 (2026-09-10) — владелец: «#mar-sheet we actually dont need
+ * that. only in the cabinet. the graph». Лист перестал быть отдельным экраном и
+ * живёт вкладкой истории болезни. Отдельным адресом он остаётся ровно затем,
+ * чтобы старые ссылки не обрывались, — маршрутизатор уводит их в кабинет.
+ *
+ * ctx.embedded = лист внутри кабинета: своей шапки и якоря пациента он не
+ * рисует — они уже стоят выше и, нарисованные дважды, разошлись бы. Всё
+ * остальное — день, счётчики, витальные, сетка, печать — то же самое, потому
+ * что это ОДИН лист, а не его облегчённая копия.
+ */
 export async function renderMarSheet(root, ctx = {}) {
     const payload = ctx.payload || {};
+    const embedded = !!ctx.embedded;
     const admissionId = Number(payload.admissionId || payload.sub || 0) || null;
 
-    const wrap = h('div', { class: 'fade-in' });
+    const wrap = h('div', { class: embedded ? '' : 'fade-in' });
     root.appendChild(wrap);
 
-    if (!admissionId) { await paintPicker(wrap, ctx); return { picker: true }; }
+    if (!admissionId) {
+        if (embedded) return { picker: false };
+        await paintPicker(wrap, ctx);
+        return { picker: true };
+    }
 
     const state = {
         admissionId, date: todayLocal(), showCancelled: false,
@@ -778,36 +796,46 @@ export async function renderMarSheet(root, ctx = {}) {
         clear(headBox);
         const a = state.admission || {};
         const p = a.patients || {};
-        headBox.appendChild(PageHead({
-            title: 'Лист назначений',
-            subtitle: 'Что назначено, в какие часы и что из этого введено',
-            right: [
-                h('button', { class: 'btn btn-sm', type: 'button', onclick: () => load() },
-                    Icon('Refresh', { size: 13 }), ' ', tr('Обновить')),
-                h('button', { class: 'btn btn-sm', type: 'button', onclick: () => printMarSheet(printable()) },
-                    Icon('Print', { size: 13 }), ' ', tr('Печать')),
-                h('button', {
-                    class: 'btn btn-primary btn-sm', type: 'button',
-                    onclick: () => openOrderForm({
-                        admissionId: state.admissionId,
-                        patientName: p.full_name || '',
-                        patientSub: [p.mrn, (a.wards && a.wards.name) || null, (a.beds && a.beds.code) || null].filter(Boolean).join(' · '),
-                        onDone: load,
-                    }),
-                }, Icon('Plus', { size: 13 }), ' ', tr('Назначение')),
-            ],
-        }));
-        // ПАЦИЕНТ — ЯКОРЬ и на этом экране: лист назначений всегда лист ОДНОГО
-        // человека, и путать их дороже всего именно здесь.
-        headBox.appendChild(h('div', { style: { marginBottom: '14px' } },
-            patientAnchor(p.full_name || tr('без имени'), [
-                p.mrn || null,
-                (a.wards && a.wards.name) || null,
-                (a.beds && a.beds.code) ? trf('койка {code}', { code: a.beds.code }) : null,
-                (a.attending && a.attending.full_name)
-                    ? trf('лечащий: {name}', { name: a.attending.full_name })
-                    : tr('лечащий врач не назначен'),
-            ].filter(Boolean).join(' · '))));
+        // ДЕЙСТВИЯ ОДНИ И ТЕ ЖЕ, меняется только место: на своём экране они
+        // стоят в шапке страницы, в кабинете — строкой над днём, потому что
+        // шапка там уже своя, пациентская.
+        const actions = [
+            h('button', { class: 'btn btn-sm', type: 'button', onclick: () => load() },
+                Icon('Refresh', { size: 13 }), ' ', tr('Обновить')),
+            h('button', { class: 'btn btn-sm', type: 'button', onclick: () => printMarSheet(printable()) },
+                Icon('Print', { size: 13 }), ' ', tr('Печать')),
+            h('button', {
+                class: 'btn btn-primary btn-sm', type: 'button',
+                onclick: () => openOrderForm({
+                    admissionId: state.admissionId,
+                    patientName: p.full_name || '',
+                    patientSub: [p.mrn, (a.wards && a.wards.name) || null, (a.beds && a.beds.code) || null].filter(Boolean).join(' · '),
+                    onDone: load,
+                }),
+            }, Icon('Plus', { size: 13 }), ' ', tr('Назначение')),
+        ];
+        if (embedded) {
+            headBox.appendChild(h('div', { class: 'mar-actions' },
+                h('b', null, tr('Лист назначений')), h('span', { class: 'grow' }), ...actions));
+        } else {
+            headBox.appendChild(PageHead({
+                title: 'Лист назначений',
+                subtitle: 'Что назначено, в какие часы и что из этого введено',
+                right: actions,
+            }));
+            // ПАЦИЕНТ — ЯКОРЬ на своём экране: лист назначений всегда лист ОДНОГО
+            // человека, и путать их дороже всего именно здесь. В кабинете этот
+            // якорь уже стоит выше, и второй превратил бы его в шум.
+            headBox.appendChild(h('div', { style: { marginBottom: '14px' } },
+                patientAnchor(p.full_name || tr('без имени'), [
+                    p.mrn || null,
+                    (a.wards && a.wards.name) || null,
+                    (a.beds && a.beds.code) ? trf('койка {code}', { code: a.beds.code }) : null,
+                    (a.attending && a.attending.full_name)
+                        ? trf('лечащий: {name}', { name: a.attending.full_name })
+                        : tr('лечащий врач не назначен'),
+                ].filter(Boolean).join(' · '))));
+        }
         headBox.appendChild(dayBar());
         headBox.appendChild(tallyBar());
         const vit = vitalsStrip();

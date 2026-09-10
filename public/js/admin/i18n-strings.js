@@ -7350,6 +7350,7 @@ export const STRINGS = {
   "Название раздела": {"en":"Section name","ru":"Название раздела","uz":"Boʻlim nomi"},
   "Переименовать раздел": {"en":"Rename the section","ru":"Переименовать раздел","uz":"Boʻlim nomini oʻzgartirish"},
   "Заготовка": {"en":"Template","ru":"Заготовка","uz":"Shablon"},
+  "Лист назначений ведут врачи и медсёстры отделения.": {"en":"The treatment sheet is kept by the ward doctors and nurses.","ru":"Лист назначений ведут врачи и медсёстры отделения.","uz":"Tayinlovlar varaqasini boʻlim shifokorlari va hamshiralari yuritadi."},
   "Сейчас {time}": {"en":"Now {time}","ru":"Сейчас {time}","uz":"Hozir {time}"},
   "Просрочено: {list}": {"en":"Overdue: {list}","ru":"Просрочено: {list}","uz":"Muddati oʻtgan: {list}"},
   "В этот час: {list}": {"en":"This hour: {list}","ru":"В этот час: {list}","uz":"Shu soatda: {list}"},

@@ -70,7 +70,6 @@ import { renderReports }      from './admin/views/reports.js?v=vatincl1';
 import { renderReportsHub }   from './admin/views/reports-hub.js?v=ru6';   // REPORTS_HUB_RU_V1 — «Отчёты» card grid + full-screen report builder
 import { renderWardBeds }     from './admin/views/ward-beds.js?v=board4';   // INPATIENT_LOCAL_V1 — fresh local ward/bed board (legacy beds.js was cloud-coupled); BED_BOARD_SHARED_V1 — доска коек теперь ещё и окно выбора койки
 import { renderInpatient }    from './admin/views/admissions.js?v=inp3';   // INPATIENT_ONE_SECTION_V1 — «Стационар» одним разделом: заявки · койки · госпитализации
-import { renderMarSheet }    from './admin/views/mar-sheet.js?v=inp5';   // MAR_SHEET_V1 — лист назначений: сетка врача «назначение × час»
 import { renderMarNurse }    from './admin/views/mar-nurse.js?v=inp5';   // MAR_NURSE_V1 — задачи медсестры: пациент — якорь, «5 прав»
 import { renderKitchenSheet } from './admin/views/kitchen-sheet.js?v=diet1';   // KITCHEN_SHEET_V1 — порционник (Задача 7; экран был написан без маршрута)
 import { renderDischarge }   from './admin/views/discharge.js?v=disch1';   // TWO_STEP_DISCHARGE_V1 — «Выписки к оформлению» (Задача 8; экран был написан без маршрута)
@@ -1024,7 +1023,17 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'admissions':    return void await renderInpatient(viewRoot, ctx);   // INPATIENT_ONE_SECTION_V1 — заявки · койки · госпитализации одним разделом
             case 'case-file':     return void await renderCaseWorkspace(viewRoot, ctx);   // CASE_WORKSPACE_V1
             case 'case-overview': return void await renderCaseOverview(viewRoot, ctx);   // CASE_OVERVIEW_V1
-            case 'mar-sheet':     return void await renderMarSheet(viewRoot, ctx);   // MAR_SHEET_V1
+            // MAR_IN_CABINET_V1 — лист назначений живёт вкладкой истории болезни.
+            // Прежний адрес не удалён, а уводит туда же: ссылки на него стоят в
+            // карточке госпитализации, у медсестры и в закладках, и оборвать их
+            // значило бы сломать переход, а не убрать экран.
+            case 'mar-sheet': {
+                const _sub = (ctx.payload && (ctx.payload.sub || ctx.payload.admissionId)) || null;
+                // Без номера госпитализации вести некуда: прежде здесь стоял
+                // выбор пациента, теперь его делает раздел «Стационар».
+                return void navigate(_sub ? 'case-file' : 'admissions',
+                    _sub ? { sub: String(_sub), tab: 'orders' } : undefined);   // MAR_SHEET_V1
+            }
             case 'mar-nurse':     return void await renderMarNurse(viewRoot, ctx);   // MAR_NURSE_V1
             case 'kitchen-sheet': return void await renderKitchenSheet(viewRoot, ctx);   // KITCHEN_SHEET_V1
             case 'discharge':     return void await renderDischarge(viewRoot, ctx);   // TWO_STEP_DISCHARGE_V1

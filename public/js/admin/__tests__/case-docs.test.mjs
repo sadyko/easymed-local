@@ -496,16 +496,10 @@ test('CASE_FILE_TABS_V1: вкладки истории болезни идут �
     btns[iOrders].click();
     assert.deepEqual(picked, ['documents'], 'нажатие на уже открытую вкладку не должно ничего делать');
 
-    // Назначения: список из обзора и дверь в лист назначений.
-    const opened = [];
-    const orders = tabs.caseOrdersPanel({ orders: [{ name: 'Цефтриаксон', dose: '1 г', route: 'в/в', freq_code: '2 раза в сутки' }] },
-        { onOpenSheet: () => opened.push(1) });
-    assert.match(orders.textContent, /Цефтриаксон/);
-    walk(orders).filter((e) => e.tagName === 'BUTTON').pop().click();
-    assert.deepEqual(opened, [1], 'вкладка обязана уводить в лист назначений, а не рисовать вторую сетку');
-
-    // Пустых выдумок нет: без назначений вкладка так и говорит.
-    assert.match(tabs.caseOrdersPanel({ orders: [] }).textContent, /Назначений пока нет/);
+    // MAR_IN_CABINET_V1 — своей панели назначений у вкладок больше нет: во
+    // вкладке стоит САМ лист назначений (mar-sheet), а не его пересказ. Второй
+    // вид одного лечения — это ровно то, из-за чего лечат по тому, который врёт.
+    assert.equal(tabs.caseOrdersPanel, undefined, 'пересказ листа назначений вернулся');
 
     // Операция: состояние от сервера, документы — из чек-листа.
     const docOpened = [];

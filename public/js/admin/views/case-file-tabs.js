@@ -95,44 +95,6 @@ function orderedRow(l) {
 const when = (v) => (v ? fmtDateTime(v) : '');
 
 // ---------------------------------------------------------------------------
-// 2. Назначения
-// ---------------------------------------------------------------------------
-/**
- * Что назначено этому пациенту. Список — из обзора; отмечает дозы и ведёт
- * сетку «назначение × час» ЛИСТ НАЗНАЧЕНИЙ, и вкладка честно уводит туда, а
- * не рисует вторую сетку.
- */
-export function caseOrdersPanel(overview, { onOpenSheet = null, onAdd = null } = {}) {
-    const rows = (overview && overview.orders) || [];
-    const box = h('section', { class: 'card cf-pane', 'aria-label': tr('Назначения') });
-    box.appendChild(h('div', { class: 'cf-pane-h' },
-        h('b', null, tr('Назначения')),
-        h('span', { class: 'grow' }),
-        onOpenSheet
-            ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => onOpenSheet() },
-                Icon('Grid', { size: 14 }), ' ', tr('Лист назначений'))
-            : null,
-        // ACT_ADD_SERVICE_V1 — назначение заводится ТЕМ ЖЕ окном, что и в листе
-        // назначений: вторая форма с теми же полями разошлась бы с первой.
-        onAdd
-            ? h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => onAdd() },
-                Icon('Plus', { size: 14 }), ' ', tr('Назначение'))
-            : null));
-
-    if (!rows.length) {
-        box.appendChild(empty('Назначений пока нет. Их делает лечащий врач в листе назначений.'));
-        return box;
-    }
-    box.appendChild(h('ul', { class: 'cf-list' }, ...rows.map((r) => h('li', { class: 'cf-row' },
-        h('div', { class: 'cf-row-main' },
-            h('div', { class: 'cf-row-t' }, r.name || '—'),
-            h('div', { class: 'cf-row-m' },
-                [r.dose, r.route, r.prn ? tr('по требованию') : r.freq_code].filter(Boolean).join(' · '))),
-        r.started_at ? h('div', { class: 'cf-row-r' }, trf('с {when}', { when: when(r.started_at) })) : null))));
-    return box;
-}
-
-// ---------------------------------------------------------------------------
 // 3. Обследования и анализы
 // ---------------------------------------------------------------------------
 const flagWord = { high: 'выше нормы', low: 'ниже нормы' };

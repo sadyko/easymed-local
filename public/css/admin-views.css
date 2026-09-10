@@ -6043,6 +6043,10 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .cf-act-inv { display: inline-flex; padding: 2px 8px; border-radius: var(--r-pill);
     background: var(--ok-50, #e8f7ef); color: var(--ok-700, #0f7a43); font-size: 12.5px; font-weight: 600; }
 .cf-act-act { text-align: right; white-space: nowrap; }
+/* MAR_IN_CABINET_V1 — строка действий листа, когда он внутри истории болезни. */
+.mar-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+    margin-bottom: 14px; font-size: 15px; }
+
 /* MAR_REF_V1 — счётчики листа назначений, строка «сейчас» и витальные. */
 .mar-tally { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px;
     padding: 10px 14px; margin-bottom: 14px; }
