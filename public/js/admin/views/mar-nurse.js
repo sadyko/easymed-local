@@ -67,6 +67,9 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, Tag, clear, toast, field, PageHead, initials } from '../ui.js';
+// SYSTEM_LANGUAGE_V1 — тот же оттенок пациента, что в стационаре, в колонке дня
+// врача и на карточке приёма: один человек — один цвет во всей программе.
+import { pastelFor } from '../pastel.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { isModuleAllowed } from '../permissions.js';
 import { inpatientModal } from './admission-modal.js?v=inp5';
@@ -555,7 +558,12 @@ export async function renderMarNurse(root, ctx = {}) {
     const wrap = h('div', { class: 'fade-in' });
     root.appendChild(wrap);
 
-    const wardSel = h('select', { class: 'input' }, h('option', { value: '' }, tr('Все отделения')));
+    // SYSTEM_LANGUAGE_V1 — .input в этом продукте НЕ СУЩЕСТВУЕТ: поля метит
+    // `.field input|select|textarea` (admin.css). Пока список отделений просил
+    // несуществующий класс, он держался только на том, что его случайно
+    // накрывала обёртка; отметки питания ниже не накрывало ничто, и там стоял
+    // серый системный список Windows посреди экрана клиники.
+    const wardSel = h('select', null, h('option', { value: '' }, tr('Все отделения')));
     const headBox = h('div');
     const body = h('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(240px, 320px) 1fr', gap: '16px', alignItems: 'start' } });
     wrap.appendChild(headBox);
@@ -565,8 +573,7 @@ export async function renderMarNurse(root, ctx = {}) {
         title: 'Задачи медсестры',
         subtitle: 'Кому и что вводить сейчас: пациент, доза, время — и что делать, если доза не введена',
         right: [
-            h('label', { class: 'field', style: { margin: 0 } },
-                h('span', { class: 'field-label' }, tr('Отделение')), wardSel),
+            field('Отделение', wardSel),
             h('button', { class: 'btn btn-sm', type: 'button', onclick: () => load() },
                 Icon('Refresh', { size: 13 }), ' ', tr('Обновить')),
         ],
@@ -700,17 +707,24 @@ export async function renderMarNurse(root, ctx = {}) {
                     Promise.all([loadMeals(), loadSheet()]).then(() => paint(people));
                 },
             },
+                // SYSTEM_LANGUAGE_V1 — та же строка пациента, что в «Стационаре»
+                // (ADM_ROW_CALM_V1): кружок 34 px в ЕГО оттенке, а не залитый
+                // брендовым зелёным. Десять пациентов в смене — это было десять
+                // тёмных пятен подряд, и список кричал ровно там, где от него
+                // нужна спокойная работа.
                 h('span', {
+                    class: ('mar-av ' + pastelFor(p.patient_id || p.patient_name)).trim(),
                     style: {
-                        width: '38px', height: '38px', borderRadius: '999px', flex: '0 0 38px',
-                        background: 'var(--primary-600, #1f7a72)', color: '#fff',
-                        display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: '15px',
+                        width: '34px', height: '34px', borderRadius: '999px', flex: '0 0 34px',
+                        background: 'var(--p-bg, var(--primary-50))', color: 'var(--p-fg, var(--primary-700))',
+                        display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: '12.5px',
                     },
                 }, initials(p.patient_name || '?')),
                 h('span', { style: { flex: 1, minWidth: 0 } },
-                    // ИМЯ — САМОЕ КРУПНОЕ НА СТРОКЕ (то же правило, что в окне
-                    // «Стационар»): это защита от «не того пациента».
-                    h('span', { style: { display: 'block', fontSize: '17px', fontWeight: 800, color: 'var(--ink-900)' } },
+                    // ИМЯ ОСТАЁТСЯ САМЫМ КРУПНЫМ И ЖИРНЫМ НА СТРОКЕ — это защита
+                    // от «не того пациента». Уменьшена ВЕЛИЧИНА, а не старшинство:
+                    // 15 px против 12.5 px у подписи, вес 700 против 400.
+                    h('span', { style: { display: 'block', fontSize: '15px', fontWeight: 700, color: 'var(--ink-900)' } },
                         p.patient_name || tr('без имени')),
                     h('span', { class: 'muted', style: { display: 'block', fontSize: '12.5px' } },
                         [p.mrn || null, bedLine(p) || null].filter(Boolean).join(' · '))),
@@ -792,7 +806,7 @@ export async function renderMarNurse(root, ctx = {}) {
 
         for (const m of data.meals) {
             const status = (m.mark && m.mark.status) || 'waiting';
-            const sel = h('select', { class: 'input' },
+            const sel = h('select', null,
                 h('option', { value: '' }, tr('Отметить…')),
                 ...MEAL_STATUS_OPTIONS.map(([v, l]) => h('option', { value: v }, tr(l))));
             sel.addEventListener('change', async () => {
@@ -823,7 +837,7 @@ export async function renderMarNurse(root, ctx = {}) {
                 h('div', { style: { fontSize: '13.5px', fontWeight: 700, minWidth: '128px' } }, mealTitle(m.meal_key)),
                 h('div', { style: { flex: 1, minWidth: '120px' } },
                     Tag(mealStatusTitle(status), { kind: mealStatusTone(status), dot: status !== 'waiting' })),
-                h('div', { style: { flex: '0 1 190px' } }, sel)));
+                h('div', { class: 'field', style: { flex: '0 1 190px' } }, sel)));
         }
         return card;
     }
@@ -887,7 +901,7 @@ export async function renderMarNurse(root, ctx = {}) {
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                         [t.service_type || null, t.room || null].filter(Boolean).join(' · '))),
                 Tag(tr('Выполнено'), { kind: 'ok', dot: true }),
-                h('button', { class: 'btn mar-do', type: 'button', onclick: () => markService(t, true) },
+                h('button', { class: 'btn btn-lg', type: 'button', onclick: () => markService(t, true) },
                     tr('Снять отметку')));
         }
         const refusal = undoRefusal(t);
@@ -972,8 +986,8 @@ export async function renderMarNurse(root, ctx = {}) {
                 meta ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, meta) : null,
                 t.note ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, t.note) : null),
             // Крупная отметка под палец: планшет в чехле, перчатки, койка.
-            h('button', { class: 'btn btn-primary mar-do', type: 'button', onclick: () => markService(t, false) },
-                Icon('Check', { size: 16 }), ' ', tr('Выполнено')));
+            h('button', { class: 'btn btn-primary btn-lg', type: 'button', onclick: () => markService(t, false) },
+                Icon('Check', { size: 14 }), ' ', tr('Выполнено')));
     }
 
     function taskRow(t, p, allergy) {
@@ -992,11 +1006,11 @@ export async function renderMarNurse(root, ctx = {}) {
                         t.late_min ? trf('опоздание {n} мин', { n: t.late_min }) : null].filter(Boolean).join(' · '))),
             h('div', { class: 'mar-task-acts' },
                 h('button', {
-                    class: 'btn btn-primary mar-do', type: 'button',
+                    class: 'btn btn-primary btn-lg', type: 'button',
                     onclick: () => openGiveModal({ task: t, patient: p, allergy, onDone: load }),
-                }, Icon('Check', { size: 16 }), ' ', tr('Выполнить')),
+                }, Icon('Check', { size: 14 }), ' ', tr('Выполнить')),
                 h('button', {
-                    class: 'btn mar-do', type: 'button',
+                    class: 'btn btn-lg', type: 'button',
                     onclick: () => openOmitModal({ task: t, patient: p, allergy, onDone: load }),
                 }, tr('Не введено'))));
     }

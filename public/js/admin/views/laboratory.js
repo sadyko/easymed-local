@@ -44,6 +44,9 @@ import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';
 // LAB_ONE_CLINIC_V1 — «лаборатория обслуживает всю клинику / только своё здание».
 import { scopeQuery, normalizeLabScope, LAB_SCOPE_CLINIC, LAB_SCOPE_BUILDING, LAB_SCOPE_DEFAULT } from './lab-scope.js';
 import { isAdminActor } from '../admin-actor.js';   // настройку клиники меняет администратор (сервер требует того же)
+// LAB_PATIENT_ORIGIN_V1 — «откуда пациент» берётся оттуда же, откуда его берут
+// кабинет врача и процедурная: из госпитализаций в койке.
+import { IN_BED_STATUSES } from '../../shared/admission-status.js';
 import { labFlagCell, labPosFor, fmtDMY, labSexRu, labRefText, matchResultsToAnalytes, labAccession, labIssueDates, labMaxDate,
          namedRangeCell, ageYears } from './lab-doc.js?v=labshared1';
 import { analyteIndex, resolveAnalyte, resolveAnalyteWhy, nk } from './lab-analyte-index.js?v=labshared1';   // LAB_BLANK_DESIGNED_V1
@@ -110,6 +113,7 @@ const refs = { container: null, list: null, emptyEl: null, totalEl: null, filter
 const state = {
     rows: [],          // lab visit_services, newest first
     patientMap: {},    // visit_id -> { visit_date, patient }
+    inBed: new Set(),  // LAB_PATIENT_ORIGIN_V1 — patient_id тех, кто сейчас в койке
     resultsByVs: {},   // visit_service_id -> lab_results rows (all analytes)
     panelByService: {},// service_id -> lab_panels row
     deptKindById: {},  // department_id -> kind   (LAB_SERVICE_ROUTING_V1)
@@ -300,7 +304,9 @@ function mount() {
     refs.list = h('div', { id: 'lab-list', class: 'lq-queue' });
     // Пустое состояние остаётся белым листом: на грунте оно иначе висело бы
     // строкой в воздухе.
-    refs.emptyEl = h('div', { class: 'empty card', style: { display: 'none' } },
+    // Пустое состояние живёт ВНУТРИ окна и своей рамки не имеет: второе окно
+    // на экране означало бы, что «заявок нет» — отдельная работа.
+    refs.emptyEl = h('div', { class: 'empty', style: { display: 'none', padding: '26px' } },
         'Заявок нет. Лабораторная услуга попадает сюда, как только добавлена к визиту; после оплаты счёта она встаёт в очередь на забор.');
     refs.totalEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
     refs.filterWrap = h('div', { class: 'segmented' });
@@ -371,9 +377,9 @@ function mount() {
         pageHead(SUBTITLES[mode], ACTIONS[mode]),
         mode === 'panels' ? refs.panelsHost
             : mode === 'stats' ? refs.statsHost
-            // LAB_QUEUE_SPLIT_V1 — белой панели вокруг очереди больше нет: окном
-            // стала сама карточка пациента, а грунт между ними — разделителем.
-            : h('div', null,
+            // LAB_ONE_WINDOW_V1 — очередь лежит в ОДНОМ рабочем окне, как всё
+            // остальное в продукте; пациентов внутри разделяет линия.
+            : h('div', { class: 'card lq-win' },
                 refs.list,
                 refs.emptyEl,
             ),
@@ -711,6 +717,25 @@ async function fetchAndPaint() {
             for (const k of Object.keys(resultsByVs)) resultsByVs[k].sort((a, b) => a.id - b.id);
         }
 
+        // LAB_PATIENT_ORIGIN_V1 (2026-09-10) — владелец: «stationary/ambulatory».
+        //
+        // Пробу лежащего пациента несут в отделение, а пришедший ждёт у окна
+        // забора — это разная работа лаборанта, и по фамилии в очереди её было
+        // не различить. Признак спрашивается ОДНИМ запросом на всех показанных
+        // пациентов: он про пациента СЕЙЧАС, а не про заказ, и живёт там же,
+        // откуда его берут кабинет врача и процедурная.
+        state.inBed = new Set();
+        try {
+            const pids = [...new Set(Object.values(patientMap)
+                .map((v) => v.patient && v.patient.id).filter(Boolean))];
+            if (pids.length) {
+                const { data: adm } = await supabase.from('admissions')
+                    .select('id, patient_id, status').in('patient_id', pids).in('status', IN_BED_STATUSES);
+                if (token !== lastFetchToken) return;
+                for (const a of (adm || [])) state.inBed.add(String(a.patient_id));
+            }
+        } catch (e) { console.warn('[labs] origin:', e && e.message); }
+
         state.rows = rows;
         state.patientMap = patientMap;
         state.resultsByVs = resultsByVs;
@@ -727,9 +752,20 @@ function paintEmpty() {
     state.rows = [];
     state.patientMap = {};
     state.resultsByVs = {};
+    state.inBed = new Set();
     paintFilters();
     paintRows();
 }
+
+/**
+ * Лежит ли пациент этой пробы в койке ПРЯМО СЕЙЧАС (LAB_PATIENT_ORIGIN_V1).
+ *
+ * Пусто — это «не лежит», а не «неизвестно»: список госпитализаций читается
+ * тем же заходом, что и очередь, и до отрисовки строки он уже есть. Отказ
+ * этого запроса очередь не роняет — тогда все считаются амбулаторными, и это
+ * честнее, чем не показать очередь вовсе.
+ */
+const inBed = (g) => state.inBed instanceof Set && state.inBed.has(String(g.patientId));
 
 // -----------------------------------------------------------------------------
 // Rows — LAB_GROUP_V1 (local port): one lq-card per patient-visit, replacing
@@ -961,6 +997,16 @@ function labGroupCard(g) {
                 ),
                 h('div', { class: 'lq-marks' },
                     g.patientMrn ? h('span', { class: 'lq-mrn' }, 'ID ' + g.patientMrn) : null,
+                    // LAB_PATIENT_ORIGIN_V1 — откуда пациент. Метка есть у ОБОИХ:
+                    // на этом экране «нет метки» уже занято — так выглядит своё
+                    // здание, — и молчание про стационар читалось бы как «свой».
+                    // Амбулаторная метка нейтральная, палатная — янтарная, те же
+                    // два тона, что и в процедурной.
+                    inBed(g)
+                        ? h('span', { class: 'tag tag-warn lq-origin', title: tr('Пациент лежит в стационаре — пробу забирают в отделении') },
+                            Icon('Bed', { size: 12 }), tr('Стационар'))
+                        : h('span', { class: 'tag lq-origin', title: tr('Пациент приходит на забор сам') },
+                            Icon('User', { size: 12 }), tr('Амбулаторно')),
                     // LAB_ONE_CLINIC_V1 / BRANCH_ORIGIN_V1 — «Филиал X»: та же
                     // буква (sync_origin), что в карте пациента и в списках.
                     // Своя работа не подписывается — подпись на КАЖДОЙ карточке

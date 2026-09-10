@@ -155,7 +155,7 @@ function rowEl(r, body) {
             // назначающего в смене нет, а ждать администратора у процедурного
             // кабинета некому.
             r.unassigned && !done
-                ? h('button', { class: 'btn btn-outline mar-do', type: 'button', title: tr('Назначить процедуру на себя'),
+                ? h('button', { class: 'btn btn-outline btn-lg', type: 'button', title: tr('Назначить процедуру на себя'),
                     onclick: () => takeProcedure(r, body) }, Icon('User', { size: 14 }), ' ' + tr('Взять'))
                 : null,
             h('span', { class: 'tag' + (done ? ' tag-ok' : r.unassigned ? ' tag-warn' : ''), style: { fontSize: '12.5px' } },
@@ -169,7 +169,7 @@ function rowEl(r, body) {
                         [r.done_by || '', r.done_at ? fmtDateTime(r.done_at) : '', r.notes].filter(Boolean).join(' · '))
                     // PROC_TOUCH_V1 — отметка крупная: процедурная сестра нажимает
                     // её планшетом в руке, а не мышью за столом.
-                    : h('button', { class: 'btn btn-primary mar-do', type: 'button', onclick: () => openDone(r, body) },
+                    : h('button', { class: 'btn btn-primary btn-lg', type: 'button', onclick: () => openDone(r, body) },
                         Icon('Check', { size: 14 }), ' ' + tr('Выполнить'))));
 }
 

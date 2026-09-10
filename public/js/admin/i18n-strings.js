@@ -7377,6 +7377,8 @@ export const STRINGS = {
   "Отметка снята.": {"en":"The mark has been removed.","ru":"Отметка снята.","uz":"Belgi olib tashlandi."},
   "Выполнено: {name}": {"en":"Done: {name}","ru":"Выполнено: {name}","uz":"Bajarildi: {name}"},
   "Амбулаторно": {"en":"Outpatient","ru":"Амбулаторно","uz":"Ambulator"},
+  "Пациент лежит в стационаре — пробу забирают в отделении": {"en":"The patient is an inpatient — the sample is taken on the ward","ru":"Пациент лежит в стационаре — пробу забирают в отделении","uz":"Bemor statsionarda yotibdi — namuna boʻlimda olinadi"},
+  "Пациент приходит на забор сам": {"en":"The patient comes in for the sample","ru":"Пациент приходит на забор сам","uz":"Bemor namuna topshirgani oʻzi keladi"},
   "назначил {name}": {"en":"ordered by {name}","ru":"назначил {name}","uz":"tayinladi: {name}"},
   "Показать убранные документы": {"en":"Show the removed documents","ru":"Показать убранные документы","uz":"Olib tashlangan hujjatlarni koʻrsatish"},
   "Свернуть убранные документы": {"en":"Hide the removed documents","ru":"Свернуть убранные документы","uz":"Olib tashlangan hujjatlarni yigʻish"},

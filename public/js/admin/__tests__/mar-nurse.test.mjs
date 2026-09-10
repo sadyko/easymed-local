@@ -442,14 +442,18 @@ test('экран спрашивает задачи на сегодня и ста
     assert.ok(textOf(list).includes('Сидоров Сидор') && textOf(list).includes('Каримова Дилноза'));
     assert.ok(textOf(list).includes('просрочено: 1'), 'значок просрочки на карточке пациента: ' + textOf(list));
 
-    // ИМЯ — САМОЕ КРУПНОЕ НА СТРОКЕ.
+    // ИМЯ — САМОЕ КРУПНОЕ И САМОЕ ЖИРНОЕ НА СТРОКЕ. Проверяется СТАРШИНСТВО, а
+    // не число: SYSTEM_LANGUAGE_V1 уменьшил величину имени с 17 px до 15 px (та
+    // же правка, что в «Стационаре», ADM_ROW_CALM_V1) — старшинство осталось.
     const name = walk(list).find((e) => (e._text || '') === 'Сидоров Сидор');
     assert.ok(name, 'имя пациента не найдено');
     const nameBox = walk(list).find((e) => e.children.includes(name));
-    assert.equal(nameBox.style.fontSize, '17px', 'имя пациента крупнее подписи под ним');
     const bed = walk(list).find((e) => (e._text || '').includes('койка T-1'));
     const bedBox = walk(list).find((e) => e.children.includes(bed));
     assert.equal(bedBox.style.fontSize, '12.5px', 'койка — подпись под именем, а не соперник ему');
+    assert.ok(parseFloat(nameBox.style.fontSize) > parseFloat(bedBox.style.fontSize),
+        'имя пациента (' + nameBox.style.fontSize + ') не крупнее подписи под ним (' + bedBox.style.fontSize + ')');
+    assert.ok(Number(nameBox.style.fontWeight) >= 700, 'имя пациента перестало быть самым жирным на строке');
 });
 
 test('справа — задачи выбранного пациента в четырёх группах и красный баннер аллергии', async () => {

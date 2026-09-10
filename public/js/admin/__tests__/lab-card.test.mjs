@@ -113,6 +113,7 @@ document.getElementById = (id) => (id === 'toast' ? toastEl : null);
 let VISIT_SERVICES = [];
 let VISITS = [];
 let LAB_RESULTS = [];
+let ADMISSIONS = [];   // LAB_PATIENT_ORIGIN_V1 — кто из пациентов очереди в койке
 function statusFilter(body) {
   for (const f of (body && body.filters) || []) {
     if (f && f.col === 'status') return f;
@@ -128,6 +129,7 @@ globalThis.fetch = async (url, opts) => {
       visit_services: VISIT_SERVICES,
       visits: VISITS,
       lab_results: LAB_RESULTS,
+      admissions: ADMISSIONS,
       lab_panels: [],
       lab_panel_analytes: [],
       services: [],
@@ -172,10 +174,11 @@ function res(id, vsId, flag, value) {
 }
 
 /** Монтирует очередь на заданных строках и отдаёт единственную карточку. */
-async function card(rows, results = [], { filter = null } = {}) {
+async function card(rows, results = [], { filter = null, admissions = [] } = {}) {
   VISIT_SERVICES = rows;
   LAB_RESULTS = results;
   VISITS = [{ id: 'v-1', visit_date: '2026-09-05', patients: PATIENT }];
+  ADMISSIONS = admissions;
   confirmPrompts = []; copied = []; toastMsg = null;
   fakeBody.children.length = 0;
   const root = mk('div');
@@ -206,6 +209,31 @@ const STATE_FIXTURES = {
   released: () => card([vs(805, 'completed'), vs(806, 'completed')],
                        [res(1, 805, 'normal', '138'), res(2, 806, 'normal', '4.2')], { filter: 'Все' }),
 };
+
+// LAB_PATIENT_ORIGIN_V1 (2026-09-10) — ОТКУДА ПАЦИЕНТ.
+//
+// Владелец: «stationary/ambulatory». Пробу лежащего несут в отделение, за
+// пришедшим приходят к окну забора — это разная работа лаборанта, и по
+// фамилии в очереди её было не различить.
+test('в очереди видно, лежит пациент в стационаре или пришёл сам', async () => {
+  const out = await card([vs(805, 'queued')]);
+  assert.ok(textOf(out).includes('Амбулаторно'),
+    'у пришедшего пациента нет метки «Амбулаторно»: ' + textOf(out));
+  assert.ok(!textOf(out).includes('Стационар'), 'амбулаторная проба подписана стационаром');
+
+  const inWard = await card([vs(805, 'queued')], [],
+    { admissions: [{ id: 'a-1', patient_id: 'p-1', status: 'active' }] });
+  assert.ok(textOf(inWard).includes('Стационар'),
+    'проба лежащего пациента не подписана «Стационар»: ' + textOf(inWard));
+  assert.ok(!textOf(inWard).includes('Амбулаторно'), 'у лежащего пациента обе метки сразу');
+});
+
+test('чужая госпитализация не делает нашего пациента стационарным', async () => {
+  const out = await card([vs(805, 'queued')], [],
+    { admissions: [{ id: 'a-9', patient_id: 'p-999', status: 'active' }] });
+  assert.ok(textOf(out).includes('Амбулаторно'),
+    'метка стационара досталась пациенту, который в койке не лежит: ' + textOf(out));
+});
 
 // --- CSS --------------------------------------------------------------------
 const HERE = path.dirname(fileURLToPath(import.meta.url));
