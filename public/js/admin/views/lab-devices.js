@@ -14,6 +14,7 @@
 import { h, Icon, Tag, toast, clear, field, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { supabase } from '../../supabase.js';
+import { liveness } from './lab-devices-live.js';   // LIS_INGEST_V1 — правило связи, чистое и покрытое тестами
 
 // Ключи словаря, а не собранные строки: tr() ищет строку целиком.
 const TRANSPORTS = [
@@ -31,18 +32,19 @@ const STATUS_RU = {
     applied:    'Применено',
 };
 
-/** «На связи» / «молчит» по последнему принятому сообщению. */
-function liveness(lastSeen) {
-    if (!lastSeen) return { kind: '', text: tr('сообщений не было') };
-    const ageMin = (Date.now() - new Date(lastSeen).getTime()) / 60000;
-    if (!Number.isFinite(ageMin)) return { kind: '', text: tr('сообщений не было') };
-    if (ageMin < 60) return { kind: 'success', text: tr('получает результаты') };
-    return { kind: 'warn', text: trf('молчит с {when}', { when: fmtDateTime(lastSeen) }) };
+// Правило «что говорить о связи» вынесено в чистый модуль без DOM и словаря
+// (lab-devices-live.js): проверять надо правило, а не разметку. Здесь остаётся
+// только перевод его решения в текст экрана.
+function livenessText(lastSeen) {
+    const s = liveness(lastSeen);
+    const params = s.params && s.params.when ? { ...s.params, when: fmtDateTime(s.params.when) } : s.params;
+    return { kind: s.kind, text: Object.keys(params || {}).length ? trf(s.key, params) : tr(s.key) };
 }
 
 // Живая лента опрашивает сервер, пока экран открыт. Таймер модульный и гасится
-// при следующем монтировании: иначе уход на другую вкладку оставлял бы за собой
-// работающий опрос, и через десяток переходов их было бы десять.
+// при следующем монтировании и при уходе с вкладки (laboratory.js): иначе
+// переход в другой режим оставлял бы за собой работающий опрос, и через десяток
+// переходов их было бы десять.
 let liveTimer = null;
 const LIVE_MS = 5000;
 
@@ -118,7 +120,7 @@ export async function mountLabDevices(container) {
         const tb = h('tbody');
         for (const d of state.devices) {
             const p = profileOf(d.profile);
-            const live = liveness(d.last_seen_at);
+            const live = livenessText(d.last_seen_at);
             tb.appendChild(h('tr', null,
                 h('td', { style: { fontWeight: 600 } }, d.name),
                 h('td', { class: 'muted' },
@@ -135,9 +137,9 @@ export async function mountLabDevices(container) {
                         ? trf('{host}:{port}', { host: d.host || tr('любой адрес'), port: d.port || 2575 })
                         : tr(TRANSPORT_LABEL[d.transport] || d.transport)),
                 h('td', null, d.enabled ? Tag(tr('включён'), { kind: 'success' }) : Tag(tr('выключен'))),
-                h('td', null, live.kind
-                    ? Tag(live.text, { kind: live.kind })
-                    : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, live.text)),
+                h('td', null, live.kind === 'idle'
+                    ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, live.text)
+                    : Tag(live.text, { kind: live.kind })),
                 h('td', { style: { textAlign: 'right' } },
                     h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => openForm(d) }, tr('Изменить')))));
         }
@@ -148,7 +150,14 @@ export async function mountLabDevices(container) {
             tb));
 
         devicesCard.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '10px' } },
-            tr('Колонка «Связь» — единственный способ заметить, что прибор перестал присылать результаты.')));
+            tr('Связь с анализатором не постоянная: он соединяется, отдаёт пробу и разъединяется. Поэтому «на связи» означает «присылал результат за последние 5 минут», а не горящую лампочку.')));
+
+        const idle = state.devices.filter((d) => !d.last_seen_at);
+        if (idle.length) {
+            devicesCard.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } },
+                trf('Приборы без единого сообщения ({list}) заведены руками и, возможно, не существуют. Такой прибор можно удалить: «Изменить» → «Удалить».',
+                    { list: idle.map((d) => d.name).join(', ') })));
+        }
     }
 
     // ---------- живая лента ----------

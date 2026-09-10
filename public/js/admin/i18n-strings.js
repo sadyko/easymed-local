@@ -3,6 +3,13 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  "ни одного сообщения": {"en":"no messages at all","ru":"ни одного сообщения","uz":"birorta ham xabar yoq"},
+  "на связи": {"en":"in touch","ru":"на связи","uz":"aloqada"},
+  "молчит {n} мин": {"en":"silent for {n} min","ru":"молчит {n} мин","uz":"{n} daqiqa jim"},
+  "молчит {n} ч": {"en":"silent for {n} h","ru":"молчит {n} ч","uz":"{n} soat jim"},
+  "не отвечает с {when}": {"en":"no response since {when}","ru":"не отвечает с {when}","uz":"{when} dan beri javob yoq"},
+  "Связь с анализатором не постоянная: он соединяется, отдаёт пробу и разъединяется. Поэтому «на связи» означает «присылал результат за последние 5 минут», а не горящую лампочку.": {"en":"The link to an analyzer is not permanent: it connects, hands over a sample and disconnects. So «in touch» means «sent a result in the last 5 minutes», not a lit-up lamp.","ru":"Связь с анализатором не постоянная: он соединяется, отдаёт пробу и разъединяется. Поэтому «на связи» означает «присылал результат за последние 5 минут», а не горящую лампочку.","uz":"Analizator bilan aloqa doimiy emas: u ulanadi, namunani beradi va uziladi. Shuning uchun «aloqada» degani «oxirgi 5 daqiqada natija yubordi», yonib turgan chiroq emas."},
+  "Приборы без единого сообщения ({list}) заведены руками и, возможно, не существуют. Такой прибор можно удалить: «Изменить» → «Удалить».": {"en":"Devices with no message at all ({list}) were added by hand and may not exist. Such a device can be deleted: «Изменить» → «Удалить».","ru":"Приборы без единого сообщения ({list}) заведены руками и, возможно, не существуют. Такой прибор можно удалить: «Изменить» → «Удалить».","uz":"Birorta ham xabar kelmagan qurilmalar ({list}) qolda qoshilgan va mavjud bolmasligi mumkin. Bunday qurilmani ochirish mumkin: «Ozgartirish» → «Ochirish»."},
   "укажите «Анализатор» над таблицей": {"en":"set «Анализатор» above the table","ru":"укажите «Анализатор» над таблицей","uz":"jadval tepasidagi «Analizator»ni tanlang"},
   "Анализатор": {"en":"Analyzer","ru":"Анализатор","uz":"Analizator"},
   "Выберите прибор — тогда у каждого показателя можно указать, какое поле анализатора его заполняет.": {"en":"Pick a device — then each indicator can say which analyzer field fills it.","ru":"Выберите прибор — тогда у каждого показателя можно указать, какое поле анализатора его заполняет.","uz":"Qurilmani tanlang — shunda har bir korsatkich uchun uni qaysi analizator maydoni toldirishini korsatish mumkin."},
