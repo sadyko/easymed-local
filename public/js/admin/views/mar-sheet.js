@@ -595,6 +595,89 @@ export function openOrderForm({ admissionId, patientName = '', patientSub = '', 
 
     const kindSel = h('select', null, ...KIND_OPTIONS.map(([v, l]) => h('option', { value: v }, tr(l))));
     const nameInp = h('input', { type: 'text', placeholder: tr('Название препарата или процедуры') });
+    // ORDER_FROM_STOCK_V1 (2026-09-10) — владелец: «the prescription do not
+    // load the drugs from the shelf». Сервер УМЕЕТ списывать назначенный
+    // препарат со склада (treatment-orders.js: stock_item_id + source
+    // 'clinic'), но форма никогда не присылала позицию склада: врач писал имя
+    // руками, и списывать было нечего. Теперь имя выбирается из склада, а
+    // написанное руками по-прежнему принимается — так назначают то, чего на
+    // складе нет, и препарат пациента.
+    const stock = { rows: [], pickedId: null, loaded: false };
+    const stockNote = h('div', { class: 'muted', style: { fontSize: '12.5px' } });
+    const stockList = h('div', { class: 'cd-icd-list', role: 'listbox' });
+    stockList.hidden = true;
+
+    const stockUnit = (r) => r.consumption_unit || r.base_unit || r.unit || '';
+    const showNote = () => {
+        clear(stockNote);
+        const r = stock.rows.find((x) => x.id === stock.pickedId);
+        if (!r) {
+            // Молчим, пока склад не спросили: подпись «не со склада» у пустого
+            // поля учит, что это ошибка, а это не ошибка.
+            if (stock.loaded && String(nameInp.value || '').trim()) {
+                stockNote.appendChild(h('span', null, tr('Не со склада — списывать будет нечего.')));
+            }
+            return;
+        }
+        const left = Number(r.on_hand) || 0;
+        stockNote.appendChild(h('span', null,
+            trf('Со склада: остаток {n} {unit}', { n: left, unit: stockUnit(r) })));
+        if (left <= 0) {
+            stockNote.appendChild(h('b', { style: { color: 'var(--warn-700, #8a5a00)' } },
+                ' · ' + tr('на складе пусто')));
+        }
+    };
+    const hideList = () => { stockList.hidden = true; clear(stockList); };
+    const paintStock = () => {
+        const q = String(nameInp.value || '').trim().toLowerCase();
+        // Позиция, выбранная раньше, перестаёт быть выбранной, как только имя
+        // правят руками: иначе списали бы не то, что написано.
+        const cur = stock.rows.find((x) => x.id === stock.pickedId);
+        if (cur && String(cur.name || '').toLowerCase() !== q) stock.pickedId = null;
+        showNote();
+        if (!stock.loaded || q.length < 2) { hideList(); return; }
+        const rows = stock.rows.filter((r) => String(r.name || '').toLowerCase().includes(q)).slice(0, 8);
+        clear(stockList);
+        if (!rows.length) { hideList(); return; }
+        for (const r of rows) {
+            const btn = h('button', { class: 'cd-icd-row', type: 'button', role: 'option' },
+                h('span', { class: 'cd-icd-name' }, r.name || ''),
+                h('span', { class: 'cd-icd-code' }, String(Number(r.on_hand) || 0) + ' ' + stockUnit(r)));
+            // mousedown, а не click: click приходит ПОСЛЕ blur, к этому времени
+            // список уже скрыт — тот же приём, что у подсказок МКБ-10.
+            btn.addEventListener('mousedown', (e) => {
+                if (e.preventDefault) e.preventDefault();
+                nameInp.value = r.name || '';
+                stock.pickedId = r.id;
+                hideList();
+                showNote();
+            });
+            stockList.appendChild(btn);
+        }
+        stockList.hidden = false;
+    };
+    nameInp.addEventListener('input', paintStock);
+    nameInp.addEventListener('focus', paintStock);
+    nameInp.addEventListener('blur', () => setTimeout(hideList, 120));
+
+    (async () => {
+        // Склад читается ОДИН раз на открытие окна: назначают подряд, а список
+        // препаратов за эти минуты не меняется.
+        // active = 1, а не true: в этой базе флаги хранятся числом, и так их
+        // спрашивают все остальные экраны склада.
+        const { data } = await supabase.from('products')
+            .select('id, name, unit, base_unit, consumption_unit, on_hand, category, is_drug')
+            .eq('active', 1).order('name');
+        const all = (data || []).filter(Boolean);
+        const drugs = all.filter((r) => r.is_drug || r.category === 'drug');
+        // ПУСТОЙ СПИСОК ХУЖЕ ЛИШНЕЙ СТРОКИ. Клиника, не разметившая склад на
+        // «медикаменты» и «прочее», получала пустые подсказки — а препарат у
+        // неё на складе есть, просто лежит без пометки. Если пометки есть,
+        // предлагаются медикаменты; если их нет ни у одной позиции — весь склад.
+        stock.rows = drugs.length ? drugs : all;
+        stock.loaded = true;
+        paintStock();
+    })();
     const doseInp = h('input', { type: 'text', placeholder: tr('Например: 500 мг') });
     const routeSel = h('select', null, h('option', { value: '' }, tr('Путь введения не указан')),
         ...ROUTES.map((r) => h('option', { value: r }, r)));
@@ -642,7 +725,8 @@ export function openOrderForm({ admissionId, patientName = '', patientSub = '', 
         patientAnchor(patientName, patientSub),
         h('div', { class: 'inp-form' },
             field(tr('Род назначения'), kindSel),
-            h('div', { class: 'span2' }, field(tr('Название'), nameInp, { required: true })),
+            h('div', { class: 'span2', style: { position: 'relative' } },
+                field(tr('Название'), nameInp, { required: true }), stockList, stockNote),
             field(tr('Доза'), doseInp),
             field(tr('Путь введения'), routeSel),
             field(tr('Частота'), freqSel),
@@ -673,6 +757,9 @@ export function openOrderForm({ admissionId, patientName = '', patientSub = '', 
             source: sourceSel.value,
             note: noteInp.value.trim(),
         };
+        // Списывают только препарат КЛИНИКИ: у препарата пациента склад не при
+        // чём, и присылать позицию склада для него значило бы списать чужое.
+        if (stock.pickedId && sourceSel.value === 'clinic') args.stock_item_id = stock.pickedId;
         if (kind === 'infusion') {
             args.volume = volInp.value === '' ? null : Number(volInp.value);
             args.rate_ml_h = rateInp.value === '' ? null : Number(rateInp.value);
@@ -883,25 +970,10 @@ export async function renderMarSheet(root, ctx = {}) {
             (t.refused + t.held + t.missed)
                 ? chip('Не введено', t.refused + t.held + t.missed, 'refused') : null);
 
-        if (state.date === todayLocal()) {
-            const f = nowFocus(scheduled, state.date, nowMs);
-            const now = new Date(nowMs);
-            const hhmm = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
-            const line = h('div', { class: 'mar-now' },
-                h('b', null, trf('Сейчас {time}', { time: hhmm })));
-            if (f.overdue.length) {
-                line.appendChild(h('span', { class: 'mar-now-hot' },
-                    trf('Просрочено: {list}', { list: f.overdue.join(', ') })));
-            }
-            if (f.due.length) {
-                line.appendChild(h('span', { class: 'mar-now-due' },
-                    trf('В этот час: {list}', { list: f.due.join(', ') })));
-            }
-            if (!f.overdue.length && !f.due.length) {
-                line.appendChild(h('span', { class: 'muted' }, tr('в этот час дозы не ждут')));
-            }
-            box.appendChild(line);
-        }
+        // SIDEBAR_CLOCK_V2 — строка «Сейчас 16:33 · просрочено …» отсюда убрана
+        // по просьбе владельца: время теперь стоит часами в меню, а что
+        // просрочено — видно счётчиком выше и красным в самой сетке. Три места
+        // с одним и тем же «сейчас» спорили друг с другом на границе минуты.
         return box;
     }
 

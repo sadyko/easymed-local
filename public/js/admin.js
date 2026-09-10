@@ -1237,6 +1237,54 @@ function renderSidebar() {
 }
 
 /**
+ * ЧАСЫ ВНИЗУ БОКОВОГО МЕНЮ — ЦИФЕРБЛАТ СО СТРЕЛКАМИ.
+ *
+ * SIDEBAR_CLOCK_V2 (2026-09-10) — владелец: «can you create beautiful analog
+ * clock like frame». Цифры 16:33 читаются, но не ЧУВСТВУЮТСЯ: у постели
+ * спрашивают не «сколько времени», а «сколько осталось до восьми» — и на это
+ * отвечает положение стрелок, а не число.
+ *
+ * Рисуется SVG, а не картинкой: стрелки должны быть того же цвета, что и меню
+ * (currentColor), и остаться чёткими на любом экране планшета.
+ *
+ * Минутная стрелка идёт раз в минуту — чаще незачем: секундной здесь нет
+ * намеренно. Тикающая секундная в углу экрана тянет взгляд на себя весь день,
+ * а работа у постели идёт не по секундам.
+ */
+const CLOCK_TICKS = [0, 3, 6, 9];   // четверти: по ним читают циферблат
+
+function clockFace(now) {
+    const NS = 'http://www.w3.org/2000/svg';
+    const el = (tag, attrs) => {
+        const n = document.createElementNS(NS, tag);
+        for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
+        return n;
+    };
+    const svg = el('svg', { viewBox: '0 0 100 100', class: 'nav-clock-face', 'aria-hidden': 'true', focusable: 'false' });
+    svg.appendChild(el('circle', { cx: 50, cy: 50, r: 46, class: 'nav-clock-rim' }));
+    for (const q of CLOCK_TICKS) {
+        const a = (q / 12) * 2 * Math.PI;
+        const x = 50 + Math.sin(a) * 37, y = 50 - Math.cos(a) * 37;
+        svg.appendChild(el('circle', { cx: x.toFixed(1), cy: y.toFixed(1), r: 2.6, class: 'nav-clock-tick' }));
+    }
+    const hand = (angle, len, cls, w) => {
+        const a = angle * 2 * Math.PI;
+        return el('line', {
+            x1: 50, y1: 50,
+            x2: (50 + Math.sin(a) * len).toFixed(1), y2: (50 - Math.cos(a) * len).toFixed(1),
+            class: cls, 'stroke-width': w, 'stroke-linecap': 'round',
+        });
+    };
+    const m = now.getMinutes(), hh = now.getHours() % 12;
+    // Часовая идёт ВМЕСТЕ с минутной: стрелка, стоящая ровно на цифре в
+    // половине шестого, — первый признак нарисованных часов.
+    svg.appendChild(hand((hh + m / 60) / 12, 24, 'nav-clock-h', 6));
+    svg.appendChild(hand(m / 60, 34, 'nav-clock-m', 4));
+    svg.appendChild(el('circle', { cx: 50, cy: 50, r: 3.4, class: 'nav-clock-pin' }));
+    return svg;
+}
+
+/**
  * ЧАСЫ ВНИЗУ БОКОВОГО МЕНЮ.
  *
  * SIDEBAR_CLOCK_V1 (2026-09-10) — владелец: «we need to add time and date in
@@ -1257,9 +1305,13 @@ function sidebarClock() {
     const paintNow = () => {
         clear(box);
         const now = new Date();
-        box.appendChild(h('span', { class: 'nav-clock-t' },
-            String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0')));
-        box.appendChild(h('span', { class: 'nav-clock-d' }, dateWords(now)));
+        box.appendChild(clockFace(now));
+        // Цифры рядом с циферблатом остаются: минуту по стрелкам читают на
+        // глаз, а в документ её вписывают точно.
+        box.appendChild(h('div', { class: 'nav-clock-txt' },
+            h('span', { class: 'nav-clock-t' },
+                String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0')),
+            h('span', { class: 'nav-clock-d' }, dateWords(now))));
     };
     paintNow();
     clearInterval(sidebarClockTimer);

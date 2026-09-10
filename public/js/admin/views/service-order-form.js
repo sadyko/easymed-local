@@ -74,7 +74,14 @@ export function openServiceOrderForm({
     const svcBox = h('div', { class: 'sof-pick' });
     const searchInp = h('input', { type: 'search', placeholder: 'Поиск по названию услуги' });
     const listBox = h('div', { class: 'sof-list' });
-    const pickBox = h('div', { class: 'sof-catalog' }, svcBox, searchInp, listBox);
+    // SERVICE_FORM_GROUPS_V1 (2026-09-10) — владелец: «can we here define the
+    // group of the service, consultation, lab or diagnostics, so its checked
+    // and selected». Плоский список в полтысячи строк заставляет угадывать
+    // название; раздел справочника сужает его до десятка и СРАЗУ показывает, в
+    // каком разделе ищут. Разделы — те же, что в справочнике: своих названий
+    // окно не придумывает.
+    const groupBox = h('div', { class: 'sof-groups' });
+    const pickBox = h('div', { class: 'sof-catalog' }, svcBox, groupBox, searchInp, listBox);
     const dateInp = h('input', { type: 'date', value: todayLocal() });
     const timeInp = h('input', { type: 'time', value: nextHalfHour() });
     const qtyInp = h('input', { type: 'number', min: '1', step: '1', value: '1' });
@@ -89,7 +96,7 @@ export function openServiceOrderForm({
     nowChk.addEventListener('change', syncWhen);
 
     // Справочник этих разделов — загружается один раз и ищется на месте.
-    const cat = { services: [], types: [], loaded: false };
+    const cat = { services: [], types: [], groups: [], group: null, loaded: false };
 
     const paintPick = () => {
         clear(svcBox);
@@ -111,6 +118,24 @@ export function openServiceOrderForm({
         const hide = !!picked.service;
         searchInp.hidden = hide;
         listBox.hidden = hide;
+        groupBox.hidden = hide || cat.groups.length < 2;
+    };
+
+    /** Раздел услуги — ТОЙ ЖЕ общей функцией, что и в большом окне подбора. */
+    const groupIdOf = (svc) => String(resolveTypeId(svc, cat.types) || '');
+
+    const paintGroups = () => {
+        clear(groupBox);
+        // Один раздел — не выбор: строка чипов из одной кнопки только занимает
+        // место и делает вид, что где-то есть второй вариант.
+        if (!cat.loaded || cat.groups.length < 2) { groupBox.hidden = true; return; }
+        groupBox.hidden = false;
+        const chip = (id, label, n) => h('button', {
+            class: 'cf-fchip' + (cat.group === id ? ' on' : ''), type: 'button',
+            onclick: () => { cat.group = id; paintGroups(); paintList(); },
+        }, label, h('span', { class: 'cf-fchip-n' }, String(n)));
+        groupBox.appendChild(chip(null, tr('Все'), cat.services.length));
+        for (const g of cat.groups) groupBox.appendChild(chip(g.id, g.name, g.count));
     };
 
     const paintList = () => {
@@ -121,7 +146,8 @@ export function openServiceOrderForm({
             return;
         }
         const q = String(searchInp.value || '').trim().toLowerCase();
-        const rows = cat.services.filter((x) => !q || String(x.name || '').toLowerCase().includes(q));
+        const rows = cat.services.filter((x) => (!cat.group || groupIdOf(x) === cat.group)
+            && (!q || String(x.name || '').toLowerCase().includes(q)));
         if (!rows.length) {
             listBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 tr('Ничего не найдено — измените запрос.')));
@@ -161,11 +187,24 @@ export function openServiceOrderForm({
         // ничего не заведено (операции сплошь и рядом лежат в «Процедурах»),
         // показывается весь справочник — то же правило, что и в большом окне.
         cat.services = only.length ? only : all;
+        // Разделы — только те, в которых что-то есть: пустой раздел в строке
+        // выбора это обещание услуг, которых нет.
+        const counts = new Map();
+        for (const svc of cat.services) {
+            const id = String(resolveTypeId(svc, cat.types) || '');
+            if (!id) continue;
+            counts.set(id, (counts.get(id) || 0) + 1);
+        }
+        cat.groups = cat.types
+            .filter((t) => counts.has(String(t.id)))
+            .map((t) => ({ id: String(t.id), name: t.name || '', count: counts.get(String(t.id)) }));
         cat.loaded = true;
+        paintGroups();
         paintList();
     })();
 
     paintPick();
+    paintGroups();
     paintList();
     syncWhen();
 

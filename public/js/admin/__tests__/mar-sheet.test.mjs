@@ -187,6 +187,13 @@ const USERS = [
 let orders = [CEF, DRESSING, KETOROL, CANCELLED];
 // MED_ADMIN_CHARGE_V1 (Задача 6) — отметка «дала», за которой не пошёл склад.
 let stockIssues = { count: 0, items: [] };
+// ORDER_FROM_STOCK_V1 — склад клиники. У этой позиции НЕТ пометки «медикамент»
+// (is_drug 0, category 'other') — ровно как в базе владельца: именно на такой
+// разметке подсказки и оказались пустыми.
+let PRODUCTS = [
+    { id: 7, name: 'Paracetamol', unit: 'шт.', base_unit: 'pcs', consumption_unit: 'шт.',
+      on_hand: 998, category: 'other', is_drug: 0 },
+];
 let rpcCalls = [];
 let createAnswer = () => ({ ok: true, data: { order: { id: 99 } } });
 
@@ -213,6 +220,7 @@ globalThis.fetch = async (url, opts = {}) => {
         return ok({});
     }
     if (u === '/api/db') {
+        if (body.table === 'products') return ok(PRODUCTS);
         if (body.table === 'admissions') return ok(body.single ? ADMISSION : [ADMISSION]);
         if (body.table === 'users') return ok(USERS);
         if (body.table === 'wards') return ok([{ id: 1, name: 'Терапия' }]);
@@ -751,4 +759,77 @@ test('MAR_GRID_V2: сутки нарисованы целиком, а капел
         // Черта «сейчас» — только на сегодняшнем листе.
         assert.ok(walk(grid).some((e) => String(e.className).includes('mar-nowline')), 'нет черты «сейчас»');
     } finally { orders = keep; }
+});
+
+// ─── ORDER_FROM_STOCK_V1 — препарат берётся СО СКЛАДА ───────────────────────
+//
+// Владелец: «the prescription do not load the drugs from the shelf», а затем,
+// на пустом списке: «procurement is not uploading». Сервер умел списывать
+// назначенный препарат (stock_item_id) с самого начала — форма просто не
+// присылала позицию склада.
+
+test('ORDER_FROM_STOCK_V1: склад подсказывает препарат, и позиция уходит на сервер', async () => {
+    const root = await renderScreen();
+    findBtn(root, 'Назначение').click();
+    await settle();
+    const overlay = BODY.children[BODY.children.length - 1];
+    const nameInp = walk(overlay).filter((e) => e.tagName === 'INPUT' && e.attrs.type === 'text')[0];
+    assert.ok(nameInp, 'поля названия нет');
+    // В браузере <select> сам стоит на первом варианте; здешний DOM этого не
+    // умеет, а списывают только препарат КЛИНИКИ — ставим явно.
+    walk(overlay).filter((e) => e.tagName === 'SELECT').forEach((sel) => {
+        if (textOf(sel).includes('Препарат клиники')) sel.value = 'clinic';
+    });
+
+    // Две буквы — и склад подсказывает, ХОТЯ позиция не помечена медикаментом.
+    nameInp.value = 'par';
+    nameInp.dispatchEvent({ type: 'input', target: nameInp });
+    await settle();
+    const row = walk(overlay).find((e) => e.tagName === 'BUTTON' && textOf(e).includes('Paracetamol'));
+    assert.ok(row, 'склад не подсказал препарат: ' + textOf(overlay).slice(0, 200));
+    assert.ok(textOf(row).includes('998'), 'в подсказке нет остатка — по нему и выбирают');
+
+    row.dispatchEvent({ type: 'mousedown', target: row });
+    await settle();
+    assert.equal(nameInp.value, 'Paracetamol', 'имя не встало в поле');
+    assert.ok(textOf(overlay).includes('остаток 998'), 'после выбора не сказано, сколько на складе');
+
+    rpcCalls = [];
+    findBtn(overlay, 'Назначить').click();
+    await settle();
+    const call = rpcCalls.find((c) => c.name === 'treatment_order_create');
+    assert.ok(call, 'назначение не ушло на сервер');
+    assert.equal(call.args.stock_item_id, 7, 'позиция склада не ушла — списывать будет нечего');
+});
+
+test('ORDER_FROM_STOCK_V1: имя, поправленное руками, отвязывает позицию склада', async () => {
+    const root = await renderScreen();
+    findBtn(root, 'Назначение').click();
+    await settle();
+    const overlay = BODY.children[BODY.children.length - 1];
+    const nameInp = walk(overlay).filter((e) => e.tagName === 'INPUT' && e.attrs.type === 'text')[0];
+    walk(overlay).filter((e) => e.tagName === 'SELECT').forEach((sel) => {
+        if (textOf(sel).includes('Препарат клиники')) sel.value = 'clinic';
+    });
+
+    nameInp.value = 'para';
+    nameInp.dispatchEvent({ type: 'input', target: nameInp });
+    await settle();
+    const row = walk(overlay).find((e) => e.tagName === 'BUTTON' && textOf(e).includes('Paracetamol'));
+    row.dispatchEvent({ type: 'mousedown', target: row });
+    await settle();
+
+    // Дописали своё — списывать по прежней позиции больше нельзя: в поле уже
+    // другой препарат.
+    nameInp.value = 'Paracetamol детский';
+    nameInp.dispatchEvent({ type: 'input', target: nameInp });
+    await settle();
+
+    rpcCalls = [];
+    findBtn(overlay, 'Назначить').click();
+    await settle();
+    const call = rpcCalls.find((c) => c.name === 'treatment_order_create');
+    assert.ok(call, 'назначение не ушло');
+    assert.equal(call.args.stock_item_id, undefined, 'списали бы не то, что написано в назначении');
+    assert.equal(call.args.name, 'Paracetamol детский');
 });

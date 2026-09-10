@@ -6158,18 +6158,31 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .inp-hint { font-size: 12.5px; color: var(--ink-500); line-height: 1.45; }
 @media (max-width: 560px) { .inp-form, .inp-row, .inp-sub { grid-template-columns: minmax(0, 1fr); } }
 
-/* SIDEBAR_CLOCK_V1 — часы внизу бокового меню: у постели время это часть
-   содержания документа, а системных часов на планшете в чехле не видно.
-   Меню видно на любом экране, поэтому часы стоят здесь, а не в колонке одного
-   раздела. */
-.nav-clock { display: flex; align-items: baseline; gap: 8px; margin-top: auto;
-    padding: 14px 14px 10px; color: var(--ink-500); }
-.nav-clock-t { font-size: 20px; font-weight: 700; color: var(--ink-900);
+/* SIDEBAR_CLOCK_V2 — часы внизу бокового меню: циферблат со стрелками и время
+   цифрами рядом. У постели время это часть содержания документа, а системных
+   часов на планшете в чехле не видно; меню же видно на любом экране.
+   Стрелки наследуют цвет темы (currentColor у линий), поэтому и в свёрнутом
+   меню, и в тёмной шапке циферблат остаётся своим. */
+.nav-clock { display: flex; align-items: center; gap: 10px; margin-top: auto;
+    padding: 14px 14px 12px; color: var(--ink-500); }
+.nav-clock-face { flex: 0 0 auto; width: 38px; height: 38px; }
+.nav-clock-rim { fill: var(--white); stroke: var(--ink-200); stroke-width: 3; }
+.nav-clock-tick { fill: var(--ink-300, #a8b1ba); }
+.nav-clock-h { stroke: var(--ink-900); }
+.nav-clock-m { stroke: var(--primary-600, #0f766e); }
+.nav-clock-pin { fill: var(--ink-900); }
+.nav-clock-txt { display: grid; min-width: 0; }
+.nav-clock-t { font-size: 15px; font-weight: 700; color: var(--ink-900);
     font-variant-numeric: tabular-nums; letter-spacing: .5px; }
-.nav-clock-d { font-size: 12.5px; }
-/* Свёрнутое меню оставляет одни часы: дата в 64 пикселя не читается. */
-.sidebar-collapsed .nav-clock { justify-content: center; padding: 14px 4px 10px; }
-.sidebar-collapsed .nav-clock-d { display: none; }
+.nav-clock-d { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Свёрнутое меню оставляет один циферблат: дата в 64 пикселя не читается, а
+   время по стрелкам — да. */
+.sidebar-collapsed .nav-clock { justify-content: center; padding: 14px 4px 12px; }
+.sidebar-collapsed .nav-clock-txt { display: none; }
+/* ORDER_FROM_STOCK_V1 — подсказки склада в назначении стоят ПОД полем имени,
+   поверх формы: список, толкающий поля вниз, уводит из-под курсора то, во что
+   метились. */
+.inp-form .cd-icd-list { position: absolute; z-index: 5; left: 0; right: 0; top: 100%; }
 
 /* DIARY_ENTRY_DATE_V1 — день записи стоит в полосе действий документа. */
 .cd-acts-date { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px;
@@ -6181,6 +6194,9 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
    поиска и короткий список. Список прокручивается сам, чтобы окно осталось
    окном, а не выросло во весь экран. */
 .sof-catalog { display: grid; gap: 8px; }
+/* SERVICE_FORM_GROUPS_V1 — разделы справочника строкой над поиском: видно, где
+   ищут, и список сужается до десятка строк вместо полутысячи. */
+.sof-groups { display: flex; flex-wrap: wrap; gap: 6px; }
 .sof-pick { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; min-height: 42px;
     padding: 8px 12px; border: 1px solid var(--ink-100); border-radius: var(--r-md); background: var(--white); }
 .sof-pick-t { flex: 1 1 100%; font-size: 13.5px; font-weight: 600; color: var(--ink-900); }

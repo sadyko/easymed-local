@@ -77,6 +77,7 @@ const settle = () => new Promise((r) => setTimeout(r, 30));
 let SERVICES = [];
 const TYPES = [
     { id: 1, name: 'Консультации', active: 1 },
+    { id: 2, name: 'Диагностика', active: 1 },
     { id: 3, name: 'Лаборатория', active: 1 },
     { id: 5, name: 'Хирургия', active: 1 },
 ];
@@ -84,6 +85,7 @@ const FULL = [
     { id: 10, name: 'Аппендэктомия', price: 3000000, type_id: 5, type: 'procedure', active: 1 },
     { id: 11, name: 'Общий анализ крови', price: 40000, type_id: 3, type: 'lab', active: 1 },
     { id: 12, name: 'Приём терапевта', price: 90000, type_id: 1, type: 'consultation', active: 1 },
+    { id: 13, name: 'УЗИ брюшной полости', price: 160000, type_id: 2, type: 'imaging', active: 1 },
 ];
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
@@ -150,6 +152,31 @@ test('услуга выбирается из справочника и уход�
     assert.ok(call.args.planned_at, 'время назначения не ушло — ради него окно и делалось');
     // Местное время переводится в общее: сравниваем момент, а не строку.
     assert.equal(new Date(call.args.planned_at).getTime(), new Date('2026-09-11T10:30:00').getTime());
+});
+
+test('SERVICE_FORM_GROUPS_V1: разделы видны строкой и сужают список', async () => {
+    // Окно анализов: лаборатория и диагностика — два раздела, между ними и
+    // выбирают. Услуга-операция в это окно не попадает вовсе.
+    const form = await openForm({ title: 'Анализы и диагностика', typeNames: ['лаборатор', 'диагностик'] });
+    const chips = walk(form).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('cf-fchip'));
+    const names = chips.map((c) => textOf(c));
+    assert.ok(names.some((n) => n.includes('Все')), 'нет строки «Все»: ' + names.join(' | '));
+    assert.ok(names.some((n) => n.includes('Лаборатория')), 'раздела «Лаборатория» нет: ' + names.join(' | '));
+    assert.ok(names.some((n) => n.includes('Диагностика')), 'раздела «Диагностика» нет: ' + names.join(' | '));
+
+    // Пока раздел не выбран — видно всё разрешённое.
+    const rowsNow = () => walk(form).filter((e) => String(e.className).includes('sof-row')).map(textOf);
+    assert.ok(rowsNow().some((n) => n.includes('Общий анализ крови')), 'анализа нет в общем списке');
+
+    // Выбрали «Диагностика» — анализ ушёл, потому что он из другого раздела.
+    chips.find((c) => textOf(c).includes('Диагностика')).click();
+    await settle();
+    assert.ok(!rowsNow().some((n) => n.includes('Общий анализ крови')),
+        'раздел выбран, а список не сузился: ' + rowsNow().join(' | '));
+    // И выбранный раздел ПОМЕЧЕН: иначе непонятно, почему список короткий.
+    const on = walk(form).filter((e) => String(e.className).includes('cf-fchip') && String(e.className).includes('on'));
+    assert.equal(on.length, 1, 'помечен не один раздел: ' + on.map(textOf).join(' | '));
+    assert.ok(textOf(on[0]).includes('Диагностика'));
 });
 
 test('в списке — только услуги нужного раздела', async () => {

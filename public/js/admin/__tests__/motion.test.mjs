@@ -354,6 +354,13 @@ test('длительности берутся из токенов admin.css, а 
 // ===========================================================================
 
 function section(css, name) {
+    // MOTION_GUARD_CRLF_V1 — конец секции ищется по строке с переводом строки, а
+    // рабочее дерево на Windows бывает и в CRLF (git autocrlf). На таком файле
+    // маркер не находился, секция тянулась до конца файла и утаскивала за собой
+    // общий выключатель анимаций — страж падал на правиле, которое сам же и
+    // считает правильным. Страж не должен зависеть от того, чем кончаются
+    // строки: это свойство машины, а не кода.
+    css = String(css).split(CRLF).join(LF);
     const i = css.indexOf(name);
     assert.ok(i > -1, 'секция ' + name + ' пропала');
     const rest = css.slice(i);
@@ -361,7 +368,12 @@ function section(css, name) {
     return end > -1 ? rest.slice(0, end) : rest;
 }
 
+const LF = String.fromCharCode(10);
+const CRLF = String.fromCharCode(13) + LF;
 const TIMED = /(transition|animation)(-duration)?\s*:\s*([^;]+);/g;
+// Общий выключатель анимаций (prefers-reduced-motion) — не правило движения, а
+// его отмена: 0.01ms там стоит намеренно и токеном быть не может.
+const OFF_SWITCH = /!important/;
 
 test('новые правила движения написаны токенами, а не числами', () => {
     const views = read('css/admin-views.css');
@@ -384,6 +396,7 @@ test('новые правила движения написаны токенам
     let checked = 0;
     while ((m = TIMED.exec(owned))) {
         const decl = m[3];
+        if (OFF_SWITCH.test(decl)) continue;
         checked++;
         assert.ok(/var\(--dur-[123]\)/.test(decl),
             'длительность мимо словаря: ' + m[0].trim());
