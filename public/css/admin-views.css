@@ -6043,6 +6043,25 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .cf-act-inv { display: inline-flex; padding: 2px 8px; border-radius: var(--r-pill);
     background: var(--ok-50, #e8f7ef); color: var(--ok-700, #0f7a43); font-size: 12.5px; font-weight: 600; }
 .cf-act-act { text-align: right; white-space: nowrap; }
+/* MAR_REF_V1 — счётчики листа назначений, строка «сейчас» и витальные. */
+.mar-tally { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px;
+    padding: 10px 14px; margin-bottom: 14px; }
+.mar-tchip { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 12px;
+    border-radius: var(--r-pill); background: var(--ink-50); color: var(--ink-500); font-size: 12.5px; font-weight: 600; }
+.mar-tchip b { font-variant-numeric: tabular-nums; }
+.mar-now { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; width: 100%;
+    padding-top: 8px; border-top: 1px solid var(--ink-50); font-size: 12.5px; color: var(--ink-700); }
+.mar-now-hot { color: var(--crit-700, #b42318); font-weight: 600; }
+.mar-now-due { color: var(--ink-700); }
+.mar-vitals { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 18px;
+    padding: 10px 14px; margin-bottom: 14px; font-size: 12.5px; }
+.mar-vit-h { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ink-500);
+    text-transform: uppercase; letter-spacing: .4px; }
+.mar-vit { display: inline-flex; align-items: baseline; gap: 5px; }
+.mar-vit b { font-size: 15px; font-variant-numeric: tabular-nums; color: var(--ink-900); }
+.mar-vit-l { color: var(--ink-500); text-transform: uppercase; letter-spacing: .4px; }
+.mar-vit-u { color: var(--ink-400); }
+
 /* ACT_TABLE_V1 — реестр: галочки, фильтры, плашка счёта. */
 .cf-act-pick { width: 34px; padding-right: 0; }
 .cf-act-pick input { width: 17px; height: 17px; accent-color: var(--brand-600, #0f766e); }

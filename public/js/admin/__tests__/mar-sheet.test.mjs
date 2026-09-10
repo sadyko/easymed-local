@@ -96,6 +96,7 @@ const {
     gridHours, splitOrders, groupByKind, hhmm, orderSubtitle, cellGlyph,
     cellStateLabel, cellTitle, marSheetPrintHtml, renderMarSheet, canOpenMarSheet,
     orderHours, gridHoursAny, voidedTrace, voidedTraceLine, cellStateColor, cellStateTone,
+    sheetTally, nowFocus,
 } = sheet;
 
 // ─── данные «сервера» ───────────────────────────────────────────────────────
@@ -654,4 +655,44 @@ test('лист назначений открывают отделение и л�
 
     perms.setFullAccess('Admin');
     assert.strictEqual(canOpenMarSheet(), true);
+});
+
+// ─── MAR_REF_V1 — счётчики и «что горит сейчас» ─────────────────────────────
+//
+// Владелец прислал эталон, где над сеткой стоят «Выполнено 7 · Ожидает 5 ·
+// Задержано 0 · Просрочено 1» и строка «Сейчас 14:29 · Просрочено: …».
+// Проверяется то, ради чего это и делается: цифры совпадают с КЛЕТКАМИ листа,
+// а не считаются вторым способом.
+
+test('MAR_REF_V1: счётчики считают те же клетки, что нарисованы', () => {
+    // Полдень: сегодняшние десять уже прошли (доза введена, перевязка — отказ),
+    // двадцать два ещё впереди.
+    const now = dueMsOf(TODAY, 12);
+    const t = sheetTally([CEF, DRESSING], TODAY, now);
+    assert.equal(t.given, 1, 'введённая доза не сосчитана');
+    assert.equal(t.refused, 1, 'отказ не сосчитан');
+    assert.equal(t.pending, 1, 'дневная точка в 22:00 должна ждать');
+    assert.equal(t.total, 3, 'в счёте оказались лишние или потерянные клетки');
+
+    // Тот же лист на завтра: ни одной отметки, обе дозы ждут.
+    const tomorrow = sheetTally([CEF, DRESSING], TOMORROW, now);
+    assert.equal(tomorrow.given, 0);
+    assert.equal(tomorrow.pending, 2, 'завтрашние дозы должны ждать, а не гореть');
+    assert.equal(tomorrow.overdue, 0, 'завтрашняя доза не может быть просрочена сегодня');
+});
+
+test('MAR_REF_V1: «сейчас» называет просроченное ИМЕНЕМ, а не числом', () => {
+    // Глубокая ночь следующего дня: десятичасовая доза перевязки просрочена
+    // безнадёжно, а сегодняшние двадцать два — тоже.
+    const late = dueMsOf(TODAY, 23) + 60 * 60 * 1000;
+    const f = nowFocus([CEF], TODAY, late);
+    assert.ok(f.overdue.some((x) => /Цефтриаксон/.test(x)), 'просроченная доза не названа: ' + f.overdue.join('; '));
+    assert.ok(f.overdue.some((x) => /22:00/.test(x)), 'у просроченной дозы не названо её время');
+
+    // В час, когда доза только наступила, она не «просрочена», а «в этот час».
+    const atTen = dueMsOf(TOMORROW, 10) + 60 * 1000;
+    const g = nowFocus([CEF], TOMORROW, atTen);
+    assert.equal(g.hour, 10);
+    assert.ok(g.due.some((x) => /Цефтриаксон/.test(x)), 'доза этого часа не названа');
+    assert.equal(g.overdue.length, 0, 'только что наступившая доза не просрочена');
 });

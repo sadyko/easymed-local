@@ -32,12 +32,12 @@ import { caseDocsView, assembleCaseFile, canEditDocSet, caseDocSetDrop, caseDocS
 import { buildReviewEditor } from './admission-modal.js?v=inp2';
 import { docActionsBar, docHeadIds, docHeadFields } from './case-doc-a4.js';   // CASE_DOC_ACTIONS_V1 / A4_LETTERHEAD_V2
 import { caseTabsBar, caseOrdersPanel, caseExamsPanel, caseSurgeryPanel, caseActPanel,
-    actPrintBody, caseBedsPanel, caseMealsPanel, caseInvoicesPanel } from './case-file-tabs.js';   // CASE_FILE_TABS_V1 / ACT_OF_WORKS_V1
+    actPrintBody, caseMealsPanel, caseInvoicesPanel } from './case-file-tabs.js';   // CASE_FILE_TABS_V1 / ACT_OF_WORKS_V1
 import { buildTitleSheetEditor, TITLE_SHEET_KIND } from './title-sheet.js';   // TITLE_SHEET_V1
 import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V2
 import { dateNumeric } from '../../shared/date-words.js';   // A4_LETTERHEAD_V2 — дата рождения числом
 import { shortName, placeLine } from '../../shared/person-name.js';   // PERSON_NAME_SHORT_V1
-import { caseHead, vitalsPanel, openVitalsModal, admissionForModals } from './case-overview.js?v=co1';   // CASE_OVERVIEW_V1 — одна шапка на «Обзор» и «Документы»; VITALS_NEWS_V1 — панель показателей
+import { caseHead } from './case-overview.js?v=co1';   // CASE_OVERVIEW_V1 — одна шапка на «Обзор» и «Документы»
 import { caseInsertPanel } from './case-doc-insert.js';   // CASE_DOC_A4_V1 — правая панель «Вставить в документ»
 import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — диагнозы списком
 import { setupA4Pagination, setupA4Fit } from './a4-paginate.js';   // A4_PAGINATE_V1 / FORM_003_ONE_PAGE_V1
@@ -248,23 +248,8 @@ function paintTab(root, onNavigate) {
     root.appendChild(box);
 
     // CASE_TABS_FULL_V1 — вкладки эталона владельца. Ни одна из них не считает
-    // ничего своего: койки читают журнал переводов, показатели и счета —
-    // готовый обзор, питание — тот же блок стола, что и карточка.
-    if (tab === 'beds') {
-        box.appendChild(caseBedsPanel(state.admissionId, state.overview));
-        return;
-    }
-    if (tab === 'vitals') {
-        // ПАНЕЛЬ ТА ЖЕ, что в обзоре: шкала NEWS одна на систему, и вторая её
-        // отрисовка разошлась бы с первой на первом же пороге.
-        box.appendChild(vitalsPanel(state.overview, {
-            onAdd: () => openVitalsModal({
-                admission: admissionForModals(state.overview),
-                onDone: async () => { await load(); paint(root, onNavigate); },
-            }),
-        }));
-        return;
-    }
+    // ничего своего: счета читают готовый обзор, питание — тот же блок стола,
+    // что и карточка госпитализации.
     if (tab === 'meals') {
         box.appendChild(caseMealsPanel(state.admissionId, state.overview, {
             onChange: async () => { await load(); paint(root, onNavigate); },

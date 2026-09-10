@@ -25,8 +25,6 @@ import { downloadCsv } from '../csv.js';                    // ACT_TABLE_V1 — 
 /** Вкладки истории болезни. Порядок — порядок работы у постели. */
 export const CASE_TABS = Object.freeze([
     { id: 'documents', label: 'Документы',              icon: 'Doc' },
-    { id: 'beds',      label: 'Койки и переводы',       icon: 'Bed' },
-    { id: 'vitals',    label: 'Показатели',             icon: 'Activity' },
     { id: 'orders',    label: 'Лист назначений',        icon: 'Pill' },
     { id: 'exams',     label: 'Обследования и услуги',  icon: 'Flask' },
     // В наборе нет еды; кухонный экран приложения зовёт 'Doc', но здесь он
@@ -610,73 +608,7 @@ export function caseSurgeryPanel(overview, docs, { onDoc = null, onAdd = null, c
 }
 
 // ---------------------------------------------------------------------------
-// 6. Койки и переводы
-// ---------------------------------------------------------------------------
-/* i18n-exempt-start: ключи слева — значения admission_transfers.kind в базе */
-const MOVE_WORD = {
-    admit: 'Размещение', transfer: 'Перевод', return_home: 'Домашний отпуск',
-    discharge: 'Выписка', discharge_cancel: 'Отмена выписки', admitted_at: 'Правка даты поступления',
-};
-/* i18n-exempt-end */
-const bedLine = (ward, bed) => [ward, bed].filter(Boolean).join(' · ') || '—';
-
-/**
- * КОЙКИ И ПЕРЕВОДЫ — лента размещений пациента.
- *
- * CASE_TABS_FULL_V1 — журнал переводов ведётся с самого начала
- * (admission_transfers, миграция 025) и по нему считается проживание, но в
- * истории болезни его было не видно: «где лежит сейчас» знала шапка, «где лежал
- * вчера» — никто. Журнал ДОПИСЫВАЕТСЯ, а не правится, поэтому здесь он только
- * читается: перевод делают в «Стационаре», где для этого есть и койки, и права.
- */
-export function caseBedsPanel(admissionId, overview) {
-    const box = h('section', { class: 'card cf-pane', 'aria-label': tr('Койки и переводы') });
-    box.appendChild(h('div', { class: 'cf-pane-h' }, h('b', null, tr('Койки и переводы'))));
-
-    const a = (overview && overview.admission) || {};
-    box.appendChild(h('div', { class: 'cf-body' },
-        h('div', { class: 'cf-row-t' }, bedLine(a.ward_name, a.bed_code)),
-        h('div', { class: 'cf-row-m' }, tr('Где пациент лежит сейчас'))));
-
-    const body = h('div', { class: 'cf-body' }, h('div', { class: 'cf-row-m' }, tr('Загружаем ленту размещений…')));
-    box.appendChild(body);
-
-    (async () => {
-        const { data, error } = await supabase.from('admission_transfers')
-            .select('id, kind, reason, transferred_at, from_bed_id(code), to_bed_id(code), '
-                  + 'from_ward_id(name), to_ward_id(name)')
-            .eq('admission_id', admissionId).order('transferred_at');
-        clear(body);
-        if (error) {
-            body.appendChild(h('div', { class: 'cf-row-m' },
-                trf('Лента не загрузилась: {msg}', { msg: error.message || '' })));
-            return;
-        }
-        const rows = data || [];
-        if (!rows.length) {
-            body.appendChild(empty('Переводов не было: пациент лежит там же, куда его положили.'));
-            return;
-        }
-        box.appendChild(h('div', { class: 'cf-group' }, tr('Лента размещений')));
-        box.appendChild(h('ul', { class: 'cf-list' }, ...rows.map((r) => {
-            const to = bedLine(r.to_ward_id && r.to_ward_id.name, r.to_bed_id && r.to_bed_id.code);
-            const from = bedLine(r.from_ward_id && r.from_ward_id.name, r.from_bed_id && r.from_bed_id.code);
-            return h('li', { class: 'cf-row' },
-                h('div', { class: 'cf-row-main' },
-                    h('div', { class: 'cf-row-t' }, tr(MOVE_WORD[r.kind] || MOVE_WORD.transfer)),
-                    h('div', { class: 'cf-row-m' }, r.kind === 'transfer' && from !== '—'
-                        ? trf('{from} → {to}', { from, to })
-                        : to),
-                    r.reason ? h('div', { class: 'cf-row-m' }, r.reason) : null),
-                h('span', { class: 'cf-when' }, when(r.transferred_at)));
-        })));
-    })();
-
-    return box;
-}
-
-// ---------------------------------------------------------------------------
-// 7. Питание
+// 6. Питание
 // ---------------------------------------------------------------------------
 /**
  * ПИТАНИЕ — действующий стол, его история и сегодняшние отметки.
@@ -724,7 +656,7 @@ export function caseMealsPanel(admissionId, overview, { onChange = null } = {}) 
 }
 
 // ---------------------------------------------------------------------------
-// 8. Счета
+// 7. Счета
 // ---------------------------------------------------------------------------
 /* i18n-exempt-start: ключи слева — значения invoices.status в базе */
 const INV_WORD = {

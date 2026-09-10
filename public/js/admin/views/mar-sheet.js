@@ -37,7 +37,7 @@
 // живут в схеме и в CHECK миграции 093, а здесь только повторены для формы.
 
 import { supabase } from '../../supabase.js';
-import { h, Icon, Tag, clear, toast, field, PageHead, initials } from '../ui.js';
+import { h, Icon, Tag, clear, toast, field, PageHead, initials, fmtDateTime } from '../ui.js';   // MAR_REF_V1 — время последнего измерения
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { isModuleAllowed } from '../permissions.js';
 import { inpatientModal, patientAnchor } from './admission-modal.js?v=inp5';
@@ -273,6 +273,53 @@ export function gridHoursAny(orders, date) {
     const set = new Set();
     for (const o of orders || []) for (const sl of orderHours(o, date)) set.add(sl);
     return [...set].sort((a, b) => a - b);
+}
+
+/**
+ * СЧЁТ ПО ЛИСТУ ЗА ДАТУ: сделано, ждёт, задержано, просрочено.
+ *
+ * MAR_REF_V1 — в эталоне владельца это первое, что видно над сеткой, и не зря:
+ * сестра приходит на смену с одним вопросом — «что горит». Раньше лист отвечал
+ * на него только глазами: цвета клеток были, счёта не было.
+ *
+ * Считается ТЕМИ ЖЕ клетками, что рисуются (cellFor): вторая арифметика поверх
+ * той же сетки разошлась бы с ней ровно на границе часа, когда «ожидает»
+ * становится «просрочено», — то есть в единственный момент, ради которого
+ * счётчик и смотрят.
+ */
+export function sheetTally(orders, date, nowMs) {
+    const out = { given: 0, pending: 0, delayed: 0, overdue: 0, refused: 0, held: 0, missed: 0, total: 0 };
+    for (const o of orders || []) {
+        for (const slot of orderHours(o, date)) {
+            const c = cellFor(o, date, slot, nowMs);
+            if (!c || c.state === 'none') continue;
+            if (out[c.state] === undefined) continue;
+            out[c.state] += 1;
+            out.total += 1;
+        }
+    }
+    return out;
+}
+
+/**
+ * ЧТО ГОРИТ ПРЯМО СЕЙЧАС: просроченные дозы и дозы этого часа.
+ *
+ * Возвращает имена, а не числа: «просрочено 1» заставляет искать глазами по
+ * сетке, «Просрочено: Омепразол 20 мг 10:00» — не заставляет.
+ */
+export function nowFocus(orders, date, nowMs) {
+    const hour = new Date(nowMs).getHours();
+    const overdue = [], due = [];
+    for (const o of orders || []) {
+        for (const slot of orderHours(o, date)) {
+            const c = cellFor(o, date, slot, nowMs);
+            if (!c) continue;
+            const label = (o.name || '') + (Number.isFinite(slot) ? ' ' + String(slot).padStart(2, '0') + ':00' : '');
+            if (c.state === 'overdue') overdue.push(label);
+            else if (Number(slot) === hour && (c.state === 'pending' || c.state === 'delayed')) due.push(label);
+        }
+    }
+    return { hour, overdue, due };
 }
 
 /**
@@ -669,6 +716,7 @@ export async function renderMarSheet(root, ctx = {}) {
     const state = {
         admissionId, date: todayLocal(), showCancelled: false,
         sheet: null, admission: null, people: new Map(),
+        overview: null,   // MAR_REF_V1 — витальные строкой: те же, что в «Показателях»
     };
     state.people = await loadPeople();
 
@@ -690,9 +738,15 @@ export async function renderMarSheet(root, ctx = {}) {
         // include_cancelled: отменённые приезжают ВСЕГДА — иначе переключатель
         // «Показать отменённые · N» не знал бы своего N и требовал бы второго
         // запроса ровно за тем, что уже посчитано.
-        const { data, error } = await supabase.rpc('treatment_orders_list', {
-            admission_id: state.admissionId, from: state.date, to: state.date, include_cancelled: true,
-        });
+        const [{ data, error }, { data: ov }] = await Promise.all([
+            supabase.rpc('treatment_orders_list', {
+                admission_id: state.admissionId, from: state.date, to: state.date, include_cancelled: true,
+            }),
+            // Отказ по роли здесь не беда: без обзора строка витальных просто
+            // не рисуется, а лист назначений остаётся листом назначений.
+            supabase.rpc('admission_overview', { admission_id: state.admissionId }),
+        ]);
+        state.overview = ov || null;
         clear(body);
         if (error || !data) {
             body.appendChild(h('div', { class: 'card', style: { padding: '18px' } },
@@ -755,6 +809,93 @@ export async function renderMarSheet(root, ctx = {}) {
                     : tr('лечащий врач не назначен'),
             ].filter(Boolean).join(' · '))));
         headBox.appendChild(dayBar());
+        headBox.appendChild(tallyBar());
+        const vit = vitalsStrip();
+        if (vit) headBox.appendChild(vit);
+    }
+
+    /**
+     * Счётчики и строка «сейчас» — первое, что читают, войдя в палату.
+     *
+     * Строка «сейчас» показывается ТОЛЬКО за сегодня: «просрочено» у вчерашнего
+     * листа — это не работа, которая ждёт, а история, и подгонять ею сестру
+     * значит приучить её не верить красному.
+     */
+    function tallyBar() {
+        const orders = (state.sheet && state.sheet.orders) || [];
+        const { scheduled } = splitOrders(orders);
+        const nowMs = Date.now();
+        const t = sheetTally(scheduled, state.date, nowMs);
+        const chip = (label, n, st) => h('span', {
+            class: 'mar-tchip' + (n ? ' on' : ''),
+            style: n ? { color: cellStateColor(st).fg, background: cellStateColor(st).bg } : null,
+        }, tr(label), h('b', null, String(n)));
+
+        const box = h('div', { class: 'card mar-tally' },
+            chip('Выполнено', t.given, 'given'),
+            chip('Ожидает', t.pending, 'pending'),
+            chip('Задержано', t.delayed, 'delayed'),
+            chip('Просрочено', t.overdue, 'overdue'),
+            (t.refused + t.held + t.missed)
+                ? chip('Не введено', t.refused + t.held + t.missed, 'refused') : null);
+
+        if (state.date === todayLocal()) {
+            const f = nowFocus(scheduled, state.date, nowMs);
+            const now = new Date(nowMs);
+            const hhmm = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+            const line = h('div', { class: 'mar-now' },
+                h('b', null, trf('Сейчас {time}', { time: hhmm })));
+            if (f.overdue.length) {
+                line.appendChild(h('span', { class: 'mar-now-hot' },
+                    trf('Просрочено: {list}', { list: f.overdue.join(', ') })));
+            }
+            if (f.due.length) {
+                line.appendChild(h('span', { class: 'mar-now-due' },
+                    trf('В этот час: {list}', { list: f.due.join(', ') })));
+            }
+            if (!f.overdue.length && !f.due.length) {
+                line.appendChild(h('span', { class: 'muted' }, tr('в этот час дозы не ждут')));
+            }
+            box.appendChild(line);
+        }
+        return box;
+    }
+
+    /**
+     * Витальные строкой над сеткой — как в эталоне.
+     *
+     * Значения ТЕ ЖЕ, что в «Показателях» истории болезни: их присылает
+     * admission_overview, и считать их здесь заново незачем. Чего в строке нет:
+     * ДИУРЕЗА И ВОДНОГО БАЛАНСА — в измерениях таких полей сегодня нет вовсе,
+     * и написать «—» вместо них значило бы пообещать сестре учёт, которого не
+     * ведётся.
+     */
+    function vitalsStrip() {
+        const v = (state.overview && state.overview.vitals) || null;
+        const last = v && v.last;
+        if (!last) return null;
+        const cell = (label, value, unit) => (value === null || value === undefined || value === ''
+            ? null
+            : h('span', { class: 'mar-vit' },
+                h('span', { class: 'mar-vit-l' }, tr(label)),
+                h('b', null, String(value)),
+                unit ? h('span', { class: 'mar-vit-u' }, tr(unit)) : null));
+        const bp = (last.bp_sys && last.bp_dia) ? last.bp_sys + '/' + last.bp_dia : null;
+        const cells = [
+            cell('Температура', last.temp_c, '°C'),
+            cell('АД', bp, 'мм рт. ст.'),
+            cell('Пульс', last.pulse_bpm, '/мин'),
+            cell('ЧДД', last.resp_rate, '/мин'),
+            cell('SpO₂', last.spo2, '%'),
+        ].filter(Boolean);
+        if (!cells.length) return null;
+        return h('div', { class: 'card mar-vitals' },
+            h('span', { class: 'mar-vit-h' }, Icon('Pulse', { size: 14 }), ' ', tr('Витальные')),
+            ...cells,
+            h('span', { class: 'grow' }),
+            last.measured_at
+                ? h('span', { class: 'muted' }, trf('обновлено {when}', { when: fmtDateTime(last.measured_at) }))
+                : null);
     }
 
     function dayBar() {

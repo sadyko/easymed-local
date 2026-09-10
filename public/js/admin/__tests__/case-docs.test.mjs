@@ -481,7 +481,7 @@ test('список редакций раскрывается кнопкой с a
 test('CASE_FILE_TABS_V1: вкладки истории болезни идут порядком работы у постели', async () => {
     const tabs = await import('../views/case-file-tabs.js');
     assert.deepEqual(tabs.CASE_TABS.map((t) => t.id),
-        ['documents', 'beds', 'vitals', 'orders', 'exams', 'meals', 'surgery', 'act', 'invoices']);
+        ['documents', 'orders', 'exams', 'meals', 'surgery', 'act', 'invoices']);
 
     // Полоса — системная (.tabs/.tab), как во всех разделах приложения.
     const picked = [];

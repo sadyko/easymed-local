@@ -79,7 +79,7 @@ globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     let body = {}; try { body = JSON.parse(opts.body || '{}'); } catch { /* не наш запрос */ }
     const ok = (data) => ({ ok: true, status: 200, json: async () => ({ data }), headers: { getSetCookie: () => [] } });
-    if (u.startsWith('/api/db')) return ok(body.table === 'admission_transfers' ? TRANSFERS : []);
+    if (u.startsWith('/api/db')) return ok([]);
     if (!u.startsWith('/api/rpc/')) return { ok: false, status: 400, json: async () => ({ error: { message: 'unexpected ' + u } }), headers: { getSetCookie: () => [] } };
     const name = u.slice('/api/rpc/'.length);
     if (name === 'admission_doc_sources') return ok(SOURCES);
@@ -90,9 +90,8 @@ globalThis.fetch = async (url, opts = {}) => {
 
 const rpc = [];
 let SOURCES = { lab: [], imaging: [], functional: [] };
-let TRANSFERS = [];
 const { caseExamsPanel, caseSurgeryPanel, caseOrdersPanel, caseActPanel,
-    caseBedsPanel, caseInvoicesPanel } = await import('../views/case-file-tabs.js');
+    caseInvoicesPanel } = await import('../views/case-file-tabs.js');
 
 /** Акт, каким его присылает сервер: у строки есть раздел справочника. */
 const CHARGES = {
@@ -231,24 +230,6 @@ test('без отметок счёт выставляется на всё нев
     await settle();
     findBtn(box, 'Выставить счёт').click();
     assert.equal(got, null, 'экран сам решил, какие строки выставлять, вместо «всё невыставленное»');
-});
-
-test('койки и переводы: где лежит сейчас и вся лента перемещений', async () => {
-    TRANSFERS = [
-        { id: 1, kind: 'admit', reason: '', transferred_at: '2026-09-08T09:00:00Z',
-          from_bed_id: null, to_bed_id: { code: 'X-2' }, from_ward_id: null, to_ward_id: { name: 'Хирургия' } },
-        { id: 2, kind: 'transfer', reason: 'нужен монитор', transferred_at: '2026-09-09T14:00:00Z',
-          from_bed_id: { code: 'X-2' }, to_bed_id: { code: 'R-1' },
-          from_ward_id: { name: 'Хирургия' }, to_ward_id: { name: 'Реанимация' } },
-    ];
-    const box = caseBedsPanel(11, { admission: { ward_name: 'Реанимация', bed_code: 'R-1' } });
-    await settle();
-    const t = textOf(box);
-    assert.ok(t.includes('Реанимация'), 'не сказано, где пациент лежит сейчас');
-    assert.ok(t.includes('Размещение'), 'первое размещение не показано');
-    assert.ok(t.includes('Перевод'), 'перевод не показан');
-    assert.ok(t.includes('нужен монитор'), 'причина перевода потерялась — по ней и читают ленту');
-    TRANSFERS = [];
 });
 
 test('счета: номер, суммы и долг — теми же цифрами, что у кассы', () => {
