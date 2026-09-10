@@ -49,7 +49,7 @@ const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагнос
 //      lab-section role (LAB_PANELS_BY_SECTION_V1).
 // v8 = one shared page head for queue+panels; marker moved off-screen into
 //      the data-attribute above; queue filter chips translate label-then-count.
-export const LAB_BUILD = 'lab-v8';
+export const LAB_BUILD = 'lab-v9';   // LIS_INGEST_V1 — выбор анализатора и колонка «Поле анализатора»
 
 // Mounts the editor into `container` and resolves once the first load has
 // painted — the caller can await it and know the screen is settled.
@@ -784,7 +784,7 @@ export async function mountLabPanels(container) {
     function deviceCell(r) {
         const channels = deviceChannels();
         if (!state.selected || !state.selected.device_id) {
-            return h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'выберите анализатор');
+            return h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('укажите «Анализатор» над таблицей'));
         }
         if (!channels.length) {
             return h('input', {

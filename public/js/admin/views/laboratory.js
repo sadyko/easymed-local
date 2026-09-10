@@ -35,8 +35,8 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { printBarcodeLabel } from './lab-barcode.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // same URL as patient-card/service-workspace (one instance)
 import { canDelete, canEditLabPanels } from '../permissions.js';   // LAB_PANELS_BY_SECTION_V1 — the gate IS lab-section access (same predicate as the sidebar)
-import { mountLabPanels, LAB_BUILD } from './lab-panels.js';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now
-import { mountLabDevices, stopLabDevicesLive } from './lab-devices.js';   // LIS_INGEST_V1 — «Анализаторы»: приборы клиники, живая лента и лоток непринятых сообщений
+import { mountLabPanels, LAB_BUILD } from './lab-panels.js?v=lisfields1';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now
+import { mountLabDevices, stopLabDevicesLive } from './lab-devices.js?v=lisfields1';   // LIS_INGEST_V1 — «Анализаторы»: приборы клиники, живая лента и лоток непринятых сообщений
 // ?v= is required here, not decorative: this module gained selectOptionsFor, and a
 // browser holding the older cached copy would fail the named import and blank the view.
 import { pluralRu, groupLabRows, selectOptionsFor,
