@@ -80,6 +80,18 @@ const walk = (e, out = []) => { if (!e || typeof e !== 'object') return out; out
 const buttons = (root) => walk(root).filter((e) => e.tagName === 'BUTTON');
 const nameOf = (b) => (b.getAttribute('aria-label') || b.textContent || '').trim();
 
+// ACT_OF_WORKS_V1 — вкладка акта СПРАШИВАЕТ сервер, поэтому у стенда есть
+// ответчик: имя вызова → готовый ответ. Никакой сети, никаких выдумок за
+// сервер — ровно тот кусок JSON, который он отдаёт.
+const rpcAnswers = {};
+globalThis.fetch = async (url, opts = {}) => {
+    const u = String(url);
+    const ok = (data) => ({ ok: true, status: 200, json: async () => ({ data }), headers: { getSetCookie: () => [] } });
+    if (u.startsWith('/api/rpc/')) return ok(rpcAnswers[u.slice('/api/rpc/'.length)] ?? null);
+    return ok(null);
+};
+const settle = () => new Promise((r) => setTimeout(r, 30));
+
 const view = await import('../views/case-docs.js');
 const server = await import('../../../../server/services/rpc/inpatient-reviews.js');
 const { TITLE_KIND } = await import('../../../../server/services/rpc/title-sheet.js');   // TITLE_SHEET_V1
@@ -465,14 +477,14 @@ test('список редакций раскрывается кнопкой с a
 // tabs for navigation: documents, prescriptions, examinations and lab, surgery».
 test('CASE_FILE_TABS_V1: четыре вкладки, и каждая показывает СВОИ данные, не выдумывая их', async () => {
     const tabs = await import('../views/case-file-tabs.js');
-    assert.deepEqual(tabs.CASE_TABS.map((t) => t.id), ['documents', 'orders', 'exams', 'surgery']);
+    assert.deepEqual(tabs.CASE_TABS.map((t) => t.id), ['documents', 'orders', 'exams', 'surgery', 'act']);
 
     // Полоса — системная (.tabs/.tab), как во всех разделах приложения.
     const picked = [];
     const bar = tabs.caseTabsBar({ active: 'orders', onPick: (id) => picked.push(id) });
     assert.ok(String(bar.className).split(/\s+/).includes('tabs'), 'полоса вкладок не системная');
     const btns = walk(bar).filter((e) => e.tagName === 'BUTTON');
-    assert.equal(btns.length, 4);
+    assert.equal(btns.length, 5);
     assert.equal(btns[1].getAttribute('aria-selected'), 'true', 'открытая вкладка не помечена');
     btns[0].click();
     assert.deepEqual(picked, ['documents']);
@@ -500,6 +512,50 @@ test('CASE_FILE_TABS_V1: четыре вкладки, и каждая показ
     walk(surgery).filter((e) => e.tagName === 'BUTTON')[0].click();
     assert.ok(['anesthesia', 'preop', 'operation'].includes(docOpened[0]),
         'кнопка документа операции должна открывать документ: ' + docOpened[0]);
+});
+
+// ACT_OF_WORKS_V1 — владелец: «act of done things». Акт показывает начисленное
+// построчно и НЕ СЧИТАЕТ САМ: суммы приходят с сервера.
+test('ACT_OF_WORKS_V1: акт показывает строки и итоги сервера, а пустой честно молчит', async () => {
+    const tabs = await import('../views/case-file-tabs.js');
+    assert.ok(tabs.CASE_TABS.some((t) => t.id === 'act'), 'вкладки акта нет');
+
+    // Ответ сервера — тот же, что отдаёт admission_charges.
+    const answer = {
+        lines: [
+            { id: 1, kind: 'stay', name: 'Проживание · Палата 1 · 2 сут. × 200000', quantity: 2,
+              unit: '', unit_price: 200000, total: 400000, billable: true, invoice_number: '', locked: false },
+            { id: 2, kind: 'item', name: 'Система для инфузий', quantity: 3, unit: 'шт.',
+              unit_price: 7000, total: 21000, billable: false, invoice_number: '', locked: false },
+            { id: 3, kind: 'service', name: 'Перевязка', quantity: 1, unit: '', unit_price: 50000,
+              total: 50000, billable: true, invoice_number: 'СЧ-00041', locked: true },
+        ],
+        totals: { accrued: 471000, billable: 450000, invoiced: 50000, pending: 400000, not_billable: 21000, lines: 3 },
+    };
+    rpcAnswers.admission_charges = answer;
+
+    const panel = tabs.caseActPanel(13, { onInvoice: () => {}, onAddExpense: () => {} });
+    await settle();
+    const t = panel.textContent;
+    for (const piece of ['Система для инфузий', 'Перевязка', 'СЧ-00041', 'шт.']) {
+        assert.ok(t.includes(piece), 'в акте нет: ' + piece);
+    }
+    // Суммы — те, что прислал сервер, и в том виде, в каком их читает касса.
+    for (const piece of ['471 000', '400 000', '50 000', '21 000']) {
+        assert.ok(t.includes(piece), 'итог не показан: ' + piece);
+    }
+    assert.ok(t.includes('Начислено') && t.includes('К выставлению') && t.includes('В счетах'),
+        'итоги не подписаны');
+
+    // Строка, уже попавшая в счёт, не предлагает себя выключить: за ней деньги.
+    const btns = walk(panel).filter((e) => e.tagName === 'BUTTON').map((b) => nameOf(b));
+    assert.ok(!btns.some((n) => /Перевязка/.test(n)), 'у выставленной строки появилась кнопка');
+
+    // Пустой акт говорит, что начислений нет, а не рисует пустую таблицу.
+    rpcAnswers.admission_charges = { lines: [], totals: { accrued: 0, pending: 0, invoiced: 0, not_billable: 0, lines: 0 } };
+    const bare = tabs.caseActPanel(13, {});
+    await settle();
+    assert.match(bare.textContent, /ещё ничего не начислено/i);
 });
 
 // CASE_DOC_LIST_QUIET_V1 — владелец показал на пустой блок «Прочие документы»

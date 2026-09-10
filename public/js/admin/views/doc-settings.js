@@ -49,8 +49,9 @@ export const DEFAULT_DOC_SETTINGS = {
 
     showWatermark:    true,
     watermarkOpacity: 0.04,     // 0–0.20 — faintness of the logo watermark
-    showStamp:        true,
-    showSignature:    true,
+    // NO_FAKE_MARKS_V1 — showStamp / showSignature / showQR больше нет: ни
+    // печати, ни росчерка, ни QR на бумаге не рисуется. Настройка, которой
+    // нечем управлять, — обещание.
 
     language:    'en',
     paperSize:   'A4',          // A4 / A5 / Letter

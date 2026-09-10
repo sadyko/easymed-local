@@ -564,65 +564,33 @@ function watermarkMark(s) {
     }
     return watermarkSVG(s.accent);
 }
-function stampSVG(accent) {
-    return `<div style="width:96px;height:96px;border-radius:50%;border:2.5px solid ${accent};opacity:0.85;display:grid;place-items:center;transform:rotate(-7deg);position:relative;box-shadow:inset 0 0 0 6px white, inset 0 0 0 7px ${accent};">
-        <svg viewBox="0 0 100 100" width="92" height="92" style="position:absolute;inset:0;">
-            <defs><path id="circ" d="M50,50 m -34,0 a 34,34 0 1,1 68,0 a 34,34 0 1,1 -68,0"/></defs>
-            <text fill="${accent}" font-family="Inter, sans-serif" font-size="8.4" font-weight="700" letter-spacing="1.2">
-                <textPath href="#circ" startOffset="2%">CLINIC SEAL · APPROVED · CONFIDENTIAL ·</textPath>
-            </text>
-        </svg>
-        <div style="text-align:center;color:${accent};font-family: ui-monospace, JetBrains Mono, monospace;">
-            <div style="font-size:8px;font-weight:700;letter-spacing:0.1em;">EASY-MED</div>
-            <div style="font-size:13px;font-weight:700;">✚</div>
-            <div style="font-size:7.5px;font-weight:700;">${new Date().getFullYear()}</div>
-        </div>
-    </div>`;
-}
-function signatureSVG(accent) {
-    return `<svg viewBox="0 0 140 40" width="140" height="40">
-        <path d="M4 28 C 12 18, 18 8, 28 18 C 36 28, 30 32, 38 26 C 46 20, 50 14, 58 22 C 64 28, 72 30, 80 22 C 86 16, 92 20, 102 28 C 110 34, 118 20, 134 12" fill="none" stroke="${accent}" stroke-width="1.6" stroke-linecap="round"/>
-        <path d="M4 34 L 134 34" stroke="#aab4bc" stroke-width="0.5" stroke-dasharray="2 2"/>
-    </svg>`;
-}
-function qrBlock(accent) {
-    // Deterministic pseudo-random dot pattern — same generator the sample
-    // uses so the QR pattern stays recognisable even though it's not a
-    // real verification code.
-    let dots = '';
-    for (let i = 0; i < 80; i++) {
-        const x = 9 + (i % 12);
-        const y = 9 + Math.floor(i / 12);
-        if ((x * 7 + y * 13) % 5 < 2) continue;
-        if (x > 20 || y > 20) continue;
-        dots += `<rect x="${x}" y="${y}" width="1" height="1" fill="${accent}"/>`;
-    }
-    return `<div style="display:flex;align-items:center;gap:10px;">
-        <svg width="56" height="56" viewBox="0 0 24 24" style="flex:0 0 56px;">
-            <rect x="0" y="0" width="24" height="24" fill="white"/>
-            ${[[0,0],[17,0],[0,17]].map(([x,y]) => `<g>
-                <rect x="${x}" y="${y}" width="7" height="7" fill="${accent}"/>
-                <rect x="${x+1}" y="${y+1}" width="5" height="5" fill="white"/>
-                <rect x="${x+2}" y="${y+2}" width="3" height="3" fill="${accent}"/>
-            </g>`).join('')}
-            ${dots}
-        </svg>
-        <div style="font-size:9.5px;color:#55636d;line-height:1.55;max-width:130px;">
-            <div style="color:${accent};font-weight:700;text-transform:uppercase;letter-spacing:0.08em;">Verify</div>
-            Scan to verify authenticity. Document hash auto-recorded on issue.
-        </div>
-    </div>`;
-}
+// NO_FAKE_MARKS_V1 (2026-09-10) — НАРИСОВАННОЙ ПОДПИСИ, ПЕЧАТИ И QR НА БУМАГЕ
+// БОЛЬШЕ НЕТ. Владелец: «we need to remove qr codes and the signatures from all
+// the documents».
+//
+// Это не косметика. Каждый из трёх знаков УТВЕРЖДАЛ ТО, ЧЕГО НЕ БЫЛО:
+//
+//   • подпись — росчерк, одинаковый на всех документах клиники и не
+//     принадлежащий никому;
+//   • печать — круг «CLINIC SEAL · APPROVED · CONFIDENTIAL», который никто не
+//     ставил и который ничего не утверждал;
+//   • QR — узор из псевдослучайных точек с подписью «отсканируйте, чтобы
+//     проверить подлинность; хеш документа записан при выдаче». Ни хеша, ни
+//     записи, ни сканируемого кода не существовало.
+//
+// Медицинский документ, на котором нарисована чужая подпись и печать, — это не
+// оформление, это подделка вида. Осталось то, что настоящее: имя врача,
+// специальность и номер лицензии, если они у документа есть.
+
 function signoffHTML(s, { signerName, signerSpec, signerLicense }) {
+    // Ни одного знака, которого никто не ставил: только имя, специальность и
+    // лицензия — и только если они у документа есть. Пустой блок не рисуется
+    // вовсе: пустая рамка под подпись выглядит как забытое поле.
+    if (!signerName && !signerLicense) return '';
     return `<div class="signoff">
         <div style="flex:1;">
-            ${s.showSignature ? signatureSVG(s.accent) : ''}
             ${signerName ? `<div class="who">${esc(signerName)}${signerSpec ? ` · ${esc(signerSpec)}` : ''}</div>` : ''}
             ${signerLicense ? `<div class="lic">${esc(signerLicense)}</div>` : ''}
-        </div>
-        <div style="display:flex;gap:14px;align-items:flex-end;">
-            ${s.showQR ? qrBlock(s.accent) : ''}
-            ${s.showStamp ? stampSVG(s.accent) : ''}
         </div>
     </div>`;
 }

@@ -663,19 +663,20 @@ export function vitalsPanel(ov, { onAdd, onDynamics = null } = {}) {
                     : tr('Измерения вносят, пока пациент на койке.'))));
     }
 
-    // Чипы по параметрам: значение и очки. Порядок — как на скриншоте.
-    const chip = (label, value, pts) => h('span', { class: 'vt-chip' + (pts ? ' vt-' + pointsTone(pts) : ''), title: label },
-        label + ' ' + value + ' (' + (pts > 0 ? '+' + pts : '0') + ')');
+    // CASE_DASH_FIT_V2 (2026-09-10) — ЧИПОВ ПО ПАРАМЕТРАМ БОЛЬШЕ НЕТ. Владелец:
+    // «the current dashboard is not fit in the viewport».
+    //
+    // Строка чипов перечисляла ЧДД, SpO₂, температуру, давление, пульс,
+    // сознание и кислород с очками — а прямо под ней те же пять показателей
+    // стоят крупными плитками, с теми же числами и теми же очками. Экран
+    // говорил одно и то же дважды и стоил обзору полосы, которой ему не
+    // хватало, чтобы поместиться целиком.
+    //
+    // Очки за сознание и кислород не потерялись: они входят в общий балл NEWS,
+    // который стоит первой строкой, а разбор по параметрам — в «Динамике».
+    // Очки по параметрам нужны плиткам ниже: их считает сервер (news.parts),
+    // и второй раз здесь их никто не выводит.
     const p = news.parts || {};
-    const chips = [
-        isNumV(last.resp_rate) ? chip(tr('ЧДД'), last.resp_rate, p.resp_rate) : null,
-        isNumV(last.spo2) ? chip('SpO₂', last.spo2, p.spo2) : null,
-        isNumV(last.temp_c) ? chip(tr('Темп'), String(last.temp_c).replace('.', ','), p.temp_c) : null,
-        isNumV(last.bp_sys) ? chip(tr('АД'), last.bp_sys, p.bp_sys) : null,
-        isNumV(last.pulse_bpm) ? chip(tr('Пульс'), last.pulse_bpm, p.pulse_bpm) : null,
-        last.consciousness ? chip(tr('Сознание'), tr(CONSCIOUSNESS_RU[last.consciousness] || last.consciousness), p.consciousness) : null,
-        h('span', { class: 'vt-chip' + (p.on_oxygen ? ' vt-warn2' : '') }, 'O₂ ' + (last.on_oxygen ? tr('да') : tr('нет')) + ' (' + (p.on_oxygen ? '+2' : '0') + ')'),
-    ].filter(Boolean);
     const totals = (v.series || []).map((r) => (r.news ? r.news.total : null));
     // VITALS_COMPACT_V1 — владелец: «remove this circle»: балл идёт словами в
     // строке уровня («NEWS 5 · Средний риск»), кружка нет.
@@ -683,8 +684,7 @@ export function vitalsPanel(ov, { onAdd, onDynamics = null } = {}) {
         h('div', { class: 'vt-band' },
             h('div', { class: 'vt-band-t' }, h('span', { class: 'vt-news' }, 'NEWS ' + news.total), ' · ', tr(band.label),
                 news.complete ? null : h('span', { class: 'vt-partial' }, ' · ' + tr('измерение неполное'))),
-            h('div', { class: 'vt-band-a' }, tr(band.advice)),
-            h('div', { class: 'vt-chips' }, ...chips)),
+            h('div', { class: 'vt-band-a' }, tr(band.advice))),
         h('div', { class: 'vt-trend' },
             // CASE_DASH_QUIET_V1 — владелец: «remove graph in the screenshot».
             // График на 120 px по последним измерениям не отвечал ни на один

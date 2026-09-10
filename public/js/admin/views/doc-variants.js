@@ -35,8 +35,10 @@ function logoTag(s, px) {
     </div>`;
 }
 function toggleCls(s) {
-    // STAMP_ONLY_V1 — signature + QR removed app-wide; only the stamp circle remains on documents.
-    return [s.showStamp !== false ? 'show-stamp' : ''].filter(Boolean).join(' ');
+    // NO_FAKE_MARKS_V1 — не осталось и печати: круг «CLINIC SEAL · APPROVED»
+    // никто не ставил, а бумага утверждала обратное. Класс больше не выдаётся;
+    // правила .show-stamp в макетах остаются мёртвыми и никого не рисуют.
+    return '';
 }
 
 // ECONOMY_BW_V1 — «Компактный · эконом» on a black-and-white printer came out as

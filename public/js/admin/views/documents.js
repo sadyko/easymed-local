@@ -237,7 +237,6 @@ function settingsPanel() {
         editorCard('Elements', 'Filter', [
             toggle('Watermark',         'showWatermark'),
             state.s.showWatermark ? watermarkOpacityControl() : null,
-            toggle('Doctor signature',  'showSignature'),
         ]),
         editorCard('Footer copy', 'Doc', [
             field('Thank-you note',  'footerNote', { multi: true }),
