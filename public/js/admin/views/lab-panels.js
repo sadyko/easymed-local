@@ -453,6 +453,15 @@ export async function mountLabPanels(container) {
             fld('Тип', modSel),
             fld('Привязанная услуга', h('div', null, svcSearch, svcSel),
                 'Когда регистратура добавит эту услугу в визит и касса примет оплату, заказ появится в «Лаборатории» с показателями этой панели.')));
+        // LIS_INGEST_V1 — какой прибор кормит эту панель. Стоит ОТДЕЛЬНОЙ строкой
+        // над таблицей показателей, а не в сетке выше: пока анализатор не выбран,
+        // колонка «Поле анализатора» у каждой строки пуста, и человек обязан
+        // видеть причину рядом с таблицей, а не искать её среди реквизитов.
+        body.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px', marginTop: '12px' } },
+            fld(tr('Анализатор'), devSel,
+                state.devices.length
+                    ? tr('Выберите прибор — тогда у каждого показателя можно указать, какое поле анализатора его заполняет.')
+                    : tr('Приборов пока нет. Запустите пробу на анализаторе — он появится сам во вкладке «Анализаторы».'))));
 
         // Says plainly whether the link is actually wired up. Without this the two
         // failure modes are silent: an unlinked panel is never ordered by anyone, and

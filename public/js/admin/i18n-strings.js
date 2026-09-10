@@ -3,6 +3,9 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  "Анализатор": {"en":"Analyzer","ru":"Анализатор","uz":"Analizator"},
+  "Выберите прибор — тогда у каждого показателя можно указать, какое поле анализатора его заполняет.": {"en":"Pick a device — then each indicator can say which analyzer field fills it.","ru":"Выберите прибор — тогда у каждого показателя можно указать, какое поле анализатора его заполняет.","uz":"Qurilmani tanlang — shunda har bir korsatkich uchun uni qaysi analizator maydoni toldirishini korsatish mumkin."},
+  "Приборов пока нет. Запустите пробу на анализаторе — он появится сам во вкладке «Анализаторы».": {"en":"No devices yet. Run a sample on the analyzer — it will appear by itself on the «Анализаторы» tab.","ru":"Приборов пока нет. Запустите пробу на анализаторе — он появится сам во вкладке «Анализаторы».","uz":"Hozircha qurilmalar yoq. Analizatorda namunani ishga tushiring — u «Analizatorlar» yorligida ozi paydo boladi."},
   // LIS_AUTODISCOVER_V1 (2026-09-10) — живая лента и самоопределение приборов
   "Что приходит с приборов": {"en":"What the devices are sending","ru":"Что приходит с приборов","uz":"Qurilmalardan nima kelmoqda"},
   "обновляется само": {"en":"refreshes itself","ru":"обновляется само","uz":"o‘zi yangilanadi"},
