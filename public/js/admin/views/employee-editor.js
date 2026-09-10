@@ -268,7 +268,6 @@ export function buildEmp(row, lookups) {
         });
     };
     const services         = buildRates(r.service_rates,  'price', true);   // performed
-    const referralServices = buildRates(r.referral_rates, 'fixed', false);  // referral reward
 
     // Name parts. Prefer the dedicated columns (migration 026); fall back to
     // splitting full_name (1st token = surname, 2nd = name, rest = patronymic).
@@ -305,7 +304,6 @@ export function buildEmp(row, lookups) {
         kpis:        new Set(Array.isArray(r.kpi_links) ? r.kpi_links : []),
         days,
         services,
-        referralServices,
         username:    r.username || '',
         password:    '',
         role_id:     r.role_id || '',
@@ -546,7 +544,7 @@ function sectionComplete(emp, id) {
         }
         case 'schedule': return emp.days.some(d => d.on);
         case 'services': return emp.services.some(s => s.on);
-        case 'referral': return emp.referralServices.some(s => s.on);
+        case 'referral': return !!(emp.referralReward && emp.referralReward.mode === 'own');   // INTERNAL_REFERRAL_V1
         case 'login':    return true;   // EMP_ROLE_IN_JOB_V1 — Role moved to Job; Login has only optional username/password.
         default: return false;
     }
@@ -941,11 +939,7 @@ const SECTION_RENDERERS = {
         priceLabel: 'Price', pctLabel: '% of doctor',
     }),
 
-    referral: (ctx) => ratesSection(ctx, {
-        arrayKey: 'referralServices', icon: 'Coins', title: 'Referral rewards',
-        sub: 'What this doctor earns when they refer a patient to another service (via “Refer to”). Applied when this doctor is the referral source on the patient’s visit — set per service, fixed amount and/or % of price.',
-        priceLabel: 'Reward (UZS)', pctLabel: '% of price',
-    }),
+    referral: (ctx) => internalReferralSection(ctx),
 
     login: ({ emp, set, markDirty, lookups }) => h('div', { class: 'fade-in' },
         secHead('Settings', 'Login & access', 'Credentials used at sign-in and the access role.'),
@@ -1035,6 +1029,135 @@ const SECTION_RENDERERS = {
 // rewards", parameterised by `cfg` (which emp array, labels, icon). Uses
 // markDirty (not set) so its own row re-render isn't clobbered by a full panel
 // rebuild, which would also reset the local search/filter.
+// INTERNAL_REFERRAL_V1 (мигр. 122) — вознаграждение врача за НАПРАВЛЕНИЕ.
+//
+// Редактируется здесь, а хранится НЕ в карточке сотрудника, а на его источнике
+// направления — той же строке, которую читают отчёт «Рефералы» и кабинет врача.
+// Поэтому три экрана не могут показать три разные суммы за одно направление.
+//
+// Стандартная ставка сразу для всех — в Настройках, на категории «Внутренние
+// врачи»; здесь её можно перекрыть одному врачу.
+function internalReferralSection({ emp, markDirty }) {
+    const wrap = h('div', { class: 'fade-in' });
+    wrap.appendChild(secHead('Coins', tr('Вознаграждение за направление'),
+        tr('Что врач получает, когда пациент пришёл по его направлению.')));
+    const body = h('div', { style: { maxWidth: '640px' } },
+        h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Загрузка…')));
+    wrap.appendChild(body);
+
+    (async () => {
+        if (!emp.__id) {
+            clear(body);
+            body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                tr('Ставка задаётся после того, как сотрудник сохранён.')));
+            return;
+        }
+        let src = null, cat = null, types = [];
+        try {
+            const [srcRes, typeRes] = await Promise.all([
+                supabase.from('referral_sources')
+                    .select('id, reward_mode, own_percent, own_rates, category_id').eq('doctor_id', emp.__id).limit(1),
+                supabase.from('service_types').select('id, name').eq('active', 1).order('name'),
+            ]);
+            src = (srcRes.data && srcRes.data[0]) || null;
+            types = typeRes.data || [];
+            if (src && src.category_id != null) {
+                const catRes = await supabase.from('referral_source_categories')
+                    .select('id, name, standard_percent').eq('id', src.category_id).limit(1);
+                cat = (catRes.data && catRes.data[0]) || null;
+            }
+        } catch (e) { /* показываем ниже */ }
+
+        clear(body);
+        if (!src) {
+            body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                tr('У этого сотрудника нет карточки источника направления — она заводится только врачам.')));
+            return;
+        }
+
+        let rates = [];
+        try {
+            rates = Array.isArray(src.own_rates) ? src.own_rates
+                : (typeof src.own_rates === 'string' && src.own_rates.trim() ? JSON.parse(src.own_rates) : []);
+        } catch { rates = []; }
+        if (!Array.isArray(rates)) rates = [];
+        const byType = new Map(rates.map(e => [Number(e && e.type_id), e]).filter(([k]) => Number.isFinite(k)));
+
+        const stdNote = cat
+            ? trf('Стандарт категории «{cat}»: {pct}% со всех услуг, кроме заданных в ней по группам.',
+                  { cat: cat.name, pct: cat.standard_percent })
+            : tr('Категория у источника не выбрана — без своей ставки вознаграждение будет нулевым.');
+
+        const modeChk = h('input', { type: 'checkbox', checked: src.reward_mode !== 'own' });
+        const pctInp = h('input', { type: 'number', min: '0', step: '0.01',
+            value: src.own_percent != null && Number(src.own_percent) !== 0 ? String(src.own_percent) : '',
+            placeholder: '0', style: { width: '140px' } });
+
+        const tbody = h('tbody');
+        for (const t of types) {
+            const cur = byType.get(Number(t.id));
+            tbody.appendChild(h('tr', null,
+                h('td', null, t.name),
+                h('td', null, h('div', { class: 'rate-cell' },
+                    h('input', { type: 'number', min: '0', step: '0.01', 'data-rate-type': String(t.id),
+                        value: cur && Number.isFinite(Number(cur.value)) ? String(cur.value) : '',
+                        placeholder: tr('по стандарту') }),
+                    h('select', { 'data-rate-unit': String(t.id) },
+                        h('option', { value: 'pct', selected: !cur || cur.unit !== 'fix' }, '%'),
+                        h('option', { value: 'fix', selected: !!(cur && cur.unit === 'fix') }, 'сум'))))));
+        }
+        if (!types.length) tbody.appendChild(h('tr', null, h('td', { colspan: '2', class: 'muted' }, tr('Группы услуг не заведены.'))));
+
+        const ownBox = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
+            h('div', { class: 'field' },
+                h('label', null, tr('Свой процент — со всех услуг, кроме перечисленных ниже')), pctInp),
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                tr('Пусто — действует стандартный процент сверху. Заполненная строка его перекрывает: % — доля от стоимости услуги, сум — фиксированная сумма за услугу.')),
+            h('table', { class: 'tbl' },
+                h('thead', null, h('tr', null,
+                    h('th', null, tr('Группа услуг')),
+                    h('th', { style: { textAlign: 'right', width: '240px' } }, tr('Ставка')))),
+                tbody));
+
+        function collect() {
+            const out = [];
+            for (const inp of tbody.querySelectorAll('input[data-rate-type]')) {
+                const raw = inp.value.trim();
+                if (raw === '') continue;
+                const value = Number(raw);
+                if (!Number.isFinite(value) || value < 0) continue;
+                const sel = tbody.querySelector('select[data-rate-unit="' + inp.dataset.rateType + '"]');
+                out.push({ type_id: Number(inp.dataset.rateType), unit: sel && sel.value === 'fix' ? 'fix' : 'pct', value });
+            }
+            return out;
+        }
+        function snapshot() {
+            return { mode: modeChk.checked ? 'category' : 'own',
+                     percent: Number(pctInp.value) || 0, rates: collect() };
+        }
+        function push() {
+            emp.referralReward = snapshot();
+            ownBox.hidden = modeChk.checked;
+            markDirty();
+        }
+        // Стартовое состояние без markDirty: открытая вкладка — не правка.
+        emp.referralReward = snapshot();
+        ownBox.hidden = modeChk.checked;
+        modeChk.addEventListener('change', push);
+        pctInp.addEventListener('input', push);
+        tbody.addEventListener('change', push);
+        tbody.addEventListener('input', push);
+
+        body.appendChild(h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } },
+            h('div', { class: 'field checkbox' }, modeChk,
+                h('label', null, tr('Вознаграждение по категории (общая ставка)'))),
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, stdNote),
+            ownBox));
+    })();
+
+    return wrap;
+}
+
 function ratesSection({ emp, markDirty, lookups }, cfg) {
     const { arrayKey, icon, title, sub, priceLabel, pctLabel } = cfg;
     const rows = () => emp[arrayKey];
@@ -1226,14 +1349,12 @@ export async function saveEmployee(emp, row) {
         percentage: Number(s.pct) || 0,
         branches: Array.isArray(s.branches) ? s.branches : [],
     }));
-    // Referral reward rules — `fixed` is the per-referral amount, `percentage`
-    // the % of price. Earned when this doctor is the referral source.
-    const referral_rates = emp.referralServices.filter(s => s.on).map(s => ({
-        service_id: s.id,
-        fixed: Number(s.price) || 0,
-        percentage: Number(s.pct) || 0,
-        branches: Array.isArray(s.branches) ? s.branches : [],
-    }));
+    // INTERNAL_REFERRAL_V1 — вознаграждения за направление больше НЕТ в карточке
+    // сотрудника: оно живёт на его ИСТОЧНИКЕ направления (мигр. 122),
+    // откуда его читают и отчёт «Рефералы», и кабинет врача. Прежний
+    // users.referral_rates был вторым механизмом для того же вознаграждения
+    // и расходился с отчётом молча. Колонку не роняем — в ней лежит то,
+    // что клиника когда-то ввела, но больше не пишем и не читаем.
 
     // EMP_BRANCH_SCOPE_V1 / EMP_BRANCH_VALIDATION_V1 — clamp ticked branches to the
     // actor's own scope (no-op for owners); for a branch-scoped actor creating NEW
@@ -1298,7 +1419,6 @@ export async function saveEmployee(emp, row) {
         kpi_links:   [...emp.kpis],
         working_hours,
         service_rates,
-        referral_rates,
         active:      emp.active,
         username:    emp.username || null,
         role_id:     emp.role_id || null,
@@ -1399,6 +1519,23 @@ export async function saveEmployee(emp, row) {
             if (error) { console.warn('[emp-editor] user_branches insert:', error.message); syncWarnings.push('филиалы'); }
         }
     } catch (e) { console.warn('[emp-editor] branch sync:', e.message); syncWarnings.push('филиалы'); }
+
+    // INTERNAL_REFERRAL_V1 — ставка вознаграждения за направление лежит на
+    // ИСТОЧНИКЕ этого врача, а не в его карточке: оттуда её читают и отчёт
+    // «Рефералы», и кабинет врача. Пишется тем же порядком, что филиалы и
+    // специальности ниже — своей попыткой, со своим предупреждением, чтобы
+    // отказ здесь не выдавал за неудачу сохранение самого сотрудника.
+    if (emp.referralReward && userId) {
+        try {
+            const rr = emp.referralReward;
+            const { error } = await supabase.from('referral_sources').update({
+                reward_mode: rr.mode === 'own' ? 'own' : 'category',
+                own_percent: rr.mode === 'own' ? (Number(rr.percent) || 0) : 0,
+                own_rates:   rr.mode === 'own' ? (rr.rates || []) : [],
+            }).eq('doctor_id', userId);
+            if (error) { console.warn('[emp-editor] referral reward:', error.message); syncWarnings.push('вознаграждение за направление'); }
+        } catch (e) { console.warn('[emp-editor] referral reward:', e.message); syncWarnings.push('вознаграждение за направление'); }
+    }
 
     // Specialties mirror (local) + medcore sync. SPECIALTIES_SYNC_V1
     try {

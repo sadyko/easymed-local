@@ -494,7 +494,7 @@ export function isModuleAllowed(navId) {
         // (Lab/Nurse/Doctor roles carry 'documents' with no settings key).
         // The Settings home index itself filters rows by isRouteAllowed, so
         // they see ONLY the rows they were granted.
-        for (const k of ['documents', 'discounts-settings', 'api-settings', 'referral-settings', 'doctor-pay', 'consultation-types', 'communications', 'cashier-settings'])
+        for (const k of ['documents', 'discounts-settings', 'api-settings', 'doctor-pay', 'consultation-types', 'communications', 'cashier-settings'])
             if (_effective.has(k)) return true;
         // LOCAL_ROLES_V1 — the production LAB_ROLE_SETTINGS_V1 implication (any
         // Laboratory-edit role also opens Settings, to manage lab panels) is
@@ -642,7 +642,6 @@ export function isRouteAllowed(view) {
     // этой строки.
     if (view === 'crm-settings') return false;
     if (view === 'doctor-pay') return _effective.has('doctor-pay') || _effective.has('settings:doctor_pay') || _effective.has('settings');   // DOCTOR_PAY_BULK_V1
-    if (view === 'referral-settings') return _effective.has('referral-settings') || _effective.has('settings');   // REFERRAL_REWARDS_V1
     if (view === 'cashier-settings') return _effective.has('cashier-settings') || _effective.has('settings:cashiers') || _effective.has('settings');   // CASHIER_SHIFT_MODE_V1
     // ROOMS_SETUP_V1 — «Помещения» пишет в те же таблицы, что разделы Rooms /
     // Wards / Beds, поэтому и права те же: у кого есть любой из них (или

@@ -24,6 +24,15 @@ function issueUnitOf(p) {
     return { unit: p.base_unit || '', factor: 1 };
 }
 
+// Единица хранения: закупочная упаковка, если она заведена и в ней больше одной
+// базовой единицы (Analgin: 100 шт лежат на складе как 10 уп по 10), иначе базовая.
+// on_hand ВСЕГДА в базовых единицах, поэтому здесь делим, а не умножаем.
+function stockUnitOf(p) {
+    const factor = Number(p.pack_factor) > 0 ? Number(p.pack_factor) : 1;
+    if (p.purchase_unit && factor > 1) return { unit: p.purchase_unit, factor };
+    return { unit: p.base_unit || '', factor: 1 };
+}
+
 export async function renderSkladTab(container) {
     clear(container);
     container.appendChild(loadingCard());
@@ -112,7 +121,6 @@ export async function renderSkladTab(container) {
                         h('th', null, 'Единица'),
                         h('th', null, 'Поставщик'),
                         h('th', null, 'В наличии'),
-                        h('th', null, 'Выдать'),
                         h('th', null, 'Себестоимость'),
                         h('th', null, 'Стоимость'),
                         h('th', null, 'Flag'),
@@ -123,7 +131,6 @@ export async function renderSkladTab(container) {
                         h('td', { style: { padding: '6px 10px', minWidth: '90px' } }, unitSel),
                         h('td', { style: { padding: '6px 10px', minWidth: '140px' } }, supplierSel),
                         h('td', { style: { padding: '6px 10px', minWidth: '110px' } }, availSel),
-                        h('td', null, ''),
                         h('td', null, ''),
                         h('td', null, ''),
                         h('td', { style: { padding: '6px 10px', minWidth: '90px' } }, flagSel),
@@ -170,14 +177,28 @@ export async function renderSkladTab(container) {
         const onHand = Number(p.on_hand) || 0;
         const low = isLowStock(p);
         const iu = issueUnitOf(p);
+        // STOCK_ONE_COLUMN_V1 — «В наличии» показывает остаток так, как его считает
+        // кладовщик: сверху упаковками («10 уп»), под ними мелким серым «= 100 шт» —
+        // сколько это в единицах выдачи. Вторая строка появляется, только если ей
+        // есть что добавить: без упаковки и без своей единицы выдачи она напечатала
+        // бы ту же цифру второй раз. Отдельная колонка «Выдать» показывала только
+        // это второе число под заголовком, который читался как действие.
+        const su = stockUnitOf(p);
+        const stockText = `${fmtQty(onHand / su.factor)} ${su.unit}`.trim();
+        const subText = (su.factor > 1 || iu.factor !== 1)
+            ? `= ${fmtQty(onHand * iu.factor)} ${iu.unit}`.trim()
+            : '';
         return h('tr', null,
             h('td', { class: 'cell-strong' }, p.name || '—'),
             h('td', null, p.base_unit || '—'),
             h('td', null, (p.suppliers && p.suppliers.name) || '—'),
-            h('td', { class: 'num' }, low
-                ? h('span', { style: { color: 'var(--crit-500)' } }, Icon('Warning', { size: 13 }), ' ' + fmtQty(onHand))
-                : fmtQty(onHand)),
-            h('td', { class: 'num' }, `${fmtQty(onHand * iu.factor)} ${iu.unit}`.trim()),
+            h('td', { class: 'num' },
+                h('div', null, low
+                    ? h('span', { style: { color: 'var(--crit-500)' } }, Icon('Warning', { size: 13 }), ' ' + stockText)
+                    : stockText),
+                subText
+                    ? h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: '400' } }, subText)
+                    : null),
             h('td', { class: 'num' }, fmtMoney2(p.avg_cost)),
             h('td', { class: 'num' }, fmtPrice(onHand * (Number(p.avg_cost) || 0))),
             h('td', null, low ? Tag('Reorder', { kind: 'crit' }) : Tag('OK', { kind: 'ok' })),
@@ -191,13 +212,14 @@ export async function renderSkladTab(container) {
         try {
             const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');
             const matrix = [
-                ['Товар', 'Единица', 'Поставщик', 'В наличии', 'Выдать', 'Себестоимость', 'Стоимость', 'Флаг'],
+                ['Товар', 'Единица', 'Поставщик', 'В наличии', 'В ед. выдачи', 'Себестоимость', 'Стоимость', 'Флаг'],
                 ...filtered().map(p => {
                     const iu = issueUnitOf(p);
+                    const su = stockUnitOf(p);
                     const onHand = Number(p.on_hand) || 0;
                     return [
                         p.name || '', p.base_unit || '', (p.suppliers && p.suppliers.name) || '',
-                        onHand, `${fmtQty(onHand * iu.factor)} ${iu.unit}`.trim(),
+                        `${fmtQty(onHand / su.factor)} ${su.unit}`.trim(), `${fmtQty(onHand * iu.factor)} ${iu.unit}`.trim(),
                         Number(p.avg_cost) || 0, Math.round(onHand * (Number(p.avg_cost) || 0)),
                         isLowStock(p) ? 'Reorder' : 'OK',
                     ];

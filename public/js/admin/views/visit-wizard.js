@@ -23,11 +23,15 @@
 // услуги» went without templates while the Калькулятор had them.
 
 import { supabase } from '../../supabase.js';
+// REFERRAL_SOURCE_CODE_V1 — подпись партнёра одна на все экраны регистратора.
+import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';
+import { searchableSelect } from './searchable-select.js?v=ss2';   // SEARCHABLE_SELECT_V1
 import { CAT_ORDER, categoryOf } from '../../shared/service-categories.js';   // SERVICE_CATALOG_FILTER_V1
 import { h, Icon, clear, toast, Avatar, initials, avColor, field, fmtDate, fmtDateTime } from '../ui.js';
 import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1
 import { doctorPoolFor } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1
+import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // PAYER_COMPANY_IN_ESTIMATE_V1
 // WIZARD_ONE_ENGINE_V1 — общий клиент слотов и записи. Один вопрос «когда врач
 // свободен» на весь продукт: его задаёт серверу этот клиент, а считает
 // server/services/rpc/slot-engine.js. ?v как у остальных импортёров модуля.
@@ -58,7 +62,17 @@ const PAGE_SIZE = 50;
 // без него выбрать их было бы негде. Значение служит ключом «корзины», а не
 // категорией — в базу оно не попадает.
 const REF_UNCAT = '—  без категории';
-const refCatOf = (s) => ((s && s.category) || '').trim();
+// REFERRAL_CATEGORY_RATES_V1 (мигр. 120) — категория приходит из СПРАВОЧНИКА
+// по ссылке category_id, а не из свободного текста в `category`. Текст
+// выбирали потому, что мастер группирует источники по этой строке и список
+// подсказок казался достаточным; с тех пор на категории появилась ставка
+// вознаграждения, и три написания одного названия стали значить не три группы
+// в списке, а деньги, которых партнёр не получил. Ключом «корзины» здесь
+// по-прежнему служит НАЗВАНИЕ — так его и показывают в списке.
+// Ключ «корзины» — ID категории, а не её название: два справочника с одним
+// написанием слились бы в одну группу, а переименование категории потеряло бы
+// уже выбранное направление. Пустая строка означает «без категории».
+const refCatOf = (s) => (s && s.category_id != null ? String(s.category_id) : '');
 const refSourcesIn = (sources, cat) => (sources || []).filter(s => (cat === REF_UNCAT ? !refCatOf(s) : refCatOf(s) === cat));
 
 function currentUserId() {
@@ -80,6 +94,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         loadError: null,
         doctors: [],
         sources: [],
+        refCats: [],   // REFERRAL_CAT_FROM_BOOK_V1 — справочник категорий, как он заведён в настройках
         payers: [],
         payersError: null,   // PAYER_LOAD_V2 — «не загрузились» ≠ «не заведены»
         cart: [],            // [{ svc, qty }]
@@ -110,6 +125,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // а не регистратуры — он подтверждается в момент приёма денег.
         // Для b2b и dms включается шаг «Кто платит» (выбор контрагента).
         payerId: 'self',
+        payersExpanded: false,   // PAYER_COMPANY_IN_ESTIMATE_V1 — раскрыт ли «Ещё N»
+        payerPickerOpen: false,   // PAYER_COMPANY_IN_ESTIMATE_V1 — раскрыта ли сетка на шаге «Кто платит»
         payMethod: 'self',   // 'self' | 'b2b' | 'dms'
         // PAYER_TYPE_THEN_COMPANY_V1 — выбранный ТИП: 'self' либо ключ из
         // kindKey() (insurance / corporate / government). Компании показываются
@@ -241,6 +258,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // счёт не должен уйти на организацию из прежнего типа.
     // Единственную компанию в типе выбираем сразу: выбирать там не из чего.
     function setPayKind(kindId) {
+        wiz.payersExpanded = false;   // у другого типа свой список — раскрытие не переносится
         wiz.payKind = kindId;
         if (kindId === 'self') {
             wiz.payerId = 'self';
@@ -266,14 +284,33 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         wiz.payerId = String(p.id);
         wiz.payKind = kindKey(p);
         wiz.payMethod = isDmsPayer(p) ? 'dms' : 'b2b';
+        wiz.payerPickerOpen = false;   // выбрали — сетка сворачивается обратно в карточку
         // COVERAGE_SPLIT_V1 — с шага 3 больше не сбрасываем: там теперь делят
         // услуги между плательщиком и пациентом, и это нужно любому контрагенту.
         paint();
     }
 
-    // PAYER_COMPANY_ON_STEP2_V1 - ряд компаний и всплывающий список «Ещё N»
-    // удалены вместе с выбором компании в СМЕТЕ: компанию выбирают на шаге
-    // «Кто платит», где рядом видно и что она покрывает.
+    // PAYER_COMPANY_IN_ESTIMATE_V1 (2026-09-07) — ряд компаний и «Ещё N»
+    // ВЕРНУЛИСЬ в смету, отменяя PAYER_COMPANY_ON_STEP2_V1.
+    //
+    // Тот довод был: «держать один выбор в двух местах — два источника правды».
+    // Довод про ДАННЫЕ, и к делу он не относился: источник один и остаётся один
+    // — wiz.payerId. Смета и шаг «Кто платит» два ВИДА на одно поле, оба зовут
+    // setPayer(); разойтись в том, кто выбран, они не могут по построению.
+    // Прежняя формулировка спутала «выбор в двух местах» с «двумя состояниями».
+    //
+    // А платила она тем, что регистратор не мог узнать ИЗ СМЕТЫ, заведена ли у
+    // клиники нужная страховая: вместо списка стояла надпись «выберете на
+    // следующем шаге», то есть просьба поверить на слово и идти дальше.
+
+    // Снятие отметки. НЕ через setPayer('self'): тот зовёт setPayKind('self') и
+    // сбросил бы ТИП плательщика — ряд компаний схлопнулся бы целиком, хотя
+    // регистратор всего лишь передумал насчёт конкретной компании. Тип
+    // остаётся, «Далее» не пропустит (nextBlockReason).
+    function clearPayer() {
+        wiz.payerId = 'self';
+        paint();
+    }
 
     function defaultWhen() {
         const d = new Date();
@@ -367,10 +404,17 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
     // ---- data ----
     try {
-        const [svcRes, docRes, srcRes, payerRes] = await Promise.all([
+        const [svcRes, docRes, srcRes, refCatRes, payerRes] = await Promise.all([
             supabase.from('services').select('id, name, price, duration_minutes, requires_doctor, is_lab, type').eq('active', true).order('name').limit(1000),
             supabase.from('users').select('id, full_name, username, role, is_active, service_rates').eq('role', 'doctor').eq('is_active', true).order('full_name'),   // SVC_DOCTORS_V1 — назначения услуг
-            supabase.from('referral_sources').select('id, name, category').eq('active', true).order('name'),
+            supabase.from('referral_sources').select('id, name, code, category_id').eq('active', true).order('name'),
+            // REFERRAL_CAT_FROM_BOOK_V1 — список категорий берётся из СПРАВОЧНИКА,
+            // а не собирается из загруженных источников. Собранный из источников
+            // он показывал только те категории, в которых уже кто-то есть: заведи
+            // клиника «Внешные врачи» и не привяжи к ней ни одного партнёра — в
+            // мастере её нет вовсе, и регистратор не понимает, куда делась
+            // категория, которую он только что видел в настройках.
+            supabase.from('referral_source_categories').select('id, name').eq('active', true).order('name'),
             // PAYER_LOAD_V2 — читаем ВЕСЬ справочник и отсеиваем неактивных здесь.
             // Раньше стоял .eq('active', true): если серверный реестр не разрешает
             // фильтр по этой колонке, запрос падает целиком и список плательщиков
@@ -381,6 +425,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         wiz.services = svcRes.data || [];
         wiz.doctors  = docRes.data || [];
         wiz.sources  = srcRes.data || [];
+        wiz.refCats  = refCatRes.data || [];
         // PAYER_LOAD_V2 — ошибка загрузки и «не заведены» — РАЗНЫЕ факты (тот же
         // урок, что CATALOG_DIAG_V4 ниже): раньше ошибка превращалась в пустой
         // массив, и мастер уверенно сообщал «Плательщики не заведены», когда они
@@ -1215,10 +1260,27 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     }
 
     // ---------------------------------------------------------------------
-    // Step 2 — Направление (источник → кто направил, врач, заметка)
+    // Step 2 — Направление (источник → кто направил)
+    //
+    // DOCTOR_FIELD_DROPPED_V1 — поля «Врач» здесь больше нет, и оно было
+    // запасным, а не основным. Врача каждая врачебная услуга получает
+    // СВОЕГО на шаге 1 (подбор в каталоге либо жёлтая плашка
+    // «Выберите врача — N услуг(и) ждут»), а услуга без врача в смету вообще
+    // не попадает (visibleCart). То есть это поле могло только назначить
+    // ОДНОГО врача сразу всем неназначенным строкам мимо того выбора,
+    // который регистратор уже сделал послужебно.
+    //
+    // Само wiz.doctorId остаётся пустым и никуда не делась — тот же приём,
+    // что у DATE_FIELD_DROPPED_V1 и VISIT_TYPE_FIELD_DROPPED_V1 выше: выражения
+    // вида `c.doctorId || (c.svc.requires_doctor ? wiz.doctorId : null)` продолжают
+    // работать и просто всегда берут врача самой строки.
+    //
+    // VISIT_NOTE_FIELD_DROPPED_V1 — поля «Заметка» здесь больше нет: на этом
+    // шаге его заполняли редко, а место оно занимало на каждом визите. Само
+    // поле визита никуда не делось — wiz.notes держит '', и в ensure_visit
+    // уходит notes: null, как и раньше уходило у незаполненной заметки.
     // ---------------------------------------------------------------------
     function paintStep2(root) {
-        const needsDoctor = wiz.cart.some(c => c.svc.requires_doctor);
 
         // DATE_FIELD_DROPPED_V1 — поля «Дата и время» здесь больше нет: дату и
         // время каждая услуга получает СВОЮ на шаге 1 (планировщик врача или
@@ -1226,11 +1288,6 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // (`c.when || wiz.when` в submit). Это поле было запасным значением для
         // строк без своей даты — оно и осталось, просто невидимым: wiz.when
         // держит defaultWhen(), так что запасной вариант никуда не делся.
-
-        const docSel = h('select', null,
-            h('option', { value: '' }, needsDoctor ? '— Выберите врача —' : '— Без врача —'),
-            ...wiz.doctors.map(d => h('option', { value: d.id, selected: String(wiz.doctorId) === String(d.id) }, d.full_name || d.username)));
-        docSel.addEventListener('change', () => { wiz.doctorId = docSel.value; });
 
         // VISIT_TYPE_FIELD_DROPPED_V1 — селектора «Тип визита» здесь нет:
         // регистратура заводит амбулаторный приём, и выбор из трёх значений был
@@ -1244,7 +1301,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // направил. Одним плоским списком всех партнёров пользоваться было
         // нельзя: на реальной базе это сотни строк вида «Имя · категория».
         // В визит по-прежнему уходит wiz.sourceId — схема не менялась.
-        const cats = [...new Set(wiz.sources.map(refCatOf).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru'));
+        const cats = (wiz.refCats || []).map(c => ({ id: String(c.id), name: c.name }));
         const hasUncat = wiz.sources.some(s => !refCatOf(s));
 
         // Правка существующего направления: категорию восстанавливаем из источника.
@@ -1255,7 +1312,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
         const catSel = h('select', null,
             h('option', { value: '' }, '— Без направления —'),
-            ...cats.map(c => h('option', { value: c, selected: wiz.sourceCat === c }, c)),
+            ...cats.map(c => h('option', { value: c.id, selected: wiz.sourceCat === c.id }, c.name)),
             ...(hasUncat ? [h('option', { value: REF_UNCAT, selected: wiz.sourceCat === REF_UNCAT }, REF_UNCAT)] : []));
         catSel.addEventListener('change', () => {
             wiz.sourceCat = catSel.value;
@@ -1266,24 +1323,29 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const inCat = wiz.sourceCat ? refSourcesIn(wiz.sources, wiz.sourceCat) : [];
         const srcSel = h('select', null,
             h('option', { value: '' }, inCat.length ? '— Выберите, кто направил —' : 'В этой категории пока никого нет'),
-            ...inCat.map(s => h('option', { value: s.id, selected: String(wiz.sourceId) === String(s.id) }, s.name)));
-        srcSel.addEventListener('change', () => { wiz.sourceId = srcSel.value; });
-
-        const notesInp = h('textarea', { rows: '2', placeholder: 'Заметка (необязательно)' });
-        notesInp.value = wiz.notes;
-        notesInp.addEventListener('input', () => { wiz.notes = notesInp.value; });
+            ...inCat.map(s => h('option', { value: s.id, selected: String(wiz.sourceId) === String(s.id) }, referralSourceLabel(s))));
+        // repaintRail() ОБЯЗАТЕЛЕН: кнопка «Далее» и причина её блокировки
+        // рисуются в смете (nextBlockReason внутри repaintRail), а не здесь.
+        // Без него регистратор выбирал, кто направил, и кнопка продолжала
+        // держать прежний отказ «выберите, кто направил пациента» — выбор
+        // сделан, на экране он виден, а мастер его как будто не заметил.
+        // Соседний catSel звал paint() с самого начала, этот — нет.
+        srcSel.addEventListener('change', () => { wiz.sourceId = srcSel.value; repaintRail(); });
 
         root.appendChild(h('div', { class: 'card', style: { padding: '18px 20px', maxWidth: '640px' } },
             h('h3', { style: { margin: '0 0 14px', fontSize: '13.5px' } }, Icon('Send', { size: 15 }), ' Направление'),
             h('div', { class: 'field-row', style: { gridTemplateColumns: '1fr 1fr' } },
                 field('Источник направления', catSel),
                 // Второе поле показываем ТОЛЬКО после выбора источника.
-                wiz.sourceCat ? field('Кто направил', srcSel) : null,
+                // SEARCHABLE_SELECT_V1 — партнёров в категории «Внутренние врачи»
+                // столько же, сколько врачей в клинике: обычным списком нужного
+                // ищут глазами сверху вниз. Ищется и по НОМЕРУ, и по имени —
+                // номер стоит первым в подписи, а правило поиска (text-match.js)
+                // требует найти каждое слово запроса где угодно в строке.
+                wiz.sourceCat ? field('Кто направил', searchableSelect(srcSel, {
+                    placeholder: 'Номер или имя…',
+                })) : null,
             ),
-            h('div', { class: 'field-row', style: { gridTemplateColumns: '1fr 1fr' } },
-                field(needsDoctor ? 'Врач (обязательно — есть врачебные услуги)' : 'Врач', docSel, { required: needsDoctor }),
-            ),
-            field('Заметка', notesInp),
         ));
     }
 
@@ -1291,7 +1353,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // же брендированном бланке (Настройки → Документы), но это НЕ счёт пациенту:
     // документ адресован организации, содержит только покрытые ею услуги и место
     // для подписей обеих сторон — им закрывают расчёт по договору.
-    function printAkt({ invoice, payerId, lines, visitDate }) {
+    function printAkt({ invoice, payerId, lines, visitDate, queue }) {
         const payer = wiz.payers.find(p => String(p.id) === String(payerId));
         const no = invoice.invoice_number || String(invoice.id);
         const docName = (c) => {
@@ -1326,6 +1388,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     const dn = docName(c);
                     return { name: c.svc.name + (dn ? ' · ' + dn : ''), qty: c.qty, price: cartLinePrice(c), _alt: i % 2 === 1 };
                 }),
+                // ACT_SHEET_V1 — очередь по услугам АКТА. Готовый queueRows
+                // счёта здесь не годится: он собран для услуг ПАЦИЕНТА, то есть
+                // ровно для тех, которых в акте нет (COVERAGE_SPLIT_V1).
+                queue: queue || [],
             },
         });
         /* i18n-exempt-end */
@@ -1362,6 +1428,36 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             ));
         }
 
+        // PAYER_COMPANY_IN_ESTIMATE_V1 — компанию выбрали в смете, и этот шаг
+        // её ПОДТВЕРЖДАЕТ. Спрашивать второй раз значит делать вид, что первый
+        // выбор не считался; «Сменить» раскрывает прежнюю сетку на месте, без
+        // возврата на шаг назад.
+        const chosen = wiz.payers.find(p => String(p.id) === String(wiz.payerId));
+        const picker = (chosen && !wiz.payerPickerOpen)
+            ? h('div', {
+                style: {
+                    display: 'flex', alignItems: 'center', gap: '12px', maxWidth: '520px',
+                    padding: '14px 16px', borderRadius: '12px',
+                    border: '1px solid var(--primary-500)', background: 'var(--primary-50, #f2faf8)',
+                },
+            },
+                h('span', { style: { color: 'var(--primary-700)', display: 'flex' } }, Icon('Check', { size: 16 })),
+                h('div', { style: { flex: 1, minWidth: 0 } },
+                    h('div', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } }, chosen.name),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '3px' } },
+                        trf('{kind} · выбран в смете', { kind: payerKindRu(chosen.kind) }))),
+                h('button', {
+                    type: 'button',
+                    onclick: () => { wiz.payerPickerOpen = true; paint(); },
+                    style: {
+                        padding: '8px 14px', borderRadius: '9px', cursor: 'pointer',
+                        fontFamily: 'inherit', fontSize: '12.5px', fontWeight: 700,
+                        background: 'var(--white, #fff)', border: '1px solid var(--ink-200)',
+                        color: 'var(--ink-700)',
+                    },
+                }, tr('Сменить')))
+            : grid;
+
         const polInp = h('input', {
             type: 'text', placeholder: 'Номер полиса (с карты пациента)', value: wiz.policyNo,
             style: { width: '100%', maxWidth: '360px', padding: '11px 12px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13.5px' },
@@ -1374,7 +1470,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '14px' } }, b2b
                 ? 'Счёт пойдёт на организацию по договору, а не пациенту.'
                 : 'Укажите номер полиса. Счёт пойдёт на страховую; кассир оформит покрытие при приёме. Страховую можно сменить здесь же.'),
-            list.length ? grid : h('div', {
+            list.length ? picker : h('div', {
                 style: { background: 'var(--ink-25, #f8fafa)', borderRadius: '10px', padding: '20px 14px', textAlign: 'center', color: 'var(--ink-500)', fontSize: '13.5px' },
             }, 'Плательщики не заведены — добавьте их в Настройки → Компании-плательщики.'),
             // Полис — только у ДМС: у договора с организацией его нет.
@@ -1851,24 +1947,71 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const payRow = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(118px, 1fr))', gap: '6px' } },
             ...payTypeChoices().map(t => payBtn(t, wiz.payKind === t.id, () => setPayKind(t.id))));
 
-        // PAYER_COMPANY_ON_STEP2_V1 — ряд компаний из СМЕТЫ убран: конкретную
-        // компанию (и то, какие услуги она покрывает) выбирают на шаге «Кто
-        // платит». Держать тот же выбор в двух местах — это два источника правды
-        // и лишний шум в смете; здесь остаётся ТИП плательщика и строка-итог
-        // ниже, показывающая, на кого в итоге пойдёт счёт.
+        // PAYER_COMPANY_IN_ESTIMATE_V1 — сам ряд. Компанию видно и выбирают
+        // здесь; шаг «Кто платит» её подтверждает и делит услуги.
         const _payer = wiz.payers.find(p => String(p.id) === String(wiz.payerId));
-        const dmsHint = wiz.payKind === 'self'
+        const companyRow = (() => {
+            if (wiz.payKind === 'self') return null;
+            const list = payersOfKind(wiz.payKind);
+            if (!list.length) return null;
+            const { shown, hiddenCount } = wiz.payersExpanded
+                ? { shown: list, hiddenCount: 0 }
+                : splitCompanies(list, wiz.payerId);
+            const chip = (p) => {
+                const on = String(wiz.payerId) === String(p.id);
+                return h('button', {
+                    type: 'button', title: p.name,
+                    onclick: () => {
+                        const next = toggleCompanyId(wiz.payerId, p.id);
+                        if (next === 'self') clearPayer(); else setPayer(next);
+                    },
+                    style: {
+                        padding: '7px 9px', borderRadius: '9px', cursor: 'pointer',
+                        fontFamily: 'inherit', fontSize: '12.5px', fontWeight: 700,
+                        display: 'flex', alignItems: 'center', gap: '6px',
+                        minWidth: 0, boxSizing: 'border-box', minHeight: '34px',
+                        overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
+                        textAlign: 'left',
+                        background: on ? 'var(--primary-50, #f2faf8)' : 'var(--white, #fff)',
+                        border: '1px solid ' + (on ? 'var(--primary-500)' : 'var(--ink-200)'),
+                        boxShadow: on ? 'inset 0 0 0 1px var(--primary-500)' : 'none',
+                        color: on ? 'var(--primary-700)' : 'var(--ink-700)',
+                    },
+                },
+                    h('span', {
+                        style: {
+                            flex: '0 0 auto', width: '14px', height: '14px', borderRadius: '4px',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            background: on ? 'var(--primary-500)' : 'var(--white, #fff)',
+                            border: '1px solid ' + (on ? 'var(--primary-500)' : 'var(--ink-300, #c7d0d6)'),
+                            color: 'var(--white, #fff)',
+                        },
+                    }, on ? Icon('Check', { size: 10 }) : null),
+                    h('span', { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }, p.name));
+            };
+            const row = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '6px' } },
+                ...shown.map(chip));
+            if (hiddenCount) {
+                row.appendChild(h('button', {
+                    type: 'button',
+                    onclick: () => { wiz.payersExpanded = true; paint(); },
+                    style: {
+                        padding: '7px 9px', borderRadius: '9px', cursor: 'pointer', minHeight: '34px',
+                        fontFamily: 'inherit', fontSize: '12.5px', fontWeight: 700,
+                        background: 'var(--white, #fff)', border: '1px dashed var(--ink-200)',
+                        color: 'var(--ink-700)',
+                    },
+                }, trf('Ещё {n}', { n: hiddenCount })));
+            }
+            return row;
+        })();
+
+        // COVERAGE_SPLIT_V1 — итог: на кого пойдёт счёт и сколько из сметы он
+        // берёт на себя. Остаётся под рядом, как и было.
+        const dmsHint = (wiz.payKind === 'self' || !_payer)
             ? null
-            : !_payer
-                // Компания ещё не выбрана — её выбирают на шаге «Кто платит»,
-                // и «Далее» без неё не пропустит (nextBlockReason).
-                ? h('div', { style: { fontSize: '12.5px', color: 'var(--warn-700, #a16207)' } },
-                    'компанию выберете на шаге «Кто платит»')
-                // COVERAGE_SPLIT_V1 — итог: кто платит и сколько из сметы берёт
-                // на себя. Смета обязана показывать, на кого пойдёт счёт, даже
-                // когда сам выбор переехал на следующий шаг.
-                : h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                    trf('{name} · покрывает {covered} из {total} сум', { name: _payer.name, covered: fmtPrice(coveredTotal()), total: fmtPrice(cartTotal()) }));
+            : h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                trf('{name} · покрывает {covered} из {total} сум', { name: _payer.name, covered: fmtPrice(coveredTotal()), total: fmtPrice(cartTotal()) }));
         // Единственная кнопка «Пациент» без объяснения выглядит как поломка —
         // но сказать «не заведены», когда список просто не загрузился, ХУЖЕ: это
         // отправляет заводить то, что уже заведено. PAYER_LOAD_V2.
@@ -1987,6 +2130,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         railEl.appendChild(h('div', { style: { borderTop: '1px solid var(--ink-100)', paddingTop: '12px', display: 'flex', flexDirection: 'column', gap: '10px' } },
             h('div', { style: { fontSize: '13.5px', fontWeight: 800, color: 'var(--ink-900)' } }, 'Кто платит'),
             payRow,
+            companyRow,
             noPayersHint,
             dmsHint,
             h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
@@ -2370,7 +2514,12 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // в кассу такой счёт не попадает (наличных по нему не берут), и
             // закрывающим документом для страховой/организации служит акт.
             for (const job of aktJobs) {
-                try { printAkt(job); } catch (e) { console.warn('[wizard] akt print:', e); }
+                // ACT_SHEET_V1 — талон связан с услугой полем service, и берём
+                // мы только строки ЭТОГО акта: у второго плательщика свой акт и
+                // свои номера, чужие на нём — прямая дезинформация регистратуры.
+                const names = new Set((job.lines || []).map(c => c.svc.name));
+                const aktQueue = queueRows.filter(q => names.has(q.service));
+                try { printAkt({ ...job, queue: aktQueue }); } catch (e) { console.warn('[wizard] akt print:', e); }
             }
 
             const dayWord = byDay.size > 1 ? ' ' + trf('(дней: {n})', { n: byDay.size }) : '';

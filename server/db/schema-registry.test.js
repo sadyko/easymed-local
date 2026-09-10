@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { REGISTRY, tableEntry, canRead, canWrite, readableColumns, writableColumns, filterAllowed, embedEntry } from './schema-registry.js';
+import { REGISTRY, tableEntry, canRead, canWrite, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns } from './schema-registry.js';
 
 test('users registry read columns include extra_roles', () => {
   assert.ok(readableColumns('users').includes('extra_roles'));
@@ -139,7 +139,7 @@ test('settings-section tables: admin-writable config, staff read, room/bed FK em
 });
 
 test('settings-match tables: admin config, FK embeds, api_tokens admin-read-only', () => {
-  for (const t of ['payer_policies','payment_providers','cashback_rules','referral_source_categories','referral_rewards','patient_discounts','doctor_rates']) {
+  for (const t of ['payer_policies','payment_providers','cashback_rules','referral_source_categories','patient_discounts','doctor_rates']) {
     assert.ok(canRead(t,'registrar'), t+' staff-readable');
     assert.ok(canWrite(t,'insert','admin'), t+' admin-writable');
     assert.ok(!canWrite(t,'insert','registrar'), t+' not registrar-writable');
@@ -149,6 +149,28 @@ test('settings-match tables: admin config, FK embeds, api_tokens admin-read-only
   assert.equal(embedEntry('payer_policies','payers').fk, 'payer_id');
   assert.equal(embedEntry('doctor_rates','users').fk, 'doctor_id');
   assert.equal(embedEntry('doctor_rates','services').fk, 'service_id');
+});
+
+// REFERRAL_CATEGORY_RATES_V1 (mig 115) — reward rates are money, so the columns
+// that carry them have to be readable by the report and writable by the admin
+// editor, and `referral_rewards` — which set rates by NAME MATCHING — has to be
+// gone from the registry, not merely unused by a screen.
+test('referral reward columns are wired, and the name-matched rewards table is not', () => {
+  for (const c of ['standard_percent','rates']) {
+    assert.ok(readableColumns('referral_source_categories','registrar').includes(c), 'category.'+c+' unreadable');
+    assert.ok(writableColumns('referral_source_categories','update','admin').includes(c), 'category.'+c+' unwritable');
+  }
+  for (const c of ['category_id','reward_mode','own_percent','own_rates']) {
+    assert.ok(readableColumns('referral_sources','registrar').includes(c), 'source.'+c+' unreadable');
+    assert.ok(writableColumns('referral_sources','update','admin').includes(c), 'source.'+c+' unwritable');
+  }
+  // JSON columns: without this the compiler binds an object straight at SQLite.
+  assert.deepEqual(jsonColumns('referral_source_categories'), ['rates']);
+  assert.deepEqual(jsonColumns('referral_sources'), ['own_rates']);
+  assert.equal(embedEntry('referral_sources','referral_source_categories').fk, 'category_id');
+  // A registrar books visits and may add a source, but rates are the admin's.
+  assert.ok(!canWrite('referral_sources','update','registrar'), 'registrar can rewrite reward rates');
+  assert.ok(!canRead('referral_rewards','admin'), 'referral_rewards still readable through /api/db');
 });
 
 test('clinical-spine tables: all doctor-readable + key write roles wired', () => {

@@ -64,8 +64,13 @@ function seedRu() {
   db.prepare("INSERT INTO users (id,username,password_hash,role,full_name) VALUES (1,'reg','x','admin','Регистратор Р.')").run();
   db.prepare("INSERT INTO users (id,username,password_hash,role,full_name) VALUES (2,'doc','x','doctor','Доктор Д.')").run();
   const payer = db.prepare("INSERT INTO payers (name, kind) VALUES ('ООО Ромашка','corporate')").run().lastInsertRowid;
-  const src = db.prepare("INSERT INTO referral_sources (name, category) VALUES ('Клиника Х','Партнёры')").run().lastInsertRowid;
-  db.prepare("INSERT INTO referral_rewards (name, percent) VALUES ('Клиника Х', 10)").run();
+  // REFERRAL_CATEGORY_RATES_V1 — ставка живёт на КАТЕГОРИИ источника.
+  const refCat = db.prepare("INSERT INTO referral_source_categories (name, standard_percent) VALUES ('Партнёры', 10)").run().lastInsertRowid;
+  const src = db.prepare("INSERT INTO referral_sources (name, category_id) VALUES ('Клиника Х', ?)").run(refCat).lastInsertRowid;
+  // Правило со СТАРЫМ способом задания ставки, названное точно как источник, —
+  // и с заведомо другим процентом. Отчёт обязан его не заметить: если
+  // сопоставление по имени когда-нибудь вернётся, этот тест упадёт.
+  db.prepare("INSERT INTO referral_rewards (name, percent) VALUES ('Клиника Х', 99)").run();
   const p1 = db.prepare("INSERT INTO patients (full_name, mrn, branch_id) VALUES ('Ann','P-26-1',1)").run().lastInsertRowid;
   const p2 = db.prepare("INSERT INTO patients (full_name, mrn, branch_id, payer_id) VALUES ('Bob','P-26-2',1,?)").run(payer).lastInsertRowid;
   const vid = db.prepare("INSERT INTO visits (patient_id, branch_id, visit_date, referral_source_id) VALUES (?,1,'2026-08-05T09:00:00Z',?)").run(p1, src).lastInsertRowid;
@@ -110,20 +115,68 @@ test('total_revenue: prorated discount, tax and doctor share per line', () => {
   assert.equal(row1[cols.indexOf('Статус')], 'Оплачен');
 });
 
-test('referrals: grouped by source with reward % from referral_rewards', () => {
+test('referrals: ставка берётся у категории, а не у одноимённого правила', () => {
   const { db } = seedRu();
   const r = runReport(db, { kind:'referrals', from:FROM, to:TO }, user);
   assert.equal(r.rows.length, 1);
   // BUILDING_REPORTS_V1 — первая колонка теперь «Здание».
-  const [building, source, category, mode, count, amount, pct, reward] = r.rows[0];
+  const [building, code, source, category, mode, count, amount, pct, reward] = r.rows[0];
   assert.equal(building, 'Main Branch');    // своё здание подписано своим именем
+  // REFERRAL_SOURCE_CODE_V1 — номер сверяем с тем, что в базе, а не с
+  // константой: с мигр. 122 каждый врач клиники тоже источник, и кто именно
+  // получит 0001, зависит от порядка посева, а не от смысла этого теста.
+  const expectedCode = db.prepare("SELECT code FROM referral_sources WHERE name = 'Клиника Х'").get().code;
+  assert.match(expectedCode, /^\d{4,}$/, 'источник остался без номера');
+  assert.equal(code, expectedCode, 'номер источника не попал в отчёт');
   assert.equal(source, 'Клиника Х');
-  assert.equal(category, 'Партнёры');
-  assert.equal(mode, 'Вручную');            // reward rate named exactly like the source
+  assert.equal(category, 'Партнёры');       // название из справочника, не из текста
+  assert.equal(mode, 'По категории');
   assert.equal(count, 2);
   assert.equal(amount, 1090000);            // 90 000 + 1 000 000
-  assert.equal(pct, 10);
+  assert.equal(pct, 10, 'взят процент из referral_rewards (99) вместо ставки категории');
   assert.equal(reward, 109000);
+});
+
+// REFERRAL_CATEGORY_RATES_V1 — ставка на каждую группу услуг, процентом или
+// фиксированной суммой. Ровно то, чего прежний плоский процент не умел.
+function seedGroups(db) {
+  const tCons = db.prepare("INSERT INTO service_types (name) VALUES ('Консультации')").run().lastInsertRowid;
+  const tSurg = db.prepare("INSERT INTO service_types (name) VALUES ('Хирургия')").run().lastInsertRowid;
+  db.prepare("UPDATE services SET type_id = ? WHERE name = 'Консультация'").run(tCons);
+  db.prepare("UPDATE services SET type_id = ? WHERE name = 'Операция аппендэктомия'").run(tSurg);
+  return { tCons, tSurg };
+}
+
+test('referrals: процент и фиксированная сумма в одной корзине, фикс — за каждую услугу', () => {
+  const { db } = seedRu();
+  const { tCons, tSurg } = seedGroups(db);
+  db.prepare("UPDATE referral_source_categories SET rates = ? WHERE name = 'Партнёры'").run(
+    JSON.stringify([{ type_id: tCons, unit: 'fix', value: 30000 },
+                    { type_id: tSurg, unit: 'pct', value: 20 }]));
+
+  const [, , , , mode, , amount, pct, reward] = runReport(db, { kind:'referrals', from:FROM, to:TO }, user).rows[0];
+  assert.equal(mode, 'По категории');
+  assert.equal(amount, 1090000);
+  // Консультаций ДВЕ по 30 000 фикса = 60 000 (фикс идёт за каждую услугу, а не
+  // за строку счёта); операция — 20% от 1 000 000 = 200 000.
+  assert.equal(reward, 260000);
+  // Одного процента у корзины больше нет — «Эфф. %» это доля от суммы услуг.
+  assert.equal(pct, 23.85);
+});
+
+test('referrals: своя ставка источника перекрывает категорию целиком', () => {
+  const { db } = seedRu();
+  const { tCons } = seedGroups(db);
+  db.prepare("UPDATE referral_source_categories SET rates = ? WHERE name = 'Партнёры'").run(
+    JSON.stringify([{ type_id: tCons, unit: 'pct', value: 50 }]));
+  db.prepare("UPDATE referral_sources SET reward_mode = 'own', own_percent = 5 WHERE name = 'Клиника Х'").run();
+
+  const [, , , , mode, , amount, , reward] = runReport(db, { kind:'referrals', from:FROM, to:TO }, user).rows[0];
+  assert.equal(mode, 'Своя');
+  assert.equal(amount, 1090000);
+  // 5% со всего. Ставка категории на консультации (50%) не подглядывается —
+  // решение владельца: карточка источника объясняет выплату целиком.
+  assert.equal(reward, 54500);
 });
 
 test('invoices_full: RU statuses, payer resolution, owed', () => {

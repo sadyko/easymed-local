@@ -18,7 +18,7 @@
 // server/db/schema-registry.js) — insert does NOT accept `active` (DB defaults
 // it to 1); update may send it. The settings-match config tables
 // (payer_policies / payment_providers / cashback_rules /
-// referral_source_categories / referral_rewards / patient_discounts /
+// referral_source_categories / patient_discounts /
 // api_tokens / doctor_rates) were added in migration 012.
 
 import { supabase } from '../../supabase.js';
@@ -118,11 +118,14 @@ const goto = (url) => () => { window.location.href = url; };
 //   • setup-checklist.js импортирован в admin.js, но renderSetupChecklist()
 //     не вызывается ниоткуда (см. шапку notifications.js: «Replaces …
 //     renderSetupChecklist»);
-//   • cashier-settings.js / referral-settings.js / procurement.js /
-//     reports-export.js / verify-banner.js читают companies.cashier_shift_mode,
-//     .referral_reward_rates, .costing_method, .verification_status — таких
-//     колонок нет ни в таблице, ни в schema-registry.js, эти вызовы и так
-//     отвечают 4xx (CLAUDE.md, «Cloud leftovers in an offline app»);
+//   • cashier-settings.js / procurement.js / verify-banner.js читают
+//     companies.cashier_shift_mode, .costing_method, .verification_status —
+//     таких колонок нет ни в таблице, ни в schema-registry.js, эти вызовы и так
+//     отвечают 4xx (CLAUDE.md, «Cloud leftovers in an offline app»).
+//     Из этого списка ушли двое: referral-settings.js удалён вместе с
+//     companies.referral_reward_rates (REFERRAL_CATEGORY_RATES_V1, мигр. 120),
+//     а выгрузка «Рефералы» в reports-export.js переписана на настоящие
+//     колонки — она читала несуществующие commission_mode / commission_rates;
 //   • у локальной `branches` НЕТ колонки company_id — внешнего ключа на
 //     companies в этой базе не существует вовсе (он есть только в устаревшем
 //     облачном описании sections.js).
@@ -281,7 +284,6 @@ const GROUPS = [
         items: [
             { label: 'Список источников',          desc: 'Откуда приходят пациенты',              icon: 'MapPin', live: true, action: () => openSection('referral_sources') },
             { label: 'Категории источников',       desc: 'Группы источников направлений',         icon: 'Folder', live: true, action: () => openSection('referral_source_categories') },
-            { label: 'Реферальное вознаграждение', desc: 'Процент вознаграждения за услуги',      icon: 'Coins',  live: true, action: () => openSection('referral_rewards') },
         ],
     },
     {
@@ -626,15 +628,20 @@ const LOOKUP_CONFIG = {
     referral_sources: {
         table: 'referral_sources', title: 'Source list', icon: 'MapPin',
         addTitle: 'Новый источник направления', editTitle: 'Источник направления',
-        modalWidth: '620px', modalCols: '1fr 1fr',
+        modalWidth: '920px', modalCols: '1fr 1fr',
+        embed: 'referral_source_categories(name)',
+        filterRow: true,   // LOOKUP_COLUMN_FILTERS_V1 — с мигр. 117 здесь ещё и все врачи клиники
+
         columns: [
+            { key: 'code', label: 'Номер' },
             { key: 'name', label: 'ФИО' },
             { key: 'phone', label: 'Телефон' },
             { key: 'workplace', label: 'Место работы' },
             { key: 'district', label: 'Район' },
-            { key: 'category', label: 'Категория' },
+            { key: 'referral_source_categories', label: 'Категория', embed: true },
         ],
         fields: [
+            { key: 'code',        label: 'Номер', type: 'readonly', placeholder: 'присвоится при сохранении' },
             { key: 'last_name',   label: 'Фамилия', type: 'text' },
             { key: 'first_name',  label: 'Имя', type: 'text', required: true },
             { key: 'middle_name', label: 'Отчество', type: 'text' },
@@ -644,11 +651,24 @@ const LOOKUP_CONFIG = {
             { key: 'payment_type', label: 'Тип оплаты', type: 'select',
               options: [['cash', 'Наличные'], ['card', 'На карту'], ['transfer', 'Перечислением']] },
             { key: 'card_number', label: 'Номер карты', type: 'text' },
-            // Свободный текст с подсказками из «Категорий источников»: визит-мастер
-            // группирует источники ПО ЭТОЙ СТРОКЕ, и три написания одной категории
-            // дали бы три отдельные группы.
-            { key: 'category',    label: 'Категория', type: 'suggest',
-              listTable: 'referral_source_categories', listLabel: 'name' },
+            // REFERRAL_CATEGORY_RATES_V1 (мигр. 120) — НАСТОЯЩАЯ ссылка вместо
+            // свободного текста. Текст выбирали потому, что визит-мастер
+            // группирует источники по категории, и список подсказок казался
+            // достаточным. Достаточным он не был: на категории теперь висит
+            // ставка вознаграждения, и три написания одного названия — это уже
+            // не три группы в списке, а деньги, которых партнёр не получил.
+            { key: 'category_id', label: 'Категория', type: 'fk',
+              fkTable: 'referral_source_categories', fkLabel: 'name' },
+            // Стоит галочка — платим по ставке категории; снята — у источника
+            // свои ставки, и категория не читается вовсе.
+            { key: 'reward_mode', label: 'Вознаграждение по категории (общая ставка)', type: 'checkbox',
+              checkedValue: 'category', uncheckedValue: 'own', default: 'category', full: true },
+            { key: 'own_percent', label: 'Свой процент — со всех услуг, кроме перечисленных ниже',
+              type: 'number', full: true, visibleWhen: (v) => v.reward_mode === 'own' },
+            { key: 'own_rates',   label: 'Свои ставки по группам услуг', type: 'group_rates',
+              hint: 'Пусто — действует стандартный процент сверху. Заполненная строка его перекрывает: % — доля от стоимости услуги, сум — фиксированная сумма за услугу.',
+              ratePlaceholder: 'по стандарту',
+              visibleWhen: (v) => v.reward_mode === 'own' },
         ],
         // `name` — производная колонка: её не показываем, но она NOT NULL и
         // остаётся тем, что видят все остальные экраны.
@@ -659,17 +679,26 @@ const LOOKUP_CONFIG = {
             payload.name = full;
         },
     },
+    // REFERRAL_CATEGORY_RATES_V1 (мигр. 120) — категория несёт СТАНДАРТНУЮ
+    // ставку: процент со всего плюс строки по группам услуг, которые его
+    // перекрывают. Раньше это делала отдельная плитка «Реферальное
+    // вознаграждение»: правило вознаграждения, названное точно так же, как
+    // категория, и найденное отчётом сравнением строк. Опечатка в названии
+    // молча означала 0%. Плитки больше нет — миграция перенесла каждое активное
+    // правило на категорию или источник, чьё имя оно повторяло.
     referral_source_categories: {
         table: 'referral_source_categories', title: 'Source categories', icon: 'Folder',
-        columns: [{ key: 'name', label: 'Name' }],
-        fields: [{ key: 'name', label: 'Category name', type: 'text', required: true }],
-    },
-    referral_rewards: {
-        table: 'referral_rewards', title: 'Referral reward', icon: 'Coins',
-        columns: [{ key: 'name', label: 'Name' }, { key: 'percent', label: 'Reward %' }],
+        modalWidth: '920px',
+        columns: [
+            { key: 'name', label: 'Name' },
+            { key: 'standard_percent', label: 'Стандартный %' },
+        ],
         fields: [
-            { key: 'name', label: 'Reward rule name', type: 'text', required: true },
-            { key: 'percent', label: 'Reward % of service price', type: 'number' },
+            { key: 'name', label: 'Category name', type: 'text', required: true },
+            { key: 'standard_percent', label: 'Стандартный процент — со всех услуг, кроме перечисленных ниже',
+              type: 'number', full: true },
+            { key: 'rates', label: 'Ставки по группам услуг', type: 'group_rates',
+              hint: 'Пусто — действует стандартный процент сверху. Заполненная строка его перекрывает: % — доля от стоимости услуги, сум — фиксированная сумма за услугу.' },
         ],
     },
 
@@ -713,6 +742,81 @@ function enumLabel(cfg, key, value) {
     return hit ? hit[1] : value;
 }
 
+// REFERRAL_CATEGORY_RATES_V1 — «строка на группу услуг»: число плюс единица.
+// Пустая строка записи НЕ создаёт — тогда действует процент уровнем выше;
+// заполненная его перекрывает. Явный ноль — это тоже ставка («за эту группу не
+// платим»), и он перекрывает процент так же, как любая другая.
+//
+// Единица у каждой строки своя: % — доля от стоимости услуги, сум —
+// фиксированная сумма ЗА УСЛУГУ (умножается на количество в отчёте).
+function groupRatesControl(initialRaw, hint) {
+    let initial = [];
+    try {
+        initial = Array.isArray(initialRaw) ? initialRaw
+            : (typeof initialRaw === 'string' && initialRaw.trim() ? JSON.parse(initialRaw) : []);
+    } catch { initial = []; }
+    if (!Array.isArray(initial)) initial = [];
+    const byType = new Map(initial.map(e => [Number(e && e.type_id), e]).filter(([k]) => Number.isFinite(k)));
+
+    const tbody = h('tbody');
+    const wrap = h('div', { style: { display: 'block' } },
+        h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '0 0 8px' } }, hint),
+        h('table', { class: 'tbl' },
+            h('thead', null, h('tr', null,
+                h('th', null, 'Группа услуг'),
+                h('th', { style: { textAlign: 'right', width: '240px' } }, 'Ставка'))),
+            tbody));
+
+    // Группы грузятся ПОСЛЕ монтирования, как fk-поля: модалка открывается
+    // сразу, а не ждёт сети.
+    wrap.load = async ({ placeholder } = {}) => {
+        try {
+            const { data, error } = await supabase.from('service_types').select('id, name').eq('active', 1).order('name');
+            if (error) throw error;
+            clear(tbody);
+            for (const t of (data || [])) {
+                const cur = byType.get(Number(t.id));
+                const val = cur && Number.isFinite(Number(cur.value)) ? String(cur.value) : '';
+                const unit = cur && cur.unit === 'fix' ? 'fix' : 'pct';
+                tbody.appendChild(h('tr', null,
+                    h('td', null, t.name),
+                    h('td', null, h('div', { class: 'rate-cell' },
+                        h('input', {
+                            type: 'number', min: '0', step: '0.01', 'data-rate-type': String(t.id),
+                            value: val, placeholder: placeholder || '',
+                        }),
+                        h('select', { 'data-rate-unit': String(t.id) },
+                            h('option', { value: 'pct', selected: unit === 'pct' }, '%'),
+                            h('option', { value: 'fix', selected: unit === 'fix' }, 'сум'))))));
+            }
+            if (!(data || []).length) {
+                tbody.appendChild(h('tr', null, h('td', { colspan: '2', class: 'muted' }, 'Группы услуг не заведены.')));
+            }
+        } catch (e) {
+            clear(tbody);
+            tbody.appendChild(h('tr', null, h('td', { colspan: '2', class: 'muted' },
+                trf('Группы услуг не загрузились: {msg}', { msg: (e && e.message) || e }))));
+        }
+    };
+
+    // save() читает поле обобщённо через .value — новый тип ему знать не нужно.
+    Object.defineProperty(wrap, 'value', {
+        get() {
+            const out = [];
+            for (const inp of tbody.querySelectorAll('input[data-rate-type]')) {
+                const raw = inp.value.trim();
+                if (raw === '') continue;              // пусто — записи нет
+                const value = Number(raw);
+                if (!Number.isFinite(value) || value < 0) continue;
+                const sel = tbody.querySelector('select[data-rate-unit="' + inp.dataset.rateType + '"]');
+                out.push({ type_id: Number(inp.dataset.rateType), unit: sel && sel.value === 'fix' ? 'fix' : 'pct', value });
+            }
+            return out;
+        },
+    });
+    return wrap;
+}
+
 async function renderEditor(container, key) {
     const cfg = LOOKUP_CONFIG[key];
     if (!cfg) { backToHub(); return; }   // unknown section — safety net, never happens from the hub UI
@@ -720,6 +824,65 @@ async function renderEditor(container, key) {
     const tbody = h('tbody');
     const emptyEl = h('div', { class: 'empty', style: { display: 'none' } },
         `No ${cfg.title.toLowerCase()} yet — add the first one.`);
+
+    // LOOKUP_COLUMN_FILTERS_V1 — строка отбора под шапкой, по полю на колонку.
+    //
+    // Появилась, когда в списке источников направления стало 23 строки: с
+    // мигр. 122 каждый врач клиники — тоже источник, и найти среди них одного
+    // внешнего партнёра глазами уже нельзя.
+    //
+    // Отбор КЛИЕНТСКИЙ, по уже загруженным строкам: список и так приезжает
+    // целиком (limit 500), и ходить на сервер за каждой набранной буквой значило
+    // бы 500 запросов там, где хватает одного. Если справочник когда-нибудь
+    // упрётся в этот предел, отбор придётся унести на сервер — и тогда об этом
+    // скажет сам предел, а не тихо неполный список.
+    //
+    // Включается конфигурацией (`filterRow: true`), а не всем подряд: в
+    // справочнике из трёх строк строка отбора — лишний шум.
+    const filterInputs = new Map();   // column key (или '__active') -> control
+    let allRows = [];
+
+    // Текст, по которому колонка ищется. ВАЖНО: это то же самое, что видно в
+    // ячейке (подпись перечисления, название по ссылке) — иначе отбор шёл бы по
+    // тому, чего на экране нет, и «ничего не нашлось» выглядело бы поломкой.
+    function cellText(row, c) {
+        const v = c.embed ? (row[c.key] ? row[c.key][c.embedLabel || 'name'] : null)
+                          : enumLabel(cfg, c.key, row[c.key]);
+        return v === 0 ? '0' : (v == null ? '' : String(v));
+    }
+
+    // toLowerCase(), а не встроенный в базу lower(): здесь JS, и он складывает
+    // регистр кириллицы (то же соображение, что у lower_uni в db/connection.js).
+    const norm = (s) => String(s == null ? '' : s).toLowerCase().trim();
+
+    function visibleRows() {
+        const active = filterInputs.get('__active');
+        const wantActive = active ? active.value : '';
+        return allRows.filter((row) => {
+            if (wantActive === 'yes' && !row.active) return false;
+            if (wantActive === 'no' && row.active) return false;
+            for (const c of cfg.columns) {
+                const q = norm(filterInputs.get(c.key)?.value);
+                if (q && !norm(cellText(row, c)).includes(q)) return false;
+            }
+            return true;
+        });
+    }
+
+    function filterRowEl() {
+        const onInput = () => paintRows(visibleRows());
+        const cell = (key, control) => { filterInputs.set(key, control); return h('td', { class: 'tbl-filter' }, control); };
+        return h('tr', { class: 'tbl-filter-row' },
+            ...cfg.columns.map(c => cell(c.key,
+                h('input', { type: 'text', placeholder: tr('Отбор…'), oninput: onInput }))),
+            cell('__active', h('select', { onchange: onInput },
+                h('option', { value: '' }, tr('Все')),
+                h('option', { value: 'yes' }, tr('Только активные')),
+                h('option', { value: 'no' }, tr('Только неактивные')))),
+        );
+    }
+
+    const anyFilterSet = () => [...filterInputs.values()].some(el => (el.value || '') !== '');
 
     const addBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openRowModal(null) },
         Icon('Plus', { size: 14 }), ' Add');
@@ -745,10 +908,13 @@ async function renderEditor(container, key) {
                 addBtn,
             ),
             h('table', { class: 'tbl' },
-                h('thead', null, h('tr', null,
-                    ...cfg.columns.map(c => h('th', null, c.label)),
-                    h('th', null, 'Active'),
-                )),
+                h('thead', null,
+                    h('tr', null,
+                        ...cfg.columns.map(c => h('th', null, c.label)),
+                        h('th', null, 'Active'),
+                    ),
+                    cfg.filterRow ? filterRowEl() : null,
+                ),
                 tbody,
             ),
             emptyEl,
@@ -761,6 +927,7 @@ async function renderEditor(container, key) {
         renderBranchSyncCard(syncSlot).catch((e) => console.warn('[branch-sync] card failed:', e && e.message));
     }
 
+
     await load();
 
     async function load() {
@@ -771,17 +938,33 @@ async function renderEditor(container, key) {
         try {
             const cols = cfg.embed ? '*, ' + cfg.embed : '*';
             const { data, error } = await supabase.from(cfg.table).select(cols).order(cfg.orderBy || 'name').limit(500);
-            if (error) { toast(`Failed to load ${cfg.title.toLowerCase()}: ` + (error.message || error), 'fail'); paintRows([]); return; }
-            paintRows(data || []);
+            if (error) { toast(`Failed to load ${cfg.title.toLowerCase()}: ` + (error.message || error), 'fail'); allRows = []; paintRows([]); return; }
+            allRows = data || [];
+            paintRows(visibleRows());
         } catch (e) {
             toast(`Failed to load ${cfg.title.toLowerCase()}: ` + (e && e.message || e), 'fail');
+            allRows = [];
             paintRows([]);
         }
     }
 
     function paintRows(rows) {
         clear(tbody);
-        if (!rows || rows.length === 0) { emptyEl.style.display = ''; return; }
+        if (!rows || rows.length === 0) {
+            // LOOKUP_COLUMN_FILTERS_V1 — «отбор ничего не нашёл» и «ничего не
+            // заведено» это РАЗНЫЕ факты, и одна фраза на оба отправила бы
+            // заводить запись, которая уже есть и просто отфильтрована.
+            if (anyFilterSet()) {
+                emptyEl.style.display = 'none';
+                tbody.appendChild(h('tr', null, h('td', {
+                    colspan: String(cfg.columns.length + 1),
+                    style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' },
+                }, trf('Под отбор не попала ни одна строка из {n}.', { n: allRows.length }))));
+            } else {
+                emptyEl.style.display = '';
+            }
+            return;
+        }
         emptyEl.style.display = 'none';
         for (const row of rows) tbody.appendChild(rowEl(row));
     }
@@ -812,6 +995,8 @@ async function renderEditor(container, key) {
         const controls = {};   // field key -> input/select element
         const fkFields = [];   // fk fields whose <select> options load async, after mount
         const suggestFields = [];   // SUGGEST_FIELD_V1 — datalists filled after mount
+        const rateFields = [];      // REFERRAL_CATEGORY_RATES_V1 — таблицы ставок, тоже после монтирования
+        const conditional = [];     // CONDITIONAL_FIELDS_V1 — поля с visibleWhen
         const fieldEls = cfg.fields.map(f => {
             let control;
             if (f.type === 'select') {
@@ -849,12 +1034,56 @@ async function renderEditor(container, key) {
                 const inner = control.firstChild;
                 Object.defineProperty(control, 'value', { get: () => inner.value, set: (v) => { inner.value = v; } });
                 suggestFields.push({ f, dl });
+            } else if (f.type === 'readonly') {
+                // REFERRAL_SOURCE_CODE_V1 — системное значение: показываем, но
+                // обратно не отправляем (save() его пропускает). У новой записи
+                // его ещё нет — номер присвоит триггер при вставке.
+                control = h('input', { type: 'text', disabled: '',
+                    value: row ? (row[f.key] || '') : '',
+                    placeholder: row ? '' : (f.placeholder || '') });
+            } else if (f.type === 'checkbox') {
+                // REFERRAL_CATEGORY_RATES_V1 — галочка, хранящая одно из ДВУХ
+                // значений перечисления, а не 0/1: «по категории» / «своя».
+                const cur = row ? row[f.key] : (f.default !== undefined ? f.default : f.checkedValue);
+                control = h('input', { type: 'checkbox', checked: cur !== f.uncheckedValue });
+            } else if (f.type === 'group_rates') {
+                control = groupRatesControl(row ? row[f.key] : null, f.hint || '');
+                rateFields.push({ f, control });
             } else {
                 control = h('input', { type: 'text', value: row ? (row[f.key] || '') : '' });
             }
             controls[f.key] = control;
-            return field(f.label, control, { required: !!f.required });
+            // Поля во всю ширину модалки: таблица ставок в одну колонку сетки —
+            // это горизонтальная прокрутка внутри окна.
+            const wrapped = f.type === 'checkbox' ? checkField(f.label, control)
+                                                  : field(f.label, control, { required: !!f.required });
+            if (f.full || f.type === 'group_rates') wrapped.style.gridColumn = '1 / -1';
+            if (f.visibleWhen) conditional.push({ f, el: wrapped });
+            return wrapped;
         });
+
+        // Значение поля в том виде, в каком его понимает конфигурация:
+        // у галочки это её значение перечисления, а не true/false.
+        function readControl(f) {
+            const c = controls[f.key];
+            if (!c) return undefined;
+            if (f.type === 'checkbox') return c.checked ? f.checkedValue : f.uncheckedValue;
+            return c.value;
+        }
+        const formValues = () => Object.fromEntries(cfg.fields.map(f => [f.key, readControl(f)]));
+
+        // CONDITIONAL_FIELDS_V1 — поле, которое имеет смысл только при
+        // определённом выборе в другом поле (свои ставки — только когда снята
+        // галочка «по категории»). Тот же приём, что в sections.js.
+        function syncConditional() {
+            const v = formValues();
+            for (const { f, el } of conditional) el.hidden = !f.visibleWhen(v);
+        }
+        for (const f of cfg.fields) {
+            const c = controls[f.key];
+            if (c && c.addEventListener) c.addEventListener('change', syncConditional);
+        }
+        syncConditional();
         const activeChk = h('input', { type: 'checkbox', checked: row ? !!row.active : true });
 
         // FK_OPTIONS_V2 — load each fk <select>'s options from its lookup table
@@ -896,6 +1125,12 @@ async function renderEditor(container, key) {
         async function save() {
             const payload = {};
             for (const f of cfg.fields) {
+                if (f.type === 'readonly') continue;   // REFERRAL_SOURCE_CODE_V1 — присваивает база, не форма
+                if (f.type === 'checkbox') { payload[f.key] = readControl(f); continue; }
+                // Массив ставок уходит как есть: колонка объявлена JSON в
+                // реестре, компилятор сериализует её сам. Пустой массив — это
+                // «ставок нет», его тоже надо записать, чтобы снять прежние.
+                if (f.type === 'group_rates') { payload[f.key] = controls[f.key].value; continue; }
                 if (f.type === 'number') { payload[f.key] = Number(controls[f.key].value) || 0; continue; }
                 if (f.type === 'fk') {
                     const raw = controls[f.key].value;
@@ -955,5 +1190,6 @@ async function renderEditor(container, key) {
         document.body.appendChild(overlay);
         for (const f of fkFields) loadFkOptions(f);
         for (const s of suggestFields) loadSuggestions(s);
+        for (const r of rateFields) r.control.load({ placeholder: r.f.ratePlaceholder }).then(syncConditional);
     }
 }

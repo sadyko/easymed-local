@@ -13,7 +13,7 @@
 // Единственная правка при переносе: buildSheetHtml больше не подставляет
 // loadDocSettings() сам (это localStorage) — настройки передаёт вызывающий.
 
-import { renderDesignedVariant } from '../admin/views/doc-variants.js?v=noqr1';
+import { renderDesignedVariant, queueGroups } from '../admin/views/doc-variants.js?v=noqr1';
 // ONEST_TYPOGRAPHY_V1 — печатное окно/PDF — отдельный документ, admin.css туда
 // не попадает; @font-face приезжает из общего модуля (см. его шапку).
 // MONTH_WORDS_V1 (2026-09-05) — дата на бланке не зависит от компьютера.
@@ -270,6 +270,14 @@ ${paper.cls === 'fiscal' ? `.sheet, .sheet * { color: #000 !important; font-weig
        идёт следом за содержимым, а не приклеен к низу - сознательный размен:
        у документа на три страницы подвал внизу ПЕРВОЙ был бы просто ошибкой. */
     .sheet { display: block; overflow: visible; }
+    /* FOOTER_PRINT_GAP_V1 — подвал держится низа листа через margin-top:auto,
+       а auto работает только внутри flex-колонки. Строкой выше эта колонка в
+       печати НАМЕРЕННО распускается в обычный блок, и отступ обращается в ноль:
+       подвал прилипает к последнему блоку содержимого — на акте это плашка
+       очереди, вплотную к «Thank you for choosing our clinic». На экране не
+       видно, потому что там колонка цела и auto отжимает подвал вниз. Нужен
+       настоящий отступ, а не auto. */
+    .footer { margin-top: 26px; }
     /* Заголовок таблицы повторяется на каждой странице: иначе на второй
        странице колонки цифр остаются без подписей. */
     thead { display: table-header-group; }
@@ -800,19 +808,57 @@ function invoiceBody(s, d) {
 // Медицинский акт оказанных услуг — печатается для непациентских плательщиков
 // (ДМС / B2B / госпрограмма) вместо счёта. Пациент подписывает после оказания
 // услуг; акт используется для сверки и выставления счёта плательщику.
+// ACT_QUEUE_BOX_V1 — плашка очереди для A4.
+//
+// Чековая вёрстка (QUEUE_CSS) сюда не годится: она рассчитана на 58-мм
+// ленту — всё по центру, номер в 40px, — и на листе А4 растягивалась во всю
+// ширину. Здесь компактная плашка со скруглением, прижатая влево: направление
+// и услуги под ним мелким, номер крупным справа. Данные берутся общей
+// queueGroups(), поэтому правило «номер принадлежит направлению, а не
+// услуге» остаётся в одном месте на оба бланка.
+function actQueueHtml(d) {
+    const groups = queueGroups(d);
+    if (!groups.length) return '';
+    const box = (g) => `<div style="display:inline-flex;align-items:center;gap:16px;border:1px solid #d5dee3;border-radius:10px;padding:8px 14px;">
+        <div>
+            ${g.label ? `<div style="font-size:11px;font-weight:700;color:#25313a;line-height:1.3;">${esc(g.label)}</div>` : ''}
+            ${g.services.map(sv => `<div style="font-size:9.5px;color:#8a96a0;line-height:1.3;">${esc(sv)}</div>`).join('')}
+        </div>
+        <div style="font-size:22px;font-weight:800;color:#25313a;line-height:1;">${esc(String(g.number))}</div>
+    </div>`;
+    return `<div style="margin-top:22px;">
+        <div style="font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#8a96a0;margin-bottom:6px;">${groups.length > 1 ? 'Номера очереди' : 'Номер очереди'}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;">${groups.map(box).join('')}</div>
+    </div>`;
+}
+
+// ACT_SHEET_V1 — номер очереди печатается ВНИЗУ бланка, под местами подписи
+// и печатью: так в образце владельца (2026-09-08). Сначала блок стоял выше —
+// «ради очереди документ несут дальше» — но это был мой довод, а не его, и
+// порядок в бланке задаёт владелец. Порядок закреплён тестом, а не глазами.
+//
+// ACT_PROTOCOL_SIGN_V1 — мест подписи ДВА: Пациент и Врач.
+//
+// Третьим печаталось «Представитель страховой» — на КАЖДОМ акте, включая
+// договорной, где страховой в сделке нет и подписывать было некому: пустая
+// линия на документе, который подшивают. Убрано решением владельца 2026-09-07.
+//
+// Пояснение живёт ЗДЕСЬ, а не HTML-комментарием внутри шаблона: тот попал бы
+// в разметку каждого напечатанного акта. Проверено собственным тестом этого
+// файла — он на этом и поймал.
 function actBody(s, d) {
     d = d || {};
     const items = (d.items || []).map(it => {
         const gross = Number(it.qty || 1) * Number(it.price || 0);
         const disc  = Number(it.disc || 0);
         const net   = Math.round(gross * (1 - disc / 100));
-        return `<div class="row ${it._alt ? 'alt' : ''}" style="grid-template-columns: 2fr 0.7fr 1.1fr 0.8fr 1.1fr 0.5fr;">
+        return `<div class="row ${it._alt ? 'alt' : ''}" style="grid-template-columns: 2fr 0.6fr 1fr 0.7fr 1fr 1.3fr;">
             <span class="name">${esc(it.name)}</span>
             <span class="val" style="font-weight:500;color:#55636d;">${esc(String(it.qty || 1))}</span>
             <span class="val">${Number(it.price || 0).toLocaleString('ru-RU')} <span class="u">UZS</span></span>
             <span class="val">${disc ? disc + ' %' : '—'}</span>
             <span class="val">${net.toLocaleString('ru-RU')} <span class="u">UZS</span></span>
-            <span class="val" style="text-align:center;font-size:14px;line-height:1;">☐</span>
+            <span class="val" style="border-bottom:1px solid #c8d2d8;min-height:14px;"></span>
         </div>`;
     }).join('');
     const subtotal      = (d.items || []).reduce((a, it) => a + Number(it.qty || 1) * Number(it.price || 0), 0);
@@ -839,8 +885,8 @@ function actBody(s, d) {
         </div>
         ${sectionBar('Оказанные услуги', s.accent)}
         <div class="lab">
-            <div class="hd" style="grid-template-columns: 2fr 0.7fr 1.1fr 0.8fr 1.1fr 0.5fr;">
-                <span>Услуга</span><span class="r">Кол-во</span><span class="r">Цена</span><span class="r">Скидка</span><span class="r">Сумма</span><span class="r" style="text-align:center;">✓</span>
+            <div class="hd" style="grid-template-columns: 2fr 0.6fr 1fr 0.7fr 1fr 1.3fr;">
+                <span>Услуга</span><span class="r">Кол-во</span><span class="r">Цена</span><span class="r">Скидка</span><span class="r">Сумма</span><span class="r">Подпись</span>
             </div>
             ${items || '<div class="row"><span style="color:#999;">Нет услуг.</span></div>'}
         </div>
@@ -853,14 +899,14 @@ function actBody(s, d) {
             <div style="display:flex;gap:28px;">
                 <div style="flex:1;border-top:1px solid ${s.ink};padding-top:6px;">Пациент<br><span style="font-size:10px;color:#8a96a0;">подпись / Ф.И.О.</span></div>
                 <div style="flex:1;border-top:1px solid ${s.ink};padding-top:6px;">Врач<br><span style="font-size:10px;color:#8a96a0;">подпись / Ф.И.О.</span></div>
-                <div style="flex:1;border-top:1px solid ${s.ink};padding-top:6px;">Представитель страховой<br><span style="font-size:10px;color:#8a96a0;">подпись / Ф.И.О.</span></div>
             </div>
             <div style="display:flex;gap:28px;margin-top:28px;align-items:flex-end;">
-                <div style="flex:1;border-top:1px solid ${s.ink};padding-top:6px;">Дата</div>
+                <div style="flex:1;"></div>
                 <div style="flex:1;text-align:center;">М.П.<br><span style="font-size:10px;color:#8a96a0;">место печати</span></div>
                 <div style="flex:1;"></div>
             </div>
         </div>
+        ${actQueueHtml(d)}
         ${footerHTML(s)}
     `;
 }

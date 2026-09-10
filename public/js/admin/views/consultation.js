@@ -13,6 +13,8 @@
 //     completed    → static "Done" tag
 
 import { supabase } from '../../supabase.js';
+// INTERNAL_REFERRAL_V1 — правило «какая ставка применяется» общее с отчётом.
+import { resolveReferralRate, rewardForLine } from '../../shared/referral-reward.js?v=rr1';
 import { h, Icon, Tag, PageHead, toast, clear, avColor, initials, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { scopedDoctorId, selfDoctorId, scopedProviderId } from '../permissions.js';   // ADMIN_DOCTOR_V2 / SERVICE_SCOPE_V1
@@ -81,7 +83,8 @@ const state = {
         doctor:    null,      // full users row for the picked doctor
         services:  [],        // visit_services this doctor performed in the period
         referrals: [],        // recommended_services where recommended_by = doctor
-        bonusRules:[],        // doctor_referral_bonuses rules for this doctor
+        rewardSource:null,    // INTERNAL_REFERRAL_V1 — карточка источника этого врача
+        rewardCategory:null,  // и её категория: стандартная ставка
     },
 };
 
@@ -1544,6 +1547,7 @@ async function loadDashboardData() {
         createdAt:    r.created_at,
         closedAt:     r.closed_at,
         serviceId:    r.service_id,
+        serviceTypeId: r.services?.type_id ?? null,   // INTERNAL_REFERRAL_V1 — ставка задана по ГРУППЕ услуг
         serviceName:  r.services?.name || r.service_name || '(removed)',
         servicePrice: Number(r.services?.price || 0),
         taxRate:      r.services?.tax_rate != null ? Number(r.services.tax_rate) : 0,   // DOCTOR_SHARE_AFTER_TAX_V1
@@ -1556,24 +1560,45 @@ async function loadDashboardData() {
         patientMrn:   r.patients?.mrn || '',
     }));
 
-    // 4. Referral reward rules — DOCTOR_PAY_REFERRAL_WIRE_V1: read from users.referral_rates
-    // (the consolidated source the employee editor writes), NOT the empty
-    // doctor_referral_bonuses table the old code queried (always returned 0).
-    const _refDoc = state.dash.doctors.find(d => String(d.id) === String(docId));
-    state.dash.bonusRules = (_refDoc && Array.isArray(_refDoc.referral_rates)) ? _refDoc.referral_rates : [];
+    // 4. Ставка вознаграждения за направление — INTERNAL_REFERRAL_V1 (мигр. 122).
+    //
+    // Читается ОТТУДА ЖЕ, откуда её берёт отчёт «Рефералы»: из карточки
+    // источника этого врача и его категории. Раньше здесь лежал свой механизм
+    // (users.referral_rates, ставка на КАЖДУЮ услугу), и он расходился с
+    // отчётом дважды: другой формой ставки и — молча — сломанным ключом.
+    // Редактор сохраняет процент как `pct` (routes/users.js, parseRates
+    // объявляет его каноническим), а этот экран читал `rule.percentage`,
+    // которого в сохранённой строке нет. То есть врачу показывался только
+    // фиксированный рубль за направление, а процент от цены — всегда ноль.
+    // Проверить это глазами было нельзя: ноль выглядит как «ещё не заработал».
+    const { data: _refSrc } = await supabase.from('referral_sources')
+        .select('id, reward_mode, own_percent, own_rates, category_id')
+        .eq('doctor_id', docId).limit(1);
+    state.dash.rewardSource = (_refSrc && _refSrc[0]) || null;
+    state.dash.rewardCategory = null;
+    if (state.dash.rewardSource && state.dash.rewardSource.category_id != null) {
+        const { data: _cat } = await supabase.from('referral_source_categories')
+            .select('id, standard_percent, rates').eq('id', state.dash.rewardSource.category_id).limit(1);
+        state.dash.rewardCategory = (_cat && _cat[0]) || null;
+    }
 
     state.dash.loaded = true;
 }
 
-// Compute one referral's commission using doctor_referral_bonuses rules.
-function commissionFor(referral, rules) {
+// Вознаграждение за одно направление — INTERNAL_REFERRAL_V1.
+//
+// Считает ОБЩИЙ модуль, тот же, что и отчёт «Рефералы» (shared/referral-reward.js):
+// две реализации «какая ставка применяется» на одном вознаграждении разошлись бы
+// молча — врач видел бы в кабинете одну сумму, ведомость показывала бы другую, и
+// обе выглядели бы рабочими.
+function commissionFor(referral) {
     if (!referral || !referral.serviceId) return 0;
-    // DOCTOR_PAY_REFERRAL_WIRE_V1 — referral_rates shape: { service_id, fixed (per-referral UZS), percentage (% of price) }.
-    const rule = (rules || []).find(r => String(r.service_id) === String(referral.serviceId));
-    if (!rule) return 0;
-    const fixed = Number(rule.fixed || 0);
-    const pct   = Number(rule.percentage || 0);
-    return fixed + Math.round(Number(referral.servicePrice || 0) * pct / 100);
+    const rate = resolveReferralRate({
+        source: state.dash.rewardSource,
+        category: state.dash.rewardCategory,
+        serviceTypeId: referral.serviceTypeId,
+    });
+    return Math.round(rewardForLine(rate, { amount: Number(referral.servicePrice || 0), discount: 0, qty: 1 }));
 }
 
 // DOCTOR_DASHBOARD_V1 — serviceRateMap()/serviceShare() ЖИВУТ В
@@ -1615,11 +1640,10 @@ function computeSalary() {
 }
 
 function computeReferralRewards() {
-    const rules = state.dash.bonusRules;
     let total = 0;
     const bySector = {};      // sector → { count, commission }
     for (const ref of state.dash.referrals) {
-        const c = commissionFor(ref, rules);
+        const c = commissionFor(ref);
         const sector = ref.serviceCat || ref.serviceType || '(uncategorised)';
         const slot = bySector[sector] || (bySector[sector] = { count: 0, commission: 0 });
         slot.count++;
@@ -1804,7 +1828,6 @@ function sectorLabel(name) {
 }
 
 function referralAnalyticsCard() {
-    const rules = state.dash.bonusRules;
     // Group referrals by their service TYPE (falls back to category, then to
     // a single bucket).
     const buckets = {};
@@ -1963,7 +1986,7 @@ function recentReferralsCard() {
                 tagEl(referralStatusLabel(r.status),
                       r.status === 'done' ? 'ok' : r.status === 'cancelled' ? 'crit' : 'warn', null),
                 h('span', { class: 'num cell-strong', style: { fontSize: '13.5px', minWidth: '80px', textAlign: 'right', color: 'var(--ok-700)' } },
-                    commissionFor(r, state.dash.bonusRules).toLocaleString('ru-RU')),
+                    commissionFor(r).toLocaleString('ru-RU')),
             ))),
     );
 }
@@ -2175,7 +2198,7 @@ function openReferralDetails() {
                 h('th', { style: { textAlign: 'right' } }, tr('Вознаграждение')),
             )),
             h('tbody', null, ...rows.map(r => {
-                const c = commissionFor(r, state.dash.bonusRules);
+                const c = commissionFor(r);
                 const sec = r.serviceCat || r.serviceType || NO_SECTOR;
                 return h('tr', null,
                     h('td', { class: 'num muted', style: { fontSize: '12.5px' } }, formatDateTime(r.createdAt)),
