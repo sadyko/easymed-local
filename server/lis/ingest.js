@@ -105,10 +105,25 @@ export function ingestMessage(db, raw, peer = '', deviceId = null) {
       detail: 'панель «' + panel.name + '» не привязана к анализатору' });
     return 'AA';
   }
+  // Панель привязана к ОДНОМУ прибору, но в лаборатории обычное дело — два
+  // одинаковых анализатора, и пробирку прогоняют на том, что свободен. Поэтому
+  // сверяется МОДЕЛЬ, а не строка прибора: у одинаковых моделей одни и те же
+  // коды каналов, и сопоставление панели верно для обеих. Отказ по номеру
+  // строки означал бы, что результат теряется в зависимости от того, какая
+  // машина оказалась свободна.
+  //
+  // Пустой профиль совпадением НЕ считается: иначе любой неопознанный прибор
+  // писал бы в любую панель.
   if (deviceId && panel.device_id !== deviceId) {
-    recordMessage(db, { ...base, visitServiceId: order.id, status: 'unmatched',
-      detail: 'панель «' + panel.name + '» кормится другим анализатором' });
-    return 'AA';
+    const mine = db.prepare('SELECT profile FROM lab_devices WHERE id = ?').get(deviceId);
+    const panelDev = db.prepare('SELECT profile, name FROM lab_devices WHERE id = ?').get(panel.device_id);
+    const sameModel = mine && panelDev && mine.profile && mine.profile === panelDev.profile;
+    if (!sameModel) {
+      recordMessage(db, { ...base, visitServiceId: order.id, status: 'unmatched',
+        detail: 'панель «' + panel.name + '» кормится анализатором другой модели'
+          + (panelDev && panelDev.name ? ' («' + panelDev.name + '»)' : '') });
+      return 'AA';
+    }
   }
 
   // D7 — выданный бланк молча не переписывается. Проверка ДО записи: замещать

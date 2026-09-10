@@ -47,31 +47,22 @@ export async function startLisListeners(db, { log = console.log } = {}) {
         onMessage: async (text, peer) => {
           const ip = normalizeIp(peer);
 
-          // Известный прибор по адресу — самый частый и самый дешёвый случай.
-          let device = list.find((d) => d.host && normalizeIp(d.host) === ip) || null;
+          // Кто прислал — решает ТОЛЬКО ensureDevice. Свой быстрый поиск «по
+          // адресу» здесь уже был и оказался вреден: он обходил проверку модели
+          // и приписывал второй анализатор, стоящий за тем же адресом, к первой
+          // найденной строке. Два набора правил про одно и то же неизбежно
+          // расходятся — правило должно быть одно, и оно там.
+          let sendingApp = '';
+          let parsed = true;
+          try { sendingApp = parseMessage(text).sendingApp || ''; } catch { parsed = false; }
 
-          if (!device) {
-            // Как прибор себя назвал. Разбор может не удаться — тогда прибор
-            // не определяем, но сообщение всё равно сохранится в лотке
-            // (инвариант 2): мусор на порту не должен заводить строк.
-            let sendingApp = '';
-            try { sendingApp = parseMessage(text).sendingApp || ''; } catch { /* мусор — прибор не заводим */ }
-
-            if (sendingApp || list.length !== 1) {
-              const found = ensureDevice(db, { sendingApp, peer: ip, port });
-              device = found.device;
-              if (found.created) {
-                log(`LIS: обнаружен анализатор «${device.name}» (${ip || 'адрес неизвестен'}), порт ${port}`);
-                // Список этого слушателя пополняем на лету: следующее сообщение
-                // с того же адреса найдётся сразу, без похода в базу.
-                list.push(device);
-              }
-            } else {
-              device = list[0];
-            }
+          const found = ensureDevice(db, { sendingApp, peer: ip, port, allowCreate: parsed });
+          if (found.created) {
+            log(`LIS: обнаружен анализатор «${found.device.name}» (${ip || 'адрес неизвестен'}), порт ${port}`);
+            list.push(found.device);
           }
 
-          return ingestMessage(db, text, ip, device ? device.id : null);
+          return ingestMessage(db, text, ip, found.device ? found.device.id : null);
         },
       });
       running.push(srv);

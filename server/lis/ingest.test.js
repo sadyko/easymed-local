@@ -226,13 +226,38 @@ test('панель без анализатора → unmapped: клиника е
   db.close();
 });
 
-test('панель кормится ДРУГИМ анализатором → unmatched, значения не пишутся', () => {
+test('панель кормится анализатором ДРУГОЙ МОДЕЛИ → unmatched, значения не пишутся', () => {
   const db = fresh();
   db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'Биохимия','mindray-bs-240')").run();
   ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1')]), '127.0.0.1', 2);
   assert.equal(message(db).status, 'unmatched');
-  assert.match(message(db).detail, /другим анализатором/);
+  assert.match(message(db).detail, /другой модел/i);
   assert.equal(results(db).length, 0);
+  db.close();
+});
+
+// НЕСКОЛЬКО ОДИНАКОВЫХ ПРИБОРОВ — обычное дело в лаборатории.
+test('второй анализатор ТОЙ ЖЕ модели принимается: пробу мог прогнать любой из них', () => {
+  // Панель привязана к прибору 1. Пробирку прогнали на приборе 2 — такой же
+  // BC-5300, стоящий рядом. Отказ означал бы, что результат теряется в
+  // зависимости от того, какая машина оказалась свободна, а коды каналов у
+  // одинаковых моделей те же самые — сопоставление панели верно для обеих.
+  const db = fresh();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'Гематология 2','mindray-bc-5300')").run();
+  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1')]), '10.0.0.12', 2);
+
+  assert.equal(results(db).length, 1, 'результат с одинаковой модели обязан лечь');
+  assert.equal(results(db)[0].value, '6.1');
+  assert.equal(message(db).status, 'applied');
+  db.close();
+});
+
+test('прибор без модели к чужой панели не допускается — пустой профиль не «совпадает» ни с чем', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'Неизвестный','')").run();
+  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1')]), '10.0.0.13', 2);
+  assert.equal(message(db).status, 'unmatched');
+  assert.equal(results(db).length, 0, 'иначе любой неопознанный прибор писал бы в любую панель');
   db.close();
 });
 

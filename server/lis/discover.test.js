@@ -49,13 +49,36 @@ test('второе сообщение того же прибора НЕ заво
   db.close();
 });
 
-test('сменившийся адрес (DHCP) переезжает на ту же строку, а не плодит новую', () => {
+test('прибор с другого адреса заводится ОТДЕЛЬНОЙ строкой, даже если назвался так же', () => {
+  // РЕШЕНИЕ, а не недосмотр. Два одинаковых анализатора представляются по HL7
+  // одинаково (MSH-3 — модель, не серийный номер), поэтому «тот же прибор с
+  // новым адресом по DHCP» неотличим от «второго такого же прибора».
+  //
+  // Раньше строка переезжала на новый адрес — и два настоящих прибора
+  // склеивались в один: адрес и «последнее сообщение» прыгали между ними, и ни
+  // одной строке нельзя было верить. Теперь лишняя строка после смены адреса
+  // ВИДНА в списке и удаляется одним щелчком, а результаты продолжают ложиться:
+  // панель принимает от прибора той же модели.
   const db = fresh();
   ensureDevice(db, { sendingApp: 'BC-5300', peer: '10.0.0.9' });
   const out = ensureDevice(db, { sendingApp: 'BC-5300', peer: '10.0.0.55' });
+  assert.equal(out.created, true);
+  assert.equal(devices(db).length, 2);
+  assert.equal(devices(db)[0].host, '10.0.0.9', 'прежняя строка не трогается — иначе это снова тихая склейка');
+  assert.equal(devices(db)[1].host, '10.0.0.55');
+  db.close();
+});
+
+test('прибор, заведённый БЕЗ адреса, принимает первый заговоривший — адрес просто дописывается', () => {
+  // Обратный случай: строку создали заранее (или прибор ещё не говорил), адрес
+  // пуст. Заводить вторую строку здесь было бы глупо — заполняем эту.
+  const db = fresh();
+  db.prepare("INSERT INTO lab_devices (name, profile, host, discovered) VALUES ('BC-5300','mindray-bc-5300','',1)").run();
+  db.prepare("INSERT INTO lab_devices (name, profile, host, enabled) VALUES ('Биохимия','mindray-bs-240','10.0.0.80',1)").run();
+  const out = ensureDevice(db, { sendingApp: 'BC-5300', peer: '10.0.0.9' });
   assert.equal(out.created, false);
-  assert.equal(devices(db).length, 1);
-  assert.equal(devices(db)[0].host, '10.0.0.55', 'адрес обязан обновиться — иначе прибор «потеряется» после перезагрузки роутера');
+  assert.equal(out.device.host, '10.0.0.9');
+  assert.equal(devices(db).length, 2);
   db.close();
 });
 
@@ -96,5 +119,61 @@ test('потолок находок: порт неаутентифицирова
   assert.equal(out.device, null);
   assert.match(out.reason, /предел/);
   assert.equal(devices(db).length, 20, 'кто угодно в сети клиники иначе наплодил бы строк');
+  db.close();
+});
+
+// ── НЕСКОЛЬКО ПРИБОРОВ ─────────────────────────────────────────────────────
+// В лаборатории обычное дело — два одинаковых анализатора. По HL7 они
+// представляются ОДИНАКОВО (MSH-3 = модель), и различает их только адрес.
+
+test('два одинаковых прибора на разных адресах — это ДВА прибора, а не один', () => {
+  const db = fresh();
+  const a = ensureDevice(db, { sendingApp: 'BC-20', peer: '10.0.0.11' });
+  const b = ensureDevice(db, { sendingApp: 'BC-20', peer: '10.0.0.12' });
+
+  assert.equal(a.created, true);
+  assert.equal(b.created, true, 'второй прибор был поглощён первым — лаборатория не увидела бы, что их два');
+  assert.equal(devices(db).length, 2);
+  assert.notEqual(devices(db)[0].host, devices(db)[1].host);
+  // Имена обязаны различаться, иначе в списке две неразличимые строки.
+  assert.notEqual(devices(db)[0].name, devices(db)[1].name);
+  assert.match(devices(db)[1].name, /10\.0\.0\.12/, 'адрес в имени — единственное, чем они отличаются');
+  db.close();
+});
+
+test('каждый из двух одинаковых приборов дальше находит СВОЮ строку', () => {
+  const db = fresh();
+  ensureDevice(db, { sendingApp: 'BC-20', peer: '10.0.0.11' });
+  ensureDevice(db, { sendingApp: 'BC-20', peer: '10.0.0.12' });
+
+  const again = ensureDevice(db, { sendingApp: 'BC-20', peer: '10.0.0.11' });
+  assert.equal(again.created, false);
+  assert.equal(again.device.host, '10.0.0.11');
+  assert.equal(devices(db).length, 2, 'повторные сообщения не должны плодить строк');
+  db.close();
+});
+
+test('с одного адреса, но ДРУГАЯ модель — это другой прибор, а не тот же', () => {
+  // Бывает на одном лабораторном ПК (или за NAT): два прибора видны системе с
+  // одного адреса. Совпадения адреса мало — если прибор назвался другой
+  // моделью, приписывать его чужой строке нельзя: панель кормилась бы данными
+  // не того аппарата.
+  const db = fresh();
+  const a = ensureDevice(db, { sendingApp: 'BC-5300', peer: '10.0.0.9' });
+  const b = ensureDevice(db, { sendingApp: 'BS-240', peer: '10.0.0.9' });
+
+  assert.equal(b.created, true, 'биохимия приписалась к строке гематологии');
+  assert.notEqual(a.device.id, b.device.id);
+  assert.equal(b.device.profile, 'mindray-bs-240');
+  db.close();
+});
+
+test('с одного адреса и ТА ЖЕ модель — та же строка, лишней не появляется', () => {
+  const db = fresh();
+  const a = ensureDevice(db, { sendingApp: 'BC-5300', peer: '10.0.0.9' });
+  const b = ensureDevice(db, { sendingApp: 'BC-5300', peer: '10.0.0.9' });
+  assert.equal(b.created, false);
+  assert.equal(a.device.id, b.device.id);
+  assert.equal(devices(db).length, 1);
   db.close();
 });
