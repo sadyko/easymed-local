@@ -819,6 +819,30 @@ function reviewTitle(kind, mode, docTitle = '') {
  * Возвращает {title, icon, fields, submitLabel, submit, secondaryLabel,
  * secondary} — ровно то, из чего собирается и окно, и правая половина экрана.
  */
+/**
+ * КАКОЙ ЧЕРНОВИК ОТКРЫВАТЬ — и почему опубликованная запись им НЕ БЫВАЕТ.
+ *
+ * DIARY_ADD_FIX_V1 (2026-09-10) — владелец, нажав «Добавить запись»: «its not
+ * addded», и в ответ приходило «Опубликованный осмотр не переписывают».
+ *
+ * Чек-лист передаёт в редактор `review_id` строки, а у пункта, где запись уже
+ * опубликована (дневник со вчерашней записью и пропущенным днём), это ИМЕННО
+ * опубликованная запись. Редактор брал её как черновик и посылал её же номер
+ * на сохранение — сервер отказывал, и правильно делал: переписать
+ * опубликованный документ нельзя.
+ *
+ * Правило простое: черновиком считается только НЕОПУБЛИКОВАННАЯ запись. Номер,
+ * пришедший снаружи, принимается лишь если он указывает на такую; иначе
+ * берётся последний свой черновик, а если и его нет — начинается новая запись.
+ */
+export function pickDraft(all, kind, draftId) {
+    const rows = (all || []).filter((r) => r && r.kind === kind);
+    const byId = draftId ? rows.find((r) => r.id === draftId) : null;
+    if (byId && !byId.published_at) return byId;
+    const drafts = rows.filter((r) => !r.published_at);
+    return drafts.length ? drafts[drafts.length - 1] : null;
+}
+
 /** Сегодня местными часами — «дата записи» ставится по календарю врача. */
 function todayIso() {
     const d = new Date();
@@ -994,9 +1018,7 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
                 || null;
             if (src && isCorrection) supersedes = src.id;
         } else {
-            const drafts = all.filter((r) => r.kind === kind && !r.published_at);
-            src = (draftId ? all.find((r) => r.id === draftId) : null)
-                || (drafts.length ? drafts[drafts.length - 1] : null);
+            src = pickDraft(all, kind, draftId);
             draftId = src ? src.id : null;
         }
         // Открытая запись показывает СВОЙ день, а не сегодняшний: правя вчерашний

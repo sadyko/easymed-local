@@ -712,3 +712,51 @@ test('CASE_RAIL_FIT_V1: чек-лист разложен на шапку, про
     const inList = walk(list).filter((e) => e.tagName === 'LI');
     assert.equal(rows.length, inList.length, 'часть строк документов рисуется вне прокручиваемого списка');
 });
+
+// ─── DIARY_ADD_FIX_V1 — «Добавить запись» не должна упираться в отказ ────────
+//
+// Владелец: «its not addded» — и тост «Опубликованный осмотр не переписывают».
+// Чек-лист передавал редактору номер ОПУБЛИКОВАННОЙ записи (у дневника со
+// вчерашней записью это она и есть), редактор брал её как черновик и посылал
+// её же номер на сохранение. Сервер отказывал — и был прав.
+test('DIARY_ADD_FIX_V1: черновиком считается только неопубликованная запись', async () => {
+    const { pickDraft } = await import('../views/admission-modal.js?v=inp2');
+    const published = { id: 11, kind: 'round', published_at: '2026-09-09T10:00:00Z' };
+    const draft = { id: 12, kind: 'round', published_at: null };
+    const alien = { id: 13, kind: 'primary', published_at: null };
+
+    // Пришёл номер опубликованной записи — она НЕ черновик.
+    assert.equal(pickDraft([published, alien], 'round', 11), null,
+        'опубликованная запись поехала бы на сохранение — тот самый отказ');
+    // Есть свой черновик — открывается он, даже если снаружи прислали чужой номер.
+    assert.equal(pickDraft([published, draft], 'round', 11).id, 12, 'недописанное потерялось бы');
+    // Номер черновика принимается как есть.
+    assert.equal(pickDraft([published, draft], 'round', 12).id, 12);
+    // Ни того, ни другого — начинается новая запись.
+    assert.equal(pickDraft([published, alien], 'round', null), null);
+    // Чужой род не подхватывается никогда.
+    assert.equal(pickDraft([alien], 'round', 13), null, 'в дневник попал бы первичный осмотр');
+});
+
+test('DIARY_ADD_FIX_V1: строка повторяющегося документа ведёт к НОВОЙ записи', async () => {
+    const tabs = await import('../views/case-docs.js');
+    const opened = [];
+    const el = tabs.caseDocsView({
+        state: {
+            base_at: '2026-09-08T09:00:00Z', now: '2026-09-10T12:00:00Z',
+            items: [{
+                kind: 'round', group: 'required', state: 'published', applies: true, required: true,
+                due_rule: 'period', period_hours: 24, entries: 1, review_id: 11, draft_id: null,
+                published_at: '2026-09-09T10:00:00Z', revisions: [], revision_count: 1,
+            }],
+            progress: { done: 1, total: 1, overdue: 0, draft: 0 }, discharge_gate: { blocking: [], incomplete: [] },
+        },
+        onDoc: (kind, mode, id) => opened.push([kind, mode, id]),
+    });
+    // Щёлкаем по самой строке документа, а не по кнопке действия.
+    const row = walk(el).find((e) => e.tagName === 'BUTTON' && String(e.className).includes('btn-plain'));
+    assert.ok(row, 'строки документа нет');
+    row.click();
+    assert.deepEqual(opened, [['round', 'edit', null]],
+        'строка снова открывает опубликованную запись: ' + JSON.stringify(opened));
+});

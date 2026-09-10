@@ -444,8 +444,14 @@ function itemRow(item, state, onDoc, activeKind = null, onDrop = null, onRename 
         },
         // CASE_DOC_OWN_NAME_V1 — имя едет вместе с родом: у своего рода клиники
         // его больше взять неоткуда, и лист подписывался «Прочий документ».
-        onclick: () => onDoc(item.kind, item.state === 'published' ? 'view' : 'edit',
-            item.review_id || item.draft_id || null, docName),
+        // DIARY_ADD_FIX_V1 — у повторяющегося документа строка ведёт к НОВОЙ
+        // записи: прежние дни видны в самой тетради, и открывать вчерашнюю,
+        // чтобы написать сегодняшнюю, незачем. Черновик, если он есть,
+        // подхватывается — недописанное не теряется.
+        onclick: () => (item.due_rule === 'period'
+            ? onDoc(item.kind, 'edit', item.draft_id || null, docName)
+            : onDoc(item.kind, item.state === 'published' ? 'view' : 'edit',
+                item.review_id || item.draft_id || null, docName)),
     },
     h('span', {
         class: 'cd-row-n',
