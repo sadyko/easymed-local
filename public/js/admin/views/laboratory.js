@@ -370,6 +370,11 @@ function mount() {
                               title: tr('Выгрузить статистику за выбранный период в Excel'),
                               onclick: () => exportStatsExcel() },
                    Icon('Download', { size: 13 }), ' Excel')],
+        // LIS_INGEST_V1 — у «Анализаторов» своих действий в шапке нет: экран
+        // сам держит кнопку «Добавить прибор» в карточке. Ключ обязан
+        // существовать — pageHead разворачивает список через ...actions, и
+        // отсутствующий режим падает "actions is not iterable".
+        devices: [],
         queue:  [
             refs.searchInp,
             refs.filterWrap,
@@ -381,7 +386,10 @@ function mount() {
 
     refs.container.appendChild(h('div', { class: 'fade-in' },
         pageHead(SUBTITLES[mode], ACTIONS[mode]),
-        mode === 'panels' ? refs.panelsHost
+        // LIS_INGEST_V1 — «Анализаторы» рисуются в тот же контейнер, что и
+        // «Панели» (paintMode монтирует их в refs.panelsHost): без этой ветки
+        // вкладка открывалась бы пустой очередью.
+        (mode === 'panels' || mode === 'devices') ? refs.panelsHost
             : mode === 'stats' ? refs.statsHost
             // LAB_ONE_WINDOW_V1 — очередь лежит в ОДНОМ рабочем окне, как всё
             // остальное в продукте; пациентов внутри разделяет линия.

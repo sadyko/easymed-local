@@ -48,7 +48,11 @@ export async function mountLabDevices(container) {
     const devicesCard = h('div', { class: 'card', style: { marginBottom: '16px' } });
     const formCard = h('div', { class: 'card', style: { marginBottom: '16px', display: 'none' } });
     const trayCard = h('div', { class: 'card' });
-    container.append(devicesCard, formCard, trayCard);
+    // appendChild, а не append: так во всём остальном коде, и тестовый DOM
+    // (lab-panels-mode.test.mjs) реализует именно его.
+    container.appendChild(devicesCard);
+    container.appendChild(formCard);
+    container.appendChild(trayCard);
 
     // ---------- загрузка ----------
 

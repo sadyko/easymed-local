@@ -596,3 +596,37 @@ test('старый адрес #lab-settings ведёт в #labs/panels (пере
   const uses = (adminSrc.match(/LEGACY_ROUTES\[/g) || []).length;
   assert.ok(uses >= 2, 'таблица применяется и в navigate(), и в parseHash() — найдено применений: ' + uses);
 });
+
+// LIS_INGEST_V1 — регрессия: каждая сторона переключателя обязана открываться.
+//
+// Вкладка «Анализаторы» была добавлена в MODES, но не в ACTIONS шапки, и
+// pageHead разворачивает список через ...actions — экран падал с «actions is
+// not iterable», то есть новая сторона существовала только в виде кнопки.
+// Второй половиной той же ошибки было тело: ветка проверяла только 'panels',
+// поэтому «Анализаторы» рисовали бы пустую очередь.
+//
+// Тест жмёт КАЖДУЮ кнопку переключателя, а не перечисленные заранее: сторона,
+// добавленная завтра, попадёт сюда сама.
+test('каждая сторона переключателя открывается без падения и что-то показывает', async () => {
+  reset();
+  setEffectiveFromRole(LAB_VIEWER);
+
+  const root = mk('div');
+  await renderLaboratory(root, {});
+  await tick();
+
+  const labels = modeButtons(root).map(textOf);
+  assert.ok(labels.length >= 4, 'переключатель обязан иметь все стороны');
+
+  for (let i = 0; i < labels.length; i++) {
+    // Кнопки перерисовываются на каждом переключении — берём заново по индексу.
+    const btn = modeButtons(root)[i];
+    btn.click();
+    await tick();
+    await tick();
+
+    const on = modeButtons(root).find((b) => b.className.includes('on'));
+    assert.strictEqual(textOf(on), labels[i], labels[i] + ': сторона обязана подсветиться');
+    assert.ok(textOf(root).trim().length > 0, labels[i] + ': экран пуст — тело режима не отрисовалось');
+  }
+});
