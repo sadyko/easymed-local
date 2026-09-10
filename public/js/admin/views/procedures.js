@@ -127,8 +127,12 @@ function placeChip(r) {
         return h('span', { class: 'proc-chip proc-chip-in', title: tr('Палатная процедура — пациент лежит в стационаре') },
             Icon('Bed', { size: 12 }), ' ' + tr('Стационар') + (where ? ' · ' + where : ''));
     }
+    // PROC_TOUCH_V1 (2026-09-10) — владелец: «the source of the patient
+    // (stationary/ambulatory)». Плашка называла МЕСТО («Процедурный кабинет»), а
+    // спрашивают ОТКУДА ПАЦИЕНТ: лежащему процедуру несут в палату, пришедший
+    // ждёт в коридоре. Место осталось в подсказке — оно тоже нужно, но вторым.
     return h('span', { class: 'proc-chip proc-chip-out', title: tr('Амбулаторная процедура — пациент приходит в процедурный кабинет') },
-        Icon('Drop', { size: 12 }), ' ' + tr('Процедурный кабинет'));
+        Icon('Drop', { size: 12 }), ' ' + tr('Амбулаторно'));
 }
 
 function rowEl(r, body) {
@@ -151,8 +155,8 @@ function rowEl(r, body) {
             // назначающего в смене нет, а ждать администратора у процедурного
             // кабинета некому.
             r.unassigned && !done
-                ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', title: tr('Назначить процедуру на себя'),
-                    onclick: () => takeProcedure(r, body) }, Icon('User', { size: 13 }), ' ' + tr('Взять'))
+                ? h('button', { class: 'btn btn-outline mar-do', type: 'button', title: tr('Назначить процедуру на себя'),
+                    onclick: () => takeProcedure(r, body) }, Icon('User', { size: 14 }), ' ' + tr('Взять'))
                 : null,
             h('span', { class: 'tag' + (done ? ' tag-ok' : r.unassigned ? ' tag-warn' : ''), style: { fontSize: '12.5px' } },
                 tr(STATUS_RU[r.status] || r.status)),
@@ -163,7 +167,10 @@ function rowEl(r, body) {
                     ? h('span', { class: 'muted', style: { fontSize: '12.5px', maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: [r.done_by, r.done_at ? fmtDateTime(r.done_at) : '', r.notes].filter(Boolean).join(' · ') },
                         // PROC_DONE_STAMP_V1 — who pressed «Выполнить» and when
                         [r.done_by || '', r.done_at ? fmtDateTime(r.done_at) : '', r.notes].filter(Boolean).join(' · '))
-                    : h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openDone(r, body) }, tr('Выполнить'))));
+                    // PROC_TOUCH_V1 — отметка крупная: процедурная сестра нажимает
+                    // её планшетом в руке, а не мышью за столом.
+                    : h('button', { class: 'btn btn-primary mar-do', type: 'button', onclick: () => openDone(r, body) },
+                        Icon('Check', { size: 14 }), ' ' + tr('Выполнить'))));
 }
 
 // PROC_PRODUCTS_V1 — compact «Выполнить процедуру» modal, styled like the inpatient

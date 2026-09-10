@@ -14,7 +14,7 @@ import { admissionTitleSheetGet, admissionTitleSheetSave } from './title-sheet.j
 import { admissionOverview } from './case-overview.js';   // CASE_OVERVIEW_V1
 import { admissionVitalsAdd, admissionVitalsList } from './vitals.js';   // VITALS_NEWS_V1
 import { caseDocTypesList, caseDocTypeSave, caseDocTypeSetActive, caseDocTypeDelete, caseDocTypesReorder } from './case-doc-types.js';   // CASE_DOC_SET_V2
-import { admissionCharges, admissionChargeSetBillable, admissionServiceAdd } from './admission-charges.js';   // ACT_OF_WORKS_V1 / ACT_ADD_SERVICE_V1
+import { admissionCharges, admissionChargeSetBillable, admissionServiceAdd, admissionServiceDone } from './admission-charges.js';   // ACT_OF_WORKS_V1 / ACT_ADD_SERVICE_V1
 import { admissionDocSources } from './case-doc-sources.js';   // CASE_DOC_A4_V1
 import { admissionsRegister } from './admissions-register.js';   // ADMISSIONS_REGISTER_V1
 import { admissionReviewSave, admissionSetAttending, admissionChangeAttending, admissionReviewsList, admissionAttendingCandidates,
@@ -294,6 +294,7 @@ export const RPC = {
   admission_charges:              (db, args, user) => admissionCharges(db, args, user),
   admission_charge_set_billable:  (db, args, user) => admissionChargeSetBillable(db, args, user),
   admission_service_add:          (db, args, user) => admissionServiceAdd(db, args, user),
+  admission_service_done:         (db, args, user) => admissionServiceDone(db, args, user),   // SERVICE_TASKS_V1
   case_doc_types_list:            (db, args, user) => caseDocTypesList(db, args, user),
   case_doc_type_save:             (db, args, user) => caseDocTypeSave(db, args, user),
   case_doc_type_set_active:       (db, args, user) => caseDocTypeSetActive(db, args, user),

@@ -210,6 +210,53 @@ export function admissionServiceAdd(db, args, user) {
   return { line: db.prepare('SELECT * FROM admission_services WHERE id = ?').get(info.lastInsertRowid) };
 }
 
+/** Кто отмечает выполнение: те, кто его и делает. */
+export const SERVICE_DONE_ROLES = ['admin', 'head_doctor', 'doctor', 'nurse', 'senior_nurse'];
+/** Сколько минут можно снять ошибочную отметку — как у дозы в листе назначений. */
+export const SERVICE_UNDO_MIN = 15;
+
+/**
+ * ОТМЕТИТЬ УСЛУГУ ВЫПОЛНЕННОЙ (и снять ошибочную отметку).
+ *
+ * SERVICE_TASKS_V1 (2026-09-10) — владелец: назначенные анализы, консультации и
+ * процедуры должны быть в задачах медсестры. Задача без отметки — это список
+ * дел, который никто не закрывает: к вечеру он весь красный, и его перестают
+ * читать. Отметка ставит `performed_at` — то самое «когда сделано», рядом с
+ * которым в строке уже лежит «на когда назначено» (миграция 118).
+ *
+ * СНЯТИЕ — ПЯТНАДЦАТЬ МИНУТ, как у дозы: промах на планшете у койки исправляют
+ * тут же, а через час отметка это уже запись о работе, и переписывать её задним
+ * числом нельзя. Строку, ушедшую в счёт, не трогаем вовсе: за ней деньги.
+ */
+export function admissionServiceDone(db, args, user) {
+  requireRole(user, SERVICE_DONE_ROLES, 'Отметка выполнения');
+  const id = Number(args && args.line_id) || null;
+  if (!id) throw new RpcError('Строка не выбрана.', 400);
+  const row = db.prepare('SELECT * FROM admission_services WHERE id = ?').get(id);
+  if (!row) throw new RpcError('Такой строки в акте нет.', 404);
+  const undo = args.undo === true || args.undo === 1 || args.undo === 'true';
+
+  if (!undo) {
+    // Повторное нажатие ничего не меняет: на планшете его делают чаще, чем
+    // кажется, и вторая отметка времени затёрла бы первую.
+    if (row.performed_at) return { line: row, already: true };
+    db.prepare(`UPDATE admission_services
+                   SET performed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'), status = 'done'
+                 WHERE id = ?`).run(id);
+    return { line: db.prepare('SELECT * FROM admission_services WHERE id = ?').get(id), already: false };
+  }
+
+  if (!row.performed_at) return { line: row, already: true };
+  if (row.invoice_item_id) throw new RpcError('Строка уже в счёте — отметку выполнения не снимают.', 400);
+  const done = Date.parse(row.performed_at);
+  const now = Date.parse(db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now') t").get().t);
+  if (Number.isFinite(done) && (now - done) > SERVICE_UNDO_MIN * 60000) {
+    throw new RpcError(`Отметку снимают в течение ${SERVICE_UNDO_MIN} минут — дальше это запись о работе.`, 400);
+  }
+  db.prepare("UPDATE admission_services SET performed_at = NULL, status = 'added' WHERE id = ?").run(id);
+  return { line: db.prepare('SELECT * FROM admission_services WHERE id = ?').get(id), already: false };
+}
+
 /**
  * ВКЛЮЧИТЬ ИЛИ ИСКЛЮЧИТЬ СТРОКУ ИЗ СЧЁТА.
  *

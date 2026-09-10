@@ -31,7 +31,7 @@ import {
   RpcError, loadAdmission, assertAdmissionAtLeast, assertCanPrescribe,
 } from './inpatient-flow.js';
 import { hasAnyRole } from '../roles.js';
-import { today } from '../domain/day.js';
+import { today, localDate } from '../domain/day.js';   // SERVICE_TASKS_V1 — день задачи МЕСТНЫЙ
 import {
   FREQ_CODES, ROUTES, freqSlots, isPrnFreq,
   expandCourse, courseEnd, dueState, isDate,
@@ -926,6 +926,65 @@ export function treatmentTasksDue(db, args, user) {
         late_min: Math.max(0, Math.round((nowMs - due.due_ms) / 60000)),
       });
     }
+  }
+
+  // SERVICE_TASKS_V1 (2026-09-10) — владелец: «we need to add lab,
+  // consultation, procedures etc prescriptions here too … and should be shown
+  // only the prescriptions of today».
+  //
+  // Назначенный анализ, консультация или процедура — ТОЖЕ работа смены, и до
+  // сих пор её не было видно нигде: врач назначал КТ на десять утра, а
+  // медсестра узнавала об этом от санитарки. Строки берутся из того же
+  // начисления, что и деньги (admission_services), по СВОЕМУ полю времени
+  // planned_at — «на когда назначено», а не «когда сделано».
+  //
+  // День — МЕСТНЫЙ (domain/day.js): в UTC+5 задача на 03:00 ночи попала бы во
+  // вчерашний список, и смена узнала бы о ней утром следующего дня.
+  const svcRows = db.prepare(`
+    SELECT s.id, s.planned_at, s.performed_at, s.quantity, s.notes,
+           COALESCE(sv.name, '') AS name,
+           COALESCE(st.name, sv.type, '') AS type_name,
+           r.name AS room_name,
+           adm.id AS admission_id, adm.patient_id, adm.ward_id, adm.bed_id,
+           p.full_name AS patient_name, w.name AS ward_name, b.code AS bed_code,
+           u.full_name AS doctor_name
+      FROM admission_services s
+      JOIN admissions adm ON adm.id = s.admission_id
+      LEFT JOIN services sv ON sv.id = s.service_id
+      LEFT JOIN service_types st ON st.id = sv.type_id
+      LEFT JOIN rooms r ON r.id = sv.room_id
+      LEFT JOIN patients p ON p.id = adm.patient_id
+      LEFT JOIN wards w ON w.id = adm.ward_id
+      LEFT JOIN beds b ON b.id = adm.bed_id
+      LEFT JOIN users u ON u.id = s.doctor_id
+     WHERE s.planned_at IS NOT NULL
+       AND ${localDate('s.planned_at')} = date(?)
+       AND adm.status IN ('active','discharging')
+       ${wardId === null ? '' : 'AND adm.ward_id = ?'}
+     ORDER BY s.planned_at, s.id`)
+    .all(...(wardId === null ? [date] : [date, wardId]));
+
+  for (const s of svcRows) {
+    const dueMs = Date.parse(s.planned_at);
+    const hour = Number.isNaN(dueMs) ? null : new Date(dueMs).getHours();
+    const task = {
+      admission_id: s.admission_id, patient_id: s.patient_id, patient_name: s.patient_name,
+      ward_id: s.ward_id, ward_name: s.ward_name, bed_id: s.bed_id, bed_code: s.bed_code,
+      // Род задачи: экран рисует услугу иначе — у неё нет ни дозы, ни пути
+      // введения, зато есть кабинет и кто назначил.
+      task: 'service', line_id: s.id, kind: 'service',
+      name: s.name, service_type: s.type_name, room: s.room_name || '',
+      doctor_name: s.doctor_name || '', quantity: s.quantity, note: s.notes || '',
+      date, slot: hour, due_at: s.planned_at,
+    };
+    if (s.performed_at) {
+      groups.done.push({ ...task, performed_at: s.performed_at, status: 'given' });
+      continue;
+    }
+    const state = Number.isNaN(dueMs) ? 'pending' : dueState({ due_ms: dueMs }, nowMs);
+    task.state = state;
+    task.late_min = Number.isNaN(dueMs) ? 0 : Math.max(0, Math.round((nowMs - dueMs) / 60000));
+    groups[Number.isNaN(dueMs) ? 'later' : groupOf(state, dueMs, nowMs)].push(task);
   }
 
   for (const key of ['overdue', 'now', 'later']) {

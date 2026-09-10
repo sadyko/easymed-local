@@ -17,7 +17,7 @@ import { admitPatient } from './inpatient.js';
 import { billAccommodation } from './accommodation.js';
 import { dispenseAdmissionItem } from './inventory.js';
 import { createInvoiceForAdmission } from './billing.js';
-import { admissionCharges, admissionChargeSetBillable, admissionServiceAdd } from './admission-charges.js';
+import { admissionCharges, admissionChargeSetBillable, admissionServiceAdd, admissionServiceDone } from './admission-charges.js';
 
 const NURSE = { id: 2, role: 'nurse', full_name: 'Медсестра' };
 const CASH  = { id: 9, role: 'cashier', full_name: 'Касса' };
@@ -237,5 +237,37 @@ test('услугу назначают НА ВРЕМЯ, и до выполнен�
     // Нечитаемое время — отказ, а не тихая запись мимо расписания.
     assert.throws(() => admissionServiceAdd(db, { admission_id: adm.id, service_id: svc, planned_at: 'завтра утром' }, DOC),
       /не разобран/i);
+  } finally { db.close(); }
+});
+
+test('SERVICE_TASKS_V1: отметка выполнения ставится, повтор ничего не портит, снять можно 15 минут', () => {
+  const { db, adm, svc } = seed();
+  const DOC = { id: 3, role: 'doctor', full_name: 'Др. Азиза' };
+  const NURSE2 = { id: 2, role: 'nurse', full_name: 'Медсестра' };
+  try {
+    admissionServiceAdd(db, { admission_id: adm.id, service_id: svc, planned_at: '2026-09-11T10:30:00Z' }, DOC);
+    const id = db.prepare('SELECT id FROM admission_services ORDER BY id DESC LIMIT 1').get().id;
+
+    // Отмечает МЕДСЕСТРА: она это и делает.
+    const first = admissionServiceDone(db, { line_id: id }, NURSE2);
+    assert.ok(first.line.performed_at, 'выполнение не отмечено');
+    assert.equal(first.already, false);
+
+    // Повторное нажатие на планшете не переписывает время первой отметки.
+    const again = admissionServiceDone(db, { line_id: id }, NURSE2);
+    assert.equal(again.already, true, 'повтор затёр бы время');
+    assert.equal(again.line.performed_at, first.line.performed_at);
+
+    // Промах снимается тут же.
+    const undone = admissionServiceDone(db, { line_id: id, undo: true }, NURSE2);
+    assert.equal(undone.line.performed_at, null, 'отметка не снялась');
+
+    // А через час — уже запись о работе.
+    admissionServiceDone(db, { line_id: id }, NURSE2);
+    db.prepare("UPDATE admission_services SET performed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now','-2 hours') WHERE id = ?").run(id);
+    assert.throws(() => admissionServiceDone(db, { line_id: id, undo: true }, NURSE2), /15 минут/);
+
+    // Касса отметок выполнения не ставит: это работа отделения.
+    assert.throws(() => admissionServiceDone(db, { line_id: id }, CASH), /роли/i);
   } finally { db.close(); }
 });

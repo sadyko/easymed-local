@@ -18,6 +18,9 @@ import {
   treatmentAdminMark, treatmentAdminUnmark, treatmentTasksDue, RpcError,
   unmarkVerdict, UNMARK_WINDOW_MIN,
 } from './treatment-orders.js';
+// SERVICE_TASKS_V1 — отметку выполнения услуги ставит акт работ: она там же,
+// где деньги строки, и второй такой отметки заводить нельзя.
+import { admissionServiceDone } from './admission-charges.js';
 
 // UNMARK_WINDOW_V1 — состарить отметку, не поспав пятнадцати минут: given_at
 // переписывается ТЕМИ ЖЕ часами, по которым правило её и читает (nowUtc →
@@ -638,5 +641,45 @@ test('список задач ограничивается отделением 
 test('список задач закрыт от кассы', () => {
   const db = seed();
   assert.throws(() => treatmentTasksDue(db, { date: START }, ACTOR.cashier), (e) => e.status === 403);
+  db.close();
+});
+
+// SERVICE_TASKS_V1 — назначенные услуги дня в задачах медсестры.
+//
+// Владелец: «we need to add lab, consultation, procedures etc prescriptions
+// here too … and should be shown only the prescriptions of today».
+//
+// День — МЕСТНЫЙ, поэтому время назначения строится местными часами (JS
+// setHours) и хранится в UTC: ровно так, как его пишет форма назначения.
+test('SERVICE_TASKS_V1: услуга, назначенная на сегодня, стоит в задачах смены и закрывается отметкой', () => {
+  const db = seed();
+  const adm = admission(db);
+  db.prepare("INSERT INTO services (id, name, price, type) VALUES (2,'КТ грудной клетки',850000,'imaging')").run();
+  // Местное «сегодня в чч:мм» → UTC, как его пишет форма.
+  const at = (h, m) => { const d = new Date(); d.setHours(h, m, 0, 0); return d.toISOString(); };
+  const line = db.prepare(`INSERT INTO admission_services
+      (admission_id, service_id, doctor_id, quantity, unit_price, total, planned_at)
+      VALUES (?,2,1,1,850000,850000,?)`);
+  line.run(adm, at(10, 30));
+  // Завтрашняя не должна попасть в смену: «only the prescriptions of today».
+  line.run(adm, new Date(Date.parse(at(10, 30)) + 86400000).toISOString());
+
+  const day = dayOf(0);
+  const work = (r) => [...r.groups.overdue, ...r.groups.now, ...r.groups.later].filter((t) => t.task === 'service');
+
+  const due = treatmentTasksDue(db, { date: day, now: at(10, 0) }, ACTOR.nurse);
+  const svcTasks = work(due);
+  assert.equal(svcTasks.length, 1, 'в смену попала не только сегодняшняя услуга');
+  assert.equal(svcTasks[0].name, 'КТ грудной клетки');
+  assert.equal(svcTasks[0].service_type, 'imaging');
+  assert.equal(svcTasks[0].patient_name, 'Иванов Иван');
+  assert.ok(svcTasks[0].line_id, 'у задачи нет строки начисления — отмечать нечего');
+
+  // Отметка выполнения закрывает задачу: она уходит из работы в «Сделано».
+  admissionServiceDone(db, { line_id: svcTasks[0].line_id }, ACTOR.nurse);
+  const after = treatmentTasksDue(db, { date: day, now: at(10, 0) }, ACTOR.nurse);
+  assert.equal(work(after).length, 0, 'выполненная услуга осталась в работе');
+  assert.ok(after.groups.done.some((t) => t.task === 'service' && t.name === 'КТ грудной клетки'),
+    'выполненной услуги нет в «Сделано»');
   db.close();
 });

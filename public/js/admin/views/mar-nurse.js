@@ -875,6 +875,21 @@ export async function renderMarNurse(root, ctx = {}) {
      * невведённая доза выглядела как введённая.
      */
     function doneRow(t, p) {
+        // SERVICE_TASKS_V1 — сделанная услуга: время выполнения и снятие
+        // отметки, пока идут пятнадцать минут. «Пяти прав» у неё нет, и окна
+        // снятия с причиной тоже: причина нужна там, где отметка про лекарство.
+        if (t.task === 'service') {
+            const col = cellStateColor('given');
+            return h('div', { class: 'mar-task mar-task-done', style: { borderLeft: '3px solid ' + col.fg, background: col.bg } },
+                h('div', { class: 'mar-task-w' }, hhmm(t.performed_at)),
+                h('div', { class: 'mar-task-m' },
+                    h('div', { class: 'mar-task-n' }, t.name || ''),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                        [t.service_type || null, t.room || null].filter(Boolean).join(' · '))),
+                Tag(tr('Выполнено'), { kind: 'ok', dot: true }),
+                h('button', { class: 'btn mar-do', type: 'button', onclick: () => markService(t, true) },
+                    tr('Снять отметку')));
+        }
         const refusal = undoRefusal(t);
         const status = t.status || 'given';
         const col = cellStateColor(status);
@@ -929,29 +944,59 @@ export async function renderMarNurse(root, ctx = {}) {
                 h('div', { class: 'muted', style: { fontSize: '12.5px' } }, voidedLine(u, state.people))));
     }
 
+    /**
+      * Отметить услугу выполненной.
+      *
+      * SERVICE_TASKS_V1 — у услуги нет ни дозы, ни пути введения, и «пяти прав»
+      * у неё тоже нет: подтверждать нечего. Поэтому отметка ставится ОДНИМ
+      * нажатием, а промах снимается тут же — так же, как отмечают питание.
+      */
+    async function markService(t, undo) {
+        const { error } = await supabase.rpc('admission_service_done',
+            { line_id: t.line_id, undo: !!undo });
+        if (error) { toast(error.message || tr('Не удалось отметить.'), 'fail'); return; }
+        toast(undo ? tr('Отметка снята.') : trf('Выполнено: {name}', { name: t.name || '' }), 'ok');
+        await load();
+    }
+
+    /** Строка НАЗНАЧЕННОЙ УСЛУГИ: время, что и где, крупная отметка. */
+    function serviceRow(t) {
+        const when = t.due_at ? String(t.due_at).slice(11, 16) : '';
+        const meta = [t.service_type || null, t.room ? trf('кабинет {room}', { room: t.room }) : null,
+            t.doctor_name ? trf('назначил {name}', { name: t.doctor_name }) : null,
+            t.late_min ? trf('опоздание {n} мин', { n: t.late_min }) : null].filter(Boolean).join(' · ');
+        return h('div', { class: 'mar-task' },
+            h('div', { class: 'mar-task-w' }, when),
+            h('div', { class: 'mar-task-m' },
+                h('div', { class: 'mar-task-n' }, t.name || ''),
+                meta ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, meta) : null,
+                t.note ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, t.note) : null),
+            // Крупная отметка под палец: планшет в чехле, перчатки, койка.
+            h('button', { class: 'btn btn-primary mar-do', type: 'button', onclick: () => markService(t, false) },
+                Icon('Check', { size: 16 }), ' ', tr('Выполнено')));
+    }
+
     function taskRow(t, p, allergy) {
+        // SERVICE_TASKS_V1 — анализ, консультация и процедура приходят тем же
+        // списком, но это другая работа: у них своя строка.
+        if (t.task === 'service') return serviceRow(t);
         const when = t.due_at
             ? String(t.due_at).slice(11)
             : (t.given_today ? trf('сегодня дано раз: {n}', { n: t.given_today }) : tr('по требованию'));
-        return h('div', {
-            style: {
-                display: 'flex', alignItems: 'center', gap: '12px',
-                padding: '12px 16px', borderTop: '1px solid var(--ink-100)', flexWrap: 'wrap',
-            },
-        },
-            h('div', { style: { fontSize: '17px', fontWeight: 800, minWidth: '64px' } }, when),
-            h('div', { style: { flex: 1, minWidth: '160px' } },
-                h('div', { style: { fontSize: '15px', fontWeight: 700, color: 'var(--ink-900)' } }, t.name || ''),
+        return h('div', { class: 'mar-task' },
+            h('div', { class: 'mar-task-w' }, when),
+            h('div', { class: 'mar-task-m' },
+                h('div', { class: 'mar-task-n' }, t.name || ''),
                 h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     [t.dose || null, t.route || null,
                         t.late_min ? trf('опоздание {n} мин', { n: t.late_min }) : null].filter(Boolean).join(' · '))),
-            h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
+            h('div', { class: 'mar-task-acts' },
                 h('button', {
-                    class: 'btn btn-primary btn-sm', type: 'button',
+                    class: 'btn btn-primary mar-do', type: 'button',
                     onclick: () => openGiveModal({ task: t, patient: p, allergy, onDone: load }),
-                }, Icon('Check', { size: 13 }), ' ', tr('Выполнить')),
+                }, Icon('Check', { size: 16 }), ' ', tr('Выполнить')),
                 h('button', {
-                    class: 'btn btn-sm', type: 'button',
+                    class: 'btn mar-do', type: 'button',
                     onclick: () => openOmitModal({ task: t, patient: p, allergy, onDone: load }),
                 }, tr('Не введено'))));
     }

@@ -6251,6 +6251,17 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
    набор под ним — тот же порядок, в каком с ними и работают. */
 @media (max-width: 860px) { .sof-grid { grid-template-columns: minmax(0, 1fr); } }
 
+/* SERVICE_TASKS_V1 — задачи медсестры под ПАЛЕЦ: планшет в чехле, перчатки,
+   койка. Строка одна на дозу и на услугу, отметка крупная — «Выполнить» в
+   двадцать пикселей высотой мимо пальца попадает чаще, чем в него. */
+.mar-task { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 12px 16px; border-top: 1px solid var(--ink-100); }
+.mar-task-w { min-width: 64px; font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.mar-task-m { flex: 1; min-width: 160px; }
+.mar-task-n { font-size: 15px; font-weight: 700; color: var(--ink-900); }
+.mar-task-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.mar-do { min-height: 44px; padding: 0 18px; font-size: 15px; }
+
 /* MAR_IN_CABINET_V1 — строка действий листа, когда он внутри истории болезни. */
 .mar-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
     margin-bottom: 14px; font-size: 15px; }

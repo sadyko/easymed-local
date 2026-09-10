@@ -815,13 +815,28 @@ test('полоса питания стоит ПОСЛЕ четырёх груп�
     assert.ok(meals < headingIndex(root, 'Сделано'), 'полоса питания уехала под список сделанного');
 });
 
+/** Таблица стилей экрана: размеры теперь живут в ней, а не в разметке. */
+async function readCss() {
+    const fsx = await import('node:fs');
+    const pathx = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = pathx.dirname(fileURLToPath(import.meta.url));
+    return fsx.readFileSync(pathx.join(dir, '..', '..', '..', 'css', 'admin-views.css'), 'utf8');
+}
+
 test('питание подписано мельче назначений — приоритет виден размером, а не только порядком', async () => {
     const root = await renderScreen();
-    const sized = (label) => walk(root).find((e) => e.style && e.style.fontSize && textOf(e).trim() === label);
-    const drug = sized('Цефтриаксон');
-    const meal = sized('Обед');
+    // SERVICE_TASKS_V1 — строка задачи переехала в класс (.mar-task-n): под
+    // палец её размер задаёт таблица стилей, а не пять одинаковых inline-строк.
+    // Проверяется то же самое, только размер препарата читается из CSS.
+    const drug = walk(root).find((e) => String(e.className || '').includes('mar-task-n')
+        && textOf(e).trim() === 'Цефтриаксон');
+    const meal = walk(root).find((e) => e.style && e.style.fontSize && textOf(e).trim() === 'Обед');
     assert.ok(drug && meal, 'не найдены строки препарата и приёма пищи');
-    assert.equal(drug.style.fontSize, '15px');
+    const css = await readCss();
+    const rule = /\.mar-task-n\s*\{[^}]*font-size:\s*([0-9.]+)px/.exec(css);
+    assert.ok(rule, 'у строки задачи нет размера в стилях');
+    assert.equal(rule[1], '15', 'препарат перестал быть крупным');
     assert.equal(meal.style.fontSize, '13.5px', 'приём пищи не должен быть крупнее препарата');
 });
 
