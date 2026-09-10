@@ -6043,6 +6043,25 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .cf-act-inv { display: inline-flex; padding: 2px 8px; border-radius: var(--r-pill);
     background: var(--ok-50, #e8f7ef); color: var(--ok-700, #0f7a43); font-size: 12.5px; font-weight: 600; }
 .cf-act-act { text-align: right; white-space: nowrap; }
+/* ACT_TABLE_V1 — реестр: галочки, фильтры, плашка счёта. */
+.cf-act-pick { width: 34px; padding-right: 0; }
+.cf-act-pick input { width: 17px; height: 17px; accent-color: var(--brand-600, #0f766e); }
+.cf-chip { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: var(--r-pill);
+    font-size: 12.5px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cf-chip-off { background: var(--ink-50); color: var(--ink-500); }
+.cf-chip-inv { background: var(--info-50, #eef4ff); color: var(--info-700, #1d4ed8); }
+.cf-chip-ok  { background: var(--ok-50, #e8f7ef); color: var(--ok-700, #0f7a43); }
+.cf-chip-hot { background: var(--warn-50, #fff6e6); color: var(--warn-700, #8a5a00); }
+.cf-filter { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
+.cf-fchip { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 12px;
+    border: 1px solid var(--ink-100); border-radius: var(--r-pill); background: var(--white);
+    color: var(--ink-700); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.cf-fchip:hover { border-color: var(--ink-200); }
+.cf-fchip.on { background: var(--brand-50, #e6f5f3); border-color: var(--brand-200, #9fd5cf);
+    color: var(--brand-800, #0b5c55); }
+.cf-fchip-n { font-variant-numeric: tabular-nums; color: var(--ink-400); }
+.cf-fchip.on .cf-fchip-n { color: var(--brand-700, #0f766e); }
+.cf-fsearch { max-width: 260px; min-height: 32px; }
 .cf-sums { display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 14px;
     padding-top: 12px; border-top: 1px solid var(--ink-100); }
 .cf-sum { display: flex; align-items: baseline; gap: 8px; }

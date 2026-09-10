@@ -181,6 +181,12 @@ body {
 .vital .val .n { font-size:18px; font-weight:700; color:${cfg.ink}; letter-spacing:-0.01em; font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; }
 .vital .val .u { font-size:10px; color:#7a8892; }
 .vital .val .f { margin-left:auto; font-size:9.5px; font-weight:700; padding:0 5px; border-radius:4px; background:#fde7c5; color:#b45309; }
+/* ACT_TABLE_V1 — реестр акта на бумаге: та же таблица, что на экране. */
+.act-wrap { margin-top: 8px; }
+.act-print { width:100%; border-collapse:collapse; font-size:11.5px; }
+.act-print th, .act-print td { border:1px solid #dfe5ea; padding:5px 7px; text-align:left; vertical-align:top; }
+.act-print th { background:#f3f6f8; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; font-size:9.5px; color:#55636d; }
+.act-print-sum { margin-top:10px; text-align:right; font-size:14px; }
 .lab { border-radius:10px; border:1px solid #e7ebee; overflow:hidden; }
 .lab .hd { display:grid; grid-template-columns: 2fr 1.1fr 1.4fr 1.4fr 0.7fr; background:${cfg.accentSoft}; padding:8px 12px; font-size:13px; font-weight:700; color:${cfg.accent}; text-transform:uppercase; letter-spacing:0.08em; }
 .lab .hd > .r { text-align:right; }

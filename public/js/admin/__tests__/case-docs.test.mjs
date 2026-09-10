@@ -475,20 +475,25 @@ test('список редакций раскрывается кнопкой с a
 
 // CASE_FILE_TABS_V1 — владелец: «after the card of the patient we need to add
 // tabs for navigation: documents, prescriptions, examinations and lab, surgery».
-test('CASE_FILE_TABS_V1: четыре вкладки, и каждая показывает СВОИ данные, не выдумывая их', async () => {
+// CASE_TABS_FULL_V1 — и дальше, по эталону: койки и переводы, показатели,
+// питание, счета. Порядок здесь закреплён намеренно: это порядок работы у
+// постели, и переставить его молча значит переучить отделение.
+test('CASE_FILE_TABS_V1: вкладки истории болезни идут порядком работы у постели', async () => {
     const tabs = await import('../views/case-file-tabs.js');
-    assert.deepEqual(tabs.CASE_TABS.map((t) => t.id), ['documents', 'orders', 'exams', 'surgery', 'act']);
+    assert.deepEqual(tabs.CASE_TABS.map((t) => t.id),
+        ['documents', 'beds', 'vitals', 'orders', 'exams', 'meals', 'surgery', 'act', 'invoices']);
 
     // Полоса — системная (.tabs/.tab), как во всех разделах приложения.
     const picked = [];
     const bar = tabs.caseTabsBar({ active: 'orders', onPick: (id) => picked.push(id) });
     assert.ok(String(bar.className).split(/\s+/).includes('tabs'), 'полоса вкладок не системная');
     const btns = walk(bar).filter((e) => e.tagName === 'BUTTON');
-    assert.equal(btns.length, 5);
-    assert.equal(btns[1].getAttribute('aria-selected'), 'true', 'открытая вкладка не помечена');
+    assert.equal(btns.length, tabs.CASE_TABS.length);
+    const iOrders = tabs.CASE_TABS.findIndex((t) => t.id === 'orders');
+    assert.equal(btns[iOrders].getAttribute('aria-selected'), 'true', 'открытая вкладка не помечена');
     btns[0].click();
     assert.deepEqual(picked, ['documents']);
-    btns[1].click();
+    btns[iOrders].click();
     assert.deepEqual(picked, ['documents'], 'нажатие на уже открытую вкладку не должно ничего делать');
 
     // Назначения: список из обзора и дверь в лист назначений.

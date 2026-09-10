@@ -65,6 +65,8 @@ export function admissionCharges(db, args, user) {
            sv.type        AS service_type_word,
            p.name         AS product_name,
            p.consumption_unit AS product_unit,
+           p.category     AS product_category,
+           r.name         AS room_name,
            p.base_unit    AS product_base_unit,
            u.full_name    AS doctor_name,
            ii.invoice_id  AS invoice_id,
@@ -73,6 +75,7 @@ export function admissionCharges(db, args, user) {
       FROM admission_services s
       LEFT JOIN services  sv  ON sv.id = s.service_id
       LEFT JOIN service_types st ON st.id = sv.type_id
+      LEFT JOIN rooms     r   ON r.id  = sv.room_id
       LEFT JOIN products  p   ON p.id  = s.clinic_item_id
       LEFT JOIN users     u   ON u.id  = s.doctor_id
       LEFT JOIN invoice_items ii ON ii.id = s.invoice_item_id
@@ -96,6 +99,15 @@ export function admissionCharges(db, args, user) {
       // правду рядом со справочником.
       service_id: r.service_id || null,
       service_type: r.service_type_name || r.service_type_word || '',
+      // ТИП РАСХОДА в акте эталона: медикамент это или изделие. Своего поля у
+      // строки нет — категория стоит у ТОВАРА, и берётся она оттуда.
+      product_category: r.product_category || '',
+      // Кабинет услуги — из справочника: он же стоит в направлении.
+      room: r.room_name || '',
+      // «Оплачен» — свойство СЧЁТА, а не строки: строка знает только, в каком
+      // она счёте. Пересчитывать оплату здесь значило бы завести вторую кассу.
+      paid: String(r.invoice_status || '') === 'paid',
+      status: r.status || '',
       quantity: Number(r.quantity) || 0,
       unit_price: round2(r.unit_price),
       total: round2(r.total),

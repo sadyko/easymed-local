@@ -31,12 +31,13 @@ import { caseDocsView, assembleCaseFile, canEditDocSet, caseDocSetDrop, caseDocS
     caseDocSetRestore, caseDocSetRename, caseDocSetDelete, loadDocTypeSet } from './case-docs.js?v=cw1';
 import { buildReviewEditor } from './admission-modal.js?v=inp2';
 import { docActionsBar, docHeadIds, docHeadFields } from './case-doc-a4.js';   // CASE_DOC_ACTIONS_V1 / A4_LETTERHEAD_V2
-import { caseTabsBar, caseOrdersPanel, caseExamsPanel, caseSurgeryPanel, caseActPanel } from './case-file-tabs.js';   // CASE_FILE_TABS_V1 / ACT_OF_WORKS_V1
+import { caseTabsBar, caseOrdersPanel, caseExamsPanel, caseSurgeryPanel, caseActPanel,
+    actPrintBody, caseBedsPanel, caseMealsPanel, caseInvoicesPanel } from './case-file-tabs.js';   // CASE_FILE_TABS_V1 / ACT_OF_WORKS_V1
 import { buildTitleSheetEditor, TITLE_SHEET_KIND } from './title-sheet.js';   // TITLE_SHEET_V1
 import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V2
 import { dateNumeric } from '../../shared/date-words.js';   // A4_LETTERHEAD_V2 — дата рождения числом
 import { shortName, placeLine } from '../../shared/person-name.js';   // PERSON_NAME_SHORT_V1
-import { caseHead } from './case-overview.js?v=co1';   // CASE_OVERVIEW_V1 — одна шапка на «Обзор» и «Документы»
+import { caseHead, vitalsPanel, openVitalsModal, admissionForModals } from './case-overview.js?v=co1';   // CASE_OVERVIEW_V1 — одна шапка на «Обзор» и «Документы»; VITALS_NEWS_V1 — панель показателей
 import { caseInsertPanel } from './case-doc-insert.js';   // CASE_DOC_A4_V1 — правая панель «Вставить в документ»
 import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — диагнозы списком
 import { setupA4Pagination, setupA4Fit } from './a4-paginate.js';   // A4_PAGINATE_V1 / FORM_003_ONE_PAGE_V1
@@ -246,6 +247,38 @@ function paintTab(root, onNavigate) {
     const box = h('div', { class: 'cf-tabwrap' });
     root.appendChild(box);
 
+    // CASE_TABS_FULL_V1 — вкладки эталона владельца. Ни одна из них не считает
+    // ничего своего: койки читают журнал переводов, показатели и счета —
+    // готовый обзор, питание — тот же блок стола, что и карточка.
+    if (tab === 'beds') {
+        box.appendChild(caseBedsPanel(state.admissionId, state.overview));
+        return;
+    }
+    if (tab === 'vitals') {
+        // ПАНЕЛЬ ТА ЖЕ, что в обзоре: шкала NEWS одна на систему, и вторая её
+        // отрисовка разошлась бы с первой на первом же пороге.
+        box.appendChild(vitalsPanel(state.overview, {
+            onAdd: () => openVitalsModal({
+                admission: admissionForModals(state.overview),
+                onDone: async () => { await load(); paint(root, onNavigate); },
+            }),
+        }));
+        return;
+    }
+    if (tab === 'meals') {
+        box.appendChild(caseMealsPanel(state.admissionId, state.overview, {
+            onChange: async () => { await load(); paint(root, onNavigate); },
+        }));
+        return;
+    }
+    if (tab === 'invoices') {
+        box.appendChild(caseInvoicesPanel(state.overview, {
+            // Деньги принимает КАССА, и вкладка честно уводит туда, а не заводит
+            // второй приём оплат внутри истории болезни.
+            onCashier: () => { if (nav) nav('cashier-shifts'); },
+        }));
+        return;
+    }
     if (tab === 'orders') {
         box.appendChild(caseOrdersPanel(state.overview, {
             onOpenSheet: () => { if (nav) nav('mar-sheet', { admissionId: state.admissionId }); },
@@ -282,10 +315,15 @@ function paintTab(root, onNavigate) {
         box.appendChild(caseActPanel(state.admissionId, {
             // Счёт выставляет ТОТ ЖЕ вызов, что и касса: своя вторая сборка
             // счёта разошлась бы с кассовой на первой же скидке.
-            onInvoice: async (reload) => {
-                const { data, error } = await supabase.rpc('admission_charges', { admission_id: state.admissionId });
-                if (error) { toast(error.message || tr('Акт не загрузился.'), 'fail'); return; }
-                const ids = ((data && data.lines) || []).filter((l) => l.billable && !l.invoice_id).map((l) => l.id);
+            // ACT_TABLE_V1 — строки выбирает КАССА галочками; без выбора счёт
+            // выставляется на всё невыставленное, как и раньше.
+            onInvoice: async (reload, picked) => {
+                let ids = picked;
+                if (!ids) {
+                    const { data, error } = await supabase.rpc('admission_charges', { admission_id: state.admissionId });
+                    if (error) { toast(error.message || tr('Акт не загрузился.'), 'fail'); return; }
+                    ids = ((data && data.lines) || []).filter((l) => l.billable && !l.invoice_id).map((l) => l.id);
+                }
                 if (!ids.length) { toast(tr('Выставлять нечего: всё уже в счетах.'), 'fail'); return; }
                 const res = await supabase.rpc('create_invoice_for_admission',
                     { admission_id: state.admissionId, admission_service_ids: ids });
@@ -293,6 +331,20 @@ function paintTab(root, onNavigate) {
                 const no = (res.data && (res.data.invoice_number || (res.data.invoice && res.data.invoice.invoice_number))) || '';
                 toast(no ? trf('Счёт {no} передан в кассу.', { no }) : tr('Счёт передан в кассу.'), 'ok');
                 await reload();
+            },
+            // Печать реестра — ОБЩИМ механизмом приложения, тем же, что печатает
+            // документы: свой второй принтер уже однажды разошёлся с этим.
+            onPrint: async (data) => {
+                const { printableSheet } = await import('./doc-settings.js?v=noqr1');
+                printableSheet({
+                    type: 'case_doc',
+                    bodyHtml: actPrintBody(data),
+                    head: {
+                        title: tr('Акт выполненных работ'),
+                        ids: docHeadIds(state.admission),
+                        fields: docHeadFields(state.admission),
+                    },
+                });
             },
             onAddExpense: async (reload) => {
                 // Расход списывается СО СКЛАДА тем же окном, что и везде:
