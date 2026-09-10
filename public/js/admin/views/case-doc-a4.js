@@ -335,14 +335,6 @@ export function docActionsBar(ed, { onDone = null } = {}) {
         },
     }, icon, ' ', tr(label)));
 
-    // DIARY_ENTRY_DATE_V1 — у документа, который пишут КАЖДЫЙ ДЕНЬ, первое
-    // поле — день, о котором запись: обход был вчера вечером, запись легла
-    // сегодня утром, и лечение читают по дню обхода, а не по минуте печати.
-    if (ed.entryDateInput) {
-        bar.appendChild(h('label', { class: 'cd-acts-date' },
-            h('span', null, tr('Дата записи')), ed.entryDateInput));
-    }
-
     // Слева — то, что документу помогает; справа — то, чем документ кончается.
     if (ed.applyTemplate) add('Заготовка', Icon('Copy', { size: 14 }), 'btn-ghost', () => { ed.applyTemplate(); return false; });
     if (ed.print) add('Печать', Icon('Print', { size: 14 }), 'btn-ghost', () => { ed.print(); return false; });

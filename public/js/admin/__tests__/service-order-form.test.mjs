@@ -154,37 +154,39 @@ test('услуга выбирается из справочника и уход�
     assert.equal(new Date(call.args.planned_at).getTime(), new Date('2026-09-11T10:30:00').getTime());
 });
 
-test('SERVICE_FORM_GROUPS_V1: разделы видны строкой и сужают список', async () => {
-    // Окно анализов: лаборатория и диагностика — два раздела, между ними и
-    // выбирают. Услуга-операция в это окно не попадает вовсе.
+test('SERVICE_FORM_GROUPS_V2: набор вкладки — умолчание, а весь справочник в одной плашке', async () => {
+    // Владелец, увидев в окне анализов только «Диагностику» и «Лабораторию»:
+    // «where is consultations and the procedures?». Разделы вкладки — это
+    // умолчание, а не стена: остальное открывается соседней плашкой.
     const form = await openForm({ title: 'Анализы и диагностика', typeNames: ['лаборатор', 'диагностик'] });
-    const chips = walk(form).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('cf-fchip'));
-    const names = chips.map((c) => textOf(c));
-    assert.ok(names.some((n) => n.includes('Все')), 'нет строки «Все»: ' + names.join(' | '));
-    assert.ok(names.some((n) => n.includes('Лаборатория')), 'раздела «Лаборатория» нет: ' + names.join(' | '));
-    assert.ok(names.some((n) => n.includes('Диагностика')), 'раздела «Диагностика» нет: ' + names.join(' | '));
+    const chips = () => walk(form).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('cf-fchip'));
+    const names = chips().map((c) => textOf(c));
+    assert.ok(names.some((n) => n.includes('Анализы и диагностика')), 'нет плашки своего набора: ' + names.join(' | '));
+    assert.ok(names.some((n) => n.includes('Весь справочник')), 'весь справочник недоступен: ' + names.join(' | '));
+    assert.ok(names.some((n) => n.includes('Консультации')), 'консультаций нет ни в одной плашке: ' + names.join(' | '));
 
-    // Пока раздел не выбран — видно всё разрешённое.
     const rowsNow = () => walk(form).filter((e) => String(e.className).includes('sof-row')).map(textOf);
-    assert.ok(rowsNow().some((n) => n.includes('Общий анализ крови')), 'анализа нет в общем списке');
+    // Открылось на своём наборе: анализ есть, консультации и операции нет.
+    assert.ok(rowsNow().some((n) => n.includes('Общий анализ крови')), 'анализа нет в умолчании');
+    assert.ok(!rowsNow().some((n) => n.includes('Приём терапевта')), 'консультация показана до того, как её попросили');
+    assert.ok(!rowsNow().some((n) => n.includes('Аппендэктомия')), 'операция показана в умолчании анализов');
 
-    // Выбрали «Диагностика» — анализ ушёл, потому что он из другого раздела.
-    chips.find((c) => textOf(c).includes('Диагностика')).click();
+    // Одна плашка — и консультация на месте.
+    chips().find((c) => textOf(c).includes('Консультации')).click();
     await settle();
-    assert.ok(!rowsNow().some((n) => n.includes('Общий анализ крови')),
-        'раздел выбран, а список не сузился: ' + rowsNow().join(' | '));
-    // И выбранный раздел ПОМЕЧЕН: иначе непонятно, почему список короткий.
-    const on = walk(form).filter((e) => String(e.className).includes('cf-fchip') && String(e.className).includes('on'));
-    assert.equal(on.length, 1, 'помечен не один раздел: ' + on.map(textOf).join(' | '));
-    assert.ok(textOf(on[0]).includes('Диагностика'));
-});
+    assert.ok(rowsNow().some((n) => n.includes('Приём терапевта')), 'консультацию так и не достать: ' + rowsNow().join(' | '));
+    assert.ok(!rowsNow().some((n) => n.includes('Общий анализ крови')), 'выбран раздел, а список не сузился');
 
-test('в списке — только услуги нужного раздела', async () => {
-    const form = await openForm({});
-    const names = walk(form).filter((e) => String(e.className).includes('sof-row')).map((e) => textOf(e));
-    assert.ok(names.some((n) => n.includes('Аппендэктомия')), 'хирургии нет в списке хирургии');
-    assert.ok(!names.some((n) => n.includes('Общий анализ крови')), 'анализ попал в список операций');
-    assert.ok(!names.some((n) => n.includes('Приём терапевта')), 'консультация попала в список операций');
+    // «Весь справочник» показывает всё, включая хирургию.
+    chips().find((c) => textOf(c).includes('Весь справочник')).click();
+    await settle();
+    const all = rowsNow();
+    assert.ok(all.some((n) => n.includes('Аппендэктомия')) && all.some((n) => n.includes('Общий анализ крови')),
+        'весь справочник показывает не всё: ' + all.join(' | '));
+
+    // Выбранная плашка ровно одна — иначе непонятно, почему список такой.
+    const on = chips().filter((c) => String(c.className).includes('on'));
+    assert.equal(on.length, 1, 'помечено плашек: ' + on.length);
 });
 
 test('без выбранной услуги окно не отпускает и на сервер ничего не шлёт', async () => {

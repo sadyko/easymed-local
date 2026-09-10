@@ -1002,6 +1002,7 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         // Открытая запись показывает СВОЙ день, а не сегодняшний: правя вчерашний
         // дневник, врач не должен молча передатировать его на сегодня.
         if (entryDateInput && src && src.entry_date) entryDateInput.value = src.entry_date;
+        paintNotes(all);
         if (src) fill(src);
         // CASE_DOC_BLANK_V1 — нового документа ещё нет: подставляем бланк
         // клиники из «Документов». Черновик всегда сильнее бланка — иначе
@@ -1074,10 +1075,71 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         ? h('input', { type: 'date', class: 'cd-acts-date-i', value: todayIso() })
         : null;
 
+    // DIARY_NOTEBOOK_V1 (2026-09-10) — владелец: «we need this section in the a4
+    // list as a "add note" and tick the day of the note … its a "notebook" for
+    // every day by doctor».
+    //
+    // Дневник наблюдения — не один документ и не стопка отдельных бумаг, а
+    // ТЕТРАДЬ: страницы идут подряд, и, дописывая сегодняшнюю, врач видит
+    // вчерашнюю. Поэтому прежние записи стоят В САМОМ ЛИСТЕ, над новой, и
+    // печатаются вместе с ней — как в бумажной истории болезни.
+    //
+    // Читаются они, а не правятся: исправление записи это отдельная редакция
+    // (superseded_by), и делают его из чек-листа. Правка «прямо в тетради»
+    // означала бы переписывание вчерашнего дня задним числом.
+    const notesBox = periodic ? h('div', { class: 'cd-notes' }) : null;
+    const addNoteHead = periodic
+        ? h('div', { class: 'cd-addnote' },
+            h('span', { class: 'cd-addnote-t' }, tr('Добавить запись')),
+            h('span', { class: 'grow' }),
+            h('label', { class: 'cd-acts-date' }, h('span', null, tr('Дата записи')), entryDateInput))
+        : null;
+
+    /** Показать написанное КАК ЕСТЬ: та же разметка, что в поле, но не правится. */
+    const noteView = (html) => {
+        const v = h('div', { class: 'cd-note-t' });
+        applyRich(v, html || '');
+        return v;
+    };
+
+    /** Текст записи для тетради: разделы, в которых что-то написано. */
+    const noteText = (r) => [
+        ['complaints', r.complaints], ['objective', r.objective],
+        ['diagnosis', r.diagnosis], ['plan', r.plan], ['body', r.body],
+    ].filter(([, v]) => String(v || '').trim());
+
+    const paintNotes = (all) => {
+        if (!notesBox) return;
+        clear(notesBox);
+        const mine = (all || [])
+            .filter((r) => r.kind === kind && r.published_at && !r.superseded_by && r.id !== draftId)
+            .sort((a, b) => String(a.entry_date || a.published_at || '').localeCompare(String(b.entry_date || b.published_at || '')));
+        if (!mine.length) return;
+        notesBox.appendChild(h('div', { class: 'cd-notes-h' }, trf('Записи: {n}', { n: mine.length })));
+        for (const r of mine) {
+            // Дата словами системы: fmtDate — тот же формат, что во всём разделе.
+            const when = fmtDate(r.entry_date || r.published_at);
+            const body = h('div', { class: 'cd-note-b' });
+            for (const [key, html] of noteText(r)) {
+                body.appendChild(h('div', { class: 'cd-note-sec' },
+                    h('span', { class: 'cd-note-sec-t' }, tr(sectionLabel(kind, key))),
+                    noteView(html)));
+            }
+            notesBox.appendChild(h('div', { class: 'cd-note' },
+                h('div', { class: 'cd-note-h' },
+                    h('b', null, when),
+                    r.author_name ? h('span', { class: 'cd-note-who' }, ' · ' + r.author_name) : null),
+                body));
+        }
+    };
+
     const patientCard = patientAnchor(p.full_name || '',
         [p.mrn, admission.department, admission.admission_no].filter(Boolean).join(' · '));
 
     const editorFields = [
+        // Тетрадь: прежние дни, затем «Добавить запись» и поля новой.
+        notesBox,
+        addNoteHead,
         sheet,
         isPrimary
             ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },

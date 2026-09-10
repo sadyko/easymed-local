@@ -96,7 +96,16 @@ export function openServiceOrderForm({
     nowChk.addEventListener('change', syncWhen);
 
     // Справочник этих разделов — загружается один раз и ищется на месте.
-    const cat = { services: [], types: [], groups: [], group: null, loaded: false };
+    // SERVICE_FORM_GROUPS_V2 (2026-09-10) — владелец, увидев в окне анализов
+    // только «Диагностику» и «Лабораторию»: «where is consultations and the
+    // procedures?». Разделы вкладки были СТЕНОЙ: остального справочника из
+    // истории болезни было не достать вовсе, хотя врач у постели назначает и
+    // консультацию смежника, и перевязку.
+    //
+    // Теперь это УМОЛЧАНИЕ, а не запрет: окно открывается на своём наборе
+    // (первая плашка), рядом стоит «Весь справочник» и каждый раздел клиники.
+    // `all` — весь справочник, `services` — то, что показано сейчас.
+    const cat = { all: [], types: [], groups: [], group: 'preset', preset: null, loaded: false };
 
     const paintPick = () => {
         clear(svcBox);
@@ -124,9 +133,16 @@ export function openServiceOrderForm({
     /** Раздел услуги — ТОЙ ЖЕ общей функцией, что и в большом окне подбора. */
     const groupIdOf = (svc) => String(resolveTypeId(svc, cat.types) || '');
 
+    /** Услуги выбранной плашки. Одно место, где решается, что показывать. */
+    const inGroup = (svc) => {
+        if (cat.group === 'preset') return !cat.preset || cat.preset.has(groupIdOf(svc));
+        if (!cat.group) return true;
+        return groupIdOf(svc) === cat.group;
+    };
+
     const paintGroups = () => {
         clear(groupBox);
-        // Один раздел — не выбор: строка чипов из одной кнопки только занимает
+        // Один раздел — не выбор: строка плашек из одной кнопки только занимает
         // место и делает вид, что где-то есть второй вариант.
         if (!cat.loaded || cat.groups.length < 2) { groupBox.hidden = true; return; }
         groupBox.hidden = false;
@@ -134,7 +150,13 @@ export function openServiceOrderForm({
             class: 'cf-fchip' + (cat.group === id ? ' on' : ''), type: 'button',
             onclick: () => { cat.group = id; paintGroups(); paintList(); },
         }, label, h('span', { class: 'cf-fchip-n' }, String(n)));
-        groupBox.appendChild(chip(null, tr('Все'), cat.services.length));
+        if (cat.preset) {
+            const n = cat.all.filter((x) => cat.preset.has(groupIdOf(x))).length;
+            // Плашка своего набора названа так же, как кнопка, которой окно
+            // открыли: врач видит, почему список начинается именно с них.
+            groupBox.appendChild(chip('preset', tr(title), n));
+        }
+        groupBox.appendChild(chip(null, tr('Весь справочник'), cat.all.length));
         for (const g of cat.groups) groupBox.appendChild(chip(g.id, g.name, g.count));
     };
 
@@ -146,7 +168,7 @@ export function openServiceOrderForm({
             return;
         }
         const q = String(searchInp.value || '').trim().toLowerCase();
-        const rows = cat.services.filter((x) => (!cat.group || groupIdOf(x) === cat.group)
+        const rows = cat.all.filter((x) => inGroup(x)
             && (!q || String(x.name || '').toLowerCase().includes(q)));
         if (!rows.length) {
             listBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
@@ -176,21 +198,22 @@ export function openServiceOrderForm({
             supabase.from('service_types').select('id, name').eq('active', true).order('name'),
         ]);
         cat.types = types || [];
+        cat.all = (services || []).filter(Boolean);
         const needles = (typeNames || []).map((x) => String(x).toLowerCase());
         const keep = needles.length
             ? cat.types.filter((t) => needles.some((n) => String(t.name || '').toLowerCase().includes(n)))
             : [];
-        const allowed = keep.length ? new Set(keep.map((t) => String(t.id))) : null;
-        const all = services || [];
-        const only = allowed ? all.filter((x) => allowed.has(String(resolveTypeId(x, cat.types) || ''))) : all;
-        // ПУСТОЙ СПИСОК ХУЖЕ ЛИШНЕЙ УСЛУГИ: если в этих разделах у клиники
+        const preset = keep.length ? new Set(keep.map((t) => String(t.id))) : null;
+        // ПУСТОЙ СПИСОК ХУЖЕ ЛИШНЕЙ УСЛУГИ: если в разделах вкладки у клиники
         // ничего не заведено (операции сплошь и рядом лежат в «Процедурах»),
-        // показывается весь справочник — то же правило, что и в большом окне.
-        cat.services = only.length ? only : all;
+        // умолчания нет вовсе — окно открывается на всём справочнике.
+        const fits = preset ? cat.all.filter((x) => preset.has(String(resolveTypeId(x, cat.types) || ''))).length : 0;
+        cat.preset = fits ? preset : null;
+        cat.group = cat.preset ? 'preset' : null;
         // Разделы — только те, в которых что-то есть: пустой раздел в строке
         // выбора это обещание услуг, которых нет.
         const counts = new Map();
-        for (const svc of cat.services) {
+        for (const svc of cat.all) {
             const id = String(resolveTypeId(svc, cat.types) || '');
             if (!id) continue;
             counts.set(id, (counts.get(id) || 0) + 1);

@@ -6184,6 +6184,24 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
    метились. */
 .inp-form .cd-icd-list { position: absolute; z-index: 5; left: 0; right: 0; top: 100%; }
 
+/* DIARY_NOTEBOOK_V1 — дневник тетрадью: прежние дни в самом листе, над новой
+   записью. Читаются, а не правятся — поэтому и выглядят текстом документа, а
+   не полями ввода. */
+.cd-notes { display: grid; gap: 14px; margin-bottom: 18px; }
+.cd-notes-h { font-size: 12.5px; font-weight: 600; letter-spacing: .4px;
+    text-transform: uppercase; color: var(--ink-400); }
+.cd-note { padding-left: 12px; border-left: 2px solid var(--ink-100); }
+.cd-note-h { font-size: 13.5px; color: var(--ink-900); }
+.cd-note-who { color: var(--ink-500); font-size: 12.5px; }
+.cd-note-b { display: grid; gap: 6px; margin-top: 4px; }
+.cd-note-sec-t { font-size: 12.5px; font-weight: 600; letter-spacing: .4px;
+    text-transform: uppercase; color: var(--ink-400); }
+.cd-note-t { font-size: 13.5px; line-height: 1.55; color: var(--ink-800); }
+/* «Добавить запись» — граница между прочитанным и тем, что пишут сейчас. */
+.cd-addnote { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px;
+    margin: 0 0 12px; padding-top: 12px; border-top: 1px solid var(--ink-100); }
+.cd-addnote-t { font-size: 15px; font-weight: 600; color: var(--ink-900); }
+
 /* DIARY_ENTRY_DATE_V1 — день записи стоит в полосе действий документа. */
 .cd-acts-date { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px;
     color: var(--ink-500); white-space: nowrap; }
