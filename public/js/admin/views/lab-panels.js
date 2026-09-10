@@ -55,7 +55,10 @@ export const LAB_BUILD = 'lab-v8';
 // painted — the caller can await it and know the screen is settled.
 export async function mountLabPanels(container) {
     clear(container);
-    const state = { panels: [], services: [], selected: null, rows: [], panelQuery: '', loadError: null, loading: true, deptKindById: {}, typeNameById: {} };
+    const state = { panels: [], services: [], selected: null, rows: [], panelQuery: '', loadError: null, loading: true, deptKindById: {}, typeNameById: {},
+        // LIS_INGEST_V1 — приборы клиники и каналы их профилей: из них строится
+        // колонка «Поле анализатора».
+        devices: [], profiles: [] };
     const cid = currentClinicId();
 
     const listEl   = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } });
@@ -111,7 +114,7 @@ export async function mountLabPanels(container) {
         // Errors are CAPTURED, not discarded. Destructuring only `data` turned any
         // failure into an empty service picker with nothing on screen to say why —
         // the screen looked like a clinic with no services rather than a broken read.
-        const [panelsRes, servicesRes, deptsRes, typesRes] = await Promise.all([
+        const [panelsRes, servicesRes, deptsRes, typesRes, devicesRes, profilesRes] = await Promise.all([
             supabase.from('lab_panels').select('*').eq('company_id', cid).order('modality').order('name'),
             // LAB_SERVICE_LINK_V1 — `type` and `is_lab` come along so the picker can
             // offer lab services first. Migration 048 keeps the two in step, so in
@@ -123,6 +126,11 @@ export async function mountLabPanels(container) {
             supabase.from('services').select('id, name, type, is_lab, department_id, type_id').eq('company_id', cid).eq('active', true).order('name'),
             supabase.from('departments').select('id, name, kind').limit(200),
             supabase.from('service_types').select('id, name').limit(200),
+            // LIS_INGEST_V1 — приборы клиники и каналы их профилей. Отказ здесь
+            // не фатален: колонка «Поле анализатора» просто не появится, а
+            // панель по-прежнему заполняется руками.
+            supabase.from('lab_devices').select('id, name, profile, enabled').order('name'),
+            supabase.rpc('lis_profiles', {}),
         ]);
         if (panelsRes.error)   state.loadError = trf('панели: {msg}', { msg: panelsRes.error.message || panelsRes.error });
         if (servicesRes.error) state.loadError = (state.loadError ? state.loadError + ' · ' : '') + trf('услуги: {msg}', { msg: servicesRes.error.message || servicesRes.error });
@@ -134,6 +142,8 @@ export async function mountLabPanels(container) {
         // via its routing enum. Not worth blocking the screen for.
         state.deptKindById = deptKindMap(deptsRes && deptsRes.data);
         state.typeNameById = typeNameMap(typesRes && typesRes.data);
+        state.devices = (devicesRes && devicesRes.data) || [];       // LIS_INGEST_V1
+        state.profiles = (profilesRes && profilesRes.data) || [];
         state.loading = false;   // read finished — from here an empty list really does mean «панелей нет»
         paintList();
         if (state.selected) { const again = state.panels.find(p => p.id === state.selected.id); selectPanel(again || null); }
@@ -353,6 +363,16 @@ export async function mountLabPanels(container) {
             return;
         }
 
+        // LIS_INGEST_V1 — какой прибор кормит эту панель. «— нет —» законно:
+        // панель, которую заполняют руками, анализатора не имеет.
+        const devSel = h('select', { style: { width: '100%' } },
+            h('option', { value: '', selected: !p.device_id }, '— нет —'),
+            ...state.devices.map(d => h('option', { value: String(d.id), selected: Number(p.device_id) === d.id },
+                (d.enabled ? d.name : trf('{name} (выключен)', { name: d.name })))));
+        // Смена прибора перерисовывает таблицу: у другого прибора другие каналы,
+        // и прежние подсказки к ним не относятся.
+        devSel.onchange = () => { p.device_id = Number(devSel.value) || null; suggestMapping(p.device_id); paintEditor(); };
+
         const nameInp = h('input', { value: p.name || '', style: { width: '100%' } });
         const modSel = h('select', { style: { width: '100%' } },
             ...['lab', 'diagnostic'].map(m => h('option', { value: m, selected: p.modality === m }, MODALITY_RU[m])));
@@ -476,7 +496,9 @@ export async function mountLabPanels(container) {
                     h('tr', null,
                         h('th', { rowspan: '2' }, 'Показатель'), h('th', { rowspan: '2' }, 'Ед.'), h('th', { rowspan: '2' }, 'Тип'),
                         h('th', { class: 'grp', colspan: '3' }, 'Референсные интервалы'),
-                        h('th', { rowspan: '2' }, 'Группа'), h('th', { rowspan: '2' }, '')),
+                        h('th', { rowspan: '2' }, 'Группа'),
+                        h('th', { rowspan: '2' }, 'Поле анализатора'),   // LIS_INGEST_V1
+                        h('th', { rowspan: '2' }, '')),
                     h('tr', null,
                         h('th', { class: 'grp' }, 'Общий'), h('th', { class: 'grp' }, 'Муж.'), h('th', { class: 'grp' }, 'Жен.'))),
                 tb));
@@ -487,13 +509,13 @@ export async function mountLabPanels(container) {
             h('button', { class: 'btn btn-primary', onclick: async (ev) => {
                 ev.currentTarget.disabled = true;
                 try {
-                    await savePanel({ name: nameInp.value.trim(), modality: modSel.value, has_narrative: narrChk.checked, service_id: svcSel.value || null, active: activeChk.checked });
+                    await savePanel({ name: nameInp.value.trim(), modality: modSel.value, has_narrative: narrChk.checked, service_id: svcSel.value || null, active: activeChk.checked, device_id: Number(devSel.value) || null });
                 } finally { if (ev.currentTarget?.isConnected) ev.currentTarget.disabled = false; }
             } }, Icon('Check', { size: 14 }), ' Сохранить панель')));
         editorEl.appendChild(body);
     }
 
-    function blankRow() { return { id: null, name: '', unit: '', value_type: 'numeric', value_options: '', decimals: 1, ref_low: null, ref_high: null, ref_text: '', ref_low_m: null, ref_high_m: null, ref_low_f: null, ref_high_f: null, group_label: '', ref_ranges: [] }; }
+    function blankRow() { return { id: null, name: '', unit: '', value_type: 'numeric', value_options: '', decimals: 1, ref_low: null, ref_high: null, ref_text: '', ref_low_m: null, ref_high_m: null, ref_low_f: null, ref_high_f: null, group_label: '', ref_ranges: [], device_code: '', device_code_confirmed: 0 }; }
 
     // ── LAB_ANALYTE_LIBRARY_V1 — pick indicators from the parameter dictionary ──
     // Reads lab_analyte_templates (migration 052), which is read-only reference
@@ -710,6 +732,78 @@ export async function mountLabPanels(container) {
         document.addEventListener('keydown', onKey);
     }
 
+    // ── LIS_INGEST_V1 — сопоставление показателя с полем анализатора ─────────
+    //
+    // Решение владельца D3: сопоставляем ПОЛЕ В ПОЛЕ, руками. Совпадение кода
+    // само по себе разрешением не является — «if we match in the system there
+    // is can be error». Поэтому подсказка допустима, а тихое применение нет:
+    // строка помечается «предложено», и пока человек её не подтвердил, приём
+    // её не применяет (D4), а панель не сохраняется.
+
+    /** Каналы прибора, выбранного у текущей панели. Пусто — прибора нет. */
+    function deviceChannels() {
+        const p = state.selected;
+        if (!p || !p.device_id) return [];
+        const dev = state.devices.find(d => d.id === Number(p.device_id));
+        if (!dev) return [];
+        const prof = state.profiles.find(x => x.key === dev.profile);
+        return (prof && prof.channels) || [];
+    }
+
+    /**
+     * Предзаполнить очевидные строки ПОДСКАЗКАМИ (не применением). Трогает
+     * только пустые: уже сопоставленное человеком не перебиваем.
+     */
+    function suggestMapping(deviceId) {
+        if (!deviceId) return;
+        const dev = state.devices.find(d => d.id === Number(deviceId));
+        const prof = dev && state.profiles.find(x => x.key === dev.profile);
+        const channels = (prof && prof.channels) || [];
+        if (!channels.length) return;
+        let hinted = 0;
+        for (const r of state.rows) {
+            if ((r.device_code || '').trim()) continue;
+            const code = (r.code || '').trim().toUpperCase();
+            if (!code) continue;
+            const ch = channels.find(c => c.code.toUpperCase() === code);
+            if (ch) { r.device_code = ch.code; r.device_code_confirmed = 0; hinted++; }
+        }
+        if (hinted) toast(trf('Предложено сопоставлений: {n}. Подтвердите каждое — панель не сохранится, пока остались непроверенные.', { n: hinted }), 'warn');
+    }
+
+    /** Ячейка «Поле анализатора» одной строки. */
+    function deviceCell(r) {
+        const channels = deviceChannels();
+        if (!state.selected || !state.selected.device_id) {
+            return h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'выберите анализатор');
+        }
+        if (!channels.length) {
+            return h('input', {
+                value: r.device_code || '', placeholder: 'код канала', class: 'lw-inp', style: { width: '130px' },
+                title: 'У этой модели каналы не заданы — впишите код так, как его присылает прибор',
+                oninput: (e) => { r.device_code = e.target.value; r.device_code_confirmed = e.target.value.trim() ? 1 : 0; },
+            });
+        }
+
+        const suggested = !!(r.device_code || '').trim() && !r.device_code_confirmed;
+        const sel = h('select', {
+            class: 'lw-inp',
+            style: { width: '150px', ...(suggested ? { opacity: '0.65', fontStyle: 'italic' } : {}) },
+            // Человек выбрал сам — это и есть подтверждение.
+            onchange: (e) => { r.device_code = e.target.value; r.device_code_confirmed = e.target.value ? 1 : 0; paintEditor(); },
+        },
+            h('option', { value: '', selected: !(r.device_code || '').trim() }, '— не выбрано —'),
+            ...channels.map(c => h('option', { value: c.code, selected: c.code === r.device_code }, c.code + ' · ' + c.name)));
+
+        if (!suggested) return sel;
+        return h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, sel,
+            h('button', {
+                class: 'lp-ic', type: 'button', title: 'Подтвердить это сопоставление',
+                'aria-label': 'Подтвердить сопоставление',
+                onclick: () => { r.device_code_confirmed = 1; paintEditor(); },
+            }, Icon('Check', { size: 12 })));
+    }
+
     function analyteRow(r, idx) {
         const numCell = (key) => h('input', { type: 'number', step: 'any', value: r[key] ?? '', class: 'lw-inp', oninput: (e) => { r[key] = e.target.value === '' ? null : Number(e.target.value); } });
         const range = (a, b) => h('span', { class: 'lp-range' }, numCell(a), h('span', { class: 'd' }, '–'), numCell(b));
@@ -733,6 +827,7 @@ export async function mountLabPanels(container) {
             h('td', null, (isText || isSel) ? h('span', { class: 'muted' }, '—') : range('ref_low_m', 'ref_high_m')),
             h('td', null, (isText || isSel) ? h('span', { class: 'muted' }, '—') : range('ref_low_f', 'ref_high_f')),
             h('td', null, h('input', { value: r.group_label || '', placeholder: '—', class: 'lw-inp', style: { width: '120px' }, oninput: (e) => { r.group_label = e.target.value; } })),
+            h('td', null, deviceCell(r)),   // LIS_INGEST_V1
             h('td', null, h('span', { class: 'lp-actions' },
                 // LAB_MULTI_REF_V1 — extra named ranges (menopause, cycle phase,
                 // trimester, age bands). Count badge so a configured analyte is
@@ -752,10 +847,20 @@ export async function mountLabPanels(container) {
 
     async function savePanel(fields) {
         if (!fields.name) { toast('Укажите название панели', 'warn'); return; }
+        // LIS_INGEST_V1 / решение владельца D4 — ЕДИНСТВЕННОЕ место, где запрет
+        // на тихое применение держится технически, а не на дисциплине. Панель с
+        // непроверенными подсказками сохранить нельзя: иначе «предложено» молча
+        // стало бы «применяется», и число из прибора легло бы под именем, к
+        // которому его никто не привязывал.
+        const unconfirmed = state.rows.filter(r => (r.device_code || '').trim() && !r.device_code_confirmed);
+        if (unconfirmed.length) {
+            toast(trf('Подтвердите поля анализатора: {list}', { list: unconfirmed.map(r => r.name || '(без имени)').join(', ') }), 'fail');
+            return;
+        }
         const p = state.selected;
         try {
             let panelId = p.id;
-            const row = { name: fields.name, modality: fields.modality, has_narrative: fields.has_narrative, service_id: fields.service_id, active: fields.active };
+            const row = { name: fields.name, modality: fields.modality, has_narrative: fields.has_narrative, service_id: fields.service_id, active: fields.active, device_id: fields.device_id };   // LIS_INGEST_V1 — device_id
             if (panelId) {
                 const { error } = await supabase.from('lab_panels').update(row).eq('id', panelId);
                 if (error) throw error;
@@ -785,6 +890,11 @@ export async function mountLabPanels(container) {
                 ref_low_m: r.ref_low_m, ref_high_m: r.ref_high_m, ref_low_f: r.ref_low_f, ref_high_f: r.ref_high_f,
                 group_label: (r.group_label || '').trim() || null, sort_order: i,
                 ref_ranges: normRanges(r).length ? normRanges(r) : null,   // LAB_MULTI_REF_V1
+                // LIS_INGEST_V1 — сопоставление с полем анализатора. Приём
+                // применяет ТОЛЬКО подтверждённые строки, поэтому флаг едет в
+                // базу вместе с кодом, а не выводится там заново.
+                device_code: (r.device_code || '').trim(),
+                device_code_confirmed: r.device_code_confirmed ? 1 : 0,
             }));
             if (ins.length) {
                 let { error } = await supabase.from('lab_panel_analytes').insert(ins);

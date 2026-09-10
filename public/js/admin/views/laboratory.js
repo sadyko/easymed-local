@@ -36,6 +36,7 @@ import { printBarcodeLabel } from './lab-barcode.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // same URL as patient-card/service-workspace (one instance)
 import { canDelete, canEditLabPanels } from '../permissions.js';   // LAB_PANELS_BY_SECTION_V1 — the gate IS lab-section access (same predicate as the sidebar)
 import { mountLabPanels, LAB_BUILD } from './lab-panels.js';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now
+import { mountLabDevices } from './lab-devices.js';   // LIS_INGEST_V1 — «Анализаторы»: приборы клиники и лоток непринятых сообщений
 // ?v= is required here, not decorative: this module gained selectOptionsFor, and a
 // browser holding the older cached copy would fail the named import and blank the view.
 import { pluralRu, groupLabRows, selectOptionsFor,
@@ -145,9 +146,12 @@ const LAB_SCOPES = [
 // usage statistics (counts only, NO money: revenue lives in Отчёты behind its
 // own permissions, while THIS screen is open to every lab-section role).
 const MODES = [
-    { key: 'queue',  label: 'Очередь' },
-    { key: 'panels', label: 'Панели'  },
-    { key: 'stats',  label: 'Статистика' },
+    { key: 'queue',   label: 'Очередь' },
+    { key: 'panels',  label: 'Панели'  },
+    { key: 'stats',   label: 'Статистика' },
+    // LIS_INGEST_V1 — четвёртая сторона: техника лаборатории. Живёт здесь, а не
+    // в Настройках, по тому же решению владельца, что увело сюда «Панели».
+    { key: 'devices', label: 'Анализаторы' },
 ];
 
 // LAB_STATS_V1 — the four periods the server's lab_usage_stats validates.
@@ -173,7 +177,7 @@ export async function renderLaboratory(container, ctx = {}) {
     // gets the queue no matter what the address bar asks for (defence in depth:
     // the shell's isRouteAllowed('labs') already refused such a role the view).
     const sub = ctx.payload && ctx.payload.sub;
-    state.mode = ((sub === 'panels' || sub === 'stats') && canEditLabPanels()) ? sub : 'queue';
+    state.mode = ((sub === 'panels' || sub === 'stats' || sub === 'devices') && canEditLabPanels()) ? sub : 'queue';
     mount();
     await paintMode();
 }
@@ -184,6 +188,7 @@ export async function renderLaboratory(container, ctx = {}) {
 // decides what fills it.
 async function paintMode() {
     if (state.mode === 'panels') await mountLabPanels(refs.panelsHost);
+    else if (state.mode === 'devices') await mountLabDevices(refs.panelsHost);   // LIS_INGEST_V1
     else if (state.mode === 'stats') await paintStats();
     else await fetchAndPaint();
 }
@@ -351,6 +356,7 @@ function mount() {
         panels: 'Панели исследований, показатели и референсные значения. Создайте панели своей клиники и заполните референсные значения.',
         stats:  'Сколько раз заказывали панели и лабораторные услуги и сколько выдано — за выбранный период.',
         queue:  'Очередь проб: забор → в работу → результаты → проверка и выдача.',
+        devices: 'Анализаторы клиники: подключение, связь и сообщения, которые не удалось разложить по бланкам.',
     };
     // The queue's own controls filter the queue — in the other modes they
     // would point at nothing, so they are absent rather than inert. The stats

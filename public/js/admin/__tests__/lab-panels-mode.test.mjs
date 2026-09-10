@@ -239,7 +239,11 @@ test('любой доступ к Лаборатории — включая чт�
 
   const btns = modeButtons(root);
   // LAB_STATS_V1 — the switch grew a third side: usage statistics.
-  assert.deepStrictEqual(btns.map(textOf), ['Очередь', 'Панели', 'Статистика'], 'трёхсторонний переключатель в шапке');
+  // LIS_INGEST_V1 — переключатель стал четырёхсторонним: техника лаборатории
+  // живёт здесь же, а не в Настройках, по тому же решению владельца, что увело
+  // сюда «Панели». Список сверяется целиком и по порядку: новая сторона обязана
+  // быть решением, а не приехать незамеченной.
+  assert.deepStrictEqual(btns.map(textOf), ['Очередь', 'Панели', 'Статистика', 'Анализаторы'], 'четырёхсторонний переключатель в шапке');
   assert.ok(btns[0].className.includes('on'), 'по умолчанию — Очередь');
   assert.strictEqual(btns[0].attrs['aria-pressed'], 'true');
   assert.strictEqual(btns[1].attrs['aria-pressed'], 'false');
