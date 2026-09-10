@@ -387,6 +387,11 @@ export function docPrintHtml(sheetHtml, { title = '', base = null, css = '' } = 
     //
     // Шрифт задаётся ПОСЛЕ вшитых правил: иначе экранный body-стиль сильнее.
     // Высота листа снимается: экранные 1123 px гнали вторую, пустую страницу.
+    // ПОЛЯ ЛИСТА ОСТАЮТСЯ ЭКРАННЫМИ. Обнулив их, я вжал документ в самый край
+    // страницы — владелец сравнил экран с бумагой и увидел два разных
+    // документа. Лист занимает всю ширину печатной области, а воздух внутри
+    // у него тот же, что на экране; рамки полей ввода на бумаге сняты — на
+    // экране они говорят «сюда можно писать», а на бумаге писать некуда.
     //
     // I18N_COVERAGE_V1 — русских слов внутри самой строки быть не должно: она
     // собирается из ${…}, и проверка ищет в таких строках непереведённый текст.
@@ -403,7 +408,9 @@ ${css}
   .no-print, .a4-sec-add, .a4-sec-x, .cd-acts, .a4-fmt, .a4-fmt-t { display: none !important; }
   .a4-sec-off { display: none !important; }
   .a4-paper { box-shadow: none !important; margin: 0 !important;
-      width: auto !important; min-height: 0 !important; padding: 0 !important; }
+      width: 100% !important; max-width: none !important; min-height: 0 !important; }
+  .a4-input { border-color: transparent !important; background: transparent !important;
+      padding-left: 0 !important; padding-right: 0 !important; }
 </style></head><body>${sheetHtml}</body></html>`;
 }
 
