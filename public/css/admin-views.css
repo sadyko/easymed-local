@@ -1426,9 +1426,21 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
    viewport not scroll view. scroll view is only a4». Средняя колонка ровно под
    лист (794 px + воздух под тень), боковые забирают ВСЮ остальную ширину: сетка
    заполняет экран, а бумага не растягивается — бумага не тянется. */
+/* CASE_FILE_FIT_V1 — КОЛОНКИ МЕРЯЮТ СВОЮ ПОЛОСУ, А НЕ ОКНО. Боковое меню
+   приложения сворачивается и разворачивается, полоса содержимого от этого
+   меняется на четверть, а @media видит только окно: при открытом меню три
+   колонки сжимались в лапшу, при закрытом — разъезжались. @container меряет то
+   самое место, в котором лежит сетка. */
+.cw-wrap { container-type: inline-size; }
 .cw-grid { display: grid; gap: 12px; align-items: start; margin-top: 10px;
     justify-content: center;
     grid-template-columns: minmax(260px, 420px) minmax(0, 820px) minmax(240px, 380px); }
+@container (max-width: 1360px) { .cw-grid { grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); }
+    .cw-aside { grid-column: 1 / -1; max-height: none; position: static; } }
+@container (max-width: 900px) { .cw-grid { grid-template-columns: minmax(0, 1fr); }
+    .cw-rail { position: static; } }
+/* Старые правила остаются полом для браузера без @container: без них узкое окно
+   получило бы три колонки по 240 px и лист шириной в ладонь. */
 @media (max-width: 1400px) { .cw-grid { grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); }
     .cw-aside { grid-column: 1 / -1; } }
 @media (max-width: 900px) { .cw-grid { grid-template-columns: minmax(0, 1fr); } }
@@ -5953,7 +5965,11 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
     background: var(--ink-25); color: var(--ink-700); box-shadow: none;
     touch-action: manipulation; transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease; }
 .btn.cd-step:focus-visible { outline: 2px solid var(--primary-500); outline-offset: 2px; }
-.btn.cd-drop:hover { background: var(--crit-50); border-color: var(--crit-200, #f3c7c7); color: var(--crit-700); }
+/* Кнопка «убрать» тише кнопки действия: в строке главное — написать документ,
+   а не убрать его из набора. Проявляется под курсором и при переходе табом. */
+.btn.cd-drop { opacity: .45; }
+.cd-list li:hover .btn.cd-drop, .btn.cd-drop:focus-visible { opacity: 1; }
+.btn.cd-drop:hover { background: var(--crit-50); border-color: var(--crit-200, #f3c7c7); color: var(--crit-700); opacity: 1; }
 .btn.cd-drop:active { background: var(--crit-100, #fadddd); }
 /* «Вернуть» — действие добавления, и оно окрашено сразу: убранный документ
    стоит бледной строкой, и зелёный «+» — единственное, что в ней светится. */
@@ -5973,9 +5989,51 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
     border: 1px solid var(--ink-100); background: var(--ink-25, #fafbfb); }
 .cd-add-in { flex: 1; min-width: 0; min-height: 44px; font-size: 13.5px; }
 .cd-add-go { flex: 0 0 auto; min-width: 44px; min-height: 44px; justify-content: center; }
-.cd-add-note { font-size: 12.5px; line-height: 1.45; margin-top: 6px; }
 /* CASE_DOC_SET_BACK_V1 — убранный документ стоит бледной строкой: он есть, но
    в наборе его нет. «+» возвращает его на место. */
+/* ── CASE_FILE_TABS_V1 — вкладки истории болезни и их содержимое ─────────── */
+/* Пустой документ на бумаге говорит, что он пуст. */
+.a4-print-empty { margin-top: 18px; font-size: 13.5px; color: var(--ink-500); }
+.cf-tabs { margin: 0 0 14px; }
+.cf-tabwrap { display: flex; flex-direction: column; gap: 14px; }
+.cf-pane { padding: 14px 16px 16px; }
+.cf-pane-h { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 15px; }
+.cf-body { display: flex; flex-direction: column; gap: 8px; }
+.cf-empty { padding: 18px 2px; font-size: 13.5px; color: var(--ink-500); }
+.cf-group { margin: 14px 0 6px; font-size: 12.5px; font-weight: 600; letter-spacing: .4px;
+    text-transform: uppercase; color: var(--ink-400); }
+.cf-list { list-style: none; margin: 0; padding: 0; }
+.cf-row { display: flex; align-items: center; gap: 10px; min-height: 48px;
+    padding: 6px 2px; border-bottom: 1px solid var(--ink-50); }
+.cf-row:last-child { border-bottom: 0; }
+.cf-row-main { flex: 1; min-width: 0; }
+.cf-row-t { font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
+.cf-row-m { font-size: 12.5px; color: var(--ink-500); line-height: 1.45; }
+.cf-row-r { flex: 0 0 auto; font-size: 12.5px; color: var(--ink-500); }
+.cf-item { padding: 10px 12px; border: 1px solid var(--ink-100); border-radius: var(--r-md); background: var(--white); }
+.cf-item-h { display: flex; align-items: baseline; gap: 10px; font-size: 13.5px; }
+.cf-when { margin-left: auto; font-size: 12.5px; color: var(--ink-500); white-space: nowrap; }
+.cf-tbl { width: 100%; margin-top: 6px; border-collapse: collapse; font-size: 13.5px; }
+.cf-tbl td { padding: 4px 6px; border-bottom: 1px solid var(--ink-50); }
+.cf-tbl td.num { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.cf-ref { color: var(--ink-500); font-size: 12.5px; white-space: nowrap; }
+/* Отклонение названо и цветом, и словом: цвет один не читается дальтоником. */
+.cf-flag { font-size: 12.5px; color: var(--crit-700); white-space: nowrap; }
+.cf-tbl tr.cf-off td { background: var(--crit-50); }
+.cf-concl { margin-top: 4px; font-size: 13.5px; line-height: 1.5; color: var(--ink-800); }
+.cf-op { display: inline-flex; align-items: center; padding: 4px 12px; border-radius: var(--r-pill);
+    background: var(--ink-100); color: var(--ink-700); font-size: 13.5px; font-weight: 600; }
+.cf-op-done { background: var(--ok-50, #e8f7ef); color: var(--ok-700, #0f7a43); }
+.cf-op-plan { background: var(--warn-50, #fff6e6); color: var(--warn-700, #8a5a00); }
+/* CASE_FILE_QUIET_V1 — убранные за одной строкой со счётчиком. */
+.cd-gone-h { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px;
+    margin-top: 10px; padding: 0 2px; border: 0; background: none; cursor: pointer;
+    font: inherit; font-size: 12.5px; font-weight: 600; letter-spacing: .4px;
+    text-transform: uppercase; color: var(--ink-400); text-align: left; }
+.cd-gone-h:hover { color: var(--ink-700); }
+.cd-gone-h .cd-gone-n { flex: 0 0 auto; margin-left: auto; display: inline-grid; place-items: center;
+    min-width: 22px; height: 20px; padding: 0 7px; border-radius: var(--r-pill);
+    background: var(--ink-100); color: var(--ink-700); font-size: 12.5px; font-weight: 700; letter-spacing: 0; }
 /* Бледнеет ИМЯ, а не кнопки: выцветший «+» читался как отключённый. */
 .cd-gone { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 2px 8px 2px 12px; }
 .cd-gone-n { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink-500); overflow-wrap: anywhere; }
@@ -6070,8 +6128,12 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .a4-sec-x:hover { background: var(--crit-50); color: var(--crit-700); }
 /* CASE_DOC_ACTIONS_V1 — полоса действий над листом: заготовка и печать
    слева, черновик и сохранение справа. Формат текста отсюда убран. */
-.cd-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cd-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; }
 .cd-acts .btn { min-height: 40px; }
+/* Заготовка и печать — вспомогательные: тихие, без рамки. Заметны две правые:
+   ими документ кончается. */
+.cd-acts .btn-ghost { color: var(--ink-600); }
+.cd-acts .btn-ghost:hover { background: var(--ink-50); color: var(--ink-900); }
 .cd-free { display: flex; flex-direction: column; }
 /* CASE_DOC_SEC_MANAGER_V2 — ВЫКЛЮЧЕННЫЙ РАЗДЕЛ ЕСТЬ СТРОКА «+ Добавить: …».
    Владелец показал лист приёма: список разделов там и есть сам лист, а не
@@ -6087,6 +6149,11 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
     border-radius: var(--r-sm); background: var(--ink-25); color: var(--ink-500);
     font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
 .cd-sec.a4-sec-off > .a4-sec-add:hover { border-color: var(--primary-300); color: var(--primary-700); }
+/* «Свой раздел» — такая же строка, как «+ Добавить: …», и стоит с ними в ряд. */
+.cd-add-free { display: block; width: 100%; text-align: left; padding: 8px 12px; margin: 3px 0;
+    border: 1px dashed var(--ink-200); border-radius: var(--r-sm); background: var(--ink-25);
+    color: var(--ink-500); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.cd-add-free:hover { border-color: var(--primary-300); color: var(--primary-700); }
 /* CASE_DOC_FORMAT_V1 — оформление текста у САМОГО раздела: кнопка рядом с
    подписью, ряд иконок над полем. Панель это инструмент, а не часть
    документа: на бумагу не идёт и по второму нажатию убирается. */
@@ -6116,6 +6183,15 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
     display: grid; place-items: center; border: 0; border-radius: var(--r-sm);
     background: transparent; color: var(--ink-300); font-size: 15px; line-height: 1; cursor: pointer; }
 .cd-sec > .a4-sec-x:hover { color: var(--crit-600); background: var(--ink-50); }
+/* CASE_FILE_QUIET_V1 — УГЛЫ РАЗДЕЛА МОЛЧАТ, ПОКА В НЁМ НЕ ПИШУТ. Восемь мелких
+   кнопок (оформление и крестик у каждого из четырёх разделов) рассыпаны по
+   всему листу и спорят с текстом. Они не исчезают — на планшете «наведения» не
+   существует, и спрятать их за него значило бы отобрать: они бледные и
+   становятся видимыми, когда в разделе стоит курсор или на нём мышь. */
+.cd-sec > .a4-sec-x, .cd-sec > .a4-fmt-t { opacity: .35; transition: opacity 120ms ease, color 120ms ease, background-color 120ms ease; }
+.cd-sec:hover > .a4-sec-x, .cd-sec:hover > .a4-fmt-t,
+.cd-sec:focus-within > .a4-sec-x, .cd-sec:focus-within > .a4-fmt-t { opacity: 1; }
+.cd-sec > .a4-fmt-t[aria-expanded="true"] { opacity: 1; }
 .cd-sec-free { padding-right: 32px; }
 
 /* ── Экран помещается: прокручивается только лист (владелец: «make everything

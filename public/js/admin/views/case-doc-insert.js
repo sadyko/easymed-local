@@ -56,7 +56,16 @@ function labHtml(item) {
  * @param {{admissionId:number, onInsert:(html:string)=>boolean}} opts
  * @returns {Node} карточка панели; данные подгружаются сами
  */
-export function caseInsertPanel({ admissionId, onInsert } = {}) {
+/**
+ * @param {{admissionId:number, onInsert:function, diagnosisNow?:() => string}} opts
+ *        diagnosisNow() — диагноз, который стоит в карточке слева ПРЯМО СЕЙЧАС.
+ *        CASE_DX_EVERYWHERE_V1 — владелец: «paste diagnosis will be fetched
+ *        from the left panel». Панель вставки и карточка диагноза показывали
+ *        РАЗНОЕ: карточка — диагноз этого документа, панель — диагноз
+ *        госпитализации. Врач правил диагноз слева, нажимал «Диагноз» справа и
+ *        получал в текст старую формулировку.
+ */
+export function caseInsertPanel({ admissionId, onInsert, diagnosisNow = null } = {}) {
     const body = h('div', { class: 'ci-body' });
     const card = h('aside', { class: 'card ci-card', 'aria-label': tr('Вставить в документ') },
         h('div', { class: 'ci-head' }, Icon('Doc', { size: 14 }), ' ', tr('Вставить в документ')),
@@ -96,8 +105,12 @@ export function caseInsertPanel({ admissionId, onInsert } = {}) {
             if (b.key === 'diagnosis') {
                 const d = data.diagnosis || {};
                 const rows = [];
-                if (d.clinical) rows.push(itemRow(d.clinical, tr('клинический'), diagnosisHtml('Клинический диагноз', d.clinical)));
-                if (d.referral) rows.push(itemRow(d.referral, tr('при направлении'), diagnosisHtml('Диагноз при направлении', d.referral)));
+                // Первым — диагноз ЭТОГО документа: он самый свежий, его только
+                // что писали слева. Диагнозы госпитализации остаются ниже.
+                const own = diagnosisNow ? String(diagnosisNow() || '').trim() : '';
+                if (own) rows.push(itemRow(own, tr('этого документа'), diagnosisHtml('Диагноз', own)));
+                if (d.clinical && d.clinical !== own) rows.push(itemRow(d.clinical, tr('клинический'), diagnosisHtml('Клинический диагноз', d.clinical)));
+                if (d.referral && d.referral !== own) rows.push(itemRow(d.referral, tr('при направлении'), diagnosisHtml('Диагноз при направлении', d.referral)));
                 box.appendChild(rows.length ? h('div', { class: 'ci-list' }, ...rows)
                     : h('div', { class: 'ci-note' }, tr('Диагноз ещё не установлен — его пишут в первичном осмотре.')));
             } else {

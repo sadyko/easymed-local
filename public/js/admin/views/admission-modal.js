@@ -48,7 +48,9 @@
 
 import { supabase } from '../../supabase.js';
 import { sectionsFor, sectionLabel, richSection, freeSection, richToolbar, printDocSheet, docActionsBar, readRich, applyRich, RICH_KEYS, insertBlock, fireInput, caseDocBlank } from './case-doc-a4.js';
-import { openTemplateLibraryModal } from './service-workspace.js';   // CASE_DOC_TEMPLATES_V1 — одна библиотека шаблонов на кабинет и стационар   // CASE_DOC_A4_V1 / CASE_DX_PICK_V1 / CASE_DOC_BLANK_V1
+// CASE_DOC_TEMPLATES_V1 — библиотека шаблонов живёт в кабинете врача и
+// подгружается в момент нажатия (см. applyTemplate ниже): статический импорт
+// замыкает кольцо модулей и оставляет экран истории болезни на старом коде.
 import { loadDocSettings } from './doc-settings.js?v=noqr1';   // CASE_DOC_BLANK_V1 — бланк клиники из «Документов»
 import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — список диагнозов с ролями
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
@@ -910,11 +912,14 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         freeHost.appendChild(made.sec);
         return made;
     };
-    const addBtn = readOnly ? null : h('div', { class: 'a4-actions no-print' },
-        h('button', {
-            class: 'btn btn-outline btn-sm', type: 'button',
-            onclick: () => { const made = addFree('', ''); if (made.name.focus) made.name.focus(); },
-        }, Icon('Plus', { size: 13 }), ' ', tr('Свой раздел')));
+    // CASE_FILE_QUIET_V1 (2026-09-10) — ОДНО СЕМЕЙСТВО «ДОБАВИТЬ». Пунктирные
+    // строки «+ Добавить: Жалобы» и отдельная кнопка с рамкой под ними — это
+    // одно действие в двух обличьях. «Свой раздел» становится такой же строкой
+    // и встаёт последней в тот же ряд.
+    const addBtn = readOnly ? null : h('button', {
+        class: 'a4-sec-add cd-add-free no-print', type: 'button',
+        onclick: () => { const made = addFree('', ''); if (made.name.focus) made.name.focus(); },
+    }, trf('+ Добавить: {name}', { name: tr('свой раздел') }));
 
     const sheet = h('div', { class: 'cd-sheet' }, ...sectionEls, freeHost, addBtn);
     syncSecs();
@@ -1120,7 +1125,15 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
      * написанное. Бланк клиники (его правят в «Документах») остался
      * подстановкой при открытии нового документа и никуда не делся.
      */
-    const applyTemplate = () => openTemplateLibraryModal(null, {
+    // Библиотека шаблонов подгружается В МОМЕНТ НАЖАТИЯ, а не импортом сверху.
+    // Статический импорт замыкал кольцо admission-modal → service-workspace →
+    // patient-card → admission-modal: браузер в таком кольце оставляет модуль
+    // недоинициализированным, и весь экран истории болезни оставался на старом
+    // коде — владелец: «its still not applied». В тестах кольцо не всплывало:
+    // там модули грузятся поодиночке и в другом порядке.
+    const applyTemplate = async () => {
+        const { openTemplateLibraryModal } = await import('./service-workspace.js');
+        openTemplateLibraryModal(null, {
         dt: 2,
         apply: (fields) => {
             let put = 0;
@@ -1137,14 +1150,16 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
                 ? trf('Шаблон вставлен: разделов — {n}.', { n: put })
                 : tr('Все разделы шаблона уже заполнены — написанное не затирается.'), put ? 'ok' : 'fail');
         },
-    });
+        });
+    };
 
     return {
         // CASE_DOC_ACTIONS_V1 — четыре действия документа отдаются наружу
         // готовыми: экран ставит их полосой над листом, окно — тем же рядом.
         applyTemplate,
-        print: () => printDocSheet(sheet.parentNode && String(sheet.parentNode.className || '').includes('a4-paper')
-            ? sheet.parentNode : sheet, { title: reviewTitle(kind, mode, docTitle) }),
+        // Лист (.a4-paper) ищет сама печать: между разделами и бумагой лежит
+        // ещё обёртка тела документа, и «один родитель вверх» промахивался.
+        print: () => printDocSheet(sheet, { title: reviewTitle(kind, mode, docTitle) }),
         // CASE_DOC_A4_V1 — панель форматирования и вставка блока отдаются
         // НАРУЖУ: рабочий экран ставит панель НАД листом, а правая панель
         // «Вставить в документ» кладёт блок туда, где стоит курсор.

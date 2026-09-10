@@ -164,13 +164,16 @@ export function caseHead(ov, { active = 'overview', onNavigate = null, onReload 
                 h('div', { class: 'co-name-row' }, nameBtn, chip, dayTag),
                 h('div', { class: 'co-sub muted' }, who || '—')),
             h('div', { class: 'co-head-side' }, allergy, navBox)),
+        // CASE_FILE_QUIET_V1 (2026-09-10) — В ШАПКЕ ЧЕТЫРЕ ФАКТА, А НЕ ШЕСТЬ.
+        // У постели спрашивают номер истории, где лежит, кто лечит и когда
+        // выписка. «Поступление» и «Приёмный врач» — факты приёмного покоя: они
+        // остаются в обзоре госпитализации, где их и смотрят. Приёмный врач
+        // возвращается в шапку, ПОКА ЛЕЧАЩЕГО НЕТ: тогда именно его ждут с
+        // осмотром, и это уже не справка, а «кого искать».
         h('div', { class: 'co-fields' },
             hf('№ истории', a.admission_no),
-            hf('Поступление', a.admitted_at && inBed ? dt(a.admitted_at) : (a.admitted_at && a.status === 'discharged' ? dt(a.admitted_at) : '—')),
             hf('Отделение · койка', place),
-            // ADMITTING_DOCTOR_V1 — приёмный врач стоит рядом с лечащим: пока
-            // лечащего нет, именно его ждут с осмотром при поступлении.
-            a.admitting_name ? hf('Приёмный врач', a.admitting_name) : null,
+            !a.attending_name && a.admitting_name ? hf('Приёмный врач', a.admitting_name) : null,
             attending,
             hf('Плановая выписка', a.planned_discharge_at ? dt(a.planned_discharge_at) : (a.discharged_at ? tr('выписан') + ' ' + dt(a.discharged_at) : '—')),
             acts.length ? h('div', { class: 'co-fields-act co-actions' }, ...acts) : null));

@@ -68,6 +68,11 @@ globalThis.document = {
 };
 globalThis.localStorage = { getItem: (k) => (k === 'admin.lang' ? 'ru' : null), setItem() {}, removeItem() {}, clear() {} };
 globalThis.window = { location: { hostname: 'localhost' }, localStorage: globalThis.localStorage, addEventListener() {}, open: () => null };
+// Несуществующее имя иконки в БРАУЗЕРЕ рисует заметную заглушку, а не падает
+// (icons.js): уронить экран клиники из-за значка дороже. В тесте окно
+// подделано, поэтому строгий режим включается руками — иначе Icon('Save'),
+// которого в наборе нет, молча проходил бы проверку и уезжал в клинику.
+globalThis.EASYMED_ICONS_STRICT = true;
 globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.requestAnimationFrame = (fn) => fn();
 
@@ -454,6 +459,47 @@ test('список редакций раскрывается кнопкой с a
     assert.match(text, /Исправление 1/, 'и его исправление названо номером');
     // Открыть можно любую редакцию, включая закрытую, — ради этого список и есть.
     assert.ok(buttons(el).filter((b) => /Открыть/.test(nameOf(b))).length >= 2);
+});
+
+// CASE_FILE_TABS_V1 — владелец: «after the card of the patient we need to add
+// tabs for navigation: documents, prescriptions, examinations and lab, surgery».
+test('CASE_FILE_TABS_V1: четыре вкладки, и каждая показывает СВОИ данные, не выдумывая их', async () => {
+    const tabs = await import('../views/case-file-tabs.js');
+    assert.deepEqual(tabs.CASE_TABS.map((t) => t.id), ['documents', 'orders', 'exams', 'surgery']);
+
+    // Полоса — системная (.tabs/.tab), как во всех разделах приложения.
+    const picked = [];
+    const bar = tabs.caseTabsBar({ active: 'orders', onPick: (id) => picked.push(id) });
+    assert.ok(String(bar.className).split(/\s+/).includes('tabs'), 'полоса вкладок не системная');
+    const btns = walk(bar).filter((e) => e.tagName === 'BUTTON');
+    assert.equal(btns.length, 4);
+    assert.equal(btns[1].getAttribute('aria-selected'), 'true', 'открытая вкладка не помечена');
+    btns[0].click();
+    assert.deepEqual(picked, ['documents']);
+    btns[1].click();
+    assert.deepEqual(picked, ['documents'], 'нажатие на уже открытую вкладку не должно ничего делать');
+
+    // Назначения: список из обзора и дверь в лист назначений.
+    const opened = [];
+    const orders = tabs.caseOrdersPanel({ orders: [{ name: 'Цефтриаксон', dose: '1 г', route: 'в/в', freq_code: '2 раза в сутки' }] },
+        { onOpenSheet: () => opened.push(1) });
+    assert.match(orders.textContent, /Цефтриаксон/);
+    walk(orders).filter((e) => e.tagName === 'BUTTON').pop().click();
+    assert.deepEqual(opened, [1], 'вкладка обязана уводить в лист назначений, а не рисовать вторую сетку');
+
+    // Пустых выдумок нет: без назначений вкладка так и говорит.
+    assert.match(tabs.caseOrdersPanel({ orders: [] }).textContent, /Назначений пока нет/);
+
+    // Операция: состояние от сервера, документы — из чек-листа.
+    const docOpened = [];
+    const surgery = tabs.caseSurgeryPanel(
+        { operation: { state: 'done', at: '2026-06-08T10:00:00Z' } },
+        { items: STATE.items }, { onDoc: (kind) => docOpened.push(kind) });
+    assert.match(surgery.textContent, /Проведена/);
+    assert.match(surgery.textContent, new RegExp(caseDocTitle('operation')));
+    walk(surgery).filter((e) => e.tagName === 'BUTTON')[0].click();
+    assert.ok(['anesthesia', 'preop', 'operation'].includes(docOpened[0]),
+        'кнопка документа операции должна открывать документ: ' + docOpened[0]);
 });
 
 // CASE_DOC_LIST_QUIET_V1 — владелец показал на пустой блок «Прочие документы»

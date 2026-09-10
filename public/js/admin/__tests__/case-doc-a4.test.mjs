@@ -26,6 +26,10 @@ class FakeNode {
     appendChild(c) { this.children.push(c); if (c && typeof c === 'object') c._parent = this; return c; }
     removeChild(c) { const i = this.children.indexOf(c); if (i > -1) this.children.splice(i, 1); return c; }
     get firstChild() { return this.children.length ? this.children[0] : null; }
+    // Настоящий узел знает своего родителя, и код на это опирается (печать
+    // поднимается от разделов до листа). Без этого подделка тише настоящего
+    // DOM и пропускает ошибку.
+    get parentNode() { return this._parent || null; }
     replaceChildren() { this.children.length = 0; }
     setAttribute(k, v) { this.attrs[k] = String(v); }
     getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; }
@@ -69,6 +73,11 @@ globalThis.document = {
 };
 globalThis.window = { location: { hostname: 'localhost' }, localStorage: { getItem: () => null, setItem() {} }, addEventListener() {}, CLINIC: {} };
 globalThis.localStorage = { getItem: (k) => (k === 'admin.lang' ? 'ru' : null), setItem() {}, removeItem() {}, clear() {} };
+// Несуществующее имя иконки в БРАУЗЕРЕ рисует заметную заглушку, а не падает
+// (icons.js): уронить экран клиники из-за значка дороже. В тесте окно
+// подделано, поэтому строгий режим включается руками — иначе Icon('Save'),
+// которого в наборе нет, молча проходил бы проверку и уезжал в клинику.
+globalThis.EASYMED_ICONS_STRICT = true;
 globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.requestAnimationFrame = (fn) => fn();
 
@@ -121,11 +130,18 @@ const { caseInsertPanel } = await import('../views/case-doc-insert.js');
 
 // ===========================================================================
 test('CASE_DOC_A4_V1: у каждого рода документа свой набор разделов, а не одна форма на всех', () => {
-    assert.deepEqual(a4.sectionsFor('operation'), ['body'], 'протокол операции — один сплошной текст');
-    assert.deepEqual(a4.sectionsFor('round'), ['complaints', 'objective', 'plan'], 'в дневнике диагноза не пишут');
+    // CASE_DX_EVERYWHERE_V1 — диагноз есть у КАЖДОГО документа (владелец: «make
+    // diagnosis active in every document so it wont confuse user»), остальные
+    // разделы остались своими у каждого рода.
+    assert.deepEqual(a4.sectionsFor('operation'), ['diagnosis', 'body'], 'протокол операции — диагноз и сплошной текст');
+    assert.deepEqual(a4.sectionsFor('round'), ['complaints', 'objective', 'diagnosis', 'plan']);
     assert.deepEqual(a4.sectionsFor('intake'), ['complaints', 'objective', 'diagnosis', 'plan']);
     assert.deepEqual(a4.sectionsFor('неизвестный род'), ['complaints', 'objective', 'diagnosis', 'plan', 'body'],
         'незнакомый род получает полный набор, а не пустой лист');
+    for (const kind of Object.keys(a4.KIND_SECTIONS)) {
+        assert.ok(a4.sectionsFor(kind).includes('diagnosis'), 'у «' + kind + '» пропал диагноз');
+        assert.ok(a4.hasDiagnosis(kind), 'карточка диагноза не появится у «' + kind + '»');
+    }
     // Подпись раздела зависит от документа: у протокола «body» — это протокол.
     assert.equal(a4.sectionLabel('operation', 'body'), 'Протокол операции');
     assert.equal(a4.sectionLabel('round', 'body'), 'Дополнительно');
@@ -271,17 +287,59 @@ test('CASE_DOC_FORMAT_V1: у раздела своя панель оформле
 });
 
 test('CASE_DOC_ACTIONS_V1: печать берёт ТОТ ЖЕ лист и прячет служебное', () => {
-    const html = a4.docPrintHtml('<div class="a4-paper"><b>Осмотр</b></div>', { title: 'Первичный осмотр' });
+    const html = a4.docPrintHtml('<div class="a4-paper"><b>Осмотр</b></div>',
+        { title: 'Первичный осмотр', base: 'http://localhost:8000/' });
     assert.match(html, /Первичный осмотр/, 'у печатной страницы нет заголовка');
     assert.match(html, /a4-paper/, 'на бумагу не попал сам лист');
+    // Окно печати пустое (about:blank): без <base> относительные ссылки в нём
+    // разрешать не от чего, и лист приезжает голым текстом и без логотипа.
+    assert.ok(html.includes('<base href="http://localhost:8000/">'), 'у печатной страницы нет корня для ссылок');
+    // Без вшитых стилей остаются ссылки — пол, а не основной путь.
     assert.ok(html.includes('css/admin.css'), 'печать без таблицы стилей — голый текст');
     assert.ok(html.includes('css/admin-views.css'), 'печать без таблицы стилей документа');
+
+    // А ВШИТЫЕ стили вытесняют ссылки: лист перестаёт зависеть от сети и
+    // таймингов — именно так он и печатался голым текстом.
+    const inlined = a4.docPrintHtml('<div class="a4-paper">лист</div>',
+        { title: 'Осмотр', base: 'http://localhost:8000/', css: '.a4-paper{width:210mm}' });
+    assert.ok(inlined.includes('.a4-paper{width:210mm}'), 'стили не вшиты в печатную страницу');
+    assert.ok(!inlined.includes('css/admin.css'), 'при вшитых стилях ссылка на файл лишняя');
     // Служебное скрыто: кнопки, крестики, свёрнутые строки, полоса действий.
     for (const cls of ['no-print', 'a4-sec-add', 'a4-sec-x', 'cd-acts', 'a4-sec-off']) {
         assert.ok(html.includes('.' + cls), 'на бумаге осталось служебное: ' + cls);
     }
     assert.ok(html.includes('@page { size: A4'), 'печать не задаёт лист A4');
+    // Шрифт объявляется заново: экранные правила приезжают, а файлы шрифта в
+    // новом окне надо назвать — иначе браузер печатает системным Times.
+    assert.match(html, /@font-face/, 'печатная страница без объявления шрифта');
+    assert.match(html, /font-family:[^;]*Onest/, 'лист печатается не шрифтом клиники');
+    // Пустой документ — одна страница: экранная высота листа гнала вторую.
+    assert.match(html, /min-height: 0 !important/, 'пустой лист снова займёт две страницы');
 });
+
+// CASE_DOC_ACTIONS_V1 — владелец: «pressing print dont cloning the current
+// document fully». Печать получала только разделы: звавший её код смотрел на
+// ОДНОГО родителя, а между разделами и бумагой лежит ещё обёртка тела.
+test('CASE_DOC_ACTIONS_V1: печать поднимается до самого листа, а не печатает одни разделы', () => {
+    const paper = mkEl('div'); paper.className = 'a4-paper';
+    const body = mkEl('div'); body.className = 'cw-doc-body';
+    const sheet = mkEl('div'); sheet.className = 'cd-sheet';
+    paper.appendChild(body); body.appendChild(sheet);
+    sheet._parent = body; body._parent = paper;
+    // Разметку берут через outerHTML — подставляем её обоим узлам, чтобы было
+    // видно, КАКОЙ из них ушёл в печать.
+    Object.defineProperty(paper, 'outerHTML', { get: () => '<div class=a4-paper>Heal point clinic · Этапный эпикриз</div>' });
+    Object.defineProperty(sheet, 'outerHTML', { get: () => '<div class=cd-sheet>только разделы</div>' });
+
+    let printed = null;
+    const w = { document: { open() {}, write(html) { printed = html; }, close() {} }, focus() {}, print() {} };
+    const openWas = globalThis.window.open;
+    globalThis.window.open = () => w;
+    try { a4.printDocSheet(sheet, { title: 'Этапный эпикриз' }); } finally { globalThis.window.open = openWas; }
+
+    assert.ok(printed, 'окно печати не получило разметки');
+    assert.ok(printed.includes('Heal point clinic'), 'на бумагу ушли одни разделы, без шапки листа');
+    assert.ok(!printed.includes('только разделы'), 'печать взяла .cd-sheet вместо листа');});
 
 test('CASE_DOC_ACTIONS_V1: чтение опубликованного не показывает ни черновика, ни сохранения', () => {
     const bar = a4.docActionsBar({ print: () => {} });

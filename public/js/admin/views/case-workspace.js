@@ -31,6 +31,7 @@ import { caseDocsView, assembleCaseFile, canEditDocSet, caseDocSetDrop, caseDocS
     caseDocSetRestore, caseDocSetRename, caseDocSetDelete, loadDocTypeSet } from './case-docs.js?v=cw1';
 import { buildReviewEditor } from './admission-modal.js?v=inp2';
 import { docActionsBar } from './case-doc-a4.js';   // CASE_DOC_ACTIONS_V1 — действия над листом
+import { caseTabsBar, caseOrdersPanel, caseExamsPanel, caseSurgeryPanel } from './case-file-tabs.js';   // CASE_FILE_TABS_V1
 import { buildTitleSheetEditor, TITLE_SHEET_KIND } from './title-sheet.js';   // TITLE_SHEET_V1
 import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V2
 import { dateNumeric } from '../../shared/date-words.js';   // A4_LETTERHEAD_V2 — дата рождения числом
@@ -113,6 +114,9 @@ async function load() {
     state.failed = null;
     state.docs = docs;
     state.admission = adm || state.admission;
+    // CASE_FILE_TABS_V1 — вкладка помнится между перерисовками: врач, открывший
+    // назначения, не должен возвращаться в документы после каждой загрузки.
+    if (!state.tab) state.tab = 'documents';
     // CASE_DOC_SET_BACK_V1 — убранные документы едут вместе с чек-листом: они
     // стоят в его конце бледной строкой, и вернуть их можно нажатием.
     state.types = canEditDocSet() ? await loadDocTypeSet() : [];
@@ -154,13 +158,33 @@ function paint(root, onNavigate) {
         root.appendChild(PageHead({ title: p.full_name || tr('История болезни'), subtitle: who || null }));
     }
 
+    // CASE_FILE_TABS_V1 — ПОЛОСА ВКЛАДОК ПОД КАРТОЧКОЙ ПАЦИЕНТА. Владелец:
+    // «after the card of the patient we need to add tabs for navigation».
+    // Пациент один и тот же, работа разная: документы, назначения, анализы,
+    // операция. Раньше за каждой из них шли в свой раздел и заново искали
+    // пациента.
+    root.appendChild(caseTabsBar({
+        active: state.tab || 'documents',
+        onPick: (id) => { state.tab = id; paint(root, onNavigate); },
+        badges: { orders: ((state.overview && state.overview.orders) || []).length },
+    }));
+
+    if ((state.tab || 'documents') !== 'documents') {
+        paintTab(root, onNavigate);
+        return;
+    }
+
     // CASE_DOC_A4_V1 — владелец: «documents of the history left panel right
     // panel». Слева шаги и диагноз, в центре лист, справа — что вставить.
     const rail = h('div', { class: 'cw-rail' });
     const pane = h('div', { class: 'cw-pane' });
     const aside = h('div', { class: 'cw-aside' });
     const grid = h('div', { class: 'cw-grid' }, rail, pane, aside);
-    root.appendChild(grid);
+    // CASE_FILE_FIT_V1 (2026-09-10) — обёртка нужна, чтобы колонки мерили СВОЮ
+    // ширину, а не ширину окна: боковое меню приложения сворачивается, полоса
+    // содержимого от этого меняется на 260 px, а @media про это не знает —
+    // владелец: «when left panel is closed the layout is breaking».
+    root.appendChild(h('div', { class: 'cw-wrap' }, grid));
     // CASE_FIT_EXACT_V1 — высота колонок МЕРЯЕТСЯ, а не угадывается. Прежнее
     // calc(100vh − 150px) считало шапку экрана постоянной, а она не постоянная:
     // имя пациента переносится, полоса реквизитов растёт, и колонка вылезала за
@@ -172,6 +196,40 @@ function paint(root, onNavigate) {
     paintPane(pane, root, onNavigate);
     paintRail(rail, root, onNavigate);
     paintAside(aside);
+}
+
+/**
+ * Вкладки, кроме документов. Ничего не считают: показывают то, что уже
+ * прислали обзор (назначения, операция) и источники документа (анализы).
+ */
+function paintTab(root, onNavigate) {
+    const tab = state.tab;
+    const nav = onNavigate || (typeof window !== 'undefined' && window.easymed && window.easymed.navigate);
+    const box = h('div', { class: 'cf-tabwrap' });
+    root.appendChild(box);
+
+    if (tab === 'orders') {
+        box.appendChild(caseOrdersPanel(state.overview, {
+            onOpenSheet: () => { if (nav) nav('mar-sheet', { admissionId: state.admissionId }); },
+        }));
+        return;
+    }
+    if (tab === 'exams') {
+        box.appendChild(caseExamsPanel(state.admissionId));
+        return;
+    }
+    if (tab === 'surgery') {
+        box.appendChild(caseSurgeryPanel(state.overview, state.docs, {
+            // Документ операции открывается ТАМ, где документы и пишут: вкладка
+            // переключается сама, иначе «Открыть» означало бы разное в разных
+            // местах экрана.
+            onDoc: (kind, mode, reviewId, docTitle) => {
+                state.tab = 'documents';
+                state.open = { kind, mode: mode || 'edit', reviewId: reviewId || null, title: docTitle || '' };
+                paint(root, onNavigate);
+            },
+        }));
+    }
 }
 
 /**
@@ -207,6 +265,12 @@ function paintAside(aside) {
     aside.appendChild(caseInsertPanel({
         admissionId: state.admissionId,
         onInsert: (html) => !!(state.editor && state.editor.insert && state.editor.insert(html)),
+        // CASE_DX_EVERYWHERE_V1 — панель спрашивает диагноз у КАРТОЧКИ СЛЕВА, а
+        // не помнит свой: карточка — владелец значения, панель только вставляет.
+        diagnosisNow: () => {
+            const ed = state.editor;
+            return (ed && ed.diagnosisInput && ed.diagnosisInput.value) || '';
+        },
     }));
 }
 
@@ -236,7 +300,10 @@ function diagnosisCard() {
             h('span', { class: 'cw-dx-ref-l' }, tr(label)),
             h('span', { class: 'cw-dx-ref-v' }, value)))));
     } else if (!(ed && ed.diagnosisInput)) {
-        card.appendChild(h('div', { class: 'cw-dx-empty' }, tr('Диагноз ещё не установлен — его пишут в первичном осмотре.')));
+        // CASE_FILE_QUIET_V1 — рамка вокруг одной фразы «диагноза ещё нет» —
+        // это карточка ни о чём. Возвращаем строку, а не карточку: место в
+        // колонке достаётся списку документов.
+        return h('div', { class: 'cw-dx-none' }, tr('Диагноз ещё не установлен — его пишут в первичном осмотре.'));
     }
     return card;
 }

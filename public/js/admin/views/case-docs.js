@@ -684,10 +684,24 @@ export function caseDocsView({ state, onDoc, onAssemble = null, activeKind = nul
         // but go inactive and added when necessary». Убранные стоят тут же, в
         // конце списка, бледной строкой с «+»: набор виден целиком — и что в
         // нём есть, и что из него убрали, — а вернуть документ можно нажатием.
+        // CASE_FILE_QUIET_V1 — убранные документы за ОДНОЙ строкой со счётчиком:
+        // клиника, убравшая шесть встроенных, получала шесть бледных строк в той
+        // же колонке, что рабочий чек-лист. Возвращают документ изредка, читают
+        // список всегда.
         const dropped = (types || []).filter((t) => !t.active);
         if (onRestore && dropped.length) {
-            list.appendChild(groupLabel(tr('Убраны из набора')));
-            list.appendChild(h('ul', { style: { listStyle: 'none', margin: '0', padding: '0' } },
+            const gone = h('ul', { class: 'cd-gone-list', style: { listStyle: 'none', margin: '0', padding: '0' } });
+            gone.hidden = true;
+            const head2 = h('button', {
+                class: 'cd-gone-h', type: 'button', 'aria-expanded': 'false',
+                onclick: () => {
+                    gone.hidden = !gone.hidden;
+                    head2.setAttribute('aria-expanded', gone.hidden ? 'false' : 'true');
+                },
+            }, tr('Убраны из набора'), h('span', { class: 'cd-gone-n' }, String(dropped.length)));
+            list.appendChild(head2);
+            list.appendChild(gone);
+            gone.appendChild(h('ul', { style: { listStyle: 'none', margin: '0', padding: '0' } },
                 ...dropped.map((t) => h('li', { class: 'cd-gone' },
                     h('span', { class: 'cd-gone-n' }, t.name),
                     // CASE_DOC_RENAME_V1 — УДАЛИТЬ НАСОВСЕМ можно только свой
@@ -747,13 +761,14 @@ export function caseDocsView({ state, onDoc, onAssemble = null, activeKind = nul
             list.appendChild(h('div', { class: 'cd-add' }, input,
                 h('button', {
                     class: 'btn btn-primary cd-add-go', type: 'button',
-                    'aria-label': tr('Добавить документ в набор'), title: tr('Добавить документ в набор'),
+                    'aria-label': tr('Добавить документ в набор'),
+                    // CASE_FILE_QUIET_V1 — объяснение в подсказке кнопки, а не
+                    // строкой под полем: нужно оно раз в месяц, а висело всегда.
+                    title: tr('Документ встанет в набор всех историй болезни.'),
                     onclick: go,
                     // Знак «плюс» из набора иконок и СЛОВО рядом: голый плюс на
                     // кнопке не говорит, что именно он добавит.
                 }, Icon('Plus', { size: 16 }), ' ', tr('Добавить'))));
-            list.appendChild(h('div', { class: 'muted cd-add-note' },
-                tr('Документ встанет в набор всех историй болезни.')));
         }
 
         // ─── Подвал: правило выписки и сборка ────────────────────────────────
@@ -768,10 +783,12 @@ export function caseDocsView({ state, onDoc, onAssemble = null, activeKind = nul
                 color: gate.blocked ? 'var(--crit-700)' : 'var(--ink-500)',
             },
         }, Icon(gate.blocked ? 'Warning' : 'Info', { size: 14 }), h('span', null, caseGateText(state))));
-        if ((gate.incomplete || []).length) {
-            foot.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', lineHeight: '1.45' } },
-                trf('Не оформлено из обязательного набора: {list}', { list: caseMissingTitles(state).join(', ') })));
-        }
+        // CASE_FILE_QUIET_V1 (2026-09-10) — ПЕРЕЧЕНЬ НЕДООФОРМЛЕННОГО УБРАН.
+        // Он повторял словами тот самый список, что стоит строкой выше: там
+        // каждый ненаписанный документ уже красный, с красным рельсом и
+        // значком. Три способа сказать одно — это не втрое понятнее.
+        // caseMissingTitles() жив: им пользуется карточка госпитализации, где
+        // списка документов нет вовсе.
         // На рабочем экране сборка стоит в шапке (onAssemble не передан):
         // вторая такая же кнопка в подвале списка шагов означала бы, что их две
         // разные — а она одна.
