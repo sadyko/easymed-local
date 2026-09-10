@@ -31,7 +31,7 @@ import { caseDocsView, assembleCaseFile, canEditDocSet, caseDocSetDrop, caseDocS
     caseDocSetRestore, caseDocSetRename, caseDocSetDelete, loadDocTypeSet } from './case-docs.js?v=cw1';
 import { buildReviewEditor } from './admission-modal.js?v=inp2';
 import { docActionsBar, docHeadIds, docHeadFields } from './case-doc-a4.js';   // CASE_DOC_ACTIONS_V1 / A4_LETTERHEAD_V2
-import { caseTabsBar, caseOrdersPanel, caseExamsPanel, caseSurgeryPanel } from './case-file-tabs.js';   // CASE_FILE_TABS_V1
+import { caseTabsBar, caseOrdersPanel, caseExamsPanel, caseSurgeryPanel, caseActPanel } from './case-file-tabs.js';   // CASE_FILE_TABS_V1 / ACT_OF_WORKS_V1
 import { buildTitleSheetEditor, TITLE_SHEET_KIND } from './title-sheet.js';   // TITLE_SHEET_V1
 import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V2
 import { dateNumeric } from '../../shared/date-words.js';   // A4_LETTERHEAD_V2 — дата рождения числом
@@ -51,6 +51,7 @@ const state = {
     disposeFit: null,          // CASE_FIT_EXACT_V1 — отмена слежения за высотой колонок
     failed: null,
     overview: null,    // CASE_OVERVIEW_V1 — ответ admission_overview для шапки
+    charges: null,     // ACT_ADD_SERVICE_V1 — начисленное: им вкладки показывают назначенное
 };
 
 function reset(admissionId) {
@@ -62,6 +63,7 @@ function reset(admissionId) {
     if (state.disposeFit) { try { state.disposeFit(); } catch (e) { /* нечего отменять */ } state.disposeFit = null; }
     state.failed = null;
     state.overview = null;
+    state.charges = null;
 }
 
 export async function renderCaseWorkspace(container, { payload, onNavigate } = {}) {
@@ -107,6 +109,13 @@ async function load() {
         supabase.rpc('admission_overview', { admission_id: state.admissionId }),   // CASE_OVERVIEW_V1 — для шапки
     ]);
     state.overview = ov || null;
+    // ACT_ADD_SERVICE_V1 — начисленное нужно вкладкам «Обследования» и
+    // «Операция», чтобы показать НАЗНАЧЕННОЕ. Отказ по праву здесь не беда:
+    // без акта вкладки просто не покажут этот блок.
+    {
+        const { data: ch } = await supabase.rpc('admission_charges', { admission_id: state.admissionId });
+        state.charges = ch || null;
+    }
     // Отказ по праву и сбой — РАЗНЫЕ вещи, и экран обязан их различать: пустой
     // список читается как «документов нет», а это ложь в обе стороны.
     if (docsErr) { state.failed = docsErr.code === 'forbidden' ? 'forbidden' : (docsErr.message || 'error'); return; }
@@ -199,6 +208,35 @@ function paint(root, onNavigate) {
 }
 
 /**
+ * НАЧИСЛИТЬ ГОСПИТАЛИЗАЦИИ УСЛУГУ ИЗ СПРАВОЧНИКА.
+ *
+ * ACT_ADD_SERVICE_V1 — окно выбора услуги здесь ТО ЖЕ, что у направлений из
+ * кабинета врача (openServicePickerModal): один справочник, один способ искать,
+ * одни и те же цены. Разделы задаёт вызывающий: анализам — лаборатория,
+ * диагностика и лучевая, операции — хирургия.
+ *
+ * Цену берёт СЕРВЕР из справочника; экран посылает только услугу.
+ */
+async function addAdmissionService(root, onNavigate, { title, types }) {
+    const { openServicePickerModal } = await import('./service-picker-modal.js?v=aug17e');
+    openServicePickerModal({
+        title: tr(title),
+        confirmLabel: tr('Назначить'),
+        allowedTypeNames: types,
+        onPick: async ({ service }) => {
+            if (!service || !service.id) return;
+            const { error } = await supabase.rpc('admission_service_add', {
+                admission_id: state.admissionId, service_id: service.id, quantity: 1,
+            });
+            if (error) { toast(error.message || tr('Не удалось назначить услугу.'), 'fail'); return; }
+            toast(trf('Назначено: {name}', { name: service.name || '' }), 'ok');
+            await load();
+            paint(root, onNavigate);
+        },
+    });
+}
+
+/**
  * Вкладки, кроме документов. Ничего не считают: показывают то, что уже
  * прислали обзор (назначения, операция) и источники документа (анализы).
  */
@@ -211,15 +249,88 @@ function paintTab(root, onNavigate) {
     if (tab === 'orders') {
         box.appendChild(caseOrdersPanel(state.overview, {
             onOpenSheet: () => { if (nav) nav('mar-sheet', { admissionId: state.admissionId }); },
+            // ТО ЖЕ окно, что и в листе назначений: одно назначение — одна форма.
+            onAdd: async () => {
+                const { openOrderForm } = await import('./mar-sheet.js?v=inp5');
+                const a = state.admission || {};
+                const p = a.patients || {};
+                openOrderForm({
+                    admissionId: state.admissionId,
+                    patientName: p.full_name || '',
+                    patientSub: [p.mrn, (a.wards && a.wards.name) || null, (a.beds && a.beds.code) || null].filter(Boolean).join(' · '),
+                    onDone: async () => { await load(); paint(root, onNavigate); },
+                });
+            },
         }));
         return;
     }
     if (tab === 'exams') {
-        box.appendChild(caseExamsPanel(state.admissionId));
+        box.appendChild(caseExamsPanel(state.admissionId, {
+            charges: state.charges,
+            // ACT_ADD_SERVICE_V1 — анализ и диагностика выбираются из СПРАВОЧНИКА
+            // услуг: цену, название и раздел знает он.
+            onAdd: () => addAdmissionService(root, onNavigate, {
+                title: 'Анализы и диагностика',
+                /* i18n-exempt-start: куски названий РАЗДЕЛОВ справочника, а не текст экрана */
+                types: ['лаборатор', 'диагностик', 'лучев', 'lab', 'imaging', 'radiolog', 'diagnost'],
+                /* i18n-exempt-end */
+            }),
+        }));
+        return;
+    }
+    if (tab === 'act') {
+        box.appendChild(caseActPanel(state.admissionId, {
+            // Счёт выставляет ТОТ ЖЕ вызов, что и касса: своя вторая сборка
+            // счёта разошлась бы с кассовой на первой же скидке.
+            onInvoice: async (reload) => {
+                const { data, error } = await supabase.rpc('admission_charges', { admission_id: state.admissionId });
+                if (error) { toast(error.message || tr('Акт не загрузился.'), 'fail'); return; }
+                const ids = ((data && data.lines) || []).filter((l) => l.billable && !l.invoice_id).map((l) => l.id);
+                if (!ids.length) { toast(tr('Выставлять нечего: всё уже в счетах.'), 'fail'); return; }
+                const res = await supabase.rpc('create_invoice_for_admission',
+                    { admission_id: state.admissionId, admission_service_ids: ids });
+                if (res.error) { toast(res.error.message || tr('Счёт не выставлен.'), 'fail'); return; }
+                const no = (res.data && (res.data.invoice_number || (res.data.invoice && res.data.invoice.invoice_number))) || '';
+                toast(no ? trf('Счёт {no} передан в кассу.', { no }) : tr('Счёт передан в кассу.'), 'ok');
+                await reload();
+            },
+            onAddExpense: async (reload) => {
+                // Расход списывается СО СКЛАДА тем же окном, что и везде:
+                // остаток, партия и цена — его забота, а не этого экрана.
+                const { openItemPickerModal } = await import('./item-picker-modal.js?v=billoptin1');
+                openItemPickerModal({
+                    title: tr('Добавить расход'), confirmLabel: tr('Списать'),
+                    onConfirm: async (lines) => {
+                        let ok = 0; const fails = [];
+                        for (const { item, qty } of lines) {
+                            try {
+                                const { error } = await supabase.rpc('dispense_admission_item',
+                                    { p_admission_id: state.admissionId, p_item_id: item.id, p_qty: Number(qty) });
+                                if (error) throw error;
+                                ok += 1;
+                            } catch (e) { fails.push((item.name || '') + ': ' + ((e && e.message) || e)); }
+                        }
+                        await reload();
+                        // Окно закрывается только при успехе: ошибка на складе —
+                        // это разговор с кладовщиком, а не «нажмите ещё раз».
+                        if (!ok) throw new Error(fails[0] || tr('Не удалось списать расход.'));
+                        toast(trf('Списано позиций: {n}', { n: ok }), 'ok');
+                        if (fails.length) toast(fails.join('; '), 'fail');
+                    },
+                });
+            },
+        }));
         return;
     }
     if (tab === 'surgery') {
         box.appendChild(caseSurgeryPanel(state.overview, state.docs, {
+            charges: state.charges,
+            onAdd: () => addAdmissionService(root, onNavigate, {
+                title: 'Операция',
+                /* i18n-exempt-start: куски названий РАЗДЕЛОВ справочника, а не текст экрана */
+                types: ['хирург', 'surg'],
+                /* i18n-exempt-end */
+            }),
             // Документ операции открывается ТАМ, где документы и пишут: вкладка
             // переключается сама, иначе «Открыть» означало бы разное в разных
             // местах экрана.

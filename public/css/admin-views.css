@@ -6003,6 +6003,9 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .cf-group { margin: 14px 0 6px; font-size: 12.5px; font-weight: 600; letter-spacing: .4px;
     text-transform: uppercase; color: var(--ink-400); }
 .cf-list { list-style: none; margin: 0; padding: 0; }
+/* ACT_ADD_SERVICE_V1 — честное пояснение под назначенным. */
+.cf-note { margin-top: 8px; padding: 8px 10px; border-radius: var(--r-md);
+    background: var(--info-50, #eef4ff); color: var(--ink-700); font-size: 12.5px; line-height: 1.45; }
 .cf-row { display: flex; align-items: center; gap: 10px; min-height: 48px;
     padding: 6px 2px; border-bottom: 1px solid var(--ink-50); }
 .cf-row:last-child { border-bottom: 0; }
@@ -6025,6 +6028,29 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
     background: var(--ink-100); color: var(--ink-700); font-size: 13.5px; font-weight: 600; }
 .cf-op-done { background: var(--ok-50, #e8f7ef); color: var(--ok-700, #0f7a43); }
 .cf-op-plan { background: var(--warn-50, #fff6e6); color: var(--warn-700, #8a5a00); }
+/* ACT_OF_WORKS_V1 — акт выполненных работ: таблица начисленного и итоги. */
+.cf-tblwrap { overflow-x: auto; }
+.cf-act { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.cf-act th { padding: 6px 8px; text-align: left; font-size: 12.5px; font-weight: 600;
+    letter-spacing: .4px; text-transform: uppercase; color: var(--ink-400);
+    border-bottom: 1px solid var(--ink-100); white-space: nowrap; }
+.cf-act td { padding: 8px; border-bottom: 1px solid var(--ink-50); vertical-align: top; }
+.cf-act .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cf-act th.num { text-align: right; }
+.cf-act-sum { font-weight: 700; color: var(--ink-900); }
+/* Строка не в счёт — бледная: она в акте есть, но денег с пациента не берёт. */
+.cf-act-off td { opacity: .55; }
+.cf-act-inv { display: inline-flex; padding: 2px 8px; border-radius: var(--r-pill);
+    background: var(--ok-50, #e8f7ef); color: var(--ok-700, #0f7a43); font-size: 12.5px; font-weight: 600; }
+.cf-act-act { text-align: right; white-space: nowrap; }
+.cf-sums { display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 14px;
+    padding-top: 12px; border-top: 1px solid var(--ink-100); }
+.cf-sum { display: flex; align-items: baseline; gap: 8px; }
+.cf-sum-l { font-size: 12.5px; color: var(--ink-500); }
+.cf-sum-v { font-size: 15px; font-weight: 700; color: var(--ink-900); font-variant-numeric: tabular-nums; }
+/* К выставлению — то, ради чего экран открывают: сумма, которую ещё не взяли. */
+.cf-sum-hot .cf-sum-v { color: var(--warn-700, #8a5a00); }
+
 /* CASE_FILE_QUIET_V1 — убранные за одной строкой со счётчиком. */
 .cd-gone-h { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px;
     margin-top: 10px; padding: 0 2px; border: 0; background: none; cursor: pointer;
