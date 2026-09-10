@@ -272,7 +272,7 @@ test('CASE_DOC_OWN_NAME_V1: редактор подписывает лист п�
     const src = fsx.readFileSync(pathx.join(dir, '..', 'views', 'admission-modal.js'), 'utf8');
     // Половина пути, которую щелчком не проверить: имя обязано дойти от
     // параметра редактора до заголовка листа.
-    assert.ok(src.includes("docTitle = '', onDone }"), 'редактор перестал принимать имя документа');
+    assert.ok(/docTitle = '',[^)]*onDone }/.test(src), 'редактор перестал принимать имя документа');
     assert.ok(src.includes('title: reviewTitle(kind, mode, docTitle)'), 'заголовок листа снова не смотрит на присланное имя');
     assert.ok(src.includes("function reviewTitle(kind, mode, docTitle = '')"), 'reviewTitle снова считает имя только по словарю');
 });

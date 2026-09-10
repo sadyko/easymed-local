@@ -445,6 +445,11 @@ export function admissionReviewSave(db, args, user) {
   // госпитализаций и в списках — там разметка была бы мусором, а не
   // оформлением.
   const sectionsJson = parseSections(a);
+  // DIARY_ENTRY_DATE_V1 — ДЕНЬ, О КОТОРОМ ЗАПИСЬ. Дневник наблюдения пишут
+  // каждый день, и написан он бывает утром следующего: время публикации
+  // отвечает «когда напечатали», а лечение читают по «за какое число». Пусто —
+  // как было: днём записи считается день публикации.
+  const entryDate = /^\d{4}-\d{2}-\d{2}$/.test(String(a.entry_date || '')) ? String(a.entry_date) : null;
   const fields = {
     complaints: rich(a.complaints, 4000),
     objective:  rich(a.objective, 8000),
@@ -536,18 +541,19 @@ export function admissionReviewSave(db, args, user) {
     if (existing) {
       db.prepare(`UPDATE admission_reviews
                      SET kind = ?, type_kind = ?, complaints = ?, objective = ?, diagnosis = ?, plan = ?, body = ?,
-                         sections_json = ?, author_role = ?, updated_at = ?, published_at = ?
+                         sections_json = ?, author_role = ?, updated_at = ?, published_at = ?,
+                         entry_date = COALESCE(?, entry_date)
                    WHERE id = ?`)
         .run(st.kind, st.type_kind, fields.complaints, fields.objective, fields.diagnosis, fields.plan, fields.body,
-             sectionsJson, authorRole, at, publishedAt, existing.id);
+             sectionsJson, authorRole, at, publishedAt, entryDate, existing.id);
       reviewId = existing.id;
     } else {
       reviewId = db.prepare(`INSERT INTO admission_reviews
           (admission_id, kind, type_kind, complaints, objective, diagnosis, plan, body,
-           sections_json, author_id, author_role, published_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+           sections_json, author_id, author_role, published_at, entry_date)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
         .run(adm.id, st.kind, st.type_kind, fields.complaints, fields.objective, fields.diagnosis, fields.plan,
-             fields.body, sectionsJson, (user && user.id) || null, authorRole, publishedAt).lastInsertRowid;
+             fields.body, sectionsJson, (user && user.id) || null, authorRole, publishedAt, entryDate).lastInsertRowid;
     }
 
     // ── Что публикация МЕНЯЕТ вокруг себя ──────────────────────────────────
@@ -989,6 +995,7 @@ function revisionsOf(chain) {
     id: r.id,
     no: i + 1,
     at: r.published_at,
+    entry_date: r.entry_date || null,   // DIARY_ENTRY_DATE_V1 — за какой день запись
     author_id: r.author_id,
     author_name: r.author_name || '',
     author_role: r.author_role || '',
@@ -1013,10 +1020,26 @@ function currentChain(chains) {
  * «Просрочен» здесь означает ровно одно и проверяемое: закрылось окно, за
  * которое документа нет. Не флаг, не догадка — арифметика по часам.
  */
+/**
+ * За какой МОМЕНТ считается запись.
+ *
+ * DIARY_ENTRY_DATE_V1 — если врач указал день (дневник за вчера, дописанный
+ * утром), период закрывает ТОТ день, а не минута печати. Полдень взят
+ * намеренно: дата без времени иначе попадала бы в полночь — на границу двух
+ * суточных окон, и запись за 9-е закрывала бы то 9-е, то 8-е.
+ */
+function stampOf(row) {
+  if (row && row.entry_date) {
+    const t = Date.parse(String(row.entry_date) + 'T12:00:00Z');
+    if (!Number.isNaN(t)) return t;
+  }
+  return msOf(row && row.published_at);
+}
+
 function periodState(base, now, periodMs, publishedRows) {
   if (base === null) return { index: 0, missing: [], covered: false, dueAt: null };
   const index = Math.max(0, Math.floor((now - base) / periodMs));
-  const stamps = publishedRows.map((r) => msOf(r.published_at)).filter((t) => t !== null);
+  const stamps = publishedRows.map(stampOf).filter((t) => t !== null);
   const inWindow = (w) => stamps.some((t) => t >= base + w * periodMs && t < base + (w + 1) * periodMs);
   const missing = [];
   for (let w = 0; w < index; w++) if (!inWindow(w)) missing.push(w);

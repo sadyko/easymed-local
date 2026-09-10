@@ -177,8 +177,10 @@ test('блоки: статус, диагноз, состояние, стол, н
     // CASE_DASH_TIDY_V1 — полосы плиток больше нет: она не несла ни одного
     // числа, которого не было бы в панелях. Числа проверяются там, где они
     // теперь и живут.
+    // CASE_LISTS_AS_STATS_V1 — назначения и услуги показаны ЧИСЛАМИ: обзор
+    // отвечает «как идут дела», а имена лежат во вкладках истории болезни.
     for (const piece of ['Пациент сейчас', 'K35.8', 'Острый аппендицит', 'Стол №1', 'съедено 2', 'отказ 1',
-        'Цефтриаксон', 'введено 2 из 4', 'пропущено 1', 'Аппендэктомия', '900 000', 'не выставлено',
+        'введено', 'пропущено', 'начислено', 'не выставлено',
         'Запланирована', 'Оформлено 3 из 9', 'просрочено 1', 'Обоснование клинического диагноза']) {
         assert.ok(t.includes(piece), 'в блоках нет: ' + piece);
     }
@@ -187,11 +189,8 @@ test('блоки: статус, диагноз, состояние, стол, н
         .map((s) => t.indexOf(s));
     assert.ok(order.every((i, k) => i >= 0 && (k === 0 || i > order[k - 1])), 'блоки идут не в порядке схемы: ' + order.join(','));
 
-    // CASE_DASH_QUIET_V1 — койко-дни назывались дважды и разными числами:
-    // начисление на сегодня в «Счёте» и строка услуги в «Услугах». Осталась
-    // строка услуги — у неё есть и ставка, и число суток, и пометка «в счёте».
+    // CASE_DASH_QUIET_V1 — койко-дни назывались дважды и разными числами.
     assert.ok(!t.includes('Койко-дней'), 'койко-дни снова названы дважды');
-    assert.ok(t.includes('Проживание (койко-дни)'), 'проживание пропало из услуг');
 
     // Полоса плиток убрана целиком.
     assert.equal(walk(root).filter((e) => String(e.className || '').split(/\s+/).includes('co-tile')).length, 0,
@@ -456,22 +455,35 @@ test('CASE_PANELS_TIDY_V1: единственная первичная кноп�
 });
 
 
-// ─── CASE_ROWS_TIDY_V1 — строка услуги в две строки, проживание словом ────────
-test('CASE_ROWS_TIDY_V1: проживание подписано «Проживание (койко-дни) · 16 сут. × 250 000», а не ACCOMMODATION-пометкой; сумма и метка — отдельной строкой', async () => {
+// ─── CASE_LISTS_AS_STATS_V1 — обзор не перечисляет, а считает ────────────────
+//
+// Владелец: «make cards of prescription statuses, not actual services and
+// invoices, just amount and the summ». До этого здесь стояли два списка —
+// назначения поимённо и услуги построчно с ценами; это была третья копия того,
+// что и так лежит во вкладках, обрезанная шириной колонки.
+test('CASE_LISTS_AS_STATS_V1: обзор показывает числа и суммы, а не строки назначений и услуг', async () => {
     const root = await render(() => {});
-    const rows = walk(root).filter((e) => String(e.className || '').split(/\s+/).includes('co-row-svc'));
-    assert.equal(rows.length, 2, 'две строки услуг');
-    const acc = rows.find((r) => textOf(r).includes('Проживание'));
-    assert.ok(acc, 'строки проживания нет: ' + rows.map(textOf).join(' | '));
-    const t = textOf(acc).replace(/\u00a0/g, ' ');
-    assert.ok(t.includes('Проживание (койко-дни)'), t);
-    assert.ok(t.includes('16 сут.') && t.includes('× 250 000'), 'подпись сут. × ставка: ' + t);
-    assert.ok(!/ACCOMMODATION/.test(t), 'техническая пометка на экране');
-    assert.ok(t.includes('4 000 000'), 'сумма строки');
-    const foot = walk(acc).find((e) => String(e.className || '').includes('co-row-foot'));
-    assert.ok(foot && textOf(foot).includes('4 000 000') && textOf(foot).includes('не выставлено'), 'сумма и метка — в подвале строки');
-});
+    const t = textOf(root).replace(/\u00a0/g, ' ');
 
+    // Имён нет ни у назначения, ни у услуги: за ними — вкладки.
+    assert.ok(!t.includes('Цефтриаксон'), 'обзор снова перечисляет назначения поимённо');
+    assert.ok(!t.includes('Аппендэктомия'), 'обзор снова перечисляет услуги строками');
+    assert.equal(walk(root).filter((e) => String(e.className || '').split(/\s+/).includes('co-row-svc')).length, 0,
+        'строки услуг вернулись в обзор');
+
+    // Зато есть числа, ради которых обзор и открывают.
+    const stats = walk(root).filter((e) => String(e.className || '').split(/\s+/).includes('co-stat'));
+    assert.ok(stats.length >= 6, 'карточек состояний меньше, чем состояний: ' + stats.length);
+    const st = stats.map((e) => textOf(e).replace(/\u00a0/g, ' '));
+    assert.ok(st.some((x) => x.includes('2') && x.includes('введено')), 'введено: ' + st.join(' | '));
+    assert.ok(st.some((x) => x.includes('1') && x.includes('пропущено')), 'пропущено: ' + st.join(' | '));
+    // Ожидает — ОСТАТОК: назначено 4, введено 2, пропущено 1 → ждёт одна доза.
+    assert.ok(st.some((x) => x.includes('1') && x.includes('ожидает')), 'ожидает: ' + st.join(' | '));
+    // Деньги — суммой СЕРВЕРА (sum_total / sum_unbilled), а не сложением строк
+    // на экране: два способа сложить одни и те же деньги расходятся молча.
+    assert.ok(st.some((x) => x.includes('950 000') && x.includes('начислено')), 'начислено: ' + st.join(' | '));
+    assert.ok(st.some((x) => x.includes('950 000') && x.includes('не выставлено')), 'не выставлено: ' + st.join(' | '));
+});
 
 // ─── VITALS_STEPPER_V1 — кнопки «−» и «+» ───────────────────────────────────
 test('VITALS_STEPPER_V1: у каждого поля кнопки слева и справа; шаг 0,1 у температуры и 1 у остальных, границы не переступает', async () => {

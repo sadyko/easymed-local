@@ -515,6 +515,17 @@ function itemRow(item, state, onDoc, activeKind = null, onDrop = null, onRename 
     } else if (item.due_rule === 'period') {
         actions.appendChild(actionBtn(tr('Создать запись'), { icon: 'Plus', onclick: () => onDoc(item.kind, 'edit', item.draft_id, docName) }));
     }
+    // DIARY_ENTRY_DATE_V1 — владелец о дневнике: «one document which can be
+    // added every day». Повторяющийся документ пишут КАЖДЫЙ ДЕНЬ, и «Новая
+    // запись» у него есть всегда — в том числе когда сегодняшняя запись уже
+    // сделана: иначе завтрашнюю нельзя завести, не дождавшись просрочки, а
+    // единственная кнопка «Исправить» уводит переписывать вчерашнюю.
+    //
+    // review_id НЕ передаётся намеренно: новая запись начинается с чистого
+    // листа, а не с чужого черновика.
+    if (item.due_rule === 'period' && (item.state === 'published' || isNext)) {
+        actions.appendChild(actionBtn(tr('Новая запись'), { icon: 'Plus', onclick: () => onDoc(item.kind, 'edit', null, docName) }));
+    }
 
     const rows = [h('div', {
         style: {

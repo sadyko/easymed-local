@@ -13,13 +13,20 @@
 // подражание ради вида: врач заводит и то и другое подряд, и две разные формы
 // для одного действия «назначить» он читает как две разные системы.
 //
-// УСЛУГА ВЫБИРАЕТСЯ ИЗ СПРАВОЧНИКА, а не пишется словами: цену, название,
-// раздел и кабинет знает он. Окно справочника — то же самое, что у направлений
-// из кабинета врача (openServicePickerModal), просто ограниченное разделами.
-import { h, Icon, clear, toast, field } from '../ui.js';
+// УСЛУГА ВЫБИРАЕТСЯ ИЗ СПРАВОЧНИКА, а не пишется словами: цену, название и
+// раздел знает он. Но справочник открывается ЗДЕСЬ ЖЕ, строкой поиска, а не
+// вторым окном: полноэкранное окно подбора услуг поверх маленькой формы — это,
+// дословно, «dialogue window is tooo big».
+//
+// Раздел услуги определяет ТА ЖЕ общая функция (resolveTypeId), что и большое
+// окно подбора: второй способ отнести услугу к разделу разошёлся бы с первым
+// молча — ровно тем, что одна и та же услуга попадала бы в разные разделы в
+// зависимости от того, откуда её ищут.
+import { h, clear, toast, field } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { supabase } from '../../supabase.js';
 import { inpatientModal, patientAnchor } from './admission-modal.js?v=inp5';
+import { resolveTypeId } from './service-group.js?v=aug17e';
 
 /** Сумма словами клиники: разряды пробелами, без копеек. */
 const money = (n) => String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
@@ -62,9 +69,12 @@ export function openServiceOrderForm({
 
     // Что выбрано в справочнике. Держится здесь, а не в полях ввода: цена и
     // раздел приходят вместе с услугой и правке с клавиатуры не подлежат.
-    const picked = { service: null, doctor: null };
+    const picked = { service: null };
 
     const svcBox = h('div', { class: 'sof-pick' });
+    const searchInp = h('input', { type: 'search', placeholder: 'Поиск по названию услуги' });
+    const listBox = h('div', { class: 'sof-list' });
+    const pickBox = h('div', { class: 'sof-catalog' }, svcBox, searchInp, listBox);
     const dateInp = h('input', { type: 'date', value: todayLocal() });
     const timeInp = h('input', { type: 'time', value: nextHalfHour() });
     const qtyInp = h('input', { type: 'number', min: '1', step: '1', value: '1' });
@@ -78,6 +88,9 @@ export function openServiceOrderForm({
     };
     nowChk.addEventListener('change', syncWhen);
 
+    // Справочник этих разделов — загружается один раз и ищется на месте.
+    const cat = { services: [], types: [], loaded: false };
+
     const paintPick = () => {
         clear(svcBox);
         if (!picked.service) {
@@ -86,47 +99,89 @@ export function openServiceOrderForm({
         } else {
             svcBox.appendChild(h('div', { class: 'sof-pick-t' }, picked.service.name || ''));
             svcBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                [money(picked.service.price) + ' ' + tr('сум'),
-                    picked.doctor ? picked.doctor.full_name : null].filter(Boolean).join(' · ')));
+                money(picked.service.price) + ' ' + tr('сум')));
+            svcBox.appendChild(h('span', { class: 'grow' }));
+            svcBox.appendChild(h('button', {
+                class: 'btn btn-sm btn-outline', type: 'button',
+                onclick: () => { picked.service = null; paintPick(); paintList(); },
+            }, tr('Изменить')));
         }
-        svcBox.appendChild(h('span', { class: 'grow' }));
-        svcBox.appendChild(h('button', {
-            class: 'btn btn-sm' + (picked.service ? ' btn-outline' : ' btn-primary'), type: 'button',
-            onclick: choose,
-        }, Icon('Search', { size: 13 }), ' ', tr(picked.service ? 'Изменить' : 'Выбрать услугу')));
+        // Пока услуга выбрана, поиск не нужен и только занимает место — а окно
+        // и упрекнули как раз в величине.
+        const hide = !!picked.service;
+        searchInp.hidden = hide;
+        listBox.hidden = hide;
     };
 
-    // Справочник открывается ПОВЕРХ этого окна: выбор услуги — шаг назначения,
-    // а не отдельное дело, и терять уже введённое время ради него незачем.
-    async function choose() {
-        const { openServicePickerModal } = await import('./service-picker-modal.js?v=aug17e');
-        openServicePickerModal({
-            title: tr(title),
-            confirmLabel: tr('Выбрать'),
-            allowedTypeNames: typeNames,
-            onPick: ({ service, doctor }) => {
-                if (!service) return;
-                picked.service = service;
-                picked.doctor = doctor || null;
-                paintPick();
+    const paintList = () => {
+        clear(listBox);
+        if (!cat.loaded) {
+            listBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                tr('Загружаем справочник…')));
+            return;
+        }
+        const q = String(searchInp.value || '').trim().toLowerCase();
+        const rows = cat.services.filter((x) => !q || String(x.name || '').toLowerCase().includes(q));
+        if (!rows.length) {
+            listBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                tr('Ничего не найдено — измените запрос.')));
+            return;
+        }
+        // Сорок строк — потолок списка, а не справочника: дальше ищут словом.
+        for (const svc of rows.slice(0, 40)) {
+            listBox.appendChild(h('button', {
+                class: 'sof-row', type: 'button',
+                onclick: () => { picked.service = svc; paintPick(); },
             },
-        });
-    }
+                h('span', { class: 'sof-row-n' }, svc.name || '—'),
+                h('span', { class: 'sof-row-p' }, money(svc.price))));
+        }
+        if (rows.length > 40) {
+            listBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                trf('Показаны первые 40 из {n} — уточните запрос.', { n: rows.length })));
+        }
+    };
+    searchInp.addEventListener('input', paintList);
+
+    (async () => {
+        const [{ data: services }, { data: types }] = await Promise.all([
+            supabase.from('services').select('id, name, price, type, type_id, is_lab')
+                .eq('active', true).order('name'),
+            supabase.from('service_types').select('id, name').eq('active', true).order('name'),
+        ]);
+        cat.types = types || [];
+        const needles = (typeNames || []).map((x) => String(x).toLowerCase());
+        const keep = needles.length
+            ? cat.types.filter((t) => needles.some((n) => String(t.name || '').toLowerCase().includes(n)))
+            : [];
+        const allowed = keep.length ? new Set(keep.map((t) => String(t.id))) : null;
+        const all = services || [];
+        const only = allowed ? all.filter((x) => allowed.has(String(resolveTypeId(x, cat.types) || ''))) : all;
+        // ПУСТОЙ СПИСОК ХУЖЕ ЛИШНЕЙ УСЛУГИ: если в этих разделах у клиники
+        // ничего не заведено (операции сплошь и рядом лежат в «Процедурах»),
+        // показывается весь справочник — то же правило, что и в большом окне.
+        cat.services = only.length ? only : all;
+        cat.loaded = true;
+        paintList();
+    })();
+
     paintPick();
+    paintList();
     syncWhen();
 
     inpatientModal(tr(title), 'Plus', [
         patientAnchor(patientName, patientSub),
-        field(tr('Услуга'), svcBox, { required: true }),
-        h('div', { style: { display: 'flex', gap: '12px', alignItems: 'flex-start', flexWrap: 'wrap' } },
-            h('div', { style: { flex: '1 1 150px' } }, field(tr('Дата'), dateInp)),
-            h('div', { style: { flex: '1 1 120px' } }, field(tr('Время'), timeInp)),
-            h('div', { style: { flex: '1 1 100px' } }, field(tr('Количество'), qtyInp))),
-        h('label', { style: { display: 'flex', alignItems: 'center', gap: '7px', fontSize: '13.5px' } },
-            nowChk, tr('Уже выполнено — начислить сейчас')),
-        field(tr('Примечание'), noteInp),
-        h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-            tr('Назначенное отсюда попадает в акт выполненных работ. В рабочий список лаборатории оно пока не встаёт — пробирку берут по направлению.')),
+        // INP_FORM_GRID_V1 — та же сетка полей, что у «Нового назначения»: два
+        // окна одного действия, набранные по-разному, читаются как две системы.
+        h('div', { class: 'inp-form' },
+            h('div', { class: 'span2' }, field(tr('Услуга'), pickBox, { required: true })),
+            field(tr('Дата'), dateInp),
+            field(tr('Время'), timeInp),
+            field(tr('Количество'), qtyInp),
+            h('label', { class: 'inp-check' }, nowChk, tr('Уже выполнено — начислить сейчас')),
+            h('div', { class: 'span2' }, field(tr('Примечание'), noteInp)),
+            h('div', { class: 'inp-hint' },
+                tr('Назначенное отсюда попадает в акт выполненных работ. В рабочий список лаборатории оно пока не встаёт — пробирку берут по направлению.'))),
     ], tr('Назначить'), async () => {
         if (!picked.service || !picked.service.id) {
             toast(tr('Выберите услугу из справочника.'), 'fail');
@@ -138,7 +193,6 @@ export function openServiceOrderForm({
             quantity: Number(qtyInp.value) || 1,
             note: noteInp.value.trim(),
         };
-        if (picked.doctor && picked.doctor.id) args.doctor_id = picked.doctor.id;
         if (!nowChk.checked) {
             const date = dateInp.value || todayLocal();
             const time = timeInp.value || '09:00';

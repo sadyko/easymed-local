@@ -120,18 +120,13 @@ test('услуга выбирается из справочника и уход�
     const form = await openForm({});
     assert.ok(textOf(form).includes('Услуга не выбрана'), 'окно не говорит, что услуга ещё не выбрана');
 
-    // 1. Справочник открывается ПОВЕРХ окна и не теряет его.
-    findBtn(form, 'Выбрать услугу').click();
-    await settle();
-    const picker = BODY.children.filter((c) => String(c.className || '').includes('modal')).pop();
-    assert.notEqual(picker, form, 'справочник не открылся');
-    const row = walk(picker).find((e) => e.tagName === 'BUTTON'
-        && String(e.className).includes('sched-col-row') && textOf(e).includes('Аппендэктомия'));
-    assert.ok(row, 'услуги в справочнике нет');
+    // 1. Справочник — В САМОМ ОКНЕ: второго, полноэкранного, больше нет.
+    assert.equal(BODY.children.filter((c) => String(c.className || '').includes('modal')).length, 1,
+        'поверх формы открылось второе окно — на его величину и жаловались');
+    const row = walk(form).find((e) => e.tagName === 'BUTTON'
+        && String(e.className).includes('sof-row') && textOf(e).includes('Аппендэктомия'));
+    assert.ok(row, 'услуги в списке нет: ' + textOf(form).slice(0, 200));
     row.click();
-    await settle();
-    walk(picker).find((e) => e.tagName === 'BUTTON' && textOf(e).includes('Выбрать')
-        && String(e.className).includes('btn-primary')).click();
     await settle();
 
     // 2. Выбранная услуга видна в окне вместе с ценой.
@@ -157,6 +152,14 @@ test('услуга выбирается из справочника и уход�
     assert.equal(new Date(call.args.planned_at).getTime(), new Date('2026-09-11T10:30:00').getTime());
 });
 
+test('в списке — только услуги нужного раздела', async () => {
+    const form = await openForm({});
+    const names = walk(form).filter((e) => String(e.className).includes('sof-row')).map((e) => textOf(e));
+    assert.ok(names.some((n) => n.includes('Аппендэктомия')), 'хирургии нет в списке хирургии');
+    assert.ok(!names.some((n) => n.includes('Общий анализ крови')), 'анализ попал в список операций');
+    assert.ok(!names.some((n) => n.includes('Приём терапевта')), 'консультация попала в список операций');
+});
+
 test('без выбранной услуги окно не отпускает и на сервер ничего не шлёт', async () => {
     const form = await openForm({});
     findBtn(form, 'Назначить').click();
@@ -168,14 +171,8 @@ test('без выбранной услуги окно не отпускает и
 
 test('«уже выполнено» гасит дату и время и шлёт назначение без плана', async () => {
     const form = await openForm({});
-    findBtn(form, 'Выбрать услугу').click();
-    await settle();
-    const picker = BODY.children.filter((c) => String(c.className || '').includes('modal')).pop();
-    walk(picker).find((e) => e.tagName === 'BUTTON' && String(e.className).includes('sched-col-row')
+    walk(form).find((e) => e.tagName === 'BUTTON' && String(e.className).includes('sof-row')
         && textOf(e).includes('Аппендэктомия')).click();
-    await settle();
-    walk(picker).find((e) => e.tagName === 'BUTTON' && textOf(e).includes('Выбрать')
-        && String(e.className).includes('btn-primary')).click();
     await settle();
 
     const chk = walk(form).filter((e) => e.tagName === 'INPUT' && e.attrs.type === 'checkbox')[0];

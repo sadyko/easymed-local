@@ -609,24 +609,28 @@ export function openOrderForm({ admissionId, patientName = '', patientSub = '', 
     const rateInp = h('input', { type: 'number', min: '0', step: '1', placeholder: '60' });
     const durInp = h('input', { type: 'number', min: '0', step: '1', placeholder: '90' });
     const contInp = h('input', { type: 'checkbox' });
-    const infusionBox = h('div', { style: { display: 'none', gap: '12px', flexWrap: 'wrap' } },
-        h('div', { style: { flex: '1 1 120px' } }, field(tr('Объём, мл'), volInp)),
-        h('div', { style: { flex: '1 1 120px' } }, field(tr('Скорость, мл/ч'), rateInp)),
-        h('div', { style: { flex: '1 1 120px' } }, field(tr('Длительность, мин'), durInp)),
-        h('label', { style: { display: 'flex', alignItems: 'center', gap: '7px', fontSize: '13.5px' } },
-            contInp, tr('Непрерывная инфузия')));
+    // INP_FORM_GRID_V1 — поля стоят СЕТКОЙ, а не пятью разными гибкими
+    // строками с числами 120/140/160/220 в каждой. Разнобой ширин и был тем
+    // «визуальным шумом»: подписи не выстраивались в колонку, а галочку «до
+    // отмены» приходилось опускать отступом в 24 пикселя, чтобы она попала на
+    // одну линию с полем рядом.
+    const infusionBox = h('div', { class: 'inp-sub', hidden: true },
+        h('div', { class: 'inp-sub-h' }, tr('Инфузия')),
+        field(tr('Объём, мл'), volInp),
+        field(tr('Скорость, мл/ч'), rateInp),
+        field(tr('Длительность, мин'), durInp),
+        h('label', { class: 'inp-check inp-sub-w' }, contInp, tr('Непрерывная инфузия')));
 
-    const courseBox = h('div', { style: { display: 'flex', gap: '12px', alignItems: 'flex-start', flexWrap: 'wrap' } },
-        h('div', { style: { flex: '1 1 120px' } }, field(tr('Дней курса'), daysInp)),
-        h('label', { style: { display: 'flex', alignItems: 'center', gap: '7px', fontSize: '13.5px', paddingTop: '24px' } },
-            openEnded, tr('до отмены')));
+    const courseBox = h('div', { class: 'inp-row' },
+        field(tr('Дней курса'), daysInp),
+        h('label', { class: 'inp-check' }, openEnded, tr('до отмены')));
 
     const syncKind = () => {
-        infusionBox.style.display = kindSel.value === 'infusion' ? 'flex' : 'none';
+        infusionBox.hidden = kindSel.value !== 'infusion';
     };
     const syncFreq = () => {
         const prn = freqSel.value === 'prn';
-        courseBox.style.display = prn ? 'none' : 'flex';
+        courseBox.hidden = prn;
         daysInp.disabled = openEnded.checked;
     };
     kindSel.addEventListener('change', syncKind);
@@ -636,21 +640,19 @@ export function openOrderForm({ admissionId, patientName = '', patientSub = '', 
 
     inpatientModal(tr('Новое назначение'), 'Pill', [
         patientAnchor(patientName, patientSub),
-        h('div', { style: { display: 'flex', gap: '12px', alignItems: 'flex-start', flexWrap: 'wrap' } },
-            h('div', { style: { flex: '1 1 160px' } }, field(tr('Род назначения'), kindSel)),
-            h('div', { style: { flex: '2 1 220px' } }, field(tr('Название'), nameInp, { required: true }))),
-        h('div', { style: { display: 'flex', gap: '12px', alignItems: 'flex-start', flexWrap: 'wrap' } },
-            h('div', { style: { flex: '1 1 140px' } }, field(tr('Доза'), doseInp)),
-            h('div', { style: { flex: '1 1 160px' } }, field(tr('Путь введения'), routeSel))),
-        h('div', { style: { display: 'flex', gap: '12px', alignItems: 'flex-start', flexWrap: 'wrap' } },
-            h('div', { style: { flex: '1 1 160px' } }, field(tr('Частота'), freqSel)),
-            h('div', { style: { flex: '1 1 160px' } }, field(tr('Начало курса'), startInp))),
-        courseBox,
-        field(tr('Чей препарат'), sourceSel),
-        infusionBox,
-        field(tr('Примечание'), noteInp),
-        h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-            tr('Назначение попадёт в задачи медсестры на те часы, которые задаёт частота.')),
+        h('div', { class: 'inp-form' },
+            field(tr('Род назначения'), kindSel),
+            h('div', { class: 'span2' }, field(tr('Название'), nameInp, { required: true })),
+            field(tr('Доза'), doseInp),
+            field(tr('Путь введения'), routeSel),
+            field(tr('Частота'), freqSel),
+            field(tr('Начало курса'), startInp),
+            courseBox,
+            field(tr('Чей препарат'), sourceSel),
+            infusionBox,
+            h('div', { class: 'span2' }, field(tr('Примечание'), noteInp)),
+            h('div', { class: 'inp-hint' },
+                tr('Назначение попадёт в задачи медсестры на те часы, которые задаёт частота.'))),
     ], tr('Назначить'), async () => {
         const name = nameInp.value.trim();
         if (!name) { toast(tr('Укажите название назначения.'), 'fail'); return false; }
@@ -757,7 +759,6 @@ export async function renderMarSheet(root, ctx = {}) {
     const state = {
         admissionId, date: todayLocal(), showCancelled: false,
         sheet: null, admission: null, people: new Map(),
-        overview: null,   // MAR_REF_V1 — витальные строкой: те же, что в «Показателях»
     };
     state.people = await loadPeople();
 
@@ -779,15 +780,9 @@ export async function renderMarSheet(root, ctx = {}) {
         // include_cancelled: отменённые приезжают ВСЕГДА — иначе переключатель
         // «Показать отменённые · N» не знал бы своего N и требовал бы второго
         // запроса ровно за тем, что уже посчитано.
-        const [{ data, error }, { data: ov }] = await Promise.all([
-            supabase.rpc('treatment_orders_list', {
-                admission_id: state.admissionId, from: state.date, to: state.date, include_cancelled: true,
-            }),
-            // Отказ по роли здесь не беда: без обзора строка витальных просто
-            // не рисуется, а лист назначений остаётся листом назначений.
-            supabase.rpc('admission_overview', { admission_id: state.admissionId }),
-        ]);
-        state.overview = ov || null;
+        const { data, error } = await supabase.rpc('treatment_orders_list', {
+            admission_id: state.admissionId, from: state.date, to: state.date, include_cancelled: true,
+        });
         clear(body);
         if (error || !data) {
             body.appendChild(h('div', { class: 'card', style: { padding: '18px' } },
@@ -861,8 +856,6 @@ export async function renderMarSheet(root, ctx = {}) {
         }
         headBox.appendChild(dayBar());
         headBox.appendChild(tallyBar());
-        const vit = vitalsStrip();
-        if (vit) headBox.appendChild(vit);
     }
 
     /**
@@ -910,43 +903,6 @@ export async function renderMarSheet(root, ctx = {}) {
             box.appendChild(line);
         }
         return box;
-    }
-
-    /**
-     * Витальные строкой над сеткой — как в эталоне.
-     *
-     * Значения ТЕ ЖЕ, что в «Показателях» истории болезни: их присылает
-     * admission_overview, и считать их здесь заново незачем. Чего в строке нет:
-     * ДИУРЕЗА И ВОДНОГО БАЛАНСА — в измерениях таких полей сегодня нет вовсе,
-     * и написать «—» вместо них значило бы пообещать сестре учёт, которого не
-     * ведётся.
-     */
-    function vitalsStrip() {
-        const v = (state.overview && state.overview.vitals) || null;
-        const last = v && v.last;
-        if (!last) return null;
-        const cell = (label, value, unit) => (value === null || value === undefined || value === ''
-            ? null
-            : h('span', { class: 'mar-vit' },
-                h('span', { class: 'mar-vit-l' }, tr(label)),
-                h('b', null, String(value)),
-                unit ? h('span', { class: 'mar-vit-u' }, tr(unit)) : null));
-        const bp = (last.bp_sys && last.bp_dia) ? last.bp_sys + '/' + last.bp_dia : null;
-        const cells = [
-            cell('Температура', last.temp_c, '°C'),
-            cell('АД', bp, 'мм рт. ст.'),
-            cell('Пульс', last.pulse_bpm, '/мин'),
-            cell('ЧДД', last.resp_rate, '/мин'),
-            cell('SpO₂', last.spo2, '%'),
-        ].filter(Boolean);
-        if (!cells.length) return null;
-        return h('div', { class: 'card mar-vitals' },
-            h('span', { class: 'mar-vit-h' }, Icon('Pulse', { size: 14 }), ' ', tr('Витальные')),
-            ...cells,
-            h('span', { class: 'grow' }),
-            last.measured_at
-                ? h('span', { class: 'muted' }, trf('обновлено {when}', { when: fmtDateTime(last.measured_at) }))
-                : null);
     }
 
     function dayBar() {

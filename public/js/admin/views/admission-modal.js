@@ -819,7 +819,13 @@ function reviewTitle(kind, mode, docTitle = '') {
  * Возвращает {title, icon, fields, submitLabel, submit, secondaryLabel,
  * secondary} — ровно то, из чего собирается и окно, и правая половина экрана.
  */
-export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', reviewId = null, docTitle = '', onDone } = {}) {
+/** Сегодня местными часами — «дата записи» ставится по календарю врача. */
+function todayIso() {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', reviewId = null, docTitle = '', periodic = false, onDone } = {}) {
     if (!admission || !admission.id) { toast(tr('Госпитализация не найдена.'), 'fail'); return null; }
     const p = admission.patients || {};
     const isPrimary = kind === 'primary';
@@ -993,6 +999,9 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
                 || (drafts.length ? drafts[drafts.length - 1] : null);
             draftId = src ? src.id : null;
         }
+        // Открытая запись показывает СВОЙ день, а не сегодняшний: правя вчерашний
+        // дневник, врач не должен молча передатировать его на сегодня.
+        if (entryDateInput && src && src.entry_date) entryDateInput.value = src.entry_date;
         if (src) fill(src);
         // CASE_DOC_BLANK_V1 — нового документа ещё нет: подставляем бланк
         // клиники из «Документов». Черновик всегда сильнее бланка — иначе
@@ -1036,6 +1045,7 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         review_id: isCorrection ? null : draftId,
         supersedes,
         kind,
+        entry_date: entryDateInput ? (entryDateInput.value || null) : null,
         // Раздел, которого у ЭТОГО документа нет, не стирается: его прежнее
         // значение уходит обратно как было. Иначе смена рода документа молча
         // вычищала бы то, что писали в другом.
@@ -1057,6 +1067,13 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     // В ОКНЕ листа нет — там карточка единственное, что говорит, чей это
     // документ, и её нельзя убрать вместе с дублем. Поэтому она уезжает из
     // полей ОТДЕЛЬНЫМ свойством, а ставит её тот, у кого шапки нет.
+    // DIARY_ENTRY_DATE_V1 — день, О КОТОРОМ запись. Только у повторяющихся
+    // документов (дневник, этапный эпикриз): у разового документа своей даты
+    // нет — он один, и датирован подписью.
+    const entryDateInput = periodic
+        ? h('input', { type: 'date', class: 'cd-acts-date-i', value: todayIso() })
+        : null;
+
     const patientCard = patientAnchor(p.full_name || '',
         [p.mrn, admission.department, admission.admission_no].filter(Boolean).join(' · '));
 
@@ -1196,6 +1213,9 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         // «Вставить в документ» кладёт блок туда, где стоит курсор.
         toolbar: toolbar.bar,
         insert: (html) => insertBlock(toolbar, html),
+        // DIARY_ENTRY_DATE_V1 — поле дня отдаётся наружу: его место в полосе
+        // действий над листом, рядом с «Печатью» и «Сохранить».
+        entryDateInput,
         // CASE_DX_PICK_V1 — поле диагноза отдаётся налево: карточка «Диагноз»
         // рисует его сама, а редактор остаётся владельцем значения.
         diagnosisInput: secKeys.includes('diagnosis') ? diagnosis : null,

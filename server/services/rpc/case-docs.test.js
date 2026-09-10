@@ -297,6 +297,49 @@ test('ДНЕВНИК НАБЛЮДЕНИЯ просрочен потому, чт�
   ctx.db.close();
 });
 
+test('ДНЕВНИК ПИШУТ КАЖДЫЙ ДЕНЬ: записи копятся, и каждая знает СВОЙ день', () => {
+  const ctx = seed();
+  const placed = inBed(ctx, 30);          // вторые сутки, за первые записи нет
+  const adm = inTreatment(ctx, placed);   // дневник ведут после осмотра
+  const day = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+  // Запись за ВЧЕРА, написанная сегодня: подпись сегодняшняя, день — вчерашний,
+  // и закрывает она вчерашние сутки, а не текущие.
+  admissionReviewSave(ctx.db, {
+    admission_id: adm.id, kind: 'round', body: 'Обход за вчера',
+    entry_date: day(NOW - 24 * H), publish: true,
+  }, doctor);
+  const afterBack = itemOf(docs(ctx, adm, 0), 'round');
+  assert.equal(afterBack.state, 'pending', 'вчерашние сутки закрыты записью за вчера');
+  assert.equal(afterBack.periods_missing, 0);
+
+  // Вторая запись — за сегодня. Она НЕ заменяет вчерашнюю: дневник это не один
+  // документ с редакциями, а запись на каждый день.
+  admissionReviewSave(ctx.db, {
+    admission_id: adm.id, kind: 'round', body: 'Обход за сегодня',
+    entry_date: day(NOW), publish: true,
+  }, doctor);
+  const st = docs(ctx, adm, 0);
+  const diary = itemOf(st, 'round');
+  assert.equal(diary.state, 'published', 'текущие сутки закрыты');
+  assert.equal(diary.entries, 2, 'обе записи остались: вторая не съела первую');
+
+  const dates = ctx.db.prepare(
+    "SELECT entry_date FROM admission_reviews WHERE admission_id = ? AND kind = 'round' ORDER BY id"
+  ).all(adm.id).map((r) => r.entry_date);
+  assert.deepEqual(dates, [day(NOW - 24 * H), day(NOW)], 'каждая запись знает свой день');
+
+  // Нечитаемая дата не портит запись: день просто не указан, как было раньше.
+  admissionReviewSave(ctx.db, {
+    admission_id: adm.id, kind: 'round', body: 'Обход без дня', entry_date: 'вчера', publish: true,
+  }, doctor);
+  const last = ctx.db.prepare(
+    "SELECT entry_date FROM admission_reviews WHERE admission_id = ? AND kind = 'round' ORDER BY id DESC LIMIT 1"
+  ).get(adm.id);
+  assert.equal(last.entry_date, null);
+  ctx.db.close();
+});
+
 test('ЭТАПНЫЙ ЭПИКРИЗ не требуется на второй день и требуется на одиннадцатый', () => {
   const ctx = seed();
   const adm = inBed(ctx, 30);

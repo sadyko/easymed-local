@@ -35,7 +35,7 @@ import { CASE_TABS, caseTabsBar, caseExamsPanel, caseSurgeryPanel, caseActPanel,
     actPrintBody, caseMealsPanel, caseInvoicesPanel } from './case-file-tabs.js';   // CASE_FILE_TABS_V1 / ACT_OF_WORKS_V1
 import { buildTitleSheetEditor, TITLE_SHEET_KIND } from './title-sheet.js';   // TITLE_SHEET_V1
 import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V2
-import { dateNumeric } from '../../shared/date-words.js';   // A4_LETTERHEAD_V2 — дата рождения числом
+import { dateNumeric, dateWords } from '../../shared/date-words.js';   // A4_LETTERHEAD_V2 — дата рождения числом; CASE_CLOCK_V1 — дата словами
 import { shortName, placeLine } from '../../shared/person-name.js';   // PERSON_NAME_SHORT_V1
 import { caseHead } from './case-overview.js?v=co1';   // CASE_OVERVIEW_V1 — одна шапка на «Обзор» и «Документы»
 import { caseInsertPanel } from './case-doc-insert.js';   // CASE_DOC_A4_V1 — правая панель «Вставить в документ»
@@ -517,6 +517,35 @@ function paintRail(rail, root, onNavigate) {
         onDelete: mayEditSet ? async (kind, name) => { if (await caseDocSetDelete(kind, name)) await reloadAll(); } : null,
     }));
     rail.appendChild(assembleFor(root, onNavigate));
+    rail.appendChild(caseClock());
+}
+
+/**
+ * ЧАСЫ ВНИЗУ ЛЕВОЙ КОЛОНКИ.
+ *
+ * CASE_CLOCK_V1 (2026-09-10) — владелец: «we need to add time and date in the
+ * left panel bottom». У постели пишут документы, у которых время — часть
+ * содержания: дневник за какой день, доза в какой час. Планшет в палате стоит
+ * в чехле, системных часов на нём не видно, и врач спрашивал время у соседа.
+ *
+ * Часы идут САМИ, по минуте, и снимают себя, когда колонку сменили: таймер,
+ * переживший экран, тикал бы до конца смены.
+ */
+function caseClock() {
+    const box = h('div', { class: 'cw-clock' });
+    const paintNow = () => {
+        clear(box);
+        const now = new Date();
+        box.appendChild(h('span', { class: 'cw-clock-t' },
+            String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0')));
+        box.appendChild(h('span', { class: 'cw-clock-d' }, dateWords(now)));
+    };
+    paintNow();
+    const timer = setInterval(() => {
+        if (!box.isConnected) { clearInterval(timer); return; }
+        paintNow();
+    }, 30000);
+    return box;
 }
 
 /** Полных лет на сегодня — или null, если даты рождения нет. */
@@ -537,6 +566,12 @@ function ageYears(dob) {
 // копии одного списка расходятся молча.
 const docIds = () => docHeadIds(state.admission);
 const docFields = () => docHeadFields(state.admission);
+
+/** «2026-09-09» → «09.09.2026»: шапка листа пишет дату как на бумаге. */
+function ruDate(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+    return m ? m[3] + '.' + m[2] + '.' + m[1] : '';
+}
 
 function paintPane(pane, root, onNavigate) {
     if (!pane) return;
@@ -562,6 +597,12 @@ function paintPane(pane, root, onNavigate) {
             kind: state.open.kind,
             mode: state.open.mode,
             reviewId: state.open.reviewId,
+            // DIARY_ENTRY_DATE_V1 — повторяющийся ли документ, знает НАБОР
+            // клиники (due_rule = 'period'), а не список родов в этом экране:
+            // клиника вправе завести свой ежедневный документ, и он получит то
+            // же поле дня, ничего здесь не меняя.
+            periodic: (((state.docs && state.docs.items) || [])
+                .find((i) => i && i.kind === state.open.kind) || {}).due_rule === 'period',
             // CASE_DOC_OWN_NAME_V1 — имя своего документа знает только чек-лист.
             docTitle: state.open.title || '',
             onDone,
@@ -579,6 +620,15 @@ function paintPane(pane, root, onNavigate) {
     // A4_ONE_TEMPLATE_V1 — панель форматирования стоит СВОЕЙ ПОЛОСОЙ над листом,
     // тем же слотом, что в кабинете врача (.a4-toolbar-slot): один инструмент —
     // одно место, где его ищут.
+    // DIARY_ENTRY_DATE_V1 — сменили день записи, и шапка листа говорит тот же
+    // день: две даты на одном документе — это вопрос, какая из них настоящая.
+    if (ed.entryDateInput) {
+        ed.entryDateInput.addEventListener('change', () => {
+            const node = card && card.querySelector ? card.querySelector('.a4-lh-date') : null;
+            if (node) node.textContent = tr('от') + ' ' + ruDate(ed.entryDateInput.value);
+        });
+    }
+
     const card = h('div', { class: 'cw-doc a4-scroll' },
         // CASE_DOC_ACTIONS_V1 — в слоте над листом стоят ДЕЙСТВИЯ документа
         // (заготовка, печать, черновик, сохранить), а не панель форматирования.
@@ -587,7 +637,8 @@ function paintPane(pane, root, onNavigate) {
             // FORM_003_V1 — у бланка 003 своя шапка (министерство, учреждение, приказ).
             ? h('div', { class: 'a4-paper f3-paper' },
                 h('div', { class: 'cw-doc-body f3' }, ...ed.fields.filter(Boolean)))
-            : a4Sheet({ title: ed.title, ids: docIds(), fields: docFields(), children: [
+            : a4Sheet({ title: ed.title, date: ed.entryDateInput ? ruDate(ed.entryDateInput.value) : undefined,
+                ids: docIds(), fields: docFields(), children: [
                 h('div', { class: 'cw-doc-body' }, ...ed.fields.filter(Boolean)),
             ] }),
         // TITLE_SHEET_PAPERS_OUT_V1 — то, что относится к документу, но им не

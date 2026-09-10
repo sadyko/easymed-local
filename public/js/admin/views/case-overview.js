@@ -463,47 +463,64 @@ function paint(root, onNavigate) {
         ] });
 
     // ── 5. Назначения и услуги ──────────────────────────────────────────────
-    const orderRow = (r) => h('div', { class: 'co-row' },
-        h('div', { class: 'co-row-main' },
-            h('div', { class: 'co-row-t' }, r.name),
-            h('div', { class: 'co-row-m' }, [r.dose, r.route, r.prn ? tr('по требованию') : r.freq_code].filter(Boolean).join(' · '))));
-    // CASE_ROWS_TIDY_V1 — строка услуги в ДВЕ строки: название и подпись, под
-    // ними сумма и метка. В узкой колонке (три колонки на широком экране) всё
-    // в одну строку не помещалось, и название рассыпалось по букве в строке.
-    // Проживание подписано словом, а не технической пометкой.
-    const serviceRow = (r) => {
-        const accommodation = r.kind === 'accommodation';
-        const title = accommodation ? tr('Проживание (койко-дни)') : (r.name || '—');
-        const meta = accommodation
-            ? [r.quantity ? trf('{n} сут.', { n: r.quantity }) : null, isNumV(r.unit_price) ? '× ' + sum(r.unit_price) : null].filter(Boolean).join(' ')
-            : [r.quantity && r.quantity !== 1 ? '× ' + r.quantity : null, r.performed_at ? dt(r.performed_at) : null].filter(Boolean).join(' · ');
-        return h('div', { class: 'co-row co-row-svc' },
-            h('div', { class: 'co-row-main' },
-                h('div', { class: 'co-row-t' }, accommodation ? ic('Bed', 13) : null, accommodation ? ' ' : null, title),
-                meta ? h('div', { class: 'co-row-m' }, meta) : null),
-            h('div', { class: 'co-row-foot' },
-                h('span', { class: 'co-row-sum' }, sum(r.total)),
-                Tag(r.invoiced ? tr('в счёте') : tr('не выставлено'), { kind: r.invoiced ? 'ok' : 'warn' })));
-    };
-    // CASE_DASH_QUIET_V1 — «0» рядом со словами «назначений нет» говорит то же
-    // самое второй раз. Счётчик показывается, когда есть что считать.
-    const col = (title, count, sub, rows, empty, foot) => h('div', { class: 'co-col' },
+    //
+    // CASE_LISTS_AS_STATS_V1 (2026-09-10) — владелец: «make cards of
+    // prescription statuses, not actual services and invoices, just amount and
+    // the summ». Здесь стояли ДВА СПИСКА — назначения поимённо и услуги
+    // построчно с ценами. Обзор от этого превращался в третью копию листа
+    // назначений и акта выполненных работ: те же строки, что во вкладках, но
+    // обрезанные шириной колонки и без единого действия над ними.
+    //
+    // Обзор отвечает на «как идут дела», а не «что именно назначено». Дела —
+    // это ЧИСЛА: сколько введено, сколько ждёт, сколько пропущено, на сколько
+    // начислено и сколько из этого не выставлено. За именами — вкладки, и
+    // ссылка туда стоит в подвале панели.
+    const stat = (label, value, tone = '') => h('div', { class: 'co-stat' + (tone ? ' co-' + tone : '') },
+        h('span', { class: 'co-stat-v' }, String(value)),
+        h('span', { class: 'co-stat-l' }, tr(label)));
+    const statSum = (label, value, tone = '') => h('div', { class: 'co-stat' + (tone ? ' co-' + tone : '') },
+        h('span', { class: 'co-stat-v co-stat-sum' }, sum(value)),
+        h('span', { class: 'co-stat-l' }, tr(label)));
+
+    // «Ожидает» СЧИТАЕТСЯ, а не приходит: сервер отдаёт назначенное на сегодня
+    // и то, что с ним сделали, — ждёт ровно остаток. Считать его на сервере
+    // значило бы завести пятое число, которое обязано сходиться с четырьмя.
+    const waiting = Math.max(0, (t.due || 0) - (t.given || 0) - (t.refused || 0) - (t.missed || 0) - (t.held || 0));
+    const billedSum = Math.max(0, (sv.sum_total || 0) - (sv.sum_unbilled || 0));
+
+    const col = (title, count, children) => h('div', { class: 'co-col' },
         h('div', { class: 'co-col-h' }, h('h3', { class: 'co-col-t' }, tr(title)),
             count ? Tag(String(count), { kind: 'teal' }) : null),
-        sub ? h('div', { class: 'co-col-s' }, sub) : null,
-        rows.length ? h('div', { class: 'co-rows' }, ...rows) : note(tr(empty)),
-        foot);
+        ...children.filter(Boolean));
+
     const listsPanel = panel('Назначения и услуги', { area: 'lists', children: [
         h('div', { class: 'co-cols' },
-            col('Назначения', o.active || 0,
-                trf('Сегодня введено {given} из {due} · пропущено {missed} · отказ {refused}', { given: t.given || 0, due: t.due || 0, missed: t.missed || 0, refused: t.refused || 0 }),
-                (o.list || []).map(orderRow), 'Назначений нет', null),
-            col('Услуги', sv.count || 0,
-                trf('В счёте {billed} · не выставлено {unbilled} на {sum}', { billed: sv.billed || 0, unbilled: sv.unbilled || 0, sum: sum(sv.sum_unbilled) }),
-                (sv.list || []).map(serviceRow), 'Услуг пока нет', null)),
-    // CASE_DASH_QUIET_V1 — одно действие на панель. «Услуги госпитализации»
-    // открывали карточку, до которой есть дорога и из списка стационара; лист
-    // назначений — то, ради чего эту панель и открывают.
+            col('Назначения', o.active || 0, [
+                (t.due || 0) || (o.active || 0)
+                    ? h('div', { class: 'co-stats' },
+                        stat('введено', t.given || 0, (t.given || 0) ? 'ok' : ''),
+                        stat('ожидает', waiting),
+                        stat('пропущено', t.missed || 0, (t.missed || 0) ? 'warn' : ''),
+                        stat('отказ', t.refused || 0, (t.refused || 0) ? 'warn' : ''))
+                    : note(tr('Назначений нет')),
+                (t.due || 0)
+                    ? h('div', { class: 'co-col-s' }, trf('на сегодня назначено доз: {n}', { n: t.due || 0 }))
+                    : null,
+            ]),
+            col('Услуги', sv.count || 0, [
+                (sv.count || 0)
+                    ? h('div', { class: 'co-stats' },
+                        statSum('начислено', sv.sum_total || 0),
+                        statSum('в счетах', billedSum),
+                        statSum('не выставлено', sv.sum_unbilled || 0, (sv.sum_unbilled || 0) ? 'warn' : ''))
+                    : note(tr('Услуг пока нет')),
+                (sv.count || 0)
+                    ? h('div', { class: 'co-col-s' },
+                        trf('строк начисления: {n} · в счёте {billed}', { n: sv.count || 0, billed: sv.billed || 0 }))
+                    : null,
+            ])),
+    // CASE_DASH_QUIET_V1 — одно действие на панель. За именами назначений и
+    // услуг — история болезни: обзор их больше не перечисляет.
     ], actions: [act('Лист назначений', () => goToMarSheet(a.id, onNavigate))] });
 
     // ── 6. Следующий шаг → ──────────────────────────────────────────────────

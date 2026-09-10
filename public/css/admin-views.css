@@ -6087,10 +6087,68 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 /* Планшет: колонки уже, левый столбец короче — сутки целиком остаются видны. */
 @media (max-width: 1180px) { .mar-grid { --mar-name-w: 186px; --mar-col: 46px; } }
 
-/* SERVICE_ORDER_FORM_V1 — выбранная услуга в окне назначения. */
+/* CASE_LISTS_AS_STATS_V1 — обзор отвечает числами, а не перечнем строк. */
+.co-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; margin-top: 8px; }
+.co-stat { display: grid; gap: 2px; padding: 8px 10px; border: 1px solid var(--ink-100);
+    border-radius: var(--r-md); background: var(--white); }
+.co-stat-v { font-size: 20px; font-weight: 700; color: var(--ink-900); font-variant-numeric: tabular-nums; }
+.co-stat-sum { font-size: 15px; }
+.co-stat-l { font-size: 12.5px; color: var(--ink-500); }
+.co-stat.co-ok .co-stat-v { color: var(--ok-700, #0f7a43); }
+.co-stat.co-warn { border-color: var(--warn-200, #f2d9a6); background: var(--warn-50, #fff6e6); }
+.co-stat.co-warn .co-stat-v { color: var(--warn-700, #8a5a00); }
+
+/* INP_FORM_GRID_V1 — поля окон стационара стоят СЕТКОЙ.
+   Раньше каждая строка формы была своей гибкой раскладкой с числами
+   120/140/160/220: подписи не выстраивались в колонку, а галочку приходилось
+   опускать отступом, чтобы попасть на одну линию с полем. Это и был «визуальный
+   шум»: не украшения, а разнобой ширин. */
+.inp-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; }
+.inp-form > .span2, .inp-form > .inp-hint, .inp-form > .inp-sub { grid-column: 1 / -1; }
+.inp-form > [hidden] { display: none; }
+.inp-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; align-items: end; }
+/* Галочка стоит на одной линии с соседним полем сама — ростом, а не отступом. */
+.inp-check { display: flex; align-items: center; gap: 8px; min-height: 38px; font-size: 13.5px;
+    color: var(--ink-800); }
+.inp-check input { width: 17px; height: 17px; accent-color: var(--brand-600, #0f766e); }
+.inp-sub { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 14px;
+    padding: 10px 12px; border: 1px solid var(--ink-100); border-radius: var(--r-md);
+    background: var(--ink-25, #f7f8fa); }
+.inp-sub-h, .inp-sub-w { grid-column: 1 / -1; }
+.inp-sub-h { font-size: 12.5px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase;
+    color: var(--ink-400); }
+.inp-hint { font-size: 12.5px; color: var(--ink-500); line-height: 1.45; }
+@media (max-width: 560px) { .inp-form, .inp-row, .inp-sub { grid-template-columns: minmax(0, 1fr); } }
+
+/* CASE_CLOCK_V1 — часы внизу левой колонки: у постели время это часть
+   содержания документа, а системных часов на планшете в чехле не видно. */
+.cw-clock { display: flex; align-items: baseline; gap: 8px; padding: 10px 4px 2px;
+    color: var(--ink-500); }
+.cw-clock-t { font-size: 20px; font-weight: 700; color: var(--ink-900);
+    font-variant-numeric: tabular-nums; letter-spacing: .5px; }
+.cw-clock-d { font-size: 12.5px; }
+
+/* DIARY_ENTRY_DATE_V1 — день записи стоит в полосе действий документа. */
+.cd-acts-date { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px;
+    color: var(--ink-500); white-space: nowrap; }
+.cd-acts-date-i { min-height: 30px; padding: 2px 8px; border: 1px solid var(--ink-100);
+    border-radius: var(--r-sm, 7px); font: inherit; font-size: 13.5px; color: var(--ink-900); }
+
+/* SERVICE_ORDER_FORM_V1 — справочник услуг ВНУТРИ окна назначения: строка
+   поиска и короткий список. Список прокручивается сам, чтобы окно осталось
+   окном, а не выросло во весь экран. */
+.sof-catalog { display: grid; gap: 8px; }
 .sof-pick { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; min-height: 42px;
     padding: 8px 12px; border: 1px solid var(--ink-100); border-radius: var(--r-md); background: var(--white); }
 .sof-pick-t { flex: 1 1 100%; font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
+.sof-list { max-height: 200px; overflow-y: auto; display: grid; gap: 2px;
+    border: 1px solid var(--ink-100); border-radius: var(--r-md); padding: 4px; background: var(--white); }
+.sof-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 38px;
+    padding: 6px 10px; border: 0; border-radius: var(--r-sm, 7px); background: none; cursor: pointer;
+    font: inherit; font-size: 13.5px; text-align: left; color: var(--ink-900); }
+.sof-row:hover { background: var(--ink-25, #f7f8fa); }
+.sof-row-n { flex: 1; min-width: 0; }
+.sof-row-p { flex: 0 0 auto; font-variant-numeric: tabular-nums; color: var(--ink-500); font-size: 12.5px; }
 
 /* MAR_IN_CABINET_V1 — строка действий листа, когда он внутри истории болезни. */
 .mar-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
