@@ -30,6 +30,7 @@ import { tr, trf } from '../i18n.js';
 import { caseDocsView, assembleCaseFile, canEditDocSet, caseDocSetDrop, caseDocSetAdd,
     caseDocSetRestore, caseDocSetRename, caseDocSetDelete, loadDocTypeSet } from './case-docs.js?v=cw1';
 import { buildReviewEditor } from './admission-modal.js?v=inp2';
+import { docActionsBar } from './case-doc-a4.js';   // CASE_DOC_ACTIONS_V1 — действия над листом
 import { buildTitleSheetEditor, TITLE_SHEET_KIND } from './title-sheet.js';   // TITLE_SHEET_V1
 import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V2
 import { dateNumeric } from '../../shared/date-words.js';   // A4_LETTERHEAD_V2 — дата рождения числом
@@ -387,7 +388,9 @@ function paintPane(pane, root, onNavigate) {
     // тем же слотом, что в кабинете врача (.a4-toolbar-slot): один инструмент —
     // одно место, где его ищут.
     const card = h('div', { class: 'cw-doc a4-scroll' },
-        ed.toolbar ? h('div', { class: 'a4-toolbar-slot' }, ed.toolbar) : null,
+        // CASE_DOC_ACTIONS_V1 — в слоте над листом стоят ДЕЙСТВИЯ документа
+        // (заготовка, печать, черновик, сохранить), а не панель форматирования.
+        h('div', { class: 'a4-toolbar-slot' }, docActionsBar(ed)),
         ed.noLetterhead
             // FORM_003_V1 — у бланка 003 своя шапка (министерство, учреждение, приказ).
             ? h('div', { class: 'a4-paper f3-paper' },
@@ -401,22 +404,9 @@ function paintPane(pane, root, onNavigate) {
         ...((ed.belowSheet || []).filter(Boolean)),
     );
 
-    const foot = h('div', { class: 'cw-doc-foot' });
-    if (ed.secondaryLabel) {
-        foot.appendChild(h('button', { class: 'btn btn-outline', type: 'button',
-            onclick: () => ed.secondary && ed.secondary() }, ed.secondaryLabel));
-    }
-    if (ed.submitLabel) {
-        foot.appendChild(h('button', {
-            class: 'btn btn-primary', type: 'button',
-            onclick: async (ev) => {
-                const btn = ev.currentTarget;
-                btn.disabled = true;
-                try { await ed.submit(); } finally { btn.disabled = false; }
-            },
-        }, ed.submitLabel));
-    }
-    if (foot.children.length) card.appendChild(foot);
+    // CASE_DOC_ACTIONS_V1 — «Черновик» и «Сохранить» переехали НАВЕРХ, в полосу
+    // действий: две одинаковые пары кнопок (сверху и под листом) означали бы,
+    // что они разные.
     pane.appendChild(card);
 
     // A4_PAGINATE_V1 — владелец: «treat every document as a a4 list, with real

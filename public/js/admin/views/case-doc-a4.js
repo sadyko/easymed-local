@@ -16,7 +16,7 @@
 // вставленного результата). Диагноз — простой текст: он показывается в обзоре,
 // в журнале и в списках, где разметка была бы мусором (то же решение на
 // сервере, rpc/inpatient-reviews.js).
-import { h, clear } from '../ui.js';
+import { h, clear, Icon } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { sanitizeStoredHtml, richIsEmpty } from '../../shared/rich-text.js';
 
@@ -128,6 +128,65 @@ export function sectionLabel(kind, key) {
 export function sectionPlaceholder(key) { return PH[key] || ''; }
 
 /**
+ * ОФОРМЛЕНИЕ ТЕКСТА У САМОГО РАЗДЕЛА.
+ *
+ * CASE_DOC_FORMAT_V1 (2026-09-10) — владелец: «add a rich text toolbar, into a
+ * fields on top, when pressed edit button. make design appealing, using maybe
+ * icons … but do not do sloppy font written text panel».
+ *
+ * Прежняя панель стояла ОДНА на весь лист и была набрана буквами — «B», «I»,
+ * «U», «• •», «1.», «Aa». Буква вместо значка — это не значок, а надпись, и
+ * читается она как отладочная. Здесь у каждого раздела своя кнопка, и по ней
+ * над полем встаёт ряд НАСТОЯЩИХ иконок набора.
+ *
+ * Панель появляется НАД полем и исчезает по второму нажатию: она инструмент, а
+ * не часть документа, и на бумагу не идёт (.no-print).
+ *
+ * @param {HTMLElement} input редактируемая область раздела
+ * @returns {{bar:HTMLElement, toggle:HTMLElement}}
+ */
+export function fieldFormatBar(input) {
+    // mousedown + preventDefault: нажатие на кнопку НЕ уводит курсор из текста,
+    // иначе команда применилась бы к пустому выделению.
+    const run = (cmd, value = null) => (e) => {
+        if (e && e.preventDefault) e.preventDefault();
+        if (input && input.focus) input.focus();
+        try { document.execCommand(cmd, false, value); } catch (err) { /* браузер без execCommand */ }
+    };
+    const tool = (title, icon, cmd) => {
+        const b = h('button', { class: 'a4-fmt-b', type: 'button', title: tr(title), 'aria-label': tr(title) },
+            Icon(icon, { size: 15 }));
+        b.addEventListener('mousedown', run(cmd));
+        return b;
+    };
+    const bar = h('div', { class: 'a4-fmt no-print', role: 'toolbar', 'aria-label': tr('Оформление текста') },
+        tool('Полужирный', 'Bold', 'bold'),
+        tool('Курсив', 'Italic', 'italic'),
+        tool('Подчёркнутый', 'Underline', 'underline'),
+        h('span', { class: 'a4-fmt-sep' }),
+        tool('Маркированный список', 'ListBullet', 'insertUnorderedList'),
+        tool('Нумерованный список', 'ListNumber', 'insertOrderedList'),
+        h('span', { class: 'a4-fmt-sep' }),
+        tool('Убрать оформление', 'TextPlain', 'removeFormat'));
+    // Скрыта СВОЙСТВОМ, а не атрибутом: атрибут h() ставит только у истинных
+    // значений, и панель открывалась бы сразу.
+    bar.hidden = true;
+
+    const toggle = h('button', {
+        class: 'a4-fmt-t no-print', type: 'button',
+        title: tr('Оформление текста'), 'aria-label': tr('Оформление текста'), 'aria-expanded': 'false',
+        onclick: () => {
+            const on = bar.hidden;
+            bar.hidden = !on;
+            toggle.setAttribute('aria-expanded', on ? 'true' : 'false');
+            if (on && input && input.focus) input.focus();
+        },
+    }, Icon('Format', { size: 14 }));
+
+    return { bar, toggle };
+}
+
+/**
  * Раздел листа: подпись и редактируемая область.
  *
  * CASE_DOC_FREE_SEC_V1 (2026-09-09) — ПОДПИСЬ ПЕРЕИМЕНОВЫВАЕТСЯ. Владелец:
@@ -138,10 +197,18 @@ export function sectionPlaceholder(key) { return PH[key] || ''; }
  * Имя, которым назвали раздел, уезжает В ЗАПИСЬ, а не в справочник: документ
  * печатают через год, и он обязан читаться так, как его писали.
  *
+ * CASE_DOC_SEC_MANAGER_V2 (2026-09-10) — РАЗДЕЛ СВОРАЧИВАЕТСЯ В СТРОКУ, как на
+ * листе приёма: выключенная коробка показывает пунктирное «+ Добавить: имя», и
+ * это ОДНА И ТА ЖЕ коробка, а не список где-то сбоку. Владелец показал лист
+ * кабинета: «here is how the sections look like in the doctors workspace.
+ * apply same thing».
+ *
  * @param {(key:string, title:string) => void} [onRename] без него подпись не
  *        правится вовсе (бланк, чтение опубликованного).
+ * @param {() => void} [onAdd] включить раздел (нажатие на свёрнутую строку).
+ * @param {() => void} [onRemove] убрать раздел (крестик в углу коробки).
  */
-export function richSection(kind, key, { title = '', onRename = null } = {}) {
+export function richSection(kind, key, { title = '', onRename = null, onAdd = null, onRemove = null } = {}) {
     const input = h('div', {
         class: 'a4-input', 'data-field': key, contentEditable: 'true',
         'data-ph': tr(sectionPlaceholder(key)),
@@ -154,14 +221,46 @@ export function richSection(kind, key, { title = '', onRename = null } = {}) {
             'aria-label': trf('Переименовать раздел: {name}', { name: shown() }),
         }, shown())
         : h('span', { class: 'a4-sec-tag' }, shown());
-    const sec = h('div', { class: 'a4-sec cd-sec', 'data-sec': key }, tag, input);
+    // CASE_DOC_FORMAT_V1 — своё оформление у каждого раздела: кнопка рядом с
+    // подписью, ряд иконок над полем.
+    const fmt = onRename || onRemove ? fieldFormatBar(input) : null;
+    // Порядок детей — тот же, что у a4Section в кабинете: свёрнутая строка,
+    // подпись, крестик, текст. На нём держится и вся раскладка (CSS прячет
+    // ровно этих детей, когда на коробке стоит a4-sec-off).
+    const sec = h('div', { class: 'a4-sec cd-sec', 'data-sec': key, style: { position: 'relative' } },
+        onAdd
+            ? h('button', {
+                class: 'a4-sec-add', type: 'button',
+                onclick: () => onAdd(),
+            }, trf('+ Добавить: {name}', { name: String(title || '').trim() || tr(sectionLabel(kind, key)) }))
+            : null,
+        tag,
+        fmt ? fmt.toggle : null,
+        onRemove
+            ? h('button', {
+                class: 'a4-sec-x no-print', type: 'button', title: tr('Убрать раздел'),
+                'aria-label': tr('Убрать раздел'), onclick: () => onRemove(),
+            }, '×')
+            : null,
+        fmt ? fmt.bar : null,
+        input);
 
     if (onRename) {
         tag.addEventListener('click', () => {
             const field = h('input', { type: 'text', class: 'a4-sec-name', placeholder: tr('Название раздела') });
             field.value = shown();
             let closed = false;
-            const stop = () => { if (closed) return; closed = true; clear(sec); sec.appendChild(tag); sec.appendChild(input); };
+            // Подменяется РОВНО подпись: коробка держит ещё свёрнутую строку,
+            // крестик и текст, и пересобирать её целиком значило бы потерять их.
+            const swap = (from, to) => {
+                const i = sec.children.indexOf(from);
+                if (i < 0) return;
+                sec.removeChild(from);
+                const rest = sec.children.splice(i);
+                sec.appendChild(to);
+                for (const el of rest) sec.appendChild(el);
+            };
+            const stop = () => { if (closed) return; closed = true; swap(field, tag); };
             const save = () => {
                 if (closed) return;
                 closed = true;
@@ -169,7 +268,7 @@ export function richSection(kind, key, { title = '', onRename = null } = {}) {
                 title = value === tr(sectionLabel(kind, key)) ? '' : value;
                 tag.textContent = shown();
                 tag.setAttribute('aria-label', trf('Переименовать раздел: {name}', { name: shown() }));
-                clear(sec); sec.appendChild(tag); sec.appendChild(input);
+                swap(field, tag);
                 onRename(key, title);
             };
             field.addEventListener('keydown', (e) => {
@@ -177,13 +276,88 @@ export function richSection(kind, key, { title = '', onRename = null } = {}) {
                 if (e.key === 'Escape') { e.preventDefault(); stop(); }
             });
             field.addEventListener('blur', save);
-            clear(sec);
-            sec.appendChild(field);
-            sec.appendChild(input);
+            swap(tag, field);
             field.focus();
         });
     }
     return { sec, input };
+}
+
+/**
+ * ПОЛОСА ДЕЙСТВИЙ НАД ЛИСТОМ: заготовка · печать · черновик · сохранить.
+ *
+ * CASE_DOC_ACTIONS_V1 (2026-09-10) — владелец: «remove this, and please add
+ * template, print, draft, save button instead». На месте панели форматирования
+ * стоят действия НАД ДОКУМЕНТОМ: взять заготовку, напечатать, отложить
+ * черновиком, сохранить. Оформление текста (Ж/К/П, списки, размер) с бумаги
+ * истории болезни не спрашивают.
+ *
+ * Ряд один и тот же на рабочем экране и в окне — иначе «Сохранить» означало бы
+ * в двух местах разное.
+ */
+export function docActionsBar(ed, { onDone = null } = {}) {
+    if (!ed) return null;
+    const bar = h('div', { class: 'cd-acts no-print' });
+    const add = (label, icon, cls, fn) => bar.appendChild(h('button', {
+        class: 'btn btn-sm ' + cls, type: 'button',
+        onclick: async (ev) => {
+            const btn = ev && ev.currentTarget;
+            if (btn) btn.disabled = true;
+            try { const r = await fn(); if (r !== false && onDone) await onDone(); }
+            finally { if (btn) btn.disabled = false; }
+        },
+    }, Icon(icon, { size: 14 }), ' ', tr(label)));
+
+    if (ed.applyTemplate) add('Заготовка', 'Doc', 'btn-outline', () => { ed.applyTemplate(); return false; });
+    if (ed.print) add('Печать', 'Print', 'btn-outline', () => { ed.print(); return false; });
+    bar.appendChild(h('span', { class: 'grow' }));
+    if (ed.secondaryLabel) add(ed.secondaryLabel, 'Save', 'btn-outline', () => { ed.secondary(); return false; });
+    if (ed.submitLabel) add(ed.submitLabel, 'Check', 'btn-primary', () => ed.submit());
+    return bar.children.length ? bar : null;
+}
+
+/**
+ * НАПЕЧАТАТЬ ЛИСТ, КОТОРЫЙ ВИДНО НА ЭКРАНЕ.
+ *
+ * CASE_DOC_ACTIONS_V1 (2026-09-10) — печатается РОВНО та разметка, что нарисована
+ * (a4Sheet с шапкой клиники), теми же таблицами стилей, что и экран. Второй
+ * генератор бумаги разошёлся бы с первым — это уже случалось с бланком
+ * результатов, и печатались два разных документа под одним именем.
+ *
+ * Служебное (кнопки, крестики, свёрнутые строки) помечено .no-print и в окно
+ * печати не попадает.
+ */
+export function docPrintHtml(sheetHtml, { title = '' } = {}) {
+    const safe = String(title || '').replace(/[<>&]/g, '');
+    // Служебное на бумагу не идёт: кнопки действий, крестики разделов и
+    // свёрнутые строки «+ Добавить». Правила ниже — этот список.
+    return `<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<title>${safe}</title>
+<link rel="stylesheet" href="css/admin.css">
+<link rel="stylesheet" href="css/admin-views.css">
+<style>
+  @page { size: A4; margin: 12mm; }
+  body { margin: 0; background: #fff; }
+  .no-print, .a4-sec-add, .a4-sec-x, .cd-acts { display: none !important; }
+  .a4-sec-off { display: none !important; }
+  .a4-paper { box-shadow: none !important; margin: 0 !important; }
+</style></head><body>${sheetHtml}</body></html>`;
+}
+
+/** Открыть окно печати с этим листом. Разметку собирает docPrintHtml. */
+export function printDocSheet(sheetEl, { title = '' } = {}) {
+    if (!sheetEl) return false;
+    const w = window.open('', '_blank', 'width=900,height=1100');
+    if (!w) return false;
+    w.document.open();
+    w.document.write(docPrintHtml(sheetEl.outerHTML, { title }));
+    w.document.close();
+    // Печать зовём ПОСЛЕ загрузки таблиц стилей: без них лист напечатался бы
+    // голым текстом, и это выглядело бы как «печать сломана».
+    try {
+        w.onload = () => { try { w.focus(); w.print(); } catch (e) { /* пользователь напечатает сам */ } };
+    } catch (e) { /* окно закрыли раньше */ }
+    return true;
 }
 
 /**
@@ -203,12 +377,15 @@ export function freeSection({ title = '', html = '', onRemove = null, onEdit = n
     const input = h('div', { class: 'a4-input', contentEditable: 'true', 'data-ph': tr('Текст раздела…') });
     if (html) applyRich(input, html);
     if (onEdit) input.addEventListener('input', onEdit);
+    const fmt = onRemove ? fieldFormatBar(input) : null;
     const sec = h('div', { class: 'a4-sec cd-sec cd-sec-free', style: { position: 'relative' } },
         name,
+        fmt ? fmt.toggle : null,
         onRemove
             ? h('button', { class: 'a4-sec-x no-print', type: 'button', title: tr('Убрать раздел'),
                 'aria-label': tr('Убрать раздел'), onclick: () => onRemove(sec) }, '×')
             : null,
+        fmt ? fmt.bar : null,
         input);
     return { sec, input, name };
 }

@@ -58,6 +58,14 @@ export const ICON_MAP = Object.freeze({
     // --- правка ---
     Copy:         'Edit/Copy',
     Edit:         'Edit/Edit_Pencil_01',
+    // CASE_DOC_FORMAT_V1 — оформление текста прямо в разделе документа.
+    Bold:         'Edit/Bold',
+    Italic:       'Edit/Italic',
+    Underline:    'Edit/Underline',
+    ListBullet:   'Edit/List_Unordered',
+    ListNumber:   'Edit/List_Ordered',
+    TextPlain:    'Edit/Text',
+    Format:       'Edit/Font',
     Layers:       'Edit/Layers',
     Minus:        'Edit/Remove_Minus',
     Move:         'Edit/Move',

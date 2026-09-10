@@ -6068,26 +6068,48 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
     display: grid; place-items: center; border: 0; border-radius: var(--r-sm);
     background: none; color: var(--ink-400); font-size: 17px; line-height: 1; cursor: pointer; }
 .a4-sec-x:hover { background: var(--crit-50); color: var(--crit-700); }
+/* CASE_DOC_ACTIONS_V1 — полоса действий над листом: заготовка и печать
+   слева, черновик и сохранение справа. Формат текста отсюда убран. */
+.cd-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cd-acts .btn { min-height: 40px; }
 .cd-free { display: flex; flex-direction: column; }
-/* CASE_DOC_SEC_MANAGER_V1 — полоса «Разделы» над листом: что включено, то
-   чипом с крестиком; что выключено — в списке «добавить». Тот же приём, что
-   над листом приёма в кабинете врача. */
-.cd-secbar { display: flex; flex-wrap: wrap; align-items: center; gap: 7px;
-    margin: 0 0 12px; padding: 10px 12px; background: var(--ink-25);
-    border: 1px solid var(--ink-100); border-radius: var(--r-md); }
-.cd-secbar-l { font-size: 12.5px; font-weight: 700; color: var(--ink-500);
-    text-transform: uppercase; letter-spacing: .04em; margin-right: 2px; }
-.cd-secchip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 5px 3px 10px;
-    background: var(--primary-50); border: 1px solid var(--primary-100);
-    border-radius: var(--r-pill); font-size: 12.5px; font-weight: 600; color: var(--ink-800); }
-.cd-secchip-x { border: 0; background: transparent; cursor: pointer; color: var(--ink-500);
-    font-size: 15px; line-height: 1; padding: 0 2px; }
-.cd-secchip-x:hover { color: var(--crit-700); }
-.cd-secadd { height: 30px; padding: 0 8px; border: 1px dashed var(--ink-300);
-    border-radius: var(--r-pill); font-size: 12.5px; color: var(--primary-700);
-    background: var(--white); cursor: pointer; }
-/* Спрятанный раздел не занимает места и не печатается. */
-.cd-sheet .a4-sec-off { display: none; }
+/* CASE_DOC_SEC_MANAGER_V2 — ВЫКЛЮЧЕННЫЙ РАЗДЕЛ ЕСТЬ СТРОКА «+ Добавить: …».
+   Владелец показал лист приёма: список разделов там и есть сам лист, а не
+   полоса сбоку. Правила те же, что инжектит кабинет (ws3-style), но своим
+   классом — чтобы лист истории болезни не зависел от того, открывали ли в этой
+   вкладке кабинет. */
+.cd-sec > .a4-sec-add { display: none; }
+.cd-sec.a4-sec-off > .a4-sec-tag,
+.cd-sec.a4-sec-off > .a4-sec-x,
+.cd-sec.a4-sec-off > .a4-input { display: none !important; }
+.cd-sec.a4-sec-off > .a4-sec-add { display: block; width: 100%; text-align: left;
+    padding: 8px 12px; margin: 3px 0; border: 1px dashed var(--ink-200);
+    border-radius: var(--r-sm); background: var(--ink-25); color: var(--ink-500);
+    font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.cd-sec.a4-sec-off > .a4-sec-add:hover { border-color: var(--primary-300); color: var(--primary-700); }
+/* CASE_DOC_FORMAT_V1 — оформление текста у САМОГО раздела: кнопка рядом с
+   подписью, ряд иконок над полем. Панель это инструмент, а не часть
+   документа: на бумагу не идёт и по второму нажатию убирается. */
+.a4-fmt-t { position: absolute; top: 0; right: 30px; width: 28px; height: 28px;
+    display: grid; place-items: center; border: 0; border-radius: var(--r-sm);
+    background: transparent; color: var(--ink-400); cursor: pointer; }
+.a4-fmt-t:hover { background: var(--primary-50); color: var(--primary-700); }
+.a4-fmt-t[aria-expanded="true"] { background: var(--primary-100); color: var(--primary-800, #145c56); }
+.a4-fmt { display: inline-flex; align-items: center; gap: 2px; margin: 0 0 6px;
+    padding: 4px; border: 1px solid var(--ink-100); border-radius: var(--r-pill);
+    background: var(--white); box-shadow: var(--shadow-sm); }
+.a4-fmt-b { width: 32px; height: 32px; display: grid; place-items: center;
+    border: 0; border-radius: var(--r-pill); background: transparent;
+    color: var(--ink-600); cursor: pointer; transition: background-color 120ms ease, color 120ms ease; }
+.a4-fmt-b:hover { background: var(--primary-50); color: var(--primary-700); }
+.a4-fmt-b:active { background: var(--primary-100); }
+.a4-fmt-b:focus-visible { outline: 2px solid var(--primary-500); outline-offset: -2px; }
+.a4-fmt-sep { width: 1px; height: 18px; margin: 0 4px; background: var(--ink-100); }
+.cd-sec.a4-sec-off > .a4-fmt, .cd-sec.a4-sec-off > .a4-fmt-t { display: none !important; }
+.cd-sec > .a4-sec-x { position: absolute; top: 2px; right: 2px; width: 28px; height: 28px;
+    display: grid; place-items: center; border: 0; border-radius: var(--r-sm);
+    background: transparent; color: var(--ink-300); font-size: 15px; line-height: 1; cursor: pointer; }
+.cd-sec > .a4-sec-x:hover { color: var(--crit-600); background: var(--ink-50); }
 .cd-sec-free { padding-right: 32px; }
 
 /* ── Экран помещается: прокручивается только лист (владелец: «make everything

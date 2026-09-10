@@ -47,7 +47,8 @@
 // дорогой вид дубля.
 
 import { supabase } from '../../supabase.js';
-import { sectionsFor, sectionLabel, richSection, freeSection, richToolbar, readRich, applyRich, RICH_KEYS, insertBlock, fireInput, caseDocBlank } from './case-doc-a4.js';   // CASE_DOC_A4_V1 / CASE_DX_PICK_V1 / CASE_DOC_BLANK_V1
+import { sectionsFor, sectionLabel, richSection, freeSection, richToolbar, printDocSheet, docActionsBar, readRich, applyRich, RICH_KEYS, insertBlock, fireInput, caseDocBlank } from './case-doc-a4.js';
+import { openTemplateLibraryModal } from './service-workspace.js';   // CASE_DOC_TEMPLATES_V1 — одна библиотека шаблонов на кабинет и стационар   // CASE_DOC_A4_V1 / CASE_DX_PICK_V1 / CASE_DOC_BLANK_V1
 import { loadDocSettings } from './doc-settings.js?v=noqr1';   // CASE_DOC_BLANK_V1 — бланк клиники из «Документов»
 import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — список диагнозов с ролями
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
@@ -859,7 +860,11 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     // остаётся в своей колонке и возвращает раздел на экран при следующем
     // открытии (то же правило, что у приёма).
     const ALL_SECS = RICH_KEYS.slice();                 // complaints, objective, plan, body
-    const secOn = new Set(secKeys.filter((k) => k !== 'diagnosis'));
+    // ВСЕ РАЗДЕЛЫ НАЧИНАЮТ СВЁРНУТЫМИ — ровно как на листе приёма
+    // (SECTIONS_ON_DEMAND_V1): документ открывается строками «+ Добавить: …», и
+    // врач открывает те, которые пишет. Написанное возвращает свой раздел само
+    // — и черновик, и бланк клиники (см. загрузку ниже).
+    const secOn = new Set();
     const madeSecs = {};
 
     const sectionEls = ALL_SECS.map((key) => {
@@ -867,49 +872,27 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
             onRename: readOnly ? null : (k, title) => {
                 if (title) secTitles[k] = title; else delete secTitles[k];
             },
+            onAdd: readOnly ? null : () => { secOn.add(key); syncSecs(); },
+            onRemove: readOnly ? null : () => { secOn.delete(key); syncSecs(); },
         });
         rich[key] = made.input;
         madeSecs[key] = made.sec;
         return made.sec;
     });
 
-    // Полоса «Разделы» — та же, что над листом приёма: что включено, то стоит
-    // чипом с крестиком; что выключено — в списке «добавить».
-    const secBar = readOnly ? null : h('div', { class: 'cd-secbar no-print' });
+    // Выключенный раздел показывает пунктирное «+ Добавить: имя» — той же
+    // коробкой, что и включённый (CASE_DOC_SEC_MANAGER_V2). Отдельной полосы с
+    // чипами больше нет: владелец показал лист кабинета, где список разделов и
+    // есть сам лист.
     const syncSecs = () => {
         for (const key of ALL_SECS) {
             const el = madeSecs[key];
             if (!el) continue;
             // Класс ставится СТРОКОЙ, а не classList.toggle: он же читается
-            // тестом, и «спрятан ли раздел» должно быть видно в разметке.
+            // тестом, и «свёрнут ли раздел» должно быть видно в разметке.
             const cls = String(el.className || '').split(/\s+/).filter((c) => c && c !== 'a4-sec-off');
             if (!secOn.has(key)) cls.push('a4-sec-off');
             el.className = cls.join(' ');
-        }
-        if (!secBar) return;
-        clear(secBar);
-        secBar.appendChild(h('span', { class: 'cd-secbar-l' }, tr('Разделы')));
-        for (const key of ALL_SECS) {
-            if (!secOn.has(key)) continue;
-            const name = secTitles[key] || tr(sectionLabel(kind, key));
-            secBar.appendChild(h('span', { class: 'cd-secchip' }, name,
-                h('button', {
-                    type: 'button', class: 'cd-secchip-x',
-                    title: tr('Убрать раздел'), 'aria-label': trf('Убрать раздел: {name}', { name }),
-                    onclick: () => { secOn.delete(key); syncSecs(); },
-                }, '×')));
-        }
-        const off = ALL_SECS.filter((k) => !secOn.has(k));
-        if (off.length) {
-            secBar.appendChild(h('select', {
-                class: 'cd-secadd',
-                'aria-label': tr('Добавить раздел'),
-                onchange: (e) => {
-                    const v = e.target && e.target.value;
-                    if (v) { secOn.add(v); syncSecs(); }
-                },
-            }, h('option', { value: '' }, '+ ' + tr('Добавить раздел')),
-                ...off.map((k) => h('option', { value: k }, secTitles[k] || tr(sectionLabel(kind, k))))));
         }
     };
 
@@ -933,8 +916,16 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
             onclick: () => { const made = addFree('', ''); if (made.name.focus) made.name.focus(); },
         }, Icon('Plus', { size: 13 }), ' ', tr('Свой раздел')));
 
-    const sheet = h('div', { class: 'cd-sheet' }, secBar, ...sectionEls, freeHost, addBtn);
+    const sheet = h('div', { class: 'cd-sheet' }, ...sectionEls, freeHost, addBtn);
     syncSecs();
+    // CASE_DOC_ACTIONS_V1 (2026-09-10) — НАД ЛИСТОМ ДЕЙСТВИЯ, А НЕ ФОРМАТИРОВАНИЕ.
+    //
+    // Владелец: «remove this, and please add template, print, draft, save
+    // button instead». Панель Ж/К/П со списками и размером шрифта — это
+    // оформление текста; над документом истории болезни ищут другое: взять
+    // заготовку, напечатать, отложить черновиком, сохранить. Сама панель
+    // остаётся объектом (её ищет правая панель «вставить в документ»), но на
+    // экран не выводится.
     const toolbar = richToolbar(sheet);
 
     // ЧТО ПОКАЗАТЬ В ПОЛЯХ — зависит от того, зачем окно открыли.
@@ -1004,8 +995,14 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         else if (!isView && !isCorrection) {
             const blank = caseDocBlank(loadDocSettings(), kind);
             for (const k of RICH_KEYS) {
-                if (rich[k] && blank[k] && !readRich(rich[k])) applyRich(rich[k], blank[k]);
+                if (rich[k] && blank[k] && !readRich(rich[k])) {
+                    applyRich(rich[k], blank[k]);
+                    // Раздел, в который бланк что-то положил, открыт: текст в
+                    // свёрнутом разделе — текст, которого никто не увидит.
+                    secOn.add(k);
+                }
             }
+            syncSecs();
         }
         if (isView) {
             for (const f of freeSecs) {
@@ -1110,7 +1107,44 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         toast(tr('Черновик осмотра сохранён.'), 'ok');
     };
 
+    /**
+     * ЗАГОТОВКА — ОКНО БИБЛИОТЕКИ ШАБЛОНОВ, то же самое, что у кабинета врача.
+     *
+     * CASE_DOC_TEMPLATES_V1 (2026-09-10) — владелец: «should open dialogue
+     * window, like this. and work actually». Кнопка молча клала бланк клиники и
+     * ничего не показывала; библиотека умеет всё, чего от неё ждут: поиск,
+     * «мои/общие», создание, правка, удаление. Заводить для стационара вторую
+     * такую же значило бы обречь их разойтись.
+     *
+     * Шаблон ложится в ПУСТЫЕ разделы и открывает их: заготовка не затирает
+     * написанное. Бланк клиники (его правят в «Документах») остался
+     * подстановкой при открытии нового документа и никуда не делся.
+     */
+    const applyTemplate = () => openTemplateLibraryModal(null, {
+        dt: 2,
+        apply: (fields) => {
+            let put = 0;
+            for (const k of RICH_KEYS) {
+                const html = fields && fields[k];
+                if (!rich[k] || !html) continue;
+                if (readRich(rich[k])) continue;   // написанное сильнее заготовки
+                applyRich(rich[k], html);
+                secOn.add(k);
+                put += 1;
+            }
+            syncSecs();
+            toast(put
+                ? trf('Шаблон вставлен: разделов — {n}.', { n: put })
+                : tr('Все разделы шаблона уже заполнены — написанное не затирается.'), put ? 'ok' : 'fail');
+        },
+    });
+
     return {
+        // CASE_DOC_ACTIONS_V1 — четыре действия документа отдаются наружу
+        // готовыми: экран ставит их полосой над листом, окно — тем же рядом.
+        applyTemplate,
+        print: () => printDocSheet(sheet.parentNode && String(sheet.parentNode.className || '').includes('a4-paper')
+            ? sheet.parentNode : sheet, { title: reviewTitle(kind, mode, docTitle) }),
         // CASE_DOC_A4_V1 — панель форматирования и вставка блока отдаются
         // НАРУЖУ: рабочий экран ставит панель НАД листом, а правая панель
         // «Вставить в документ» кладёт блок туда, где стоит курсор.
@@ -1144,7 +1178,10 @@ export function openAdmissionReviewModal(opts = {}) {
     const dxField = ed.diagnosisInput
         ? field(tr('Диагноз'), dxEditor({ carrier: ed.diagnosisInput, required: ed.diagnosisRequired }), { required: ed.diagnosisRequired })
         : null;
-    modal(ed.title, ed.icon, [ed.patientCard, ed.toolbar, dxField, ...ed.fields].filter(Boolean), ed.submitLabel, ed.submit, {
+    // CASE_DOC_ACTIONS_V1 — в окне тот же ряд действий, что на рабочем экране;
+    // «Сохранить» и «Черновик» остаются и в подвале окна — это его собственные
+    // кнопки, и убирать их у окна нельзя.
+    modal(ed.title, ed.icon, [ed.patientCard, docActionsBar({ applyTemplate: ed.applyTemplate, print: ed.print }), dxField, ...ed.fields].filter(Boolean), ed.submitLabel, ed.submit, {
         width: 720,
         secondaryLabel: ed.secondaryLabel,
         onSecondary: ed.secondary,

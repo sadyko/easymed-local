@@ -179,6 +179,117 @@ test('CASE_DOC_FREE_SEC_V1: подпись раздела переименовы
     assert.equal(a4.richSection('primary', 'objective').sec.children[0].tagName, 'SPAN');
 });
 
+// CASE_DOC_SEC_MANAGER_V2 — владелец показал лист кабинета: «here is how the
+// sections look like in the doctors workspace. apply same thing». Выключенный
+// раздел — это ТА ЖЕ коробка, свёрнутая в строку «+ Добавить: имя».
+test('CASE_DOC_SEC_MANAGER_V2: раздел сворачивается в строку «+ Добавить», как на листе приёма', () => {
+    const acts = [];
+    const made = a4.richSection('round', 'body', {
+        onAdd: () => acts.push('add'), onRemove: () => acts.push('remove'),
+    });
+
+    // Порядок детей коробки — тот же, что у a4Section в кабинете: на нём
+    // держится вся раскладка, потому что прячет их CSS по позиции.
+    const kinds = made.sec.children.map((c) => String(c.className || c.tagName));
+    const at = (cls) => kinds.findIndex((c) => c.split(/\s+/).includes(cls));
+    assert.equal(at('a4-sec-add'), 0, 'свёрнутая строка должна быть первой: ' + kinds.join(', '));
+    assert.ok(at('a4-sec-tag') > at('a4-sec-add'), 'подпись должна идти за свёрнутой строкой');
+    assert.ok(at('a4-sec-x') > at('a4-sec-tag'), 'крестик должен идти за подписью');
+    assert.equal(at('a4-input'), kinds.length - 1, 'текст должен идти последним: ' + kinds.join(', '));
+
+    const addRow = made.sec.children[at('a4-sec-add')];
+    assert.match(textOf(addRow), /Добавить/, 'свёрнутая строка не называет, что она добавит');
+    assert.match(textOf(addRow), /Дополнительно/, 'свёрнутая строка не называет РАЗДЕЛ');
+    addRow.click();
+    made.sec.children[at('a4-sec-x')].click();
+    assert.deepEqual(acts, ['add', 'remove'], 'строка и крестик должны звать включение и выключение');
+
+    // Без обработчиков — ни строки, ни крестика: бланк и чтение их не рисуют.
+    const plain = a4.richSection('round', 'body');
+    assert.equal(plain.sec.children.length, 2,
+        'у нередактируемого раздела остаются только подпись и текст: ' + plain.sec.children.map((c) => c.className).join(', '));
+});
+
+// CASE_DOC_ACTIONS_V1 — владелец: «remove this [панель форматирования], and
+// please add template, print, draft, save button instead».
+test('CASE_DOC_ACTIONS_V1: над листом четыре действия документа, а не форматирование', () => {
+    const calls = [];
+    const bar = a4.docActionsBar({
+        applyTemplate: () => calls.push('template'),
+        print: () => calls.push('print'),
+        secondaryLabel: 'Сохранить черновик', secondary: () => calls.push('draft'),
+        submitLabel: 'Опубликовать документ', submit: () => calls.push('publish'),
+    });
+    assert.ok(bar, 'полосы действий нет');
+    const names = walk(bar).filter((e) => e.tagName === 'BUTTON').map((b) => textOf(b).trim());
+    assert.equal(names.length, 4, 'действий должно быть четыре: ' + names.join(' | '));
+    assert.match(names[0], /Заготовка/);
+    assert.match(names[1], /Печать/);
+    assert.match(names[2], /черновик/i);
+    assert.match(names[3], /Опубликовать/);
+
+    // Ни одной кнопки форматирования: ни Ж/К/П, ни списков, ни размера.
+    for (const n of names) assert.ok(!/^(B|I|U|Aa|1.)$/.test(n), 'вернулось форматирование: ' + n);
+
+    walk(bar).filter((e) => e.tagName === 'BUTTON').forEach((b) => b.click());
+    assert.deepEqual(calls, ['template', 'print', 'draft', 'publish']);
+});
+
+// CASE_DOC_FORMAT_V1 — владелец: «add a rich text toolbar, into a fields on
+// top, when pressed edit button … but do not do sloppy font written text panel».
+test('CASE_DOC_FORMAT_V1: у раздела своя панель оформления — скрытая, иконками, над полем', () => {
+    const made = a4.richSection('primary', 'objective', { onRename: () => {}, onRemove: () => {} });
+    const kids = made.sec.children.map((c) => String(c.className || ''));
+    const iBar = kids.findIndex((c) => c.includes('a4-fmt') && !c.includes('a4-fmt-t'));
+    const iInput = kids.findIndex((c) => c.includes('a4-input'));
+    assert.ok(iBar > -1, 'панели оформления у раздела нет');
+    assert.ok(iBar < iInput, 'панель обязана стоять НАД полем: ' + kids.join(', '));
+
+    const bar = made.sec.children[iBar];
+    assert.equal(bar.hidden, true, 'панель должна быть скрыта, пока её не позвали');
+    const toggle = made.sec.children.find((c) => String(c.className || '').includes('a4-fmt-t'));
+    assert.ok(toggle, 'кнопки вызова панели нет');
+    toggle.click();
+    assert.equal(bar.hidden, false, 'кнопка не открыла панель');
+    assert.equal(toggle.attrs['aria-expanded'], 'true');
+    toggle.click();
+    assert.equal(bar.hidden, true, 'второе нажатие не убрало панель');
+
+    // ИКОНКИ, а не буквы: у кнопки нет собственного текста, но есть имя.
+    const tools = walk(bar).filter((e) => e.tagName === 'BUTTON');
+    assert.equal(tools.length, 6, 'инструментов должно быть шесть: ' + tools.length);
+    for (const b of tools) {
+        // Прежняя панель была набрана БУКВАМИ: «B», «I», «U», «• •», «1.», «Aa».
+        // Буква вместо значка читается как отладочная надпись — владелец: «do
+        // not do sloppy font written text panel».
+        const own = textOf(b).trim();
+        assert.ok(!/^(B|I|U|Aa|1\.|• •)$/.test(own), 'кнопка набрана буквами вместо значка: ' + own);
+        assert.ok(own.startsWith('<svg'), 'в кнопке оформления нет значка набора');
+        assert.ok((b.getAttribute('aria-label') || '').length > 2, 'у кнопки оформления нет имени');
+    }
+    assert.ok(String(bar.className).includes('no-print'), 'панель оформления пойдёт на бумагу');
+});
+
+test('CASE_DOC_ACTIONS_V1: печать берёт ТОТ ЖЕ лист и прячет служебное', () => {
+    const html = a4.docPrintHtml('<div class="a4-paper"><b>Осмотр</b></div>', { title: 'Первичный осмотр' });
+    assert.match(html, /Первичный осмотр/, 'у печатной страницы нет заголовка');
+    assert.match(html, /a4-paper/, 'на бумагу не попал сам лист');
+    assert.ok(html.includes('css/admin.css'), 'печать без таблицы стилей — голый текст');
+    assert.ok(html.includes('css/admin-views.css'), 'печать без таблицы стилей документа');
+    // Служебное скрыто: кнопки, крестики, свёрнутые строки, полоса действий.
+    for (const cls of ['no-print', 'a4-sec-add', 'a4-sec-x', 'cd-acts', 'a4-sec-off']) {
+        assert.ok(html.includes('.' + cls), 'на бумаге осталось служебное: ' + cls);
+    }
+    assert.ok(html.includes('@page { size: A4'), 'печать не задаёт лист A4');
+});
+
+test('CASE_DOC_ACTIONS_V1: чтение опубликованного не показывает ни черновика, ни сохранения', () => {
+    const bar = a4.docActionsBar({ print: () => {} });
+    const names = walk(bar).filter((e) => e.tagName === 'BUTTON').map((b) => textOf(b).trim());
+    assert.deepEqual(names.length, 1, 'у чтения остаётся только печать: ' + names.join(' | '));
+    assert.match(names[0], /Печать/);
+});
+
 test('CASE_DOC_FREE_SEC_V1: свой раздел бывает и без имени, и убирается крестиком', () => {
     const removed = [];
     const made = a4.freeSection({ title: 'Осмотр стопы', html: '<p>Пульсация</p>', onRemove: (box) => removed.push(box) });
@@ -192,7 +303,7 @@ test('CASE_DOC_FREE_SEC_V1: свой раздел бывает и без име�
     assert.equal(bare.name.value, '');
     assert.ok(String(bare.name.attrs.placeholder || '').length > 0, 'у поля имени нет подсказки');
 
-    const x = made.sec.children.find((c) => c.tagName === 'BUTTON');
+    const x = made.sec.children.find((c) => String(c.className || '').split(/\s+/).includes('a4-sec-x'));
     assert.ok(x, 'убрать свой раздел нечем');
     x.click();
     assert.deepEqual(removed, [made.sec]);
