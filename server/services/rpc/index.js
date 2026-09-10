@@ -46,7 +46,7 @@ import { cashierReport } from './cashier-report.js';   // CASHIER_REPORT_V1
 import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
 import { licenceStatus, licenceUnlock, licenceEnroll, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
 import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRecentCalls, telephonyDispositions } from './telephony.js';   // TELEPHONY_V1 / TELEPHONY_ROUTING_V1
-import { lisProfiles, lisRestart, lisMessageAttach, lisMessageDismiss } from './lis.js';   // LIS_INGEST_V1
+import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss } from './lis.js';   // LIS_INGEST_V1
 import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
 import { backupList, backupCreate, backupRestore, factoryReset } from './backup.js';   // SYSTEM_SETTINGS_V1
@@ -424,6 +424,7 @@ export const RPC = {
   // выразить. lis_restart async — как telephony_test выше.
   lis_profiles:             (db, args, user) => lisProfiles(db, args, user),
   lis_restart:              (db, args, user) => lisRestart(db, args, user),
+  lis_recent:               (db, args, user) => lisRecent(db, args, user),
   lis_message_attach:       (db, args, user) => lisMessageAttach(db, args, user),
   lis_message_dismiss:      (db, args, user) => lisMessageDismiss(db, args, user),
 

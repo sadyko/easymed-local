@@ -1,17 +1,21 @@
-// LIS_INGEST_V1 — поднять слушатели анализаторов по включённым устройствам.
+// LIS_INGEST_V1 / LIS_AUTODISCOVER_V1 — слушатели анализаторов.
+//
+// Порт по умолчанию слушается ВСЕГДА, даже когда у клиники не заведено ни
+// одного прибора. Это решение владельца: «we should not setup anything» —
+// анализатор обязан появиться в списке сам, как только заговорил. Пока порт
+// открывался только под заведённый прибор, наладка упиралась в шаг, который
+// инженер не мог сделать заранее: он не знал ни адреса прибора, ни того, как
+// тот себя называет.
 //
 // ОДИН слушатель на ЗАНЯТЫЙ ПОРТ, а не один на устройство: два прибора,
 // настроенных на 2575, иначе подрались бы за него, и второй молча не поднялся
 // бы — а молча неработающий приём результатов хуже явно ненастроенного.
-//
-// Какому устройству принадлежит пришедшее сообщение:
-//   1. по адресу отправителя, если у устройства заполнен host;
-//   2. иначе — по единственному включённому устройству на этом порту;
-//   3. иначе устройство не определено: сообщение сохраняется с device_id = NULL
-//      и видно в лотке. Лечится тем, что клиника проставляет host или разводит
-//      приборы по разным портам.
 import { startMllpServer } from './mllp.js';
 import { ingestMessage } from './ingest.js';
+import { ensureDevice } from './discover.js';
+import { parseMessage } from './hl7.js';
+
+export const DEFAULT_PORT = 2575;
 
 let running = [];
 
@@ -26,11 +30,11 @@ export async function startLisListeners(db, { log = console.log } = {}) {
   }
 
   const devices = db.prepare("SELECT * FROM lab_devices WHERE enabled = 1 AND transport = 'mllp'").all();
-  if (!devices.length) return [];
 
-  const byPort = new Map();
+  // Порт по умолчанию есть в списке всегда — даже с пустой клиникой.
+  const byPort = new Map([[Number(process.env.LIS_PORT) || DEFAULT_PORT, []]]);
   for (const d of devices) {
-    const port = d.port || 2575;
+    const port = d.port || DEFAULT_PORT;
     if (!byPort.has(port)) byPort.set(port, []);
     byPort.get(port).push(d);
   }
@@ -42,13 +46,38 @@ export async function startLisListeners(db, { log = console.log } = {}) {
         log,
         onMessage: async (text, peer) => {
           const ip = normalizeIp(peer);
-          let device = list.find((d) => d.host && normalizeIp(d.host) === ip);
-          if (!device && list.length === 1) device = list[0];
+
+          // Известный прибор по адресу — самый частый и самый дешёвый случай.
+          let device = list.find((d) => d.host && normalizeIp(d.host) === ip) || null;
+
+          if (!device) {
+            // Как прибор себя назвал. Разбор может не удаться — тогда прибор
+            // не определяем, но сообщение всё равно сохранится в лотке
+            // (инвариант 2): мусор на порту не должен заводить строк.
+            let sendingApp = '';
+            try { sendingApp = parseMessage(text).sendingApp || ''; } catch { /* мусор — прибор не заводим */ }
+
+            if (sendingApp || list.length !== 1) {
+              const found = ensureDevice(db, { sendingApp, peer: ip, port });
+              device = found.device;
+              if (found.created) {
+                log(`LIS: обнаружен анализатор «${device.name}» (${ip || 'адрес неизвестен'}), порт ${port}`);
+                // Список этого слушателя пополняем на лету: следующее сообщение
+                // с того же адреса найдётся сразу, без похода в базу.
+                list.push(device);
+              }
+            } else {
+              device = list[0];
+            }
+          }
+
           return ingestMessage(db, text, ip, device ? device.id : null);
         },
       });
       running.push(srv);
-      log(`LIS: порт ${srv.port} слушает (${list.map((d) => d.name).join(', ')})`);
+      log(list.length
+        ? `LIS: порт ${srv.port} слушает (${list.map((d) => d.name).join(', ')})`
+        : `LIS: порт ${srv.port} слушает, ждёт первый анализатор`);
     } catch (e) {
       // Приложение НЕ роняем: неподнявшийся слушатель — это неработающий
       // анализатор, а не неработающая клиника. Регистратура, касса и приём

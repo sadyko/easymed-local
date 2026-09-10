@@ -44,6 +44,10 @@ export function parseMessage(text) {
   // 'ORU^R01'.
   const type = comp(mshF[8] || '').slice(0, 2).filter(Boolean).join('^');
   const controlId = mshF[9] || '';
+  // MSH-3 — как прибор себя называет («BC-5300»). На этом держится
+  // самоопределение: клиника не должна заводить анализатор руками, чтобы он
+  // появился в списке.
+  const sendingApp = comp(mshF[2] || '')[0].trim();
 
   if (type === 'QRY^Q02') {
     // Прибор спрашивает рабочий список для отсканированной пробирки. Полезно
@@ -74,7 +78,7 @@ export function parseMessage(text) {
     }
   }
 
-  return { type, controlId, sampleId, observations, sep: { fieldSep, compSep, repSep, escChar, subSep } };
+  return { type, controlId, sendingApp, sampleId, observations, sep: { fieldSep, compSep, repSep, escChar, subSep } };
 }
 
 /**

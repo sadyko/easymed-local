@@ -40,18 +40,31 @@ function liveness(lastSeen) {
     return { kind: 'warn', text: trf('молчит с {when}', { when: fmtDateTime(lastSeen) }) };
 }
 
+// Живая лента опрашивает сервер, пока экран открыт. Таймер модульный и гасится
+// при следующем монтировании: иначе уход на другую вкладку оставлял бы за собой
+// работающий опрос, и через десяток переходов их было бы десять.
+let liveTimer = null;
+const LIVE_MS = 5000;
+
+export function stopLabDevicesLive() {
+    if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+}
+
 export async function mountLabDevices(container) {
+    stopLabDevicesLive();
     clear(container);
 
-    const state = { devices: [], profiles: [], messages: [], loadError: null };
+    const state = { devices: [], profiles: [], messages: [], recent: [], loadError: null };
 
     const devicesCard = h('div', { class: 'card', style: { marginBottom: '16px' } });
     const formCard = h('div', { class: 'card', style: { marginBottom: '16px', display: 'none' } });
+    const liveCard = h('div', { class: 'card', style: { marginBottom: '16px' } });
     const trayCard = h('div', { class: 'card' });
     // appendChild, а не append: так во всём остальном коде, и тестовый DOM
     // (lab-panels-mode.test.mjs) реализует именно его.
     container.appendChild(devicesCard);
     container.appendChild(formCard);
+    container.appendChild(liveCard);
     container.appendChild(trayCard);
 
     // ---------- загрузка ----------
@@ -61,16 +74,19 @@ export async function mountLabDevices(container) {
         // Ошибки ЗАХВАТЫВАЮТСЯ, а не отбрасываются: экран без приборов и экран,
         // который не смог их прочитать, выглядели бы одинаково — а это разные
         // беды, и лечатся они по-разному.
-        const [devRes, msgRes, profRes] = await Promise.all([
+        const [devRes, msgRes, profRes, recentRes] = await Promise.all([
             supabase.from('lab_devices').select('*').order('name'),
             supabase.from('lab_device_messages').select('*').is('resolved_at', null).order('received_at', { ascending: false }).limit(100),
             supabase.rpc('lis_profiles', {}),
+            supabase.rpc('lis_recent', { limit: 30 }),
         ]);
         if (devRes.error) state.loadError = devRes.error.message || String(devRes.error);
         state.devices = devRes.data || [];
         state.messages = (msgRes.data || []).filter((m) => m.status !== 'applied');
         state.profiles = profRes.data || [];
+        state.recent = recentRes.data || [];
         paintDevices();
+        paintLive();
         paintTray();
     }
 
@@ -95,7 +111,7 @@ export async function mountLabDevices(container) {
             devicesCard.appendChild(h('div', { class: 'empty', style: { padding: '34px 20px' } },
                 h('p', null, tr('Приборов пока нет.')),
                 h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
-                    tr('Добавьте анализатор, затем в «Панелях» выберите его у нужной панели и подтвердите поля показателей.'))));
+                    tr('Заводить прибор заранее не нужно: запустите пробу на анализаторе, и он появится здесь сам. Дальше — выберите его у панели в «Панелях» и подтвердите поля показателей.'))));
             return;
         }
 
@@ -105,7 +121,15 @@ export async function mountLabDevices(container) {
             const live = liveness(d.last_seen_at);
             tb.appendChild(h('tr', null,
                 h('td', { style: { fontWeight: 600 } }, d.name),
-                h('td', { class: 'muted' }, p ? p.vendor + ' ' + p.model : trf('{key} — профиль не найден', { key: d.profile })),
+                h('td', { class: 'muted' },
+                    p ? p.vendor + ' ' + p.model
+                      : (d.profile ? trf('{key} — профиль не найден', { key: d.profile }) : tr('модель не выбрана')),
+                    // Найденный прибор: модель ПОДОБРАНА по тому, как он себя
+                    // назвал. Это догадка, и лаборант обязан её увидеть прежде,
+                    // чем привяжет прибор к панели.
+                    d.discovered
+                        ? h('div', null, Tag(tr('найден сам — проверьте модель'), { kind: 'warn' }))
+                        : null),
                 h('td', { class: 'cell-mono', style: { fontSize: '12.5px' } },
                     d.transport === 'mllp'
                         ? trf('{host}:{port}', { host: d.host || tr('любой адрес'), port: d.port || 2575 })
@@ -125,6 +149,64 @@ export async function mountLabDevices(container) {
 
         devicesCard.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '10px' } },
             tr('Колонка «Связь» — единственный способ заметить, что прибор перестал присылать результаты.')));
+    }
+
+    // ---------- живая лента ----------
+    //
+    // Отвечает не на «настроен ли прибор», а на вопрос, который лаборант задаёт
+    // на самом деле: «мою пробу приняли, и чья она?». Поэтому строка идёт
+    // связкой «время → номер пробы → ПАЦИЕНТ → значения»: номер пробы сам по
+    // себе человеку не говорит ничего.
+
+    function paintLive() {
+        clear(liveCard);
+        liveCard.appendChild(h('div', { class: 'card-header' },
+            h('h3', null, tr('Что приходит с приборов')),
+            h('span', { class: 'grow' }),
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('обновляется само'))));
+
+        if (!state.recent.length) {
+            liveCard.appendChild(h('div', { class: 'empty', style: { padding: '30px 20px' } },
+                h('p', null, tr('Приборы пока ничего не присылали.')),
+                h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
+                    tr('Запустите пробу на анализаторе — он появится здесь сам, заводить его заранее не нужно.'))));
+            return;
+        }
+
+        const tb = h('tbody');
+        for (const r of state.recent) {
+            const vals = r.values || [];
+            const valueCell = vals.length
+                ? h('span', { style: { display: 'inline-flex', gap: '6px', flexWrap: 'wrap' } },
+                    ...vals.slice(0, 8).map((v) => Tag(
+                        trf('{param} {value}', { param: v.parameter, value: v.value + (v.unit ? ' ' + v.unit : '') }),
+                        { kind: v.flag === 'critical' ? 'danger' : (v.flag === 'high' || v.flag === 'low' ? 'warn' : '') })),
+                    vals.length > 8 ? h('span', { class: 'muted', style: { fontSize: '12.5px' } },
+                        trf('и ещё {n}', { n: vals.length - 8 })) : null)
+                : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('в бланк ничего не легло'));
+
+            tb.appendChild(h('tr', null,
+                h('td', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, fmtDateTime(r.received_at)),
+                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, r.device_name || '—'),
+                h('td', { class: 'cell-mono' }, r.sample_id || '—'),
+                // Имя пациента — обязательное поле этой строки, а не украшение.
+                h('td', null,
+                    r.patient_name
+                        ? h('span', { style: { fontWeight: 600 } }, r.patient_name)
+                        : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('пациент не определён')),
+                    r.service_name
+                        ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, r.service_name)
+                        : null),
+                h('td', null, valueCell),
+                h('td', null, Tag(tr(STATUS_RU[r.status] || r.status), {
+                    kind: r.status === 'applied' ? 'success' : (r.status === 'superseded' ? 'warn' : ''),
+                }))));
+        }
+        liveCard.appendChild(h('table', { class: 'table' },
+            h('thead', null, h('tr', null,
+                h('th', null, tr('Получено')), h('th', null, tr('Прибор')), h('th', null, tr('Номер пробы')),
+                h('th', null, tr('Пациент')), h('th', null, tr('Значения')), h('th', null, tr('Что случилось')))),
+            tb));
     }
 
     // ---------- форма прибора ----------
@@ -296,4 +378,18 @@ export async function mountLabDevices(container) {
     }
 
     await reload();
+
+    // Живой опрос. Молча: сетевой сбой на фоне не должен сыпать тостами поверх
+    // работы лаборанта — экран просто останется на прежних данных, а следующая
+    // попытка через пять секунд его догонит. Останавливается, когда контейнер
+    // ушёл из документа (лаборант переключил вкладку) — иначе опрос пережил бы
+    // экран.
+    liveTimer = setInterval(() => {
+        if (container && container.isConnected === false) { stopLabDevicesLive(); return; }
+        reload().catch(() => {});
+    }, LIVE_MS);
+    // Опрос НИКОГДА не держит процесс живым — то же правило, что у таймеров
+    // телефонии. В браузере unref нет, поэтому вызов необязательный; под Node
+    // (тесты экрана) без него `node --test` ждал бы вечно, что и случилось.
+    if (liveTimer && typeof liveTimer.unref === 'function') liveTimer.unref();
 }

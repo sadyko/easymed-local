@@ -894,9 +894,11 @@ export const REGISTRY = {
   // Лаборатория → «Анализаторы». Принадлежность ЗДАНИЮ: в справочник филиалов
   // не едут, потому что прибор соседнего здания в нашей базе бессмыслен.
   lab_devices: {
-    read:  { roles: ALL_STAFF, columns: ['id','name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','last_seen_at','created_at'] },
+    read:  { roles: ALL_STAFF, columns: ['id','name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','last_seen_at','created_at','discovered'] },   // discovered: LIS_AUTODISCOVER_V1 (mig 124) — ставит только сервер
     write: { insert: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled'] },
-             update: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled'] },
+             // discovered в update: правка прибора руками снимает пометку «модель
+             // подобрана, не подтверждена» — это и есть подтверждение.
+             update: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','discovered'] },
              delete: { roles: LAB_SECTION_ROLES } },
     filters: ['id','enabled','transport','profile'],
     embed:   {},

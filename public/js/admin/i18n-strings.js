@@ -3,6 +3,20 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // LIS_AUTODISCOVER_V1 (2026-09-10) — живая лента и самоопределение приборов
+  "Что приходит с приборов": {"en":"What the devices are sending","ru":"Что приходит с приборов","uz":"Qurilmalardan nima kelmoqda"},
+  "обновляется само": {"en":"refreshes itself","ru":"обновляется само","uz":"o‘zi yangilanadi"},
+  "Приборы пока ничего не присылали.": {"en":"No device has sent anything yet.","ru":"Приборы пока ничего не присылали.","uz":"Qurilmalar hali hech narsa yubormagan."},
+  "Запустите пробу на анализаторе — он появится здесь сам, заводить его заранее не нужно.": {"en":"Run a sample on the analyzer — it will appear here by itself, no need to add it in advance.","ru":"Запустите пробу на анализаторе — он появится здесь сам, заводить его заранее не нужно.","uz":"Analizatorda namunani ishga tushiring — u bu yerda o‘zi paydo bo‘ladi, oldindan qo‘shish shart emas."},
+  "Прибор": {"en":"Device","ru":"Прибор","uz":"Qurilma"},
+  "Значения": {"en":"Values","ru":"Значения","uz":"Qiymatlar"},
+  "пациент не определён": {"en":"patient not identified","ru":"пациент не определён","uz":"bemor aniqlanmagan"},
+  "в бланк ничего не легло": {"en":"nothing reached the form","ru":"в бланк ничего не легло","uz":"blankaga hech narsa tushmadi"},
+  "{param} {value}": {"en":"{param} {value}","ru":"{param} {value}","uz":"{param} {value}"},
+  "и ещё {n}": {"en":"and {n} more","ru":"и ещё {n}","uz":"va yana {n} ta"},
+  "модель не выбрана": {"en":"no model selected","ru":"модель не выбрана","uz":"model tanlanmagan"},
+  "найден сам — проверьте модель": {"en":"found by itself — check the model","ru":"найден сам — проверьте модель","uz":"o‘zi topildi — modelni tekshiring"},
+  "Заводить прибор заранее не нужно: запустите пробу на анализаторе, и он появится здесь сам. Дальше — выберите его у панели в «Панелях» и подтвердите поля показателей.": {"en":"No need to add a device in advance: run a sample on the analyzer and it will appear here by itself. Then pick it for the panel in «Панели» and confirm the indicator fields.","ru":"Заводить прибор заранее не нужно: запустите пробу на анализаторе, и он появится здесь сам. Дальше — выберите его у панели в «Панелях» и подтвердите поля показателей.","uz":"Qurilmani oldindan qo‘shish shart emas: analizatorda namunani ishga tushiring, u bu yerda o‘zi paydo bo‘ladi. So‘ng uni «Panellar»da panelga tanlang va ko‘rsatkich maydonlarini tasdiqlang."},
   "{name} (выключен)": {"en":"{name} (off)","ru":"{name} (выключен)","uz":"{name} (o‘chirilgan)"},
   // LIS_INGEST_V1 (2026-09-10) — Лаборатория → «Анализаторы» и сопоставление в панелях
   // LIS_INGEST_V1 (2026-09-10) — Лаборатория → «Анализаторы» и сопоставление в панелях

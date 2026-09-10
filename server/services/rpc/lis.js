@@ -37,6 +37,52 @@ export function lisProfiles(db, args, user) {
 }
 
 /**
+ * Живая лента: что приборы прислали за последнее время, ЧЬЁ это и что легло в
+ * бланк.
+ *
+ * Экран «Анализаторы» без неё отвечает только на вопрос «настроен ли прибор».
+ * Лаборанту нужен другой: «мою пробу приняли?» — а на него отвечает связка
+ * «время → номер пробы → ПАЦИЕНТ → значения». Поэтому имя пациента здесь
+ * обязательное поле, а не украшение: номер пробы сам по себе не говорит
+ * человеку ничего.
+ *
+ * Значения берутся из бланка (`source = 'analyzer'`), а не из сырого сообщения:
+ * показывать надо то, что РЕАЛЬНО легло, иначе лента врала бы про
+ * неподтверждённые сопоставления.
+ */
+export function lisRecent(db, args, user) {
+  guard(user);
+  const limit = Math.min(Math.max(Number((args && args.limit) || 30), 1), 200);
+
+  const rows = db.prepare(`
+    SELECT m.id, m.received_at, m.sample_id, m.status, m.detail, m.peer,
+           m.visit_service_id, m.resolved_at,
+           d.name  AS device_name,
+           s.name  AS service_name,
+           p.full_name AS patient_name,
+           v.id    AS visit_id
+      FROM lab_device_messages m
+      LEFT JOIN lab_devices    d  ON d.id  = m.device_id
+      LEFT JOIN visit_services vs ON vs.id = m.visit_service_id
+      LEFT JOIN services       s  ON s.id  = vs.service_id
+      LEFT JOIN visits         v  ON v.id  = vs.visit_id
+      LEFT JOIN patients       p  ON p.id  = v.patient_id
+     ORDER BY m.id DESC
+     LIMIT ?`).all(limit);
+
+  const valuesFor = db.prepare(`
+    SELECT parameter, value, unit, flag
+      FROM lab_results
+     WHERE visit_service_id = ? AND source = 'analyzer'
+     ORDER BY id`);
+
+  return rows.map((r) => ({
+    ...r,
+    values: r.visit_service_id ? valuesFor.all(r.visit_service_id) : [],
+  }));
+}
+
+/**
  * Перечитать устройства и поднять слушатели заново — после правки настроек.
  * Без этого клиника перезапускала бы Easy-Med целиком ради смены порта.
  */

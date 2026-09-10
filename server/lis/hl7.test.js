@@ -17,6 +17,7 @@ test('разбирает ORU: тип, номер сообщения, номер 
   assert.equal(m.type, 'ORU^R01');
   assert.equal(m.controlId, '42');
   assert.equal(m.sampleId, 'LAB-000123');
+  assert.equal(m.sendingApp, 'BC-5300', 'MSH-3: как прибор себя называет — на этом держится самоопределение');
   assert.equal(m.observations.length, 2);
   assert.deepEqual(m.observations[0], {
     valueType: 'NM', code: 'WBC', value: '6.1',

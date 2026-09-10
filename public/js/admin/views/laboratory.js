@@ -36,7 +36,7 @@ import { printBarcodeLabel } from './lab-barcode.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // same URL as patient-card/service-workspace (one instance)
 import { canDelete, canEditLabPanels } from '../permissions.js';   // LAB_PANELS_BY_SECTION_V1 — the gate IS lab-section access (same predicate as the sidebar)
 import { mountLabPanels, LAB_BUILD } from './lab-panels.js';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now
-import { mountLabDevices } from './lab-devices.js';   // LIS_INGEST_V1 — «Анализаторы»: приборы клиники и лоток непринятых сообщений
+import { mountLabDevices, stopLabDevicesLive } from './lab-devices.js';   // LIS_INGEST_V1 — «Анализаторы»: приборы клиники, живая лента и лоток непринятых сообщений
 // ?v= is required here, not decorative: this module gained selectOptionsFor, and a
 // browser holding the older cached copy would fail the named import and blank the view.
 import { pluralRu, groupLabRows, selectOptionsFor,
@@ -187,6 +187,10 @@ export async function renderLaboratory(container, ctx = {}) {
 // here is shared beyond that head — mount() decides which body exists, this
 // decides what fills it.
 async function paintMode() {
+    // LIS_INGEST_V1 — живая лента «Анализаторов» опрашивает сервер, пока экран
+    // открыт; уходя с вкладки, опрос обязан прекратиться. Иначе лаборант,
+    // походив по разделу, оставил бы за собой несколько работающих опросов.
+    if (state.mode !== 'devices') stopLabDevicesLive();
     if (state.mode === 'panels') await mountLabPanels(refs.panelsHost);
     else if (state.mode === 'devices') await mountLabDevices(refs.panelsHost);   // LIS_INGEST_V1
     else if (state.mode === 'stats') await paintStats();

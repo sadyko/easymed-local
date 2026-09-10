@@ -101,6 +101,13 @@ export function startMllpServer({ port, onMessage, maxBytes = DEFAULT_MAX_BYTES,
     });
 
     server.listen(port, '0.0.0.0', () => {
+      // unref по той же причине, что у таймеров опроса телефонии: слушатель
+      // анализатора не должен УДЕРЖИВАТЬ процесс живым. В приложении его и так
+      // держит HTTP-сервер, а вот в тестах открытый порт означал бы, что
+      // `node --test` ждёт вечно — так и случилось, когда порт стал
+      // открываться всегда (LIS_AUTODISCOVER_V1), а не только под заведённый
+      // прибор.
+      server.unref();
       resolve({
         port: server.address().port,
         close: () => new Promise((r) => server.close(() => r())),
