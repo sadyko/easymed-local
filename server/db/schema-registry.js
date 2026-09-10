@@ -249,7 +249,10 @@ export const REGISTRY = {
                visits: { table:'visits', fk:'visit_id', columns:['id','visit_date','patient_id','status','doctor_id','branch_id','referral_source_id'] } },
   },
   lab_results: {
-    read:  { roles: ALL_STAFF, columns: ['id','visit_service_id','parameter','value','numeric_value','unit','reference_range','flag','notes','entered_by','entered_at','verified_by','verified_at','created_at','ref_low','ref_high','sync_origin'] },   // ref_low/high: LAB_HANDLING_V1 (mig 041); sync_origin: BRANCH_ORIGIN_V1 (mig 083)
+    // LIS_INGEST_V1 — source ('manual' | 'analyzer') стоит ТОЛЬКО в чтении: его
+    // ставит сервер при приёме с прибора, и браузер не должен уметь объявить
+    // машинное значение набранным руками или наоборот.
+    read:  { roles: ALL_STAFF, columns: ['id','visit_service_id','parameter','value','numeric_value','unit','reference_range','flag','notes','entered_by','entered_at','verified_by','verified_at','created_at','ref_low','ref_high','sync_origin','source'] },   // ref_low/high: LAB_HANDLING_V1 (mig 041); sync_origin: BRANCH_ORIGIN_V1 (mig 083); source: LIS_INGEST_V1 (mig 123)
     write: { insert: { roles: ['admin','lab'], columns: ['visit_service_id','parameter','value','numeric_value','unit','reference_range','flag','notes','entered_by','ref_low','ref_high'] },
              update: { roles: ['admin','lab'], columns: ['parameter','value','numeric_value','unit','reference_range','flag','notes','verified_by','verified_at','ref_low','ref_high'] },
              delete: { roles: ['admin'] } },
@@ -887,25 +890,59 @@ export const REGISTRY = {
     filters: ['id','admission_id','kind','published_at','superseded_by','author_id'],
     embed:   { users: { table:'users', fk:'author_id', columns:['id','full_name'] } },
   },
+  // LIS_INGEST_V1 — анализаторы клиники. views/lab-devices.js, вкладка
+  // Лаборатория → «Анализаторы». Принадлежность ЗДАНИЮ: в справочник филиалов
+  // не едут, потому что прибор соседнего здания в нашей базе бессмыслен.
+  lab_devices: {
+    read:  { roles: ALL_STAFF, columns: ['id','name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','last_seen_at','created_at'] },
+    write: { insert: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled'] },
+             update: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled'] },
+             delete: { roles: LAB_SECTION_ROLES } },
+    filters: ['id','enabled','transport','profile'],
+    embed:   {},
+  },
+
+  // LIS_INGEST_V1 — лоток входящих сообщений. Пишет ТОЛЬКО сервер: строки
+  // здесь — свидетельство о том, что пришло по проводу, и правка их из
+  // браузера превратила бы журнал в пересказ. Разрешение строки идёт через
+  // RPC lis_message_attach / lis_message_dismiss, а не записью в таблицу.
+  lab_device_messages: {
+    read:  { roles: ALL_STAFF, columns: ['id','device_id','peer','raw','sample_id','visit_service_id','status','detail','received_at','resolved_at'] },
+    write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },
+    filters: ['id','status','visit_service_id','device_id','resolved_at'],
+    embed:   {},
+  },
+
   // Lab/diagnostic panel definitions (config). views/lab-panels.js, mounted as
   // the «Панели» mode of Лаборатория. Owned by every labs-section role.
+  // LIS_INGEST_V1 — device_id: каким анализатором кормится панель. NULL законно
+  // (панель заполняется руками). В справочник филиалов НЕ едет: перечни колонок
+  // в branch-sync/catalogue.js явные, а прибор соседнего здания в нашей базе не
+  // означает ничего (пин: миграция 123.test.js).
   lab_panels: {
-    read:  { roles: ALL_STAFF, columns: ['id','name','code','modality','has_narrative','service_id','core_panel_id','active','created_at'] },
-    write: { insert: { roles: LAB_SECTION_ROLES, columns: ['name','code','modality','has_narrative','service_id','core_panel_id','active'] },
-             update: { roles: LAB_SECTION_ROLES, columns: ['name','code','modality','has_narrative','service_id','active'] },
+    read:  { roles: ALL_STAFF, columns: ['id','name','code','modality','has_narrative','service_id','core_panel_id','active','created_at','device_id'] },
+    write: { insert: { roles: LAB_SECTION_ROLES, columns: ['name','code','modality','has_narrative','service_id','core_panel_id','active','device_id'] },
+             update: { roles: LAB_SECTION_ROLES, columns: ['name','code','modality','has_narrative','service_id','active','device_id'] },
              delete: { roles: LAB_SECTION_ROLES } },
-    filters: ['id','modality','name','active'],
+    filters: ['id','modality','name','active','device_id'],
     embed:   {},
   },
   // Analytes within a panel (config). views/lab-panels.js. Saved by
   // delete-then-insert reconcile, so the labs roles need insert + delete.
   lab_panel_analytes: {
+    // LIS_INGEST_V1 — device_code: поле анализатора, кормящее ЭТОТ показатель;
+    // device_code_confirmed: человек это сопоставление подтвердил. Приём
+    // применяет только подтверждённые (решение владельца D4), поэтому обе
+    // колонки обязаны быть и читаемыми, и записываемыми из редактора панелей.
     read:  { roles: ALL_STAFF, columns: ['id','panel_id','code','name','unit','value_type','value_options','decimals',
-             'ref_low','ref_high','ref_text','ref_low_m','ref_high_m','ref_low_f','ref_high_f','group_label','sort_order','ref_ranges','active','created_at'] },
+             'ref_low','ref_high','ref_text','ref_low_m','ref_high_m','ref_low_f','ref_high_f','group_label','sort_order','ref_ranges','active','created_at',
+             'device_code','device_code_confirmed'] },
     write: { insert: { roles: LAB_SECTION_ROLES, columns: ['panel_id','code','name','unit','value_type','value_options','decimals',
-               'ref_low','ref_high','ref_text','ref_low_m','ref_high_m','ref_low_f','ref_high_f','group_label','sort_order','ref_ranges','active'] },
+               'ref_low','ref_high','ref_text','ref_low_m','ref_high_m','ref_low_f','ref_high_f','group_label','sort_order','ref_ranges','active',
+               'device_code','device_code_confirmed'] },
              update: { roles: LAB_SECTION_ROLES, columns: ['code','name','unit','value_type','value_options','decimals',
-               'ref_low','ref_high','ref_text','ref_low_m','ref_high_m','ref_low_f','ref_high_f','group_label','sort_order','ref_ranges','active'] },
+               'ref_low','ref_high','ref_text','ref_low_m','ref_high_m','ref_low_f','ref_high_f','group_label','sort_order','ref_ranges','active',
+               'device_code','device_code_confirmed'] },
              delete: { roles: LAB_SECTION_ROLES } },
     // LAB_SVC_ANALYTE_FALLBACK_V1 — поиск по ИМЕНИ показателя: услуга без
     // панели («Д-димер» отдельной строкой в прайсе) берёт единицы и норму у
