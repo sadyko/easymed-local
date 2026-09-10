@@ -6090,21 +6090,27 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 /* CASE_DOC_FORMAT_V1 — оформление текста у САМОГО раздела: кнопка рядом с
    подписью, ряд иконок над полем. Панель это инструмент, а не часть
    документа: на бумагу не идёт и по второму нажатию убирается. */
-.a4-fmt-t { position: absolute; top: 0; right: 30px; width: 28px; height: 28px;
-    display: grid; place-items: center; border: 0; border-radius: var(--r-sm);
-    background: transparent; color: var(--ink-400); cursor: pointer; }
-.a4-fmt-t:hover { background: var(--primary-50); color: var(--primary-700); }
-.a4-fmt-t[aria-expanded="true"] { background: var(--primary-100); color: var(--primary-800, #145c56); }
-.a4-fmt { display: inline-flex; align-items: center; gap: 2px; margin: 0 0 6px;
-    padding: 4px; border: 1px solid var(--ink-100); border-radius: var(--r-pill);
-    background: var(--white); box-shadow: var(--shadow-sm); }
-.a4-fmt-b { width: 32px; height: 32px; display: grid; place-items: center;
-    border: 0; border-radius: var(--r-pill); background: transparent;
+/* Кнопка вызова — рядом с крестиком раздела и такая же тихая: это инструмент,
+   а не действие над документом. */
+.a4-fmt-t { position: absolute; top: 0; right: 28px; width: 26px; height: 26px;
+    display: grid; place-items: center; border: 0; border-radius: var(--r-xs, 6px);
+    background: transparent; color: var(--ink-300); cursor: pointer;
+    transition: background-color 120ms ease, color 120ms ease; }
+.a4-fmt-t:hover { background: var(--ink-50); color: var(--primary-700); }
+.a4-fmt-t[aria-expanded="true"] { background: var(--primary-50); color: var(--primary-700); }
+/* СВОЕЙ СТРОКОЙ НАД ПОЛЕМ, шириной по содержимому: рядом с подписью раздела
+   она вставала в одну строку с ней и растягивала шапку раздела на пол-листа
+   (владелец: «its looking horible»). Прямоугольная и плотная — не таблетка. */
+.a4-fmt { display: flex; width: fit-content; align-items: center; gap: 1px;
+    margin: 2px 0 5px; padding: 2px; border: 1px solid var(--ink-100);
+    border-radius: var(--r-sm); background: var(--white); box-shadow: var(--shadow-sm); }
+.a4-fmt-b { width: 26px; height: 26px; display: grid; place-items: center;
+    border: 0; border-radius: var(--r-xs, 6px); background: transparent;
     color: var(--ink-600); cursor: pointer; transition: background-color 120ms ease, color 120ms ease; }
 .a4-fmt-b:hover { background: var(--primary-50); color: var(--primary-700); }
 .a4-fmt-b:active { background: var(--primary-100); }
 .a4-fmt-b:focus-visible { outline: 2px solid var(--primary-500); outline-offset: -2px; }
-.a4-fmt-sep { width: 1px; height: 18px; margin: 0 4px; background: var(--ink-100); }
+.a4-fmt-sep { width: 1px; height: 14px; margin: 0 4px; background: var(--ink-100); }
 .cd-sec.a4-sec-off > .a4-fmt, .cd-sec.a4-sec-off > .a4-fmt-t { display: none !important; }
 .cd-sec > .a4-sec-x { position: absolute; top: 2px; right: 2px; width: 28px; height: 28px;
     display: grid; place-items: center; border: 0; border-radius: var(--r-sm);
