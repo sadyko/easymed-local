@@ -11,6 +11,7 @@ import { bootstrapAdmin } from './services/auth.js';
 import { autoCloseStaleShifts } from './services/rpc/cashier.js';   // SHIFT_AUTOCLOSE_V1
 import { startTelegramBot } from './services/telegram/index.js';   // TELEGRAM_BOT_V1
 import { schedulePolling } from './services/telephony/poller.js';   // TELEPHONY_V1
+import { startLisListeners } from './lis/index.js';   // LIS_INGEST_V1
 import { createApp } from './app.js';
 import { setDataDir, setAppVersion } from './services/control/config.js';   // SUPERVISED_INSTALL_V1 / UPDATE_DELIVERY_V1
 import { scheduleCheckin } from './services/control/checkin.js';   // LICENCE_CORE_V1
@@ -211,6 +212,15 @@ if (isMain) {
   // one settings read every 30 seconds and nothing else. unref'd timers —
   // it can never hold a shutdown open.
   schedulePolling(db);
+
+  // LIS_INGEST_V1 — слушатели анализаторов, в этом же процессе по той же
+  // причине «один npm start», что бот и опрос телефонии выше. Клиника без
+  // заведённых приборов не поднимает ни одного порта.
+  //
+  // Не await и с проглоченной ошибкой намеренно: занятый порт анализатора не
+  // должен задерживать или ронять старт клиники — регистратура и касса важнее
+  // приёма результатов.
+  startLisListeners(db).catch((e) => console.log('LIS: ' + (e && e.message ? e.message : e)));
 
     const PORT = Number(process.env.PORT || 8000);
   const server = createApp(db, { dataDir: DATA_DIR }).listen(PORT, '0.0.0.0', () => {
