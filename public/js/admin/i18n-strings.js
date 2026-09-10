@@ -7373,6 +7373,7 @@ export const STRINGS = {
   "Название раздела": {"en":"Section name","ru":"Название раздела","uz":"Boʻlim nomi"},
   "Переименовать раздел": {"en":"Rename the section","ru":"Переименовать раздел","uz":"Boʻlim nomini oʻzgartirish"},
   "Заготовка": {"en":"Template","ru":"Заготовка","uz":"Shablon"},
+  "Проверьте дату и время: {name}": {"en":"Check the date and the time: {name}","ru":"Проверьте дату и время: {name}","uz":"Sana va vaqtni tekshiring: {name}"},
   "Справочник услуг": {"en":"Service catalogue","ru":"Справочник услуг","uz":"Xizmatlar maʻlumotnomasi"},
   "Назначаем": {"en":"Ordering","ru":"Назначаем","uz":"Tayinlanmoqda"},
   "Ничего не выбрано — отметьте услуги слева.": {"en":"Nothing picked — tick services on the left.","ru":"Ничего не выбрано — отметьте услуги слева.","uz":"Hech narsa tanlanmagan — chapdan xizmatlarni belgilang."},

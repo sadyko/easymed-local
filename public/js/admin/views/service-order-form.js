@@ -1,9 +1,9 @@
-// SERVICE_ORDER_FORM_V3 (2026-09-10) — НАЗНАЧИТЬ УСЛУГИ ГОСПИТАЛИЗАЦИИ.
+// SERVICE_ORDER_FORM_V4 (2026-09-10) — НАЗНАЧИТЬ УСЛУГИ ГОСПИТАЛИЗАЦИИ.
 //
-// Владелец, тремя заходами: «make dialogue window in the services like in the
-// prescriptions, select time and date etc» → «dialogue window is tooo big» →
-// «increase the width, so user can select time date and performer, also add
-// several services at one time».
+// Владелец, четырьмя заходами: «make dialogue window in the services like in
+// the prescriptions, select time and date etc» → «dialogue window is tooo big»
+// → «increase the width, so user can select time date and performer, also add
+// several services at one time» → «one card and time and date for each».
 //
 // ЧТО ЭТО ЗА ОКНО. Раньше «+ Анализы и диагностика» открывали прямо справочник:
 // выбрал — начислено сию секунду. Для расходника это верно (его списали со
@@ -17,9 +17,15 @@
 // пациента, дату и врача. Полноэкранное окно подбора при этом не возвращается —
 // «tooo big» было про него.
 //
-// ОДНО ВРЕМЯ И ОДИН ИСПОЛНИТЕЛЬ НА ВЕСЬ НАБОР. Их спрашивают один раз: набор
-// назначают на один заход в кабинет, а разное время у соседних строк — это уже
-// два назначения, и делают их двумя открытиями окна.
+// У КАЖДОЙ УСЛУГИ СВОЁ ВРЕМЯ (V4, владелец: «one card and time and date for
+// each»). Общее время на весь набор было домыслом: кровь берут натощак утром,
+// КТ дают на день, а перевязку делают после обхода — это один заход врача в
+// окно, но три разных часа. Время новой карточки подставляется от предыдущей:
+// набор чаще всего идёт подряд, и переписывать дату в каждой строке заново —
+// работа без смысла.
+//
+// ИСПОЛНИТЕЛЬ ОСТАЁТСЯ ОБЩИМ: он про то, КОМУ поручено, а поручают набор
+// целиком. Понадобится разным — назначают двумя открытиями окна.
 //
 // Раздел услуги определяет ТА ЖЕ общая функция (resolveTypeId), что и большое
 // окно подбора: второй способ отнести услугу к разделу разошёлся бы с первым
@@ -92,16 +98,15 @@ export function openServiceOrderForm({
     const cartBox = h('div', { class: 'sof-cart' });
     const cartSum = h('div', { class: 'sof-sum' });
 
-    const dateInp = h('input', { type: 'date', value: todayLocal() });
-    const timeInp = h('input', { type: 'time', value: nextHalfHour() });
+    // Поля времени всех карточек: их гасит переключатель «уже выполнено».
+    const whenInputs = [];
     const noteInp = h('input', { type: 'text', placeholder: 'Например: натощак' });
     const nowChk = h('input', { type: 'checkbox' });
     const docSel = h('select', null, h('option', { value: '' }, tr('Исполнитель не назначен')));
 
     const syncWhen = () => {
         const now = nowChk.checked;
-        dateInp.disabled = now;
-        timeInp.disabled = now;
+        for (const el of whenInputs) el.disabled = now;
     };
     nowChk.addEventListener('change', syncWhen);
 
@@ -119,6 +124,7 @@ export function openServiceOrderForm({
     const paintCart = () => {
         clear(cartBox);
         clear(cartSum);
+        whenInputs.length = 0;
         if (!cart.length) {
             cartBox.appendChild(h('div', { class: 'sof-empty' },
                 tr('Ничего не выбрано — отметьте услуги слева.')));
@@ -133,16 +139,30 @@ export function openServiceOrderForm({
                 row.qty = Number.isFinite(n) && n > 0 ? n : 1;
                 paintSum();
             });
-            cartBox.appendChild(h('div', { class: 'sof-cart-row' },
-                h('div', { class: 'sof-cart-main' },
-                    h('div', { class: 'sof-cart-n' }, row.service.name || '—'),
-                    h('div', { class: 'sof-cart-p' }, money(row.service.price) + ' ' + tr('сум'))),
-                qty,
-                h('button', {
-                    class: 'btn btn-sm btn-ghost', type: 'button',
-                    title: tr('Убрать из назначения'),
-                    onclick: () => { cart.splice(cart.indexOf(row), 1); paintCart(); paintList(); },
-                }, Icon('X', { size: 13 }))));
+            // Дата и время ЭТОЙ услуги. Значение живёт в строке набора, а не в
+            // поле: строку перерисуют — введённое останется.
+            const date = h('input', { type: 'date', class: 'sof-when', 'aria-label': tr('Дата') });
+            const time = h('input', { type: 'time', class: 'sof-when', 'aria-label': tr('Время') });
+            date.value = row.date; time.value = row.time;
+            date.disabled = nowChk.checked; time.disabled = nowChk.checked;
+            date.addEventListener('input', () => { row.date = date.value; });
+            time.addEventListener('input', () => { row.time = time.value; });
+            whenInputs.push(date, time);
+
+            cartBox.appendChild(h('div', { class: 'sof-card' },
+                h('div', { class: 'sof-card-h' },
+                    h('div', { class: 'sof-cart-main' },
+                        h('div', { class: 'sof-cart-n' }, row.service.name || '—'),
+                        h('div', { class: 'sof-cart-p' }, money(row.service.price) + ' ' + tr('сум'))),
+                    h('button', {
+                        class: 'btn btn-sm btn-ghost', type: 'button',
+                        title: tr('Убрать из назначения'),
+                        onclick: () => { cart.splice(cart.indexOf(row), 1); paintCart(); paintList(); },
+                    }, Icon('X', { size: 13 }))),
+                h('div', { class: 'sof-card-f' },
+                    h('label', { class: 'sof-f' }, h('span', null, tr('Дата')), date),
+                    h('label', { class: 'sof-f' }, h('span', null, tr('Время')), time),
+                    h('label', { class: 'sof-f sof-f-qty' }, h('span', null, tr('Кол-во')), qty))));
         }
         paintSum();
     };
@@ -201,7 +221,16 @@ export function openServiceOrderForm({
                 onclick: () => {
                     const has = inCart(svc.id);
                     if (has) cart.splice(cart.indexOf(has), 1);
-                    else cart.push({ service: svc, qty: 1 });
+                    else {
+                        // Время новой строки — от предыдущей: набор идёт подряд,
+                        // и переписывать дату в каждой строке заново незачем.
+                        const last = cart[cart.length - 1];
+                        cart.push({
+                            service: svc, qty: 1,
+                            date: last ? last.date : todayLocal(),
+                            time: last ? last.time : nextHalfHour(),
+                        });
+                    }
                     paintCart(); paintList();
                 },
             },
@@ -274,8 +303,6 @@ export function openServiceOrderForm({
             h('div', { class: 'sof-col-h' }, tr('Назначаем')),
             cartBox, cartSum,
             h('div', { class: 'inp-form' },
-                field(tr('Дата'), dateInp),
-                field(tr('Время'), timeInp),
                 h('div', { class: 'span2' }, field(tr('Исполнитель'), docSel)),
                 h('label', { class: 'inp-check span2' }, nowChk, tr('Уже выполнено — начислить сейчас')),
                 h('div', { class: 'span2' }, field(tr('Примечание'), noteInp)),
@@ -290,15 +317,21 @@ export function openServiceOrderForm({
             }
             const args = { admission_id: admissionId, note: noteInp.value.trim() };
             if (docSel.value) args.doctor_id = Number(docSel.value);
+            // Время у КАЖДОЙ строки своё. Проверяются все сразу: отказ на
+            // середине набора оставил бы половину начисленной, а половину — нет
+            // из-за опечатки в дате.
             if (!nowChk.checked) {
-                const date = dateInp.value || todayLocal();
-                const time = timeInp.value || '09:00';
-                // Местное время врача переводится в общее: сервер хранит время в
-                // UTC, и запись «10:30» из Ташкента и из Москвы должна означать
-                // разные минуты, а не одну.
-                const when = new Date(date + 'T' + time + ':00');
-                if (Number.isNaN(when.getTime())) { toast(tr('Проверьте дату и время.'), 'fail'); return false; }
-                args.planned_at = when.toISOString();
+                for (const row of cart) {
+                    // Местное время врача переводится в общее: сервер хранит
+                    // время в UTC, и «10:30» из Ташкента и из Москвы должны
+                    // означать разные минуты, а не одну.
+                    const when = new Date((row.date || todayLocal()) + 'T' + (row.time || '09:00') + ':00');
+                    if (Number.isNaN(when.getTime())) {
+                        toast(trf('Проверьте дату и время: {name}', { name: row.service.name || '' }), 'fail');
+                        return false;
+                    }
+                    row.plannedAt = when.toISOString();
+                }
             }
             // Строки уходят ПООЧЕРЁДНО, и отказ по одной не отменяет остальных:
             // сервер начисляет каждую своей записью, а «всё или ничего» здесь
@@ -306,8 +339,9 @@ export function openServiceOrderForm({
             const failed = [];
             let ok = 0;
             for (const row of [...cart]) {
-                const { error } = await supabase.rpc('admission_service_add',
-                    Object.assign({}, args, { service_id: row.service.id, quantity: row.qty }));
+                const one = Object.assign({}, args, { service_id: row.service.id, quantity: row.qty });
+                if (!nowChk.checked && row.plannedAt) one.planned_at = row.plannedAt;
+                const { error } = await supabase.rpc('admission_service_add', one);
                 if (error) failed.push({ row, msg: (row.service.name || '') + ': ' + (error.message || '') });
                 else { ok += 1; cart.splice(cart.indexOf(row), 1); }
             }

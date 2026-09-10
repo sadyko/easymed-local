@@ -6229,13 +6229,20 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .sof-row-c { flex: 0 0 16px; display: grid; place-items: center; color: var(--brand-700, #0f766e); }
 .sof-row-n { flex: 1; min-width: 0; }
 .sof-row-p { flex: 0 0 auto; font-variant-numeric: tabular-nums; color: var(--ink-500); font-size: 12.5px; }
-.sof-cart { display: grid; gap: 4px; min-height: 44px; padding: 4px;
-    border: 1px solid var(--ink-100); border-radius: var(--r-md); background: var(--white); }
-.sof-cart-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; }
+/* SERVICE_ORDER_FORM_V4 — у каждой услуги СВОЯ КАРТОЧКА со своим временем:
+   кровь берут утром натощак, КТ дают на день, перевязку делают после обхода —
+   один заход врача в окно, но три разных часа. */
+.sof-cart { display: grid; gap: 8px; min-height: 44px; }
+.sof-card { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--ink-100);
+    border-radius: var(--r-md); background: var(--white); }
+.sof-card-h { display: flex; align-items: flex-start; gap: 8px; }
+.sof-card-f { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 74px; gap: 8px; }
+.sof-f { display: grid; gap: 3px; min-width: 0; font-size: 12.5px; color: var(--ink-500); }
+.sof-when { min-height: 34px; }
 .sof-cart-main { flex: 1; min-width: 0; }
 .sof-cart-n { font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
 .sof-cart-p { font-size: 12.5px; color: var(--ink-500); font-variant-numeric: tabular-nums; }
-.sof-qty { width: 62px; min-height: 32px; text-align: center; }
+.sof-qty { min-height: 34px; text-align: center; }
 .sof-sum { display: flex; align-items: baseline; gap: 8px; padding: 0 6px; font-size: 12.5px; }
 .sof-sum-l { color: var(--ink-500); }
 .sof-sum-v { font-size: 15px; font-weight: 700; color: var(--ink-900); font-variant-numeric: tabular-nums; }

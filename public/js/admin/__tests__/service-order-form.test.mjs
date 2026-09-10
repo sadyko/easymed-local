@@ -123,7 +123,7 @@ const openForm = async (opts) => {
     return modals[modals.length - 1];
 };
 
-test('НЕСКОЛЬКО УСЛУГ ЗА РАЗ: набор, одно время, один исполнитель', async () => {
+test('НЕСКОЛЬКО УСЛУГ ЗА РАЗ: у каждой своё время, исполнитель один', async () => {
     // Без набора вкладки окно открывается на всём справочнике — в наборе будут
     // услуги из разных разделов, как это и бывает перед операцией.
     const form = await openForm({ typeNames: null });
@@ -148,10 +148,19 @@ test('НЕСКОЛЬКО УСЛУГ ЗА РАЗ: набор, одно время
     qty.dispatchEvent({ type: 'input', target: qty });
     await settle();
 
-    // Время и исполнитель — общие на весь набор.
-    const inputs = walk(form).filter((e) => e.tagName === 'INPUT');
-    inputs.find((e) => e.attrs.type === 'date').value = '2026-09-11';
-    inputs.find((e) => e.attrs.type === 'time').value = '10:30';
+    // У КАЖДОЙ карточки своё время: кровь утром натощак, КТ днём.
+    const dates = walk(form).filter((e) => e.tagName === 'INPUT' && e.attrs.type === 'date');
+    const times = walk(form).filter((e) => e.tagName === 'INPUT' && e.attrs.type === 'time');
+    assert.equal(dates.length, 2, 'дата не у каждой услуги: ' + dates.length);
+    assert.equal(times.length, 2, 'время не у каждой услуги: ' + times.length);
+    const setWhen = (i, d, t) => {
+        dates[i].value = d; dates[i].dispatchEvent({ type: 'input', target: dates[i] });
+        times[i].value = t; times[i].dispatchEvent({ type: 'input', target: times[i] });
+    };
+    setWhen(0, '2026-09-11', '10:30');
+    setWhen(1, '2026-09-12', '07:00');
+
+    // Исполнитель — общий: поручают набор целиком.
     const sel = walk(form).find((e) => e.tagName === 'SELECT');
     assert.ok(textOf(sel).includes('Мудунов'), 'исполнителей не подгрузили: ' + textOf(sel));
     sel.value = '77';
@@ -162,11 +171,12 @@ test('НЕСКОЛЬКО УСЛУГ ЗА РАЗ: набор, одно время
     assert.equal(calls.length, 2, 'ушло записей: ' + calls.length);
     assert.deepEqual(calls.map((c) => c.args.service_id).sort((a, b) => a - b), [10, 11]);
     assert.equal(calls.find((c) => c.args.service_id === 11).args.quantity, 3, 'количество строки потерялось');
-    for (const c of calls) {
-        assert.equal(c.args.doctor_id, 77, 'исполнитель не ушёл');
-        assert.equal(new Date(c.args.planned_at).getTime(), new Date('2026-09-11T10:30:00').getTime(),
-            'время назначения не то');
-    }
+    for (const c of calls) assert.equal(c.args.doctor_id, 77, 'исполнитель не ушёл');
+    const byId = (id) => calls.find((c) => c.args.service_id === id);
+    assert.equal(new Date(byId(10).args.planned_at).getTime(), new Date('2026-09-11T10:30:00').getTime(),
+        'у первой услуги ушло чужое время');
+    assert.equal(new Date(byId(11).args.planned_at).getTime(), new Date('2026-09-12T07:00:00').getTime(),
+        'вторая услуга уехала со временем первой — общее время вернулось');
 });
 
 test('повторное нажатие СНИМАЕТ услугу с набора', async () => {
