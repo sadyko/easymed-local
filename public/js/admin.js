@@ -7,6 +7,7 @@ try { document.title = (document.title || 'Easy-Med') + ' · b2107a'; } catch (e
 import { supabase, pingSupabase } from './supabase.js';
 import { SECTIONS } from './admin/sections.js?v=rolecmp1';
 import { h, Icon, clear, initials } from './admin/ui.js';
+import { dateWords } from './shared/date-words.js';   // SIDEBAR_CLOCK_V1 — дата словами под часами
 import { phoneInput } from './admin/phone-input.js?v=ph1';
 // UI_ENHANCE_V1 — родные <select> и поля даты становятся полями программы.
 // Один наблюдатель на весь документ: списки живут и в видах, и в диалоговых
@@ -1234,6 +1235,41 @@ function renderSidebar() {
             unlicensed && h('span', { class: 'nav-lock-icon' }, Icon('Lock', { size: 14 })),
         ));
     }
+    sidebarEl.appendChild(sidebarClock());
+}
+
+/**
+ * ЧАСЫ ВНИЗУ БОКОВОГО МЕНЮ.
+ *
+ * SIDEBAR_CLOCK_V1 (2026-09-10) — владелец: «we need to add time and date in
+ * the left panel bottom», затем «time and date should be in the left panel not
+ * in the workspace window». Место выбрано им: меню видно на любом экране, а
+ * экраны сменяются.
+ *
+ * Зачем вообще: в палате пишут документы, у которых время — часть содержания
+ * (дневник за какой день, доза в какой час), а планшет стоит в чехле, и
+ * системных часов на нём не видно.
+ *
+ * Часы идут по минуте и переживают перерисовку меню: она случается на каждом
+ * переходе, и таймер, оставленный от прежней отрисовки, тикал бы в никуда.
+ */
+let sidebarClockTimer = null;
+function sidebarClock() {
+    const box = h('div', { class: 'nav-clock' });
+    const paintNow = () => {
+        clear(box);
+        const now = new Date();
+        box.appendChild(h('span', { class: 'nav-clock-t' },
+            String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0')));
+        box.appendChild(h('span', { class: 'nav-clock-d' }, dateWords(now)));
+    };
+    paintNow();
+    clearInterval(sidebarClockTimer);
+    sidebarClockTimer = setInterval(() => {
+        if (!box.isConnected) { clearInterval(sidebarClockTimer); return; }
+        paintNow();
+    }, 30000);
+    return box;
 }
 
 // Format a count for the sidebar badge. Returns null when there's nothing to

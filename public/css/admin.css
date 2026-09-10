@@ -471,6 +471,10 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
     flex: 1;
     overflow-y: auto;
     padding: 8px 0 12px;
+    /* SIDEBAR_CLOCK_V1 — колонка, чтобы часы прижимались книзу (margin-top:auto),
+       а не висели сразу под последним разделом. */
+    display: flex;
+    flex-direction: column;
 }
 
 /* NO_TABS_APPBAR_V1 (2026-09-05) — `.sidebar-cta` is gone with the two buttons

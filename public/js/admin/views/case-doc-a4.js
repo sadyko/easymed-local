@@ -232,7 +232,9 @@ export function fieldFormatBar(input) {
  */
 export function richSection(kind, key, { title = '', onRename = null, onAdd = null, onRemove = null } = {}) {
     const input = h('div', {
-        class: 'a4-input', 'data-field': key, contentEditable: 'true',
+        // A4_SHEETS_V1 — по этой пометке раскладка находит текст раздела и, если
+        // он не помещается, делит его по абзацам между листами.
+        class: 'a4-input', 'data-field': key, 'data-a4-field': key, contentEditable: 'true',
         'data-ph': tr(sectionPlaceholder(key)),
     });
     const shown = () => (String(title || '').trim() || tr(sectionLabel(kind, key)));
@@ -463,6 +465,8 @@ function escHtml(v) {
  *
  * @returns {{sec:HTMLElement, input:HTMLElement, name:HTMLElement}}
  */
+let freeSeq = 0;
+
 export function freeSection({ title = '', html = '', onRemove = null, onEdit = null } = {}) {
     const name = h('input', {
         type: 'text', class: 'a4-sec-name', placeholder: tr('Название раздела — можно не заполнять'),
@@ -470,7 +474,13 @@ export function freeSection({ title = '', html = '', onRemove = null, onEdit = n
     });
     name.value = title || '';
     if (onEdit) name.addEventListener('input', onEdit);
-    const input = h('div', { class: 'a4-input', contentEditable: 'true', 'data-ph': tr('Текст раздела…') });
+    // A4_SHEETS_V1 — своему разделу имени в наборе нет, а раскладке по листам
+    // нужен ключ, по которому хвост вернётся в своё поле. Номер счётчика для
+    // этого достаточен: он живёт ровно столько, сколько открыт документ.
+    const input = h('div', {
+        class: 'a4-input', contentEditable: 'true', 'data-ph': tr('Текст раздела…'),
+        'data-a4-field': 'free_' + (freeSeq += 1),
+    });
     if (html) applyRich(input, html);
     if (onEdit) input.addEventListener('input', onEdit);
     const fmt = onRemove ? fieldFormatBar(input) : null;

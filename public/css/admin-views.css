@@ -2082,6 +2082,20 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .a4-foot .a4-foot-name{ font-size:13.5px; font-weight:600; color:var(--ink-900); }
 
 /* AURORA_A4_PAGINATE_V1 — page-break guide between A4 pages */
+/* A4_SHEETS_V1 — документ отдельными листами. Между листами пусто, как между
+   бумагами на столе; у второго и следующих шапки бланка нет — она печатается
+   один раз, как и на бумаге. Пунктирная полоса «СТРАНИЦА 2» поперёк одного
+   бесконечного листа (.a4-pbreak ниже) для этих документов больше не рисуется:
+   владелец просил именно листы, а не отметку разрыва. */
+.a4-paper + .a4-paper { margin-top: 22px; }
+.a4-paper-next { padding-top: 48px; }
+.a4-flow { display: block; }
+/* Продолжение раздела на следующем листе — то же поле, второе окно в него.
+   Подписи у него нет: заголовок раздела остался на первом листе, и повторять
+   его значило бы сказать, что раздела два. */
+.a4-cont-wrap { margin: 0; }
+.a4-cont-wrap .a4-sec-tag, .a4-cont-wrap .a4-sec-add, .a4-cont-wrap .a4-sec-x { display: none; }
+
 .a4-pbreak{ position:relative; margin:0 -48px; display:flex; align-items:flex-end;
   justify-content:center; user-select:none; pointer-events:none; }
 .a4-pbreak::after{ content:''; position:absolute; left:24px; right:24px; bottom:0;
@@ -6120,13 +6134,18 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .inp-hint { font-size: 12.5px; color: var(--ink-500); line-height: 1.45; }
 @media (max-width: 560px) { .inp-form, .inp-row, .inp-sub { grid-template-columns: minmax(0, 1fr); } }
 
-/* CASE_CLOCK_V1 — часы внизу левой колонки: у постели время это часть
-   содержания документа, а системных часов на планшете в чехле не видно. */
-.cw-clock { display: flex; align-items: baseline; gap: 8px; padding: 10px 4px 2px;
-    color: var(--ink-500); }
-.cw-clock-t { font-size: 20px; font-weight: 700; color: var(--ink-900);
+/* SIDEBAR_CLOCK_V1 — часы внизу бокового меню: у постели время это часть
+   содержания документа, а системных часов на планшете в чехле не видно.
+   Меню видно на любом экране, поэтому часы стоят здесь, а не в колонке одного
+   раздела. */
+.nav-clock { display: flex; align-items: baseline; gap: 8px; margin-top: auto;
+    padding: 14px 14px 10px; color: var(--ink-500); }
+.nav-clock-t { font-size: 20px; font-weight: 700; color: var(--ink-900);
     font-variant-numeric: tabular-nums; letter-spacing: .5px; }
-.cw-clock-d { font-size: 12.5px; }
+.nav-clock-d { font-size: 12.5px; }
+/* Свёрнутое меню оставляет одни часы: дата в 64 пикселя не читается. */
+.sidebar-collapsed .nav-clock { justify-content: center; padding: 14px 4px 10px; }
+.sidebar-collapsed .nav-clock-d { display: none; }
 
 /* DIARY_ENTRY_DATE_V1 — день записи стоит в полосе действий документа. */
 .cd-acts-date { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px;
