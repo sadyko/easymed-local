@@ -393,6 +393,11 @@ export function docPrintHtml(sheetHtml, { title = '', base = null, css = '' } = 
     // у него тот же, что на экране; рамки полей ввода на бумаге сняты — на
     // экране они говорят «сюда можно писать», а на бумаге писать некуда.
     //
+    // ШАПКА НЕ СКЛАДЫВАЕТСЯ. Окно печати узкое, и экранные правила для мелких
+    // экранов сворачивали полосу реквизитов в два столбца, прятали линейку и
+    // уводили номера влево — бумага переставала быть похожа на лист, который
+    // видел врач. Печать — это всегда лист A4, а не телефон.
+    //
     // I18N_COVERAGE_V1 — русских слов внутри самой строки быть не должно: она
     // собирается из ${…}, и проверка ищет в таких строках непереведённый текст.
     return `<!doctype html><html lang="ru"><head><meta charset="utf-8">
@@ -411,6 +416,10 @@ ${css}
       width: 100% !important; max-width: none !important; min-height: 0 !important; }
   .a4-input { border-color: transparent !important; background: transparent !important;
       padding-left: 0 !important; padding-right: 0 !important; }
+  .a4-lh-fields { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+  .a4-lh-top { flex-wrap: nowrap !important; }
+  .a4-lh-rule { display: block !important; }
+  .a4-lh-ids { justify-items: end !important; text-align: right !important; }
 </style></head><body>${sheetHtml}</body></html>`;
 }
 
