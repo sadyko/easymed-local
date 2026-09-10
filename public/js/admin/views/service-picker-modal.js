@@ -50,6 +50,11 @@ export function openServicePickerModal({
     confirmLabel    = 'Готово',
     confirmIcon     = 'Check',
     lockedTypeNames = null,
+    // ACT_ADD_SERVICE_V1 — ПОКАЗАТЬ ТОЛЬКО ЭТИ РАЗДЕЛЫ (подстроки, без регистра).
+    // Отличается от lockedTypeNames тем, что разделов может остаться несколько:
+    // «Анализы и диагностика» — это лаборатория, диагностика и лучевая сразу, и
+    // выбирает между ними врач. Если подошёл ровно один — он и запирается.
+    allowedTypeNames = null,
     // When true, a per-doctor schedule calendar appears under the columns once
     // a doctor is picked. It auto-selects the nearest free slot and returns the
     // chosen day/time on onPick. Off for flows that don't book a time (e.g. the
@@ -125,6 +130,7 @@ export function openServicePickerModal({
         docConsult:        {},  // "doctorId|typeId" -> {price, available, is_free}
         // Set to true after we've found a matching type and hidden the column.
         typeLocked: false,
+        allowedTypeIds: null,   // ACT_ADD_SERVICE_V1 — разделы, которыми ограничено окно
         // ---- Schedule (only used when showSchedule) ----
         schedDateIso:    null,   // YYYY-MM-DD of the chosen slot
         schedStartMin:   null,   // minutes-from-midnight of the chosen slot
@@ -399,6 +405,33 @@ export function openServicePickerModal({
             }
         } catch (e) { console.warn('[picker] consultations', e.message); }
 
+        // ACT_ADD_SERVICE_V1 — сначала отсекаем лишние разделы: дальше и
+        // список услуг знает про это ограничение, иначе «Все группы» вернули
+        // бы в анализы консультации и койко-дни.
+        if (Array.isArray(allowedTypeNames) && allowedTypeNames.length) {
+            const allow = allowedTypeNames.map(x => String(x).toLowerCase());
+            const keep = state.types.filter(t => {
+                const n = (t.name || '').toLowerCase();
+                return allow.some(a => n.includes(a));
+            });
+            // Разделы НЕ вырезаются из state.types: по этому же списку
+            // resolveTypeId узнаёт раздел услуги, у которой type_id не заполнен.
+            // Урезав список, окно перестаёт понимать половину справочника.
+            state.allowedTypeIds = keep.length ? new Set(keep.map(t => typeKey(t.id))) : null;
+            // ПУСТОЕ ОКНО ХУЖЕ ЛИШНЕЙ УСЛУГИ. Если в этих разделах у клиники
+            // ничего не заведено (операции сплошь и рядом лежат в «Процедурах»),
+            // ограничение снимается, и врач видит весь справочник — с честной
+            // подписью, почему.
+            const fits = state.allowedTypeIds
+                ? state.services.filter(x => state.allowedTypeIds.has(_implType(x))).length : 0;
+            if (!state.allowedTypeIds || !fits) {
+                state.allowedTypeIds = null;
+                toast('В нужных разделах услуг не нашлось — показан весь справочник.', 'fail');
+            } else if (keep.length === 1) {
+                state.typeId = typeKey(keep[0].id);
+            }
+        }
+
         // Auto-pick the locked type, if any. We hide the Types column only
         // when we actually found a match — otherwise the user has to pick
         // manually and we leave the column visible as a fallback.
@@ -408,7 +441,7 @@ export function openServicePickerModal({
                 const n = (t.name || '').toLowerCase();
                 return needles.some(needle => n.includes(needle));
             });
-            if (match) { state.typeId = match.id; state.typeLocked = true; }
+            if (match) { state.typeId = String(match.id); state.typeLocked = true; }
             else toast('Группа услуг не найдена — выберите вручную.', 'fail');
         }
 
@@ -661,11 +694,12 @@ export function openServicePickerModal({
         clear(listEl);
         if (i === 0) {
             const t = state.typeSearch.trim().toLowerCase();
-            const filtered = state.types.filter(r => !t || (r.name || '').toLowerCase().includes(t));
+            const filtered = state.types.filter(r => (!state.allowedTypeIds || state.allowedTypeIds.has(typeKey(r.id)))
+                && (!t || (r.name || '').toLowerCase().includes(t)));
             if (!filtered.length) { listEl.appendChild(emptyHint('Нет групп услуг.', '')); return; }
             // "All" pseudo-row lets the user clear the type filter.
             listEl.appendChild(rowEl('Все группы', '', state.typeId === null, () => selectAt(0, null)));
-            for (const r of filtered) listEl.appendChild(rowEl(r.name, r.code || '', state.typeId === r.id, () => selectAt(0, r.id)));
+            for (const r of filtered) listEl.appendChild(rowEl(r.name, r.code || '', state.typeId === typeKey(r.id), () => selectAt(0, r.id)));
         } else if (i === 1) {
             const filtered = filterServices();
             if (!filtered.length) {
@@ -701,7 +735,8 @@ export function openServicePickerModal({
     function selectAt(colIdx, id) {
         if (colIdx === 0) {
             // Clicking the already-active type clears the filter; clicking "All" passes id=null.
-            state.typeId = state.typeId === id ? null : id;
+            const key = typeKey(id);
+            state.typeId = state.typeId === key ? null : key;
             // Drop the service pick if it no longer matches the new type filter.
             if (state.typeId) {
                 const svc = state.services.find(s => s.id === state.serviceId);
@@ -788,16 +823,27 @@ export function openServicePickerModal({
     // only «Все группы» ever showed anything. resolveTypeId() derives the group
     // from the routing `type` when type_id is missing (and still prefers an
     // explicit type_id, so a hand-filed service keeps its group).
+    //
+    // PICKER_TYPE_KEY_V1 — РАЗДЕЛ СРАВНИВАЕТСЯ ОДНИМ ВИДОМ, строкой.
+    //
+    // Здесь была тихая беда: resolveTypeId возвращает String(type_id) ('5'),
+    // а в колонку разделов кладётся id из таблицы — число 5. `'5' !== 5`, и
+    // выбранный раздел отфильтровывал ВСЕ услуги: колонка «Услуги не найдены»
+    // при полном справочнике. Ключ раздела теперь один — строка.
+    const typeKey = (v) => (v === null || v === undefined || v === '' ? null : String(v));
     function _implType(svc) {
         if (!svc) return null;
-        if (svc.__consult) return CONSULT_GROUP_ID;
-        if (state.useGroups)  return state.svcGroupMap[svc.core_service_id] || null;
-        if (state.deriveType) return (svc.type || null);
-        return resolveTypeId(svc, state.types) || null;
+        if (svc.__consult) return typeKey(CONSULT_GROUP_ID);
+        if (state.useGroups)  return typeKey(state.svcGroupMap[svc.core_service_id]);
+        if (state.deriveType) return typeKey(svc.type);
+        return typeKey(resolveTypeId(svc, state.types) || null);
     }
     function filterServices() {
         const t = state.svcSearch.trim().toLowerCase();
         return state.services.filter(s => {
+            // ACT_ADD_SERVICE_V1 — раздел не выбран («Все группы») ещё не значит
+            // «любая услуга»: если окно открыли под анализы, хирургии в нём нет.
+            if (state.allowedTypeIds && !state.allowedTypeIds.has(_implType(s))) return false;
             if (state.typeId && _implType(s) !== state.typeId) return false;
             if (t && !(s.name || '').toLowerCase().includes(t)) return false;
             return true;
