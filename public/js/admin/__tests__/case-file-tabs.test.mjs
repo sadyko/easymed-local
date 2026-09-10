@@ -133,22 +133,36 @@ test('назначенный анализ виден СРАЗУ, до резул
     assert.ok(!t.includes('Система для инфузий'), 'расходник — не обследование');
 });
 
-test('пришедший результат — строка «Результат готов», и он раскрывается на месте', async () => {
+test('пришедший результат — строка «Результат готов», и она ОТКРЫВАЕТ ДОКУМЕНТ', async () => {
     SOURCES = { lab: [{ name: 'Биохимия крови', at: '2026-09-10T09:10:00Z', doctor_name: 'Лаборатория',
         results: [{ parameter: 'Глюкоза', value: '6.4', unit: 'ммоль/л', reference_range: '3.9–6.1', flag: 'high' }] }],
         imaging: [], functional: [] };
-    const box = caseExamsPanel(11, { onAdd: () => {}, charges: CHARGES });
-    await settle();
-    assert.ok(textOf(box).includes('Результат готов'), 'результат не показан состоянием');
-    // До нажатия значений на экране нет: реестр читают строками, а не простынёй.
-    assert.ok(!textOf(box).includes('Глюкоза'), 'результат развёрнут до нажатия');
-    const btn = findBtn(box, 'Просмотреть');
-    assert.ok(btn, 'результат нечем открыть');
-    btn.click();
-    assert.ok(textOf(box).includes('Глюкоза'), 'результат не раскрылся');
-    btn.click();
-    assert.ok(!textOf(box).includes('Глюкоза'), 'результат не сворачивается обратно');
-    SOURCES = { lab: [], imaging: [], functional: [] };
+    // Печать открывает окно и пишет в него документ: ловим написанное.
+    const written = [];
+    const openWas = globalThis.window.open;
+    globalThis.window.open = () => ({
+        document: { open() {}, write(html) { written.push(String(html)); }, close() {} },
+        focus() {}, print() {},
+    });
+    try {
+        const box = caseExamsPanel(11, { onAdd: () => {}, charges: CHARGES,
+            patient: { full_name: 'Иванов Иван', mrn: 'ID-1', date_of_birth: '1994-11-15', gender: 'male' } });
+        await settle();
+        assert.ok(textOf(box).includes('Результат готов'), 'результат не показан состоянием');
+        // Значения не разворачиваются строкой под строкой: их место в документе.
+        assert.ok(!textOf(box).includes('Глюкоза'), 'значения высыпались в реестр');
+
+        const btn = findBtn(box, 'Просмотреть');
+        assert.ok(btn, 'результат нечем открыть');
+        btn.click();
+        await settle();
+        assert.equal(written.length, 1, 'документ не открылся');
+        assert.ok(written[0].includes('Глюкоза'), 'в документе нет самого результата');
+        assert.ok(written[0].includes('Иванов Иван'), 'документ без имени пациента подшить некуда');
+    } finally {
+        globalThis.window.open = openWas;
+        SOURCES = { lab: [], imaging: [], functional: [] };
+    }
 });
 
 test('во вкладке «Операция» видна назначенная операция и её кнопка', async () => {

@@ -403,6 +403,29 @@ export function orderSubtitle(order) {
     ].filter(Boolean).join(' · ');
 }
 
+/**
+ * КУРС СТРОКОЙ: «день 3 из 7 · до 12.06».
+ *
+ * MAR_GRID_V2 — в эталоне это третья строка назначения, и она отвечает на
+ * вопрос, который у постели задают чаще прочих: сколько ещё колоть. «До
+ * отмены» остаётся словами: подменять его числом дней нельзя — постоянная
+ * терапия и курс на 999 дней разные вещи (миграция 093).
+ */
+export function courseLine(order, date) {
+    const o = order || {};
+    if (!o.starts_on) return '';
+    const day = Math.floor((Date.parse(date + 'T00:00:00') - Date.parse(o.starts_on + 'T00:00:00')) / 86400000) + 1;
+    const nth = day > 0 ? (o.days ? trf('день {n} из {total}', { n: day, total: o.days }) : trf('день {n}', { n: day })) : '';
+    const till = o.days ? (o.ends_on ? trf('до {date}', { date: dateShort(o.ends_on) }) : '') : tr('до отмены');
+    return [nth, till].filter(Boolean).join(' · ');
+}
+
+/** Дата курса — числом и без года: год у койки не спрашивают. */
+function dateShort(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+    return m ? m[3] + '.' + m[2] : '';
+}
+
 /** Что написать в подсказке клетки: состояние, время, кто и почему. */
 export function cellTitle(cell, people) {
     const c = cell || {};
@@ -975,62 +998,186 @@ export async function renderMarSheet(root, ctx = {}) {
             '·', tr('Ст. медсестра'), '______________'));
     }
 
-    function gridCard(scheduled, hours, nowMs) {
-        const card = h('div', { class: 'card' },
-            h('div', { class: 'card-header' },
-                h('h3', null, Icon('Pill', { size: 16 }), ' ', tr('Назначения по часам')),
-                h('span', { style: { flex: 1 } }),
-                h('span', { class: 'muted', style: { fontSize: '12.5px' } },
-                    trf('назначений: {n}', { n: scheduled.length }))));
-        if (!scheduled.length || !hours.length) {
+    /**
+     * СЕТКА СУТОК — как в эталоне владельца: слева назначение, справа сутки от
+     * 00:00 до 23:00, красная черта «сейчас» поперёк всех строк.
+     *
+     * MAR_GRID_V2 (2026-09-10) — раньше в сетке стояли ТОЛЬКО часы, в которых
+     * что-то есть: лист из двух назначений рисовал две колонки, и «10:05» в
+     * такой сетке не отвечало на вопрос «а сколько сейчас». Сутки нарисованы
+     * целиком, и время читается положением, а не подписью.
+     *
+     * ИНФУЗИЯ — ПОЛОСОЙ, а не точкой: у неё в базе есть объём, скорость и
+     * длительность (миграция 093), и капельница «с 06:10 до 10:00» — это
+     * четыре часа работы, а не событие в шесть утра.
+     */
+    function gridCard(scheduled, _hours, nowMs) {
+        const card = h('div', { class: 'card mar-grid' });
+        if (!scheduled.length) {
             card.appendChild(h('div', { class: 'empty', style: { padding: '26px' } }, tr('На эту дату назначений нет.')));
             return card;
         }
-        const nowHour = state.date === todayLocal() ? new Date(nowMs).getHours() : -1;
-        const head = h('tr', null, h('th', { style: { textAlign: 'left', minWidth: '240px' } }, tr('Назначение')));
-        for (const sl of hours) {
-            const isNow = sl === nowHour;
-            head.appendChild(h('th', {
-                style: {
-                    textAlign: 'center', minWidth: '52px', fontSize: '12.5px',
-                    background: isNow ? 'rgba(31,122,114,.12)' : 'transparent',
-                    color: isNow ? 'var(--primary-700, #145f59)' : 'inherit',
-                },
-                title: isNow ? tr('Сейчас') : '',
-            }, String(sl).padStart(2, '0'), isNow ? h('div', { style: { fontSize: '12.5px', fontWeight: 700 } }, tr('сейчас')) : null));
+        const today = state.date === todayLocal();
+        const now = new Date(nowMs);
+        // Доля суток, прошедшая к этой минуте: по ней стоит и черта, и её метка.
+        const nowFrac = today ? (now.getHours() + now.getMinutes() / 60) : null;
+        const atNow = (frac) => 'calc(var(--mar-name-w) + var(--mar-col) * ' + frac + ')';
+
+        const scroll = h('div', { class: 'mar-scroll' });
+        const inner = h('div', { class: 'mar-inner' });
+
+        const hourCells = [];
+        for (let i = 0; i < 24; i += 1) {
+            hourCells.push(h('div', { class: 'mar-hour' }, String(i).padStart(2, '0') + ':00'));
         }
-        const tbody = h('tbody');
+        inner.appendChild(h('div', { class: 'mar-head' },
+            h('div', { class: 'mar-name mar-name-h' }, tr('Назначение')),
+            h('div', { class: 'mar-lane mar-lane-h' }, ...hourCells),
+            h('div', { class: 'mar-row-act' }),
+            nowFrac === null ? null
+                : h('span', { class: 'mar-now-pill', style: { left: atNow(nowFrac) } },
+                    String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0'))));
+
+        const rows = h('div', { class: 'mar-rows' });
+        if (nowFrac !== null) rows.appendChild(h('div', { class: 'mar-nowline', style: { left: atNow(nowFrac) } }));
         for (const g of groupByKind(scheduled)) {
-            tbody.appendChild(h('tr', null, h('td', {
-                colspan: String(hours.length + 1),
-                style: { background: 'var(--ink-25, #f7f8fa)', fontWeight: 700, fontSize: '12.5px' },
-            }, tr(g.label))));
-            for (const o of g.orders) tbody.appendChild(orderRow(o, hours, nowMs));
+            rows.appendChild(h('div', { class: 'mar-group' },
+                h('span', { class: 'mar-group-in' },
+                    tr(g.label), h('span', { class: 'mar-group-n' }, '· ' + g.orders.length))));
+            for (const o of g.orders) rows.appendChild(laneRow(o, nowMs));
         }
-        card.appendChild(h('div', { style: { overflowX: 'auto' } },
-            h('table', { class: 'table' }, h('thead', null, head), tbody)));
+        inner.appendChild(rows);
+        scroll.appendChild(inner);
+        card.appendChild(scroll);
+        fitToViewport(scroll);
         return card;
     }
 
-    function orderRow(o, hours, nowMs) {
-        const row = h('tr', null,
-            h('td', null,
-                h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-                    h('div', { style: { flex: 1, minWidth: 0 } },
-                        h('div', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } }, o.name || ''),
-                        h('div', { class: 'muted', style: { fontSize: '12.5px' } }, orderSubtitle(o))),
-                    h('button', {
-                        class: 'btn btn-sm', type: 'button', title: tr('Отменить назначение'),
-                        onclick: () => openOrderCancel({ order: o, onDone: load }),
-                    }, tr('Отменить')))));
-        for (const sl of hours) row.appendChild(cellEl(o, sl, nowMs));
-        return row;
+    /** Строка сетки: назначение слева, сутки справа, отмена в конце. */
+    function laneRow(o, nowMs) {
+        const lane = h('div', { class: 'mar-lane' });
+        if (o.kind === 'infusion') {
+            for (const b of infusionBars(o, nowMs)) lane.appendChild(b);
+        } else {
+            for (const sl of orderHours(o, state.date)) {
+                const cell = laneMark(o, sl, nowMs);
+                if (cell) lane.appendChild(cell);
+            }
+        }
+        return h('div', { class: 'mar-row' },
+            h('div', { class: 'mar-name' },
+                h('div', { class: 'mar-name-t' }, o.name || ''),
+                h('div', { class: 'mar-name-s' }, orderSubtitle(o)),
+                h('div', { class: 'mar-name-c' }, courseLine(o, state.date))),
+            lane,
+            h('div', { class: 'mar-row-act' },
+                h('button', {
+                    class: 'btn btn-sm mar-x', type: 'button', title: tr('Отменить назначение'),
+                    onclick: () => openOrderCancel({ order: o, onDone: load }),
+                }, Icon('X', { size: 13 }))));
     }
 
     /**
-     * Одна клетка «назначение × час» — ОДНА функция на сетку и на отменённые.
-     * Вторая её копия для отменённых назначений разошлась бы с первой ровно в
-     * том, ради чего эту клетку и рисуют.
+     * Отметка в своём часе. Цвет — ТОТ ЖЕ словарь состояний (cellStateColor),
+     * что у списка снятых отметок и у печати: три палитры одного листа
+     * разошлись бы на первом же новом состоянии.
+     */
+    function laneMark(o, sl, nowMs) {
+        const c = cellFor(o, state.date, sl, nowMs);
+        if (c.state === 'none') return null;
+        const col = cellStateColor(c.state);
+        const waiting = c.state === 'pending' || c.state === 'delayed';
+        const time = c.mark && c.mark.given_at ? hhmm(c.mark.given_at) : '';
+        const who = c.mark ? initials(personName(state.people, c.mark.given_by) || '') : '';
+        // След снятия называет ВРЕМЯ и ЧЕЛОВЕКА прямо в клетке: подсказки мыши
+        // на планшете у койки нет, а на бумаге нет и подавно.
+        const undone = c.voided
+            ? [VOIDED_GLYPH, hhmm(c.voided.voided_at), initials(personName(state.people, c.voided.voided_by) || '')]
+                .filter(Boolean).join(' ')
+            : '';
+        return h('div', { class: 'mar-slot', style: { gridColumn: String(sl + 1) }, title: cellTitle(c, state.people) },
+            h('span', {
+                class: 'mar-mark' + (waiting ? ' mar-mark-wait' : ''),
+                // Ждущая доза — пустой контур, сделанная — залитый знак: на
+                // планшете у койки это различается издали, а глиф — нет.
+                style: waiting ? null : { background: col.fg, color: '#fff' },
+            }, waiting ? '' : cellGlyph(c.state)),
+            time ? h('span', { class: 'mar-mark-t' }, time) : null,
+            who ? h('span', { class: 'mar-mark-t' }, who) : null,
+            undone ? h('span', { class: 'mar-mark-t' }, undone) : null);
+    }
+
+    /**
+     * ПОЛОСЫ КАПЕЛЬНИЦЫ.
+     *
+     * Длину даёт `duration_min` — она сохранена у назначения, а не выдумана
+     * экраном. У постоянной инфузии (инфузомат) длительности нет по смыслу:
+     * она идёт до отмены, и полоса тянется до конца суток.
+     */
+    function infusionBars(o, nowMs) {
+        const out = [];
+        const hoursOf = (min) => Math.max(1, Math.ceil((Number(min) || 60) / 60));
+        const slots = orderHours(o, state.date);
+        if (o.continuous) {
+            const start = slots.length ? slots[0] : 0;
+            out.push(infusionBar(o, start, 24 - start, nowMs));
+            return out.filter(Boolean);
+        }
+        for (const sl of slots) {
+            const span = Math.min(hoursOf(o.duration_min), 24 - sl);
+            out.push(infusionBar(o, sl, span, nowMs));
+        }
+        return out.filter(Boolean);
+    }
+
+    function infusionBar(o, sl, span, nowMs) {
+        const c = cellFor(o, state.date, sl, nowMs);
+        if (c.state === 'none') return null;
+        const col = cellStateColor(c.state);
+        const started = c.mark && c.mark.given_at ? hhmm(c.mark.given_at) : String(sl).padStart(2, '0') + ':00';
+        const endHour = (sl + span) % 24;
+        const rate = o.rate_ml_h ? trf('{n} мл/ч', { n: o.rate_ml_h }) : '';
+        return h('div', {
+            class: 'mar-bar', title: cellTitle(c, state.people),
+            style: { gridColumn: String(sl + 1) + ' / span ' + span, borderColor: col.fg, background: col.bg, color: col.fg },
+        },
+            h('span', { class: 'mar-bar-a' }, cellGlyph(c.state), ' ', started),
+            rate ? h('span', { class: 'mar-bar-r' }, rate) : null,
+            h('span', { class: 'mar-bar-e' }, trf('до {time}', { time: String(endHour).padStart(2, '0') + ':00' })));
+    }
+
+    /**
+     * ВЫСОТА ПОД ЭКРАН ПЛАНШЕТА.
+     *
+     * Владелец: «adapt to the tablet. so everything fit in the viewport».
+     * Сетка суток шире и выше любого планшета, и место ей отводит не догадка в
+     * стилях, а измерение: сколько осталось от окна под её верхним краем.
+     * Написать в CSS `calc(100vh - 320px)` значило бы вписать туда высоту
+     * всего, что стоит выше, — и разойтись с ней на первой же строке, которую
+     * туда добавят.
+     */
+    function fitToViewport(box) {
+        if (typeof window === 'undefined' || !box) return;
+        const apply = () => {
+            const top = box.getBoundingClientRect ? box.getBoundingClientRect().top : 0;
+            box.style.maxHeight = Math.max(220, Math.round(window.innerHeight - top - 16)) + 'px';
+        };
+        apply();
+        if (!window.addEventListener) return;
+        // Слушатель снимает сам себя, когда сетку сменили: иначе каждый
+        // перелистанный день оставлял бы за собой ещё один.
+        const onResize = () => {
+            if (!box.isConnected) { window.removeEventListener('resize', onResize); return; }
+            apply();
+        };
+        window.addEventListener('resize', onResize);
+    }
+
+    /**
+     * Клетка «назначение × час» ТАБЛИЦЕЙ — для блока отменённых назначений и
+     * для печати: там сутки целиком не нужны, нужны только часы, в которых
+     * что-то было. Состояние и цвет она берёт из того же словаря, что и сетка
+     * (cellFor/cellStateColor), — расходиться им не на чем.
      */
     function cellEl(o, sl, nowMs) {
         const c = cellFor(o, state.date, sl, nowMs);

@@ -97,40 +97,6 @@ const when = (v) => (v ? fmtDateTime(v) : '');
 // ---------------------------------------------------------------------------
 // 3. Обследования и анализы
 // ---------------------------------------------------------------------------
-const flagWord = { high: 'выше нормы', low: 'ниже нормы' };
-
-function labCard(a) {
-    const rows = (a.results || []).filter((r) => r && r.parameter);
-    return h('div', { class: 'cf-item' },
-        h('div', { class: 'cf-item-h' },
-            h('b', null, a.name || '—'),
-            h('span', { class: 'cf-when' }, when(a.at))),
-        rows.length
-            ? h('table', { class: 'cf-tbl' }, h('tbody', null, ...rows.map((r) => h('tr', {
-                class: r.flag === 'high' || r.flag === 'low' ? 'cf-off' : '',
-            },
-                h('td', null, r.parameter),
-                h('td', { class: 'num' }, [r.value, r.unit].filter(Boolean).join(' ')),
-                h('td', { class: 'cf-ref' }, r.reference_range || ''),
-                h('td', { class: 'cf-flag' }, r.flag && flagWord[r.flag] ? tr(flagWord[r.flag]) : '')))))
-            : h('div', { class: 'cf-row-m' }, tr('Результат ещё не внесён.')));
-}
-
-function reportCard(a) {
-    return h('div', { class: 'cf-item' },
-        h('div', { class: 'cf-item-h' },
-            h('b', null, a.name || '—'),
-            h('span', { class: 'cf-when' }, when(a.at))),
-        a.conclusion
-            ? h('div', { class: 'cf-concl' }, a.conclusion)
-            : h('div', { class: 'cf-row-m' }, tr('Заключение ещё не написано.')));
-}
-
-/**
- * Анализы, снимки и функциональные — ТОГО ЖЕ ИСТОЧНИКА, что и правая панель
- * «Вставить в документ» (admission_doc_sources). Один запрос, одна правда:
- * список во вкладке и список для вставки не смогут разойтись.
- */
 /** Колонки реестра обследований — один список на экран и на выгрузку. */
 const EXAM_COLS = ['Услуга', 'Назначил', 'Дата', 'Кабинет', 'Кол-во', 'Стоимость', 'Сумма', 'Статус', 'Результат'];
 const EXAM_ST = {
@@ -144,6 +110,54 @@ function examStatus(kind) {
     return h('span', { class: 'cf-chip ' + m.cls }, tr(m.word));
 }
 
+/* i18n-exempt-start: ключи слева — значения флага в базе */
+const FLAG_MARK = { high: '↑', low: '↓' };
+/* i18n-exempt-end */
+const SEX_WORD = { male: 'Муж.', female: 'Жен.' };
+
+/**
+ * ОТКРЫТЬ РЕЗУЛЬТАТ ДОКУМЕНТОМ.
+ *
+ * EXAM_RESULT_DOC_V1 — владелец: «document should be opened». Раньше кнопка
+ * разворачивала значения строкой под строкой; читать их так можно, а отдать
+ * пациенту или подшить — нет.
+ *
+ * Бланк берётся ТОТ ЖЕ, что печатает лабораторию везде в системе
+ * (printableSheet: тип и вариант выбраны в «Настройки → Документы»). Своя
+ * вёрстка результатов здесь была бы ПЯТОЙ — ровно та ошибка, которую уже
+ * однажды исправляли: один анализ выглядел по-разному в лаборатории, в карте,
+ * в боте и в разделе документов.
+ */
+async function openResultDoc(it, kind, patient) {
+    const p = patient || {};
+    const head = {
+        patientName: p.full_name || '—',
+        mrn: p.mrn || '',
+        dob: p.date_of_birth ? dateNumeric(p.date_of_birth) : '',
+        sex: p.gender && SEX_WORD[p.gender] ? tr(SEX_WORD[p.gender]) : '',
+    };
+    const { printableSheet } = await import('./doc-settings.js?v=noqr1');
+    if (kind === 'lab') {
+        const tests = (it.results || []).filter((r) => r && r.parameter).map((r) => ({
+            name: r.parameter, code: '',
+            value: r.value === null || r.value === undefined || r.value === '' ? '—' : String(r.value),
+            unit: r.unit || '', ref: r.reference_range || '', flag: FLAG_MARK[r.flag] || '',
+        }));
+        if (!tests.length) { toast(tr('Результат ещё не внесён — открывать нечего.'), 'fail'); return; }
+        printableSheet({
+            type: 'lab', title: tr('Результаты анализов'),
+            data: Object.assign({}, head, { dateOut: it.at ? dateNumeric(it.at) : '', groups: [{ title: it.name || '', tests }] }),
+        });
+        return;
+    }
+    const text = String(it.conclusion || '').trim();
+    if (!text) { toast(tr('Заключение ещё не написано — открывать нечего.'), 'fail'); return; }
+    printableSheet({
+        type: 'diag', title: tr('Заключение диагностики'),
+        data: Object.assign({}, head, { issueDate: it.at ? dateNumeric(it.at) : '', conclusion: text }),
+    });
+}
+
 /**
  * ОБСЛЕДОВАНИЯ И УСЛУГИ — реестром эталона владельца.
  *
@@ -155,7 +169,7 @@ function examStatus(kind) {
  * визиту, а не к строке начисления, — поэтому строки стоят рядом, а не
  * склеиваются в одну ложным соответствием.
  */
-export function caseExamsPanel(admissionId, { onAdd = null, charges = null } = {}) {
+export function caseExamsPanel(admissionId, { onAdd = null, charges = null, patient = null } = {}) {
     const box = h('section', { class: 'card cf-pane', 'aria-label': tr('Обследования и услуги') });
     box.appendChild(h('div', { class: 'cf-pane-h' },
         h('b', null, tr('Обследования и услуги')),
@@ -182,9 +196,9 @@ export function caseExamsPanel(admissionId, { onAdd = null, charges = null } = {
         // Назначенное — из акта: второго списка назначенного в системе нет.
         const ordered = orderedServices(charges, EXAM_TYPES);
         const results = [
-            ...lab.map((it) => ({ it, card: labCard })),
-            ...imaging.map((it) => ({ it, card: reportCard })),
-            ...functional.map((it) => ({ it, card: reportCard })),
+            ...lab.map((it) => ({ it, kind: 'lab' })),
+            ...imaging.map((it) => ({ it, kind: 'report' })),
+            ...functional.map((it) => ({ it, kind: 'report' })),
         ];
         if (!ordered.length && !results.length) {
             body.appendChild(empty('Ни анализов, ни исследований по этой госпитализации ещё нет.'));
@@ -207,13 +221,7 @@ export function caseExamsPanel(admissionId, { onAdd = null, charges = null } = {
         }
         for (const r of results) {
             const it = r.it;
-            // Раскрытие живёт СТРОКОЙ ПОД строкой, а не отдельным окном: результат
-            // читают рядом с назначением, а не вместо него.
-            const det = h('tr', { class: 'cf-exam-det' });
-            const show = () => {
-                if (det.children.length) { clear(det); return; }
-                det.appendChild(h('td', { colspan: String(EXAM_COLS.length) }, r.card(it)));
-            };
+            const show = () => openResultDoc(it, r.kind, patient);
             tbody.appendChild(h('tr', null,
                 h('td', null, h('div', { class: 'cf-row-t' }, it.name || '—')),
                 h('td', null, it.doctor_name || '—'),
@@ -225,7 +233,6 @@ export function caseExamsPanel(admissionId, { onAdd = null, charges = null } = {
                 h('td', null, examStatus('ready')),
                 h('td', null, h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: show },
                     Icon('ZoomIn', { size: 13 }), ' ', tr('Просмотреть')))));
-            tbody.appendChild(det);
         }
 
         body.appendChild(h('div', { class: 'cf-tblwrap' }, h('table', { class: 'cf-act' },

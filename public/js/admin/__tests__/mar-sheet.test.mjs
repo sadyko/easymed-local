@@ -96,7 +96,7 @@ const {
     gridHours, splitOrders, groupByKind, hhmm, orderSubtitle, cellGlyph,
     cellStateLabel, cellTitle, marSheetPrintHtml, renderMarSheet, canOpenMarSheet,
     orderHours, gridHoursAny, voidedTrace, voidedTraceLine, cellStateColor, cellStateTone,
-    sheetTally, nowFocus,
+    sheetTally, nowFocus, courseLine,
 } = sheet;
 
 // ─── данные «сервера» ───────────────────────────────────────────────────────
@@ -377,7 +377,7 @@ test('снятая отметка называет кто, когда и поч�
         assert.ok(txt.includes('не тот пациент'), 'почему сняли: ' + txt);
 
         // И в самой клетке — не голый знак, а время и инициалы снявшего.
-        const grid = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Назначения по часам'));
+        const grid = walk(root).find((e) => String(e.className).includes('mar-grid'));
         assert.ok(textOf(grid).includes('ЮА'), 'в клетке нет инициалов того, кто снял: ' + textOf(grid));
 
         const html = marSheetPrintHtml({ date: TODAY, orders, people, now_ms: dueMsOf(TODAY, 23) });
@@ -438,8 +438,10 @@ test('экран спрашивает лист у сервера на сегод
     assert.ok(txt.includes('10:05'), 'клетка введённой дозы показывает фактическое время');
     assert.ok(txt.includes('ИМ'), 'и инициалы того, кто ввёл (Иванова Мария)');
 
-    // Подсказка клетки называет человека полным именем.
-    const cells = walk(root).filter((e) => e.tagName === 'TD' && (e.attrs.title || '').includes('10:05'));
+    // Подсказка клетки называет человека полным именем. MAR_GRID_V2 — клетка
+    // это .mar-slot в сутках, а не ячейка таблицы.
+    const cells = walk(root).filter((e) => String(e.className).includes('mar-slot')
+        && (e.attrs.title || '').includes('10:05'));
     assert.ok(cells.length, 'клетка с временем введения не найдена');
     assert.ok(cells[0].attrs.title.includes('Иванова Мария'), cells[0].attrs.title);
 });
@@ -592,9 +594,15 @@ test('назначение без названия на сервер не ухо
 
 test('отмена назначения без причины не уходит на сервер', async () => {
     const root = await renderScreen();
-    const grid = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Назначения по часам'));
-    const rows = walk(grid).filter((e) => e.tagName === 'TR' && textOf(e).includes('Цефтриаксон'));
-    findBtn(rows[0], 'Отменить').click();
+    // MAR_GRID_V2 — сетка суток строится не таблицей, а полосами: строка это
+    // .mar-row, а отмена — кнопка с названием в подсказке (на планшете место
+    // отдано суткам, а не слову «Отменить» в каждой строке).
+    const grid = walk(root).find((e) => String(e.className).includes('mar-grid'));
+    const rows = walk(grid).filter((e) => String(e.className).includes('mar-row') && textOf(e).includes('Цефтриаксон'));
+    const cancelBtn = walk(rows[0]).find((e) => e.tagName === 'BUTTON'
+        && /Отменить/.test(e.getAttribute('title') || ''));
+    assert.ok(cancelBtn, 'в строке назначения нечем его отменить');
+    cancelBtn.click();
     await settle();
 
     const overlay = BODY.children[BODY.children.length - 1];
@@ -695,4 +703,52 @@ test('MAR_REF_V1: «сейчас» называет просроченное И�
     assert.equal(g.hour, 10);
     assert.ok(g.due.some((x) => /Цефтриаксон/.test(x)), 'доза этого часа не названа');
     assert.equal(g.overdue.length, 0, 'только что наступившая доза не просрочена');
+});
+
+// ─── MAR_GRID_V2 — сетка суток по эталону владельца ─────────────────────────
+//
+// «now make interface like this, and adapt to the tablet. so everything fit in
+// the viewport». Сутки нарисованы целиком, капельница идёт полосой, а курс
+// назван строкой под назначением. Проверяется то, что легко потерять при
+// следующей правке вида.
+
+test('MAR_GRID_V2: курс назван строкой — «день N из M» и до какого числа', () => {
+    assert.equal(courseLine({ starts_on: '2026-06-10', days: 7, ends_on: '2026-06-16' }, '2026-06-12'),
+        'день 3 из 7 · до 16.06');
+    // «До отмены» остаётся словами: подменять его числом дней нельзя.
+    assert.equal(courseLine({ starts_on: '2026-06-10', days: null, ends_on: null }, '2026-06-12'),
+        'день 3 · до отмены');
+    assert.equal(courseLine({}, '2026-06-12'), '', 'без начала курса строке взяться неоткуда');
+});
+
+test('MAR_GRID_V2: сутки нарисованы целиком, а капельница идёт полосой', async () => {
+    const INF = {
+        id: 7, admission_id: 13, kind: 'infusion', name: 'NaCl 0.9% 400 мл', dose: '400 мл',
+        route: 'в/в кап.', freq_code: '2x', prn: 0, status: 'active', source: 'clinic',
+        starts_on: TODAY, days: 5, ends_on: null, slot_hours: [6, 14],
+        volume: 400, rate_ml_h: 100, duration_min: 240, continuous: 0,
+        due: [due(TODAY, 6), due(TODAY, 14)], marks: [], voided_marks: [], prn_marks: [],
+    };
+    const keep = orders;
+    orders = [CEF, INF];
+    try {
+        const root = await renderScreen();
+        const grid = walk(root).find((e) => String(e.className).includes('mar-grid'));
+        const hours = walk(grid).filter((e) => String(e.className).includes('mar-hour'));
+        assert.equal(hours.length, 24, 'в сетке должны стоять все сутки, а не только занятые часы');
+        assert.equal(textOf(hours[0]).trim(), '00:00');
+        assert.equal(textOf(hours[23]).trim(), '23:00');
+
+        // Капельница — полоса на четыре часа, со скоростью и концом.
+        const bars = walk(grid).filter((e) => String(e.className).includes('mar-bar'));
+        assert.ok(bars.length >= 2, 'капельница не нарисована полосами: ' + bars.length);
+        assert.ok(/span 4/.test(bars[0].style.gridColumn || ''), 'длина полосы берётся из duration_min: '
+            + bars[0].style.gridColumn);
+        const t = textOf(bars[0]);
+        assert.ok(t.includes('100 мл/ч'), 'на полосе нет скорости: ' + t);
+        assert.ok(t.includes('до 10:00'), 'на полосе не сказано, когда капельница кончится: ' + t);
+
+        // Черта «сейчас» — только на сегодняшнем листе.
+        assert.ok(walk(grid).some((e) => String(e.className).includes('mar-nowline')), 'нет черты «сейчас»');
+    } finally { orders = keep; }
 });

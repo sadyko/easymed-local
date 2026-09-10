@@ -297,6 +297,9 @@ function paintTab(root, onNavigate) {
     if (tab === 'exams') {
         box.appendChild(caseExamsPanel(state.admissionId, {
             charges: state.charges,
+            // Бланк результата называет пациента: документ без имени подшить
+            // некуда, а имя знает только этот экран.
+            patient: (state.admission && state.admission.patients) || null,
             // ACT_ADD_SERVICE_V1 — анализ и диагностика выбираются из СПРАВОЧНИКА
             // услуг: цену, название и раздел знает он.
             onAdd: () => addAdmissionService(root, onNavigate, {

@@ -6043,6 +6043,50 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .cf-act-inv { display: inline-flex; padding: 2px 8px; border-radius: var(--r-pill);
     background: var(--ok-50, #e8f7ef); color: var(--ok-700, #0f7a43); font-size: 12.5px; font-weight: 600; }
 .cf-act-act { text-align: right; white-space: nowrap; }
+/* MAR_GRID_V2 — сетка суток: слева назначение, справа сутки от 00:00 до 23:00.
+   Ширину колонки и левого столбца держат переменные: на планшете они меньше, и
+   всё остальное — черта «сейчас», полосы капельниц — следует за ними само. */
+.mar-grid { --mar-name-w: 240px; --mar-col: 56px; padding: 0; overflow: hidden; }
+.mar-scroll { overflow: auto; }
+.mar-inner { min-width: calc(var(--mar-name-w) + var(--mar-col) * 24 + 44px); }
+.mar-head { position: sticky; top: 0; z-index: 3; display: flex; align-items: stretch;
+    background: var(--white); border-bottom: 1px solid var(--ink-100); }
+.mar-name { position: sticky; left: 0; z-index: 2; flex: 0 0 var(--mar-name-w); width: var(--mar-name-w);
+    padding: 8px 12px; background: var(--white); border-right: 1px solid var(--ink-100); }
+.mar-name-h { display: flex; align-items: center; }
+.mar-name-h, .mar-hour, .mar-group { font-size: 12.5px; font-weight: 600; letter-spacing: .4px;
+    text-transform: uppercase; color: var(--ink-400); }
+.mar-lane { display: grid; grid-template-columns: repeat(24, var(--mar-col)); align-items: center; }
+.mar-hour { padding: 9px 0; text-align: center; }
+.mar-row { display: flex; align-items: stretch; border-bottom: 1px solid var(--ink-50); }
+.mar-row:hover .mar-name { background: var(--ink-25, #f7f8fa); }
+.mar-name-t { font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
+.mar-name-s, .mar-name-c { font-size: 12.5px; color: var(--ink-500); line-height: 1.4; }
+.mar-group { background: var(--ink-25, #f7f8fa); border-bottom: 1px solid var(--ink-50); }
+.mar-group-in { position: sticky; left: 0; display: inline-flex; gap: 6px; padding: 6px 12px; }
+.mar-group-n { color: var(--ink-300, #a8b1ba); }
+.mar-slot { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 0; }
+.mar-mark { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px;
+    font-size: 13.5px; font-weight: 700; }
+/* Ждущая доза — пустой контур: издали он читается как «ещё не сделано». */
+.mar-mark-wait { border: 1.5px solid var(--ink-200, #cfd6dd); background: var(--white); }
+.mar-mark-t { font-size: 12.5px; color: var(--ink-500); }
+.mar-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    height: 30px; margin: 6px 4px; padding: 0 10px; border: 1px solid; border-radius: var(--r-pill);
+    font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; }
+.mar-bar-r { color: var(--ink-700); }
+.mar-rows { position: relative; }
+/* Черта «сейчас» — поперёк всех строк, ровно по минуте. */
+.mar-nowline { position: absolute; top: 0; bottom: 0; width: 2px; z-index: 1; pointer-events: none;
+    background: var(--crit-600, #e11d48); }
+.mar-now-pill { position: absolute; top: 7px; z-index: 4; transform: translateX(-50%);
+    padding: 1px 8px; border-radius: var(--r-pill); background: var(--crit-600, #e11d48);
+    color: var(--white); font-size: 12.5px; font-weight: 700; letter-spacing: 0; }
+.mar-row-act { flex: 0 0 44px; display: grid; place-items: center; }
+.mar-x { padding: 4px 7px; }
+/* Планшет: колонки уже, левый столбец короче — сутки целиком остаются видны. */
+@media (max-width: 1180px) { .mar-grid { --mar-name-w: 186px; --mar-col: 46px; } }
+
 /* MAR_IN_CABINET_V1 — строка действий листа, когда он внутри истории болезни. */
 .mar-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
     margin-bottom: 14px; font-size: 15px; }
