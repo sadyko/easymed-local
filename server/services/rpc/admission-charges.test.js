@@ -214,3 +214,28 @@ test('строка акта называет свой РАЗДЕЛ: по нем�
     assert.equal(op.service_id, opSvc, 'строка помнит, какая это услуга');
   } finally { db.close(); }
 });
+
+test('услугу назначают НА ВРЕМЯ, и до выполнения акт не называет её сделанной', () => {
+  const { db, adm, svc } = seed();
+  const DOC = { id: 3, role: 'doctor', full_name: 'Др. Азиза' };
+  try {
+    admissionServiceAdd(db, { admission_id: adm.id, service_id: svc, planned_at: '2026-09-11T10:30:00Z' }, DOC);
+    const line = db.prepare('SELECT planned_at, performed_at FROM admission_services WHERE service_id = ?').get(svc);
+    assert.equal(line.planned_at, '2026-09-11T10:30:00Z', 'время назначения не сохранено');
+    assert.equal(line.performed_at, null, 'назначенное на завтра не может быть выполнено сегодня');
+
+    const act = admissionCharges(db, { admission_id: adm.id }, CASH);
+    const row = act.lines.find((l) => l.name === 'Перевязка');
+    assert.equal(row.planned_at, '2026-09-11T10:30:00Z', 'акт не отдаёт «на когда назначено»');
+
+    // Без времени — как и раньше: сделано сейчас.
+    admissionServiceAdd(db, { admission_id: adm.id, service_id: svc }, DOC);
+    const now = db.prepare('SELECT planned_at, performed_at FROM admission_services ORDER BY id DESC LIMIT 1').get();
+    assert.equal(now.planned_at, null);
+    assert.ok(now.performed_at, 'услуга без плана начисляется выполненной');
+
+    // Нечитаемое время — отказ, а не тихая запись мимо расписания.
+    assert.throws(() => admissionServiceAdd(db, { admission_id: adm.id, service_id: svc, planned_at: 'завтра утром' }, DOC),
+      /не разобран/i);
+  } finally { db.close(); }
+});

@@ -30,6 +30,7 @@ class FakeNode {
     get firstChild() { return this.children.length ? this.children[0] : null; }
     replaceChildren() { this.children.length = 0; }
     setAttribute(k, v) { this.attrs[k] = String(v); }
+    removeAttribute(k) { delete this.attrs[k]; }
     getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; }
     hasAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k); }
     addEventListener(t, fn) { (this._l[t] || (this._l[t] = [])).push(fn); }
@@ -140,4 +141,28 @@ test('если в разделе у клиники пусто — огранич
     const box = await openPicker({ allowedTypeNames: ['хирург'] });
     const t = textOf(box);
     assert.ok(t.includes('Аппендэктомия'), 'окно осталось пустым: врачу нечем назначить операцию');
+});
+
+test('услугу МОЖНО ВЫБРАТЬ И ДОБАВИТЬ: щелчок по строке, затем «Назначить»', async () => {
+    SERVICES = FULL;
+    const picked = [];
+    const box = await openPicker({
+        allowedTypeNames: ['хирург'], confirmLabel: 'Назначить',
+        onPick: (payload) => picked.push(payload),
+    });
+    // Строка услуги — кнопка в колонке услуг.
+    const row = walk(box).find((e) => e.tagName === 'BUTTON'
+        && String(e.className).includes('sched-col-row') && textOf(e).includes('Аппендэктомия'));
+    assert.ok(row, 'услуги нечем выбрать: строки нет');
+    row.click();
+    await settle();
+
+    const done = walk(box).find((e) => e.tagName === 'BUTTON' && textOf(e).includes('Назначить'));
+    assert.ok(done, 'кнопки подтверждения нет');
+    assert.ok(!done.hasAttribute('disabled'),
+        'услуга выбрана, а подтвердить нельзя — ровно то, на что жалуется владелец');
+    done.click();
+    await settle();
+    assert.equal(picked.length, 1, 'выбор не дошёл до экрана, который начисляет услугу');
+    assert.equal(picked[0].service.id, 10, 'дошла не та услуга');
 });

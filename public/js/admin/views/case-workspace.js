@@ -212,31 +212,27 @@ function paint(root, onNavigate) {
 }
 
 /**
- * НАЧИСЛИТЬ ГОСПИТАЛИЗАЦИИ УСЛУГУ ИЗ СПРАВОЧНИКА.
+ * НАЗНАЧИТЬ ГОСПИТАЛИЗАЦИИ УСЛУГУ.
  *
- * ACT_ADD_SERVICE_V1 — окно выбора услуги здесь ТО ЖЕ, что у направлений из
- * кабинета врача (openServicePickerModal): один справочник, один способ искать,
- * одни и те же цены. Разделы задаёт вызывающий: анализам — лаборатория,
- * диагностика и лучевая, операции — хирургия.
+ * SERVICE_ORDER_FORM_V1 — владелец: «make dialogue window in the services like
+ * in the prescriptions, select time and date etc». Окно то же по устройству,
+ * что «Новое назначение»: якорь пациента, поля, дата и время. Услуга в нём
+ * выбирается из СПРАВОЧНИКА — цену, раздел и кабинет знает он, а не экран.
  *
- * Цену берёт СЕРВЕР из справочника; экран посылает только услугу.
+ * Поздний импорт: форма тянет карточку госпитализации (окно и якорь), а та —
+ * этот экран.
  */
 async function addAdmissionService(root, onNavigate, { title, types }) {
-    const { openServicePickerModal } = await import('./service-picker-modal.js?v=aug17e');
-    openServicePickerModal({
-        title: tr(title),
-        confirmLabel: tr('Назначить'),
-        allowedTypeNames: types,
-        onPick: async ({ service }) => {
-            if (!service || !service.id) return;
-            const { error } = await supabase.rpc('admission_service_add', {
-                admission_id: state.admissionId, service_id: service.id, quantity: 1,
-            });
-            if (error) { toast(error.message || tr('Не удалось назначить услугу.'), 'fail'); return; }
-            toast(trf('Назначено: {name}', { name: service.name || '' }), 'ok');
-            await load();
-            paint(root, onNavigate);
-        },
+    const { openServiceOrderForm } = await import('./service-order-form.js?v=sof1');
+    const a = state.admission || {};
+    const p = a.patients || {};
+    openServiceOrderForm({
+        admissionId: state.admissionId,
+        title,
+        typeNames: types,
+        patientName: p.full_name || '',
+        patientSub: [p.mrn, (a.wards && a.wards.name) || null, (a.beds && a.beds.code) || null].filter(Boolean).join(' · '),
+        onDone: async () => { await load(); paint(root, onNavigate); },
     });
 }
 

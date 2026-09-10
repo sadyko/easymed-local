@@ -6087,6 +6087,11 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 /* Планшет: колонки уже, левый столбец короче — сутки целиком остаются видны. */
 @media (max-width: 1180px) { .mar-grid { --mar-name-w: 186px; --mar-col: 46px; } }
 
+/* SERVICE_ORDER_FORM_V1 — выбранная услуга в окне назначения. */
+.sof-pick { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; min-height: 42px;
+    padding: 8px 12px; border: 1px solid var(--ink-100); border-radius: var(--r-md); background: var(--white); }
+.sof-pick-t { flex: 1 1 100%; font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
+
 /* MAR_IN_CABINET_V1 — строка действий листа, когда он внутри истории болезни. */
 .mar-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
     margin-bottom: 14px; font-size: 15px; }

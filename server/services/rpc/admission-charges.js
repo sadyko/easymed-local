@@ -104,6 +104,9 @@ export function admissionCharges(db, args, user) {
       product_category: r.product_category || '',
       // Кабинет услуги — из справочника: он же стоит в направлении.
       room: r.room_name || '',
+      // SERVICE_ORDER_FORM_V1 — «на когда назначено». Это НЕ время выполнения:
+      // по нему готовят кабинет, а не считают деньги.
+      planned_at: r.planned_at || null,
       // «Оплачен» — свойство СЧЁТА, а не строки: строка знает только, в каком
       // она счёте. Пересчитывать оплату здесь значило бы завести вторую кассу.
       paid: String(r.invoice_status || '') === 'paid',
@@ -157,6 +160,11 @@ export const SERVICE_ADD_ROLES = ['admin', 'head_doctor', 'doctor'];
  * ЦЕНА БЕРЁТСЯ ИЗ СПРАВОЧНИКА, а не из аргументов. Цена, присланная экраном, —
  * это цена, которую можно подделать запросом; здесь же деньги.
  *
+ * SERVICE_ORDER_FORM_V1 — назначают НА ВРЕМЯ: `planned_at` (миграция 118).
+ * Строка при этом остаётся невыполненной — performed_at пуст, — потому что
+ * «назначено на завтра» и «сделано» это разные вещи, и акт не должен говорить
+ * второе, когда правда первое.
+ *
  * ЧЕГО ЭТО НЕ ДЕЛАЕТ. Строка начисляет и печатается в акте, но НЕ СТАНОВИТСЯ
  * заданием лаборатории: очередь лаборатории сегодня собирается из визитов
  * (lab_results.visit_service_id), и связать её с госпитализацией — отдельная
@@ -186,12 +194,18 @@ export function admissionServiceAdd(db, args, user) {
   const total = round2(price * quantity);
   const doctorId = Number(a.doctor_id) || (user && user.id) || null;
   const note = a.note === null || a.note === undefined ? null : String(a.note).trim().slice(0, 300) || null;
+  // Время принимается только разбираемое: строка, которую не прочесть, в
+  // расписании кабинета хуже пустого поля — её никто не заметит.
+  const planned = a.planned_at ? new Date(String(a.planned_at)) : null;
+  if (planned && Number.isNaN(planned.getTime())) throw new RpcError('Время назначения не разобрано.', 400);
+  const plannedAt = planned ? planned.toISOString().slice(0, 19) + 'Z' : null;
 
   const info = db.prepare(`
     INSERT INTO admission_services (admission_id, service_id, doctor_id, quantity, unit_price, total,
-                                    status, billable, notes, performed_at)
-    VALUES (?,?,?,?,?,?,'added',1,?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
-  `).run(admissionId, serviceId, doctorId, quantity, price, total, note);
+                                    status, billable, notes, planned_at, performed_at)
+    VALUES (?,?,?,?,?,?,'added',1,?,?,
+            CASE WHEN ? IS NULL THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') ELSE NULL END)
+  `).run(admissionId, serviceId, doctorId, quantity, price, total, note, plannedAt, plannedAt);
 
   return { line: db.prepare('SELECT * FROM admission_services WHERE id = ?').get(info.lastInsertRowid) };
 }

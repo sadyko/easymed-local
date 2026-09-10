@@ -208,10 +208,13 @@ export function caseExamsPanel(admissionId, { onAdd = null, charges = null, pati
         const tbody = h('tbody');
         // Назначенное — сверху: сначала «что заказано», потом «что пришло».
         for (const l of ordered) {
+            // «Дата» назначенного — НА КОГДА назначено, если время задали:
+            // кабинет готовят по нему, а не по минуте, когда нажали кнопку.
+            const at = l.planned_at || l.at;
             tbody.appendChild(h('tr', null,
                 h('td', null, h('div', { class: 'cf-row-t' }, l.name || '—')),
                 h('td', null, l.doctor_name || '—'),
-                h('td', { class: 'num' }, day(l.at)),
+                h('td', { class: 'num' }, l.planned_at ? whenShort(at) : day(at)),
                 h('td', null, l.room || '—'),
                 h('td', { class: 'num' }, String(l.quantity)),
                 h('td', { class: 'num' }, money(l.unit_price)),
@@ -268,6 +271,8 @@ const ACT_COLS = ['Наименование', 'Вид расхода', 'Тип �
 const money = (n) => String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 /** Дата строки — одним числом, как в реестре: время здесь только мешает. */
 const day = (v) => (v ? dateNumeric(String(v).slice(0, 10)) : '');
+/** Дата и время — там, где назначено на час: без часа запись бесполезна. */
+const whenShort = (v) => (v ? dateNumeric(v, { withTime: true }) : '');
 
 /**
  * ТИП РАСХОДА — то, чем строка является в деньгах.
