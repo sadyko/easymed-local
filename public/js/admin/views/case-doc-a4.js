@@ -19,7 +19,8 @@
 import { h, clear, Icon } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { sanitizeStoredHtml, richIsEmpty } from '../../shared/rich-text.js';
-import { PRINT_FONT_FACE_CSS, PRINT_FONT_STACK } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1
+import { dateNumeric } from '../../shared/date-words.js';   // A4_LETTERHEAD_V2 — дата рождения числом
+import { shortName, placeLine } from '../../shared/person-name.js';   // PERSON_NAME_SHORT_V1
 
 /** Разделы, которые пишутся разметкой. `diagnosis` сюда не входит намеренно. */
 export const RICH_KEYS = Object.freeze(['complaints', 'objective', 'plan', 'body']);
@@ -352,177 +353,99 @@ export function docActionsBar(ed, { onDone = null } = {}) {
  * Служебное (кнопки, крестики, свёрнутые строки) помечено .no-print и в окно
  * печати не попадает.
  */
-/**
- * Разметка печатной страницы.
- *
- * СТИЛИ ЕДУТ ВНУТРИ СТРАНИЦЫ, А НЕ ССЫЛКОЙ. Окно печати открывается ПУСТЫМ
- * (window.open('')), адрес у него about:blank, и ссылка «css/admin.css»
- * разрешаться ей не от чего — лист приезжал голым текстом, будто напечатали
- * исходник. Владелец дважды: «printing documents still not applied», «its like
- * rendering the html format».
- *
- * <base> это чинит, но только пока стили успевают загрузиться до печати —
- * то есть ставит бумагу в зависимость от сети и таймингов. Поэтому таблицы
- * стилей ВШИВАЮТСЯ: печать перестаёт зависеть от чего бы то ни было, кроме
- * самой разметки. <base> остаётся ради картинок (логотип клиники).
- *
- * ШРИФТ. Экранные правила приходят вместе со стилями, но САМИ ФАЙЛЫ шрифта в
- * новом окне надо объявить заново — иначе браузер печатает системным Times, и
- * бумага клиники выглядит чужой (владелец: «why? its looking like this?»).
- * Берём тот же @font-face, которым печатают все остальные документы.
- *
- * @param {{title?:string, base?:string, css?:string}} opts
- */
-export function docPrintHtml(sheetHtml, { title = '', base = null, css = '' } = {}) {
-    const safe = String(title || '').replace(/[<>&]/g, '');
-    const origin = base !== null ? base
-        : (typeof location !== 'undefined' && location.origin ? location.origin + '/' : '');
-    const baseTag = origin ? `<base href="${String(origin).replace(/["<>]/g, '')}">` : '';
-    // Ссылки остаются ПОЛОМ: если вшить стили не удалось (старый браузер,
-    // отказ fetch), лист всё равно попробует взять их по адресу.
-    const links = css ? '' : '<link rel="stylesheet" href="css/admin.css">'
-        + '<link rel="stylesheet" href="css/admin-views.css">';
-    // Служебное на бумагу не идёт: кнопки действий, крестики разделов и
-    // свёрнутые строки «+ Добавить» — они в списке скрытого ниже.
-    //
-    // Шрифт задаётся ПОСЛЕ вшитых правил: иначе экранный body-стиль сильнее.
-    // Высота листа снимается: экранные 1123 px гнали вторую, пустую страницу.
-    // ПОЛЯ ЛИСТА ОСТАЮТСЯ ЭКРАННЫМИ. Обнулив их, я вжал документ в самый край
-    // страницы — владелец сравнил экран с бумагой и увидел два разных
-    // документа. Лист занимает всю ширину печатной области, а воздух внутри
-    // у него тот же, что на экране; рамки полей ввода на бумаге сняты — на
-    // экране они говорят «сюда можно писать», а на бумаге писать некуда.
-    //
-    // ШАПКА НЕ СКЛАДЫВАЕТСЯ. Окно печати узкое, и экранные правила для мелких
-    // экранов сворачивали полосу реквизитов в два столбца, прятали линейку и
-    // уводили номера влево — бумага переставала быть похожа на лист, который
-    // видел врач. Печать — это всегда лист A4, а не телефон.
-    //
-    // I18N_COVERAGE_V1 — русских слов внутри самой строки быть не должно: она
-    // собирается из ${…}, и проверка ищет в таких строках непереведённый текст.
-    return `<!doctype html><html lang="ru"><head><meta charset="utf-8">
-${baseTag}
-<title>${safe}</title>
-${links}
-<style>
-${PRINT_FONT_FACE_CSS}
-${css}
-  @page { size: A4; margin: 12mm; }
-  html, body { margin: 0; background: #fff; font-family: ${PRINT_FONT_STACK}; }
-  body * { font-family: inherit; }
-  .no-print, .a4-sec-add, .a4-sec-x, .cd-acts, .a4-fmt, .a4-fmt-t { display: none !important; }
-  .a4-sec-off { display: none !important; }
-  .a4-paper { box-shadow: none !important; margin: 0 !important;
-      width: 100% !important; max-width: none !important; min-height: 0 !important; }
-  .a4-input { border-color: transparent !important; background: transparent !important;
-      padding-left: 0 !important; padding-right: 0 !important; }
-  .a4-lh-fields { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
-  .a4-lh-top { flex-wrap: nowrap !important; }
-  .a4-lh-rule { display: block !important; }
-  .a4-lh-ids { justify-items: end !important; text-align: right !important; }
-</style></head><body>${sheetHtml}</body></html>`;
+/** Полных лет на сегодня — или null, если даты рождения нет. */
+function ageYears(dob) {
+    if (!dob) return null;
+    const d = new Date(dob);
+    if (Number.isNaN(d.getTime())) return null;
+    const now = new Date();
+    let n = now.getFullYear() - d.getFullYear();
+    const before = now.getMonth() < d.getMonth()
+        || (now.getMonth() === d.getMonth() && now.getDate() < d.getDate());
+    if (before) n -= 1;
+    return n >= 0 && n < 130 ? n : null;
 }
 
 /**
- * БУМАГА, В КОТОРОЙ ЛЕЖИТ ЭТОТ УЗЕЛ.
- *
- * Печать получала .cd-sheet — только разделы, — потому что звавший её код
- * смотрел на ОДНОГО родителя, а между разделами и листом лежит ещё обёртка
- * тела документа. На бумагу уходил текст без шапки клиники, без названия
- * документа и без полосы реквизитов.
+ * Номера справа от названия документа: ID пациента и номер истории. Их
+ * спрашивают по телефону и ищут в стопке.
  */
-function paperOf(node) {
-    let el = node;
-    for (let i = 0; el && i < 12; i += 1) {
-        const cls = String(el.className || '').split(/\s+/);
-        if (cls.includes('a4-paper')) return el;
-        el = el.parentNode;
+export function docHeadIds(admission) {
+    const a = admission || {};
+    return [
+        { label: 'ID', value: (a.patients || {}).mrn || '' },
+        { label: '№ истории', value: a.admission_no || '' },
+    ];
+}
+
+/**
+ * Реквизиты в полосе под шапкой.
+ *
+ * A4_LETTERHEAD_V2 — владелец: «add necessary fields». К пациенту и дате
+ * рождения добавлены те, без которых стационарная бумага не опознаётся:
+ * отделение с койкой и лечащий врач.
+ *
+ * Имя — ФАМИЛИЯ С ИНИЦИАЛАМИ (PERSON_NAME_SHORT_V1): полное не помещается в
+ * четверть листа и уводит соседнюю ячейку на вторую строку.
+ *
+ * CASE_DOC_PRINT_V4 — собирается ОДНИМ местом на экран и на печать: две копии
+ * этого списка разошлись бы, и бумага называла бы пациента иначе, чем экран.
+ */
+export function docHeadFields(admission) {
+    const a = admission || {};
+    const p = a.patients || {};
+    const age = ageYears(p.date_of_birth);
+    return [
+        { label: 'Пациент', uz: 'Bemor', value: shortName(p.full_name), full: p.full_name || '' },
+        { label: 'Дата рождения', uz: 'Tugʻilgan sana',
+          value: p.date_of_birth ? dateNumeric(p.date_of_birth) : '',
+          extra: age === null ? '' : trf('({n} лет)', { n: age }) },
+        { label: 'Отделение · койка', uz: 'Boʻlim · koyka',
+          value: placeLine(a.department, a.wards && a.wards.name, a.beds && a.beds.code) },
+        { label: 'Лечащий врач', uz: 'Davolovchi shifokor',
+          value: shortName((a.attending && a.attending.full_name) || '') },
+    ];
+}
+
+/**
+ * ТЕЛО ДОКУМЕНТА ДЛЯ ПЕЧАТНОГО ЛИСТА.
+ *
+ * CASE_DOC_PRINT_V4 (2026-09-10) — владелец: «#service-workspace print working
+ * properly, but in the stationary its not».
+ *
+ * И был прав по существу: кабинет врача печатает через ОДИН общий механизм
+ * приложения (doc-settings → buildSheetHtml), которым печатают счета, справки
+ * и заключения, — с бумагой клиники, её шрифтом, полями, водяным знаком и
+ * подписью. История болезни печаталась моим собственным: я снимал разметку с
+ * экрана, вшивал в неё экранные стили и раз за разом чинил то поля, то рамки,
+ * то шрифт. Так и должно было кончиться: два печатных механизма расходятся.
+ *
+ * Здесь остаётся ровно то, чего у общего механизма нет и быть не может, —
+ * ЗНАНИЕ О РАЗДЕЛАХ ЭТОГО ДОКУМЕНТА. Всё остальное делает он.
+ *
+ * @param {Array<{title:string, html:string}>} parts разделы по порядку
+ * @returns {string} разметка тела листа
+ */
+export function caseDocPrintBody(parts) {
+    const rows = (parts || []).filter((p) => p && String(p.html || '').trim());
+    if (!rows.length) {
+        return `<div class="body muted" style="margin-top:18px;">${escHtml(tr('Документ ещё не заполнен.'))}</div>`;
     }
-    return node;
+    return rows.map((p) => {
+        const name = String(p.title || '').trim();
+        // Раздел без имени печатается без заголовка — так его и завели.
+        const head = name
+            ? `<div class="sect"><span class="txt">${escHtml(name)}</span><span class="rule"></span></div>`
+            : '';
+        return `${head}<div class="body" style="text-align:left;">${sanitizeStoredHtml(p.html)}</div>`;
+    }).join('');
 }
 
-/**
- * Собрать таблицы стилей САМОЙ СТРАНИЦЫ — те, по которым лист нарисован на
- * экране. Читаются правила уже загруженных стилей; если браузер их не отдаёт
- * (в этом приложении такого нет, но правило общее), возвращается пусто, и
- * печать откатывается на ссылки.
- */
-function pageCss() {
-    try {
-        const out = [];
-        for (const sheet of Array.from(document.styleSheets || [])) {
-            let rules = null;
-            try { rules = sheet.cssRules; } catch (e) { rules = null; }   // чужой домен
-            if (!rules) continue;
-            for (const rule of Array.from(rules)) out.push(rule.cssText);
-        }
-        return out.join('\n');
-    } catch (e) { return ''; }
-}
-
-/** Служебное на листе: инструменты, а не документ. */
-const PRINT_STRIP = '.no-print, .a4-sec-off, .a4-sec-add, .a4-sec-x, .a4-fmt, .a4-fmt-t, .cd-acts, .a4-pbreak';
-
-/**
- * КОПИЯ ЛИСТА БЕЗ СЛУЖЕБНОГО.
- *
- * CASE_DOC_PRINT_V3 (2026-09-10) — раньше служебное пряталось правилами CSS в
- * печатной странице, и любое расхождение в этих правилах давало пустой лист:
- * владелец получил бумагу, на которой была только шапка. Правило, спрятавшее
- * лишнее, ровно так же прячет нужное — и молча.
- *
- * Теперь лишнее ВЫРЕЗАЕТСЯ из копии, а печатается то, что осталось. Копия — не
- * сам лист: врач продолжает писать в свой документ, пока открыто окно печати.
- */
-function printableClone(paper) {
-    if (!paper || typeof paper.cloneNode !== 'function') return paper;
-    const copy = paper.cloneNode(true);
-    try {
-        const junk = copy.querySelectorAll ? copy.querySelectorAll(PRINT_STRIP) : [];
-        for (const el of Array.from(junk)) { if (el && el.remove) el.remove(); }
-    } catch (e) { /* нечего вырезать — печатаем как есть */ }
-
-    // ПУСТОЙ ЛИСТ ОБЯЗАН СКАЗАТЬ, ЧТО ОН ПУСТ. Документ, у которого не
-    // заполнен ни один раздел, печатался шапкой и белым полем — и выглядел
-    // как сломанная печать, а не как пустой документ.
-    try {
-        const filled = Array.from(copy.querySelectorAll ? copy.querySelectorAll('.a4-input') : [])
-            .some((el) => String(el.textContent || '').trim());
-        if (!filled && copy.appendChild) {
-            const note = document.createElement('div');
-            note.className = 'a4-print-empty';
-            note.textContent = tr('Документ ещё не заполнен.');
-            copy.appendChild(note);
-        }
-    } catch (e) { /* не смогли проверить — печатаем как есть */ }
-    return copy;
-}
-
-/** Открыть окно печати с этим листом. Разметку собирает docPrintHtml. */
-export function printDocSheet(node, { title = '' } = {}) {
-    const sheetEl = paperOf(node);
-    if (!sheetEl) return false;
-    const w = window.open('', '_blank', 'width=900,height=1100');
-    if (!w) return false;
-    const copy = printableClone(sheetEl);
-    w.document.open();
-    w.document.write(docPrintHtml(copy.outerHTML, { title, css: pageCss() }));
-    w.document.close();
-    // Печать зовём ПОСЛЕ загрузки: стили теперь внутри страницы, но картинки
-    // (логотип) ещё едут. Если onload не случится, печатаем всё равно — через
-    // секунду: молчащее окно печати выглядит так же, как сломанная кнопка.
-    let done = false;
-    const go = () => {
-        if (done) return;
-        done = true;
-        try { w.focus(); w.print(); } catch (e) { /* пользователь напечатает сам */ }
-    };
-    try {
-        w.onload = go;
-        if (typeof w.setTimeout === 'function') w.setTimeout(go, 1200);
-        else if (typeof setTimeout === 'function') setTimeout(go, 1200);
-    } catch (e) { /* окно закрыли раньше */ }
-    return true;
+/** Экранирование для печатной разметки: имя раздела пишет человек. */
+function escHtml(v) {
+    return String(v === null || v === undefined ? '' : v)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
 }
 
 /**

@@ -286,60 +286,50 @@ test('CASE_DOC_FORMAT_V1: у раздела своя панель оформле
     assert.ok(String(bar.className).includes('no-print'), 'панель оформления пойдёт на бумагу');
 });
 
-test('CASE_DOC_ACTIONS_V1: печать берёт ТОТ ЖЕ лист и прячет служебное', () => {
-    const html = a4.docPrintHtml('<div class="a4-paper"><b>Осмотр</b></div>',
-        { title: 'Первичный осмотр', base: 'http://localhost:8000/' });
-    assert.match(html, /Первичный осмотр/, 'у печатной страницы нет заголовка');
-    assert.match(html, /a4-paper/, 'на бумагу не попал сам лист');
-    // Окно печати пустое (about:blank): без <base> относительные ссылки в нём
-    // разрешать не от чего, и лист приезжает голым текстом и без логотипа.
-    assert.ok(html.includes('<base href="http://localhost:8000/">'), 'у печатной страницы нет корня для ссылок');
-    // Без вшитых стилей остаются ссылки — пол, а не основной путь.
-    assert.ok(html.includes('css/admin.css'), 'печать без таблицы стилей — голый текст');
-    assert.ok(html.includes('css/admin-views.css'), 'печать без таблицы стилей документа');
+// CASE_DOC_PRINT_V4 — владелец: «#service-workspace print working properly, but
+// in the stationary its not». Своя печать у истории болезни снята: документ
+// печатается ОБЩИМ механизмом приложения (doc-settings → buildSheetHtml), тем
+// же, которым печатают счета, справки и заключение из кабинета врача. Здесь
+// проверяется ровно то, что осталось на стороне истории болезни: разделы.
+test('CASE_DOC_PRINT_V4: тело листа — это разделы документа, пустые не печатаются', () => {
+    const html = a4.caseDocPrintBody([
+        { title: 'Жалобы', html: '<p>Болит живот</p>' },
+        { title: 'Объективно', html: '   ' },
+        { title: '', html: '<p>Абзац без имени</p>' },
+    ]);
+    assert.match(html, /Жалобы/);
+    assert.match(html, /Болит живот/);
+    assert.ok(!/Объективно/.test(html), 'пустой раздел не печатается');
+    assert.match(html, /Абзац без имени/, 'раздел без имени потерян');
 
-    // А ВШИТЫЕ стили вытесняют ссылки: лист перестаёт зависеть от сети и
-    // таймингов — именно так он и печатался голым текстом.
-    const inlined = a4.docPrintHtml('<div class="a4-paper">лист</div>',
-        { title: 'Осмотр', base: 'http://localhost:8000/', css: '.a4-paper{width:210mm}' });
-    assert.ok(inlined.includes('.a4-paper{width:210mm}'), 'стили не вшиты в печатную страницу');
-    assert.ok(!inlined.includes('css/admin.css'), 'при вшитых стилях ссылка на файл лишняя');
-    // Служебное скрыто: кнопки, крестики, свёрнутые строки, полоса действий.
-    for (const cls of ['no-print', 'a4-sec-add', 'a4-sec-x', 'cd-acts', 'a4-sec-off']) {
-        assert.ok(html.includes('.' + cls), 'на бумаге осталось служебное: ' + cls);
-    }
-    assert.ok(html.includes('@page { size: A4'), 'печать не задаёт лист A4');
-    // Шрифт объявляется заново: экранные правила приезжают, а файлы шрифта в
-    // новом окне надо назвать — иначе браузер печатает системным Times.
-    assert.match(html, /@font-face/, 'печатная страница без объявления шрифта');
-    assert.match(html, /font-family:[^;]*Onest/, 'лист печатается не шрифтом клиники');
-    // Пустой документ — одна страница: экранная высота листа гнала вторую.
-    assert.match(html, /min-height: 0 !important/, 'пустой лист снова займёт две страницы');
+    // Разметка чистится и здесь: тело листа собирается из написанного врачом.
+    const dirty = a4.caseDocPrintBody([{ title: 'Жалобы', html: '<p onclick="x()">текст</p><script>bad()</script>' }]);
+    assert.ok(!/script|onclick/i.test(dirty), 'разметка раздела не почищена перед печатью');
+
+    // Пустой документ говорит, что он пуст, а не выдаёт белый лист за бумагу.
+    assert.match(a4.caseDocPrintBody([]), /не заполнен/i);
 });
 
-// CASE_DOC_ACTIONS_V1 — владелец: «pressing print dont cloning the current
-// document fully». Печать получала только разделы: звавший её код смотрел на
-// ОДНОГО родителя, а между разделами и бумагой лежит ещё обёртка тела.
-test('CASE_DOC_ACTIONS_V1: печать поднимается до самого листа, а не печатает одни разделы', () => {
-    const paper = mkEl('div'); paper.className = 'a4-paper';
-    const body = mkEl('div'); body.className = 'cw-doc-body';
-    const sheet = mkEl('div'); sheet.className = 'cd-sheet';
-    paper.appendChild(body); body.appendChild(sheet);
-    sheet._parent = body; body._parent = paper;
-    // Разметку берут через outerHTML — подставляем её обоим узлам, чтобы было
-    // видно, КАКОЙ из них ушёл в печать.
-    Object.defineProperty(paper, 'outerHTML', { get: () => '<div class=a4-paper>Heal point clinic · Этапный эпикриз</div>' });
-    Object.defineProperty(sheet, 'outerHTML', { get: () => '<div class=cd-sheet>только разделы</div>' });
+test('CASE_DOC_PRINT_V4: шапку листа собирает ОДНО место — экран и печать называют пациента одинаково', () => {
+    const adm = {
+        admission_no: 'ADM-00003',
+        department: 'Хирургия',
+        patients: { mrn: 'P-26-69933', full_name: 'Дилшод Дилшодов Дилшодович', date_of_birth: '1995-08-17' },
+        wards: { name: '201' }, beds: { code: '1' },
+        attending: { full_name: 'Мухаммадиева Севара' },
+    };
+    const ids = a4.docHeadIds(adm);
+    assert.deepEqual(ids.map((i) => i.value), ['P-26-69933', 'ADM-00003']);
 
-    let printed = null;
-    const w = { document: { open() {}, write(html) { printed = html; }, close() {} }, focus() {}, print() {} };
-    const openWas = globalThis.window.open;
-    globalThis.window.open = () => w;
-    try { a4.printDocSheet(sheet, { title: 'Этапный эпикриз' }); } finally { globalThis.window.open = openWas; }
-
-    assert.ok(printed, 'окно печати не получило разметки');
-    assert.ok(printed.includes('Heal point clinic'), 'на бумагу ушли одни разделы, без шапки листа');
-    assert.ok(!printed.includes('только разделы'), 'печать взяла .cd-sheet вместо листа');});
+    const fields = a4.docHeadFields(adm);
+    assert.equal(fields.length, 4, 'реквизитов на листе четыре');
+    // Фамилия с инициалами: полное имя не помещается в четверть листа.
+    assert.equal(fields[0].value, 'Дилшод Д. Д.');
+    assert.equal(fields[0].full, 'Дилшод Дилшодов Дилшодович', 'полное имя обязано остаться в подсказке');
+    assert.match(fields[1].extra || '', /31|30/, 'возраст не посчитан');
+    assert.match(fields[2].value, /201/, 'палата и койка не собраны');
+    assert.match(fields[3].value, /Мухаммадиева/);
+});
 
 test('CASE_DOC_ACTIONS_V1: чтение опубликованного не показывает ни черновика, ни сохранения', () => {
     const bar = a4.docActionsBar({ print: () => {} });

@@ -164,9 +164,9 @@ export { buildSheetHtml, esc };
 // External callers (invoice receipt button etc.) call this with `type` +
 // `data`. Falls back to an inline iframe preview if pop-ups are blocked.
 // ---------------------------------------------------------------------------
-export function printableSheet({ type = 'invoice', title = null, idLine = null, data = null, bodyHtml = null, settings = null } = {}) {
+export function printableSheet({ type = 'invoice', title = null, idLine = null, data = null, bodyHtml = null, settings = null, head = null } = {}) {
     const s = settings || loadDocSettings();
-    const html = buildSheetHtml({ type, s, data, idLine, title, bodyHtml });
+    const html = buildSheetHtml({ type, s, data, idLine, title, bodyHtml, head });
     const w = window.open('', '_blank', 'width=900,height=1100');
     if (w) { w.document.open(); w.document.write(html); w.document.close(); return; }
     openInlinePrintPreview(html);

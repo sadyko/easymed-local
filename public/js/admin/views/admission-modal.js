@@ -47,11 +47,11 @@
 // дорогой вид дубля.
 
 import { supabase } from '../../supabase.js';
-import { sectionsFor, sectionLabel, richSection, freeSection, richToolbar, printDocSheet, docActionsBar, readRich, applyRich, RICH_KEYS, insertBlock, fireInput, caseDocBlank } from './case-doc-a4.js';
+import { sectionsFor, sectionLabel, richSection, freeSection, richToolbar, caseDocPrintBody, docHeadIds, docHeadFields, docActionsBar, readRich, applyRich, RICH_KEYS, insertBlock, fireInput, caseDocBlank } from './case-doc-a4.js';
 // CASE_DOC_TEMPLATES_V1 — библиотека шаблонов живёт в кабинете врача и
 // подгружается в момент нажатия (см. applyTemplate ниже): статический импорт
 // замыкает кольцо модулей и оставляет экран истории болезни на старом коде.
-import { loadDocSettings } from './doc-settings.js?v=noqr1';   // CASE_DOC_BLANK_V1 — бланк клиники из «Документов»
+import { loadDocSettings, printableSheet } from './doc-settings.js?v=noqr1';   // CASE_DOC_BLANK_V1 / CASE_DOC_PRINT_V4 — один механизм печати на всё приложение
 import { dxEditor } from './case-dx.js';   // CASE_DX_LIST_V1 — список диагнозов с ролями
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
 import { h, Icon, Tag, toast, clear, field, fmtDate, fmtDateTime } from '../ui.js';
@@ -1157,9 +1157,40 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         // CASE_DOC_ACTIONS_V1 — четыре действия документа отдаются наружу
         // готовыми: экран ставит их полосой над листом, окно — тем же рядом.
         applyTemplate,
-        // Лист (.a4-paper) ищет сама печать: между разделами и бумагой лежит
-        // ещё обёртка тела документа, и «один родитель вверх» промахивался.
-        print: () => printDocSheet(sheet, { title: reviewTitle(kind, mode, docTitle) }),
+        /**
+         * ПЕЧАТЬ — ОБЩИМ МЕХАНИЗМОМ ПРИЛОЖЕНИЯ (CASE_DOC_PRINT_V4).
+         *
+         * Тем же, которым печатают счета, справки и заключение из кабинета
+         * врача: бумага клиники, её шрифт, поля, водяной знак, подпись. Своя
+         * печать у истории болезни была, и владелец сравнил: «в кабинете
+         * работает, в стационаре нет».
+         *
+         * Отсюда уходит ровно то, чего общий механизм знать не может: какие
+         * разделы у ЭТОГО документа, как они названы и что в них написано.
+         */
+        print: () => {
+            const parts = [];
+            for (const key of ALL_SECS) {
+                if (!secOn.has(key) || !rich[key]) continue;
+                parts.push({ title: secTitles[key] || tr(sectionLabel(kind, key)), html: readRich(rich[key]) });
+            }
+            for (const f of freeSecs) {
+                parts.push({ title: String(f.name.value || '').trim(), html: readRich(f.input) });
+            }
+            const dx = diagnosis && diagnosis.value ? String(diagnosis.value).trim() : '';
+            if (dx) parts.unshift({ title: tr('Диагноз'), html: '<p>' + dx.replace(/[<>&]/g, '') + '</p>' });
+            printableSheet({
+                type: 'case_doc',
+                title: reviewTitle(kind, mode, docTitle),
+                idLine: admission.admission_no || '',
+                bodyHtml: caseDocPrintBody(parts),
+                head: {
+                    title: reviewTitle(kind, mode, docTitle),
+                    ids: docHeadIds(admission),
+                    fields: docHeadFields(admission),
+                },
+            });
+        },
         // CASE_DOC_A4_V1 — панель форматирования и вставка блока отдаются
         // НАРУЖУ: рабочий экран ставит панель НАД листом, а правая панель
         // «Вставить в документ» кладёт блок туда, где стоит курсор.

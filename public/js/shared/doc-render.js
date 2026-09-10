@@ -86,7 +86,7 @@ export function esc(s) {
 // Build the final HTML for the print/preview window. Wraps the per-type
 // renderer in branded paper chrome + auto-print script.
 // ---------------------------------------------------------------------------
-export function buildSheetHtml({ type = 'invoice', s = null, data = null, idLine = null, title = null, bodyHtml = null }) {
+export function buildSheetHtml({ type = 'invoice', s = null, data = null, idLine = null, title = null, bodyHtml = null, head = null }) {
     // `s` обязателен: этот модуль не знает ни про localStorage, ни про
     // clinic-контекст. Настройки собирает вызывающий — браузер через
     // loadDocSettings(), сервер через doc_settings/doc_branding.
@@ -104,7 +104,7 @@ export function buildSheetHtml({ type = 'invoice', s = null, data = null, idLine
     // real data; the wrapper (header + footer + watermark + stamp) is
     // always supplied by doc-settings.
     const body = bodyHtml != null
-        ? renderCustomBody({ s: cfg, type, bodyHtml, idLine, title })
+        ? renderCustomBody({ s: cfg, type, bodyHtml, idLine, title, head })
         : renderBuiltinBody({ s: cfg, type, data });
 
     // Page geometry per type. Fiscal = narrow thermal strip, A5 = half A4.
@@ -299,7 +299,33 @@ ${paper.cls === 'fiscal' ? `.sheet, .sheet * { color: #000 !important; font-weig
 
 // External-print fallback: caller passes their own body HTML; we wrap it
 // with the standard branded header + footer.
-function renderCustomBody({ s, type, bodyHtml, idLine, title }) {
+/**
+ * Тело, собранное вызывающим.
+ *
+ * CASE_DOC_PRINT_V4 (2026-09-10) — ШАПКА ДОКУМЕНТА, ЕСЛИ ЕЁ ПЕРЕДАЛИ. Владелец:
+ * «#service-workspace print working properly, but in the stationary its not» —
+ * кабинет печатает через этот механизм, а история болезни печаталась своим,
+ * собранным на коленке, и выходила другой бумагой. Теперь и она приходит сюда,
+ * и вместе с телом присылает шапку: название, дату, номера, реквизиты.
+ *
+ * Без `head` всё как было: старая шапка клиники и английская строка Document —
+ * её ждут прежние вызовы (квитанция кассы).
+ */
+function renderCustomBody({ s, type, bodyHtml, idLine, title, head = null }) {
+    if (head) {
+        return `
+        ${docHeadHTML(s, {
+            title: head.title || title || titleFor(type),
+            uz: head.uz || '',
+            date: head.date || dateNumeric(new Date()),
+            ids: head.ids || [],
+            fields: head.fields || [],
+        })}
+        ${bodyHtml}
+        ${signoffHTML(s, head.sign || { signerName: '', signerSpec: '', signerLicense: '' })}
+        ${footerHTML(s)}
+    `;
+    }
     return `
         ${headerHTML(s)}
         <div class="row" style="margin-top:18px;align-items:flex-start;gap:18px;">

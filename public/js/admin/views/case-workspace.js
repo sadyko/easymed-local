@@ -30,7 +30,7 @@ import { tr, trf } from '../i18n.js';
 import { caseDocsView, assembleCaseFile, canEditDocSet, caseDocSetDrop, caseDocSetAdd,
     caseDocSetRestore, caseDocSetRename, caseDocSetDelete, loadDocTypeSet } from './case-docs.js?v=cw1';
 import { buildReviewEditor } from './admission-modal.js?v=inp2';
-import { docActionsBar } from './case-doc-a4.js';   // CASE_DOC_ACTIONS_V1 — действия над листом
+import { docActionsBar, docHeadIds, docHeadFields } from './case-doc-a4.js';   // CASE_DOC_ACTIONS_V1 / A4_LETTERHEAD_V2
 import { caseTabsBar, caseOrdersPanel, caseExamsPanel, caseSurgeryPanel } from './case-file-tabs.js';   // CASE_FILE_TABS_V1
 import { buildTitleSheetEditor, TITLE_SHEET_KIND } from './title-sheet.js';   // TITLE_SHEET_V1
 import { a4Sheet } from './a4-letterhead.js';   // A4_LETTERHEAD_V2
@@ -373,45 +373,11 @@ function ageYears(dob) {
     return n >= 0 && n < 130 ? n : null;
 }
 
-/**
- * Номера справа от названия документа: ID пациента и номер, под которым бумага
- * лежит в архиве. Их спрашивают по телефону и ищут в стопке.
- */
-function docIds() {
-    const a = state.admission || {};
-    return [
-        { label: 'ID', value: (a.patients || {}).mrn || '' },
-        { label: '№ истории', value: a.admission_no || '' },
-    ];
-}
-
-/**
- * Реквизиты в полосе под шапкой.
- *
- * A4_LETTERHEAD_V2 — владелец: «add necessary fields». К пациенту и дате
- * рождения добавлены те, без которых стационарная бумага не опознаётся:
- * отделение с койкой и лечащий врач. Их спрашивают у постели чаще, чем номер
- * истории.
- *
- * Имя — ФАМИЛИЯ С ИНИЦИАЛАМИ (PERSON_NAME_SHORT_V1): полное не помещалось в
- * четверть листа и уводило соседнюю ячейку на вторую строку. Целиком оно
- * остаётся в подсказке и в теле документа.
- */
-function docFields() {
-    const a = state.admission || {};
-    const p = a.patients || {};
-    const age = ageYears(p.date_of_birth);
-    return [
-        { label: 'Пациент', uz: 'Bemor', value: shortName(p.full_name), full: p.full_name || '' },
-        { label: 'Дата рождения', uz: 'Tugʻilgan sana',
-          value: p.date_of_birth ? dateNumeric(p.date_of_birth) : '',
-          extra: age === null ? '' : trf('({n} лет)', { n: age }) },
-        { label: 'Отделение · койка', uz: 'Boʻlim · koyka',
-          value: placeLine(a.department, a.wards && a.wards.name, a.beds && a.beds.code) },
-        { label: 'Лечащий врач', uz: 'Davolovchi shifokor',
-          value: shortName((a.attending && a.attending.full_name) || '') },
-    ];
-}
+// A4_LETTERHEAD_V2 / CASE_DOC_PRINT_V4 — номера и реквизиты шапки собирает
+// case-doc-a4.js: экран и печать обязаны называть пациента одинаково, а две
+// копии одного списка расходятся молча.
+const docIds = () => docHeadIds(state.admission);
+const docFields = () => docHeadFields(state.admission);
 
 function paintPane(pane, root, onNavigate) {
     if (!pane) return;
