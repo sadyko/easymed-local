@@ -75,7 +75,7 @@ export function ingestMessage(db, raw, peer = '', deviceId = null) {
   const vsId = parseSampleId(msg.sampleId);
 
   const order = vsId
-    ? db.prepare(`SELECT vs.*, s.is_lab FROM visit_services vs
+    ? db.prepare(`SELECT vs.*, s.is_lab, s.name AS service_name FROM visit_services vs
                     JOIN services s ON s.id = vs.service_id
                    WHERE vs.id = ?`).get(vsId)
     : null;
@@ -85,13 +85,19 @@ export function ingestMessage(db, raw, peer = '', deviceId = null) {
     return 'AA';
   }
   if (!order.is_lab) {
-    recordMessage(db, { ...base, visitServiceId: order.id, status: 'unmatched', detail: 'услуга не лабораторная' });
+    recordMessage(db, { ...base, visitServiceId: order.id, status: 'unmatched',
+      detail: 'услуга «' + (order.service_name || order.service_id) + '» не помечена как лабораторная' });
     return 'AA';
   }
 
   const panel = db.prepare('SELECT * FROM lab_panels WHERE service_id = ? AND active = 1 ORDER BY id LIMIT 1').get(order.service_id);
   if (!panel) {
-    recordMessage(db, { ...base, visitServiceId: order.id, status: 'unmapped', detail: 'у услуги нет панели' });
+    // Название услуги здесь обязательно. У клиники бывает несколько похоже
+    // названных услуг («Общий анализ крови (CBC)», «(ОАК)», «(стационар)»), и
+    // безымянное «у услуги нет панели» не отвечает на единственный вопрос,
+    // который человек задаёт в этот момент: у КАКОЙ именно.
+    recordMessage(db, { ...base, visitServiceId: order.id, status: 'unmapped',
+      detail: 'услуга «' + (order.service_name || order.service_id) + '» не привязана ни к одной панели' });
     return 'AA';
   }
   if (!panel.device_id) {

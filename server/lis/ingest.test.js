@@ -199,7 +199,20 @@ test('услуга не лабораторная → unmatched с этой пр�
   db.prepare('UPDATE services SET is_lab = 0 WHERE id = 9').run();
   ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1')]), '127.0.0.1');
   assert.equal(message(db).status, 'unmatched');
-  assert.match(message(db).detail, /не лабораторная/);
+  assert.match(message(db).detail, /Общий анализ крови/, 'услуга обязана быть названа — у клиники их несколько с похожими именами');
+  db.close();
+});
+
+test('у услуги нет панели → unmapped, и услуга НАЗВАНА по имени', () => {
+  // У клиники бывает несколько похоже названных услуг: «Общий анализ крови
+  // (CBC)», «(ОАК)», «(стационар)». Безымянное «у услуги нет панели» не
+  // отвечает на единственный вопрос, который человек задаёт в этот момент.
+  const db = fresh();
+  db.prepare('UPDATE lab_panels SET service_id = NULL WHERE id = 5').run();
+  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1')]), '127.0.0.1');
+  assert.equal(message(db).status, 'unmapped');
+  assert.match(message(db).detail, /Общий анализ крови/, 'в лотке обязано быть имя услуги, а не только слово «услуга»');
+  assert.equal(results(db).length, 0);
   db.close();
 });
 
