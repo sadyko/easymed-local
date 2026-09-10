@@ -75,6 +75,10 @@ const settle = () => new Promise((r) => setTimeout(r, 30));
 
 // ─── «сервер»: справочник разделов и услуг местной клиники ─────────────────
 let SERVICES = [];
+const STAFF = [
+    { id: 77, full_name: 'Мудунов А. М.', specialty: 'Хирург', role: 'doctor', is_doctor: 1 },
+    { id: 78, full_name: 'Кассир К.', specialty: '', role: 'cashier', is_doctor: 0 },
+];
 const TYPES = [
     { id: 1, name: 'Консультации', active: 1 },
     { id: 2, name: 'Диагностика', active: 1 },
@@ -95,6 +99,7 @@ globalThis.fetch = async (url, opts = {}) => {
     if (u.startsWith('/api/db')) {
         if (body.table === 'service_types') return ok(TYPES);
         if (body.table === 'services') return ok(SERVICES);
+        if (body.table === 'users') return ok(STAFF);
         return ok([]);
     }
     if (u.startsWith('/api/rpc/')) {
@@ -118,40 +123,61 @@ const openForm = async (opts) => {
     return modals[modals.length - 1];
 };
 
-test('услуга выбирается из справочника и уходит на сервер С ВРЕМЕНЕМ', async () => {
-    const form = await openForm({});
-    assert.ok(textOf(form).includes('Услуга не выбрана'), 'окно не говорит, что услуга ещё не выбрана');
+test('НЕСКОЛЬКО УСЛУГ ЗА РАЗ: набор, одно время, один исполнитель', async () => {
+    // Без набора вкладки окно открывается на всём справочнике — в наборе будут
+    // услуги из разных разделов, как это и бывает перед операцией.
+    const form = await openForm({ typeNames: null });
+    const rows = () => walk(form).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('sof-row'));
 
-    // 1. Справочник — В САМОМ ОКНЕ: второго, полноэкранного, больше нет.
-    assert.equal(BODY.children.filter((c) => String(c.className || '').includes('modal')).length, 1,
-        'поверх формы открылось второе окно — на его величину и жаловались');
-    const row = walk(form).find((e) => e.tagName === 'BUTTON'
-        && String(e.className).includes('sof-row') && textOf(e).includes('Аппендэктомия'));
-    assert.ok(row, 'услуги в списке нет: ' + textOf(form).slice(0, 200));
-    row.click();
+    // Отмечаем две услуги подряд — окно не закрывается и список не сбрасывается.
+    rows().find((e) => textOf(e).includes('Аппендэктомия')).click();
+    await settle();
+    const second = rows().find((e) => textOf(e).includes('Общий анализ крови'));
+    assert.ok(second, 'после первой отметки список услуг пропал');
+    second.click();
     await settle();
 
-    // 2. Выбранная услуга видна в окне вместе с ценой.
-    assert.ok(textOf(form).includes('Аппендэктомия'), 'выбранная услуга не показана: ' + textOf(form).slice(0, 200));
-    assert.ok(textOf(form).includes('3 000 000'), 'цена услуги не показана');
+    // Справа видно, что назначаем, и на какую сумму.
+    const t = textOf(form).replace(/ /g, ' ');
+    assert.ok(t.includes('Услуг: 2'), 'набор не посчитан: ' + t.slice(0, 200));
+    assert.ok(t.includes('3 040 000'), 'сумма набора не показана: ' + t.slice(0, 200));
 
-    // 3. Дата и время — как в назначениях.
+    // Количество второй строки — своё.
+    const qty = walk(form).filter((e) => e.tagName === 'INPUT' && String(e.className).includes('sof-qty'))[1];
+    qty.value = '3';
+    qty.dispatchEvent({ type: 'input', target: qty });
+    await settle();
+
+    // Время и исполнитель — общие на весь набор.
     const inputs = walk(form).filter((e) => e.tagName === 'INPUT');
-    const dateInp = inputs.find((e) => e.attrs.type === 'date');
-    const timeInp = inputs.find((e) => e.attrs.type === 'time');
-    assert.ok(dateInp && timeInp, 'в окне нет даты и времени');
-    dateInp.value = '2026-09-11';
-    timeInp.value = '10:30';
+    inputs.find((e) => e.attrs.type === 'date').value = '2026-09-11';
+    inputs.find((e) => e.attrs.type === 'time').value = '10:30';
+    const sel = walk(form).find((e) => e.tagName === 'SELECT');
+    assert.ok(textOf(sel).includes('Мудунов'), 'исполнителей не подгрузили: ' + textOf(sel));
+    sel.value = '77';
 
     findBtn(form, 'Назначить').click();
     await settle();
-    const call = rpc.find((c) => c.name === 'admission_service_add');
-    assert.ok(call, 'назначение не ушло на сервер');
-    assert.equal(call.args.service_id, 10, 'ушла не та услуга');
-    assert.equal(call.args.quantity, 1);
-    assert.ok(call.args.planned_at, 'время назначения не ушло — ради него окно и делалось');
-    // Местное время переводится в общее: сравниваем момент, а не строку.
-    assert.equal(new Date(call.args.planned_at).getTime(), new Date('2026-09-11T10:30:00').getTime());
+    const calls = rpc.filter((c) => c.name === 'admission_service_add');
+    assert.equal(calls.length, 2, 'ушло записей: ' + calls.length);
+    assert.deepEqual(calls.map((c) => c.args.service_id).sort((a, b) => a - b), [10, 11]);
+    assert.equal(calls.find((c) => c.args.service_id === 11).args.quantity, 3, 'количество строки потерялось');
+    for (const c of calls) {
+        assert.equal(c.args.doctor_id, 77, 'исполнитель не ушёл');
+        assert.equal(new Date(c.args.planned_at).getTime(), new Date('2026-09-11T10:30:00').getTime(),
+            'время назначения не то');
+    }
+});
+
+test('повторное нажатие СНИМАЕТ услугу с набора', async () => {
+    const form = await openForm({});
+    const rows = () => walk(form).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('sof-row'));
+    rows().find((e) => textOf(e).includes('Аппендэктомия')).click();
+    await settle();
+    assert.ok(textOf(form).includes('Услуг: 1'));
+    rows().find((e) => textOf(e).includes('Аппендэктомия')).click();
+    await settle();
+    assert.ok(textOf(form).includes('Ничего не выбрано'), 'услуга не снялась: ' + textOf(form).slice(0, 200));
 });
 
 test('SERVICE_FORM_GROUPS_V2: набор вкладки — умолчание, а весь справочник в одной плашке', async () => {
@@ -189,7 +215,7 @@ test('SERVICE_FORM_GROUPS_V2: набор вкладки — умолчание, 
     assert.equal(on.length, 1, 'помечено плашек: ' + on.length);
 });
 
-test('без выбранной услуги окно не отпускает и на сервер ничего не шлёт', async () => {
+test('пустой набор окно не отпускает и на сервер ничего не шлёт', async () => {
     const form = await openForm({});
     findBtn(form, 'Назначить').click();
     await settle();

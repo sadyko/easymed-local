@@ -6208,24 +6208,41 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .cd-acts-date-i { min-height: 30px; padding: 2px 8px; border: 1px solid var(--ink-100);
     border-radius: var(--r-sm, 7px); font: inherit; font-size: 13.5px; color: var(--ink-900); }
 
-/* SERVICE_ORDER_FORM_V1 — справочник услуг ВНУТРИ окна назначения: строка
-   поиска и короткий список. Список прокручивается сам, чтобы окно осталось
-   окном, а не выросло во весь экран. */
-.sof-catalog { display: grid; gap: 8px; }
-/* SERVICE_FORM_GROUPS_V1 — разделы справочника строкой над поиском: видно, где
-   ищут, и список сужается до десятка строк вместо полутысячи. */
+/* SERVICE_ORDER_FORM_V3 — окно назначения в ДВЕ КОЛОНКИ: слева справочник,
+   справа набор, время и исполнитель. Назначают набором («анализы перед
+   операцией»), и закрывать окно после каждой услуги значит четырежды заново
+   искать пациента, дату и врача. */
+.sof-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 18px; }
+.sof-col { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.sof-col-h { font-size: 12.5px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase;
+    color: var(--ink-400); }
 .sof-groups { display: flex; flex-wrap: wrap; gap: 6px; }
-.sof-pick { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; min-height: 42px;
-    padding: 8px 12px; border: 1px solid var(--ink-100); border-radius: var(--r-md); background: var(--white); }
-.sof-pick-t { flex: 1 1 100%; font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
-.sof-list { max-height: 200px; overflow-y: auto; display: grid; gap: 2px;
+.sof-list { max-height: 320px; overflow-y: auto; display: grid; gap: 2px; align-content: start;
     border: 1px solid var(--ink-100); border-radius: var(--r-md); padding: 4px; background: var(--white); }
-.sof-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 38px;
+.sof-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px;
     padding: 6px 10px; border: 0; border-radius: var(--r-sm, 7px); background: none; cursor: pointer;
     font: inherit; font-size: 13.5px; text-align: left; color: var(--ink-900); }
 .sof-row:hover { background: var(--ink-25, #f7f8fa); }
+/* Отмеченная услуга помечена и слева, и справа: строка в списке остаётся на
+   месте, чтобы отметить соседнюю, не перескакивая глазами. */
+.sof-row.on { background: var(--brand-50, #e6f5f3); color: var(--brand-800, #0b5c55); }
+.sof-row-c { flex: 0 0 16px; display: grid; place-items: center; color: var(--brand-700, #0f766e); }
 .sof-row-n { flex: 1; min-width: 0; }
 .sof-row-p { flex: 0 0 auto; font-variant-numeric: tabular-nums; color: var(--ink-500); font-size: 12.5px; }
+.sof-cart { display: grid; gap: 4px; min-height: 44px; padding: 4px;
+    border: 1px solid var(--ink-100); border-radius: var(--r-md); background: var(--white); }
+.sof-cart-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; }
+.sof-cart-main { flex: 1; min-width: 0; }
+.sof-cart-n { font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
+.sof-cart-p { font-size: 12.5px; color: var(--ink-500); font-variant-numeric: tabular-nums; }
+.sof-qty { width: 62px; min-height: 32px; text-align: center; }
+.sof-sum { display: flex; align-items: baseline; gap: 8px; padding: 0 6px; font-size: 12.5px; }
+.sof-sum-l { color: var(--ink-500); }
+.sof-sum-v { font-size: 15px; font-weight: 700; color: var(--ink-900); font-variant-numeric: tabular-nums; }
+.sof-empty { padding: 10px 8px; font-size: 12.5px; color: var(--ink-500); }
+/* На планшете в портрете колонки становятся друг под другом: справочник сверху,
+   набор под ним — тот же порядок, в каком с ними и работают. */
+@media (max-width: 860px) { .sof-grid { grid-template-columns: minmax(0, 1fr); } }
 
 /* MAR_IN_CABINET_V1 — строка действий листа, когда он внутри истории болезни. */
 .mar-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px;

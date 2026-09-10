@@ -231,6 +231,8 @@ async function addAdmissionService(root, onNavigate, { title, types }) {
         admissionId: state.admissionId,
         title,
         typeNames: types,
+        // Лечащий врач — умолчание исполнителя: чаще всего назначает и делает он.
+        doctorId: a.attending_doctor_id || null,
         patientName: p.full_name || '',
         patientSub: [p.mrn, (a.wards && a.wards.name) || null, (a.beds && a.beds.code) || null].filter(Boolean).join(' · '),
         onDone: async () => { await load(); paint(root, onNavigate); },
