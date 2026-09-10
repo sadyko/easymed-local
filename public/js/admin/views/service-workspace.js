@@ -857,17 +857,18 @@ function soapForm(ctx) {
             else renderBlank(ctx);
         },
     },
-        // AURORA_DOCTYPE_GROUPS_V1 — clinical-first grouping (matches the reference's clinical focus).
-        h('optgroup', { label: 'Клинические' },
-            h('option', { value: 'conclusion' }, 'Приём (осмотр, консультация)'),
-            h('option', { value: 'lab' }, 'Анализы (лаборатория)'),
-            h('option', { value: 'diag' }, 'Диагностика (МРТ · КТ · УЗИ)'),
-        ),
-        h('optgroup', { label: 'Финансовые' },
-            h('option', { value: 'invoice' }, 'Счёт за услуги'),
-            h('option', { value: 'check' }, 'Чек (квитанция)'),
-            h('option', { value: 'fiscal' }, 'Фискальный чек'),
-        ),
+        // WS_DOCTYPE_TWO_V1 (2026-09-10) — владелец: «remove from the dropdown
+        // list of the doctors workspace the everything except diagnostics and
+        // the consultation type document».
+        //
+        // Врач в кабинете пишет ровно два документа: приём и заключение
+        // исследования. Бланк анализов заполняет лаборатория (#labs), счёт и
+        // чеки печатает касса — и печатала их отсюда ТЕМИ ЖЕ шаблонами, то есть
+        // выбор здесь означал «напечатать чужую бумагу из своего окна». Список
+        // из шести строк, где четыре не твои, читается как незнание того, что
+        // делает врач.
+        h('option', { value: 'conclusion' }, 'Приём (осмотр, консультация)'),
+        h('option', { value: 'diag' }, 'Диагностика (МРТ · КТ · УЗИ)'),
     );
 
     const draftBtn = h('button', { class: 'btn btn-outline', type: 'button', onclick: async (ev) => {
@@ -1021,6 +1022,17 @@ function soapForm(ctx) {
                 // Sections 7-8
                 a4Section(ctx, { sec: 'therapy',         ru: 'ТЕРАПИЯ',      uz: 'DAVOLASH',   field: 'therapy_text',         ph: 'Назначенная терапия…' }),
                 a4Section(ctx, { sec: 'recommendations', ru: 'РЕКОМЕНДАЦИИ', uz: 'TAVSIYALAR', field: 'recommendations_text', ph: 'Рекомендации пациенту…' }),
+                // WS_CONCLUSION_V1 (2026-09-10) — владелец: «add to the workspace
+                // the "conclusion" section … because we have the paste section in
+                // the case-file which will fetch the data from that section».
+                //
+                // ЗАКЛЮЧЕНИЕ — то, что из этого документа читают ДРУГИЕ: врач
+                // стационара вставляет его в историю болезни правой панелью. У
+                // визита для него есть своя колонка (visits.conclusion), и
+                // читает панель именно её. До этого раздела заполнять её было
+                // нечем, и панель показывала пусто у пациента с десятком
+                // выполненных консультаций.
+                a4Section(ctx, { sec: 'conclusion', ru: 'ЗАКЛЮЧЕНИЕ', uz: 'XULOSA', field: 'conclusion_text', ph: 'Заключение по результату приёма или исследования…' }),
                 // WS_EXAM_AND_FREE_V1 — СВОИ РАЗДЕЛЫ, сколько угодно, с именем от врача.
                 //
                 // Владелец: «option for adding free fields (one or more with naming
@@ -2157,11 +2169,13 @@ const TPL_BODY_KEYS = [
     'physical_exam',        // ОСМОТР
     'therapy_text',         // ТЕРАПИЯ
     'recommendations_text', // РЕКОМЕНДАЦИИ
+    'conclusion_text',      // ЗАКЛЮЧЕНИЕ (WS_CONCLUSION_V1)
 ];
 const TPL_LABELS = {
     chief_complaint: 'Жалобы', hpi: 'Анамнез', labs_text: 'Лабораторные',
     instrumental_text: 'Инструментальные', physical_exam: 'Осмотр',
     therapy_text: 'Терапия', recommendations_text: 'Рекомендации',
+    conclusion_text: 'Заключение',
 };
 // DOC_TPL_DIAG_V1 — templates can also target the imaging «Диагностика» document.
 const TPL_DIAG_KEYS = ['instrumental_text', 'primary_diagnosis'];
@@ -2800,6 +2814,8 @@ const DOC_SECTIONS = [
     { sec: 'diagnosis',       label: 'Диагноз',          field: 'primary_diagnosis' },
     { sec: 'therapy',         label: 'Терапия',          field: 'therapy_text' },
     { sec: 'recommendations', label: 'Рекомендации',     field: 'recommendations_text' },
+    // WS_CONCLUSION_V1 — последним: заключение пишут, дописав остальное.
+    { sec: 'conclusion',      label: 'Заключение',       field: 'conclusion_text' },
 ];
 const DOC_SECTIONS_DEFAULT = [];   // SECTIONS_ON_DEMAND_V1 — EVERY section (incl. Жалобы/Осмотр/Диагноз) starts collapsed as «+ Добавить: …» and opens on press; drafts with content re-open their sections on load
 function ensureDocSections() { if (!wsState.docSections) wsState.docSections = new Set(DOC_SECTIONS_DEFAULT); }
@@ -3729,6 +3745,29 @@ async function handleSignFinalize(ctx) {
         });
     } catch (e) { console.warn('[visit_documents] persist:', e.message); }
 
+    // WS_CONCLUSION_V1 — ЗАКЛЮЧЕНИЕ УЕЗЖАЕТ В ВИЗИТ.
+    //
+    // Владелец: «we have the paste section in the case-file workspace which will
+    // fetch the data from that section». Панель вставки читает visits.conclusion
+    // — одну колонку, общую для консультаций и исследований. Снимок документа
+    // (visit_documents) для этого не годится: он про то, КАК документ выглядел,
+    // а не про то, что из него берут в чужую историю болезни.
+    //
+    // Тип заключения ставится по роду документа: диагностика — 'diagnostic',
+    // приём — 'consultation'. По нему панель и понимает, что перед ней.
+    try {
+        const _conclText = String((buildBlankData(ctx) || {}).conclusionText || '').trim();
+        if (ctx.visitId && _conclText) {
+            const _isDiag2 = (ctx.deptKind === 'diagnostics') || (wsState.docType === 'diag');
+            const { error: _cErr } = await supabase.from('visits')
+                .update({ conclusion: _conclText, conclusion_type: _isDiag2 ? 'diagnostic' : 'consultation' })
+                .eq('id', ctx.visitId);
+            // Молчать здесь нельзя: врач написал заключение, а в историю
+            // болезни его никто не вставит — и узнается это у постели.
+            if (_cErr) toast(trf('Заключение не записано в визит: {msg}', { msg: _cErr.message || '' }), 'fail');
+        }
+    } catch (e) { console.warn('[visits.conclusion] persist:', e.message); }
+
     // Mirror onto the parent visit so the scheduling calendar recolors and
     // the patient leaves the queue. The visit only becomes "completed" once
     // every service on it is done — otherwise it stays in_progress so a
@@ -4495,6 +4534,7 @@ const _BLANK_FIELD_MAP = [
     ['chief_complaint', 'complaint'], ['hpi', 'hpi'], ['labs_text', 'labs'],
     ['instrumental_text', 'instrumental'], ['physical_exam', 'exam'],
     ['primary_diagnosis', 'dx'], ['therapy_text', 'therapy'], ['recommendations_text', 'recsText'],
+    ['conclusion_text', 'conclusionText'],
 ];
 function _blankStrip(x) {
     return String(x || '').replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|li)>/gi, '\n')
@@ -4528,6 +4568,7 @@ function buildBlankData(ctx) {
     data.exam = _blankStrip(f.physical_exam); data.dx = _blankStrip(f.primary_diagnosis) || _mainDxText();   // DX_SAVE_FIX_V1
     data.icd10 = _blankStrip(f.icd10); data.therapy = _blankStrip(f.therapy_text);
     data.recsText = _blankStrip(f.recommendations_text);
+    data.conclusionText = _blankStrip(f.conclusion_text);
     // WS_DOCPHONE_V1 — doctor phone shows on the sheet only when «Тел. врача» is toggled on.
     data.doctorPhone = wsState.docPhone ? (_blankStrip(f.doctor_phone) || (wsState.wsDoctorKnown ? wsState.wsDoctorPhone : (me().phone || ''))) : '';   // DOC_PHONE_SOURCE_V1 — consultation doctor's own phone
     data.showDoctor = wsState.docDoctorInfo !== false;   // DOC_DOCTOR_TOGGLE_V1

@@ -89,3 +89,30 @@ test('CASE_DOC_A4_V1: разделы сохраняются разметкой, 
   assert.equal(res.review.diagnosis, 'K35.8 аппендицит', 'диагноз — простой текст: он едет в списки и в журнал');
   db.close();
 });
+
+// INSERT_SOURCES_V2 — заключения ОДНИМ списком: вставляют не тип услуги, а текст.
+//
+// Владелец: «remove functional diagnostics, and the radiology, leave only the
+// diagnosis, consultations/diagnostics and the lab».
+test('заключения врача и исследований идут одним списком studies, анализы — отдельно', () => {
+  const db = seed();
+  try {
+    const out = admissionDocSources(db, { admission_id: 10 }, doctor);
+    const names = (out.studies || []).map((s) => s.name).sort();
+    assert.deepEqual(names, ['ЭКГ', 'Приём терапевта', 'Рентген грудной клетки'].sort(),
+      'в списке не то: ' + names.join(', '));
+
+    // КОНСУЛЬТАЦИЯ раньше не попадала НИКУДА: её тип не лучевой и не
+    // функциональный, и заключение врача-консультанта вставить было нечем.
+    assert.ok(!(out.imaging || []).some((x) => x.name === 'Приём терапевта'));
+    assert.ok(!(out.functional || []).some((x) => x.name === 'Приём терапевта'));
+
+    // Заключение доезжает текстом — им и вставляют.
+    const consult = out.studies.find((x) => x.name === 'Приём терапевта');
+    assert.match(consult.conclusion, /Признаков патологии/, 'заключение не доехало');
+
+    // Анализ в этот список не попадает: у него не заключение, а показатели.
+    assert.ok(!names.includes('Общий анализ крови'), 'анализ попал к заключениям');
+    assert.equal((out.lab || []).length, 1, 'анализ пропал из своего списка');
+  } finally { db.close(); }
+});

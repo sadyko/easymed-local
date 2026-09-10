@@ -206,6 +206,24 @@ async function loadServices() {
             for (const it of (_its || [])) _rtInvByItem.set(it.id, it.invoices?.status || null);
         } catch (e) { console.warn('[my-services] invoice status:', e && e.message); }
     }
+    // QUEUE_WARD_BADGE_V1 (2026-09-10) — владелец: «in the list of the doctors
+    // cabinet add a where patient belongs to (ambulatory, stationary)».
+    //
+    // Приём лежащего пациента ведут иначе: заключение уходит в историю болезни,
+    // счёт идёт госпитализации, а самого пациента приводят из отделения — и
+    // узнать об этом по фамилии в списке было нельзя. Признак не хранится у
+    // визита: он про пациента СЕЙЧАС, и берётся оттуда же, откуда его берёт
+    // «Стационар» — из госпитализаций в койке (IN_BED_STATUSES).
+    const _inBed = new Set();
+    try {
+        const _pids = [...new Set((data || []).map((r) => r.visits?.patient_id).filter(Boolean))];
+        if (_pids.length) {
+            const { data: _adm } = await supabase.from('admissions')
+                .select('id, patient_id, status').in('patient_id', _pids).in('status', IN_BED_STATUSES);
+            for (const a of (_adm || [])) _inBed.add(a.patient_id);
+        }
+    } catch (e) { console.warn('[my-services] inpatient flag:', e && e.message); }
+
     state.rows = (data || []).filter(r => !_goesElsewhere(r)).map(r => {
         const p = r.visits?.patients || {};
         const patientName = [p.last_name, p.first_name].filter(Boolean).join(' ').trim()
@@ -227,6 +245,9 @@ async function loadServices() {
             doctorRoom:      r.users?.rooms?.name || '',
             doctorFloor:     r.users?.rooms?.floors?.name || '',
             patientId:       r.visits?.patient_id,
+            // Пусто — не «амбулаторный»: пока список госпитализаций не ответил,
+            // мы не знаем, и рисовать плашку по незнанию нельзя.
+            inBed:           _inBed.has(r.visits?.patient_id),
             patientName,
             patientMrn:      p.mrn || '',
             patientPhone:    p.phone || '',
@@ -935,7 +956,13 @@ function listRow(r, i) {
                 h('div', { class: 'avatar sm ' + avColor(r.patientId || r.patientName) }, initials(r.patientName)),
                 h('div', null,
                     nameLink(r),
-                    r.patientMrn && h('div', { class: 'muted', style: { fontSize: '12.5px' } }, r.patientMrn),
+                    h('div', { class: 'row', style: { gap: '6px', alignItems: 'center' } },
+                        r.patientMrn && h('span', { class: 'muted', style: { fontSize: '12.5px' } }, r.patientMrn),
+                        // QUEUE_WARD_BADGE_V1 — лежащий пациент помечен, амбулаторный нет:
+                        // амбулаторных большинство, и плашка у каждого превратилась бы в фон.
+                        r.inBed
+                            ? h('span', { class: 'tag tag-violet' }, Icon('Bed', { size: 11 }), ' ', tr('Стационар'))
+                            : null),
                 ),
             ),
         ),

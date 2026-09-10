@@ -93,6 +93,13 @@ const SOURCES = {
     ] }],
     imaging: [{ id: 62, name: 'Рентген грудной клетки', at: '2026-09-07T09:00:00Z', conclusion: 'Без очаговых теней' }],
     functional: [{ id: 63, name: 'ЭКГ', at: '2026-09-07T09:00:00Z', conclusion: '' }],
+    // INSERT_SOURCES_V2 — заключения одним списком: консультация, лучевое,
+    // функциональное. Тип услуги при вставке не значит ничего.
+    studies: [
+        { id: 64, name: 'Приём кардиолога', at: '2026-09-07T09:00:00Z', conclusion: 'Ритм синусовый' },
+        { id: 62, name: 'Рентген грудной клетки', at: '2026-09-07T09:00:00Z', conclusion: 'Без очаговых теней' },
+        { id: 63, name: 'ЭКГ', at: '2026-09-07T09:00:00Z', conclusion: '' },
+    ],
 };
 let rpcCalls = [];
 globalThis.fetch = async (url, opts = {}) => {
@@ -357,20 +364,32 @@ test('CASE_DOC_FREE_SEC_V1: свой раздел бывает и без име�
     assert.deepEqual(removed, [made.sec]);
 });
 
-test('CASE_DOC_A4_V1: правая панель показывает четыре источника и вставляет анализ таблицей с отклонением', async () => {
+test('INSERT_SOURCES_V2: три источника, диагноз — ТОЛЬКО из этого документа', async () => {
     rpcCalls = [];
     const inserted = [];
-    const panel = caseInsertPanel({ admissionId: 11, onInsert: (html) => { inserted.push(html); return true; } });
+    // Диагноз панель спрашивает у документа, а не у истории болезни.
+    const panel = caseInsertPanel({
+        admissionId: 11,
+        onInsert: (html) => { inserted.push(html); return true; },
+        diagnosisNow: () => 'Острый холецистит K81.0',
+    });
     BODY.appendChild(panel);
     await settle();
 
     assert.ok(rpcCalls.some((c) => c.name === 'admission_doc_sources' && c.args.admission_id === 11), 'источники спрошены у сервера');
     const t = textOf(panel);
-    for (const block of ['Диагноз', 'Функциональные исследования', 'Лучевая диагностика', 'Лабораторные исследования']) {
+    for (const block of ['Диагноз', 'Консультации и диагностика', 'Лабораторные исследования']) {
         assert.ok(t.includes(block), 'нет блока: ' + block);
     }
+    // Деления по типу услуги больше нет: вставляют заключение, а не тип.
+    assert.ok(!t.includes('Функциональные исследования'), 'старое деление вернулось');
+    assert.ok(!t.includes('Лучевая диагностика'), 'старое деление вернулось');
+    // Диагнозы госпитализации не предлагаются: вставили бы прошлую формулировку.
+    assert.ok(!t.includes('Острый аппендицит'), 'диагноз снова берётся из истории болезни');
+    assert.ok(!t.includes('K35.8'), 'диагноз при направлении снова предлагается');
+
     const items = walk(panel).filter((e) => e.tagName === 'BUTTON' && String(e.className).includes('ci-item'));
-    const byText = (s) => items.find((x) => textOf(x).includes(s));
+    const byText = (s2) => items.find((x) => textOf(x).includes(s2));
 
     // Анализ вставляется таблицей: показатель, значение с единицей, норма; отклонение — цветом.
     byText('Общий анализ крови').click();
@@ -379,19 +398,27 @@ test('CASE_DOC_A4_V1: правая панель показывает четыр�
     assert.ok(html.includes('<table class="a4-restbl">'), 'анализ вставляется таблицей: ' + html.slice(0, 120));
     assert.ok(html.includes('HGB') && html.includes('101') && html.includes('120–160'));
     assert.ok(/<span style="color: #b91c1c[^"]*">101<\/span>/.test(html), 'отклонение отмечено цветом: ' + html);
-    assert.ok(html.includes('Общий анализ крови'), 'у блока есть заголовок с названием анализа');
 
-    // Диагноз — одной строкой.
-    byText('Острый аппендицит').click();
-    assert.ok(inserted[1].includes('Острый аппендицит K35.8') && inserted[1].includes('<b>'), inserted[1]);
+    // Диагноз этого документа — одной строкой.
+    byText('Острый холецистит').click();
+    assert.ok(inserted[1].includes('Острый холецистит K81.0') && inserted[1].includes('<b>'), inserted[1]);
 
-    // Исследование с заключением вставляется, без заключения — кнопка выключена.
-    byText('Рентген').click();
-    assert.ok(inserted[2].includes('Без очаговых теней'));
+    // Заключение консультанта теперь вставляется — раньше его не было нигде.
+    byText('Приём кардиолога').click();
+    assert.ok(inserted[2].includes('Ритм синусовый'), 'заключение консультанта не вставилось');
+
+    // Без заключения кнопка выключена и ничего не вставляет.
     const ecg = byText('ЭКГ');
     assert.ok(ecg.hasAttribute('disabled'), 'вставлять нечего — кнопка выключена, а не вставляет пустоту');
     ecg.click();
     assert.equal(inserted.length, 3, 'выключенная кнопка ничего не вставила');
+});
+
+test('INSERT_SOURCES_V2: без диагноза в документе панель говорит, где его написать', async () => {
+    const panel = caseInsertPanel({ admissionId: 11, onInsert: () => true, diagnosisNow: () => '' });
+    BODY.appendChild(panel);
+    await settle();
+    assert.ok(textOf(panel).includes('Диагноз пока не написан'), 'подсказки нет: ' + textOf(panel).slice(0, 200));
 });
 
 // ─── CASE_DX_LIST_V1 — диагнозы списком, с ролями ───────────────────────────

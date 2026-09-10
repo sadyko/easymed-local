@@ -709,13 +709,26 @@ export function caseDocsView({ state, onDoc, onAssemble = null, activeKind = nul
         if (onRestore && dropped.length) {
             const gone = h('ul', { class: 'cd-gone-list', style: { listStyle: 'none', margin: '0', padding: '0' } });
             gone.hidden = true;
+            // GONE_CHEVRON_V1 (2026-09-10) — владелец: «collapsing this accordion
+            // is not understandable for user, please add or chevron or + button
+            // but not generic font use icons».
+            //
+            // Строка была набором заглавных букв со счётчиком: на ощупь не
+            // отличить заголовок от кнопки, и никто её не нажимал. Шеврон —
+            // знак системы, тот же, что у всех раскрывающихся мест; он
+            // поворачивается, и по нему видно, открыто сейчас или закрыто.
+            const chev = h('span', { class: 'cd-gone-ic' }, Icon('ChevronRight', { size: 14 }));
             const head2 = h('button', {
                 class: 'cd-gone-h', type: 'button', 'aria-expanded': 'false',
+                title: tr('Показать убранные документы'),
                 onclick: () => {
                     gone.hidden = !gone.hidden;
-                    head2.setAttribute('aria-expanded', gone.hidden ? 'false' : 'true');
+                    const open = !gone.hidden;
+                    head2.setAttribute('aria-expanded', open ? 'true' : 'false');
+                    head2.classList.toggle('on', open);
+                    head2.setAttribute('title', tr(open ? 'Свернуть убранные документы' : 'Показать убранные документы'));
                 },
-            }, tr('Убраны из набора'), h('span', { class: 'cd-gone-n' }, String(dropped.length)));
+            }, chev, tr('Убраны из набора'), h('span', { class: 'cd-gone-n' }, String(dropped.length)));
             list.appendChild(head2);
             list.appendChild(gone);
             gone.appendChild(h('ul', { style: { listStyle: 'none', margin: '0', padding: '0' } },

@@ -14,11 +14,15 @@ import { h, Icon, clear, toast, fmtDate } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { escapeHtml } from '../sanitize.js';
 
+// INSERT_SOURCES_V2 (2026-09-10) — владелец: «remove functional diagnostics,
+// and the radiology, leave only the diagnosis, consultations/diagnostics and
+// the lab». Вставляют не тип услуги, а ЗАКЛЮЧЕНИЕ, и пишется оно одинаково —
+// консультантом, рентгенологом или функционалистом. Три раздела вместо четырёх
+// потому, что различий между ними при вставке не было ни одного.
 const BLOCKS = [
-    { key: 'diagnosis',  label: 'Диагноз',                    icon: 'Stethoscope', hint: 'из истории болезни' },
-    { key: 'functional', label: 'Функциональные исследования', icon: 'Activity',    hint: 'ЭКГ, ЭхоКГ, спирометрия' },
-    { key: 'imaging',    label: 'Лучевая диагностика',         icon: 'Scan',        hint: 'рентген, УЗИ, КТ, МРТ' },
-    { key: 'lab',        label: 'Лабораторные исследования',   icon: 'Flask',       hint: 'анализы с показателями' },
+    { key: 'diagnosis', label: 'Диагноз',                  icon: 'Stethoscope', hint: 'из этого документа' },
+    { key: 'studies',   label: 'Консультации и диагностика', icon: 'Activity',  hint: 'заключения врачей и исследований' },
+    { key: 'lab',       label: 'Лабораторные исследования', icon: 'Flask',       hint: 'анализы с показателями' },
 ];
 
 const dt = (iso) => (iso ? fmtDate(String(iso).slice(0, 10)) : '');
@@ -103,22 +107,24 @@ export function caseInsertPanel({ admissionId, onInsert, diagnosisNow = null } =
                         h('span', { class: 'ci-sum-t' }, tr(b.label)),
                         h('span', { class: 'ci-sum-m' }, tr(b.hint)))));
             if (b.key === 'diagnosis') {
-                const d = data.diagnosis || {};
-                const rows = [];
-                // Первым — диагноз ЭТОГО документа: он самый свежий, его только
-                // что писали слева. Диагнозы госпитализации остаются ниже.
+                // INSERT_SOURCES_V2 — владелец: «diagnosis should not come from
+                // the history but from the document itself from tashxis
+                // section». Диагнозы госпитализации отсюда убраны: врач пишет
+                // диагноз В ЭТОМ документе, и вставлять рядом прошлогоднюю
+                // формулировку из первичного осмотра значит предлагать ошибку —
+                // однажды её и вставят, не заметив разницы.
                 const own = diagnosisNow ? String(diagnosisNow() || '').trim() : '';
-                if (own) rows.push(itemRow(own, tr('этого документа'), diagnosisHtml('Диагноз', own)));
-                if (d.clinical && d.clinical !== own) rows.push(itemRow(d.clinical, tr('клинический'), diagnosisHtml('Клинический диагноз', d.clinical)));
-                if (d.referral && d.referral !== own) rows.push(itemRow(d.referral, tr('при направлении'), diagnosisHtml('Диагноз при направлении', d.referral)));
-                box.appendChild(rows.length ? h('div', { class: 'ci-list' }, ...rows)
-                    : h('div', { class: 'ci-note' }, tr('Диагноз ещё не установлен — его пишут в первичном осмотре.')));
+                box.appendChild(own
+                    ? h('div', { class: 'ci-list' },
+                        itemRow(own, tr('этого документа'), diagnosisHtml('Диагноз', own)))
+                    : h('div', { class: 'ci-note' },
+                        tr('Диагноз пока не написан — впишите его в разделе «Диагноз» этого документа.')));
             } else {
                 const list = Array.isArray(data[b.key]) ? data[b.key] : [];
                 box.appendChild(list.length
                     ? h('div', { class: 'ci-list' }, ...list.map((it) => (b.key === 'lab'
                         ? itemRow(it.name || tr('Анализ'), trf('{n} показателей · {when}', { n: (it.results || []).length, when: dt(it.at) }), labHtml(it))
-                        : itemRow(it.name || tr('Исследование'), dt(it.at), it.conclusion ? studyHtml(it) : '', 'Заключение ещё не внесено — вставлять нечего'))))
+                        : itemRow(it.name || tr('Заключение'), dt(it.at), it.conclusion ? studyHtml(it) : '', 'Заключение ещё не написано — вставлять нечего'))))
                     : h('div', { class: 'ci-note' }, tr('Результатов пока нет.')));
             }
             body.appendChild(box);

@@ -6307,6 +6307,12 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
     font: inherit; font-size: 12.5px; font-weight: 600; letter-spacing: .4px;
     text-transform: uppercase; color: var(--ink-400); text-align: left; }
 .cd-gone-h:hover { color: var(--ink-700); }
+/* GONE_CHEVRON_V1 — шеврон системы вместо догадки: свёрнуто — вправо,
+   раскрыто — вниз. Поворот, а не вторая иконка: один знак, два состояния. */
+.cd-gone-ic { display: inline-grid; place-items: center; flex: 0 0 auto; color: var(--ink-400);
+    transition: transform var(--dur-1, .15s) var(--ease-out, ease); }
+.cd-gone-h.on .cd-gone-ic { transform: rotate(90deg); }
+.cd-gone-h.on { color: var(--ink-700); }
 .cd-gone-h .cd-gone-n { flex: 0 0 auto; margin-left: auto; display: inline-grid; place-items: center;
     min-width: 22px; height: 20px; padding: 0 7px; border-radius: var(--r-pill);
     background: var(--ink-100); color: var(--ink-700); font-size: 12.5px; font-weight: 700; letter-spacing: 0; }
