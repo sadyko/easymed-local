@@ -34,9 +34,24 @@ test('BC-5300 несёт все 27 каналов со скриншота вла
   }
 });
 
-test('у BS-240 и CL-900i каналы пусты намеренно — набор задаёт клиника', () => {
-  assert.equal(getProfile('mindray-bs-240').channels.length, 0);
-  assert.equal(getProfile('mindray-cl-900i').channels.length, 0);
+test('BS-240 и CL-900i несут типовые наборы — заполнены по просьбе владельца 2026-09-11', () => {
+  // Раньше были пусты намеренно (набор задаёт закупка реагентов). Владелец
+  // попросил заполнить: каждую строку лаборант подтверждает руками, так что
+  // длинный список ничего не сопоставляет сам.
+  assert.ok(getProfile('mindray-bs-240').channels.length >= 20);
+  assert.ok(getProfile('mindray-cl-900i').channels.length >= 20);
+  for (const code of ['GLU', 'ALT', 'CREA', 'CRP']) assert.ok(getProfile('mindray-bs-240').channels.some((c) => c.code === code), 'BS-240: нет ' + code);
+  for (const code of ['TSH', 'FT4', 'PRL', 'PSA']) assert.ok(getProfile('mindray-cl-900i').channels.some((c) => c.code === code), 'CL-900i: нет ' + code);
+});
+
+test('каждый профиль говорит, ОТКУДА его список каналов — ни один не из документации', () => {
+  // Mindray протокол не публикует. Честность здесь машинно-читаема: экран может
+  // предупредить «набор типовой, сверьте по прибору», а не изображать знание.
+  const allowed = ['documented', 'screenshot', 'conventional'];
+  for (const p of listProfiles()) {
+    assert.ok(allowed.includes(p.channelsSource), p.key + ': channelsSource=' + p.channelsSource);
+    assert.notEqual(p.channelsSource, 'documented', p.key + ': документации у нас нет — заявлять её нельзя');
+  }
 });
 
 test('неизвестный ключ — это null, а не исключение: устройство могло остаться от снятого профиля', () => {

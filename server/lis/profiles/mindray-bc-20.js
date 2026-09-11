@@ -16,6 +16,7 @@ export default {
   kind: 'hematology',
   transports: ['mllp'],
   defaultPort: 2575,
+  channelsSource: 'conventional',
   channels: [
     { code: 'WBC',    name: 'Лейкоциты',                   unit: '10^9/л',  type: 'numeric' },
     { code: 'LYM#',   name: 'Лимфоциты, абс.',             unit: '10^9/л',  type: 'numeric' },
