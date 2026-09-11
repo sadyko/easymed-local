@@ -6526,25 +6526,60 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
    Владелец: «create an appealing dashboard with graphs … use for design
    reference bklit.com area-chart». Графики — чистый SVG (views/dash-charts.js);
    здесь только их одежда: сетка, оси, перекрестие, подсказка, легенда.
-   Единственный кегль графика — 12.5 px; движение — токенами admin.css. */
-.dash-body{ display:grid; gap:16px; }
-.dash-card-body{ padding:12px 16px 10px; }
-.dash-card-right{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
-.dash-card-total{ font-size:13.5px; font-weight:600; color:var(--ink-700); font-variant-numeric:tabular-nums; }
+   Единственный кегль графика — 12.5 px; движение — токенами admin.css.
 
-/* Рамка графика: SVG растягивается по ширине карточки, подсказка поверх. */
+   DASH_ONE_SCREEN_V1 — владелец: «make fit everything in to one viewport so
+   user won't scroll». Корень сводки получает высоту по месту (dashboard.js
+   fitToViewport), внутри — колонка: шапка, плитки, ряд «деньги + койки»,
+   ряд «движение людей». Две нижние строки делят остаток высоты 1 : 0.7 и
+   отдают его графикам: на большом мониторе они выше, на ноутбуке — ниже. */
+.dash-fit{ display:flex; flex-direction:column; min-height:0; }
+.dash-fit .page-head{ margin-bottom:12px; flex:0 0 auto; }
+.dash-body{
+  flex:1 1 auto; min-height:0;
+  display:grid; grid-template-rows:auto minmax(0, 1fr) minmax(0, 0.7fr); gap:12px;
+}
+.dash-top{ display:grid; gap:10px; }
+.dash-grid{ display:grid; grid-template-columns:1.6fr 1fr; gap:12px; min-height:0; align-items:stretch; }
+
+/* Карточка сводки — колонка: шапка своя, тело берёт остаток. */
+.dash-card{ display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+.dash-card > .card-header{ flex:0 0 auto; padding:10px 16px; }
+.dash-card-body{ flex:1 1 auto; min-height:0; display:flex; flex-direction:column; padding:8px 12px 6px; }
+.dash-card-right{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; justify-content:flex-end; }
+.dash-card-total{ font-size:13.5px; font-weight:600; color:var(--ink-700); font-variant-numeric:tabular-nums; }
+/* Быстрые действия — в шапке карточки, отделены от легенды волосяной линией. */
+.dash-card-acts{ display:flex; gap:2px; padding-left:10px; border-left:1px solid var(--ink-100); }
+.dash-act{ height:28px; padding:0 8px; }
+
+/* Плитка в один взгляд: значок и подпись строкой, число под ними. */
+.dash-kpi-row{ display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; }
+.dash-kpi{ padding:10px 12px 11px; gap:2px; border-radius:14px; min-width:0; }
+.dash-kpi-top{ display:flex; align-items:center; gap:8px; margin-bottom:2px; min-width:0; }
+.dash-kpi-icon{ width:28px; height:28px; border-radius:8px; flex:0 0 28px; }
+.dash-kpi-label{ flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; letter-spacing:0.05em; }
+.dash-kpi-go{ flex:0 0 auto; display:inline-flex; }
+.dash-kpi-value{ font-size:24px; margin-top:0; }
+.dash-kpi-meta{ margin-top:1px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* Рамка графика: SVG растягивается по карточке; слой наведения — поверх. */
 .dash-chart{ position:relative; width:100%; }
+.dash-chart-fill{ flex:1 1 auto; min-height:120px; }
 .dash-chart svg.dc{ display:block; width:100%; height:100%; overflow:visible; }
+.dash-chart svg.dc-over{ position:absolute; inset:0; pointer-events:none; }
 .dc-grid{ stroke:var(--ink-100); stroke-dasharray:3 4; }
 .dc-ax{ fill:var(--ink-500); font-family:inherit; }
 .dc-cross{ stroke:var(--ink-300); stroke-dasharray:4 4; }
 .dc-dot{ stroke:var(--white); stroke-width:2; }
-.dc-bar{ transition:opacity var(--dur-2) var(--ease-out); }
-.dc-bar.dim{ opacity:.35; }
-/* Появление — раскрытие слева направо, как в образце: маска clip-path
-   растёт от нуля до всей ширины. Под общим выключателем движения. */
+.dc-band{ fill:var(--ink-900); opacity:.06; }
+/* Появление — раскрытие слева направо, как в образце: маска clip-path растёт
+   от нуля до всей ширины; столбики поднимаются от оси. Оба — только на
+   ПЕРВОМ кадре основы (DASH_HOVER_STILL_V1): наведение рисует свой слой
+   поверх и основу не перезапускает. Под общим выключателем движения. */
 .dc-reveal{ transform-origin:0 0; animation:dc-reveal calc(var(--dur-3) * 4) var(--ease-out) both; }
 @keyframes dc-reveal{ from{ transform:scaleX(0); } to{ transform:scaleX(1); } }
+.dc-rise{ transform-box:fill-box; transform-origin:50% 100%; animation:dc-rise calc(var(--dur-3) * 3) var(--ease-out) both; }
+@keyframes dc-rise{ from{ transform:scaleY(0); } to{ transform:scaleY(1); } }
 .dash-ring-arc{ transition:stroke-dashoffset calc(var(--dur-3) * 3) var(--ease-out); }
 
 .dash-chart-tip{
@@ -6563,17 +6598,20 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .dash-legend-i{ display:inline-flex; align-items:center; gap:6px; }
 .dash-legend-i i{ width:10px; height:10px; border-radius:3px; display:inline-block; }
 
-/* Кольцо занятости и отделения. */
+/* Кольцо занятости и отделения; список отделений прокручивается ВНУТРИ
+   карточки, экран — нет. */
+.dash-beds-body{ display:flex; flex-direction:column; min-height:0; margin:-8px -12px -6px; }
 .dash-ring{ position:relative; flex:0 0 auto; }
 .dash-ring-v{ position:absolute; inset:0; display:grid; place-items:center; text-align:center; }
 .dash-ring-v b{ display:block; font-size:20px; font-weight:700; color:var(--ink-900); line-height:1; }
 .dash-ring-v span{ display:block; font-size:12.5px; color:var(--ink-500); margin-top:2px; }
-.dash-beds{ display:flex; gap:18px; align-items:center; padding:16px 18px 10px; }
+.dash-beds{ display:flex; gap:16px; align-items:center; padding:12px 18px 8px; flex:0 0 auto; }
 .dash-beds-n{ font-size:24px; font-weight:700; color:var(--ink-900); line-height:1.1; }
 .dash-beds-s{ font-size:12.5px; color:var(--ink-500); margin-top:2px; }
+.dash-wards{ flex:1 1 auto; min-height:0; overflow:auto; }
 .dash-ward{
-  display:grid; grid-template-columns:minmax(0,1fr) 110px 64px; gap:10px; align-items:center;
-  padding:9px 18px; border-top:1px solid var(--ink-100); font-size:13.5px; color:var(--ink-800);
+  display:grid; grid-template-columns:minmax(0,1fr) 96px 60px; gap:10px; align-items:center;
+  padding:7px 18px; border-top:1px solid var(--ink-100); font-size:13.5px; color:var(--ink-800);
 }
 .dash-ward-name{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .dash-ward-bar{ height:6px; border-radius:999px; background:var(--ink-100); overflow:hidden; }
@@ -6582,15 +6620,19 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 
 /* Тревога о складе — полоса, а не плитка с нулём. */
 .dash-alert{
-  display:flex; align-items:center; gap:10px; padding:10px 14px; border-radius:12px;
+  display:flex; align-items:center; gap:10px; padding:8px 14px; border-radius:12px;
   background:var(--warn-50); border:1px solid #fde9b6; color:var(--warn-800); font-size:13.5px;
 }
 .dash-alert .btn{ margin-left:auto; }
 
-/* На узком экране плитки в два столбца, графики друг под другом. */
+/* Узкий экран: графики друг под другом, плитки в два столбца — здесь
+   прокрутка честнее, чем нечитаемые графики. */
 @media (max-width: 1100px){
-  .dash-kpi-row{ grid-template-columns:repeat(2, 1fr); }
+  .dash-fit{ height:auto !important; }
+  .dash-body{ grid-template-rows:auto auto auto; }
   .dash-grid{ grid-template-columns:1fr; }
+  .dash-kpi-row{ grid-template-columns:repeat(2, 1fr); }
+  .dash-chart-fill{ height:220px; flex:0 0 auto; }
 }
 @media (max-width: 560px){
   .dash-kpi-row{ grid-template-columns:1fr; }

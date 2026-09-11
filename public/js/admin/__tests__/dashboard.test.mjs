@@ -80,6 +80,7 @@ const textOf = (e) => walk(e).map((x) => x._text || '').join(' ');
 const byClass = (root, c) => walk(root).filter((e) => String(e.className || '').split(/\s+/).includes(c));
 const findBtn = (root, label) => walk(root).find((e) => e.tagName === 'BUTTON' && textOf(e).includes(label));
 const svgs = (root) => walk(root).filter((e) => e.tagName === 'SVG' && /<svg class="dc"/.test(e._text || ''));
+const overlays = (root) => walk(root).filter((e) => e.tagName === 'SVG' && /<svg class="dc dc-over"/.test(e._text || ''));
 const settle = () => new Promise((r) => setTimeout(r, 30));
 
 // ─── данные, которые отдаёт «сервер» ────────────────────────────────────────
@@ -188,16 +189,26 @@ test('подсказка под курсором называет день, об
     const { root } = await screen();
     const card = byClass(root, 'card').find((c) => textOf(c).includes('Деньги по дням'));
     const chart = byClass(card, 'dash-chart')[0];
-    chart.getBoundingClientRect = () => ({ left: 0, width: 640 });
+    chart.getBoundingClientRect = () => ({ left: 0, width: 640, height: 220 });
+    const baseBefore = svgs(chart)[0];
+    assert.ok(/class="dc-reveal"/.test(baseBefore._text), 'основа не раскрывается на первом кадре');
     chart.dispatch('mousemove', { clientX: 700 });   // за правым краем — прижимается к последнему дню
     const tip = byClass(chart, 'dash-chart-tip')[0];
     assert.ok(tip && !tip.hidden, 'подсказка не показалась');
     const t = textOf(tip);
     assert.ok(t.includes(shortDay(day(0))), 'подсказка не называет день: ' + t);
     assert.ok(t.includes('Амбулаторно') && t.includes('Стационар') && t.includes('Всего'), t);
-    assert.ok(/<circle class="dc-dot"/.test(svgs(chart)[0]._text), 'точки на кривых не подсвечены');
+    // DASH_HOVER_STILL_V1 — основа под курсором НЕ перерисовывается (тот же
+    // узел), а перекрестие и точки живут на своём слое сверху.
+    assert.strictEqual(svgs(chart)[0], baseBefore, 'наведение перерисовало основу — раскрытие запустилось заново');
+    const over = overlays(chart);
+    assert.strictEqual(over.length, 1, 'слоёв наведения: ' + over.length);
+    assert.ok(/<circle class="dc-dot"/.test(over[0]._text) && /<line class="dc-cross"/.test(over[0]._text), 'на слое наведения нет точек и перекрестия');
+    chart.dispatch('mousemove', { clientX: 300 });
+    assert.strictEqual(svgs(chart)[0], baseBefore, 'второе движение перерисовало основу');
     chart.dispatch('mouseleave', {});
     assert.ok(tip.hidden, 'подсказка не спряталась');
+    assert.strictEqual(overlays(chart).length, 0, 'слой наведения остался после ухода курсора');
 });
 
 // ─── 3. Период один на всё ──────────────────────────────────────────────────
@@ -233,8 +244,14 @@ test('визиты и госпитализации — столбики, по г
     const card = byClass(root, 'card').find((c) => textOf(c).includes('Визиты и госпитализации'));
     assert.ok(card, 'нет карточки движения людей');
     const svg = svgs(card)[0];
-    const bars = (svg._text.match(/<rect class="dc-bar/g) || []).length;
+    const bars = (svg._text.match(/<rect class="dc-bar"/g) || []).length;
     assert.strictEqual(bars, 14 * 2, 'столбиков: ' + bars);
+    // Под курсором — полоса над группой на своём слое, столбики на месте.
+    const chart = byClass(card, 'dash-chart')[0];
+    chart.getBoundingClientRect = () => ({ left: 0, width: 640, height: 200 });
+    chart.dispatch('mousemove', { clientX: 60 });
+    assert.strictEqual(svgs(card)[0], svg, 'наведение перерисовало столбики');
+    assert.ok(/<rect class="dc-band"/.test(overlays(card)[0]._text), 'полосы над группой нет');
 });
 
 // ─── 5. Тревога о складе ────────────────────────────────────────────────────
@@ -271,6 +288,37 @@ test('ряды не загрузились — плитки сводки всё 
         assert.ok(textOf(root).includes('Пациентов сегодня'));
         assert.ok(textOf(root).includes('Нет данных'), 'пустой график не говорит словами');
     } finally { trendFail = false; }
+});
+
+// ─── 8. Быстрые действия в карточках ────────────────────────────────────────
+test('у каждой карточки свои быстрые действия, и они ведут в разделы', async () => {
+    const { root, nav } = await screen();
+    const acts = byClass(root, 'dash-act');
+    assert.strictEqual(acts.length, 6, 'быстрых действий: ' + acts.length);
+    for (const a of acts) a.click();
+    assert.deepStrictEqual(nav, ['cashier-shifts', 'reports-hub', 'admissions', 'beds', 'queue', 'patients']);
+    // Действие стоит в шапке ТОЙ карточки, к которой относится.
+    const money = byClass(root, 'card').find((c) => textOf(c).includes('Деньги по дням'));
+    assert.ok(findBtn(money, 'Касса') && findBtn(money, 'Отчёты'), 'у денег нет кассы и отчётов');
+    const beds = byClass(root, 'card').find((c) => textOf(c).includes('Койки'));
+    assert.ok(findBtn(beds, 'Стационар'), 'у коек нет стационара');
+});
+
+// ─── 9. В один экран ────────────────────────────────────────────────────────
+test('сводка берёт высоту окна по месту, а графики — остаток карточки', async () => {
+    globalThis.window.innerHeight = 768;
+    const { root } = await screen();
+    const fit = byClass(root, 'dash-fit')[0];
+    assert.ok(fit, 'корень сводки не помечен под один экран');
+    fit.getBoundingClientRect = () => ({ top: 88 });
+    globalThis.window.dispatchResize && globalThis.window.dispatchResize();
+    // Высота ставится числом от окна; до измерения (поддельный DOM) — не ставится вовсе.
+    const charts = byClass(root, 'dash-chart');
+    assert.ok(charts.length >= 2);
+    for (const c of charts) {
+        assert.ok(String(c.className).includes('dash-chart-fill'), 'график с фиксированной высотой не займёт карточку');
+        assert.ok(!c.style.height, 'у графика прибита высота: ' + c.style.height);
+    }
 });
 
 // ─── чистая математика графика ──────────────────────────────────────────────
