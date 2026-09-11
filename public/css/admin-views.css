@@ -6638,3 +6638,47 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
   .dash-kpi-row{ grid-template-columns:1fr; }
 }
 /* ============================ end DASHBOARD_TREND_V1 ============================ */
+
+/* ============================ DOCTOR_PAY_V2 (2026-09-11) — вкладка «Зарплата» кабинета ============================
+   Владелец: «redesign this … for the doctor» и «make everything fit into a
+   one page». Плитки, карточки и график те же, что на сводке клиники (dash-*);
+   здесь только сетка. PAY_ONE_SCREEN_V1: корень берёт высоту окна по месту
+   (dash-kpi.js fitViewport), две нижние строки делят остаток, длинные списки
+   прокручиваются ВНУТРИ своих карточек — экран не прокручивается. */
+.pay-page{ display:grid; gap:12px; min-height:0;
+  grid-template-rows:auto auto minmax(0, 1fr) minmax(0, 0.9fr); }
+.pay-page .page-head{ margin-bottom:0; }
+.pay-grid{ display:grid; grid-template-columns:1.6fr 1fr; gap:12px; min-height:0; align-items:stretch; }
+.pay-grid-2{ display:grid; grid-template-columns:1.3fr 1fr; gap:12px; min-height:0; align-items:stretch; }
+.pay-card{ display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+.pay-card > .card-header{ flex:0 0 auto; padding:10px 16px; }
+.pay-scroll{ flex:1 1 auto; min-height:0; overflow:auto; }
+.pay-kv{ padding:8px 18px 14px; }
+/* PAY_ROWS_V1 — строка списка «Последние»: когда · что (кто) · состояние · сумма. */
+.pay-row{ display:flex; align-items:center; gap:10px; padding:8px 16px; border-top:1px solid var(--ink-100); }
+.pay-row:first-child{ border-top:none; }
+.pay-row-t{ flex:0 0 auto; font-size:12.5px; color:var(--ink-500); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.pay-row-m{ flex:1 1 auto; min-width:0; }
+.pay-row-n{ font-size:13.5px; font-weight:600; color:var(--ink-900); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pay-row-s{ font-size:12.5px; color:var(--ink-500); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pay-row > .tag{ flex:0 0 auto; }
+.pay-row-sum{ flex:0 0 auto; min-width:72px; text-align:right; font-size:13.5px; font-weight:700; color:var(--ink-900); font-variant-numeric:tabular-nums; }
+/* Узкий экран: колонки друг под другом, списки — по высоте содержимого;
+   здесь прокрутка страницы честнее, чем нечитаемые таблицы. */
+@media (max-width: 1100px){
+  .pay-page{ height:auto !important; grid-template-rows:auto; }
+  .pay-grid, .pay-grid-2{ grid-template-columns:1fr; }
+  .pay-scroll{ max-height:320px; }
+  .pay-page .dash-chart-fill{ height:220px; flex:0 0 auto; }
+}
+/* WORK_ONE_SCREEN_V1 — «Мои приёмы»: плитки сверху, очередь в остатке окна,
+   прокручивается только список; шапка таблицы прилипает к верху списка. */
+.work-page{ display:grid; gap:12px; min-height:0; grid-template-rows:auto minmax(0, 1fr); }
+.work-card{ display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+.work-card > .card-header{ flex:0 0 auto; }
+.work-scroll{ flex:1 1 auto; min-height:0; overflow:auto; }
+.work-scroll table.tbl thead th{ position:sticky; top:0; background:var(--white); z-index:1; }
+@media (max-width: 1100px){
+  .work-page{ height:auto !important; grid-template-rows:auto; }
+}
+/* ============================ end DOCTOR_PAY_V2 ============================ */

@@ -90,6 +90,9 @@ import { selfDoctorId } from '../permissions.js';   // ADMIN_DOCTOR_V2
 import { pastelFor, pastelForDashTile } from '../pastel.js';   // PASTEL_IDENTITY_V1 — оттенок = личность, не тяжесть
 // HEAD_DOCTOR_WARD_VIEW_V1 — «в койке» одним списком на сервер и браузер.
 import { IN_BED_STATUSES } from '../../shared/admission-status.js';
+// CABINET_REDESIGN_V1 — график и подгонка общие со сводкой клиники.
+import { barChart } from './dash-charts.js';
+import { fitViewport } from './dash-kpi.js';
 
 export const DOCTOR_DASH_BUILD = 'DOCTOR_DASHBOARD_V1';
 
@@ -542,16 +545,23 @@ export async function loadDoctorDashboard() {
 //     --ink-900: чёрное на светлом читается при любом оттенке.
 // ---------------------------------------------------------------------------
 const DASH_CSS = `
-.dd-grid { display: grid; gap: 14px; align-items: start;
+/* DASH_ONE_SCREEN_V1 — the grid takes the window height (dash-kpi.js
+   fitViewport) and hands the remainder to the chart; the day column runs
+   full height and scrolls inside. No Cyrillic here: this is a JS string. */
+.dd-grid { display: grid; gap: 12px; align-items: stretch; min-height: 0;
     grid-template-columns: minmax(0, 1fr) 344px;
+    grid-template-rows: auto auto minmax(0, 1fr);
     grid-template-areas: "hero day" "stats day" "chart day"; }
-.dd-hero  { grid-area: hero;  padding: 20px 22px; }
-.dd-stats { grid-area: stats; display: grid; gap: 12px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.dd-chart { grid-area: chart; padding: 16px 18px; }
-.dd-day   { grid-area: day; display: flex; flex-direction: column; overflow: hidden; max-height: 78vh; }
+.dd-hero  { grid-area: hero;  padding: 14px 18px; }
+.dd-stats { grid-area: stats; display: grid; gap: 10px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.dd-chart { grid-area: chart; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.dd-chart > .card-header { flex: 0 0 auto; padding: 10px 16px; }
+.dd-chart-body { flex: 1 1 auto; min-height: 140px; display: flex; flex-direction: column; }
+.dd-day   { grid-area: day; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
 @media (max-width: 1180px) {
-  .dd-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "hero" "stats" "day" "chart"; }
-  .dd-day { max-height: none; }
+  .dd-grid { height: auto !important; grid-template-rows: auto; grid-template-columns: minmax(0, 1fr); grid-template-areas: "hero" "stats" "day" "chart"; }
+  .dd-day { max-height: 60vh; }
+  .dd-chart-body { height: 220px; flex: 0 0 auto; }
 }
 @media (max-width: 860px) { .dd-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
@@ -563,37 +573,29 @@ const DASH_CSS = `
 .dd-id-sub  { font-size: 13.5px; color: var(--ink-500); margin-top: 2px; }
 .dd-id-date { font-size: 13.5px; color: var(--ink-600); font-weight: 600; text-align: right; }
 
-.dd-figs { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 18px; }
+.dd-figs { display: grid; gap: 10px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 12px; }
 @media (max-width: 700px) { .dd-figs { grid-template-columns: minmax(0, 1fr); } }
-.dd-fig { border: 1px solid var(--ink-100); border-radius: 14px; padding: 14px 16px;
+.dd-fig { border: 1px solid var(--ink-100); border-radius: 14px; padding: 10px 14px;
     background-color: var(--ink-25); }
 .dd-fig.tint-wash, .dd-stat.tint-wash { border-color: var(--p-line); }
-.dd-fig-v { font-size: 30px; font-weight: 700; color: var(--ink-900); line-height: 1.15; letter-spacing: -0.02em; }
-.dd-fig-v.is-none { font-size: 24px; color: var(--ink-400); }
+.dd-fig-v { font-size: 24px; font-weight: 700; color: var(--ink-900); line-height: 1.15; letter-spacing: -0.02em; }
+.dd-fig-v.is-none { font-size: 20px; color: var(--ink-400); }
 .dd-fig-l { font-size: 12.5px; color: var(--ink-500); margin-top: 4px; }
 .tint-wash > .dd-fig-l, .tint-wash > .dd-stat-l { color: var(--p-fg); font-weight: 600; }
 .dd-fig-s { font-size: 12.5px; color: var(--ink-600); margin-top: 4px; }
 
-.dd-progress { margin-top: 16px; }
+.dd-progress { margin-top: 10px; }
 .dd-progress-t { font-size: 12.5px; color: var(--ink-600); margin-bottom: 6px; }
 .dd-track { height: 8px; border-radius: 999px; background: var(--ink-100); overflow: hidden; }
 .dd-track i { display: block; height: 100%; border-radius: 999px; background: var(--primary-500); }
 
-.dd-stat { padding: 14px 16px; }
+.dd-stat { padding: 10px 14px; }
 .dd-stat-l { font-size: 12.5px; color: var(--ink-500); }
-.dd-stat-v { font-size: 24px; font-weight: 700; color: var(--ink-900); line-height: 1.2; margin-top: 4px;
+.dd-stat-v { font-size: 20px; font-weight: 700; color: var(--ink-900); line-height: 1.2; margin-top: 4px;
     display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 
-.dd-plot { display: flex; align-items: flex-end; gap: 6px; height: 156px; margin-top: 14px; }
-.dd-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end;
-    align-items: center; gap: 6px; height: 100%; }
-.dd-bar { width: 100%; min-height: 3px; border-radius: 6px 6px 2px 2px; background: var(--primary-300); }
-.dd-col.is-today .dd-bar { background: var(--primary-600); }
-.dd-col-l { font-size: 12.5px; color: var(--ink-400); white-space: nowrap; }
-.dd-col.is-today .dd-col-l { color: var(--ink-700); font-weight: 600; }
-
-.dd-top { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--ink-100);
-    display: flex; flex-direction: column; gap: 10px; }
+.dd-top { flex: 0 0 auto; padding: 10px 18px 12px; border-top: 1px solid var(--ink-100);
+    display: flex; flex-direction: column; gap: 8px; }
 .dd-top-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; align-items: center; }
 .dd-top-n { font-size: 13.5px; color: var(--ink-800); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dd-top-c { font-size: 12.5px; color: var(--ink-500); font-variant-numeric: tabular-nums; }
@@ -655,9 +657,14 @@ function ensureCss() {
  * @param host       куда рисовать
  * @param onOpenWork колбэк «открыть рабочий список» (вкладка «Мои приёмы»)
  */
-export async function renderDoctorDashboard(host, { onOpenWork, onOpenInpatients } = {}) {
+// CABINET_REDESIGN_V1 — куда ведёт быстрое действие «Зарплата»: во вкладку,
+// а не в чужой экран; вкладку переключает кабинет, дашборд только просит.
+let openPayRef = null;
+
+export async function renderDoctorDashboard(host, { onOpenWork, onOpenInpatients, onOpenPay } = {}) {
     hostRef = host;
     openWorkRef = typeof onOpenWork === 'function' ? onOpenWork : null;
+    openPayRef = typeof onOpenPay === 'function' ? onOpenPay : null;
     // HEAD_DOCTOR_WARD_VIEW_V1 — КУДА вести, а не ЧТО показывать: право на
     // широкий взгляд по-прежнему выдаёт только сервер.
     openInpatientsRef = typeof onOpenInpatients === 'function' ? onOpenInpatients : null;
@@ -684,7 +691,7 @@ export function resetDoctorDashboard() {
     state.doctor = null; state.visits = []; state.services = [];
     state.metric = 'services'; state.now = null;
     ward.wide = false; ward.loaded = false; ward.exam = 0; ward.attending = 0; ward.inBed = 0;
-    hostRef = null; openWorkRef = null; openInpatientsRef = null;
+    hostRef = null; openWorkRef = null; openInpatientsRef = null; openPayRef = null;
 }
 
 function paint() {
@@ -715,12 +722,16 @@ function paint() {
     // лежит и не лечится, а суточное за койку уже идёт.
     if (ward.wide) hostRef.appendChild(wardCard());
 
-    hostRef.appendChild(h('div', { class: 'dd-grid' },
+    const grid = h('div', { class: 'dd-grid' },
         heroCard(doc, stats, now, perService),
         statsRow(stats),
         chartCard(stats),
         dayCard(day, now),
-    ));
+    );
+    hostRef.appendChild(grid);
+    // DASH_ONE_SCREEN_V1 — кабинет, как и сводка клиники, помещается в экран:
+    // мой день читают одним взглядом, а не листают. Высота берётся по месту.
+    fitViewport(grid, { min: 560 });
     if (state.failed) {
         // Сбой запроса и пустой день выглядят одинаково — серым нулём. Разница
         // между «отдел пуст» и «экран сломан» обязана быть на экране словами.
@@ -847,30 +858,36 @@ function deltaNode(value, suffix) {
 }
 
 // ---- График за 14 дней -----------------------------------------------------
+// CABINET_REDESIGN_V1 — тот же график, что на сводке клиники (dash-charts.js):
+// столбики с сеткой, подписями и подсказкой под курсором; наведение рисует
+// свой слой и основу не перезапускает. Столбики из <div> ушли: у них не было
+// ни оси, ни чисел, ни подсказки — только высота.
 function chartCard(stats) {
-    const field = state.metric === 'earned' ? 'earned' : 'services';
-    const max = Math.max(1, ...stats.series.map((d) => d[field]));
+    const earned = state.metric === 'earned';
+    const keys = [earned
+        ? { key: 'earned', label: tr('Заработок'), color: 'var(--ok-700)' }
+        : { key: 'services', label: tr('Услуги'), color: 'var(--primary-600)' }];
     return h('section', { class: 'card dd-chart' },
-        h('div', { class: 'row', style: { alignItems: 'center', gap: '10px', flexWrap: 'wrap' } },
-            h('div', { style: { fontSize: '15px', fontWeight: '600', color: 'var(--ink-900)' } },
-                tr('Последние 14 дней')),
-            h('span', { style: { flex: '1' } }),
-            h('div', { class: 'segmented', 'aria-label': tr('Что показывает график') },
-                metricBtn('services', tr('Услуги')),
-                metricBtn('earned', tr('Заработок')),
+        h('div', { class: 'card-header' },
+            h('h3', null, Icon('Chart', { size: 16 }), ' ', tr('Последние 14 дней')),
+            h('div', { class: 'dash-card-right' },
+                h('div', { class: 'segmented', 'aria-label': tr('Что показывает график') },
+                    metricBtn('services', tr('Услуги')),
+                    metricBtn('earned', tr('Заработок')),
+                ),
+                // Быстрые действия — рядом с тем, на что смотрят: от графика работы
+                // один шаг до списка приёмов и до зарплаты.
+                h('div', { class: 'dash-card-acts' },
+                    h('button', { class: 'btn btn-ghost btn-sm dash-act', type: 'button',
+                        onclick: () => { if (openWorkRef) openWorkRef(); } },
+                        Icon('Activity', { size: 13 }), ' ', tr('Мои приёмы')),
+                    h('button', { class: 'btn btn-ghost btn-sm dash-act', type: 'button',
+                        onclick: () => { if (openPayRef) openPayRef(); } },
+                        Icon('Wallet', { size: 13 }), ' ', tr('Зарплата'))),
             ),
         ),
-        h('div', { class: 'dd-plot' },
-            ...stats.series.map((d) => h('div', {
-                class: 'dd-col' + (d.isToday ? ' is-today' : ''),
-                title: state.metric === 'earned'
-                    ? trf('{d}: заработано {v}', { d: d.label, v: money(d.earned) })
-                    : trf('{d}: услуг {v}', { d: d.label, v: d.services }),
-            },
-                h('div', { class: 'dd-bar', style: { height: Math.max(3, Math.round(d[field] * 100 / max)) + '%' } }),
-                h('div', { class: 'dd-col-l' }, d.label),
-            )),
-        ),
+        h('div', { class: 'dash-card-body dd-chart-body' },
+            barChart({ series: stats.series, x: 'label', keys, fmt: earned ? money : String })),
         topServicesBlock(stats.topServices),
     );
 }
@@ -922,8 +939,13 @@ function dayCard(day, now) {
     return h('aside', { class: 'card dd-day' },
         h('div', { class: 'card-header' },
             h('h3', null, Icon('Calendar', { size: 15 }), tr('Мой день')),
-            h('span', { class: 'muted', style: { fontSize: '12.5px' } },
-                trf('приёмов: {n}', { n: day.rows.length })),
+            h('div', { class: 'dash-card-right' },
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } },
+                    trf('приёмов: {n}', { n: day.rows.length })),
+                h('div', { class: 'dash-card-acts' },
+                    h('button', { class: 'btn btn-ghost btn-sm dash-act', type: 'button',
+                        onclick: () => { if (openWorkRef) openWorkRef(); } },
+                        Icon('Activity', { size: 13 }), ' ', tr('Мои приёмы')))),
         ),
         list,
     );

@@ -38,6 +38,8 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 // доски очереди (public/js/admin/motion.js): один словарь движения на всё.
 import { revealOn } from '../motion.js?v=mo1';
 import { areaChart, barChart, ringGauge, legend } from './dash-charts.js';
+// DASH_SHARED_V1 — плитка-число и «в один экран» общие с кабинетом врача.
+import { kpiTile, fitViewport } from './dash-kpi.js';
 
 const PERIODS = [7, 14, 30];
 const PERIOD_KEY = 'dash.days';
@@ -94,26 +96,9 @@ function mount() {
     );
     refs.container.appendChild(refs.wrap);
     paintPeriod();
-    fitToViewport();
+    fitViewport(refs.wrap, { min: MIN_FIT_H });
 }
 
-// DASH_ONE_SCREEN_V1 — высота экрана меряется ПО МЕСТУ, а не считается из
-// токенов оболочки: что бы ни стояло над сводкой (верхняя строка, зазор,
-// поле области), она берёт ровно остаток окна. На маленьком окне ниже
-// MIN_FIT_H ужиматься дальше некуда — тогда честнее прокрутка, чем нечитаемые
-// графики.
-let fitBound = false;
-function fitToViewport() {
-    const wrap = refs.wrap;
-    if (!wrap || typeof window === 'undefined' || !wrap.getBoundingClientRect || !window.innerHeight) return;
-    const top = wrap.getBoundingClientRect().top || 0;
-    const avail = Math.round(window.innerHeight - top - 24);
-    wrap.style.height = Math.max(MIN_FIT_H, avail) + 'px';
-    if (!fitBound && typeof window.addEventListener === 'function') {
-        fitBound = true;
-        window.addEventListener('resize', () => { if (refs.wrap && refs.wrap.isConnected !== false) fitToViewport(); });
-    }
-}
 
 function paintPeriod() {
     clear(refs.periodWrap);
@@ -205,16 +190,6 @@ function fmtCompact(n) {
 }
 const num = (v) => String(Number(v) || 0);
 
-// Accent tint per KPI category — fg on the icon glyph, bg behind it (reuses
-// the same -700/-50 token pairing as .dash-alert-* / .tag-*).
-const KPI_ACCENT = {
-    primary: { fg: 'var(--primary-600)', bg: 'var(--primary-50)' },
-    ok:      { fg: 'var(--ok-700)',      bg: 'var(--ok-50)' },
-    warn:    { fg: 'var(--warn-700)',    bg: 'var(--warn-50)' },
-    crit:    { fg: 'var(--crit-700)',    bg: 'var(--crit-50)' },
-    info:    { fg: 'var(--info-700)',    bg: 'var(--info-50)' },
-    ward:    { fg: 'var(--purple-700)',  bg: 'var(--purple-50)' },
-};
 
 // BUILDING_REPORTS_V1 — вторая строка плитки: из чего сложено число.
 //
@@ -242,35 +217,35 @@ function paint() {
 
     // 1. Плитки — восемь, стационар среди них.
     const grid = h('div', { class: 'dash-kpi-row' });
-    grid.appendChild(kpi({ icon: 'Patients', accent: 'primary', label: 'Пациентов сегодня',
+    grid.appendChild(kpiTile({ icon: 'Patients', accent: 'primary', label: 'Пациентов сегодня',
         value: num(d.patients_today), split: splitLine(d, 'patients_today', num),
         onClick: go('patients') }));
-    grid.appendChild(kpi({ icon: 'Calendar', accent: 'info', label: 'Визитов сегодня',
+    grid.appendChild(kpiTile({ icon: 'Calendar', accent: 'info', label: 'Визитов сегодня',
         value: num(d.visits_today), split: splitLine(d, 'visits_today', num),
         onClick: go('queue') }));
-    grid.appendChild(kpi({ icon: 'Bed', accent: 'ward', label: 'В стационаре',
+    grid.appendChild(kpiTile({ icon: 'Bed', accent: 'ward', label: 'В стационаре',
         value: num(ip.in_bed),
         meta: t ? trf('поступило {a} · выписано {b}', { a: num(ip.admitted_today), b: num(ip.discharged_today) }) : null,
         onClick: go('admissions') }));
-    grid.appendChild(kpi({ icon: 'Building', accent: 'ward', label: 'Занято коек',
+    grid.appendChild(kpiTile({ icon: 'Building', accent: 'ward', label: 'Занято коек',
         value: t ? num(ip.occupancy) + '%' : '—',
         meta: t ? trf('{busy} из {total}', { busy: num(ip.beds_busy), total: num(ip.beds_total) }) : null,
         onClick: go('beds') }));
-    grid.appendChild(kpi({ icon: 'Coins', accent: 'ok', label: 'Принято сегодня',
+    grid.appendChild(kpiTile({ icon: 'Coins', accent: 'ok', label: 'Принято сегодня',
         value: fmtPrice(d.collected_today),
         meta: last ? trf('амбулаторно {a} · стационар {b}', { a: fmtPrice(last.clinic), b: fmtPrice(last.inpatient) }) : null,
         split: splitLine(d, 'collected_today', fmtPrice),
         onClick: go('cashier-shifts') }));
-    grid.appendChild(kpi({ icon: 'Receipt', accent: 'crit', label: 'Долг',
+    grid.appendChild(kpiTile({ icon: 'Receipt', accent: 'crit', label: 'Долг',
         value: fmtPrice(d.outstanding_amount),
         meta: trf('счетов: {n}', { n: num(d.outstanding_count) }),
         split: splitLine(d, 'outstanding_amount', fmtPrice),
         onClick: go('cashier-head') }));
-    grid.appendChild(kpi({ icon: 'Wallet', accent: 'ward', label: 'Начислено стационару',
+    grid.appendChild(kpiTile({ icon: 'Wallet', accent: 'ward', label: 'Начислено стационару',
         value: t ? fmtPrice(ip.accrued_unbilled) : '—',
         meta: tr('ещё не выставлено в счёт'),
         onClick: go('admissions') }));
-    grid.appendChild(kpi({ icon: 'Flask', accent: 'info', label: 'Анализы в работе',
+    grid.appendChild(kpiTile({ icon: 'Flask', accent: 'info', label: 'Анализы в работе',
         value: num(d.lab_pending_count),
         split: splitLine(d, 'lab_pending_count', num),
         onClick: go('labs') }));
@@ -295,34 +270,9 @@ function paint() {
 
     // Плитки приподнимаются при входе в экран — наблюдатель один.
     revealOn(grid, '[data-reveal]');
-    fitToViewport();
+    fitViewport(refs.wrap, { min: MIN_FIT_H });
 }
 
-function kpi({ icon, accent, label, value, meta, split, valueWarn, onClick }) {
-    const a = KPI_ACCENT[accent] || KPI_ACCENT.primary;
-    return h('div', {
-        class: 'dash-kpi',
-        'data-reveal': '',
-        role: onClick ? 'button' : null,
-        tabindex: onClick ? '0' : null,
-        onclick: onClick || undefined,
-    },
-        // DASH_ONE_SCREEN_V1 — плитка в один взгляд: значок и подпись одной
-        // строкой, число под ними, одна строка пояснения. Две строки таких
-        // плиток занимают то, что раньше занимала одна.
-        h('div', { class: 'dash-kpi-top' },
-            h('div', { class: 'dash-kpi-icon', style: { color: a.fg, background: a.bg } }, Icon(icon, { size: 15 })),
-            h('div', { class: 'dash-kpi-label' }, label),
-            onClick ? h('span', { class: 'dash-kpi-go' }, Icon('ArrowRight', { size: 14 })) : null,
-        ),
-        h('div', {
-            class: 'dash-kpi-value num',
-            style: valueWarn ? { color: 'var(--warn-700)' } : null,
-        }, value),
-        meta ? h('div', { class: 'dash-kpi-meta', title: meta }, meta) : null,
-        split ? h('div', { class: 'dash-kpi-meta', title: split }, split) : null,
-    );
-}
 
 const MONEY_KEYS = () => [
     { key: 'clinic', label: tr('Амбулаторно'), color: CLINIC_COLOR },

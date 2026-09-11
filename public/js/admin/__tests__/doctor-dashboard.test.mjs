@@ -310,6 +310,15 @@ const A_VISITS = VISIT_ROWS.filter((v) => v.doctor_id === 'u-doc-a').map((v) => 
 }));
 
 // ===========================================================================
+// CABINET_REDESIGN_V1 — график столбиков рисует dash-charts.js (SVG): день —
+// это <rect class="dc-bar"> в основе графика, а не <div class="dd-col">.
+const chartBars = (host) => {
+  const out = [];
+  (function w(e) { out.push(e); for (const c of e.children || []) w(c); })(host);
+  return out.filter((n) => n.tagName === 'SVG' && /<svg class="dc"/.test(n._t || ''))
+    .reduce((sum, n) => sum + ((n._t.match(/<rect class="dc-bar"/g) || []).length), 0);
+};
+
 test('доля врача считается по формуле отчёта: база − скидка счёта, минус налог, × процент', () => {
   const rateMap = dash.serviceRateMap(DOCTOR_A);
   // sv1: (200 000 − 20 000) × 0,94 × 0,40
@@ -488,7 +497,7 @@ test('дашборд рисует день, четыре плитки, граф�
   assert.ok(txt.includes('Завершено 2 из 4 сегодняшних услуг'), 'статистика дня словами: ' + txt.slice(0, 500));
 
   assert.strictEqual(byClass(host, 'dd-stat').length, 4, 'ровно четыре маленькие плитки');
-  assert.strictEqual(byClass(host, 'dd-col').length, 14, 'график — четырнадцать дневных столбцов');
+  assert.strictEqual(chartBars(host), 14, 'график — четырнадцать дневных столбцов');
   assert.ok(txt.includes('Частые услуги за 14 дней') && txt.includes('Приём терапевта'));
 
   const appts = byClass(host, 'dd-appt');
@@ -505,7 +514,7 @@ test('дашборд рисует день, четыре плитки, граф�
   const earnBtn = buttonByText(host, /Заработок/);
   assert.ok(earnBtn, 'переключатель Услуги | Заработок');
   earnBtn.click();
-  assert.strictEqual(byClass(host, 'dd-col').length, 14, 'после переключения график остаётся на месте');
+  assert.strictEqual(chartBars(host), 14, 'после переключения график остаётся на месте');
 });
 
 test('пустой день (08:00, записей ещё нет) говорит словами, а не пустотой', async () => {
@@ -519,7 +528,7 @@ test('пустой день (08:00, записей ещё нет) говорит
   assert.ok(txt.includes('Как только регистратура запишет пациента'), 'и говорит, что будет дальше');
   assert.ok(txt.includes('приёмов: 0'));
   assert.strictEqual(byClass(host, 'dd-appt').length, 0);
-  assert.strictEqual(byClass(host, 'dd-col').length, 14, 'график на месте, все столбцы нулевые');
+  assert.strictEqual(chartBars(host), 14, 'график на месте, все столбцы нулевые');
   assert.ok(txt.includes('За две недели завершённых услуг нет'), 'частоту не выдумываем');
 });
 

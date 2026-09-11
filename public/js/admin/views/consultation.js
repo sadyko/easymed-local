@@ -15,7 +15,10 @@
 import { supabase } from '../../supabase.js';
 // INTERNAL_REFERRAL_V1 — правило «какая ставка применяется» общее с отчётом.
 import { resolveReferralRate, rewardForLine } from '../../shared/referral-reward.js?v=rr1';
-import { h, Icon, Tag, PageHead, toast, clear, avColor, initials, fmtDateTime } from '../ui.js';
+import { h, Icon, Tag, PageHead, toast, clear, avColor, initials, fmtDateTime, field } from '../ui.js';
+// CABINET_REDESIGN_V1 — плитка и график те же, что на сводке клиники.
+import { kpiTile, fitViewport } from './dash-kpi.js';
+import { areaChart, legend } from './dash-charts.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { scopedDoctorId, selfDoctorId, scopedProviderId } from '../permissions.js';   // ADMIN_DOCTOR_V2 / SERVICE_SCOPE_V1
 import { renderDoctorProfile } from './doctor-profile.js?v=btnright1';
@@ -53,6 +56,7 @@ const state = {
     view:         'list',    // 'list' | 'calendar'
     dateRange:    'all',     // CABINET_DEFAULT_ALL_V1 — was 'today', which hid future-dated bookings; show all, doctor can filter
     search:       '',
+    workRootEl:   null,      // WORK_ONE_SCREEN_V1 — корень вкладки «Мои приёмы», ему подгоняется высота окна
     // Today's referrals THIS doctor made (for the KPI cards / RecsModal). Lazy
     // and tolerant — see loadTodayReferrals(). { loaded, rows: [...] }
     todayReferrals: { loaded: false, rows: [] },
@@ -85,6 +89,8 @@ const state = {
         referrals: [],        // recommended_services where recommended_by = doctor
         rewardSource:null,    // INTERNAL_REFERRAL_V1 — карточка источника этого врача
         rewardCategory:null,  // и её категория: стандартная ставка
+        recent:    'services',   // PAY_ONE_SCREEN_V1 — какой из трёх списков открыт в «Последних»
+        rootEl:    null,         // корень вкладки — ему подгоняется высота окна
     },
 };
 
@@ -335,6 +341,10 @@ function paint() {
     // The appointments table body is painted into a slot by id — only meaningful
     // when the appointments tab is the one being shown.
     if (state.tab === 'appointments') paintBody();
+    if (state.tab === 'appointments' && state.workRootEl) fitViewport(state.workRootEl, { min: 520 });   // WORK_ONE_SCREEN_V1
+    // PAY_ONE_SCREEN_V1 — владелец: «make everything fit into a one page».
+    // Вкладка берёт остаток окна по месту, как сводка клиники.
+    if (state.tab === 'pay' && state.dash.rootEl) fitViewport(state.dash.rootEl, { min: 560 });
 }
 
 // DOCTOR_DASHBOARD_V1 — дашборд рисует себя сам в своё гнездо: у него своё
@@ -343,6 +353,7 @@ function paint() {
 function doctorDashboardView() {
     const host = h('div');
     renderDoctorDashboard(host, {
+        onOpenPay: () => setTab('pay'),   // CABINET_REDESIGN_V1 — быстрое действие с графика
         // Карточка приёма ведёт туда, где с ним работают, — в рабочий список.
         // Своего второго окна приёма дашборд не заводит.
         onOpenWork: () => setTab('appointments'),
@@ -707,9 +718,13 @@ function topTab(id, label, icon, badge) {
 // search box and the status filter it has always worked with.
 // ---------------------------------------------------------------------------
 function appointmentsView() {
-    return h('div', null,
+    // WORK_ONE_SCREEN_V1 — владелец: «fit this too in to a one viewport and
+    // scroll only a list of the patients». Плитки сверху, карточка очереди
+    // берёт остаток окна, и прокручивается только список внутри неё: шапка с
+    // поиском и фильтрами всегда на месте.
+    const root = h('div', { class: 'work-page dash-fit' },
         kpiSummary(),
-        h('div', { class: 'card', id: 'svc-card' },
+        h('div', { class: 'card work-card', id: 'svc-card' },
             h('div', { class: 'card-header' },
                 h('div', { class: 'row', style: { gap: '10px', flex: '1', flexWrap: 'wrap' } },
                     h('input', {
@@ -725,9 +740,11 @@ function appointmentsView() {
                     'Показано ', h('b', { id: 'svc-count', style: { color: 'var(--ink-800)' } }, '0'),
                     ' из ', String(state.rows.length)),
             ),
-            h('div', { id: 'svc-body' }),
+            h('div', { id: 'svc-body', class: 'work-scroll' }),
         ),
     );
+    state.workRootEl = root;
+    return root;
 }
 
 // ---- Date-range filter: Сегодня / Неделя / Месяц / Период ----
@@ -1688,13 +1705,15 @@ function dashboardView() {
         return h('div', { class: 'empty', style: { padding: '60px' } }, tr('Загружаем начисления…'));
     }
     const doc = state.dash.doctor;
+    // CABINET_REDESIGN_V1 — врач выбирается системным полем (.field select), и
+    // только когда есть из кого выбирать: у врача под своим входом список из
+    // одного имени был бы кнопкой, которая ничего не делает.
     const docSelect = h('select', {
         onchange: (ev) => {
             state.dash.doctorId = ev.target.value;
             state.dash.loaded = false; state.dash.loading = true; paint();
             loadDashboardData().then(() => { state.dash.loading = false; paint(); });
         },
-        style: { height: '34px', borderRadius: '8px', border: '1px solid var(--ink-200)', padding: '0 10px', fontSize: '13.5px', minWidth: '220px' },
     },
         ...state.dash.doctors.map(d => h('option', { value: d.id, selected: state.dash.doctorId === d.id },
             d.full_name + (d.specialty ? ' · ' + d.specialty : ''))),
@@ -1712,72 +1731,182 @@ function dashboardView() {
     const inProgressCount = state.dash.services.filter(s => s.status === 'in_progress').length;
     const uniquePatients = new Set(state.dash.services.map(s => s.patientName + '|' + s.patientMrn)).size;
 
-    return h('div', null,
+    const root = h('div', { class: 'pay-page dash-fit' },
         PageHead({
             // DOCTOR_DASHBOARD_V1 — вкладка называется «Зарплата», и шапка обязана
             // говорить то же самое: два разных имени у одного экрана — это два
             // экрана в голове у врача.
             // DOCTOR_PAY_I18N_V1 — вся вкладка была написана английскими
-            // литералами мимо tr(), поэтому на русском и узбекском интерфейсе
-            // разбор начислений оставался английским. Исходная строка теперь
-            // русская: так экран попадает под общий страж i18n-coverage, который
-            // ищет ИМЕННО кириллицу и английского литерала не замечает.
+            // литералами мимо tr(); исходная строка теперь русская, так экран
+            // попадает под общий страж i18n-coverage.
             title: tr('Зарплата'),
             subtitle: doc
                 ? trf('Зарплата, вознаграждения за направления и работа врача: {name}.', { name: doc.full_name })
                 : tr('Врач не выбран.'),
-            right: [docSelect, periodSeg],
+            right: [state.dash.doctors.length > 1 ? field('Врач', docSelect) : null, periodSeg].filter(Boolean),
         }),
-        // KPI tiles
-        h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px', marginBottom: '16px' } },
+        // Плитки — те же, что на сводке клиники (dash-kpi.js): одна плитка на
+        // весь продукт, и врач в своём кабинете видит ту же программу.
+        h('div', { class: 'dash-kpi-row' },
             kpiTile({
-                label: trf('Зарплата · {period}', { period: periodLabel() }),
-                value: salary.total.toLocaleString('ru-RU') + ' UZS',
-                sub:   salaryKindLabel(salary.kind) + (salary.kind === 'fix_plus_kpi'
-                    ? '  ·  ' + trf('оклад {fix} + переменная {variable}', {
+                icon: 'Wallet', accent: 'ok', label: 'Зарплата',
+                value: uzs(salary.total),
+                meta: salaryKindLabel(salary.kind) + (salary.kind === 'fix_plus_kpi'
+                    ? ' · ' + trf('оклад {fix} + переменная {variable}', {
                         fix:      Math.round(salary.fixed).toLocaleString('ru-RU'),
                         variable: Math.round(salary.variable).toLocaleString('ru-RU'),
                     })
                     : ''),
-                icon:  'Wallet', color: 'var(--ok-700)',
-                detailsLabel: tr('Разбор зарплаты'),
-                onDetails: () => openSalaryDetails(),
+                onClick: () => openSalaryDetails(),
             }),
             kpiTile({
-                label: trf('Вознаграждения за направления · {period}', { period: periodLabel() }),
-                value: rewards.total.toLocaleString('ru-RU') + ' UZS',
-                sub:   trf('отправлено направлений: {n}', { n: rewards.count }),
-                icon:  'ArrowRight', color: 'var(--info-700)',
-                detailsLabel: tr('Разбор направлений'),
-                onDetails: () => openReferralDetails(),
+                icon: 'ArrowRight', accent: 'info', label: 'Вознаграждения за направления',
+                value: uzs(rewards.total),
+                meta: trf('отправлено направлений: {n}', { n: rewards.count }),
+                onClick: () => openReferralDetails(),
             }),
             kpiTile({
-                label: tr('Услуг завершено'),
+                icon: 'Check', accent: 'primary', label: 'Услуг завершено',
                 value: String(completedCount),
-                sub:   trf('сейчас в работе: {n}', { n: inProgressCount }),
-                icon:  'Check', color: 'var(--primary-700)',
+                meta: trf('сейчас в работе: {n}', { n: inProgressCount }),
             }),
             kpiTile({
-                label: tr('Пациентов принято'),
+                icon: 'Patients', accent: 'ward', label: 'Пациентов принято',
                 value: String(uniquePatients),
-                sub:   tr('разных пациентов за период'),
-                icon:  'Patients', color: 'var(--purple-700, var(--purple-500))',
+                meta: tr('разных пациентов за период'),
             }),
         ),
-        // Salary setup on the left, full referral analytics table on the right.
-        h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1.6fr', gap: '16px' } },
+        // Начисления по дням слева, как они считаются — справа.
+        h('div', { class: 'pay-grid' },
+            earningsChartCard(),
             salaryConfigCard(salary),
+        ),
+        // Разбор направлений слева; справа — одна карточка на три списка
+        // (последние услуги, последние направления, по категориям): три
+        // списка рядом не влезли бы в экран, а экран — один.
+        h('div', { class: 'pay-grid-2' },
             referralAnalyticsCard(),
+            recentCard(rewards),
         ),
-        // Recent services + recent referrals.
-        h('div', { style: { display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: '16px', marginTop: '16px' } },
-            recentServicesCard(),
-            recentReferralsCard(),
-        ),
-        // "Rewards by sector" mini summary — moved down per request.
-        h('div', { style: { marginTop: '16px' } },
-            referralBySectorCard(rewards),
-        ),
+    );
+    state.dash.rootEl = root;
+    return root;
+}
+
+// PAY_ONE_SCREEN_V1 — три списка в одной карточке, переключателем.
+const RECENT = [
+    ['services',  'Последние услуги'],
+    ['referrals', 'Последние направления'],
+    ['sectors',   'По категориям'],
+];
+function recentCard(rewards) {
+    const which = RECENT.some(([id]) => id === state.dash.recent) ? state.dash.recent : 'services';
+    const seg = h('div', { class: 'segmented', role: 'group', 'aria-label': tr('Последние') },
+        ...RECENT.map(([id, label]) => h('button', {
+            type: 'button', class: which === id ? 'on' : '', 'aria-pressed': which === id ? 'true' : 'false',
+            onclick: () => { if (state.dash.recent === id) return; state.dash.recent = id; paint(); },
+        }, tr(label))));
+    const body = which === 'referrals' ? recentReferralsBody()
+        : which === 'sectors' ? referralBySectorBody(rewards)
+        : recentServicesBody();
+    return h('div', { class: 'card pay-card' },
+        h('div', { class: 'card-header' },
+            h('h3', null, Icon('Activity', { size: 16 }), ' ', tr('Последние')),
+            h('div', { class: 'dash-card-right' },
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } }, periodLabel()),
+                seg)),
+        h('div', { class: 'pay-scroll' }, body));
+}
+
+const uzs = (n) => Math.round(Number(n) || 0).toLocaleString('ru-RU') + ' UZS';
+/** Подпись оси денег: 350 000 → «350 тыс.», 1 200 000 → «1,2 млн». */
+function compactUzs(n) {
+    const v = Number(n) || 0;
+    const a = Math.abs(v);
+    const trim = (x) => String(Math.round(x * 10) / 10).replace('.', ',');
+    if (a >= 1e6) return trf('{n} млн', { n: trim(v / 1e6) });
+    if (a >= 1e3) return trf('{n} тыс.', { n: trim(v / 1e3) });
+    return String(Math.round(v));
+}
+/** Быстрое действие в шапке карточки: значок + слово. */
+function payAction(label, icon, onclick) {
+    return h('button', { class: 'btn btn-ghost btn-sm dash-act', type: 'button', onclick },
+        Icon(icon, { size: 13 }), ' ', tr(label));
+}
+
+// CABINET_REDESIGN_V1 — НАЧИСЛЕНИЯ ПО ДНЯМ.
+//
+// Владелец: «redesign this … for the doctor». Вкладка показывала сумму за
+// период одним числом, и врач не видел, из каких дней она сложилась. Теперь —
+// площадь стопкой: доля за услуги снизу, вознаграждения за направления
+// сверху, итог — верхняя кривая. Числа считаются ТЕМИ ЖЕ функциями, что и
+// плитки (serviceShare, commissionFor): график — это разложенная по дням
+// плитка, а не вторая арифметика.
+//
+// День — местный (ключ строится из местных часов): начисление в 23:30 лежит
+// в своём дне, а не в завтрашнем. Период «всё время» и «12 месяцев» на графике
+// показываются последними CHART_DAYS_MAX днями — год точек по дням нечитаем, и
+// подпись под графиком говорит об этом словами.
+const CHART_DAYS_MAX = 90;
+function dayKey(value) {
+    const d = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function earningsSeries() {
+    const doc = state.dash.doctor;
+    const { startIso, endIso } = periodRange(state.dash.period);
+    const end = new Date(endIso);
+    const start = new Date(startIso);
+    const span = Math.max(1, Math.round((end - start) / 86400000) + 1);
+    const days = Math.min(CHART_DAYS_MAX, span);
+    const list = [];
+    const byKey = new Map();
+    for (let i = days - 1; i >= 0; i--) {
+        const d = new Date(end);
+        d.setDate(end.getDate() - i);
+        const row = { date: dayKey(d), services: 0, referrals: 0 };
+        list.push(row);
+        byKey.set(row.date, row);
+    }
+    // Доля за услуги идёт в зарплату по тому же правилу, что в computeSalary:
+    // при окладе её нет вовсе, при «оклад + KPI» — только если отмечен
+    // показатель по услугам.
+    const perSvc = !!doc && doc.salary_type !== 'fixed'
+        && (doc.salary_type !== 'fix_plus_kpi' || perServicePayApplies(doc));
+    if (perSvc) {
+        const rateMap = serviceRateMap(doc);
+        for (const s of state.dash.services) {
+            if (s.status !== 'completed' && s.status !== 'in_progress') continue;
+            const row = byKey.get(dayKey(s.createdAt));
+            if (row) row.services += serviceShare(s, rateMap);
+        }
+    }
+    for (const r of state.dash.referrals) {
+        const row = byKey.get(dayKey(r.createdAt));
+        if (row) row.referrals += commissionFor(r);
+    }
+    for (const row of list) { row.services = Math.round(row.services); row.referrals = Math.round(row.referrals); }
+    return { list, capped: span > CHART_DAYS_MAX };
+}
+function earningsChartCard() {
+    const keys = [
+        { key: 'services',  label: tr('Услуги'),      color: 'var(--ok-700)' },
+        { key: 'referrals', label: tr('Направления'), color: 'var(--info-700)' },
+    ];
+    const { list, capped } = earningsSeries();
+    return h('div', { class: 'card dash-card' },
+        h('div', { class: 'card-header' },
+            h('h3', null, Icon('Chart', { size: 16 }), ' ', tr('Начисления по дням')),
+            h('div', { class: 'dash-card-right' },
+                legend(keys),
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } },
+                    capped ? trf('последние {n} дней', { n: CHART_DAYS_MAX }) : periodLabel()),
+                h('div', { class: 'dash-card-acts' },
+                    payAction('Разбор зарплаты', 'Wallet', () => openSalaryDetails()),
+                    payAction('Разбор направлений', 'ArrowRight', () => openReferralDetails())))),
+        h('div', { class: 'dash-card-body' },
+            areaChart({ series: list, keys, fmt: (n) => Math.round(n).toLocaleString('ru-RU'), fmtY: compactUzs })),
     );
 }
 
@@ -1800,29 +1929,14 @@ function salaryKindLabel(kind) {
     return tr({ fixed: 'Оклад помесячно', percentage: 'Процент от услуг', fix_plus_kpi: 'Оклад + процент', none: 'Не настроено' }[kind]) || kind;
 }
 
-function kpiTile({ label, value, sub, icon, color, detailsLabel, onDetails }) {
-    return h('div', { style: { padding: '14px 16px', border: '1px solid var(--ink-100)', borderRadius: '12px', background: 'white', display: 'flex', flexDirection: 'column', gap: '8px' } },
-        h('div', { class: 'row', style: { gap: '8px', color } },
-            Icon(icon, { size: 16 }),
-            h('span', { style: { fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' } }, label),
-        ),
-        h('div', { class: 'num', style: { fontSize: '24px', fontWeight: 700, color: 'var(--ink-900)', letterSpacing: '-0.02em' } }, value),
-        sub && h('div', { class: 'muted', style: { fontSize: '12.5px' } }, sub),
-        onDetails && h('button', {
-            class: 'btn btn-outline btn-sm', onclick: onDetails,
-            style: { marginTop: 'auto', alignSelf: 'flex-start' },
-        }, Icon('ArrowRight', { size: 12 }), ' ', detailsLabel || tr('Подробнее')),
-    );
-}
-
 function salaryConfigCard(salary) {
     const doc = state.dash.doctor;
     if (!doc) return h('div');
-    return h('div', { class: 'card', style: { padding: '16px 18px' } },
-        h('div', { class: 'row', style: { gap: '8px', marginBottom: '10px' } },
-            Icon('Wallet', { size: 16 }),
-            h('span', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)', textTransform: 'uppercase', letterSpacing: '0.04em' } }, tr('Как считается зарплата')),
-        ),
+    return h('div', { class: 'card pay-card' },
+        h('div', { class: 'card-header' },
+            h('h3', null, Icon('Wallet', { size: 16 }), ' ', tr('Как считается зарплата')),
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, periodLabel())),
+        h('div', { class: 'pay-kv pay-scroll' },
         kvRow(tr('Схема'),         salaryKindLabel(salary.kind)),
         kvRow(tr('Оклад'),         trf('{sum} UZS в месяц', { sum: Number(doc.salary_fixed || 0).toLocaleString('ru-RU') })),
         kvRow(tr('Ставки по услугам'), trf('услуг задано: {n}', { n: (Array.isArray(doc.service_rates) ? doc.service_rates.filter(r => Number(r.value != null ? r.value : r.percentage) > 0).length : 0) })),
@@ -1836,7 +1950,7 @@ function salaryConfigCard(salary) {
             h('span', { class: 'grow' }),
             h('span', { class: 'num', style: { fontSize: '15px', fontWeight: 700, color: 'var(--ok-700)' } },
                 Math.round(salary.total).toLocaleString('ru-RU') + ' UZS'),
-        ),
+        )),
     );
 }
 
@@ -1880,7 +1994,10 @@ function referralAnalyticsCard() {
             const net = gross * (1 - taxPct / 100);
             slot.revenue      += gross;
             slot.revenueAfter += net;
-            slot.reward       += commissionFor(r, rules);
+            // `rules` здесь не существовало никогда — след старого механизма
+            // users.referral_rates; при первом же дошедшем направлении разбор
+            // падал с ReferenceError, и вкладка не рисовалась вовсе.
+            slot.reward       += commissionFor(r);
         }
     }
     const rows = Object.values(buckets).sort((a, b) => b.reward - a.reward);
@@ -1893,7 +2010,7 @@ function referralAnalyticsCard() {
         reward:       acc.reward + r.reward,
     }), { referred: 0, arrived: 0, revenueAfter: 0, reward: 0 });
 
-    return h('div', { class: 'card' },
+    return h('div', { class: 'card pay-card' },
         h('div', { class: 'card-header' },
             h('h3', null, Icon('ArrowRight', { size: 16 }), ' ', tr('Разбор направлений')),
             h('div', { class: 'row', style: { gap: '10px' } },
@@ -1904,7 +2021,7 @@ function referralAnalyticsCard() {
                 }, tr('Открыть весь список'), ' ', Icon('ArrowRight', { size: 12 })),
             ),
         ),
-        rows.length === 0
+        h('div', { class: 'pay-scroll' }, rows.length === 0
             ? h('div', { class: 'empty', style: { padding: '40px 20px', fontSize: '12.5px' } },
                 tr('За этот период направлений нет.'))
             : h('table', { class: 'tbl' },
@@ -1944,78 +2061,66 @@ function referralAnalyticsCard() {
                             h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '4px' } }, 'UZS')),
                     ),
                 ),
-            ),
+            )),
     );
 }
 
-function referralBySectorCard(rewards) {
+/** Вознаграждения по категориям — тело для карточки «Последние». */
+function referralBySectorBody(rewards) {
     const sectors = Object.entries(rewards.bySector).sort((a, b) => b[1].commission - a[1].commission);
-    return h('div', { class: 'card', style: { padding: '16px 18px' } },
-        h('div', { class: 'row', style: { gap: '8px', marginBottom: '10px' } },
-            Icon('ArrowRight', { size: 16 }),
-            h('span', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)', textTransform: 'uppercase', letterSpacing: '0.04em' } }, tr('Вознаграждения по категориям услуг')),
-        ),
+    return (
         sectors.length === 0
-            ? h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '8px 0' } }, tr('За этот период направлений нет.'))
+            ? h('div', { class: 'empty', style: { padding: '30px 20px', fontSize: '12.5px' } }, tr('За этот период направлений нет.'))
             : h('div', null, ...sectors.map(([name, s]) =>
-                h('div', { class: 'row', style: { padding: '6px 0', borderBottom: '1px solid var(--ink-100)', gap: '10px' } },
+                h('div', { class: 'row', style: { padding: '9px 16px', borderTop: '1px solid var(--ink-100)', gap: '10px' } },
                     h('span', { style: { fontSize: '13.5px', color: 'var(--ink-900)' } }, sectorLabel(name)),
                     h('span', { class: 'grow' }),
                     h('span', { class: 'muted num', style: { fontSize: '12.5px' } }, trf('направлений: {n}', { n: s.count })),
                     h('span', { class: 'num cell-strong', style: { fontSize: '13.5px', color: 'var(--ok-700)', minWidth: '90px', textAlign: 'right' } },
                         s.commission.toLocaleString('ru-RU') + ' UZS'),
                 ),
-            )),
+            ))
     );
 }
 
-function recentServicesCard() {
-    const rows = state.dash.services.slice(0, 8);
-    return h('div', { class: 'card' },
-        h('div', { class: 'card-header' },
-            h('h3', null, Icon('Activity', { size: 16 }), ' ', tr('Последние услуги')),
-            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, periodLabel()),
-        ),
-        rows.length === 0
-            ? h('div', { class: 'empty', style: { padding: '30px 20px', fontSize: '12.5px' } }, tr('За этот период услуг нет.'))
-            : h('table', { class: 'tbl' },
-                h('thead', null, h('tr', null,
-                    h('th', null, tr('Когда')), h('th', null, tr('Услуга')),
-                    h('th', null, tr('Пациент')), h('th', null, tr('Статус')),
-                    h('th', { style: { textAlign: 'right' } }, tr('Сумма')),
-                )),
-                h('tbody', null, ...rows.map(s => h('tr', null,
-                    h('td', { class: 'num muted', style: { fontSize: '12.5px' } }, formatDateTime(s.createdAt)),
-                    h('td', { class: 'cell-strong' }, s.serviceName),
-                    h('td', null, s.patientName,
-                        s.patientMrn && h('div', { class: 'muted', style: { fontSize: '12.5px' } }, s.patientMrn)),
-                    h('td', null, statusBadge(s.status)),
-                    h('td', { class: 'num cell-strong', style: { textAlign: 'right' } }, s.total.toLocaleString('ru-RU')),
-                ))),
-            ),
-    );
+/** «18.08 11:09» — когда, коротко: дата словами съедала полстроки узкой карточки. */
+function whenShort(iso) {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    const p = (n) => String(n).padStart(2, '0');
+    return p(d.getDate()) + '.' + p(d.getMonth() + 1) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+// PAY_ROWS_V1 — владелец (снимок «So'nggilari»): «list looks terribly wrong».
+// Пять колонок таблицы в карточке шириной с ладонь: дата словами занимала
+// половину, имя и услуга ломались на три строки. Список — одна строка на
+// запись: когда · что (кто под ним) · состояние · сумма. Одна и та же строка
+// у всех трёх списков, поэтому переключатель не меняет ритм карточки.
+function payRow(when, title, sub, tag, sum) {
+    return h('div', { class: 'pay-row' },
+        h('span', { class: 'pay-row-t' }, when),
+        h('div', { class: 'pay-row-m' },
+            h('div', { class: 'pay-row-n', title }, title),
+            sub ? h('div', { class: 'pay-row-s', title: sub }, sub) : null),
+        tag,
+        h('span', { class: 'pay-row-sum num' }, sum));
+}
+function recentServicesBody() {
+    const rows = state.dash.services.slice(0, 12);
+    if (!rows.length) return h('div', { class: 'empty', style: { padding: '30px 20px', fontSize: '12.5px' } }, tr('За этот период услуг нет.'));
+    return h('div', null, ...rows.map((s) => payRow(
+        whenShort(s.createdAt), s.serviceName,
+        [s.patientName, s.patientMrn].filter(Boolean).join(' · '),
+        statusBadge(s.status), s.total.toLocaleString('ru-RU'))));
 }
 
-function recentReferralsCard() {
-    const rows = state.dash.referrals.slice(0, 8);
-    return h('div', { class: 'card' },
-        h('div', { class: 'card-header' },
-            h('h3', null, Icon('ArrowRight', { size: 16 }), ' ', tr('Последние направления')),
-            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, periodLabel()),
-        ),
-        rows.length === 0
-            ? h('div', { class: 'empty', style: { padding: '30px 20px', fontSize: '12.5px' } }, tr('За этот период направлений нет.'))
-            : h('div', null, ...rows.map(r => h('div', { class: 'row', style: { padding: '10px 16px', borderTop: '1px solid var(--ink-100)', gap: '10px' } },
-                h('div', { style: { flex: 1, minWidth: 0 } },
-                    h('div', { class: 'cell-strong', style: { fontSize: '12.5px' } }, r.serviceName),
-                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, r.patientName + (r.serviceCat ? ' · ' + r.serviceCat : '')),
-                ),
-                tagEl(referralStatusLabel(r.status),
-                      r.status === 'done' ? 'ok' : r.status === 'cancelled' ? 'crit' : 'warn', null),
-                h('span', { class: 'num cell-strong', style: { fontSize: '13.5px', minWidth: '80px', textAlign: 'right', color: 'var(--ok-700)' } },
-                    commissionFor(r).toLocaleString('ru-RU')),
-            ))),
-    );
+function recentReferralsBody() {
+    const rows = state.dash.referrals.slice(0, 12);
+    if (!rows.length) return h('div', { class: 'empty', style: { padding: '30px 20px', fontSize: '12.5px' } }, tr('За этот период направлений нет.'));
+    return h('div', null, ...rows.map((r) => payRow(
+        whenShort(r.createdAt), r.serviceName,
+        [r.patientName, r.serviceCat].filter(Boolean).join(' · '),
+        tagEl(referralStatusLabel(r.status), r.status === 'done' ? 'ok' : r.status === 'cancelled' ? 'crit' : 'warn', null),
+        commissionFor(r).toLocaleString('ru-RU'))));
 }
 
 // Состояние направления словами. Три значения — закрытый набор, поэтому
