@@ -51,6 +51,7 @@ import { supabase } from '../../supabase.js';
 import { isAccommodationLine, isServiceLine, isGoodsLine, ACCOMMODATION_LABEL } from '../../shared/accommodation-line.js';
 // INPATIENT_FLOW_V1 — «в койке» это ЧЕТЫРЕ состояния, а не 'active' (миграция 091).
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
+import { fitViewport } from './dash-kpi.js';   // WARD_BOARD_V3 — доска в один экран, как сводка
 import { CAT_ORDER, categoryOf, filterCatalog, categoryCounts } from '../../shared/service-categories.js';   // SERVICE_CATALOG_FILTER_V1   // ACCOMMODATION_AS_SERVICE_V1
 import { h, Icon, clear, toast, Tag, field, fmtDateTime, initials } from '../ui.js';
 import { pastelFor } from '../pastel.js';   // ADMISSIONS_REGISTER_V1 — аватар пациента
@@ -129,7 +130,9 @@ export async function renderWardBeds(container, ctx = {}) {
     clear(container);
     navigateTo = ctx.onNavigate || null;
     state = { tab: 'board', wardFilter: 'all', statusFilter: 'all', embedded: !!ctx.embedded };
-    const root = h('div', { class: 'fade-in' });
+    // WARD_BOARD_V3 — владелец: «redesign this too». Доска берёт остаток окна;
+    // счётчики и палаты-фильтр стоят, прокручивается только коечный фонд.
+    const root = h('div', { class: 'fade-in wb-fit' });
     container.appendChild(root);
     await paint(root);
 }
@@ -206,7 +209,11 @@ async function paint(root) {
         return;
     }
 
-    if (state.tab === 'admissions') { root.appendChild(await admissionsTable()); return; }
+    if (state.tab === 'admissions') {
+        root.appendChild(h('div', { class: 'wb-board' }, await admissionsTable()));
+        fitViewport(root, { min: 520 });
+        return;
+    }
 
     // KPI strip (also status filters)
     const counts = { all: data.beds.length, free: 0, occupied: 0, cleaning: 0, maintenance: 0 };
@@ -217,13 +224,14 @@ async function paint(root) {
     root.appendChild(wardPills(data, root));
 
     // Ward cards — та же функция, которой рисует себя окно выбора койки.
-    root.appendChild(bedBoardEl(data, {
+    root.appendChild(h('div', { class: 'wb-board' }, bedBoardEl(data, {
         mode: 'board',
         wardFilter: state.wardFilter,
         statusFilter: state.statusFilter,
         showOpRooms: true,
         onBed: (bed, ward, adm) => onBedClick(bed, ward, adm, root),
-    }));
+    })));
+    fitViewport(root, { min: 520 });
 }
 
 // STATIONARY_ROOMS_V1 — карточка операционных. Плитки НЕ кликабельны: положить
@@ -361,7 +369,14 @@ function wardCardEl(ward, beds, data, opts = {}) {
                     tr(WARD_TYPE_LABEL[ward.type] || ward.type || 'Общая') + ' · ' + rate)),
             h('div', { class: 'wb-ward__occ' },
                 h('span', { class: 'muted wb-ward__occlb' }, trf('занято {busy} из {all}', { busy, all: all.length })),
-                h('span', { class: 'wb-bar' }, h('span', { class: 'wb-bar__fill', style: { width: pct + '%' } })))),
+                h('span', { class: 'wb-bar' }, h('span', { class: 'wb-bar__fill', style: { width: pct + '%' } })),
+                // WARD_BOARD_V3 — быстрое действие там, где на него смотрят: палата
+                // правится в «Помещениях», и путь туда — один шаг из её шапки.
+                // В окне выбора койки (mode 'pick') действия нет — там выбирают.
+                opts.mode !== 'pick' && navigateTo
+                    ? h('button', { class: 'btn btn-ghost btn-sm dash-act', type: 'button', onclick: () => navigateTo('rooms-setup') },
+                        Icon('Building', { size: 13 }), ' ', tr('Помещения'))
+                    : null)),
         tiles,
     );
 }
@@ -377,43 +392,41 @@ function bedTileEl(bed, ward, data, { mode = 'board', selectedBedId = null, onBe
     const chosen = mode === 'pick' && selectedBedId != null && String(selectedBedId) === String(bed.id);
     // Плитка — КНОПКА, а не div с обработчиком: по ней щёлкают, значит до неё
     // надо доходить с клавиатуры и объявлять её нажимаемой.
+    // WARD_BOARD_V3 — плитка описана классами (.wb-bed.is-<статус>), а не
+    // набором inline-стилей: те же четыре цвета состояния, но из таблицы
+    // стилей, и кружок пациента — в ЕГО оттенке (pastel.js), как в списках
+    // стационара, а не залитый брендовым зелёным.
     const tile = h('button', {
         type: 'button',
         disabled: !pickable,
+        class: 'wb-bed is-' + st + (chosen ? ' is-chosen' : '') + (pickable ? '' : ' is-locked'),
         'aria-pressed': mode === 'pick' ? (chosen ? 'true' : 'false') : null,
         title: pickable ? null : tr(style.label),
-        style: {
-            border: chosen ? '2px solid var(--primary-600, #1f7a72)' : '1px solid ' + style.bd,
-            background: style.bg, borderRadius: '10px', padding: chosen ? '9px' : '10px',
-            cursor: pickable ? 'pointer' : 'not-allowed', opacity: pickable ? '1' : '0.62',
-            minHeight: '84px', display: 'flex', flexDirection: 'column', gap: '4px',
-            font: 'inherit', textAlign: 'left', width: '100%',
-        },
         onclick: () => { if (pickable && onBed) onBed(bed, ward, adm, st); },
     },
-        h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' } },
-            h('strong', { style: { fontSize: '13.5px' } }, bed.code),
-            h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12.5px', fontWeight: '700', color: style.fg } },
+        h('div', { class: 'wb-bed__top' },
+            h('strong', { class: 'wb-bed__code' }, bed.code),
+            h('span', { class: 'wb-bed__st' },
                 h('span', { class: 'wb-dot', style: { background: style.dot } }),
                 tr(style.label)),
         ),
     );
     if (adm) {
         const p = adm.patients || {};
-        tile.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '7px', marginTop: '2px' } },
-            h('span', { style: { width: '22px', height: '22px', borderRadius: '50%', background: 'var(--primary-600, #1f7a72)', color: '#fff', fontSize: '12.5px', fontWeight: 700, display: 'grid', placeItems: 'center', flex: '0 0 22px' } }, initials(p.full_name || '?')),
-            h('div', { style: { minWidth: 0 } },
-                h('div', { style: { fontSize: '12.5px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, p.full_name || '—'),
-                h('div', { class: 'muted', style: { fontSize: '12.5px' } }, (p.mrn ? p.mrn + ' · ' : '') + lengthOfStay(adm.admitted_at)),
+        tile.appendChild(h('div', { class: 'wb-bed__who' },
+            h('span', { class: 'wb-bed__av ' + pastelFor(adm.patient_id || p.mrn || p.full_name) }, initials(p.full_name || '?')),
+            h('div', { class: 'wb-bed__m' },
+                h('div', { class: 'wb-bed__n' }, p.full_name || '—'),
+                h('div', { class: 'wb-bed__s' }, (p.mrn ? p.mrn + ' · ' : '') + lengthOfStay(adm.admitted_at)),
             ),
         ));
-        if (adm.users && adm.users.full_name) tile.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', display: 'flex', alignItems: 'center', gap: '4px' } }, Icon('Stethoscope', { size: 11 }), adm.users.full_name));
+        if (adm.users && adm.users.full_name) tile.appendChild(h('div', { class: 'wb-bed__doc' }, Icon('Stethoscope', { size: 11 }), adm.users.full_name));
     } else {
         // Здесь стояло «Госпитализация — в разделе "Стационар"» — указатель на
         // другой пункт меню. Пункта больше нет: заявки стали соседней вкладкой
         // этого же раздела, и указывать некуда. Осталось то, что о койке
         // действительно надо знать перед выбором, — её тип.
-        tile.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: 'auto' } },
+        tile.appendChild(h('div', { class: 'wb-bed__type' },
             bed.type && bed.type !== 'standard' ? tr(BED_TYPE_LABEL[bed.type] || bed.type) : '—'));
     }
     return tile;

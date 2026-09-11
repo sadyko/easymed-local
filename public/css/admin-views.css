@@ -6827,3 +6827,50 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
   .fp-tree{ max-height:280px; }
 }
 /* ============================ end FACILITY_PLAN_V1 ============================ */
+
+/* ============================ WARD_BOARD_V3 (2026-09-11) — доска коек в один экран ============================
+   Владелец: «#admissions/beds … redesign this too». Доска берёт остаток окна
+   (dash-kpi.js fitViewport): счётчики-фильтры и полоса палат стоят,
+   прокручивается только коечный фонд. Плитка койки — классами в четырёх
+   цветах состояния; пациент на ней — в своём оттенке, как во всех списках. */
+.wb-fit{ display:flex; flex-direction:column; min-height:0; }
+.wb-fit > .page-head{ flex:0 0 auto; margin-bottom:12px; }
+.wb-fit > .wb-kpis{ flex:0 0 auto; margin-bottom:10px; }
+.wb-fit > .segmented{ flex:0 0 auto; }
+.wb-board{ flex:1 1 auto; min-height:0; overflow:auto; padding-bottom:4px; }
+.wb-kpi{ border-radius:14px; padding:10px 12px; }
+.wb-kpi__n{ font-size:20px; }
+.wb-ward__head{ padding:10px 14px; }
+.wb-tiles{ padding:10px 12px; gap:8px; }
+
+.wb-bed{
+  display:flex; flex-direction:column; gap:4px; min-height:78px; width:100%; text-align:left;
+  padding:9px 10px; border:1px solid var(--ink-200); border-radius:10px; background:var(--white);
+  font:inherit; cursor:pointer;
+  transition:border-color var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out);
+}
+.wb-bed:hover{ box-shadow:var(--shadow-sm); }
+.wb-bed:focus-visible{ outline:2px solid var(--primary-600); outline-offset:2px; }
+.wb-bed.is-free{ background:var(--ok-50, #e9f7ef); border-color:var(--ok-200, #bde5cd); }
+.wb-bed.is-occupied{ background:var(--primary-50, #e8f3f2); border-color:var(--primary-200, #bcdedb); }
+.wb-bed.is-cleaning{ background:var(--warn-50, #fdf5e6); border-color:var(--warn-200, #f0dca8); }
+.wb-bed.is-maintenance{ background:var(--ink-50, #f1f2f4); border-color:var(--ink-200, #d5d8dd); }
+.wb-bed.is-chosen{ border:2px solid var(--primary-600); padding:8px 9px; }
+.wb-bed.is-locked{ cursor:not-allowed; opacity:.62; }
+.wb-bed__top{ display:flex; justify-content:space-between; align-items:center; gap:8px; }
+.wb-bed__code{ font-size:13.5px; }
+.wb-bed__st{ display:inline-flex; align-items:center; gap:5px; font-size:12.5px; font-weight:700; }
+.wb-bed.is-free .wb-bed__st{ color:var(--ok-700, #1a7a44); }
+.wb-bed.is-occupied .wb-bed__st{ color:var(--primary-700, #1f7a72); }
+.wb-bed.is-cleaning .wb-bed__st{ color:var(--warn-700, #9a6b00); }
+.wb-bed.is-maintenance .wb-bed__st{ color:var(--ink-600, #545b66); }
+.wb-bed__who{ display:flex; align-items:center; gap:7px; margin-top:2px; min-width:0; }
+.wb-bed__av{ width:24px; height:24px; border-radius:999px; flex:0 0 24px; display:grid; place-items:center;
+  font-size:12.5px; font-weight:700; background:var(--p-bg, var(--primary-50)); color:var(--p-fg, var(--primary-700)); }
+.wb-bed__m{ min-width:0; }
+.wb-bed__n{ font-size:12.5px; font-weight:600; color:var(--ink-900); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.wb-bed__s{ font-size:12.5px; color:var(--ink-500); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.wb-bed__doc{ display:flex; align-items:center; gap:4px; font-size:12.5px; color:var(--ink-500); }
+.wb-bed__type{ font-size:12.5px; color:var(--ink-500); margin-top:auto; }
+@media (max-width: 1100px){ .wb-fit{ height:auto !important; } .wb-board{ overflow:visible; } }
+/* ============================ end WARD_BOARD_V3 ============================ */
