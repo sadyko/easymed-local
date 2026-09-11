@@ -61,13 +61,16 @@ export async function mountLabDevices(container) {
     const devicesCard = h('div', { class: 'card', style: { marginBottom: '16px' } });
     const formCard = h('div', { class: 'card', style: { marginBottom: '16px', display: 'none' } });
     const liveCard = h('div', { class: 'card', style: { marginBottom: '16px' } });
-    const trayCard = h('div', { class: 'card' });
+    const trayCard = h('div', { class: 'card', style: { marginBottom: '16px' } });
+    const guideCard = h('div', { class: 'card' });
     // appendChild, а не append: так во всём остальном коде, и тестовый DOM
     // (lab-panels-mode.test.mjs) реализует именно его.
     container.appendChild(devicesCard);
     container.appendChild(formCard);
     container.appendChild(liveCard);
     container.appendChild(trayCard);
+    container.appendChild(guideCard);
+    paintGuide();
 
     // ---------- загрузка ----------
 
@@ -309,6 +312,61 @@ export async function mountLabDevices(container) {
     function closeForm() {
         formCard.style.display = 'none';
         clear(formCard);
+    }
+
+    // ---------- инструкция по подключению ----------
+    //
+    // Единственное место, где человек, стоящий у прибора, прочитает, что
+    // нажать. Раньше эти шаги жили в переписке с разработчиком — то есть нигде.
+    // Инструкция честная: сетевой прибор подключается одной настройкой на нём
+    // самом, прибор, подключённый к компьютеру только кабелем, ПОКА не
+    // поддержан — и сказать это здесь важнее, чем выглядеть законченным.
+
+    function hostForGuide() {
+        const hn = (typeof location !== 'undefined' && location && location.hostname) || '';
+        return (!hn || hn === 'localhost' || hn === '127.0.0.1') ? tr('адрес этого компьютера в сети') : hn;
+    }
+
+    function paintGuide() {
+        clear(guideCard);
+        const body = h('div', { style: { display: 'none' } });
+        const toggle = h('button', { class: 'btn btn-outline btn-sm', type: 'button',
+            onclick: () => {
+                const open = body.style.display === 'none';
+                body.style.display = open ? '' : 'none';
+                toggle.textContent = open ? tr('Свернуть') : tr('Показать');
+            } }, tr('Показать'));
+
+        guideCard.appendChild(h('div', { class: 'card-header' },
+            h('h3', null, tr('Как подключить анализатор')),
+            h('span', { class: 'grow' }),
+            toggle));
+
+        const step = (text) => h('li', { style: { marginBottom: '6px' } }, text);
+        body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Прибор с сетевым разъёмом (BC-20, BC-5300, BS-240, CL-900i)')));
+        body.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '8px' } },
+            tr('В Easy-Med ничего настраивать не нужно. Всё делается один раз в меню самого прибора.')));
+        body.appendChild(h('ol', { style: { paddingLeft: '20px', marginBottom: '12px' } },
+            step(tr('Подключите прибор сетевым кабелем к той же сети, где стоит компьютер с Easy-Med.')),
+            step(tr('На приборе откройте: Настройка → Системные настройки → Связь (Setup → System Setup → Communication).')),
+            step(tr('Связь: «сетевой порт» (Network port), а не «последовательный порт».')),
+            // location может отсутствовать (тестовый DOM); а localhost человеку у
+            // прибора бесполезен — ему нужен адрес компьютера В СЕТИ клиники.
+            step(trf('Адрес назначения: адрес компьютера с Easy-Med — {ip}. Порт: 2575. Протокол: HL7.', { ip: hostForGuide() })),
+            step(tr('Включите «Автоматическая передача» (Auto Communicate) — тогда прибор отправляет каждую готовую пробу сам.')),
+            step(tr('Прогоните одну пробу. Прибор появится в списке выше сам; затем в «Панелях» выберите его у панели и подтвердите поля.'))));
+
+        body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Прибор, подключённый к компьютеру только кабелем COM (BC-2800, BC-3000 Plus)')));
+        body.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '12px' } },
+            tr('Пока не поддерживается: такой прибор не умеет отправлять по сети, и для него нужна отдельная программа на том компьютере. Она в планах. Результаты с него вносятся руками, как сейчас.')));
+
+        body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Важно')));
+        body.appendChild(h('ul', { style: { paddingLeft: '20px', fontSize: '12.5px' } },
+            h('li', { style: { marginBottom: '4px' } }, tr('Прибор отправляет результаты только по ОДНОМУ адресу. Если он сейчас направлен на другую программу, после переключения та программа результаты получать перестанет.')),
+            h('li', { style: { marginBottom: '4px' } }, tr('Результат никогда не выдаётся сам: прибор заполняет бланк, а проверяет и выдаёт лаборант.')),
+            h('li', null, tr('Если прибор появился в списке, но значения не ложатся — смотрите «Необработанные»: там написано, чего именно не хватает.'))));
+
+        guideCard.appendChild(body);
     }
 
     // ---------- лоток ----------
