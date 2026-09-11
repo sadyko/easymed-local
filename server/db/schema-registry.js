@@ -459,16 +459,26 @@ export const REGISTRY = {
   // «часов не задано» → берутся часы клиники.
   // ROOMS_WARDS_DEPT_V1 — `department_id` и `notes`: разметка настроек их уже
   // показывала, а разрешения на них не было, и выбранный отдел молча пропадал.
-  rooms: { read:{roles:ALL_STAFF,columns:['id','name','code','room_type','capacity','queue_mode','floor_id','department_id','notes','active','created_at','working_hours']},
-    write:{insert:{roles:['admin'],columns:['name','code','room_type','capacity','queue_mode','floor_id','department_id','notes','active','working_hours']},update:{roles:['admin'],columns:['name','code','room_type','capacity','queue_mode','floor_id','department_id','notes','active','working_hours']},delete:{roles:[]}},
+  rooms: { read:{roles:ALL_STAFF,columns:['id','name','code','room_type','capacity','queue_mode','floor_id','department_id','notes','active','created_at','working_hours','plan_x','plan_y','plan_w','plan_h']},
+    write:{insert:{roles:['admin'],columns:['name','code','room_type','capacity','queue_mode','floor_id','department_id','notes','active','working_hours','plan_x','plan_y','plan_w','plan_h']},update:{roles:['admin'],columns:['name','code','room_type','capacity','queue_mode','floor_id','department_id','notes','active','working_hours','plan_x','plan_y','plan_w','plan_h']},delete:{roles:[]}},
     filters:['id','active','floor_id','department_id','room_type','queue_mode'],
     embed:{ floors:{table:'floors',fk:'floor_id',columns:['id','name']},
             departments:{table:'departments',fk:'department_id',columns:['id','name','kind']} } },
-  wards: { read:{roles:ALL_STAFF,columns:['id','name','code','floor_id','department_id','active','created_at','type','billing_mode','price_per_day','price_per_hour','color']},
-    write:{insert:{roles:['admin'],columns:['name','code','floor_id','department_id','active','type','billing_mode','price_per_day','price_per_hour','color']},update:{roles:['admin'],columns:['name','code','floor_id','department_id','active','type','billing_mode','price_per_day','price_per_hour','color']},delete:{roles:[]}},
+  wards: { read:{roles:ALL_STAFF,columns:['id','name','code','floor_id','department_id','active','created_at','type','billing_mode','price_per_day','price_per_hour','color','plan_x','plan_y','plan_w','plan_h']},
+    write:{insert:{roles:['admin'],columns:['name','code','floor_id','department_id','active','type','billing_mode','price_per_day','price_per_hour','color','plan_x','plan_y','plan_w','plan_h']},update:{roles:['admin'],columns:['name','code','floor_id','department_id','active','type','billing_mode','price_per_day','price_per_hour','color','plan_x','plan_y','plan_w','plan_h']},delete:{roles:[]}},
     filters:['id','active','floor_id','department_id'],
     embed:{ floors:{table:'floors',fk:'floor_id',columns:['id','name']},
             departments:{table:'departments',fk:'department_id',columns:['id','name','kind']} } },
+  // FACILITY_PLAN_V1 (миграция 125) — оборудование клиники и что где стоит.
+  // Справочник пишет администратор; размещение — тоже он, и удаляет тоже он:
+  // строка размещения — связь без истории, снять её безопасно.
+  equipment: { read:{roles:ALL_STAFF,columns:['id','name','kind','active','created_at']},
+    write:{insert:{roles:['admin'],columns:['name','kind','active']},update:{roles:['admin'],columns:['name','kind','active']},delete:{roles:['admin']}},
+    filters:['id','active'], embed:{} },
+  room_equipment: { read:{roles:ALL_STAFF,columns:['id','room_id','ward_id','equipment_id','quantity','created_at']},
+    write:{insert:{roles:['admin'],columns:['room_id','ward_id','equipment_id','quantity']},update:{roles:['admin'],columns:['quantity']},delete:{roles:['admin']}},
+    filters:['id','room_id','ward_id','equipment_id'],
+    embed:{ equipment:{table:'equipment',fk:'equipment_id',columns:['id','name','kind']} } },
   // `status` is intentionally NOT writable via /api/db — bed occupancy/housekeeping
   // is changed only by the inpatient RPCs (admit → occupied, discharge → cleaning,
   // set_bed_status → free/cleaning/maintenance), so a config edit can never desync a

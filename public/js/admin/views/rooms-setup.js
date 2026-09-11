@@ -21,6 +21,8 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, PageHead } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+// FACILITY_PLAN_V1 — план этажа: дерево, холст с плитками, карточка помещения.
+import { mountFacilityPlan } from './facility-plan.js';
 
 // ROOM_CATS_V1 — типы сгруппированы в четыре категории по постановке владельца.
 // cat — это ТОЛЬКО раскладка выбора; на запись она не влияет: kind по-прежнему
@@ -81,7 +83,7 @@ const QUEUE_MODES = [
     ['doctor', 'Очередь к врачу'],
 ];
 
-const state = { floors: [], rooms: [], wards: [], bedsByWard: {}, doctors: [], view: 'plan' };
+const state = { floors: [], rooms: [], wards: [], bedsByWard: {}, doctors: [], departments: [], equipment: [], roomEquipment: [], view: 'plan' };
 let containerRef = null;
 
 export async function renderRoomsSetup(container) {
@@ -100,16 +102,23 @@ export async function renderRoomsSetup(container) {
 }
 
 async function load() {
-    const [fl, rm, wd, bd, us] = await Promise.all([
+    const [fl, rm, wd, bd, us, dp, eq, re] = await Promise.all([
         supabase.from('floors').select('id, name, level, active').order('level', { ascending: true }),
-        supabase.from('rooms').select('id, name, code, room_type, capacity, queue_mode, floor_id, active').order('name', { ascending: true }),
-        supabase.from('wards').select('id, name, code, type, floor_id, billing_mode, price_per_hour, price_per_day, active').order('name', { ascending: true }),
+        // FACILITY_PLAN_V1 — отделение и координаты плана едут вместе с помещением.
+        supabase.from('rooms').select('id, name, code, room_type, capacity, queue_mode, floor_id, department_id, active, plan_x, plan_y, plan_w, plan_h').order('name', { ascending: true }),
+        supabase.from('wards').select('id, name, code, type, floor_id, department_id, billing_mode, price_per_hour, price_per_day, active, plan_x, plan_y, plan_w, plan_h').order('name', { ascending: true }),
         supabase.from('beds').select('id, ward_id, code, type, status, active').limit(5000),
         supabase.from('users').select('id, full_name, is_doctor, specialty, room_id, is_active').limit(1000),
+        supabase.from('departments').select('id, name, kind, active').limit(500),
+        supabase.from('equipment').select('id, name, kind, active').limit(2000),
+        supabase.from('room_equipment').select('id, room_id, ward_id, equipment_id, quantity').limit(5000),
     ]);
     state.floors = fl.data || [];
     state.rooms = rm.data || [];
     state.wards = wd.data || [];
+    state.departments = (dp.data || []).filter((d) => d.active !== false && d.active !== 0);
+    state.equipment = eq.data || [];
+    state.roomEquipment = re.data || [];
     state.doctors = (us.data || []).filter(u => u.is_doctor && u.is_active !== false && u.is_active !== 0);
     state.bedsByWard = {};
     for (const b of (bd.data || [])) {
@@ -185,17 +194,24 @@ function paint() {
     const { byFloor, order } = groupByFloor(rows);
 
     const body = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } });
-    body.appendChild(floorsCard());
+    // FACILITY_PLAN_V1 — «План» рисует модуль плана: этажи, дерево, холст,
+    // карточка. Этажи правятся из него же, поэтому отдельная карточка этажей
+    // нужна только списку.
+    if (state.view === 'plan') {
+        const host = h('div');
+        mountFacilityPlan(host, { state, api: planApi() });
+        body.appendChild(host);
+    } else {
+        body.appendChild(floorsCard());
+    }
 
-    if (!rows.length) {
+    if (!rows.length && state.view !== 'plan') {
         body.appendChild(h('div', { class: 'card', style: { padding: '28px', textAlign: 'center' } },
             h('div', { class: 'muted' }, tr('\u041f\u043e\u043c\u0435\u0449\u0435\u043d\u0438\u0439 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442. \u041d\u0430\u0447\u043d\u0438\u0442\u0435 \u0441 \u043a\u0430\u0431\u0438\u043d\u0435\u0442\u0430 \u043f\u0440\u0438\u0451\u043c\u0430 \u0438\u043b\u0438 \u043f\u0430\u043b\u0430\u0442\u044b.'))));
     }
 
-    for (const key of order) {
-        body.appendChild(state.view === 'plan'
-            ? planFloorCard(key, byFloor.get(key))
-            : listFloorCard(key, byFloor.get(key)));
+    if (state.view !== 'plan') {
+        for (const key of order) body.appendChild(listFloorCard(key, byFloor.get(key)));
     }
 
     containerRef.appendChild(h('div', { class: 'fade-in' },
@@ -209,6 +225,21 @@ function paint() {
         }),
         body,
     ));
+}
+
+// FACILITY_PLAN_V1 — что план просит у раздела: окна, сохранение, врачи.
+function planApi() {
+    return {
+        openWizard: (row, presets) => openWizard(row, presets),
+        openFloor: (row) => openFloor(row),
+        confirmDelete: (kind, row) => confirmDelete(kind, row, null),
+        assignDoctors: async (roomId, ids) => { await syncDoctors(roomId, ids); await load(); paint(); },
+        reload: async () => { await load(); paint(); },
+        typeByKey: (k) => TYPE_BY_KEY[k],
+        types: () => TYPES,
+        rowFor: (it) => buildRows().find((r) => r.kind === it.kind && String(r.id) === String(it.id)) || null,
+        modal: modalShell,
+    };
 }
 
 function viewSwitch() {
@@ -394,7 +425,7 @@ function modalShell(title) {
 }
 
 // row === null → создание; иначе редактирование существующей строки.
-function openWizard(row) {
+function openWizard(row, presets) {
     const editing = !!row;
     const m = modalShell(editing ? tr('Помещение') : tr('Новое помещение'));
     const src = editing ? row.raw : null;
@@ -403,7 +434,7 @@ function openWizard(row) {
         kind: editing ? row.kind : null,
         name: src ? (src.name || '') : '',
         code: src ? (src.code || '') : '',
-        floor_id: src && src.floor_id != null ? String(src.floor_id) : '',
+        floor_id: src && src.floor_id != null ? String(src.floor_id) : (presets && presets.floor_id != null ? String(presets.floor_id) : ''),
         active: src ? (src.active !== false && src.active !== 0) : true,
         queue_mode: src && src.queue_mode ? src.queue_mode : 'none',
         doctorIds: editing && row.kind === 'room' ? doctorsIn(row.id).map(x => x.id) : [],

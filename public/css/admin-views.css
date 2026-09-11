@@ -6714,3 +6714,116 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
   .work-page{ height:auto !important; grid-template-rows:auto; }
 }
 /* ============================ end DOCTOR_PAY_V2 ============================ */
+
+/* ============================ FACILITY_PLAN_V1 (2026-09-11) — план клиники ============================
+   Три колонки: дерево · план этажа · карточка. Плитка помещения — абсолютно
+   позиционированный блок на сетке 16 px в оттенке своего отделения
+   (pastel.js: --p-bg/--p-fg/--p-line). Не чертёж, а план управления. */
+.fp{ display:grid; grid-template-columns:250px minmax(0,1fr) 300px; grid-template-rows:auto minmax(0,1fr); gap:12px; align-items:stretch; }
+.fp-top{ grid-column:1 / -1; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.fp-figs{ display:flex; gap:18px; flex-wrap:wrap; }
+.fp-fig{ display:flex; align-items:baseline; gap:6px; }
+.fp-fig b{ font-size:17px; font-weight:700; color:var(--ink-900); font-variant-numeric:tabular-nums; }
+.fp-fig span{ font-size:12.5px; color:var(--ink-500); }
+.fp-tools{ display:flex; gap:8px; flex-wrap:wrap; }
+.fp-field{ margin:0; }
+.fp-field .fp-search{ width:260px; max-width:100%; }
+.fp-tools .field select{ min-width:150px; }
+
+/* Дерево */
+.fp-tree{ display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+.fp-tree > .card-header{ padding:10px 12px; }
+.fp-tree-list{ flex:1 1 auto; min-height:0; overflow:auto; padding:6px; }
+.fp-node{ display:flex; align-items:center; gap:7px; width:100%; text-align:left; padding:6px 8px; border:0; border-radius:8px;
+  background:transparent; font-family:inherit; font-size:13.5px; color:var(--ink-800); cursor:pointer; }
+.fp-node:hover{ background:var(--ink-25); }
+.fp-node--floor{ font-weight:700; color:var(--ink-900); }
+.fp-node--floor.is-open{ background:var(--primary-50); color:var(--primary-800); }
+.fp-node--dept{ padding-left:22px; font-size:12.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--p-fg, var(--ink-600)); cursor:default; }
+.fp-node--dept:hover{ background:transparent; }
+.fp-dot{ width:8px; height:8px; border-radius:999px; background:var(--p-line, var(--ink-300)); flex:0 0 8px; }
+.fp-node--room{ padding-left:36px; }
+.fp-node--room.is-on{ background:var(--primary-100); color:var(--primary-900); }
+.fp-node--room.is-off{ opacity:.6; }
+.fp-node--empty{ padding-left:22px; font-size:12.5px; cursor:default; }
+.fp-node--add{ padding-left:22px; color:var(--primary-700); font-size:12.5px; }
+.fp-node-n{ flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fp-node-c{ font-size:12.5px; color:var(--ink-400); font-variant-numeric:tabular-nums; }
+
+/* План этажа */
+.fp-main{ display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+.fp-main-head{ padding:10px 14px; }
+.fp-crumbs{ display:flex; align-items:center; gap:6px; font-size:13.5px; color:var(--ink-500); min-width:0; }
+.fp-crumbs b{ color:var(--ink-900); }
+.fp-crumbs--sm{ font-size:12.5px; margin-bottom:10px; flex-wrap:wrap; }
+.fp-floors{ flex-wrap:wrap; }
+.fp-canvas{ position:relative; flex:1 1 auto; min-height:480px; overflow:auto; margin:10px;
+  border:1px solid var(--ink-100); border-radius:12px;
+  background-color:var(--ink-25);
+  background-image:linear-gradient(var(--ink-100) 1px, transparent 1px), linear-gradient(90deg, var(--ink-100) 1px, transparent 1px);
+  background-size:16px 16px; }
+.fp-canvas:focus-visible{ outline:2px solid var(--primary-500); outline-offset:2px; }
+.fp-canvas-empty{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; color:var(--ink-500); font-size:13.5px; }
+.fp-room{ position:absolute; box-sizing:border-box; display:flex; flex-direction:column; gap:3px; padding:8px 10px;
+  background:var(--white); border:1px solid var(--p-line, var(--ink-200)); border-left:4px solid var(--p-line, var(--primary-400));
+  border-radius:10px; box-shadow:var(--shadow-xs); cursor:grab; user-select:none; touch-action:none;
+  transition:box-shadow var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out), opacity var(--dur-2) var(--ease-out); }
+.fp-room:hover{ box-shadow:var(--shadow-sm); }
+.fp-room.is-on{ border-color:var(--primary-600); box-shadow:0 0 0 3px var(--primary-50), var(--shadow-sm); }
+.fp-room.is-drag{ cursor:grabbing; box-shadow:0 10px 24px rgba(11,20,24,.14); z-index:3; }
+.fp-room.is-auto{ border-style:dashed; }
+.fp-room.is-dim{ opacity:.28; }
+.fp-room.is-off{ background:var(--ink-25); }
+.fp-room:focus-visible{ outline:2px solid var(--primary-600); outline-offset:2px; }
+.fp-room--ward{ background-image:linear-gradient(152deg, var(--p-bg, var(--ink-25)) 0%, var(--white) 96%); }
+.fp-room-top{ display:flex; align-items:center; justify-content:space-between; gap:6px; min-width:0; }
+.fp-room-code{ font-size:12.5px; font-weight:700; color:var(--ink-400); font-variant-numeric:tabular-nums; }
+.fp-room-dept{ font-size:12.5px; font-weight:700; color:var(--p-fg, var(--ink-500)); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fp-room-name{ font-size:13.5px; font-weight:600; color:var(--ink-900); line-height:1.25; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fp-room-meta{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:auto; }
+.fp-chip{ display:inline-flex; align-items:center; gap:3px; font-size:12.5px; color:var(--ink-600); background:var(--ink-25); border-radius:999px; padding:1px 7px; }
+.fp-resize{ position:absolute; right:2px; bottom:2px; width:12px; height:12px; cursor:nwse-resize; border-right:2px solid var(--ink-300); border-bottom:2px solid var(--ink-300); border-radius:0 0 4px 0; }
+.fp-legend{ display:flex; gap:12px; flex-wrap:wrap; padding:0 14px 12px; }
+.fp-legend-i{ display:inline-flex; align-items:center; gap:6px; font-size:12.5px; color:var(--ink-600); }
+.fp-legend-i i{ width:10px; height:10px; border-radius:3px; background:var(--p-line, var(--ink-300)); }
+
+/* Карточка выбранного */
+.fp-side{ display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+.fp-side > .card-header{ padding:10px 12px; }
+.fp-side-body{ flex:1 1 auto; min-height:0; overflow:auto; padding:10px 14px 14px; }
+.fp-kv{ display:flex; justify-content:space-between; gap:10px; padding:5px 0; font-size:13.5px; border-top:1px solid var(--ink-50); }
+.fp-kv:first-of-type{ border-top:none; }
+.fp-kv-k{ color:var(--ink-500); }
+.fp-kv-v{ color:var(--ink-900); font-weight:600; text-align:right; }
+.fp-sec{ display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:14px; margin-bottom:4px;
+  font-size:12.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-500); }
+.fp-none{ font-size:12.5px; padding:4px 0; }
+.fp-row{ display:flex; align-items:center; gap:8px; padding:6px 0; border-top:1px solid var(--ink-50); }
+.fp-av{ width:28px; height:28px; border-radius:999px; flex:0 0 28px; display:grid; place-items:center; font-size:12.5px; font-weight:700;
+  background:var(--p-bg, var(--primary-50)); color:var(--p-fg, var(--primary-700)); }
+.fp-row-m{ flex:1 1 auto; min-width:0; display:flex; flex-direction:column; }
+.fp-row-n{ font-size:13.5px; font-weight:600; color:var(--ink-900); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fp-row-s{ font-size:12.5px; color:var(--ink-500); }
+.fp-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }
+
+/* Меню по правой кнопке */
+.fp-menu{ position:fixed; z-index:80; min-width:200px; padding:6px; background:var(--white); border:1px solid var(--ink-200); border-radius:10px; box-shadow:var(--shadow-sm); }
+.fp-menu-i{ display:flex; align-items:center; gap:8px; width:100%; text-align:left; padding:7px 10px; border:0; border-radius:7px; background:transparent; font-family:inherit; font-size:13.5px; color:var(--ink-800); cursor:pointer; }
+.fp-menu-i:hover{ background:var(--ink-25); }
+.fp-menu-i.is-danger{ color:var(--crit-700); }
+
+/* Пустая клиника */
+.fp-empty{ padding:40px 24px; text-align:center; display:flex; flex-direction:column; align-items:center; gap:8px; }
+.fp-empty-ic{ width:56px; height:56px; border-radius:16px; display:grid; place-items:center; background:var(--primary-50); color:var(--primary-700); margin-bottom:4px; }
+.fp-empty-t{ font-size:20px; font-weight:700; color:var(--ink-900); }
+.fp-empty-s{ font-size:13.5px; color:var(--ink-500); max-width:420px; margin-bottom:8px; }
+
+@media (max-width: 1180px){
+  .fp{ grid-template-columns:220px minmax(0,1fr); }
+  .fp-side{ grid-column:1 / -1; }
+}
+@media (max-width: 860px){
+  .fp{ grid-template-columns:1fr; }
+  .fp-tree{ max-height:280px; }
+}
+/* ============================ end FACILITY_PLAN_V1 ============================ */
