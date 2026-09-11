@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { dashboardSummary } from './dashboard.js';
+import { dashboardSummary, dashboardTrend } from './dashboard.js';
 import { ownBuildingOnly, LAB_SCOPE_CLINIC, LAB_SCOPE_BUILDING } from '../../../public/js/admin/views/lab-scope.js';
 
 test('dashboard_summary returns today counts, collected, outstanding, low-stock', () => {
@@ -113,4 +113,75 @@ test('dashboard_summary: пациенты и визиты считаются п�
   assert.equal(b.patients_today, 1, 'приехавшая строка приписана зданию B, а не своему');
   assert.equal(b.label, 'Чиланзар', 'имя берётся из перечня, включая строку active = 0');
   assert.equal(own_b.visits_today + b.visits_today, s.visits_today);
+});
+
+// DASHBOARD_TREND_V1 — ряды по дням и стационар.
+//
+// Владелец: «create an appealing dashboard with graphs. add stationary
+// patients too into an account». Проверяется то, что рисуют графики: деньги
+// раскладываются на амбулаторные и стационарные ПО СЧЁТУ, вчерашняя оплата
+// ложится во вчерашний столбик, и стационар считает койки по госпитализациям.
+function seedTrend() {
+  const db = openDb(':memory:'); migrate(db);
+  const pid = db.prepare("INSERT INTO patients (full_name, branch_id) VALUES ('C',1)").run().lastInsertRowid;
+  const pid2 = db.prepare("INSERT INTO patients (full_name, branch_id) VALUES ('D',1)").run().lastInsertRowid;
+  db.prepare("INSERT INTO visits (patient_id, branch_id, visit_date) VALUES (?,1,strftime('%Y-%m-%dT%H:%M:%SZ','now'))").run(pid);
+  const wid = db.prepare("INSERT INTO wards (name, billing_mode, price_per_day) VALUES ('Терапия','daily',100000)").run().lastInsertRowid;
+  const b1 = db.prepare("INSERT INTO beds (code, ward_id, status) VALUES ('K-1',?,'occupied')").run(wid).lastInsertRowid;
+  db.prepare("INSERT INTO beds (code, ward_id, status) VALUES ('K-2',?,'free')").run(wid);
+  const adm = db.prepare("INSERT INTO admissions (patient_id, ward_id, bed_id, status, admitted_at) VALUES (?,?,?,'active',strftime('%Y-%m-%dT%H:%M:%SZ','now'))").run(pid2, wid, b1).lastInsertRowid;
+  // Амбулаторный счёт и стационарный счёт — оба оплачены сегодня.
+  const inv = db.prepare("INSERT INTO invoices (patient_id, total_amount, paid_amount, status) VALUES (?, 50000, 50000, 'paid')").run(pid).lastInsertRowid;
+  const invAdm = db.prepare("INSERT INTO invoices (patient_id, admission_id, total_amount, paid_amount, status) VALUES (?, ?, 300000, 300000, 'paid')").run(pid2, adm).lastInsertRowid;
+  db.prepare("INSERT INTO payments (invoice_id, amount, method, paid_at) VALUES (?, 50000, 'cash', strftime('%Y-%m-%dT%H:%M:%SZ','now'))").run(inv);
+  db.prepare("INSERT INTO payments (invoice_id, amount, method, paid_at) VALUES (?, 300000, 'card', strftime('%Y-%m-%dT%H:%M:%SZ','now'))").run(invAdm);
+  // Вчерашняя оплата и «кошелёк» (не приход).
+  db.prepare("INSERT INTO payments (invoice_id, amount, method, paid_at) VALUES (?, 20000, 'cash', strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 day'))").run(inv);
+  db.prepare("INSERT INTO payments (invoice_id, amount, method, paid_at) VALUES (?, 99999, 'wallet', strftime('%Y-%m-%dT%H:%M:%SZ','now'))").run(inv);
+  // Начислено стационару, в счёт ещё не выставлено.
+  db.prepare("INSERT INTO admission_services (admission_id, quantity, unit_price, total, billable) VALUES (?,1,45000,45000,1)").run(adm);
+  db.prepare("INSERT INTO admission_services (admission_id, quantity, unit_price, total, billable) VALUES (?,1,5000,5000,0)").run(adm);
+  return db;
+}
+
+test('dashboard_trend: деньги по дням раскладываются на амбулаторию и стационар по счёту', () => {
+  const db = seedTrend();
+  const t = dashboardTrend(db, { days: 7 }, { id: 1, role: 'admin' });
+  assert.equal(t.days, 7);
+  assert.equal(t.series.length, 7, 'по строке на каждый день, включая пустые');
+  const last = t.series[t.series.length - 1];
+  assert.equal(last.date, t.to);
+  assert.equal(last.clinic, 50000, 'амбулаторная оплата');
+  assert.equal(last.inpatient, 300000, 'оплата по счёту госпитализации');
+  assert.equal(last.total, 350000, '«кошелёк» — не приход');
+  assert.equal(last.visits, 1);
+  assert.equal(last.admissions, 1);
+  // Вчерашняя оплата — во вчерашнем столбике, а не в сегодняшнем.
+  const prev = t.series[t.series.length - 2];
+  assert.equal(prev.clinic, 20000);
+  assert.equal(t.totals.total, 370000);
+  db.close();
+});
+
+test('dashboard_trend: стационар считает койки по госпитализациям, а не по статусу койки', () => {
+  const db = seedTrend();
+  const t = dashboardTrend(db, {}, { id: 1, role: 'admin' });
+  assert.equal(t.days, 14, 'период по умолчанию — две недели');
+  assert.equal(t.inpatient.in_bed, 1);
+  assert.equal(t.inpatient.beds_total, 2);
+  assert.equal(t.inpatient.beds_busy, 1);
+  assert.equal(t.inpatient.occupancy, 50);
+  assert.equal(t.inpatient.admitted_today, 1);
+  assert.equal(t.inpatient.discharged_today, 0);
+  assert.equal(t.inpatient.accrued_unbilled, 45000, 'только billable и не в счёте');
+  assert.deepEqual(t.inpatient.wards.map((w) => [w.name, w.beds, w.busy]), [['Терапия', 2, 1]]);
+  db.close();
+});
+
+test('dashboard_trend: период зажат в 1..90 дней', () => {
+  const db = seedTrend();
+  assert.equal(dashboardTrend(db, { days: 0 }, {}).days, 14);
+  assert.equal(dashboardTrend(db, { days: 1 }, {}).series.length, 1);
+  assert.equal(dashboardTrend(db, { days: 500 }, {}).days, 90);
+  db.close();
 });

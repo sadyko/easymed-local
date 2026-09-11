@@ -11,7 +11,7 @@
 // было), а деньги приехать не могли — значит, выручка второго здания в сводке
 // просто отсутствовала. Теперь каждая плитка знает, из чего она сложена.
 
-import { isLocalToday } from '../domain/day.js';
+import { isLocalToday, today, localDate, inLocalRange } from '../domain/day.js';
 import { outstandingWhere } from '../domain/money.js';
 import { INFLOW_SQL } from '../../../public/js/shared/payment-methods.js';   // DEPOSIT_REVENUE_V1
 // LAB_ONE_CLINIC_V1 — границу лаборатории задаёт ОДНА функция, общая с экраном
@@ -22,6 +22,9 @@ import { INFLOW_SQL } from '../../../public/js/shared/payment-methods.js';   // 
 import {
   buildingContext, originExpr, summariseByBuilding, labScopeOf, labScopeWhere,
 } from '../domain/buildings.js';
+// DASHBOARD_TREND_V1 — «кто лежит» решает тот же список статусов, что и все
+// экраны стационара: своя копия здесь разошлась бы с ним при первой правке.
+import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 
 export function dashboardSummary(db, _args, _user) {
   const one = (sql, ...p) => db.prepare(sql).get(...p);
@@ -92,5 +95,119 @@ export function dashboardSummary(db, _args, _user) {
     buildings,
     building_count: buildings.length,
     lab_scope: labScope,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// DASHBOARD_TREND_V1 (2026-09-11) — РЯДЫ ПО ДНЯМ И СТАЦИОНАР.
+//
+// Владелец: «create an appealing dashboard with graphs. add stationary
+// patients too into an account».
+//
+// Сводка до этого знала только СЕГОДНЯ и только амбулаторию: шесть чисел без
+// вчера, и ни одного слова о людях в койках. Здесь — то, из чего рисуются
+// графики, и стационар как равный участник:
+//   • деньги по дням, разложенные на амбулаторные и стационарные — по счёту,
+//     к которому пришла оплата (invoices.admission_id, миграция 040). Это
+//     единственный честный признак: платёж сам не знает, за что он;
+//   • визиты, поступления и выписки по дням — движение людей;
+//   • стационар СЕЙЧАС: кто в койке, сколько коек занято по отделениям,
+//     сколько начислено и ещё не выставлено — деньги, которых касса пока не
+//     видит, но которые уже заработаны.
+//
+// День — МЕСТНЫЙ (domain/day.js), тем же правилом, что и у кассы: иначе
+// оплата в 23:30 уехала бы в завтрашний столбик графика.
+// ---------------------------------------------------------------------------
+const TREND_DAYS_DEFAULT = 14;
+const TREND_DAYS_MAX = 90;
+
+/** Календарные дни клиники, кончая сегодняшним, в порядке возрастания. */
+function localDays(db, days) {
+  const to = today(db);
+  const end = new Date(to + 'T00:00:00Z').getTime();
+  const out = [];
+  for (let i = days - 1; i >= 0; i--) out.push(new Date(end - i * 86400000).toISOString().slice(0, 10));
+  return out;
+}
+
+export function dashboardTrend(db, args, _user) {
+  const all = (sql, ...p) => db.prepare(sql).all(...p);
+  const one = (sql, ...p) => db.prepare(sql).get(...p);
+  const days = Math.max(1, Math.min(TREND_DAYS_MAX, Math.round(Number(args && args.days) || TREND_DAYS_DEFAULT)));
+  const list = localDays(db, days);
+  const from = list[0];
+  const to = list[list.length - 1];
+  const inBed = IN_BED_STATUSES.map((s) => `'${s}'`).join(',');
+
+  const byDay = new Map(list.map((d) => [d, {
+    date: d, clinic: 0, inpatient: 0, total: 0, visits: 0, admissions: 0, discharges: 0,
+  }]));
+  const bump = (d, key, v) => { const row = byDay.get(d); if (row) row[key] += Number(v) || 0; };
+
+  // Деньги: приход кассы (без «кошелька» — это трата уже принятого депозита),
+  // разложенный по счёту: у счёта госпитализации есть admission_id.
+  for (const r of all(`
+    SELECT ${localDate('p.paid_at')} AS d,
+           CASE WHEN i.admission_id IS NOT NULL THEN 'inpatient' ELSE 'clinic' END AS kind,
+           COALESCE(SUM(p.amount), 0) AS s
+      FROM payments p
+      JOIN invoices i ON i.id = p.invoice_id
+     WHERE p.${INFLOW_SQL} AND ${inLocalRange('p.paid_at')}
+     GROUP BY d, kind`, from, to)) {
+    bump(r.d, r.kind, r.s);
+    bump(r.d, 'total', r.s);
+  }
+  for (const r of all(`SELECT ${localDate('v.visit_date')} AS d, COUNT(*) AS n
+      FROM visits v WHERE ${inLocalRange('v.visit_date')} GROUP BY d`, from, to)) bump(r.d, 'visits', r.n);
+  for (const r of all(`SELECT ${localDate('a.admitted_at')} AS d, COUNT(*) AS n
+      FROM admissions a WHERE a.status <> 'cancelled' AND ${inLocalRange('a.admitted_at')} GROUP BY d`, from, to)) bump(r.d, 'admissions', r.n);
+  for (const r of all(`SELECT ${localDate('a.discharged_at')} AS d, COUNT(*) AS n
+      FROM admissions a WHERE a.discharged_at IS NOT NULL AND ${inLocalRange('a.discharged_at')} GROUP BY d`, from, to)) bump(r.d, 'discharges', r.n);
+
+  const series = list.map((d) => {
+    const r = byDay.get(d);
+    for (const k of ['clinic', 'inpatient', 'total']) r[k] = Math.round(r[k] * 100) / 100;
+    return r;
+  });
+  const totals = series.reduce((t, r) => {
+    for (const k of ['clinic', 'inpatient', 'total', 'visits', 'admissions', 'discharges']) t[k] = (t[k] || 0) + r[k];
+    return t;
+  }, {});
+  for (const k of ['clinic', 'inpatient', 'total']) totals[k] = Math.round((totals[k] || 0) * 100) / 100;
+
+  // Стационар сейчас. Занятость считается по ГОСПИТАЛИЗАЦИЯМ в койке, а не по
+  // beds.status: статус койки уже расходился с реальностью (см. память о
+  // дрейфе «occupied · no admission link»), а госпитализация — первоисточник.
+  const in_bed = one(`SELECT COUNT(*) AS n FROM admissions WHERE status IN (${inBed})`).n;
+  const beds_total = one('SELECT COUNT(*) AS n FROM beds').n;
+  const beds_busy = one(`SELECT COUNT(DISTINCT bed_id) AS n FROM admissions
+      WHERE bed_id IS NOT NULL AND status IN (${inBed})`).n;
+  const wards = all(`
+    SELECT w.id, w.name, COUNT(b.id) AS beds,
+           COALESCE(SUM(CASE WHEN EXISTS (
+             SELECT 1 FROM admissions a WHERE a.bed_id = b.id AND a.status IN (${inBed})
+           ) THEN 1 ELSE 0 END), 0) AS busy
+      FROM wards w
+      LEFT JOIN beds b ON b.ward_id = w.id
+     GROUP BY w.id
+     ORDER BY w.name`);
+  const accrued = one(`
+    SELECT COALESCE(SUM(s.total), 0) AS s
+      FROM admission_services s
+      JOIN admissions a ON a.id = s.admission_id
+     WHERE s.billable = 1 AND s.invoice_item_id IS NULL AND a.status IN (${inBed})`).s;
+  const last = series[series.length - 1] || {};
+
+  return {
+    days, from, to, series, totals,
+    inpatient: {
+      in_bed,
+      beds_total, beds_busy,
+      occupancy: beds_total ? Math.round((beds_busy / beds_total) * 100) : 0,
+      admitted_today: last.admissions || 0,
+      discharged_today: last.discharges || 0,
+      accrued_unbilled: Math.round(accrued * 100) / 100,
+      wards: wards.map((w) => ({ id: w.id, name: w.name, beds: w.beds, busy: w.busy })),
+    },
   };
 }

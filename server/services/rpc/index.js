@@ -3,7 +3,7 @@
 // slices (dispensing, discounts, queue numbers, …).
 import { createInvoiceForVisit, recordPayment, recordPaymentSplit, markInvoiceDebt, changeUnpaidService, removeUnpaidService, refundPayment, createInvoiceForAdmission, removeAdmissionLineFromInvoice } from './billing.js';
 import { receiveStock, dispenseItem, voidDispense, dispenseAdmissionItem, voidDispensedAdmissionItem } from './inventory.js';
-import { dashboardSummary } from './dashboard.js';
+import { dashboardSummary, dashboardTrend } from './dashboard.js';   // DASHBOARD_TREND_V1
 import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel } from './procurement.js';
 import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
@@ -296,6 +296,7 @@ export const RPC = {
   admission_charge_set_billable:  (db, args, user) => admissionChargeSetBillable(db, args, user),
   admission_service_add:          (db, args, user) => admissionServiceAdd(db, args, user),
   admission_service_done:         (db, args, user) => admissionServiceDone(db, args, user),   // SERVICE_TASKS_V1
+  dashboard_trend:                (db, args, user) => dashboardTrend(db, args, user),   // DASHBOARD_TREND_V1
   case_doc_types_list:            (db, args, user) => caseDocTypesList(db, args, user),
   case_doc_type_save:             (db, args, user) => caseDocTypeSave(db, args, user),
   case_doc_type_set_active:       (db, args, user) => caseDocTypeSetActive(db, args, user),
