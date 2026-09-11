@@ -590,8 +590,9 @@ function bedDetailModal(bed, ward, adm, root) {
             j.appendChild(h('div', { class: 'row', style: { gap: '8px', padding: '7px 0', borderBottom: '1px solid var(--ink-50)', fontSize: '12.5px' } },
                 // ADMISSION_DATE_EDIT_V1 — правка даты это НЕ перевод: койка не
                 // менялась, и строка «Перевод 201·1 → 201·1» только сбивала бы.
-                h('span', { style: { color: t.kind === 'admitted_at' ? 'var(--warn-600, #d97706)' : 'var(--ok-600)', fontWeight: 800 } },
-                    t.kind === 'admit' ? '+' : t.kind === 'admitted_at' ? '✎' : '→'),
+                // GLYPH_ICON_V1 — знак события значком системы, а не буквой.
+                h('span', { style: { color: t.kind === 'admitted_at' ? 'var(--warn-600, #d97706)' : 'var(--ok-600)', display: 'inline-flex' } },
+                    Icon(t.kind === 'admit' ? 'Plus' : t.kind === 'admitted_at' ? 'Edit' : 'ArrowRight', { size: 13 })),
                 h('span', { style: { flex: 1 } },
                     t.kind === 'admit' ? h('span', null, h('b', null, 'Поступил'), ' (new) → ' + to)
                         : t.kind === 'admitted_at' ? h('span', null, h('b', null, 'Изменена дата поступления'), t.reason ? ' · ' + t.reason : '')
@@ -789,7 +790,8 @@ function bedDetailModal(bed, ward, adm, root) {
                         s2.name,
                         h('span', { class: 'muted', style: { fontSize: '12.5px' } }, ' · ' + categoryOf(s2))),
                     h('span', { class: 'num', style: { fontSize: '12.5px', fontWeight: 700, whiteSpace: 'nowrap' } }, fmtPrice(s2.price), ' сум'),
-                    h('span', { style: { fontSize: '15px', fontWeight: 800, color: already ? 'var(--ink-300)' : 'var(--primary-600)', width: '16px', textAlign: 'center' } }, already ? '✓' : '+')));
+                    h('span', { style: { color: already ? 'var(--ink-300)' : 'var(--primary-600)', width: '16px', display: 'inline-flex', justifyContent: 'center' } },
+                        Icon(already ? 'Check' : 'Plus', { size: 14 }))));
             }
             if (pool.length > 200) {
                 catalogEl.appendChild(h('div', { class: 'muted', style: { padding: '10px', textAlign: 'center', fontSize: '12.5px' } },

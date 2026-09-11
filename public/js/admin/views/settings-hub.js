@@ -145,30 +145,30 @@ const GROUPS = [
         title: 'Управление пользователями и сотрудниками', icon: 'ID', color: { bg: '#e4f3f1', fg: '#1f8a80' },
         items: [
             { label: 'Сотрудники', desc: 'Врачи, медсёстры, регистратура, администрация', icon: 'ID',       live: true, action: nav('employees') },
-            { label: 'Роли',       desc: 'Роли доступа и разрешённые разделы меню',       icon: 'Settings', live: true, action: () => openSection('roles') },
-            { label: 'Отделы',     desc: 'Клинические отделения и их руководители',       icon: 'Building', live: true, action: () => openSection('departments') },
+            { label: 'Роли',       desc: 'Кто что видит: роли и разделы меню',       icon: 'Settings', live: true, action: () => openSection('roles') },
+            { label: 'Отделы',     desc: 'Отделения клиники и кто ими руководит',       icon: 'Building', live: true, action: () => openSection('departments') },
         ],
     },
     {
         title: 'Настройки услуг', icon: 'Flask', color: { bg: '#efeafb', fg: '#6b4fb0' },
         items: [
-            { label: 'Список услуг',        desc: 'Все услуги клиники · цены и маршрутизация', icon: 'Receipt', live: true, action: nav('services') },
+            { label: 'Список услуг',        desc: 'Все услуги клиники: цены и куда ведёт каждая', icon: 'Receipt', live: true, action: nav('services') },
             // LAB_PANELS_BY_SECTION_V1 (2026-08-31) — «Лаборатория и диагностика»
             // is gone from this card on purpose (owner: «remove the laboratory
             // and the panels settings from the settings, leave only in the lab
             // section with switch»). The panel editor's one home is the «Панели»
             // mode of Лаборатория, open to every role that can open the section;
             // the old address redirects there (admin.js LEGACY_ROUTES).
-            { label: 'Товары и препараты',  desc: 'Склад · остатки, цены, точки заказа', icon: 'Pill',   live: true, action: nav('inventory') },
-            { label: 'Типы услуг',          desc: 'Категории и разделы услуг',           icon: 'Layers', live: true, action: () => openSection('service_types') },
+            { label: 'Товары и препараты',  desc: 'Что на складе, по какой цене и когда пора заказывать', icon: 'Pill',   live: true, action: nav('inventory') },
+            { label: 'Типы услуг',          desc: 'Как услуги сгруппированы в прайсе',           icon: 'Layers', live: true, action: () => openSection('service_types') },
             { label: 'Консультации врачей', desc: 'Виды консультаций и их стоимость',    icon: 'Stethoscope', live: true, action: () => openSection('consultation_types') },
         ],
     },
     {
         title: 'Основное', icon: 'Folder', color: { bg: '#fdf3e1', fg: '#b07d1f' },
         items: [
-            { label: 'Пациенты',            desc: 'Картотека пациентов · данные, контакты, номер карты', icon: 'ID',       live: true, action: nav('settings:patients') },   // PATIENTS_SECTION_V1 — easymed's section-CRUD register (route, NOT openSection: that's the hub's own lookup editor and has no patients config)
-            { label: 'Категории пациентов', desc: 'Категории пациентов (VIP, обычные, …)',               icon: 'Layers',   live: true, action: () => openSection('patient_categories') },
+            { label: 'Пациенты',            desc: 'Картотека: данные пациента, контакты, номер карты', icon: 'ID',       live: true, action: nav('settings:patients') },   // PATIENTS_SECTION_V1 — easymed's section-CRUD register (route, NOT openSection: that's the hub's own lookup editor and has no patients config)
+            { label: 'Категории пациентов', desc: 'Группы пациентов: VIP, обычные и другие',               icon: 'Layers',   live: true, action: () => openSection('patient_categories') },
             // COMPANY_SECTION_V1 — «Компания» было НЕКУДА открыть.
             //
             // Печатные формы, шапка приложения и window.CLINIC берут название,
@@ -180,7 +180,7 @@ const GROUPS = [
             // раздела, которого в меню не было. Отсюда и «нельзя изменить
             // название компании»: менять было негде, а правки в дизайнере
             // затирались при следующей загрузке.
-            { label: 'Документы',           desc: 'Печатные шаблоны и настройки документов',             icon: 'Doc',      live: true, action: nav('documents') },
+            { label: 'Документы',           desc: 'Как выглядят печатные документы',             icon: 'Doc',      live: true, action: nav('documents') },
             { label: 'Скидки пациентов',    desc: 'Промокоды, подарочные карты и сертификаты',           icon: 'Coins',    live: true, action: () => openSection('patient_discounts') },
             // TELEGRAM_BOT_V1 — токен бота и режимы выдачи документов пациентам.
             // Раздел админский: isRouteAllowed('telegram-settings') пускает только
@@ -208,13 +208,13 @@ const GROUPS = [
         // opens daily.
         title: 'Системные настройки', icon: 'Settings', color: { bg: '#e9ebfb', fg: '#4b52b0' },
         items: [
-            { label: 'CRM-канбан',          desc: 'Колонки воронки и источники заявок', icon: 'Grid', live: true, action: nav('crm-settings') },
+            { label: 'CRM-канбан',          desc: 'По каким шагам идёт заявка и откуда приходят люди', icon: 'Grid', live: true, action: nav('crm-settings') },
             // TELEPHONY_ROUTING_V1 — обе подписи поехали вслед за карточкой
             // «Звонки → заявки»: CRM-канбан обещал маршрут, которого у него
             // больше нет, а Телефония не упоминала маршрут, который теперь её.
-            { label: 'Телефония',           desc: 'Звонки Binotel: подключение, опрос, маршрут звонков в заявки и журнал', icon: 'Headset', live: true, action: nav('telephony-settings') },
+            { label: 'Телефония',           desc: 'Звонки Binotel: подключение и как звонки становятся заявками', icon: 'Headset', live: true, action: nav('telephony-settings') },
             { label: 'Telegram-бот',        desc: 'Пациент получает свои документы в Telegram по номеру телефона', icon: 'Bot', live: true, action: nav('telegram-settings') },
-            { label: 'API',                 desc: 'Токены интеграции для партнёров',                     icon: 'Settings', live: true, action: () => openSection('api_tokens') },
+            { label: 'API',                 desc: 'Ключи доступа для партнёрских программ',                     icon: 'Settings', live: true, action: () => openSection('api_tokens') },
         ],
     },
     {
@@ -233,7 +233,7 @@ const GROUPS = [
             // Единственное «управление филиалами» в системе: тот же редактор
             // (LOOKUP_CONFIG.branches), просто теперь у него один вход, а не
             // собственная группа из двух строк.
-            { label: 'Филиалы',             desc: 'Физические адреса клиник', icon: 'Building', live: true, action: () => openSection('branches') },
+            { label: 'Филиалы',             desc: 'Адреса зданий клиники', icon: 'Building', live: true, action: () => openSection('branches') },
             // SETTINGS_SPLIT_V1 (2026-08-29, владелец: «в подписке оставить
             // только подписку и статус модулей (с запросом), а в системе —
             // только версию и что нового») — «Система» больше не четыре
@@ -263,7 +263,7 @@ const GROUPS = [
         // под ним, потому что дают поля, которых нет в мастере, и импорт.
         title: 'Помещения', icon: 'Building', color: { bg: '#e8f6ed', fg: '#2e8b52' },
         items: [
-            { label: 'Помещения', desc: 'Этажи, кабинеты и палаты в одном экране · койки, цена, очередь, врачи', icon: 'Building', live: true, action: nav('rooms-setup') },
+            { label: 'Помещения', desc: 'Этажи, кабинеты и палаты в одном месте: койки, цены, врачи', icon: 'Building', live: true, action: nav('rooms-setup') },
             { label: 'Этажи',    desc: 'Этажи и уровни здания',                    icon: 'Layers', live: true, action: () => openSection('floors') },
             { label: 'Кабинеты', desc: 'Кабинеты приёма и процедурные по этажам',  icon: 'Grid',   live: true, action: () => openSection('rooms') },
             { label: 'Палаты',   desc: 'Палаты стационара',                        icon: 'Bed',    live: true, action: () => openSection('wards') },
@@ -273,17 +273,17 @@ const GROUPS = [
     {
         title: 'Управление плательщиками', icon: 'Coins', color: { bg: '#e9ebfb', fg: '#4b52b0' },
         items: [
-            { label: 'Компании-плательщики',       desc: 'Страховые и корпоративные плательщики', icon: 'Coins', live: true, action: () => openSection('payers') },
-            { label: 'Страховые полисы',           desc: 'Программы покрытия по плательщикам',    icon: 'Doc',   live: true, action: () => openSection('payer_policies') },
-            { label: 'Провайдеры онлайн-платежей', desc: 'Payme, Click, Uzum — комиссии клиники', icon: 'Coins', live: true, action: () => openSection('payment_providers') },
-            { label: 'Кэшбэк',                     desc: 'Правила кэшбэка для пациентов',         icon: 'Coins', live: true, action: () => openSection('cashback_rules') },
+            { label: 'Компании-плательщики',       desc: 'Кто платит за пациента: страховые и компании', icon: 'Coins', live: true, action: () => openSection('payers') },
+            { label: 'Страховые полисы',           desc: 'Что и на сколько процентов покрывает каждый плательщик',    icon: 'Doc',   live: true, action: () => openSection('payer_policies') },
+            { label: 'Провайдеры онлайн-платежей', desc: 'Payme, Click, Uzum: какую комиссию платит клиника', icon: 'Coins', live: true, action: () => openSection('payment_providers') },
+            { label: 'Кэшбэк',                     desc: 'Сколько возвращать пациенту и за что',         icon: 'Coins', live: true, action: () => openSection('cashback_rules') },
         ],
     },
     {
         title: 'Направления', icon: 'MapPin', color: { bg: '#e3f4f7', fg: '#1f7f95' },
         items: [
             { label: 'Список источников',          desc: 'Откуда приходят пациенты',              icon: 'MapPin', live: true, action: () => openSection('referral_sources') },
-            { label: 'Категории источников',       desc: 'Группы источников направлений',         icon: 'Folder', live: true, action: () => openSection('referral_source_categories') },
+            { label: 'Категории источников',       desc: 'Как сгруппированы источники',         icon: 'Folder', live: true, action: () => openSection('referral_source_categories') },
         ],
     },
     {
@@ -472,149 +472,149 @@ async function paintUpdateStatus() {
 const LOOKUP_CONFIG = {
     // ---- Основное / General ----------------------------------------------
     patient_categories: {
-        table: 'patient_categories', title: 'Patient categories', icon: 'ID',
-        columns: [{ key: 'name', label: 'Name' }, { key: 'tier', label: 'Tier' }],
+        table: 'patient_categories', title: 'Категории пациентов', icon: 'ID',
+        columns: [{ key: 'name', label: 'Название' }, { key: 'tier', label: 'Уровень' }],
         fields: [
-            { key: 'name', label: 'Name', type: 'text', required: true },
-            { key: 'tier', label: 'Tier', type: 'text' },
+            { key: 'name', label: 'Название', type: 'text', required: true },
+            { key: 'tier', label: 'Уровень', type: 'text' },
         ],
     },
     patient_discounts: {
-        table: 'patient_discounts', title: 'Discounts & certificates', icon: 'Coins',
-        columns: [{ key: 'name', label: 'Name' }, { key: 'kind', label: 'Kind' }, { key: 'percent', label: 'Percent %' }, { key: 'amount', label: 'Amount' }],
+        table: 'patient_discounts', title: 'Скидки и сертификаты', icon: 'Coins',
+        columns: [{ key: 'name', label: 'Название' }, { key: 'kind', label: 'Вид' }, { key: 'percent', label: 'Скидка, %' }, { key: 'amount', label: 'Сумма' }],
         fields: [
-            { key: 'name', label: 'Name', type: 'text', required: true },
-            { key: 'kind', label: 'Kind', type: 'select', options: [['promo', 'Промокод'], ['gift_card', 'Подарочная карта'], ['certificate', 'Сертификат']] },
-            { key: 'percent', label: 'Percent off (%)', type: 'number' },
-            { key: 'amount', label: 'Fixed amount (UZS)', type: 'number' },
+            { key: 'name', label: 'Название', type: 'text', required: true },
+            { key: 'kind', label: 'Вид', type: 'select', options: [['promo', 'Промокод'], ['gift_card', 'Подарочная карта'], ['certificate', 'Сертификат']] },
+            { key: 'percent', label: 'Скидка, %', type: 'number' },
+            { key: 'amount', label: 'Фиксированная сумма, UZS', type: 'number' },
         ],
     },
     api_tokens: {
-        table: 'api_tokens', title: 'API tokens', icon: 'Settings',
-        columns: [{ key: 'name', label: 'Name' }, { key: 'token', label: 'Token' }],
+        table: 'api_tokens', title: 'Ключи API', icon: 'Settings',
+        columns: [{ key: 'name', label: 'Название' }, { key: 'token', label: 'Ключ' }],
         fields: [
-            { key: 'name', label: 'Token name / purpose', type: 'text', required: true },
-            { key: 'token', label: 'Token value', type: 'text' },
+            { key: 'name', label: 'Название ключа и для чего он', type: 'text', required: true },
+            { key: 'token', label: 'Значение ключа', type: 'text' },
         ],
     },
 
     // ---- Настройки услуг / Service settings -------------------------------
     service_types: {
-        table: 'service_types', title: 'Service types', icon: 'Layers',
-        columns: [{ key: 'name', label: 'Name' }, { key: 'code', label: 'Code' }, { key: 'billing_mode', label: 'Billing' }],
+        table: 'service_types', title: 'Типы услуг', icon: 'Layers',
+        columns: [{ key: 'name', label: 'Название' }, { key: 'code', label: 'Код' }, { key: 'billing_mode', label: 'Оплата' }],
         fields: [
-            { key: 'name', label: 'Name', type: 'text', required: true },
-            { key: 'code', label: 'Code', type: 'text' },
-            { key: 'billing_mode', label: 'Billing mode', type: 'select', options: [['one_time', 'Разовая'], ['continuable', 'Продлеваемая']] },
+            { key: 'name', label: 'Название', type: 'text', required: true },
+            { key: 'code', label: 'Код', type: 'text' },
+            { key: 'billing_mode', label: 'Как оплачивается', type: 'select', options: [['one_time', 'Разовая'], ['continuable', 'Продлеваемая']] },
         ],
     },
     consultation_types: {
-        table: 'consultation_types', title: 'Consultation types', icon: 'Flask',
-        columns: [{ key: 'name', label: 'Name' }, { key: 'price', label: 'Price' }],
+        table: 'consultation_types', title: 'Виды консультаций', icon: 'Flask',
+        columns: [{ key: 'name', label: 'Название' }, { key: 'price', label: 'Цена' }],
         fields: [
-            { key: 'name', label: 'Name', type: 'text', required: true },
-            { key: 'price', label: 'Price', type: 'number' },
+            { key: 'name', label: 'Название', type: 'text', required: true },
+            { key: 'price', label: 'Цена', type: 'number' },
         ],
     },
 
     // ---- Управление персоналом / Staff -----------------------------------
     departments: {
-        table: 'departments', title: 'Departments', icon: 'Building',
-        columns: [{ key: 'name', label: 'Name' }, { key: 'code', label: 'Code' }, { key: 'kind', label: 'Kind' }],
+        table: 'departments', title: 'Отделения', icon: 'Building',
+        columns: [{ key: 'name', label: 'Название' }, { key: 'code', label: 'Код' }, { key: 'kind', label: 'Вид' }],
         fields: [
-            { key: 'name', label: 'Name', type: 'text', required: true },
-            { key: 'code', label: 'Code', type: 'text' },
-            { key: 'kind', label: 'Kind', type: 'select', options: [['clinical', 'Клиническое'], ['laboratory', 'Лабораторное'], ['diagnostics', 'Диагностическое'], ['procedure', 'Процедурное'], ['inpatient', 'Стационарное'], ['administrative', 'Административное']] },
+            { key: 'name', label: 'Название', type: 'text', required: true },
+            { key: 'code', label: 'Код', type: 'text' },
+            { key: 'kind', label: 'Вид', type: 'select', options: [['clinical', 'Клиническое'], ['laboratory', 'Лабораторное'], ['diagnostics', 'Диагностическое'], ['procedure', 'Процедурное'], ['inpatient', 'Стационарное'], ['administrative', 'Административное']] },
         ],
     },
 
     // ---- Управление филиалами / Branch management ------------------------
     branches: {
-        table: 'branches', title: 'Branches', icon: 'Building',
-        columns: [{ key: 'name', label: 'Name' }, { key: 'phone', label: 'Phone' }, { key: 'address', label: 'Address' }],
+        table: 'branches', title: 'Филиалы', icon: 'Building',
+        columns: [{ key: 'name', label: 'Название' }, { key: 'phone', label: 'Телефон' }, { key: 'address', label: 'Адрес' }],
         fields: [
-            { key: 'name', label: 'Name', type: 'text', required: true },
-            { key: 'phone', label: 'Phone', type: 'phone' },
-            { key: 'address', label: 'Address', type: 'text' },
+            { key: 'name', label: 'Название', type: 'text', required: true },
+            { key: 'phone', label: 'Телефон', type: 'phone' },
+            { key: 'address', label: 'Адрес', type: 'text' },
         ],
     },
 
     // ---- Управление плательщиками / Payer management ---------------------
     payers: {
-        table: 'payers', title: 'Payer companies', icon: 'Coins',
-        columns: [{ key: 'name', label: 'Name' }, { key: 'kind', label: 'Kind' }],
+        table: 'payers', title: 'Компании-плательщики', icon: 'Coins',
+        columns: [{ key: 'name', label: 'Название' }, { key: 'kind', label: 'Вид' }],
         fields: [
-            { key: 'name', label: 'Name', type: 'text', required: true },
-            { key: 'kind', label: 'Kind', type: 'select', options: [['insurance', 'Страховая'], ['corporate', 'Корпоративный'], ['government', 'Государственный']] },
+            { key: 'name', label: 'Название', type: 'text', required: true },
+            { key: 'kind', label: 'Вид', type: 'select', options: [['insurance', 'Страховая'], ['corporate', 'Корпоративный'], ['government', 'Государственный']] },
         ],
     },
     payer_policies: {
-        table: 'payer_policies', title: 'Payer policies', icon: 'Doc', embed: 'payers(name)',
-        columns: [{ key: 'name', label: 'Policy' }, { key: 'payers', label: 'Payer', embed: true }, { key: 'coverage_percent', label: 'Coverage %' }],
+        table: 'payer_policies', title: 'Страховые полисы', icon: 'Doc', embed: 'payers(name)',
+        columns: [{ key: 'name', label: 'Полис' }, { key: 'payers', label: 'Плательщик', embed: true }, { key: 'coverage_percent', label: 'Покрытие, %' }],
         fields: [
-            { key: 'name', label: 'Policy name (e.g. Gold 2026)', type: 'text', required: true },
-            { key: 'payer_id', label: 'Payer company', type: 'fk', fkTable: 'payers', fkLabel: 'name' },
-            { key: 'coverage_percent', label: 'Coverage % (insurer pays)', type: 'number' },
+            { key: 'name', label: 'Название полиса (например, Gold 2026)', type: 'text', required: true },
+            { key: 'payer_id', label: 'Компания-плательщик', type: 'fk', fkTable: 'payers', fkLabel: 'name' },
+            { key: 'coverage_percent', label: 'Покрытие, % (платит страховая)', type: 'number' },
         ],
     },
     payment_providers: {
-        table: 'payment_providers', title: 'Online payment providers', icon: 'Coins',
-        columns: [{ key: 'name', label: 'Provider' }, { key: 'fee_percent', label: 'Fee %' }],
+        table: 'payment_providers', title: 'Провайдеры онлайн-платежей', icon: 'Coins',
+        columns: [{ key: 'name', label: 'Провайдер' }, { key: 'fee_percent', label: 'Комиссия, %' }],
         fields: [
-            { key: 'name', label: 'Provider name (Payme, Click, Uzum…)', type: 'text', required: true },
-            { key: 'fee_percent', label: 'Processing fee charged to the clinic (%)', type: 'number' },
+            { key: 'name', label: 'Название провайдера (Payme, Click, Uzum…)', type: 'text', required: true },
+            { key: 'fee_percent', label: 'Комиссия с клиники, %', type: 'number' },
         ],
     },
     cashback_rules: {
-        table: 'cashback_rules', title: 'Cashback', icon: 'Coins',
-        columns: [{ key: 'name', label: 'Rule' }, { key: 'percent', label: 'Cashback %' }],
+        table: 'cashback_rules', title: 'Кэшбэк', icon: 'Coins',
+        columns: [{ key: 'name', label: 'Правило' }, { key: 'percent', label: 'Кэшбэк, %' }],
         fields: [
-            { key: 'name', label: 'Rule name (e.g. Self-pay 3%)', type: 'text', required: true },
-            { key: 'percent', label: 'Cashback % (returned to patient)', type: 'number' },
+            { key: 'name', label: 'Название правила (например, «Самоплательщик 3%»)', type: 'text', required: true },
+            { key: 'percent', label: 'Кэшбэк, % (возвращается пациенту)', type: 'number' },
         ],
     },
 
     // ---- Кабинеты и этажи / Rooms & floors -------------------------------
     floors: {
-        table: 'floors', title: 'Floors', icon: 'Layers',
-        columns: [{ key: 'name', label: 'Name' }, { key: 'level', label: 'Level' }],
+        table: 'floors', title: 'Этажи', icon: 'Layers',
+        columns: [{ key: 'name', label: 'Название' }, { key: 'level', label: 'Уровень' }],
         fields: [
-            { key: 'name', label: 'Name', type: 'text', required: true },
-            { key: 'level', label: 'Level', type: 'number' },
+            { key: 'name', label: 'Название', type: 'text', required: true },
+            { key: 'level', label: 'Уровень', type: 'number' },
         ],
     },
     rooms: {
-        table: 'rooms', title: 'Rooms', icon: 'Grid', embed: 'floors(name)',
-        columns: [{ key: 'name', label: 'Name' }, { key: 'floors', label: 'Floor', embed: true }],
+        table: 'rooms', title: 'Кабинеты', icon: 'Grid', embed: 'floors(name)',
+        columns: [{ key: 'name', label: 'Название' }, { key: 'floors', label: 'Этаж', embed: true }],
         fields: [
-            { key: 'name', label: 'Name', type: 'text', required: true },
-            { key: 'floor_id', label: 'Floor', type: 'fk', fkTable: 'floors', fkLabel: 'name' },
+            { key: 'name', label: 'Название', type: 'text', required: true },
+            { key: 'floor_id', label: 'Этаж', type: 'fk', fkTable: 'floors', fkLabel: 'name' },
         ],
     },
 
     // ---- Стационар / Inpatient -------------------------------------------
     wards: {
-        table: 'wards', title: 'Wards', icon: 'Bed',
-        columns: [{ key: 'name', label: 'Name' }, { key: 'type', label: 'Type' }, { key: 'billing_mode', label: 'Billing' }, { key: 'price_per_day', label: 'Price/day' }],
+        table: 'wards', title: 'Палаты', icon: 'Bed',
+        columns: [{ key: 'name', label: 'Название' }, { key: 'type', label: 'Тип' }, { key: 'billing_mode', label: 'Оплата' }, { key: 'price_per_day', label: 'Цена в сутки' }],
         fields: [
-            { key: 'name', label: 'Name', type: 'text', required: true },
-            { key: 'type', label: 'Type', type: 'select', options: [['general', 'Общая'], ['icu', 'Реанимация'], ['maternity', 'Родильная'], ['pediatrics', 'Детская'], ['surgery', 'Хирургическая'], ['oncology', 'Онкологическая'], ['isolation', 'Изолятор'], ['other', 'Прочая']] },
-            { key: 'billing_mode', label: 'Accommodation billing', type: 'select', options: [['daily', 'Посуточно'], ['hourly', 'Почасово']] },
-            { key: 'price_per_day', label: 'Price per day (UZS)', type: 'number' },
-            { key: 'price_per_hour', label: 'Price per hour (UZS)', type: 'number' },
+            { key: 'name', label: 'Название', type: 'text', required: true },
+            { key: 'type', label: 'Тип', type: 'select', options: [['general', 'Общая'], ['icu', 'Реанимация'], ['maternity', 'Родильная'], ['pediatrics', 'Детская'], ['surgery', 'Хирургическая'], ['oncology', 'Онкологическая'], ['isolation', 'Изолятор'], ['other', 'Прочая']] },
+            { key: 'billing_mode', label: 'Оплата проживания', type: 'select', options: [['daily', 'Посуточно'], ['hourly', 'Почасово']] },
+            { key: 'price_per_day', label: 'Цена в сутки, UZS', type: 'number' },
+            { key: 'price_per_hour', label: 'Цена в час, UZS', type: 'number' },
         ],
     },
     beds: {
         // `status` is operational (managed on the Ward & beds board via the inpatient
         // RPCs), not config — so it is shown read-only in the list but not editable here.
-        table: 'beds', title: 'Beds', icon: 'Bed', embed: 'wards(name)', orderBy: 'code',   // beds has no `name` column — order by `code`
-        columns: [{ key: 'code', label: 'Code' }, { key: 'wards', label: 'Ward', embed: true }, { key: 'type', label: 'Type' }, { key: 'status', label: 'Status' }],
+        table: 'beds', title: 'Койки', icon: 'Bed', embed: 'wards(name)', orderBy: 'code',   // beds has no `name` column — order by `code`
+        columns: [{ key: 'code', label: 'Код' }, { key: 'wards', label: 'Палата', embed: true }, { key: 'type', label: 'Тип' }, { key: 'status', label: 'Статус' }],
         fields: [
-            { key: 'code', label: 'Code', type: 'text', required: true },
-            { key: 'ward_id', label: 'Ward', type: 'fk', fkTable: 'wards', fkLabel: 'name' },
-            { key: 'type', label: 'Type', type: 'select', options: [['standard', 'Обычная'], ['icu', 'Реанимационная'], ['isolation', 'Изоляционная'], ['vip', 'VIP'], ['recovery', 'Послеоперационная'], ['observation', 'Наблюдения']] },
-            { key: 'price_per_day', label: 'Price/day override (0 = use ward)', type: 'number' },
-            { key: 'price_per_hour', label: 'Price/hour override (0 = use ward)', type: 'number' },
+            { key: 'code', label: 'Код', type: 'text', required: true },
+            { key: 'ward_id', label: 'Палата', type: 'fk', fkTable: 'wards', fkLabel: 'name' },
+            { key: 'type', label: 'Тип', type: 'select', options: [['standard', 'Обычная'], ['icu', 'Реанимационная'], ['isolation', 'Изоляционная'], ['vip', 'VIP'], ['recovery', 'Послеоперационная'], ['observation', 'Наблюдения']] },
+            { key: 'price_per_day', label: 'Своя цена в сутки (0 — как у палаты)', type: 'number' },
+            { key: 'price_per_hour', label: 'Своя цена в час (0 — как у палаты)', type: 'number' },
         ],
     },
 
@@ -690,7 +690,7 @@ const LOOKUP_CONFIG = {
         table: 'referral_source_categories', title: 'Source categories', icon: 'Folder',
         modalWidth: '920px',
         columns: [
-            { key: 'name', label: 'Name' },
+            { key: 'name', label: 'Название' },
             { key: 'standard_percent', label: 'Стандартный %' },
         ],
         fields: [
@@ -709,7 +709,7 @@ const LOOKUP_CONFIG = {
         columns: [
             { key: 'users', label: 'Doctor', embed: true, embedLabel: 'full_name' },
             { key: 'services', label: 'Service', embed: true },
-            { key: 'percent', label: 'Percent %' },
+            { key: 'percent', label: 'Скидка, %' },
         ],
         fields: [
             { key: 'doctor_id', label: 'Doctor', type: 'fk', fkTable: 'users', fkLabel: 'full_name', fkActiveCol: 'is_active', fkFilter: { role: 'doctor' }, required: true },

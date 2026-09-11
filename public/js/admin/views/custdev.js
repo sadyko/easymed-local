@@ -468,7 +468,8 @@ async function openReport(b) {
         }
         return h('div', { style: { marginTop: '16px' } },
             h('h3', { style: { fontSize: '13.5px', margin: '0 0 6px' } }, title),
-            h('table', { class: 'table' },
+            // GHOST_CLASS_V1 — .table в продукте не существует; таблица зовётся table.list.
+            h('table', { class: 'list' },
                 h('thead', null, h('tr', null,
                     h('th', null, 'Сотрудник'),
                     h('th', { style: { textAlign: 'right' } }, 'Доволен'),

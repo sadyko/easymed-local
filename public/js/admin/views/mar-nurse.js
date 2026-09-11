@@ -70,6 +70,7 @@ import { h, Icon, Tag, clear, toast, field, PageHead, initials } from '../ui.js'
 // SYSTEM_LANGUAGE_V1 — тот же оттенок пациента, что в стационаре, в колонке дня
 // врача и на карточке приёма: один человек — один цвет во всей программе.
 import { pastelFor } from '../pastel.js';
+import { fitViewport } from './dash-kpi.js';   // MAR_ONE_SCREEN_V1 — смена в один экран, как сводка
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { isModuleAllowed } from '../permissions.js';
 import { inpatientModal } from './admission-modal.js?v=inp5';
@@ -335,24 +336,28 @@ export function extraPayload(rows, productId) {
 
 // ─── Диалоги ────────────────────────────────────────────────────────────────
 
-function anchorBig(name, sub) {
+function anchorBig(name, sub, seed) {
+    // MAR_ONE_SCREEN_V1 — якорь остаётся самым крупным на экране (защита от
+    // «не того пациента»), но 17 px вместо 20/800, и кружок в ЕГО оттенке, а не
+    // залитый брендовым: то же правило, что у строки слева и в стационаре.
     return h('div', {
         style: {
-            display: 'flex', alignItems: 'center', gap: '12px', padding: '13px 15px',
+            display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px',
             background: 'var(--primary-25, #f2faf8)', border: '1px solid var(--primary-100, #d7efe9)',
             borderRadius: '11px',
         },
     },
         h('span', {
+            class: ('mar-av ' + pastelFor(seed || name)).trim(),
             style: {
-                width: '44px', height: '44px', borderRadius: '999px', flex: '0 0 44px',
-                background: 'var(--primary-600, #1f7a72)', color: '#fff',
-                display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: '15px',
+                width: '38px', height: '38px', borderRadius: '999px', flex: '0 0 38px',
+                background: 'var(--p-bg, var(--primary-50))', color: 'var(--p-fg, var(--primary-700))',
+                display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: '13.5px',
             },
         }, initials(name || '?')),
         h('div', { style: { minWidth: 0 } },
-            h('div', { style: { fontSize: '20px', fontWeight: 800, color: 'var(--ink-900)', lineHeight: 1.2 } }, name || '—'),
-            sub ? h('div', { class: 'muted', style: { fontSize: '13.5px', marginTop: '2px' } }, sub) : null),
+            h('div', { style: { fontSize: '17px', fontWeight: 700, color: 'var(--ink-900)', lineHeight: 1.2 } }, name || '—'),
+            sub ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, sub) : null),
     );
 }
 
@@ -555,7 +560,11 @@ export async function renderMarNurse(root, ctx = {}) {
         sheet: null,
     };
 
-    const wrap = h('div', { class: 'fade-in' });
+    // MAR_ONE_SCREEN_V1 — владелец: «redesign this window too to its fits in
+    // to view port, and make the text smaller but align with the tablet».
+    // Экран берёт остаток окна; список пациентов и работа смены прокручиваются
+    // каждый в своей колонке. Текст на ступень мельче, отметки — те же 42 px.
+    const wrap = h('div', { class: 'fade-in mar-fit' });
     root.appendChild(wrap);
 
     // SYSTEM_LANGUAGE_V1 — .input в этом продукте НЕ СУЩЕСТВУЕТ: поля метит
@@ -565,7 +574,7 @@ export async function renderMarNurse(root, ctx = {}) {
     // серый системный список Windows посреди экрана клиники.
     const wardSel = h('select', null, h('option', { value: '' }, tr('Все отделения')));
     const headBox = h('div');
-    const body = h('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(240px, 320px) 1fr', gap: '16px', alignItems: 'start' } });
+    const body = h('div', { class: 'mar-body' });
     wrap.appendChild(headBox);
     wrap.appendChild(body);
 
@@ -673,6 +682,7 @@ export async function renderMarNurse(root, ctx = {}) {
         clear(body);
         body.appendChild(peopleCard(people));
         body.appendChild(tasksCard(people));
+        fitViewport(wrap, { min: 520 });
     }
 
     function peopleCard(people) {
@@ -724,7 +734,7 @@ export async function renderMarNurse(root, ctx = {}) {
                     // ИМЯ ОСТАЁТСЯ САМЫМ КРУПНЫМ И ЖИРНЫМ НА СТРОКЕ — это защита
                     // от «не того пациента». Уменьшена ВЕЛИЧИНА, а не старшинство:
                     // 15 px против 12.5 px у подписи, вес 700 против 400.
-                    h('span', { style: { display: 'block', fontSize: '15px', fontWeight: 700, color: 'var(--ink-900)' } },
+                    h('span', { style: { display: 'block', fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } },
                         p.patient_name || tr('без имени')),
                     h('span', { class: 'muted', style: { display: 'block', fontSize: '12.5px' } },
                         [p.mrn || null, bedLine(p) || null].filter(Boolean).join(' · '))),
@@ -745,7 +755,7 @@ export async function renderMarNurse(root, ctx = {}) {
         }
         const allergy = allergyOf(state.allergies, p.patient_id);
         box.appendChild(h('div', { class: 'card', style: { padding: '14px 16px', display: 'grid', gap: '10px' } },
-            anchorBig(p.patient_name, [p.mrn || null, bedLine(p) || null].filter(Boolean).join(' · ')),
+            anchorBig(p.patient_name, [p.mrn || null, bedLine(p) || null].filter(Boolean).join(' · '), p.patient_id || p.patient_name),
             allergyBanner(allergy),
             h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
                 h('button', {

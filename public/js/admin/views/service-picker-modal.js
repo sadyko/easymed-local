@@ -2179,7 +2179,7 @@ export function openServicePickerModal({
                 onclick: () => { if (!skipped && n < wiz.step) wizGoto(n); } };
             if (skipped) { props.disabled = ''; props.style = { opacity: '0.45' }; props.title = 'Пациент платит сам — распределение не требуется'; }
             wizChipsEl.appendChild(h('button', props,
-                h('span', { class: 'n' }, (wiz.step > n && !skipped) ? '✓' : String(n)), label));
+                h('span', { class: 'n' }, (wiz.step > n && !skipped) ? Icon('Check', { size: 12 }) : String(n)), label));
         }
     }
 

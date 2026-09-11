@@ -733,9 +733,9 @@ function _deleteSummaryToast(deleted, deactivated, firstError) {
 async function bulkDelete(container, onNavigate, def) {
     const ids = [...state.selectedIds];
     if (ids.length === 0) return;
-    if (!canDelete(currentPermKey())) { toast('Your role can’t delete here (Admin level required).', 'fail'); return; }
+    if (!canDelete(currentPermKey())) { toast(tr('Удалять здесь может только администратор.'), 'fail'); return; }
     const _warn = await staffDeleteWarning(def.table, ids);   // DELETE_INTEGRITY_V1
-    if (!confirm(_warn + `Delete ${ids.length} ${def.label} row${ids.length > 1 ? 's' : ''}? This cannot be undone.`)) return;
+    if (!confirm(_warn + trf('Удалить строк: {n}? Отменить это нельзя.', { n: ids.length }))) return;
     let deleted = 0, deactivated = 0, firstError = null;
     for (const _id of ids) {
         const res = await _deleteOne(def, _id);
@@ -976,9 +976,9 @@ async function primeFkCache(table) {
 
 async function deleteRow(container, onNavigate, row) {
     const def = SECTIONS[state.sectionKey];
-    if (!canDelete(currentPermKey())) { toast('Your role can’t delete here (Admin level required).', 'fail'); return; }
+    if (!canDelete(currentPermKey())) { toast(tr('Удалять здесь может только администратор.'), 'fail'); return; }
     const _warn = await staffDeleteWarning(def.table, [row.id]);   // DELETE_INTEGRITY_V1
-    if (!confirm(_warn + `Delete this ${def.label} row?`)) return;
+    if (!confirm(_warn + tr('Удалить эту строку? Отменить это нельзя.'))) return;
     const res = await _deleteOne(def, row.id);   // DELETE_SOFT_FALLBACK_V1
     if (res.error) { toast(res.error, 'fail'); return; }
     toast(res.outcome === 'deactivated'

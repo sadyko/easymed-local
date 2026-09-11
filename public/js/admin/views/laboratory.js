@@ -48,6 +48,10 @@ import { isAdminActor } from '../admin-actor.js';   // настройку кли
 // LAB_PATIENT_ORIGIN_V1 — «откуда пациент» берётся оттуда же, откуда его берут
 // кабинет врача и процедурная: из госпитализаций в койке.
 import { IN_BED_STATUSES } from '../../shared/admission-status.js';
+// LAB_ONE_SCREEN_V1 — тот же оттенок пациента, что в стационаре и в кабинете
+// врача, и та же подгонка «в один экран», что у сводки.
+import { pastelFor } from '../pastel.js';
+import { fitViewport } from './dash-kpi.js';
 import { labFlagCell, labPosFor, fmtDMY, labSexRu, labRefText, matchResultsToAnalytes, labAccession, labIssueDates, labMaxDate,
          namedRangeCell, ageYears } from './lab-doc.js?v=labshared1';
 import { analyteIndex, resolveAnalyte, resolveAnalyteWhy, nk } from './lab-analyte-index.js?v=labshared1';   // LAB_BLANK_DESIGNED_V1
@@ -388,7 +392,11 @@ function mount() {
         ],
     };
 
-    refs.container.appendChild(h('div', { class: 'fade-in' },
+    // LAB_ONE_SCREEN_V1 — владелец: «make in one viewport everything». Очередь
+    // берёт остаток окна по месту и прокручивается ВНУТРИ окна; шапка с
+    // поиском, фильтрами и переключателем всегда на месте. Панели и статистика
+    // живут своей высотой — там редактируют и читают, а не дежурят.
+    const root = h('div', { class: 'fade-in' + (mode === 'queue' ? ' lab-fit' : '') },
         pageHead(SUBTITLES[mode], ACTIONS[mode]),
         // LIS_INGEST_V1 — «Анализаторы» рисуются в тот же контейнер, что и
         // «Панели» (paintMode монтирует их в refs.panelsHost): без этой ветки
@@ -401,8 +409,9 @@ function mount() {
                 refs.list,
                 refs.emptyEl,
             ),
-    ));
-    if (mode === 'queue') { paintFilters(); paintScopeSwitch(); }
+    );
+    refs.container.appendChild(root);
+    if (mode === 'queue') { paintFilters(); paintScopeSwitch(); fitViewport(root, { min: 520 }); }
     if (mode === 'stats') paintPeriodChips();
 }
 
@@ -1001,7 +1010,9 @@ function labGroupCard(g) {
     return h('div', { class: 'lq-card', 'data-state': cardState },
         // 1. ЧЬЯ ПРОБА.
         h('div', { class: 'lq-head' },
-            h('div', { class: 'avatar ' + avColor(g.patientId || g.patientMrn || g.patientName) }, initials(g.patientName)),
+            // LAB_ONE_SCREEN_V1 — кружок в оттенке ЭТОГО пациента (pastel.js), как в
+            // стационаре и в кабинете: один человек — один цвет во всей программе.
+            h('span', { class: 'lq-av ' + pastelFor(g.patientId || g.patientMrn || g.patientName) }, initials(g.patientName)),
             h('div', { class: 'lq-who' },
                 h('div', { class: 'lq-title' }, g.patientName),
                 h('div', { class: 'lq-facts' },
@@ -1053,14 +1064,11 @@ function labGroupCard(g) {
     );
 }
 
+// LAB_ONE_SCREEN_V1 — кнопка-значок из системы (.btn-icon), а не свой
+// квадрат; и с именем: кнопка без подписи для читалки экрана — молчание.
 function iconBtn(icon, title, onclick) {
     return h('button', {
-        type: 'button', title, onclick,
-        style: {
-            width: '30px', height: '30px', borderRadius: '8px', cursor: 'pointer',
-            border: '1px solid var(--ink-200)', background: 'var(--white, #fff)',
-            color: 'var(--ink-600)', display: 'inline-grid', placeItems: 'center',
-        },
+        type: 'button', class: 'btn btn-outline btn-icon', title, 'aria-label': title, onclick,
     }, Icon(icon, { size: 13 }));
 }
 

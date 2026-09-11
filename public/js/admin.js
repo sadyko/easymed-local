@@ -15,7 +15,7 @@ import { phoneInput } from './admin/phone-input.js?v=ph1';
 import { startUiEnhance } from './admin/ui-enhance.js?v=uien1';
 // MOTION_REVEAL_V1 — единственный словарь движения приложения; оболочке из
 // него нужна одна вещь: сворачивание колонки меню (см. wireSidebarCollapse).
-import { pulseFade } from './admin/motion.js?v=mo1';
+import { pulseFade, revealOn, HIDDEN_CLASS, SHOWN_CLASS } from './admin/motion.js?v=mo1';   // SHELL_REVEAL_V1 — появление для всех экранов
 import {
     isModuleAllowed, isRouteAllowed, actorRoleCodes,   // actorRoleCodes — ROLE_HOME_V1
     setFullAccess, setEffectiveFromRole, setEffectiveFromRoles, currentRoleLabel,
@@ -880,7 +880,28 @@ async function renderViewInto(pane) {
         return await renderViewInner(root, pane.view, ctx);
     } finally {
         dedupeSectionHeading(pane);
+        revealShell(root);
     }
+}
+
+// SHELL_REVEAL_V1 (2026-09-11) — ПОЯВЛЕНИЕ ДЛЯ ВСЕХ ЭКРАНОВ ИЗ ОДНОГО МЕСТА.
+//
+// Владелец: «apply the animations in to the every panel every module and
+// window». Три экрана из семидесяти просили появление сами (пациенты, очередь,
+// сводка); остальные вставали на экран рывком, и приложение двигалось в трёх
+// местах из семидесяти. Оболочка — единственная, кто знает момент «экран
+// дорисован», поэтому просит появления здесь: рабочие окна и плитки КАЖДОГО
+// раздела приподнимаются одинаково, под тем же словарём движения и тем же
+// выключателем «меньше движения» (motion.js решает, прятать ли вообще).
+//
+// Что НЕ трогается: элементы, которые экран уже пометил сам (у них стоит
+// класс помощника), окно в окне (вложенная карточка едет вместе с внешней —
+// две волны на одном месте читались бы как дрожь) и диалоги (у них свой
+// переход, MOTION_DIALOG_V1). Отказ помощника экран не роняет.
+const SHELL_REVEAL = ['.card:not(.card .card)', '.dash-kpi', '.list-container']
+    .map((sel) => sel + ':not(.' + HIDDEN_CLASS + '):not(.' + SHOWN_CLASS + ')').join(', ');
+function revealShell(root) {
+    try { revealOn(root, SHELL_REVEAL); } catch (e) { /* появление — украшение; экран без него цел */ }
 }
 
 // Legacy renderView shim — kept so any caller still pointing here ends up

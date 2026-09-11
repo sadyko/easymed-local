@@ -3629,10 +3629,18 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
    разное. Заливка во всю ширину спутать с разделителем нельзя. */
 .lq-win{ overflow:hidden; }   /* скругление окна обязано резать первую и последнюю строку */
 .lq-queue{ background:var(--white); }
+/* LAB_ONE_SCREEN_V1 — раздел берёт высоту окна (dash-kpi.js fitViewport), окно
+   очереди — остаток, прокручивается только список внутри него. Строка стала
+   компактнее (шаг ~ на четверть меньше), содержание всё то же. */
+.lab-fit{ display:flex; flex-direction:column; min-height:0; }
+.lab-fit > .page-head{ flex:0 0 auto; margin-bottom:12px; }
+.lab-fit > .lq-win{ flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
+.lab-fit > .lq-win > .lq-queue{ flex:1 1 auto; min-height:0; overflow:auto; }
+@media (max-width: 1100px){ .lab-fit{ height:auto !important; } .lab-fit > .lq-win > .lq-queue{ overflow:visible; } }
 .lq-card{
-  background:var(--white); padding:14px 18px 12px;
+  background:var(--white); padding:10px 16px 8px;
   border-top:1px solid var(--ink-200);
-  transition:background .15s;
+  transition:background var(--dur-2) var(--ease-out);
 }
 /* Первая строка не отделяется от шапки окна второй линией. */
 .lq-card:first-child{ border-top:none; }
@@ -3643,18 +3651,22 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .lq-card[data-state="unpaid"]:hover{ background:var(--ink-50); }
 
 /* ---- 1. ЧЬЯ ПРОБА ---- */
-.lq-head{ display:flex; align-items:flex-start; gap:12px; flex-wrap:wrap; }
+.lq-head{ display:flex; align-items:flex-start; gap:10px; flex-wrap:wrap; }
+/* Кружок пациента — как строка стационара (ADM_ROW_CALM_V1): 34 px в его оттенке. */
+.lq-av{ width:34px; height:34px; border-radius:999px; flex:0 0 34px; display:grid; place-items:center;
+  font-weight:700; font-size:12.5px; background:var(--p-bg, var(--primary-50)); color:var(--p-fg, var(--primary-700)); }
 .lq-who{ flex:1 1 220px; min-width:0; }
-.lq-title{ font-size:17px; font-weight:700; color:var(--ink-900); line-height:1.2; overflow-wrap:anywhere; }
+/* Имя — самое крупное на строке, но величиной как в стационаре: 15 px, а не 17. */
+.lq-title{ font-size:15px; font-weight:700; color:var(--ink-900); line-height:1.25; overflow-wrap:anywhere; }
 /* Факты о человеке — один ряд текста, разделённый точками, а не четыре
    одинаковые таблетки: пол, возраст и дата рождения не равновелики, и
    таблетка вокруг каждого делала их равновеликими. */
-.lq-facts{ display:flex; flex-wrap:wrap; align-items:baseline; gap:0 6px; margin-top:3px; }
-.lq-fact{ font-size:13.5px; font-weight:600; color:var(--ink-700); white-space:nowrap; }
+.lq-facts{ display:flex; flex-wrap:wrap; align-items:baseline; gap:0 6px; margin-top:2px; }
+.lq-fact{ font-size:12.5px; font-weight:600; color:var(--ink-700); white-space:nowrap; }
 .lq-fact-soft{ font-weight:500; color:var(--ink-500); }
 .lq-fact + .lq-fact::before{ content:"\00B7"; color:var(--ink-300); margin-right:6px; font-weight:600; }
 /* Метки-факты: номер карты, чужой филиал, критические значения. */
-.lq-marks{ display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:7px; }
+.lq-marks{ display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:5px; }
 .lq-mrn{
   font-family:var(--font-mono); font-size:12.5px; font-weight:600; color:var(--ink-600);
   background:var(--ink-25); border:1px solid var(--ink-100); border-radius:6px;
@@ -3676,7 +3688,7 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .lq-acc .v{ font-size:13.5px; font-weight:700; font-family:var(--font-mono); color:var(--ink-700); letter-spacing:.3px; user-select:text; }
 
 /* ---- 3. СОСТОЯНИЕ + 4. ДЕЙСТВИЕ ---- */
-.lq-status{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:11px; padding-top:10px; border-top:1px solid var(--ink-50); }
+.lq-status{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:8px; padding-top:8px; border-top:1px solid var(--ink-50); }
 .lq-gap{ flex:1 1 auto; }
 .lq-do{ display:flex; gap:6px; flex-wrap:wrap; }
 .lq-prog{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
@@ -3716,8 +3728,8 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .lq-flag--critical{ background:var(--crit-50); color:var(--crit-700); border-color:#fecaca; font-weight:700; }
 
 /* ---- 2. ЧТО В ПРОБЕ ---- */
-.lq-list{ margin-top:6px; }
-.lq-item{ display:flex; align-items:center; gap:10px; padding:8px 6px; border-radius:9px; border-top:1px solid var(--ink-50); flex-wrap:wrap; }
+.lq-list{ margin-top:4px; }
+.lq-item{ display:flex; align-items:center; gap:10px; padding:6px 6px; border-radius:9px; border-top:1px solid var(--ink-50); flex-wrap:wrap; }
 .lq-item:first-child{ border-top:none; }
 .lq-item:hover{ background:var(--ink-25); }
 .lq-item-main{ flex:1 1 200px; min-width:0; }
@@ -6266,6 +6278,26 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .mar-task-m { flex: 1; min-width: 160px; }
 .mar-task-n { font-size: 15px; font-weight: 700; color: var(--ink-900); }
 .mar-task-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+/* MAR_ONE_SCREEN_V1 — задачи медсестры в один экран: экран берёт остаток окна
+   (dash-kpi.js fitViewport), список пациентов и работа смены прокручиваются
+   каждый в своей колонке; шапки карточек и строки на ступень плотнее, отметки
+   под палец — те же 42 px (.btn-lg). */
+.mar-fit{ display:flex; flex-direction:column; min-height:0; }
+.mar-fit > .page-head{ flex:0 0 auto; margin-bottom:12px; }
+.mar-body{ flex:1 1 auto; min-height:0; display:grid; grid-template-columns:minmax(240px, 300px) 1fr; gap:12px; align-items:stretch; }
+.mar-body > *{ min-height:0; overflow:auto; }
+.mar-fit .card-header{ padding:10px 14px; }
+.mar-fit .card-header h3{ font-size:13.5px; }
+.mar-fit .mar-task{ padding:9px 14px; }
+@media (max-width: 1100px){
+  .mar-fit{ height:auto !important; }
+  .mar-body{ grid-template-columns:1fr; }
+  .mar-body > *{ overflow:visible; }
+}
+/* GLYPH_ICON_V1 — крестик закрытия теперь значок: центрируем его в кнопке. */
+.modal-close{ display:inline-grid; place-items:center; }
+.modal-close svg{ display:block; }
+
 /* Сделанная строка несёт полосу состояния слева — на её толщину и уменьшается
    левое поле, иначе выполненные строки стоят на три пикселя правее прочих. */
 .mar-task-done { padding-left: 13px; }

@@ -1369,7 +1369,8 @@ export async function renderMarSheet(root, ctx = {}) {
                     h('td', { class: 'muted', style: { fontSize: '12.5px' } }, orderSubtitle(o) || o.name || ''));
                 for (const sl of hours) cells.appendChild(cellEl(o, sl, nowMs));
                 row.appendChild(h('div', { style: { overflowX: 'auto', marginTop: '8px' } },
-                    h('table', { class: 'table' }, h('thead', null, head), h('tbody', null, cells))));
+                    // GHOST_CLASS_V1 — .table в продукте не существует; таблица зовётся table.list.
+                    h('table', { class: 'list' }, h('thead', null, head), h('tbody', null, cells))));
             }
 
             // «По требованию» у отменённого назначения — те же события, что и в

@@ -58,9 +58,20 @@ export function h(tag, props = null, ...children) {
         else el.appendChild(document.createTextNode(tr(String(c))));
     }
     // A11Y_CENTRAL - icon-only close buttons ('x') carry no accessible name; give them one.
-    if (tag === 'button' && !el.hasAttribute('aria-label') &&
-        (el.classList.contains('modal-close') || el.textContent.trim() === '\u00d7')) {
-        el.setAttribute('aria-label', tr('Close'));
+    // GLYPH_ICON_V1 (2026-09-11) — владелец: «apply icons of the systems». Крестик
+    // закрытия был буквой «×» в шести десятках окон и чипов; знак системы один,
+    // и ставится здесь — в единственном месте, где рождается каждая кнопка:
+    // текст «×» / «✕» заменяется значком X. Имя для читалки остаётся.
+    if (tag === 'button') {
+        const glyph = String(el.textContent || '').trim();
+        const isGlyph = glyph === '\u00d7' || glyph === '\u2715';
+        if (isGlyph) {
+            while (el.firstChild) el.removeChild(el.firstChild);
+            el.appendChild(html(iconHtml('X', { size: 14 })));
+        }
+        if ((isGlyph || el.classList.contains('modal-close')) && !el.hasAttribute('aria-label')) {
+            el.setAttribute('aria-label', tr('Close'));
+        }
     }
     return el;
 }
@@ -185,7 +196,8 @@ export function Ring({ value, max = 100, size = 64, stroke = 7, color = 'var(--p
     </svg>`));
     wrap.appendChild(h('div', {
         style: { position: 'absolute', inset: 0, display: 'grid', placeItems: 'center',
-                 fontWeight: 700, color: 'var(--ink-900)', fontSize: size > 48 ? '14px' : '11px' }
+                 // TYPE_SCALE_V1 — кегли со шкалы: 13.5 / 12.5, а не 14 / 11 (те обходили страж тернаром).
+                 fontWeight: 700, color: 'var(--ink-900)', fontSize: size > 48 ? '13.5px' : '12.5px' }
     }, label ?? Math.round((value / max) * 100) + '%'));
     return wrap;
 }
