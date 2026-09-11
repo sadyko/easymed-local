@@ -3,6 +3,7 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  "список показателей типовой — сверьте по прибору": {"en":"the indicator list is a typical set — check it against the device","ru":"список показателей типовой — сверьте по прибору","uz":"ko‘rsatkichlar ro‘yxati namunaviy — qurilma bilan solishtiring"},
   // LIS_GUIDE_V1 (2026-09-11) — инструкция по подключению анализатора на вкладке
   "Как подключить анализатор": {"en":"How to connect an analyzer","ru":"Как подключить анализатор","uz":"Analizatorni qanday ulash"},
   "Свернуть": {"en":"Collapse","ru":"Свернуть","uz":"Yig‘ish"},

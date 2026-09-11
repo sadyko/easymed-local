@@ -139,6 +139,12 @@ export async function mountLabDevices(container) {
                     // чем привяжет прибор к панели.
                     d.discovered
                         ? h('div', null, Tag(tr('найден сам — проверьте модель'), { kind: 'warn' }))
+                        : null,
+                    // Список каналов модели — типовой или со скриншота, но не из
+                    // документации: Mindray протокол не публикует. Лаборант обязан
+                    // знать, что коды в выпадающем списке — ожидание, а не факт.
+                    p && p.channelsSource !== 'documented'
+                        ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('список показателей типовой — сверьте по прибору'))
                         : null),
                 h('td', { class: 'cell-mono', style: { fontSize: '12.5px' } },
                     d.transport === 'mllp'

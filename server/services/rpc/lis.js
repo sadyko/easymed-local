@@ -41,6 +41,9 @@ export function lisProfiles(db, args, user) {
     kind: p.kind,
     transports: p.transports,
     defaultPort: p.defaultPort || 2575,
+    // Откуда список каналов: экран обязан сказать лаборанту, что набор типовой,
+    // а не изображать знание протокола, которого у нас нет.
+    channelsSource: p.channelsSource || 'conventional',
     channels: p.channels,
   }));
 }
