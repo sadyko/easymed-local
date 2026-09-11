@@ -252,17 +252,23 @@ function syncModeUrl() {
 // assuming it, so the two gates can never drift apart. The .seg-lg variant
 // (admin-views.css) is the owner's «a little bit prominent»: a filled primary
 // active side and a larger hit area, still the same one control.
+// LAB_TABS_SYSTEM_V1 (2026-09-11) — владелец: «#labs … also the tabs of the
+// lab». Четыре стороны раздела были крупной пилюлей рядом с заголовком —
+// своим переключателем, каких в системе больше нет. Теперь это .tabs/.tab —
+// тот же подчёркнутый ряд со значками, каким переключается кабинет врача
+// (CABINET_TABS_SYSTEM_V1), и стоит он там же: под шапкой, отдельной строкой.
+const MODE_ICONS = { queue: 'Flask', panels: 'Layers', stats: 'Chart', devices: 'Scan' };
 function modeSwitch() {
     if (!canEditLabPanels()) return null;
-    const wrap = h('div', { class: 'segmented seg-lg', role: 'group', 'aria-label': 'Режим раздела' });
+    const wrap = h('div', { class: 'tabs lab-tabs', role: 'tablist', 'aria-label': 'Режим раздела' });
     for (const m of MODES) {
         const on = state.mode === m.key;
         wrap.appendChild(h('button', {
-            type: 'button',
-            class: 'segmented-btn' + (on ? ' on' : ''),
-            'aria-pressed': on ? 'true' : 'false',
+            type: 'button', role: 'tab',
+            class: 'tab' + (on ? ' on' : ''),
+            'aria-selected': on ? 'true' : 'false',
             onclick: () => setMode(m.key),
-        }, m.label));
+        }, Icon(MODE_ICONS[m.key] || 'Grid', { size: 15 }), h('span', { class: 'lab-tab-l' }, m.label)));
     }
     return wrap;
 }
@@ -294,10 +300,7 @@ function pageHead(subtitle, actions) {
         // minWidth 0 — a flex child with a long subtitle must be allowed to
         // shrink, or the head actions get pushed off the right edge.
         h('div', { style: { minWidth: '0' } },
-            h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' } },
-                h('h1', { class: 'page-title' }, 'Лаборатория'),
-                modeSwitch(),
-            ),
+            h('h1', { class: 'page-title' }, 'Лаборатория'),
             h('p', { class: 'page-subtitle' }, subtitle),
         ),
         h('div', { class: 'page-head-actions', style: { display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
@@ -324,19 +327,11 @@ function mount() {
     refs.totalEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
     refs.filterWrap = h('div', { class: 'segmented' });
 
-    refs.searchInp = h('input', {
-        type: 'text', placeholder: 'Поиск: пациент, тест, №…',
-        style: {
-            height: '34px', padding: '0 12px', width: '240px', maxWidth: '100%',
-            border: '1px solid var(--ink-200)', borderRadius: '9px',
-            fontSize: '12.5px', fontFamily: 'inherit',
-        },
-    });
-    let tmr = null;
-    refs.searchInp.addEventListener('input', () => {
-        clearTimeout(tmr);
-        tmr = setTimeout(() => { state.search = refs.searchInp.value; paintRows(); }, 180);
-    });
+    // LAB_TABS_SYSTEM_V1 — поле поиска из системы (.field input), а не свой
+    // прямоугольник с прибитыми размерами; задержку ввода даёт общий дебаунс
+    // поисковых полей (ui.js SEARCH_DEBOUNCE_V1), своего таймера здесь нет.
+    refs.searchInp = h('input', { type: 'search', class: 'lq-search', placeholder: 'Поиск: пациент, тест, №…', autocomplete: 'off' });
+    refs.searchInp.addEventListener('input', () => { state.search = refs.searchInp.value; paintRows(); });
 
     // LAB_PANELS_MODE_V1 — the editor gets its own host so switching modes swaps
     // one child instead of leaving the queue's card on screen behind it.
@@ -383,12 +378,12 @@ function mount() {
         // существовать — pageHead разворачивает список через ...actions, и
         // отсутствующий режим падает "actions is not iterable".
         devices: [],
+        // LAB_TABS_SYSTEM_V1 — поиск, фильтры и граница очереди переехали в шапку
+        // ОКНА очереди (как в «Моих приёмах» кабинета): они управляют списком,
+        // и стоять им над списком, а не над всем разделом.
         queue:  [
-            refs.searchInp,
-            refs.filterWrap,
-            h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => fetchAndPaint() },
-                Icon('Refresh', { size: 13 }), ' Обновить'),
-            scopeBox,   // LAB_ONE_CLINIC_V1 — null для не-администратора; h() пропускает
+            h('button', { class: 'btn btn-sm', type: 'button', onclick: () => fetchAndPaint() },
+                Icon('Refresh', { size: 13 }), ' ', tr('Обновить')),
         ],
     };
 
@@ -398,6 +393,8 @@ function mount() {
     // живут своей высотой — там редактируют и читают, а не дежурят.
     const root = h('div', { class: 'fade-in' + (mode === 'queue' ? ' lab-fit' : '') },
         pageHead(SUBTITLES[mode], ACTIONS[mode]),
+        // Вкладки раздела — под шапкой, отдельной строкой (как в кабинете).
+        modeSwitch(),
         // LIS_INGEST_V1 — «Анализаторы» рисуются в тот же контейнер, что и
         // «Панели» (paintMode монтирует их в refs.panelsHost): без этой ветки
         // вкладка открывалась бы пустой очередью.
@@ -406,6 +403,12 @@ function mount() {
             // LAB_ONE_WINDOW_V1 — очередь лежит в ОДНОМ рабочем окне, как всё
             // остальное в продукте; пациентов внутри разделяет линия.
             : h('div', { class: 'card lq-win' },
+                h('div', { class: 'card-header lq-head-row' },
+                    h('div', { class: 'lq-tools' },
+                        h('div', { class: 'field lq-field' }, refs.searchInp),
+                        refs.filterWrap,
+                        scopeBox),   // LAB_ONE_CLINIC_V1 — null для не-администратора; h() пропускает
+                    refs.totalEl),
                 refs.list,
                 refs.emptyEl,
             ),
@@ -815,7 +818,7 @@ function paintRows() {
             || accession(r).toLowerCase().includes(q);
     });
 
-    if (refs.totalEl) refs.totalEl.textContent = String(visible.length);
+    if (refs.totalEl) refs.totalEl.textContent = trf('показано {n} из {all}', { n: visible.length, all: state.rows.length });
     if (!visible.length) { refs.emptyEl.style.display = ''; return; }
     refs.emptyEl.style.display = 'none';
 

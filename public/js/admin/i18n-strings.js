@@ -7490,6 +7490,7 @@ export const STRINGS = {
   "Отметка снята.": {"en":"The mark has been removed.","ru":"Отметка снята.","uz":"Belgi olib tashlandi."},
   "Выполнено: {name}": {"en":"Done: {name}","ru":"Выполнено: {name}","uz":"Bajarildi: {name}"},
   "Амбулаторно": {"en":"Outpatient","ru":"Амбулаторно","uz":"Ambulator"},
+  "показано {n} из {all}": {"en":"showing {n} of {all}","ru":"показано {n} из {all}","uz":"{all} dan {n} koʻrsatilgan"},
   "Постройте клинику": {"en":"Build your clinic","ru":"Постройте клинику","uz":"Klinikangizni quring"},
   "Начните с первого этажа, затем добавьте отделения, кабинеты, палаты и врачей.": {"en":"Start with the first floor, then add departments, rooms, wards and doctors.","ru":"Начните с первого этажа, затем добавьте отделения, кабинеты, палаты и врачей.","uz":"Birinchi qavatdan boshlang, keyin boʻlimlar, xonalar, palatalar va shifokorlarni qoʻshing."},
   "Создать первый этаж": {"en":"Create the first floor","ru":"Создать первый этаж","uz":"Birinchi qavatni yaratish"},

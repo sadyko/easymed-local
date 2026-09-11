@@ -119,7 +119,10 @@ const hasClass = (n, c) => String(n.className || '').split(/\s+/).includes(c);
 // The switch is identified by its accessible name, not by '.segmented': the
 // queue's own status filter is a .segmented too, and asserting on the class
 // would pass for the wrong control.
-const modeSwitch = (root) => walk(root).find((n) => hasClass(n, 'segmented') && n.attrs['aria-label'] === 'Режим раздела');
+// LAB_TABS_SYSTEM_V1 — переключатель режима это системные вкладки (.tabs), а
+// не пилюля; узнаётся по имени, как и раньше.
+const modeSwitch = (root) => walk(root).find((n) => hasClass(n, 'tabs') && n.attrs['aria-label'] === 'Режим раздела');
+const labelOf = (b) => textOf(b).replace(/<svg[\s\S]*?<\/svg>/g, '').trim();
 const modeButtons = (root) => { const sw = modeSwitch(root); return sw ? findAllButtons(sw) : []; };
 
 // A toast node, so ui.js reuses it instead of appending to the fake body. Its
@@ -254,10 +257,10 @@ test('любой доступ к Лаборатории — включая чт�
   // живёт здесь же, а не в Настройках, по тому же решению владельца, что увело
   // сюда «Панели». Список сверяется целиком и по порядку: новая сторона обязана
   // быть решением, а не приехать незамеченной.
-  assert.deepStrictEqual(btns.map(textOf), ['Очередь', 'Панели', 'Статистика', 'Анализаторы'], 'четырёхсторонний переключатель в шапке');
+  assert.deepStrictEqual(btns.map(labelOf), ['Очередь', 'Панели', 'Статистика', 'Анализаторы'], 'четыре вкладки раздела');
   assert.ok(btns[0].className.includes('on'), 'по умолчанию — Очередь');
-  assert.strictEqual(btns[0].attrs['aria-pressed'], 'true');
-  assert.strictEqual(btns[1].attrs['aria-pressed'], 'false');
+  assert.strictEqual(btns[0].attrs['aria-selected'], 'true');
+  assert.strictEqual(btns[1].attrs['aria-selected'], 'false');
   assert.ok(textOf(root).includes('Открытые'), 'фильтры очереди видны в режиме очереди');
 
   btns[1].click();
@@ -267,7 +270,7 @@ test('любой доступ к Лаборатории — включая чт�
   assert.ok(!textOf(root).includes('Открытые'), 'фильтры очереди убраны, а не оставлены бесполезными');
   const after = modeButtons(root);
   assert.ok(after[1].className.includes('on'), '«Панели» подсвечены');
-  assert.strictEqual(after[1].attrs['aria-pressed'], 'true');
+  assert.strictEqual(after[1].attrs['aria-selected'], 'true');
 
   // и обратно — очередь возвращается целиком
   after[0].click();
@@ -335,18 +338,22 @@ test('переключатель заметный: seg-lg на переключ�
 
   const sw = modeSwitch(root);
   assert.ok(sw, 'переключатель на месте');
-  assert.ok(hasClass(sw, 'seg-lg'), 'режимный переключатель — крупный вариант: ' + sw.className);
-  const smallSegments = walk(root).filter((n) => hasClass(n, 'segmented') && n !== sw);
-  assert.ok(smallSegments.length >= 1, 'фильтр очереди — тоже .segmented (иначе сравнивать не с чем)');
+  // LAB_TABS_SYSTEM_V1 — режим раздела переключают СИСТЕМНЫЕ вкладки (.tab с
+  // подчёркиванием, ровно одна .on), а фильтры очереди остаются мелкими
+  // сегментами: две разные работы — два разных органа управления.
+  const tabs = findAllButtons(sw);
+  assert.ok(tabs.length >= 3 && tabs.every((b) => hasClass(b, 'tab')), 'вкладки раздела — .tab');
+  assert.strictEqual(tabs.filter((b) => hasClass(b, 'on')).length, 1, 'ровно одна вкладка открыта');
+  const smallSegments = walk(root).filter((n) => hasClass(n, 'segmented'));
+  assert.ok(smallSegments.length >= 1, 'фильтр очереди — .segmented (иначе сравнивать не с чем)');
   for (const s of smallSegments) assert.ok(!hasClass(s, 'seg-lg'), 'фильтры очереди остаются мелкими');
 
-  // Класс без правила — невидимая «заметность»: разметка получила seg-lg, а
-  // браузер рисовал бы обычную мелкую пилюлю. admin-views.css обязан объявлять
-  // вариант, и его активная сторона — заливка primary, не белая карточка.
+  // Класс без правила — невидимый ряд: admin-views.css обязан объявлять .tabs и
+  // подчёркивание открытой вкладки primary — то, чем вкладки узнаются во всём
+  // продукте.
   const css = fs.readFileSync(path.resolve(HERE, '..', '..', '..', 'css', 'admin-views.css'), 'utf8');
-  assert.match(css, /\.segmented\.seg-lg\s*\{/, 'вариант .seg-lg объявлен в admin-views.css');
-  assert.match(css, /\.segmented\.seg-lg button\.on\s*\{[^}]*var\(--primary-600\)/,
-    'активная сторона крупного варианта залита primary — то самое «a little bit prominent»');
+  assert.match(css, /\.tabs\s*\{/, 'ряд вкладок объявлен в admin-views.css');
+  assert.match(css, /\.tab\.on\s*\{[^}]*var\(--primary-600\)/, 'открытая вкладка подчёркнута primary');
 });
 
 // LAB_HEAD_ONE_V1 — the owner's two screenshots showed two DIFFERENT heads:
@@ -369,14 +376,18 @@ test('одна шапка на все режимы: заголовок, рядо
 
     const sw = modeSwitch(root);
     assert.ok(sw, name + ': переключатель на месте');
-    assert.ok(hasClass(sw, 'seg-lg'), name + ': тот же крупный вариант');
+    assert.ok(hasClass(sw, 'tabs'), name + ': те же системные вкладки');
 
     // The switch stands NEXT TO THE TITLE — same row, same parent — in BOTH
     // modes, never parked in the right-hand actions block (that is exactly
     // where the panels mode used to drift it to).
+    // LAB_TABS_SYSTEM_V1 — вкладки стоят ПОД шапкой отдельной строкой, как в
+    // кабинете врача, в ОБОИХ режимах — не в правом блоке действий шапки.
+    const head = walk(root).find((n) => hasClass(n, 'page-head'));
     const swParent = parentOf(root, sw);
-    assert.ok(swParent && swParent.children.some((c) => c.tagName === 'H1'),
-      name + ': переключатель в одном ряду с заголовком');
+    assert.ok(swParent && swParent.children.includes(head)
+      && swParent.children.indexOf(sw) === swParent.children.indexOf(head) + 1,
+      name + ': вкладки сразу под шапкой');
     const actions = walk(root).find((n) => hasClass(n, 'page-head-actions'));
     assert.ok(!actions || !walk(actions).includes(sw), name + ': и НЕ в блоке действий справа');
 
@@ -490,7 +501,7 @@ test('режим «Статистика»: чипы периода (по умо�
 
   const btns = modeButtons(root);
   assert.ok(btns[2].className.includes('on'), '«Статистика» подсвечена');
-  assert.strictEqual(btns[2].attrs['aria-pressed'], 'true');
+  assert.strictEqual(btns[2].attrs['aria-selected'], 'true');
   assert.ok(!textOf(root).includes('Открытые'), 'фильтров очереди нет — они про очередь');
   assert.ok(!textOf(root).includes('Из каталога'), 'редактора панелей нет');
 
