@@ -67,7 +67,7 @@ export async function mountLabPanels(container) {
     // are clinical shorthand and every one of them would be underlined red.
     const panelSearch = h('input', {
         type: 'search', name: 'lab-panel-search', 'aria-label': 'Поиск панели', spellcheck: 'false',
-        placeholder: 'Поиск панели…', style: { width: '100%', marginBottom: '8px', fontSize: '12.5px' },
+        placeholder: 'Поиск панели…', style: { width: '100%' },
         oninput: (e) => { state.panelQuery = e.target.value; paintList(); },
     });
     // minWidth 0 — this is a grid child holding a wide analyte table; without it
@@ -75,27 +75,29 @@ export async function mountLabPanels(container) {
     // page scrolls sideways instead of the table inside its own scroller.
     const editorEl = h('div', { class: 'card', style: { minHeight: '320px', minWidth: '0' } });
 
-    container.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '320px 1fr', gap: '16px', alignItems: 'start' } },
-        h('div', { class: 'card', style: { padding: '10px', position: 'sticky', top: '88px' } },
-            h('div', { class: 'row', style: { gap: '6px', marginBottom: '10px' } },
-                // LAB_TEMPLATES_V1 — «Из каталога» is back, now reading the
-                // catalogue seeded by migrations 050/051 instead of the cloud
-                // medcore gateway this offline build cannot reach.
-                h('button', { class: 'btn btn-primary btn-sm', type: 'button', style: { flex: 1 }, onclick: () => openCatalog() },
+    // LAB_COMPACT_V1 — владелец: «the panels grid and spacing and location of
+    // the objects». Список панелей — карточка с шапкой: имя раздела и два тихих
+    // действия справа; главное действие «Из каталога» — одной кнопкой во всю
+    // ширину над поиском; поиск — системное поле. Редактор — рядом, зазор 12 px.
+    container.appendChild(h('div', { class: 'lp-grid' },
+        h('div', { class: 'card lp-list', style: { position: 'sticky', top: '88px' } },
+            h('div', { class: 'card-header' },
+                h('h3', null, Icon('Layers', { size: 15 }), ' ', 'Панели'),
+                h('div', { class: 'dash-card-acts' },
+                    h('button', { class: 'btn btn-ghost btn-sm dash-act', type: 'button', title: 'Создать пустую панель вручную', onclick: () => newBlankPanel() },
+                        Icon('Plus', { size: 13 }), ' Пустая'),
+                    h('button', {
+                        class: 'btn btn-ghost btn-sm dash-act btn-icon',
+                        type: 'button',
+                        title: 'Создать копию выбранной панели',
+                        'aria-label': 'Создать копию выбранной панели',
+                        onclick: () => duplicatePanel(),
+                    }, Icon('Repeat', { size: 13 })))),
+            h('div', { class: 'lp-list-body' },
+                h('button', { class: 'btn btn-primary btn-sm', type: 'button', style: { width: '100%', marginBottom: '8px' }, onclick: () => openCatalog() },
                     Icon('Layers', { size: 13 }), ' Из каталога'),
-                h('button', { class: 'btn btn-outline btn-sm', type: 'button', title: 'Создать пустую панель вручную', onclick: () => newBlankPanel() },
-                    Icon('Plus', { size: 13 }), ' Пустая'),
-                h('button', {
-                    class: 'btn btn-outline btn-sm',
-                    type: 'button',
-                    title: 'Создать копию выбранной панели',
-                    // Icon-only: the title attribute is a tooltip, not an
-                    // accessible name, so name it explicitly.
-                    'aria-label': 'Создать копию выбранной панели',
-                    onclick: () => duplicatePanel(),
-                }, Icon('Repeat', { size: 13 }))),
-            panelSearch,
-            listEl),
+                h('div', { class: 'field' }, panelSearch),
+                listEl)),
         editorEl,
     ));
 

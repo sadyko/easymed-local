@@ -58,18 +58,25 @@ export async function mountLabDevices(container) {
 
     const state = { devices: [], profiles: [], messages: [], recent: [], loadError: null };
 
-    const devicesCard = h('div', { class: 'card', style: { marginBottom: '16px' } });
-    const formCard = h('div', { class: 'card', style: { marginBottom: '16px', display: 'none' } });
-    const liveCard = h('div', { class: 'card', style: { marginBottom: '16px' } });
-    const trayCard = h('div', { class: 'card', style: { marginBottom: '16px' } });
+    const devicesCard = h('div', { class: 'card' });
+    const formCard = h('div', { class: 'card', style: { display: 'none' } });
+    const liveCard = h('div', { class: 'card' });
+    const trayCard = h('div', { class: 'card' });
     const guideCard = h('div', { class: 'card' });
+    // LAB_COMPACT_V1 — владелец: «too much noise and text … fix the listings».
+    // Карточки — сеткой с общим зазором: приборы во всю ширину, «последние
+    // результаты» и «необработанные» рядом, инструкция — свёрнутой внизу.
     // appendChild, а не append: так во всём остальном коде, и тестовый DOM
     // (lab-panels-mode.test.mjs) реализует именно его.
-    container.appendChild(devicesCard);
-    container.appendChild(formCard);
-    container.appendChild(liveCard);
-    container.appendChild(trayCard);
-    container.appendChild(guideCard);
+    const grid = h('div', { class: 'ld' });
+    grid.appendChild(devicesCard);
+    grid.appendChild(formCard);
+    const pair = h('div', { class: 'ld-grid' });
+    pair.appendChild(liveCard);
+    pair.appendChild(trayCard);
+    grid.appendChild(pair);
+    grid.appendChild(guideCard);
+    container.appendChild(grid);
     paintGuide();
 
     // ---------- загрузка ----------
@@ -113,10 +120,8 @@ export async function mountLabDevices(container) {
             return;
         }
         if (!state.devices.length) {
-            devicesCard.appendChild(h('div', { class: 'empty', style: { padding: '34px 20px' } },
-                h('p', null, tr('Приборов пока нет.')),
-                h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
-                    tr('Заводить прибор заранее не нужно: запустите пробу на анализаторе, и он появится здесь сам. Дальше — выберите его у панели в «Панелях» и подтвердите поля показателей.'))));
+            devicesCard.appendChild(h('div', { class: 'empty', style: { padding: '26px 20px' } },
+                tr('Приборов пока нет — запустите пробу на анализаторе, и он появится здесь сам.')));
             return;
         }
 
@@ -144,23 +149,18 @@ export async function mountLabDevices(container) {
                     ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, live.text)
                     : Tag(live.text, { kind: live.kind })),
                 h('td', { style: { textAlign: 'right' } },
-                    h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => openForm(d) }, tr('Изменить')))));
+                    h('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => openForm(d) }, Icon('Edit', { size: 13 }), ' ', tr('Изменить')))));
         }
-        devicesCard.appendChild(h('table', { class: 'table' },
+        devicesCard.appendChild(h('table', { class: 'list' },
             h('thead', null, h('tr', null,
                 h('th', null, tr('Название')), h('th', null, tr('Модель')), h('th', null, tr('Подключение')),
-                h('th', null, tr('Состояние')), h('th', null, tr('Связь')), h('th', null, ''))),
+                h('th', null, tr('Состояние')),
+                // LAB_COMPACT_V1 — объяснение «что значит на связи» — подсказкой к
+                // колонке, а не абзацем под списком.
+                h('th', { title: tr('«На связи» — прислал результат за последние 5 минут: прибор соединяется только на время передачи.') }, tr('Связь')),
+                h('th', null, ''))),
             tb));
 
-        devicesCard.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '10px' } },
-            tr('Связь с анализатором не постоянная: он соединяется, отдаёт пробу и разъединяется. Поэтому «на связи» означает «присылал результат за последние 5 минут», а не горящую лампочку.')));
-
-        const idle = state.devices.filter((d) => !d.last_seen_at);
-        if (idle.length) {
-            devicesCard.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } },
-                trf('Приборы без единого сообщения ({list}) заведены руками и, возможно, не существуют. Такой прибор можно удалить: «Изменить» → «Удалить».',
-                    { list: idle.map((d) => d.name).join(', ') })));
-        }
     }
 
     // ---------- живая лента ----------
@@ -173,15 +173,12 @@ export async function mountLabDevices(container) {
     function paintLive() {
         clear(liveCard);
         liveCard.appendChild(h('div', { class: 'card-header' },
-            h('h3', null, tr('Что приходит с приборов')),
+            h('h3', null, tr('Последние результаты')),
             h('span', { class: 'grow' }),
             h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('обновляется само'))));
 
         if (!state.recent.length) {
-            liveCard.appendChild(h('div', { class: 'empty', style: { padding: '30px 20px' } },
-                h('p', null, tr('Приборы пока ничего не присылали.')),
-                h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
-                    tr('Запустите пробу на анализаторе — он появится здесь сам, заводить его заранее не нужно.'))));
+            liveCard.appendChild(h('div', { class: 'empty', style: { padding: '26px 20px' } }, tr('Приборы пока ничего не присылали.')));
             return;
         }
 
@@ -214,10 +211,10 @@ export async function mountLabDevices(container) {
                     kind: r.status === 'applied' ? 'success' : (r.status === 'superseded' ? 'warn' : ''),
                 }))));
         }
-        liveCard.appendChild(h('table', { class: 'table' },
+        liveCard.appendChild(h('table', { class: 'list' },
             h('thead', null, h('tr', null,
                 h('th', null, tr('Получено')), h('th', null, tr('Прибор')), h('th', null, tr('Номер пробы')),
-                h('th', null, tr('Пациент')), h('th', null, tr('Значения')), h('th', null, tr('Что случилось')))),
+                h('th', null, tr('Пациент')), h('th', null, tr('Значения')), h('th', null, tr('Состояние')))),
             tb));
     }
 
@@ -380,10 +377,7 @@ export async function mountLabDevices(container) {
                 state.messages.length ? trf('ждут разбора: {n}', { n: state.messages.length }) : tr('пусто'))));
 
         if (!state.messages.length) {
-            trayCard.appendChild(h('div', { class: 'empty', style: { padding: '30px 20px' } },
-                h('p', null, tr('Все пришедшие результаты разложены по бланкам.')),
-                h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
-                    tr('Сюда попадает то, что не удалось применить: неизвестный номер пробы, неподтверждённое поле, результат по уже выданному анализу. Ничего не теряется.'))));
+            trayCard.appendChild(h('div', { class: 'empty', style: { padding: '26px 20px' } }, tr('Все результаты разложены по бланкам.')));
             return;
         }
 
@@ -412,9 +406,9 @@ export async function mountLabDevices(container) {
                     ' ',
                     h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => dismiss(m) }, tr('Отклонить')))));
         }
-        trayCard.appendChild(h('table', { class: 'table' },
+        trayCard.appendChild(h('table', { class: 'list' },
             h('thead', null, h('tr', null,
-                h('th', null, tr('Получено')), h('th', null, tr('Номер пробы')), h('th', null, tr('Что случилось')),
+                h('th', null, tr('Получено')), h('th', null, tr('Номер пробы')), h('th', null, tr('Состояние')),
                 h('th', null, tr('Подробности')), h('th', null, ''))),
             tb));
     }

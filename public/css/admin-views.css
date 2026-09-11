@@ -3645,7 +3645,7 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .lab-fit > .lq-win > .lq-queue{ flex:1 1 auto; min-height:0; overflow:auto; }
 @media (max-width: 1100px){ .lab-fit{ height:auto !important; } .lab-fit > .lq-win > .lq-queue{ overflow:visible; } }
 .lq-card{
-  background:var(--white); padding:10px 16px 8px;
+  background:var(--white); padding:8px 14px 6px;
   border-top:1px solid var(--ink-200);
   transition:background var(--dur-2) var(--ease-out);
 }
@@ -3660,16 +3660,18 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 /* ---- 1. ЧЬЯ ПРОБА ---- */
 .lq-head{ display:flex; align-items:flex-start; gap:10px; flex-wrap:wrap; }
 /* Кружок пациента — как строка стационара (ADM_ROW_CALM_V1): 34 px в его оттенке. */
-.lq-av{ width:34px; height:34px; border-radius:999px; flex:0 0 34px; display:grid; place-items:center;
+.lq-av{ width:28px; height:28px; border-radius:999px; flex:0 0 28px; display:grid; place-items:center;
   font-weight:700; font-size:12.5px; background:var(--p-bg, var(--primary-50)); color:var(--p-fg, var(--primary-700)); }
 .lq-who{ flex:1 1 220px; min-width:0; }
 /* Имя — самое крупное на строке, но величиной как в стационаре: 15 px, а не 17. */
-.lq-title{ font-size:15px; font-weight:700; color:var(--ink-900); line-height:1.25; overflow-wrap:anywhere; }
+/* LAB_COMPACT_V1 — владелец: «text will be small and list more appealing». Имя 13.5,
+   номер и факты 12.5: строка читается одной строкой, а не абзацем. */
+.lq-title{ font-size:13.5px; font-weight:700; color:var(--ink-900); line-height:1.25; overflow-wrap:anywhere; }
 /* Факты о человеке — один ряд текста, разделённый точками, а не четыре
    одинаковые таблетки: пол, возраст и дата рождения не равновелики, и
    таблетка вокруг каждого делала их равновеликими. */
 .lq-facts{ display:flex; flex-wrap:wrap; align-items:baseline; gap:0 6px; margin-top:2px; }
-.lq-fact{ font-size:12.5px; font-weight:600; color:var(--ink-700); white-space:nowrap; }
+.lq-fact{ font-size:12.5px; font-weight:600; color:var(--ink-700); white-space:nowrap; }   /* главные факты тяжелее второстепенных (.lq-fact-soft 500) */
 .lq-fact-soft{ font-weight:500; color:var(--ink-500); }
 .lq-fact + .lq-fact::before{ content:"\00B7"; color:var(--ink-300); margin-right:6px; font-weight:600; }
 /* Метки-факты: номер карты, чужой филиал, критические значения. */
@@ -3692,10 +3694,10 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .lq-acc:hover{ border-color:var(--ink-300); color:var(--ink-700); background:#fff; }
 .lq-acc:focus-visible{ outline:2px solid var(--primary-500); outline-offset:2px; }
 .lq-acc .k{ font-size:12.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-400); }
-.lq-acc .v{ font-size:13.5px; font-weight:700; font-family:var(--font-mono); color:var(--ink-700); letter-spacing:.3px; user-select:text; }
+.lq-acc .v{ font-size:12.5px; font-weight:700; font-family:var(--font-mono); color:var(--ink-700); letter-spacing:.3px; user-select:text; }
 
 /* ---- 3. СОСТОЯНИЕ + 4. ДЕЙСТВИЕ ---- */
-.lq-status{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:8px; padding-top:8px; border-top:1px solid var(--ink-50); }
+.lq-status{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:6px; padding-top:6px; border-top:1px solid var(--ink-50); }
 .lq-gap{ flex:1 1 auto; }
 .lq-do{ display:flex; gap:6px; flex-wrap:wrap; }
 .lq-prog{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
@@ -3735,12 +3737,12 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .lq-flag--critical{ background:var(--crit-50); color:var(--crit-700); border-color:#fecaca; font-weight:700; }
 
 /* ---- 2. ЧТО В ПРОБЕ ---- */
-.lq-list{ margin-top:4px; }
-.lq-item{ display:flex; align-items:center; gap:10px; padding:6px 6px; border-radius:9px; border-top:1px solid var(--ink-50); flex-wrap:wrap; }
+.lq-list{ margin-top:2px; }
+.lq-item{ display:flex; align-items:center; gap:10px; padding:4px 6px; border-radius:9px; border-top:1px solid var(--ink-50); flex-wrap:wrap; }
 .lq-item:first-child{ border-top:none; }
 .lq-item:hover{ background:var(--ink-25); }
 .lq-item-main{ flex:1 1 200px; min-width:0; }
-.lq-name{ font-size:13.5px; font-weight:600; color:var(--ink-800); overflow-wrap:anywhere; }
+.lq-name{ font-size:12.5px; font-weight:600; color:var(--ink-800); overflow-wrap:anywhere; }
 .lq-type{ display:flex; flex-wrap:wrap; gap:0 6px; font-size:12.5px; color:var(--ink-400); margin-top:1px; }
 .lq-type > span + span::before{ content:"\00B7"; margin-right:6px; }
 .lq-collected{ white-space:nowrap; }
@@ -6881,3 +6883,22 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .wb-bed__type{ font-size:12.5px; color:var(--ink-500); margin-top:auto; }
 @media (max-width: 1100px){ .wb-fit{ height:auto !important; } .wb-board{ overflow:visible; } }
 /* ============================ end WARD_BOARD_V3 ============================ */
+
+/* ============================ LAB_COMPACT_V1 (2026-09-11) — «Анализаторы» и «Панели» ============================
+   Владелец: «too much noise and text … fix the listings … the panels grid
+   and spacing and location of the objects». Анализаторы: карточки сеткой,
+   списки — table.list, объяснения ушли в подсказки. Панели: список слева —
+   карточка с шапкой и полем поиска, редактор справа, зазоры 12 px. */
+.ld{ display:grid; gap:12px; }
+.ld-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px; align-items:start; }
+.ld .card-header{ padding:10px 14px; }
+.ld table.list td, .ld table.list th{ font-size:12.5px; }
+.lp-grid{ display:grid; grid-template-columns:300px minmax(0,1fr); gap:12px; align-items:start; }
+.lp-list{ display:flex; flex-direction:column; }
+.lp-list > .card-header{ padding:10px 12px; }
+.lp-list-body{ padding:10px; }
+.lp-list-body .field{ margin:0 0 8px; }
+.lp-list-body .nav-item{ font-size:13.5px; }
+.lp-tbl{ min-width:720px; }
+@media (max-width: 1100px){ .ld-grid{ grid-template-columns:1fr; } .lp-grid{ grid-template-columns:1fr; } }
+/* ============================ end LAB_COMPACT_V1 ============================ */
