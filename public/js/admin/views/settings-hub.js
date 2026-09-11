@@ -264,10 +264,12 @@ const GROUPS = [
         title: 'Помещения', icon: 'Building', color: { bg: '#e8f6ed', fg: '#2e8b52' },
         items: [
             { label: 'Помещения', desc: 'Этажи, кабинеты и палаты в одном месте: койки, цены, врачи', icon: 'Building', live: true, action: nav('rooms-setup') },
-            { label: 'Этажи',    desc: 'Этажи и уровни здания',                    icon: 'Layers', live: true, action: () => openSection('floors') },
-            { label: 'Кабинеты', desc: 'Кабинеты приёма и процедурные по этажам',  icon: 'Grid',   live: true, action: () => openSection('rooms') },
-            { label: 'Палаты',   desc: 'Палаты стационара',                        icon: 'Bed',    live: true, action: () => openSection('wards') },
-            { label: 'Кровати',  desc: 'Койки по палатам',                         icon: 'Bed',    live: true, action: () => openSection('beds') },
+            // ROOMS_ONE_ENTRANCE_V1 (2026-09-11) — четыре старых редактора (Этажи,
+            // Кабинеты, Палаты, Кровати) из меню убраны: «Помещения» делает всё то же
+            // в одном окне и на плане, а два входа в одно и то же читались как два
+            // разных раздела. Сами редакторы (openSection) целы — по прямой ссылке
+            // #settings/<section> они открываются, это запасной ход, а не парадный.
+            // Решение владельца: «go ahead» на «hide, not delete».
         ],
     },
     {
