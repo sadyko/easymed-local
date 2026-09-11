@@ -9,14 +9,23 @@ import { startLisListeners } from '../../lis/index.js';
 import { ingestMessage } from '../../lis/ingest.js';
 import { resolveMessage } from '../../lis/inbox.js';
 import { LAB_SECTION_ROLES } from '../../db/schema-registry.js';
+import { hasAnyRole } from '../roles.js';   // ЭФФЕКТИВНЫЕ роли, как в lab-stats.js — не голая строка user.role
 
 class LisError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
 }
 
-/** Тот же круг ролей, что правит панели: лаборатория настраивает свою технику. */
+/**
+ * Тот же круг ролей, что правит панели: лаборатория настраивает свою технику.
+ *
+ * hasAnyRole, а не LAB_SECTION_ROLES.includes(user.role): у сотрудника бывает
+ * несколько ролей (roles.js, effectiveRoles), и лаборант с основной ролью
+ * «медсестра» и дополнительной «лаборатория» по голой строке user.role сюда не
+ * проходил — получал 403 на список моделей и не мог завести прибор. Ровно так
+ * это уже решено в lab-stats.js: одна дверь для всех лабораторных RPC.
+ */
 function guard(user) {
-  if (!user || !LAB_SECTION_ROLES.includes(user.role)) throw new LisError('Недостаточно прав', 403);
+  if (!hasAnyRole(user, LAB_SECTION_ROLES)) throw new LisError('Недостаточно прав', 403);
 }
 
 /**
