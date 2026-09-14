@@ -488,6 +488,9 @@ function chargeAdministration(db, order, administration, user) {
           doctor_id: order.prescribed_by,
           billable: true,
           note: `${doseNotePrefix(administration.id)}${order.name}${order.dose ? ` · ${order.dose}` : ''}`,
+          // HOLDINGS_V1 — the nurse's own stock or the ward's department
+          // first; the warehouse only when neither holds the dose.
+          prefer_holdings: true,
         }, user);
         stockStatus = worseStock(stockStatus, 'ok');
         basis = q.basis;
@@ -530,6 +533,7 @@ function chargeAdministration(db, order, administration, user) {
         doctor_id: order.prescribed_by,
         billable: !!item.billable,
         note: `${extraNotePrefix(administration.id, item.product_id)}${item.name || 'расход сверх дозы'}`,
+        prefer_holdings: true,   // HOLDINGS_V1
       }, user);
       stockStatus = worseStock(stockStatus, 'ok');
     } catch (e) {

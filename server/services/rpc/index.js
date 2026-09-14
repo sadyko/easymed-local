@@ -39,6 +39,7 @@ import { setAdmissionDate } from './admission-date.js';   // ADMISSION_DATE_EDIT
 import { deleteService, serviceDeleteCheck } from './catalog.js';   // SERVICE_DELETE_V1
 import { serviceSave } from './service-save.js';   // SERVICE_EDITOR_V1
 import { servicePriceQuote } from './service-price-quote.js';   // VISIT_TIER_PRICING_V1
+import { holdingsList, dispenseFromHolding, voidHoldingDispense, outpatientsToday, visitItems } from './holdings.js';   // HOLDINGS_V1
 import { saveLabResults } from './lab.js';   // LAB_SAVE_BATCH_V1
 import { labUsageStats } from './lab-stats.js';   // LAB_STATS_V1
 import { roomAssignDoctors } from './rooms.js';   // ROOMS_SETUP_V1
@@ -114,6 +115,13 @@ export const RPC = {
   approve_requisition_and_issue: (db, args, user) => approveRequisitionAndIssue(db, args, user),    // PROC_P2 — issue a requisition from the pool
   post_stock_count:              (db, args, user) => postStockCount(db, args, user),                // PROC_P2 — reconcile a physical count
   issue_stock_lines:             (db, args, user) => issueStockLines(db, args, user),               // PROCUREMENT_REDESIGN_V1 — Выдача со склада
+  // HOLDINGS_V1 — что выдано со склада медсестре / в кабинет / в отделение и
+  // ещё не израсходовано; выдача пациенту с рук, а не со склада.
+  holdings_list:                 (db, args, user) => holdingsList(db, args, user),
+  dispense_from_holding:         (db, args, user) => dispenseFromHolding(db, args, user),
+  void_holding_dispense:         (db, args, user) => voidHoldingDispense(db, args, user),
+  outpatients_today:             (db, args, user) => outpatientsToday(db, args, user),
+  visit_items:                   (db, args, user) => visitItems(db, args, user),
   import_products_excel:         (db, args, user) => importProductsExcel(db, args, user),           // PROCUREMENT_REDESIGN_V1 — Импорт из Excel
   reports_overview:         (db, args, user) => reportsOverview(db, args, user),
   run_report:               (db, args, user) => runReport(db, args, user),

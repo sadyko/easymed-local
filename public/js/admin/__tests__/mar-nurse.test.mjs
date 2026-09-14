@@ -80,7 +80,9 @@ globalThis.document = {
 };
 // I18N_LOCALE_PIN_V1 — экран рисуется по-русски независимо от локали машины.
 globalThis.localStorage = { getItem: (k) => (k === 'admin.lang' ? 'ru' : null), setItem() {}, removeItem() {}, clear() {} };
-globalThis.window = { location: { hostname: 'localhost' }, localStorage: globalThis.localStorage, addEventListener() {}, open: () => null };
+globalThis.window = { location: { hostname: 'localhost' }, localStorage: globalThis.localStorage, addEventListener() {}, open: () => null,
+    // MAR_OUTPATIENTS_V1 — the signed-in nurse (holdings «Мои запасы» are hers) and a confirm() that says yes.
+    easymed: { state: { user: { id: 5, role: 'nurse', full_name: 'Медсестра Ирина' } } }, confirm: () => true };
 globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.requestAnimationFrame = (fn) => fn();
 
@@ -240,6 +242,20 @@ const MEALS = {
 
 let rpcCalls = [];
 let dbCalls = [];
+// MAR_OUTPATIENTS_V1 — today's outpatient visits, what holders have, what a visit got.
+const OUTPATIENTS = { date: TODAY, visits: [
+    { id: 301, visit_date: TODAY + 'T05:30:00Z', status: 'arrived', patient_id: 21, doctor_id: 8, patient_name: 'Юсупова Малика', mrn: 'EM-21', allergies: 'Пенициллин', doctor_name: 'Врач Азиз', service_count: 1, item_count: 0 },
+    { id: 302, visit_date: TODAY + 'T06:00:00Z', status: 'scheduled', patient_id: 22, doctor_id: null, patient_name: 'Рахимов Бобур', mrn: 'EM-22', allergies: '', doctor_name: null, service_count: 0, item_count: 2 },
+] };
+let HOLDINGS = { holdings: [
+    { holder_type: 'staff', holder_id: 5, holder_name: 'Медсестра Ирина', product_id: 40, product_name: 'Парацетамол', base_unit: 'уп', consumption_unit: 'таб', consumption_factor: 10, sale_price: 5000, is_drug: true, active: true, qty_base: 2, qty_units: 20 },
+    { holder_type: 'staff', holder_id: 6, holder_name: 'Другая медсестра', product_id: 40, product_name: 'Парацетамол', base_unit: 'уп', consumption_unit: 'таб', consumption_factor: 10, sale_price: 5000, is_drug: true, active: true, qty_base: 1, qty_units: 10 },
+    { holder_type: 'room', holder_id: 7, holder_name: 'Процедурный', product_id: 41, product_name: 'Шприц 5 мл', base_unit: 'шт', consumption_unit: '', consumption_factor: 1, sale_price: 1500, is_drug: false, active: true, qty_base: 50, qty_units: 50 },
+] };
+let VISIT_ITEMS = { 301: [], 302: [
+    { id: 900, product_id: 40, product_name: 'Парацетамол', unit: 'таб', quantity: 2, unit_price: 500, total: 1000, invoiced: false, from_holding: true, created_by_name: 'Медсестра Ирина' },
+    { id: 901, product_id: 41, product_name: 'Шприц 5 мл', unit: 'шт', quantity: 1, unit_price: 1500, total: 1500, invoiced: true, from_holding: false, created_by_name: 'Кладовщик' },
+] };
 let markWarnings = [];
 let markAnswer = () => ({ ok: true, data: { administration: { id: 900 }, already: false, warnings: markWarnings } });
 let unmarkWarnings = [];
@@ -274,6 +290,15 @@ globalThis.fetch = async (url, opts = {}) => {
             const a = unmarkAnswer();
             return a.ok ? ok(a.data) : fail(a.message);
         }
+        if (name === 'outpatients_today') return ok(OUTPATIENTS);
+        if (name === 'holdings_list') return ok(HOLDINGS);
+        if (name === 'visit_items') return ok({ items: VISIT_ITEMS[body.visit_id] || [] });
+        if (name === 'dispense_from_holding') {
+            if (body.quantity > 20) return fail('Недостаточно на руках: Парацетамол — есть 20 таб');
+            (VISIT_ITEMS[body.visit_id] = VISIT_ITEMS[body.visit_id] || []).push({ id: 950, product_id: body.product_id, product_name: 'Парацетамол', unit: 'таб', quantity: body.quantity, unit_price: 500, total: 500 * body.quantity, invoiced: false, from_holding: true, created_by_name: 'Медсестра Ирина' });
+            return ok({ line_id: 950, item_name: 'Парацетамол', unit_price: 500, total: 500 * body.quantity, left_units: 20 - body.quantity });
+        }
+        if (name === 'void_holding_dispense') { VISIT_ITEMS[302] = VISIT_ITEMS[302].filter((i) => i.id !== body.visit_service_id); return ok({ ok: true }); }
         return ok({});
     }
     if (u === '/api/db') {
@@ -916,4 +941,69 @@ test('выбор другого пациента перечитывает ЕГО
     assert.ok(txt.includes('Стол не назначен'), 'пустое место вместо стола: ' + txt);
     assert.ok(txt.includes('Завтрак') && !txt.includes('Второй завтрак'),
         '4-разовое питание не разворачивают в пятиразовое');
+});
+
+// ─── MAR_OUTPATIENTS_V1 — вкладка «Амбулаторные» ────────────────────────────
+async function renderOutpatients() {
+    const root = await renderScreen();
+    findBtn(root, 'Амбулаторные').click();
+    await settle();
+    return root;
+}
+
+test('вкладка «Амбулаторные»: сегодняшние визиты слева, первый выбран, аллергия красным справа', async () => {
+    const root = await renderOutpatients();
+    assert.ok(rpcCalls.some((c) => c.name === 'outpatients_today'), 'визиты спрашиваются у сервера');
+    assert.ok(rpcCalls.some((c) => c.name === 'holdings_list'), 'остатки на руках спрашиваются у сервера');
+    const list = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Сегодня в клинике'));
+    assert.ok(list, 'списка визитов нет');
+    assert.ok(textOf(list).includes('Юсупова Малика') && textOf(list).includes('Рахимов Бобур'));
+    assert.ok(textOf(list).includes('выдано: 2'), 'значок выданного на строке второго');
+    const txt = textOf(root);
+    assert.ok(txt.includes('Пенициллин'), 'аллергия выбранного пациента — на экране');
+    assert.ok(txt.includes('Пока ничего не выдано.'), 'у первого визита выдач нет');
+    // Отделение — фильтр стационара, на амбулаторной вкладке его нет.
+    const wardBox = walk(root).find((e) => e.className === 'field' && textOf(e).includes('Отделение'));
+    assert.equal(wardBox.style.display, 'none');
+});
+
+test('источники: свои запасы и кабинет — да, чужие личные запасы — нет; выдача уходит с держателем, товаром, количеством и визитом', async () => {
+    const root = await renderOutpatients();
+    const give = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Выдать пациенту'));
+    assert.ok(give, 'карточки «Выдать пациенту» нет');
+    const src = walk(give).find((e) => e.tagName === 'SELECT');
+    const opts = src.children.map((o) => textOf(o).trim());
+    assert.deepEqual(opts, ['Мои запасы', 'Кабинет: Процедурный'], 'чужая медсестра в источниках: ' + opts.join(' | '));
+    assert.ok(textOf(give).includes('Есть 20 таб'), 'остаток и цена за единицу видны: ' + textOf(give));
+
+    const qty = walk(give).find((e) => e.tagName === 'INPUT' && e.attrs.type === 'number');
+    qty.value = '3';
+    findBtn(give, 'Выдать').click();
+    await settle();
+    const call = rpcCalls.find((c) => c.name === 'dispense_from_holding');
+    assert.ok(call, 'выдача не ушла на сервер');
+    assert.deepEqual(call.args, { holder: { type: 'staff', id: 5 }, product_id: 40, quantity: 3, visit_id: 301, billable: true });
+    assert.ok(textOf(root).includes('Парацетамол'), 'выданное появилось в списке визита');
+});
+
+test('отказ сервера («недостаточно») доходит словами; отмена — только у неоплаченной строки с рук', async () => {
+    const root = await renderOutpatients();
+    const give = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Выдать пациенту'));
+    const qty = walk(give).find((e) => e.tagName === 'INPUT' && e.attrs.type === 'number');
+    qty.value = '25';
+    findBtn(give, 'Выдать').click();
+    await settle();
+    assert.equal(rpcCalls.filter((c) => c.name === 'dispense_from_holding').length, 0, 'больше, чем есть, экран не отправляет');
+
+    // Второй пациент: две строки — одна с рук (можно отменить), одна со склада в счёте (нельзя).
+    const list = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Сегодня в клинике'));
+    walk(list).find((e) => e.tagName === 'BUTTON' && textOf(e).includes('Рахимов Бобур')).click();
+    await settle();
+    const items = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Выдано на этом визите'));
+    assert.equal(walk(items).filter((e) => e.tagName === 'BUTTON' && textOf(e).includes('Отменить')).length, 1, 'кнопка отмены ровно у одной строки');
+    assert.ok(textOf(items).includes('в счёте'), 'строка в счёте подписана');
+    findBtn(items, 'Отменить').click();
+    await settle();
+    const v = rpcCalls.find((c) => c.name === 'void_holding_dispense');
+    assert.deepEqual(v.args, { visit_service_id: 900 });
 });

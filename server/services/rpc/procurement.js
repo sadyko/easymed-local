@@ -9,6 +9,7 @@
 // always expressed in base units.
 
 import { hasAnyRole } from '../roles.js';
+import { resolveHolder, moveHolding } from './holdings.js';   // HOLDINGS_V1
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -403,7 +404,13 @@ const ISSUE_UNITS = ['base', 'consumption'];
 export function issueStockLines(db, args, user) {
   requireRole(user, PROCUREMENT_ROLES);
 
-  const recipient = (args && typeof args.recipient === 'string') ? args.recipient.trim() : '';
+  // HOLDINGS_V1 — a structured recipient {type: staff|room|department, id}
+  // makes the issue a MOVE: the holder's own ledger receives what the
+  // warehouse gives up (rpc/holdings.js). The free-text recipient stays
+  // accepted for the journal note and for older screens; without a holder
+  // the issue is a plain write-off, as it always was.
+  const holder = args && args.holder && typeof args.holder === 'object' ? resolveHolder(db, args.holder) : null;
+  const recipient = (args && typeof args.recipient === 'string') ? args.recipient.trim() : (holder ? holder.name : '');
   if (!recipient) {
     throw new RpcError('recipient is required.', 400);
   }
@@ -447,8 +454,8 @@ export function issueStockLines(db, args, user) {
       WHERE id = ?
     `);
     const insertMovement = db.prepare(`
-      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, note, created_by, branch_id)
-      VALUES (?, 'dispense', ?, ?, 'issue', ?, ?, 1)
+      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, note, created_by, branch_id, holder_type, holder_id)
+      VALUES (?, 'dispense', ?, ?, 'issue', ?, ?, 1, ?, ?)
     `);
 
     const issued = [];
@@ -472,7 +479,8 @@ export function issueStockLines(db, args, user) {
 
       const newOnHand = round2(product.on_hand - baseQty);
       updateProduct.run(newOnHand, productId);
-      insertMovement.run(productId, -baseQty, product.avg_cost, note, user.id);
+      insertMovement.run(productId, -baseQty, product.avg_cost, note, user.id, holder ? holder.type : null, holder ? holder.id : null);
+      if (holder) moveHolding(db, holder, productId, baseQty);   // HOLDINGS_V1 — warehouse → holder
       issued.push({ product_id: productId, base_qty: baseQty, on_hand: newOnHand });
     }
     return { issued };

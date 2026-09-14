@@ -12,6 +12,8 @@ import { assertOwnBuilding } from './billing.js';
 // 2026-09-04). Проверка живёт в одном месте на весь стационар, а не копией
 // здесь: см. rpc/inpatient-flow.js.
 import { assertAdmissionAtLeast } from './inpatient-flow.js';
+// HOLDINGS_V1 — what the ward already holds is used before the warehouse.
+import { moveHolding } from './holdings.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -240,6 +242,26 @@ export function dispenseAdmissionItem(db, args, user) {
 // stock_movements пишутся ровно тем же кодом, что и у койки. Своя копия
 // разъехалась бы с этой в мелочах (знак qty, reference_type, цена из
 // каталога), и нашлось бы это при сверке склада, через месяц.
+// HOLDINGS_V1 — where a ward dispense comes from when the caller says
+// «prefer_holdings»: the acting nurse's own stock first, then the department
+// of the patient's ward. Only a holding that covers the WHOLE quantity is
+// used — a dose is not split between a pocket and the warehouse. Nothing
+// found → the warehouse, exactly as before.
+export function pickHoldingFor(db, user, adm, productId, quantity) {
+  const q = db.prepare('SELECT qty FROM stock_holdings WHERE holder_type = ? AND holder_id = ? AND product_id = ?');
+  const candidates = [];
+  if (user && isPositiveInt(user.id)) candidates.push({ type: 'staff', id: user.id });
+  if (adm && adm.ward_id) {
+    const ward = db.prepare('SELECT department_id FROM wards WHERE id = ?').get(adm.ward_id);
+    if (ward && ward.department_id) candidates.push({ type: 'department', id: ward.department_id });
+  }
+  for (const c of candidates) {
+    const row = q.get(c.type, c.id, productId);
+    if (row && row.qty + 1e-9 >= quantity) return c;
+  }
+  return null;
+}
+
 export function dispenseAdmissionItemCore(db, args, user) {
   const admissionId = args && args.admission_id;
   if (!isPositiveInt(admissionId)) throw new RpcError('admission_id must be a positive integer.', 400);
@@ -252,6 +274,7 @@ export function dispenseAdmissionItemCore(db, args, user) {
   // со старым admission-modal); консоль передаёт явный выбор из чекбокса.
   const billable = (args && args.billable !== undefined) ? !!args.billable : true;
   const note = (args && typeof args.note === 'string' ? args.note.trim().slice(0, 300) : '') || null;
+  const preferHoldings = !!(args && args.prefer_holdings);   // HOLDINGS_V1
 
   const run = db.transaction(() => {
     // INPATIENT_FLOW_V1 — было `adm.status !== 'active'`, и это ПРАВИЛО
@@ -271,12 +294,18 @@ export function dispenseAdmissionItemCore(db, args, user) {
     const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId);
     if (!product) throw new RpcError('product not found.', 400);
     if (!product.active) throw new RpcError('product is not active.', 400);
-    if (product.on_hand < quantity) {
-      throw new RpcError(`insufficient stock: on hand ${product.on_hand}, requested ${quantity}`, 400);
-    }
 
-    db.prepare(`UPDATE products SET on_hand = on_hand - ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`)
-      .run(quantity, productId);
+    // HOLDINGS_V1 — from what the ward holds, if it covers the dose; else the warehouse.
+    const holder = preferHoldings ? pickHoldingFor(db, user, adm, productId, quantity) : null;
+    if (holder) {
+      moveHolding(db, holder, productId, -quantity);
+    } else {
+      if (product.on_hand < quantity) {
+        throw new RpcError(`insufficient stock: on hand ${product.on_hand}, requested ${quantity}`, 400);
+      }
+      db.prepare(`UPDATE products SET on_hand = on_hand - ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`)
+        .run(quantity, productId);
+    }
 
     const unitPrice = product.sale_price;
     const total = round2(unitPrice * quantity);
@@ -286,12 +315,12 @@ export function dispenseAdmissionItemCore(db, args, user) {
     `).run(admissionId, productId, doctorId, adm.bed_id, adm.ward_id, quantity, unitPrice, total, billable ? 1 : 0, note);
 
     db.prepare(`
-      INSERT INTO stock_movements (product_id, kind, qty, reference_type, reference_id, created_by)
-      VALUES (?, 'dispense', ?, 'admission', ?, ?)
-    `).run(productId, -quantity, info.lastInsertRowid, user.id);
+      INSERT INTO stock_movements (product_id, kind, qty, reference_type, reference_id, created_by, holder_type, holder_id)
+      VALUES (?, 'dispense', ?, 'admission', ?, ?, ?, ?)
+    `).run(productId, -quantity, info.lastInsertRowid, user.id, holder ? holder.type : null, holder ? holder.id : null);
 
     const fresh = db.prepare('SELECT on_hand FROM products WHERE id = ?').get(productId);
-    return { line_id: info.lastInsertRowid, item_name: product.name, on_hand: fresh.on_hand };
+    return { line_id: info.lastInsertRowid, item_name: product.name, on_hand: fresh.on_hand, from_holding: holder || null };
   });
   return run();
 }
@@ -315,12 +344,20 @@ export function voidDispensedAdmissionItemCore(db, args, user) {
     if (line.clinic_item_id == null) throw new RpcError('not a dispensed line.', 400);
     if (line.invoice_item_id != null) throw new RpcError('cannot void an invoiced line.', 400);
 
-    db.prepare(`UPDATE products SET on_hand = on_hand + ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`)
-      .run(line.quantity, line.clinic_item_id);
+    // HOLDINGS_V1 — back to where it came from: the holder the dispense
+    // movement names, or the warehouse.
+    const mv = db.prepare(`SELECT holder_type, holder_id FROM stock_movements WHERE reference_type = 'admission' AND reference_id = ? AND kind = 'dispense' ORDER BY id DESC LIMIT 1`).get(lineId);
+    const holder = mv && mv.holder_type ? { type: mv.holder_type, id: mv.holder_id } : null;
+    if (holder) {
+      moveHolding(db, holder, line.clinic_item_id, line.quantity);
+    } else {
+      db.prepare(`UPDATE products SET on_hand = on_hand + ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`)
+        .run(line.quantity, line.clinic_item_id);
+    }
     db.prepare(`
-      INSERT INTO stock_movements (product_id, kind, qty, reference_type, reference_id, created_by)
-      VALUES (?, 'void', ?, 'admission', ?, ?)
-    `).run(line.clinic_item_id, line.quantity, lineId, user.id);
+      INSERT INTO stock_movements (product_id, kind, qty, reference_type, reference_id, created_by, holder_type, holder_id)
+      VALUES (?, 'void', ?, 'admission', ?, ?, ?, ?)
+    `).run(line.clinic_item_id, line.quantity, lineId, user.id, holder ? holder.type : null, holder ? holder.id : null);
     db.prepare('DELETE FROM admission_services WHERE id = ?').run(lineId);
 
     const fresh = db.prepare('SELECT on_hand FROM products WHERE id = ?').get(line.clinic_item_id);

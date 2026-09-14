@@ -368,7 +368,7 @@ function openIssueModal(onDone) {
     document.addEventListener('keydown', onKey);
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
-    const modal = { products: [], departments: [] };
+    const modal = { products: [], departments: [], rooms: [], staff: [] };
     const lineObjs = [];
     const linesBody = h('tbody');
     linesBody.appendChild(h('tr', null, h('td', { colspan: '4', style: { textAlign: 'center', padding: '16px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Загрузка товаров…')));
@@ -378,9 +378,22 @@ function openIssueModal(onDone) {
         onclick: () => addLine(),
     }, Icon('Plus', { size: 13 }), ' Добавить строку');
 
-    const deptList = h('datalist', { id: 'issue-recipients' });
-    const recipientInp = h('input', { type: 'text', required: true, list: 'issue-recipients', placeholder: 'Отделение или сотрудник' });
+    // HOLDINGS_V1 — получатель выбирается, а не вписывается: сотрудник, кабинет
+    // или отделение. Выдача ПЕРЕКЛАДЫВАЕТ товар на его остаток, и медсестра
+    // потом выдаёт пациенту с рук, а не со склада (второго списания нет).
+    const holderType = h('select', { style: { width: '180px' } },
+        h('option', { value: 'staff' }, 'Сотруднику'),
+        h('option', { value: 'room' }, 'В кабинет'),
+        h('option', { value: 'department' }, 'В отделение'));
+    const holderSel = h('select', { style: { flex: '1' } }, h('option', { value: '' }, '— Выберите —'));
     const noteInp = h('input', { type: 'text', placeholder: 'Основание (необязательно)' });
+    function paintHolders() {
+        clear(holderSel);
+        holderSel.appendChild(h('option', { value: '' }, '— Выберите —'));
+        const rows = holderType.value === 'staff' ? modal.staff : holderType.value === 'room' ? modal.rooms : modal.departments;
+        for (const r of rows) holderSel.appendChild(h('option', { value: String(r.id) }, r.label));
+    }
+    holderType.addEventListener('change', paintHolders);
 
     const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Выдать');
     saveBtn.addEventListener('click', save);
@@ -436,8 +449,9 @@ function openIssueModal(onDone) {
     }
 
     async function save() {
-        const recipient = recipientInp.value.trim();
-        if (!recipient) { toast('Укажите, кому выдаётся товар.', 'fail'); return; }
+        const holderId = Number(holderSel.value) || 0;
+        if (!holderId) { toast('Укажите, кому выдаётся товар.', 'fail'); return; }
+        const holder = { type: holderType.value, id: holderId };
         const lines = [];
         for (const line of lineObjs) {
             if (!line.product) continue;
@@ -452,7 +466,7 @@ function openIssueModal(onDone) {
         saveBtn.textContent = tr('Выдаём…');
         try {
             const note = noteInp.value.trim() || undefined;
-            const { error } = await supabase.rpc('issue_stock_lines', { lines, recipient, note });
+            const { error } = await supabase.rpc('issue_stock_lines', { lines, holder, note });
             if (error) throw error;
             toast('Выдано со склада', 'ok');
             close();
@@ -481,7 +495,9 @@ function openIssueModal(onDone) {
                 ),
             ),
             addLineBtn,
-            field('Кому', h('div', null, recipientInp, deptList), { required: true }),
+            field('Кому', h('div', { class: 'row', style: { gap: '8px' } }, holderType, holderSel), { required: true }),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 10px' } },
+                'Выданное числится за получателем: медсестра выдаёт пациенту из своих запасов, кабинета или отделения — склад второй раз не списывается.'),
             field('Примечание', noteInp),
         ),
         h('footer', { class: 'modal-foot' },
@@ -493,16 +509,20 @@ function openIssueModal(onDone) {
 
     (async () => {
         try {
-            const [pr, dr] = await Promise.all([
+            const [pr, dr, rr, ur] = await Promise.all([
                 supabase.from('products')
                     .select('id,name,base_unit,consumption_unit,consumption_factor,on_hand')
                     .eq('active', 1).order('name', { ascending: true }),
-                supabase.from('departments').select('name').eq('active', 1).order('name', { ascending: true }),
+                supabase.from('departments').select('id,name').eq('active', 1).order('name', { ascending: true }),
+                supabase.from('rooms').select('id,name,code').eq('active', 1).order('name', { ascending: true }),
+                supabase.from('users').select('id,full_name,role').eq('active', 1).order('full_name', { ascending: true }),
             ]);
             if (pr.error) throw pr.error;
             modal.products = pr.data || [];
-            modal.departments = (dr.error ? [] : dr.data) || [];
-            for (const d of modal.departments) deptList.appendChild(h('option', { value: d.name }));
+            modal.departments = ((dr.error ? [] : dr.data) || []).map((d) => ({ id: d.id, label: d.name || '' }));
+            modal.rooms = ((rr.error ? [] : rr.data) || []).map((r) => ({ id: r.id, label: (r.name || '') + (r.code ? ' · ' + r.code : '') }));
+            modal.staff = ((ur.error ? [] : ur.data) || []).map((u) => ({ id: u.id, label: (u.full_name || '') + (u.role ? ' · ' + u.role : '') }));
+            paintHolders();
         } catch (e) {
             toast(trf('Не удалось загрузить товары: {msg}', { msg: (e && e.message) || e }), 'fail');
             modal.products = [];

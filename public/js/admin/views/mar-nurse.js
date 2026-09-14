@@ -71,6 +71,10 @@ import { h, Icon, Tag, clear, toast, field, PageHead, initials } from '../ui.js'
 // врача и на карточке приёма: один человек — один цвет во всей программе.
 import { pastelFor } from '../pastel.js';
 import { fitViewport } from './dash-kpi.js';   // MAR_ONE_SCREEN_V1 — смена в один экран, как сводка
+// MAR_OUTPATIENTS_V1 — вкладка «Амбулаторные»: сегодняшние визиты и выдача
+// с рук (из того, что склад выдал медсестре, кабинету, отделению).
+import { mountOutpatients } from './mar-outpatients.js';
+import { currentUser } from '../data.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { isModuleAllowed } from '../permissions.js';
 import { inpatientModal } from './admission-modal.js?v=inp5';
@@ -548,6 +552,9 @@ export function openUndoModal({ task, patient, onDone } = {}) {
 
 export async function renderMarNurse(root, ctx = {}) {
     const state = {
+        // MAR_OUTPATIENTS_V1 — 'ward' (лист назначений стационара, как было)
+        // или 'outpatient' (сегодняшние амбулаторные визиты и выдача с рук).
+        mode: (ctx && ctx.sub === 'outpatient') ? 'outpatient' : 'ward',
         date: todayLocal(), wardId: '', wards: [],
         due: null, allergies: new Map(), mrns: new Map(), people: new Map(), selected: null,
         // Питание выбранного пациента на выбранный день (admission_meals_list).
@@ -578,15 +585,32 @@ export async function renderMarNurse(root, ctx = {}) {
     wrap.appendChild(headBox);
     wrap.appendChild(body);
 
+    const wardField = field('Отделение', wardSel);
     headBox.appendChild(PageHead({
         title: 'Задачи медсестры',
         subtitle: 'Кому и что вводить сейчас: пациент, доза, время — и что делать, если доза не введена',
         right: [
-            field('Отделение', wardSel),
+            wardField,
             h('button', { class: 'btn btn-sm', type: 'button', onclick: () => load() },
                 Icon('Refresh', { size: 13 }), ' ', tr('Обновить')),
         ],
     }));
+    // MAR_OUTPATIENTS_V1 — две вкладки над сменой: стационар (лист назначений)
+    // и амбулаторные (сегодняшние визиты, выдача с рук). Системные .tabs.
+    const tabBtn = (mode, label) => h('button', {
+        type: 'button', role: 'tab', class: 'tab' + (state.mode === mode ? ' on' : ''),
+        'aria-selected': state.mode === mode ? 'true' : 'false',
+        onclick: () => { if (state.mode === mode) return; state.mode = mode; paintTabs(); load(); },
+    }, label);
+    const tabsEl = h('div', { class: 'tabs', role: 'tablist', style: { marginBottom: '10px' } });
+    function paintTabs() {
+        clear(tabsEl);
+        tabsEl.appendChild(tabBtn('ward', tr('Стационар')));
+        tabsEl.appendChild(tabBtn('outpatient', tr('Амбулаторные')));
+        wardField.style.display = state.mode === 'ward' ? '' : 'none';
+    }
+    paintTabs();
+    headBox.appendChild(tabsEl);
 
     async function loadWards() {
         const { data } = await supabase.from('wards').select('id, name').order('name');
@@ -654,6 +678,12 @@ export async function renderMarNurse(root, ctx = {}) {
     async function load() {
         clear(body);
         body.appendChild(h('div', { class: 'muted', style: { padding: '18px', fontSize: '13.5px' } }, tr('Загрузка…')));
+        if (state.mode === 'outpatient') {
+            // MAR_OUTPATIENTS_V1 — своя пара карточек в той же раскладке.
+            await mountOutpatients(body, { user: currentUser() });
+            fitViewport(wrap, { min: 520 });
+            return;
+        }
         const args = { date: state.date };
         if (state.wardId) args.ward_id = Number(state.wardId);
         const { data, error } = await supabase.rpc('treatment_tasks_due', args);
