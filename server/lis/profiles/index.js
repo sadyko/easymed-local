@@ -7,8 +7,10 @@ import bc20 from './mindray-bc-20.js';
 import bc5300 from './mindray-bc-5300.js';
 import bs240 from './mindray-bs-240.js';
 import cl900i from './mindray-cl-900i.js';
+import bc2800 from './mindray-bc-2800.js';         // только RS-232 — приходит через переадресатор
+import bc3000plus from './mindray-bc-3000-plus.js'; // только RS-232 — приходит через переадресатор
 
-const ALL = Object.freeze([bc20, bc5300, bs240, cl900i]);
+const ALL = Object.freeze([bc20, bc5300, bs240, cl900i, bc2800, bc3000plus]);
 const BY_KEY = new Map(ALL.map((p) => [p.key, p]));
 
 export function listProfiles() { return ALL; }

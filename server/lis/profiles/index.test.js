@@ -44,13 +44,28 @@ test('BS-240 и CL-900i несут типовые наборы — заполн�
   for (const code of ['TSH', 'FT4', 'PRL', 'PSA']) assert.ok(getProfile('mindray-cl-900i').channels.some((c) => c.code === code), 'CL-900i: нет ' + code);
 });
 
-test('каждый профиль говорит, ОТКУДА его список каналов — ни один не из документации', () => {
-  // Mindray протокол не публикует. Честность здесь машинно-читаема: экран может
-  // предупредить «набор типовой, сверьте по прибору», а не изображать знание.
+test('каждый профиль говорит, ОТКУДА его список каналов; «документирован» — только у тех, где документ есть', () => {
+  // Mindray протокол сетевых приборов не публикует, зато формат BC-2800 и
+  // BC-3000 Plus напечатан в их руководствах целиком (приложения A и D).
+  // Честность машинно-читаема: экран предупреждает «набор типовой» у всех,
+  // кроме этих двух, — и заявить документ там, где его нет, тест не даст.
   const allowed = ['documented', 'screenshot', 'conventional'];
+  const DOCUMENTED = new Set(['mindray-bc-2800', 'mindray-bc-3000-plus']);
   for (const p of listProfiles()) {
     assert.ok(allowed.includes(p.channelsSource), p.key + ': channelsSource=' + p.channelsSource);
-    assert.notEqual(p.channelsSource, 'documented', p.key + ': документации у нас нет — заявлять её нельзя');
+    assert.equal(p.channelsSource === 'documented', DOCUMENTED.has(p.key),
+      p.key + ': «documented» допустим только там, где руководство с форматом у нас на руках');
+  }
+});
+
+test('BC-2800 и BC-3000 Plus: коды каналов — буква в букву те, что ставит переадресатор', () => {
+  // Один список в двух местах: forwarder/protocols/mindray-legacy.js (OBX-3
+  // при преобразовании записи «A») и этот профиль (выпадающий список в
+  // панели). Разойдутся — документированный прибор перестанет сопоставляться.
+  const fromManual = ['WBC', 'Lymph#', 'Mid#', 'Gran#', 'Lymph%', 'Mid%', 'Gran%', 'RBC', 'HGB', 'MCHC',
+    'MCV', 'MCH', 'RDW-CV', 'HCT', 'PLT', 'MPV', 'PDW', 'PCT', 'RDW-SD'];
+  for (const key of ['mindray-bc-2800', 'mindray-bc-3000-plus']) {
+    assert.deepEqual(getProfile(key).channels.map((c) => c.code), fromManual, key);
   }
 });
 
