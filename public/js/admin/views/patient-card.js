@@ -22,7 +22,7 @@ import { labFlagCell, labPosFor, fmtDMY, labSexRu, labRefLines, labRefText, matc
          namedRangeCell, ageYears } from './lab-doc.js?v=labshared1';
 import { analyteIndex, resolveAnalyte, analytesForService } from './lab-analyte-index.js?v=labshared1';   // LAB_BLANK_DESIGNED_V1
 import { originTag } from '../record-origin.js';   // BRANCH_ORIGIN_V1 — откуда запись
-import { openVisitWizard } from './visit-wizard.js?v=tier1';
+import { openVisitWizard } from './visit-wizard.js?v=tier2';
 import { printInvoiceCheck } from './receipt-print.js?v=rp1';   // REPRINT_SERVICE_CHECK_V1
 import { printableSheet as _printSheet } from './doc-settings.js?v=noqr1';   // VISIT_WIZARD_LOCAL_V1 — full-screen «Добавить услугу к визиту»
 import { openVisitBillModal } from './visit-bill.js';

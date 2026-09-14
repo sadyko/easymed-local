@@ -465,7 +465,7 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
         // переживает переход; грузим его лениво, чтобы окно заведения пациента
         // не тянуло каталог услуг при каждом открытии.
         if (openVisit && patient && patient.id) {
-            import('./visit-wizard.js?v=tier1')
+            import('./visit-wizard.js?v=tier2')
                 .then((mod) => mod.openVisitWizard(null, {
                     id: patient.id, full_name: patient.fullName, mrn: patient.mrn, phone: patient.phone,
                 }))

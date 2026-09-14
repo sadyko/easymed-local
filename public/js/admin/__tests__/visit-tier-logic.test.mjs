@@ -82,8 +82,9 @@ test('the editor sends the four tier fields; the wizard, attach path and doctor 
     const vw = read('views/visit-wizard.js');
     assert.match(vw, /rpc\('service_price_quote'/, 'мастер записи спрашивает цену у сервера');
     assert.match(vw, /price_tier:\s*lineTier\(c\)/, 'строка визита из мастера несёт ступень');
+    assert.match(vw, /if \(day\) args\.date = day;/, 'котировка спрашивается на ДЕНЬ записи, а не на сегодня');
     assert.match(vw, /if \(tierApplies\(tq\)\) return Number\(tq\.price\);/, 'ступень сильнее личной цены врача — как в кассе');
     for (const f of ['views/crm.js', 'views/patient-card.js', 'views/patient-create-modal.js']) {
-        assert.ok(read(f).includes('visit-wizard.js?v=tier1'), f + ' держит старый кэш мастера записи');
+        assert.ok(read(f).includes('visit-wizard.js?v=tier2'), f + ' держит старый кэш мастера записи');
     }
 });

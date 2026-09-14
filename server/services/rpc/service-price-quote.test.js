@@ -106,3 +106,25 @@ test('the cashier honours the recorded tier: a secondary line is invoiced at 60 
   assert.deepEqual(inv.items.map((i) => i.unit_price), [60000, 200000]);
   assert.equal(inv.invoice.subtotal, 260000);
 });
+
+test('quote for a PLANNED date: booked for tomorrow after a visit today → second visit; same day → first (unless «со дня» is 0)', () => {
+  const db = fresh();
+  const id = tiered(db);
+  pastVisit(db, { daysAgo: 0, serviceId: id, tier: 'primary' });
+  const tomorrow = db.prepare("SELECT date('now', 'localtime', '+1 day') d").get().d;
+  const todayYmd = db.prepare("SELECT date('now', 'localtime') d").get().d;
+  assert.equal(servicePriceQuote(db, { patient_id: 1, service_ids: [id], date: tomorrow }, registrar).quotes[id].tier, 'secondary');
+  assert.equal(servicePriceQuote(db, { patient_id: 1, service_ids: [id], date: todayYmd }, registrar).quotes[id].reason, 'too_soon');
+  assert.equal(servicePriceQuote(db, { patient_id: 1, service_ids: [id] }, registrar).quotes[id].tier, 'primary', 'no date = today');
+  // «со дня» 0 lets a same-day second visit count.
+  serviceSave(db, { id, name: 'Приём невролога', type: 'consultation', price: 200000, performers: [], price_secondary: 60000, secondary_days_from: 0, secondary_days_to: 6, price_repeat: 0 }, admin);
+  assert.equal(servicePriceQuote(db, { patient_id: 1, service_ids: [id], date: todayYmd }, registrar).quotes[id].tier, 'secondary');
+  // A visit planned AFTER the quoted date is not «earlier».
+  const db2 = fresh();
+  const id2 = tiered(db2);
+  const future = db2.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+3 days') d").get().d;
+  const vid = db2.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (1, ?, 'scheduled')").run(future).lastInsertRowid;
+  db2.prepare("INSERT INTO visit_services (visit_id, service_id, price_tier) VALUES (?, ?, 'primary')").run(vid, id2);
+  assert.equal(servicePriceQuote(db2, { patient_id: 1, service_ids: [id2] }, registrar).quotes[id2].reason, 'first');
+  assert.equal(servicePriceQuote(db2, { patient_id: 1, service_ids: [id2], date: 'garbage' }, registrar).quotes[id2].reason, 'first', 'a bad date falls back to today');
+});

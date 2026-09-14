@@ -21,7 +21,10 @@ export class RpcError extends Error {
 const QUOTE_ROLES = ['admin', 'registrar', 'doctor', 'nurse', 'cashier', 'callcenter'];
 
 /**
- * args: { patient_id, service_ids: [id…], visit_id? }
+ * args: { patient_id, service_ids: [id…], visit_id?, date?: 'YYYY-MM-DD' }
+ * `date` — the day the visit is PLANNED for (the wizard books tomorrow as
+ * readily as today); the window is counted to that day, and only visits up
+ * to that day are «earlier». Absent → the clinic's today.
  * → { quotes: { [service_id]: { tier, price, base_price, days_since, reason, prev_day } } }
  */
 export function servicePriceQuote(db, args, user) {
@@ -33,7 +36,7 @@ export function servicePriceQuote(db, args, user) {
   if (!ids.length) return { quotes: {} };
   const visitId = a.visit_id == null ? null : Number(a.visit_id);
 
-  const todayYmd = today(db);
+  const todayYmd = /^\d{4}-\d{2}-\d{2}$/.test(String(a.date || '')) ? String(a.date) : today(db);
   const getService = db.prepare('SELECT id, price, price_secondary, secondary_days_from, secondary_days_to, price_repeat FROM services WHERE id = ?');
   // The most recent earlier line of this service for this patient. Lines
   // cancelled at the desk and visits that never happened do not count: a

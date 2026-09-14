@@ -224,13 +224,13 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // and charged another at the till.
     // A stored price of 0 is a real free-of-charge price, so test for null/undefined
     // rather than falsiness.
-    function linePrice(svc, doctorId) {
+    function linePrice(svc, doctorId, tierDay = null) {
         const cat = Number(svc && svc.price) || 0;
         // VISIT_TIER_PRICING_V1 — a second/repeat visit of this service for
         // THIS patient is priced by its tier, over the catalog AND over the
         // doctor's own price (both are first-visit prices) — the same
         // precedence the till applies (billing.js tierUnitPrice).
-        const tq = svc && wiz.tiers[svc.id];
+        const tq = svc && wiz.tiers[tierKey(svc.id, tierDay)];
         if (tierApplies(tq)) return Number(tq.price);
         if (!doctorId) return cat;
         const doc = wiz.doctors.find(d => String(d.id) === String(doctorId));
@@ -240,24 +240,49 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const own = Number(rate.price);
         return Number.isFinite(own) && own >= 0 ? own : cat;
     }
-    const cartLinePrice = (c) => linePrice(c.svc, c.doctorId);
-    const lineTier = (c) => { const q = c && c.svc && wiz.tiers[c.svc.id]; return q ? (tierApplies(q) ? q.tier : 'primary') : null; };
-    // VISIT_TIER_PRICING_V1 — ask once per cart change; the newest answer wins.
+    // VISIT_TIER_PRICING_V1 — the tier depends on the DAY the line is planned
+    // for (a visit today and a booking for tomorrow are one day apart), so the
+    // quote is keyed by service AND day, and asked per day.
+    const lineDay = (c) => String((c && c.when) || wiz.when || '').slice(0, 10) || null;
+    const tierKey = (svcId, day) => String(svcId) + '@' + (day || '');
+    const cartLinePrice = (c) => linePrice(c.svc, c.doctorId, lineDay(c));
+    const lineTier = (c) => { const q = c && c.svc && wiz.tiers[tierKey(c.svc.id, lineDay(c))]; return q ? (tierApplies(q) ? q.tier : 'primary') : null; };
+    // Ask once per (services × days) set — the newest answer wins; called from
+    // repaintRail so a changed day or a new line re-asks by itself.
     let _tierSeq = 0;
+    let _tierSig = '';
     async function refreshTiers() {
-        const ids = [...new Set(wiz.cart.map((c) => c.svc && c.svc.id).filter((id) => Number.isInteger(Number(id)) && Number(id) > 0).map(Number))];
-        if (!ids.length || !patient || !patient.id) return;
+        if (!patient || !patient.id) return;
+        const byDay = new Map();
+        for (const c of wiz.cart) {
+            const id = Number(c && c.svc && c.svc.id);
+            if (!Number.isInteger(id) || id <= 0) continue;
+            const day = lineDay(c) || '';
+            if (!byDay.has(day)) byDay.set(day, new Set());
+            byDay.get(day).add(id);
+        }
+        const sig = [...byDay.entries()].map(([d, ids]) => d + ':' + [...ids].sort().join(',')).sort().join('|');
+        if (!sig || sig === _tierSig) return;
+        _tierSig = sig;
         const seq = ++_tierSeq;
-        let res = null;
-        try { res = await supabase.rpc('service_price_quote', { patient_id: patient.id, service_ids: ids }); } catch (_) { return; }
-        if (seq !== _tierSeq || !res || res.error || !res.data || !res.data.quotes) return;
-        Object.assign(wiz.tiers, res.data.quotes);
+        const merged = {};
+        try {
+            for (const [day, ids] of byDay) {
+                const args = { patient_id: patient.id, service_ids: [...ids] };
+                if (day) args.date = day;
+                const res = await supabase.rpc('service_price_quote', args);
+                if (!res || res.error || !res.data || !res.data.quotes) return;
+                for (const [id, q] of Object.entries(res.data.quotes)) merged[tierKey(id, day)] = q;
+            }
+        } catch (_) { return; }
+        if (seq !== _tierSeq) return;
+        Object.assign(wiz.tiers, merged);
         repaintRail();
         if (wiz.step === 1) repaintCatalog();
     }
     // The chip beside a quoted line: «Второй визит» / «Повторный визит».
     const tierChip = (c) => {
-        const q = c && c.svc && wiz.tiers[c.svc.id];
+        const q = c && c.svc && wiz.tiers[tierKey(c.svc.id, lineDay(c))];
         if (!tierApplies(q)) return null;
         return h('span', { class: 'wzc-tier', title: q.days_since != null
             ? trf('Прошлый визит по этой услуге — {n} дн. назад. Цена первого визита: {price}', { n: q.days_since, price: fmtPrice(q.base_price) })
@@ -1818,6 +1843,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
     function repaintRail() {
         if (!railEl) return;
+        refreshTiers();   // VISIT_TIER_PRICING_V1 — no-op unless services or days changed
         clear(railEl);
         // WIZ_TEMPLATES_LOCAL_V1 — «Сохранить как шаблон» стоит у заголовка сметы
         // и появляется, только когда в ней есть что сохранять. Шаблон хранит
