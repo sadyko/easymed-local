@@ -898,6 +898,15 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     // — и черновик, и бланк клиники (см. загрузку ниже).
     const secOn = new Set();
     const madeSecs = {};
+    // CASE_TPL_OVER_BLANK_V1 (2026-09-14) — что в разделе лежит БЛАНК КЛИНИКИ,
+    // а не текст врача. Владелец: «we cannot use templates … in the
+    // stationary. the templates can be saved. but not be used». Причина: новый
+    // документ открывается с подставленным бланком, а шаблон ложился только в
+    // ПУСТЫЕ разделы — и на новом документе с бланком не ложился никуда,
+    // отвечая «все разделы уже заполнены». Снимок содержимого после
+    // подстановки бланка позволяет отличить «бланк, которого никто не трогал»
+    // (шаблон его заменяет) от «врач уже написал» (шаблон не затирает).
+    const blankPut = {};
 
     const sectionEls = ALL_SECS.map((key) => {
         const made = richSection(kind, key, {
@@ -1034,6 +1043,7 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
             for (const k of RICH_KEYS) {
                 if (rich[k] && blank[k] && !readRich(rich[k])) {
                     applyRich(rich[k], blank[k]);
+                    blankPut[k] = readRich(rich[k]);   // CASE_TPL_OVER_BLANK_V1
                     // Раздел, в который бланк что-то положил, открыт: текст в
                     // свёрнутом разделе — текст, которого никто не увидит.
                     secOn.add(k);
@@ -1237,19 +1247,24 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
         openTemplateLibraryModal(null, {
         dt: 2,
         apply: (fields) => {
-            let put = 0;
+            let put = 0, kept = 0;
             for (const k of RICH_KEYS) {
                 const html = fields && fields[k];
                 if (!rich[k] || !html) continue;
-                if (readRich(rich[k])) continue;   // написанное сильнее заготовки
+                // CASE_TPL_OVER_BLANK_V1 — написанное ВРАЧОМ сильнее шаблона;
+                // нетронутый бланк клиники — нет: его шаблон заменяет.
+                const cur = readRich(rich[k]);
+                if (cur && cur !== blankPut[k]) { kept += 1; continue; }
                 applyRich(rich[k], html);
+                delete blankPut[k];
                 secOn.add(k);
                 put += 1;
             }
             syncSecs();
             toast(put
-                ? trf('Шаблон вставлен: разделов — {n}.', { n: put })
-                : tr('Все разделы шаблона уже заполнены — написанное не затирается.'), put ? 'ok' : 'fail');
+                ? (kept ? trf('Шаблон вставлен: разделов — {n}. Разделы с вашим текстом оставлены как есть.', { n: put })
+                        : trf('Шаблон вставлен: разделов — {n}.', { n: put }))
+                : tr('Все разделы шаблона уже заполнены вашим текстом — написанное не затирается.'), put ? 'ok' : 'fail');
         },
         });
     };

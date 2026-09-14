@@ -277,6 +277,23 @@ test('CASE_DOC_OWN_NAME_V1: редактор подписывает лист п�
     assert.ok(src.includes("function reviewTitle(kind, mode, docTitle = '')"), 'reviewTitle снова считает имя только по словарю');
 });
 
+// CASE_TPL_OVER_BLANK_V1 (2026-09-14) — владелец: «we cannot use templates …
+// in the stationary. the templates can be saved. but not be used». Новый
+// документ открывается с бланком клиники в разделах, а шаблон ложился только в
+// ПУСТЫЕ — то есть на новом документе никуда. Теперь нетронутый бланк шаблон
+// заменяет, а текст врача — нет.
+test('CASE_TPL_OVER_BLANK_V1: шаблон заменяет нетронутый бланк клиники и не трогает текст врача', async () => {
+    const fsx = await import('node:fs');
+    const pathx = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = pathx.dirname(fileURLToPath(import.meta.url));
+    const src = fsx.readFileSync(pathx.join(dir, '..', 'views', 'admission-modal.js'), 'utf8');
+    assert.ok(src.includes('blankPut[k] = readRich(rich[k]);'), 'после подстановки бланка не делается снимок — шаблон не отличит бланк от текста врача');
+    const apply = src.slice(src.indexOf('apply: (fields) => {'), src.indexOf('syncSecs();', src.indexOf('apply: (fields) => {')));
+    assert.ok(/if \(cur && cur !== blankPut\[k\]\)/.test(apply), 'шаблон снова уступает бланку клиники');
+    assert.ok(!/if \(readRich\(rich\[k\]\)\) continue;/.test(apply), 'старое правило «любой текст сильнее шаблона» вернулось');
+});
+
 // CASE_DOC_SET_BACK_V1 — владелец: «when i am deleting the documents we gave
 // should disappear but go inactive and added when necessary». Убранный
 // документ не исчезает бесследно: он стоит бледной строкой в конце списка, и
