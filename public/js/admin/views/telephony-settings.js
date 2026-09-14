@@ -559,9 +559,10 @@ function connectionCard() {
                 try {
                     const res = await rpc('telephony_test', args);
                     if (res && res.ok) setResult(true, tr('Подключение работает.'));
-                    // res.reason — человеческая русская фраза от сервера,
-                    // динамика в словарь не ходит.
-                    else setResult(false, (res && res.reason) || tr('Не удалось подключиться.'));
+                    // res.message — человеческая русская фраза от сервера;
+                    // reason — машинный код (bad_credentials), его владелец
+                    // увидел на экране 2026-09-14 — он только запасной.
+                    else setResult(false, (res && (res.message || res.reason)) || tr('Не удалось подключиться.'));
                 } catch (e) {
                     // Честная строка вместо тоста: результат проверки должен
                     // остаться на экране, а не растаять через 2,4 секунды.

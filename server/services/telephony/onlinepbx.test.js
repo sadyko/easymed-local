@@ -115,26 +115,40 @@ test('pbxHistory: окно не старше недели, pbxCallNow: from/to �
 });
 
 test('normalizePbxCall: входящий, исходящий, пропущенный — в словарь Binotel (call_type, disposition, wait/bill)', () => {
-  const inbound = normalizePbxCall({ uuid: 'u1', accountcode: 'inbound', caller_id_number: '998901112233', destination_number: '101', start_stamp: 1789372800, duration: 40, user_talk_time: 30 });
+  // Формы — с живой истории клиники: у входящего destination_number — очередь,
+  // ответивший добавочный — в events[type=user].answered_stamp.
+  const inbound = normalizePbxCall({ uuid: 'u1', accountcode: 'inbound', caller_id_number: '998901112233', destination_number: '10',
+    start_stamp: 1789372800, end_stamp: 1789372840, duration: 40, user_talk_time: 30, hangup_cause: 'NORMAL_CLEARING',
+    events: [{ type: 'transfer', number: '6100' }, { type: 'user', number: '105', end_stamp: 1789372805 }, { type: 'user', number: '108', answered_stamp: 1789372810, end_stamp: 1789372840 }] });
   assert.equal(inbound.general_call_id, 'onlinepbx:u1');
   assert.equal(inbound.started_at, '2026-09-14T08:00:00Z');
   assert.equal(inbound.call_type, 0);
   assert.equal(inbound.external_number, '998901112233');
-  assert.equal(inbound.internal_number, '101');
-  assert.equal(inbound.waitsec, 10);
+  assert.equal(inbound.internal_number, '108', 'кто снял трубку, а не очередь');
+  assert.equal(inbound.waitsec, 10, 'ждал до answered_stamp');
   assert.equal(inbound.billsec, 30);
   assert.equal(inbound.disposition, 'ANSWER');
 
-  const outbound = normalizePbxCall({ uuid: 'u2', accountcode: 'outbound', caller_id_number: '101', destination_number: '998901112233', start_stamp: 1789372900, duration: 5, user_talk_time: 0 });
+  const outbound = normalizePbxCall({ uuid: 'u2', accountcode: 'outbound', caller_id_number: '101', destination_number: '998901112233', start_stamp: 1789372900, duration: 5, user_talk_time: 0, hangup_cause: 'NORMAL_CLEARING' });
   assert.equal(outbound.call_type, 1);
   assert.equal(outbound.external_number, '998901112233', 'у исходящего внешний — тот, кому звонили');
   assert.equal(outbound.internal_number, '101');
-  assert.equal(outbound.disposition, 'CANCEL');
+  assert.equal(outbound.disposition, 'NOANSWER');
+  assert.equal(outbound.waitsec, 5);
 
-  const missed = normalizePbxCall({ uuid: 'u3', accountcode: 'missed', caller_id_number: '998901112233', destination_number: '101', start_stamp: 1789373000, duration: 20, user_talk_time: 0 });
+  const cancelled = normalizePbxCall({ uuid: 'u3', accountcode: 'inbound', caller_id_number: '998901112233', destination_number: '10', start_stamp: 1789373000, duration: 65, user_talk_time: 0, hangup_cause: 'ORIGINATOR_CANCEL',
+    events: [{ type: 'user', number: '108', end_stamp: 1789373060 }] });
+  assert.equal(cancelled.call_type, 0);
+  assert.equal(cancelled.disposition, 'CANCEL', 'звонящий повесил трубку, пока звонило');
+  assert.equal(cancelled.internal_number, '10', 'никто не ответил — остаётся набранный номер');
+  assert.equal(cancelled.waitsec, 65);
+
+  const busy = normalizePbxCall({ uuid: 'u4', accountcode: 'outbound', caller_id_number: '102', destination_number: '998909999999', start_stamp: 1789373100, duration: 3, user_talk_time: 0, hangup_cause: 'USER_BUSY' });
+  assert.equal(busy.disposition, 'BUSY');
+
+  const missed = normalizePbxCall({ uuid: 'u5', accountcode: 'missed', caller_id_number: '998901112233', destination_number: '101', start_stamp: 1789373200, duration: 20, user_talk_time: 0, hangup_cause: 'NO_ANSWER' });
   assert.equal(missed.call_type, 0);
   assert.equal(missed.disposition, 'NOANSWER');
-  assert.equal(missed.waitsec, 20);
 
   assert.equal(normalizePbxCall({ accountcode: 'inbound', start_stamp: 1 }), null, 'без uuid нечего дедуплицировать');
   assert.equal(normalizePbxCall({ uuid: 'x' }), null, 'без времени нечего сортировать');

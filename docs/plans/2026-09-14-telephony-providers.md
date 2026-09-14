@@ -75,4 +75,16 @@ change, not a screen change, if a vendor ever needs one.
   payload is known (owner to paste the page text or a sample body).
 - Click-to-call from the patient card via `call/now.json` — the client function
   exists (`pbxCallNow`), the button does not yet.
-- Live verification against a real onlinePBX account — owner will provide keys.
+
+## Verified live (2026-09-14, the owner's account)
+
+`auth.json` issues the pair; `mongo_history/search.json` answered 3 250 calls for six
+days (2.1 MB — the client's body cap is 16 MB for that reason, and a tick normally
+re-reads only the two-minute overlap). Real shapes differ from the spec's sketch in
+two ways the normaliser now honours: an inbound call's `destination_number` is the
+queue or the last dialled extension, and WHO answered is the `events[type=user]`
+entry with `answered_stamp`; and `accountcode` is only inbound/outbound here, so an
+unanswered call's outcome comes from `hangup_cause` (USER_BUSY → BUSY,
+ORIGINATOR_CANCEL → CANCEL, else NOANSWER). The first poll on the dev box filed 283
+calls of the last 24 hours, 5 matched to patients, and the shared routing rules made
+leads of them — the same day-one behaviour Binotel has.

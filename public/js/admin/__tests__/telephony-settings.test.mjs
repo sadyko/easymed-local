@@ -357,13 +357,13 @@ test('проверка подключения шлёт введённые клю
   // потомкам и run() восстанавливает подпись, а этот фейковый читает только
   // собственный _t — после первого клика поиск по тексту кнопку не найдёт.
   const testBtn = findButtonByText(root, /Проверить подключение/);
-  testRespond = () => jsonOk({ ok: false, reason: 'Binotel отклонил ключ' });
+  testRespond = () => jsonOk({ ok: false, reason: 'bad_credentials', message: 'Binotel отклонил ключ' });
   testBtn.click();
   await tick();
   assert.strictEqual(testCalls, 1);
   assert.deepStrictEqual(lastTestBody, { api_key: 'k-typed', api_secret: 's-typed' },
     'контракт: telephony_test {api_key?, api_secret?} — проверяются именно введённые');
-  assert.strictEqual(status.textContent, 'Binotel отклонил ключ');
+  assert.strictEqual(status.textContent, 'Binotel отклонил ключ', 'на экране фраза сервера, не код bad_credentials');
 
   testRespond = () => jsonOk({ ok: true });
   testBtn.click();
