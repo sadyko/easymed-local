@@ -65,11 +65,11 @@ async function fetchPerformers() {
 
 // Routing type (раздел) — the fixed easymed set. Drives the «Услуги и ставки»
 // type filter in the employee editor and where the service is grouped.
-const SERVICE_TYPES = [['imaging', 'Диагностика'], ['radiology', 'Лучевая диагностика'], ['consultation', 'Консультации'], ['lab', 'Лаборатория'], ['procedure', 'Процедуры'], ['other', 'Хирургия']];
+const SERVICE_TYPES = [['imaging', 'Диагностика'], ['consultation', 'Консультации'], ['lab', 'Лаборатория'], ['procedure', 'Процедуры'], ['other', 'Хирургия']];   // SERVICE_TYPES_FIVE_V1 — the five the editor offers; a legacy 'radiology' row reads as «Диагностика»
 // A service with no explicit `type` still lands in a bucket (a lab test in
 // «Лаборатория», everything else in «Консультации»). The column filter MUST use
 // this same derivation, or filtering by the type shown in the row would drop it.
-const typeKey = (s) => s.type || (s.is_lab ? 'lab' : 'consultation');
+const typeKey = (s) => (s.type === 'radiology' ? 'imaging' : s.type) || (s.is_lab ? 'lab' : 'consultation');
 const typeLabel = (s) => (SERVICE_TYPES.find(t => t[0] === typeKey(s)) || ['', '—'])[1];
 
 // SERVICE_DELETE_V1 — mirrors the RPC's own rule (server/services/rpc/catalog.js).

@@ -46,9 +46,9 @@ const roleLabel = (r) => (ALL_ASSIGNABLE_ROLES.find(x => x[0] === r) || [r, r])[
 const fromMain = (u) => !!u && u.is_local === false;
 const staffLabel = (s) => (STAFF_TYPES.find(x => x[0] === s) || ['', 'Не выбрана'])[1];
 // Routing type (раздел) — the fixed easymed set (mirrors services.js).
-const SERVICE_TYPES = [['imaging', 'Диагностика'], ['radiology', 'Лучевая диагностика'], ['consultation', 'Консультации'], ['lab', 'Лаборатория'], ['procedure', 'Процедуры'], ['other', 'Хирургия']];
+const SERVICE_TYPES = [['imaging', 'Диагностика'], ['consultation', 'Консультации'], ['lab', 'Лаборатория'], ['procedure', 'Процедуры'], ['other', 'Хирургия']];   // SERVICE_TYPES_FIVE_V1 — the five the editor offers; a legacy 'radiology' row reads as «Диагностика»
 const svcTypeVal = (s) => s.type || (s.is_lab ? 'lab' : 'consultation');
-const svcTypeLabel = (v) => (SERVICE_TYPES.find(t => t[0] === v) || [v, v])[1];
+const svcTypeLabel = (v) => (SERVICE_TYPES.find(t => t[0] === (v === 'radiology' ? 'imaging' : v)) || [v, v])[1];
 function fmtPrice(n) { const v = Math.round(Number(n) || 0); return (v < 0 ? '-' : '') + String(Math.abs(v)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); }
 
 async function api(path, opts = {}) {

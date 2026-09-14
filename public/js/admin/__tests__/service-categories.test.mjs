@@ -72,3 +72,23 @@ test('все разделы присутствуют в счётчиках, да
     const c = categoryCounts([]);
     for (const cat of CAT_ORDER) assert.strictEqual(c[cat], 0, cat);
 });
+
+// SERVICE_CAT_BY_TYPE_V1 — the section is the service's TYPE, not a guess from
+// its name. Owner: «we have only 5 types… why is there other: 341».
+test('раздел берётся из типа услуги, а не угадывается по названию', () => {
+    assert.strictEqual(categoryOf({ name: 'NUGA BEST', type: 'other' }), 'Хирургия');
+    assert.strictEqual(categoryOf({ name: 'BEL UMURTQA CHECK UP (10 кунлик)', type: 'procedure' }), 'Процедуры');
+    assert.strictEqual(categoryOf({ name: 'CA 15-3 (Онкомаркер)', type: 'lab', is_lab: 1 }), 'Лаборатория');
+    assert.strictEqual(categoryOf({ name: 'Consultation', type: 'consultation' }), 'Консультации');
+    assert.strictEqual(categoryOf({ name: 'MRT', type: 'imaging' }), 'Диагностика');
+    assert.strictEqual(categoryOf({ name: 'Рентген', type: 'radiology' }), 'Диагностика', 'устаревший radiology — в диагностику');
+    // the type wins over a misleading name
+    assert.strictEqual(categoryOf({ name: 'Консультация хирурга', type: 'other' }), 'Хирургия');
+    // only a row with no type at all falls back to the name
+    assert.strictEqual(categoryOf({ name: 'Консультация хирурга' }), 'Консультации');
+    assert.strictEqual(categoryOf({ name: 'Прокат костылей', type: 'nonsense' }), 'Прочее');
+    const counts = categoryCounts([{ id: 1, name: 'NUGA BEST', type: 'other' }, { id: 2, name: 'X', type: 'imaging' }, { id: 3, name: 'Y', type: 'imaging' }]);
+    assert.strictEqual(counts['Прочее'], 0);
+    assert.strictEqual(counts['Диагностика'], 2);
+    assert.strictEqual(counts['Хирургия'], 1);
+});

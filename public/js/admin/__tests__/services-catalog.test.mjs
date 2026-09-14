@@ -290,3 +290,13 @@ test('колонки «Второй визит» и «Повторный виз�
   assert.ok(ths.some((t) => t.style && t.style.width === '21%'), 'у колонок заданы ширины (fixed layout)');
   services = [SVC];
 });
+
+// SERVICE_TYPES_FIVE_V1 — the list's type filter offers exactly the five types
+// the editor has; «Лучевая диагностика» is not a sixth (owner: «we have only 5 types»).
+test('фильтр «Тип» — ровно пять разделов, как в редакторе', async () => {
+  const c = await paint(ADMIN);
+  const sel = tags(c, 'select').find((el) => (el.children || []).some((o) => textOf(o).includes('Хирургия')));
+  assert.ok(sel, 'фильтр по типу есть');
+  const labels = sel.children.map((o) => textOf(o).trim()).filter(Boolean);
+  assert.deepEqual(labels, ['Все', 'Диагностика', 'Консультации', 'Лаборатория', 'Процедуры', 'Хирургия']);
+});
