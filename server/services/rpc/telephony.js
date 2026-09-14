@@ -9,6 +9,8 @@ import { hasAnyRole } from '../roles.js';
 import { publicSettings, saveSettings, getCredentials, listDispositions, SettingsError } from '../telephony/settings.js';
 import { binotelCall } from '../telephony/binotel.js';
 import { wakePolling } from '../telephony/poller.js';
+// TELEPHONY_PROVIDERS_V1 — провайдеры кроме Binotel.
+import { listProviders, saveProvider, deleteProvider, testProvider, ProviderError, KINDS } from '../telephony/providers.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -92,7 +94,7 @@ export function telephonyRecentCalls(db, _args, user) {
   return db.prepare(`
     SELECT c.id, c.general_call_id, c.started_at, c.call_type, c.external_number,
            c.internal_number, c.waitsec, c.billsec, c.disposition, c.is_new_call,
-           c.patient_id, p.full_name AS patient_name, c.source
+           c.patient_id, p.full_name AS patient_name, c.source, c.provider, c.provider_id
       FROM calls c
       LEFT JOIN patients p ON p.id = c.patient_id
      ORDER BY c.started_at DESC, c.id DESC
@@ -115,4 +117,35 @@ export function telephonyRecentCalls(db, _args, user) {
 export function telephonyDispositions(db, _args, user) {
   requireAdmin(user);
   return listDispositions(db);
+}
+
+// ---------------------------------------------------------------------------
+// TELEPHONY_PROVIDERS_V1 — карточки провайдеров: список, сохранение, удаление,
+// проверка. Всё — администратору, как и остальная телефония. Секреты наружу
+// не выходят (secret_set), а сохранение с пустым секретом не стирает
+// сохранённый — та же защита, что у Binotel.
+// ---------------------------------------------------------------------------
+export function telephonyProvidersList(db, _args, user) {
+  requireAdmin(user);
+  return { kinds: Object.entries(KINDS).map(([k, v]) => ({ kind: k, label: v.label })), providers: listProviders(db) };
+}
+
+export function telephonyProviderSave(db, args, user) {
+  requireAdmin(user);
+  let out;
+  try { out = saveProvider(db, args || {}, user && user.id ? user.id : null); }
+  catch (e) { if (e instanceof ProviderError) throw new RpcError(e.message, e.status); throw e; }
+  wakePolling();
+  return out;
+}
+
+export function telephonyProviderDelete(db, args, user) {
+  requireAdmin(user);
+  try { return deleteProvider(db, args && args.id); }
+  catch (e) { if (e instanceof ProviderError) throw new RpcError(e.message, e.status); throw e; }
+}
+
+export async function telephonyProviderTest(db, args, user, seams = {}) {
+  requireAdmin(user);
+  return testProvider(db, args || {}, seams);
 }

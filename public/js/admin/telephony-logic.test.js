@@ -10,6 +10,7 @@ import {
     DASH, textOrDash, secretPlaceholder, formatDuration, dispositionLabel,
     callDirection, normalizeInterval, webhookUrl, timeLabel, isNotImplemented,
     shapeCalls, statusTime, shapeDispositions, pluralRu,
+    providerLabel, providerStatus, reasonLabel, shapeProviders,
 } from './telephony-logic.js';
 
 // --- textOrDash --------------------------------------------------------------
@@ -260,4 +261,57 @@ test('pluralRu: the «звонок / звонка / звонков» line agrees
     for (const n of [2, 3, 4, 22, 104]) assert.equal(f(n), 'звонка', `n=${n}`);
     // 11-14 are the trap every hand-rolled version gets wrong.
     for (const n of [0, 5, 11, 12, 13, 14, 25, 111]) assert.equal(f(n), 'звонков', `n=${n}`);
+});
+
+// --- TELEPHONY_PROVIDERS_V1 ------------------------------------------------
+
+test('providerLabel: brands are not translated; absent → Binotel; unknown kind shows its key', () => {
+    assert.equal(providerLabel('binotel'), 'Binotel');
+    assert.equal(providerLabel('ONLINEPBX'), 'onlinePBX');
+    assert.equal(providerLabel(''), 'Binotel');
+    assert.equal(providerLabel(undefined), 'Binotel');
+    assert.equal(providerLabel('zadarma'), 'zadarma');
+    assert.equal(shapeCalls({ calls: [{}] })[0].provider, 'Binotel', 'a call from a server without the column is Binotel\'s');
+    assert.equal(shapeCalls({ calls: [{ provider: 'onlinepbx' }] })[0].provider, 'onlinePBX');
+});
+
+test('providerStatus: works / errs / off / never set up — in that diagnostic order', () => {
+    assert.deepEqual(providerStatus({ enabled: true, configured: true, last_error: '' }), { kind: 'ok', label: 'Опрос включён' });
+    assert.deepEqual(providerStatus({ enabled: true, configured: true, last_error: 'offline' }), { kind: 'crit', label: 'Ошибка опроса' });
+    assert.deepEqual(providerStatus({ enabled: false, configured: true, last_error: 'offline' }), { kind: 'off', label: 'Выключен' });
+    assert.deepEqual(providerStatus({ enabled: false, configured: false }), { kind: 'warn', label: 'Не настроен' });
+    assert.deepEqual(providerStatus(), { kind: 'warn', label: 'Не настроен' });
+});
+
+test('reasonLabel: the poller\'s machine codes → short Russian; unknown code stays visible; empty → dash', () => {
+    assert.equal(reasonLabel('offline'), 'Нет связи');
+    assert.equal(reasonLabel('BAD_CREDENTIALS'), 'Ключ не подходит');
+    assert.equal(reasonLabel('rate_limited'), 'АТС просит реже');
+    assert.equal(reasonLabel('weird'), 'weird');
+    assert.equal(reasonLabel(''), DASH);
+    assert.equal(reasonLabel(null), DASH);
+});
+
+test('shapeProviders: the contract shape → safe cards; anything thinner → no kinds, no providers', () => {
+    const out = shapeProviders({
+        kinds: [{ kind: 'onlinepbx' }, { nope: 1 }, null],
+        providers: [
+            { id: 3, kind: 'onlinepbx', name: '  ', enabled: 1, poll_interval_sec: '4', config: { domain: 'c.onpbx.ru' }, secret_set: { auth_key: true } },
+            { kind: 'onlinepbx' },   // no id — not a row
+            'x',
+        ],
+    });
+    assert.deepEqual(out.kinds, [{ kind: 'onlinepbx', label: 'onlinePBX' }]);
+    assert.equal(out.providers.length, 1);
+    const p = out.providers[0];
+    assert.equal(p.name, 'onlinePBX', 'blank name falls back to the brand');
+    assert.equal(p.enabled, true);
+    assert.equal(p.poll_interval_sec, 30, 'below the floor → the default, never a 4-second poll on screen');
+    assert.equal(p.domain, 'c.onpbx.ru');
+    assert.equal(p.default_extension, '');
+    assert.equal(p.auth_key_set, true);
+    assert.equal(p.last_error, '');
+    for (const bad of [null, undefined, {}, [], 'x', { kinds: 'x', providers: {} }]) {
+        assert.deepEqual(shapeProviders(bad), { kinds: [], providers: [] }, `input=${JSON.stringify(bad)}`);
+    }
 });

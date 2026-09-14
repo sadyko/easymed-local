@@ -4794,6 +4794,71 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     .tel-route-action, .tel-route-stage { min-width: 0; max-width: none; }
 }
 
+/* TELEPHONY_PROVIDERS_V1 — the provider row: one tile per PBX (Binotel, each
+   onlinePBX) plus a dashed «Добавить». A tile is a BUTTON that selects whose
+   settings open below; the pastel hue comes from the provider KIND (pastel.js),
+   so Binotel is always the same colour on every screen that names it. The
+   selected tile takes the working-window line — the same teal the .card uses
+   — and no shadow: it is a state, not a lifted object. */
+.tel-providers {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 10px;
+}
+.tel-prov {
+    display: flex; flex-direction: column; gap: 8px;
+    min-height: 104px; padding: 12px 14px;
+    text-align: left; font: inherit; color: var(--ink-900);
+    background: var(--p-bg, var(--white));
+    border: 1px solid var(--p-line, var(--ink-200));
+    border-radius: 12px;
+    cursor: pointer;
+    transition: border-color var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out);
+}
+.tel-prov:hover { transform: translateY(-1px); box-shadow: var(--shadow-xs); }
+.tel-prov:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--primary-50); border-color: var(--primary-500); }
+.tel-prov.is-on { border-color: var(--window-line, var(--primary-500)); box-shadow: inset 0 0 0 1px var(--window-line, var(--primary-500)); }
+.tel-prov.is-draft { border-style: dashed; }
+.tel-prov-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.tel-prov-mark {
+    flex: 0 0 auto; width: 30px; height: 30px; border-radius: 9px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 13.5px;
+    background: var(--white); color: var(--p-fg, var(--ink-700));
+    border: 1px solid var(--p-line, var(--ink-200));
+}
+.tel-prov-names { min-width: 0; }
+.tel-prov-name { font-weight: 700; font-size: 13.5px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tel-prov-kind { font-size: 12.5px; margin-top: 2px; }
+.tel-prov-status { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
+.tel-prov-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-400); flex: 0 0 auto; }
+.tel-prov-dot.is-ok   { background: var(--ok-500); }
+.tel-prov-dot.is-warn { background: var(--warn-500); }
+.tel-prov-dot.is-crit { background: var(--crit-500); }
+.tel-prov-dot.is-off  { background: var(--ink-400); }
+.tel-prov-meta { font-size: 12.5px; margin-top: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The «add» tile: dashed, no pastel, centred — an invitation, not a provider. */
+.tel-prov-add {
+    align-items: center; justify-content: center; text-align: center; gap: 4px;
+    background: var(--white); border-style: dashed; color: var(--ink-700);
+}
+.tel-prov-add:disabled { cursor: not-allowed; opacity: .6; transform: none; box-shadow: none; }
+.tel-prov-plus {
+    width: 30px; height: 30px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 1px dashed var(--ink-300); color: var(--ink-500); margin-bottom: 2px;
+}
+/* The kind picker that opens under the row when «Добавить» is pressed. */
+.tel-kinds { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--ink-100); border-radius: 12px; background: var(--ink-25, #fafbfc); }
+.tel-kinds-title { font-size: 12.5px; font-weight: 600; margin-bottom: 8px; color: var(--ink-700); }
+/* Deleting a provider is the one destructive action on the screen: red on
+   hover only, quiet otherwise, and pushed to the far edge of its card. */
+.tel-prov-del:hover { color: var(--crit-500); }
+
+@media (prefers-reduced-motion: reduce) {
+    .tel-prov, .tel-prov:hover { transition: none; transform: none; }
+}
+
 /* ============================ ROLES_EDITOR_V2 — «Роли и права» ============================
    Экран жил на инлайновых стилях, разложенных по вызовам h() (padding, border,
    font-size у каждой строки матрицы). Стили переехали сюда — тот же приём и та

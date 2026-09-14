@@ -26,6 +26,17 @@
 // смержены, маршрут отвечает 501 rpc_not_implemented — на это экран отвечает
 // спокойной строкой «недоступно», а не падением (isNotImplemented ниже).
 // Все решения отображения — telephony-logic.js; здесь только DOM.
+//
+// TELEPHONY_PROVIDERS_V1 (2026-09-14) — владелец: «make in the telephony
+// settings section a cards of the companies (now we have binotel with their
+// settings) and we will add another (onlinePBX) … flow should be exactly
+// like that». Экран стал рядом карточек-провайдеров: Binotel (своя строка
+// telephony_settings, свои три карточки ниже — они не менялись), каждый
+// onlinePBX (строка telephony_providers, две карточки: подключение и опрос)
+// и плитка «Добавить». Выбранная плитка раскрывает свои настройки; журнал и
+// маршрут «звонок → заявка» общие: все провайдеры пишут в один журнал и в
+// один словарь исходов. Секреты любого провайдера — та же поза, что у
+// Binotel: наружу только «ключ сохранён».
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, PageHead, Tag, clear, toast, field, checkField } from '../ui.js';
@@ -36,7 +47,11 @@ import { tr, trf } from '../i18n.js';
 import {
     DASH, secretPlaceholder, normalizeInterval, webhookUrl, shapeCalls,
     statusTime, textOrDash, isNotImplemented, shapeDispositions, pluralRu,
+    providerLabel, providerStatus, reasonLabel, shapeProviders,
 } from '../telephony-logic.js';
+// Плитка провайдера несёт устойчивый пастельный оттенок по своему виду —
+// тот же приём, что у карточек врачей: Binotel всегда одного цвета.
+import { pastelFor } from '../pastel.js';
 // Словарь исходов звонка и список действий берутся из CRM-логики, а не
 // переписываются здесь: карточка переехала, ПРАВИЛА не менялись. Второй
 // экземпляр DISPOSITION_RU разошёлся бы с сервером через один релиз —
@@ -52,6 +67,12 @@ const state = {
     // видимые колонки канбана для выпадающего списка (crm_config_get).
     // null = ещё грузится, [] = загрузилось и пусто — разные экраны.
     routing: null, stages: [], routingError: null,
+    // TELEPHONY_PROVIDERS_V1 — карточки провайдеров кроме Binotel. kinds —
+    // какие виды сервер умеет подключать; providers — заведённые строки;
+    // selected — чья плитка раскрыта: 'binotel', id строки или 'new' (черновик
+    // ещё не сохранённого провайдера вида draftKind). providersError —
+    // старый сервер (501): ряд остаётся одной плиткой Binotel.
+    kinds: [], providers: [], providersError: null, selected: 'binotel', draftKind: null, picking: false,
 };
 let refs = { root: null, body: null, callsBody: null, routingBody: null, onNavigate: null };
 
@@ -79,7 +100,7 @@ export async function renderTelephonySettings(container, { onNavigate } = {}) {
 
     refs.root.appendChild(PageHead({
         title: 'Телефония',
-        subtitle: 'Стандартная интеграция с АТС Binotel: звонки клиники попадают в журнал и находят карту пациента по номеру телефона.',
+        subtitle: 'Подключите АТС клиники: звонки попадают в журнал, находят карту пациента по номеру и становятся заявками.',
     }));
 
     const body = h('div');
@@ -88,7 +109,24 @@ export async function renderTelephonySettings(container, { onNavigate } = {}) {
 
     body.appendChild(h('div', { class: 'muted', style: { padding: '24px' } }, 'Загрузка…'));
     try {
-        state.s = await rpc('telephony_settings_get', {});
+        // Настройки Binotel и список остальных провайдеров — параллельно: два
+        // независимых источника, и старый сервер без второго (501) — не
+        // повод не показать первый.
+        const [settings, providers] = await Promise.all([
+            rpc('telephony_settings_get', {}),
+            rpc('telephony_providers_list', {}).then((d) => ({ ok: true, d }), (e) => ({ ok: false, e })),
+        ]);
+        state.s = settings;
+        if (providers.ok) {
+            const shaped = shapeProviders(providers.d);
+            state.kinds = shaped.kinds; state.providers = shaped.providers; state.providersError = null;
+        } else {
+            state.kinds = []; state.providers = []; state.providersError = providers.e;
+        }
+        // Выбранная плитка переживает перерисовку, но не исчезнувшую строку.
+        if (state.selected !== 'binotel' && state.selected !== 'new'
+            && !state.providers.some((p) => p.id === state.selected)) state.selected = 'binotel';
+        state.draftKind = null; state.picking = false;
     } catch (e) {
         clear(body);
         if (isNotImplemented(e)) {
@@ -117,15 +155,318 @@ export async function renderTelephonySettings(container, { onNavigate } = {}) {
 
 function paint() {
     clear(refs.body);
-    refs.body.appendChild(connectionCard());
-    refs.body.appendChild(pollingCard());
-    refs.body.appendChild(webhooksCard());
+    // Ряд плиток-провайдеров, затем настройки той, что выбрана.
+    refs.body.appendChild(providersCard());
+    if (state.selected === 'binotel') {
+        refs.body.appendChild(connectionCard());
+        refs.body.appendChild(pollingCard());
+        refs.body.appendChild(webhooksCard());
+    } else if (state.selected === 'new') {
+        refs.body.appendChild(pbxConnectionCard(null));
+    } else {
+        const p = state.providers.find((x) => x.id === state.selected);
+        if (p) {
+            refs.body.appendChild(pbxConnectionCard(p));
+            refs.body.appendChild(pbxPollingCard(p));
+        }
+    }
     // Маршрут стоит ПОСЛЕ подключения и опроса и ПЕРЕД журналом: правила
     // бессмысленны, пока связь не работает (потому не выше), но это всё ещё
     // настройка, а журнал — не настройка, а доказательство жизни (потому не
     // ниже него).
     refs.body.appendChild(routingCard());
     refs.body.appendChild(callsCard());
+}
+
+// ---------------------------------------------------------------------------
+// 0. Провайдеры — ряд карточек: Binotel, каждый onlinePBX, «Добавить»
+// ---------------------------------------------------------------------------
+function providersCard() {
+    const s = state.s;
+    const grid = h('div', { class: 'tel-providers', role: 'list' });
+
+    // Binotel — карточка из строки telephony_settings: настроен, если есть
+    // ключ и secret; статус — по тем же трём фактам, что у остальных.
+    grid.appendChild(providerTile({
+        key: 'binotel', kind: 'binotel', name: 'Binotel', kindLabel: providerLabel('binotel'),
+        status: providerStatus({ enabled: !!s.enabled, configured: !!(s.api_key && s.api_secret_set), last_error: s.last_error || '' }),
+        lastCall: s.last_call_at, lastError: s.last_error || '',
+    }));
+    for (const p of state.providers) {
+        grid.appendChild(providerTile({
+            key: p.id, kind: p.kind, name: p.name, kindLabel: p.kind_label,
+            status: providerStatus({ enabled: p.enabled, configured: !!(p.domain && p.auth_key_set), last_error: p.last_error }),
+            lastCall: p.last_call_at, lastError: p.last_error,
+        }));
+    }
+    if (state.selected === 'new' && state.draftKind) {
+        grid.appendChild(providerTile({
+            key: 'new', kind: state.draftKind, name: providerLabel(state.draftKind), kindLabel: providerLabel(state.draftKind),
+            status: { kind: 'warn', label: 'Не сохранён' }, lastCall: null, lastError: '', draft: true,
+        }));
+    }
+    grid.appendChild(addTile());
+
+    const box = h('div', { style: { padding: '14px 18px 18px' } }, grid);
+    if (state.picking) box.appendChild(kindPicker());
+    if (state.providersError) {
+        box.appendChild(h('div', { class: 'muted tel-route-note', style: { marginTop: '10px' } },
+            isNotImplemented(state.providersError)
+                ? 'Другие провайдеры недоступны: сервер ещё не обновлён до этой версии.'
+                : ['Не удалось загрузить провайдеров: ', state.providersError.message]));
+    }
+    return h('div', { class: 'card', style: { marginBottom: '16px' } },
+        h('div', { class: 'card-header' }, h('h3', null, Icon('Building', { size: 16 }), ' ', tr('Провайдеры'))),
+        box);
+}
+
+// Одна плитка. Кнопка, не div: плитку выбирают с клавиатуры так же, как
+// мышью, и aria-pressed говорит читалке, чья карточка сейчас раскрыта.
+function providerTile({ key, kind, name, kindLabel, status, lastCall, lastError, draft = false }) {
+    const on = state.selected === key;
+    const tile = h('button', {
+        type: 'button', role: 'listitem',
+        class: 'tel-prov ' + pastelFor(kind) + (on ? ' is-on' : '') + (draft ? ' is-draft' : ''),
+        'aria-pressed': on ? 'true' : 'false',
+        onclick: () => { state.selected = key; state.picking = false; paint(); },
+    },
+        h('div', { class: 'tel-prov-head' },
+            h('span', { class: 'tel-prov-mark', 'aria-hidden': 'true' }, String(name || '?').slice(0, 1).toUpperCase()),
+            h('div', { class: 'tel-prov-names' },
+                h('div', { class: 'tel-prov-name' }, name),
+                // Имя и вид совпадают у Binotel — второй строкой его не дублируем.
+                name === kindLabel ? null : h('div', { class: 'tel-prov-kind muted' }, kindLabel))),
+        h('div', { class: 'tel-prov-status' },
+            h('span', { class: 'tel-prov-dot is-' + status.kind, 'aria-hidden': 'true' }),
+            status.label),
+        // Одна строка фактов: ошибка, если она есть, важнее последнего звонка.
+        h('div', { class: 'tel-prov-meta muted' },
+            lastError ? [tr('Ошибка'), ': ', reasonLabel(lastError)]
+                : [tr('Последний звонок'), ': ', statusTime(lastCall)]));
+    return tile;
+}
+
+// «Добавить провайдера» — пунктирная плитка. Старый сервер (501) или сервер
+// без единого вида — плитка отключена и объясняет почему, а не молчит.
+function addTile() {
+    const can = !state.providersError && state.kinds.length > 0;
+    return h('button', {
+        type: 'button', role: 'listitem', class: 'tel-prov tel-prov-add' + (state.picking ? ' is-on' : ''),
+        disabled: !can, 'aria-expanded': state.picking ? 'true' : 'false',
+        title: can ? '' : tr('Сервер ещё не умеет других провайдеров.'),
+        onclick: () => { state.picking = !state.picking; paint(); },
+    },
+        h('span', { class: 'tel-prov-plus', 'aria-hidden': 'true' }, Icon('Plus', { size: 18 })),
+        h('span', { class: 'tel-prov-name' }, 'Добавить провайдера'),
+        h('span', { class: 'tel-prov-kind muted' }, can ? 'Другая АТС' : 'Пока только Binotel'));
+}
+
+// Выбор вида: один вид сегодня, но список — чтобы второй вид был строкой
+// данных, а не переделкой экрана.
+function kindPicker() {
+    return h('div', { class: 'tel-kinds', role: 'group', 'aria-label': tr('Какую АТС подключить?') },
+        h('div', { class: 'tel-kinds-title' }, 'Какую АТС подключить?'),
+        h('div', { class: 'row', style: { gap: '8px', flexWrap: 'wrap' } },
+            ...state.kinds.map((k) => h('button', { class: 'btn', type: 'button',
+                onclick: () => { state.draftKind = k.kind; state.selected = 'new'; state.picking = false; paint(); } },
+                Icon('Phone', { size: 13 }), ' ', k.label))));
+}
+
+async function loadProviders() {
+    try {
+        const shaped = shapeProviders(await rpc('telephony_providers_list', {}));
+        state.kinds = shaped.kinds; state.providers = shaped.providers; state.providersError = null;
+    } catch (e) {
+        state.providersError = e;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// onlinePBX — подключение: домен, ключ API, внутренний номер по умолчанию.
+// Тот же сценарий, что у Binotel: ввёл ключи → проверил → сохранил → включил
+// опрос. `p` = null — черновик: первое сохранение заводит строку.
+// ---------------------------------------------------------------------------
+function pbxConnectionCard(p) {
+    const kind = p ? p.kind : state.draftKind;
+    const card = h('div', { style: { padding: '18px' } });
+
+    card.appendChild(field('Провайдер', h('div', { style: { fontWeight: '600' } }, providerLabel(kind))));
+    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 14px' } },
+        'Домен и ключ API — в панели onlinePBX: Настройки → Интеграции → API.'));
+
+    const nameInput = h('input', {
+        type: 'text', autocomplete: 'off', spellcheck: 'false', style: { width: '100%' },
+        value: p ? p.name : providerLabel(kind), placeholder: 'например, Регистратура',
+    });
+    card.appendChild(field('Название карточки', nameInput));
+
+    const domainInput = h('input', {
+        type: 'text', autocomplete: 'off', spellcheck: 'false', style: { width: '100%' },
+        value: p ? p.domain : '', placeholder: 'clinic.onpbx.ru',
+    });
+    card.appendChild(field('Домен АТС', domainInput));
+
+    const keyInput = h('input', {
+        type: 'password', autocomplete: 'off', spellcheck: 'false', style: { width: '100%' },
+        placeholder: p && p.auth_key_set ? 'сохранён — введите новый, чтобы заменить' : 'ключ API из панели onlinePBX',
+    });
+    const showBtn = h('button', { class: 'btn btn-sm', type: 'button',
+        onclick: () => {
+            keyInput.type = keyInput.type === 'password' ? 'text' : 'password';
+            showBtn.textContent = tr(keyInput.type === 'password' ? 'Показать' : 'Скрыть');
+        } }, 'Показать');
+    card.appendChild(field(
+        p && p.auth_key_set ? 'Ключ API: сохранён (заменить)' : 'Ключ API',
+        h('div', { class: 'row', style: { gap: '8px' } },
+            h('div', { style: { flex: '1' } }, keyInput), showBtn)));
+
+    const extInput = h('input', {
+        type: 'text', autocomplete: 'off', spellcheck: 'false', style: { width: '160px' },
+        value: p ? p.default_extension : '', placeholder: '101',
+    });
+    card.appendChild(field('Внутренний номер по умолчанию', extInput));
+    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 14px' } },
+        'С какого внутреннего номера система будет звонить пациенту. Можно оставить пустым.'));
+
+    const resultLine = h('div', { role: 'status', style: { marginTop: '10px', fontSize: '13.5px', minHeight: '18px' } });
+    const setResult = (ok, text) => {
+        resultLine.style.color = ok ? 'var(--ok-700, #2e8b52)' : 'var(--crit-700, #b03a3a)';
+        resultLine.textContent = text;
+    };
+
+    // Что уходит на сервер: ключ — ТОЛЬКО если введён новый (пустое поле =
+    // «оставить сохранённый», как secret у Binotel).
+    const payload = () => {
+        const out = {
+            kind, name: nameInput.value.trim(),
+            config: { domain: domainInput.value.trim(), default_extension: extInput.value.trim() },
+        };
+        if (p) out.id = p.id;
+        const key = keyInput.value.trim();
+        if (key) out.secret = { auth_key: key };
+        return out;
+    };
+
+    const saveBtn = h('button', { class: 'btn btn-primary', type: 'button',
+        onclick: async () => {
+            if (!domainInput.value.trim()) return toast('Введите домен АТС.', 'warn');
+            if (!p && !keyInput.value.trim()) return toast('Введите ключ API.', 'warn');
+            await run(saveBtn, async () => {
+                const saved = await rpc('telephony_provider_save', payload());
+                await loadProviders();
+                // Черновик стал строкой — раскрываем уже её.
+                state.selected = saved && saved.id != null ? saved.id : state.selected;
+                if (state.selected === 'new') state.selected = 'binotel';
+                state.draftKind = null;
+                toast('Сохранено.', 'success');
+                paint();
+            });
+        } }, Icon('Check', { size: 13 }), ' ', tr('Сохранить подключение'));
+
+    const testBtn = h('button', { class: 'btn', type: 'button',
+        onclick: async () => {
+            await run(testBtn, async () => {
+                const args = {};
+                if (p) args.id = p.id;
+                const domain = domainInput.value.trim();
+                const key = keyInput.value.trim();
+                if (domain) args.config = { domain };
+                if (key) args.secret = { auth_key: key };
+                resultLine.style.color = '';
+                resultLine.textContent = tr('Проверка…');
+                try {
+                    const res = await rpc('telephony_provider_test', args);
+                    if (res && res.ok) setResult(true, tr('Подключение работает.'));
+                    // res.message — человеческая русская фраза от сервера.
+                    else setResult(false, (res && res.message) || tr('Не удалось подключиться.'));
+                } catch (e) {
+                    if (isNotImplemented(e)) setResult(false, tr('Проверка недоступна: сервер ещё не обновлён.'));
+                    else setResult(false, e.message || tr('Не удалось подключиться.'));
+                }
+            });
+        } }, Icon('Refresh', { size: 13 }), ' ', tr('Проверить подключение'));
+
+    const actions = h('div', { class: 'row', style: { gap: '8px', marginTop: '12px' } }, saveBtn, testBtn);
+    if (!p) {
+        actions.appendChild(h('button', { class: 'btn btn-ghost', type: 'button',
+            onclick: () => { state.selected = 'binotel'; state.draftKind = null; paint(); } }, 'Отмена'));
+    }
+    card.appendChild(actions);
+    card.appendChild(resultLine);
+
+    return h('div', { class: 'card', style: { marginBottom: '16px' } },
+        h('div', { class: 'card-header' }, h('h3', null, Icon('Phone', { size: 16 }), ' ', tr('Подключение'))),
+        card);
+}
+
+// onlinePBX — опрос: выключатель (сохраняется сразу), интервал, жизнь
+// подключения и удаление карточки.
+function pbxPollingCard(p) {
+    const card = h('div', { style: { padding: '18px' } });
+
+    const enabled = h('input', { type: 'checkbox', checked: !!p.enabled,
+        onchange: async () => {
+            enabled.disabled = true;
+            try {
+                await rpc('telephony_provider_save', { id: p.id, enabled: enabled.checked });
+                p.enabled = enabled.checked;
+                toast(enabled.checked ? 'Опрос звонков включён.' : 'Опрос звонков выключен.', 'success');
+                await loadProviders();
+                paint();   // плитка провайдера показывает новый статус
+            } catch (e) {
+                enabled.checked = !enabled.checked;   // не сохранилось — не врём галочкой
+                toast(e.message || 'Не удалось сохранить.', 'error');
+            } finally { enabled.disabled = false; }
+        } });
+    card.appendChild(checkField('Опрос включён', enabled));
+    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 12px 26px' } },
+        'Сохраняется сразу. Система сама опрашивает АТС и записывает новые звонки в журнал.'));
+
+    const intInput = h('input', {
+        type: 'number', min: '10', step: '1', style: { width: '120px' },
+        value: String(p.poll_interval_sec),
+    });
+    const intBtn = h('button', { class: 'btn', type: 'button',
+        onclick: async () => {
+            const v = normalizeInterval(intInput.value);
+            if (v == null) return toast('Интервал опроса — целое число, не меньше 10 секунд.', 'warn');
+            await run(intBtn, async () => {
+                await rpc('telephony_provider_save', { id: p.id, poll_interval_sec: v });
+                p.poll_interval_sec = v;
+                toast('Сохранено.', 'success');
+            });
+        } }, 'Сохранить интервал');
+    card.appendChild(field('Интервал опроса, секунд',
+        h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } }, intInput, intBtn)));
+
+    const statusRow = (label, value) => h('div', { class: 'muted', style: { fontSize: '13.5px', marginTop: '4px' } },
+        label, ': ', h('span', { style: { color: 'var(--ink-700, inherit)' } }, value));
+    card.appendChild(h('div', { style: { marginTop: '10px' } },
+        statusRow('Последняя проверка', statusTime(p.last_poll_at)),
+        statusRow('Последний звонок', statusTime(p.last_call_at)),
+        statusRow('Последняя ошибка', reasonLabel(p.last_error))));
+
+    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '12px' } },
+        'Звонок появляется в журнале в течение минуты после завершения плюс один интервал опроса.'));
+
+    const delBtn = h('button', { class: 'btn btn-ghost tel-prov-del', type: 'button',
+        onclick: async () => {
+            // Удаление убирает карточку и её ключи; звонки в журнале остаются
+            // (ссылка на провайдера снимается, сам звонок — нет).
+            if (!window.confirm(tr('Удалить эту карточку провайдера? Звонки в журнале останутся.'))) return;
+            await run(delBtn, async () => {
+                await rpc('telephony_provider_delete', { id: p.id });
+                await loadProviders();
+                state.selected = 'binotel';
+                toast('Провайдер удалён.', 'success');
+                paint();
+            });
+        } }, Icon('Trash', { size: 13 }), ' ', tr('Удалить провайдера'));
+    card.appendChild(h('div', { class: 'row', style: { gap: '8px', marginTop: '16px', justifyContent: 'flex-end' } }, delBtn));
+
+    return h('div', { class: 'card', style: { marginBottom: '16px' } },
+        h('div', { class: 'card-header' }, h('h3', null, Icon('Refresh', { size: 16 }), ' ', tr('Опрос звонков'))),
+        card);
 }
 
 // ---------------------------------------------------------------------------
@@ -430,7 +771,10 @@ function paintRouting() {
     }
 
     box.appendChild(h('div', { class: 'muted tel-route-note', style: { padding: '18px 18px 0' } },
-        'Телефония сообщает, чем закончился каждый звонок. Здесь решается, из каких звонков система сама делает заявку и в какую колонку её кладёт.'));
+        'Телефония сообщает, чем закончился каждый звонок. Здесь решается, из каких звонков система сама делает заявку и в какую колонку её кладёт.',
+        // Один словарь на всех: исход любой АТС переводится в эти же слова,
+        // поэтому правило задаётся один раз, а не на каждого провайдера.
+        state.providers.length ? [' ', 'Правила общие для всех подключённых АТС.'] : null));
 
     if (!state.routing.length) {
         // Ни одного звонка и ни одного правила: у свежей установки такого не
@@ -594,6 +938,7 @@ function paintCalls() {
             h('td', { style: { whiteSpace: 'nowrap' } },
                 h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } },
                     Icon(c.direction.icon, { size: 14 }), c.direction.label)),
+            h('td', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, c.provider),
             h('td', { class: 'cell-mono', style: { fontSize: '12.5px' } }, c.external),
             h('td', null, c.patient_id
                 ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button',
@@ -610,6 +955,7 @@ function paintCalls() {
             // НЕ голое «Направление»: этот исходный ключ уже занят в словаре
             // медицинским «Referral», и tr() перевёл бы шапку не тем словом.
             h('th', null, 'Направление звонка'),
+            h('th', null, 'АТС'),
             h('th', null, 'Номер'),
             h('th', null, 'Пациент'),
             h('th', null, 'Длительность'),

@@ -191,7 +191,92 @@ export function shapeCalls(data) {
             disposition: dispositionLabel(r.disposition),
             patient_id:  r.patient_id ?? null,
             patient_name: (typeof r.patient_name === 'string' && r.patient_name.trim() !== '') ? r.patient_name : null,
+            // TELEPHONY_PROVIDERS_V1 — which PBX filed the call. An older
+            // server has no column at all: those calls are Binotel's, the only
+            // provider that ever existed before the column did.
+            provider:    providerLabel(r.provider),
         }));
+}
+
+// ---------------------------------------------------------------------------
+// TELEPHONY_PROVIDERS_V1 — provider cards (docs: owner 2026-09-14, «cards of
+// the companies … flow should be exactly like that [Binotel]»).
+// ---------------------------------------------------------------------------
+
+// Vendor names are brands, not words: they render the same in ru/uz/en and
+// are deliberately NOT dictionary keys.
+const PROVIDER_LABELS = { binotel: 'Binotel', onlinepbx: 'onlinePBX' };
+
+/** kind → brand name; unknown kinds show their raw key; absent → Binotel (see shapeCalls). */
+export function providerLabel(kind) {
+    if (typeof kind !== 'string' || kind.trim() === '') return PROVIDER_LABELS.binotel;
+    const k = kind.trim().toLowerCase();
+    return PROVIDER_LABELS[k] || kind.trim();
+}
+
+/**
+ * One status word per provider tile, from the three facts every provider
+ * exposes: is polling on, are credentials stored, did the last poll fail.
+ * Four states, in the order a person diagnoses them: it works / it errs /
+ * it is off / it was never set up. `kind` is the semantic colour role.
+ */
+export function providerStatus({ enabled, configured, last_error } = {}) {
+    const err = typeof last_error === 'string' && last_error.trim() !== '';
+    if (enabled && !err) return { kind: 'ok',   label: 'Опрос включён' };
+    if (enabled && err)  return { kind: 'crit', label: 'Ошибка опроса' };
+    if (configured)      return { kind: 'off',  label: 'Выключен' };
+    return { kind: 'warn', label: 'Не настроен' };
+}
+
+// The poller stores a machine reason (the same codes telephony_test returns);
+// the tile and the status line show a short human phrase for each, and the
+// raw code for one the screen has not learned — never «undefined».
+const REASON_LABELS = {
+    offline:         'Нет связи',
+    bad_credentials: 'Ключ не подходит',
+    not_auth:        'Ключ не подходит',
+    server_error:    'Ошибка на стороне АТС',
+    bad_response:    'Непонятный ответ АТС',
+    rate_limited:    'АТС просит реже',
+};
+export function reasonLabel(code) {
+    if (typeof code !== 'string' || code.trim() === '') return DASH;
+    return REASON_LABELS[code.trim().toLowerCase()] || code;
+}
+
+/**
+ * telephony_providers_list's reply → {kinds, providers} with every field the
+ * cards read re-derived, so an older or thinner server can never crash the
+ * screen: unknown shapes → no kinds and no providers, which the view renders
+ * as «Binotel only».
+ */
+export function shapeProviders(data) {
+    const kinds = (data && Array.isArray(data.kinds) ? data.kinds : [])
+        .filter((k) => k && typeof k.kind === 'string' && k.kind.trim() !== '')
+        .map((k) => ({ kind: k.kind.trim(), label: providerLabel(k.kind) }));
+    const providers = (data && Array.isArray(data.providers) ? data.providers : [])
+        .filter((p) => p && typeof p === 'object' && p.id != null && typeof p.kind === 'string')
+        .map((p) => {
+            const cfg = p.config && typeof p.config === 'object' ? p.config : {};
+            const set = p.secret_set && typeof p.secret_set === 'object' ? p.secret_set : {};
+            const n = Math.floor(Number(p.poll_interval_sec));
+            return {
+                id: p.id,
+                kind: p.kind,
+                kind_label: providerLabel(p.kind),
+                name: (typeof p.name === 'string' && p.name.trim() !== '') ? p.name.trim() : providerLabel(p.kind),
+                enabled: !!p.enabled,
+                poll_interval_sec: Number.isFinite(n) && n >= 10 ? n : 30,
+                domain: typeof cfg.domain === 'string' ? cfg.domain : '',
+                default_extension: typeof cfg.default_extension === 'string' ? cfg.default_extension : '',
+                auth_key_set: !!set.auth_key,
+                authorized: !!p.authorized,
+                last_poll_at: p.last_poll_at ?? null,
+                last_call_at: p.last_call_at ?? null,
+                last_error: typeof p.last_error === 'string' ? p.last_error : '',
+            };
+        });
+    return { kinds, providers };
 }
 
 /**

@@ -68,7 +68,8 @@ globalThis.localStorage = fakeLocalStorage;
 // Russian-string assertions hold on GitHub's English-locale runner exactly
 // as they do on a Russian-locale dev machine.
 fakeLocalStorage.setItem('admin.lang', 'ru');
-globalThis.window = { location: { hostname: 'localhost' }, localStorage: fakeLocalStorage, addEventListener(){}, easymed: { state: { user: null } } };
+globalThis.window = { location: { hostname: 'localhost' }, localStorage: fakeLocalStorage, addEventListener(){}, easymed: { state: { user: null } },
+  confirm: () => confirmAnswer };
 globalThis.MutationObserver=class{observe(){}disconnect(){}};
 globalThis.requestAnimationFrame=(fn)=>fn();
 
@@ -113,6 +114,18 @@ let settingsRespond, saveRespond, testRespond, callsRespond, dbRespond;
 let dispCalls, cfgGetCalls, cfgSaveCalls;
 let lastDispBody, lastCfgGetBody, lastCfgSaveBody;
 let dispRespond, cfgGetRespond, cfgSaveRespond;
+// TELEPHONY_PROVIDERS_V1 — the provider cards' four RPCs.
+let provListCalls, provSaveCalls, provDelCalls, provTestCalls;
+let lastProvSaveBody, lastProvDelBody, lastProvTestBody;
+let provListRespond, provSaveRespond, provDelRespond, provTestRespond;
+let confirmAnswer = true;
+
+const PBX = {
+  id: 7, kind: 'onlinepbx', kind_label: 'onlinePBX', name: 'Регистратура', enabled: false, poll_interval_sec: 30,
+  last_poll_at: null, last_call_at: '2026-09-14T08:01:40Z', last_error: '', updated_at: null,
+  config: { domain: 'clinic.onpbx.ru', default_extension: '101' }, secret_set: { auth_key: true }, authorized: true,
+};
+const PROVIDERS = { kinds: [{ kind: 'onlinepbx', label: 'onlinePBX' }], providers: [PBX] };
 
 const FULL_SETTINGS = {
   enabled: true, provider: 'binotel', api_key: 'key-live', api_secret_set: true, company_id: '12345',
@@ -148,6 +161,13 @@ function resetServer() {
   lastGetBody = null; lastSaveBody = null; lastTestBody = null; lastCallsBody = null; lastDbBody = null;
   dispCalls = 0; cfgGetCalls = 0; cfgSaveCalls = 0;
   lastDispBody = null; lastCfgGetBody = null; lastCfgSaveBody = null;
+  provListCalls = 0; provSaveCalls = 0; provDelCalls = 0; provTestCalls = 0;
+  lastProvSaveBody = null; lastProvDelBody = null; lastProvTestBody = null;
+  provListRespond = () => jsonOk(JSON.parse(JSON.stringify(PROVIDERS)));
+  provSaveRespond = () => jsonOk({ ...PBX });
+  provDelRespond = () => jsonOk({ ok: true });
+  provTestRespond = () => jsonOk({ ok: true, calls_last_minute: 0 });
+  confirmAnswer = true;
   dispRespond = () => jsonOk(JSON.parse(JSON.stringify(DISPOSITIONS)));
   cfgGetRespond = () => jsonOk(JSON.parse(JSON.stringify(CRM_CONFIG)));
   // The real crm_config_save answers with the WHOLE config (services/crm/config.js).
@@ -172,6 +192,10 @@ globalThis.fetch = async (url, opts) => {
   if (u.startsWith('/api/rpc/telephony_dispositions'))  { dispCalls++; lastDispBody = body; return dispRespond(); }
   if (u.startsWith('/api/rpc/crm_config_get'))          { cfgGetCalls++; lastCfgGetBody = body; return cfgGetRespond(); }
   if (u.startsWith('/api/rpc/crm_config_save'))         { cfgSaveCalls++; lastCfgSaveBody = body; return cfgSaveRespond(); }
+  if (u.startsWith('/api/rpc/telephony_providers_list')) { provListCalls++; return provListRespond(); }
+  if (u.startsWith('/api/rpc/telephony_provider_save'))  { provSaveCalls++; lastProvSaveBody = body; return provSaveRespond(); }
+  if (u.startsWith('/api/rpc/telephony_provider_delete')) { provDelCalls++; lastProvDelBody = body; return provDelRespond(); }
+  if (u.startsWith('/api/rpc/telephony_provider_test'))  { provTestCalls++; lastProvTestBody = body; return provTestRespond(); }
   if (u.startsWith('/api/db')) { dbCalls++; lastDbBody = body; return dbRespond(); }
   return jsonOk({});
 };
@@ -561,4 +585,169 @@ test('501 только на маршруте — остальной экран �
   assert.ok(text.includes('Последние звонки'), 'журнал отрисован');
   assert.ok(text.includes('Маршрут звонков недоступен: сервер ещё не обновлён.'), text);
   assert.strictEqual(findSelects(root).length, 0, 'ни одного списка, который нечем наполнить');
+});
+
+// ---------------------------------------------------------------------------
+// TELEPHONY_PROVIDERS_V1 — provider cards: Binotel + each onlinePBX + «Добавить».
+// ---------------------------------------------------------------------------
+const findTiles = (root) => walk(root).filter((n) => n.tagName === 'BUTTON' && /(^|\s)tel-prov(\s|$)/.test(String(n.className)));
+const findTileByText = (root, re) => findTiles(root).find((b) => re.test(textOf(b)));
+
+test('ряд провайдеров: Binotel + каждый onlinePBX + «Добавить»; Binotel раскрыт по умолчанию; плитка onlinePBX раскрывает свои карточки', async () => {
+  resetServer();
+  const root = await render();
+  assert.strictEqual(provListCalls, 1, 'список провайдеров читается вместе с настройками');
+  const tiles = findTiles(root);
+  assert.strictEqual(tiles.length, 3, 'Binotel, Регистратура (onlinePBX), Добавить');
+  const binotel = findTileByText(root, /Binotel/);
+  const pbx = findTileByText(root, /Регистратура/);
+  assert.strictEqual(binotel.attrs['aria-pressed'], 'true', 'Binotel раскрыт по умолчанию');
+  assert.strictEqual(pbx.attrs['aria-pressed'], 'false');
+  assert.ok(textOf(pbx).includes('onlinePBX'), 'вид под именем');
+  assert.ok(textOf(pbx).includes('Выключен'), 'статус словом: ключ есть, опрос выключен');
+  assert.ok(textOf(binotel).includes('Опрос включён'));
+  let text = textOf(root);
+  assert.ok(text.includes('WebHook-и'), 'у Binotel — его три карточки');
+
+  pbx.click();
+  await tick();
+  text = textOf(root);
+  assert.ok(findTileByText(root, /Регистратура/).attrs['aria-pressed'] === 'true');
+  assert.ok(text.includes('Домен АТС') && text.includes('Ключ API: сохранён (заменить)'), 'подключение onlinePBX');
+  assert.ok(text.includes('Опрос звонков') && !text.includes('WebHook-и'), 'карточки Binotel спрятаны, WebHook-ов у onlinePBX нет');
+  assert.strictEqual(findInputByPlaceholder(root, /clinic\.onpbx\.ru/).value, 'clinic.onpbx.ru');
+  assert.ok(findButtonByText(root, /Удалить провайдера/), 'удаление — на карточке опроса');
+  assert.ok(text.includes('Правила общие для всех подключённых АТС.'), 'маршрут говорит, что словарь один');
+});
+
+test('501 на списке провайдеров — одна плитка Binotel, «Добавить» отключена и объясняет почему', async () => {
+  resetServer();
+  provListRespond = err501;
+  const root = await render();
+  const tiles = findTiles(root);
+  assert.strictEqual(tiles.length, 2);
+  const add = findTileByText(root, /Добавить провайдера/);
+  assert.strictEqual(add.attrs.disabled !== undefined || add.disabled === true, true, 'плитка отключена');
+  assert.ok(textOf(root).includes('Другие провайдеры недоступны: сервер ещё не обновлён до этой версии.'));
+  assert.ok(textOf(root).includes('Подключение'), 'Binotel живёт');
+});
+
+test('добавить: выбор вида → черновик; без домена и ключа не уходит; сохранение шлёт kind/config/secret без id и раскрывает новую строку', async () => {
+  resetServer();
+  provListRespond = () => jsonOk({ kinds: PROVIDERS.kinds, providers: [] });
+  const root = await render();
+  findTileByText(root, /Добавить провайдера/).click();
+  await tick();
+  assert.ok(textOf(root).includes('Какую АТС подключить?'));
+  // The kind button carries an icon before its label — match the label at the end.
+  findButtonByText(root, /onlinePBX\s*$/).click();
+  await tick();
+  let text = textOf(root);
+  assert.ok(text.includes('Не сохранён'), 'черновик — плиткой с честным статусом');
+  assert.ok(findInputByPlaceholder(root, /clinic\.onpbx\.ru/), 'форма подключения открыта');
+
+  findButtonByText(root, /Сохранить подключение/).click();
+  await tick();
+  assert.strictEqual(provSaveCalls, 0, 'без домена — не уходит');
+  assert.ok(/домен/i.test(String(lastToast())), lastToast());
+
+  findInputByPlaceholder(root, /clinic\.onpbx\.ru/).value = ' https://Clinic.onpbx.ru ';
+  findButtonByText(root, /Сохранить подключение/).click();
+  await tick();
+  assert.strictEqual(provSaveCalls, 0, 'без ключа новый провайдер не сохраняется');
+  assert.ok(/ключ/i.test(String(lastToast())), lastToast());
+
+  findInputByType(root, 'password').value = 'AUTH-KEY';
+  findInputByPlaceholder(root, /101/).value = '102';
+  provListRespond = () => jsonOk(JSON.parse(JSON.stringify(PROVIDERS)));
+  findButtonByText(root, /Сохранить подключение/).click();
+  await tick();
+  assert.strictEqual(provSaveCalls, 1);
+  assert.deepStrictEqual(lastProvSaveBody, {
+    kind: 'onlinepbx', name: 'onlinePBX',
+    config: { domain: 'https://Clinic.onpbx.ru', default_extension: '102' },
+    secret: { auth_key: 'AUTH-KEY' },
+  }, 'черновик уходит без id; домен нормализует сервер');
+  assert.strictEqual(provListCalls, 2, 'список перечитан');
+  assert.strictEqual(findTileByText(root, /Регистратура/).attrs['aria-pressed'], 'true', 'новая строка раскрыта');
+});
+
+test('сохранение существующего: id всегда, secret только когда введён новый ключ', async () => {
+  resetServer();
+  const root = await render();
+  findTileByText(root, /Регистратура/).click();
+  await tick();
+  findButtonByText(root, /Сохранить подключение/).click();
+  await tick();
+  assert.strictEqual(provSaveCalls, 1);
+  assert.deepStrictEqual(lastProvSaveBody, {
+    id: 7, kind: 'onlinepbx', name: 'Регистратура',
+    config: { domain: 'clinic.onpbx.ru', default_extension: '101' },
+  }, 'пустое поле ключа = оставить сохранённый');
+});
+
+test('проверка onlinePBX: шлёт id и введённое; провал печатает message сервера; успех — «работает»', async () => {
+  resetServer();
+  const root = await render();
+  findTileByText(root, /Регистратура/).click();
+  await tick();
+  findInputByType(root, 'password').value = 'NEW';
+  provTestRespond = () => jsonOk({ ok: false, reason: 'bad_credentials', message: 'Домен или ключ API не подходят.' });
+  // One reference for both clicks: run() restores the label via textContent,
+  // which this fake DOM cannot round-trip for a button built from children.
+  const testBtn = findButtonByText(root, /Проверить подключение/);
+  testBtn.click();
+  await tick();
+  assert.deepStrictEqual(lastProvTestBody, { id: 7, config: { domain: 'clinic.onpbx.ru' }, secret: { auth_key: 'NEW' } });
+  assert.strictEqual(findByRole(root, 'status').textContent, 'Домен или ключ API не подходят.');
+  provTestRespond = () => jsonOk({ ok: true, calls_last_minute: 3 });
+  testBtn.click();
+  await tick();
+  assert.strictEqual(findByRole(root, 'status').textContent, 'Подключение работает.');
+});
+
+test('выключатель опроса onlinePBX шлёт {id, enabled}; интервал — {id, poll_interval_sec}; удаление спрашивает и шлёт {id}', async () => {
+  resetServer();
+  const root = await render();
+  findTileByText(root, /Регистратура/).click();
+  await tick();
+  const cb = findInputs(root).find((n) => n.attrs.type === 'checkbox');
+  cb.checked = true;
+  cb.dispatchEvent({ type: 'change' });
+  await tick();
+  assert.deepStrictEqual(lastProvSaveBody, { id: 7, enabled: true });
+
+  const num = findInputs(root).find((n) => n.attrs.type === 'number');
+  num.value = '5';
+  findButtonByText(root, /Сохранить интервал/).click();
+  await tick();
+  assert.strictEqual(provSaveCalls, 1, 'меньше 10 не уходит');
+  num.value = '45';
+  findButtonByText(root, /Сохранить интервал/).click();
+  await tick();
+  assert.deepStrictEqual(lastProvSaveBody, { id: 7, poll_interval_sec: 45 });
+
+  confirmAnswer = false;
+  findButtonByText(root, /Удалить провайдера/).click();
+  await tick();
+  assert.strictEqual(provDelCalls, 0, 'отказ в подтверждении — ничего не удалено');
+  confirmAnswer = true;
+  provListRespond = () => jsonOk({ kinds: PROVIDERS.kinds, providers: [] });
+  findButtonByText(root, /Удалить провайдера/).click();
+  await tick();
+  assert.deepStrictEqual(lastProvDelBody, { id: 7 });
+  assert.strictEqual(findTiles(root).length, 2, 'плитка ушла');
+  assert.strictEqual(findTileByText(root, /Binotel/).attrs['aria-pressed'], 'true', 'раскрыт снова Binotel');
+});
+
+test('журнал: колонка «АТС» называет провайдера; без колонки на сервере — Binotel', async () => {
+  resetServer();
+  callsRespond = () => jsonOk({ calls: [
+    { started_at: 1789372800, call_type: 0, external_number: '+998901234567', disposition: 'ANSWER', provider: 'onlinepbx' },
+    { started_at: 1789372700, call_type: 1, external_number: '+998901234568', disposition: 'ANSWER' },
+  ] });
+  const root = await render();
+  const text = textOf(root);
+  assert.ok(text.includes('АТС'), 'шапка колонки');
+  assert.ok(text.includes('onlinePBX') && text.includes('Binotel'));
 });

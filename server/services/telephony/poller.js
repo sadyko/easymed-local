@@ -20,6 +20,11 @@ import { findPatientsByPhone } from '../telegram/documents.js';
 // reason recordCall itself is shared: two call sites would be two chances for
 // one call to produce two leads — or, worse, none.
 import { leadFromCall } from '../crm/lead-from-call.js';
+// TELEPHONY_PROVIDERS_V1 — остальные провайдеры (onlinePBX) опрашиваются тем же
+// тиком, каждый своим клиентом, и складываются в ТУ ЖЕ таблицу звонков тем же
+// recordCall'ом: журнал, пациент по номеру и «звонок → заявка» одни на всех.
+import { pbxHistory, normalizePbxCall } from './onlinepbx.js';
+import { pbxOptions, recordProviderPoll, noteProviderCall } from './providers.js';
 
 // Cursor overlap. Binotel's since-methods key on the call's startTime; a call
 // that STARTED just before our last poll but was still ringing at poll time
@@ -61,45 +66,63 @@ export function callList(data) {
 // UNIQUE(general_call_id) + DO NOTHING make that race harmless: first writer
 // wins, the second changes nothing (both carry the same unified structure —
 // which is also why the plan's "upsert" needs no UPDATE branch).
-export function recordCall(db, d, source) {
+export function recordCall(db, d, source, provider = null) {
   if (!d || typeof d !== 'object') return false;
-  const id = d.generalCallID == null ? '' : String(d.generalCallID);
-  const startUnix = Number(d.startTime);
-  // No id or no start time = nothing we could ever de-duplicate or sort —
-  // not a call this table can file. Skipped, not thrown: one malformed entry
-  // must not cost the rest of the batch.
-  if (!id || !Number.isFinite(startUnix) || startUnix <= 0) return false;
+  const n = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+  // TELEPHONY_PROVIDERS_V1 — строка либо сырая Binotel (generalCallID/startTime),
+  // либо уже приведённая к словарю журнала (general_call_id/started_at) —
+  // так приходят звонки onlinePBX через normalizePbxCall. Один INSERT на всех:
+  // журнал, пациент по номеру и «звонок → заявка» не знают, чей это звонок.
+  let row;
+  if (d.general_call_id != null && d.started_at) {
+    row = {
+      general_call_id: String(d.general_call_id), started_at: String(d.started_at),
+      call_type: n(d.call_type) ?? 0, external_number: d.external_number == null ? '' : String(d.external_number),
+      internal_number: d.internal_number == null ? '' : String(d.internal_number),
+      waitsec: n(d.waitsec), billsec: n(d.billsec), disposition: d.disposition == null ? '' : String(d.disposition),
+      is_new_call: n(d.is_new_call), raw: d.raw == null ? d : d.raw,
+    };
+  } else {
+    const id = d.generalCallID == null ? '' : String(d.generalCallID);
+    const startUnix = Number(d.startTime);
+    // No id or no start time = nothing we could ever de-duplicate or sort —
+    // not a call this table can file. Skipped, not thrown: one malformed entry
+    // must not cost the rest of the batch.
+    if (!id || !Number.isFinite(startUnix) || startUnix <= 0) return false;
+    row = {
+      general_call_id: id, started_at: isoFromUnix(startUnix),
+      call_type: n(d.callType) ?? 0, external_number: d.externalNumber == null ? '' : String(d.externalNumber),
+      internal_number: d.internalNumber == null ? '' : String(d.internalNumber),
+      waitsec: n(d.waitsec), billsec: n(d.billsec), disposition: d.disposition == null ? '' : String(d.disposition),
+      is_new_call: n(d.isNewCall), raw: d,
+    };
+  }
+  if (!row.general_call_id || !row.started_at) return false;
 
-  const externalNumber = d.externalNumber == null ? '' : String(d.externalNumber);
+  const externalNumber = row.external_number;
   // One phone number can be a whole family (telegram/documents.js's accepted
   // reality); a call row has one patient column, so take the top match —
   // findPatientsByPhone orders active cards first, which is the person most
   // likely to be calling.
   const matches = externalNumber ? findPatientsByPhone(db, externalNumber, 1) : [];
-  const startedAt = isoFromUnix(startUnix);
+  const startedAt = row.started_at;
 
-  const n = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
   const info = db.prepare(`INSERT INTO calls
       (general_call_id, started_at, call_type, external_number, internal_number,
-       waitsec, billsec, disposition, is_new_call, patient_id, raw, source)
+       waitsec, billsec, disposition, is_new_call, patient_id, raw, source, provider, provider_id)
     VALUES (@general_call_id, @started_at, @call_type, @external_number, @internal_number,
-       @waitsec, @billsec, @disposition, @is_new_call, @patient_id, @raw, @source)
+       @waitsec, @billsec, @disposition, @is_new_call, @patient_id, @raw, @source, @provider, @provider_id)
     ON CONFLICT(general_call_id) DO NOTHING`).run({
-    general_call_id: id,
-    started_at: startedAt,
-    call_type: n(d.callType) ?? 0,
-    external_number: externalNumber,
-    internal_number: d.internalNumber == null ? '' : String(d.internalNumber),
-    waitsec: n(d.waitsec),
-    billsec: n(d.billsec),
-    disposition: d.disposition == null ? '' : String(d.disposition),
-    is_new_call: n(d.isNewCall),
+    ...row,
+    raw: JSON.stringify(row.raw),
     patient_id: matches.length ? matches[0].id : null,
-    raw: JSON.stringify(d),
     source,
+    provider: provider && provider.kind ? String(provider.kind) : 'binotel',
+    provider_id: provider && provider.id ? Number(provider.id) : null,
   });
   if (info.changes) {
-    noteCallSeen(db, startedAt);
+    if (provider && provider.id) noteProviderCall(db, provider.id, startedAt);
+    else noteCallSeen(db, startedAt);
     // CRM_CONFIG_V1 — only on a REAL insert, never on the ON CONFLICT no-op:
     // that is what makes poll-and-webhook double delivery produce one lead
     // instead of two, by exactly the constraint that already de-duplicates
@@ -113,7 +136,7 @@ export function recordCall(db, d, source) {
     try {
       leadFromCall(db, {
         id: info.lastInsertRowid,
-        disposition: d.disposition == null ? '' : String(d.disposition),
+        disposition: row.disposition,
         external_number: externalNumber,
         patient_id: matches.length ? matches[0].id : null,
       });
@@ -153,17 +176,26 @@ export async function pollOnce(db, opts = {}) {
   }
 }
 
-async function performPoll(db, { fetchImpl, timeoutMs, maxBytes, hasModule = defaultHasModule } = {}) {
+async function performPoll(db, opts = {}) {
+  const { hasModule = defaultHasModule } = opts;
+  // Licence check every tick, not once at boot: a module granted at the next
+  // check-in (or lapsing mid-day) must take effect without a restart. One
+  // licence for the whole feature: Binotel and every other provider alike.
+  if (!hasModule(db)) return;
+  await pollBinotel(db, opts);
+  await pollProviders(db, opts);
+}
+
+async function pollBinotel(db, { fetchImpl, timeoutMs, maxBytes } = {}) {
   const row = readSettingsRow(db);
   // Disabled, or the migration somehow hasn't run — not an error, just quiet.
   if (!row || !row.enabled) return;
-  // Licence check every tick, not once at boot: a module granted at the next
-  // check-in (or lapsing mid-day) must take effect without a restart.
-  if (!hasModule(db)) return;
   const { key, secret } = getCredentials(db);
   if (!key || !secret) return;   // saveSettings forbids this while enabled; belt for hand-edited rows
 
-  const maxStarted = db.prepare('SELECT MAX(started_at) AS m FROM calls').get().m;
+  // Binotel's cursor is over Binotel's OWN rows: another provider's fresher
+  // call must not push this window past a Binotel call still in flight.
+  const maxStarted = db.prepare("SELECT MAX(started_at) AS m FROM calls WHERE provider = 'binotel'").get().m;
   const maxUnix = maxStarted ? unixFromIso(maxStarted) : null;
   const since = maxUnix ? maxUnix - OVERLAP_SEC : Math.floor(Date.now() / 1000) - FIRST_WINDOW_SEC;
 
@@ -187,6 +219,37 @@ async function performPoll(db, { fetchImpl, timeoutMs, maxBytes, hasModule = def
   recordPoll(db, { ok: !failure, error: failure });
 }
 
+// TELEPHONY_PROVIDERS_V1 — каждый включённый провайдер опрашивается своим
+// курсором: MAX(started_at) ЕГО звонков минус перекрытие. Отказ одного
+// провайдера — его last_error; соседям и Binotel он не мешает.
+async function pollProviders(db, { fetchImpl, timeoutMs, maxBytes, pbxHistoryImpl = pbxHistory } = {}) {
+  let rows = [];
+  try { rows = db.prepare('SELECT * FROM telephony_providers WHERE enabled = 1 ORDER BY id').all(); } catch { return; }
+  for (const p of rows) {
+    if (p.kind !== 'onlinepbx') continue;
+    try {
+      const o = pbxOptions(db, p, { fetchImpl, timeoutMs, maxBytes });
+      if (!o.domain || (!o.authKey && !o.creds)) { recordProviderPoll(db, p.id, { ok: false, error: 'bad_credentials' }); continue; }
+      const maxStarted = db.prepare('SELECT MAX(started_at) AS m FROM calls WHERE provider_id = ?').get(p.id).m;
+      const maxUnix = maxStarted ? unixFromIso(maxStarted) : null;
+      const since = maxUnix ? maxUnix - OVERLAP_SEC : Math.floor(Date.now() / 1000) - FIRST_WINDOW_SEC;
+      const r = await pbxHistoryImpl(o.domain, since, o);
+      if (!r.ok) { recordProviderPoll(db, p.id, { ok: false, error: r.reason }); continue; }
+      for (const c of (Array.isArray(r.data) ? r.data : [])) {
+        const norm = normalizePbxCall(c);
+        if (!norm) continue;
+        try { recordCall(db, norm, 'poll', { id: p.id, kind: p.kind }); }
+        catch (e) { console.warn('[telephony] onlinepbx call not recorded:', e && e.message); }
+      }
+      recordProviderPoll(db, p.id, { ok: true });
+    } catch (e) {
+      // One provider's surprise costs that provider's tick, never the loop.
+      console.warn('[telephony] provider poll failed:', p.id, e && e.message);
+      try { recordProviderPoll(db, p.id, { ok: false, error: 'server_error' }); } catch {}
+    }
+  }
+}
+
 // --------------------------------------------------------------------------
 // Scheduling — the shape of scheduleCheckin (unref'd timers, wrapped ticks)
 // with telegram/index.js's wake-on-save so a settings change acts in seconds.
@@ -199,11 +262,24 @@ let armFn = null;
 // Each tick re-reads the interval so a changed setting takes effect on the
 // very next arm, without a restart. Exported for tests.
 export function nextDelayMs(db) {
+  // TELEPHONY_PROVIDERS_V1 — шаг цикла — самый частый из включённых: Binotel
+  // и провайдеры. Ни одного включённого — редкое дыхание, как раньше.
+  let providerMs = null;
+  try {
+    const r = db.prepare('SELECT MIN(poll_interval_sec) AS m FROM telephony_providers WHERE enabled = 1').get();
+    if (r && r.m) providerMs = Math.max(10, Number(r.m)) * 1000;
+  } catch { providerMs = null; }
   let row = null;
   try { row = readSettingsRow(db); } catch { row = null; }
-  if (!row || !row.enabled) return IDLE_RECHECK_MS;
-  const sec = Number(row.poll_interval_sec);
-  return (Number.isFinite(sec) && sec >= 10 ? sec : 30) * 1000;
+  let binotelMs = null;
+  if (row && row.enabled) {
+    const sec = Number(row.poll_interval_sec);
+    binotelMs = (Number.isFinite(sec) && sec >= 10 ? sec : 30) * 1000;
+  }
+  if (binotelMs == null && providerMs == null) return IDLE_RECHECK_MS;
+  if (binotelMs == null) return providerMs;
+  if (providerMs == null) return binotelMs;
+  return Math.min(binotelMs, providerMs);
 }
 
 // Called from rpc/telephony.js right after a save, so «включить» starts

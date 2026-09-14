@@ -45,7 +45,8 @@ import { roomsSetupDelete } from './rooms-delete.js';   // ROOMS_DELETE_V1
 import { cashierReport } from './cashier-report.js';   // CASHIER_REPORT_V1
 import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegramTestConnection, telegramLinksList, telegramLinkRevoke, telegramDeliveriesList, telegramStats, telegramBroadcastPreview, telegramBroadcastSend, telegramBroadcastStatus, telegramBroadcastHistory, telegramChatsList, telegramChatMessages, telegramChatSend, telegramChatSendFile, telegramChatUnread, telegramFolderSave, telegramFolderSetChat, telegramChatLink } from './telegram.js';   // TELEGRAM_BOT_V1 / TELEGRAM_BROADCAST_V1 / TELEGRAM_CHAT_V1
 import { licenceStatus, licenceUnlock, licenceEnroll, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
-import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRecentCalls, telephonyDispositions } from './telephony.js';   // TELEPHONY_V1 / TELEPHONY_ROUTING_V1
+import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRecentCalls, telephonyDispositions,
+         telephonyProvidersList, telephonyProviderSave, telephonyProviderDelete, telephonyProviderTest } from './telephony.js';   // TELEPHONY_V1 / TELEPHONY_ROUTING_V1 / TELEPHONY_PROVIDERS_V1
 import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss } from './lis.js';   // LIS_INGEST_V1
 import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
@@ -439,6 +440,11 @@ export const RPC = {
   // НЕТ намеренно — как и telephony_settings_get: у клиники с просроченной
   // лицензией нет опроса звонков, и настраивать маршрут ей нечего.
   telephony_dispositions:   (db, args, user) => telephonyDispositions(db, args, user),
+  // TELEPHONY_PROVIDERS_V1 — карточки провайдеров (onlinePBX и следующие).
+  telephony_providers_list:  (db, args, user) => telephonyProvidersList(db, args, user),
+  telephony_provider_save:   (db, args, user) => telephonyProviderSave(db, args, user),
+  telephony_provider_delete: (db, args, user) => telephonyProviderDelete(db, args, user),
+  telephony_provider_test:   (db, args, user) => telephonyProviderTest(db, args, user),
 
   // CRM_CONFIG_V1 — Настройки → «CRM-канбан»: колонки доски, источники и
   // «звонок -> карточка» (миграция 077). _get читают И доска, и экран

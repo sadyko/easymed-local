@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRecentCalls, telephonyDispositions, RpcError } from './telephony.js';
+import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRecentCalls, telephonyDispositions, RpcError,
+         telephonyProvidersList, telephonyProviderSave, telephonyProviderDelete, telephonyProviderTest } from './telephony.js';
 import { getRpc } from './index.js';
 import { SELLABLE_MODULES } from './licence.js';
 
@@ -205,7 +206,8 @@ test('dispositions — an outcome Binotel invented after the install: present, u
 
 test('registered in the RPC registry under the planned names', () => {
   for (const name of ['telephony_settings_get', 'telephony_settings_save', 'telephony_test',
-                      'telephony_recent_calls', 'telephony_dispositions']) {
+                      'telephony_recent_calls', 'telephony_dispositions',
+                      'telephony_providers_list', 'telephony_provider_save', 'telephony_provider_delete', 'telephony_provider_test']) {
     assert.equal(typeof getRpc(name), 'function', name);
   }
 });
@@ -214,4 +216,46 @@ test("'callcenter' is sellable — the locked-module screen's request must not 4
   // The telephony tile gates on the callcenter module; a locked clinic asks
   // for it through module_request, which validates against this exact set.
   assert.ok(SELLABLE_MODULES.has('callcenter'));
+});
+
+// --- TELEPHONY_PROVIDERS_V1 --------------------------------------------------
+
+test('provider RPCs: admin-only counting extra roles; the secret never crosses the boundary; validation is 400/404, not 500', async () => {
+  const db = fresh();
+  assert.throws(() => telephonyProvidersList(db, {}, registrar), (e) => e instanceof RpcError && e.status === 403);
+  assert.throws(() => telephonyProviderSave(db, {}, registrar), (e) => e.status === 403);
+  assert.throws(() => telephonyProviderDelete(db, {}, registrar), (e) => e.status === 403);
+  await assert.rejects(() => telephonyProviderTest(db, {}, registrar), (e) => e.status === 403);
+
+  const saved = telephonyProviderSave(db, { kind: 'onlinepbx', name: 'Офис', config: { domain: 'c.onpbx.ru' }, secret: { auth_key: 'AUTH' } }, doctorAdmin);
+  assert.equal(saved.kind, 'onlinepbx');
+  assert.deepEqual(saved.secret_set, { auth_key: true });
+  const list = telephonyProvidersList(db, {}, admin);
+  assert.deepEqual(list.kinds, [{ kind: 'onlinepbx', label: 'onlinePBX' }]);
+  assert.equal(list.providers.length, 1);
+  assert.equal(JSON.stringify(list).includes('AUTH'), false, 'auth_key is server-only');
+
+  assert.throws(() => telephonyProviderSave(db, { kind: 'skype' }, admin), (e) => e instanceof RpcError && e.status === 400);
+  assert.throws(() => telephonyProviderSave(db, { id: saved.id, enabled: true, config: { domain: '' } }, admin),
+    (e) => e instanceof RpcError && e.status === 400);
+  assert.throws(() => telephonyProviderDelete(db, { id: 999 }, admin), (e) => e instanceof RpcError && e.status === 404);
+
+  const r = await telephonyProviderTest(db, { id: saved.id }, admin, {
+    pbxAuthImpl: async () => ({ ok: true, key_id: 'ID', key: 'K' }),
+    pbxHistoryImpl: async () => ({ ok: true, data: [] }),
+  });
+  assert.deepEqual(r, { ok: true, calls_last_minute: 0 });
+
+  assert.deepEqual(telephonyProviderDelete(db, { id: saved.id }, admin), { ok: true });
+  assert.equal(telephonyProvidersList(db, {}, admin).providers.length, 0);
+});
+
+test('recent calls carry provider and provider_id so the log can name the PBX', () => {
+  const db = fresh();
+  const pid = db.prepare("INSERT INTO telephony_providers (kind, name) VALUES ('onlinepbx', 'x')").run().lastInsertRowid;
+  db.prepare("INSERT INTO calls (general_call_id, started_at, provider, provider_id) VALUES ('onlinepbx:u', '2026-09-14T08:00:00Z', 'onlinepbx', ?)").run(pid);
+  db.prepare("INSERT INTO calls (general_call_id, started_at) VALUES ('1', '2026-09-14T07:00:00Z')").run();
+  const rows = telephonyRecentCalls(db, {}, admin);
+  assert.deepEqual(rows.map((c) => [c.general_call_id, c.provider, c.provider_id]),
+    [['onlinepbx:u', 'onlinepbx', pid], ['1', 'binotel', null]]);
 });
