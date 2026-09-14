@@ -189,7 +189,7 @@ export function createInvoiceForVisit(db, args, user) {
     // with their own price for that service overrides the catalog
     // (DOCTOR_OWN_PRICE_V1, see domain/pricing.js). A line with neither a
     // service nor a product (ad-hoc) keeps its stored price.
-    const getService = db.prepare('SELECT price, name, price_secondary, secondary_days_from, secondary_days_to, price_repeat FROM services WHERE id = ?');
+    const getService = db.prepare('SELECT price, name, price_secondary, secondary_days_from, secondary_days_to, price_repeat, repeat_days_from, repeat_days_to FROM services WHERE id = ?');
     const getProduct = db.prepare('SELECT sale_price, name FROM products WHERE id = ?');
     const priced = rows.map((row) => {
       let unit = row.unit_price;

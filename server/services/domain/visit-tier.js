@@ -10,10 +10,14 @@
 //   • a service with no tier prices at all is priced the old way — one price;
 //   • no earlier visit of this service for this patient → PRIMARY;
 //   • the earlier visit is counted from its calendar day; if today falls
-//     outside [secondary_days_from … secondary_days_to] days after it, the
-//     chain is broken → PRIMARY again («пришёл позже окна — заново»);
-//   • inside the window: the previous line was primary → SECONDARY; it was
-//     already secondary or repeat → REPEAT (third and later);
+//     outside the window of days after it, the chain is broken → PRIMARY
+//     again («пришёл позже окна — заново»);
+//   • the previous line was primary → the candidate is SECONDARY and the
+//     window is [secondary_days_from … secondary_days_to]; it was already
+//     secondary or repeat → the candidate is REPEAT (third and later) and the
+//     window is [repeat_days_from … repeat_days_to] when the service sets
+//     either bound (REPEAT_WINDOW_V1, mig 130), else the second-visit window
+//     as before;
 //   • a tier the service does not price falls back to the nearest one that
 //     exists: no repeat price → the secondary price again; no secondary price
 //     but a repeat one → straight to repeat; neither → primary.
@@ -33,6 +37,23 @@ export function numOrNull(v) {
   if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * The window of days (after the previous visit) in which `tier` still counts:
+ * { from, to } — `from` defaults to 1 (the next calendar day), `to` null means
+ * no upper limit. REPEAT_WINDOW_V1: the repeat tier has its own window when
+ * the service sets either bound; otherwise it shares the second-visit window.
+ */
+export function windowFor(service, tier) {
+  let from = numOrNull(service && service.secondary_days_from);
+  let to = numOrNull(service && service.secondary_days_to);
+  if (tier === 'repeat') {
+    const rf = numOrNull(service && service.repeat_days_from);
+    const rt = numOrNull(service && service.repeat_days_to);
+    if (rf !== null || rt !== null) { from = rf; to = rt; }
+  }
+  return { from: from === null ? 1 : Math.max(0, Math.floor(from)), to: to === null ? null : Math.floor(to) };
 }
 
 /** Whole days from `fromYmd` to `toYmd` ('YYYY-MM-DD' each); negative when reversed. */
@@ -78,14 +99,13 @@ export function tierFor(service, prev, todayYmd) {
   if (!prev || !prev.day) return out('primary', base, null, 'first');
 
   const days = daysBetween(prev.day, todayYmd);
-  const from = numOrNull(service.secondary_days_from);
-  const to = numOrNull(service.secondary_days_to);
-  const lo = from === null ? 1 : Math.max(0, Math.floor(from));
-  if (days < lo) return out('primary', base, days, 'too_soon');
-  if (to !== null && days > Math.floor(to)) return out('primary', base, days, 'window_passed');
-
   const prevTier = prev.tier === 'secondary' || prev.tier === 'repeat' ? prev.tier : 'primary';
-  const r = priceForTier(service, prevTier === 'primary' ? 'secondary' : 'repeat');
+  const wanted = prevTier === 'primary' ? 'secondary' : 'repeat';
+  const { from, to } = windowFor(service, wanted);
+  if (days < from) return out('primary', base, days, 'too_soon');
+  if (to !== null && days > to) return out('primary', base, days, 'window_passed');
+
+  const r = priceForTier(service, wanted);
   return out(r.tier, r.price, days, 'in_window');
 }
 

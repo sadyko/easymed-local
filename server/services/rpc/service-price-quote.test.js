@@ -128,3 +128,16 @@ test('quote for a PLANNED date: booked for tomorrow after a visit today → seco
   assert.equal(servicePriceQuote(db2, { patient_id: 1, service_ids: [id2] }, registrar).quotes[id2].reason, 'first');
   assert.equal(servicePriceQuote(db2, { patient_id: 1, service_ids: [id2], date: 'garbage' }, registrar).quotes[id2].reason, 'first', 'a bad date falls back to today');
 });
+
+// REPEAT_WINDOW_V1 — the save RPC stores and checks the repeat visit's own window.
+test('service_save: окно повторного визита хранится; перепутанные границы и окно без цены — отказ', () => {
+  const db = fresh();
+  const id = tiered(db, { repeat_days_from: 1, repeat_days_to: 30 });
+  const row = db.prepare('SELECT repeat_days_from, repeat_days_to FROM services WHERE id = ?').get(id);
+  assert.deepEqual(row, { repeat_days_from: 1, repeat_days_to: 30 });
+  serviceSave(db, { id, name: 'Приём невролога', type: 'consultation', price: 200000, performers: [], price_secondary: 60000, price_repeat: 0, repeat_days_from: '', repeat_days_to: '' }, admin);
+  assert.deepEqual(db.prepare('SELECT repeat_days_from, repeat_days_to FROM services WHERE id = ?').get(id), { repeat_days_from: null, repeat_days_to: null }, 'пустые поля — окно снято');
+  assert.throws(() => tiered(db, { repeat_days_from: 30, repeat_days_to: 1 }), /повторного визита/);
+  assert.throws(() => tiered(db, { price_secondary: null, price_repeat: null, secondary_days_from: null, secondary_days_to: null, repeat_days_to: 30 }), /цену повторного визита/);
+  db.close();
+});

@@ -158,6 +158,10 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
     const daysFromInp = h('input', { type: 'number', step: '1', min: '0', value: row && row.secondary_days_from != null ? row.secondary_days_from : '', placeholder: '1', style: { width: '90px' } });
     const daysToInp   = h('input', { type: 'number', step: '1', min: '0', value: row && row.secondary_days_to != null ? row.secondary_days_to : '', placeholder: 'без предела', style: { width: '110px' } });
     const repPriceInp = h('input', { type: 'number', step: '0.01', min: '0', value: row && row.price_repeat != null ? row.price_repeat : '', placeholder: 'пусто — как второй' });
+    // REPEAT_WINDOW_V1 — своё окно дней у повторного визита (владелец: «repeat
+    // days, it should have the range too»); оба пустые — как у второго.
+    const repFromInp = h('input', { type: 'number', step: '1', min: '0', value: row && row.repeat_days_from != null ? row.repeat_days_from : '', placeholder: 'как у второго', style: { width: '110px' } });
+    const repToInp   = h('input', { type: 'number', step: '1', min: '0', value: row && row.repeat_days_to != null ? row.repeat_days_to : '', placeholder: 'как у второго', style: { width: '110px' } });
 
     // ---- исполнители -------------------------------------------------------
     // «Врач» переключает СПИСОК между врачами и остальными; галочки живут в
@@ -253,6 +257,8 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
             secondary_days_from: numOrNull(daysFromInp.value),
             secondary_days_to: numOrNull(daysToInp.value),
             price_repeat: numOrNull(repPriceInp.value),
+            repeat_days_from: numOrNull(repFromInp.value),
+            repeat_days_to: numOrNull(repToInp.value),
             code: codeInp.value.trim() || null,
             active: activeChk.checked,
             type_ref: typeCombo.resolve(),
@@ -314,12 +320,14 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
             h('section', { class: 'mg-section span-full' },
                 h('h3', null, 'Цена по счёту визита'),
                 h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px', lineHeight: 1.5 } },
-                    'Необязательно. Первый визит — по цене выше. Второй визит по этой же услуге считается по своей цене, если пациент пришёл через указанное число дней после предыдущего визита: «не раньше чем через 1» и «не позже чем через 6» — это пример «между 1 и 6 днями». Третий и дальше в том же окне — по цене повторного. Пришёл позже окна — снова первый. Чтобы второй визит в тот же день тоже считался вторым, поставьте «не раньше чем через 0».'),
+                    'Необязательно. Первый визит — по цене выше. Второй визит по этой же услуге считается по своей цене, если пациент пришёл через указанное число дней после предыдущего визита: «не раньше чем через 1» и «не позже чем через 6» — это пример «между 1 и 6 днями». Третий и дальше — по цене повторного, в своём окне дней от предыдущего визита (пусто — то же окно, что у второго). Пришёл позже окна — снова первый. Чтобы визит в тот же день тоже считался, поставьте «не раньше чем через 0».'),
                 h('div', { class: 'mg-grid' },
                     field('Цена второго визита', secPriceInp),
                     field('Второй визит — не раньше чем через (дней после предыдущего)', daysFromInp),
                     field('и не позже чем через (дней; пусто — без предела)', daysToInp),
-                    field('Цена повторного визита (третий и далее, 0 — бесплатно)', repPriceInp))),
+                    field('Цена повторного визита (третий и далее, 0 — бесплатно)', repPriceInp),
+                    field('Повторный визит — не раньше чем через (дней; пусто — как у второго)', repFromInp),
+                    field('и не позже чем через (дней; пусто — как у второго)', repToInp))),
             performersSection,
             h('section', { class: 'mg-section span-full' },
                 h('div', { class: 'mg-grid' },

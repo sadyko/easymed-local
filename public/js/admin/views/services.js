@@ -24,6 +24,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { importExportButtons, exportSectionRows } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1 + SERVICES_BULK_V1
+import { tierWindowParts } from '../visit-tier-logic.js';   // SVC_TIER_COLUMN_V1 + REPEAT_WINDOW_V1
 import { ratesOf } from './doctor-pool.js?v=dp1';   // SVC_PERFORMERS_V1 — тот же разбор service_rates, что и в мастере визита
 import { openServiceEditor } from './service-editor.js?v=svceditor1';   // SERVICES_ONE_EDITOR_V1
 
@@ -96,6 +97,7 @@ const flt = {
     name: '', code: '', type: '',
     priceMin: '', priceMax: '', durMin: '', durMax: '',
     doctor: '', lab: '', active: '',
+    tiered: '',   // SVC_TIER_COLUMN_V1 — услуги с ценой по счёту визита
     performer: '',   // SVC_PERFORMERS_V1 — «какие услуги делает этот врач»
 };
 const clearFilters = () => Object.keys(flt).forEach((k) => { flt[k] = ''; });
@@ -138,6 +140,7 @@ function matchesFilters(s) {
     if (flt.type && typeKey(s) !== flt.type) return false;
     if (!inRange(s.price, flt.priceMin, flt.priceMax)) return false;
     if (!inRange(s.duration_minutes, flt.durMin, flt.durMax)) return false;
+    if (!flagOk(flt.tiered, tierWindowParts(s, 'secondary'))) return false;   // SVC_TIER_COLUMN_V1
     if (!flagOk(flt.doctor, s.requires_doctor)) return false;
     // SVC_PERFORMERS_V1 — обратный вопрос к колонке: показать всё, что делает
     // конкретный сотрудник. Ищем по тем же именам, что стоят в ячейке.
@@ -197,6 +200,8 @@ function mount() {
         h('th', null, textFilter('code', 'Code')),
         h('th', null, selectFilter('type', [['', 'All']].concat(SERVICE_TYPES))),
         h('th', null, rangeFilter('priceMin', 'priceMax')),
+        h('th', null, selectFilter('tiered', YES_NO)),   // SVC_TIER_COLUMN_V1 — есть ли цена по счёту визита
+        h('th', null, ''),
         h('th', null, rangeFilter('durMin', 'durMax')),
         h('th', null, selectFilter('doctor', YES_NO)),
         h('th', null, textFilter('performer', 'Doctor name')),   // SVC_PERFORMERS_V1
@@ -257,6 +262,8 @@ function mount() {
                         h('th', null, 'Code'),
                         h('th', null, 'Type'),
                         h('th', null, 'Price'),
+                        h('th', null, 'Второй визит'),   // SVC_TIER_COLUMN_V1 — цена и окно в днях
+                        h('th', null, 'Повторный визит'),
                         h('th', null, 'Duration'),
                         h('th', null, 'Doctor'),
                         h('th', null, 'Performers'),
@@ -327,7 +334,7 @@ function setLoadingRow() {
     if (!refs.tbody) return;
     clear(refs.tbody);
     refs.tbody.appendChild(h('tr', null,
-        h('td', { colspan: String(isAdmin() ? 11 : 10), style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Loading…'),
+        h('td', { colspan: String(isAdmin() ? 13 : 12), style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Loading…'),
     ));
     refs.emptyEl.style.display = 'none';
 }
@@ -466,6 +473,25 @@ function paintBulkBar() {
     ));
 }
 
+// SVC_TIER_COLUMN_V1 — «Второй визит» / «Повторный визит»: the price and how
+// many days after the previous visit it still counts. The words match the
+// editor («не раньше чем через… не позже чем через…») so the list and the
+// form describe one rule; a service with one price shows a dash. The repeat
+// price when unset is the second-visit price (the server's fallback), and its
+// window when unset is the second-visit window (REPEAT_WINDOW_V1).
+function tierCell(s, tier) {
+    const w = tierWindowParts(s, tier);
+    if (!w) return h('td', { class: 'muted' }, '—');
+    const own = tier === 'repeat' ? s.price_repeat : s.price_secondary;
+    const price = own != null && own !== '' ? Number(own) : (tier === 'repeat' && s.price_secondary != null && s.price_secondary !== '' ? Number(s.price_secondary) : Number(s.price));
+    const days = w.kind === 'to' ? trf('до {n} дн.', { n: w.to })
+        : w.kind === 'range' ? trf('{a}–{b} дн.', { a: w.from, b: w.to })
+        : trf('от {n} дн.', { n: w.from });
+    return h('td', { class: 'num' },
+        h('div', null, price === 0 ? tr('бесплатно') : fmtPrice(price)),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, days));
+}
+
 function serviceRow(s) {
     const inactive = !s.active;
     const box = h('input', { type: 'checkbox',
@@ -484,6 +510,8 @@ function serviceRow(s) {
         h('td', { class: 'muted' }, s.code || '—'),
         h('td', null, typeLabel(s)),
         h('td', { class: 'num' }, fmtPrice(s.price)),
+        tierCell(s, 'secondary'),   // SVC_TIER_COLUMN_V1
+        tierCell(s, 'repeat'),
         h('td', null, s.duration_minutes != null ? trf('{n} мин', { n: s.duration_minutes }) : '—'),
         h('td', null, s.requires_doctor ? Tag('Yes', { kind: 'ok', dot: true }) : h('span', { class: 'muted' }, '—')),
         performerCell(s),

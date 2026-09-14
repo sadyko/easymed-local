@@ -97,6 +97,7 @@ function resolveRefTx(db, table, ref) {
  * args: { id?, name, type, price, tax_rate?, duration_minutes?, requires_doctor?,
  *         default_doctor_percent?, room_id?, code?, active?,
  *         price_secondary?, secondary_days_from?, secondary_days_to?, price_repeat?  (VISIT_TIER_PRICING_V1, all nullable)
+ *         repeat_days_from?, repeat_days_to?  (REPEAT_WINDOW_V1, nullable — empty = the second-visit window)
  *         type_ref?/category_ref?/department_ref?: {id}|{name}|null,
  *         lab?: {specimen, result_unit, ref_low, ref_high, ref_text, tube_color},
  *         performers?: [userId] }
@@ -155,6 +156,15 @@ export function serviceSave(db, args, user) {
   }
   if ((daysFrom !== null || daysTo !== null) && priceSecondary === null && priceRepeat === null) {
     throw new RpcError('Укажите цену второго визита — иначе окно дней не на что применить.', 400);
+  }
+  // REPEAT_WINDOW_V1 — the repeat visit's own window; both empty = as the second visit.
+  const repDaysFrom = tierDays(a.repeat_days_from, 'Повторный визит, «не раньше чем через»');
+  const repDaysTo = tierDays(a.repeat_days_to, 'Повторный визит, «не позже чем через»');
+  if (repDaysFrom !== null && repDaysTo !== null && repDaysTo < repDaysFrom) {
+    throw new RpcError('Окно повторного визита: «не позже чем через» не может быть раньше «не раньше чем через».', 400);
+  }
+  if ((repDaysFrom !== null || repDaysTo !== null) && priceSecondary === null && priceRepeat === null) {
+    throw new RpcError('Укажите цену повторного визита — иначе окно дней не на что применить.', 400);
   }
   const active = a.active === undefined ? 1 : asBool(a.active);
   const code = a.code == null || String(a.code).trim() === '' ? null : String(a.code).trim();
@@ -223,6 +233,7 @@ export function serviceSave(db, args, user) {
         type_id: refs.type_id, category_id: refs.category_id, department_id: refs.department_id,
         default_doctor_percent: defaultPct, room_id: roomId,
         price_secondary: priceSecondary, secondary_days_from: daysFrom, secondary_days_to: daysTo, price_repeat: priceRepeat,
+        repeat_days_from: repDaysFrom, repeat_days_to: repDaysTo,
         // Не-лабораторная услуга рождается с пустым лаб-блоком; лабораторная —
         // с тем, что ввели.
         specimen: lab ? (lab.specimen ?? null) : null,
@@ -243,6 +254,7 @@ export function serviceSave(db, args, user) {
         type_id: refs.type_id, category_id: refs.category_id, department_id: refs.department_id,
         default_doctor_percent: defaultPct, room_id: roomId,
         price_secondary: priceSecondary, secondary_days_from: daysFrom, secondary_days_to: daysTo, price_repeat: priceRepeat,
+        repeat_days_from: repDaysFrom, repeat_days_to: repDaysTo,
       };
       // Лаб-колонки пишутся ТОЛЬКО когда раздел = лаборатория. Скрытый блок
       // не затирает сохранённое (прецедент sections.js visibleWhen).

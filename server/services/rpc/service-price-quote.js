@@ -37,7 +37,7 @@ export function servicePriceQuote(db, args, user) {
   const visitId = a.visit_id == null ? null : Number(a.visit_id);
 
   const todayYmd = /^\d{4}-\d{2}-\d{2}$/.test(String(a.date || '')) ? String(a.date) : today(db);
-  const getService = db.prepare('SELECT id, price, price_secondary, secondary_days_from, secondary_days_to, price_repeat FROM services WHERE id = ?');
+  const getService = db.prepare('SELECT id, price, price_secondary, secondary_days_from, secondary_days_to, price_repeat, repeat_days_from, repeat_days_to FROM services WHERE id = ?');
   // The most recent earlier line of this service for this patient. Lines
   // cancelled at the desk and visits that never happened do not count: a
   // patient who booked and did not come has not had a first visit.

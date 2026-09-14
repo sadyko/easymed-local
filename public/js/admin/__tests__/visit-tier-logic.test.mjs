@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { tierLabel, tierApplies, quotableIds, applyQuotes, resetQuotes, priceTierOf } from '../visit-tier-logic.js';
+import { tierLabel, tierApplies, quotableIds, applyQuotes, resetQuotes, priceTierOf, tierWindowParts, tierWindow } from '../visit-tier-logic.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const read = (rel) => fs.readFileSync(path.join(HERE, '..', rel), 'utf8');
@@ -87,4 +87,17 @@ test('the editor sends the four tier fields; the wizard, attach path and doctor 
     for (const f of ['views/crm.js', 'views/patient-card.js', 'views/patient-create-modal.js']) {
         assert.ok(read(f).includes('visit-wizard.js?v=tier2'), f + ' держит старый кэш мастера записи');
     }
+});
+
+// SVC_TIER_COLUMN_V1 / REPEAT_WINDOW_V1 — the words the catalogue column says.
+test('tierWindowParts: «до 6 дн.» for 1–6, a range when the lower bound matters, open-ended without «до»; the repeat window falls back to the second-visit one', () => {
+    const svc = { price: 200000, price_secondary: 60000, secondary_days_from: 1, secondary_days_to: 6, price_repeat: 0 };
+    assert.deepEqual(tierWindowParts(svc), { kind: 'to', from: 1, to: 6 });
+    assert.deepEqual(tierWindowParts({ ...svc, secondary_days_from: 2 }), { kind: 'range', from: 2, to: 6 });
+    assert.deepEqual(tierWindowParts({ ...svc, secondary_days_to: null }), { kind: 'from', from: 1, to: null });
+    assert.deepEqual(tierWindowParts(svc, 'repeat'), { kind: 'to', from: 1, to: 6 }, 'no own window — the second-visit one');
+    assert.deepEqual(tierWindowParts({ ...svc, repeat_days_to: 30 }, 'repeat'), { kind: 'to', from: 1, to: 30 });
+    assert.deepEqual(tierWindow({ ...svc, repeat_days_from: 3, repeat_days_to: 30 }, 'repeat'), { from: 3, to: 30 });
+    assert.equal(tierWindowParts({ price: 100 }), null, 'one-price service — nothing to say');
+    assert.equal(tierWindowParts({ price: 100, secondary_days_to: 6 }), null, 'a window without a price is not a tier');
 });

@@ -253,3 +253,34 @@ test('выделение: «Отметить все» в шапке берёт �
   assert.equal(rpcCalls.filter((r) => r.name === 'delete_service').length, 2);
   services = [SVC];
 });
+
+// SVC_TIER_COLUMN_V1 + REPEAT_WINDOW_V1 — owner: «add into the settings of the
+// services the secondary visit until (show in the days)… repeat days, it
+// should have the range too». Two columns: the second and the repeat visit,
+// each with its price and its window in days; one-price services show a dash.
+test('колонки «Второй визит» и «Повторный визит»: цена и окно в днях; у услуги с одной ценой — прочерк', async () => {
+  services = [
+    { ...SVC, id: 7, price_secondary: 60000, secondary_days_from: 1, secondary_days_to: 6, price_repeat: 0, repeat_days_from: 2, repeat_days_to: 30 },
+    { ...SVC, id: 8, name: 'ЭКГ', price_secondary: 30000, secondary_days_to: 10 },
+    { ...SVC, id: 9, name: 'Массаж' },
+  ];
+  window.easymed.state.user = ADMIN;
+  document.body.children.length = 0;
+  const c = mk('div');
+  await renderServices(c, {});
+  await flush();
+
+  const heads = tags(c, 'th').map((t) => textOf(t).trim());
+  assert.ok(heads.includes('Второй визит') && heads.includes('Повторный визит'), 'шапка: ' + heads.join(' | '));
+  const rows = tags(c, 'tr').filter((r) => /row-click/.test(r.className || ''));
+  const cellsOf = (r) => tags(r, 'td').map((t) => textOf(t).replace(/\s+/g, ' ').trim());
+  const r7 = cellsOf(rows[0]);
+  assert.ok(r7.some((t) => /60 000/.test(t) && /до 6 дн\./.test(t)), 'второй: цена и «до 6 дн.» — ' + r7.join(' | '));
+  assert.ok(r7.some((t) => /бесплатно/.test(t) && /2–30 дн\./.test(t)), 'повторный: бесплатно и «2–30 дн.» — ' + r7.join(' | '));
+  const r8 = cellsOf(rows[1]);
+  assert.ok(r8.some((t) => /30 000/.test(t) && /до 10 дн\./.test(t)), 'второй визит ЭКГ');
+  assert.equal(r8.filter((t) => /30 000/.test(t) && /до 10 дн\./.test(t)).length, 2, 'повторный без своих цены и окна — как второй');
+  const r9 = cellsOf(rows[2]);
+  assert.equal(r9.filter((t) => t === '—').length >= 2, true, 'одна цена — прочерки в обеих колонках');
+  services = [SVC];
+});

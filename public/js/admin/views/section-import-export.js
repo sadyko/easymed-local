@@ -437,6 +437,8 @@ const IMPORT_CONFIGS = {
             { key: 'secondary_days_from', coerce: 'int', hint: 'Второй визит — не раньше чем через N дней после предыдущего' },
             { key: 'secondary_days_to',   coerce: 'int', hint: 'и не позже чем через M дней (пусто — без предела)' },
             { key: 'price_repeat',     coerce: 'num', hint: 'Цена повторного визита, третий и далее (0 — бесплатно; пусто — как второй)' },
+            { key: 'repeat_days_from', coerce: 'int', hint: 'Повторный визит — не раньше чем через N дней после предыдущего (пусто — как у второго)' },
+            { key: 'repeat_days_to',   coerce: 'int', hint: 'и не позже чем через M дней (пусто — как у второго)' },
             { key: 'tax_rate',         coerce: 'num',  defaultNum: 12, hint: 'НДС % (по умолчанию 12, если пусто)' },
             { key: 'duration_minutes', coerce: 'int',  defaultNum: 30, hint: 'Длительность, мин (по умолчанию 30, если пусто)' },
             { key: 'requires_doctor',  coerce: 'bool', defaultBool: true, hint: 'true / false — нужен врач (по умолчанию true)' },

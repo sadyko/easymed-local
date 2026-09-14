@@ -2,7 +2,7 @@
 // 60 000 for a second visit 1–6 days later, free for the third in the window.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { tierFor, tierUnitPrice, hasTiers, daysBetween, priceForTier } from './visit-tier.js';
+import { windowFor, tierFor, tierUnitPrice, hasTiers, daysBetween, priceForTier } from './visit-tier.js';
 
 const SVC = { price: 200000, price_secondary: 60000, secondary_days_from: 1, secondary_days_to: 6, price_repeat: 0 };
 
@@ -59,4 +59,30 @@ test('tierUnitPrice: the cashier re-prices a stored line by its recorded tier', 
   assert.equal(tierUnitPrice(SVC, 'repeat', 200000), 0);
   assert.equal(tierUnitPrice(SVC, 'primary', 200000), 200000);
   assert.equal(tierUnitPrice(SVC, null, 200000), 200000);
+});
+
+// REPEAT_WINDOW_V1 — owner: «there was secondary visit days and repeat days,
+// it should have the range too».
+test('the repeat visit has its own window: second within 1–6 days, third within 1–30; outside either — first again', () => {
+  const svc = { price: 200000, price_secondary: 60000, secondary_days_from: 1, secondary_days_to: 6, price_repeat: 0, repeat_days_from: 1, repeat_days_to: 30 };
+  assert.equal(tierFor(svc, { day: '2026-09-01', tier: null }, '2026-09-05').tier, 'secondary');
+  // third visit 20 days after the second — outside the second-visit window, inside the repeat one
+  const third = tierFor(svc, { day: '2026-09-05', tier: 'secondary' }, '2026-09-25');
+  assert.equal(third.tier, 'repeat'); assert.equal(third.price, 0);
+  assert.equal(tierFor(svc, { day: '2026-09-05', tier: 'secondary' }, '2026-10-10').reason, 'window_passed');
+  assert.equal(tierFor(svc, { day: '2026-09-05', tier: 'secondary' }, '2026-10-10').tier, 'primary');
+  // fourth after the third — the repeat window again, counted from the third
+  assert.equal(tierFor(svc, { day: '2026-09-25', tier: 'repeat' }, '2026-10-20').tier, 'repeat');
+  assert.deepEqual(windowFor(svc, 'repeat'), { from: 1, to: 30 });
+  assert.deepEqual(windowFor(svc, 'secondary'), { from: 1, to: 6 });
+});
+
+test('without its own window the repeat visit keeps the second-visit window — services set up before mig 130 behave as before', () => {
+  const svc = { price: 200000, price_secondary: 60000, secondary_days_from: 1, secondary_days_to: 6, price_repeat: 0 };
+  assert.equal(tierFor(svc, { day: '2026-09-05', tier: 'secondary' }, '2026-09-25').tier, 'primary', '20 days: outside the shared window');
+  assert.equal(tierFor(svc, { day: '2026-09-05', tier: 'secondary' }, '2026-09-08').tier, 'repeat');
+  assert.deepEqual(windowFor(svc, 'repeat'), { from: 1, to: 6 });
+  // only one bound set → the other takes the default (from 1 / to unlimited), not the second-visit value
+  assert.deepEqual(windowFor({ ...svc, repeat_days_to: 90 }, 'repeat'), { from: 1, to: 90 });
+  assert.deepEqual(windowFor({ ...svc, repeat_days_from: 0 }, 'repeat'), { from: 0, to: null });
 });
