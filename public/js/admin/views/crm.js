@@ -6,7 +6,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { openVisitWizard } from './visit-wizard.js?v=aug17e';   // CRM_V4 — конверсия сразу в реальный заказ услуги
+import { openVisitWizard } from './visit-wizard.js?v=tier1';   // CRM_V4 — конверсия сразу в реальный заказ услуги
 import { digitsOf, phoneLikePattern, filterPhoneMatches, uzLocalDigits, MIN_PHONE_DIGITS } from './crm-phone-match.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
 // CRM_CARD_V2 — номер на карточке группируется ТЕМ ЖЕ правилом, что и во всех

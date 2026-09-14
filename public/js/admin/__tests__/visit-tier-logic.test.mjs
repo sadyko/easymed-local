@@ -77,4 +77,13 @@ test('the editor sends the four tier fields; the wizard, attach path and doctor 
     assert.match(vm, /price_tier:\s*price_tier \|\| null/, 'visit-modal кладёт ступень в строку');
     const ws = read('views/service-workspace.js');
     assert.match(ws, /rpc\('service_price_quote'/, 'кабинет врача идёт через ту же котировку');
+    // The registration wizard (visit-wizard.js — «Записать на визит» from the
+    // patient card, the new-patient window and the CRM) is the main path.
+    const vw = read('views/visit-wizard.js');
+    assert.match(vw, /rpc\('service_price_quote'/, 'мастер записи спрашивает цену у сервера');
+    assert.match(vw, /price_tier:\s*lineTier\(c\)/, 'строка визита из мастера несёт ступень');
+    assert.match(vw, /if \(tierApplies\(tq\)\) return Number\(tq\.price\);/, 'ступень сильнее личной цены врача — как в кассе');
+    for (const f of ['views/crm.js', 'views/patient-card.js', 'views/patient-create-modal.js']) {
+        assert.ok(read(f).includes('visit-wizard.js?v=tier1'), f + ' держит старый кэш мастера записи');
+    }
 });

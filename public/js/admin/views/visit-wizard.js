@@ -31,6 +31,7 @@ import { h, Icon, clear, toast, Avatar, initials, avColor, field, fmtDate, fmtDa
 import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1
 import { doctorPoolFor } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1
+import { tierLabel, tierApplies } from '../visit-tier-logic.js';   // VISIT_TIER_PRICING_V1
 import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // PAYER_COMPANY_IN_ESTIMATE_V1
 // WIZARD_ONE_ENGINE_V1 — общий клиент слотов и записи. Один вопрос «когда врач
 // свободен» на весь продукт: его задаёт серверу этот клиент, а считает
@@ -87,6 +88,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
     const wiz = {
         step: 1,
+        tiers: {},           // VISIT_TIER_PRICING_V1 — service_id → quote for this patient
         services: [],        // catalog
         // CATALOG_DIAG_V4 — null until the catalog load finishes; a string means
         // it failed and the empty state must say so rather than claim the
@@ -224,6 +226,12 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // rather than falsiness.
     function linePrice(svc, doctorId) {
         const cat = Number(svc && svc.price) || 0;
+        // VISIT_TIER_PRICING_V1 — a second/repeat visit of this service for
+        // THIS patient is priced by its tier, over the catalog AND over the
+        // doctor's own price (both are first-visit prices) — the same
+        // precedence the till applies (billing.js tierUnitPrice).
+        const tq = svc && wiz.tiers[svc.id];
+        if (tierApplies(tq)) return Number(tq.price);
         if (!doctorId) return cat;
         const doc = wiz.doctors.find(d => String(d.id) === String(doctorId));
         if (!doc || !Array.isArray(doc.service_rates)) return cat;
@@ -233,6 +241,28 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         return Number.isFinite(own) && own >= 0 ? own : cat;
     }
     const cartLinePrice = (c) => linePrice(c.svc, c.doctorId);
+    const lineTier = (c) => { const q = c && c.svc && wiz.tiers[c.svc.id]; return q ? (tierApplies(q) ? q.tier : 'primary') : null; };
+    // VISIT_TIER_PRICING_V1 — ask once per cart change; the newest answer wins.
+    let _tierSeq = 0;
+    async function refreshTiers() {
+        const ids = [...new Set(wiz.cart.map((c) => c.svc && c.svc.id).filter((id) => Number.isInteger(Number(id)) && Number(id) > 0).map(Number))];
+        if (!ids.length || !patient || !patient.id) return;
+        const seq = ++_tierSeq;
+        let res = null;
+        try { res = await supabase.rpc('service_price_quote', { patient_id: patient.id, service_ids: ids }); } catch (_) { return; }
+        if (seq !== _tierSeq || !res || res.error || !res.data || !res.data.quotes) return;
+        Object.assign(wiz.tiers, res.data.quotes);
+        repaintRail();
+        if (wiz.step === 1) repaintCatalog();
+    }
+    // The chip beside a quoted line: «Второй визит» / «Повторный визит».
+    const tierChip = (c) => {
+        const q = c && c.svc && wiz.tiers[c.svc.id];
+        if (!tierApplies(q)) return null;
+        return h('span', { class: 'wzc-tier', title: q.days_since != null
+            ? trf('Прошлый визит по этой услуге — {n} дн. назад. Цена первого визита: {price}', { n: q.days_since, price: fmtPrice(q.base_price) })
+            : '' }, tierLabel(q.tier));
+    };
 
     // COVERAGE_SPLIT_V1 — что именно берёт на себя контрагент. Строка сметы
     // считается покрытой, пока её явно не сняли: выбирая плательщика, регистратор
@@ -1247,6 +1277,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // умолчанию сегодняшний. dateOnly отличает её от записи на время.
         if (!svc.requires_doctor) { line.dateOnly = true; line.when = isoDay(d0.getTime()) + 'T00:00'; }
         wiz.cart.push(line);
+        refreshTiers();   // VISIT_TIER_PRICING_V1
         // SCHED_V1 + SVC_DOCTORS_V1 — если на услугу назначен ровно один врач,
         // выбираем его и ближайший слот сами; иначе регистратор выбирает из
         // назначенных на услугу.
@@ -1609,6 +1640,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     h('span', { style: { flex: 1, minWidth: 0 } },
                         h('span', null, c.svc.name),
                         sub ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, ' · ' + sub) : null),
+                    tierChip(c),
                     h('span', { class: 'muted num' }, c.qty + ' ×'),
                     h('span', { class: 'num', style: { fontWeight: 600 } }, fmtPrice(cartLinePrice(c) * c.qty)),
                 );
@@ -1836,6 +1868,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         h('span', { class: 'num', style: { fontSize: '13.5px', minWidth: '20px', textAlign: 'center' } }, String(c.qty)),
                         stepBtn('+', () => { c.qty += 1; repaintRail(); }),
                     ] : []),
+                    tierChip(c),
                     h('span', { class: 'num', style: { fontSize: '13.5px', fontWeight: 700, whiteSpace: 'nowrap' } }, fmtPrice(cartLinePrice(c) * c.qty), ' сум'),
                     h('button', {
                         type: 'button', title: 'Убрать',
@@ -2360,6 +2393,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         unit_price: cartLinePrice(c),
                         total: cartLinePrice(c) * c.qty,
                         status: 'added',
+                        price_tier: lineTier(c),   // VISIT_TIER_PRICING_V1 — the till re-prices by this word
                     };
                     // SCHED_V1 — врач и время строки из inline-планировщика; фолбэк —
                     // врач шага 2 для врачебных услуг (как раньше).
