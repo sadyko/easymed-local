@@ -22,9 +22,11 @@ import { tr, trf } from '../i18n.js';
 import { fmtPrice, fmtQty } from './inventory-shared.js';
 
 const HOLDER_WORD = { staff: 'Мои запасы', room: 'Кабинет', department: 'Отделение' };
+const WAREHOUSE_KEY = 'warehouse';
 
 /** «Кабинет: Процедурный» / «Мои запасы» — подпись источника в списке. */
 export function holderLabel(hd, myId) {
+    if (hd.holder_type === WAREHOUSE_KEY) return tr('Склад (общий остаток)');
     if (hd.holder_type === 'staff') return Number(hd.holder_id) === Number(myId) ? tr(HOLDER_WORD.staff) : hd.holder_name || tr('Сотрудник');
     return tr(HOLDER_WORD[hd.holder_type] || '') + ': ' + (hd.holder_name || '');
 }
@@ -35,7 +37,7 @@ export function holderLabel(hd, myId) {
  * запасы (другого сотрудника) не предлагаются: выдавать из чужого кармана
  * нельзя, даже если он в списке.
  */
-export function sourcesFor(holdings, myId) {
+export function sourcesFor(holdings, myId, products = []) {
     const byKey = new Map();
     for (const hd of holdings || []) {
         if (hd.holder_type === 'staff' && Number(hd.holder_id) !== Number(myId)) continue;
@@ -45,7 +47,17 @@ export function sourcesFor(holdings, myId) {
         byKey.get(key).items.push(hd);
     }
     const order = { staff: 0, room: 1, department: 2 };
-    return [...byKey.values()].sort((a, b) => (order[a.holder_type] - order[b.holder_type]) || String(a.holder_name).localeCompare(String(b.holder_name)));
+    const out = [...byKey.values()].sort((a, b) => (order[a.holder_type] - order[b.holder_type]) || String(a.holder_name).localeCompare(String(b.holder_name)));
+    // The warehouse is always the last source: what nobody was issued yet can
+    // still be given from the general stock (the old dispense_item door).
+    const stock = (products || []).filter((p) => p && p.active !== false && p.active !== 0 && Number(p.on_hand) > 0).map((p) => {
+        const cf = p.consumption_unit && Number(p.consumption_factor) > 0 ? Number(p.consumption_factor) : 1;
+        return { holder_type: WAREHOUSE_KEY, holder_id: null, holder_name: '', product_id: p.id, product_name: p.name,
+            base_unit: p.base_unit || p.unit || '', consumption_unit: p.consumption_unit || p.base_unit || p.unit || '', consumption_factor: cf,
+            sale_price: Number(p.sale_price) || 0, qty_base: Number(p.on_hand), qty_units: Math.round(Number(p.on_hand) * cf * 100) / 100 };
+    });
+    if (stock.length) out.push({ key: WAREHOUSE_KEY, holder_type: WAREHOUSE_KEY, holder_id: null, holder_name: '', items: stock });
+    return out;
 }
 
 /** «10:30» из ISO-времени визита, в местном времени. */
@@ -57,12 +69,19 @@ export function visitTime(iso) {
 
 export async function mountOutpatients(body, { user, onEmpty } = {}) {
     const myId = user && user.id;
-    const state = { visits: [], selected: null, items: null, holdings: [], failed: '' };
+    const state = { visits: [], selected: null, items: null, holdings: [], products: [], failed: '' };
 
+    async function loadProducts() {
+        const { data } = await supabase.from('products')
+            .select('id,name,unit,base_unit,consumption_unit,consumption_factor,on_hand,sale_price,active')
+            .eq('active', 1).order('name', { ascending: true });
+        state.products = Array.isArray(data) ? data : [];
+    }
     async function load() {
         const [v, hd] = await Promise.all([
             supabase.rpc('outpatients_today', {}),
             supabase.rpc('holdings_list', {}),
+            loadProducts(),
         ]);
         state.failed = v.error ? (v.error.message || tr('нет данных')) : '';
         state.visits = (!v.error && v.data && Array.isArray(v.data.visits)) ? v.data.visits : [];
@@ -78,7 +97,7 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
         state.items = data && Array.isArray(data.items) ? data.items : [];
     }
     async function reloadHoldings() {
-        const hd = await supabase.rpc('holdings_list', {});
+        const [hd] = await Promise.all([supabase.rpc('holdings_list', {}), loadProducts()]);
         state.holdings = (!hd.error && hd.data && Array.isArray(hd.data.holdings)) ? hd.data.holdings : [];
     }
 
@@ -165,9 +184,9 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
         if (!state.items.length) { card.appendChild(h('div', { class: 'empty', style: { padding: '18px' } }, tr('Пока ничего не выдано.'))); return card; }
         const tb = h('tbody');
         for (const it of state.items) {
-            const undo = it.from_holding && !it.invoiced
+            const undo = (it.can_void !== undefined ? it.can_void : (it.from_holding && !it.invoiced))
                 ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: async () => {
-                    if (!window.confirm(tr('Отменить выдачу? Количество вернётся на руки.'))) return;
+                    if (!window.confirm(tr('Отменить выдачу? Количество вернётся туда, откуда взято.'))) return;
                     const { error } = await supabase.rpc('void_holding_dispense', { visit_service_id: it.id });
                     if (error) { toast(error.message || tr('Не удалось отменить.'), 'error'); return; }
                     toast(tr('Выдача отменена.'), 'success');
@@ -175,7 +194,7 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
                     v.item_count = Math.max(0, (v.item_count || 1) - 1);
                     paint();
                 } }, tr('Отменить'))
-                : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, it.invoiced ? tr('в счёте') : (it.from_holding ? '' : tr('со склада')));
+                : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, it.invoiced ? tr('в счёте') : '');
             tb.appendChild(h('tr', null,
                 h('td', null, it.product_name),
                 h('td', { class: 'num' }, fmtQty(Number(it.quantity)), ' ', it.unit || ''),
@@ -192,13 +211,13 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
     function giveCard(v) {
         const card = h('div', { class: 'card' },
             h('div', { class: 'card-header' }, h('h3', null, Icon('Send', { size: 16 }), ' ', tr('Выдать пациенту'))));
-        const sources = sourcesFor(state.holdings, myId);
+        const sources = sourcesFor(state.holdings, myId, state.products);
         const bodyEl = h('div', { style: { padding: '14px 16px', display: 'grid', gap: '10px' } });
         if (!sources.length) {
             bodyEl.appendChild(h('div', { class: 'empty', style: { padding: '14px' } },
-                h('p', null, tr('На руках ничего нет.')),
+                h('p', null, tr('Выдавать нечего: на складе нет остатков.')),
                 h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
-                    tr('Склад выдаёт препараты и расходники сотруднику, в кабинет или в отделение — в разделе «Склад → Выдать». Выданное появится здесь.'))));
+                    tr('Приход оформляется в разделе «Склад». Выданное медсестре, в кабинет или в отделение появится здесь отдельным источником.'))));
             card.appendChild(bodyEl);
             return card;
         }
@@ -238,8 +257,9 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
             if (qty > it.qty_units + 1e-9) return toast(trf('На руках только {qty} {unit}.', { qty: fmtQty(it.qty_units), unit: it.consumption_unit || '' }), 'warn');
             giveBtn.disabled = true;
             try {
+                const src = current();
                 const { data, error } = await supabase.rpc('dispense_from_holding', {
-                    holder: { type: current().holder_type, id: current().holder_id },
+                    holder: src.holder_type === WAREHOUSE_KEY ? { type: WAREHOUSE_KEY } : { type: src.holder_type, id: src.holder_id },
                     product_id: it.product_id, quantity: qty, visit_id: v.id, billable: billChk.checked,
                 });
                 if (error) throw error;
@@ -253,6 +273,10 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
         } }, Icon('Check', { size: 13 }), ' ', tr('Выдать'));
 
         bodyEl.appendChild(field('Откуда', srcSel));
+        if (sources.length === 1 && sources[0].holder_type === WAREHOUSE_KEY) {
+            bodyEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 0' } },
+                tr('Пока только общий склад. Когда склад выдаст вам, в кабинет или в отделение, эти запасы появятся здесь первыми.')));
+        }
         bodyEl.appendChild(field('Что', prodSel));
         bodyEl.appendChild(field('Сколько', h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } }, qtyInp, unitEl)));
         bodyEl.appendChild(availEl);

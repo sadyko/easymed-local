@@ -252,6 +252,10 @@ let HOLDINGS = { holdings: [
     { holder_type: 'staff', holder_id: 6, holder_name: 'Другая медсестра', product_id: 40, product_name: 'Парацетамол', base_unit: 'уп', consumption_unit: 'таб', consumption_factor: 10, sale_price: 5000, is_drug: true, active: true, qty_base: 1, qty_units: 10 },
     { holder_type: 'room', holder_id: 7, holder_name: 'Процедурный', product_id: 41, product_name: 'Шприц 5 мл', base_unit: 'шт', consumption_unit: '', consumption_factor: 1, sale_price: 1500, is_drug: false, active: true, qty_base: 50, qty_units: 50 },
 ] };
+const PRODUCTS = [
+    { id: 40, name: 'Парацетамол', unit: 'уп', base_unit: 'уп', consumption_unit: 'таб', consumption_factor: 10, on_hand: 12, sale_price: 5000, active: 1 },
+    { id: 42, name: 'Бинт', unit: 'шт', base_unit: 'шт', consumption_unit: '', consumption_factor: 1, on_hand: 0, sale_price: 2000, active: 1 },
+];
 let VISIT_ITEMS = { 301: [], 302: [
     { id: 900, product_id: 40, product_name: 'Парацетамол', unit: 'таб', quantity: 2, unit_price: 500, total: 1000, invoiced: false, from_holding: true, created_by_name: 'Медсестра Ирина' },
     { id: 901, product_id: 41, product_name: 'Шприц 5 мл', unit: 'шт', quantity: 1, unit_price: 1500, total: 1500, invoiced: true, from_holding: false, created_by_name: 'Кладовщик' },
@@ -306,6 +310,7 @@ globalThis.fetch = async (url, opts = {}) => {
         if (body.table === 'wards') return ok([{ id: 1, name: 'Терапия' }]);
         if (body.table === 'patients') return ok(PATIENTS);
         if (body.table === 'users') return ok(USERS);
+        if (body.table === 'products') return ok(PRODUCTS);
         return ok([]);
     }
     return ok([]);
@@ -973,7 +978,7 @@ test('источники: свои запасы и кабинет — да, чу
     assert.ok(give, 'карточки «Выдать пациенту» нет');
     const src = walk(give).find((e) => e.tagName === 'SELECT');
     const opts = src.children.map((o) => textOf(o).trim());
-    assert.deepEqual(opts, ['Мои запасы', 'Кабинет: Процедурный'], 'чужая медсестра в источниках: ' + opts.join(' | '));
+    assert.deepEqual(opts, ['Мои запасы', 'Кабинет: Процедурный', 'Склад (общий остаток)'], 'источники: свои, кабинет, склад последним; чужая медсестра — нет: ' + opts.join(' | '));
     assert.ok(textOf(give).includes('Есть 20 таб'), 'остаток и цена за единицу видны: ' + textOf(give));
 
     const qty = walk(give).find((e) => e.tagName === 'INPUT' && e.attrs.type === 'number');
@@ -1006,4 +1011,24 @@ test('отказ сервера («недостаточно») доходит с
     await settle();
     const v = rpcCalls.find((c) => c.name === 'void_holding_dispense');
     assert.deepEqual(v.args, { visit_service_id: 900 });
+});
+
+test('ничего не выдано медсестре — выдаёт со склада напрямую, склад в списке источников единственный', async () => {
+    const saved = HOLDINGS;
+    HOLDINGS = { holdings: [] };
+    try {
+        const root = await renderOutpatients();
+        const give = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Выдать пациенту'));
+        const src = walk(give).find((e) => e.tagName === 'SELECT');
+        assert.deepEqual(src.children.map((o) => textOf(o).trim()), ['Склад (общий остаток)']);
+        assert.ok(textOf(give).includes('Пока только общий склад'), 'подсказка, откуда возьмутся свои запасы');
+        assert.ok(textOf(give).includes('Парацетамол'), 'товар со склада в списке');
+        assert.ok(!textOf(give).includes('Бинт'), 'товар с нулевым остатком не предлагается');
+        const qty = walk(give).find((e) => e.tagName === 'INPUT' && e.attrs.type === 'number');
+        qty.value = '2';
+        findBtn(give, 'Выдать').click();
+        await settle();
+        const call = rpcCalls.find((c) => c.name === 'dispense_from_holding');
+        assert.deepEqual(call.args, { holder: { type: 'warehouse' }, product_id: 40, quantity: 2, visit_id: 301, billable: true });
+    } finally { HOLDINGS = saved; }
 });

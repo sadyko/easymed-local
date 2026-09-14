@@ -22,6 +22,11 @@ export class RpcError extends Error {
 }
 
 export const HOLDER_TYPES = ['staff', 'room', 'department'];
+// The warehouse itself is also a valid SOURCE for a dispense (not a holder):
+// a nurse with nothing issued to her can still give from the general stock —
+// the old dispense_item behaviour, kept under one door (owner 2026-09-14:
+// «i cannot dispense items to the patients in the ambulatory»).
+export const WAREHOUSE = 'warehouse';
 const LIST_ROLES = ['admin', 'inventory', 'nurse', 'doctor', 'registrar', 'cashier'];
 const DISPENSE_ROLES = ['admin', 'inventory', 'nurse', 'doctor'];
 const MAX_QTY = 1_000_000;
@@ -134,18 +139,27 @@ export function dispenseFromHolding(db, args, user) {
   const note = typeof a.note === 'string' ? a.note.trim().slice(0, 300) : '';
 
   const run = db.transaction(() => {
-    const holder = resolveHolder(db, a.holder);
+    const fromWarehouse = !!(a.holder && a.holder.type === WAREHOUSE);
+    const holder = fromWarehouse ? null : resolveHolder(db, a.holder);
     const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId);
     if (!product) throw new RpcError('Товар не найден.', 400);
     const cf = consumptionFactor(product);
     const baseQty = round2(qtyUnits / cf);
     if (!(baseQty > 0)) throw new RpcError('Количество слишком мало.', 400);
-    const held = db.prepare('SELECT qty FROM stock_holdings WHERE holder_type = ? AND holder_id = ? AND product_id = ?').get(holder.type, holder.id, productId);
-    if (!held || held.qty + 1e-9 < baseQty) {
-      const have = held ? round2(held.qty * cf) : 0;
-      throw new RpcError(`Недостаточно на руках: ${product.name} — есть ${have} ${product.consumption_unit || product.base_unit || ''}`.trim(), 400);
+    if (fromWarehouse) {
+      if (!product.active) throw new RpcError('Товар отключён в каталоге.', 400);
+      if (product.on_hand + 1e-9 < baseQty) {
+        throw new RpcError(`Недостаточно на складе: ${product.name} — есть ${round2(product.on_hand * cf)} ${product.consumption_unit || product.base_unit || ''}`.trim(), 400);
+      }
+      db.prepare("UPDATE products SET on_hand = on_hand - ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(baseQty, productId);
+    } else {
+      const held = db.prepare('SELECT qty FROM stock_holdings WHERE holder_type = ? AND holder_id = ? AND product_id = ?').get(holder.type, holder.id, productId);
+      if (!held || held.qty + 1e-9 < baseQty) {
+        const have = held ? round2(held.qty * cf) : 0;
+        throw new RpcError(`Недостаточно на руках: ${product.name} — есть ${have} ${product.consumption_unit || product.base_unit || ''}`.trim(), 400);
+      }
+      moveHolding(db, holder, productId, -baseQty);
     }
-    moveHolding(db, holder, productId, -baseQty);
 
     // Price per consumption unit — the sale price is per base unit.
     const unitPrice = round2(Number(product.sale_price) / cf);
@@ -169,9 +183,15 @@ export function dispenseFromHolding(db, args, user) {
     db.prepare(`
       INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, note, created_by, holder_type, holder_id)
       VALUES (?, 'dispense', ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(productId, -baseQty, product.avg_cost, refType, lineId, note, user.id, holder.type, holder.id);
-    const left = db.prepare('SELECT qty FROM stock_holdings WHERE holder_type = ? AND holder_id = ? AND product_id = ?').get(holder.type, holder.id, productId);
-    return { line_id: lineId, item_name: product.name, unit_price: unitPrice, total, left_units: round2((left ? left.qty : 0) * cf) };
+      .run(productId, -baseQty, product.avg_cost, refType, lineId, note, user.id, holder ? holder.type : null, holder ? holder.id : null);
+    let leftBase = 0;
+    if (holder) {
+      const left = db.prepare('SELECT qty FROM stock_holdings WHERE holder_type = ? AND holder_id = ? AND product_id = ?').get(holder.type, holder.id, productId);
+      leftBase = left ? left.qty : 0;
+    } else {
+      leftBase = db.prepare('SELECT on_hand FROM products WHERE id = ?').get(productId).on_hand;
+    }
+    return { line_id: lineId, item_name: product.name, unit_price: unitPrice, total, left_units: round2(leftBase * cf), source: holder ? holder.type : WAREHOUSE };
   });
   return run();
 }
@@ -196,14 +216,16 @@ export function voidHoldingDispense(db, args, user) {
     if (!line) throw new RpcError('Строка не найдена.', 404);
     if (line.clinic_item_id == null) throw new RpcError('Это не выдача товара.', 400);
     if (line.invoice_item_id != null) throw new RpcError('Строка уже в счёте — сначала уберите её из счёта.', 400);
-    const mv = db.prepare(`SELECT * FROM stock_movements WHERE reference_type = ? AND reference_id = ? AND kind = 'dispense' AND holder_type IS NOT NULL ORDER BY id DESC LIMIT 1`)
+    const mv = db.prepare(`SELECT * FROM stock_movements WHERE reference_type = ? AND reference_id = ? AND kind = 'dispense' ORDER BY id DESC LIMIT 1`)
       .get(refType, id);
-    if (!mv) throw new RpcError('Эта строка выдана со склада, а не с рук — отменяйте её там.', 400);
-    const holder = { type: mv.holder_type, id: mv.holder_id };
-    moveHolding(db, holder, line.clinic_item_id, -mv.qty);   // mv.qty is negative
+    if (!mv) throw new RpcError('Движение склада по этой строке не найдено.', 400);
+    const holder = mv.holder_type ? { type: mv.holder_type, id: mv.holder_id } : null;
+    // Back to where it came from: the holder the movement names, or the warehouse.
+    if (holder) moveHolding(db, holder, line.clinic_item_id, -mv.qty);   // mv.qty is negative
+    else db.prepare("UPDATE products SET on_hand = on_hand + ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(-mv.qty, line.clinic_item_id);
     db.prepare(`
       INSERT INTO stock_movements (product_id, kind, qty, reference_type, reference_id, created_by, holder_type, holder_id)
-      VALUES (?, 'void', ?, ?, ?, ?, ?, ?)`).run(line.clinic_item_id, -mv.qty, refType, id, user.id, holder.type, holder.id);
+      VALUES (?, 'void', ?, ?, ?, ?, ?, ?)`).run(line.clinic_item_id, -mv.qty, refType, id, user.id, holder ? holder.type : null, holder ? holder.id : null);
     db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(id);
     return { ok: true };
   });
@@ -251,5 +273,5 @@ export function visitItems(db, args, user) {
       LEFT JOIN stock_movements m ON m.reference_type = 'visit' AND m.reference_id = vs.id AND m.kind = 'dispense'
      WHERE vs.visit_id = ? AND vs.clinic_item_id IS NOT NULL
      ORDER BY vs.id`).all(visitId);
-  return { items: rows.map((r) => ({ ...r, unit: r.consumption_unit || r.base_unit || '', from_holding: !!r.holder_type, invoiced: r.invoice_item_id != null })) };
+  return { items: rows.map((r) => ({ ...r, unit: r.consumption_unit || r.base_unit || '', from_holding: !!r.holder_type, invoiced: r.invoice_item_id != null, can_void: r.invoice_item_id == null })) };
 }

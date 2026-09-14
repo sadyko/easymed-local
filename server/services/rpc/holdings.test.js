@@ -166,3 +166,19 @@ test('ward dose: the nurse\'s own holding is used before the warehouse, then the
   voidDispensedAdmissionItemCore(db, { line_id: c.line_id }, nurse);
   assert.equal(onHand(db, prod), 16);
 });
+
+test('the warehouse is a source too: a nurse with nothing issued dispenses from the general stock; void returns it there', () => {
+  const { db, prod, visit } = seed();
+  const r = dispenseFromHolding(db, { holder: { type: 'warehouse' }, product_id: prod, quantity: 5, visit_id: visit }, nurse);
+  assert.equal(r.source, 'warehouse');
+  assert.equal(r.unit_price, 500); assert.equal(r.total, 2500);
+  assert.equal(onHand(db, prod), 19.5, '5 tablets = half a pack off the warehouse');
+  assert.equal(r.left_units, 195);
+  const mv = db.prepare("SELECT qty, holder_type FROM stock_movements WHERE reference_type = 'visit' AND reference_id = ?").get(r.line_id);
+  assert.deepEqual(mv, { qty: -0.5, holder_type: null });
+  const items = visitItems(db, { visit_id: visit }, nurse).items;
+  assert.equal(items[0].from_holding, false); assert.equal(items[0].can_void, true);
+  voidHoldingDispense(db, { visit_service_id: r.line_id }, nurse);
+  assert.equal(onHand(db, prod), 20);
+  assert.throws(() => dispenseFromHolding(db, { holder: { type: 'warehouse' }, product_id: prod, quantity: 500, visit_id: visit }, nurse), /Недостаточно на складе/);
+});
