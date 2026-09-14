@@ -3610,13 +3610,25 @@ async function addOwnService(ctx, svc) {
     let vsId = null;
     if (ctx.visitId) {
         try {
-            const price = svc.price != null ? Number(svc.price) : 0;
+            let price = svc.price != null ? Number(svc.price) : 0;
+            let priceTier = null;
+            // VISIT_TIER_PRICING_V1 — the doctor's own «добавить услугу» goes
+            // through the same quote as the front desk: a second visit costs
+            // the second-visit price wherever the line is born.
+            if (!svc.__consult && svc.id && ctx.patient?.id) {
+                try {
+                    const q = await supabase.rpc('service_price_quote', { patient_id: ctx.patient.id, service_ids: [svc.id], visit_id: ctx.visitId });
+                    const quote = q && !q.error && q.data && q.data.quotes ? q.data.quotes[svc.id] : null;
+                    if (quote && Number.isFinite(Number(quote.price))) { price = Number(quote.price); priceTier = quote.tier === 'secondary' || quote.tier === 'repeat' ? quote.tier : 'primary'; }
+                } catch (_) { /* old server — catalog price */ }
+            }
             const row = {
                 visit_id:   ctx.visitId,
                 company_id: currentClinicId() || null,
                 doctor_id:  svc.__consultDoctorId || ctx.patient?.__service?.doctorId || null,
                 quantity:   1, unit_price: price, total: price, status: 'added',
             };
+            if (priceTier) row.price_tier = priceTier;
             if (svc.__consult) row.consultation_type_id = svc.consultation_type_id || null;
             else row.service_id = svc.id || null;
             const { data, error } = await insertRow('visit_services', row);
@@ -3627,7 +3639,7 @@ async function addOwnService(ctx, svc) {
     // Keep the workspace's own JSON list (drives the left-column display + print).
     const payload = wsState.payload || await readPayload(ctx);
     if (!Array.isArray(payload.services)) payload.services = [];
-    payload.services.push({ name: svc.name, price: svc.price, vsId });
+    payload.services.push({ name: svc.name, price: svc.price, vsId });   // catalog price for the doctor's list; the bill carries the quoted one
     if (!await writePayload(ctx, payload)) return;
     paintOwnServices(ctx);
     toast('Услуга добавлена в приём', 'ok');

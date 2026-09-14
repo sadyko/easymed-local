@@ -192,7 +192,8 @@ export const REGISTRY = {
   services: {
     read:  { roles: ALL_STAFF, columns: ['id','name','code','price','tax_rate','duration_minutes','requires_doctor','active','created_at','updated_at',
              'is_lab','specimen','result_unit','ref_low','ref_high','ref_text','type','type_id','category_id','department_id','tube_color',
-             'default_doctor_percent','room_id'] },   // tube_color: LAB_HANDLING_V1 (mig 041); default_doctor_percent/room_id: SERVICE_EDITOR_V1 (mig 081) — read-only here, written ONLY by the service_save RPC (rates merge must be transactional)
+             'default_doctor_percent','room_id',
+             'price_secondary','secondary_days_from','secondary_days_to','price_repeat'] },   // tube_color: LAB_HANDLING_V1 (mig 041); default_doctor_percent/room_id: SERVICE_EDITOR_V1 (mig 081) — read-only here, written ONLY by the service_save RPC (rates merge must be transactional); price_secondary…price_repeat: VISIT_TIER_PRICING_V1 (mig 127) — written by service_save too
     write: { insert: { roles: ['admin'], columns: ['name','code','price','tax_rate','duration_minutes','requires_doctor','active',
              'is_lab','specimen','result_unit','ref_low','ref_high','ref_text','type','type_id','category_id','department_id','tube_color'] },
              update: { roles: ['admin'], columns: ['name','code','price','tax_rate','duration_minutes','requires_doctor','active',
@@ -211,8 +212,9 @@ export const REGISTRY = {
   },
   visit_services: {
     read:  { roles: ALL_STAFF, columns: ['id','visit_id','service_id','clinic_item_id','doctor_id','quantity','unit_price','total','status','invoice_item_id','created_by','created_at','consultation_type_id','scheduled_at','queue_key','queue_no','notes',
-             'sample_collected_at','verified_by','verified_at','sync_origin'] },   // queue_* set ONLY by issue_queue_numbers; notes = WS consult document JSON (mig 039); sample/verify: LAB_HANDLING_V1 (mig 041); sync_origin: BRANCH_ORIGIN_V1 (mig 083)
-    write: { insert: { roles: ['admin','registrar','doctor'], columns: ['visit_id','service_id','doctor_id','quantity','unit_price','total','status','created_by','consultation_type_id','scheduled_at'] },
+             'sample_collected_at','verified_by','verified_at','sync_origin',
+             'price_tier'] },   // price_tier: VISIT_TIER_PRICING_V1 (mig 127) — primary/secondary/repeat, set by the screen from service_price_quote   // queue_* set ONLY by issue_queue_numbers; notes = WS consult document JSON (mig 039); sample/verify: LAB_HANDLING_V1 (mig 041); sync_origin: BRANCH_ORIGIN_V1 (mig 083)
+    write: { insert: { roles: ['admin','registrar','doctor'], columns: ['visit_id','service_id','doctor_id','quantity','unit_price','total','status','created_by','consultation_type_id','scheduled_at','price_tier'] },
              update: { roles: ['admin','registrar','doctor','lab','nurse'], columns: ['status','doctor_id','consultation_type_id','notes',
              'sample_collected_at','verified_by','verified_at'] },   // LAB_HANDLING_V1 (lab) + PROCEDURES_V1 (nurse отмечает выполнение)
              delete: { roles: ['admin','registrar'] } },

@@ -1034,7 +1034,7 @@ async function voidDispensedItem(row, state, onReload) {
 }
 
 async function addServiceFromPicker(state, pick, onReload) {
-    const { service, doctor, startISO } = pick || {};
+    const { service, doctor, startISO, price_tier } = pick || {};
     // The visit day is over — refuse even if the picker was opened earlier.
     if (isVisitEnded(state.visit)) { toast(VISIT_ENDED_MSG, 'fail'); return; }
     // Reject duplicates — the same service can't be attached to the same
@@ -1053,6 +1053,7 @@ async function addServiceFromPicker(state, pick, onReload) {
         unit_price:   price,
         total:        price,
         scheduled_at: startISO || null,
+        price_tier:   price_tier || null,   // VISIT_TIER_PRICING_V1 — quoted by the picker for this patient
     });
     if (error) { toast(error.message, 'fail'); return; }
     await activateVisitIfPending(state);

@@ -96,6 +96,7 @@ function resolveRefTx(db, table, ref) {
  * service_save — создать или обновить услугу целиком, как её видит диалог.
  * args: { id?, name, type, price, tax_rate?, duration_minutes?, requires_doctor?,
  *         default_doctor_percent?, room_id?, code?, active?,
+ *         price_secondary?, secondary_days_from?, secondary_days_to?, price_repeat?  (VISIT_TIER_PRICING_V1, all nullable)
  *         type_ref?/category_ref?/department_ref?: {id}|{name}|null,
  *         lab?: {specimen, result_unit, ref_low, ref_high, ref_text, tube_color},
  *         performers?: [userId] }
@@ -128,6 +129,33 @@ export function serviceSave(db, args, user) {
 
   const requiresDoctor = asBool(a.requires_doctor);
   const defaultPct = clampPct(a.default_doctor_percent);
+
+  // VISIT_TIER_PRICING_V1 — цены по счёту визита. Все четыре поля могут быть
+  // пустыми (услуга с одной ценой); заданная цена — неотрицательное число,
+  // окно — целые дни, «до» не раньше «от». Окно без второй цены бессмысленно:
+  // считать нечего — пусть экран не притворяется, что настроил.
+  const tierNum = (v, what) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0) throw new RpcError(`${what} — неотрицательное число.`, 400);
+    return n;
+  };
+  const tierDays = (v, what) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 0) throw new RpcError(`${what} — целое число дней.`, 400);
+    return n;
+  };
+  const priceSecondary = tierNum(a.price_secondary, 'Цена второго визита');
+  const priceRepeat = tierNum(a.price_repeat, 'Цена повторного визита');
+  const daysFrom = tierDays(a.secondary_days_from, '«Со дня»');
+  const daysTo = tierDays(a.secondary_days_to, '«По день»');
+  if (daysFrom !== null && daysTo !== null && daysTo < daysFrom) {
+    throw new RpcError('Окно второго визита: «по день» не может быть раньше «со дня».', 400);
+  }
+  if ((daysFrom !== null || daysTo !== null) && priceSecondary === null && priceRepeat === null) {
+    throw new RpcError('Укажите цену второго визита — иначе окно дней не на что применить.', 400);
+  }
   const active = a.active === undefined ? 1 : asBool(a.active);
   const code = a.code == null || String(a.code).trim() === '' ? null : String(a.code).trim();
 
@@ -194,6 +222,7 @@ export function serviceSave(db, args, user) {
         requires_doctor: requiresDoctor, active, type, is_lab: isLab,
         type_id: refs.type_id, category_id: refs.category_id, department_id: refs.department_id,
         default_doctor_percent: defaultPct, room_id: roomId,
+        price_secondary: priceSecondary, secondary_days_from: daysFrom, secondary_days_to: daysTo, price_repeat: priceRepeat,
         // Не-лабораторная услуга рождается с пустым лаб-блоком; лабораторная —
         // с тем, что ввели.
         specimen: lab ? (lab.specimen ?? null) : null,
@@ -213,6 +242,7 @@ export function serviceSave(db, args, user) {
         requires_doctor: requiresDoctor, active, type, is_lab: isLab,
         type_id: refs.type_id, category_id: refs.category_id, department_id: refs.department_id,
         default_doctor_percent: defaultPct, room_id: roomId,
+        price_secondary: priceSecondary, secondary_days_from: daysFrom, secondary_days_to: daysTo, price_repeat: priceRepeat,
       };
       // Лаб-колонки пишутся ТОЛЬКО когда раздел = лаборатория. Скрытый блок
       // не затирает сохранённое (прецедент sections.js visibleWhen).

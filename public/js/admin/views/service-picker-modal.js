@@ -38,6 +38,9 @@ import { printableSheet } from './doc-settings.js?v=noqr1';   // insurance/B2B: 
 import { tr, trf } from '../i18n.js';   // WIZ_TEMPLATES_V1 + I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { resolveTypeId } from './service-group.js?v=aug17e';   // SERVICE_GROUPS_V1 — group filtering must survive a NULL type_id
+// VISIT_TIER_PRICING_V1 — цена по счёту визита: смета спрашивает сервер, что
+// эти услуги стоят ЭТОМУ пациенту сегодня, и кладёт ответ на строки.
+import { tierLabel, tierApplies, quotableIds, applyQuotes, resetQuotes, priceTierOf } from '../visit-tier-logic.js';
 
 // PROC_PERFORMER_V1 — роли, которым можно поручить процедуру. Врач сюда
 // попадает НЕ отсюда, а по is_doctor (ADMIN_DOCTOR_LIST_V1) — см.
@@ -1315,7 +1318,7 @@ export function openServicePickerModal({
                 ),
                 h('button', {
                     class: 'x', type: 'button', title: 'Отвязать пациента',
-                    onclick: () => { refs.attachedPatient = null; renderCalcBar(); },
+                    onclick: () => { refs.attachedPatient = null; resetQuotes(state.added); renderCalcBar(); },
                 }, '×'),
             ));
             el.appendChild(h('button', {
@@ -1421,6 +1424,7 @@ export function openServicePickerModal({
         closeAttach();
         renderCalcBar();
         if (catListEl) { wiz.depositBalance = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); }   // CATALOG_WIZARD_V4
+        refreshTierQuotes();   // VISIT_TIER_PRICING_V1 — the patient decides the tier
         const nm = (p.lastName || p.fullName || '').toString().trim();
         toast(nm ? trf('Пациент привязан: {name}', { name: nm }) : tr('Пациент привязан'));
     }
@@ -1632,6 +1636,7 @@ export function openServicePickerModal({
                 startISO: scheduledISO || null, durationMinutes: dur, __needsDoc: false,
             });
             paintCatalog();
+            refreshTierQuotes();
             return;
         }
         const perf = svcPerformers(svc);
@@ -1646,6 +1651,7 @@ export function openServicePickerModal({
             durationMinutes: dur, __needsDoc: needsDoc, __dayIso: catDays()[0].iso, __auto: false };
         state.added.push(item);
         paintCatalog();
+        refreshTierQuotes();
         if (needsDoc && perf.length === 1) await catPickDoc(item, perf[0], true);
     }
     function catRemove(item) {
@@ -1714,6 +1720,25 @@ export function openServicePickerModal({
     function paintCatalog() {
         if (!catListEl || !catListEl.isConnected) { if (!catListEl) return; }
         paintCatCtx(); paintCatGroups(); paintCatList(); paintCatRail();
+    }
+
+    // VISIT_TIER_PRICING_V1 — after a patient is attached or a service added:
+    // ask the server which tier each catalog service is on for this patient and
+    // put the answer on the cart. A newer answer supersedes an older one
+    // (_tierSeq); an older server without the RPC leaves catalog prices alone.
+    let _tierSeq = 0;
+    async function refreshTierQuotes() {
+        const p = refs.attachedPatient;
+        if (!p || !p.id) { resetQuotes(state.added); return; }
+        const ids = quotableIds(state.added);
+        if (!ids.length) return;
+        const seq = ++_tierSeq;
+        let res = null;
+        try { res = await supabase.rpc('service_price_quote', { patient_id: p.id, service_ids: ids }); } catch (_) { return; }
+        if (seq !== _tierSeq) return;
+        if (!res || res.error || !res.data || !res.data.quotes) return;
+        applyQuotes(state.added, res.data.quotes);
+        if (catListEl) paintCatalog();
     }
     function paintCatCtx() {
         clear(catCtxEl);
@@ -1910,7 +1935,7 @@ export function openServicePickerModal({
                     h('div', { style: { fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, nm),
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [p.mrn, p.phone].filter(Boolean).join(' · ') || '—')),
                 patient ? null : h('button', { class: 'x', type: 'button', title: 'Отвязать пациента',
-                    onclick: () => { refs.attachedPatient = null; wiz.depositBalance = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); } }, '×')));
+                    onclick: () => { refs.attachedPatient = null; resetQuotes(state.added); wiz.depositBalance = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); } }, '×')));
         } else {
             catRailEl.appendChild(h('button', { class: 'wzc-attach', type: 'button', onclick: () => openAttachPatientModal() },
                 h('div', { style: { fontWeight: 700, color: 'var(--primary-700)' } }, 'Привязать пациента'),
@@ -1932,6 +1957,13 @@ export function openServicePickerModal({
                 rowsWrap.appendChild(h('div', { class: 'wzc-ln' },
                     h('div', { style: { minWidth: 0 } }, h('div', { style: { fontSize: '12.5px' } }, a.service.name), who),
                     h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flex: 'none' } },
+                        // VISIT_TIER_PRICING_V1 — a quoted second/repeat visit shows its
+                        // tier and the crossed-out first-visit price, so the registrar sees
+                        // WHY the number differs from the catalog before the patient asks.
+                        tierApplies(a.tier) ? h('span', { class: 'wzc-tier', title: a.tier.days_since != null
+                            ? trf('Прошлый визит по этой услуге — {n} дн. назад. Цена первого визита: {price}', { n: a.tier.days_since, price: formatMoney(a.tier.base_price) })
+                            : '' }, tierLabel(a.tier.tier)) : null,
+                        tierApplies(a.tier) ? h('s', { class: 'num muted', style: { fontSize: '12.5px' } }, formatMoney(Number(a.tier.base_price || 0))) : null,
                         h('span', { class: 'num', style: { fontWeight: 700 } }, formatMoney(Number(a.service.price || 0))),
                         itemComplete(a) ? h('button', { type: 'button', title: 'Изменить врача и время',
                             style: { border: '0', background: 'none', cursor: 'pointer', font: 'inherit', fontSize: '12.5px', color: 'var(--primary-700, #115d5a)', textDecoration: 'underline', padding: '0', flex: 'none' },
@@ -2004,7 +2036,7 @@ export function openServicePickerModal({
         let added = 0, failed = 0;
         for (const a of rows) {
             try {
-                await onPick({ service: a.service, doctor: a.doctor || null, startISO: a.startISO || null });
+                await onPick({ service: a.service, doctor: a.doctor || null, startISO: a.startISO || null, price_tier: priceTierOf(a) });   // VISIT_TIER_PRICING_V1
                 added++;
             } catch (e) {
                 failed++;
@@ -2623,6 +2655,7 @@ export function openServicePickerModal({
                     total:        unitPrice,
                     scheduled_at: a.startISO || scheduledISO || null,
                     referral_source_id: ((wiz.referral || {}).per || {})[state.added.indexOf(a)] && wiz.referral.per[state.added.indexOf(a)].sourceId || null,   // SVC_REFERRAL_V1
+                    price_tier:   isConsult ? null : priceTierOf(a),   // VISIT_TIER_PRICING_V1 — the till re-prices by this word
                 });
                 if (vsErr) { console.warn('[wizard] visit_services:', vsErr.message || vsErr); continue; }
                 vsRows.push({ vs, a, unitPrice });
@@ -2697,7 +2730,7 @@ export function openServicePickerModal({
                             invoice_id:  inv.id,
                             service_id:  r.a.service.__consult ? null : r.a.service.id,
                             // i18n-exempt: описание строки счёта пишется В БАЗУ — хранимая запись, а не текст экрана
-                            description: (r.a.service.name || 'Услуга') + (wizDiscountPct() ? ` (скидка ${wizDiscountPct()}%)` : ''),
+                            description: (r.a.service.name || 'Услуга') + (tierApplies(r.a.tier) ? (r.a.tier.tier === 'repeat' ? ' (повторный визит)' : ' (второй визит)') : '') + (wizDiscountPct() ? ` (скидка ${wizDiscountPct()}%)` : ''),   // i18n-exempt: хранимая строка счёта
                             quantity:    1,
                             unit_price:  price,
                             total:       price,

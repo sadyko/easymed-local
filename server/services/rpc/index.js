@@ -38,6 +38,7 @@ import { billAccommodation, unbillAccommodation, accommodationState } from './ac
 import { setAdmissionDate } from './admission-date.js';   // ADMISSION_DATE_EDIT_V1   // ACCOMMODATION_AS_SERVICE_V1   // CALLCENTER_REPORT_V1
 import { deleteService, serviceDeleteCheck } from './catalog.js';   // SERVICE_DELETE_V1
 import { serviceSave } from './service-save.js';   // SERVICE_EDITOR_V1
+import { servicePriceQuote } from './service-price-quote.js';   // VISIT_TIER_PRICING_V1
 import { saveLabResults } from './lab.js';   // LAB_SAVE_BATCH_V1
 import { labUsageStats } from './lab-stats.js';   // LAB_STATS_V1
 import { roomAssignDoctors } from './rooms.js';   // ROOMS_SETUP_V1
@@ -360,6 +361,9 @@ export const RPC = {
   // users.service_rates — ОДНОЙ транзакцией, чтобы частичное сохранение
   // было невозможно (см. заголовок service-save.js).
   service_save:                   (db, args, user) => serviceSave(db, args, user),
+  // VISIT_TIER_PRICING_V1 — цена услуги для ЭТОГО пациента сегодня (первый /
+  // второй / повторный визит). Чтение, ничего не пишет.
+  service_price_quote:            (db, args, user) => servicePriceQuote(db, args, user),
 
   // LAB_SAVE_BATCH_V1 — вся панель одним запросом и одной транзакцией.
   // Заменяет цикл «HTTP-запрос на каждый показатель»: 29 обращений по сети

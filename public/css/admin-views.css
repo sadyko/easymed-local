@@ -3510,6 +3510,8 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     background: #f0fdf4; text-align: center; cursor: pointer; font: inherit; margin-bottom: 8px; }
 .wzc-attach:hover { border-color: #22c55e; background: #dcfce7; }
 .wzc-ln { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 5px 0; }
+/* VISIT_TIER_PRICING_V1 — «Второй визит» / «Повторный визит» beside the price. */
+.wzc-tier { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 12.5px; font-weight: 600; background: var(--primary-50); color: var(--primary-700); white-space: nowrap; }
 .wzc-warn { color: #8a5a0e; font-size: 12.5px; }
 .wzc-empty { color: var(--ink-400); font-size: 12.5px; text-align: center; padding: 14px 6px; border: 1px dashed var(--ink-100); border-radius: 9px; margin-bottom: 8px; }
 .wzc-tot { display: flex; justify-content: space-between; font-weight: 800; border-top: 1px solid var(--ink-100); margin-top: 8px; padding-top: 10px; font-size: 13.5px; }

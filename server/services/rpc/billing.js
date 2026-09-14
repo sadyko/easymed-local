@@ -5,6 +5,9 @@
 import { ensureOpenShift } from './cashier.js';   // SHIFT_AUTO_V2
 import { invoiceStatusFor } from '../domain/money.js';
 import { unitPriceFor } from '../domain/pricing.js';
+// VISIT_TIER_PRICING_V1 — a line quoted as a second/repeat visit keeps that
+// price at the till: the catalog price is the FIRST visit's price.
+import { tierUnitPrice } from '../domain/visit-tier.js';
 import { hasAnyRole } from '../roles.js';
 
 export class RpcError extends Error {
@@ -186,7 +189,7 @@ export function createInvoiceForVisit(db, args, user) {
     // with their own price for that service overrides the catalog
     // (DOCTOR_OWN_PRICE_V1, see domain/pricing.js). A line with neither a
     // service nor a product (ad-hoc) keeps its stored price.
-    const getService = db.prepare('SELECT price, name FROM services WHERE id = ?');
+    const getService = db.prepare('SELECT price, name, price_secondary, secondary_days_from, secondary_days_to, price_repeat FROM services WHERE id = ?');
     const getProduct = db.prepare('SELECT sale_price, name FROM products WHERE id = ?');
     const priced = rows.map((row) => {
       let unit = row.unit_price;
@@ -201,6 +204,10 @@ export function createInvoiceForVisit(db, args, user) {
           serviceId: row.service_id,
           catalogPrice: svc.price,
         });
+        // VISIT_TIER_PRICING_V1 — the tier recorded on the line wins over the
+        // catalog and over the doctor's own price: those are first-visit
+        // prices, and this visit was quoted as the second or a repeat.
+        unit = tierUnitPrice(svc, row.price_tier, unit);
         svcName = svc.name;
       } else if (row.clinic_item_id != null) {
         const prod = getProduct.get(row.clinic_item_id);

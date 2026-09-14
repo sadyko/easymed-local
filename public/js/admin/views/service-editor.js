@@ -150,6 +150,15 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
     reqDoc.checked = row ? !!row.requires_doctor : false;
     const pctInp   = h('input', { type: 'number', step: '0.01', min: '0', max: '100', value: row && row.default_doctor_percent != null ? row.default_doctor_percent : 0 });
 
+    // VISIT_TIER_PRICING_V1 — цена по счёту визита (владелец: «for the primary
+    // visit, secondary, repeat visit and set dates between the first and
+    // second»). Все четыре поля необязательны: пустые — услуга с одной ценой.
+    // Правило считает сервер (domain/visit-tier.js); здесь только ввод.
+    const secPriceInp = h('input', { type: 'number', step: '0.01', min: '0', value: row && row.price_secondary != null ? row.price_secondary : '', placeholder: 'пусто — как первый' });
+    const daysFromInp = h('input', { type: 'number', step: '1', min: '0', value: row && row.secondary_days_from != null ? row.secondary_days_from : '', placeholder: '1', style: { width: '90px' } });
+    const daysToInp   = h('input', { type: 'number', step: '1', min: '0', value: row && row.secondary_days_to != null ? row.secondary_days_to : '', placeholder: 'без предела', style: { width: '110px' } });
+    const repPriceInp = h('input', { type: 'number', step: '0.01', min: '0', value: row && row.price_repeat != null ? row.price_repeat : '', placeholder: 'пусто — как второй' });
+
     // ---- исполнители -------------------------------------------------------
     // «Врач» переключает СПИСОК между врачами и остальными; галочки живут в
     // общем наборе picked и переключение их НЕ сбрасывает — у услуги могут
@@ -207,7 +216,8 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
     if (readOnly) {
         for (const el of [nameInp, typeSel, typeCombo.input, catCombo.input, depCombo.input, roomSel,
             specimenInp, tubeSel,   // LAB_REFS_IN_PANELS_V1 — единицы и нормы живут в панели
-            priceInp, vatInp, durInp, reqDoc, pctInp, docChk, codeInp, activeChk]) el.disabled = true;
+            priceInp, vatInp, durInp, reqDoc, pctInp, docChk, codeInp, activeChk,
+            secPriceInp, daysFromInp, daysToInp, repPriceInp]) el.disabled = true;
     }
 
     const overlay = h('div', { class: 'modal' });
@@ -237,6 +247,12 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
             requires_doctor: reqDoc.checked,
             default_doctor_percent: numOrNull(pctInp.value) ?? 0,
             room_id: roomSel.value ? Number(roomSel.value) : null,
+            // VISIT_TIER_PRICING_V1 — пустое поле уходит как null (не 0): сервер
+            // отличает «не задано» от «бесплатно».
+            price_secondary: numOrNull(secPriceInp.value),
+            secondary_days_from: numOrNull(daysFromInp.value),
+            secondary_days_to: numOrNull(daysToInp.value),
+            price_repeat: numOrNull(repPriceInp.value),
             code: codeInp.value.trim() || null,
             active: activeChk.checked,
             type_ref: typeCombo.resolve(),
@@ -295,6 +311,15 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
                 field('Длительность (мин)', durInp),
                 checkField('Услугу оказывает специалист (врач / медсестра)', reqDoc),
                 field('Доля исполнителя по умолчанию, %', pctInp)),
+            h('section', { class: 'mg-section span-full' },
+                h('h3', null, 'Цена по счёту визита'),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px', lineHeight: 1.5 } },
+                    'Необязательно. Первый визит — по цене выше. Если пациент приходит по этой же услуге снова в указанное окно дней после предыдущего визита, второй визит считается по своей цене, третий и дальше — по цене повторного. Пришёл позже окна — снова первый.'),
+                h('div', { class: 'mg-grid' },
+                    field('Цена второго визита', secPriceInp),
+                    field('Окно второго визита: со дня — по день после предыдущего',
+                        h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } }, daysFromInp, h('span', { class: 'muted' }, '—'), daysToInp)),
+                    field('Цена повторного визита (третий и далее, 0 — бесплатно)', repPriceInp))),
             performersSection,
             h('section', { class: 'mg-section span-full' },
                 h('div', { class: 'mg-grid' },
