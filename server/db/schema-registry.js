@@ -72,7 +72,8 @@ export const REGISTRY = {
               'branch_id','primary_doctor_id','payer_id','referral_source_id','notes','photo_url','active',
               'registration_date','created_by','created_at','updated_at',
               'marital_status','emergency_contact_relation','payer_policy_id','insurance_policy_number','insurance_expiry_date',
-              'sync_origin'] },   // sync_origin: BRANCH_ORIGIN_V1 — см. комментарий у filters
+              'sync_origin',
+              'phone_secondary','language','passport_number','behavior_note','country','region','district','mahalla','citizenship'] },   // sync_origin: BRANCH_ORIGIN_V1 — см. комментарий у filters; phone_secondary…citizenship: PATIENT_FORM_ONE_V1 (mig 129) — the registration window's fields finally have columns
     write:  {
       // CALLCENTER_ROLE_V1 — «Зарегистрировать» on a CRM card creates the patient
       // card from the call. INSERT only: the call centre opens a card for the
@@ -82,13 +83,15 @@ export const REGISTRY = {
                 'occupation','emergency_contact_name','emergency_contact_phone','allergies','chronic_conditions','category_id',
                 'branch_id','primary_doctor_id','payer_id','referral_source_id','notes','photo_url','created_by',
                 'active','registration_date',
-                'marital_status','emergency_contact_relation','payer_policy_id','insurance_policy_number','insurance_expiry_date'] },
+                'marital_status','emergency_contact_relation','payer_policy_id','insurance_policy_number','insurance_expiry_date',
+                'phone_secondary','language','passport_number','behavior_note','country','region','district','mahalla','citizenship'] },
       update: { roles: ['admin','registrar'], columns: ['mrn','full_name','first_name','last_name','middle_name',
                 'date_of_birth','gender','blood_type','phone','email','national_id','address','nationality',
                 'occupation','emergency_contact_name','emergency_contact_phone','allergies','chronic_conditions','category_id',
                 'branch_id','primary_doctor_id','payer_id','referral_source_id','notes','photo_url','created_by',
                 'active','registration_date',
-                'marital_status','emergency_contact_relation','payer_policy_id','insurance_policy_number','insurance_expiry_date'] },
+                'marital_status','emergency_contact_relation','payer_policy_id','insurance_policy_number','insurance_expiry_date',
+                'phone_secondary','language','passport_number','behavior_note','country','region','district','mahalla','citizenship'] },
       // Settings → Пациенты exposes per-row + bulk delete (admin only). A
       // patient with clinical history is still protected by FK constraints —
       // the delete errors cleanly and the row survives.
@@ -111,7 +114,10 @@ export const REGISTRY = {
                // creator:created_by(full_name) — кто завёл карту. Имя сотрудника
                // и так открыто всему персоналу; связь просто избавляет от
                // второго запроса на каждую открытую карточку.
-               created_by: { table:'users', fk:'created_by', columns:['id','full_name'] } },
+               created_by: { table:'users', fk:'created_by', columns:['id','full_name'] },
+               // CATEGORY_DISCOUNT_V1 / DISCOUNT_RULES_V1 — the wizard reads the patient's
+               // group and its discount in the same request as the patient row.
+               patient_categories: { table:'patient_categories', fk:'category_id', columns:['id','name','discount_percent','active'] } },
   },
   // ═══ VISITS_ONE_DOOR_V1 (2026-09-05) — РАСПИСАНИЕ НЕ ПИШЕТСЯ ЧЕРЕЗ /api/db ═══
   //
@@ -575,9 +581,18 @@ export const REGISTRY = {
     write:{insert:{roles:['admin'],columns:['name','standard_percent','rates','active']},
       update:{roles:['admin'],columns:['name','standard_percent','rates','active']},delete:{roles:[]}},
     filters:['id','active'], json:['rates'], embed:{} },
-  patient_discounts: { read:{roles:ALL_STAFF,columns:['id','name','kind','percent','amount','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','kind','percent','amount','active']},update:{roles:['admin'],columns:['name','kind','percent','amount','active']},delete:{roles:[]}},
-    filters:['id','active','kind'], embed:{} },
+  // DISCOUNT_RULES_V1 (mig 129) — valid_from/valid_until, category_id (apply to a
+  // patient group), service_ids (JSON list: apply to these services only), note.
+  patient_discounts: { read:{roles:ALL_STAFF,columns:['id','name','kind','percent','amount','active','created_at','valid_from','valid_until','category_id','service_ids','note']},
+    write:{insert:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},
+      update:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},delete:{roles:[]}},
+    filters:['id','active','kind','category_id'], json:['service_ids'],
+    embed:{ patient_categories:{table:'patient_categories',fk:'category_id',columns:['id','name']} } },
+  // CHRONIC_REF_V1 (mig 129) — the clinic's list of chronic conditions the
+  // patient form picks from.
+  chronic_conditions_ref: { read:{roles:ALL_STAFF,columns:['id','name','code','active','created_at']},
+    write:{insert:{roles:['admin'],columns:['name','code','active']},update:{roles:['admin'],columns:['name','code','active']},delete:{roles:[]}},
+    filters:['id','active'], embed:{} },
   api_tokens: { read:{roles:['admin'],columns:['id','name','token','active','created_at']},
     write:{insert:{roles:['admin'],columns:['name','token','active']},update:{roles:['admin'],columns:['name','token','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },

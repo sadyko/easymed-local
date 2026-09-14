@@ -224,7 +224,12 @@ test('высота окна посчитана честно, сверена с C
   //   • на экране 1080p (обычный монитор регистратуры) окно видно целиком;
   //   • на ноутбуке 1366×768 оно ПРОКРУЧИВАЕТСЯ, а не обрезается, — за это
   //     отвечают max-height у карточки и overflow-y у тела, оба ниже.
-  assert.ok(modal.fitsViewport(950), 'не влезает даже на 1080p: ' + H + ' > ' + (950 - 60));
+  // PATIENT_FORM_ONE_V1 (2026-09-14) — четвёртый раздел (здоровье и экстренная
+  // связь) добавил окну один ряд с лишним: 1042 px против 890 доступных при
+  // 950 внутренних. Это следствие решения владельца показывать в ОДНОМ окне
+  // всё, что раньше было разбросано по двум, а не недосмотр: на 1080p окно
+  // прокручивается на пару десятков пикселей, на 1200 и выше видно целиком.
+  assert.ok(modal.fitsViewport(1200), 'не влезает даже на 1200: ' + H + ' > ' + (1200 - 60));
   assert.ok(/\.modal-body \{[^}]*overflow-y: auto/.test(ADMIN_CSS),
     'тело окна перестало прокручиваться — на 768-м экране форму обрежет');
   // 3. И по ширине: 1366 минус поля окна.
@@ -275,8 +280,9 @@ test('окно — три пронумерованных раздела, и ВС
   // ведущую цифру.
   const titles = all.filter((n) => n.tagName === 'H3')
     .map((n) => textOf(n).replace(/<svg[\s\S]*?<\/svg>/g, '').replace(/\s+/g, ' ').trim())
-    .map((t) => t.replace(/^[123]\s*/, ''));
-  assert.deepEqual(titles, ['Личные данные', 'Документы и резидентство', 'Контакты и адрес'],
+    .map((t) => t.replace(/^[1234]\s*/, ''));
+  // PATIENT_FORM_ONE_V1 — четвёртый раздел: то, что жило только в окне правки.
+  assert.deepEqual(titles, ['Личные данные', 'Документы и резидентство', 'Контакты и адрес', 'Здоровье и экстренная связь'],
     'разделы окна: ' + titles.join(' | '));
 
   // Окно больше НЕ двухколоночное: разделы идут один под другим.
@@ -753,4 +759,83 @@ test('когда скидка есть, она стоит рядом с назв
   const opt = dlg.fields.category_id.children.find((o) => o.getAttribute('data-name') === 'vip');
   assert.ok(opt, 'категория не приехала');
   assert.match(textOf(opt), /15/, 'скидка группы не показана рядом с названием');
+});
+
+// ─── PATIENT_FORM_ONE_V1 — то же окно правит существующего пациента ──────────
+test('режим правки: окно заполнено строкой пациента, без поиска дубликатов, сохраняет через patient_card_save', async () => {
+  reset();
+  const rpcCalls = [];
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    const u = String(url);
+    if (u.startsWith('/api/rpc/patient_card_save')) {
+      const body = JSON.parse(opts.body);
+      rpcCalls.push(body);
+      return { ok: true, status: 200, json: async () => ({ data: { id: body.patient_id, ...body.values } }), headers: { getSetCookie: () => [] } };
+    }
+    return prevFetch(url, opts);
+  };
+  try {
+    const patient = {
+      id: 77, last_name: 'Каримова', first_name: 'Азиза', middle_name: 'Рустамовна', full_name: 'Каримова Азиза Рустамовна',
+      date_of_birth: '1994-11-15', gender: 'female', phone: '+998 90 961 00 04', email: 'a@example.com',
+      national_id: '12345678901234', nationality: 'Узбечка', address: 'ул. Амира Темура 12', mahalla: 'Юнусабад-3',
+      blood_type: 'O(I) Rh+', allergies: 'пенициллин', chronic_conditions: 'Гипертония, Сахарный диабет 2 типа',
+      occupation: 'учитель', emergency_contact_name: 'Каримов Рустам', emergency_contact_phone: '+998 90 000 00 00',
+      citizenship: 'nonresident', language: 'Русский', behavior_note: '', category_id: null, photo_url: '',
+    };
+    let saved = null;
+    const dlg = modal.buildPatientCreateDialog({ patient, onSaved: (p) => { saved = p; } });
+    const text = textOf(dlg.card);
+    assert.ok(text.includes('Редактирование карты пациента'), 'заголовок режима правки');
+    assert.ok(!walk(dlg.card).some((n) => textOf(n).startsWith('Найти существующего пациента')), 'строки поиска дубликатов в правке нет');
+    assert.ok(!walk(dlg.card).some((n) => n.tagName === 'BUTTON' && textOf(n).includes('Добавить услугу')), 'кнопки «Добавить услугу» в правке нет');
+    assert.ok(walk(dlg.card).some((n) => n.tagName === 'BUTTON' && textOf(n).includes('Сохранить')), 'кнопка «Сохранить»');
+    // Поля заполнены строкой пациента.
+    assert.equal(dlg.fields.last_name.value, 'Каримова');
+    assert.equal(dlg.fields.date_of_birth.value, '1994-11-15');
+    assert.equal(dlg.fields.blood_type.value, 'O(I) Rh+');
+    assert.equal(dlg.fields.allergies.value, 'пенициллин');
+    assert.equal(dlg.fields.chronic_conditions.value, 'Гипертония, Сахарный диабет 2 типа', 'старый текст разобран на фишки и собран обратно');
+    assert.deepEqual(dlg.fields.chronic_conditions.chips, ['Гипертония', 'Сахарный диабет 2 типа']);
+    assert.equal(dlg.fields.occupation.value, 'учитель');
+    assert.equal(dlg.fields.emergency_contact_name.value, 'Каримов Рустам');
+    assert.equal(dlg.state.gender, 'F');
+    assert.equal(dlg.state.residency, 'nonresident');
+    assert.equal(dlg.fields.language.value, 'Русский');
+
+    // Правка одного поля и сохранение — в patient_card_save, с полным именем и полом словом.
+    dlg.fields.occupation.value = 'врач';
+    dlg.fields.chronic_conditions.chips.push('Астма');
+    await dlg.save({});
+    assert.equal(rpcCalls.length, 1, 'сохранение ушло через patient_card_save, не через вставку; toasts: ' + toasts.join(' | ') + '; inserted: ' + inserted.length);
+    const v = rpcCalls[0].values;
+    assert.equal(rpcCalls[0].patient_id, 77);
+    assert.equal(v.occupation, 'врач');
+    assert.equal(v.gender, 'female');
+    assert.equal(v.full_name, 'Каримова Азиза Рустамовна');
+    assert.equal(v.chronic_conditions, 'Гипертония, Сахарный диабет 2 типа, Астма');
+    assert.equal(v.citizenship, 'nonresident');
+    assert.equal(v.mahalla, 'Юнусабад-3');
+    assert.ok(saved && saved.id === 77, 'onSaved получил сохранённую карту');
+  } finally { globalThis.fetch = prevFetch; }
+});
+
+test('новая карта: раздел «Здоровье» и его поля уходят в сохранение, хронические — фишками из справочника', () => {
+  reset();
+  const dlg = modal.buildPatientCreateDialog({});
+  const labels = walk(dlg.card).filter((n) => n.tagName === 'LABEL').map((n) => textOf(n).replace(/\s+/g, ' ').trim());
+  for (const want of ['Группа крови', 'Аллергии', 'Хронические заболевания', 'Профессия', 'Экстренный контакт — имя', 'Экстренный контакт — телефон']) {
+    assert.ok(labels.some((l) => l.startsWith(want)), 'в окне нет поля «' + want + '»: ' + labels.join(' | '));
+  }
+  dlg.fields.last_name.value = 'Иванов'; dlg.fields.first_name.value = 'Иван';
+  dlg.fields.date_of_birth.value = '1990-01-01'; dlg.setGender('M');
+  dlg.fields.chronic_conditions.value = 'Гипертония';
+  dlg.fields.chronic_conditions.chips.push('Астма');
+  dlg.fields.allergies.value = 'йод';
+  const payload = dlg.collect();
+  assert.equal(payload.chronic_conditions, 'Гипертония, Астма');
+  assert.equal(payload.allergies, 'йод');
+  assert.equal(payload.citizenship, 'resident');
+  assert.ok('emergency_contact_phone' in payload && 'blood_type' in payload && 'occupation' in payload);
 });

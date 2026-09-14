@@ -94,6 +94,10 @@ export const LAYOUT = Object.freeze({
     s1: Object.freeze(['last/first/middle', 'dob/age/sex', 'phone/phone2/email']),
     s2: Object.freeze(['residency/lang', 'pinfl/document/citizenship', 'category/behaviour']),
     s3: Object.freeze(['country/region/district', 'mahalla/street']),
+    // PATIENT_FORM_ONE_V1 (2026-09-14) — четвёртый раздел: то, что раньше было
+    // ТОЛЬКО в окне правки (кровь, аллергии, хронические, профессия, экстренная
+    // связь). Окно заведения и окно правки — одно окно с одним составом.
+    s4: Object.freeze(['blood/allergies/chronic', 'occupation/emergency-name/emergency-phone']),
 });
 
 function fieldRowH() { return METRICS.labelH + METRICS.labelGap + METRICS.fieldH; }
@@ -114,6 +118,7 @@ export function firstScreenHeight() {
     const search = sectionH(LAYOUT.search.rows, { titled: false });
     return headHeight() + search
         + sectionH(LAYOUT.s1.length) + sectionH(LAYOUT.s2.length) + sectionH(LAYOUT.s3.length)
+        + sectionH(LAYOUT.s4.length)
         + footHeight();
 }
 
@@ -149,17 +154,39 @@ export function openPatientCreateModal(opts = {}) {
 }
 
 /**
+ * PATIENT_FORM_ONE_V1 — открыть ТО ЖЕ окно для правки существующего пациента.
+ * Владелец: «editing the existing patients dont have the same fields as
+ * registration of new patients. we need to make the window and the fields
+ * similar». Право здесь не спрашивается: кнопку «Редактировать» показывает
+ * карта пациента по праву на вкладку «Деталь», и rpc patient_card_save
+ * проверяет его ещё раз.
+ * @param {object} patient  строка patients (как её отдаёт карта)
+ * @param {{onSaved?:Function, onNavigate?:Function}} [opts]
+ */
+export function openPatientEditModal(patient, opts = {}) {
+    if (!patient || !patient.id) return null;
+    const dlg = buildPatientCreateDialog({ ...opts, patient });
+    document.body.appendChild(dlg.overlay);
+    document.addEventListener('keydown', dlg.onKey);
+    setTimeout(() => { try { dlg.fields.last_name.focus(); } catch (e) { /* нет фокуса — не беда */ } }, 30);
+    return dlg;
+}
+
+/**
  * Собрать окно, НЕ вставляя его в документ. Отдельно от open* ради теста:
  * проверять состав первого экрана, раскрытие и сбор значений можно без
  * document.body и без таймеров.
  */
-export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
+export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null } = {}) {
     const navigate = typeof onNavigate === 'function' ? onNavigate : () => {};
+    // PATIENT_FORM_ONE_V1 — режим правки: то же окно, заполненное строкой пациента.
+    const editing = !!(patient && patient.id);
+    const pv = (name) => (editing && patient[name] != null ? String(patient[name]) : '');
     const state = {
-        gender:      '',
-        residency:   'resident',   // → patients.citizenship
+        gender:      editing ? ({ male: 'M', female: 'F', M: 'M', F: 'F' }[patient.gender] || '') : '',
+        residency:   editing && patient.citizenship === 'nonresident' ? 'nonresident' : 'resident',   // → patients.citizenship
         photoFile:   null,
-        photoUrl:    '',
+        photoUrl:    editing ? (patient.photo_url || '') : '',
         tgSent:      false,
         moreOpen:    false,
     };
@@ -204,7 +231,7 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
     // заполняют. Номер берётся у поля телефона этого же окна.
     const tg = telegramBlock(state, () => fields.phone && fields.phone.value);
     card.appendChild(h('header', { class: 'modal-head' },
-        h('h2', null, Icon('Patients', { size: 16 }), ' ', tr('Создать пациента')),
+        h('h2', null, Icon('Patients', { size: 16 }), ' ', tr(editing ? 'Редактирование карты пациента' : 'Создать пациента')),
         h('span', { class: 'grow' }),
         tg,
         h('button', { class: 'modal-close', onclick: close }, '×'),
@@ -215,7 +242,7 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
 
     // ---- Поиск существующего пациента (одной строкой, во всю ширину) -------
     const search = searchStrip(navigate, close);
-    body.appendChild(search.el);
+    if (!editing) body.appendChild(search.el);   // PATIENT_FORM_ONE_V1 — дубликаты ищут при заведении, не при правке
 
     // ---- Левая колонка: личные данные --------------------------------------
     // DATE_NUMERIC_V1 — дата рождения показана цифрами: её сверяют с паспортом.
@@ -225,10 +252,11 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
     // сохранённую дату рождения; `off` здесь просто отказывался от помощи.
     const dobInput = reg('date_of_birth', h('input', {
         name: 'date_of_birth', type: 'date', placeholder: '15.11.1994',
-        'data-date-numeric': '', autocomplete: 'bday',
+        'data-date-numeric': '', autocomplete: 'bday', value: pv('date_of_birth').slice(0, 10),
     }));
     const ageInput = h('input', { name: '__age', readOnly: true, placeholder: '—' });
-    const categorySel = reg('category_id', categorySelect());   // CATEGORY_DISCOUNT_V1 — имя поля = имя колонки, иначе collect() соберёт ключ, который сервер молча выбросит
+    const categorySel = reg('category_id', categorySelect(editing ? patient.category_id : null));   // CATEGORY_DISCOUNT_V1 — имя поля = имя колонки, иначе collect() соберёт ключ, который сервер молча выбросит
+    if (editing) { const age = computeAge(dobInput.value); ageInput.value = (age == null || age < 0 || age > 130) ? '' : String(age); }
     dobInput.addEventListener('input', () => {
         const age = computeAge(dobInput.value);
         ageInput.value = (age == null || age < 0 || age > 130) ? '' : String(age);
@@ -247,6 +275,7 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
     // в лицо, и прятать снимок за раскрытием было неправильно. Email здесь же,
     // рядом с телефонами: это способ связи, а не документ.
     const photo = photoBlock(state);
+    if (editing && patient.photo_url) photo.setPhoto(patient.photo_url);
     const geo   = geoCascade();
     reg('country',  geo.countrySel);
     reg('region',   geo.regionSel);
@@ -257,9 +286,9 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
             h('div', { class: 'pc-id-photo' }, photo.el),
             h('div', { class: 'pc-id-fields' },
                 mgGrid(3,
-                    field(['Фамилия ', req()], reg('last_name',   nameInput('last_name',   'Каримова'))),
-                    field(['Имя ',     req()], reg('first_name',  nameInput('first_name',  'Азиза'))),
-                    field('Отчество',          reg('middle_name', nameInput('middle_name', 'Рустамовна'))),
+                    field(['Фамилия ', req()], reg('last_name',   nameInput('last_name',   'Каримова', pv('last_name')))),
+                    field(['Имя ',     req()], reg('first_name',  nameInput('first_name',  'Азиза', pv('first_name')))),
+                    field('Отчество',          reg('middle_name', nameInput('middle_name', 'Рустамовна', pv('middle_name')))),
                 ),
                 mgGrid(3,
                     field(['Дата рождения ', req()], dobInput),
@@ -270,9 +299,9 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
                     // REQUIRED_HONEST_V1 — у телефона звёздочки НЕТ: правило «голый
                     // +998 сохраняется пустым» означает, что карта без номера — штатный
                     // случай (сопровождающий, ребёнок, экстренный приём).
-                    field('Номер телефона',      regPhone('phone',           phoneInput('phone', '+998 90 961 00 04'))),
-                    field('Доп. номер телефона', regPhone('phone_secondary', phoneInput('phone_secondary', '+998 90 000 00 00'))),
-                    field('Email', reg('email', h('input', { name: 'email', placeholder: 'name@example.com' }))),
+                    field('Номер телефона',      regPhone('phone',           phoneInput('phone', '+998 90 961 00 04', { value: pv('phone') }))),
+                    field('Доп. номер телефона', regPhone('phone_secondary', phoneInput('phone_secondary', '+998 90 000 00 00', { value: pv('phone_secondary') }))),
+                    field('Email', reg('email', h('input', { name: 'email', placeholder: 'name@example.com', value: pv('email') }))),
                 ),
             ),
         ),
@@ -287,12 +316,12 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
                 [['resident', 'Резидент РУз'], ['nonresident', 'Нерезидент']],
                 () => state.residency,
                 (v) => { state.residency = v; }), 2),
-            field('Предпочитаемый язык', reg('language', select('language', ['Узбекский', 'Русский', 'Английский', 'Каракалпакский']))),
+            field('Предпочитаемый язык', reg('language', select('language', ['Узбекский', 'Русский', 'Английский', 'Каракалпакский'], pv('language')))),
         ),
         mgGrid(3,
-            field('ПИНФЛ (ЖШШИР)',        reg('national_id',     h('input', { name: 'national_id', placeholder: '14 цифр', maxLength: '14' }))),
-            field('Паспорт / документ №', reg('passport_number', h('input', { name: 'passport_number', placeholder: 'AB1234567' }))),
-            field('Гражданство / национальность', reg('nationality', h('input', { name: 'nationality', placeholder: 'Узбек' }))),
+            field('ПИНФЛ (ЖШШИР)',        reg('national_id',     h('input', { name: 'national_id', placeholder: '14 цифр', maxLength: '14', value: pv('national_id') }))),
+            field('Паспорт / документ №', reg('passport_number', h('input', { name: 'passport_number', placeholder: 'AB1234567', value: pv('passport_number') }))),
+            field('Гражданство / национальность', reg('nationality', h('input', { name: 'nationality', placeholder: 'Узбек', value: pv('nationality') }))),
         ),
         // Категория несёт скидку группы (CATEGORY_DISCOUNT_V1), поведение —
         // предупреждение для регистратуры. Ни того, ни другого на образце нет,
@@ -301,10 +330,10 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
         mgGrid(3,
             field('Категория пациента', categorySel),
             field('Поведение / предупреждение',
-                reg('behavior_note', h('textarea', {
+                reg('behavior_note', textareaWith({
                     name: 'behavior_note', rows: '1',
                     placeholder: 'напр. Грубил регистратуре; приходил в нетрезвом виде.',
-                })), 2),
+                }, pv('behavior_note'))), 2),
         ),
     ], { step: 2 }));
 
@@ -316,10 +345,30 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
             field('Район',  geo.districtSel),
         ),
         mgGrid(3,
-            field('Махалля', reg('mahalla', h('input', { name: 'mahalla', placeholder: 'Юнусабад-3' }))),
-            field('Улица, дом, квартира', reg('address', h('input', { name: 'address', placeholder: 'ул. Амира Темура 12, кв. 47' })), 2),
+            field('Махалля', reg('mahalla', h('input', { name: 'mahalla', placeholder: 'Юнусабад-3', value: pv('mahalla') }))),
+            field('Улица, дом, квартира', reg('address', h('input', { name: 'address', placeholder: 'ул. Амира Темура 12, кв. 47', value: pv('address') })), 2),
         ),
     ], { step: 3 }));
+    if (editing) geo.preset({ country: patient.country, region: patient.region, district: patient.district });
+
+    // ── Раздел 4: здоровье и экстренная связь ──────────────────────────────
+    // PATIENT_FORM_ONE_V1 — эти поля жили только в окне правки; теперь они в
+    // ОДНОМ окне с заведением. Хронические заболевания — выбор из справочника
+    // клиники (CHRONIC_REF_V1), а не свободный текст: одинаково названные
+    // болезни потом считаются и ищутся.
+    const chronic = chronicPicker(pv('chronic_conditions'));
+    body.appendChild(mgSection('Здоровье и экстренная связь', [
+        mgGrid(3,
+            field('Группа крови', reg('blood_type', h('input', { name: 'blood_type', placeholder: 'напр. O(I) Rh+', value: pv('blood_type') }))),
+            field('Аллергии', reg('allergies', textareaWith({ name: 'allergies', rows: '1', placeholder: 'напр. пенициллин, йод' }, pv('allergies')))),
+            field('Хронические заболевания', reg('chronic_conditions', chronic)),
+        ),
+        mgGrid(3,
+            field('Профессия', reg('occupation', h('input', { name: 'occupation', placeholder: 'напр. учитель', value: pv('occupation') }))),
+            field('Экстренный контакт — имя', reg('emergency_contact_name', h('input', { name: 'emergency_contact_name', placeholder: 'напр. Каримов Рустам, супруг', value: pv('emergency_contact_name') }))),
+            field('Экстренный контакт — телефон', regPhone('emergency_contact_phone', phoneInput('emergency_contact_phone', '+998 90 000 00 00', { value: pv('emergency_contact_phone') }))),
+        ),
+    ], { step: 4 }));
 
     // PATIENT_FORM_REWRITE_V1 — раскрытия «Подробнее» больше нет: всё, что оно
     // прятало, разошлось по трём разделам выше. setMore/isMoreOpen оставлены
@@ -340,14 +389,14 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
         Icon('Plus', { size: 14 }), ' ', tr('Добавить услугу'));
     const saveOnlyBtn = h('button', { class: 'btn btn-primary', type: 'button',
         onclick: (ev) => guarded(ev, () => save({ openVisit: false })) },
-        Icon('Check', { size: 14 }), ' ', tr('Создать пациента'));
+        Icon('Check', { size: 14 }), ' ', tr(editing ? 'Сохранить' : 'Создать пациента'));
     // Горячая клавиша, о которой нигде не написано, не существует: подпись в
     // подвале — часть самой возможности, а не украшение.
     card.appendChild(h('footer', { class: 'modal-foot' },
         h('span', { class: 'mg-hint' }, h('kbd', null, 'Enter'), ' ', tr('— сохранить пациента')),
         h('span', { class: 'grow' }),
         cancelBtn,
-        saveAndServiceBtn,
+        editing ? null : saveAndServiceBtn,   // PATIENT_FORM_ONE_V1 — услугу к уже заведённому добавляют из его карты
         saveOnlyBtn,
     ));
 
@@ -434,13 +483,34 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
         if (!payload) return null;
         const photoUrl = await uploadPendingPhoto(state);
         if (photoUrl) payload.photo_url = photoUrl;
+        // PATIENT_FORM_ONE_V1 — правка: та же анкета уходит в patient_card_save,
+        // который пишет только разрешённые колонки. Без поиска дубликатов —
+        // это и есть тот самый пациент.
+        if (editing) {
+            const values = { ...payload };
+            values.gender = values.gender === 'M' ? 'male' : values.gender === 'F' ? 'female' : (values.gender || null);
+            values.full_name = [values.last_name, values.first_name, values.middle_name].map((x) => String(x || '').trim()).filter(Boolean).join(' ') || patient.full_name;
+            if (values.category_id === '') values.category_id = null;
+            for (const k of ['telegram_opt_in', 'telegram_invited_at']) delete values[k];
+            try {
+                const { data, error } = await supabase.rpc('patient_card_save', { patient_id: patient.id, values });
+                if (error) throw new Error(error.message || String(error));
+                close();
+                toast('Сохранено.');
+                if (typeof onSaved === 'function') onSaved(data || { ...patient, ...values });
+                return data || values;
+            } catch (e) {
+                toast(trf('Не удалось сохранить: {msg}', { msg: (e && e.message) || e }), 'fail');
+                return null;
+            }
+        }
         if (state.tgSent) {
             payload.telegram_opt_in = true;
             payload.telegram_invited_at = new Date().toISOString();
         }
-        let patient;
+        let created;   // PATIENT_FORM_ONE_V1 — не `patient`: так зовётся правимая строка снаружи save()
         try {
-            patient = await savePatient(payload, { force });
+            created = await savePatient(payload, { force });
         } catch (e) {
             if (e && e.code === 'DUPLICATE_PATIENT' && e.existing) {
                 openDuplicatePatientDialog(e, {
@@ -459,19 +529,19 @@ export function buildPatientCreateDialog({ onNavigate, onSaved } = {}) {
         }
         close();
         toast('Пациент сохранён.');
-        if (typeof onSaved === 'function') onSaved(patient);
+        if (typeof onSaved === 'function') onSaved(created);
         else navigate('patients');
         // REG_ADD_SERVICE_V1 — мастер услуг монтируется в document.body и
         // переживает переход; грузим его лениво, чтобы окно заведения пациента
         // не тянуло каталог услуг при каждом открытии.
-        if (openVisit && patient && patient.id) {
+        if (openVisit && created && created.id) {
             import('./visit-wizard.js?v=tier2')
                 .then((mod) => mod.openVisitWizard(null, {
-                    id: patient.id, full_name: patient.fullName, mrn: patient.mrn, phone: patient.phone,
+                    id: created.id, full_name: created.fullName, mrn: created.mrn, phone: created.phone,
                 }))
                 .catch((e) => toast(trf('Не удалось открыть мастер услуг: {msg}', { msg: (e && e.message) || e }), 'fail'));
         }
-        return patient;
+        return created;
     }
 
     return {
@@ -519,9 +589,59 @@ function field(label, input, span) {
 }
 function req() { return h('span', { class: 'req' }, '*'); }
 
+// PATIENT_FORM_ONE_V1 — <textarea> держит текст как содержимое, а не атрибут:
+// h() с value его не заполнит. Один помощник на все три textarea окна.
+function textareaWith(attrs, value) {
+    const el = h('textarea', attrs);
+    if (value) el.value = value;
+    return el;
+}
+
+// CHRONIC_REF_V1 — хронические заболевания выбираются из справочника
+// (Настройки → Хронические заболевания) и хранятся в patients.chronic_conditions
+// ТЕКСТОМ через запятую: карта и печать читают поле по-прежнему. Старое
+// свободное значение разбирается на такие же фишки, чтобы его можно было
+// править, а не потерять.
+export function splitConditions(text) {
+    return String(text || '').split(/[,;\n]+/).map((x) => x.trim()).filter(Boolean);
+}
+function chronicPicker(initialText) {
+    const chips = [];
+    for (const c of splitConditions(initialText)) if (!chips.includes(c)) chips.push(c);
+    const sel = h('select', { name: '__chronic_pick' }, h('option', { value: '' }, '— выбрать из списка —'));
+    const box = h('div', { class: 'pc-chips' });
+    const paint = () => {
+        clear(box);
+        for (const c of chips) {
+            box.appendChild(h('span', { class: 'pc-chip' }, c,
+                h('button', { type: 'button', class: 'pc-chip-x', title: tr('Убрать'), 'aria-label': tr('Убрать'),
+                    onclick: () => { const i = chips.indexOf(c); if (i >= 0) chips.splice(i, 1); paint(); } }, '×')));
+        }
+    };
+    sel.addEventListener('change', () => {
+        const v = sel.value;
+        if (v && !chips.includes(v)) chips.push(v);
+        sel.value = '';
+        paint();
+    });
+    supabase.from('chronic_conditions_ref').select('id, name').eq('active', true).order('name')
+        .then(({ data, error }) => {
+            if (error || !Array.isArray(data)) return;
+            if (!data.length) { sel.appendChild(h('option', { value: '', disabled: '' }, 'Список пуст — Настройки → Хронические заболевания')); return; }
+            for (const r of data) sel.appendChild(h('option', { value: r.name }, r.name));
+        })
+        .catch(() => { /* нет справочника — выбирать не из чего, фишки остаются */ });
+    paint();
+    const el = h('div', { class: 'pc-chronic' }, sel, box);
+    Object.defineProperty(el, 'value', { get: () => chips.join(', '), set: (v) => { chips.length = 0; for (const c of splitConditions(v)) if (!chips.includes(c)) chips.push(c); paint(); } });
+    el.chips = chips;
+    return el;
+}
+
 function select(name, options, def) {
     const sel = h('select', { name });
     for (const opt of options) sel.appendChild(h('option', { value: opt, selected: def === opt }, opt));
+    if (def && options.includes(def)) sel.value = def;   // PATIENT_FORM_ONE_V1 — значение выставляется и там, где select не выводит его из selected
     return sel;
 }
 
@@ -535,8 +655,8 @@ function capitalizeNameInput(el) {
         try { el.setSelectionRange(pos, pos); } catch (e) { /* не текстовое поле */ }
     }
 }
-function nameInput(nameAttr, ph) {
-    const el = h('input', { name: nameAttr, placeholder: ph, autocapitalize: 'words', autocomplete: 'off' });
+function nameInput(nameAttr, ph, value = '') {
+    const el = h('input', { value: value || '', name: nameAttr, placeholder: ph, autocapitalize: 'words', autocomplete: 'off' });
     el.addEventListener('input', () => capitalizeNameInput(el));
     el.addEventListener('blur',  () => capitalizeNameInput(el));
     return el;
@@ -569,18 +689,22 @@ export function computeAge(iso) {
 // Теперь поле называет `category_id` (миграция 107 завела и колонку, и ссылку),
 // а варианты приезжают из справочника «Категории пациентов» — того самого, где
 // администратор задаёт скидку группы.
-function categorySelect() {
+function categorySelect(want = null) {
     const sel = h('select', { name: 'category_id' });
     sel.appendChild(h('option', { value: '' }, '—'));
     const fill = (rows) => {
+        // PATIENT_FORM_ONE_V1 — в режиме правки категория пациента выбирается,
+        // как только список приехал.
+        const wanted = want != null ? String(want) : '';
         for (const c of rows) {
             const pct = Number(c.discount_percent) || 0;
             // Имя лежит на самом варианте: подстановка по возрасту ищет
             // категорию ПО ИМЕНИ, и разбирать ради этого готовую подпись
             // «VIP (−15%)» значило бы ломаться от смены формата подписи.
-            sel.appendChild(h('option', { value: String(c.id), 'data-name': c.name },
+            sel.appendChild(h('option', { value: String(c.id), 'data-name': c.name, selected: wanted !== '' && wanted === String(c.id) },
                 pct > 0 ? c.name + '  (−' + pct + '%)' : c.name));
         }
+        if (wanted) sel.value = wanted;
     };
 
     // CATEGORY_LIST_RESILIENT_V1 — СНАЧАЛА СПИСОК, ПОТОМ СКИДКА.
@@ -1065,17 +1189,26 @@ export function geoCascade() {
         paintSelect(districtSel, dists, dists.length ? tr('Выберите район') : tr('Районы не заведены — Настройки → География'));
     });
 
+    // PATIENT_FORM_ONE_V1 — режим правки: страна/регион/район пациента
+    // выбираются по именам, как только соответствующий список приехал.
+    const want = { country: '', region: '', district: '' };
     (async () => {
         const countries = await load('countries', null);
         paintSelect(countrySel, countries,
             countries.length ? tr('Выберите страну') : tr('Страны не заведены — Настройки → География'),
-            'Uzbekistan');
+            want.country || 'Uzbekistan');
         const cid = selectedId(countrySel);
         if (cid) {
             const regs = await load('regions', ['country_id', cid]);
-            paintSelect(regionSel, regs, regs.length ? tr('Выберите регион') : tr('Регионы не заведены — Настройки → География'));
+            paintSelect(regionSel, regs, regs.length ? tr('Выберите регион') : tr('Регионы не заведены — Настройки → География'), want.region);
+            const rid = selectedId(regionSel);
+            if (rid && want.district) {
+                const dists = await load('districts', ['region_id', rid]);
+                paintSelect(districtSel, dists, dists.length ? tr('Выберите район') : tr('Районы не заведены — Настройки → География'), want.district);
+            }
         }
     })();
 
-    return { countrySel, regionSel, districtSel };
+    return { countrySel, regionSel, districtSel,
+        preset: ({ country, region, district } = {}) => { want.country = country || ''; want.region = region || ''; want.district = district || ''; } };
 }

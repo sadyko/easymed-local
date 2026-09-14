@@ -2074,6 +2074,17 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
     function openEditModal() {
         const p = patient;
         if (!p) return;
+        // PATIENT_FORM_ONE_V1 — то же окно, что при заведении (владелец: «make
+        // the window and the fields similar»). Старая укороченная форма ниже
+        // больше не вызывается и оставлена только до следующей чистки.
+        import('./patient-create-modal.js').then((mod) => mod.openPatientEditModal(p, { onSaved: () => reload() }))
+            .catch((e) => toast(trf('Не удалось открыть окно: {msg}', { msg: (e && e.message) || e }), 'fail'));
+        return;
+    }
+    // eslint-disable-next-line no-unused-vars
+    function openEditModalLegacy() {
+        const p = patient;
+        if (!p) return;
 
         const overlay = h('div', { class: 'modal' });
         const close = () => overlay.remove();

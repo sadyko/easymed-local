@@ -127,21 +127,25 @@ test('patients import: every template column is a real, writable column', async 
   assert.ok(got.mrn, 'MRN is assigned automatically — that is what makes an export re-importable');
 });
 
-test('patients import: columns the table does not have are dropped silently — so none may sit in the template', async (t) => {
+test('patients: the registration window columns are real since migration 129 — passport, region, district round-trip; an unknown column is still dropped silently', async (t) => {
   const { db: sqlite, server, base } = await startServer();
   t.after(() => { server.close(); sqlite.close(); });
   const cookie = await loginAdmin(base);
 
   const ins = await db(base, cookie, {
     table: 'patients', op: 'insert', returning: true, single: 'single',
-    values: { full_name: 'Ghost Column', last_name: 'Ghost', first_name: 'Column', passport_number: 'AB1234567', region: 'Tashkent', district: 'Yunusobod' },
+    values: { full_name: 'Ghost Column', last_name: 'Ghost', first_name: 'Column', passport_number: 'AB1234567', region: 'Tashkent', district: 'Yunusobod', totally_unknown: 'x' },
   });
   assert.equal(ins.status, 200);
-  // This is the trap: the write succeeds and the data is gone. The importer
-  // config must therefore not advertise these columns.
-  assert.equal(ins.json.data.passport_number, undefined);
-  assert.equal(ins.json.data.region, undefined);
-  assert.equal(ins.json.data.district, undefined);
+  // PATIENT_FORM_ONE_V1 — until 2026-09-14 these three were dropped on the
+  // floor: the window asked for them and the table had no columns. Now they
+  // are stored. The trap itself is unchanged for a column that does not exist:
+  // the write succeeds and the key is gone — an importer template must only
+  // list columns the registry knows.
+  assert.equal(ins.json.data.passport_number, 'AB1234567');
+  assert.equal(ins.json.data.region, 'Tashkent');
+  assert.equal(ins.json.data.district, 'Yunusobod');
+  assert.equal(ins.json.data.totally_unknown, undefined);
 });
 
 test('patients export/import round-trip: re-importing by MRN updates instead of duplicating', async (t) => {

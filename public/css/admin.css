@@ -1581,6 +1581,13 @@ html[lang="uz"] .modal-close::after { content: 'Yopish'; }
    понимая, что именно не так. Ширина 168 px вместо 190: плитка на три ряда
    полей и так заметна, а лишние 22 px она отбирала у фамилии и отчества. */
 .pc-id { display: flex; align-items: stretch; gap: 14px; }
+/* CHRONIC_REF_V1 — фишки выбранных хронических заболеваний под списком. */
+.pc-chronic { display: grid; gap: 6px; min-width: 0; }
+.pc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.pc-chips:empty { display: none; }
+.pc-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px 2px 9px; border-radius: 999px; background: var(--primary-50); color: var(--primary-700); font-size: 12.5px; font-weight: 600; line-height: 1.4; }
+.pc-chip-x { border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: 13.5px; line-height: 1; padding: 0 2px; opacity: .7; }
+.pc-chip-x:hover { opacity: 1; }
 .pc-id-photo { flex: 0 0 168px; display: flex; }
 .pc-id-fields { flex: 1 1 auto; min-width: 0; display: grid; gap: 10px; align-content: start; }
 /* PATIENT_PHOTO_TILE_V1 — плитка фото держит высоту трёх рядов полей рядом.
