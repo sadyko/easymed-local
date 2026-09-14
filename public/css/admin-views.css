@@ -4796,6 +4796,32 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     .tel-route-action, .tel-route-stage { min-width: 0; max-width: none; }
 }
 
+/* SVC_TABLE_FIT_V1 (2026-09-14) — owner: «make fonts smaller and content not
+   get out of view». Twelve columns at 13.5 px with 14 px cell padding ran to
+   1727 px and pushed the whole page sideways on a 1366 px screen. The list
+   is laid out FIXED from the header widths (services.js), one step down the
+   type scale, tighter cells, headers allowed to wrap; the card scrolls inside
+   itself as a last resort so the page never grows a horizontal scrollbar. */
+.svc-card { overflow-x: auto; }
+table.tbl.svc-tbl { table-layout: fixed; font-size: 12.5px; }
+table.tbl.svc-tbl thead th { padding: 8px 10px; letter-spacing: 0.03em; line-height: 1.25; vertical-align: bottom; }
+table.tbl.svc-tbl thead tr.filter-row th, table.tbl.svc-tbl thead tr.filter-row td { padding: 4px 6px 8px; }
+table.tbl.svc-tbl tbody td { padding: 7px 10px; overflow-wrap: anywhere; line-height: 1.35; }
+table.tbl.svc-tbl td.cell-strong { font-weight: 600; }
+table.tbl.svc-tbl td.svc-tier { white-space: nowrap; }
+table.tbl.svc-tbl .svc-tier-line + .svc-tier-line { margin-top: 2px; }
+table.tbl.svc-tbl input[type="checkbox"] { width: 15px; height: 15px; margin: 0; vertical-align: middle; }
+table.tbl.svc-tbl td.svc-one-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The filter row must obey the same widths: a select keeps its intrinsic width
+   and a number input its spin buttons unless told otherwise, and either one
+   pushes into the next column. */
+table.tbl.svc-tbl thead tr.filter-row th { overflow: hidden; }
+table.tbl.svc-tbl thead tr.filter-row th > input, table.tbl.svc-tbl thead tr.filter-row th > select { min-width: 0; max-width: 100%; }
+table.tbl.svc-tbl thead tr.filter-row th > div > input { min-width: 0; flex: 1 1 0; width: auto; padding: 0 4px; }
+table.tbl.svc-tbl thead tr.filter-row input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+table.tbl.svc-tbl thead tr.filter-row input[type="number"]::-webkit-inner-spin-button,
+table.tbl.svc-tbl thead tr.filter-row input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
 .bulk-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; margin-bottom: 12px; background: var(--primary-50); border: 1px solid var(--primary-200); border-radius: 10px; flex-wrap: wrap; }
 .bulk-count { font-size: 13.5px; color: var(--primary-700); font-weight: 600; }
 

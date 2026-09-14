@@ -201,7 +201,6 @@ function mount() {
         h('th', null, selectFilter('type', [['', 'All']].concat(SERVICE_TYPES))),
         h('th', null, rangeFilter('priceMin', 'priceMax')),
         h('th', null, selectFilter('tiered', YES_NO)),   // SVC_TIER_COLUMN_V1 — есть ли цена по счёту визита
-        h('th', null, ''),
         h('th', null, rangeFilter('durMin', 'durMax')),
         h('th', null, selectFilter('doctor', YES_NO)),
         h('th', null, textFilter('performer', 'Doctor name')),   // SVC_PERFORMERS_V1
@@ -252,24 +251,26 @@ function mount() {
                 addBtn),
         ),
         refs.bulkBar,
-        h('div', { class: 'card' },
-            h('table', { class: 'tbl' },
+        h('div', { class: 'card svc-card' },
+            h('table', { class: 'tbl svc-tbl' },
                 h('thead', null,
+                    // SVC_TABLE_FIT_V1 — the widths live on the header cells and the
+                    // table is laid out fixed (see .svc-tbl), so twelve columns share
+                    // the card instead of pushing the page sideways at 1366 px.
                     h('tr', null,
-                        h('th', { style: { width: '1%' } }, (refs.headBox = h('input', { type: 'checkbox', title: tr('Отметить все'),
+                        h('th', { style: { width: '34px' } }, (refs.headBox = h('input', { type: 'checkbox', title: tr('Отметить все'),
                             onchange: (ev) => { const rows = allServices.filter(matchesFilters); if (ev.target.checked) for (const r of rows) selected.add(r.id); else for (const r of rows) selected.delete(r.id); renderRows(); } }))),
-                        h('th', null, 'Name'),
-                        h('th', null, 'Code'),
-                        h('th', null, 'Type'),
-                        h('th', null, 'Price'),
-                        h('th', null, 'Второй визит'),   // SVC_TIER_COLUMN_V1 — цена и окно в днях
-                        h('th', null, 'Повторный визит'),
-                        h('th', null, 'Duration'),
-                        h('th', null, 'Doctor'),
-                        h('th', null, 'Performers'),
-                        h('th', null, 'Lab'),
-                        h('th', null, 'Active'),
-                        isAdmin() ? h('th', null, '') : null,   // SERVICE_DELETE_V1
+                        h('th', { style: { width: '21%' } }, 'Name'),
+                        h('th', { style: { width: '5%' } }, 'Code'),
+                        h('th', { style: { width: '11%' } }, 'Type'),
+                        h('th', { style: { width: '8%' } }, 'Price'),
+                        h('th', { style: { width: '16%' } }, 'По счёту визита'),   // SVC_TIER_COLUMN_V1 — второй и повторный: цена и окно в днях
+                        h('th', { style: { width: '7%' } }, 'Время'),
+                        h('th', { style: { width: '5%' } }, 'Doctor'),
+                        h('th', { style: { width: '13%' } }, 'Performers'),
+                        h('th', { style: { width: '5%' } }, 'Lab'),
+                        h('th', { style: { width: '7%' } }, 'Active'),
+                        isAdmin() ? h('th', { style: { width: '44px' } }, '') : null,   // SERVICE_DELETE_V1
                     ),
                     filterRow,
                 ),
@@ -334,7 +335,7 @@ function setLoadingRow() {
     if (!refs.tbody) return;
     clear(refs.tbody);
     refs.tbody.appendChild(h('tr', null,
-        h('td', { colspan: String(isAdmin() ? 13 : 12), style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Loading…'),
+        h('td', { colspan: String(isAdmin() ? 12 : 11), style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Loading…'),
     ));
     refs.emptyEl.style.display = 'none';
 }
@@ -400,7 +401,7 @@ function performerCell(s) {
         title: names.join(', '),
         style: {
             whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: '1.35',
-            fontSize: '12.5px', minWidth: '170px', maxWidth: '260px',
+            fontSize: '12.5px',   // SVC_TABLE_FIT_V1 — width comes from the header, not a min-width
         },
     }, names.join(', '));
 }
@@ -473,23 +474,31 @@ function paintBulkBar() {
     ));
 }
 
-// SVC_TIER_COLUMN_V1 — «Второй визит» / «Повторный визит»: the price and how
-// many days after the previous visit it still counts. The words match the
-// editor («не раньше чем через… не позже чем через…») so the list and the
-// form describe one rule; a service with one price shows a dash. The repeat
-// price when unset is the second-visit price (the server's fallback), and its
-// window when unset is the second-visit window (REPEAT_WINDOW_V1).
-function tierCell(s, tier) {
+// SVC_TIER_COLUMN_V1 — «По счёту визита»: two lines, the second visit and the
+// repeat visit, each with its price and how many days after the previous
+// visit it still counts. The words match the editor («не раньше чем через…
+// не позже чем через…») so the list and the form describe one rule; a
+// service with one price shows a dash. The repeat price when unset is the
+// second-visit price (the server's fallback), and its window when unset is
+// the second-visit window (REPEAT_WINDOW_V1). One column, not two
+// (SVC_TABLE_FIT_V1): the list has to fit a 1366 px screen.
+function tierLine(s, tier) {
     const w = tierWindowParts(s, tier);
-    if (!w) return h('td', { class: 'muted' }, '—');
+    if (!w) return null;
     const own = tier === 'repeat' ? s.price_repeat : s.price_secondary;
     const price = own != null && own !== '' ? Number(own) : (tier === 'repeat' && s.price_secondary != null && s.price_secondary !== '' ? Number(s.price_secondary) : Number(s.price));
     const days = w.kind === 'to' ? trf('до {n} дн.', { n: w.to })
         : w.kind === 'range' ? trf('{a}–{b} дн.', { a: w.from, b: w.to })
         : trf('от {n} дн.', { n: w.from });
-    return h('td', { class: 'num' },
-        h('div', null, price === 0 ? tr('бесплатно') : fmtPrice(price)),
-        h('div', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, days));
+    return h('div', { class: 'svc-tier-line' },
+        h('span', { class: 'muted' }, tier === 'repeat' ? tr('повт.:') : tr('2-й:')), ' ',
+        h('span', null, price === 0 ? tr('бесплатно') : fmtPrice(price)),
+        h('span', { class: 'muted' }, ' · ' + days));
+}
+function tierCell(s) {
+    const second = tierLine(s, 'secondary');
+    if (!second) return h('td', { class: 'muted' }, '—');
+    return h('td', { class: 'svc-tier' }, second, tierLine(s, 'repeat'));
 }
 
 function serviceRow(s) {
@@ -508,11 +517,10 @@ function serviceRow(s) {
         h('td', { onclick: (e) => e.stopPropagation() }, box),
         h('td', { class: 'cell-strong' }, s.name || '—'),
         h('td', { class: 'muted' }, s.code || '—'),
-        h('td', null, typeLabel(s)),
+        h('td', { class: 'svc-one-line', title: typeLabel(s) }, typeLabel(s)),
         h('td', { class: 'num' }, fmtPrice(s.price)),
-        tierCell(s, 'secondary'),   // SVC_TIER_COLUMN_V1
-        tierCell(s, 'repeat'),
-        h('td', null, s.duration_minutes != null ? trf('{n} мин', { n: s.duration_minutes }) : '—'),
+        tierCell(s),   // SVC_TIER_COLUMN_V1
+        h('td', { class: 'svc-one-line' }, s.duration_minutes != null ? trf('{n} мин', { n: s.duration_minutes }) : '—'),
         h('td', null, s.requires_doctor ? Tag('Yes', { kind: 'ok', dot: true }) : h('span', { class: 'muted' }, '—')),
         performerCell(s),
         h('td', null, s.is_lab ? Tag('Lab', { kind: 'info', dot: true }) : h('span', { class: 'muted' }, '—')),
@@ -534,7 +542,7 @@ function deleteCell(s) {
     if (!isAdmin()) return null;
     return h('td', { style: { textAlign: 'right', width: '1%' } },
         h('button', {
-            class: 'btn btn-danger btn-sm', type: 'button', title: 'Удалить',
+            class: 'icon-btn sm danger', type: 'button', title: 'Удалить', 'aria-label': 'Удалить',   // SVC_TABLE_FIT_V1 — as in the settings register (LIST_ACTIONS_V1)
             onclick: async (e) => {
                 e.stopPropagation();   // клик по ряду открывает редактор — не сюда
                 const btn = e.currentTarget;

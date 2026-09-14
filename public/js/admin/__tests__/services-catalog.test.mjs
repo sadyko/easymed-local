@@ -271,16 +271,22 @@ test('колонки «Второй визит» и «Повторный виз�
   await flush();
 
   const heads = tags(c, 'th').map((t) => textOf(t).trim());
-  assert.ok(heads.includes('Второй визит') && heads.includes('Повторный визит'), 'шапка: ' + heads.join(' | '));
+  assert.ok(heads.includes('По счёту визита'), 'шапка: ' + heads.join(' | '));
+  assert.ok(!heads.includes('Второй визит') && !heads.includes('Повторный визит'), 'SVC_TABLE_FIT_V1: одна колонка, не две');
   const rows = tags(c, 'tr').filter((r) => /row-click/.test(r.className || ''));
   const cellsOf = (r) => tags(r, 'td').map((t) => textOf(t).replace(/\s+/g, ' ').trim());
   const r7 = cellsOf(rows[0]);
-  assert.ok(r7.some((t) => /60 000/.test(t) && /до 6 дн\./.test(t)), 'второй: цена и «до 6 дн.» — ' + r7.join(' | '));
-  assert.ok(r7.some((t) => /бесплатно/.test(t) && /2–30 дн\./.test(t)), 'повторный: бесплатно и «2–30 дн.» — ' + r7.join(' | '));
-  const r8 = cellsOf(rows[1]);
-  assert.ok(r8.some((t) => /30 000/.test(t) && /до 10 дн\./.test(t)), 'второй визит ЭКГ');
-  assert.equal(r8.filter((t) => /30 000/.test(t) && /до 10 дн\./.test(t)).length, 2, 'повторный без своих цены и окна — как второй');
+  const tier7 = r7.find((t) => /2-й:/.test(t));
+  assert.ok(tier7, 'ячейка «по счёту визита»: ' + r7.join(' | '));
+  assert.match(tier7, /2-й: 60 000 · до 6 дн\./, 'второй: цена и «до 6 дн.»');
+  assert.match(tier7, /повт\.: бесплатно · 2–30 дн\./, 'повторный: бесплатно и своё окно «2–30 дн.»');
+  const tier8 = cellsOf(rows[1]).find((t) => /2-й:/.test(t));
+  assert.match(tier8, /2-й: 30 000 · до 10 дн\./, 'второй визит ЭКГ');
+  assert.match(tier8, /повт\.: 30 000 · до 10 дн\./, 'повторный без своих цены и окна — как второй');
   const r9 = cellsOf(rows[2]);
-  assert.equal(r9.filter((t) => t === '—').length >= 2, true, 'одна цена — прочерки в обеих колонках');
+  assert.ok(!r9.some((t) => /2-й:/.test(t)) && r9.includes('—'), 'одна цена — прочерк');
+  // SVC_TABLE_FIT_V1 — the widths that let twelve columns share one screen
+  const ths = tags(c, 'th');
+  assert.ok(ths.some((t) => t.style && t.style.width === '21%'), 'у колонок заданы ширины (fixed layout)');
   services = [SVC];
 });
