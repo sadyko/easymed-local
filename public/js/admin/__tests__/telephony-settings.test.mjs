@@ -81,8 +81,8 @@ const findInputs = (root) => walk(root).filter((n) => n.tagName === 'INPUT');
 const findInputByType = (root, type) => findInputs(root).find((n) => n.attrs.type === type);
 const findInputByPlaceholder = (root, re) => findInputs(root).find((n) => re.test(String(n.attrs.placeholder || '')));
 const findByRole = (root, role) => walk(root).find((n) => n.attrs.role === role);
-// Company ID — единственный text-инпут секции без плейсхолдера (ключ и адрес свои несут).
-const findCompanyInput = (root) => findInputs(root).find((n) => n.attrs.type === 'text' && !n.attrs.placeholder);
+// Company ID — поле с подсказкой «например, 95710» (TEL_FIELDS_PLAIN_V1).
+const findCompanyInput = (root) => findInputByPlaceholder(root, /95710/);
 
 // The last toast the screen raised. A dedicated #toast node is handed to
 // ui.js's toast() so it reuses it instead of appending a new one, and its text
@@ -613,10 +613,10 @@ test('ряд провайдеров: Binotel + каждый onlinePBX + «Доб
   await tick();
   text = textOf(root);
   assert.ok(findTileByText(root, /Регистратура/).attrs['aria-pressed'] === 'true');
-  assert.ok(text.includes('Домен АТС') && text.includes('Ключ API: сохранён (заменить)'), 'подключение onlinePBX');
+  assert.ok(text.includes('Домен АТС из панели onlinePBX') && text.includes('Ключ API из панели onlinePBX: сохранён (заменить)'), 'подключение onlinePBX: поля называют, откуда взять значение');
   assert.ok(text.includes('Опрос звонков') && !text.includes('WebHook-и'), 'карточки Binotel спрятаны, WebHook-ов у onlinePBX нет');
-  assert.strictEqual(findInputByPlaceholder(root, /clinic\.onpbx\.ru/).value, 'clinic.onpbx.ru');
-  assert.ok(findButtonByText(root, /Удалить провайдера/), 'удаление — на карточке опроса');
+  assert.strictEqual(findInputByPlaceholder(root, /onpbx\.ru/).value, 'clinic.onpbx.ru');
+  assert.ok(findButtonByText(root, /Удалить провайдера/), 'удаление — рядом с сохранением');
   assert.ok(text.includes('Правила общие для всех подключённых АТС.'), 'маршрут говорит, что словарь один');
 });
 
@@ -644,14 +644,14 @@ test('добавить: выбор вида → черновик; без дом�
   await tick();
   let text = textOf(root);
   assert.ok(text.includes('Не сохранён'), 'черновик — плиткой с честным статусом');
-  assert.ok(findInputByPlaceholder(root, /clinic\.onpbx\.ru/), 'форма подключения открыта');
+  assert.ok(findInputByPlaceholder(root, /onpbx\.ru/), 'форма подключения открыта');
 
   findButtonByText(root, /Сохранить подключение/).click();
   await tick();
   assert.strictEqual(provSaveCalls, 0, 'без домена — не уходит');
   assert.ok(/домен/i.test(String(lastToast())), lastToast());
 
-  findInputByPlaceholder(root, /clinic\.onpbx\.ru/).value = ' https://Clinic.onpbx.ru ';
+  findInputByPlaceholder(root, /onpbx\.ru/).value = ' https://Clinic.onpbx.ru ';
   findButtonByText(root, /Сохранить подключение/).click();
   await tick();
   assert.strictEqual(provSaveCalls, 0, 'без ключа новый провайдер не сохраняется');

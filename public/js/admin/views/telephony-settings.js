@@ -291,24 +291,27 @@ function pbxConnectionCard(p) {
     const card = h('div', { style: { padding: '18px' } });
 
     card.appendChild(field('Провайдер', h('div', { style: { fontWeight: '600' } }, providerLabel(kind))));
+    // TEL_FIELDS_PLAIN_V1 — где взять: домен — вверху панели onlinePBX, ключ —
+    // «Интеграция → API» (и там же снять «Проверка IP», иначе АТС отвечает
+    // только адресам из своего списка, а адрес клиники меняется).
     card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 14px' } },
-        'Домен и ключ API — в панели onlinePBX: Настройки → Интеграции → API.'));
+        'Домен показан вверху панели onlinePBX. Ключ — в разделе «Интеграция → API»; там же снимите галочку «Проверка IP», иначе АТС не будет отвечать клинике.'));
 
     const nameInput = h('input', {
         type: 'text', autocomplete: 'off', spellcheck: 'false', style: { width: '100%' },
         value: p ? p.name : providerLabel(kind), placeholder: 'например, Регистратура',
     });
-    card.appendChild(field('Название карточки', nameInput));
+    card.appendChild(field('Название (как показывать в списке провайдеров)', nameInput));
 
     const domainInput = h('input', {
         type: 'text', autocomplete: 'off', spellcheck: 'false', style: { width: '100%' },
-        value: p ? p.domain : '', placeholder: 'clinic.onpbx.ru',
+        value: p ? p.domain : '', placeholder: 'например, pbx38631.onpbx.ru',
     });
-    card.appendChild(field('Домен АТС', domainInput));
+    card.appendChild(field('Домен АТС из панели onlinePBX', domainInput));
 
     const keyInput = h('input', {
         type: 'password', autocomplete: 'off', spellcheck: 'false', style: { width: '100%' },
-        placeholder: p && p.auth_key_set ? 'сохранён — введите новый, чтобы заменить' : 'ключ API из панели onlinePBX',
+        placeholder: p && p.auth_key_set ? 'сохранён — введите новый, чтобы заменить' : 'ключ из раздела «Интеграция → API» панели onlinePBX',
     });
     const showBtn = h('button', { class: 'btn btn-sm', type: 'button',
         onclick: () => {
@@ -316,17 +319,17 @@ function pbxConnectionCard(p) {
             showBtn.textContent = tr(keyInput.type === 'password' ? 'Показать' : 'Скрыть');
         } }, 'Показать');
     card.appendChild(field(
-        p && p.auth_key_set ? 'Ключ API: сохранён (заменить)' : 'Ключ API',
+        p && p.auth_key_set ? 'Ключ API из панели onlinePBX: сохранён (заменить)' : 'Ключ API из панели onlinePBX',
         h('div', { class: 'row', style: { gap: '8px' } },
             h('div', { style: { flex: '1' } }, keyInput), showBtn)));
 
     const extInput = h('input', {
         type: 'text', autocomplete: 'off', spellcheck: 'false', style: { width: '160px' },
-        value: p ? p.default_extension : '', placeholder: '101',
+        value: p ? p.default_extension : '', placeholder: 'например, 101',
     });
-    card.appendChild(field('Внутренний номер по умолчанию', extInput));
+    card.appendChild(field('Внутренний номер, с которого звонить пациенту', extInput));
     card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 14px' } },
-        'С какого внутреннего номера система будет звонить пациенту. Можно оставить пустым.'));
+        'Добавочный номер регистратуры в АТС. Можно оставить пустым — тогда звонок из системы будет недоступен.'));
 
     const resultLine = h('div', { role: 'status', style: { marginTop: '10px', fontSize: '13.5px', minHeight: '18px' } });
     const setResult = (ok, text) => {
@@ -390,6 +393,11 @@ function pbxConnectionCard(p) {
     if (!p) {
         actions.appendChild(h('button', { class: 'btn btn-ghost', type: 'button',
             onclick: () => { state.selected = 'binotel'; state.draftKind = null; paint(); } }, 'Отмена'));
+    } else {
+        // TEL_FIELDS_PLAIN_V1 — удаление рядом с сохранением, в первой карточке:
+        // внизу второй его не находили (владелец: «can I able to delete?»).
+        actions.appendChild(h('span', { class: 'grow' }));
+        actions.appendChild(deleteProviderButton(p));
     }
     card.appendChild(actions);
     card.appendChild(resultLine);
@@ -449,10 +457,16 @@ function pbxPollingCard(p) {
     card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '12px' } },
         'Звонок появляется в журнале в течение минуты после завершения плюс один интервал опроса.'));
 
+    return h('div', { class: 'card', style: { marginBottom: '16px' } },
+        h('div', { class: 'card-header' }, h('h3', null, Icon('Refresh', { size: 16 }), ' ', tr('Опрос звонков'))),
+        card);
+}
+
+// Удаление убирает карточку и её ключи; звонки в журнале остаются (ссылка
+// на провайдера снимается, сам звонок — нет).
+function deleteProviderButton(p) {
     const delBtn = h('button', { class: 'btn btn-ghost tel-prov-del', type: 'button',
         onclick: async () => {
-            // Удаление убирает карточку и её ключи; звонки в журнале остаются
-            // (ссылка на провайдера снимается, сам звонок — нет).
             if (!window.confirm(tr('Удалить эту карточку провайдера? Звонки в журнале останутся.'))) return;
             await run(delBtn, async () => {
                 await rpc('telephony_provider_delete', { id: p.id });
@@ -462,11 +476,7 @@ function pbxPollingCard(p) {
                 paint();
             });
         } }, Icon('Trash', { size: 13 }), ' ', tr('Удалить провайдера'));
-    card.appendChild(h('div', { class: 'row', style: { gap: '8px', marginTop: '16px', justifyContent: 'flex-end' } }, delBtn));
-
-    return h('div', { class: 'card', style: { marginBottom: '16px' } },
-        h('div', { class: 'card-header' }, h('h3', null, Icon('Refresh', { size: 16 }), ' ', tr('Опрос звонков'))),
-        card);
+    return delBtn;
 }
 
 // ---------------------------------------------------------------------------
@@ -477,14 +487,17 @@ function connectionCard() {
     const card = h('div', { style: { padding: '18px' } });
 
     card.appendChild(field('Провайдер', h('div', { style: { fontWeight: '600' } }, 'Binotel')));
+    // TEL_FIELDS_PLAIN_V1 — владелец: «rename fields and setup placeholders so
+    // I can understand what to type». Каждое поле называет, ОТКУДА берётся
+    // значение, а подсказка внутри — как оно выглядит.
     card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 14px' } },
-        'Ключ и secret выдаёт поддержка Binotel — support@binotel.ua.'));
+        'Три значения из письма Binotel с данными интеграции: key, secret и Company ID. Письмо присылает поддержка Binotel — support@binotel.ua.'));
 
     const keyInput = h('input', {
         type: 'text', autocomplete: 'off', spellcheck: 'false', style: { width: '100%' },
-        value: s.api_key || '', placeholder: 'ключ из письма Binotel',
+        value: s.api_key || '', placeholder: 'строка «key» — ключ из письма Binotel',
     });
-    card.appendChild(field('API-ключ (key)', keyInput));
+    card.appendChild(field('Ключ (key) из письма Binotel', keyInput));
 
     // type=password — secret не должен светиться на экране в регистратуре
     // (та же причина, что у токена Telegram-бота).
@@ -498,7 +511,7 @@ function connectionCard() {
             showBtn.textContent = tr(secInput.type === 'password' ? 'Показать' : 'Скрыть');
         } }, 'Показать');
     card.appendChild(field(
-        s.api_secret_set ? 'Secret: сохранён (заменить)' : 'Secret',
+        s.api_secret_set ? 'Секрет (secret) из письма Binotel: сохранён (заменить)' : 'Секрет (secret) из письма Binotel',
         h('div', { class: 'row', style: { gap: '8px' } },
             h('div', { style: { flex: '1' } }, secInput), showBtn)));
 
@@ -509,11 +522,11 @@ function connectionCard() {
     // должна очищать и хранилище, а не молча оставлять старый номер).
     const cidInput = h('input', {
         type: 'text', autocomplete: 'off', spellcheck: 'false', style: { width: '100%' },
-        value: s.company_id || '',
+        value: s.company_id || '', placeholder: 'например, 95710',
     });
-    card.appendChild(field('Company ID', cidInput));
+    card.appendChild(field('Номер компании (Company ID) из письма Binotel', cidInput));
     card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 14px' } },
-        'Номер компании в Binotel — указан в письме с данными интеграции'));
+        'Короткий номер компании в Binotel. Можно оставить пустым — тогда WebHook-и не сверяются с ним.'));
 
     // role="status" — живая область: результат проверки объявляется читалке,
     // где бы ни был фокус (тот же приём, что на экране «Модуль не подключён»).
