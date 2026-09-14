@@ -118,6 +118,15 @@ export function dayWindow(hoursRaw, weekday) {
   // График не задан вовсе — работаем по умолчанию. Существующие врачи и
   // кабинеты не должны переставать записываться от того, что колонку добавили.
   if (!hours) return { from: DEFAULT_FROM_MIN, to: DEFAULT_TO_MIN, breaks: [] };
+  // EMPTY_HOURS_DEFAULT_V1 (2026-09-14) — ПУСТОЙ ОБЪЕКТ — ТОЖЕ «НЕ ЗАДАНО».
+  // Экран «Сотрудники» заводит нового врача с working_hours '{}' (ни одного
+  // дня не отмечено), и до этой строки движок читал это как «не принимает
+  // ни в один день»: колонка в календаре вся серая, запись отказывает —
+  // владелец: «calendar not working properly». То же правило, что у часов
+  // здания (clinicWindow ниже): распорядок, в котором нет ни одного дня, —
+  // это отсутствие распорядка, а не решение закрыть приём. Закрытый день —
+  // это заполненный распорядок, где этого дня нет.
+  if (!WEEKDAY_KEYS.some((k) => k in hours)) return { from: DEFAULT_FROM_MIN, to: DEFAULT_TO_MIN, breaks: [] };
 
   const entry = hours[WEEKDAY_KEYS[((weekday % 7) + 7) % 7]];
   if (!entry || typeof entry !== 'object') return null;   // дня нет в графике = выходной
