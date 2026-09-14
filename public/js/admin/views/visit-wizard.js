@@ -32,6 +32,9 @@ import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — пе�
 import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1
 import { doctorPoolFor } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1
 import { tierLabel, tierApplies } from '../visit-tier-logic.js';   // VISIT_TIER_PRICING_V1
+// DISCOUNT_RULES_V1 — какие скидки подходят этому пациенту сегодня и на что
+// они действуют; одно правило на оба мастера.
+import { eligibleDiscounts, discountValue, discountOptionParts, localYmd } from '../discount-rules.js';
 import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // PAYER_COMPANY_IN_ESTIMATE_V1
 // WIZARD_ONE_ENGINE_V1 — общий клиент слотов и записи. Один вопрос «когда врач
 // свободен» на весь продукт: его задаёт серверу этот клиент, а считает
@@ -147,7 +150,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         discountMode: 'pct', // 'pct' | 'abs'
         discountPct: 0,      // «Скидка (лояльность), %»
         discountAbs: 0,      // «Скидка (лояльность), сум»
-        promo: null,         // применённый patient_discounts: { name, percent, amount }
+        promo: null,         // применённый patient_discounts: { name, percent, amount, service_ids }
+        discounts: [],       // DISCOUNT_RULES_V1 — все действующие скидки клиники; подходящие отбираются на лету
+        categoryId: null,    // категория пациента (для скидок «только для группы»)
+        categoryName: '',    // CATEGORY_DISCOUNT_V1 — скидка группы подставляется в «лояльность» сама
+        categoryPct: 0,
         promoOpen: false,    // PROMO_TICK_V1 — поле промокода раскрыто галочкой (редкий случай)
         // step 4
         raiseInvoice: true,
@@ -477,6 +484,24 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // ничего не стоят, а картина «есть в настройках, но не выбрать» уходит.
             supabase.from('payers').select('id, name, kind, active').order('name'),
         ]);
+        // DISCOUNT_RULES_V1 + CATEGORY_DISCOUNT_V1 — отдельно и без права ронять
+        // мастер: без списка скидок смета работает, просто выпадающий список пуст.
+        try {
+            const [dRes, pRes] = await Promise.all([
+                supabase.from('patient_discounts').select('id, name, kind, percent, amount, active, valid_from, valid_until, category_id, service_ids').eq('active', 1).order('name'),
+                supabase.from('patients').select('id, category_id, patient_categories(id, name, discount_percent, active)').eq('id', patient.id).maybeSingle(),
+            ]);
+            wiz.discounts = (!dRes.error && Array.isArray(dRes.data)) ? dRes.data : [];
+            const cat = pRes && !pRes.error && pRes.data ? pRes.data.patient_categories : null;
+            wiz.categoryId = pRes && !pRes.error && pRes.data && pRes.data.category_id != null ? Number(pRes.data.category_id) : null;
+            if (cat && cat.active !== 0 && cat.active !== false && Number(cat.discount_percent) > 0) {
+                wiz.categoryName = cat.name || '';
+                wiz.categoryPct = Math.min(100, Number(cat.discount_percent));
+                // Подставляется, только если регистратор ещё ничего не ввёл:
+                // сервер всё равно применит скидку группы как минимум (billing.js).
+                if (!Number(wiz.discountPct) && !Number(wiz.discountAbs)) { wiz.discountMode = 'pct'; wiz.discountPct = wiz.categoryPct; }
+            }
+        } catch (e) { wiz.discounts = []; }
         wiz.services = svcRes.data || [];
         wiz.doctors  = docRes.data || [];
         wiz.sources  = srcRes.data || [];
@@ -1831,13 +1856,27 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const pct = Math.min(100, Math.max(0, Number(wiz.discountPct) || 0));
         return sub * (pct / 100);
     }
+    // DISCOUNT_RULES_V1 — промокод считается по строкам, которых он касается
+    // (все — если услуги у скидки не отмечены), с суммы уже после скидки
+    // лояльности, чтобы две скидки не накладывались на один и тот же сум.
+    function promoLines() {
+        const sub = cartTotal();
+        const loyalty = loyaltyDiscount();
+        const k = sub > 0 ? Math.max(0, 1 - loyalty / sub) : 1;
+        return visibleCart().map((c) => ({ service_id: c.svc.id, total: cartLinePrice(c) * c.qty * k }));
+    }
     function discountAmount() {
         const sub = cartTotal();
         let d = loyaltyDiscount();
-        if (wiz.promo) {
-            d += wiz.promo.percent ? sub * (Number(wiz.promo.percent) / 100) : (Number(wiz.promo.amount) || 0);
-        }
+        if (wiz.promo) d += discountValue(wiz.promo, promoLines());
         return Math.min(sub, Math.round(d));
+    }
+    // Which discounts this patient may pick today for THIS cart.
+    function discountChoices() {
+        return eligibleDiscounts(wiz.discounts, {
+            today: localYmd(), categoryId: wiz.categoryId,
+            serviceIds: visibleCart().map((c) => Number(c.svc.id)),
+        });
     }
     function grandTotal() { return Math.max(0, cartTotal() - discountAmount()); }
 
@@ -2147,32 +2186,37 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         paintModes();
         syncDiscInput();
 
-        const promoInp = h('input', {
-            type: 'text', placeholder: 'Промокод / карта / сертификат',
-            value: wiz.promo ? wiz.promo.name : '',
-            style: { flex: 1, minWidth: 0, padding: '11px 12px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13.5px' },
-        });
-        const promoBtn = h('button', {
-            class: 'btn btn-outline btn-sm', type: 'button',
-            onclick: async () => {
-                const code = promoInp.value.trim();
-                if (!code) { wiz.promo = null; refreshTotals(); return; }
-                const { data, error } = await supabase.from('patient_discounts')
-                    .select('id, name, kind, percent, amount').eq('active', 1);
-                if (error) { toast(trf('Не удалось проверить код: {msg}', { msg: error.message }), 'fail'); return; }
-                const hit = (data || []).find(d => (d.name || '').trim().toLowerCase() === code.toLowerCase());
-                if (!hit) { toast(trf('Код «{code}» не найден (Настройки → Скидки пациентов).', { code }), 'fail'); return; }
-                wiz.promo = hit;
-                toast(trf('Применено: {what}', { what: hit.name + (hit.percent ? ' (−' + hit.percent + '%)' : hit.amount ? ' (−' + fmtPrice(hit.amount) + ' ' + tr('сум') + ')' : '') }), 'ok');
+        // DISCOUNT_RULES_V1 — выпадающий список подходящих скидок вместо
+        // набора кода: регистратор видит, что положено ЭТОМУ пациенту сегодня
+        // на ЭТУ смету (срок, группа, услуги — discount-rules.js), и выбирает.
+        const choices = discountChoices();
+        if (wiz.promo && !choices.some((d) => d.id === wiz.promo.id)) wiz.promo = null;   // состав сметы изменился — скидка больше не подходит
+        const promoSel = h('select', {
+            style: { flex: 1, minWidth: 0, padding: '10px 12px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13.5px' },
+            onchange: () => {
+                const id = Number(promoSel.value) || 0;
+                wiz.promo = choices.find((d) => d.id === id) || null;
                 refreshTotals();
+                if (wiz.promo) {
+                    const parts = discountOptionParts(wiz.promo, fmtPrice);
+                    toast(trf('Применено: {what}', { what: parts.name + (parts.value ? ' (' + parts.value + ')' : '') }), 'ok');
+                }
             },
-        }, 'Применить');
+        },
+            h('option', { value: '' }, choices.length ? tr('— выберите скидку —') : tr('Подходящих скидок нет')),
+            ...choices.map((d) => {
+                const parts = discountOptionParts(d, fmtPrice);
+                return h('option', { value: String(d.id), selected: !!(wiz.promo && wiz.promo.id === d.id) },
+                    parts.name + (parts.value ? ' — ' + parts.value : '') + (parts.scoped ? ' · ' + tr('на выбранные услуги') : ''));
+            }));
+        if (wiz.promo) promoSel.value = String(wiz.promo.id);
+        if (!choices.length) promoSel.disabled = true;
 
         // PROMO_TICK_V1 — промокод используется редко: по умолчанию поле
         // скрыто, вместо него маленькая галочка. Применённый код держит
         // блок раскрытым.
         if (wiz.promo) wiz.promoOpen = true;
-        const promoRow = h('div', { class: 'row', style: { gap: '8px', display: wiz.promoOpen ? '' : 'none' } }, promoInp, promoBtn);
+        const promoRow = h('div', { class: 'row', style: { gap: '8px', display: wiz.promoOpen ? '' : 'none' } }, promoSel);
         const promoChk = h('input', {
             type: 'checkbox', checked: !!wiz.promoOpen,
             style: { width: '15px', height: '15px', accentColor: 'var(--primary-600)', cursor: 'pointer' },
@@ -2180,8 +2224,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         promoChk.addEventListener('change', () => {
             wiz.promoOpen = promoChk.checked;
             promoRow.style.display = wiz.promoOpen ? '' : 'none';
-            if (!wiz.promoOpen && wiz.promo) { wiz.promo = null; promoInp.value = ''; refreshTotals(); }   // снятие галочки снимает код
-            if (wiz.promoOpen) promoInp.focus();
+            if (!wiz.promoOpen && wiz.promo) { wiz.promo = null; promoSel.value = ''; refreshTotals(); }   // снятие галочки снимает код
+            if (wiz.promoOpen) promoSel.focus();
         });
         const promoTick = h('label', { style: { display: 'flex', alignItems: 'center', gap: '7px', cursor: 'pointer', fontSize: '12.5px', color: 'var(--ink-500)' } },
             promoChk, 'Промокод / карта / сертификат');
@@ -2194,6 +2238,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             dmsHint,
             h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
                 discLabelEl, modesEl, discInp),
+            // CATEGORY_DISCOUNT_V1 — откуда взялся процент: скидка группы пациента.
+            wiz.categoryPct > 0 ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '-4px' } },
+                trf('Скидка группы «{name}» — {pct}% подставлена; можно изменить.', { name: wiz.categoryName, pct: wiz.categoryPct })) : null,
             promoTick,
             promoRow,
         ));

@@ -168,7 +168,9 @@ const GROUPS = [
         title: 'Основное', icon: 'Folder', color: { bg: '#fdf3e1', fg: '#b07d1f' },
         items: [
             { label: 'Пациенты',            desc: 'Картотека: данные пациента, контакты, номер карты', icon: 'ID',       live: true, action: nav('settings:patients') },   // PATIENTS_SECTION_V1 — easymed's section-CRUD register (route, NOT openSection: that's the hub's own lookup editor and has no patients config)
-            { label: 'Категории пациентов', desc: 'Группы пациентов: VIP, обычные и другие',               icon: 'Layers',   live: true, action: () => openSection('patient_categories') },
+            { label: 'Категории пациентов', desc: 'Группы пациентов и скидка каждой группы',               icon: 'Layers',   live: true, action: () => openSection('patient_categories') },
+            // CHRONIC_REF_V1 — список, из которого анкета пациента выбирает хронические заболевания.
+            { label: 'Хронические заболевания', desc: 'Список для анкеты пациента: выбирают, а не печатают', icon: 'Heart',  live: true, action: () => openSection('chronic_conditions_ref') },
             // COMPANY_SECTION_V1 — «Компания» было НЕКУДА открыть.
             //
             // Печатные формы, шапка приложения и window.CLINIC берут название,
@@ -181,7 +183,7 @@ const GROUPS = [
             // название компании»: менять было негде, а правки в дизайнере
             // затирались при следующей загрузке.
             { label: 'Документы',           desc: 'Как выглядят печатные документы',             icon: 'Doc',      live: true, action: nav('documents') },
-            { label: 'Скидки пациентов',    desc: 'Промокоды, подарочные карты и сертификаты',           icon: 'Coins',    live: true, action: () => openSection('patient_discounts') },
+            { label: 'Скидки пациентов',    desc: 'Промокоды и сертификаты: срок, группа пациентов, услуги', icon: 'Coins',    live: true, action: () => openSection('patient_discounts') },
             // TELEGRAM_BOT_V1 — токен бота и режимы выдачи документов пациентам.
             // Раздел админский: isRouteAllowed('telegram-settings') пускает только
             // полный доступ, остальные упрутся в отказ на самом экране.
@@ -475,20 +477,47 @@ const LOOKUP_CONFIG = {
     // ---- Основное / General ----------------------------------------------
     patient_categories: {
         table: 'patient_categories', title: 'Категории пациентов', icon: 'ID',
-        columns: [{ key: 'name', label: 'Название' }, { key: 'tier', label: 'Уровень' }],
+        // CATEGORY_DISCOUNT_V1 — скидка группы видна в списке: ради неё
+        // категорию и заводят. Считается на сервере при выставлении счёта
+        // (billing.js) и подставляется в смету сама.
+        columns: [{ key: 'name', label: 'Название' }, { key: 'discount_percent', label: 'Скидка, %' }, { key: 'tier', label: 'Уровень' }],
         fields: [
             { key: 'name', label: 'Название', type: 'text', required: true },
-            { key: 'tier', label: 'Уровень', type: 'text' },
+            { key: 'discount_percent', label: 'Скидка группы, % — применяется к счетам пациентов этой категории сама', type: 'number' },
+            { key: 'tier', label: 'Уровень (необязательно)', type: 'text' },
         ],
     },
+    // CHRONIC_REF_V1 — справочник для анкеты пациента.
+    chronic_conditions_ref: {
+        table: 'chronic_conditions_ref', title: 'Хронические заболевания', icon: 'Heart',
+        columns: [{ key: 'name', label: 'Название' }, { key: 'code', label: 'Код' }],
+        fields: [
+            { key: 'name', label: 'Название (как в анкете)', type: 'text', required: true },
+            { key: 'code', label: 'Код МКБ-10 (необязательно)', type: 'text' },
+        ],
+    },
+    // DISCOUNT_RULES_V1 — срок, группа пациентов и услуги у скидки. Пустое поле
+    // = без ограничения. Смета показывает пациенту только те скидки, что
+    // подходят ему сегодня (visit-wizard.js eligibleDiscounts).
     patient_discounts: {
         table: 'patient_discounts', title: 'Скидки и сертификаты', icon: 'Coins',
-        columns: [{ key: 'name', label: 'Название' }, { key: 'kind', label: 'Вид' }, { key: 'percent', label: 'Скидка, %' }, { key: 'amount', label: 'Сумма' }],
+        embed: 'patient_categories(name)',
+        columns: [
+            { key: 'name', label: 'Название' }, { key: 'kind', label: 'Вид' }, { key: 'percent', label: 'Скидка, %' }, { key: 'amount', label: 'Сумма' },
+            { key: 'valid_until', label: 'Действует', format: (row) => discountValidityText(row) },
+            { key: 'patient_categories', label: 'Группа', embed: true },
+            { key: 'service_ids', label: 'Услуги', format: (row) => discountScopeText(row) },
+        ],
         fields: [
             { key: 'name', label: 'Название', type: 'text', required: true },
             { key: 'kind', label: 'Вид', type: 'select', options: [['promo', 'Промокод'], ['gift_card', 'Подарочная карта'], ['certificate', 'Сертификат']] },
             { key: 'percent', label: 'Скидка, %', type: 'number' },
             { key: 'amount', label: 'Фиксированная сумма, UZS', type: 'number' },
+            { key: 'valid_from', label: 'Действует с (пусто — сразу)', type: 'date' },
+            { key: 'valid_until', label: 'Действует по (пусто — бессрочно)', type: 'date' },
+            { key: 'category_id', label: 'Только для группы пациентов (пусто — для всех)', type: 'fk', fkTable: 'patient_categories', fkLabel: 'name' },
+            { key: 'service_ids', label: 'Только на эти услуги (ничего не отмечено — на весь счёт)', type: 'services', full: true },
+            { key: 'note', label: 'Примечание', type: 'text', full: true },
         ],
     },
     api_tokens: {
@@ -735,6 +764,57 @@ function optionPairs(f) {
     return (f.options || []).map(o => (Array.isArray(o) ? o : [o, o]));
 }
 
+// DISCOUNT_RULES_V1 — «с 01.09 по 30.09» / «бессрочно» / «услуг: 3» / «на весь счёт».
+function ruDate(iso) {
+    const s = String(iso || '').slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0, 4) : '';
+}
+export function discountValidityText(row) {
+    const from = ruDate(row && row.valid_from), to = ruDate(row && row.valid_until);
+    if (from && to) return trf('с {from} по {to}', { from, to });
+    if (to) return trf('по {to}', { to });
+    if (from) return trf('с {from}', { from });
+    return tr('бессрочно');
+}
+export function discountScopeText(row) {
+    const ids = Array.isArray(row && row.service_ids) ? row.service_ids : [];
+    return ids.length ? trf('услуг: {n}', { n: ids.length }) : tr('на весь счёт');
+}
+
+// DISCOUNT_RULES_V1 — список активных услуг с отметками и поиском. Загружается
+// после монтирования (load), как fk-списки; .value — массив отмеченных id.
+function servicesPicker(initialIds) {
+    const picked = new Set((initialIds || []).map(Number).filter(Number.isFinite));
+    const q = h('input', { type: 'text', placeholder: 'Поиск услуги…', style: { width: '100%', marginBottom: '6px' } });
+    const list = h('div', { style: { maxHeight: '180px', overflowY: 'auto', border: '1px solid var(--ink-100)', borderRadius: '8px', padding: '6px 8px', display: 'grid', gap: '4px' } },
+        h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Загрузка…'));
+    const countEl = h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } }, '');
+    let rows = [];
+    const paint = () => {
+        clear(list);
+        const needle = q.value.trim().toLowerCase();
+        const shown = rows.filter((r) => !needle || String(r.name || '').toLowerCase().includes(needle));
+        if (!shown.length) list.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } }, rows.length ? 'Ничего не найдено' : 'Услуг нет'));
+        for (const r of shown) {
+            const cb = h('input', { type: 'checkbox', checked: picked.has(Number(r.id)), onchange: () => { if (cb.checked) picked.add(Number(r.id)); else picked.delete(Number(r.id)); sync(); } });
+            list.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13.5px', cursor: 'pointer' } }, cb, r.name || ''));
+        }
+        sync();
+    };
+    const sync = () => { countEl.textContent = picked.size ? trf('Отмечено услуг: {n}', { n: picked.size }) : tr('Ничего не отмечено — скидка действует на весь счёт'); };
+    q.addEventListener('input', paint);
+    const el = h('div', null, q, list, countEl);
+    el.load = async () => {
+        try {
+            const { data, error } = await supabase.from('services').select('id,name').eq('active', 1).order('name').limit(2000);
+            rows = error ? [] : (data || []);
+        } catch (e) { rows = []; }
+        paint();
+    };
+    Object.defineProperty(el, 'value', { get: () => [...picked] });
+    return el;
+}
+
 // The label for a stored enum value, for the LIST view — without this the table
 // would keep printing the raw value while the editor showed the translated one.
 function enumLabel(cfg, key, value) {
@@ -848,6 +928,7 @@ async function renderEditor(container, key) {
     // ячейке (подпись перечисления, название по ссылке) — иначе отбор шёл бы по
     // тому, чего на экране нет, и «ничего не нашлось» выглядело бы поломкой.
     function cellText(row, c) {
+        if (typeof c.format === 'function') return c.format(row);
         const v = c.embed ? (row[c.key] ? row[c.key][c.embedLabel || 'name'] : null)
                           : enumLabel(cfg, c.key, row[c.key]);
         return v === 0 ? '0' : (v == null ? '' : String(v));
@@ -1012,6 +1093,15 @@ async function renderEditor(container, key) {
                         h('option', { value: val, selected: !!(row && row[f.key] === val) }, label)));
             } else if (f.type === 'number') {
                 control = h('input', { type: 'number', value: row && row[f.key] != null ? String(row[f.key]) : '' });
+            } else if (f.type === 'date') {
+                // DISCOUNT_RULES_V1 — календарная дата; пустая на правке уходит
+                // как null, чтобы срок можно было СНЯТЬ, а не только поставить.
+                control = h('input', { type: 'date', value: row && row[f.key] ? String(row[f.key]).slice(0, 10) : '' });
+            } else if (f.type === 'services') {
+                // DISCOUNT_RULES_V1 — отметки по списку активных услуг с поиском;
+                // .value отдаёт массив id (колонка объявлена json в реестре).
+                control = servicesPicker(Array.isArray(row && row[f.key]) ? row[f.key] : []);
+                fkFields.push({ ...f, __services: true });
             } else if (f.type === 'phone') {
                 // PHONE_INPUT_V1 — country picker, Uzbekistan by default. Its
                 // .value reads '' while only the dialling code is present, so
@@ -1094,6 +1184,7 @@ async function renderEditor(container, key) {
         // an extra equality filter (f.fkFilter, e.g. { role: 'doctor' }).
         async function loadFkOptions(f) {
             const select = controls[f.key];
+            if (f.__services) { await select.load(); return; }   // DISCOUNT_RULES_V1
             try {
                 let q = supabase.from(f.fkTable).select('id,' + f.fkLabel).eq(f.fkActiveCol || 'active', 1);
                 if (f.fkFilter) for (const [col, val] of Object.entries(f.fkFilter)) q = q.eq(col, val);
@@ -1134,6 +1225,8 @@ async function renderEditor(container, key) {
                 // «ставок нет», его тоже надо записать, чтобы снять прежние.
                 if (f.type === 'group_rates') { payload[f.key] = controls[f.key].value; continue; }
                 if (f.type === 'number') { payload[f.key] = Number(controls[f.key].value) || 0; continue; }
+                if (f.type === 'date') { const d = String(controls[f.key].value || '').slice(0, 10); if (d) payload[f.key] = d; else if (isEdit) payload[f.key] = null; continue; }
+                if (f.type === 'services') { payload[f.key] = controls[f.key].value; continue; }
                 if (f.type === 'fk') {
                     const raw = controls[f.key].value;
                     if (f.required && !raw) { toast(`Choose ${f.label.toLowerCase()}.`, 'fail'); return; }

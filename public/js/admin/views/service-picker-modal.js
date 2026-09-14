@@ -41,6 +41,7 @@ import { resolveTypeId } from './service-group.js?v=aug17e';   // SERVICE_GROUPS
 // VISIT_TIER_PRICING_V1 — цена по счёту визита: смета спрашивает сервер, что
 // эти услуги стоят ЭТОМУ пациенту сегодня, и кладёт ответ на строки.
 import { tierLabel, tierApplies, quotableIds, applyQuotes, resetQuotes, priceTierOf } from '../visit-tier-logic.js';
+import { discountBlockReason, eligibleDiscounts, discountValue, discountOptionParts, localYmd } from '../discount-rules.js';   // DISCOUNT_RULES_V1
 
 // PROC_PERFORMER_V1 — роли, которым можно поручить процедуру. Врач сюда
 // попадает НЕ отсюда, а по is_doctor (ADMIN_DOCTOR_LIST_V1) — см.
@@ -2256,8 +2257,19 @@ export function openServicePickerModal({
     function wizCardsAvail() { return wizCards().reduce((s, c) => s + Math.max(0, Number(c.remaining ?? c.amount ?? 0)), 0); }
     function wizPromoOff(base) {
         const pr = wizPromo(); if (!pr) return 0;
-        if (pr.discount_type === 'amount') return Math.min(base, Math.round(Number(pr.amount || 0)));
-        return Math.round(base * Math.min(100, Math.max(0, Number(pr.percent || 0))) / 100);
+        // DISCOUNT_RULES_V1 — скидка «на выбранные услуги» считается только по
+        // ним; сумма сметы после лояльности раскладывается по строкам
+        // пропорционально, чтобы процент лёг на то же основание, что и итог.
+        const full = calcCartTotal();
+        const k = full > 0 ? base / full : 1;
+        const lines = state.added.map((a) => ({ service_id: Number(a.service && a.service.id), total: Number(a.service && a.service.price || 0) * k }));
+        return Math.min(base, discountValue(pr, lines));
+    }
+    // Категория привязанного пациента — для скидок «только для группы».
+    function wizPatientCategoryId() {
+        const p = refs.attachedPatient;
+        const raw = p && (p.category_id != null ? p.category_id : (p._raw && p._raw.category_id));
+        return raw == null || raw === '' ? null : Number(raw);
     }
     async function wizApplyCode(code) {
         // CLOUD_LEFTOVER_COLUMNS_V1 — колонки `code` у скидки офлайн нет: скидки
@@ -2272,6 +2284,13 @@ export function openServicePickerModal({
         const row = (data || []).find(d => String(d.name || '').trim().toLowerCase() === want);
         if (!row) { toast('Код не найден.', 'fail'); return; }
         if (!row.active) { toast('Код деактивирован.', 'fail'); return; }
+        // DISCOUNT_RULES_V1 — срок, группа пациента, услуги: одно правило с
+        // мастером записи (discount-rules.js).
+        const why = discountBlockReason(row, { today: localYmd(), categoryId: wizPatientCategoryId(), serviceIds: state.added.map((a) => Number(a.service && a.service.id)) });
+        if (why === 'not_yet') { toast('Код ещё не действует.', 'fail'); return; }
+        if (why === 'expired') { toast('Срок действия кода истёк.', 'fail'); return; }
+        if (why === 'other_group') { toast('Скидка только для другой группы пациентов.', 'fail'); return; }
+        if (why === 'no_matching_service') { toast('Скидка действует на другие услуги — в смете их нет.', 'fail'); return; }
         const today = new Date().toISOString().slice(0, 10);
         if (row.valid_from && row.valid_from > today) { toast('Код ещё не действует.', 'fail'); return; }
         if (row.valid_to && row.valid_to < today) { toast('Срок действия кода истёк.', 'fail'); return; }
