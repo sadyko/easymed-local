@@ -145,7 +145,7 @@ export async function mountLabDevices(container) {
                     // знать, что коды в выпадающем списке — ожидание, а не факт.
                     p && p.channelsSource !== 'documented'
                         ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('список показателей типовой — сверьте по прибору'))
-                        : null),
+                        : (p ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('формат документирован')) : null)),
                 h('td', { class: 'cell-mono', style: { fontSize: '12.5px' } },
                     d.transport === 'mllp'
                         ? trf('{host}:{port}', { host: d.host || tr('любой адрес'), port: d.port || 2575 })
@@ -359,9 +359,11 @@ export async function mountLabDevices(container) {
             step(tr('Включите «Автоматическая передача» (Auto Communicate) — тогда прибор отправляет каждую готовую пробу сам.')),
             step(tr('Прогоните одну пробу. Прибор появится в списке выше сам; затем в «Панелях» выберите его у панели и подтвердите поля.'))));
 
-        body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Прибор, подключённый к компьютеру только кабелем COM (BC-2800, BC-3000 Plus)')));
+        body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Прибор, подключённый к компьютеру только кабелем COM (BC-2800, BC-3000 Plus, AutoLumo A1000 и другие)')));
         body.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '12px' } },
-            tr('Пока не поддерживается: такой прибор не умеет отправлять по сети, и для него нужна отдельная программа на том компьютере. Она в планах. Результаты с него вносятся руками, как сейчас.')));
+            tr('Такой прибор не умеет отправлять по сети — за него это делает переадресатор на том же компьютере. Папку «analyzers» выдаёт разработчик: скопируйте её целиком на лабораторный компьютер и запустите файл своей модели — FORWARD-BC-2800.bat, FORWARD-AutoLumo-A1000.bat и так далее. При первом запуске он спросит COM-порт, скорость и адрес этого компьютера с Easy-Med. Дальше результаты приходят сюда так же, как с сетевого прибора.')));
+        body.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '12px' } },
+            tr('COM-порт может держать только одна программа: пока работает переадресатор, ПО производителя этот прибор не видит. Чтобы работали оба, прибору нужен второй последовательный порт или разветвитель.')));
 
         body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Важно')));
         body.appendChild(h('ul', { style: { paddingLeft: '20px', fontSize: '12.5px' } },
