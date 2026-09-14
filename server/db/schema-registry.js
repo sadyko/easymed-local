@@ -200,10 +200,14 @@ export const REGISTRY = {
              'is_lab','specimen','result_unit','ref_low','ref_high','ref_text','type','type_id','category_id','department_id','tube_color',
              'default_doctor_percent','room_id',
              'price_secondary','secondary_days_from','secondary_days_to','price_repeat'] },   // tube_color: LAB_HANDLING_V1 (mig 041); default_doctor_percent/room_id: SERVICE_EDITOR_V1 (mig 081) — read-only here, written ONLY by the service_save RPC (rates merge must be transactional); price_secondary…price_repeat: VISIT_TIER_PRICING_V1 (mig 127) — written by service_save too
+    // FULL_EXPORT_V1 — the Excel importer writes these directly (admin only);
+    // the dialog still goes through service_save, which merges performer rates.
     write: { insert: { roles: ['admin'], columns: ['name','code','price','tax_rate','duration_minutes','requires_doctor','active',
-             'is_lab','specimen','result_unit','ref_low','ref_high','ref_text','type','type_id','category_id','department_id','tube_color'] },
+             'is_lab','specimen','result_unit','ref_low','ref_high','ref_text','type','type_id','category_id','department_id','tube_color',
+             'price_secondary','secondary_days_from','secondary_days_to','price_repeat','default_doctor_percent','room_id'] },
              update: { roles: ['admin'], columns: ['name','code','price','tax_rate','duration_minutes','requires_doctor','active',
-             'is_lab','specimen','result_unit','ref_low','ref_high','ref_text','type','type_id','category_id','department_id','tube_color'] },
+             'is_lab','specimen','result_unit','ref_low','ref_high','ref_text','type','type_id','category_id','department_id','tube_color',
+             'price_secondary','secondary_days_from','secondary_days_to','price_repeat','default_doctor_percent','room_id'] },
              delete: { roles: [] } },
     // `type` is the routing column ('lab','consultation','procedure','imaging',
     // 'other') and was readable but not filterable, so "give me the lab services"

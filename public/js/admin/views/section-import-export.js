@@ -427,9 +427,23 @@ const IMPORT_CONFIGS = {
             // importing price-lists that get priced after upload. Missing price
             // now imports as 0 with a warning instead of an error.
             { key: 'price',            coerce: 'num',  defaultNum: 0,  warnIfMissing: true, hint: 'Цена, число — напр. 150000 (пусто → 0)' },
+            // FULL_EXPORT_V1 (2026-09-14) — owner: «exporting and importing are not
+            // giving all the information». Every field the service editor holds now
+            // travels: code, the visit-tier prices (VISIT_TIER_PRICING_V1), the
+            // performer share, the room, and the lab block. All optional; a sheet
+            // without these columns imports exactly as before.
+            { key: 'code',             hint: 'Внутренний код (необязательно)' },
+            { key: 'price_secondary',  coerce: 'num', hint: 'Цена второго визита (пусто — как первый)' },
+            { key: 'secondary_days_from', coerce: 'int', hint: 'Второй визит — не раньше чем через N дней после предыдущего' },
+            { key: 'secondary_days_to',   coerce: 'int', hint: 'и не позже чем через M дней (пусто — без предела)' },
+            { key: 'price_repeat',     coerce: 'num', hint: 'Цена повторного визита, третий и далее (0 — бесплатно; пусто — как второй)' },
             { key: 'tax_rate',         coerce: 'num',  defaultNum: 12, hint: 'НДС % (по умолчанию 12, если пусто)' },
             { key: 'duration_minutes', coerce: 'int',  defaultNum: 30, hint: 'Длительность, мин (по умолчанию 30, если пусто)' },
             { key: 'requires_doctor',  coerce: 'bool', defaultBool: true, hint: 'true / false — нужен врач (по умолчанию true)' },
+            { key: 'default_doctor_percent', coerce: 'num', hint: 'Доля исполнителя по умолчанию, % (необязательно)' },
+            { key: 'room',             fk: { source: 'rooms', keyField: 'name', target: 'room_id' }, hint: 'Кабинет (очередь диагностики) — по названию из справочника; необязательно' },
+            { key: 'specimen',         hint: 'Лаборатория: материал (кровь, моча…) — необязательно' },
+            { key: 'tube_color',       hint: 'Лаборатория: пробирка — light_blue, red, gold, green, lavender, pink, grey, royal_blue, yellow_acd, black, none' },
             { key: 'active',           coerce: 'bool', defaultBool: true, hint: 'true / false — активна (по умолчанию true)' },
         ],
         // SERVICE_IMPORT_TYPE_NO_AUTOCREATE_V1 — sample rows leave `type` blank so
@@ -474,6 +488,28 @@ const IMPORT_CONFIGS = {
             { key: 'blood_type',         hint: 'Blood group — one of: A+ A- B+ B- AB+ AB- O+ O- unknown' },
             { key: 'allergies',          hint: 'Comma-separated — e.g. Penicillin, Latex. Leave blank for none.' },
             { key: 'chronic_conditions', hint: 'Comma-separated — e.g. Hypertension, Diabetes.' },
+            // FULL_EXPORT_V1 (2026-09-14) — the rest of the patient window, so an
+            // export carries the whole card and an edited sheet brings it back.
+            // PATIENT_FORM_ONE_V1 gave these columns a home (migration 129).
+            { key: 'category',           fk: { source: 'patient_categories', keyField: 'name', target: 'category_id' }, hint: 'Категория пациента — по названию из справочника (VIP, Сотрудник…); необязательно' },
+            { key: 'phone_secondary',    hint: 'Доп. номер телефона' },
+            { key: 'passport_number',    hint: 'Паспорт / документ №' },
+            { key: 'citizenship',        hint: 'resident / nonresident' },
+            { key: 'language',           hint: 'Предпочитаемый язык: Узбекский, Русский, Английский, Каракалпакский' },
+            { key: 'country',            hint: 'Страна (по названию из Настройки → География)' },
+            { key: 'region',             hint: 'Регион' },
+            { key: 'district',           hint: 'Район' },
+            { key: 'mahalla',            hint: 'Махалля' },
+            { key: 'occupation',         hint: 'Профессия' },
+            { key: 'marital_status',     hint: 'Семейное положение: single / married / divorced / widowed' },
+            { key: 'emergency_contact_name',     hint: 'Экстренный контакт — имя' },
+            { key: 'emergency_contact_phone',    hint: 'Экстренный контакт — телефон' },
+            { key: 'emergency_contact_relation', hint: 'Экстренный контакт — кем приходится' },
+            { key: 'behavior_note',      hint: 'Поведение / предупреждение для регистратуры' },
+            { key: 'insurance_policy_number', hint: 'Номер страхового полиса' },
+            { key: 'insurance_expiry_date',   coerce: 'date', hint: 'Полис действует до — 2027-05-01, 01.05.2027 или дата из Excel' },
+            { key: 'registration_date',  coerce: 'date', hint: 'Дата регистрации (пусто — сегодня)' },
+            { key: 'notes',              hint: 'Заметки' },
             // BRANCH_IDENTITY_V1 (migration 080) — the prefix is no longer the
             // literal 'P': it is the letter of the branch this install IS, so the
             // main branch mints A-26-00042 and a secondary mints C-26-00042. The
@@ -629,6 +665,12 @@ export function hasImporter(sectionKey) {
 function getCfg(sectionKey) {
     if (IMPORT_CONFIGS[sectionKey]) return IMPORT_CONFIGS[sectionKey];
     return autoConfigFor(sectionKey);
+}
+
+/** FULL_EXPORT_V1 — the column keys a section's Excel file carries (for tests and screens). */
+export function exportColumnKeys(sectionKey) {
+    const cfg = getCfg(sectionKey);
+    return cfg ? cfg.columns.filter(c => !c.capture && c.tmpl !== false).map(c => c.key) : [];
 }
 
 // Field types we deliberately skip in the auto-derived importer — they

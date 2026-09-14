@@ -23,7 +23,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag } from '../ui.js';
 import { tr, trf } from '../i18n.js';
-import { importExportButtons } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1
+import { importExportButtons, exportSectionRows } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1 + SERVICES_BULK_V1
 import { ratesOf } from './doctor-pool.js?v=dp1';   // SVC_PERFORMERS_V1 — тот же разбор service_rates, что и в мастере визита
 import { openServiceEditor } from './service-editor.js?v=svceditor1';   // SERVICES_ONE_EDITOR_V1
 
@@ -192,6 +192,7 @@ function mount() {
         numFilter(minKey, 'from'), numFilter(maxKey, 'to'));
 
     const filterRow = h('tr', { class: 'filter-row', style: { background: 'var(--ink-25, #f6f8f9)' } },
+        h('td', { class: 'tbl-filter' }),   // SERVICES_BULK_V1 — под колонкой отметок
         h('th', null, textFilter('name', 'Name')),
         h('th', null, textFilter('code', 'Code')),
         h('th', null, selectFilter('type', [['', 'All']].concat(SERVICE_TYPES))),
@@ -224,6 +225,9 @@ function mount() {
         onclick: () => openServiceEditor({ row: null, readOnly: !isAdmin(), onSaved: fetchAndPaint }),
     }, Icon('Plus', { size: 14 }), ' Add service');
 
+    // SERVICES_BULK_V1 — полоса действий над отмеченными строками (владелец:
+    // «cannot select several patients and services at the same time»).
+    refs.bulkBar = h('div', { id: 'svc-bulk-bar', style: { display: 'none' } });
     refs.container.appendChild(h('div', { class: 'fade-in' },
         h('div', { class: 'page-head' },
             h('div', null,
@@ -242,10 +246,13 @@ function mount() {
                 }),
                 addBtn),
         ),
+        refs.bulkBar,
         h('div', { class: 'card' },
             h('table', { class: 'tbl' },
                 h('thead', null,
                     h('tr', null,
+                        h('th', { style: { width: '1%' } }, (refs.headBox = h('input', { type: 'checkbox', title: tr('Отметить все'),
+                            onchange: (ev) => { const rows = allServices.filter(matchesFilters); if (ev.target.checked) for (const r of rows) selected.add(r.id); else for (const r of rows) selected.delete(r.id); renderRows(); } }))),
                         h('th', null, 'Name'),
                         h('th', null, 'Code'),
                         h('th', null, 'Type'),
@@ -320,7 +327,7 @@ function setLoadingRow() {
     if (!refs.tbody) return;
     clear(refs.tbody);
     refs.tbody.appendChild(h('tr', null,
-        h('td', { colspan: String(isAdmin() ? 10 : 9), style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Loading…'),
+        h('td', { colspan: String(isAdmin() ? 11 : 10), style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Loading…'),
     ));
     refs.emptyEl.style.display = 'none';
 }
@@ -353,6 +360,7 @@ function renderRows() {
 
     const shown = rows.slice(0, MAX_RENDERED);
     for (const s of shown) refs.tbody.appendChild(serviceRow(s));
+    syncSelection(rows);
 
     // Never let a cap pass for a complete list.
     if (refs.capNote) {
@@ -390,8 +398,80 @@ function performerCell(s) {
     }, names.join(', '));
 }
 
+// SERVICES_BULK_V1 — отмеченные услуги (id) и полоса действий над ними.
+const selected = new Set();
+function syncSelection(rows) {
+    for (const id of [...selected]) if (!allServices.some((r) => r.id === id)) selected.delete(id);
+    if (refs.headBox) {
+        const all = rows.length > 0 && rows.every((r) => selected.has(r.id));
+        refs.headBox.checked = all;
+        refs.headBox.indeterminate = !all && rows.some((r) => selected.has(r.id));
+    }
+    paintBulkBar();
+}
+function paintBulkBar() {
+    const bar = refs.bulkBar;
+    if (!bar) return;
+    clear(bar);
+    const n = selected.size;
+    if (!n) { bar.style.display = 'none'; return; }
+    bar.style.display = '';
+    const picked = () => allServices.filter((r) => selected.has(r.id));
+    const setActive = async (active) => {
+        const rows = picked();
+        let ok = 0, bad = 0;
+        for (const r of rows) {
+            const { error } = await supabase.from('services').update({ active: active ? 1 : 0 }).eq('id', r.id);
+            if (error) bad++; else ok++;
+        }
+        toast(active ? trf('Включено услуг: {n}', { n: ok }) : trf('Отключено услуг: {n}', { n: ok }), bad ? 'warn' : 'ok');
+        selected.clear();
+        await fetchAndPaint();
+    };
+    const removeAll = async () => {
+        const rows = picked();
+        if (!window.confirm(trf('Удалить услуг: {n}? Услуги, которые уже использовались, удалить нельзя — они будут отключены.', { n: rows.length }))) return;
+        let deleted = 0, disabled = 0, bad = 0;
+        for (const r of rows) {
+            try {
+                const { data: chk, error } = await supabase.rpc('service_delete_check', { p_service_id: r.id });
+                if (error) throw error;
+                if (chk && chk.deletable) {
+                    const { error: delErr } = await supabase.rpc('delete_service', { p_service_id: r.id });
+                    if (delErr) throw delErr;
+                    deleted++;
+                } else {
+                    const { error: upErr } = await supabase.from('services').update({ active: 0 }).eq('id', r.id);
+                    if (upErr) throw upErr;
+                    disabled++;
+                }
+            } catch (e) { bad++; }
+        }
+        toast(trf('Удалено: {d}, отключено: {o}, не удалось: {b}', { d: deleted, o: disabled, b: bad }), bad ? 'warn' : 'ok');
+        selected.clear();
+        await fetchAndPaint();
+    };
+    bar.appendChild(h('div', { class: 'bulk-bar' },
+        h('span', { style: { color: 'var(--primary-700)' } }, Icon('Check', { size: 14 })),
+        h('span', { class: 'bulk-count' }, trf('Выбрано: {n}', { n })),
+        h('button', { class: 'btn btn-ghost btn-sm', type: 'button', style: { color: 'var(--primary-700)' },
+            onclick: () => { selected.clear(); renderRows(); } }, tr('Снять выделение')),
+        h('span', { class: 'grow' }),
+        h('button', { class: 'btn btn-outline btn-sm', type: 'button',
+            onclick: () => exportSectionRows({ sectionKey: 'services', rows: picked(), filenameStem: 'services-selected' }) },
+            Icon('Download', { size: 14 }), ' ', tr('Экспорт выбранных в Excel')),
+        isAdmin() ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => setActive(true) }, Icon('Check', { size: 14 }), ' ', tr('Включить')) : null,
+        isAdmin() ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => setActive(false) }, Icon('Pause', { size: 14 }), ' ', tr('Отключить')) : null,
+        isAdmin() ? h('button', { class: 'btn btn-danger btn-sm', type: 'button', onclick: removeAll }, Icon('Trash', { size: 14 }), ' ', tr('Удалить')) : null,
+    ));
+}
+
 function serviceRow(s) {
     const inactive = !s.active;
+    const box = h('input', { type: 'checkbox',
+        onclick: (e) => e.stopPropagation(),   // клик по ряду открывает редактор — галочка не должна
+        onchange: (e) => { if (e.target.checked) selected.add(s.id); else selected.delete(s.id); syncSelection(allServices.filter(matchesFilters)); } });
+    if (selected.has(s.id)) box.checked = true;
     return h('tr', {
         class: 'row-click',
         style: { cursor: 'pointer', opacity: inactive ? '0.55' : '' },
@@ -399,6 +479,7 @@ function serviceRow(s) {
         // below admin, matching the services write grant).
         onclick: () => openServiceEditor({ row: s, readOnly: !isAdmin(), onSaved: fetchAndPaint }),
     },
+        h('td', { onclick: (e) => e.stopPropagation() }, box),
         h('td', { class: 'cell-strong' }, s.name || '—'),
         h('td', { class: 'muted' }, s.code || '—'),
         h('td', null, typeLabel(s)),

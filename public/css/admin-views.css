@@ -4796,6 +4796,9 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     .tel-route-action, .tel-route-stage { min-width: 0; max-width: none; }
 }
 
+.bulk-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; margin-bottom: 12px; background: var(--primary-50); border: 1px solid var(--primary-200); border-radius: 10px; flex-wrap: wrap; }
+.bulk-count { font-size: 13.5px; color: var(--primary-700); font-weight: 600; }
+
 /* TELEPHONY_PROVIDERS_V1 — the provider row: one tile per PBX (Binotel, each
    onlinePBX) plus a dashed «Добавить». A tile is a BUTTON that selects whose
    settings open below; the pastel hue comes from the provider KIND (pastel.js),

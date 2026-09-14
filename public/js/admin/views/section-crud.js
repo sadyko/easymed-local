@@ -23,6 +23,7 @@ import {
     openSectionImporter,
     downloadSectionSample,
     exportRowsToExcel,
+    exportSectionRows,   // FULL_EXPORT_V1
 } from './section-import-export.js?v=aug17e';
 import { openEmployeeEditor } from './employee-editor.js?v=multirole3';
 import { openServiceEditor } from './service-editor.js?v=svceditor1';   // SERVICE_EDITOR_V1
@@ -149,19 +150,29 @@ function paintShell(container, onNavigate) {
     }
     if (hasImporter(state.sectionKey)) {
         extraButtons.push(
+            // FULL_EXPORT_V1 — the whole section (all pages, current filters),
+            // every field the import format knows. Same file the importer takes.
             h('button', {
-                class: 'btn btn-outline',
-                title: 'Download a sample Excel template you can fill in',
+                class: 'btn btn-outline', type: 'button',
+                title: tr('Выгрузить весь раздел в Excel — все страницы, с учётом фильтров'),
+                onclick: async (ev) => {
+                    const btn = ev.currentTarget; btn.disabled = true;
+                    try { await exportWholeSection(def); } finally { btn.disabled = false; }
+                },
+            }, Icon('Download', { size: 14 }), ' ', tr('Экспорт в Excel')),
+            h('button', {
+                class: 'btn btn-outline', type: 'button',
+                title: tr('Скачать образец Excel-файла для заполнения'),
                 onclick: () => downloadSectionSample(state.sectionKey),
-            }, Icon('Download', { size: 14 }), ' Sample'),
+            }, Icon('Doc', { size: 14 }), ' ', tr('Образец')),
             h('button', {
-                class: 'btn btn-outline',
-                title: 'Import many rows from an .xlsx / .csv file',
+                class: 'btn btn-outline', type: 'button',
+                title: tr('Загрузить много строк из файла .xlsx / .csv'),
                 onclick: () => openSectionImporter({
                     sectionKey: state.sectionKey,
                     onImported: () => loadRows(container, onNavigate),
                 }),
-            }, Icon('Plus', { size: 14 }), ' Import Excel'),
+            }, Icon('Plus', { size: 14 }), ' ', tr('Импорт Excel')),
         );
     }
 
@@ -241,6 +252,55 @@ function paintHeaderStats(container) {
     slot.appendChild(grid);
 }
 
+// Один запрос с областью видимости (клиника, филиал, скрытые сотрудники) — и
+// для списка, и для экспорта всего раздела: что видно на экране, то и в файле.
+function scopedQuery(def, opts = {}) {
+    const _path = BRANCH_PATHS[def.table];
+    const _embedSelect = (def.branchScoped && _path && _path.kind === 'embed' && branchFilterActive())
+        ? `*, ${_path.rel}!inner(${_path.col})`
+        : '*';
+    let q0 = supabase.from(def.table).select(opts.columns || _embedSelect, opts.count ? { count: 'exact' } : undefined);
+    const cid = currentClinicId();   // TENANT_SCOPE_V2: each clinic sees only its own settings rows
+    if (cid && isClinicScopedTable(def.table)) q0 = q0.eq('company_id', cid);
+    if (def.table === 'users') {
+        q0 = q0.not('is_super_admin', 'is', true);   // TENANT_LOCK_V1 — platform super-admins are never clinic staff
+        if (!isClinicOwner()) q0 = q0.neq('role', 'admin').not('branch_id', 'is', null);   // BRANCH_STAFF_VISIBILITY_V1 — non-owners never see the owner or untagged staff
+    }
+    if (def.branchScoped) q0 = branchScope(q0, def.table);   // BRANCH_ISOLATION_V2 — per-branch sections
+    return q0;
+}
+
+// FULL_EXPORT_V1 (2026-09-14) — owner: «exporting … not giving all the
+// information … for the patients». The register had no whole-list export at
+// all: only «Экспорт выбранных», which on a paged section (patients) reaches
+// the forty rows of the current page. This pulls the WHOLE section — every
+// page — honouring the search and column filters the screen shows, in slices
+// small enough for the local API, and writes it through the section's import
+// format, so the file carries every field and can come back through import.
+const EXPORT_SLICE = 2000;
+async function fetchAllRowsForExport(def) {
+    if (!state.paged) return filterRows(state.rows, def, state.search);
+    const out = [];
+    for (let from = 0; ; from += EXPORT_SLICE) {
+        let q = applyListFilters(scopedQuery(def), def);
+        if (def.orderBy) q = q.order(def.orderBy.column, { ascending: def.orderBy.ascending !== false });
+        if (!def.orderBy || def.orderBy.column !== 'id') q = q.order('id', { ascending: false });
+        const { data, error } = await q.range(from, from + EXPORT_SLICE - 1);
+        if (error) throw error;
+        out.push(...(data || []));
+        if (!data || data.length < EXPORT_SLICE) break;
+    }
+    return out;
+}
+
+async function exportWholeSection(def) {
+    let rows;
+    try { rows = await fetchAllRowsForExport(def); }
+    catch (e) { toast(trf('Экспорт не удался: {msg}', { msg: (e && e.message) || e }), 'fail'); return; }
+    if (!rows.length) { toast(tr('Нечего экспортировать.'), 'fail'); return; }
+    await exportSectionRows({ sectionKey: state.sectionKey, rows, filenameStem: state.sectionKey });
+}
+
 async function loadRows(container, onNavigate) {
     const def = SECTIONS[state.sectionKey];
     // BRANCH_ISOLATION_V2 — a restricted staffer with NO assigned branch sees nothing on a
@@ -265,23 +325,10 @@ async function loadRows(container, onNavigate) {
     // branchScope() will actually filter (restricted staff, or owner narrowed to a subset).
     // When nobody is filtering, a plain `*` keeps null-FK rows visible. BRANCH_PATHS is the
     // single source of truth for the relation + column (no hardcoded floors/wards here).
-    const _path = BRANCH_PATHS[def.table];
-    const _embedSelect = (def.branchScoped && _path && _path.kind === 'embed' && branchFilterActive())
-        ? `*, ${_path.rel}!inner(${_path.col})`
-        : '*';
     // Базовый запрос без сортировки/страницы — используется и для замера размера,
     // и для самой выборки, чтобы область видимости (клиника, филиал) была одна.
-    const baseQuery = (opts = {}) => {
-        let q0 = supabase.from(def.table).select(opts.columns || _embedSelect, opts.count ? { count: 'exact' } : undefined);
-        const cid = currentClinicId();   // TENANT_SCOPE_V2: each clinic sees only its own settings rows
-        if (cid && isClinicScopedTable(def.table)) q0 = q0.eq('company_id', cid);
-        if (def.table === 'users') {
-            q0 = q0.not('is_super_admin', 'is', true);   // TENANT_LOCK_V1 — platform super-admins are never clinic staff
-            if (!isClinicOwner()) q0 = q0.neq('role', 'admin').not('branch_id', 'is', null);   // BRANCH_STAFF_VISIBILITY_V1 — non-owners never see the owner or untagged staff
-        }
-        if (def.branchScoped) q0 = branchScope(q0, def.table);   // BRANCH_ISOLATION_V2 — per-branch sections
-        return q0;
-    };
+    // FULL_EXPORT_V1 — тот же запрос читает и экспорт всего раздела (scopedQuery).
+    const baseQuery = (opts = {}) => scopedQuery(def, opts);
 
     // PAGED_LIST_V1 — сколько строк в разделе ВООБЩЕ. Дешёвый COUNT(*) (без
     // выборки), зато решает главное: маленькие разделы (услуги, сотрудники,
@@ -621,21 +668,21 @@ function paintBulkBar(container, onNavigate, def) {
     },
         h('span', { style: { color: 'var(--primary-700)' } }, Icon('Check', { size: 14 })),
         h('span', { style: { fontSize: '13.5px', color: 'var(--primary-700)', fontWeight: 600 } },
-            String(count) + ' selected'),
+            trf('Выбрано: {n}', { n: count })),
         h('button', {
             class: 'btn btn-ghost btn-sm', type: 'button',
             style: { color: 'var(--primary-700)' },
             onclick: () => { state.selectedIds.clear(); paintList(container, onNavigate); },
-        }, 'Clear'),
+        }, 'Снять выделение'),
         h('span', { class: 'grow' }),
         h('button', {
             class: 'btn btn-outline',
             onclick: () => bulkExport(def),
-        }, Icon('Download', { size: 14 }), ' Export to Excel'),
+        }, Icon('Download', { size: 14 }), ' ', tr('Экспорт выбранных в Excel')),
         canDelete(currentPermKey()) && h('button', {
             class: 'btn btn-danger',
             onclick: () => bulkDelete(container, onNavigate, def),
-        }, Icon('Trash', { size: 14 }), ' Delete'),
+        }, Icon('Trash', { size: 14 }), ' ', tr('Удалить')),
     ));
 }
 
@@ -643,6 +690,14 @@ async function bulkExport(def) {
     const ids = state.selectedIds;
     const rows = state.rows.filter(r => ids.has(r.id));
     if (rows.length === 0) { toast('Nothing to export.', 'fail'); return; }
+    // FULL_EXPORT_V1 — a section with an import format (patients, services,
+    // employees…) exports through it: every column the file can carry back,
+    // not just the few the list shows (owner: «exporting … not giving all the
+    // information»). Sections without one keep the list-column export.
+    if (hasImporter(state.sectionKey)) {
+        await exportSectionRows({ sectionKey: state.sectionKey, rows, filenameStem: state.sectionKey + '-selected' });
+        return;
+    }
     await exportRowsToExcel({
         filenameStem: state.sectionKey,
         sheetName:    def.label,

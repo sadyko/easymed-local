@@ -198,3 +198,58 @@ test('удаление: используемая услуга — предлаг
   assert.equal(upd.values.active, 0);
   assert.ok(upd.filters.some((f) => f.col === 'id' && f.val === SVC.id), 'деактивируется именно эта услуга');
 });
+
+// SERVICES_BULK_V1 — owner: «cannot select several … services at the same
+// time». Every row carries a checkbox; ticking shows a bar with the count and
+// the group actions; «Отключить» writes active=0 to each picked row.
+const rowBoxes = (root) => tags(root, 'input').filter((i) => i.attrs.type === 'checkbox' && i.attrs.title !== 'Отметить все');
+const tick = (box, on) => { box.checked = on; box.dispatchEvent({ type: 'change', target: box }); };
+
+test('выделение: галочки в строках, счётчик «Выбрано», «Отключить» пишет active=0 каждой', async () => {
+  services = [SVC, { ...SVC, id: 8, name: 'УЗИ почек', code: 'US-02' }, { ...SVC, id: 9, name: 'ЭКГ', code: 'ECG' }];
+  window.easymed.state.user = ADMIN;
+  document.body.children.length = 0;
+  dbCalls.length = 0; rpcCalls.length = 0; confirms = [];
+  const c = mk('div');
+  await renderServices(c, {});
+  await flush();
+
+  const boxes = rowBoxes(c);
+  assert.equal(boxes.length, 3, 'по галочке на строку');
+  assert.ok(!buttonWith(c, 'Снять выделение'), 'без выделения панели нет');
+
+  tick(boxes[0], true);
+  tick(boxes[2], true);
+  assert.ok(textOf(c).includes('Выбрано: 2'), 'панель показывает число выбранных');
+  assert.ok(buttonWith(c, 'Экспорт выбранных в Excel'), 'экспорт выбранных доступен');
+
+  buttonWith(c, 'Отключить').click();
+  await flush();
+  const upds = dbCalls.filter((d) => d.op === 'update' && d.table === 'services');
+  assert.deepEqual(upds.map((u) => u.filters.find((f) => f.col === 'id').val).sort(), [7, 9], 'отключены ровно выбранные');
+  assert.ok(upds.every((u) => u.values.active === 0));
+  services = [SVC];
+});
+
+test('выделение: «Отметить все» в шапке берёт все строки и «Удалить» проверяет каждую', async () => {
+  services = [SVC, { ...SVC, id: 8, name: 'УЗИ почек', code: 'US-02' }];
+  window.easymed.state.user = ADMIN;
+  document.body.children.length = 0;
+  dbCalls.length = 0; rpcCalls.length = 0; confirms = []; confirmAnswer = true;
+  deleteCheck = { deletable: true, name: SVC.name, blocking: [] };
+  const c = mk('div');
+  await renderServices(c, {});
+  await flush();
+
+  const head = tags(c, 'input').find((i) => i.attrs.title === 'Отметить все');
+  assert.ok(head, 'в шапке таблицы есть «Отметить все»');
+  tick(head, true);
+  assert.ok(textOf(c).includes('Выбрано: 2'));
+
+  buttonWith(c, 'Удалить').click();
+  await flush();
+  assert.equal(confirms.length, 1, 'одно подтверждение на всю группу');
+  assert.equal(rpcCalls.filter((r) => r.name === 'service_delete_check').length, 2, 'каждая проверяется перед удалением');
+  assert.equal(rpcCalls.filter((r) => r.name === 'delete_service').length, 2);
+  services = [SVC];
+});
