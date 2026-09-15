@@ -13,7 +13,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { importExportButtons } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1
 import { soleBranchId } from '../branch-context.js?v=bc3';                  // SOLE_BRANCH_V1
-import { specialtyOptions } from '../specialties.js?v=spec1';               // SPECIALTY_LIST_V1
+import { specialtyOptions, canonicalSpecialty } from '../specialties.js?v=spec2';   // SPECIALTY_LIST_V1 + SPECIALTIES_CLONED_V1
 
 const ROLES = [
     ['registrar', 'Регистратор'], ['doctor', 'Врач'], ['nurse', 'Медсестра'],

@@ -27,7 +27,7 @@
 // блок Telegram и обе кнопки подвала (сохранить · сохранить и добавить
 // услугу).
 
-import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { tr, trf, getLang } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 // MOTION_DIALOG_V1 — окно ОТКРЫВАЕТСЯ чистым CSS (правило на .modal), а
 // закрывается через общий помощник: угасание и снятие из документа одной
 // строкой. Помощник обязан убрать окно в любом случае — нет анимации (старый
@@ -1147,11 +1147,15 @@ export function geoCascade() {
     const regionSel   = h('select', { name: 'region'   });
     const districtSel = h('select', { name: 'district' });
 
+    // GEO_HARDCODE_V1 — the option shows the name in the interface language
+    // (uz / en from migration 132); the VALUE stays the Russian name, which is
+    // what patients.country/region/district have always stored.
+    const label = (r) => { const l = getLang(); return (l === 'uz' && r.name_uz) || (l === 'en' && r.name_en) || r.name; };
     function paintSelect(sel, rows, placeholder, selectedName) {
         clear(sel);
         sel.appendChild(h('option', { value: '' }, placeholder));
-        for (const r of rows) {
-            const opt = h('option', { value: r.name }, r.name);
+        for (const r of [...rows].sort((a, b) => label(a).localeCompare(label(b), 'ru'))) {
+            const opt = h('option', { value: r.name }, label(r));
             opt.dataset.id = r.id;
             if (selectedName && selectedName === r.name) opt.selected = true;
             sel.appendChild(opt);
@@ -1163,7 +1167,7 @@ export function geoCascade() {
     }
     const load = async (table, filter) => {
         try {
-            let q = supabase.from(table).select('id, name').eq('active', true).order('name');
+            let q = supabase.from(table).select('id, name, name_uz, name_en').eq('active', true).order('name');
             if (filter) q = q.eq(filter[0], filter[1]);
             const { data, error } = await q;
             if (error) return [];
@@ -1195,7 +1199,7 @@ export function geoCascade() {
     (async () => {
         const countries = await load('countries', null);
         paintSelect(countrySel, countries,
-            countries.length ? tr('Выберите страну') : tr('Страны не заведены — Настройки → География'),
+            countries.length ? tr('Выберите страну') : tr('Список стран не загрузился — обновите страницу'),   // GEO_HARDCODE_V1 — the list ships with the app; empty means the request failed
             want.country || 'Uzbekistan');
         const cid = selectedId(countrySel);
         if (cid) {

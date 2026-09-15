@@ -1104,25 +1104,25 @@ export const REGISTRY = {
   // registration.js selects id/name filtered by active (+ parent FK for the
   // cascade); sections.js "Geography" maintains the catalog. No frontend embeds.
   countries: {
-    read:  { roles: ALL_STAFF, columns: ['id','name','code','active','created_at'] },
-    write: { insert: { roles: ['admin'], columns: ['name','code','active'] },
-             update: { roles: ['admin'], columns: ['name','code','active'] },
+    read:  { roles: ALL_STAFF, columns: ['id','name','code','active','created_at','name_uz','name_en'] },   // GEO_HARDCODE_V1 (mig 132)
+    write: { insert: { roles: ['admin'], columns: ['name','code','active','name_uz','name_en'] },
+             update: { roles: ['admin'], columns: ['name','code','active','name_uz','name_en'] },
              delete: { roles: ['admin'] } },
     filters: ['id','active','name','code'],
     embed:   {},
   },
   regions: {
-    read:  { roles: ALL_STAFF, columns: ['id','country_id','name','active','created_at'] },
-    write: { insert: { roles: ['admin'], columns: ['country_id','name','active'] },
-             update: { roles: ['admin'], columns: ['country_id','name','active'] },
+    read:  { roles: ALL_STAFF, columns: ['id','country_id','name','active','created_at','code','name_uz','name_en'] },   // GEO_HARDCODE_V1
+    write: { insert: { roles: ['admin'], columns: ['country_id','name','active','code','name_uz','name_en'] },
+             update: { roles: ['admin'], columns: ['country_id','name','active','code','name_uz','name_en'] },
              delete: { roles: ['admin'] } },
     filters: ['id','active','name','country_id'],   // registration.js filters by country_id (cascade)
     embed:   {},
   },
   districts: {
-    read:  { roles: ALL_STAFF, columns: ['id','region_id','name','active','created_at'] },
-    write: { insert: { roles: ['admin'], columns: ['region_id','name','active'] },
-             update: { roles: ['admin'], columns: ['region_id','name','active'] },
+    read:  { roles: ALL_STAFF, columns: ['id','region_id','name','active','created_at','code','name_uz','name_en','kind'] },   // GEO_HARDCODE_V1
+    write: { insert: { roles: ['admin'], columns: ['region_id','name','active','code','name_uz','name_en','kind'] },
+             update: { roles: ['admin'], columns: ['region_id','name','active','code','name_uz','name_en','kind'] },
              delete: { roles: ['admin'] } },
     filters: ['id','active','name','region_id'],     // registration.js filters by region_id (cascade)
     embed:   {},
