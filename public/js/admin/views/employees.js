@@ -65,6 +65,8 @@ let showArchive = false;
 let departments = [];
 let branches = [];
 let services = [];
+let serviceTypes = [];       // RATES_FILTERS_V2 — the clinic's own types (service_types)
+let serviceCategories = [];  // and categories (service_categories)
 
 export async function renderEmployees(container) {
     clear(container);
@@ -251,12 +253,18 @@ async function paint(root) {
     tbody.appendChild(h('tr', null, h('td', { colspan: '6', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } }, 'Загрузка…')));
     try {
         if (!departments.length || !branches.length || !services.length) {
-            const [dep, br, sv] = await Promise.all([
+            const [dep, br, sv, st, sc] = await Promise.all([
                 supabase.from('departments').select('id, name').eq('active', 1).order('name'),
                 supabase.from('branches').select('id, name').eq('active', 1).order('name'),
-                supabase.from('services').select('id, name, price, is_lab, type').eq('active', 1).order('name').limit(1000),
+                supabase.from('services').select('id, name, price, is_lab, type, type_id, category_id').eq('active', 1).order('name').limit(1000),
+                // RATES_FILTERS_V2 — type and category, the clinic's own words,
+                // as filters next to the group (owner: «add not only groups,
+                // but category and type filters too for editing»).
+                supabase.from('service_types').select('id, name').order('name').limit(2000),
+                supabase.from('service_categories').select('id, name').order('name').limit(2000),
             ]);
             departments = dep.data || []; branches = br.data || []; services = sv.data || [];
+            serviceTypes = st.data || []; serviceCategories = sc.data || [];
         }
         const { users } = await api('');
         allUsers = users || [];
@@ -615,7 +623,7 @@ function openEditor(user, root) {
         } catch (e) { toast(e.message || 'Не удалось сохранить.', 'fail'); saveBtn.disabled = false; saveBtn.textContent = prev; }
     }
 
-    overlay.appendChild(h('div', { class: 'modal-card', style: { width: '960px', maxWidth: 'calc(100vw - 32px)', height: 'min(90vh, 780px)', display: 'flex', flexDirection: 'column' } },
+    overlay.appendChild(h('div', { class: 'modal-card', style: { width: '1080px', maxWidth: 'calc(100vw - 32px)', height: 'min(90vh, 780px)', display: 'flex', flexDirection: 'column' } },   // RATES_FILTERS_V2 — room for the service name
         h('header', { class: 'modal-head', style: { alignItems: 'center' } }, headWrap, ringWrap, h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { style: { display: 'flex', flex: 1, minHeight: 0 } }, rail, body),
         // Кнопок «Сохранить» и «Удалить» у карточки главной клиники нет вовсе —
@@ -651,10 +659,14 @@ function segmented(enabled, isFix, onPick, disabled = false) {
 // ---------------------------------------------------------------------------
 function ratesSection(emp, arrayKey, opts, touch) {
     if (!Array.isArray(emp[arrayKey])) emp[arrayKey] = [];
-    let q = '', typeFilter = 'all';
+    let q = '', typeFilter = 'all', kindFilter = '', catFilter = '';   // group · type (clinic's) · category (clinic's)
     const arr = () => emp[arrayKey];
     const idxOf = (sid) => arr().findIndex(r => Number(r.service_id) === Number(sid));
-    const visible = () => services.filter(s => (typeFilter === 'all' || svcTypeVal(s) === typeFilter) && s.name.toLowerCase().includes(q.toLowerCase()));
+    const nameIn = (rows, id) => (id == null ? '' : ((rows.find(r => String(r.id) === String(id)) || {}).name || ''));
+    const visible = () => services.filter(s => (typeFilter === 'all' || svcTypeVal(s) === typeFilter)
+        && (!kindFilter || String(s.type_id) === kindFilter)
+        && (!catFilter || String(s.category_id) === catFilter)
+        && [s.name, nameIn(serviceTypes, s.type_id), nameIn(serviceCategories, s.category_id)].join(' ').toLowerCase().includes(q.toLowerCase()));
 
     const selBadge = h('span', { class: 'rt-sel' });
     const refreshCount = () => { clear(selBadge); selBadge.append(h('i'), trf('Выбрано: {n}', { n: arr().length })); };
@@ -710,8 +722,22 @@ function ratesSection(emp, arrayKey, opts, touch) {
     searchInp.addEventListener('input', () => { q = searchInp.value; renderRows(); });
     const searchBox = h('div', { class: 'rt-search' },
         h('span', { class: 'rt-search-ic' }, Icon('Search', { size: 14 })), searchInp);
-    const typeSel = h('select', { class: 'rt-select', style: { width: 'auto', minWidth: '150px' } }, ...[['all', 'Все группы'], ...SERVICE_TYPES].map(([v, l]) => h('option', { value: v }, l)));   // SVC_VOCAB_V1 — the five are groups
+    const typeSel = h('select', { class: 'rt-select', style: { width: 'auto', minWidth: '130px' } }, ...[['all', 'Все группы'], ...SERVICE_TYPES].map(([v, l]) => h('option', { value: v }, l)));   // SVC_VOCAB_V1 — the five are groups
     typeSel.addEventListener('change', () => { typeFilter = typeSel.value; renderRows(); });
+    // RATES_FILTERS_V2 — only the types / categories some service actually has,
+    // so the lists stay short; empty when the clinic has not written any.
+    const usedIds = (key) => new Set(services.map(s => (s[key] == null ? '' : String(s[key]))).filter(Boolean));
+    const lookupSel = (rows, key, allLabel, onPick) => {
+        const used = usedIds(key);
+        const opts = rows.filter(r => used.has(String(r.id)));
+        const sel = h('select', { class: 'rt-select', style: { width: 'auto', minWidth: '130px' }, disabled: !opts.length, title: opts.length ? null : tr('У услуг пока не заполнено') },
+            h('option', { value: '' }, allLabel),
+            ...opts.map(r => h('option', { value: String(r.id) }, r.name)));
+        sel.addEventListener('change', () => { onPick(sel.value); renderRows(); });
+        return sel;
+    };
+    const kindSel = lookupSel(serviceTypes, 'type_id', 'Все типы', (v) => { kindFilter = v; });
+    const catSel = lookupSel(serviceCategories, 'category_id', 'Все категории', (v) => { catFilter = v; });
     const selAllChk = h('input', { type: 'checkbox' });
     const allOn = () => { const v = visible(); return v.length > 0 && v.every(s => idxOf(s.id) >= 0); };
     selAllChk.addEventListener('change', () => { const want = selAllChk.checked; for (const s of visible()) { const i = idxOf(s.id); if (want && i < 0) arr().push(newRate(s.id)); if (!want && i >= 0) arr().splice(i, 1); } touch(); refreshCount(); renderRows(); });
@@ -817,7 +843,8 @@ function ratesSection(emp, arrayKey, opts, touch) {
                 chk,
                 h('div', { style: { minWidth: 0 } },
                     h('div', { class: 'rt-name', title: s.name }, s.name),
-                    h('div', { class: 'rt-type' }, svcTypeLabel(svcTypeVal(s)))),
+                    // group · type · category — whichever the service has
+                    h('div', { class: 'rt-type' }, [tr(svcTypeLabel(svcTypeVal(s))), nameIn(serviceTypes, s.type_id), nameIn(serviceCategories, s.category_id)].filter(Boolean).join(' · '))),
                 brSel,
                 opts.ownPrice ? ownPriceCell(s, r, on) : h('div', { class: 'rt-catalog' }, fmtPrice(s.price)),
                 h('div', { class: 'rt-rate' },
@@ -835,7 +862,7 @@ function ratesSection(emp, arrayKey, opts, touch) {
             h('div', { style: { flex: 1 } }, h('h2', { style: { margin: 0, fontSize: '17px' } }, opts.title), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, opts.sub)),
             selBadge),
         h('div', { class: 'rt-toolbar' },
-            searchBox, typeSel, h('span', { class: 'grow' }),
+            searchBox, typeSel, kindSel, catSel, h('span', { class: 'grow' }),
             h('label', { class: 'rt-selall' }, selAllChk, 'Выбрать все'),
             h('div', { class: 'rt-bulk' },
                 h('span', { class: 'muted' }, 'Ставка для всех'),

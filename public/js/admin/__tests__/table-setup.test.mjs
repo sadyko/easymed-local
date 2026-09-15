@@ -71,3 +71,17 @@ test('реестр «Пациенты» открывает то же окно, �
     assert.match(block, /openPatientCreateModal\(/, 'создание — тем же окном');
     assert.match(block, /return;/, 'общая форма полей для пациентов не рисуется');
 });
+
+// RATES_FILTERS_V2 — «Услуги и ставки» / «Вознаграждение» filter by group AND
+// by the clinic's type and category; a row names all three.
+test('ставки сотрудника: фильтры по группе, типу и категории; тип/категория берутся из справочников', () => {
+    const emp = read('views/employees.js');
+    assert.match(emp, /select\('id, name, price, is_lab, type, type_id, category_id'\)/, 'услуги грузятся с type_id и category_id');
+    assert.match(emp, /from\('service_types'\)/, 'справочник типов');
+    assert.match(emp, /from\('service_categories'\)/, 'справочник категорий');
+    assert.match(emp, /lookupSel\(serviceTypes, 'type_id', 'Все типы'/, 'фильтр «Все типы»');
+    assert.match(emp, /lookupSel\(serviceCategories, 'category_id', 'Все категории'/, 'фильтр «Все категории»');
+    assert.match(emp, /searchBox, typeSel, kindSel, catSel/, 'три фильтра в панели');
+    assert.match(emp, /String\(s\.type_id\) === kindFilter/, 'отбор по типу');
+    assert.match(emp, /String\(s\.category_id\) === catFilter/, 'отбор по категории');
+});
