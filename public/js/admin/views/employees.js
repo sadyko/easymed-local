@@ -13,7 +13,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { importExportButtons } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1
 import { soleBranchId } from '../branch-context.js?v=bc3';                  // SOLE_BRANCH_V1
-import { specialtyOptions, canonicalSpecialty } from '../specialties.js?v=spec2';   // SPECIALTY_LIST_V1 + SPECIALTIES_CLONED_V1
+import { specialtyOptions, canonicalSpecialty, SPECIALTY_ROWS } from '../specialties.js?v=spec2';   // SPECIALTY_LIST_V1 + SPECIALTIES_CLONED_V1 + MULTI_SPECIALTY_V1
 
 const ROLES = [
     ['registrar', 'Регистратор'], ['doctor', 'Врач'], ['nurse', 'Медсестра'],
@@ -321,7 +321,7 @@ function openEditor(user, root) {
     const emp = {
         last_name: '', first_name: '', middle_name: '', phone: '', email: '',
         staff_type: '', scheduling_mode: 'schedulable', department_id: '', is_doctor: false,
-        specialty: '', doctor_category: '', hire_date: '', license_number: '', license_expiry_date: '',
+        specialty: '', specialties: [], doctor_category: '', hire_date: '', license_number: '', license_expiry_date: '',
         branch_id: '', employment_type: '', salary_type: '', salary_fixed: '', salary_percent: '',
         working_hours: {}, service_rates: [], referral_rates: [],
         username: '', password: '', role: 'registrar', extra_roles: [], is_active: true,
@@ -335,6 +335,8 @@ function openEditor(user, root) {
             staff_type: user.staff_type || (user.is_doctor ? 'doctor' : ''), scheduling_mode: user.scheduling_mode || 'schedulable',
             department_id: user.department_id != null ? String(user.department_id) : '',
             is_doctor: !!user.is_doctor, specialty: user.specialty || '', doctor_category: user.doctor_category || '', hire_date: user.hire_date || '',
+            // MULTI_SPECIALTY_V1 — the list from the server (primary first); an old record has only the column
+            specialties: (Array.isArray(user.specialties) && user.specialties.length ? user.specialties.map((x) => (typeof x === 'string' ? x : x.name)) : (user.specialty ? [user.specialty] : [])).map(canonicalSpecialty),
             license_number: user.license_number || '', license_expiry_date: user.license_expiry_date || '',
             // SOLE_BRANCH_V1 — у давнего сотрудника филиал мог не проставиться:
             // при единственном филиале подставляем его, а не пустое «—».
@@ -391,7 +393,7 @@ function openEditor(user, root) {
             // нет, и специальность описывает сотрудника точнее; без неё
             // остаётся одна категория, а не «Без должности».
             h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                [emp.specialty, staffLabel(emp.staff_type)].filter(Boolean).join(' · ')),
+                [(emp.specialties || []).filter(Boolean).join(', ') || emp.specialty, staffLabel(emp.staff_type)].filter(Boolean).join(' · ')),
             h('div', { style: { display: 'flex', gap: '6px', marginTop: '5px', flexWrap: 'wrap' } }, chip(depName(emp.department_id) || 'Без отдела'), chip('Lic. ' + (emp.license_number || '—')), chip(roleLabel(emp.role)))));
     }
 
@@ -470,6 +472,30 @@ function openEditor(user, root) {
             h('div', { style: { flex: 1 } }, h('h2', { style: { margin: 0, fontSize: '17px' } }, title), h('div', { class: 'muted', style: { fontSize: '12.5px' } }, sub)),
             right || null);
         const grid = (...els) => h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px' } }, ...els.filter(Boolean));
+        // MULTI_SPECIALTY_V1 — up to four specialties (owner). The first is the
+        // primary: it is what users.specialty carries and what every other
+        // screen shows. «+ Добавить специальность» adds a row; «×» removes one.
+        const MAX_SPEC = 4;
+        function specialtiesField() {
+            const list = () => { if (!Array.isArray(emp.specialties)) emp.specialties = []; if (!emp.specialties.length) emp.specialties.push(emp.specialty || ''); return emp.specialties; };
+            const commit = () => { emp.specialties = list().map((v) => String(v || '').trim()); emp.specialty = emp.specialties[0] || ''; markDirty({ specialty: emp.specialty, specialties: emp.specialties }); };
+            const box = h('div', { class: 'spec-list' });
+            const paint = () => {
+                clear(box);
+                const rows = list();
+                rows.forEach((val, i) => {
+                    const s2 = h('select', null, ...specialtyOptions(val).map(([v, l]) => h('option', { value: v, selected: String(v) === String(val) }, l)));
+                    s2.addEventListener('change', () => { rows[i] = s2.value; commit(); });
+                    const rm = i > 0 ? h('button', { type: 'button', class: 'icon-btn sm', title: tr('Убрать'), 'aria-label': tr('Убрать'),
+                        onclick: () => { rows.splice(i, 1); commit(); paint(); } }, Icon('X', { size: 14 })) : null;
+                    box.appendChild(h('div', { class: 'spec-row' }, s2, rm));
+                });
+                if (rows.length < MAX_SPEC) box.appendChild(h('button', { type: 'button', class: 'btn btn-ghost btn-sm spec-add',
+                    onclick: () => { rows.push(''); paint(); } }, Icon('Plus', { size: 14 }), ' ', tr('Добавить специальность')));
+            };
+            paint();
+            return field(trf('Специальность (основная — первая, до {n})', { n: MAX_SPEC }), box);
+        }
         const hint = (t) => h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px', lineHeight: 1.5 } }, t);
 
         if (active === 'personal') {
@@ -492,7 +518,7 @@ function openEditor(user, root) {
                 // специальность не приезжала в трёх написаниях.
                 h('div', { style: { marginTop: '14px' } }, grid(
                     field('Отдел', sel('department_id', [['', '—']].concat(departments.map(d => [String(d.id), d.name])))),
-                    field('Специальность', sel('specialty', specialtyOptions(emp.specialty))), field('Дата приёма', datef('hire_date')),
+                    specialtiesField(), field('Дата приёма', datef('hire_date')),
                     emp.is_doctor ? field('Категория врача', sel('doctor_category', DOCTOR_CATEGORIES)) : null)));
         } else if (active === 'license') {
             body.append(head('Лицензия', 'Медицинская лицензия сотрудника.'), grid(field('Номер лицензии', txt('license_number', 'AA-000000')), field('Действует до', datef('license_expiry_date'))));
@@ -606,7 +632,10 @@ function openEditor(user, root) {
             // and PATCH only writes keys it receives, so any value an existing
             // record already carries is left untouched rather than blanked.
             department_id: emp.department_id ? Number(emp.department_id) : null,
-            specialty: emp.specialty.trim(), doctor_category: emp.doctor_category || '', hire_date: emp.hire_date || '',
+            specialty: String(emp.specialty || '').trim(), doctor_category: emp.doctor_category || '', hire_date: emp.hire_date || '',
+            // MULTI_SPECIALTY_V1 — the whole list; the server takes the first as users.specialty
+            specialties: (emp.specialties || []).map((v) => String(v || '').trim()).filter(Boolean)
+                .map((name) => ({ name, slug: (SPECIALTY_ROWS.find((r) => r.ru === name) || {}).slug || null })),
             license_number: emp.license_number.trim(), license_expiry_date: emp.license_expiry_date || '',
             branch_id: emp.branch_id ? Number(emp.branch_id) : null, employment_type: emp.employment_type || '', salary_type: emp.salary_type || '',
             salary_fixed: Number(emp.salary_fixed) || 0, salary_percent: Number(emp.salary_percent) || 0, working_hours: JSON.stringify(emp.working_hours || {}),

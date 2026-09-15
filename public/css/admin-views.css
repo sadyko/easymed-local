@@ -4885,6 +4885,11 @@ table.list.svc-tbl .list-act .icon-btn.sm { width: 26px; height: 26px; }
                     background: var(--ink-25); border: 1px solid var(--ink-200); border-left: 0; border-radius: 0 8px 8px 0; }
 .svc-ed-note { font-size: 12.5px; line-height: 1.5; color: var(--ink-500); }
 .svc-ed-combo input { width: 100%; box-sizing: border-box; }
+/* MULTI_SPECIALTY_V1 — up to four specialty rows in the employee window */
+.spec-list { display: flex; flex-direction: column; gap: 6px; }
+.spec-row { display: flex; align-items: center; gap: 6px; }
+.spec-row select { flex: 1 1 auto; min-width: 0; width: 100%; }
+.spec-add { align-self: flex-start; }
 .svc-ed-online { display: flex; flex-direction: column; gap: 4px; }
 .svc-ed-online .field.checkbox { padding: 0; }
 .field.svc-ed-need input { border-color: var(--warn-500, #f59e0b); background: var(--warn-50, #fffbeb); }

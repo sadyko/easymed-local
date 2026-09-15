@@ -289,6 +289,46 @@ function deriveFullName(fields) {
     .map(s => (s || '').trim()).filter(Boolean).join(' ');
 }
 
+// MULTI_SPECIALTY_V1 (2026-09-15) — up to four specialties per doctor (owner:
+// «we should be able to add up to 4 specialties»). The FIRST one is the
+// primary and is also written to users.specialty, so every screen that reads
+// the one column (booking, service picker, profile, print) keeps working;
+// the full list lives in user_specialties (mig 026) as delete-then-insert.
+export const MAX_SPECIALTIES = 4;
+export function parseSpecialties(raw) {
+  if (raw === undefined) return { ok: true, list: undefined };
+  if (!Array.isArray(raw)) return { ok: false, message: 'specialties must be a list.' };
+  const list = [];
+  const seen = new Set();
+  for (const it of raw) {
+    const name = String((it && typeof it === 'object' ? it.name : it) || '').trim().slice(0, 100);
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const slug = it && typeof it === 'object' && it.slug ? String(it.slug).trim().slice(0, 80) : null;
+    list.push({ name, slug });
+  }
+  if (list.length > MAX_SPECIALTIES) return { ok: false, message: `Не больше ${MAX_SPECIALTIES} специальностей.` };
+  return { ok: true, list };
+}
+export function writeSpecialties(db, userId, list) {
+  db.prepare('DELETE FROM user_specialties WHERE user_id = ?').run(userId);
+  const ins = db.prepare('INSERT INTO user_specialties (user_id, specialty_slug, name_ru, is_primary) VALUES (?, ?, ?, ?)');
+  list.forEach((sp, i) => ins.run(userId, sp.slug, sp.name, i === 0 ? 1 : 0));
+}
+export function readSpecialties(db, userId) {
+  return db.prepare('SELECT specialty_slug AS slug, name_ru AS name, is_primary FROM user_specialties WHERE user_id = ? ORDER BY is_primary DESC, id').all(userId)
+    .map((r) => ({ slug: r.slug, name: r.name }));
+}
+// The view plus its list; a doctor saved before this feature has the one
+// column and no rows — the list is then that one name.
+function withSpecialties(db, view) {
+  const list = readSpecialties(db, view.id);
+  view.specialties = list.length ? list : (view.specialty ? [{ slug: null, name: view.specialty }] : []);
+  return view;
+}
+
 export function userRoutes(db) {
   const r = Router();
   // Staff roster is sensitive and these pages run on shared clinic PCs.
@@ -297,7 +337,7 @@ export function userRoutes(db) {
 
   r.get('/', (req, res) => {
     const rows = db.prepare('SELECT * FROM users ORDER BY username').all();
-    res.json({ users: rows.map(employeeView) });
+    res.json({ users: rows.map((u) => withSpecialties(db, employeeView(u))) });
   });
 
   r.post('/', (req, res) => {
@@ -320,6 +360,9 @@ export function userRoutes(db) {
     const parsed = parseEmployeeFields(req.body, db);
     if (!parsed.ok) return bad(res, parsed.message);
     const ef = parsed.fields;
+    const specs = parseSpecialties(req.body && req.body.specialties);   // MULTI_SPECIALTY_V1
+    if (!specs.ok) return bad(res, specs.message);
+    if (specs.list) ef.specialty = specs.list.length ? specs.list[0].name : '';
 
     const hasNameParts = req.body && (req.body.last_name !== undefined || req.body.first_name !== undefined || req.body.middle_name !== undefined);
     const finalFullName = hasNameParts ? deriveFullName(ef) : full_name.slice(0, 100).trim();
@@ -328,7 +371,8 @@ export function userRoutes(db) {
     const placeholders = columns.map(() => '?').join(',');
     const values = [name, hashPassword(password), finalFullName, role, ...Object.values(ef)];
     const info = db.prepare(`INSERT INTO users (${columns.join(',')}) VALUES (${placeholders})`).run(...values);
-    res.status(201).json({ user: employeeView(db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid)) });
+    if (specs.list) writeSpecialties(db, Number(info.lastInsertRowid), specs.list);
+    res.status(201).json({ user: withSpecialties(db, employeeView(db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid))) });
   });
 
   r.patch('/:id', (req, res) => {
@@ -368,6 +412,9 @@ export function userRoutes(db) {
     const parsed = parseEmployeeFields(req.body, db, user.role);
     if (!parsed.ok) return bad(res, parsed.message);
     const ef = parsed.fields;
+    const specs = parseSpecialties(req.body && req.body.specialties);   // MULTI_SPECIALTY_V1
+    if (!specs.ok) return bad(res, specs.message);
+    if (specs.list) ef.specialty = specs.list.length ? specs.list[0].name : '';
 
     // If any name part was supplied, recompute full_name from the merged
     // (existing + incoming) parts rather than from the incoming ones alone,
@@ -399,13 +446,14 @@ export function userRoutes(db) {
       ...efKeys.map(k => ef[k]),
     ];
     db.prepare(`UPDATE users SET ${setClauses.join(', ')} WHERE id = ?`).run(...values, user.id);
+    if (specs.list) writeSpecialties(db, user.id, specs.list);
     // Deactivation OR password reset must end the target's sessions (a reset
     // is the standard response to a suspected compromise). The acting admin's
     // own session survives a self password change.
     if (active === false || password !== undefined) {
       db.prepare('DELETE FROM sessions WHERE user_id = ? AND id <> ?').run(user.id, req.sessionId ?? '');
     }
-    res.json({ user: employeeView(db.prepare('SELECT * FROM users WHERE id = ?').get(user.id)) });
+    res.json({ user: withSpecialties(db, employeeView(db.prepare('SELECT * FROM users WHERE id = ?').get(user.id))) });
   });
 
   // STAFF_DELETE_V1 — what removing this employee would do, without doing it.

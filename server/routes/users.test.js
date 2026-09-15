@@ -532,3 +532,39 @@ test('service_rates round-trip: own price and percentage survive a save', async 
     assert.match((await bad.json()).error.message, /price/i);
   } finally { server.close(); }
 });
+
+// MULTI_SPECIALTY_V1 — up to four specialties; the first is the primary in users.specialty.
+test('specialties: up to four stored, first = users.specialty, GET returns them, a fifth is refused', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const admin = await loginAdmin(base);
+    let res = await post(base, '/api/users', {
+      username: 'doc4', password: 'password2', role: 'doctor', staff_type: 'doctor', last_name: 'Ким', first_name: 'Олег',
+      specialties: [{ slug: 'kardiolog', name: 'Кардиолог' }, { slug: 'terapevt', name: 'Терапевт' }, ' Кардиолог '],
+    }, admin);
+    const createdBody = await res.json();
+    assert.equal(res.status, 201, JSON.stringify(createdBody));
+    const created = createdBody.user;
+    assert.equal(created.specialty, 'Кардиолог', 'первая — основная, в старой колонке');
+    assert.deepEqual(created.specialties.map((s) => s.name), ['Кардиолог', 'Терапевт'], 'дубль убран');
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM user_specialties WHERE user_id = ? AND is_primary = 1').get(created.id).n, 1);
+
+    res = await patch(base, `/api/users/${created.id}`, { specialties: ['Терапевт', 'Кардиолог', 'Невролог', 'Диетолог'] }, admin);
+    assert.equal(res.status, 200);
+    const upd = (await res.json()).user;
+    assert.equal(upd.specialty, 'Терапевт', 'порядок меняет основную');
+    assert.equal(upd.specialties.length, 4);
+
+    res = await patch(base, `/api/users/${created.id}`, { specialties: ['А', 'Б', 'В', 'Г', 'Д'] }, admin);
+    assert.equal(res.status, 400, 'пятая — отказ');
+
+    res = await fetch(base + '/api/users', { headers: { Cookie: admin } });
+    const list = (await res.json()).users.find((u) => u.id === created.id);
+    assert.deepEqual(list.specialties.map((s) => s.name), ['Терапевт', 'Кардиолог', 'Невролог', 'Диетолог']);
+    // a doctor saved before the feature: the one column becomes the list
+    db.prepare("UPDATE users SET specialty = 'Хирург' WHERE id = ?").run(created.id);
+    db.prepare('DELETE FROM user_specialties WHERE user_id = ?').run(created.id);
+    res = await fetch(base + '/api/users', { headers: { Cookie: admin } });
+    assert.deepEqual((await res.json()).users.find((u) => u.id === created.id).specialties, [{ slug: null, name: 'Хирург' }]);
+  } finally { server.close(); }
+});

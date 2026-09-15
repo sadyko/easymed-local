@@ -7497,6 +7497,8 @@ export const STRINGS = {
   "Отметка снята.": {"en":"The mark has been removed.","ru":"Отметка снята.","uz":"Belgi olib tashlandi."},
   "Выполнено: {name}": {"en":"Done: {name}","ru":"Выполнено: {name}","uz":"Bajarildi: {name}"},
   "Амбулаторно": {"en":"Outpatient","ru":"Амбулаторно","uz":"Ambulator"},
+  "Специальность (основная — первая, до {n})": {"en": "Specialty (the first is primary, up to {n})", "ru": "Специальность (основная — первая, до {n})", "uz": "Mutaxassislik (birinchisi asosiy, {n} tagacha)"},
+  "Добавить специальность": {"en": "Add a specialty", "ru": "Добавить специальность", "uz": "Mutaxassislik qo‘shish"},
   "Список стран не загрузился — обновите страницу": {"en": "The country list did not load — reload the page", "ru": "Список стран не загрузился — обновите страницу", "uz": "Mamlakatlar ro‘yxati yuklanmadi — sahifani yangilang"},
   "ЛОР": {"en": "ENT", "ru": "ЛОР", "uz": "LOR"},
   "Врач УЗД": {"en": "Ultrasound doctor", "ru": "Врач УЗД", "uz": "UTT shifokori"},
