@@ -69,6 +69,7 @@ const SVC = { id: 7, name: 'УЗИ печени', code: 'US-01', price: 50000, t
   duration_minutes: 20, requires_doctor: 1, active: 1, is_lab: 0, type: 'imaging' };
 let services = [SVC];
 let categories = [{ id: 3, name: 'УЗИ' }];   // SVC_LIST_V2 — the «Категория» column reads names by id
+let serviceTypes = [{ id: 5, name: 'Абдоминальное' }];   // SVC_VOCAB_V1 — «Тип» is the clinic's own word, by id
 let deleteCheck = { deletable: true, name: SVC.name, blocking: [] };
 const dbCalls = [];
 const rpcCalls = [];
@@ -77,7 +78,7 @@ globalThis.fetch = async (url, opts) => {
   if (u === '/api/db') {
     const desc = opts && opts.body ? JSON.parse(opts.body) : {};
     dbCalls.push(desc);
-    if (desc.op === 'select') return jsonOk(desc.table === 'services' ? services : desc.table === 'service_categories' ? categories : []);
+    if (desc.op === 'select') return jsonOk(desc.table === 'services' ? services : desc.table === 'service_categories' ? categories : desc.table === 'service_types' ? serviceTypes : []);
     return jsonOk({});
   }
   if (u.startsWith('/api/rpc/')) {
@@ -278,30 +279,37 @@ async function paintRows(rows, user = ADMIN) {
 }
 
 test('пять колонок по умолчанию, под каждой — поле «фильтр»; категория — по названию', async () => {
-  const c = await paintRows([{ ...SVC, category_id: 3 }]);
+  const c = await paintRows([{ ...SVC, category_id: 3, type_id: 5 }]);
   assert.deepEqual(headLabels(c), ['Наименование', 'Категория', 'Тип', 'Цена', 'Статус']);
   for (const k of ['name', 'category', 'type', 'price', 'status']) assert.ok(filterBox(c, k), 'поле фильтра под колонкой ' + k);
   assert.ok(!headLabels(c).includes('По счёту визита') && !headLabels(c).includes('Код'), 'без кода и без цен по счёту визита');
   const cells = cellsOf(dataRows(c)[0]);
   assert.ok(cells.includes('УЗИ'), 'категория подписана названием: ' + cells.join(' | '));
-  assert.ok(cells.includes('Диагностика') && cells.includes('50 000') && cells.includes('Активна'));
-  const sel = tags(c, 'select').find((el) => el.attrs.id === 'svc-type');
-  assert.deepEqual(sel.children.map((o) => textOf(o).trim()), ['Все типы', 'Диагностика', 'Консультации', 'Лаборатория', 'Процедуры', 'Хирургия']);
+  // SVC_VOCAB_V1 — «Тип» is what the clinic wrote (service_types), NOT the group of five
+  assert.ok(cells.includes('Абдоминальное'), 'тип — слово клиники: ' + cells.join(' | '));
+  assert.ok(!cells.includes('Диагностика'), 'группа не подменяет тип');
+  assert.ok(cells.includes('50 000') && cells.includes('Активна'));
+  const sel = tags(c, 'select').find((el) => el.attrs.id === 'svc-group');
+  assert.deepEqual(sel.children.map((o) => textOf(o).trim()), ['Все группы', 'Диагностика', 'Консультации', 'Лаборатория', 'Процедуры', 'Хирургия'], 'группа — пять, в выпадающем списке');
   services = [SVC];
 });
 
 test('фильтр под колонкой ищет по тому, что видно; «Активные» прячет отключённые, «Все» показывает', async () => {
   const c = await paintRows([SVC, { ...SVC, id: 8, name: 'ЭКГ', type: 'procedure', active: 0 }, { ...SVC, id: 9, name: 'Массаж', type: 'procedure' }]);
   assert.equal(dataRows(c).length, 2, 'по умолчанию — только активные');
-  type(filterBox(c, 'type'), 'процед');
-  assert.deepEqual(dataRows(c).map((r) => cellsOf(r)[1]), ['Массаж'], 'фильтр «Тип» по слову из ячейки');
+  const groupSel = tags(c, 'select').find((el) => el.attrs.id === 'svc-group');
+  groupSel.value = 'procedure'; groupSel.dispatchEvent({ type: 'change', target: groupSel });
+  assert.deepEqual(dataRows(c).map((r) => cellsOf(r)[1]), ['Массаж'], 'группа в списке отбирает по пяти (отключённая ЭКГ скрыта)');
   buttonWith(c, 'Все').click();
   assert.deepEqual(dataRows(c).map((r) => cellsOf(r)[1]).sort(), ['Массаж', 'ЭКГ'], '«Все» возвращает отключённые');
+  type(filterBox(c, 'name'), 'масс');
+  assert.deepEqual(dataRows(c).map((r) => cellsOf(r)[1]), ['Массаж'], 'фильтр под колонкой по слову из ячейки');
   const reset = buttonWith(c, 'Сбросить');
   assert.ok(reset && !reset.attrs.disabled, '«Сбросить» активна, пока есть фильтр');
   reset.click();
-  assert.equal(dataRows(c).length, 3, 'сброс снимает фильтры колонок');
-  assert.equal(filterBox(c, 'type').value, '', 'поле фильтра очищено');
+  assert.equal(dataRows(c).length, 3, 'сброс снимает группу и фильтры колонок');
+  assert.equal(filterBox(c, 'name').value, '', 'поле фильтра очищено');
+  assert.equal(groupSel.value, '', 'группа сброшена');
   const search = tags(c, 'input').find((i) => i.attrs.id === 'svc-search');
   type(search, 'экг');
   await new Promise((r) => setTimeout(r, 650));   // SEARCH_DEBOUNCE_V1 (500 мс) — поле поиска отвечает с задержкой

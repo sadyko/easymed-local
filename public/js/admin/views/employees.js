@@ -710,7 +710,7 @@ function ratesSection(emp, arrayKey, opts, touch) {
     searchInp.addEventListener('input', () => { q = searchInp.value; renderRows(); });
     const searchBox = h('div', { class: 'rt-search' },
         h('span', { class: 'rt-search-ic' }, Icon('Search', { size: 14 })), searchInp);
-    const typeSel = h('select', { class: 'rt-select', style: { width: 'auto', minWidth: '150px' } }, ...[['all', 'Все типы'], ...SERVICE_TYPES].map(([v, l]) => h('option', { value: v }, l)));
+    const typeSel = h('select', { class: 'rt-select', style: { width: 'auto', minWidth: '150px' } }, ...[['all', 'Все группы'], ...SERVICE_TYPES].map(([v, l]) => h('option', { value: v }, l)));   // SVC_VOCAB_V1 — the five are groups
     typeSel.addEventListener('change', () => { typeFilter = typeSel.value; renderRows(); });
     const selAllChk = h('input', { type: 'checkbox' });
     const allOn = () => { const v = visible(); return v.length > 0 && v.every(s => idxOf(s.id) >= 0); };

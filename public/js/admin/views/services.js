@@ -68,14 +68,20 @@ async function fetchPerformers() {
     return data || [];
 }
 
-// Routing type (раздел) — the fixed easymed set. Drives the «Услуги и ставки»
-// type filter in the employee editor and where the service is grouped.
-const SERVICE_TYPES = [['imaging', 'Диагностика'], ['consultation', 'Консультации'], ['lab', 'Лаборатория'], ['procedure', 'Процедуры'], ['other', 'Хирургия']];   // SERVICE_TYPES_FIVE_V1 — the five the editor offers; a legacy 'radiology' row reads as «Диагностика»
-// A service with no explicit `type` still lands in a bucket (a lab test in
-// «Лаборатория», everything else in «Консультации»). The column filter MUST use
-// this same derivation, or filtering by the type shown in the row would drop it.
-const typeKey = (s) => (s.type === 'radiology' ? 'imaging' : s.type) || (s.is_lab ? 'lab' : 'consultation');
-const typeLabel = (s) => (SERVICE_TYPES.find(t => t[0] === typeKey(s)) || ['', '—'])[1];
+// SVC_VOCAB_V1 (2026-09-15) — the owner's words, kept apart everywhere:
+//   ГРУППА    — services.type, the fixed five (consultation, lab, diagnostics
+//               = imaging, procedure, surgery = 'other'); routing and the
+//               chips in the registration window follow it.
+//   ТИП       — service_types, written by the clinic when it adds a service
+//               (services.type_id, «Выберите или впишите новую…»).
+//   КАТЕГОРИЯ — service_categories, the same way (services.category_id).
+// «the group is 5 … the type and category is written by the clinic».
+const SERVICE_GROUPS = [['imaging', 'Диагностика'], ['consultation', 'Консультации'], ['lab', 'Лаборатория'], ['procedure', 'Процедуры'], ['other', 'Хирургия']];   // SERVICE_TYPES_FIVE_V1 — the five; a legacy 'radiology' row reads as «Диагностика»
+// A service with no explicit group still lands in a bucket (a lab test in
+// «Лаборатория», everything else in «Консультации»). The filter MUST use this
+// same derivation, or filtering by the group shown in the row would drop it.
+const groupKey = (s) => (s.type === 'radiology' ? 'imaging' : s.type) || (s.is_lab ? 'lab' : 'consultation');
+const groupLabel = (s) => (SERVICE_GROUPS.find(t => t[0] === groupKey(s)) || ['', '—'])[1];
 
 // SERVICE_DELETE_V1 — mirrors the RPC's own rule (server/services/rpc/catalog.js).
 function isAdmin() {
@@ -97,7 +103,7 @@ function fmtPrice(n) {
 // The five without `optional` are the default; the rest wait in «Настройка
 // таблицы → Можно добавить».
 // -----------------------------------------------------------------------------
-const lookups = { categories: new Map(), departments: new Map() };   // id (string) -> name
+const lookups = { types: new Map(), categories: new Map(), departments: new Map() };   // id (string) -> name
 const nameOf = (map, id) => (id == null || id === '' ? '' : (map.get(String(id)) || ''));
 const performerNames = (s) => performersBySvc.get(String(s.id)) || [];
 
@@ -105,7 +111,8 @@ const COLUMNS = [
     { key: 'name',       label: 'Наименование', w: 34, text: (s) => s.name || '',
       cell: (s) => h('td', { class: 'cell-strong' }, s.name || '—') },
     { key: 'category',   label: 'Категория',    w: 16, text: (s) => nameOf(lookups.categories, s.category_id) },
-    { key: 'type',       label: 'Тип',          w: 14, text: (s) => typeLabel(s) },
+    { key: 'type',       label: 'Тип',          w: 14, text: (s) => nameOf(lookups.types, s.type_id) },
+    { key: 'group',      label: 'Группа',       w: 12, optional: true, text: (s) => groupLabel(s) },
     { key: 'price',      label: 'Цена',         w: 10, num: true, text: (s) => fmtPrice(s.price) },
     { key: 'status',     label: 'Статус',       w: 12, text: (s) => (s.active ? 'Активна' : 'Отключена'),
       cell: (s) => h('td', null, Tag(s.active ? 'Активна' : 'Отключена', { kind: s.active ? 'ok' : '', dot: true })) },
@@ -165,9 +172,9 @@ function performerCell(s) {
 // -----------------------------------------------------------------------------
 const refs = { container: null, onNavigate: null, card: null, tbody: null, emptyEl: null, totalEl: null, capNote: null, bulkBar: null, headBox: null, resetBtn: null, colInputs: {} };
 let allServices = [];
-const flt = { q: '', status: 'active', type: '', cols: {} };
-const clearFilters = () => { flt.q = ''; flt.type = ''; flt.cols = {}; };
-const anyFilter = () => !!(flt.q.trim() || flt.type || Object.values(flt.cols).some((v) => String(v || '').trim()));
+const flt = { q: '', status: 'active', group: '', cols: {} };
+const clearFilters = () => { flt.q = ''; flt.group = ''; flt.cols = {}; };
+const anyFilter = () => !!(flt.q.trim() || flt.group || Object.values(flt.cols).some((v) => String(v || '').trim()));
 
 // Rendering every row of a big catalogue costs more than it is worth; the cap
 // is announced (never silent) so a truncated list can't read as a complete one.
@@ -176,10 +183,10 @@ const MAX_RENDERED = 1000;
 function matchesFilters(s) {
     if (flt.status === 'active' && !s.active) return false;
     if (flt.status === 'off' && s.active) return false;
-    if (flt.type && typeKey(s) !== flt.type) return false;
+    if (flt.group && groupKey(s) !== flt.group) return false;
     const q = flt.q.trim().toLowerCase();
     if (q) {
-        const hay = [s.name, s.code, nameOf(lookups.categories, s.category_id), tr(typeLabel(s)), ...performerNames(s)]
+        const hay = [s.name, s.code, nameOf(lookups.types, s.type_id), nameOf(lookups.categories, s.category_id), tr(groupLabel(s)), ...performerNames(s)]
             .filter(Boolean).join(' ').toLowerCase();
         if (!hay.includes(q)) return false;
     }
@@ -212,7 +219,7 @@ function mount() {
 
     // ---- toolbar ------------------------------------------------------------
     const searchInp = h('input', {
-        type: 'search', id: 'svc-search', placeholder: tr('Поиск по названию, коду, исполнителю…'),
+        type: 'search', id: 'svc-search', placeholder: tr('Поиск по названию, коду, типу, исполнителю…'),
         oninput: (e) => { flt.q = e.target.value; renderRows(); },
     });
     const segBtns = {};
@@ -221,15 +228,15 @@ function mount() {
             type: 'button', class: flt.status === v ? 'on' : '',
             onclick: () => { flt.status = v; for (const [k, b] of Object.entries(segBtns)) b.className = k === v ? 'on' : ''; renderRows(); },
         }, label))));
-    const typeSel = h('select', { id: 'svc-type', class: 'svc-type',
-        onchange: (e) => { flt.type = e.target.value; renderRows(); } },
-        h('option', { value: '' }, 'Все типы'),
-        ...SERVICE_TYPES.map(([v, l]) => h('option', { value: v }, l)));
+    const groupSel = h('select', { id: 'svc-group', class: 'svc-type',
+        onchange: (e) => { flt.group = e.target.value; renderRows(); } },
+        h('option', { value: '' }, 'Все группы'),
+        ...SERVICE_GROUPS.map(([v, l]) => h('option', { value: v }, l)));
     refs.resetBtn = h('button', {
         class: 'btn btn-ghost btn-sm svc-reset', type: 'button', title: tr('Сбросить поиск и фильтры'), disabled: true,
         onclick: () => {
             clearFilters();
-            searchInp.value = ''; typeSel.value = '';
+            searchInp.value = ''; groupSel.value = '';
             for (const inp of Object.values(refs.colInputs)) inp.value = '';
             renderRows();
         },
@@ -254,7 +261,7 @@ function mount() {
         h('div', { class: 'svc-tb-left' },
             h('label', { class: 'svc-search', for: 'svc-search' }, Icon('Search', { size: 15 }), searchInp),
             segment,
-            typeSel,
+            groupSel,
             refs.resetBtn,
             refs.totalEl),
         h('div', { class: 'svc-tb-right' },
@@ -335,15 +342,17 @@ async function fetchAndPaint() {
         // load TOGETHER with the catalogue; a failure there leaves the column
         // empty, never hides the list. SVC_LIST_V2 — categories and departments
         // the same way: a name per id for the two lookup columns.
-        const [rows, staff, cats, deps] = await Promise.all([
+        const [rows, staff, typs, cats, deps] = await Promise.all([
             fetchAllServices(),
             fetchPerformers().catch((e) => { console.warn('[services] performers:', e && e.message); return []; }),
+            fetchNames('service_types'),
             fetchNames('service_categories'),
             fetchNames('departments'),
         ]);
         if (token !== lastFetchToken) return;   // a newer fetch already landed
         allServices = rows;
         performersBySvc = buildPerformerIndex(staff);
+        lookups.types = typs;
         lookups.categories = cats;
         lookups.departments = deps;
         renderRows();

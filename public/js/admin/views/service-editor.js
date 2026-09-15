@@ -315,7 +315,7 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
             grp('Наименование и классификация',
                 field('Название', nameInp, { required: true }),
                 grid(2,
-                    field('Раздел — куда попадает услуга (маршрутизация)', typeSel),
+                    field('Группа — одна из пяти, задаёт маршрут', typeSel),   // SVC_VOCAB_V1
                     typeCombo.el,
                     catCombo.el,
                     depCombo.el,

@@ -7496,6 +7496,8 @@ export const STRINGS = {
   "Отметка снята.": {"en":"The mark has been removed.","ru":"Отметка снята.","uz":"Belgi olib tashlandi."},
   "Выполнено: {name}": {"en":"Done: {name}","ru":"Выполнено: {name}","uz":"Bajarildi: {name}"},
   "Амбулаторно": {"en":"Outpatient","ru":"Амбулаторно","uz":"Ambulator"},
+  "Поиск по названию, коду, типу, исполнителю…": {"en": "Search by name, code, type, performer…", "ru": "Поиск по названию, коду, типу, исполнителю…", "uz": "Nomi, kodi, turi, bajaruvchi bo‘yicha qidirish…"},
+  "Группа — одна из пяти, задаёт маршрут": {"en": "Group — one of five, sets the route", "ru": "Группа — одна из пяти, задаёт маршрут", "uz": "Guruh — beshtadan biri, marshrutni belgilaydi"},
   "как у 2-го": {"en": "as the 2nd visit", "ru": "как у 2-го", "uz": "2-chidagidek"},
   "напр. Приём кардиолога": {"en": "e.g. Cardiologist consultation", "ru": "напр. Приём кардиолога", "uz": "masalan, Kardiolog qabuli"},
   "необязательно": {"en": "optional", "ru": "необязательно", "uz": "ixtiyoriy"},
