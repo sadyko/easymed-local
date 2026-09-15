@@ -49,7 +49,7 @@ const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагнос
 //      lab-section role (LAB_PANELS_BY_SECTION_V1).
 // v8 = one shared page head for queue+panels; marker moved off-screen into
 //      the data-attribute above; queue filter chips translate label-then-count.
-export const LAB_BUILD = 'lab-v11';   // LAB_PANELS_V2 — the editor in groups; sex ranges and analyzer column on demand
+export const LAB_BUILD = 'lab-v12';   // LAB_RANGES_VISIBLE_V1 — named ranges as a visible link + presets
 
 // Mounts the editor into `container` and resolves once the first load has
 // painted — the caller can await it and know the screen is settled.
@@ -676,6 +676,19 @@ export async function mountLabPanels(container) {
         return Array.isArray(v) ? v : [];
     }
 
+    // LAB_RANGES_VISIBLE_V1 — the sets a clinic asks for: hormones by cycle phase
+    // and menopause, pregnancy by trimester, children/adults/elderly by age.
+    const RANGE_PRESETS = [
+        { label: 'Возраст', title: 'Дети · взрослые · пожилые', rows: [
+            { label: 'Дети (0–17)', age_min: 0, age_max: 17 }, { label: 'Взрослые (18–59)', age_min: 18, age_max: 59 }, { label: 'Пожилые (60+)', age_min: 60, age_max: null }] },
+        { label: 'Фазы цикла', title: 'Фолликулярная · овуляция · лютеиновая · постменопауза (Ж)', rows: [
+            { label: 'Фолликулярная фаза', sex: 'female' }, { label: 'Овуляция', sex: 'female' }, { label: 'Лютеиновая фаза', sex: 'female' }, { label: 'Постменопауза', sex: 'female' }] },
+        { label: 'Пре-/менопауза', title: 'Пременопауза · менопауза (Ж)', rows: [
+            { label: 'Пременопауза', sex: 'female' }, { label: 'Менопауза', sex: 'female' }] },
+        { label: 'Беременность', title: 'I · II · III триместр (Ж)', rows: [
+            { label: 'I триместр', sex: 'female' }, { label: 'II триместр', sex: 'female' }, { label: 'III триместр', sex: 'female' }] },
+    ];
+
     function openRangesModal(r) {
         const rows = normRanges(r).map(x => ({ ...x }));
         const overlay = h('div', { class: 'modal' });
@@ -705,7 +718,7 @@ export async function mountLabPanels(container) {
                     h('td', null, num('age_max', '64px')),
                     h('td', null, num('low')),
                     h('td', null, num('high')),
-                    h('td', null, h('input', { value: rr.text || '', placeholder: 'или текст', class: 'lw-inp', style: { width: '120px' },
+                    h('td', null, h('input', { value: rr.text || '', placeholder: 'или текст', class: 'lw-inp', style: { width: '104px' },
                         oninput: (e) => { rr.text = e.target.value; } })),
                     h('td', null, h('span', { class: 'lp-actions' },
                         h('button', { class: 'lp-ic', type: 'button', title: 'Вверх', 'aria-label': 'Вверх', onclick: () => { if (i > 0) { const t = rows[i - 1]; rows[i - 1] = rows[i]; rows[i] = t; paintRows(); } } }, '↑'),
@@ -715,7 +728,7 @@ export async function mountLabPanels(container) {
         };
         paintRows();
 
-        const card = h('div', { class: 'modal-card', style: { width: '900px', maxWidth: 'calc(100vw - 32px)' } },
+        const card = h('div', { class: 'modal-card', style: { width: '1000px', maxWidth: 'calc(100vw - 32px)' } },
             h('header', { class: 'modal-head' },
                 h('h2', null, trf('Диапазоны нормы · {name}', { name: r.name || tr('показатель') })),
                 h('button', { class: 'modal-close', onclick: close }, '×')),
@@ -732,9 +745,16 @@ export async function mountLabPanels(container) {
                             h('th', null, 'Мин'), h('th', null, 'Макс'),
                             h('th', null, 'Текст'), h('th', null, ''))),
                         listEl)),
-                h('button', { class: 'btn btn-outline btn-sm', style: { marginTop: '10px' },
-                    onclick: () => { rows.push({ label: '', sex: null, age_min: null, age_max: null, low: null, high: null, text: '' }); paintRows(); } },
-                    Icon('Plus', { size: 12 }), ' Добавить диапазон')),
+                h('div', { class: 'row', style: { gap: '8px', marginTop: '10px', alignItems: 'center', flexWrap: 'wrap' } },
+                    h('button', { class: 'btn btn-outline btn-sm',
+                        onclick: () => { rows.push({ label: '', sex: null, age_min: null, age_max: null, low: null, high: null, text: '' }); paintRows(); } },
+                        Icon('Plus', { size: 12 }), ' Добавить диапазон'),
+                    // LAB_RANGES_VISIBLE_V1 — ready-made sets: the rows come named,
+                    // the laborant only fills the numbers.
+                    h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('или набор:')),
+                    ...RANGE_PRESETS.map((ps) => h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: ps.title,
+                        onclick: () => { for (const row of ps.rows) rows.push({ label: row.label, sex: row.sex || null, age_min: row.age_min ?? null, age_max: row.age_max ?? null, low: null, high: null, text: '' }); paintRows(); } },
+                        ps.label)))),
             h('footer', { class: 'modal-foot' },
                 h('span', { class: 'grow' }),
                 h('button', { class: 'btn', onclick: close }, 'Отмена'),
@@ -839,25 +859,25 @@ export async function mountLabPanels(container) {
             h('option', { value: 'numeric', selected: !isText && !isSel }, 'число'),
             h('option', { value: 'text', selected: isText }, 'текст'),
             h('option', { value: 'select', selected: isSel }, 'список'));
+        // LAB_RANGES_VISIBLE_V1 (2026-09-15) — owner: «we forgot the ranges for
+        // age groups (hormones, premenopause, menopause)». They were there
+        // (LAB_MULTI_REF_V1) behind a «±» glyph nobody read. Now a numeric row
+        // carries a plain link under its norm — «+ возраст / фаза / менопауза»
+        // — that turns into «N диапазонов» once set. A «список» or «текст» row
+        // has no ranges: blood group is not a number.
+        const rangesLink = (isText || isSel) ? null : h('button', {
+            class: 'lp-ranges' + (nRanges ? ' on' : ''), type: 'button',
+            title: tr('Диапазоны нормы: возрастные группы, фаза цикла, менопауза, триместр'),
+            onclick: () => openRangesModal(r),
+        }, nRanges ? trf('{n} диапаз.', { n: nRanges }) : tr('+ возраст / фаза / менопауза'));
         const normCell = isSel
             ? h('input', { value: r.value_options || '', placeholder: 'Прозрачная, Мутная', title: 'Варианты ответа через запятую — лаборант выберет один из списка', class: 'lw-inp', style: { width: '140px' }, oninput: (e) => { r.value_options = e.target.value; } })
             : isText
                 ? h('input', { value: r.ref_text || '', placeholder: 'норма', class: 'lw-inp', style: { width: '110px' }, oninput: (e) => { r.ref_text = e.target.value; } })
-                : range('ref_low', 'ref_high');
+                : h('div', { class: 'lp-norm' }, range('ref_low', 'ref_high'), rangesLink);
         const showSex = !!state.sexRanges;
         const showDevice = true;   // LIS_INGEST_V1 — always shown, see above
         const actions = h('span', { class: 'lp-actions' },
-            // LAB_MULTI_REF_V1 — extra named ranges (menopause, cycle phase,
-            // trimester, age bands). Count badge so a configured analyte is
-            // obvious at a glance in a long panel.
-            (isText || isSel) ? h('span', { class: 'lp-ic muted' }, '·') : h('button', {
-                class: 'lp-ic' + (nRanges > 1 ? ' on' : ''),
-                style: nRanges > 1 ? { fontWeight: '700', color: 'var(--primary-700)' } : null,
-                type: 'button',
-                title: 'Диапазоны нормы (фаза цикла, менопауза, возраст…)',
-                'aria-label': 'Диапазоны нормы',
-                onclick: () => openRangesModal(r),
-            }, nRanges ? '±' + nRanges : '±'),
             h('button', { class: 'lp-ic', type: 'button', title: 'Вверх', 'aria-label': 'Вверх', onclick: () => { if (idx > 0) { const t = state.rows[idx - 1]; state.rows[idx - 1] = state.rows[idx]; state.rows[idx] = t; paintEditor(); } } }, '↑'),
             h('button', { class: 'lp-ic', type: 'button', title: 'Вниз', 'aria-label': 'Вниз', onclick: () => { if (idx < state.rows.length - 1) { const t = state.rows[idx + 1]; state.rows[idx + 1] = state.rows[idx]; state.rows[idx] = t; paintEditor(); } } }, '↓'),
             h('button', { class: 'lp-ic del', type: 'button', title: 'Удалить', 'aria-label': 'Удалить', onclick: () => { state.rows.splice(idx, 1); paintEditor(); } }, Icon('Trash', { size: 12 })));

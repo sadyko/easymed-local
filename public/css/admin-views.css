@@ -7166,6 +7166,11 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .lp-body > .row, .lp-body > div:not(.lp-grp){ margin-left:20px !important; margin-right:20px !important; }
 .lp-tbl{ min-width:0; }
 .lp-tbl th.act, .lp-tbl td.act{ width:96px; padding-left:6px; }
+/* LAB_RANGES_VISIBLE_V1 — the norm cell: the range and, under it, the link to the named ranges */
+.lp-norm{ display:flex; flex-direction:column; gap:3px; align-items:flex-start; }
+.lp-ranges{ border:0; background:transparent; padding:0; font:600 12.5px/1.2 inherit; font-family:inherit; color:var(--primary-700); cursor:pointer; white-space:nowrap; }
+.lp-ranges:hover{ text-decoration:underline; }
+.lp-ranges.on{ background:var(--primary-50); border:1px solid var(--primary-200); border-radius:999px; padding:1px 8px; }
 .lp-tbl td{ padding:4px 5px; }
 .lp-tbl thead th{ white-space:nowrap; }
 .lp-range .lw-inp{ width:50px; }
