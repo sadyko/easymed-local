@@ -58,3 +58,16 @@ test('the services list and the settings registers share the dialog and the layo
     assert.match(block, /key: 'gender'.*enum_text/, 'пол — словом, не кодом');
     assert.match(crud, /if \(col\.type === 'enum_text'\) return opt \? tr\(opt\[1\]\)/, 'enum_text рисуется словом, не плашкой');
 });
+
+// PATIENT_FORM_ONE_V2 — the settings register opens the shared patient window,
+// never its generic field form, for patients.
+test('реестр «Пациенты» открывает то же окно, что регистратура и карта пациента', () => {
+    const crud = read('views/section-crud.js');
+    const i = crud.indexOf("if (state.sectionKey === 'patients') {");
+    assert.ok(i > 0, 'ветка для пациентов есть');
+    const block = crud.slice(i, i + 600);
+    assert.match(block, /import\('\.\/patient-create-modal\.js'\)/, 'общее окно пациента');
+    assert.match(block, /openPatientEditModal\(row/, 'правка — тем же окном');
+    assert.match(block, /openPatientCreateModal\(/, 'создание — тем же окном');
+    assert.match(block, /return;/, 'общая форма полей для пациентов не рисуется');
+});

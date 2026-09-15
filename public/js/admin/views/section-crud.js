@@ -1123,6 +1123,21 @@ async function openEditor(container, onNavigate, row, forceForm) {   // CUSTOM_C
         });
         return;
     }
+    // PATIENT_FORM_ONE_V2 (2026-09-15) — the settings register opens the SAME
+    // patient window as registration and the patient card (owner: «editing
+    // patients dialogue window, everywhere should repeat the same dialogue
+    // window as creating patients»). The generic field form below never
+    // knew the window's sections (chronic conditions from the clinic's list,
+    // category with its discount, geography…) and saved through /api/db,
+    // bypassing patient_card_save. Loaded on demand — the window is heavy and
+    // the other registers never need it.
+    if (state.sectionKey === 'patients') {
+        const mod = await import('./patient-create-modal.js');
+        const onSaved = () => loadRows(container, onNavigate);
+        if (row) mod.openPatientEditModal(row, { onSaved, onNavigate });
+        else mod.openPatientCreateModal({ onSaved, onNavigate });
+        return;
+    }
     const fkSources = new Set(def.fields.filter(f => f.type === 'fk' && f.source).map(f => f.source));
     // multi_fk fields also need their source cached.
     for (const f of def.fields) if (f.type === 'multi_fk' && f.source) fkSources.add(f.source);
