@@ -4796,31 +4796,68 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     .tel-route-action, .tel-route-stage { min-width: 0; max-width: none; }
 }
 
-/* SVC_TABLE_FIT_V1 (2026-09-14) — owner: «make fonts smaller and content not
-   get out of view». Twelve columns at 13.5 px with 14 px cell padding ran to
-   1727 px and pushed the whole page sideways on a 1366 px screen. The list
-   is laid out FIXED from the header widths (services.js), one step down the
-   type scale, tighter cells, headers allowed to wrap; the card scrolls inside
-   itself as a last resort so the page never grows a horizontal scrollbar. */
+/* SVC_LIST_V2 (2026-09-15) — the services list after the owner's choice: a
+   toolbar row, a header with a filter box under every label, and a table laid
+   out FIXED from column shares (services.js paintTable), so whatever columns
+   are on — five by default, up to eleven — they divide the card exactly. With
+   the sidebar closed the card widens and the columns widen with it; on a small
+   screen they narrow; the page never grows a horizontal scrollbar (the card
+   scrolls inside itself only as a last resort). One step down the type scale
+   (12.5) and tight cells, as agreed after SVC_TABLE_FIT_V1. */
+.svc-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-bottom: 12px; }
+.svc-tb-left, .svc-tb-right { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.svc-tb-left { flex: 1 1 560px; min-width: 0; }
+.svc-tb-right { margin-left: auto; }
+.svc-count { font-size: 12.5px; white-space: nowrap; }
+.svc-search { display: flex; align-items: center; gap: 8px; flex: 1 1 260px; min-width: 200px; max-width: 460px; height: 34px; padding: 0 12px;
+              border: 1px solid var(--ink-200); border-radius: 9px; background: var(--white); color: var(--ink-400); }
+.svc-search:focus-within { border-color: var(--primary-500); box-shadow: 0 0 0 3px var(--primary-50); }
+.svc-search input { flex: 1 1 auto; min-width: 0; height: 100%; border: 0; outline: none; background: transparent; font: inherit; font-size: 13.5px; color: var(--ink-900); }
+.svc-search input::placeholder { color: var(--ink-400); }
+.svc-search input::-webkit-search-cancel-button { -webkit-appearance: none; }
+.svc-toolbar .svc-type { height: 34px; padding: 0 10px; border: 1px solid var(--ink-200); border-radius: 9px; background: var(--white); font: inherit; font-size: 13.5px; color: var(--ink-900); min-width: 150px; }
+.svc-toolbar .svc-reset[disabled] { opacity: .5; cursor: default; }
+.svc-toolbar .segmented { height: 34px; box-sizing: border-box; }
+@media (max-width: 860px) { .svc-search { max-width: none; } }
+
 .svc-card { overflow-x: auto; }
 table.tbl.svc-tbl { table-layout: fixed; font-size: 12.5px; }
-table.tbl.svc-tbl thead th { padding: 8px 10px; letter-spacing: 0.03em; line-height: 1.25; vertical-align: bottom; }
-table.tbl.svc-tbl thead tr.filter-row th, table.tbl.svc-tbl thead tr.filter-row td { padding: 4px 6px 8px; }
+table.tbl.svc-tbl thead th { padding: 8px 10px 8px; vertical-align: top; overflow: hidden; }
+table.tbl.svc-tbl thead th.num { text-align: right; }
+table.tbl.svc-tbl thead th input[type="checkbox"] { margin-top: 4px; }
+.svc-th-label { font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-500); font-weight: 600; line-height: 1.25;
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 6px; }
+.svc-th-filter { display: block; width: 100%; min-width: 0; height: 26px; padding: 0 8px; box-sizing: border-box; font: inherit; font-size: 12.5px; text-transform: none; letter-spacing: 0;
+                 color: var(--ink-900); background: var(--white); border: 1px solid var(--ink-200); border-radius: 6px; outline: none; }
+.svc-th-filter::placeholder { color: var(--ink-300); }
+.svc-th-filter:focus { border-color: var(--primary-500); box-shadow: 0 0 0 3px var(--primary-50); }
+table.tbl.svc-tbl thead th.num .svc-th-filter { text-align: right; }
 table.tbl.svc-tbl tbody td { padding: 7px 10px; overflow-wrap: anywhere; line-height: 1.35; }
 table.tbl.svc-tbl td.cell-strong { font-weight: 600; }
-table.tbl.svc-tbl td.svc-tier { white-space: nowrap; }
-table.tbl.svc-tbl .svc-tier-line + .svc-tier-line { margin-top: 2px; }
-table.tbl.svc-tbl input[type="checkbox"] { width: 15px; height: 15px; margin: 0; vertical-align: middle; }
+table.tbl.svc-tbl td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 table.tbl.svc-tbl td.svc-one-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* The filter row must obey the same widths: a select keeps its intrinsic width
-   and a number input its spin buttons unless told otherwise, and either one
-   pushes into the next column. */
-table.tbl.svc-tbl thead tr.filter-row th { overflow: hidden; }
-table.tbl.svc-tbl thead tr.filter-row th > input, table.tbl.svc-tbl thead tr.filter-row th > select { min-width: 0; max-width: 100%; }
-table.tbl.svc-tbl thead tr.filter-row th > div > input { min-width: 0; flex: 1 1 0; width: auto; padding: 0 4px; }
-table.tbl.svc-tbl thead tr.filter-row input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
-table.tbl.svc-tbl thead tr.filter-row input[type="number"]::-webkit-inner-spin-button,
-table.tbl.svc-tbl thead tr.filter-row input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+table.tbl.svc-tbl input[type="checkbox"] { width: 15px; height: 15px; margin: 0; vertical-align: middle; }
+
+/* «Настройка таблицы» — SVC_TABLE_SETUP_V1 */
+.modal-card.tset-card { width: 720px; }
+.tset-card .modal-head h2 { display: inline-flex; align-items: center; gap: 8px; }
+.tset-hint { font-size: 12.5px; line-height: 1.45; color: var(--ink-700); background: var(--primary-50); border: 1px solid var(--primary-200); border-radius: 9px; padding: 10px 12px; }
+.tset-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 640px) { .tset-cols { grid-template-columns: 1fr; } }
+.tset-title { font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-500); font-weight: 600; margin-bottom: 6px; }
+.tset-title b { color: var(--ink-900); }
+.tset-list { display: flex; flex-direction: column; border: 1px solid var(--ink-100); border-radius: 9px; overflow: hidden; background: var(--white); min-height: 44px; }
+.tset-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; border-bottom: 1px solid var(--ink-100); font-size: 13.5px; color: var(--ink-900); background: var(--white); }
+.tset-row:last-child { border-bottom: 0; }
+.tset-row[draggable="true"] { cursor: grab; }
+.tset-row[draggable="true"]:active { cursor: grabbing; }
+.tset-row:hover { background: var(--ink-25); }
+.tset-check { display: flex; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0; cursor: pointer; }
+.tset-check input[type="checkbox"] { width: 15px; height: 15px; margin: 0; accent-color: var(--primary-600); }
+.tset-grip { color: var(--ink-300); display: inline-flex; padding: 2px; }
+.tset-row:hover .tset-grip { color: var(--ink-500); }
+.tset-empty { padding: 14px; font-size: 12.5px; color: var(--ink-400); text-align: center; }
+.tset-card .modal-foot .grow { flex: 1 1 auto; }
 
 .bulk-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; margin-bottom: 12px; background: var(--primary-50); border: 1px solid var(--primary-200); border-radius: 10px; flex-wrap: wrap; }
 .bulk-count { font-size: 13.5px; color: var(--primary-700); font-weight: 600; }

@@ -68,6 +68,7 @@ const jsonOk = (data) => ({ ok: true, json: async () => ({ data }) });
 const SVC = { id: 7, name: 'УЗИ печени', code: 'US-01', price: 50000, tax_rate: 12,
   duration_minutes: 20, requires_doctor: 1, active: 1, is_lab: 0, type: 'imaging' };
 let services = [SVC];
+let categories = [{ id: 3, name: 'УЗИ' }];   // SVC_LIST_V2 — the «Категория» column reads names by id
 let deleteCheck = { deletable: true, name: SVC.name, blocking: [] };
 const dbCalls = [];
 const rpcCalls = [];
@@ -76,7 +77,7 @@ globalThis.fetch = async (url, opts) => {
   if (u === '/api/db') {
     const desc = opts && opts.body ? JSON.parse(opts.body) : {};
     dbCalls.push(desc);
-    if (desc.op === 'select') return jsonOk(desc.table === 'services' ? services : []);
+    if (desc.op === 'select') return jsonOk(desc.table === 'services' ? services : desc.table === 'service_categories' ? categories : []);
     return jsonOk({});
   }
   if (u.startsWith('/api/rpc/')) {
@@ -122,10 +123,10 @@ async function paint(user = ADMIN) {
 // их появление в dbCalls — доказательство, что открылся именно он.
 const EDITOR_LOOKUPS = ['service_types', 'service_categories', 'departments', 'rooms', 'users'];
 
-test('«Добавить услугу» открывает ЕДИНЫЙ редактор, а не свою модалку', async () => {
+test('«Создать» открывает ЕДИНЫЙ редактор, а не свою модалку', async () => {
   const c = await paint(ADMIN);
-  const add = buttonWith(c, 'Добавить услугу');
-  assert.ok(add, 'кнопка «Добавить услугу» есть и переведена');
+  const add = buttonWith(c, 'Создать');
+  assert.ok(add, 'кнопка «Создать» есть и переведена');
 
   dbCalls.length = 0;
   add.click();
@@ -254,49 +255,87 @@ test('выделение: «Отметить все» в шапке берёт �
   services = [SVC];
 });
 
-// SVC_TIER_COLUMN_V1 + REPEAT_WINDOW_V1 — owner: «add into the settings of the
-// services the secondary visit until (show in the days)… repeat days, it
-// should have the range too». Two columns: the second and the repeat visit,
-// each with its price and its window in days; one-price services show a dash.
-test('колонки «Второй визит» и «Повторный визит»: цена и окно в днях; у услуги с одной ценой — прочерк', async () => {
-  services = [
-    { ...SVC, id: 7, price_secondary: 60000, secondary_days_from: 1, secondary_days_to: 6, price_repeat: 0, repeat_days_from: 2, repeat_days_to: 30 },
-    { ...SVC, id: 8, name: 'ЭКГ', price_secondary: 30000, secondary_days_to: 10 },
-    { ...SVC, id: 9, name: 'Массаж' },
-  ];
-  window.easymed.state.user = ADMIN;
+// SVC_LIST_V2 — the list the owner chose from the four previews: five columns
+// by default (Наименование, Категория, Тип, Цена, Статус), a filter box under
+// every label, a toolbar with search · Активные/Отключённые/Все · type ·
+// Сбросить · Шаблон/Импорт/Экспорт · Таблица · Создать. No price range, no
+// «По счёту визита».
+const headLabels = (c) => walk(c).filter((n) => /svc-th-label/.test(n.className || '')).map((n) => textOf(n).trim());
+const dataRows = (c) => tags(c, 'tr').filter((r) => /row-click/.test(r.className || ''));
+const cellsOf = (r) => tags(r, 'td').map((t) => textOf(t).replace(/\s+/g, ' ').trim());
+const filterBox = (c, key) => tags(c, 'input').find((i) => i.attrs.id === 'svc-f-' + key);
+const type = (inp, v) => { inp.value = v; inp.dispatchEvent({ type: 'input', target: inp }); };
+// paint() resets the catalogue to one row; these tests bring their own.
+async function paintRows(rows, user = ADMIN) {
+  window.easymed.state.user = user;
   document.body.children.length = 0;
+  dbCalls.length = 0; rpcCalls.length = 0; confirms = []; confirmAnswer = true;
+  services = rows;
   const c = mk('div');
   await renderServices(c, {});
   await flush();
+  return c;
+}
 
-  const heads = tags(c, 'th').map((t) => textOf(t).trim());
-  assert.ok(heads.includes('По счёту визита'), 'шапка: ' + heads.join(' | '));
-  assert.ok(!heads.includes('Второй визит') && !heads.includes('Повторный визит'), 'SVC_TABLE_FIT_V1: одна колонка, не две');
-  const rows = tags(c, 'tr').filter((r) => /row-click/.test(r.className || ''));
-  const cellsOf = (r) => tags(r, 'td').map((t) => textOf(t).replace(/\s+/g, ' ').trim());
-  const r7 = cellsOf(rows[0]);
-  const tier7 = r7.find((t) => /2-й:/.test(t));
-  assert.ok(tier7, 'ячейка «по счёту визита»: ' + r7.join(' | '));
-  assert.match(tier7, /2-й: 60 000 · до 6 дн\./, 'второй: цена и «до 6 дн.»');
-  assert.match(tier7, /повт\.: бесплатно · 2–30 дн\./, 'повторный: бесплатно и своё окно «2–30 дн.»');
-  const tier8 = cellsOf(rows[1]).find((t) => /2-й:/.test(t));
-  assert.match(tier8, /2-й: 30 000 · до 10 дн\./, 'второй визит ЭКГ');
-  assert.match(tier8, /повт\.: 30 000 · до 10 дн\./, 'повторный без своих цены и окна — как второй');
-  const r9 = cellsOf(rows[2]);
-  assert.ok(!r9.some((t) => /2-й:/.test(t)) && r9.includes('—'), 'одна цена — прочерк');
-  // SVC_TABLE_FIT_V1 — the widths that let twelve columns share one screen
-  const ths = tags(c, 'th');
-  assert.ok(ths.some((t) => t.style && t.style.width === '21%'), 'у колонок заданы ширины (fixed layout)');
+test('пять колонок по умолчанию, под каждой — поле «фильтр»; категория — по названию', async () => {
+  const c = await paintRows([{ ...SVC, category_id: 3 }]);
+  assert.deepEqual(headLabels(c), ['Наименование', 'Категория', 'Тип', 'Цена', 'Статус']);
+  for (const k of ['name', 'category', 'type', 'price', 'status']) assert.ok(filterBox(c, k), 'поле фильтра под колонкой ' + k);
+  assert.ok(!headLabels(c).includes('По счёту визита') && !headLabels(c).includes('Код'), 'без кода и без цен по счёту визита');
+  const cells = cellsOf(dataRows(c)[0]);
+  assert.ok(cells.includes('УЗИ'), 'категория подписана названием: ' + cells.join(' | '));
+  assert.ok(cells.includes('Диагностика') && cells.includes('50 000') && cells.includes('Активна'));
+  const sel = tags(c, 'select').find((el) => el.attrs.id === 'svc-type');
+  assert.deepEqual(sel.children.map((o) => textOf(o).trim()), ['Все типы', 'Диагностика', 'Консультации', 'Лаборатория', 'Процедуры', 'Хирургия']);
   services = [SVC];
 });
 
-// SERVICE_TYPES_FIVE_V1 — the list's type filter offers exactly the five types
-// the editor has; «Лучевая диагностика» is not a sixth (owner: «we have only 5 types»).
-test('фильтр «Тип» — ровно пять разделов, как в редакторе', async () => {
+test('фильтр под колонкой ищет по тому, что видно; «Активные» прячет отключённые, «Все» показывает', async () => {
+  const c = await paintRows([SVC, { ...SVC, id: 8, name: 'ЭКГ', type: 'procedure', active: 0 }, { ...SVC, id: 9, name: 'Массаж', type: 'procedure' }]);
+  assert.equal(dataRows(c).length, 2, 'по умолчанию — только активные');
+  type(filterBox(c, 'type'), 'процед');
+  assert.deepEqual(dataRows(c).map((r) => cellsOf(r)[1]), ['Массаж'], 'фильтр «Тип» по слову из ячейки');
+  buttonWith(c, 'Все').click();
+  assert.deepEqual(dataRows(c).map((r) => cellsOf(r)[1]).sort(), ['Массаж', 'ЭКГ'], '«Все» возвращает отключённые');
+  const reset = buttonWith(c, 'Сбросить');
+  assert.ok(reset && !reset.attrs.disabled, '«Сбросить» активна, пока есть фильтр');
+  reset.click();
+  assert.equal(dataRows(c).length, 3, 'сброс снимает фильтры колонок');
+  assert.equal(filterBox(c, 'type').value, '', 'поле фильтра очищено');
+  const search = tags(c, 'input').find((i) => i.attrs.id === 'svc-search');
+  type(search, 'экг');
+  await new Promise((r) => setTimeout(r, 650));   // SEARCH_DEBOUNCE_V1 (500 мс) — поле поиска отвечает с задержкой
+  assert.equal(dataRows(c).length, 1, 'поиск по названию');
+  services = [SVC];
+});
+
+test('«Таблица»: добавить «Код», убрать «Категорию», «Применить» — шапка меняется и выбор запоминается; «По умолчанию» возвращает пять', async () => {
+  localStorage.removeItem('svc.tbl.cols.v1');
   const c = await paint(ADMIN);
-  const sel = tags(c, 'select').find((el) => (el.children || []).some((o) => textOf(o).includes('Хирургия')));
-  assert.ok(sel, 'фильтр по типу есть');
-  const labels = sel.children.map((o) => textOf(o).trim()).filter(Boolean);
-  assert.deepEqual(labels, ['Все', 'Диагностика', 'Консультации', 'Лаборатория', 'Процедуры', 'Хирургия']);
+  buttonWith(c, 'Таблица').click();
+  const body = document.body;
+  assert.ok(textOf(body).includes('Настройка таблицы'), 'диалог открылся');
+  const rowOf = (label) => walk(body).filter((n) => /tset-row/.test(n.className || '')).find((r) => textOf(r).includes(label));
+  assert.ok(rowOf('Код') && rowOf('Категория'), 'слева — текущие колонки, справа — доступные');
+  const tick = (label) => { const cb = tags(rowOf(label), 'input')[0]; cb.checked = !cb.checked; cb.dispatchEvent({ type: 'change', target: cb }); };
+  tick('Код');          // add
+  tick('Категория');    // remove
+  buttonWith(body, 'Применить').click();
+  assert.deepEqual(headLabels(c), ['Наименование', 'Тип', 'Цена', 'Статус', 'Код']);
+  assert.deepEqual(JSON.parse(localStorage.getItem('svc.tbl.cols.v1')), ['name', 'type', 'price', 'status', 'code'], 'выбор колонок сохранён в браузере');
+  assert.ok(cellsOf(dataRows(c)[0]).includes('US-01'), 'колонка «Код» показывает код');
+
+  buttonWith(c, 'Таблица').click();
+  buttonWith(document.body, 'По умолчанию').click();
+  buttonWith(document.body, 'Применить').click();
+  assert.deepEqual(headLabels(c), ['Наименование', 'Категория', 'Тип', 'Цена', 'Статус']);
+  assert.equal(localStorage.getItem('svc.tbl.cols.v1'), null, 'умолчание — без записи');
+});
+
+test('ширины колонок — доли карточки: любой набор колонок делит ширину без прокрутки', async () => {
+  const c = await paint(ADMIN);
+  const ths = tags(c, 'th').filter((t) => t.style && /calc\(\(100% - 78px\)/.test(t.style.width || ''));
+  assert.equal(ths.length, 5, 'у каждой колонки — доля от (100% − фикс. колонки)');
+  const shares = ths.map((t) => Number(t.style.width.match(/\* ([\d.]+)\)/)[1]));
+  assert.ok(Math.abs(shares.reduce((a, b) => a + b, 0) - 1) < 0.01, 'доли в сумме дают 1: ' + shares.join(', '));
 });
