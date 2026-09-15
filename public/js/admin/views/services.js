@@ -32,6 +32,7 @@ import { tr, trf } from '../i18n.js';
 import { importExportButtons, exportSectionRows } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1 + SERVICES_BULK_V1
 import { ratesOf } from './doctor-pool.js?v=dp1';   // SVC_PERFORMERS_V1 — тот же разбор service_rates, что и в мастере визита
 import { openServiceEditor } from './service-editor.js?v=svceditor1';   // SERVICES_ONE_EDITOR_V1
+import { openTableSetup, readColPrefs, writeColPrefs, widthShare } from './table-setup.js';   // TABLE_SETUP_V1
 
 // SVC_PERFORMERS_V1 — кто выполняет услугу.
 //
@@ -139,21 +140,8 @@ const colByKey = (k) => COLUMNS.find((c) => c.key === k);
 // search match THIS, so typing what you see always finds the row.
 const displayText = (col, s) => tr(col.text(s) || '');
 
-function readColPrefs() {
-    try {
-        const v = JSON.parse(localStorage.getItem(COL_PREF_KEY));
-        if (Array.isArray(v) && v.length && v.every((k) => !!colByKey(k))) return v;
-    } catch (e) { /* no prefs or a broken value — defaults */ }
-    return null;
-}
-function writeColPrefs(keys) {
-    try {
-        if (!keys || keys.join() === DEFAULT_COLS.join()) localStorage.removeItem(COL_PREF_KEY);
-        else localStorage.setItem(COL_PREF_KEY, JSON.stringify(keys));
-    } catch (e) { /* private mode — the choice lives until reload */ }
-}
 function visibleColumns() {
-    return (readColPrefs() || DEFAULT_COLS).map(colByKey);
+    return (readColPrefs(COL_PREF_KEY, COLUMNS.map((c) => c.key)) || DEFAULT_COLS).map(colByKey);
 }
 
 // Имена переносятся по словам: «Утамуродова Манзура, Усмонкулов Шароф» в одну
@@ -256,7 +244,7 @@ function mount() {
     }, Icon('Plus', { size: 14 }), ' ', tr('Создать'));
     const setupBtn = h('button', {
         class: 'btn btn-outline btn-sm', type: 'button', title: tr('Состав и порядок колонок таблицы'),
-        onclick: openTableSetup,
+        onclick: openTableSetupForServices,
     }, Icon('Settings', { size: 14 }), ' ', tr('Таблица'));
 
     // Two groups: filters on the left, actions on the right. When the card is
@@ -297,9 +285,7 @@ function mount() {
 // column set fills the width exactly — never a sideways scroll.
 function paintTable() {
     const cols = visibleColumns();
-    const sumW = cols.reduce((n, c) => n + c.w, 0);
-    const fixedPx = 34 + (isAdmin() ? 44 : 0);
-    const share = (c) => `calc((100% - ${fixedPx}px) * ${(c.w / sumW).toFixed(4)})`;
+    const share = widthShare(cols, 34 + (isAdmin() ? 44 : 0));
 
     refs.colInputs = {};
     refs.tbody = h('tbody');
@@ -465,80 +451,14 @@ function serviceRow(s, cols) {
     );
 }
 
-// -----------------------------------------------------------------------------
-// «Настройка таблицы» — SVC_TABLE_SETUP_V1. Left: the columns in their current
-// order (drag the grip to reorder, untick to remove). Right: the columns that
-// can be added. «По умолчанию» restores the five. Applies per browser.
-// -----------------------------------------------------------------------------
-function openTableSetup() {
-    let vis = visibleColumns().map((c) => c.key);
-    let drag = null;   // key being dragged
-    const overlay = h('div', { class: 'modal' });
-    const close = () => overlay.remove();
-
-    const leftCount = h('b', null, '');
-    const rightCount = h('b', null, '');
-    const leftList = h('div', { class: 'tset-list', ondragover: (e) => { if (drag) e.preventDefault(); }, ondrop: (e) => { e.preventDefault(); moveTo(drag, vis.length); } });
-    const rightList = h('div', { class: 'tset-list tset-avail' });
-
-    const moveTo = (key, index) => {
-        if (!key) return;
-        const from = vis.indexOf(key);
-        if (from < 0) return;
-        const next = vis.filter((k) => k !== key);
-        next.splice(index > from ? index - 1 : index, 0, key);
-        vis = next; drag = null; paint();
-    };
-    const paint = () => {
-        clear(leftList); clear(rightList);
-        leftCount.textContent = String(vis.length);
-        for (const key of vis) {
-            const c = colByKey(key);
-            const row = h('div', { class: 'tset-row', draggable: 'true',
-                ondragstart: (e) => { drag = key; try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', key); } catch (err) { /* fake DOM */ } },
-                ondragover: (e) => { if (!drag || drag === key) return; e.preventDefault(); e.stopPropagation(); },
-                ondrop: (e) => { e.preventDefault(); e.stopPropagation();
-                    const r = e.currentTarget.getBoundingClientRect ? e.currentTarget.getBoundingClientRect() : { top: 0, height: 0 };
-                    const after = r.height && (e.clientY - r.top) > r.height / 2;
-                    moveTo(drag, vis.indexOf(key) + (after ? 1 : 0)); },
-            },
-                h('label', { class: 'tset-check' },
-                    h('input', { type: 'checkbox', checked: true, onchange: () => { if (vis.length > 1) { vis = vis.filter((k) => k !== key); paint(); } else paint(); } }),
-                    h('span', null, c.label)),
-                h('span', { class: 'tset-grip', title: tr('Перетащите, чтобы изменить порядок') }, Icon('Grid', { size: 14 })));
-            leftList.appendChild(row);
-        }
-        const avail = COLUMNS.filter((c) => !vis.includes(c.key));
-        rightCount.textContent = String(avail.length);
-        if (!avail.length) rightList.appendChild(h('div', { class: 'tset-empty' }, 'Все колонки уже в таблице'));
-        for (const c of avail) {
-            rightList.appendChild(h('div', { class: 'tset-row' },
-                h('label', { class: 'tset-check' },
-                    h('input', { type: 'checkbox', onchange: () => { vis = [...vis, c.key]; paint(); } }),
-                    h('span', null, c.label))));
-        }
-    };
-    paint();
-
-    const apply = () => { writeColPrefs(vis); close(); paintTable(); };
-    const card = h('div', { class: 'modal-card tset-card' },
-        h('header', { class: 'modal-head' },
-            h('h2', null, Icon('Settings', { size: 16 }), ' ', tr('Настройка таблицы')),
-            h('button', { class: 'icon-btn sm', type: 'button', title: tr('Закрыть'), 'aria-label': tr('Закрыть'), onclick: close }, Icon('X', { size: 14 }))),
-        h('div', { class: 'modal-body' },
-            h('div', { class: 'tset-hint' }, 'Слева — колонки таблицы в текущем порядке: перетаскивайте строки за ручку справа, чтобы поменять очерёдность; снятая галочка убирает колонку. Справа — колонки, которые можно добавить галочкой.'),
-            h('div', { class: 'tset-cols' },
-                h('div', null, h('div', { class: 'tset-title' }, tr('В таблице'), ' ', leftCount), leftList),
-                h('div', null, h('div', { class: 'tset-title' }, tr('Можно добавить'), ' ', rightCount), rightList))),
-        h('footer', { class: 'modal-foot' },
-            h('button', { class: 'btn btn-outline', type: 'button', onclick: () => { vis = [...DEFAULT_COLS]; paint(); } }, Icon('Refresh', { size: 14 }), ' ', tr('По умолчанию')),
-            h('span', { class: 'grow' }),
-            h('button', { class: 'btn', type: 'button', onclick: close }, tr('Отмена')),
-            h('button', { class: 'btn btn-primary', type: 'button', onclick: apply }, Icon('Check', { size: 14 }), ' ', tr('Применить'))));
-
-    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
+// «Настройка таблицы» — SVC_TABLE_SETUP_V1, the shared dialog (table-setup.js).
+function openTableSetupForServices() {
+    openTableSetup({
+        columns: COLUMNS.map((c) => ({ key: c.key, label: c.label })),
+        visible: visibleColumns().map((c) => c.key),
+        defaults: DEFAULT_COLS,
+        onApply: (keys) => { writeColPrefs(COL_PREF_KEY, keys, DEFAULT_COLS); paintTable(); },
+    });
 }
 
 // SERVICES_BULK_V1 — отмеченные услуги (id) и полоса действий над ними.

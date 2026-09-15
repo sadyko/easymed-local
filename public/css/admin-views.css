@@ -4821,22 +4821,31 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 @media (max-width: 860px) { .svc-search { max-width: none; } }
 
 .svc-card { overflow-x: auto; }
-table.tbl.svc-tbl { table-layout: fixed; font-size: 12.5px; }
-table.tbl.svc-tbl thead th { padding: 8px 10px 8px; vertical-align: top; overflow: hidden; }
-table.tbl.svc-tbl thead th.num { text-align: right; }
-table.tbl.svc-tbl thead th input[type="checkbox"] { margin-top: 4px; }
+table.svc-tbl { table-layout: fixed; font-size: 12.5px; }
+table.svc-tbl thead th { padding: 8px 10px 8px; vertical-align: top; overflow: hidden; }
+table.svc-tbl thead th.num { text-align: right; }
+table.svc-tbl thead th input[type="checkbox"] { margin-top: 4px; }
 .svc-th-label { font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-500); font-weight: 600; line-height: 1.25;
                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 6px; }
-.svc-th-filter { display: block; width: 100%; min-width: 0; height: 26px; padding: 0 8px; box-sizing: border-box; font: inherit; font-size: 12.5px; text-transform: none; letter-spacing: 0;
-                 color: var(--ink-900); background: var(--white); border: 1px solid var(--ink-200); border-radius: 6px; outline: none; }
+.svc-th-filter, table.svc-tbl thead th input.svc-th-filter, table.svc-tbl thead th select.svc-th-filter {
+    display: block; width: 100%; min-width: 0; height: 26px; line-height: 24px; padding: 0 8px; margin: 0; box-sizing: border-box;
+    font: inherit; font-size: 12.5px; font-weight: 400; text-transform: none; letter-spacing: 0;
+    color: var(--ink-900); background: var(--white); border: 1px solid var(--ink-200); border-radius: 6px; outline: none; box-shadow: none; }
+table.svc-tbl thead th select.svc-th-filter { padding-right: 22px; }
+table.svc-tbl thead th { height: 62px; }   /* label line + box — every column the same, whatever the label wraps to */
 .svc-th-filter::placeholder { color: var(--ink-300); }
 .svc-th-filter:focus { border-color: var(--primary-500); box-shadow: 0 0 0 3px var(--primary-50); }
-table.tbl.svc-tbl thead th.num .svc-th-filter { text-align: right; }
-table.tbl.svc-tbl tbody td { padding: 7px 10px; overflow-wrap: anywhere; line-height: 1.35; }
-table.tbl.svc-tbl td.cell-strong { font-weight: 600; }
-table.tbl.svc-tbl td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-table.tbl.svc-tbl td.svc-one-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-table.tbl.svc-tbl input[type="checkbox"] { width: 15px; height: 15px; margin: 0; vertical-align: middle; }
+table.svc-tbl thead th.num .svc-th-filter { text-align: right; }
+table.svc-tbl tbody td { padding: 7px 10px; overflow-wrap: anywhere; line-height: 1.35; }
+table.svc-tbl td.cell-strong { font-weight: 600; }
+table.svc-tbl td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.svc-tbl td.svc-one-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+table.svc-tbl input[type="checkbox"] { width: 15px; height: 15px; margin: 0; vertical-align: middle; }
+/* CRUD_LIST_V2 — the settings registers (table.list) share the look */
+table.list.svc-tbl { font-size: 12.5px; }
+table.list.svc-tbl thead th { text-transform: none; letter-spacing: 0; font-weight: 600; }
+table.list.svc-tbl tbody td { padding: 7px 10px; height: 40px; }
+table.list.svc-tbl .list-act .icon-btn.sm { width: 26px; height: 26px; }
 
 /* SERVICE_EDITOR_V2 (2026-09-15) — the service dialog in the shape of the
    owner's reference: name + section in the header, a rail of tabs on the

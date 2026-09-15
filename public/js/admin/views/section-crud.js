@@ -11,7 +11,7 @@ import { permissionGroups, allPermissionKeys, canEdit, canDelete, PATIENT_TABS }
 import { levelsFor, openAction, actionFor } from '../role-actions.js?v=acts1';
 import { hashPassword } from '../auth.js?v=admdoc3';
 import { BRANCH_BUCKET, uploadFile, signedUrl, removeFile } from '../storage.js?v=aurora20b';
-import { h, Icon, Tag, PageHead, toast, clear } from '../ui.js';
+import { h, Icon, Tag, toast, clear } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { isClinicScopedTable, currentClinicId } from '../tenant-tables.js';
 import { branchScope, branchFilterActive, BRANCH_PATHS } from '../branch-filter.js?v=bf4';   // BRANCH_ISOLATION_V2
@@ -27,6 +27,7 @@ import {
 } from './section-import-export.js?v=aug17e';
 import { openEmployeeEditor } from './employee-editor.js?v=multirole3';
 import { openServiceEditor } from './service-editor.js?v=svceditor1';   // SERVICE_EDITOR_V1
+import { openTableSetup, readColPrefs, writeColPrefs, widthShare } from './table-setup.js';   // CRUD_LIST_V2
 import { renderItemsLedger } from './items-ledger.js?v=ledger3';   // ITEMS_LEDGER_V1
 import { phoneInput, isCodeOnly } from '../phone-input.js?v=ph1';
 
@@ -41,6 +42,24 @@ const state = {
     page:          0,                     // 0-based
     total:         0,                     // всего строк под текущими фильтрами
     paged:         false,                 // раздел читается страницами (большая таблица)
+};
+
+// CRUD_LIST_V2 — which columns the section shows, in the order the user chose
+// («Настройка таблицы», kept per browser); every column of the section by
+// default. Width weights by kind: names wide, flags and dates narrow.
+const colPrefKey = () => 'crud.tbl.cols.' + state.sectionKey + '.v1';
+const defaultColKeys = (def) => def.columns.filter((c) => !c.optional).map((c) => c.key);
+function visibleColumns(def) {
+    const keys = readColPrefs(colPrefKey(), def.columns.map((c) => c.key)) || defaultColKeys(def);
+    return keys.map((k) => def.columns.find((c) => c.key === k)).filter(Boolean);
+}
+const COL_WEIGHT = (c) => {
+    if (/^(full_name|name|label|title|patient|description)$/.test(c.key)) return 2.6;
+    if (/^(mrn|code|sku)$/.test(c.key)) return 0.8;
+    if (c.type === 'bool' || c.type === 'enum_text') return 0.7;
+    if (c.type === 'date' || c.type === 'money' || c.suffix) return 0.9;
+    if (c.lookup) return 1.1;
+    return 1;
 };
 
 // PAGED_LIST_V1 — раньше список тянул ВСЮ таблицу (`select('*')` без limit) и
@@ -143,7 +162,7 @@ function paintShell(container, onNavigate) {
     // medcore catalog, alongside creating its own via "+ Add service".
     if (state.sectionKey === 'services' && clinicFlagsSync().custom_services_enabled) {
         extraButtons.push(h('button', {
-            class: 'btn btn-outline',
+            class: 'btn btn-outline btn-sm',
             title: 'Добавить услуги из общего каталога medcore',
             onclick: () => openAddServiceModal(container, onNavigate),
         }, Icon('Download', { size: 14 }), ' Из каталога'));
@@ -153,7 +172,7 @@ function paintShell(container, onNavigate) {
             // FULL_EXPORT_V1 — the whole section (all pages, current filters),
             // every field the import format knows. Same file the importer takes.
             h('button', {
-                class: 'btn btn-outline', type: 'button',
+                class: 'btn btn-outline btn-sm', type: 'button',
                 title: tr('Выгрузить весь раздел в Excel — все страницы, с учётом фильтров'),
                 onclick: async (ev) => {
                     const btn = ev.currentTarget; btn.disabled = true;
@@ -161,12 +180,12 @@ function paintShell(container, onNavigate) {
                 },
             }, Icon('Download', { size: 14 }), ' ', tr('Экспорт в Excel')),
             h('button', {
-                class: 'btn btn-outline', type: 'button',
+                class: 'btn btn-outline btn-sm', type: 'button',
                 title: tr('Скачать образец Excel-файла для заполнения'),
                 onclick: () => downloadSectionSample(state.sectionKey),
             }, Icon('Doc', { size: 14 }), ' ', tr('Образец')),
             h('button', {
-                class: 'btn btn-outline', type: 'button',
+                class: 'btn btn-outline btn-sm', type: 'button',
                 title: tr('Загрузить много строк из файла .xlsx / .csv'),
                 onclick: () => openSectionImporter({
                     sectionKey: state.sectionKey,
@@ -179,31 +198,58 @@ function paintShell(container, onNavigate) {
     // ITEMS_LEDGER_V1 — Приход-расход report for the drugs/products catalog (Товары).
     if (state.sectionKey === 'clinic_items') {
         extraButtons.push(h('button', {
-            class: 'btn btn-outline',
+            class: 'btn btn-outline btn-sm',
             title: 'Приход-расход: поступление и расход по себестоимости',
             onclick: () => renderItemsLedger(container, { onBack: () => renderSectionCrud(container, { sectionKey: 'clinic_items', onNavigate }) }),
         }, Icon('Coins', { size: 14 }), ' Приход-расход'));
     }
 
-    container.appendChild(h('div', { class: 'fade-in' },
-        PageHead({
-            title: tr(def.label),
-            subtitle: 'Manage records in this section.',
-            right: [
-                h('div', { style: { position: 'relative' } },
-                    h('input', {
-                        id: 'crud-search',
-                        placeholder: tr('Search…'),
-                        style: { height: '34px', padding: '0 12px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', minWidth: '240px' },
-                        value: state.search,
-                        oninput: (e) => { state.search = e.target.value; onFilterChanged(container, onNavigate); },
-                    }),
-                ),
-                ...extraButtons,
-                canEdit(currentPermKey()) && h('button', { class: 'btn btn-primary', onclick: () => openEditor(container, onNavigate, null) },
-                    Icon('Plus', { size: 14 }), state.sectionKey === 'services' ? ' Add service' : ' Add'),
-            ].filter(Boolean),
+    // CRUD_LIST_V2 (2026-09-15) — the settings registers take the services
+    // list's shape (owner: «#settings:patients list too, make redesign
+    // similar to the list of the services… just list and export, import
+    // upload etc.»): a toolbar — search · Сбросить · the count on the left,
+    // Образец / Импорт / Экспорт / Таблица / Добавить on the right — a header
+    // with the filter control under every label, widths as shares of the
+    // card, and «Настройка таблицы» per section. The dialogs are untouched.
+    const searchInp = h('input', {
+        id: 'crud-search', type: 'search',
+        placeholder: tr('Search…'),
+        value: state.search,
+        oninput: (e) => { state.search = e.target.value; onFilterChanged(container, onNavigate); },
+    });
+    const resetBtn = h('button', {
+        class: 'btn btn-ghost btn-sm svc-reset', id: 'crud-reset', type: 'button', title: tr('Сбросить поиск и фильтры'), disabled: true,
+        onclick: () => {
+            state.columnFilters = {};
+            state.search = '';
+            searchInp.value = '';
+            onFilterChanged(container, onNavigate);
+        },
+    }, Icon('Refresh', { size: 14 }), ' ', tr('Сбросить'));
+    const setupBtn = h('button', {
+        class: 'btn btn-outline btn-sm', type: 'button', title: tr('Состав и порядок колонок таблицы'),
+        onclick: () => openTableSetup({
+            columns: def.columns.map((c) => ({ key: c.key, label: tr(c.label || c.key) })),
+            visible: visibleColumns(def).map((c) => c.key),
+            defaults: defaultColKeys(def),
+            onApply: (keys) => { writeColPrefs(colPrefKey(), keys, defaultColKeys(def)); paintList(container, onNavigate); },
         }),
+    }, Icon('Settings', { size: 14 }), ' ', tr('Таблица'));
+
+    container.appendChild(h('div', { class: 'fade-in' },
+        h('div', { class: 'page-head' },
+            h('div', null, h('h1', { class: 'page-title' }, tr(def.label))),   // the shell lifts the title into the top bar
+        ),
+        h('div', { class: 'svc-toolbar' },
+            h('div', { class: 'svc-tb-left' },
+                h('label', { class: 'svc-search', for: 'crud-search' }, Icon('Search', { size: 15 }), searchInp),
+                resetBtn,
+                h('span', { class: 'muted svc-count', id: 'crud-count' }, '')),
+            h('div', { class: 'svc-tb-right' },
+                ...extraButtons,
+                setupBtn,
+                canEdit(currentPermKey()) && h('button', { class: 'btn btn-primary btn-sm', onclick: () => openEditor(container, onNavigate, null) },
+                    Icon('Plus', { size: 14 }), state.sectionKey === 'services' ? ' Add service' : ' Add'))),
         // Optional KPI strip — sections opt in by defining `headerStats`.
         // Re-computed after loadRows.
         h('div', { id: 'crud-stats-strip' }),
@@ -432,7 +478,7 @@ function applyListFilters(q, def) {
             q = ids.length ? q.in(col.key, ids) : q.eq(col.key, -1);   // ничего не совпало → пустой список
             continue;
         }
-        if (col.type === 'enum_label' && Array.isArray(col.options)) {
+        if ((col.type === 'enum_label' || col.type === 'enum_text') && Array.isArray(col.options)) {
             const vals = col.options
                 .filter(([val, label]) => String(label || val).toLowerCase().includes(f.toLowerCase()))
                 .map(([val]) => val);
@@ -490,42 +536,38 @@ function paintList(container, onNavigate) {
     headerBox.indeterminate = someChecked;
 
     const hasAnyColumnFilter = Object.values(state.columnFilters || {}).some(v => String(v || '').trim());
+    const filtering = hasAnyColumnFilter || !!String(state.search || '').trim();
+    const resetBtn = container.querySelector('#crud-reset');
+    if (resetBtn) resetBtn.disabled = !filtering;
+    const countEl = container.querySelector('#crud-count');
+    if (countEl) {
+        const total = state.paged ? state.total : state.rows.length;
+        countEl.textContent = filtering
+            ? trf('{n} из {max}', { n: state.paged ? state.total : filtered.length, max: state.paged ? state.total : state.rows.length })
+            : trf('Всего: {n}', { n: total });
+        if (filtering && state.paged) countEl.textContent = trf('Найдено: {n}', { n: state.total });
+    }
 
-    listCard.appendChild(h('table', { class: 'list' },
+    // CRUD_LIST_V2 — the chosen columns, laid out fixed from weight shares;
+    // label and filter control in ONE header cell (see services.js).
+    const cols = visibleColumns(def);
+    const share = widthShare(cols, 34 + 92, COL_WEIGHT);
+
+    listCard.appendChild(h('table', { class: 'list svc-tbl crud-tbl' },
         h('thead', null,
             h('tr', null,
-                h('th', { style: { width: '36px' } }, headerBox),
-                ...def.columns.map(c => h('th', null, tr(c.label || c.key))),
-                h('th', { class: 'list-act-h', style: { width: '104px', textAlign: 'right' } }, tr('Действия')),
-            ),
-            // Per-column filter row — instant in-memory narrowing without
-            // re-querying the DB.
-            h('tr', { class: 'filter-row', style: { background: 'var(--ink-25)' } },
-                h('th', { style: { textAlign: 'center', verticalAlign: 'middle' } },
-                    hasAnyColumnFilter
-                        ? h('button', {
-                            type: 'button',
-                            title: 'Clear all column filters',
-                            style: {
-                                background: 'transparent', border: 0, padding: 0, cursor: 'pointer',
-                                color: 'var(--crit-700)', fontSize: '13.5px', lineHeight: '1',
-                            },
-                            onclick: () => {
-                                state.columnFilters = {};
-                                onFilterChanged(container, onNavigate);
-                            },
-                        }, '×')
-                        : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '⌕'),
-                ),
-                ...def.columns.map(c => h('th', null, columnFilterInput(c, container, onNavigate))),
-                h('th'),
+                h('th', { style: { width: '34px' } }, headerBox),
+                ...cols.map(c => h('th', { style: { width: share(c) }, class: c.type === 'money' ? 'num' : null },
+                    h('div', { class: 'svc-th-label', title: tr(c.label || c.key) }, tr(c.label || c.key)),
+                    columnFilterInput(c, container, onNavigate))),
+                h('th', { class: 'list-act-h', style: { width: '92px', textAlign: 'right' } }, ''),
             ),
         ),
         h('tbody', null, ...(filtered.length ? [] : [
             // EMPTY_FILTER_KEEPS_FILTERS_V2 — zero rows to show: message (and a
             // reset button when filters are the cause) INSIDE the table so the
             // filter row above stays usable in every case.
-            h('tr', null, h('td', { colspan: String(def.columns.length + 2), style: { textAlign: 'center', padding: '32px 16px' } },
+            h('tr', null, h('td', { colspan: String(cols.length + 2), style: { textAlign: 'center', padding: '32px 16px' } },
                 h('div', { class: 'muted', style: { fontSize: '13.5px', marginBottom: '10px' } },
                     state.rows.length
                         ? 'Ни одна строка не соответствует фильтрам.'
@@ -562,7 +604,7 @@ function paintList(container, onNavigate) {
             const mayDelete = canDelete(currentPermKey()) && !(def.table === 'roles' && row.locked);
             return h('tr', null,
                 h('td', null, rowBox),
-                ...def.columns.map(c => h('td', null, renderCell(row, c))),
+                ...cols.map(c => h('td', { class: c.type === 'money' ? 'num' : null }, renderCell(row, c))),
                 // LIST_ACTIONS_V1 (2026-09-05) — действия строки: значками и на
                 // языке интерфейса. Здесь стояли английские «Edit / Del» посреди
                 // русского и узбекского списка, а удаление было залитым красным
@@ -819,23 +861,18 @@ function columnFilterInput(col, container, onNavigate) {
         else     delete state.columnFilters[k];
         onFilterChanged(container, onNavigate);
     };
-    const baseStyle = {
-        width: '100%', height: '28px', padding: '0 8px',
-        borderRadius: '6px', border: '1px solid var(--ink-200)',
-        background: 'white', fontSize: '12.5px', fontFamily: 'inherit',
-        boxSizing: 'border-box',
-    };
+    const baseStyle = null;   // CRUD_LIST_V2 — .svc-th-filter carries the look
 
     // Bool — 3-state Any / Active / Inactive.
     if (col.type === 'bool') {
         return h('select', {
             dataset: { filterKey: k },
-            style: baseStyle,
+            class: 'svc-th-filter',
             onchange: (e) => onInput(e, e.target.value),
         },
-            h('option', { value: '', selected: cur === '' }, 'Any'),
-            h('option', { value: 'active',   selected: cur === 'active'   }, 'Active'),
-            h('option', { value: 'inactive', selected: cur === 'inactive' }, 'Inactive'),
+            h('option', { value: '', selected: cur === '' }, 'Все'),
+            h('option', { value: 'active',   selected: cur === 'active'   }, 'Активные'),
+            h('option', { value: 'inactive', selected: cur === 'inactive' }, 'Отключённые'),
         );
     }
 
@@ -852,22 +889,22 @@ function columnFilterInput(col, container, onNavigate) {
         labels.sort((a, b) => a.localeCompare(b));
         return h('select', {
             dataset: { filterKey: k },
-            style: baseStyle,
+            class: 'svc-th-filter',
             onchange: (e) => onInput(e, e.target.value),
         },
-            h('option', { value: '', selected: cur === '' }, 'Any'),
+            h('option', { value: '', selected: cur === '' }, 'Все'),
             ...labels.map(l => h('option', { value: l.toLowerCase(), selected: cur === l.toLowerCase() }, l)),
         );
     }
 
     // Enum with a fixed set of (value, label) options — dropdown of labels.
-    if (col.type === 'enum_label' && Array.isArray(col.options)) {
+    if ((col.type === 'enum_label' || col.type === 'enum_text') && Array.isArray(col.options)) {
         return h('select', {
             dataset: { filterKey: k },
-            style: baseStyle,
+            class: 'svc-th-filter',
             onchange: (e) => onInput(e, e.target.value),
         },
-            h('option', { value: '', selected: cur === '' }, 'Any'),
+            h('option', { value: '', selected: cur === '' }, 'Все'),
             ...col.options
                 .filter(([val]) => val !== '')
                 .map(([val, label]) => h('option', {
@@ -881,9 +918,9 @@ function columnFilterInput(col, container, onNavigate) {
     return h('input', {
         type: 'text',
         value: cur,
-        placeholder: tr('Filter…'),
+        placeholder: tr('фильтр'),
         dataset: { filterKey: k },
-        style: baseStyle,
+        class: 'svc-th-filter',
         oninput: (e) => onInput(e, e.target.value),
     });
 }
@@ -937,7 +974,7 @@ function columnMatches(row, col, f) {
         return true;        // any other value = "Any" = don't filter
     }
     // enum_label — match against the visible label.
-    if (col.type === 'enum_label' && Array.isArray(col.options)) {
+    if ((col.type === 'enum_label' || col.type === 'enum_text') && Array.isArray(col.options)) {
         const opt = col.options.find(([val]) => String(val) === String(v));
         const label = (opt ? opt[1] : v) || '';
         return String(label).toLowerCase().includes(f);
@@ -967,10 +1004,11 @@ function renderCell(row, col) {
         return h('span', { style }, text);
     }
     // Enum value rendered with its human label from the column's options.
-    if (col.type === 'enum_label' && Array.isArray(col.options)) {
+    if ((col.type === 'enum_label' || col.type === 'enum_text') && Array.isArray(col.options)) {
         const opt = col.options.find(([val]) => String(val) === String(v));
         // SVC_DOCTOR_TAG_COLOR_V1 — an option may carry its own tag kind as a
         // third tuple element: [value, label, kind]; falls back to col.tagKind.
+        if (col.type === 'enum_text') return opt ? tr(opt[1]) : String(v);   // CRUD_LIST_V2 — a word, not a tag
         return opt ? Tag(opt[1], { kind: opt[2] || col.tagKind || '' }) : String(v);
     }
     if (col.type === 'money') {

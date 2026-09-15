@@ -512,17 +512,20 @@ export const SECTIONS = {
         orderBy: { column: 'created_at', ascending: false },
         searchColumns: ['full_name', 'phone', 'email', 'mrn', 'national_id'],
         fkLookups: ['payers', 'payer_policies', 'branches', 'referral_sources', 'users'],
+        // CRUD_LIST_V2 — six columns by default; branch / doctor / payer /
+        // policy wait in «Настройка таблицы» (optional). Gender as a word, not
+        // the stored code.
         columns: [
             { key: 'mrn',         label: 'MRN' },
-            { key: 'full_name',   label: 'Name' },
-            { key: 'phone',       label: 'Phone' },
-            { key: 'date_of_birth', label: 'DOB', type: 'date' },
-            { key: 'gender',      label: 'Gender' },
-            { key: 'branch_id',   label: 'Branch', lookup: 'branches' },
-            { key: 'primary_doctor_id', label: 'Primary doctor', lookup: 'users' },
-            { key: 'payer_id',    label: 'Payer', lookup: 'payers' },
-            { key: 'payer_policy_id', label: 'Policy', lookup: 'payer_policies' },
-            { key: 'active',      label: 'Status', type: 'bool' },
+            { key: 'full_name',   label: 'ФИО' },
+            { key: 'phone',       label: 'Телефон' },
+            { key: 'date_of_birth', label: 'Дата рождения', type: 'date' },
+            { key: 'gender',      label: 'Пол', type: 'enum_text', options: [['male', 'Муж.'], ['female', 'Жен.'], ['other', 'Другой']] },
+            { key: 'branch_id',   label: 'Филиал', lookup: 'branches', optional: true },
+            { key: 'primary_doctor_id', label: 'Лечащий врач', lookup: 'users', optional: true },
+            { key: 'payer_id',    label: 'Плательщик', lookup: 'payers', optional: true },
+            { key: 'payer_policy_id', label: 'Полис', lookup: 'payer_policies', optional: true },
+            { key: 'active',      label: 'Статус', type: 'bool' },
         ],
         fields: [
             { key: 'mrn',                label: 'Medical record # (MRN)', type: 'text' },

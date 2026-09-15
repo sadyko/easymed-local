@@ -7496,6 +7496,8 @@ export const STRINGS = {
   "Отметка снята.": {"en":"The mark has been removed.","ru":"Отметка снята.","uz":"Belgi olib tashlandi."},
   "Выполнено: {name}": {"en":"Done: {name}","ru":"Выполнено: {name}","uz":"Bajarildi: {name}"},
   "Амбулаторно": {"en":"Outpatient","ru":"Амбулаторно","uz":"Ambulator"},
+  "Другой": {"en": "Other", "ru": "Другой", "uz": "Boshqa"},
+  "Всего: {n}": {"en": "Total: {n}", "ru": "Всего: {n}", "uz": "Jami: {n}"},
   "Классификация": {"en": "Classification", "ru": "Классификация", "uz": "Tasnif"},
   "Название (RU)": {"en": "Name (RU)", "ru": "Название (RU)", "uz": "Nomi (RU)"},
   "Название (UZ)": {"en": "Name (UZ)", "ru": "Название (UZ)", "uz": "Nomi (UZ)"},
