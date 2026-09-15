@@ -35,7 +35,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { printBarcodeLabel } from './lab-barcode.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // same URL as patient-card/service-workspace (one instance)
 import { canDelete, canEditLabPanels } from '../permissions.js';   // LAB_PANELS_BY_SECTION_V1 — the gate IS lab-section access (same predicate as the sidebar)
-import { mountLabPanels, LAB_BUILD } from './lab-panels.js?v=lisfields2';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now
+import { mountLabPanels, LAB_BUILD } from './lab-panels.js?v=panelsv2';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now
 import { mountLabDevices, stopLabDevicesLive } from './lab-devices.js?v=lisfields2';   // LIS_INGEST_V1 — «Анализаторы»: приборы клиники, живая лента и лоток непринятых сообщений
 // ?v= is required here, not decorative: this module gained selectOptionsFor, and a
 // browser holding the older cached copy would fail the named import and blank the view.
@@ -1628,11 +1628,12 @@ function wsAnalyteLine(e, onRemove) {
         class: 'le-flag',
         onchange: (ev) => { e.flag = ev.target.value; applyFlag(); },
     },
-        h('option', { value: 'normal' }, '🟢 Норма'),
-        h('option', { value: 'high' }, '🟡 Высокий'),
-        h('option', { value: 'low' }, '🟡 Низкий'),
-        h('option', { value: 'abnormal' }, '🟠 Отклон.'),
-        h('option', { value: 'critical' }, '🔴 Критич.'),
+        // LAB_WS_V2 — words, no emoji: the colour is the select's own class
+        h('option', { value: 'normal' }, 'Норма'),
+        h('option', { value: 'high' }, 'Выше нормы'),
+        h('option', { value: 'low' }, 'Ниже нормы'),
+        h('option', { value: 'abnormal' }, 'Отклонение'),
+        h('option', { value: 'critical' }, 'Критично'),
     );
 
     // LAB_SELECT_OPTIONS_V1 — the value control follows the analyte's value_type,
@@ -1747,8 +1748,8 @@ function wsSection(section) {
         ),
         h('div', { class: 'lw-sec-body' },
             h('div', { class: 'le-head' },
-                h('span', null, 'Показатель'), h('span', { style: { textAlign: 'center' } }, 'Значение'),
-                h('span', null, 'Ед.'), h('span', null, 'Норма'), h('span', { style: { textAlign: 'center' } }, 'Флаг'), h('span', null, ''),
+                h('span', null, 'Показатель'), h('span', { style: { textAlign: 'center' } }, 'Результат'),
+                h('span', null, 'Ед.'), h('span', null, 'Норма'), h('span', { style: { textAlign: 'center' } }, 'Оценка'), h('span', null, ''),
             ),
             listEl,
             h('button', {
@@ -1786,7 +1787,9 @@ async function openPatientWorksheet(g, patient) {
                     panels.length + ' ' + pluralRu(panels.length, 'анализ', 'анализа', 'анализов'),
                 ].filter(Boolean).map(t => h('span', { class: 'chip' }, t))),
         ),
-        h('div', { class: 'lw-acc' }, h('div', { class: 'k' }, 'Образец №'), h('div', { class: 'v' }, g.accession || '—')),
+        // LAB_WS_V2 — the sample number is the same quiet, copyable mono button
+        // as in the queue (LAB_CARD_V3), not a black block louder than the name.
+        h('div', { class: 'lw-accwrap' }, accessionButton(g.accession)),
     ));
 
     for (const section of sections) body.appendChild(wsSection(section));
@@ -1851,10 +1854,11 @@ async function openPatientWorksheet(g, patient) {
 
     overlay.appendChild(h('div', { class: 'modal-card lw-modal', style: { width: '1040px', maxWidth: 'calc(100vw - 32px)' } },
         h('header', { class: 'modal-head' },
-            h('h2', null, Icon('Flask', { size: 16 }), ' Лаборатория · ', g.patientName),
+            h('h2', null, Icon('Flask', { size: 16 }), ' ', tr('Результаты анализов'), ' · ', g.patientName),
             h('button', { class: 'modal-close', onclick: close }, '×')),
         body,
         h('footer', { class: 'modal-foot' },
+            h('span', { class: 'muted lw-hint' }, tr('Enter или ↓ — к следующему показателю. Оценка ставится сама по норме; её можно поправить.')),
             h('button', { class: 'btn', type: 'button', onclick: close }, 'Закрыть'),
             h('span', { class: 'grow' }),
             h('button', {

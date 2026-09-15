@@ -49,7 +49,7 @@ const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагнос
 //      lab-section role (LAB_PANELS_BY_SECTION_V1).
 // v8 = one shared page head for queue+panels; marker moved off-screen into
 //      the data-attribute above; queue filter chips translate label-then-count.
-export const LAB_BUILD = 'lab-v10';   // LIS_INGEST_V1 — выбор анализатора и колонка «Поле анализатора»
+export const LAB_BUILD = 'lab-v11';   // LAB_PANELS_V2 — the editor in groups; sex ranges and analyzer column on demand
 
 // Mounts the editor into `container` and resolves once the first load has
 // painted — the caller can await it and know the screen is settled.
@@ -367,7 +367,8 @@ export async function mountLabPanels(container) {
 
         // LIS_INGEST_V1 — какой прибор кормит эту панель. «— нет —» законно:
         // панель, которую заполняют руками, анализатора не имеет.
-        const devSel = h('select', { style: { width: '100%' } },
+        state.devSelValue = String(p.device_id || '');
+        const devSel = h('select', { style: { width: '100%' }, onchange: (e) => { state.devSelValue = e.target.value; paintEditor(); } },
             h('option', { value: '', selected: !p.device_id }, '— нет —'),
             ...state.devices.map(d => h('option', { value: String(d.id), selected: Number(p.device_id) === d.id },
                 (d.enabled ? d.name : trf('{name} (выключен)', { name: d.name })))));
@@ -449,44 +450,57 @@ export async function mountLabPanels(container) {
             h('h3', null, Icon('Flask', { size: 16 }), ' ', p.id ? 'Редактирование панели' : 'Новая панель'),
             p.id ? h('button', { class: 'btn btn-ghost btn-sm', style: { marginLeft: 'auto', color: 'var(--crit-700)' }, onclick: () => removePanel(p) }, Icon('Trash', { size: 13 }), ' Удалить') : null));
 
-        const body = h('div', { class: 'card-pad' });
-        body.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '12px' } },
-            fld('Название панели', nameInp),
-            fld('Тип', modSel),
-            fld('Привязанная услуга', h('div', null, svcSearch, svcSel),
-                'Когда регистратура добавит эту услугу в визит и касса примет оплату, заказ появится в «Лаборатории» с показателями этой панели.')));
-        // LIS_INGEST_V1 — какой прибор кормит эту панель. Стоит ОТДЕЛЬНОЙ строкой
-        // над таблицей показателей, а не в сетке выше: пока анализатор не выбран,
-        // колонка «Поле анализатора» у каждой строки пуста, и человек обязан
-        // видеть причину рядом с таблицей, а не искать её среди реквизитов.
-        body.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px', marginTop: '12px' } },
-            fld(tr('Анализатор'), devSel,
-                state.devices.length
-                    ? tr('Выберите прибор — тогда у каждого показателя можно указать, какое поле анализатора его заполняет.')
-                    : tr('Приборов пока нет. Запустите пробу на анализаторе — он появится сам во вкладке «Анализаторы».'))));
+        // LAB_PANELS_V2 (2026-09-15) — owner: «make a little redesign so its more
+        // understandable». The editor is three groups a laborant reads top to
+        // bottom: what the panel is → which service orders it and which machine
+        // fills it → its indicators. The long explanations became one-line
+        // notes under the field they explain; the two checkboxes sit with the
+        // name; the link status is one calm line, not a stray sentence.
+        const grp = (title, ...kids) => h('section', { class: 'lp-grp' }, h('h3', null, title), ...kids);
+        const body = h('div', { class: 'card-pad lp-body' });
+        body.appendChild(grp('Панель',
+            h('div', { class: 'lp-grid3' },
+                fld('Название панели', nameInp),
+                fld('Группа', modSel),
+                h('div', { class: 'field' }, h('label', null, tr('Состояние')),
+                    h('div', { class: 'row', style: { gap: '8px' } },
+                        h('label', { class: 'lp-check' + (p.active !== false ? ' on' : '') }, activeChk, ' Активна'),
+                        h('label', { class: 'lp-check' }, narrChk, ' Текстовое заключение'))))));
 
         // Says plainly whether the link is actually wired up. Without this the two
         // failure modes are silent: an unlinked panel is never ordered by anyone, and
         // a panel on a non-lab service never reaches the lab queue.
         const linkedSvc = state.services.find(s => s.id === (p.service_id || svcSel.value));
-        body.appendChild(
-            !p.service_id
-                ? h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 12px' } },
-                    Icon('Warning', { size: 12 }), ' Панель ни к чему не привязана — заказать её пока нельзя.')
-                : (linkedSvc && !isLabSvc(linkedSvc))
-                    ? h('div', { style: { fontSize: '12.5px', margin: '-6px 0 12px', color: 'var(--warn-700, #92400e)' } },
-                        Icon('Warning', { size: 12 }),
-                        ' ', trf('Услуга «{name}» не помечена как лабораторная. Поставьте ей тип «Лаборатория» в Настройки → Услуги, иначе заказ не попадёт в очередь лаборатории.', { name: linkedSvc.name }))
-                    : h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 12px' } },
-                        Icon('Check', { size: 12 }), ' ', linkedSvc ? trf('Привязана к услуге «{name}» — заказы попадут в «Лабораторию».', { name: linkedSvc.name }) : 'Привязана — заказы попадут в «Лабораторию».'));
-        body.appendChild(h('div', { class: 'row', style: { gap: '10px', margin: '14px 0 18px' } },
-            h('label', { class: 'lp-check' }, narrChk, ' Текстовое заключение'),
-            h('label', { class: 'lp-check' + (p.active !== false ? ' on' : '') }, activeChk, ' Активна')));
+        const linkLine = !p.service_id
+            ? h('div', { class: 'lp-note warn' }, Icon('Warning', { size: 12 }), ' ', tr('Панель ни к чему не привязана — заказать её пока нельзя.'))
+            : (linkedSvc && !isLabSvc(linkedSvc))
+                ? h('div', { class: 'lp-note warn' }, Icon('Warning', { size: 12 }), ' ', trf('Услуга «{name}» не помечена как лабораторная. Поставьте ей тип «Лаборатория» в Настройки → Услуги, иначе заказ не попадёт в очередь лаборатории.', { name: linkedSvc.name }))
+                : h('div', { class: 'lp-note ok' }, Icon('Check', { size: 12 }), ' ', linkedSvc ? trf('Привязана к услуге «{name}» — заказы попадут в «Лабораторию».', { name: linkedSvc.name }) : tr('Привязана — заказы попадут в «Лабораторию».'));
+        body.appendChild(grp('Услуга и прибор',
+            h('div', { class: 'lp-grid2' },
+                fld('Привязанная услуга', h('div', { class: 'lp-svc' }, svcSearch, svcSel),
+                    tr('Заказ этой услуги (после оплаты в кассе) попадёт в «Лабораторию» с показателями панели.')),
+                // LIS_INGEST_V1 — which machine feeds this panel. Until one is chosen
+                // the «Поле анализатора» column is not shown at all.
+                fld(tr('Анализатор'), devSel,
+                    state.devices.length
+                        ? tr('Выберите прибор — тогда у каждого показателя можно указать, какое поле анализатора его заполняет.')
+                        : tr('Приборов пока нет. Запустите пробу на анализаторе — он появится сам во вкладке «Анализаторы».'))),
+            linkLine));
 
         // ── analyte table ──
+        // Sex-specific ranges and the analyzer column only when they carry
+        // something: nine columns did not fit a laptop and the actions were
+        // off screen (owner's screenshot).
+        if (state.sexRanges == null) state.sexRanges = state.rows.some(r => [r.ref_low_m, r.ref_high_m, r.ref_low_f, r.ref_high_f].some(v => v != null && v !== ''));
+        const showSex = !!state.sexRanges;
+        const showDevice = true;   // LIS_INGEST_V1 — the mapping column is always there (a laborant must see where a machine's field lands)
         body.appendChild(h('div', { class: 'row', style: { alignItems: 'center', margin: '4px 0 8px' } },
             h('h4', { style: { margin: 0, fontSize: '13.5px' } }, 'Показатели'),
             h('span', { class: 'tag tag-teal', style: { marginLeft: '8px', fontSize: '12.5px' } }, String(state.rows.length)),
+            h('button', { class: 'btn btn-outline btn-sm' + (showSex ? ' on' : ''), style: { marginLeft: '12px' }, type: 'button',
+                title: tr('Показать колонки норм для мужчин и женщин'),
+                onclick: () => { state.sexRanges = !showSex; paintEditor(); } }, Icon('User', { size: 12 }), ' ', tr('Нормы по полу')),
             h('span', { style: { flex: 1 } }),
             // LAB_ANALYTE_LIBRARY_V1 — two ways to add an indicator, mirroring the
             // panel level above: pick from the dictionary, or start an empty row.
@@ -505,13 +519,13 @@ export async function mountLabPanels(container) {
             tblWrap.appendChild(h('table', { class: 'lp-tbl' },
                 h('thead', null,
                     h('tr', null,
+                        h('th', { rowspan: '2', class: 'act' }, ''),   // LAB_PANELS_V2 — actions first: always in view, however wide the rest
                         h('th', { rowspan: '2' }, 'Показатель'), h('th', { rowspan: '2' }, 'Ед.'), h('th', { rowspan: '2' }, 'Тип'),
-                        h('th', { class: 'grp', colspan: '3' }, 'Референсные интервалы'),
-                        h('th', { rowspan: '2' }, 'Группа'),
-                        h('th', { rowspan: '2' }, 'Поле анализатора'),   // LIS_INGEST_V1
-                        h('th', { rowspan: '2' }, '')),
+                        h('th', { class: 'grp', colspan: String(showSex ? 3 : 1) }, showSex ? 'Референсные интервалы' : 'Норма'),
+                        h('th', { rowspan: '2' }, 'Раздел бланка'),
+                        showDevice ? h('th', { rowspan: '2' }, 'Поле анализатора') : null),   // LIS_INGEST_V1
                     h('tr', null,
-                        h('th', { class: 'grp' }, 'Общий'), h('th', { class: 'grp' }, 'Муж.'), h('th', { class: 'grp' }, 'Жен.'))),
+                        h('th', { class: 'grp' }, showSex ? 'Общий' : ''), showSex ? h('th', { class: 'grp' }, 'Муж.') : null, showSex ? h('th', { class: 'grp' }, 'Жен.') : null)),
                 tb));
         }
         body.appendChild(tblWrap);
@@ -821,39 +835,42 @@ export async function mountLabPanels(container) {
         const isText = r.value_type === 'text';
         const isSel = r.value_type === 'select';   // LAB_SELECT_OPTIONS_V1 — answer picked from a list
         const nRanges = normRanges(r).length;      // LAB_MULTI_REF_V1
-        const typeSel = h('select', { class: 'lw-inp', style: { width: '96px' }, onchange: (e) => { r.value_type = e.target.value; paintEditor(); } },
+        const typeSel = h('select', { class: 'lw-inp', style: { width: '84px' }, onchange: (e) => { r.value_type = e.target.value; paintEditor(); } },
             h('option', { value: 'numeric', selected: !isText && !isSel }, 'число'),
             h('option', { value: 'text', selected: isText }, 'текст'),
             h('option', { value: 'select', selected: isSel }, 'список'));
         const normCell = isSel
-            ? h('input', { value: r.value_options || '', placeholder: 'Прозрачная, Мутная', title: 'Варианты ответа через запятую — лаборант выберет один из списка', class: 'lw-inp', style: { width: '190px' }, oninput: (e) => { r.value_options = e.target.value; } })
+            ? h('input', { value: r.value_options || '', placeholder: 'Прозрачная, Мутная', title: 'Варианты ответа через запятую — лаборант выберет один из списка', class: 'lw-inp', style: { width: '140px' }, oninput: (e) => { r.value_options = e.target.value; } })
             : isText
-                ? h('input', { value: r.ref_text || '', placeholder: 'норма', class: 'lw-inp', style: { width: '130px' }, oninput: (e) => { r.ref_text = e.target.value; } })
+                ? h('input', { value: r.ref_text || '', placeholder: 'норма', class: 'lw-inp', style: { width: '110px' }, oninput: (e) => { r.ref_text = e.target.value; } })
                 : range('ref_low', 'ref_high');
+        const showSex = !!state.sexRanges;
+        const showDevice = true;   // LIS_INGEST_V1 — always shown, see above
+        const actions = h('span', { class: 'lp-actions' },
+            // LAB_MULTI_REF_V1 — extra named ranges (menopause, cycle phase,
+            // trimester, age bands). Count badge so a configured analyte is
+            // obvious at a glance in a long panel.
+            (isText || isSel) ? h('span', { class: 'lp-ic muted' }, '·') : h('button', {
+                class: 'lp-ic' + (nRanges > 1 ? ' on' : ''),
+                style: nRanges > 1 ? { fontWeight: '700', color: 'var(--primary-700)' } : null,
+                type: 'button',
+                title: 'Диапазоны нормы (фаза цикла, менопауза, возраст…)',
+                'aria-label': 'Диапазоны нормы',
+                onclick: () => openRangesModal(r),
+            }, nRanges ? '±' + nRanges : '±'),
+            h('button', { class: 'lp-ic', type: 'button', title: 'Вверх', 'aria-label': 'Вверх', onclick: () => { if (idx > 0) { const t = state.rows[idx - 1]; state.rows[idx - 1] = state.rows[idx]; state.rows[idx] = t; paintEditor(); } } }, '↑'),
+            h('button', { class: 'lp-ic', type: 'button', title: 'Вниз', 'aria-label': 'Вниз', onclick: () => { if (idx < state.rows.length - 1) { const t = state.rows[idx + 1]; state.rows[idx + 1] = state.rows[idx]; state.rows[idx] = t; paintEditor(); } } }, '↓'),
+            h('button', { class: 'lp-ic del', type: 'button', title: 'Удалить', 'aria-label': 'Удалить', onclick: () => { state.rows.splice(idx, 1); paintEditor(); } }, Icon('Trash', { size: 12 })));
         return h('tr', null,
-            h('td', null, h('input', { value: r.name || '', class: 'lw-inp param', style: { minWidth: '150px' }, oninput: (e) => { r.name = e.target.value; } })),
-            h('td', null, h('input', { value: r.unit || '', class: 'lw-inp unit', style: { width: '70px' }, oninput: (e) => { r.unit = e.target.value; } })),
+            h('td', { class: 'act' }, actions),
+            h('td', null, h('input', { value: r.name || '', class: 'lw-inp param', style: { minWidth: '120px' }, oninput: (e) => { r.name = e.target.value; } })),
+            h('td', null, h('input', { value: r.unit || '', class: 'lw-inp unit', style: { width: '64px' }, placeholder: 'ед.', oninput: (e) => { r.unit = e.target.value; } })),
             h('td', null, typeSel),
             h('td', null, normCell),
-            h('td', null, (isText || isSel) ? h('span', { class: 'muted' }, '—') : range('ref_low_m', 'ref_high_m')),
-            h('td', null, (isText || isSel) ? h('span', { class: 'muted' }, '—') : range('ref_low_f', 'ref_high_f')),
-            h('td', null, h('input', { value: r.group_label || '', placeholder: '—', class: 'lw-inp', style: { width: '120px' }, oninput: (e) => { r.group_label = e.target.value; } })),
-            h('td', null, deviceCell(r)),   // LIS_INGEST_V1
-            h('td', null, h('span', { class: 'lp-actions' },
-                // LAB_MULTI_REF_V1 — extra named ranges (menopause, cycle phase,
-                // trimester, age bands). Count badge so a configured analyte is
-                // obvious at a glance in a long panel.
-                (isText || isSel) ? h('span', { class: 'muted' }, '—') : h('button', {
-                    class: 'lp-ic' + (nRanges > 1 ? ' on' : ''),
-                    style: nRanges > 1 ? { fontWeight: '700', color: 'var(--primary-700)' } : null,
-                    type: 'button',
-                    title: 'Диапазоны нормы (фаза цикла, менопауза, возраст…)',
-                    'aria-label': 'Диапазоны нормы',
-                    onclick: () => openRangesModal(r),
-                }, nRanges ? '±' + nRanges : '±'),
-                h('button', { class: 'lp-ic', type: 'button', title: 'Вверх', 'aria-label': 'Вверх', onclick: () => { if (idx > 0) { const t = state.rows[idx - 1]; state.rows[idx - 1] = state.rows[idx]; state.rows[idx] = t; paintEditor(); } } }, '↑'),
-                h('button', { class: 'lp-ic', type: 'button', title: 'Вниз', 'aria-label': 'Вниз', onclick: () => { if (idx < state.rows.length - 1) { const t = state.rows[idx + 1]; state.rows[idx + 1] = state.rows[idx]; state.rows[idx] = t; paintEditor(); } } }, '↓'),
-                h('button', { class: 'lp-ic del', type: 'button', title: 'Удалить', 'aria-label': 'Удалить', onclick: () => { state.rows.splice(idx, 1); paintEditor(); } }, Icon('Trash', { size: 12 })))));
+            showSex ? h('td', null, (isText || isSel) ? h('span', { class: 'muted' }, '—') : range('ref_low_m', 'ref_high_m')) : null,
+            showSex ? h('td', null, (isText || isSel) ? h('span', { class: 'muted' }, '—') : range('ref_low_f', 'ref_high_f')) : null,
+            h('td', null, h('input', { value: r.group_label || '', placeholder: '—', title: tr('Подзаголовок на бланке, напр. «Лейкоцитарная формула»'), class: 'lw-inp', style: { width: '84px' }, oninput: (e) => { r.group_label = e.target.value; } })),
+            showDevice ? h('td', null, deviceCell(r)) : null);   // LIS_INGEST_V1
     }
 
     async function savePanel(fields) {
