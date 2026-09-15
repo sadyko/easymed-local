@@ -4875,6 +4875,9 @@ table.tbl.svc-tbl input[type="checkbox"] { width: 15px; height: 15px; margin: 0;
                     background: var(--ink-25); border: 1px solid var(--ink-200); border-left: 0; border-radius: 0 8px 8px 0; }
 .svc-ed-note { font-size: 12.5px; line-height: 1.5; color: var(--ink-500); }
 .svc-ed-combo input { width: 100%; box-sizing: border-box; }
+.svc-ed-online { display: flex; flex-direction: column; gap: 4px; }
+.svc-ed-online .field.checkbox { padding: 0; }
+.field.svc-ed-need input { border-color: var(--warn-500, #f59e0b); background: var(--warn-50, #fffbeb); }
 .svc-ed-tier { border: 1px solid var(--ink-100); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; background: var(--ink-25); }
 .svc-ed-tier h4 { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
 .svc-ed-tier .field input { background: var(--white); }

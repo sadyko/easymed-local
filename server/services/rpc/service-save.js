@@ -98,6 +98,7 @@ function resolveRefTx(db, table, ref) {
  *         default_doctor_percent?, room_id?, code?, active?,
  *         price_secondary?, secondary_days_from?, secondary_days_to?, price_repeat?  (VISIT_TIER_PRICING_V1, all nullable)
  *         repeat_days_from?, repeat_days_to?  (REPEAT_WINDOW_V1, nullable — empty = the second-visit window)
+ *         name_uz?, name_en?, online_booking?  (SERVICE_NAMES_ONLINE_V1 — online needs name AND name_uz)
  *         type_ref?/category_ref?/department_ref?: {id}|{name}|null,
  *         lab?: {specimen, result_unit, ref_low, ref_high, ref_text, tube_color},
  *         performers?: [userId] }
@@ -112,6 +113,16 @@ export function serviceSave(db, args, user) {
   // --- валидация ДО транзакции: отказ не должен ничего успеть создать ------
   const name = String(a.name ?? '').trim();
   if (!name) throw new RpcError('Укажите название услуги.', 400);
+  // SERVICE_NAMES_ONLINE_V1 — названия на узбекском и английском; флаг
+  // онлайн-записи — только параметр, но включить его можно лишь с названиями
+  // на русском и узбекском (владелец: «do not save active unless users writes
+  // the language versions»). Английское — по желанию.
+  const nameUz = String(a.name_uz ?? '').trim() || null;
+  const nameEn = String(a.name_en ?? '').trim() || null;
+  const onlineBooking = asBool(a.online_booking) ? 1 : 0;
+  if (onlineBooking && !nameUz) {
+    throw new RpcError('Для онлайн-записи заполните название на русском и узбекском.', 400);
+  }
 
   const type = String(a.type ?? '');
   if (!KNOWN_TYPES.has(type)) throw new RpcError('Неизвестный раздел услуги.', 400);
@@ -234,6 +245,7 @@ export function serviceSave(db, args, user) {
         default_doctor_percent: defaultPct, room_id: roomId,
         price_secondary: priceSecondary, secondary_days_from: daysFrom, secondary_days_to: daysTo, price_repeat: priceRepeat,
         repeat_days_from: repDaysFrom, repeat_days_to: repDaysTo,
+        name_uz: nameUz, name_en: nameEn, online_booking: onlineBooking,
         // Не-лабораторная услуга рождается с пустым лаб-блоком; лабораторная —
         // с тем, что ввели.
         specimen: lab ? (lab.specimen ?? null) : null,
@@ -255,6 +267,7 @@ export function serviceSave(db, args, user) {
         default_doctor_percent: defaultPct, room_id: roomId,
         price_secondary: priceSecondary, secondary_days_from: daysFrom, secondary_days_to: daysTo, price_repeat: priceRepeat,
         repeat_days_from: repDaysFrom, repeat_days_to: repDaysTo,
+        name_uz: nameUz, name_en: nameEn, online_booking: onlineBooking,
       };
       // Лаб-колонки пишутся ТОЛЬКО когда раздел = лаборатория. Скрытый блок
       // не затирает сохранённое (прецедент sections.js visibleWhen).

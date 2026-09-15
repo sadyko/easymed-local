@@ -38,6 +38,7 @@ const PATIENT_FORM_FIELDS = [
 const SERVICE_EDITOR_FIELDS = [
     'name', 'code', 'price', 'tax_rate', 'duration_minutes', 'requires_doctor', 'default_doctor_percent', 'active',
     'price_secondary', 'secondary_days_from', 'secondary_days_to', 'price_repeat', 'repeat_days_from', 'repeat_days_to', 'specimen', 'tube_color',
+    'name_uz', 'name_en', 'online_booking',
 ];
 
 test('экспорт пациентов несёт каждое поле окна пациента (категория — по названию)', () => {

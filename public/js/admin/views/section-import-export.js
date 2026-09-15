@@ -433,6 +433,12 @@ const IMPORT_CONFIGS = {
             // performer share, the room, and the lab block. All optional; a sheet
             // without these columns imports exactly as before.
             { key: 'code',             hint: 'Внутренний код (необязательно)' },
+            // SERVICE_NAMES_ONLINE_V1 — the uz/en names and the online flag; the
+            // importer writes straight to the columns, so an online row without
+            // a uz name is the sheet's responsibility (the dialog refuses it).
+            { key: 'name_uz',          hint: 'Название на узбекском (обязательно для онлайн-записи)' },
+            { key: 'name_en',          hint: 'Название на английском (необязательно)' },
+            { key: 'online_booking',   coerce: 'bool', defaultBool: false, hint: 'true / false — доступна для онлайн-записи (нужны названия ru и uz)' },
             { key: 'price_secondary',  coerce: 'num', hint: 'Цена второго визита (пусто — как первый)' },
             { key: 'secondary_days_from', coerce: 'int', hint: 'Второй визит — не раньше чем через N дней после предыдущего' },
             { key: 'secondary_days_to',   coerce: 'int', hint: 'и не позже чем через M дней (пусто — без предела)' },

@@ -111,6 +111,13 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
 
     // ---- основное ----------------------------------------------------------
     const nameInp = h('input', { type: 'text', value: (row && row.name) || '', placeholder: 'напр. Приём кардиолога' });
+    // SERVICE_NAMES_ONLINE_V1 — название на узбекском и английском и флаг
+    // «доступна для онлайн-записи» (только параметр). Включённая онлайн-запись
+    // требует названий на русском и узбекском; английское — по желанию.
+    const nameUzInp = h('input', { type: 'text', value: (row && row.name_uz) || '', placeholder: 'masalan, Kardiolog qabuli' });
+    const nameEnInp = h('input', { type: 'text', value: (row && row.name_en) || '', placeholder: 'e.g. Cardiologist visit' });
+    const onlineChk = h('input', { type: 'checkbox' });
+    onlineChk.checked = row ? !!row.online_booking : false;
     const typeSel = h('select', null,
         ...SERVICE_SECTIONS.map((s) => h('option', {
             value: s.type, selected: (row ? row.type === s.type : s.type === 'consultation'),
@@ -213,7 +220,7 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
     if (readOnly) {
         for (const el of [nameInp, typeSel, typeCombo.input, catCombo.input, depCombo.input, roomSel,
             specimenInp, tubeSel,   // LAB_REFS_IN_PANELS_V1 — единицы и нормы живут в панели
-            priceInp, vatInp, durInp, reqDoc, pctInp, codeInp, activeChk,
+            priceInp, vatInp, durInp, reqDoc, pctInp, codeInp, activeChk, nameUzInp, nameEnInp, onlineChk,
             secPriceInp, daysFromInp, daysToInp, repPriceInp, repFromInp, repToInp]) el.disabled = true;
     }
 
@@ -223,6 +230,11 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
     async function save(e) {
         const name = nameInp.value.trim();
         if (!name) { toast('Укажите название услуги.', 'warn'); goTo('main', nameInp); return; }
+        // SERVICE_NAMES_ONLINE_V1 — the server refuses this too; the check here
+        // only puts the cursor where the missing word goes.
+        if (onlineChk.checked && !nameUzInp.value.trim()) {
+            toast('Для онлайн-записи заполните название на русском и узбекском.', 'warn'); goTo('main', nameUzInp); return;
+        }
         const price = Number(priceInp.value);
         if (priceInp.value === '' || !Number.isFinite(price) || price < 0) {
             toast('Укажите цену услуги.', 'warn'); goTo('price', priceInp); return;
@@ -254,6 +266,9 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
             repeat_days_to: numOrNull(repToInp.value),
             code: codeInp.value.trim() || null,
             active: activeChk.checked,
+            name_uz: nameUzInp.value.trim() || null,
+            name_en: nameEnInp.value.trim() || null,
+            online_booking: onlineChk.checked,
             type_ref: typeCombo.resolve(),
             category_ref: catCombo.resolve(),
             department_ref: depCombo.resolve(),
@@ -310,10 +325,31 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
             field('Цвет пробирки', tubeSel)),
         h('div', { class: 'svc-ed-note' }, 'Показатели, единицы и нормы задаются в панели анализа: Лаборатория → Панели.'));
 
+    // The uz name is required only while online booking is on: the label
+    // gets its star and the field its highlight the moment the box is ticked.
+    const uzField = field('Название (UZ)', nameUzInp);
+    const uzStar = h('span', { class: 'req' }, ' *');
+    const syncOnline = () => {
+        const on = onlineChk.checked;
+        if (on && !uzStar.parentNode) uzField.firstChild.appendChild(uzStar);
+        if (!on && uzStar.parentNode) uzStar.remove();
+        uzField.className = 'field' + (on && !nameUzInp.value.trim() ? ' svc-ed-need' : '');
+    };
+    onlineChk.addEventListener('change', syncOnline);
+    nameUzInp.addEventListener('input', syncOnline);
+    syncOnline();
+
     const panels = {
         main: h('div', { class: 'svc-ed-panel' },
-            grp('Наименование и классификация',
-                field('Название', nameInp, { required: true }),
+            grp('Наименование',
+                field('Название (RU)', nameInp, { required: true }),
+                grid(2,
+                    uzField,
+                    field('Название (EN)', nameEnInp)),
+                h('div', { class: 'svc-ed-online' },
+                    checkField('Доступна для онлайн-записи', onlineChk),
+                    h('div', { class: 'svc-ed-note' }, 'Пока только параметр. Для онлайн-записи нужны названия на русском и узбекском — без них сохранить с включённой галочкой нельзя.'))),
+            grp('Классификация',
                 grid(2,
                     field('Группа — одна из пяти, задаёт маршрут', typeSel),   // SVC_VOCAB_V1
                     typeCombo.el,

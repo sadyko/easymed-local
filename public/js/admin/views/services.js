@@ -125,6 +125,11 @@ const COLUMNS = [
     { key: 'performers', label: 'Исполнители',  w: 18, optional: true, text: (s) => performerNames(s).join(', '), cell: performerCell },
     { key: 'lab',        label: 'Лаб.',         w: 7,  optional: true, text: (s) => (s.is_lab ? 'Лаб.' : ''),
       cell: (s) => h('td', null, s.is_lab ? Tag('Лаб.', { kind: 'info', dot: true }) : h('span', { class: 'muted' }, '—')) },
+    // SERVICE_NAMES_ONLINE_V1
+    { key: 'name_uz',    label: 'Название (UZ)', w: 24, optional: true, text: (s) => s.name_uz || '' },
+    { key: 'name_en',    label: 'Название (EN)', w: 24, optional: true, text: (s) => s.name_en || '' },
+    { key: 'online',     label: 'Онлайн-запись', w: 9,  optional: true, text: (s) => (s.online_booking ? 'Да' : 'Нет'),
+      cell: (s) => h('td', null, s.online_booking ? Tag('Да', { kind: 'ok', dot: true }) : h('span', { class: 'muted' }, '—')) },
 ];
 const DEFAULT_COLS = COLUMNS.filter((c) => !c.optional).map((c) => c.key);
 const COL_PREF_KEY = 'svc.tbl.cols.v1';   // SVC_TABLE_SETUP_V1 — per browser, like the reference's prefKey
@@ -186,7 +191,7 @@ function matchesFilters(s) {
     if (flt.group && groupKey(s) !== flt.group) return false;
     const q = flt.q.trim().toLowerCase();
     if (q) {
-        const hay = [s.name, s.code, nameOf(lookups.types, s.type_id), nameOf(lookups.categories, s.category_id), tr(groupLabel(s)), ...performerNames(s)]
+        const hay = [s.name, s.name_uz, s.name_en, s.code, nameOf(lookups.types, s.type_id), nameOf(lookups.categories, s.category_id), tr(groupLabel(s)), ...performerNames(s)]
             .filter(Boolean).join(' ').toLowerCase();
         if (!hay.includes(q)) return false;
     }

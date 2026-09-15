@@ -141,3 +141,20 @@ test('service_save: окно повторного визита хранится;
   assert.throws(() => tiered(db, { price_secondary: null, price_repeat: null, secondary_days_from: null, secondary_days_to: null, repeat_days_to: 30 }), /цену повторного визита/);
   db.close();
 });
+
+// SERVICE_NAMES_ONLINE_V1 — names on three languages; online booking only with ru + uz names.
+test('service_save: названия на uz/en хранятся; онлайн-запись без узбекского названия — отказ, с ним — включается', () => {
+  const db = fresh();
+  const id = tiered(db, { name_uz: 'Nevrolog qabuli', name_en: 'Neurologist visit' });
+  assert.deepEqual(db.prepare('SELECT name_uz, name_en, online_booking FROM services WHERE id = ?').get(id),
+    { name_uz: 'Nevrolog qabuli', name_en: 'Neurologist visit', online_booking: 0 });
+  assert.throws(() => tiered(db, { name_uz: '', online_booking: true }), /на русском и узбекском/);
+  assert.throws(() => tiered(db, { name_uz: '   ', online_booking: 1 }), /на русском и узбекском/);
+  const id2 = tiered(db, { name: 'Приём кардиолога', name_uz: 'Kardiolog qabuli', online_booking: true });
+  assert.equal(db.prepare('SELECT online_booking FROM services WHERE id = ?').get(id2).online_booking, 1);
+  // clearing the uz name while online stays on is refused too — the rule holds on update
+  assert.throws(() => serviceSave(db, { id: id2, name: 'Приём кардиолога', type: 'consultation', price: 200000, performers: [], name_uz: '', online_booking: true }, admin), /на русском и узбекском/);
+  serviceSave(db, { id: id2, name: 'Приём кардиолога', type: 'consultation', price: 200000, performers: [], name_uz: '', online_booking: false }, admin);
+  assert.deepEqual(db.prepare('SELECT name_uz, online_booking FROM services WHERE id = ?').get(id2), { name_uz: null, online_booking: 0 });
+  db.close();
+});
