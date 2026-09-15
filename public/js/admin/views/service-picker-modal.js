@@ -48,6 +48,20 @@ import { discountBlockReason, eligibleDiscounts, discountValue, discountOptionPa
 // isProcedurePerformer ниже и его двойника на сервере, rpc/procedures.js.
 const PROC_ROLES = ['doctor', 'head_doctor', 'nurse', 'senior_nurse'];
 
+// DOCTOR_ROUTE_V1 — what a booking produced, for onBooked(summary).
+function bookedSummary(visit, vsRows) {
+    return {
+        visit,
+        rows: (vsRows || []).map((r) => ({
+            visit_service_id: r.vs && r.vs.id != null ? r.vs.id : null,
+            service: r.a && r.a.service ? { id: r.a.service.id, name: r.a.service.name, room_id: r.a.service.room_id ?? null, department_id: r.a.service.department_id ?? null } : null,
+            doctor: r.a && r.a.doctor ? { id: r.a.doctor.id, name: r.a.doctor.name || r.a.doctor.full_name || '' } : null,
+            price: r.unitPrice,
+            scheduled_at: (r.a && r.a.startISO) || null,
+        })),
+    };
+}
+
 export function openServicePickerModal({
     visitDoctorId   = null,
     onPick,
@@ -2690,7 +2704,7 @@ export function openServicePickerModal({
                 toast(trf('Записались не все услуги ({got} из {want}) — счёт НЕ выставлен. Откройте визит и добавьте услуги вручную.', { got: vsRows.length, want: state.added.length }), 'fail');
                 overlay.remove();
                 document.removeEventListener('keydown', onKey);
-                if (typeof onBooked === 'function') { try { onBooked(); } catch (_) {} }
+                if (typeof onBooked === 'function') { try { onBooked(bookedSummary(visit, vsRows)); } catch (_) {} }
                 return;
             }
             // COVER_SPLIT_V1 — split by who pays (chosen on step 3 «Кто платит»):
@@ -2979,7 +2993,10 @@ export function openServicePickerModal({
             toast(tr('Визит создан') + note);
             overlay.remove();
             document.removeEventListener('keydown', onKey);
-            if (typeof onBooked === 'function') { try { onBooked(); } catch (_) {} }
+            // DOCTOR_ROUTE_V1 — the caller learns WHAT landed (visit + lines in the
+            // picked order), so the doctor's cabinet can print the route sheet.
+            // Older callers take no argument and are unaffected.
+            if (typeof onBooked === 'function') { try { onBooked(bookedSummary(visit, vsRows)); } catch (_) {} }
             if (openServicesFor) {
                 // Open the visit on its Services tab so the registrar can generate the
                 // invoice for the patient-paid services. Dynamic import avoids the

@@ -4110,6 +4110,63 @@ async function openRecommendPickerModal(ctx) {
     paintChips(); paintList();
 }
 
+// DOCTOR_ROUTE_V1 — «Маршрутный лист»: the A4 checklist the patient carries
+// from the cabinet — the referred services in the order the doctor picked,
+// each with its room, a box to tick, and where to pay. Printed right after
+// the referral books the visit and raises the cashier's invoice (the picker
+// does both); a line goes into the document's «Рекомендации» so the
+// consultation itself says what was referred.
+async function printRouteSheet(ctx, res) {
+    const p = ctx.patient || {};
+    const rows = (res && res.rows) || [];
+    const ids = [...new Set(rows.map(r => r.service && r.service.id).filter(Boolean))];
+    let svcById = {}, roomById = {}, depById = {};
+    try {
+        const { data: svcs } = await supabase.from('services').select('id, name, room_id, department_id').in('id', ids);
+        for (const s of (svcs || [])) svcById[s.id] = s;
+        const roomIds = [...new Set((svcs || []).map(s => s.room_id).filter(Boolean))];
+        const depIds = [...new Set((svcs || []).map(s => s.department_id).filter(Boolean))];
+        if (roomIds.length) { const { data: rooms } = await supabase.from('rooms').select('id, name').in('id', roomIds); for (const r of (rooms || [])) roomById[r.id] = r.name; }
+        if (depIds.length) { const { data: deps } = await supabase.from('departments').select('id, name').in('id', depIds); for (const d of (deps || [])) depById[d.id] = d.name; }
+    } catch (e) { console.warn('[route sheet] lookups:', e); }
+    const where = (r) => {
+        const s = (r.service && svcById[r.service.id]) || r.service || {};
+        return roomById[s.room_id] || depById[s.department_id] || (r.doctor && r.doctor.name) || '';
+    };
+    const dob = p.date_of_birth ? new Date(p.date_of_birth).toLocaleDateString('ru-RU') : '—';
+    const doctorName = (ctx.patient && ctx.patient.__service && ctx.patient.__service.doctorName) || me().full_name || '';
+    const items = rows.map((r, i) => `<tr>
+        <td class="mono" style="width:28px;color:#55636d;">${i + 1}</td>
+        <td><b>${esc(r.service ? r.service.name : '—')}</b></td>
+        <td style="width:34%;">${esc(where(r) || '—')}</td>
+        <td style="width:70px;text-align:center;"><span style="display:inline-block;width:14px;height:14px;border:1.5px solid #142026;border-radius:3px;"></span></td>
+    </tr>`).join('');
+    const bodyHtml = `
+        <table class="tbl" style="width:100%;border-collapse:collapse;margin-top:10px;font-size:13.5px;">
+            <thead><tr style="text-align:left;color:#55636d;font-size:12.5px;text-transform:uppercase;letter-spacing:.06em;">
+                <th style="padding:6px 8px;">№</th><th style="padding:6px 8px;">${esc(tr('Услуга'))}</th><th style="padding:6px 8px;">${esc(tr('Кабинет'))}</th><th style="padding:6px 8px;text-align:center;">${esc(tr('Выполнено'))}</th>
+            </tr></thead>
+            <tbody>${items}</tbody>
+        </table>
+        <div style="margin-top:14px;padding:10px 12px;border:1px solid #d3d9de;border-radius:8px;font-size:12.5px;color:#1f2d34;">
+            ${esc(tr('Оплатите в кассе, затем пройдите кабинеты по порядку. Отметьте выполненное — лист вернуть врачу.'))}
+        </div>`;
+    printableSheet({
+        type: 'lab', title: tr('Маршрутный лист'), idLine: p.mrn || '',
+        head: {
+            title: tr('Маршрутный лист'), uz: 'Yo‘nalish varaqasi',
+            ids: [{ label: 'ID', value: p.mrn || '—' }, { label: tr('Визит'), value: res.visit && res.visit.id ? '№ ' + res.visit.id : '—' }],
+            fields: [[tr('Пациент'), p.full_name || '—'], [tr('Дата рождения'), dob], [tr('Направил'), doctorName || '—']],
+            sign: { signerName: doctorName || '', signerSpec: (ctx.patient && ctx.patient.__service && ctx.patient.__service.doctorSpec) || '', signerLicense: '' },
+        },
+        bodyHtml, settings: loadDocSettings(),
+    });
+    try {
+        const names = rows.map(r => r.service && r.service.name).filter(Boolean).map(esc).join(', ');
+        noteInRecommendations(ctx, `<div><b>${esc(tr('Направления'))}:</b> ${names}. ${esc(tr('Маршрутный лист выдан, счёт — в кассе.'))}</div>`);
+    } catch (e) { /* the sheet is printed; the note is a courtesy */ }
+}
+
 async function sendReferral(ctx, target, service, doctor) {
     // Referrals live in `recommended_services` only — they do NOT get pushed
     // into the visit's notes-history payload. The patient card's Recommended
@@ -4735,11 +4792,19 @@ function _wireBlankEditing(ctx, frame) {
         '.bk-up:hover,.bk-dn:hover{color:var(--accent,#1a7f77);background:#eef2f7;}' +
         'body{padding-top:8px !important;}' +
         // PAPER_A4_KEEP_V1 — keep the full A4 page (no min-height override); buttons stack vertically.
-        '[data-ws-actions]{display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;gap:8px;margin:16px 0 4px;}' +
-        '[data-ws-actions] .ws-actbreak{flex-basis:100%;height:0;margin:0;}' +   // forces «Тел. врача» onto its own line
-        '[data-ws-actions] button{display:inline-flex;align-items:center;gap:6px;padding:8px 13px;border:1px solid #a7f3d0;border-radius:8px;background:#ecfdf5;color:#065f46;font:600 12.5px/1 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;}' +
-        '[data-ws-actions] button svg{width:15px;height:15px;flex:0 0 auto;}' +
-        '[data-ws-actions] button:hover{border-color:#34d399;background:#d1fae5;}' +
+        // DOCTOR_ACTIONS_V2 — three labelled groups; one filled button; switches look like switches.
+        '[data-ws-actions]{display:flex;flex-direction:column;gap:6px;margin:16px 0 4px;padding:10px 12px;border:1px dashed #cbd5e1;border-radius:10px;background:#f8fafc;}' +
+        '[data-ws-actions] .ws-grp{display:flex;flex-wrap:wrap;align-items:center;gap:6px;}' +
+        '[data-ws-actions] .ws-grp-l{flex:0 0 104px;font:700 12.5px/1 "Onest","Helvetica Neue",Arial,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:#7a8892;}' +
+        '[data-ws-actions] button{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid #d3d9de;border-radius:8px;background:#fff;color:#1f2d34;font:600 12.5px/1 "Onest","Helvetica Neue",Arial,sans-serif;cursor:pointer;}' +
+        '[data-ws-actions] button svg{width:15px;height:15px;flex:0 0 auto;color:#55636d;}' +
+        '[data-ws-actions] button:hover{border-color:#4eb0aa;background:#effaf8;}' +
+        '[data-ws-actions] button.ws-primary{background:#167873;border-color:#167873;color:#fff;}' +
+        '[data-ws-actions] button.ws-primary svg{color:#fff;}' +
+        '[data-ws-actions] button.ws-primary:hover{background:#115d5a;border-color:#115d5a;}' +
+        '[data-ws-actions] button.ws-toggle::before{content:"";width:12px;height:12px;border-radius:4px;border:1.5px solid #aab4bc;background:#fff;flex:0 0 auto;}' +
+        '[data-ws-actions] button.ws-toggle[aria-pressed="true"]{background:#effaf8;border-color:#4eb0aa;color:#115d5a;}' +
+        '[data-ws-actions] button.ws-toggle[aria-pressed="true"]::before{background:#167873;border-color:#167873;box-shadow:inset 0 0 0 2px #fff;}' +
         // DX_PLAIN_SECTION_V1 — in the editor the Диагноз block looks like every
         // other section: same white box, neutral header (no red), same focus ring.
         '.dx{background:#fff !important;border:1px solid #e2e8f0 !important;border-left:1px solid #e2e8f0 !important;border-radius:8px !important;padding:9px 12px 10px !important;margin:8px 0 !important;}' +
@@ -4877,39 +4942,56 @@ function _wireBlankEditing(ctx, frame) {
                 b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); onClick(); });
                 return b;
             };
-            // PAPER_ACTIONS_ROW_V1 — one wrapping row, ordered per request; «Тел. врача» on its own line.
-            if (patientTabCanEdit('recommended')) bar.appendChild(mk(_ic.recommend, 'Рекомендовать услугу', () => openServicePickerModal({
-                title: 'Рекомендовать услугу', titleIcon: 'Flag',
-                confirmLabel: 'Добавить в рекомендации', confirmIcon: 'Plus',
-                onPick: ({ service, doctor }) => sendReferral(ctx, REFERRAL_TARGETS[0], service, doctor),
-            })));
-            bar.appendChild(mk(_ic.revisit, 'Повторный визит', () => openRevisitModal(ctx)));
-            bar.appendChild(mk(_ic.recipe, 'Рецепт', () => openPrescriptionDialog(ctx, null)));
-            bar.appendChild(mk(_ic.results, 'Вставить результаты', () => openEmrModal(ctx)));
-            if (patientTabCanEdit('services')) bar.appendChild(mk(_ic.service, 'Услуги приёма', async () => {
-                const svc = ctx.patient?.__service || {};
-                const did = await resolveWsDoctorId(ctx);
-                openServicePickerModal({
-                    patient: ctx.patient,
-                    lockedDoctor: did ? { id: did, name: svc.doctorName || '', spec: svc.doctorSpec || '' } : null,
-                    onBooked: () => { try { loadPatientEmr(ctx.patient).then(() => paintEmr()); } catch (e) {} },
-                });
-            }));
-            bar.appendChild(mk(_ic.dispense, 'Выдать препарат', () => openDispenseConsultItem(ctx)));
-            bar.appendChild(mk(_ic.hospital, 'Заявка на госпитализацию', () => openHospitalizationRequestModal(ctx)));
-            const _brk = doc.createElement('div'); _brk.className = 'ws-actbreak'; bar.appendChild(_brk);   // «Тел. врача» wraps to its own line
-            bar.appendChild(mk(_ic.phone, 'Тел. врача', () => {
+            // DOCTOR_ACTIONS_V2 (2026-09-15) — owner: «remove recommend service,
+            // remove the services of the visit… we need to just create a refer
+            // to a service… create a route with the selected services in order
+            // and cabinet, an A4 checklist, and an invoice for the cashier. make
+            // it most useful for the doctors». Nine equal chips became three
+            // small groups in the order a consultation ends: what the doctor
+            // PRESCRIBES (one filled button — the referral that books the
+            // services, prints the route sheet and raises the cashier's invoice;
+            // prescription; a drug from the cabinet), what comes NEXT (revisit,
+            // hospitalisation), and what goes INTO the document (previous
+            // results, and two on/off switches that look like switches).
+            const grp = (label) => { const g = doc.createElement('div'); g.className = 'ws-grp'; const l = doc.createElement('span'); l.className = 'ws-grp-l'; l.textContent = label; g.appendChild(l); bar.appendChild(g); return g; };
+            const primary = (b) => { b.classList.add('ws-primary'); return b; };
+            const toggle = (b, isOn) => { b.classList.add('ws-toggle'); b.setAttribute('aria-pressed', isOn() ? 'true' : 'false'); return b; };
+            _ic.route = _svg('<path d="M3 17h4l3-7 4 10 3-7h4"/><circle cx="19" cy="6" r="2"/>');
+            _ic.check = _svg('<path d="M20 6 9 17l-5-5"/>');
+
+            const g1 = grp(tr('Назначить'));
+            if (patientTabCanEdit('services')) g1.appendChild(primary(mk(_ic.route, tr('Направить на услуги'), () => openServicePickerModal({
+                patient: ctx.patient,
+                onBooked: (res) => {
+                    try { loadPatientEmr(ctx.patient).then(() => paintEmr()); } catch (e) {}
+                    if (res && res.rows && res.rows.length) printRouteSheet(ctx, res);
+                },
+            }))));
+            g1.appendChild(mk(_ic.recipe, tr('Рецепт'), () => openPrescriptionDialog(ctx, null)));
+            g1.appendChild(mk(_ic.dispense, tr('Выдать препарат'), () => openDispenseConsultItem(ctx)));
+
+            const g2 = grp(tr('Дальше'));
+            g2.appendChild(mk(_ic.revisit, tr('Повторный визит'), () => openRevisitModal(ctx)));
+            g2.appendChild(mk(_ic.hospital, tr('Заявка на госпитализацию'), () => openHospitalizationRequestModal(ctx)));
+
+            const g3 = grp(tr('В документ'));
+            g3.appendChild(mk(_ic.results, tr('Вставить результаты'), () => openEmrModal(ctx)));
+            const phoneBtn = toggle(mk(_ic.phone, tr('Тел. врача'), () => {
                 wsState.docPhone = !wsState.docPhone;
+                phoneBtn.setAttribute('aria-pressed', wsState.docPhone ? 'true' : 'false');
                 const el = ctx.container.querySelector('[data-docphone]');
                 if (el) el.classList.toggle('a4-sec-off', !wsState.docPhone);
                 const inp = el && el.querySelector('[data-field="doctor_phone"]');
                 if (wsState.docPhone && inp) { if (!(inp.innerText || '').trim()) inp.textContent = (wsState.wsDoctorKnown ? (wsState.wsDoctorPhone || '') : (me().phone || '')); inp.focus(); }
                 try { setTimeout(() => renderBlank(ctx), 0); } catch (e) {}
-            }));
-            bar.appendChild(mk(_ic.docinfo, 'Инфо о враче', () => {
+            }), () => !!wsState.docPhone);
+            g3.appendChild(phoneBtn);
+            const infoBtn = toggle(mk(_ic.docinfo, tr('Инфо о враче'), () => {
                 wsState.docDoctorInfo = !wsState.docDoctorInfo;
+                infoBtn.setAttribute('aria-pressed', wsState.docDoctorInfo ? 'true' : 'false');
                 try { setTimeout(() => renderBlank(ctx), 0); } catch (e) {}
-            }));
+            }), () => !!wsState.docDoctorInfo);
+            g3.appendChild(infoBtn);
             const signoff = doc.querySelector('.signoff');
             if (signoff && signoff.parentNode) signoff.parentNode.insertBefore(bar, signoff);
             else doc.body.appendChild(bar);
