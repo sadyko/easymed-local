@@ -17,7 +17,7 @@
 // подсказки — вежливость, а не защита.
 import { supabase } from '../../supabase.js';
 import { h, Icon, toast, field, checkField } from '../ui.js';
-import { trf } from '../i18n.js';
+import { tr, trf } from '../i18n.js';
 import {
     SERVICE_SECTIONS, labBlockVisible, resolveCombobox, splitPerformers,
     currentPerformerIds, performerGate, rpcErrorTemplate,
@@ -60,7 +60,7 @@ function combo(labelText, rows, initialId) {
         placeholder: 'Выберите или впишите новую…',
         value: initial ? initial.name : '',
     });
-    const wrap = field(labelText, h('div', null, inp, dl));
+    const wrap = field(labelText, h('div', { class: 'svc-ed-combo' }, inp, dl));   // SERVICE_EDITOR_V2 — fills its column
     return { el: wrap, input: inp, resolve: () => resolveCombobox(inp.value, rows) };
 }
 
@@ -100,8 +100,17 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
     const picked = new Set(row && row.id ? currentPerformerIds(users, row.id) : []);
     const { doctors, others } = splitPerformers(users);
 
-    // ---- левая колонка: что это -------------------------------------------
-    const nameInp = h('input', { type: 'text', value: (row && row.name) || '' });
+    // SERVICE_EDITOR_V2 (2026-09-15) — the dialog rebuilt to the owner's
+    // reference after the list («i guess its a little bit messy. please make
+    // something like in the services list»): a header with the service's name
+    // and its section, a rail of tabs on the left (Основное · Цены ·
+    // Исполнители · Лаборатория), short labels with units in the label,
+    // fields that share the width, and the visit-tier prices as two small
+    // cards (second visit / repeat visit) instead of six long-named fields.
+    // Same controls, same save — only the arrangement changed.
+
+    // ---- основное ----------------------------------------------------------
+    const nameInp = h('input', { type: 'text', value: (row && row.name) || '', placeholder: 'напр. Приём кардиолога' });
     const typeSel = h('select', null,
         ...SERVICE_SECTIONS.map((s) => h('option', {
             value: s.type, selected: (row ? row.type === s.type : s.type === 'consultation'),
@@ -112,6 +121,9 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
     const roomSel = h('select', null,
         h('option', { value: '' }, '—'),
         ...rooms.map((r) => h('option', { value: String(r.id), selected: !!(row && row.room_id === r.id) }, r.name)));
+    const codeInp = h('input', { type: 'text', value: (row && row.code) || '', placeholder: 'необязательно' });
+    const activeChk = h('input', { type: 'checkbox' });
+    activeChk.checked = row ? !!row.active : true;
 
     // Лабораторный блок — существующие колонки services, видим ТОЛЬКО при
     // разделе «лаборатория» (labBlockVisible). Скрытый блок сервер не пишет,
@@ -132,17 +144,8 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
     const specimenInp = h('input', { type: 'text', value: (row && row.specimen) || '' });
     const tubeSel = h('select', null,
         ...TUBE_OPTIONS.map(([v, l]) => h('option', { value: v, selected: !!(row && (row.tube_color || '') === v) }, l)));
-    const labBlock = h('div', null,
-        field('Материал (кровь, моча…)', specimenInp),
-        field('Цвет пробирки', tubeSel),
-        h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px', lineHeight: 1.5 } },
-            'Показатели, единицы и нормы задаются в панели анализа: Лаборатория → Панели.'));
 
-    const syncLab = () => { labBlock.style.display = labBlockVisible(typeSel.value) ? '' : 'none'; };
-    typeSel.addEventListener('change', syncLab);
-    syncLab();
-
-    // ---- правая колонка: деньги и время -----------------------------------
+    // ---- цены и время ------------------------------------------------------
     const priceInp = h('input', { type: 'number', step: '0.01', min: '0', value: row && row.price != null ? row.price : '' });
     const vatInp   = h('input', { type: 'number', step: '0.01', value: row && row.tax_rate != null ? row.tax_rate : 12 });
     const durInp   = h('input', { type: 'number', min: '1', value: row && row.duration_minutes != null ? row.duration_minutes : 30 });
@@ -152,76 +155,66 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
 
     // VISIT_TIER_PRICING_V1 — цена по счёту визита (владелец: «for the primary
     // visit, secondary, repeat visit and set dates between the first and
-    // second»). Все четыре поля необязательны: пустые — услуга с одной ценой.
+    // second»). Все поля необязательны: пустые — услуга с одной ценой.
     // Правило считает сервер (domain/visit-tier.js); здесь только ввод.
-    const secPriceInp = h('input', { type: 'number', step: '0.01', min: '0', value: row && row.price_secondary != null ? row.price_secondary : '', placeholder: 'пусто — как первый' });
-    const daysFromInp = h('input', { type: 'number', step: '1', min: '0', value: row && row.secondary_days_from != null ? row.secondary_days_from : '', placeholder: '1', style: { width: '90px' } });
-    const daysToInp   = h('input', { type: 'number', step: '1', min: '0', value: row && row.secondary_days_to != null ? row.secondary_days_to : '', placeholder: 'без предела', style: { width: '110px' } });
-    const repPriceInp = h('input', { type: 'number', step: '0.01', min: '0', value: row && row.price_repeat != null ? row.price_repeat : '', placeholder: 'пусто — как второй' });
+    const secPriceInp = h('input', { type: 'number', step: '0.01', min: '0', value: row && row.price_secondary != null ? row.price_secondary : '', placeholder: 'как первый' });
+    const daysFromInp = h('input', { type: 'number', step: '1', min: '0', value: row && row.secondary_days_from != null ? row.secondary_days_from : '', placeholder: '1' });
+    const daysToInp   = h('input', { type: 'number', step: '1', min: '0', value: row && row.secondary_days_to != null ? row.secondary_days_to : '', placeholder: 'без предела' });
+    const repPriceInp = h('input', { type: 'number', step: '0.01', min: '0', value: row && row.price_repeat != null ? row.price_repeat : '', placeholder: 'как второй' });
     // REPEAT_WINDOW_V1 — своё окно дней у повторного визита (владелец: «repeat
     // days, it should have the range too»); оба пустые — как у второго.
-    const repFromInp = h('input', { type: 'number', step: '1', min: '0', value: row && row.repeat_days_from != null ? row.repeat_days_from : '', placeholder: 'как у второго', style: { width: '110px' } });
-    const repToInp   = h('input', { type: 'number', step: '1', min: '0', value: row && row.repeat_days_to != null ? row.repeat_days_to : '', placeholder: 'как у второго', style: { width: '110px' } });
+    const repFromInp = h('input', { type: 'number', step: '1', min: '0', value: row && row.repeat_days_from != null ? row.repeat_days_from : '', placeholder: 'как у 2-го' });
+    const repToInp   = h('input', { type: 'number', step: '1', min: '0', value: row && row.repeat_days_to != null ? row.repeat_days_to : '', placeholder: 'как у 2-го' });
 
     // ---- исполнители -------------------------------------------------------
-    // «Врач» переключает СПИСОК между врачами и остальными; галочки живут в
-    // общем наборе picked и переключение их НЕ сбрасывает — у услуги могут
-    // быть и врачи, и медсёстры разом (опубликованный диалог терял отметки
-    // при переключении; здесь это починено сознательно).
-    const docChk = h('input', { type: 'checkbox' });
-    docChk.checked = true;
-    const staffBox = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px', maxHeight: '180px', overflowY: 'auto' } });
+    // Переключатель «Врачи | Другие сотрудники» меняет СПИСОК; галочки живут
+    // в общем наборе picked и переключение их НЕ сбрасывает — у услуги могут
+    // быть и врачи, и медсёстры разом. Поиск по имени — список на тридцать
+    // врачей иначе листается.
+    let staffMode = 'doctors';
+    const staffSearch = h('input', { type: 'search', placeholder: 'Найти по имени…', class: 'svc-ed-staff-search',
+        oninput: () => renderStaff() });
+    const staffCount = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
+    const staffBox = h('div', { class: 'svc-ed-staff' });
+    const staffSeg = {};
+    const staffSegment = h('div', { class: 'segmented' },
+        ...[['doctors', 'Врачи'], ['others', 'Другие сотрудники']].map(([k, label]) => (staffSeg[k] = h('button', {
+            type: 'button', class: k === staffMode ? 'on' : '',
+            onclick: () => { staffMode = k; for (const [kk, b] of Object.entries(staffSeg)) b.className = kk === k ? 'on' : ''; renderStaff(); },
+        }, label))));
     function renderStaff() {
         staffBox.replaceChildren();
+        const q = staffSearch.value.trim().toLowerCase();
         // Неактивный сотрудник показывается только если уже отмечен: снять
         // его можно, наставить новых неактивных — незачем.
-        const src = (docChk.checked ? doctors : others)
-            .filter((u) => (u.is_active !== 0 && u.is_active !== false) || picked.has(u.id));
+        const src = (staffMode === 'doctors' ? doctors : others)
+            .filter((u) => (u.is_active !== 0 && u.is_active !== false) || picked.has(u.id))
+            .filter((u) => !q || String(u.full_name || '').toLowerCase().includes(q));
+        staffCount.textContent = trf('Отмечено: {n}', { n: picked.size });
         if (!src.length) {
             staffBox.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } },
-                docChk.checked ? 'Нет врачей.' : 'Нет других сотрудников.'));
+                q ? 'Никого с таким именем.' : (staffMode === 'doctors' ? 'Нет врачей.' : 'Нет других сотрудников.')));
             return;
         }
         for (const u of src) {
             const cb = h('input', { type: 'checkbox', disabled: readOnly, onchange: (e) => {
                 if (e.target.checked) picked.add(u.id); else picked.delete(u.id);
+                staffCount.textContent = trf('Отмечено: {n}', { n: picked.size });
+                e.target.closest('label').className = 'svc-ed-chip' + (e.target.checked ? ' on' : '');
             } });
             cb.checked = picked.has(u.id);
-            const sub = docChk.checked ? (u.specialty || '') : (u.role || '');
-            staffBox.appendChild(h('label', { style: {
-                display: 'inline-flex', alignItems: 'center', gap: '6px',
-                border: '1px solid var(--ink-200)', borderRadius: '8px',
-                padding: '5px 9px', fontSize: '12.5px', cursor: 'pointer',
-            } }, cb, u.full_name + (sub ? ' · ' + sub : '')));
+            const sub = staffMode === 'doctors' ? (u.specialty || '') : (u.role || '');
+            staffBox.appendChild(h('label', { class: 'svc-ed-chip' + (cb.checked ? ' on' : '') },
+                cb, h('span', null, u.full_name), sub ? h('span', { class: 'muted' }, ' · ' + sub) : null));
         }
     }
-    docChk.addEventListener('change', renderStaff);
     renderStaff();
 
-    const performersSection = h('section', { class: 'mg-section span-full' },
-        h('h3', null, 'Исполнители'),
-        h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13.5px', padding: '0 0 10px', cursor: 'pointer' } },
-            docChk, h('span', null, 'Врач'),
-            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '(снимите — другие сотрудники)')),
-        staffBox);
-    // Блок виден только при «оказывает специалист» — как в опубликованном
-    // диалоге. Скрытие НЕ очищает picked: члены остаются членами, пока их
-    // не сняли явно (см. сборку performers при сохранении).
-    const syncPerformers = () => { performersSection.style.display = reqDoc.checked ? '' : 'none'; };
-    reqDoc.addEventListener('change', syncPerformers);
-    syncPerformers();
-
-    // ---- низ: код и статус -------------------------------------------------
-    const codeInp = h('input', { type: 'text', value: (row && row.code) || '', style: { maxWidth: '220px' } });
-    const activeChk = h('input', { type: 'checkbox' });
-    activeChk.checked = row ? !!row.active : true;
-
-    // ---- сборка ------------------------------------------------------------
     if (readOnly) {
         for (const el of [nameInp, typeSel, typeCombo.input, catCombo.input, depCombo.input, roomSel,
             specimenInp, tubeSel,   // LAB_REFS_IN_PANELS_V1 — единицы и нормы живут в панели
-            priceInp, vatInp, durInp, reqDoc, pctInp, docChk, codeInp, activeChk,
-            secPriceInp, daysFromInp, daysToInp, repPriceInp]) el.disabled = true;
+            priceInp, vatInp, durInp, reqDoc, pctInp, codeInp, activeChk,
+            secPriceInp, daysFromInp, daysToInp, repPriceInp, repFromInp, repToInp]) el.disabled = true;
     }
 
     const overlay = h('div', { class: 'modal' });
@@ -229,10 +222,10 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
 
     async function save(e) {
         const name = nameInp.value.trim();
-        if (!name) { toast('Укажите название услуги.', 'warn'); nameInp.focus(); return; }
+        if (!name) { toast('Укажите название услуги.', 'warn'); goTo('main', nameInp); return; }
         const price = Number(priceInp.value);
         if (priceInp.value === '' || !Number.isFinite(price) || price < 0) {
-            toast('Укажите цену услуги.', 'warn'); priceInp.focus(); return;
+            toast('Укажите цену услуги.', 'warn'); goTo('price', priceInp); return;
         }
         // performers — авторитетный СПИСОК ЧЛЕНСТВА: сервер добавит недостающих
         // и снимет неотмеченных. Отправляется и при выключенном «оказывает
@@ -296,43 +289,113 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
         } finally { e.target.disabled = false; }
     }
 
-    const card = h('div', { class: 'modal-card modal-grouped has-groups' },
-        h('header', { class: 'modal-head' },
-            h('h2', null, readOnly ? 'Просмотр услуги' : (row ? 'Изменить услугу' : 'Новая услуга')),
-            h('button', { class: 'modal-close', onclick: close }, '×')),
-        h('div', { class: 'modal-body' },
-            h('section', { class: 'mg-section' },
-                h('h3', null, 'Основное'),
+    // ---- сборка: шапка · рельс вкладок · содержимое · подвал --------------
+    const sectionLabel = () => (SERVICE_SECTIONS.find((x) => x.type === typeSel.value) || {}).label || '';
+    const headName = h('div', { class: 'svc-ed-name' }, '');
+    const headSub  = h('div', { class: 'svc-ed-sub' }, '');
+    const paintHead = () => {
+        headName.textContent = nameInp.value.trim() || tr(row ? 'Без названия' : 'Новая услуга');
+        headSub.textContent = [tr(sectionLabel()), codeInp.value.trim()].filter(Boolean).join(' · ');
+    };
+    nameInp.addEventListener('input', paintHead);
+    codeInp.addEventListener('input', paintHead);
+
+    const grp = (title, ...kids) => h('section', { class: 'svc-ed-grp' }, h('h3', null, title), ...kids);
+    const grid = (cols, ...kids) => h('div', { class: 'svc-ed-grid cols-' + cols }, ...kids);
+    const unitField = (label, inp, unit) => field(label, h('div', { class: 'svc-ed-unit' }, inp, h('span', null, unit)));
+
+    const labGroup = grp('Забор материала',
+        grid(2,
+            field('Материал (кровь, моча…)', specimenInp),
+            field('Цвет пробирки', tubeSel)),
+        h('div', { class: 'svc-ed-note' }, 'Показатели, единицы и нормы задаются в панели анализа: Лаборатория → Панели.'));
+
+    const panels = {
+        main: h('div', { class: 'svc-ed-panel' },
+            grp('Наименование и классификация',
                 field('Название', nameInp, { required: true }),
-                field('Раздел — куда попадает услуга (маршрутизация)', typeSel),
-                typeCombo.el,
-                catCombo.el,
-                depCombo.el,
-                field('Кабинет (очередь диагностики)', roomSel),
-                labBlock),
-            h('section', { class: 'mg-section' },
-                h('h3', null, 'Цена, налог и длительность'),
-                field('Цена', priceInp, { required: true }),
-                field('НДС (%)', vatInp),
-                field('Длительность (мин)', durInp),
-                checkField('Услугу оказывает специалист (врач / медсестра)', reqDoc),
-                field('Доля исполнителя по умолчанию, %', pctInp)),
-            h('section', { class: 'mg-section span-full' },
-                h('h3', null, 'Цена по счёту визита'),
-                h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px', lineHeight: 1.5 } },
-                    'Необязательно. Первый визит — по цене выше. Второй визит по этой же услуге считается по своей цене, если пациент пришёл через указанное число дней после предыдущего визита: «не раньше чем через 1» и «не позже чем через 6» — это пример «между 1 и 6 днями». Третий и дальше — по цене повторного, в своём окне дней от предыдущего визита (пусто — то же окно, что у второго). Пришёл позже окна — снова первый. Чтобы визит в тот же день тоже считался, поставьте «не раньше чем через 0».'),
-                h('div', { class: 'mg-grid' },
-                    field('Цена второго визита', secPriceInp),
-                    field('Второй визит — не раньше чем через (дней после предыдущего)', daysFromInp),
-                    field('и не позже чем через (дней; пусто — без предела)', daysToInp),
-                    field('Цена повторного визита (третий и далее, 0 — бесплатно)', repPriceInp),
-                    field('Повторный визит — не раньше чем через (дней; пусто — как у второго)', repFromInp),
-                    field('и не позже чем через (дней; пусто — как у второго)', repToInp))),
-            performersSection,
-            h('section', { class: 'mg-section span-full' },
-                h('div', { class: 'mg-grid' },
-                    field('Внутренний код (необязательно)', codeInp),
-                    checkField('Активна', activeChk)))),
+                grid(2,
+                    field('Раздел — куда попадает услуга (маршрутизация)', typeSel),
+                    typeCombo.el,
+                    catCombo.el,
+                    depCombo.el,
+                    field('Кабинет (очередь диагностики)', roomSel),
+                    field('Внутренний код', codeInp)),
+                checkField('Активна — видна в списках выбора', activeChk))),
+        price: h('div', { class: 'svc-ed-panel' },
+            grp('Цена и время',
+                grid(3,
+                    field('Цена', priceInp, { required: true }),
+                    unitField('НДС', vatInp, '%'),
+                    unitField('Длительность', durInp, 'мин')),
+                grid(2,
+                    checkField('Услугу оказывает специалист (врач / медсестра)', reqDoc),
+                    unitField('Доля исполнителя по умолчанию', pctInp, '%'))),
+            grp('Цена по счёту визита',
+                h('div', { class: 'svc-ed-note' }, 'Необязательно. Окно дней считается от предыдущего визита по этой же услуге; пришёл позже окна — снова первый визит. «Не раньше чем через 0» — второй визит в тот же день тоже считается.'),
+                grid(2,
+                    h('div', { class: 'svc-ed-tier' },
+                        h('h4', null, 'Второй визит'),
+                        field('Цена', secPriceInp),
+                        grid(2,
+                            unitField('Не раньше чем через', daysFromInp, 'дн.'),
+                            unitField('Не позже чем через', daysToInp, 'дн.'))),
+                    h('div', { class: 'svc-ed-tier' },
+                        h('h4', null, 'Повторный визит — третий и далее'),
+                        field('Цена (0 — бесплатно)', repPriceInp),
+                        grid(2,
+                            unitField('Не раньше чем через', repFromInp, 'дн.'),
+                            unitField('Не позже чем через', repToInp, 'дн.')))))),
+        staff: h('div', { class: 'svc-ed-panel' },
+            grp('Кто выполняет услугу',
+                h('div', { class: 'svc-ed-staff-bar' }, staffSegment, staffSearch, staffCount),
+                staffBox)),
+        lab: h('div', { class: 'svc-ed-panel' }, labGroup),
+    };
+
+    // Рельс. «Исполнители» — только когда услугу оказывает специалист (как и
+    // раньше: блок был скрыт), «Лаборатория» — только у раздела лаборатории.
+    // Скрытие НЕ очищает отмеченных: члены остаются членами, пока их не сняли.
+    const TABS = [
+        ['main',  'Основное',     'Doc'],
+        ['price', 'Цены',         'Coins'],
+        ['staff', 'Исполнители',  'User'],
+        ['lab',   'Лаборатория',  'Flask'],
+    ];
+    let tab = 'main';
+    const railBtns = {};
+    const tabVisible = (k) => (k === 'staff' ? reqDoc.checked : k === 'lab' ? labBlockVisible(typeSel.value) : true);
+    const showTab = (k) => {
+        tab = k;
+        for (const [kk, b] of Object.entries(railBtns)) b.className = 'svc-ed-tab' + (kk === k ? ' on' : '');
+        for (const [kk, p] of Object.entries(panels)) p.style.display = kk === k ? '' : 'none';
+    };
+    const rail = h('aside', { class: 'svc-ed-rail' },
+        ...TABS.map(([k, label, ic]) => (railBtns[k] = h('button', { type: 'button', class: 'svc-ed-tab', onclick: () => showTab(k) },
+            Icon(ic, { size: 15 }), h('span', null, label)))));
+    const syncRail = () => {
+        for (const [k] of TABS) railBtns[k].style.display = tabVisible(k) ? '' : 'none';
+        if (!tabVisible(tab)) showTab('main');
+    };
+    typeSel.addEventListener('change', () => { syncRail(); paintHead(); });
+    reqDoc.addEventListener('change', syncRail);
+    syncRail();
+    showTab('main');
+    paintHead();
+
+    // Проверка перед сохранением ведёт на вкладку с пустым обязательным полем.
+    const goTo = (k, inp) => { showTab(k); setTimeout(() => inp.focus(), 0); };
+
+    const card = h('div', { class: 'modal-card svc-ed' },
+        h('header', { class: 'modal-head svc-ed-head' },
+            h('span', { class: 'svc-ed-ic' }, Icon('Receipt', { size: 20 })),
+            h('div', { class: 'svc-ed-title' },
+                h('h2', null, readOnly ? 'Просмотр услуги' : (row ? 'Изменить услугу' : 'Новая услуга')),
+                headName, headSub),
+            h('button', { class: 'modal-close', onclick: close }, '×')),
+        h('div', { class: 'modal-body svc-ed-body' },
+            rail,
+            h('div', { class: 'svc-ed-cont' }, ...Object.values(panels))),
         h('footer', { class: 'modal-foot' },
             h('button', { class: 'btn', onclick: close }, readOnly ? 'Закрыть' : 'Отмена'),
             !readOnly && h('button', { class: 'btn btn-primary', onclick: save },
