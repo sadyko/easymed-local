@@ -77,12 +77,18 @@ const ST = {
     completed:   { label: 'Выдан',              kind: 'ok' },
 };
 
+// LAB_UNPAID_TAB_V1 (2026-09-15) — «Открытые» is the lab's WORK: paid and
+// waiting for collection, in work, or resulted. Unpaid lines ('added') are
+// nothing the lab can act on, and on the owner's data 23 of them — a month
+// old, their invoices re-issued or voided — sat in «Открытые · 41» forever.
+// They have their own tab now, still visible, still counted, out of the way.
 const FILTERS = [
-    { key: 'open',      label: 'Открытые',   match: (s) => s !== 'completed' },
-    { key: 'collect',   label: 'Забор',      match: (s) => s === 'queued' },
-    { key: 'work',      label: 'В работе',   match: (s) => s === 'collected' || s === 'in_progress' },
-    { key: 'resulted',  label: 'Результаты', match: (s) => s === 'resulted' },
-    { key: 'all',       label: 'Все',        match: () => true },
+    { key: 'open',      label: 'Открытые',    match: (s) => s !== 'completed' && s !== 'added' },
+    { key: 'collect',   label: 'Забор',       match: (s) => s === 'queued' },
+    { key: 'work',      label: 'В работе',    match: (s) => s === 'collected' || s === 'in_progress' },
+    { key: 'resulted',  label: 'Результаты',  match: (s) => s === 'resulted' },
+    { key: 'unpaid',    label: 'Не оплачено', match: (s) => s === 'added' },
+    { key: 'all',       label: 'Все',         match: () => true },
 ];
 
 // Tube-colour pill (services.tube_color). Names follow common vacutainer caps.
@@ -125,6 +131,7 @@ const state = {
     typeNameById: {},  // service_type_id -> name (LAB_SERVICE_ROUTING_V1)
     filter: 'open',
     search: '',
+    open: new Set(),   // LAB_QUEUE_ROWS_V1 — visit keys whose analyses are unfolded
     mode: 'queue',     // LAB_PANELS_MODE_V1 / LAB_STATS_V1 — 'queue' | 'panels' | 'stats'
     statsPeriod: '30d',
     statsData: null,   // LAB_STATS_XLSX_V1 — last painted stats, for the Excel export// LAB_STATS_V1 — the period chip in force ('today'|'7d'|'30d'|'all')
@@ -1010,9 +1017,19 @@ function labGroupCard(g) {
     const actions = defs.filter(d => d[0] === primary).concat(defs.filter(d => d[0] !== primary))
         .map(d => act(d[0], d[1], d[2], d[3], d[4]));
 
-    return h('div', { class: 'lq-card', 'data-state': cardState },
+    // LAB_QUEUE_ROWS_V1 (2026-09-15) — owner: «make list like this, and show
+    // as accordion the list of the services when pressed. small lists». One
+    // patient = one line (who · state · next step); the analyses unfold under
+    // it on click. The three blocks and their order are unchanged (head →
+    // status → list); collapsing is CSS on .open, so every action and test of
+    // LAB_CARD_V3 still holds.
+    const isOpen = state.open.has(g.key);
+    const toggle = () => { if (state.open.has(g.key)) state.open.delete(g.key); else state.open.add(g.key); paintRows(); };
+    const onHeadClick = (e) => { if (e.target && e.target.closest && e.target.closest('button, a, input, select')) return; toggle(); };
+
+    return h('div', { class: 'lq-card' + (isOpen ? ' open' : ''), 'data-state': cardState },
         // 1. ЧЬЯ ПРОБА.
-        h('div', { class: 'lq-head' },
+        h('div', { class: 'lq-head', onclick: onHeadClick },
             // LAB_ONE_SCREEN_V1 — кружок в оттенке ЭТОГО пациента (pastel.js), как в
             // стационаре и в кабинете: один человек — один цвет во всей программе.
             h('span', { class: 'lq-av ' + pastelFor(g.patientId || g.patientMrn || g.patientName) }, initials(g.patientName)),
@@ -1024,8 +1041,10 @@ function labGroupCard(g) {
                     // узел, а склеенная строка «31 год» словарю неизвестна и
                     // осталась бы русской в узбекском интерфейсе.
                     age != null ? h('span', { class: 'lq-fact' }, String(age), ' ', pluralRu(age, 'год', 'года', 'лет')) : null,
-                    g.patientDob ? h('span', { class: 'lq-fact lq-fact-soft' }, fmtBirth(g.patientDob)) : null,
+                    g.patientDob ? h('span', { class: 'lq-fact lq-fact-soft lq-dob' }, fmtBirth(g.patientDob)) : null,
                     h('span', { class: 'lq-fact lq-fact-soft' }, trf('{n} анализ(ов)', { n: total })),
+                    // LAB_QUEUE_ROWS_V1 — when the visit was booked (the reference list's «Запись»)
+                    info.visit_date ? h('span', { class: 'lq-fact lq-fact-soft lq-when', title: tr('Запись') }, fmtDate(info.visit_date)) : null,
                 ),
                 h('div', { class: 'lq-marks' },
                     g.patientMrn ? h('span', { class: 'lq-mrn' }, 'ID ' + g.patientMrn) : null,
@@ -1061,6 +1080,10 @@ function labGroupCard(g) {
             ),
             h('span', { class: 'lq-gap' }),
             h('div', { class: 'lq-do' }, ...actions),
+            // LAB_QUEUE_ROWS_V1 — unfold / fold the analyses
+            h('button', { class: 'icon-btn sm lq-toggle', type: 'button', 'aria-expanded': isOpen ? 'true' : 'false',
+                title: isOpen ? tr('Скрыть анализы') : tr('Показать анализы'), 'aria-label': isOpen ? tr('Скрыть анализы') : tr('Показать анализы'),
+                onclick: toggle }, Icon('ChevronDown', { size: 14 })),
         ),
         // 2. ЧТО В ПРОБЕ.
         h('div', { class: 'lq-list' }, ...rows.map(r => lqItem(r, patient))),

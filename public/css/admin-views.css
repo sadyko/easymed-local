@@ -3758,6 +3758,49 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
   /* Поле строки ужимается, РАЗДЕЛИТЕЛЬ — нет: он и есть граница между людьми. */
   .lq-card{ padding:12px 14px 10px; }
 }
+/* ---- LAB_QUEUE_ROWS_V1 (2026-09-15) — the queue as a list of rows; the
+   analyses unfold under a row on click (accordion). Owner: «make list like
+   this, and show as accordion the list of the services when pressed. small
+   lists». Same three blocks as LAB_CARD_V3 (head → status → list); the list is
+   hidden until .open. Columns align across rows through a grid: avatar ·
+   name · facts · marks · sample №. On a wide monitor the state and the next
+   step sit on the same line; on a 1366 laptop they take a second, indented
+   line — the same for every row. The collapsed row is far shorter than the
+   LAB_CARD_V3 height model in lab-separation.test.mjs (an upper bound now). */
+.lq-card{ display:grid; grid-template-columns:minmax(0,1fr); gap:4px 12px; align-items:center; padding:6px 14px 6px; }
+.lq-card.open{ background:var(--primary-25, #f4fbfa); }
+.lq-card.open:hover{ background:var(--primary-25, #f4fbfa); }
+.lq-head{ display:grid; grid-template-columns:28px minmax(150px,1.4fr) minmax(120px,1fr) minmax(150px,1.1fr) auto;
+  gap:0 12px; align-items:center; flex-wrap:nowrap; cursor:pointer; min-width:0; }
+.lq-who{ display:contents; }
+.lq-title{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lq-facts{ margin-top:0; flex-wrap:nowrap; overflow:hidden; white-space:nowrap; }
+.lq-marks{ margin-top:0; flex-wrap:nowrap; overflow:hidden; }
+.lq-facts .lq-dob{ display:none; }                                   /* the age says it; the date is on the unfolded card */
+.lq-acc{ margin-left:0; white-space:nowrap; }
+.lq-acc .k{ display:none; }                                          /* the mono number is recognisable by itself */
+.lq-status{ margin-top:0; padding:0 0 0 40px; border-top:0; flex-wrap:nowrap; min-width:0; }
+.lq-state-card{ max-width:230px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lq-prog .lq-bar{ display:none; }                                    /* «1 / 3 готово» says it */
+.lq-card:not(.open) .lq-do .btn:not(.btn-primary){ display:none; }    /* folded: only the next step */
+.lq-toggle{ margin-left:auto; }
+.lq-toggle svg{ transition:transform var(--dur-2) var(--ease-out); }
+.lq-card.open .lq-toggle svg{ transform:rotate(180deg); }
+.lq-list{ display:none; margin:2px 0 2px 40px; padding-top:2px; border-top:1px dashed var(--ink-100); }
+.lq-card.open .lq-list{ display:block; }
+@media (min-width: 1500px){
+  .lq-card{ grid-template-columns:minmax(0,1fr) 620px; }   /* fixed: the identity columns then align across rows */
+  .lq-status{ padding-left:0; }
+  .lq-do, .lq-prog{ flex-wrap:nowrap; }
+  .lq-toggle{ margin-left:4px; }
+  .lq-list{ grid-column:1 / -1; }
+}
+@media (max-width: 960px){
+  .lq-head{ grid-template-columns:28px minmax(0,1fr) auto; }
+  .lq-facts, .lq-marks{ grid-column:2; }
+  .lq-facts{ margin-top:2px; }
+  .lq-status{ flex-wrap:wrap; }
+}
 /* ============================ end LAB_CARD_V3 ============================ */
 
 /* ============================ LAB_STATS_V1 — usage statistics mode ============================ */

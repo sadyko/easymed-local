@@ -198,7 +198,7 @@ async function card(rows, results = [], { filter = null, admissions = [] } = {})
 // ПЯТЬ СОСТОЯНИЙ, в которых лаборант реально застаёт пробу.
 const STATE_FIXTURES = {
   // счёт не оплачен — лаборатории делать нечего
-  unpaid:   () => card([vs(805, 'added')]),
+  unpaid:   () => card([vs(805, 'added')], [], { filter: 'Не оплачено' }),   // LAB_UNPAID_TAB_V1 — unpaid lines live on their own tab
   // оплачено, ни одного результата
   fresh:    () => card([vs(805, 'queued'), vs(806, 'collected')]),
   // часть внесена

@@ -443,7 +443,7 @@ test('чипы фильтра очереди переводятся: слово 
     // The fake db answers both the open and the completed query with the same
     // row, so every matching chip counts it twice.
     assert.deepStrictEqual(texts,
-      ['Ochiq · 2', 'Namuna olish · 2', 'Jarayonda · 0', 'Natijalar · 0', 'Hammasi · 2'],
+      ['Ochiq · 2', 'Namuna olish · 2', 'Jarayonda · 0', 'Natijalar · 0', "To'lanmagan · 0", 'Hammasi · 2'],
       'каждый чип — переведённое слово + счётчик');
     assert.ok(!/[Ѐ-ӿ]/.test(texts.join(' ')), 'на узбекском экране в чипах нет кириллицы');
   } finally {
@@ -455,7 +455,7 @@ test('чипы фильтра очереди переводятся: слово 
   await renderLaboratory(root2, {});
   await tick();
   assert.deepStrictEqual(chipTexts(root2),
-    ['Открытые · 2', 'Забор · 2', 'В работе · 0', 'Результаты · 0', 'Все · 2']);
+    ['Открытые · 2', 'Забор · 2', 'В работе · 0', 'Результаты · 0', 'Не оплачено · 0', 'Все · 2']);   // LAB_UNPAID_TAB_V1
 });
 
 test('переключение режима пишет адрес: #labs/panels и обратно #labs (replaceState, без новой записи истории)', async () => {
