@@ -31,7 +31,7 @@ import { BRANCH_BUCKET, signedUrl } from '../storage.js?v=aurora20b';   // SLICE
 import { printableSheet, loadDocSettings } from './doc-settings.js?v=noqr1';   // UNIFY_PRINT_V1 — ?v=db9 must match in EVERY importer
 import { renderDesignedVariant } from './doc-variants.js?v=noqr1';   // WYSIWYG_BLANK_V1 — stateless renderer, own ?v is safe (STAMP_ONLY_V1)
 import { openVitalsDialog } from './patient-card.js?v=labshared1';   // CARD_SPEC_V1 — same URL as admin.js (one instance)
-import { serviceGroupLabel } from './service-group.js?v=aug17e';   // SERVICE_GROUPS_V1 — chips must survive a NULL type_id
+import { serviceGroupLabel, TYPE_TO_GROUP_NAME } from './service-group.js?v=aug17e';   // SERVICE_GROUPS_V1 — chips must survive a NULL type_id
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
 
 // AURORA_REAL_VITALS_V1 — the vitals strip is filled async from patient_vitals (see vitalsStrip / loadVitals).
@@ -4110,28 +4110,75 @@ async function openRecommendPickerModal(ctx) {
     paintChips(); paintList();
 }
 
+// DOCTOR_REFER_WIZARD_V1 (2026-09-16) — owner: «направление на услуги — это
+// какая-то старая версия, можно тот же мастер, что в регистратуре?». Да.
+// «Направить на услуги» больше не открывает свой, отдельный выбор услуг: он
+// открывает ТОТ ЖЕ мастер, которым регистратура записывает пациента
+// (visit-wizard.js) — тот же каталог с поиском и разделами, те же шаблоны, цена
+// по кратности визита, скидки пациента, выбор плательщика, дата и время у
+// врача. Два разных окна для одного и того же дела расходились: то, что
+// регистратура получала в мастере, врач в своём окне не видел.
+//
+// Кабинет добавляет к мастеру ровно одно своё: по записанным строкам печатает
+// «Маршрутный лист». Кто может нажимать — решает та же вкладка «Услуги» в
+// ролях (patientTabCanEdit('services')), что и раньше; отдельного права у
+// мастера нет.
+// Кабинет держит пациента в СВОЁМ виде (fullName, dob — вид для экрана), а
+// мастер и печатные бланки читают поля БАЗЫ (full_name, date_of_birth). Из-за
+// этого маршрутный лист печатался с «Пациент: —». Отдаём им карточку в том
+// виде, в каком её отдаёт регистратура: сначала сырая строка базы (_raw),
+// затем — то, что есть на экране.
+function referralPatient(ctx) {
+    const p = ctx.patient || {};
+    const raw = p._raw || {};
+    const mrn = raw.mrn || (p.mrn && p.mrn !== '—' ? p.mrn : '');
+    return {
+        id:            p.id || raw.id,
+        full_name:     raw.full_name || p.fullName || p.label || '',
+        mrn:           mrn || '',
+        phone:         raw.phone || p.phone || '',
+        date_of_birth: raw.date_of_birth || p.dob || null,
+        insurance_policy_number: raw.insurance_policy_number || null,
+    };
+}
+
+function openReferralWizard(ctx) {
+    if (!ctx.patient || !ctx.patient.id) { toast('Нет контекста пациента.', 'fail'); return; }
+    import('./visit-wizard.js?v=tier2')
+        .then((mod) => mod.openVisitWizard(async (res) => {
+            try { await loadPatientEmr(ctx.patient); paintEmr(); } catch (e) {}
+            if (res && res.rows && res.rows.length) printRouteSheet(ctx, res);
+        }, referralPatient(ctx), { title: 'Направить на услуги' }))
+        .catch((e) => toast(trf('Не удалось открыть мастер услуг: {msg}', { msg: (e && e.message) || e }), 'fail'));
+}
+
 // DOCTOR_ROUTE_V1 — «Маршрутный лист»: the A4 checklist the patient carries
 // from the cabinet — the referred services in the order the doctor picked,
 // each with its room, a box to tick, and where to pay. Printed right after
 // the referral books the visit and raises the cashier's invoice (the picker
 // does both); a line goes into the document's «Рекомендации» so the
-// consultation itself says what was referred.
+// consultation itself says what was referred. Since DOCTOR_REFER_WIZARD_V1 the
+// booking and the invoice come from the registration wizard.
 async function printRouteSheet(ctx, res) {
-    const p = ctx.patient || {};
+    const p = referralPatient(ctx);
     const rows = (res && res.rows) || [];
     const ids = [...new Set(rows.map(r => r.service && r.service.id).filter(Boolean))];
     let svcById = {}, roomById = {}, depById = {};
     try {
-        const { data: svcs } = await supabase.from('services').select('id, name, room_id, department_id').in('id', ids);
+        const { data: svcs } = await supabase.from('services').select('id, name, type, room_id, department_id').in('id', ids);
         for (const s of (svcs || [])) svcById[s.id] = s;
         const roomIds = [...new Set((svcs || []).map(s => s.room_id).filter(Boolean))];
         const depIds = [...new Set((svcs || []).map(s => s.department_id).filter(Boolean))];
         if (roomIds.length) { const { data: rooms } = await supabase.from('rooms').select('id, name').in('id', roomIds); for (const r of (rooms || [])) roomById[r.id] = r.name; }
         if (depIds.length) { const { data: deps } = await supabase.from('departments').select('id, name').in('id', depIds); for (const d of (deps || [])) depById[d.id] = d.name; }
     } catch (e) { console.warn('[route sheet] lookups:', e); }
+    // Куда идти: кабинет → отделение → врач → раздел («Лаборатория»). Пустая
+    // клетка на листе пациенту ничего не говорит, а раздел говорит хотя бы
+    // «в лабораторию».
     const where = (r) => {
         const s = (r.service && svcById[r.service.id]) || r.service || {};
-        return roomById[s.room_id] || depById[s.department_id] || (r.doctor && r.doctor.name) || '';
+        return roomById[s.room_id] || depById[s.department_id] || (r.doctor && r.doctor.name)
+            || tr(TYPE_TO_GROUP_NAME[s.type] || '') || '';
     };
     const dob = p.date_of_birth ? new Date(p.date_of_birth).toLocaleDateString('ru-RU') : '—';
     const doctorName = (ctx.patient && ctx.patient.__service && ctx.patient.__service.doctorName) || me().full_name || '';
@@ -4151,12 +4198,21 @@ async function printRouteSheet(ctx, res) {
         <div style="margin-top:14px;padding:10px 12px;border:1px solid #d3d9de;border-radius:8px;font-size:12.5px;color:#1f2d34;">
             ${esc(tr('Оплатите в кассе, затем пройдите кабинеты по порядку. Отметьте выполненное — лист вернуть врачу.'))}
         </div>`;
+    // Тип 'case_doc' — а НЕ 'lab': бланк результатов клиника оформляет своим
+    // макетом (doc-variants), и этот макет рисуется РАНЬШЕ переданного текста —
+    // маршрутный лист печатался как демо-бланк анализов с чужой фамилией.
+    // 'case_doc' — тот самый тип, которым печатают акт и документы истории
+    // болезни: фирменная шапка + наш текст.
     printableSheet({
-        type: 'lab', title: tr('Маршрутный лист'), idLine: p.mrn || '',
+        type: 'case_doc', title: tr('Маршрутный лист'), idLine: p.mrn || '',
         head: {
             title: tr('Маршрутный лист'), uz: 'Yo‘nalish varaqasi',
             ids: [{ label: 'ID', value: p.mrn || '—' }, { label: tr('Визит'), value: res.visit && res.visit.id ? '№ ' + res.visit.id : '—' }],
-            fields: [[tr('Пациент'), p.full_name || '—'], [tr('Дата рождения'), dob], [tr('Направил'), doctorName || '—']],
+            fields: [
+                { label: tr('Пациент'), uz: 'Bemor', value: p.full_name || '—' },
+                { label: tr('Дата рождения'), uz: 'Tug‘ilgan sana', value: dob },
+                { label: tr('Направил'), uz: 'Yo‘naltirdi', value: doctorName || '—' },
+            ],
             sign: { signerName: doctorName || '', signerSpec: (ctx.patient && ctx.patient.__service && ctx.patient.__service.doctorSpec) || '', signerLicense: '' },
         },
         bodyHtml, settings: loadDocSettings(),
@@ -4960,13 +5016,7 @@ function _wireBlankEditing(ctx, frame) {
             _ic.check = _svg('<path d="M20 6 9 17l-5-5"/>');
 
             const g1 = grp(tr('Назначить'));
-            if (patientTabCanEdit('services')) g1.appendChild(primary(mk(_ic.route, tr('Направить на услуги'), () => openServicePickerModal({
-                patient: ctx.patient,
-                onBooked: (res) => {
-                    try { loadPatientEmr(ctx.patient).then(() => paintEmr()); } catch (e) {}
-                    if (res && res.rows && res.rows.length) printRouteSheet(ctx, res);
-                },
-            }))));
+            if (patientTabCanEdit('services')) g1.appendChild(primary(mk(_ic.route, tr('Направить на услуги'), () => openReferralWizard(ctx))));
             g1.appendChild(mk(_ic.recipe, tr('Рецепт'), () => openPrescriptionDialog(ctx, null)));
             g1.appendChild(mk(_ic.dispense, tr('Выдать препарат'), () => openDispenseConsultItem(ctx)));
 

@@ -41,6 +41,7 @@ import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // 
 // server/services/rpc/slot-engine.js. ?v как у остальных импортёров модуля.
 import { primeSlotDays, slotDayCached, freeStartMinutes, loadSlotDay, hhmmToMin,
          askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=aug17e';
+import { hasActorRole } from '../permissions.js';   // INVOICE_ROLE_HONEST_V1
 import { printableSheet } from './doc-settings.js?v=noqr1';   // WIZ_INVOICE_PRINT_V1 — тот же брендированный бланк «Счёт» (Настройки → Документы); ?v как у всех импортёров
 
 
@@ -79,6 +80,19 @@ const REF_UNCAT = '—  без категории';
 const refCatOf = (s) => (s && s.category_id != null ? String(s.category_id) : '');
 const refSourcesIn = (sources, cat) => (sources || []).filter(s => (cat === REF_UNCAT ? !refCatOf(s) : refCatOf(s) === cat));
 
+// INVOICE_ROLE_HONEST_V1 (2026-09-16) — ЗЕРКАЛО CREATE_INVOICE_ROLES
+// (server/services/rpc/billing.js): счёт выставляют администратор,
+// регистратура и касса. Врач направляет на услуги, но счёта не выставляет —
+// это правило про деньги, а не про экран, и сервер держит его сам.
+//
+// Мастер об этом правиле молчал: галочка «Сразу выставить счёт» стояла у всех,
+// врач нажимал «Сформировать счёт» и получал английский отказ сервера «Your
+// role is not allowed…» — как будто что-то сломалось. Теперь у роли без права
+// галочки нет, кнопка называется «Записать услуги», а внизу написано, кто
+// выставит счёт. Услуги при этом записываются как и раньше — касса выставляет
+// по ним счёт из визита.
+const INVOICE_ROLES = ['admin', 'registrar', 'cashier'];
+
 function currentUserId() {
     try { return (window.easymed && window.easymed.state && window.easymed.state.user && window.easymed.state.user.id) || null; }
     catch (e) { return null; }
@@ -88,6 +102,7 @@ function currentUserId() {
 // known patient (from the patient card). onSaved runs after a successful create.
 export async function openVisitWizard(onSaved, patient, opts = {}) {
     if (!patient || !patient.id) { toast('Сначала выберите пациента.', 'fail'); return; }
+    const canInvoice = hasActorRole(INVOICE_ROLES);   // INVOICE_ROLE_HONEST_V1
 
     const wiz = {
         step: 1,
@@ -157,7 +172,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         categoryPct: 0,
         promoOpen: false,    // PROMO_TICK_V1 — поле промокода раскрыто галочкой (редкий случай)
         // step 4
-        raiseInvoice: true,
+        raiseInvoice: canInvoice,   // INVOICE_ROLE_HONEST_V1
         creating: false,
     };
 
@@ -258,6 +273,12 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // repaintRail so a changed day or a new line re-asks by itself.
     let _tierSeq = 0;
     let _tierSig = '';
+    // TIER_CHIP_REFRESH_V1 — ответ о кратности визита приходит ПОСЛЕ отрисовки
+    // каталога, и каталог надо перерисовать. Отсюда его функция не видна (она
+    // живёт внутри шага 1), и прямой вызов молча падал: «repaintCatalog is not
+    // defined» — чипы «Повторный визит» в списке услуг не обновлялись. Шаг 1
+    // кладёт сюда свою перерисовку сам.
+    let _repaintCatalog = null;
     async function refreshTiers() {
         if (!patient || !patient.id) return;
         const byDay = new Map();
@@ -285,7 +306,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         if (seq !== _tierSeq) return;
         Object.assign(wiz.tiers, merged);
         repaintRail();
-        if (wiz.step === 1) repaintCatalog();
+        if (wiz.step === 1 && typeof _repaintCatalog === 'function') _repaintCatalog();
     }
     // The chip beside a quoted line: «Второй визит» / «Повторный визит».
     const tierChip = (c) => {
@@ -401,7 +422,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         },
     },
         h('span', { style: { color: 'var(--ink-700)', display: 'flex' } }, Icon('Plus', { size: 16 })),
-        h('div', { style: { fontSize: '15px', fontWeight: 700, color: 'var(--ink-900)' } }, 'Добавить услуги'),   // DAY_VISIT_V1 — работаем услугами; визит (день) считается сам
+        h('div', { style: { fontSize: '15px', fontWeight: 700, color: 'var(--ink-900)' } },
+            // DAY_VISIT_V1 — работаем услугами; визит (день) считается сам.
+            // DOCTOR_REFER_WIZARD_V1 — кабинет врача зовёт то же окно «Направить
+            // на услуги»: одно окно, подпись по месту, откуда его открыли.
+            opts.title ? tr(opts.title) : tr('Добавить услуги')),
         h('span', { style: { flex: 1 } }),
         h('button', {
             class: 'btn',
@@ -804,6 +829,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // схлопывается к нулю. Сохраняем её: выбор врача, дня и времени происходит
         // прямо в строке услуги, и список не должен уезжать из-под курсора.
         // toTop:true — для смены поиска/категории: там список другой, начинаем сверху.
+        _repaintCatalog = repaintCatalog;   // TIER_CHIP_REFRESH_V1
         function repaintCatalog({ toTop = false } = {}) {
             // CATALOG_PAGE_V1 — новый поиск/категория = новый список: снова с первых 50.
             if (toTop) wiz.limit = PAGE_SIZE;
@@ -1701,8 +1727,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             h('div', { class: 'row', style: { padding: '10px 0 0', fontSize: '13.5px', gap: '10px' } },
                 h('span', { style: { flex: 1, fontWeight: 700 } }, 'Итого'),
                 h('span', { class: 'num', style: { fontWeight: 800, color: 'var(--primary-700)' } }, fmtPrice(grandTotal()), ' сум')),
-            h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px', fontSize: '12.5px', color: 'var(--ink-700)', cursor: 'pointer' } },
-                invoiceCb, 'Сразу выставить счёт — он появится в кассе («Приём оплат»)'),
+            canInvoice
+                ? h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px', fontSize: '12.5px', color: 'var(--ink-700)', cursor: 'pointer' } },
+                    invoiceCb, 'Сразу выставить счёт — он появится в кассе («Приём оплат»)')
+                : h('div', { class: 'muted', style: { marginTop: '16px', fontSize: '12.5px' } },
+                    'Счёт выставит касса — у вашей роли нет права выставлять счета.'),
         ));
     }
 
@@ -2259,7 +2288,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const NEXT_TITLES = { 2: 'Направление', 3: 'Кто платит', 4: 'Подтверждение' };
         const seqIdx = seq.indexOf(wiz.step);
         const nextStep = seqIdx >= 0 && seqIdx < seq.length - 1 ? seq[seqIdx + 1] : null;
-        const nextLabel = nextStep ? trf('Далее: {step}', { step: tr(NEXT_TITLES[nextStep]) }) : 'Сформировать счёт';   // WIZ_INVOICE_PRINT_V1
+        const nextLabel = nextStep
+            ? trf('Далее: {step}', { step: tr(NEXT_TITLES[nextStep]) })
+            : (canInvoice ? tr('Сформировать счёт') : tr('Записать услуги'));   // WIZ_INVOICE_PRINT_V1 + INVOICE_ROLE_HONEST_V1
         const blocked = nextBlockReason();
         const nextBtn = h('button', {
             class: 'btn', type: 'button',
@@ -2380,6 +2411,12 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             const aktJobs = [];                            // AKT_DOC_V1 — акты по счетам контрагентов
             let firstInvoice = null;                       // WIZ_INVOICE_PRINT_V1 — печатаем первый счёт
             const lineByVsId = new Map();                  // QUEUE_TICKET_V1 — vsId -> cart line
+            // DOCTOR_REFER_WIZARD_V1 (2026-09-16) — мастер ОТЧИТЫВАЕТСЯ, что
+            // именно он записал. Кабинет врача печатает по этому списку
+            // «Маршрутный лист», поэтому строки собираются в том порядке, в
+            // каком врач их выбрал. Вызовы, которые аргумент не принимают
+            // (карта пациента, CRM), ничего не замечают.
+            const booked = [];
             // DISCOUNT_CARRY_V1 — скидка идёт на счета пациента по порядку дней:
             // сколько влезло в первый, остаток — в следующий (см. ниже).
             let discountLeft = discountAmount();
@@ -2478,6 +2515,15 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     if (res.error) throw new Error(trf('Услуга «{name}»: {msg}', { name: c.svc.name, msg: res.error.message || 'insert failed' }));
                     vsIds.push(res.data.id);
                     lineByVsId.set(res.data.id, c);
+                    const bDoc = lineDoc ? wiz.doctors.find(x => String(x.id) === String(lineDoc)) : null;
+                    booked.push({
+                        visit_service_id: res.data.id,
+                        visit,
+                        service: { id: c.svc.id, name: c.svc.name, room_id: c.svc.room_id ?? null, department_id: c.svc.department_id ?? null },
+                        doctor: lineDoc ? { id: Number(lineDoc), name: (bDoc && (bDoc.full_name || bDoc.username)) || '' } : null,
+                        price: cartLinePrice(c),
+                        scheduled_at: row.scheduled_at || null,
+                    });
                     if (isCovered(c)) coveredVsIds.push(res.data.id);
                 }
 
@@ -2632,13 +2678,20 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             const dayWord = byDay.size > 1 ? ' ' + trf('(дней: {n})', { n: byDay.size }) : '';
             const cashInvoices = invoicesOk - aktJobs.length;
             const invMsg = invoiceFail || [
+                !canInvoice ? ' ' + tr('Счёт выставит касса.') : '',
                 cashInvoices > 0 ? ' ' + tr('Счёт пациента выставлен — виден в кассе.') : '',
                 aktJobs.length ? ' ' + tr('Услуги плательщика — по акту, в кассу не идут.') : '',
             ].join('');
             toast(tr('Услуги добавлены') + dayWord + '.' + invMsg, invoiceFail ? 'info' : 'ok');
             await closeCrmLines();   // CRM_SCHEDULE_V1
             close();
-            if (typeof onSaved === 'function') await onSaved();
+            if (typeof onSaved === 'function') {
+                await onSaved({
+                    visit:  booked.length ? booked[0].visit : null,
+                    visits: [...new Map(booked.map(b => [b.visit.id, b.visit])).values()],
+                    rows:   booked,
+                });
+            }
         } catch (e) {
             toast(trf('Не удалось сохранить услуги: {msg}', { msg: (e && e.message) || e }), 'fail');
             wiz.creating = false;
