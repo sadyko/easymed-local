@@ -712,7 +712,7 @@ function variantCard() {
         ...list.map(v => {
             const on = sel === v.key;
             return h('button', {
-                type: 'button', disabled: v.stub ? '' : null,
+                type: 'button', disabled: v.stub ? true : null,
                 onclick: () => { if (!v.stub) setVariant(state.active, v.key); },
                 style: {
                     display: 'flex', alignItems: 'center', gap: '8px', width: '100%', textAlign: 'left',

@@ -37,7 +37,7 @@ export async function renderApiSettings(container, { onNavigate } = {}) {
         const clinicKeys = keys.filter(k => k.scope === 'clinic' && k.source !== 'easymed');
         clear(tokensCard);
 
-        const createBtn = h('button', { class: 'btn btn-primary btn-sm', disabled: clinicKeys.length >= MAX_KEYS ? '' : null,
+        const createBtn = h('button', { class: 'btn btn-primary btn-sm', disabled: clinicKeys.length >= MAX_KEYS ? true : null,
             onclick: () => openCreate() }, Icon('Plus', { size: 13 }), ' Создать токен');
         tokensCard.appendChild(h('div', { class: 'card-header' },
             h('h3', null, 'Токены доступа'),

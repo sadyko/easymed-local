@@ -611,7 +611,7 @@ const fkSelect = (val, list, on, { placeholder = '— none —', ...opts } = {})
     selectInput(val, [['', placeholder], ...list.map(r => [r.id, fkLabel(r)])], on, opts);
 const cbx = (on, onClick, { sm, disabled } = {}) => h('button', {
     type: 'button', class: 'cbx' + (sm ? ' sm' : '') + (on ? ' on' : ''),
-    disabled: disabled ? '' : null,
+    disabled: disabled ? true : null,
     onclick: (e) => { e.preventDefault(); if (!disabled) onClick(); },
 }, on && Icon('Check', { size: sm ? 10 : 12 }));
 
@@ -891,7 +891,7 @@ const SECTION_RENDERERS = {
             const tpl = emp.days.find(d => d.on) || emp.days[0];
             set({ days: emp.days.map(d => ({ ...d, start: tpl.start, end: tpl.end, lunch: tpl.lunch, lunchStart: tpl.lunchStart, lunchEnd: tpl.lunchEnd })) });
         };
-        const timeEl = (val, disabled, on) => { const el = h('input', { type: 'time', value: val, disabled: disabled ? '' : null }); el.onchange = () => on(el.value); return el; };
+        const timeEl = (val, disabled, on) => { const el = h('input', { type: 'time', value: val, disabled: disabled ? true : null }); el.onchange = () => on(el.value); return el; };
         return h('div', { class: 'fade-in' },
             secHead('Clock', 'Working days & hours', 'Set the days this employee works and their hours, including optional lunch breaks.',
                 h('button', { class: 'btn btn-outline btn-sm', onclick: copyAll }, Icon('Repeat', { size: 13 }), ' Copy first row to all')),

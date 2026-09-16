@@ -111,7 +111,7 @@ export async function renderCashierSettings(container) {
         wrap.appendChild(card);
     }
 
-    const saveBtn = h('button', { class: 'btn btn-primary', disabled: migrationMissing ? '' : null },
+    const saveBtn = h('button', { class: 'btn btn-primary', disabled: migrationMissing ? true : null },
         Icon('Check', { size: 14 }), ' Сохранить');
     saveBtn.addEventListener('click', async () => {
         saveBtn.disabled = true;

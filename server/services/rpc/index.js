@@ -17,6 +17,7 @@ import { caseDocTypesList, caseDocTypeSave, caseDocTypeSetActive, caseDocTypeDel
 import { admissionCharges, admissionChargeSetBillable, admissionServiceAdd, admissionServiceDone } from './admission-charges.js';   // ACT_OF_WORKS_V1 / ACT_ADD_SERVICE_V1
 import { admissionDocSources } from './case-doc-sources.js';   // CASE_DOC_A4_V1
 import { admissionsRegister } from './admissions-register.js';   // ADMISSIONS_REGISTER_V1
+import { patientBaseAggregates } from './patient-aggregates.js';   // PATIENT_AGGREGATES_V1
 import { admissionReviewSave, admissionSetAttending, admissionChangeAttending, admissionReviewsList, admissionAttendingCandidates,
   admissionCaseDocs, admissionCaseFile, admissionCaseFileSave } from './inpatient-reviews.js';   // INPATIENT_REVIEW_V1 / CASE_DOCS_V1
 import {
@@ -234,6 +235,11 @@ export const RPC = {
   admission_vitals_list:          (db, args, user) => admissionVitalsList(db, args, user),  // VITALS_NEWS_V1
   admission_doc_sources:          (db, args, user) => admissionDocSources(db, args, user),  // CASE_DOC_A4_V1
   admissions_register:            (db, args, user) => admissionsRegister(db, args, user),   // ADMISSIONS_REGISTER_V1
+  // PATIENT_AGGREGATES_V1 — числа картотеки (визиты, последний визит, баланс,
+  // страховка, регистратор) одним вызовом на страницу списка. Раньше этого RPC
+  // не было вовсе: сервер отвечал 501, а картотека у всех показывала «визитов
+  // не было» и «0 сум».
+  patient_base_aggregates:        (db, args, user) => patientBaseAggregates(db, args, user),
 
   // TWO_STEP_DISCHARGE_V1 (Задача 8) — ВЫПИСКА В ДВА ШАГА. Клиническая
   // готовность и административная выписка — разные события разных людей:

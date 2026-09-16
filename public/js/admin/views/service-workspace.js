@@ -724,7 +724,7 @@ function fmtToolbar(ctx) {
     const sizeSel = h('select', { class: 'fmt-sel', style: { width: '64px' }, onmousedown: (e) => e.stopPropagation(),
         onchange: (e) => { const el = a4Target(ctx); if (el) el.focus(); document.execCommand('fontSize', false, e.target.value); wsState.saved = false; resetSaveBtn(ctx); } },
         ...[['1', '10'], ['2', '12'], ['3', '14'], ['4', '16'], ['5', '18'], ['6', '24']].map(([v, l]) =>
-            h('option', { value: v, selected: v === '3' ? '' : null }, l)),
+            h('option', { value: v, selected: v === '3' ? true : null }, l)),
     );
 
     const bold = fb('Полужирный (Ctrl+B)', h('b', { style: { fontSize: '13.5px' } }, 'Ж'), exec('bold'));

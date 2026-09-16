@@ -234,12 +234,12 @@ export async function mountLabDevices(container) {
 
         const nameInp = h('input', { type: 'text', value: d.name, placeholder: tr('Например: Гематология') });
         const profSel = h('select', null, ...state.profiles.map((p) =>
-            h('option', { value: p.key, selected: p.key === d.profile ? '' : null }, p.vendor + ' ' + p.model)));
+            h('option', { value: p.key, selected: p.key === d.profile ? true : null }, p.vendor + ' ' + p.model)));
         const transSel = h('select', null, ...TRANSPORTS.map((t) =>
-            h('option', { value: t.key, selected: t.key === d.transport ? '' : null }, tr(t.label))));
+            h('option', { value: t.key, selected: t.key === d.transport ? true : null }, tr(t.label))));
         const hostInp = h('input', { type: 'text', value: d.host || '', placeholder: tr('пусто — принимать с любого адреса') });
         const portInp = h('input', { type: 'number', value: d.port || 2575, min: '1', max: '65535', style: { width: '110px' } });
-        const enabledInp = h('input', { type: 'checkbox', checked: d.enabled ? '' : null });
+        const enabledInp = h('input', { type: 'checkbox', checked: d.enabled ? true : null });
 
         const notReady = h('p', { class: 'muted', style: { fontSize: '12.5px' } },
             tr('Этот транспорт пока не поддерживается — настройка сохранится, но приём по нему не заработает.'));

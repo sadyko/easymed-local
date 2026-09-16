@@ -1140,7 +1140,7 @@ export function openServicePickerModal({
         const isToday = viewIso === schedTodayIso();
         const prevBtn = h('button', {
             class: 'btn btn-sm', type: 'button',
-            disabled: isToday ? '' : null,
+            disabled: isToday ? true : null,
             title: isToday ? 'Cannot book in the past' : 'Previous day',
             onclick: () => { if (!isToday) selectSchedDay(schedAddDays(viewIso, -1)); },
         }, '‹');
@@ -1315,7 +1315,7 @@ export function openServicePickerModal({
             // State A — attach a patient.
             const btn = h('button', {
                 class: 'pk2-calc-btn', type: 'button',
-                disabled: state.added.length === 0 ? '' : null,
+                disabled: state.added.length === 0 ? true : null,
                 onclick: () => openAttachPatientModal(),
             }, Icon('User', { size: 15 }), ' Привязать пациента');
             el.appendChild(btn);
@@ -1843,7 +1843,7 @@ export function openServicePickerModal({
             h('div', { class: 'row', style: { gap: '10px', flex: 'none', alignItems: 'center' } },
                 h('span', { class: 'num', style: { fontWeight: 700 } }, priceLabel),
                 item ? h('button', { class: 'wzc-rm', type: 'button', onclick: () => catRemove(item) }, 'убрать')
-                     : h('button', { class: 'wzc-add', type: 'button', disabled: onVisit ? '' : undefined,
+                     : h('button', { class: 'wzc-add', type: 'button', disabled: onVisit ? true : undefined,
                          title: onVisit ? 'Эта услуга уже добавлена в визит' : null,
                          onclick: () => { if (!onVisit) catAdd(s); } }, 'Добавить'))));
         if (item && !lockedDoctor && item.__needsDoc) row.appendChild(catPickerPanel(item, perf));
@@ -2136,7 +2136,7 @@ export function openServicePickerModal({
                 payerSel.appendChild(h('option', { value: '' }, wiz.payers === null ? 'Загрузка…' : '— выберите компанию —'));
                 const want = COV_TYPE[pm.coverage];
                 for (const x of (wiz.payers || []).filter(x => !want || (x.type || '') === want))
-                    payerSel.appendChild(h('option', { value: x.id, selected: pm.payerId === x.id ? '' : null }, x.name || '—'));
+                    payerSel.appendChild(h('option', { value: x.id, selected: pm.payerId === x.id ? true : null }, x.name || '—'));
                 payerSel.addEventListener('change', () => { pm.payerId = payerSel.value || null; pm.policyId = null; refresh(); });
                 const polIn = h('input', { class: 'tp-input', placeholder: 'Номер полиса / договора', value: pm.policyNumber || '',
                     style: { width: '100%', marginTop: '6px' },
@@ -2487,7 +2487,7 @@ export function openServicePickerModal({
             const mk = (val, label) => {
                 const on = covOf(i) === val;
                 const disabled = selfPay && val === 'payer';
-                return h('button', { type: 'button', disabled: disabled ? '' : null, title: label,
+                return h('button', { type: 'button', disabled: disabled ? true : null, title: label,
                     style: { padding: '6px 12px', border: '0', cursor: disabled ? 'not-allowed' : 'pointer', font: 'inherit', fontSize: '12.5px', fontWeight: 600,
                              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '240px',
                              background: on ? 'var(--primary-600, #167873)' : 'transparent',

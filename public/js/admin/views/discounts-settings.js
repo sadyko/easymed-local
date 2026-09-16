@@ -154,15 +154,15 @@ export async function renderDiscountsSettings(container, { onNavigate } = {}) {
         const inp = (props) => h('input', { style: { width: '100%', boxSizing: 'border-box' }, ...props });
 
         const fKind = h('select', { style: { width: '100%' }, onchange: () => syncKind() },
-            ...KINDS.map(([v, l]) => h('option', { value: v, selected: r.kind === v ? '' : null }, l)));
+            ...KINDS.map(([v, l]) => h('option', { value: v, selected: r.kind === v ? true : null }, l)));
         const fCode = inp({ value: r.code || '', placeholder: 'НАПР. WELCOME10' });
         const genBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button', style: { marginTop: '4px' },
             onclick: () => { fCode.value = (KIND_RU[fKind.value] === 'Промокод' ? 'P' : 'G') + '-' + Array.from({ length: 8 }, () => 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 31)]).join(''); } },
             'Сгенерировать');
         const fName = inp({ value: r.name || '', placeholder: 'Например: Акция к открытию' });
         const fDtype = h('select', { style: { width: '100%' }, onchange: () => syncKind() },
-            h('option', { value: 'percent', selected: (r.discount_type || 'percent') === 'percent' ? '' : null }, 'Процент (%)'),
-            h('option', { value: 'amount', selected: r.discount_type === 'amount' ? '' : null }, 'Фиксированная сумма'));
+            h('option', { value: 'percent', selected: (r.discount_type || 'percent') === 'percent' ? true : null }, 'Процент (%)'),
+            h('option', { value: 'amount', selected: r.discount_type === 'amount' ? true : null }, 'Фиксированная сумма'));
         const fPercent = inp({ type: 'number', min: '0', max: '100', value: r.percent != null ? String(r.percent) : '' });
         const fAmount = inp({ type: 'number', min: '0', value: r.amount != null ? String(r.amount) : '' });
         const fRemaining = inp({ type: 'number', min: '0', value: r.remaining != null ? String(r.remaining) : '' });
@@ -171,8 +171,8 @@ export async function renderDiscountsSettings(container, { onNavigate } = {}) {
         const fFrom = inp({ type: 'date', value: r.valid_from || '' });
         const fTo = inp({ type: 'date', value: r.valid_to || '' });
         const fActive = h('select', { style: { width: '100%' } },
-            h('option', { value: '1', selected: r.active !== false ? '' : null }, 'Активен'),
-            h('option', { value: '0', selected: r.active === false ? '' : null }, 'Выключен'));
+            h('option', { value: '1', selected: r.active !== false ? true : null }, 'Активен'),
+            h('option', { value: '0', selected: r.active === false ? true : null }, 'Выключен'));
         const fNotes = h('textarea', { rows: '2', style: { width: '100%', boxSizing: 'border-box' } }, r.notes || '');
 
         // patient binding — debounced search picker (any patient OR a specific one)

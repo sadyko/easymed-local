@@ -624,7 +624,7 @@ function servicesPane(state, onReload) {
             }, Icon('Pill', { size: 13 }), ' Dispense item'),
             h('button', {
                 class: 'btn btn-primary btn-sm',
-                disabled: unbilled.length === 0 || selected.size === 0 ? '' : null,
+                disabled: unbilled.length === 0 || selected.size === 0 ? true : null,
                 title: unbilled.length === 0 ? 'All services are already invoiced' : 'Create an invoice from the selected services',
                 onclick: () => generateInvoiceFromSelection(state, selected, onReload),
             }, Icon('Wallet', { size: 13 }), ' Generate invoice'),
