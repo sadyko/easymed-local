@@ -14,6 +14,7 @@
 // No row for a (doctor,type) = defaults: available, not free, price = type default.
 
 import { h, Icon, PageHead, clear, toast, initials, avColor } from '../ui.js';
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { supabase } from '../../supabase.js';
 import { currentClinicId } from '../tenant-tables.js';
 
@@ -31,8 +32,8 @@ export async function renderConsultationTypes(container, ctx = {}) {
     container.appendChild(root);
 
     root.appendChild(PageHead({
-        title: 'Doctor consultations',
-        subtitle: "Set each doctor's availability & price for every consultation type",
+        title: 'Консультации врачей',
+        subtitle: 'Кто из врачей ведёт какой приём и по какой цене.',
     }));
 
     if (!cid) {
@@ -118,7 +119,7 @@ function renderDefaults(types, cid) {
     },
         h('div', { style: { width: '32px', height: '32px', borderRadius: '8px', display: 'grid', placeItems: 'center', background: 'var(--primary-50)', color: 'var(--primary-700)', flex: '0 0 32px' } }, Icon('Stethoscope', { size: 17 })),
         h('div', { style: { flex: 1, minWidth: 0 } },
-            h('div', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } }, 'Consultation types'),
+            h('div', { style: { fontSize: '13.5px', fontWeight: 700, color: 'var(--ink-900)' } }, 'Виды консультаций'),
             h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '1px' } }, 'Shared list of consultation kinds — prices are set per doctor'),
         ),
         chevron,
@@ -163,7 +164,7 @@ function renderDefaults(types, cid) {
             h('th', null, 'Name (RU)'),
             h('th', null, 'Name (UZ)'),
             h('th', null, 'Цена'),
-            h('th', { style: { textAlign: 'center' } }, 'Active'),
+            h('th', { style: { textAlign: 'center' } }, 'Активен'),
         )),
         tb));
 
@@ -182,7 +183,7 @@ function renderDefaults(types, cid) {
                 if (error) throw error;
                 t.name_ru = e.name_ru.trim(); t.name_uz = e.name_uz.trim(); t.price = price; t.active = !!e.active;
             }
-            toast('Consultation types saved', 'info');
+            toast('Виды консультаций сохранены', 'info');
         } catch (err) {
             console.warn('[consultation-types] save defaults:', err.message);
             toast('Save failed: ' + (err.message || err), 'fail');
@@ -200,7 +201,7 @@ function renderDefaults(types, cid) {
 function renderDoctors(types, doctors, priceMap, cid, branches, branchOf, branchName) {
     const wrap = h('div', null);
     wrap.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', margin: '4px 0 12px' } },
-        h('h2', { style: { fontSize: '17px', margin: 0, fontWeight: 700 } }, 'Doctors'),
+        h('h2', { style: { fontSize: '17px', margin: 0, fontWeight: 700 } }, 'Врачи'),
         h('span', { class: 'muted', style: { fontSize: '12.5px' } }, doctors.length + ' total'),
     ));
 
@@ -219,7 +220,7 @@ function renderDoctors(types, doctors, priceMap, cid, branches, branchOf, branch
     // Branch filter
     const selStyle = { height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontSize: '13.5px', background: 'white', fontFamily: 'inherit', cursor: 'pointer' };
     const branchSel = h('select', { style: selStyle },
-        h('option', { value: '' }, 'All branches'),
+        h('option', { value: '' }, 'Все филиалы'),
         ...branches.map(b => h('option', { value: b.id }, b.name_ru || b.name || '—')),
     );
     branchSel.onchange = () => { branchFilter = branchSel.value; offset = 0; paint(); };
@@ -232,7 +233,7 @@ function renderDoctors(types, doctors, priceMap, cid, branches, branchOf, branch
     );
 
     wrap.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' } },
-        h('span', { class: 'muted', style: { fontSize: '12.5px', display: 'inline-flex', alignItems: 'center', gap: '5px' } }, Icon('Filter', { size: 13 }), 'Branch'),
+        h('span', { class: 'muted', style: { fontSize: '12.5px', display: 'inline-flex', alignItems: 'center', gap: '5px' } }, Icon('Filter', { size: 13 }), 'Филиал'),
         branchSel,
         searchWrap,
     ));
@@ -284,7 +285,7 @@ function renderDoctors(types, doctors, priceMap, cid, branches, branchOf, branch
 // One doctor row with branch + price summary + an Edit button that opens the dialog.
 function doctorRow(d, types, priceMap, cid, branchOf, branchName, repaint) {
     const ids = Array.from(branchOf[d.id] || []);
-    const branchLabel = ids.length ? ids.map(id => branchName[id] || '—').join(', ') : 'No branch';
+    const branchLabel = ids.length ? ids.map(id => branchName[id] || '—').join(', ') : 'Без филиала';
     const configured = types.filter(t => priceMap[key(d.id, t.id)]).length;
 
     const editBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, Icon('Edit', { size: 13 }), ' Edit');
@@ -386,7 +387,7 @@ function openDoctorPricesModal(d, types, priceMap, cid, repaint) {
                 const s = state[t.id];
                 priceMap[key(d.id, t.id)] = { price: s.is_free ? null : num(s.price), available: !!s.available, is_free: !!s.is_free, name_ru: (s.name_ru || '').trim() || null, name_uz: (s.name_uz || '').trim() || null, name_en: (s.name_en || '').trim() || null };
             }
-            toast('Saved ' + (d.full_name || 'doctor'), 'info');
+            toast(trf('Сохранено: {name}', { name: d.full_name || tr('врач') }), 'info');
             close();
             if (repaint) repaint();
         } catch (err) {
@@ -401,7 +402,7 @@ function openDoctorPricesModal(d, types, priceMap, cid, repaint) {
             h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 } },
                 h('div', { class: 'avatar ' + avColor(d.id), style: { flex: '0 0 32px', width: '32px', height: '32px' } }, initials(d.full_name)),
                 h('div', { style: { minWidth: 0 } },
-                    h('div', { style: { fontWeight: 700, fontSize: '15px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, d.full_name || 'Doctor'),
+                    h('div', { style: { fontWeight: 700, fontSize: '15px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, d.full_name || 'Врач'),
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Consultation availability & price'),
                 ),
             ),
@@ -410,17 +411,17 @@ function openDoctorPricesModal(d, types, priceMap, cid, repaint) {
         h('div', { class: 'modal-body' },
             h('table', { class: 'tbl', style: { width: '100%' } },
                 h('thead', null, h('tr', null,
-                    h('th', null, 'Consultation type'),
-                    h('th', { style: { textAlign: 'center' } }, 'Available'),
-                    h('th', null, 'Price'),
-                    h('th', { style: { textAlign: 'center' } }, 'Free'),
+                    h('th', null, 'Вид консультации'),
+                    h('th', { style: { textAlign: 'center' } }, 'Ведёт'),
+                    h('th', null, 'Цена'),
+                    h('th', { style: { textAlign: 'center' } }, 'Бесплатно'),
                 )),
                 tb),
             h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '8px' } },
                 'Цена и название — для этого врача. «Free» = бесплатно. Пустое название = название типа.'),
         ),
         h('footer', { class: 'modal-foot' },
-            h('button', { class: 'btn btn-outline', type: 'button', onclick: close }, 'Cancel'),
+            h('button', { class: 'btn btn-outline', type: 'button', onclick: close }, 'Отмена'),
             saveBtn,
         ),
     );

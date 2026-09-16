@@ -41,7 +41,7 @@ function lineEditor(products, { withCost }) {
         const costInp = withCost ? h('input', { type: 'number', min: '0', step: 'any', style: numStyle }) : null;
         if (costInp) costInp.addEventListener('input', () => { line.cost = costInp.value; });
         const removeBtn = h('button', {
-            class: 'btn btn-ghost btn-sm', type: 'button', title: 'Remove line',
+            class: 'btn btn-ghost btn-sm', type: 'button', title: 'Убрать строку',
             onclick: () => { const i = lineObjs.indexOf(line); if (i >= 0) lineObjs.splice(i, 1); tr.remove(); if (!lineObjs.length) addLine(); },
         }, '×');
         const cells = [h('td', null, prodSel), h('td', { style: { width: '120px' } }, qtyInp)];
@@ -52,14 +52,14 @@ function lineEditor(products, { withCost }) {
     }
 
     addLine();
-    const headCells = [h('th', null, 'Product'), h('th', null, 'Qty')];
-    if (withCost) headCells.push(h('th', null, 'Unit cost'));
+    const headCells = [h('th', null, 'Товар'), h('th', null, 'Кол-во')];
+    if (withCost) headCells.push(h('th', null, 'Цена за единицу'));
     headCells.push(h('th', null, ''));
 
     const el = h('div', null,
         h('div', { style: { overflowX: 'auto', border: '1px solid var(--ink-100)', borderRadius: '10px', marginBottom: '10px' } },
             h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ...headCells)), body)),
-        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => addLine() }, Icon('Plus', { size: 13 }), ' Add line'));
+        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => addLine() }, Icon('Plus', { size: 13 }), ' Добавить строку'));
 
     function getLines() {
         const out = [];
@@ -110,21 +110,21 @@ function loadingRowInto(tbody, span) {
 const poRefs = { tbody: null, emptyEl: null, totalEl: null };
 
 function poStatusTag(s) {
-    const m = { draft: ['Draft', ''], ordered: ['Ordered', 'info'], partial: ['Partial', 'warn'], received: ['Received', 'ok'], cancelled: ['Cancelled', ''] };
+    const m = { draft: ['Черновик', ''], ordered: ['Заказан', 'info'], partial: ['Частично принят', 'warn'], received: ['Принят', 'ok'], cancelled: ['Отменён', ''] };
     const [l, k] = m[s] || [s, ''];
     return Tag(l, { kind: k, dot: true });
 }
 
 export function renderPurchaseOrdersTab(container) {
     poRefs.tbody = h('tbody');
-    poRefs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } }, 'No purchase orders yet — create the first one.');
+    poRefs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } }, 'Заказов пока нет — создайте первый.');
     poRefs.totalEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
-    const addBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openPOModal(fetchPOsAndPaint) }, Icon('Plus', { size: 14 }), ' New order');
+    const addBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openPOModal(fetchPOsAndPaint) }, Icon('Plus', { size: 14 }), ' Новый заказ');
 
     container.appendChild(h('div', null,
         h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' } },
             poRefs.totalEl, h('div', { class: 'page-head-actions' }, addBtn)),
-        tableCard(['PO #', 'Supplier', 'Status', 'Lines', 'Total', 'Date'], poRefs.tbody, poRefs.emptyEl)));
+        tableCard(['№ заказа', 'Поставщик', 'Статус', 'Строк', 'Сумма', 'Дата'], poRefs.tbody, poRefs.emptyEl)));
     fetchPOsAndPaint();
 }
 
@@ -166,17 +166,17 @@ async function fetchPOsAndPaint() {
                 h('td', { class: 'num' }, fmtPrice(po.total)),
                 h('td', null, fmtDateTime(po.created_at))));
         }
-        poRefs.totalEl.textContent = `${rows.length} order${rows.length === 1 ? '' : 's'}`;
+        poRefs.totalEl.textContent = trf('Заказов: {n}', { n: rows.length });
     } catch (e) {
         if (token !== lastFetchToken) return;
-        toast('Failed to load purchase orders: ' + ((e && e.message) || e), 'fail');
+        toast(trf('Не удалось загрузить заказы: {msg}', { msg: (e && e.message) || e }), 'fail');
         clear(poRefs.tbody); poRefs.emptyEl.style.display = '';
     }
 }
 
 async function openPOModal(onSaved) {
     let products = [], suppliers = [];
-    try { products = await loadActiveProducts(); } catch (e) { toast('Failed to load products.', 'fail'); }
+    try { products = await loadActiveProducts(); } catch (e) { toast('Не удалось загрузить товары.', 'fail'); }
     try { const r = await supabase.from('suppliers').select('id,name').eq('active', 1).order('name', { ascending: true }); suppliers = r.data || []; } catch (e) { /* optional */ }
 
     const supplierSel = h('select', { style: selStyle }, h('option', { value: '' }, '— No supplier —'),
@@ -184,10 +184,10 @@ async function openPOModal(onSaved) {
     const notesInp = h('input', { type: 'text', placeholder: 'optional' });
     const editor = lineEditor(products, { withCost: true });
 
-    const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Create order');
+    const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Создать заказ');
     saveBtn.addEventListener('click', async () => {
         const lines = editor.getLines();
-        if (!lines.length) { toast('Add at least one line.', 'fail'); return; }
+        if (!lines.length) { toast('Добавьте хотя бы одну строку.', 'fail'); return; }
         const total = lines.reduce((s, l) => s + l.qty * l.cost, 0);
         saveBtn.disabled = true; const prev = saveBtn.textContent; saveBtn.textContent = 'Creating…';
         try {
@@ -200,19 +200,19 @@ async function openPOModal(onSaved) {
                     .insert({ po_id: po.id, product_id: l.product.id, qty_ordered: l.qty, unit_cost: l.cost }).select('id').single();
                 if (liErr) throw liErr;
             }
-            toast('Purchase order created', 'ok');
+            toast('Заказ на закупку создан', 'ok');
             close();
             if (typeof onSaved === 'function') await onSaved();
         } catch (e) {
-            toast((e && e.message) || 'Failed to create purchase order.', 'fail');
+            toast((e && e.message) || 'Не удалось создать заказ.', 'fail');
             saveBtn.disabled = false; saveBtn.textContent = prev;
         }
     });
 
     const { close } = docModal({
-        title: 'New purchase order', icon: 'Receipt',
-        body: [field('Supplier', supplierSel), editor.el, field('Notes', notesInp)],
-        footer: (close) => [h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancel'), h('span', { class: 'grow' }), saveBtn],
+        title: 'Новый заказ на закупку', icon: 'Receipt',
+        body: [field('Поставщик', supplierSel), editor.el, field('Примечание', notesInp)],
+        footer: (close) => [h('button', { class: 'btn', type: 'button', onclick: close }, 'Отмена'), h('span', { class: 'grow' }), saveBtn],
     });
 }
 
@@ -221,7 +221,7 @@ async function openPODetail(po, onSaved) {
     const footWrap = h('div', { style: { display: 'flex', width: '100%', alignItems: 'center', gap: '8px' } });
 
     const { close } = docModal({
-        title: `Purchase order ${po.po_number}`, icon: 'Receipt', width: 640,
+        title: trf('Заказ на закупку {no}', { no: po.po_number }), icon: 'Receipt', width: 640,
         body: [h('div', { style: { marginBottom: '8px' } }, poStatusTag(po.status),
             (po.suppliers && po.suppliers.name) ? h('span', { class: 'muted', style: { marginLeft: '10px', fontSize: '12.5px' } }, po.suppliers.name) : null),
             bodyWrap],
@@ -231,11 +231,11 @@ async function openPODetail(po, onSaved) {
     const { data: items, error } = await supabase.from('purchase_order_items')
         .select('id,qty_ordered,qty_received,unit_cost,line_total, products(name,base_unit)').eq('po_id', po.id);
     clear(bodyWrap);
-    if (error) { bodyWrap.appendChild(h('div', { class: 'empty' }, 'Could not load lines.')); return; }
+    if (error) { bodyWrap.appendChild(h('div', { class: 'empty' }, 'Не удалось загрузить строки.')); return; }
     const rows = items || [];
     bodyWrap.appendChild(h('div', { style: { overflowX: 'auto', border: '1px solid var(--ink-100)', borderRadius: '10px' } },
         h('table', { class: 'tbl' },
-            h('thead', null, h('tr', null, h('th', null, 'Product'), h('th', null, 'Ordered'), h('th', null, 'Received'), h('th', null, 'Unit cost'), h('th', null, 'Line total'))),
+            h('thead', null, h('tr', null, h('th', null, 'Товар'), h('th', null, 'Заказано'), h('th', null, 'Принято'), h('th', null, 'Цена за единицу'), h('th', null, 'Сумма строки'))),
             h('tbody', null, ...rows.map(it => {
                 const unit = (it.products && it.products.base_unit) || '';
                 return h('tr', null,
@@ -248,20 +248,20 @@ async function openPODetail(po, onSaved) {
 
     const canReceive = !['received', 'cancelled'].includes(po.status);
     clear(footWrap);
-    footWrap.appendChild(h('button', { class: 'btn', type: 'button', onclick: close }, 'Close'));
+    footWrap.appendChild(h('button', { class: 'btn', type: 'button', onclick: close }, 'Закрыть'));
     footWrap.appendChild(h('span', { class: 'grow' }));
     if (po.status === 'draft') {
         footWrap.appendChild(h('button', { class: 'btn', type: 'button', onclick: async () => {
-            try { const { error } = await supabase.from('purchase_orders').update({ status: 'cancelled' }).eq('id', po.id).select().single(); if (error) throw error; toast('Order cancelled', 'ok'); close(); await onSaved(); }
-            catch (e) { toast((e && e.message) || 'Failed to cancel.', 'fail'); }
-        } }, 'Cancel order'));
+            try { const { error } = await supabase.from('purchase_orders').update({ status: 'cancelled' }).eq('id', po.id).select().single(); if (error) throw error; toast('Заказ отменён', 'ok'); close(); await onSaved(); }
+            catch (e) { toast((e && e.message) || 'Не удалось отменить.', 'fail'); }
+        } }, 'Отменить заказ'));
     }
     if (canReceive) {
-        const recvBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Receive all');
+        const recvBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Принять всё');
         recvBtn.addEventListener('click', async () => {
             recvBtn.disabled = true; recvBtn.textContent = 'Receiving…';
-            try { const { error } = await supabase.rpc('receive_purchase_order', { po_id: po.id }); if (error) throw error; toast('Stock received', 'ok'); close(); await onSaved(); }
-            catch (e) { toast((e && e.message) || 'Failed to receive.', 'fail'); recvBtn.disabled = false; recvBtn.textContent = 'Receive all'; }
+            try { const { error } = await supabase.rpc('receive_purchase_order', { po_id: po.id }); if (error) throw error; toast('Товар принят на склад', 'ok'); close(); await onSaved(); }
+            catch (e) { toast((e && e.message) || tr('Не удалось принять товар.'), 'fail'); recvBtn.disabled = false; recvBtn.textContent = tr('Принять всё'); }
         });
         footWrap.appendChild(recvBtn);
     }
@@ -453,7 +453,7 @@ async function openReqDetail(rq, onSaved) {
     const footWrap = h('div', { style: { display: 'flex', width: '100%', alignItems: 'center', gap: '8px' } });
 
     const { close } = docModal({
-        title: `Requisition ${rq.req_number}`, icon: 'Send', width: 560,
+        title: trf('Заявка {no}', { no: rq.req_number }), icon: 'Send', width: 560,
         body: [h('div', { style: { marginBottom: '8px' } }, reqStatusTag(rq.status),
             (rq.departments && rq.departments.name) ? h('span', { class: 'muted', style: { marginLeft: '10px', fontSize: '12.5px' } }, rq.departments.name) : null),
             bodyWrap],
@@ -463,31 +463,31 @@ async function openReqDetail(rq, onSaved) {
     const { data: items, error } = await supabase.from('purchase_requisition_items')
         .select('id,qty,note, products(name,base_unit)').eq('req_id', rq.id);
     clear(bodyWrap);
-    if (error) { bodyWrap.appendChild(h('div', { class: 'empty' }, 'Could not load lines.')); return; }
+    if (error) { bodyWrap.appendChild(h('div', { class: 'empty' }, 'Не удалось загрузить строки.')); return; }
     const rows = items || [];
     bodyWrap.appendChild(h('div', { style: { overflowX: 'auto', border: '1px solid var(--ink-100)', borderRadius: '10px' } },
         h('table', { class: 'tbl' },
-            h('thead', null, h('tr', null, h('th', null, 'Product'), h('th', null, 'Qty'))),
+            h('thead', null, h('tr', null, h('th', null, 'Товар'), h('th', null, 'Кол-во'))),
             h('tbody', null, ...rows.map(it => h('tr', null,
                 h('td', { class: 'cell-strong' }, (it.products && it.products.name) || '—'),
                 h('td', { class: 'num' }, `${fmtQty(it.qty)} ${(it.products && it.products.base_unit) || ''}`.trim())))))));
 
     const canAct = ['draft', 'submitted', 'approved'].includes(rq.status);
     clear(footWrap);
-    footWrap.appendChild(h('button', { class: 'btn', type: 'button', onclick: close }, 'Close'));
+    footWrap.appendChild(h('button', { class: 'btn', type: 'button', onclick: close }, 'Закрыть'));
     footWrap.appendChild(h('span', { class: 'grow' }));
     if (canAct) {
         footWrap.appendChild(h('button', { class: 'btn', type: 'button', onclick: async () => {
             const reason = window.prompt('Reject reason (optional):', '') ;
             if (reason === null) return;
-            try { const { error } = await supabase.from('purchase_requisitions').update({ status: 'rejected', reject_reason: reason || null }).eq('id', rq.id).select().single(); if (error) throw error; toast('Requisition rejected', 'ok'); close(); await onSaved(); }
-            catch (e) { toast((e && e.message) || 'Failed to reject.', 'fail'); }
-        } }, 'Reject'));
+            try { const { error } = await supabase.from('purchase_requisitions').update({ status: 'rejected', reject_reason: reason || null }).eq('id', rq.id).select().single(); if (error) throw error; toast('Заявка отклонена', 'ok'); close(); await onSaved(); }
+            catch (e) { toast((e && e.message) || 'Не удалось отклонить.', 'fail'); }
+        } }, 'Отклонить'));
         const issueBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Approve & issue');
         issueBtn.addEventListener('click', async () => {
             issueBtn.disabled = true; issueBtn.textContent = 'Issuing…';
-            try { const { error } = await supabase.rpc('approve_requisition_and_issue', { req_id: rq.id }); if (error) throw error; toast('Requisition issued', 'ok'); close(); await onSaved(); }
-            catch (e) { toast((e && e.message) || 'Failed to issue.', 'fail'); issueBtn.disabled = false; issueBtn.textContent = 'Approve & issue'; }
+            try { const { error } = await supabase.rpc('approve_requisition_and_issue', { req_id: rq.id }); if (error) throw error; toast('Заявка одобрена, товар выдан', 'ok'); close(); await onSaved(); }
+            catch (e) { toast((e && e.message) || 'Не удалось выдать товар по заявке.', 'fail'); issueBtn.disabled = false; issueBtn.textContent = 'Approve & issue'; }
         });
         footWrap.appendChild(issueBtn);
     }
@@ -501,21 +501,21 @@ async function openReqDetail(rq, onSaved) {
 const countRefs = { tbody: null, emptyEl: null, totalEl: null };
 
 function countStatusTag(s) {
-    const m = { open: ['Open', ''], counting: ['Counting', 'info'], posted: ['Posted', 'ok'], cancelled: ['Cancelled', ''] };
+    const m = { open: ['Открыта', ''], counting: ['Идёт пересчёт', 'info'], posted: ['Проведена', 'ok'], cancelled: ['Отменена', ''] };
     const [l, k] = m[s] || [s, ''];
     return Tag(l, { kind: k, dot: true });
 }
 
 export function renderStockCountsTab(container) {
     countRefs.tbody = h('tbody');
-    countRefs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } }, 'No stock counts yet.');
+    countRefs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } }, 'Инвентаризаций пока нет.');
     countRefs.totalEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
-    const addBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => createStockCount(fetchCountsAndPaint) }, Icon('Plus', { size: 14 }), ' New count');
+    const addBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => createStockCount(fetchCountsAndPaint) }, Icon('Plus', { size: 14 }), ' Новая инвентаризация');
 
     container.appendChild(h('div', null,
         h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' } },
             countRefs.totalEl, h('div', { class: 'page-head-actions' }, addBtn)),
-        tableCard(['Count #', 'Status', 'Items', 'Posted', 'Created'], countRefs.tbody, countRefs.emptyEl)));
+        tableCard(['№ ведомости', 'Статус', 'Позиций', 'Проведена', 'Создана'], countRefs.tbody, countRefs.emptyEl)));
     fetchCountsAndPaint();
 }
 
@@ -542,10 +542,10 @@ async function fetchCountsAndPaint() {
                 h('td', null, c.posted_at ? fmtDateTime(c.posted_at) : h('span', { class: 'muted' }, '—')),
                 h('td', null, fmtDateTime(c.created_at))));
         }
-        countRefs.totalEl.textContent = `${rows.length} count${rows.length === 1 ? '' : 's'}`;
+        countRefs.totalEl.textContent = trf('Инвентаризаций: {n}', { n: rows.length });
     } catch (e) {
         if (token !== lastFetchToken) return;
-        toast('Failed to load stock counts: ' + ((e && e.message) || e), 'fail');
+        toast(trf('Не удалось загрузить инвентаризации: {msg}', { msg: (e && e.message) || e }), 'fail');
         clear(countRefs.tbody); countRefs.emptyEl.style.display = '';
     }
 }
@@ -556,7 +556,7 @@ async function createStockCount(onSaved) {
     if (!window.confirm('Create a stock-count sheet snapshotting all active products?')) return;
     try {
         const products = await loadActiveProducts('id,on_hand');
-        if (!products.length) { toast('No active products to count.', 'fail'); return; }
+        if (!products.length) { toast('Нечего пересчитывать: активных товаров нет.', 'fail'); return; }
         const { data: cnt, error } = await supabase.from('stock_counts')
             .insert({ count_number: 'SC-' + Date.now().toString(36).toUpperCase(), status: 'counting' }).select('id,count_number,status,posted_at,created_at').single();
         if (error) throw error;
@@ -565,11 +565,11 @@ async function createStockCount(onSaved) {
                 .insert({ count_id: cnt.id, product_id: p.id, system_qty: Number(p.on_hand) || 0 }).select('id').single();
             if (iErr) throw iErr;
         }
-        toast('Count sheet created', 'ok');
+        toast('Ведомость пересчёта создана', 'ok');
         if (typeof onSaved === 'function') await onSaved();
         openCountDetail(cnt, onSaved);
     } catch (e) {
-        toast((e && e.message) || 'Failed to create count.', 'fail');
+        toast((e && e.message) || 'Не удалось создать ведомость.', 'fail');
     }
 }
 
@@ -579,7 +579,7 @@ async function openCountDetail(count, onSaved) {
     const editable = ['open', 'counting'].includes(count.status);
 
     const { close } = docModal({
-        title: `Stock count ${count.count_number}`, icon: 'Ruler', width: 640,
+        title: trf('Инвентаризация {no}', { no: count.count_number }), icon: 'Ruler', width: 640,
         body: [h('div', { style: { marginBottom: '8px' } }, countStatusTag(count.status)), bodyWrap],
         footer: () => footWrap,
     });
@@ -587,12 +587,12 @@ async function openCountDetail(count, onSaved) {
     const { data: items, error } = await supabase.from('stock_count_items')
         .select('id,system_qty,counted_qty, products(name,base_unit)').eq('count_id', count.id);
     clear(bodyWrap);
-    if (error) { bodyWrap.appendChild(h('div', { class: 'empty' }, 'Could not load lines.')); return; }
+    if (error) { bodyWrap.appendChild(h('div', { class: 'empty' }, 'Не удалось загрузить строки.')); return; }
     const rows = items || [];
     const inputs = new Map();   // item id -> input element
     bodyWrap.appendChild(h('div', { style: { overflowX: 'auto', border: '1px solid var(--ink-100)', borderRadius: '10px' } },
         h('table', { class: 'tbl' },
-            h('thead', null, h('tr', null, h('th', null, 'Product'), h('th', null, 'System'), h('th', null, 'Counted'), h('th', null, 'Variance'))),
+            h('thead', null, h('tr', null, h('th', null, 'Товар'), h('th', null, 'По системе'), h('th', null, 'Пересчитано'), h('th', null, 'Расхождение'))),
             h('tbody', null, ...rows.map(it => {
                 const unit = (it.products && it.products.base_unit) || '';
                 const varEl = h('td', { class: 'num' }, it.counted_qty != null ? fmtSignedQty(Number(it.counted_qty) - Number(it.system_qty), '') : h('span', { class: 'muted' }, '—'));
@@ -614,24 +614,24 @@ async function openCountDetail(count, onSaved) {
         for (const [id, inp] of inputs) {
             const raw = inp.value.trim();
             const val = raw === '' ? null : Number(raw);
-            if (val !== null && (!Number.isFinite(val) || val < 0)) throw new Error('Counted quantities must be zero or more.');
+            if (val !== null && (!Number.isFinite(val) || val < 0)) throw new Error('Пересчитанное количество не может быть отрицательным.');
             const { error } = await supabase.from('stock_count_items').update({ counted_qty: val }).eq('id', id).select('id').single();
             if (error) throw error;
         }
     }
 
     clear(footWrap);
-    footWrap.appendChild(h('button', { class: 'btn', type: 'button', onclick: close }, 'Close'));
+    footWrap.appendChild(h('button', { class: 'btn', type: 'button', onclick: close }, 'Закрыть'));
     footWrap.appendChild(h('span', { class: 'grow' }));
     if (editable) {
-        const saveBtn = h('button', { class: 'btn', type: 'button' }, 'Save counts');
+        const saveBtn = h('button', { class: 'btn', type: 'button' }, 'Сохранить пересчёт');
         saveBtn.addEventListener('click', async () => {
             saveBtn.disabled = true;
-            try { await saveCounts(); toast('Counts saved', 'ok'); if (typeof onSaved === 'function') await onSaved(); }
-            catch (e) { toast((e && e.message) || 'Failed to save.', 'fail'); }
+            try { await saveCounts(); toast('Пересчёт сохранён', 'ok'); if (typeof onSaved === 'function') await onSaved(); }
+            catch (e) { toast((e && e.message) || 'Не удалось сохранить.', 'fail'); }
             finally { saveBtn.disabled = false; }
         });
-        const postBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Post count');
+        const postBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Провести инвентаризацию');
         postBtn.addEventListener('click', async () => {
             if (!window.confirm('Post this count? On-hand will be set to the counted quantities.')) return;
             postBtn.disabled = true; postBtn.textContent = 'Posting…';
@@ -639,12 +639,12 @@ async function openCountDetail(count, onSaved) {
                 await saveCounts();
                 const { error } = await supabase.rpc('post_stock_count', { count_id: count.id });
                 if (error) throw error;
-                toast('Count posted — stock reconciled', 'ok');
+                toast('Инвентаризация проведена — остатки пересчитаны', 'ok');
                 close();
                 if (typeof onSaved === 'function') await onSaved();
             } catch (e) {
-                toast((e && e.message) || 'Failed to post count.', 'fail');
-                postBtn.disabled = false; postBtn.textContent = 'Post count';
+                toast((e && e.message) || 'Не удалось провести инвентаризацию.', 'fail');
+                postBtn.disabled = false; postBtn.textContent = tr('Провести инвентаризацию');
             }
         });
         footWrap.appendChild(saveBtn);

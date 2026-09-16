@@ -391,7 +391,7 @@ function openProductModal(p, onSaved) {
     }
 
     const bodyChildren = [
-        field('Name', nameInp, { required: true }),
+        field('Название', nameInp, { required: true }),
         h('div', { class: 'row', style: { gap: '12px', alignItems: 'flex-end' } },
             h('div', { style: { flex: 1 } }, field('Категория', categorySel)),
             h('label', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13.5px', paddingBottom: '12px', cursor: 'pointer', whiteSpace: 'nowrap' } },
@@ -412,7 +412,7 @@ function openProductModal(p, onSaved) {
     // растягивает карточку почти на весь экран (!important).
     overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '720px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 60px)', display: 'flex', flexDirection: 'column' } },
         h('header', { class: 'modal-head' },
-            h('h2', null, isEdit ? 'Товар' : 'Add product'),
+            h('h2', null, isEdit ? 'Товар' : 'Новый товар'),
             h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { class: 'modal-body', style: { overflowY: 'auto' } },
             ...bodyChildren,

@@ -94,7 +94,7 @@ export async function renderSkladTab(container) {
     const availSel = filterSelect(
         [['all', 'Все'], ['in', 'В наличии'], ['low', 'Заканчивается'], ['out', 'Нет в наличии']],
         sklad.avail, v => { sklad.avail = v; paintRows(); });
-    const flagSel = filterSelect([['all', 'Все'], ['ok', 'OK'], ['reorder', 'Reorder']], sklad.flag,
+    const flagSel = filterSelect([['all', 'Все'], ['ok', 'Хватает'], ['reorder', 'Пора заказать']], sklad.flag,
         v => { sklad.flag = v; paintRows(); });
 
     // ---- toolbar ---------------------------------------------------------
@@ -117,13 +117,13 @@ export async function renderSkladTab(container) {
             h('table', { class: 'tbl' },
                 h('thead', null,
                     h('tr', null,
-                        h('th', null, 'Product'),
+                        h('th', null, 'Товар'),
                         h('th', null, 'Единица'),
                         h('th', null, 'Поставщик'),
                         h('th', null, 'В наличии'),
                         h('th', null, 'Себестоимость'),
                         h('th', null, 'Стоимость'),
-                        h('th', null, 'Flag'),
+                        h('th', null, 'Остаток'),
                         h('th', null, ''),
                     ),
                     h('tr', null,
@@ -201,7 +201,7 @@ export async function renderSkladTab(container) {
                     : null),
             h('td', { class: 'num' }, fmtMoney2(p.avg_cost)),
             h('td', { class: 'num' }, fmtPrice(onHand * (Number(p.avg_cost) || 0))),
-            h('td', null, low ? Tag('Reorder', { kind: 'crit' }) : Tag('OK', { kind: 'ok' })),
+            h('td', null, low ? Tag('Пора заказать', { kind: 'crit' }) : Tag('Хватает', { kind: 'ok' })),
             h('td', { style: { textAlign: 'right' } },
                 h('button', { class: 'btn btn-sm', type: 'button', disabled: true, title: 'Заказы на закупку — во 2-й фазе' }, 'Заказать')),
         );
@@ -221,7 +221,7 @@ export async function renderSkladTab(container) {
                         p.name || '', p.base_unit || '', (p.suppliers && p.suppliers.name) || '',
                         `${fmtQty(onHand / su.factor)} ${su.unit}`.trim(), `${fmtQty(onHand * iu.factor)} ${iu.unit}`.trim(),
                         Number(p.avg_cost) || 0, Math.round(onHand * (Number(p.avg_cost) || 0)),
-                        isLowStock(p) ? 'Reorder' : 'OK',
+                        isLowStock(p) ? 'Пора заказать' : 'Хватает',
                     ];
                 }),
             ];
